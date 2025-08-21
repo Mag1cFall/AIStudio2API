@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.vscode/
+deprecated_javascript_version/
+memory-bank/
+*.log
+*.DS_Store
+venv/
+env/
+# auth_profiles/ # Handled by volume mount
+# certs/         # Handled by volume mount or generated in container
+# logs/          # Supervisord logs to stdout/stderr
