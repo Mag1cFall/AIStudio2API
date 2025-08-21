@@ -763,27 +763,17 @@ class PageController:
                 await file_chooser.set_files(local_file_paths)
                 self.logger.info(f"[{self.req_id}] 已将 {len(local_file_paths)} 个文件设置到文件选择器。")
 
-                # 等待文件上传完成 - 确保图片真正出现在对话中
-                await asyncio.sleep(2.0)  # 给文件上传一些时间
-                await self._check_disconnect(check_client_disconnected, "After File Upload")
-
+                # 处理版权确认（如果需要）
                 copyright_ack_button = self.page.locator('button[aria-label="Agree to the copyright acknowledgement"]')
                 try:
                     await copyright_ack_button.click(timeout=2000)
                     self.logger.info(f"[{self.req_id}] 已点击版权确认按钮。")
+                    await asyncio.sleep(0.5)  # 给版权确认处理一些时间
                 except TimeoutError:
                     self.logger.info(f"[{self.req_id}] 未检测到版权确认按钮，跳过。")
 
-                # 验证图片是否成功上传到对话中
-                try:
-                    image_preview_locator = self.page.locator('img[alt*="Uploaded"], .image-preview, [data-testid*="image"]')
-                    uploaded_images = await image_preview_locator.count()
-                    if uploaded_images > 0:
-                        self.logger.info(f"[{self.req_id}] 成功验证 {uploaded_images} 张图片已上传到对话中")
-                    else:
-                        self.logger.warning(f"[{self.req_id}] 未检测到已上传的图片预览，但继续执行")
-                except Exception as e_verify:
-                    self.logger.warning(f"[{self.req_id}] 验证图片上传状态时出错: {e_verify}")
+                # 强化图片上传验证 - 确保图片真正出现在对话中
+                await self._verify_images_uploaded(len(local_file_paths), check_client_disconnected)
 
                 await self._check_disconnect(check_client_disconnected, "After Image Upload Complete")
 
@@ -827,6 +817,89 @@ class PageController:
                         self.logger.info(f"[{self.req_id}]   - 已移除: {temp_path}")
                     except Exception as e_clean:
                         self.logger.warning(f"[{self.req_id}]   - 移除临时文件 {temp_path} 失败: {e_clean}")
+
+    async def _verify_images_uploaded(self, expected_count: int, check_client_disconnected: Callable):
+        """强化验证图片是否成功上传到对话中"""
+        self.logger.info(f"[{self.req_id}] 开始验证 {expected_count} 张图片的上传状态...")
+        
+        max_wait_time = 15.0  # 最大等待15秒
+        check_interval = 0.5  # 每500ms检查一次
+        max_checks = int(max_wait_time / check_interval)
+        
+        for attempt in range(max_checks):
+            try:
+                await self._check_disconnect(check_client_disconnected, f"图片上传验证 - 第{attempt+1}次检查")
+                
+                # 多种选择器来检测已上传的图片
+                image_selectors = [
+                    'img[alt*="Uploaded"]',
+                    'img[src*="blob:"]',
+                    '.image-preview img',
+                    '[data-testid*="image"] img',
+                    'img[src*="googleusercontent.com"]',
+                    '.uploaded-image',
+                    'ms-image-upload img'
+                ]
+                
+                uploaded_images = 0
+                for selector in image_selectors:
+                    try:
+                        locator = self.page.locator(selector)
+                        count = await locator.count()
+                        uploaded_images = max(uploaded_images, count)
+                        if uploaded_images >= expected_count:
+                            break
+                    except Exception:
+                        continue
+                
+                if uploaded_images >= expected_count:
+                    self.logger.info(f"[{self.req_id}] ✅ 成功验证 {uploaded_images}/{expected_count} 张图片已上传到对话中")
+                    return
+                
+                # 同时检查是否有上传进度指示器或加载状态
+                loading_indicators = [
+                    '.uploading',
+                    '.loading',
+                    '[aria-label*="uploading"]',
+                    '[data-testid*="upload-progress"]'
+                ]
+                
+                still_uploading = False
+                for indicator_selector in loading_indicators:
+                    try:
+                        indicator = self.page.locator(indicator_selector)
+                        if await indicator.count() > 0:
+                            still_uploading = True
+                            break
+                    except Exception:
+                        continue
+                
+                if still_uploading:
+                    self.logger.info(f"[{self.req_id}] 检测到上传仍在进行，继续等待...")
+                else:
+                    self.logger.info(f"[{self.req_id}] 当前检测到 {uploaded_images}/{expected_count} 张图片，继续等待...")
+                
+                await asyncio.sleep(check_interval)
+                
+            except Exception as e_verify:
+                self.logger.warning(f"[{self.req_id}] 图片上传验证第{attempt+1}次检查时出错: {e_verify}")
+                if attempt < max_checks - 1:
+                    await asyncio.sleep(check_interval)
+                    continue
+                else:
+                    break
+        
+        # 最终验证失败处理
+        self.logger.error(f"[{self.req_id}] ❌ 图片上传验证失败：在{max_wait_time}秒内未能确认{expected_count}张图片上传成功")
+        
+        # 尝试获取页面截图用于调试
+        try:
+            await save_error_snapshot(f"image_upload_verify_fail_{self.req_id}")
+        except Exception:
+            pass
+        
+        # 抛出异常阻止继续执行
+        raise Exception(f"图片上传验证失败：期望{expected_count}张图片，但验证超时")
 
     async def _try_shortcut_submit(self, prompt_textarea_locator, check_client_disconnected: Callable) -> bool:
         """尝试使用快捷键提交"""

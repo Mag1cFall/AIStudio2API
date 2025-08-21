@@ -150,7 +150,7 @@ async def queue_worker():
                 elif result_future.done():
                     logger.info(f"[{req_id}] (Worker) Future 在处理前已完成/取消。跳过。")
                 else:
-                    # 在处理请求前清空聊天历史
+                    # 在处理请求前清空聊天历史 - 强制要求清空成功
                     try:
                         from server import page_instance, is_page_ready
                         if page_instance and not page_instance.is_closed() and is_page_ready:
@@ -158,17 +158,23 @@ async def queue_worker():
                             from api_utils.request_processor import _setup_disconnect_monitoring
 
                             # 为清空操作设置一个临时的断开连接检查器
-                            _, _, temp_check_disco = await _setup_disconnect_monitoring(req_id, http_request, result_future)
+                            _, _, temp_check_disco = await _setup_disconnect_monitoring(req_id, http_request, result_future, page_instance)
                             
                             page_controller = PageController(page_instance, logger, req_id)
                             logger.info(f"[{req_id}] (Worker) 在处理新请求前执行聊天历史清空...")
+                            
+                            # 执行清理并验证成功
                             await page_controller.clear_chat_history(temp_check_disco)
-                            logger.info(f"[{req_id}] (Worker) ✅ 聊天历史清空完成。")
+                            logger.info(f"[{req_id}] (Worker) ✅ 聊天历史清空完成并验证成功。")
                         else:
                             logger.warning(f"[{req_id}] (Worker) 页面未就绪，跳过前置清空操作。")
                     except Exception as clear_err:
                         logger.error(f"[{req_id}] (Worker) 在处理前清空聊天历史时发生错误: {clear_err}", exc_info=True)
-                        # 即使清空失败，也继续处理请求，避免阻塞
+                        # 清空失败时，不能继续处理请求，必须停止以避免消息发送到错误的会话
+                        if not result_future.done():
+                            result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] 聊天历史清空失败，无法继续处理请求"))
+                        request_queue.task_done()
+                        continue
                     
                     # 调用实际的请求处理函数
                     try:
