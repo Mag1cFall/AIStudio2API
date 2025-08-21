@@ -15,8 +15,8 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/Mag1cFall/Gemini-AIStudio2API.git
-cd Gemini-AIStudio2API
+git clone https://github.com/Mag1cFall/AIStudio2API.git
+cd AIStudio2API
 
 # 2. 安装 Poetry (如果尚未安装)
 curl -sSL https://install.python-poetry.org | python3 -
@@ -34,7 +34,7 @@ npm install -g pyright
 ## 📁 项目结构
 
 ```
-Gemini-AIStudio2API/
+AIStudio2API/
 ├── api_utils/              # FastAPI 应用核心模块
 │   ├── app.py             # FastAPI 应用入口
 │   ├── routes.py          # API 路由定义

@@ -55,6 +55,8 @@ poetry env use C:\Users\2\AppData\Local\Programs\Python\Python312\python.exe
 poetry install
 ```
 
+**注意**: 安装过程中会自动下载和安装 Camoufox 浏览器（约 100MB），这是项目的核心组件，用于反指纹检测。首次安装可能需要较长时间，请耐心等待。
+
 ## 🚀 快速开始
 
 ### 首次使用（需要认证）
@@ -184,14 +186,6 @@ cp .env.example .env
 - 支持多个认证文件的保存和切换
 - 通过 GUI 的"管理认证文件"功能进行管理
 
-### 模型切换
-
-API 请求中的 `model` 字段支持：
-- `gemini-1.5-pro`
-- `gemini-1.5-flash`
-- `gemini-2.0-flash-exp`
-- 其他 AI Studio 支持的模型
-
 ## 🐳 Docker 部署
 
 ```bash
@@ -226,13 +220,3 @@ docker compose up -d
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
-
-## 📄 License
-
-[AGPLv3](LICENSE)
-
----
-
-**作者**: Mag1cFall  
-**邮箱**: 2986151272@qq.com  
-**仓库**: https://github.com/Mag1cFall/AIStudio2API

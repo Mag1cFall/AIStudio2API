@@ -53,8 +53,8 @@ curl -sSL https://install.python-poetry.org | python3 -
 ### 2. 克隆仓库
 
 ```bash
-git clone https://github.com/Mag1cFall/Gemini-AIStudio2API.git
-cd Gemini-AIStudio2API
+git clone https://github.com/Mag1cFall/AIStudio2API.git
+cd AIStudio2API
 ```
 
 ### 3. 安装依赖

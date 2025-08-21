@@ -17,7 +17,7 @@
 ## 📁 模块结构详解
 
 ```
-Gemini-AIStudio2API/
+AIStudio2API/
 ├── api_utils/              # FastAPI 应用核心模块
 │   ├── app.py             # FastAPI 应用入口和生命周期管理
 │   ├── routes.py          # API 路由定义和端点实现
