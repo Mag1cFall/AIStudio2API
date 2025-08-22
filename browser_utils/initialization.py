@@ -296,7 +296,19 @@ async def _initialize_page_logic(browser: AsyncBrowser):
     
     try:
         logger.info("创建新的浏览器上下文...")
-        context_options: Dict[str, Any] = {'viewport': {'width': 1920, 'height': 1080}}
+        
+        # 强制固定分辨率配置
+        fixed_width = 1920
+        fixed_height = 1080
+        context_options: Dict[str, Any] = {
+            'viewport': {'width': fixed_width, 'height': fixed_height},
+            'screen': {'width': fixed_width, 'height': fixed_height},  # 设置屏幕尺寸
+            'device_scale_factor': 1,  # 固定设备缩放
+            'is_mobile': False,  # 确保非移动模式
+            'has_touch': False,  # 禁用触摸
+        }
+        logger.info(f"   (强制设置分辨率: {fixed_width}x{fixed_height})")
+        
         if storage_state_path_to_use:
             context_options['storage_state'] = storage_state_path_to_use
             logger.info(f"   (使用 storage_state='{os.path.basename(storage_state_path_to_use)}')")

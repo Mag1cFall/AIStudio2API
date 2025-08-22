@@ -665,35 +665,88 @@ class PageController:
             # 记录一个更强烈的警告。
             self.logger.warning(f"[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。")
     
-    async def _click_with_retry(self, locator, description: str, attempts: int = 3, timeout_per_attempt: int = 15000):
+    async def _click_with_retry(self, locator, description: str, attempts: int = 5, timeout_per_attempt: int = 8000):
         """
-        Tries to click an element, retrying on timeout and using a JS fallback.
+        智能点击重试机制，采用多种策略确保点击成功。
         """
         last_exception = None
+        
         for attempt in range(attempts):
             try:
-                self.logger.info(f"[{self.req_id}] Attempting standard click on '{description}' (Attempt {attempt + 1}/{attempts})...")
-                await locator.click(timeout=timeout_per_attempt)
-                self.logger.info(f"[{self.req_id}] Successfully clicked '{description}' with standard method.")
-                return
-            except Exception as e:
-                self.logger.warning(f"[{self.req_id}] Standard click attempt {attempt + 1} for '{description}' failed: {e}")
-                last_exception = e
-                # Only use JS fallback if it's a timeout error
-                if 'timeout' in str(e).lower():
-                    try:
-                        self.logger.info(f"[{self.req_id}] Attempting JS click on '{description}'...")
-                        await locator.dispatch_event('click', timeout=timeout_per_attempt)
-                        self.logger.info(f"[{self.req_id}] Successfully clicked '{description}' with JS method.")
-                        return
-                    except Exception as js_e:
-                        self.logger.warning(f"[{self.req_id}] JS click for '{description}' also failed: {js_e}")
-                        last_exception = js_e
-
-                if attempt < attempts - 1:
-                    await asyncio.sleep(1)
+                self.logger.info(f"[{self.req_id}] 尝试点击 '{description}' (第{attempt + 1}/{attempts}次)...")
+                
+                # 第1步：确保元素可见和可点击
+                try:
+                    await expect_async(locator).to_be_visible(timeout=3000)
+                    await expect_async(locator).to_be_enabled(timeout=2000)
+                    self.logger.info(f"[{self.req_id}] '{description}' 元素状态验证通过")
+                except Exception as state_e:
+                    self.logger.warning(f"[{self.req_id}] '{description}' 元素状态检查失败: {state_e}")
+                    # 继续尝试，不因为状态检查失败就放弃
+                
+                # 第2步：滚动到元素位置确保可见
+                try:
+                    await locator.scroll_into_view_if_needed(timeout=2000)
+                    await asyncio.sleep(0.2)  # 等待滚动完成
+                except Exception:
+                    pass  # 滚动失败不影响点击尝试
+                
+                # 第3步：根据尝试次数选择不同的点击策略
+                if attempt == 0:
+                    # 第一次尝试：标准点击
+                    self.logger.info(f"[{self.req_id}] 使用标准点击方法")
+                    await locator.click(timeout=timeout_per_attempt)
+                    
+                elif attempt == 1:
+                    # 第二次尝试：强制点击（忽略遮挡）
+                    self.logger.info(f"[{self.req_id}] 使用强制点击方法")
+                    await locator.click(force=True, timeout=timeout_per_attempt)
+                    
+                elif attempt == 2:
+                    # 第三次尝试：JavaScript 点击
+                    self.logger.info(f"[{self.req_id}] 使用 JavaScript 点击方法")
+                    await locator.evaluate('element => element.click()')
+                    
+                elif attempt == 3:
+                    # 第四次尝试：dispatch 事件
+                    self.logger.info(f"[{self.req_id}] 使用 dispatch 事件方法")
+                    await locator.dispatch_event('click')
+                    
                 else:
-                    self.logger.error(f"[{self.req_id}] All {attempts} attempts to click '{description}' failed.")
+                    # 第五次尝试：坐标点击
+                    self.logger.info(f"[{self.req_id}] 使用坐标点击方法")
+                    box = await locator.bounding_box(timeout=3000)
+                    if box:
+                        x = box['x'] + box['width'] / 2
+                        y = box['y'] + box['height'] / 2
+                        await self.page.mouse.click(x, y)
+                    else:
+                        # 如果无法获取坐标，回退到JavaScript点击
+                        await locator.evaluate('element => element.click()')
+                
+                self.logger.info(f"[{self.req_id}] ✅ '{description}' 点击成功 (方法: {attempt + 1})")
+                
+                # 点击成功后短暂等待UI响应
+                await asyncio.sleep(0.3)
+                return
+                
+            except Exception as e:
+                self.logger.warning(f"[{self.req_id}] '{description}' 第{attempt + 1}次点击失败: {e}")
+                last_exception = e
+                
+                if attempt < attempts - 1:
+                    # 重试前的等待时间递增
+                    wait_time = 0.5 + (attempt * 0.3)
+                    self.logger.info(f"[{self.req_id}] 等待 {wait_time}秒 后重试...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.logger.error(f"[{self.req_id}] ❌ '{description}' 所有{attempts}次点击尝试均失败")
+                    # 最终失败时尝试保存截图
+                    try:
+                        from .operations import save_error_snapshot
+                        await save_error_snapshot(f"click_fail_{description.replace(' ', '_')}_{self.req_id}")
+                    except:
+                        pass
                     raise last_exception
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
@@ -822,46 +875,101 @@ class PageController:
         """强化验证图片是否成功上传到对话中"""
         self.logger.info(f"[{self.req_id}] 开始验证 {expected_count} 张图片的上传状态...")
         
-        max_wait_time = 15.0  # 最大等待15秒
-        check_interval = 0.5  # 每500ms检查一次
+        max_wait_time = 20.0  # 增加到20秒
+        check_interval = 0.3  # 缩短检查间隔到300ms，更快发现问题
         max_checks = int(max_wait_time / check_interval)
+        
+        consecutive_success_required = 3  # 需要连续3次成功检测才算稳定
+        consecutive_success_count = 0
         
         for attempt in range(max_checks):
             try:
                 await self._check_disconnect(check_client_disconnected, f"图片上传验证 - 第{attempt+1}次检查")
                 
-                # 多种选择器来检测已上传的图片
-                image_selectors = [
-                    'img[alt*="Uploaded"]',
-                    'img[src*="blob:"]',
-                    '.image-preview img',
-                    '[data-testid*="image"] img',
-                    'img[src*="googleusercontent.com"]',
-                    '.uploaded-image',
-                    'ms-image-upload img'
+                # 1. 首先检查是否有上传错误
+                error_indicators = [
+                    '[class*="error"]',
+                    '[data-testid*="error"]',
+                    'mat-error',
+                    '.upload-error'
                 ]
                 
-                uploaded_images = 0
-                for selector in image_selectors:
+                for error_selector in error_indicators:
                     try:
-                        locator = self.page.locator(selector)
-                        count = await locator.count()
-                        uploaded_images = max(uploaded_images, count)
-                        if uploaded_images >= expected_count:
-                            break
+                        error_locator = self.page.locator(error_selector)
+                        if await error_locator.count() > 0:
+                            error_text = await error_locator.first.inner_text(timeout=1000)
+                            if 'upload' in error_text.lower() or 'file' in error_text.lower():
+                                self.logger.error(f"[{self.req_id}] 检测到上传错误: {error_text}")
+                                raise Exception(f"文件上传失败: {error_text}")
                     except Exception:
                         continue
                 
-                if uploaded_images >= expected_count:
-                    self.logger.info(f"[{self.req_id}] ✅ 成功验证 {uploaded_images}/{expected_count} 张图片已上传到对话中")
-                    return
+                # 2. 多层次检测已上传图片
+                uploaded_images = 0
                 
-                # 同时检查是否有上传进度指示器或加载状态
+                # 最优先的选择器（对话输入框中的图片）
+                priority_selectors = [
+                    'ms-prompt-input-wrapper img',
+                    '.prompt-input img',
+                    'textarea[data-test-ms-prompt-textarea] ~ * img',
+                    '[data-testid="prompt-input"] img'
+                ]
+                
+                for selector in priority_selectors:
+                    try:
+                        locator = self.page.locator(selector)
+                        count = await locator.count()
+                        if count > 0:
+                            # 检查图片是否真的已加载
+                            for i in range(count):
+                                img = locator.nth(i)
+                                src = await img.get_attribute('src', timeout=1000)
+                                if src and ('blob:' in src or 'data:' in src or 'googleusercontent.com' in src):
+                                    uploaded_images += 1
+                    except Exception:
+                        continue
+                
+                # 备用选择器
+                if uploaded_images < expected_count:
+                    backup_selectors = [
+                        'img[alt*="Uploaded"]',
+                        'img[src*="blob:"]',
+                        '.image-preview img',
+                        '[data-testid*="image"] img',
+                        'img[src*="googleusercontent.com"]',
+                        '.uploaded-image'
+                    ]
+                    
+                    for selector in backup_selectors:
+                        try:
+                            locator = self.page.locator(selector)
+                            count = await locator.count()
+                            uploaded_images = max(uploaded_images, count)
+                            if uploaded_images >= expected_count:
+                                break
+                        except Exception:
+                            continue
+                
+                # 3. 检查上传状态
+                if uploaded_images >= expected_count:
+                    consecutive_success_count += 1
+                    self.logger.info(f"[{self.req_id}] ✅ 第{consecutive_success_count}次检测到 {uploaded_images}/{expected_count} 张图片")
+                    
+                    if consecutive_success_count >= consecutive_success_required:
+                        self.logger.info(f"[{self.req_id}] ✅ 连续{consecutive_success_required}次成功验证，图片上传稳定")
+                        return
+                else:
+                    consecutive_success_count = 0  # 重置连续成功计数
+                
+                # 4. 检查是否仍在上传中
                 loading_indicators = [
                     '.uploading',
                     '.loading',
                     '[aria-label*="uploading"]',
-                    '[data-testid*="upload-progress"]'
+                    '[data-testid*="upload-progress"]',
+                    'mat-progress-spinner',
+                    '.spinner'
                 ]
                 
                 still_uploading = False
@@ -870,19 +978,22 @@ class PageController:
                         indicator = self.page.locator(indicator_selector)
                         if await indicator.count() > 0:
                             still_uploading = True
+                            self.logger.info(f"[{self.req_id}] 检测到上传进度指示器: {indicator_selector}")
                             break
                     except Exception:
                         continue
                 
                 if still_uploading:
-                    self.logger.info(f"[{self.req_id}] 检测到上传仍在进行，继续等待...")
+                    self.logger.info(f"[{self.req_id}] 上传仍在进行，继续等待...")
                 else:
-                    self.logger.info(f"[{self.req_id}] 当前检测到 {uploaded_images}/{expected_count} 张图片，继续等待...")
+                    self.logger.info(f"[{self.req_id}] 当前检测到 {uploaded_images}/{expected_count} 张图片 (需连续{consecutive_success_required}次成功)")
                 
                 await asyncio.sleep(check_interval)
                 
             except Exception as e_verify:
                 self.logger.warning(f"[{self.req_id}] 图片上传验证第{attempt+1}次检查时出错: {e_verify}")
+                if "文件上传失败" in str(e_verify):
+                    raise  # 直接抛出上传错误
                 if attempt < max_checks - 1:
                     await asyncio.sleep(check_interval)
                     continue
@@ -892,14 +1003,17 @@ class PageController:
         # 最终验证失败处理
         self.logger.error(f"[{self.req_id}] ❌ 图片上传验证失败：在{max_wait_time}秒内未能确认{expected_count}张图片上传成功")
         
-        # 尝试获取页面截图用于调试
+        # 尝试获取页面截图和更多调试信息
         try:
             await save_error_snapshot(f"image_upload_verify_fail_{self.req_id}")
+            # 记录当前页面中所有图片元素用于调试
+            all_images = await self.page.locator('img').count()
+            self.logger.error(f"[{self.req_id}] 调试信息：页面中共有 {all_images} 个img元素")
         except Exception:
             pass
         
         # 抛出异常阻止继续执行
-        raise Exception(f"图片上传验证失败：期望{expected_count}张图片，但验证超时")
+        raise Exception(f"图片上传验证失败：期望{expected_count}张图片，验证超时（{max_wait_time}秒）")
 
     async def _try_shortcut_submit(self, prompt_textarea_locator, check_client_disconnected: Callable) -> bool:
         """尝试使用快捷键提交"""
