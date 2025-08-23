@@ -25,8 +25,8 @@ from config import (
     DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P,
     ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH
 )
-from models import ClientDisconnectedError
-from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content
+from models import ClientDisconnectedError, ElementClickError
+from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content, click_element
 
 class PageController:
     """封装了与AI Studio页面交互的所有操作。"""
@@ -665,90 +665,6 @@ class PageController:
             # 记录一个更强烈的警告。
             self.logger.warning(f"[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。")
     
-    async def _click_with_retry(self, locator, description: str, attempts: int = 5, timeout_per_attempt: int = 8000):
-        """
-        智能点击重试机制，采用多种策略确保点击成功。
-        """
-        last_exception = None
-        
-        for attempt in range(attempts):
-            try:
-                self.logger.info(f"[{self.req_id}] 尝试点击 '{description}' (第{attempt + 1}/{attempts}次)...")
-                
-                # 第1步：确保元素可见和可点击
-                try:
-                    await expect_async(locator).to_be_visible(timeout=3000)
-                    await expect_async(locator).to_be_enabled(timeout=2000)
-                    self.logger.info(f"[{self.req_id}] '{description}' 元素状态验证通过")
-                except Exception as state_e:
-                    self.logger.warning(f"[{self.req_id}] '{description}' 元素状态检查失败: {state_e}")
-                    # 继续尝试，不因为状态检查失败就放弃
-                
-                # 第2步：滚动到元素位置确保可见
-                try:
-                    await locator.scroll_into_view_if_needed(timeout=2000)
-                    await asyncio.sleep(0.2)  # 等待滚动完成
-                except Exception:
-                    pass  # 滚动失败不影响点击尝试
-                
-                # 第3步：根据尝试次数选择不同的点击策略
-                if attempt == 0:
-                    # 第一次尝试：标准点击
-                    self.logger.info(f"[{self.req_id}] 使用标准点击方法")
-                    await locator.click(timeout=timeout_per_attempt)
-                    
-                elif attempt == 1:
-                    # 第二次尝试：强制点击（忽略遮挡）
-                    self.logger.info(f"[{self.req_id}] 使用强制点击方法")
-                    await locator.click(force=True, timeout=timeout_per_attempt)
-                    
-                elif attempt == 2:
-                    # 第三次尝试：JavaScript 点击
-                    self.logger.info(f"[{self.req_id}] 使用 JavaScript 点击方法")
-                    await locator.evaluate('element => element.click()')
-                    
-                elif attempt == 3:
-                    # 第四次尝试：dispatch 事件
-                    self.logger.info(f"[{self.req_id}] 使用 dispatch 事件方法")
-                    await locator.dispatch_event('click')
-                    
-                else:
-                    # 第五次尝试：坐标点击
-                    self.logger.info(f"[{self.req_id}] 使用坐标点击方法")
-                    box = await locator.bounding_box(timeout=3000)
-                    if box:
-                        x = box['x'] + box['width'] / 2
-                        y = box['y'] + box['height'] / 2
-                        await self.page.mouse.click(x, y)
-                    else:
-                        # 如果无法获取坐标，回退到JavaScript点击
-                        await locator.evaluate('element => element.click()')
-                
-                self.logger.info(f"[{self.req_id}] ✅ '{description}' 点击成功 (方法: {attempt + 1})")
-                
-                # 点击成功后短暂等待UI响应
-                await asyncio.sleep(0.3)
-                return
-                
-            except Exception as e:
-                self.logger.warning(f"[{self.req_id}] '{description}' 第{attempt + 1}次点击失败: {e}")
-                last_exception = e
-                
-                if attempt < attempts - 1:
-                    # 重试前的等待时间递增
-                    wait_time = 0.5 + (attempt * 0.3)
-                    self.logger.info(f"[{self.req_id}] 等待 {wait_time}秒 后重试...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    self.logger.error(f"[{self.req_id}] ❌ '{description}' 所有{attempts}次点击尝试均失败")
-                    # 最终失败时尝试保存截图
-                    try:
-                        from .operations import save_error_snapshot
-                        await save_error_snapshot(f"click_fail_{description.replace(' ', '_')}_{self.req_id}")
-                    except:
-                        pass
-                    raise last_exception
-
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
         """提交提示到页面，并处理文件上传。"""
         self.logger.info(f"[{self.req_id}] 填充并提交提示 ({len(prompt)} chars)...")
@@ -769,12 +685,11 @@ class PageController:
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
             await self._check_disconnect(check_client_disconnected, "After Input Fill")
 
-            # 处理文件上传 - 确保图片正确传入对话
+            # 处理文件上传
             if image_list:
                 self.logger.info(f"[{self.req_id}] 检测到 {len(image_list)} 个文件需要上传。")
                 await self._check_disconnect(check_client_disconnected, "Before Image Upload")
                 
-                # 将 data URI 转换为临时文件
                 local_file_paths = []
                 for idx, image_source in enumerate(image_list):
                     if image_source.startswith('data:image'):
@@ -793,16 +708,20 @@ class PageController:
                         except Exception as e_dec:
                             self.logger.error(f"[{self.req_id}] 解码或保存 data URI 时出错: {e_dec}")
                     else:
-                        local_file_paths.append(image_source) # 假定为有效路径
+                        local_file_paths.append(image_source)
 
                 if not local_file_paths:
                     raise Exception("没有可用于上传的有效文件路径。")
 
-                # 执行上传操作 - 增加更多状态检查确保图片真正上传
                 insert_button_locator = self.page.locator('button[aria-label="Insert assets such as images, videos, files, or audio"]')
-                await expect_async(insert_button_locator).to_be_visible(timeout=5000)
-                await self._check_disconnect(check_client_disconnected, "Before Insert Assets Click")
-                await self._click_with_retry(insert_button_locator, "Insert Assets Button")
+                try:
+                    await click_element(self.page, insert_button_locator, "Insert Assets Button", self.req_id)
+                except ElementClickError as e:
+                    self.logger.error(f"[{self.req_id}] 致命错误: 'Insert Assets Button' 点击失败，所有方法均无效。正在刷新会话...")
+                    await self.clear_chat_history(check_client_disconnected)
+                    self.logger.info(f"[{self.req_id}] 会话已刷新。")
+                    raise e from e
+
                 await self._check_disconnect(check_client_disconnected, "After Insert Assets Click")
 
                 upload_button_locator = self.page.locator(UPLOAD_BUTTON_SELECTOR)
@@ -816,18 +735,15 @@ class PageController:
                 await file_chooser.set_files(local_file_paths)
                 self.logger.info(f"[{self.req_id}] 已将 {len(local_file_paths)} 个文件设置到文件选择器。")
 
-                # 处理版权确认（如果需要）
                 copyright_ack_button = self.page.locator('button[aria-label="Agree to the copyright acknowledgement"]')
                 try:
                     await copyright_ack_button.click(timeout=2000)
                     self.logger.info(f"[{self.req_id}] 已点击版权确认按钮。")
-                    await asyncio.sleep(0.5)  # 给版权确认处理一些时间
+                    await asyncio.sleep(0.5)
                 except TimeoutError:
                     self.logger.info(f"[{self.req_id}] 未检测到版权确认按钮，跳过。")
 
-                # 强化图片上传验证 - 确保图片真正出现在对话中
                 await self._verify_images_uploaded(len(local_file_paths), check_client_disconnected)
-
                 await self._check_disconnect(check_client_disconnected, "After Image Upload Complete")
 
             # 等待发送按钮启用

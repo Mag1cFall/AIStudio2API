@@ -13,7 +13,7 @@ from playwright.async_api import Page as AsyncPage, Locator, Error as Playwright
 
 # 导入配置和模型
 from config import *
-from models import ClientDisconnectedError
+from models import ClientDisconnectedError, ElementClickError
 
 logger = logging.getLogger("AIStudioProxyServer")
 
@@ -473,6 +473,67 @@ async def save_error_snapshot(error_name: str = 'error'):
             logger.error(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}")
     except Exception as dir_err:
         logger.error(f"{log_prefix}   创建错误目录或保存快照时发生其他错误 ({base_error_name}): {dir_err}")
+
+async def click_element(
+    page: AsyncPage,
+    locator: Locator,
+    element_name: str,
+    req_id: str,
+    internal_timeout: int = 2000,
+) -> bool:
+    """
+    快速连续尝试用多种方法点击一个元素。如果所有方法都失败，则引发异常。
+    方法顺序:
+    1. 标准点击
+    2. 强制点击
+    3. JavaScript 点击
+    """
+    last_error = None
+    
+    # 验证元素状态
+    try:
+        await locator.wait_for(state='visible', timeout=internal_timeout)
+        logger.info(f"[{req_id}] '{element_name}' 元素状态验证通过")
+    except Exception as e:
+        logger.warning(f"[{req_id}] '{element_name}' 元素在点击前验证失败 (不可见): {e}")
+        raise ElementClickError(f"Element '{element_name}' not visible before click attempt.") from e
+
+    # 方法 1: 标准点击
+    try:
+        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 标准)")
+        await locator.click(timeout=internal_timeout)
+        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 1)")
+        return True
+    except Exception as e:
+        logger.warning(f"[{req_id}] '{element_name}' 标准点击失败: {type(e).__name__}")
+        last_error = e
+
+    await asyncio.sleep(0.1)
+
+    # 方法 2: 强制点击
+    try:
+        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 强制)")
+        await locator.click(timeout=internal_timeout, force=True)
+        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 2)")
+        return True
+    except Exception as e:
+        logger.warning(f"[{req_id}] '{element_name}' 强制点击失败: {type(e).__name__}")
+        last_error = e
+
+    await asyncio.sleep(0.1)
+
+    # 方法 3: JavaScript 点击
+    try:
+        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: JS)")
+        await locator.evaluate('element => element.click()')
+        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 3)")
+        return True
+    except Exception as e:
+        logger.warning(f"[{req_id}] '{element_name}' JS 点击失败: {type(e).__name__}")
+        last_error = e
+
+    logger.error(f"[{req_id}] 所有点击 '{element_name}' 的尝试都失败了。")
+    raise ElementClickError(f"All click attempts for '{element_name}' failed.") from last_error
 
 async def get_response_via_edit_button(
     page: AsyncPage,
