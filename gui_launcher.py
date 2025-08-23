@@ -204,7 +204,10 @@ LANG_TEXTS = {
     "no_file_selected": {"zh": "请选择一个认证文件", "en": "Please select an authentication file"},
     "auth_file_activated": {"zh": "认证文件 '{file}' 已成功激活", "en": "Authentication file '{file}' has been activated successfully"},
     "error_activating_file": {"zh": "激活文件 '{file}' 时出错: {error}", "en": "Error activating file '{file}': {error}"},
+    "auth_deactivated": {"zh": "已取消激活所有认证", "en": "All authentications deactivated"},
+    "error_deactivating": {"zh": "取消激活时出错: {error}", "en": "Error during deactivation: {error}"},
     "activate_selected_btn": {"zh": "激活选中的文件", "en": "Activate Selected File"},
+    "deactivate_btn": {"zh": "取消激活", "en": "Deactivate"},
     "cancel_btn": {"zh": "取消", "en": "Cancel"},
     "auth_files_management": {"zh": "认证文件管理", "en": "Auth Files Management"},
     "manage_auth_files_btn": {"zh": "管理认证文件", "en": "Manage Auth Files"},
@@ -685,10 +688,33 @@ def manage_auth_files_gui():
             messagebox.showerror(get_text("error_title"), get_text("error_activating_file", file=selected_file_name, error=str(e)), parent=auth_window)
             _update_active_auth_display() # 即使失败也尝试更新显示
 
+    def deactivate_current_auth():
+        """清空 active 目录，取消激活"""
+        try:
+            for existing_file in os.listdir(ACTIVE_AUTH_DIR):
+                if existing_file.lower().endswith('.json'):
+                    os.remove(os.path.join(ACTIVE_AUTH_DIR, existing_file))
+            messagebox.showinfo(get_text("info_title"), get_text("auth_deactivated"), parent=auth_window)
+            _update_active_auth_display()
+            auth_window.destroy()
+        except Exception as e:
+            messagebox.showerror(get_text("error_title"), get_text("error_deactivating", error=str(e)), parent=auth_window)
+            _update_active_auth_display()
+
     buttons_frame = ttk.Frame(auth_window)
     buttons_frame.pack(fill=tk.X, padx=10, pady=10)
-    ttk.Button(buttons_frame, text=get_text("activate_selected_btn"), command=activate_selected_file).pack(side=tk.LEFT, padx=5)
-    ttk.Button(buttons_frame, text=get_text("cancel_btn"), command=auth_window.destroy).pack(side=tk.RIGHT, padx=5)
+    
+    # 激活按钮
+    activate_btn = ttk.Button(buttons_frame, text=get_text("activate_selected_btn"), command=activate_selected_file)
+    activate_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+
+    # 取消激活按钮
+    deactivate_btn = ttk.Button(buttons_frame, text=get_text("deactivate_btn"), command=deactivate_current_auth)
+    deactivate_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+
+    # 取消按钮
+    cancel_btn = ttk.Button(buttons_frame, text=get_text("cancel_btn"), command=auth_window.destroy)
+    cancel_btn.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
 
 def get_active_auth_json_path_for_launch() -> Optional[str]:
     """获取用于启动命令的 --active-auth-json 参数值"""

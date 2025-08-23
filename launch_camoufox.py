@@ -615,6 +615,7 @@ if __name__ == "__main__":
                 "addons": [],
                 # "proxy": camoufox_proxy_internal, # 已移除
                 "exclude_addons": [DefaultAddons.UBO], # Assuming DefaultAddons.UBO exists
+                "window": (1920, 1080) # 使用 'window' 参数在指纹生成时固定分辨率
             }
 
             # 正确添加代理的方式
