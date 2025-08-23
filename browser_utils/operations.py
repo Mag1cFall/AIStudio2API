@@ -484,12 +484,13 @@ async def click_element(
     """
     快速连续尝试用多种方法点击一个元素。如果所有方法都失败，则引发异常。
     方法顺序:
-    1. 标准点击
-    2. 强制点击
+    1. 标准点击 (快速超时)
+    2. 强制点击 (快速超时)
     3. JavaScript 点击
     """
     last_error = None
-    
+    fast_click_timeout = 500  # 为快速失败设置500ms超时
+
     # 验证元素状态
     try:
         await locator.wait_for(state='visible', timeout=internal_timeout)
@@ -501,7 +502,7 @@ async def click_element(
     # 方法 1: 标准点击
     try:
         logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 标准)")
-        await locator.click(timeout=internal_timeout)
+        await locator.click(timeout=fast_click_timeout)
         logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 1)")
         return True
     except Exception as e:
@@ -513,7 +514,7 @@ async def click_element(
     # 方法 2: 强制点击
     try:
         logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 强制)")
-        await locator.click(timeout=internal_timeout, force=True)
+        await locator.click(timeout=fast_click_timeout, force=True)
         logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 2)")
         return True
     except Exception as e:

@@ -207,7 +207,7 @@ class PageController:
             if should_enable_search != is_currently_checked:
                 action = "打开" if should_enable_search else "关闭"
                 self.logger.info(f"[{self.req_id}] Google Search 开关状态与期望不符。正在点击以{action}...")
-                await toggle_locator.click(timeout=CLICK_TIMEOUT_MS)
+                await click_element(self.page, toggle_locator, "Google Search Toggle", self.req_id)
                 await self._check_disconnect(check_client_disconnected, f"Google Search 开关 - 点击{action}后")
                 await asyncio.sleep(0.5) # 等待UI更新
                 new_state = await toggle_locator.get_attribute("aria-checked")
@@ -235,7 +235,7 @@ class PageController:
 
             if class_string and "expanded" not in class_string.split():
                 self.logger.info(f"[{self.req_id}] 工具面板未展开，正在点击以展开...")
-                await collapse_tools_locator.click(timeout=CLICK_TIMEOUT_MS)
+                await click_element(self.page, collapse_tools_locator, "Expand/Collapse Tools Button", self.req_id)
                 await self._check_disconnect(check_client_disconnected, "展开工具面板后")
                 # 等待展开动画完成
                 await expect_async(grandparent_locator).to_have_class(re.compile(r'.*expanded.*'), timeout=5000)
@@ -258,7 +258,7 @@ class PageController:
             is_checked = await use_url_content_selector.get_attribute("aria-checked")
             if "false" == is_checked:
                 self.logger.info(f"[{self.req_id}] URL Context 开关未开启，正在点击以开启...")
-                await use_url_content_selector.click(timeout=CLICK_TIMEOUT_MS)
+                await click_element(self.page, use_url_content_selector, "URL Context Toggle", self.req_id)
                 await self._check_disconnect(check_client_disconnected, "点击URLCONTEXT后")
                 self.logger.info(f"[{self.req_id}]  URL Context 开关已点击。")
             else:
@@ -287,7 +287,7 @@ class PageController:
             if current_state_is_checked != should_be_checked:
                 action = "启用" if should_be_checked else "禁用"
                 self.logger.info(f"[{self.req_id}] 思考预算开关当前状态与期望不符，正在点击以{action}...")
-                await toggle_locator.click(timeout=CLICK_TIMEOUT_MS)
+                await click_element(self.page, toggle_locator, "Thinking Budget Toggle", self.req_id)
                 await self._check_disconnect(check_client_disconnected, f"思考预算开关 - 点击{action}后")
 
                 await asyncio.sleep(0.5)
@@ -467,7 +467,7 @@ class PageController:
                 while await remove_chip_buttons_locator.count() > 0 and removed_count < max_removals:
                     await self._check_disconnect(check_client_disconnected, "停止序列清除 - 循环开始")
                     try:
-                        await remove_chip_buttons_locator.first.click(timeout=2000)
+                        await click_element(self.page, remove_chip_buttons_locator.first, "Remove Stop Sequence Chip", self.req_id)
                         removed_count += 1
                         await asyncio.sleep(0.15)
                     except Exception:
@@ -586,10 +586,10 @@ class PageController:
 
         if overlay_initially_visible:
             self.logger.info(f"[{self.req_id}] 点击\"继续\"按钮 (遮罩层已存在): {CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}")
-            await confirm_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+            await click_element(self.page, confirm_button_locator, "Clear Chat Confirm Button (Overlay)", self.req_id)
         else:
             self.logger.info(f"[{self.req_id}] 点击\"清空聊天\"按钮: {CLEAR_CHAT_BUTTON_SELECTOR}")
-            await clear_chat_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+            await click_element(self.page, clear_chat_button_locator, "Clear Chat Button", self.req_id)
             await self._check_disconnect(check_client_disconnected, "清空聊天 - 点击\"清空聊天\"后")
 
             try:
@@ -603,8 +603,8 @@ class PageController:
                 raise Exception(error_msg)
 
             await self._check_disconnect(check_client_disconnected, "清空聊天 - 遮罩层出现后")
-            self.logger.info(f"[{self.req_id}] 点击\"继续\"按钮 (在对话框中): {CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}")
-            await confirm_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+            self.logger.info(f"[{self.r_id}] 点击\"继续\"按钮 (在对话框中): {CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}")
+            await click_element(self.page, confirm_button_locator, "Clear Chat Confirm Button (Dialog)", self.req_id)
 
         await self._check_disconnect(check_client_disconnected, "清空聊天 - 点击\"继续\"后")
 
@@ -729,7 +729,7 @@ class PageController:
                 await self._check_disconnect(check_client_disconnected, "Before File Upload")
                 
                 async with self.page.expect_file_chooser(timeout=30000) as fc_info:
-                    await upload_button_locator.click()
+                    await click_element(self.page, upload_button_locator, "Upload File Button", self.req_id)
                 
                 file_chooser = await fc_info.value
                 await file_chooser.set_files(local_file_paths)
@@ -737,11 +737,11 @@ class PageController:
 
                 copyright_ack_button = self.page.locator('button[aria-label="Agree to the copyright acknowledgement"]')
                 try:
-                    await copyright_ack_button.click(timeout=2000)
+                    await click_element(self.page, copyright_ack_button, "Copyright Acknowledgement Button", self.req_id)
                     self.logger.info(f"[{self.req_id}] 已点击版权确认按钮。")
                     await asyncio.sleep(0.5)
-                except TimeoutError:
-                    self.logger.info(f"[{self.req_id}] 未检测到版权确认按钮，跳过。")
+                except (ElementClickError, TimeoutError):
+                    self.logger.info(f"[{self.req_id}] 未检测到版权确认按钮或点击失败，跳过。")
 
                 await self._verify_images_uploaded(len(local_file_paths), check_client_disconnected)
                 await self._check_disconnect(check_client_disconnected, "After Image Upload Complete")
@@ -766,7 +766,7 @@ class PageController:
             # 如果快捷键失败，使用按钮点击
             if not submitted_successfully:
                 self.logger.info(f"[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...")
-                await submit_button_locator.click(timeout=5000)
+                await click_element(self.page, submit_button_locator, "Submit Button", self.req_id)
                 self.logger.info(f"[{self.req_id}]  提交按钮点击完成。")
 
             await self._check_disconnect(check_client_disconnected, "After Submit")
@@ -993,8 +993,8 @@ class PageController:
             submission_success = False
 
             try:
-                # 方法1: 检查原始输入框是否清空
-                current_content = await prompt_textarea_locator.input_value(timeout=2000) or ""
+                # 方法1: 检查原始输入框是否清空。使用 .last 来定位提交后新出现的输入框，避免严格模式冲突。
+                current_content = await prompt_textarea_locator.last.input_value(timeout=2000) or ""
                 if original_content and not current_content.strip():
                     self.logger.info(f"[{self.req_id}] 验证方法1: 输入框已清空，快捷键提交成功")
                     submission_success = True
