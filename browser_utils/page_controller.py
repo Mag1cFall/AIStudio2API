@@ -21,6 +21,16 @@ from config import (
     GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR
 )
 from config import (
+    TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR,
+    MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR,
+    CLEAR_CHAT_BUTTON_SELECTOR, CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR, OVERLAY_SELECTOR,
+    PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR,
+    EDIT_MESSAGE_BUTTON_SELECTOR,USE_URL_CONTEXT_SELECTOR,UPLOAD_BUTTON_SELECTOR,
+    SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR,
+    GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR,
+    SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR
+)
+from config import (
     CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS,
     DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P,
     ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH
@@ -80,6 +90,31 @@ class PageController:
 
         # 调整 Google Search 开关
         await self._adjust_google_search(request_params, check_client_disconnected)
+
+    async def set_system_instructions(self, system_prompt: str, check_client_disconnected: Callable):
+        """设置系统指令。"""
+        if not system_prompt:
+            return
+
+        self.logger.info(f"[{self.req_id}] 正在设置系统指令...")
+        await self._check_disconnect(check_client_disconnected, "Start System Instructions")
+
+        try:
+            # 点击系统指令按钮以显示文本区域
+            sys_prompt_button = self.page.locator(SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR)
+            await click_element(self.page, sys_prompt_button, "System Instructions Button", self.req_id)
+            await self._check_disconnect(check_client_disconnected, "After System Instructions Button Click")
+
+            # 填充系统指令文本区域
+            sys_prompt_textarea = self.page.locator(SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR)
+            await expect_async(sys_prompt_textarea).to_be_visible(timeout=5000)
+            await sys_prompt_textarea.fill(system_prompt, timeout=5000)
+            self.logger.info(f"[{self.req_id}] 系统指令已填充。")
+
+        except Exception as e:
+            self.logger.error(f"[{self.req_id}] 设置系统指令时出错: {e}")
+            if isinstance(e, ClientDisconnectedError):
+                raise
 
     async def _handle_thinking_budget(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
         """处理思考预算的调整逻辑。"""

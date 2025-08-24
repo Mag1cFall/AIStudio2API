@@ -298,22 +298,31 @@ def extract_base64_to_local(base64_data: str) -> str:
 
 
 # --- 提示准备函数 ---
-def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
+def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, str, list]:
     """
     准备组合提示，为每个角色添加前缀并拼接所有消息。
     现在支持图片标记功能，为每张图片分配具体文件名标识符并在对应消息中标注。
+    同时，它会分离出系统提示。
     """
     from server import logger
     
     logger.info(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。")
     
+    system_prompt = ""
     combined_parts = []
     images_list = []
     image_counter = 1  # 全局图片计数器
-    role_map = {"user": "用户", "assistant": "助手", "system": "系统"}
+    role_map = {"user": "用户", "assistant": "助手"}  # "system" 角色被特殊处理
 
     for i, msg in enumerate(messages):
         role = msg.role or 'unknown'
+
+        if role == 'system':
+            if isinstance(msg.content, str):
+                system_prompt = msg.content.strip()
+                logger.info(f"[{req_id}] 提取到系统提示: '{system_prompt[:100]}...'")
+            continue  # 系统提示不加入主提示
+
         # 获取角色前缀，如果未知则使用首字母大写的角色名
         role_prefix = f"{role_map.get(role, role.capitalize())}: "
         
@@ -397,7 +406,7 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
     logger.info(f"[{req_id}] (准备提示) 组合提示长度: {len(final_prompt)}，包含 {len(images_list)} 张图片。预览: '{preview_text}...'")
     
     # 返回处理后的提示和图片列表
-    return final_prompt, images_list
+    return system_prompt, final_prompt, images_list
 
 
 def _get_image_message_index(messages: List[Message], image_num: int) -> int:

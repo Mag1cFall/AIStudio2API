@@ -367,7 +367,7 @@ async def _handle_parameter_cache(req_id: str, context: dict) -> None:
             page_params_cache["last_known_model_id_for_params"] = current_ai_studio_model_id
 
 
-async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequest, check_client_disconnected: Callable) -> Tuple[str, list]:
+async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequest, check_client_disconnected: Callable) -> Tuple[str, str, list]:
     """准备和验证请求"""
     from server import logger
     
@@ -378,7 +378,7 @@ async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequ
     
     # 直接将消息传递给 prepare_combined_prompt 进行处理
     # 它会同时返回格式化的提示和需要上传的图片列表
-    prepared_prompt, final_image_list = prepare_combined_prompt(request.messages, req_id)
+    system_prompt, prepared_prompt, final_image_list = prepare_combined_prompt(request.messages, req_id)
     check_client_disconnected("After Prompt Prep")
 
     # 确保图片列表不为空时记录日志
@@ -387,7 +387,7 @@ async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequ
     else:
         logger.info(f"[{req_id}] 没有检测到需要上传的图片")
     
-    return prepared_prompt, final_image_list
+    return system_prompt, prepared_prompt, final_image_list
 
 async def _handle_response_processing(req_id: str, request: ChatCompletionRequest, page: AsyncPage,
                                     context: dict, result_future: Future,
@@ -1094,7 +1094,10 @@ async def _process_request_refactored(
         await _handle_model_switching(req_id, context, check_client_disconnected)
         await _handle_parameter_cache(req_id, context)
         
-        prepared_prompt, image_list = await _prepare_and_validate_request(req_id, request, check_client_disconnected)
+        system_prompt, prepared_prompt, image_list = await _prepare_and_validate_request(req_id, request, check_client_disconnected)
+
+        # 在调整其他参数之前设置系统指令
+        await page_controller.set_system_instructions(system_prompt, check_client_disconnected)
 
         # 使用PageController处理页面交互
         # 注意：聊天历史清空已移至队列处理锁释放后执行
