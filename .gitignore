@@ -8,6 +8,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 /upload_images
+homework/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
