@@ -308,7 +308,7 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
     
     logger.info(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。")
     
-    system_prompt = ""
+    system_prompts = []
     combined_parts = []
     images_list = []
     image_counter = 1  # 全局图片计数器
@@ -319,8 +319,7 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
 
         if role == 'system':
             if isinstance(msg.content, str):
-                system_prompt = msg.content.strip()
-                logger.info(f"[{req_id}] 提取到系统提示: '{system_prompt[:100]}...'")
+                system_prompts.append(msg.content.strip())
             continue  # 系统提示不加入主提示
 
         # 获取角色前缀，如果未知则使用首字母大写的角色名
@@ -399,6 +398,10 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
 
     # 使用两个换行符来分隔不同的消息轮次
     final_prompt = "\n\n".join(combined_parts)
+    
+    system_prompt = "\n\n".join(system_prompts)
+    if system_prompt:
+        logger.info(f"[{req_id}] 提取到组合后的系统提示: '{system_prompt[:100]}...'")
     
     # 不再在提示末尾添加图片说明，图片标记已直接嵌入在对应消息中
     
