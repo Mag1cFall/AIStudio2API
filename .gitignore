@@ -142,6 +142,7 @@ errors/
 __pycache__/
 *.py[cod]
 *$py.class
+1.py
 
 # Python Libraries
 *.egg-info/
