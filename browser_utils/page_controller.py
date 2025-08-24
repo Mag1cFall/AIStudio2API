@@ -18,7 +18,8 @@ from config import (
     PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR,
     EDIT_MESSAGE_BUTTON_SELECTOR,USE_URL_CONTEXT_SELECTOR,UPLOAD_BUTTON_SELECTOR,
     SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR,
-    GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR
+    GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR,
+    SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR
 )
 from config import (
     TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR,
@@ -50,6 +51,36 @@ class PageController:
         """检查客户端是否断开连接或请求是否被取消。"""
         if check_client_disconnected(stage):
             raise ClientDisconnectedError(f"[{self.req_id}] Client disconnected or request cancelled at stage: {stage}")
+
+    async def continuously_handle_skip_button(self, stop_event: asyncio.Event, check_client_disconnected: Callable):
+        """在后台持续监控并处理“跳过”按钮，直到收到停止信号。"""
+        self.logger.info(f"[{self.req_id}] 'Skip'按钮后台监控任务已启动。")
+        while not stop_event.is_set():
+            try:
+                skip_button_locator = self.page.locator(SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR)
+                # 使用短超时进行非阻塞检查
+                await expect_async(skip_button_locator).to_be_visible(timeout=1000)
+                
+                self.logger.info(f"[{self.req_id}] (监控) 检测到'Skip'按钮，尝试点击...")
+                try:
+                    await click_element(self.page, skip_button_locator, "Skip Preference Vote Button", self.req_id)
+                    self.logger.info(f"[{self.req_id}] (监控) 'Skip'按钮已成功点击。")
+                except Exception as click_err:
+                    self.logger.error(f"[{self.req_id}] (监控) 'Skip'按钮点击失败: {click_err}。即将刷新页面...")
+                    # 点击失败，刷新页面（导航到 new_chat）
+                    await self.clear_chat_history(check_client_disconnected)
+                    self.logger.info(f"[{self.req_id}] (监控) 页面已刷新。")
+
+            except TimeoutError:
+                # 按钮不可见，这是正常情况，继续检查
+                pass
+            except Exception as e:
+                if not stop_event.is_set():
+                    self.logger.warning(f"[{self.req_id}] (监控) 处理'Skip'按钮时发生意外错误: {e}")
+            
+            # 等待一段时间再检查，避免CPU占用过高
+            await asyncio.sleep(2)
+        self.logger.info(f"[{self.req_id}] 'Skip'按钮后台监控任务已停止。")
 
     async def adjust_parameters(self, request_params: Dict[str, Any], page_params_cache: Dict[str, Any], params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: List[Dict[str, Any]], check_client_disconnected: Callable):
         """调整所有请求参数。"""

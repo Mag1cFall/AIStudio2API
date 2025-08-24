@@ -1085,6 +1085,7 @@ async def _process_request_refactored(
     
     submit_button_locator = page.locator(SUBMIT_BUTTON_SELECTOR) if page else None
     completion_event = None
+    skip_button_monitor_task = None
     
     try:
         await _validate_page_status(req_id, context, check_client_disconnected)
@@ -1116,6 +1117,12 @@ async def _process_request_refactored(
 
         await page_controller.submit_prompt(prepared_prompt, image_list, check_client_disconnected)
         
+        # 启动 "Skip" 按钮的后台监控任务
+        skip_button_stop_event = asyncio.Event()
+        skip_button_monitor_task = asyncio.create_task(
+            page_controller.continuously_handle_skip_button(skip_button_stop_event, check_client_disconnected)
+        )
+
         # 响应处理仍然需要在这里，因为它决定了是流式还是非流式，并设置future
         response_result = await _handle_response_processing(
             req_id, request, page, context, result_future, submit_button_locator, check_client_disconnected, disconnect_check_task
@@ -1145,6 +1152,17 @@ async def _process_request_refactored(
         if not result_future.done():
             result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Unexpected server error: {e}"))
     finally:
+        # 停止 "Skip" 按钮监控任务
+        if 'skip_button_stop_event' in locals() and skip_button_stop_event:
+            skip_button_stop_event.set()
+        if skip_button_monitor_task:
+            try:
+                await asyncio.wait_for(skip_button_monitor_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                context['logger'].warning(f"[{req_id}] 'Skip' 按钮监控任务关闭超时。")
+            except Exception as e:
+                context['logger'].error(f"[{req_id}] 'Skip' 按钮监控任务清理时发生错误: {e}")
+
         # 从请求管理器中注销请求
         request_manager.unregister_request(req_id)
         

@@ -13,6 +13,7 @@ SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button'
 CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.primary:has-text("Continue")'
 UPLOAD_BUTTON_SELECTOR = 'button[aria-label="Upload File"]'
+SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR = 'button[data-test-id="skip-button"][aria-label="Skip preference vote"]'
 
 # --- 响应相关选择器 ---
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
