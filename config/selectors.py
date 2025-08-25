@@ -44,7 +44,8 @@ MAT_CHIP_REMOVE_BUTTON_SELECTOR = 'mat-chip-set mat-chip-row button[aria-label*=
 TOP_P_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Top P"]]//input[@type="number"]'
 TEMPERATURE_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Temperature"]]//input[@type="number"]'
 USE_URL_CONTEXT_SELECTOR = 'button[aria-label="Browse the url context"]'
-SET_THINKING_BUDGET_TOGGLE_SELECTOR = 'button[aria-label="Toggle thinking budget between auto and manual"]'
+THINKING_MODE_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="enable-thinking"] button'
+SET_THINKING_BUDGET_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="manual-budget"] button'
 # Thinking budget slider input
 THINKING_BUDGET_INPUT_SELECTOR = '//div[contains(@class, "settings-item") and .//p[normalize-space()="Set thinking budget"]]/following-sibling::div//input[@type="number"]'
 # --- Google Search Grounding ---
@@ -53,3 +54,29 @@ GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR = 'div[data-test-id="searchAsAToolT
 # --- 系统指令 ---
 SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR = 'button[aria-label="System instructions"]'
 SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR = 'textarea[aria-label="System instructions"]'
+
+# --- 模型选择器 ---
+# 新版界面模型选择器（优先尝试）
+MODEL_SELECTOR_CARD_TITLE = '.model-selector-card .title'
+MODEL_SELECTOR_CARD_NAME = '[data-test-id="model-name"]'
+MODEL_SELECTOR_CARD_SUBTITLE = '.model-selector-card .subtitle'
+
+# 旧版界面模型选择器（备用）
+MODEL_SELECTOR_LEGACY_PRIMARY = 'mat-select[data-test-ms-model-selector] .model-option-content span'
+MODEL_SELECTOR_LEGACY_FALLBACK = 'mat-select[data-test-ms-model-selector] span'
+MODEL_SELECTOR_LEGACY_GENERIC = '[data-test-ms-model-selector] span'
+MODEL_SELECTOR_BUTTON_SPAN = 'button[data-test-ms-model-selector] span'
+MODEL_OPTION_CONTENT_SPAN = '.model-option-content span'
+
+# 模型选择器列表（按优先级排序）
+MODEL_SELECTORS_LIST = [
+    MODEL_SELECTOR_CARD_TITLE,
+    MODEL_SELECTOR_CARD_NAME,
+    MODEL_SELECTOR_CARD_SUBTITLE,
+    MODEL_SELECTOR_LEGACY_PRIMARY,
+    MODEL_SELECTOR_LEGACY_FALLBACK,
+    MODEL_SELECTOR_LEGACY_GENERIC,
+    '.model-selector span',
+    MODEL_SELECTOR_BUTTON_SPAN,
+    MODEL_OPTION_CONTENT_SPAN
+]

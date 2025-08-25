@@ -428,13 +428,25 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             logger.info("-> ✅ 核心输入区域可见。")
             
-            model_name_locator = found_page.locator('mat-select[data-test-ms-model-selector] .model-option-content span')
+            # 尝试获取模型名称（可选，失败不影响初始化）
             try:
-                model_name_on_page = await model_name_locator.first.inner_text(timeout=5000)
-                logger.info(f"-> 🤖 页面检测到的当前模型: {model_name_on_page}")
-            except PlaywrightAsyncError as e:
-                logger.error(f"获取模型名称时出错 (model_name_locator): {e}")
-                raise
+                from config.selectors import MODEL_SELECTORS_LIST
+                
+                model_name_on_page = None
+                for selector in MODEL_SELECTORS_LIST:
+                    try:
+                        model_name_locator = found_page.locator(selector)
+                        model_name_on_page = await model_name_locator.first.inner_text(timeout=2000)
+                        logger.info(f"-> 🤖 页面检测到的当前模型: {model_name_on_page} (选择器: {selector})")
+                        break
+                    except PlaywrightAsyncError:
+                        continue
+                
+                if not model_name_on_page:
+                    logger.warning("-> ⚠️ 无法获取模型名称，但不影响初始化继续")
+                    
+            except Exception as e:
+                logger.warning(f"-> ⚠️ 获取模型名称时发生意外错误: {e}，但不影响初始化继续")
             
             result_page_instance = found_page
             result_page_ready = True

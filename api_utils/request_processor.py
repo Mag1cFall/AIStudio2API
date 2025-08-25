@@ -425,7 +425,13 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
         try:
             completion_event = Event()
             
-            async def create_stream_generator_from_helper(event_to_set: Event, task_to_cancel: Optional[asyncio.Task]) -> AsyncGenerator[str, None]:
+            async def create_stream_generator_from_helper(event_to_set: Event, task_to_cancel: Optional[asyncio.Task], page_controller: PageController) -> AsyncGenerator[str, None]:
+                # --- Skip Button Monitor ---
+                skip_button_stop_event = asyncio.Event()
+                skip_monitor_task = asyncio.create_task(
+                    page_controller.continuously_handle_skip_button(skip_button_stop_event, check_client_disconnected)
+                )
+
                 last_reason_pos = 0
                 last_body_pos = 0
                 model_name_for_stream = current_ai_studio_model_id or MODEL_NAME
@@ -681,6 +687,17 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                     except Exception:
                         pass  # 如果无法发送错误信息，继续处理结束逻辑
                 finally:
+                    # --- Stop Skip Button Monitor ---
+                    logger.info(f"[{req_id}] 流式生成器结束，正在停止 'Skip' 按钮监控...")
+                    skip_button_stop_event.set()
+                    try:
+                        await asyncio.wait_for(skip_monitor_task, timeout=2.0)
+                        logger.info(f"[{req_id}] 'Skip' 按钮监控任务已成功清理。")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{req_id}] 'Skip' 按钮监控任务关闭超时。")
+                    except Exception as e_clean_skip:
+                        logger.error(f"[{req_id}] 清理 'Skip' 按钮监控任务时出错: {e_clean_skip}")
+
                     # 计算usage统计
                     try:
                         usage_stats = calculate_usage_stats(
@@ -737,7 +754,8 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                     else:
                         logger.info(f"[{req_id}] ✅ 监控任务无需取消（可能已完成或不存在）")
 
-            stream_gen_func = create_stream_generator_from_helper(completion_event, disconnect_check_task)
+            page_controller = PageController(context['page'], logger, req_id)
+            stream_gen_func = create_stream_generator_from_helper(completion_event, disconnect_check_task, page_controller)
             if not result_future.done():
                 result_future.set_result(StreamingResponse(stream_gen_func, media_type="text/event-stream"))
             else:
@@ -880,10 +898,16 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
         async def create_response_stream_generator():
             # 数据接收状态标记
             data_receiving = False
+            page_controller = PageController(page, logger, req_id)
+
+            # --- Skip Button Monitor ---
+            skip_button_stop_event = asyncio.Event()
+            skip_monitor_task = asyncio.create_task(
+                page_controller.continuously_handle_skip_button(skip_button_stop_event, check_client_disconnected)
+            )
 
             try:
                 # 使用PageController获取响应
-                page_controller = PageController(page, logger, req_id)
                 final_content = await page_controller.get_response(check_client_disconnected)
 
                 # 标记数据接收状态
@@ -964,6 +988,17 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                 except Exception:
                     pass  # 如果无法发送错误信息，继续处理结束逻辑
             finally:
+                # --- Stop Skip Button Monitor ---
+                logger.info(f"[{req_id}] Playwright流式生成器结束，正在停止 'Skip' 按钮监控...")
+                skip_button_stop_event.set()
+                try:
+                    await asyncio.wait_for(skip_monitor_task, timeout=2.0)
+                    logger.info(f"[{req_id}] Playwright 'Skip' 按钮监控任务已成功清理。")
+                except asyncio.TimeoutError:
+                    logger.warning(f"[{req_id}] Playwright 'Skip' 按钮监控任务关闭超时。")
+                except Exception as e_clean_skip:
+                    logger.error(f"[{req_id}] 清理 Playwright 'Skip' 按钮监控任务时出错: {e_clean_skip}")
+
                 # 确保事件被设置
                 if not completion_event.is_set():
                     completion_event.set()
@@ -1085,7 +1120,6 @@ async def _process_request_refactored(
     
     submit_button_locator = page.locator(SUBMIT_BUTTON_SELECTOR) if page else None
     completion_event = None
-    skip_button_monitor_task = None
     
     try:
         await _validate_page_status(req_id, context, check_client_disconnected)
@@ -1117,12 +1151,6 @@ async def _process_request_refactored(
 
         await page_controller.submit_prompt(prepared_prompt, image_list, check_client_disconnected)
         
-        # 启动 "Skip" 按钮的后台监控任务
-        skip_button_stop_event = asyncio.Event()
-        skip_button_monitor_task = asyncio.create_task(
-            page_controller.continuously_handle_skip_button(skip_button_stop_event, check_client_disconnected)
-        )
-
         # 响应处理仍然需要在这里，因为它决定了是流式还是非流式，并设置future
         response_result = await _handle_response_processing(
             req_id, request, page, context, result_future, submit_button_locator, check_client_disconnected, disconnect_check_task
@@ -1152,17 +1180,6 @@ async def _process_request_refactored(
         if not result_future.done():
             result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Unexpected server error: {e}"))
     finally:
-        # 停止 "Skip" 按钮监控任务
-        if 'skip_button_stop_event' in locals() and skip_button_stop_event:
-            skip_button_stop_event.set()
-        if skip_button_monitor_task:
-            try:
-                await asyncio.wait_for(skip_button_monitor_task, timeout=2.0)
-            except asyncio.TimeoutError:
-                context['logger'].warning(f"[{req_id}] 'Skip' 按钮监控任务关闭超时。")
-            except Exception as e:
-                context['logger'].error(f"[{req_id}] 'Skip' 按钮监控任务清理时发生错误: {e}")
-
         # 从请求管理器中注销请求
         request_manager.unregister_request(req_id)
         

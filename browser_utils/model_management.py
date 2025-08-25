@@ -280,17 +280,33 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 page_display_match = True
             else:
                 try:
-                    model_name_locator = page.locator('mat-select[data-test-ms-model-selector] .model-option-content span')
-                    actual_displayed_model_name_on_page_raw = await model_name_locator.first.inner_text(timeout=5000)
-                    actual_displayed_model_name_on_page = actual_displayed_model_name_on_page_raw.strip()
-                    normalized_actual_display = actual_displayed_model_name_on_page.lower()
-                    normalized_expected_display = expected_display_name_for_target_id.strip().lower()
+                    from config.selectors import MODEL_SELECTORS_LIST
                     
-                    if normalized_actual_display == normalized_expected_display:
-                        page_display_match = True
-                        logger.info(f"[{req_id}] ✅ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 一致。")
+                    actual_displayed_model_name_on_page = None
+                    actual_displayed_model_name_on_page_raw = "无法读取"
+                    
+                    # 尝试多个选择器获取模型名称
+                    for selector in MODEL_SELECTORS_LIST:
+                        try:
+                            model_name_locator = page.locator(selector)
+                            actual_displayed_model_name_on_page_raw = await model_name_locator.first.inner_text(timeout=2000)
+                            actual_displayed_model_name_on_page = actual_displayed_model_name_on_page_raw.strip()
+                            logger.info(f"[{req_id}] 使用选择器 '{selector}' 成功获取模型名称: '{actual_displayed_model_name_on_page}'")
+                            break
+                        except Exception:
+                            continue
+                    
+                    if actual_displayed_model_name_on_page:
+                        normalized_actual_display = actual_displayed_model_name_on_page.lower()
+                        normalized_expected_display = expected_display_name_for_target_id.strip().lower()
+                        
+                        if normalized_actual_display == normalized_expected_display:
+                            page_display_match = True
+                            logger.info(f"[{req_id}] ✅ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 一致。")
+                        else:
+                            logger.error(f"[{req_id}] ❌ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 不一致。(Raw page: '{actual_displayed_model_name_on_page_raw}')")
                     else:
-                        logger.error(f"[{req_id}] ❌ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 不一致。(Raw page: '{actual_displayed_model_name_on_page_raw}')")
+                        logger.error(f"[{req_id}] ❌ 无法从页面获取模型名称")
                 except Exception as e_disp:
                     logger.warning(f"[{req_id}] 读取页面显示的当前模型名称时出错: {e_disp}。将无法验证页面显示。")
             
@@ -306,10 +322,25 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         current_displayed_name_for_revert_stripped = "无法读取"
         
         try:
-            model_name_locator_revert = page.locator('mat-select[data-test-ms-model-selector] .model-option-content span')
-            current_displayed_name_for_revert_raw = await model_name_locator_revert.first.inner_text(timeout=5000)
-            current_displayed_name_for_revert_stripped = current_displayed_name_for_revert_raw.strip()
-            logger.info(f"[{req_id}] 恢复：页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')")
+            from config.selectors import MODEL_SELECTORS_LIST
+            
+            current_displayed_name_for_revert_raw = "无法读取"
+            current_displayed_name_for_revert_stripped = "无法读取"
+            
+            # 尝试多个选择器获取当前模型名称用于恢复
+            for selector in MODEL_SELECTORS_LIST:
+                try:
+                    model_name_locator_revert = page.locator(selector)
+                    current_displayed_name_for_revert_raw = await model_name_locator_revert.first.inner_text(timeout=2000)
+                    current_displayed_name_for_revert_stripped = current_displayed_name_for_revert_raw.strip()
+                    logger.info(f"[{req_id}] 恢复：使用选择器 '{selector}' 获取页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')")
+                    break
+                except Exception:
+                    continue
+            
+            if current_displayed_name_for_revert_stripped == "无法读取":
+                logger.warning(f"[{req_id}] 恢复：所有选择器都无法获取页面当前显示模型名称")
+                
         except Exception as e_read_disp_revert:
             logger.warning(f"[{req_id}] 恢复：读取页面当前显示模型名称失败: {e_read_disp_revert}。将尝试回退到原始localStorage。")
             if original_prefs_str:
@@ -529,10 +560,25 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool = Fals
     
     try:
         logger.info("   尝试从页面显示元素读取当前模型名称...")
-        model_name_locator = page.locator('mat-select[data-test-ms-model-selector] .model-option-content span')
-        displayed_model_name_from_page_raw = await model_name_locator.first.inner_text(timeout=7000)
-        displayed_model_name = displayed_model_name_from_page_raw.strip()
-        logger.info(f"   页面当前显示模型名称 (原始: '{displayed_model_name_from_page_raw}', 清理后: '{displayed_model_name}')")
+        from config.selectors import MODEL_SELECTORS_LIST
+        
+        displayed_model_name = None
+        displayed_model_name_from_page_raw = "无法读取"
+        
+        # 尝试多个选择器获取模型名称
+        for selector in MODEL_SELECTORS_LIST:
+            try:
+                model_name_locator = page.locator(selector)
+                displayed_model_name_from_page_raw = await model_name_locator.first.inner_text(timeout=3000)
+                displayed_model_name = displayed_model_name_from_page_raw.strip()
+                logger.info(f"   使用选择器 '{selector}' 成功获取页面当前显示模型名称 (原始: '{displayed_model_name_from_page_raw}', 清理后: '{displayed_model_name}')")
+                break
+            except Exception:
+                continue
+        
+        if not displayed_model_name:
+            logger.warning("   所有选择器都无法获取页面显示的模型名称")
+            displayed_model_name = "未知模型"
         
         found_model_id_from_display = None
         if model_list_fetch_event and not model_list_fetch_event.is_set():
