@@ -1,10 +1,6 @@
-"""
-FastAPI 依赖项模块
-"""
 import logging
 from asyncio import Queue, Lock, Event
 from typing import Dict, Any, List, Set
-
 from fastapi import Request
 
 def get_logger() -> logging.Logger:
@@ -29,12 +25,7 @@ def get_worker_task():
 
 def get_server_state() -> Dict[str, Any]:
     from server import is_initializing, is_playwright_ready, is_browser_connected, is_page_ready
-    return {
-        "is_initializing": is_initializing,
-        "is_playwright_ready": is_playwright_ready,
-        "is_browser_connected": is_browser_connected,
-        "is_page_ready": is_page_ready,
-    }
+    return {'is_initializing': is_initializing, 'is_playwright_ready': is_playwright_ready, 'is_browser_connected': is_browser_connected, 'is_page_ready': is_page_ready}
 
 def get_page_instance():
     from server import page_instance
