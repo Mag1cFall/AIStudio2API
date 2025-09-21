@@ -10,8 +10,7 @@ INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 
 # --- 按钮选择器 ---
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button'
-CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
-CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.primary:has-text("Continue")'
+INSERT_BUTTON_SELECTOR = 'button[aria-label="Insert assets such as images, videos, files, or audio"]'
 UPLOAD_BUTTON_SELECTOR = 'button[aria-label="Upload File"]'
 SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR = 'button[data-test-id="skip-button"][aria-label="Skip preference vote"]'
 
@@ -28,13 +27,13 @@ ZERO_STATE_SELECTOR = 'ms-zero-state'
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
 
 # --- 编辑相关选择器 ---
-EDIT_MESSAGE_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button'
+EDIT_MESSAGE_BUTTON_SELECTOR = 'button[aria-label="Edit"].toggle-edit-button'
 MESSAGE_TEXTAREA_SELECTOR = 'ms-chat-turn:last-child ms-text-chunk ms-autosize-textarea'
-FINISH_EDIT_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button[aria-label="Stop editing"]'
+FINISH_EDIT_BUTTON_SELECTOR = 'button[aria-label="Stop editing"].toggle-edit-button'
 
 # --- 菜单和复制相关选择器 ---
-MORE_OPTIONS_BUTTON_SELECTOR = 'div.actions-container div ms-chat-turn-options div > button'
-COPY_MARKDOWN_BUTTON_SELECTOR = 'button.mat-mdc-menu-item:nth-child(4)'
+MORE_OPTIONS_BUTTON_SELECTOR = 'button[aria-label="Open options"]'
+COPY_MARKDOWN_BUTTON_SELECTOR = 'button[role="menuitem"]:has-text("Copy markdown")'
 COPY_MARKDOWN_BUTTON_SELECTOR_ALT = 'div[role="menu"] button:has-text("Copy Markdown")'
 
 # --- 设置相关选择器 ---

@@ -544,8 +544,8 @@ async def get_response_via_edit_button(
     """通过编辑按钮获取响应"""
     logger.info(f"[{req_id}] (Helper) 尝试通过编辑按钮获取响应...")
     last_message_container = page.locator('ms-chat-turn').last
-    edit_button = last_message_container.get_by_label("Edit")
-    finish_edit_button = last_message_container.get_by_label("Stop editing")
+    edit_button = last_message_container.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
+    finish_edit_button = last_message_container.locator(FINISH_EDIT_BUTTON_SELECTOR)
     autosize_textarea_locator = last_message_container.locator('ms-autosize-textarea')
     actual_textarea_locator = autosize_textarea_locator.locator('textarea')
     
@@ -655,8 +655,8 @@ async def get_response_via_copy_button(
     """通过复制按钮获取响应"""
     logger.info(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...")
     last_message_container = page.locator('ms-chat-turn').last
-    more_options_button = last_message_container.get_by_label("Open options")
-    copy_markdown_button = page.get_by_role("menuitem", name="Copy markdown")
+    more_options_button = last_message_container.locator(MORE_OPTIONS_BUTTON_SELECTOR)
+    copy_markdown_button = page.locator(COPY_MARKDOWN_BUTTON_SELECTOR)
     
     try:
         logger.info(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...")
