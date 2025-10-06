@@ -335,7 +335,7 @@ class PageController:
             self.logger.info(f'[{self.req_id}] 检查并调整温度设置...')
             clamped_temp = max(0.0, min(2.0, temperature))
             if clamped_temp != temperature:
-                self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围 [0, 2]，已调整为 {clamped_temp}')
+                self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
             cached_temp = page_params_cache.get('temperature')
             if cached_temp is not None and abs(cached_temp - clamped_temp) < 0.001:
                 self.logger.info(f'[{self.req_id}] 温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 一致。跳过页面交互。')
@@ -486,7 +486,7 @@ class PageController:
         self.logger.info(f'[{self.req_id}] 检查并调整 Top P 设置...')
         clamped_top_p = max(0.0, min(1.0, top_p))
         if abs(clamped_top_p - top_p) > 1e-09:
-            self.logger.warning(f'[{self.req_id}] 请求的 Top P {top_p} 超出范围 [0, 1]，已调整为 {clamped_top_p}')
+            self.logger.warning(f'[{self.req_id}] 请求的 Top P {top_p} 超出范围，已调整为 {clamped_top_p}')
         top_p_input_locator = self.page.locator(TOP_P_INPUT_SELECTOR)
         try:
             await expect_async(top_p_input_locator).to_be_visible(timeout=5000)
@@ -557,41 +557,115 @@ class PageController:
             await save_error_snapshot(f'clear_chat_verify_fail_{self.req_id}')
             self.logger.warning(f'[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。')
 
+    async def _write_image_to_clipboard(self, image_data: str, image_mime_type: str):
+        """将base64编码的图片写入浏览器的剪贴板，自动转换不支持的格式为PNG。"""
+        self.logger.info(f"[{self.req_id}] 正在将图片 ({image_mime_type}) 写入剪贴板...")
+        script = """
+        async ([base64Data, mimeType]) => {
+            try {
+                let blob = await fetch(`data:${mimeType};base64,${base64Data}`).then(res => res.blob());
+
+                // 检查浏览器是否直接支持写入此类型
+                try {
+                    const data = [new ClipboardItem({ [mimeType]: blob })];
+                    await navigator.clipboard.write(data);
+                    console.log(`[AI Studio Enhancements] 图片已作为 ${mimeType} 成功写入剪贴板。`);
+                    return { success: true };
+                } catch (err) {
+                    console.warn(`[AI Studio Enhancements] 直接写入 ${mimeType} 失败: ${err.message}. 尝试转换为 PNG...`);
+                    
+                    // 转换逻辑: 创建Image -> 绘制到Canvas -> 从Canvas导出为PNG Blob
+                    const image = new Image();
+                    const imageUrl = `data:${mimeType};base64,${base64Data}`;
+                    
+                    const imageLoaded = new Promise((resolve, reject) => {
+                        image.onload = resolve;
+                        image.onerror = reject;
+                        image.src = imageUrl;
+                    });
+                    
+                    await imageLoaded;
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.width = image.width;
+                    canvas.height = image.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(image, 0, 0);
+                    
+                    const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                    
+                    if (!pngBlob) {
+                        throw new Error('Canvas toBlob() failed to produce a blob.');
+                    }
+
+                    const pngData = [new ClipboardItem({ 'image/png': pngBlob })];
+                    await navigator.clipboard.write(pngData);
+                    console.log('[AI Studio Enhancements] 图片已成功转换为 PNG 并写入剪贴板。');
+                    return { success: true };
+                }
+            } catch (err) {
+                console.error('[AI Studio Enhancements] 写入剪贴板时出错:', err);
+                return { success: false, error: err.message };
+            }
+        }
+        """
+        result = await self.page.evaluate(script, [image_data, image_mime_type])
+        if not result or not result.get('success'):
+            error_message = result.get('error', '未知错误')
+            self.logger.error(f"[{self.req_id}] 无法将图片写入剪贴板: {error_message}")
+            raise Exception(f"无法将图片写入剪贴板: {error_message}")
+        self.logger.info(f"[{self.req_id}]  图片已成功写入剪贴板。")
+
+
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
-        """提交提示到页面，并处理文件上传。"""
+        """提交提示到页面，通过剪贴板粘贴处理文件上传。"""
         self.logger.info(f'[{self.req_id}] 填充并提交提示 ({len(prompt)} chars)...')
         prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
         autosize_wrapper_locator = self.page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
         submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, 'After Input Visible')
+            await self._check_disconnect(check_client_disconnected, '输入框可见后')
+            if image_list:
+                self.logger.info(f"[{self.req_id}] 开始为 {len(image_list)} 张图片执行粘贴流程。")
+                for index, image_url in enumerate(image_list):
+                    self.logger.info(f"[{self.req_id}]  正在粘贴图片 {index + 1}/{len(image_list)}...")
+                    match = re.match('data:(image/\\w+);base64,(.*)', image_url)
+                    if not match:
+                        self.logger.warning(f"[{self.req_id}]  图片 {index + 1} 的 base64 格式无效，已跳过。")
+                        continue
+                    mime_type = match.group(1)
+                    b64_data = match.group(2)
+                    await self._write_image_to_clipboard(b64_data, mime_type)
+                    await prompt_textarea_locator.focus(timeout=3000)
+                    is_mac_str = await self.page.evaluate("() => navigator.platform")
+                    is_mac = 'mac' in is_mac_str.lower()
+                    modifier = 'Meta' if is_mac else 'Control'
+                    await self.page.keyboard.press(f'{modifier}+v')
+                    self.logger.info(f"[{self.req_id}]  已为图片 {index + 1} 发送粘贴命令。")
+                    await asyncio.sleep(1)
+                self.logger.info(f"[{self.req_id}] 所有图片已粘贴。正在验证上传...")
+                await self._verify_images_uploaded(len(image_list), check_client_disconnected)
             await prompt_textarea_locator.evaluate('(element, text) => { element.value = text; element.dispatchEvent(new Event("input", { bubbles: true })); }', prompt)
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
-            await self._check_disconnect(check_client_disconnected, 'After Input Fill')
-            
-            # Image upload logic is removed as per user request.
-            # The user is expected to upload images via client-side paste.
-            if image_list:
-                self.logger.warning(f'[{self.req_id}] The `image_list` parameter is deprecated. Images should be pasted on the client-side.')
-
+            await self._check_disconnect(check_client_disconnected, '输入框填充后')
             wait_timeout_ms_submit_enabled = 100000
             try:
-                await self._check_disconnect(check_client_disconnected, '填充提示后等待发送按钮启用 - 前置检查')
+                await self._check_disconnect(check_client_disconnected, '等待发送按钮启用前')
                 await expect_async(submit_button_locator).to_be_enabled(timeout=wait_timeout_ms_submit_enabled)
                 self.logger.info(f'[{self.req_id}]  发送按钮已启用。')
             except Exception as e_pw_enabled:
                 self.logger.error(f'[{self.req_id}]  等待发送按钮启用超时或错误: {e_pw_enabled}')
                 await save_error_snapshot(f'submit_button_enable_timeout_{self.req_id}')
                 raise
-            await self._check_disconnect(check_client_disconnected, 'After Submit Button Enabled')
+            await self._check_disconnect(check_client_disconnected, '发送按钮启用后')
             await asyncio.sleep(0.3)
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
                 self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
                 await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id)
                 self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
-            await self._check_disconnect(check_client_disconnected, 'After Submit')
+            await self._check_disconnect(check_client_disconnected, '提交后')
         except Exception as e_input_submit:
             self.logger.error(f'[{self.req_id}] 输入和提交过程中发生错误: {e_input_submit}')
             if not isinstance(e_input_submit, ClientDisconnectedError):
