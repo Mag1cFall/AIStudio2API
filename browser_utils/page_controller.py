@@ -563,60 +563,18 @@ class PageController:
         prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
         autosize_wrapper_locator = self.page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
         submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-        temp_files_to_upload = []
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, 'After Input Visible')
             await prompt_textarea_locator.evaluate('(element, text) => { element.value = text; element.dispatchEvent(new Event("input", { bubbles: true })); }', prompt)
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
             await self._check_disconnect(check_client_disconnected, 'After Input Fill')
+            
+            # Image upload logic is removed as per user request.
+            # The user is expected to upload images via client-side paste.
             if image_list:
-                self.logger.info(f'[{self.req_id}] 检测到 {len(image_list)} 个文件需要上传。')
-                await self._check_disconnect(check_client_disconnected, 'Before Image Upload')
-                local_file_paths = []
-                for idx, image_source in enumerate(image_list):
-                    if image_source.startswith('data:image'):
-                        try:
-                            match = re.match('data:image/(?P<type>\\w+);base64,(?P<data>.*)', image_source)
-                            if match:
-                                img_type = match.group('type')
-                                img_data = base64.b64decode(match.group('data'))
-                                with tempfile.NamedTemporaryFile(suffix=f'.{img_type}', delete=False, mode='wb') as temp_file:
-                                    temp_file.write(img_data)
-                                    temp_files_to_upload.append(temp_file.name)
-                                    local_file_paths.append(temp_file.name)
-                                self.logger.info(f'[{self.req_id}] 已将图片{idx + 1} data URI 转换为临时文件: {temp_file.name}')
-                            else:
-                                self.logger.warning(f'[{self.req_id}] 无法解析的 data URI 格式，已跳过。')
-                        except Exception as e_dec:
-                            self.logger.error(f'[{self.req_id}] 解码或保存 data URI 时出错: {e_dec}')
-                    else:
-                        local_file_paths.append(image_source)
-                if not local_file_paths:
-                    raise Exception('没有可用于上传的有效文件路径。')
-                insert_button_locator = self.page.locator(INSERT_BUTTON_SELECTOR)
-                upload_button_locator = self.page.locator(UPLOAD_BUTTON_SELECTOR)
-                try:
-                    await self._click_and_verify(insert_button_locator, upload_button_locator, 'Insert Assets Button', 'Upload File Button')
-                except ElementClickError as e:
-                    self.logger.error(f"[{self.req_id}] 'Insert Assets' 或 'Upload File' 按钮处理失败: {e}。将刷新会话并重试。")
-                    await self.clear_chat_history(check_client_disconnected)
-                    raise ElementClickError('Failed to open upload dialog, session refreshed.') from e
-                await self._check_disconnect(check_client_disconnected, 'Before File Upload')
-                async with self.page.expect_file_chooser(timeout=30000) as fc_info:
-                    await click_element(self.page, upload_button_locator, 'Upload File Button', self.req_id)
-                file_chooser = await fc_info.value
-                await file_chooser.set_files(local_file_paths)
-                self.logger.info(f'[{self.req_id}] 已将 {len(local_file_paths)} 个文件设置到文件选择器。')
-                copyright_ack_button = self.page.locator('button[aria-label="Agree to the copyright acknowledgement"]')
-                try:
-                    await click_element(self.page, copyright_ack_button, 'Copyright Acknowledgement Button', self.req_id)
-                    self.logger.info(f'[{self.req_id}] 已点击版权确认按钮。')
-                    await asyncio.sleep(0.5)
-                except (ElementClickError, TimeoutError):
-                    self.logger.info(f'[{self.req_id}] 未检测到版权确认按钮或点击失败，跳过。')
-                await self._verify_images_uploaded(len(local_file_paths), check_client_disconnected)
-                await self._check_disconnect(check_client_disconnected, 'After Image Upload Complete')
+                self.logger.warning(f'[{self.req_id}] The `image_list` parameter is deprecated. Images should be pasted on the client-side.')
+
             wait_timeout_ms_submit_enabled = 100000
             try:
                 await self._check_disconnect(check_client_disconnected, '填充提示后等待发送按钮启用 - 前置检查')
@@ -639,15 +597,6 @@ class PageController:
             if not isinstance(e_input_submit, ClientDisconnectedError):
                 await save_error_snapshot(f'input_submit_error_{self.req_id}')
             raise
-        finally:
-            if temp_files_to_upload:
-                self.logger.info(f'[{self.req_id}] 清理 {len(temp_files_to_upload)} 个临时文件...')
-                for temp_path in temp_files_to_upload:
-                    try:
-                        os.remove(temp_path)
-                        self.logger.info(f'[{self.req_id}]   - 已移除: {temp_path}')
-                    except Exception as e_clean:
-                        self.logger.warning(f'[{self.req_id}]   - 移除临时文件 {temp_path} 失败: {e_clean}')
 
     async def _verify_images_uploaded(self, expected_count: int, check_client_disconnected: Callable):
         """强化验证图片是否成功上传到对话中"""
@@ -738,9 +687,30 @@ class PageController:
             pass
         raise Exception(f'图片上传验证失败：期望{expected_count}张图片，验证超时（{max_wait_time}秒）')
 
+    async def _verify_submission(self, prompt_textarea_locator: Locator, original_content: str) -> bool:
+        """Helper to verify if a submission was successful."""
+        try:
+            current_content = await prompt_textarea_locator.last.input_value(timeout=1500) or ''
+            if original_content and not current_content.strip():
+                self.logger.info(f'[{self.req_id}] Verification Method 1: Textarea cleared, submission successful.')
+                return True
+            submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+            if await submit_button_locator.is_disabled(timeout=1500):
+                self.logger.info(f'[{self.req_id}] Verification Method 2: Submit button is disabled, submission successful.')
+                return True
+            response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
+            if await response_container.count() > 0 and await response_container.last.is_visible(timeout=1000):
+                self.logger.info(f'[{self.req_id}] Verification Method 3: New response container detected, submission successful.')
+                return True
+        except Exception as verify_err:
+            self.logger.warning(f'[{self.req_id}] Could not confirm submission during verification: {type(verify_err).__name__}')
+            return False
+        return False
+
     async def _try_shortcut_submit(self, prompt_textarea_locator, check_client_disconnected: Callable) -> bool:
-        """尝试使用快捷键提交"""
+        """Tries multiple keyboard shortcuts to submit the prompt."""
         import os
+        self.logger.info(f'[{self.req_id}] Attempting to submit using keyboard shortcuts...')
         try:
             host_os_from_launcher = os.environ.get('HOST_OS_FOR_SHORTCUT')
             is_mac_determined = False
@@ -760,63 +730,28 @@ class PageController:
                         user_agent_data_platform = 'Other'
                 is_mac_determined = 'mac' in user_agent_data_platform.lower()
             shortcut_modifier = 'Meta' if is_mac_determined else 'Control'
-            shortcut_key = 'Enter'
-            self.logger.info(f'[{self.req_id}] 使用快捷键: {shortcut_modifier}+{shortcut_key}')
             await prompt_textarea_locator.focus(timeout=5000)
             await self._check_disconnect(check_client_disconnected, 'After Input Focus')
-            await asyncio.sleep(0.1)
-            original_content = ''
-            try:
-                original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
-            except Exception:
-                pass
-            try:
-                await self.page.keyboard.press(f'{shortcut_modifier}+{shortcut_key}')
-            except Exception:
-                await self.page.keyboard.down(shortcut_modifier)
-                await asyncio.sleep(0.05)
-                await self.page.keyboard.press(shortcut_key)
-                await asyncio.sleep(0.05)
-                await self.page.keyboard.up(shortcut_modifier)
-            await self._check_disconnect(check_client_disconnected, 'After Shortcut Press')
-            await asyncio.sleep(2.0)
-            submission_success = False
-            try:
-                current_content = await prompt_textarea_locator.last.input_value(timeout=2000) or ''
-                if original_content and (not current_content.strip()):
-                    self.logger.info(f'[{self.req_id}] 验证方法1: 输入框已清空，快捷键提交成功')
-                    submission_success = True
-                if not submission_success:
-                    submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-                    try:
-                        is_disabled = await submit_button_locator.is_disabled(timeout=2000)
-                        if is_disabled:
-                            self.logger.info(f'[{self.req_id}] 验证方法2: 提交按钮已禁用，快捷键提交成功')
-                            submission_success = True
-                    except Exception:
-                        pass
-                if not submission_success:
-                    try:
-                        response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
-                        container_count = await response_container.count()
-                        if container_count > 0:
-                            last_container = response_container.last
-                            if await last_container.is_visible(timeout=1000):
-                                self.logger.info(f'[{self.req_id}] 验证方法3: 检测到响应容器，快捷键提交成功')
-                                submission_success = True
-                    except Exception:
-                        pass
-            except Exception as verify_err:
-                self.logger.warning(f'[{self.req_id}] 快捷键提交验证过程出错: {verify_err}')
-                submission_success = True
-            if submission_success:
-                self.logger.info(f'[{self.req_id}]  快捷键提交成功')
+            original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
+            self.logger.info(f'[{self.req_id}]   - Attempting {shortcut_modifier}+Enter...')
+            await self.page.keyboard.press(f'{shortcut_modifier}+Enter')
+            await asyncio.sleep(1.5)
+            if await self._verify_submission(prompt_textarea_locator, original_content):
+                self.logger.info(f'[{self.req_id}]   ✅ Success with {shortcut_modifier}+Enter.')
                 return True
-            else:
-                self.logger.warning(f'[{self.req_id}]  快捷键提交验证失败')
-                return False
+            self.logger.warning(f'[{self.req_id}]   - {shortcut_modifier}+Enter submission failed verification.')
+            self.logger.info(f'[{self.req_id}]   - Attempting Enter...')
+            await prompt_textarea_locator.focus(timeout=5000)
+            await self.page.keyboard.press('Enter')
+            await asyncio.sleep(1.5)
+            if await self._verify_submission(prompt_textarea_locator, original_content):
+                self.logger.info(f'[{self.req_id}]   ✅ Success with Enter.')
+                return True
+            self.logger.warning(f'[{self.req_id}]   - Enter submission failed verification.')
+            self.logger.error(f'[{self.req_id}] All shortcut submission attempts failed.')
+            return False
         except Exception as shortcut_err:
-            self.logger.warning(f'[{self.req_id}] 快捷键提交失败: {shortcut_err}')
+            self.logger.error(f'[{self.req_id}] Exception during shortcut submission: {shortcut_err}')
             return False
 
     async def stop_generation(self, check_client_disconnected: Callable):
