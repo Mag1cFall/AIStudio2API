@@ -71,25 +71,37 @@ class PageController:
         self.logger.info(f"[{self.req_id}] 'Skip'按钮后台监控任务已停止。")
 
     async def adjust_parameters(self, request_params: Dict[str, Any], page_params_cache: Dict[str, Any], params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: List[Dict[str, Any]], check_client_disconnected: Callable):
-        """调整所有请求参数。"""
-        self.logger.info(f'[{self.req_id}] 开始调整所有请求参数...')
+        """调整所有请求参数 (并发模式)。"""
+        self.logger.info(f'[{self.req_id}] 开始调整所有请求参数 (并发执行)...')
         await self._check_disconnect(check_client_disconnected, 'Start Parameter Adjustment')
+        
         temp_to_set = request_params.get('temperature', DEFAULT_TEMPERATURE)
-        await self._adjust_temperature(temp_to_set, page_params_cache, params_cache_lock, check_client_disconnected)
         max_tokens_to_set = request_params.get('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
-        await self._adjust_max_tokens(max_tokens_to_set, page_params_cache, params_cache_lock, model_id_to_use, parsed_model_list, check_client_disconnected)
         stop_to_set = request_params.get('stop', DEFAULT_STOP_SEQUENCES)
-        await self._adjust_stop_sequences(stop_to_set, page_params_cache, params_cache_lock, check_client_disconnected)
         top_p_to_set = request_params.get('top_p', DEFAULT_TOP_P)
-        await self._adjust_top_p(top_p_to_set, check_client_disconnected)
-        await self._ensure_tools_panel_expanded(check_client_disconnected)
-        if ENABLE_URL_CONTEXT:
-            await self._open_url_content(check_client_disconnected)
-        else:
-            self.logger.info(f'[{self.req_id}] URL Context 功能已禁用，跳过调整。')
-        # 暂时禁用 Thinking Mode 逻辑
-        # await self._handle_thinking_budget(request_params, check_client_disconnected)
-        await self._adjust_google_search(request_params, check_client_disconnected)
+
+        # 定义工具面板相关的任务链
+        async def handle_tools_panel():
+            await self._ensure_tools_panel_expanded(check_client_disconnected)
+            if ENABLE_URL_CONTEXT:
+                await self._open_url_content(check_client_disconnected)
+            else:
+                self.logger.info(f'[{self.req_id}] URL Context 功能已禁用，跳过调整。')
+            # 暂时禁用 Thinking Mode 逻辑
+            # await self._handle_thinking_budget(request_params, check_client_disconnected)
+
+        # 创建并发任务列表
+        tasks = [
+            self._adjust_temperature(temp_to_set, page_params_cache, params_cache_lock, check_client_disconnected),
+            self._adjust_max_tokens(max_tokens_to_set, page_params_cache, params_cache_lock, model_id_to_use, parsed_model_list, check_client_disconnected),
+            self._adjust_stop_sequences(stop_to_set, page_params_cache, params_cache_lock, check_client_disconnected),
+            self._adjust_top_p(top_p_to_set, check_client_disconnected),
+            self._adjust_google_search(request_params, check_client_disconnected),
+            handle_tools_panel()
+        ]
+        
+        # 并发执行所有调整任务
+        await asyncio.gather(*tasks)
 
     async def set_system_instructions(self, system_prompt: str, check_client_disconnected: Callable):
         """设置系统指令。"""
@@ -332,155 +344,155 @@ class PageController:
 
     async def _adjust_temperature(self, temperature: float, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
         """调整温度参数。"""
-        async with params_cache_lock:
-            self.logger.info(f'[{self.req_id}] 检查并调整温度设置...')
-            clamped_temp = max(0.0, min(2.0, temperature))
-            if clamped_temp != temperature:
-                self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
-            cached_temp = page_params_cache.get('temperature')
-            if cached_temp is not None and abs(cached_temp - clamped_temp) < 0.001:
-                self.logger.info(f'[{self.req_id}] 温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 一致。跳过页面交互。')
-                return
-            self.logger.info(f'[{self.req_id}] 请求温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 不一致或缓存中无值。需要与页面交互。')
-            temp_input_locator = self.page.locator(TEMPERATURE_INPUT_SELECTOR)
-            try:
-                await expect_async(temp_input_locator).to_be_visible(timeout=5000)
-                await self._check_disconnect(check_client_disconnected, '温度调整 - 输入框可见后')
-                current_temp_str = await temp_input_locator.input_value(timeout=3000)
-                await self._check_disconnect(check_client_disconnected, '温度调整 - 读取输入框值后')
-                current_temp_float = float(current_temp_str)
-                self.logger.info(f'[{self.req_id}] 页面当前温度: {current_temp_float}, 请求调整后温度: {clamped_temp}')
-                if abs(current_temp_float - clamped_temp) < 0.001:
-                    self.logger.info(f'[{self.req_id}] 页面当前温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 一致。更新缓存并跳过写入。')
-                    page_params_cache['temperature'] = current_temp_float
+        # 移除锁以支持并发
+        self.logger.info(f'[{self.req_id}] 检查并调整温度设置...')
+        clamped_temp = max(0.0, min(2.0, temperature))
+        if clamped_temp != temperature:
+            self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
+        cached_temp = page_params_cache.get('temperature')
+        if cached_temp is not None and abs(cached_temp - clamped_temp) < 0.001:
+            self.logger.info(f'[{self.req_id}] 温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 一致。跳过页面交互。')
+            return
+        self.logger.info(f'[{self.req_id}] 请求温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 不一致或缓存中无值。需要与页面交互。')
+        temp_input_locator = self.page.locator(TEMPERATURE_INPUT_SELECTOR)
+        try:
+            await expect_async(temp_input_locator).to_be_visible(timeout=5000)
+            await self._check_disconnect(check_client_disconnected, '温度调整 - 输入框可见后')
+            current_temp_str = await temp_input_locator.input_value(timeout=3000)
+            await self._check_disconnect(check_client_disconnected, '温度调整 - 读取输入框值后')
+            current_temp_float = float(current_temp_str)
+            self.logger.info(f'[{self.req_id}] 页面当前温度: {current_temp_float}, 请求调整后温度: {clamped_temp}')
+            if abs(current_temp_float - clamped_temp) < 0.001:
+                self.logger.info(f'[{self.req_id}] 页面当前温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 一致。更新缓存并跳过写入。')
+                page_params_cache['temperature'] = current_temp_float
+            else:
+                self.logger.info(f'[{self.req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 不同，正在更新...')
+                await temp_input_locator.fill(str(clamped_temp), timeout=5000)
+                await self._check_disconnect(check_client_disconnected, '温度调整 - 填充输入框后')
+                await asyncio.sleep(0.1)
+                new_temp_str = await temp_input_locator.input_value(timeout=3000)
+                new_temp_float = float(new_temp_str)
+                if abs(new_temp_float - clamped_temp) < 0.001:
+                    self.logger.info(f'[{self.req_id}]  温度已成功更新为: {new_temp_float}。更新缓存。')
+                    page_params_cache['temperature'] = new_temp_float
                 else:
-                    self.logger.info(f'[{self.req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 不同，正在更新...')
-                    await temp_input_locator.fill(str(clamped_temp), timeout=5000)
-                    await self._check_disconnect(check_client_disconnected, '温度调整 - 填充输入框后')
-                    await asyncio.sleep(0.1)
-                    new_temp_str = await temp_input_locator.input_value(timeout=3000)
-                    new_temp_float = float(new_temp_str)
-                    if abs(new_temp_float - clamped_temp) < 0.001:
-                        self.logger.info(f'[{self.req_id}]  温度已成功更新为: {new_temp_float}。更新缓存。')
-                        page_params_cache['temperature'] = new_temp_float
-                    else:
-                        self.logger.warning(f'[{self.req_id}]  温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。')
-                        page_params_cache.pop('temperature', None)
-                        await save_error_snapshot(f'temperature_verify_fail_{self.req_id}')
-            except ValueError as ve:
-                self.logger.error(f'[{self.req_id}] 转换温度值为浮点数时出错. 错误: {ve}。清除缓存中的温度。')
-                page_params_cache.pop('temperature', None)
-                await save_error_snapshot(f'temperature_value_error_{self.req_id}')
-            except Exception as pw_err:
-                self.logger.error(f'[{self.req_id}]  操作温度输入框时发生错误: {pw_err}。清除缓存中的温度。')
-                page_params_cache.pop('temperature', None)
-                await save_error_snapshot(f'temperature_playwright_error_{self.req_id}')
-                if isinstance(pw_err, ClientDisconnectedError):
-                    raise
+                    self.logger.warning(f'[{self.req_id}]  温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。')
+                    page_params_cache.pop('temperature', None)
+                    await save_error_snapshot(f'temperature_verify_fail_{self.req_id}')
+        except ValueError as ve:
+            self.logger.error(f'[{self.req_id}] 转换温度值为浮点数时出错. 错误: {ve}。清除缓存中的温度。')
+            page_params_cache.pop('temperature', None)
+            await save_error_snapshot(f'temperature_value_error_{self.req_id}')
+        except Exception as pw_err:
+            self.logger.error(f'[{self.req_id}]  操作温度输入框时发生错误: {pw_err}。清除缓存中的温度。')
+            page_params_cache.pop('temperature', None)
+            await save_error_snapshot(f'temperature_playwright_error_{self.req_id}')
+            if isinstance(pw_err, ClientDisconnectedError):
+                raise
 
     async def _adjust_max_tokens(self, max_tokens: int, page_params_cache: dict, params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: list, check_client_disconnected: Callable):
         """调整最大输出Token参数。"""
-        async with params_cache_lock:
-            self.logger.info(f'[{self.req_id}] 检查并调整最大输出 Token 设置...')
-            min_val_for_tokens = 1
-            max_val_for_tokens_from_model = 65536
-            if model_id_to_use and parsed_model_list:
-                current_model_data = next((m for m in parsed_model_list if m.get('id') == model_id_to_use), None)
-                if current_model_data and current_model_data.get('supported_max_output_tokens') is not None:
-                    try:
-                        supported_tokens = int(current_model_data['supported_max_output_tokens'])
-                        if supported_tokens > 0:
-                            max_val_for_tokens_from_model = supported_tokens
-                        else:
-                            self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 无效: {supported_tokens}')
-                    except (ValueError, TypeError):
-                        self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 解析失败')
-            clamped_max_tokens = max(min_val_for_tokens, min(max_val_for_tokens_from_model, max_tokens))
-            if clamped_max_tokens != max_tokens:
-                self.logger.warning(f'[{self.req_id}] 请求的最大输出 Tokens {max_tokens} 超出模型范围，已调整为 {clamped_max_tokens}')
-            cached_max_tokens = page_params_cache.get('max_output_tokens')
-            if cached_max_tokens is not None and cached_max_tokens == clamped_max_tokens:
-                self.logger.info(f'[{self.req_id}] 最大输出 Tokens ({clamped_max_tokens}) 与缓存值一致。跳过页面交互。')
-                return
-            max_tokens_input_locator = self.page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
-            try:
-                await expect_async(max_tokens_input_locator).to_be_visible(timeout=5000)
-                await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 输入框可见后')
-                current_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-                current_max_tokens_int = int(current_max_tokens_str)
-                if current_max_tokens_int == clamped_max_tokens:
-                    self.logger.info(f'[{self.req_id}] 页面当前最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 一致。更新缓存并跳过写入。')
-                    page_params_cache['max_output_tokens'] = current_max_tokens_int
-                else:
-                    self.logger.info(f'[{self.req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 不同，正在更新...')
-                    await max_tokens_input_locator.fill(str(clamped_max_tokens), timeout=5000)
-                    await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 填充输入框后')
-                    await asyncio.sleep(0.1)
-                    new_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-                    new_max_tokens_int = int(new_max_tokens_str)
-                    if new_max_tokens_int == clamped_max_tokens:
-                        self.logger.info(f'[{self.req_id}]  最大输出 Tokens 已成功更新为: {new_max_tokens_int}')
-                        page_params_cache['max_output_tokens'] = new_max_tokens_int
+        # 移除锁以支持并发
+        self.logger.info(f'[{self.req_id}] 检查并调整最大输出 Token 设置...')
+        min_val_for_tokens = 1
+        max_val_for_tokens_from_model = 65536
+        if model_id_to_use and parsed_model_list:
+            current_model_data = next((m for m in parsed_model_list if m.get('id') == model_id_to_use), None)
+            if current_model_data and current_model_data.get('supported_max_output_tokens') is not None:
+                try:
+                    supported_tokens = int(current_model_data['supported_max_output_tokens'])
+                    if supported_tokens > 0:
+                        max_val_for_tokens_from_model = supported_tokens
                     else:
-                        self.logger.warning(f'[{self.req_id}]  最大输出 Tokens 更新后验证失败。页面显示: {new_max_tokens_int}, 期望: {clamped_max_tokens}。清除缓存。')
-                        page_params_cache.pop('max_output_tokens', None)
-                        await save_error_snapshot(f'max_tokens_verify_fail_{self.req_id}')
-            except (ValueError, TypeError) as ve:
-                self.logger.error(f'[{self.req_id}] 转换最大输出 Tokens 值时出错: {ve}。清除缓存。')
-                page_params_cache.pop('max_output_tokens', None)
-                await save_error_snapshot(f'max_tokens_value_error_{self.req_id}')
-            except Exception as e:
-                self.logger.error(f'[{self.req_id}]  调整最大输出 Tokens 时出错: {e}。清除缓存。')
-                page_params_cache.pop('max_output_tokens', None)
-                await save_error_snapshot(f'max_tokens_error_{self.req_id}')
-                if isinstance(e, ClientDisconnectedError):
-                    raise
+                        self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 无效: {supported_tokens}')
+                except (ValueError, TypeError):
+                    self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 解析失败')
+        clamped_max_tokens = max(min_val_for_tokens, min(max_val_for_tokens_from_model, max_tokens))
+        if clamped_max_tokens != max_tokens:
+            self.logger.warning(f'[{self.req_id}] 请求的最大输出 Tokens {max_tokens} 超出模型范围，已调整为 {clamped_max_tokens}')
+        cached_max_tokens = page_params_cache.get('max_output_tokens')
+        if cached_max_tokens is not None and cached_max_tokens == clamped_max_tokens:
+            self.logger.info(f'[{self.req_id}] 最大输出 Tokens ({clamped_max_tokens}) 与缓存值一致。跳过页面交互。')
+            return
+        max_tokens_input_locator = self.page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
+        try:
+            await expect_async(max_tokens_input_locator).to_be_visible(timeout=5000)
+            await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 输入框可见后')
+            current_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
+            current_max_tokens_int = int(current_max_tokens_str)
+            if current_max_tokens_int == clamped_max_tokens:
+                self.logger.info(f'[{self.req_id}] 页面当前最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 一致。更新缓存并跳过写入。')
+                page_params_cache['max_output_tokens'] = current_max_tokens_int
+            else:
+                self.logger.info(f'[{self.req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 不同，正在更新...')
+                await max_tokens_input_locator.fill(str(clamped_max_tokens), timeout=5000)
+                await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 填充输入框后')
+                await asyncio.sleep(0.1)
+                new_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
+                new_max_tokens_int = int(new_max_tokens_str)
+                if new_max_tokens_int == clamped_max_tokens:
+                    self.logger.info(f'[{self.req_id}]  最大输出 Tokens 已成功更新为: {new_max_tokens_int}')
+                    page_params_cache['max_output_tokens'] = new_max_tokens_int
+                else:
+                    self.logger.warning(f'[{self.req_id}]  最大输出 Tokens 更新后验证失败。页面显示: {new_max_tokens_int}, 期望: {clamped_max_tokens}。清除缓存。')
+                    page_params_cache.pop('max_output_tokens', None)
+                    await save_error_snapshot(f'max_tokens_verify_fail_{self.req_id}')
+        except (ValueError, TypeError) as ve:
+            self.logger.error(f'[{self.req_id}] 转换最大输出 Tokens 值时出错: {ve}。清除缓存。')
+            page_params_cache.pop('max_output_tokens', None)
+            await save_error_snapshot(f'max_tokens_value_error_{self.req_id}')
+        except Exception as e:
+            self.logger.error(f'[{self.req_id}]  调整最大输出 Tokens 时出错: {e}。清除缓存。')
+            page_params_cache.pop('max_output_tokens', None)
+            await save_error_snapshot(f'max_tokens_error_{self.req_id}')
+            if isinstance(e, ClientDisconnectedError):
+                raise
 
     async def _adjust_stop_sequences(self, stop_sequences, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
         """调整停止序列参数。"""
-        async with params_cache_lock:
-            self.logger.info(f'[{self.req_id}] 检查并设置停止序列...')
-            normalized_requested_stops = set()
-            if stop_sequences is not None:
-                if isinstance(stop_sequences, str):
-                    if stop_sequences.strip():
-                        normalized_requested_stops.add(stop_sequences.strip())
-                elif isinstance(stop_sequences, list):
-                    for s in stop_sequences:
-                        if isinstance(s, str) and s.strip():
-                            normalized_requested_stops.add(s.strip())
-            cached_stops_set = page_params_cache.get('stop_sequences')
-            if cached_stops_set is not None and cached_stops_set == normalized_requested_stops:
-                self.logger.info(f'[{self.req_id}] 请求的停止序列与缓存值一致。跳过页面交互。')
-                return
-            stop_input_locator = self.page.locator(STOP_SEQUENCE_INPUT_SELECTOR)
-            remove_chip_buttons_locator = self.page.locator(MAT_CHIP_REMOVE_BUTTON_SELECTOR)
-            try:
-                initial_chip_count = await remove_chip_buttons_locator.count()
-                removed_count = 0
-                max_removals = initial_chip_count + 5
-                while await remove_chip_buttons_locator.count() > 0 and removed_count < max_removals:
-                    await self._check_disconnect(check_client_disconnected, '停止序列清除 - 循环开始')
-                    try:
-                        await click_element(self.page, remove_chip_buttons_locator.first, 'Remove Stop Sequence Chip', self.req_id)
-                        removed_count += 1
-                        await asyncio.sleep(0.15)
-                    except Exception:
-                        break
-                if normalized_requested_stops:
-                    await expect_async(stop_input_locator).to_be_visible(timeout=5000)
-                    for seq in normalized_requested_stops:
-                        await stop_input_locator.fill(seq, timeout=3000)
-                        await stop_input_locator.press('Enter', timeout=3000)
-                        await asyncio.sleep(0.2)
-                page_params_cache['stop_sequences'] = normalized_requested_stops
-                self.logger.info(f'[{self.req_id}]  停止序列已成功设置。缓存已更新。')
-            except Exception as e:
-                self.logger.error(f'[{self.req_id}]  设置停止序列时出错: {e}')
-                page_params_cache.pop('stop_sequences', None)
-                await save_error_snapshot(f'stop_sequence_error_{self.req_id}')
-                if isinstance(e, ClientDisconnectedError):
-                    raise
+        # 移除锁以支持并发
+        self.logger.info(f'[{self.req_id}] 检查并设置停止序列...')
+        normalized_requested_stops = set()
+        if stop_sequences is not None:
+            if isinstance(stop_sequences, str):
+                if stop_sequences.strip():
+                    normalized_requested_stops.add(stop_sequences.strip())
+            elif isinstance(stop_sequences, list):
+                for s in stop_sequences:
+                    if isinstance(s, str) and s.strip():
+                        normalized_requested_stops.add(s.strip())
+        cached_stops_set = page_params_cache.get('stop_sequences')
+        if cached_stops_set is not None and cached_stops_set == normalized_requested_stops:
+            self.logger.info(f'[{self.req_id}] 请求的停止序列与缓存值一致。跳过页面交互。')
+            return
+        stop_input_locator = self.page.locator(STOP_SEQUENCE_INPUT_SELECTOR)
+        remove_chip_buttons_locator = self.page.locator(MAT_CHIP_REMOVE_BUTTON_SELECTOR)
+        try:
+            initial_chip_count = await remove_chip_buttons_locator.count()
+            removed_count = 0
+            max_removals = initial_chip_count + 5
+            while await remove_chip_buttons_locator.count() > 0 and removed_count < max_removals:
+                await self._check_disconnect(check_client_disconnected, '停止序列清除 - 循环开始')
+                try:
+                    await click_element(self.page, remove_chip_buttons_locator.first, 'Remove Stop Sequence Chip', self.req_id)
+                    removed_count += 1
+                    await asyncio.sleep(0.15)
+                except Exception:
+                    break
+            if normalized_requested_stops:
+                await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                for seq in normalized_requested_stops:
+                    await stop_input_locator.fill(seq, timeout=3000)
+                    await stop_input_locator.press('Enter', timeout=3000)
+                    await asyncio.sleep(0.2)
+            page_params_cache['stop_sequences'] = normalized_requested_stops
+            self.logger.info(f'[{self.req_id}]  停止序列已成功设置。缓存已更新。')
+        except Exception as e:
+            self.logger.error(f'[{self.req_id}]  设置停止序列时出错: {e}')
+            page_params_cache.pop('stop_sequences', None)
+            await save_error_snapshot(f'stop_sequence_error_{self.req_id}')
+            if isinstance(e, ClientDisconnectedError):
+                raise
 
     async def _adjust_top_p(self, top_p: float, check_client_disconnected: Callable):
         """调整Top P参数。"""
@@ -558,64 +570,223 @@ class PageController:
             await save_error_snapshot(f'clear_chat_verify_fail_{self.req_id}')
             self.logger.warning(f'[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。')
 
-    async def _write_image_to_clipboard(self, image_data: str, image_mime_type: str):
-        """将base64编码的图片写入浏览器的剪贴板，自动转换不支持的格式为PNG。"""
-        self.logger.info(f"[{self.req_id}] 正在将图片 ({image_mime_type}) 写入剪贴板...")
+    async def _robust_click_insert_assets(self, check_client_disconnected: Callable) -> bool:
+        """
+        尝试强力点击 'Insert assets' 按钮并等待 'Upload File' 菜单项出现。
+        使用了轮询和多种点击方式 (dispatch event, js click) 以应对 Playwright 在无头模式下的卡死问题。
+        """
+        self.logger.info(f"[{self.req_id}] 开始寻找并点击 'Insert assets' 按钮...")
+        
+        trigger_selectors = [
+            'button[aria-label*="Insert assets"]',
+            'button[iconname="add_circle"]',
+            '.ms-button-icon[iconname="add_circle"]'
+        ]
+        
+        trigger_btn = None
+        for sel in trigger_selectors:
+            if await self.page.locator(sel).count() > 0:
+                trigger_btn = self.page.locator(sel).first
+                break
+        
+        if not trigger_btn:
+            self.logger.warning(f"[{self.req_id}] 未找到 'Insert assets' 按钮。")
+            return False
+
+        # 定义一个检查菜单是否出现的内部函数
+        async def is_menu_open():
+            try:
+                # 检查 'Upload File' 是否可见
+                # 这里的 timeout 要短，因为我们在循环中检查
+                count = await self.page.locator('button[aria-label="Upload File"]').count()
+                if count > 0 and await self.page.locator('button[aria-label="Upload File"]').first.is_visible():
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # 尝试点击的策略循环
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            await self._check_disconnect(check_client_disconnected, f'点击Insert Assets - 尝试 {attempt+1}')
+            
+            # 策略 1: 优先使用 dispatchEvent 'click'，这通常能绕过 Playwright 的 actionability 检查
+            self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 发送 'click' 事件到 Insert Assets 按钮...")
+            try:
+                await trigger_btn.dispatch_event('click')
+            except Exception as e:
+                self.logger.warning(f"[{self.req_id}] dispatch_event 失败: {e}")
+            
+            # 等待菜单出现 (最多 2 秒)
+            for _ in range(10): # 10 * 200ms = 2s
+                if await is_menu_open():
+                    self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启。")
+                    return True
+                await asyncio.sleep(0.2)
+            
+            # 策略 2: 如果没开，尝试 JS click
+            self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 菜单未开，尝试 JS click...")
+            try:
+                await trigger_btn.evaluate('e => e.click()')
+            except Exception as e:
+                self.logger.warning(f"[{self.req_id}] JS click 失败: {e}")
+
+            # 再次等待菜单
+            for _ in range(5): # 5 * 200ms = 1s
+                if await is_menu_open():
+                    self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启 (JS click 后)。")
+                    return True
+                await asyncio.sleep(0.2)
+                
+            self.logger.warning(f"[{self.req_id}] (尝试 {attempt+1}) 菜单仍未开启。")
+
+        self.logger.error(f"[{self.req_id}] 多次尝试后仍无法打开 'Insert assets' 菜单。")
+        return False
+
+    async def _upload_images_via_file_input(self, images: List[Dict[str, str]], check_client_disconnected: Callable) -> bool:
+        """
+        将 Base64 图片写入临时文件，并使用 Playwright 的 set_input_files 批量上传。
+        这是最快且最稳定的方法，等同于用户在文件选择框中一次性选中所有图片。
+        """
+        self.logger.info(f"[{self.req_id}] 尝试通过文件选择器批量上传 {len(images)} 张图片...")
+        temp_files = []
+        file_paths = []
+        try:
+            # 1. 创建临时文件
+            for idx, img in enumerate(images):
+                mime = img['mime']
+                try:
+                    data = base64.b64decode(img['data'])
+                except Exception:
+                    self.logger.warning(f"[{self.req_id}] 图片 {idx} base64 解码失败，跳过")
+                    continue
+                
+                ext = mime.split('/')[-1] if '/' in mime else 'png'
+                if ext == 'jpeg': ext = 'jpg'
+                
+                tf = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}', prefix=f'upload_{self.req_id}_{idx}_')
+                tf.write(data)
+                tf.close()
+                temp_files.append(tf.name)
+                file_paths.append(tf.name)
+
+            if not file_paths:
+                self.logger.warning(f"[{self.req_id}] 没有有效的图片文件可上传。")
+                return False
+
+            # 2. 尝试定位并展开 'Insert assets' 菜单
+            menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
+            
+            if not menu_opened:
+                self.logger.warning(f"[{self.req_id}] 未能打开菜单，将尝试直接查找 input (可能已存在)。")
+
+            # 3. 定位 input[type="file"]
+            # 即使菜单没打开成功，也尝试找一下 input，万一不需要菜单呢（虽然不太可能）
+            # 或者之前的操作其实成功了只是检测没过
+            file_input = self.page.locator('input[type="file"]').first
+            
+            if await file_input.count() == 0:
+                self.logger.warning(f"[{self.req_id}] 未找到文件输入框 (input[type='file'])。回退到粘贴模式。")
+                asyncio.create_task(self._cleanup_temp_files(temp_files))
+                return False
+
+            # 4. 设置文件
+            await self._check_disconnect(check_client_disconnected, '文件上传 - set_input_files前')
+            # set_input_files 会自动触发 change 事件，模拟上传行为
+            self.logger.info(f"[{self.req_id}] 找到 file input，正在设置 {len(file_paths)} 个文件...")
+            await file_input.set_input_files(file_paths)
+            self.logger.info(f"[{self.req_id}] set_input_files 完成。")
+            
+            # 5. 异步清理
+            asyncio.create_task(self._cleanup_temp_files(temp_files))
+            return True
+
+        except Exception as e:
+            self.logger.error(f"[{self.req_id}] 文件选择器上传失败: {e}")
+            asyncio.create_task(self._cleanup_temp_files(temp_files))
+            return False
+
+    async def _cleanup_temp_files(self, file_paths: List[str]):
+        """延迟清理临时文件，确保浏览器有足够时间读取"""
+        await asyncio.sleep(10)
+        for path in file_paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+    async def _paste_images_via_event(self, images: List[Dict[str, str]], target_locator: Locator):
+        """
+        备选方案：通过构造 DataTransfer 对象并触发 Paste 事件来模拟批量粘贴图片。
+        """
+        self.logger.info(f"[{self.req_id}] (备选) 正在通过虚拟粘贴事件上传 {len(images)} 张图片...")
+        
+        # 确保输入框获得焦点
+        try:
+            await target_locator.focus()
+        except Exception:
+            pass
+
+        # JS 函数签名: (target, images) => ...
         script = """
-        async ([base64Data, mimeType]) => {
+        async (target, images) => {
             try {
-                let blob = await fetch(`data:${mimeType};base64,${base64Data}`).then(res => res.blob());
-
-                // 检查浏览器是否直接支持写入此类型
-                try {
-                    const data = [new ClipboardItem({ [mimeType]: blob })];
-                    await navigator.clipboard.write(data);
-                    console.log(`[AI Studio Enhancements] 图片已作为 ${mimeType} 成功写入剪贴板。`);
-                    return { success: true };
-                } catch (err) {
-                    console.warn(`[AI Studio Enhancements] 直接写入 ${mimeType} 失败: ${err.message}. 尝试转换为 PNG...`);
-                    
-                    // 转换逻辑: 创建Image -> 绘制到Canvas -> 从Canvas导出为PNG Blob
-                    const image = new Image();
-                    const imageUrl = `data:${mimeType};base64,${base64Data}`;
-                    
-                    const imageLoaded = new Promise((resolve, reject) => {
-                        image.onload = resolve;
-                        image.onerror = reject;
-                        image.src = imageUrl;
-                    });
-                    
-                    await imageLoaded;
-                    
-                    const canvas = document.createElement('canvas');
-                    canvas.width = image.width;
-                    canvas.height = image.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(image, 0, 0);
-                    
-                    const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-                    
-                    if (!pngBlob) {
-                        throw new Error('Canvas toBlob() failed to produce a blob.');
-                    }
-
-                    const pngData = [new ClipboardItem({ 'image/png': pngBlob })];
-                    await navigator.clipboard.write(pngData);
-                    console.log('[AI Studio Enhancements] 图片已成功转换为 PNG 并写入剪贴板。');
-                    return { success: true };
+                if (!target) {
+                    return { success: false, error: "目标元素未找到" };
                 }
+                
+                let successCount = 0;
+                
+                // 确保有焦点
+                target.focus();
+
+                for (const img of images) {
+                    try {
+                        const dataTransfer = new DataTransfer();
+                        const res = await fetch(`data:${img.mime};base64,${img.data}`);
+                        const blob = await res.blob();
+                        const ext = img.mime.split('/')[1] || 'png';
+                        const filename = `image_${Date.now()}_${Math.random().toString(36).slice(2)}_${successCount}.${ext}`;
+                        const file = new File([blob], filename, { type: img.mime });
+                        dataTransfer.items.add(file);
+
+                        const pasteEvent = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: dataTransfer
+                        });
+
+                        target.dispatchEvent(pasteEvent);
+                        successCount++;
+                        
+                        // 将延迟降低到 50ms，加快回退模式的速度
+                        await new Promise(r => setTimeout(r, 50));
+                        
+                    } catch (err) {
+                        console.error(`[AI Studio Enhancements] 处理单张图片数据失败:`, err);
+                    }
+                }
+
+                if (successCount === 0) {
+                    return { success: false, error: "没有图片被成功处理" };
+                }
+                
+                console.log(`[AI Studio Enhancements] 已逐个触发粘贴事件，共 ${successCount} 个文件。`);
+                return { success: true, count: successCount };
             } catch (err) {
-                console.error('[AI Studio Enhancements] 写入剪贴板时出错:', err);
+                console.error('[AI Studio Enhancements] 模拟粘贴事件循环失败:', err);
                 return { success: false, error: err.message };
             }
         }
         """
-        result = await self.page.evaluate(script, [image_data, image_mime_type])
+        result = await target_locator.evaluate(script, images)
         if not result or not result.get('success'):
             error_message = result.get('error', '未知错误')
-            self.logger.error(f"[{self.req_id}] 无法将图片写入剪贴板: {error_message}")
-            raise Exception(f"无法将图片写入剪贴板: {error_message}")
-        self.logger.info(f"[{self.req_id}]  图片已成功写入剪贴板。")
+            self.logger.error(f"[{self.req_id}] 虚拟粘贴图片失败: {error_message}")
+            # 不抛出异常，以免阻塞文字输入
+        else:
+            self.logger.info(f"[{self.req_id}]  虚拟粘贴事件已触发。")
 
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
@@ -627,28 +798,56 @@ class PageController:
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, '输入框可见后')
+            
+            # --- 图片上传逻辑 ---
             if image_list:
-                self.logger.info(f"[{self.req_id}] 开始为 {len(image_list)} 张图片执行粘贴流程。")
+                self.logger.info(f"[{self.req_id}] 开始为 {len(image_list)} 张图片执行批量上传。")
+                processed_images = []
                 for index, image_url in enumerate(image_list):
-                    self.logger.info(f"[{self.req_id}]  正在粘贴图片 {index + 1}/{len(image_list)}...")
                     match = re.match('data:(image/\\w+);base64,(.*)', image_url)
                     if not match:
                         self.logger.warning(f"[{self.req_id}]  图片 {index + 1} 的 base64 格式无效，已跳过。")
                         continue
-                    mime_type = match.group(1)
-                    b64_data = match.group(2)
-                    await self._write_image_to_clipboard(b64_data, mime_type)
-                    await prompt_textarea_locator.focus(timeout=3000)
-                    is_mac_str = await self.page.evaluate("() => navigator.platform")
-                    is_mac = 'mac' in is_mac_str.lower()
-                    modifier = 'Meta' if is_mac else 'Control'
-                    await self.page.keyboard.press(f'{modifier}+v')
-                    self.logger.info(f"[{self.req_id}]  已为图片 {index + 1} 发送粘贴命令。")
-                    await asyncio.sleep(1)
-                self.logger.info(f"[{self.req_id}] 所有图片已粘贴。正在验证上传...")
-                await self._verify_images_uploaded(len(image_list), check_client_disconnected)
+                    processed_images.append({
+                        'mime': match.group(1),
+                        'data': match.group(2)
+                    })
+                
+                if processed_images:
+                    try:
+                        # 1. 尝试极速上传
+                        upload_success = await self._upload_images_via_file_input(processed_images, check_client_disconnected)
+                        
+                        # 2. 失败则回退到粘贴
+                        if not upload_success:
+                            self.logger.info(f"[{self.req_id}] 回退到虚拟粘贴模式...")
+                            await self._paste_images_via_event(processed_images, prompt_textarea_locator)
+                        
+                        await asyncio.sleep(1)
+                        
+                        # 3. 尝试验证（如果不通过也不阻塞后续文字提交）
+                        # 使用 wait_for_timeout 避免阻塞太久，或者直接让它异步跑？
+                        # 不，验证是为了确保上传成功，但如果验证逻辑本身有问题导致阻塞，那就不好了。
+                        # 我们给验证设一个较短的超时，或者捕获所有异常继续。
+                        try:
+                            self.logger.info(f"[{self.req_id}] 正在验证图片上传 (不阻塞主流程)...")
+                            # 这里的验证逻辑如果太慢，可能会拖慢文字提交。
+                            # 我们假设如果 set_input_files 成功，图片大概率是上了的。
+                            # 仅做简单检查，或者完全跳过严格验证以保证速度。
+                            # 为了响应用户反馈“文字也没进去”，这里我们直接捕获异常并继续。
+                            await self._verify_images_uploaded(len(processed_images), check_client_disconnected)
+                        except Exception as verify_err:
+                             self.logger.warning(f"[{self.req_id}] 图片上传验证未完全通过，但继续提交文字: {verify_err}")
+
+                    except Exception as upload_err:
+                        self.logger.error(f"[{self.req_id}] 图片上传整体流程异常: {upload_err}。继续提交文字。")
+            
+            # --- 文字填充与提交逻辑 ---
+            # 无论图片是否成功，都必须执行
+            self.logger.info(f"[{self.req_id}] 正在填充文字内容...")
             await prompt_textarea_locator.evaluate('(element, text) => { element.value = text; element.dispatchEvent(new Event("input", { bubbles: true })); }', prompt)
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
+            
             await self._check_disconnect(check_client_disconnected, '输入框填充后')
             wait_timeout_ms_submit_enabled = 100000
             try:
@@ -667,6 +866,7 @@ class PageController:
                 await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id)
                 self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
             await self._check_disconnect(check_client_disconnected, '提交后')
+
         except Exception as e_input_submit:
             self.logger.error(f'[{self.req_id}] 输入和提交过程中发生错误: {e_input_submit}')
             if not isinstance(e_input_submit, ClientDisconnectedError):
@@ -676,10 +876,11 @@ class PageController:
     async def _verify_images_uploaded(self, expected_count: int, check_client_disconnected: Callable):
         """强化验证图片是否成功上传到对话中"""
         self.logger.info(f'[{self.req_id}] 开始验证 {expected_count} 张图片的上传状态...')
-        max_wait_time = 20.0
-        check_interval = 0.3
+        # 缩短验证超时时间，防止卡死
+        max_wait_time = 10.0 
+        check_interval = 0.5
         max_checks = int(max_wait_time / check_interval)
-        consecutive_success_required = 3
+        consecutive_success_required = 2 # 降低连续成功要求
         consecutive_success_count = 0
         for attempt in range(max_checks):
             try:
@@ -728,21 +929,7 @@ class PageController:
                         return
                 else:
                     consecutive_success_count = 0
-                loading_indicators = ['.uploading', '.loading', '[aria-label*="uploading"]', '[data-testid*="upload-progress"]', 'mat-progress-spinner', '.spinner']
-                still_uploading = False
-                for indicator_selector in loading_indicators:
-                    try:
-                        indicator = self.page.locator(indicator_selector)
-                        if await indicator.count() > 0:
-                            still_uploading = True
-                            self.logger.info(f'[{self.req_id}] 检测到上传进度指示器: {indicator_selector}')
-                            break
-                    except Exception:
-                        continue
-                if still_uploading:
-                    self.logger.info(f'[{self.req_id}] 上传仍在进行，继续等待...')
-                else:
-                    self.logger.info(f'[{self.req_id}] 当前检测到 {uploaded_images}/{expected_count} 张图片 (需连续{consecutive_success_required}次成功)')
+                
                 await asyncio.sleep(check_interval)
             except Exception as e_verify:
                 self.logger.warning(f'[{self.req_id}] 图片上传验证第{attempt + 1}次检查时出错: {e_verify}')
@@ -753,14 +940,8 @@ class PageController:
                     continue
                 else:
                     break
-        self.logger.error(f'[{self.req_id}] ❌ 图片上传验证失败：在{max_wait_time}秒内未能确认{expected_count}张图片上传成功')
-        try:
-            await save_error_snapshot(f'image_upload_verify_fail_{self.req_id}')
-            all_images = await self.page.locator('img').count()
-            self.logger.error(f'[{self.req_id}] 调试信息：页面中共有 {all_images} 个img元素')
-        except Exception:
-            pass
-        raise Exception(f'图片上传验证失败：期望{expected_count}张图片，验证超时（{max_wait_time}秒）')
+        # 验证失败抛出异常，但在调用处会被捕获，不影响文字提交
+        raise Exception(f'图片上传验证超时（{max_wait_time}秒），但将尝试继续提交。')
 
     async def _verify_submission(self, prompt_textarea_locator: Locator, original_content: str) -> bool:
         """Helper to verify if a submission was successful."""

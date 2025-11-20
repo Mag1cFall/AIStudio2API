@@ -9,6 +9,8 @@ from config import *
 from models import ClientDisconnectedError
 logger = logging.getLogger('AIStudioProxyServer')
 
+from .operations import get_model_name_from_page_parallel
+
 async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> dict:
     """
     验证UI状态设置是否正确
@@ -198,17 +200,11 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             else:
                 try:
                     from config.selectors import MODEL_SELECTORS_LIST
-                    actual_displayed_model_name_on_page = None
-                    actual_displayed_model_name_on_page_raw = '无法读取'
-                    for selector in MODEL_SELECTORS_LIST:
-                        try:
-                            model_name_locator = page.locator(selector)
-                            actual_displayed_model_name_on_page_raw = await model_name_locator.first.inner_text(timeout=2000)
-                            actual_displayed_model_name_on_page = actual_displayed_model_name_on_page_raw.strip()
-                            logger.info(f"[{req_id}] 使用选择器 '{selector}' 成功获取模型名称: '{actual_displayed_model_name_on_page}'")
-                            break
-                        except Exception:
-                            continue
+                    # 使用并行检测替代串行循环，传入期望名称
+                    actual_displayed_model_name_on_page = await get_model_name_from_page_parallel(
+                        page, MODEL_SELECTORS_LIST, timeout=2000, req_id=req_id, expected_model_name=expected_display_name_for_target_id
+                    )
+                    
                     if actual_displayed_model_name_on_page:
                         normalized_actual_display = actual_displayed_model_name_on_page.lower()
                         normalized_expected_display = expected_display_name_for_target_id.strip().lower()
@@ -216,7 +212,7 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                             page_display_match = True
                             logger.info(f"[{req_id}] ✅ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 一致。")
                         else:
-                            logger.error(f"[{req_id}] ❌ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 不一致。(Raw page: '{actual_displayed_model_name_on_page_raw}')")
+                            logger.error(f"[{req_id}] ❌ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 不一致。")
                     else:
                         logger.error(f'[{req_id}] ❌ 无法从页面获取模型名称')
                 except Exception as e_disp:
@@ -228,22 +224,18 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         else:
             logger.error(f"[{req_id}] ❌ AI Studio 未接受模型更改 (localStorage)。期望='{full_model_path}', 实际='{final_prompt_model_in_storage or '未设置或无效'}'.")
         logger.info(f'[{req_id}] 模型切换失败。尝试恢复到页面当前实际显示的模型的状态...')
-        current_displayed_name_for_revert_raw = '无法读取'
         current_displayed_name_for_revert_stripped = '无法读取'
         try:
             from config.selectors import MODEL_SELECTORS_LIST
-            current_displayed_name_for_revert_raw = '无法读取'
-            current_displayed_name_for_revert_stripped = '无法读取'
-            for selector in MODEL_SELECTORS_LIST:
-                try:
-                    model_name_locator_revert = page.locator(selector)
-                    current_displayed_name_for_revert_raw = await model_name_locator_revert.first.inner_text(timeout=2000)
-                    current_displayed_name_for_revert_stripped = current_displayed_name_for_revert_raw.strip()
-                    logger.info(f"[{req_id}] 恢复：使用选择器 '{selector}' 获取页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')")
-                    break
-                except Exception:
-                    continue
-            if current_displayed_name_for_revert_stripped == '无法读取':
+            # 使用并行检测
+            found_name = await get_model_name_from_page_parallel(
+                page, MODEL_SELECTORS_LIST, timeout=2000, req_id=req_id, expected_model_name=None
+            )
+            
+            if found_name:
+                current_displayed_name_for_revert_stripped = found_name
+                logger.info(f"[{req_id}] 恢复：成功获取页面当前显示的模型名称: '{found_name}'")
+            else:
                 logger.warning(f'[{req_id}] 恢复：所有选择器都无法获取页面当前显示模型名称')
         except Exception as e_read_disp_revert:
             logger.warning(f'[{req_id}] 恢复：读取页面当前显示模型名称失败: {e_read_disp_revert}。将尝试回退到原始localStorage。')
@@ -438,17 +430,11 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
     try:
         logger.info('   尝试从页面显示元素读取当前模型名称...')
         from config.selectors import MODEL_SELECTORS_LIST
-        displayed_model_name = None
-        displayed_model_name_from_page_raw = '无法读取'
-        for selector in MODEL_SELECTORS_LIST:
-            try:
-                model_name_locator = page.locator(selector)
-                displayed_model_name_from_page_raw = await model_name_locator.first.inner_text(timeout=3000)
-                displayed_model_name = displayed_model_name_from_page_raw.strip()
-                logger.info(f"   使用选择器 '{selector}' 成功获取页面当前显示模型名称 (原始: '{displayed_model_name_from_page_raw}', 清理后: '{displayed_model_name}')")
-                break
-            except Exception:
-                continue
+        # 使用并行检测
+        displayed_model_name = await get_model_name_from_page_parallel(
+            page, MODEL_SELECTORS_LIST, timeout=3000, req_id='init_set_model', expected_model_name=None
+        )
+        
         if not displayed_model_name:
             logger.warning('   所有选择器都无法获取页面显示的模型名称')
             displayed_model_name = '未知模型'

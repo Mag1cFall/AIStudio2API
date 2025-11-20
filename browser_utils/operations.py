@@ -10,6 +10,81 @@ from config import *
 from models import ClientDisconnectedError, ElementClickError
 logger = logging.getLogger('AIStudioProxyServer')
 
+async def get_model_name_from_page_parallel(page: AsyncPage, selectors: list, timeout: int = 2000, req_id: str = 'unknown', expected_model_name: str = None) -> Optional[str]:
+    """
+    并行尝试多个选择器获取模型名称，一旦有结果立即返回（竞速模式）。
+    
+    Args:
+        page: Playwright页面对象
+        selectors: 选择器列表
+        timeout: 每个选择器的超时时间
+        req_id: 请求ID
+        expected_model_name: 期望的模型名称（用于日志或优先匹配验证）
+    """
+    if not selectors:
+        return None
+
+    if expected_model_name:
+        logger.info(f"[{req_id}] 并行检测模型名称，期望值: '{expected_model_name}'")
+
+    async def check_selector(selector):
+        try:
+            # 使用 first 确保只获取第一个匹配项
+            text = await page.locator(selector).first.inner_text(timeout=timeout)
+            if text and text.strip():
+                return (selector, text.strip())
+        except Exception:
+            pass
+        return None
+
+    # 创建所有选择器的任务
+    tasks = [asyncio.create_task(check_selector(sel)) for sel in selectors]
+    
+    first_valid_result = None
+    
+    try:
+        # 使用 as_completed 实现竞速：只要有一个任务返回非空结果，就处理
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result:
+                selector, text = result
+                
+                # 如果提供了期望名称，进行比对
+                if expected_model_name:
+                    if text.lower() == expected_model_name.lower():
+                        logger.info(f"[{req_id}] ✅ 并行检测：选择器 '{selector}' 快速匹配到期望模型: '{text}'")
+                        # 找到完美匹配，取消其他任务并返回
+                        for t in tasks:
+                            if not t.done(): t.cancel()
+                        return text
+                    else:
+                        # 找到了但不匹配，暂存结果，继续看有没有更匹配的（或者直接返回也行，视策略而定）
+                        # 鉴于页面上通常只有一个模型名，如果找到了不一样的，那可能就是不一样的。
+                        # 但为了极速，我们暂存第一个结果。
+                        if first_valid_result is None:
+                            first_valid_result = text
+                            logger.info(f"[{req_id}] 并行检测：选择器 '{selector}' 找到模型: '{text}' (与期望 '{expected_model_name}' 不完全一致，暂存)")
+                else:
+                    # 没有期望值，直接返回第一个找到的
+                    logger.info(f"[{req_id}] 并行检测：选择器 '{selector}' 率先返回模型: '{text}'")
+                    for t in tasks:
+                        if not t.done(): t.cancel()
+                    return text
+
+        # 如果所有任务都完成了（或者没有找到完美匹配的），返回第一个找到的有效结果
+        if first_valid_result:
+             logger.info(f"[{req_id}] 并行检测结束，返回暂存结果: '{first_valid_result}'")
+             return first_valid_result
+             
+    except Exception as e:
+        logger.error(f"[{req_id}] 并行模型检测发生异常: {e}")
+    
+    # 确保清理所有挂起的任务
+    for t in tasks:
+        if not t.done(): t.cancel()
+            
+    return None
+
 async def get_raw_text_content(response_element: Locator, previous_text: str, req_id: str) -> str:
     """从响应元素获取原始文本内容"""
     raw_text = previous_text

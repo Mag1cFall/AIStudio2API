@@ -306,16 +306,16 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.info('-> ✅ 核心输入区域可见。')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
-                model_name_on_page = None
-                for selector in MODEL_SELECTORS_LIST:
-                    try:
-                        model_name_locator = found_page.locator(selector)
-                        model_name_on_page = await model_name_locator.first.inner_text(timeout=2000)
-                        logger.info(f'-> 🤖 页面检测到的当前模型: {model_name_on_page} (选择器: {selector})')
-                        break
-                    except PlaywrightAsyncError:
-                        continue
-                if not model_name_on_page:
+                from browser_utils.operations import get_model_name_from_page_parallel
+                
+                # 使用并行检测优化初始化速度
+                model_name_on_page = await get_model_name_from_page_parallel(
+                    found_page, MODEL_SELECTORS_LIST, timeout=2000, req_id='init_page_logic', expected_model_name=None
+                )
+
+                if model_name_on_page:
+                    logger.info(f'-> 🤖 页面检测到的当前模型: {model_name_on_page}')
+                else:
                     logger.warning('-> ⚠️ 无法获取模型名称，但不影响初始化继续')
             except Exception as e:
                 logger.warning(f'-> ⚠️ 获取模型名称时发生意外错误: {e}，但不影响初始化继续')
