@@ -87,7 +87,8 @@ class PageController:
             await self._open_url_content(check_client_disconnected)
         else:
             self.logger.info(f'[{self.req_id}] URL Context 功能已禁用，跳过调整。')
-        await self._handle_thinking_budget(request_params, check_client_disconnected)
+        # 暂时禁用 Thinking Mode 逻辑
+        # await self._handle_thinking_budget(request_params, check_client_disconnected)
         await self._adjust_google_search(request_params, check_client_disconnected)
 
     async def set_system_instructions(self, system_prompt: str, check_client_disconnected: Callable):
