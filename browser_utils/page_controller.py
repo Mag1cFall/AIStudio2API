@@ -349,36 +349,26 @@ class PageController:
         clamped_temp = max(0.0, min(2.0, temperature))
         if clamped_temp != temperature:
             self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
-        cached_temp = page_params_cache.get('temperature')
-        if cached_temp is not None and abs(cached_temp - clamped_temp) < 0.001:
-            self.logger.info(f'[{self.req_id}] 温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 一致。跳过页面交互。')
-            return
-        self.logger.info(f'[{self.req_id}] 请求温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 不一致或缓存中无值。需要与页面交互。')
+        
         temp_input_locator = self.page.locator(TEMPERATURE_INPUT_SELECTOR)
         try:
             await expect_async(temp_input_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, '温度调整 - 输入框可见后')
-            current_temp_str = await temp_input_locator.input_value(timeout=3000)
-            await self._check_disconnect(check_client_disconnected, '温度调整 - 读取输入框值后')
-            current_temp_float = float(current_temp_str)
-            self.logger.info(f'[{self.req_id}] 页面当前温度: {current_temp_float}, 请求调整后温度: {clamped_temp}')
-            if abs(current_temp_float - clamped_temp) < 0.001:
-                self.logger.info(f'[{self.req_id}] 页面当前温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 一致。更新缓存并跳过写入。')
-                page_params_cache['temperature'] = current_temp_float
+            
+            self.logger.info(f'[{self.req_id}] 强制更新温度为: {clamped_temp}')
+            await temp_input_locator.fill(str(clamped_temp), timeout=5000)
+            await self._check_disconnect(check_client_disconnected, '温度调整 - 填充输入框后')
+            await asyncio.sleep(0.1)
+            
+            new_temp_str = await temp_input_locator.input_value(timeout=3000)
+            new_temp_float = float(new_temp_str)
+            if abs(new_temp_float - clamped_temp) < 0.001:
+                self.logger.info(f'[{self.req_id}]  温度已成功更新为: {new_temp_float}。更新缓存。')
+                page_params_cache['temperature'] = new_temp_float
             else:
-                self.logger.info(f'[{self.req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 不同，正在更新...')
-                await temp_input_locator.fill(str(clamped_temp), timeout=5000)
-                await self._check_disconnect(check_client_disconnected, '温度调整 - 填充输入框后')
-                await asyncio.sleep(0.1)
-                new_temp_str = await temp_input_locator.input_value(timeout=3000)
-                new_temp_float = float(new_temp_str)
-                if abs(new_temp_float - clamped_temp) < 0.001:
-                    self.logger.info(f'[{self.req_id}]  温度已成功更新为: {new_temp_float}。更新缓存。')
-                    page_params_cache['temperature'] = new_temp_float
-                else:
-                    self.logger.warning(f'[{self.req_id}]  温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。')
-                    page_params_cache.pop('temperature', None)
-                    await save_error_snapshot(f'temperature_verify_fail_{self.req_id}')
+                self.logger.warning(f'[{self.req_id}]  温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。')
+                page_params_cache.pop('temperature', None)
+                await save_error_snapshot(f'temperature_verify_fail_{self.req_id}')
         except ValueError as ve:
             self.logger.error(f'[{self.req_id}] 转换温度值为浮点数时出错. 错误: {ve}。清除缓存中的温度。')
             page_params_cache.pop('temperature', None)
@@ -504,22 +494,19 @@ class PageController:
         try:
             await expect_async(top_p_input_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, 'Top P 调整 - 输入框可见后')
-            current_top_p_str = await top_p_input_locator.input_value(timeout=3000)
-            current_top_p_float = float(current_top_p_str)
-            if abs(current_top_p_float - clamped_top_p) > 1e-09:
-                self.logger.info(f'[{self.req_id}] 页面 Top P ({current_top_p_float}) 与请求值 ({clamped_top_p}) 不同，正在更新...')
-                await top_p_input_locator.fill(str(clamped_top_p), timeout=5000)
-                await self._check_disconnect(check_client_disconnected, 'Top P 调整 - 填充输入框后')
-                await asyncio.sleep(0.1)
-                new_top_p_str = await top_p_input_locator.input_value(timeout=3000)
-                new_top_p_float = float(new_top_p_str)
-                if abs(new_top_p_float - clamped_top_p) <= 1e-09:
-                    self.logger.info(f'[{self.req_id}]  Top P 已成功更新为: {new_top_p_float}')
-                else:
-                    self.logger.warning(f'[{self.req_id}]  Top P 更新后验证失败。页面显示: {new_top_p_float}, 期望: {clamped_top_p}')
-                    await save_error_snapshot(f'top_p_verify_fail_{self.req_id}')
+            
+            self.logger.info(f'[{self.req_id}] 强制更新 Top P 为: {clamped_top_p}')
+            await top_p_input_locator.fill(str(clamped_top_p), timeout=5000)
+            await self._check_disconnect(check_client_disconnected, 'Top P 调整 - 填充输入框后')
+            await asyncio.sleep(0.1)
+            
+            new_top_p_str = await top_p_input_locator.input_value(timeout=3000)
+            new_top_p_float = float(new_top_p_str)
+            if abs(new_top_p_float - clamped_top_p) <= 1e-09:
+                self.logger.info(f'[{self.req_id}]  Top P 已成功更新为: {new_top_p_float}')
             else:
-                self.logger.info(f'[{self.req_id}] 页面 Top P ({current_top_p_float}) 与请求值 ({clamped_top_p}) 一致，无需更改')
+                self.logger.warning(f'[{self.req_id}]  Top P 更新后验证失败。页面显示: {new_top_p_float}, 期望: {clamped_top_p}')
+                await save_error_snapshot(f'top_p_verify_fail_{self.req_id}')
         except (ValueError, TypeError) as ve:
             self.logger.error(f'[{self.req_id}] 转换 Top P 值时出错: {ve}')
             await save_error_snapshot(f'top_p_value_error_{self.req_id}')
