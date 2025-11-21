@@ -48,6 +48,45 @@ class RequestCancellationManager:
             return result
 request_manager = RequestCancellationManager()
 
+def calculate_stream_max_retries(messages: List[Message]) -> int:
+    """根据请求内容计算流式响应的最大重试次数 (动态超时)"""
+    base_retries = 300  # 基础 30秒
+    total_token_estimate = 0
+    image_count = 0
+
+    for msg in messages:
+        content = msg.content
+        if not content:
+            continue
+        
+        if isinstance(content, str):
+            total_token_estimate += len(content) / 3  # 粗略估计
+        elif isinstance(content, list):
+            for item in content:
+                # 尝试处理 Pydantic 对象或 Dict
+                if hasattr(item, 'type') and item.type == 'text':
+                    text = item.text or ''
+                    total_token_estimate += len(text) / 3
+                elif isinstance(item, dict) and item.get('type') == 'text':
+                    text = item.get('text', '')
+                    total_token_estimate += len(text) / 3
+                
+                if hasattr(item, 'type') and item.type == 'image_url':
+                    image_count += 1
+                elif isinstance(item, dict) and item.get('type') == 'image_url':
+                    image_count += 1
+
+    # 策略:
+    # 基础: 300 (30s)
+    # 每张图片: +50 (5s)
+    # 每10000 Token: +20 (2s)
+    
+    additional_retries = (image_count * 50) + int((total_token_estimate / 10000) * 20)
+    total_retries = base_retries + additional_retries
+    
+    # 设定上限 1200 (2分钟)
+    return min(1200, total_retries)
+
 def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
     chunk_data = {'id': f'chatcmpl-{req_id}', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'delta': {'content': delta}, 'finish_reason': None}]}
     return f'data: {json.dumps(chunk_data)}\n\n'
@@ -62,16 +101,16 @@ def generate_sse_error_chunk(message: str, req_id: str, error_type: str='server_
     error_chunk = {'error': {'message': message, 'type': error_type, 'param': None, 'code': req_id}}
     return f'data: {json.dumps(error_chunk)}\n\n'
 
-async def use_stream_response(req_id: str) -> AsyncGenerator[Any, None]:
+async def use_stream_response(req_id: str, max_empty_retries: int = 300) -> AsyncGenerator[Any, None]:
     """使用流响应（从服务器的全局队列获取数据）"""
     from server import STREAM_QUEUE, logger
     import queue
     if STREAM_QUEUE is None:
         logger.warning(f'[{req_id}] STREAM_QUEUE is None, 无法使用流响应')
         return
-    logger.info(f'[{req_id}] 开始使用流响应')
+    logger.info(f'[{req_id}] 开始使用流响应 (Max Retries: {max_empty_retries})')
     empty_count = 0
-    max_empty_retries = 300
+    # max_empty_retries 参数控制
     data_received = False
     try:
         while True:

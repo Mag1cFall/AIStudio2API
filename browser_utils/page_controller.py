@@ -1020,7 +1020,7 @@ class PageController:
             await expect_async(response_element_locator).to_be_attached(timeout=90000)
             await self._check_disconnect(check_client_disconnected, '获取响应 - 响应元素已附加')
             submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-            edit_button_locator = self.page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
+            edit_button_locator = self.page.locator('ms-chat-turn').last.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
             input_field_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
             self.logger.info(f'[{self.req_id}] 等待响应完成...')
             await self._check_disconnect(check_client_disconnected, '获取响应 - 开始等待完成前')

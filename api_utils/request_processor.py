@@ -11,7 +11,7 @@ from playwright.async_api import Page as AsyncPage, Locator, Error as Playwright
 from config import *
 from models import ChatCompletionRequest, ClientDisconnectedError
 from browser_utils import switch_ai_studio_model, save_error_snapshot
-from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager
+from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager, calculate_stream_max_retries
 from .abort_detector import AbortSignalDetector, AbortSignalHandler
 from browser_utils.page_controller import PageController
 
@@ -275,6 +275,8 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
     if is_streaming:
         try:
             completion_event = Event()
+            max_stream_retries = calculate_stream_max_retries(request.messages)
+            logger.info(f"[{req_id}] 动态流式超时设置 - Max Retries: {max_stream_retries}")
 
             async def create_stream_generator_from_helper(event_to_set: Event, task_to_cancel: Optional[asyncio.Task], page_controller: PageController) -> AsyncGenerator[str, None]:
                 skip_button_stop_event = asyncio.Event()
@@ -288,7 +290,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                 full_body_content = ''
                 data_receiving = False
                 try:
-                    async for raw_data in use_stream_response(req_id):
+                    async for raw_data in use_stream_response(req_id, max_stream_retries):
                         data_receiving = True
                         try:
                             check_client_disconnected(f'流式生成器循环 ({req_id}): ')
@@ -452,7 +454,10 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
         reasoning_content = None
         functions = None
         final_data_from_aux_stream = None
-        async for raw_data in use_stream_response(req_id):
+        max_stream_retries = calculate_stream_max_retries(request.messages)
+        logger.info(f"[{req_id}] 动态非流式超时设置 - Max Retries: {max_stream_retries}")
+
+        async for raw_data in use_stream_response(req_id, max_stream_retries):
             check_client_disconnected(f'非流式辅助流 - 循环中 ({req_id}): ')
             if isinstance(raw_data, str):
                 try:

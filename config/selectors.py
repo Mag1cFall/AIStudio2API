@@ -11,7 +11,7 @@ LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-s
 OVERLAY_SELECTOR = '.mat-mdc-dialog-inner-container'
 ZERO_STATE_SELECTOR = 'ms-zero-state'
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
-EDIT_MESSAGE_BUTTON_SELECTOR = 'button[aria-label="Edit"].toggle-edit-button'
+EDIT_MESSAGE_BUTTON_SELECTOR = 'button[aria-label="Edit"].toggle-edit-button:has(span:text-is("edit"))'
 MESSAGE_TEXTAREA_SELECTOR = 'ms-chat-turn:last-child ms-text-chunk ms-autosize-textarea'
 FINISH_EDIT_BUTTON_SELECTOR = 'button[aria-label="Stop editing"].toggle-edit-button'
 MORE_OPTIONS_BUTTON_SELECTOR = 'button[aria-label="Open options"]'
