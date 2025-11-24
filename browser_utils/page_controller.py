@@ -342,6 +342,90 @@ class PageController:
             if isinstance(e, ClientDisconnectedError):
                 raise
 
+    async def _set_parameter_with_retry(self, locator: Locator, target_value: str, param_name: str, check_client_disconnected: Callable) -> bool:
+        """
+        尝试设置参数值，包含重试机制和多种输入策略。
+        策略:
+        1. fill() + Enter
+        2. Select all + Type + Enter
+        3. JS injection
+        """
+        # 辅助函数：比较值是否相等
+        def is_equal(val1, val2):
+            try:
+                f1, f2 = float(val1), float(val2)
+                # 处理整数或浮点数比较
+                return abs(f1 - f2) < 0.001
+            except ValueError:
+                return str(val1).strip() == str(val2).strip()
+
+        # 0. 预检查：如果值已经正确，跳过
+        # try:
+        #     current_val = await locator.input_value(timeout=1000)
+        #     if is_equal(current_val, target_value):
+        #         self.logger.info(f"[{self.req_id}] {param_name} 页面值 ({current_val}) 已匹配目标值 ({target_value})，跳过设置。")
+        #         return True
+        # except Exception:
+        #     # 如果无法读取（例如超时），则继续尝试设置
+        #     pass
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            strategy_name = "Unknown"
+            try:
+                await self._check_disconnect(check_client_disconnected, f'设置 {param_name} - 尝试 {attempt + 1}')
+                
+                # 首次尝试前确保可见
+                if attempt == 0:
+                    await expect_async(locator).to_be_visible(timeout=5000)
+                    # 确保之前的操作已完成
+                    await asyncio.sleep(0.3)
+
+                if attempt == 0:
+                    # 策略 1: 标准 fill + Enter
+                    strategy_name = "Standard Fill"
+                    # 先focus确保交互对象正确
+                    await locator.focus()
+                    await locator.fill(str(target_value))
+                    # 触发 change 事件
+                    await locator.dispatch_event('change')
+                    await locator.press('Enter')
+                elif attempt == 1:
+                    # 策略 2: Select Text + Type + Enter
+                    strategy_name = "Select & Type"
+                    await locator.focus()
+                    await locator.select_text()
+                    await locator.press('Backspace') # 显式清除
+                    await asyncio.sleep(0.1)
+                    await locator.type(str(target_value), delay=50) # 带延迟输入
+                    await locator.press('Enter')
+                else:
+                    # 策略 3: JS Set + Dispatch Events + Enter
+                    strategy_name = "JS Injection"
+                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
+                    await asyncio.sleep(0.2)
+                    await locator.press('Enter')
+
+                # 验证
+                await asyncio.sleep(0.5) # 给UI一点反应时间
+                
+                final_val = await locator.input_value(timeout=2000)
+                if is_equal(final_val, target_value):
+                    self.logger.info(f"[{self.req_id}] {param_name} 成功设置为 {final_val} (策略: {strategy_name})。")
+                    return True
+                
+                self.logger.warning(f"[{self.req_id}] {param_name} 验证失败 (尝试 {attempt + 1}, 策略: {strategy_name})。页面显示: {final_val}, 期望: {target_value}")
+                
+            except Exception as e:
+                self.logger.warning(f"[{self.req_id}] {param_name} 设置发生异常 (尝试 {attempt + 1}): {e}")
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+            
+            await asyncio.sleep(0.5)
+
+        self.logger.error(f"[{self.req_id}] {param_name} 最终设置失败，已耗尽所有策略。")
+        return False
+
     async def _adjust_temperature(self, temperature: float, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
         """调整温度参数。"""
         # 移除锁以支持并发
@@ -350,42 +434,29 @@ class PageController:
         if clamped_temp != temperature:
             self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
         
+        # 缓存检查优化
+        # if page_params_cache.get('temperature') == clamped_temp:
+        #      self.logger.info(f'[{self.req_id}] 温度缓存匹配 ({clamped_temp})，跳过调整。')
+        #      return
+
         temp_input_locator = self.page.locator(TEMPERATURE_INPUT_SELECTOR)
-        try:
-            await expect_async(temp_input_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '温度调整 - 输入框可见后')
-            
-            self.logger.info(f'[{self.req_id}] 强制更新温度为: {clamped_temp}')
-            await temp_input_locator.fill(str(clamped_temp), timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '温度调整 - 填充输入框后')
-            await asyncio.sleep(0.1)
-            
-            new_temp_str = await temp_input_locator.input_value(timeout=3000)
-            new_temp_float = float(new_temp_str)
-            if abs(new_temp_float - clamped_temp) < 0.001:
-                self.logger.info(f'[{self.req_id}]  温度已成功更新为: {new_temp_float}。更新缓存。')
-                page_params_cache['temperature'] = new_temp_float
-            else:
-                self.logger.warning(f'[{self.req_id}]  温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。')
-                page_params_cache.pop('temperature', None)
-                await save_error_snapshot(f'temperature_verify_fail_{self.req_id}')
-        except ValueError as ve:
-            self.logger.error(f'[{self.req_id}] 转换温度值为浮点数时出错. 错误: {ve}。清除缓存中的温度。')
+        success = await self._set_parameter_with_retry(temp_input_locator, str(clamped_temp), "Temperature", check_client_disconnected)
+        
+        if success:
+            page_params_cache['temperature'] = clamped_temp
+        else:
+            self.logger.error(f'[{self.req_id}] 温度设置彻底失败，清除缓存。')
             page_params_cache.pop('temperature', None)
-            await save_error_snapshot(f'temperature_value_error_{self.req_id}')
-        except Exception as pw_err:
-            self.logger.error(f'[{self.req_id}]  操作温度输入框时发生错误: {pw_err}。清除缓存中的温度。')
-            page_params_cache.pop('temperature', None)
-            await save_error_snapshot(f'temperature_playwright_error_{self.req_id}')
-            if isinstance(pw_err, ClientDisconnectedError):
-                raise
+            await save_error_snapshot(f'temperature_set_fail_{self.req_id}')
 
     async def _adjust_max_tokens(self, max_tokens: int, page_params_cache: dict, params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: list, check_client_disconnected: Callable):
         """调整最大输出Token参数。"""
         # 移除锁以支持并发
         self.logger.info(f'[{self.req_id}] 检查并调整最大输出 Token 设置...')
+        
         min_val_for_tokens = 1
         max_val_for_tokens_from_model = 65536
+        
         if model_id_to_use and parsed_model_list:
             current_model_data = next((m for m in parsed_model_list if m.get('id') == model_id_to_use), None)
             if current_model_data and current_model_data.get('supported_max_output_tokens') is not None:
@@ -393,50 +464,26 @@ class PageController:
                     supported_tokens = int(current_model_data['supported_max_output_tokens'])
                     if supported_tokens > 0:
                         max_val_for_tokens_from_model = supported_tokens
-                    else:
-                        self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 无效: {supported_tokens}')
                 except (ValueError, TypeError):
                     self.logger.warning(f'[{self.req_id}] 模型 {model_id_to_use} supported_max_output_tokens 解析失败')
+        
         clamped_max_tokens = max(min_val_for_tokens, min(max_val_for_tokens_from_model, max_tokens))
         if clamped_max_tokens != max_tokens:
             self.logger.warning(f'[{self.req_id}] 请求的最大输出 Tokens {max_tokens} 超出模型范围，已调整为 {clamped_max_tokens}')
-        cached_max_tokens = page_params_cache.get('max_output_tokens')
-        if cached_max_tokens is not None and cached_max_tokens == clamped_max_tokens:
-            self.logger.info(f'[{self.req_id}] 最大输出 Tokens ({clamped_max_tokens}) 与缓存值一致。跳过页面交互。')
-            return
+        
+        # [修改] 移除缓存检查，强制尝试设置
+        # if page_params_cache.get('max_output_tokens') == clamped_max_tokens:
+        #      self.logger.info(f'[{self.req_id}] 最大输出 Tokens 缓存匹配 ({clamped_max_tokens})。跳过。')
+        #      return
+
         max_tokens_input_locator = self.page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
-        try:
-            await expect_async(max_tokens_input_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 输入框可见后')
-            current_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-            current_max_tokens_int = int(current_max_tokens_str)
-            if current_max_tokens_int == clamped_max_tokens:
-                self.logger.info(f'[{self.req_id}] 页面当前最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 一致。更新缓存并跳过写入。')
-                page_params_cache['max_output_tokens'] = current_max_tokens_int
-            else:
-                self.logger.info(f'[{self.req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 不同，正在更新...')
-                await max_tokens_input_locator.fill(str(clamped_max_tokens), timeout=5000)
-                await self._check_disconnect(check_client_disconnected, '最大输出Token调整 - 填充输入框后')
-                await asyncio.sleep(0.1)
-                new_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-                new_max_tokens_int = int(new_max_tokens_str)
-                if new_max_tokens_int == clamped_max_tokens:
-                    self.logger.info(f'[{self.req_id}]  最大输出 Tokens 已成功更新为: {new_max_tokens_int}')
-                    page_params_cache['max_output_tokens'] = new_max_tokens_int
-                else:
-                    self.logger.warning(f'[{self.req_id}]  最大输出 Tokens 更新后验证失败。页面显示: {new_max_tokens_int}, 期望: {clamped_max_tokens}。清除缓存。')
-                    page_params_cache.pop('max_output_tokens', None)
-                    await save_error_snapshot(f'max_tokens_verify_fail_{self.req_id}')
-        except (ValueError, TypeError) as ve:
-            self.logger.error(f'[{self.req_id}] 转换最大输出 Tokens 值时出错: {ve}。清除缓存。')
-            page_params_cache.pop('max_output_tokens', None)
-            await save_error_snapshot(f'max_tokens_value_error_{self.req_id}')
-        except Exception as e:
-            self.logger.error(f'[{self.req_id}]  调整最大输出 Tokens 时出错: {e}。清除缓存。')
-            page_params_cache.pop('max_output_tokens', None)
-            await save_error_snapshot(f'max_tokens_error_{self.req_id}')
-            if isinstance(e, ClientDisconnectedError):
-                raise
+        success = await self._set_parameter_with_retry(max_tokens_input_locator, str(clamped_max_tokens), "Max Output Tokens", check_client_disconnected)
+
+        if success:
+             page_params_cache['max_output_tokens'] = clamped_max_tokens
+        else:
+             page_params_cache.pop('max_output_tokens', None)
+             await save_error_snapshot(f'max_tokens_set_fail_{self.req_id}')
 
     async def _adjust_stop_sequences(self, stop_sequences, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
         """调整停止序列参数。"""
@@ -490,31 +537,12 @@ class PageController:
         clamped_top_p = max(0.0, min(1.0, top_p))
         if abs(clamped_top_p - top_p) > 1e-09:
             self.logger.warning(f'[{self.req_id}] 请求的 Top P {top_p} 超出范围，已调整为 {clamped_top_p}')
+        
         top_p_input_locator = self.page.locator(TOP_P_INPUT_SELECTOR)
-        try:
-            await expect_async(top_p_input_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, 'Top P 调整 - 输入框可见后')
-            
-            self.logger.info(f'[{self.req_id}] 强制更新 Top P 为: {clamped_top_p}')
-            await top_p_input_locator.fill(str(clamped_top_p), timeout=5000)
-            await self._check_disconnect(check_client_disconnected, 'Top P 调整 - 填充输入框后')
-            await asyncio.sleep(0.1)
-            
-            new_top_p_str = await top_p_input_locator.input_value(timeout=3000)
-            new_top_p_float = float(new_top_p_str)
-            if abs(new_top_p_float - clamped_top_p) <= 1e-09:
-                self.logger.info(f'[{self.req_id}]  Top P 已成功更新为: {new_top_p_float}')
-            else:
-                self.logger.warning(f'[{self.req_id}]  Top P 更新后验证失败。页面显示: {new_top_p_float}, 期望: {clamped_top_p}')
-                await save_error_snapshot(f'top_p_verify_fail_{self.req_id}')
-        except (ValueError, TypeError) as ve:
-            self.logger.error(f'[{self.req_id}] 转换 Top P 值时出错: {ve}')
-            await save_error_snapshot(f'top_p_value_error_{self.req_id}')
-        except Exception as e:
-            self.logger.error(f'[{self.req_id}]  调整 Top P 时出错: {e}')
-            await save_error_snapshot(f'top_p_error_{self.req_id}')
-            if isinstance(e, ClientDisconnectedError):
-                raise
+        success = await self._set_parameter_with_retry(top_p_input_locator, str(clamped_top_p), "Top P", check_client_disconnected)
+        
+        if not success:
+             await save_error_snapshot(f'top_p_set_fail_{self.req_id}')
 
     async def clear_chat_history(self, check_client_disconnected: Callable):
         """通过直接导航到 new_chat URL 来清空聊天记录，并包含重试逻辑。"""

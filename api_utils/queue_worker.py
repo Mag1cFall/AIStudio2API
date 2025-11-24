@@ -35,30 +35,48 @@ async def queue_worker():
                 checked_count = 0
                 items_to_requeue = []
                 processed_ids = set()
+                
+                # 批量取出任务
+                items_to_check = []
                 while checked_count < queue_size and checked_count < 10:
                     try:
                         item = request_queue.get_nowait()
                         item_req_id = item.get('req_id', 'unknown')
+                        
+                        # 避免重复处理
                         if item_req_id in processed_ids:
                             items_to_requeue.append(item)
                             continue
+                            
                         processed_ids.add(item_req_id)
-                        if not item.get('cancelled', False):
-                            item_http_request = item.get('http_request')
-                            if item_http_request:
-                                try:
-                                    if await item_http_request.is_disconnected():
-                                        logger.info(f'[{item_req_id}] (Worker Queue Check) 检测到客户端已断开，标记为取消。')
-                                        item['cancelled'] = True
-                                        item_future = item.get('result_future')
-                                        if item_future and (not item_future.done()):
-                                            item_future.set_exception(HTTPException(status_code=499, detail=f'[{item_req_id}] Client disconnected while queued.'))
-                                except Exception as check_err:
-                                    logger.error(f'[{item_req_id}] (Worker Queue Check) Error checking disconnect: {check_err}')
-                        items_to_requeue.append(item)
+                        items_to_check.append(item)
                         checked_count += 1
                     except asyncio.QueueEmpty:
                         break
+
+                # 定义并发检查函数
+                async def check_item_disconnect(item_data):
+                    i_req_id = item_data.get('req_id', 'unknown')
+                    if not item_data.get('cancelled', False):
+                        i_http_request = item_data.get('http_request')
+                        if i_http_request:
+                            try:
+                                if await i_http_request.is_disconnected():
+                                    logger.info(f'[{i_req_id}] (Worker Queue Check) 检测到客户端已断开，标记为取消。')
+                                    item_data['cancelled'] = True
+                                    i_future = item_data.get('result_future')
+                                    if i_future and (not i_future.done()):
+                                        i_future.set_exception(HTTPException(status_code=499, detail=f'[{i_req_id}] Client disconnected while queued.'))
+                            except Exception as check_err:
+                                logger.error(f'[{i_req_id}] (Worker Queue Check) Error checking disconnect: {check_err}')
+                    return item_data
+
+                if items_to_check:
+                    # 并行执行所有检查
+                    checked_results = await asyncio.gather(*[check_item_disconnect(i) for i in items_to_check])
+                    items_to_requeue.extend(checked_results)
+
+                # 批量放回队列
                 for item in items_to_requeue:
                     await request_queue.put(item)
             try:

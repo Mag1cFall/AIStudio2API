@@ -45,7 +45,9 @@ async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> d
 
 async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bool:
     """
-    强制设置UI状态
+    强制设置UI状态 (原子化操作优化版本)
+    
+    将读取、校验、写入、验证整合到一次 JS 执行中，减少 CDP 通信开销。
 
     Args:
         page: Playwright页面对象
@@ -55,24 +57,58 @@ async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bo
         bool: 设置是否成功
     """
     try:
-        logger.info(f'[{req_id}] 开始强制设置UI状态...')
-        current_state = await _verify_ui_state_settings(page, req_id)
-        if not current_state['needsUpdate']:
-            logger.info(f'[{req_id}] UI状态已正确设置，无需更新')
-            return True
-        prefs = current_state.get('prefs', {})
-        prefs['isAdvancedOpen'] = True
-        prefs['areToolsOpen'] = True
-        prefs_str = json.dumps(prefs)
-        await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", prefs_str)
-        logger.info(f'[{req_id}] 已强制设置: isAdvancedOpen=true, areToolsOpen=true')
-        verify_state = await _verify_ui_state_settings(page, req_id)
-        if not verify_state['needsUpdate']:
-            logger.info(f'[{req_id}] ✅ UI状态设置验证成功')
+        logger.info(f'[{req_id}] 开始强制设置UI状态 (原子化JS)...')
+        
+        js_script = """
+        () => {
+            try {
+                const key = 'aiStudioUserPreference';
+                let prefsStr = localStorage.getItem(key);
+                let prefs = {};
+                if (prefsStr) {
+                    try {
+                        prefs = JSON.parse(prefsStr);
+                    } catch (e) {
+                        console.warn('JSON parse failed, resetting prefs', e);
+                    }
+                }
+                
+                // 检查是否已满足条件
+                if (prefs.isAdvancedOpen === true && prefs.areToolsOpen === true) {
+                    return { success: true, updated: false, msg: 'Already correct' };
+                }
+                
+                // 更新状态
+                prefs.isAdvancedOpen = true;
+                prefs.areToolsOpen = true;
+                localStorage.setItem(key, JSON.stringify(prefs));
+                
+                // 立即验证
+                const checkStr = localStorage.getItem(key);
+                const checkPrefs = JSON.parse(checkStr);
+                if (checkPrefs.isAdvancedOpen === true && checkPrefs.areToolsOpen === true) {
+                    return { success: true, updated: true, msg: 'Updated and verified' };
+                } else {
+                    return { success: false, error: 'Verification failed inside JS' };
+                }
+            } catch (e) {
+                return { success: false, error: e.toString() };
+            }
+        }
+        """
+        
+        result = await page.evaluate(js_script)
+        
+        if result.get('success'):
+            if result.get('updated'):
+                logger.info(f"[{req_id}] ✅ UI状态已更新并验证成功 (原子化操作)")
+            else:
+                logger.info(f"[{req_id}] UI状态已正确，无需更新 (原子化检查)")
             return True
         else:
-            logger.warning(f'[{req_id}] ⚠️ UI状态设置验证失败，可能需要重试')
+            logger.warning(f"[{req_id}] ⚠️ UI状态设置失败 (原子化操作): {result.get('error')}")
             return False
+            
     except Exception as e:
         logger.error(f'[{req_id}] 强制设置UI状态时发生错误: {e}')
         return False

@@ -14,7 +14,7 @@
 
 ## 📋 系统要求
 
-- **Python**: 3.12 (推荐) - **注意：不支持 Python 3.13**
+- **Python**: 3.12 (推荐)
 - **依赖管理**: [Poetry](https://python-poetry.org/)
 - **操作系统**: Windows, macOS, Linux
 - **内存**: 建议 2GB+ 可用内存
@@ -25,9 +25,45 @@
 ### 1. 安装 Poetry
 
 ```bash
-# 使用官方安装脚本
-curl -sSL https://install.python-poetry.org | python -
+curl.exe -sSL https://install.python-poetry.org | python -
+# 或
+(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
 ```
+---
+安装结束后会显示类似如下内容:
+````
+A. Append the bin directory to your user environment variable `PATH`:
+
+```
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\1\AppData\Roaming\Python\Scripts", "User")
+```
+
+B. Try to append the bin directory to PATH every when you run PowerShell (>=6 recommended):
+
+```
+echo 'if (-not (Get-Command poetry -ErrorAction Ignore)) { $env:Path += ";C:\Users\1\AppData\Roaming\Python\Scripts" }' | Out-File -Append $PROFILE
+```
+
+Alternatively, you can call Poetry explicitly with `C:\Users\1\AppData\Roaming\Python\Scripts\poetry`.
+
+You can test that everything is set up by executing:
+
+`poetry --version`
+````
+按要求执行指令，建议直接执行:
+```
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\1\AppData\Roaming\Python\Scripts", "User")
+```
+执行后过几秒，什么都不会输出。此时关闭Powershell窗口(或VSCode软件、命令行...等)，重新打开后执行:
+```
+poetry --version
+```
+预计输出:
+```
+PS C:\Users\1\Desktop\AIStudio2API> poetry --version
+Poetry (version 2.2.1)
+```
+如果执行命令报错、总之你没有成功通过执行命令来将`poetry`添加到系统变量，可以手动去「编辑账户的环境变量」- Path 里添加路径，或不添加系统变量，直接使用绝对路径继续后面的命令。
 
 ### 2. 克隆项目
 
@@ -42,6 +78,7 @@ cd AIStudio2API
 
 ```bash
 # 设置 Poetry 使用指定的 Python 3.12 版本
+# 更换成你自己的用户名和路径
 poetry env use C:\Users\2\AppData\Local\Programs\Python\Python312\python.exe
 
 # Poetry 会输出类似以下信息：
@@ -53,9 +90,12 @@ poetry env use C:\Users\2\AppData\Local\Programs\Python\Python312\python.exe
 
 ```bash
 poetry install
+poetry run camoufox fetch
 ```
 
-**注意**: 安装过程中会自动下载和安装 Camoufox 浏览器（约 100MB），这是项目的核心组件，用于反指纹检测。首次安装可能需要较长时间，请耐心等待。
+**注意**: 安装过程中会自动下载和安装 Camoufox 浏览器（约 600MB），这是项目的核心组件，用于反指纹检测。首次安装可能需要较长时间，请耐心等待。
+
+***
 
 ## 🚀 快速开始
 
