@@ -7,7 +7,7 @@
 - **OpenAI 兼容 API**: 完全兼容 OpenAI 格式的 `/v1/chat/completions` 端点
 - **智能模型切换**: 通过 `model` 字段动态切换 AI Studio 中的模型
 - **反指纹检测**: 使用 Camoufox 浏览器降低被检测风险
-- **图形界面启动器**: 功能丰富的 GUI 启动器，简化配置和管理
+- **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
 - **Ollama 兼容层**: 内置 `llm.py` 提供 Ollama 格式 API 兼容
 - **模块化架构**: 清晰的模块分离设计，易于维护
 - **现代化工具链**: Poetry 依赖管理 + 完整类型支持
@@ -104,12 +104,12 @@ poetry run camoufox fetch
 
 1. **启动图形界面**:
    ```bash
-   poetry run python gui_launcher.py
+   poetry run python app_launcher.py
    ```
 
 2. **配置代理**（建议）:
    - 在 GUI 中勾选"启用浏览器代理"
-   - 输入您的代理地址（如有）
+   - 输入您的代理地址（如`http://127.0.0.1:7890`）
 
 3. **启动有头模式进行认证**:
    - 点击"启动有头模式 (新终端)"
@@ -128,13 +128,27 @@ poetry run camoufox fetch
 
 1. 启动图形界面:
    ```bash
-   poetry run python gui_launcher.py
+   poetry run python app_launcher.py
    ```
 
-2. 点击"启动无头模式 (新终端)"
+2. 点击「启动无头模式」或 「虚拟显示模式」
 
 3. API 服务将在后台运行，默认端口 `2048`
-增加了前端界面（开发中），访问`http://localhost:2048/`，可以获取更清晰的日志。
+
+### 快速启动
+
+`start_cmd.bat`：命令行直接启动。
+```
+ - --- 请选择启动模式 (未通过命令行参数指定) ---
+  请输入启动模式 ([1] 无头模式, [2] 调试模式; 默认: 1 headless模式，15秒超时):
+```
+
+`start_webui_legacy.bat`：
+旧版的可视化启动器，不推荐使用。
+
+`start_webui.bat`：
+启动前端界面，自动跳转或访问`http://127.0.0.1:9000`进行后续使用，推荐。
+
 
 ## 📡 API 使用
 
@@ -146,7 +160,7 @@ poetry run camoufox fetch
 curl -X POST http://localhost:2048/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-1.5-pro",
+    "model": "gemini-2.5-pro",
     "messages": [
       {"role": "user", "content": "Hello, world!"}
     ]
@@ -155,13 +169,13 @@ curl -X POST http://localhost:2048/v1/chat/completions \
 
 ### 客户端配置示例
 
-以 Open WebUI 为例：
+以 Cherry Studio 为例：
 
-1. 打开 Open WebUI 设置
+1. 打开 Cherry Studio 设置
 2. 在"连接"部分添加新模型:
-   - **API 基础 URL**: `http://127.0.0.1:2048/v1`
-   - **模型名称**: `gemini-1.5-pro` (或其他 AI Studio 支持的模型)
-   - **API 密钥**: 留空或输入任意字符
+   - **API 主机地址**: `http://127.0.0.1:2048/v1/`
+   - **模型名称**: `gemini-2.5-pro` (或其他 AI Studio 支持的模型)
+   - **API 密钥**: 留空或输入任意字符，如`123`
 
 ### Ollama 兼容层
 
@@ -182,7 +196,8 @@ curl -X POST http://localhost:11434/api/chat \
 
 ```
 AIStudio2API/
-├── gui_launcher.py          # 图形界面启动器
+├── app_launcher.py          # 图形界面启动器
+├── gui_launcher.py          # 旧版图形界面启动器
 ├── launch_camoufox.py       # 命令行启动器
 ├── server.py                # 主服务器
 ├── llm.py                   # Ollama 兼容层

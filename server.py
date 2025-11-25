@@ -64,7 +64,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
 async def read_root():
-    return FileResponse(os.path.join(STATIC_DIR, 'index.html'))
+    return JSONResponse(content={
+        "status": "running",
+        "service": "AI Studio Proxy API",
+        "message": "Service is running normally. Please use the AI Studio Manager for control and logs."
+    })
 
 if __name__ == '__main__':
     import uvicorn
