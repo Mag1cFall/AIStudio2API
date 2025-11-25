@@ -121,6 +121,8 @@ uv run playwright install firefox
 `start_webui.bat`：
 启动前端界面，自动跳转或访问`http://127.0.0.1:9000`进行后续使用，推荐。
 
+等待出现`ℹ️  INFO    | --- 队列 Worker 已启动 ---`后，即可开始使用API。
+
 
 ## 📡 API 使用
 
@@ -237,3 +239,19 @@ cp .env.example .env
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
+## 📅 开发计划
+
+- **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
+- **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
+- **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
+- **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
+- **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
+- **单元测试**: 增加核心模块（特别是浏览器自动化部分）的测试覆盖率
+- **负载均衡**: 支持多 Google 账号轮询池，以提高并发限额与稳定性 (这项或许不可能实现)
+
+
+<!-- 
+## 📈 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date)](https://star-history.com/#Mag1cFall/AIStudio2API&Date) -->
