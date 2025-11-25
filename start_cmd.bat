@@ -1,3 +1,3 @@
 @echo off
-poetry run python launch_camoufox.py
+uv run python launch_camoufox.py
 pause
