@@ -34,6 +34,23 @@ macOS / Linux:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+预期输出：
+```
+PS C:\Users\2\Desktop\AIStudio2API> powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+Downloading uv 0.9.11 (x86_64-pc-windows-msvc)
+Installing to C:\Users\2\.local\bin
+  uv.exe
+  uvx.exe
+  uvw.exe
+everything's installed!
+
+To add C:\Users\2\.local\bin to your PATH, either restart your shell or run:
+
+    set Path=C:\Users\2\.local\bin;%Path%   (cmd)
+    $env:Path = "C:\Users\2\.local\bin;$env:Path"   (powershell)
+```
+请按照您的路径将其添加到环境变量。
+
 ### 2. 克隆项目
 
 ```bash
@@ -141,7 +158,7 @@ curl -X POST http://localhost:2048/v1/chat/completions \
 
 ```bash
 # 启动 Ollama 兼容服务
-poetry run python gui_launcher.py
+uv run python gui_launcher.py
 # 在 GUI 中点击"启动本地LLM模拟服务"
 
 # 使用 Ollama 格式 API
@@ -200,7 +217,6 @@ cp .env.example .env
 - 认证文件存储在 `auth_profiles/` 目录
 - 支持多个认证文件的保存和切换
 - 通过 GUI 的"管理认证文件"功能进行管理
-
 
 ## 📚 详细文档
 
