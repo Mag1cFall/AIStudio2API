@@ -193,11 +193,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 def create_app() -> FastAPI:
     app = FastAPI(title='AI Studio Proxy Server (集成模式)', description='通过 Playwright与 AI Studio 交互的代理服务器。', version='0.6.0-integrated', lifespan=lifespan)
     app.add_middleware(APIKeyAuthMiddleware)
-    from .routes import read_index, get_css, get_js, get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key
+    from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key
     from fastapi.responses import FileResponse
-    app.get('/', response_class=FileResponse)(read_index)
-    app.get('/webui.css')(get_css)
-    app.get('/webui.js')(get_js)
     app.get('/api/info')(get_api_info)
     app.get('/health')(health_check)
     app.get('/v1/models')(list_models)
