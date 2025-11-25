@@ -53,6 +53,7 @@ You can test that everything is set up by executing:
 按要求执行指令，建议直接执行:
 ```
 [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\1\AppData\Roaming\Python\Scripts", "User")
+# 注意复制你自己的输出日志里的那行指令。或将用户名或路径全部替换成自己的。
 ```
 执行后过几秒，什么都不会输出。此时关闭Powershell窗口(或VSCode软件、命令行...等)，重新打开后执行:
 ```
