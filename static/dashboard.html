@@ -6,6 +6,7 @@
     <title>AI Studio 控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -28,21 +29,33 @@
         ::-webkit-scrollbar-thumb { background-color: #30363d; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background-color: #484f58; }
         .log-entry:hover { background-color: #161b22; }
+        .prose { color: #c9d1d9; max-width: none; }
+        .prose pre { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1em; overflow-x: auto; margin: 0.5em 0; }
+        .prose code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 0.9em; background-color: rgba(110, 118, 129, 0.4); padding: 0.2em 0.4em; border-radius: 4px; }
+        .prose pre code { background-color: transparent; padding: 0; border-radius: 0; color: inherit; }
+        .prose p { margin: 0.5em 0; }
+        .prose ul { list-style-type: disc; padding-left: 1.5em; margin: 0.5em 0; }
+        .prose ol { list-style-type: decimal; padding-left: 1.5em; margin: 0.5em 0; }
+        .prose a { color: #58a6ff; text-decoration: none; }
+        .prose a:hover { text-decoration: underline; }
+        .prose blockquote { border-left: 4px solid #30363d; padding-left: 1em; color: #8b949e; margin: 0.5em 0; }
+        .prose h1, .prose h2, .prose h3 { color: #fff; font-weight: 600; margin-top: 1em; margin-bottom: 0.5em; }
+        .prose h1 { font-size: 1.5em; border-bottom: 1px solid #30363d; padding-bottom: 0.3em; }
+        .prose h2 { font-size: 1.3em; }
+        .prose h3 { font-size: 1.1em; }
     </style>
 </head>
 <body class="h-screen flex overflow-hidden text-sm">
     <div id="app" class="flex w-full h-full">
-        <!-- Sidebar -->
         <div class="w-64 bg-[#161b22] flex flex-col border-r border-[#30363d] shrink-0">
             <div class="h-14 flex items-center px-4 border-b border-[#30363d] gap-2">
                 <div class="w-3 h-3 rounded-full" :class="statusColor"></div>
                 <h1 class="font-bold text-lg text-white">AI Studio <span class="text-blue-400">Manager</span></h1>
             </div>
-
             <nav class="flex-1 p-2 space-y-1">
                 <button @click="currentTab = 'dashboard'" 
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
                     仪表盘
                 </button>
                 <button @click="currentTab = 'config'" 
@@ -90,11 +103,8 @@
             </div>
         </div>
 
-        <!-- Main Content -->
         <div class="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
-            <!-- Dashboard View -->
             <div v-if="currentTab === 'dashboard'" class="flex-1 flex flex-col h-full">
-                <!-- Log Toolbar -->
                 <div class="h-10 border-b border-[#30363d] flex items-center px-4 justify-between bg-[#161b22]">
                     <div class="flex items-center gap-3">
                         <span class="text-xs text-gray-400">日志等级:</span>
@@ -115,7 +125,6 @@
                     </div>
                 </div>
                 
-                <!-- Logs Area -->
                 <div ref="logsContainer" class="flex-1 overflow-auto p-2 font-mono text-[13px] leading-5 bg-[#0d1117]">
                     <div v-for="(log, index) in filteredLogs" :key="index" class="log-entry flex gap-3 px-2 py-0.5 border-l-2"
                         :class="{
@@ -130,7 +139,6 @@
                 </div>
             </div>
 
-            <!-- Config View -->
             <div v-if="currentTab === 'config'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
                 <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">启动配置</h2>
                 
@@ -186,7 +194,6 @@
                 </div>
             </div>
 
-            <!-- Auth View -->
             <div v-if="currentTab === 'auth'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
                 <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">认证文件管理</h2>
                 
@@ -226,7 +233,6 @@
                 </div>
             </div>
             
-            <!-- System View -->
             <div v-if="currentTab === 'system'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
                 <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">系统工具</h2>
                 
@@ -275,24 +281,39 @@
                 </div>
             </div>
 
-            <!-- Playground View -->
             <div v-if="currentTab === 'playground'" class="flex-1 flex overflow-hidden">
-                <!-- Chat Area -->
                 <div class="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
                     <div class="flex-1 overflow-auto p-4 space-y-4" ref="chatContainer">
                         <div v-if="chatMessages.length === 0" class="h-full flex flex-col items-center justify-center text-gray-500">
                             <svg class="w-16 h-16 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
                             <p>开始一个新的对话...</p>
                         </div>
-                        <div v-for="(msg, idx) in chatMessages" :key="idx" class="flex gap-4 max-w-3xl mx-auto">
-                            <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                        <div v-for="(msg, idx) in chatMessages" :key="idx" class="flex gap-4 max-w-3xl mx-auto group">
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none"
                                 :class="msg.role === 'user' ? 'bg-blue-600' : 'bg-green-600'">
                                 <span class="text-xs font-bold">{{ msg.role === 'user' ? 'U' : 'AI' }}</span>
                             </div>
-                            <div class="flex-1 space-y-2">
-                                <div class="bg-[#161b22] rounded-lg p-3 border border-[#30363d] text-gray-200 text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</div>
+                            <div class="flex-1 min-w-0 space-y-2">
+                                <div v-if="msg.reasoning_content" class="mb-2">
+                                    <details class="group/thinking bg-[#0d1117] rounded-lg border border-blue-900/30 overflow-hidden">
+                                        <summary class="px-3 py-2 cursor-pointer bg-[#161b22] hover:bg-[#1c2128] transition select-none flex items-center gap-2 text-xs text-gray-400 font-medium list-none">
+                                            <svg class="w-3 h-3 text-gray-500 transition-transform group-open/thinking:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                                            <span class="text-blue-400">Thinking Process</span>
+                                            <span v-if="!msg.done && msg.role === 'assistant'" class="animate-pulse">...</span>
+                                        </summary>
+                                        <div class="p-3 text-gray-400 text-xs font-mono whitespace-pre-wrap border-t border-[#30363d] bg-[#0d1117]/50 leading-relaxed">
+                                            {{ msg.reasoning_content }}
+                                        </div>
+                                    </details>
+                                </div>
+
+                                <div class="bg-[#161b22] rounded-lg p-3 border border-[#30363d] text-gray-200 text-sm leading-relaxed shadow-sm relative">
+                                    <div v-if="msg.role === 'assistant'" class="prose" v-html="renderMarkdown(msg.content)"></div>
+                                    <div v-else class="whitespace-pre-wrap">{{ msg.content }}</div>
+                                </div>
+
                                 <div v-if="msg.images && msg.images.length" class="flex gap-2 flex-wrap">
-                                    <img v-for="(img, i) in msg.images" :key="i" :src="img" class="h-20 w-auto rounded border border-[#30363d] object-cover cursor-pointer" @click="showImage(img)">
+                                    <img v-for="(img, i) in msg.images" :key="i" :src="img" class="h-24 w-auto rounded-md border border-[#30363d] object-cover cursor-pointer hover:opacity-80 transition" @click="showImage(img)">
                                 </div>
                             </div>
                         </div>
@@ -303,7 +324,6 @@
                         </div>
                     </div>
                     
-                    <!-- Input Area -->
                     <div class="p-4 border-t border-[#30363d] bg-[#161b22]">
                         <div class="max-w-3xl mx-auto space-y-3">
                             <div v-if="pendingImages.length" class="flex gap-2 overflow-x-auto pb-2">
@@ -319,17 +339,25 @@
                                 <input type="file" ref="fileInput" class="hidden" multiple accept="image/*" @change="handleImageSelect">
                                 <textarea v-model="chatInput" @keydown.ctrl.enter="sendMessage" placeholder="输入消息 (Ctrl+Enter 发送)..."
                                     class="flex-1 bg-[#0d1117] border border-[#30363d] rounded p-2 text-white text-sm focus:border-blue-500 focus:outline-none resize-none h-[42px] max-h-[200px]"></textarea>
-                                <button @click="sendMessage" :disabled="isSending || (!chatInput.trim() && !pendingImages.length)"
+                                <button v-if="!isSending" @click="sendMessage" :disabled="(!chatInput.trim() && !pendingImages.length)"
                                     class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium transition">
                                     发送
+                                </button>
+                                <button v-else @click="stopGeneration"
+                                    class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium transition flex items-center gap-2">
+                                    <svg class="w-4 h-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                    停止
                                 </button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Settings Sidebar -->
                 <div class="w-64 bg-[#161b22] border-l border-[#30363d] flex flex-col overflow-auto p-4 space-y-6">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">System Prompt</label>
+                        <textarea v-model="chatConfig.systemPrompt" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white h-24 resize-none focus:border-blue-500 focus:outline-none mb-1" placeholder="You are a helpful AI assistant..."></textarea>
+                    </div>
                     <div>
                         <label class="block text-xs font-bold text-gray-500 uppercase mb-2">API Endpoint</label>
                         <input v-model="chatConfig.endpoint" type="text" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white mb-1">
@@ -340,19 +368,28 @@
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Model</label>
-                        <input v-model="chatConfig.model" type="text" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white" placeholder="gemini-2.5-pro">
+                        <div class="relative">
+                            <select v-model="chatConfig.model" @click="fetchModels" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white appearance-none focus:border-blue-500 focus:outline-none">
+                                <option v-for="m in availableModels" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option>
+                                <option value="custom">Custom...</option>
+                            </select>
+                            <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                                <svg class="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                            </div>
+                        </div>
+                        <input v-if="chatConfig.model === 'custom'" v-model="chatConfig.customModel" type="text" class="mt-2 w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white" placeholder="Enter model ID...">
                     </div>
                     <div>
-                        <div class="flex justify-between mb-1">
+                        <div class="flex justify-between mb-1 items-center">
                             <label class="text-xs font-bold text-gray-500 uppercase">Temperature</label>
-                            <span class="text-xs text-blue-400">{{ chatConfig.temperature }}</span>
+                            <input v-model.number="chatConfig.temperature" type="number" min="0" max="2" step="0.1" class="w-12 bg-transparent text-right text-xs text-blue-400 border-b border-gray-700 focus:border-blue-500 focus:outline-none">
                         </div>
                         <input v-model.number="chatConfig.temperature" type="range" min="0" max="2" step="0.1" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
                     </div>
                     <div>
-                        <div class="flex justify-between mb-1">
+                        <div class="flex justify-between mb-1 items-center">
                             <label class="text-xs font-bold text-gray-500 uppercase">Top P</label>
-                            <span class="text-xs text-blue-400">{{ chatConfig.top_p }}</span>
+                            <input v-model.number="chatConfig.top_p" type="number" min="0" max="1" step="0.05" class="w-12 bg-transparent text-right text-xs text-blue-400 border-b border-gray-700 focus:border-blue-500 focus:outline-none">
                         </div>
                         <input v-model.number="chatConfig.top_p" type="range" min="0" max="1" step="0.05" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
                     </div>
@@ -362,6 +399,13 @@
                             <span class="text-xs text-blue-400">{{ chatConfig.max_tokens }}</span>
                         </div>
                         <input v-model.number="chatConfig.max_tokens" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white">
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <label class="text-xs font-bold text-gray-500 uppercase">Google Search</label>
+                        <div class="relative inline-block w-8 h-4 align-middle select-none transition duration-200 ease-in">
+                            <input v-model="chatConfig.googleSearch" type="checkbox" name="toggle" id="googleSearchToggle" class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out" :class="chatConfig.googleSearch ? 'translate-x-4 border-blue-600' : 'translate-x-0 border-gray-400'"/>
+                            <label for="googleSearchToggle" class="toggle-label block overflow-hidden h-4 rounded-full cursor-pointer transition-colors duration-200 ease-in-out" :class="chatConfig.googleSearch ? 'bg-blue-600' : 'bg-gray-700'"></label>
+                        </div>
                     </div>
                     <div class="pt-4 border-t border-[#30363d]">
                         <button @click="chatMessages = []" class="w-full py-2 border border-[#30363d] hover:bg-red-900/20 text-red-400 rounded text-xs transition">清空对话</button>
@@ -389,19 +433,27 @@
                 const logFilter = ref('ALL');
                 let ws = null;
 
-                // Playground State
                 const chatMessages = ref([]);
                 const chatInput = ref('');
                 const pendingImages = ref([]);
                 const isSending = ref(false);
                 const chatContainer = ref(null);
+                const availableModels = ref([]);
                 const chatConfig = ref({
                     endpoint: `http://${window.location.hostname}:2048/v1/chat/completions`,
                     apiKey: 'any',
-                    model: 'gemini-2.5-pro',
-                    temperature: 1.0,
-                    top_p: 0.95,
-                    max_tokens: 65535
+                    model: '',
+                    customModel: '',
+                    systemPrompt: ``,
+                    temperature: 0.7,
+                    top_p: 0.98,
+                    max_tokens: 65535,
+                    googleSearch: true
+                });
+                let abortController = null;
+
+                const effectiveModel = computed(() => {
+                    return chatConfig.value.model === 'custom' ? chatConfig.value.customModel : chatConfig.value.model;
                 });
 
                 const filteredLogs = computed(() => {
@@ -465,7 +517,6 @@
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(config.value)
                     });
-                    // Show toast?
                 };
 
                 const fetchAuthFiles = async () => {
@@ -490,7 +541,6 @@
                         if (!data.success) {
                             alert('操作失败: ' + (data.detail || '未知错误'));
                         } else {
-                            // 成功后刷新列表
                             await fetchAuthFiles();
                         }
                     } catch (e) {
@@ -526,15 +576,6 @@
                     logs.value = [];
                 };
 
-                watch(currentTab, (val) => {
-                    if (val === 'system') {
-                        // We need access to checkAllPorts here, but checkAllPorts is defined inside setup return object
-                        // To fix this cleanly in setup():
-                        // We need to define checkAllPorts before returning
-                    }
-                });
-                
-                // Re-structuring setup to allow internal calls
                 const checkAllPorts = async () => {
                     const res = await fetch('/api/system/ports');
                     multiPortResults.value = await res.json();
@@ -543,11 +584,44 @@
                 watch(currentTab, (val) => {
                     if (val === 'system') checkAllPorts();
                 });
+                
+                const fetchModels = async () => {
+                    try {
+                        const port = config.value.fastapi_port || 2048;
+                        const protocol = window.location.protocol;
+                        const hostname = window.location.hostname;
+                        const modelsEndpoint = `${protocol}//${hostname}:${port}/v1/models`;
+
+                        availableModels.value = [{ id: '', display_name: '加载中...' }];
+
+                        const res = await fetch(modelsEndpoint);
+
+                        if (res.ok) {
+                            const data = await res.json();
+                            const models = data.data || [];
+                            if (models.length > 0) {
+                                availableModels.value = models;
+                                const currentModelExists = models.some(m => m.id === chatConfig.value.model);
+                                if (!chatConfig.value.model || !currentModelExists) {
+                                    chatConfig.value.model = models[0].id;
+                                }
+                            } else {
+                                availableModels.value = [{ id: '', display_name: '无可用模型' }];
+                            }
+                        } else {
+                             availableModels.value = [{ id: '', display_name: '加载失败' }];
+                        }
+                    } catch (e) {
+                        console.error("Fetch models failed:", e);
+                        availableModels.value = [{ id: '', display_name: '加载失败' }];
+                    }
+                };
 
                 onMounted(() => {
                     connectWS();
                     fetchConfig();
                     fetchAuthFiles();
+                    fetchModels();
                 });
 
                 return {
@@ -577,15 +651,33 @@
                         const res = await fetch(`/api/system/kill/${pid}`, { method: 'POST' });
                         const data = await res.json();
                         if(data.success) {
-                            // Refresh
-                            const resPorts = await fetch('/api/system/ports');
-                            multiPortResults.value = await resPorts.json();
+                            await fetch('/api/system/ports');
                         } else {
                             alert(data.detail || 'Failed');
                         }
                     },
-                    // Playground Methods
-                    chatMessages, chatInput, pendingImages, isSending, chatContainer, chatConfig,
+                    chatMessages, chatInput, pendingImages, isSending, chatContainer, chatConfig, availableModels,
+                    fetchModels,
+                    stopGeneration: () => {
+                        if (abortController) {
+                            abortController.abort();
+                            abortController = null;
+                            isSending.value = false;
+                            const lastMsg = chatMessages.value[chatMessages.value.length - 1];
+                            if (lastMsg && lastMsg.role === 'assistant') {
+                                lastMsg.content += "\n\n[已停止生成]";
+                                lastMsg.done = true;
+                            }
+                        }
+                    },
+                    renderMarkdown: (text) => {
+                        if (!text) return '';
+                        try {
+                            return marked.parse(text);
+                        } catch (e) {
+                            return text;
+                        }
+                    },
                     handleImageSelect: (e) => {
                         const files = Array.from(e.target.files);
                         files.forEach(file => {
@@ -625,79 +717,106 @@
                         
                         chatMessages.value.push(userMsg);
                         
-                        // Prepare API request
-                        const messagesPayload = chatMessages.value.map(m => {
-                            if (m.role === 'user' && m.images && m.images.length) {
-                                // For simplicity in display history we store simpler struct, but here we reconstruct for API if needed
-                                // But wait, we just pushed a display friendly version.
-                                // Let's simplify: Just send the last user message properly formatted, and previous text only for context?
-                                // Or fully support multimodal context.
-                                // For this simple playground, let's just send the text history + current multimodal msg
-                                return { role: m.role, content: m.content }; // Simplification for history
-                            }
-                            return { role: m.role, content: m.content };
+                        const messagesPayload = chatMessages.value.slice(0, -1).map(m => {
+                             return { role: m.role, content: m.content };
                         });
                         
-                        // Replace last message with full multimodal content
-                        messagesPayload[messagesPayload.length - 1] = { role: 'user', content: content };
+                        if (chatConfig.value.systemPrompt && chatConfig.value.systemPrompt.trim()) {
+                            messagesPayload.unshift({ role: 'system', content: chatConfig.value.systemPrompt });
+                        }
+                        
+                        messagesPayload.push({ role: 'user', content: content });
 
                         chatInput.value = '';
                         pendingImages.value = [];
                         isSending.value = true;
+                        abortController = new AbortController();
 
                         nextTick(() => {
                             if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
                         });
 
                         try {
+                            const payload = {
+                                model: effectiveModel.value,
+                                messages: messagesPayload,
+                                temperature: chatConfig.value.temperature,
+                                top_p: chatConfig.value.top_p,
+                                max_tokens: chatConfig.value.max_tokens,
+                                stream: true
+                            };
+
+                            if (chatConfig.value.googleSearch) {
+                                payload.tools = [{ "type": "function", "function": { "name": "google_search" } }];
+                            }
+
                             const res = await fetch(chatConfig.value.endpoint, {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
                                     'Authorization': `Bearer ${chatConfig.value.apiKey}`
                                 },
-                                body: JSON.stringify({
-                                    model: chatConfig.value.model,
-                                    messages: messagesPayload,
-                                    temperature: chatConfig.value.temperature,
-                                    top_p: chatConfig.value.top_p,
-                                    max_tokens: chatConfig.value.max_tokens,
-                                    stream: true
-                                })
+                                body: JSON.stringify(payload),
+                                signal: abortController.signal
                             });
 
-                            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+                            if (!res.ok) throw new Error(`API Error: ${res.status} ${await res.text()}`);
 
                             const reader = res.body.getReader();
                             const decoder = new TextDecoder();
-                            let aiMsg = { role: 'assistant', content: '' };
+                            let aiMsg = { role: 'assistant', content: '', reasoning_content: '', done: false };
                             chatMessages.value.push(aiMsg);
 
                             while (true) {
                                 const { done, value } = await reader.read();
-                                if (done) break;
+                                if (done) {
+                                    aiMsg.done = true;
+                                    break;
+                                }
                                 
-                                const chunk = decoder.decode(value);
+                                const chunk = decoder.decode(value, { stream: true });
                                 const lines = chunk.split('\n');
                                 
                                 for (const line of lines) {
-                                    if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                                    if (line.startsWith('data: ') && line.trim() !== 'data: [DONE]') {
                                         try {
-                                            const data = JSON.parse(line.slice(6));
-                                            if (data.choices && data.choices[0].delta.content) {
-                                                aiMsg.content += data.choices[0].delta.content;
-                                                nextTick(() => {
-                                                    if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
-                                                });
+                                            const jsonStr = line.slice(6);
+                                            if (jsonStr) {
+                                                const data = JSON.parse(jsonStr);
+                                                const choice = data.choices && data.choices[0];
+                                                if (choice) {
+                                                    const delta = choice.delta;
+                                                    if (delta.content) {
+                                                        aiMsg.content += delta.content;
+                                                    }
+                                                    if (delta.reasoning_content) {
+                                                        aiMsg.reasoning_content += delta.reasoning_content;
+                                                    }
+                                                    nextTick(() => {
+                                                        if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+                                                    });
+                                                }
                                             }
-                                        } catch (e) {}
+                                        } catch (e) {
+                                            console.error('Error parsing stream chunk:', e, 'Chunk:', line);
+                                        }
                                     }
                                 }
                             }
                         } catch (e) {
-                            chatMessages.value.push({ role: 'assistant', content: `Error: ${e.message}` });
+                            if (e.name === 'AbortError') {
+                                console.log('Request aborted by user');
+                            } else {
+                                const lastMsg = chatMessages.value[chatMessages.value.length-1];
+                                if(lastMsg && lastMsg.role === 'assistant'){
+                                   lastMsg.content = `Error: ${e.message}`;
+                                } else {
+                                   chatMessages.value.push({ role: 'assistant', content: `Error: ${e.message}` });
+                                }
+                            }
                         } finally {
                             isSending.value = false;
+                            abortController = null;
                         }
                     },
                     showImage: (src) => {
@@ -706,12 +825,6 @@
                     }
                 };
             },
-            mounted() {
-                // Auto refresh if on system tab
-                if (this.currentTab === 'system') {
-                    this.checkAllPorts();
-                }
-            }
         }).mount('#app');
     </script>
 </body>
