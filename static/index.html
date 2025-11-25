@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Studio Proxy Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: { 750: '#2d3748', 850: '#1a202c', 950: '#0d1117' }
+                    },
+                    fontFamily: {
+                        mono: ['"JetBrains Mono"', '"Fira Code"', 'Consolas', 'Monaco', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; }
+        .log-entry { border-left: 3px solid transparent; }
+        .log-entry:hover { background-color: #161b22; }
+        .log-info { border-left-color: #38bdf8; color: #e6edf3; }
+        .log-warn { border-left-color: #fbbf24; color: #e6edf3; background-color: rgba(251, 191, 36, 0.05); }
+        .log-error { border-left-color: #f87171; color: #ff7b72; background-color: rgba(248, 113, 113, 0.1); }
+        .log-debug { border-left-color: #94a3b8; color: #8b949e; }
+        
+        ::-webkit-scrollbar { width: 12px; }
+        ::-webkit-scrollbar-track { background: #0d1117; }
+        ::-webkit-scrollbar-thumb { background-color: #30363d; border: 3px solid #0d1117; border-radius: 6px; }
+        ::-webkit-scrollbar-thumb:hover { background-color: #484f58; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-sm">
+
+    <header class="bg-[#161b22] border-b border-[#30363d] h-14 flex items-center px-4 justify-between shrink-0 z-20 shadow-md">
+        <div class="flex items-center gap-3">
+            <div class="relative flex h-3 w-3">
+                <span id="ws-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span id="ws-dot" class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+            </div>
+            <h1 class="font-bold text-lg tracking-tight text-white">
+                AI Studio <span class="text-blue-400">Proxy</span>
+            </h1>
+            <span class="px-2 py-0.5 rounded-full bg-[#30363d] text-xs text-gray-400 border border-gray-700" id="server-status">Connecting...</span>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div class="hidden md:flex items-center gap-4 text-xs text-gray-400 mr-4">
+                <div class="flex items-center gap-1">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    Queue: <span id="stat-queue" class="text-gray-200 font-mono">0</span>
+                </div>
+                <div class="flex items-center gap-1">
+                    <span class="w-2 h-2 bg-purple-500 rounded-full"></span>
+                    Active: <span id="stat-active" class="text-gray-200 font-mono">0</span>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 border-l border-[#30363d] pl-4">
+                <button onclick="clearLogs()" class="p-1.5 text-gray-400 hover:text-white hover:bg-[#30363d] rounded transition" title="Clear Logs">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                </button>
+                <div class="flex bg-[#30363d] rounded p-0.5">
+                    <button onclick="setFilter('ALL')" id="filter-all" class="px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition">ALL</button>
+                    <button onclick="setFilter('INFO')" id="filter-info" class="px-2 py-0.5 text-xs rounded hover:bg-gray-600 text-gray-300 transition">INFO</button>
+                    <button onclick="setFilter('WARN')" id="filter-warn" class="px-2 py-0.5 text-xs rounded hover:bg-gray-600 text-gray-300 transition">WARN</button>
+                    <button onclick="setFilter('ERROR')" id="filter-error" class="px-2 py-0.5 text-xs rounded hover:bg-gray-600 text-gray-300 transition">ERROR</button>
+                </div>
+                <button id="auto-scroll-toggle" onclick="toggleAutoScroll()" class="text-xs px-2 py-1 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition flex items-center gap-1">
+                    <span>Auto Scroll</span>
+                    <div class="w-2 h-2 rounded-full bg-blue-500" id="scroll-indicator"></div>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 relative bg-[#0d1117] flex flex-col min-h-0">
+        <div id="logs-container" class="flex-1 overflow-y-auto overflow-x-hidden p-2 font-mono text-[13px] leading-5 space-y-[1px]">
+        </div>
+        
+        <button id="scroll-down-fab" onclick="forceScrollDown()" class="absolute bottom-6 right-6 p-3 bg-blue-600 hover:bg-blue-500 text-white rounded-full shadow-lg transition-all transform translate-y-20 opacity-0 z-10">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+        </button>
+    </main>
+
+    <script>
+        const logsContainer = document.getElementById('logs-container');
+        const wsDot = document.getElementById('ws-dot');
+        const wsPing = document.getElementById('ws-ping');
+        const serverStatus = document.getElementById('server-status');
+        const scrollIndicator = document.getElementById('scroll-indicator');
+        const scrollDownFab = document.getElementById('scroll-down-fab');
+        
+        let autoScroll = true;
+        let ws = null;
+        let currentFilter = 'ALL';
+        let logCount = 0;
+        const MAX_LOGS = 3000;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+            
+            if (ws) ws.close();
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                setConnectionStatus(true);
+                addLog('SYSTEM', 'INFO', '已连接到日志流服务器');
+                fetchServerStatus();
+            };
+
+            ws.onmessage = (event) => {
+                parseAndAppendLog(event.data);
+            };
+
+            ws.onclose = (e) => {
+                setConnectionStatus(false);
+                addLog('SYSTEM', 'WARN', `连接断开 (${e.code})，3秒后尝试重连...`);
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WS Error:', err);
+                ws.close();
+            };
+        }
+
+        function setConnectionStatus(connected) {
+            if (connected) {
+                wsDot.className = "relative inline-flex rounded-full h-3 w-3 bg-green-500";
+                wsPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75";
+            } else {
+                wsDot.className = "relative inline-flex rounded-full h-3 w-3 bg-red-500";
+                wsPing.className = "hidden";
+            }
+        }
+
+        function parseAndAppendLog(rawStr) {
+            const parts = rawStr.split('|');
+            let time = new Date().toLocaleTimeString();
+            let level = 'INFO';
+            let msg = rawStr;
+
+            if (parts.length >= 3) {
+                const datePart = parts[0].trim();
+                const timeMatch = datePart.match(/\d{2}:\d{2}:\d{2}/);
+                if (timeMatch) time = timeMatch[0];
+
+                const levelPart = parts[1].trim();
+                msg = parts.slice(2).join('|').trim();
+
+                if (levelPart.includes('ERROR') || levelPart.includes('❌') || levelPart.includes('CRITICAL') || levelPart.includes('🔥')) level = 'ERROR';
+                else if (levelPart.includes('WARN') || levelPart.includes('⚠️')) level = 'WARN';
+                else if (levelPart.includes('DEBUG') || levelPart.includes('🐛')) level = 'DEBUG';
+            }
+
+            addLog(time, level, msg);
+        }
+
+        function addLog(time, level, msg) {
+            if (currentFilter !== 'ALL' && level !== currentFilter) return; 
+            
+            const div = document.createElement('div');
+            div.className = `log-entry log-${level.toLowerCase()} flex gap-3 px-2 py-0.5`;
+            div.dataset.level = level;
+            
+            if (currentFilter !== 'ALL' && level !== currentFilter) {
+                div.style.display = 'none';
+            }
+
+            div.innerHTML = `
+                <span class="text-gray-500 select-none shrink-0 w-16 text-right opacity-60">${time}</span>
+                <span class="font-bold shrink-0 w-12 text-center select-none opacity-80">${level}</span>
+                <span class="break-all whitespace-pre-wrap">${escapeHtml(msg)}</span>
+            `;
+
+            logsContainer.appendChild(div);
+            logCount++;
+
+            if (logCount > MAX_LOGS) {
+                logsContainer.removeChild(logsContainer.firstChild);
+                logCount--;
+            }
+
+            if (autoScroll) {
+                scrollToBottom();
+            } else {
+                updateScrollFab();
+            }
+        }
+
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            scrollIndicator.className = `w-2 h-2 rounded-full ${autoScroll ? 'bg-blue-500' : 'bg-gray-500'}`;
+            if (autoScroll) scrollToBottom();
+            updateScrollFab();
+        }
+
+        function scrollToBottom() {
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+            updateScrollFab();
+        }
+        
+        function forceScrollDown() {
+            autoScroll = true;
+            scrollIndicator.className = "w-2 h-2 rounded-full bg-blue-500";
+            scrollToBottom();
+        }
+
+        function clearLogs() {
+            logsContainer.innerHTML = '';
+            logCount = 0;
+            addLog('SYSTEM', 'INFO', '日志已清空');
+        }
+
+        function setFilter(level) {
+            currentFilter = level;
+            
+            ['all', 'info', 'warn', 'error'].forEach(t => {
+                const btn = document.getElementById(`filter-${t}`);
+                const isActive = t.toUpperCase() === level;
+                if (isActive) {
+                    btn.className = "px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition";
+                } else {
+                    btn.className = "px-2 py-0.5 text-xs rounded hover:bg-gray-600 text-gray-300 transition";
+                }
+            });
+
+            const entries = logsContainer.children;
+            for (let entry of entries) {
+                if (level === 'ALL' || entry.dataset.level === level) {
+                    entry.style.display = 'flex';
+                } else {
+                    entry.style.display = 'none';
+                }
+            }
+            
+            if (autoScroll) scrollToBottom();
+        }
+
+        function updateScrollFab() {
+            const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop - logsContainer.clientHeight < 50;
+            if (autoScroll || isAtBottom) {
+                scrollDownFab.classList.add('translate-y-20', 'opacity-0');
+            } else {
+                scrollDownFab.classList.remove('translate-y-20', 'opacity-0');
+            }
+        }
+
+        logsContainer.addEventListener('scroll', () => {
+            const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop - logsContainer.clientHeight < 20;
+            if (!isAtBottom && autoScroll) {
+                autoScroll = false;
+                scrollIndicator.className = "w-2 h-2 rounded-full bg-gray-500";
+            } else if (isAtBottom && !autoScroll) {
+                autoScroll = true;
+                scrollIndicator.className = "w-2 h-2 rounded-full bg-blue-500";
+            }
+            updateScrollFab();
+        });
+
+        async function fetchServerStatus() {
+            try {
+                const res = await fetch('/health');
+                if (res.ok) {
+                    const data = await res.json();
+                    serverStatus.textContent = "Online";
+                    serverStatus.className = "px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 text-xs border border-green-500/20";
+                    
+                    if (data.details) {
+                        document.getElementById('stat-queue').textContent = data.details.queueLength >= 0 ? data.details.queueLength : 0;
+                    }
+                    fetchQueueStatus();
+                } else {
+                    throw new Error('Status not OK');
+                }
+            } catch (e) {
+                serverStatus.textContent = "Offline";
+                serverStatus.className = "px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-xs border border-red-500/20";
+            }
+            setTimeout(fetchServerStatus, 5000);
+        }
+
+        async function fetchQueueStatus() {
+            try {
+                const res = await fetch('/v1/queue');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('stat-queue').textContent = data.queue_length;
+                    document.getElementById('stat-active').textContent = data.active_requests_count;
+                }
+            } catch (e) {}
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        connectWebSocket();
+    </script>
+</body>
+</html>

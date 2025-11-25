@@ -12,32 +12,56 @@ def setup_server_logging(logger_instance: logging.Logger, log_ws_manager: WebSoc
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
     os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
-    file_log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s')
+    
+    class EmojiFormatter(logging.Formatter):
+        EMOJIS = {
+            'DEBUG': '🐛',
+            'INFO': 'ℹ️ ',
+            'WARNING': '⚠️ ',
+            'ERROR': '❌',
+            'CRITICAL': '🔥'
+        }
+
+        def format(self, record):
+            emoji = self.EMOJIS.get(record.levelname, '📝')
+            record.levelname_emoji = f"{emoji} {record.levelname:<7}"
+            return super().format(record)
+
+    log_fmt_str = '%(asctime)s | %(levelname_emoji)s | %(message)s'
+    file_log_formatter = EmojiFormatter(log_fmt_str, datefmt='%Y-%m-%d %H:%M:%S')
+
     if logger_instance.hasHandlers():
         logger_instance.handlers.clear()
     logger_instance.setLevel(log_level)
     logger_instance.propagate = False
+    
     if os.path.exists(APP_LOG_FILE_PATH):
         try:
             os.remove(APP_LOG_FILE_PATH)
         except OSError as e:
-            print(f"警告 (setup_server_logging): 尝试移除旧的 app.log 文件 '{APP_LOG_FILE_PATH}' 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.__stderr__)
+            print(f"⚠️ (setup) 移除旧日志失败: {e}", file=sys.__stderr__)
+            
     file_handler = logging.handlers.RotatingFileHandler(APP_LOG_FILE_PATH, maxBytes=5 * 1024 * 1024, backupCount=5, encoding='utf-8', mode='w')
     file_handler.setFormatter(file_log_formatter)
     logger_instance.addHandler(file_handler)
+    
     if log_ws_manager is None:
-        print('严重警告 (setup_server_logging): log_ws_manager 未初始化！WebSocket 日志功能将不可用。', file=sys.__stderr__)
+        print('⚠️ (setup) WebSocket 日志管理器未初始化', file=sys.__stderr__)
     else:
         ws_handler = WebSocketLogHandler(log_ws_manager)
         ws_handler.setLevel(logging.INFO)
+        ws_handler.setFormatter(file_log_formatter)
         logger_instance.addHandler(ws_handler)
-    console_server_log_formatter = logging.Formatter('%(asctime)s - %(levelname)s [SERVER] - %(message)s')
+    
+    console_server_log_formatter = EmojiFormatter('%(asctime)s | %(levelname_emoji)s | %(message)s', datefmt='%H:%M:%S')
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setFormatter(console_server_log_formatter)
     console_handler.setLevel(log_level)
     logger_instance.addHandler(console_handler)
+    
     original_stdout = sys.stdout
     original_stderr = sys.stderr
+    
     if redirect_print:
         print('--- 注意：server.py 正在将其 print 输出重定向到日志系统 (文件、WebSocket 和控制台记录器) ---', file=original_stderr)
         stdout_redirect_logger = logging.getLogger('AIStudioProxyServer.stdout')
@@ -50,17 +74,18 @@ def setup_server_logging(logger_instance: logging.Logger, log_ws_manager: WebSoc
         sys.stderr = StreamToLogger(stderr_redirect_logger, logging.ERROR)
     else:
         print('--- server.py 的 print 输出未被重定向到日志系统 (将使用原始 stdout/stderr) ---', file=original_stderr)
+        
     logging.getLogger('uvicorn').setLevel(logging.WARNING)
     logging.getLogger('uvicorn.error').setLevel(logging.INFO)
     logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
     logging.getLogger('websockets').setLevel(logging.WARNING)
     logging.getLogger('playwright').setLevel(logging.WARNING)
     logging.getLogger('asyncio').setLevel(logging.ERROR)
-    logger_instance.info('=' * 5 + ' AIStudioProxyServer 日志系统已在 lifespan 中初始化 ' + '=' * 5)
-    logger_instance.info(f'日志级别设置为: {logging.getLevelName(log_level)}')
-    logger_instance.info(f'日志文件路径: {APP_LOG_FILE_PATH}')
-    logger_instance.info(f'控制台日志处理器已添加。')
-    logger_instance.info(f"Print 重定向 (由 SERVER_REDIRECT_PRINT 环境变量控制): {('启用' if redirect_print else '禁用')}")
+    
+    logger_instance.info('🚀 AIStudioProxyServer 日志系统就绪')
+    logger_instance.info(f'📝 Level: {logging.getLevelName(log_level)} | Path: {APP_LOG_FILE_PATH}')
+    logger_instance.info(f"🖨️ Print Redirect: {('ON' if redirect_print else 'OFF')}")
+    
     return (original_stdout, original_stderr)
 
 def restore_original_streams(original_stdout: object, original_stderr: object) -> None:

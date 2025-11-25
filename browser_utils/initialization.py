@@ -10,7 +10,6 @@ from models import ClientDisconnectedError
 logger = logging.getLogger('AIStudioProxyServer')
 
 async def _setup_network_interception_and_scripts(context: AsyncBrowserContext):
-    """设置网络拦截和脚本注入"""
     try:
         from config.settings import ENABLE_SCRIPT_INJECTION
         if not ENABLE_SCRIPT_INJECTION:
@@ -22,11 +21,8 @@ async def _setup_network_interception_and_scripts(context: AsyncBrowserContext):
         logger.error(f'设置网络拦截和脚本注入时发生错误: {e}')
 
 async def _setup_model_list_interception(context: AsyncBrowserContext):
-    """设置模型列表网络拦截"""
     try:
-
         async def handle_model_list_route(route):
-            """处理模型列表请求的路由"""
             request = route.request
             if 'alkalimakersuite' in request.url and 'ListModels' in request.url:
                 logger.info(f'🔍 拦截到模型列表请求: {request.url}')
@@ -42,7 +38,6 @@ async def _setup_model_list_interception(context: AsyncBrowserContext):
         logger.error(f'设置模型列表网络拦截时发生错误: {e}')
 
 async def _modify_model_list_response(original_body: bytes, url: str) -> bytes:
-    """修改模型列表响应"""
     try:
         original_text = original_body.decode('utf-8')
         ANTI_HIJACK_PREFIX = ")]}'\n"
@@ -63,7 +58,6 @@ async def _modify_model_list_response(original_body: bytes, url: str) -> bytes:
         return original_body
 
 async def _inject_models_to_response(json_data: dict, url: str) -> dict:
-    """向响应中注入模型"""
     try:
         from .operations import _get_injected_models
         injected_models = _get_injected_models()
@@ -130,9 +124,7 @@ def _find_template_model(models_array):
     return None
 
 async def _add_init_scripts_to_context(context: AsyncBrowserContext):
-    """在浏览器上下文中添加初始化脚本。"""
     try:
-        # 1. 注入用于模型发现的原有脚本
         from config.settings import USERSCRIPT_PATH
         if os.path.exists(USERSCRIPT_PATH):
             with open(USERSCRIPT_PATH, 'r', encoding='utf-8') as f:
@@ -163,12 +155,11 @@ def _clean_userscript_headers(script_content: str) -> str:
     return '\n'.join(cleaned_lines)
 
 async def _initialize_page_logic(browser: AsyncBrowser):
-    """初始化页面逻辑，连接到现有浏览器"""
-    logger.info('--- 初始化页面逻辑 (连接到现有浏览器) ---')
+    logger.info('🚀 --- 初始化页面逻辑 (连接到现有浏览器) ---')
     temp_context: Optional[AsyncBrowserContext] = None
     storage_state_path_to_use: Optional[str] = None
     launch_mode = os.environ.get('LAUNCH_MODE', 'debug')
-    logger.info(f'   检测到启动模式: {launch_mode}')
+    logger.info(f'⚙️  检测到启动模式: {launch_mode}')
     loop = asyncio.get_running_loop()
     if launch_mode == 'headless' or launch_mode == 'virtual_headless':
         auth_filename = os.environ.get('ACTIVE_AUTH_JSON_PATH')
@@ -176,46 +167,38 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             constructed_path = auth_filename
             if os.path.exists(constructed_path):
                 storage_state_path_to_use = constructed_path
-                logger.info(f'   无头模式将使用的认证文件: {constructed_path}')
+                logger.info(f'🔐 无头模式将使用的认证文件: {constructed_path}')
             else:
-                logger.error(f"{launch_mode} 模式认证文件无效或不存在: '{constructed_path}'")
+                logger.error(f"❌ {launch_mode} 模式认证文件无效或不存在: '{constructed_path}'")
                 raise RuntimeError(f"{launch_mode} 模式认证文件无效: '{constructed_path}'")
         else:
-            logger.error(f'{launch_mode} 模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置或为空。')
+            logger.error(f'❌ {launch_mode} 模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置或为空。')
             raise RuntimeError(f'{launch_mode} 模式需要 ACTIVE_AUTH_JSON_PATH。')
     elif launch_mode == 'debug':
-        logger.info(f'   调试模式: 尝试从环境变量 ACTIVE_AUTH_JSON_PATH 加载认证文件...')
         auth_filepath_from_env = os.environ.get('ACTIVE_AUTH_JSON_PATH')
         if auth_filepath_from_env and os.path.exists(auth_filepath_from_env):
             storage_state_path_to_use = auth_filepath_from_env
-            logger.info(f'   调试模式将使用的认证文件 (来自环境变量): {storage_state_path_to_use}')
+            logger.info(f'🔐 调试模式将使用的认证文件: {storage_state_path_to_use}')
         elif auth_filepath_from_env:
-            logger.warning(f"   调试模式下环境变量 ACTIVE_AUTH_JSON_PATH 指向的文件不存在: '{auth_filepath_from_env}'。不加载认证文件。")
+            logger.warning(f"⚠️ 调试模式下环境变量文件不存在: '{auth_filepath_from_env}'。不加载认证文件。")
         else:
-            logger.info('   调试模式下未通过环境变量提供认证文件。将使用浏览器当前状态。')
+            logger.info('ℹ️ 调试模式下未提供认证文件，使用浏览器当前状态。')
     elif launch_mode == 'direct_debug_no_browser':
-        logger.info('   direct_debug_no_browser 模式：不加载 storage_state，不进行浏览器操作。')
+        logger.info('ℹ️ direct_debug_no_browser 模式：不加载 storage_state。')
     else:
         logger.warning(f"   ⚠️ 警告: 未知的启动模式 '{launch_mode}'。不加载 storage_state。")
     try:
-        logger.info('创建新的浏览器上下文...')
+        logger.info('🖥️ 创建新的浏览器上下文...')
         fixed_width = 1920
         fixed_height = 1080
         context_options: Dict[str, Any] = {'viewport': {'width': fixed_width, 'height': fixed_height}, 'screen': {'width': fixed_width, 'height': fixed_height}, 'device_scale_factor': 1, 'is_mobile': False, 'has_touch': False}
-        logger.info(f'   (强制设置分辨率: {fixed_width}x{fixed_height})')
         if storage_state_path_to_use:
             context_options['storage_state'] = storage_state_path_to_use
-            logger.info(f"   (使用 storage_state='{os.path.basename(storage_state_path_to_use)}')")
-        else:
-            logger.info('   (不使用 storage_state)')
         import server
         if server.PLAYWRIGHT_PROXY_SETTINGS:
             context_options['proxy'] = server.PLAYWRIGHT_PROXY_SETTINGS
-            logger.info(f"   (浏览器上下文将使用代理: {server.PLAYWRIGHT_PROXY_SETTINGS['server']})")
-        else:
-            logger.info('   (浏览器上下文不使用显式代理配置)')
+            logger.info(f"🌐 浏览器代理: {server.PLAYWRIGHT_PROXY_SETTINGS['server']}")
         context_options['ignore_https_errors'] = True
-        logger.info('   (浏览器上下文将忽略 HTTPS 错误)')
         temp_context = await browser.new_context(**context_options)
         await _setup_network_interception_and_scripts(temp_context)
         found_page: Optional[AsyncPage] = None
@@ -243,15 +226,14 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             except Exception as e_url_check:
                 logger.warning(f'   检查页面 URL 时出现其他未预期错误: {e_url_check} (类型: {type(e_url_check).__name__})')
         if not found_page:
-            logger.info(f'-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...')
+            logger.info(f'🌐 打开新页面并导航: {target_full_url}...')
             found_page = await temp_context.new_page()
             if found_page:
-                logger.info(f'   为新创建的页面添加模型列表响应监听器 (导航前)。')
                 found_page.on('response', _handle_model_list_response)
             try:
                 await found_page.goto(target_full_url, wait_until='domcontentloaded', timeout=90000)
                 current_url = found_page.url
-                logger.info(f'-> 新页面导航尝试完成。当前 URL: {current_url}')
+                logger.info(f'✅ 页面导航完成: {current_url}')
             except Exception as new_page_nav_err:
                 from .operations import save_error_snapshot
                 await save_error_snapshot('init_new_page_nav_fail')
@@ -297,18 +279,17 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await save_error_snapshot('init_unexpected_page')
             logger.error(f"初始导航后页面 URL 意外: {current_url}。期望包含 '{target_url_base}' 和 '/prompts/'。")
             raise RuntimeError(f'初始导航后出现意外页面: {current_url}。')
-        logger.info(f'-> 确认当前位于 AI Studio 对话页面: {current_url}')
+        logger.info(f'✅ 确认位于 AI Studio: {current_url}')
         await found_page.bring_to_front()
         try:
             input_wrapper_locator = found_page.locator('ms-prompt-input-wrapper')
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
-            logger.info('-> ✅ 核心输入区域可见。')
+            logger.info('✅ 核心输入区域可见。')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
                 from browser_utils.operations import get_model_name_from_page_parallel
                 
-                # 使用并行检测优化初始化速度
                 model_name_on_page = await get_model_name_from_page_parallel(
                     found_page, MODEL_SELECTORS_LIST, timeout=2000, req_id='init_page_logic', expected_model_name=None
                 )
@@ -342,7 +323,6 @@ async def _initialize_page_logic(browser: AsyncBrowser):
         raise RuntimeError(f'页面初始化意外错误: {e_init_page}') from e_init_page
 
 async def _close_page_logic():
-    """关闭页面逻辑"""
     import server
     logger.info('--- 运行页面逻辑关闭 --- ')
     if server.page_instance and (not server.page_instance.is_closed()):
@@ -361,7 +341,6 @@ async def _close_page_logic():
     return (None, False)
 
 async def signal_camoufox_shutdown():
-    """发送关闭信号到Camoufox服务器"""
     logger.info('   尝试发送关闭信号到 Camoufox 服务器 (此功能可能已由父进程处理)...')
     ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
     if not ws_endpoint:
@@ -378,7 +357,6 @@ async def signal_camoufox_shutdown():
         logger.error(f'   ⚠️ 发送关闭信号过程中捕获异常: {e}', exc_info=True)
 
 async def _wait_for_model_list_and_handle_auth_save(temp_context, launch_mode, loop):
-    """等待模型列表响应并处理认证保存"""
     import server
     logger.info('   等待模型列表响应以确认登录成功...')
     try:
@@ -418,7 +396,6 @@ async def _wait_for_model_list_and_handle_auth_save(temp_context, launch_mode, l
     print('=' * 50 + '\n', flush=True)
 
 async def _handle_auth_file_save(temp_context, loop):
-    """处理认证文件保存（手动模式）"""
     os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
     default_auth_filename = f'auth_state_{int(time.time())}.json'
     print(USER_INPUT_START_MARKER_SERVER, flush=True)
@@ -447,7 +424,6 @@ async def _handle_auth_file_save(temp_context, loop):
         print(f'   ❌ 保存认证状态失败: {save_state_err}', flush=True)
 
 async def _handle_auth_file_save_auto(temp_context):
-    """处理认证文件保存（自动模式）"""
     os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
     timestamp = int(time.time())
     auto_auth_filename = f'auth_auto_{timestamp}.json'

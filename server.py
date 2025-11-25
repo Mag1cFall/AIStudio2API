@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator, TimeoutError
@@ -56,7 +57,17 @@ params_cache_lock: Optional[Lock] = None
 logger = logging.getLogger('AIStudioProxyServer')
 log_ws_manager = None
 app = create_app()
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+os.makedirs(STATIC_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+async def read_root():
+    return FileResponse(os.path.join(STATIC_DIR, 'index.html'))
+
 if __name__ == '__main__':
     import uvicorn
     port = int(os.environ.get('PORT', 2048))
+    logger.info(f"✨ Dashboard available at: http://localhost:{port}")
     uvicorn.run('server:app', host='0.0.0.0', port=port, log_level='info', access_log=False)

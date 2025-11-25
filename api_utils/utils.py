@@ -49,8 +49,7 @@ class RequestCancellationManager:
 request_manager = RequestCancellationManager()
 
 def calculate_stream_max_retries(messages: List[Message]) -> int:
-    """根据请求内容计算流式响应的最大重试次数 (动态超时)"""
-    base_retries = 300  # 基础 30秒
+    base_retries = 300
     total_token_estimate = 0
     image_count = 0
 
@@ -60,10 +59,9 @@ def calculate_stream_max_retries(messages: List[Message]) -> int:
             continue
         
         if isinstance(content, str):
-            total_token_estimate += len(content) / 3  # 粗略估计
+            total_token_estimate += len(content) / 3
         elif isinstance(content, list):
             for item in content:
-                # 尝试处理 Pydantic 对象或 Dict
                 if hasattr(item, 'type') and item.type == 'text':
                     text = item.text or ''
                     total_token_estimate += len(text) / 3
@@ -76,15 +74,9 @@ def calculate_stream_max_retries(messages: List[Message]) -> int:
                 elif isinstance(item, dict) and item.get('type') == 'image_url':
                     image_count += 1
 
-    # 策略:
-    # 基础: 300 (30s)
-    # 每张图片: +50 (5s)
-    # 每10000 Token: +20 (2s)
-    
     additional_retries = (image_count * 50) + int((total_token_estimate / 10000) * 20)
     total_retries = base_retries + additional_retries
     
-    # 设定上限 1200 (2分钟)
     return min(1200, total_retries)
 
 def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
@@ -102,31 +94,28 @@ def generate_sse_error_chunk(message: str, req_id: str, error_type: str='server_
     return f'data: {json.dumps(error_chunk)}\n\n'
 
 async def use_stream_response(req_id: str, max_empty_retries: int = 300) -> AsyncGenerator[Any, None]:
-    """使用流响应（从服务器的全局队列获取数据）"""
     from server import STREAM_QUEUE, logger
     import queue
     if STREAM_QUEUE is None:
-        logger.warning(f'[{req_id}] STREAM_QUEUE is None, 无法使用流响应')
+        logger.warning(f'[{req_id}] ⚠️ STREAM_QUEUE is None, 无法使用流响应')
         return
-    logger.info(f'[{req_id}] 开始使用流响应 (Max Retries: {max_empty_retries})')
+    logger.info(f'[{req_id}] 🌊 开始使用流响应 (Max Retries: {max_empty_retries})')
     empty_count = 0
-    # max_empty_retries 参数控制
     data_received = False
     try:
         while True:
             try:
                 data = STREAM_QUEUE.get_nowait()
                 if data is None:
-                    logger.info(f'[{req_id}] 接收到流结束标志')
+                    logger.info(f'[{req_id}] 🛑 接收到流结束标志')
                     break
                 empty_count = 0
                 data_received = True
-                logger.debug(f'[{req_id}] 接收到流数据: {type(data)} - {str(data)[:200]}...')
                 if isinstance(data, str):
                     try:
                         parsed_data = json.loads(data)
                         if parsed_data.get('done') is True:
-                            logger.info(f'[{req_id}] 接收到JSON格式的完成标志')
+                            logger.info(f'[{req_id}] ✅ 接收到JSON格式的完成标志')
                             yield parsed_data
                             break
                         else:
@@ -159,25 +148,21 @@ async def use_stream_response(req_id: str, max_empty_retries: int = 300) -> Asyn
         logger.info(f'[{req_id}] 流响应使用完成，数据接收状态: {data_received}')
 
 async def clear_stream_queue():
-    """清空流队列（与原始参考文件保持一致）"""
     from server import STREAM_QUEUE, logger
     import queue
     if STREAM_QUEUE is None:
-        logger.info('流队列未初始化或已被禁用，跳过清空操作。')
         return
     while True:
         try:
             data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
         except queue.Empty:
-            logger.info('流式队列已清空 (捕获到 queue.Empty)。')
             break
         except Exception as e:
-            logger.error(f'清空流式队列时发生意外错误: {e}', exc_info=True)
+            logger.error(f'❌ 清空流式队列时发生意外错误: {e}', exc_info=True)
             break
-    logger.info('流式队列缓存清空完毕。')
+    logger.info('🧹 流式队列缓存清空完毕。')
 
 async def use_helper_get_response(helper_endpoint: str, helper_sapisid: str) -> AsyncGenerator[str, None]:
-    """使用Helper服务获取响应的生成器"""
     from server import logger
     import aiohttp
     logger.info(f'正在尝试使用Helper端点: {helper_endpoint}')
@@ -233,7 +218,7 @@ def extract_base64_to_local(base64_data: str) -> str:
 
 def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, str, list]:
     from server import logger
-    logger.info(f'[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。')
+    logger.info(f'[{req_id}] 🧩 正在从 {len(messages)} 条消息准备组合提示...')
     system_prompts = []
     combined_parts = []
     images_list = []
@@ -274,7 +259,7 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
                         image_tag = f'[{filename}]'
                         message_images.append(image_tag)
                         image_counter += 1
-                        logger.info(f'[{req_id}] 为图片分配标识符: {image_tag}')
+                        logger.info(f'[{req_id}] 🖼️ 为图片分配标识符: {image_tag}')
                     else:
                         images_list.append(image_url_value)
                         try:
@@ -286,12 +271,12 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
                         image_tag = f'[{filename}]'
                         message_images.append(image_tag)
                         image_counter += 1
-                        logger.info(f'[{req_id}] 为图片URL分配标识符: {image_tag}')
+                        logger.info(f'[{req_id}] 🖼️ 为图片URL分配标识符: {image_tag}')
                 else:
-                    logger.warning(f'[{req_id}] (准备提示) 警告: 在索引 {i} 的消息中忽略非文本或未知类型的 content item')
+                    logger.warning(f'[{req_id}] ⚠️ 忽略未知类型的 content item')
             content_str = '\n'.join(text_parts).strip()
         else:
-            logger.warning(f'[{req_id}] (准备提示) 警告: 角色 {role} 在索引 {i} 的内容类型意外 ({type(content)}) 或为 None。')
+            logger.warning(f'[{req_id}] ⚠️ 角色 {role} 内容类型意外: {type(content)}')
             content_str = str(content or '').strip()
         if content_str or message_images:
             message_content = content_str
@@ -305,9 +290,9 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
     final_prompt = '\n\n'.join(combined_parts)
     system_prompt = '\n\n'.join(system_prompts)
     if system_prompt:
-        logger.info(f"[{req_id}] 提取到组合后的系统提示: '{system_prompt[:100]}...'")
-    preview_text = final_prompt[:500].replace('\n', '\\n')
-    logger.info(f"[{req_id}] (准备提示) 组合提示长度: {len(final_prompt)}，包含 {len(images_list)} 张图片。预览: '{preview_text}...'")
+        logger.info(f"[{req_id}] 📝 系统提示: '{system_prompt[:50]}...'")
+    preview_text = final_prompt[:200].replace('\n', '\\n')
+    logger.info(f"[{req_id}] 🧩 组合提示 ({len(final_prompt)} chars, {len(images_list)} imgs): '{preview_text}...'")
     return (system_prompt, final_prompt, images_list)
 
 def _get_image_message_index(messages: List[Message], image_num: int) -> int:

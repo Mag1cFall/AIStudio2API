@@ -12,21 +12,10 @@ logger = logging.getLogger('AIStudioProxyServer')
 from .operations import get_model_name_from_page_parallel
 
 async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> dict:
-    """
-    验证UI状态设置是否正确
-
-    Args:
-        page: Playwright页面对象
-        req_id: 请求ID用于日志
-
-    Returns:
-        dict: 包含验证结果的字典
-    """
     try:
-        logger.info(f'[{req_id}] 验证UI状态设置...')
         prefs_str = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
         if not prefs_str:
-            logger.warning(f'[{req_id}] localStorage.aiStudioUserPreference 不存在')
+            logger.warning(f'[{req_id}] ⚠️ localStorage.aiStudioUserPreference 不存在')
             return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': 'localStorage不存在'}
         try:
             prefs = json.loads(prefs_str)
@@ -34,30 +23,17 @@ async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> d
             are_tools_open = prefs.get('areToolsOpen')
             needs_update = is_advanced_open is not True or are_tools_open is not True
             result = {'exists': True, 'isAdvancedOpen': is_advanced_open, 'areToolsOpen': are_tools_open, 'needsUpdate': needs_update, 'prefs': prefs}
-            logger.info(f'[{req_id}] UI状态验证结果: isAdvancedOpen={is_advanced_open}, areToolsOpen={are_tools_open} (期望: True), needsUpdate={needs_update}')
             return result
         except json.JSONDecodeError as e:
-            logger.error(f'[{req_id}] 解析localStorage JSON失败: {e}')
+            logger.error(f'[{req_id}] ❌ 解析localStorage JSON失败: {e}')
             return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'JSON解析失败: {e}'}
     except Exception as e:
-        logger.error(f'[{req_id}] 验证UI状态设置时发生错误: {e}')
+        logger.error(f'[{req_id}] ❌ 验证UI状态设置时发生错误: {e}')
         return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'验证失败: {e}'}
 
 async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bool:
-    """
-    强制设置UI状态 (原子化操作优化版本)
-    
-    将读取、校验、写入、验证整合到一次 JS 执行中，减少 CDP 通信开销。
-
-    Args:
-        page: Playwright页面对象
-        req_id: 请求ID用于日志
-
-    Returns:
-        bool: 设置是否成功
-    """
     try:
-        logger.info(f'[{req_id}] 开始强制设置UI状态 (原子化JS)...')
+        logger.info(f'[{req_id}] ⚡ 开始强制设置UI状态 (原子化JS)...')
         
         js_script = """
         () => {
@@ -73,17 +49,14 @@ async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bo
                     }
                 }
                 
-                // 检查是否已满足条件
                 if (prefs.isAdvancedOpen === true && prefs.areToolsOpen === true) {
                     return { success: true, updated: false, msg: 'Already correct' };
                 }
                 
-                // 更新状态
                 prefs.isAdvancedOpen = true;
                 prefs.areToolsOpen = true;
                 localStorage.setItem(key, JSON.stringify(prefs));
                 
-                // 立即验证
                 const checkStr = localStorage.getItem(key);
                 const checkPrefs = JSON.parse(checkStr);
                 if (checkPrefs.isAdvancedOpen === true && checkPrefs.areToolsOpen === true) {
@@ -101,55 +74,32 @@ async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bo
         
         if result.get('success'):
             if result.get('updated'):
-                logger.info(f"[{req_id}] ✅ UI状态已更新并验证成功 (原子化操作)")
+                logger.info(f"[{req_id}] ✅ UI状态已更新 (原子化)")
             else:
-                logger.info(f"[{req_id}] UI状态已正确，无需更新 (原子化检查)")
+                logger.info(f"[{req_id}] ✅ UI状态已正确 (原子化)")
             return True
         else:
-            logger.warning(f"[{req_id}] ⚠️ UI状态设置失败 (原子化操作): {result.get('error')}")
+            logger.warning(f"[{req_id}] ⚠️ UI状态设置失败: {result.get('error')}")
             return False
             
     except Exception as e:
-        logger.error(f'[{req_id}] 强制设置UI状态时发生错误: {e}')
+        logger.error(f'[{req_id}] ❌ 强制设置UI状态错误: {e}')
         return False
 
 async def _force_ui_state_with_retry(page: AsyncPage, req_id: str='unknown', max_retries: int=3, retry_delay: float=1.0) -> bool:
-    """
-    带重试机制的UI状态强制设置
-
-    Args:
-        page: Playwright页面对象
-        req_id: 请求ID用于日志
-        max_retries: 最大重试次数
-        retry_delay: 重试延迟（秒）
-
-    Returns:
-        bool: 设置是否最终成功
-    """
     for attempt in range(1, max_retries + 1):
-        logger.info(f'[{req_id}] 尝试强制设置UI状态 (第 {attempt}/{max_retries} 次)')
         success = await _force_ui_state_settings(page, req_id)
         if success:
-            logger.info(f'[{req_id}] ✅ UI状态设置在第 {attempt} 次尝试中成功')
+            logger.info(f'[{req_id}] ✅ UI状态设置成功')
             return True
         if attempt < max_retries:
-            logger.warning(f'[{req_id}] ⚠️ 第 {attempt} 次尝试失败，{retry_delay}秒后重试...')
+            logger.warning(f'[{req_id}] ⚠️ UI设置失败，重试...')
             await asyncio.sleep(retry_delay)
         else:
-            logger.error(f'[{req_id}] ❌ UI状态设置在 {max_retries} 次尝试后仍然失败')
+            logger.error(f'[{req_id}] ❌ UI状态设置最终失败')
     return False
 
 async def _verify_and_apply_ui_state(page: AsyncPage, req_id: str='unknown') -> bool:
-    """
-    验证并应用UI状态设置的完整流程
-
-    Args:
-        page: Playwright页面对象
-        req_id: 请求ID用于日志
-
-    Returns:
-        bool: 操作是否成功
-    """
     try:
         logger.info(f'[{req_id}] 开始验证并应用UI状态设置...')
         state = await _verify_ui_state_settings(page, req_id)
@@ -165,8 +115,7 @@ async def _verify_and_apply_ui_state(page: AsyncPage, req_id: str='unknown') -> 
         return False
 
 async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) -> bool:
-    """切换AI Studio模型"""
-    logger.info(f'[{req_id}] 开始切换模型到: {model_id}')
+    logger.info(f'[{req_id}] 🔄 开始切换模型到: {model_id}')
     original_prefs_str: Optional[str] = None
     original_prompt_model: Optional[str] = None
     new_chat_url = f'https://{AI_STUDIO_URL_PATTERN}prompts/new_chat'
@@ -183,28 +132,25 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         current_prefs_for_modification = json.loads(original_prefs_str) if original_prefs_str else {}
         full_model_path = f'models/{model_id}'
         if current_prefs_for_modification.get('promptModel') == full_model_path:
-            logger.info(f'[{req_id}] 模型已经设置为 {model_id} (localStorage 中已是目标值)，无需切换')
+            logger.info(f'[{req_id}] 🆗 模型已是 {model_id}，无需切换')
             if page.url != new_chat_url:
-                logger.info(f'[{req_id}] 当前 URL 不是 new_chat ({page.url})，导航到 {new_chat_url}')
+                logger.info(f'[{req_id}] 🌐 导航到 new_chat')
                 await page.goto(new_chat_url, wait_until='domcontentloaded', timeout=30000)
                 await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
             return True
-        logger.info(f"[{req_id}] 从 {current_prefs_for_modification.get('promptModel', '未知')} 更新 localStorage.promptModel 为 {full_model_path}")
+        logger.info(f"[{req_id}] 📝 更新 localStorage: {full_model_path}")
         current_prefs_for_modification['promptModel'] = full_model_path
         await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(current_prefs_for_modification))
-        logger.info(f'[{req_id}] 应用强制UI状态设置...')
         ui_state_success = await _verify_and_apply_ui_state(page, req_id)
         if not ui_state_success:
-            logger.warning(f'[{req_id}] UI状态设置失败，但继续执行模型切换流程')
+            logger.warning(f'[{req_id}] ⚠️ UI状态设置失败，继续...')
         current_prefs_for_modification['isAdvancedOpen'] = True
         current_prefs_for_modification['areToolsOpen'] = True
         await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(current_prefs_for_modification))
-        logger.info(f"[{req_id}] localStorage 已更新，导航到 '{new_chat_url}' 应用新模型...")
+        logger.info(f"[{req_id}] 🌐 导航应用新模型...")
         await page.goto(new_chat_url, wait_until='domcontentloaded', timeout=30000)
         input_field = page.locator(INPUT_SELECTOR)
         await expect_async(input_field).to_be_visible(timeout=30000)
-        logger.info(f'[{req_id}] 页面已导航到新聊天并加载完成，输入框可见')
-        logger.info(f'[{req_id}] 页面加载完成，验证UI状态设置...')
         final_ui_state_success = await _verify_and_apply_ui_state(page, req_id)
         if final_ui_state_success:
             logger.info(f'[{req_id}] ✅ UI状态最终验证成功')
@@ -236,7 +182,6 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             else:
                 try:
                     from config.selectors import MODEL_SELECTORS_LIST
-                    # 使用并行检测替代串行循环，传入期望名称
                     actual_displayed_model_name_on_page = await get_model_name_from_page_parallel(
                         page, MODEL_SELECTORS_LIST, timeout=2000, req_id=req_id, expected_model_name=expected_display_name_for_target_id
                     )
@@ -263,7 +208,6 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         current_displayed_name_for_revert_stripped = '无法读取'
         try:
             from config.selectors import MODEL_SELECTORS_LIST
-            # 使用并行检测
             found_name = await get_model_name_from_page_parallel(
                 page, MODEL_SELECTORS_LIST, timeout=2000, req_id=req_id, expected_model_name=None
             )
@@ -377,7 +321,6 @@ def load_excluded_models(filename: str):
         logger.error(f"❌ 从 '{filename}' 加载排除模型列表时出错: {e}", exc_info=True)
 
 async def _handle_initial_model_state_and_storage(page: AsyncPage):
-    """处理初始模型状态和存储"""
     import server
     current_ai_studio_model_id = getattr(server, 'current_ai_studio_model_id', None)
     parsed_model_list = getattr(server, 'parsed_model_list', [])
@@ -458,7 +401,6 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
             logger.error(f'   回退设置模型ID也失败: {fallback_err}')
 
 async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False):
-    """从页面显示设置模型"""
     import server
     current_ai_studio_model_id = getattr(server, 'current_ai_studio_model_id', None)
     parsed_model_list = getattr(server, 'parsed_model_list', [])
@@ -466,7 +408,6 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
     try:
         logger.info('   尝试从页面显示元素读取当前模型名称...')
         from config.selectors import MODEL_SELECTORS_LIST
-        # 使用并行检测
         displayed_model_name = await get_model_name_from_page_parallel(
             page, MODEL_SELECTORS_LIST, timeout=3000, req_id='init_set_model', expected_model_name=None
         )

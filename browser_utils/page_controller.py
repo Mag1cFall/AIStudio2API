@@ -17,14 +17,10 @@ class PageController:
         self.req_id = req_id
 
     async def _check_disconnect(self, check_client_disconnected: Callable, stage: str):
-        """检查客户端是否断开连接或请求是否被取消。"""
         if check_client_disconnected(stage):
             raise ClientDisconnectedError(f'[{self.req_id}] Client disconnected or request cancelled at stage: {stage}')
 
     async def _click_and_verify(self, trigger_locator: Locator, expected_locator: Locator, trigger_name: str, expected_name: str, max_retries: int=3, delay_between_retries: float=0.5) -> None:
-        """
-        点击一个元素并验证另一个元素是否出现，包含重试逻辑。
-        """
         for attempt in range(max_retries):
             self.logger.info(f"[{self.req_id}] (尝试 {attempt + 1}/{max_retries}) 点击 '{trigger_name}'...")
             try:
@@ -45,34 +41,24 @@ class PageController:
                 raise
 
     async def continuously_handle_skip_button(self, stop_event: asyncio.Event, check_client_disconnected: Callable):
-        """在后台持续监控并处理“跳过”按钮，直到收到停止信号。"""
-        self.logger.info(f"[{self.req_id}] 'Skip'按钮后台监控任务已启动。")
         while not stop_event.is_set():
             try:
                 skip_button_locator = self.page.locator(SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR)
-                await expect_async(skip_button_locator).to_be_visible(timeout=1000)
-                self.logger.info(f"[{self.req_id}] (监控) 检测到'Skip'按钮，尝试点击...")
+                await expect_async(skip_button_locator).to_be_visible(timeout=500)
+                self.logger.info(f"[{self.req_id}] ⏭️ (监控) 检测到'Skip'按钮，尝试点击...")
                 try:
                     await click_element(self.page, skip_button_locator, 'Skip Preference Vote Button', self.req_id)
-                    self.logger.info(f"[{self.req_id}] (监控) 'Skip'按钮已成功点击。")
+                    self.logger.info(f"[{self.req_id}] ✅ (监控) 'Skip'按钮已成功点击。")
                 except Exception as click_err:
-                    self.logger.error(f"[{self.req_id}] (监控) 'Skip'按钮点击失败: {click_err}。即将刷新页面...")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ (监控) 'Skip'按钮点击失败，即将刷新: {click_err}")
                     await self.clear_chat_history(check_client_disconnected)
-                    self.logger.info(f'[{self.req_id}] (监控) 页面已刷新。')
-            except TimeoutError:
-                self.logger.debug(f"[{self.req_id}] (监控) 'Skip'按钮未找到，继续轮询。")
-            except Exception as e:
-                if not stop_event.is_set():
-                    if 'Timeout' in type(e).__name__:
-                        self.logger.debug(f"[{self.req_id}] (监控) 'Skip'按钮检查超时: {e}")
-                    else:
-                        self.logger.warning(f"[{self.req_id}] (监控) 处理'Skip'按钮时发生意外错误: {e}")
-            await asyncio.sleep(2)
-        self.logger.info(f"[{self.req_id}] 'Skip'按钮后台监控任务已停止。")
+            except (TimeoutError, Exception):
+                pass
+            
+            await asyncio.sleep(2.5)
 
     async def adjust_parameters(self, request_params: Dict[str, Any], page_params_cache: Dict[str, Any], params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: List[Dict[str, Any]], check_client_disconnected: Callable):
-        """调整所有请求参数 (并发模式)。"""
-        self.logger.info(f'[{self.req_id}] 开始调整所有请求参数 (并发执行)...')
+        self.logger.info(f'[{self.req_id}] ⚙️ 并发调整参数...')
         await self._check_disconnect(check_client_disconnected, 'Start Parameter Adjustment')
         
         temp_to_set = request_params.get('temperature', DEFAULT_TEMPERATURE)
@@ -80,17 +66,13 @@ class PageController:
         stop_to_set = request_params.get('stop', DEFAULT_STOP_SEQUENCES)
         top_p_to_set = request_params.get('top_p', DEFAULT_TOP_P)
 
-        # 定义工具面板相关的任务链
         async def handle_tools_panel():
             await self._ensure_tools_panel_expanded(check_client_disconnected)
             if ENABLE_URL_CONTEXT:
                 await self._open_url_content(check_client_disconnected)
             else:
                 self.logger.info(f'[{self.req_id}] URL Context 功能已禁用，跳过调整。')
-            # 暂时禁用 Thinking Mode 逻辑
-            # await self._handle_thinking_budget(request_params, check_client_disconnected)
 
-        # 创建并发任务列表
         tasks = [
             self._adjust_temperature(temp_to_set, page_params_cache, params_cache_lock, check_client_disconnected),
             self._adjust_max_tokens(max_tokens_to_set, page_params_cache, params_cache_lock, model_id_to_use, parsed_model_list, check_client_disconnected),
@@ -100,11 +82,9 @@ class PageController:
             handle_tools_panel()
         ]
         
-        # 并发执行所有调整任务
         await asyncio.gather(*tasks)
 
     async def set_system_instructions(self, system_prompt: str, check_client_disconnected: Callable):
-        """设置系统指令。"""
         if not system_prompt:
             return
         self.logger.info(f'[{self.req_id}] 正在设置系统指令...')
@@ -123,7 +103,6 @@ class PageController:
                 raise
 
     async def _control_thinking_mode_toggle(self, should_be_checked: bool, check_client_disconnected: Callable):
-        """根据 should_be_checked 的值，控制 "Thinking Mode" 主开关的状态。"""
         toggle_selector = THINKING_MODE_TOGGLE_SELECTOR
         self.logger.info(f"[{self.req_id}] 控制 'Thinking Mode' 开关，期望状态: {('启用' if should_be_checked else '禁用')}...")
         try:
@@ -137,27 +116,25 @@ class PageController:
                 return
             is_checked_str = await toggle_locator.get_attribute('aria-checked')
             current_state_is_checked = is_checked_str == 'true'
-            self.logger.info(f"[{self.req_id}] 'Thinking Mode' 开关当前 'aria-checked' 状态: {is_checked_str}")
             if current_state_is_checked != should_be_checked:
                 action = '启用' if should_be_checked else '禁用'
-                self.logger.info(f"[{self.req_id}] 'Thinking Mode' 开关与期望不符，正在点击以{action}...")
+                self.logger.info(f"[{self.req_id}] 💡 点击以{action} 'Thinking Mode'...")
                 await click_element(self.page, toggle_locator, 'Thinking Mode Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'思考模式开关 - 点击{action}后')
                 await asyncio.sleep(0.5)
                 new_state_str = await toggle_locator.get_attribute('aria-checked')
                 if (new_state_str == 'true') == should_be_checked:
-                    self.logger.info(f"[{self.req_id}]  'Thinking Mode' 开关已成功{action}。")
+                    self.logger.info(f"[{self.req_id}] ✅ 'Thinking Mode' 已{action}。")
                 else:
-                    self.logger.warning(f"[{self.req_id}]  'Thinking Mode' 开关{action}后验证失败。当前状态: '{new_state_str}'")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ 'Thinking Mode' {action}验证失败: '{new_state_str}'")
             else:
-                self.logger.info(f"[{self.req_id}] 'Thinking Mode' 开关已处于期望状态，无需操作。")
+                self.logger.info(f"[{self.req_id}] ✅ 'Thinking Mode' 已就绪。")
         except Exception as e:
             self.logger.error(f"[{self.req_id}]  操作 'Thinking Mode toggle' 开关时发生错误: {e}")
             if isinstance(e, ClientDisconnectedError):
                 raise
 
     async def _handle_thinking_budget(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
-        """处理思考预算的调整逻辑。"""
         reasoning_effort = request_params.get('reasoning_effort')
         should_enable_thinking_mode = True
         if isinstance(reasoning_effort, str) and reasoning_effort.lower() == 'none':
@@ -197,7 +174,6 @@ class PageController:
         return token_budget
 
     async def _adjust_thinking_budget(self, reasoning_effort: Optional[Any], check_client_disconnected: Callable):
-        """根据 reasoning_effort 调整思考预算。"""
         self.logger.info(f'[{self.req_id}] 检查并调整思考预算，输入值: {reasoning_effort}')
         token_budget = self._parse_thinking_budget(reasoning_effort)
         if token_budget is None:
@@ -241,8 +217,6 @@ class PageController:
             return ENABLE_GOOGLE_SEARCH
 
     async def _adjust_google_search(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
-        """根据请求参数或默认配置，双向控制 Google Search 开关。"""
-        self.logger.info(f'[{self.req_id}] 检查并调整 Google Search 开关...')
         should_enable_search = self._should_enable_google_search(request_params)
         toggle_selector = GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR
         try:
@@ -251,48 +225,44 @@ class PageController:
             await self._check_disconnect(check_client_disconnected, 'Google Search 开关 - 元素可见后')
             is_checked_str = await toggle_locator.get_attribute('aria-checked')
             is_currently_checked = is_checked_str == 'true'
-            self.logger.info(f"[{self.req_id}] Google Search 开关当前状态: '{is_checked_str}'。期望状态: {should_enable_search}")
             if should_enable_search != is_currently_checked:
                 action = '打开' if should_enable_search else '关闭'
-                self.logger.info(f'[{self.req_id}] Google Search 开关状态与期望不符。正在点击以{action}...')
+                self.logger.info(f'[{self.req_id}] 🌍 正在{action} Google Search...')
                 await click_element(self.page, toggle_locator, 'Google Search Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'Google Search 开关 - 点击{action}后')
                 await asyncio.sleep(0.5)
                 new_state = await toggle_locator.get_attribute('aria-checked')
                 if (new_state == 'true') == should_enable_search:
-                    self.logger.info(f'[{self.req_id}]  Google Search 开关已成功{action}。')
+                    self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
                 else:
-                    self.logger.warning(f"[{self.req_id}]  Google Search 开关{action}失败。当前状态: '{new_state}'")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失败: '{new_state}'")
             else:
-                self.logger.info(f'[{self.req_id}] Google Search 开关已处于期望状态，无需操作。')
+                self.logger.info(f'[{self.req_id}] ✅ Google Search 已就绪。')
         except Exception as e:
             self.logger.error(f"[{self.req_id}]  操作 'Google Search toggle' 开关时发生错误: {e}")
             if isinstance(e, ClientDisconnectedError):
                 raise
 
     async def _ensure_tools_panel_expanded(self, check_client_disconnected: Callable):
-        """确保包含高级工具（URL上下文、思考预算等）的面板是展开的。"""
-        self.logger.info(f'[{self.req_id}] 检查并确保工具面板已展开...')
         try:
             collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
             await expect_async(collapse_tools_locator).to_be_visible(timeout=5000)
             grandparent_locator = collapse_tools_locator.locator('xpath=../..')
             class_string = await grandparent_locator.get_attribute('class', timeout=3000)
             if class_string and 'expanded' not in class_string.split():
-                self.logger.info(f'[{self.req_id}] 工具面板未展开，正在点击以展开...')
+                self.logger.info(f'[{self.req_id}] 🔧 正在展开工具面板...')
                 await click_element(self.page, collapse_tools_locator, 'Expand/Collapse Tools Button', self.req_id)
                 await self._check_disconnect(check_client_disconnected, '展开工具面板后')
                 await expect_async(grandparent_locator).to_have_class(re.compile('.*expanded.*'), timeout=5000)
-                self.logger.info(f'[{self.req_id}]  工具面板已成功展开。')
+                self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
             else:
-                self.logger.info(f'[{self.req_id}] 工具面板已处于展开状态。')
+                self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
         except Exception as e:
             self.logger.error(f'[{self.req_id}]  展开工具面板时发生错误: {e}')
             if isinstance(e, ClientDisconnectedError):
                 raise
 
     async def _open_url_content(self, check_client_disconnected: Callable):
-        """仅负责打开 URL Context 开关，前提是面板已展开。"""
         try:
             self.logger.info(f'[{self.req_id}] 检查并启用 URL Context 开关...')
             use_url_content_selector = self.page.locator(USE_URL_CONTEXT_SELECTOR)
@@ -311,9 +281,6 @@ class PageController:
                 raise
 
     async def _control_thinking_budget_toggle(self, should_be_checked: bool, check_client_disconnected: Callable):
-        """
-        根据 should_be_checked 的值，控制 "Set Thinking Budget" (手动预算) 滑块开关的状态。
-        """
         toggle_selector = SET_THINKING_BUDGET_TOGGLE_SELECTOR
         self.logger.info(f"[{self.req_id}] 控制 'Set Thinking Budget' 开关，期望状态: {('选中' if should_be_checked else '未选中')}...")
         try:
@@ -343,31 +310,12 @@ class PageController:
                 raise
 
     async def _set_parameter_with_retry(self, locator: Locator, target_value: str, param_name: str, check_client_disconnected: Callable) -> bool:
-        """
-        尝试设置参数值，包含重试机制和多种输入策略。
-        策略:
-        1. fill() + Enter
-        2. Select all + Type + Enter
-        3. JS injection
-        """
-        # 辅助函数：比较值是否相等
         def is_equal(val1, val2):
             try:
                 f1, f2 = float(val1), float(val2)
-                # 处理整数或浮点数比较
                 return abs(f1 - f2) < 0.001
             except ValueError:
                 return str(val1).strip() == str(val2).strip()
-
-        # 0. 预检查：如果值已经正确，跳过
-        # try:
-        #     current_val = await locator.input_value(timeout=1000)
-        #     if is_equal(current_val, target_value):
-        #         self.logger.info(f"[{self.req_id}] {param_name} 页面值 ({current_val}) 已匹配目标值 ({target_value})，跳过设置。")
-        #         return True
-        # except Exception:
-        #     # 如果无法读取（例如超时），则继续尝试设置
-        #     pass
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -375,39 +323,31 @@ class PageController:
             try:
                 await self._check_disconnect(check_client_disconnected, f'设置 {param_name} - 尝试 {attempt + 1}')
                 
-                # 首次尝试前确保可见
                 if attempt == 0:
                     await expect_async(locator).to_be_visible(timeout=5000)
-                    # 确保之前的操作已完成
                     await asyncio.sleep(0.3)
 
                 if attempt == 0:
-                    # 策略 1: 标准 fill + Enter
                     strategy_name = "Standard Fill"
-                    # 先focus确保交互对象正确
                     await locator.focus()
                     await locator.fill(str(target_value))
-                    # 触发 change 事件
                     await locator.dispatch_event('change')
                     await locator.press('Enter')
                 elif attempt == 1:
-                    # 策略 2: Select Text + Type + Enter
                     strategy_name = "Select & Type"
                     await locator.focus()
                     await locator.select_text()
-                    await locator.press('Backspace') # 显式清除
+                    await locator.press('Backspace')
                     await asyncio.sleep(0.1)
-                    await locator.type(str(target_value), delay=50) # 带延迟输入
+                    await locator.type(str(target_value), delay=50)
                     await locator.press('Enter')
                 else:
-                    # 策略 3: JS Set + Dispatch Events + Enter
                     strategy_name = "JS Injection"
                     await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
                     await asyncio.sleep(0.2)
                     await locator.press('Enter')
 
-                # 验证
-                await asyncio.sleep(0.5) # 给UI一点反应时间
+                await asyncio.sleep(0.5)
                 
                 final_val = await locator.input_value(timeout=2000)
                 if is_equal(final_val, target_value):
@@ -427,18 +367,11 @@ class PageController:
         return False
 
     async def _adjust_temperature(self, temperature: float, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
-        """调整温度参数。"""
-        # 移除锁以支持并发
         self.logger.info(f'[{self.req_id}] 检查并调整温度设置...')
         clamped_temp = max(0.0, min(2.0, temperature))
         if clamped_temp != temperature:
             self.logger.warning(f'[{self.req_id}] 请求的温度 {temperature} 超出范围，已调整为 {clamped_temp}')
         
-        # 缓存检查优化
-        # if page_params_cache.get('temperature') == clamped_temp:
-        #      self.logger.info(f'[{self.req_id}] 温度缓存匹配 ({clamped_temp})，跳过调整。')
-        #      return
-
         temp_input_locator = self.page.locator(TEMPERATURE_INPUT_SELECTOR)
         success = await self._set_parameter_with_retry(temp_input_locator, str(clamped_temp), "Temperature", check_client_disconnected)
         
@@ -450,8 +383,6 @@ class PageController:
             await save_error_snapshot(f'temperature_set_fail_{self.req_id}')
 
     async def _adjust_max_tokens(self, max_tokens: int, page_params_cache: dict, params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: list, check_client_disconnected: Callable):
-        """调整最大输出Token参数。"""
-        # 移除锁以支持并发
         self.logger.info(f'[{self.req_id}] 检查并调整最大输出 Token 设置...')
         
         min_val_for_tokens = 1
@@ -471,11 +402,6 @@ class PageController:
         if clamped_max_tokens != max_tokens:
             self.logger.warning(f'[{self.req_id}] 请求的最大输出 Tokens {max_tokens} 超出模型范围，已调整为 {clamped_max_tokens}')
         
-        # [修改] 移除缓存检查，强制尝试设置
-        # if page_params_cache.get('max_output_tokens') == clamped_max_tokens:
-        #      self.logger.info(f'[{self.req_id}] 最大输出 Tokens 缓存匹配 ({clamped_max_tokens})。跳过。')
-        #      return
-
         max_tokens_input_locator = self.page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
         success = await self._set_parameter_with_retry(max_tokens_input_locator, str(clamped_max_tokens), "Max Output Tokens", check_client_disconnected)
 
@@ -486,8 +412,6 @@ class PageController:
              await save_error_snapshot(f'max_tokens_set_fail_{self.req_id}')
 
     async def _adjust_stop_sequences(self, stop_sequences, page_params_cache: dict, params_cache_lock: asyncio.Lock, check_client_disconnected: Callable):
-        """调整停止序列参数。"""
-        # 移除锁以支持并发
         self.logger.info(f'[{self.req_id}] 检查并设置停止序列...')
         normalized_requested_stops = set()
         if stop_sequences is not None:
@@ -532,7 +456,6 @@ class PageController:
                 raise
 
     async def _adjust_top_p(self, top_p: float, check_client_disconnected: Callable):
-        """调整Top P参数。"""
         self.logger.info(f'[{self.req_id}] 检查并调整 Top P 设置...')
         clamped_top_p = max(0.0, min(1.0, top_p))
         if abs(clamped_top_p - top_p) > 1e-09:
@@ -545,7 +468,6 @@ class PageController:
              await save_error_snapshot(f'top_p_set_fail_{self.req_id}')
 
     async def clear_chat_history(self, check_client_disconnected: Callable):
-        """通过直接导航到 new_chat URL 来清空聊天记录，并包含重试逻辑。"""
         self.logger.info(f'[{self.req_id}] 开始清空聊天记录 (通过导航)...')
         await self._check_disconnect(check_client_disconnected, 'Start Clear Chat')
         new_chat_url = 'https://aistudio.google.com/prompts/new_chat'
@@ -570,7 +492,6 @@ class PageController:
                     raise
 
     async def _verify_chat_cleared(self, check_client_disconnected: Callable):
-        """验证聊天已清空"""
         self.logger.info(f'[{self.req_id}] 验证聊天是否已清空...')
         await self._check_disconnect(check_client_disconnected, 'Start Verify Clear Chat')
         try:
@@ -586,10 +507,6 @@ class PageController:
             self.logger.warning(f'[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。')
 
     async def _robust_click_insert_assets(self, check_client_disconnected: Callable) -> bool:
-        """
-        尝试强力点击 'Insert assets' 按钮并等待 'Upload File' 菜单项出现。
-        使用了轮询和多种点击方式 (dispatch event, js click) 以应对 Playwright 在无头模式下的卡死问题。
-        """
         self.logger.info(f"[{self.req_id}] 开始寻找并点击 'Insert assets' 按钮...")
         
         trigger_selectors = [
@@ -608,11 +525,8 @@ class PageController:
             self.logger.warning(f"[{self.req_id}] 未找到 'Insert assets' 按钮。")
             return False
 
-        # 定义一个检查菜单是否出现的内部函数
         async def is_menu_open():
             try:
-                # 检查 'Upload File' 是否可见
-                # 这里的 timeout 要短，因为我们在循环中检查
                 count = await self.page.locator('button[aria-label="Upload File"]').count()
                 if count > 0 and await self.page.locator('button[aria-label="Upload File"]').first.is_visible():
                     return True
@@ -620,34 +534,29 @@ class PageController:
                 pass
             return False
 
-        # 尝试点击的策略循环
         max_attempts = 3
         for attempt in range(max_attempts):
             await self._check_disconnect(check_client_disconnected, f'点击Insert Assets - 尝试 {attempt+1}')
             
-            # 策略 1: 优先使用 dispatchEvent 'click'，这通常能绕过 Playwright 的 actionability 检查
             self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 发送 'click' 事件到 Insert Assets 按钮...")
             try:
                 await trigger_btn.dispatch_event('click')
             except Exception as e:
                 self.logger.warning(f"[{self.req_id}] dispatch_event 失败: {e}")
             
-            # 等待菜单出现 (最多 2 秒)
-            for _ in range(10): # 10 * 200ms = 2s
+            for _ in range(10):
                 if await is_menu_open():
                     self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启。")
                     return True
                 await asyncio.sleep(0.2)
             
-            # 策略 2: 如果没开，尝试 JS click
             self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 菜单未开，尝试 JS click...")
             try:
                 await trigger_btn.evaluate('e => e.click()')
             except Exception as e:
                 self.logger.warning(f"[{self.req_id}] JS click 失败: {e}")
 
-            # 再次等待菜单
-            for _ in range(5): # 5 * 200ms = 1s
+            for _ in range(5):
                 if await is_menu_open():
                     self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启 (JS click 后)。")
                     return True
@@ -659,15 +568,10 @@ class PageController:
         return False
 
     async def _upload_images_via_file_input(self, images: List[Dict[str, str]], check_client_disconnected: Callable) -> bool:
-        """
-        将 Base64 图片写入临时文件，并使用 Playwright 的 set_input_files 批量上传。
-        这是最快且最稳定的方法，等同于用户在文件选择框中一次性选中所有图片。
-        """
         self.logger.info(f"[{self.req_id}] 尝试通过文件选择器批量上传 {len(images)} 张图片...")
         temp_files = []
         file_paths = []
         try:
-            # 1. 创建临时文件
             for idx, img in enumerate(images):
                 mime = img['mime']
                 try:
@@ -689,15 +593,11 @@ class PageController:
                 self.logger.warning(f"[{self.req_id}] 没有有效的图片文件可上传。")
                 return False
 
-            # 2. 尝试定位并展开 'Insert assets' 菜单
             menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
             
             if not menu_opened:
                 self.logger.warning(f"[{self.req_id}] 未能打开菜单，将尝试直接查找 input (可能已存在)。")
 
-            # 3. 定位 input[type="file"]
-            # 即使菜单没打开成功，也尝试找一下 input，万一不需要菜单呢（虽然不太可能）
-            # 或者之前的操作其实成功了只是检测没过
             file_input = self.page.locator('input[type="file"]').first
             
             if await file_input.count() == 0:
@@ -705,14 +605,11 @@ class PageController:
                 asyncio.create_task(self._cleanup_temp_files(temp_files))
                 return False
 
-            # 4. 设置文件
             await self._check_disconnect(check_client_disconnected, '文件上传 - set_input_files前')
-            # set_input_files 会自动触发 change 事件，模拟上传行为
             self.logger.info(f"[{self.req_id}] 找到 file input，正在设置 {len(file_paths)} 个文件...")
             await file_input.set_input_files(file_paths)
             self.logger.info(f"[{self.req_id}] set_input_files 完成。")
             
-            # 5. 异步清理
             asyncio.create_task(self._cleanup_temp_files(temp_files))
             return True
 
@@ -722,7 +619,6 @@ class PageController:
             return False
 
     async def _cleanup_temp_files(self, file_paths: List[str]):
-        """延迟清理临时文件，确保浏览器有足够时间读取"""
         await asyncio.sleep(10)
         for path in file_paths:
             try:
@@ -732,18 +628,13 @@ class PageController:
                 pass
 
     async def _paste_images_via_event(self, images: List[Dict[str, str]], target_locator: Locator):
-        """
-        备选方案：通过构造 DataTransfer 对象并触发 Paste 事件来模拟批量粘贴图片。
-        """
         self.logger.info(f"[{self.req_id}] (备选) 正在通过虚拟粘贴事件上传 {len(images)} 张图片...")
         
-        # 确保输入框获得焦点
         try:
             await target_locator.focus()
         except Exception:
             pass
 
-        # JS 函数签名: (target, images) => ...
         script = """
         async (target, images) => {
             try {
@@ -753,7 +644,6 @@ class PageController:
                 
                 let successCount = 0;
                 
-                // 确保有焦点
                 target.focus();
 
                 for (const img of images) {
@@ -775,7 +665,6 @@ class PageController:
                         target.dispatchEvent(pasteEvent);
                         successCount++;
                         
-                        // 将延迟降低到 50ms，加快回退模式的速度
                         await new Promise(r => setTimeout(r, 50));
                         
                     } catch (err) {
@@ -799,14 +688,12 @@ class PageController:
         if not result or not result.get('success'):
             error_message = result.get('error', '未知错误')
             self.logger.error(f"[{self.req_id}] 虚拟粘贴图片失败: {error_message}")
-            # 不抛出异常，以免阻塞文字输入
         else:
             self.logger.info(f"[{self.req_id}]  虚拟粘贴事件已触发。")
 
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
-        """提交提示到页面，通过剪贴板粘贴处理文件上传。"""
-        self.logger.info(f'[{self.req_id}] 填充并提交提示 ({len(prompt)} chars)...')
+        self.logger.info(f'[{self.req_id}] 📤 提交提示 ({len(prompt)} chars)...')
         prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
         autosize_wrapper_locator = self.page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
         submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
@@ -814,7 +701,6 @@ class PageController:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, '输入框可见后')
             
-            # --- 图片上传逻辑 ---
             if image_list:
                 self.logger.info(f"[{self.req_id}] 开始为 {len(image_list)} 张图片执行批量上传。")
                 processed_images = []
@@ -830,26 +716,16 @@ class PageController:
                 
                 if processed_images:
                     try:
-                        # 1. 尝试极速上传
                         upload_success = await self._upload_images_via_file_input(processed_images, check_client_disconnected)
                         
-                        # 2. 失败则回退到粘贴
                         if not upload_success:
                             self.logger.info(f"[{self.req_id}] 回退到虚拟粘贴模式...")
                             await self._paste_images_via_event(processed_images, prompt_textarea_locator)
                         
                         await asyncio.sleep(1)
                         
-                        # 3. 尝试验证（如果不通过也不阻塞后续文字提交）
-                        # 使用 wait_for_timeout 避免阻塞太久，或者直接让它异步跑？
-                        # 不，验证是为了确保上传成功，但如果验证逻辑本身有问题导致阻塞，那就不好了。
-                        # 我们给验证设一个较短的超时，或者捕获所有异常继续。
                         try:
                             self.logger.info(f"[{self.req_id}] 正在验证图片上传 (不阻塞主流程)...")
-                            # 这里的验证逻辑如果太慢，可能会拖慢文字提交。
-                            # 我们假设如果 set_input_files 成功，图片大概率是上了的。
-                            # 仅做简单检查，或者完全跳过严格验证以保证速度。
-                            # 为了响应用户反馈“文字也没进去”，这里我们直接捕获异常并继续。
                             await self._verify_images_uploaded(len(processed_images), check_client_disconnected)
                         except Exception as verify_err:
                              self.logger.warning(f"[{self.req_id}] 图片上传验证未完全通过，但继续提交文字: {verify_err}")
@@ -857,8 +733,6 @@ class PageController:
                     except Exception as upload_err:
                         self.logger.error(f"[{self.req_id}] 图片上传整体流程异常: {upload_err}。继续提交文字。")
             
-            # --- 文字填充与提交逻辑 ---
-            # 无论图片是否成功，都必须执行
             self.logger.info(f"[{self.req_id}] 正在填充文字内容...")
             await prompt_textarea_locator.evaluate('(element, text) => { element.value = text; element.dispatchEvent(new Event("input", { bubbles: true })); }', prompt)
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
@@ -889,13 +763,11 @@ class PageController:
             raise
 
     async def _verify_images_uploaded(self, expected_count: int, check_client_disconnected: Callable):
-        """强化验证图片是否成功上传到对话中"""
         self.logger.info(f'[{self.req_id}] 开始验证 {expected_count} 张图片的上传状态...')
-        # 缩短验证超时时间，防止卡死
         max_wait_time = 10.0 
         check_interval = 0.5
         max_checks = int(max_wait_time / check_interval)
-        consecutive_success_required = 2 # 降低连续成功要求
+        consecutive_success_required = 2
         consecutive_success_count = 0
         for attempt in range(max_checks):
             try:
@@ -955,11 +827,9 @@ class PageController:
                     continue
                 else:
                     break
-        # 验证失败抛出异常，但在调用处会被捕获，不影响文字提交
         raise Exception(f'图片上传验证超时（{max_wait_time}秒），但将尝试继续提交。')
 
     async def _verify_submission(self, prompt_textarea_locator: Locator, original_content: str) -> bool:
-        """Helper to verify if a submission was successful."""
         try:
             current_content = await prompt_textarea_locator.last.input_value(timeout=1500) or ''
             if original_content and not current_content.strip():
@@ -979,7 +849,6 @@ class PageController:
         return False
 
     async def _try_shortcut_submit(self, prompt_textarea_locator, check_client_disconnected: Callable) -> bool:
-        """Tries multiple keyboard shortcuts to submit the prompt."""
         import os
         self.logger.info(f'[{self.req_id}] Attempting to submit using keyboard shortcuts...')
         try:
@@ -1026,10 +895,6 @@ class PageController:
             return False
 
     async def stop_generation(self, check_client_disconnected: Callable):
-        """
-        通过导航到新的聊天URL来停止当前的生成。
-        这是根据用户反馈的最有效的方法。
-        """
         self.logger.info(f'[{self.req_id}] 通过导航到新聊天来停止生成...')
         try:
             await self.clear_chat_history(check_client_disconnected)
@@ -1038,19 +903,16 @@ class PageController:
             self.logger.error(f'[{self.req_id}] 通过导航到新聊天停止生成失败: {e}')
 
     async def get_response(self, check_client_disconnected: Callable) -> str:
-        """获取响应内容。"""
-        self.logger.info(f'[{self.req_id}] 等待并获取响应...')
+        self.logger.info(f'[{self.req_id}] 📥 等待响应...')
         try:
             await self._check_disconnect(check_client_disconnected, '获取响应 - 开始前')
             response_container_locator = self.page.locator(RESPONSE_CONTAINER_SELECTOR).last
             response_element_locator = response_container_locator.locator(RESPONSE_TEXT_SELECTOR)
-            self.logger.info(f'[{self.req_id}] 等待响应元素附加到DOM...')
             await expect_async(response_element_locator).to_be_attached(timeout=90000)
             await self._check_disconnect(check_client_disconnected, '获取响应 - 响应元素已附加')
             submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
             edit_button_locator = self.page.locator('ms-chat-turn').last.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
             input_field_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
-            self.logger.info(f'[{self.req_id}] 等待响应完成...')
             await self._check_disconnect(check_client_disconnected, '获取响应 - 开始等待完成前')
             completion_detected = await _wait_for_response_completion(self.page, input_field_locator, submit_button_locator, edit_button_locator, self.req_id, check_client_disconnected, None)
             await self._check_disconnect(check_client_disconnected, '获取响应 - 完成检测后')

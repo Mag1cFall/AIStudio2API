@@ -16,15 +16,13 @@ from browser_utils import _handle_model_list_response
 from .dependencies import *
 
 async def read_index(logger: logging.Logger=Depends(get_logger)):
-    """返回主页面"""
-    index_html_path = os.path.join(os.path.dirname(__file__), '..', 'index.html')
+    index_html_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'index.html')
     if not os.path.exists(index_html_path):
         logger.error(f'index.html not found at {index_html_path}')
         raise HTTPException(status_code=404, detail='index.html not found')
     return FileResponse(index_html_path)
 
 async def get_css(logger: logging.Logger=Depends(get_logger)):
-    """返回CSS文件"""
     css_path = os.path.join(os.path.dirname(__file__), '..', 'webui.css')
     if not os.path.exists(css_path):
         logger.error(f'webui.css not found at {css_path}')
@@ -32,7 +30,6 @@ async def get_css(logger: logging.Logger=Depends(get_logger)):
     return FileResponse(css_path, media_type='text/css')
 
 async def get_js(logger: logging.Logger=Depends(get_logger)):
-    """返回JavaScript文件"""
     js_path = os.path.join(os.path.dirname(__file__), '..', 'webui.js')
     if not os.path.exists(js_path):
         logger.error(f'webui.js not found at {js_path}')
@@ -40,7 +37,6 @@ async def get_js(logger: logging.Logger=Depends(get_logger)):
     return FileResponse(js_path, media_type='application/javascript')
 
 async def get_api_info(request: Request, current_ai_studio_model_id: str=Depends(get_current_ai_studio_model_id)):
-    """返回API信息"""
     from api_utils import auth_utils
     server_port = request.url.port or os.environ.get('SERVER_PORT_INFO', '8000')
     host = request.headers.get('host') or f'127.0.0.1:{server_port}'
@@ -57,7 +53,6 @@ async def get_api_info(request: Request, current_ai_studio_model_id: str=Depends
     return JSONResponse(content={'model_name': effective_model_name, 'api_base_url': api_base, 'server_base_url': base_url, 'api_key_required': api_key_required, 'api_key_count': api_key_count, 'auth_header': 'Authorization: Bearer <token> or X-API-Key: <token>' if api_key_required else None, 'openai_compatible': True, 'supported_auth_methods': ['Authorization: Bearer', 'X-API-Key'] if api_key_required else [], 'message': message})
 
 async def health_check(server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task), request_queue: Queue=Depends(get_request_queue)):
-    """健康检查"""
     is_worker_running = bool(worker_task and (not worker_task.done()))
     launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
     browser_page_critical = launch_mode != 'direct_debug_no_browser'
@@ -88,7 +83,6 @@ async def health_check(server_state: Dict[str, Any]=Depends(get_server_state), w
         return JSONResponse(content=status, status_code=503)
 
 async def list_models(logger: logging.Logger=Depends(get_logger), model_list_fetch_event: Event=Depends(get_model_list_fetch_event), page_instance: AsyncPage=Depends(get_page_instance), parsed_model_list: List[Dict[str, Any]]=Depends(get_parsed_model_list), excluded_model_ids: Set[str]=Depends(get_excluded_model_ids)):
-    """获取模型列表"""
     logger.info('[API] 收到 /v1/models 请求。')
     if not model_list_fetch_event.is_set() and page_instance and (not page_instance.is_closed()):
         logger.info('/v1/models: 模型列表事件未设置，尝试刷新页面...')
@@ -108,9 +102,8 @@ async def list_models(logger: logging.Logger=Depends(get_logger), model_list_fet
         return {'object': 'list', 'data': [{'id': DEFAULT_FALLBACK_MODEL_ID, 'object': 'model', 'created': int(time.time()), 'owned_by': 'camoufox-proxy-fallback'}]}
 
 async def chat_completions(request: ChatCompletionRequest, http_request: Request, logger: logging.Logger=Depends(get_logger), request_queue: Queue=Depends(get_request_queue), server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task)):
-    """处理聊天完成请求"""
     req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
-    logger.info(f'[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})')
+    logger.info(f'[{req_id}] 📨 收到 /v1/chat/completions 请求 (Stream={request.stream})')
     launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
     browser_page_critical = launch_mode != 'direct_debug_no_browser'
     service_unavailable = server_state['is_initializing'] or not server_state['is_playwright_ready'] or (browser_page_critical and (not server_state['is_page_ready'] or not server_state['is_browser_connected'])) or (not worker_task) or worker_task.done()
@@ -127,23 +120,22 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         raise HTTPException(status_code=499, detail=f'[{req_id}] 请求被客户端取消。')
     except HTTPException as http_exc:
         if http_exc.status_code == 499:
-            logger.info(f'[{req_id}] 客户端断开连接: {http_exc.detail}')
+            logger.warning(f'[{req_id}] 🔌 客户端断开连接: {http_exc.detail}')
         else:
-            logger.warning(f'[{req_id}] HTTP异常: {http_exc.detail}')
+            logger.warning(f'[{req_id}] ⚠️ HTTP异常: {http_exc.detail}')
         raise http_exc
     except Exception as e:
-        logger.exception(f'[{req_id}] 等待Worker响应时出错')
+        logger.exception(f'[{req_id}] ❌ 等待Worker响应时出错')
         raise HTTPException(status_code=500, detail=f'[{req_id}] 服务器内部错误: {e}')
 
 async def cancel_queued_request(req_id: str, request_queue: Queue, logger: logging.Logger) -> bool:
-    """取消队列中的请求"""
     items_to_requeue = []
     found = False
     try:
         while not request_queue.empty():
             item = request_queue.get_nowait()
             if item.get('req_id') == req_id:
-                logger.info(f'[{req_id}] 在队列中找到请求，标记为已取消。')
+                logger.info(f'[{req_id}] 🗑️ 在队列中找到请求，标记为已取消。')
                 item['cancelled'] = True
                 if (future := item.get('result_future')) and (not future.done()):
                     future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] Request cancelled.'))
@@ -155,7 +147,6 @@ async def cancel_queued_request(req_id: str, request_queue: Queue, logger: loggi
     return found
 
 async def cancel_request(req_id: str, logger: logging.Logger=Depends(get_logger), request_queue: Queue=Depends(get_request_queue)):
-    """取消请求端点 - 支持取消队列中和正在处理的请求"""
     from api_utils.utils import request_manager
     logger.info(f'[{req_id}] 收到取消请求。')
     if request_manager.cancel_request(req_id):
@@ -167,14 +158,12 @@ async def cancel_request(req_id: str, logger: logging.Logger=Depends(get_logger)
         return JSONResponse(status_code=404, content={'success': False, 'message': f'Request {req_id} not found in queue or active requests.', 'type': 'not_found'})
 
 async def get_queue_status(request_queue: Queue=Depends(get_request_queue), processing_lock: Lock=Depends(get_processing_lock)):
-    """获取队列状态"""
     from api_utils.utils import request_manager
     queue_items = list(request_queue._queue)
     active_requests = request_manager.get_active_requests()
     return JSONResponse(content={'queue_length': len(queue_items), 'active_requests_count': len(active_requests), 'is_processing_locked': processing_lock.locked(), 'queued_items': sorted([{'req_id': item.get('req_id', 'unknown'), 'enqueue_time': item.get('enqueue_time', 0), 'wait_time_seconds': round(time.time() - item.get('enqueue_time', 0), 2), 'is_streaming': item.get('request_data').stream, 'cancelled': item.get('cancelled', False)} for item in queue_items], key=lambda x: x.get('enqueue_time', 0)), 'active_items': sorted(active_requests, key=lambda x: x.get('duration', 0), reverse=True)})
 
 async def websocket_log_endpoint(websocket: WebSocket, logger: logging.Logger=Depends(get_logger), log_ws_manager: WebSocketConnectionManager=Depends(get_log_ws_manager)):
-    """WebSocket日志端点"""
     if not log_ws_manager:
         await websocket.close(code=1011)
         return
@@ -197,7 +186,6 @@ class ApiKeyTestRequest(BaseModel):
     key: str
 
 async def get_api_keys(logger: logging.Logger=Depends(get_logger)):
-    """获取API密钥列表"""
     from api_utils import auth_utils
     try:
         auth_utils.initialize_keys()
@@ -208,7 +196,6 @@ async def get_api_keys(logger: logging.Logger=Depends(get_logger)):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def add_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get_logger)):
-    """添加API密钥"""
     from api_utils import auth_utils
     key_value = request.key.strip()
     if not key_value or len(key_value) < 8:
@@ -231,7 +218,6 @@ async def add_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get
         raise HTTPException(status_code=500, detail=str(e))
 
 async def test_api_key(request: ApiKeyTestRequest, logger: logging.Logger=Depends(get_logger)):
-    """测试API密钥"""
     from api_utils import auth_utils
     key_value = request.key.strip()
     if not key_value:
@@ -242,7 +228,6 @@ async def test_api_key(request: ApiKeyTestRequest, logger: logging.Logger=Depend
     return JSONResponse(content={'success': True, 'valid': is_valid, 'message': '密钥有效' if is_valid else '密钥无效或不存在'})
 
 async def delete_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get_logger)):
-    """删除API密钥"""
     from api_utils import auth_utils
     key_value = request.key.strip()
     if not key_value:

@@ -16,16 +16,13 @@ from .abort_detector import AbortSignalDetector, AbortSignalHandler
 from browser_utils.page_controller import PageController
 
 async def _initialize_request_context(req_id: str, request: ChatCompletionRequest) -> dict:
-    """初始化请求上下文"""
     from server import logger, page_instance, is_page_ready, parsed_model_list, current_ai_studio_model_id, model_switching_lock, page_params_cache, params_cache_lock
     request_manager.register_request(req_id, {'model': request.model, 'stream': request.stream, 'message_count': len(request.messages)})
-    logger.info(f'[{req_id}] 开始处理请求...')
-    logger.info(f'[{req_id}]   请求参数 - Model: {request.model}, Stream: {request.stream}')
+    logger.info(f'[{req_id}] 🚀 开始请求 | Model: {request.model} | Stream: {request.stream}')
     context = {'logger': logger, 'page': page_instance, 'is_page_ready': is_page_ready, 'parsed_model_list': parsed_model_list, 'current_ai_studio_model_id': current_ai_studio_model_id, 'model_switching_lock': model_switching_lock, 'page_params_cache': page_params_cache, 'params_cache_lock': params_cache_lock, 'is_streaming': request.stream, 'model_actually_switched': False, 'requested_model': request.model, 'model_id_to_use': None, 'needs_model_switching': False}
     return context
 
 async def _analyze_model_requirements(req_id: str, context: dict, request: ChatCompletionRequest) -> dict:
-    """分析模型需求并确定是否需要切换"""
     logger = context['logger']
     current_ai_studio_model_id = context['current_ai_studio_model_id']
     parsed_model_list = context['parsed_model_list']
@@ -44,7 +41,6 @@ async def _analyze_model_requirements(req_id: str, context: dict, request: ChatC
     return context
 
 async def _test_client_connection(req_id: str, http_request: Request) -> bool:
-    """增强的客户端连接检测，专门针对Cherry Studio实时检测优化"""
     from server import logger
     try:
         is_disconnected = await http_request.is_disconnected()
@@ -111,7 +107,6 @@ async def _test_client_connection(req_id: str, http_request: Request) -> bool:
         return False
 
 async def _setup_disconnect_monitoring(req_id: str, http_request: Request, result_future: Future, page: AsyncPage) -> Tuple[Event, asyncio.Task, Callable]:
-    """设置客户端断开连接监控 - 增强调试版本"""
     from server import logger
     client_disconnected_event = Event()
     page_controller = PageController(page, logger, req_id)
@@ -120,16 +115,14 @@ async def _setup_disconnect_monitoring(req_id: str, http_request: Request, resul
     async def check_disconnect_periodically():
         consecutive_disconnect_count = 0
         loop_count = 0
-        logger.info(f'[{req_id}] 🔄 监控循环开始运行，50ms检测频率')
         while not client_disconnected_event.is_set():
             try:
                 loop_count += 1
-                if loop_count % 20 == 0:
-                    logger.info(f'[{req_id}] 💡 监控进行中... 已检查{loop_count}次 ({loop_count * 0.05:.1f}秒)')
+                
                 is_connected = await _test_client_connection(req_id, http_request)
                 if not is_connected:
                     consecutive_disconnect_count += 1
-                    logger.info(f'[{req_id}] 🚨 主动检测到客户端断开！(第{consecutive_disconnect_count}次)')
+                    logger.warning(f'[{req_id}] 🔌 检测到客户端连接断开')
                     client_disconnected_event.set()
                     if not result_future.done():
                         result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] 客户端关闭了请求'))
@@ -186,7 +179,6 @@ async def _setup_disconnect_monitoring(req_id: str, http_request: Request, resul
     return (client_disconnected_event, disconnect_check_task, check_client_disconnected)
 
 async def _validate_page_status(req_id: str, context: dict, check_client_disconnected: Callable) -> None:
-    """验证页面状态"""
     page = context['page']
     is_page_ready = context['is_page_ready']
     if not page or page.is_closed() or (not is_page_ready):
@@ -194,7 +186,6 @@ async def _validate_page_status(req_id: str, context: dict, check_client_disconn
     check_client_disconnected('Initial Page Check')
 
 async def _handle_model_switching(req_id: str, context: dict, check_client_disconnected: Callable) -> dict:
-    """处理模型切换逻辑"""
     if not context['needs_model_switching']:
         return context
     logger = context['logger']
@@ -204,26 +195,24 @@ async def _handle_model_switching(req_id: str, context: dict, check_client_disco
     import server
     async with model_switching_lock:
         if server.current_ai_studio_model_id != model_id_to_use:
-            logger.info(f'[{req_id}] 准备切换模型: {server.current_ai_studio_model_id} -> {model_id_to_use}')
+            logger.info(f'[{req_id}] 🔄 切换模型: {server.current_ai_studio_model_id} -> {model_id_to_use}')
             switch_success = await switch_ai_studio_model(page, model_id_to_use, req_id)
             if switch_success:
                 server.current_ai_studio_model_id = model_id_to_use
                 context['model_actually_switched'] = True
                 context['current_ai_studio_model_id'] = model_id_to_use
-                logger.info(f'[{req_id}]  模型切换成功: {server.current_ai_studio_model_id}')
+                logger.info(f'[{req_id}] ✅ 模型切换成功')
             else:
                 await _handle_model_switch_failure(req_id, page, model_id_to_use, server.current_ai_studio_model_id, logger)
     return context
 
 async def _handle_model_switch_failure(req_id: str, page: AsyncPage, model_id_to_use: str, model_before_switch: str, logger) -> None:
-    """处理模型切换失败的情况"""
     import server
     logger.warning(f'[{req_id}] ❌ 模型切换至 {model_id_to_use} 失败。')
     server.current_ai_studio_model_id = model_before_switch
     raise HTTPException(status_code=422, detail=f"[{req_id}] 未能切换到模型 '{model_id_to_use}'。请确保模型可用。")
 
 async def _handle_parameter_cache(req_id: str, context: dict) -> None:
-    """处理参数缓存"""
     logger = context['logger']
     params_cache_lock = context['params_cache_lock']
     page_params_cache = context['page_params_cache']
@@ -232,12 +221,10 @@ async def _handle_parameter_cache(req_id: str, context: dict) -> None:
     async with params_cache_lock:
         cached_model_for_params = page_params_cache.get('last_known_model_id_for_params')
         if model_actually_switched or current_ai_studio_model_id != cached_model_for_params:
-            logger.info(f'[{req_id}] 模型已更改，参数缓存失效。')
             page_params_cache.clear()
             page_params_cache['last_known_model_id_for_params'] = current_ai_studio_model_id
 
 async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequest, check_client_disconnected: Callable) -> Tuple[str, str, list]:
-    """准备和验证请求"""
     from server import logger
     try:
         validate_chat_request(request.messages, req_id)
@@ -246,13 +233,10 @@ async def _prepare_and_validate_request(req_id: str, request: ChatCompletionRequ
     system_prompt, prepared_prompt, final_image_list = prepare_combined_prompt(request.messages, req_id)
     check_client_disconnected('After Prompt Prep')
     if final_image_list:
-        logger.info(f'[{req_id}] 准备上传 {len(final_image_list)} 张图片到页面')
-    else:
-        logger.info(f'[{req_id}] 没有检测到需要上传的图片')
+        logger.info(f'[{req_id}] 🖼️ 准备上传 {len(final_image_list)} 张图片')
     return (system_prompt, prepared_prompt, final_image_list)
 
 async def _handle_response_processing(req_id: str, request: ChatCompletionRequest, page: AsyncPage, context: dict, result_future: Future, submit_button_locator: Locator, check_client_disconnected: Callable, disconnect_check_task: Optional[asyncio.Task]) -> Optional[Tuple[Event, Locator, Callable]]:
-    """处理响应生成"""
     from server import logger
     is_streaming = request.stream
     current_ai_studio_model_id = context.get('current_ai_studio_model_id')
@@ -264,7 +248,6 @@ async def _handle_response_processing(req_id: str, request: ChatCompletionReques
         return await _handle_playwright_response(req_id, request, page, context, result_future, submit_button_locator, check_client_disconnected)
 
 async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletionRequest, context: dict, result_future: Future, submit_button_locator: Locator, check_client_disconnected: Callable, disconnect_check_task: Optional[asyncio.Task]) -> Optional[Tuple[Event, Locator, Callable]]:
-    """使用辅助流处理响应"""
     from server import logger
     is_streaming = request.stream
     current_ai_studio_model_id = context.get('current_ai_studio_model_id')
@@ -504,7 +487,6 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
         return None
 
 async def _handle_playwright_response(req_id: str, request: ChatCompletionRequest, page: AsyncPage, context: dict, result_future: Future, submit_button_locator: Locator, check_client_disconnected: Callable) -> Optional[Tuple[Event, Locator, Callable]]:
-    """使用Playwright处理响应"""
     from server import logger
     is_streaming = request.stream
     current_ai_studio_model_id = context.get('current_ai_studio_model_id')
@@ -614,7 +596,6 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
         return None
 
 async def _cleanup_request_resources(req_id: str, disconnect_check_task: Optional[asyncio.Task], completion_event: Optional[Event], result_future: Future, is_streaming: bool) -> None:
-    """清理请求资源 - 修复流式响应的监控任务生命周期"""
     from server import logger
     if is_streaming:
         logger.info(f'[{req_id}] 流式响应：监控任务将在生成完成后自然结束')
@@ -645,7 +626,6 @@ async def _cleanup_request_resources(req_id: str, disconnect_check_task: Optiona
         completion_event.set()
 
 async def _process_request_refactored(req_id: str, request: ChatCompletionRequest, http_request: Request, result_future: Future) -> Optional[Tuple[Event, Locator, Callable[[str], bool]]]:
-    """核心请求处理函数 - 重构版本"""
     import server
     if not hasattr(server, 'current_http_requests'):
         server.current_http_requests = {}
@@ -668,7 +648,6 @@ async def _process_request_refactored(req_id: str, request: ChatCompletionReques
         await _validate_page_status(req_id, context, check_client_disconnected)
         page_controller = PageController(page, context['logger'], req_id)
 
-        # [优化] 并行执行: 模型切换 (IO) + 请求预处理 (CPU)
         model_switch_task = asyncio.create_task(_handle_model_switching(req_id, context, check_client_disconnected))
         prep_task = asyncio.create_task(_prepare_and_validate_request(req_id, request, check_client_disconnected))
         

@@ -11,25 +11,14 @@ from models import ClientDisconnectedError, ElementClickError
 logger = logging.getLogger('AIStudioProxyServer')
 
 async def get_model_name_from_page_parallel(page: AsyncPage, selectors: list, timeout: int = 2000, req_id: str = 'unknown', expected_model_name: str = None) -> Optional[str]:
-    """
-    并行尝试多个选择器获取模型名称，一旦有结果立即返回（竞速模式）。
-    
-    Args:
-        page: Playwright页面对象
-        selectors: 选择器列表
-        timeout: 每个选择器的超时时间
-        req_id: 请求ID
-        expected_model_name: 期望的模型名称（用于日志或优先匹配验证）
-    """
     if not selectors:
         return None
 
     if expected_model_name:
-        logger.info(f"[{req_id}] 并行检测模型名称，期望值: '{expected_model_name}'")
+        logger.info(f"[{req_id}] ⚡ 并行检测模型，期望: '{expected_model_name}'")
 
     async def check_selector(selector):
         try:
-            # 使用 first 确保只获取第一个匹配项
             text = await page.locator(selector).first.inner_text(timeout=timeout)
             if text and text.strip():
                 return (selector, text.strip())
@@ -37,56 +26,45 @@ async def get_model_name_from_page_parallel(page: AsyncPage, selectors: list, ti
             pass
         return None
 
-    # 创建所有选择器的任务
     tasks = [asyncio.create_task(check_selector(sel)) for sel in selectors]
     
     first_valid_result = None
     
     try:
-        # 使用 as_completed 实现竞速：只要有一个任务返回非空结果，就处理
         for coro in asyncio.as_completed(tasks):
             result = await coro
             if result:
                 selector, text = result
                 
-                # 如果提供了期望名称，进行比对
                 if expected_model_name:
                     if text.lower() == expected_model_name.lower():
-                        logger.info(f"[{req_id}] ✅ 并行检测：选择器 '{selector}' 快速匹配到期望模型: '{text}'")
-                        # 找到完美匹配，取消其他任务并返回
+                        logger.info(f"[{req_id}] ✅ 并行匹配成功: '{text}'")
                         for t in tasks:
                             if not t.done(): t.cancel()
                         return text
                     else:
-                        # 找到了但不匹配，暂存结果，继续看有没有更匹配的（或者直接返回也行，视策略而定）
-                        # 鉴于页面上通常只有一个模型名，如果找到了不一样的，那可能就是不一样的。
-                        # 但为了极速，我们暂存第一个结果。
                         if first_valid_result is None:
                             first_valid_result = text
-                            logger.info(f"[{req_id}] 并行检测：选择器 '{selector}' 找到模型: '{text}' (与期望 '{expected_model_name}' 不完全一致，暂存)")
+                            logger.info(f"[{req_id}] ⚠️ 找到但不匹配: '{text}' (期望 '{expected_model_name}')")
                 else:
-                    # 没有期望值，直接返回第一个找到的
-                    logger.info(f"[{req_id}] 并行检测：选择器 '{selector}' 率先返回模型: '{text}'")
+                    logger.info(f"[{req_id}] ✅ 发现模型: '{text}'")
                     for t in tasks:
                         if not t.done(): t.cancel()
                     return text
 
-        # 如果所有任务都完成了（或者没有找到完美匹配的），返回第一个找到的有效结果
         if first_valid_result:
-             logger.info(f"[{req_id}] 并行检测结束，返回暂存结果: '{first_valid_result}'")
+             logger.info(f"[{req_id}] 🏁 并行检测结束，返回: '{first_valid_result}'")
              return first_valid_result
              
     except Exception as e:
-        logger.error(f"[{req_id}] 并行模型检测发生异常: {e}")
+        logger.error(f"[{req_id}] ❌ 并行检测异常: {e}")
     
-    # 确保清理所有挂起的任务
     for t in tasks:
         if not t.done(): t.cancel()
             
     return None
 
 async def get_raw_text_content(response_element: Locator, previous_text: str, req_id: str) -> str:
-    """从响应元素获取原始文本内容"""
     raw_text = previous_text
     try:
         await response_element.wait_for(state='attached', timeout=1000)
@@ -180,7 +158,6 @@ def _get_injected_models():
         return []
 
 async def _handle_model_list_response(response: Any):
-    """处理模型列表响应"""
     import server
     global_model_list_raw_json = getattr(server, 'global_model_list_raw_json', None)
     parsed_model_list = getattr(server, 'parsed_model_list', [])
@@ -368,7 +345,6 @@ async def _handle_model_list_response(response: Any):
                 model_list_fetch_event.set()
 
 async def detect_and_extract_page_error(page: AsyncPage, req_id: str) -> Optional[str]:
-    """检测并提取页面错误"""
     error_toast_locator = page.locator(ERROR_TOAST_SELECTOR).last
     try:
         await error_toast_locator.wait_for(state='visible', timeout=500)
@@ -387,7 +363,6 @@ async def detect_and_extract_page_error(page: AsyncPage, req_id: str) -> Optiona
         return None
 
 async def save_error_snapshot(error_name: str='error'):
-    """保存错误快照"""
     import server
     name_parts = error_name.split('_')
     req_id = name_parts[-1] if len(name_parts) > 1 and len(name_parts[-1]) == 7 else None
@@ -397,7 +372,7 @@ async def save_error_snapshot(error_name: str='error'):
     if not server.browser_instance or not server.browser_instance.is_connected() or (not page_to_snapshot) or page_to_snapshot.is_closed():
         logger.warning(f'{log_prefix} 无法保存快照 ({base_error_name})，浏览器/页面不可用。')
         return
-    logger.info(f'{log_prefix} 尝试保存错误快照 ({base_error_name})...')
+    logger.info(f'{log_prefix} 📸 保存错误快照 ({base_error_name})...')
     timestamp = int(time.time() * 1000)
     error_dir = os.path.join(os.path.dirname(__file__), '..', 'errors_py')
     try:
@@ -408,18 +383,17 @@ async def save_error_snapshot(error_name: str='error'):
         html_path = os.path.join(error_dir, f'{filename_base}.html')
         try:
             await page_to_snapshot.screenshot(path=screenshot_path, full_page=True, timeout=15000)
-            logger.info(f'{log_prefix}   快照已保存到: {screenshot_path}')
+            logger.info(f'{log_prefix} 📸 快照: {os.path.basename(screenshot_path)}')
         except Exception as ss_err:
-            logger.error(f'{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}')
+            logger.error(f'{log_prefix} ❌ 截图失败: {ss_err}')
         try:
             content = await page_to_snapshot.content()
             f = None
             try:
                 f = open(html_path, 'w', encoding='utf-8')
                 f.write(content)
-                logger.info(f'{log_prefix}   HTML 已保存到: {html_path}')
             except Exception as write_err:
-                logger.error(f'{log_prefix}   保存 HTML 失败 ({base_error_name}): {write_err}')
+                logger.error(f'{log_prefix} ❌ HTML保存失败: {write_err}')
             finally:
                 if f:
                     try:
@@ -433,13 +407,6 @@ async def save_error_snapshot(error_name: str='error'):
         logger.error(f'{log_prefix}   创建错误目录或保存快照时发生其他错误 ({base_error_name}): {dir_err}')
 
 async def click_element(page: AsyncPage, locator: Locator, element_name: str, req_id: str, internal_timeout: int=2000) -> bool:
-    """
-    快速连续尝试用多种方法点击一个元素。如果所有方法都失败，则引发异常。
-    方法顺序:
-    1. 标准点击 (快速超时)
-    2. 强制点击 (快速超时)
-    3. JavaScript 点击
-    """
     last_error = None
     fast_click_timeout = 500
     try:
@@ -449,36 +416,30 @@ async def click_element(page: AsyncPage, locator: Locator, element_name: str, re
         logger.warning(f"[{req_id}] '{element_name}' 元素在点击前验证失败 (不可见): {e}")
         raise ElementClickError(f"Element '{element_name}' not visible before click attempt.") from e
     try:
-        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 标准)")
         await locator.click(timeout=fast_click_timeout)
-        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 1)")
         return True
     except Exception as e:
-        logger.warning(f"[{req_id}] '{element_name}' 标准点击失败: {type(e).__name__}")
         last_error = e
     await asyncio.sleep(0.1)
     try:
-        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: 强制)")
+        logger.info(f"[{req_id}] 🖱️ 尝试强制点击 '{element_name}'")
         await locator.click(timeout=fast_click_timeout, force=True)
-        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 2)")
+        logger.info(f"[{req_id}] ✅ '{element_name}' 强制点击成功")
         return True
     except Exception as e:
-        logger.warning(f"[{req_id}] '{element_name}' 强制点击失败: {type(e).__name__}")
         last_error = e
     await asyncio.sleep(0.1)
     try:
-        logger.info(f"[{req_id}] 尝试点击 '{element_name}' (方法: JS)")
+        logger.info(f"[{req_id}] 🖱️ 尝试JS点击 '{element_name}'")
         await locator.evaluate('element => element.click()')
-        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功 (方法: 3)")
+        logger.info(f"[{req_id}] ✅ '{element_name}' JS点击成功")
         return True
     except Exception as e:
-        logger.warning(f"[{req_id}] '{element_name}' JS 点击失败: {type(e).__name__}")
         last_error = e
-    logger.error(f"[{req_id}] 所有点击 '{element_name}' 的尝试都失败了。")
+    logger.error(f"[{req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了。")
     raise ElementClickError(f"All click attempts for '{element_name}' failed.") from last_error
 
 async def get_response_via_edit_button(page: AsyncPage, req_id: str, check_client_disconnected: Callable) -> Optional[str]:
-    """通过编辑按钮获取响应"""
     logger.info(f'[{req_id}] (Helper) 尝试通过编辑按钮获取响应...')
     last_message_container = page.locator('ms-chat-turn').last
     edit_button = last_message_container.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
@@ -571,7 +532,6 @@ async def get_response_via_edit_button(page: AsyncPage, req_id: str, check_clien
         return None
 
 async def get_response_via_copy_button(page: AsyncPage, req_id: str, check_client_disconnected: Callable) -> Optional[str]:
-    """通过复制按钮获取响应"""
     logger.info(f'[{req_id}] (Helper) 尝试通过复制按钮获取响应...')
     last_message_container = page.locator('ms-chat-turn').last
     more_options_button = last_message_container.locator(MORE_OPTIONS_BUTTON_SELECTOR)
@@ -642,7 +602,6 @@ async def get_response_via_copy_button(page: AsyncPage, req_id: str, check_clien
         return None
 
 async def _wait_for_response_completion(page: AsyncPage, prompt_textarea_locator: Locator, submit_button_locator: Locator, edit_button_locator: Locator, req_id: str, check_client_disconnected_func: Callable, current_chat_id: Optional[str], timeout_ms=RESPONSE_COMPLETION_TIMEOUT, initial_wait_ms=INITIAL_WAIT_MS_BEFORE_POLLING) -> bool:
-    """等待响应完成"""
     from playwright.async_api import TimeoutError
     logger.info(f'[{req_id}] (WaitV3) 开始等待响应完成... (超时: {timeout_ms}ms)')
     await asyncio.sleep(initial_wait_ms / 1000)
@@ -704,7 +663,6 @@ async def _wait_for_response_completion(page: AsyncPage, prompt_textarea_locator
         await asyncio.sleep(0.5)
 
 async def _get_final_response_content(page: AsyncPage, req_id: str, check_client_disconnected: Callable) -> Optional[str]:
-    """获取最终响应内容"""
     logger.info(f'[{req_id}] (Helper GetContent) 开始获取最终响应内容...')
     response_content = await get_response_via_edit_button(page, req_id, check_client_disconnected)
     if response_content is not None:
