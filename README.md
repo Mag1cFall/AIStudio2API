@@ -10,61 +10,29 @@
 - **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
 - **Ollama 兼容层**: 内置 `llm.py` 提供 Ollama 格式 API 兼容
 - **模块化架构**: 清晰的模块分离设计，易于维护
-- **现代化工具链**: Poetry 依赖管理 + 完整类型支持
+- **现代化工具链**: uv 依赖管理 + 完整类型支持
 
 ## 📋 系统要求
 
 - **Python**: 3.12 (推荐)
-- **依赖管理**: [Poetry](https://python-poetry.org/)
+- **依赖管理**: [uv](https://docs.astral.sh/uv/)
 - **操作系统**: Windows, macOS, Linux
 - **内存**: 建议 2GB+ 可用内存
 - **网络**: 稳定的互联网连接访问 Google AI Studio
 
 ## 🛠️ 安装步骤
 
-### 1. 安装 Poetry
+### 1. 安装 uv
 
+Windows (PowerShell):
+```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+macOS / Linux:
 ```bash
-curl.exe -sSL https://install.python-poetry.org | python -
-# 或
-(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
----
-安装结束后会显示类似如下内容:
-````
-A. Append the bin directory to your user environment variable `PATH`:
-
-```
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\1\AppData\Roaming\Python\Scripts", "User")
-```
-
-B. Try to append the bin directory to PATH every when you run PowerShell (>=6 recommended):
-
-```
-echo 'if (-not (Get-Command poetry -ErrorAction Ignore)) { $env:Path += ";C:\Users\1\AppData\Roaming\Python\Scripts" }' | Out-File -Append $PROFILE
-```
-
-Alternatively, you can call Poetry explicitly with `C:\Users\1\AppData\Roaming\Python\Scripts\poetry`.
-
-You can test that everything is set up by executing:
-
-`poetry --version`
-````
-按要求执行指令，建议直接执行:
-```
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\1\AppData\Roaming\Python\Scripts", "User")
-# 注意复制你自己的输出日志里的那行指令。或将用户名或路径全部替换成自己的。
-```
-执行后过几秒，什么都不会输出。此时关闭Powershell窗口(或VSCode软件、命令行...等)，重新打开后执行:
-```
-poetry --version
-```
-预计输出:
-```
-PS C:\Users\1\Desktop\AIStudio2API> poetry --version
-Poetry (version 2.2.1)
-```
-如果执行命令报错、总之你没有成功通过执行命令来将`poetry`添加到系统变量，可以手动去「编辑账户的环境变量」- Path 里添加路径，或不添加系统变量，直接使用绝对路径继续后面的命令。
 
 ### 2. 克隆项目
 
@@ -73,25 +41,12 @@ git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
 ```
 
-### 3. 配置 Python 环境
-
-**重要**: 确保使用 Python 3.12，不要使用 Python 3.13
+### 3. 安装依赖
 
 ```bash
-# 设置 Poetry 使用指定的 Python 3.12 版本
-# 更换成你自己的用户名和路径
-poetry env use C:\Users\2\AppData\Local\Programs\Python\Python312\python.exe
-
-# Poetry 会输出类似以下信息：
-# Creating virtualenv aistudio2api-QAhNHTrK-py3.12 in C:\Users\2\AppData\Local\pypoetry\Cache\virtualenvs
-# Using virtualenv: C:\Users\2\AppData\Local\pypoetry\Cache\virtualenvs\aistudio2api-QAhNHTrK-py3.12
-```
-
-### 4. 安装依赖
-
-```bash
-poetry install
-poetry run camoufox fetch
+uv sync
+uv run camoufox fetch
+uv run playwright install firefox
 ```
 
 **注意**: 安装过程中会自动下载和安装 Camoufox 浏览器（约 600MB），这是项目的核心组件，用于反指纹检测。首次安装可能需要较长时间，请耐心等待。
@@ -104,7 +59,7 @@ poetry run camoufox fetch
 
 1. **启动图形界面**:
    ```bash
-   poetry run python app_launcher.py
+   uv run python app_launcher.py
    ```
 
 2. **配置代理**（建议）:
@@ -114,7 +69,7 @@ poetry run camoufox fetch
 3. **启动有头模式进行认证**:
    - 点击"启动有头模式 (新终端)"
    - **命令行终端**内输入`N`，获取新的认证文件
-   - 命令行终端指`start_webui.bat`启动的终端，或者您运行`poetry run python app_launcher.py`的终端
+   - 命令行终端指`start_webui.bat`启动的终端，或者您运行`uv run python app_launcher.py`的终端
    - 浏览器会自动打开并导航到 AI Studio
    - 手动登录您的 Google 账号
    - 确保进入 AI Studio 主页
@@ -131,7 +86,7 @@ poetry run camoufox fetch
 
 1. 启动图形界面:
    ```bash
-   poetry run python app_launcher.py
+   uv run python app_launcher.py
    ```
 
 2. 点击「启动无头模式」或 「虚拟显示模式」
@@ -246,16 +201,6 @@ cp .env.example .env
 - 支持多个认证文件的保存和切换
 - 通过 GUI 的"管理认证文件"功能进行管理
 
-## 🐳 Docker 部署
-
-```bash
-cd docker
-cp .env.docker .env
-# 编辑 .env 文件
-docker compose up -d
-```
-
-详细说明请参见 [Docker 部署指南](docker/README-Docker.md)。
 
 ## 📚 详细文档
 

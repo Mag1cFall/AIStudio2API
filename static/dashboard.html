@@ -30,7 +30,7 @@
         .log-entry:hover { background-color: #161b22; }
     </style>
 </head>
-<body class="h-screen flex overflow-hidden text-sm select-none">
+<body class="h-screen flex overflow-hidden text-sm">
     <div id="app" class="flex w-full h-full">
         <!-- Sidebar -->
         <div class="w-64 bg-[#161b22] flex flex-col border-r border-[#30363d] shrink-0">
@@ -324,7 +324,7 @@
                             serviceInfo.value = data.info || {};
                         } else if (data.type === 'log') {
                             logs.value.push(data);
-                            if (logs.value.length > 2000) logs.value.shift();
+                            if (logs.value.length > 1000) logs.value.shift();
                             if (autoScroll.value) {
                                 nextTick(() => {
                                     if (logsContainer.value) {
