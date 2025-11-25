@@ -118,9 +118,6 @@ uv run playwright install firefox
   请输入启动模式 ([1] 无头模式, [2] 调试模式; 默认: 1 headless模式，15秒超时):
 ```
 
-`start_webui_legacy.bat`：
-旧版的可视化启动器，不推荐使用。
-
 `start_webui.bat`：
 启动前端界面，自动跳转或访问`http://127.0.0.1:9000`进行后续使用，推荐。
 
@@ -172,7 +169,6 @@ curl -X POST http://localhost:11434/api/chat \
 ```
 AIStudio2API/
 ├── app_launcher.py          # 图形界面启动器
-├── gui_launcher.py          # 旧版图形界面启动器
 ├── launch_camoufox.py       # 命令行启动器
 ├── server.py                # 主服务器
 ├── llm.py                   # Ollama 兼容层
