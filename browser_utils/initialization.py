@@ -134,6 +134,29 @@ async def _add_init_scripts_to_context(context: AsyncBrowserContext):
             logger.info(f'✅ 已将模型发现脚本添加到浏览器上下文: {os.path.basename(USERSCRIPT_PATH)}')
         else:
             logger.info(f'模型发现脚本文件不存在，跳过注入: {USERSCRIPT_PATH}')
+            
+        # 注入 Skip Button 自动点击脚本 (MutationObserver)
+        skip_button_observer_script = """
+        (function() {
+            if (window._skipObserverInstalled) return;
+            console.log('[AutoSkipper] Installing MutationObserver for Skip button...');
+            
+            const observer = new MutationObserver((mutations) => {
+                const btn = document.querySelector('button[data-test-id="skip-button"][aria-label="Skip preference vote"]');
+                if (btn) {
+                    console.log('[AutoSkipper] ⏭️ Detected Skip button, clicking immediately.');
+                    btn.click();
+                }
+            });
+            
+            observer.observe(document.body, { childList: true, subtree: true });
+            window._skipObserverInstalled = true;
+            console.log('[AutoSkipper] MutationObserver installed.');
+        })();
+        """
+        await context.add_init_script(skip_button_observer_script)
+        logger.info('✅ 已注入自动 Skip 按钮 MutationObserver 脚本')
+
     except Exception as e:
         logger.error(f'添加初始化脚本到上下文时发生错误: {e}')
 

@@ -42,7 +42,7 @@ def open_dashboard_window():
     print("Browser executable for App Mode not found, opening in default browser...")
     webbrowser.open(DASHBOARD_URL)
 
-if __name__ == '__main__':
+def main():
     print("--- AI Studio Proxy Manager ---")
     print(f"Starting Manager Backend on {DASHBOARD_URL}...")
     
@@ -56,4 +56,8 @@ if __name__ == '__main__':
         print("\nStopping...")
     except Exception as e:
         print(f"\nError starting server: {e}")
-        input("Press Enter to exit...")
+        # input("Press Enter to exit...") # CLI模式下通常不阻塞退出
+
+if __name__ == '__main__':
+    main()
+    input("Press Enter to exit...")

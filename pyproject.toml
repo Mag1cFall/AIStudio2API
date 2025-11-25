@@ -24,8 +24,8 @@ dependencies = [
     "python-socks~=2.7.1"
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "black>=23.0.0",
     "isort>=5.12.0",
@@ -33,8 +33,20 @@ dev-dependencies = [
     "flake8>=6.0.0"
 ]
 
+[project.scripts]
+aistudio = "app_launcher:main"
+aistudio2api = "app_launcher:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["api_utils", "browser_utils", "config", "logging_utils", "models", "stream"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"app_launcher.py" = "app_launcher.py"
+"manager.py" = "manager.py"
+"server.py" = "server.py"
+"launch_camoufox.py" = "launch_camoufox.py"
+"llm.py" = "llm.py"
+"static" = "static"
 
 [build-system]
 requires = ["hatchling"]

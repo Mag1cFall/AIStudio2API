@@ -74,14 +74,24 @@ class ServiceManager:
             "level": level,
             "message": message
         })
+        
+        if not self.active_connections:
+            return
+
         to_remove = []
-        for connection in self.active_connections:
+        
+        async def send_safe(connection):
             try:
                 await connection.send_text(log_entry)
             except:
                 to_remove.append(connection)
+
+        # 并发发送给所有连接，避免单客户端阻塞
+        await asyncio.gather(*(send_safe(c) for c in self.active_connections))
+        
         for c in to_remove:
-            self.active_connections.remove(c)
+            if c in self.active_connections:
+                self.active_connections.remove(c)
 
     def _monitor_output(self, process):
         try:

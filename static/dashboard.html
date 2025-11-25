@@ -60,6 +60,11 @@
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                     系统工具
                 </button>
+                <button @click="currentTab = 'playground'"
+                    :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'playground' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+                    Playground
+                </button>
             </nav>
 
             <div class="p-4 border-t border-[#30363d]">
@@ -269,6 +274,100 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Playground View -->
+            <div v-if="currentTab === 'playground'" class="flex-1 flex overflow-hidden">
+                <!-- Chat Area -->
+                <div class="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
+                    <div class="flex-1 overflow-auto p-4 space-y-4" ref="chatContainer">
+                        <div v-if="chatMessages.length === 0" class="h-full flex flex-col items-center justify-center text-gray-500">
+                            <svg class="w-16 h-16 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                            <p>开始一个新的对话...</p>
+                        </div>
+                        <div v-for="(msg, idx) in chatMessages" :key="idx" class="flex gap-4 max-w-3xl mx-auto">
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                                :class="msg.role === 'user' ? 'bg-blue-600' : 'bg-green-600'">
+                                <span class="text-xs font-bold">{{ msg.role === 'user' ? 'U' : 'AI' }}</span>
+                            </div>
+                            <div class="flex-1 space-y-2">
+                                <div class="bg-[#161b22] rounded-lg p-3 border border-[#30363d] text-gray-200 text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</div>
+                                <div v-if="msg.images && msg.images.length" class="flex gap-2 flex-wrap">
+                                    <img v-for="(img, i) in msg.images" :key="i" :src="img" class="h-20 w-auto rounded border border-[#30363d] object-cover cursor-pointer" @click="showImage(img)">
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="isSending" class="flex gap-4 max-w-3xl mx-auto">
+                            <div class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center shrink-0 animate-pulse">
+                                <span class="text-xs font-bold">...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Input Area -->
+                    <div class="p-4 border-t border-[#30363d] bg-[#161b22]">
+                        <div class="max-w-3xl mx-auto space-y-3">
+                            <div v-if="pendingImages.length" class="flex gap-2 overflow-x-auto pb-2">
+                                <div v-for="(img, idx) in pendingImages" :key="idx" class="relative group">
+                                    <img :src="img.preview" class="h-16 w-16 rounded object-cover border border-[#30363d]">
+                                    <button @click="pendingImages.splice(idx, 1)" class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition">×</button>
+                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <button @click="$refs.fileInput.click()" class="px-3 py-2 bg-[#21262d] text-gray-400 hover:text-white rounded border border-[#30363d] transition">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                </button>
+                                <input type="file" ref="fileInput" class="hidden" multiple accept="image/*" @change="handleImageSelect">
+                                <textarea v-model="chatInput" @keydown.ctrl.enter="sendMessage" placeholder="输入消息 (Ctrl+Enter 发送)..."
+                                    class="flex-1 bg-[#0d1117] border border-[#30363d] rounded p-2 text-white text-sm focus:border-blue-500 focus:outline-none resize-none h-[42px] max-h-[200px]"></textarea>
+                                <button @click="sendMessage" :disabled="isSending || (!chatInput.trim() && !pendingImages.length)"
+                                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium transition">
+                                    发送
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Sidebar -->
+                <div class="w-64 bg-[#161b22] border-l border-[#30363d] flex flex-col overflow-auto p-4 space-y-6">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">API Endpoint</label>
+                        <input v-model="chatConfig.endpoint" type="text" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white mb-1">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">API Key</label>
+                        <input v-model="chatConfig.apiKey" type="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Model</label>
+                        <input v-model="chatConfig.model" type="text" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white" placeholder="gemini-2.5-pro">
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-xs font-bold text-gray-500 uppercase">Temperature</label>
+                            <span class="text-xs text-blue-400">{{ chatConfig.temperature }}</span>
+                        </div>
+                        <input v-model.number="chatConfig.temperature" type="range" min="0" max="2" step="0.1" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-xs font-bold text-gray-500 uppercase">Top P</label>
+                            <span class="text-xs text-blue-400">{{ chatConfig.top_p }}</span>
+                        </div>
+                        <input v-model.number="chatConfig.top_p" type="range" min="0" max="1" step="0.05" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
+                    </div>
+                     <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-xs font-bold text-gray-500 uppercase">Max Tokens</label>
+                            <span class="text-xs text-blue-400">{{ chatConfig.max_tokens }}</span>
+                        </div>
+                        <input v-model.number="chatConfig.max_tokens" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white">
+                    </div>
+                    <div class="pt-4 border-t border-[#30363d]">
+                        <button @click="chatMessages = []" class="w-full py-2 border border-[#30363d] hover:bg-red-900/20 text-red-400 rounded text-xs transition">清空对话</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -289,6 +388,21 @@
                 const multiPortResults = ref([]);
                 const logFilter = ref('ALL');
                 let ws = null;
+
+                // Playground State
+                const chatMessages = ref([]);
+                const chatInput = ref('');
+                const pendingImages = ref([]);
+                const isSending = ref(false);
+                const chatContainer = ref(null);
+                const chatConfig = ref({
+                    endpoint: `http://${window.location.hostname}:2048/v1/chat/completions`,
+                    apiKey: 'any',
+                    model: 'gemini-2.5-pro',
+                    temperature: 1.0,
+                    top_p: 0.95,
+                    max_tokens: 65535
+                });
 
                 const filteredLogs = computed(() => {
                     if (logFilter.value === 'ALL') return logs.value;
@@ -469,6 +583,126 @@
                         } else {
                             alert(data.detail || 'Failed');
                         }
+                    },
+                    // Playground Methods
+                    chatMessages, chatInput, pendingImages, isSending, chatContainer, chatConfig,
+                    handleImageSelect: (e) => {
+                        const files = Array.from(e.target.files);
+                        files.forEach(file => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                pendingImages.value.push({
+                                    file: file,
+                                    preview: e.target.result,
+                                    base64: e.target.result.split(',')[1],
+                                    mime: file.type
+                                });
+                            };
+                            reader.readAsDataURL(file);
+                        });
+                        e.target.value = '';
+                    },
+                    sendMessage: async () => {
+                        if (isSending.value) return;
+                        if (!chatInput.value.trim() && pendingImages.value.length === 0) return;
+
+                        const content = [];
+                        if (chatInput.value.trim()) {
+                            content.push({ type: 'text', text: chatInput.value });
+                        }
+                        pendingImages.value.forEach(img => {
+                            content.push({
+                                type: 'image_url',
+                                image_url: { url: `data:${img.mime};base64,${img.base64}` }
+                            });
+                        });
+
+                        const userMsg = {
+                            role: 'user',
+                            content: chatInput.value,
+                            images: pendingImages.value.map(i => i.preview)
+                        };
+                        
+                        chatMessages.value.push(userMsg);
+                        
+                        // Prepare API request
+                        const messagesPayload = chatMessages.value.map(m => {
+                            if (m.role === 'user' && m.images && m.images.length) {
+                                // For simplicity in display history we store simpler struct, but here we reconstruct for API if needed
+                                // But wait, we just pushed a display friendly version.
+                                // Let's simplify: Just send the last user message properly formatted, and previous text only for context?
+                                // Or fully support multimodal context.
+                                // For this simple playground, let's just send the text history + current multimodal msg
+                                return { role: m.role, content: m.content }; // Simplification for history
+                            }
+                            return { role: m.role, content: m.content };
+                        });
+                        
+                        // Replace last message with full multimodal content
+                        messagesPayload[messagesPayload.length - 1] = { role: 'user', content: content };
+
+                        chatInput.value = '';
+                        pendingImages.value = [];
+                        isSending.value = true;
+
+                        nextTick(() => {
+                            if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+                        });
+
+                        try {
+                            const res = await fetch(chatConfig.value.endpoint, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${chatConfig.value.apiKey}`
+                                },
+                                body: JSON.stringify({
+                                    model: chatConfig.value.model,
+                                    messages: messagesPayload,
+                                    temperature: chatConfig.value.temperature,
+                                    top_p: chatConfig.value.top_p,
+                                    max_tokens: chatConfig.value.max_tokens,
+                                    stream: true
+                                })
+                            });
+
+                            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+
+                            const reader = res.body.getReader();
+                            const decoder = new TextDecoder();
+                            let aiMsg = { role: 'assistant', content: '' };
+                            chatMessages.value.push(aiMsg);
+
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                
+                                const chunk = decoder.decode(value);
+                                const lines = chunk.split('\n');
+                                
+                                for (const line of lines) {
+                                    if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                                        try {
+                                            const data = JSON.parse(line.slice(6));
+                                            if (data.choices && data.choices[0].delta.content) {
+                                                aiMsg.content += data.choices[0].delta.content;
+                                                nextTick(() => {
+                                                    if(chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+                                                });
+                                            }
+                                        } catch (e) {}
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            chatMessages.value.push({ role: 'assistant', content: `Error: ${e.message}` });
+                        } finally {
+                            isSending.value = false;
+                        }
+                    },
+                    showImage: (src) => {
+                        const w = window.open("");
+                        w.document.write(`<img src="${src}" style="max-width:100%">`);
                     }
                 };
             },

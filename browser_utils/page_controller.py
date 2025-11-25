@@ -41,21 +41,8 @@ class PageController:
                 raise
 
     async def continuously_handle_skip_button(self, stop_event: asyncio.Event, check_client_disconnected: Callable):
-        while not stop_event.is_set():
-            try:
-                skip_button_locator = self.page.locator(SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR)
-                await expect_async(skip_button_locator).to_be_visible(timeout=500)
-                self.logger.info(f"[{self.req_id}] ⏭️ (监控) 检测到'Skip'按钮，尝试点击...")
-                try:
-                    await click_element(self.page, skip_button_locator, 'Skip Preference Vote Button', self.req_id)
-                    self.logger.info(f"[{self.req_id}] ✅ (监控) 'Skip'按钮已成功点击。")
-                except Exception as click_err:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ (监控) 'Skip'按钮点击失败，即将刷新: {click_err}")
-                    await self.clear_chat_history(check_client_disconnected)
-            except (TimeoutError, Exception):
-                pass
-            
-            await asyncio.sleep(2.5)
+
+        await stop_event.wait()
 
     async def adjust_parameters(self, request_params: Dict[str, Any], page_params_cache: Dict[str, Any], params_cache_lock: asyncio.Lock, model_id_to_use: str, parsed_model_list: List[Dict[str, Any]], check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] ⚙️ 并发调整参数...')

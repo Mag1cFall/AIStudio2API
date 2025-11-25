@@ -112,60 +112,38 @@ async def _setup_disconnect_monitoring(req_id: str, http_request: Request, resul
     page_controller = PageController(page, logger, req_id)
     logger.info(f'[{req_id}] 🚀 创建客户端断开监控任务')
 
-    async def check_disconnect_periodically():
-        consecutive_disconnect_count = 0
-        loop_count = 0
-        while not client_disconnected_event.is_set():
-            try:
-                loop_count += 1
-                
-                is_connected = await _test_client_connection(req_id, http_request)
-                if not is_connected:
-                    consecutive_disconnect_count += 1
-                    logger.warning(f'[{req_id}] 🔌 检测到客户端连接断开')
+    async def listen_for_disconnect():
+        logger.info(f'[{req_id}] 👂 启动长连接断开监听 (Event-Driven)...')
+        try:
+            while not client_disconnected_event.is_set():
+                # 直接等待 ASGI 消息，不再轮询
+                message = await http_request.receive()
+                if message['type'] == 'http.disconnect':
+                    logger.warning(f'[{req_id}] 🔌 收到 http.disconnect 信号')
                     client_disconnected_event.set()
                     if not result_future.done():
                         result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] 客户端关闭了请求'))
-                    logger.info(f'[{req_id}] 🛑 客户端断开，正在调用页面停止生成...')
+                    
+                    logger.info(f'[{req_id}] 🛑 客户端断开，触发页面停止生成...')
                     try:
-
-                        def simple_disconnect_check(stage=''):
-                            return False
+                        # 定义一个简易的检查函数，避免循环依赖
+                        def simple_disconnect_check(stage=''): return False
                         await page_controller.stop_generation(simple_disconnect_check)
                         logger.info(f'[{req_id}] ✅ 页面停止生成命令执行成功')
                     except Exception as stop_err:
                         logger.error(f'[{req_id}] ❌ 页面停止生成失败: {stop_err}')
                     break
-                else:
-                    consecutive_disconnect_count = 0
-                backup_disconnected = await http_request.is_disconnected()
-                if backup_disconnected:
-                    logger.info(f'[{req_id}] 🚨 备用检测到客户端断开连接')
-                    client_disconnected_event.set()
-                    if not result_future.done():
-                        result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] 客户端关闭了请求'))
-                    logger.info(f'[{req_id}] 🛑 客户端断开（备用检测），正在调用页面停止生成...')
-                    try:
-
-                        def simple_disconnect_check(stage=''):
-                            return False
-                        await page_controller.stop_generation(simple_disconnect_check)
-                        logger.info(f'[{req_id}] ✅ 备用检测页面停止生成命令执行成功')
-                    except Exception as stop_err:
-                        logger.error(f'[{req_id}] ❌ 备用检测页面停止生成失败: {stop_err}')
-                    break
-                await asyncio.sleep(0.05)
-            except asyncio.CancelledError:
-                logger.info(f'[{req_id}] 📛 监控任务被取消')
-                break
-            except Exception as e:
-                logger.error(f'[{req_id}] ❌ 监控循环异常: {e}')
-                client_disconnected_event.set()
-                if not result_future.done():
-                    result_future.set_exception(HTTPException(status_code=500, detail=f'[{req_id}] Internal disconnect checker error: {e}'))
-                break
-        logger.info(f'[{req_id}] 🏁 监控循环结束，总共运行了{loop_count}次循环')
-    disconnect_check_task = asyncio.create_task(check_disconnect_periodically())
+                # 如果收到其他类型的消息 (极少见，因为Body已被读取)，继续等待
+        except asyncio.CancelledError:
+            logger.info(f'[{req_id}] 📛 断开监听任务被取消')
+        except Exception as e:
+            # 某些情况下 receive() 可能会因为连接早已断开而抛出异常
+            logger.warning(f'[{req_id}] ❌ 断开监听捕获异常 (可能连接已关闭): {e}')
+            client_disconnected_event.set()
+            if not result_future.done():
+                result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] Client connection lost: {e}'))
+    
+    disconnect_check_task = asyncio.create_task(listen_for_disconnect())
     logger.info(f'[{req_id}] ✅ 监控任务已创建并启动: {disconnect_check_task}')
 
     def check_client_disconnected(stage: str=''):
