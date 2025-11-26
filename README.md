@@ -157,8 +157,8 @@ curl -X POST http://localhost:2048/v1/chat/completions \
 
 ```bash
 # 启动 Ollama 兼容服务
-uv run python gui_launcher.py
-# 在 GUI 中点击"启动本地LLM模拟服务"
+uv run python app_launcher.py
+# 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
 
 # 使用 Ollama 格式 API
 curl http://localhost:11434/api/tags

@@ -40,14 +40,14 @@ code .env
 配置完成后，启动变得非常简单：
 
 ```bash
-# 图形界面启动（推荐新手）
-python gui_launcher.py
+# 图形界面启动（推荐）
+uv run python app_launcher.py
 
-# 命令行启动（推荐日常使用）
-python launch_camoufox.py --headless
+# 命令行启动无头模式
+uv run python launch_camoufox.py --headless
 
-# 调试模式（首次设置或故障排除）
-python launch_camoufox.py --debug
+# 命令行启动调试模式（首次设置或故障排除）
+uv run python launch_camoufox.py --debug
 ```
 
 **就这么简单！** 无需复杂的命令行参数，所有配置都在 `.env` 文件中预设好了。
@@ -58,14 +58,14 @@ python launch_camoufox.py --debug
 
 ```bash
 # 之前需要这样的复杂命令
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
 ```
 
 ### 使用 `.env` 配置后（简单）
 
 ```bash
 # 现在只需要这样
-python launch_camoufox.py --headless
+uv run python launch_camoufox.py --headless
 ```
 
 **配置一次，终身受益！** 所有复杂的参数都在 `.env` 文件中预设，启动命令变得极其简洁。
@@ -291,7 +291,7 @@ STREAM_PORT=3120
 1. **命令行参数** (最高优先级)
    ```bash
    # 命令行参数会覆盖 .env 文件中的设置
-   python launch_camoufox.py --headless --server-port 3048
+   uv run python launch_camoufox.py --headless --server-port 3048
    ```
 
 2. **`.env` 文件配置** (推荐)
@@ -353,7 +353,7 @@ STREAM_PORT=3120
 ### 端口冲突
 
 1. 检查端口是否被其他程序占用
-2. 使用 GUI 启动器的端口检查功能
+2. 使用 Web GUI 启动器的端口检查功能
 3. 修改为其他可用端口
 
 ## 更多信息

@@ -217,12 +217,27 @@ if data["stream"]:
                         print(f"\nError from server: {error_data['error']}")
                         break
                 except json.JSONDecodeError:
-                     print(f"\nError decoding error JSON: {decoded_line}")
+                    print(f"\nError decoding error JSON: {decoded_line}")
 else:
     if response.status_code == 200:
         print(json.dumps(response.json(), indent=2))
     else:
         print(f"Error: {response.status_code}\n{response.text}")
+```
+
+### Ollama 兼容层
+
+项目还提供 Ollama 格式的 API 兼容：
+
+```bash
+# 启动 Ollama 兼容服务
+uv run python app_launcher.py
+# 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
+
+# 使用 Ollama 格式 API
+curl http://localhost:11434/api/tags
+curl -X POST http://localhost:11434/api/chat \
+  -d '{"model": "gemini", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### 模型列表
@@ -318,17 +333,6 @@ else:
 *   请求体：`{"key": "key-to-delete"}`
 *   **无需认证**: 此端点不需要API密钥认证
 
-## 配置客户端 (以 Open WebUI 为例)
-
-1. 打开 Open WebUI。
-2. 进入 "设置" -> "连接"。
-3. 在 "模型" 部分，点击 "添加模型"。
-4. **模型名称**: 输入你想要的名字，例如 `aistudio-gemini-py`。
-5. **API 基础 URL**: 输入代理服务器的地址，例如 `http://127.0.0.1:2048/v1` (如果服务器在另一台机器，用其 IP 替换 `127.0.0.1`，并确保端口可访问)。
-6. **API 密钥**: 留空或输入任意字符 (服务器不验证)。
-7. 保存设置。
-8. 现在，你应该可以在 Open WebUI 中选择你在第一步中配置的模型名称并开始聊天了。如果之前配置过，可能需要刷新或重新选择模型以应用新的 API 基地址。
-
 ## 重要提示
 
 ### 三层响应获取机制与参数控制
@@ -370,11 +374,11 @@ else:
 ## 兼容性说明
 
 ### Python 版本兼容性
-*   **推荐版本**: Python 3.10+ 或 3.11+ (生产环境推荐)
+*   **推荐版本**: Python 3.12+ (生产环境推荐)
 *   **最低要求**: Python 3.9 (所有功能完全支持)
 *   **Docker环境**: Python 3.10 (容器内默认版本)
 *   **完全支持**: Python 3.9, 3.10, 3.11, 3.12, 3.13
-*   **依赖管理**: 使用 Poetry 管理，确保版本一致性
+*   **依赖管理**: 使用 uv 管理，确保版本一致性
 
 ### API 兼容性
 *   **OpenAI API**: 完全兼容 OpenAI v1 API 标准，支持所有主流客户端
@@ -389,6 +393,5 @@ else:
 ## 下一步
 
 API 使用配置完成后，请参考：
-- [Web UI 使用指南](webui-guide.md)
 - [故障排除指南](troubleshooting.md)
 - [日志控制指南](logging-control.md)

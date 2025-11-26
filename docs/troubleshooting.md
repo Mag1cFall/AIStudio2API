@@ -39,7 +39,7 @@ grep -i error logs/app.log
 
 **Python 版本过低**:
 - **最低要求**: Python 3.9+
-- **推荐版本**: Python 3.10+ 或 3.11+
+- **推荐版本**: Python 3.12+
 - **检查版本**: `python --version`
 
 **常见版本问题**:
@@ -86,7 +86,7 @@ source venv/bin/activate  # Linux/macOS
 
 ### `launch_camoufox.py` 启动报错
 
-*   检查 Camoufox 是否已通过 `camoufox fetch` 正确下载。
+*   检查 Camoufox 是否已通过 `uv run camoufox fetch` 正确下载。
 *   查看终端输出，是否有来自 Camoufox 库的具体错误信息。
 *   确保没有其他 Camoufox 或 Playwright 进程冲突。
 
@@ -94,7 +94,7 @@ source venv/bin/activate  # Linux/macOS
 
 如果 [`server.py`](../server.py) 启动时提示端口 (`2048`) 被占用：
 
-*   如果使用 [`gui_launcher.py`](../gui_launcher.py) 启动，它会尝试自动检测并提示终止占用进程。
+*   如果使用 [`app_launcher.py`](../app_launcher.py) 启动，Web UI 提供了端口占用检测和进程终止功能。
 *   手动查找并结束占用进程：
     ```bash
     # Windows
@@ -112,10 +112,10 @@ source venv/bin/activate  # Linux/macOS
 **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
 
 **解决方案**:
-1. 删除 `active` 下的文件
-2. 重新运行 [`python launch_camoufox.py --debug`](../launch_camoufox.py) 生成新的认证文件
-3. 将新文件移动到 `active` 目录
-4. 确认 `active` 目录下只有一个 `.json` 文件
+1. 启动 Web UI (`uv run python app_launcher.py`)。
+2. 在 `认证文件` 页面取消激活旧文件。
+3. 重新运行 `uv run python launch_camoufox.py --debug` 生成新的认证文件。
+4. 在 `认证文件` 页面激活新文件。
 
 ### 检查认证状态
 
@@ -279,11 +279,6 @@ chmod 644 key.txt
 
 ### 客户端配置问题
 
-**Open WebUI 配置**:
-- API 基础 URL：`http://127.0.0.1:2048/v1`
-- API 密钥：输入有效的密钥或留空（如果服务器不需要认证）
-- 确认端口号与服务器实际监听端口一致
-
 **其他客户端配置**:
 - 检查客户端是否支持 `Authorization: Bearer` 认证头
 - 确认客户端正确处理 401 认证错误
@@ -346,7 +341,7 @@ chmod 644 browser_utils/more_modles.js
 **后端检查**:
 ```bash
 # 查看脚本注入相关日志
-python launch_camoufox.py --debug | grep -i "script\|inject\|model"
+uv run python launch_camoufox.py --debug | grep -i "script\|inject\|model"
 
 # 检查 API 响应
 curl http://localhost:2048/v1/models | jq '.data[] | select(.injected == true)'
@@ -387,7 +382,7 @@ const MODELS_TO_INJECT = [
 ```bash
 # 启用详细日志查看网络拦截状态
 export DEBUG_LOGS_ENABLED=true
-python launch_camoufox.py --debug
+uv run python launch_camoufox.py --debug
 ```
 
 **常见错误**:
@@ -461,7 +456,7 @@ echo "ENABLE_SCRIPT_INJECTION=false" >> .env
 
 # 方法2：使用环境变量
 export ENABLE_SCRIPT_INJECTION=false
-python launch_camoufox.py --headless
+uv run python launch_camoufox.py --headless
 
 # 方法3：删除脚本文件（临时）
 mv browser_utils/more_modles.js browser_utils/more_modles.js.bak

@@ -1,6 +1,6 @@
 # 首次运行与认证设置指南
 
-为了避免每次启动都手动登录 AI Studio，你需要先通过 [`launch_camoufox.py --debug`](../launch_camoufox.py) 模式或 [`gui_launcher.py`](../gui_launcher.py) 的有头模式运行一次来生成认证文件。
+为了避免每次启动都手动登录 AI Studio，你需要先通过 [`launch_camoufox.py --debug`](../launch_camoufox.py) 模式或 [`app_launcher.py`](../app_launcher.py) 的有头模式运行一次来生成认证文件。
 
 ## 认证文件的重要性
 
@@ -19,10 +19,10 @@ DEBUG_LOGS_ENABLED=true
 
 ```bash
 # 简化启动命令 (推荐)
-python launch_camoufox.py --debug
+uv run python launch_camoufox.py --debug
 
 # 传统命令行方式 (仍然支持)
-python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+uv run python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
 ```
 
 **重要参数说明:**
@@ -49,11 +49,13 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper ''
 
 ## 方法二：通过 GUI 启动有头模式
 
-1. 运行 `python gui_launcher.py`。
-2. 在 GUI 中输入 `FastAPI 服务端口` (默认为 2048)。
-3. 点击 `启动有头模式` 按钮。
-4. 在弹出的新控制台和浏览器窗口中，按照命令行方式的提示进行 Google 登录和认证文件保存操作。
-5. 同样需要手动将认证文件从 `auth_profiles/saved/` 移动到 `auth_profiles/active/`便于无头模式正常使用。
+1. 运行 `uv run python app_launcher.py`。
+2. 浏览器会自动打开管理界面（默认 `http://127.0.0.1:9000`）。
+3. 在 `配置` 页面选择 `调试模式 (Debug)`。
+4. 点击 `启动服务` 按钮。
+5. 在弹出的浏览器窗口中，按照提示进行 Google 登录。
+6. 登录成功后，在你的**命令行窗口**按回车保存认证文件。
+7. 你可以在 `认证文件` 页面管理和激活保存的文件。
 
 ## 激活认证文件
 
@@ -65,9 +67,9 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper ''
 
 **认证文件会过期!** Google 的登录状态不是永久有效的。当无头模式启动失败并报告认证错误或重定向到登录页时，意味着 `active` 目录下的认证文件已失效。你需要：
 
-1. 删除 `active` 目录下的旧文件。
+1. 在 GUI 的 `认证文件` 页面，取消激活旧文件。
 2. 重新执行上面的 **【通过命令行运行 Debug 模式】** 或 **【通过 GUI 启动有头模式】** 步骤，生成新的认证文件。
-3. 将新生成的 `.json` 文件再次移动到 `active` 目录下。
+3. 在 GUI 中激活新生成的认证文件。
 
 ## 重要提示
 
@@ -76,6 +78,4 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper ''
 ## 下一步
 
 认证设置完成后，请参考：
-- [日常运行指南](daily-usage.md)
 - [API 使用指南](api-usage.md)
-- [Web UI 使用指南](webui-guide.md)

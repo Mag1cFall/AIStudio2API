@@ -42,14 +42,15 @@ UNIFIED_PROXY_CONFIG=
 
 ```bash
 # 简化启动命令 (推荐)
-python launch_camoufox.py --headless
+uv run python launch_camoufox.py --headless
 
 # 传统命令行方式 (仍然支持)
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
 ```
 
+```bash
 # 启用统一代理配置（同时应用于浏览器和流式代理）
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
 ```
 
 在此模式下，主服务器会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
@@ -58,10 +59,10 @@ python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --hel
 
 ```bash
 # 基本外部Helper模式，明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
 
 # 外部Helper模式 + 统一代理配置
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
 ```
 
 在此模式下，主服务器会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
@@ -70,10 +71,10 @@ python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper
 
 ```bash
 # 纯Playwright模式，明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
 
 # Playwright模式 + 统一代理配置
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+uv run python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
 ```
 
 在此模式下，主服务器将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
@@ -88,7 +89,7 @@ python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper
   1. 确保您的 Linux 系统已安装 `xvfb`
   2. 在运行时添加 `--virtual-display` 标志：
      ```bash
-     python launch_camoufox.py --virtual-display --server-port 2048 --stream-port 3120 --internal-camoufox-proxy ''
+     uv run python launch_camoufox.py --virtual-display --server-port 2048 --stream-port 3120 --internal-camoufox-proxy ''
      ```
 
 ## 流式代理服务配置
@@ -302,22 +303,34 @@ return self._cached_models
 
 ## GUI 启动器高级功能
 
-### 本地LLM模拟服务
+新的 `app_launcher.py` 提供了一个基于 Web 的现代化管理界面：
 
-GUI 集成了启动和管理一个本地LLM模拟服务的功能：
+### 仪表盘 (Dashboard)
+- 实时查看服务状态 (Running/Stopped/Starting)
+- 查看服务 PID
+- 一键启动/停止服务
+- 实时查看详细日志，支持过滤 (INFO/WARN/ERROR)
 
-- **功能**: 监听 `11434` 端口，模拟部分 Ollama API 端点和 OpenAI 兼容的 `/v1/chat/completions` 端点
-- **启动**: 在 GUI 的"启动选项"区域，点击"启动本地LLM模拟服务"按钮
-- **依赖检测**: 启动前会自动检测 `localhost:2048` 端口是否可用
-- **用途**: 主要用于测试客户端与 Ollama 或 OpenAI 兼容 API 的对接
+### 配置管理 (Config)
+- 图形化配置所有关键参数
+- 端口设置 (FastAPI, Camoufox)
+- 启动模式选择 (Headless, Debug, Virtual)
+- 代理设置
 
-### 端口进程管理
+### 认证管理 (Auth)
+- 查看当前激活的认证文件
+- 浏览已保存的历史认证文件
+- 一键激活/切换认证文件
 
-GUI 提供端口进程管理功能：
+### 系统工具 (System)
+- 端口占用检查
+- 进程管理（查看/终止占用端口的进程）
+- 帮助排查启动失败问题
 
-- 查询指定端口上当前正在运行的进程
-- 选择并尝试停止在指定端口上找到的进程
-- 手动输入 PID 终止进程
+### Playground
+- 自动接入反代API
+- 提供了基础的对话机器人实现
+- 测试服务可用性
 
 ## 环境变量配置
 

@@ -6,8 +6,8 @@
 
 ### 前置要求
 
-- **Python**: >=3.9, <4.0 (推荐 3.10+ 以获得最佳性能)
-- **Poetry**: 现代化 Python 依赖管理工具
+- **Python**: >=3.9, <4.0 (推荐 3.12 以获得最佳性能)
+- **uv**: 极速的现代化 Python 依赖管理工具
 - **Node.js**: >=16.0 (用于 Pyright 类型检查，可选)
 - **Git**: 版本控制
 
@@ -18,14 +18,15 @@
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
 
-# 2. 安装 Poetry (如果尚未安装)
-curl -sSL https://install.python-poetry.org | python3 -
+# 2. 安装 uv (如果尚未安装)
+# macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-# 3. 安装项目依赖 (包括开发依赖)
-poetry install --with dev
+# 3. 同步项目依赖 (uv 会自动创建 .venv 并安装依赖)
+uv sync
 
-# 4. 激活虚拟环境
-poetry env activate
+# 4. 验证环境
+uv run python --version
 
 # 5. 安装 Pyright (可选，用于类型检查)
 npm install -g pyright
@@ -68,71 +69,59 @@ AIStudio2API/
 └── README.md              # 项目说明
 ```
 
-## 🔧 依赖管理 (Poetry)
+## 🔧 依赖管理 (uv)
 
-### Poetry 基础命令
+### uv 基础命令
 
 ```bash
-# 查看项目信息
-poetry show
+# 同步依赖（安装所有 pyproject.toml 中的包）
+uv sync
 
 # 查看依赖树
-poetry show --tree
+uv tree
 
 # 添加新依赖
-poetry add package_name
+uv add package_name
 
 # 添加开发依赖
-poetry add --group dev package_name
+uv add --dev package_name
 
 # 移除依赖
-poetry remove package_name
+uv remove package_name
 
-# 更新依赖
-poetry update
-
-# 更新特定依赖
-poetry update package_name
-
-# 导出 requirements.txt (兼容性)
-poetry export -f requirements.txt --output requirements.txt
+# 运行命令（自动使用虚拟环境）
+uv run python script.py
 ```
 
 ### 依赖分组
 
-项目使用 Poetry 的依赖分组功能：
+项目使用标准 `pyproject.toml` 的依赖分组功能（uv 支持）：
 
 ```toml
-[tool.poetry.dependencies]
-# 生产依赖
-python = ">=3.9,<4.0"
-fastapi = "==0.115.12"
-# ... 其他生产依赖
+[project]
+dependencies = [
+    "fastapi==0.115.12",
+    # ... 其他生产依赖
+]
 
-[tool.poetry.group.dev.dependencies]
-# 开发依赖 (可选安装)
-pytest = "^7.0.0"
-black = "^23.0.0"
-isort = "^5.12.0"
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0"
+]
 ```
 
 ### 虚拟环境管理
 
+uv 默认在项目根目录下管理 `.venv`。
+
 ```bash
-# 查看虚拟环境信息
-poetry env info
-
-# 查看虚拟环境路径
-poetry env info --path
-
-# 激活虚拟环境
-poetry env activate
+# 显式创建虚拟环境（通常 uv sync 会自动做）
+uv venv
 
 # 在虚拟环境中运行命令
-poetry run python script.py
-
-# 删除虚拟环境
-poetry env remove python
+uv run python script.py
 ```
 
 ## 🔍 类型检查 (Pyright)
@@ -201,13 +190,13 @@ class ChatRequest(BaseModel):
 
 ```bash
 # 运行所有测试
-poetry run pytest
+uv run pytest
 
 # 运行特定测试文件
-poetry run pytest tests/test_api.py
+uv run pytest tests/test_api.py
 
 # 运行测试并生成覆盖率报告
-poetry run pytest --cov=api_utils --cov-report=html
+uv run pytest --cov=api_utils --cov-report=html
 ```
 
 ### 测试结构
@@ -226,13 +215,13 @@ tests/
 
 ```bash
 # 使用 Black 格式化代码
-poetry run black .
+uv run black .
 
 # 使用 isort 整理导入
-poetry run isort .
+uv run isort .
 
 # 检查代码风格
-poetry run flake8 .
+uv run flake8 .
 ```
 
 ### 2. 类型检查
@@ -242,17 +231,17 @@ poetry run flake8 .
 pyright
 
 # 或使用 mypy (如果安装)
-poetry run mypy .
+uv run mypy .
 ```
 
 ### 3. 测试
 
 ```bash
 # 运行测试
-poetry run pytest
+uv run pytest
 
 # 运行测试并检查覆盖率
-poetry run pytest --cov
+uv run pytest --cov
 ```
 
 ### 4. 提交代码
@@ -303,7 +292,7 @@ def process_chat_request(request: ChatRequest) -> ChatResponse:
 
 ```bash
 # 构建分发包
-poetry build
+uv build
 
 # 检查构建结果
 ls dist/
@@ -346,7 +335,7 @@ docker run -it --rm -v $(pwd):/app aistudio-dev bash
 
 ## 🔗 相关资源
 
-- [Poetry 官方文档](https://python-poetry.org/docs/)
+- [uv 官方文档](https://github.com/astral-sh/uv)
 - [Pyright 官方文档](https://github.com/microsoft/pyright)
 - [FastAPI 官方文档](https://fastapi.tiangolo.com/)
 - [Playwright 官方文档](https://playwright.dev/python/)
