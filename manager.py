@@ -471,5 +471,6 @@ async def websocket_logs(websocket: WebSocket):
 
 if __name__ == '__main__':
     import uvicorn
-    # 使用 9000 端口
-    uvicorn.run(app, host="127.0.0.1", port=9000, log_level="error")
+    # 使用 9000 端口，支持通过环境变量修改监听地址
+    host = os.environ.get('MANAGER_HOST', '127.0.0.1')
+    uvicorn.run(app, host=host, port=9000, log_level="error")

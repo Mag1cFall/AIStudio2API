@@ -9,7 +9,7 @@ from manager import app
 
 # Configuration
 PORT = 9000
-HOST = "127.0.0.1"
+HOST = os.environ.get('MANAGER_HOST', '127.0.0.1')
 DASHBOARD_URL = f"http://{HOST}:{PORT}"
 
 def open_dashboard_window():
@@ -46,8 +46,11 @@ def main():
     print("--- AI Studio Proxy Manager ---")
     print(f"Starting Manager Backend on {DASHBOARD_URL}...")
     
-    # Launch browser in a separate thread
-    threading.Thread(target=open_dashboard_window, daemon=True).start()
+    # Launch browser in a separate thread (unless disabled)
+    if os.environ.get('NO_BROWSER_AUTO_OPEN', '').lower() not in ('true', '1', 'yes'):
+        threading.Thread(target=open_dashboard_window, daemon=True).start()
+    else:
+        print("Browser auto-open disabled by environment variable.")
     
     # Run server
     try:
