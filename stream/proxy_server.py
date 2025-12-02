@@ -24,6 +24,27 @@ class ProxyServer:
         log_dir.mkdir(exist_ok=True)
         self.interceptor = HttpInterceptor(str(log_dir))
         self.logger = logging.getLogger('proxy_server')
+        self._ssl_context_cache = {}
+
+    def get_ssl_context(self, host):
+        # 性能优化：复用 SSL 上下文以减少文件 IO 和 CPU 消耗
+        # 安全性说明：此缓存仅用于「本地」浏览器与代理之间的内部连接，
+        # 不会影响代理向外部（Google）发起的连接指纹，因此不影响反指纹能力。
+        if host in self._ssl_context_cache:
+            return self._ssl_context_cache[host]
+        
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(
+            certfile=self.cert_manager.cert_dir / f'{host}.crt',
+            keyfile=self.cert_manager.cert_dir / f'{host}.key'
+        )
+        
+        # 简单的容量保护，防止长期运行内存泄漏
+        if len(self._ssl_context_cache) > 50:
+            self._ssl_context_cache.clear()
+            
+        self._ssl_context_cache[host] = ssl_context
+        return ssl_context
 
     def should_intercept(self, host):
         if host in self.intercept_domains:
@@ -71,8 +92,7 @@ class ProxyServer:
             if transport is None:
                 self.logger.warning(f'Client writer transport is None for {host}:{port} before TLS upgrade. Closing.')
                 return
-            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            ssl_context.load_cert_chain(certfile=self.cert_manager.cert_dir / f'{host}.crt', keyfile=self.cert_manager.cert_dir / f'{host}.key')
+            ssl_context = self.get_ssl_context(host)
             client_protocol = transport.get_protocol()
             new_transport = await loop.start_tls(transport=transport, protocol=client_protocol, sslcontext=ssl_context, server_side=True)
             if new_transport is None:

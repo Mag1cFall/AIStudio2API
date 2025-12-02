@@ -114,12 +114,15 @@ class ServiceManager:
                             if "好的，不加载认证文件或超时" in decoded_line or "已选择加载" in decoded_line or "将使用默认值" in decoded_line:
                                 self._console_print_state = "default"
                         
-                        # --- 离散检查：仅打印登录提示的关键行，过滤中间的代理日志 ---
-                        elif ("__USER_INPUT_START__" in decoded_line or
-                              "检测到可能需要登录" in decoded_line or
-                              "==================== 需要操作 ====================" in decoded_line or
-                              "__USER_INPUT_END__" in decoded_line):
-                            print(decoded_line, flush=True)
+                        # --- 离散检查：仅打印登录提示的关键行，并使用固定文本以过滤干扰 ---
+                        elif "==================== 需要操作 ====================" in decoded_line:
+                            print("==================== 需要操作 ====================", flush=True)
+                        elif "__USER_INPUT_START__" in decoded_line:
+                            print("__USER_INPUT_START__", flush=True)
+                        elif "检测到可能需要登录" in decoded_line:
+                            print("检测到可能需要登录。如果浏览器显示登录页面，请在浏览器窗口中完成 Google 登录，然后在此处按 Enter 键继续...", flush=True)
+                        elif "__USER_INPUT_END__" in decoded_line:
+                            print("__USER_INPUT_END__", flush=True)
 
                     # --- 所有日志仍然发送到 WebSocket ---
                     level = "INFO"

@@ -291,8 +291,8 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> tuple[str, 
     system_prompt = '\n\n'.join(system_prompts)
     if system_prompt:
         logger.info(f"[{req_id}] 📝 系统提示: '{system_prompt[:50]}...'")
-    preview_text = final_prompt[:200].replace('\n', '\\n')
-    logger.info(f"[{req_id}] 🧩 组合提示 ({len(final_prompt)} chars, {len(images_list)} imgs): '{preview_text}...'")
+    # preview_text = final_prompt[:200].replace('\n', '\\n')
+    logger.info(f"[{req_id}] 🧩 组合提示 ({len(final_prompt)} chars, {len(images_list)} imgs)")
     return (system_prompt, final_prompt, images_list)
 
 def _get_image_message_index(messages: List[Message], image_num: int) -> int:

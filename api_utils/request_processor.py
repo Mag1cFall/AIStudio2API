@@ -513,11 +513,11 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                             pass
                         break
                     if line:
-                        chunk_size = 5
+                        chunk_size = 50
                         for i in range(0, len(line), chunk_size):
                             chunk = line[i:i + chunk_size]
                             yield generate_sse_chunk(chunk, req_id, current_ai_studio_model_id or MODEL_NAME)
-                            await asyncio.sleep(0.03)
+                            # await asyncio.sleep(0.03) # Removed artificial delay
                     if line_idx < len(lines) - 1:
                         yield generate_sse_chunk('\n', req_id, current_ai_studio_model_id or MODEL_NAME)
                         await asyncio.sleep(0.01)
