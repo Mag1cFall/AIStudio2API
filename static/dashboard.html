@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/i18n.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -43,45 +44,80 @@
         .prose h1 { font-size: 1.5em; border-bottom: 1px solid #30363d; padding-bottom: 0.3em; }
         .prose h2 { font-size: 1.3em; }
         .prose h3 { font-size: 1.1em; }
+        .log-action-required {
+            border-color: #f59e0b !important;
+            background-color: rgba(245, 158, 11, 0.1);
+            color: #fcd34d;
+        }
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+        }
     </style>
 </head>
 <body class="h-screen flex overflow-hidden text-sm">
     <div id="app" class="flex w-full h-full">
+        <!-- Main UI -->
         <div class="w-64 bg-[#161b22] flex flex-col border-r border-[#30363d] shrink-0">
-            <div class="h-14 flex items-center px-4 border-b border-[#30363d] gap-2">
-                <div class="w-3 h-3 rounded-full" :class="statusColor"></div>
-                <h1 class="font-bold text-lg text-white">AI Studio <span class="text-blue-400">Manager</span></h1>
+            <div class="h-14 flex items-center px-4 border-b border-[#30363d] gap-2 justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="w-3 h-3 rounded-full" :class="statusColor"></div>
+                    <h1 class="font-bold text-lg text-white">AI Studio Proxy</h1>
+                </div>
+                <div class="relative group">
+                    <button class="text-xs text-gray-500 hover:text-white border border-gray-700 rounded px-1.5 py-0.5 transition font-mono flex items-center gap-1">
+                        {{ lang }}
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                    <!-- 使用 pt-1 增加透明填充区以桥接间隙，防止鼠标移动时菜单消失 -->
+                    <div class="absolute right-0 top-full pt-1 hidden group-hover:block z-50">
+                        <div class="bg-[#161b22] border border-[#30363d] rounded shadow-xl overflow-hidden">
+                            <button v-for="l in availableLangs" :key="l.code" @click="setLang(l.code)"
+                                class="block w-full text-left px-4 py-2 text-xs text-gray-300 hover:bg-blue-600 hover:text-white whitespace-nowrap">
+                                {{ l.label }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <nav class="flex-1 p-2 space-y-1">
                 <button @click="currentTab = 'dashboard'" 
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
-                    仪表盘
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                    {{ t('nav.dashboard') }}
                 </button>
                 <button @click="currentTab = 'config'" 
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'config' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                    配置
+                    {{ t('nav.config') }}
                 </button>
                 <button @click="currentTab = 'auth'" 
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'auth' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
-                    认证文件
+                    {{ t('nav.auth') }}
                 </button>
                 <button @click="currentTab = 'system'"
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'system' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                    系统工具
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    {{ t('nav.system') }}
                 </button>
                 <button @click="currentTab = 'playground'"
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'playground' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
-                    Playground
+                    {{ t('nav.playground') }}
                 </button>
             </nav>
 
             <div class="p-4 border-t border-[#30363d]">
-                <div class="text-xs text-gray-500 mb-2">服务状态</div>
+                <div class="text-xs text-gray-500 mb-2">{{ t('status.title') }}</div>
                 <div class="flex items-center justify-between mb-4">
                     <span :class="statusTextColor" class="font-mono font-bold">{{ serviceStatus.toUpperCase() }}</span>
                     <span v-if="serviceInfo.pid" class="text-xs text-gray-500 font-mono">PID: {{ serviceInfo.pid }}</span>
@@ -91,14 +127,14 @@
                     class="w-full py-2 bg-green-600 hover:bg-green-500 text-white rounded font-bold shadow transition flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                     <svg v-if="loading" class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                     <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    启动服务
+                    {{ t('status.start') }}
                 </button>
                 
                 <button v-else @click="stopService" :disabled="loading"
                     class="w-full py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow transition flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                     <svg v-if="loading" class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path></svg>
-                    停止服务
+                    <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path></svg>
+                    {{ t('status.stop') }}
                 </button>
             </div>
         </div>
@@ -107,21 +143,41 @@
             <div v-if="currentTab === 'dashboard'" class="flex-1 flex flex-col h-full">
                 <div class="h-10 border-b border-[#30363d] flex items-center px-4 justify-between bg-[#161b22]">
                     <div class="flex items-center gap-3">
-                        <span class="text-xs text-gray-400">日志等级:</span>
+                        <span class="text-xs text-gray-400">{{ t('logs.level') }}:</span>
                         <div class="flex bg-[#0d1117] rounded border border-[#30363d] p-0.5">
-                            <button @click="logFilter = 'ALL'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'ALL' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200']">ALL</button>
-                            <button @click="logFilter = 'INFO'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'INFO' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200']">INFO</button>
-                            <button @click="logFilter = 'WARN'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'WARN' ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-gray-200']">WARN</button>
-                            <button @click="logFilter = 'ERROR'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'ERROR' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-gray-200']">ERROR</button>
+                            <button @click="logFilter = 'ALL'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'ALL' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200']">{{ t('logs.all') }}</button>
+                            <button @click="logFilter = 'INFO'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'INFO' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200']">{{ t('logs.info') }}</button>
+                            <button @click="logFilter = 'WARN'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'WARN' ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-gray-200']">{{ t('logs.warn') }}</button>
+                            <button @click="logFilter = 'ERROR'" :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'ERROR' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-gray-200']">{{ t('logs.error') }}</button>
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
-                         <button @click="clearLogs" class="text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-[#30363d]" title="清空日志">
+                         <button @click="clearLogs" class="text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-[#30363d]" :title="t('logs.clear')">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                         </button>
                         <button @click="autoScroll = !autoScroll" :class="['text-xs px-2 py-0.5 rounded border transition', autoScroll ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' : 'border-gray-700 text-gray-500']">
-                            Auto Scroll: {{ autoScroll ? 'ON' : 'OFF' }}
+                            {{ t('logs.autoScroll') }}: {{ autoScroll ? 'ON' : 'OFF' }}
                         </button>
+                    </div>
+                </div>
+
+                <div v-if="isActionRequired" class="p-3 border-b border-amber-500/30 bg-amber-900/10">
+                    <div class="text-amber-400 font-bold mb-2 text-center text-sm">
+                        <svg class="w-4 h-4 inline-block mr-1 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        {{ t('action.title') }}
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input v-model="customInput" @keydown.enter="sendInput(customInput)" type="text" :placeholder="t('action.placeholder')"
+                            class="flex-1 bg-[#0d1117] border border-[#30363d] rounded px-3 py-1.5 text-white focus:border-blue-500 focus:outline-none transition text-sm">
+                        <button @click="sendInput(customInput)" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition text-sm">{{ t('action.send') }}</button>
+                    </div>
+                    <div class="flex items-center gap-2 mt-2 justify-center flex-wrap">
+                        <span class="text-xs text-gray-500">{{ t('action.shortcuts') }}:</span>
+                        <button @click="sendInput('')" class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded border border-[#30363d] transition text-xs">{{ t('action.sendEnter') }}</button>
+                        <button @click="sendInput('N')" class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded border border-[#30363d] transition text-xs">{{ t('action.sendN') }}</button>
+                        <button @click="sendInput('y')" class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded border border-[#30363d] transition text-xs">{{ t('action.sendY') }}</button>
+                        <button @click="sendInput('1')" class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded border border-[#30363d] transition text-xs">{{ t('action.send1') }}</button>
+                        <button @click="sendInput('2')" class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded border border-[#30363d] transition text-xs">{{ t('action.send2') }}</button>
                     </div>
                 </div>
                 
@@ -130,75 +186,76 @@
                         :class="{
                             'border-blue-500 text-gray-300': log.level === 'INFO',
                             'border-yellow-500 text-yellow-100 bg-yellow-500/5': log.level === 'WARN',
-                            'border-red-500 text-red-100 bg-red-500/10': log.level === 'ERROR'
+                            'border-red-500 text-red-100 bg-red-500/10': log.level === 'ERROR',
+                            'log-action-required': log.level === 'ACTION_REQUIRED'
                         }">
                         <span class="text-gray-600 shrink-0 select-none w-16 text-right">{{ log.time }}</span>
-                        <span class="whitespace-pre-wrap break-all">{{ log.message }}</span>
+                        <span class="whitespace-pre-wrap break-all" :class="{'font-bold': log.level === 'ACTION_REQUIRED'}">{{ log.message }}</span>
                     </div>
-                    <div v-if="logs.length === 0" class="text-gray-600 text-center mt-10 italic">等待日志输出...</div>
+                    <div v-if="logs.length === 0" class="text-gray-600 text-center mt-10 italic">{{ t('logs.waiting') }}</div>
                 </div>
             </div>
 
             <div v-if="currentTab === 'config'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
-                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">启动配置</h2>
+                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">{{ t('config.title') }}</h2>
                 
                 <div class="space-y-6">
                     <div class="grid grid-cols-2 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-400 mb-1">FastAPI 服务端口</label>
+                            <label class="block text-sm font-medium text-gray-400 mb-1">{{ t('config.fastapiPort') }}</label>
                             <input v-model.number="config.fastapi_port" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
-                            <p class="text-xs text-gray-600 mt-1">默认: 2048</p>
+                            <p class="text-xs text-gray-600 mt-1">{{ t('config.default') }}: 2048</p>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-400 mb-1">Camoufox 调试端口</label>
+                            <label class="block text-sm font-medium text-gray-400 mb-1">{{ t('config.camoufoxPort') }}</label>
                             <input v-model.number="config.camoufox_debug_port" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
-                            <p class="text-xs text-gray-600 mt-1">默认: 9222</p>
+                            <p class="text-xs text-gray-600 mt-1">{{ t('config.default') }}: 9222</p>
                         </div>
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-gray-400 mb-1">启动模式</label>
+                        <label class="block text-sm font-medium text-gray-400 mb-1">{{ t('config.launchMode') }}</label>
                         <select v-model="config.launch_mode" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
-                            <option value="headless">无头模式 (Headless) - 推荐，后台静默运行</option>
-                            <option value="debug">调试模式 (Debug) - 显示浏览器窗口，用于手动登录</option>
-                            <option value="virtual_headless">虚拟显示模式 (Linux Xvfb)</option>
+                            <option value="headless">{{ t('config.modeHeadless') }}</option>
+                            <option value="debug">{{ t('config.modeDebug') }}</option>
+                            <option value="virtual_headless">{{ t('config.modeVirtual') }}</option>
                         </select>
-                        <p class="text-xs text-gray-600 mt-1">调试模式将弹出一个新的浏览器窗口。无头模式将在后台运行。</p>
+                        <p class="text-xs text-gray-600 mt-1">{{ t('config.modeDesc') }}</p>
                     </div>
 
                     <div class="bg-[#161b22] p-4 rounded-lg border border-[#30363d]">
                         <div class="flex items-center justify-between mb-3">
-                            <label class="text-sm font-medium text-gray-300">流式代理服务</label>
+                            <label class="text-sm font-medium text-gray-300">{{ t('config.streamProxy') }}</label>
                             <input v-model="config.stream_port_enabled" type="checkbox" class="w-4 h-4 rounded bg-[#0d1117] border-gray-600 text-blue-600 focus:ring-blue-500">
                         </div>
                         <div v-if="config.stream_port_enabled">
-                            <label class="block text-xs text-gray-500 mb-1">流式端口</label>
+                            <label class="block text-xs text-gray-500 mb-1">{{ t('config.streamPort') }}</label>
                             <input v-model.number="config.stream_port" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
                         </div>
                     </div>
 
                     <div class="bg-[#161b22] p-4 rounded-lg border border-[#30363d]">
                         <div class="flex items-center justify-between mb-3">
-                            <label class="text-sm font-medium text-gray-300">HTTP 代理</label>
+                            <label class="text-sm font-medium text-gray-300">{{ t('config.httpProxy') }}</label>
                             <input v-model="config.proxy_enabled" type="checkbox" class="w-4 h-4 rounded bg-[#0d1117] border-gray-600 text-blue-600 focus:ring-blue-500">
                         </div>
                         <div v-if="config.proxy_enabled">
-                            <label class="block text-xs text-gray-500 mb-1">代理地址</label>
+                            <label class="block text-xs text-gray-500 mb-1">{{ t('config.proxyAddress') }}</label>
                             <input v-model="config.proxy_address" type="text" placeholder="http://127.0.0.1:7890" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
                         </div>
                     </div>
 
                     <div class="flex justify-end pt-4">
-                        <button @click="saveConfig" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition shadow-lg">保存配置</button>
+                        <button @click="saveConfig" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition shadow-lg">{{ t('config.save') }}</button>
                     </div>
                 </div>
             </div>
 
             <div v-if="currentTab === 'auth'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
-                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">认证文件管理</h2>
+                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">{{ t('auth.title') }}</h2>
                 
                 <div class="mb-6">
-                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">当前激活</h3>
+                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">{{ t('auth.active') }}</h3>
                     <div v-if="authData.active" class="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3">
                             <div class="bg-green-500/20 p-2 rounded-full text-green-400">
@@ -206,43 +263,43 @@
                             </div>
                             <div>
                                 <div class="text-green-300 font-mono font-bold text-lg">{{ authData.active }}</div>
-                                <div class="text-green-500/60 text-xs">正在使用此文件进行认证</div>
+                                <div class="text-green-500/60 text-xs">{{ t('auth.using') }}</div>
                             </div>
                         </div>
                         <button @click="deactivateAuth" class="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs border border-red-900/50 transition flex items-center gap-1">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                            取消激活
+                            {{ t('auth.deactivate') }}
                         </button>
                     </div>
-                    <div v-else class="text-gray-500 italic bg-[#161b22] p-4 rounded border border-[#30363d]">当前无激活的认证文件</div>
+                    <div v-else class="text-gray-500 italic bg-[#161b22] p-4 rounded border border-[#30363d]">{{ t('auth.noActive') }}</div>
                 </div>
 
                 <div>
-                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">已保存文件 (Saved)</h3>
+                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">{{ t('auth.saved') }}</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div v-for="file in authData.saved" :key="file" class="bg-[#161b22] border border-[#30363d] hover:border-blue-500/50 rounded-lg p-4 transition group">
                             <div class="font-mono text-gray-200 mb-4 truncate" :title="file">{{ file }}</div>
                             <button @click="activateAuth(file)" class="w-full py-1.5 text-xs bg-[#21262d] hover:bg-blue-600 hover:text-white text-gray-300 rounded border border-[#30363d] transition">
-                                激活此文件
+                                {{ t('auth.activate') }}
                             </button>
                         </div>
                         <div v-if="authData.saved.length === 0" class="col-span-2 text-center py-8 text-gray-600">
-                            没有找到已保存的认证文件
+                            {{ t('auth.notFound') }}
                         </div>
                     </div>
                 </div>
             </div>
             
             <div v-if="currentTab === 'system'" class="flex-1 overflow-auto p-8 max-w-3xl mx-auto w-full">
-                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">系统工具</h2>
+                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">{{ t('system.title') }}</h2>
                 
                 <div class="space-y-6">
                     <div class="bg-[#161b22] p-4 rounded-lg border border-[#30363d]">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="font-bold text-gray-300">端口占用情况</h3>
+                            <h3 class="font-bold text-gray-300">{{ t('system.portStatus') }}</h3>
                             <button @click="checkAllPorts" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition flex items-center gap-1">
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                                刷新
+                                {{ t('system.refresh') }}
                             </button>
                         </div>
                         
@@ -254,7 +311,7 @@
                                         {{ result.label }} ({{ result.port }})
                                     </div>
                                     <div class="text-xs" :class="result.in_use ? 'text-red-400' : 'text-green-400'">
-                                        {{ result.in_use ? '被占用' : '空闲' }}
+                                        {{ result.in_use ? t('system.inUse') : t('system.free') }}
                                     </div>
                                 </div>
                                 <div v-if="result.in_use" class="p-2 space-y-1">
@@ -265,17 +322,17 @@
                                             {{ proc.name }}
                                         </div>
                                         <button @click="killProcess(proc.pid)" class="px-2 py-0.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs border border-red-900/50 transition">
-                                            终止
+                                            {{ t('system.kill') }}
                                         </button>
                                     </div>
                                 </div>
                                 <div v-else class="p-4 text-center text-gray-600 text-xs italic">
-                                    此端口当前未被占用
+                                    {{ t('system.portFree') }}
                                 </div>
                             </div>
                         </div>
                         <div v-else class="text-center py-8 text-gray-500">
-                            点击刷新查看端口状态
+                            {{ t('system.refreshHint') }}
                         </div>
                     </div>
                 </div>
@@ -286,7 +343,7 @@
                     <div class="flex-1 overflow-auto p-4 space-y-4" ref="chatContainer">
                         <div v-if="chatMessages.length === 0" class="h-full flex flex-col items-center justify-center text-gray-500">
                             <svg class="w-16 h-16 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
-                            <p>开始一个新的对话...</p>
+                            <p>{{ t('chat.start') }}</p>
                         </div>
                         <div v-for="(msg, idx) in chatMessages" :key="idx" class="flex gap-4 max-w-3xl mx-auto group">
                             <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none"
@@ -337,16 +394,16 @@
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                 </button>
                                 <input type="file" ref="fileInput" class="hidden" multiple accept="image/*" @change="handleImageSelect">
-                                <textarea v-model="chatInput" @keydown.ctrl.enter="sendMessage" placeholder="输入消息 (Ctrl+Enter 发送)..."
+                                <textarea v-model="chatInput" @keydown.ctrl.enter="sendMessage" :placeholder="t('chat.placeholder')"
                                     class="flex-1 bg-[#0d1117] border border-[#30363d] rounded p-2 text-white text-sm focus:border-blue-500 focus:outline-none resize-none h-[42px] max-h-[200px]"></textarea>
                                 <button v-if="!isSending" @click="sendMessage" :disabled="(!chatInput.trim() && !pendingImages.length)"
                                     class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium transition">
-                                    发送
+                                    {{ t('chat.send') }}
                                 </button>
                                 <button v-else @click="stopGeneration"
                                     class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium transition flex items-center gap-2">
                                     <svg class="w-4 h-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                                    停止
+                                    {{ t('chat.stop') }}
                                 </button>
                             </div>
                         </div>
@@ -355,23 +412,23 @@
 
                 <div class="w-64 bg-[#161b22] border-l border-[#30363d] flex flex-col overflow-auto p-4 space-y-6">
                     <div>
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">System Prompt</label>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">{{ t('chat.systemPrompt') }}</label>
                         <textarea v-model="chatConfig.systemPrompt" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white h-24 resize-none focus:border-blue-500 focus:outline-none mb-1" placeholder="You are a helpful AI assistant..."></textarea>
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">API Endpoint</label>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">{{ t('chat.endpoint') }}</label>
                         <input v-model="chatConfig.endpoint" type="text" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white mb-1">
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">API Key</label>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">{{ t('chat.apiKey') }}</label>
                         <input v-model="chatConfig.apiKey" type="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white">
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Model</label>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">{{ t('chat.model') }}</label>
                         <div class="relative">
                             <select v-model="chatConfig.model" @click="fetchModels" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white appearance-none focus:border-blue-500 focus:outline-none">
                                 <option v-for="m in availableModels" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option>
-                                <option value="custom">Custom...</option>
+                                <option value="custom">{{ t('chat.customModel') }}</option>
                             </select>
                             <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
                                 <svg class="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -381,35 +438,54 @@
                     </div>
                     <div>
                         <div class="flex justify-between mb-1 items-center">
-                            <label class="text-xs font-bold text-gray-500 uppercase">Temperature</label>
+                            <label class="text-xs font-bold text-gray-500 uppercase">{{ t('chat.temperature') }}</label>
                             <input v-model.number="chatConfig.temperature" type="number" min="0" max="2" step="0.1" class="w-12 bg-transparent text-right text-xs text-blue-400 border-b border-gray-700 focus:border-blue-500 focus:outline-none">
                         </div>
                         <input v-model.number="chatConfig.temperature" type="range" min="0" max="2" step="0.1" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
                     </div>
                     <div>
                         <div class="flex justify-between mb-1 items-center">
-                            <label class="text-xs font-bold text-gray-500 uppercase">Top P</label>
+                            <label class="text-xs font-bold text-gray-500 uppercase">{{ t('chat.topP') }}</label>
                             <input v-model.number="chatConfig.top_p" type="number" min="0" max="1" step="0.05" class="w-12 bg-transparent text-right text-xs text-blue-400 border-b border-gray-700 focus:border-blue-500 focus:outline-none">
                         </div>
                         <input v-model.number="chatConfig.top_p" type="range" min="0" max="1" step="0.05" class="w-full accent-blue-600 h-1 bg-[#30363d] rounded-lg appearance-none cursor-pointer">
                     </div>
                      <div>
                         <div class="flex justify-between mb-1">
-                            <label class="text-xs font-bold text-gray-500 uppercase">Max Tokens</label>
+                            <label class="text-xs font-bold text-gray-500 uppercase">{{ t('chat.maxTokens') }}</label>
                             <span class="text-xs text-blue-400">{{ chatConfig.max_tokens }}</span>
                         </div>
                         <input v-model.number="chatConfig.max_tokens" type="number" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white">
                     </div>
                     <div class="flex items-center justify-between">
-                        <label class="text-xs font-bold text-gray-500 uppercase">Google Search</label>
+                        <label class="text-xs font-bold text-gray-500 uppercase">{{ t('chat.googleSearch') }}</label>
                         <div class="relative inline-block w-8 h-4 align-middle select-none transition duration-200 ease-in">
                             <input v-model="chatConfig.googleSearch" type="checkbox" name="toggle" id="googleSearchToggle" class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out" :class="chatConfig.googleSearch ? 'translate-x-4 border-blue-600' : 'translate-x-0 border-gray-400'"/>
                             <label for="googleSearchToggle" class="toggle-label block overflow-hidden h-4 rounded-full cursor-pointer transition-colors duration-200 ease-in-out" :class="chatConfig.googleSearch ? 'bg-blue-600' : 'bg-gray-700'"></label>
                         </div>
                     </div>
                     <div class="pt-4 border-t border-[#30363d]">
-                        <button @click="chatMessages = []" class="w-full py-2 border border-[#30363d] hover:bg-red-900/20 text-red-400 rounded text-xs transition">清空对话</button>
+                        <button @click="chatMessages = []" class="w-full py-2 border border-[#30363d] hover:bg-red-900/20 text-red-400 rounded text-xs transition">{{ t('chat.clear') }}</button>
                     </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Prompt Modal -->
+        <div v-if="currentPrompt" class="modal-overlay">
+            <div class="bg-[#161b22] border border-[#30363d] rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+                <h3 class="text-lg font-bold text-white mb-4">{{ currentPrompt.text }}</h3>
+                <div v-if="currentPrompt.type === 'choice'" class="space-y-2">
+                    <button v-for="opt in currentPrompt.options" :key="opt.value" @click="sendPromptResponse(opt.value)"
+                        class="w-full text-left px-4 py-2 rounded-md transition bg-[#21262d] hover:bg-blue-600 text-gray-300 hover:text-white">
+                        {{ opt.label }}
+                    </button>
+                </div>
+                <div v-if="currentPrompt.type === 'confirm'">
+                    <button @click="sendPromptResponse(currentPrompt.response_value)"
+                        class="w-full px-4 py-2 rounded-md transition bg-blue-600 hover:bg-blue-500 text-white font-bold">
+                        {{ currentPrompt.confirm_text || 'Confirm' }}
+                    </button>
                 </div>
             </div>
         </div>
@@ -420,6 +496,7 @@
 
         createApp({
             setup() {
+                const { lang, t, setLang, availableLangs } = useI18n(ref);
                 const currentTab = ref('dashboard');
                 const serviceStatus = ref('stopped');
                 const serviceInfo = ref({});
@@ -431,6 +508,9 @@
                 const logsContainer = ref(null);
                 const multiPortResults = ref([]);
                 const logFilter = ref('ALL');
+                const isActionRequired = ref(false);
+                const customInput = ref('');
+                const currentPrompt = ref(null); // Kept for backward compatibility or future specific prompts
                 let ws = null;
 
                 const chatMessages = ref([]);
@@ -488,7 +568,13 @@
                         if (data.type === 'status') {
                             serviceStatus.value = data.status;
                             serviceInfo.value = data.info || {};
+                            if (data.status === 'stopped' || data.status === 'stopping') {
+                                isActionRequired.value = false;
+                            }
                         } else if (data.type === 'log') {
+                            if (data.level === 'ACTION_REQUIRED') {
+                                isActionRequired.value = true;
+                            }
                             logs.value.push(data);
                             if (logs.value.length > 1000) logs.value.shift();
                             if (autoScroll.value) {
@@ -498,6 +584,9 @@
                                     }
                                 });
                             }
+                        } else if (data.type === 'prompt') {
+                             // Specific prompt modal handling if needed in future
+                             currentPrompt.value = data.data;
                         }
                     };
 
@@ -624,7 +713,36 @@
                     fetchModels();
                 });
 
+                const sendInput = async (value) => {
+                    if (serviceStatus.value !== 'running' && serviceStatus.value !== 'starting') return;
+                    try {
+                        await fetch('/api/control/stdin', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ input: value })
+                        });
+                        customInput.value = ''; // 发送后清空输入框
+                        isActionRequired.value = false; // 乐观地隐藏面板，等待下一个提示
+                    } catch (e) {
+                        console.error("Failed to send input:", e);
+                    }
+                };
+
+                const sendPromptResponse = (value) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'prompt_response',
+                            value: value
+                        }));
+                        currentPrompt.value = null;
+                    }
+                };
+
                 return {
+                    lang,
+                    t,
+                    setLang,
+                    availableLangs,
                     currentTab,
                     serviceStatus,
                     serviceInfo,
@@ -646,6 +764,9 @@
                     filteredLogs,
                     multiPortResults,
                     checkAllPorts,
+                    isActionRequired,
+                    customInput,
+                    sendInput,
                     killProcess: async (pid) => {
                         if(!confirm(`确定要强制终止进程 ${pid} 吗？`)) return;
                         const res = await fetch(`/api/system/kill/${pid}`, { method: 'POST' });
@@ -822,7 +943,9 @@
                     showImage: (src) => {
                         const w = window.open("");
                         w.document.write(`<img src="${src}" style="max-width:100%">`);
-                    }
+                    },
+                    currentPrompt, // Expose prompt state
+                    sendPromptResponse // Expose prompt response handler
                 };
             },
         }).mount('#app');
