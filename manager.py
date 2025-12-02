@@ -37,6 +37,8 @@ class ServiceManager:
         self.stop_event = threading.Event()
         self.service_status = "stopped"  # stopped, starting, running, stopping
         self.service_info = {}
+        self.current_launch_mode = None
+        self._console_print_state = "default"
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE_PATH):
@@ -101,7 +103,25 @@ class ServiceManager:
                 if line:
                     decoded_line = line.decode('utf-8', errors='replace').strip()
                     
-                    # 简单解析日志级别
+                    if self.current_launch_mode == 'debug':
+                        # --- 状态机：仅用于连续打印认证文件列表 ---
+                        if self._console_print_state == "default" and "找到以下可用的认证文件" in decoded_line:
+                            self._console_print_state = "printing_auth"
+
+                        if self._console_print_state == "printing_auth":
+                            print(decoded_line, flush=True)
+                            # 检测到列表结束或选择结果时退出打印状态
+                            if "好的，不加载认证文件或超时" in decoded_line or "已选择加载" in decoded_line or "将使用默认值" in decoded_line:
+                                self._console_print_state = "default"
+                        
+                        # --- 离散检查：仅打印登录提示的关键行，过滤中间的代理日志 ---
+                        elif ("__USER_INPUT_START__" in decoded_line or
+                              "检测到可能需要登录" in decoded_line or
+                              "==================== 需要操作 ====================" in decoded_line or
+                              "__USER_INPUT_END__" in decoded_line):
+                            print(decoded_line, flush=True)
+
+                    # --- 所有日志仍然发送到 WebSocket ---
                     level = "INFO"
                     upper_line = decoded_line.upper()
                     if "ERROR" in upper_line or "EXCEPTION" in upper_line or "CRITICAL" in upper_line:
@@ -140,9 +160,11 @@ class ServiceManager:
 
         self.service_status = "starting"
         self.stop_event.clear()
+        self._console_print_state = "default" # 重置打印状态
         
         # 模式选择
         mode = config.get('launch_mode', 'headless')
+        self.current_launch_mode = mode # 记录当前模式
         mode_flag = '--headless'
         if mode == 'debug':
             mode_flag = '--debug'
