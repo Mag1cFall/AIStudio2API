@@ -1,3 +1,5 @@
+[中文](README.md) | [English](README_en.md)
+
 # AI Studio Proxy API
 
 一个基于 Python 的代理服务器，用于将 Google AI Studio 的网页界面转换为 OpenAI 兼容的 API。通过 Camoufox (反指纹检测的 Firefox) 和 Playwright 自动化，提供稳定的 API 访问。
@@ -22,7 +24,29 @@
 
 ## 🛠️ 安装步骤
 
-### 1. 安装 uv
+### 方式一：一键安装（推荐）
+
+```bash
+git clone https://github.com/Mag1cFall/AIStudio2API.git
+cd AIStudio2API
+```
+
+然后双击运行 `setup.bat`，脚本将自动完成所有安装步骤。
+
+Windows (PowerShell):
+```powershell
+.\setup.bat
+```
+
+Linux:
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+### 方式二：手动安装
+
+#### 1. 安装 uv
 
 Windows (PowerShell):
 ```powershell
@@ -51,14 +75,14 @@ To add C:\Users\2\.local\bin to your PATH, either restart your shell or run:
 ```
 请按照您的路径将其添加到环境变量。
 
-### 2. 克隆项目
+#### 2. 克隆项目
 
 ```bash
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
 ```
 
-### 3. 安装依赖
+#### 3. 安装依赖
 
 ```bash
 uv sync
@@ -242,6 +266,7 @@ cp .env.example .env
 
 ## 📅 开发计划
 
+- **TTS 支持**: 适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
 - **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
 - **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
@@ -249,9 +274,3 @@ cp .env.example .env
 - **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
 - **单元测试**: 增加核心模块（特别是浏览器自动化部分）的测试覆盖率
 - **负载均衡**: 支持多 Google 账号轮询池，以提高并发限额与稳定性 (这项或许不可能实现)
-
-
-<!-- 
-## 📈 Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date)](https://star-history.com/#Mag1cFall/AIStudio2API&Date) -->
