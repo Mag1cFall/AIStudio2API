@@ -5,9 +5,10 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
-from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH
+from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL
 from models import ClientDisconnectedError, ElementClickError
 from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content, click_element
+from .thinking_normalizer import parse_reasoning_param, describe_config
 
 class PageController:
 
@@ -66,6 +67,7 @@ class PageController:
             self._adjust_stop_sequences(stop_to_set, page_params_cache, params_cache_lock, check_client_disconnected),
             self._adjust_top_p(top_p_to_set, check_client_disconnected),
             self._adjust_google_search(request_params, check_client_disconnected),
+            self._handle_thinking_budget(request_params, model_id_to_use, check_client_disconnected),
             handle_tools_panel()
         ]
         
@@ -89,98 +91,189 @@ class PageController:
             if isinstance(e, ClientDisconnectedError):
                 raise
 
-    async def _control_thinking_mode_toggle(self, should_be_checked: bool, check_client_disconnected: Callable):
+    async def _control_thinking_mode_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = THINKING_MODE_TOGGLE_SELECTOR
-        self.logger.info(f"[{self.req_id}] 控制 'Thinking Mode' 开关，期望状态: {('启用' if should_be_checked else '禁用')}...")
-        try:
-            toggle_locator = self.page.locator(toggle_selector)
-            await expect_async(toggle_locator).to_be_visible(timeout=7000)
-            await self._check_disconnect(check_client_disconnected, '思考模式开关 - 元素可见后')
-            parent_toggle_locator = toggle_locator.locator('xpath=../..')
-            is_disabled_class = await parent_toggle_locator.get_attribute('class')
-            if is_disabled_class and 'mat-mdc-slide-toggle-disabled' in is_disabled_class:
-                self.logger.info(f"[{self.req_id}] 'Thinking Mode' 开关当前被禁用，跳过操作。")
-                return
-            is_checked_str = await toggle_locator.get_attribute('aria-checked')
-            current_state_is_checked = is_checked_str == 'true'
-            if current_state_is_checked != should_be_checked:
-                action = '启用' if should_be_checked else '禁用'
-                self.logger.info(f"[{self.req_id}] 💡 点击以{action} 'Thinking Mode'...")
+        action = '啟用' if should_be_checked else '停用'
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 控制 Thinking Mode 開關: {action}...")
+                toggle_locator = self.page.locator(toggle_selector)
+                await expect_async(toggle_locator).to_be_visible(timeout=7000)
+                await self._check_disconnect(check_client_disconnected, '思考模式開關 - 元素可見後')
+                parent_toggle_locator = toggle_locator.locator('xpath=../..')
+                is_disabled_class = await parent_toggle_locator.get_attribute('class')
+                if is_disabled_class and 'mat-mdc-slide-toggle-disabled' in is_disabled_class:
+                    self.logger.info(f"[{self.req_id}] Thinking Mode 開關當前被禁用，跳過操作。")
+                    return False
+                is_checked_str = await toggle_locator.get_attribute('aria-checked')
+                current_state_is_checked = is_checked_str == 'true'
+                if current_state_is_checked == should_be_checked:
+                    self.logger.info(f"[{self.req_id}] ✅ Thinking Mode 已就緒。")
+                    return True
                 await click_element(self.page, toggle_locator, 'Thinking Mode Toggle', self.req_id)
-                await self._check_disconnect(check_client_disconnected, f'思考模式开关 - 点击{action}后')
+                await self._check_disconnect(check_client_disconnected, f'思考模式開關 - 點擊{action}後')
                 await asyncio.sleep(0.5)
                 new_state_str = await toggle_locator.get_attribute('aria-checked')
                 if (new_state_str == 'true') == should_be_checked:
-                    self.logger.info(f"[{self.req_id}] ✅ 'Thinking Mode' 已{action}。")
+                    self.logger.info(f"[{self.req_id}] ✅ Thinking Mode 已{action}。")
+                    return True
                 else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ 'Thinking Mode' {action}验证失败: '{new_state_str}'")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Thinking Mode {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f"[{self.req_id}] Thinking Mode 操作失敗 (嘗試 {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f"[{self.req_id}] ❌ Thinking Mode 設定失敗，已重試 {max_retries} 次")
+        return False
+
+    def _is_gemini3_pro_series(self, model_id: Optional[str]) -> bool:
+        """判斷是否為 Gemini 3 Pro 系列（使用等級而非預算）"""
+        mid = (model_id or "").lower()
+        return ("gemini-3" in mid) and ("pro" in mid)
+
+    def _has_main_reasoning_switch(self, model_id: Optional[str]) -> bool:
+        """判斷模型是否擁有主開關（Flash 系列）"""
+        mid = (model_id or "").lower()
+        return "flash" in mid
+
+    async def _check_level_dropdown_exists(self) -> bool:
+        """檢查等級下拉選單是否存在"""
+        try:
+            locator = self.page.locator(THINKING_LEVEL_SELECT_SELECTOR)
+            return await locator.count() > 0
+        except Exception:
+            return False
+
+    def _determine_level_from_effort(self, reasoning_effort: Any) -> Optional[str]:
+        """根據 reasoning_effort 決定等級（high/low）"""
+        if isinstance(reasoning_effort, str):
+            rs = reasoning_effort.strip().lower()
+            if rs == "low":
+                return "low"
+            if rs in ["high", "none", "-1"]:
+                return "high"
+            try:
+                return "high" if int(rs) >= 8000 else "low"
+            except Exception:
+                return None
+        if isinstance(reasoning_effort, int):
+            return "high" if reasoning_effort >= 8000 or reasoning_effort == -1 else "low"
+        return None
+
+    def _apply_model_budget_cap(self, value: int, model_id: Optional[str]) -> int:
+        """根據模型類型限制預算上限"""
+        mid = (model_id or "").lower()
+        if "gemini-2.5-pro" in mid:
+            return min(value, 32768)
+        if "flash-lite" in mid:
+            return min(value, 24576)
+        if "flash" in mid:
+            return min(value, 24576)
+        return value
+
+    async def _select_thinking_level(self, level: str, check_client_disconnected: Callable):
+        """設定推理等級（Gemini 3 Pro 專用），包含重試邏輯"""
+        target_selector = (
+            THINKING_LEVEL_OPTION_HIGH_SELECTOR if level == "high"
+            else THINKING_LEVEL_OPTION_LOW_SELECTOR
+        )
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 設定推理等級 {level}...")
+                trigger = self.page.locator(THINKING_LEVEL_SELECT_SELECTOR)
+                if await trigger.count() == 0:
+                    self.logger.warning(f"[{self.req_id}] 等級選擇器未找到，可能當前模型不支援")
+                    raise Exception("等級選擇器不存在")
+                await click_element(self.page, trigger, "Thinking Level Selector", self.req_id)
+                await self._check_disconnect(check_client_disconnected, '等級選單展開後')
+                await asyncio.sleep(0.3)
+                option = self.page.locator(target_selector)
+                if await option.count() == 0:
+                    self.logger.warning(f"[{self.req_id}] 等級選項 {level} 未找到")
+                    try:
+                        await self.page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    raise Exception(f"等級選項 {level} 不存在")
+                await click_element(self.page, option, f"Thinking Level {level}", self.req_id)
+                await asyncio.sleep(0.2)
+                self.logger.info(f"[{self.req_id}] ✓ 推理等級已設定為 {level}")
+                return
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f"[{self.req_id}] 設定等級失敗 (嘗試 {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5)
+                else:
+                    raise
+
+    async def _set_budget_value(self, token_budget: int, check_client_disconnected: Callable):
+        """設定預算數值"""
+        budget_input = self.page.locator(THINKING_BUDGET_INPUT_SELECTOR)
+        try:
+            await expect_async(budget_input).to_be_visible(timeout=5000)
+            await self._check_disconnect(check_client_disconnected, '預算輸入框可見後')
+            self.logger.info(f"[{self.req_id}] 設定推理預算為: {token_budget} tokens")
+            await budget_input.fill(str(token_budget), timeout=5000)
+            await self._check_disconnect(check_client_disconnected, '預算填充後')
+            await asyncio.sleep(0.1)
+            actual_val = await budget_input.input_value(timeout=3000)
+            if int(actual_val) == token_budget:
+                self.logger.info(f"[{self.req_id}] ✓ 預算已更新為 {actual_val}")
             else:
-                self.logger.info(f"[{self.req_id}] ✅ 'Thinking Mode' 已就绪。")
+                self.logger.warning(f"[{self.req_id}] 預算驗證失敗，實際: {actual_val}，預期: {token_budget}")
         except Exception as e:
-            self.logger.error(f"[{self.req_id}]  操作 'Thinking Mode toggle' 开关时发生错误: {e}")
+            self.logger.error(f"[{self.req_id}] 設定預算時發生錯誤: {e}")
             if isinstance(e, ClientDisconnectedError):
                 raise
 
-    async def _handle_thinking_budget(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
+    async def _handle_thinking_budget(self, request_params: Dict[str, Any], model_id_to_use: Optional[str], check_client_disconnected: Callable):
+        """處理推理模式與預算的完整邏輯"""
         reasoning_effort = request_params.get('reasoning_effort')
-        should_enable_thinking_mode = True
-        if isinstance(reasoning_effort, str) and reasoning_effort.lower() == 'none':
-            should_enable_thinking_mode = False
-        elif reasoning_effort is None and (not ENABLE_THINKING_BUDGET):
-            should_enable_thinking_mode = False
-        self.logger.info(f"[{self.req_id}] 根据请求和配置，'Thinking Mode' 应处于 {('启用' if should_enable_thinking_mode else '禁用')} 状态。")
-        await self._control_thinking_mode_toggle(should_be_checked=should_enable_thinking_mode, check_client_disconnected=check_client_disconnected)
-        if not should_enable_thinking_mode:
-            self.logger.info(f"[{self.req_id}] 'Thinking Mode' 已禁用，跳过预算设置。")
-            return
-        self.logger.info(f"[{self.req_id}] 'Thinking Mode' 已启用，现在确保手动预算已开启。")
-        await self._control_thinking_budget_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
-        await self._adjust_thinking_budget(reasoning_effort, check_client_disconnected)
+        cfg = parse_reasoning_param(reasoning_effort)
+        self.logger.info(f"[{self.req_id}] 推理配置: {describe_config(cfg)}")
 
-    def _parse_thinking_budget(self, reasoning_effort: Optional[Any]) -> Optional[int]:
-        token_budget = None
-        if reasoning_effort is None:
-            token_budget = DEFAULT_THINKING_BUDGET
-            self.logger.info(f"[{self.req_id}] 'reasoning_effort' 为空，使用默认思考预算: {token_budget}")
-        elif isinstance(reasoning_effort, int):
-            token_budget = reasoning_effort
-        elif isinstance(reasoning_effort, str):
-            if reasoning_effort.lower() == 'none':
-                token_budget = DEFAULT_THINKING_BUDGET
-                self.logger.info(f"[{self.req_id}] 'reasoning_effort' 为 'none' 字符串，使用默认思考预算: {token_budget}")
-            else:
-                effort_map = {'low': 1000, 'medium': 8000, 'high': 24000}
-                token_budget = effort_map.get(reasoning_effort.lower())
-                if token_budget is None:
-                    try:
-                        token_budget = int(reasoning_effort)
-                    except (ValueError, TypeError):
-                        pass
-        if token_budget is None:
-            self.logger.warning(f"[{self.req_id}] 无法从 '{reasoning_effort}' (类型: {type(reasoning_effort)}) 解析出有效的 token_budget。")
-        return token_budget
-
-    async def _adjust_thinking_budget(self, reasoning_effort: Optional[Any], check_client_disconnected: Callable):
-        self.logger.info(f'[{self.req_id}] 检查并调整思考预算，输入值: {reasoning_effort}')
-        token_budget = self._parse_thinking_budget(reasoning_effort)
-        if token_budget is None:
-            self.logger.warning(f"[{self.req_id}] 无效的 reasoning_effort 值: '{reasoning_effort}'。跳过调整。")
+        if not cfg.enable_reasoning:
+            self.logger.info(f"[{self.req_id}] 推理模式已停用，跳過相關設定")
             return
-        budget_input_locator = self.page.locator(THINKING_BUDGET_INPUT_SELECTOR)
+
         try:
-            await expect_async(budget_input_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '思考预算调整 - 输入框可见后')
-            self.logger.info(f'[{self.req_id}] 设置思考预算为: {token_budget}')
-            await budget_input_locator.fill(str(token_budget), timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '思考预算调整 - 填充输入框后')
-            await asyncio.sleep(0.1)
-            new_value_str = await budget_input_locator.input_value(timeout=3000)
-            if int(new_value_str) == token_budget:
-                self.logger.info(f'[{self.req_id}]  思考预算已成功更新为: {new_value_str}')
+            uses_level = self._is_gemini3_pro_series(model_id_to_use) and await self._check_level_dropdown_exists()
+            has_switch = self._has_main_reasoning_switch(model_id_to_use)
+
+            if has_switch:
+                self.logger.info(f"[{self.req_id}] 控制主開關: 啟用")
+                await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
+
+            if uses_level:
+                level = self._determine_level_from_effort(reasoning_effort) or DEFAULT_THINKING_LEVEL
+                try:
+                    await self._select_thinking_level(level, check_client_disconnected)
+                except Exception as e:
+                    self.logger.warning(f"[{self.req_id}] 設定推理等級失敗，使用預算模式: {e}")
+                    if cfg.use_budget_limit and cfg.budget_tokens:
+                        capped_val = self._apply_model_budget_cap(cfg.budget_tokens, model_id_to_use)
+                        await self._control_thinking_budget_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
+                        await self._set_budget_value(capped_val, check_client_disconnected)
+                return
+
+            if cfg.use_budget_limit and cfg.budget_tokens:
+                capped_val = self._apply_model_budget_cap(cfg.budget_tokens, model_id_to_use)
+                self.logger.info(f"[{self.req_id}] 啟用預算限制，數值: {capped_val}")
+                await self._control_thinking_budget_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
+                await self._set_budget_value(capped_val, check_client_disconnected)
             else:
-                self.logger.warning(f'[{self.req_id}]  思考预算更新后验证失败。页面显示: {new_value_str}, 期望: {token_budget}')
+                self.logger.info(f"[{self.req_id}] 推理已啟用，無預算限制")
+                await self._control_thinking_budget_toggle(should_be_checked=False, check_client_disconnected=check_client_disconnected)
         except Exception as e:
-            self.logger.error(f'[{self.req_id}]  调整思考预算时出错: {e}')
+            self.logger.error(f"[{self.req_id}] 處理推理模式時發生錯誤: {e}")
             if isinstance(e, ClientDisconnectedError):
                 raise
 
@@ -206,29 +299,37 @@ class PageController:
     async def _adjust_google_search(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
         should_enable_search = self._should_enable_google_search(request_params)
         toggle_selector = GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR
-        try:
-            toggle_locator = self.page.locator(toggle_selector)
-            await expect_async(toggle_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, 'Google Search 开关 - 元素可见后')
-            is_checked_str = await toggle_locator.get_attribute('aria-checked')
-            is_currently_checked = is_checked_str == 'true'
-            if should_enable_search != is_currently_checked:
-                action = '打开' if should_enable_search else '关闭'
-                self.logger.info(f'[{self.req_id}] 🌍 正在{action} Google Search...')
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                toggle_locator = self.page.locator(toggle_selector)
+                await expect_async(toggle_locator).to_be_visible(timeout=5000)
+                await self._check_disconnect(check_client_disconnected, 'Google Search 開關 - 元素可見後')
+                is_checked_str = await toggle_locator.get_attribute('aria-checked')
+                is_currently_checked = is_checked_str == 'true'
+                if should_enable_search == is_currently_checked:
+                    self.logger.info(f'[{self.req_id}] ✅ Google Search 已就緒。')
+                    return
+                action = '打開' if should_enable_search else '關閉'
+                self.logger.info(f'[{self.req_id}] 🌍 (嘗試 {attempt}/{max_retries}) 正在{action} Google Search...')
                 await click_element(self.page, toggle_locator, 'Google Search Toggle', self.req_id)
-                await self._check_disconnect(check_client_disconnected, f'Google Search 开关 - 点击{action}后')
+                await self._check_disconnect(check_client_disconnected, f'Google Search 開關 - 點擊{action}後')
                 await asyncio.sleep(0.5)
                 new_state = await toggle_locator.get_attribute('aria-checked')
                 if (new_state == 'true') == should_enable_search:
                     self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
+                    return
                 else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失败: '{new_state}'")
-            else:
-                self.logger.info(f'[{self.req_id}] ✅ Google Search 已就绪。')
-        except Exception as e:
-            self.logger.error(f"[{self.req_id}]  操作 'Google Search toggle' 开关时发生错误: {e}")
-            if isinstance(e, ClientDisconnectedError):
-                raise
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f"[{self.req_id}] Google Search 操作失敗 (嘗試 {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f"[{self.req_id}] ❌ Google Search 設定失敗，已重試 {max_retries} 次")
 
     async def _ensure_tools_panel_expanded(self, check_client_disconnected: Callable):
         try:
@@ -267,34 +368,40 @@ class PageController:
             if isinstance(e, ClientDisconnectedError):
                 raise
 
-    async def _control_thinking_budget_toggle(self, should_be_checked: bool, check_client_disconnected: Callable):
+    async def _control_thinking_budget_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = SET_THINKING_BUDGET_TOGGLE_SELECTOR
-        self.logger.info(f"[{self.req_id}] 控制 'Set Thinking Budget' 开关，期望状态: {('选中' if should_be_checked else '未选中')}...")
-        try:
-            toggle_locator = self.page.locator(toggle_selector)
-            await expect_async(toggle_locator).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '手动预算开关 - 元素可见后')
-            is_checked_str = await toggle_locator.get_attribute('aria-checked')
-            current_state_is_checked = is_checked_str == 'true'
-            self.logger.info(f"[{self.req_id}] 手动预算开关当前 'aria-checked' 状态: {is_checked_str} (当前是否选中: {current_state_is_checked})")
-            if current_state_is_checked != should_be_checked:
-                action = '启用' if should_be_checked else '禁用'
-                self.logger.info(f'[{self.req_id}] 手动预算开关当前状态与期望不符，正在点击以{action}...')
+        action = '啟用' if should_be_checked else '停用'
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 控制 Set Thinking Budget 開關: {action}...")
+                toggle_locator = self.page.locator(toggle_selector)
+                await expect_async(toggle_locator).to_be_visible(timeout=5000)
+                await self._check_disconnect(check_client_disconnected, '手動預算開關 - 元素可見後')
+                is_checked_str = await toggle_locator.get_attribute('aria-checked')
+                current_state_is_checked = is_checked_str == 'true'
+                if current_state_is_checked == should_be_checked:
+                    self.logger.info(f"[{self.req_id}] ✅ Set Thinking Budget 開關已就緒。")
+                    return True
                 await click_element(self.page, toggle_locator, 'Set Thinking Budget Toggle', self.req_id)
-                await self._check_disconnect(check_client_disconnected, f'手动预算开关 - 点击{action}后')
+                await self._check_disconnect(check_client_disconnected, f'手動預算開關 - 點擊{action}後')
                 await asyncio.sleep(0.5)
                 new_state_str = await toggle_locator.get_attribute('aria-checked')
-                new_state_is_checked = new_state_str == 'true'
-                if new_state_is_checked == should_be_checked:
-                    self.logger.info(f"[{self.req_id}]  'Set Thinking Budget' 开关已成功{action}。新状态: {new_state_str}")
+                if (new_state_str == 'true') == should_be_checked:
+                    self.logger.info(f"[{self.req_id}] ✅ Set Thinking Budget 開關已{action}。")
+                    return True
                 else:
-                    self.logger.warning(f"[{self.req_id}]  'Set Thinking Budget' 开关{action}后验证失败。期望状态: '{should_be_checked}', 实际状态: '{new_state_str}'")
-            else:
-                self.logger.info(f"[{self.req_id}] 'Set Thinking Budget' 开关已处于期望状态，无需操作。")
-        except Exception as e:
-            self.logger.error(f"[{self.req_id}]  操作 'Set Thinking Budget toggle' 开关时发生错误: {e}")
-            if isinstance(e, ClientDisconnectedError):
-                raise
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Set Thinking Budget {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f"[{self.req_id}] Set Thinking Budget 操作失敗 (嘗試 {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f"[{self.req_id}] ❌ Set Thinking Budget 設定失敗，已重試 {max_retries} 次")
+        return False
 
     async def _set_parameter_with_retry(self, locator: Locator, target_value: str, param_name: str, check_client_disconnected: Callable) -> bool:
         def is_equal(val1, val2):
