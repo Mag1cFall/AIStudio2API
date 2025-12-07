@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import secrets
 import time
 from typing import Optional, Tuple, Callable, AsyncGenerator
 from asyncio import Event, Future
@@ -230,9 +231,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
     is_streaming = request.stream
     current_ai_studio_model_id = context.get('current_ai_studio_model_id')
 
-    def generate_random_string(length):
-        charset = 'abcdefghijklmnopqrstuvwxyz0123456789'
-        return ''.join((random.choice(charset) for _ in range(length)))
+
     if is_streaming:
         try:
             completion_event = Event()
@@ -320,7 +319,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                             if done and function and (len(function) > 0):
                                 tool_calls_list = []
                                 for func_idx, function_call_data in enumerate(function):
-                                    tool_calls_list.append({'id': f'call_{generate_random_string(24)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                                    tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
                                 delta_content['tool_calls'] = tool_calls_list
                                 choice_item['finish_reason'] = 'tool_calls'
                                 choice_item['native_finish_reason'] = 'tool_calls'
@@ -333,7 +332,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                                 delta_content = {'role': 'assistant', 'content': None}
                                 tool_calls_list = []
                                 for func_idx, function_call_data in enumerate(function):
-                                    tool_calls_list.append({'id': f'call_{generate_random_string(24)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                                    tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
                                 delta_content['tool_calls'] = tool_calls_list
                                 choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'tool_calls', 'native_finish_reason': 'tool_calls'}
                             else:
@@ -452,7 +451,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
         if functions and len(functions) > 0:
             tool_calls_list = []
             for func_idx, function_call_data in enumerate(functions):
-                tool_calls_list.append({'id': f'call_{generate_random_string(24)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
             message_payload['tool_calls'] = tool_calls_list
             finish_reason_val = 'tool_calls'
             message_payload['content'] = None

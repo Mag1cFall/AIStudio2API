@@ -110,14 +110,6 @@ async def queue_worker():
                 delay_time = max(0.5, 1.0 - (current_time - last_request_completion_time))
                 logger.info(f'[{req_id}] (Worker) 连续流式请求，添加 {delay_time:.2f}s 延迟...')
                 await asyncio.sleep(delay_time)
-
-            is_connected = await _test_client_connection(req_id, http_request)
-            if not is_connected:
-                logger.info(f'[{req_id}] (Worker) ✅ 等待锁时检测到客户端断开，取消处理')
-                if not result_future.done():
-                    result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] 客户端关闭了请求'))
-                request_queue.task_done()
-                continue
             
             logger.info(f'[{req_id}] (Worker) 等待处理锁...')
             async with processing_lock:
