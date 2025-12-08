@@ -1,7 +1,9 @@
 # Logs
 logs
 *.log
-certs/*
+certs/
+data/certs/
+src/certs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -216,14 +218,14 @@ env.bak/
 venv.bak/
 
 # Error snapshots directory (Python specific)
-errors_py/
+data/errors_py/
 logs/
 
 # Authentication Profiles (Sensitive)
-auth_profiles/active/*
-!auth_profiles/active/.gitkeep
-auth_profiles/saved/*
-!auth_profiles/saved/.gitkeep
+data/auth_profiles/active/*
+!data/auth_profiles/active/.gitkeep
+data/auth_profiles/saved/*
+!data/auth_profiles/saved/.gitkeep
 
 # Camoufox/Playwright Profile Data (Assume these are generated/temporary)
 camoufox_profile/
@@ -234,10 +236,10 @@ deprecated_javascript_version/node_modules/
 
 .roomodes
 memory-bank/
-gui_config.json
+data/gui_config.json
 
 # key
-key.txt
+data/key.txt
 
 # 脚本注入相关文件
 # 用户自定义的模型配置文件（保留示例文件）

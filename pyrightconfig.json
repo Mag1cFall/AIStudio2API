@@ -13,13 +13,13 @@
         "logs"
     ],
     "extraPaths": [
-        ".",
-        "./api",
-        "./browser",
-        "./config",
-        "./models",
-        "./logger",
-        "./proxy"
+        "./src",
+        "./src/api",
+        "./src/browser",
+        "./src/config",
+        "./src/models",
+        "./src/logger",
+        "./src/proxy"
     ],
     "pythonVersion": "3.13",
     "pythonPlatform": "Darwin",

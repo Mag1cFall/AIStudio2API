@@ -1,0 +1,22 @@
+services:
+  aistudio-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: aistudio-proxy
+    restart: unless-stopped
+    ports:
+      - "2048:2048"
+      - "3120:3120"
+    environment:
+      - TZ=Asia/Shanghai
+      - LAUNCH_MODE=virtual_headless
+      - SERVER_LOG_LEVEL=INFO
+      - STREAM_PORT=3120
+      - PYTHONPATH=/app/src
+    volumes:
+      - ../data/auth_profiles:/app/data/auth_profiles
+      - ../data/logs:/app/data/logs
+      - ../data/certs:/app/data/certs
+      - ../.env:/app/.env
+    command: uv run python src/launch_camoufox.py --headless --virtual-display --server-port 2048 --stream-port 3120

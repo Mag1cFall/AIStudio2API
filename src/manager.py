@@ -21,7 +21,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('Manager')
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'gui_config.json')
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+CONFIG_FILE_PATH = os.path.join(DATA_DIR, 'gui_config.json')
 LAUNCH_CAMOUFOX_PY = os.path.join(SCRIPT_DIR, 'launch_camoufox.py')
 PYTHON_EXECUTABLE = sys.executable
 
@@ -187,7 +189,7 @@ class ServiceManager:
         if config.get('helper_enabled') and config.get('helper_endpoint'):
             cmd.extend(['--helper', config.get('helper_endpoint')])
 
-        active_dir = os.path.join(SCRIPT_DIR, 'auth_profiles', 'active')
+        active_dir = os.path.join(DATA_DIR, 'auth_profiles', 'active')
         if os.path.exists(active_dir):
             files = [f for f in os.listdir(active_dir) if f.endswith('.json')]
             if files:
@@ -327,6 +329,7 @@ app.add_middleware(
 )
 
 STATIC_DIR = os.path.join(SCRIPT_DIR, 'static')
+os.makedirs(DATA_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
@@ -402,7 +405,7 @@ async def kill_process(pid: int):
 
 @app.get("/api/auth/files")
 async def list_auth_files():
-    profiles_dir = os.path.join(SCRIPT_DIR, 'auth_profiles')
+    profiles_dir = os.path.join(DATA_DIR, 'auth_profiles')
     active_dir = os.path.join(profiles_dir, 'active')
     saved_dir = os.path.join(profiles_dir, 'saved')
     
@@ -422,7 +425,7 @@ async def list_auth_files():
 
 @app.post("/api/auth/activate")
 async def activate_auth(filename: str = Body(..., embed=True)):
-    profiles_dir = os.path.join(SCRIPT_DIR, 'auth_profiles')
+    profiles_dir = os.path.join(DATA_DIR, 'auth_profiles')
     active_dir = os.path.join(profiles_dir, 'active')
     saved_dir = os.path.join(profiles_dir, 'saved')
     
@@ -444,7 +447,7 @@ async def activate_auth(filename: str = Body(..., embed=True)):
 
 @app.post("/api/auth/deactivate")
 async def deactivate_auth():
-    profiles_dir = os.path.join(SCRIPT_DIR, 'auth_profiles')
+    profiles_dir = os.path.join(DATA_DIR, 'auth_profiles')
     active_dir = os.path.join(profiles_dir, 'active')
     
     if os.path.exists(active_dir):

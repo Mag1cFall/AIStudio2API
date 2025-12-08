@@ -12,12 +12,12 @@
 ### 第一步：准备认证文件
 
 1.  **在本地电脑上**（Windows/macOS/Linux 桌面版），按照 [安装指南](installation-guide.md) 配置环境。
-2.  运行 `start_webui.bat` (Windows) 或 `uv run python app_launcher.py` (Mac/Linux)。
+2.  运行 `start_webui.bat` (Windows) 或 `uv run python src/app_launcher.py` (Mac/Linux)。
 3.  在 Web 界面点击 "调试模式 (Debug)" -> "启动服务"。
 4.  在弹出的浏览器中完成 Google 登录。
 5.  登录成功后，在终端按回车保存认证文件。
 6.  在 Web 界面的 "认证文件" 页面，激活刚刚保存的文件。
-7.  **检查文件**: 确保项目目录下的 `auth_profiles/active/` 文件夹中有一个 `.json` 文件（例如 `auth_state_xxx.json`）。
+7.  **检查文件**: 确保 `data/auth_profiles/active/` 文件夹中有一个 `.json` 文件（例如 `auth_state_xxx.json`）。
 
 ### 第二步：配置环境
 
@@ -37,9 +37,12 @@
 
 ### 第三步：启动 Docker 容器
 
-在项目根目录下执行：
+在 `docker/` 目录下执行：
 
 ```bash
+# 进入 docker 目录
+cd docker
+
 # 构建并后台启动
 docker-compose up -d
 
@@ -59,16 +62,16 @@ docker-compose logs -f
 
 `docker-compose.yml` 已经配置了以下卷挂载，确保数据不会因容器重启而丢失：
 
-*   `./auth_profiles`: 存放认证文件 (**重要**)
+*   `./data/auth_profiles`: 存放认证文件 (**重要**)
 *   `./logs`: 存放运行日志
-*   `./certs`: 存放流式代理生成的证书
+*   `./data/certs`: 存放流式代理生成的证书
 *   `./.env`: 挂载配置文件
 
 ## ❓ 常见问题
 
 ### 1. 容器启动后报错 "Authentication failed" 或 "Login required"
-*   **原因**: `auth_profiles/active/` 目录下没有有效的 `.json` 认证文件，或者文件已过期。
-*   **解决**: 重新在本地执行"第一步"，生成新的认证文件，并确保它位于 `auth_profiles/active/` 目录下，然后重启容器。
+*   **原因**: `data/auth_profiles/active/` 目录下没有有效的 `.json` 认证文件，或者文件已过期。
+*   **解决**: 重新在本地执行"第一步"，生成新的认证文件，并确保它位于 `data/auth_profiles/active/` 目录下，然后重启容器。
 
 ### 2. 端口冲突
 *   默认占用 `2048` 和 `3120` 端口。

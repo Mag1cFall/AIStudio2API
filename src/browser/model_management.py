@@ -304,7 +304,10 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
 def load_excluded_models(filename: str):
     import server
     excluded_model_ids = getattr(server, 'excluded_model_ids', set())
-    excluded_file_path = os.path.join(os.path.dirname(__file__), '..', filename)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    data_dir = os.path.join(project_root, 'data')
+    excluded_file_path = os.path.join(data_dir, filename)
     try:
         if os.path.exists(excluded_file_path):
             with open(excluded_file_path, 'r', encoding='utf-8') as f:

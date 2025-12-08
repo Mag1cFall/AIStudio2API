@@ -61,7 +61,7 @@ echo [INFO] 正在下载 Camoufox 浏览器核心...
 call "%UV_CMD%" run camoufox fetch
 if %errorlevel% neq 0 (
     echo [WARNING] 浏览器下载似乎遇到问题。
-    echo 您可以稍后尝试运行 'uv run python fetch_camoufox_data.py'
+    echo 您可以稍后尝试运行 'uv run python camoufox/fetch_camoufox_data.py'
 ) else (
     echo [OK] 浏览器下载完成。
 )

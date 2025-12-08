@@ -1,3 +1,5 @@
 @echo off
-uv run python launch_camoufox.py
+cd /d "%~dp0"
+set PYTHONPATH=%~dp0src;%PYTHONPATH%
+uv run python src/launch_camoufox.py
 pause

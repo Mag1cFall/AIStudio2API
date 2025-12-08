@@ -43,7 +43,7 @@ echo "[INFO] 正在下载 Camoufox 浏览器核心..."
 uv run camoufox fetch
 if [ $? -ne 0 ]; then
     echo "[WARNING] 浏览器下载似乎遇到问题。"
-    echo "您可以稍后尝试运行 'uv run python fetch_camoufox_data.py'"
+    echo "您可以稍后尝试运行 'uv run python scripts/fetch_camoufox_data.py'"
 else
     echo "[OK] 浏览器下载完成。"
 fi
@@ -57,7 +57,6 @@ echo "      安装完成！"
 echo "==================================================="
 echo ""
 echo "启动方式:"
-echo "1. 运行 './setup.sh' (本项目无需额外构建，uv run 直接运行)"
-echo "2. 启动图形界面: uv run python app_launcher.py"
-echo "3. 启动命令行版: uv run python launch_camoufox.py --headless"
+echo "1. 图形界面: PYTHONPATH=src uv run python src/app_launcher.py"
+echo "2. 命令行版: PYTHONPATH=src uv run python src/launch_camoufox.py --headless"
 echo ""

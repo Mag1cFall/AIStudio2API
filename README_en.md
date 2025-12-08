@@ -101,7 +101,7 @@ uv run playwright install firefox
 
 1. **Start the GUI**:
    ```bash
-   uv run python app_launcher.py
+   uv run python src/app_launcher.py
    ```
 
 2. **Configure Proxy** (recommended):
@@ -126,7 +126,7 @@ After authentication is saved, you can use headless mode:
 
 1. Start the GUI:
    ```bash
-   uv run python app_launcher.py
+   uv run python src/app_launcher.py
    ```
 
 2. Click "Start Headless Mode" or "Virtual Display Mode"
@@ -175,7 +175,7 @@ The project also provides Ollama format API compatibility:
 
 ```bash
 # Start Ollama compatible service
-uv run python app_launcher.py
+uv run python src/app_launcher.py
 # Click "Start Local LLM Simulation Service" in the GUI config page
 
 # Use Ollama format API
@@ -188,16 +188,30 @@ curl -X POST http://localhost:11434/api/chat \
 
 ```
 AIStudio2API/
-├── app_launcher.py          # GUI launcher
-├── launch_camoufox.py       # Command-line launcher
-├── server.py                # Main server
-├── llm.py                   # Ollama compatibility layer
-├── api/                     # API processing modules
-├── browser/                 # Browser automation modules
-├── config/                  # Configuration management
-├── models/                  # Data models
-├── proxy/                   # Streaming proxy
-└── docs/                    # Detailed documentation
+├── src/                         # Source code directory
+│   ├── app_launcher.py          # GUI launcher
+│   ├── launch_camoufox.py       # Command-line launcher
+│   ├── server.py                # Main server
+│   ├── manager.py               # WebUI manager
+│   ├── api/                     # API processing modules
+│   ├── browser/                 # Browser automation modules
+│   ├── config/                  # Configuration management
+│   ├── models/                  # Data models
+│   ├── proxy/                   # Streaming proxy
+│   └── static/                  # Static resources
+├── data/                        # Runtime data directory
+│   ├── auth_profiles/           # Authentication files
+│   ├── certs/                   # Certificate files
+│   └── key.txt                  # API keys
+├── llm/                         # Ollama compatibility layer
+├── camoufox/                    # Camoufox scripts
+├── docker/                      # Docker configuration
+├── docs/                        # Detailed documentation
+├── logs/                        # Log files
+├── start_webui.bat              # WebUI startup script
+├── start_cmd.bat                # Command-line startup script
+├── setup.bat                    # Windows installation script
+└── setup.sh                     # Linux/macOS installation script
 ```
 
 ## ⚙️ Configuration
@@ -230,7 +244,7 @@ Supports accessing AI Studio through proxy:
 
 ### Authentication File Management
 
-- Authentication files are stored in `auth_profiles/` directory
+- Authentication files are stored in `data/auth_profiles/` directory
 - Supports saving and switching multiple authentication files
 - Manage through the "Manage Auth Files" feature in the GUI
 

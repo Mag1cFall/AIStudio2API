@@ -34,19 +34,11 @@ dev = [
 ]
 
 [project.scripts]
-aistudio = "app_launcher:main"
-aistudio2api = "app_launcher:main"
+aistudio = "src.app_launcher:main"
+aistudio2api = "src.app_launcher:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["api", "browser", "config", "logger", "models", "proxy"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"app_launcher.py" = "app_launcher.py"
-"manager.py" = "manager.py"
-"server.py" = "server.py"
-"launch_camoufox.py" = "launch_camoufox.py"
-"llm.py" = "llm.py"
-"static" = "static"
+packages = ["src"]
 
 [build-system]
 requires = ["hatchling"]

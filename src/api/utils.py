@@ -188,7 +188,9 @@ def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Opt
     return {'error': None, 'warning': None}
 
 def extract_base64_to_local(base64_data: str) -> str:
-    output_dir = os.path.join(os.path.dirname(__file__), '..', 'upload_images')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    output_dir = os.path.join(project_root, 'data', 'upload_images')
     match = re.match('data:image/(\\w+);base64,(.*)', base64_data)
     if not match:
         print('错误: Base64 数据格式不正确。')

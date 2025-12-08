@@ -100,7 +100,7 @@ uv run playwright install firefox
 
 1. **启动图形界面**:
    ```bash
-   uv run python app_launcher.py
+   uv run python src/app_launcher.py
    ```
 
 2. **配置代理**（建议）:
@@ -127,7 +127,7 @@ uv run playwright install firefox
 
 1. 启动图形界面:
    ```bash
-   uv run python app_launcher.py
+   uv run python src/app_launcher.py
    ```
 
 2. 点击「启动无头模式」或 「虚拟显示模式」
@@ -181,7 +181,7 @@ curl -X POST http://localhost:2048/v1/chat/completions \
 
 ```bash
 # 启动 Ollama 兼容服务
-uv run python app_launcher.py
+uv run python src/app_launcher.py
 # 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
 
 # 使用 Ollama 格式 API
@@ -194,16 +194,30 @@ curl -X POST http://localhost:11434/api/chat \
 
 ```
 AIStudio2API/
-├── app_launcher.py          # 图形界面启动器
-├── launch_camoufox.py       # 命令行启动器
-├── server.py                # 主服务器
-├── llm.py                   # Ollama 兼容层
-├── api/                     # API 处理模块
-├── browser/                 # 浏览器自动化模块
-├── config/                  # 配置管理
-├── models/                  # 数据模型
-├── proxy/                   # 流式代理
-└── docs/                    # 详细文档
+├── src/                         # 源码目录
+│   ├── app_launcher.py          # 图形界面启动器
+│   ├── launch_camoufox.py       # 命令行启动器
+│   ├── server.py                # 主服务器
+│   ├── manager.py               # WebUI 管理器
+│   ├── api/                     # API 处理模块
+│   ├── browser/                 # 浏览器自动化模块
+│   ├── config/                  # 配置管理
+│   ├── models/                  # 数据模型
+│   ├── proxy/                   # 流式代理
+│   └── static/                  # 静态资源
+├── data/                        # 运行时数据目录
+│   ├── auth_profiles/           # 认证文件
+│   ├── certs/                   # 证书文件
+│   └── key.txt                  # API 密钥
+├── llm/                         # Ollama 兼容层
+├── camoufox/                    # Camoufox 脚本
+├── docker/                      # Docker 配置
+├── docs/                        # 详细文档
+├── logs/                        # 日志文件
+├── start_webui.bat              # WebUI 启动脚本
+├── start_cmd.bat                # 命令行启动脚本
+├── setup.bat                    # Windows 安装脚本
+└── setup.sh                     # Linux/macOS 安装脚本
 ```
 
 ## ⚙️ 配置说明
@@ -236,7 +250,7 @@ cp .env.example .env
 
 ### 认证文件管理
 
-- 认证文件存储在 `auth_profiles/` 目录
+- 认证文件存储在 `data/auth_profiles/` 目录
 - 支持多个认证文件的保存和切换
 - 通过 GUI 的"管理认证文件"功能进行管理
 

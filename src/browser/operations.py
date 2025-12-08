@@ -374,7 +374,9 @@ async def save_error_snapshot(error_name: str='error'):
         return
     logger.info(f'{log_prefix} 📸 保存错误快照 ({base_error_name})...')
     timestamp = int(time.time() * 1000)
-    error_dir = os.path.join(os.path.dirname(__file__), '..', 'errors_py')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    error_dir = os.path.join(project_root, 'data', 'errors_py')
     try:
         os.makedirs(error_dir, exist_ok=True)
         filename_suffix = f'{req_id}_{timestamp}' if req_id else f'{timestamp}'

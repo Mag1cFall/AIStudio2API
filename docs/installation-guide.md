@@ -92,7 +92,7 @@ uv run camoufox fetch
 uv run playwright install-deps firefox
 ```
 
-如果 `camoufox fetch` 因网络问题失败，可以尝试运行项目中的 [`fetch_camoufox_data.py`](../fetch_camoufox_data.py) 脚本 (详见[故障排除指南](troubleshooting.md))。
+如果 `camoufox fetch` 因网络问题失败，可以尝试运行项目中的 [`camoufox/fetch_camoufox_data.py`](../camoufox/fetch_camoufox_data.py) 脚本 (详见[故障排除指南](troubleshooting.md))。
 
 ## 🔍 验证安装
 
@@ -136,14 +136,14 @@ uv run python -c "import playwright; print('Playwright: OK')"
 *   `uv` 在 Windows 上的表现同样优秀。
 *   Windows 防火墙可能会阻止 Uvicorn/FastAPI 监听端口。如果遇到连接问题（特别是从其他设备访问时），请检查 Windows 防火墙设置，允许 Python 或特定端口的入站连接。
 *   `playwright install-deps` 命令在原生 Windows 上作用有限（主要用于 Linux），但运行 `camoufox fetch` (内部会调用 Playwright) 会确保下载正确的浏览器。
-*   **推荐使用 [`app_launcher.py`](../app_launcher.py) 启动**，或者直接运行 `start_webui.bat`，它们会自动处理后台进程和用户交互。
+*   **推荐使用 [`src/app_launcher.py`](../src/app_launcher.py) 启动**，或者直接运行 `start_webui.bat`，它们会自动处理后台进程和用户交互。
 
 #### WSL (Windows Subsystem for Linux)
 
 *   **推荐**: 对于习惯 Linux 环境的用户，WSL (特别是 WSL2) 提供了更好的体验。
 *   在 WSL 环境内，按照 **macOS / Linux** 的步骤进行安装 (使用 `uv`)。
 *   所有命令（`uv sync`, `uv run camoufox fetch` 等）都应在 WSL 终端内执行。
-*   无头模式 (通过 `uv run app_launcher.py` 启动) 不受影响。
+*   无头模式 (通过 `uv run src/app_launcher.py` 启动) 不受影响。
 
 ## 配置环境变量（推荐）
 
@@ -178,7 +178,7 @@ DEBUG_LOGS_ENABLED=false
 
 ```bash
 # 简单启动，无需复杂参数
-uv run python launch_camoufox.py --headless
+uv run python src/launch_camoufox.py --headless
 ```
 
 详细配置说明请参见 [环境变量配置指南](environment-configuration.md)。
@@ -189,15 +189,15 @@ uv run python launch_camoufox.py --headless
 
 ### 创建密钥文件
 
-在项目根目录创建 `key.txt` 文件：
+在 `data/` 目录下创建 `key.txt` 文件：
 
 ```bash
 # 创建密钥文件
-touch key.txt
+touch data/key.txt
 
 # 添加密钥（每行一个）
-echo "your-first-api-key" >> key.txt
-echo "your-second-api-key" >> key.txt
+echo "your-first-api-key" >> data/key.txt
+echo "your-second-api-key" >> data/key.txt
 ```
 
 ### 密钥格式要求

@@ -183,7 +183,9 @@ async def add_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get
     if key_value in auth_utils.API_KEYS:
         raise HTTPException(status_code=400, detail='该API密钥已存在。')
     try:
-        key_file_path = os.path.join(os.path.dirname(__file__), '..', 'key.txt')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        key_file_path = os.path.join(project_root, 'data', 'key.txt')
         with open(key_file_path, 'a+', encoding='utf-8') as f:
             f.seek(0)
             if f.read():
@@ -215,7 +217,9 @@ async def delete_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(
     if key_value not in auth_utils.API_KEYS:
         raise HTTPException(status_code=404, detail='API密钥不存在。')
     try:
-        key_file_path = os.path.join(os.path.dirname(__file__), '..', 'key.txt')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        key_file_path = os.path.join(project_root, 'data', 'key.txt')
         with open(key_file_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         with open(key_file_path, 'w', encoding='utf-8') as f:

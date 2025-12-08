@@ -2,7 +2,9 @@ import os
 from typing import Set
 
 _keys: Set[str] = set()
-_key_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'key.txt')
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(_script_dir))
+_key_file = os.path.join(_project_root, 'data', 'key.txt')
 
 
 def load_keys():
