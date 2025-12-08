@@ -311,7 +311,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.info('✅ 核心输入区域可见。')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
-                from browser_utils.operations import get_model_name_from_page_parallel
+                from browser.operations import get_model_name_from_page_parallel
                 
                 model_name_on_page = await get_model_name_from_page_parallel(
                     found_page, MODEL_SELECTORS_LIST, timeout=2000, req_id='init_page_logic', expected_model_name=None

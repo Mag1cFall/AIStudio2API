@@ -17,17 +17,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Manager')
 
-# 常量定义
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'gui_config.json')
 LAUNCH_CAMOUFOX_PY = os.path.join(SCRIPT_DIR, 'launch_camoufox.py')
 PYTHON_EXECUTABLE = sys.executable
 
-# 全局状态
 class ServiceManager:
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
@@ -35,7 +32,7 @@ class ServiceManager:
         self.active_connections: List[WebSocket] = []
         self.output_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
-        self.service_status = "stopped"  # stopped, starting, running, stopping
+        self.service_status = "stopped"
         self.service_info = {}
         self.current_launch_mode = None
         self._console_print_state = "default"
@@ -88,7 +85,6 @@ class ServiceManager:
             except:
                 to_remove.append(connection)
 
-        # 并发发送给所有连接，避免单客户端阻塞
         await asyncio.gather(*(send_safe(c) for c in self.active_connections))
         
         for c in to_remove:
@@ -97,24 +93,20 @@ class ServiceManager:
 
     def _monitor_output(self, process):
         try:
-            # 捕获 stdout
             for line in iter(process.stdout.readline, b''):
                 if self.stop_event.is_set(): break
                 if line:
                     decoded_line = line.decode('utf-8', errors='replace').strip()
                     
                     if self.current_launch_mode == 'debug':
-                        # --- 状态机：仅用于连续打印认证文件列表 ---
                         if self._console_print_state == "default" and "找到以下可用的认证文件" in decoded_line:
                             self._console_print_state = "printing_auth"
 
                         if self._console_print_state == "printing_auth":
                             print(decoded_line, flush=True)
-                            # 检测到列表结束或选择结果时退出打印状态
                             if "好的，不加载认证文件或超时" in decoded_line or "已选择加载" in decoded_line or "将使用默认值" in decoded_line:
                                 self._console_print_state = "default"
                         
-                        # --- 离散检查：仅打印登录提示的关键行，并使用固定文本以过滤干扰 ---
                         elif "==================== 需要操作 ====================" in decoded_line:
                             print("==================== 需要操作 ====================", flush=True)
                         elif "__USER_INPUT_START__" in decoded_line:
@@ -124,7 +116,6 @@ class ServiceManager:
                         elif "__USER_INPUT_END__" in decoded_line:
                             print("__USER_INPUT_END__", flush=True)
 
-                    # --- 所有日志仍然发送到 WebSocket ---
                     level = "INFO"
                     upper_line = decoded_line.upper()
                     if "ERROR" in upper_line or "EXCEPTION" in upper_line or "CRITICAL" in upper_line:
@@ -163,18 +154,16 @@ class ServiceManager:
 
         self.service_status = "starting"
         self.stop_event.clear()
-        self._console_print_state = "default" # 重置打印状态
+        self._console_print_state = "default"
         
-        # 模式选择
         mode = config.get('launch_mode', 'headless')
-        self.current_launch_mode = mode # 记录当前模式
+        self.current_launch_mode = mode
         mode_flag = '--headless'
         if mode == 'debug':
             mode_flag = '--debug'
         elif mode == 'virtual_headless':
             mode_flag = '--virtual-display'
 
-        # 构建命令
         cmd = [
             PYTHON_EXECUTABLE,
             LAUNCH_CAMOUFOX_PY,
@@ -183,24 +172,20 @@ class ServiceManager:
             '--camoufox-debug-port', str(config.get('camoufox_debug_port', 9222))
         ]
         
-        # 代理设置
         env = os.environ.copy()
         if config.get('proxy_enabled'):
             proxy = config.get('proxy_address', '')
             if proxy:
                 cmd.extend(['--internal-camoufox-proxy', proxy])
         
-        # 流式端口
         if config.get('stream_port_enabled'):
             cmd.extend(['--stream-port', str(config.get('stream_port', 3120))])
         else:
             cmd.extend(['--stream-port', '0'])
 
-        # Helper
         if config.get('helper_enabled') and config.get('helper_endpoint'):
             cmd.extend(['--helper', config.get('helper_endpoint')])
 
-        # 认证文件 (查找 active 目录)
         active_dir = os.path.join(SCRIPT_DIR, 'auth_profiles', 'active')
         if os.path.exists(active_dir):
             files = [f for f in os.listdir(active_dir) if f.endswith('.json')]
@@ -208,12 +193,10 @@ class ServiceManager:
                 cmd.extend(['--active-auth-json', os.path.join(active_dir, files[0])])
 
         try:
-            # 强制无缓冲输出
             env['PYTHONUNBUFFERED'] = '1'
             env['PYTHONIOENCODING'] = 'utf-8'
             
             if platform.system() == 'Windows':
-                # Windows下创建新进程组，方便杀死
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 creationflags = 0
@@ -221,7 +204,7 @@ class ServiceManager:
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, # 合并 stderr 到 stdout
+                stderr=subprocess.STDOUT,
                 env=env,
                 cwd=SCRIPT_DIR,
                 creationflags=creationflags
@@ -254,7 +237,6 @@ class ServiceManager:
         self.stop_event.set()
         
         try:
-            # 尝试优雅关闭
             if platform.system() == 'Windows':
                 subprocess.run(['taskkill', '/PID', str(self.process.pid), '/T', '/F'], capture_output=True)
             else:
@@ -283,7 +265,7 @@ class ServiceManager:
                         parts = line.split()
                         if len(parts) >= 5 and str(port) in parts[1]:
                             pids.add(int(parts[-1]))
-            else: # Linux/Mac
+            else:
                 cmd = f'lsof -ti :{port} -sTCP:LISTEN'
                 res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if res.returncode == 0:
@@ -329,13 +311,11 @@ async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
     yield
-    # Cleanup
     if manager.process:
         manager.stop_service()
 
 app = FastAPI(lifespan=lifespan)
 
-# 允许跨域，方便开发调试
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -344,7 +324,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 静态文件服务
 STATIC_DIR = os.path.join(SCRIPT_DIR, 'static')
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -447,16 +426,13 @@ async def activate_auth(filename: str = Body(..., embed=True)):
     
     os.makedirs(active_dir, exist_ok=True)
     
-    # 清除当前的
     for f in os.listdir(active_dir):
         if f.endswith('.json'):
             os.remove(os.path.join(active_dir, f))
             
-    # 复制新的
     src = os.path.join(saved_dir, filename)
     if not os.path.exists(src):
-        # 尝试在 active 中找（如果只是重激活）
-        src = os.path.join(active_dir, filename) # 实际上已经被删了，所以逻辑上这里只支持从 saved 激活
+        src = os.path.join(active_dir, filename)
         if not os.path.exists(src):
              raise HTTPException(status_code=404, detail="文件不存在")
     
@@ -483,7 +459,6 @@ async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
     manager.active_connections.append(websocket)
     try:
-        # 发送当前状态
         await websocket.send_text(json.dumps({
             "type": "status", 
             "status": manager.service_status,
@@ -496,6 +471,5 @@ async def websocket_logs(websocket: WebSocket):
 
 if __name__ == '__main__':
     import uvicorn
-    # 使用 9000 端口，支持通过环境变量修改监听地址
     host = os.environ.get('MANAGER_HOST', '127.0.0.1')
     uvicorn.run(app, host=host, port=9000, log_level="error")

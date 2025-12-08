@@ -192,11 +192,11 @@ AIStudio2API/
 ├── launch_camoufox.py       # Command-line launcher
 ├── server.py                # Main server
 ├── llm.py                   # Ollama compatibility layer
-├── api_utils/               # API processing modules
-├── browser_utils/           # Browser automation modules
+├── api/                     # API processing modules
+├── browser/                 # Browser automation modules
 ├── config/                  # Configuration management
 ├── models/                  # Data models
-├── stream/                  # Streaming proxy
+├── proxy/                   # Streaming proxy
 └── docs/                    # Detailed documentation
 ```
 

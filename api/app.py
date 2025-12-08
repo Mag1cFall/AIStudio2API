@@ -12,9 +12,9 @@ from typing import Callable, Awaitable
 from playwright.async_api import Browser as AsyncBrowser, Playwright as AsyncPlaywright
 from config import *
 from models import WebSocketConnectionManager
-from logging_utils import setup_server_logging, restore_original_streams
-from browser_utils import _initialize_page_logic, _close_page_logic, load_excluded_models, _handle_initial_model_state_and_storage
-import stream
+from logger import initialize_logging, restore_streams
+from browser import _initialize_page_logic, _close_page_logic, load_excluded_models, _handle_initial_model_state_and_storage
+import proxy
 from asyncio import Queue, Lock
 from . import auth_utils
 playwright_manager: Optional[AsyncPlaywright] = None
@@ -44,7 +44,7 @@ def _setup_logging():
     log_level_env = os.environ.get('SERVER_LOG_LEVEL', 'INFO')
     redirect_print_env = os.environ.get('SERVER_REDIRECT_PRINT', 'false')
     server.log_ws_manager = WebSocketConnectionManager()
-    return setup_server_logging(logger_instance=server.logger, log_ws_manager=server.log_ws_manager, log_level_name=log_level_env, redirect_print_str=redirect_print_env)
+    return initialize_logging(target_logger=server.logger, ws_manager=server.log_ws_manager, level_name=log_level_env, redirect_output=redirect_print_env)
 
 def _initialize_globals():
     import server
@@ -78,7 +78,7 @@ async def _start_stream_proxy():
         STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
         server.logger.info(f'Starting STREAM proxy on port {port} with upstream proxy: {STREAM_PROXY_SERVER_ENV}')
         server.STREAM_QUEUE = multiprocessing.Queue()
-        server.STREAM_PROCESS = multiprocessing.Process(target=stream.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
+        server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
         server.STREAM_PROCESS.start()
         server.logger.info('STREAM proxy process started.')
 
@@ -162,8 +162,8 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info('Shutting down server...')
         await _shutdown_resources()
-        restore_original_streams(initial_stdout, initial_stderr)
-        restore_original_streams(*original_streams)
+        restore_streams(initial_stdout, initial_stderr)
+        restore_streams(*original_streams)
         logger.info('Server shutdown complete.')
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):

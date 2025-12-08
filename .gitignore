@@ -241,13 +241,13 @@ key.txt
 
 # 脚本注入相关文件
 # 用户自定义的模型配置文件（保留示例文件）
-browser_utils/model_configs.json
-browser_utils/my_*.json
+browser/model_configs.json
+browser/my_*.json
 # 用户自定义的油猴脚本（如果不是默认的）
-browser_utils/custom_*.js
-browser_utils/my_*.js
+browser/custom_*.js
+browser/my_*.js
 # 临时生成的脚本文件
-browser_utils/generated_*.js
+browser/generated_*.js
 # Docker 环境的实际配置文件（保留示例文件）
 docker/.env
 docker/my_*.json

@@ -12,11 +12,11 @@ from pydantic import BaseModel
 from playwright.async_api import Page as AsyncPage
 from config import *
 from models import ChatCompletionRequest, WebSocketConnectionManager
-from browser_utils import _handle_model_list_response
+from browser import _handle_model_list_response
 from .dependencies import *
 
 async def get_api_info(request: Request, current_ai_studio_model_id: str=Depends(get_current_ai_studio_model_id)):
-    from api_utils import auth_utils
+    from api import auth_utils
     server_port = request.url.port or os.environ.get('SERVER_PORT_INFO', '8000')
     host = request.headers.get('host') or f'127.0.0.1:{server_port}'
     scheme = request.headers.get('x-forwarded-proto', 'http')
@@ -126,7 +126,7 @@ async def cancel_queued_request(req_id: str, request_queue: Queue, logger: loggi
     return found
 
 async def cancel_request(req_id: str, logger: logging.Logger=Depends(get_logger), request_queue: Queue=Depends(get_request_queue)):
-    from api_utils.utils import request_manager
+    from api.utils import request_manager
     logger.info(f'[{req_id}] 收到取消请求。')
     if request_manager.cancel_request(req_id):
         logger.info(f'[{req_id}] 正在处理的请求已标记为取消。')
@@ -137,7 +137,7 @@ async def cancel_request(req_id: str, logger: logging.Logger=Depends(get_logger)
         return JSONResponse(status_code=404, content={'success': False, 'message': f'Request {req_id} not found in queue or active requests.', 'type': 'not_found'})
 
 async def get_queue_status(request_queue: Queue=Depends(get_request_queue), processing_lock: Lock=Depends(get_processing_lock)):
-    from api_utils.utils import request_manager
+    from api.utils import request_manager
     queue_items = list(request_queue._queue)
     active_requests = request_manager.get_active_requests()
     return JSONResponse(content={'queue_length': len(queue_items), 'active_requests_count': len(active_requests), 'is_processing_locked': processing_lock.locked(), 'queued_items': sorted([{'req_id': item.get('req_id', 'unknown'), 'enqueue_time': item.get('enqueue_time', 0), 'wait_time_seconds': round(time.time() - item.get('enqueue_time', 0), 2), 'is_streaming': item.get('request_data').stream, 'cancelled': item.get('cancelled', False)} for item in queue_items], key=lambda x: x.get('enqueue_time', 0)), 'active_items': sorted(active_requests, key=lambda x: x.get('duration', 0), reverse=True)})
@@ -165,7 +165,7 @@ class ApiKeyTestRequest(BaseModel):
     key: str
 
 async def get_api_keys(logger: logging.Logger=Depends(get_logger)):
-    from api_utils import auth_utils
+    from api import auth_utils
     try:
         auth_utils.initialize_keys()
         keys_info = [{'value': key, 'status': '有效'} for key in auth_utils.API_KEYS]
@@ -175,7 +175,7 @@ async def get_api_keys(logger: logging.Logger=Depends(get_logger)):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def add_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get_logger)):
-    from api_utils import auth_utils
+    from api import auth_utils
     key_value = request.key.strip()
     if not key_value or len(key_value) < 8:
         raise HTTPException(status_code=400, detail='无效的API密钥格式。')
@@ -197,7 +197,7 @@ async def add_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get
         raise HTTPException(status_code=500, detail=str(e))
 
 async def test_api_key(request: ApiKeyTestRequest, logger: logging.Logger=Depends(get_logger)):
-    from api_utils import auth_utils
+    from api import auth_utils
     key_value = request.key.strip()
     if not key_value:
         raise HTTPException(status_code=400, detail='API密钥不能为空。')
@@ -207,7 +207,7 @@ async def test_api_key(request: ApiKeyTestRequest, logger: logging.Logger=Depend
     return JSONResponse(content={'success': True, 'valid': is_valid, 'message': '密钥有效' if is_valid else '密钥无效或不存在'})
 
 async def delete_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(get_logger)):
-    from api_utils import auth_utils
+    from api import auth_utils
     key_value = request.key.strip()
     if not key_value:
         raise HTTPException(status_code=400, detail='API密钥不能为空。')

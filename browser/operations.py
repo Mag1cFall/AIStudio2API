@@ -132,7 +132,7 @@ def _get_injected_models():
         enable_injection = os.environ.get('ENABLE_SCRIPT_INJECTION', 'true').lower() in ('true', '1', 'yes')
         if not enable_injection:
             return []
-        script_path = os.environ.get('USERSCRIPT_PATH', 'browser_utils/more_modles.js')
+        script_path = os.environ.get('USERSCRIPT_PATH', 'browser/more_models.js')
         if not os.path.exists(script_path):
             return []
         with open(script_path, 'r', encoding='utf-8') as f:

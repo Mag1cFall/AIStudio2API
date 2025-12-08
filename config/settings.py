@@ -29,4 +29,4 @@ def get_int_env(key: str, default: int=0) -> int:
         return default
 NO_PROXY_ENV = os.environ.get('NO_PROXY')
 ENABLE_SCRIPT_INJECTION = get_boolean_env('ENABLE_SCRIPT_INJECTION', True)
-USERSCRIPT_PATH = get_environment_variable('USERSCRIPT_PATH', 'browser_utils/more_modles.js')
+USERSCRIPT_PATH = get_environment_variable('USERSCRIPT_PATH', 'browser/more_models.js')

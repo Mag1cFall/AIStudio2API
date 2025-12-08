@@ -198,11 +198,11 @@ AIStudio2API/
 ├── launch_camoufox.py       # 命令行启动器
 ├── server.py                # 主服务器
 ├── llm.py                   # Ollama 兼容层
-├── api_utils/               # API 处理模块
-├── browser_utils/           # 浏览器自动化模块
+├── api/                     # API 处理模块
+├── browser/                 # 浏览器自动化模块
 ├── config/                  # 配置管理
 ├── models/                  # 数据模型
-├── stream/                  # 流式代理
+├── proxy/                   # 流式代理
 └── docs/                    # 详细文档
 ```
 

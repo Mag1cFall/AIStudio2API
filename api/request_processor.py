@@ -11,10 +11,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from playwright.async_api import Page as AsyncPage, Locator, Error as PlaywrightAsyncError, expect as expect_async
 from config import *
 from models import ChatCompletionRequest, ClientDisconnectedError
-from browser_utils import switch_ai_studio_model, save_error_snapshot
+from browser import switch_ai_studio_model, save_error_snapshot
 from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager, calculate_stream_max_retries
 from .abort_detector import AbortSignalDetector, AbortSignalHandler
-from browser_utils.page_controller import PageController
+from browser.page_controller import PageController
 
 async def _initialize_request_context(req_id: str, request: ChatCompletionRequest) -> dict:
     from server import logger, page_instance, is_page_ready, parsed_model_list, current_ai_studio_model_id, model_switching_lock, page_params_cache, params_cache_lock

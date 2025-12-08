@@ -563,30 +563,59 @@
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
                     
+                    let scrollTimeout = null;
+                    const scheduleScroll = () => {
+                        if (!autoScroll.value) return;
+                        if (scrollTimeout) return;
+                        scrollTimeout = requestAnimationFrame(() => {
+                            if (logsContainer.value) {
+                                logsContainer.value.scrollTop = logsContainer.value.scrollHeight;
+                            }
+                            scrollTimeout = null;
+                        });
+                    };
+
+                    const handleLogEntry = (entry) => {
+                        if (entry.level === 'ACTION_REQUIRED') {
+                            isActionRequired.value = true;
+                        }
+                        logs.value.push(entry);
+                        if (logs.value.length > 2000) logs.value.shift();
+                        scheduleScroll();
+                    };
+
+                    const handleLogBatch = (entries) => {
+                        const hasActionRequired = entries.some(e => e.level === 'ACTION_REQUIRED');
+                        if (hasActionRequired) {
+                            isActionRequired.value = true;
+                        }
+                        logs.value.push(...entries);
+                        if (logs.value.length > 2000) {
+                            logs.value = logs.value.slice(-2000);
+                        }
+                        scheduleScroll();
+                    };
+
                     ws.onmessage = (event) => {
-                        const data = JSON.parse(event.data);
-                        if (data.type === 'status') {
-                            serviceStatus.value = data.status;
-                            serviceInfo.value = data.info || {};
-                            if (data.status === 'stopped' || data.status === 'stopping') {
-                                isActionRequired.value = false;
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'status') {
+                                serviceStatus.value = data.status;
+                                serviceInfo.value = data.info || {};
+                                if (data.status === 'stopped' || data.status === 'stopping') {
+                                    isActionRequired.value = false;
+                                }
+                            } else if (data.type === 'log') {
+                                handleLogEntry(data);
+                            } else if (data.type === 'log_batch') {
+                                if (data.entries && Array.isArray(data.entries)) {
+                                    handleLogBatch(data.entries);
+                                }
+                            } else if (data.type === 'prompt') {
+                                 currentPrompt.value = data.data;
                             }
-                        } else if (data.type === 'log') {
-                            if (data.level === 'ACTION_REQUIRED') {
-                                isActionRequired.value = true;
-                            }
-                            logs.value.push(data);
-                            if (logs.value.length > 1000) logs.value.shift();
-                            if (autoScroll.value) {
-                                nextTick(() => {
-                                    if (logsContainer.value) {
-                                        logsContainer.value.scrollTop = logsContainer.value.scrollHeight;
-                                    }
-                                });
-                            }
-                        } else if (data.type === 'prompt') {
-                             // Specific prompt modal handling if needed in future
-                             currentPrompt.value = data.data;
+                        } catch (e) {
+                            console.error(e);
                         }
                     };
 

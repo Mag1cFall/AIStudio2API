@@ -96,7 +96,7 @@ async def queue_worker():
             is_streaming_request = request_data.stream
             logger.info(f"[{req_id}] (Worker) 取出请求。模式: {('流式' if is_streaming_request else '非流式')}")
             
-            from api_utils.request_processor import _test_client_connection
+            from api.request_processor import _test_client_connection
             is_connected = await _test_client_connection(req_id, http_request)
             if not is_connected:
                 logger.info(f'[{req_id}] (Worker) ✅ 主动检测到客户端已断开，跳过处理节省资源')
@@ -125,8 +125,8 @@ async def queue_worker():
                     try:
                         from server import page_instance, is_page_ready
                         if page_instance and (not page_instance.is_closed()) and is_page_ready:
-                            from browser_utils.page_controller import PageController
-                            from api_utils.request_processor import _setup_disconnect_monitoring
+                            from browser.page_controller import PageController
+                            from api.request_processor import _setup_disconnect_monitoring
                             _, _, temp_check_disco = await _setup_disconnect_monitoring(req_id, http_request, result_future, page_instance)
                             page_controller = PageController(page_instance, logger, req_id)
                             logger.info(f'[{req_id}] (Worker) 在处理新请求前执行聊天历史清空...')
@@ -142,7 +142,7 @@ async def queue_worker():
                         continue
                     
                     try:
-                        from api_utils import _process_request_refactored
+                        from api import _process_request_refactored
                         returned_value = await _process_request_refactored(req_id, request_data, http_request, result_future)
                         completion_event, submit_btn_loc, client_disco_checker = (None, None, None)
                         current_request_was_streaming = False
@@ -220,7 +220,7 @@ async def queue_worker():
                                 wait_timeout_ms = 30000
                                 try:
                                     from playwright.async_api import expect as expect_async
-                                    from api_utils.request_processor import ClientDisconnectedError
+                                    from api.request_processor import ClientDisconnectedError
                                     client_disco_checker('流式响应后按钮状态检查 - 前置检查: ')
                                     await asyncio.sleep(0.5)
                                     logger.info(f'[{req_id}] (Worker) 检查发送按钮状态...')
@@ -240,7 +240,7 @@ async def queue_worker():
                                     logger.info(f'[{req_id}] ✅ 发送按钮已禁用。')
                                 except Exception as e_pw_disabled:
                                     logger.warning(f'[{req_id}] ⚠️ 流式响应后按钮状态处理超时或错误: {e_pw_disabled}')
-                                    from api_utils.request_processor import save_error_snapshot
+                                    from api.request_processor import save_error_snapshot
                                     await save_error_snapshot(f'stream_post_submit_button_handling_timeout_{req_id}')
                                 except ClientDisconnectedError:
                                     logger.info(f'[{req_id}] 客户端在流式响应后按钮状态处理时断开连接。')
@@ -270,7 +270,7 @@ async def queue_worker():
             logger.info(f'[{req_id}] (Worker) 释放处理锁。')
             
             try:
-                from api_utils import clear_stream_queue
+                from api import clear_stream_queue
                 await clear_stream_queue()
             except Exception as clear_err:
                 logger.error(f'[{req_id}] (Worker) 清空操作时发生错误: {clear_err}', exc_info=True)

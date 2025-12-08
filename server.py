@@ -26,13 +26,13 @@ from urllib.parse import urljoin, urlparse
 import uuid
 import datetime
 import aiohttp
-import stream
+import proxy
 import queue
 from config import *
 from models import FunctionCall, ToolCall, MessageContentItem, Message, ChatCompletionRequest, ClientDisconnectedError, StreamToLogger, WebSocketConnectionManager, WebSocketLogHandler
-from logging_utils import setup_server_logging, restore_original_streams
-from browser_utils import _initialize_page_logic, _close_page_logic, signal_camoufox_shutdown, _handle_model_list_response, detect_and_extract_page_error, save_error_snapshot, get_response_via_edit_button, get_response_via_copy_button, _wait_for_response_completion, _get_final_response_content, get_raw_text_content, switch_ai_studio_model, load_excluded_models, _handle_initial_model_state_and_storage, _set_model_from_page_display
-from api_utils import generate_sse_chunk, generate_sse_stop_chunk, generate_sse_error_chunk, use_helper_get_response, use_stream_response, clear_stream_queue, prepare_combined_prompt, validate_chat_request, _process_request_refactored, create_app, queue_worker
+from logger import initialize_logging, restore_streams
+from browser import _initialize_page_logic, _close_page_logic, signal_camoufox_shutdown, _handle_model_list_response, detect_and_extract_page_error, save_error_snapshot, get_response_via_edit_button, get_response_via_copy_button, _wait_for_response_completion, _get_final_response_content, get_raw_text_content, switch_ai_studio_model, load_excluded_models, _handle_initial_model_state_and_storage, _set_model_from_page_display
+from api import generate_sse_chunk, generate_sse_stop_chunk, generate_sse_error_chunk, use_helper_get_response, use_stream_response, clear_stream_queue, prepare_combined_prompt, validate_chat_request, _process_request_refactored, create_app, queue_worker
 STREAM_QUEUE: Optional[multiprocessing.Queue] = None
 STREAM_PROCESS = None
 playwright_manager: Optional[AsyncPlaywright] = None

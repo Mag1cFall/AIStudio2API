@@ -14,12 +14,12 @@
     ],
     "extraPaths": [
         ".",
-        "./api_utils",
-        "./browser_utils",
+        "./api",
+        "./browser",
         "./config",
         "./models",
-        "./logging_utils",
-        "./stream"
+        "./logger",
+        "./proxy"
     ],
     "pythonVersion": "3.13",
     "pythonPlatform": "Darwin",

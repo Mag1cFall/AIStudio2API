@@ -36,13 +36,13 @@ npm install -g pyright
 
 ```
 AIStudio2API/
-├── api_utils/              # FastAPI 应用核心模块
+├── api/                    # FastAPI 应用核心模块
 │   ├── app.py             # FastAPI 应用入口
 │   ├── routes.py          # API 路由定义
 │   ├── request_processor.py # 请求处理逻辑
 │   ├── queue_worker.py    # 队列工作器
 │   └── auth_utils.py      # 认证工具
-├── browser_utils/          # 浏览器自动化模块
+├── browser/                # 浏览器自动化模块
 │   ├── page_controller.py # 页面控制器
 │   ├── model_management.py # 模型管理
 │   ├── script_manager.py  # 脚本注入管理
@@ -53,14 +53,15 @@ AIStudio2API/
 │   ├── timeouts.py        # 超时配置
 │   └── selectors.py       # CSS 选择器
 ├── models/                 # 数据模型
-│   ├── chat.py           # 聊天相关模型
-│   ├── exceptions.py     # 异常定义
-│   └── logging.py        # 日志模型
-├── stream/                 # 流式代理服务
-│   ├── main.py           # 代理服务入口
-│   ├── proxy_server.py   # 代理服务器
-│   └── interceptors.py   # 请求拦截器
-├── logging_utils/          # 日志工具
+│   ├── types.py          # 聊天/异常模型
+│   └── websocket.py      # WebSocket日志模型
+├── proxy/                  # 流式代理服务
+│   ├── runner.py         # 代理服务入口
+│   ├── server.py         # 代理服务器
+│   ├── handler.py        # 请求处理器
+│   └── connection.py     # 连接/证书管理
+├── logger/                 # 日志工具
+│   └── config.py         # 日志配置
 ├── docs/                   # 文档目录
 ├── docker/                 # Docker 相关文件
 ├── pyproject.toml         # Poetry 配置文件
@@ -136,12 +137,12 @@ uv run python script.py
     "pythonPlatform": "Darwin",
     "typeCheckingMode": "off",
     "extraPaths": [
-        "./api_utils",
-        "./browser_utils",
+        "./api",
+        "./browser",
         "./config",
         "./models",
-        "./logging_utils",
-        "./stream"
+        "./logger",
+        "./proxy"
     ]
 }
 ```
@@ -156,7 +157,7 @@ npm install -g pyright
 pyright
 
 # 检查特定文件
-pyright api_utils/app.py
+pyright api/app.py
 
 # 监视模式 (文件变化时自动检查)
 pyright --watch
@@ -196,7 +197,7 @@ uv run pytest
 uv run pytest tests/test_api.py
 
 # 运行测试并生成覆盖率报告
-uv run pytest --cov=api_utils --cov-report=html
+uv run pytest --cov=api --cov-report=html
 ```
 
 ### 测试结构

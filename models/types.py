@@ -1,23 +1,38 @@
 from typing import List, Optional, Union, Dict, Any
+
 from pydantic import BaseModel
+
 from config import MODEL_NAME
+
+
+class ClientDisconnectedError(Exception):
+    pass
+
+
+class ElementClickError(Exception):
+    pass
+
 
 class FunctionCall(BaseModel):
     name: str
     arguments: str
+
 
 class ToolCall(BaseModel):
     id: str
     type: str = 'function'
     function: FunctionCall
 
+
 class ImageURL(BaseModel):
     url: str
+
 
 class MessageContentItem(BaseModel):
     type: str
     text: Optional[str] = None
     image_url: Optional[ImageURL] = None
+
 
 class Message(BaseModel):
     role: str
@@ -25,6 +40,7 @@ class Message(BaseModel):
     name: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
+
 
 class ChatCompletionRequest(BaseModel):
     messages: List[Message]
