@@ -1,8 +1,24 @@
-[中文](README.md) | [English](README_en.md)
+<div align="center">
 
-# AI Studio Proxy API
+# AI Studio to OpenAI Compatible API
 
-A Python-based proxy server that converts the Google AI Studio web interface into an OpenAI-compatible API. Provides stable API access through Camoufox (anti-fingerprint Firefox) and Playwright automation.
+<p align="center">
+  <a href="README.md">中文</a>
+  &nbsp;|&nbsp;
+  <a href="README_en.md"><b>English</b></a>
+</p>
+
+<p>
+  <b>A High-Performance Python Proxy Server</b><br>
+  Converts the Google AI Studio web interface into an OpenAI-compatible API.<br>
+  Powered by Camoufox (anti-fingerprint Firefox) and Playwright automation for stable and stealthy access.
+</p>
+
+<img src="docs/demo.gif" alt="Demo GIF" width="100%" />
+
+</div>
+
+---
 
 ## 🚀 Features
 
