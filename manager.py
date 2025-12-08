@@ -53,7 +53,8 @@ class ServiceManager:
             'proxy_address': 'http://127.0.0.1:7890',
             'helper_enabled': False,
             'helper_endpoint': '',
-            'launch_mode': 'headless'
+            'launch_mode': 'headless',
+            'script_injection_enabled': False
         }
 
     def save_config(self, config):
@@ -195,6 +196,7 @@ class ServiceManager:
         try:
             env['PYTHONUNBUFFERED'] = '1'
             env['PYTHONIOENCODING'] = 'utf-8'
+            env['ENABLE_SCRIPT_INJECTION'] = 'true' if config.get('script_injection_enabled', False) else 'false'
             
             if platform.system() == 'Windows':
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP

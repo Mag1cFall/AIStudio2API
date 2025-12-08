@@ -48,6 +48,8 @@ const locales = {
             streamPort: '流式端口',
             httpProxy: 'HTTP 代理',
             proxyAddress: '代理地址',
+            scriptInjection: '模型注入脚本',
+            scriptInjectionDesc: '启用后可添加 AI Studio 未列出的模型（已被弃用）',
             save: '保存配置'
         },
         auth: {
@@ -136,6 +138,8 @@ const locales = {
             streamPort: '流式埠',
             httpProxy: 'HTTP 代理',
             proxyAddress: '代理位址',
+            scriptInjection: '模型注入腳本',
+            scriptInjectionDesc: '啟用後可添加 AI Studio 未列出的模型（已被棄用）',
             save: '儲存設定'
         },
         auth: {
@@ -224,6 +228,8 @@ const locales = {
             streamPort: 'Stream Port',
             httpProxy: 'HTTP Proxy',
             proxyAddress: 'Proxy Address',
+            scriptInjection: 'Model Injection Script',
+            scriptInjectionDesc: 'Enable to add unlisted models in AI Studio (Deprecated)',
             save: 'Save Config'
         },
         auth: {
@@ -312,6 +318,8 @@ const locales = {
             streamPort: 'ストリームポート',
             httpProxy: 'HTTPプロキシ',
             proxyAddress: 'プロキシアドレス',
+            scriptInjection: 'モデル注入スクリプト',
+            scriptInjectionDesc: '有効にするとAI Studioに未掲載のモデルを追加できます（非推奨）',
             save: '設定を保存'
         },
         auth: {
@@ -400,6 +408,8 @@ const locales = {
             streamPort: '스트림 포트',
             httpProxy: 'HTTP 프록시',
             proxyAddress: '프록시 주소',
+            scriptInjection: '모델 주입 스크립트',
+            scriptInjectionDesc: '활성화하면 AI Studio에 나열되지 않은 모델 추가 가능 (더 이상 사용되지 않음)',
             save: '설정 저장'
         },
         auth: {
@@ -488,6 +498,8 @@ const locales = {
             streamPort: 'Port Stream',
             httpProxy: 'Proxy HTTP',
             proxyAddress: 'Adresse Proxy',
+            scriptInjection: 'Script d\'injection de modèle',
+            scriptInjectionDesc: 'Activer pour ajouter des modèles non listés dans AI Studio (Obsolète)',
             save: 'Enregistrer'
         },
         auth: {
@@ -576,6 +588,8 @@ const locales = {
             streamPort: 'Stream Port',
             httpProxy: 'HTTP Proxy',
             proxyAddress: 'Proxy Adresse',
+            scriptInjection: 'Modell-Injektionsskript',
+            scriptInjectionDesc: 'Aktivieren, um nicht aufgelistete Modelle in AI Studio hinzuzufügen (Veraltet)',
             save: 'Speichern'
         },
         auth: {
