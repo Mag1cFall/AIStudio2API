@@ -56,6 +56,11 @@ AIStudio2API/
 │   ├── models/                 # 数据模型
 │   │   ├── types.py            # 聊天/异常模型
 │   │   └── websocket.py        # WebSocket日志模型
+│   ├── tts/                    # TTS 语音生成模块
+│   │   ├── __init__.py         # 模块初始化
+│   │   ├── models.py           # TTS 数据模型
+│   │   ├── tts_controller.py   # TTS 页面控制器
+│   │   └── tts_processor.py    # TTS 请求处理器
 │   ├── proxy/                  # 流式代理服务
 │   │   ├── runner.py           # 代理服务入口
 │   │   ├── server.py           # 代理服务器

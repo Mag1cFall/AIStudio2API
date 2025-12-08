@@ -23,6 +23,7 @@
 ## 🚀 Features
 
 - **OpenAI Compatible API**: Fully compatible with OpenAI format `/v1/chat/completions` endpoint
+- **TTS Speech Generation**: Supports Gemini 2.5 TTS models for single/multi-speaker audio generation
 - **Smart Model Switching**: Dynamically switch models in AI Studio via the `model` field
 - **Anti-Fingerprint Detection**: Uses Camoufox browser to reduce detection risk
 - **GUI Launcher**: Feature-rich **web** launcher for simplified configuration and management
@@ -185,6 +186,59 @@ Using Cherry Studio as an example:
    - **Model Name**: `gemini-2.5-pro` (or other AI Studio supported models)
    - **API Key**: Leave empty or enter any character like `123`
 
+### TTS Speech Generation
+
+Supports Gemini 2.5 Flash/Pro TTS models for single-speaker or multi-speaker audio generation:
+
+#### Single-Speaker Example
+
+```bash
+curl -X POST http://localhost:2048/generate-speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "contents": "Hello, this is a test.",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "voiceConfig": {
+          "prebuiltVoiceConfig": {"voiceName": "Kore"}
+        }
+      }
+    }
+  }'
+```
+
+#### Multi-Speaker Example
+
+```bash
+curl -X POST http://localhost:2048/generate-speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "contents": "Joe: How are you?\nJane: I am fine, thanks!",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "multiSpeakerVoiceConfig": {
+          "speakerVoiceConfigs": [
+            {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}
+          ]
+        }
+      }
+    }
+  }'
+```
+
+**Available Voices**: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, and 18 more voices.
+
+**Endpoints**:
+- `POST /generate-speech`
+- `POST /v1beta/models/{model}:generateContent` (compatible with official API)
+
+**Response Format**: Audio data is returned as Base64-encoded WAV format in `candidates[0].content.parts[0].inlineData.data`.
+
 ### Ollama Compatibility Layer
 
 The project also provides Ollama format API compatibility:
@@ -213,6 +267,7 @@ AIStudio2API/
 │   ├── browser/                 # Browser automation modules
 │   ├── config/                  # Configuration management
 │   ├── models/                  # Data models
+│   ├── tts/                     # TTS Speech Generation modules
 │   ├── proxy/                   # Streaming proxy
 │   └── static/                  # Static resources
 ├── data/                        # Runtime data directory
@@ -290,7 +345,7 @@ Issues and Pull Requests are welcome!
 
 ## 📅 Development Roadmap
 
-- **TTS Support**: Adapt `gemini-2.5-flash/pro-preview-tts` speech generation models
+- ✅ **TTS Support**: Adapted `gemini-2.5-flash/pro-preview-tts` speech generation models
 - **Documentation**: Update and optimize documentation in `docs/` directory
 - **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
 - **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files

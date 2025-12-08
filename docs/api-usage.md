@@ -225,6 +225,40 @@ else:
         print(f"Error: {response.status_code}\n{response.text}")
 ```
 
+### TTS 语音生成
+
+**端点**: 
+- `POST /generate-speech`
+- `POST /v1beta/models/{model}:generateContent`
+
+支持 Gemini 2.5 TTS 模型进行单说话人或多说话人音频生成。
+
+**支持的模型**:
+- `gemini-2.5-flash-preview-tts`
+- `gemini-2.5-pro-preview-tts`
+
+**请求示例**:
+```bash
+curl -X POST http://localhost:2048/generate-speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "contents": "Hello, this is a test.",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "voiceConfig": {
+          "prebuiltVoiceConfig": {"voiceName": "Kore"}
+        }
+      }
+    }
+  }'
+```
+
+**响应格式**: 音频数据以 Base64 编码的 WAV 格式在 `candidates[0].content.parts[0].inlineData.data` 中返回。
+
+**详细文档**: 参见 [TTS 使用指南](tts-guide.md)
+
 ### Ollama 兼容层
 
 项目还提供 Ollama 格式的 API 兼容：
@@ -393,5 +427,6 @@ curl -X POST http://localhost:11434/api/chat \
 ## 下一步
 
 API 使用配置完成后，请参考：
+- [TTS 语音生成指南](tts-guide.md)
 - [故障排除指南](troubleshooting.md)
 - [日志控制指南](logging-control.md)

@@ -23,6 +23,7 @@
 ## 🚀 特性
 
 - **OpenAI 兼容 API**: 完全兼容 OpenAI 格式的 `/v1/chat/completions` 端点
+- **TTS 语音生成**: 支持 Gemini 2.5 TTS 模型的单/多说话人音频生成
 - **智能模型切换**: 通过 `model` 字段动态切换 AI Studio 中的模型
 - **反指纹检测**: 使用 Camoufox 浏览器降低被检测风险
 - **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
@@ -191,6 +192,59 @@ curl -X POST http://localhost:2048/v1/chat/completions \
    - **模型名称**: `gemini-2.5-pro` (或其他 AI Studio 支持的模型)
    - **API 密钥**: 留空或输入任意字符，如`123`
 
+### TTS 语音生成
+
+支持 Gemini 2.5 Flash/Pro TTS 模型进行单说话人或多说话人音频生成：
+
+#### 单说话人示例
+
+```bash
+curl -X POST http://localhost:2048/generate-speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "contents": "Hello, this is a test.",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "voiceConfig": {
+          "prebuiltVoiceConfig": {"voiceName": "Kore"}
+        }
+      }
+    }
+  }'
+```
+
+#### 多说话人示例
+
+```bash
+curl -X POST http://localhost:2048/generate-speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "contents": "Joe: How are you?\nJane: I am fine, thanks!",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "multiSpeakerVoiceConfig": {
+          "speakerVoiceConfigs": [
+            {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}
+          ]
+        }
+      }
+    }
+  }'
+```
+
+**可用语音**: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus 等 30 种。
+
+**端点**:
+- `POST /generate-speech`
+- `POST /v1beta/models/{model}:generateContent` (兼容官方 API)
+
+**返回格式**: 音频数据以 Base64 编码的 WAV 格式在 `candidates[0].content.parts[0].inlineData.data` 中返回。
+
 ### Ollama 兼容层
 
 项目还提供 Ollama 格式的 API 兼容：
@@ -219,6 +273,7 @@ AIStudio2API/
 │   ├── browser/                 # 浏览器自动化模块
 │   ├── config/                  # 配置管理
 │   ├── models/                  # 数据模型
+│   ├── tts/                     # TTS 语音生成模块
 │   ├── proxy/                   # 流式代理
 │   └── static/                  # 静态资源
 ├── data/                        # 运行时数据目录
@@ -296,7 +351,7 @@ cp .env.example .env
 
 ## 📅 开发计划
 
-- **TTS 支持**: 适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
+- ✅ **TTS 支持**: 已适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
 - **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
 - **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程

@@ -204,7 +204,7 @@ def create_app() -> FastAPI:
     )
     
     app.add_middleware(APIKeyAuthMiddleware)
-    from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key
+    from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key, generate_speech
     from fastapi.responses import FileResponse
     app.get('/api/info')(get_api_info)
     app.get('/health')(health_check)
@@ -217,4 +217,6 @@ def create_app() -> FastAPI:
     app.post('/api/keys')(add_api_key)
     app.post('/api/keys/test')(test_api_key)
     app.delete('/api/keys')(delete_api_key)
+    app.post('/generate-speech')(generate_speech)
+    app.post('/v1beta/models/{model}:generateContent')(generate_speech)
     return app

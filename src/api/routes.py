@@ -3,7 +3,7 @@ import os
 import random
 import time
 import uuid
-from typing import Dict, List, Any, Set
+from typing import Dict, List, Any, Set, Optional
 from asyncio import Queue, Future, Lock, Event
 import logging
 from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect, Depends
@@ -230,3 +230,57 @@ async def delete_api_key(request: ApiKeyRequest, logger: logging.Logger=Depends(
     except Exception as e:
         logger.error(f'删除API密钥失败: {e}')
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class GenerateSpeechRequest(BaseModel):
+    model: str = 'gemini-2.5-flash-preview-tts'
+    contents: Any = None
+    generationConfig: Optional[Dict[str, Any]] = None
+    generation_config: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = 'allow'
+
+
+async def generate_speech(request: GenerateSpeechRequest, http_request: Request, logger: logging.Logger=Depends(get_logger), request_queue: Queue=Depends(get_request_queue), server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task), page_instance: AsyncPage=Depends(get_page_instance)):
+    req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
+    logger.info(f'[{req_id}] 🎤 收到 TTS 请求 | Model: {request.model}')
+    
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != 'direct_debug_no_browser'
+    service_unavailable = server_state['is_initializing'] or not server_state['is_playwright_ready'] or (browser_page_critical and (not server_state['is_page_ready'] or not server_state['is_browser_connected'])) or (not worker_task) or worker_task.done()
+    
+    if service_unavailable:
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 服务当前不可用。请稍后重试。', headers={'Retry-After': '30'})
+    
+    if not page_instance or page_instance.is_closed():
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 浏览器页面不可用。')
+    
+    from tts import process_tts_request
+    from models import ClientDisconnectedError
+    
+    def check_client_disconnected(stage: str = '') -> bool:
+        return False
+    
+    try:
+        request_data = request.model_dump()
+        if request.generation_config and not request.generationConfig:
+            request_data['generationConfig'] = request.generation_config
+        
+        result = await process_tts_request(
+            req_id=req_id,
+            page=page_instance,
+            logger=logger,
+            request_data=request_data,
+            check_client_disconnected=check_client_disconnected
+        )
+        return JSONResponse(content=result)
+    except ClientDisconnectedError as e:
+        logger.warning(f'[{req_id}] 客户端断开: {e}')
+        raise HTTPException(status_code=499, detail=str(e))
+    except TimeoutError as e:
+        logger.error(f'[{req_id}] TTS 生成超时: {e}')
+        raise HTTPException(status_code=504, detail=f'[{req_id}] TTS 生成超时: {e}')
+    except Exception as e:
+        logger.exception(f'[{req_id}] TTS 处理错误')
+        raise HTTPException(status_code=500, detail=f'[{req_id}] TTS 处理错误: {e}')
