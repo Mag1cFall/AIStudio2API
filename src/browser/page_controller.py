@@ -86,6 +86,16 @@ class PageController:
             await sys_prompt_textarea.fill(system_prompt, timeout=5000)
             await expect_async(sys_prompt_textarea).to_have_value(system_prompt, timeout=5000)
             self.logger.info(f'[{self.req_id}] 系统指令已成功填充并验证。')
+            for close_attempt in range(1, 4):
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(0.2)
+                    if not await sys_prompt_textarea.is_visible():
+                        self.logger.info(f'[{self.req_id}] ✅ 系统指令面板已关闭。')
+                        break
+                    self.logger.warning(f"[{self.req_id}] 系统指令面板关闭验证失败 (嘗試 {close_attempt})")
+                except Exception:
+                    pass
         except Exception as e:
             self.logger.error(f'[{self.req_id}] 设置系统指令时出错: {e}')
             if isinstance(e, ClientDisconnectedError):
@@ -136,10 +146,6 @@ class PageController:
         mid = (model_id or "").lower()
         return ("gemini-3" in mid) and ("pro" in mid)
 
-    def _has_main_reasoning_switch(self, model_id: Optional[str]) -> bool:
-        """判斷模型是否擁有主開關（Flash 系列）"""
-        mid = (model_id or "").lower()
-        return "flash" in mid
 
     async def _check_level_dropdown_exists(self) -> bool:
         """檢查等級下拉選單是否存在"""
@@ -150,12 +156,11 @@ class PageController:
             return False
 
     def _determine_level_from_effort(self, reasoning_effort: Any) -> Optional[str]:
-        """根據 reasoning_effort 決定等級（high/low）"""
         if isinstance(reasoning_effort, str):
             rs = reasoning_effort.strip().lower()
             if rs == "low":
                 return "low"
-            if rs in ["high", "none", "-1"]:
+            if rs in ["high", "medium", "none", "-1"]:
                 return "high"
             try:
                 return "high" if int(rs) >= 8000 else "low"
@@ -177,7 +182,6 @@ class PageController:
         return value
 
     async def _select_thinking_level(self, level: str, check_client_disconnected: Callable):
-        """設定推理等級（Gemini 3 Pro 專用），包含重試邏輯"""
         target_selector = (
             THINKING_LEVEL_OPTION_HIGH_SELECTOR if level == "high"
             else THINKING_LEVEL_OPTION_LOW_SELECTOR
@@ -202,40 +206,51 @@ class PageController:
                         pass
                     raise Exception(f"等級選項 {level} 不存在")
                 await click_element(self.page, option, f"Thinking Level {level}", self.req_id)
-                await asyncio.sleep(0.2)
-                self.logger.info(f"[{self.req_id}] ✓ 推理等級已設定為 {level}")
-                return
+                await asyncio.sleep(0.3)
+                current_text = await trigger.inner_text(timeout=2000)
+                if level.lower() in current_text.lower():
+                    self.logger.info(f"[{self.req_id}] ✓ 推理等級已設定為 {level}")
+                    return
+                self.logger.warning(f"[{self.req_id}] 等級驗證失敗 (嘗試 {attempt}): 當前顯示 '{current_text}'")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] 設定等級失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
                     await asyncio.sleep(0.5)
-                else:
-                    raise
+        self.logger.error(f"[{self.req_id}] ❌ 推理等級設定失敗，已重試 {max_retries} 次")
+        raise Exception(f"推理等級 {level} 設定失敗")
 
     async def _set_budget_value(self, token_budget: int, check_client_disconnected: Callable):
-        """設定預算數值"""
         budget_input = self.page.locator(THINKING_BUDGET_INPUT_SELECTOR)
-        try:
-            await expect_async(budget_input).to_be_visible(timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '預算輸入框可見後')
-            self.logger.info(f"[{self.req_id}] 設定推理預算為: {token_budget} tokens")
-            await budget_input.fill(str(token_budget), timeout=5000)
-            await self._check_disconnect(check_client_disconnected, '預算填充後')
-            await asyncio.sleep(0.1)
-            actual_val = await budget_input.input_value(timeout=3000)
-            if int(actual_val) == token_budget:
-                self.logger.info(f"[{self.req_id}] ✓ 預算已更新為 {actual_val}")
-            else:
-                self.logger.warning(f"[{self.req_id}] 預算驗證失敗，實際: {actual_val}，預期: {token_budget}")
-        except Exception as e:
-            self.logger.error(f"[{self.req_id}] 設定預算時發生錯誤: {e}")
-            if isinstance(e, ClientDisconnectedError):
-                raise
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 設定推理預算為: {token_budget} tokens")
+                await expect_async(budget_input).to_be_visible(timeout=5000)
+                await self._check_disconnect(check_client_disconnected, '預算輸入框可見後')
+                await budget_input.fill(str(token_budget), timeout=5000)
+                await self._check_disconnect(check_client_disconnected, '預算填充後')
+                await asyncio.sleep(0.2)
+                actual_val = await budget_input.input_value(timeout=3000)
+                if int(actual_val) == token_budget:
+                    self.logger.info(f"[{self.req_id}] ✓ 預算已更新為 {actual_val}")
+                    return True
+                self.logger.warning(f"[{self.req_id}] 預算驗證失敗 (嘗試 {attempt}): 實際 {actual_val}, 預期 {token_budget}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f"[{self.req_id}] 設定預算失敗 (嘗試 {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f"[{self.req_id}] ❌ 預算設定失敗，已重試 {max_retries} 次")
+        return False
 
     async def _handle_thinking_budget(self, request_params: Dict[str, Any], model_id_to_use: Optional[str], check_client_disconnected: Callable):
-        """處理推理模式與預算的完整邏輯"""
         reasoning_effort = request_params.get('reasoning_effort')
         cfg = parse_reasoning_param(reasoning_effort)
         self.logger.info(f"[{self.req_id}] 推理配置: {describe_config(cfg)}")
@@ -245,12 +260,9 @@ class PageController:
             return
 
         try:
-            uses_level = self._is_gemini3_pro_series(model_id_to_use) and await self._check_level_dropdown_exists()
-            has_switch = self._has_main_reasoning_switch(model_id_to_use)
+            await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
 
-            if has_switch:
-                self.logger.info(f"[{self.req_id}] 控制主開關: 啟用")
-                await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
+            uses_level = self._is_gemini3_pro_series(model_id_to_use) and await self._check_level_dropdown_exists()
 
             if uses_level:
                 level = self._determine_level_from_effort(reasoning_effort) or DEFAULT_THINKING_LEVEL
@@ -332,41 +344,63 @@ class PageController:
         self.logger.error(f"[{self.req_id}] ❌ Google Search 設定失敗，已重試 {max_retries} 次")
 
     async def _ensure_tools_panel_expanded(self, check_client_disconnected: Callable):
-        try:
-            collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
-            await expect_async(collapse_tools_locator).to_be_visible(timeout=5000)
-            grandparent_locator = collapse_tools_locator.locator('xpath=../..')
-            class_string = await grandparent_locator.get_attribute('class', timeout=3000)
-            if class_string and 'expanded' not in class_string.split():
-                self.logger.info(f'[{self.req_id}] 🔧 正在展开工具面板...')
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
+                await expect_async(collapse_tools_locator).to_be_visible(timeout=5000)
+                grandparent_locator = collapse_tools_locator.locator('xpath=../..')
+                class_string = await grandparent_locator.get_attribute('class', timeout=3000)
+                if class_string and 'expanded' in class_string.split():
+                    self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
+                    return
+                self.logger.info(f'[{self.req_id}] 🔧 (嘗試 {attempt}/{max_retries}) 正在展开工具面板...')
                 await click_element(self.page, collapse_tools_locator, 'Expand/Collapse Tools Button', self.req_id)
                 await self._check_disconnect(check_client_disconnected, '展开工具面板后')
-                await expect_async(grandparent_locator).to_have_class(re.compile('.*expanded.*'), timeout=5000)
-                self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
-            else:
-                self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
-        except Exception as e:
-            self.logger.error(f'[{self.req_id}]  展开工具面板时发生错误: {e}')
-            if isinstance(e, ClientDisconnectedError):
-                raise
+                await asyncio.sleep(0.3)
+                new_class = await grandparent_locator.get_attribute('class', timeout=3000)
+                if new_class and 'expanded' in new_class.split():
+                    self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
+                    return
+                self.logger.warning(f"[{self.req_id}] 工具面板展开验证失败 (嘗試 {attempt})")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f'[{self.req_id}] 展开工具面板失败 (嘗試 {attempt}): {e}')
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f'[{self.req_id}] ❌ 工具面板展开失败，已重试 {max_retries} 次')
 
     async def _open_url_content(self, check_client_disconnected: Callable):
-        try:
-            self.logger.info(f'[{self.req_id}] 检查并启用 URL Context 开关...')
-            use_url_content_selector = self.page.locator(USE_URL_CONTEXT_SELECTOR)
-            await expect_async(use_url_content_selector).to_be_visible(timeout=5000)
-            is_checked = await use_url_content_selector.get_attribute('aria-checked')
-            if 'false' == is_checked:
-                self.logger.info(f'[{self.req_id}] URL Context 开关未开启，正在点击以开启...')
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.logger.info(f'[{self.req_id}] (嘗試 {attempt}/{max_retries}) 检查并启用 URL Context 开关...')
+                use_url_content_selector = self.page.locator(USE_URL_CONTEXT_SELECTOR)
+                await expect_async(use_url_content_selector).to_be_visible(timeout=5000)
+                is_checked = await use_url_content_selector.get_attribute('aria-checked')
+                if is_checked == 'true':
+                    self.logger.info(f'[{self.req_id}] ✅ URL Context 开关已处于开启状态。')
+                    return
                 await click_element(self.page, use_url_content_selector, 'URL Context Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, '点击URLCONTEXT后')
-                self.logger.info(f'[{self.req_id}]  URL Context 开关已点击。')
-            else:
-                self.logger.info(f'[{self.req_id}] URL Context 开关已处于开启状态。')
-        except Exception as e:
-            self.logger.error(f'[{self.req_id}]  操作 USE_URL_CONTEXT_SELECTOR 时发生错误:{e}。')
-            if isinstance(e, ClientDisconnectedError):
-                raise
+                await asyncio.sleep(0.3)
+                new_state = await use_url_content_selector.get_attribute('aria-checked')
+                if new_state == 'true':
+                    self.logger.info(f'[{self.req_id}] ✅ URL Context 开关已开启。')
+                    return
+                self.logger.warning(f"[{self.req_id}] URL Context 验证失败 (嘗試 {attempt}): '{new_state}'")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f'[{self.req_id}] URL Context 操作失败 (嘗試 {attempt}): {e}')
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        self.logger.error(f'[{self.req_id}] ❌ URL Context 设定失败，已重试 {max_retries} 次')
 
     async def _control_thinking_budget_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = SET_THINKING_BUDGET_TOGGLE_SELECTOR

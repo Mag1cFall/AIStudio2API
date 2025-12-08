@@ -38,11 +38,12 @@ def parse_reasoning_param(effort: Optional[Union[int, str]]) -> ReasoningConfig:
                 budget_tokens=None,
                 raw_input=effort,
             )
-        if val in ["high", "low", "medium"]:
+        level_map = {"low": 4096, "medium": 8192, "high": 16384}
+        if val in level_map:
             return ReasoningConfig(
                 enable_reasoning=True,
-                use_budget_limit=False,
-                budget_tokens=None,
+                use_budget_limit=True,
+                budget_tokens=level_map[val],
                 raw_input=effort,
             )
     elif effort == -1:
