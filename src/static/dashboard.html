@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Studio 控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.staticfile.net/vue/3.3.4/vue.global.min.js"></script>
+    <script src="https://cdn.staticfile.net/marked/5.1.2/marked.min.js"></script>
     <script src="/static/i18n.js?v=2"></script>
     <script src="/static/icons.js?v=2"></script>
     <script>
@@ -459,11 +459,6 @@
                         </div>
 
                         <div v-if="multiPortResults.length > 0" class="space-y-4">
-                            <div v-for="result in result.port ? multiPortResults : []" :key="result.port"
-                                class="border border-[#30363d] rounded bg-[#0d1117] overflow-hidden">
-                                <!-- Note: Removed fallback v-for guard in actual implementation below to match logic -->
-                            </div>
-                            <!-- Correcting the v-for logic from original code snippet assumption -->
                             <div v-for="result in multiPortResults" :key="result.port"
                                 class="border border-[#30363d] rounded bg-[#0d1117] overflow-hidden">
                                 <div
