@@ -23,6 +23,7 @@
 ## 🚀 特性
 
 - **OpenAI 兼容 API**: 完全兼容 OpenAI 格式的 `/v1/chat/completions` 端点
+- **多 Worker 并发**: 支持多账号并发处理，提升吞吐量和稳定性
 - **TTS 语音生成**: 支持 Gemini 2.5 TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Imagen 3 和 Gemini 2.5 Flash (Nano Banana) 图片生成
 - **视频生成**: 支持 Veo 2 视频生成，包含图片转视频功能
@@ -323,6 +324,8 @@ AIStudio2API/
 │   ├── tts/                     # TTS 语音生成模块
 │   ├── media/                   # 媒体生成模块 (Imagen/Veo/Nano)
 │   ├── proxy/                   # 流式代理
+│   ├── worker/                  # 多Worker管理模块
+│   ├── gateway.py               # 多Worker负载均衡网关
 │   └── static/                  # 静态资源
 ├── data/                        # 运行时数据目录
 │   ├── auth_profiles/           # 认证文件
@@ -379,6 +382,7 @@ cp .env.example .env
 - [环境变量配置](docs/environment-configuration.md)
 - [认证设置](docs/authentication-setup.md)
 - [API 使用指南](docs/api-usage.md)
+- [多Worker并发模式](docs/multi-worker-guide.md)
 - [故障排除](docs/troubleshooting.md)
 
 ## ⚠️ 重要提示
@@ -408,4 +412,4 @@ cp .env.example .env
 - **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
 - **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
 - **单元测试**: 增加核心模块（特别是浏览器自动化部分）的测试覆盖率
-- **负载均衡**: 支持多 Google 账号轮询池，以提高并发限额与稳定性 (这项或许不可能实现)
+- ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性 (这项或许不可能实现) (fix:2025/12/09 这项已实现)

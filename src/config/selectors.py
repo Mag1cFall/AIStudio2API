@@ -43,3 +43,6 @@ THINKING_LEVEL_SELECT_SELECTOR = 'mat-select[aria-label="Thinking Level"], mat-s
 THINKING_LEVEL_OPTION_HIGH_SELECTOR = 'mat-option:has-text("High")'
 THINKING_LEVEL_OPTION_LOW_SELECTOR = 'mat-option:has-text("Low")'
 DEFAULT_THINKING_LEVEL = "high"
+
+RATE_LIMIT_CALLOUT_SELECTOR = 'ms-callout.error-callout .message, ms-callout.warning-callout .message'
+RATE_LIMIT_KEYWORDS = ["exceeded quota", "out of free generations"]

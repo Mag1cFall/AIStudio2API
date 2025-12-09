@@ -362,6 +362,20 @@ async def detect_and_extract_page_error(page: AsyncPage, req_id: str) -> Optiona
         logger.warning(f'[{req_id}]    检查页面错误时出错: {e}')
         return None
 
+async def detect_rate_limit(page: AsyncPage, req_id: str) -> tuple:
+    try:
+        locator = page.locator(RATE_LIMIT_CALLOUT_SELECTOR).last
+        if await locator.count() > 0:
+            text = await locator.text_content(timeout=500)
+            if text:
+                for kw in RATE_LIMIT_KEYWORDS:
+                    if kw in text.lower():
+                        logger.warning(f'[{req_id}] ⚠️ Rate Limit detected: {text.strip()}')
+                        return True, text.strip()
+    except:
+        pass
+    return False, ""
+
 async def save_error_snapshot(error_name: str='error'):
     import server
     name_parts = error_name.split('_')

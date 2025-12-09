@@ -73,12 +73,16 @@ AIStudio2API/
 │   │   ├── server.py           # 代理服务器
 │   │   ├── handler.py          # 请求处理器
 │   │   └── connection.py       # 连接/证书管理
+│   ├── worker/                 # 多Worker管理模块
+│   │   ├── models.py           # Worker数据模型
+│   │   └── pool.py             # Worker池管理
 │   ├── logger/                 # 日志工具
 │   │   └── config.py           # 日志配置
 │   ├── static/                 # 静态资源
 │   ├── app_launcher.py         # GUI 启动器
 │   ├── launch_camoufox.py      # 命令行启动器
 │   ├── manager.py              # WebUI 管理器
+│   ├── gateway.py              # 多Worker负载均衡网关
 │   └── server.py               # 主服务器
 ├── data/                       # 运行时数据目录
 │   ├── auth_profiles/          # 认证文件存储

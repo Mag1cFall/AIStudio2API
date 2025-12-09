@@ -23,6 +23,7 @@
 ## 🚀 Features
 
 - **OpenAI Compatible API**: Fully compatible with OpenAI format `/v1/chat/completions` endpoint
+- **Multi-Worker Concurrency**: Supports multi-account concurrent processing for improved throughput and stability
 - **TTS Speech Generation**: Supports Gemini 2.5 TTS models for single/multi-speaker audio generation
 - **Image Generation**: Supports Imagen 3 and Gemini 2.5 Flash (Nano Banana) image generation
 - **Video Generation**: Supports Veo 2 video generation, including image-to-video
@@ -317,6 +318,8 @@ AIStudio2API/
 │   ├── tts/                     # TTS Speech Generation modules
 │   ├── media/                   # Media Generation modules (Imagen/Veo/Nano)
 │   ├── proxy/                   # Streaming proxy
+│   ├── worker/                  # Multi-Worker management module
+│   ├── gateway.py               # Multi-Worker load balancing gateway
 │   └── static/                  # Static resources
 ├── data/                        # Runtime data directory
 │   ├── auth_profiles/           # Authentication files
@@ -373,6 +376,7 @@ Supports accessing AI Studio through proxy:
 - [Environment Configuration](docs/environment-configuration.md)
 - [Authentication Setup](docs/authentication-setup.md)
 - [API Usage Guide](docs/api-usage.md)
+- [Multi-Worker Concurrency Mode](docs/multi-worker-guide.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
 ## ⚠️ Important Notes
@@ -402,5 +406,5 @@ Issues and Pull Requests are welcome!
 - **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
 - **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
 - **Unit Testing**: Increase test coverage for core modules (especially browser automation)
-- **Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
+- ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
 

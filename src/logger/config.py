@@ -33,8 +33,8 @@ def _clear_old_log() -> None:
     if os.path.exists(APP_LOG_FILE_PATH):
         try:
             os.remove(APP_LOG_FILE_PATH)
-        except OSError as err:
-            print(f"⚠️ 清除旧日志失败: {err}", file=sys.__stderr__)
+        except OSError:
+            pass
 
 
 def _create_file_handler(fmt: LogFormatter) -> logging.Handler:

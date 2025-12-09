@@ -1,0 +1,31 @@
+{
+  "workers": [
+    {
+      "id": "w1",
+      "profile": "auth_auto_1764657832.json",
+      "port": 3001,
+      "camoufox_port": 9222
+    },
+    {
+      "id": "w2",
+      "profile": "auth_auto_1764657915.json",
+      "port": 3002,
+      "camoufox_port": 9223
+    },
+    {
+      "id": "w3",
+      "profile": "auth_auto_1764658826.json",
+      "port": 3003,
+      "camoufox_port": 9224
+    },
+    {
+      "id": "w4",
+      "profile": "auth_auto_1765180693.json",
+      "port": 3004,
+      "camoufox_port": 9225
+    }
+  ],
+  "settings": {
+    "recovery_hours": 6.0
+  }
+}
