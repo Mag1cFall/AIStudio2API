@@ -260,20 +260,24 @@ class PageController:
             return
 
         try:
-            await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
+            is_gemini3 = self._is_gemini3_pro_series(model_id_to_use)
+            uses_level = is_gemini3 and await self._check_level_dropdown_exists()
 
-            uses_level = self._is_gemini3_pro_series(model_id_to_use) and await self._check_level_dropdown_exists()
+            if not is_gemini3:
+                await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
 
             if uses_level:
                 level = self._determine_level_from_effort(reasoning_effort) or DEFAULT_THINKING_LEVEL
                 try:
                     await self._select_thinking_level(level, check_client_disconnected)
                 except Exception as e:
-                    self.logger.warning(f"[{self.req_id}] 設定推理等級失敗，使用預算模式: {e}")
-                    if cfg.use_budget_limit and cfg.budget_tokens:
-                        capped_val = self._apply_model_budget_cap(cfg.budget_tokens, model_id_to_use)
-                        await self._control_thinking_budget_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
-                        await self._set_budget_value(capped_val, check_client_disconnected)
+                    self.logger.warning(f"[{self.req_id}] 設定推理等級 {level} 失敗: {e}")
+                    if level == "low":
+                        self.logger.info(f"[{self.req_id}] low 選項不存在，嘗試使用 high")
+                        try:
+                            await self._select_thinking_level("high", check_client_disconnected)
+                        except Exception as e2:
+                            self.logger.warning(f"[{self.req_id}] high 選項也失敗: {e2}")
                 return
 
             if cfg.use_budget_limit and cfg.budget_tokens:
