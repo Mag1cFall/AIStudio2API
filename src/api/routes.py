@@ -284,3 +284,221 @@ async def generate_speech(request: GenerateSpeechRequest, http_request: Request,
     except Exception as e:
         logger.exception(f'[{req_id}] TTS 处理错误')
         raise HTTPException(status_code=500, detail=f'[{req_id}] TTS 处理错误: {e}')
+
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    model: str = 'imagen-4.0-generate-001'
+    number_of_images: int = 1
+    aspect_ratio: str = '1:1'
+    negative_prompt: Optional[str] = None
+
+    class Config:
+        extra = 'allow'
+
+
+class GenerateVideoRequest(BaseModel):
+    prompt: str
+    model: str = 'veo-2.0-generate-001'
+    number_of_videos: int = 1
+    aspect_ratio: str = '16:9'
+    duration_seconds: int = 5
+    negative_prompt: Optional[str] = None
+    image: Optional[str] = None
+
+    class Config:
+        extra = 'allow'
+
+
+class NanoBananaRequest(BaseModel):
+    model: str = 'gemini-2.5-flash-image'
+    contents: Any = None
+    generationConfig: Optional[Dict[str, Any]] = None
+    generation_config: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = 'allow'
+
+
+async def generate_image(request: GenerateImageRequest, http_request: Request, logger: logging.Logger=Depends(get_logger), server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task), page_instance: AsyncPage=Depends(get_page_instance)):
+    import base64
+    req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
+    logger.info(f'[{req_id}] 🎨 收到 Imagen 请求 | Model: {request.model} | Count: {request.number_of_images}')
+    
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != 'direct_debug_no_browser'
+    service_unavailable = server_state['is_initializing'] or not server_state['is_playwright_ready'] or (browser_page_critical and (not server_state['is_page_ready'] or not server_state['is_browser_connected'])) or (not worker_task) or worker_task.done()
+    
+    if service_unavailable:
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 服务当前不可用。请稍后重试。', headers={'Retry-After': '30'})
+    
+    if not page_instance or page_instance.is_closed():
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 浏览器页面不可用。')
+    
+    from media import process_image_request, ImageGenerationConfig
+    from models import ClientDisconnectedError
+    
+    def check_client_disconnected(stage: str = '') -> bool:
+        return False
+    
+    try:
+        config = ImageGenerationConfig(
+            prompt=request.prompt,
+            model=request.model,
+            number_of_images=request.number_of_images,
+            aspect_ratio=request.aspect_ratio,
+            negative_prompt=request.negative_prompt
+        )
+        
+        result = await process_image_request(
+            page=page_instance,
+            config=config,
+            logger=logger,
+            req_id=req_id,
+            check_client_disconnected=check_client_disconnected
+        )
+        return JSONResponse(content=result)
+    except ClientDisconnectedError as e:
+        logger.warning(f'[{req_id}] 客户端断开: {e}')
+        raise HTTPException(status_code=499, detail=str(e))
+    except TimeoutError as e:
+        logger.error(f'[{req_id}] 图片生成超时: {e}')
+        raise HTTPException(status_code=504, detail=f'[{req_id}] 图片生成超时: {e}')
+    except Exception as e:
+        logger.exception(f'[{req_id}] Imagen 处理错误')
+        raise HTTPException(status_code=500, detail=f'[{req_id}] Imagen 处理错误: {e}')
+
+
+async def generate_video(request: GenerateVideoRequest, http_request: Request, logger: logging.Logger=Depends(get_logger), server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task), page_instance: AsyncPage=Depends(get_page_instance)):
+    import base64
+    req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
+    logger.info(f'[{req_id}] 🎬 收到 Veo 请求 | Model: {request.model} | Duration: {request.duration_seconds}s')
+    
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != 'direct_debug_no_browser'
+    service_unavailable = server_state['is_initializing'] or not server_state['is_playwright_ready'] or (browser_page_critical and (not server_state['is_page_ready'] or not server_state['is_browser_connected'])) or (not worker_task) or worker_task.done()
+    
+    if service_unavailable:
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 服务当前不可用。请稍后重试。', headers={'Retry-After': '30'})
+    
+    if not page_instance or page_instance.is_closed():
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 浏览器页面不可用。')
+    
+    from media import process_video_request, VideoGenerationConfig
+    from models import ClientDisconnectedError
+    
+    def check_client_disconnected(stage: str = '') -> bool:
+        return False
+    
+    try:
+        image_bytes = None
+        image_mime_type = None
+        if request.image and 'imageBytes' in request.image:
+            image_bytes = base64.b64decode(request.image['imageBytes'])
+            image_mime_type = request.image.get('mimeType', 'image/png')
+        
+        config = VideoGenerationConfig(
+            prompt=request.prompt,
+            model=request.model,
+            number_of_videos=request.number_of_videos,
+            aspect_ratio=request.aspect_ratio,
+            duration_seconds=request.duration_seconds,
+            negative_prompt=request.negative_prompt,
+            image_bytes=image_bytes,
+            image_mime_type=image_mime_type
+        )
+        
+        result = await process_video_request(
+            page=page_instance,
+            config=config,
+            logger=logger,
+            req_id=req_id,
+            check_client_disconnected=check_client_disconnected
+        )
+        return JSONResponse(content=result)
+    except ClientDisconnectedError as e:
+        logger.warning(f'[{req_id}] 客户端断开: {e}')
+        raise HTTPException(status_code=499, detail=str(e))
+    except TimeoutError as e:
+        logger.error(f'[{req_id}] 视频生成超时: {e}')
+        raise HTTPException(status_code=504, detail=f'[{req_id}] 视频生成超时: {e}')
+    except Exception as e:
+        logger.exception(f'[{req_id}] Veo 处理错误')
+        raise HTTPException(status_code=500, detail=f'[{req_id}] Veo 处理错误: {e}')
+
+
+async def generate_nano_content(request: NanoBananaRequest, http_request: Request, logger: logging.Logger=Depends(get_logger), server_state: Dict[str, Any]=Depends(get_server_state), worker_task=Depends(get_worker_task), page_instance: AsyncPage=Depends(get_page_instance)):
+    import base64
+    req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
+    logger.info(f'[{req_id}] 🖼️ 收到 Nano Banana 请求 | Model: {request.model}')
+    
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != 'direct_debug_no_browser'
+    service_unavailable = server_state['is_initializing'] or not server_state['is_playwright_ready'] or (browser_page_critical and (not server_state['is_page_ready'] or not server_state['is_browser_connected'])) or (not worker_task) or worker_task.done()
+    
+    if service_unavailable:
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 服务当前不可用。请稍后重试。', headers={'Retry-After': '30'})
+    
+    if not page_instance or page_instance.is_closed():
+        raise HTTPException(status_code=503, detail=f'[{req_id}] 浏览器页面不可用。')
+    
+    from media import process_nano_request, NanoBananaConfig
+    from models import ClientDisconnectedError
+    
+    def check_client_disconnected(stage: str = '') -> bool:
+        return False
+    
+    try:
+        prompt = ''
+        image_bytes = None
+        image_mime_type = None
+        
+        contents = request.contents
+        if isinstance(contents, str):
+            prompt = contents
+        elif isinstance(contents, list):
+            for content in contents:
+                if isinstance(content, dict):
+                    parts = content.get('parts', [])
+                    for part in parts:
+                        if isinstance(part, dict):
+                            if 'text' in part:
+                                prompt += part['text'] + ' '
+                            elif 'inlineData' in part:
+                                inline = part['inlineData']
+                                image_bytes = base64.b64decode(inline.get('data', ''))
+                                image_mime_type = inline.get('mimeType', 'image/png')
+                        elif isinstance(part, str):
+                            prompt += part + ' '
+                elif isinstance(content, str):
+                    prompt += content + ' '
+        
+        gen_config = request.generationConfig or request.generation_config or {}
+        aspect_ratio = gen_config.get('aspectRatio', '1:1')
+        
+        config = NanoBananaConfig(
+            prompt=prompt.strip(),
+            model=request.model,
+            aspect_ratio=aspect_ratio,
+            image_bytes=image_bytes,
+            image_mime_type=image_mime_type
+        )
+        
+        result = await process_nano_request(
+            page=page_instance,
+            config=config,
+            logger=logger,
+            req_id=req_id,
+            check_client_disconnected=check_client_disconnected
+        )
+        return JSONResponse(content=result)
+    except ClientDisconnectedError as e:
+        logger.warning(f'[{req_id}] 客户端断开: {e}')
+        raise HTTPException(status_code=499, detail=str(e))
+    except TimeoutError as e:
+        logger.error(f'[{req_id}] Nano 生成超时: {e}')
+        raise HTTPException(status_code=504, detail=f'[{req_id}] Nano 生成超时: {e}')
+    except Exception as e:
+        logger.exception(f'[{req_id}] Nano Banana 处理错误')
+        raise HTTPException(status_code=500, detail=f'[{req_id}] Nano Banana 处理错误: {e}')
+

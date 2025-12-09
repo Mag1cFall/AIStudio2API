@@ -259,6 +259,22 @@ curl -X POST http://localhost:2048/generate-speech \
 
 **详细文档**: 参见 [TTS 使用指南](tts-guide.md)
 
+### 图片/视频生成
+
+**端点**: 
+- `POST /generate-image` - Imagen 图片生成
+- `POST /generate-video` - Veo 视频生成
+- `POST /nano/generate` - Nano Banana 图片生成
+
+支持 Imagen 3、Veo 2 和 Gemini 2.5 Flash 进行图片/视频生成。
+
+**支持的模型**:
+- Imagen: `imagen-3.0-generate-002`
+- Veo: `veo-2.0-generate-001`
+- Nano Banana: `gemini-2.5-flash-image`
+
+**详细文档**: 参见 [媒体生成指南](media-generation-guide.md)
+
 ### Ollama 兼容层
 
 项目还提供 Ollama 格式的 API 兼容：

@@ -24,6 +24,8 @@
 
 - **OpenAI Compatible API**: Fully compatible with OpenAI format `/v1/chat/completions` endpoint
 - **TTS Speech Generation**: Supports Gemini 2.5 TTS models for single/multi-speaker audio generation
+- **Image Generation**: Supports Imagen 3 and Gemini 2.5 Flash (Nano Banana) image generation
+- **Video Generation**: Supports Veo 2 video generation, including image-to-video
 - **Smart Model Switching**: Dynamically switch models in AI Studio via the `model` field
 - **Anti-Fingerprint Detection**: Uses Camoufox browser to reduce detection risk
 - **GUI Launcher**: Feature-rich **web** launcher for simplified configuration and management
@@ -268,6 +270,7 @@ AIStudio2API/
 │   ├── config/                  # Configuration management
 │   ├── models/                  # Data models
 │   ├── tts/                     # TTS Speech Generation modules
+│   ├── media/                   # Media Generation modules (Imagen/Veo/Nano)
 │   ├── proxy/                   # Streaming proxy
 │   └── static/                  # Static resources
 ├── data/                        # Runtime data directory
@@ -346,6 +349,8 @@ Issues and Pull Requests are welcome!
 ## 📅 Development Roadmap
 
 - ✅ **TTS Support**: Adapted `gemini-2.5-flash/pro-preview-tts` speech generation models
+- ✅ **Media Generation**: Supports Imagen 3, Veo 2, Nano Banana image/video generation
+- **Unified Click Logic**: Extract `_safe_click` method to global `operations.py`, unify click operations across all controllers
 - **Documentation**: Update and optimize documentation in `docs/` directory
 - **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
 - **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files
@@ -353,3 +358,4 @@ Issues and Pull Requests are welcome!
 - **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
 - **Unit Testing**: Increase test coverage for core modules (especially browser automation)
 - **Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
+

@@ -61,6 +61,13 @@ AIStudio2API/
 │   │   ├── models.py           # TTS 数据模型
 │   │   ├── tts_controller.py   # TTS 页面控制器
 │   │   └── tts_processor.py    # TTS 请求处理器
+│   ├── media/                  # 媒体生成模块
+│   │   ├── __init__.py         # 模块初始化
+│   │   ├── models.py           # 媒体数据模型
+│   │   ├── nano_controller.py  # Nano Banana 控制器
+│   │   ├── imagen_controller.py# Imagen 控制器
+│   │   ├── veo_controller.py   # Veo 控制器
+│   │   └── media_processor.py  # 媒体请求处理器
 │   ├── proxy/                  # 流式代理服务
 │   │   ├── runner.py           # 代理服务入口
 │   │   ├── server.py           # 代理服务器

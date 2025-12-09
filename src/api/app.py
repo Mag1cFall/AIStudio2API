@@ -204,7 +204,7 @@ def create_app() -> FastAPI:
     )
     
     app.add_middleware(APIKeyAuthMiddleware)
-    from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key, generate_speech
+    from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key, generate_speech, generate_image, generate_video, generate_nano_content
     from fastapi.responses import FileResponse
     app.get('/api/info')(get_api_info)
     app.get('/health')(health_check)
@@ -219,4 +219,10 @@ def create_app() -> FastAPI:
     app.delete('/api/keys')(delete_api_key)
     app.post('/generate-speech')(generate_speech)
     app.post('/v1beta/models/{model}:generateContent')(generate_speech)
+    app.post('/generate-image')(generate_image)
+    app.post('/v1beta/models/{model}:predict')(generate_image)
+    app.post('/generate-video')(generate_video)
+    app.post('/v1beta/models/{model}:predictLongRunning')(generate_video)
+    app.post('/nano/generate')(generate_nano_content)
+    app.post('/v1beta/models/gemini-2.5-flash-image:generateContent')(generate_nano_content)
     return app

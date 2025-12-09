@@ -1,6 +1,6 @@
 import asyncio
 from typing import Callable, Optional
-from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Page as AsyncPage, Locator, expect as expect_async, TimeoutError as PlaywrightTimeoutError
 from config.tts_selectors import (
     TTS_ROOT_SELECTOR, TTS_RUN_BUTTON_SELECTOR, TTS_AUDIO_PLAYER_SELECTOR,
     TTS_SINGLE_SPEAKER_TEXT_INPUT_SELECTOR, TTS_SINGLE_SPEAKER_STYLE_INPUT_SELECTOR,
@@ -23,6 +23,32 @@ class TTSController:
     async def _check_disconnect(self, check_client_disconnected: Callable, stage: str):
         if check_client_disconnected(stage):
             raise ClientDisconnectedError(f'[{self.req_id}] Client disconnected at stage: {stage}')
+
+    async def _safe_click(self, locator: Locator, element_name: str, timeout: int = 2000) -> bool:
+        try:
+            await locator.wait_for(state='visible', timeout=timeout)
+        except Exception as e:
+            self.logger.warning(f"[{self.req_id}] '{element_name}' 元素不可见: {e}")
+            return False
+        try:
+            await locator.click(timeout=500)
+            return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.1)
+        try:
+            await locator.click(timeout=500, force=True)
+            return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.1)
+        try:
+            await locator.evaluate('element => element.click()')
+            return True
+        except Exception as e:
+            self.logger.error(f"[{self.req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了: {e}")
+            return False
+
 
     async def navigate_to_tts_page(self, model: str, check_client_disconnected: Callable):
         if model not in TTS_SUPPORTED_MODELS:
@@ -63,7 +89,8 @@ class TTSController:
                     self.logger.info(f'[{self.req_id}] ✅ TTS 模式已就绪: {mode_name}')
                     return
                 
-                await mode_btn.click()
+                if not await self._safe_click(mode_btn, f'TTS 模式按钮 {mode_name}'):
+                    continue
                 await self._check_disconnect(check_client_disconnected, f'TTS 模式切换后')
                 await asyncio.sleep(1.0)
                 
@@ -104,14 +131,14 @@ class TTSController:
                     self.logger.warning(f'[{self.req_id}] 未找到语音选择下拉框')
                     return
                 target_dropdown = voice_dropdowns.nth(speaker_index) if dropdown_count > speaker_index else voice_dropdowns.first
-                await target_dropdown.click()
+                if not await self._safe_click(target_dropdown, f'语音下拉框 {speaker_index}'):
+                    continue
                 await asyncio.sleep(0.3)
                 option = self.page.locator(f'{TTS_SETTINGS_VOICE_OPTION_SELECTOR}:has-text("{voice_name}")')
                 if await option.count() > 0:
-                    await option.first.click()
-                    await asyncio.sleep(0.2)
-                    self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
-                    return
+                    if await self._safe_click(option.first, f'语音选项 {voice_name}'):
+                        self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
+                        return
                 else:
                     self.logger.warning(f'[{self.req_id}] 未找到语音选项: {voice_name}')
                     await self.page.keyboard.press('Escape')
@@ -171,10 +198,15 @@ class TTSController:
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
+                await self.page.keyboard.press('Escape')
+                await asyncio.sleep(0.3)
                 run_btn = self.page.locator(TTS_RUN_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
-                await run_btn.click()
+                if not await self._safe_click(run_btn, 'Run 按钮'):
+                    if attempt < max_retries:
+                        continue
+                    raise Exception('Run 按钮点击失败')
                 await self._check_disconnect(check_client_disconnected, 'TTS Run 按钮点击后')
                 self.logger.info(f'[{self.req_id}] ✅ 生成已启动')
                 return

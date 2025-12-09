@@ -24,6 +24,8 @@
 
 - **OpenAI 兼容 API**: 完全兼容 OpenAI 格式的 `/v1/chat/completions` 端点
 - **TTS 语音生成**: 支持 Gemini 2.5 TTS 模型的单/多说话人音频生成
+- **图片生成**: 支持 Imagen 3 和 Gemini 2.5 Flash (Nano Banana) 图片生成
+- **视频生成**: 支持 Veo 2 视频生成，包含图片转视频功能
 - **智能模型切换**: 通过 `model` 字段动态切换 AI Studio 中的模型
 - **反指纹检测**: 使用 Camoufox 浏览器降低被检测风险
 - **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
@@ -274,6 +276,7 @@ AIStudio2API/
 │   ├── config/                  # 配置管理
 │   ├── models/                  # 数据模型
 │   ├── tts/                     # TTS 语音生成模块
+│   ├── media/                   # 媒体生成模块 (Imagen/Veo/Nano)
 │   ├── proxy/                   # 流式代理
 │   └── static/                  # 静态资源
 ├── data/                        # 运行时数据目录
@@ -352,6 +355,8 @@ cp .env.example .env
 ## 📅 开发计划
 
 - ✅ **TTS 支持**: 已适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
+- ✅ **媒体生成**: 已支持 Imagen 3、Veo 2、Nano Banana 图片/视频生成
+- **点击逻辑统一**: 将 `_safe_click` 方法提取到全局 `operations.py`，统一所有控制器的点击操作
 - **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
 - **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
