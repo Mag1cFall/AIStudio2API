@@ -269,13 +269,10 @@ class PageController:
 
         try:
             is_gemini3 = self._is_gemini3_pro_series(model_id_to_use)
-            uses_level = is_gemini3 and await self._check_level_dropdown_exists()
 
-            if not is_gemini3:
-                await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
-
-            if uses_level:
+            if is_gemini3:
                 level = self._determine_level_from_effort(reasoning_effort) or DEFAULT_THINKING_LEVEL
+                self.logger.info(f"[{self.req_id}] Gemini 3 Pro 系列，使用等級模式: {level}")
                 try:
                     await self._select_thinking_level(level, check_client_disconnected)
                 except Exception as e:
@@ -287,6 +284,8 @@ class PageController:
                         except Exception as e2:
                             self.logger.warning(f"[{self.req_id}] high 選項也失敗: {e2}")
                 return
+
+            await self._control_thinking_mode_toggle(should_be_checked=True, check_client_disconnected=check_client_disconnected)
 
             if cfg.use_budget_limit and cfg.budget_tokens:
                 capped_val = self._apply_model_budget_cap(cfg.budget_tokens, model_id_to_use)
