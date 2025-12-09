@@ -247,6 +247,51 @@ curl -X POST http://localhost:2048/generate-speech \
 
 **返回格式**: 音频数据以 Base64 编码的 WAV 格式在 `candidates[0].content.parts[0].inlineData.data` 中返回。
 
+### 图片生成 (Imagen 3)
+
+```bash
+curl -X POST http://localhost:2048/generate-image \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A beautiful sunset over mountains",
+    "model": "imagen-3.0-generate-002",
+    "number_of_images": 1,
+    "aspect_ratio": "16:9"
+  }'
+```
+
+**端点**: `POST /generate-image`
+
+### 视频生成 (Veo 2)
+
+```bash
+curl -X POST http://localhost:2048/generate-video \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A drone flying over a forest",
+    "model": "veo-2.0-generate-001",
+    "aspect_ratio": "16:9",
+    "duration_seconds": 5
+  }'
+```
+
+**端点**: `POST /generate-video`
+
+### Nano Banana (Gemini 图片生成)
+
+```bash
+curl -X POST http://localhost:2048/nano/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-image",
+    "contents": [{"parts": [{"text": "A cute cat wearing a tiny hat"}]}]
+  }'
+```
+
+**端点**: `POST /nano/generate`
+
+**详细文档**: 参见 [媒体生成指南](docs/media-generation-guide.md)
+
 ### Ollama 兼容层
 
 项目还提供 Ollama 格式的 API 兼容：

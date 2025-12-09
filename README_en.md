@@ -241,6 +241,51 @@ curl -X POST http://localhost:2048/generate-speech \
 
 **Response Format**: Audio data is returned as Base64-encoded WAV format in `candidates[0].content.parts[0].inlineData.data`.
 
+### Image Generation (Imagen 3)
+
+```bash
+curl -X POST http://localhost:2048/generate-image \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A beautiful sunset over mountains",
+    "model": "imagen-3.0-generate-002",
+    "number_of_images": 1,
+    "aspect_ratio": "16:9"
+  }'
+```
+
+**Endpoint**: `POST /generate-image`
+
+### Video Generation (Veo 2)
+
+```bash
+curl -X POST http://localhost:2048/generate-video \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A drone flying over a forest",
+    "model": "veo-2.0-generate-001",
+    "aspect_ratio": "16:9",
+    "duration_seconds": 5
+  }'
+```
+
+**Endpoint**: `POST /generate-video`
+
+### Nano Banana (Gemini Image Generation)
+
+```bash
+curl -X POST http://localhost:2048/nano/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash-image",
+    "contents": [{"parts": [{"text": "A cute cat wearing a tiny hat"}]}]
+  }'
+```
+
+**Endpoint**: `POST /nano/generate`
+
+**Detailed Documentation**: See [Media Generation Guide](docs/media-generation-guide.md)
+
 ### Ollama Compatibility Layer
 
 The project also provides Ollama format API compatibility:
