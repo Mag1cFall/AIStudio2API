@@ -197,15 +197,23 @@ class PageController:
                 await click_element(self.page, trigger, "Thinking Level Selector", self.req_id)
                 await self._check_disconnect(check_client_disconnected, '等級選單展開後')
                 await asyncio.sleep(0.3)
+                
                 option = self.page.locator(target_selector)
-                if await option.count() == 0:
-                    self.logger.warning(f"[{self.req_id}] 等級選項 {level} 未找到")
+                option_count = await option.count()
+                if option_count == 0:
+                    self.logger.warning(f"[{self.req_id}] 等級選項 {level} 未找到，等待加載...")
+                    await asyncio.sleep(0.3)
+                    option_count = await option.count()
+                
+                if option_count == 0:
+                    self.logger.warning(f"[{self.req_id}] 等級選項 {level} 仍未找到")
                     try:
                         await self.page.keyboard.press("Escape")
                     except Exception:
                         pass
                     raise Exception(f"等級選項 {level} 不存在")
-                await click_element(self.page, option, f"Thinking Level {level}", self.req_id)
+                
+                await click_element(self.page, option.first, f"Thinking Level {level}", self.req_id)
                 await asyncio.sleep(0.3)
                 current_text = await trigger.inner_text(timeout=2000)
                 if level.lower() in current_text.lower():
