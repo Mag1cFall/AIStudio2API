@@ -240,6 +240,7 @@ data/gui_config.json
 
 # key
 data/key.txt
+data/workers.json
 
 # 脚本注入相关文件
 # 用户自定义的模型配置文件（保留示例文件）
