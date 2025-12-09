@@ -527,6 +527,11 @@ async def check_all_ports():
     
     if config.get('stream_port_enabled'):
         ports_to_check.append({"label": "流式代理", "port": config.get('stream_port', 3120)})
+    
+    if config.get('worker_mode_enabled') and WORKER_POOL_AVAILABLE:
+        for w in worker_pool.workers.values():
+            ports_to_check.append({"label": f"Worker-{w.id} API", "port": w.port})
+            ports_to_check.append({"label": f"Worker-{w.id} Camoufox", "port": w.camoufox_port})
         
     results = []
     for item in ports_to_check:
@@ -709,6 +714,26 @@ async def save_workers_config():
         return {"success": True, "count": len(worker_pool.workers)}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.get("/api/workers/next")
+async def get_next_available_worker(model: str = ""):
+    if not WORKER_POOL_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Worker pool not available")
+    worker = worker_pool.get_worker_for_model(model)
+    if worker:
+        worker.request_count += 1
+        return {"port": worker.port, "worker_id": worker.id}
+    all_limited = all(w.is_model_limited(model) for w in worker_pool.workers.values() if w.status == "running")
+    if all_limited:
+        return {"error": "all_rate_limited", "message": f"All workers rate limited for model {model}"}
+    return {"error": "no_workers", "message": "No available workers"}
+
+@app.post("/api/workers/{worker_id}/rate-limit")
+async def mark_worker_rate_limited(worker_id: str, model: str = Body(..., embed=True)):
+    if not WORKER_POOL_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Worker pool not available")
+    worker_pool.mark_rate_limited(worker_id, model)
+    return {"success": True}
 
 @app.post("/api/workers/{worker_id}/start")
 async def start_worker_api(worker_id: str):
