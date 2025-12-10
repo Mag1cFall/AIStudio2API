@@ -27,13 +27,14 @@
 #### 1. 根 CA 证书生成 (`CertStore._create_authority`)
 
 ```python
-key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-cert = (
-    x509.CertificateBuilder()
-    .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-    .add_extension(x509.KeyUsage(key_cert_sign=True, crl_sign=True, ...), critical=True)
-    .sign(key, hashes.SHA256())
-)
+name = x509.Name([
+    x509.NameAttribute(NameOID.COUNTRY_NAME, self._profile['country']), # 随机国家 (JP/TW/DE/NL/SG)
+    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, self._profile['state']),
+    x509.NameAttribute(NameOID.LOCALITY_NAME, self._profile['city']),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, self._profile['org']),
+    x509.NameAttribute(NameOID.COMMON_NAME, self._profile['cn'])
+])
+# ... 证书签发逻辑 ...
 ```
 
 生成的 `ca.crt` 需要被系统/浏览器信任，才能使后续的域名证书被接受。
@@ -106,12 +107,15 @@ elif 'GenerateContent' in path:
 ### 响应解码流程 (`ResponseHandler.handle_response`)
 
 ```python
+```python
 async def handle_response(self, data, host, path, headers):
+    # 使用 memoryview 优化内存复制
     decoded, completed = self._unchunk(bytes(data))
     decoded = self._inflate(decoded)
     result = self._extract_content(decoded)
     result['done'] = completed
     return result
+```
 ```
 
 #### 1. Chunked 解码 (`_unchunk`)
@@ -172,16 +176,23 @@ elif len(payload) > 2:
 通过分析包含 Function Call 的响应，发现参数使用递归嵌套数组表示：
 
 ```python
+```python
 def _parse_tool_args(self, args):
+    extractors = {
+        1: lambda v: None,
+        2: lambda v: v[1],
+        3: lambda v: v[2],
+        4: lambda v: v[3] == 1,
+        5: lambda v: self._parse_tool_args(v[4]),
+    }
+    
     for param in params:
-        name = param[0]
-        value = param[1]
-        
-        if len(value) == 1: result[name] = None
-        elif len(value) == 2: result[name] = value[1]
-        elif len(value) == 3: result[name] = value[2]
-        elif len(value) == 4: result[name] = value[3] == 1
-        elif len(value) == 5: result[name] = self._parse_tool_args(value[4])
+        name, value = param[0], param[1]
+        if isinstance(value, list):
+            extractor = extractors.get(len(value))
+            if extractor:
+                result[name] = extractor(value)
+```
 ```
 
 value 数组长度与数据类型的映射关系：

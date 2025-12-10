@@ -1,6 +1,7 @@
 import datetime
 import os
 import ssl
+import random
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
@@ -16,6 +17,15 @@ from python_socks.async_.asyncio import Proxy
 import ssl as ssl_module
 
 
+CERT_PROFILES = [
+    {'country': 'JP', 'state': 'Tokyo', 'city': 'Shibuya', 'org': 'Interceptor Ltd', 'cn': 'Local Proxy Root'},
+    {'country': 'TW', 'state': 'Taiwan', 'city': 'Taipei', 'org': 'Secure Gateway', 'cn': 'Gateway CA'},
+    {'country': 'DE', 'state': 'Hessen', 'city': 'Frankfurt', 'org': 'Network Services', 'cn': 'Network CA'},
+    {'country': 'NL', 'state': 'Noord-Holland', 'city': 'Amsterdam', 'org': 'Privacy Tools', 'cn': 'Privacy CA Root'},
+    {'country': 'SG', 'state': 'Singapore', 'city': 'Singapore', 'org': 'Cloud Proxy', 'cn': 'Cloud CA'},
+]
+
+
 class CertStore:
 
     def __init__(self, storage_path: str = 'certs'):
@@ -23,6 +33,7 @@ class CertStore:
         self.storage_dir.mkdir(exist_ok=True)
         self.authority_key_file = self.storage_dir / 'ca.key'
         self.authority_cert_file = self.storage_dir / 'ca.crt'
+        self._profile = random.choice(CERT_PROFILES)
         if not self.authority_cert_file.exists() or not self.authority_key_file.exists():
             self._create_authority()
         self._load_authority()
@@ -41,11 +52,11 @@ class CertStore:
             ))
         
         name = x509.Name([
-            x509.NameAttribute(NameOID.COUNTRY_NAME, 'US'),
-            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, 'California'),
-            x509.NameAttribute(NameOID.LOCALITY_NAME, 'San Francisco'),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'Proxy CA'),
-            x509.NameAttribute(NameOID.COMMON_NAME, 'Proxy CA Root')
+            x509.NameAttribute(NameOID.COUNTRY_NAME, self._profile['country']),
+            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, self._profile['state']),
+            x509.NameAttribute(NameOID.LOCALITY_NAME, self._profile['city']),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, self._profile['org']),
+            x509.NameAttribute(NameOID.COMMON_NAME, self._profile['cn'])
         ])
         
         cert = (

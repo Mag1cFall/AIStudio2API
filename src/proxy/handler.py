@@ -102,22 +102,20 @@ class ResponseHandler:
             params = args[0]
             result = {}
             
+            extractors = {
+                1: lambda v: None,
+                2: lambda v: v[1],
+                3: lambda v: v[2],
+                4: lambda v: v[3] == 1,
+                5: lambda v: self._parse_tool_args(v[4]),
+            }
+            
             for param in params:
-                name = param[0]
-                value = param[1]
-                
+                name, value = param[0], param[1]
                 if isinstance(value, list):
-                    length = len(value)
-                    if length == 1:
-                        result[name] = None
-                    elif length == 2:
-                        result[name] = value[1]
-                    elif length == 3:
-                        result[name] = value[2]
-                    elif length == 4:
-                        result[name] = value[3] == 1
-                    elif length == 5:
-                        result[name] = self._parse_tool_args(value[4])
+                    extractor = extractors.get(len(value))
+                    if extractor:
+                        result[name] = extractor(value)
             
             return result
         except Exception as e:
@@ -130,35 +128,32 @@ class ResponseHandler:
 
     @staticmethod
     def _unchunk(body: bytes) -> Tuple[bytes, bool]:
+        mv = memoryview(body)
         result = bytearray()
+        offset = 0
+        body_len = len(mv)
         
-        while True:
-            crlf_pos = body.find(b'\r\n')
+        while offset < body_len:
+            crlf_pos = body.find(b'\r\n', offset)
             if crlf_pos == -1:
                 break
             
-            hex_size = body[:crlf_pos]
             try:
-                chunk_size = int(hex_size, 16)
+                chunk_size = int(mv[offset:crlf_pos].tobytes(), 16)
             except ValueError as e:
                 logging.error(f'Chunk parse error: {e}')
                 break
             
             if chunk_size == 0:
-                end_marker = body.find(b'0\r\n\r\n')
-                if end_marker != -1:
-                    return bytes(result), True
+                return bytes(result), True
             
-            if chunk_size + 2 > len(body):
+            data_start = crlf_pos + 2
+            data_end = data_start + chunk_size
+            
+            if data_end > body_len:
                 break
             
-            start = crlf_pos + 2
-            end = start + chunk_size
-            result.extend(body[start:end])
-            
-            if end + 2 > len(body):
-                break
-            
-            body = body[end + 2:]
+            result.extend(mv[data_start:data_end])
+            offset = data_end + 2
         
         return bytes(result), False
