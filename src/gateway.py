@@ -134,7 +134,7 @@ async def chat_completions(request: Request):
                         data, _ = chunk
                         if data:
                             check_count += 1
-                            if check_count <= 5 and not rate_limited:
+                            if not rate_limited:
                                 if check_rate_limit_in_response(data):
                                     rate_limited = True
                             yield data

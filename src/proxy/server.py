@@ -45,6 +45,10 @@ class MitmProxy:
             certfile=self.cert_store.storage_dir / f'{domain}.crt',
             keyfile=self.cert_store.storage_dir / f'{domain}.key'
         )
+        try:
+            ctx.set_alpn_protocols(['http/1.1'])
+        except Exception:
+            pass
         
         if len(self._context_cache) > 50:
             self._context_cache.clear()
@@ -131,8 +135,13 @@ class MitmProxy:
             )
             
             try:
+                upstream_ctx = ssl.create_default_context()
+                try:
+                    upstream_ctx.set_alpn_protocols(['http/1.1'])
+                except Exception:
+                    pass
                 server_reader, server_writer = await self.connector.open_connection(
-                    host, port, ssl.create_default_context()
+                    host, port, upstream_ctx
                 )
                 await self._relay_with_inspection(
                     client_reader, client_writer,
@@ -219,7 +228,18 @@ class MitmProxy:
                             client_buf.clear()
                             continue
                         
-                        if 'GenerateContent' in path:
+                        if 'jserror' in path:
+                            inspect_response = False
+                            try:
+                                path_str = path
+                                if 'quota' in path_str or 'limit' in path_str or 'exceeded' in path_str:
+                                    self.log.info(f"Rate limit keyword found in jserror: {path_str}")
+                                    if self.message_queue is not None:
+                                        self.message_queue.put({'error': 'rate_limit', 'detail': 'Rate limit detected via jserror', 'source': 'jserror', 'path': path_str})
+                            except Exception as e:
+                                self.log.error(f"Error inspecting jserror: {e}")
+                            server_writer.write(client_buf)
+                        elif 'GenerateContent' in path:
                             inspect_response = True
                             processed = await self.response_handler.handle_request(
                                 body_bytes, host, path

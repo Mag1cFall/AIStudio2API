@@ -292,6 +292,15 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                                 continue
                         elif isinstance(raw_data, dict):
                             data = raw_data
+                            if data.get('error') == 'rate_limit':
+                                logger.warning(f"[{req_id}] 🚨 接收到来自代理的速率限制信号: {data}")
+                                try:
+                                    error_chunk = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': f"\n\n[System: Rate Limit Exceeded - {data.get('detail', 'Quota exceeded')}]"}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}]}
+                                    yield f"data: {json.dumps(error_chunk, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                                except: pass
+                                if not event_to_set.is_set():
+                                    event_to_set.set()
+                                break
                         else:
                             logger.warning(f'[{req_id}] 未知的流数据类型: {type(raw_data)}')
                             continue
@@ -339,6 +348,30 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                                 choice_item = {'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}
                             output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
                             yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                    
+                    # Late Rate Limit Check
+                    late_check_wait = 2.0 if len(full_body_content) < 50 else 0.2
+                    if late_check_wait > 0.5:
+                         logger.info(f"[{req_id}] 内容较短 ({len(full_body_content)}), 等待 {late_check_wait}s 检查延迟 Rate Limit")
+                    await asyncio.sleep(late_check_wait)
+                    try:
+                        from server import STREAM_QUEUE
+                        import queue
+                        if STREAM_QUEUE:
+                            while True:
+                                try:
+                                    msg = STREAM_QUEUE.get_nowait()
+                                    if isinstance(msg, dict) and msg.get('error') == 'rate_limit':
+                                        logger.warning(f"[{req_id}] 🚨 捕获到延迟的 Rate Limit 信号: {msg}")
+                                        try:
+                                            error_chunk = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': f"\n\n[System: Rate Limit Exceeded - {msg.get('detail', 'Quota exceeded')}]"}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}]}
+                                            yield f"data: {json.dumps(error_chunk, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                                        except: pass
+                                except queue.Empty:
+                                    break
+                    except Exception as e:
+                        logger.error(f"[{req_id}] Late check failed: {e}")
+                    
                 except ClientDisconnectedError as disconnect_err:
                     abort_handler = AbortSignalHandler()
                     disconnect_info = abort_handler.handle_error(disconnect_err, req_id)
@@ -427,6 +460,9 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                     continue
             elif isinstance(raw_data, dict):
                 data = raw_data
+                if data.get('error') == 'rate_limit':
+                    logger.warning(f"[{req_id}] 🚨 非流式请求中接收到速率限制: {data}")
+                    raise HTTPException(status_code=429, detail=f"Rate limit exceeded: {data.get('detail')}")
             else:
                 logger.warning(f'[{req_id}] 非流式未知数据类型: {type(raw_data)}')
                 continue
