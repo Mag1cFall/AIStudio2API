@@ -198,7 +198,7 @@
                 <button @click="currentTab = 'auth'"
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'auth' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
                     <span v-html="AppIcons.key"></span>
-                    Worker 管理
+                    {{ t('worker.title') }}
                 </button>
                 <button @click="currentTab = 'system'"
                     :class="['w-full text-left px-3 py-2 rounded-md transition flex items-center gap-2', currentTab === 'system' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-[#21262d]']">
@@ -255,10 +255,10 @@
                                 :class="['px-2 py-0.5 text-xs rounded transition', logFilter === 'ERROR' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-gray-200']">{{
                                 t('logs.error') }}</button>
                         </div>
-                        <span class="text-xs text-gray-400 ml-2">来源:</span>
+                        <span class="text-xs text-gray-400 ml-2">{{ t('logs.source') }}:</span>
                         <select v-model="workerFilter"
                             class="bg-[#0d1117] border border-[#30363d] rounded px-2 py-0.5 text-xs text-gray-300">
-                            <option value="ALL">全部</option>
+                            <option value="ALL">{{ t('logs.allSources') }}</option>
                             <option value="Main">Main</option>
                             <option value="Gateway">Gateway</option>
                             <option v-for="w in workers" :key="w.id" :value="'Worker-' + w.id">Worker-{{ w.id }}
@@ -399,6 +399,17 @@
                         </div>
                     </div>
 
+                    <div class="bg-[#161b22] p-4 rounded-lg border border-[#30363d]">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <label class="text-sm font-medium text-gray-300">{{ t('config.logEnabled') }}</label>
+                                <p class="text-xs text-gray-500 mt-1">{{ t('config.logEnabledDesc') }}</p>
+                            </div>
+                            <input v-model="config.log_enabled" type="checkbox"
+                                class="w-4 h-4 rounded bg-[#0d1117] border-gray-600 text-blue-600 focus:ring-blue-500">
+                        </div>
+                    </div>
+
                     <div class="flex justify-end pt-4">
                         <button @click="saveConfig"
                             class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition shadow-lg">{{
@@ -408,13 +419,14 @@
             </div>
 
             <div v-if="currentTab === 'auth'" class="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full">
-                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">Worker 管理</h2>
+                <h2 class="text-2xl font-bold mb-6 text-white border-b border-[#30363d] pb-2">{{ t('worker.title') }}
+                </h2>
 
                 <div class="mb-6 bg-[#161b22] border border-[#30363d] rounded-lg p-4">
                     <div class="flex items-center justify-between">
                         <div>
-                            <h3 class="text-white font-bold mb-1">Worker 模式</h3>
-                            <p class="text-gray-500 text-xs">启用后，点击左下角"启动服务"将启动所有已添加的Worker（多账号并发），日志显示在主页</p>
+                            <h3 class="text-white font-bold mb-1">{{ t('worker.mode') }}</h3>
+                            <p class="text-gray-500 text-xs">{{ t('worker.modeDesc') }}</p>
                         </div>
                         <label class="relative inline-flex items-center cursor-pointer">
                             <input type="checkbox" v-model="config.worker_mode_enabled" @change="saveConfig"
@@ -426,29 +438,30 @@
                     </div>
                     <div v-if="config.worker_mode_enabled"
                         class="mt-3 pt-3 border-t border-[#30363d] text-xs text-green-400">
-                        ✓ Worker模式已启用，共{{ workers.length }}个Worker。点击左下角"启动服务"开始。
+                        {{ t('worker.modeEnabled').replace('{count}', workers.length) }}
                     </div>
                 </div>
 
                 <div class="mb-8">
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-sm font-bold text-gray-400 uppercase tracking-wider">已配置的 Workers</h3>
+                        <h3 class="text-sm font-bold text-gray-400 uppercase tracking-wider">{{ t('worker.configured')
+                            }}</h3>
                         <div class="flex gap-2">
                             <button @click="saveWorkersConfig"
                                 class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition">
-                                💾 保存配置
+                                {{ t('worker.saveConfig') }}
                             </button>
                             <button @click="refreshWorkers"
                                 class="px-3 py-1.5 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded text-xs transition border border-[#30363d]">
-                                刷新
+                                {{ t('worker.refresh') }}
                             </button>
                         </div>
                     </div>
 
                     <div v-if="workers.length === 0"
                         class="text-center py-8 text-gray-500 bg-[#161b22] rounded border border-[#30363d]">
-                        <p class="mb-2">暂无Worker</p>
-                        <p class="text-xs">从下方认证文件列表添加Worker</p>
+                        <p class="mb-2">{{ t('worker.noWorkers') }}</p>
+                        <p class="text-xs">{{ t('worker.addFromAuthFiles') }}</p>
                     </div>
 
                     <div class="space-y-3">
@@ -462,8 +475,8 @@
                                     <span class="text-gray-400 text-sm">{{ worker.profile }}</span>
                                 </div>
                                 <div class="flex items-center gap-2 text-xs text-gray-500">
-                                    <span>端口: {{ worker.port }}</span>
-                                    <span>请求: {{ worker.request_count }}</span>
+                                    <span>{{ t('worker.port') }}: {{ worker.port }}</span>
+                                    <span>{{ t('worker.requests') }}: {{ worker.request_count }}</span>
                                 </div>
                             </div>
                             <div class="flex items-center justify-between">
@@ -474,25 +487,25 @@
                                 <div class="flex gap-2">
                                     <button v-if="worker.status !== 'running'" @click="startWorker(worker.id)"
                                         class="px-3 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs transition">
-                                        启动
+                                        {{ t('worker.start') }}
                                     </button>
                                     <button v-else @click="stopWorker(worker.id)"
                                         class="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs transition">
-                                        停止
+                                        {{ t('worker.stop') }}
                                     </button>
                                     <button @click="clearWorkerLimits(worker.id)"
                                         class="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded text-xs transition border border-[#30363d]">
-                                        清除限流
+                                        {{ t('worker.clearLimits') }}
                                     </button>
                                     <button @click="removeWorker(worker.id)"
                                         class="px-3 py-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs transition border border-red-900/50">
-                                        删除
+                                        {{ t('worker.delete') }}
                                     </button>
                                 </div>
                             </div>
                             <div v-if="Object.keys(worker.rate_limited_models || {}).length > 0"
                                 class="mt-3 pt-3 border-t border-[#30363d]">
-                                <div class="text-xs text-yellow-400 mb-2">⚠️ 限流模型:</div>
+                                <div class="text-xs text-yellow-400 mb-2">{{ t('worker.rateLimitedModels') }}:</div>
                                 <div class="flex flex-wrap gap-2">
                                     <span v-for="(recovery, model) in worker.rate_limited_models" :key="model"
                                         class="px-2 py-1 bg-yellow-900/30 text-yellow-400 rounded text-xs border border-yellow-900/50">
@@ -505,7 +518,8 @@
                 </div>
 
                 <div class="mb-6">
-                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">当前激活认证</h3>
+                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">{{ t('worker.activeAuth')
+                        }}</h3>
                     <div v-if="authData.active"
                         class="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3">
@@ -516,16 +530,17 @@
                         </div>
                         <button @click="deactivateAuth"
                             class="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs border border-red-900/50 transition">
-                            停用
+                            {{ t('worker.deactivate') }}
                         </button>
                     </div>
                     <div v-else class="text-gray-500 italic bg-[#161b22] p-4 rounded border border-[#30363d]">
-                        无激活认证（单Worker模式使用）
+                        {{ t('worker.noActiveAuth') }}
                     </div>
                 </div>
 
                 <div>
-                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">认证文件列表</h3>
+                    <h3 class="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">{{
+                        t('worker.authFileList') }}</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div v-for="file in authData.saved" :key="file"
                             class="bg-[#161b22] border border-[#30363d] hover:border-blue-500/50 rounded-lg p-4 transition">
@@ -533,42 +548,44 @@
                                 <div class="font-mono text-gray-200 truncate flex-1" :title="file">{{ file }}</div>
                                 <button @click="startRenameAuth(file)"
                                     class="text-gray-500 hover:text-blue-400 text-xs ml-2">
-                                    重命名
+                                    {{ t('worker.rename') }}
                                 </button>
                             </div>
                             <div class="flex gap-2">
                                 <button @click="activateAuth(file)"
                                     class="flex-1 py-1.5 text-xs bg-[#21262d] hover:bg-blue-600 hover:text-white text-gray-300 rounded border border-[#30363d] transition">
-                                    激活
+                                    {{ t('worker.activate') }}
                                 </button>
                                 <button @click="addWorkerFromProfile(file)" :disabled="isProfileInWorkers(file)"
                                     :class="['flex-1 py-1.5 text-xs rounded border transition', isProfileInWorkers(file) ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed' : 'bg-green-600/20 hover:bg-green-600 text-green-400 hover:text-white border-green-600/50']">
-                                    {{ isProfileInWorkers(file) ? '已添加' : '添加为Worker' }}
+                                    {{ isProfileInWorkers(file) ? t('worker.added') : t('worker.addAsWorker') }}
                                 </button>
                             </div>
                         </div>
                         <div v-if="authData.saved.length === 0" class="col-span-2 text-center py-8 text-gray-600">
-                            暂无已保存的认证文件
+                            {{ t('worker.noSavedAuthFiles') }}
                         </div>
                     </div>
                 </div>
 
                 <div v-if="renameModal.show" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                     <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6 w-96">
-                        <h3 class="text-lg font-bold text-white mb-4">重命名认证文件</h3>
+                        <h3 class="text-lg font-bold text-white mb-4">{{ t('modal.renameAuth') }}</h3>
                         <div class="mb-4">
-                            <div class="text-gray-400 text-sm mb-2">原文件名: {{ renameModal.oldName }}</div>
-                            <input v-model="renameModal.newName" type="text" placeholder="新文件名"
+                            <div class="text-gray-400 text-sm mb-2">{{ t('modal.oldName') }}: {{ renameModal.oldName }}
+                            </div>
+                            <input v-model="renameModal.newName" type="text"
+                                :placeholder="t('modal.newNamePlaceholder')"
                                 class="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-white focus:border-blue-500 focus:outline-none">
                         </div>
                         <div class="flex gap-2">
                             <button @click="renameModal.show = false"
                                 class="flex-1 py-2 bg-[#21262d] hover:bg-[#30363d] text-gray-300 rounded text-sm transition">
-                                取消
+                                {{ t('modal.cancel') }}
                             </button>
                             <button @click="confirmRenameAuth"
                                 class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm transition">
-                                确认
+                                {{ t('modal.confirm') }}
                             </button>
                         </div>
                     </div>
@@ -902,6 +919,9 @@
                     }
                 });
 
+                let wsReconnectAttempts = 0;
+                const maxReconnectDelay = 30000;
+
                 const connectWS = () => {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
@@ -962,8 +982,14 @@
                         }
                     };
 
+                    ws.onopen = () => {
+                        wsReconnectAttempts = 0;
+                    };
+
                     ws.onclose = () => {
-                        setTimeout(connectWS, 2000);
+                        wsReconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(1.5, wsReconnectAttempts), maxReconnectDelay);
+                        setTimeout(connectWS, delay);
                     };
                 };
 
@@ -995,17 +1021,17 @@
                 };
 
                 const deactivateAuth = async () => {
-                    if (!confirm('确定要取消激活当前认证文件吗？')) return;
+                    if (!confirm(t('confirm.deactivateAuth'))) return;
                     try {
                         const res = await fetch('/api/auth/deactivate', { method: 'POST' });
                         const data = await res.json();
                         if (!data.success) {
-                            alert('操作失败: ' + (data.detail || '未知错误'));
+                            alert(t('alert.operationFailed') + ': ' + (data.detail || 'Unknown error'));
                         } else {
                             await fetchAuthFiles();
                         }
                     } catch (e) {
-                        alert('请求发生错误: ' + e);
+                        alert(t('alert.requestError') + ': ' + e);
                     }
                 };
 
@@ -1042,8 +1068,16 @@
                     multiPortResults.value = await res.json();
                 };
 
+                const refreshWorkers = async () => {
+                    try {
+                        const res = await fetch('/api/workers');
+                        workers.value = await res.json();
+                    } catch (e) { console.error('Failed to refresh workers:', e); }
+                };
+
                 watch(currentTab, (val) => {
                     if (val === 'system') checkAllPorts();
+                    if (val === 'auth') refreshWorkers();
                 });
 
                 const fetchModels = async () => {
@@ -1053,7 +1087,7 @@
                         const hostname = window.location.hostname;
                         const modelsEndpoint = `${protocol}//${hostname}:${port}/v1/models`;
 
-                        availableModels.value = [{ id: '', display_name: '加载中...' }];
+                        availableModels.value = [{ id: '', display_name: t('status.loading') }];
 
                         const res = await fetch(modelsEndpoint);
 
@@ -1067,22 +1101,31 @@
                                     chatConfig.value.model = models[0].id;
                                 }
                             } else {
-                                availableModels.value = [{ id: '', display_name: '无可用模型' }];
+                                availableModels.value = [{ id: '', display_name: t('status.noModels') }];
                             }
                         } else {
-                            availableModels.value = [{ id: '', display_name: '加载失败' }];
+                            availableModels.value = [{ id: '', display_name: t('status.loadFailed') }];
                         }
                     } catch (e) {
                         console.error("Fetch models failed:", e);
-                        availableModels.value = [{ id: '', display_name: '加载失败' }];
+                        availableModels.value = [{ id: '', display_name: t('status.loadFailed') }];
                     }
                 };
 
-                onMounted(() => {
+                onMounted(async () => {
                     connectWS();
-                    fetchConfig();
-                    fetchAuthFiles();
-                    fetchModels();
+                    document.title = t('pageTitle');
+                    await Promise.all([
+                        fetchConfig(),
+                        fetchAuthFiles(),
+                        fetchModels(),
+                        refreshWorkers(),
+                        checkAllPorts()
+                    ]);
+                });
+
+                watch(lang, () => {
+                    document.title = t('pageTitle');
                 });
 
                 const sendInput = async (value) => {
@@ -1142,7 +1185,7 @@
                     customInput,
                     sendInput,
                     killProcess: async (pid) => {
-                        if (!confirm(`确定要强制终止进程 ${pid} 吗？`)) return;
+                        if (!confirm(t('confirm.killProcess').replace('{pid}', pid))) return;
                         const res = await fetch(`/api/system/kill/${pid}`, { method: 'POST' });
                         const data = await res.json();
                         if (data.success) {
@@ -1160,7 +1203,7 @@
                             isSending.value = false;
                             const lastMsg = chatMessages.value[chatMessages.value.length - 1];
                             if (lastMsg && lastMsg.role === 'assistant') {
-                                lastMsg.content += "\n\n[已停止生成]";
+                                lastMsg.content += "\n\n" + t('status.stopped');
                                 lastMsg.done = true;
                             }
                         }
@@ -1321,18 +1364,13 @@
                     currentPrompt,
                     sendPromptResponse,
                     workers,
-                    refreshWorkers: async () => {
-                        try {
-                            const res = await fetch('/api/workers');
-                            workers.value = await res.json();
-                        } catch (e) { console.error('Failed to refresh workers:', e); }
-                    },
+                    refreshWorkers,
                     saveWorkersConfig: async () => {
                         try {
                             const res = await fetch('/api/workers/save', { method: 'POST' });
                             const data = await res.json();
                             if (data.success) {
-                                alert('Worker配置已保存');
+                                alert(t('alert.workerConfigSaved'));
                             }
                         } catch (e) { console.error('Failed to save workers config:', e); }
                     },

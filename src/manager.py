@@ -41,6 +41,7 @@ class ServiceManager:
         self.worker_processes: List[subprocess.Popen] = []
         self.output_threads: List[threading.Thread] = []
         self.is_worker_mode = False
+        self._log_enabled = True
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE_PATH):
@@ -60,7 +61,8 @@ class ServiceManager:
             'helper_endpoint': '',
             'launch_mode': 'headless',
             'script_injection_enabled': False,
-            'worker_mode_enabled': False
+            'worker_mode_enabled': False,
+            'log_enabled': True
         }
 
     def save_config(self, config):
@@ -73,6 +75,8 @@ class ServiceManager:
             return False
 
     async def broadcast_log(self, message: str, level: str = "INFO"):
+        if not self.active_connections or not self._log_enabled:
+            return
         timestamp = time.strftime("%H:%M:%S")
         log_entry = json.dumps({
             "type": "log",
@@ -80,9 +84,6 @@ class ServiceManager:
             "level": level,
             "message": message
         })
-        
-        if not self.active_connections:
-            return
 
         to_remove = []
         
@@ -460,6 +461,8 @@ loop = None
 async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
+    config = manager.load_config()
+    manager._log_enabled = config.get('log_enabled', True)
     if WORKER_POOL_AVAILABLE:
         worker_pool.init_from_config()
     yield
@@ -490,6 +493,7 @@ async def get_config():
 
 @app.post("/api/config")
 async def save_config(config: Dict[str, Any] = Body(...)):
+    manager._log_enabled = config.get('log_enabled', True)
     if manager.save_config(config):
         return {"success": True}
     raise HTTPException(status_code=500, detail="保存失败")

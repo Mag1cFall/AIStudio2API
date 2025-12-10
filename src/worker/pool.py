@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import asyncio
 import logging
 import subprocess
@@ -62,7 +63,8 @@ class WorkerPool:
                     "id": w.id,
                     "profile": w.profile_name,
                     "port": w.port,
-                    "camoufox_port": w.camoufox_port
+                    "camoufox_port": w.camoufox_port,
+                    "rate_limited_models": w.rate_limited_models
                 }
                 for w in self.workers.values()
             ],
@@ -76,6 +78,7 @@ class WorkerPool:
         config = self.load_config()
         self.recovery_hours = config.get("settings", {}).get("recovery_hours", 6.0)
         valid_workers = []
+        current_time = time.time()
         for w_cfg in config.get("workers", []):
             profile_path = os.path.join(DATA_DIR, 'auth_profiles', 'saved', w_cfg['profile'])
             if not os.path.exists(profile_path):
@@ -90,6 +93,11 @@ class WorkerPool:
                 port=w_cfg['port'],
                 camoufox_port=w_cfg['camoufox_port']
             )
+            saved_limits = w_cfg.get('rate_limited_models', {})
+            for model_id, recovery_time in saved_limits.items():
+                if recovery_time > current_time:
+                    worker.rate_limited_models[model_id] = recovery_time
+                    logger.info(f"Worker {worker.id} 模型 {model_id} 限流恢复于 {recovery_time - current_time:.0f}s 后")
             self.workers[worker.id] = worker
             valid_workers.append(w_cfg)
         if len(valid_workers) != len(config.get("workers", [])):
@@ -171,10 +179,12 @@ class WorkerPool:
         if worker_id in self.workers:
             self.workers[worker_id].mark_model_limited(model_id, self.recovery_hours)
             logger.warning(f"Worker {worker_id} rate limited for model {model_id}")
+            self.save_config()
     
     def clear_rate_limits(self, worker_id: str) -> bool:
         if worker_id in self.workers:
             self.workers[worker_id].clear_rate_limits()
+            self.save_config()
             return True
         return False
     

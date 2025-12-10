@@ -1,6 +1,7 @@
 const locales = {
     'zh-CN': {
         label: '简体中文',
+        pageTitle: 'AI Studio 控制台',
         nav: {
             dashboard: '仪表盘',
             config: '配置',
@@ -11,7 +12,11 @@ const locales = {
         status: {
             title: '服务状态',
             start: '启动服务',
-            stop: '停止服务'
+            stop: '停止服务',
+            loading: '加载中...',
+            noModels: '无可用模型',
+            loadFailed: '加载失败',
+            stopped: '[已停止生成]'
         },
         logs: {
             level: '日志等级',
@@ -50,6 +55,8 @@ const locales = {
             proxyAddress: '代理地址',
             scriptInjection: '模型注入脚本',
             scriptInjectionDesc: '启用后可添加 AI Studio 未列出的模型（已被弃用）',
+            logEnabled: '启用日志',
+            logEnabledDesc: '禁用日志可提升性能（需重启服务生效）',
             save: '保存配置'
         },
         auth: {
@@ -87,10 +94,66 @@ const locales = {
             topP: '核采样 (Top P)',
             maxTokens: '最大输出 Tokens',
             googleSearch: '谷歌搜索'
+        },
+        worker: {
+            title: 'Worker 管理',
+            mode: 'Worker 模式',
+            modeDesc: '启用后，点击左下角"启动服务"将启动所有已添加的Worker（多账号并发），日志显示在主页',
+            modeEnabled: '✓ Worker模式已启用，共{count}个Worker。点击左下角"启动服务"开始。',
+            configured: '已配置的 Workers',
+            saveConfig: '💾 保存配置',
+            refresh: '刷新',
+            noWorkers: '暂无Worker',
+            addFromAuthFiles: '从下方认证文件列表添加Worker',
+            port: '端口',
+            requests: '请求',
+            start: '启动',
+            stop: '停止',
+            clearLimits: '清除限流',
+            delete: '删除',
+            rateLimitedModels: '⚠️ 限流模型',
+            activeAuth: '当前激活认证',
+            deactivate: '停用',
+            noActiveAuth: '无激活认证（单Worker模式使用）',
+            authFileList: '认证文件列表',
+            rename: '重命名',
+            activate: '激活',
+            added: '已添加',
+            addAsWorker: '添加为Worker',
+            noSavedAuthFiles: '暂无已保存的认证文件'
+        },
+        modal: {
+            renameAuth: '重命名认证文件',
+            oldName: '原文件名',
+            newNamePlaceholder: '新文件名',
+            cancel: '取消',
+            confirm: '确认'
+        },
+        logs: {
+            level: '日志等级',
+            clear: '清空日志',
+            autoScroll: '自动滚动',
+            waiting: '等待日志输出...',
+            all: '全部',
+            info: '信息',
+            warn: '警告',
+            error: '错误',
+            source: '来源',
+            allSources: '全部'
+        },
+        confirm: {
+            deactivateAuth: '确定要取消激活当前认证文件吗？',
+            killProcess: '确定要强制终止进程 {pid} 吗？'
+        },
+        alert: {
+            operationFailed: '操作失败',
+            requestError: '请求发生错误',
+            workerConfigSaved: 'Worker配置已保存'
         }
     },
     'zh-TW': {
         label: '繁體中文',
+        pageTitle: 'AI Studio 控制台',
         nav: {
             dashboard: '儀表板',
             config: '設定',
@@ -101,7 +164,11 @@ const locales = {
         status: {
             title: '服務狀態',
             start: '啟動服務',
-            stop: '停止服務'
+            stop: '停止服務',
+            loading: '載入中...',
+            noModels: '無可用模型',
+            loadFailed: '載入失敗',
+            stopped: '[已停止生成]'
         },
         logs: {
             level: '紀錄等級',
@@ -140,6 +207,8 @@ const locales = {
             proxyAddress: '代理位址',
             scriptInjection: '模型注入腳本',
             scriptInjectionDesc: '啟用後可添加 AI Studio 未列出的模型（已被棄用）',
+            logEnabled: '啟用日誌',
+            logEnabledDesc: '禁用日誌可提升性能（需重啟服務生效）',
             save: '儲存設定'
         },
         auth: {
@@ -177,10 +246,66 @@ const locales = {
             topP: '核取樣 (Top P)',
             maxTokens: '最大輸出 Tokens',
             googleSearch: 'Google 搜尋'
+        },
+        worker: {
+            title: 'Worker 管理',
+            mode: 'Worker 模式',
+            modeDesc: '啟用後，點擊左下角「啟動服務」將啟動所有已添加的Worker（多帳號並發），日誌顯示在主頁',
+            modeEnabled: '✓ Worker模式已啟用，共{count}個Worker。點擊左下角「啟動服務」開始。',
+            configured: '已配置的 Workers',
+            saveConfig: '💾 儲存配置',
+            refresh: '重新整理',
+            noWorkers: '暫無Worker',
+            addFromAuthFiles: '從下方認證檔案列表添加Worker',
+            port: '埠',
+            requests: '請求',
+            start: '啟動',
+            stop: '停止',
+            clearLimits: '清除限流',
+            delete: '刪除',
+            rateLimitedModels: '⚠️ 限流模型',
+            activeAuth: '當前啟用認證',
+            deactivate: '停用',
+            noActiveAuth: '無啟用認證（單Worker模式使用）',
+            authFileList: '認證檔案列表',
+            rename: '重新命名',
+            activate: '啟用',
+            added: '已添加',
+            addAsWorker: '添加為Worker',
+            noSavedAuthFiles: '暫無已儲存的認證檔案'
+        },
+        modal: {
+            renameAuth: '重新命名認證檔案',
+            oldName: '原檔案名',
+            newNamePlaceholder: '新檔案名',
+            cancel: '取消',
+            confirm: '確認'
+        },
+        logs: {
+            level: '紀錄等級',
+            clear: '清空紀錄',
+            autoScroll: '自動捲動',
+            waiting: '等待紀錄輸出...',
+            all: '全部',
+            info: '資訊',
+            warn: '警告',
+            error: '錯誤',
+            source: '來源',
+            allSources: '全部'
+        },
+        confirm: {
+            deactivateAuth: '確定要取消啟用當前認證檔案嗎？',
+            killProcess: '確定要強制終止進程 {pid} 嗎？'
+        },
+        alert: {
+            operationFailed: '操作失敗',
+            requestError: '請求發生錯誤',
+            workerConfigSaved: 'Worker配置已儲存'
         }
     },
     en: {
         label: 'English',
+        pageTitle: 'AI Studio Console',
         nav: {
             dashboard: 'Dashboard',
             config: 'Config',
@@ -191,7 +316,11 @@ const locales = {
         status: {
             title: 'Service Status',
             start: 'Start Service',
-            stop: 'Stop Service'
+            stop: 'Stop Service',
+            loading: 'Loading...',
+            noModels: 'No models available',
+            loadFailed: 'Load failed',
+            stopped: '[Generation stopped]'
         },
         logs: {
             level: 'Log Level',
@@ -230,6 +359,8 @@ const locales = {
             proxyAddress: 'Proxy Address',
             scriptInjection: 'Model Injection Script',
             scriptInjectionDesc: 'Enable to add unlisted models in AI Studio (Deprecated)',
+            logEnabled: 'Enable Logging',
+            logEnabledDesc: 'Disabling logs improves performance (requires service restart)',
             save: 'Save Config'
         },
         auth: {
@@ -267,10 +398,66 @@ const locales = {
             topP: 'Top P',
             maxTokens: 'Max Tokens',
             googleSearch: 'Google Search'
+        },
+        worker: {
+            title: 'Worker Management',
+            mode: 'Worker Mode',
+            modeDesc: 'When enabled, clicking "Start Service" will launch all added Workers (multi-account concurrent), logs shown on dashboard',
+            modeEnabled: '✓ Worker mode enabled, {count} Workers total. Click "Start Service" to begin.',
+            configured: 'Configured Workers',
+            saveConfig: '💾 Save Config',
+            refresh: 'Refresh',
+            noWorkers: 'No Workers',
+            addFromAuthFiles: 'Add Workers from auth file list below',
+            port: 'Port',
+            requests: 'Requests',
+            start: 'Start',
+            stop: 'Stop',
+            clearLimits: 'Clear Limits',
+            delete: 'Delete',
+            rateLimitedModels: '⚠️ Rate Limited Models',
+            activeAuth: 'Active Authentication',
+            deactivate: 'Deactivate',
+            noActiveAuth: 'No active auth (single Worker mode)',
+            authFileList: 'Auth File List',
+            rename: 'Rename',
+            activate: 'Activate',
+            added: 'Added',
+            addAsWorker: 'Add as Worker',
+            noSavedAuthFiles: 'No saved auth files'
+        },
+        modal: {
+            renameAuth: 'Rename Auth File',
+            oldName: 'Original Name',
+            newNamePlaceholder: 'New file name',
+            cancel: 'Cancel',
+            confirm: 'Confirm'
+        },
+        logs: {
+            level: 'Log Level',
+            clear: 'Clear Logs',
+            autoScroll: 'Auto Scroll',
+            waiting: 'Waiting for logs...',
+            all: 'ALL',
+            info: 'INFO',
+            warn: 'WARN',
+            error: 'ERROR',
+            source: 'Source',
+            allSources: 'All'
+        },
+        confirm: {
+            deactivateAuth: 'Are you sure you want to deactivate the current auth file?',
+            killProcess: 'Are you sure you want to force kill process {pid}?'
+        },
+        alert: {
+            operationFailed: 'Operation Failed',
+            requestError: 'Request Error',
+            workerConfigSaved: 'Worker config saved'
         }
     },
     ja: {
         label: '日本語',
+        pageTitle: 'AI Studio コンソール',
         nav: {
             dashboard: 'ダッシュボード',
             config: '設定',
@@ -281,7 +468,11 @@ const locales = {
         status: {
             title: 'サービスステータス',
             start: 'サービス開始',
-            stop: 'サービス停止'
+            stop: 'サービス停止',
+            loading: '読み込み中...',
+            noModels: '利用可能なモデルなし',
+            loadFailed: '読み込み失敗',
+            stopped: '[生成停止]'
         },
         logs: {
             level: 'ログレベル',
@@ -320,6 +511,8 @@ const locales = {
             proxyAddress: 'プロキシアドレス',
             scriptInjection: 'モデル注入スクリプト',
             scriptInjectionDesc: '有効にするとAI Studioに未掲載のモデルを追加できます（非推奨）',
+            logEnabled: 'ログを有効にする',
+            logEnabledDesc: 'ログを無効にするとパフォーマンスが向上します（サービス再起動が必要）',
             save: '設定を保存'
         },
         auth: {
@@ -357,10 +550,66 @@ const locales = {
             topP: 'トップP (Top P)',
             maxTokens: '最大トークン数',
             googleSearch: 'Google検索'
+        },
+        worker: {
+            title: 'Worker管理',
+            mode: 'Workerモード',
+            modeDesc: '有効にすると、「サービス開始」をクリックして追加されたすべてのWorkerを起動します（マルチアカウント並行）',
+            modeEnabled: '✓ Workerモードが有効、{count}個のWorker。「サービス開始」をクリックして開始。',
+            configured: '設定済みWorkers',
+            saveConfig: '💾 設定を保存',
+            refresh: '更新',
+            noWorkers: 'Workerなし',
+            addFromAuthFiles: '下の認証ファイルリストからWorkerを追加',
+            port: 'ポート',
+            requests: 'リクエスト',
+            start: '開始',
+            stop: '停止',
+            clearLimits: '制限をクリア',
+            delete: '削除',
+            rateLimitedModels: '⚠️ レート制限モデル',
+            activeAuth: 'アクティブな認証',
+            deactivate: '無効化',
+            noActiveAuth: 'アクティブな認証なし（単一Workerモード）',
+            authFileList: '認証ファイルリスト',
+            rename: '名前変更',
+            activate: '有効化',
+            added: '追加済み',
+            addAsWorker: 'Workerとして追加',
+            noSavedAuthFiles: '保存された認証ファイルなし'
+        },
+        modal: {
+            renameAuth: '認証ファイル名変更',
+            oldName: '元のファイル名',
+            newNamePlaceholder: '新しいファイル名',
+            cancel: 'キャンセル',
+            confirm: '確認'
+        },
+        logs: {
+            level: 'ログレベル',
+            clear: 'ログを消去',
+            autoScroll: '自動スクロール',
+            waiting: 'ログ出力を待機中...',
+            all: 'すべて',
+            info: '情報',
+            warn: '警告',
+            error: 'エラー',
+            source: 'ソース',
+            allSources: 'すべて'
+        },
+        confirm: {
+            deactivateAuth: '現在の認証ファイルを無効にしてもよろしいですか？',
+            killProcess: 'プロセス {pid} を強制終了してもよろしいですか？'
+        },
+        alert: {
+            operationFailed: '操作失敗',
+            requestError: 'リクエストエラー',
+            workerConfigSaved: 'Worker設定が保存されました'
         }
     },
     ko: {
         label: '한국어',
+        pageTitle: 'AI Studio 콘솔',
         nav: {
             dashboard: '대시보드',
             config: '설정',
@@ -371,7 +620,11 @@ const locales = {
         status: {
             title: '서비스 상태',
             start: '서비스 시작',
-            stop: '서비스 중지'
+            stop: '서비스 중지',
+            loading: '로딩 중...',
+            noModels: '사용 가능한 모델 없음',
+            loadFailed: '로드 실패',
+            stopped: '[생성 중지됨]'
         },
         logs: {
             level: '로그 레벨',
@@ -410,6 +663,8 @@ const locales = {
             proxyAddress: '프록시 주소',
             scriptInjection: '모델 주입 스크립트',
             scriptInjectionDesc: '활성화하면 AI Studio에 나열되지 않은 모델 추가 가능 (더 이상 사용되지 않음)',
+            logEnabled: '로깅 활성화',
+            logEnabledDesc: '로그 비활성화 시 성능 향상 (서비스 재시작 필요)',
             save: '설정 저장'
         },
         auth: {
@@ -447,10 +702,66 @@ const locales = {
             topP: 'Top P',
             maxTokens: '최대 토큰',
             googleSearch: 'Google 검색'
+        },
+        worker: {
+            title: 'Worker 관리',
+            mode: 'Worker 모드',
+            modeDesc: '활성화하면 "서비스 시작"을 클릭하여 추가된 모든 Worker를 시작합니다 (다중 계정 동시 실행)',
+            modeEnabled: '✓ Worker 모드 활성화됨, 총 {count}개 Worker. "서비스 시작"을 클릭하여 시작.',
+            configured: '구성된 Workers',
+            saveConfig: '💾 설정 저장',
+            refresh: '새로 고침',
+            noWorkers: 'Worker 없음',
+            addFromAuthFiles: '아래 인증 파일 목록에서 Worker 추가',
+            port: '포트',
+            requests: '요청',
+            start: '시작',
+            stop: '중지',
+            clearLimits: '제한 해제',
+            delete: '삭제',
+            rateLimitedModels: '⚠️ 속도 제한 모델',
+            activeAuth: '활성 인증',
+            deactivate: '비활성화',
+            noActiveAuth: '활성 인증 없음 (단일 Worker 모드)',
+            authFileList: '인증 파일 목록',
+            rename: '이름 변경',
+            activate: '활성화',
+            added: '추가됨',
+            addAsWorker: 'Worker로 추가',
+            noSavedAuthFiles: '저장된 인증 파일 없음'
+        },
+        modal: {
+            renameAuth: '인증 파일 이름 변경',
+            oldName: '원래 이름',
+            newNamePlaceholder: '새 파일 이름',
+            cancel: '취소',
+            confirm: '확인'
+        },
+        logs: {
+            level: '로그 레벨',
+            clear: '로그 지우기',
+            autoScroll: '자동 스크롤',
+            waiting: '로그 출력 대기 중...',
+            all: '전체',
+            info: '정보',
+            warn: '경고',
+            error: '오류',
+            source: '소스',
+            allSources: '전체'
+        },
+        confirm: {
+            deactivateAuth: '현재 인증 파일을 비활성화하시겠습니까?',
+            killProcess: '프로세스 {pid}를 강제 종료하시겠습니까?'
+        },
+        alert: {
+            operationFailed: '작업 실패',
+            requestError: '요청 오류',
+            workerConfigSaved: 'Worker 설정 저장됨'
         }
     },
     fr: {
         label: 'Français',
+        pageTitle: 'Console AI Studio',
         nav: {
             dashboard: 'Tableau de bord',
             config: 'Configuration',
@@ -461,7 +772,11 @@ const locales = {
         status: {
             title: 'État du service',
             start: 'Démarrer le service',
-            stop: 'Arrêter le service'
+            stop: 'Arrêter le service',
+            loading: 'Chargement...',
+            noModels: 'Aucun modèle disponible',
+            loadFailed: 'Échec du chargement',
+            stopped: '[Génération arrêtée]'
         },
         logs: {
             level: 'Niveau de log',
@@ -500,6 +815,8 @@ const locales = {
             proxyAddress: 'Adresse Proxy',
             scriptInjection: 'Script d\'injection de modèle',
             scriptInjectionDesc: 'Activer pour ajouter des modèles non listés dans AI Studio (Obsolète)',
+            logEnabled: 'Activer les journaux',
+            logEnabledDesc: 'Désactiver améliore les performances (redémarrage requis)',
             save: 'Enregistrer'
         },
         auth: {
@@ -537,10 +854,66 @@ const locales = {
             topP: 'Top P',
             maxTokens: 'Tokens Max',
             googleSearch: 'Recherche Google'
+        },
+        worker: {
+            title: 'Gestion Workers',
+            mode: 'Mode Worker',
+            modeDesc: 'Une fois activé, cliquez sur "Démarrer" pour lancer tous les Workers ajoutés (multi-compte simultané)',
+            modeEnabled: '✓ Mode Worker activé, {count} Workers au total. Cliquez sur "Démarrer" pour commencer.',
+            configured: 'Workers configurés',
+            saveConfig: '💾 Enregistrer',
+            refresh: 'Actualiser',
+            noWorkers: 'Aucun Worker',
+            addFromAuthFiles: 'Ajouter depuis la liste des fichiers auth',
+            port: 'Port',
+            requests: 'Requêtes',
+            start: 'Démarrer',
+            stop: 'Arrêter',
+            clearLimits: 'Suppr. limites',
+            delete: 'Supprimer',
+            rateLimitedModels: '⚠️ Modèles limités',
+            activeAuth: 'Auth active',
+            deactivate: 'Désactiver',
+            noActiveAuth: 'Pas d\'auth active (mode Worker unique)',
+            authFileList: 'Liste fichiers auth',
+            rename: 'Renommer',
+            activate: 'Activer',
+            added: 'Ajouté',
+            addAsWorker: 'Ajouter comme Worker',
+            noSavedAuthFiles: 'Aucun fichier auth sauvegardé'
+        },
+        modal: {
+            renameAuth: 'Renommer fichier auth',
+            oldName: 'Nom original',
+            newNamePlaceholder: 'Nouveau nom',
+            cancel: 'Annuler',
+            confirm: 'Confirmer'
+        },
+        logs: {
+            level: 'Niveau de log',
+            clear: 'Effacer les logs',
+            autoScroll: 'Défilement auto',
+            waiting: 'En attente de logs...',
+            all: 'TOUT',
+            info: 'INFO',
+            warn: 'AVERT',
+            error: 'ERREUR',
+            source: 'Source',
+            allSources: 'Tout'
+        },
+        confirm: {
+            deactivateAuth: 'Êtes-vous sûr de vouloir désactiver le fichier auth actuel ?',
+            killProcess: 'Êtes-vous sûr de vouloir forcer l\'arrêt du processus {pid} ?'
+        },
+        alert: {
+            operationFailed: 'Opération échouée',
+            requestError: 'Erreur de requête',
+            workerConfigSaved: 'Config Worker sauvegardée'
         }
     },
     de: {
         label: 'Deutsch',
+        pageTitle: 'AI Studio Konsole',
         nav: {
             dashboard: 'Dashboard',
             config: 'Konfiguration',
@@ -551,7 +924,11 @@ const locales = {
         status: {
             title: 'Service-Status',
             start: 'Dienst starten',
-            stop: 'Dienst stoppen'
+            stop: 'Dienst stoppen',
+            loading: 'Wird geladen...',
+            noModels: 'Keine Modelle verfügbar',
+            loadFailed: 'Laden fehlgeschlagen',
+            stopped: '[Generierung gestoppt]'
         },
         logs: {
             level: 'Log-Level',
@@ -590,6 +967,8 @@ const locales = {
             proxyAddress: 'Proxy Adresse',
             scriptInjection: 'Modell-Injektionsskript',
             scriptInjectionDesc: 'Aktivieren, um nicht aufgelistete Modelle in AI Studio hinzuzufügen (Veraltet)',
+            logEnabled: 'Protokollierung aktivieren',
+            logEnabledDesc: 'Deaktivieren verbessert die Leistung (Neustart erforderlich)',
             save: 'Speichern'
         },
         auth: {
@@ -627,6 +1006,61 @@ const locales = {
             topP: 'Top P',
             maxTokens: 'Max Tokens',
             googleSearch: 'Google Suche'
+        },
+        worker: {
+            title: 'Worker-Verwaltung',
+            mode: 'Worker-Modus',
+            modeDesc: 'Wenn aktiviert, klicken Sie auf "Dienst starten" um alle hinzugefügten Worker zu starten (Multi-Account parallel)',
+            modeEnabled: '✓ Worker-Modus aktiviert, {count} Worker insgesamt. Klicken Sie auf "Dienst starten" zum Beginnen.',
+            configured: 'Konfigurierte Workers',
+            saveConfig: '💾 Speichern',
+            refresh: 'Aktualisieren',
+            noWorkers: 'Keine Worker',
+            addFromAuthFiles: 'Worker aus Auth-Dateiliste hinzufügen',
+            port: 'Port',
+            requests: 'Anfragen',
+            start: 'Starten',
+            stop: 'Stoppen',
+            clearLimits: 'Limits löschen',
+            delete: 'Löschen',
+            rateLimitedModels: '⚠️ Rate-limitierte Modelle',
+            activeAuth: 'Aktive Authentifizierung',
+            deactivate: 'Deaktivieren',
+            noActiveAuth: 'Keine aktive Auth (Einzel-Worker-Modus)',
+            authFileList: 'Auth-Dateiliste',
+            rename: 'Umbenennen',
+            activate: 'Aktivieren',
+            added: 'Hinzugefügt',
+            addAsWorker: 'Als Worker hinzufügen',
+            noSavedAuthFiles: 'Keine gespeicherten Auth-Dateien'
+        },
+        modal: {
+            renameAuth: 'Auth-Datei umbenennen',
+            oldName: 'Ursprünglicher Name',
+            newNamePlaceholder: 'Neuer Dateiname',
+            cancel: 'Abbrechen',
+            confirm: 'Bestätigen'
+        },
+        logs: {
+            level: 'Log-Level',
+            clear: 'Logs löschen',
+            autoScroll: 'Auto-Scroll',
+            waiting: 'Warte auf Logs...',
+            all: 'ALLE',
+            info: 'INFO',
+            warn: 'WARN',
+            error: 'FEHLER',
+            source: 'Quelle',
+            allSources: 'Alle'
+        },
+        confirm: {
+            deactivateAuth: 'Sind Sie sicher, dass Sie die aktuelle Auth-Datei deaktivieren möchten?',
+            killProcess: 'Sind Sie sicher, dass Sie Prozess {pid} zwangsbeenden möchten?'
+        },
+        alert: {
+            operationFailed: 'Operation fehlgeschlagen',
+            requestError: 'Anfragefehler',
+            workerConfigSaved: 'Worker-Konfiguration gespeichert'
         }
     }
 };
