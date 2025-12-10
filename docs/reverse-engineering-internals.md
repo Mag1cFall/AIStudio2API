@@ -28,13 +28,12 @@
 
 ```python
 name = x509.Name([
-    x509.NameAttribute(NameOID.COUNTRY_NAME, self._profile['country']), # 随机国家 (JP/TW/DE/NL/SG)
+    x509.NameAttribute(NameOID.COUNTRY_NAME, self._profile['country']),
     x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, self._profile['state']),
     x509.NameAttribute(NameOID.LOCALITY_NAME, self._profile['city']),
     x509.NameAttribute(NameOID.ORGANIZATION_NAME, self._profile['org']),
     x509.NameAttribute(NameOID.COMMON_NAME, self._profile['cn'])
 ])
-# ... 证书签发逻辑 ...
 ```
 
 生成的 `ca.crt` 需要被系统/浏览器信任，才能使后续的域名证书被接受。
@@ -107,15 +106,12 @@ elif 'GenerateContent' in path:
 ### 响应解码流程 (`ResponseHandler.handle_response`)
 
 ```python
-```python
 async def handle_response(self, data, host, path, headers):
-    # 使用 memoryview 优化内存复制
     decoded, completed = self._unchunk(bytes(data))
     decoded = self._inflate(decoded)
     result = self._extract_content(decoded)
     result['done'] = completed
     return result
-```
 ```
 
 #### 1. Chunked 解码 (`_unchunk`)
@@ -176,7 +172,6 @@ elif len(payload) > 2:
 通过分析包含 Function Call 的响应，发现参数使用递归嵌套数组表示：
 
 ```python
-```python
 def _parse_tool_args(self, args):
     extractors = {
         1: lambda v: None,
@@ -192,7 +187,6 @@ def _parse_tool_args(self, args):
             extractor = extractors.get(len(value))
             if extractor:
                 result[name] = extractor(value)
-```
 ```
 
 value 数组长度与数据类型的映射关系：
