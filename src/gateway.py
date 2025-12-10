@@ -47,10 +47,25 @@ async def refresh_workers():
 
 def get_next_worker(model: str = "") -> Optional[dict]:
     cache = _worker_cache
-    available = cache["workers"]
-    if not available:
+    workers = cache["workers"]
+    if not workers:
         return None
-    worker = available[cache["index"] % len(available)]
+    
+    candidates = workers
+    if model:
+        current_time = time.time()
+        candidates = []
+        for w in workers:
+            limits = w.get("rate_limited_models", {})
+            if model in limits:
+                if limits[model] > current_time:
+                    continue
+            candidates.append(w)
+            
+    if not candidates:
+        return None
+        
+    worker = candidates[cache["index"] % len(candidates)]
     cache["index"] += 1
     return worker
 
