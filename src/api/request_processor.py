@@ -632,10 +632,8 @@ async def _process_request_refactored(req_id: str, request: ChatCompletionReques
         system_prompt, prepared_prompt, image_list = await prep_task
 
         await _handle_parameter_cache(req_id, context)
-        await asyncio.gather(
-            page_controller.adjust_parameters(request.model_dump(exclude_none=True), context['page_params_cache'], context['params_cache_lock'], context['model_id_to_use'], context['parsed_model_list'], check_client_disconnected),
-            page_controller.set_system_instructions(system_prompt, check_client_disconnected)
-        )
+        await page_controller.adjust_parameters(request.model_dump(exclude_none=True), context['page_params_cache'], context['params_cache_lock'], context['model_id_to_use'], context['parsed_model_list'], check_client_disconnected)
+        await page_controller.set_system_instructions(system_prompt, check_client_disconnected)
         check_client_disconnected('提交提示前最终检查')
         await page_controller.submit_prompt(prepared_prompt, image_list, check_client_disconnected)
         response_result = await _handle_response_processing(req_id, request, page, context, result_future, submit_button_locator, check_client_disconnected, disconnect_check_task)
