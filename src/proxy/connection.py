@@ -18,11 +18,67 @@ import ssl as ssl_module
 
 
 CERT_PROFILES = [
-    {'country': 'JP', 'state': 'Tokyo', 'city': 'Shibuya', 'org': 'Interceptor Ltd', 'cn': 'Local Proxy Root'},
-    {'country': 'TW', 'state': 'Taiwan', 'city': 'Taipei', 'org': 'Secure Gateway', 'cn': 'Gateway CA'},
-    {'country': 'DE', 'state': 'Hessen', 'city': 'Frankfurt', 'org': 'Network Services', 'cn': 'Network CA'},
-    {'country': 'NL', 'state': 'Noord-Holland', 'city': 'Amsterdam', 'org': 'Privacy Tools', 'cn': 'Privacy CA Root'},
-    {'country': 'SG', 'state': 'Singapore', 'city': 'Singapore', 'org': 'Cloud Proxy', 'cn': 'Cloud CA'},
+    # --- Taiwan (15 entries) ---
+    {'country': 'TW', 'state': 'Taipei', 'city': 'Xinyi District', 'org': 'Chunghwa Telecom', 'cn': 'HiNet CA'},
+    {'country': 'TW', 'state': 'Taipei', 'city': 'Da-an District', 'org': 'National Taiwan University', 'cn': 'NTU Root CA'},
+    {'country': 'TW', 'state': 'New Taipei', 'city': 'Banqiao', 'org': 'Far EasTone', 'cn': 'FET Network CA'},
+    {'country': 'TW', 'state': 'Hsinchu', 'city': 'Hsinchu Science Park', 'org': 'TSMC IT Services', 'cn': 'Fab Network Root'},
+    {'country': 'TW', 'state': 'Hsinchu', 'city': 'Zhubei', 'org': 'MediaTek Internal', 'cn': 'MTK Secure CA'},
+    {'country': 'TW', 'state': 'Taichung', 'city': 'Xitun', 'org': 'Taichung City Gov', 'cn': 'Taichung Smart City CA'},
+    {'country': 'TW', 'state': 'Tainan', 'city': 'East District', 'org': 'NCKU Network', 'cn': 'NCKU Academic CA'},
+    {'country': 'TW', 'state': 'Kaohsiung', 'city': 'Zuoying', 'org': 'Kaohsiung Rapid Transit', 'cn': 'KRT Secure Net'},
+    {'country': 'TW', 'state': 'Kaohsiung', 'city': 'Qianzhen', 'org': 'China Steel Corp', 'cn': 'CSC Enterprise CA'},
+    {'country': 'TW', 'state': 'Taoyuan', 'city': 'Dayuan', 'org': 'Taoyuan Airport', 'cn': 'TPE Airport Free WiFi'},
+    {'country': 'TW', 'state': 'Keelung', 'city': 'Ren-ai', 'org': 'Keelung Harbor', 'cn': 'Port Authority CA'},
+    {'country': 'TW', 'state': 'Yilan', 'city': 'Yilan City', 'org': 'Lanyang Network', 'cn': 'Yilan County CA'},
+    {'country': 'TW', 'state': 'Hualien', 'city': 'Hualien City', 'org': 'Tzu Chi Foundation', 'cn': 'TC Foundation Root'},
+    {'country': 'TW', 'state': 'Taitung', 'city': 'Taitung City', 'org': 'Taitung Univ', 'cn': 'NTTU Campus CA'},
+    {'country': 'TW', 'state': 'Penghu', 'city': 'Magong', 'org': 'Penghu Telecom', 'cn': 'Islands Connect CA'},
+
+    # --- USA (10 entries) ---
+    {'country': 'US', 'state': 'California', 'city': 'Mountain View', 'org': 'Alphabet Inc', 'cn': 'Google Internal CA'},
+    {'country': 'US', 'state': 'California', 'city': 'Cupertino', 'org': 'Apple Inc', 'cn': 'Apple Engineering CA'},
+    {'country': 'US', 'state': 'Washington', 'city': 'Redmond', 'org': 'Microsoft Corp', 'cn': 'MSFT Corporate Root'},
+    {'country': 'US', 'state': 'Washington', 'city': 'Seattle', 'org': 'Amazon Web Services', 'cn': 'AWS Internal Root'},
+    {'country': 'US', 'state': 'New York', 'city': 'New York', 'org': 'JPMorgan Chase', 'cn': 'JPMC Secure Net'},
+    {'country': 'US', 'state': 'Massachusetts', 'city': 'Cambridge', 'org': 'MIT CSAIL', 'cn': 'MIT Research CA'},
+    {'country': 'US', 'state': 'Texas', 'city': 'Austin', 'org': 'Tesla Motors', 'cn': 'Tesla Factory Net'},
+    {'country': 'US', 'state': 'Illinois', 'city': 'Chicago', 'org': 'Boeing', 'cn': 'Boeing Enterprise CA'},
+    {'country': 'US', 'state': 'California', 'city': 'San Francisco', 'org': 'OpenAI', 'cn': 'OAI Research Root'},
+    {'country': 'US', 'state': 'California', 'city': 'Menlo Park', 'org': 'Meta Platforms', 'cn': 'Meta Corporate CA'},
+
+    # --- Japan (8 entries) ---
+    {'country': 'JP', 'state': 'Tokyo', 'city': 'Chiyoda', 'org': 'Hitachi Ltd', 'cn': 'Hitachi Group CA'},
+    {'country': 'JP', 'state': 'Tokyo', 'city': 'Minato', 'org': 'Sony Corporation', 'cn': 'Sony Global Root'},
+    {'country': 'JP', 'state': 'Tokyo', 'city': 'Shibuya', 'org': 'LINE Corp', 'cn': 'LINE Internal CA'},
+    {'country': 'JP', 'state': 'Osaka', 'city': 'Kadoma', 'org': 'Panasonic', 'cn': 'Panasonic Net'},
+    {'country': 'JP', 'state': 'Aichi', 'city': 'Toyota', 'org': 'Toyota Motor', 'cn': 'Toyota Global CA'},
+    {'country': 'JP', 'state': 'Kyoto', 'city': 'Kyoto', 'org': 'Nintendo Co Ltd', 'cn': 'Nintendo Dev Net'},
+    {'country': 'JP', 'state': 'Tokyo', 'city': 'Ota', 'org': 'Canon Inc', 'cn': 'Canon Enterprise CA'},
+    {'country': 'JP', 'state': 'Fukuoka', 'city': 'Fukuoka', 'org': 'SoftBank Corp', 'cn': 'SoftBank Internal'},
+
+    # --- Europe (10 entries) ---
+    {'country': 'GB', 'state': 'London', 'city': 'London', 'org': 'DeepMind Technologies', 'cn': 'DeepMind Research CA'},
+    {'country': 'GB', 'state': 'London', 'city': 'Westminster', 'org': 'BBC', 'cn': 'BBC Internal Root'},
+    {'country': 'DE', 'state': 'Bavaria', 'city': 'Munich', 'org': 'Siemens AG', 'cn': 'Siemens Corporate CA'},
+    {'country': 'DE', 'state': 'Hessen', 'city': 'Frankfurt', 'org': 'Deutsche Bank', 'cn': 'DB Secure Net'},
+    {'country': 'DE', 'state': 'Berlin', 'city': 'Berlin', 'org': 'SAP SE', 'cn': 'SAP Global Root'},
+    {'country': 'FR', 'state': 'Ile-de-France', 'city': 'Paris', 'org': 'Dassault Systemes', 'cn': 'Dassault Internal'},
+    {'country': 'FR', 'state': 'Ile-de-France', 'city': 'Issy-les-Moulineaux', 'org': 'Orange SA', 'cn': 'Orange Network CA'},
+    {'country': 'NL', 'state': 'North Holland', 'city': 'Amsterdam', 'org': 'Booking.com', 'cn': 'Booking Corporate CA'},
+    {'country': 'NL', 'state': 'Eindhoven', 'city': 'Eindhoven', 'org': 'ASML', 'cn': 'ASML Engineering CA'},
+    {'country': 'SE', 'state': 'Stockholm', 'city': 'Stockholm', 'org': 'Spotify AB', 'cn': 'Spotify Internal'},
+
+    # --- Other Asia/Pacific (9 entries) ---
+    {'country': 'SG', 'state': 'Singapore', 'city': 'Singapore', 'org': 'Singtel', 'cn': 'Singtel OnePass'},
+    {'country': 'SG', 'state': 'Singapore', 'city': 'Singapore', 'org': 'DBS Bank', 'cn': 'DBS Secure Access'},
+    {'country': 'KR', 'state': 'Seoul', 'city': 'Seocho', 'org': 'Samsung Electronics', 'cn': 'Samsung Global CA'},
+    {'country': 'KR', 'state': 'Seoul', 'city': 'Songpa', 'org': 'Lotte Corp', 'cn': 'Lotte Group Root'},
+    {'country': 'KR', 'state': 'Gyeonggi', 'city': 'Seongnam', 'org': 'Naver Corp', 'cn': 'Naver Service CA'},
+    {'country': 'AU', 'state': 'New South Wales', 'city': 'Sydney', 'org': 'Atlassian', 'cn': 'Atlassian Corp CA'},
+    {'country': 'AU', 'state': 'Victoria', 'city': 'Melbourne', 'org': 'Telstra', 'cn': 'Telstra Network Root'},
+    {'country': 'IN', 'state': 'Karnataka', 'city': 'Bangalore', 'org': 'Infosys', 'cn': 'Infosys Limited CA'},
+    {'country': 'IN', 'state': 'Maharashtra', 'city': 'Mumbai', 'org': 'Tata Consultancy', 'cn': 'TCS Global Root'},
 ]
 
 
