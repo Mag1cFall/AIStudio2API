@@ -46,3 +46,5 @@ DEFAULT_THINKING_LEVEL = "high"
 
 RATE_LIMIT_CALLOUT_SELECTOR = 'ms-callout.error-callout .message, ms-callout.warning-callout .message'
 RATE_LIMIT_KEYWORDS = ["exceeded quota", "out of free generations"]
+
+

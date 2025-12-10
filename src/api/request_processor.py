@@ -555,7 +555,7 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                             # await asyncio.sleep(0.03) # Removed artificial delay
                     if line_idx < len(lines) - 1:
                         yield generate_sse_chunk('\n', req_id, current_ai_studio_model_id or MODEL_NAME)
-                        await asyncio.sleep(0.01)
+                        # await asyncio.sleep(0.01)
                 usage_stats = calculate_usage_stats([msg.model_dump() for msg in request.messages], final_content, '')
                 logger.info(f'[{req_id}] Playwright非流式计算的token使用统计: {usage_stats}')
                 yield generate_sse_stop_chunk(req_id, current_ai_studio_model_id or MODEL_NAME, 'stop', usage_stats)
