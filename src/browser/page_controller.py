@@ -5,7 +5,7 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
-from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL
+from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
 from models import ClientDisconnectedError, ElementClickError
 from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content, click_element
 from .thinking_normalizer import parse_reasoning_param, describe_config
@@ -53,6 +53,8 @@ class PageController:
         max_tokens_to_set = request_params.get('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
         stop_to_set = request_params.get('stop', DEFAULT_STOP_SEQUENCES)
         top_p_to_set = request_params.get('top_p', DEFAULT_TOP_P)
+
+        await self._ensure_advanced_settings_expanded(check_client_disconnected)
 
         async def handle_tools_panel():
             await self._ensure_tools_panel_expanded(check_client_disconnected)
@@ -354,6 +356,60 @@ class PageController:
                     await asyncio.sleep(0.3)
         self.logger.error(f"[{self.req_id}] ❌ Google Search 設定失敗，已重試 {max_retries} 次")
 
+
+    async def _ensure_advanced_settings_expanded(self, check_client_disconnected: Callable):
+        max_retries = 3
+        expander_locator = self.page.locator(ADVANCED_SETTINGS_EXPANDER_SELECTOR)
+        
+        async def is_expanded() -> bool:
+            try:
+                grandparent = expander_locator.locator('xpath=../..')
+                class_str = await grandparent.get_attribute('class', timeout=2000)
+                return class_str and 'expanded' in class_str.split()
+            except Exception:
+                return False
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                await self._check_disconnect(check_client_disconnected, f'高级设置展开 - 尝试 {attempt}')
+                
+                if await expander_locator.count() == 0:
+                    self.logger.info(f'[{self.req_id}] 高级设置展开按钮不存在，可能已是新版布局，跳过。')
+                    return
+                
+                if await is_expanded():
+                    self.logger.info(f'[{self.req_id}] ✅ 高级设置面板已展开。')
+                    return
+                
+                self.logger.info(f'[{self.req_id}] 🔧 (尝试 {attempt}/{max_retries}) 正在展开高级设置面板...')
+                
+                try:
+                    await click_element(self.page, expander_locator, '高级设置展开按钮', self.req_id)
+                except ElementClickError as e:
+                    self.logger.warning(f'[{self.req_id}] 高级设置展开按钮点击失败: {e}')
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.3)
+                    continue
+                
+                await asyncio.sleep(0.3)
+                
+                if await is_expanded():
+                    self.logger.info(f'[{self.req_id}] ✅ 高级设置面板已展开。')
+                    return
+                
+                self.logger.warning(f'[{self.req_id}] 高级设置展开验证失败 (尝试 {attempt})')
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+                    
+            except Exception as e:
+                if isinstance(e, ClientDisconnectedError):
+                    raise
+                self.logger.warning(f'[{self.req_id}] 展开高级设置失败 (尝试 {attempt}): {e}')
+                if attempt < max_retries:
+                    await asyncio.sleep(0.3)
+        
+        self.logger.error(f'[{self.req_id}] ❌ 高级设置展开失败，已重试 {max_retries} 次')
+
     async def _ensure_tools_panel_expanded(self, check_client_disconnected: Callable):
         max_retries = 3
         for attempt in range(1, max_retries + 1):
@@ -646,64 +702,56 @@ class PageController:
             self.logger.warning(f'[{self.req_id}] 警告: 清空聊天验证失败，但将继续执行。后续操作可能会受影响。')
 
     async def _robust_click_insert_assets(self, check_client_disconnected: Callable) -> bool:
-        self.logger.info(f"[{self.req_id}] 开始寻找并点击 'Insert assets' 按钮...")
+        self.logger.info(f"[{self.req_id}] 开始寻找并点击媒体添加按钮...")
         
         trigger_selectors = [
-            'button[aria-label*="Insert assets"]',
+            INSERT_BUTTON_SELECTOR,
+            'button[aria-label*="Insert"]',
             'button[iconname="add_circle"]',
-            '.ms-button-icon[iconname="add_circle"]'
+            'button[iconname="note_add"]'
         ]
         
         trigger_btn = None
         for sel in trigger_selectors:
             if await self.page.locator(sel).count() > 0:
                 trigger_btn = self.page.locator(sel).first
+                self.logger.info(f"[{self.req_id}] 找到媒体按钮: {sel}")
                 break
         
         if not trigger_btn:
-            self.logger.warning(f"[{self.req_id}] 未找到 'Insert assets' 按钮。")
+            self.logger.warning(f"[{self.req_id}] 未找到媒体添加按钮。")
             return False
 
-        async def is_menu_open():
-            try:
-                count = await self.page.locator('button[aria-label="Upload File"]').count()
-                if count > 0 and await self.page.locator('button[aria-label="Upload File"]').first.is_visible():
-                    return True
-            except Exception:
-                pass
-            return False
-
+        upload_menu_locator = self.page.locator(UPLOAD_BUTTON_SELECTOR)
+        
         max_attempts = 3
-        for attempt in range(max_attempts):
-            await self._check_disconnect(check_client_disconnected, f'点击Insert Assets - 尝试 {attempt+1}')
+        for attempt in range(1, max_attempts + 1):
+            await self._check_disconnect(check_client_disconnected, f'点击媒体按钮 - 尝试 {attempt}')
             
-            self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 发送 'click' 事件到 Insert Assets 按钮...")
+            self.logger.info(f"[{self.req_id}] (尝试 {attempt}/{max_attempts}) 点击媒体添加按钮...")
+            
             try:
-                await trigger_btn.dispatch_event('click')
-            except Exception as e:
-                self.logger.warning(f"[{self.req_id}] dispatch_event 失败: {e}")
+                await click_element(self.page, trigger_btn, '媒体添加按钮', self.req_id)
+            except ElementClickError as e:
+                self.logger.warning(f"[{self.req_id}] 媒体按钮点击失败: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(0.5)
+                continue
             
             for _ in range(10):
-                if await is_menu_open():
-                    self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启。")
-                    return True
+                try:
+                    if await upload_menu_locator.count() > 0 and await upload_menu_locator.first.is_visible():
+                        self.logger.info(f"[{self.req_id}] ✅ 'Upload file' 菜单项已检测到开启。")
+                        return True
+                except Exception:
+                    pass
                 await asyncio.sleep(0.2)
             
-            self.logger.info(f"[{self.req_id}] (尝试 {attempt+1}) 菜单未开，尝试 JS click...")
-            try:
-                await trigger_btn.evaluate('e => e.click()')
-            except Exception as e:
-                self.logger.warning(f"[{self.req_id}] JS click 失败: {e}")
+            self.logger.warning(f"[{self.req_id}] (尝试 {attempt}/{max_attempts}) 菜单仍未开启。")
+            if attempt < max_attempts:
+                await asyncio.sleep(0.3)
 
-            for _ in range(5):
-                if await is_menu_open():
-                    self.logger.info(f"[{self.req_id}] 'Upload File' 菜单项已检测到开启 (JS click 后)。")
-                    return True
-                await asyncio.sleep(0.2)
-                
-            self.logger.warning(f"[{self.req_id}] (尝试 {attempt+1}) 菜单仍未开启。")
-
-        self.logger.error(f"[{self.req_id}] 多次尝试后仍无法打开 'Insert assets' 菜单。")
+        self.logger.error(f"[{self.req_id}] 多次尝试后仍无法打开媒体菜单。")
         return False
 
     async def _upload_images_via_file_input(self, images: List[Dict[str, str]], check_client_disconnected: Callable) -> bool:
