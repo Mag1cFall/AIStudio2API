@@ -59,7 +59,7 @@ class ImagenController:
                     self.logger.warning(f'[{self.req_id}] 未找到数量输入框')
                     return
                 await input_locator.fill(str(count))
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 self.logger.info(f'[{self.req_id}] ✅ 图片数量已设置: {count}')
                 return
             except Exception as e:
@@ -67,7 +67,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置数量失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def set_aspect_ratio(self, aspect_ratio: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 设置宽高比: {aspect_ratio}')
@@ -87,7 +87,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置宽高比失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def set_negative_prompt(self, negative_prompt: str, check_client_disconnected: Callable):
         if not negative_prompt:
@@ -101,7 +101,7 @@ class ImagenController:
                     self.logger.warning(f'[{self.req_id}] 未找到负面提示词输入框')
                     return
                 await textarea.fill(negative_prompt)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 self.logger.info(f'[{self.req_id}] ✅ 负面提示词已设置')
                 return
             except Exception as e:
@@ -109,7 +109,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置负面提示词失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def fill_prompt(self, prompt: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 填充提示词 ({len(prompt)} chars)')
@@ -117,11 +117,11 @@ class ImagenController:
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 text_input = self.page.locator(IMAGEN_PROMPT_INPUT_SELECTOR)
                 await safe_click(text_input, '输入框', self.req_id)
                 await text_input.fill(prompt)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
                 return
             except Exception as e:
@@ -129,7 +129,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充提示词失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         raise Exception('填充提示词失败')
 
     async def run_generation(self, check_client_disconnected: Callable):
@@ -138,7 +138,7 @@ class ImagenController:
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 run_btn = self.page.locator(IMAGEN_RUN_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
@@ -154,7 +154,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_images(self, expected_count: int, check_client_disconnected: Callable, timeout_seconds: int = 180) -> List[GeneratedImage]:
@@ -191,4 +191,4 @@ class ImagenController:
             except Exception as e:
                 self.logger.warning(f'[{self.req_id}] 检查图片时出错: {e}')
             
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)

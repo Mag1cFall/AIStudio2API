@@ -4,11 +4,43 @@ import json
 import os
 import re
 import logging
-from typing import Optional, Any, List, Dict, Callable, Set
+import functools
+from typing import Optional, Any, List, Dict, Callable, Set, TypeVar
 from playwright.async_api import Page as AsyncPage, Locator, Error as PlaywrightAsyncError
 from config import *
 from models import ClientDisconnectedError, ElementClickError
 logger = logging.getLogger('AIStudioProxyServer')
+
+T = TypeVar('T')
+
+def check_disconnect(check_client_disconnected: Callable, stage: str, req_id: str):
+    if check_client_disconnected and check_client_disconnected(stage):
+        raise ClientDisconnectedError(f'[{req_id}] Client disconnected at stage: {stage}')
+
+async def retry_async(
+    func: Callable,
+    max_retries: int = 3,
+    delay: float = 0.15,
+    req_id: str = 'unknown',
+    operation_name: str = 'operation',
+    check_client_disconnected: Callable = None
+) -> Any:
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            if check_client_disconnected:
+                check_disconnect(check_client_disconnected, f'{operation_name} - 尝试 {attempt}', req_id)
+            return await func()
+        except ClientDisconnectedError:
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f'[{req_id}] {operation_name} 失败 (尝试 {attempt}): {e}')
+                await asyncio.sleep(delay)
+    logger.error(f'[{req_id}] {operation_name} 最终失败，已重试 {max_retries} 次')
+    raise last_error if last_error else Exception(f'{operation_name} failed')
+
 
 async def get_model_name_from_page_parallel(page: AsyncPage, selectors: list, timeout: int = 2000, req_id: str = 'unknown', expected_model_name: str = None) -> Optional[str]:
     if not selectors:

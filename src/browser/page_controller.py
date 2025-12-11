@@ -795,9 +795,9 @@ class PageController:
                 await file_input.set_input_files(tf.name)
                 uploaded_count += 1
                 
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.2)
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.1)
             
             asyncio.create_task(self._cleanup_temp_files(temp_files))
             

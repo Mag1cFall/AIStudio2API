@@ -61,7 +61,7 @@ class NanoController:
                     return
                 if not await safe_click(dropdown, '宽高比下拉框', self.req_id):
                     continue
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 option = self.page.locator(f'mat-option:has-text("{aspect_ratio}")')
                 if await option.count() > 0:
                     if await safe_click(option.first, f'宽高比选项 {aspect_ratio}', self.req_id):
@@ -76,7 +76,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置宽高比失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         self.logger.warning(f'[{self.req_id}] 宽高比设置失败，使用默认值')
 
     async def upload_image(self, image_bytes: bytes, mime_type: str, check_client_disconnected: Callable):
@@ -92,7 +92,7 @@ class NanoController:
                     if attempt < max_retries:
                         continue
                     return
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 await self._check_disconnect(check_client_disconnected, '插入菜单展开后')
                 
                 ext = 'png' if 'png' in mime_type else 'jpg'
@@ -102,9 +102,9 @@ class NanoController:
                     'mimeType': mime_type,
                     'buffer': image_bytes
                 })
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.8)
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 self.logger.info(f'[{self.req_id}] ✅ 图片已上传')
                 return
             except Exception as e:
@@ -112,7 +112,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 上传图片失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
 
     async def fill_prompt(self, prompt: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 填充提示词 ({len(prompt)} chars)')
@@ -120,11 +120,11 @@ class NanoController:
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 text_input = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
                 await safe_click(text_input, '输入框', self.req_id)
                 await text_input.fill(prompt)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 actual = await text_input.input_value()
                 if prompt in actual or actual in prompt:
                     self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
@@ -135,7 +135,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充提示词失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         raise Exception('填充提示词失败')
 
     async def run_generation(self, check_client_disconnected: Callable):
@@ -144,7 +144,7 @@ class NanoController:
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 run_btn = self.page.locator(SUBMIT_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
@@ -160,7 +160,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_content(self, check_client_disconnected: Callable, timeout_seconds: int = 120) -> GeneratedContent:
@@ -229,7 +229,7 @@ class NanoController:
             except Exception as e:
                 self.logger.warning(f'[{self.req_id}] 检查内容时出错: {e}')
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
 
     async def _extract_images_via_download(self, count: int) -> List[GeneratedImage]:
         import tempfile
@@ -244,9 +244,9 @@ class NanoController:
                 img = chunk.locator('img')
                 if await img.count() > 0:
                     await img.first.hover()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.25)
                     await chunk.evaluate('el => el.dispatchEvent(new MouseEvent("mouseenter", {bubbles: true}))')
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.15)
                 
                 download_btn = chunk.locator('button[aria-label="Download"]')
                 if await download_btn.count() == 0:

@@ -68,7 +68,7 @@ class TTSController:
                 if not await safe_click(mode_btn, f'TTS 模式按钮 {mode_name}', self.req_id):
                     continue
                 await self._check_disconnect(check_client_disconnected, f'TTS 模式切换后')
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.5)
                 
                 new_class = await mode_btn.get_attribute('class') or ''
                 is_now_active = 'ms-button-active' in new_class
@@ -93,7 +93,7 @@ class TTSController:
                     raise
                 self.logger.warning(f'[{self.req_id}] TTS 模式切换失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
         raise Exception(f'TTS 模式切换失败: {mode_name}')
 
     async def set_voice(self, voice_name: str, speaker_index: int = 0, check_client_disconnected: Callable = None):
@@ -109,7 +109,7 @@ class TTSController:
                 target_dropdown = voice_dropdowns.nth(speaker_index) if dropdown_count > speaker_index else voice_dropdowns.first
                 if not await safe_click(target_dropdown, f'语音下拉框 {speaker_index}', self.req_id):
                     continue
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 option = self.page.locator(f'{TTS_SETTINGS_VOICE_OPTION_SELECTOR}:has-text("{voice_name}")')
                 if await option.count() > 0:
                     if await safe_click(option.first, f'语音选项 {voice_name}', self.req_id):
@@ -124,7 +124,7 @@ class TTSController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置语音失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def fill_single_speaker_text(self, text: str, style_instructions: str = '', check_client_disconnected: Callable = None):
         self.logger.info(f'[{self.req_id}] 填充单说话人文本 ({len(text)} chars)')
@@ -134,7 +134,7 @@ class TTSController:
                 text_input = self.page.locator(TTS_SINGLE_SPEAKER_TEXT_INPUT_SELECTOR)
                 await expect_async(text_input).to_be_visible(timeout=5000)
                 await text_input.fill(text)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 actual = await text_input.input_value()
                 if actual == text:
                     self.logger.info(f'[{self.req_id}] ✅ 文本已填充')
@@ -149,7 +149,7 @@ class TTSController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充文本失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def fill_multi_speaker_text(self, raw_script: str, check_client_disconnected: Callable = None):
         self.logger.info(f'[{self.req_id}] 填充多说话人脚本 ({len(raw_script)} chars)')
@@ -159,7 +159,7 @@ class TTSController:
                 raw_input = self.page.locator(TTS_MULTI_SPEAKER_RAW_INPUT_SELECTOR)
                 await expect_async(raw_input).to_be_visible(timeout=5000)
                 await raw_input.fill(raw_script)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
                 self.logger.info(f'[{self.req_id}] ✅ 多说话人脚本已填充')
                 return
             except Exception as e:
@@ -167,7 +167,7 @@ class TTSController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充脚本失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
     async def run_generation(self, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 🚀 开始生成语音...')
@@ -175,7 +175,7 @@ class TTSController:
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
                 run_btn = self.page.locator(TTS_RUN_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
@@ -191,7 +191,7 @@ class TTSController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_audio(self, check_client_disconnected: Callable, timeout_seconds: int = 120) -> str:
