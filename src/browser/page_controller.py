@@ -825,64 +825,73 @@ class PageController:
         
         try:
             await target_locator.focus()
+            await target_locator.click()
         except Exception:
             pass
 
         script = """
-        async (target, images) => {
+        async (images) => {
             try {
-                if (!target) {
-                    return { success: false, error: "目标元素未找到" };
-                }
+                const dataTransfer = new DataTransfer();
                 
-                let successCount = 0;
-                
-                target.focus();
-
-                for (const img of images) {
+                for (let i = 0; i < images.length; i++) {
+                    const img = images[i];
                     try {
-                        const dataTransfer = new DataTransfer();
-                        const res = await fetch(`data:${img.mime};base64,${img.data}`);
-                        const blob = await res.blob();
+                        const byteCharacters = atob(img.data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let j = 0; j < byteCharacters.length; j++) {
+                            byteNumbers[j] = byteCharacters.charCodeAt(j);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: img.mime });
+                        
                         const ext = img.mime.split('/')[1] || 'png';
-                        const filename = `image_${Date.now()}_${Math.random().toString(36).slice(2)}_${successCount}.${ext}`;
-                        const file = new File([blob], filename, { type: img.mime });
+                        const filename = `pasted_image_${i + 1}.${ext}`;
+                        const file = new File([blob], filename, { type: img.mime, lastModified: Date.now() });
+                        
                         dataTransfer.items.add(file);
-
-                        const pasteEvent = new ClipboardEvent('paste', {
-                            bubbles: true,
-                            cancelable: true,
-                            clipboardData: dataTransfer
-                        });
-
-                        target.dispatchEvent(pasteEvent);
-                        successCount++;
-                        
-                        await new Promise(r => setTimeout(r, 50));
-                        
                     } catch (err) {
-                        console.error(`[AI Studio Enhancements] 处理单张图片数据失败:`, err);
+                        console.error(`[Paste] 处理图片 ${i + 1} 失败:`, err);
                     }
                 }
-
-                if (successCount === 0) {
-                    return { success: false, error: "没有图片被成功处理" };
+                
+                if (dataTransfer.files.length === 0) {
+                    return { success: false, error: "没有文件被添加到 DataTransfer" };
                 }
                 
-                console.log(`[AI Studio Enhancements] 已逐个触发粘贴事件，共 ${successCount} 个文件。`);
-                return { success: true, count: successCount };
+                const pasteEvent = new ClipboardEvent('paste', {
+                    bubbles: true,
+                    cancelable: true,
+                });
+                
+                Object.defineProperty(pasteEvent, 'clipboardData', {
+                    value: dataTransfer,
+                    writable: false,
+                    configurable: true
+                });
+                
+                const textarea = document.querySelector('ms-prompt-box textarea');
+                if (textarea) {
+                    textarea.focus();
+                    textarea.dispatchEvent(pasteEvent);
+                }
+                
+                document.dispatchEvent(pasteEvent);
+                
+                console.log(`[Paste] 已触发粘贴事件，包含 ${dataTransfer.files.length} 个文件`);
+                return { success: true, count: dataTransfer.files.length };
             } catch (err) {
-                console.error('[AI Studio Enhancements] 模拟粘贴事件循环失败:', err);
+                console.error('[Paste] 模拟粘贴失败:', err);
                 return { success: false, error: err.message };
             }
         }
         """
-        result = await target_locator.evaluate(script, images)
+        result = await self.page.evaluate(script, images)
         if not result or not result.get('success'):
             error_message = result.get('error', '未知错误')
             self.logger.error(f"[{self.req_id}] 虚拟粘贴图片失败: {error_message}")
         else:
-            self.logger.info(f"[{self.req_id}]  虚拟粘贴事件已触发。")
+            self.logger.info(f"[{self.req_id}] ✅ 虚拟粘贴事件已触发 ({result.get('count', 0)} 个文件)")
 
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
