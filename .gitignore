@@ -254,3 +254,6 @@ browser/generated_*.js
 # Docker 环境的实际配置文件（保留示例文件）
 docker/.env
 docker/my_*.json
+
+# Test output files
+test/test_output/
