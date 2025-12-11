@@ -834,7 +834,7 @@ class PageController:
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 📤 提交提示 ({len(prompt)} chars)...')
         prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
-        autosize_wrapper_locator = self.page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
+        autosize_wrapper_locator = self.page.locator('ms-prompt-box .text-wrapper')
         submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
@@ -923,7 +923,7 @@ class PageController:
                     except Exception:
                         continue
                 uploaded_images = 0
-                priority_selectors = ['ms-prompt-input-wrapper img', '.prompt-input img', 'textarea[data-test-ms-prompt-textarea] ~ * img', '[data-testid="prompt-input"] img']
+                priority_selectors = ['ms-prompt-box img', '.prompt-input img', 'textarea[data-test-ms-prompt-textarea] ~ * img', '[data-testid="prompt-input"] img']
                 for selector in priority_selectors:
                     try:
                         locator = self.page.locator(selector)

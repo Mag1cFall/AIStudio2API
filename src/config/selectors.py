@@ -1,4 +1,4 @@
-PROMPT_TEXTAREA_SELECTOR = 'ms-prompt-input-wrapper ms-autosize-textarea textarea'
+PROMPT_TEXTAREA_SELECTOR = 'ms-prompt-box textarea'
 INPUT_SELECTOR = PROMPT_TEXTAREA_SELECTOR
 INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button'
