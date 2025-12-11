@@ -90,6 +90,8 @@ async def process_image_request(
     
     images = await controller.wait_for_images(config.number_of_images, check_client_disconnected)
     
+    logger.info(f'[{req_id}] 📦 处理 {len(images)} 张图片数据...')
+    
     generated_images = []
     for img in images:
         generated_images.append({
@@ -98,6 +100,8 @@ async def process_image_request(
                 'mimeType': img.mime_type
             }
         })
+    
+    logger.info(f'[{req_id}] ✅ 返回响应 (generatedImages: {len(generated_images)})')
     
     return {
         'generatedImages': generated_images,

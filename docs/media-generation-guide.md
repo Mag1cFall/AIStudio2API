@@ -54,8 +54,8 @@ payload = {
 response = requests.post(url, json=payload)
 data = response.json()
 
-for i, image in enumerate(data['images']):
-    image_bytes = base64.b64decode(image['data'])
+for i, img in enumerate(data['generatedImages']):
+    image_bytes = base64.b64decode(img['image']['imageBytes'])
     with open(f'imagen_output_{i}.png', 'wb') as f:
         f.write(image_bytes)
 ```
@@ -71,7 +71,7 @@ $body = @{
 } | ConvertTo-Json
 
 $response = Invoke-RestMethod -Uri "http://localhost:2048/generate-image" -Method Post -ContentType "application/json" -Body $body
-$imageData = $response.images[0].data
+$imageData = $response.generatedImages[0].image.imageBytes
 [System.IO.File]::WriteAllBytes("C:\output.png", [Convert]::FromBase64String($imageData))
 ```
 
@@ -120,8 +120,8 @@ payload = {
 response = requests.post(url, json=payload, timeout=600)
 data = response.json()
 
-for i, video in enumerate(data['videos']):
-    video_bytes = base64.b64decode(video['data'])
+for i, vid in enumerate(data['generatedVideos']):
+    video_bytes = base64.b64decode(vid['video']['videoBytes'])
     with open(f'veo_output_{i}.mp4', 'wb') as f:
         f.write(video_bytes)
 ```
@@ -147,7 +147,7 @@ payload = {
 response = requests.post(url, json=payload, timeout=600)
 data = response.json()
 
-video_bytes = base64.b64decode(data['videos'][0]['data'])
+video_bytes = base64.b64decode(data['generatedVideos'][0]['video']['videoBytes'])
 with open('output_video.mp4', 'wb') as f:
     f.write(video_bytes)
 ```
@@ -256,17 +256,35 @@ for i, part in enumerate(parts):
 
 ## 响应格式
 
-### Imagen / Veo 响应
+### Imagen 响应
 
 ```json
 {
-  "images": [
+  "generatedImages": [
     {
-      "data": "<Base64 编码的图片数据>",
-      "mimeType": "image/png",
-      "index": 0
+      "image": {
+        "imageBytes": "<Base64 编码的图片数据>",
+        "mimeType": "image/png"
+      }
     }
-  ]
+  ],
+  "modelVersion": "imagen-3.0-generate-002"
+}
+```
+
+### Veo 响应
+
+```json
+{
+  "generatedVideos": [
+    {
+      "video": {
+        "videoBytes": "<Base64 编码的视频数据>",
+        "mimeType": "video/mp4"
+      }
+    }
+  ],
+  "modelVersion": "veo-2.0-generate-001"
 }
 ```
 

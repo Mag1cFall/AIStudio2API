@@ -175,6 +175,7 @@ class ImagenController:
                     for i in range(current_count):
                         img = image_locator.nth(i)
                         src = await img.get_attribute('src') or ''
+                        self.logger.info(f'[{self.req_id}] 图片 {i} src 类型: {src[:50] if src else "空"}...')
                         if src.startswith('data:image/'):
                             if ',' in src:
                                 header, base64_data = src.split(',', 1)
