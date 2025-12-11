@@ -176,6 +176,58 @@ async def chat_completions(request: Request):
 async def health():
     return {"status": "ok", "workers": len(_worker_cache["workers"])}
 
+async def forward_media_request(request: Request, path: str):
+    await refresh_workers()
+    worker = get_next_worker()
+    if not worker:
+        raise HTTPException(status_code=503, detail="No workers available")
+    
+    port = worker["port"]
+    url = f"http://127.0.0.1:{port}{path}"
+    
+    body = await request.body()
+    forward_headers = {}
+    for k, v in request.headers.items():
+        if k.lower() not in ('host', 'content-length', 'transfer-encoding'):
+            forward_headers[k] = v
+    
+    session = await get_session()
+    try:
+        async with session.post(url, data=body, headers=forward_headers, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+            content = await resp.read()
+            return Response(content=content, status_code=resp.status, media_type=resp.content_type)
+    except Exception as e:
+        logger.error(f"Forward {path} failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+@app.post("/generate-speech")
+async def generate_speech(request: Request):
+    return await forward_media_request(request, "/generate-speech")
+
+@app.post("/generate-image")
+async def generate_image(request: Request):
+    return await forward_media_request(request, "/generate-image")
+
+@app.post("/generate-video")
+async def generate_video(request: Request):
+    return await forward_media_request(request, "/generate-video")
+
+@app.post("/nano/generate")
+async def nano_generate(request: Request):
+    return await forward_media_request(request, "/nano/generate")
+
+@app.post("/v1beta/models/{model}:generateContent")
+async def v1beta_generate_content(request: Request, model: str):
+    return await forward_media_request(request, f"/v1beta/models/{model}:generateContent")
+
+@app.post("/v1beta/models/{model}:predict")
+async def v1beta_predict(request: Request, model: str):
+    return await forward_media_request(request, f"/v1beta/models/{model}:predict")
+
+@app.post("/v1beta/models/{model}:predictLongRunning")
+async def v1beta_predict_long_running(request: Request, model: str):
+    return await forward_media_request(request, f"/v1beta/models/{model}:predictLongRunning")
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
