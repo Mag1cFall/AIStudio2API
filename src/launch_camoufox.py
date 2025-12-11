@@ -464,7 +464,18 @@ if __name__ == '__main__':
         print(f"--- [内部Camoufox启动] 模式: {internal_mode_arg}, 认证文件: {(os.path.basename(auth_file) if auth_file else '无')}, Camoufox端口: {camoufox_port_internal}, 代理: {camoufox_proxy_internal or '无'}, 模拟OS: {camoufox_os_internal} ---", flush=True)
         print(f'--- [内部Camoufox启动] 正在调用 camoufox.server.launch_server ... ---', flush=True)
         try:
-            launch_args_for_internal_camoufox = {'port': camoufox_port_internal, 'addons': [], 'exclude_addons': [DefaultAddons.UBO], 'window': (1920, 1080)}
+            memory_optimization_prefs = {
+                'browser.cache.memory.enable': False,
+                'browser.cache.memory.capacity': 0,
+                'browser.sessionhistory.max_entries': 3,
+                'browser.sessionhistory.max_total_viewers': 0,
+                'javascript.options.mem.gc_frequency': 300,
+                'javascript.options.mem.high_water_mark': 128,
+                'dom.ipc.processCount': 1,
+                'layout.css.grid-template-masonry-value.enabled': False,
+                'toolkit.cosmeticAnimations.enabled': False,
+            }
+            launch_args_for_internal_camoufox = {'port': camoufox_port_internal, 'addons': [], 'exclude_addons': [DefaultAddons.UBO], 'window': (1920, 1080), 'firefox_user_prefs': memory_optimization_prefs}
             if camoufox_proxy_internal:
                 launch_args_for_internal_camoufox['proxy'] = {'server': camoufox_proxy_internal}
             if auth_file:
