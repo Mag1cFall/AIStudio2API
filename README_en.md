@@ -10,11 +10,22 @@
 
 <p>
   <b>A High-Performance Python Proxy Server</b><br>
-  Converts the Google AI Studio web interface into an OpenAI-compatible API.<br>
-  Powered by Camoufox (anti-fingerprint Firefox) and Playwright automation for stable and stealthy access.
+  Converts the Google AI Studio web interface into an OpenAI-compatible API
+</p>
+
+<p>
+  🔄 Multi-Worker Concurrency &nbsp;•&nbsp;
+  🖼️ Imagen 3 Image Generation &nbsp;•&nbsp;
+  🎨 Nano Banana Image Generation<br>
+  🎬 Veo 2 Video Generation &nbsp;•&nbsp;
+  🎤 Gemini 2.5 TTS Speech Synthesis
 </p>
 
 <img src="docs/demo.gif" alt="Demo GIF" width="100%" />
+
+<p align="center">
+  <img src="docs/多worker并发和媒体模型支援.png" alt="Multi-Worker Concurrency & Media Model Support" width="80%" />
+</p>
 
 </div>
 

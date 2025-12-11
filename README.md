@@ -10,11 +10,22 @@
 
 <p>
   <b>一个基于 Python 的高性能代理服务</b><br>
-  将 Google AI Studio 网页界面转换为 OpenAI 兼容格式 API。<br>
-  利用 Camoufox (反指纹浏览器) 与 Playwright 自动化技术，确保访问稳定、隐蔽。
+  将 Google AI Studio 网页界面转换为 OpenAI 兼容格式 API
+</p>
+
+<p>
+  🔄 多Worker并发 &nbsp;•&nbsp;
+  🖼️ Imagen 3 图片生成 &nbsp;•&nbsp;
+  🎨 Nano Banana 图片生成<br>
+  🎬 Veo 2 视频生成 &nbsp;•&nbsp;
+  🎤 Gemini 2.5 TTS 语音生成
 </p>
 
 <img src="docs/demo.gif" alt="Demo GIF" width="100%" />
+
+<p align="center">
+  <img src="docs/多worker并发和媒体模型支援.png" alt="多Worker并发与媒体模型支援" width="80%" />
+</p>
 
 </div>
 
