@@ -755,11 +755,14 @@ class PageController:
         return False
 
     async def _upload_images_via_file_input(self, images: List[Dict[str, str]], check_client_disconnected: Callable) -> bool:
-        self.logger.info(f"[{self.req_id}] 尝试通过文件选择器批量上传 {len(images)} 张图片...")
+        self.logger.info(f"[{self.req_id}] 尝试逐个上传 {len(images)} 张图片...")
         temp_files = []
-        file_paths = []
+        uploaded_count = 0
+        
         try:
             for idx, img in enumerate(images):
+                await self._check_disconnect(check_client_disconnected, f'上传图片 {idx+1}/{len(images)}')
+                
                 mime = img['mime']
                 try:
                     data = base64.b64decode(img['data'])
@@ -774,34 +777,37 @@ class PageController:
                 tf.write(data)
                 tf.close()
                 temp_files.append(tf.name)
-                file_paths.append(tf.name)
-
-            if not file_paths:
-                self.logger.warning(f"[{self.req_id}] 没有有效的图片文件可上传。")
-                return False
-
-            menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
-            
-            if not menu_opened:
-                self.logger.warning(f"[{self.req_id}] 未能打开菜单，将尝试直接查找 input (可能已存在)。")
-
-            file_input = self.page.locator('input[type="file"]').first
-            
-            if await file_input.count() == 0:
-                self.logger.warning(f"[{self.req_id}] 未找到文件输入框 (input[type='file'])。回退到粘贴模式。")
-                asyncio.create_task(self._cleanup_temp_files(temp_files))
-                return False
-
-            await self._check_disconnect(check_client_disconnected, '文件上传 - set_input_files前')
-            self.logger.info(f"[{self.req_id}] 找到 file input，正在设置 {len(file_paths)} 个文件...")
-            await file_input.set_input_files(file_paths)
-            self.logger.info(f"[{self.req_id}] set_input_files 完成。")
+                
+                menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
+                if not menu_opened:
+                    self.logger.warning(f"[{self.req_id}] 未能打开菜单，尝试直接查找 input...")
+                
+                from config import HIDDEN_FILE_INPUT_SELECTOR
+                file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
+                if await file_input.count() == 0:
+                    file_input = self.page.locator('input[type="file"]').first
+                
+                if await file_input.count() == 0:
+                    self.logger.warning(f"[{self.req_id}] 未找到文件输入框，跳过图片 {idx+1}")
+                    continue
+                
+                self.logger.info(f"[{self.req_id}] 上传图片 {idx+1}/{len(images)}...")
+                await file_input.set_input_files(tf.name)
+                uploaded_count += 1
+                
+                await asyncio.sleep(0.8)
+                await self.page.keyboard.press('Escape')
+                await asyncio.sleep(0.3)
             
             asyncio.create_task(self._cleanup_temp_files(temp_files))
-            return True
+            
+            if uploaded_count > 0:
+                self.logger.info(f"[{self.req_id}] ✅ 成功上传 {uploaded_count}/{len(images)} 张图片")
+                return True
+            return False
 
         except Exception as e:
-            self.logger.error(f"[{self.req_id}] 文件选择器上传失败: {e}")
+            self.logger.error(f"[{self.req_id}] 文件上传失败: {e}")
             asyncio.create_task(self._cleanup_temp_files(temp_files))
             return False
 

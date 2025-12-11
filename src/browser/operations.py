@@ -455,6 +455,36 @@ async def click_element(page: AsyncPage, locator: Locator, element_name: str, re
     logger.error(f"[{req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了。")
     raise ElementClickError(f"All click attempts for '{element_name}' failed.") from last_error
 
+async def safe_click(locator: Locator, element_name: str, req_id: str, timeout: int = 2000) -> bool:
+    try:
+        await locator.wait_for(state='visible', timeout=timeout)
+    except Exception as e:
+        logger.warning(f"[{req_id}] '{element_name}' 元素不可见: {e}")
+        return False
+    try:
+        await locator.click(timeout=500)
+        logger.info(f"[{req_id}] ✅ '{element_name}' 点击成功")
+        return True
+    except Exception:
+        pass
+    await asyncio.sleep(0.1)
+    try:
+        logger.info(f"[{req_id}] 🖱️ 尝试强制点击 '{element_name}'")
+        await locator.click(timeout=500, force=True)
+        logger.info(f"[{req_id}] ✅ '{element_name}' 强制点击成功")
+        return True
+    except Exception:
+        pass
+    await asyncio.sleep(0.1)
+    try:
+        logger.info(f"[{req_id}] 🖱️ 尝试JS点击 '{element_name}'")
+        await locator.evaluate('element => element.click()')
+        logger.info(f"[{req_id}] ✅ '{element_name}' JS点击成功")
+        return True
+    except Exception as e:
+        logger.error(f"[{req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了: {e}")
+        return False
+
 async def get_response_via_edit_button(page: AsyncPage, req_id: str, check_client_disconnected: Callable) -> Optional[str]:
     logger.info(f'[{req_id}] (Helper) 尝试通过编辑按钮获取响应...')
     last_message_container = page.locator('ms-chat-turn').last

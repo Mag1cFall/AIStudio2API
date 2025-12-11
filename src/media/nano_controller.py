@@ -11,6 +11,7 @@ from config.selectors import (
     PROMPT_TEXTAREA_SELECTOR, SUBMIT_BUTTON_SELECTOR,
     INSERT_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTOR
 )
+from browser.operations import safe_click
 from .models import NanoBananaConfig, GeneratedImage, GeneratedContent
 from models import ClientDisconnectedError
 
@@ -25,39 +26,6 @@ class NanoController:
     async def _check_disconnect(self, check_client_disconnected: Callable, stage: str):
         if check_client_disconnected(stage):
             raise ClientDisconnectedError(f'[{self.req_id}] Client disconnected at stage: {stage}')
-
-    async def _safe_click(self, locator: Locator, element_name: str, timeout: int = 2000) -> bool:
-        try:
-            await locator.wait_for(state='visible', timeout=timeout)
-        except Exception as e:
-            self.logger.warning(f"[{self.req_id}] '{element_name}' 元素不可见: {e}")
-            return False
-        
-        try:
-            await locator.click(timeout=500)
-            self.logger.info(f"[{self.req_id}] ✅ '{element_name}' 点击成功")
-            return True
-        except Exception:
-            pass
-        
-        await asyncio.sleep(0.1)
-        try:
-            self.logger.info(f"[{self.req_id}] 🖱️ 尝试强制点击 '{element_name}'")
-            await locator.click(timeout=500, force=True)
-            self.logger.info(f"[{self.req_id}] ✅ '{element_name}' 强制点击成功")
-            return True
-        except Exception:
-            pass
-        
-        await asyncio.sleep(0.1)
-        try:
-            self.logger.info(f"[{self.req_id}] 🖱️ 尝试JS点击 '{element_name}'")
-            await locator.evaluate('element => element.click()')
-            self.logger.info(f"[{self.req_id}] ✅ '{element_name}' JS点击成功")
-            return True
-        except Exception as e:
-            self.logger.error(f"[{self.req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了: {e}")
-            return False
 
 
     async def navigate_to_nano_page(self, model: str, check_client_disconnected: Callable):
@@ -91,12 +59,12 @@ class NanoController:
                 if await dropdown.count() == 0:
                     self.logger.warning(f'[{self.req_id}] 未找到宽高比下拉框')
                     return
-                if not await self._safe_click(dropdown, '宽高比下拉框'):
+                if not await safe_click(dropdown, '宽高比下拉框', self.req_id):
                     continue
                 await asyncio.sleep(0.3)
                 option = self.page.locator(f'mat-option:has-text("{aspect_ratio}")')
                 if await option.count() > 0:
-                    if await self._safe_click(option.first, f'宽高比选项 {aspect_ratio}'):
+                    if await safe_click(option.first, f'宽高比选项 {aspect_ratio}', self.req_id):
                         self.logger.info(f'[{self.req_id}] ✅ 宽高比已设置: {aspect_ratio}')
                         return
                 else:
@@ -120,7 +88,7 @@ class NanoController:
                 if await insert_btn.count() == 0:
                     self.logger.warning(f'[{self.req_id}] 未找到插入按钮')
                     return
-                if not await self._safe_click(insert_btn, '插入按钮'):
+                if not await safe_click(insert_btn, '插入按钮', self.req_id):
                     if attempt < max_retries:
                         continue
                     return
@@ -154,7 +122,7 @@ class NanoController:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.3)
                 text_input = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
-                await self._safe_click(text_input, '输入框')
+                await safe_click(text_input, '输入框', self.req_id)
                 await text_input.fill(prompt)
                 await asyncio.sleep(0.2)
                 actual = await text_input.input_value()
@@ -180,7 +148,7 @@ class NanoController:
                 run_btn = self.page.locator(SUBMIT_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
-                if not await self._safe_click(run_btn, 'Run 按钮'):
+                if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
                         continue
                     raise Exception('Run 按钮点击失败')

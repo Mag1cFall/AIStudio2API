@@ -3,8 +3,9 @@ INPUT_SELECTOR = PROMPT_TEXTAREA_SELECTOR
 INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 SUBMIT_BUTTON_SELECTOR = 'ms-prompt-box ms-run-button button'
 INSERT_BUTTON_SELECTOR = 'button[data-test-id="add-media-button"]'
-UPLOAD_BUTTON_SELECTOR = 'button[role="menuitem"]:has-text("Upload file")'
-HIDDEN_FILE_INPUT_SELECTOR = 'input.file-input[type="file"]'
+UPLOAD_BUTTON_SELECTOR = 'button[role="menuitem"]:has-text("Upload a file")'
+HIDDEN_FILE_INPUT_SELECTOR = 'input[type="file"][data-test-upload-file-input]'
+UPLOADED_MEDIA_ITEM_SELECTOR = 'ms-prompt-box .multi-media-row ms-media-chip'
 SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR = 'button[data-test-id="skip-button"][aria-label="Skip preference vote"]'
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'

@@ -9,6 +9,7 @@ from config.tts_selectors import (
     TTS_SETTINGS_VOICE_SELECT_DROPDOWN_SELECTOR, TTS_SETTINGS_VOICE_OPTION_SELECTOR,
     TTS_PAGE_URL_TEMPLATE, TTS_SUPPORTED_MODELS
 )
+from browser.operations import safe_click
 from .models import SpeechConfig
 from models import ClientDisconnectedError
 
@@ -23,31 +24,6 @@ class TTSController:
     async def _check_disconnect(self, check_client_disconnected: Callable, stage: str):
         if check_client_disconnected(stage):
             raise ClientDisconnectedError(f'[{self.req_id}] Client disconnected at stage: {stage}')
-
-    async def _safe_click(self, locator: Locator, element_name: str, timeout: int = 2000) -> bool:
-        try:
-            await locator.wait_for(state='visible', timeout=timeout)
-        except Exception as e:
-            self.logger.warning(f"[{self.req_id}] '{element_name}' 元素不可见: {e}")
-            return False
-        try:
-            await locator.click(timeout=500)
-            return True
-        except Exception:
-            pass
-        await asyncio.sleep(0.1)
-        try:
-            await locator.click(timeout=500, force=True)
-            return True
-        except Exception:
-            pass
-        await asyncio.sleep(0.1)
-        try:
-            await locator.evaluate('element => element.click()')
-            return True
-        except Exception as e:
-            self.logger.error(f"[{self.req_id}] ❌ 所有点击 '{element_name}' 的尝试都失败了: {e}")
-            return False
 
 
     async def navigate_to_tts_page(self, model: str, check_client_disconnected: Callable):
@@ -89,7 +65,7 @@ class TTSController:
                     self.logger.info(f'[{self.req_id}] ✅ TTS 模式已就绪: {mode_name}')
                     return
                 
-                if not await self._safe_click(mode_btn, f'TTS 模式按钮 {mode_name}'):
+                if not await safe_click(mode_btn, f'TTS 模式按钮 {mode_name}', self.req_id):
                     continue
                 await self._check_disconnect(check_client_disconnected, f'TTS 模式切换后')
                 await asyncio.sleep(1.0)
@@ -131,12 +107,12 @@ class TTSController:
                     self.logger.warning(f'[{self.req_id}] 未找到语音选择下拉框')
                     return
                 target_dropdown = voice_dropdowns.nth(speaker_index) if dropdown_count > speaker_index else voice_dropdowns.first
-                if not await self._safe_click(target_dropdown, f'语音下拉框 {speaker_index}'):
+                if not await safe_click(target_dropdown, f'语音下拉框 {speaker_index}', self.req_id):
                     continue
                 await asyncio.sleep(0.3)
                 option = self.page.locator(f'{TTS_SETTINGS_VOICE_OPTION_SELECTOR}:has-text("{voice_name}")')
                 if await option.count() > 0:
-                    if await self._safe_click(option.first, f'语音选项 {voice_name}'):
+                    if await safe_click(option.first, f'语音选项 {voice_name}', self.req_id):
                         self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
                         return
                 else:
@@ -203,7 +179,7 @@ class TTSController:
                 run_btn = self.page.locator(TTS_RUN_BUTTON_SELECTOR)
                 await expect_async(run_btn).to_be_visible(timeout=5000)
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
-                if not await self._safe_click(run_btn, 'Run 按钮'):
+                if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
                         continue
                     raise Exception('Run 按钮点击失败')
