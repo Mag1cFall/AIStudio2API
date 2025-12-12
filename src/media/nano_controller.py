@@ -146,8 +146,8 @@ class NanoController:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
                 run_btn = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=5000)
-                await expect_async(run_btn).to_be_enabled(timeout=5000)
+                await expect_async(run_btn).to_be_visible(timeout=10000)
+                await expect_async(run_btn).to_be_enabled(timeout=10000)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
                         continue
@@ -160,7 +160,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.5)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_content(self, check_client_disconnected: Callable, timeout_seconds: int = 120) -> GeneratedContent:
@@ -172,6 +172,7 @@ class NanoController:
         result = GeneratedContent()
         last_chunk_count = 0
         stable_count = 0
+        no_progress_count = 0
         
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -183,6 +184,10 @@ class NanoController:
             await self._check_disconnect(check_client_disconnected, f'等待内容 ({int(elapsed)}s)')
             
             try:
+                error_detected = await self._check_for_error()
+                if error_detected:
+                    self.logger.error(f'[{self.req_id}] ❌ 检测到生成错误: {error_detected}')
+                    raise Exception(f'生成失败: {error_detected}')
                 chunk_count = await image_chunk_locator.count()
                 self.logger.info(f'[{self.req_id}] 检测到图片块数量: {chunk_count}')
                 
@@ -225,11 +230,40 @@ class NanoController:
                     else:
                         stable_count = 0
                     last_chunk_count = chunk_count
+                elif not is_generating and chunk_count == 0 and not result.text:
+                    no_progress_count += 1
+                    if no_progress_count >= 40:
+                        self.logger.warning(f'[{self.req_id}] ⚠️ 长时间无进展，可能生成失败')
+                        raise Exception('生成无响应，可能失败')
+                else:
+                    no_progress_count = 0
                     
             except Exception as e:
+                if 'ClientDisconnected' in str(type(e).__name__):
+                    raise
+                if '生成失败' in str(e) or '生成无响应' in str(e):
+                    raise
                 self.logger.warning(f'[{self.req_id}] 检查内容时出错: {e}')
             
             await asyncio.sleep(0.25)
+
+    async def _check_for_error(self):
+        error_selectors = [
+            'mat-snack-bar-container .mdc-snackbar__label',
+            '.error-toast span.content-text',
+            'ms-callout[severity="error"] .content-container',
+            '.mat-mdc-snack-bar-label'
+        ]
+        for sel in error_selectors:
+            try:
+                locator = self.page.locator(sel)
+                if await locator.count() > 0 and await locator.first.is_visible():
+                    text = await locator.first.inner_text(timeout=1000)
+                    if text and text.strip():
+                        return text.strip()
+            except:
+                pass
+        return None
 
     async def _extract_images_via_download(self, count: int) -> List[GeneratedImage]:
         import tempfile

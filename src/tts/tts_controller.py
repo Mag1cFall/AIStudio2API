@@ -111,18 +111,30 @@ class TTSController:
                     continue
                 await asyncio.sleep(0.15)
                 option = self.page.locator(f'{TTS_SETTINGS_VOICE_OPTION_SELECTOR}:has-text("{voice_name}")')
-                if await option.count() > 0:
-                    if await safe_click(option.first, f'语音选项 {voice_name}', self.req_id):
-                        self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
-                        return
-                else:
-                    self.logger.warning(f'[{self.req_id}] 未找到语音选项: {voice_name}')
+                try:
+                    await expect_async(option.first).to_be_visible(timeout=3000)
+                except PlaywrightTimeoutError:
+                    self.logger.warning(f'[{self.req_id}] 语音选项 {voice_name} 未出现 (尝试 {attempt})')
                     await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.2)
+                    continue
+                if await safe_click(option.first, f'语音选项 {voice_name}', self.req_id):
+                    await asyncio.sleep(0.15)
+                    self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
                     return
+                else:
+                    self.logger.warning(f'[{self.req_id}] 语音选项点击失败 (尝试 {attempt})')
+                    await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.2)
+                    continue
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置语音失败 (尝试 {attempt}): {e}')
+                try:
+                    await self.page.keyboard.press('Escape')
+                except:
+                    pass
             if attempt < max_retries:
                 await asyncio.sleep(0.15)
 

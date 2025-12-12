@@ -140,8 +140,8 @@ class ImagenController:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
                 run_btn = self.page.locator(IMAGEN_RUN_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=5000)
-                await expect_async(run_btn).to_be_enabled(timeout=5000)
+                await expect_async(run_btn).to_be_visible(timeout=10000)
+                await expect_async(run_btn).to_be_enabled(timeout=10000)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
                         continue
@@ -154,7 +154,7 @@ class ImagenController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.5)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_images(self, expected_count: int, check_client_disconnected: Callable, timeout_seconds: int = 180) -> List[GeneratedImage]:

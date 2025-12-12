@@ -19,50 +19,65 @@ async def process_nano_request(
     req_id: str,
     check_client_disconnected: Callable
 ) -> Dict[str, Any]:
-    controller = NanoController(page, logger, req_id)
+    max_retries = 3
+    last_error = None
     
-    await controller.navigate_to_nano_page(config.model, check_client_disconnected)
-    
-    if config.aspect_ratio and config.aspect_ratio != '1:1':
-        await controller.set_aspect_ratio(config.aspect_ratio, check_client_disconnected)
-    
-    if config.image_bytes:
-        await controller.upload_image(
-            config.image_bytes,
-            config.image_mime_type or 'image/png',
-            check_client_disconnected
-        )
-    
-    await controller.fill_prompt(config.prompt, check_client_disconnected)
-    await controller.run_generation(check_client_disconnected)
-    
-    content = await controller.wait_for_content(check_client_disconnected)
-    
-    response_parts = []
-    
-    if content.text:
-        response_parts.append({
-            'text': content.text
-        })
-    
-    for img in content.images:
-        response_parts.append({
-            'inlineData': {
-                'mimeType': img.mime_type,
-                'data': base64.b64encode(img.image_bytes).decode('utf-8')
+    for attempt in range(1, max_retries + 1):
+        try:
+            controller = NanoController(page, logger, req_id)
+            
+            await controller.navigate_to_nano_page(config.model, check_client_disconnected)
+            
+            if config.aspect_ratio and config.aspect_ratio != '1:1':
+                await controller.set_aspect_ratio(config.aspect_ratio, check_client_disconnected)
+            
+            if config.image_bytes:
+                await controller.upload_image(
+                    config.image_bytes,
+                    config.image_mime_type or 'image/png',
+                    check_client_disconnected
+                )
+            
+            await controller.fill_prompt(config.prompt, check_client_disconnected)
+            await controller.run_generation(check_client_disconnected)
+            
+            content = await controller.wait_for_content(check_client_disconnected)
+            
+            response_parts = []
+            
+            if content.text:
+                response_parts.append({
+                    'text': content.text
+                })
+            
+            for img in content.images:
+                response_parts.append({
+                    'inlineData': {
+                        'mimeType': img.mime_type,
+                        'data': base64.b64encode(img.image_bytes).decode('utf-8')
+                    }
+                })
+            
+            return {
+                'candidates': [{
+                    'content': {
+                        'parts': response_parts,
+                        'role': 'model'
+                    },
+                    'finishReason': 'STOP'
+                }],
+                'modelVersion': config.model
             }
-        })
+        except Exception as e:
+            last_error = e
+            if 'ClientDisconnected' in str(type(e).__name__):
+                raise
+            logger.warning(f'[{req_id}] Nano 请求失败 (尝试 {attempt}/{max_retries}): {e}')
+            if attempt < max_retries:
+                import asyncio
+                await asyncio.sleep(1)
     
-    return {
-        'candidates': [{
-            'content': {
-                'parts': response_parts,
-                'role': 'model'
-            },
-            'finishReason': 'STOP'
-        }],
-        'modelVersion': config.model
-    }
+    raise last_error if last_error else Exception('Nano 请求失败')
 
 
 async def process_image_request(
