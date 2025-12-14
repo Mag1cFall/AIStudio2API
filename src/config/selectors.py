@@ -21,8 +21,9 @@ INSERT_BUTTON_SELECTORS = [
 INSERT_BUTTON_SELECTOR = INSERT_BUTTON_SELECTORS[0]
 
 UPLOAD_BUTTON_SELECTORS = [
-    'button[role="menuitem"]:has-text("Upload a file")',
     'button[aria-label="Upload File"]',
+    'button[role="menuitem"]:has-text("Upload File")',
+    'button[role="menuitem"]:has-text("Upload a file")',
 ]
 UPLOAD_BUTTON_SELECTOR = UPLOAD_BUTTON_SELECTORS[0]
 

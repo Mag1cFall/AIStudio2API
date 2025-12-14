@@ -755,14 +755,11 @@ class PageController:
         return False
 
     async def _upload_images_via_file_input(self, images: List[Dict[str, str]], check_client_disconnected: Callable) -> bool:
-        self.logger.info(f"[{self.req_id}] 尝试逐个上传 {len(images)} 张图片...")
+        self.logger.info(f"[{self.req_id}] 准备上传 {len(images)} 张图片...")
         temp_files = []
-        uploaded_count = 0
         
         try:
             for idx, img in enumerate(images):
-                await self._check_disconnect(check_client_disconnected, f'上传图片 {idx+1}/{len(images)}')
-                
                 mime = img['mime']
                 try:
                     data = base64.b64decode(img['data'])
@@ -777,32 +774,62 @@ class PageController:
                 tf.write(data)
                 tf.close()
                 temp_files.append(tf.name)
-                
-                menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
-                if not menu_opened:
-                    self.logger.warning(f"[{self.req_id}] 未能打开菜单，尝试直接查找 input...")
-                
-                from config import HIDDEN_FILE_INPUT_SELECTOR
-                file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
-                if await file_input.count() == 0:
-                    file_input = self.page.locator('input[type="file"]').first
-                
-                if await file_input.count() == 0:
-                    self.logger.warning(f"[{self.req_id}] 未找到文件输入框，跳过图片 {idx+1}")
-                    continue
-                
-                self.logger.info(f"[{self.req_id}] 上传图片 {idx+1}/{len(images)}...")
-                await file_input.set_input_files(tf.name)
-                uploaded_count += 1
-                
-                await asyncio.sleep(0.2)
+            
+            if not temp_files:
+                return False
+            
+            await self._check_disconnect(check_client_disconnected, '上传图片前')
+            menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
+            if not menu_opened:
+                self.logger.warning(f"[{self.req_id}] 未能打开菜单，尝试直接查找 input...")
+            
+            from config import HIDDEN_FILE_INPUT_SELECTOR
+            file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
+            if await file_input.count() == 0:
+                file_input = self.page.locator('input[type="file"]').first
+            
+            if await file_input.count() == 0:
+                self.logger.warning(f"[{self.req_id}] 未找到文件输入框")
+                asyncio.create_task(self._cleanup_temp_files(temp_files))
+                return False
+            
+            try:
+                self.logger.info(f"[{self.req_id}] 尝试批量上传 {len(temp_files)} 张图片...")
+                await file_input.set_input_files(temp_files)
+                await asyncio.sleep(0.3)
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.1)
+                self.logger.info(f"[{self.req_id}] ✅ 批量上传成功 ({len(temp_files)} 张)")
+                asyncio.create_task(self._cleanup_temp_files(temp_files))
+                return True
+            except Exception as batch_err:
+                self.logger.warning(f"[{self.req_id}] 批量上传失败: {batch_err}，尝试逐个上传...")
+            
+            uploaded_count = 0
+            for idx, tf_path in enumerate(temp_files):
+                await self._check_disconnect(check_client_disconnected, f'上传图片 {idx+1}/{len(temp_files)}')
+                
+                if idx > 0:
+                    menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
+                    if not menu_opened:
+                        continue
+                    file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
+                    if await file_input.count() == 0:
+                        file_input = self.page.locator('input[type="file"]').first
+                
+                try:
+                    self.logger.info(f"[{self.req_id}] 上传图片 {idx+1}/{len(temp_files)}...")
+                    await file_input.set_input_files(tf_path)
+                    uploaded_count += 1
+                    await asyncio.sleep(0.2)
+                    await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.1)
+                except Exception as single_err:
+                    self.logger.warning(f"[{self.req_id}] 单张上传失败 {idx+1}: {single_err}")
             
             asyncio.create_task(self._cleanup_temp_files(temp_files))
             
             if uploaded_count > 0:
-                self.logger.info(f"[{self.req_id}] ✅ 成功上传 {uploaded_count}/{len(images)} 张图片")
+                self.logger.info(f"[{self.req_id}] ✅ 逐个上传完成 {uploaded_count}/{len(temp_files)} 张")
                 return True
             return False
 
@@ -902,7 +929,13 @@ class PageController:
             prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
         else:
             self.logger.info(f'[{self.req_id}] 找到输入框 (匹配: {matched_selector})')
-        autosize_wrapper_locator = self.page.locator('ms-prompt-box .text-wrapper')
+        autosize_wrapper_selectors = ['ms-prompt-input-wrapper .text-wrapper', 'ms-prompt-box .text-wrapper', '.prompt-input-wrapper-container']
+        autosize_wrapper_locator = None
+        for ws in autosize_wrapper_selectors:
+            loc = self.page.locator(ws)
+            if await loc.count() > 0:
+                autosize_wrapper_locator = loc
+                break
         submit_button_locator, submit_matched = await get_first_visible_locator(self.page, SUBMIT_BUTTON_SELECTORS, timeout=3000)
         if not submit_button_locator:
             submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
@@ -933,33 +966,28 @@ class PageController:
                             self.logger.info(f"[{self.req_id}] 回退到虚拟粘贴模式...")
                             await self._paste_images_via_event(processed_images, prompt_textarea_locator)
                         
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(0.5)
                         
-                        try:
-                            self.logger.info(f"[{self.req_id}] 正在验证图片上传 (不阻塞主流程)...")
-                            await self._verify_images_uploaded(len(processed_images), check_client_disconnected)
-                        except Exception as verify_err:
-                             self.logger.warning(f"[{self.req_id}] 图片上传验证未完全通过，但继续提交文字: {verify_err}")
-
                     except Exception as upload_err:
                         self.logger.error(f"[{self.req_id}] 图片上传整体流程异常: {upload_err}。继续提交文字。")
             
             self.logger.info(f"[{self.req_id}] 正在填充文字内容...")
             await prompt_textarea_locator.evaluate('(element, text) => { element.value = text; element.dispatchEvent(new Event("input", { bubbles: true })); }', prompt)
-            await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
+            if autosize_wrapper_locator:
+                try:
+                    await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prompt)
+                except Exception:
+                    pass
             
             await self._check_disconnect(check_client_disconnected, '输入框填充后')
-            wait_timeout_ms_submit_enabled = 100000
+            self.logger.info(f'[{self.req_id}] 文字填充完成，等待发送按钮...')
             try:
-                await self._check_disconnect(check_client_disconnected, '等待发送按钮启用前')
-                await expect_async(submit_button_locator).to_be_enabled(timeout=wait_timeout_ms_submit_enabled)
+                await expect_async(submit_button_locator).to_be_enabled(timeout=15000)
                 self.logger.info(f'[{self.req_id}]  发送按钮已启用。')
             except Exception as e_pw_enabled:
-                self.logger.error(f'[{self.req_id}]  等待发送按钮启用超时或错误: {e_pw_enabled}')
-                await save_error_snapshot(f'submit_button_enable_timeout_{self.req_id}')
-                raise
+                self.logger.warning(f'[{self.req_id}]  等待发送按钮启用超时: {e_pw_enabled}，尝试继续提交...')
             await self._check_disconnect(check_client_disconnected, '发送按钮启用后')
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
                 self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
