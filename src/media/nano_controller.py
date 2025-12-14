@@ -8,10 +8,13 @@ from config.nano_selectors import (
     NANO_SETTINGS_ASPECT_RATIO_DROPDOWN_SELECTOR
 )
 from config.selectors import (
-    PROMPT_TEXTAREA_SELECTOR, SUBMIT_BUTTON_SELECTOR,
-    INSERT_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTOR
+    PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS,
+    SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS,
+    INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS,
+    UPLOAD_BUTTON_SELECTOR, LOADING_SPINNER_SELECTORS
 )
 from browser.operations import safe_click
+from browser.selector_utils import wait_for_any_selector, get_first_visible_locator
 from .models import NanoBananaConfig, GeneratedImage, GeneratedContent
 from models import ClientDisconnectedError
 
@@ -38,10 +41,11 @@ class NanoController:
             try:
                 await self.page.goto(url, timeout=30000, wait_until='domcontentloaded')
                 await self._check_disconnect(check_client_disconnected, 'Nano 页面导航后')
-                prompt_input = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
-                await expect_async(prompt_input).to_be_visible(timeout=15000)
-                self.logger.info(f'[{self.req_id}] ✅ Nano Banana 页面已加载')
-                return
+                locator, matched = await wait_for_any_selector(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=15000)
+                if locator:
+                    self.logger.info(f'[{self.req_id}] ✅ Nano Banana 页面已加载 (匹配: {matched})')
+                    return
+                raise Exception('未找到输入框')
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
@@ -84,11 +88,11 @@ class NanoController:
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
-                insert_btn = self.page.locator(INSERT_BUTTON_SELECTOR)
-                if await insert_btn.count() == 0:
+                insert_btn_locator, _ = await get_first_visible_locator(self.page, INSERT_BUTTON_SELECTORS)
+                if not insert_btn_locator:
                     self.logger.warning(f'[{self.req_id}] 未找到插入按钮')
                     return
-                if not await safe_click(insert_btn, '插入按钮', self.req_id):
+                if not await safe_click(insert_btn_locator, '插入按钮', self.req_id):
                     if attempt < max_retries:
                         continue
                     return
@@ -121,11 +125,13 @@ class NanoController:
             try:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
-                text_input = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
-                await safe_click(text_input, '输入框', self.req_id)
-                await text_input.fill(prompt)
+                text_input_locator, _ = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS)
+                if not text_input_locator:
+                    raise Exception('未找到输入框')
+                await safe_click(text_input_locator, '输入框', self.req_id)
+                await text_input_locator.fill(prompt)
                 await asyncio.sleep(0.1)
-                actual = await text_input.input_value()
+                actual = await text_input_locator.input_value()
                 if prompt in actual or actual in prompt:
                     self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
                     return
@@ -145,8 +151,10 @@ class NanoController:
             try:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
-                run_btn = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=10000)
+                run_btn, matched = await wait_for_any_selector(self.page, SUBMIT_BUTTON_SELECTORS, timeout=10000)
+                if not run_btn:
+                    raise Exception('未找到Run按钮')
+                self.logger.info(f'[{self.req_id}] 找到Run按钮 (匹配: {matched})')
                 await expect_async(run_btn).to_be_enabled(timeout=10000)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
@@ -202,8 +210,7 @@ class NanoController:
                         result.text = '\n'.join(texts)
                 
                 is_generating = False
-                spinner_selectors = [
-                    'button[aria-label="Run"].run-button svg .stoppable-spinner',
+                spinner_selectors = LOADING_SPINNER_SELECTORS + [
                     'mat-spinner',
                     '.loading-spinner',
                     'ms-chat-turn.model .thinking-indicator'

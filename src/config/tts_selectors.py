@@ -10,7 +10,11 @@ TTS_FOOTER_ACTIONS_SELECTOR = '.speech-prompt-footer-actions'
 TTS_FOOTER_AUDIO_PLAYER_WRAPPER_SELECTOR = '.speech-prompt-footer-actions-left'
 TTS_AUDIO_PLAYER_SELECTOR = '.speech-prompt-footer audio[controls]'
 TTS_RUN_BUTTON_WRAPPER_SELECTOR = '.speech-prompt-footer .button-wrapper'
-TTS_RUN_BUTTON_SELECTOR = 'ms-run-button button[aria-label="Run"]'
+TTS_RUN_BUTTON_SELECTORS = [
+    'ms-run-button button[aria-label="Run"]',
+    '.speech-prompt-footer button[aria-label="Run"].run-button',
+]
+TTS_RUN_BUTTON_SELECTOR = TTS_RUN_BUTTON_SELECTORS[0]
 
 TTS_SINGLE_SPEAKER_BUILDER_SELECTOR = '.single-speaker-prompt-builder-wrapper'
 TTS_SINGLE_SPEAKER_STYLE_INPUT_SELECTOR = 'ms-autosize-textarea.style-instructions-textarea textarea'

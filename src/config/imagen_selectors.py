@@ -7,8 +7,20 @@ IMAGEN_MAIN_CONTENT_SELECTOR = '.image-prompt-main'
 IMAGEN_TOOLBAR_SELECTOR = 'ms-toolbar'
 IMAGEN_TOOLBAR_TITLE_SELECTOR = 'ms-toolbar h1.mode-title'
 
-IMAGEN_PROMPT_INPUT_SELECTOR = 'ms-prompt-box textarea[aria-label="Enter a prompt to generate an image"]'
-IMAGEN_RUN_BUTTON_SELECTOR = 'ms-prompt-box ms-run-button button[aria-label="Run"]'
+IMAGEN_PROMPT_INPUT_SELECTORS = [
+    'ms-prompt-input-wrapper textarea[aria-label="Enter a prompt to generate an image"]',
+    'textarea[aria-label="Enter a prompt to generate an image"]',
+    'ms-prompt-box textarea[aria-label="Enter a prompt to generate an image"]',
+]
+IMAGEN_PROMPT_INPUT_SELECTOR = IMAGEN_PROMPT_INPUT_SELECTORS[0]
+
+IMAGEN_RUN_BUTTON_SELECTORS = [
+    'ms-run-button button[aria-label="Run"]',
+    'button[aria-label="Run"].run-button',
+    'ms-prompt-input-wrapper ms-run-button button[aria-label="Run"]',
+    'ms-prompt-box ms-run-button button[aria-label="Run"]',
+]
+IMAGEN_RUN_BUTTON_SELECTOR = IMAGEN_RUN_BUTTON_SELECTORS[0]
 
 IMAGEN_GALLERY_CONTAINER_SELECTOR = 'ms-image-generation-gallery'
 IMAGEN_GALLERY_ITEM_SELECTOR = 'ms-image-generation-gallery-image'

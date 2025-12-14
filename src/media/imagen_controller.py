@@ -4,13 +4,15 @@ from typing import Callable, Optional, List
 from playwright.async_api import Page as AsyncPage, Locator, expect as expect_async
 from config.imagen_selectors import (
     IMAGEN_PAGE_URL_TEMPLATE, IMAGEN_SUPPORTED_MODELS, IMAGEN_ROOT_SELECTOR,
-    IMAGEN_PROMPT_INPUT_SELECTOR, IMAGEN_RUN_BUTTON_SELECTOR,
+    IMAGEN_PROMPT_INPUT_SELECTOR, IMAGEN_PROMPT_INPUT_SELECTORS,
+    IMAGEN_RUN_BUTTON_SELECTOR, IMAGEN_RUN_BUTTON_SELECTORS,
     IMAGEN_GALLERY_CONTAINER_SELECTOR, IMAGEN_GALLERY_ITEM_SELECTOR,
     IMAGEN_GENERATED_IMAGE_SELECTOR, IMAGEN_SETTINGS_PANEL_SELECTOR,
     IMAGEN_SETTINGS_NUM_RESULTS_INPUT_SELECTOR, IMAGEN_SETTINGS_ASPECT_RATIO_BUTTON_SELECTOR,
     IMAGEN_SETTINGS_NEGATIVE_PROMPT_SELECTOR
 )
 from browser.operations import safe_click
+from browser.selector_utils import wait_for_any_selector, get_first_visible_locator
 from .models import ImageGenerationConfig, GeneratedImage
 from models import ClientDisconnectedError
 
@@ -118,7 +120,10 @@ class ImagenController:
             try:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
-                text_input = self.page.locator(IMAGEN_PROMPT_INPUT_SELECTOR)
+                text_input, matched = await get_first_visible_locator(self.page, IMAGEN_PROMPT_INPUT_SELECTORS)
+                if not text_input:
+                    raise Exception('未找到输入框')
+                self.logger.info(f'[{self.req_id}] 找到输入框 (匹配: {matched})')
                 await safe_click(text_input, '输入框', self.req_id)
                 await text_input.fill(prompt)
                 await asyncio.sleep(0.1)
@@ -139,8 +144,10 @@ class ImagenController:
             try:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
-                run_btn = self.page.locator(IMAGEN_RUN_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=10000)
+                run_btn, matched = await wait_for_any_selector(self.page, IMAGEN_RUN_BUTTON_SELECTORS, timeout=10000)
+                if not run_btn:
+                    raise Exception('未找到Run按钮')
+                self.logger.info(f'[{self.req_id}] 找到Run按钮 (匹配: {matched})')
                 await expect_async(run_btn).to_be_enabled(timeout=10000)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:

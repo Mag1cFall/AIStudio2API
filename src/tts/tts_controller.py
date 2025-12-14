@@ -2,7 +2,8 @@ import asyncio
 from typing import Callable, Optional
 from playwright.async_api import Page as AsyncPage, Locator, expect as expect_async, TimeoutError as PlaywrightTimeoutError
 from config.tts_selectors import (
-    TTS_ROOT_SELECTOR, TTS_RUN_BUTTON_SELECTOR, TTS_AUDIO_PLAYER_SELECTOR,
+    TTS_ROOT_SELECTOR, TTS_RUN_BUTTON_SELECTOR, TTS_RUN_BUTTON_SELECTORS,
+    TTS_AUDIO_PLAYER_SELECTOR,
     TTS_SINGLE_SPEAKER_TEXT_INPUT_SELECTOR, TTS_SINGLE_SPEAKER_STYLE_INPUT_SELECTOR,
     TTS_MULTI_SPEAKER_RAW_INPUT_SELECTOR, TTS_SETTINGS_MODE_SELECTOR_CONTAINER,
     TTS_SETTINGS_SINGLE_SPEAKER_MODE_BUTTON, TTS_SETTINGS_MULTI_SPEAKER_MODE_BUTTON,
@@ -10,6 +11,7 @@ from config.tts_selectors import (
     TTS_PAGE_URL_TEMPLATE, TTS_SUPPORTED_MODELS
 )
 from browser.operations import safe_click
+from browser.selector_utils import wait_for_any_selector
 from .models import SpeechConfig
 from models import ClientDisconnectedError
 
@@ -188,8 +190,10 @@ class TTSController:
             try:
                 await self.page.keyboard.press('Escape')
                 await asyncio.sleep(0.15)
-                run_btn = self.page.locator(TTS_RUN_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=5000)
+                run_btn, matched = await wait_for_any_selector(self.page, TTS_RUN_BUTTON_SELECTORS, timeout=5000)
+                if not run_btn:
+                    raise Exception('未找到Run按钮')
+                self.logger.info(f'[{self.req_id}] 找到Run按钮 (匹配: {matched})')
                 await expect_async(run_btn).to_be_enabled(timeout=5000)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:

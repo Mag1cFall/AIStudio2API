@@ -1,15 +1,49 @@
-PROMPT_TEXTAREA_SELECTOR = 'ms-prompt-box textarea'
+PROMPT_TEXTAREA_SELECTORS = [
+    'ms-prompt-input-wrapper ms-autosize-textarea textarea',
+    'ms-prompt-box textarea',
+]
+PROMPT_TEXTAREA_SELECTOR = PROMPT_TEXTAREA_SELECTORS[0]
 INPUT_SELECTOR = PROMPT_TEXTAREA_SELECTOR
 INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
-SUBMIT_BUTTON_SELECTOR = 'ms-prompt-box ms-run-button button'
-INSERT_BUTTON_SELECTOR = 'button[data-test-id="add-media-button"]'
-UPLOAD_BUTTON_SELECTOR = 'button[role="menuitem"]:has-text("Upload a file")'
-HIDDEN_FILE_INPUT_SELECTOR = 'input[type="file"][data-test-upload-file-input]'
+
+SUBMIT_BUTTON_SELECTORS = [
+    'button[aria-label="Run"].run-button',
+    'ms-run-button button[aria-label="Run"]',
+    'ms-prompt-box ms-run-button button',
+]
+SUBMIT_BUTTON_SELECTOR = SUBMIT_BUTTON_SELECTORS[0]
+
+INSERT_BUTTON_SELECTORS = [
+    'button[aria-label="Insert assets such as images, videos, files, or audio"]',
+    'button[data-test-add-chunk-menu-button]',
+    'button[data-test-id="add-media-button"]',
+]
+INSERT_BUTTON_SELECTOR = INSERT_BUTTON_SELECTORS[0]
+
+UPLOAD_BUTTON_SELECTORS = [
+    'button[role="menuitem"]:has-text("Upload a file")',
+    'button[aria-label="Upload File"]',
+]
+UPLOAD_BUTTON_SELECTOR = UPLOAD_BUTTON_SELECTORS[0]
+
+HIDDEN_FILE_INPUT_SELECTORS = [
+    'input[type="file"][data-test-upload-file-input]',
+    'input.file-input[type="file"]',
+]
+HIDDEN_FILE_INPUT_SELECTOR = HIDDEN_FILE_INPUT_SELECTORS[0]
+
 UPLOADED_MEDIA_ITEM_SELECTOR = 'ms-prompt-box .multi-media-row ms-media-chip'
 SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR = 'button[data-test-id="skip-button"][aria-label="Skip preference vote"]'
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
-LOADING_SPINNER_SELECTOR = 'ms-prompt-box ms-run-button button svg .stoppable-spinner'
+
+LOADING_SPINNER_SELECTORS = [
+    'button[aria-label="Run"].run-button svg .stoppable-spinner',
+    'ms-run-button button svg .stoppable-spinner',
+    'ms-prompt-box ms-run-button button svg .stoppable-spinner',
+]
+LOADING_SPINNER_SELECTOR = LOADING_SPINNER_SELECTORS[0]
+
 OVERLAY_SELECTOR = '.mat-mdc-dialog-inner-container'
 ZERO_STATE_SELECTOR = 'ms-zero-state'
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'

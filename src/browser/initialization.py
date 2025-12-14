@@ -6,6 +6,7 @@ import logging
 from typing import Optional, Any, Dict, Tuple
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, BrowserContext as AsyncBrowserContext, Error as PlaywrightAsyncError, expect as expect_async
 from config import *
+from config.selectors import PROMPT_TEXTAREA_SELECTORS
 from models import ClientDisconnectedError
 logger = logging.getLogger('AIStudioProxyServer')
 
@@ -305,10 +306,19 @@ async def _initialize_page_logic(browser: AsyncBrowser):
         logger.info(f'✅ 确认位于 AI Studio: {current_url}')
         await found_page.bring_to_front()
         try:
-            input_wrapper_locator = found_page.locator('ms-prompt-box')
-            await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
-            await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
-            logger.info('✅ 核心输入区域可见。')
+            from browser.selector_utils import wait_for_any_selector
+            wrapper_selectors = ['ms-prompt-input-wrapper', 'ms-prompt-box']
+            wrapper_locator, wrapper_matched = await wait_for_any_selector(found_page, wrapper_selectors, timeout=35000)
+            if wrapper_locator:
+                logger.info(f'✅ 输入框wrapper可见 (匹配: {wrapper_matched})')
+            else:
+                logger.warning('⚠️ 未找到任何wrapper，尝试直接查找输入框')
+            input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=10000)
+            if input_locator:
+                logger.info(f'✅ 核心输入区域可见 (匹配: {matched})')
+            else:
+                await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
+                logger.info('✅ 核心输入区域可见 (默认选择器)')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
                 from browser.operations import get_model_name_from_page_parallel

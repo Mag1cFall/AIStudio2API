@@ -5,10 +5,11 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
-from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
+from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
 from models import ClientDisconnectedError, ElementClickError
 from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content, click_element
 from .thinking_normalizer import parse_reasoning_param, describe_config
+from .selector_utils import wait_for_any_selector, get_first_visible_locator
 
 class PageController:
 
@@ -704,8 +705,7 @@ class PageController:
     async def _robust_click_insert_assets(self, check_client_disconnected: Callable) -> bool:
         self.logger.info(f"[{self.req_id}] 开始寻找并点击媒体添加按钮...")
         
-        trigger_selectors = [
-            INSERT_BUTTON_SELECTOR,
+        trigger_selectors = INSERT_BUTTON_SELECTORS + [
             'button[aria-label*="Insert"]',
             'button[iconname="add_circle"]',
             'button[iconname="note_add"]'
@@ -896,9 +896,18 @@ class PageController:
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 📤 提交提示 ({len(prompt)} chars)...')
-        prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
+        prompt_textarea_locator, matched_selector = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=5000)
+        if not prompt_textarea_locator:
+            self.logger.warning(f'[{self.req_id}] 未找到输入框，尝试默认选择器')
+            prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
+        else:
+            self.logger.info(f'[{self.req_id}] 找到输入框 (匹配: {matched_selector})')
         autosize_wrapper_locator = self.page.locator('ms-prompt-box .text-wrapper')
-        submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+        submit_button_locator, submit_matched = await get_first_visible_locator(self.page, SUBMIT_BUTTON_SELECTORS, timeout=3000)
+        if not submit_button_locator:
+            submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+        else:
+            self.logger.info(f'[{self.req_id}] 找到提交按钮 (匹配: {submit_matched})')
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
             await self._check_disconnect(check_client_disconnected, '输入框可见后')
