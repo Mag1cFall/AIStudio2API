@@ -3,9 +3,10 @@ import json
 import asyncio
 import logging
 import time
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, List, Dict, Any, Union
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
+from pydantic import BaseModel, Field
 import aiohttp
 import uvicorn
 
@@ -19,7 +20,75 @@ DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 MANAGER_URL = "http://127.0.0.1:9000"
 RATE_LIMIT_KEYWORDS = [b"exceeded quota", b"out of free generations", b"rate limit"]
 
-app = FastAPI(title="AIStudio2API Gateway")
+
+class MessageContent(BaseModel):
+    type: str = "text"
+    text: Optional[str] = None
+    image_url: Optional[Dict[str, str]] = None
+
+class Message(BaseModel):
+    role: str = Field(..., description="角色: system, user, assistant")
+    content: Union[str, List[MessageContent]] = Field(..., description="消息内容")
+
+class ChatCompletionRequest(BaseModel):
+    model: str = Field("gemini-2.0-flash", description="模型ID")
+    messages: List[Message] = Field(..., description="消息列表")
+    stream: bool = Field(False, description="是否流式响应")
+    temperature: Optional[float] = Field(1.0, ge=0, le=2)
+    max_tokens: Optional[int] = Field(65536)
+    top_p: Optional[float] = Field(0.95, ge=0, le=1)
+    stop: Optional[List[str]] = None
+    reasoning_effort: Optional[Union[int, str]] = Field(None, description="思考预算")
+
+    class Config:
+        extra = "allow"
+
+class TTSRequest(BaseModel):
+    model: str = Field("gemini-2.5-flash-preview-tts")
+    contents: Any = Field(..., description="文本内容")
+    generationConfig: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = "allow"
+
+class ImagenRequest(BaseModel):
+    prompt: str = Field(..., description="图片描述")
+    model: str = Field("imagen-3.0-generate-002")
+    number_of_images: int = Field(1, ge=1, le=4)
+    aspect_ratio: str = Field("1:1")
+    negative_prompt: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+class VeoRequest(BaseModel):
+    prompt: str = Field(..., description="视频描述")
+    model: str = Field("veo-2.0-generate-001")
+    duration_seconds: int = Field(5)
+    aspect_ratio: str = Field("16:9")
+    negative_prompt: Optional[str] = None
+    image: Optional[str] = Field(None, description="Base64参考图")
+
+    class Config:
+        extra = "allow"
+
+class NanoRequest(BaseModel):
+    model: str = Field("gemini-2.5-flash-image")
+    prompt: str = Field(..., description="图片描述")
+    aspect_ratio: str = Field("1:1")
+    image: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+app = FastAPI(
+    title="AIStudio2API Gateway",
+    description="多Worker负载均衡网关，将请求转发到后端Worker实例",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
 _session: Optional[aiohttp.ClientSession] = None
 _worker_cache = {"workers": [], "last_update": 0, "index": 0}
@@ -91,12 +160,14 @@ async def shutdown():
     if _session and not _session.closed:
         await _session.close()
 
-@app.get("/")
+@app.get("/", tags=["System"], summary="网关状态")
 async def root():
+    """返回网关运行状态和可用Worker数量"""
     return {"status": "ok", "mode": "gateway", "workers": len(_worker_cache["workers"])}
 
-@app.get("/v1/models")
+@app.get("/v1/models", tags=["Chat"], summary="获取模型列表")
 async def models():
+    """返回所有可用的AI模型列表"""
     await refresh_workers()
     worker = get_next_worker()
     if not worker:
@@ -114,8 +185,9 @@ async def models():
         logger.error(f"Forward /v1/models failed: {e}")
         raise HTTPException(status_code=502, detail=str(e))
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", tags=["Chat"], summary="聊天对话")
 async def chat_completions(request: Request):
+    """OpenAI兼容的聊天接口，支持流式和非流式响应"""
     await refresh_workers()
     body = await request.body()
     body_json = json.loads(body)
@@ -172,8 +244,9 @@ async def chat_completions(request: Request):
             logger.error(f"[{req_id}] Forward failed: {e}")
             raise HTTPException(status_code=502, detail=str(e))
 
-@app.get("/health")
+@app.get("/health", tags=["System"], summary="健康检查")
 async def health():
+    """返回网关健康状态"""
     return {"status": "ok", "workers": len(_worker_cache["workers"])}
 
 async def forward_media_request(request: Request, path: str):
@@ -200,20 +273,24 @@ async def forward_media_request(request: Request, path: str):
         logger.error(f"Forward {path} failed: {e}")
         raise HTTPException(status_code=502, detail=str(e))
 
-@app.post("/generate-speech")
+@app.post("/generate-speech", tags=["Media"], summary="TTS语音合成")
 async def generate_speech(request: Request):
+    """Gemini 2.5 TTS语音生成"""
     return await forward_media_request(request, "/generate-speech")
 
-@app.post("/generate-image")
+@app.post("/generate-image", tags=["Media"], summary="Imagen图片生成")
 async def generate_image(request: Request):
+    """Imagen 3图片生成"""
     return await forward_media_request(request, "/generate-image")
 
-@app.post("/generate-video")
+@app.post("/generate-video", tags=["Media"], summary="Veo视频生成")
 async def generate_video(request: Request):
+    """Veo 2视频生成"""
     return await forward_media_request(request, "/generate-video")
 
-@app.post("/nano/generate")
+@app.post("/nano/generate", tags=["Media"], summary="Nano图片生成")
 async def nano_generate(request: Request):
+    """Gemini 2.5 Flash原生图片生成"""
     return await forward_media_request(request, "/nano/generate")
 
 @app.post("/v1beta/models/{model}:generateContent")

@@ -1,0 +1,679 @@
+openapi: 3.1.0
+info:
+  title: AIStudio2API
+  description: |
+    将 Google AI Studio 网页界面转换为 OpenAI 兼容格式的代理 API。
+    
+    ## 认证
+    - 如果配置了API密钥，需要在请求头中提供 `Authorization: Bearer <token>` 或 `X-API-Key: <token>`
+    - 密钥配置文件: `data/key.txt`
+    
+    ## 快速开始
+    ```bash
+    curl http://localhost:2048/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"model": "gemini-2.0-flash", "messages": [{"role": "user", "content": "Hello"}]}'
+    ```
+  version: 1.0.0
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:2048
+    description: 本地开发服务器
+
+tags:
+  - name: Chat
+    description: 聊天对话接口 (OpenAI兼容)
+  - name: Media
+    description: 媒体生成接口 (图片/视频/TTS)
+  - name: System
+    description: 系统管理接口
+  - name: Keys
+    description: API密钥管理
+
+paths:
+  /v1/chat/completions:
+    post:
+      tags: [Chat]
+      summary: 聊天对话
+      description: OpenAI兼容的聊天接口，支持流式和非流式响应
+      operationId: chatCompletions
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            examples:
+              basic:
+                summary: 基础请求
+                value:
+                  model: gemini-2.0-flash
+                  messages:
+                    - role: user
+                      content: Hello!
+                  stream: false
+              with_params:
+                summary: 带参数请求
+                value:
+                  model: gemini-2.5-pro-preview-05-06
+                  messages:
+                    - role: system
+                      content: You are helpful.
+                    - role: user
+                      content: Explain quantum computing
+                  stream: true
+                  temperature: 0.7
+                  max_tokens: 4096
+                  reasoning_effort: 8192
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE流式响应
+        '401':
+          description: 未授权
+        '500':
+          description: 服务器错误
+
+  /v1/models:
+    get:
+      tags: [Chat]
+      summary: 获取模型列表
+      operationId: listModels
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+
+  /v1/queue:
+    get:
+      tags: [System]
+      summary: 获取请求队列状态
+      operationId: getQueueStatus
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueStatus'
+
+  /v1/cancel/{req_id}:
+    post:
+      tags: [System]
+      summary: 取消排队请求
+      operationId: cancelRequest
+      parameters:
+        - name: req_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+        '404':
+          description: 请求未找到
+
+  /generate-speech:
+    post:
+      tags: [Media]
+      summary: TTS语音合成
+      operationId: generateSpeech
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TTSRequest'
+            example:
+              model: gemini-2.5-flash-preview-tts
+              contents: Hello, world!
+              generationConfig:
+                responseModalities: [AUDIO]
+                speechConfig:
+                  voiceConfig:
+                    prebuiltVoiceConfig:
+                      voiceName: Kore
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TTSResponse'
+
+  /generate-image:
+    post:
+      tags: [Media]
+      summary: Imagen图片生成
+      operationId: generateImage
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImagenRequest'
+            example:
+              prompt: A beautiful sunset over mountains
+              model: imagen-3.0-generate-002
+              number_of_images: 1
+              aspect_ratio: "16:9"
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImagenResponse'
+
+  /generate-video:
+    post:
+      tags: [Media]
+      summary: Veo视频生成
+      operationId: generateVideo
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VeoRequest'
+            example:
+              prompt: A cat walking in the garden
+              model: veo-2.0-generate-001
+              duration_seconds: 5
+              aspect_ratio: "16:9"
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VeoResponse'
+
+  /nano/generate:
+    post:
+      tags: [Media]
+      summary: Nano Banana图片生成
+      operationId: generateNano
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NanoRequest'
+            example:
+              model: gemini-2.5-flash-image
+              prompt: Generate an image of a robot
+              aspect_ratio: "1:1"
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NanoResponse'
+
+  /health:
+    get:
+      tags: [System]
+      summary: 健康检查
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /api/info:
+    get:
+      tags: [System]
+      summary: 获取API配置信息
+      operationId: getApiInfo
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiInfo'
+
+  /api/keys:
+    get:
+      tags: [Keys]
+      summary: 获取API密钥列表
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: string
+    post:
+      tags: [Keys]
+      summary: 添加API密钥
+      operationId: addApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: 成功
+    delete:
+      tags: [Keys]
+      summary: 删除API密钥
+      operationId: deleteApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+      responses:
+        '200':
+          description: 成功
+
+  /api/keys/test:
+    post:
+      tags: [Keys]
+      summary: 测试API密钥有效性
+      operationId: testApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      required: [messages]
+      properties:
+        model:
+          type: string
+          default: gemini-2.0-flash
+          description: 模型ID
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        stream:
+          type: boolean
+          default: false
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          default: 1.0
+        max_tokens:
+          type: integer
+          default: 65536
+        top_p:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.95
+        stop:
+          type: array
+          items:
+            type: string
+        reasoning_effort:
+          oneOf:
+            - type: integer
+              description: 思考预算(token数)
+            - type: string
+              enum: [low, medium, high]
+        tools:
+          type: array
+          items:
+            type: object
+          description: 工具定义(如google_search)
+
+    Message:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum: [text, image_url]
+                  text:
+                    type: string
+                  image_url:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          default: chat.completion
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: '#/components/schemas/Message'
+              finish_reason:
+                type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    ModelList:
+      type: object
+      properties:
+        object:
+          type: string
+          default: list
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              object:
+                type: string
+              created:
+                type: integer
+              owned_by:
+                type: string
+              display_name:
+                type: string
+              injected:
+                type: boolean
+
+    TTSRequest:
+      type: object
+      required: [contents]
+      properties:
+        model:
+          type: string
+          default: gemini-2.5-flash-preview-tts
+          enum:
+            - gemini-2.5-flash-preview-tts
+            - gemini-2.5-pro-preview-tts
+        contents:
+          oneOf:
+            - type: string
+            - type: array
+          description: 文本内容或SSML
+        generationConfig:
+          type: object
+          properties:
+            responseModalities:
+              type: array
+              items:
+                type: string
+            speechConfig:
+              type: object
+              properties:
+                voiceConfig:
+                  type: object
+
+    TTSResponse:
+      type: object
+      properties:
+        candidates:
+          type: array
+          items:
+            type: object
+            properties:
+              content:
+                type: object
+                properties:
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        inlineData:
+                          type: object
+                          properties:
+                            mimeType:
+                              type: string
+                            data:
+                              type: string
+                              description: Base64编码的WAV音频
+
+    ImagenRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        model:
+          type: string
+          default: imagen-3.0-generate-002
+        number_of_images:
+          type: integer
+          default: 1
+          minimum: 1
+          maximum: 4
+        aspect_ratio:
+          type: string
+          default: "1:1"
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4"]
+        negative_prompt:
+          type: string
+
+    ImagenResponse:
+      type: object
+      properties:
+        predictions:
+          type: array
+          items:
+            type: object
+            properties:
+              bytesBase64Encoded:
+                type: string
+              mimeType:
+                type: string
+
+    VeoRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        model:
+          type: string
+          default: veo-2.0-generate-001
+        duration_seconds:
+          type: integer
+          default: 5
+          enum: [5, 8]
+        aspect_ratio:
+          type: string
+          default: "16:9"
+        negative_prompt:
+          type: string
+        image:
+          type: string
+          description: Base64编码的参考图片
+
+    VeoResponse:
+      type: object
+      properties:
+        predictions:
+          type: array
+          items:
+            type: object
+            properties:
+              bytesBase64Encoded:
+                type: string
+              mimeType:
+                type: string
+
+    NanoRequest:
+      type: object
+      required: [prompt]
+      properties:
+        model:
+          type: string
+          default: gemini-2.5-flash-image
+        prompt:
+          type: string
+        aspect_ratio:
+          type: string
+          default: "1:1"
+        image:
+          type: string
+          description: Base64编码的参考图片
+
+    NanoResponse:
+      type: object
+      properties:
+        candidates:
+          type: array
+          items:
+            type: object
+            properties:
+              content:
+                type: object
+                properties:
+                  parts:
+                    type: array
+
+    QueueStatus:
+      type: object
+      properties:
+        queue_length:
+          type: integer
+        active_requests_count:
+          type: integer
+        is_processing_locked:
+          type: boolean
+        queued_items:
+          type: array
+          items:
+            type: object
+        active_items:
+          type: array
+          items:
+            type: object
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        playwright:
+          type: boolean
+        browser_connected:
+          type: boolean
+        page_status:
+          type: string
+        worker_task:
+          type: string
+        queue_length:
+          type: integer
+
+    ApiInfo:
+      type: object
+      properties:
+        model_name:
+          type: string
+        api_base_url:
+          type: string
+        api_key_required:
+          type: boolean
+        api_key_count:
+          type: integer
+        openai_compatible:
+          type: boolean

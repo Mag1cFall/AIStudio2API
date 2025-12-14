@@ -191,9 +191,15 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 def create_app() -> FastAPI:
-    app = FastAPI(title='AI Studio Proxy Server (集成模式)', description='通过 Playwright与 AI Studio 交互的代理服务器。', version='0.6.0-integrated', lifespan=lifespan)
+    app = FastAPI(
+        title='AIStudio2API',
+        description='AI Studio 代理服务器 - 将 Google AI Studio 转换为 OpenAI 兼容 API',
+        version='1.0.0',
+        lifespan=lifespan,
+        docs_url='/docs',
+        redoc_url='/redoc',
+    )
     
-    # 添加 CORS 支持，允许前端 Playground (端口9000) 访问 API (端口2048)
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
         CORSMiddleware,
@@ -206,23 +212,28 @@ def create_app() -> FastAPI:
     app.add_middleware(APIKeyAuthMiddleware)
     from .routes import get_api_info, health_check, list_models, chat_completions, cancel_request, get_queue_status, websocket_log_endpoint, get_api_keys, add_api_key, test_api_key, delete_api_key, generate_speech, generate_image, generate_video, generate_nano_content
     from fastapi.responses import FileResponse
-    app.get('/api/info')(get_api_info)
-    app.get('/health')(health_check)
-    app.get('/v1/models')(list_models)
-    app.post('/v1/chat/completions')(chat_completions)
-    app.post('/v1/cancel/{req_id}')(cancel_request)
-    app.get('/v1/queue')(get_queue_status)
-    app.websocket('/ws/logs')(websocket_log_endpoint)
-    app.get('/api/keys')(get_api_keys)
-    app.post('/api/keys')(add_api_key)
-    app.post('/api/keys/test')(test_api_key)
-    app.delete('/api/keys')(delete_api_key)
-    app.post('/generate-speech')(generate_speech)
-    app.post('/v1beta/models/{model}:generateContent')(generate_speech)
-    app.post('/generate-image')(generate_image)
-    app.post('/v1beta/models/{model}:predict')(generate_image)
-    app.post('/generate-video')(generate_video)
-    app.post('/v1beta/models/{model}:predictLongRunning')(generate_video)
-    app.post('/nano/generate')(generate_nano_content)
-    app.post('/v1beta/models/gemini-2.5-flash-image:generateContent')(generate_nano_content)
+    
+    app.add_api_route('/api/info', get_api_info, methods=['GET'], tags=['System'], summary='获取API配置信息')
+    app.add_api_route('/health', health_check, methods=['GET'], tags=['System'], summary='健康检查')
+    
+    app.add_api_route('/v1/models', list_models, methods=['GET'], tags=['Chat'], summary='获取模型列表', description='返回所有可用的AI模型')
+    app.add_api_route('/v1/chat/completions', chat_completions, methods=['POST'], tags=['Chat'], summary='聊天对话', description='OpenAI兼容的聊天接口，支持流式和非流式响应')
+    app.add_api_route('/v1/cancel/{req_id}', cancel_request, methods=['POST'], tags=['Chat'], summary='取消请求')
+    app.add_api_route('/v1/queue', get_queue_status, methods=['GET'], tags=['Chat'], summary='获取队列状态')
+    
+    app.add_api_route('/api/keys', get_api_keys, methods=['GET'], tags=['Keys'], summary='获取API密钥列表')
+    app.add_api_route('/api/keys', add_api_key, methods=['POST'], tags=['Keys'], summary='添加API密钥')
+    app.add_api_route('/api/keys/test', test_api_key, methods=['POST'], tags=['Keys'], summary='测试API密钥')
+    app.add_api_route('/api/keys', delete_api_key, methods=['DELETE'], tags=['Keys'], summary='删除API密钥')
+    
+    app.add_api_route('/generate-speech', generate_speech, methods=['POST'], tags=['Media'], summary='TTS语音合成', description='Gemini 2.5 TTS语音生成')
+    app.add_api_route('/v1beta/models/{model}:generateContent', generate_speech, methods=['POST'], tags=['Media'], summary='TTS (v1beta格式)')
+    app.add_api_route('/generate-image', generate_image, methods=['POST'], tags=['Media'], summary='Imagen图片生成', description='Imagen 3图片生成')
+    app.add_api_route('/v1beta/models/{model}:predict', generate_image, methods=['POST'], tags=['Media'], summary='Imagen (v1beta格式)')
+    app.add_api_route('/generate-video', generate_video, methods=['POST'], tags=['Media'], summary='Veo视频生成', description='Veo 2视频生成')
+    app.add_api_route('/v1beta/models/{model}:predictLongRunning', generate_video, methods=['POST'], tags=['Media'], summary='Veo (v1beta格式)')
+    app.add_api_route('/nano/generate', generate_nano_content, methods=['POST'], tags=['Media'], summary='Nano图片生成', description='Gemini 2.5 Flash原生图片生成')
+    app.add_api_route('/v1beta/models/gemini-2.5-flash-image:generateContent', generate_nano_content, methods=['POST'], tags=['Media'], summary='Nano (v1beta格式)')
+    
+    app.add_api_websocket_route('/ws/logs', websocket_log_endpoint)
     return app
