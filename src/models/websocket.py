@@ -7,6 +7,8 @@ from typing import Dict
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from config.timeouts import SLEEP_RETRY, SLEEP_MEDIUM
+
 
 class StreamToLogger:
 
@@ -150,8 +152,8 @@ class WebSocketLogHandler(logging.Handler):
                     })
                     await self.manager.broadcast(payload)
 
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(SLEEP_MEDIUM)
                 
             except Exception as err:
                 print(f"WebSocketLogHandler Error: {err}", file=sys.stderr)
-                await asyncio.sleep(1)
+                await asyncio.sleep(SLEEP_RETRY)

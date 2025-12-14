@@ -21,11 +21,11 @@
   🎤 Gemini 2.5 TTS 语音生成
 </p>
 
-<img src="docs/demo.gif" alt="Demo GIF" width="100%" />
+<img src="docs/img/demo.gif" alt="Demo GIF" width="100%" />
 
-<p align="center">
-  <img src="docs/多worker并发和媒体模型支援.png" alt="多Worker并发与媒体模型支援" width="80%" />
-</p>
+<!-- <p align="center">
+  <img src="docs/img/多worker并发和媒体模型支援.png" alt="多Worker并发与媒体模型支援" width="80%" />
+</p> -->
 
 </div>
 

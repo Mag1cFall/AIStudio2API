@@ -12,6 +12,11 @@ from config.veo_selectors import (
     VEO_SETTINGS_NUM_RESULTS_INPUT_SELECTOR, VEO_SETTINGS_ASPECT_RATIO_BUTTON_SELECTOR,
     VEO_SETTINGS_DURATION_DROPDOWN_SELECTOR, VEO_SETTINGS_NEGATIVE_PROMPT_SELECTOR
 )
+from config.timeouts import (
+    MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
+    SLEEP_VIDEO_POLL, TIMEOUT_PAGE_NAVIGATION, TIMEOUT_ELEMENT_ATTACHED,
+    TIMEOUT_ELEMENT_ENABLED, TIMEOUT_DOWNLOAD_VIDEO, DELAY_AFTER_TOGGLE
+)
 from browser.operations import safe_click
 from .models import VideoGenerationConfig, GeneratedVideo
 from models import ClientDisconnectedError
@@ -34,13 +39,13 @@ class VeoController:
             model = VEO_SUPPORTED_MODELS[0]
         url = VEO_PAGE_URL_TEMPLATE.format(model=model)
         self.logger.info(f'[{self.req_id}] 🎬 导航到 Veo 页面: {url}')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
-                await self.page.goto(url, timeout=30000, wait_until='domcontentloaded')
+                await self.page.goto(url, timeout=TIMEOUT_PAGE_NAVIGATION, wait_until='domcontentloaded')
                 await self._check_disconnect(check_client_disconnected, 'Veo 页面导航后')
                 root = self.page.locator(VEO_ROOT_SELECTOR)
-                await expect_async(root).to_be_visible(timeout=15000)
+                await expect_async(root).to_be_visible(timeout=TIMEOUT_ELEMENT_ATTACHED)
                 self.logger.info(f'[{self.req_id}] ✅ Veo 页面已加载')
                 return
             except Exception as e:
@@ -48,12 +53,12 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] Veo 页面加载失败 (尝试 {attempt}): {e}')
                 if attempt < max_retries:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(SLEEP_RETRY)
         raise Exception(f'Veo 页面加载失败，已重试 {max_retries} 次')
 
     async def set_number_of_videos(self, count: int, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 设置视频数量: {count}')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 input_locator = self.page.locator(VEO_SETTINGS_NUM_RESULTS_INPUT_SELECTOR)
@@ -61,7 +66,7 @@ class VeoController:
                     self.logger.warning(f'[{self.req_id}] 未找到数量输入框')
                     return
                 await input_locator.fill(str(count))
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 视频数量已设置: {count}')
                 return
             except Exception as e:
@@ -69,11 +74,11 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置数量失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
 
     async def set_aspect_ratio(self, aspect_ratio: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 设置宽高比: {aspect_ratio}')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 btn = self.page.locator(f'{VEO_SETTINGS_ASPECT_RATIO_BUTTON_SELECTOR}:has-text("{aspect_ratio}")')
@@ -89,11 +94,11 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置宽高比失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
 
     async def set_duration(self, duration_seconds: int, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 设置视频时长: {duration_seconds}s')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 dropdown = self.page.locator(VEO_SETTINGS_DURATION_DROPDOWN_SELECTOR)
@@ -102,7 +107,7 @@ class VeoController:
                     return
                 if not await safe_click(dropdown, '时长下拉框', self.req_id):
                     continue
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
                 option = self.page.locator(f'mat-option:has-text("{duration_seconds}")')
                 if await option.count() > 0:
                     if await safe_click(option.first, f'时长选项 {duration_seconds}s', self.req_id):
@@ -117,13 +122,13 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置时长失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
 
     async def set_negative_prompt(self, negative_prompt: str, check_client_disconnected: Callable):
         if not negative_prompt:
             return
         self.logger.info(f'[{self.req_id}] 设置负面提示词')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 textarea = self.page.locator(VEO_SETTINGS_NEGATIVE_PROMPT_SELECTOR)
@@ -131,7 +136,7 @@ class VeoController:
                     self.logger.warning(f'[{self.req_id}] 未找到负面提示词输入框')
                     return
                 await textarea.fill(negative_prompt)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 负面提示词已设置')
                 return
             except Exception as e:
@@ -139,11 +144,11 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置负面提示词失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
 
     async def upload_image(self, image_bytes: bytes, mime_type: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 上传参考图片 ({len(image_bytes)} bytes)')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 add_media_btn = self.page.locator(VEO_ADD_MEDIA_BUTTON_SELECTOR)
@@ -154,7 +159,7 @@ class VeoController:
                     if attempt < max_retries:
                         continue
                     return
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(SLEEP_MEDIUM)
                 await self._check_disconnect(check_client_disconnected, '添加媒体按钮点击后')
                 
                 ext = 'png' if 'png' in mime_type else 'jpg'
@@ -165,9 +170,9 @@ class VeoController:
                         'mimeType': mime_type,
                         'buffer': image_bytes
                     })
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
                     await self.page.keyboard.press('Escape')
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(SLEEP_SHORT)
                     self.logger.info(f'[{self.req_id}] ✅ 图片已上传')
                     return
             except Exception as e:
@@ -175,19 +180,19 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 上传图片失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
 
     async def fill_prompt(self, prompt: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 填充提示词 ({len(prompt)} chars)')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
                 text_input = self.page.locator(VEO_PROMPT_INPUT_SELECTOR)
                 await safe_click(text_input, '输入框', self.req_id)
                 await text_input.fill(prompt)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
                 return
             except Exception as e:
@@ -195,19 +200,19 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充提示词失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
         raise Exception('填充提示词失败')
 
     async def run_generation(self, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 🚀 开始生成视频...')
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
                 run_btn = self.page.locator(VEO_RUN_BUTTON_SELECTOR)
-                await expect_async(run_btn).to_be_visible(timeout=10000)
-                await expect_async(run_btn).to_be_enabled(timeout=10000)
+                await expect_async(run_btn).to_be_visible(timeout=TIMEOUT_ELEMENT_ENABLED)
+                await expect_async(run_btn).to_be_enabled(timeout=TIMEOUT_ELEMENT_ENABLED)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
                     if attempt < max_retries:
                         continue
@@ -220,7 +225,7 @@ class VeoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
             if attempt < max_retries:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(SLEEP_LONG)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_videos(self, expected_count: int, check_client_disconnected: Callable, timeout_seconds: int = 300) -> List[GeneratedVideo]:
@@ -262,7 +267,7 @@ class VeoController:
             except Exception as e:
                 self.logger.warning(f'[{self.req_id}] 检查视频时出错: {e}')
             
-            await asyncio.sleep(5)
+            await asyncio.sleep(SLEEP_VIDEO_POLL)
 
     async def _download_video(self, index: int, check_client_disconnected: Callable) -> Optional[bytes]:
         try:
@@ -280,7 +285,7 @@ class VeoController:
             temp_file = os.path.join(temp_dir, f'veo_video_{self.req_id}_{index}.mp4')
             
             try:
-                async with self.page.expect_download(timeout=120000) as download_info:
+                async with self.page.expect_download(timeout=TIMEOUT_DOWNLOAD_VIDEO) as download_info:
                     await download_btn.click()
                 
                 download = await download_info.value

@@ -6,6 +6,14 @@ import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
 from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
+from config.timeouts import (
+    MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
+    SLEEP_IMAGE_UPLOAD, SLEEP_CLEANUP, SLEEP_NAVIGATION, TIMEOUT_PAGE_NAVIGATION,
+    TIMEOUT_ELEMENT_ATTACHED, TIMEOUT_ELEMENT_VISIBLE, TIMEOUT_ELEMENT_ENABLED,
+    TIMEOUT_SUBMIT_ENABLED, TIMEOUT_INNER_TEXT, TIMEOUT_INPUT_VALUE,
+    DELAY_AFTER_CLICK, DELAY_AFTER_FILL, DELAY_AFTER_TOGGLE, DELAY_BETWEEN_RETRIES,
+    MAX_WAIT_UPLOAD_VERIFY, NEW_CHAT_URL
+)
 from models import ClientDisconnectedError, ElementClickError
 from .operations import save_error_snapshot, _wait_for_response_completion, _get_final_response_content, click_element
 from .thinking_normalizer import parse_reasoning_param, describe_config
@@ -92,7 +100,7 @@ class PageController:
             for close_attempt in range(1, 4):
                 try:
                     await self.page.keyboard.press("Escape")
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(DELAY_AFTER_FILL)
                     if not await sys_prompt_textarea.is_visible():
                         self.logger.info(f'[{self.req_id}] ✅ 系统指令面板已关闭。')
                         break
@@ -107,7 +115,7 @@ class PageController:
     async def _control_thinking_mode_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = THINKING_MODE_TOGGLE_SELECTOR
         action = '啟用' if should_be_checked else '停用'
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 控制 Thinking Mode 開關: {action}...")
@@ -126,7 +134,7 @@ class PageController:
                     return True
                 await click_element(self.page, toggle_locator, 'Thinking Mode Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'思考模式開關 - 點擊{action}後')
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(SLEEP_LONG)
                 new_state_str = await toggle_locator.get_attribute('aria-checked')
                 if (new_state_str == 'true') == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Thinking Mode 已{action}。")
@@ -134,13 +142,13 @@ class PageController:
                 else:
                     self.logger.warning(f"[{self.req_id}] ⚠️ Thinking Mode {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
                     if attempt < max_retries:
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] Thinking Mode 操作失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f"[{self.req_id}] ❌ Thinking Mode 設定失敗，已重試 {max_retries} 次")
         return False
 
@@ -189,7 +197,7 @@ class PageController:
             THINKING_LEVEL_OPTION_HIGH_SELECTOR if level == "high"
             else THINKING_LEVEL_OPTION_LOW_SELECTOR
         )
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 設定推理等級 {level}...")
@@ -199,13 +207,13 @@ class PageController:
                     raise Exception("等級選擇器不存在")
                 await click_element(self.page, trigger, "Thinking Level Selector", self.req_id)
                 await self._check_disconnect(check_client_disconnected, '等級選單展開後')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 
                 option = self.page.locator(target_selector)
                 option_count = await option.count()
                 if option_count == 0:
                     self.logger.warning(f"[{self.req_id}] 等級選項 {level} 未找到，等待加載...")
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
                     option_count = await option.count()
                 
                 if option_count == 0:
@@ -217,26 +225,26 @@ class PageController:
                     raise Exception(f"等級選項 {level} 不存在")
                 
                 await click_element(self.page, option.first, f"Thinking Level {level}", self.req_id)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 current_text = await trigger.inner_text(timeout=2000)
                 if level.lower() in current_text.lower():
                     self.logger.info(f"[{self.req_id}] ✓ 推理等級已設定為 {level}")
                     return
                 self.logger.warning(f"[{self.req_id}] 等級驗證失敗 (嘗試 {attempt}): 當前顯示 '{current_text}'")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] 設定等級失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(SLEEP_LONG)
         self.logger.error(f"[{self.req_id}] ❌ 推理等級設定失敗，已重試 {max_retries} 次")
         raise Exception(f"推理等級 {level} 設定失敗")
 
     async def _set_budget_value(self, token_budget: int, check_client_disconnected: Callable):
         budget_input = self.page.locator(THINKING_BUDGET_INPUT_SELECTOR)
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 設定推理預算為: {token_budget} tokens")
@@ -244,20 +252,20 @@ class PageController:
                 await self._check_disconnect(check_client_disconnected, '預算輸入框可見後')
                 await budget_input.fill(str(token_budget), timeout=5000)
                 await self._check_disconnect(check_client_disconnected, '預算填充後')
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(DELAY_AFTER_FILL)
                 actual_val = await budget_input.input_value(timeout=3000)
                 if int(actual_val) == token_budget:
                     self.logger.info(f"[{self.req_id}] ✓ 預算已更新為 {actual_val}")
                     return True
                 self.logger.warning(f"[{self.req_id}] 預算驗證失敗 (嘗試 {attempt}): 實際 {actual_val}, 預期 {token_budget}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] 設定預算失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f"[{self.req_id}] ❌ 預算設定失敗，已重試 {max_retries} 次")
         return False
 
@@ -325,7 +333,7 @@ class PageController:
     async def _adjust_google_search(self, request_params: Dict[str, Any], check_client_disconnected: Callable):
         should_enable_search = self._should_enable_google_search(request_params)
         toggle_selector = GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 toggle_locator = self.page.locator(toggle_selector)
@@ -340,7 +348,7 @@ class PageController:
                 self.logger.info(f'[{self.req_id}] 🌍 (嘗試 {attempt}/{max_retries}) 正在{action} Google Search...')
                 await click_element(self.page, toggle_locator, 'Google Search Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'Google Search 開關 - 點擊{action}後')
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(SLEEP_LONG)
                 new_state = await toggle_locator.get_attribute('aria-checked')
                 if (new_state == 'true') == should_enable_search:
                     self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
@@ -348,18 +356,18 @@ class PageController:
                 else:
                     self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
                     if attempt < max_retries:
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] Google Search 操作失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f"[{self.req_id}] ❌ Google Search 設定失敗，已重試 {max_retries} 次")
 
 
     async def _ensure_advanced_settings_expanded(self, check_client_disconnected: Callable):
-        max_retries = 3
+        max_retries = MAX_RETRIES
         expander_locator = self.page.locator(ADVANCED_SETTINGS_EXPANDER_SELECTOR)
         
         async def is_expanded() -> bool:
@@ -389,10 +397,10 @@ class PageController:
                 except ElementClickError as e:
                     self.logger.warning(f'[{self.req_id}] 高级设置展开按钮点击失败: {e}')
                     if attempt < max_retries:
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
                     continue
                 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 
                 if await is_expanded():
                     self.logger.info(f'[{self.req_id}] ✅ 高级设置面板已展开。')
@@ -400,19 +408,19 @@ class PageController:
                 
                 self.logger.warning(f'[{self.req_id}] 高级设置展开验证失败 (尝试 {attempt})')
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
                     
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 展开高级设置失败 (尝试 {attempt}): {e}')
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         
         self.logger.error(f'[{self.req_id}] ❌ 高级设置展开失败，已重试 {max_retries} 次')
 
     async def _ensure_tools_panel_expanded(self, check_client_disconnected: Callable):
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
@@ -425,24 +433,24 @@ class PageController:
                 self.logger.info(f'[{self.req_id}] 🔧 (嘗試 {attempt}/{max_retries}) 正在展开工具面板...')
                 await click_element(self.page, collapse_tools_locator, 'Expand/Collapse Tools Button', self.req_id)
                 await self._check_disconnect(check_client_disconnected, '展开工具面板后')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 new_class = await grandparent_locator.get_attribute('class', timeout=3000)
                 if new_class and 'expanded' in new_class.split():
                     self.logger.info(f'[{self.req_id}] ✅ 工具面板已展开。')
                     return
                 self.logger.warning(f"[{self.req_id}] 工具面板展开验证失败 (嘗試 {attempt})")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 展开工具面板失败 (嘗試 {attempt}): {e}')
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f'[{self.req_id}] ❌ 工具面板展开失败，已重试 {max_retries} 次')
 
     async def _open_url_content(self, check_client_disconnected: Callable):
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(f'[{self.req_id}] (嘗試 {attempt}/{max_retries}) 检查并启用 URL Context 开关...')
@@ -454,26 +462,26 @@ class PageController:
                     return
                 await click_element(self.page, use_url_content_selector, 'URL Context Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, '点击URLCONTEXT后')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 new_state = await use_url_content_selector.get_attribute('aria-checked')
                 if new_state == 'true':
                     self.logger.info(f'[{self.req_id}] ✅ URL Context 开关已开启。')
                     return
                 self.logger.warning(f"[{self.req_id}] URL Context 验证失败 (嘗試 {attempt}): '{new_state}'")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] URL Context 操作失败 (嘗試 {attempt}): {e}')
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f'[{self.req_id}] ❌ URL Context 设定失败，已重试 {max_retries} 次')
 
     async def _control_thinking_budget_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = SET_THINKING_BUDGET_TOGGLE_SELECTOR
         action = '啟用' if should_be_checked else '停用'
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(f"[{self.req_id}] (嘗試 {attempt}/{max_retries}) 控制 Set Thinking Budget 開關: {action}...")
@@ -487,7 +495,7 @@ class PageController:
                     return True
                 await click_element(self.page, toggle_locator, 'Set Thinking Budget Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'手動預算開關 - 點擊{action}後')
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(SLEEP_LONG)
                 new_state_str = await toggle_locator.get_attribute('aria-checked')
                 if (new_state_str == 'true') == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Set Thinking Budget 開關已{action}。")
@@ -495,13 +503,13 @@ class PageController:
                 else:
                     self.logger.warning(f"[{self.req_id}] ⚠️ Set Thinking Budget {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
                     if attempt < max_retries:
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f"[{self.req_id}] Set Thinking Budget 操作失敗 (嘗試 {attempt}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f"[{self.req_id}] ❌ Set Thinking Budget 設定失敗，已重試 {max_retries} 次")
         return False
 
@@ -513,7 +521,7 @@ class PageController:
             except ValueError:
                 return str(val1).strip() == str(val2).strip()
 
-        max_retries = 3
+        max_retries = MAX_RETRIES
         for attempt in range(max_retries):
             strategy_name = "Unknown"
             try:
@@ -521,7 +529,7 @@ class PageController:
                 
                 if attempt == 0:
                     await expect_async(locator).to_be_visible(timeout=5000)
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
 
                 if attempt == 0:
                     strategy_name = "Standard Fill"
@@ -534,16 +542,16 @@ class PageController:
                     await locator.focus()
                     await locator.select_text()
                     await locator.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(SLEEP_TICK)
                     await locator.type(str(target_value), delay=50)
                     await locator.press('Enter')
                 else:
                     strategy_name = "JS Injection"
                     await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(DELAY_AFTER_FILL)
                     await locator.press('Enter')
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(SLEEP_LONG)
                 
                 final_val = await locator.input_value(timeout=2000)
                 if is_equal(final_val, target_value):
@@ -557,7 +565,7 @@ class PageController:
                 if isinstance(e, ClientDisconnectedError):
                     raise
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(SLEEP_LONG)
 
         self.logger.error(f"[{self.req_id}] {param_name} 最终设置失败，已耗尽所有策略。")
         return False
@@ -633,7 +641,7 @@ class PageController:
                 try:
                     await click_element(self.page, remove_chip_buttons_locator.first, 'Remove Stop Sequence Chip', self.req_id)
                     removed_count += 1
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(SLEEP_SHORT)
                 except Exception:
                     break
             if normalized_requested_stops:
@@ -641,7 +649,7 @@ class PageController:
                 for seq in normalized_requested_stops:
                     await stop_input_locator.fill(seq, timeout=3000)
                     await stop_input_locator.press('Enter', timeout=3000)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(DELAY_AFTER_FILL)
             page_params_cache['stop_sequences'] = normalized_requested_stops
             self.logger.info(f'[{self.req_id}]  停止序列已成功设置。缓存已更新。')
         except Exception as e:
@@ -666,8 +674,8 @@ class PageController:
     async def clear_chat_history(self, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 开始清空聊天记录 (通过导航)...')
         await self._check_disconnect(check_client_disconnected, 'Start Clear Chat')
-        new_chat_url = 'https://aistudio.google.com/prompts/new_chat'
-        max_retries = 3
+        new_chat_url = NEW_CHAT_URL
+        max_retries = MAX_RETRIES
         for attempt in range(max_retries):
             try:
                 self.logger.info(f'[{self.req_id}] (尝试 {attempt + 1}/{max_retries}) 导航到: {new_chat_url}')
@@ -735,7 +743,7 @@ class PageController:
             except ElementClickError as e:
                 self.logger.warning(f"[{self.req_id}] 媒体按钮点击失败: {e}")
                 if attempt < max_attempts:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(SLEEP_LONG)
                 continue
             
             for _ in range(10):
@@ -745,11 +753,11 @@ class PageController:
                         return True
                 except Exception:
                     pass
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(DELAY_AFTER_FILL)
             
             self.logger.warning(f"[{self.req_id}] (尝试 {attempt}/{max_attempts}) 菜单仍未开启。")
             if attempt < max_attempts:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
 
         self.logger.error(f"[{self.req_id}] 多次尝试后仍无法打开媒体菜单。")
         return False
@@ -796,7 +804,7 @@ class PageController:
             try:
                 self.logger.info(f"[{self.req_id}] 尝试批量上传 {len(temp_files)} 张图片...")
                 await file_input.set_input_files(temp_files)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(DELAY_AFTER_TOGGLE)
                 await self.page.keyboard.press('Escape')
                 self.logger.info(f"[{self.req_id}] ✅ 批量上传成功 ({len(temp_files)} 张)")
                 asyncio.create_task(self._cleanup_temp_files(temp_files))
@@ -820,9 +828,9 @@ class PageController:
                     self.logger.info(f"[{self.req_id}] 上传图片 {idx+1}/{len(temp_files)}...")
                     await file_input.set_input_files(tf_path)
                     uploaded_count += 1
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(DELAY_AFTER_FILL)
                     await self.page.keyboard.press('Escape')
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(SLEEP_TICK)
                 except Exception as single_err:
                     self.logger.warning(f"[{self.req_id}] 单张上传失败 {idx+1}: {single_err}")
             
@@ -839,7 +847,7 @@ class PageController:
             return False
 
     async def _cleanup_temp_files(self, file_paths: List[str]):
-        await asyncio.sleep(10)
+        await asyncio.sleep(SLEEP_CLEANUP)
         for path in file_paths:
             try:
                 if os.path.exists(path):
@@ -966,7 +974,7 @@ class PageController:
                             self.logger.info(f"[{self.req_id}] 回退到虚拟粘贴模式...")
                             await self._paste_images_via_event(processed_images, prompt_textarea_locator)
                         
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(SLEEP_LONG)
                         
                     except Exception as upload_err:
                         self.logger.error(f"[{self.req_id}] 图片上传整体流程异常: {upload_err}。继续提交文字。")
@@ -987,7 +995,7 @@ class PageController:
             except Exception as e_pw_enabled:
                 self.logger.warning(f'[{self.req_id}]  等待发送按钮启用超时: {e_pw_enabled}，尝试继续提交...')
             await self._check_disconnect(check_client_disconnected, '发送按钮启用后')
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(SLEEP_TICK)
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
                 self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')

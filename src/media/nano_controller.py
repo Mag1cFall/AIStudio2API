@@ -13,6 +13,11 @@ from config.selectors import (
     INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS,
     UPLOAD_BUTTON_SELECTOR, LOADING_SPINNER_SELECTORS
 )
+from config.timeouts import (
+    MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
+    SLEEP_IMAGE_UPLOAD, TIMEOUT_PAGE_NAVIGATION, TIMEOUT_ELEMENT_ATTACHED,
+    TIMEOUT_ELEMENT_ENABLED, TIMEOUT_DOWNLOAD, TIMEOUT_INNER_TEXT
+)
 from browser.operations import safe_click
 from browser.selector_utils import wait_for_any_selector, get_first_visible_locator
 from .models import NanoBananaConfig, GeneratedImage, GeneratedContent
@@ -36,12 +41,11 @@ class NanoController:
             model = NANO_SUPPORTED_MODELS[0]
         url = NANO_PAGE_URL_TEMPLATE.format(model=model)
         self.logger.info(f'[{self.req_id}] 🖼️ 导航到 Nano Banana 页面: {url}')
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
-                await self.page.goto(url, timeout=30000, wait_until='domcontentloaded')
+                await self.page.goto(url, timeout=TIMEOUT_PAGE_NAVIGATION, wait_until='domcontentloaded')
                 await self._check_disconnect(check_client_disconnected, 'Nano 页面导航后')
-                locator, matched = await wait_for_any_selector(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=15000)
+                locator, matched = await wait_for_any_selector(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=TIMEOUT_ELEMENT_ATTACHED)
                 if locator:
                     self.logger.info(f'[{self.req_id}] ✅ Nano Banana 页面已加载 (匹配: {matched})')
                     return
@@ -50,14 +54,13 @@ class NanoController:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] Nano 页面加载失败 (尝试 {attempt}): {e}')
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-        raise Exception(f'Nano Banana 页面加载失败，已重试 {max_retries} 次')
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(SLEEP_RETRY)
+        raise Exception(f'Nano Banana 页面加载失败，已重试 {MAX_RETRIES} 次')
 
     async def set_aspect_ratio(self, aspect_ratio: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 设置宽高比: {aspect_ratio}')
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 dropdown = self.page.locator(NANO_SETTINGS_ASPECT_RATIO_DROPDOWN_SELECTOR)
                 if await dropdown.count() == 0:
@@ -65,7 +68,7 @@ class NanoController:
                     return
                 if not await safe_click(dropdown, '宽高比下拉框', self.req_id):
                     continue
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
                 option = self.page.locator(f'mat-option:has-text("{aspect_ratio}")')
                 if await option.count() > 0:
                     if await safe_click(option.first, f'宽高比选项 {aspect_ratio}', self.req_id):
@@ -79,24 +82,23 @@ class NanoController:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 设置宽高比失败 (尝试 {attempt}): {e}')
-            if attempt < max_retries:
-                await asyncio.sleep(0.15)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(SLEEP_SHORT)
         self.logger.warning(f'[{self.req_id}] 宽高比设置失败，使用默认值')
 
     async def upload_image(self, image_bytes: bytes, mime_type: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 上传参考图片 ({len(image_bytes)} bytes)')
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 insert_btn_locator, _ = await get_first_visible_locator(self.page, INSERT_BUTTON_SELECTORS)
                 if not insert_btn_locator:
                     self.logger.warning(f'[{self.req_id}] 未找到插入按钮')
                     return
                 if not await safe_click(insert_btn_locator, '插入按钮', self.req_id):
-                    if attempt < max_retries:
+                    if attempt < MAX_RETRIES:
                         continue
                     return
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(SLEEP_MEDIUM)
                 await self._check_disconnect(check_client_disconnected, '插入菜单展开后')
                 
                 ext = 'png' if 'png' in mime_type else 'jpg'
@@ -106,31 +108,30 @@ class NanoController:
                     'mimeType': mime_type,
                     'buffer': image_bytes
                 })
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(SLEEP_IMAGE_UPLOAD)
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(SLEEP_MEDIUM)
                 self.logger.info(f'[{self.req_id}] ✅ 图片已上传')
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 上传图片失败 (尝试 {attempt}): {e}')
-            if attempt < max_retries:
-                await asyncio.sleep(0.25)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(SLEEP_MEDIUM)
 
     async def fill_prompt(self, prompt: str, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 填充提示词 ({len(prompt)} chars)')
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(SLEEP_SHORT)
                 text_input_locator, _ = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS)
                 if not text_input_locator:
                     raise Exception('未找到输入框')
                 await safe_click(text_input_locator, '输入框', self.req_id)
                 await text_input_locator.fill(prompt)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(SLEEP_TICK)
                 actual = await text_input_locator.input_value()
                 if prompt in actual or actual in prompt:
                     self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
@@ -140,24 +141,23 @@ class NanoController:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 填充提示词失败 (尝试 {attempt}): {e}')
-            if attempt < max_retries:
-                await asyncio.sleep(0.15)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(SLEEP_SHORT)
         raise Exception('填充提示词失败')
 
     async def run_generation(self, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 🚀 开始生成...')
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 await self.page.keyboard.press('Escape')
-                await asyncio.sleep(0.15)
-                run_btn, matched = await wait_for_any_selector(self.page, SUBMIT_BUTTON_SELECTORS, timeout=10000)
+                await asyncio.sleep(SLEEP_SHORT)
+                run_btn, matched = await wait_for_any_selector(self.page, SUBMIT_BUTTON_SELECTORS, timeout=TIMEOUT_ELEMENT_ENABLED)
                 if not run_btn:
                     raise Exception('未找到Run按钮')
                 self.logger.info(f'[{self.req_id}] 找到Run按钮 (匹配: {matched})')
-                await expect_async(run_btn).to_be_enabled(timeout=10000)
+                await expect_async(run_btn).to_be_enabled(timeout=TIMEOUT_ELEMENT_ENABLED)
                 if not await safe_click(run_btn, 'Run 按钮', self.req_id):
-                    if attempt < max_retries:
+                    if attempt < MAX_RETRIES:
                         continue
                     raise Exception('Run 按钮点击失败')
                 await self._check_disconnect(check_client_disconnected, 'Run 按钮点击后')
@@ -167,8 +167,8 @@ class NanoController:
                 if isinstance(e, ClientDisconnectedError):
                     raise
                 self.logger.warning(f'[{self.req_id}] 点击 Run 失败 (尝试 {attempt}): {e}')
-            if attempt < max_retries:
-                await asyncio.sleep(0.5)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(SLEEP_LONG)
         raise Exception('点击 Run 按钮失败')
 
     async def wait_for_content(self, check_client_disconnected: Callable, timeout_seconds: int = 120) -> GeneratedContent:
@@ -252,7 +252,7 @@ class NanoController:
                     raise
                 self.logger.warning(f'[{self.req_id}] 检查内容时出错: {e}')
             
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(SLEEP_MEDIUM)
 
     async def _check_for_error(self):
         error_selectors = [
@@ -265,7 +265,7 @@ class NanoController:
             try:
                 locator = self.page.locator(sel)
                 if await locator.count() > 0 and await locator.first.is_visible():
-                    text = await locator.first.inner_text(timeout=1000)
+                    text = await locator.first.inner_text(timeout=TIMEOUT_INNER_TEXT)
                     if text and text.strip():
                         return text.strip()
             except:
@@ -285,9 +285,9 @@ class NanoController:
                 img = chunk.locator('img')
                 if await img.count() > 0:
                     await img.first.hover()
-                    await asyncio.sleep(0.25)
+                    await asyncio.sleep(SLEEP_MEDIUM)
                     await chunk.evaluate('el => el.dispatchEvent(new MouseEvent("mouseenter", {bubbles: true}))')
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(SLEEP_SHORT)
                 
                 download_btn = chunk.locator('button[aria-label="Download"]')
                 if await download_btn.count() == 0:
@@ -303,7 +303,7 @@ class NanoController:
                 temp_file = os.path.join(temp_dir, f'nano_image_{self.req_id}_{i}.png')
                 
                 try:
-                    async with self.page.expect_download(timeout=15000) as download_info:
+                    async with self.page.expect_download(timeout=TIMEOUT_DOWNLOAD) as download_info:
                         await download_btn.first.evaluate('el => el.click()')
                     
                     download = await download_info.value

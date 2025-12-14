@@ -17,6 +17,10 @@ from python_socks.async_.asyncio import Proxy
 import ssl as ssl_module
 
 
+from config.settings import DATA_DIR
+
+CERTS_DIR = str(Path(DATA_DIR) / 'certs')
+
 CERT_PROFILES = [
     # --- Taiwan (15 entries) ---
     {'country': 'TW', 'state': 'Taipei', 'city': 'Xinyi District', 'org': 'Chunghwa Telecom', 'cn': 'HiNet CA'},
@@ -84,7 +88,7 @@ CERT_PROFILES = [
 
 class CertStore:
 
-    def __init__(self, storage_path: str = 'certs'):
+    def __init__(self, storage_path: str = CERTS_DIR):
         self.storage_dir = Path(storage_path)
         self.storage_dir.mkdir(exist_ok=True)
         self.authority_key_file = self.storage_dir / 'ca.key'

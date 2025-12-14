@@ -1,7 +1,9 @@
+import asyncio
 import base64
 from typing import Dict, Any, Callable, Optional
 from playwright.async_api import Page as AsyncPage
 
+from config.timeouts import MAX_RETRIES, SLEEP_RETRY
 from .models import (
     NanoBananaConfig, ImageGenerationConfig, VideoGenerationConfig,
     GeneratedContent, GeneratedImage, GeneratedVideo,
@@ -19,7 +21,7 @@ async def process_nano_request(
     req_id: str,
     check_client_disconnected: Callable
 ) -> Dict[str, Any]:
-    max_retries = 3
+    max_retries = MAX_RETRIES
     last_error = None
     
     for attempt in range(1, max_retries + 1):
@@ -74,8 +76,7 @@ async def process_nano_request(
                 raise
             logger.warning(f'[{req_id}] Nano 请求失败 (尝试 {attempt}/{max_retries}): {e}')
             if attempt < max_retries:
-                import asyncio
-                await asyncio.sleep(1)
+                await asyncio.sleep(SLEEP_RETRY)
     
     raise last_error if last_error else Exception('Nano 请求失败')
 

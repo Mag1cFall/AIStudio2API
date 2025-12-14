@@ -6,6 +6,7 @@ import time
 from typing import Optional, Set
 from playwright.async_api import Page as AsyncPage, expect as expect_async, Error as PlaywrightAsyncError
 from config import *
+from config.timeouts import MAX_RETRIES, SLEEP_VIDEO_POLL
 from models import ClientDisconnectedError
 logger = logging.getLogger('AIStudioProxyServer')
 
@@ -367,7 +368,7 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
             await _set_model_from_page_display(page, set_storage=True)
             current_page_url = page.url
             logger.info(f'   步骤 2: 重新加载页面 ({current_page_url}) 以应用 isAdvancedOpen=true...')
-            max_retries = 3
+            max_retries = MAX_RETRIES
             for attempt in range(max_retries):
                 try:
                     logger.info(f'   尝试重新加载页面 (第 {attempt + 1}/{max_retries} 次): {current_page_url}')
@@ -385,7 +386,7 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
                     logger.warning(f'   ⚠️ 页面重新加载尝试 {attempt + 1}/{max_retries} 失败: {reload_err}')
                     if attempt < max_retries - 1:
                         logger.info(f'   将在5秒后重试...')
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(SLEEP_VIDEO_POLL)
                     else:
                         logger.error(f'   ❌ 页面重新加载在 {max_retries} 次尝试后最终失败: {reload_err}. 后续模型状态可能不准确。', exc_info=True)
                         from .operations import save_error_snapshot

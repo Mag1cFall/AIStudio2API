@@ -5,6 +5,7 @@ import multiprocessing
 import sys
 from pathlib import Path
 
+from config.settings import DATA_DIR
 from proxy.server import MitmProxy
 
 
@@ -26,8 +27,8 @@ async def standalone():
     )
     log = logging.getLogger('proxy_runner')
     
-    cert_path = Path('certs')
-    cert_path.mkdir(exist_ok=True)
+    cert_path = Path(DATA_DIR) / 'certs'
+    cert_path.mkdir(parents=True, exist_ok=True)
     
     log.info(f'Starting on {args.host}:{args.port}')
     log.info(f'Target domains: {args.domains}')
@@ -63,8 +64,8 @@ async def embedded(
     )
     log = logging.getLogger('proxy_runner')
     
-    cert_path = Path('certs')
-    cert_path.mkdir(exist_ok=True)
+    cert_path = Path(DATA_DIR) / 'certs'
+    cert_path.mkdir(parents=True, exist_ok=True)
     
     if port is None:
         port = 3120

@@ -74,14 +74,24 @@ AIStudio2API 是一个高性能代理服务，将 Google AI Studio 网页界面�
 | 文件 | 描述 |
 |------|------|
 | `__init__.py` | 导出所有配置常量 |
-| `constants.py` | 全局常量定义 |
-| `settings.py` | 环境变量设置 |
-| `timeouts.py` | 超时配置 |
+| `constants.py` | 全局常量：模型名称、ID前缀、默认参数等 |
+| `settings.py` | 环境变量设置：调试开关、认证配置、路径定义 |
+| `timeouts.py` | **超时和时间常量**。包含所有 sleep/timeout/retry/delay 统一常量 |
 | `selectors.py` | **主选择器**。AI Studio 核心页面元素 CSS/XPath 选择器 |
 | `tts_selectors.py` | TTS 页面选择器 |
 | `imagen_selectors.py` | Imagen 页面选择器 |
 | `veo_selectors.py` | Veo 页面选择器 |
 | `nano_selectors.py` | Nano Banana 页面选择器 |
+
+#### timeouts.py 常量分类
+
+| 类别 | 示例常量 | 用途 |
+|------|----------|------|
+| Sleep | `SLEEP_TICK`, `SLEEP_RETRY`, `SLEEP_NAVIGATION` | UI操作等待时间 |
+| Delay | `DELAY_AFTER_CLICK`, `DELAY_AFTER_FILL` | 操作后延迟 |
+| Timeout | `TIMEOUT_ELEMENT_VISIBLE`, `TIMEOUT_PAGE_NAVIGATION` | 超时限制 |
+| Retry | `MAX_RETRIES`, `BASE_STREAM_RETRIES` | 重试次数 |
+| URL | `NEW_CHAT_URL` | 固定URL模板 |
 
 ---
 
@@ -190,6 +200,7 @@ AIStudio2API 是一个高性能代理服务，将 Google AI Studio 网页界面�
 | `multi-worker-guide.md` | 多 Worker 模式说明 |
 | `docker-deployment.md` | Docker 部署指南 |
 | `development-guide.md` | 开发指南 |
+| `project-structure.md` | 项目结构说明 (本文档) |
 | `dependency-versions.md` | 依赖版本说明 |
 | `reverse-engineering-internals.md` | 逆向工程内部文档 |
 | `client-stop-mechanisms-analysis.md` | 客户端中断机制分析 |

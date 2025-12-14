@@ -8,6 +8,7 @@ import subprocess
 import platform
 from typing import Dict, List, Optional, AsyncGenerator
 import aiohttp
+from config.timeouts import RECOVERY_HOURS, KEEPALIVE_TIMEOUT
 from .models import Worker
 
 logger = logging.getLogger('WorkerPool')
@@ -22,7 +23,7 @@ class WorkerPool:
     def __init__(self):
         self.workers: Dict[str, Worker] = {}
         self._lock = asyncio.Lock()
-        self.recovery_hours = 6.0
+        self.recovery_hours = RECOVERY_HOURS
         self._session: Optional[aiohttp.ClientSession] = None
         self._connector: Optional[aiohttp.TCPConnector] = None
     
@@ -31,7 +32,7 @@ class WorkerPool:
             self._connector = aiohttp.TCPConnector(
                 limit=100,
                 limit_per_host=20,
-                keepalive_timeout=30,
+                keepalive_timeout=KEEPALIVE_TIMEOUT,
                 enable_cleanup_closed=True
             )
             timeout = aiohttp.ClientTimeout(total=300, connect=10)
@@ -54,7 +55,7 @@ class WorkerPool:
                     return json.load(f)
             except:
                 pass
-        return {"workers": [], "settings": {"recovery_hours": 6}}
+        return {"workers": [], "settings": {"recovery_hours": RECOVERY_HOURS}}
     
     def save_config(self):
         config = {
@@ -76,7 +77,7 @@ class WorkerPool:
     
     def init_from_config(self):
         config = self.load_config()
-        self.recovery_hours = config.get("settings", {}).get("recovery_hours", 6.0)
+        self.recovery_hours = config.get("settings", {}).get("recovery_hours", RECOVERY_HOURS)
         valid_workers = []
         current_time = time.time()
         for w_cfg in config.get("workers", []):

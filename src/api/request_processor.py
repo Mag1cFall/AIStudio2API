@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from playwright.async_api import Page as AsyncPage, Locator, Error as PlaywrightAsyncError, expect as expect_async
 from config import *
+from config.timeouts import STREAM_CHUNK_SIZE
 from models import ChatCompletionRequest, ClientDisconnectedError
 from browser import switch_ai_studio_model, save_error_snapshot
 from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager, calculate_stream_max_retries
@@ -548,7 +549,7 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                             pass
                         break
                     if line:
-                        chunk_size = 50
+                        chunk_size = STREAM_CHUNK_SIZE
                         for i in range(0, len(line), chunk_size):
                             chunk = line[i:i + chunk_size]
                             yield generate_sse_chunk(chunk, req_id, current_ai_studio_model_id or MODEL_NAME)

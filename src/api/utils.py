@@ -12,6 +12,8 @@ import os
 import hashlib
 import threading
 
+from config.timeouts import BASE_STREAM_RETRIES
+
 class RequestCancellationManager:
 
     def __init__(self):
@@ -49,7 +51,7 @@ class RequestCancellationManager:
 request_manager = RequestCancellationManager()
 
 def calculate_stream_max_retries(messages: List[Message]) -> int:
-    base_retries = 300
+    base_retries = BASE_STREAM_RETRIES
     total_token_estimate = 0
     image_count = 0
 

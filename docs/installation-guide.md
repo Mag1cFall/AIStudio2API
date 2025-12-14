@@ -232,4 +232,5 @@ admin-key-for-testing
 - [环境变量配置指南](environment-configuration.md) - ⭐ 推荐先配置，简化后续使用
 - [首次运行与认证指南](authentication-setup.md)
 - [API使用指南](api-usage.md) - 包含详细的密钥管理说明
+- [项目结构说明](project-structure.md) - 了解代码组织
 - [故障排除指南](troubleshooting.md)
