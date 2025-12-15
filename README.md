@@ -408,6 +408,43 @@ cp .env.example .env
 - **参数支持**: 支持 `temperature`、`max_output_tokens`、`top_p`、`stop` 等参数
 - **认证有效期**: 认证文件可能会过期，需要重新进行认证流程
 
+## 🔍 故障排除
+
+### Windows 端口被系统保留
+
+如果启动时出现 `端口 30XX (主机 0.0.0.0) 当前被占用` 但任务管理器中找不到占用进程，这通常是 Windows 的 Hyper-V/WSL2/Docker 的 NAT 服务随机保留了端口段。
+
+> ⚠️ **以下所有指令需要在管理员权限的 PowerShell 或 CMD 中运行**
+
+#### 1. 查看被 Windows 保留的端口范围
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+如果 Worker 使用的端口（如 3001-3008）落在输出的 `Start Port` 和 `End Port` 范围内，即为此问题。
+
+#### 2. 临时解决（重启 WinNAT 服务）
+
+```powershell
+net stop winnat
+net start winnat
+```
+
+重启后再次执行步骤1查看，端口范围通常会变化并释放您需要的端口。
+
+#### 3. 永久解决（将常用端口加入保留白名单）
+
+趁端口空闲时，将开发常用端口永久标记为管理员保留，防止 Windows 再次占用：
+
+```powershell
+netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=20 store=persistent
+```
+
+成功后列表中会出现带 `*` 标记的条目，表示该范围受永久保护。
+
+更多问题排除方案请参阅 [故障排除文档](docs/troubleshooting.md)。
+
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！

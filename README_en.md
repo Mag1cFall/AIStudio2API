@@ -402,6 +402,43 @@ This project uses [Camoufox](https://camoufox.com/) browser to avoid detection a
 - **Parameter Support**: Supports `temperature`, `max_output_tokens`, `top_p`, `stop` parameters
 - **Authentication Expiry**: Authentication files may expire; re-authentication required
 
+## 🔍 Troubleshooting
+
+### Windows Port Reserved by System
+
+If you see `Port 30XX (host 0.0.0.0) is currently in use` on startup but can't find the occupying process in Task Manager, this is usually caused by Windows Hyper-V/WSL2/Docker NAT service randomly reserving port ranges.
+
+> ⚠️ **All commands below must be run in Administrator PowerShell or CMD**
+
+#### 1. View Windows Reserved Port Ranges
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+If your Worker ports (e.g., 3001-3008) fall within the `Start Port` and `End Port` range shown, this is the issue.
+
+#### 2. Temporary Fix (Restart WinNAT Service)
+
+```powershell
+net stop winnat
+net start winnat
+```
+
+After restart, run step 1 again. The port ranges usually change and release your needed ports.
+
+#### 3. Permanent Fix (Add Common Ports to Reserved Whitelist)
+
+While ports are free, permanently mark commonly used development ports as administrator-reserved to prevent Windows from occupying them again:
+
+```powershell
+netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=20 store=persistent
+```
+
+On success, entries with `*` marker will appear in the list, indicating permanent protection.
+
+For more troubleshooting solutions, see [Troubleshooting Guide](docs/troubleshooting.md).
+
 ## 🤝 Contributing
 
 Issues and Pull Requests are welcome!

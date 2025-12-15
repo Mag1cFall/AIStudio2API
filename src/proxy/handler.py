@@ -73,7 +73,7 @@ class ResponseHandler:
         return result
 
     def _extract_content(self, raw_data: bytes) -> Dict[str, Any]:
-        pattern = b'\\[\\[\\[null,.*?]],\"model\"]'
+        pattern = rb'\[\[\[null,.*?]],"model"]'
         matches = list(re.finditer(pattern, raw_data))
         
         output = {'reason': '', 'body': '', 'function': []}
