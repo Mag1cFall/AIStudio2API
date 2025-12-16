@@ -5,7 +5,7 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
-from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
+from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTORS, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, HIDDEN_FILE_INPUT_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
 from config.timeouts import (
     MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
     SLEEP_IMAGE_UPLOAD, SLEEP_CLEANUP, SLEEP_NAVIGATION, TIMEOUT_PAGE_NAVIGATION,
@@ -730,7 +730,7 @@ class PageController:
             self.logger.warning(f"[{self.req_id}] 未找到媒体添加按钮。")
             return False
 
-        upload_menu_locator = self.page.locator(UPLOAD_BUTTON_SELECTOR)
+        upload_menu_locator, _ = await get_first_visible_locator(self.page, UPLOAD_BUTTON_SELECTORS, timeout=1000)
         
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -748,8 +748,9 @@ class PageController:
             
             for _ in range(10):
                 try:
-                    if await upload_menu_locator.count() > 0 and await upload_menu_locator.first.is_visible():
-                        self.logger.info(f"[{self.req_id}] ✅ 'Upload file' 菜单项已检测到开启。")
+                    upload_menu_locator, matched_upload = await get_first_visible_locator(self.page, UPLOAD_BUTTON_SELECTORS, timeout=500)
+                    if upload_menu_locator and await upload_menu_locator.is_visible():
+                        self.logger.info(f"[{self.req_id}] ✅ 'Upload file' 菜单项已检测到开启 (匹配: {matched_upload})。")
                         return True
                 except Exception:
                     pass
@@ -791,9 +792,8 @@ class PageController:
             if not menu_opened:
                 self.logger.warning(f"[{self.req_id}] 未能打开菜单，尝试直接查找 input...")
             
-            from config import HIDDEN_FILE_INPUT_SELECTOR
-            file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
-            if await file_input.count() == 0:
+            file_input, matched_input = await get_first_visible_locator(self.page, HIDDEN_FILE_INPUT_SELECTORS + ['input[type="file"]'], timeout=2000)
+            if not file_input:
                 file_input = self.page.locator('input[type="file"]').first
             
             if await file_input.count() == 0:
@@ -820,8 +820,8 @@ class PageController:
                     menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
                     if not menu_opened:
                         continue
-                    file_input = self.page.locator(HIDDEN_FILE_INPUT_SELECTOR)
-                    if await file_input.count() == 0:
+                    file_input, _ = await get_first_visible_locator(self.page, HIDDEN_FILE_INPUT_SELECTORS + ['input[type="file"]'], timeout=2000)
+                    if not file_input:
                         file_input = self.page.locator('input[type="file"]').first
                 
                 try:

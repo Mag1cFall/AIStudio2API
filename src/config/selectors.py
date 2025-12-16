@@ -1,4 +1,7 @@
 PROMPT_TEXTAREA_SELECTORS = [
+    'ms-prompt-box textarea[aria-label="Enter a prompt"]',
+    'ms-prompt-box textarea[placeholder="Start typing a prompt"]',
+    'ms-prompt-box .prompt-box-container .text-wrapper textarea',
     'ms-prompt-input-wrapper ms-autosize-textarea textarea',
     'ms-prompt-box textarea',
 ]
@@ -14,16 +17,19 @@ SUBMIT_BUTTON_SELECTORS = [
 SUBMIT_BUTTON_SELECTOR = SUBMIT_BUTTON_SELECTORS[0]
 
 INSERT_BUTTON_SELECTORS = [
+    'button[data-test-id="add-media-button"]',
+    'button[aria-label="Insert images, videos, audio, or files"]',
+    'ms-add-media-button button',
     'button[aria-label="Insert assets such as images, videos, files, or audio"]',
     'button[data-test-add-chunk-menu-button]',
-    'button[data-test-id="add-media-button"]',
 ]
 INSERT_BUTTON_SELECTOR = INSERT_BUTTON_SELECTORS[0]
 
 UPLOAD_BUTTON_SELECTORS = [
+    'button.upload-file-menu-item',
+    'button[role="menuitem"]:has-text("Upload a file")',
     'button[aria-label="Upload File"]',
     'button[role="menuitem"]:has-text("Upload File")',
-    'button[role="menuitem"]:has-text("Upload a file")',
 ]
 UPLOAD_BUTTON_SELECTOR = UPLOAD_BUTTON_SELECTORS[0]
 
