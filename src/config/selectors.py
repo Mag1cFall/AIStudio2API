@@ -67,9 +67,9 @@ MAT_CHIP_REMOVE_BUTTON_SELECTOR = 'mat-chip-set mat-chip-row button[aria-label*=
 TOP_P_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Top P"]]//input[@type="number"]'
 TEMPERATURE_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Temperature"]]//input[@type="number"]'
 USE_URL_CONTEXT_SELECTOR = 'button[aria-label="Browse the url context"]'
-THINKING_MODE_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="enable-thinking"] button'
-SET_THINKING_BUDGET_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="manual-budget"] button'
-THINKING_BUDGET_INPUT_SELECTOR = '//div[contains(@class, "settings-item") and .//p[normalize-space()="Set thinking budget"]]/following-sibling::div//input[@type="number"]'
+THINKING_MODE_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="enable-thinking"]'
+SET_THINKING_BUDGET_TOGGLE_SELECTOR = 'mat-slide-toggle[data-test-toggle="manual-budget"]'
+THINKING_BUDGET_INPUT_SELECTOR = 'ms-slider[data-test-slider] input[type="number"]'
 GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR = 'div[data-test-id="searchAsAToolTooltip"] mat-slide-toggle button'
 SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR = 'button[aria-label="System instructions"]'
 SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR = 'textarea[aria-label="System instructions"]'
@@ -84,8 +84,14 @@ MODEL_OPTION_CONTENT_SPAN = '.model-option-content span'
 MODEL_SELECTORS_LIST = [MODEL_SELECTOR_CARD_TITLE, MODEL_SELECTOR_CARD_NAME, MODEL_SELECTOR_CARD_SUBTITLE, MODEL_SELECTOR_LEGACY_PRIMARY, MODEL_SELECTOR_LEGACY_FALLBACK, MODEL_SELECTOR_LEGACY_GENERIC, '.model-selector span', MODEL_SELECTOR_BUTTON_SPAN, MODEL_OPTION_CONTENT_SPAN]
 
 THINKING_LEVEL_SELECT_SELECTOR = 'mat-select[aria-label="Thinking Level"], mat-select[aria-label="Thinking level"]'
-THINKING_LEVEL_OPTION_HIGH_SELECTOR = 'mat-option:has-text("High")'
-THINKING_LEVEL_OPTION_LOW_SELECTOR = 'mat-option:has-text("Low")'
+THINKING_LEVEL_OPTIONS = {
+    'minimal': 'mat-option:has-text("Minimal")',
+    'low': 'mat-option:has-text("Low")',
+    'medium': 'mat-option:has-text("Medium")',
+    'high': 'mat-option:has-text("High")',
+}
+THINKING_LEVEL_OPTION_HIGH_SELECTOR = THINKING_LEVEL_OPTIONS['high']
+THINKING_LEVEL_OPTION_LOW_SELECTOR = THINKING_LEVEL_OPTIONS['low']
 DEFAULT_THINKING_LEVEL = "high"
 
 RATE_LIMIT_CALLOUT_SELECTOR = 'ms-callout.error-callout .message, ms-callout.warning-callout .message'

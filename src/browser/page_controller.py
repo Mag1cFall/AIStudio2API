@@ -5,7 +5,7 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
-from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTORS, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, HIDDEN_FILE_INPUT_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTION_HIGH_SELECTOR, THINKING_LEVEL_OPTION_LOW_SELECTOR, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
+from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTORS, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, HIDDEN_FILE_INPUT_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTIONS, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
 from config.timeouts import (
     MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
     SLEEP_IMAGE_UPLOAD, SLEEP_CLEANUP, SLEEP_NAVIGATION, TIMEOUT_PAGE_NAVIGATION,
@@ -122,25 +122,28 @@ class PageController:
                 toggle_locator = self.page.locator(toggle_selector)
                 await expect_async(toggle_locator).to_be_visible(timeout=7000)
                 await self._check_disconnect(check_client_disconnected, '思考模式開關 - 元素可見後')
-                parent_toggle_locator = toggle_locator.locator('xpath=../..')
-                is_disabled_class = await parent_toggle_locator.get_attribute('class')
-                if is_disabled_class and 'mat-mdc-slide-toggle-disabled' in is_disabled_class:
+                toggle_class = await toggle_locator.get_attribute('class') or ''
+                if 'mat-mdc-slide-toggle-disabled' in toggle_class:
                     self.logger.info(f"[{self.req_id}] Thinking Mode 開關當前被禁用，跳過操作。")
                     return False
-                is_checked_str = await toggle_locator.get_attribute('aria-checked')
-                current_state_is_checked = is_checked_str == 'true'
+                current_state_is_checked = 'mat-mdc-slide-toggle-checked' in toggle_class
                 if current_state_is_checked == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Thinking Mode 已就緒。")
                     return True
-                await click_element(self.page, toggle_locator, 'Thinking Mode Toggle', self.req_id)
+                inner_btn = toggle_locator.locator('button[role="switch"]')
+                if await inner_btn.count() > 0:
+                    await click_element(self.page, inner_btn, 'Thinking Mode Toggle Button', self.req_id)
+                else:
+                    await click_element(self.page, toggle_locator, 'Thinking Mode Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'思考模式開關 - 點擊{action}後')
                 await asyncio.sleep(SLEEP_LONG)
-                new_state_str = await toggle_locator.get_attribute('aria-checked')
-                if (new_state_str == 'true') == should_be_checked:
+                new_class = await toggle_locator.get_attribute('class') or ''
+                new_state_is_checked = 'mat-mdc-slide-toggle-checked' in new_class
+                if new_state_is_checked == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Thinking Mode 已{action}。")
                     return True
                 else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ Thinking Mode {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Thinking Mode {action}驗證失敗 (嘗試 {attempt})")
                     if attempt < max_retries:
                         await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
@@ -152,10 +155,10 @@ class PageController:
         self.logger.error(f"[{self.req_id}] ❌ Thinking Mode 設定失敗，已重試 {max_retries} 次")
         return False
 
-    def _is_gemini3_pro_series(self, model_id: Optional[str]) -> bool:
-        """判斷是否為 Gemini 3 Pro 系列（使用等級而非預算）"""
+    def _is_gemini3_series(self, model_id: Optional[str]) -> bool:
+        """判斷是否為 Gemini 3 系列（使用等級選擇器而非預算開關）"""
         mid = (model_id or "").lower()
-        return ("gemini-3" in mid) and ("pro" in mid)
+        return "gemini-3" in mid
 
 
     async def _check_level_dropdown_exists(self) -> bool:
@@ -169,16 +172,31 @@ class PageController:
     def _determine_level_from_effort(self, reasoning_effort: Any) -> Optional[str]:
         if isinstance(reasoning_effort, str):
             rs = reasoning_effort.strip().lower()
-            if rs == "low":
-                return "low"
-            if rs in ["high", "medium", "none", "-1"]:
-                return "high"
+            if rs in ['minimal', 'low', 'medium', 'high']:
+                return rs
+            if rs in ['none', '-1']:
+                return 'high'
             try:
-                return "high" if int(rs) >= 8000 else "low"
+                val = int(rs)
+                if val >= 16384:
+                    return 'high'
+                elif val >= 8192:
+                    return 'medium'
+                elif val >= 4096:
+                    return 'low'
+                else:
+                    return 'minimal'
             except Exception:
                 return None
         if isinstance(reasoning_effort, int):
-            return "high" if reasoning_effort >= 8000 or reasoning_effort == -1 else "low"
+            if reasoning_effort == -1 or reasoning_effort >= 16384:
+                return 'high'
+            elif reasoning_effort >= 8192:
+                return 'medium'
+            elif reasoning_effort >= 4096:
+                return 'low'
+            else:
+                return 'minimal'
         return None
 
     def _apply_model_budget_cap(self, value: int, model_id: Optional[str]) -> int:
@@ -193,10 +211,11 @@ class PageController:
         return value
 
     async def _select_thinking_level(self, level: str, check_client_disconnected: Callable):
-        target_selector = (
-            THINKING_LEVEL_OPTION_HIGH_SELECTOR if level == "high"
-            else THINKING_LEVEL_OPTION_LOW_SELECTOR
-        )
+        level = level.lower()
+        if level not in THINKING_LEVEL_OPTIONS:
+            self.logger.warning(f"[{self.req_id}] 未知等級 '{level}'，使用預設 'high'")
+            level = 'high'
+        target_selector = THINKING_LEVEL_OPTIONS[level]
         max_retries = MAX_RETRIES
         for attempt in range(1, max_retries + 1):
             try:
@@ -279,11 +298,11 @@ class PageController:
             return
 
         try:
-            is_gemini3 = self._is_gemini3_pro_series(model_id_to_use)
+            is_gemini3 = self._is_gemini3_series(model_id_to_use)
 
             if is_gemini3:
                 level = self._determine_level_from_effort(reasoning_effort) or DEFAULT_THINKING_LEVEL
-                self.logger.info(f"[{self.req_id}] Gemini 3 Pro 系列，使用等級模式: {level}")
+                self.logger.info(f"[{self.req_id}] Gemini 3 系列，使用等級模式: {level}")
                 try:
                     await self._select_thinking_level(level, check_client_disconnected)
                 except Exception as e:
@@ -488,20 +507,25 @@ class PageController:
                 toggle_locator = self.page.locator(toggle_selector)
                 await expect_async(toggle_locator).to_be_visible(timeout=5000)
                 await self._check_disconnect(check_client_disconnected, '手動預算開關 - 元素可見後')
-                is_checked_str = await toggle_locator.get_attribute('aria-checked')
-                current_state_is_checked = is_checked_str == 'true'
+                toggle_class = await toggle_locator.get_attribute('class') or ''
+                current_state_is_checked = 'mat-mdc-slide-toggle-checked' in toggle_class
                 if current_state_is_checked == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Set Thinking Budget 開關已就緒。")
                     return True
-                await click_element(self.page, toggle_locator, 'Set Thinking Budget Toggle', self.req_id)
+                inner_btn = toggle_locator.locator('button[role="switch"]')
+                if await inner_btn.count() > 0:
+                    await click_element(self.page, inner_btn, 'Set Thinking Budget Toggle Button', self.req_id)
+                else:
+                    await click_element(self.page, toggle_locator, 'Set Thinking Budget Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'手動預算開關 - 點擊{action}後')
                 await asyncio.sleep(SLEEP_LONG)
-                new_state_str = await toggle_locator.get_attribute('aria-checked')
-                if (new_state_str == 'true') == should_be_checked:
+                new_class = await toggle_locator.get_attribute('class') or ''
+                new_state_is_checked = 'mat-mdc-slide-toggle-checked' in new_class
+                if new_state_is_checked == should_be_checked:
                     self.logger.info(f"[{self.req_id}] ✅ Set Thinking Budget 開關已{action}。")
                     return True
                 else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ Set Thinking Budget {action}驗證失敗 (嘗試 {attempt}): '{new_state_str}'")
+                    self.logger.warning(f"[{self.req_id}] ⚠️ Set Thinking Budget {action}驗證失敗 (嘗試 {attempt})")
                     if attempt < max_retries:
                         await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
