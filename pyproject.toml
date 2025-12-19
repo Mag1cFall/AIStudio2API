@@ -2,7 +2,7 @@
 name = "aistudio2api"
 version = "0.1.0"
 description = "AI Studio Proxy API - Convert Google AI Studio to OpenAI compatible API"
-authors = [{name = "Mag1cFall", email = "mag1cfall@example.com"}]
+authors = [{name = "Mag1cFall", email = "lk25611295@gmail.com"}]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
