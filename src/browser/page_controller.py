@@ -812,15 +812,25 @@ class PageController:
                 return False
             
             await self._check_disconnect(check_client_disconnected, '上传图片前')
+            
+            '''
+            # 旧批量上传逻辑（AI Studio新前端不支援multiple属性）
             menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
             if not menu_opened:
                 self.logger.warning(f"[{self.req_id}] 未能打开菜单，尝试直接查找 input...")
             
-            file_input, matched_input = await get_first_visible_locator(self.page, HIDDEN_FILE_INPUT_SELECTORS + ['input[type="file"]'], timeout=2000)
+            file_input = None
+            for selector in HIDDEN_FILE_INPUT_SELECTORS:
+                loc = self.page.locator(selector)
+                if await loc.count() > 0:
+                    file_input = loc.first
+                    break
             if not file_input:
-                file_input = self.page.locator('input[type="file"]').first
+                loc = self.page.locator('input[type="file"]')
+                if await loc.count() > 0:
+                    file_input = loc.first
             
-            if await file_input.count() == 0:
+            if not file_input:
                 self.logger.warning(f"[{self.req_id}] 未找到文件输入框")
                 asyncio.create_task(self._cleanup_temp_files(temp_files))
                 return False
@@ -835,26 +845,36 @@ class PageController:
                 return True
             except Exception as batch_err:
                 self.logger.warning(f"[{self.req_id}] 批量上传失败: {batch_err}，尝试逐个上传...")
+            '''
             
             uploaded_count = 0
             for idx, tf_path in enumerate(temp_files):
                 await self._check_disconnect(check_client_disconnected, f'上传图片 {idx+1}/{len(temp_files)}')
                 
-                if idx > 0:
-                    menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
-                    if not menu_opened:
-                        continue
-                    file_input, _ = await get_first_visible_locator(self.page, HIDDEN_FILE_INPUT_SELECTORS + ['input[type="file"]'], timeout=2000)
-                    if not file_input:
-                        file_input = self.page.locator('input[type="file"]').first
+                menu_opened = await self._robust_click_insert_assets(check_client_disconnected)
+                if not menu_opened:
+                    continue
+                
+                file_input = None
+                for selector in HIDDEN_FILE_INPUT_SELECTORS:
+                    loc = self.page.locator(selector)
+                    if await loc.count() > 0:
+                        file_input = loc.first
+                        break
+                if not file_input:
+                    loc = self.page.locator('input[type="file"]')
+                    if await loc.count() > 0:
+                        file_input = loc.first
+                
+                if not file_input:
+                    self.logger.warning(f"[{self.req_id}] 第{idx+1}张图片：未找到文件输入框")
+                    continue
                 
                 try:
                     self.logger.info(f"[{self.req_id}] 上传图片 {idx+1}/{len(temp_files)}...")
                     await file_input.set_input_files(tf_path)
                     uploaded_count += 1
-                    await asyncio.sleep(DELAY_AFTER_FILL)
-                    await self.page.keyboard.press('Escape')
-                    await asyncio.sleep(SLEEP_TICK)
+                    await asyncio.sleep(SLEEP_IMAGE_UPLOAD)
                 except Exception as single_err:
                     self.logger.warning(f"[{self.req_id}] 单张上传失败 {idx+1}: {single_err}")
             
@@ -879,78 +899,82 @@ class PageController:
             except Exception:
                 pass
 
-    async def _paste_images_via_event(self, images: List[Dict[str, str]], target_locator: Locator):
+    async def _paste_images_via_event(self, images: List[Dict[str, str]], target_locator: Locator, check_client_disconnected: Callable) -> bool:
         self.logger.info(f"[{self.req_id}] (备选) 正在通过虚拟粘贴事件上传 {len(images)} 张图片...")
+        expected_count = len(images)
         
         try:
-            await target_locator.focus()
-            await target_locator.click()
-        except Exception:
-            pass
+            await self._check_disconnect(check_client_disconnected, '虚拟粘贴')
+            
+            await self.page.evaluate('document.querySelector("ms-prompt-box textarea")?.focus()')
 
-        script = """
-        async (images) => {
-            try {
-                const dataTransfer = new DataTransfer();
-                
-                for (let i = 0; i < images.length; i++) {
-                    const img = images[i];
-                    try {
-                        const byteCharacters = atob(img.data);
-                        const byteNumbers = new Array(byteCharacters.length);
-                        for (let j = 0; j < byteCharacters.length; j++) {
-                            byteNumbers[j] = byteCharacters.charCodeAt(j);
+            script = """
+            async (images) => {
+                try {
+                    const dataTransfer = new DataTransfer();
+                    for (let i = 0; i < images.length; i++) {
+                        const img = images[i];
+                        try {
+                            const byteCharacters = atob(img.data);
+                            const byteNumbers = new Array(byteCharacters.length);
+                            for (let j = 0; j < byteCharacters.length; j++) {
+                                byteNumbers[j] = byteCharacters.charCodeAt(j);
+                            }
+                            const byteArray = new Uint8Array(byteNumbers);
+                            const blob = new Blob([byteArray], { type: img.mime });
+                            const ext = img.mime.split('/')[1] || 'png';
+                            const filename = `pasted_image_${i + 1}.${ext}`;
+                            const file = new File([blob], filename, { type: img.mime, lastModified: Date.now() });
+                            dataTransfer.items.add(file);
+                        } catch (err) {
+                            console.error(`[Paste] 处理图片 ${i + 1} 失败:`, err);
                         }
-                        const byteArray = new Uint8Array(byteNumbers);
-                        const blob = new Blob([byteArray], { type: img.mime });
-                        
-                        const ext = img.mime.split('/')[1] || 'png';
-                        const filename = `pasted_image_${i + 1}.${ext}`;
-                        const file = new File([blob], filename, { type: img.mime, lastModified: Date.now() });
-                        
-                        dataTransfer.items.add(file);
-                    } catch (err) {
-                        console.error(`[Paste] 处理图片 ${i + 1} 失败:`, err);
                     }
+                    if (dataTransfer.files.length === 0) {
+                        return { success: false, error: "没有文件被添加到 DataTransfer" };
+                    }
+                    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+                    Object.defineProperty(pasteEvent, 'clipboardData', { value: dataTransfer, writable: false, configurable: true });
+                    const textarea = document.querySelector('ms-prompt-box textarea');
+                    if (textarea) { textarea.focus(); textarea.dispatchEvent(pasteEvent); }
+                    document.dispatchEvent(pasteEvent);
+                    return { success: true, count: dataTransfer.files.length };
+                } catch (err) {
+                    return { success: false, error: err.message };
                 }
-                
-                if (dataTransfer.files.length === 0) {
-                    return { success: false, error: "没有文件被添加到 DataTransfer" };
-                }
-                
-                const pasteEvent = new ClipboardEvent('paste', {
-                    bubbles: true,
-                    cancelable: true,
-                });
-                
-                Object.defineProperty(pasteEvent, 'clipboardData', {
-                    value: dataTransfer,
-                    writable: false,
-                    configurable: true
-                });
-                
-                const textarea = document.querySelector('ms-prompt-box textarea');
-                if (textarea) {
-                    textarea.focus();
-                    textarea.dispatchEvent(pasteEvent);
-                }
-                
-                document.dispatchEvent(pasteEvent);
-                
-                console.log(`[Paste] 已触发粘贴事件，包含 ${dataTransfer.files.length} 个文件`);
-                return { success: true, count: dataTransfer.files.length };
-            } catch (err) {
-                console.error('[Paste] 模拟粘贴失败:', err);
-                return { success: false, error: err.message };
             }
-        }
-        """
-        result = await self.page.evaluate(script, images)
-        if not result or not result.get('success'):
-            error_message = result.get('error', '未知错误')
-            self.logger.error(f"[{self.req_id}] 虚拟粘贴图片失败: {error_message}")
-        else:
-            self.logger.info(f"[{self.req_id}] ✅ 虚拟粘贴事件已触发 ({result.get('count', 0)} 个文件)")
+            """
+            result = await self.page.evaluate(script, images)
+            if not result or not result.get('success'):
+                self.logger.error(f"[{self.req_id}] 虚拟粘贴触发失败: {result.get('error', '未知')}")
+                return False
+            
+            self.logger.info(f"[{self.req_id}] 虚拟粘贴事件已触发")
+            await asyncio.sleep(SLEEP_IMAGE_UPLOAD)
+            
+            uploaded_images = 0
+            for selector in ['ms-prompt-box img', '.prompt-input img', 'img[src*="blob:"]']:
+                try:
+                    locator = self.page.locator(selector)
+                    count = await locator.count()
+                    if count >= expected_count:
+                        uploaded_images = count
+                        break
+                except Exception:
+                    pass
+            
+            if uploaded_images >= expected_count:
+                self.logger.info(f"[{self.req_id}] ✅ 虚拟粘贴成功，检测到 {uploaded_images} 张图片")
+                return True
+            else:
+                self.logger.warning(f"[{self.req_id}] 虚拟粘贴验证失败: 检测到{uploaded_images}/{expected_count}张")
+                return False
+                
+        except Exception as e:
+            if isinstance(e, ClientDisconnectedError):
+                raise
+            self.logger.error(f"[{self.req_id}] ❌ 虚拟粘贴异常: {e}")
+            return False
 
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
@@ -996,7 +1020,7 @@ class PageController:
                         
                         if not upload_success:
                             self.logger.info(f"[{self.req_id}] 回退到虚拟粘贴模式...")
-                            await self._paste_images_via_event(processed_images, prompt_textarea_locator)
+                            await self._paste_images_via_event(processed_images, prompt_textarea_locator, check_client_disconnected)
                         
                         await asyncio.sleep(SLEEP_LONG)
                         

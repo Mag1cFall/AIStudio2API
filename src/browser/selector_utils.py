@@ -19,6 +19,11 @@ async def wait_for_any_selector(
     
     tasks = [asyncio.create_task(check_one(sel)) for sel in selectors]
     
+    async def cancel_tasks(pending_tasks):
+        for p in pending_tasks:
+            p.cancel()
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+    
     try:
         done, pending = await asyncio.wait(
             tasks,
@@ -29,19 +34,16 @@ async def wait_for_any_selector(
         for task in done:
             success, selector = task.result()
             if success:
-                for p in pending:
-                    p.cancel()
+                await cancel_tasks(pending)
                 return (page.locator(selector), selector)
         
-        for p in pending:
-            p.cancel()
+        await cancel_tasks(pending)
         return (None, None)
         
     except asyncio.TimeoutError:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
+        await cancel_tasks(tasks)
         return (None, None)
+
 
 
 async def get_first_visible_locator(

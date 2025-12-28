@@ -257,7 +257,11 @@ class MitmProxy:
                         await server_writer.drain()
                         client_buf.clear()
             except Exception as e:
-                self.log.error(f'Upstream error: {e}')
+                err_str = str(e)
+                if 'APPLICATION_DATA_AFTER_CLOSE_NOTIFY' in err_str or 'Connection reset' in err_str:
+                    pass
+                else:
+                    self.log.error(f'Upstream error: {e}')
             finally:
                 server_writer.close()
 
@@ -304,7 +308,11 @@ class MitmProxy:
                     if b'0\r\n\r\n' in server_buf:
                         server_buf.clear()
             except Exception as e:
-                self.log.error(f'Downstream error: {e}')
+                err_str = str(e)
+                if 'APPLICATION_DATA_AFTER_CLOSE_NOTIFY' in err_str or 'Connection reset' in err_str:
+                    pass
+                else:
+                    self.log.error(f'Downstream error: {e}')
             finally:
                 client_writer.close()
 
