@@ -5,6 +5,7 @@ import tempfile
 import re
 import os
 from playwright.async_api import Page as AsyncPage, expect as expect_async, TimeoutError, Locator
+import json as json_module
 from config import TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR, TOP_P_INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, SUBMIT_BUTTON_SELECTORS, OVERLAY_SELECTOR, PROMPT_TEXTAREA_SELECTOR, PROMPT_TEXTAREA_SELECTORS, RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, EDIT_MESSAGE_BUTTON_SELECTOR, USE_URL_CONTEXT_SELECTOR, UPLOAD_BUTTON_SELECTOR, UPLOAD_BUTTON_SELECTORS, INSERT_BUTTON_SELECTOR, INSERT_BUTTON_SELECTORS, HIDDEN_FILE_INPUT_SELECTORS, THINKING_MODE_TOGGLE_SELECTOR, SET_THINKING_BUDGET_TOGGLE_SELECTOR, THINKING_BUDGET_INPUT_SELECTOR, GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR, ZERO_STATE_SELECTOR, SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR, SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR, SKIP_PREFERENCE_VOTE_BUTTON_SELECTOR, CLICK_TIMEOUT_MS, WAIT_FOR_ELEMENT_TIMEOUT_MS, CLEAR_CHAT_VERIFY_TIMEOUT_MS, DEFAULT_TEMPERATURE, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_STOP_SEQUENCES, DEFAULT_TOP_P, ENABLE_URL_CONTEXT, ENABLE_THINKING_BUDGET, DEFAULT_THINKING_BUDGET, ENABLE_GOOGLE_SEARCH, THINKING_LEVEL_SELECT_SELECTOR, THINKING_LEVEL_OPTIONS, DEFAULT_THINKING_LEVEL, ADVANCED_SETTINGS_EXPANDER_SELECTOR
 from config.timeouts import (
     MAX_RETRIES, SLEEP_RETRY, SLEEP_SHORT, SLEEP_MEDIUM, SLEEP_LONG, SLEEP_TICK,
@@ -71,6 +72,7 @@ class PageController:
                 await self._open_url_content(check_client_disconnected)
             else:
                 self.logger.info(f'[{self.req_id}] URL Context 功能已禁用，跳过调整。')
+            # NOTE: Function Calling 改为合并到 system prompt，不再通过 UI 填写
 
         tasks = [
             self._adjust_temperature(temp_to_set, page_params_cache, params_cache_lock, check_client_disconnected),
@@ -87,16 +89,20 @@ class PageController:
     async def set_system_instructions(self, system_prompt: str, check_client_disconnected: Callable):
         if not system_prompt:
             return
-        self.logger.info(f'[{self.req_id}] 正在设置系统指令...')
+        self.logger.info(f'[{self.req_id}] 正在设置系统指令 (长度: {len(system_prompt)} chars)...')
         await self._check_disconnect(check_client_disconnected, 'Start System Instructions')
         try:
             sys_prompt_button = self.page.locator(SYSTEM_INSTRUCTIONS_BUTTON_SELECTOR)
             sys_prompt_textarea = self.page.locator(SYSTEM_INSTRUCTIONS_TEXTAREA_SELECTOR)
             await self._click_and_verify(sys_prompt_button, sys_prompt_textarea, 'System Instructions Button', 'System Instructions Textarea')
-            await expect_async(sys_prompt_textarea).to_be_editable(timeout=5000)
-            await sys_prompt_textarea.fill(system_prompt, timeout=5000)
-            await expect_async(sys_prompt_textarea).to_have_value(system_prompt, timeout=5000)
-            self.logger.info(f'[{self.req_id}] 系统指令已成功填充并验证。')
+            await expect_async(sys_prompt_textarea).to_be_editable(timeout=TIMEOUT_ELEMENT_VISIBLE)
+            await sys_prompt_textarea.fill(system_prompt)
+            await asyncio.sleep(DELAY_AFTER_FILL)
+            filled_value = await sys_prompt_textarea.input_value(timeout=TIMEOUT_INPUT_VALUE)
+            if len(filled_value) >= len(system_prompt) * 0.9:
+                self.logger.info(f'[{self.req_id}] ✅ 系统指令已填充 (验证长度: {len(filled_value)} chars)')
+            else:
+                self.logger.warning(f'[{self.req_id}] ⚠️ 系统指令填充可能不完整 (期望: {len(system_prompt)}, 实际: {len(filled_value)})')
             for close_attempt in range(1, 4):
                 try:
                     await self.page.keyboard.press("Escape")
@@ -108,9 +114,13 @@ class PageController:
                 except Exception:
                     pass
         except Exception as e:
-            self.logger.error(f'[{self.req_id}] 设置系统指令时出错: {e}')
+            err_msg = str(e)
+            if len(err_msg) > 200:
+                err_msg = err_msg[:200] + '...[truncated]'
+            self.logger.error(f'[{self.req_id}] 设置系统指令时出错: {err_msg}')
             if isinstance(e, ClientDisconnectedError):
                 raise
+
 
     async def _control_thinking_mode_toggle(self, should_be_checked: bool, check_client_disconnected: Callable) -> bool:
         toggle_selector = THINKING_MODE_TOGGLE_SELECTOR
@@ -383,6 +393,10 @@ class PageController:
                 if attempt < max_retries:
                     await asyncio.sleep(DELAY_AFTER_TOGGLE)
         self.logger.error(f"[{self.req_id}] ❌ Google Search 設定失敗，已重試 {max_retries} 次")
+
+
+    # NOTE: _extract_function_declarations 和 _adjust_function_calling 已移除
+    # Function Calling 改为将 tools 定义合并到 system prompt 中
 
 
     async def _ensure_advanced_settings_expanded(self, check_client_disconnected: Callable):

@@ -17,6 +17,33 @@ from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_
 from .abort_detector import AbortSignalDetector, AbortSignalHandler
 from browser.page_controller import PageController
 
+def _merge_tools_to_system_prompt(system_prompt: str, tools: Optional[list], logger, req_id: str) -> str:
+    if not tools:
+        return system_prompt
+    function_declarations = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('google_search_retrieval') is not None:
+            continue
+        if tool.get('function', {}).get('name') == 'googleSearch':
+            continue
+        if 'function' in tool:
+            func = tool['function']
+            declaration = {
+                'name': func.get('name', ''),
+                'description': func.get('description', ''),
+            }
+            if 'parameters' in func:
+                declaration['parameters'] = func['parameters']
+            function_declarations.append(declaration)
+    if not function_declarations:
+        return system_prompt
+    tools_json = json.dumps(function_declarations, indent=2, ensure_ascii=False)
+    logger.info(f"[{req_id}] 🔧 合并 {len(function_declarations)} 个函数到系统提示词")
+    tools_section = f"<tools>\n{tools_json}\n</tools>\n\n"
+    return tools_section + system_prompt
+
 async def _initialize_request_context(req_id: str, request: ChatCompletionRequest) -> dict:
     from server import logger, page_instance, is_page_ready, parsed_model_list, current_ai_studio_model_id, model_switching_lock, page_params_cache, params_cache_lock
     request_manager.register_request(req_id, {'model': request.model, 'stream': request.stream, 'message_count': len(request.messages)})
@@ -670,7 +697,10 @@ async def _process_request_refactored(req_id: str, request: ChatCompletionReques
 
         await _handle_parameter_cache(req_id, context)
         await page_controller.adjust_parameters(request.model_dump(exclude_none=True), context['page_params_cache'], context['params_cache_lock'], context['model_id_to_use'], context['parsed_model_list'], check_client_disconnected)
-        await page_controller.set_system_instructions(system_prompt, check_client_disconnected)
+        
+        # 合并tools到system prompt
+        final_system_prompt = _merge_tools_to_system_prompt(system_prompt, request.tools, context['logger'], req_id)
+        await page_controller.set_system_instructions(final_system_prompt, check_client_disconnected)
         check_client_disconnected('提交提示前最终检查')
         await page_controller.submit_prompt(prepared_prompt, image_list, check_client_disconnected)
         response_result = await _handle_response_processing(req_id, request, page, context, result_future, submit_button_locator, check_client_disconnected, disconnect_check_task)
