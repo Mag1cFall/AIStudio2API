@@ -16,7 +16,7 @@ dependencies = [
     "playwright==1.48.0",
     "camoufox[geoip]==0.4.11",
     "cryptography==42.0.5",
-    "aiohttp~=3.9.5",
+    "aiohttp>=3.9.5",
     "requests==2.31.0",
     "pyjwt==2.8.0",
     "Flask==3.0.3",
