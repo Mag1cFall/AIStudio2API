@@ -3,7 +3,6 @@ PROMPT_TEXTAREA_SELECTORS = [
     'ms-prompt-box textarea[aria-label="Enter a prompt"]',
     'ms-prompt-box textarea[placeholder="Start typing a prompt"]',
     'ms-prompt-box .prompt-box-container .text-wrapper textarea',
-    'ms-prompt-input-wrapper ms-autosize-textarea textarea',
     'ms-prompt-box textarea',
 ]
 PROMPT_TEXTAREA_SELECTOR = PROMPT_TEXTAREA_SELECTORS[0]
@@ -12,9 +11,9 @@ INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 
 # 提交按钮
 SUBMIT_BUTTON_SELECTORS = [
-    'button[aria-label="Run"].run-button',
     'ms-run-button button[aria-label="Run"]',
     'ms-prompt-box ms-run-button button',
+    'button[aria-label="Run"]',
 ]
 SUBMIT_BUTTON_SELECTOR = SUBMIT_BUTTON_SELECTORS[0]
 
@@ -23,15 +22,13 @@ INSERT_BUTTON_SELECTORS = [
     'button[data-test-id="add-media-button"]',
     'button[aria-label="Insert images, videos, audio, or files"]',
     'ms-add-media-button button',
-    'button[aria-label="Insert assets such as images, videos, files, or audio"]',
     'button[data-test-add-chunk-menu-button]',
 ]
 INSERT_BUTTON_SELECTOR = INSERT_BUTTON_SELECTORS[0]
 
 UPLOAD_BUTTON_SELECTORS = [
     'button.upload-file-menu-item',
-    'button[role="menuitem"]:has-text("Upload a file")',
-    'button[aria-label="Upload File"]',
+    'button[role="menuitem"]:has-text("Upload files")',
     'button[role="menuitem"]:has-text("Upload File")',
 ]
 UPLOAD_BUTTON_SELECTOR = UPLOAD_BUTTON_SELECTORS[0]
@@ -51,9 +48,9 @@ RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
 
 # 加载状态
 LOADING_SPINNER_SELECTORS = [
-    'button[aria-label="Run"].run-button svg .stoppable-spinner',
     'ms-run-button button svg .stoppable-spinner',
     'ms-prompt-box ms-run-button button svg .stoppable-spinner',
+    'button[aria-label="Run"] svg .stoppable-spinner',
 ]
 LOADING_SPINNER_SELECTOR = LOADING_SPINNER_SELECTORS[0]
 
@@ -75,11 +72,11 @@ ADVANCED_SETTINGS_EXPANDER_SELECTOR = 'button[aria-label="Expand or collapse adv
 MAX_OUTPUT_TOKENS_SELECTOR = 'input[aria-label="Maximum output tokens"]'
 STOP_SEQUENCE_INPUT_SELECTOR = 'input[aria-label="Add stop token"]'
 MAT_CHIP_REMOVE_BUTTON_SELECTOR = 'mat-chip-set mat-chip-row button[aria-label*="Remove"]'
-TOP_P_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Top P"]]//input[@type="number"]'
-TEMPERATURE_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Temperature"]]//input[@type="number"]'
+TOP_P_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Top P"]]//input[@role="spinbutton"]'
+TEMPERATURE_INPUT_SELECTOR = '//div[contains(@class, "settings-item-column") and .//h3[normalize-space()="Temperature"]]//input[@role="spinbutton"]'
 
 # 工具面板
-USE_URL_CONTEXT_SELECTOR = 'button[aria-label="Browse the url context"]'
+USE_URL_CONTEXT_SELECTOR = 'ms-browse-as-a-tool mat-slide-toggle button[role="switch"]'
 GROUNDING_WITH_GOOGLE_SEARCH_TOGGLE_SELECTOR = 'div[data-test-id="searchAsAToolTooltip"] mat-slide-toggle button'
 
 # 思考模式
