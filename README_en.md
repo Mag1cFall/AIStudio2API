@@ -41,7 +41,6 @@
 - **Smart Model Switching**: Dynamically switch models in AI Studio via the `model` field
 - **Anti-Fingerprint Detection**: Uses Camoufox browser to reduce detection risk
 - **GUI Launcher**: Feature-rich **web** launcher for simplified configuration and management
-- **Ollama Compatibility Layer**: Built-in `llm.py` provides Ollama format API compatibility
 - **Modular Architecture**: Clear module separation design for easy maintenance
 - **Modern Toolchain**: uv dependency management + full type support
 
@@ -298,21 +297,6 @@ curl -X POST http://localhost:2048/nano/generate \
 
 **Detailed Documentation**: See [Media Generation Guide](docs/media-generation-guide.md)
 
-### Ollama Compatibility Layer
-
-The project also provides Ollama format API compatibility:
-
-```bash
-# Start Ollama compatible service
-uv run python src/app_launcher.py
-# Click "Start Local LLM Simulation Service" in the GUI config page
-
-# Use Ollama format API
-curl http://localhost:11434/api/tags
-curl -X POST http://localhost:11434/api/chat \
-  -d '{"model": "gemini", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
 ## 🏗️ Project Architecture
 
 ```
@@ -321,7 +305,7 @@ AIStudio2API/
 │   ├── app_launcher.py          # GUI launcher
 │   ├── launch_camoufox.py       # Command-line launcher
 │   ├── server.py                # Main server
-│   ├── manager.py               # WebUI manager
+│   ├── manager/                 # WebUI manager package
 │   ├── api/                     # API processing modules
 │   ├── browser/                 # Browser automation modules
 │   ├── config/                  # Configuration management
@@ -336,7 +320,6 @@ AIStudio2API/
 │   ├── auth_profiles/           # Authentication files
 │   ├── certs/                   # Certificate files
 │   └── key.txt                  # API keys
-├── llm/                         # Ollama compatibility layer
 ├── camoufox/                    # Camoufox scripts
 ├── docker/                      # Docker configuration
 ├── docs/                        # Detailed documentation
@@ -363,7 +346,6 @@ cp .env.example .env
 - **FastAPI Service**: Default port `2048`
 - **Camoufox Debug**: Default port `9222`
 - **Streaming Proxy**: Default port `3120`
-- **Ollama Compatible**: Default port `11434`
 
 ## 🔧 Advanced Features
 
@@ -455,4 +437,3 @@ Issues and Pull Requests are welcome!
 - **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
 - **Unit Testing**: Increase test coverage for core modules (especially browser automation)
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
-

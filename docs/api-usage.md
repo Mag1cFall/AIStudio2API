@@ -275,21 +275,6 @@ curl -X POST http://localhost:2048/generate-speech \
 
 **详细文档**: 参见 [媒体生成指南](media-generation-guide.md)
 
-### Ollama 兼容层
-
-项目还提供 Ollama 格式的 API 兼容：
-
-```bash
-# 启动 Ollama 兼容服务
-uv run python app_launcher.py
-# 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
-
-# 使用 Ollama 格式 API
-curl http://localhost:11434/api/tags
-curl -X POST http://localhost:11434/api/chat \
-  -d '{"model": "gemini", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
 ### 模型列表
 
 **端点**: `GET /v1/models`

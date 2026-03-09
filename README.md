@@ -41,7 +41,6 @@
 - **智能模型切换**: 通过 `model` 字段动态切换 AI Studio 中的模型
 - **反指纹检测**: 使用 Camoufox 浏览器降低被检测风险
 - **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
-- **Ollama 兼容层**: 内置 `llm.py` 提供 Ollama 格式 API 兼容
 - **模块化架构**: 清晰的模块分离设计，易于维护
 - **现代化工具链**: uv 依赖管理 + 完整类型支持
 
@@ -304,21 +303,6 @@ curl -X POST http://localhost:2048/nano/generate \
 
 **详细文档**: 参见 [媒体生成指南](docs/media-generation-guide.md)
 
-### Ollama 兼容层
-
-项目还提供 Ollama 格式的 API 兼容：
-
-```bash
-# 启动 Ollama 兼容服务
-uv run python src/app_launcher.py
-# 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
-
-# 使用 Ollama 格式 API
-curl http://localhost:11434/api/tags
-curl -X POST http://localhost:11434/api/chat \
-  -d '{"model": "gemini", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
 ## 🏗️ 项目架构
 
 ```
@@ -327,7 +311,7 @@ AIStudio2API/
 │   ├── app_launcher.py          # 图形界面启动器
 │   ├── launch_camoufox.py       # 命令行启动器
 │   ├── server.py                # 主服务器
-│   ├── manager.py               # WebUI 管理器
+│   ├── manager/                 # WebUI 管理器包
 │   ├── api/                     # API 处理模块
 │   ├── browser/                 # 浏览器自动化模块
 │   ├── config/                  # 配置管理
@@ -342,7 +326,6 @@ AIStudio2API/
 │   ├── auth_profiles/           # 认证文件
 │   ├── certs/                   # 证书文件
 │   └── key.txt                  # API 密钥
-├── llm/                         # Ollama 兼容层
 ├── camoufox/                    # Camoufox 脚本
 ├── docker/                      # Docker 配置
 ├── docs/                        # 详细文档
@@ -369,7 +352,6 @@ cp .env.example .env
 - **FastAPI 服务**: 默认端口 `2048`
 - **Camoufox 调试**: 默认端口 `9222`
 - **流式代理**: 默认端口 `3120`
-- **Ollama 兼容**: 默认端口 `11434`
 
 ## 🔧 高级功能
 

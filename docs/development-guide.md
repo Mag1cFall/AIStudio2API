@@ -81,14 +81,13 @@ AIStudio2API/
 │   ├── static/                 # 静态资源
 │   ├── app_launcher.py         # GUI 启动器
 │   ├── launch_camoufox.py      # 命令行启动器
-│   ├── manager.py              # WebUI 管理器
+│   ├── manager/                # WebUI 管理器包
 │   ├── gateway.py              # 多Worker负载均衡网关
 │   └── server.py               # 主服务器
 ├── data/                       # 运行时数据目录
 │   ├── auth_profiles/          # 认证文件存储
 │   ├── certs/                  # 代理证书
 │   └── key.txt                 # API 密钥
-├── llm/                        # Ollama 兼容层
 ├── camoufox/                   # Camoufox 脚本
 ├── docker/                     # Docker 相关文件
 ├── docs/                       # 文档目录

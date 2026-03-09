@@ -1,85 +1,111 @@
-import os
-import json
 import asyncio
+import json
 import logging
 import time
-from typing import Optional, AsyncGenerator, List, Dict, Any, Union
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, Response
-from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Optional
+
 import aiohttp
 import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - [Gateway] %(levelname)s - %(message)s')
-logger = logging.getLogger('Gateway')
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+logger = logging.getLogger("Gateway")
 
 MANAGER_URL = "http://127.0.0.1:9000"
 RATE_LIMIT_KEYWORDS = [b"exceeded quota", b"out of free generations", b"rate limit"]
 
+_session: Optional[aiohttp.ClientSession] = None
+_worker_cache = {"workers": [], "last_update": 0, "index": 0}
+CACHE_TTL = 5
 
-class MessageContent(BaseModel):
-    type: str = "text"
-    text: Optional[str] = None
-    image_url: Optional[Dict[str, str]] = None
 
-class Message(BaseModel):
-    role: str = Field(..., description="角色: system, user, assistant")
-    content: Union[str, List[MessageContent]] = Field(..., description="消息内容")
+async def get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=100, limit_per_host=20, keepalive_timeout=30
+        )
+        _session = aiohttp.ClientSession(connector=connector)
+    return _session
 
-class ChatCompletionRequest(BaseModel):
-    model: str = Field("gemini-2.0-flash", description="模型ID")
-    messages: List[Message] = Field(..., description="消息列表")
-    stream: bool = Field(False, description="是否流式响应")
-    temperature: Optional[float] = Field(1.0, ge=0, le=2)
-    max_tokens: Optional[int] = Field(65536)
-    top_p: Optional[float] = Field(0.95, ge=0, le=1)
-    stop: Optional[List[str]] = None
-    reasoning_effort: Optional[Union[int, str]] = Field(None, description="思考预算")
 
-    class Config:
-        extra = "allow"
+async def close_session() -> None:
+    global _session
+    if _session and not _session.closed:
+        await _session.close()
+    _session = None
 
-class TTSRequest(BaseModel):
-    model: str = Field("gemini-2.5-flash-preview-tts")
-    contents: Any = Field(..., description="文本内容")
-    generationConfig: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "allow"
+async def refresh_workers() -> None:
+    cache = _worker_cache
+    if time.time() - cache["last_update"] < CACHE_TTL and cache["workers"]:
+        return
 
-class ImagenRequest(BaseModel):
-    prompt: str = Field(..., description="图片描述")
-    model: str = Field("imagen-3.0-generate-002")
-    number_of_images: int = Field(1, ge=1, le=4)
-    aspect_ratio: str = Field("1:1")
-    negative_prompt: Optional[str] = None
+    try:
+        session = await get_session()
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with session.get(
+            f"{MANAGER_URL}/api/workers", timeout=timeout
+        ) as response:
+            workers = await response.json()
+            cache["workers"] = [
+                worker for worker in workers if worker.get("status") == "running"
+            ]
+            cache["last_update"] = time.time()
+    except Exception as exc:
+        logger.warning(f"Refresh workers failed: {exc}")
 
-    class Config:
-        extra = "allow"
 
-class VeoRequest(BaseModel):
-    prompt: str = Field(..., description="视频描述")
-    model: str = Field("veo-2.0-generate-001")
-    duration_seconds: int = Field(5)
-    aspect_ratio: str = Field("16:9")
-    negative_prompt: Optional[str] = None
-    image: Optional[str] = Field(None, description="Base64参考图")
+def get_next_worker(model: str = "") -> Optional[dict]:
+    cache = _worker_cache
+    workers = cache["workers"]
+    if not workers:
+        return None
 
-    class Config:
-        extra = "allow"
+    candidates = workers
+    if model:
+        current_time = time.time()
+        candidates = []
+        for worker in workers:
+            limits = worker.get("rate_limited_models", {})
+            if model in limits and limits[model] > current_time:
+                continue
+            candidates.append(worker)
 
-class NanoRequest(BaseModel):
-    model: str = Field("gemini-2.5-flash-image")
-    prompt: str = Field(..., description="图片描述")
-    aspect_ratio: str = Field("1:1")
-    image: Optional[str] = None
+    if not candidates:
+        return None
 
-    class Config:
-        extra = "allow"
+    worker = candidates[cache["index"] % len(candidates)]
+    cache["index"] += 1
+    return worker
+
+
+async def report_rate_limit(worker_id: str, model: str) -> None:
+    try:
+        session = await get_session()
+        timeout = aiohttp.ClientTimeout(total=2)
+        await session.post(
+            f"{MANAGER_URL}/api/workers/{worker_id}/rate-limit",
+            json={"model": model},
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logger.warning(f"Report rate limit failed for worker {worker_id}: {exc}")
+
+
+def check_rate_limit_in_response(content: bytes) -> bool:
+    content_lower = content.lower()
+    return any(keyword in content_lower for keyword in RATE_LIMIT_KEYWORDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await refresh_workers()
+    logger.info("Gateway started")
+    yield
+    await close_session()
 
 
 app = FastAPI(
@@ -88,230 +114,213 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
-_session: Optional[aiohttp.ClientSession] = None
-_worker_cache = {"workers": [], "last_update": 0, "index": 0}
-CACHE_TTL = 5
-
-async def get_session() -> aiohttp.ClientSession:
-    global _session
-    if _session is None or _session.closed:
-        connector = aiohttp.TCPConnector(limit=100, limit_per_host=20, keepalive_timeout=30)
-        _session = aiohttp.ClientSession(connector=connector)
-    return _session
-
-async def refresh_workers():
-    cache = _worker_cache
-    if time.time() - cache["last_update"] < CACHE_TTL and cache["workers"]:
-        return
-    try:
-        session = await get_session()
-        async with session.get(f"{MANAGER_URL}/api/workers", timeout=aiohttp.ClientTimeout(total=5)) as resp:
-            workers = await resp.json()
-            cache["workers"] = [w for w in workers if w.get("status") == "running"]
-            cache["last_update"] = time.time()
-    except Exception as e:
-        logger.warning(f"Refresh workers failed: {e}")
-
-def get_next_worker(model: str = "") -> Optional[dict]:
-    cache = _worker_cache
-    workers = cache["workers"]
-    if not workers:
-        return None
-    
-    candidates = workers
-    if model:
-        current_time = time.time()
-        candidates = []
-        for w in workers:
-            limits = w.get("rate_limited_models", {})
-            if model in limits:
-                if limits[model] > current_time:
-                    continue
-            candidates.append(w)
-            
-    if not candidates:
-        return None
-        
-    worker = candidates[cache["index"] % len(candidates)]
-    cache["index"] += 1
-    return worker
-
-async def report_rate_limit(worker_id: str, model: str):
-    try:
-        session = await get_session()
-        await session.post(f"{MANAGER_URL}/api/workers/{worker_id}/rate-limit", json={"model": model}, timeout=aiohttp.ClientTimeout(total=2))
-    except:
-        pass
-
-def check_rate_limit_in_response(content: bytes) -> bool:
-    content_lower = content.lower()
-    return any(kw in content_lower for kw in RATE_LIMIT_KEYWORDS)
-
-@app.on_event("startup")
-async def startup():
-    await refresh_workers()
-    logger.info(f"Gateway started")
-
-@app.on_event("shutdown")
-async def shutdown():
-    global _session
-    if _session and not _session.closed:
-        await _session.close()
 
 @app.get("/", tags=["System"], summary="网关状态")
 async def root():
-    """返回网关运行状态和可用Worker数量"""
     return {"status": "ok", "mode": "gateway", "workers": len(_worker_cache["workers"])}
+
 
 @app.get("/v1/models", tags=["Chat"], summary="获取模型列表")
 async def models():
-    """返回所有可用的AI模型列表"""
     await refresh_workers()
     worker = get_next_worker()
     if not worker:
         raise HTTPException(status_code=503, detail="No workers available")
-    
-    port = worker["port"]
-    url = f"http://127.0.0.1:{port}/v1/models"
-    
+
+    url = f"http://127.0.0.1:{worker['port']}/v1/models"
     session = await get_session()
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            content = await resp.read()
-            return Response(content=content, status_code=resp.status, media_type=resp.content_type)
-    except Exception as e:
-        logger.error(f"Forward /v1/models failed: {e}")
-        raise HTTPException(status_code=502, detail=str(e))
+        async with session.get(
+            url, timeout=aiohttp.ClientTimeout(total=30)
+        ) as response:
+            content = await response.read()
+            return Response(
+                content=content,
+                status_code=response.status,
+                media_type=response.content_type,
+            )
+    except Exception as exc:
+        logger.error(f"Forward /v1/models failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 @app.post("/v1/chat/completions", tags=["Chat"], summary="聊天对话")
 async def chat_completions(request: Request):
-    """OpenAI兼容的聊天接口，支持流式和非流式响应"""
     await refresh_workers()
     body = await request.body()
     body_json = json.loads(body)
     is_stream = body_json.get("stream", False)
     model_id = body_json.get("model", "")
-    
+
     worker = get_next_worker(model_id)
     if not worker:
         raise HTTPException(status_code=503, detail="No workers available")
-    
+
     port = worker["port"]
     worker_id = worker.get("id", "")
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     req_id = f"gw-{worker_id}"
     logger.info(f"[{req_id}] POST -> worker:{port} (stream={is_stream})")
-    
-    forward_headers = {'Content-Type': 'application/json'}
-    for k, v in request.headers.items():
-        if k.lower() not in ('host', 'content-length', 'transfer-encoding', 'content-type'):
-            forward_headers[k] = v
-    
+
+    forward_headers = {"Content-Type": "application/json"}
+    for key, value in request.headers.items():
+        if key.lower() not in (
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "content-type",
+        ):
+            forward_headers[key] = value
+
     session = await get_session()
-    
+
     if is_stream:
+
         async def stream_proxy() -> AsyncGenerator[bytes, None]:
             rate_limited = False
-            check_count = 0
             try:
-                async with session.post(url, data=body, headers=forward_headers, timeout=aiohttp.ClientTimeout(total=600, sock_read=300)) as resp:
-                    async for chunk in resp.content.iter_chunks():
+                timeout = aiohttp.ClientTimeout(total=600, sock_read=300)
+                async with session.post(
+                    url, data=body, headers=forward_headers, timeout=timeout
+                ) as response:
+                    async for chunk in response.content.iter_chunks():
                         data, _ = chunk
-                        if data:
-                            check_count += 1
-                            if not rate_limited:
-                                if check_rate_limit_in_response(data):
-                                    rate_limited = True
-                            yield data
+                        if not data:
+                            continue
+                        if not rate_limited and check_rate_limit_in_response(data):
+                            rate_limited = True
+                        yield data
+
                     if rate_limited and worker_id and model_id:
                         asyncio.create_task(report_rate_limit(worker_id, model_id))
             except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"[{req_id}] Stream error: {e}")
-        
-        return StreamingResponse(stream_proxy(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    else:
-        try:
-            async with session.post(url, data=body, headers=forward_headers, timeout=aiohttp.ClientTimeout(total=300)) as resp:
-                content = await resp.read()
-                if check_rate_limit_in_response(content) and worker_id and model_id:
-                    asyncio.create_task(report_rate_limit(worker_id, model_id))
-                return Response(content=content, status_code=resp.status, media_type=resp.content_type)
-        except Exception as e:
-            logger.error(f"[{req_id}] Forward failed: {e}")
-            raise HTTPException(status_code=502, detail=str(e))
+                logger.info(f"[{req_id}] Stream cancelled")
+                raise
+            except Exception as exc:
+                logger.error(f"[{req_id}] Stream error: {exc}")
+
+        return StreamingResponse(
+            stream_proxy(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        async with session.post(
+            url,
+            data=body,
+            headers=forward_headers,
+            timeout=aiohttp.ClientTimeout(total=300),
+        ) as response:
+            content = await response.read()
+            if check_rate_limit_in_response(content) and worker_id and model_id:
+                asyncio.create_task(report_rate_limit(worker_id, model_id))
+            return Response(
+                content=content,
+                status_code=response.status,
+                media_type=response.content_type,
+            )
+    except Exception as exc:
+        logger.error(f"[{req_id}] Forward failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 @app.get("/health", tags=["System"], summary="健康检查")
 async def health():
-    """返回网关健康状态"""
     return {"status": "ok", "workers": len(_worker_cache["workers"])}
+
 
 async def forward_media_request(request: Request, path: str):
     await refresh_workers()
     worker = get_next_worker()
     if not worker:
         raise HTTPException(status_code=503, detail="No workers available")
-    
-    port = worker["port"]
-    url = f"http://127.0.0.1:{port}{path}"
-    
+
+    url = f"http://127.0.0.1:{worker['port']}{path}"
     body = await request.body()
     forward_headers = {}
-    for k, v in request.headers.items():
-        if k.lower() not in ('host', 'content-length', 'transfer-encoding'):
-            forward_headers[k] = v
-    
+    for key, value in request.headers.items():
+        if key.lower() not in ("host", "content-length", "transfer-encoding"):
+            forward_headers[key] = value
+
     session = await get_session()
     try:
-        async with session.post(url, data=body, headers=forward_headers, timeout=aiohttp.ClientTimeout(total=300)) as resp:
-            content = await resp.read()
-            return Response(content=content, status_code=resp.status, media_type=resp.content_type)
-    except Exception as e:
-        logger.error(f"Forward {path} failed: {e}")
-        raise HTTPException(status_code=502, detail=str(e))
+        async with session.post(
+            url,
+            data=body,
+            headers=forward_headers,
+            timeout=aiohttp.ClientTimeout(total=300),
+        ) as response:
+            content = await response.read()
+            return Response(
+                content=content,
+                status_code=response.status,
+                media_type=response.content_type,
+            )
+    except Exception as exc:
+        logger.error(f"Forward {path} failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 @app.post("/generate-speech", tags=["Media"], summary="TTS语音合成")
 async def generate_speech(request: Request):
-    """Gemini 2.5 TTS语音生成"""
     return await forward_media_request(request, "/generate-speech")
+
 
 @app.post("/generate-image", tags=["Media"], summary="Imagen图片生成")
 async def generate_image(request: Request):
-    """Imagen 3图片生成"""
     return await forward_media_request(request, "/generate-image")
+
 
 @app.post("/generate-video", tags=["Media"], summary="Veo视频生成")
 async def generate_video(request: Request):
-    """Veo 2视频生成"""
     return await forward_media_request(request, "/generate-video")
+
 
 @app.post("/nano/generate", tags=["Media"], summary="Nano图片生成")
 async def nano_generate(request: Request):
-    """Gemini 2.5 Flash原生图片生成"""
     return await forward_media_request(request, "/nano/generate")
+
 
 @app.post("/v1beta/models/{model}:generateContent")
 async def v1beta_generate_content(request: Request, model: str):
-    return await forward_media_request(request, f"/v1beta/models/{model}:generateContent")
+    return await forward_media_request(
+        request, f"/v1beta/models/{model}:generateContent"
+    )
+
 
 @app.post("/v1beta/models/{model}:predict")
 async def v1beta_predict(request: Request, model: str):
     return await forward_media_request(request, f"/v1beta/models/{model}:predict")
 
+
 @app.post("/v1beta/models/{model}:predictLongRunning")
 async def v1beta_predict_long_running(request: Request, model: str):
-    return await forward_media_request(request, f"/v1beta/models/{model}:predictLongRunning")
+    return await forward_media_request(
+        request, f"/v1beta/models/{model}:predictLongRunning"
+    )
 
-def main():
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - [Gateway] %(levelname)s - %(message)s",
+    )
+
+
+def main() -> None:
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=2048)
+    parser.add_argument("--port", type=int, default=2048)
     args = parser.parse_args()
+
+    configure_logging()
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+
 
 if __name__ == "__main__":
     main()
-

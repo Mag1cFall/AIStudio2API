@@ -19,7 +19,6 @@ dependencies = [
     "aiohttp>=3.9.5",
     "requests==2.31.0",
     "pyjwt==2.8.0",
-    "Flask==3.0.3",
     "aiosocks~=0.2.6",
     "python-socks~=2.7.1"
 ]
