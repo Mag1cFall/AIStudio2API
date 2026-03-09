@@ -21,7 +21,7 @@
   🎤 Gemini 2.5 TTS Speech Synthesis
 </p>
 
-<img src="docs/img/demo.gif" alt="Demo GIF" width="100%" />
+<!-- <img src="docs/img/demo.gif" alt="Demo GIF" width="100%" /> -->
 
 <!-- <p align="center">
   <img src="docs/img/多worker并发和媒体模型支援.png" alt="Multi-Worker Concurrency & Media Model Support" width="80%" />

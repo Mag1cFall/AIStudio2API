@@ -22,6 +22,7 @@ async def websocket_logs(websocket: WebSocket):
                 }
             )
         )
+        await manager.broadcast_worker_snapshot()
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:

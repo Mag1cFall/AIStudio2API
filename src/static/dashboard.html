@@ -227,8 +227,8 @@
                     {{ t('status.start') }}
                 </button>
 
-                <button v-else @click="stopService" :disabled="loading"
-                    class="w-full py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow transition flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <button v-else @click="stopService"
+                    class="w-full py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow transition flex justify-center items-center gap-2">
                     <span v-if="loading" v-html="AppIcons.spinner"></span>
                     <span v-else v-html="AppIcons.stop"></span>
                     {{ t('status.stop') }}
@@ -469,8 +469,7 @@
                             class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
                             <div class="flex items-center justify-between mb-2">
                                 <div class="flex items-center gap-3">
-                                    <div class="w-3 h-3 rounded-full"
-                                        :class="worker.status === 'running' ? 'bg-green-500' : 'bg-gray-500'"></div>
+                                    <div class="w-3 h-3 rounded-full" :class="workerStatusDotClass(worker)"></div>
                                     <span class="font-mono text-white font-bold">{{ worker.id }}</span>
                                     <span class="text-gray-400 text-sm">{{ worker.profile }}</span>
                                 </div>
@@ -480,9 +479,8 @@
                                 </div>
                             </div>
                             <div class="flex items-center justify-between">
-                                <span class="text-xs"
-                                    :class="worker.status === 'running' ? 'text-green-400' : 'text-gray-500'">
-                                    {{ worker.status.toUpperCase() }}
+                                <span class="text-xs" :class="workerStatusTextClass(worker)">
+                                    {{ getWorkerDisplayStatus(worker).toUpperCase() }}
                                 </span>
                                 <div class="flex gap-2">
                                     <button v-if="worker.status !== 'running'" @click="startWorker(worker.id)"
@@ -886,6 +884,54 @@
                 const workers = ref([]);
                 const renameModal = ref({ show: false, oldName: '', newName: '' });
 
+                const sortWorkers = (items) => {
+                    return [...items].sort((a, b) => {
+                        const aId = String(a.id || '');
+                        const bId = String(b.id || '');
+                        const aNum = aId.startsWith('w') ? Number(aId.slice(1)) : Number.NaN;
+                        const bNum = bId.startsWith('w') ? Number(bId.slice(1)) : Number.NaN;
+                        if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+                        return aId.localeCompare(bId);
+                    });
+                };
+
+                const setWorkers = (items) => {
+                    workers.value = sortWorkers(Array.isArray(items) ? items : []);
+                };
+
+                const upsertWorker = (worker) => {
+                    const nextWorkers = [...workers.value];
+                    const index = nextWorkers.findIndex(item => item.id === worker.id);
+                    if (index === -1) {
+                        nextWorkers.push(worker);
+                    } else {
+                        nextWorkers[index] = { ...nextWorkers[index], ...worker };
+                    }
+                    workers.value = sortWorkers(nextWorkers);
+                };
+
+                const getWorkerDisplayStatus = (worker) => {
+                    return worker.display_status || worker.status || 'stopped';
+                };
+
+                const workerStatusDotClass = (worker) => {
+                    switch (getWorkerDisplayStatus(worker)) {
+                        case 'running': return 'bg-green-500';
+                        case 'rate_limited': return 'bg-yellow-500';
+                        case 'crashed': return 'bg-red-500';
+                        default: return 'bg-gray-500';
+                    }
+                };
+
+                const workerStatusTextClass = (worker) => {
+                    switch (getWorkerDisplayStatus(worker)) {
+                        case 'running': return 'text-green-400';
+                        case 'rate_limited': return 'text-yellow-400';
+                        case 'crashed': return 'text-red-400';
+                        default: return 'text-gray-500';
+                    }
+                };
+
                 const effectiveModel = computed(() => {
                     return chatConfig.value.model === 'custom' ? chatConfig.value.customModel : chatConfig.value.model;
                 });
@@ -974,6 +1020,12 @@
                                 if (data.entries && Array.isArray(data.entries)) {
                                     handleLogBatch(data.entries);
                                 }
+                            } else if (data.type === 'worker_snapshot') {
+                                setWorkers(data.workers || []);
+                            } else if (data.type === 'worker_status') {
+                                if (data.worker) {
+                                    upsertWorker(data.worker);
+                                }
                             } else if (data.type === 'prompt') {
                                 currentPrompt.value = data.data;
                             }
@@ -1044,7 +1096,11 @@
                             body: JSON.stringify(config.value)
                         });
                         const data = await res.json();
-                        if (!data.success) alert(data.message);
+                        if (!res.ok || !data.success) {
+                            alert(data.detail || data.message || 'Unknown error');
+                        }
+                    } catch (e) {
+                        alert('Request failed: ' + e.message);
                     } finally {
                         loading.value = false;
                     }
@@ -1071,7 +1127,7 @@
                 const refreshWorkers = async () => {
                     try {
                         const res = await fetch('/api/workers');
-                        workers.value = await res.json();
+                        setWorkers(await res.json());
                     } catch (e) { console.error('Failed to refresh workers:', e); }
                 };
 
@@ -1364,6 +1420,9 @@
                     currentPrompt,
                     sendPromptResponse,
                     workers,
+                    getWorkerDisplayStatus,
+                    workerStatusDotClass,
+                    workerStatusTextClass,
                     refreshWorkers,
                     saveWorkersConfig: async () => {
                         try {
@@ -1378,42 +1437,42 @@
                         try {
                             await fetch('/api/workers/init', { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to init workers:', e); }
                     },
                     startWorker: async (id) => {
                         try {
                             await fetch(`/api/workers/${id}/start`, { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to start worker:', e); }
                     },
                     stopWorker: async (id) => {
                         try {
                             await fetch(`/api/workers/${id}/stop`, { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to stop worker:', e); }
                     },
                     startAllWorkers: async () => {
                         try {
                             await fetch('/api/workers/start-all', { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to start all workers:', e); }
                     },
                     stopAllWorkers: async () => {
                         try {
                             await fetch('/api/workers/stop-all', { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to stop all workers:', e); }
                     },
                     clearWorkerLimits: async (id) => {
                         try {
                             await fetch(`/api/workers/${id}/clear-limits`, { method: 'POST' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to clear limits:', e); }
                     },
                     formatRecoveryTime: (timestamp) => {
@@ -1445,14 +1504,14 @@
                                 body: JSON.stringify({ profile })
                             });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to add worker:', e); }
                     },
                     removeWorker: async (id) => {
                         try {
                             await fetch(`/api/workers/${id}`, { method: 'DELETE' });
                             const res = await fetch('/api/workers');
-                            workers.value = await res.json();
+                            setWorkers(await res.json());
                         } catch (e) { console.error('Failed to remove worker:', e); }
                     },
                     isProfileInWorkers: (profile) => {

@@ -7,7 +7,7 @@ try:
 except ImportError:
     from config.settings import SAVED_AUTH_DIR
 
-from ..service import WORKER_POOL_AVAILABLE, worker_pool
+from ..service import WORKER_POOL_AVAILABLE, manager, worker_pool
 
 
 router = APIRouter(prefix="/api/workers", tags=["Workers"])
@@ -54,6 +54,12 @@ async def add_worker(profile: str = Body(..., embed=True)):
     )
     pool.workers[worker_id] = worker
     pool.save_config()
+    if manager.is_worker_mode and manager.service_status == "running":
+        pool.configure_runtime(manager.load_config())
+        success, message = pool.start_worker(worker_id)
+        if not success:
+            raise HTTPException(status_code=500, detail=message)
+    await manager.broadcast_worker_snapshot()
     return {"success": True, "worker": worker.to_dict()}
 
 
@@ -65,11 +71,16 @@ async def remove_worker(worker_id: str):
         raise HTTPException(status_code=404, detail="Worker not found")
 
     worker = pool.workers[worker_id]
+    process = worker.process
     if worker.status == "running":
-        pool.stop_worker(worker_id)
+        success, message = await pool.stop_worker(worker_id)
+        if not success:
+            raise HTTPException(status_code=500, detail=message)
+        manager.unregister_worker_process(process)
 
     del pool.workers[worker_id]
     pool.save_config()
+    await manager.broadcast_worker_snapshot()
     return {"success": True}
 
 
@@ -86,6 +97,7 @@ async def list_workers():
 async def init_workers():
     pool = _require_worker_pool()
     pool.init_from_config()
+    await manager.broadcast_worker_snapshot()
     return {"success": True, "count": len(pool.workers)}
 
 
@@ -94,6 +106,7 @@ async def save_workers_config():
     pool = _require_worker_pool()
     try:
         pool.save_config()
+        await manager.broadcast_worker_snapshot()
         return {"success": True, "count": len(pool.workers)}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -124,24 +137,30 @@ async def get_next_available_worker(model: str = ""):
 async def mark_worker_rate_limited(worker_id: str, model: str = Body(..., embed=True)):
     pool = _require_worker_pool()
     pool.mark_rate_limited(worker_id, model)
+    await manager.broadcast_worker_snapshot()
     return {"success": True}
 
 
 @router.post("/{worker_id}/start")
 async def start_worker_api(worker_id: str):
     pool = _require_worker_pool()
+    pool.configure_runtime(manager.load_config())
     success, message = pool.start_worker(worker_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
+    await manager.broadcast_worker_snapshot()
     return {"success": True, "message": message}
 
 
 @router.post("/{worker_id}/stop")
 async def stop_worker_api(worker_id: str):
     pool = _require_worker_pool()
-    success, message = pool.stop_worker(worker_id)
+    process = pool.workers.get(worker_id).process if worker_id in pool.workers else None
+    success, message = await pool.stop_worker(worker_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
+    manager.unregister_worker_process(process)
+    await manager.broadcast_worker_snapshot()
     return {"success": True, "message": message}
 
 
@@ -149,6 +168,7 @@ async def stop_worker_api(worker_id: str):
 async def clear_worker_limits(worker_id: str):
     pool = _require_worker_pool()
     if pool.clear_rate_limits(worker_id):
+        await manager.broadcast_worker_snapshot()
         return {"success": True}
     raise HTTPException(status_code=404, detail="Worker not found")
 
@@ -156,12 +176,18 @@ async def clear_worker_limits(worker_id: str):
 @router.post("/start-all")
 async def start_all_workers():
     pool = _require_worker_pool()
-    pool.start_all()
+    pool.configure_runtime(manager.load_config())
+    await pool.start_all()
+    await manager.broadcast_worker_snapshot()
     return {"success": True}
 
 
 @router.post("/stop-all")
 async def stop_all_workers():
     pool = _require_worker_pool()
-    pool.stop_all()
+    processes = [worker.process for worker in pool.workers.values() if worker.process]
+    await pool.stop_all()
+    for process in processes:
+        manager.unregister_worker_process(process)
+    await manager.broadcast_worker_snapshot()
     return {"success": True}

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
@@ -51,8 +51,8 @@ class ServiceManager:
         self.service_info: Dict[str, Any] = {}
         self.current_launch_mode: Optional[str] = None
         self._console_print_state = "default"
-        self.worker_processes: List[subprocess.Popen] = []
-        self.output_threads: List[threading.Thread] = []
+        self.worker_processes: Dict[int, subprocess.Popen] = {}
+        self.output_threads: Dict[int, threading.Thread] = {}
         self.is_worker_mode = False
         self._log_enabled = True
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -127,6 +127,102 @@ class ServiceManager:
         if self.loop and not self.loop.is_closed():
             asyncio.run_coroutine_threadsafe(self.broadcast_status(), self.loop)
 
+    def _broadcast_worker_snapshot_from_thread(self) -> None:
+        if self.loop and not self.loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_worker_snapshot(), self.loop
+            )
+
+    def prune_worker_processes(self) -> None:
+        stale_pids = [
+            pid
+            for pid, process in self.worker_processes.items()
+            if process.poll() is not None
+        ]
+        for pid in stale_pids:
+            self.worker_processes.pop(pid, None)
+            self.output_threads.pop(pid, None)
+
+    def attach_worker_process(
+        self, process: Optional[subprocess.Popen], prefix: str
+    ) -> None:
+        if process is None:
+            return
+        self.prune_worker_processes()
+        if process.pid in self.worker_processes:
+            return
+        self.worker_processes[process.pid] = process
+        thread = threading.Thread(
+            target=self._monitor_output,
+            args=(process, prefix),
+            daemon=True,
+        )
+        thread.start()
+        self.output_threads[process.pid] = thread
+
+    def unregister_worker_process(self, process: Optional[subprocess.Popen]) -> None:
+        if process is None:
+            return
+        self.worker_processes.pop(process.pid, None)
+        self.output_threads.pop(process.pid, None)
+
+    async def _broadcast_message(self, payload: Dict[str, Any]) -> None:
+        if not self.active_connections:
+            return
+        message = json.dumps(payload)
+        to_remove: List[WebSocket] = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                to_remove.append(connection)
+        for connection in to_remove:
+            if connection in self.active_connections:
+                self.active_connections.remove(connection)
+
+    def refresh_worker_service_info(self) -> None:
+        if not self.is_worker_mode or not WORKER_POOL_AVAILABLE or worker_pool is None:
+            return
+        running_count = sum(
+            1 for worker in worker_pool.workers.values() if worker.status == "running"
+        )
+        current_port = self.service_info.get(
+            "port", self.load_config().get("fastapi_port", 2048)
+        )
+        self.service_info = {
+            "mode": "worker",
+            "worker_count": running_count,
+            "port": current_port,
+        }
+
+    async def broadcast_worker_event(self, event: Dict[str, Any]) -> None:
+        self.refresh_worker_service_info()
+        await self._broadcast_message(event)
+        await self.broadcast_status()
+
+    async def broadcast_worker_snapshot(self) -> None:
+        if not WORKER_POOL_AVAILABLE or worker_pool is None:
+            return
+        self.refresh_worker_service_info()
+        await self._broadcast_message(
+            {"type": "worker_snapshot", "workers": worker_pool.get_status()}
+        )
+
+    def handle_worker_status_event(self, event: Dict[str, Any]) -> None:
+        if not self.loop or self.loop.is_closed():
+            return
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is self.loop:
+            self.loop.create_task(self.broadcast_worker_event(event))
+            return
+        asyncio.run_coroutine_threadsafe(self.broadcast_worker_event(event), self.loop)
+
+    def handle_worker_process_started(self, worker) -> None:
+        self.attach_worker_process(worker.process, f"Worker-{worker.id}")
+
     def _monitor_output(self, process: subprocess.Popen, prefix: str = "Main") -> None:
         try:
             for line in iter(process.stdout.readline, b""):
@@ -193,8 +289,11 @@ class ServiceManager:
             if not self.is_worker_mode:
                 self.service_status = "stopped"
                 self._broadcast_status_from_thread()
+            else:
+                self.unregister_worker_process(process)
 
     async def broadcast_status(self) -> None:
+        self.refresh_worker_service_info()
         status_msg = json.dumps(
             {
                 "type": "status",
@@ -213,10 +312,11 @@ class ServiceManager:
             if connection in self.active_connections:
                 self.active_connections.remove(connection)
 
-    def start_service(self, config: Dict[str, Any]) -> tuple[bool, str]:
+    async def start_service(self, config: Dict[str, Any]) -> tuple[bool, str]:
+        self.prune_worker_processes()
         if self.process and self.process.poll() is None:
             return False, "服务已在运行"
-        if self.worker_processes:
+        if self.service_status == "running" and self.is_worker_mode:
             return False, "Worker模式已在运行"
 
         self.service_status = "starting"
@@ -243,7 +343,7 @@ class ServiceManager:
         )
 
         if config.get("worker_mode_enabled", False):
-            return self._start_worker_mode(config, mode_flag, env, creationflags)
+            return await self._start_worker_mode(config, mode_flag, env, creationflags)
         return self._start_single_mode(config, mode_flag, env, creationflags)
 
     def _start_single_mode(
@@ -315,7 +415,7 @@ class ServiceManager:
             logger.error(f"启动失败: {exc}")
             return False, str(exc)
 
-    def _start_worker_mode(
+    async def _start_worker_mode(
         self,
         config: Dict[str, Any],
         mode_flag: str,
@@ -329,79 +429,33 @@ class ServiceManager:
         self.is_worker_mode = True
 
         worker_pool.init_from_config()
+        worker_pool.configure_runtime(config)
         if not worker_pool.workers:
             self.service_status = "stopped"
             return False, "未找到Worker配置，请先在Worker管理中添加Worker"
 
-        self.worker_processes = []
-        self.output_threads = []
-
-        def start_single_worker(
-            worker_id: str, worker
-        ) -> tuple[str, Optional[subprocess.Popen], Optional[str]]:
-            cmd = [
-                PYTHON_EXECUTABLE,
-                LAUNCH_CAMOUFOX_PY,
-                mode_flag,
-                "--server-port",
-                str(worker.port),
-                "--camoufox-debug-port",
-                str(worker.camoufox_port),
-                "--active-auth-json",
-                worker.profile_path,
-            ]
-
-            if config.get("proxy_enabled"):
-                proxy = config.get("proxy_address", "")
-                if proxy:
-                    cmd.extend(["--internal-camoufox-proxy", proxy])
-
-            if config.get("stream_port_enabled"):
-                stream_base = config.get("stream_port", 3120)
-                worker_stream_port = stream_base + int(worker_id.replace("w", "")) - 1
-                cmd.extend(["--stream-port", str(worker_stream_port)])
-            else:
-                cmd.extend(["--stream-port", "0"])
-
-            try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    env=env,
-                    cwd=SOURCE_DIR,
-                    creationflags=creationflags,
-                )
-                worker.process = process
-                worker.status = "running"
-                return worker_id, process, None
-            except Exception as exc:
-                return worker_id, None, str(exc)
-
+        self.worker_processes = {}
+        self.output_threads = {}
         started_count = 0
-        with ThreadPoolExecutor(max_workers=len(worker_pool.workers)) as executor:
-            futures = {
-                executor.submit(start_single_worker, worker_id, worker): worker_id
-                for worker_id, worker in worker_pool.workers.items()
-            }
-            for future in as_completed(futures):
-                worker_id, process, error = future.result()
-                if process is None:
-                    logger.error(f"启动Worker {worker_id}失败: {error}")
-                    continue
+        worker_ids = list(worker_pool.workers.keys())
+        for index, worker_id in enumerate(worker_ids):
+            if self.stop_event.is_set():
+                logger.info("启动过程中收到停止信号，中断Worker启动")
+                break
+            success, message = worker_pool.start_worker(worker_id)
+            worker = worker_pool.workers[worker_id]
+            if not success or worker.process is None:
+                logger.error(f"启动Worker {worker_id}失败: {message}")
+                continue
+            started_count += 1
+            logger.info(f"启动Worker {worker_id} (端口:{worker.port})")
+            if index < len(worker_ids) - 1:
+                await asyncio.sleep(3)
 
-                self.worker_processes.append(process)
-                thread = threading.Thread(
-                    target=self._monitor_output,
-                    args=(process, f"Worker-{worker_id}"),
-                    daemon=True,
-                )
-                thread.start()
-                self.output_threads.append(thread)
-                started_count += 1
-                logger.info(
-                    f"启动Worker {worker_id} (端口:{worker_pool.workers[worker_id].port})"
-                )
+        if self.stop_event.is_set():
+            self.service_status = "stopped"
+            self.is_worker_mode = False
+            return False, "启动过程已被中断"
 
         if started_count == 0:
             self.service_status = "stopped"
@@ -424,14 +478,7 @@ class ServiceManager:
                 cwd=SOURCE_DIR,
                 creationflags=creationflags,
             )
-            self.worker_processes.append(gateway_process)
-            gateway_thread = threading.Thread(
-                target=self._monitor_output,
-                args=(gateway_process, "Gateway"),
-                daemon=True,
-            )
-            gateway_thread.start()
-            self.output_threads.append(gateway_thread)
+            self.attach_worker_process(gateway_process, "Gateway")
             logger.info(f"启动Gateway (端口:{gateway_port})")
         except Exception as exc:
             logger.error(f"启动Gateway失败: {exc}")
@@ -448,6 +495,7 @@ class ServiceManager:
         )
 
     def stop_service(self) -> tuple[bool, str]:
+        self.prune_worker_processes()
         if not self.process and not self.worker_processes:
             return True, "服务未运行"
 
@@ -472,17 +520,17 @@ class ServiceManager:
 
         try:
             if self.is_worker_mode:
-                with ThreadPoolExecutor(
-                    max_workers=max(1, len(self.worker_processes))
-                ) as executor:
-                    executor.map(kill_process, self.worker_processes)
-                self.worker_processes = []
-                self.output_threads = []
+                processes = list(self.worker_processes.values())
+                if processes:
+                    with ThreadPoolExecutor(
+                        max_workers=max(1, len(processes))
+                    ) as executor:
+                        executor.map(kill_process, processes)
+                self.worker_processes = {}
+                self.output_threads = {}
                 self.is_worker_mode = False
                 if WORKER_POOL_AVAILABLE and worker_pool is not None:
-                    for worker in worker_pool.workers.values():
-                        worker.status = "stopped"
-                        worker.process = None
+                    worker_pool.force_stop_all()
             elif self.process:
                 kill_process(self.process)
                 self.process = None

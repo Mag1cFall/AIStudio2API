@@ -31,11 +31,24 @@ async def lifespan(app: FastAPI):
     manager.loop = asyncio.get_running_loop()
     config = manager.load_config()
     manager._log_enabled = config.get("log_enabled", True)
+    health_task = None
     if WORKER_POOL_AVAILABLE and worker_pool is not None:
         worker_pool.init_from_config()
+        worker_pool.configure_runtime(config)
+        worker_pool.register_status_listener(manager.handle_worker_status_event)
+        worker_pool.register_process_listener(manager.handle_worker_process_started)
+        health_task = asyncio.create_task(worker_pool.health_check_loop())
     yield
+    if health_task is not None:
+        health_task.cancel()
+        try:
+            await health_task
+        except asyncio.CancelledError:
+            pass
     if manager.process or manager.worker_processes:
         manager.stop_service()
+    if WORKER_POOL_AVAILABLE and worker_pool is not None:
+        await worker_pool.close()
     manager.loop = None
 
 
