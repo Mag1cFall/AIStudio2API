@@ -70,6 +70,17 @@ def _initialize_proxy_settings():
     else:
         server.logger.info('No proxy configured for Playwright.')
 
+async def _wait_for_port(port: int, timeout: float = 10.0, interval: float = 0.3):
+    import socket
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=1):
+                return True
+        except (ConnectionRefusedError, OSError, socket.timeout):
+            await asyncio.sleep(interval)
+    return False
+
 async def _start_stream_proxy():
     import server
     STREAM_PORT = os.environ.get('STREAM_PORT')
@@ -80,7 +91,15 @@ async def _start_stream_proxy():
         server.STREAM_QUEUE = multiprocessing.Queue()
         server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
         server.STREAM_PROCESS.start()
-        server.logger.info('STREAM proxy process started.')
+        server.logger.info('STREAM proxy process started. Waiting for port readiness...')
+        if await _wait_for_port(port):
+            server.logger.info(f'STREAM proxy port {port} is ready.')
+        else:
+            server.logger.error(f'STREAM proxy port {port} not ready after timeout. Browser may fail to connect.')
+            if server.STREAM_PROCESS and server.STREAM_PROCESS.is_alive():
+                server.logger.warning('STREAM proxy process is alive but port not listening.')
+            else:
+                server.logger.error(f'STREAM proxy process died. Exit code: {server.STREAM_PROCESS.exitcode}')
 
 async def _initialize_browser_and_page():
     import server

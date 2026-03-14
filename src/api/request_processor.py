@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import secrets
 import time
 from typing import Optional, Tuple, Callable, AsyncGenerator
@@ -16,6 +17,57 @@ from browser import switch_ai_studio_model, save_error_snapshot
 from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager, calculate_stream_max_retries
 from .abort_detector import AbortSignalDetector, AbortSignalHandler
 from browser.page_controller import PageController
+
+TOOL_CALL_INSTRUCTION = """When you need to call a tool, you MUST use EXACTLY this format (one per tool call):
+
+```tool_call
+{"name": "function_name", "arguments": {"param1": "value1", "param2": "value2"}}
+```
+
+Rules:
+- Use ```tool_call code blocks, one block per function call.
+- The content MUST be valid JSON with "name" and "arguments" keys.
+- You may call multiple tools by using multiple ```tool_call blocks.
+- Do NOT use any other format like XML tags or custom syntax.
+- After receiving tool results, provide your final answer to the user.
+"""
+
+_TOOL_CALL_PATTERN = re.compile(
+    r'```tool_call\s*\n\s*(\{.*?\})\s*\n\s*```',
+    re.DOTALL
+)
+
+def _extract_tool_calls_from_text(text: str, logger=None, req_id: str = '') -> Tuple[Optional[list], str]:
+    if '```tool_call' not in text:
+        return None, text
+    matches = list(_TOOL_CALL_PATTERN.finditer(text))
+    if not matches:
+        return None, text
+    tool_calls = []
+    for match in matches:
+        try:
+            data = json.loads(match.group(1))
+            fn_name = data.get('name', '')
+            fn_args = data.get('arguments', {})
+            if not fn_name:
+                continue
+            tool_calls.append({
+                'id': f'call_{secrets.token_hex(12)}',
+                'type': 'function',
+                'function': {
+                    'name': fn_name,
+                    'arguments': json.dumps(fn_args, ensure_ascii=False) if isinstance(fn_args, dict) else str(fn_args)
+                }
+            })
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            if logger:
+                logger.warning(f"[{req_id}] 解析文本工具调用失败: {e}, raw: {match.group(1)[:100]}")
+    if not tool_calls:
+        return None, text
+    remaining = _TOOL_CALL_PATTERN.sub('', text).strip()
+    if logger:
+        logger.info(f"[{req_id}] 🔧 从文本中提取到 {len(tool_calls)} 个工具调用")
+    return tool_calls, remaining
 
 def _merge_tools_to_system_prompt(system_prompt: str, tools: Optional[list], logger, req_id: str) -> str:
     if not tools:
@@ -41,7 +93,7 @@ def _merge_tools_to_system_prompt(system_prompt: str, tools: Optional[list], log
         return system_prompt
     tools_json = json.dumps(function_declarations, indent=2, ensure_ascii=False)
     logger.info(f"[{req_id}] 🔧 合并 {len(function_declarations)} 个函数到系统提示词")
-    tools_section = f"<tools>\n{tools_json}\n</tools>\n\n"
+    tools_section = f"<tools>\n{tools_json}\n</tools>\n\n{TOOL_CALL_INSTRUCTION}\n"
     return tools_section + system_prompt
 
 async def _initialize_request_context(req_id: str, request: ChatCompletionRequest) -> dict:
@@ -339,6 +391,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                         body = data.get('body', '')
                         done = data.get('done', False)
                         function = data.get('function', [])
+                        has_tools = bool(request.tools)
                         if reason:
                             full_reasoning_content = reason
                         if body:
@@ -347,35 +400,57 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                             output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': None, 'reasoning_content': reason[last_reason_pos:]}, 'finish_reason': None, 'native_finish_reason': None}]}
                             last_reason_pos = len(reason)
                             yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
-                        if len(body) > last_body_pos:
-                            finish_reason_val = None
+                        if has_tools:
                             if done:
-                                finish_reason_val = 'stop'
-                            delta_content = {'role': 'assistant', 'content': body[last_body_pos:]}
-                            choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': finish_reason_val, 'native_finish_reason': finish_reason_val}
-                            if done and function and (len(function) > 0):
-                                tool_calls_list = []
-                                for func_idx, function_call_data in enumerate(function):
-                                    tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
-                                delta_content['tool_calls'] = tool_calls_list
-                                choice_item['finish_reason'] = 'tool_calls'
-                                choice_item['native_finish_reason'] = 'tool_calls'
-                                delta_content['content'] = None
-                            output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
-                            last_body_pos = len(body)
-                            yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
-                        elif done:
-                            if function and len(function) > 0:
-                                delta_content = {'role': 'assistant', 'content': None}
-                                tool_calls_list = []
-                                for func_idx, function_call_data in enumerate(function):
-                                    tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
-                                delta_content['tool_calls'] = tool_calls_list
-                                choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'tool_calls', 'native_finish_reason': 'tool_calls'}
-                            else:
-                                choice_item = {'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}
-                            output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
-                            yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                                if function and len(function) > 0:
+                                    delta_content = {'role': 'assistant', 'content': None}
+                                    tool_calls_list = []
+                                    for func_idx, function_call_data in enumerate(function):
+                                        tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                                    delta_content['tool_calls'] = tool_calls_list
+                                    choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'tool_calls', 'native_finish_reason': 'tool_calls'}
+                                elif full_body_content:
+                                    text_tool_calls, remaining_text = _extract_tool_calls_from_text(full_body_content, logger, req_id)
+                                    if text_tool_calls:
+                                        delta_content = {'role': 'assistant', 'content': remaining_text or None, 'tool_calls': text_tool_calls}
+                                        choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'tool_calls', 'native_finish_reason': 'tool_calls'}
+                                    else:
+                                        delta_content = {'role': 'assistant', 'content': full_body_content}
+                                        choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}
+                                else:
+                                    choice_item = {'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}
+                                output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                        else:
+                            if len(body) > last_body_pos:
+                                finish_reason_val = None
+                                if done:
+                                    finish_reason_val = 'stop'
+                                delta_content = {'role': 'assistant', 'content': body[last_body_pos:]}
+                                choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': finish_reason_val, 'native_finish_reason': finish_reason_val}
+                                if done and function and (len(function) > 0):
+                                    tool_calls_list = []
+                                    for func_idx, function_call_data in enumerate(function):
+                                        tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                                    delta_content['tool_calls'] = tool_calls_list
+                                    choice_item['finish_reason'] = 'tool_calls'
+                                    choice_item['native_finish_reason'] = 'tool_calls'
+                                    delta_content['content'] = None
+                                output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
+                                last_body_pos = len(body)
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                            elif done:
+                                if function and len(function) > 0:
+                                    delta_content = {'role': 'assistant', 'content': None}
+                                    tool_calls_list = []
+                                    for func_idx, function_call_data in enumerate(function):
+                                        tool_calls_list.append({'id': f'call_{secrets.token_hex(12)}', 'index': func_idx, 'type': 'function', 'function': {'name': function_call_data['name'], 'arguments': json.dumps(function_call_data['params'])}})
+                                    delta_content['tool_calls'] = tool_calls_list
+                                    choice_item = {'index': 0, 'delta': delta_content, 'finish_reason': 'tool_calls', 'native_finish_reason': 'tool_calls'}
+                                else:
+                                    choice_item = {'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': 'stop', 'native_finish_reason': 'stop'}
+                                output = {'id': chat_completion_id, 'object': 'chat.completion.chunk', 'model': model_name_for_stream, 'created': created_timestamp, 'choices': [choice_item]}
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
                     
                     # Late Rate Limit Check
                     late_check_wait = 2.0 if len(full_body_content) < 50 else 0.2
@@ -519,6 +594,12 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
             message_payload['tool_calls'] = tool_calls_list
             finish_reason_val = 'tool_calls'
             message_payload['content'] = None
+        elif content:
+            text_tool_calls, remaining_text = _extract_tool_calls_from_text(content, logger, req_id)
+            if text_tool_calls:
+                message_payload['tool_calls'] = text_tool_calls
+                message_payload['content'] = remaining_text or None
+                finish_reason_val = 'tool_calls'
         if reasoning_content:
             message_payload['reasoning_content'] = reasoning_content
         usage_stats = calculate_usage_stats([msg.model_dump() for msg in request.messages], content or '', reasoning_content)
@@ -586,7 +667,13 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                         # await asyncio.sleep(0.01)
                 usage_stats = calculate_usage_stats([msg.model_dump() for msg in request.messages], final_content, '')
                 logger.info(f'[{req_id}] Playwright非流式计算的token使用统计: {usage_stats}')
-                yield generate_sse_stop_chunk(req_id, current_ai_studio_model_id or MODEL_NAME, 'stop', usage_stats)
+                text_tool_calls, remaining_text = _extract_tool_calls_from_text(final_content, logger, req_id)
+                if text_tool_calls:
+                    tool_call_chunk = {'id': f'{CHAT_COMPLETION_ID_PREFIX}{req_id}', 'object': 'chat.completion.chunk', 'model': current_ai_studio_model_id or MODEL_NAME, 'created': int(time.time()), 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': remaining_text or None, 'tool_calls': text_tool_calls}, 'finish_reason': 'tool_calls'}]}
+                    yield f"data: {json.dumps(tool_call_chunk, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                    yield generate_sse_stop_chunk(req_id, current_ai_studio_model_id or MODEL_NAME, 'tool_calls', usage_stats)
+                else:
+                    yield generate_sse_stop_chunk(req_id, current_ai_studio_model_id or MODEL_NAME, 'stop', usage_stats)
             except ClientDisconnectedError as disconnect_err:
                 abort_handler = AbortSignalHandler()
                 disconnect_info = abort_handler.handle_error(disconnect_err, req_id)
@@ -632,6 +719,11 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
         usage_stats = calculate_usage_stats([msg.model_dump() for msg in request.messages], final_content, '')
         logger.info(f'[{req_id}] Playwright非流式计算的token使用统计: {usage_stats}')
         response_payload = {'id': f'{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}', 'object': 'chat.completion', 'created': int(time.time()), 'model': current_ai_studio_model_id or MODEL_NAME, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': final_content}, 'finish_reason': 'stop'}], 'usage': usage_stats}
+        text_tool_calls, remaining_text = _extract_tool_calls_from_text(final_content, logger, req_id)
+        if text_tool_calls:
+            response_payload['choices'][0]['message']['tool_calls'] = text_tool_calls
+            response_payload['choices'][0]['message']['content'] = remaining_text or None
+            response_payload['choices'][0]['finish_reason'] = 'tool_calls'
         if not result_future.done():
             result_future.set_result(JSONResponse(content=response_payload))
         return None
