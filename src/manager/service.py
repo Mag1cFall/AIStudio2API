@@ -450,7 +450,7 @@ class ServiceManager:
             started_count += 1
             logger.info(f"启动Worker {worker_id} (端口:{worker.port})")
             if index < len(worker_ids) - 1:
-                await asyncio.sleep(3)
+                await asyncio.sleep(15)
 
         if self.stop_event.is_set():
             self.service_status = "stopped"

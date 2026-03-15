@@ -32,7 +32,7 @@ except ImportError:
         launch_server = None
         DefaultAddons = None
 PYTHON_EXECUTABLE = sys.executable
-ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '45'))
+ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '90'))
 DEFAULT_SERVER_PORT = int(os.environ.get('DEFAULT_FASTAPI_PORT', '2048'))
 DEFAULT_CAMOUFOX_PORT = int(os.environ.get('DEFAULT_CAMOUFOX_PORT', '9222'))
 DEFAULT_STREAM_PORT = int(os.environ.get('STREAM_PORT', '3120'))
