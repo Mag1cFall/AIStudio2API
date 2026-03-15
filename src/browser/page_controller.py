@@ -105,6 +105,16 @@ class PageController:
                 self.logger.warning(f'[{self.req_id}] ⚠️ 系统指令填充可能不完整 (期望: {len(system_prompt)}, 实际: {len(filled_value)})')
             for close_attempt in range(1, 4):
                 try:
+                    if not await sys_prompt_textarea.is_visible():
+                        self.logger.info(f'[{self.req_id}] ✅ 系统指令面板已关闭。')
+                        break
+                    # Try clicking the button again to close the panel
+                    await sys_prompt_button.click(timeout=2000)
+                    await asyncio.sleep(DELAY_AFTER_FILL)
+                    if not await sys_prompt_textarea.is_visible():
+                        self.logger.info(f'[{self.req_id}] ✅ 系统指令面板已关闭。')
+                        break
+                    # Fallback: Escape key
                     await self.page.keyboard.press("Escape")
                     await asyncio.sleep(DELAY_AFTER_FILL)
                     if not await sys_prompt_textarea.is_visible():
@@ -570,23 +580,23 @@ class PageController:
                     await asyncio.sleep(DELAY_AFTER_TOGGLE)
 
                 if attempt == 0:
+                    strategy_name = "JS Injection"
+                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
+                    await asyncio.sleep(DELAY_AFTER_FILL)
+                    await locator.press('Enter')
+                elif attempt == 1:
                     strategy_name = "Standard Fill"
                     await locator.focus()
                     await locator.fill(str(target_value))
                     await locator.dispatch_event('change')
                     await locator.press('Enter')
-                elif attempt == 1:
+                else:
                     strategy_name = "Select & Type"
                     await locator.focus()
                     await locator.select_text()
                     await locator.press('Backspace')
                     await asyncio.sleep(SLEEP_TICK)
                     await locator.type(str(target_value), delay=50)
-                    await locator.press('Enter')
-                else:
-                    strategy_name = "JS Injection"
-                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
-                    await asyncio.sleep(DELAY_AFTER_FILL)
                     await locator.press('Enter')
 
                 await asyncio.sleep(SLEEP_LONG)
