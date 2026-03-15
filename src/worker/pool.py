@@ -287,6 +287,9 @@ class WorkerPool:
         self._cancel_restart(worker_id)
         self._free_port(worker.camoufox_port)
         self._free_port(worker.port)
+        stream_port = self._resolve_stream_port(worker)
+        if stream_port:
+            self._free_port(stream_port)
         try:
             worker.process = subprocess.Popen(
                 self._build_worker_command(worker),
@@ -556,10 +559,9 @@ class WorkerPool:
             # Grace period: skip health check for 60s after start
             if worker.last_health_check is None and worker.process is not None:
                 start_time = getattr(worker, '_start_time', None)
-                if start_time is None:
-                    worker._start_time = time.time()
-                    continue
-                if time.time() - start_time < 60:
+                if start_time is None or time.time() - start_time < 60:
+                    if start_time is None:
+                        worker._start_time = time.time()
                     continue
             is_healthy, error = await self._probe_worker_health(worker)
             worker.last_health_check = time.time()
@@ -579,7 +581,7 @@ class WorkerPool:
                 self._schedule_restart(worker.id)
 
     async def health_check_loop(self):
-        await asyncio.sleep(self.health_check_interval)
+        await asyncio.sleep(90)
         while True:
             try:
                 await self.health_check()
