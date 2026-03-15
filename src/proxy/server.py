@@ -55,15 +55,19 @@ class MitmProxy:
         "bad record mac",
         "Connection reset",
         "Connection aborted",
+        "ConnectionResetError",
         "EOF occurred in violation",
         "WRONG_VERSION_NUMBER",
         "\u9023\u7dda\u5df2\u88ab\u60a8\u4e3b\u6a5f\u4e0a\u7684\u8edf\u9ad4\u4e2d\u6b62",
         "\u9060\u7aef\u4e3b\u6a5f\u5df2\u5f37\u5236\u95dc\u9589",
+        # Japanese locale (WinError 10053 / 10054)
+        "\u78ba\u7acb\u3055\u308c\u305f\u63a5\u7d9a\u304c\u30db\u30b9\u30c8",
+        "\u30ea\u30e2\u30fc\u30c8 \u30db\u30b9\u30c8\u306b\u3088\u3063\u3066\u5f37\u5236\u7684\u306b\u9589\u3058\u3089\u308c",
     )
 
     @classmethod
     def _should_ignore_connection_error(cls, exc: BaseException) -> bool:
-        err_str = str(exc)
+        err_str = f"{type(exc).__name__}: {exc}"
         return any(marker in err_str for marker in cls._IGNORABLE_ERRORS)
 
     async def _run_relay_tasks(self, *coroutines) -> None:
@@ -121,7 +125,8 @@ class MitmProxy:
             if method == "CONNECT":
                 await self._process_tunnel(reader, writer, target)
         except Exception as e:
-            self.log.error(f"Client error: {e}")
+            if not self._should_ignore_connection_error(e):
+                self.log.error(f"Client error: {e!r}", exc_info=True)
         finally:
             writer.close()
 

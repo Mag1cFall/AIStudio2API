@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Optional
 import aiohttp
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 
@@ -117,6 +118,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/", tags=["System"], summary="网关状态")
 async def root():
@@ -151,6 +159,8 @@ async def models():
 async def chat_completions(request: Request):
     await refresh_workers()
     body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Request body is empty")
     body_json = json.loads(body)
     is_stream = body_json.get("stream", False)
     model_id = body_json.get("model", "")

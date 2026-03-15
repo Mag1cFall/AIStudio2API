@@ -129,7 +129,7 @@ def cleanup():
                     camoufox_proc.terminate()
             elif sys.platform == 'win32':
                 logger.info(f'进程树 (PID: {pid}) 发送终止请求')
-                subprocess.call(['taskkill', '/T', '/PID', str(pid)])
+                subprocess.call(['taskkill', '/F', '/T', '/PID', str(pid)])
             else:
                 logger.info(f'  向 Camoufox (PID: {pid}) 发送 SIGTERM 信号...')
                 camoufox_proc.terminate()
