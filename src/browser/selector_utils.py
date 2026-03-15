@@ -9,40 +9,21 @@ async def wait_for_any_selector(
     timeout: int = 5000,
     state: str = 'visible'
 ) -> Tuple[Optional[Locator], Optional[str]]:
-    async def check_one(selector: str) -> Tuple[bool, str]:
-        try:
-            locator = page.locator(selector)
-            await locator.wait_for(state=state, timeout=timeout)
-            return (True, selector)
-        except:
-            return (False, selector)
-    
-    tasks = [asyncio.create_task(check_one(sel)) for sel in selectors]
-    
-    async def cancel_tasks(pending_tasks):
-        for p in pending_tasks:
-            p.cancel()
-        await asyncio.gather(*pending_tasks, return_exceptions=True)
-    
+    combined = ", ".join(selectors)
     try:
-        done, pending = await asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-            timeout=timeout / 1000 + 1
-        )
-        
-        for task in done:
-            success, selector = task.result()
-            if success:
-                await cancel_tasks(pending)
-                return (page.locator(selector), selector)
-        
-        await cancel_tasks(pending)
+        await page.locator(combined).first.wait_for(state=state, timeout=timeout)
+    except Exception:
         return (None, None)
-        
-    except asyncio.TimeoutError:
-        await cancel_tasks(tasks)
-        return (None, None)
+
+    for selector in selectors:
+        try:
+            loc = page.locator(selector)
+            if await loc.count() > 0 and await loc.first.is_visible():
+                return (loc, selector)
+        except Exception:
+            continue
+
+    return (page.locator(combined), combined)
 
 
 
