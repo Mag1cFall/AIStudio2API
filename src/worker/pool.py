@@ -244,6 +244,36 @@ class WorkerPool:
         if task and not task.done():
             task.cancel()
 
+    def _free_port(self, port: int) -> None:
+        """Kill any process occupying the given TCP port."""
+        try:
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True, text=True
+                )
+                for line in result.stdout.splitlines():
+                    if f":{port} " in line and "LISTENING" in line:
+                        parts = line.split()
+                        pid = parts[-1]
+                        if pid.isdigit():
+                            subprocess.run(
+                                ["taskkill", "/PID", pid, "/F"],
+                                capture_output=True
+                            )
+                            logger.info(f"Freed port {port} (killed PID {pid})")
+            else:
+                result = subprocess.run(
+                    ["lsof", "-ti", f"tcp:{port}"],
+                    capture_output=True, text=True
+                )
+                for pid in result.stdout.strip().splitlines():
+                    if pid.isdigit():
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+                        logger.info(f"Freed port {port} (killed PID {pid})")
+        except Exception as e:
+            logger.warning(f"Failed to free port {port}: {e}")
+
     def start_worker(self, worker_id: str) -> tuple[bool, str]:
         if worker_id not in self.workers:
             return False, "Worker not found"
@@ -255,6 +285,11 @@ class WorkerPool:
         ):
             return False, "Worker already running"
         self._cancel_restart(worker_id)
+        self._free_port(worker.camoufox_port)
+        self._free_port(worker.port)
+        stream_port = self._resolve_stream_port(worker)
+        if stream_port:
+            self._free_port(stream_port)
         try:
             worker.process = subprocess.Popen(
                 self._build_worker_command(worker),
@@ -269,6 +304,7 @@ class WorkerPool:
             worker.health_failures = 0
             worker.last_health_check = None
             worker.last_error = None
+            worker._start_time = time.time()
             self._notify_process_started(worker)
             self._notify_status_change(worker, "started")
             logger.info(f"Started worker {worker_id} on port {worker.port}")
@@ -520,6 +556,13 @@ class WorkerPool:
         for worker in list(self.workers.values()):
             if worker.status != "running":
                 continue
+            # Grace period: skip health check for 60s after start
+            if worker.last_health_check is None and worker.process is not None:
+                start_time = getattr(worker, '_start_time', None)
+                if start_time is None or time.time() - start_time < 60:
+                    if start_time is None:
+                        worker._start_time = time.time()
+                    continue
             is_healthy, error = await self._probe_worker_health(worker)
             worker.last_health_check = time.time()
             if is_healthy:
@@ -538,6 +581,7 @@ class WorkerPool:
                 self._schedule_restart(worker.id)
 
     async def health_check_loop(self):
+        await asyncio.sleep(90)
         while True:
             try:
                 await self.health_check()

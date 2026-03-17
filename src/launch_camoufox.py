@@ -32,7 +32,7 @@ except ImportError:
         launch_server = None
         DefaultAddons = None
 PYTHON_EXECUTABLE = sys.executable
-ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '45'))
+ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '90'))
 DEFAULT_SERVER_PORT = int(os.environ.get('DEFAULT_FASTAPI_PORT', '2048'))
 DEFAULT_CAMOUFOX_PORT = int(os.environ.get('DEFAULT_CAMOUFOX_PORT', '9222'))
 DEFAULT_STREAM_PORT = int(os.environ.get('STREAM_PORT', '3120'))
@@ -129,7 +129,7 @@ def cleanup():
                     camoufox_proc.terminate()
             elif sys.platform == 'win32':
                 logger.info(f'进程树 (PID: {pid}) 发送终止请求')
-                subprocess.call(['taskkill', '/T', '/PID', str(pid)])
+                subprocess.call(['taskkill', '/F', '/T', '/PID', str(pid)])
             else:
                 logger.info(f'  向 Camoufox (PID: {pid}) 发送 SIGTERM 信号...')
                 camoufox_proc.terminate()
@@ -465,17 +465,42 @@ if __name__ == '__main__':
         print(f'--- [内部Camoufox启动] 正在调用 camoufox.server.launch_server ... ---', flush=True)
         try:
             memory_optimization_prefs = {
+                # Disable memory cache
                 'browser.cache.memory.enable': False,
                 'browser.cache.memory.capacity': 0,
-                'browser.sessionhistory.max_entries': 3,
+                # Minimal session history
+                'browser.sessionhistory.max_entries': 2,
                 'browser.sessionhistory.max_total_viewers': 0,
+                # JS memory limits
                 'javascript.options.mem.gc_frequency': 300,
-                'javascript.options.mem.high_water_mark': 128,
+                'javascript.options.mem.high_water_mark': 32,
+                'javascript.options.mem.nursery.max_kb': 2048,
+                # Single process mode
                 'dom.ipc.processCount': 1,
+                'dom.ipc.processCount.webIsolated': 1,
+                'browser.tabs.remote.autostart': False,
+                'browser.tabs.remote.autostart.2': False,
+                # Disable unused features
                 'layout.css.grid-template-masonry-value.enabled': False,
                 'toolkit.cosmeticAnimations.enabled': False,
+                'media.memory_cache_max_size': 256,
+                'image.mem.max_ms_before_yield': 50,
+                # Disable telemetry/background services
+                'datareporting.healthreport.uploadEnabled': False,
+                'datareporting.policy.dataSubmissionEnabled': False,
+                'browser.ping-centre.telemetry': False,
+                'toolkit.telemetry.enabled': False,
+                'toolkit.telemetry.unified': False,
+                # Disable disk cache
+                'browser.cache.disk.enable': False,
+                'browser.cache.offline.enable': False,
+                # Disable prefetch
+                'network.prefetch-next': False,
+                'network.dns.disablePrefetch': True,
+                # Reduce font memory
+                'gfx.font_rendering.fontconfig.max_generic_substitutions': 3,
             }
-            launch_args_for_internal_camoufox = {'port': camoufox_port_internal, 'addons': [], 'exclude_addons': [DefaultAddons.UBO], 'window': (1920, 1080), 'firefox_user_prefs': memory_optimization_prefs}
+            launch_args_for_internal_camoufox = {'port': camoufox_port_internal, 'addons': [], 'exclude_addons': [DefaultAddons.UBO], 'window': (1280, 720), 'firefox_user_prefs': memory_optimization_prefs}
             if camoufox_proxy_internal:
                 launch_args_for_internal_camoufox['proxy'] = {'server': camoufox_proxy_internal}
             if auth_file:
