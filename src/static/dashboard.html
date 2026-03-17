@@ -410,6 +410,13 @@
                         </div>
                     </div>
 
+                    <div v-if="config.worker_mode_enabled" class="bg-[#161b22] p-4 rounded-lg border border-[#30363d]">
+                        <label class="block text-sm font-medium text-gray-300 mb-2">{{ t('config.workerStartupInterval') }}</label>
+                        <input v-model.number="config.worker_startup_interval" type="number" min="1" max="120"
+                            class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none transition">
+                        <p class="text-xs text-gray-600 mt-1">{{ t('config.workerStartupIntervalDesc') }}</p>
+                    </div>
+
                     <div class="flex justify-end pt-4">
                         <button @click="saveConfig"
                             class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition shadow-lg">{{
@@ -1047,7 +1054,11 @@
 
                 const fetchConfig = async () => {
                     const res = await fetch('/api/config');
-                    config.value = await res.json();
+                    const data = await res.json();
+                    if (data.worker_startup_interval === undefined) {
+                        data.worker_startup_interval = 5;
+                    }
+                    config.value = data;
                 };
 
                 const saveConfig = async () => {
