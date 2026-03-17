@@ -57,6 +57,8 @@ const locales = {
             scriptInjectionDesc: '启用后可添加 AI Studio 未列出的模型（已被弃用）',
             logEnabled: '启用日志',
             logEnabledDesc: '禁用日志可提升性能（需重启服务生效）',
+            workerStartupInterval: 'Worker 启动间隔（秒）',
+            workerStartupIntervalDesc: '多个 Worker 之间依次启动的等待时间，默认 5 秒',
             save: '保存配置'
         },
         auth: {
@@ -209,6 +211,8 @@ const locales = {
             scriptInjectionDesc: '啟用後可添加 AI Studio 未列出的模型（已被棄用）',
             logEnabled: '啟用日誌',
             logEnabledDesc: '禁用日誌可提升性能（需重啟服務生效）',
+            workerStartupInterval: 'Worker 啟動間隔（秒）',
+            workerStartupIntervalDesc: '多個 Worker 之間依次啟動的等待時間，預設 5 秒',
             save: '儲存設定'
         },
         auth: {
@@ -361,6 +365,8 @@ const locales = {
             scriptInjectionDesc: 'Enable to add unlisted models in AI Studio (Deprecated)',
             logEnabled: 'Enable Logging',
             logEnabledDesc: 'Disabling logs improves performance (requires service restart)',
+            workerStartupInterval: 'Worker Startup Interval (seconds)',
+            workerStartupIntervalDesc: 'Delay between starting each Worker, default 5 seconds',
             save: 'Save Config'
         },
         auth: {
@@ -513,6 +519,8 @@ const locales = {
             scriptInjectionDesc: '有効にするとAI Studioに未掲載のモデルを追加できます（非推奨）',
             logEnabled: 'ログを有効にする',
             logEnabledDesc: 'ログを無効にするとパフォーマンスが向上します（サービス再起動が必要）',
+            workerStartupInterval: 'Worker起動間隔（秒）',
+            workerStartupIntervalDesc: '各Workerの起動間隔、デフォルト5秒',
             save: '設定を保存'
         },
         auth: {
@@ -665,6 +673,8 @@ const locales = {
             scriptInjectionDesc: '활성화하면 AI Studio에 나열되지 않은 모델 추가 가능 (더 이상 사용되지 않음)',
             logEnabled: '로깅 활성화',
             logEnabledDesc: '로그 비활성화 시 성능 향상 (서비스 재시작 필요)',
+            workerStartupInterval: 'Worker 시작 간격 (초)',
+            workerStartupIntervalDesc: '각 Worker 시작 사이의 대기 시간, 기본 5초',
             save: '설정 저장'
         },
         auth: {

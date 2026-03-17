@@ -244,8 +244,9 @@ class WorkerPool:
         if task and not task.done():
             task.cancel()
 
+    _SAFE_PROCESS_NAMES = {"python", "python3", "pythonw", "camoufox", "firefox", "uv"}
+
     def _free_port(self, port: int) -> None:
-        """Kill any process occupying the given TCP port."""
         try:
             if platform.system() == "Windows":
                 result = subprocess.run(
@@ -257,11 +258,19 @@ class WorkerPool:
                         parts = line.split()
                         pid = parts[-1]
                         if pid.isdigit():
-                            subprocess.run(
-                                ["taskkill", "/PID", pid, "/F"],
-                                capture_output=True
+                            proc_check = subprocess.run(
+                                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                capture_output=True, text=True
                             )
-                            logger.info(f"Freed port {port} (killed PID {pid})")
+                            proc_name = proc_check.stdout.strip().split(",")[0].strip('"').lower().replace(".exe", "")
+                            if proc_name in self._SAFE_PROCESS_NAMES:
+                                subprocess.run(
+                                    ["taskkill", "/PID", pid, "/F"],
+                                    capture_output=True
+                                )
+                                logger.info(f"Freed port {port} (killed {proc_name} PID {pid})")
+                            else:
+                                logger.warning(f"Port {port} occupied by {proc_name} (PID {pid}), skipping")
             else:
                 result = subprocess.run(
                     ["lsof", "-ti", f"tcp:{port}"],
@@ -269,8 +278,16 @@ class WorkerPool:
                 )
                 for pid in result.stdout.strip().splitlines():
                     if pid.isdigit():
-                        subprocess.run(["kill", "-9", pid], capture_output=True)
-                        logger.info(f"Freed port {port} (killed PID {pid})")
+                        proc_check = subprocess.run(
+                            ["ps", "-p", pid, "-o", "comm="],
+                            capture_output=True, text=True
+                        )
+                        proc_name = proc_check.stdout.strip().lower()
+                        if any(safe in proc_name for safe in self._SAFE_PROCESS_NAMES):
+                            subprocess.run(["kill", "-9", pid], capture_output=True)
+                            logger.info(f"Freed port {port} (killed {proc_name} PID {pid})")
+                        else:
+                            logger.warning(f"Port {port} occupied by {proc_name} (PID {pid}), skipping")
         except Exception as e:
             logger.warning(f"Failed to free port {port}: {e}")
 

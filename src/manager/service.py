@@ -76,6 +76,7 @@ class ServiceManager:
             "launch_mode": "headless",
             "script_injection_enabled": False,
             "worker_mode_enabled": False,
+            "worker_startup_interval": 5,
             "log_enabled": True,
         }
 
@@ -450,7 +451,7 @@ class ServiceManager:
             started_count += 1
             logger.info(f"启动Worker {worker_id} (端口:{worker.port})")
             if index < len(worker_ids) - 1:
-                await asyncio.sleep(15)
+                await asyncio.sleep(config.get("worker_startup_interval", 5))
 
         if self.stop_event.is_set():
             self.service_status = "stopped"
