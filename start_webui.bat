@@ -3,6 +3,8 @@ cd /d "%~dp0"
 
 echo Starting AI Studio Proxy Manager...
 
+call auto_update.bat
+
 set PYTHONPATH=%~dp0src;%PYTHONPATH%
 call uv run python src/app_launcher.py
 

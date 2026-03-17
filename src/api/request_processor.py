@@ -200,7 +200,7 @@ async def _setup_disconnect_monitoring(req_id: str, http_request: Request, resul
                 # 直接等待 ASGI 消息，不再轮询
                 message = await http_request.receive()
                 if message['type'] == 'http.disconnect':
-                    logger.warning(f'[{req_id}] 🔌 收到 http.disconnect 信号')
+                    logger.debug(f'[{req_id}] 🔌 收到 http.disconnect 信号')
                     client_disconnected_event.set()
                     if not result_future.done():
                         result_future.set_exception(HTTPException(status_code=499, detail=f'[{req_id}] 客户端关闭了请求'))
