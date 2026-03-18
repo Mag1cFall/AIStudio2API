@@ -1079,7 +1079,7 @@ class PageController:
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
                 self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
-                await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id)
+                await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id, internal_timeout=10000)
                 self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
             await self._check_disconnect(check_client_disconnected, '提交后')
 
