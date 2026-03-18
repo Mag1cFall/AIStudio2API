@@ -376,6 +376,9 @@ class PageController:
         for attempt in range(1, max_retries + 1):
             try:
                 toggle_locator = self.page.locator(toggle_selector)
+                if await toggle_locator.count() == 0:
+                    self.logger.debug(f'[{self.req_id}] Google Search 开关不存在，跳过。')
+                    return
                 await expect_async(toggle_locator).to_be_visible(timeout=5000)
                 await self._check_disconnect(check_client_disconnected, 'Google Search 開關 - 元素可見後')
                 is_checked_str = await toggle_locator.get_attribute('aria-checked')
@@ -467,6 +470,9 @@ class PageController:
         for attempt in range(1, max_retries + 1):
             try:
                 collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
+                if await collapse_tools_locator.count() == 0:
+                    self.logger.info(f'[{self.req_id}] 工具面板展开按钮不存在，跳过。')
+                    return
                 await expect_async(collapse_tools_locator).to_be_visible(timeout=5000)
                 grandparent_locator = collapse_tools_locator.locator('xpath=../..')
                 class_string = await grandparent_locator.get_attribute('class', timeout=3000)
@@ -581,15 +587,17 @@ class PageController:
 
                 if attempt == 0:
                     strategy_name = "JS Injection"
-                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
+                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); el.dispatchEvent(new Event("blur", {bubbles: true})); }', str(target_value))
                     await asyncio.sleep(DELAY_AFTER_FILL)
-                    await locator.press('Enter')
+                    await locator.press('Tab')
                 elif attempt == 1:
                     strategy_name = "Standard Fill"
                     await locator.focus()
+                    await locator.triple_click()
                     await locator.fill(str(target_value))
+                    await locator.press('Tab')
+                    await asyncio.sleep(DELAY_AFTER_FILL)
                     await locator.dispatch_event('change')
-                    await locator.press('Enter')
                 else:
                     strategy_name = "Select & Type"
                     await locator.focus()
@@ -597,7 +605,7 @@ class PageController:
                     await locator.press('Backspace')
                     await asyncio.sleep(SLEEP_TICK)
                     await locator.type(str(target_value), delay=50)
-                    await locator.press('Enter')
+                    await locator.press('Tab')
 
                 await asyncio.sleep(SLEEP_LONG)
                 
@@ -1011,7 +1019,7 @@ class PageController:
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 📤 提交提示 ({len(prompt)} chars)...')
-        prompt_textarea_locator, matched_selector = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=5000)
+        prompt_textarea_locator, matched_selector = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=15000)
         if not prompt_textarea_locator:
             self.logger.warning(f'[{self.req_id}] 未找到输入框，尝试默认选择器')
             prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
