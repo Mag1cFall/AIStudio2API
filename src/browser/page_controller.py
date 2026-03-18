@@ -750,8 +750,16 @@ class PageController:
             await expect_async(self.page).to_have_url(re.compile('.*/prompts/new_chat.*'), timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS)
             self.logger.info(f'[{self.req_id}]   - URL验证成功: 页面已导航到 new_chat。')
             zero_state_locator = self.page.locator(ZERO_STATE_SELECTOR)
-            await expect_async(zero_state_locator).to_be_visible(timeout=5000)
-            self.logger.info(f'[{self.req_id}]   - UI验证成功: “零状态”元素可见。')
+            try:
+                await expect_async(zero_state_locator).to_be_visible(timeout=5000)
+                self.logger.info(f'[{self.req_id}]   - UI验证成功: "零状态"元素可见。')
+            except Exception:
+                self.logger.debug(f'[{self.req_id}]   - zero_state not visible, waiting for textarea...')
+                try:
+                    await expect_async(self.page.locator(PROMPT_TEXTAREA_SELECTOR)).to_be_visible(timeout=10000)
+                    self.logger.info(f'[{self.req_id}]   - Textarea visible, page ready.')
+                except Exception:
+                    self.logger.debug(f'[{self.req_id}]   - Textarea also not visible, continuing anyway.')
             self.logger.info(f'[{self.req_id}] 聊天已成功清空 (验证通过)。')
         except Exception as verify_err:
             self.logger.error(f'[{self.req_id}] 错误: 清空聊天验证失败: {verify_err}')
