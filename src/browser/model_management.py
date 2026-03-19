@@ -29,7 +29,10 @@ async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> d
             logger.error(f'[{req_id}] ❌ 解析localStorage JSON失败: {e}')
             return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'JSON解析失败: {e}'}
     except Exception as e:
-        logger.error(f'[{req_id}] ❌ 验证UI状态设置时发生错误: {e}')
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.debug(f'[{req_id}] UI状态验证时浏览器已关闭')
+        else:
+            logger.error(f'[{req_id}] ❌ 验证UI状态设置时发生错误: {e}')
         return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'验证失败: {e}'}
 
 async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bool:
@@ -84,7 +87,10 @@ async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bo
             return False
             
     except Exception as e:
-        logger.error(f'[{req_id}] ❌ 强制设置UI状态错误: {e}')
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.debug(f'[{req_id}] 强制设置UI时浏览器已关闭')
+        else:
+            logger.error(f'[{req_id}] ❌ 强制设置UI状态错误: {e}')
         return False
 
 async def _force_ui_state_with_retry(page: AsyncPage, req_id: str='unknown', max_retries: int=3, retry_delay: float=1.0) -> bool:

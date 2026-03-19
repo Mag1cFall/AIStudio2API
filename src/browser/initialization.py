@@ -347,16 +347,21 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.error(f'页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}', exc_info=True)
             raise RuntimeError(f'页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}') from input_visible_err
     except Exception as e_init_page:
-        logger.critical(f'❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}', exc_info=True)
+        is_browser_closed = 'Target page, context or browser has been closed' in str(e_init_page)
+        if is_browser_closed:
+            logger.warning(f'页面初始化时浏览器已关闭: {e_init_page}')
+        else:
+            logger.critical(f'❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}', exc_info=True)
         if temp_context:
             try:
                 logger.info(f'   尝试关闭临时的浏览器上下文 due to initialization error.')
                 await temp_context.close()
                 logger.info('   ✅ 临时浏览器上下文已关闭。')
             except Exception as close_err:
-                logger.warning(f'   ⚠️ 关闭临时浏览器上下文时出错: {close_err}')
-        from .operations import save_error_snapshot
-        await save_error_snapshot('init_unexpected_error')
+                logger.debug(f'   关闭临时浏览器上下文时出错: {close_err}')
+        if not is_browser_closed:
+            from .operations import save_error_snapshot
+            await save_error_snapshot('init_unexpected_error')
         raise RuntimeError(f'页面初始化意外错误: {e_init_page}') from e_init_page
 
 async def _close_page_logic():

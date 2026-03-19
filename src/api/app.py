@@ -175,7 +175,10 @@ async def lifespan(app: FastAPI):
         server.is_initializing = False
         yield
     except Exception as e:
-        logger.critical(f'Application startup failed: {e}', exc_info=True)
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.warning(f'Application startup failed (browser closed): {e}')
+        else:
+            logger.critical(f'Application startup failed: {e}', exc_info=True)
         await _shutdown_resources()
         raise RuntimeError(f'Application startup failed: {e}') from e
     finally:
