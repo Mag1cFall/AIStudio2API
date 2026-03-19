@@ -719,15 +719,16 @@ if __name__ == '__main__':
         camoufox_popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
     try:
         logger.info(f"  将执行 Camoufox 内部启动命令: {' '.join(camoufox_internal_cmd_args)}")
-        def _find_free_port(start_port: int, max_tries: int = 10) -> int:
+        def _find_free_port(start_port: int, max_tries: int = 20) -> int:
             for p in range(start_port, start_port + max_tries):
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.bind(('', p))
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+                        s.bind(('127.0.0.1', p))
                         return p
                 except OSError:
                     continue
-            return start_port
+            return start_port + max_tries
         MAX_CAMOUFOX_RETRIES = 3
         for camoufox_attempt in range(MAX_CAMOUFOX_RETRIES):
             # Always find a free port (avoids EADDRINUSE on first and retry attempts)
@@ -767,6 +768,10 @@ if __name__ == '__main__':
                         logger.warning(log_line_content)
                     else:
                         logger.info(log_line_content)
+                    # Early exit on port conflict - no need to wait full timeout
+                    if 'EADDRINUSE' in line_from_camoufox:
+                        logger.warning(f'  ⚡ 检测到端口冲突，立即终止并重试...')
+                        break
                     ws_match = ws_regex.search(line_from_camoufox)
                     if ws_match:
                         captured_ws_endpoint = ws_match.group(1)
