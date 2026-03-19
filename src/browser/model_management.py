@@ -484,4 +484,8 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
             await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(prefs_to_set))
             logger.info(f"   ✅ localStorage.aiStudioUserPreference 已更新。isAdvancedOpen: {prefs_to_set.get('isAdvancedOpen')}, areToolsOpen: {prefs_to_set.get('areToolsOpen')} (期望: True), promptModel: '{prefs_to_set.get('promptModel', '未设置/保留原样')}'。")
     except Exception as e_set_disp:
-        logger.error(f'   尝试从页面显示设置模型时出错: {e_set_disp}', exc_info=True)
+        from playwright._impl._errors import TargetClosedError
+        if isinstance(e_set_disp, TargetClosedError):
+            logger.debug(f'   尝试从页面显示设置模型时出错 (browser closed): {e_set_disp}')
+        else:
+            logger.error(f'   尝试从页面显示设置模型时出错: {e_set_disp}', exc_info=True)

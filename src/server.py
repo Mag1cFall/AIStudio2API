@@ -35,6 +35,7 @@ from browser import _initialize_page_logic, _close_page_logic, signal_camoufox_s
 from api import generate_sse_chunk, generate_sse_stop_chunk, generate_sse_error_chunk, use_helper_get_response, use_stream_response, clear_stream_queue, prepare_combined_prompt, validate_chat_request, _process_request_refactored, create_app, queue_worker
 STREAM_QUEUE: Optional[multiprocessing.Queue] = None
 STREAM_PROCESS = None
+STREAM_PORT_ACTUAL: Optional[int] = None
 playwright_manager: Optional[AsyncPlaywright] = None
 browser_instance: Optional[AsyncBrowser] = None
 page_instance: Optional[AsyncPage] = None
