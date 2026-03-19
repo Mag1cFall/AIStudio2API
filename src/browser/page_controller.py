@@ -569,11 +569,18 @@ class PageController:
 
     async def _set_parameter_with_retry(self, locator: Locator, target_value: str, param_name: str, check_client_disconnected: Callable) -> bool:
         def is_equal(val1, val2):
+            import re
+            def extract_float(s):
+                m = re.search(r'[-+]?\d*\.?\d+', str(s))
+                return float(m.group()) if m else None
             try:
-                f1, f2 = float(val1), float(val2)
-                return abs(f1 - f2) < 0.001
-            except ValueError:
-                return str(val1).strip() == str(val2).strip()
+                f1 = extract_float(val1)
+                f2 = float(val2)
+                if f1 is not None:
+                    return abs(f1 - f2) < 0.001
+            except (ValueError, TypeError):
+                pass
+            return str(val1).strip() == str(val2).strip()
 
         max_retries = MAX_RETRIES
         for attempt in range(max_retries):
@@ -609,7 +616,7 @@ class PageController:
 
                 await asyncio.sleep(SLEEP_LONG)
                 
-                final_val = await locator.input_value(timeout=2000)
+                final_val = await locator.input_value(timeout=5000)
                 if is_equal(final_val, target_value):
                     self.logger.info(f"[{self.req_id}] {param_name} 成功设置为 {final_val} (策略: {strategy_name})。")
                     return True

@@ -385,7 +385,7 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
                 except Exception as reload_err:
                     err_str = str(reload_err)
                     if 'Target page, context or browser has been closed' in err_str or 'Browser has been closed' in err_str:
-                        logger.warning(f'   ⚠️ 浏览器已关闭，跳过重新加载。')
+                        logger.debug(f'   ⚠️ 浏览器已关闭，跳过重新加载。')
                         return
                     logger.warning(f'   ⚠️ 页面重新加载尝试 {attempt + 1}/{max_retries} 失败: {reload_err}')
                     if attempt < max_retries - 1:

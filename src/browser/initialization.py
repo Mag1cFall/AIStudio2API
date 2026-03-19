@@ -312,7 +312,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             if wrapper_locator:
                 logger.info(f'✅ 输入框wrapper可见 (匹配: {wrapper_matched})')
             else:
-                logger.warning('⚠️ 未找到任何wrapper，尝试直接查找输入框')
+                logger.debug('⚠️ 未找到任何wrapper，尝试直接查找输入框')
             input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=30000)
             if input_locator:
                 logger.info(f'✅ 核心输入区域可见 (匹配: {matched})')
@@ -338,6 +338,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.info(f'✅ 页面逻辑初始化成功。')
             return (result_page_instance, result_page_ready)
         except Exception as input_visible_err:
+            from playwright._impl._errors import TargetClosedError
+            if isinstance(input_visible_err, TargetClosedError) or 'Target page, context or browser has been closed' in str(input_visible_err):
+                logger.warning(f'页面初始化时浏览器已关闭，跳过。')
+                raise
             from .operations import save_error_snapshot
             await save_error_snapshot('init_fail_input_timeout')
             logger.error(f'页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}', exc_info=True)
