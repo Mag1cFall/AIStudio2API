@@ -92,7 +92,7 @@ async def _start_stream_proxy():
         server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
         server.STREAM_PROCESS.start()
         server.logger.info('STREAM proxy process started. Waiting for port readiness...')
-        if await _wait_for_port(port):
+        if await _wait_for_port(port, timeout=30.0):
             server.logger.info(f'STREAM proxy port {port} is ready.')
         else:
             server.logger.error(f'STREAM proxy port {port} not ready after timeout. Browser may fail to connect.')

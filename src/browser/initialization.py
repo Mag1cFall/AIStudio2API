@@ -313,11 +313,11 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 logger.info(f'✅ 输入框wrapper可见 (匹配: {wrapper_matched})')
             else:
                 logger.warning('⚠️ 未找到任何wrapper，尝试直接查找输入框')
-            input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=10000)
+            input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=30000)
             if input_locator:
                 logger.info(f'✅ 核心输入区域可见 (匹配: {matched})')
             else:
-                await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
+                await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
                 logger.info('✅ 核心输入区域可见 (默认选择器)')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
