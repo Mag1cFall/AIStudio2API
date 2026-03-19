@@ -390,7 +390,7 @@ class PageController:
                 self.logger.info(f'[{self.req_id}] 🌍 (嘗試 {attempt}/{max_retries}) 正在{action} Google Search...')
                 await click_element(self.page, toggle_locator, 'Google Search Toggle', self.req_id)
                 await self._check_disconnect(check_client_disconnected, f'Google Search 開關 - 點擊{action}後')
-                await asyncio.sleep(SLEEP_LONG)
+                await asyncio.sleep(1.0)
                 new_state = await toggle_locator.get_attribute('aria-checked')
                 if (new_state == 'true') == should_enable_search:
                     self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
@@ -593,7 +593,7 @@ class PageController:
                 elif attempt == 1:
                     strategy_name = "Standard Fill"
                     await locator.focus()
-                    await locator.triple_click()
+                    await locator.select_text()
                     await locator.fill(str(target_value))
                     await locator.press('Tab')
                     await asyncio.sleep(DELAY_AFTER_FILL)
