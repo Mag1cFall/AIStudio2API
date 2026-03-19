@@ -722,7 +722,13 @@ if __name__ == '__main__':
         MAX_CAMOUFOX_RETRIES = 3
         for camoufox_attempt in range(MAX_CAMOUFOX_RETRIES):
             if camoufox_attempt > 0:
-                logger.warning(f'  🔄 重试启动 Camoufox (第 {camoufox_attempt + 1}/{MAX_CAMOUFOX_RETRIES} 次)...')
+                # Use a different port to avoid EADDRINUSE from previous attempt
+                retry_port = args.camoufox_debug_port + camoufox_attempt
+                for i, arg in enumerate(camoufox_internal_cmd_args):
+                    if arg == '--internal-camoufox-port' and i + 1 < len(camoufox_internal_cmd_args):
+                        camoufox_internal_cmd_args[i + 1] = str(retry_port)
+                        break
+                logger.warning(f'  🔄 重试启动 Camoufox (第 {camoufox_attempt + 1}/{MAX_CAMOUFOX_RETRIES} 次, 端口: {retry_port})...')
             camoufox_proc = subprocess.Popen(camoufox_internal_cmd_args, **camoufox_popen_kwargs)
             logger.info(f'  Camoufox 内部进程已启动 (PID: {camoufox_proc.pid})。正在等待 WebSocket 端点输出 (最长 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...')
             camoufox_output_q = queue.Queue()
