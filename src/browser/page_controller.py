@@ -608,17 +608,17 @@ class PageController:
                     strategy_name = "Ctrl+A Fill"
                     await locator.click()
                     await locator.press('Control+a')
-                    await locator.type(str(target_value), delay=30)
+                    await locator.fill(str(target_value))
+                    await locator.dispatch_event('input')
+                    await locator.dispatch_event('change')
                     await locator.press('Tab')
                     await asyncio.sleep(DELAY_AFTER_FILL)
-                    await locator.dispatch_event('change')
                 else:
-                    strategy_name = "Select & Type"
-                    await locator.focus()
-                    await locator.press('Control+a')
-                    await locator.press('Backspace')
-                    await asyncio.sleep(SLEEP_TICK)
-                    await locator.type(str(target_value), delay=50)
+                    strategy_name = "Triple Click Fill"
+                    await locator.click(click_count=3)
+                    await locator.fill(str(target_value))
+                    await locator.dispatch_event('input')
+                    await locator.dispatch_event('change')
                     await locator.press('Tab')
 
                 await asyncio.sleep(SLEEP_LONG)
