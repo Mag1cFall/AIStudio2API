@@ -719,16 +719,27 @@ if __name__ == '__main__':
         camoufox_popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
     try:
         logger.info(f"  将执行 Camoufox 内部启动命令: {' '.join(camoufox_internal_cmd_args)}")
+        def _find_free_port(start_port: int, max_tries: int = 10) -> int:
+            for p in range(start_port, start_port + max_tries):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(('', p))
+                        return p
+                except OSError:
+                    continue
+            return start_port
         MAX_CAMOUFOX_RETRIES = 3
         for camoufox_attempt in range(MAX_CAMOUFOX_RETRIES):
+            # Always find a free port (avoids EADDRINUSE on first and retry attempts)
+            free_port = _find_free_port(args.camoufox_debug_port + camoufox_attempt)
+            for i, arg in enumerate(camoufox_internal_cmd_args):
+                if arg == '--internal-camoufox-port' and i + 1 < len(camoufox_internal_cmd_args):
+                    camoufox_internal_cmd_args[i + 1] = str(free_port)
+                    break
             if camoufox_attempt > 0:
-                # Use a different port to avoid EADDRINUSE from previous attempt
-                retry_port = args.camoufox_debug_port + camoufox_attempt
-                for i, arg in enumerate(camoufox_internal_cmd_args):
-                    if arg == '--internal-camoufox-port' and i + 1 < len(camoufox_internal_cmd_args):
-                        camoufox_internal_cmd_args[i + 1] = str(retry_port)
-                        break
-                logger.warning(f'  🔄 重试启动 Camoufox (第 {camoufox_attempt + 1}/{MAX_CAMOUFOX_RETRIES} 次, 端口: {retry_port})...')
+                logger.warning(f'  🔄 重试启动 Camoufox (第 {camoufox_attempt + 1}/{MAX_CAMOUFOX_RETRIES} 次, 端口: {free_port})...')
+            else:
+                logger.info(f'  使用端口 {free_port} 启动 Camoufox...')
             camoufox_proc = subprocess.Popen(camoufox_internal_cmd_args, **camoufox_popen_kwargs)
             logger.info(f'  Camoufox 内部进程已启动 (PID: {camoufox_proc.pid})。正在等待 WebSocket 端点输出 (最长 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...')
             camoufox_output_q = queue.Queue()

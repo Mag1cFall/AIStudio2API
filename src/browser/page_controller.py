@@ -388,6 +388,7 @@ class PageController:
                     return
                 action = '打開' if should_enable_search else '關閉'
                 self.logger.info(f'[{self.req_id}] 🌍 (嘗試 {attempt}/{max_retries}) 正在{action} Google Search...')
+                await toggle_locator.scroll_into_view_if_needed(timeout=3000)
                 await toggle_locator.click(force=True, timeout=3000)
                 await self._check_disconnect(check_client_disconnected, f'Google Search 開關 - 點擊{action}後')
                 await asyncio.sleep(1.0)
@@ -715,6 +716,7 @@ class PageController:
                     break
             if normalized_requested_stops:
                 await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                await stop_input_locator.scroll_into_view_if_needed(timeout=3000)
                 for seq in normalized_requested_stops:
                     await stop_input_locator.click(timeout=3000)
                     await stop_input_locator.fill(seq, timeout=5000)
