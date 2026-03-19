@@ -719,54 +719,65 @@ if __name__ == '__main__':
         camoufox_popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
     try:
         logger.info(f"  将执行 Camoufox 内部启动命令: {' '.join(camoufox_internal_cmd_args)}")
-        camoufox_proc = subprocess.Popen(camoufox_internal_cmd_args, **camoufox_popen_kwargs)
-        logger.info(f'  Camoufox 内部进程已启动 (PID: {camoufox_proc.pid})。正在等待 WebSocket 端点输出 (最长 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...')
-        camoufox_output_q = queue.Queue()
-        camoufox_stdout_reader = threading.Thread(target=_enqueue_output, args=(camoufox_proc.stdout, 'stdout', camoufox_output_q, camoufox_proc.pid), daemon=True)
-        camoufox_stderr_reader = threading.Thread(target=_enqueue_output, args=(camoufox_proc.stderr, 'stderr', camoufox_output_q, camoufox_proc.pid), daemon=True)
-        camoufox_stdout_reader.start()
-        camoufox_stderr_reader.start()
-        ws_capture_start_time = time.time()
-        camoufox_ended_streams_count = 0
-        while time.time() - ws_capture_start_time < ENDPOINT_CAPTURE_TIMEOUT:
-            if camoufox_proc.poll() is not None:
-                logger.error(f'  Camoufox 内部进程 (PID: {camoufox_proc.pid}) 在等待 WebSocket 端点期间已意外退出，退出码: {camoufox_proc.poll()}。')
-                break
-            try:
-                stream_name, line_from_camoufox = camoufox_output_q.get(timeout=0.2)
-                if line_from_camoufox is None:
-                    camoufox_ended_streams_count += 1
-                    logger.debug(f'  [InternalCamoufox-{stream_name}-PID:{camoufox_proc.pid}] 输出流已关闭 (EOF)。')
-                    if camoufox_ended_streams_count >= 2:
-                        logger.info(f'  Camoufox 内部进程 (PID: {camoufox_proc.pid}) 的所有输出流均已关闭。')
-                        break
-                    continue
-                log_line_content = f'[InternalCamoufox-{stream_name}-PID:{camoufox_proc.pid}]: {line_from_camoufox.rstrip()}'
-                if stream_name == 'stderr' or 'ERROR' in line_from_camoufox.upper() or '❌' in line_from_camoufox:
-                    logger.warning(log_line_content)
-                else:
-                    logger.info(log_line_content)
-                ws_match = ws_regex.search(line_from_camoufox)
-                if ws_match:
-                    captured_ws_endpoint = ws_match.group(1)
-                    logger.info(f'  ✅ 成功从 Camoufox 内部进程捕获到 WebSocket 端点: {captured_ws_endpoint[:40]}...')
+        MAX_CAMOUFOX_RETRIES = 3
+        for camoufox_attempt in range(MAX_CAMOUFOX_RETRIES):
+            if camoufox_attempt > 0:
+                logger.warning(f'  🔄 重试启动 Camoufox (第 {camoufox_attempt + 1}/{MAX_CAMOUFOX_RETRIES} 次)...')
+            camoufox_proc = subprocess.Popen(camoufox_internal_cmd_args, **camoufox_popen_kwargs)
+            logger.info(f'  Camoufox 内部进程已启动 (PID: {camoufox_proc.pid})。正在等待 WebSocket 端点输出 (最长 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...')
+            camoufox_output_q = queue.Queue()
+            camoufox_stdout_reader = threading.Thread(target=_enqueue_output, args=(camoufox_proc.stdout, 'stdout', camoufox_output_q, camoufox_proc.pid), daemon=True)
+            camoufox_stderr_reader = threading.Thread(target=_enqueue_output, args=(camoufox_proc.stderr, 'stderr', camoufox_output_q, camoufox_proc.pid), daemon=True)
+            camoufox_stdout_reader.start()
+            camoufox_stderr_reader.start()
+            ws_capture_start_time = time.time()
+            camoufox_ended_streams_count = 0
+            while time.time() - ws_capture_start_time < ENDPOINT_CAPTURE_TIMEOUT:
+                if camoufox_proc.poll() is not None:
+                    logger.error(f'  Camoufox 内部进程 (PID: {camoufox_proc.pid}) 在等待 WebSocket 端点期间已意外退出，退出码: {camoufox_proc.poll()}。')
                     break
-            except queue.Empty:
-                continue
-        if camoufox_stdout_reader.is_alive():
-            camoufox_stdout_reader.join(timeout=1.0)
-        if camoufox_stderr_reader.is_alive():
-            camoufox_stderr_reader.join(timeout=1.0)
-        if not captured_ws_endpoint and (camoufox_proc and camoufox_proc.poll() is None):
-            logger.error(f'  ❌ 未能在 {ENDPOINT_CAPTURE_TIMEOUT} 秒内从 Camoufox 内部进程 (PID: {camoufox_proc.pid}) 捕获到 WebSocket 端点。')
-            logger.error('  Camoufox 内部进程仍在运行，但未输出预期的 WebSocket 端点。请检查其日志或行为。')
+                try:
+                    stream_name, line_from_camoufox = camoufox_output_q.get(timeout=0.2)
+                    if line_from_camoufox is None:
+                        camoufox_ended_streams_count += 1
+                        logger.debug(f'  [InternalCamoufox-{stream_name}-PID:{camoufox_proc.pid}] 输出流已关闭 (EOF)。')
+                        if camoufox_ended_streams_count >= 2:
+                            logger.info(f'  Camoufox 内部进程 (PID: {camoufox_proc.pid}) 的所有输出流均已关闭。')
+                            break
+                        continue
+                    log_line_content = f'[InternalCamoufox-{stream_name}-PID:{camoufox_proc.pid}]: {line_from_camoufox.rstrip()}'
+                    if stream_name == 'stderr' or 'ERROR' in line_from_camoufox.upper() or '❌' in line_from_camoufox:
+                        logger.warning(log_line_content)
+                    else:
+                        logger.info(log_line_content)
+                    ws_match = ws_regex.search(line_from_camoufox)
+                    if ws_match:
+                        captured_ws_endpoint = ws_match.group(1)
+                        logger.info(f'  ✅ 成功从 Camoufox 内部进程捕获到 WebSocket 端点: {captured_ws_endpoint[:40]}...')
+                        break
+                except queue.Empty:
+                    continue
+            if camoufox_stdout_reader.is_alive():
+                camoufox_stdout_reader.join(timeout=1.0)
+            if camoufox_stderr_reader.is_alive():
+                camoufox_stderr_reader.join(timeout=1.0)
+            if captured_ws_endpoint:
+                break
+            # Failed - kill process and retry
+            if camoufox_proc and camoufox_proc.poll() is None:
+                logger.warning(f'  ❌ 未能在 {ENDPOINT_CAPTURE_TIMEOUT} 秒内捕获到 WebSocket 端点，终止进程 (PID: {camoufox_proc.pid})...')
+                camoufox_proc.terminate()
+                try:
+                    camoufox_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    camoufox_proc.kill()
+            else:
+                logger.warning(f'  ❌ Camoufox 内部进程已退出，未能捕获到 WebSocket 端点。')
+            if camoufox_attempt < MAX_CAMOUFOX_RETRIES - 1:
+                time.sleep(3)
+        if not captured_ws_endpoint:
+            logger.error(f'  ❌ Camoufox 在 {MAX_CAMOUFOX_RETRIES} 次尝试后均未能输出 WebSocket 端点。')
             cleanup()
-            sys.exit(1)
-        elif not captured_ws_endpoint and (camoufox_proc and camoufox_proc.poll() is not None):
-            logger.error(f'  ❌ Camoufox 内部进程已退出，且未能捕获到 WebSocket 端点。')
-            sys.exit(1)
-        elif not captured_ws_endpoint:
-            logger.error(f'  ❌ 未能捕获到 WebSocket 端点。')
             sys.exit(1)
     except Exception as e_launch_camoufox_internal:
         logger.critical(f'  ❌ 在内部启动 Camoufox 或捕获其 WebSocket 端点时发生致命错误: {e_launch_camoufox_internal}', exc_info=True)
