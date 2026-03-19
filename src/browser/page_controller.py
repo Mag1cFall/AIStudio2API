@@ -1212,7 +1212,7 @@ class PageController:
                         user_agent_data_platform = 'Other'
                 is_mac_determined = 'mac' in user_agent_data_platform.lower()
             shortcut_modifier = 'Meta' if is_mac_determined else 'Control'
-            await prompt_textarea_locator.focus(timeout=5000)
+            await prompt_textarea_locator.focus(timeout=15000)
             await self._check_disconnect(check_client_disconnected, 'After Input Focus')
             original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
             self.logger.info(f'[{self.req_id}]   - Attempting {shortcut_modifier}+Enter...')
