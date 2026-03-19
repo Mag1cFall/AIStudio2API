@@ -598,17 +598,17 @@ class PageController:
                     await asyncio.sleep(DELAY_AFTER_FILL)
                     await locator.press('Tab')
                 elif attempt == 1:
-                    strategy_name = "Standard Fill"
-                    await locator.focus()
-                    await locator.select_text()
-                    await locator.fill(str(target_value))
+                    strategy_name = "Ctrl+A Fill"
+                    await locator.click()
+                    await locator.press('Control+a')
+                    await locator.type(str(target_value), delay=30)
                     await locator.press('Tab')
                     await asyncio.sleep(DELAY_AFTER_FILL)
                     await locator.dispatch_event('change')
                 else:
                     strategy_name = "Select & Type"
                     await locator.focus()
-                    await locator.select_text()
+                    await locator.press('Control+a')
                     await locator.press('Backspace')
                     await asyncio.sleep(SLEEP_TICK)
                     await locator.type(str(target_value), delay=50)
@@ -1093,9 +1093,14 @@ class PageController:
             await asyncio.sleep(SLEEP_TICK)
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
-                self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
-                await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id, internal_timeout=10000)
-                self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
+                # Check if response already started (submission may have succeeded despite verification failure)
+                response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
+                if await response_container.count() > 0 and await response_container.last.is_visible(timeout=2000):
+                    self.logger.info(f'[{self.req_id}] 快捷键验证失败但响应已开始，视为提交成功。')
+                else:
+                    self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
+                    await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id, internal_timeout=10000)
+                    self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
             await self._check_disconnect(check_client_disconnected, '提交后')
 
         except Exception as e_input_submit:
