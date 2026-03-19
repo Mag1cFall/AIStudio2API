@@ -395,10 +395,16 @@ class PageController:
                 if (new_state == 'true') == should_enable_search:
                     self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
                     return
-                else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
-                    if attempt < max_retries:
-                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
+                # Force via JS click on parent label
+                await toggle_locator.evaluate('el => (el.closest("label") || el).click()')
+                await asyncio.sleep(1.0)
+                new_state = await toggle_locator.get_attribute('aria-checked')
+                if (new_state == 'true') == should_enable_search:
+                    self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action} (JS)。')
+                    return
+                self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
+                if attempt < max_retries:
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
@@ -710,6 +716,7 @@ class PageController:
             if normalized_requested_stops:
                 await expect_async(stop_input_locator).to_be_visible(timeout=5000)
                 for seq in normalized_requested_stops:
+                    await stop_input_locator.click(timeout=3000)
                     await stop_input_locator.fill(seq, timeout=5000)
                     await stop_input_locator.press('Enter', timeout=5000)
                     await asyncio.sleep(DELAY_AFTER_FILL)
