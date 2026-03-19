@@ -407,6 +407,10 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
         else:
             logger.info('   localStorage 状态良好 (isAdvancedOpen=true, promptModel有效)，无需刷新页面。')
     except Exception as e:
+        from playwright._impl._errors import TargetClosedError
+        if isinstance(e, TargetClosedError):
+            logger.debug(f'处理初始模型状态时浏览器已关闭: {e}')
+            return
         logger.error(f'❌ (新) 处理初始模型状态和 localStorage 时发生严重错误: {e}', exc_info=True)
         try:
             logger.warning('   由于发生错误，尝试回退仅从页面显示设置全局模型 ID (不写入localStorage)...')
