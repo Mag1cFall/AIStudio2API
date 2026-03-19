@@ -427,7 +427,7 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
         )
         
         if not displayed_model_name:
-            logger.warning('   所有选择器都无法获取页面显示的模型名称')
+            logger.debug('   所有选择器都无法获取页面显示的模型名称')
             displayed_model_name = '未知模型'
         found_model_id_from_display = None
         if model_list_fetch_event and (not model_list_fetch_event.is_set()):
@@ -443,7 +443,7 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
                     logger.info(f"   显示名称 '{displayed_model_name}' 对应模型 ID: {found_model_id_from_display}")
                     break
             if not found_model_id_from_display:
-                logger.warning(f"   未在已知模型列表中找到与显示名称 '{displayed_model_name}' 匹配的 ID。")
+                logger.debug(f"   未在已知模型列表中找到与显示名称 '{displayed_model_name}' 匹配的 ID。")
         else:
             logger.warning('   模型列表尚不可用，无法将显示名称转换为ID。')
         new_model_value = found_model_id_from_display if found_model_id_from_display else displayed_model_name
