@@ -376,6 +376,9 @@ class PageController:
         for attempt in range(1, max_retries + 1):
             try:
                 toggle_locator = self.page.locator(toggle_selector)
+                if await toggle_locator.count() == 0:
+                    self.logger.debug(f'[{self.req_id}] Google Search 开关不存在，跳过。')
+                    return
                 await expect_async(toggle_locator).to_be_visible(timeout=5000)
                 await self._check_disconnect(check_client_disconnected, 'Google Search 開關 - 元素可見後')
                 is_checked_str = await toggle_locator.get_attribute('aria-checked')
@@ -385,17 +388,24 @@ class PageController:
                     return
                 action = '打開' if should_enable_search else '關閉'
                 self.logger.info(f'[{self.req_id}] 🌍 (嘗試 {attempt}/{max_retries}) 正在{action} Google Search...')
-                await click_element(self.page, toggle_locator, 'Google Search Toggle', self.req_id)
+                await toggle_locator.scroll_into_view_if_needed(timeout=3000)
+                await toggle_locator.click(force=True, timeout=3000)
                 await self._check_disconnect(check_client_disconnected, f'Google Search 開關 - 點擊{action}後')
-                await asyncio.sleep(SLEEP_LONG)
+                await asyncio.sleep(1.0)
                 new_state = await toggle_locator.get_attribute('aria-checked')
                 if (new_state == 'true') == should_enable_search:
                     self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action}。')
                     return
-                else:
-                    self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
-                    if attempt < max_retries:
-                        await asyncio.sleep(DELAY_AFTER_TOGGLE)
+                # Force via JS click on parent label
+                await toggle_locator.evaluate('el => (el.closest("label") || el).click()')
+                await asyncio.sleep(1.0)
+                new_state = await toggle_locator.get_attribute('aria-checked')
+                if (new_state == 'true') == should_enable_search:
+                    self.logger.info(f'[{self.req_id}] ✅ Google Search 已{action} (JS)。')
+                    return
+                self.logger.warning(f"[{self.req_id}] ⚠️ Google Search {action}失敗 (嘗試 {attempt}): '{new_state}'")
+                if attempt < max_retries:
+                    await asyncio.sleep(DELAY_AFTER_TOGGLE)
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
                     raise
@@ -467,6 +477,9 @@ class PageController:
         for attempt in range(1, max_retries + 1):
             try:
                 collapse_tools_locator = self.page.locator('button[aria-label="Expand or collapse tools"]')
+                if await collapse_tools_locator.count() == 0:
+                    self.logger.info(f'[{self.req_id}] 工具面板展开按钮不存在，跳过。')
+                    return
                 await expect_async(collapse_tools_locator).to_be_visible(timeout=5000)
                 grandparent_locator = collapse_tools_locator.locator('xpath=../..')
                 class_string = await grandparent_locator.get_attribute('class', timeout=3000)
@@ -563,11 +576,18 @@ class PageController:
 
     async def _set_parameter_with_retry(self, locator: Locator, target_value: str, param_name: str, check_client_disconnected: Callable) -> bool:
         def is_equal(val1, val2):
+            import re
+            def extract_float(s):
+                m = re.search(r'[-+]?\d*\.?\d+', str(s))
+                return float(m.group()) if m else None
             try:
-                f1, f2 = float(val1), float(val2)
-                return abs(f1 - f2) < 0.001
-            except ValueError:
-                return str(val1).strip() == str(val2).strip()
+                f1 = extract_float(val1)
+                f2 = float(val2)
+                if f1 is not None:
+                    return abs(f1 - f2) < 0.001
+            except (ValueError, TypeError):
+                pass
+            return str(val1).strip() == str(val2).strip()
 
         max_retries = MAX_RETRIES
         for attempt in range(max_retries):
@@ -576,32 +596,39 @@ class PageController:
                 await self._check_disconnect(check_client_disconnected, f'设置 {param_name} - 尝试 {attempt + 1}')
                 
                 if attempt == 0:
-                    await expect_async(locator).to_be_visible(timeout=5000)
+                    try:
+                        await expect_async(locator).to_be_visible(timeout=5000)
+                    except Exception:
+                        # Panel might be collapsed - try to expand and retry visibility
+                        await self._ensure_advanced_settings_expanded(check_client_disconnected)
+                        await expect_async(locator).to_be_visible(timeout=5000)
                     await asyncio.sleep(DELAY_AFTER_TOGGLE)
 
                 if attempt == 0:
                     strategy_name = "JS Injection"
-                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); }', str(target_value))
+                    await locator.evaluate('(el, val) => { el.value = val; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); el.dispatchEvent(new Event("blur", {bubbles: true})); }', str(target_value))
                     await asyncio.sleep(DELAY_AFTER_FILL)
-                    await locator.press('Enter')
+                    await locator.press('Tab')
                 elif attempt == 1:
-                    strategy_name = "Standard Fill"
-                    await locator.focus()
+                    strategy_name = "Ctrl+A Fill"
+                    await locator.click()
+                    await locator.press('Control+a')
                     await locator.fill(str(target_value))
+                    await locator.dispatch_event('input')
                     await locator.dispatch_event('change')
-                    await locator.press('Enter')
+                    await locator.press('Tab')
+                    await asyncio.sleep(DELAY_AFTER_FILL)
                 else:
-                    strategy_name = "Select & Type"
-                    await locator.focus()
-                    await locator.select_text()
-                    await locator.press('Backspace')
-                    await asyncio.sleep(SLEEP_TICK)
-                    await locator.type(str(target_value), delay=50)
-                    await locator.press('Enter')
+                    strategy_name = "Triple Click Fill"
+                    await locator.click(click_count=3)
+                    await locator.fill(str(target_value))
+                    await locator.dispatch_event('input')
+                    await locator.dispatch_event('change')
+                    await locator.press('Tab')
 
                 await asyncio.sleep(SLEEP_LONG)
                 
-                final_val = await locator.input_value(timeout=2000)
+                final_val = await locator.input_value(timeout=5000)
                 if is_equal(final_val, target_value):
                     self.logger.info(f"[{self.req_id}] {param_name} 成功设置为 {final_val} (策略: {strategy_name})。")
                     return True
@@ -693,10 +720,16 @@ class PageController:
                 except Exception:
                     break
             if normalized_requested_stops:
-                await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                try:
+                    await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                except Exception:
+                    await self._ensure_advanced_settings_expanded(check_client_disconnected)
+                    await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                await stop_input_locator.scroll_into_view_if_needed(timeout=3000)
                 for seq in normalized_requested_stops:
-                    await stop_input_locator.fill(seq, timeout=3000)
-                    await stop_input_locator.press('Enter', timeout=3000)
+                    await stop_input_locator.click(timeout=3000)
+                    await stop_input_locator.fill(seq, timeout=5000)
+                    await stop_input_locator.press('Enter', timeout=5000)
                     await asyncio.sleep(DELAY_AFTER_FILL)
             page_params_cache['stop_sequences'] = normalized_requested_stops
             self.logger.info(f'[{self.req_id}]  停止序列已成功设置。缓存已更新。')
@@ -750,8 +783,16 @@ class PageController:
             await expect_async(self.page).to_have_url(re.compile('.*/prompts/new_chat.*'), timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS)
             self.logger.info(f'[{self.req_id}]   - URL验证成功: 页面已导航到 new_chat。')
             zero_state_locator = self.page.locator(ZERO_STATE_SELECTOR)
-            await expect_async(zero_state_locator).to_be_visible(timeout=5000)
-            self.logger.info(f'[{self.req_id}]   - UI验证成功: “零状态”元素可见。')
+            try:
+                await expect_async(zero_state_locator).to_be_visible(timeout=5000)
+                self.logger.info(f'[{self.req_id}]   - UI验证成功: "零状态"元素可见。')
+            except Exception:
+                self.logger.debug(f'[{self.req_id}]   - zero_state not visible, waiting for textarea...')
+                try:
+                    await expect_async(self.page.locator(PROMPT_TEXTAREA_SELECTOR)).to_be_visible(timeout=10000)
+                    self.logger.info(f'[{self.req_id}]   - Textarea visible, page ready.')
+                except Exception:
+                    self.logger.debug(f'[{self.req_id}]   - Textarea also not visible, continuing anyway.')
             self.logger.info(f'[{self.req_id}] 聊天已成功清空 (验证通过)。')
         except Exception as verify_err:
             self.logger.error(f'[{self.req_id}] 错误: 清空聊天验证失败: {verify_err}')
@@ -1003,7 +1044,7 @@ class PageController:
 
     async def submit_prompt(self, prompt: str, image_list: List, check_client_disconnected: Callable):
         self.logger.info(f'[{self.req_id}] 📤 提交提示 ({len(prompt)} chars)...')
-        prompt_textarea_locator, matched_selector = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=5000)
+        prompt_textarea_locator, matched_selector = await get_first_visible_locator(self.page, PROMPT_TEXTAREA_SELECTORS, timeout=15000)
         if not prompt_textarea_locator:
             self.logger.warning(f'[{self.req_id}] 未找到输入框，尝试默认选择器')
             prompt_textarea_locator = self.page.locator(PROMPT_TEXTAREA_SELECTOR)
@@ -1070,9 +1111,14 @@ class PageController:
             await asyncio.sleep(SLEEP_TICK)
             submitted_successfully = await self._try_shortcut_submit(prompt_textarea_locator, check_client_disconnected)
             if not submitted_successfully:
-                self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
-                await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id)
-                self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
+                # Check if response already started (submission may have succeeded despite verification failure)
+                response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
+                if await response_container.count() > 0 and await response_container.last.is_visible(timeout=2000):
+                    self.logger.info(f'[{self.req_id}] 快捷键验证失败但响应已开始，视为提交成功。')
+                else:
+                    self.logger.info(f'[{self.req_id}] 快捷键提交失败，尝试点击提交按钮...')
+                    await click_element(self.page, submit_button_locator, 'Submit Button', self.req_id, internal_timeout=10000)
+                    self.logger.info(f'[{self.req_id}]  提交按钮点击完成。')
             await self._check_disconnect(check_client_disconnected, '提交后')
 
         except Exception as e_input_submit:
@@ -1189,7 +1235,7 @@ class PageController:
                         user_agent_data_platform = 'Other'
                 is_mac_determined = 'mac' in user_agent_data_platform.lower()
             shortcut_modifier = 'Meta' if is_mac_determined else 'Control'
-            await prompt_textarea_locator.focus(timeout=5000)
+            await prompt_textarea_locator.focus(timeout=15000)
             await self._check_disconnect(check_client_disconnected, 'After Input Focus')
             original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
             self.logger.info(f'[{self.req_id}]   - Attempting {shortcut_modifier}+Enter...')

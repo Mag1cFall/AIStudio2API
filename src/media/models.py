@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Literal, Union
+from typing import Optional, List, Union
 
 IMAGEN_SUPPORTED_MODELS = ['imagen-4.0-generate-001', 'imagen-4.0-ultra-generate-001', 'imagen-4.0-fast-generate-001']
 VEO_SUPPORTED_MODELS = ['veo-2.0-generate-001']

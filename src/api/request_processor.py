@@ -15,7 +15,7 @@ from config.timeouts import STREAM_CHUNK_SIZE
 from models import ChatCompletionRequest, ClientDisconnectedError
 from browser import switch_ai_studio_model, save_error_snapshot
 from .utils import validate_chat_request, prepare_combined_prompt, generate_sse_chunk, generate_sse_stop_chunk, use_stream_response, calculate_usage_stats, request_manager, calculate_stream_max_retries
-from .abort_detector import AbortSignalDetector, AbortSignalHandler
+from .abort_detector import AbortSignalHandler
 from browser.page_controller import PageController
 
 TOOL_CALL_INSTRUCTION = """When you need to call a tool, you MUST use EXACTLY this format (one per tool call):
@@ -114,7 +114,13 @@ async def _analyze_model_requirements(req_id: str, context: dict, request: ChatC
         if parsed_model_list:
             valid_model_ids = [m.get('id') for m in parsed_model_list]
             if requested_model_id not in valid_model_ids:
-                raise HTTPException(status_code=400, detail=f"[{req_id}] Invalid model '{requested_model_id}'. Available models: {', '.join(valid_model_ids)}")
+                # fuzzy match: find model whose id contains the requested id or vice versa
+                fuzzy = next((mid for mid in valid_model_ids if requested_model_id in mid or mid.startswith(requested_model_id.split('-preview')[0])), None)
+                if fuzzy:
+                    logger.info(f'[{req_id}] 模型 "{requested_model_id}" 不在列表中，自动映射到 "{fuzzy}"')
+                    requested_model_id = fuzzy
+                else:
+                    raise HTTPException(status_code=400, detail=f"[{req_id}] Invalid model '{requested_model_id}'. Available models: {', '.join(valid_model_ids)}")
         context['model_id_to_use'] = requested_model_id
         if current_ai_studio_model_id != requested_model_id:
             context['needs_model_switching'] = True
