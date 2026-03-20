@@ -234,7 +234,7 @@ async def queue_worker():
                                         else:
                                             logger.info(f'[{req_id}] (Worker) 发送按钮已禁用，无需点击。')
                                     except Exception as button_check_err:
-                                        logger.warning(f'[{req_id}] (Worker) 检查按钮状态失败: {button_check_err}')
+                                        logger.debug(f'[{req_id}] (Worker) 检查按钮状态失败: {button_check_err}')
                                     logger.info(f'[{req_id}] (Worker) 等待发送按钮最终禁用...')
                                     await expect_async(submit_btn_loc).to_be_disabled(timeout=wait_timeout_ms)
                                     logger.info(f'[{req_id}] ✅ 发送按钮已禁用。')
