@@ -29,7 +29,10 @@ async def _verify_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> d
             logger.error(f'[{req_id}] ❌ 解析localStorage JSON失败: {e}')
             return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'JSON解析失败: {e}'}
     except Exception as e:
-        logger.error(f'[{req_id}] ❌ 验证UI状态设置时发生错误: {e}')
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.debug(f'[{req_id}] UI状态验证时浏览器已关闭')
+        else:
+            logger.error(f'[{req_id}] ❌ 验证UI状态设置时发生错误: {e}')
         return {'exists': False, 'isAdvancedOpen': None, 'areToolsOpen': None, 'needsUpdate': True, 'error': f'验证失败: {e}'}
 
 async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bool:
@@ -84,7 +87,10 @@ async def _force_ui_state_settings(page: AsyncPage, req_id: str='unknown') -> bo
             return False
             
     except Exception as e:
-        logger.error(f'[{req_id}] ❌ 强制设置UI状态错误: {e}')
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.debug(f'[{req_id}] 强制设置UI时浏览器已关闭')
+        else:
+            logger.error(f'[{req_id}] ❌ 强制设置UI状态错误: {e}')
         return False
 
 async def _force_ui_state_with_retry(page: AsyncPage, req_id: str='unknown', max_retries: int=3, retry_delay: float=1.0) -> bool:
@@ -385,7 +391,7 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
                 except Exception as reload_err:
                     err_str = str(reload_err)
                     if 'Target page, context or browser has been closed' in err_str or 'Browser has been closed' in err_str:
-                        logger.warning(f'   ⚠️ 浏览器已关闭，跳过重新加载。')
+                        logger.debug(f'   ⚠️ 浏览器已关闭，跳过重新加载。')
                         return
                     logger.warning(f'   ⚠️ 页面重新加载尝试 {attempt + 1}/{max_retries} 失败: {reload_err}')
                     if attempt < max_retries - 1:
@@ -401,6 +407,10 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
         else:
             logger.info('   localStorage 状态良好 (isAdvancedOpen=true, promptModel有效)，无需刷新页面。')
     except Exception as e:
+        from playwright._impl._errors import TargetClosedError
+        if isinstance(e, TargetClosedError):
+            logger.debug(f'处理初始模型状态时浏览器已关闭: {e}')
+            return
         logger.error(f'❌ (新) 处理初始模型状态和 localStorage 时发生严重错误: {e}', exc_info=True)
         try:
             logger.warning('   由于发生错误，尝试回退仅从页面显示设置全局模型 ID (不写入localStorage)...')
@@ -421,7 +431,7 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
         )
         
         if not displayed_model_name:
-            logger.warning('   所有选择器都无法获取页面显示的模型名称')
+            logger.debug('   所有选择器都无法获取页面显示的模型名称')
             displayed_model_name = '未知模型'
         found_model_id_from_display = None
         if model_list_fetch_event and (not model_list_fetch_event.is_set()):
@@ -437,7 +447,7 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
                     logger.info(f"   显示名称 '{displayed_model_name}' 对应模型 ID: {found_model_id_from_display}")
                     break
             if not found_model_id_from_display:
-                logger.warning(f"   未在已知模型列表中找到与显示名称 '{displayed_model_name}' 匹配的 ID。")
+                logger.debug(f"   未在已知模型列表中找到与显示名称 '{displayed_model_name}' 匹配的 ID。")
         else:
             logger.warning('   模型列表尚不可用，无法将显示名称转换为ID。')
         new_model_value = found_model_id_from_display if found_model_id_from_display else displayed_model_name
@@ -478,4 +488,8 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool=False)
             await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(prefs_to_set))
             logger.info(f"   ✅ localStorage.aiStudioUserPreference 已更新。isAdvancedOpen: {prefs_to_set.get('isAdvancedOpen')}, areToolsOpen: {prefs_to_set.get('areToolsOpen')} (期望: True), promptModel: '{prefs_to_set.get('promptModel', '未设置/保留原样')}'。")
     except Exception as e_set_disp:
-        logger.error(f'   尝试从页面显示设置模型时出错: {e_set_disp}', exc_info=True)
+        from playwright._impl._errors import TargetClosedError
+        if isinstance(e_set_disp, TargetClosedError):
+            logger.debug(f'   尝试从页面显示设置模型时出错 (browser closed): {e_set_disp}')
+        else:
+            logger.error(f'   尝试从页面显示设置模型时出错: {e_set_disp}', exc_info=True)

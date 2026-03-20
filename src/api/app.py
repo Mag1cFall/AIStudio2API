@@ -14,7 +14,6 @@ from config import *
 from models import WebSocketConnectionManager
 from logger import initialize_logging, restore_streams
 from browser import _initialize_page_logic, _close_page_logic, load_excluded_models, _handle_initial_model_state_and_storage
-import proxy
 from asyncio import Queue, Lock
 from . import auth_utils
 playwright_manager: Optional[AsyncPlaywright] = None
@@ -82,24 +81,30 @@ async def _wait_for_port(port: int, timeout: float = 10.0, interval: float = 0.3
     return False
 
 async def _start_stream_proxy():
+    import proxy
     import server
     STREAM_PORT = os.environ.get('STREAM_PORT')
     if STREAM_PORT != '0':
         port = int(STREAM_PORT or 3120)
         STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
         server.logger.info(f'Starting STREAM proxy on port {port} with upstream proxy: {STREAM_PROXY_SERVER_ENV}')
-        server.STREAM_QUEUE = multiprocessing.Queue()
-        server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
-        server.STREAM_PROCESS.start()
-        server.logger.info('STREAM proxy process started. Waiting for port readiness...')
-        if await _wait_for_port(port):
-            server.logger.info(f'STREAM proxy port {port} is ready.')
-        else:
-            server.logger.error(f'STREAM proxy port {port} not ready after timeout. Browser may fail to connect.')
-            if server.STREAM_PROCESS and server.STREAM_PROCESS.is_alive():
-                server.logger.warning('STREAM proxy process is alive but port not listening.')
+        for attempt in range(3):
+            current_port = port + attempt
+            server.STREAM_QUEUE = multiprocessing.Queue()
+            server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, current_port, STREAM_PROXY_SERVER_ENV))
+            server.STREAM_PROCESS.start()
+            server.logger.info(f'STREAM proxy process started on port {current_port}. Waiting for port readiness...')
+            if await _wait_for_port(current_port, timeout=30.0):
+                server.STREAM_PORT_ACTUAL = current_port
+                server.logger.info(f'STREAM proxy port {current_port} is ready.')
+                if current_port != port:
+                    server.logger.warning(f'STREAM proxy using fallback port {current_port} (requested {port}).')
+                return
             else:
-                server.logger.error(f'STREAM proxy process died. Exit code: {server.STREAM_PROCESS.exitcode}')
+                server.logger.warning(f'STREAM proxy port {current_port} not ready, killing process...')
+                server.STREAM_PROCESS.terminate()
+                server.STREAM_PROCESS.join(timeout=3)
+        server.logger.error(f'STREAM proxy failed to start after 3 attempts.')
 
 async def _initialize_browser_and_page():
     import server
@@ -175,7 +180,12 @@ async def lifespan(app: FastAPI):
         server.is_initializing = False
         yield
     except Exception as e:
-        logger.critical(f'Application startup failed: {e}', exc_info=True)
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.warning(f'Application startup failed (browser closed): {e}')
+        elif 'NS_ERROR_PROXY' in str(e) or 'PROXY_CONNECTION_REFUSED' in str(e):
+            logger.warning(f'Application startup failed (proxy error): {e}')
+        else:
+            logger.critical(f'Application startup failed: {e}', exc_info=True)
         await _shutdown_resources()
         raise RuntimeError(f'Application startup failed: {e}') from e
     finally:
