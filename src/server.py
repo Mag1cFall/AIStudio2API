@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright
 from config import *
 from models import WebSocketConnectionManager
-from api import create_app
+from api import create_app, queue_worker
 
 STREAM_QUEUE: Optional[multiprocessing.Queue] = None
 STREAM_PROCESS = None

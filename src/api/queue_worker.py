@@ -205,11 +205,11 @@ async def queue_worker():
                         
                         try:
                             if completion_event:
-                                from server import RESPONSE_COMPLETION_TIMEOUT
+                                from config import RESPONSE_COMPLETION_TIMEOUT
                                 await asyncio.wait_for(completion_event.wait(), timeout=RESPONSE_COMPLETION_TIMEOUT / 1000 + 60)
                                 logger.info(f'[{req_id}] (Worker) ✅ 流式生成器完成信号收到。客户端提前断开: {client_disconnected_early}')
                             else:
-                                from server import RESPONSE_COMPLETION_TIMEOUT
+                                from config import RESPONSE_COMPLETION_TIMEOUT
                                 await asyncio.wait_for(asyncio.shield(result_future), timeout=RESPONSE_COMPLETION_TIMEOUT / 1000 + 60)
                                 logger.info(f'[{req_id}] (Worker) ✅ 非流式处理完成。客户端提前断开: {client_disconnected_early}')
                             
