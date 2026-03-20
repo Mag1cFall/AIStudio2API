@@ -1196,20 +1196,28 @@ class PageController:
 
     async def _verify_submission(self, prompt_textarea_locator: Locator, original_content: str) -> bool:
         try:
-            current_content = await prompt_textarea_locator.last.input_value(timeout=1500) or ''
+            current_content = await prompt_textarea_locator.last.input_value(timeout=3000) or ''
             if original_content and not current_content.strip():
                 self.logger.info(f'[{self.req_id}] Verification Method 1: Textarea cleared, submission successful.')
                 return True
             submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
-            if await submit_button_locator.is_disabled(timeout=1500):
+            if await submit_button_locator.is_disabled(timeout=3000):
                 self.logger.info(f'[{self.req_id}] Verification Method 2: Submit button is disabled, submission successful.')
                 return True
             response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
-            if await response_container.count() > 0 and await response_container.last.is_visible(timeout=1000):
+            if await response_container.count() > 0 and await response_container.last.is_visible(timeout=2000):
                 self.logger.info(f'[{self.req_id}] Verification Method 3: New response container detected, submission successful.')
                 return True
         except Exception as verify_err:
             self.logger.warning(f'[{self.req_id}] Could not confirm submission during verification: {type(verify_err).__name__}')
+            # Even if verification timed out, check if response already started
+            try:
+                response_container = self.page.locator(RESPONSE_CONTAINER_SELECTOR)
+                if await response_container.count() > 0 and await response_container.last.is_visible(timeout=1000):
+                    self.logger.info(f'[{self.req_id}] Verification fallback: Response container visible, submission successful.')
+                    return True
+            except Exception:
+                pass
             return False
         return False
 
@@ -1240,7 +1248,7 @@ class PageController:
             original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
             self.logger.info(f'[{self.req_id}]   - Attempting {shortcut_modifier}+Enter...')
             await self.page.keyboard.press(f'{shortcut_modifier}+Enter')
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
             if await self._verify_submission(prompt_textarea_locator, original_content):
                 self.logger.info(f'[{self.req_id}]   ✅ Success with {shortcut_modifier}+Enter.')
                 return True
@@ -1248,7 +1256,7 @@ class PageController:
             self.logger.info(f'[{self.req_id}]   - Attempting Enter...')
             await prompt_textarea_locator.focus(timeout=5000)
             await self.page.keyboard.press('Enter')
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
             if await self._verify_submission(prompt_textarea_locator, original_content):
                 self.logger.info(f'[{self.req_id}]   ✅ Success with Enter.')
                 return True
