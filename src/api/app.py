@@ -158,7 +158,7 @@ async def _shutdown_resources():
 async def lifespan(app: FastAPI):
     """FastAPI application life cycle management"""
     import server
-    from server import queue_worker
+    from api import queue_worker
     original_streams = (sys.stdout, sys.stderr)
     initial_stdout, initial_stderr = _setup_logging()
     logger = server.logger
