@@ -506,13 +506,10 @@ if __name__ == '__main__':
                 # Disable WebGL (not needed for AI Studio)
                 'webgl.disabled': True,
                 'webgl.enable-webgl2': False,
-                # Cap JS heap
-                'javascript.options.mem.max': 512,
                 # Reduce HTTP connections
                 'network.http.max-connections': 6,
                 'network.http.max-persistent-connections-per-server': 2,
-                # Disable service workers / push / notifications
-                'dom.serviceWorkers.enabled': False,
+                # Disable push / notifications
                 'dom.push.enabled': False,
                 'dom.webnotifications.enabled': False,
                 # Reduce session store overhead
