@@ -1,29 +1,10 @@
 # 首次运行与认证设置指南
 
-为了避免每次启动都手动登录 AI Studio，你需要先通过 [`launch_camoufox.py --debug`](../launch_camoufox.py) 模式或 [`app_launcher.py`](../app_launcher.py) 的有头模式运行一次来生成认证文件。
+为了避免每次启动都手动登录 AI Studio，你需要先通过 [`src/launch_camoufox.py --debug`](../src/launch_camoufox.py) 模式或 [`src/app_launcher.py`](../src/app_launcher.py) 的有头模式运行一次来生成认证文件。
 
 ## 认证文件的重要性
 
-**认证文件是无头模式的关键**: 无头模式依赖于 `auth_profiles/active/` 目录下的有效 `.json` 文件来维持登录状态和访问权限。**文件可能会过期**，需要定期通过 [`launch_camoufox.py --debug`](../launch_camoufox.py) 模式手动运行、登录并保存新的认证文件来替换更新。
-
-## 方法一：通过命令行运行 Debug 模式
-
-**推荐使用 .env 配置方式**:
-```env
-# .env 文件配置
-DEFAULT_FASTAPI_PORT=2048
-STREAM_PORT=0
-LAUNCH_MODE=normal
-DEBUG_LOGS_ENABLED=true
-```
-
-```bash
-# 简化启动命令 (推荐)
-uv run python launch_camoufox.py --debug
-
-# 传统命令行方式 (仍然支持)
-uv run python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
-```
+**认证文件是无头模式的关键**: 无头模式依赖于 `auth_profiles/active/` 目录下的有效 `.json` 文件来维持登录状态和访问权限。**文件可能会过期**，需要定期通过 [`src/launch_camoufox.py --debug`](../src/launch_camoufox.py) 模式手动运行、登录并保存新的认证文件来替换更新。
 
 **重要参数说明:**
 *   `--debug`: 启动有头模式，用于首次认证和调试
@@ -49,7 +30,7 @@ uv run python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --he
 
 ## 方法二：通过 GUI 启动有头模式
 
-1. 运行 `uv run python app_launcher.py`。
+1. 运行 `uv run python src/app_launcher.py`。
 2. 浏览器会自动打开管理界面（默认 `http://127.0.0.1:9000`）。
 3. 在 `配置` 页面选择 `调试模式 (Debug)`。
 4. 点击 `启动服务` 按钮。
