@@ -69,8 +69,8 @@ Worker 配置保存在 `data/workers.json`：
 ```json
 {
   "workers": [
-    {"id": "w1", "profile": "account1.json", "port": 3001, "camoufox_port": 40223},
-    {"id": "w2", "profile": "account2.json", "port": 3002, "camoufox_port": 9224}
+    {"id": "w1", "profile": "account1.json", "port": 3001, "camoufox_port": 40222},
+    {"id": "w2", "profile": "account2.json", "port": 3002, "camoufox_port": 40223}
   ],
   "settings": {"recovery_hours": 6}
 }
