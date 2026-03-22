@@ -19,7 +19,8 @@ AUTH_PROFILES_DIR = os.path.join(DATA_DIR, 'auth_profiles')
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'active')
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'saved')
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
-APP_LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
+# One shared app.log + RotatingFileHandler across uvicorn workers fails on Windows (WinError 32 on rotate).
+APP_LOG_FILE_PATH = os.path.join(LOG_DIR, f'app-{os.getpid()}.log')
 
 # 工具函数
 def get_environment_variable(key: str, default: str='') -> str:
