@@ -34,7 +34,7 @@ async def add_worker(profile: str = Body(..., embed=True)):
     existing_ports = [worker.port for worker in pool.workers.values()]
     existing_camoufox_ports = [worker.camoufox_port for worker in pool.workers.values()]
     port = max(existing_ports, default=3000) + 1
-    camoufox_port = max(existing_camoufox_ports, default=9221) + 1
+    camoufox_port = max(existing_camoufox_ports, default=40221) + 1
 
     profile_path = os.path.join(SAVED_AUTH_DIR, profile)
     if not os.path.exists(profile_path):

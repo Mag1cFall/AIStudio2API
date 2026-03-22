@@ -69,8 +69,8 @@ Worker 配置保存在 `data/workers.json`：
 ```json
 {
   "workers": [
-    {"id": "w1", "profile": "account1.json", "port": 3001, "camoufox_port": 9223},
-    {"id": "w2", "profile": "account2.json", "port": 3002, "camoufox_port": 9224}
+    {"id": "w1", "profile": "account1.json", "port": 3001, "camoufox_port": 40222},
+    {"id": "w2", "profile": "account2.json", "port": 3002, "camoufox_port": 40223}
   ],
   "settings": {"recovery_hours": 6}
 }
@@ -85,7 +85,7 @@ Worker 配置保存在 `data/workers.json`：
 ## 注意事项
 
 1. **端口分配**: 每个 Worker 自动分配独立端口，避免冲突
-2. **流式代理端口**: Worker-w1 使用 3120，Worker-w2 使用 3121，以此类推
+2. **流式代理端口**: 各 Worker 启动时从 `stream_port`（默认 3120）开始依次递增分配，与 Worker ID 无固定对应关系
 3. **账号安全**: 确保每个账号的认证文件独立，不要共用
 4. **资源占用**: 每个 Worker 运行独立的浏览器实例，注意内存占用
 
