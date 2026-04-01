@@ -19,6 +19,7 @@ from browser.operations import safe_click
 from browser.selector_utils import wait_for_any_selector
 from .models import SpeechConfig
 from models import ClientDisconnectedError
+from debug.dom_snapshot import dump_page
 
 
 class TTSController:
@@ -45,6 +46,7 @@ class TTSController:
                 tts_root = self.page.locator(TTS_ROOT_SELECTOR)
                 await expect_async(tts_root).to_be_visible(timeout=TIMEOUT_ELEMENT_ATTACHED)
                 self.logger.info(f'[{self.req_id}] ✅ TTS 页面已加载')
+                await dump_page(self.page, f'tts_nav_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -68,6 +70,7 @@ class TTSController:
                 
                 if is_active:
                     self.logger.info(f'[{self.req_id}] ✅ TTS 模式已就绪: {mode_name}')
+                    await dump_page(self.page, f'tts_mode_ready_{mode_name}_{self.req_id}', self.logger)
                     return
                 
                 if not await safe_click(mode_btn, f'TTS 模式按钮 {mode_name}', self.req_id):
@@ -85,11 +88,13 @@ class TTSController:
                     raw_input = self.page.locator(TTS_MULTI_SPEAKER_RAW_INPUT_SELECTOR)
                     if await raw_input.count() > 0 and await raw_input.is_visible():
                         self.logger.info(f'[{self.req_id}] ✅ TTS 模式已切换: {mode_name} (通过输入框验证)')
+                        await dump_page(self.page, f'tts_mode_switched_{mode_name}_{self.req_id}', self.logger)
                         return
                 else:
                     text_input = self.page.locator(TTS_SINGLE_SPEAKER_TEXT_INPUT_SELECTOR)
                     if await text_input.count() > 0 and await text_input.is_visible():
                         self.logger.info(f'[{self.req_id}] ✅ TTS 模式已切换: {mode_name} (通过输入框验证)')
+                        await dump_page(self.page, f'tts_mode_switched_{mode_name}_{self.req_id}', self.logger)
                         return
                 
                 self.logger.warning(f'[{self.req_id}] TTS 模式切换验证失败 (尝试 {attempt})')
@@ -125,6 +130,7 @@ class TTSController:
                 if await safe_click(option.first, f'语音选项 {voice_name}', self.req_id):
                     await asyncio.sleep(SLEEP_SHORT)
                     self.logger.info(f'[{self.req_id}] ✅ 语音已设置: {voice_name}')
+                    await dump_page(self.page, f'tts_voice_set_{voice_name}_{self.req_id}', self.logger)
                     return
                 else:
                     self.logger.warning(f'[{self.req_id}] 语音选项点击失败 (尝试 {attempt})')
@@ -157,6 +163,7 @@ class TTSController:
                         style_input = self.page.locator(TTS_SINGLE_SPEAKER_STYLE_INPUT_SELECTOR)
                         if await style_input.count() > 0:
                             await style_input.fill(style_instructions)
+                    await dump_page(self.page, f'tts_text_filled_{self.req_id}', self.logger)
                     return
                 self.logger.warning(f'[{self.req_id}] 文本填充验证失败 (尝试 {attempt})')
             except Exception as e:
@@ -175,6 +182,7 @@ class TTSController:
                 await raw_input.fill(raw_script)
                 await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 多说话人脚本已填充')
+                await dump_page(self.page, f'tts_multi_filled_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -200,6 +208,7 @@ class TTSController:
                     raise Exception('Run 按钮点击失败')
                 await self._check_disconnect(check_client_disconnected, 'TTS Run 按钮点击后')
                 self.logger.info(f'[{self.req_id}] ✅ 生成已启动')
+                await dump_page(self.page, f'tts_run_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -217,6 +226,7 @@ class TTSController:
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > timeout_seconds:
+                await dump_page(self.page, f'tts_timeout_{self.req_id}', self.logger)
                 raise TimeoutError(f'音频生成超时 ({timeout_seconds}s)')
             await self._check_disconnect(check_client_disconnected, f'等待音频 ({int(elapsed)}s)')
             try:
@@ -224,6 +234,7 @@ class TTSController:
                     src = await audio_player.get_attribute('src') or ''
                     if src and src.startswith('data:audio/') and src != last_src:
                         self.logger.info(f'[{self.req_id}] ✅ 音频已生成 ({len(src)} bytes)')
+                        await dump_page(self.page, f'tts_audio_found_{self.req_id}', self.logger)
                         if ',' in src:
                             base64_data = src.split(',', 1)[1]
                             return base64_data

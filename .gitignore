@@ -257,3 +257,4 @@ docker/my_*.json
 
 # Test output files
 test/test_output/
+test/dom_snapshots/

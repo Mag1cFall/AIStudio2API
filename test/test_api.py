@@ -6,7 +6,7 @@ import sys
 import os
 import time
 from pathlib import Path
-from typing import Tuple, List
+from typing import Optional, Tuple, List
 from dataclasses import dataclass, field
 
 BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:2048")
@@ -20,12 +20,21 @@ TIMEOUT_LONG = 600
 class TestResult:
     passed: int = 0
     failed: int = 0
-    results: List[Tuple[str, bool, str, float]] = field(default_factory=list)
-    
-    def record(self, name: str, success: bool, message: str = "", duration: float = 0):
-        icon = "[OK]" if success else "[X]"
+    skipped: int = 0
+    results: List[Tuple[str, Optional[bool], str, float]] = field(default_factory=list)
+
+    def record(
+        self, name: str, success: Optional[bool], message: str = "", duration: float = 0
+    ):
+        if success is None:
+            icon = "[--]"
+        else:
+            icon = "[OK]" if success else "[X]"
         self.results.append((name, success, message, duration))
-        if success:
+        if success is None:
+            self.skipped += 1
+            print(f"  {icon} {name}: {message}")
+        elif success:
             self.passed += 1
             print(f"  {icon} {name} ({duration:.2f}s)")
         else:
@@ -41,7 +50,9 @@ def ensure_output_dir():
 async def test_health(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
     start = time.time()
     try:
-        async with session.get(f"{BASE_URL}/health", timeout=aiohttp.ClientTimeout(total=TIMEOUT_SHORT)) as resp:
+        async with session.get(
+            f"{BASE_URL}/health", timeout=aiohttp.ClientTimeout(total=TIMEOUT_SHORT)
+        ) as resp:
             data = await resp.json()
             return True, f"status={data.get('status')}", time.time() - start
     except Exception as e:
@@ -51,7 +62,9 @@ async def test_health(session: aiohttp.ClientSession) -> Tuple[bool, str, float]
 async def test_models(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
     start = time.time()
     try:
-        async with session.get(f"{BASE_URL}/v1/models", timeout=aiohttp.ClientTimeout(total=TIMEOUT_SHORT)) as resp:
+        async with session.get(
+            f"{BASE_URL}/v1/models", timeout=aiohttp.ClientTimeout(total=TIMEOUT_SHORT)
+        ) as resp:
             data = await resp.json()
             count = len(data.get("data", []))
             return True, f"count={count}", time.time() - start
@@ -65,12 +78,12 @@ async def test_chat(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
         payload = {
             "model": "gemini-2.5-flash",
             "messages": [{"role": "user", "content": "Say 'test ok' in 2 words."}],
-            "max_tokens": 50
+            "max_tokens": 50,
         }
         async with session.post(
             f"{BASE_URL}/v1/chat/completions",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=TIMEOUT_MEDIUM)
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_MEDIUM),
         ) as resp:
             data = await resp.json()
             content = data["choices"][0]["message"]["content"][:30]
@@ -88,19 +101,19 @@ async def test_tts(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": "Kore"}
-                    }
-                }
-            }
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+                },
+            },
         }
         async with session.post(
             f"{BASE_URL}/generate-speech",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=TIMEOUT_MEDIUM)
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_MEDIUM),
         ) as resp:
             data = await resp.json()
-            audio_b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+            audio_b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"][
+                "data"
+            ]
             audio_bytes = base64.b64decode(audio_b64)
             output_path = OUTPUT_DIR / "tts_output.wav"
             output_path.write_bytes(audio_bytes)
@@ -109,21 +122,26 @@ async def test_tts(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
         return False, str(e), time.time() - start
 
 
-async def test_imagen(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
+async def test_imagen(
+    session: aiohttp.ClientSession,
+) -> Tuple[Optional[bool], str, float]:
     start = time.time()
     try:
         payload = {
             "prompt": "A mountain landscape at sunset",
-            "model": "imagen-3.0-generate-002",
+            "model": "imagen-4.0-generate-001",
             "number_of_images": 1,
-            "aspect_ratio": "16:9"
+            "aspect_ratio": "16:9",
         }
         async with session.post(
             f"{BASE_URL}/generate-image",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG)
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG),
         ) as resp:
             data = await resp.json()
+            detail = str(data.get("detail", ""))
+            if resp.status == 403 and "付费 api key" in detail.lower():
+                return None, detail, time.time() - start
             img_b64 = data["generatedImages"][0]["image"]["imageBytes"]
             img_bytes = base64.b64decode(img_b64)
             output_path = OUTPUT_DIR / "imagen_output.png"
@@ -138,12 +156,12 @@ async def test_nano(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
     try:
         payload = {
             "model": "gemini-2.5-flash-image",
-            "contents": [{"parts": [{"text": "A cute cartoon cat"}]}]
+            "contents": [{"parts": [{"text": "A cute cartoon cat"}]}],
         }
         async with session.post(
             f"{BASE_URL}/nano/generate",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG)
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG),
         ) as resp:
             data = await resp.json()
             parts = data["candidates"][0]["content"]["parts"]
@@ -165,12 +183,12 @@ async def test_veo(session: aiohttp.ClientSession) -> Tuple[bool, str, float]:
             "prompt": "Ocean waves on beach",
             "model": "veo-2.0-generate-001",
             "aspect_ratio": "16:9",
-            "duration_seconds": 5
+            "duration_seconds": 5,
         }
         async with session.post(
             f"{BASE_URL}/generate-video",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG)
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_LONG),
         ) as resp:
             data = await resp.json()
             vid_b64 = data["generatedVideos"][0]["video"]["videoBytes"]
@@ -188,9 +206,9 @@ async def run_concurrent_tests(skip_veo: bool = True):
     print(f" Base URL: {BASE_URL}")
     print(f" Mode: CONCURRENT (all tests run in parallel)")
     print("=" * 50)
-    
+
     ensure_output_dir()
-    
+
     async with aiohttp.ClientSession() as session:
         tests = [
             ("Health", test_health(session)),
@@ -200,20 +218,20 @@ async def run_concurrent_tests(skip_veo: bool = True):
             ("Imagen", test_imagen(session)),
             ("Nano", test_nano(session)),
         ]
-        
+
         if not skip_veo:
             tests.append(("Veo", test_veo(session)))
-        
+
         print(f"\nRunning {len(tests)} tests concurrently...")
         start_all = time.time()
-        
+
         tasks = [t[1] for t in tests]
         names = [t[0] for t in tests]
-        
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         total_time = time.time() - start_all
-        
+
         print("\n=== Results ===")
         result = TestResult()
         for name, res in zip(names, results):
@@ -222,16 +240,18 @@ async def run_concurrent_tests(skip_veo: bool = True):
             else:
                 success, msg, duration = res
                 result.record(name, success, msg, duration)
-        
+
         if skip_veo:
             print("  [--] Veo: SKIPPED (use --veo to include)")
-    
+
     print("\n" + "=" * 50)
     total = result.passed + result.failed
     print(f" Results: {result.passed}/{total} passed")
+    if result.skipped:
+        print(f" Skipped: {result.skipped}")
     print(f" Total time: {total_time:.2f}s (concurrent)")
     print("=" * 50)
-    
+
     return result.failed == 0
 
 
