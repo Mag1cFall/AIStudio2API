@@ -99,6 +99,9 @@ async def _start_stream_proxy():
                 server.logger.info(f'STREAM proxy port {current_port} is ready.')
                 if current_port != port:
                     server.logger.warning(f'STREAM proxy using fallback port {current_port} (requested {port}).')
+                    if server.PLAYWRIGHT_PROXY_SETTINGS and 'server' in server.PLAYWRIGHT_PROXY_SETTINGS:
+                        server.PLAYWRIGHT_PROXY_SETTINGS['server'] = f'http://127.0.0.1:{current_port}/'
+                        server.logger.info(f'Updated Playwright proxy to actual STREAM port: {current_port}')
                 return
             else:
                 server.logger.warning(f'STREAM proxy port {current_port} not ready, killing process...')

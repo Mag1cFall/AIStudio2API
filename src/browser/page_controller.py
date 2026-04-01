@@ -1248,7 +1248,7 @@ class PageController:
             original_content = await prompt_textarea_locator.input_value(timeout=2000) or ''
             self.logger.info(f'[{self.req_id}]   - Attempting {shortcut_modifier}+Enter...')
             await self.page.keyboard.press(f'{shortcut_modifier}+Enter')
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(1.5)
             if await self._verify_submission(prompt_textarea_locator, original_content):
                 self.logger.info(f'[{self.req_id}]   ✅ Success with {shortcut_modifier}+Enter.')
                 return True
@@ -1256,7 +1256,7 @@ class PageController:
             self.logger.info(f'[{self.req_id}]   - Attempting Enter...')
             await prompt_textarea_locator.focus(timeout=5000)
             await self.page.keyboard.press('Enter')
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(1.5)
             if await self._verify_submission(prompt_textarea_locator, original_content):
                 self.logger.info(f'[{self.req_id}]   ✅ Success with Enter.')
                 return True
