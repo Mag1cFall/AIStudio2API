@@ -552,7 +552,11 @@ async def generate_image(
     if not page_instance or page_instance.is_closed():
         raise HTTPException(status_code=503, detail=f"[{req_id}] 浏览器页面不可用。")
 
-    from media import process_image_request, ImageGenerationConfig
+    from media import (
+        process_image_request,
+        ImageGenerationConfig,
+        PaidApiKeyRequiredError,
+    )
 
     def check_client_disconnected(stage: str = "") -> bool:
         return False
@@ -577,6 +581,9 @@ async def generate_image(
     except ClientDisconnectedError as e:
         logger.warning(f"[{req_id}] 客户端断开: {e}")
         raise HTTPException(status_code=499, detail=str(e))
+    except PaidApiKeyRequiredError as e:
+        logger.warning(f"[{req_id}] Imagen 需要付费 API key: {e}")
+        raise HTTPException(status_code=403, detail=f"[{req_id}] {e}")
     except TimeoutError as e:
         logger.error(f"[{req_id}] 图片生成超时: {e}")
         raise HTTPException(status_code=504, detail=f"[{req_id}] 图片生成超时: {e}")

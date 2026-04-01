@@ -28,10 +28,16 @@ IMAGEN_RUN_BUTTON_SELECTOR = IMAGEN_RUN_BUTTON_SELECTORS[0]
 IMAGEN_GALLERY_CONTAINER_SELECTOR = "ms-image-generation-gallery"
 IMAGEN_GALLERY_ITEM_SELECTOR = "ms-image-generation-gallery-image"
 IMAGEN_GENERATED_IMAGE_SELECTOR = (
-    "ms-image-generation-gallery-image .image-container img"
+    "ms-image-generation-gallery-image img.loaded-image, "
+    "ms-image-generation-gallery-image .image-container img, "
+    "ms-image-generation-gallery img"
 )
 IMAGEN_IMAGE_ACTIONS_CONTAINER_SELECTOR = (
     "ms-image-generation-gallery-image .actions-container"
+)
+IMAGEN_PAID_USAGE_DIALOG_SELECTOR = "ms-paid-usage-dialog"
+IMAGEN_PAID_USAGE_CLOSE_BUTTON_SELECTOR = (
+    'ms-paid-usage-dialog button[aria-label="close"]'
 )
 IMAGEN_IMAGE_DOWNLOAD_BUTTON_SELECTOR = (
     'ms-image-generation-gallery-image button[aria-label="Download this image"]'

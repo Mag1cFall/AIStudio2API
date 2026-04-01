@@ -20,6 +20,7 @@ from config.timeouts import (
 from browser.operations import safe_click
 from .models import VideoGenerationConfig, GeneratedVideo
 from models import ClientDisconnectedError
+from debug.dom_snapshot import dump_page
 
 
 class VeoController:
@@ -47,6 +48,7 @@ class VeoController:
                 root = self.page.locator(VEO_ROOT_SELECTOR)
                 await expect_async(root).to_be_visible(timeout=TIMEOUT_ELEMENT_ATTACHED)
                 self.logger.info(f'[{self.req_id}] ✅ Veo 页面已加载')
+                await dump_page(self.page, f'veo_nav_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -64,10 +66,12 @@ class VeoController:
                 input_locator = self.page.locator(VEO_SETTINGS_NUM_RESULTS_INPUT_SELECTOR)
                 if await input_locator.count() == 0:
                     self.logger.warning(f'[{self.req_id}] 未找到数量输入框')
+                    await dump_page(self.page, f'veo_no_count_input_{self.req_id}', self.logger)
                     return
                 await input_locator.fill(str(count))
                 await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 视频数量已设置: {count}')
+                await dump_page(self.page, f'veo_count_set_{count}_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -85,6 +89,7 @@ class VeoController:
                 if await btn.count() > 0:
                     if await safe_click(btn.first, f'宽高比按钮 {aspect_ratio}', self.req_id):
                         self.logger.info(f'[{self.req_id}] ✅ 宽高比已设置: {aspect_ratio}')
+                        await dump_page(self.page, f'veo_ratio_set_{self.req_id}', self.logger)
                         return
                 else:
                     self.logger.warning(f'[{self.req_id}] 未找到宽高比按钮: {aspect_ratio}')
@@ -104,6 +109,7 @@ class VeoController:
                 dropdown = self.page.locator(VEO_SETTINGS_DURATION_DROPDOWN_SELECTOR)
                 if await dropdown.count() == 0:
                     self.logger.warning(f'[{self.req_id}] 未找到时长下拉框')
+                    await dump_page(self.page, f'veo_no_duration_dropdown_{self.req_id}', self.logger)
                     return
                 if not await safe_click(dropdown, '时长下拉框', self.req_id):
                     continue
@@ -112,6 +118,7 @@ class VeoController:
                 if await option.count() > 0:
                     if await safe_click(option.first, f'时长选项 {duration_seconds}s', self.req_id):
                         self.logger.info(f'[{self.req_id}] ✅ 视频时长已设置: {duration_seconds}s')
+                        await dump_page(self.page, f'veo_duration_set_{duration_seconds}_{self.req_id}', self.logger)
                         return
                 else:
                     self.logger.warning(f'[{self.req_id}] 未找到时长选项: {duration_seconds}s')
@@ -138,6 +145,7 @@ class VeoController:
                 await textarea.fill(negative_prompt)
                 await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 负面提示词已设置')
+                await dump_page(self.page, f'veo_neg_prompt_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -174,6 +182,7 @@ class VeoController:
                     await self.page.keyboard.press('Escape')
                     await asyncio.sleep(SLEEP_SHORT)
                     self.logger.info(f'[{self.req_id}] ✅ 图片已上传')
+                    await dump_page(self.page, f'veo_img_uploaded_{self.req_id}', self.logger)
                     return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -194,6 +203,7 @@ class VeoController:
                 await text_input.fill(prompt)
                 await asyncio.sleep(SLEEP_TICK)
                 self.logger.info(f'[{self.req_id}] ✅ 提示词已填充')
+                await dump_page(self.page, f'veo_prompt_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -219,6 +229,7 @@ class VeoController:
                     raise Exception('Run 按钮点击失败')
                 await self._check_disconnect(check_client_disconnected, 'Run 按钮点击后')
                 self.logger.info(f'[{self.req_id}] ✅ 生成已启动')
+                await dump_page(self.page, f'veo_run_{self.req_id}', self.logger)
                 return
             except Exception as e:
                 if isinstance(e, ClientDisconnectedError):
@@ -236,6 +247,7 @@ class VeoController:
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > timeout_seconds:
+                await dump_page(self.page, f'veo_timeout_{self.req_id}', self.logger)
                 raise TimeoutError(f'视频生成超时 ({timeout_seconds}s)')
             await self._check_disconnect(check_client_disconnected, f'等待视频 ({int(elapsed)}s)')
             
@@ -262,6 +274,7 @@ class VeoController:
                                     index=i
                                 ))
                         if len(videos) >= expected_count:
+                            await dump_page(self.page, f'veo_done_{self.req_id}', self.logger)
                             self.logger.info(f'[{self.req_id}] ✅ 视频生成完成 ({len(videos)} 个)')
                             return videos
             except Exception as e:
