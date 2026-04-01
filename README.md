@@ -140,7 +140,7 @@ uv run playwright install firefox
 3. **启动有头模式进行认证**:
    - 点击"启动有头模式 (新终端)"
    - **命令行终端**内输入`N`，获取新的认证文件
-   - 命令行终端指`start_webui.bat`启动的终端，或者您运行`uv run python app_launcher.py`的终端
+   - 命令行终端指`start_webui.bat`启动的终端，或者您运行`uv run python src/app_launcher.py`的终端
    - 浏览器会自动打开并导航到 AI Studio
    - 手动登录您的 Google 账号
    - 确保进入 AI Studio 主页
@@ -350,7 +350,7 @@ cp .env.example .env
 ### 端口配置
 
 - **FastAPI 服务**: 默认端口 `2048`
-- **Camoufox 调试**: 默认端口 `9222`
+- **Camoufox 调试**: 默认端口 `40222`
 - **流式代理**: 默认端口 `3120`
 
 ## 🔧 高级功能

@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import json
 import logging
 import os
@@ -155,6 +154,7 @@ class WorkerPool:
         logger.info(f"Loaded {len(self.workers)} workers from config")
 
     def _dispatch_listener_result(self, result: Any):
+        import inspect
         if not inspect.isawaitable(result):
             return
         try:

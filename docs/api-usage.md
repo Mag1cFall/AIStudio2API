@@ -18,7 +18,7 @@
 
 项目使用 `key.txt` 文件来管理API密钥：
 
-**文件位置**: 项目根目录下的 `key.txt` 文件
+**文件位置**: `data/key.txt`
 
 **文件格式**: 每行一个API密钥，支持空行和注释
 ```
@@ -34,13 +34,13 @@ another-api-key
 ### 密钥管理方法
 
 #### 手动编辑文件
-直接编辑 `key.txt` 文件添加或删除密钥：
+直接编辑 `data/key.txt` 文件添加或删除密钥：
 ```bash
 # 添加密钥
-echo "your-new-api-key" >> key.txt
+echo "your-new-api-key" >> data/key.txt
 
 # 查看当前密钥（注意安全）
-cat key.txt
+cat data/key.txt
 ```
 
 #### 通过 Web UI 管理

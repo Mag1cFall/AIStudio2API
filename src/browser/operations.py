@@ -4,8 +4,7 @@ import json
 import os
 import re
 import logging
-import functools
-from typing import Optional, Any, List, Dict, Callable, Set, TypeVar
+from typing import Optional, Any, Callable, TypeVar
 from playwright.async_api import Page as AsyncPage, Locator, Error as PlaywrightAsyncError
 from config import *
 from models import ClientDisconnectedError, ElementClickError
