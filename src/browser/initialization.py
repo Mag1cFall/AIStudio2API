@@ -312,12 +312,12 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             if wrapper_locator:
                 logger.info(f'✅ 输入框wrapper可见 (匹配: {wrapper_matched})')
             else:
-                logger.warning('⚠️ 未找到任何wrapper，尝试直接查找输入框')
-            input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=10000)
+                logger.debug('⚠️ 未找到任何wrapper，尝试直接查找输入框')
+            input_locator, matched = await wait_for_any_selector(found_page, PROMPT_TEXTAREA_SELECTORS, timeout=30000)
             if input_locator:
                 logger.info(f'✅ 核心输入区域可见 (匹配: {matched})')
             else:
-                await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
+                await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
                 logger.info('✅ 核心输入区域可见 (默认选择器)')
             try:
                 from config.selectors import MODEL_SELECTORS_LIST
@@ -338,21 +338,33 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.info(f'✅ 页面逻辑初始化成功。')
             return (result_page_instance, result_page_ready)
         except Exception as input_visible_err:
+            from playwright._impl._errors import TargetClosedError
+            if isinstance(input_visible_err, TargetClosedError) or 'Target page, context or browser has been closed' in str(input_visible_err):
+                logger.warning(f'页面初始化时浏览器已关闭，跳过。')
+                raise
             from .operations import save_error_snapshot
             await save_error_snapshot('init_fail_input_timeout')
             logger.error(f'页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}', exc_info=True)
             raise RuntimeError(f'页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}') from input_visible_err
     except Exception as e_init_page:
-        logger.critical(f'❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}', exc_info=True)
+        is_browser_closed = 'Target page, context or browser has been closed' in str(e_init_page)
+        is_proxy_error = 'NS_ERROR_PROXY' in str(e_init_page) or 'PROXY_CONNECTION_REFUSED' in str(e_init_page)
+        if is_browser_closed:
+            logger.warning(f'页面初始化时浏览器已关闭: {e_init_page}')
+        elif is_proxy_error:
+            logger.warning(f'页面初始化时代理连接失败: {e_init_page}')
+        else:
+            logger.critical(f'❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}', exc_info=True)
         if temp_context:
             try:
                 logger.info(f'   尝试关闭临时的浏览器上下文 due to initialization error.')
                 await temp_context.close()
                 logger.info('   ✅ 临时浏览器上下文已关闭。')
             except Exception as close_err:
-                logger.warning(f'   ⚠️ 关闭临时浏览器上下文时出错: {close_err}')
-        from .operations import save_error_snapshot
-        await save_error_snapshot('init_unexpected_error')
+                logger.debug(f'   关闭临时浏览器上下文时出错: {close_err}')
+        if not is_browser_closed:
+            from .operations import save_error_snapshot
+            await save_error_snapshot('init_unexpected_error')
         raise RuntimeError(f'页面初始化意外错误: {e_init_page}') from e_init_page
 
 async def _close_page_logic():

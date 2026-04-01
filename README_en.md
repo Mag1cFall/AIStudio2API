@@ -344,7 +344,7 @@ cp .env.example .env
 ### Port Configuration
 
 - **FastAPI Service**: Default port `2048`
-- **Camoufox Debug**: Default port `9222`
+- **Camoufox Debug**: Default port `40222`
 - **Streaming Proxy**: Default port `3120`
 
 ## 🔧 Advanced Features

@@ -16,7 +16,7 @@ async def check_all_ports():
     config = manager.load_config()
     ports_to_check = [
         {"label": "FastAPI 服务", "port": config.get("fastapi_port", 2048)},
-        {"label": "Camoufox 调试", "port": config.get("camoufox_debug_port", 9222)},
+        {"label": "Camoufox 调试", "port": config.get("camoufox_debug_port", 40222)},
     ]
 
     if config.get("stream_port_enabled"):

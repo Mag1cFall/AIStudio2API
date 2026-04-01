@@ -1,5 +1,4 @@
 import asyncio
-import base64
 from typing import Callable, Optional, List
 from playwright.async_api import Page as AsyncPage, Locator, expect as expect_async
 from config.nano_selectors import (

@@ -7,7 +7,6 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
@@ -43,7 +42,7 @@ PYTHON_EXECUTABLE = sys.executable
 class ServiceManager:
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
-        self.log_queue: asyncio.Queue = asyncio.Queue()
+        self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self.active_connections: List[WebSocket] = []
         self.output_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
@@ -66,7 +65,7 @@ class ServiceManager:
                 pass
         return {
             "fastapi_port": 2048,
-            "camoufox_debug_port": 9222,
+            "camoufox_debug_port": 40222,
             "stream_port": 3120,
             "stream_port_enabled": True,
             "proxy_enabled": False,
@@ -362,7 +361,7 @@ class ServiceManager:
             "--server-port",
             str(config.get("fastapi_port", 2048)),
             "--camoufox-debug-port",
-            str(config.get("camoufox_debug_port", 9222)),
+            str(config.get("camoufox_debug_port", 40222)),
         ]
 
         if config.get("proxy_enabled"):
@@ -523,6 +522,7 @@ class ServiceManager:
             if self.is_worker_mode:
                 processes = list(self.worker_processes.values())
                 if processes:
+                    from concurrent.futures import ThreadPoolExecutor
                     with ThreadPoolExecutor(
                         max_workers=max(1, len(processes))
                     ) as executor:
