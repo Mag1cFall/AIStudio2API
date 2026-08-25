@@ -1,6 +1,6 @@
 <div align="center">
 
-# AI Studio to OpenAI Compatible API
+# AI Studio to OpenAI, Anthropic & Gemini Compatible API
 
 <p align="center">
   <a href="README.md"><b>中文</b></a>
@@ -9,16 +9,16 @@
 </p>
 
 <p>
-  <b>一个基于 Python 的高性能代理服务</b><br>
-  将 Google AI Studio 网页界面转换为 OpenAI 兼容格式 API
+  <b>一个基于 Go 的高性能代理服务</b><br>
+  将 Google AI Studio 网页协议转换为 OpenAI、Responses、Anthropic 和 Gemini 兼容 API
 </p>
 
 <p>
-  🔄 多Worker并发 &nbsp;•&nbsp;
-  🖼️ Imagen 3 图片生成 &nbsp;•&nbsp;
-  🎨 Nano Banana 图片生成<br>
-  🎬 Veo 2 视频生成 &nbsp;•&nbsp;
-  🎤 Gemini 2.5 TTS 语音生成
+  多账户轮询 &nbsp;•&nbsp;
+  Nano Banana 图片生成 &nbsp;•&nbsp;
+  Google 工具<br>
+  Veo 视频生成 &nbsp;•&nbsp;
+  Gemini TTS 语音生成
 </p>
 
 <!-- <img src="docs/img/demo.gif" alt="Demo GIF" width="100%" /> -->
@@ -31,79 +31,55 @@
 
 ---
 
-## 🚀 特性
+## 特性
 
-- **OpenAI 兼容 API**: 完全兼容 OpenAI 格式的 `/v1/chat/completions` 端点
-- **多 Worker 并发**: 支持多账号并发处理，提升吞吐量和稳定性
-- **TTS 语音生成**: 支持 Gemini 2.5 TTS 模型的单/多说话人音频生成
-- **图片生成**: 支持 Imagen 3 和 Gemini 2.5 Flash (Nano Banana) 图片生成
-- **视频生成**: 支持 Veo 2 视频生成，包含图片转视频功能
-- **智能模型切换**: 通过 `model` 字段动态切换 AI Studio 中的模型
-- **反指纹检测**: 使用 Camoufox 浏览器降低被检测风险
-- **图形界面启动器**: 功能丰富的 **网页** 启动器，简化配置和管理
-- **模块化架构**: 清晰的模块分离设计，易于维护
-- **现代化工具链**: uv 依赖管理 + 完整类型支持
+- **四套 API 协议**: 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini GenerateContent
+- **多账户运行**: 支持账户轮询、模型能力筛选、限流冷却、请求故障切换和资源账户粘性
+- **原生流式响应**: 实时输出正文、思考摘要、函数调用、Google 工具、媒体和 usage
+- **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
+- **图片生成**: 支持 Nano Banana 图片生成
+- **视频生成**: 支持 Veo 视频生成和图片转视频
+- **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
+- **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
+- **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
+- **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求和配置
+- **模块化架构**: Go 负责协议、调度、API 与管理端，Camoufox 负责 WAA 运行时和隔离登录
 
-## 📋 系统要求
+## 系统要求
 
-- **Python**: 3.12 (推荐)
-- **依赖管理**: [uv](https://docs.astral.sh/uv/)
-- **操作系统**: Windows, macOS, Linux
+- **Release 运行**: Windows 10 或更高版本、`aistudio2api.exe`、`start.bat` 和 `runtime/camoufox/`
+- **源码运行**: Go 1.26、Node.js 24、npm 和 Camoufox
+- **操作系统**: Windows、macOS、Linux
 - **内存**: 建议 2GB+ 可用内存
 - **网络**: 稳定的互联网连接访问 Google AI Studio
 
-## 🛠️ 安装步骤
+## 安装步骤
 
-### 方式一：一键安装（推荐）
+### 方式一：Windows 一键启动（推荐）
 
-```bash
+```powershell
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
+copy .env.example .env
 ```
 
-然后双击运行 `setup.bat`，脚本将自动完成所有安装步骤。
+然后双击运行 `start.bat`。Windows PowerShell 也可以直接执行：
 
-Windows (PowerShell):
 ```powershell
-.\setup.bat
+.\start.bat
 ```
 
-Linux:
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+已有 `aistudio2api.exe` 时脚本立即运行；源码目录缺少可执行文件时，脚本自动安装前端依赖并构建前端与 Go 程序。
 
-### 方式二：手动安装
+Camoufox 可以放在 `runtime/camoufox/`，也可以通过环境变量 `CAMOUFOX_PATH` 指定可执行文件。
 
-#### 1. 安装 uv
+### 方式二：手动构建
 
-Windows (PowerShell):
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+#### 1. 安装依赖
 
-macOS / Linux:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-预期输出：
-```
-PS C:\Users\2\Desktop\AIStudio2API> powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-Downloading uv 0.9.11 (x86_64-pc-windows-msvc)
-Installing to C:\Users\2\.local\bin
-  uv.exe
-  uvx.exe
-  uvw.exe
-everything's installed!
-
-To add C:\Users\2\.local\bin to your PATH, either restart your shell or run:
-
-    set Path=C:\Users\2\.local\bin;%Path%   (cmd)
-    $env:Path = "C:\Users\2\.local\bin;$env:Path"   (powershell)
-```
-请按照您的路径将其添加到环境变量。
+- Go 1.26
+- Node.js 24 与 npm
+- Camoufox
 
 #### 2. 克隆项目
 
@@ -112,130 +88,142 @@ git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
 ```
 
-#### 3. 安装依赖
+#### 3. 构建并运行
 
 ```bash
-uv sync
-uv run camoufox fetch
-uv run playwright install firefox
+cd web
+npm ci
+npm run build
+cd ..
+go build -o aistudio2api ./cmd/aistudio2api
+./aistudio2api
 ```
 
-**注意**: 安装过程中会自动下载和安装 Camoufox 浏览器（约 600MB），这是项目的核心组件，用于反指纹检测。首次安装可能需要较长时间，请耐心等待。
-
-***
-
-## 🚀 快速开始
+## 快速开始
 
 ### 首次使用（需要认证）
 
-1. **启动图形界面**:
-   ```bash
-   uv run python src/app_launcher.py
+1. **导入本机 Chrome 账户**:
+   ```powershell
+   start.bat setup
    ```
+   扫描结果会列出可导入的 Chrome 登录态，账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录。
 
-2. **配置代理**（建议）:
-   - 在 GUI 中勾选"启用浏览器代理"
-   - 输入您的代理地址（如`http://127.0.0.1:7890`）
+2. **启动图形界面**:
+   - 双击 `start.bat`
+   - 浏览器自动打开 `http://127.0.0.1:2048`
+   - 页面初始状态为 `STOPPED`，默认显示“日志”页面
 
-3. **启动有头模式进行认证**:
-   - 点击"启动有头模式 (新终端)"
-   - **命令行终端**内输入`N`，获取新的认证文件
-   - 命令行终端指`start_webui.bat`启动的终端，或者您运行`uv run python src/app_launcher.py`的终端
-   - 浏览器会自动打开并导航到 AI Studio
-   - 手动登录您的 Google 账号
-   - 确保进入 AI Studio 主页
-   - 在命令行终端按回车键保存认证信息
-   - 认证文件保存情况会在日志里输出，命令行内不会输出内容
+3. **添加其他账户**:
+   - 打开“账户”页面并点击“新增账户”
+   - 填写账户名称、代理、语言和时区
+   - 提交后会打开独立 Camoufox 窗口，在其中登录 Google 并进入 AI Studio
+   - 登录完成后账户自动保存
 
-4. **认证完成后**:
-   - 认证信息会自动保存
-   - 可以关闭有头模式的浏览器和终端
+4. **启动 API**:
+   - 点击“启动服务”启动数据面
+   - 在“日志”页面确认账户、模型和请求状态
+   - API 默认监听 `http://127.0.0.1:2048`
+
+账户操作随状态显示：
+
+| 账户状态 | 可用操作 |
+| --- | --- |
+| `ready` | 编辑、停用、验证、删除 |
+| `disabled` | 编辑、启用、删除 |
+| `auth_required` | 编辑、停用、重新登录、验证、删除 |
+
+“重新登录”只在账户状态为 `auth_required` 时显示。
 
 ### 日常使用（已有认证）
 
-认证保存后，可以使用无头模式：
+1. 双击 `start.bat` 打开管理页面
+2. 点击“启动服务”启用 API
+3. 点击“停止服务”会取消活动请求并关闭 WAA Worker，管理页面与日志保持可用
+4. 再次点击“启动服务”即可恢复 API
 
-1. 启动图形界面:
-   ```bash
-   uv run python src/app_launcher.py
-   ```
-
-2. 点击「启动无头模式」或 「虚拟显示模式」
-
-3. API 服务将在后台运行，默认端口 `2048`
+在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
 ### 快速启动
 
-`start_cmd.bat`：命令行直接启动。
-```
- - --- 请选择启动模式 (未通过命令行参数指定) ---
-  请输入启动模式 ([1] 无头模式, [2] 调试模式; 默认: 1 headless模式，15秒超时):
-```
+`start.bat`：启动管理进程并自动打开网页。
 
-`start_webui.bat`：
-启动前端界面，自动跳转或访问`http://127.0.0.1:9000`进行后续使用，推荐。
+`start.bat -open-ui=false`：启动管理进程但不自动打开网页。
 
-等待出现`ℹ️  INFO    | --- 队列 Worker 已启动 ---`后，即可开始使用API。
+`start.bat setup`：扫描本机 Chrome 账户；也可使用 `--email`、`--profile`、`--login` 或 `--storage-state` 选择明确的认证入口。
 
-
-## 📡 API 使用
+## API 使用
 
 ### OpenAI 兼容接口
 
-服务启动后，可以使用 OpenAI 兼容的 API：
+服务启动后，可以直接使用 OpenAI Chat Completions：
 
 ```bash
-curl -X POST http://localhost:2048/v1/chat/completions \
+curl http://127.0.0.1:2048/v1/chat/completions \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-pro",
-    "messages": [
-      {"role": "user", "content": "Hello, world!"}
-    ]
+    "model": "gemini-3.7-flash",
+    "messages": [{"role": "user", "content": "Hello, world!"}],
+    "stream": true
   }'
 ```
 
 ### 客户端配置示例
 
+| 协议 | Base URL | API key |
+| --- | --- | --- |
+| OpenAI Chat / Responses | `http://127.0.0.1:2048/v1` | `.env` 中的 `PROXY_API_KEY` |
+| Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
+| Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
+
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。
+
 以 Cherry Studio 为例：
 
 1. 打开 Cherry Studio 设置
-2. 在"连接"部分添加新模型:
-   - **API 主机地址**: `http://127.0.0.1:2048/v1/`
-   - **模型名称**: `gemini-2.5-pro` (或其他 AI Studio 支持的模型)
-   - **API 密钥**: 留空或输入任意字符，如`123`
+2. 新增 OpenAI 兼容提供商
+3. API 主机地址填写 `http://127.0.0.1:2048/v1`
+4. API 密钥填写 `.env` 中的 `PROXY_API_KEY`
+5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.6-flash`、`gemini-3.7-flash`
+
+主要端点：
+
+| 能力 | 端点 |
+| --- | --- |
+| 模型 | `GET /v1/models`、`GET /v1beta/models` |
+| OpenAI Chat | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
+| Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens` |
+| 图片 | `POST /v1/images/generations` |
+| 语音 | `POST /v1/audio/speech` |
+| 音乐 | Gemini `generateContent` + `responseModalities: ["AUDIO"]` |
+| 视频 | `POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 
 ### TTS 语音生成
 
-支持 Gemini 2.5 Flash/Pro TTS 模型进行单说话人或多说话人音频生成：
-
-#### 单说话人示例
-
 ```bash
-curl -X POST http://localhost:2048/generate-speech \
+curl http://127.0.0.1:2048/v1/audio/speech \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash-preview-tts",
-    "contents": "Hello, this is a test.",
-    "generationConfig": {
-      "responseModalities": ["AUDIO"],
-      "speechConfig": {
-        "voiceConfig": {
-          "prebuiltVoiceConfig": {"voiceName": "Kore"}
-        }
-      }
-    }
-  }'
+    "model": "gemini-3.1-flash-tts-preview",
+    "input": "Hello, this is a test.",
+    "voice": "Kore",
+    "response_format": "wav"
+  }' \
+  --output speech.wav
 ```
 
-#### 多说话人示例
+多说话人语音可以通过 Gemini `generateContent` 的 `multiSpeakerVoiceConfig` 配置。
 
 ```bash
-curl -X POST http://localhost:2048/generate-speech \
+curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateContent \
+  -H "x-goog-api-key: 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash-preview-tts",
-    "contents": "Joe: How are you?\nJane: I am fine, thanks!",
+    "contents": [{"parts": [{"text": "Joe: How are you?\nJane: I am fine, thanks!"}]}],
     "generationConfig": {
       "responseModalities": ["AUDIO"],
       "speechConfig": {
@@ -247,96 +235,95 @@ curl -X POST http://localhost:2048/generate-speech \
         }
       }
     }
-  }'
+  }' --output speech.json
 ```
 
-**可用语音**: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus 等 30 种。
+可用语音由实时模型目录中的 `capability_options.voices` 返回。
 
-**端点**:
-- `POST /generate-speech`
-- `POST /v1beta/models/{model}:generateContent` (兼容官方 API)
-
-**返回格式**: 音频数据以 Base64 编码的 WAV 格式在 `candidates[0].content.parts[0].inlineData.data` 中返回。
-
-### 图片生成 (Imagen 3)
+### 图片生成 (Nano Banana)
 
 ```bash
-curl -X POST http://localhost:2048/generate-image \
+curl http://127.0.0.1:2048/v1/images/generations \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "A beautiful sunset over mountains",
-    "model": "imagen-3.0-generate-002",
-    "number_of_images": 1,
-    "aspect_ratio": "16:9"
+    "model": "gemini-3.1-flash-image",
+    "prompt": "A cute cat wearing a tiny hat",
+    "n": 1,
+    "size": "1024x1024"
   }'
 ```
 
-**端点**: `POST /generate-image`
-
-### 视频生成 (Veo 2)
+### 视频生成 (Veo)
 
 ```bash
-curl -X POST http://localhost:2048/generate-video \
+curl http://127.0.0.1:2048/v1/videos \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "A drone flying over a forest",
-    "model": "veo-2.0-generate-001",
-    "aspect_ratio": "16:9",
-    "duration_seconds": 5
+    "model": "veo-3.1-fast-generate-preview",
+    "prompt": "A drone flying over a forest"
   }'
 ```
 
-**端点**: `POST /generate-video`
+创建操作后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果。
 
-### Nano Banana (Gemini 图片生成)
+## 模型
 
-```bash
-curl -X POST http://localhost:2048/nano/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-2.5-flash-image",
-    "contents": [{"parts": [{"text": "A cute cat wearing a tiny hat"}]}]
-  }'
-```
+模型目录会随 AI Studio 更新，客户端可以从 `/v1/models` 或 `/v1beta/models` 读取。当前目录包含：
 
-**端点**: `POST /nano/generate`
+| Model ID | Display name | Input | Output | Methods |
+| --- | --- | ---: | ---: | --- |
+| `antigravity-preview-05-2026` | Antigravity Agent Preview | 131072 | 65536 | `countTokens, generateContent` |
+| `gemini-2.5-flash` | Gemini 2.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-flash-image` | Nano Banana | 32768 | 32768 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-2.5-flash-lite` | Gemini 2.5 Flash-Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-flash-preview-tts` | Gemini 2.5 Flash Preview TTS | 8192 | 16384 | `countTokens, generateContent` |
+| `gemini-2.5-pro` | Gemini 2.5 Pro | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-pro-preview-tts` | Gemini 2.5 Pro Preview TTS | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3-flash-preview` | Gemini 3 Flash Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3-pro-image` | Nano Banana Pro | 131072 | 32768 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-image` | Nano Banana 2 | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-tts-preview` | Gemini 3.1 Flash TTS Preview | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.5-flash` | Gemini 3.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.6-flash` | Gemini 3.6 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.7-flash` | Gemini 3.7 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-flash-latest` | Gemini Flash Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-flash-lite-latest` | Gemini Flash-Lite Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-omni-flash-preview` | Gemini Omni Flash Preview | 131072 | 65536 | `countTokens, generateContent` |
+| `gemini-pro-latest` | Gemini Pro Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-robotics-er-1.6-preview` | Gemini Robotics-ER 1.6 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-robotics-er-2-preview` | Gemini Robotics-ER 2 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemma-4-26b-a4b-it` | Gemma 4 26B A4B IT | 262144 | 32768 | `countTokens, generateContent` |
+| `gemma-4-31b-it` | Gemma 4 31B IT | 262144 | 32768 | `countTokens, generateContent` |
+| `lyria-3-clip-preview` | Lyria 3 Clip Preview | 1048576 | 65536 | `countTokens, generateContent` |
+| `lyria-3-pro-preview` | Lyria 3 Pro Preview | 1048576 | 65536 | `countTokens, generateContent` |
+| `veo-3.1-fast-generate-preview` | Veo 3.1 fast | 480 | 8192 | `predictLongRunning` |
+| `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
+| `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
 
-**详细文档**: 参见 [媒体生成指南](docs/media-generation-guide.md)
+公开端点实现标准 `generateContent`、`countTokens` 和 `predictLongRunning`。`batchGenerateContent` 和 `createCachedContent` 只保留实时模型元数据，bidi-only 与 private Interaction 模型不进入公开模型列表。
 
-## 🏗️ 项目架构
+## 项目架构
 
-```
+```text
 AIStudio2API/
-├── src/                         # 源码目录
-│   ├── app_launcher.py          # 图形界面启动器
-│   ├── launch_camoufox.py       # 命令行启动器
-│   ├── server.py                # 主服务器
-│   ├── manager/                 # WebUI 管理器包
-│   ├── api/                     # API 处理模块
-│   ├── browser/                 # 浏览器自动化模块
-│   ├── config/                  # 配置管理
-│   ├── models/                  # 数据模型
-│   ├── tts/                     # TTS 语音生成模块
-│   ├── media/                   # 媒体生成模块 (Imagen/Veo/Nano)
-│   ├── proxy/                   # 流式代理
-│   ├── worker/                  # 多Worker管理模块
-│   ├── gateway.py               # 多Worker负载均衡网关
-│   └── static/                  # 静态资源
-├── data/                        # 运行时数据目录
-│   ├── auth_profiles/           # 认证文件
-│   ├── certs/                   # 证书文件
-│   └── key.txt                  # API 密钥
-├── camoufox/                    # Camoufox 脚本
-├── docker/                      # Docker 配置
-├── docs/                        # 详细文档
-├── logs/                        # 日志文件
-├── start_webui.bat              # WebUI 启动脚本
-├── start_cmd.bat                # 命令行启动脚本
-├── setup.bat                    # Windows 安装脚本
-└── setup.sh                     # Linux/macOS 安装脚本
+├── cmd/aistudio2api/        # 程序入口、管理端与运行时
+├── internal/aistudio/       # AI Studio 协议、认证、模型与媒体
+├── internal/api/            # OpenAI、Responses、Anthropic 与 Gemini 适配
+├── internal/chromeauth/     # Windows Chrome 与 DBSC 导入
+├── internal/camoufoxnative/ # Camoufox BiDi、登录与 WAA Worker
+├── internal/webui/          # 内嵌前端产物
+├── web/                     # Vue 3 + TypeScript 管理页面
+├── docs/                    # 开发文档与协议规范
+└── start.bat                # Windows 一键启动入口
 ```
 
-## ⚙️ 配置说明
+## 配置说明
 
 ### 环境变量配置
 
@@ -344,59 +331,65 @@ AIStudio2API/
 
 ```bash
 cp .env.example .env
-# 编辑 .env 文件进行自定义配置
 ```
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
+| `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
+| `PROXY_API_KEY` | 空 | 公开 API key |
+| `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理 |
+| `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
+| `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间 |
 
 ### 端口配置
 
-- **FastAPI 服务**: 默认端口 `2048`
-- **Camoufox 调试**: 默认端口 `40222`
-- **流式代理**: 默认端口 `3120`
+- **管理页面与 API**: 默认端口 `2048`
+- **Camoufox**: 由程序动态分配本机端口
 
-## 🔧 高级功能
+## 高级功能
 
 ### 代理配置
 
-支持通过代理访问 AI Studio：
+支持通过无认证信息的 HTTP、HTTPS 或 SOCKS5 代理访问 AI Studio：
 
-1. 在 GUI 中启用"浏览器代理"
-2. 输入代理地址（如 `http://127.0.0.1:7890`）
-3. 点击"测试"按钮验证代理连接
+1. 在“服务配置”中设置全局代理
+2. 在“账户”页面编辑单个账户时可以设置账户专用代理
+3. 账户代理同时用于登录、WAA 与业务请求
 
 ### 认证文件管理
 
-- 认证文件存储在 `data/auth_profiles/` 目录
-- 支持多个认证文件的保存和切换
-- 通过 GUI 的"管理认证文件"功能进行管理
+- 认证文件默认存储在 `auth/` 目录
+- 新增账户会直接启动隔离 Camoufox 登录
+- `ready` 账户可以编辑、停用、验证和删除
+- `auth_required` 账户可以重新登录
 
-## 📚 详细文档
+## 详细文档
 
-- [安装指南](docs/installation-guide.md)
-- [环境变量配置](docs/environment-configuration.md)
-- [认证设置](docs/authentication-setup.md)
-- [API 使用指南](docs/api-usage.md)
-- [多Worker并发模式](docs/multi-worker-guide.md)
-- [故障排除](docs/troubleshooting.md)
+- [开发与贡献](docs/development.md)
+- [Google AI Studio 协议规范](docs/protocol.md)
 
-## ⚠️ 重要提示
+## 重要提示
 
 ### 关于 Camoufox
 
-本项目使用 [Camoufox](https://camoufox.com/) 浏览器来避免被检测为自动化脚本。Camoufox 基于 Firefox，通过修改底层实现来伪装设备指纹，提供更好的隐蔽性。
+本项目使用 [Camoufox](https://camoufox.com/) 浏览器来降低被检测为自动化脚本的风险。Camoufox 基于 Firefox，通过修改底层实现来保持真实的设备指纹。
+
+Go 直接处理业务请求，业务传输使用与 Camoufox 对齐的 Firefox TLS/HTTP2 配置；Camoufox 用于官方 WAA 初始化、fresh proof 和隔离账户登录。
 
 ### 使用限制
 
-- **客户端管理历史**: 代理不支持 UI 内编辑，客户端需要维护完整的聊天记录
-- **参数支持**: 支持 `temperature`、`max_output_tokens`、`top_p`、`stop` 等参数
-- **认证有效期**: 认证文件可能会过期，需要重新进行认证流程
+- **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
+- **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
+- **认证有效期**: Chrome 导入账户保留 DBSC 续签材料；隔离登录账户失效后在账户页重新登录
 
-## 🔍 故障排除
+## 故障排除
 
 ### Windows 端口被系统保留
 
-如果启动时出现 `端口 30XX (主机 0.0.0.0) 当前被占用` 但任务管理器中找不到占用进程，这通常是 Windows 的 Hyper-V/WSL2/Docker 的 NAT 服务随机保留了端口段。
+如果启动时提示 `LISTEN_ADDR` 配置的端口被占用，任务管理器中又找不到占用进程，可能是 Hyper-V、WSL2 或 Docker 的 NAT 服务保留了端口段。
 
-> ⚠️ **以下所有指令需要在管理员权限的 PowerShell 或 CMD 中运行**
+以下命令需要在管理员权限的 PowerShell 或 CMD 中运行。
 
 #### 1. 查看被 Windows 保留的端口范围
 
@@ -404,42 +397,41 @@ cp .env.example .env
 netsh interface ipv4 show excludedportrange protocol=tcp
 ```
 
-如果 Worker 使用的端口（如 3001-3008）落在输出的 `Start Port` 和 `End Port` 范围内，即为此问题。
-
-#### 2. 临时解决（重启 WinNAT 服务）
+如果 `2048` 落在输出的 `Start Port` 和 `End Port` 范围内，可以修改 `LISTEN_ADDR`，或重启 WinNAT 服务后再次检查：
 
 ```powershell
 net stop winnat
 net start winnat
 ```
 
-重启后再次执行步骤1查看，端口范围通常会变化并释放您需要的端口。
-
-#### 3. 永久解决（将常用端口加入保留白名单）
-
-趁端口空闲时，将开发常用端口永久标记为管理员保留，防止 Windows 再次占用：
+端口空闲后，也可以将 `2048` 加入持久保留：
 
 ```powershell
-netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=20 store=persistent
+netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1 store=persistent
 ```
 
-成功后列表中会出现带 `*` 标记的条目，表示该范围受永久保护。
+常见运行状态：
 
-更多问题排除方案请参阅 [故障排除文档](docs/troubleshooting.md)。
+| 状态 | 处理方法 |
+| --- | --- |
+| 页面未自动打开 | 手动打开 `.env` 中 `LISTEN_ADDR` 对应的地址 |
+| `service_stopped` | 在管理页面点击“启动服务” |
+| 没有可用账户 | 在账户页新增、启用或重新登录账户 |
+| 找不到 Camoufox | 放入 `runtime/camoufox/` 或设置 `CAMOUFOX_PATH` |
 
-## 🤝 贡献
+## 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 📅 开发计划
+## 开发计划
 
 - ✅ **TTS 支持**: 已适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
 - ✅ **媒体生成**: 已支持 Imagen 3、Veo 2、Nano Banana 图片/视频生成
 - **点击逻辑统一**: 将 `_safe_click` 方法提取到全局 `operations.py`，统一所有控制器的点击操作
-- **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
+- ✅ **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
 - **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
-- **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
-- **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
+- ✅ **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
+- ✅ **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
 - **单元测试**: 增加核心模块（特别是浏览器自动化部分）的测试覆盖率
 - ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性 (这项或许不可能实现) (fix:2025/12/09 这项已实现)
