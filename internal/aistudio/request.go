@@ -21,6 +21,10 @@ func (e *UnverifiedProtocolError) Error() string {
 
 // EncodeCountTokensRequest 编码现场确认的 CountTokens 请求
 func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
+	tools, explicitTools, err := encodeRequestedTools(request.Tools)
+	if err != nil {
+		return nil, err
+	}
 	contents, err := encodeContents(request.Contents)
 	if err != nil {
 		return nil, err
@@ -28,10 +32,13 @@ func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 	if len(contents) == 0 && request.System == "" {
 		return nil, fmt.Errorf("CountTokens contents 不能为空")
 	}
-	if request.System != "" || countTokensNeedsGenerateRequest(request.Contents) {
+	if request.System != "" || explicitTools || countTokensNeedsGenerateRequest(request.Contents) {
 		length := 2
 		if request.System != "" {
 			length = 6
+		}
+		if explicitTools {
+			length = 7
 		}
 		generate := make([]any, length)
 		generate[0] = wireModelName(request.Model)
@@ -40,6 +47,9 @@ func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 		}
 		if request.System != "" {
 			generate[5] = encodeSystemInstruction(request.System)
+		}
+		if explicitTools {
+			generate[6] = tools
 		}
 		return json.Marshal([]any{wireModelName(request.Model), nil, generate})
 	}
@@ -98,6 +108,7 @@ func encodeContents(contents []Content) ([]any, error) {
 }
 
 func encodeContent(content Content, functionNames map[string]string) ([]any, error) {
+	content = attachYouTubeMedia(content)
 	role := ""
 	switch content.Role {
 	case RoleUser:
@@ -138,6 +149,9 @@ func encodePart(part Part) ([]any, error) {
 	if part.InlineData != nil {
 		variants++
 	}
+	if part.ExternalMedia != nil {
+		variants++
+	}
 	if part.File != nil {
 		variants++
 	}
@@ -160,13 +174,28 @@ func encodePart(part Part) ([]any, error) {
 		return nil, fmt.Errorf("part 必须且只能设置一种内容")
 	}
 	if part.Text != "" {
-		return setPartThoughtSignature([]any{nil, part.Text}, part.ThoughtSignature), nil
+		wire := []any{nil, part.Text}
+		if part.Thought {
+			for len(wire) <= 12 {
+				wire = append(wire, nil)
+			}
+			wire[12] = true
+		}
+		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
 	if part.InlineData != nil {
 		if part.InlineData.MIME == "" || len(part.InlineData.Data) == 0 {
 			return nil, fmt.Errorf("inline data 缺少 MIME 或数据")
 		}
 		wire := []any{nil, nil, []any{part.InlineData.MIME, base64.StdEncoding.EncodeToString(part.InlineData.Data)}}
+		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+	}
+	if part.ExternalMedia != nil {
+		if part.ExternalMedia.MIME == "" || part.ExternalMedia.URL == "" {
+			return nil, fmt.Errorf("外部媒体缺少 MIME 或 URL")
+		}
+		wire := make([]any, 7)
+		wire[6] = []any{part.ExternalMedia.MIME, part.ExternalMedia.URL}
 		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
 	if part.File != nil {
@@ -252,8 +281,9 @@ func wireModelName(model string) string {
 
 func countTokensNeedsGenerateRequest(contents []Content) bool {
 	for _, content := range contents {
+		content = attachYouTubeMedia(content)
 		for _, part := range content.Parts {
-			if part.InlineData != nil || part.File != nil || part.FunctionCall != nil || part.FunctionResult != nil ||
+			if part.InlineData != nil || part.ExternalMedia != nil || part.File != nil || part.FunctionCall != nil || part.FunctionResult != nil ||
 				part.ExecutableCode != nil || part.CodeExecutionResult != nil {
 				return true
 			}

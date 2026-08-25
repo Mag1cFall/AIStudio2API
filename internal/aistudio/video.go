@@ -41,7 +41,6 @@ type VideoOperation struct {
 	ID   string
 	Done bool
 	File *FileRef
-	Raw  json.RawMessage
 }
 
 // EncodeGenerateVideoRequest 编码当前网页 GenerateVideo 数组协议
@@ -127,7 +126,7 @@ func ParseVideoOperation(source io.Reader, method string) (VideoOperation, error
 	if err != nil {
 		return VideoOperation{}, withMethod(err, method)
 	}
-	operation := VideoOperation{Raw: append(json.RawMessage(nil), raw...)}
+	var operation VideoOperation
 	if method == "GenerateVideo" {
 		if len(root) > 0 && !isJSONNull(root[0]) {
 			operation.ID, err = rawString(root[0], "$[0]", raw)

@@ -59,15 +59,11 @@ export interface Model {
   capability_options?: Record<string, string[]>
 }
 
-export type QuotaState = 'available' | 'cooldown' | 'limited' | 'unknown'
-
-export interface Quota {
+export interface Cooldown {
   account_id: string
   model_id: string
-  state: QuotaState
-  remaining?: number
-  limit?: number
-  reset_at?: string
+  until: string
+  reason?: string
 }
 
 export type RequestState = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
@@ -87,6 +83,10 @@ export interface ServiceConfig {
   proxy: string
   init_timeout: string
   request_timeout: string
+  warm_worker_limit: number
+  warm_startup_concurrency: number
+  per_account_concurrency: number
+  temporary_chat: boolean
 }
 
 export type AdminEvent =
@@ -94,7 +94,7 @@ export type AdminEvent =
   | { type: 'log'; data: AdminLog }
   | { type: 'account'; data: Account }
   | { type: 'models'; data: { models: Model[] } }
-  | { type: 'quota'; data: Quota }
+  | { type: 'cooldowns'; data: Cooldown[] }
   | { type: 'request'; data: RequestSummary }
 
 export type PlaygroundProtocol = 'openai-chat' | 'openai-responses' | 'anthropic' | 'gemini'

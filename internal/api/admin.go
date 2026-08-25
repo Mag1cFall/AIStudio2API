@@ -23,7 +23,7 @@ type AdminService interface {
 	ClearLogs(context.Context) error
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, RuntimeConfig) (RuntimeConfig, error)
-	Quotas(context.Context) ([]AdminQuota, error)
+	Cooldowns(context.Context) ([]AdminCooldown, error)
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
 	Events(context.Context) (<-chan AdminEvent, error)
@@ -90,24 +90,26 @@ type AccountInput struct {
 	Timezone string `json:"timezone"`
 }
 
-// RuntimeConfig 表示六项全局运行配置
+// RuntimeConfig 表示全局运行配置
 type RuntimeConfig struct {
-	AuthStates     string `json:"auth_states"`
-	ListenAddr     string `json:"listen_addr"`
-	APIKey         string `json:"proxy_api_key"`
-	Proxy          string `json:"proxy"`
-	InitTimeout    string `json:"init_timeout"`
-	RequestTimeout string `json:"request_timeout"`
+	AuthStates             string `json:"auth_states"`
+	ListenAddr             string `json:"listen_addr"`
+	APIKey                 string `json:"proxy_api_key"`
+	Proxy                  string `json:"proxy"`
+	InitTimeout            string `json:"init_timeout"`
+	RequestTimeout         string `json:"request_timeout"`
+	WarmWorkerLimit        int    `json:"warm_worker_limit"`
+	WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
+	PerAccountConcurrency  int    `json:"per_account_concurrency"`
+	TemporaryChat          bool   `json:"temporary_chat"`
 }
 
-// AdminQuota 表示账户模型配额
-type AdminQuota struct {
-	AccountID string     `json:"account_id"`
-	ModelID   string     `json:"model_id"`
-	State     string     `json:"state"`
-	Remaining *int64     `json:"remaining,omitempty"`
-	Limit     *int64     `json:"limit,omitempty"`
-	ResetAt   *time.Time `json:"reset_at,omitempty"`
+// AdminCooldown 表示账户模型冷却
+type AdminCooldown struct {
+	AccountID string    `json:"account_id"`
+	ModelID   string    `json:"model_id"`
+	Until     time.Time `json:"until"`
+	Reason    string    `json:"reason,omitempty"`
 }
 
 // AdminRequest 表示活动请求摘要
@@ -137,7 +139,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/logs", s.handleClearLogs)
 	mux.HandleFunc("GET /api/config", s.handleRuntimeConfig)
 	mux.HandleFunc("PUT /api/config", s.handleUpdateRuntimeConfig)
-	mux.HandleFunc("GET /api/quota", s.handleQuotas)
+	mux.HandleFunc("GET /api/cooldowns", s.handleCooldowns)
 	mux.HandleFunc("GET /api/requests", s.handleRequests)
 	mux.HandleFunc("POST /api/requests/{id}/cancel", s.handleCancelRequest)
 	mux.HandleFunc("GET /api/events", s.handleAdminEvents)
@@ -285,13 +287,13 @@ func (s *server) handleUpdateRuntimeConfig(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *server) handleQuotas(w http.ResponseWriter, r *http.Request) {
-	quotas, err := s.config.Admin.Quotas(r.Context())
+func (s *server) handleCooldowns(w http.ResponseWriter, r *http.Request) {
+	cooldowns, err := s.config.Admin.Cooldowns(r.Context())
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]AdminQuota{"quotas": quotas})
+	writeJSON(w, http.StatusOK, map[string][]AdminCooldown{"cooldowns": cooldowns})
 }
 
 func (s *server) handleRequests(w http.ResponseWriter, r *http.Request) {

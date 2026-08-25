@@ -27,6 +27,7 @@ go build -o "%APP%" ./cmd/aistudio2api
 if errorlevel 1 goto failed
 
 :ready
+if not defined CAMOUFOX_PATH if not exist "%CD%\runtime\camoufox\camoufox.exe" if not exist "%LOCALAPPDATA%\camoufox\camoufox\Cache\camoufox.exe" echo Camoufox will be downloaded automatically on first launch
 "%APP%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 goto finished

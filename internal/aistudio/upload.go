@@ -235,7 +235,7 @@ func (t *MakerSuiteHTTPTransport) DownloadDrive(ctx context.Context, accountID s
 			message = http.StatusText(response.StatusCode)
 		}
 		return Media{}, release(&RPCError{
-			Method: "DriveDownload", StatusCode: response.StatusCode, Message: message, Raw: append(json.RawMessage(nil), data...),
+			Method: "DriveDownload", StatusCode: response.StatusCode, Message: message,
 		})
 	}
 	media := Media{Data: data, MIME: response.Header.Get("Content-Type"), Name: driveFilename(response.Header.Get("Content-Disposition"))}

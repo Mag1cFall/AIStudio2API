@@ -35,7 +35,7 @@ type AccountState string
 const (
 	// AccountReady 表示账户可以接收请求
 	AccountReady AccountState = "ready"
-	// AccountBusy 表示账户已有独占请求
+	// AccountBusy 表示账户存在活动请求
 	AccountBusy AccountState = "busy"
 	// AccountCooldown 表示账户或模型处于冷却期
 	AccountCooldown AccountState = "cooldown"
@@ -85,45 +85,62 @@ type accountRuntimeState struct {
 
 // Account 表示一个稳定目录对应的 AI Studio 账户
 type Account struct {
-	ID            string                `json:"id"`
-	Directory     string                `json:"-"`
-	ConfigPath    string                `json:"-"`
-	StoragePath   string                `json:"-"`
-	RuntimePath   string                `json:"-"`
-	Config        AccountConfig         `json:"config"`
-	StorageState  StorageState          `json:"-"`
-	Models        []Model               `json:"models,omitempty"`
-	Quotas        map[string]QuotaState `json:"quota,omitempty"`
-	State         AccountState          `json:"state"`
-	LastUsed      time.Time             `json:"last_used,omitempty"`
-	runtime       accountRuntimeState
-	leased        bool
-	stateMessage  string
-	initializedAt time.Time
+	ID             string        `json:"id"`
+	Directory      string        `json:"-"`
+	ConfigPath     string        `json:"-"`
+	StoragePath    string        `json:"-"`
+	RuntimePath    string        `json:"-"`
+	Config         AccountConfig `json:"config"`
+	StorageState   StorageState  `json:"-"`
+	Models         []Model       `json:"models,omitempty"`
+	State          AccountState  `json:"state"`
+	LastUsed       time.Time     `json:"last_used,omitempty"`
+	runtime        accountRuntimeState
+	active         int
+	exclusive      bool
+	leaseLock      *flock.Flock
+	leasePath      string
+	storageMu      sync.Mutex
+	authGeneration uint64
+	stateMessage   string
+	initializedAt  time.Time
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
 type AccountStatus struct {
-	ID            string                `json:"id"`
-	Label         string                `json:"label"`
-	State         AccountState          `json:"state"`
-	Enabled       bool                  `json:"enabled"`
-	Proxy         string                `json:"proxy"`
-	Locale        string                `json:"locale"`
-	Timezone      string                `json:"timezone"`
-	Models        []string              `json:"models"`
-	Quota         map[string]QuotaState `json:"quota,omitempty"`
-	CooldownUntil *time.Time            `json:"cooldown_until,omitempty"`
-	LastUsed      *time.Time            `json:"last_used,omitempty"`
-	Message       string                `json:"message,omitempty"`
+	ID        string                   `json:"id"`
+	Label     string                   `json:"label"`
+	State     AccountState             `json:"state"`
+	Enabled   bool                     `json:"enabled"`
+	Proxy     string                   `json:"proxy"`
+	Locale    string                   `json:"locale"`
+	Timezone  string                   `json:"timezone"`
+	Models    []string                 `json:"models"`
+	Cooldowns map[string]CooldownState `json:"-"`
+	LastUsed  *time.Time               `json:"last_used,omitempty"`
+	Message   string                   `json:"message,omitempty"`
 }
 
 // AccountSelection 描述账户调度所需的能力或粘性条件
 type AccountSelection struct {
-	ModelID    string
-	Method     string
-	AccountID  string
-	ResourceID string
+	ModelID           string
+	Method            string
+	AccountID         string
+	ResourceID        string
+	AllowedAccountIDs []string
+}
+
+// BootstrapModelID 是 WAA 初始化使用的实时模型
+const BootstrapModelID = "gemini-flash-latest"
+
+// AccountCandidateGroups 表示 warm 与 standby 账户的实时可调度状态
+type AccountCandidateGroups struct {
+	WarmReady        []string
+	WarmBusy         []string
+	StandbyReady     []string
+	StandbyBusy      []string
+	EarliestCooldown time.Time
+	Eligible         bool
 }
 
 // AccountStore 从一个或多个账户文件或目录加载账户
@@ -131,26 +148,27 @@ type AccountStore struct {
 	paths []string
 }
 
-// AccountPool 在账户之间执行独占能力调度
+// AccountPool 在账户之间执行能力与并发槽位调度
 type AccountPool struct {
-	mu        sync.Mutex
-	accounts  []*Account
-	byID      map[string]*Account
-	resources map[string]string
-	next      int
-	changed   chan struct{}
+	mu                    sync.Mutex
+	accounts              []*Account
+	byID                  map[string]*Account
+	resources             map[string]string
+	perAccountConcurrency int
+	next                  int
+	changed               chan struct{}
 }
 
-// AccountLease 表示一个账户的跨进程独占租约
+// AccountLease 表示一个账户请求槽位
 type AccountLease struct {
-	pool      *AccountPool
-	account   *Account
-	lock      *flock.Flock
-	leasePath string
-	operation sync.Mutex
-	released  bool
-	once      sync.Once
-	err       error
+	pool           *AccountPool
+	account        *Account
+	exclusive      bool
+	authGeneration uint64
+	operation      sync.Mutex
+	released       bool
+	once           sync.Once
+	err            error
 }
 
 // DefaultAccountConfig 返回新账户的最小配置
@@ -312,23 +330,23 @@ func (s *AccountStore) Delete(account *Account) error {
 	if !info.IsDir() {
 		return fmt.Errorf("账户路径不是目录: %s", directory)
 	}
-	leaseLock, leasePath, err := acquireAccountFileLease(account.StoragePath)
+	leaseLock, _, err := acquireAccountFileLease(account.StoragePath)
 	if errors.Is(err, errAccountLeaseBusy) {
 		return fmt.Errorf("%w: %s", ErrAccountLeased, account.ID)
 	}
 	if err != nil {
 		return err
 	}
+	if err := os.RemoveAll(directory); err != nil {
+		if leaseLock != nil {
+			_ = leaseLock.Unlock()
+		}
+		return fmt.Errorf("删除账户目录: %w", err)
+	}
 	if leaseLock != nil {
 		if err := leaseLock.Unlock(); err != nil {
 			return fmt.Errorf("释放账户删除租约: %w", err)
 		}
-		if err := os.Remove(leasePath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("删除账户租约文件: %w", err)
-		}
-	}
-	if err := os.RemoveAll(directory); err != nil {
-		return fmt.Errorf("删除账户目录: %w", err)
 	}
 	return nil
 }
@@ -448,19 +466,14 @@ func modelMatchesID(model Model, modelID string) bool {
 }
 
 // NewAccountPool 创建账户独占调度池
-func NewAccountPool(accounts []*Account) *AccountPool {
+func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool {
 	p := &AccountPool{
-		accounts:  append([]*Account(nil), accounts...),
-		byID:      make(map[string]*Account, len(accounts)),
-		resources: make(map[string]string),
-		changed:   make(chan struct{}),
+		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
+		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
 	}
 	for _, account := range p.accounts {
 		if account == nil {
 			continue
-		}
-		if account.Quotas == nil {
-			account.Quotas = make(map[string]QuotaState)
 		}
 		if account.runtime.Cooldowns == nil {
 			account.runtime.Cooldowns = make(map[string]CooldownState)
@@ -500,9 +513,6 @@ func (p *AccountPool) Add(account *Account) error {
 	if _, exists := p.byID[account.ID]; exists {
 		return fmt.Errorf("账户已存在: %s", account.ID)
 	}
-	if account.Quotas == nil {
-		account.Quotas = make(map[string]QuotaState)
-	}
 	if account.runtime.Cooldowns == nil {
 		account.runtime.Cooldowns = make(map[string]CooldownState)
 	}
@@ -529,21 +539,31 @@ func (p *AccountPool) Remove(accountID string, deleteDirectory func(*Account) er
 		return nil, ErrAccountNotFound
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	accountID = strings.TrimSpace(accountID)
 	account := p.byID[accountID]
 	if account == nil {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrAccountNotFound, accountID)
 	}
-	if account.leased {
+	if account.exclusive || account.active > 0 {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrAccountLeased, accountID)
 	}
 	if deleteDirectory == nil {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("账户目录删除函数为空")
 	}
+	account.exclusive = true
+	p.notifyLocked()
+	p.mu.Unlock()
 	if err := deleteDirectory(account); err != nil {
+		p.mu.Lock()
+		account.exclusive = false
+		p.notifyLocked()
+		p.mu.Unlock()
 		return nil, err
 	}
+	p.mu.Lock()
 	for resourceID, owner := range p.resources {
 		if owner == accountID {
 			delete(p.resources, resourceID)
@@ -560,10 +580,11 @@ func (p *AccountPool) Remove(accountID string, deleteDirectory func(*Account) er
 		p.next = 0
 	}
 	p.notifyLocked()
+	p.mu.Unlock()
 	return account, nil
 }
 
-// Acquire 为模型轮询获取一个独占账户
+// Acquire 为模型轮询获取一个账户槽位
 func (p *AccountPool) Acquire(ctx context.Context, model string) (*AccountLease, error) {
 	return p.AcquireFor(ctx, AccountSelection{ModelID: model})
 }
@@ -581,12 +602,16 @@ func (p *AccountPool) AcquireAccount(ctx context.Context, accountID string) (*Ac
 			p.mu.Unlock()
 			return nil, fmt.Errorf("%w: %s", ErrAccountNotFound, accountID)
 		}
-		if !account.leased {
+		if !account.exclusive && account.active == 0 {
 			leaseLock, leasePath, err := acquireAccountFileLease(account.StoragePath)
 			if err == nil {
-				account.leased = true
+				account.exclusive = true
+				account.leaseLock = leaseLock
+				account.leasePath = leasePath
 				p.mu.Unlock()
-				return &AccountLease{pool: p, account: account, lock: leaseLock, leasePath: leasePath}, nil
+				return &AccountLease{
+					pool: p, account: account, exclusive: true, authGeneration: account.authGeneration,
+				}, nil
 			}
 			if !errors.Is(err, errAccountLeaseBusy) {
 				p.mu.Unlock()
@@ -612,7 +637,7 @@ func (p *AccountPool) AcquireAccount(ctx context.Context, accountID string) (*Ac
 	}
 }
 
-// AcquireFor 按模型方法账户或资源粘性获取独占账户
+// AcquireFor 按模型方法账户或资源粘性获取账户槽位
 func (p *AccountPool) AcquireFor(ctx context.Context, selection AccountSelection) (*AccountLease, error) {
 	if p == nil {
 		return nil, ErrNoEligibleAccount
@@ -696,11 +721,57 @@ func (l *AccountLease) SaveStorageState(state StorageState) error {
 	if l.released {
 		return fmt.Errorf("账户租约已释放")
 	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
 	if err := WriteStorageState(l.account.StoragePath, state); err != nil {
 		return err
 	}
 	l.pool.mu.Lock()
 	l.account.StorageState = state
+	l.pool.mu.Unlock()
+	return nil
+}
+
+// RefreshStorageState 保证并发认证失效只续签一次
+func (l *AccountLease) RefreshStorageState(update func(*StorageState) error, after func() error) error {
+	if l == nil || l.account == nil || l.pool == nil || update == nil {
+		return fmt.Errorf("账户租约未初始化")
+	}
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		return fmt.Errorf("账户租约已释放")
+	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	l.pool.mu.Lock()
+	currentGeneration := l.account.authGeneration
+	l.pool.mu.Unlock()
+	if l.authGeneration != currentGeneration {
+		l.authGeneration = currentGeneration
+		return nil
+	}
+	state, err := LoadStorageState(l.account.StoragePath)
+	if err != nil {
+		return err
+	}
+	if err := update(&state); err != nil {
+		return err
+	}
+	if err := WriteStorageState(l.account.StoragePath, state); err != nil {
+		return err
+	}
+	l.pool.mu.Lock()
+	l.account.StorageState = state
+	l.pool.mu.Unlock()
+	if after != nil {
+		if err := after(); err != nil {
+			return err
+		}
+	}
+	l.pool.mu.Lock()
+	l.account.authGeneration++
+	l.authGeneration = l.account.authGeneration
 	l.pool.mu.Unlock()
 	return nil
 }
@@ -715,6 +786,8 @@ func (l *AccountLease) SaveConfig(value AccountConfig) error {
 	if l.released {
 		return fmt.Errorf("账户租约已释放")
 	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
 	if err := writeAccountConfig(l.account.ConfigPath, value); err != nil {
 		return err
 	}
@@ -743,6 +816,8 @@ func (l *AccountLease) ReloadStorageState() (StorageState, error) {
 	if l.released {
 		return StorageState{}, fmt.Errorf("账户租约已释放")
 	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
 	state, err := LoadStorageState(l.account.StoragePath)
 	if err != nil {
 		return StorageState{}, err
@@ -763,7 +838,37 @@ func (l *AccountLease) BindResource(resourceID string, kind string) error {
 	if l.released {
 		return fmt.Errorf("账户租约已释放")
 	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
 	return l.pool.BindResourceKind(resourceID, l.account.ID, kind)
+}
+
+// MergeSetCookieHeaders 将响应 Cookie 合并到账户最新持久状态
+func (l *AccountLease) MergeSetCookieHeaders(headers []string, requestURL string, now time.Time) error {
+	if l == nil || l.account == nil || l.pool == nil {
+		return fmt.Errorf("账户租约未初始化")
+	}
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		return fmt.Errorf("账户租约已释放")
+	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	state, err := LoadStorageState(l.account.StoragePath)
+	if err != nil {
+		return err
+	}
+	if err := state.MergeSetCookieHeaders(headers, requestURL, now); err != nil {
+		return err
+	}
+	if err := WriteStorageState(l.account.StoragePath, state); err != nil {
+		return err
+	}
+	l.pool.mu.Lock()
+	l.account.StorageState = state
+	l.pool.mu.Unlock()
+	return nil
 }
 
 // Release 释放账户文件和进程内租约
@@ -775,16 +880,19 @@ func (l *AccountLease) Release() error {
 		l.operation.Lock()
 		defer l.operation.Unlock()
 		l.released = true
-		if l.lock != nil {
-			if err := l.lock.Unlock(); err != nil {
-				l.err = err
-			}
-			if err := os.Remove(l.leasePath); err != nil && !os.IsNotExist(err) && l.err == nil {
-				l.err = err
-			}
-		}
 		l.pool.mu.Lock()
-		l.account.leased = false
+		if l.exclusive {
+			l.account.exclusive = false
+		} else if l.account.active > 0 {
+			l.account.active--
+		}
+		if l.account.active == 0 && !l.account.exclusive && l.account.leaseLock != nil {
+			if err := l.account.leaseLock.Unlock(); err != nil {
+				l.err = err
+			}
+			l.account.leaseLock = nil
+			l.account.leasePath = ""
+		}
 		l.pool.notifyLocked()
 		l.pool.mu.Unlock()
 	})
@@ -829,12 +937,6 @@ func (p *AccountPool) MarkCooldown(accountID string, modelID string, until time.
 		return err
 	}
 	account.runtime = runtimeState
-	quota := account.Quotas[modelID]
-	quota.ModelID = modelID
-	quota.CooldownUntil = timePointer(until)
-	quota.Reason = reason
-	quota.UpdatedAt = time.Now()
-	account.Quotas[modelID] = quota
 	p.notifyLocked()
 	return nil
 }
@@ -924,10 +1026,10 @@ func (p *AccountPool) Status() []AccountStatus {
 			continue
 		}
 		state := account.State
-		cooldown, active := accountCooldown(account, "", now)
+		_, active := accountCooldown(account, "", now)
 		if !account.Config.Enabled {
 			state = AccountDisabled
-		} else if account.leased {
+		} else if account.exclusive || account.active > 0 {
 			state = AccountBusy
 		} else if state == AccountReady && active {
 			state = AccountCooldown
@@ -938,19 +1040,16 @@ func (p *AccountPool) Status() []AccountStatus {
 		}
 		sort.Strings(models)
 		status := AccountStatus{
-			ID:       account.ID,
-			Label:    account.Config.Label,
-			State:    state,
-			Enabled:  account.Config.Enabled,
-			Proxy:    account.Config.Proxy,
-			Locale:   account.Config.Locale,
-			Timezone: account.Config.Timezone,
-			Models:   models,
-			Quota:    cloneQuotas(account.Quotas),
-			Message:  account.stateMessage,
-		}
-		if active {
-			status.CooldownUntil = timePointer(cooldown.Until)
+			ID:        account.ID,
+			Label:     account.Config.Label,
+			State:     state,
+			Enabled:   account.Config.Enabled,
+			Proxy:     account.Config.Proxy,
+			Locale:    account.Config.Locale,
+			Timezone:  account.Config.Timezone,
+			Models:    models,
+			Cooldowns: cloneCooldowns(account.runtime.Cooldowns),
+			Message:   account.stateMessage,
 		}
 		if !account.LastUsed.IsZero() {
 			status.LastUsed = timePointer(account.LastUsed)
@@ -958,6 +1057,71 @@ func (p *AccountPool) Status() []AccountStatus {
 		statuses = append(statuses, status)
 	}
 	return statuses
+}
+
+// ClassifyCandidates 按 warm 集合分类目标请求的候选账户
+func (p *AccountPool) ClassifyCandidates(selection AccountSelection, warmAccountIDs []string) (AccountCandidateGroups, error) {
+	if p == nil {
+		return AccountCandidateGroups{}, ErrNoEligibleAccount
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
+	selection.ModelID = modelID
+	if modelID != "" {
+		if !p.hasModelCatalogLocked() {
+			return AccountCandidateGroups{}, ErrNoEligibleAccount
+		}
+		if !p.hasModelLocked(modelID) {
+			return AccountCandidateGroups{}, fmt.Errorf("%w: %s", ErrModelNotFound, modelID)
+		}
+		if selection.Method != "" && !p.hasModelMethodLocked(modelID, selection.Method) {
+			return AccountCandidateGroups{}, fmt.Errorf("%w: 模型 %s 不支持 %s", ErrModelNotFound, modelID, selection.Method)
+		}
+	}
+	indices, err := p.selectionIndicesLocked(selection)
+	if err != nil {
+		return AccountCandidateGroups{}, err
+	}
+	warm := make(map[string]struct{}, len(warmAccountIDs))
+	for _, accountID := range warmAccountIDs {
+		if accountID = strings.TrimSpace(accountID); accountID != "" {
+			warm[accountID] = struct{}{}
+		}
+	}
+	now := time.Now()
+	groups := AccountCandidateGroups{}
+	for _, index := range indices {
+		account := p.accounts[index]
+		if account == nil || !account.Config.Enabled || account.State != AccountReady {
+			continue
+		}
+		if modelID != "" && !account.SupportsModel(modelID) {
+			continue
+		}
+		if selection.Method != "" && !account.SupportsMethod(modelID, selection.Method) {
+			continue
+		}
+		groups.Eligible = true
+		if cooldown, active := accountCooldown(account, modelID, now); active {
+			if groups.EarliestCooldown.IsZero() || cooldown.Until.Before(groups.EarliestCooldown) {
+				groups.EarliestCooldown = cooldown.Until
+			}
+			continue
+		}
+		_, isWarm := warm[account.ID]
+		switch {
+		case isWarm && (account.exclusive || account.active >= p.perAccountConcurrency):
+			groups.WarmBusy = append(groups.WarmBusy, account.ID)
+		case isWarm:
+			groups.WarmReady = append(groups.WarmReady, account.ID)
+		case account.exclusive || account.active >= p.perAccountConcurrency:
+			groups.StandbyBusy = append(groups.StandbyBusy, account.ID)
+		default:
+			groups.StandbyReady = append(groups.StandbyReady, account.ID)
+		}
+	}
+	return groups, nil
 }
 
 func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time) (*AccountLease, time.Time, bool, error) {
@@ -979,7 +1143,7 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 			continue
 		}
 		waitable = true
-		if account.leased {
+		if account.exclusive || account.active >= p.perAccountConcurrency {
 			continue
 		}
 		if selection.ResourceID == "" {
@@ -990,21 +1154,27 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 				continue
 			}
 		}
-		leaseLock, leasePath, err := acquireAccountFileLease(account.StoragePath)
-		if errors.Is(err, errAccountLeaseBusy) {
-			pollAt := now.Add(externalLeasePoll)
-			if earliest.IsZero() || pollAt.Before(earliest) {
-				earliest = pollAt
+		if account.active == 0 {
+			leaseLock, leasePath, err := acquireAccountFileLease(account.StoragePath)
+			if errors.Is(err, errAccountLeaseBusy) {
+				pollAt := now.Add(externalLeasePoll)
+				if earliest.IsZero() || pollAt.Before(earliest) {
+					earliest = pollAt
+				}
+				continue
 			}
-			continue
+			if err != nil {
+				return nil, time.Time{}, false, err
+			}
+			account.leaseLock = leaseLock
+			account.leasePath = leasePath
 		}
-		if err != nil {
-			return nil, time.Time{}, false, err
-		}
-		account.leased = true
+		account.active++
 		account.LastUsed = now
 		p.next = (index + 1) % max(1, len(p.accounts))
-		return &AccountLease{pool: p, account: account, lock: leaseLock, leasePath: leasePath}, time.Time{}, true, nil
+		return &AccountLease{
+			pool: p, account: account, authGeneration: account.authGeneration,
+		}, time.Time{}, true, nil
 	}
 	return nil, earliest, waitable, nil
 }
@@ -1055,15 +1225,24 @@ func (p *AccountPool) BootstrapModel(accountID string) (string, error) {
 		return "", fmt.Errorf("账户不存在: %s", accountID)
 	}
 	for _, model := range account.Models {
-		if model.ID == "gemini-flash-latest" && hasMethod(model, "generateContent") &&
+		if model.ID == BootstrapModelID && hasMethod(model, "generateContent") &&
 			hasMethod(model, "countTokens") && hasMethod(model, "createCachedContent") && model.Capabilities["chat_model"] {
 			return model.ID, nil
 		}
 	}
-	return "", fmt.Errorf("账户 %s 的实时目录没有 gemini-flash-latest", account.ID)
+	return "", fmt.Errorf("账户 %s 的实时目录没有 %s", account.ID, BootstrapModelID)
 }
 
 func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int, error) {
+	var allowed map[string]struct{}
+	if selection.AllowedAccountIDs != nil {
+		allowed = make(map[string]struct{}, len(selection.AllowedAccountIDs))
+		for _, accountID := range selection.AllowedAccountIDs {
+			if accountID = strings.TrimSpace(accountID); accountID != "" {
+				allowed[accountID] = struct{}{}
+			}
+		}
+	}
 	accountID := strings.TrimSpace(selection.AccountID)
 	if selection.ResourceID != "" {
 		owner, exists := p.resources[selection.ResourceID]
@@ -1078,6 +1257,11 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	if accountID != "" {
 		for index, account := range p.accounts {
 			if account != nil && account.ID == accountID {
+				if allowed != nil {
+					if _, exists := allowed[accountID]; !exists {
+						return nil, ErrNoEligibleAccount
+					}
+				}
 				return []int{index}, nil
 			}
 		}
@@ -1085,7 +1269,17 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	}
 	indices := make([]int, 0, len(p.accounts))
 	for offset := 0; offset < len(p.accounts); offset++ {
-		indices = append(indices, (p.next+offset)%len(p.accounts))
+		index := (p.next + offset) % len(p.accounts)
+		account := p.accounts[index]
+		if allowed != nil {
+			if account == nil {
+				continue
+			}
+			if _, exists := allowed[account.ID]; !exists {
+				continue
+			}
+		}
+		indices = append(indices, index)
 	}
 	return indices, nil
 }
@@ -1144,7 +1338,6 @@ func loadAccount(directory string) (*Account, error) {
 		RuntimePath:  runtimePath,
 		Config:       accountConfig,
 		StorageState: state,
-		Quotas:       make(map[string]QuotaState),
 		State:        initialAccountState(accountConfig, state),
 		runtime:      runtimeState,
 	}, nil
@@ -1271,7 +1464,12 @@ func acquireAccountFileLease(storagePath string) (*flock.Flock, string, error) {
 	if storagePath == "" {
 		return nil, "", nil
 	}
-	leasePath := storagePath + ".lease"
+	accountDirectory := filepath.Dir(storagePath)
+	leaseDirectory := filepath.Join(filepath.Dir(accountDirectory), ".leases")
+	if err := os.MkdirAll(leaseDirectory, 0o700); err != nil {
+		return nil, "", fmt.Errorf("创建账户租约目录: %w", err)
+	}
+	leasePath := filepath.Join(leaseDirectory, filepath.Base(accountDirectory)+".lock")
 	leaseLock := flock.New(leasePath)
 	locked, err := leaseLock.TryLock()
 	if err != nil {
@@ -1324,13 +1522,13 @@ func cloneAccountModels(models []Model) []Model {
 	return result
 }
 
-func cloneQuotas(quotas map[string]QuotaState) map[string]QuotaState {
-	if len(quotas) == 0 {
+func cloneCooldowns(cooldowns map[string]CooldownState) map[string]CooldownState {
+	if len(cooldowns) == 0 {
 		return nil
 	}
-	result := make(map[string]QuotaState, len(quotas))
-	for key, quota := range quotas {
-		result[key] = quota
+	result := make(map[string]CooldownState, len(cooldowns))
+	for key, cooldown := range cooldowns {
+		result[key] = cooldown
 	}
 	return result
 }

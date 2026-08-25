@@ -140,29 +140,32 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		return fmt.Errorf("认证续签缺少账户租约")
 	}
 	account := lease.Account()
-	state := account.StorageState
-	extension, exists, err := state.AuthExtension()
-	if err != nil {
-		return err
-	}
-	if !exists || extension.OAuth == nil {
-		return fmt.Errorf("账户 %s 缺少 Chrome OAuth 续签材料", account.ID)
-	}
-	cookies, err := refresher.refresh(ctx, *extension.OAuth, account.EffectiveProxy(refresher.globalProxy))
-	if err != nil {
-		return fmt.Errorf("续签账户 %s: %w", account.ID, err)
-	}
-	state.Cookies = cookies
-	if err := lease.SaveStorageState(state); err != nil {
-		return fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
-	}
-	if refresher.invalidate != nil {
-		if err := refresher.invalidate(account.ID); err != nil {
-			return fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
+	if err := lease.RefreshStorageState(func(state *aistudio.StorageState) error {
+		extension, exists, err := state.AuthExtension()
+		if err != nil {
+			return err
 		}
-	}
-	if err := refresher.reset(account.ID); err != nil {
-		return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
+		if !exists || extension.OAuth == nil {
+			return fmt.Errorf("账户 %s 缺少 Chrome OAuth 续签材料", account.ID)
+		}
+		cookies, err := refresher.refresh(ctx, *extension.OAuth, account.EffectiveProxy(refresher.globalProxy))
+		if err != nil {
+			return fmt.Errorf("续签账户 %s: %w", account.ID, err)
+		}
+		state.Cookies = cookies
+		return nil
+	}, func() error {
+		if refresher.invalidate != nil {
+			if err := refresher.invalidate(account.ID); err != nil {
+				return fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
+			}
+		}
+		if err := refresher.reset(account.ID); err != nil {
+			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
 	}
 	return nil
 }
@@ -173,7 +176,11 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	extension, exists, err := lease.Account().StorageState.AuthExtension()
+	state, err := lease.ReloadStorageState()
+	if err != nil {
+		return false
+	}
+	extension, exists, err := state.AuthExtension()
 	return err == nil && exists && extension.OAuth != nil
 }
 

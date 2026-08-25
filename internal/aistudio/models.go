@@ -43,23 +43,6 @@ var imageResolutions = map[int64]string{1: "1K", 2: "2K", 3: "4K", 4: "512"}
 var videoDurations = map[int64]string{1: "5", 2: "6", 3: "7", 4: "8", 5: "4"}
 var videoResolutions = map[int64]string{1: "720p", 2: "1080p", 3: "4k", 4: "368p", 5: "360p"}
 
-// FieldEvidence 保存尚未映射的字段和值
-type FieldEvidence struct {
-	Path string          `json:"path"`
-	Raw  json.RawMessage `json:"raw"`
-}
-
-// ModelEvidence 保存模型行的完整数组和扩展码
-type ModelEvidence struct {
-	ID                       string          `json:"id"`
-	Raw                      json.RawMessage `json:"raw"`
-	UnknownFields            []FieldEvidence `json:"unknown_fields,omitempty"`
-	CapabilityCodes          []int64         `json:"capability_codes,omitempty"`
-	SecondaryCapabilityCodes []int64         `json:"secondary_capability_codes,omitempty"`
-	UnknownCapabilityCodes   []int64         `json:"unknown_capability_codes,omitempty"`
-	UnknownSecondaryCodes    []int64         `json:"unknown_secondary_codes,omitempty"`
-}
-
 // GenerationDefaults 保存 ListModels 返回的生成默认值
 type GenerationDefaults struct {
 	MaxOutputTokens      int64
@@ -75,7 +58,6 @@ type GenerationDefaults struct {
 type modelEntry struct {
 	model    Model
 	defaults GenerationDefaults
-	evidence ModelEvidence
 }
 
 type modelCatalog struct {
@@ -84,18 +66,12 @@ type modelCatalog struct {
 }
 
 // ParseModels 解码 ListModels 的现场数组协议
-func ParseModels(source io.Reader) ([]Model, []ModelEvidence, error) {
+func ParseModels(source io.Reader) ([]Model, error) {
 	catalog, err := parseModelCatalog(source)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	models := cloneModels(catalog.models)
-	evidence := make([]ModelEvidence, 0, len(catalog.entries))
-	for _, model := range models {
-		entry := catalog.entries[model.ID]
-		evidence = append(evidence, cloneModelEvidence(entry.evidence))
-	}
-	return models, evidence, nil
+	return cloneModels(catalog.models), nil
 }
 
 func parseModelCatalog(source io.Reader) (modelCatalog, error) {
@@ -168,22 +144,16 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		return modelEntry{}, err
 	}
 	capabilities := make(map[string]bool)
-	unknownCapabilities := make([]int64, 0)
 	for _, code := range capabilityCodes {
 		name, known := capabilityNames[code]
 		if known {
 			capabilities[name] = true
-		} else {
-			unknownCapabilities = append(unknownCapabilities, code)
 		}
 		capabilities["capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
-	unknownSecondary := make([]int64, 0)
 	for _, code := range secondaryCodes {
 		if name, known := secondaryCapabilityNames[code]; known {
 			capabilities[name] = true
-		} else {
-			unknownSecondary = append(unknownSecondary, code)
 		}
 		capabilities["secondary_capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
@@ -209,16 +179,7 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	if err != nil {
 		return modelEntry{}, err
 	}
-	evidence := ModelEvidence{
-		ID:                       id,
-		Raw:                      append(json.RawMessage(nil), raw...),
-		UnknownFields:            unknownModelFields(row, rowIndex),
-		CapabilityCodes:          append([]int64(nil), capabilityCodes...),
-		SecondaryCapabilityCodes: append([]int64(nil), secondaryCodes...),
-		UnknownCapabilityCodes:   append([]int64(nil), unknownCapabilities...),
-		UnknownSecondaryCodes:    append([]int64(nil), unknownSecondary...),
-	}
-	return modelEntry{model: model, defaults: defaults, evidence: evidence}, nil
+	return modelEntry{model: model, defaults: defaults}, nil
 }
 
 func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.RawMessage) (map[string][]string, error) {
@@ -543,18 +504,6 @@ func appendOption(options map[string][]string, key string, values []string) {
 	}
 }
 
-func unknownModelFields(row []json.RawMessage, rowIndex int) []FieldEvidence {
-	known := map[int]bool{0: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true, 10: true, 56: true, 64: true, 66: true, 70: true, 71: true, 74: true, 75: true, 76: true}
-	fields := make([]FieldEvidence, 0)
-	for index, raw := range row {
-		if known[index] || isJSONNull(raw) {
-			continue
-		}
-		fields = append(fields, FieldEvidence{Path: fmt.Sprintf("$[0][%d][%d]", rowIndex, index), Raw: append(json.RawMessage(nil), raw...)})
-	}
-	return fields
-}
-
 func cloneModels(models []Model) []Model {
 	result := make([]Model, len(models))
 	for index, model := range models {
@@ -573,20 +522,6 @@ func cloneModels(models []Model) []Model {
 			}
 		}
 	}
-	return result
-}
-
-func cloneModelEvidence(evidence ModelEvidence) ModelEvidence {
-	result := evidence
-	result.Raw = append(json.RawMessage(nil), evidence.Raw...)
-	result.UnknownFields = make([]FieldEvidence, len(evidence.UnknownFields))
-	for index, field := range evidence.UnknownFields {
-		result.UnknownFields[index] = FieldEvidence{Path: field.Path, Raw: append(json.RawMessage(nil), field.Raw...)}
-	}
-	result.CapabilityCodes = append([]int64(nil), evidence.CapabilityCodes...)
-	result.SecondaryCapabilityCodes = append([]int64(nil), evidence.SecondaryCapabilityCodes...)
-	result.UnknownCapabilityCodes = append([]int64(nil), evidence.UnknownCapabilityCodes...)
-	result.UnknownSecondaryCodes = append([]int64(nil), evidence.UnknownSecondaryCodes...)
 	return result
 }
 

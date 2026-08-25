@@ -7,7 +7,7 @@ import type {
   AdminLog,
   AdminEvent,
   Model,
-  Quota,
+  Cooldown,
   RequestSummary,
   ServiceConfig,
   ServiceStatus,
@@ -27,7 +27,7 @@ const status = ref<ServiceStatus | null>(null)
 const logs = ref<AdminLog[]>([])
 const accounts = ref<Account[]>([])
 const models = ref<Model[]>([])
-const quotas = ref<Quota[]>([])
+const cooldowns = ref<Cooldown[]>([])
 const requests = ref<RequestSummary[]>([])
 const config = ref<ServiceConfig | null>(null)
 const controlPending = ref<'' | 'start' | 'stop'>('')
@@ -36,10 +36,10 @@ const loading = reactive({
   accounts: true,
   models: true,
   requests: true,
-  quotas: true,
+  cooldowns: true,
   config: true,
 })
-const errors = reactive({ accounts: '', models: '', requests: '', quotas: '', config: '' })
+const errors = reactive({ accounts: '', models: '', requests: '', cooldowns: '', config: '' })
 let eventConnection: EventConnection | undefined
 let noticeTimer: number | undefined
 
@@ -120,15 +120,15 @@ async function loadModels(): Promise<void> {
   }
 }
 
-async function loadQuotas(): Promise<void> {
-  loading.quotas = quotas.value.length === 0
-  errors.quotas = ''
+async function loadCooldowns(): Promise<void> {
+  loading.cooldowns = cooldowns.value.length === 0
+  errors.cooldowns = ''
   try {
-    quotas.value = await api.quotas()
+    cooldowns.value = await api.cooldowns()
   } catch (error) {
-    errors.quotas = messageOf(error)
+    errors.cooldowns = messageOf(error)
   } finally {
-    loading.quotas = false
+    loading.cooldowns = false
   }
 }
 
@@ -145,7 +145,7 @@ async function loadRequests(): Promise<void> {
 }
 
 async function loadRequestData(): Promise<void> {
-  await Promise.all([loadRequests(), loadQuotas()])
+  await Promise.all([loadRequests(), loadCooldowns()])
 }
 
 async function loadConfig(): Promise<void> {
@@ -165,7 +165,7 @@ async function refreshAll(): Promise<void> {
     loadStatus(),
     loadAccounts(),
     loadModels(),
-    loadQuotas(),
+    loadCooldowns(),
     loadRequests(),
     loadConfig(),
   ])
@@ -176,7 +176,7 @@ async function controlService(action: 'start' | 'stop'): Promise<void> {
   try {
     status.value = action === 'start' ? await api.startService() : await api.stopService()
     showNotice(t(action === 'start' ? 'app.start' : 'app.stop'), 'success')
-    if (action === 'start') await Promise.all([loadAccounts(), loadModels(), loadQuotas()])
+    if (action === 'start') await Promise.all([loadAccounts(), loadModels(), loadCooldowns()])
   } catch (error) {
     showNotice(messageOf(error), 'error')
   } finally {
@@ -217,13 +217,8 @@ function handleAdminEvent(event: AdminEvent): void {
     models.value = event.data.models
     return
   }
-  if (event.type === 'quota') {
-    const index = quotas.value.findIndex(
-      (quota) =>
-        quota.account_id === event.data.account_id && quota.model_id === event.data.model_id,
-    )
-    if (index === -1) quotas.value.unshift(event.data)
-    else quotas.value[index] = event.data
+  if (event.type === 'cooldowns') {
+    cooldowns.value = event.data
     return
   }
   replaceByID(requests.value, event.data)
@@ -356,10 +351,10 @@ onUnmounted(() => {
       <RequestsPanel
         v-else-if="currentTab === 'requests'"
         :accounts="accounts"
-        :quotas="quotas"
+        :cooldowns="cooldowns"
         :requests="requests"
-        :loading="loading.requests || loading.quotas"
-        :quota-error="errors.quotas"
+        :loading="loading.requests || loading.cooldowns"
+        :cooldown-error="errors.cooldowns"
         :request-error="errors.requests"
         @refresh="loadRequestData"
         @notice="showNotice"

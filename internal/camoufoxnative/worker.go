@@ -172,6 +172,9 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		return err
 	}
 	target := aiStudioOrigin + "/prompts/new_chat?model=" + url.QueryEscape(options.Model)
+	if options.TemporaryChat {
+		target += "&temporary=true"
+	}
 	if _, err := client.command(ctx, "browsingContext.navigate", map[string]any{
 		"context": contextID,
 		"url":     target,
@@ -199,6 +202,9 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
   if (button && button.offsetParent !== null) button.click();
   return Boolean(button);
 })()`)
+	if err := dismissVisibleDialogs(ctx, client, contextID); err != nil {
+		return err
+	}
 	snapshotKey, err := client.waitSnapshotFunction(ctx, contextID, 30*time.Second)
 	if err != nil {
 		return err
@@ -207,18 +213,6 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err != nil || filled != options.BootstrapPrompt {
 		return fmt.Errorf("填写 bootstrap 提示词失败 value=%q err=%v", filled, err)
 	}
-	_, _ = client.evaluate(ctx, contextID, `(() => {
-  for (const dialog of document.querySelectorAll('[role="dialog"]')) {
-    if (!dialog.textContent?.includes('Go Further, Build Smarter')) continue;
-    for (const button of dialog.querySelectorAll('button')) {
-      if (button.textContent?.trim() === 'Continue' || button.getAttribute('aria-label') === 'Close dialog') {
-        button.click();
-        return true;
-      }
-    }
-  }
-  return false;
-})()`)
 	if _, err := client.command(ctx, "session.subscribe", map[string]any{
 		"events":   []string{"network.beforeRequestSent", "network.responseStarted", "network.responseCompleted"},
 		"contexts": []string{contextID},
@@ -264,6 +258,36 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		SnapshotKey:            snapshotKey,
 		OfficialGenerateStatus: client.generateStatus,
 		Headers:                headers,
+	}
+	return nil
+}
+
+// dismissVisibleDialogs 关闭页面启动时出现的可见公告模态
+func dismissVisibleDialogs(ctx context.Context, client *bidiClient, contextID string) error {
+	for range 8 {
+		clicked, err := client.evaluateBool(ctx, contextID, `(() => {
+  const visible = (item) => item instanceof HTMLElement && item.offsetParent !== null;
+  const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter(visible);
+  for (const dialog of dialogs.reverse()) {
+    const buttons = [...dialog.querySelectorAll('button, [role="button"]')]
+      .filter((button) => visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true');
+    if (buttons.length === 0) continue;
+    buttons.at(-1).click();
+    return true;
+  }
+  return false;
+})()`)
+		if err != nil {
+			return fmt.Errorf("处理 AI Studio 公告模态: %w", err)
+		}
+		if !clicked {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	return nil
 }

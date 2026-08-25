@@ -326,7 +326,6 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	events := make(chan Event, 8)
 	go func() {
 		defer close(events)
-		defer response.Body.Close()
 		decoder := NewFrameDecoder()
 		send := func(event Event) error {
 			event.ProviderModel = entry.model.ID
@@ -361,6 +360,9 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		if err == nil {
 			err = decoder.End()
 		}
+		if closeErr := response.Body.Close(); err == nil {
+			err = closeErr
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				_ = send(Event{Kind: EventError, Err: err})
@@ -368,19 +370,13 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return
 		}
 		if usage == nil {
-			_ = send(Event{Kind: EventError, Err: fmt.Errorf("AI Studio GenerateContent 完成帧缺少 usage")})
-			return
-		}
-		if usage.OutputTokensMissing {
-			measured, measureErr := c.measureGeneratedOutput(ctx, request, output)
-			if measureErr != nil {
-				if ctx.Err() == nil {
-					_ = send(Event{Kind: EventError, Err: fmt.Errorf("测量输出 token: %w", measureErr)})
-				}
-				return
+			usage = localCompleteUsage(request, output)
+		} else if usage.OutputTokensMissing {
+			outputTokens := usage.TotalTokens - usage.InputTokens - usage.ToolTokens - usage.ReasoningTokens
+			if outputTokens < 0 {
+				outputTokens = localPartsTokens(output.visible)
 			}
-			usage.OutputTokens = measured
-			usage.TotalTokens = usage.InputTokens + usage.ToolTokens + usage.ReasoningTokens + measured
+			usage.OutputTokens = outputTokens
 			usage.OutputTokensMissing = false
 		}
 		if err := send(Event{Kind: EventUsage, Usage: usage}); err != nil {

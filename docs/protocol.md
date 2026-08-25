@@ -1,6 +1,6 @@
 # Google AI Studio 私有协议
 
-本文定义 AIStudio2API 使用的 Google AI Studio 私有协议、认证状态、WAA 运行时、JSON+protobuf 数组、增量事件、工具与媒体链。模型方法、限制和能力由账户的实时 `ListModels` 返回，公开 API 只投影协议核心产生的规范事件。
+本文定义 AIStudio2API 使用的 Google AI Studio 私有协议、认证状态、WAA 运行时、JSON+protobuf 数组、增量事件、工具与媒体链。模型方法、限制和能力由账户的实时 `ListModels` 返回，公开 API 将原始结构投影为规范事件和兼容响应。
 
 ## 1. 协议范围、入口与公共头
 
@@ -33,7 +33,7 @@ MakerSuite 请求使用以下公共头：
 
 MakerSuite 与 Drive 业务请求使用和 Camoufox 对齐的 Firefox TLS、HTTP/2 与请求头顺序；WAA VM、fresh proof 和隔离登录由同一账户的 Camoufox 环境完成。
 
-JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始，protobuf field 从 `1` 开始，因此 field `N` 对应索引 `N-1`。Google 响应允许省略空槽并形成 `[,value]`；解码前应把省略槽规范化为 `null`，不得把 HTTPS chunk 当作数组或业务事件边界。
+JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始，protobuf field 从 `1` 开始，因此 field `N` 对应索引 `N-1`。Google 响应允许省略空槽并形成 `[,value]`；解码器先把省略槽规范化为 `null`，再从完整 JSON 根值中提取 repeated message。HTTPS chunk 仅提供字节序列，业务事件边界由数组结构确定。
 
 协议核心使用以下 MakerSuite RPC：
 
@@ -59,7 +59,7 @@ AI Studio 页面初始化还包含以下控制面 RPC：
 | `ListPrompts` | 提示词目录 |
 | `GetUserRestrictions` | 账户限制 |
 
-这些控制面响应不参与生成请求编解码。服务启动只加载账户、公开头和实时模型目录，业务能力按需调用对应数据面 RPC。
+服务启动加载账户、公共头和实时模型目录，业务能力按需调用对应数据面 RPC。
 
 ## 2. SAPISID、Chrome DBSC、Cookie 与账户状态
 
@@ -82,7 +82,7 @@ token = "<LABEL> <TIMESTAMP>_<DIGEST>"
 authorization = token_1 + " " + token_2 + " " + token_3
 ```
 
-MakerSuite 响应的 `Set-Cookie` 在账户独占租约内合并到 `storage-state.json` 并原子写回。签名、Cookie 选择和过期判断均以请求时重新读取的账户状态为准。
+MakerSuite 响应的 `Set-Cookie` 在响应头到达时基于账户最新 `storage-state.json` 单写合并并原子写回。签名、Cookie 选择和过期判断均以请求时重新读取的账户状态为准。
 
 ### Windows Chrome DBSC 导入
 
@@ -114,7 +114,7 @@ Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存�
 | `camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、语言、地区和时区配置 |
 | `runtime-state.json` | 模型/全局冷却与 Drive/Veo 资源到账户的绑定 |
 
-初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。调度器先按模型与方法筛选，再轮询获取独占账户；进程内互斥与文件租约共同保护状态。未绑定账户和资源的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个客户端可见事件前切换到另一个同能力账户一次。Drive file、Veo operation 与产物 file 始终使用创建账户。
+初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。调度器先按模型与方法筛选，再轮询获取账号并发槽位。同账号 WAA proof 串行生成，已准备的 MakerSuite HTTP 请求并发执行；首个活动请求获取跨进程文件租约，最后一个释放。未绑定账户和资源的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个客户端可见事件前切换到另一个同能力账户。Drive file、Veo operation 与产物 file 始终使用创建账户。
 
 ## 3. WAA challenge、官方 VM 与 fresh proof
 
@@ -144,27 +144,39 @@ Waa/Create
 }
 ```
 
-`program` 与 challenge 属于当前 Create 生命周期，interpreter 只能按 hash 缓存。proof 绑定当前 prompt 摘要与 VM 内部状态，必须逐请求生成，禁止缓存或重放。
+`program` 与 challenge 属于当前 Create 生命周期，interpreter 按 hash 缓存。proof 绑定当前 prompt 摘要与 VM 内部状态，每个请求生成新的 proof。
 
-每个账户的 WAA runtime 延迟到第一次受保护请求启动：
+生成服务启动时按配置的常驻数与启动并发数预热账户 WAA runtime：
 
 1. Go 启动隔离、无头 Camoufox，并通过原生 WebDriver BiDi 建立 session
-2. 写入账户 Cookie 与 localStorage，使用实时目录中的 `gemini-flash-latest` 进入新对话
-3. 定位当前 bundle 中调用 `.snapshot({` 且包含 `content` 的官方高层函数
+2. 写入账户 Cookie 与 localStorage，使用实时目录中的 `gemini-flash-latest` 进入新对话；`TEMPORARY_CHAT=true` 时 URL 携带 `temporary=true`
+3. 定位页面 bundle 中调用 `.snapshot({` 且包含 `content` 的官方高层函数
 4. 填入唯一 bootstrap prompt 并执行一次官网 Run
 5. 保存官网 `GenerateContent` 的必要动态头与官方 WAA service
 6. 后续业务请求串行调用同一 service 获取 fresh proof
 7. `GenerateContent` 写入 field 5，`GenerateVideo` 写入 field 8，正文由 Go HTTP transport 发送
 
-Camoufox 不读取业务响应 DOM、不操作模型菜单、不负责公开协议输出。运行期不需要 Python、Node.js 或 Playwright。官方 VM 初始化形状为：
+Camoufox 负责官方 VM 初始化与 WAA proof；Go 负责业务请求、增量解码和公开 API。运行期依赖 Go 与 Camoufox。官方 VM 初始化形状为：
 
 ```javascript
 initialize(program, ready, true, environment, signalLists, persistentState, false, loggers)
 ```
 
-VM 生命周期参数为 `43,200,000ms`，检查间隔为 `300,000ms`。页面生命周期中断、snapshot 错误、计时器到期、认证续签或进程关闭会使 runtime 失效，下一次请求重新 bootstrap。`Waa/Ping` 属于官方生命周期控制面，不替代 snapshot 或业务请求 proof。
+VM 生命周期参数为 `43,200,000ms`，检查间隔为 `300,000ms`。页面生命周期中断、snapshot 错误、计时器到期、认证续签或进程关闭会使 runtime 失效，下一次请求重新 bootstrap。`Waa/Ping` 维护官方生命周期，业务请求 proof 由 snapshot 生成。
 
-同一账户的 snapshot 必须串行。文本、内联二进制 Base64、Drive file ID 与工具 part 按 contents 顺序组成 binding prompt；Veo 使用视频提示词。worker 状态为 `starting`、`bootstrapping`、`ready`、`busy`、`closing`、`closed` 和 `failed`。
+WAA 预热页在普通模式下会执行官网 `GenerateTitle` 与 `CreatePrompt`；临时对话关闭该页的自动保存，`GenerateContent` 请求结构保持一致。
+
+同一账户的 snapshot 必须串行。GenerateContent 的 binding prompt 按 contents 和 parts 的原顺序展开，再以单个空格连接：
+
+| Part | 写入 binding prompt 的值 |
+| --- | --- |
+| text | 原始文本 |
+| inline data | 原始二进制的标准 Base64 |
+| external media | URL |
+| Drive file | file ID |
+| function、function result、code、thought signature | 空字符串 |
+
+binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prompt 的 SHA-256 小写十六进制摘要交给官方 snapshot，返回值是 `!` 开头的字符串；编码器随后把 proof 写入目标 protobuf field，原请求的其他槽位保持不变。worker 状态为 `starting`、`bootstrapping`、`ready`、`busy`、`closing`、`closed` 和 `failed`。
 
 ## 4. ListModels、CountTokens 与 GenerateContent 请求
 
@@ -214,7 +226,7 @@ VM 生命周期参数为 `43,200,000ms`，检查间隔为 `300,000ms`。页面�
 | 54 | image search | 58 | Google Maps |
 | 59 | private Interaction route | | |
 
-未知能力码以 `capability_code_<N>` 或 `secondary_capability_code_<N>` 保留，不从模型名称推断能力。
+未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
 
 图片与视频选项使用枚举码：
 
@@ -235,13 +247,56 @@ Veo field 71 的宽高比、时长和分辨率分别位于子索引 `4`、`5`、
 ["models/<MODEL_ID>", [<CONTENT>, ...]]
 ```
 
-含 system、inline data 或 Drive file：
+含 system、inline data、外部媒体或 Drive file：
 
 ```json
 ["models/<MODEL_ID>", null, ["models/<MODEL_ID>", [<CONTENT>, ...], null, null, null, <SYSTEM>]]
 ```
 
-响应索引 `0` 是权威输入 token 数。其他槽按不透明协议字段保留。
+请求形状选择：
+
+| 条件 | 根结构 | GenerateContent 子消息位置 |
+| --- | --- | --- |
+| 纯文本 contents | `[model, contents]` | — |
+| system instruction | `[model, null, generate]` | `$[2][5]` |
+| function / Google tools | `[model, null, generate]` | `$[2][6]` |
+| inline data、external media、Drive、function call/result、code result | `[model, null, generate]` | `$[2][1]` |
+
+包含 system 与函数声明的完整计数请求：
+
+```json
+[
+  "models/gemini-3.6-flash",
+  null,
+  [
+    "models/gemini-3.6-flash",
+    [
+      [
+        [[null, "调用 ping 检查服务"]],
+        "user"
+      ]
+    ],
+    null,
+    null,
+    null,
+    [
+      [[null, "你是诊断助手"]],
+      "user"
+    ],
+    [
+      [null, [["ping", "检查服务"]]]
+    ]
+  ]
+]
+```
+
+响应为单元素数组：
+
+```text
+[<INPUT_TOKEN_COUNT>]
+```
+
+索引 `0` 是权威输入 token 数。其他槽按不透明协议字段保留。
 
 ### Content、Part 与 system
 
@@ -258,6 +313,7 @@ Content 形状：
 | 1 | 2 | 文本 |
 | 2 | 3 | inline data `[mime, base64]` |
 | 5 | 6 | Drive file `[fileId]` |
+| 6 | 7 | 外部媒体 `[mime, url]` |
 | 7 | 8 | executable code `[languageCode, code]` |
 | 8 | 9 | code execution result `[outcomeCode, output]` |
 | 10 | 11 | function call `[name, Struct, callId?]` |
@@ -317,7 +373,63 @@ generation config 字段：
 | 18 | 19 | seed |
 | 26 | 27 | image config `[aspectRatio?, imageSize?]` |
 
-thinking level 为 Low=`1`、Medium=`2`、High=`3`。JSON Schema type code 为 string=`1`、number=`2`、integer=`3`、boolean=`4`、array=`5`、object=`6`；schema 支持 format、description、nullable、enum、items、properties、required 和 field 23 `propertyOrdering`。
+生成参数校验：
+
+| 参数 | 默认来源 | 有效值 |
+| --- | --- | --- |
+| max output | ListModels field 7 | `1..model.outputTokenLimit` |
+| temperature | ListModels field 9 | `0..2` |
+| topP | ListModels field 10 | `0..1` |
+| topK | ListModels field 11 | 非负整数 |
+| thinking level | ListModels field 72 | Low=`1`、Medium=`2`、High=`3`、Minimal=`4` |
+| thinking budget | 请求值 | 模型能力码包含 thinking budget |
+
+response modalities：
+
+| 输出 | wire | 默认路由 |
+| --- | --- | --- |
+| text | `[1]` | chat |
+| image | `[2]` | image route |
+| image + text | `[2,1]` | 显式组合请求 |
+| audio | `[3]` | speech / music route |
+
+AUDIO 采用独立输出模态。JSON Schema type code 为 string=`1`、number=`2`、integer=`3`、boolean=`4`、array=`5`、object=`6`；schema 支持 format、description、nullable、enum、items、properties、required 和 field 23 `propertyOrdering`。
+
+以下最小组合请求包含 system、文本、函数声明、generation config、WAA proof 与账户时区。连续空槽保持在同行，字段含义查上表：
+
+```json
+[
+  "models/gemini-3.6-flash",
+  [
+    [
+      [[null, "调用 ping 检查服务"]],
+      "user"
+    ]
+  ],
+  [
+    [null, null, 7, 5],
+    [null, null, 8, 5],
+    [null, null, 9, 5],
+    [null, null, 10, 5]
+  ],
+  [null, null, null, 512, 0.2, 0.95, 40, null, null, null, null, null, null, 1],
+  "!WAA_PROOF",
+  [
+    [[null, "你是诊断助手"]],
+    "user"
+  ],
+  [
+    [null, [["ping", "检查服务"]]]
+  ],
+  null,
+  null,
+  null,
+  1,
+  null,
+  null,
+  [[null, null, "Asia/Taipei"]]
+]
+```
 
 ## 5. 增量流、思考、usage、来源与错误
 
@@ -334,7 +446,70 @@ thinking level 为 Low=`1`、Medium=`2`、High=`3`。JSON Schema type code 为 s
 | `$[0][frame][7]` | response ID |
 | `$[0][frame][3]` 且 frame 0 为空 | interaction metadata |
 
-candidate content 为 `[[parts...], "model"]`。Part 文本带 `part[12]=true` 时属于 reasoning summary，普通文本属于可见正文；`part[14]` 是 thought signature。签名可以附在文本、函数调用或独立空 Part 上，下一轮必须原样回传。
+传输正文是一个 JSON 根值，网络 chunk 提供字节；解码器在 `$[0]` 中每出现一个完整 repeated frame 时立即消费该 frame。每个内容帧包含一个 candidate，candidate content 为 `[[parts...], "model"]`。完成帧可以同时携带最后一组 Part、usage、response ID 和 finish reason，根数组解析完成后结束读取。
+
+从 `$[0]` 提取出的文本帧：
+
+```json
+[
+  [
+    [
+      [
+        [[null, "42"]],
+        "model"
+      ]
+    ]
+  ]
+]
+```
+
+随后到达的完成帧包含 `finish=1`、usage 和 response ID：
+
+```json
+[
+  [[null, 1]],
+  null,
+  [27, 1, 28, null, null, null, null, 0, null, 0],
+  null,
+  null,
+  null,
+  null,
+  "response_01"
+]
+```
+
+高频路径速查：
+
+| 结构 | JSONPath | 内容 |
+| --- | --- | --- |
+| GenerateContent | `$[0]` | model |
+| GenerateContent | `$[1]` | contents |
+| GenerateContent | `$[3]` | generation config |
+| GenerateContent | `$[4]` | WAA proof |
+| GenerateContent | `$[5]` | system instruction |
+| GenerateContent | `$[6]` | tools |
+| GenerateContent | `$[13][0][2]` | timezone |
+| response root | `$[0][frame]` | repeated frame |
+| candidate content | `$[0][frame][0][0][0]` | `[[parts], "model"]` |
+| candidate finish | `$[0][frame][0][0][1]` | finish reason code |
+| Part text | `...parts[part][1]` | text |
+| Part inline data | `...parts[part][2]` | `[mime, base64]` |
+| Part function call | `...parts[part][10]` | `[name, Struct, callId?]` |
+| Part thought | `...parts[part][12]` | boolean |
+| Part signature | `...parts[part][14]` | signature |
+| frame usage | `$[0][frame][2]` | usage array |
+| frame response ID | `$[0][frame][7]` | response ID |
+
+Part 文本带 `part[12]=true` 时属于 reasoning summary，普通文本属于可见正文；`part[14]` 是 thought signature。签名可以附在文本、函数调用或独立空 Part 上，下一轮必须原样回传：
+
+| 公开协议 | 签名输入 | 签名输出 |
+| --- | --- | --- |
+| OpenAI Chat | assistant tool call 的 `extra_content.google.thought_signature` | tool call 的同名扩展字段 |
+| OpenAI Responses | `reasoning.encrypted_content` 紧邻后续 `function_call` | reasoning item 的 `encrypted_content` |
+| Anthropic | `thinking` 或 `redacted_thinking` block 的 `signature` | thinking block 的 `signature` |
+| Gemini | 数据 Part 或独立 Part 的 `thoughtSignature` | Part 的 `thoughtSignature` |
+
+reasoning summary 是服务端返回的摘要文本。thought signature 作为下一轮请求的协议状态字段原样回传。
 
 协议核心按网络顺序输出 `text`、`reasoning`、`tool_call`、`executable_code`、`code_execution_result`、`grounding`、`citation`、`media`、`thought_signature`、`usage`、`finish` 和 `error`。
 
@@ -353,6 +528,25 @@ grounding metadata 字段：
 
 grounding chunk 的 oneof 索引 `0/1/2` 分别为 web、retrieved context、maps；内部字段依次为 URI、title、text、place ID。support 为 `[segment, chunkIndices, confidenceScores]`，segment 为 `[partIndex,startIndex,endIndex,text]`。candidate citations 的 entries 位于 metadata 索引 0，每项 URL 在索引 2、title 在索引 3。
 
+包含 web chunk、maps chunk、正文 support、检索分数和查询词的 raw metadata：
+
+```json
+[
+  ["<div>Search results</div>", "SDK_BLOB"],
+  [
+    [["https://example.com/gemini", "Gemini Guide", "Protocol overview"]],
+    [null, null, ["https://maps.google.com/?cid=1", "Google Taipei", "", "ChIJ_demo"]]
+  ],
+  [
+    [[0, 0, 12, "Gemini Guide"], [0], [0.98]]
+  ],
+  [null, 0.91],
+  ["Gemini AI Studio protocol"],
+  null,
+  "MAPS_WIDGET_CONTEXT_TOKEN"
+]
+```
+
 Code Execution 的 language code 为 `0=LANGUAGE_UNSPECIFIED`、`1=PYTHON`。执行结果 outcome code 为 `0=OUTCOME_UNSPECIFIED`、`1=OUTCOME_OK`、`2=OUTCOME_FAILED`、`3=OUTCOME_DEADLINE_EXCEEDED`。
 
 ### Usage
@@ -367,9 +561,9 @@ Code Execution 的 language code 为 `0=LANGUAGE_UNSPECIFIED`、`1=PYTHON`。执
 | 7 | tool tokens | `tool_tokens` |
 | 9 | thought tokens | `reasoning_tokens` |
 
-当完成帧省略 visible output tokens 时，服务使用同一账户调用 `CountTokens` 测量实际返回的 model content，并据此补全 output 与 total。完整 usage 直接按上游原值返回。
+完整 usage 直接按上游原值返回。完成帧省略 visible output tokens 时，服务按上游 total 与其余分类字段恢复该值。完整 usage 缺失时，内置 Gemini SentencePiece tokenizer 在本地统计可观测输入、工具声明、reasoning summary 和实际输出。
 
-OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible output + reasoning。Gemini 分别投影 `promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount` 与 `totalTokenCount`。隐藏完整思考只使用服务端 thought tokens，不根据思考摘要估算。
+OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible output + reasoning。Gemini 分别投影 `promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount` 与 `totalTokenCount`。隐藏思考用量来自上游 usage field 9；本地 fallback 统计服务端返回的 reasoning summary。
 
 ### Finish 与错误
 
@@ -385,7 +579,7 @@ OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible o
 | 14 | image_prohibited_content | 15 | image_other |
 | 16 | no_image | 17 | image_recitation |
 
-错误响应根形状为 `[null,[code,message,...]]`。协议核心保留 HTTP 状态、协议 code、message 与脱敏原始数组；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误、缺失完成帧或明确 finish reason 形成失败。
+错误响应根形状为 `[null,[code,message,...]]`。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
 ## 6. 函数、Google 工具、Drive 与媒体
 
@@ -402,7 +596,80 @@ OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible o
 | URL Context | 8 槽数组，索引 7 为 `[]` |
 | Google Maps | 11 槽数组，索引 10 为 `[]` |
 
+公开工具名称归一化后再生成上述 Tool 数组：
+
+| AI Studio 工具 | OpenAI Chat / Responses | Anthropic | Gemini |
+| --- | --- | --- | --- |
+| function declarations | `function` | 空 type 或 `custom` | `functionDeclarations` |
+| Google Search | `web_search`、`web_search_preview` | `web_search*` | `googleSearch`、`googleSearchRetrieval` |
+| Image Search | `image_search` | — | `imageSearch` |
+| URL Context | `url_context` | `web_fetch*`、`url_context*` | `urlContext` |
+| Code Execution | `code_interpreter` | `code_execution*` | `codeExecution` |
+| Google Maps | `google_maps` | `google_maps*` | `googleMaps` |
+
+根 field 7 按请求声明逐项编码，函数声明和各类 Google 工具分别占用独立 Tool entry。模型的工具范围取自实时能力码。
+
 函数 JSON Struct 使用 protobuf `Struct/Value` 数组：map 为 `[[[key,value],...]]`；Value oneof 索引 `0..5` 分别表示 null、number、string、bool、Struct、ListValue。对象键排序后编码。
+
+例如以下函数参数：
+
+```json
+{
+  "city": "Taipei",
+  "days": 2,
+  "metric": true,
+  "note": null,
+  "units": ["C", "F"]
+}
+```
+
+编码后的 Struct 为：
+
+```json
+[
+  [
+    ["city", [null, null, "Taipei"]],
+    ["days", [null, 2]],
+    ["metric", [null, null, null, true]],
+    ["note", [0]],
+    [
+      "units",
+      [
+        null,
+        null,
+        null,
+        null,
+        null,
+        [[[null, null, "C"], [null, null, "F"]]]
+      ]
+    ]
+  ]
+]
+```
+
+完整 function call Part 的关键槽位为：
+
+```json
+[
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  ["multiply", [[["a", [null, 21]], ["b", [null, 2]]]], "call_01"],
+  null,
+  null,
+  null,
+  "!THOUGHT_SIGNATURE"
+]
+```
+
+其中 Part 索引 `10` 保存 function call，索引 `14` 保存 thought signature。
 
 函数参数和结构化输出 Schema 使用以下 protobuf fields：
 
@@ -421,7 +688,16 @@ OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible o
 | `maxItems` | 21 | `minItems` | 22 |
 | `propertyOrdering` | 23 | | |
 
-公开协议输入中的 `$schema`、`default`、`additionalProperties` 和 `exclusiveMinimum` 在编码前移除；其余未知 Schema 字段返回参数错误。`type: [T, "null"]` 以及 `anyOf`、`oneOf` 中的 null 分支映射为 `nullable`，其余联合分支保持原顺序。缺少 `type` 的组合 Schema 使用首个声明类型的分支作为根类型，并保留完整组合分支。
+Schema 归一化规则：
+
+| 输入结构 | 编码结果 |
+| --- | --- |
+| `$schema`、`default`、`additionalProperties`、`exclusiveMinimum` | 从 wire schema 中省略 |
+| `type: [T, "null"]` | 根类型 `T` 与 `nullable=true` |
+| `anyOf` / `oneOf` 的 null 分支 | 移除 null 分支并设置 `nullable=true` |
+| 多个非 null `type` | 首项作为根类型，完整类型集合写入 `anyOf` |
+| 组合 Schema 缺少根 `type` | 首个带类型的分支作为根类型 |
+| 其他 Schema 字段 | 返回 `400 invalid_request` / `INVALID_ARGUMENT` |
 
 AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7 的函数声明，由模型决定是否调用；none 省略 tools。客户端工具选择映射如下：
 
@@ -431,7 +707,7 @@ AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7
 | Anthropic | 默认、`auto`、`none` | `any`、named `tool` |
 | Gemini | 默认、`AUTO`、`NONE` | `ANY`、`allowedFunctionNames` |
 
-函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。
+函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。公开协议的 tool result 只有 call ID 时，实现从同一 contents 链的先前 function call 恢复函数名，查找失败返回参数错误。函数参数和结果使用 JSON object，标量或数组结果封装为 `{"result":<VALUE>}`。
 
 ### Drive 上传与文件 Part
 
@@ -497,12 +773,50 @@ Drive token、上传、提示引用和下载使用创建账户固定出口。文
 | 账户 | `GET /api/accounts`、`POST /api/accounts`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
 | 账户认证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
 | 配置 | `GET /api/config`、`PUT /api/config` |
-| 冷却与请求 | `GET /api/quota`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
+| 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
 
-管理进程启动后生成服务处于停止状态。`POST /api/control/start` 刷新可用账户的模型目录并开启生成数据面；没有可用账户时返回 `400 account_required`。`POST /api/control/stop` 取消活动生成请求、关闭 WAA worker，并保持管理页面、控制端点、健康检查和模型查询可用。停止期间生成与计数请求返回 `503 service_stopped`。进程退出后管理页面和全部端点一并关闭。
+运行状态机：
 
-`GET /v1/models` 默认返回 OpenAI model list；请求携带 `Anthropic-Version` 时返回 Anthropic model list。Gemini 模型端点使用 `models/<ID>` 名称。private Interaction 模型只保留在管理端实时目录，不进入公开模型列表。多个账户出现同一模型时，generation methods 与能力选项取并集，输入和输出 token limit 取正数最小值，保证轮询到任一合格账户时都不超过公开上限。
+```text
+process start
+  -> control plane ready
+  -> data plane stopped
+
+POST /api/control/start
+  -> refresh account model catalogs
+  -> prewarm up to WARM_WORKER_LIMIT workers
+     with WARM_STARTUP_CONCURRENCY bootstraps
+  -> first worker ready
+  -> data plane ready
+
+request
+  -> match model + method
+  -> acquire one PER_ACCOUNT_CONCURRENCY slot
+  -> prepare WAA proof
+  -> send MakerSuite RPC
+  -> stream frames
+  -> release slot
+
+POST /api/control/stop
+  -> cancel active requests
+  -> close WAA workers
+  -> data plane stopped
+```
+
+`stopped` 状态下生成与计数端点返回 `503 service_stopped`。模型路由从支持目标模型与方法的 ready 账户中轮询，冷却时加载合格备用账户，无可用账户时返回 `400 account_required`。
+
+模型目录投影：
+
+| 规则 | 结果 |
+| --- | --- |
+| OpenAI | `GET /v1/models` 返回 OpenAI model list |
+| Anthropic | `GET /v1/models` 携带 `Anthropic-Version` 时返回 Anthropic model list |
+| Gemini | 模型名称使用 `models/<ID>` |
+| 多账户同模型 | generation methods 与能力选项取并集 |
+| 多账户 token limit | 输入和输出上限分别取正数最小值 |
+| 模型别名 | 来自 ListModels field 57 |
+| 请求匹配 | model ID/alias 与 method 同时命中目录后进入账户调度 |
 
 主要请求合同：
 
@@ -516,14 +830,41 @@ Drive token、上传、提示引用和下载使用创建账户固定出口。文
 | `/v1/audio/speech` | `model`、`input` | WAV、PCM 或 MP3 body |
 | `/v1/videos` | `model`、`prompt` | 长任务对象，随后轮询并下载内容 |
 
+四套生成入口共享同一规范请求，输入映射如下：
+
+| 能力 | OpenAI Chat | OpenAI Responses | Anthropic | Gemini |
+| --- | --- | --- | --- | --- |
+| system | `system` / `developer` messages | `instructions` 和 system/developer message items | `system` 字符串或 text blocks | `systemInstruction` text parts |
+| text | 字符串或 text content part | 字符串、message item | 字符串或 text block | Part `text` |
+| image/document | Base64 data URL、`file_id` | `input_image`、`input_file` | base64 source 或 URL source | `inlineData`、`fileData` |
+| audio input | `input_audio` Base64 | message content 中的 `input_audio` | base64 document source | `inlineData` |
+| YouTube | `video_url` / `input_video` | `input_video` | URL source | `fileData.fileUri` |
+| function call | assistant `tool_calls` | `function_call` item | `tool_use` block | `functionCall` Part |
+| function result | tool message | `function_call_output` item | `tool_result` block | `functionResponse` Part |
+| structured output | `response_format` | `text.format` | — | `responseMimeType` 与 response schema |
+| thinking | `reasoning_effort` 或 `reasoning.effort` | `reasoning.effort` | `thinking.budget_tokens`、`output_config.effort` | `thinkingConfig` |
+
+生成参数映射：
+
+| 参数 | 规则 |
+| --- | --- |
+| OpenAI max tokens | `max_completion_tokens` 优先于 `max_tokens` |
+| Anthropic max tokens | `max_tokens` 映射 generation config field 4 |
+| Gemini max tokens | `maxOutputTokens` 映射 generation config field 4 |
+| temperature / topP / topK / seed | 映射 generation config fields 5 / 6 / 7 / 19 |
+| stop sequence | 映射 generation config field 2 |
+| structured output | MIME type 映射 field 8，Schema 映射 field 9 |
+| frequency / presence penalty | `0` 采用 AI Studio 默认值，非零值返回 `400 invalid_request` |
+| Responses `parallel_tool_calls` | 写入响应合同元数据，函数调用仍采用 AI Studio auto 模式 |
+
 流式端点统一使用 `text/event-stream`，每个 SSE frame 以空行结束：
 
-| 协议 | 流事件 |
-| --- | --- |
-| OpenAI Chat | `data: <chat.completion.chunk>`，终态后发送 `data: [DONE]` |
-| OpenAI Responses | `event: <response.*>` 与对应 JSON data，终态为 `response.completed` |
-| Anthropic | `event: <message/content_block_*>` 与对应 JSON data，终态为 `message_stop` |
-| Gemini | `data: <GenerateContentResponse>` 增量，最后一帧携带 finish reason 与 usage |
+| 协议 | 首事件 | 内容序列 | usage | 终止事件 |
+| --- | --- | --- | --- | --- |
+| OpenAI Chat | assistant role chunk | chat completion delta | `include_usage=true` 时位于 finish chunk 之后 | `data: [DONE]` |
+| OpenAI Responses | `response.created`、`response.in_progress` | output item / content part / delta / done | 完成 response 的 `usage` | `response.completed` 或 `response.incomplete` |
+| Anthropic | `message_start` | `content_block_start`、delta、`content_block_stop` | `message_delta.usage` | `message_stop` |
+| Gemini | candidate Part | `GenerateContentResponse` 增量 | 最后一帧 `usageMetadata` | 最后一帧 finish reason |
 
 公开适配规则：
 
@@ -540,10 +881,97 @@ Drive token、上传、提示引用和下载使用创建账户固定出口。文
 
 OpenAI Chat 使用 Markdown data URL 承载生成图片；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的图片恢复为 inline data Part，保留图片多轮上下文。
 
+用户文本中的 `youtu.be/<ID>`、`youtube.com/watch?v=<ID>`、`/shorts/<ID>`、`/live/<ID>` 和 `/embed/<ID>` 会转换为 `video/*` 外部媒体 part，并从用户 text part 中移除；重复 URL 合并为一个附件。OpenAI `video_url`/`input_video`、Anthropic URL source 与 Gemini `fileData.fileUri` 使用相同的外部媒体编码。
+
 OpenAI Responses 的 `previous_response_id` 在进程内保存最多 256 个响应节点并重建完整 contents；重启后客户端重新提交完整上下文。Drive 与 Veo 资源绑定持久化到磁盘。
 
-模型不存在返回 `model_not_found`/`NOT_FOUND`，本地参数错误返回 `invalid_request`/`INVALID_ARGUMENT`，账户暂时不可用返回服务错误，上游 HTTP 与协议错误保留供应商 message。客户端取消必须关闭上游 reader并释放账户租约；只有收到完成帧才发送正常终态。
+模型、参数、账户与上游错误按下方状态表投影。客户端取消会关闭上游 reader并释放账户租约。
 
-实现不公开 cached content、batch、Bidi/Live 或 private Interactions 占位端点。模型目录列出实时并集及其 generation methods，别名只接受 field 57 的显式声明；请求的模型或方法不在目录时返回对应错误，不静默降级。WAA 仍依赖每账户 Camoufox 官方 VM；业务协议、流式解码和公开 API 均由 Go 实现。
+错误对象与状态语义：
 
-认证文件、Cookie、SAPISID、authorization、proof、OAuth 材料、账户标识和完整原始帧不得写入普通日志或公开提交。
+| 情况 | HTTP | OpenAI | Anthropic | Gemini |
+| --- | ---: | --- | --- | --- |
+| 参数、Schema、tool choice 无效 | 400 | `invalid_request` | `invalid_request_error` | `INVALID_ARGUMENT` |
+| 本地 API key 无效 | 401 | `invalid_api_key` | `authentication_error` | `UNAUTHENTICATED` |
+| 模型或方法不存在 | 404 | `model_not_found` | `not_found_error` | `NOT_FOUND` |
+| 上游拒绝权限 | 403 | `upstream_error` | `permission_error` | `PERMISSION_DENIED` |
+| 上游配额或限流 | 429 | `upstream_error` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
+| 生成服务已停止 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
+| 请求期限到期 | 504 | `upstream_error` | `api_error` | `DEADLINE_EXCEEDED` |
+| 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
+
+错误对象 raw body：
+
+**OpenAI Chat / Responses**
+
+```json
+{
+  "error": {
+    "message": "upstream response ended before finish frame",
+    "type": "api_error",
+    "code": "upstream_error"
+  }
+}
+```
+
+**Anthropic**
+
+```json
+{
+  "type": "error",
+  "error": {
+    "type": "api_error",
+    "message": "upstream response ended before finish frame"
+  }
+}
+```
+
+**Gemini**
+
+```json
+{
+  "error": {
+    "code": 502,
+    "message": "upstream response ended before finish frame",
+    "status": "INTERNAL"
+  }
+}
+```
+
+已开始流式响应后的终止原文：
+
+```text
+# OpenAI Chat
+data: {"error":{"message":"...","type":"api_error","code":"upstream_error"}}
+
+# OpenAI Responses
+event: response.failed
+data: {"response":{"id":"resp_...","object":"response","status":"failed","error":{"code":"upstream_error","message":"..."}}}
+
+# Anthropic
+event: error
+data: {"type":"error","error":{"type":"api_error","message":"..."}}
+
+# Gemini
+data: {"error":{"code":502,"message":"...","status":"INTERNAL"}}
+```
+
+MakerSuite 错误解析：
+
+| 来源 | 路径 | 公开结果 |
+| --- | --- | --- |
+| HTTP status | response status | 保留原状态码 |
+| protocol code | `$[1][0]` | 映射到协议 error code/type/status |
+| protocol message | `$[1][1]` | 写入公开错误的 `message` |
+| 原始形状 | `[null,[code,message,...]]` | 解析后进入统一错误事件 |
+
+请求生命周期：
+
+| 阶段 | HTTP / SSE 行为 | 资源状态 |
+| --- | --- | --- |
+| response headers 前失败 | 返回对应 HTTP status 与协议 JSON error | 释放账户槽位 |
+| SSE 已开始后失败 | 发送 OpenAI error、`response.failed`、Anthropic `error` 或 Gemini error frame | 关闭上游 reader并释放账户槽位 |
+| 完成帧 | 输出 finish reason、usage 与协议终止事件 | 合并 Set-Cookie并释放账户槽位 |
+| 客户端取消 | 结束上游读取 | 取消请求上下文并释放账户槽位 |
+
+欢迎二次开发，如果对你有帮助，考虑给仓库点一个Star~

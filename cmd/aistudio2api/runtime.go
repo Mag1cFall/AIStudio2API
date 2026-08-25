@@ -33,7 +33,7 @@ func newRuntime(ctx context.Context, cfg config.Config) (aistudio.Service, api.A
 		return nil, nil, nil, err
 	}
 
-	pool := aistudio.NewAccountPool(accounts)
+	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	headers, err := newAccountHeaderProvider(accounts, cfg.Proxy)
 	if err != nil {
 		return nil, nil, nil, err
@@ -44,7 +44,10 @@ func newRuntime(ctx context.Context, cfg config.Config) (aistudio.Service, api.A
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	workers := newAccountWorkerManager(pool, accounts, camoufoxPath, cfg.Proxy, cfg.InitTimeout)
+	workers := newAccountWorkerManager(
+		pool, accounts, camoufoxPath, cfg.Proxy, cfg.InitTimeout,
+		cfg.WarmWorkerLimit, cfg.WarmStartupConcurrency, cfg.TemporaryChat,
+	)
 	protected, err := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
 		Transport: transport, Workers: workers,
 	})
@@ -86,13 +89,20 @@ func newRuntime(ctx context.Context, cfg config.Config) (aistudio.Service, api.A
 
 // accountWorkerManager 管理每账户的长驻 WAA worker
 type accountWorkerManager struct {
-	mu          sync.RWMutex
-	pool        *aistudio.AccountPool
-	accounts    map[string]*accountWorker
-	camoufox    string
-	globalProxy string
-	initTimeout time.Duration
-	closed      bool
+	mu              sync.RWMutex
+	fillMu          sync.Mutex
+	rebalanceMu     sync.Mutex
+	pool            *aistudio.AccountPool
+	accounts        map[string]*accountWorker
+	camoufox        string
+	globalProxy     string
+	initTimeout     time.Duration
+	warmLimit       int
+	warmConcurrency int
+	temporaryChat   bool
+	lifecycle       context.Context
+	cancel          context.CancelFunc
+	closed          bool
 }
 
 type accountWorker struct {
@@ -100,6 +110,7 @@ type accountWorker struct {
 	id     string
 	config camoufoxnative.Options
 	worker *aistudio.NativeWorker
+	warm   atomic.Bool
 }
 
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
@@ -122,10 +133,16 @@ func newAccountWorkerManager(
 	camoufoxPath string,
 	globalProxy string,
 	initTimeout time.Duration,
+	warmLimit int,
+	warmConcurrency int,
+	temporaryChat bool,
 ) *accountWorkerManager {
+	lifecycle, cancel := context.WithCancel(context.Background())
 	manager := &accountWorkerManager{
 		pool: pool, accounts: make(map[string]*accountWorker, len(accounts)), camoufox: camoufoxPath,
 		globalProxy: globalProxy, initTimeout: initTimeout,
+		warmLimit: warmLimit, warmConcurrency: warmConcurrency, temporaryChat: temporaryChat,
+		lifecycle: lifecycle, cancel: cancel,
 	}
 	for _, account := range accounts {
 		if account == nil {
@@ -168,6 +185,7 @@ func (manager *accountWorkerManager) Reset(accountID string) error {
 	}
 	err := account.worker.Close()
 	account.worker = nil
+	account.warm.Store(false)
 	return err
 }
 
@@ -189,6 +207,7 @@ func (manager *accountWorkerManager) Update(account *aistudio.Account) error {
 			return err
 		}
 		worker.worker = nil
+		worker.warm.Store(false)
 	}
 	worker.config = manager.workerConfig(account)
 	return nil
@@ -232,34 +251,68 @@ func (manager *accountWorkerManager) workerConfig(account *aistudio.Account) cam
 		Timezone:         account.Config.Timezone,
 		Proxy:            account.EffectiveProxy(manager.globalProxy),
 		Headless:         true,
+		TemporaryChat:    manager.temporaryChat,
 	}
+}
+
+// WarmAccountIDs 返回当前驻留的健康 WAA worker
+func (manager *accountWorkerManager) WarmAccountIDs() []string {
+	manager.mu.RLock()
+	accounts := make([]*accountWorker, 0, len(manager.accounts))
+	for _, account := range manager.accounts {
+		accounts = append(accounts, account)
+	}
+	manager.mu.RUnlock()
+	warm := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		if account.warm.Load() {
+			warm = append(warm, account.id)
+		}
+	}
+	return warm
+}
+
+// WorkerFailed 返回账户驻留 worker 是否已经失败
+func (manager *accountWorkerManager) WorkerFailed(accountID string) bool {
+	manager.mu.RLock()
+	account := manager.accounts[accountID]
+	manager.mu.RUnlock()
+	if account == nil {
+		return false
+	}
+	account.mu.Lock()
+	defer account.mu.Unlock()
+	return account.worker != nil && account.worker.State().Phase == aistudio.WorkerFailed
 }
 
 // Worker 返回账户当前可用的 WAA preparer
 func (manager *accountWorkerManager) Worker(ctx context.Context, accountID string) (aistudio.ProtectedPreparer, error) {
 	manager.mu.RLock()
-	defer manager.mu.RUnlock()
 	if manager.closed {
+		manager.mu.RUnlock()
 		return nil, fmt.Errorf("WAA worker manager 已关闭")
 	}
 	account := manager.accounts[accountID]
+	manager.mu.RUnlock()
 	if account == nil {
 		return nil, fmt.Errorf("账户不存在: %s", accountID)
+	}
+	account.mu.Lock()
+	defer account.mu.Unlock()
+	if account.worker != nil {
+		phase := account.worker.State().Phase
+		if phase == aistudio.WorkerReady || phase == aistudio.WorkerBusy {
+			return account.worker, nil
+		}
+		if err := account.worker.Close(); err != nil {
+			return nil, err
+		}
+		account.worker = nil
+		account.warm.Store(false)
 	}
 	model, err := manager.pool.BootstrapModel(accountID)
 	if err != nil {
 		return nil, err
-	}
-	account.mu.Lock()
-	defer account.mu.Unlock()
-	if account.worker != nil && account.worker.State().Phase == aistudio.WorkerReady {
-		return account.worker, nil
-	}
-	if account.worker != nil {
-		if err := account.worker.Close(); err != nil {
-			slog.Warn("关闭旧 WAA worker 失败", "error", err)
-		}
-		account.worker = nil
 	}
 	initCtx, cancel := context.WithTimeout(ctx, manager.initTimeout)
 	defer cancel()
@@ -269,7 +322,198 @@ func (manager *accountWorkerManager) Worker(ctx context.Context, accountID strin
 		return nil, &accountWorkerInitError{err: err}
 	}
 	account.worker = worker
+	account.warm.Store(true)
 	return worker, nil
+}
+
+func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
+	statusByID := make(map[string]aistudio.AccountStatus)
+	for _, status := range manager.pool.Status() {
+		statusByID[status.ID] = status
+	}
+	warm := manager.WarmAccountIDs()
+	var selected string
+	var selectedUsed time.Time
+	for _, accountID := range warm {
+		if accountID == excludeID {
+			continue
+		}
+		status := statusByID[accountID]
+		if status.State == aistudio.AccountBusy {
+			continue
+		}
+		lastUsed := time.Time{}
+		if status.LastUsed != nil {
+			lastUsed = *status.LastUsed
+		}
+		if selected == "" || lastUsed.Before(selectedUsed) {
+			selected = accountID
+			selectedUsed = lastUsed
+		}
+	}
+	return selected
+}
+
+func (manager *accountWorkerManager) promote(ctx context.Context, accountID string) error {
+	manager.rebalanceMu.Lock()
+	defer manager.rebalanceMu.Unlock()
+	warm := manager.WarmAccountIDs()
+	for _, warmAccountID := range warm {
+		if warmAccountID == accountID {
+			return nil
+		}
+	}
+	for len(warm) >= manager.warmLimit {
+		victim := manager.idleWarmVictim(accountID)
+		if victim != "" {
+			if err := manager.Reset(victim); err != nil {
+				return err
+			}
+			break
+		}
+		if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+		warm = manager.WarmAccountIDs()
+	}
+	_, err := manager.Worker(ctx, accountID)
+	return err
+}
+
+// StartPrewarm 启动有界预热并返回首个就绪结果
+func (manager *accountWorkerManager) StartPrewarm(ctx context.Context) <-chan error {
+	first := make(chan error, 1)
+	manager.mu.RLock()
+	closed := manager.closed
+	manager.mu.RUnlock()
+	if closed {
+		first <- fmt.Errorf("WAA worker manager 已关闭")
+		close(first)
+		return first
+	}
+	if !manager.fillMu.TryLock() {
+		if len(manager.WarmAccountIDs()) > 0 {
+			first <- nil
+		} else {
+			first <- fmt.Errorf("WAA 预热已在进行")
+		}
+		close(first)
+		return first
+	}
+	fillContext, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(manager.lifecycle, cancel)
+	go manager.fillWarm(fillContext, first, func() {
+		stop()
+		cancel()
+	})
+	return first
+}
+
+func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- error, cleanup func()) {
+	defer cleanup()
+	defer manager.fillMu.Unlock()
+	defer close(first)
+	notified := false
+	notify := func(err error) {
+		if notified {
+			return
+		}
+		notified = true
+		first <- err
+	}
+	if len(manager.WarmAccountIDs()) > 0 {
+		notify(nil)
+	}
+	var failures []error
+	for {
+		if err := ctx.Err(); err != nil {
+			if !notified {
+				notify(errors.Join(append(failures, err)...))
+			}
+			return
+		}
+		manager.rebalanceMu.Lock()
+		warm := manager.WarmAccountIDs()
+		if len(warm) >= manager.warmLimit {
+			manager.rebalanceMu.Unlock()
+			if !notified {
+				notify(nil)
+			}
+			return
+		}
+		groups, err := manager.pool.ClassifyCandidates(aistudio.AccountSelection{
+			ModelID: aistudio.BootstrapModelID, Method: "generateContent",
+		}, warm)
+		if err != nil {
+			manager.rebalanceMu.Unlock()
+			failures = append(failures, err)
+			if !notified {
+				notify(errors.Join(failures...))
+			}
+			return
+		}
+		if len(groups.StandbyReady) == 0 {
+			manager.rebalanceMu.Unlock()
+			if len(groups.StandbyBusy) > 0 {
+				if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil && !notified {
+					notify(errors.Join(append(failures, err)...))
+				}
+				continue
+			}
+			if groups.Eligible && !groups.EarliestCooldown.IsZero() {
+				delay := time.Until(groups.EarliestCooldown)
+				if delay > 0 {
+					if err := waitWarmCandidate(ctx, delay); err != nil && !notified {
+						notify(errors.Join(append(failures, err)...))
+					}
+					continue
+				}
+			}
+			if !notified {
+				if len(failures) == 0 {
+					failures = append(failures, aistudio.ErrNoEligibleAccount)
+				}
+				notify(errors.Join(failures...))
+			}
+			return
+		}
+		remaining := manager.warmLimit - len(warm)
+		batchSize := min(manager.warmConcurrency, remaining, len(groups.StandbyReady))
+		results := make(chan warmResult, batchSize)
+		for _, accountID := range groups.StandbyReady[:batchSize] {
+			go func(accountID string) {
+				_, err := manager.Worker(ctx, accountID)
+				results <- warmResult{accountID: accountID, err: err}
+			}(accountID)
+		}
+		for range batchSize {
+			result := <-results
+			if result.err == nil {
+				notify(nil)
+				continue
+			}
+			if ctx.Err() != nil {
+				continue
+			}
+			failure := fmt.Errorf("预热账户 %s: %w", result.accountID, result.err)
+			failures = append(failures, failure)
+			if cooldownErr := manager.pool.MarkCooldown(result.accountID, "", time.Now().Add(5*time.Minute), result.err.Error()); cooldownErr != nil {
+				failures = append(failures, cooldownErr)
+			}
+			slog.Warn("WAA 预热失败", "account", result.accountID, "error", result.err)
+		}
+		manager.rebalanceMu.Unlock()
+	}
+}
+
+type warmResult struct {
+	accountID string
+	err       error
+}
+
+func (manager *accountWorkerManager) waitPrewarm() {
+	manager.fillMu.Lock()
+	manager.fillMu.Unlock()
 }
 
 // Close 关闭全部账户 worker
@@ -280,17 +524,20 @@ func (manager *accountWorkerManager) Close() error {
 		return nil
 	}
 	manager.closed = true
+	manager.cancel()
 	accounts := make([]*accountWorker, 0, len(manager.accounts))
 	for _, account := range manager.accounts {
 		accounts = append(accounts, account)
 	}
 	manager.mu.Unlock()
+	manager.waitPrewarm()
 	var closeErrors []error
 	for _, account := range accounts {
 		account.mu.Lock()
 		if account.worker != nil {
 			closeErrors = append(closeErrors, account.worker.Close())
 			account.worker = nil
+			account.warm.Store(false)
 		}
 		account.mu.Unlock()
 	}
@@ -470,6 +717,28 @@ func (service *trackedService) Start(ctx context.Context) ([]aistudio.Model, boo
 		return models, false, err
 	}
 	service.dataContext, service.dataCancel = context.WithCancel(service.lifecycle)
+	firstWarm := service.workers.StartPrewarm(service.dataContext)
+	select {
+	case <-ctx.Done():
+		service.dataCancel()
+		service.workers.waitPrewarm()
+		service.dataContext = nil
+		service.dataCancel = nil
+		_ = service.workers.ResetAll()
+		return nil, false, ctx.Err()
+	case warmErr, ok := <-firstWarm:
+		if !ok {
+			warmErr = fmt.Errorf("WAA 预热未返回就绪账户")
+		}
+		if warmErr != nil {
+			service.dataCancel()
+			service.workers.waitPrewarm()
+			service.dataContext = nil
+			service.dataCancel = nil
+			_ = service.workers.ResetAll()
+			return nil, false, warmErr
+		}
+	}
 	service.running.Store(true)
 	return models, true, nil
 }
@@ -483,6 +752,7 @@ func (service *trackedService) Stop() (bool, error) {
 	}
 	service.running.Store(false)
 	service.dataCancel()
+	service.workers.waitPrewarm()
 	service.dataContext = nil
 	service.dataCancel = nil
 	service.requests.cancelAll()
@@ -534,6 +804,7 @@ func (service *trackedService) SyncModels(ctx context.Context) error {
 		service.clearModels()
 		return err
 	}
+	service.workers.StartPrewarm(service.dataContext)
 	return nil
 }
 
@@ -619,6 +890,66 @@ func (service *trackedService) DownloadFile(ctx context.Context, fileID string) 
 	return media, requestErr
 }
 
+func (service *trackedService) warmCandidates(ctx context.Context, selection aistudio.AccountSelection) ([]string, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		warm := service.workers.WarmAccountIDs()
+		groups, err := service.pool.ClassifyCandidates(selection, warm)
+		if err != nil {
+			return nil, err
+		}
+		if len(groups.WarmReady)+len(groups.WarmBusy) > 0 {
+			allowed := append([]string(nil), groups.WarmReady...)
+			allowed = append(allowed, groups.WarmBusy...)
+			return allowed, nil
+		}
+		if len(groups.StandbyReady) > 0 {
+			accountID := groups.StandbyReady[0]
+			if err := service.workers.promote(ctx, accountID); err == nil {
+				continue
+			} else {
+				if cooldownErr := service.pool.MarkCooldown(accountID, "", time.Now().Add(5*time.Minute), err.Error()); cooldownErr != nil {
+					return nil, errors.Join(err, cooldownErr)
+				}
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+		}
+		if len(groups.StandbyBusy) > 0 {
+			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if groups.Eligible && !groups.EarliestCooldown.IsZero() {
+			delay := time.Until(groups.EarliestCooldown)
+			if delay <= 0 {
+				continue
+			}
+			if err := waitWarmCandidate(ctx, delay); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		return nil, aistudio.ErrNoEligibleAccount
+	}
+}
+
+func waitWarmCandidate(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // Generate 获取唯一账户并转发规范事件流
 func (service *trackedService) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
 	api.SetAccessLogTarget(ctx, request.Model, "")
@@ -655,9 +986,16 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	var source <-chan aistudio.Event
 	var first aistudio.Event
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		nextLease, acquireErr := service.pool.AcquireFor(requestCtx, aistudio.AccountSelection{
+		selection := aistudio.AccountSelection{
 			ModelID: modelID, Method: "generateContent", AccountID: requestedAccountID, ResourceID: resourceID,
-		})
+		}
+		warm, warmErr := service.warmCandidates(requestCtx, selection)
+		if warmErr != nil {
+			err = warmErr
+			break
+		}
+		selection.AllowedAccountIDs = warm
+		nextLease, acquireErr := service.pool.AcquireFor(requestCtx, selection)
 		if acquireErr != nil {
 			if err == nil || !errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) {
 				err = acquireErr
@@ -677,7 +1015,14 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 				break
 			}
 		}
-		retryable := retryableGenerateAccountError(requestCtx, err)
+		workerFailed := service.workers.WorkerFailed(request.AccountID)
+		retryable := retryableGenerateAccountError(requestCtx, err) || workerFailed && requestCtx.Err() == nil
+		if workerFailed {
+			if resetErr := service.workers.Reset(request.AccountID); resetErr != nil {
+				err = errors.Join(err, resetErr)
+				retryable = false
+			}
+		}
 		if aistudio.DefinitiveAuthenticationFailure(err) {
 			if stateErr := service.pool.MarkAuthRequired(request.AccountID, err.Error()); stateErr != nil {
 				err = errors.Join(err, stateErr)
@@ -697,7 +1042,7 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 			cooldownModel := modelID
 			cooldownDuration := 30 * time.Second
 			var workerInitError *accountWorkerInitError
-			if errors.As(err, &workerInitError) {
+			if errors.As(err, &workerInitError) || workerFailed {
 				cooldownModel = ""
 				cooldownDuration = 5 * time.Minute
 			}

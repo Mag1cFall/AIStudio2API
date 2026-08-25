@@ -5,7 +5,7 @@ import type {
   Model,
   PlaygroundInput,
   PlaygroundMedia,
-  Quota,
+  Cooldown,
   RequestSummary,
   ServiceConfig,
   ServiceStatus,
@@ -19,8 +19,8 @@ interface ModelsResponse {
   models: Model[]
 }
 
-interface QuotasResponse {
-  quotas: Quota[]
+interface CooldownsResponse {
+  cooldowns: Cooldown[]
 }
 
 interface RequestsResponse {
@@ -92,7 +92,7 @@ function parseAdminEvent(raw: string): AdminEvent | undefined {
     type !== 'log' &&
     type !== 'account' &&
     type !== 'models' &&
-    type !== 'quota' &&
+    type !== 'cooldowns' &&
     type !== 'request'
   ) {
     return undefined
@@ -105,7 +105,7 @@ export const api = {
   status: () => requestJSON<ServiceStatus>('/api/status'),
   accounts: async () => (await requestJSON<AccountsResponse>('/api/accounts')).accounts,
   models: async () => (await requestJSON<ModelsResponse>('/api/models')).models,
-  quotas: async () => (await requestJSON<QuotasResponse>('/api/quota')).quotas,
+  cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,
   requests: async () => (await requestJSON<RequestsResponse>('/api/requests')).requests,
   config: () => requestJSON<ServiceConfig>('/api/config'),
   createAccount: (draft: AccountDraft) =>

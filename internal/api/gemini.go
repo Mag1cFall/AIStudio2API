@@ -342,6 +342,10 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 		if part.FunctionResponse != nil {
 			variants++
 		}
+		if variants == 0 && part.ThoughtSignature != "" {
+			parts = append(parts, aistudio.Part{ThoughtSignature: part.ThoughtSignature})
+			continue
+		}
 		if variants != 1 {
 			return nil, false, fmt.Errorf("parts[%d] must contain exactly one data field", index)
 		}
@@ -362,12 +366,16 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if part.FileData.FileURI == "" || part.FileData.MIMEType == "" {
 				return nil, false, fmt.Errorf("fileData requires fileUri and mimeType")
 			}
-			parts = append(parts, aistudio.Part{
-				File: &aistudio.FileRef{
-					ID: part.FileData.FileURI, Name: part.FileData.DisplayName, MIME: part.FileData.MIMEType,
-				},
-				ThoughtSignature: part.ThoughtSignature,
-			})
+			if media, ok := aistudio.ExternalMediaForURL(part.FileData.FileURI); ok {
+				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature})
+			} else {
+				parts = append(parts, aistudio.Part{
+					File: &aistudio.FileRef{
+						ID: part.FileData.FileURI, Name: part.FileData.DisplayName, MIME: part.FileData.MIMEType,
+					},
+					ThoughtSignature: part.ThoughtSignature,
+				})
+			}
 		case part.FunctionCall != nil:
 			if part.FunctionCall.Name == "" {
 				return nil, false, fmt.Errorf("functionCall requires name")
@@ -478,7 +486,7 @@ func mapGeminiTools(groups []geminiToolGroup, config geminiToolConfig) (aistudio
 
 func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest) {
 	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
-		Model: request.Model, System: request.System, Contents: request.Contents,
+		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
 	})
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {

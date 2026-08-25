@@ -178,7 +178,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 		return errors.Join(requestErr, lease.Release())
 	}
 	account := lease.Account()
-	state, headers, err := prepareProtocolHeaders(ctx, lease, rpc, t.signer, t.headers, t.now(), true)
+	_, headers, err := prepareProtocolHeaders(ctx, lease, rpc, t.signer, t.headers, t.now(), true)
 	if err != nil {
 		return nil, releaseOnError(err)
 	}
@@ -196,17 +196,16 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 		return nil, releaseOnError(fmt.Errorf("执行 MakerSuite %s 请求: %w", rpc.Method, err))
 	}
 	setCookies := append([]string(nil), response.Header.Values("Set-Cookie")...)
+	if len(setCookies) > 0 {
+		if err := lease.MergeSetCookieHeaders(setCookies, rpc.URL, t.now()); err != nil {
+			_ = response.Body.Close()
+			return nil, releaseOnError(fmt.Errorf("合并 MakerSuite %s 响应 Cookie: %w", rpc.Method, err))
+		}
+	}
 	body := &leaseResponseBody{
 		body: response.Body,
 		finish: func() error {
 			var finishErr error
-			if len(setCookies) > 0 {
-				if err := state.MergeSetCookieHeaders(setCookies, rpc.URL, t.now()); err != nil {
-					finishErr = err
-				} else if err := lease.SaveStorageState(state); err != nil {
-					finishErr = err
-				}
-			}
 			if owned {
 				finishErr = errors.Join(finishErr, lease.Release())
 			}

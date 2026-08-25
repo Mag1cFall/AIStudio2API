@@ -13,12 +13,12 @@ func findCamoufoxExecutable() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("CAMOUFOX_PATH")); configured != "" {
 		return validateCamoufoxExecutable(configured)
 	}
-	name := "camoufox"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
+	name, err := camoufoxExecutablePath()
+	if err != nil {
+		return "", err
 	}
 	candidates := []string{filepath.Join("runtime", "camoufox", name)}
-	if executable, err := os.Executable(); err == nil {
+	if executable, executableErr := os.Executable(); executableErr == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "runtime", "camoufox", name))
 	}
 	if runtime.GOOS == "windows" {
@@ -32,7 +32,24 @@ func findCamoufoxExecutable() (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("未找到 Camoufox，请将浏览器放到 runtime/camoufox")
+	path, err := installCamoufox(name)
+	if err != nil {
+		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
+	}
+	return validateCamoufoxExecutable(path)
+}
+
+func camoufoxExecutablePath() (string, error) {
+	switch runtime.GOOS {
+	case "windows":
+		return "camoufox.exe", nil
+	case "linux":
+		return "camoufox-bin", nil
+	case "darwin":
+		return filepath.Join("Camoufox.app", "Contents", "MacOS", "camoufox"), nil
+	default:
+		return "", fmt.Errorf("Camoufox 不支持 %s", runtime.GOOS)
+	}
 }
 
 func validateCamoufoxExecutable(path string) (string, error) {
