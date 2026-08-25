@@ -23,6 +23,12 @@ type Blob struct {
 	Data []byte `json:"data"`
 }
 
+// ExternalMedia 表示可由 AI Studio 直接读取的外部媒体
+type ExternalMedia struct {
+	MIME string `json:"mime"`
+	URL  string `json:"url"`
+}
+
 // FileRef 表示已上传文件引用
 type FileRef struct {
 	ID   string `json:"id"`
@@ -101,11 +107,13 @@ type GroundingMetadata struct {
 type Part struct {
 	Text                string               `json:"text,omitempty"`
 	InlineData          *Blob                `json:"inline_data,omitempty"`
+	ExternalMedia       *ExternalMedia       `json:"external_media,omitempty"`
 	File                *FileRef             `json:"file,omitempty"`
 	FunctionCall        *FunctionCall        `json:"function_call,omitempty"`
 	FunctionResult      *FunctionResult      `json:"function_result,omitempty"`
 	ExecutableCode      *ExecutableCode      `json:"executable_code,omitempty"`
 	CodeExecutionResult *CodeExecutionResult `json:"code_execution_result,omitempty"`
+	Thought             bool                 `json:"thought,omitempty"`
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`
 }
 
@@ -197,6 +205,7 @@ type TokenCountRequest struct {
 	Model    string    `json:"model"`
 	System   string    `json:"system,omitempty"`
 	Contents []Content `json:"contents"`
+	Tools    Tools     `json:"tools,omitempty"`
 }
 
 // TokenCount 表示上游返回的权威计数

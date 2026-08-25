@@ -21,12 +21,6 @@
   Gemini TTS 语音生成
 </p>
 
-<!-- <img src="docs/img/demo.gif" alt="Demo GIF" width="100%" /> -->
-
-<!-- <p align="center">
-  <img src="docs/img/多worker并发和媒体模型支援.png" alt="多Worker并发与媒体模型支援" width="80%" />
-</p> -->
-
 </div>
 
 ---
@@ -39,6 +33,7 @@
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
 - **视频生成**: 支持 Veo 视频生成和图片转视频
+- **YouTube 输入**: 粘贴视频 URL 即可作为外部视频附件读取
 - **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
 - **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
@@ -47,10 +42,10 @@
 
 ## 系统要求
 
-- **Release 运行**: Windows 10 或更高版本、`aistudio2api.exe`、`start.bat` 和 `runtime/camoufox/`
-- **源码运行**: Go 1.26、Node.js 24、npm 和 Camoufox
+- **Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
+- **源码运行**: Go 1.26、Node.js 24 和 npm
 - **操作系统**: Windows、macOS、Linux
-- **内存**: 建议 2GB+ 可用内存
+- **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
 - **网络**: 稳定的互联网连接访问 Google AI Studio
 
 ## 安装步骤
@@ -71,7 +66,7 @@ copy .env.example .env
 
 已有 `aistudio2api.exe` 时脚本立即运行；源码目录缺少可执行文件时，脚本自动安装前端依赖并构建前端与 Go 程序。
 
-Camoufox 可以放在 `runtime/camoufox/`，也可以通过环境变量 `CAMOUFOX_PATH` 指定可执行文件。
+首次启动会自动下载当前平台的 Camoufox 到 `runtime/camoufox/`。也可以通过环境变量 `CAMOUFOX_PATH` 指定已有可执行文件。
 
 ### 方式二：手动构建
 
@@ -79,7 +74,6 @@ Camoufox 可以放在 `runtime/camoufox/`，也可以通过环境变量 `CAMOUFO
 
 - Go 1.26
 - Node.js 24 与 npm
-- Camoufox
 
 #### 2. 克隆项目
 
@@ -96,8 +90,11 @@ npm ci
 npm run build
 cd ..
 go build -o aistudio2api ./cmd/aistudio2api
+chmod +x ./aistudio2api
 ./aistudio2api
 ```
+
+Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
 ## 快速开始
 
@@ -341,6 +338,10 @@ cp .env.example .env
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间 |
+| `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
+| `WARM_STARTUP_CONCURRENCY` | `2` | 同时初始化的预热账户数 |
+| `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
+| `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
 ### 端口配置
 
@@ -380,6 +381,7 @@ Go 直接处理业务请求，业务传输使用与 Camoufox 对齐的 Firefox T
 ### 使用限制
 
 - **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
+- **AI Studio 历史**: API 请求不保存到官网历史；`TEMPORARY_CHAT=true` 还会关闭 WAA 预热页的自动保存
 - **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
 - **认证有效期**: Chrome 导入账户保留 DBSC 续签材料；隔离登录账户失效后在账户页重新登录
 
@@ -417,7 +419,7 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 | 页面未自动打开 | 手动打开 `.env` 中 `LISTEN_ADDR` 对应的地址 |
 | `service_stopped` | 在管理页面点击“启动服务” |
 | 没有可用账户 | 在账户页新增、启用或重新登录账户 |
-| 找不到 Camoufox | 放入 `runtime/camoufox/` 或设置 `CAMOUFOX_PATH` |
+| Camoufox 准备失败 | 检查 GitHub Release 访问，或设置 `CAMOUFOX_PATH` |
 
 ## 贡献
 
@@ -427,11 +429,8 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 
 - ✅ **TTS 支持**: 已适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
 - ✅ **媒体生成**: 已支持 Imagen 3、Veo 2、Nano Banana 图片/视频生成
-- **点击逻辑统一**: 将 `_safe_click` 方法提取到全局 `operations.py`，统一所有控制器的点击操作
 - ✅ **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
 - **一键部署**: 提供 Windows/Linux/macOS 的全自动化安装与启动脚本
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
 - ✅ **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
-- ✅ **CI/CD 流水线**: 建立 GitHub Actions 自动化测试与构建发布流程
-- **单元测试**: 增加核心模块（特别是浏览器自动化部分）的测试覆盖率
-- ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性 (这项或许不可能实现) (fix:2025/12/09 这项已实现)
+- ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性

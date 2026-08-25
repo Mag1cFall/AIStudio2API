@@ -26,6 +26,10 @@ const form = reactive<ServiceConfig>({
   proxy: '',
   init_timeout: '2m',
   request_timeout: '5m',
+  warm_worker_limit: 5,
+  warm_startup_concurrency: 2,
+  per_account_concurrency: 2,
+  temporary_chat: false,
 })
 
 watch(
@@ -36,7 +40,7 @@ watch(
   { immediate: true },
 )
 
-// saveConfig 原子保存六项全局配置
+// saveConfig 原子保存全局配置
 async function saveConfig(): Promise<void> {
   saving.value = true
   try {
@@ -151,6 +155,51 @@ async function saveConfig(): Promise<void> {
           />
         </label>
       </div>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-400">{{
+            t('settings.warmWorkerLimit')
+          }}</span>
+          <input
+            v-model.number="form.warm_worker_limit"
+            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+            type="number"
+            min="1"
+            required
+          />
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-400">{{
+            t('settings.warmStartupConcurrency')
+          }}</span>
+          <input
+            v-model.number="form.warm_startup_concurrency"
+            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+            type="number"
+            min="1"
+            :max="form.warm_worker_limit"
+            required
+          />
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-400">{{
+            t('settings.perAccountConcurrency')
+          }}</span>
+          <input
+            v-model.number="form.per_account_concurrency"
+            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+            type="number"
+            min="1"
+            required
+          />
+        </label>
+      </div>
+
+      <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+        <input v-model="form.temporary_chat" class="h-4 w-4 accent-blue-500" type="checkbox" />
+        <span class="text-sm font-medium text-gray-300">{{ t('settings.temporaryChat') }}</span>
+      </label>
 
       <div class="flex justify-end pt-4">
         <button

@@ -461,6 +461,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	cfg := config.Config{
 		AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, ProxyAPIKey: value.APIKey,
 		Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
+		WarmWorkerLimit: value.WarmWorkerLimit, WarmStartupConcurrency: value.WarmStartupConcurrency,
+		PerAccountConcurrency: value.PerAccountConcurrency,
+		TemporaryChat:         value.TemporaryChat,
 	}
 	if err := cfg.Save(admin.configPath); err != nil {
 		return api.RuntimeConfig{}, err
@@ -472,40 +475,45 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	return runtimeConfigDTO(cfg), nil
 }
 
-func (admin *runtimeAdmin) Quotas(context.Context) ([]api.AdminQuota, error) {
+func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, error) {
 	statuses := admin.pool.Status()
-	quotas := make([]api.AdminQuota, 0)
+	cooldowns := make([]api.AdminCooldown, 0)
 	now := time.Now()
 	for _, account := range statuses {
-		modelIDs := make([]string, 0, len(account.Quota))
-		for modelID := range account.Quota {
+		models := make(map[string]struct{}, len(account.Models))
+		for _, modelID := range account.Models {
+			models[modelID] = struct{}{}
+		}
+		effective := make(map[string]aistudio.CooldownState)
+		if global, ok := account.Cooldowns["*"]; ok && global.Active(now) {
+			for modelID := range models {
+				effective[modelID] = global
+			}
+		}
+		for modelID, cooldown := range account.Cooldowns {
+			if modelID == "*" || !cooldown.Active(now) {
+				continue
+			}
+			if _, ok := models[modelID]; !ok {
+				continue
+			}
+			if current, ok := effective[modelID]; !ok || cooldown.Until.After(current.Until) {
+				effective[modelID] = cooldown
+			}
+		}
+		modelIDs := make([]string, 0, len(effective))
+		for modelID := range effective {
 			modelIDs = append(modelIDs, modelID)
 		}
 		sort.Strings(modelIDs)
 		for _, modelID := range modelIDs {
-			quota := account.Quota[modelID]
-			state := quotaState(quota, now)
-			quotas = append(quotas, api.AdminQuota{
-				AccountID: account.ID, ModelID: quota.ModelID, State: state,
-				Remaining: quota.Remaining, Limit: quota.Limit, ResetAt: quota.ResetAt,
+			cooldown := effective[modelID]
+			cooldowns = append(cooldowns, api.AdminCooldown{
+				AccountID: account.ID, ModelID: modelID, Until: cooldown.Until, Reason: cooldown.Reason,
 			})
 		}
 	}
-	return quotas, nil
-}
-
-// quotaState 将运行时配额投影为管理界面支持的状态
-func quotaState(quota aistudio.QuotaState, now time.Time) string {
-	if quota.CoolingDown(now) {
-		return "cooldown"
-	}
-	if quota.Remaining == nil || quota.Limit == nil {
-		return "unknown"
-	}
-	if *quota.Remaining <= 0 {
-		return "limited"
-	}
-	return "available"
+	return cooldowns, nil
 }
 
 func (admin *runtimeAdmin) Requests(context.Context) ([]api.AdminRequest, error) {
@@ -537,7 +545,7 @@ func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, e
 		cancel()
 		return nil, err
 	}
-	quotas, err := admin.Quotas(eventCtx)
+	cooldowns, err := admin.Cooldowns(eventCtx)
 	if err != nil {
 		stopLifecycle()
 		cancel()
@@ -560,9 +568,7 @@ func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, e
 		for _, account := range accounts {
 			initial = append(initial, api.AdminEvent{Type: "account", Data: account})
 		}
-		for _, quota := range quotas {
-			initial = append(initial, api.AdminEvent{Type: "quota", Data: quota})
-		}
+		initial = append(initial, api.AdminEvent{Type: "cooldowns", Data: cooldowns})
 		for _, request := range admin.requests.list() {
 			initial = append(initial, api.AdminEvent{Type: "request", Data: request})
 		}
@@ -610,7 +616,7 @@ func (admin *runtimeAdmin) requestUpdates(ctx context.Context, request api.Admin
 	if err != nil {
 		return nil, err
 	}
-	quotas, err := admin.Quotas(ctx)
+	cooldowns, err := admin.Cooldowns(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -618,9 +624,7 @@ func (admin *runtimeAdmin) requestUpdates(ctx context.Context, request api.Admin
 	for _, account := range accounts {
 		updates = append(updates, api.AdminEvent{Type: "account", Data: account})
 	}
-	for _, quota := range quotas {
-		updates = append(updates, api.AdminEvent{Type: "quota", Data: quota})
-	}
+	updates = append(updates, api.AdminEvent{Type: "cooldowns", Data: cooldowns})
 	return updates, nil
 }
 
@@ -779,6 +783,9 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 	return api.RuntimeConfig{
 		AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
+		WarmWorkerLimit: cfg.WarmWorkerLimit, WarmStartupConcurrency: cfg.WarmStartupConcurrency,
+		PerAccountConcurrency: cfg.PerAccountConcurrency,
+		TemporaryChat:         cfg.TemporaryChat,
 	}
 }
 

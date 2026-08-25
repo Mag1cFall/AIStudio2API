@@ -2,7 +2,6 @@ package aistudio
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -111,13 +110,12 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}, nil
 }
 
-// RPCError 保存上游状态、协议错误码和原始错误证据
+// RPCError 保存上游状态和协议错误码
 type RPCError struct {
 	Method     string
 	StatusCode int
 	Code       int64
 	Message    string
-	Raw        json.RawMessage
 }
 
 // Error 返回结构化上游错误
@@ -204,7 +202,6 @@ func decodeRPCError(method string, statusCode int, raw []byte) error {
 		Method:     method,
 		StatusCode: statusCode,
 		Message:    http.StatusText(statusCode),
-		Raw:        append(json.RawMessage(nil), raw...),
 	}
 	value, err := decodeJSONValue(raw)
 	if err != nil {

@@ -82,15 +82,12 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		worker.fail(err)
 		return PreparedProtectedRequest{}, err
 	}
-	proofHash := sha256.Sum256([]byte(proof))
 	worker.updateState(func(state *WorkerState) {
 		state.Phase = WorkerReady
-		state.LastProofSHA256 = fmt.Sprintf("%x", proofHash)
 	})
 	return PreparedProtectedRequest{
-		Body:        body,
-		Headers:     headers,
-		ProofSHA256: fmt.Sprintf("%x", proofHash),
+		Body:    body,
+		Headers: headers,
 	}, nil
 }
 

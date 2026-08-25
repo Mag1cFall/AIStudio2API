@@ -45,7 +45,20 @@ func PersistAccountFingerprint(sourceDirectory string, targetDirectory string) e
 
 // browserMajor 从 Camoufox 发行元数据读取实际 Firefox 主版本
 func browserMajor(executablePath string) (int, error) {
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(executablePath), "version.json"))
+	directory := filepath.Dir(executablePath)
+	var data []byte
+	var err error
+	for range 5 {
+		data, err = os.ReadFile(filepath.Join(directory, "version.json"))
+		if err == nil {
+			break
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			break
+		}
+		directory = parent
+	}
 	if err != nil {
 		return 0, fmt.Errorf("读取 Camoufox 版本: %w", err)
 	}

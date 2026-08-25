@@ -2,15 +2,15 @@
 import { computed, ref } from 'vue'
 import { api } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
-import type { Account, Quota, QuotaState, RequestState, RequestSummary } from '@/types'
+import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{
   accounts: Account[]
-  quotas: Quota[]
+  cooldowns: Cooldown[]
   requests: RequestSummary[]
   loading: boolean
-  quotaError: string
+  cooldownError: string
   requestError: string
 }>()
 
@@ -21,13 +21,6 @@ const emit = defineEmits<{
 
 const { locale, t } = useI18n()
 const cancelling = ref('')
-
-const quotaStateKeys: Record<QuotaState, TranslationKey> = {
-  available: 'state.available',
-  cooldown: 'state.cooldown',
-  limited: 'state.limited',
-  unknown: 'state.unknown',
-}
 
 const requestStateKeys: Record<RequestState, TranslationKey> = {
   queued: 'state.queued',
@@ -46,18 +39,6 @@ const activeCount = computed(
 // accountLabel 将稳定账户 ID 映射为用户显示名称
 function accountLabel(id: string): string {
   return props.accounts.find((account) => account.id === id)?.label ?? id
-}
-
-// formatNumber 格式化服务端提供的数值
-function formatNumber(value: number | undefined): string {
-  if (value === undefined) return t('common.unknown')
-  return new Intl.NumberFormat(locale.value).format(value)
-}
-
-// quotaWidth 计算存在上下限时的配额进度
-function quotaWidth(quota: Quota): string {
-  if (quota.remaining === undefined || quota.limit === undefined || quota.limit <= 0) return '0%'
-  return `${Math.min(100, Math.max(0, (quota.remaining / quota.limit) * 100))}%`
 }
 
 // formatTime 根据当前语言显示请求时间
@@ -102,60 +83,43 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
     <div class="space-y-6">
       <article class="rounded-lg border border-[#30363d] bg-[#161b22] p-4">
         <div class="mb-4 flex items-center justify-between">
-          <h3 class="font-bold text-gray-300">{{ t('quota.title') }}</h3>
-          <span class="font-mono text-xs text-gray-500">{{ quotas.length }}</span>
+          <h3 class="font-bold text-gray-300">{{ t('cooldowns.title') }}</h3>
+          <span class="font-mono text-xs text-gray-500">{{ cooldowns.length }}</span>
         </div>
         <div
-          v-if="quotaError"
+          v-if="cooldownError"
           class="rounded border border-red-500/40 bg-red-500/10 p-3 text-red-300"
         >
-          {{ quotaError }}
+          {{ cooldownError }}
         </div>
         <div v-else-if="loading" class="py-8 text-center text-gray-500">
           {{ t('common.loading') }}
         </div>
-        <div v-else-if="quotas.length === 0" class="py-8 text-center text-xs text-gray-600">
-          {{ t('quota.empty') }}
+        <div v-else-if="cooldowns.length === 0" class="py-8 text-center text-xs text-gray-600">
+          {{ t('cooldowns.empty') }}
         </div>
         <div v-else class="space-y-3">
           <div
-            v-for="quota in quotas"
-            :key="`${quota.account_id}:${quota.model_id}`"
+            v-for="cooldown in cooldowns"
+            :key="`${cooldown.account_id}:${cooldown.model_id}`"
             class="overflow-hidden rounded border border-[#30363d] bg-[#0d1117]"
           >
             <div
               class="flex items-center justify-between gap-3 border-b border-[#30363d] bg-[#21262d] px-4 py-2"
             >
               <div class="min-w-0">
-                <strong class="block truncate text-sm text-gray-200">{{ quota.model_id }}</strong>
-                <span class="text-xs text-gray-500">{{ accountLabel(quota.account_id) }}</span>
+                <strong class="block truncate text-sm text-gray-200">{{
+                  cooldown.model_id
+                }}</strong>
+                <span class="text-xs text-gray-500">{{ accountLabel(cooldown.account_id) }}</span>
               </div>
-              <span
-                class="shrink-0 text-xs"
-                :class="{
-                  'text-green-400': quota.state === 'available',
-                  'text-yellow-400': quota.state === 'cooldown',
-                  'text-red-400': quota.state === 'limited',
-                  'text-gray-500': quota.state === 'unknown',
-                }"
-              >
-                {{ t(quotaStateKeys[quota.state]) }}
+              <span class="shrink-0 text-xs text-yellow-400">
+                {{ t('state.cooldown') }}
               </span>
             </div>
-            <div class="p-3">
-              <div
-                v-if="quota.remaining !== undefined && quota.limit !== undefined"
-                class="mb-2 h-1 overflow-hidden rounded bg-[#30363d]"
-              >
-                <i class="block h-full bg-blue-500" :style="{ width: quotaWidth(quota) }"></i>
-              </div>
-              <div class="flex justify-between text-xs text-gray-500">
-                <span>
-                  {{ t('quota.remaining') }}:
-                  <b class="font-normal text-gray-300">{{ formatNumber(quota.remaining) }}</b>
-                </span>
-                <span>{{ quota.reset_at ? formatTime(quota.reset_at) : '—' }}</span>
-              </div>
+            <div class="flex flex-wrap justify-between gap-2 p-3 text-xs text-gray-500">
+              <span class="min-w-0 break-words">{{ cooldown.reason || '—' }}</span>
+              <span>{{ t('cooldowns.until') }}: {{ formatTime(cooldown.until) }}</span>
             </div>
           </div>
         </div>

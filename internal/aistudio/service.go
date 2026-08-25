@@ -155,12 +155,15 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 	}
 	values := make([]string, 0)
 	for _, content := range request.Contents {
+		content = attachYouTubeMedia(content)
 		for _, part := range content.Parts {
 			switch {
 			case part.Text != "":
 				values = append(values, part.Text)
 			case part.InlineData != nil:
 				values = append(values, base64.StdEncoding.EncodeToString(part.InlineData.Data))
+			case part.ExternalMedia != nil:
+				values = append(values, part.ExternalMedia.URL)
 			case part.File != nil:
 				values = append(values, part.File.ID)
 			default:

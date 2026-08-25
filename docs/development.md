@@ -6,8 +6,8 @@ AIStudio2API 使用 Go 直接调用 Google AI Studio 的 MakerSuite 私有协议
 
 | 场景 | 必需组件 | 说明 |
 | --- | --- | --- |
-| Release 运行 | `aistudio2api` 与 Camoufox | 不需要 Python、Node.js 或 Playwright |
-| 源码运行 | Go 1.26、Node.js 24、npm 与 Camoufox | Node.js 只用于构建 Vue 管理端 |
+| Release 运行 | `aistudio2api` | 首次启动自动准备 Camoufox，不需要 Python、Node.js 或 Playwright |
+| 源码运行 | Go 1.26、Node.js 24 与 npm | Node.js 只用于构建 Vue 管理端 |
 | Windows Chrome 导入 | Windows amd64、稳定版 Chrome | Go 程序直接读取本机 Profile 的 OAuth/DBSC 材料 |
 
 Windows 用户可以直接运行根目录的 `start.bat`。脚本优先启动已有的 `aistudio2api.exe`；源码目录缺少可执行文件时才执行 `npm ci`、前端构建与 Go 构建。程序启动后自动打开管理页面，生成服务初始保持停止；账户登录、日志查看和生成服务启停均在该页面完成。
@@ -31,7 +31,7 @@ go run ./cmd/aistudio2api
 | 隔离登录 | `aistudio2api setup --login` | 可见 Camoufox 中手动完成 Google 登录 |
 | 文件导入 | `aistudio2api setup --storage-state <file>` | 导入 Playwright storage state 结构 |
 
-`--proxy` 会同时固定到新账户的初始化、WAA 与业务请求，接受无认证信息的 HTTP、HTTPS 或 SOCKS5 URL。`--locale` 和 `--timezone` 设置账户环境；Chrome 导入未显式指定语言时读取 Profile 的首选语言。Camoufox 按以下顺序定位：进程环境变量 `CAMOUFOX_PATH`、`runtime/camoufox/camoufox[.exe]`、可执行文件旁的同名目录、Windows 本机 Camoufox 缓存。
+`--proxy` 会同时固定到新账户的初始化、WAA 与业务请求，接受无认证信息的 HTTP、HTTPS 或 SOCKS5 URL。`--locale` 和 `--timezone` 设置账户环境；Chrome 导入未显式指定语言时读取 Profile 的首选语言。Camoufox 按以下顺序定位：进程环境变量 `CAMOUFOX_PATH`、`runtime/camoufox/`、可执行文件旁的同名目录、Windows 本机 Camoufox 缓存。全部不存在时自动下载当前平台的固定版本。
 
 日常启动只需运行二进制或 Go 入口，再从管理页面启动生成服务：
 
@@ -50,7 +50,7 @@ internal/aistudio/       账户、MakerSuite、WAA、模型、工具、上传、
 internal/api/            OpenAI、Responses、Anthropic、Gemini 与管理端 HTTP 路由
 internal/camoufoxnative/ 原生 WebDriver BiDi、WAA bootstrap 与隔离登录
 internal/chromeauth/     Windows Chrome OAuth/DBSC 发现、导入和续签
-internal/config/         六项全局配置的读取、校验和原子写回
+internal/config/         全局配置的读取、校验和原子写回
 internal/webui/          嵌入并提供 Vue 构建产物
 web/                     Vue 3、TypeScript、Vite 和 Tailwind CSS 源码
 docs/                    开发流程与私有协议说明
@@ -73,7 +73,7 @@ HTTP route
   -> client protocol response
 ```
 
-Camoufox 由 Go 通过 WebDriver BiDi 直接管理。每个被首次使用的账户启动一个隔离、无头、长驻 runtime，完成一次官网生成以取得官方 WAA service 与动态请求头；后续业务正文由 Go 编码并通过同账户固定出口发送。HTTP transport 使用与当前 Camoufox 对齐的 Firefox 152 TLS、HTTP/2 和请求头顺序。源码和 Release 均不包含 Python 数据面、Node.js 浏览器 worker 或 Playwright runtime。
+Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 与 `WARM_STARTUP_CONCURRENCY` 准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。每个 runtime 完成一次官网生成以取得官方 WAA service 与动态请求头；后续业务正文由 Go 编码并通过同账户固定出口发送。HTTP transport 使用与当前 Camoufox 对齐的 Firefox 152 TLS、HTTP/2 和请求头顺序。源码和 Release 均不包含 Python 数据面、Node.js 浏览器 worker 或 Playwright runtime。
 
 ## 3. 配置、账户和持久状态
 
@@ -87,6 +87,10 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。每个被首次使用的账
 | `PROXY` | setup 与未设置账户代理时使用的固定出口 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间 | `5m` |
+| `WARM_WORKER_LIMIT` | 常驻预热账户数 | `5` |
+| `WARM_STARTUP_CONCURRENCY` | 同时初始化的预热账户数 | `2` |
+| `PER_ACCOUNT_CONCURRENCY` | 单账号同时执行的请求数 | `2` |
+| `TEMPORARY_CHAT` | WAA 预热页是否使用临时对话 | `false` |
 
 每个账户目录包含：
 
@@ -97,7 +101,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。每个被首次使用的账
 | `camoufox-fingerprint.json` | 账户固定的浏览器指纹、语言与时区 | 首次运行生成；重新登录和 WAA runtime 继续复用 |
 | `runtime-state.json` | 模型冷却与 Drive/Veo 资源到账户的绑定 | 请求失败、资源创建和服务重启期间保留 |
 
-账户调度先按实时 `ListModels` 的模型和方法筛选，再执行轮询。租约同时覆盖进程内独占、跨进程文件锁、请求读取和 Cookie 写回。未固定账户和资源的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个客户端可见事件前切换到另一个同能力账户一次；显式账户、Drive 文件和 Veo operation 始终保持创建账户粘性。Chrome 导入状态保留续签材料，401 或 403 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
+账户调度先按实时 `ListModels` 的模型和方法筛选，再执行轮询。每个账号最多同时租用 `PER_ACCOUNT_CONCURRENCY` 个请求槽位；首个请求获取跨进程文件锁，最后一个请求释放。WAA proof 由账号 worker 串行生成，MakerSuite HTTP 响应可并发流式输出，Cookie 在响应头到达时基于最新账户状态单写合并。未固定账户和资源的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个客户端可见事件前切换到另一个同能力账户；显式账户、Drive 文件和 Veo operation 始终保持创建账户粘性。Chrome 导入状态保留续签材料，401 或 403 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
 
 认证状态包含长期凭证和设备绑定材料，只能保存在本机受控目录。提交、Issue、CI 和普通日志中不得出现 Cookie、token、proof、邮箱、账户 ID、提示词、响应正文或完整原始帧。
 
@@ -142,42 +146,11 @@ Vite 将生产产物写入 `internal/webui/dist`。管理端通过本机 `/api` 
 
 公开适配器不得访问账户文件、WAA runtime 或原始上游数组。协议核心不得从模型 ID 猜测方法、token 上限、工具或媒体参数。资源型操作在创建时记录账户 ID，后续轮询、下载与提示引用继续使用该账户。
 
-已识别字段必须校验类型和 oneof 约束。新增的未知非空槽保留为脱敏 DEBUG 信息，不中断已识别文本和媒体事件；出现无法解释的已消费字段、缺失完成帧或无效媒体内容时返回结构化协议错误。
+已识别字段必须校验类型和 oneof 约束。未知非空槽不进入公开事件，也不影响已识别文本和媒体事件；出现无法解释的已消费字段、缺失完成帧或无效媒体内容时返回结构化协议错误。
 
-## 6. 自动检查与集成测试
+## 6. 构建与贡献
 
-提交前执行：
-
-```powershell
-cd web
-npm ci
-npm run typecheck
-npm run lint
-npm run format:check
-npm run build
-cd ..
-gofmt -w <修改的 Go 文件>
-go test ./cmd/... ./internal/...
-go vet ./cmd/... ./internal/...
-go build ./cmd/aistudio2api
-```
-
-集成测试使用临时认证目录、临时监听端口和一次性本地 API key。测试矩阵按改动范围选择：
-
-| 能力组 | 必须检查的结果 |
-| --- | --- |
-| 认证 | Chrome 导入或隔离登录、模型目录、Cookie 轮换、401/403 续签、停止后重启 |
-| 文本 | 四个入口的流式与非流式正文、权威 usage、finish reason、客户端取消 |
-| 多轮与工具 | 完整消息历史、`previous_response_id`、函数调用、tool result、thought signature |
-| Google 工具 | Search、URL Context、Code Execution、Maps、Image Search 的事件与来源结构 |
-| 媒体 | 上传文件可被模型读取、图片可解码、音频可播放、Veo 可轮询并下载 MP4 |
-| 多账户 | 能力筛选、轮询、冷却、首个可见事件前故障转移、资源粘性和重启恢复 |
-
-协议改动应使用脱敏 fixture 检查稀疏数组、UTF-8 跨块、思考、工具、媒体、usage、finish 和错误。账户改动应检查租约、轮询、冷却、Cookie 合并、资源绑定与原子持久化。集成改动应检查多次 WAA proof、认证轮换、请求取消、进程 `Ctrl+C`、再次启动和继续调用。
-
-## 7. Release 与贡献验收
-
-Release 构建顺序固定为前端安装、生产构建和 Go 二进制构建：
+发布二进制前先构建前端：
 
 ```powershell
 cd web
@@ -187,6 +160,4 @@ cd ..
 go build -trimpath -o aistudio2api.exe ./cmd/aistudio2api
 ```
 
-Windows 发布包包含 `aistudio2api.exe`、`start.bat` 和 `runtime/camoufox/`。其他平台提供同一 Go 程序与对应 Camoufox 运行时。发布验收在全新解压目录完成管理页新增账户和登录、生成服务启停、实时模型发现、一次流式文本、一个媒体能力、退出管理进程和重启后再次调用。
-
-协议相关 Issue 或 PR 应提供入口协议、模型 ID、HTTP 状态、最短脱敏请求形状、响应事件顺序、静态检查结果和集成测试结果。原始认证状态、完整上游请求与响应、本机绝对路径留在本机私有目录。
+Windows 发布包包含 `aistudio2api.exe` 与 `start.bat`；其他平台使用同一 Go 程序。Camoufox 在首次启动时自动准备。贡献请聚焦单一功能或协议变更，不提交认证状态、原始请求响应或本机运行产物。

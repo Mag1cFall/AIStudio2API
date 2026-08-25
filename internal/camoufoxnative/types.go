@@ -17,6 +17,7 @@ type Options struct {
 	Proxy            string
 	ProxyBypass      string
 	Headless         bool
+	TemporaryChat    bool
 	ReadyTimeout     time.Duration
 	Log              io.Writer
 }

@@ -109,7 +109,7 @@ func verifyModels(ctx context.Context, client *http.Client, state *aistudio.Stor
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), aistudio.JSONProtobufContentType) {
 		return 0, fmt.Errorf("AI Studio ListModels 返回未识别的 Content-Type %q", response.Header.Get("Content-Type"))
 	}
-	models, _, err := aistudio.ParseModels(response.Body)
+	models, err := aistudio.ParseModels(response.Body)
 	if err != nil {
 		return 0, err
 	}

@@ -5,33 +5,16 @@ import (
 	"fmt"
 )
 
-// StreamEvidence 保存 canonical Event 尚未承载的不透明协议状态
-type StreamEvidence struct {
-	ThoughtSignatures []string        `json:"thought_signatures,omitempty"`
-	ResponseIDs       []string        `json:"response_ids,omitempty"`
-	Interaction       json.RawMessage `json:"interaction,omitempty"`
-}
-
 // FrameDecoder 将 field 1 repeated 帧转换为规范事件
 type FrameDecoder struct {
 	usage     *Usage
 	finished  bool
-	evidence  StreamEvidence
 	lastFrame json.RawMessage
 }
 
 // NewFrameDecoder 创建单次 GenerateContent 的有状态解码器
 func NewFrameDecoder() *FrameDecoder {
 	return &FrameDecoder{}
-}
-
-// Evidence 返回当前已保存的不透明流状态
-func (d *FrameDecoder) Evidence() StreamEvidence {
-	return StreamEvidence{
-		ThoughtSignatures: append([]string(nil), d.evidence.ThoughtSignatures...),
-		ResponseIDs:       append([]string(nil), d.evidence.ResponseIDs...),
-		Interaction:       append(json.RawMessage(nil), d.evidence.Interaction...),
-	}
 }
 
 // Decode 解码一条 repeated 流帧
@@ -45,7 +28,7 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, d.protocolError("$[0][]", "空流帧", raw)
 	}
 	if isJSONNull(frame[0]) {
-		return d.decodeMetadataFrame(frame, raw)
+		return nil, nil
 	}
 	candidates, err := rawArray(frame[0], "$[0][][0]", raw)
 	if err != nil {
@@ -90,15 +73,6 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		}
 		if complete {
 			d.usage = &usage
-		}
-	}
-	if responseIDRaw := rawAt(frame, 7); !isJSONNull(responseIDRaw) {
-		responseID, err := rawString(responseIDRaw, "$[0][][7]", raw)
-		if err != nil {
-			return nil, withMethod(err, "GenerateContent")
-		}
-		if len(d.evidence.ResponseIDs) == 0 || d.evidence.ResponseIDs[len(d.evidence.ResponseIDs)-1] != responseID {
-			d.evidence.ResponseIDs = append(d.evidence.ResponseIDs, responseID)
 		}
 	}
 	finishRaw := rawAt(candidate, 1)
@@ -174,15 +148,6 @@ func (d *FrameDecoder) End() error {
 	return d.protocolError("$", "流结束前没有完成帧", d.lastFrame)
 }
 
-func (d *FrameDecoder) decodeMetadataFrame(frame []json.RawMessage, evidence json.RawMessage) ([]Event, error) {
-	interaction := rawAt(frame, 3)
-	if isJSONNull(interaction) {
-		return nil, nil
-	}
-	d.evidence.Interaction = append(json.RawMessage(nil), interaction...)
-	return nil, nil
-}
-
 func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
 	content, err := rawArray(raw, "$[0][][0][0][0]", evidence)
 	if err != nil {
@@ -235,7 +200,6 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 		if err != nil {
 			return nil, withMethod(err, "GenerateContent")
 		}
-		d.evidence.ThoughtSignatures = append(d.evidence.ThoughtSignatures, signature)
 	}
 	events := make([]Event, 0, 2)
 	emptyText := false

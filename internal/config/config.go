@@ -15,10 +15,13 @@ import (
 )
 
 const (
-	defaultAuthStates     = "auth"
-	defaultListenAddr     = "127.0.0.1:2048"
-	defaultInitTimeout    = 2 * time.Minute
-	defaultRequestTimeout = 5 * time.Minute
+	defaultAuthStates         = "auth"
+	defaultListenAddr         = "127.0.0.1:2048"
+	defaultInitTimeout        = 2 * time.Minute
+	defaultRequestTimeout     = 5 * time.Minute
+	defaultWarmWorkerLimit    = 5
+	defaultWarmConcurrency    = 2
+	defaultAccountConcurrency = 2
 )
 
 var configKeys = [...]string{
@@ -28,25 +31,36 @@ var configKeys = [...]string{
 	"PROXY",
 	"INIT_TIMEOUT",
 	"REQUEST_TIMEOUT",
+	"WARM_WORKER_LIMIT",
+	"WARM_STARTUP_CONCURRENCY",
+	"PER_ACCOUNT_CONCURRENCY",
+	"TEMPORARY_CHAT",
 }
 
-// Config 保存服务的六项全局配置
+// Config 保存服务的全局配置
 type Config struct {
-	AuthStates     string        `json:"auth_states"`
-	ListenAddr     string        `json:"listen_addr"`
-	ProxyAPIKey    string        `json:"proxy_api_key"`
-	Proxy          string        `json:"proxy"`
-	InitTimeout    time.Duration `json:"-"`
-	RequestTimeout time.Duration `json:"-"`
+	AuthStates             string        `json:"auth_states"`
+	ListenAddr             string        `json:"listen_addr"`
+	ProxyAPIKey            string        `json:"proxy_api_key"`
+	Proxy                  string        `json:"proxy"`
+	InitTimeout            time.Duration `json:"-"`
+	RequestTimeout         time.Duration `json:"-"`
+	WarmWorkerLimit        int           `json:"warm_worker_limit"`
+	WarmStartupConcurrency int           `json:"warm_startup_concurrency"`
+	PerAccountConcurrency  int           `json:"per_account_concurrency"`
+	TemporaryChat          bool          `json:"temporary_chat"`
 }
 
 // Default 返回可直接启动的默认配置
 func Default() Config {
 	return Config{
-		AuthStates:     defaultAuthStates,
-		ListenAddr:     defaultListenAddr,
-		InitTimeout:    defaultInitTimeout,
-		RequestTimeout: defaultRequestTimeout,
+		AuthStates:             defaultAuthStates,
+		ListenAddr:             defaultListenAddr,
+		InitTimeout:            defaultInitTimeout,
+		RequestTimeout:         defaultRequestTimeout,
+		WarmWorkerLimit:        defaultWarmWorkerLimit,
+		WarmStartupConcurrency: defaultWarmConcurrency,
+		PerAccountConcurrency:  defaultAccountConcurrency,
 	}
 }
 
@@ -87,24 +101,52 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if value, ok := values["WARM_WORKER_LIMIT"]; ok {
+		cfg.WarmWorkerLimit, err = parsePositiveInt("WARM_WORKER_LIMIT", value)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if value, ok := values["WARM_STARTUP_CONCURRENCY"]; ok {
+		cfg.WarmStartupConcurrency, err = parsePositiveInt("WARM_STARTUP_CONCURRENCY", value)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if value, ok := values["PER_ACCOUNT_CONCURRENCY"]; ok {
+		cfg.PerAccountConcurrency, err = parsePositiveInt("PER_ACCOUNT_CONCURRENCY", value)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if value, ok := values["TEMPORARY_CHAT"]; ok {
+		cfg.TemporaryChat, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("TEMPORARY_CHAT 必须是 true 或 false")
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-// Save 将六项配置原子写入指定 env 文件
+// Save 将配置原子写入指定 env 文件
 func (c Config) Save(path string) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
 	values := map[string]string{
-		"AISTUDIO_AUTH_STATES": c.AuthStates,
-		"LISTEN_ADDR":          c.ListenAddr,
-		"PROXY_API_KEY":        c.ProxyAPIKey,
-		"PROXY":                c.Proxy,
-		"INIT_TIMEOUT":         c.InitTimeout.String(),
-		"REQUEST_TIMEOUT":      c.RequestTimeout.String(),
+		"AISTUDIO_AUTH_STATES":     c.AuthStates,
+		"LISTEN_ADDR":              c.ListenAddr,
+		"PROXY_API_KEY":            c.ProxyAPIKey,
+		"PROXY":                    c.Proxy,
+		"INIT_TIMEOUT":             c.InitTimeout.String(),
+		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
+		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
+		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
+		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
+		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 	}
 
 	var output strings.Builder
@@ -134,38 +176,59 @@ func (c Config) Validate() error {
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("REQUEST_TIMEOUT 必须是正数时长")
 	}
+	if c.WarmWorkerLimit <= 0 {
+		return fmt.Errorf("WARM_WORKER_LIMIT 必须是正整数")
+	}
+	if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.WarmWorkerLimit {
+		return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 WARM_WORKER_LIMIT")
+	}
+	if c.PerAccountConcurrency <= 0 {
+		return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
+	}
 	return nil
 }
 
 // MarshalJSON 将时长输出为 env 使用的文本格式
 func (c Config) MarshalJSON() ([]byte, error) {
 	type payload struct {
-		AuthStates     string `json:"auth_states"`
-		ListenAddr     string `json:"listen_addr"`
-		ProxyAPIKey    string `json:"proxy_api_key"`
-		Proxy          string `json:"proxy"`
-		InitTimeout    string `json:"init_timeout"`
-		RequestTimeout string `json:"request_timeout"`
+		AuthStates             string `json:"auth_states"`
+		ListenAddr             string `json:"listen_addr"`
+		ProxyAPIKey            string `json:"proxy_api_key"`
+		Proxy                  string `json:"proxy"`
+		InitTimeout            string `json:"init_timeout"`
+		RequestTimeout         string `json:"request_timeout"`
+		WarmWorkerLimit        int    `json:"warm_worker_limit"`
+		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
+		PerAccountConcurrency  int    `json:"per_account_concurrency"`
+		TemporaryChat          bool   `json:"temporary_chat"`
 	}
 	return json.Marshal(payload{
-		AuthStates:     c.AuthStates,
-		ListenAddr:     c.ListenAddr,
-		ProxyAPIKey:    c.ProxyAPIKey,
-		Proxy:          c.Proxy,
-		InitTimeout:    c.InitTimeout.String(),
-		RequestTimeout: c.RequestTimeout.String(),
+		AuthStates:             c.AuthStates,
+		ListenAddr:             c.ListenAddr,
+		ProxyAPIKey:            c.ProxyAPIKey,
+		Proxy:                  c.Proxy,
+		InitTimeout:            c.InitTimeout.String(),
+		RequestTimeout:         c.RequestTimeout.String(),
+		WarmWorkerLimit:        c.WarmWorkerLimit,
+		WarmStartupConcurrency: c.WarmStartupConcurrency,
+		PerAccountConcurrency:  c.PerAccountConcurrency,
+		TemporaryChat:          c.TemporaryChat,
 	})
 }
 
 // UnmarshalJSON 从管理接口使用的文本时长解析配置
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type payload struct {
-		AuthStates     string `json:"auth_states"`
-		ListenAddr     string `json:"listen_addr"`
-		ProxyAPIKey    string `json:"proxy_api_key"`
-		Proxy          string `json:"proxy"`
-		InitTimeout    string `json:"init_timeout"`
-		RequestTimeout string `json:"request_timeout"`
+		AuthStates             string `json:"auth_states"`
+		ListenAddr             string `json:"listen_addr"`
+		ProxyAPIKey            string `json:"proxy_api_key"`
+		Proxy                  string `json:"proxy"`
+		InitTimeout            string `json:"init_timeout"`
+		RequestTimeout         string `json:"request_timeout"`
+		WarmWorkerLimit        int    `json:"warm_worker_limit"`
+		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
+		PerAccountConcurrency  int    `json:"per_account_concurrency"`
+		TemporaryChat          bool   `json:"temporary_chat"`
 	}
 	var value payload
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -180,12 +243,16 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	parsed := Config{
-		AuthStates:     strings.TrimSpace(value.AuthStates),
-		ListenAddr:     strings.TrimSpace(value.ListenAddr),
-		ProxyAPIKey:    strings.TrimSpace(value.ProxyAPIKey),
-		Proxy:          strings.TrimSpace(value.Proxy),
-		InitTimeout:    initTimeout,
-		RequestTimeout: requestTimeout,
+		AuthStates:             strings.TrimSpace(value.AuthStates),
+		ListenAddr:             strings.TrimSpace(value.ListenAddr),
+		ProxyAPIKey:            strings.TrimSpace(value.ProxyAPIKey),
+		Proxy:                  strings.TrimSpace(value.Proxy),
+		InitTimeout:            initTimeout,
+		RequestTimeout:         requestTimeout,
+		WarmWorkerLimit:        value.WarmWorkerLimit,
+		WarmStartupConcurrency: value.WarmStartupConcurrency,
+		PerAccountConcurrency:  value.PerAccountConcurrency,
+		TemporaryChat:          value.TemporaryChat,
 	}
 	if err := parsed.Validate(); err != nil {
 		return err
@@ -306,6 +373,14 @@ func parsePositiveDuration(key string, value string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s 必须是正数时长，例如 30s 或 5m", key)
 	}
 	return duration, nil
+}
+
+func parsePositiveInt(key string, value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s 必须是正整数", key)
+	}
+	return parsed, nil
 }
 
 func validateListenAddr(value string) error {

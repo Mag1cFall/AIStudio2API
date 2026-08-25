@@ -21,12 +21,6 @@
   Gemini TTS Speech Synthesis
 </p>
 
-<!-- <img src="docs/img/demo.gif" alt="Demo GIF" width="100%" /> -->
-
-<!-- <p align="center">
-  <img src="docs/img/多worker并发和媒体模型支援.png" alt="Multi-Worker concurrency and media models" width="80%" />
-</p> -->
-
 </div>
 
 ---
@@ -39,6 +33,7 @@
 - **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
 - **Image Generation**: Nano Banana image generation
 - **Video Generation**: Veo video generation and image-to-video
+- **YouTube Input**: Paste a video URL to attach and read the external video
 - **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
 - **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
 - **Anti-Fingerprinting**: Camoufox holds the official WAA lifecycle with a stable browser fingerprint and network exit per account
@@ -47,10 +42,10 @@
 
 ## System Requirements
 
-- **Release Runtime**: Windows 10 or later, `aistudio2api.exe`, `start.bat`, and `runtime/camoufox/`
-- **Source Build**: Go 1.26, Node.js 24, npm, and Camoufox
+- **Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
+- **Source Build**: Go 1.26, Node.js 24, and npm
 - **Operating System**: Windows, macOS, Linux
-- **Memory**: 2GB+ available memory recommended
+- **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
 - **Network**: Stable internet connection to Google AI Studio
 
 ## Installation
@@ -71,7 +66,7 @@ Then double-click `start.bat`. You can also run it from PowerShell:
 
 The script runs an existing `aistudio2api.exe` immediately. In a source checkout without the executable, it installs frontend dependencies and builds the frontend and Go program.
 
-Place Camoufox in `runtime/camoufox/` or set the `CAMOUFOX_PATH` environment variable to its executable.
+The first launch downloads Camoufox for the current platform to `runtime/camoufox/`. Set `CAMOUFOX_PATH` to use an existing executable instead.
 
 ### Method 2: Manual Build
 
@@ -79,7 +74,6 @@ Place Camoufox in `runtime/camoufox/` or set the `CAMOUFOX_PATH` environment var
 
 - Go 1.26
 - Node.js 24 and npm
-- Camoufox
 
 #### 2. Clone the Project
 
@@ -96,8 +90,11 @@ npm ci
 npm run build
 cd ..
 go build -o aistudio2api ./cmd/aistudio2api
+chmod +x ./aistudio2api
 ./aistudio2api
 ```
+
+The first Linux or macOS launch also prepares the matching Camoufox build automatically.
 
 ## Quick Start
 
@@ -341,6 +338,10 @@ cp .env.example .env
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `5m` | Maximum request execution time |
+| `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
+| `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
+| `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
+| `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
 ### Port Configuration
 
@@ -380,6 +381,7 @@ Go handles business requests with a Firefox TLS/HTTP2 profile aligned with Camou
 ### Limitations
 
 - **Client-Managed History**: Clients submit complete conversation context for Chat, Anthropic, and Gemini requests
+- **AI Studio History**: API requests are not saved to website history; `TEMPORARY_CHAT=true` also disables autosave for the WAA prewarm page
 - **Responses Sessions**: `previous_response_id` is stored only in the current process and is cleared on restart
 - **Authentication Expiry**: Chrome imports retain DBSC renewal material; isolated-login accounts must log in again after authentication expires
 
@@ -417,7 +419,7 @@ Common runtime states:
 | The page does not open automatically | Open the address configured by `LISTEN_ADDR` in `.env` |
 | `service_stopped` | Click "Start service" in the management UI |
 | No account is available | Add, enable, or log in to an account from Accounts |
-| Camoufox cannot be found | Place it in `runtime/camoufox/` or set `CAMOUFOX_PATH` |
+| Camoufox preparation fails | Check access to GitHub Releases or set `CAMOUFOX_PATH` |
 
 ## Contributing
 
@@ -427,11 +429,8 @@ Issues and Pull Requests are welcome!
 
 - ✅ **TTS Support**: Adapted `gemini-2.5-flash/pro-preview-tts` speech generation models
 - ✅ **Media Generation**: Supports Imagen 3, Veo 2, Nano Banana image/video generation
-- **Unified Click Logic**: Extract `_safe_click` method to global `operations.py`, unify click operations across all controllers
 - ✅ **Documentation**: Update and optimize documentation in `docs/` directory
 - **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
 - **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files
 - ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
-- ✅ **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
-- **Unit Testing**: Increase test coverage for core modules (especially browser automation)
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits

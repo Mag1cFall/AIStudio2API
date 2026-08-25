@@ -13,9 +13,8 @@ type ProtectedRequest struct {
 
 // PreparedProtectedRequest 表示已写入 fresh proof 的请求
 type PreparedProtectedRequest struct {
-	Body        []byte
-	Headers     http.Header
-	ProofSHA256 string
+	Body    []byte
+	Headers http.Header
 }
 
 // WorkerPhase 表示账户 runtime 当前阶段
@@ -40,12 +39,11 @@ const (
 
 // WorkerState 表示账户 runtime 的可观察状态
 type WorkerState struct {
-	AccountID       string
-	Phase           WorkerPhase
-	PID             int
-	RuntimeID       string
-	PageURL         string
-	RequestCount    uint64
-	LastProofSHA256 string
-	LastError       string
+	AccountID    string
+	Phase        WorkerPhase
+	PID          int
+	RuntimeID    string
+	PageURL      string
+	RequestCount uint64
+	LastError    string
 }

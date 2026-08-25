@@ -313,6 +313,7 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 		Type       string          `json:"type"`
 		Text       string          `json:"text"`
 		ImageURL   json.RawMessage `json:"image_url"`
+		VideoURL   json.RawMessage `json:"video_url"`
 		FileID     string          `json:"file_id"`
 		Filename   string          `json:"filename"`
 		FileData   string          `json:"file_data"`
@@ -333,6 +334,16 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 			return aistudio.Part{}, err
 		}
 		return fileOrInlinePart(url, "")
+	case "video_url", "input_video":
+		url, err := imageURLString(block.VideoURL)
+		if err != nil {
+			return aistudio.Part{}, err
+		}
+		media, ok := aistudio.ExternalMediaForURL(url)
+		if !ok {
+			return aistudio.Part{}, fmt.Errorf("video_url must contain a YouTube video URL")
+		}
+		return aistudio.Part{ExternalMedia: media}, nil
 	case "file", "input_file":
 		if block.FileData != "" {
 			return fileOrInlinePart(block.FileData, "")
@@ -367,6 +378,9 @@ func imageURLString(raw json.RawMessage) (string, error) {
 }
 
 func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
+	if media, ok := aistudio.ExternalMediaForURL(value); ok {
+		return aistudio.Part{ExternalMedia: media}, nil
+	}
 	if !strings.HasPrefix(value, "data:") {
 		return aistudio.Part{File: &aistudio.FileRef{ID: value, Name: name}}, nil
 	}

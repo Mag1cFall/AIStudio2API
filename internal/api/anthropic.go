@@ -75,6 +75,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	if request.Stream {
 		count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
 			Model: generateRequest.Model, System: generateRequest.System, Contents: generateRequest.Contents,
+			Tools: generateRequest.Tools,
 		})
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -122,6 +123,7 @@ func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 	}
 	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
 		Model: generateRequest.Model, System: generateRequest.System, Contents: generateRequest.Contents,
+		Tools: generateRequest.Tools,
 	})
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -259,7 +261,11 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 				}
 				parts = append(parts, aistudio.Part{InlineData: &aistudio.Blob{MIME: block.Source.MediaType, Data: data}})
 			case "url":
-				parts = append(parts, aistudio.Part{File: &aistudio.FileRef{ID: block.Source.URL, MIME: block.Source.MediaType}})
+				if media, ok := aistudio.ExternalMediaForURL(block.Source.URL); ok {
+					parts = append(parts, aistudio.Part{ExternalMedia: media})
+				} else {
+					parts = append(parts, aistudio.Part{File: &aistudio.FileRef{ID: block.Source.URL, MIME: block.Source.MediaType}})
+				}
 			default:
 				return nil, fmt.Errorf("unsupported source type %q", block.Source.Type)
 			}
