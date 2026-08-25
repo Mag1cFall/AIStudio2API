@@ -1,6 +1,6 @@
 <div align="center">
 
-# AI Studio to OpenAI Compatible API
+# AI Studio to OpenAI, Anthropic & Gemini Compatible API
 
 <p align="center">
   <a href="README.md">中文</a>
@@ -9,102 +9,77 @@
 </p>
 
 <p>
-  <b>A High-Performance Python Proxy Server</b><br>
-  Converts the Google AI Studio web interface into an OpenAI-compatible API
+  <b>A High-Performance Go Proxy Server</b><br>
+  Converts the Google AI Studio web protocol into OpenAI, Responses, Anthropic, and Gemini compatible APIs
 </p>
 
 <p>
-  🔄 Multi-Worker Concurrency &nbsp;•&nbsp;
-  🖼️ Imagen 3 Image Generation &nbsp;•&nbsp;
-  🎨 Nano Banana Image Generation<br>
-  🎬 Veo 2 Video Generation &nbsp;•&nbsp;
-  🎤 Gemini 2.5 TTS Speech Synthesis
+  Multi-Account Rotation &nbsp;•&nbsp;
+  Nano Banana Image Generation &nbsp;•&nbsp;
+  Google Tools<br>
+  Veo Video Generation &nbsp;•&nbsp;
+  Gemini TTS Speech Synthesis
 </p>
 
 <!-- <img src="docs/img/demo.gif" alt="Demo GIF" width="100%" /> -->
 
 <!-- <p align="center">
-  <img src="docs/img/多worker并发和媒体模型支援.png" alt="Multi-Worker Concurrency & Media Model Support" width="80%" />
+  <img src="docs/img/多worker并发和媒体模型支援.png" alt="Multi-Worker concurrency and media models" width="80%" />
 </p> -->
 
 </div>
 
 ---
 
-## 🚀 Features
+## Features
 
-- **OpenAI Compatible API**: Fully compatible with OpenAI format `/v1/chat/completions` endpoint
-- **Multi-Worker Concurrency**: Supports multi-account concurrent processing for improved throughput and stability
-- **TTS Speech Generation**: Supports Gemini 2.5 TTS models for single/multi-speaker audio generation
-- **Image Generation**: Supports Imagen 3 and Gemini 2.5 Flash (Nano Banana) image generation
-- **Video Generation**: Supports Veo 2 video generation, including image-to-video
-- **Smart Model Switching**: Dynamically switch models in AI Studio via the `model` field
-- **Anti-Fingerprint Detection**: Uses Camoufox browser to reduce detection risk
-- **GUI Launcher**: Feature-rich **web** launcher for simplified configuration and management
-- **Modular Architecture**: Clear module separation design for easy maintenance
-- **Modern Toolchain**: uv dependency management + full type support
+- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent
+- **Multi-Account Runtime**: Account rotation, capability filtering, cooldowns, request failover, and account-bound resources
+- **Native Streaming**: Text, reasoning summaries, function calls, Google tools, media, and usage
+- **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
+- **Image Generation**: Nano Banana image generation
+- **Video Generation**: Veo video generation and image-to-video
+- **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
+- **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
+- **Anti-Fingerprinting**: Camoufox holds the official WAA lifecycle with a stable browser fingerprint and network exit per account
+- **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, and configuration in the web UI
+- **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; Camoufox hosts WAA and isolated login
 
-## 📋 System Requirements
+## System Requirements
 
-- **Python**: 3.12 (recommended)
-- **Dependency Management**: [uv](https://docs.astral.sh/uv/)
+- **Release Runtime**: Windows 10 or later, `aistudio2api.exe`, `start.bat`, and `runtime/camoufox/`
+- **Source Build**: Go 1.26, Node.js 24, npm, and Camoufox
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory recommended
-- **Network**: Stable internet connection to access Google AI Studio
+- **Network**: Stable internet connection to Google AI Studio
 
-## 🛠️ Installation
+## Installation
 
-### Method 1: One-Click Install (Recommended)
+### Method 1: Windows One-Click Start (Recommended)
 
-```bash
+```powershell
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
+copy .env.example .env
 ```
 
-Then double-click `setup.bat` to run it. The script will automatically complete all installation steps.
+Then double-click `start.bat`. You can also run it from PowerShell:
 
-
-Windows (PowerShell):
 ```powershell
-.\setup.bat
+.\start.bat
 ```
 
-Linux:
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+The script runs an existing `aistudio2api.exe` immediately. In a source checkout without the executable, it installs frontend dependencies and builds the frontend and Go program.
 
-### Method 2: Manual Installation
+Place Camoufox in `runtime/camoufox/` or set the `CAMOUFOX_PATH` environment variable to its executable.
 
-#### 1. Install uv
+### Method 2: Manual Build
 
-Windows (PowerShell):
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+#### 1. Install Dependencies
 
-macOS / Linux:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Expected output:
-```
-PS C:\Users\2\Desktop\AIStudio2API> powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-Downloading uv 0.9.11 (x86_64-pc-windows-msvc)
-Installing to C:\Users\2\.local\bin
-  uv.exe
-  uvx.exe
-  uvw.exe
-everything's installed!
-
-To add C:\Users\2\.local\bin to your PATH, either restart your shell or run:
-
-    set Path=C:\Users\2\.local\bin;%Path%   (cmd)
-    $env:Path = "C:\Users\2\.local\bin;$env:Path"   (powershell)
-```
-Please add it to your environment variables according to your path.
+- Go 1.26
+- Node.js 24 and npm
+- Camoufox
 
 #### 2. Clone the Project
 
@@ -113,123 +88,142 @@ git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
 ```
 
-#### 3. Install Dependencies
+#### 3. Build and Run
 
 ```bash
-uv sync
-uv run camoufox fetch
-uv run playwright install firefox
+cd web
+npm ci
+npm run build
+cd ..
+go build -o aistudio2api ./cmd/aistudio2api
+./aistudio2api
 ```
 
-**Note**: The Camoufox browser (approximately 600MB) will be automatically downloaded during installation. This is a core component for anti-fingerprint detection. First-time installation may take some time, please be patient.
+## Quick Start
 
-***
+### First-Time Use (Authentication Required)
 
-## 🚀 Quick Start
-
-### First-time Use (Authentication Required)
-
-1. **Start the GUI**:
-   ```bash
-   uv run python src/app_launcher.py
+1. **Import local Chrome accounts**:
+   ```powershell
+   start.bat setup
    ```
+   The scan lists available Chrome sign-ins and saves selected accounts under the path configured by `AISTUDIO_AUTH_STATES` in `.env`.
 
-2. **Configure Proxy** (recommended):
-   - Check "Enable Browser Proxy" in the GUI
-   - Enter your proxy address (e.g., `http://127.0.0.1:7890`)
+2. **Start the management UI**:
+   - Double-click `start.bat`
+   - The browser opens `http://127.0.0.1:2048`
+   - The initial state is `STOPPED`, with Logs open by default
 
-3. **Start Headed Mode for Authentication**:
-   - Click "Start Headed Mode (New Terminal)"
-   - Type `N` in the terminal to get a new authentication file
-   - The browser will automatically open and navigate to AI Studio
-   - Manually log in to your Google account
-   - Ensure you're on the AI Studio homepage
-   - Press Enter in the terminal to save authentication info
+3. **Add another account**:
+   - Open Accounts and click "Add account"
+   - Enter the account name, proxy, locale, and timezone
+   - Submitting opens an isolated Camoufox window; sign in to Google and enter AI Studio there
+   - The account is saved when login completes
 
-4. **After Authentication**:
-   - Authentication info will be saved automatically
-   - You can close the headed mode browser and terminal
+4. **Start the API**:
+   - Click "Start service" to start the data plane
+   - Use Logs to confirm account, model, and request status
+   - The API listens on `http://127.0.0.1:2048` by default
+
+Account actions depend on state:
+
+| Account state | Available actions |
+| --- | --- |
+| `ready` | Edit, disable, verify, delete |
+| `disabled` | Edit, enable, delete |
+| `auth_required` | Edit, disable, log in again, verify, delete |
+
+"Log in again" appears only when the account state is `auth_required`.
 
 ### Daily Use (With Existing Authentication)
 
-After authentication is saved, you can use headless mode:
+1. Double-click `start.bat` to open the management UI
+2. Click "Start service" to enable the APIs
+3. "Stop service" cancels active requests and closes WAA workers while the management UI and Logs remain available
+4. Click "Start service" again to resume the APIs
 
-1. Start the GUI:
-   ```bash
-   uv run python src/app_launcher.py
-   ```
+Press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
 
-2. Click "Start Headless Mode" or "Virtual Display Mode"
+### Quick Start
 
-3. The API service will run in the background, default port `2048`
+`start.bat`: Starts the manager and opens the web UI.
 
-### Quick Start Scripts
+`start.bat -open-ui=false`: Starts the manager without opening the web UI.
 
-`start_cmd.bat`: Direct command-line startup.
+`start.bat setup`: Scans local Chrome accounts. Use `--email`, `--profile`, `--login`, or `--storage-state` for an explicit authentication entry.
 
-`start_webui.bat`: Starts the web interface, auto-redirects or visit `http://127.0.0.1:9000`.
-
-Wait for `ℹ️  INFO    | --- Queue Worker Started ---` to appear before using the API.
-
-
-## 📡 API Usage
+## API Usage
 
 ### OpenAI Compatible Interface
 
-After starting the service, use the OpenAI-compatible API:
+After starting the service, call OpenAI Chat Completions directly:
 
 ```bash
-curl -X POST http://localhost:2048/v1/chat/completions \
+curl http://127.0.0.1:2048/v1/chat/completions \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-pro",
-    "messages": [
-      {"role": "user", "content": "Hello, world!"}
-    ]
+    "model": "gemini-3.7-flash",
+    "messages": [{"role": "user", "content": "Hello, world!"}],
+    "stream": true
   }'
 ```
 
 ### Client Configuration Example
 
-Using Cherry Studio as an example:
+| Protocol | Base URL | API key |
+| --- | --- | --- |
+| OpenAI Chat / Responses | `http://127.0.0.1:2048/v1` | `PROXY_API_KEY` from `.env` |
+| Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
+| Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
+
+Read model names from `GET /v1/models` or `GET /v1beta/models`.
+
+For Cherry Studio:
 
 1. Open Cherry Studio settings
-2. Add a new model in the "Connection" section:
-   - **API Host**: `http://127.0.0.1:2048/v1/`
-   - **Model Name**: `gemini-2.5-pro` (or other AI Studio supported models)
-   - **API Key**: Leave empty or enter any character like `123`
+2. Add an OpenAI-compatible provider
+3. Set the API host to `http://127.0.0.1:2048/v1`
+4. Set the API key to `PROXY_API_KEY` from `.env`
+5. Load models from `/v1/models`, or add `gemini-3.6-flash` and `gemini-3.7-flash` manually
+
+Main endpoints:
+
+| Capability | Endpoint |
+| --- | --- |
+| Models | `GET /v1/models`, `GET /v1beta/models` |
+| OpenAI Chat | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| Anthropic | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
+| Gemini | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` |
+| Images | `POST /v1/images/generations` |
+| Speech | `POST /v1/audio/speech` |
+| Music | Gemini `generateContent` with `responseModalities: ["AUDIO"]` |
+| Video | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
 
 ### TTS Speech Generation
 
-Supports Gemini 2.5 Flash/Pro TTS models for single-speaker or multi-speaker audio generation:
-
-#### Single-Speaker Example
-
 ```bash
-curl -X POST http://localhost:2048/generate-speech \
+curl http://127.0.0.1:2048/v1/audio/speech \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash-preview-tts",
-    "contents": "Hello, this is a test.",
-    "generationConfig": {
-      "responseModalities": ["AUDIO"],
-      "speechConfig": {
-        "voiceConfig": {
-          "prebuiltVoiceConfig": {"voiceName": "Kore"}
-        }
-      }
-    }
-  }'
+    "model": "gemini-3.1-flash-tts-preview",
+    "input": "Hello, this is a test.",
+    "voice": "Kore",
+    "response_format": "wav"
+  }' \
+  --output speech.wav
 ```
 
-#### Multi-Speaker Example
+Multi-speaker speech is available through Gemini `generateContent` with `multiSpeakerVoiceConfig`.
 
 ```bash
-curl -X POST http://localhost:2048/generate-speech \
+curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateContent \
+  -H "x-goog-api-key: 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash-preview-tts",
-    "contents": "Joe: How are you?\nJane: I am fine, thanks!",
+    "contents": [{"parts": [{"text": "Joe: How are you?\nJane: I am fine, thanks!"}]}],
     "generationConfig": {
       "responseModalities": ["AUDIO"],
       "speechConfig": {
@@ -241,199 +235,203 @@ curl -X POST http://localhost:2048/generate-speech \
         }
       }
     }
-  }'
+  }' --output speech.json
 ```
 
-**Available Voices**: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, and 18 more voices.
+Available voices are returned by `capability_options.voices` in the live model catalog.
 
-**Endpoints**:
-- `POST /generate-speech`
-- `POST /v1beta/models/{model}:generateContent` (compatible with official API)
-
-**Response Format**: Audio data is returned as Base64-encoded WAV format in `candidates[0].content.parts[0].inlineData.data`.
-
-### Image Generation (Imagen 3)
+### Image Generation (Nano Banana)
 
 ```bash
-curl -X POST http://localhost:2048/generate-image \
+curl http://127.0.0.1:2048/v1/images/generations \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "A beautiful sunset over mountains",
-    "model": "imagen-3.0-generate-002",
-    "number_of_images": 1,
-    "aspect_ratio": "16:9"
+    "model": "gemini-3.1-flash-image",
+    "prompt": "A cute cat wearing a tiny hat",
+    "n": 1,
+    "size": "1024x1024"
   }'
 ```
 
-**Endpoint**: `POST /generate-image`
-
-### Video Generation (Veo 2)
+### Video Generation (Veo)
 
 ```bash
-curl -X POST http://localhost:2048/generate-video \
+curl http://127.0.0.1:2048/v1/videos \
+  -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "A drone flying over a forest",
-    "model": "veo-2.0-generate-001",
-    "aspect_ratio": "16:9",
-    "duration_seconds": 5
+    "model": "veo-3.1-fast-generate-preview",
+    "prompt": "A drone flying over a forest"
   }'
 ```
 
-**Endpoint**: `POST /generate-video`
+After creating the operation, poll `GET /v1/videos/{id}` and download the result from `GET /v1/videos/{id}/content`.
 
-### Nano Banana (Gemini Image Generation)
+## Models
 
-```bash
-curl -X POST http://localhost:2048/nano/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-2.5-flash-image",
-    "contents": [{"parts": [{"text": "A cute cat wearing a tiny hat"}]}]
-  }'
-```
+The model directory follows AI Studio updates and is available from `/v1/models` and `/v1beta/models`. The current directory contains:
 
-**Endpoint**: `POST /nano/generate`
+| Model ID | Display name | Input | Output | Methods |
+| --- | --- | ---: | ---: | --- |
+| `antigravity-preview-05-2026` | Antigravity Agent Preview | 131072 | 65536 | `countTokens, generateContent` |
+| `gemini-2.5-flash` | Gemini 2.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-flash-image` | Nano Banana | 32768 | 32768 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-2.5-flash-lite` | Gemini 2.5 Flash-Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-flash-preview-tts` | Gemini 2.5 Flash Preview TTS | 8192 | 16384 | `countTokens, generateContent` |
+| `gemini-2.5-pro` | Gemini 2.5 Pro | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-2.5-pro-preview-tts` | Gemini 2.5 Pro Preview TTS | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3-flash-preview` | Gemini 3 Flash Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3-pro-image` | Nano Banana Pro | 131072 | 32768 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-image` | Nano Banana 2 | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-flash-tts-preview` | Gemini 3.1 Flash TTS Preview | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
+| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.5-flash` | Gemini 3.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.6-flash` | Gemini 3.6 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-3.7-flash` | Gemini 3.7 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-flash-latest` | Gemini Flash Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-flash-lite-latest` | Gemini Flash-Lite Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-omni-flash-preview` | Gemini Omni Flash Preview | 131072 | 65536 | `countTokens, generateContent` |
+| `gemini-pro-latest` | Gemini Pro Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-robotics-er-1.6-preview` | Gemini Robotics-ER 1.6 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemini-robotics-er-2-preview` | Gemini Robotics-ER 2 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
+| `gemma-4-26b-a4b-it` | Gemma 4 26B A4B IT | 262144 | 32768 | `countTokens, generateContent` |
+| `gemma-4-31b-it` | Gemma 4 31B IT | 262144 | 32768 | `countTokens, generateContent` |
+| `lyria-3-clip-preview` | Lyria 3 Clip Preview | 1048576 | 65536 | `countTokens, generateContent` |
+| `lyria-3-pro-preview` | Lyria 3 Pro Preview | 1048576 | 65536 | `countTokens, generateContent` |
+| `veo-3.1-fast-generate-preview` | Veo 3.1 fast | 480 | 8192 | `predictLongRunning` |
+| `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
+| `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
 
-**Detailed Documentation**: See [Media Generation Guide](docs/media-generation-guide.md)
+Public endpoints implement standard `generateContent`, `countTokens`, and `predictLongRunning`. `batchGenerateContent` and `createCachedContent` remain live model metadata, while bidi-only and private Interaction models are omitted from public model lists.
 
-## 🏗️ Project Architecture
+## Project Architecture
 
-```
+```text
 AIStudio2API/
-├── src/                         # Source code directory
-│   ├── app_launcher.py          # GUI launcher
-│   ├── launch_camoufox.py       # Command-line launcher
-│   ├── server.py                # Main server
-│   ├── manager/                 # WebUI manager package
-│   ├── api/                     # API processing modules
-│   ├── browser/                 # Browser automation modules
-│   ├── config/                  # Configuration management
-│   ├── models/                  # Data models
-│   ├── tts/                     # TTS Speech Generation modules
-│   ├── media/                   # Media Generation modules (Imagen/Veo/Nano)
-│   ├── proxy/                   # Streaming proxy
-│   ├── worker/                  # Multi-Worker management module
-│   ├── gateway.py               # Multi-Worker load balancing gateway
-│   └── static/                  # Static resources
-├── data/                        # Runtime data directory
-│   ├── auth_profiles/           # Authentication files
-│   ├── certs/                   # Certificate files
-│   └── key.txt                  # API keys
-├── camoufox/                    # Camoufox scripts
-├── docker/                      # Docker configuration
-├── docs/                        # Detailed documentation
-├── logs/                        # Log files
-├── start_webui.bat              # WebUI startup script
-├── start_cmd.bat                # Command-line startup script
-├── setup.bat                    # Windows installation script
-└── setup.sh                     # Linux/macOS installation script
+├── cmd/aistudio2api/        # Program entry point, management, and runtime
+├── internal/aistudio/       # AI Studio protocol, authentication, models, and media
+├── internal/api/            # OpenAI, Responses, Anthropic, and Gemini adapters
+├── internal/chromeauth/     # Windows Chrome and DBSC import
+├── internal/camoufoxnative/ # Camoufox BiDi, login, and WAA workers
+├── internal/webui/          # Embedded frontend build
+├── web/                     # Vue 3 and TypeScript management UI
+├── docs/                    # Development guide and protocol specification
+└── start.bat                # Windows one-click launcher
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
-Copy and edit the environment configuration file:
+Copy and edit the environment file:
 
 ```bash
 cp .env.example .env
-# Edit .env file for custom configuration
 ```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
+| `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
+| `PROXY_API_KEY` | empty | Public API key |
+| `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override |
+| `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
+| `REQUEST_TIMEOUT` | `5m` | Maximum request execution time |
 
 ### Port Configuration
 
-- **FastAPI Service**: Default port `2048`
-- **Camoufox Debug**: Default port `40222`
-- **Streaming Proxy**: Default port `3120`
+- **Management UI and APIs**: Default port `2048`
+- **Camoufox**: Local ports are allocated dynamically
 
-## 🔧 Advanced Features
+## Advanced Features
 
 ### Proxy Configuration
 
-Supports accessing AI Studio through proxy:
+HTTP, HTTPS, and SOCKS5 proxies without embedded credentials are supported:
 
-1. Enable "Browser Proxy" in the GUI
-2. Enter proxy address (e.g., `http://127.0.0.1:7890`)
-3. Click "Test" button to verify proxy connection
+1. Set the global proxy under Service Configuration
+2. Edit an account to set an account-specific proxy
+3. The account proxy is used for login, WAA, and business requests
 
 ### Authentication File Management
 
-- Authentication files are stored in `data/auth_profiles/` directory
-- Supports saving and switching multiple authentication files
-- Manage through the "Manage Auth Files" feature in the GUI
+- Authentication files are stored in `auth/` by default
+- Adding an account starts an isolated Camoufox login
+- `ready` accounts can be edited, disabled, verified, and deleted
+- `auth_required` accounts can log in again
 
-## 📚 Documentation
+## Documentation
 
-- [Installation Guide](docs/installation-guide.md)
-- [Environment Configuration](docs/environment-configuration.md)
-- [Authentication Setup](docs/authentication-setup.md)
-- [API Usage Guide](docs/api-usage.md)
-- [Multi-Worker Concurrency Mode](docs/multi-worker-guide.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [Development and contribution](docs/development.md)
+- [Google AI Studio protocol specification](docs/protocol.md)
 
-## ⚠️ Important Notes
+## Important Notes
 
 ### About Camoufox
 
-This project uses [Camoufox](https://camoufox.com/) browser to avoid detection as an automation script. Camoufox is based on Firefox and disguises device fingerprints by modifying the underlying implementation.
+This project uses [Camoufox](https://camoufox.com/) to reduce automation detection. Camoufox is based on Firefox and changes lower-level browser behavior to retain a realistic device fingerprint.
+
+Go handles business requests with a Firefox TLS/HTTP2 profile aligned with Camoufox. Camoufox provides official WAA initialization, fresh proofs, and isolated account login.
 
 ### Limitations
 
-- **Client-Managed History**: Proxy doesn't support in-UI editing; clients need to maintain full chat history
-- **Parameter Support**: Supports `temperature`, `max_output_tokens`, `top_p`, `stop` parameters
-- **Authentication Expiry**: Authentication files may expire; re-authentication required
+- **Client-Managed History**: Clients submit complete conversation context for Chat, Anthropic, and Gemini requests
+- **Responses Sessions**: `previous_response_id` is stored only in the current process and is cleared on restart
+- **Authentication Expiry**: Chrome imports retain DBSC renewal material; isolated-login accounts must log in again after authentication expires
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Windows Port Reserved by System
 
-If you see `Port 30XX (host 0.0.0.0) is currently in use` on startup but can't find the occupying process in Task Manager, this is usually caused by Windows Hyper-V/WSL2/Docker NAT service randomly reserving port ranges.
+If startup reports that the port configured by `LISTEN_ADDR` is unavailable while Task Manager shows no owning process, Hyper-V, WSL2, or Docker NAT may have reserved the port range.
 
-> ⚠️ **All commands below must be run in Administrator PowerShell or CMD**
+Run the following commands from an elevated PowerShell or CMD window.
 
-#### 1. View Windows Reserved Port Ranges
+#### 1. Inspect Reserved Port Ranges
 
 ```powershell
 netsh interface ipv4 show excludedportrange protocol=tcp
 ```
 
-If your Worker ports (e.g., 3001-3008) fall within the `Start Port` and `End Port` range shown, this is the issue.
-
-#### 2. Temporary Fix (Restart WinNAT Service)
+If `2048` falls inside a reserved range, change `LISTEN_ADDR`, or restart WinNAT and inspect the range again:
 
 ```powershell
 net stop winnat
 net start winnat
 ```
 
-After restart, run step 1 again. The port ranges usually change and release your needed ports.
-
-#### 3. Permanent Fix (Add Common Ports to Reserved Whitelist)
-
-While ports are free, permanently mark commonly used development ports as administrator-reserved to prevent Windows from occupying them again:
+When the port is free, it can be reserved persistently:
 
 ```powershell
-netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=20 store=persistent
+netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1 store=persistent
 ```
 
-On success, entries with `*` marker will appear in the list, indicating permanent protection.
+Common runtime states:
 
-For more troubleshooting solutions, see [Troubleshooting Guide](docs/troubleshooting.md).
+| State | Resolution |
+| --- | --- |
+| The page does not open automatically | Open the address configured by `LISTEN_ADDR` in `.env` |
+| `service_stopped` | Click "Start service" in the management UI |
+| No account is available | Add, enable, or log in to an account from Accounts |
+| Camoufox cannot be found | Place it in `runtime/camoufox/` or set `CAMOUFOX_PATH` |
 
-## 🤝 Contributing
+## Contributing
 
 Issues and Pull Requests are welcome!
 
-## 📅 Development Roadmap
+## Development Roadmap
 
 - ✅ **TTS Support**: Adapted `gemini-2.5-flash/pro-preview-tts` speech generation models
 - ✅ **Media Generation**: Supports Imagen 3, Veo 2, Nano Banana image/video generation
 - **Unified Click Logic**: Extract `_safe_click` method to global `operations.py`, unify click operations across all controllers
-- **Documentation**: Update and optimize documentation in `docs/` directory
+- ✅ **Documentation**: Update and optimize documentation in `docs/` directory
 - **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
 - **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files
-- **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
-- **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
+- ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
+- ✅ **CI/CD Pipeline**: Establish GitHub Actions automated testing and build release process
 - **Unit Testing**: Increase test coverage for core modules (especially browser automation)
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
