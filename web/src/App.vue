@@ -30,7 +30,9 @@ const models = ref<Model[]>([])
 const cooldowns = ref<Cooldown[]>([])
 const requests = ref<RequestSummary[]>([])
 const config = ref<ServiceConfig | null>(null)
-const controlPending = ref<'' | 'start' | 'stop'>('')
+const startPending = ref(false)
+const stopPending = ref(false)
+const launchCancellationRequested = ref(false)
 const notice = reactive({ message: '', tone: 'success' as 'success' | 'error' })
 const loading = reactive({
   accounts: true,
@@ -54,18 +56,19 @@ const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
 
 const serviceState = computed(() => {
   if (status.value === null) return 'unavailable'
-  if (!status.value.running) return controlPending.value === 'start' ? 'starting' : 'stopped'
-  if (status.value.ready) return 'running'
-  return 'unavailable'
+  if (status.value.state === 'RUNNING') return 'running'
+  if (status.value.state === 'LAUNCHING') return 'launching'
+  if (startPending.value && !launchCancellationRequested.value) return 'launching'
+  return 'stopped'
 })
 const statusColor = computed(() => {
   if (serviceState.value === 'running') return 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]'
-  if (serviceState.value === 'starting') return 'bg-yellow-500 animate-pulse'
+  if (serviceState.value === 'launching') return 'bg-cyan-400 animate-pulse'
   return 'bg-gray-600'
 })
 const statusTextColor = computed(() => {
   if (serviceState.value === 'running') return 'text-green-400'
-  if (serviceState.value === 'starting') return 'text-yellow-400'
+  if (serviceState.value === 'launching') return 'text-cyan-300'
   return 'text-gray-500'
 })
 
@@ -171,16 +174,34 @@ async function refreshAll(): Promise<void> {
   ])
 }
 
-async function controlService(action: 'start' | 'stop'): Promise<void> {
-  controlPending.value = action
+async function startService(): Promise<void> {
+  startPending.value = true
+  launchCancellationRequested.value = false
   try {
-    status.value = action === 'start' ? await api.startService() : await api.stopService()
-    showNotice(t(action === 'start' ? 'app.start' : 'app.stop'), 'success')
-    if (action === 'start') await Promise.all([loadAccounts(), loadModels(), loadCooldowns()])
+    status.value = await api.startService()
+    if (launchCancellationRequested.value || status.value.state !== 'RUNNING') return
+    showNotice(t('app.start'), 'success')
+    await Promise.all([loadAccounts(), loadModels(), loadCooldowns()])
+  } catch (error) {
+    if (!launchCancellationRequested.value) showNotice(messageOf(error), 'error')
+    await loadStatus()
+  } finally {
+    startPending.value = false
+  }
+}
+
+async function stopService(): Promise<void> {
+  launchCancellationRequested.value = serviceState.value === 'launching'
+  stopPending.value = true
+  try {
+    status.value = await api.stopService()
+    showNotice(t('app.stop'), 'success')
+    await Promise.all([loadAccounts(), loadModels(), loadCooldowns(), loadRequests()])
   } catch (error) {
     showNotice(messageOf(error), 'error')
+    await loadStatus()
   } finally {
-    controlPending.value = ''
+    stopPending.value = false
   }
 }
 
@@ -209,8 +230,8 @@ function handleAdminEvent(event: AdminEvent): void {
     if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
     return
   }
-  if (event.type === 'account') {
-    replaceByID(accounts.value, event.data)
+  if (event.type === 'accounts') {
+    accounts.value = event.data.accounts
     return
   }
   if (event.type === 'models') {
@@ -296,7 +317,11 @@ onUnmounted(() => {
         </button>
       </nav>
 
-      <div class="min-w-0 border-t border-[#30363d] p-2 md:p-4">
+      <div
+        class="relative min-w-0 overflow-hidden border-t border-[#30363d] p-2 md:p-4"
+        :class="serviceState === 'launching' ? 'launching-shell' : ''"
+      >
+        <div v-if="serviceState === 'launching'" class="launching-scan" aria-hidden="true"></div>
         <div class="mb-2 text-xs text-gray-500">{{ t('app.status') }}</div>
         <div class="mb-4 flex items-center justify-between">
           <span class="font-mono font-bold" :class="statusTextColor">
@@ -310,23 +335,23 @@ onUnmounted(() => {
           </span>
         </div>
         <button
-          v-if="status?.running === false"
+          v-if="serviceState === 'stopped'"
           class="flex w-full items-center justify-center gap-2 rounded bg-green-600 py-2 font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50"
           type="button"
-          :disabled="controlPending !== ''"
-          @click="controlService('start')"
+          :disabled="startPending || stopPending"
+          @click="startService"
         >
-          <UiIcon :name="controlPending !== '' ? 'spinner' : 'play'" :size="16" />
+          <UiIcon :name="startPending ? 'spinner' : 'play'" :size="16" />
           {{ t('app.start') }}
         </button>
         <button
-          v-else
+          v-else-if="serviceState === 'launching' || serviceState === 'running'"
           class="flex w-full items-center justify-center gap-2 rounded bg-red-600 py-2 font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50"
           type="button"
-          :disabled="controlPending !== '' || status === null"
-          @click="controlService('stop')"
+          :disabled="stopPending"
+          @click="stopService"
         >
-          <UiIcon :name="controlPending !== '' ? 'spinner' : 'stop'" :size="16" />
+          <UiIcon :name="stopPending ? 'spinner' : 'stop'" :size="16" />
           {{ t('app.stop') }}
         </button>
       </div>
@@ -385,3 +410,25 @@ onUnmounted(() => {
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.launching-shell {
+  background: radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), #161b22;
+}
+
+.launching-scan {
+  position: absolute;
+  top: 0;
+  left: -45%;
+  width: 45%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(103 232 249), transparent);
+  animation: launching-scan 1.25s ease-in-out infinite;
+}
+
+@keyframes launching-scan {
+  to {
+    transform: translateX(320%);
+  }
+}
+</style>

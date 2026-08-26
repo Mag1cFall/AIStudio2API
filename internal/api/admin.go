@@ -27,11 +27,13 @@ type AdminService interface {
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
 	Events(context.Context) (<-chan AdminEvent, error)
+	RecordAccessStart(AccessLog)
 	RecordAccessLog(AccessLog)
 }
 
 // AdminStatus 表示管理端运行状态
 type AdminStatus struct {
+	State          string             `json:"state"`
 	Running        bool               `json:"running"`
 	Ready          bool               `json:"ready"`
 	Version        string             `json:"version"`
@@ -49,14 +51,25 @@ type AdminLog struct {
 
 // AccessLog 表示一次公开 API 请求的最终访问记录
 type AccessLog struct {
-	Status    int
-	Latency   time.Duration
-	Method    string
-	Path      string
-	Model     string
-	Account   string
-	RequestID string
-	Error     string
+	Status          int
+	Latency         time.Duration
+	FirstEvent      time.Duration
+	FirstContent    time.Duration
+	ContentChars    int
+	OutputTokens    int64
+	ReasoningTokens int64
+	Temperature     string
+	TopP            string
+	Thinking        string
+	MaxOutputTokens string
+	Method          string
+	Path            string
+	Model           string
+	Account         string
+	FinishReason    string
+	Error           string
+	Canceled        bool
+	Generation      bool
 }
 
 // AdminAccountCounts 表示账户状态计数
@@ -70,15 +83,16 @@ type AdminAccountCounts struct {
 
 // AdminAccount 表示管理端账户摘要
 type AdminAccount struct {
-	ID       string   `json:"id"`
-	Label    string   `json:"label"`
-	Enabled  bool     `json:"enabled"`
-	State    string   `json:"state"`
-	Proxy    string   `json:"proxy"`
-	Locale   string   `json:"locale"`
-	Timezone string   `json:"timezone"`
-	Models   []string `json:"models"`
-	Message  string   `json:"message"`
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Enabled     bool     `json:"enabled"`
+	State       string   `json:"state"`
+	Proxy       string   `json:"proxy"`
+	Locale      string   `json:"locale"`
+	Timezone    string   `json:"timezone"`
+	Models      []string `json:"models"`
+	BenefitTier string   `json:"benefit_tier"`
+	Message     string   `json:"message"`
 }
 
 // AccountInput 表示新增账户配置
@@ -106,19 +120,21 @@ type RuntimeConfig struct {
 
 // AdminCooldown 表示账户模型冷却
 type AdminCooldown struct {
-	AccountID string    `json:"account_id"`
-	ModelID   string    `json:"model_id"`
-	Until     time.Time `json:"until"`
-	Reason    string    `json:"reason,omitempty"`
+	AccountID    string    `json:"account_id"`
+	AccountLabel string    `json:"account_label"`
+	ModelID      string    `json:"model_id"`
+	Until        time.Time `json:"until"`
+	Reason       string    `json:"reason,omitempty"`
 }
 
 // AdminRequest 表示活动请求摘要
 type AdminRequest struct {
-	ID        string    `json:"id"`
-	Model     string    `json:"model"`
-	AccountID string    `json:"account_id"`
-	State     string    `json:"state"`
-	StartedAt time.Time `json:"started_at"`
+	ID           string    `json:"id"`
+	Model        string    `json:"model"`
+	AccountID    string    `json:"account_id"`
+	AccountLabel string    `json:"account_label"`
+	State        string    `json:"state"`
+	StartedAt    time.Time `json:"started_at"`
 }
 
 // AdminEvent 表示管理端增量事件

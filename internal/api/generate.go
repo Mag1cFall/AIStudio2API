@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
 var errIncompleteStream = errors.New("upstream stream closed before finish")
 var errUpstreamStream = errors.New("upstream stream error")
+
+const streamHeartbeatInterval = 10 * time.Second
 
 type generationResult struct {
 	events        []aistudio.Event
@@ -95,12 +98,56 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	return nil
 }
 
-func consumeEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (generationResult, error) {
-	var result generationResult
+func consumeEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (result generationResult, resultErr error) {
+	return consumeEventsWithHeartbeat(ctx, events, emit, nil)
+}
+
+func consumeStreamEvents(
+	ctx context.Context,
+	events <-chan aistudio.Event,
+	emit func(aistudio.Event) error,
+	heartbeat func() error,
+) (generationResult, error) {
+	return consumeEventsWithHeartbeat(ctx, events, emit, heartbeat)
+}
+
+func consumeEventsWithHeartbeat(
+	ctx context.Context,
+	events <-chan aistudio.Event,
+	emit func(aistudio.Event) error,
+	heartbeat func() error,
+) (result generationResult, resultErr error) {
+	defer func() {
+		SetAccessLogError(ctx, resultErr)
+	}()
+	var heartbeatTimer *time.Timer
+	var heartbeatTick <-chan time.Time
+	if heartbeat != nil {
+		heartbeatTimer = time.NewTimer(streamHeartbeatInterval)
+		heartbeatTick = heartbeatTimer.C
+		defer heartbeatTimer.Stop()
+	}
+	resetHeartbeat := func() {
+		if heartbeatTimer == nil {
+			return
+		}
+		if !heartbeatTimer.Stop() {
+			select {
+			case <-heartbeatTimer.C:
+			default:
+			}
+		}
+		heartbeatTimer.Reset(streamHeartbeatInterval)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return result, ctx.Err()
+		case <-heartbeatTick:
+			if err := heartbeat(); err != nil {
+				return result, err
+			}
+			resetHeartbeat()
 		case event, ok := <-events:
 			if !ok {
 				if !result.finished {
@@ -116,6 +163,7 @@ func consumeEvents(ctx context.Context, events <-chan aistudio.Event, emit func(
 					return result, err
 				}
 			}
+			resetHeartbeat()
 		}
 	}
 }

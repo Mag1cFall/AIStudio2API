@@ -28,7 +28,7 @@
 ## 特性
 
 - **四套 API 协议**: 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini GenerateContent
-- **多账户运行**: 支持账户轮询、模型能力筛选、限流冷却、请求故障切换和资源账户粘性
+- **多账户运行**: 识别 Free、Pro、Ultra 与 Plus 权益，按模型实际资格、首事件速度和并发槽位调度
 - **原生流式响应**: 实时输出正文、思考摘要、函数调用、Google 工具、媒体和 usage
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
@@ -42,7 +42,7 @@
 
 ## 系统要求
 
-- **Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
+- **Windows Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
 - **源码运行**: Go 1.26、Node.js 24 和 npm
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
@@ -68,7 +68,7 @@ copy .env.example .env
 
 首次启动会自动下载当前平台的 Camoufox 到 `runtime/camoufox/`。也可以通过环境变量 `CAMOUFOX_PATH` 指定已有可执行文件。
 
-### 方式二：手动构建
+### 方式二：Linux 与 macOS 源码构建
 
 #### 1. 安装依赖
 
@@ -80,6 +80,7 @@ copy .env.example .env
 ```bash
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
+cp .env.example .env
 ```
 
 #### 3. 构建并运行
@@ -100,25 +101,37 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
 ### 首次使用（需要认证）
 
-1. **导入本机 Chrome 账户**:
+1. **准备首个账户**:
+
+   Windows 可以导入本机 Chrome 账户：
+
    ```powershell
    start.bat setup
    ```
-   扫描结果会列出可导入的 Chrome 登录态，账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录。
+
+   Linux 与 macOS 使用隔离 Camoufox 登录：
+
+   ```bash
+   ./aistudio2api setup --login --label name@gmail.com
+   ```
+
+   `--label` 填写登录的 Google 邮箱。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认读取当前电脑设置，也可以通过 `--locale`、`--timezone` 指定。
 
 2. **启动图形界面**:
-   - 双击 `start.bat`
+   - Windows 双击 `start.bat`
+   - Linux 与 macOS 运行 `./aistudio2api`
    - 浏览器自动打开 `http://127.0.0.1:2048`
    - 页面初始状态为 `STOPPED`，默认显示“日志”页面
 
 3. **添加其他账户**:
    - 打开“账户”页面并点击“新增账户”
-   - 填写账户名称、代理、语言和时区
+   - 填写 Google 邮箱、代理、语言和时区
    - 提交后会打开独立 Camoufox 窗口，在其中登录 Google 并进入 AI Studio
    - 登录完成后账户自动保存
 
 4. **启动 API**:
    - 点击“启动服务”启动数据面
+   - 状态依次显示 `LAUNCHING` 和 `RUNNING`；`LAUNCHING` 期间可以点击“停止服务”取消启动
    - 在“日志”页面确认账户、模型和请求状态
    - API 默认监听 `http://127.0.0.1:2048`
 
@@ -134,9 +147,9 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
 ### 日常使用（已有认证）
 
-1. 双击 `start.bat` 打开管理页面
+1. Windows 双击 `start.bat`；Linux 与 macOS 运行 `./aistudio2api`
 2. 点击“启动服务”启用 API
-3. 点击“停止服务”会取消活动请求并关闭 WAA Worker，管理页面与日志保持可用
+3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
 在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
@@ -147,7 +160,7 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
 `start.bat -open-ui=false`：启动管理进程但不自动打开网页。
 
-`start.bat setup`：扫描本机 Chrome 账户；也可使用 `--email`、`--profile`、`--login` 或 `--storage-state` 选择明确的认证入口。
+`start.bat setup`：扫描本机 Chrome 账户；也可使用 `--email` 或 `--profile` 选择明确的 Chrome 账户。隔离登录使用 `start.bat setup --login --label name@gmail.com`；文件导入使用 `start.bat setup --storage-state <file> --label name@gmail.com`。
 
 ## API 使用
 
@@ -360,15 +373,25 @@ cp .env.example .env
 
 ### 认证文件管理
 
-- 认证文件默认存储在 `auth/` 目录
-- 新增账户会直接启动隔离 Camoufox 登录
-- `ready` 账户可以编辑、停用、验证和删除
-- `auth_required` 账户可以重新登录
+认证文件默认存储在 `auth/` 目录：
+
+| 路径 | 内容 |
+| --- | --- |
+| `auth/<Google 邮箱>/account.json` | 账户邮箱、代理、语言、时区和启用状态 |
+| `auth/<Google 邮箱>/storage-state.json` | Google Cookie 与认证续签材料 |
+| `auth/<Google 邮箱>/runtime-state.json` | 权益等级、模型资格、冷却状态与资源所属账户 |
+| `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
+| `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
+
+账户邮箱同时作为目录名、管理页面标识和日志来源，统一使用小写形式。`.leases` 协调账户目录读写，用户缓存中的 runtime lease 保证同一邮箱在当前电脑上只有一个 WAA Worker。
+
+新增账户会启动隔离 Camoufox 登录。`ready` 账户可以编辑、停用、验证和删除，`auth_required` 账户可以重新登录。
 
 ## 详细文档
 
 - [开发与贡献](docs/development.md)
 - [Google AI Studio 协议规范](docs/protocol.md)
+- [运行日志说明](docs/logging.md)
 
 ## 重要提示
 
@@ -434,3 +457,13 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 - **Docker 支持**: 提供标准 Dockerfile 及 Docker Compose 编排文件，简化部署流程
 - ✅ **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
 - ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性
+
+### 纯协议 WAA 运行时
+
+目标是完整逆向并复现 WAA VM，使用 Go 执行 dynamic program、interpreter、challenge、persistent state、snapshot 与 proof 全链路。最终生产运行期只保留 Go 协议实现，无 Camoufox 进程、DOM 环境和 AI Studio 前端 bundle 依赖。
+
+| 阶段 | 交付内容 |
+| --- | --- |
+| 协议固化 | 归档 dynamic program、challenge、状态迁移、snapshot 与 proof 的完整输入输出，建立可重复验证的协议样本 |
+| Go 执行器 | 实现 dynamic program 加载、interpreter、challenge 求值、persistent state、snapshot 恢复与 proof 生成，并与协议样本逐项一致 |
+| 运行时切换 | 将账户初始化和 proof 刷新接入 Go 原生运行时，通过全部已知 challenge 验证后删除 Camoufox、DOM 与前端 bundle 运行链路 |

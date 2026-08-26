@@ -28,7 +28,7 @@
 ## Features
 
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent
-- **Multi-Account Runtime**: Account rotation, capability filtering, cooldowns, request failover, and account-bound resources
+- **Multi-Account Runtime**: Detects Free, Pro, Ultra, and Plus benefits and schedules by verified model access, first-event latency, and concurrency slots
 - **Native Streaming**: Text, reasoning summaries, function calls, Google tools, media, and usage
 - **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
 - **Image Generation**: Nano Banana image generation
@@ -42,7 +42,7 @@
 
 ## System Requirements
 
-- **Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
+- **Windows Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
 - **Source Build**: Go 1.26, Node.js 24, and npm
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
@@ -68,7 +68,7 @@ The script runs an existing `aistudio2api.exe` immediately. In a source checkout
 
 The first launch downloads Camoufox for the current platform to `runtime/camoufox/`. Set `CAMOUFOX_PATH` to use an existing executable instead.
 
-### Method 2: Manual Build
+### Method 2: Linux and macOS Source Build
 
 #### 1. Install Dependencies
 
@@ -80,6 +80,7 @@ The first launch downloads Camoufox for the current platform to `runtime/camoufo
 ```bash
 git clone https://github.com/Mag1cFall/AIStudio2API.git
 cd AIStudio2API
+cp .env.example .env
 ```
 
 #### 3. Build and Run
@@ -100,25 +101,37 @@ The first Linux or macOS launch also prepares the matching Camoufox build automa
 
 ### First-Time Use (Authentication Required)
 
-1. **Import local Chrome accounts**:
+1. **Prepare the first account**:
+
+   Windows can import a local Chrome account:
+
    ```powershell
    start.bat setup
    ```
-   The scan lists available Chrome sign-ins and saves selected accounts under the path configured by `AISTUDIO_AUTH_STATES` in `.env`.
+
+   Linux and macOS use an isolated Camoufox login:
+
+   ```bash
+   ./aistudio2api setup --login --label name@gmail.com
+   ```
+
+   Set `--label` to the Google email used for the login. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the current computer and can be set with `--locale` and `--timezone`.
 
 2. **Start the management UI**:
-   - Double-click `start.bat`
+   - Double-click `start.bat` on Windows
+   - Run `./aistudio2api` on Linux or macOS
    - The browser opens `http://127.0.0.1:2048`
    - The initial state is `STOPPED`, with Logs open by default
 
 3. **Add another account**:
    - Open Accounts and click "Add account"
-   - Enter the account name, proxy, locale, and timezone
+   - Enter the Google email, proxy, locale, and timezone
    - Submitting opens an isolated Camoufox window; sign in to Google and enter AI Studio there
    - The account is saved when login completes
 
 4. **Start the API**:
    - Click "Start service" to start the data plane
+   - The state advances through `LAUNCHING` to `RUNNING`; "Stop service" cancels an in-progress launch
    - Use Logs to confirm account, model, and request status
    - The API listens on `http://127.0.0.1:2048` by default
 
@@ -134,9 +147,9 @@ Account actions depend on state:
 
 ### Daily Use (With Existing Authentication)
 
-1. Double-click `start.bat` to open the management UI
+1. Double-click `start.bat` on Windows; run `./aistudio2api` on Linux or macOS
 2. Click "Start service" to enable the APIs
-3. "Stop service" cancels active requests and closes WAA workers while the management UI and Logs remain available
+3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
 Press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
@@ -147,7 +160,7 @@ Press `Ctrl+C` in the launch window or close that window to exit the manager. Cl
 
 `start.bat -open-ui=false`: Starts the manager without opening the web UI.
 
-`start.bat setup`: Scans local Chrome accounts. Use `--email`, `--profile`, `--login`, or `--storage-state` for an explicit authentication entry.
+`start.bat setup`: Scans local Chrome accounts. Use `--email` or `--profile` to select a Chrome account. Run `start.bat setup --login --label name@gmail.com` for an isolated login, or `start.bat setup --storage-state <file> --label name@gmail.com` to import a file.
 
 ## API Usage
 
@@ -360,15 +373,25 @@ HTTP, HTTPS, and SOCKS5 proxies without embedded credentials are supported:
 
 ### Authentication File Management
 
-- Authentication files are stored in `auth/` by default
-- Adding an account starts an isolated Camoufox login
-- `ready` accounts can be edited, disabled, verified, and deleted
-- `auth_required` accounts can log in again
+Authentication files are stored in `auth/` by default:
+
+| Path | Contents |
+| --- | --- |
+| `auth/<Google email>/account.json` | Account email, proxy, locale, timezone, and enabled state |
+| `auth/<Google email>/storage-state.json` | Google cookies and authentication renewal material |
+| `auth/<Google email>/runtime-state.json` | Benefit tier, model eligibility, cooldowns, and resource ownership |
+| `auth/.leases/<Google email>.lock` | Cross-process lease for the account directory |
+| `[user cache]/AIStudio2API/runtime-leases/<Google email>.lock` | WAA Worker lease for that email on the current computer |
+
+The lowercase Google email is the account directory, management UI identity, and log source. `.leases` coordinates account-directory access, while the runtime lease in the user cache allows one WAA Worker per email on the current computer.
+
+Adding an account starts an isolated Camoufox login. `ready` accounts can be edited, disabled, verified, and deleted; `auth_required` accounts can log in again.
 
 ## Documentation
 
 - [Development and contribution](docs/development.md)
 - [Google AI Studio protocol specification](docs/protocol.md)
+- [Runtime logging](docs/logging.md)
 
 ## Important Notes
 
@@ -434,3 +457,13 @@ Issues and Pull Requests are welcome!
 - **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files
 - ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
+
+### Pure-Protocol WAA Runtime
+
+The target is a complete reverse-engineered WAA VM implemented in Go, covering the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
+
+| Stage | Deliverable |
+| --- | --- |
+| Protocol fixtures | Archive complete inputs and outputs for the dynamic program, challenges, state transitions, snapshots, and proofs as reproducible protocol fixtures |
+| Go executor | Implement dynamic-program loading, interpretation, challenge evaluation, persistent state, snapshot restoration, and proof generation with fixture-level parity |
+| Runtime cutover | Move account initialization and proof refresh to the native Go runtime, validate every known challenge, then remove the Camoufox, DOM, and frontend-bundle runtime path |

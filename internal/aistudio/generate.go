@@ -326,6 +326,10 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	events := make(chan Event, 8)
 	go func() {
 		defer close(events)
+		stopClose := context.AfterFunc(ctx, func() {
+			_ = response.Body.Close()
+		})
+		defer stopClose()
 		decoder := NewFrameDecoder()
 		send := func(event Event) error {
 			event.ProviderModel = entry.model.ID
@@ -356,7 +360,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return send(event)
 			}
 		}
-		err := DecodeGenerateStream(response.Body, decoder, emit)
+		err := DecodeGenerateStream(observeStreamActivity(ctx, response.Body), decoder, emit)
 		if err == nil {
 			err = decoder.End()
 		}

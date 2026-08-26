@@ -16,22 +16,31 @@ func ExternalMediaForURL(raw string) (*ExternalMedia, bool) {
 		return nil, false
 	}
 	host := strings.ToLower(parsed.Hostname())
+	videoID := ""
 	switch host {
 	case "youtu.be":
-		if strings.Trim(parsed.Path, "/") == "" {
-			return nil, false
+		path := strings.Trim(parsed.Path, "/")
+		if path != "" {
+			videoID = strings.Split(path, "/")[0]
 		}
 	case "youtube.com", "www.youtube.com", "m.youtube.com":
 		path := strings.Trim(parsed.Path, "/")
-		valid := path == "watch" && parsed.Query().Get("v") != ""
-		valid = valid || strings.HasPrefix(path, "shorts/") || strings.HasPrefix(path, "live/") || strings.HasPrefix(path, "embed/")
-		if !valid {
-			return nil, false
+		if path == "watch" {
+			videoID = parsed.Query().Get("v")
+		} else {
+			segments := strings.Split(path, "/")
+			if len(segments) >= 2 && (segments[0] == "shorts" || segments[0] == "live" || segments[0] == "embed") {
+				videoID = segments[1]
+			}
 		}
 	default:
 		return nil, false
 	}
-	return &ExternalMedia{MIME: "video/*", URL: raw}, true
+	videoID = strings.TrimSpace(videoID)
+	if videoID == "" {
+		return nil, false
+	}
+	return &ExternalMedia{MIME: "video/*", URL: "https://www.youtube.com/watch?v=" + url.QueryEscape(videoID)}, true
 }
 
 func attachYouTubeMedia(content Content) Content {

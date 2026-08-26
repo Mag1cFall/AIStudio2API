@@ -17,6 +17,8 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const defaultAccountLocale = navigator.language || 'en-US'
+const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const showAdd = ref(false)
 const editingAccountID = ref('')
 const pendingAction = ref('')
@@ -24,8 +26,8 @@ const draft = reactive<AccountDraft>({
   label: '',
   enabled: true,
   proxy: '',
-  locale: navigator.language || 'zh-TW',
-  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Taipei',
+  locale: defaultAccountLocale,
+  timezone: defaultAccountTimezone,
 })
 
 const stateKeys: Record<AccountState, TranslationKey> = {
@@ -46,8 +48,8 @@ function resetDraft(): void {
   draft.label = ''
   draft.enabled = true
   draft.proxy = ''
-  draft.locale = navigator.language || 'zh-TW'
-  draft.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Taipei'
+  draft.locale = defaultAccountLocale
+  draft.timezone = defaultAccountTimezone
 }
 
 function beginAdd(): void {
@@ -188,15 +190,17 @@ async function removeAccount(account: Account): Promise<void> {
             ></div>
             <div class="min-w-0">
               <strong class="block truncate font-mono text-white">{{ account.label }}</strong>
-              <span class="block truncate text-xs text-gray-500">{{ account.id }}</span>
             </div>
           </div>
           <div class="shrink-0 text-xs text-gray-500">
-            {{ t('accounts.models') }}: {{ account.models.length }}
+            {{ t('accounts.models') }}:
+            {{ account.models.length === 0 ? '—' : account.models.length }}
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-2 border-t border-[#30363d] pt-3 text-xs md:grid-cols-3">
+        <div
+          class="grid grid-cols-1 gap-2 border-t border-[#30363d] pt-3 text-xs sm:grid-cols-2 md:grid-cols-4"
+        >
           <div>
             <span class="text-gray-500">{{ t('accounts.proxy') }}</span>
             <div class="truncate text-gray-300">{{ account.proxy || t('accounts.direct') }}</div>
@@ -208,6 +212,10 @@ async function removeAccount(account: Account): Promise<void> {
           <div>
             <span class="text-gray-500">{{ t('accounts.timezone') }}</span>
             <div class="text-gray-300">{{ account.timezone }}</div>
+          </div>
+          <div>
+            <span class="text-gray-500">{{ t('accounts.benefitTier') }}</span>
+            <div class="text-gray-300">{{ account.benefit_tier }}</div>
           </div>
         </div>
 
@@ -306,8 +314,10 @@ async function removeAccount(account: Account): Promise<void> {
               <input
                 v-model.trim="draft.label"
                 class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                :disabled="editingAccountID !== ''"
+                type="email"
                 required
-                autocomplete="off"
+                autocomplete="email"
               />
             </label>
             <label class="block">

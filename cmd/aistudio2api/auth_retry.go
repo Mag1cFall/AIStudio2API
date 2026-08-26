@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
@@ -18,6 +19,7 @@ type authRuntimeRefresher struct {
 	reset       func(string) error
 	invalidate  func(string) error
 	globalProxy string
+	requests    *requestRegistry
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -61,13 +63,19 @@ func (transport *authRetryTransport) DownloadDrive(
 }
 
 // newAuthRuntimeRefresher 创建生产环境认证续签器
-func newAuthRuntimeRefresher(workers *accountWorkerManager, headers *accountHeaderProvider, globalProxy string) *authRuntimeRefresher {
+func newAuthRuntimeRefresher(
+	workers *accountWorkerManager,
+	headers *accountHeaderProvider,
+	requests *requestRegistry,
+	globalProxy string,
+) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
 		refresh: chromeauth.Refresh, reset: workers.Reset, invalidate: headers.Invalidate, globalProxy: globalProxy,
+		requests: requests,
 	}
 }
 
-// Do 在 401 或 403 后续签同一账户并重放一次请求
+// Do 在 401 后续签同一账户并重放一次请求
 func (transport *authRetryTransport) Do(ctx context.Context, request aistudio.RPCRequest) (*aistudio.RPCResponse, error) {
 	response, err := transport.transport.Do(ctx, request)
 	if err != nil || !authenticationFailed(response) {
@@ -85,7 +93,7 @@ func (transport *authRetryTransport) Do(ctx context.Context, request aistudio.RP
 	return transport.transport.Do(ctx, request)
 }
 
-// DoProtected 在 401 或 403 后续签同一账户并重放一次受保护请求
+// DoProtected 在 401 后续签同一账户并重放一次受保护请求
 func (transport *authRetryProtectedTransport) DoProtected(
 	ctx context.Context,
 	request aistudio.GenerateRequest,
@@ -139,8 +147,15 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("认证续签缺少账户租约")
 	}
+	endRefresh, ok := lease.BeginAuthRefresh()
+	if !ok {
+		return fmt.Errorf("%w: 账户存在活动生成", aistudio.ErrAccountLeased)
+	}
+	defer endRefresh()
 	account := lease.Account()
-	if err := lease.RefreshStorageState(func(state *aistudio.StorageState) error {
+	startedAt := time.Now()
+	refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
+	err := lease.RefreshStorageState(func(state *aistudio.StorageState) error {
 		extension, exists, err := state.AuthExtension()
 		if err != nil {
 			return err
@@ -155,6 +170,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		state.Cookies = cookies
 		return nil
 	}, func() error {
+		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")
 		if refresher.invalidate != nil {
 			if err := refresher.invalidate(account.ID); err != nil {
 				return fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
@@ -164,9 +180,19 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
+	})
+	if err != nil {
+		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
+		refresher.requests.log(account.Config.Label, "ERROR", fmt.Sprintf(
+			"账户认证续签失败 | 耗时=%s | 错误=%s",
+			time.Since(startedAt).Round(time.Millisecond), wrapped.Error(),
+		))
+		return wrapped
 	}
+	refresher.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
+		"账户认证续签完成 | 耗时=%s",
+		time.Since(startedAt).Round(time.Millisecond),
+	))
 	return nil
 }
 
@@ -185,8 +211,7 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 }
 
 func authenticationFailed(response *aistudio.RPCResponse) bool {
-	return response != nil && response.Body != nil &&
-		(response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden)
+	return response != nil && response.Body != nil && response.StatusCode == http.StatusUnauthorized
 }
 
 func authenticationRefreshError(method string, statusCode int, err error) error {

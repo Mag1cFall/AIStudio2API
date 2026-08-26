@@ -14,6 +14,7 @@ export interface Account {
   locale: string
   timezone: string
   models: string[]
+  benefit_tier: string
   message: string
 }
 
@@ -34,6 +35,7 @@ export interface AccountCounters {
 }
 
 export interface ServiceStatus {
+  state: 'STOPPED' | 'LAUNCHING' | 'RUNNING'
   running: boolean
   ready: boolean
   version: string
@@ -57,10 +59,13 @@ export interface Model {
   output_token_limit?: number
   capabilities?: Record<string, boolean>
   capability_options?: Record<string, string[]>
+  access_modes?: number[]
+  paid?: boolean
 }
 
 export interface Cooldown {
   account_id: string
+  account_label: string
   model_id: string
   until: string
   reason?: string
@@ -72,6 +77,7 @@ export interface RequestSummary {
   id: string
   model: string
   account_id: string
+  account_label: string
   state: RequestState
   started_at: string
 }
@@ -92,7 +98,7 @@ export interface ServiceConfig {
 export type AdminEvent =
   | { type: 'status'; data: ServiceStatus }
   | { type: 'log'; data: AdminLog }
-  | { type: 'account'; data: Account }
+  | { type: 'accounts'; data: { accounts: Account[] } }
   | { type: 'models'; data: { models: Model[] } }
   | { type: 'cooldowns'; data: Cooldown[] }
   | { type: 'request'; data: RequestSummary }

@@ -90,6 +90,8 @@ type Client struct {
 	contextProvider RequestContextProvider
 	catalogMu       sync.RWMutex
 	catalogs        map[string]modelCatalog
+	tierMu          sync.RWMutex
+	tiers           map[string]BenefitTier
 }
 
 var _ Service = (*Client)(nil)
@@ -107,6 +109,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		protected:       options.Protected,
 		contextProvider: options.ContextProvider,
 		catalogs:        make(map[string]modelCatalog),
+		tiers:           make(map[string]BenefitTier),
 	}, nil
 }
 
@@ -133,6 +136,7 @@ func (e *RPCError) HTTPStatus() int {
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
 	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
+	c.applyBenefitTier(method, accountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
@@ -142,6 +146,7 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {
 	rpc := newRPCRequest("GenerateContent", request.AccountID, request.ID, body, true)
+	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio GenerateContent: %w", err)
@@ -155,6 +160,7 @@ func (c *Client) doProtectedVideo(ctx context.Context, request VideoRequest, bod
 		return nil, fmt.Errorf("AI Studio protected transport 不支持 GenerateVideo")
 	}
 	rpc := newRPCRequest("GenerateVideo", request.AccountID, "", body, false)
+	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := transport.DoProtectedVideo(ctx, request, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio GenerateVideo: %w", err)

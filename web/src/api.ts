@@ -90,7 +90,7 @@ function parseAdminEvent(raw: string): AdminEvent | undefined {
   if (
     type !== 'status' &&
     type !== 'log' &&
-    type !== 'account' &&
+    type !== 'accounts' &&
     type !== 'models' &&
     type !== 'cooldowns' &&
     type !== 'request'

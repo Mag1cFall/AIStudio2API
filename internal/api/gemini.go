@@ -730,7 +730,7 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 
 func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, events <-chan aistudio.Event) {
 	streamHeaders(w)
-	result, err := consumeEvents(r.Context(), events, func(event aistudio.Event) error {
+	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
 		response := map[string]any{"responseId": request.ID, "modelVersion": request.Model}
 		switch event.Kind {
 		case aistudio.EventText:
@@ -798,7 +798,7 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 			return nil
 		}
 		return writeSSE(w, "", response)
-	})
+	}, func() error { return writeSSEHeartbeat(w) })
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			_ = writeSSE(w, "", map[string]any{"error": map[string]any{

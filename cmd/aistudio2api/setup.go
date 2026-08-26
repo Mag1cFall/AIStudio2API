@@ -92,7 +92,7 @@ func importStorageState(store *aistudio.AccountStore, options setupOptions) erro
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s (%s)\n", account.ID, account.Config.Label)
+	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
 	return nil
 }
 
@@ -119,7 +119,7 @@ func importIsolatedLogin(ctx context.Context, store *aistudio.AccountStore, opti
 	}
 	label := options.label
 	if label == "" {
-		label = "Default"
+		return fmt.Errorf("--login 必须同时提供 --label <Google 邮箱>")
 	}
 	account, err := store.Create(setupAccountConfig(label, options), result.StorageState)
 	if err != nil {
@@ -128,7 +128,7 @@ func importIsolatedLogin(ctx context.Context, store *aistudio.AccountStore, opti
 	if err := camoufoxnative.PersistAccountFingerprint(loginDirectory, account.Directory); err != nil {
 		return errors.Join(err, store.Delete(account))
 	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s (%s)\n", account.ID, account.Config.Label)
+	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
 	return nil
 }
 
@@ -179,11 +179,11 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudi
 		if !options.localeSet && result.Locale != "" {
 			accountOptions.locale = result.Locale
 		}
-		account, err := store.Create(setupAccountConfig(label, accountOptions), result.State)
+		_, err := store.Create(setupAccountConfig(label, accountOptions), result.State)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型，账户 %s\n", result.Email, result.Profile, modelCounts[index], account.ID)
+		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, modelCounts[index])
 	}
 	return nil
 }
@@ -250,8 +250,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
 	label := flags.String("label", "", "账户显示名称")
 	proxy := flags.String("proxy", cfg.Proxy, "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
-	locale := flags.String("locale", "en-US", "账户语言")
-	timezone := flags.String("timezone", "UTC", "账户时区")
+	locale := flags.String("locale", aistudio.DefaultAccountLocale(), "账户语言")
+	timezone := flags.String("timezone", aistudio.DefaultAccountTimezone(), "账户时区")
 	if err := flags.Parse(args); err != nil {
 		return setupOptions{}, err
 	}
