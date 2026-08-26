@@ -267,7 +267,10 @@ func snapshotHookExpression() string {
   if (!snapshotKey) return 'no_snapshot_fn';
   const original = makerSuite[snapshotKey];
   const wrapped = function(...args) {
-    window.__aistudioWaaService = args[0];
+    const service = args[0];
+    if (service && (typeof service === 'object' || typeof service === 'function')) {
+      window.__aistudioWaaService = service;
+    }
     return original.apply(this, args);
   };
   wrapped.__aistudioWrapped = true;
