@@ -41,9 +41,10 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
+	finishRaw := rawAt(candidate, 1)
 	events := make([]Event, 0, 4)
 	if len(candidate) > 0 && !isJSONNull(candidate[0]) {
-		contentEvents, err := d.decodeContent(candidate[0], raw)
+		contentEvents, err := d.decodeContent(candidate[0], !isJSONNull(finishRaw), raw)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +76,6 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 			d.usage = &usage
 		}
 	}
-	finishRaw := rawAt(candidate, 1)
 	if !isJSONNull(finishRaw) {
 		finishCode, err := rawInt64(finishRaw, "$[0][][0][0][1]", raw)
 		if err != nil {
@@ -145,7 +145,7 @@ func (d *FrameDecoder) End() error {
 	return d.protocolError("$", "流结束前没有完成帧", d.lastFrame)
 }
 
-func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
+func (d *FrameDecoder) decodeContent(raw json.RawMessage, finished bool, evidence json.RawMessage) ([]Event, error) {
 	content, err := rawArray(raw, "$[0][][0][0][0]", evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
@@ -153,16 +153,19 @@ func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessa
 	if len(content) == 0 {
 		return nil, nil
 	}
-	partsRaw := rawAt(content, 0)
-	if isJSONNull(partsRaw) {
-		return nil, d.protocolError("$[0][][0][0][0][0]", "模型内容缺少 parts", evidence)
-	}
 	role, err := rawString(rawAt(content, 1), "$[0][][0][0][0][1]", evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if role != "model" {
 		return nil, d.protocolError("$[0][][0][0][0][1]", "响应角色不是 model", rawAt(content, 1))
+	}
+	partsRaw := rawAt(content, 0)
+	if isJSONNull(partsRaw) {
+		if finished {
+			return nil, nil
+		}
+		return nil, d.protocolError("$[0][][0][0][0][0]", "模型内容缺少 parts", evidence)
 	}
 	parts, err := rawArray(partsRaw, "$[0][][0][0][0][0]", evidence)
 	if err != nil {

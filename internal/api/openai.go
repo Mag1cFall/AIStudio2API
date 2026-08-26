@@ -483,12 +483,6 @@ func appendUnique(values []string, value string) []string {
 }
 
 func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error) {
-	if request.FrequencyPenalty != nil && *request.FrequencyPenalty != 0 {
-		return aistudio.GenerationConfig{}, fmt.Errorf("frequency_penalty is not supported by AI Studio Web")
-	}
-	if request.PresencePenalty != nil && *request.PresencePenalty != 0 {
-		return aistudio.GenerationConfig{}, fmt.Errorf("presence_penalty is not supported by AI Studio Web")
-	}
 	config := aistudio.GenerationConfig{
 		Temperature:     request.Temperature,
 		TopP:            request.TopP,

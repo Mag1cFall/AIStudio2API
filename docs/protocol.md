@@ -326,6 +326,8 @@ Content 形状：
 [[<PART>, ...], "user|model"]
 ```
 
+带 finish reason 的模型完成帧可以使用 `[null,"model"]`，该帧只提供终止状态与 usage。
+
 客户端 tool result 使用 `user` role。Part 字段：
 
 | JSON 索引 | protobuf field | 内容 |
@@ -877,7 +879,7 @@ POST /api/control/stop
 | temperature / topP / topK / seed | 映射 generation config fields 5 / 6 / 7 / 19 |
 | stop sequence | 映射 generation config field 2 |
 | structured output | MIME type 映射 field 8，Schema 映射 field 9 |
-| frequency / presence penalty | `0` 采用 AI Studio 默认值，非零值返回 `400 invalid_request` |
+| frequency / presence penalty | 接收并忽略 |
 | Responses `parallel_tool_calls` | 写入响应合同元数据，函数调用仍采用 AI Studio auto 模式 |
 
 流式端点统一使用 `text/event-stream`，每个 SSE frame 以空行结束：

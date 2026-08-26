@@ -124,6 +124,23 @@ type accountWorker struct {
 	warm         atomic.Bool
 }
 
+type accountWorkerPreparer struct {
+	account *accountWorker
+	worker  *aistudio.NativeWorker
+}
+
+var errAccountWorkerReplaced = errors.New("WAA worker 已更新")
+
+// Prepare 在账户 Worker 有效期间生成 proof
+func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aistudio.ProtectedRequest) (aistudio.PreparedProtectedRequest, error) {
+	preparer.account.mu.Lock()
+	defer preparer.account.mu.Unlock()
+	if preparer.account.worker != preparer.worker {
+		return aistudio.PreparedProtectedRequest{}, errAccountWorkerReplaced
+	}
+	return preparer.worker.Prepare(ctx, request)
+}
+
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
 type accountWorkerInitError struct {
 	err error
@@ -385,7 +402,7 @@ func (manager *accountWorkerManager) Worker(ctx context.Context, accountID strin
 	if account.worker != nil {
 		phase := account.worker.State().Phase
 		if phase == aistudio.WorkerReady || phase == aistudio.WorkerBusy {
-			return account.worker, nil
+			return &accountWorkerPreparer{account: account, worker: account.worker}, nil
 		}
 		if err := closeAccountWorker(account); err != nil {
 			return nil, err
@@ -461,7 +478,7 @@ func (manager *accountWorkerManager) Worker(ctx context.Context, accountID strin
 			"WAA Worker 就绪 | 模型=%s | PID=%d | 耗时=%s",
 			model, worker.State().PID, time.Since(startedAt).Round(time.Millisecond),
 		))
-		return worker, nil
+		return &accountWorkerPreparer{account: account, worker: worker}, nil
 	}
 	err = errors.Join(failures...)
 	manager.requests.log(account.label, "ERROR", fmt.Sprintf(
@@ -1483,9 +1500,17 @@ func (service *trackedService) generateWithRetry(
 	var activity *upstreamActivity
 	var err error
 	attempted := make(map[string]struct{}, maxAttempts)
+	recoveredWorker := make(map[string]struct{})
+	recoveryAccountID := ""
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		selectionAccountID := requestedAccountID
+		recoveringAccount := recoveryAccountID != ""
+		if recoveryAccountID != "" {
+			selectionAccountID = recoveryAccountID
+			recoveryAccountID = ""
+		}
 		selection := aistudio.AccountSelection{
-			ModelID: modelID, Method: "generateContent", AccountID: requestedAccountID, ResourceID: resourceID,
+			ModelID: modelID, Method: "generateContent", AccountID: selectionAccountID, ResourceID: resourceID,
 		}
 		if unbound && len(attempted) > 0 {
 			for _, status := range service.pool.Status() {
@@ -1499,6 +1524,10 @@ func (service *trackedService) generateWithRetry(
 			if err == nil || !errors.Is(warmErr, aistudio.ErrNoEligibleAccount) {
 				err = warmErr
 			}
+			if recoveringAccount && unbound && requestCtx.Err() == nil {
+				attempted[selectionAccountID] = struct{}{}
+				continue
+			}
 			break
 		}
 		selection.AllowedAccountIDs = warm
@@ -1506,6 +1535,10 @@ func (service *trackedService) generateWithRetry(
 		if acquireErr != nil {
 			if err == nil || !errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) {
 				err = acquireErr
+			}
+			if recoveringAccount && unbound && requestCtx.Err() == nil {
+				attempted[selectionAccountID] = struct{}{}
+				continue
 			}
 			break
 		}
@@ -1572,8 +1605,13 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		workerFailed := service.workers.WorkerFailed(request.AccountID)
-		retryable := retryableGenerateAccountError(requestCtx, err) || workerFailed && requestCtx.Err() == nil
-		if workerFailed {
+		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
+		workerReplaced := errors.Is(err, errAccountWorkerReplaced)
+		_, alreadyRecovered := recoveredWorker[request.AccountID]
+		recoverWorker := (workerFailed || waaRuntimeFailed || workerReplaced) && !alreadyRecovered && requestCtx.Err() == nil
+		localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
+		retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
+		if workerFailed || waaRuntimeFailed {
 			if resetErr := service.workers.Reset(request.AccountID); resetErr != nil {
 				err = errors.Join(err, resetErr)
 				retryable = false
@@ -1603,13 +1641,20 @@ func (service *trackedService) generateWithRetry(
 		if !retryable {
 			break
 		}
-		if !aistudio.DefinitiveAuthenticationFailure(err) && !modelAccessDenied {
+		if recoverWorker {
+			recoveredWorker[request.AccountID] = struct{}{}
+			recoveryAccountID = request.AccountID
+			delete(attempted, request.AccountID)
+			maxAttempts++
+		} else if !aistudio.DefinitiveAuthenticationFailure(err) && !modelAccessDenied {
 			cooldownModel := modelID
 			cooldownDuration := 30 * time.Second
 			var workerInitError *accountWorkerInitError
 			if errors.As(err, &workerInitError) || workerFailed {
 				cooldownModel = ""
 				cooldownDuration = 5 * time.Minute
+			} else if waaRuntimeFailed || workerReplaced {
+				cooldownModel = ""
 			}
 			if cooldownErr := service.pool.MarkCooldown(request.AccountID, cooldownModel, time.Now().Add(cooldownDuration), err.Error()); cooldownErr != nil {
 				err = errors.Join(err, cooldownErr)
@@ -1618,6 +1663,12 @@ func (service *trackedService) generateWithRetry(
 		}
 		if attempt+1 == maxAttempts {
 			break
+		}
+		if recoverWorker {
+			service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+				"WAA Worker 重新调度 | 模型=%s | 重放当前请求", modelID,
+			))
+			continue
 		}
 		switchMessage := fmt.Sprintf(
 			"账号切换 | 模型=%s\n原因: %s",

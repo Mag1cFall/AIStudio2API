@@ -325,6 +325,13 @@ func DefinitiveModelAccessFailure(err error) bool {
 	return errors.As(err, &rpcError) && rpcError.StatusCode == http.StatusForbidden && rpcError.Code == 7
 }
 
+// DefinitiveWAARuntimeFailure 判断上游是否明确拒绝当前 WAA 运行态
+func DefinitiveWAARuntimeFailure(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.StatusCode == http.StatusNotFound && rpcError.Code == 5 &&
+		strings.Contains(rpcError.Message, "Ambiguous request for service ''")
+}
+
 func (s *PooledService) markRetryableFailure(accountID string, modelID string, err error) error {
 	if DefinitiveAuthenticationFailure(err) {
 		return s.pool.MarkAuthRequired(accountID, err.Error())
