@@ -37,8 +37,8 @@ const activeCount = computed(
 )
 
 // accountLabel 将稳定账户 ID 映射为用户显示名称
-function accountLabel(id: string): string {
-  return props.accounts.find((account) => account.id === id)?.label ?? id
+function accountLabel(id: string, label: string): string {
+  return label || props.accounts.find((account) => account.id === id)?.label || '—'
 }
 
 // formatTime 根据当前语言显示请求时间
@@ -111,7 +111,9 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
                 <strong class="block truncate text-sm text-gray-200">{{
                   cooldown.model_id
                 }}</strong>
-                <span class="text-xs text-gray-500">{{ accountLabel(cooldown.account_id) }}</span>
+                <span class="text-xs text-gray-500">{{
+                  accountLabel(cooldown.account_id, cooldown.account_label)
+                }}</span>
               </div>
               <span class="shrink-0 text-xs text-yellow-400">
                 {{ t('state.cooldown') }}
@@ -150,15 +152,14 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
           >
             <div class="min-w-0 flex-1">
               <div class="flex min-w-0 items-center gap-2">
-                <code class="max-w-48 truncate text-xs font-bold text-blue-400">{{
-                  request.id
-                }}</code>
+                <strong class="truncate text-sm text-gray-300">{{ request.model }}</strong>
                 <span class="text-xs text-gray-500">{{ t(requestStateKeys[request.state]) }}</span>
               </div>
-              <strong class="mt-1 block truncate text-sm text-gray-300">{{ request.model }}</strong>
             </div>
             <div class="text-right text-xs text-gray-500">
-              <span class="block">{{ accountLabel(request.account_id) }}</span>
+              <span class="block">{{
+                accountLabel(request.account_id, request.account_label)
+              }}</span>
               <time class="font-mono">{{ formatTime(request.started_at) }}</time>
             </div>
             <button

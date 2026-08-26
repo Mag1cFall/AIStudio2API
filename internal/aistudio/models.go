@@ -157,6 +157,14 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		}
 		capabilities["secondary_capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
+	accessModes, err := intSliceField(row, 82, path, raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	paidCode, err := optionalIntField(row, 77, path, raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
 	options, err := decodeCapabilityOptions(row, path, raw)
 	if err != nil {
 		return modelEntry{}, err
@@ -174,6 +182,8 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		OutputTokenLimit:  outputLimit,
 		Capabilities:      capabilities,
 		CapabilityOptions: options,
+		AccessModes:       append([]int64(nil), accessModes...),
+		Paid:              paidCode == 2,
 	}
 	defaults, err := decodeGenerationDefaults(row, path, raw, capabilities)
 	if err != nil {
@@ -509,6 +519,7 @@ func cloneModels(models []Model) []Model {
 	for index, model := range models {
 		result[index] = model
 		result[index].Methods = append([]string(nil), model.Methods...)
+		result[index].AccessModes = append([]int64(nil), model.AccessModes...)
 		if model.Capabilities != nil {
 			result[index].Capabilities = make(map[string]bool, len(model.Capabilities))
 			for key, value := range model.Capabilities {

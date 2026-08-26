@@ -101,7 +101,15 @@ function tokenLimit(value: number | undefined): string {
           class="flex flex-wrap items-start justify-between gap-3 border-b border-[#30363d] bg-[#21262d] px-4 py-2"
         >
           <div class="min-w-0">
-            <strong class="block text-gray-200">{{ model.name }}</strong>
+            <div class="flex items-center gap-2">
+              <strong class="block text-gray-200">{{ model.name }}</strong>
+              <span
+                v-if="model.paid"
+                class="rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+              >
+                {{ t('models.paid') }}
+              </span>
+            </div>
             <code class="block truncate text-xs text-blue-400">{{ model.id }}</code>
           </div>
           <div class="flex gap-4 text-right font-mono text-xs text-gray-500">

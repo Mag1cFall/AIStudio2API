@@ -47,6 +47,9 @@ func streamHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func writeSSE(w http.ResponseWriter, event string, payload any) error {
@@ -70,6 +73,16 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
+}
+
+func writeSSEHeartbeat(w http.ResponseWriter) error {
+	if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 		return err
 	}
 	if flusher, ok := w.(http.Flusher); ok {

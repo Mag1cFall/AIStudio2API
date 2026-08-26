@@ -223,6 +223,8 @@ type Model struct {
 	OutputTokenLimit  int64               `json:"output_token_limit,omitempty"`
 	Capabilities      map[string]bool     `json:"capabilities,omitempty"`
 	CapabilityOptions map[string][]string `json:"capability_options,omitempty"`
+	AccessModes       []int64             `json:"access_modes,omitempty"`
+	Paid              bool                `json:"paid,omitempty"`
 }
 
 // Usage 表示一次生成的 token 用量

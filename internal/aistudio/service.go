@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+const modelCatalogConcurrency = 5
 
 // PooledService 在账户租约内调用协议客户端
 type PooledService struct {
@@ -125,6 +128,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 	if err != nil {
 		return nil, fmt.Errorf("获取账户 WAA preparer: %w", err)
 	}
+	reportRequestPhase(ctx, RequestPhasePreparingWAA)
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
 		URL:        rpc.URL,
 		Headers:    rpc.Header.Clone(),
@@ -140,12 +144,21 @@ func (t *WorkerProtectedTransport) doPrepared(
 	}
 	rpc.AccountID = lease.Account().ID
 	rpc.Body = append([]byte(nil), prepared.Body...)
+	requestHeaders := rpc.Header
 	rpc.Header = prepared.Headers.Clone()
+	for name, values := range requestHeaders {
+		rpc.Header.Del(name)
+		for _, value := range values {
+			rpc.Header.Add(name, value)
+		}
+	}
 	rpc.Header.Set("Content-Type", JSONProtobufContentType)
+	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := t.transport.Do(ctx, rpc)
 	if err != nil {
 		return nil, err
 	}
+	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil
 }
 
@@ -162,8 +175,6 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 				values = append(values, part.Text)
 			case part.InlineData != nil:
 				values = append(values, base64.StdEncoding.EncodeToString(part.InlineData.Data))
-			case part.ExternalMedia != nil:
-				values = append(values, part.ExternalMedia.URL)
 			case part.File != nil:
 				values = append(values, part.File.ID)
 			default:
@@ -199,59 +210,50 @@ func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 		return s.modelsForLease(ctx, lease)
 	}
 	statuses := s.pool.Status()
+	jobs := make(chan AccountStatus)
+	results := make(chan accountModelsResult, len(statuses))
+	workerCount := min(modelCatalogConcurrency, len(statuses))
+	var workers sync.WaitGroup
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for status := range jobs {
+				results <- s.modelsForStatus(ctx, status)
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, status := range statuses {
+			if !status.Enabled || status.State != AccountReady && status.State != AccountBusy {
+				continue
+			}
+			select {
+			case jobs <- status:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
 	models := make([]Model, 0)
 	available := 0
 	failures := make([]error, 0)
-	for _, status := range statuses {
-		if !status.Enabled || status.State != AccountReady && status.State != AccountBusy {
-			continue
+	for result := range results {
+		models = mergeModels(models, result.models)
+		if result.available {
+			available++
 		}
-		cached := s.cachedModels(status.ID)
-		if status.State == AccountBusy {
-			if len(cached) > 0 {
-				models = mergeModels(models, cached)
-				available++
-			} else {
-				failures = append(failures, fmt.Errorf("账户 %s 正在使用且没有缓存模型目录", status.ID))
-			}
-			continue
+		if result.err != nil {
+			failures = append(failures, result.err)
 		}
-		lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: status.ID})
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, errors.Join(append(failures, ctx.Err())...)
-			}
-			failure := fmt.Errorf("获取账户 %s 的模型目录租约: %w", status.ID, err)
-			failures = append(failures, failure)
-			if len(cached) > 0 {
-				models = mergeModels(models, cached)
-				available++
-			}
-			continue
-		}
-		accountModels, requestErr := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease)
-		releaseErr := lease.Release()
-		if requestErr != nil {
-			err := errors.Join(requestErr, releaseErr)
-			if ctx.Err() != nil {
-				return nil, errors.Join(append(failures, err)...)
-			}
-			failure := fmt.Errorf("刷新账户 %s 的模型目录: %w", status.ID, err)
-			failures = append(failures, failure)
-			if DefinitiveAuthenticationFailure(requestErr) {
-				failures = appendStatusError(failures, s.pool.MarkAuthRequired(status.ID, failure.Error()))
-			}
-			if len(cached) > 0 {
-				models = mergeModels(models, cached)
-				available++
-			}
-			continue
-		}
-		models = mergeModels(models, accountModels)
-		available++
-		if releaseErr != nil {
-			failures = append(failures, fmt.Errorf("释放账户 %s 的模型目录租约: %w", status.ID, releaseErr))
-		}
+	}
+	if ctx.Err() != nil {
+		failures = append(failures, ctx.Err())
 	}
 	if available == 0 {
 		if len(failures) > 0 {
@@ -262,6 +264,45 @@ func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 	return models, nil
 }
 
+type accountModelsResult struct {
+	models    []Model
+	available bool
+	err       error
+}
+
+func (s *PooledService) modelsForStatus(ctx context.Context, status AccountStatus) accountModelsResult {
+	cached := s.cachedModels(status.ID)
+	if status.State == AccountBusy {
+		if len(cached) > 0 {
+			return accountModelsResult{models: cached, available: true}
+		}
+		return accountModelsResult{err: fmt.Errorf("账户 %s 正在使用且没有缓存模型目录", status.ID)}
+	}
+	lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: status.ID})
+	if err != nil {
+		return accountModelsResult{
+			models: cached, available: len(cached) > 0,
+			err: fmt.Errorf("获取账户 %s 的模型目录租约: %w", status.ID, err),
+		}
+	}
+	accountModels, requestErr := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease)
+	releaseErr := lease.Release()
+	if requestErr != nil {
+		failure := fmt.Errorf("刷新账户 %s 的模型目录: %w", status.ID, errors.Join(requestErr, releaseErr))
+		if DefinitiveAuthenticationFailure(requestErr) {
+			failure = errors.Join(failure, s.pool.MarkAuthRequired(status.ID, failure.Error()))
+		}
+		return accountModelsResult{models: cached, available: len(cached) > 0, err: failure}
+	}
+	if releaseErr != nil {
+		return accountModelsResult{
+			models: accountModels, available: true,
+			err: fmt.Errorf("释放账户 %s 的模型目录租约: %w", status.ID, releaseErr),
+		}
+	}
+	return accountModelsResult{models: accountModels, available: true}
+}
+
 func (s *PooledService) cachedModels(accountID string) []Model {
 	s.pool.mu.Lock()
 	defer s.pool.mu.Unlock()
@@ -269,7 +310,7 @@ func (s *PooledService) cachedModels(accountID string) []Model {
 	if account == nil {
 		return nil
 	}
-	return cloneAccountModels(account.Models)
+	return modelsAllowedByTier(cloneAccountModels(account.Models), account.BenefitTier)
 }
 
 // DefinitiveAuthenticationFailure 判断上游是否明确要求重新认证
@@ -278,23 +319,47 @@ func DefinitiveAuthenticationFailure(err error) bool {
 	return errors.As(err, &rpcError) && rpcError.StatusCode == 401
 }
 
+// DefinitiveModelAccessFailure 判断上游是否明确拒绝账户模型组合
+func DefinitiveModelAccessFailure(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.StatusCode == http.StatusForbidden && rpcError.Code == 7
+}
+
 func (s *PooledService) markRetryableFailure(accountID string, modelID string, err error) error {
 	if DefinitiveAuthenticationFailure(err) {
 		return s.pool.MarkAuthRequired(accountID, err.Error())
+	}
+	if DefinitiveModelAccessFailure(err) {
+		_, stateErr := s.pool.MarkModelAccess(accountID, modelID, ModelAccessDenied, err.Error())
+		return stateErr
 	}
 	return s.pool.MarkCooldown(accountID, modelID, time.Now().Add(30*time.Second), err.Error())
 }
 
 func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease) ([]Model, error) {
 	account := lease.Account()
+	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
+	if err != nil {
+		return nil, err
+	}
 	models, err := s.client.ModelsForAccount(ContextWithAccountLease(ctx, lease), account.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.pool.SetModels(account.ID, models); err != nil {
+	if err := s.pool.SetCatalog(account.ID, tier, models); err != nil {
 		return nil, err
 	}
-	return models, nil
+	return modelsAllowedByTier(models, tier), nil
+}
+
+func modelsAllowedByTier(models []Model, tier BenefitTier) []Model {
+	result := make([]Model, 0, len(models))
+	for _, model := range models {
+		if modelAllowedByTier(model, tier) {
+			result = append(result, model)
+		}
+	}
+	return result
 }
 
 // CountTokens 使用支持目标模型的独占账户计数
@@ -320,6 +385,9 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 			requestErr = errors.Join(requestErr, lease.Release())
 		}
 		if requestErr == nil || !retryableAccountError(requestErr) {
+			if requestErr == nil {
+				_, requestErr = s.pool.MarkModelAccess(accountID, modelID, ModelAccessVerified, "")
+			}
 			return count, requestErr
 		}
 		if stateErr := s.markRetryableFailure(accountID, modelID, requestErr); stateErr != nil {
@@ -375,8 +443,8 @@ func accountAttemptLimit(pool *AccountPool, pinned bool) int {
 			eligible++
 		}
 	}
-	if eligible > 1 {
-		return 2
+	if eligible > 0 {
+		return eligible
 	}
 	return 1
 }
@@ -396,8 +464,6 @@ func forwardEventsWithLease(ctx context.Context, source <-chan Event, destinatio
 		select {
 		case destination <- event:
 		case <-ctx.Done():
-			for range source {
-			}
 			_ = lease.Release()
 			return
 		}
@@ -439,6 +505,8 @@ func mergeModels(base []Model, additions []Model) []Model {
 		for name, values := range model.CapabilityOptions {
 			current.CapabilityOptions[name] = unionStrings(current.CapabilityOptions[name], values)
 		}
+		current.AccessModes = unionInt64(current.AccessModes, model.AccessModes)
+		current.Paid = current.Paid || model.Paid
 		merged[model.ID] = current
 	}
 	result := make([]Model, 0, len(merged))
@@ -452,6 +520,22 @@ func mergeModels(base []Model, additions []Model) []Model {
 	sort.Slice(result, func(left int, right int) bool {
 		return result[left].ID < result[right].ID
 	})
+	return result
+}
+
+func unionInt64(left []int64, right []int64) []int64 {
+	values := make(map[int64]struct{}, len(left)+len(right))
+	for _, value := range left {
+		values[value] = struct{}{}
+	}
+	for _, value := range right {
+		values[value] = struct{}{}
+	}
+	result := make([]int64, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(left int, right int) bool { return result[left] < result[right] })
 	return result
 }
 

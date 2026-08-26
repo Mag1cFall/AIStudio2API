@@ -90,7 +90,8 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 }
 
 // runServer 管理 HTTP 监听与优雅退出
-func runServer(ctx context.Context, cfg config.Config, options commandOptions, service aistudio.Service, admin api.AdminService) error {
+func runServer(ctx context.Context, cfg config.Config, options commandOptions, service aistudio.Service, admin *runtimeAdmin) error {
+	admin.requests.log("service", "INFO", fmt.Sprintf("应用启动 | 4/4 | 监听 HTTP | 地址=%s", cfg.ListenAddr))
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
@@ -107,13 +108,14 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, s
 	}()
 
 	address := browserAddress(listener.Addr().String())
-	slog.Info("AIStudio2API 已启动", "address", address)
+	admin.requests.log("service", "INFO", "管理服务就绪 | 地址=http://"+address)
 	if options.openUI {
 		if err := openBrowser("http://" + address); err != nil {
 			_ = server.Close()
 			<-serveError
 			return err
 		}
+		admin.requests.log("service", "INFO", "管理页面已打开 | 地址=http://"+address)
 	}
 
 	select {

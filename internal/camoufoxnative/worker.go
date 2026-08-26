@@ -17,6 +17,8 @@ import (
 
 const aiStudioOrigin = "https://aistudio.google.com"
 
+const generateContentPath = "/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/GenerateContent"
+
 var publicHeaderNames = []string{
 	"x-goog-api-key",
 	"x-goog-authuser",
@@ -50,6 +52,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	if options.BootstrapPrompt == "" {
 		options.BootstrapPrompt = fmt.Sprintf("AIStudio2API bootstrap %d", time.Now().UnixNano())
 	}
+	options.reportStartup(StartupPreparingBrowser)
 	ffVersion, err := browserMajor(options.ExecutablePath)
 	if err != nil {
 		return nil, err
@@ -58,6 +61,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
+	options.reportStartup(StartupLaunchingBrowser)
 	process, endpoint, err := launchBrowser(ctx, options, fingerprint)
 	if err != nil {
 		return nil, err
@@ -69,6 +73,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 			_ = worker.Close()
 		}
 	}()
+	options.reportStartup(StartupConnectingBiDi)
 	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
 	connection, _, err := dialer.DialContext(ctx, endpoint, nil)
 	if err != nil {
@@ -83,7 +88,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	return worker, nil
 }
 
-// ProtocolHeaders 返回官网 bootstrap 实际发送的七个公共头
+// ProtocolHeaders 返回官网为 GenerateContent 构造的七个公共头
 func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
@@ -171,6 +176,7 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err := client.installCookies(ctx, storage.Cookies); err != nil {
 		return err
 	}
+	options.reportStartup(StartupLoadingAIStudio)
 	target := aiStudioOrigin + "/prompts/new_chat?model=" + url.QueryEscape(options.Model)
 	if options.TemporaryChat {
 		target += "&temporary=true"
@@ -205,19 +211,38 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err := dismissVisibleDialogs(ctx, client, contextID); err != nil {
 		return err
 	}
+	options.reportStartup(StartupLocatingWAA)
 	snapshotKey, err := client.waitSnapshotFunction(ctx, contextID, 30*time.Second)
 	if err != nil {
 		return err
 	}
+	options.reportStartup(StartupBootstrappingWAA)
 	filled, err := client.evaluateString(ctx, contextID, fillPromptExpression(options.BootstrapPrompt))
 	if err != nil || filled != options.BootstrapPrompt {
 		return fmt.Errorf("填写 bootstrap 提示词失败 value=%q err=%v", filled, err)
 	}
 	if _, err := client.command(ctx, "session.subscribe", map[string]any{
-		"events":   []string{"network.beforeRequestSent", "network.responseStarted", "network.responseCompleted"},
+		"events":   []string{"network.beforeRequestSent"},
 		"contexts": []string{contextID},
 	}); err != nil {
 		return err
+	}
+	intercept, err := client.command(ctx, "network.addIntercept", map[string]any{
+		"phases":   []string{"beforeRequestSent"},
+		"contexts": []string{contextID},
+		"urlPatterns": []map[string]any{{
+			"type":     "pattern",
+			"protocol": "https",
+			"hostname": "alkalimakersuite-pa.clients6.google.com",
+			"pathname": generateContentPath,
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("安装 GenerateContent 拦截: %w", err)
+	}
+	interceptID, _ := intercept["intercept"].(string)
+	if interceptID == "" {
+		return errors.New("GenerateContent 拦截 ID 无效")
 	}
 	clicked, err := client.evaluateBool(ctx, contextID, `(() => {
   const button = [...document.querySelectorAll('ms-run-button button[type="submit"]')].at(-1);
@@ -231,8 +256,12 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err := client.waitFor(ctx, contextID, "Boolean(window.__aistudioWaaService)", 60*time.Second); err != nil {
 		return fmt.Errorf("官网 WAA service 未暴露: %w", err)
 	}
-	if err := client.waitGenerateCompleted(ctx, contextID, 60*time.Second); err != nil {
+	requestID, err := client.waitBlockedGenerateRequest(ctx, contextID, 60*time.Second)
+	if err != nil {
 		return err
+	}
+	if _, err := client.command(ctx, "network.failRequest", map[string]any{"request": requestID}); err != nil {
+		return fmt.Errorf("终止 bootstrap GenerateContent: %w", err)
 	}
 	headers := make(http.Header, len(publicHeaderNames))
 	for _, name := range publicHeaderNames {
@@ -250,14 +279,13 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	platform, _ := client.evaluateString(ctx, contextID, "navigator.platform")
 	timezone, _ := client.evaluateString(ctx, contextID, "Intl.DateTimeFormat().resolvedOptions().timeZone")
 	worker.state = State{
-		PID:                    worker.process.command.Process.Pid,
-		PageURL:                pageURL,
-		UserAgent:              userAgent,
-		Platform:               platform,
-		Timezone:               timezone,
-		SnapshotKey:            snapshotKey,
-		OfficialGenerateStatus: client.generateStatus,
-		Headers:                headers,
+		PID:         worker.process.command.Process.Pid,
+		PageURL:     pageURL,
+		UserAgent:   userAgent,
+		Platform:    platform,
+		Timezone:    timezone,
+		SnapshotKey: snapshotKey,
+		Headers:     headers,
 	}
 	return nil
 }

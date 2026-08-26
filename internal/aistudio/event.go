@@ -81,10 +81,7 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		if err != nil {
 			return nil, withMethod(err, "GenerateContent")
 		}
-		finishReason, ok := decodeFinishReason(finishCode)
-		if !ok {
-			return nil, d.protocolError("$[0][][0][0][1]", fmt.Sprintf("未识别的 finish reason %d", finishCode), finishRaw)
-		}
+		finishReason := decodeFinishReason(finishCode)
 		if !d.finished {
 			if d.usage != nil {
 				usage := *d.usage
@@ -97,46 +94,46 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 	return events, nil
 }
 
-func decodeFinishReason(code int64) (string, bool) {
+func decodeFinishReason(code int64) string {
 	switch code {
 	case 0:
-		return "unspecified", true
+		return "unspecified"
 	case 1:
-		return "stop", true
+		return "stop"
 	case 2:
-		return "max_tokens", true
+		return "max_tokens"
 	case 3:
-		return "safety", true
+		return "safety"
 	case 4:
-		return "recitation", true
+		return "recitation"
 	case 5:
-		return "other", true
+		return "other"
 	case 6:
-		return "language", true
+		return "language"
 	case 7:
-		return "blocklist", true
+		return "blocklist"
 	case 8:
-		return "prohibited_content", true
+		return "prohibited_content"
 	case 9:
-		return "spii", true
+		return "spii"
 	case 10:
-		return "malformed_function_call", true
+		return "malformed_function_call"
 	case 11:
-		return "image_safety", true
+		return "image_safety"
 	case 12:
-		return "unexpected_tool_call", true
+		return "unexpected_tool_call"
 	case 13:
-		return "too_many_tool_calls", true
+		return "too_many_tool_calls"
 	case 14:
-		return "image_prohibited_content", true
+		return "image_prohibited_content"
 	case 15:
-		return "image_other", true
+		return "image_other"
 	case 16:
-		return "no_image", true
+		return "no_image"
 	case 17:
-		return "image_recitation", true
+		return "image_recitation"
 	default:
-		return "", false
+		return fmt.Sprintf("provider_%d", code)
 	}
 }
 

@@ -3,22 +3,61 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
 type accessLogContextKey struct{}
 
 type accessLogMetadata struct {
-	mu        sync.Mutex
-	requestID string
-	model     string
-	account   string
-	err       string
+	mu              sync.Mutex
+	admin           AdminService
+	method          string
+	path            string
+	started         bool
+	generation      bool
+	model           string
+	account         string
+	finishReason    string
+	err             string
+	canceled        bool
+	failureStatus   int
+	firstEvent      time.Duration
+	firstContent    time.Duration
+	contentChars    int
+	outputTokens    int64
+	reasoningTokens int64
+	temperature     string
+	topP            string
+	thinking        string
+	maxOutputTokens string
+}
+
+type accessLogSnapshot struct {
+	generation      bool
+	model           string
+	account         string
+	finishReason    string
+	requestErr      string
+	canceled        bool
+	failureStatus   int
+	firstEvent      time.Duration
+	firstContent    time.Duration
+	contentChars    int
+	outputTokens    int64
+	reasoningTokens int64
+	temperature     string
+	topP            string
+	thinking        string
+	maxOutputTokens string
 }
 
 type accessLogResponseWriter struct {
@@ -66,6 +105,26 @@ func (metadata *accessLogMetadata) setTarget(model string, account string) {
 		metadata.account = account
 	}
 	metadata.mu.Unlock()
+	metadata.start(false)
+}
+
+func (metadata *accessLogMetadata) start(force bool) {
+	metadata.mu.Lock()
+	if metadata.started || !force && metadata.account == "" {
+		metadata.mu.Unlock()
+		return
+	}
+	metadata.started = true
+	admin := metadata.admin
+	entry := AccessLog{
+		Method: metadata.method, Path: metadata.path, Model: metadata.model, Account: metadata.account,
+		Temperature: metadata.temperature, TopP: metadata.topP, Thinking: metadata.thinking,
+		MaxOutputTokens: metadata.maxOutputTokens, Generation: metadata.generation,
+	}
+	metadata.mu.Unlock()
+	if admin != nil {
+		admin.RecordAccessStart(entry)
+	}
 }
 
 func (metadata *accessLogMetadata) setError(message string) {
@@ -78,11 +137,118 @@ func (metadata *accessLogMetadata) setError(message string) {
 	metadata.mu.Unlock()
 }
 
-func (metadata *accessLogMetadata) snapshot() (string, string, string) {
+func (metadata *accessLogMetadata) setRequestError(err error) {
+	if err == nil {
+		return
+	}
 	metadata.mu.Lock()
-	model, account, requestErr := metadata.model, metadata.account, metadata.err
+	metadata.err = strings.TrimSpace(err.Error())
+	metadata.canceled = errors.Is(err, context.Canceled)
+	if metadata.canceled {
+		metadata.failureStatus = 499
+	} else {
+		metadata.failureStatus = statusFromError(err)
+	}
 	metadata.mu.Unlock()
-	return model, account, requestErr
+}
+
+func (metadata *accessLogMetadata) setFinishReason(reason string) {
+	metadata.mu.Lock()
+	metadata.finishReason = strings.TrimSpace(reason)
+	metadata.mu.Unlock()
+}
+
+func (metadata *accessLogMetadata) setGenerationResult(
+	firstContent time.Duration,
+	contentChars int,
+	outputTokens int64,
+	reasoningTokens int64,
+) {
+	metadata.mu.Lock()
+	metadata.firstContent = firstContent
+	metadata.contentChars = contentChars
+	metadata.outputTokens = outputTokens
+	metadata.reasoningTokens = reasoningTokens
+	metadata.mu.Unlock()
+}
+
+func (metadata *accessLogMetadata) setGenerationConfig(config aistudio.GenerationConfig) {
+	metadata.mu.Lock()
+	metadata.generation = true
+	metadata.temperature = formatLogFloat(config.Temperature)
+	metadata.topP = formatLogFloat(config.TopP)
+	metadata.thinking = formatLogThinking(config)
+	metadata.maxOutputTokens = formatLogInt(config.MaxOutputTokens)
+	metadata.mu.Unlock()
+}
+
+func (metadata *accessLogMetadata) setFirstEvent(firstEvent time.Duration) {
+	metadata.mu.Lock()
+	if metadata.firstEvent == 0 {
+		metadata.firstEvent = firstEvent
+	}
+	metadata.mu.Unlock()
+}
+
+func (metadata *accessLogMetadata) snapshot() accessLogSnapshot {
+	metadata.mu.Lock()
+	snapshot := accessLogSnapshot{
+		generation: metadata.generation,
+		model:      metadata.model, account: metadata.account, finishReason: metadata.finishReason,
+		requestErr: metadata.err, canceled: metadata.canceled,
+		failureStatus: metadata.failureStatus,
+		firstEvent:    metadata.firstEvent, firstContent: metadata.firstContent, contentChars: metadata.contentChars,
+		outputTokens: metadata.outputTokens, reasoningTokens: metadata.reasoningTokens,
+		temperature: metadata.temperature, topP: metadata.topP,
+		thinking: metadata.thinking, maxOutputTokens: metadata.maxOutputTokens,
+	}
+	metadata.mu.Unlock()
+	return snapshot
+}
+
+// SetAccessLogFirstEvent 写入首个上游语义事件耗时
+func SetAccessLogFirstEvent(ctx context.Context, firstEvent time.Duration) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.setFirstEvent(firstEvent)
+	}
+}
+
+// SetAccessLogGenerationConfig 写入生成请求采用的参数
+func SetAccessLogGenerationConfig(ctx context.Context, config aistudio.GenerationConfig) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.setGenerationConfig(config)
+	}
+}
+
+// StartAccessLog 立即写入已经完成解析的请求开始记录
+func StartAccessLog(ctx context.Context) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.start(true)
+	}
+}
+
+func formatLogFloat(value *float64) string {
+	if value == nil {
+		return "默认"
+	}
+	return strconv.FormatFloat(*value, 'f', -1, 64)
+}
+
+func formatLogInt(value *int64) string {
+	if value == nil {
+		return "默认"
+	}
+	return strconv.FormatInt(*value, 10)
+}
+
+func formatLogThinking(config aistudio.GenerationConfig) string {
+	if effort := strings.TrimSpace(config.ReasoningEffort); effort != "" {
+		return effort
+	}
+	if config.ThinkingBudget != nil {
+		return "预算" + strconv.FormatInt(*config.ThinkingBudget, 10)
+	}
+	return "默认"
 }
 
 // SetAccessLogTarget 写入请求实际使用的模型与账户
@@ -98,35 +264,59 @@ func SetAccessLogError(ctx context.Context, err error) {
 		return
 	}
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setError(err.Error())
+		metadata.setRequestError(err)
 	}
 }
 
-// AccessLogRequestID 返回公开请求的访问日志 ID
-func AccessLogRequestID(ctx context.Context) string {
+// SetAccessLogFinishReason 写入生成请求的上游终止原因
+func SetAccessLogFinishReason(ctx context.Context, reason string) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		return metadata.requestID
+		metadata.setFinishReason(reason)
 	}
-	return ""
+}
+
+// SetAccessLogGenerationResult 写入生成流的完成摘要
+func SetAccessLogGenerationResult(
+	ctx context.Context,
+	firstContent time.Duration,
+	contentChars int,
+	outputTokens int64,
+	reasoningTokens int64,
+) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.setGenerationResult(firstContent, contentChars, outputTokens, reasoningTokens)
+	}
 }
 
 func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		requestID := newID("req")
-		metadata := &accessLogMetadata{requestID: requestID}
+		metadata := &accessLogMetadata{admin: admin, method: r.Method, path: r.URL.Path}
 		writer := &accessLogResponseWriter{ResponseWriter: w, metadata: metadata}
 		request := r.WithContext(context.WithValue(r.Context(), accessLogContextKey{}, metadata))
 		next.ServeHTTP(writer, request)
+		metadata.start(true)
 		status := writer.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		model, account, requestErr := metadata.snapshot()
+		snapshot := metadata.snapshot()
+		if snapshot.canceled || errors.Is(r.Context().Err(), context.Canceled) {
+			status = 499
+		} else if status < http.StatusBadRequest && snapshot.failureStatus >= http.StatusBadRequest {
+			status = snapshot.failureStatus
+		}
 		if admin != nil {
 			admin.RecordAccessLog(AccessLog{
-				Status: status, Latency: time.Since(started), Method: r.Method, Path: r.URL.Path,
-				Model: model, Account: account, RequestID: requestID, Error: requestErr,
+				Status: status, Latency: time.Since(started), FirstEvent: snapshot.firstEvent,
+				FirstContent: snapshot.firstContent,
+				ContentChars: snapshot.contentChars, OutputTokens: snapshot.outputTokens,
+				ReasoningTokens: snapshot.reasoningTokens,
+				Temperature:     snapshot.temperature, TopP: snapshot.topP,
+				Thinking: snapshot.thinking, MaxOutputTokens: snapshot.maxOutputTokens,
+				Method: r.Method, Path: r.URL.Path, Model: snapshot.model, Account: snapshot.account,
+				FinishReason: snapshot.finishReason, Error: snapshot.requestErr,
+				Canceled: snapshot.canceled, Generation: snapshot.generation,
 			})
 		}
 	})

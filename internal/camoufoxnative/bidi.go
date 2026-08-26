@@ -14,12 +14,11 @@ import (
 )
 
 type bidiClient struct {
-	connection        *websocket.Conn
-	commandLock       chan struct{}
-	nextID            int
-	generateStatus    int
-	generateHeaders   map[string]string
-	generateCompleted bool
+	connection               *websocket.Conn
+	commandLock              chan struct{}
+	nextID                   int
+	generateHeaders          map[string]string
+	blockedGenerateRequestID string
 }
 
 // newBiDiClient 创建串行 WebDriver BiDi 客户端
@@ -96,11 +95,6 @@ func (client *bidiClient) observe(message map[string]any) {
 	if !strings.HasSuffix(rawURL, "/GenerateContent") || requestMethod != http.MethodPost {
 		return
 	}
-	if response, ok := params["response"].(map[string]any); ok {
-		if status, ok := number(response["status"]); ok {
-			client.generateStatus = int(status)
-		}
-	}
 	if headers, ok := request["headers"].([]any); ok {
 		for _, item := range headers {
 			header, _ := item.(map[string]any)
@@ -111,8 +105,10 @@ func (client *bidiClient) observe(message map[string]any) {
 			}
 		}
 	}
-	if method == "network.responseCompleted" {
-		client.generateCompleted = true
+	blocked, _ := params["isBlocked"].(bool)
+	requestID, _ := request["request"].(string)
+	if method == "network.beforeRequestSent" && blocked && requestID != "" {
+		client.blockedGenerateRequestID = requestID
 	}
 }
 
@@ -237,18 +233,18 @@ func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID st
 	return "", errors.New("官网高层 snapshot 函数定位超时")
 }
 
-func (client *bidiClient) waitGenerateCompleted(ctx context.Context, contextID string, timeout time.Duration) error {
+func (client *bidiClient) waitBlockedGenerateRequest(ctx context.Context, contextID string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if client.generateCompleted {
-			return nil
+		if client.blockedGenerateRequestID != "" {
+			return client.blockedGenerateRequestID, nil
 		}
 		if _, err := client.evaluateBool(ctx, contextID, "true"); err != nil {
-			return err
+			return "", err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("官网 GenerateContent 完成事件超时")
+	return "", errors.New("官网 GenerateContent 拦截事件超时")
 }
 
 func snapshotHookExpression() string {

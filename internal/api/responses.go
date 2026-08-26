@@ -637,7 +637,7 @@ func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request
 	if err := writer.emit("response.in_progress", map[string]any{"response": responseShell(id, created, "in_progress", request)}); err != nil {
 		return
 	}
-	result, err := consumeEvents(r.Context(), events, writer.live)
+	result, err := consumeStreamEvents(r.Context(), events, writer.live, func() error { return writeSSEHeartbeat(w) })
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			_ = writer.failed(err)

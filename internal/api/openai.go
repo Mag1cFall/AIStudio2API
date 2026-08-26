@@ -610,7 +610,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 	toolIndex := 0
 	hasContent := false
 	contentEndsWithNewline := false
-	result, err := consumeEvents(r.Context(), events, func(event aistudio.Event) error {
+	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
 		switch event.Kind {
 		case aistudio.EventText:
 			hasContent = hasContent || event.Text != ""
@@ -663,7 +663,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			return writeChatChunk(w, id, created, request.Model, map[string]any{"content": content}, nil, request.StreamOptions.IncludeUsage)
 		}
 		return nil
-	})
+	}, func() error { return writeSSEHeartbeat(w) })
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			status := statusFromError(err)

@@ -23,7 +23,8 @@ MakerSuite 请求使用以下公共头：
 | `x-goog-api-key` | AI Studio 首页或当前官网请求动态值 |
 | `x-goog-authuser` | 当前账户官网请求 |
 | `x-aistudio-visit-id` | 首页初始化或当前官网请求 |
-| `x-aistudio-g1-tier`、`x-goog-ext-519733851-bin` | 官网请求存在时透传 |
+| `x-aistudio-g1-tier` | `GetAiStudioBenefitTier` 返回值映射为 `TIER0`、`TIER1` 或 `TIER2` |
+| `x-goog-ext-519733851-bin` | 当前官网请求动态值 |
 | `authorization` | 三段 SAPISID 签名 |
 | `cookie` | 当前账户对目标 RPC 可见的 Cookie |
 | `origin`、`referer` | `https://aistudio.google.com` |
@@ -54,12 +55,12 @@ AI Studio 页面初始化还包含以下控制面 RPC：
 | `GetUserPreferences` | 用户偏好与欢迎状态 |
 | `UpdateUserPreferences` | 更新欢迎状态等用户偏好 |
 | `ListPromos` | 页面活动信息 |
-| `GetAiStudioBenefitTier` | 账户层级枚举 |
+| `GetAiStudioBenefitTier` | 账户权益枚举与 tier 请求头 |
 | `ListRecentApplets` | 最近 Applet |
 | `ListPrompts` | 提示词目录 |
 | `GetUserRestrictions` | 账户限制 |
 
-服务启动加载账户、公共头和实时模型目录，业务能力按需调用对应数据面 RPC。
+管理进程启动时加载账户并准备公共头。`POST /api/control/start` 刷新实时模型目录、预热 WAA Worker并启用数据面，业务能力随后按需调用对应 RPC。
 
 ## 2. SAPISID、Chrome DBSC、Cookie 与账户状态
 
@@ -103,18 +104,35 @@ Chrome Local State + Profile Preferences + Web Data/token_service
 
 OAuthMultilogin 使用 `MultiOAuth` 头。第一次 assertion 为 `DBSC_CHALLENGE_IF_REQUIRED`，响应提供 challenge；第二次 assertion 的 JWT header 使用 `ES256` 与 `DEVICE_BOUND_SESSION_CREDENTIALS_ASSERTION`。payload 绑定 Google OAuth client、challenge、设备公钥 issuer 和临时 HPKE 公钥。Cookie 密文使用 X25519、HKDF-SHA256 与 AES-128-GCM 解密。
 
-Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源、Gaia ID、refresh token 与 wrapped binding key。普通或受保护 RPC 首次返回 401/403 时，服务在同一账户出口续签 Cookie、使动态头失效、关闭该账户 WAA runtime，并只重放一次。隔离 Camoufox 登录和外部 storage state 不携带 Chrome OAuth 扩展。
+Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源、Gaia ID、refresh token 与 wrapped binding key。普通或受保护 RPC 首次返回 HTTP `401` 时，服务在同一账户出口续签 Cookie、使动态头失效、关闭该账户 WAA runtime，并重放一次。HTTP `403` 保留为权限错误；首个上游语义事件前可以切换到下一个同能力账户。隔离 Camoufox 登录和外部 storage state 不携带 Chrome OAuth 扩展。
 
 ### 账户持久状态
 
 | 文件 | 内容 |
 | --- | --- |
-| `account.json` | label、enabled、proxy、locale、timezone |
-| `storage-state.json` | Cookie、localStorage 和可选 Chrome 续签材料 |
-| `camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、语言、地区和时区配置 |
-| `runtime-state.json` | 模型/全局冷却与 Drive/Veo 资源到账户的绑定 |
+| `auth/<Google 邮箱>/account.json` | 邮箱、enabled、proxy、locale、timezone |
+| `auth/<Google 邮箱>/storage-state.json` | Cookie、localStorage 和可选 Chrome 续签材料 |
+| `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、语言、地区和时区配置 |
+| `auth/<Google 邮箱>/runtime-state.json` | 账户权益、实测模型资格、冷却与 Drive/Veo 资源绑定 |
+| `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
+| `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
 
-初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。调度器先按模型与方法筛选，再轮询获取账号并发槽位。同账号 WAA proof 串行生成，已准备的 MakerSuite HTTP 请求并发执行；首个活动请求获取跨进程文件租约，最后一个释放。未绑定账户和资源的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个客户端可见事件前切换到另一个同能力账户。Drive file、Veo operation 与产物 file 始终使用创建账户。
+Google 邮箱的小写形式同时作为账户目录、管理页面标识和日志来源。新账户的 locale 与 timezone 读取当前电脑设置，管理页面使用浏览器语言和 IANA 时区；CLI 使用操作系统语言和时区。初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。同一电脑上的多个进程按邮箱共享 WAA runtime lease，调度器只会为未被占用的邮箱创建 Worker。
+
+调度器按模型方法、账户权益和实测模型资格筛选，优先选择已经成功调用目标模型的预热账户，再按目标模型最近一次真实首事件耗时排序。Code 7 将当前账户模型组合记为 `denied`，该账户的其他模型继续调度；重新登录、账户验证或权益变化会重新建立资格。常驻 Worker 优先覆盖可调用模型更多的账户。预热数量低于上限时提升合格待机账户，预热账户均忙时等待并发槽位。同账号 WAA proof 串行生成，已准备的 MakerSuite HTTP 请求并发执行；首个活动请求获取 `.leases` 文件锁，最后一个释放。Drive file、Veo operation 与产物 file 始终使用创建账户。
+
+### 账户权益
+
+`GetAiStudioBenefitTier` 请求为 `[]`，响应 field 1 的枚举映射如下：
+
+| 值 | 权益 | RPC Header |
+| ---: | --- | --- |
+| 0 | Free | 无 |
+| 1 | Pro | `X-AIStudio-G1-Tier: TIER1` |
+| 2 | Ultra | `X-AIStudio-G1-Tier: TIER2` |
+| 3 | Plus | `X-AIStudio-G1-Tier: TIER0` |
+
+官网为 `GenerateContent`、`CountTokens`、Interaction、Code Assistant 与 Veo RPC 注入该 header。模型 field 83 描述访问方式：`1` 为付费 API key，`3` 为 Pro/Ultra 订阅，`4` 为 Ultra 订阅。浏览器账户池使用订阅路径，公开模型目录只合并至少一个账户权益可达的模型。
 
 ## 3. WAA challenge、官方 VM 与 fresh proof
 
@@ -149,10 +167,10 @@ Waa/Create
 生成服务启动时按配置的常驻数与启动并发数预热账户 WAA runtime：
 
 1. Go 启动隔离、无头 Camoufox，并通过原生 WebDriver BiDi 建立 session
-2. 写入账户 Cookie 与 localStorage，使用实时目录中的 `gemini-flash-latest` 进入新对话；`TEMPORARY_CHAT=true` 时 URL 携带 `temporary=true`
+2. 写入账户 Cookie 与 localStorage，从实时目录依次尝试 `gemini-flash-latest`、`gemini-3.7-flash` 进入新对话；`TEMPORARY_CHAT=true` 时 URL 携带 `temporary=true`
 3. 定位页面 bundle 中调用 `.snapshot({` 且包含 `content` 的官方高层函数
-4. 填入唯一 bootstrap prompt 并执行一次官网 Run
-5. 保存官网 `GenerateContent` 的必要动态头与官方 WAA service
+4. 为官网 `GenerateContent` 安装 `beforeRequestSent` BiDi 拦截，再填入唯一 bootstrap prompt 并执行官网 Run
+5. 页面调用官方 snapshot 时保存 WAA service；请求进入拦截阶段后保存动态头并通过 `network.failRequest` 在浏览器内终止
 6. 后续业务请求串行调用同一 service 获取 fresh proof
 7. `GenerateContent` 写入 field 5，`GenerateVideo` 写入 field 8，正文由 Go HTTP transport 发送
 
@@ -164,7 +182,7 @@ initialize(program, ready, true, environment, signalLists, persistentState, fals
 
 VM 生命周期参数为 `43,200,000ms`，检查间隔为 `300,000ms`。页面生命周期中断、snapshot 错误、计时器到期、认证续签或进程关闭会使 runtime 失效，下一次请求重新 bootstrap。`Waa/Ping` 维护官方生命周期，业务请求 proof 由 snapshot 生成。
 
-WAA 预热页在普通模式下会执行官网 `GenerateTitle` 与 `CreatePrompt`；临时对话关闭该页的自动保存，`GenerateContent` 请求结构保持一致。
+Bootstrap 使用的 `GenerateContent` 在发往上游前终止，模型输出量为零。临时对话关闭预热页的自动保存。
 
 同一账户的 snapshot 必须串行。GenerateContent 的 binding prompt 按 contents 和 parts 的原顺序展开，再以单个空格连接：
 
@@ -172,7 +190,7 @@ WAA 预热页在普通模式下会执行官网 `GenerateTitle` 与 `CreatePrompt
 | --- | --- |
 | text | 原始文本 |
 | inline data | 原始二进制的标准 Base64 |
-| external media | URL |
+| external media | 空字符串 |
 | Drive file | file ID |
 | function、function result、code、thought signature | 空字符串 |
 
@@ -210,6 +228,8 @@ binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prom
 | 74 | 75 | 次能力码 |
 | 75 | 76 | 图片宽高比码 |
 | 76 | 77 | 图片输出分辨率码 |
+| 77 | 78 | Paid 标记，值 `2` 时显示 Paid |
+| 82 | 83 | 模型访问方式 |
 
 能力码映射：
 
@@ -578,6 +598,7 @@ OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible o
 | 12 | unexpected_tool_call | 13 | too_many_tool_calls |
 | 14 | image_prohibited_content | 15 | image_other |
 | 16 | no_image | 17 | image_recitation |
+| 其他整数 | `provider_<code>` | | |
 
 错误响应根形状为 `[null,[code,message,...]]`。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
@@ -781,14 +802,16 @@ Drive token、上传、提示引用和下载使用创建账户固定出口。文
 ```text
 process start
   -> control plane ready
-  -> data plane stopped
+  -> STOPPED
 
 POST /api/control/start
-  -> refresh account model catalogs
+  -> LAUNCHING
+  -> refresh account model catalogs with up to 5 concurrent accounts
   -> prewarm up to WARM_WORKER_LIMIT workers
      with WARM_STARTUP_CONCURRENCY bootstraps
   -> first worker ready
-  -> data plane ready
+  -> RUNNING
+  -> continue remaining worker prewarm in background
 
 request
   -> match model + method
@@ -799,12 +822,12 @@ request
   -> release slot
 
 POST /api/control/stop
-  -> cancel active requests
+  -> cancel launch or active requests
   -> close WAA workers
-  -> data plane stopped
+  -> STOPPED
 ```
 
-`stopped` 状态下生成与计数端点返回 `503 service_stopped`。模型路由从支持目标模型与方法的 ready 账户中轮询，冷却时加载合格备用账户，无可用账户时返回 `400 account_required`。
+`stopped` 状态下生成与计数端点返回 `503 service_stopped`。模型路由从支持目标模型与方法的 ready 账户中选择可用预热账户，并使用真实请求记录的目标模型首事件耗时排序；需要时启动合格待机账户。无可用账户时返回 `400 account_required`。
 
 模型目录投影：
 
@@ -816,7 +839,7 @@ POST /api/control/stop
 | 多账户同模型 | generation methods 与能力选项取并集 |
 | 多账户 token limit | 输入和输出上限分别取正数最小值 |
 | 模型别名 | 来自 ListModels field 57 |
-| 请求匹配 | model ID/alias 与 method 同时命中目录后进入账户调度 |
+| 请求匹配 | model ID/alias、method、账户权益与实测资格同时命中后进入账户调度 |
 
 主要请求合同：
 
@@ -865,6 +888,8 @@ POST /api/control/stop
 | OpenAI Responses | `response.created`、`response.in_progress` | output item / content part / delta / done | 完成 response 的 `usage` | `response.completed` 或 `response.incomplete` |
 | Anthropic | `message_start` | `content_block_start`、delta、`content_block_stop` | `message_delta.usage` | `message_stop` |
 | Gemini | candidate Part | `GenerateContentResponse` 增量 | 最后一帧 `usageMetadata` | 最后一帧 finish reason |
+
+连续 10 秒没有上游语义事件时，四套流式协议发送 SSE 注释帧 `: ping` 并立即 flush。OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端。Gemini 的首个帧来自上游语义事件或 `: ping`。
 
 公开适配规则：
 
