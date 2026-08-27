@@ -87,20 +87,22 @@ func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (B
 	if err != nil {
 		return BenefitTierFree, withMethod(err, "GetAiStudioBenefitTier")
 	}
-	if len(root) != 1 {
-		return BenefitTierFree, &ProtocolEvidenceError{
-			Method: "GetAiStudioBenefitTier", Path: "$", Detail: "根数组字段数不是现场确认的 1", Raw: raw,
-		}
+	if len(root) == 0 || isJSONNull(root[0]) {
+		c.tierMu.Lock()
+		c.tiers[accountID] = BenefitTierFree
+		c.tierMu.Unlock()
+		return BenefitTierFree, nil
 	}
 	wire, err := rawInt64(root[0], "$[0]", raw)
 	if err != nil {
-		return BenefitTierFree, withMethod(err, "GetAiStudioBenefitTier")
+		c.tierMu.Lock()
+		c.tiers[accountID] = BenefitTierFree
+		c.tierMu.Unlock()
+		return BenefitTierFree, nil
 	}
 	tier := BenefitTier(wire)
 	if tier < BenefitTierFree || tier > BenefitTierPlus {
-		return BenefitTierFree, &ProtocolEvidenceError{
-			Method: "GetAiStudioBenefitTier", Path: "$[0]", Detail: fmt.Sprintf("未识别的权益等级 %d", wire), Raw: raw,
-		}
+		tier = BenefitTierFree
 	}
 	c.tierMu.Lock()
 	c.tiers[accountID] = tier
