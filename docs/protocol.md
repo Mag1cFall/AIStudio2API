@@ -123,7 +123,7 @@ Google 邮箱的小写形式同时作为账户目录、管理页面标识和日�
 
 ### 账户权益
 
-`GetAiStudioBenefitTier` 请求为 `[]`，响应 field 1 的枚举映射如下：
+`GetAiStudioBenefitTier` 请求为 `[]`，响应 field 1 的枚举映射如下。`[]`、`[null]` 和 `[0]` 均表示 Free；响应存在后续字段时，权益仍由 field 1 决定。
 
 | 值 | 权益 | RPC Header |
 | ---: | --- | --- |
@@ -206,7 +206,7 @@ binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prom
 []
 ```
 
-响应根形状为 `[[<MODEL_ROW>, ...]]`。模型行字段：
+响应根形状为 `[[<MODEL_ROW>, ...]]`。模型列表位于 field 1，后续根字段不改变模型目录。模型行字段：
 
 | JSON 索引 | protobuf field | 内容 |
 | ---: | ---: | --- |

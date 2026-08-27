@@ -83,8 +83,8 @@ func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 	if err != nil {
 		return modelCatalog{}, withMethod(err, "ListModels")
 	}
-	if len(root) != 1 {
-		return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: "$", Detail: "根数组字段数不是现场确认的 1", Raw: raw}
+	if len(root) == 0 || isJSONNull(root[0]) {
+		return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: "$[0]", Detail: "缺少模型列表", Raw: raw}
 	}
 	rows, err := rawArray(root[0], "$[0]", raw)
 	if err != nil {

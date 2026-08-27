@@ -79,6 +79,17 @@ func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (B
 	if err != nil {
 		return BenefitTierFree, fmt.Errorf("读取 GetAiStudioBenefitTier: %w", err)
 	}
+	tier, err := decodeBenefitTier(raw)
+	if err != nil {
+		return BenefitTierFree, err
+	}
+	c.tierMu.Lock()
+	c.tiers[accountID] = tier
+	c.tierMu.Unlock()
+	return tier, nil
+}
+
+func decodeBenefitTier(raw []byte) (BenefitTier, error) {
 	value, err := decodeJSONValue(raw)
 	if err != nil {
 		return BenefitTierFree, withMethod(err, "GetAiStudioBenefitTier")
@@ -88,25 +99,21 @@ func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (B
 		return BenefitTierFree, withMethod(err, "GetAiStudioBenefitTier")
 	}
 	if len(root) == 0 || isJSONNull(root[0]) {
-		c.tierMu.Lock()
-		c.tiers[accountID] = BenefitTierFree
-		c.tierMu.Unlock()
 		return BenefitTierFree, nil
 	}
 	wire, err := rawInt64(root[0], "$[0]", raw)
 	if err != nil {
-		c.tierMu.Lock()
-		c.tiers[accountID] = BenefitTierFree
-		c.tierMu.Unlock()
-		return BenefitTierFree, nil
+		return BenefitTierFree, withMethod(err, "GetAiStudioBenefitTier")
 	}
 	tier := BenefitTier(wire)
 	if tier < BenefitTierFree || tier > BenefitTierPlus {
-		tier = BenefitTierFree
+		return BenefitTierFree, &ProtocolEvidenceError{
+			Method: "GetAiStudioBenefitTier",
+			Path:   "$[0]",
+			Detail: fmt.Sprintf("未识别的账户权益枚举 %d", wire),
+			Raw:    append([]byte(nil), raw...),
+		}
 	}
-	c.tierMu.Lock()
-	c.tiers[accountID] = tier
-	c.tierMu.Unlock()
 	return tier, nil
 }
 
