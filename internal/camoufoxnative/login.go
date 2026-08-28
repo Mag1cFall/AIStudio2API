@@ -324,8 +324,11 @@ func decodeStorageCookie(value map[string]any) (storageCookie, bool) {
 		}
 	}
 	sameSite, _ := value["sameSite"].(string)
-	if sameSite != "" {
-		sameSite = strings.ToUpper(sameSite[:1]) + strings.ToLower(sameSite[1:])
+	sameSite = strings.ToLower(strings.TrimSpace(sameSite))
+	if sameSite != "none" && sameSite != "lax" && sameSite != "strict" {
+		sameSite = ""
+	} else {
+		sameSite = strings.ToUpper(sameSite[:1]) + sameSite[1:]
 	}
 	partitionKey, _ := value["partitionKey"].(string)
 	httpOnly, _ := value["httpOnly"].(bool)
