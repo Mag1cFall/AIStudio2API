@@ -313,16 +313,54 @@ func resolveAccountLease(ctx context.Context, pool *AccountPool, selection Accou
 }
 
 func validateLeaseSelection(lease *AccountLease, selection AccountSelection) error {
-	account := lease.Account()
-	if selection.AccountID != "" && account.ID != selection.AccountID {
-		return fmt.Errorf("context 租约账户 %s 与请求账户 %s 不一致", account.ID, selection.AccountID)
+	if lease == nil || lease.pool == nil || lease.account == nil {
+		return fmt.Errorf("context 账户租约未初始化")
 	}
-	modelID := strings.TrimPrefix(selection.ModelID, "models/")
+	lease.pool.mu.Lock()
+	defer lease.pool.mu.Unlock()
+	account := lease.Account()
+	if lease.pool.byID[account.ID] != account {
+		return fmt.Errorf("context 租约账户不存在: %s", account.ID)
+	}
+	if accountID := strings.TrimSpace(selection.AccountID); accountID != "" && account.ID != accountID {
+		return fmt.Errorf("context 租约账户 %s 与请求账户 %s 不一致", account.ID, accountID)
+	}
+	if selection.AllowedAccountIDs != nil {
+		allowed := false
+		for _, accountID := range selection.AllowedAccountIDs {
+			if strings.TrimSpace(accountID) == account.ID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return ErrNoEligibleAccount
+		}
+	}
+	if resourceID := strings.TrimSpace(selection.ResourceID); resourceID != "" {
+		owner, exists := lease.pool.resources[resourceID]
+		if !exists {
+			return ErrResourceNotFound
+		}
+		if owner != account.ID {
+			return fmt.Errorf("资源 %s 绑定账户 %s", resourceID, owner)
+		}
+	}
+	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	if modelID != "" && !account.SupportsModel(modelID) {
 		return fmt.Errorf("context 租约账户 %s 不支持模型 %s", account.ID, modelID)
 	}
 	if selection.Method != "" && !account.SupportsMethod(modelID, selection.Method) {
 		return fmt.Errorf("context 租约账户 %s 不支持方法 %s", account.ID, selection.Method)
+	}
+	capability := strings.TrimSpace(selection.Capability)
+	if capability != "" {
+		for _, model := range account.Models {
+			if modelMatchesID(model, modelID) && model.Capabilities[capability] {
+				return nil
+			}
+		}
+		return fmt.Errorf("context 租约账户 %s 不支持能力 %s", account.ID, capability)
 	}
 	return nil
 }

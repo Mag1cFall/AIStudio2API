@@ -224,14 +224,26 @@ func (session *loginSession) waitLogin(ctx context.Context, origins map[string]s
 			return "", err
 		}
 		pageURL, err := session.client.evaluateString(ctx, session.contextID, "location.href")
-		if err == nil {
-			session.captureCurrentOrigin(ctx, pageURL, origins)
-			ready, readyErr := session.client.evaluateBool(ctx, session.contextID, loginReadyExpression)
-			if readyErr == nil && ready && strings.HasPrefix(pageURL, aiStudioOrigin+"/") {
-				return pageURL, nil
+		if err != nil {
+			if !retryablePageEvaluation(err) {
+				return "", fmt.Errorf("读取隔离登录页面: %w", err)
 			}
+			if err := waitContext(ctx, 300*time.Millisecond); err != nil {
+				return "", err
+			}
+			continue
 		}
-		time.Sleep(300 * time.Millisecond)
+		session.captureCurrentOrigin(ctx, pageURL, origins)
+		ready, readyErr := session.client.evaluateBool(ctx, session.contextID, loginReadyExpression)
+		if readyErr != nil && !retryablePageEvaluation(readyErr) {
+			return "", fmt.Errorf("检查隔离登录页面: %w", readyErr)
+		}
+		if readyErr == nil && ready && strings.HasPrefix(pageURL, aiStudioOrigin+"/") {
+			return pageURL, nil
+		}
+		if err := waitContext(ctx, 300*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 }
 
@@ -242,17 +254,27 @@ func (session *loginSession) waitVerification(ctx context.Context) (string, bool
 		}
 		pageURL, err := session.client.evaluateString(ctx, session.contextID, "location.href")
 		if err != nil {
-			time.Sleep(200 * time.Millisecond)
+			if !retryablePageEvaluation(err) {
+				return "", false, "", fmt.Errorf("读取隔离验证页面: %w", err)
+			}
+			if err := waitContext(ctx, 200*time.Millisecond); err != nil {
+				return "", false, "", err
+			}
 			continue
 		}
 		if isGoogleLoginURL(pageURL) {
 			return pageURL, false, "AI Studio 登录已失效", nil
 		}
 		ready, err := session.client.evaluateBool(ctx, session.contextID, loginReadyExpression)
+		if err != nil && !retryablePageEvaluation(err) {
+			return "", false, "", fmt.Errorf("检查隔离验证页面: %w", err)
+		}
 		if err == nil && ready && strings.HasPrefix(pageURL, aiStudioOrigin+"/") {
 			return pageURL, true, "", nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		if err := waitContext(ctx, 200*time.Millisecond); err != nil {
+			return "", false, "", err
+		}
 	}
 }
 

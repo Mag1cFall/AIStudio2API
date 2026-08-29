@@ -1,12 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,13 +29,19 @@ type responsesRequest struct {
 	ParallelToolCalls  *bool             `json:"parallel_tool_calls"`
 	Truncation         string            `json:"truncation"`
 	Metadata           map[string]string `json:"metadata"`
+	Store              *bool             `json:"store"`
 }
 
 type responsesTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Type              string          `json:"type"`
+	Name              string          `json:"name,omitempty"`
+	Description       string          `json:"description,omitempty"`
+	Parameters        json.RawMessage `json:"parameters,omitempty"`
+	SearchContextSize string          `json:"search_context_size,omitempty"`
+	UserLocation      json.RawMessage `json:"user_location,omitempty"`
+	Filters           json.RawMessage `json:"filters,omitempty"`
+	Container         json.RawMessage `json:"container,omitempty"`
+	Strict            *bool           `json:"strict,omitempty"`
 }
 
 type responsesInputItem struct {
@@ -160,7 +165,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
@@ -172,7 +177,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
@@ -182,7 +187,9 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		return
 	}
-	s.storeResponseState(responseID, request.PreviousResponseID, currentContents, currentInlineInstructions, result)
+	if request.Store == nil || *request.Store {
+		s.storeResponseState(responseID, request.PreviousResponseID, currentContents, currentInlineInstructions, result)
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -226,6 +233,16 @@ func responseHistoryOutput(result generationResult) aistudio.Content {
 }
 
 func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, []string, error) {
+	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
+		return aistudio.GenerateRequest{}, nil, fmt.Errorf("parallel_tool_calls must be true")
+	}
+	switch request.Truncation {
+	case "", "disabled":
+	case "auto":
+		return aistudio.GenerateRequest{}, nil, fmt.Errorf("truncation auto is unsupported")
+	default:
+		return aistudio.GenerateRequest{}, nil, fmt.Errorf("unsupported truncation %q", request.Truncation)
+	}
 	contents, inlineInstructions, err := responsesContents(request.Input)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
@@ -357,6 +374,9 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			if tool.Name == "" {
 				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
 			}
+			if tool.Strict != nil && *tool.Strict {
+				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
+			}
 			parameters := tool.Parameters
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -364,9 +384,15 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
 				Name: tool.Name, Description: tool.Description, Parameters: parameters,
 			})
-		case "web_search", "web_search_preview":
+		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
+			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
+				return aistudio.Tools{}, fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
+			}
 			mapped.Google = appendUnique(mapped.Google, "google_search")
 		case "code_interpreter":
+			if err := validateResponsesCodeContainer(tool.Container); err != nil {
+				return aistudio.Tools{}, err
+			}
 			mapped.Google = appendUnique(mapped.Google, "code_execution")
 		case "url_context":
 			mapped.Google = appendUnique(mapped.Google, "url_context")
@@ -403,6 +429,9 @@ func buildResponsesObject(id string, created int64, request responsesRequest, re
 		})
 	}
 	output = append(output, responseCodeInterpreterItems(id, result.events)...)
+	if responsesUsesWebSearch(request.Tools) {
+		output = append(output, responseWebSearchItems(id, result.events)...)
+	}
 	if result.text.Len() > 0 {
 		output = append(output, map[string]any{
 			"id":     "msg_" + id,
@@ -430,18 +459,27 @@ func buildResponsesObject(id string, created int64, request responsesRequest, re
 		output = append(output, item)
 	}
 	status := "completed"
-	if result.finishReason == "max_tokens" {
+	incompleteReason := ""
+	switch openAIFinishReason(result.finishReason, false) {
+	case "length":
 		status = "incomplete"
+		incompleteReason = "max_output_tokens"
+	case "content_filter":
+		status = "incomplete"
+		incompleteReason = "content_filter"
 	}
 	response := responseShell(id, created, status, request)
 	response["completed_at"] = time.Now().Unix()
 	if status == "incomplete" {
-		response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+		response["incomplete_details"] = map[string]any{"reason": incompleteReason}
 	}
 	response["output"] = output
 	response["output_text"] = result.text.String()
 	if result.providerModel != "" {
 		response["provider_model"] = result.providerModel
+	}
+	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+		response["provider_finish_reason"] = providerReason
 	}
 	if result.usage != nil {
 		response["usage"] = responsesUsage(result.usage)
@@ -509,6 +547,11 @@ func rawJSONValue(raw json.RawMessage, defaultValue any) any {
 	return value
 }
 
+func rawJSONConfigured(raw json.RawMessage) bool {
+	value := strings.TrimSpace(string(raw))
+	return value != "" && value != "null"
+}
+
 func responseFunctionCall(call aistudio.FunctionCall) map[string]any {
 	return map[string]any{
 		"id":        "fc_" + call.ID,
@@ -555,6 +598,7 @@ func responseCodeInterpreterItems(responseID string, events []aistudio.Event) []
 			logs := call.result.Output
 			if call.result.Outcome != "OUTCOME_OK" {
 				status = "failed"
+				logs = call.result.Error
 				if logs != "" {
 					logs = "stderr:\n" + logs
 				}
@@ -602,6 +646,9 @@ func responsesUsage(usage *aistudio.Usage) map[string]any {
 		"input_tokens":  inputTokens(usage),
 		"output_tokens": outputTokens(usage),
 		"total_tokens":  usage.TotalTokens,
+		"input_tokens_details": map[string]any{
+			"cached_tokens": 0,
+		},
 		"output_tokens_details": map[string]any{
 			"reasoning_tokens": usage.ReasoningTokens,
 		},
@@ -619,6 +666,10 @@ type responsesStreamWriter struct {
 	textOpen      bool
 	mediaCount    int
 	codeCount     int
+	searchCount   int
+	searchQueries map[string]struct{}
+	searchProbe   bool
+	pendingText   []string
 	pendingCode   *responsesPendingCode
 }
 
@@ -630,7 +681,10 @@ type responsesPendingCode struct {
 
 func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request responsesRequest, contents []aistudio.Content, inlineInstructions []string, id string, created int64, events <-chan aistudio.Event) {
 	streamHeaders(w)
-	writer := &responsesStreamWriter{w: w, id: id, created: created, request: request, indexes: make(map[string]int)}
+	writer := &responsesStreamWriter{
+		w: w, id: id, created: created, request: request,
+		indexes: make(map[string]int), searchProbe: responsesUsesWebSearch(request.Tools),
+	}
 	if err := writer.emit("response.created", map[string]any{"response": responseShell(id, created, "in_progress", request)}); err != nil {
 		return
 	}
@@ -639,7 +693,8 @@ func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request
 	}
 	result, err := consumeStreamEvents(r.Context(), events, writer.live, func() error { return writeSSEHeartbeat(w) })
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
+			_ = writer.flushPendingText()
 			_ = writer.failed(err)
 		}
 		return
@@ -649,7 +704,9 @@ func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request
 		_ = writer.failed(err)
 		return
 	}
-	s.storeResponseState(id, request.PreviousResponseID, contents, inlineInstructions, result)
+	if request.Store == nil || *request.Store {
+		s.storeResponseState(id, request.PreviousResponseID, contents, inlineInstructions, result)
+	}
 	if err := writer.finish(result, response); err != nil {
 		_ = writer.failed(err)
 	}
@@ -673,13 +730,11 @@ func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 			"item_id": "rs_" + writer.id, "output_index": index, "summary_index": 0, "delta": event.Text,
 		})
 	case aistudio.EventText:
-		index, err := writer.ensureText()
-		if err != nil {
-			return err
+		if writer.searchProbe {
+			writer.pendingText = append(writer.pendingText, event.Text)
+			return nil
 		}
-		return writer.emit("response.output_text.delta", map[string]any{
-			"item_id": "msg_" + writer.id, "output_index": index, "content_index": 0, "delta": event.Text, "logprobs": []any{},
-		})
+		return writer.emitText(event.Text)
 	case aistudio.EventToolCall:
 		if event.ToolCall != nil {
 			return writer.emitToolCall(*event.ToolCall)
@@ -696,7 +751,40 @@ func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 		if event.CodeExecutionResult != nil {
 			return writer.emitCodeExecutionResult(*event.CodeExecutionResult)
 		}
+	case aistudio.EventGrounding:
+		if event.Grounding != nil {
+			emitted, err := writer.emitGrounding(*event.Grounding)
+			if err != nil {
+				return err
+			}
+			if writer.searchProbe && emitted {
+				if err := writer.flushPendingText(); err != nil {
+					return err
+				}
+			}
+		}
 	}
+	return nil
+}
+
+func (writer *responsesStreamWriter) emitText(text string) error {
+	index, err := writer.ensureText()
+	if err != nil {
+		return err
+	}
+	return writer.emit("response.output_text.delta", map[string]any{
+		"item_id": "msg_" + writer.id, "output_index": index, "content_index": 0, "delta": text, "logprobs": []any{},
+	})
+}
+
+func (writer *responsesStreamWriter) flushPendingText() error {
+	writer.searchProbe = false
+	for _, text := range writer.pendingText {
+		if err := writer.emitText(text); err != nil {
+			return err
+		}
+	}
+	writer.pendingText = nil
 	return nil
 }
 
@@ -839,6 +927,7 @@ func (writer *responsesStreamWriter) emitCodeExecutionResult(result aistudio.Cod
 	logs := result.Output
 	if result.Outcome != "OUTCOME_OK" {
 		status = "failed"
+		logs = result.Error
 		if logs != "" {
 			logs = "stderr:\n" + logs
 		}
@@ -881,6 +970,9 @@ func (writer *responsesStreamWriter) finish(result generationResult, response ma
 			return err
 		}
 	}
+	if err := writer.flushPendingText(); err != nil {
+		return err
+	}
 	if writer.textOpen {
 		id := "msg_" + writer.id
 		index := writer.indexes[id]
@@ -908,11 +1000,44 @@ func (writer *responsesStreamWriter) finish(result generationResult, response ma
 			return err
 		}
 	}
+	orderResponsesOutput(response, writer.indexes)
 	eventType := "response.completed"
 	if response["status"] == "incomplete" {
 		eventType = "response.incomplete"
 	}
 	return writer.emit(eventType, map[string]any{"response": response})
+}
+
+func orderResponsesOutput(response map[string]any, indexes map[string]int) {
+	output, ok := response["output"].([]any)
+	if !ok {
+		return
+	}
+	sort.SliceStable(output, func(left int, right int) bool {
+		leftIndex, leftExists := responseOutputIndex(output[left], indexes)
+		rightIndex, rightExists := responseOutputIndex(output[right], indexes)
+		if !leftExists {
+			return false
+		}
+		if !rightExists {
+			return true
+		}
+		return leftIndex < rightIndex
+	})
+	response["output"] = output
+}
+
+func responseOutputIndex(item any, indexes map[string]int) (int, bool) {
+	object, ok := item.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	id, ok := object["id"].(string)
+	if !ok {
+		return 0, false
+	}
+	index, exists := indexes[id]
+	return index, exists
 }
 
 func (writer *responsesStreamWriter) failed(err error) error {

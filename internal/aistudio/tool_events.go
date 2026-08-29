@@ -49,14 +49,20 @@ func decodeCodeExecutionResult(raw json.RawMessage, path string, evidence json.R
 	if !ok {
 		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("未识别的 code execution outcome %d", outcomeCode), Raw: raw}
 	}
-	output := ""
-	if outputRaw := rawAt(values, 1); !isJSONNull(outputRaw) {
-		output, err = rawString(outputRaw, path+"[1]", evidence)
+	value := ""
+	if valueRaw := rawAt(values, 1); !isJSONNull(valueRaw) {
+		value, err = rawString(valueRaw, path+"[1]", evidence)
 		if err != nil {
 			return CodeExecutionResult{}, withMethod(err, "GenerateContent")
 		}
 	}
-	return CodeExecutionResult{Outcome: outcome, Output: output}, nil
+	result := CodeExecutionResult{Outcome: outcome}
+	if outcomeCode == 1 {
+		result.Output = value
+	} else {
+		result.Error = value
+	}
+	return result, nil
 }
 
 func decodeGroundingMetadata(raw json.RawMessage, path string, evidence json.RawMessage) (GroundingMetadata, error) {
@@ -97,17 +103,30 @@ func decodeGroundingMetadata(raw json.RawMessage, path string, evidence json.Raw
 			metadata.DynamicRetrievalScore = &score
 		}
 	}
-	if queriesRaw := rawAt(values, 4); !isJSONNull(queriesRaw) {
-		queries, err := rawArray(queriesRaw, path+"[4]", evidence)
+	var seenQueries map[string]struct{}
+	for _, fieldIndex := range []int{4, 5} {
+		queriesRaw := rawAt(values, fieldIndex)
+		if isJSONNull(queriesRaw) {
+			continue
+		}
+		queryPath := fmt.Sprintf("%s[%d]", path, fieldIndex)
+		queries, err := rawArray(queriesRaw, queryPath, evidence)
 		if err != nil {
 			return GroundingMetadata{}, withMethod(err, "GenerateContent")
 		}
-		metadata.WebSearchQueries = make([]string, 0, len(queries))
+		if metadata.WebSearchQueries == nil {
+			metadata.WebSearchQueries = make([]string, 0, len(queries))
+			seenQueries = make(map[string]struct{}, len(queries))
+		}
 		for index, queryRaw := range queries {
-			query, err := rawString(queryRaw, fmt.Sprintf("%s[4][%d]", path, index), evidence)
+			query, err := rawString(queryRaw, fmt.Sprintf("%s[%d]", queryPath, index), evidence)
 			if err != nil {
 				return GroundingMetadata{}, withMethod(err, "GenerateContent")
 			}
+			if _, exists := seenQueries[query]; exists {
+				continue
+			}
+			seenQueries[query] = struct{}{}
 			metadata.WebSearchQueries = append(metadata.WebSearchQueries, query)
 		}
 	}

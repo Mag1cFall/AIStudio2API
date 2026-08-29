@@ -20,6 +20,7 @@ const (
 	defaultInitTimeout        = 2 * time.Minute
 	defaultRequestTimeout     = 5 * time.Minute
 	defaultWarmWorkerLimit    = 5
+	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 2
 	defaultAccountConcurrency = 2
 )
@@ -32,6 +33,7 @@ var configKeys = [...]string{
 	"INIT_TIMEOUT",
 	"REQUEST_TIMEOUT",
 	"WARM_WORKER_LIMIT",
+	"MAX_ACTIVE_WORKERS",
 	"WARM_STARTUP_CONCURRENCY",
 	"PER_ACCOUNT_CONCURRENCY",
 	"TEMPORARY_CHAT",
@@ -46,6 +48,7 @@ type Config struct {
 	InitTimeout            time.Duration `json:"-"`
 	RequestTimeout         time.Duration `json:"-"`
 	WarmWorkerLimit        int           `json:"warm_worker_limit"`
+	MaxActiveWorkers       int           `json:"max_active_workers"`
 	WarmStartupConcurrency int           `json:"warm_startup_concurrency"`
 	PerAccountConcurrency  int           `json:"per_account_concurrency"`
 	TemporaryChat          bool          `json:"temporary_chat"`
@@ -59,6 +62,7 @@ func Default() Config {
 		InitTimeout:            defaultInitTimeout,
 		RequestTimeout:         defaultRequestTimeout,
 		WarmWorkerLimit:        defaultWarmWorkerLimit,
+		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
 	}
@@ -107,6 +111,12 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if value, ok := values["MAX_ACTIVE_WORKERS"]; ok {
+		cfg.MaxActiveWorkers, err = parsePositiveInt("MAX_ACTIVE_WORKERS", value)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if value, ok := values["WARM_STARTUP_CONCURRENCY"]; ok {
 		cfg.WarmStartupConcurrency, err = parsePositiveInt("WARM_STARTUP_CONCURRENCY", value)
 		if err != nil {
@@ -144,6 +154,7 @@ func (c Config) Save(path string) error {
 		"INIT_TIMEOUT":             c.InitTimeout.String(),
 		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
 		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
+		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
 		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
@@ -179,6 +190,9 @@ func (c Config) Validate() error {
 	if c.WarmWorkerLimit <= 0 {
 		return fmt.Errorf("WARM_WORKER_LIMIT 必须是正整数")
 	}
+	if c.MaxActiveWorkers < c.WarmWorkerLimit {
+		return fmt.Errorf("MAX_ACTIVE_WORKERS 必须大于或等于 WARM_WORKER_LIMIT")
+	}
 	if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.WarmWorkerLimit {
 		return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 WARM_WORKER_LIMIT")
 	}
@@ -198,6 +212,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		InitTimeout            string `json:"init_timeout"`
 		RequestTimeout         string `json:"request_timeout"`
 		WarmWorkerLimit        int    `json:"warm_worker_limit"`
+		MaxActiveWorkers       int    `json:"max_active_workers"`
 		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
 		TemporaryChat          bool   `json:"temporary_chat"`
@@ -210,6 +225,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		InitTimeout:            c.InitTimeout.String(),
 		RequestTimeout:         c.RequestTimeout.String(),
 		WarmWorkerLimit:        c.WarmWorkerLimit,
+		MaxActiveWorkers:       c.MaxActiveWorkers,
 		WarmStartupConcurrency: c.WarmStartupConcurrency,
 		PerAccountConcurrency:  c.PerAccountConcurrency,
 		TemporaryChat:          c.TemporaryChat,
@@ -226,6 +242,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		InitTimeout            string `json:"init_timeout"`
 		RequestTimeout         string `json:"request_timeout"`
 		WarmWorkerLimit        int    `json:"warm_worker_limit"`
+		MaxActiveWorkers       int    `json:"max_active_workers"`
 		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
 		TemporaryChat          bool   `json:"temporary_chat"`
@@ -250,6 +267,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		InitTimeout:            initTimeout,
 		RequestTimeout:         requestTimeout,
 		WarmWorkerLimit:        value.WarmWorkerLimit,
+		MaxActiveWorkers:       value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		TemporaryChat:          value.TemporaryChat,

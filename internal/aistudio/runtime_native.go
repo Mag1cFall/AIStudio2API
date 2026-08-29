@@ -112,13 +112,15 @@ func (worker *NativeWorker) Close() error {
 	defer worker.operationMu.Unlock()
 	worker.updateState(func(state *WorkerState) {
 		state.Phase = WorkerClosing
+		state.LastError = ""
 	})
 	err := worker.runtime.Close()
 	worker.updateState(func(state *WorkerState) {
-		state.Phase = WorkerClosed
 		if err != nil {
 			state.LastError = err.Error()
+			return
 		}
+		state.Phase = WorkerClosed
 	})
 	return err
 }

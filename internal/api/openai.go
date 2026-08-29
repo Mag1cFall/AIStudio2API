@@ -1,10 +1,8 @@
 package api
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -27,6 +25,10 @@ type chatRequest struct {
 	MaxCompletionTokens *int64            `json:"max_completion_tokens"`
 	FrequencyPenalty    *float64          `json:"frequency_penalty"`
 	PresencePenalty     *float64          `json:"presence_penalty"`
+	N                   *int64            `json:"n"`
+	ParallelToolCalls   *bool             `json:"parallel_tool_calls"`
+	Logprobs            *bool             `json:"logprobs"`
+	LogitBias           json.RawMessage   `json:"logit_bias"`
 	Stop                json.RawMessage   `json:"stop"`
 	ResponseFormat      json.RawMessage   `json:"response_format"`
 	ReasoningEffort     string            `json:"reasoning_effort"`
@@ -66,6 +68,7 @@ type openAITool struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Parameters  json.RawMessage `json:"parameters"`
+		Strict      *bool           `json:"strict"`
 	} `json:"function"`
 }
 
@@ -74,10 +77,11 @@ var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z
 func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.service.Models(r.Context())
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
-	models = publicModels(models)
 	if r.Header.Get("Anthropic-Version") != "" {
 		writeAnthropicModels(w, models)
 		return
@@ -100,6 +104,12 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(model.CapabilityOptions) > 0 {
 			item["capability_options"] = model.CapabilityOptions
+		}
+		if len(model.AccessModes) > 0 {
+			item["access_modes"] = model.AccessModes
+		}
+		if model.Paid {
+			item["paid"] = true
 		}
 		data = append(data, item)
 	}
@@ -124,7 +134,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
@@ -136,7 +146,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
@@ -414,6 +424,9 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 			if tool.Function.Name == "" {
 				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
 			}
+			if tool.Function.Strict != nil && *tool.Function.Strict {
+				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
+			}
 			parameters := tool.Function.Parameters
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -483,6 +496,30 @@ func appendUnique(values []string, value string) []string {
 }
 
 func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error) {
+	if request.N != nil && *request.N != 1 {
+		return aistudio.GenerationConfig{}, fmt.Errorf("n must be 1")
+	}
+	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
+		return aistudio.GenerationConfig{}, fmt.Errorf("parallel_tool_calls must be true")
+	}
+	if request.Logprobs != nil && *request.Logprobs {
+		return aistudio.GenerationConfig{}, fmt.Errorf("logprobs must be false")
+	}
+	if rawJSONConfigured(request.LogitBias) {
+		var biases map[string]json.RawMessage
+		if err := json.Unmarshal(request.LogitBias, &biases); err != nil || biases == nil {
+			return aistudio.GenerationConfig{}, fmt.Errorf("logit_bias must be an empty object")
+		}
+		if len(biases) != 0 {
+			return aistudio.GenerationConfig{}, fmt.Errorf("logit_bias must be empty")
+		}
+	}
+	if request.FrequencyPenalty != nil && *request.FrequencyPenalty != 0 {
+		return aistudio.GenerationConfig{}, fmt.Errorf("frequency_penalty must be 0")
+	}
+	if request.PresencePenalty != nil && *request.PresencePenalty != 0 {
+		return aistudio.GenerationConfig{}, fmt.Errorf("presence_penalty must be 0")
+	}
 	config := aistudio.GenerationConfig{
 		Temperature:     request.Temperature,
 		TopP:            request.TopP,
@@ -576,16 +613,20 @@ func buildChatCompletion(id string, created int64, model string, result generati
 	if len(result.citations) > 0 {
 		message["annotations"] = openAICitations(result.citations)
 	}
+	choice := map[string]any{
+		"index":         0,
+		"message":       message,
+		"finish_reason": openAIFinishReason(result.finishReason, len(result.toolCalls) > 0),
+	}
+	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+		choice["provider_finish_reason"] = providerReason
+	}
 	response := map[string]any{
 		"id":      id,
 		"object":  "chat.completion",
 		"created": created,
 		"model":   model,
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       message,
-			"finish_reason": normalizedFinish(result.finishReason, len(result.toolCalls) > 0),
-		}},
+		"choices": []any{choice},
 	}
 	if result.providerModel != "" {
 		response["provider_model"] = result.providerModel
@@ -659,7 +700,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 		return nil
 	}, func() error { return writeSSEHeartbeat(w) })
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			status := statusFromError(err)
 			code := openAIErrorCode(err)
 			_ = writeSSE(w, "", map[string]any{"error": map[string]any{
@@ -673,8 +714,12 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 	if len(result.citations) > 0 {
 		_ = writeChatChunk(w, id, created, request.Model, map[string]any{"annotations": openAICitations(result.citations)}, nil, request.StreamOptions.IncludeUsage)
 	}
-	finish := normalizedFinish(result.finishReason, len(result.toolCalls) > 0)
-	if err := writeChatChunk(w, id, created, request.Model, map[string]any{}, &finish, request.StreamOptions.IncludeUsage); err != nil {
+	finish := openAIFinishReason(result.finishReason, len(result.toolCalls) > 0)
+	finalDelta := map[string]any{}
+	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+		finalDelta["provider_finish_reason"] = providerReason
+	}
+	if err := writeChatChunk(w, id, created, request.Model, finalDelta, &finish, request.StreamOptions.IncludeUsage); err != nil {
 		return
 	}
 	if request.StreamOptions.IncludeUsage && result.usage != nil {
@@ -694,21 +739,42 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 }
 
 func writeChatChunk(w http.ResponseWriter, id string, created int64, model string, delta map[string]any, finish *string, includeUsage bool) error {
+	choice := map[string]any{
+		"index":         0,
+		"delta":         delta,
+		"finish_reason": finish,
+	}
+	if providerReason, ok := delta["provider_finish_reason"].(string); ok && providerReason != "" {
+		delete(delta, "provider_finish_reason")
+		choice["provider_finish_reason"] = providerReason
+	}
 	chunk := map[string]any{
 		"id":      id,
 		"object":  "chat.completion.chunk",
 		"created": created,
 		"model":   model,
-		"choices": []any{map[string]any{
-			"index":         0,
-			"delta":         delta,
-			"finish_reason": finish,
-		}},
+		"choices": []any{choice},
 	}
 	if includeUsage {
 		chunk["usage"] = nil
 	}
 	return writeSSE(w, "", chunk)
+}
+
+func openAIFinishReason(reason string, hasTools bool) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "max_tokens", "max_output_tokens", "length":
+		return "length"
+	case "stop_sequence":
+		return "stop"
+	case "", "stop":
+		if hasTools {
+			return "tool_calls"
+		}
+		return "stop"
+	default:
+		return "content_filter"
+	}
 }
 
 func openAIToolCallOutput(calls []aistudio.FunctionCall) []map[string]any {

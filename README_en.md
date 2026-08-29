@@ -36,6 +36,8 @@
 - **YouTube Input**: Paste a video URL to attach and read the external video
 - **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
 - **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
+- **Files and Transcribe**: File upload, metadata, content, deletion, and audio transcription
+- **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
 - **Anti-Fingerprinting**: Camoufox holds the official WAA lifecycle with a stable browser fingerprint and network exit per account
 - **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, and configuration in the web UI
 - **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; Camoufox hosts WAA and isolated login
@@ -152,6 +154,8 @@ Account actions depend on state:
 3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
+Starting again loads the latest data-plane settings from `.env`. Changes to `LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
+
 Press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
 
 ### Quick Start
@@ -204,12 +208,18 @@ Main endpoints:
 | Models | `GET /v1/models`, `GET /v1beta/models` |
 | OpenAI Chat | `POST /v1/chat/completions` |
 | OpenAI Responses | `POST /v1/responses` |
+| Files | `POST /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}` |
 | Anthropic | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
 | Gemini | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` |
 | Images | `POST /v1/images/generations` |
 | Speech | `POST /v1/audio/speech` |
+| Transcription | `POST /v1/audio/transcriptions` |
 | Music | Gemini `generateContent` with `responseModalities: ["AUDIO"]` |
 | Video | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
+| Gemini Video | `POST /v1beta/models/{model}:predictLongRunning`, `GET /v1beta/operations/{id}` |
+| Live / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
+
+All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
 ### TTS Speech Generation
 
@@ -280,7 +290,7 @@ After creating the operation, poll `GET /v1/videos/{id}` and download the result
 
 ## Models
 
-The model directory follows AI Studio updates and is available from `/v1/models` and `/v1beta/models`. The current directory contains:
+The model catalog follows AI Studio updates; clients read the current values from `/v1/models` or `/v1beta/models`. The table below is a catalog-shape example; runtime results are authoritative for model IDs, limits, and methods:
 
 | Model ID | Display name | Input | Output | Methods |
 | --- | --- | ---: | ---: | --- |
@@ -316,13 +326,15 @@ The model directory follows AI Studio updates and is available from `/v1/models`
 | `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
 | `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
 
-Public endpoints implement standard `generateContent`, `countTokens`, and `predictLongRunning`. `batchGenerateContent` and `createCachedContent` remain live model metadata, while bidi-only and private Interaction models are omitted from public model lists.
+Public endpoints implement `generateContent`, `countTokens`, and `predictLongRunning`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
 ## Project Architecture
 
 ```text
 AIStudio2API/
-├── cmd/aistudio2api/        # Program entry point, management, and runtime
+├── cmd/aistudio2api/        # Thin entry point
+├── internal/app/            # Commands, management listener, data-plane lifecycle, and scheduling
+├── internal/setup/          # Account import and isolated-login CLI
 ├── internal/aistudio/       # AI Studio protocol, authentication, models, and media
 ├── internal/api/            # OpenAI, Responses, Anthropic, and Gemini adapters
 ├── internal/chromeauth/     # Windows Chrome and DBSC import
@@ -352,9 +364,12 @@ cp .env.example .env
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `5m` | Maximum request execution time |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
+| `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
+
+The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
 
 ### Port Configuration
 
@@ -392,6 +407,7 @@ Adding an account starts an isolated Camoufox login. `ready` accounts can be edi
 - [Development and contribution](docs/development.md)
 - [Google AI Studio protocol specification](docs/protocol.md)
 - [Runtime logging](docs/logging.md)
+- [Reusable reverse-engineering development guide](docs/reverse-engineering.md)
 
 ## Important Notes
 

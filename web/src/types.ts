@@ -86,10 +86,15 @@ export interface ServiceConfig {
   auth_states: string
   listen_addr: string
   proxy_api_key: string
+  active_listen_addr: string
+  active_proxy_api_key: string
+  management_restart_required: boolean
+  service_restart_required: boolean
   proxy: string
   init_timeout: string
   request_timeout: string
   warm_worker_limit: number
+  max_active_workers: number
   warm_startup_concurrency: number
   per_account_concurrency: number
   temporary_chat: boolean
@@ -109,7 +114,8 @@ export type PlaygroundMode = 'text' | 'image' | 'speech' | 'music' | 'video'
 
 export type PlaygroundReasoning = '' | 'low' | 'medium' | 'high'
 
-export type PlaygroundTool = '' | 'web_search' | 'code_interpreter' | 'url_context' | 'google_maps'
+export type PlaygroundTool =
+  '' | 'web_search' | 'image_search' | 'code_interpreter' | 'url_context' | 'google_maps'
 
 export interface PlaygroundInput {
   mode: PlaygroundMode

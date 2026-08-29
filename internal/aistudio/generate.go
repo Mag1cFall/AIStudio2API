@@ -3,10 +3,19 @@ package aistudio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 )
+
+var errStopSequenceMatched = errors.New("stop sequence matched")
+
+// tokenCountResult 保存并发输入计数结果
+type tokenCountResult struct {
+	count TokenCount
+	err   error
+}
 
 // EncodeGenerateContentRequest 编码当前成功基线的 GenerateContent 数组
 func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDefaults, runtime RequestContext) ([]byte, error) {
@@ -58,6 +67,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	}
 	thinkingLevel := defaults.DefaultThinkingLevel
 	hasReasoningEffort := strings.TrimSpace(config.ReasoningEffort) != ""
+	thinkingBudget := config.ThinkingBudget
 	switch strings.ToLower(strings.TrimSpace(config.ReasoningEffort)) {
 	case "":
 	case "low":
@@ -72,10 +82,16 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		return nil, fmt.Errorf("reasoning effort 必须是 minimal、low、medium 或 high")
 	}
 	if hasReasoningEffort && !defaults.ThinkingLevel {
-		return nil, fmt.Errorf("模型不支持 thinking level")
+		if thinkingBudget == nil || !defaults.ThinkingBudget {
+			return nil, fmt.Errorf("模型不支持 thinking level")
+		}
+		hasReasoningEffort = false
 	}
-	if config.ThinkingBudget != nil && !defaults.ThinkingBudget {
-		return nil, fmt.Errorf("模型不支持 thinking budget")
+	if thinkingBudget != nil && !defaults.ThinkingBudget {
+		if !hasReasoningEffort || !defaults.ThinkingLevel {
+			return nil, fmt.Errorf("模型不支持 thinking budget")
+		}
+		thinkingBudget = nil
 	}
 	maxOutput := defaults.MaxOutputTokens
 	if config.MaxOutputTokens != nil {
@@ -117,6 +133,11 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if err != nil {
 		return nil, err
 	}
+	transcriptionConfig, err := encodeTranscriptionConfig(config.TranscriptionConfig)
+	if err != nil {
+		return nil, err
+	}
+	includeThinking := defaults.Thinking || defaults.ThinkingBudget || defaults.ThinkingLevel || thinkingBudget != nil || hasReasoningEffort
 	length := 14
 	if responseModalities != nil {
 		length = 15
@@ -124,7 +145,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if speechConfig != nil {
 		length = 16
 	}
-	if defaults.Thinking || defaults.ThinkingBudget || defaults.ThinkingLevel || config.ThinkingBudget != nil || hasReasoningEffort {
+	if includeThinking {
 		if length < 17 {
 			length = 17
 		}
@@ -136,6 +157,9 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	}
 	if imageConfig != nil {
 		length = 27
+	}
+	if transcriptionConfig != nil {
+		length = 32
 	}
 	wire := make([]any, length)
 	if len(config.StopSequences) > 0 {
@@ -164,16 +188,16 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if speechConfig != nil {
 		wire[15] = speechConfig
 	}
-	if length >= 17 {
+	if includeThinking {
 		thinking := []any{int64(1)}
 		if defaults.ThinkingLevel {
 			thinking = []any{int64(1), nil, nil, thinkingLevel}
 		}
-		if config.ThinkingBudget != nil {
+		if thinkingBudget != nil {
 			if len(thinking) < 2 {
 				thinking = append(thinking, nil)
 			}
-			thinking[1] = *config.ThinkingBudget
+			thinking[1] = *thinkingBudget
 		}
 		wire[16] = thinking
 	}
@@ -182,6 +206,9 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	}
 	if imageConfig != nil {
 		wire[26] = imageConfig
+	}
+	if transcriptionConfig != nil {
+		wire[31] = transcriptionConfig
 	}
 	return wire, nil
 }
@@ -301,11 +328,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
-	if entry.model.Capabilities["interaction_route"] {
-		return nil, fmt.Errorf("%w: 模型 %q 使用 private Interaction 路由", ErrInvalidArgument, entry.model.ID)
+	if err := validateRequestedTools(request.Tools, entry.model); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if !hasMethod(entry.model, "generateContent") {
-		return nil, fmt.Errorf("%w: 模型 %q 的实时目录没有 generateContent 方法", ErrInvalidArgument, entry.model.ID)
+	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
 	runtime := RequestContext{}
@@ -315,7 +342,9 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return nil, fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
 		}
 	}
-	body, err := EncodeGenerateContentRequest(request, entry.defaults, runtime)
+	wireRequest := request
+	wireRequest.Config.StopSequences = nil
+	body, err := EncodeGenerateContentRequest(wireRequest, entry.defaults, runtime)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -323,9 +352,27 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
+	matcher := newStopSequenceMatcher(request.Config.StopSequences)
+	var stopTokenCount <-chan tokenCountResult
+	cancelTokenCount := func() {}
+	if matcher != nil {
+		countContext, cancel := context.WithCancel(ctx)
+		cancelTokenCount = cancel
+		results := make(chan tokenCountResult, 1)
+		stopTokenCount = results
+		countRequest := TokenCountRequest{
+			Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
+		}
+		go func() {
+			count, countErr := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
+			results <- tokenCountResult{count: count, err: countErr}
+			close(results)
+		}()
+	}
 	events := make(chan Event, 8)
 	go func() {
 		defer close(events)
+		defer cancelTokenCount()
 		stopClose := context.AfterFunc(ctx, func() {
 			_ = response.Body.Close()
 		})
@@ -343,7 +390,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		var usage *Usage
 		var finish *Event
 		var output generatedOutputParts
-		emit := func(event Event) error {
+		matchedStopSequence := ""
+		emitEvent := func(event Event) error {
 			switch event.Kind {
 			case EventUsage:
 				if event.Usage != nil {
@@ -360,12 +408,60 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return send(event)
 			}
 		}
+		emit := func(event Event) error {
+			if matcher == nil {
+				return emitEvent(event)
+			}
+			if pending := matcher.boundary(event.Kind); pending != "" {
+				if err := emitEvent(Event{Kind: EventText, Text: pending, ProviderModel: event.ProviderModel}); err != nil {
+					return err
+				}
+			}
+			if event.Kind != EventText {
+				return emitEvent(event)
+			}
+			text, matched := matcher.write(event.Text)
+			if text != "" {
+				event.Text = text
+				if err := emitEvent(event); err != nil {
+					return err
+				}
+			}
+			if matched != "" {
+				matchedStopSequence = matched
+				return errStopSequenceMatched
+			}
+			return nil
+		}
 		err := DecodeGenerateStream(observeStreamActivity(ctx, response.Body), decoder, emit)
+		if errors.Is(err, errStopSequenceMatched) {
+			_ = response.Body.Close()
+			select {
+			case result := <-stopTokenCount:
+				if result.err == nil {
+					usage = countedCompleteUsage(request, output, result.count)
+					if err := send(Event{Kind: EventUsage, Usage: usage}); err != nil {
+						return
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+			_ = send(Event{Kind: EventFinish, FinishReason: "stop_sequence", StopSequence: matchedStopSequence})
+			return
+		}
 		if err == nil {
 			err = decoder.End()
 		}
 		if closeErr := response.Body.Close(); err == nil {
 			err = closeErr
+		}
+		if ctx.Err() == nil && matcher != nil {
+			if pending := matcher.flush(); pending != "" {
+				if flushErr := emitEvent(Event{Kind: EventText, Text: pending}); err == nil {
+					err = flushErr
+				}
+			}
 		}
 		if err != nil {
 			if ctx.Err() == nil {

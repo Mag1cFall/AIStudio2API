@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,6 +20,17 @@ type bidiClient struct {
 	nextID                   int
 	generateHeaders          map[string]string
 	blockedGenerateRequestID string
+}
+
+type bidiCommandError struct {
+	method  string
+	code    string
+	message string
+	payload string
+}
+
+func (err *bidiCommandError) Error() string {
+	return fmt.Sprintf("BiDi %s 失败: %s", err.method, err.payload)
 }
 
 // newBiDiClient 创建串行 WebDriver BiDi 客户端
@@ -75,7 +87,9 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 		}
 		if message["type"] != "success" {
 			encoded, _ := json.Marshal(message)
-			return nil, fmt.Errorf("BiDi %s 失败: %s", method, encoded)
+			code, _ := message["error"].(string)
+			detail, _ := message["message"].(string)
+			return nil, &bidiCommandError{method: method, code: code, message: detail, payload: string(encoded)}
 		}
 		result, _ := message["result"].(map[string]any)
 		return result, nil
@@ -92,7 +106,8 @@ func (client *bidiClient) observe(message map[string]any) {
 	request, _ := params["request"].(map[string]any)
 	rawURL, _ := request["url"].(string)
 	requestMethod, _ := request["method"].(string)
-	if !strings.HasSuffix(rawURL, "/GenerateContent") || requestMethod != http.MethodPost {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "alkalimakersuite-pa.clients6.google.com") || parsed.Path != generateContentPath || requestMethod != http.MethodPost {
 		return
 	}
 	if headers, ok := request["headers"].([]any); ok {
@@ -210,10 +225,15 @@ func (client *bidiClient) waitFor(ctx context.Context, contextID, expression str
 			return err
 		}
 		ready, err := client.evaluateBool(ctx, contextID, expression)
+		if err != nil && !retryablePageEvaluation(err) {
+			return err
+		}
 		if err == nil && ready {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		if err := waitContext(ctx, 200*time.Millisecond); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("等待页面条件超时: %s", expression)
 }
@@ -222,13 +242,18 @@ func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID st
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		key, err := client.evaluateString(ctx, contextID, snapshotHookExpression())
+		if err != nil && !retryablePageEvaluation(err) {
+			return "", err
+		}
 		if err == nil && key != "" && key != "no_default_MakerSuite" && key != "no_snapshot_fn" {
 			return key, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		time.Sleep(500 * time.Millisecond)
+		if err := waitContext(ctx, 500*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 	return "", errors.New("官网高层 snapshot 函数定位超时")
 }
@@ -239,12 +264,40 @@ func (client *bidiClient) waitBlockedGenerateRequest(ctx context.Context, contex
 		if client.blockedGenerateRequestID != "" {
 			return client.blockedGenerateRequestID, nil
 		}
-		if _, err := client.evaluateBool(ctx, contextID, "true"); err != nil {
+		if _, err := client.evaluateBool(ctx, contextID, "true"); err != nil && !retryablePageEvaluation(err) {
 			return "", err
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err := waitContext(ctx, 100*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 	return "", errors.New("官网 GenerateContent 拦截事件超时")
+}
+
+func retryablePageEvaluation(err error) bool {
+	var commandError *bidiCommandError
+	if !errors.As(err, &commandError) || commandError.method != "script.evaluate" {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(commandError.code))
+	if code == "no such frame" || code == "no such browsing context" {
+		return true
+	}
+	message := strings.ToLower(commandError.message)
+	contextLost := strings.Contains(message, "browsing context") || strings.Contains(message, "realm")
+	destroyed := strings.Contains(message, "discarded") || strings.Contains(message, "destroyed") || strings.Contains(message, "navigation")
+	return (code == "no such handle" || code == "unknown error") && contextLost && destroyed
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func snapshotHookExpression() string {

@@ -20,9 +20,12 @@ import (
 
 var bidiEndpointPattern = regexp.MustCompile(`ws://[^\s]+`)
 
+const browserProcessCloseTimeout = 5 * time.Second
+
+type browserProcessTerminator func(context.Context, *exec.Cmd) error
+
 type browserProcess struct {
 	command *exec.Cmd
-	cancel  context.CancelFunc
 	done    chan struct{}
 	waitErr error
 	profile string
@@ -53,7 +56,6 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		return nil, "", err
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
 	arguments := []string{"--remote-debugging-port=0"}
 	if options.Headless {
 		arguments = append(arguments, "-no-remote", "-headless")
@@ -61,29 +63,25 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		arguments = append(arguments, "-wait-for-browser")
 	}
 	arguments = append(arguments, "-profile", profile)
-	command := exec.CommandContext(runCtx, options.ExecutablePath, arguments...)
+	command := exec.Command(options.ExecutablePath, arguments...)
 	command.Env = environment
 	configureBrowserProcess(command, options.Headless)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		cancel()
 		_ = os.RemoveAll(profile)
 		return nil, "", err
 	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
-		cancel()
 		_ = os.RemoveAll(profile)
 		return nil, "", err
 	}
 	if err := command.Start(); err != nil {
-		cancel()
 		_ = os.RemoveAll(profile)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
 	}
 	process := &browserProcess{
 		command: command,
-		cancel:  cancel,
 		done:    make(chan struct{}),
 		profile: profile,
 	}
@@ -111,7 +109,6 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		err := process.waitErr
 		process.closed = true
 		process.mu.Unlock()
-		cancel()
 		_ = os.RemoveAll(profile)
 		if err == nil {
 			err = errors.New("Camoufox 在报告 BiDi 端点前退出")
@@ -128,6 +125,10 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 
 // Close 关闭 Camoufox 并删除隔离 profile
 func (process *browserProcess) Close() error {
+	return process.close(browserProcessCloseTimeout, terminateBrowserProcess)
+}
+
+func (process *browserProcess) close(timeout time.Duration, terminate browserProcessTerminator) error {
 	if process == nil {
 		return nil
 	}
@@ -136,22 +137,31 @@ func (process *browserProcess) Close() error {
 		process.mu.Unlock()
 		return nil
 	}
-	process.closed = true
 	process.mu.Unlock()
-	process.cancel()
+	if timeout <= 0 {
+		timeout = browserProcessCloseTimeout
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	var closeErr error
 	select {
 	case <-process.done:
-	case <-time.After(5 * time.Second):
-		if process.command.Process != nil {
-			closeErr = process.command.Process.Kill()
+	default:
+		closeErr = terminate(closeCtx, process.command)
+		select {
+		case <-process.done:
+		case <-closeCtx.Done():
+			closeErr = errors.Join(closeErr, fmt.Errorf("等待 Camoufox 进程退出: %w", closeCtx.Err()))
 		}
-		<-process.done
 	}
-	if err := removeProfile(process.profile); closeErr == nil {
-		closeErr = err
+	closeErr = errors.Join(closeErr, removeProfile(process.profile))
+	if closeErr != nil {
+		return closeErr
 	}
-	return closeErr
+	process.mu.Lock()
+	process.closed = true
+	process.mu.Unlock()
+	return nil
 }
 
 func removeProfile(profile string) error {

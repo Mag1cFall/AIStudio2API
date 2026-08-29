@@ -36,6 +36,8 @@
 - **YouTube 输入**: 粘贴视频 URL 即可作为外部视频附件读取
 - **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
+- **Files 与 Transcribe**: 支持文件上传、查询、内容读取、删除和音频转录
+- **Live 与 Robotics**: 通过 WebSocket 支持文本、音频、JPEG、媒体结束、工具调用、恢复和中断
 - **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
 - **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求和配置
 - **模块化架构**: Go 负责协议、调度、API 与管理端，Camoufox 负责 WAA 运行时和隔离登录
@@ -152,6 +154,8 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
+停止后再次启动会读取最新 `.env` 生成服务配置；管理页面地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+
 在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
 ### 快速启动
@@ -204,12 +208,18 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | 模型 | `GET /v1/models`、`GET /v1beta/models` |
 | OpenAI Chat | `POST /v1/chat/completions` |
 | OpenAI Responses | `POST /v1/responses` |
+| Files | `POST /v1/files`、`GET /v1/files/{id}`、`GET /v1/files/{id}/content`、`DELETE /v1/files/{id}` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
 | Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens` |
 | 图片 | `POST /v1/images/generations` |
 | 语音 | `POST /v1/audio/speech` |
+| 转录 | `POST /v1/audio/transcriptions` |
 | 音乐 | Gemini `generateContent` + `responseModalities: ["AUDIO"]` |
 | 视频 | `POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
+| Gemini 视频 | `POST /v1beta/models/{model}:predictLongRunning`、`GET /v1beta/operations/{id}` |
+| Live / Robotics | `GET /v1/live`、`GET /v1/robotics/stream` |
+
+四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
 ### TTS 语音生成
 
@@ -280,7 +290,7 @@ curl http://127.0.0.1:2048/v1/videos \
 
 ## 模型
 
-模型目录会随 AI Studio 更新，客户端可以从 `/v1/models` 或 `/v1beta/models` 读取。当前目录包含：
+模型目录会随 AI Studio 更新，客户端从 `/v1/models` 或 `/v1beta/models` 读取当前值。下表保留目录结构示例，模型 ID、限制和方法以运行时结果为准：
 
 | Model ID | Display name | Input | Output | Methods |
 | --- | --- | ---: | ---: | --- |
@@ -316,13 +326,15 @@ curl http://127.0.0.1:2048/v1/videos \
 | `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
 | `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
 
-公开端点实现标准 `generateContent`、`countTokens` 和 `predictLongRunning`。`batchGenerateContent` 和 `createCachedContent` 只保留实时模型元数据，bidi-only 与 private Interaction 模型不进入公开模型列表。
+公开端点实现标准 `generateContent`、`countTokens` 和 `predictLongRunning`。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
 ## 项目架构
 
 ```text
 AIStudio2API/
-├── cmd/aistudio2api/        # 程序入口、管理端与运行时
+├── cmd/aistudio2api/        # 薄入口
+├── internal/app/            # 命令、管理监听、生成服务生命周期与调度
+├── internal/setup/          # 账户导入和独立登录 CLI
 ├── internal/aistudio/       # AI Studio 协议、认证、模型与媒体
 ├── internal/api/            # OpenAI、Responses、Anthropic 与 Gemini 适配
 ├── internal/chromeauth/     # Windows Chrome 与 DBSC 导入
@@ -352,9 +364,12 @@ cp .env.example .env
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间 |
 | `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
+| `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `2` | 同时初始化的预热账户数 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
+
+服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制启动预热并发，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。
 
 ### 端口配置
 
@@ -392,6 +407,7 @@ cp .env.example .env
 - [开发与贡献](docs/development.md)
 - [Google AI Studio 协议规范](docs/protocol.md)
 - [运行日志说明](docs/logging.md)
+- [可复用逆向开发指南](docs/reverse-engineering.md)
 
 ## 重要提示
 

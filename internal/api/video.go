@@ -3,13 +3,13 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -51,13 +51,6 @@ type openAIVideoRequest struct {
 	InputReference string `json:"input_reference"`
 }
 
-type openAIVideoState struct {
-	Model     string
-	Seconds   string
-	Size      string
-	CreatedAt int64
-}
-
 func (s *server) handleGeminiVideoCreate(w http.ResponseWriter, r *http.Request, model string) {
 	service, ok := s.service.(aistudio.VideoService)
 	if !ok {
@@ -77,12 +70,11 @@ func (s *server) handleGeminiVideoCreate(w http.ResponseWriter, r *http.Request,
 	videoRequest = normalizeVideoDefaults(videoRequest)
 	operation, err := service.GenerateVideo(r.Context(), videoRequest)
 	if err != nil {
-		writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		}
 		return
 	}
-	s.videoStates.Store(operation.ID, openAIVideoState{
-		Model: model, Seconds: strconv.Itoa(videoRequest.DurationSeconds), Size: geminiVideoSize(videoRequest), CreatedAt: time.Now().Unix(),
-	})
 	writeJSON(w, http.StatusOK, map[string]any{"name": "operations/" + operation.ID})
 }
 
@@ -156,7 +148,9 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	operationID := cleanOperationID(r.PathValue("operation"))
 	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
 	if err != nil {
-		writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		}
 		return
 	}
 	response := map[string]any{"name": "operations/" + operationID, "done": operation.Done}
@@ -191,15 +185,12 @@ func (s *server) handleOpenAIVideoCreate(w http.ResponseWriter, r *http.Request)
 	videoRequest = normalizeVideoDefaults(videoRequest)
 	operation, err := service.GenerateVideo(r.Context(), videoRequest)
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
-	state := openAIVideoState{Model: videoRequest.Model, Seconds: strconv.Itoa(videoRequest.DurationSeconds), Size: request.Size, CreatedAt: time.Now().Unix()}
-	if state.Size == "" {
-		state.Size = geminiVideoSize(videoRequest)
-	}
-	s.videoStates.Store(operation.ID, state)
-	writeJSON(w, http.StatusOK, openAIVideoObject(operation, state))
+	writeJSON(w, http.StatusOK, openAIVideoObject(operation))
 }
 
 func parseOpenAIVideoRequest(r *http.Request) (openAIVideoRequest, *aistudio.VideoImage, error) {
@@ -272,7 +263,7 @@ func (request openAIVideoRequest) toVideoRequest(image *aistudio.VideoImage) (ai
 	}
 	return aistudio.VideoRequest{
 		Model: request.Model, Prompt: request.Prompt, Count: 1, DurationSeconds: duration,
-		AspectRatio: aspectRatio, Resolution: resolution, StartImage: image,
+		AspectRatio: aspectRatio, Resolution: resolution, Size: strings.TrimSpace(request.Size), StartImage: image,
 	}, nil
 }
 
@@ -302,15 +293,15 @@ func (s *server) handleOpenAIVideoGet(w http.ResponseWriter, r *http.Request) {
 	operationID := cleanOperationID(r.PathValue("video"))
 	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
-	state, _ := s.videoStates.Load(operationID)
-	metadata, _ := state.(openAIVideoState)
-	writeJSON(w, http.StatusOK, openAIVideoObject(operation, metadata))
+	writeJSON(w, http.StatusOK, openAIVideoObject(operation))
 }
 
-func openAIVideoObject(operation aistudio.VideoOperation, state openAIVideoState) map[string]any {
+func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 	status := "queued"
 	progress := 0
 	if operation.Done {
@@ -322,9 +313,9 @@ func openAIVideoObject(operation aistudio.VideoOperation, state openAIVideoState
 		}
 	}
 	return map[string]any{
-		"id": operation.ID, "object": "video", "model": state.Model,
-		"status": status, "progress": progress, "created_at": state.CreatedAt,
-		"size": state.Size, "seconds": state.Seconds,
+		"id": operation.ID, "object": "video", "model": operation.Model,
+		"status": status, "progress": progress, "created_at": operation.CreatedAt.Unix(),
+		"size": operation.Size, "seconds": operation.Seconds,
 	}
 }
 
@@ -341,7 +332,9 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	operationID := cleanOperationID(r.PathValue("video"))
 	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
 	if !operation.Done || operation.File == nil {
@@ -350,7 +343,9 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	}
 	media, err := service.DownloadFile(r.Context(), operation.File.ID)
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
 	mimeType := media.MIME
@@ -359,8 +354,15 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Content-Disposition", `attachment; filename="video.mp4"`)
+	if media.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(media.Size, 10))
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(media.Data)
+	_, copyErr := io.Copy(w, media.Body)
+	closeErr := media.Body.Close()
+	if requestErr := errors.Join(copyErr, closeErr); requestErr != nil {
+		SetAccessLogError(r.Context(), requestErr)
+	}
 }
 
 func cleanOperationID(value string) string {
@@ -376,26 +378,6 @@ func videoContentURL(r *http.Request, operationID string) string {
 		scheme = forwarded
 	}
 	return scheme + "://" + r.Host + "/v1/videos/" + operationID + "/content"
-}
-
-func geminiVideoSize(request aistudio.VideoRequest) string {
-	request = normalizeVideoDefaults(request)
-	if request.Resolution == "1080p" {
-		if request.AspectRatio == "9:16" {
-			return "1080x1920"
-		}
-		return "1920x1080"
-	}
-	if request.Resolution == "4k" {
-		if request.AspectRatio == "9:16" {
-			return "2160x3840"
-		}
-		return "3840x2160"
-	}
-	if request.AspectRatio == "9:16" {
-		return "720x1280"
-	}
-	return "1280x720"
 }
 
 func normalizeVideoDefaults(request aistudio.VideoRequest) aistudio.VideoRequest {

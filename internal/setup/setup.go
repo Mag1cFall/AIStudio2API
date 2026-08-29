@@ -1,4 +1,4 @@
-package main
+package setup
 
 import (
 	"bufio"
@@ -47,12 +47,8 @@ type setupOptions struct {
 	timezone     string
 }
 
-// runSetup 执行本机 Chrome 导入、文件导入或隔离登录
-func runSetup(ctx context.Context, cfg config.Config, args []string) error {
-	return runSetupCommand(ctx, cfg, args, nil)
-}
-
-func runSetupCommand(ctx context.Context, cfg config.Config, args []string, driver aistudio.IsolatedLoginDriver) error {
+// Run 执行本机 Chrome 导入、文件导入或隔离登录
+func Run(ctx context.Context, cfg config.Config, args []string) error {
 	options, err := parseSetupFlags(args, cfg)
 	if err != nil {
 		return err
@@ -65,11 +61,9 @@ func runSetupCommand(ctx context.Context, cfg config.Config, args []string, driv
 		return importStorageState(store, options)
 	}
 	if options.login {
-		if driver == nil {
-			driver, err = defaultSetupLoginDriver(cfg)
-			if err != nil {
-				return err
-			}
+		driver, err := defaultSetupLoginDriver(ctx, cfg)
+		if err != nil {
+			return err
 		}
 		return importIsolatedLogin(ctx, store, options, driver)
 	}
@@ -88,15 +82,23 @@ func importStorageState(store *aistudio.AccountStore, options setupOptions) erro
 	if label == "" {
 		label = defaultSetupLabel(options.storageState)
 	}
-	account, err := store.Create(setupAccountConfig(label, options), state)
+	account, publishLease, err := store.Create(setupAccountConfig(label, options), state)
 	if err != nil {
+		return err
+	}
+	if err := publishLease.Release(); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
 	return nil
 }
 
-func importIsolatedLogin(ctx context.Context, store *aistudio.AccountStore, options setupOptions, driver aistudio.IsolatedLoginDriver) error {
+func importIsolatedLogin(
+	ctx context.Context,
+	store *aistudio.AccountStore,
+	options setupOptions,
+	driver aistudio.IsolatedLoginDriver,
+) (resultErr error) {
 	loginDirectory, err := os.MkdirTemp("", "aistudio2api-login-*")
 	if err != nil {
 		return fmt.Errorf("创建隔离登录目录: %w", err)
@@ -121,10 +123,13 @@ func importIsolatedLogin(ctx context.Context, store *aistudio.AccountStore, opti
 	if label == "" {
 		return fmt.Errorf("--login 必须同时提供 --label <Google 邮箱>")
 	}
-	account, err := store.Create(setupAccountConfig(label, options), result.StorageState)
+	account, publishLease, err := store.Create(setupAccountConfig(label, options), result.StorageState)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, publishLease.Release())
+	}()
 	if err := camoufoxnative.PersistAccountFingerprint(loginDirectory, account.Directory); err != nil {
 		return errors.Join(err, store.Delete(account))
 	}
@@ -179,8 +184,11 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudi
 		if !options.localeSet && result.Locale != "" {
 			accountOptions.locale = result.Locale
 		}
-		_, err := store.Create(setupAccountConfig(label, accountOptions), result.State)
+		_, publishLease, err := store.Create(setupAccountConfig(label, accountOptions), result.State)
 		if err != nil {
+			return err
+		}
+		if err := publishLease.Release(); err != nil {
 			return err
 		}
 		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, modelCounts[index])
@@ -301,8 +309,8 @@ func defaultSetupLabel(storageState string) string {
 	return parent
 }
 
-func defaultSetupLoginDriver(cfg config.Config) (aistudio.IsolatedLoginDriver, error) {
-	camoufoxPath, err := findCamoufoxExecutable()
+func defaultSetupLoginDriver(ctx context.Context, cfg config.Config) (aistudio.IsolatedLoginDriver, error) {
+	camoufoxPath, err := camoufoxnative.FindExecutable(ctx)
 	if err != nil {
 		return nil, err
 	}

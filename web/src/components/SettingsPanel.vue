@@ -23,10 +23,15 @@ const form = reactive<ServiceConfig>({
   auth_states: 'auth',
   listen_addr: '127.0.0.1:2048',
   proxy_api_key: '',
+  active_listen_addr: '127.0.0.1:2048',
+  active_proxy_api_key: '',
+  management_restart_required: false,
+  service_restart_required: false,
   proxy: '',
   init_timeout: '2m',
   request_timeout: '5m',
   warm_worker_limit: 5,
+  max_active_workers: 10,
   warm_startup_concurrency: 2,
   per_account_concurrency: 2,
   temporary_chat: false,
@@ -44,10 +49,18 @@ watch(
 async function saveConfig(): Promise<void> {
   saving.value = true
   try {
-    const saved = { ...form }
-    await api.saveConfig(saved)
+    const saved = await api.saveConfig({ ...form })
     emit('saved', saved)
-    emit('notice', t('settings.saved'), 'success')
+
+    if (saved.management_restart_required && saved.service_restart_required) {
+      emit('notice', t('settings.savedBoth'), 'success')
+    } else if (saved.management_restart_required) {
+      emit('notice', t('settings.savedManagement'), 'success')
+    } else if (saved.service_restart_required) {
+      emit('notice', t('settings.savedService'), 'success')
+    } else {
+      emit('notice', t('settings.saved'), 'success')
+    }
   } catch (error) {
     emit('notice', error instanceof Error ? error.message : t('common.error'), 'error')
   } finally {
@@ -69,6 +82,19 @@ async function saveConfig(): Promise<void> {
       {{ t('common.loading') }}
     </div>
     <form v-else class="space-y-6" @submit.prevent="saveConfig">
+      <div
+        v-if="config.service_restart_required"
+        class="rounded border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200"
+      >
+        {{ t('settings.pendingService') }}
+      </div>
+      <div
+        v-if="config.management_restart_required"
+        class="rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+      >
+        {{ t('settings.pendingManagement') }}
+      </div>
+
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <label class="block">
           <span class="mb-1 block text-sm font-medium text-gray-400">{{
@@ -80,6 +106,12 @@ async function saveConfig(): Promise<void> {
             required
             autocomplete="off"
           />
+          <span
+            v-if="form.listen_addr !== config.active_listen_addr"
+            class="mt-1 block text-xs text-gray-500"
+          >
+            {{ t('settings.activeValue') }}: {{ config.active_listen_addr }}
+          </span>
         </label>
         <label class="block">
           <span class="mb-1 block text-sm font-medium text-gray-400">{{
@@ -114,6 +146,13 @@ async function saveConfig(): Promise<void> {
               {{ revealKey ? t('settings.hide') : t('settings.reveal') }}
             </button>
           </div>
+          <span
+            v-if="form.proxy_api_key !== config.active_proxy_api_key"
+            class="mt-1 block text-xs text-gray-500"
+          >
+            {{ t('settings.activeValue') }}:
+            {{ revealKey ? config.active_proxy_api_key || t('common.empty') : '••••••••' }}
+          </span>
         </label>
       </div>
 
@@ -166,6 +205,18 @@ async function saveConfig(): Promise<void> {
             class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
             type="number"
             min="1"
+            required
+          />
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-400">{{
+            t('settings.maxActiveWorkers')
+          }}</span>
+          <input
+            v-model.number="form.max_active_workers"
+            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+            type="number"
+            :min="form.warm_worker_limit"
             required
           />
         </label>

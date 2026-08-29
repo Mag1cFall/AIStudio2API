@@ -260,8 +260,12 @@ func encodePart(part Part) ([]any, error) {
 		return nil, fmt.Errorf("未识别的 code execution outcome %q", part.CodeExecutionResult.Outcome)
 	}
 	result := []any{outcome}
-	if part.CodeExecutionResult.Output != "" {
-		result = append(result, part.CodeExecutionResult.Output)
+	value := part.CodeExecutionResult.Output
+	if outcome != 1 {
+		value = part.CodeExecutionResult.Error
+	}
+	if value != "" {
+		result = append(result, value)
 	}
 	wire := make([]any, 9)
 	wire[8] = result

@@ -92,8 +92,14 @@ func writeSSEHeartbeat(w http.ResponseWriter) error {
 }
 
 func statusFromError(err error) int {
+	if errors.Is(err, context.Canceled) {
+		return http.StatusServiceUnavailable
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return http.StatusGatewayTimeout
+	}
+	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
+		return http.StatusBadRequest
 	}
 	if errors.Is(err, aistudio.ErrInvalidArgument) {
 		return http.StatusBadRequest
@@ -117,6 +123,11 @@ func statusFromError(err error) int {
 		return validHTTPStatus(codeErr.StatusCode())
 	}
 	return http.StatusBadGateway
+}
+
+// shouldWriteRequestError 判断仍在线的客户端是否需要收到结构化错误
+func shouldWriteRequestError(r *http.Request, err error) bool {
+	return err != nil && (!errors.Is(err, context.Canceled) || r.Context().Err() == nil)
 }
 
 func isUnverifiedProtocolError(err error) bool {
@@ -209,8 +220,14 @@ func writeAdminError(w http.ResponseWriter, status int, code string, message str
 }
 
 func openAIErrorCode(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "request_canceled"
+	}
 	if errors.Is(err, aistudio.ErrModelNotFound) {
 		return "model_not_found"
+	}
+	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
+		return "account_required"
 	}
 	if errors.Is(err, aistudio.ErrInvalidArgument) {
 		return "invalid_request"

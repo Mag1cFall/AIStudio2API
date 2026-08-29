@@ -106,16 +106,21 @@ type AccountInput struct {
 
 // RuntimeConfig 表示全局运行配置
 type RuntimeConfig struct {
-	AuthStates             string `json:"auth_states"`
-	ListenAddr             string `json:"listen_addr"`
-	APIKey                 string `json:"proxy_api_key"`
-	Proxy                  string `json:"proxy"`
-	InitTimeout            string `json:"init_timeout"`
-	RequestTimeout         string `json:"request_timeout"`
-	WarmWorkerLimit        int    `json:"warm_worker_limit"`
-	WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
-	PerAccountConcurrency  int    `json:"per_account_concurrency"`
-	TemporaryChat          bool   `json:"temporary_chat"`
+	AuthStates                string `json:"auth_states"`
+	ListenAddr                string `json:"listen_addr"`
+	APIKey                    string `json:"proxy_api_key"`
+	ActiveListenAddr          string `json:"active_listen_addr"`
+	ActiveAPIKey              string `json:"active_proxy_api_key"`
+	ManagementRestartRequired bool   `json:"management_restart_required"`
+	ServiceRestartRequired    bool   `json:"service_restart_required"`
+	Proxy                     string `json:"proxy"`
+	InitTimeout               string `json:"init_timeout"`
+	RequestTimeout            string `json:"request_timeout"`
+	WarmWorkerLimit           int    `json:"warm_worker_limit"`
+	MaxActiveWorkers          int    `json:"max_active_workers"`
+	WarmStartupConcurrency    int    `json:"warm_startup_concurrency"`
+	PerAccountConcurrency     int    `json:"per_account_concurrency"`
+	TemporaryChat             bool   `json:"temporary_chat"`
 }
 
 // AdminCooldown 表示账户模型冷却

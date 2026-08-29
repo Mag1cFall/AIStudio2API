@@ -1,10 +1,11 @@
-package main
+package app
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -15,11 +16,11 @@ type chromeCookieRefreshFunc func(context.Context, aistudio.ChromeOAuthMaterial,
 
 // authRuntimeRefresher 使用账户保存的 Chrome OAuth 材料原地续签
 type authRuntimeRefresher struct {
-	refresh     chromeCookieRefreshFunc
-	reset       func(string) error
-	invalidate  func(string) error
-	globalProxy string
-	requests    *requestRegistry
+	refresh        chromeCookieRefreshFunc
+	reset          func(string) error
+	prepareHeaders func(string) (func(bool), error)
+	globalProxy    string
+	requests       *requestRegistry
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -32,6 +33,61 @@ type authRetryTransport struct {
 type authRetryProtectedTransport struct {
 	transport aistudio.ProtectedTransport
 	refresher *authRuntimeRefresher
+}
+
+type bidiReleaseGate struct {
+	mu        sync.Mutex
+	once      sync.Once
+	release   func() error
+	requested bool
+	committed bool
+	abandoned bool
+	err       error
+}
+
+func newBidiReleaseGate(release func() error) *bidiReleaseGate {
+	return &bidiReleaseGate{release: release}
+}
+
+func (gate *bidiReleaseGate) Release() error {
+	gate.mu.Lock()
+	if gate.abandoned {
+		gate.mu.Unlock()
+		return nil
+	}
+	if !gate.committed {
+		gate.requested = true
+		gate.mu.Unlock()
+		return nil
+	}
+	gate.mu.Unlock()
+	return gate.releaseNow()
+}
+
+func (gate *bidiReleaseGate) Commit() error {
+	gate.mu.Lock()
+	gate.committed = true
+	requested := gate.requested
+	gate.mu.Unlock()
+	if !requested {
+		return nil
+	}
+	return gate.releaseNow()
+}
+
+func (gate *bidiReleaseGate) Abandon() {
+	gate.mu.Lock()
+	gate.abandoned = true
+	gate.mu.Unlock()
+}
+
+func (gate *bidiReleaseGate) releaseNow() error {
+	gate.once.Do(func() {
+		if gate.release != nil {
+			gate.err = gate.release()
+		}
+	})
+	return gate.err
 }
 
 // UploadDrive 将 Drive 上传委托给同一认证传输
@@ -54,12 +110,26 @@ func (transport *authRetryTransport) DownloadDrive(
 	accountID string,
 	token string,
 	fileID string,
-) (aistudio.Media, error) {
+) (aistudio.MediaStream, error) {
 	drive, ok := transport.transport.(aistudio.DriveTransport)
 	if !ok {
-		return aistudio.Media{}, fmt.Errorf("transport 不支持 Drive 下载")
+		return aistudio.MediaStream{}, fmt.Errorf("transport 不支持 Drive 下载")
 	}
 	return drive.DownloadDrive(ctx, accountID, token, fileID)
+}
+
+// DeleteDrive 将 Drive 删除委托给同一认证传输
+func (transport *authRetryTransport) DeleteDrive(
+	ctx context.Context,
+	accountID string,
+	token string,
+	fileID string,
+) error {
+	drive, ok := transport.transport.(aistudio.DriveTransport)
+	if !ok {
+		return fmt.Errorf("transport 不支持 Drive 删除")
+	}
+	return drive.DeleteDrive(ctx, accountID, token, fileID)
 }
 
 // newAuthRuntimeRefresher 创建生产环境认证续签器
@@ -70,9 +140,28 @@ func newAuthRuntimeRefresher(
 	globalProxy string,
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
-		refresh: chromeauth.Refresh, reset: workers.Reset, invalidate: headers.Invalidate, globalProxy: globalProxy,
-		requests: requests,
+		refresh: chromeauth.Refresh, reset: workers.Reset, prepareHeaders: headers.prepareInvalidate,
+		globalProxy: globalProxy,
+		requests:    requests,
 	}
+}
+
+func (provider *accountHeaderProvider) prepareInvalidate(accountID string) (func(bool), error) {
+	provider.mu.RLock()
+	account := provider.accounts[accountID]
+	provider.mu.RUnlock()
+	if account == nil {
+		return nil, fmt.Errorf("账户固定出口不存在: %s", accountID)
+	}
+	account.mu.Lock()
+	previous := account.headers.Clone()
+	account.headers = nil
+	return func(committed bool) {
+		if !committed {
+			account.headers = previous
+		}
+		account.mu.Unlock()
+	}, nil
 }
 
 // Do 在 401 后续签同一账户并重放一次请求
@@ -113,6 +202,36 @@ func (transport *authRetryProtectedTransport) DoProtected(
 		return nil, authenticationRefreshError(rpc.Method, response.StatusCode, err)
 	}
 	return transport.transport.DoProtected(ctx, request, rpc)
+}
+
+// OpenBidiProtected 在 401 后续签同一账户并重新建立 WebChannel
+func (transport *authRetryProtectedTransport) OpenBidiProtected(
+	ctx context.Context,
+	request aistudio.BidiRequest,
+	runtime aistudio.RequestContext,
+	lease *aistudio.AccountLease,
+	release func() error,
+) (*aistudio.BidiSession, error) {
+	bidiTransport, ok := transport.transport.(aistudio.BidiProtectedTransport)
+	if !ok {
+		return nil, fmt.Errorf("protected transport 不支持 BidiGenerateContent")
+	}
+	gate := newBidiReleaseGate(release)
+	session, err := bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, gate.Release)
+	if err == nil {
+		if releaseErr := gate.Commit(); releaseErr != nil {
+			return nil, errors.Join(releaseErr, session.Close())
+		}
+		return session, nil
+	}
+	if !aistudio.DefinitiveAuthenticationFailure(err) || transport.refresher == nil || !transport.refresher.Available(ctx) {
+		return nil, errors.Join(err, gate.Commit())
+	}
+	gate.Abandon()
+	if refreshErr := transport.refresher.Refresh(ctx); refreshErr != nil {
+		return nil, authenticationRefreshError("BidiGenerateContent", http.StatusUnauthorized, refreshErr)
+	}
+	return bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, release)
 }
 
 // DoProtectedVideo 在认证失败后续签同一账户并重放 Veo 请求
@@ -169,17 +288,16 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		}
 		state.Cookies = cookies
 		return nil
-	}, func() error {
+	}, func() (func(bool), error) {
 		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")
-		if refresher.invalidate != nil {
-			if err := refresher.invalidate(account.ID); err != nil {
-				return fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
-			}
-		}
 		if err := refresher.reset(account.ID); err != nil {
-			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
+			return nil, fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
 		}
-		return nil
+		finish, err := refresher.prepareHeaders(account.ID)
+		if err != nil {
+			return nil, fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
+		}
+		return finish, nil
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
@@ -224,3 +342,4 @@ var _ aistudio.RPCTransport = (*authRetryTransport)(nil)
 var _ aistudio.DriveTransport = (*authRetryTransport)(nil)
 var _ aistudio.ProtectedTransport = (*authRetryProtectedTransport)(nil)
 var _ aistudio.VideoProtectedTransport = (*authRetryProtectedTransport)(nil)
+var _ aistudio.BidiProtectedTransport = (*authRetryProtectedTransport)(nil)
