@@ -9,13 +9,14 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // VideoService 定义长任务视频适配器依赖的能力
 type VideoService interface {
 	GenerateVideo(context.Context, VideoRequest) (VideoOperation, error)
 	GetGenerateVideoOperation(context.Context, string) (VideoOperation, error)
-	DownloadFile(context.Context, string) (Media, error)
+	DownloadFile(context.Context, string) (MediaStream, error)
 }
 
 // VideoImage 表示 Veo 起始帧
@@ -26,21 +27,33 @@ type VideoImage struct {
 
 // VideoRequest 表示一次 Veo 长任务请求
 type VideoRequest struct {
-	Model           string
-	Prompt          string
-	Count           int
-	AspectRatio     string
-	DurationSeconds int
-	Resolution      string
-	AccountID       string
-	StartImage      *VideoImage
+	Model             string
+	Prompt            string
+	Count             int
+	AspectRatio       string
+	DurationSeconds   int
+	Resolution        string
+	Size              string
+	AccountID         string
+	StartImage        *VideoImage
+	RecoverWAARuntime func(context.Context, string, error) (bool, error)
 }
 
 // VideoOperation 表示 Veo 私有长任务状态
 type VideoOperation struct {
-	ID   string
-	Done bool
-	File *FileRef
+	ID              string
+	Done            bool
+	File            *FileRef
+	Model           string
+	Seconds         string
+	Size            string
+	CreatedAt       time.Time
+	accessCheckedAt time.Time
+}
+
+// ModelAccessCheckedAt 返回上游接受视频任务的资格时间
+func (operation VideoOperation) ModelAccessCheckedAt() time.Time {
+	return operation.accessCheckedAt
 }
 
 // EncodeGenerateVideoRequest 编码当前网页 GenerateVideo 数组协议
@@ -202,7 +215,12 @@ func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (Video
 		return VideoOperation{}, err
 	}
 	defer response.Body.Close()
-	return ParseVideoOperation(response.Body, "GenerateVideo")
+	operation, err := ParseVideoOperation(response.Body, "GenerateVideo")
+	if err != nil {
+		return VideoOperation{}, err
+	}
+	operation.accessCheckedAt = time.Now().UTC()
+	return operation, nil
 }
 
 // GetGenerateVideoOperation 读取 Veo 长任务当前状态
@@ -223,18 +241,26 @@ func (c *Client) GetGenerateVideoOperation(ctx context.Context, accountID string
 
 // GenerateVideo 使用一个独占账户创建任务并保存 operation 绑定
 func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest) (VideoOperation, error) {
+	request = normalizeVideoRequest(request)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	resourceID := ""
 	if request.StartImage != nil && request.StartImage.File != nil {
 		resourceID = strings.TrimSpace(request.StartImage.File.ID)
 	}
+	requestedAccountID := strings.TrimSpace(request.AccountID)
 	selection := AccountSelection{
-		ModelID: modelID, Method: "predictLongRunning", AccountID: strings.TrimSpace(request.AccountID), ResourceID: resourceID,
+		ModelID: modelID, Method: "predictLongRunning", AccountID: requestedAccountID, ResourceID: resourceID,
 	}
 	maxAttempts := accountAttemptLimit(s.pool, selection.AccountID != "" || selection.ResourceID != "")
+	recoveryAccountID := ""
 	var operation VideoOperation
 	var generateErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		selection.AccountID = requestedAccountID
+		if recoveryAccountID != "" {
+			selection.AccountID = recoveryAccountID
+			recoveryAccountID = ""
+		}
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
 		if err != nil {
 			if generateErr != nil && errors.Is(err, ErrNoEligibleAccount) {
@@ -243,18 +269,66 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 			return VideoOperation{}, err
 		}
 		request.AccountID = lease.Account().ID
-		operation, generateErr = s.client.GenerateVideo(ContextWithAccountLease(ctx, lease), request)
+		attemptCtx := ContextWithAccountLease(ctx, lease)
+		operation, generateErr = s.client.GenerateVideo(attemptCtx, request)
 		if generateErr == nil {
-			generateErr = lease.BindResource(operation.ID, "video-operation")
+			operation.accessCheckedAt = lease.CheckedAt()
+			generateErr = errors.Join(
+				lease.MarkAuthenticationValid(),
+				s.pool.ClearCooldownIfGeneration(
+					request.AccountID, "", lease.ModelAccessGeneration(), lease.CheckedAt(),
+				),
+			)
+		}
+		if generateErr == nil {
+			var binding ResourceBinding
+			size := strings.TrimSpace(request.Size)
+			if size == "" {
+				size = videoOutputSize(request)
+			}
+			binding, generateErr = lease.BindVideoOperation(attemptCtx, operation.ID, VideoResourceMetadata{
+				Model: request.Model, Seconds: strconv.Itoa(request.DurationSeconds), Size: size,
+			})
+			if generateErr == nil {
+				applyVideoOperationBinding(&operation, binding)
+			}
+		}
+		var earlyStateErr error
+		if owned && DefinitiveModelAccessFailure(generateErr) {
+			earlyStateErr = s.markRetryableFailure(lease, modelID, generateErr)
 		}
 		if owned {
-			generateErr = errors.Join(generateErr, lease.Release())
+			generateErr = errors.Join(generateErr, earlyStateErr, lease.Release())
 		}
-		if generateErr == nil || !retryableAccountError(generateErr) {
+		if earlyStateErr != nil {
 			return operation, generateErr
 		}
-		if stateErr := s.markRetryableFailure(request.AccountID, modelID, generateErr); stateErr != nil {
-			return operation, errors.Join(generateErr, stateErr)
+		if generateErr == nil || !retryableAccountError(generateErr) {
+			if generateErr == nil {
+				return operation, nil
+			}
+			if request.RecoverWAARuntime == nil {
+				return operation, generateErr
+			}
+		}
+		if request.RecoverWAARuntime != nil {
+			recovered, recoveryErr := request.RecoverWAARuntime(ctx, request.AccountID, generateErr)
+			if recoveryErr != nil {
+				return operation, errors.Join(generateErr, recoveryErr)
+			}
+			if recovered {
+				recoveryAccountID = request.AccountID
+				maxAttempts++
+				continue
+			}
+		}
+		if !retryableAccountError(generateErr) {
+			return operation, generateErr
+		}
+		if !DefinitiveModelAccessFailure(generateErr) {
+			if stateErr := s.markRetryableFailure(lease, modelID, generateErr); stateErr != nil {
+				return operation, errors.Join(generateErr, stateErr)
+			}
 		}
 	}
 	return operation, generateErr
@@ -267,19 +341,54 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 		return VideoOperation{}, err
 	}
 	accountID := lease.Account().ID
+	binding, bindingErr := lease.VideoOperationBinding(operationID)
+	if bindingErr != nil {
+		if owned {
+			bindingErr = errors.Join(bindingErr, lease.Release())
+		}
+		return VideoOperation{}, bindingErr
+	}
 	operation, pollErr := s.client.GetGenerateVideoOperation(ContextWithAccountLease(ctx, lease), accountID, operationID)
-	if pollErr == nil && operation.Done && operation.File != nil {
-		pollErr = lease.BindResource(operation.File.ID, "video-file")
+	applyVideoOperationBinding(&operation, binding)
+	if pollErr == nil {
+		pollErr = errors.Join(
+			lease.MarkAuthenticationValid(),
+			s.pool.ClearCooldownIfGeneration(
+				accountID, "", lease.ModelAccessGeneration(), lease.CheckedAt(),
+			),
+		)
+		if pollErr == nil && operation.Done && operation.File != nil {
+			pollErr = lease.BindResource(operation.File.ID, "video-file")
+		}
+	} else if DefinitiveAuthenticationFailure(pollErr) {
+		pollErr = errors.Join(pollErr, lease.MarkAuthenticationRequired(pollErr.Error()))
 	}
 	if owned {
 		pollErr = errors.Join(pollErr, lease.Release())
 	}
-	if DefinitiveAuthenticationFailure(pollErr) {
-		if stateErr := s.pool.MarkAuthRequired(accountID, pollErr.Error()); stateErr != nil {
-			pollErr = errors.Join(pollErr, stateErr)
-		}
-	}
 	return operation, pollErr
+}
+
+func applyVideoOperationBinding(operation *VideoOperation, binding ResourceBinding) {
+	operation.Model = binding.Video.Model
+	operation.Seconds = binding.Video.Seconds
+	operation.Size = binding.Video.Size
+	operation.CreatedAt = binding.CreatedAt
+}
+
+func videoOutputSize(request VideoRequest) string {
+	width := "1280"
+	height := "720"
+	switch strings.ToLower(request.Resolution) {
+	case "1080p":
+		width, height = "1920", "1080"
+	case "4k":
+		width, height = "3840", "2160"
+	}
+	if request.AspectRatio == "9:16" {
+		return height + "x" + width
+	}
+	return width + "x" + height
 }
 
 func validateVideoOptions(request VideoRequest, model Model) error {

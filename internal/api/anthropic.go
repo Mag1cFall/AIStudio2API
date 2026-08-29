@@ -1,12 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -39,16 +38,37 @@ type anthropicMessage struct {
 }
 
 type anthropicTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Type        string                     `json:"type"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description"`
+	InputSchema json.RawMessage            `json:"input_schema"`
+	Options     map[string]json.RawMessage `json:"-"`
+}
+
+func (tool *anthropicTool) UnmarshalJSON(data []byte) error {
+	type knownTool anthropicTool
+	var known knownTool
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	delete(fields, "type")
+	delete(fields, "name")
+	delete(fields, "description")
+	delete(fields, "input_schema")
+	*tool = anthropicTool(known)
+	tool.Options = fields
+	return nil
 }
 
 type anthropicContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	Thinking  *string         `json:"thinking,omitempty"`
+	Data      string          `json:"data,omitempty"`
 	Signature string          `json:"signature,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -65,40 +85,45 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model, messages and max_tokens are required")
 		return
 	}
+	if request.Messages[len(request.Messages)-1].Role == "assistant" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "assistant prefill is not supported by the AI Studio upstream")
+		return
+	}
 	messageID := newID("msg")
 	generateRequest, err := request.toGenerateRequest(messageID)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	var inputTokens int64
 	if request.Stream {
-		count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
-			Model: generateRequest.Model, System: generateRequest.System, Contents: generateRequest.Contents,
-			Tools: generateRequest.Tools,
-		})
+		streamHeaders(w)
+		writer := &anthropicStreamWriter{
+			w: w, id: messageID, model: request.Model,
+			inputTokens: aistudio.EstimatedInputTokens(generateRequest),
+		}
+		if err := writer.start(); err != nil {
+			return
+		}
+		events, err := s.service.Generate(r.Context(), generateRequest)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
+			if shouldWriteRequestError(r, err) {
+				_ = writer.error(err)
 			}
 			return
 		}
-		inputTokens = count.InputTokens
+		s.streamAnthropic(r, writer, events)
+		return
 	}
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
 		}
 		return
 	}
-	if request.Stream {
-		s.streamAnthropic(w, r, request.Model, messageID, inputTokens, events)
-		return
-	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
 		}
 		return
@@ -126,7 +151,7 @@ func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		Tools: generateRequest.Tools,
 	})
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
 		}
 		return
@@ -135,6 +160,18 @@ func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 }
 
 func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
+	if request.Thinking != nil {
+		switch request.Thinking.Type {
+		case "enabled":
+			if request.Thinking.BudgetTokens == nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("thinking.budget_tokens is required when thinking.type is enabled")
+			}
+		case "disabled":
+			return aistudio.GenerateRequest{}, fmt.Errorf("thinking.type disabled is not supported by the AI Studio upstream")
+		default:
+			return aistudio.GenerateRequest{}, fmt.Errorf("thinking.type must be enabled")
+		}
+	}
 	system, err := anthropicSystemText(request.System)
 	if err != nil {
 		return aistudio.GenerateRequest{}, err
@@ -222,15 +259,24 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	}
 	parts := make([]aistudio.Part, 0, len(blocks))
 	pendingSignature := ""
+	flushPendingSignature := func() {
+		if pendingSignature == "" {
+			return
+		}
+		parts = append(parts, aistudio.Part{ThoughtSignature: pendingSignature})
+		pendingSignature = ""
+	}
 	for _, rawBlock := range blocks {
 		var block struct {
 			Type      string          `json:"type"`
 			Text      string          `json:"text"`
+			Data      string          `json:"data"`
 			ID        string          `json:"id"`
 			Name      string          `json:"name"`
 			Input     json.RawMessage `json:"input"`
 			ToolUseID string          `json:"tool_use_id"`
 			Content   json.RawMessage `json:"content"`
+			IsError   bool            `json:"is_error"`
 			Signature string          `json:"signature"`
 			Source    *struct {
 				Type      string `json:"type"`
@@ -244,12 +290,19 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		}
 		switch block.Type {
 		case "text":
-			pendingSignature = ""
+			flushPendingSignature()
 			parts = append(parts, aistudio.Part{Text: block.Text})
-		case "thinking", "redacted_thinking":
+		case "thinking":
+			flushPendingSignature()
 			pendingSignature = block.Signature
+		case "redacted_thinking":
+			flushPendingSignature()
+			if block.Data == "" {
+				return nil, fmt.Errorf("redacted_thinking data is required")
+			}
+			pendingSignature = block.Data
 		case "image", "document":
-			pendingSignature = ""
+			flushPendingSignature()
 			if block.Source == nil {
 				return nil, fmt.Errorf("%s source is required", block.Type)
 			}
@@ -264,7 +317,17 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 				if media, ok := aistudio.ExternalMediaForURL(block.Source.URL); ok {
 					parts = append(parts, aistudio.Part{ExternalMedia: media})
 				} else {
-					parts = append(parts, aistudio.Part{File: &aistudio.FileRef{ID: block.Source.URL, MIME: block.Source.MediaType}})
+					mime := block.Source.MediaType
+					if mime == "" && block.Type == "image" {
+						mime = "image/*"
+					}
+					if mime == "" {
+						mime = "application/pdf"
+					}
+					if strings.TrimSpace(block.Source.URL) == "" {
+						return nil, fmt.Errorf("%s source URL is required", block.Type)
+					}
+					parts = append(parts, aistudio.Part{ExternalMedia: &aistudio.ExternalMedia{MIME: mime, URL: block.Source.URL}})
 				}
 			default:
 				return nil, fmt.Errorf("unsupported source type %q", block.Source.Type)
@@ -279,10 +342,22 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 			}})
 			pendingSignature = ""
 		case "tool_result":
-			pendingSignature = ""
-			content, err := normalizeFunctionResultContent(block.Content)
-			if err != nil {
-				return nil, fmt.Errorf("tool_result: %w", err)
+			flushPendingSignature()
+			content := block.Content
+			if block.IsError {
+				if len(content) == 0 {
+					content = json.RawMessage("null")
+				}
+				if !json.Valid(content) {
+					return nil, fmt.Errorf("tool_result: function result must be JSON")
+				}
+				content = json.RawMessage(`{"error":` + strings.TrimSpace(string(content)) + `}`)
+			} else {
+				var err error
+				content, err = normalizeFunctionResultContent(content)
+				if err != nil {
+					return nil, fmt.Errorf("tool_result: %w", err)
+				}
 			}
 			parts = append(parts, aistudio.Part{FunctionResult: &aistudio.FunctionResult{
 				ID: block.ToolUseID, Content: content,
@@ -291,6 +366,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 			return nil, fmt.Errorf("unsupported content block type %q", block.Type)
 		}
 	}
+	flushPendingSignature()
 	return parts, nil
 }
 
@@ -299,17 +375,47 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 	for _, tool := range tools {
 		typeName := strings.ToLower(tool.Type)
 		switch {
-		case strings.HasPrefix(typeName, "web_search"):
+		case typeName == "web_search_20250305":
+			if err := validateAnthropicServerTool(tool, "web_search"); err != nil {
+				return aistudio.Tools{}, err
+			}
 			mapped.Google = appendUnique(mapped.Google, "google_search")
-		case strings.HasPrefix(typeName, "web_fetch"), strings.HasPrefix(typeName, "url_context"):
+		case typeName == "image_search":
+			if err := validateAnthropicServerTool(tool, "image_search"); err != nil {
+				return aistudio.Tools{}, err
+			}
+			mapped.Google = appendUnique(mapped.Google, "image_search")
+		case typeName == "web_fetch_20250910":
+			if err := validateAnthropicServerTool(tool, "web_fetch"); err != nil {
+				return aistudio.Tools{}, err
+			}
 			mapped.Google = appendUnique(mapped.Google, "url_context")
-		case strings.HasPrefix(typeName, "code_execution"):
+		case typeName == "code_execution_20250522", typeName == "code_execution_20250825":
+			if err := validateAnthropicServerTool(tool, "code_execution"); err != nil {
+				return aistudio.Tools{}, err
+			}
 			mapped.Google = appendUnique(mapped.Google, "code_execution")
-		case strings.HasPrefix(typeName, "google_maps"):
+		case typeName == "url_context":
+			if err := validateAnthropicServerTool(tool, "url_context"); err != nil {
+				return aistudio.Tools{}, err
+			}
+			mapped.Google = appendUnique(mapped.Google, "url_context")
+		case typeName == "google_maps":
+			if err := validateAnthropicServerTool(tool, "google_maps"); err != nil {
+				return aistudio.Tools{}, err
+			}
 			mapped.Google = appendUnique(mapped.Google, "google_maps")
 		case typeName == "", typeName == "custom":
 			if tool.Name == "" {
 				return aistudio.Tools{}, fmt.Errorf("tool name is required")
+			}
+			if len(tool.Options) > 0 {
+				fields := make([]string, 0, len(tool.Options))
+				for field := range tool.Options {
+					fields = append(fields, field)
+				}
+				sort.Strings(fields)
+				return aistudio.Tools{}, fmt.Errorf("custom tool %q has unsupported option %q", tool.Name, fields[0])
 			}
 			parameters := tool.InputSchema
 			if len(parameters) == 0 {
@@ -331,6 +437,24 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
+}
+
+func validateAnthropicServerTool(tool anthropicTool, name string) error {
+	if tool.Name != name {
+		return fmt.Errorf("tool type %q requires name %q", tool.Type, name)
+	}
+	if tool.Description != "" || rawJSONConfigured(tool.InputSchema) {
+		return fmt.Errorf("tool type %q does not accept description or input_schema", tool.Type)
+	}
+	if len(tool.Options) == 0 {
+		return nil
+	}
+	fields := make([]string, 0, len(tool.Options))
+	for field := range tool.Options {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fmt.Errorf("tool type %q has unsupported option %q", tool.Type, fields[0])
 }
 
 func anthropicToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
@@ -359,17 +483,21 @@ func anthropicToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
 }
 
 func buildAnthropicResponse(id string, model string, result generationResult) map[string]any {
+	stopReason, stopSequence := anthropicStop(result.finishReason, len(result.toolCalls) > 0, result.stopSequence)
 	response := map[string]any{
 		"id":            id,
 		"type":          "message",
 		"role":          "assistant",
 		"model":         model,
 		"content":       anthropicBlocks(result),
-		"stop_reason":   anthropicStopReason(result.finishReason, len(result.toolCalls) > 0),
-		"stop_sequence": nil,
+		"stop_reason":   stopReason,
+		"stop_sequence": stopSequence,
 	}
 	if result.providerModel != "" {
 		response["provider_model"] = result.providerModel
+	}
+	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+		response["provider_finish_reason"] = providerReason
 	}
 	if result.usage != nil {
 		response["usage"] = anthropicUsage(result.usage)
@@ -397,15 +525,19 @@ func anthropicBlocks(result generationResult) []anthropicContentBlock {
 				thinking := event.Text
 				blocks = append(blocks, anthropicContentBlock{Type: "thinking", Thinking: &thinking, Signature: event.ThoughtSignature})
 			}
+		case aistudio.EventThoughtSignature:
+			if event.ThoughtSignature == "" {
+				continue
+			}
+			blocks = append(blocks, anthropicContentBlock{Type: "redacted_thinking", Data: event.ThoughtSignature})
 		case aistudio.EventToolCall:
 			if event.ToolCall != nil {
 				if event.ToolCall.ThoughtSignature != "" {
 					if len(blocks) > 0 && blocks[len(blocks)-1].Type == "thinking" {
 						blocks[len(blocks)-1].Signature = event.ToolCall.ThoughtSignature
 					} else {
-						thinking := ""
 						blocks = append(blocks, anthropicContentBlock{
-							Type: "thinking", Thinking: &thinking, Signature: event.ToolCall.ThoughtSignature,
+							Type: "redacted_thinking", Data: event.ToolCall.ThoughtSignature,
 						})
 					}
 				}
@@ -439,23 +571,25 @@ func anthropicBlocks(result generationResult) []anthropicContentBlock {
 	return blocks
 }
 
-func anthropicStopReason(reason string, hasTools bool) string {
-	if hasTools {
-		return "tool_use"
-	}
-	switch strings.ToLower(strings.TrimSpace(reason)) {
+func anthropicStop(reason string, hasTools bool, stopSequence string) (string, *string) {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
 	case "max_tokens", "max_output_tokens", "length":
-		return "max_tokens"
+		return "max_tokens", nil
 	case "stop_sequence":
-		return "stop_sequence"
+		if stopSequence != "" {
+			return "stop_sequence", &stopSequence
+		}
+		return "stop_sequence", nil
 	case "pause_turn":
-		return "pause_turn"
-	case "refusal":
-		return "refusal"
-	case "safety", "content_filter", "blocked", "recitation", "blocklist", "prohibited_content", "spii", "image_safety", "image_prohibited_content", "no_image", "image_recitation":
-		return "refusal"
+		return "pause_turn", nil
+	case "", "stop":
+		if hasTools {
+			return "tool_use", nil
+		}
+		return "end_turn", nil
 	default:
-		return "end_turn"
+		return "refusal", nil
 	}
 }
 
@@ -491,15 +625,10 @@ type anthropicStreamWriter struct {
 	thinkingSignature string
 }
 
-func (s *server) streamAnthropic(w http.ResponseWriter, r *http.Request, model string, id string, inputTokens int64, events <-chan aistudio.Event) {
-	streamHeaders(w)
-	writer := &anthropicStreamWriter{w: w, id: id, model: model, inputTokens: inputTokens}
-	if err := writer.start(); err != nil {
-		return
-	}
-	result, err := consumeStreamEvents(r.Context(), events, writer.live, func() error { return writeSSEHeartbeat(w) })
+func (s *server) streamAnthropic(r *http.Request, writer *anthropicStreamWriter, events <-chan aistudio.Event) {
+	result, err := consumeStreamEvents(r.Context(), events, writer.live, func() error { return writeSSEHeartbeat(writer.w) })
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			_ = writer.error(err)
 		}
 		return
@@ -543,16 +672,22 @@ func (writer *anthropicStreamWriter) live(event aistudio.Event) error {
 			"type": "content_block_delta", "index": writer.blockIndex,
 			"delta": map[string]any{"type": "thinking_delta", "thinking": event.Text},
 		})
+	case aistudio.EventThoughtSignature:
+		if event.ThoughtSignature == "" {
+			return nil
+		}
+		return writer.redactedThinking(event.ThoughtSignature)
 	case aistudio.EventToolCall:
 		if event.ToolCall == nil {
 			return nil
 		}
 		call := event.ToolCall
 		if call.ThoughtSignature != "" {
-			if err := writer.ensureBlock("thinking"); err != nil {
+			if writer.currentBlock == "thinking" {
+				writer.thinkingSignature = call.ThoughtSignature
+			} else if err := writer.redactedThinking(call.ThoughtSignature); err != nil {
 				return err
 			}
-			writer.thinkingSignature = call.ThoughtSignature
 		}
 		if err := writer.closeBlock(); err != nil {
 			return err
@@ -623,6 +758,25 @@ func (writer *anthropicStreamWriter) ensureBlock(blockType string) error {
 	return nil
 }
 
+func (writer *anthropicStreamWriter) redactedThinking(data string) error {
+	if err := writer.closeBlock(); err != nil {
+		return err
+	}
+	if err := writer.emit("content_block_start", map[string]any{
+		"type": "content_block_start", "index": writer.blockIndex,
+		"content_block": map[string]any{"type": "redacted_thinking", "data": data},
+	}); err != nil {
+		return err
+	}
+	if err := writer.emit("content_block_stop", map[string]any{
+		"type": "content_block_stop", "index": writer.blockIndex,
+	}); err != nil {
+		return err
+	}
+	writer.blockIndex++
+	return nil
+}
+
 func (writer *anthropicStreamWriter) closeBlock() error {
 	if writer.currentBlock == "" {
 		return nil
@@ -670,11 +824,16 @@ func (writer *anthropicStreamWriter) finish(result generationResult) error {
 		usage["input_tokens"] = inputTokens(result.usage)
 		usage["output_tokens"] = outputTokens(result.usage)
 	}
+	stopReason, stopSequence := anthropicStop(result.finishReason, len(result.toolCalls) > 0, result.stopSequence)
+	delta := map[string]any{
+		"stop_reason": stopReason, "stop_sequence": stopSequence,
+	}
+	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+		delta["provider_finish_reason"] = providerReason
+	}
 	if err := writer.emit("message_delta", map[string]any{
-		"type": "message_delta",
-		"delta": map[string]any{
-			"stop_reason": anthropicStopReason(result.finishReason, len(result.toolCalls) > 0), "stop_sequence": nil,
-		},
+		"type":  "message_delta",
+		"delta": delta,
 		"usage": usage,
 	}); err != nil {
 		return err

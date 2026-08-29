@@ -295,7 +295,6 @@ func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handle
 		writer := &accessLogResponseWriter{ResponseWriter: w, metadata: metadata}
 		request := r.WithContext(context.WithValue(r.Context(), accessLogContextKey{}, metadata))
 		next.ServeHTTP(writer, request)
-		metadata.start(true)
 		status := writer.status
 		if status == 0 {
 			status = http.StatusOK
@@ -331,7 +330,7 @@ func setAccessLogResponseError(w http.ResponseWriter, message string) {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Goog-API-Key, Anthropic-Version")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Goog-API-Key, Anthropic-Version, Anthropic-Beta")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

@@ -2,10 +2,8 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -68,12 +66,14 @@ func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
@@ -166,12 +166,14 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
 		return
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return

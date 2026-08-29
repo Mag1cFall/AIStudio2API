@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+	"time"
 )
 
 func encodeRequestedTools(tools Tools) ([]any, bool, error) {
@@ -14,10 +16,10 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 	default:
 		return nil, false, fmt.Errorf("tool choice 只支持 auto 或 none")
 	}
-	if len(tools.Functions) == 0 && len(tools.Google) == 0 {
+	if len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil {
 		return nil, false, nil
 	}
-	wire := make([]any, 0, len(tools.Google)+1)
+	wire := make([]any, 0, len(tools.Google)+2)
 	if len(tools.Functions) > 0 {
 		declarations := make([]any, 0, len(tools.Functions))
 		for index, declaration := range tools.Functions {
@@ -29,11 +31,18 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 		}
 		wire = append(wire, []any{nil, declarations})
 	}
-	searchEnabled := false
-	imageSearchEnabled := false
+	search := GoogleSearchOptions{}
+	searchRequested := tools.GoogleSearch != nil
+	if tools.GoogleSearch != nil {
+		search = *tools.GoogleSearch
+	}
 	for _, name := range tools.Google {
-		searchEnabled = searchEnabled || name == "google_search"
-		imageSearchEnabled = imageSearchEnabled || name == "image_search"
+		search.WebSearch = search.WebSearch || name == "google_search"
+		search.ImageSearch = search.ImageSearch || name == "image_search"
+		searchRequested = searchRequested || name == "google_search" || name == "image_search"
+	}
+	if searchRequested && !search.WebSearch && !search.ImageSearch {
+		search.WebSearch = true
 	}
 	searchEncoded := false
 	for _, name := range tools.Google {
@@ -42,7 +51,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 			wire = append(wire, []any{[]any{}})
 		case "google_search", "image_search":
 			if !searchEncoded {
-				wire = append(wire, encodeSearchTool(searchEnabled, imageSearchEnabled))
+				wire = append(wire, encodeSearchTool(search))
 				searchEncoded = true
 			}
 		case "url_context":
@@ -57,22 +66,44 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 			return nil, false, fmt.Errorf("未知 Google tool %q", name)
 		}
 	}
+	if searchRequested && !searchEncoded {
+		wire = append(wire, encodeSearchTool(search))
+	}
 	return wire, true, nil
 }
 
-func encodeSearchTool(searchEnabled bool, imageSearchEnabled bool) []any {
+func encodeSearchTool(options GoogleSearchOptions) []any {
 	length := 1
-	if imageSearchEnabled {
+	if options.ImageSearch {
 		length = 2
 	}
 	searchTypes := make([]any, length)
-	if searchEnabled {
+	if options.WebSearch {
 		searchTypes[0] = []any{}
 	}
-	if imageSearchEnabled {
+	if options.ImageSearch {
 		searchTypes[1] = []any{}
 	}
-	return []any{nil, nil, nil, []any{nil, searchTypes}}
+	searchConfig := []any{nil, searchTypes}
+	if options.TimeRange != nil {
+		searchConfig[0] = encodeGoogleSearchTimeRange(*options.TimeRange)
+	}
+	return []any{nil, nil, nil, searchConfig}
+}
+
+func encodeGoogleSearchTimeRange(value GoogleSearchTimeRange) []any {
+	wire := make([]any, 2)
+	if !value.StartTime.IsZero() {
+		wire[0] = encodeGoogleTimestamp(value.StartTime)
+	}
+	if !value.EndTime.IsZero() {
+		wire[1] = encodeGoogleTimestamp(value.EndTime)
+	}
+	return wire
+}
+
+func encodeGoogleTimestamp(value time.Time) []any {
+	return []any{strconv.FormatInt(value.Unix(), 10)}
 }
 
 func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
@@ -122,16 +153,19 @@ func decodeFunctionCall(raw json.RawMessage, path string, evidence json.RawMessa
 	if err != nil {
 		return FunctionCall{}, withMethod(err, "GenerateContent")
 	}
-	if len(values) < 2 {
-		return FunctionCall{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "function call 字段不足", Raw: raw}
+	if len(values) == 0 {
+		return FunctionCall{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "function call 缺少名称", Raw: raw}
 	}
 	name, err := rawString(values[0], path+"[0]", raw)
 	if err != nil {
 		return FunctionCall{}, withMethod(err, "GenerateContent")
 	}
-	arguments, err := decodeWireStruct(values[1], path+"[1]", evidence)
-	if err != nil {
-		return FunctionCall{}, err
+	arguments := json.RawMessage(`{}`)
+	if argumentsRaw := rawAt(values, 1); !isJSONNull(argumentsRaw) {
+		arguments, err = decodeWireStruct(argumentsRaw, path+"[1]", evidence)
+		if err != nil {
+			return FunctionCall{}, err
+		}
 	}
 	id := ""
 	if idRaw := rawAt(values, 2); !isJSONNull(idRaw) {

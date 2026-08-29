@@ -128,7 +128,7 @@ export const api = {
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
   clearLogs: () => requestCommand('/api/logs', { method: 'DELETE' }),
   saveConfig: (config: ServiceConfig) =>
-    requestCommand('/api/config', {
+    requestJSON<ServiceConfig>('/api/config', {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
@@ -173,24 +173,35 @@ export interface PlaygroundChunk {
 
 function toolPayload(input: PlaygroundInput): unknown[] | undefined {
   if (input.tool === '') return undefined
+
   if (input.protocol === 'gemini') {
     const names: Record<Exclude<PlaygroundInput['tool'], ''>, string> = {
       web_search: 'googleSearch',
+      image_search: 'imageSearch',
       code_interpreter: 'codeExecution',
       url_context: 'urlContext',
       google_maps: 'googleMaps',
     }
     return [{ [names[input.tool]]: {} }]
   }
+
   if (input.protocol === 'anthropic') {
-    const names: Record<Exclude<PlaygroundInput['tool'], ''>, string> = {
-      web_search: 'web_search_20250305',
-      code_interpreter: 'code_execution_20250825',
-      url_context: 'web_fetch_20250910',
-      google_maps: 'google_maps_20250825',
+    const definitions: Record<
+      Exclude<PlaygroundInput['tool'], ''>,
+      { type: string; name: string }
+    > = {
+      web_search: { type: 'web_search_20250305', name: 'web_search' },
+      image_search: { type: 'image_search', name: 'image_search' },
+      code_interpreter: {
+        type: 'code_execution_20250825',
+        name: 'code_execution',
+      },
+      url_context: { type: 'web_fetch_20250910', name: 'web_fetch' },
+      google_maps: { type: 'google_maps', name: 'google_maps' },
     }
-    return [{ type: names[input.tool], name: input.tool }]
+    return [definitions[input.tool]]
   }
+
   return [{ type: input.tool }]
 }
 

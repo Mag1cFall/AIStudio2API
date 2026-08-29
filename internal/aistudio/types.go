@@ -3,6 +3,7 @@ package aistudio
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Role 表示规范消息角色
@@ -61,6 +62,7 @@ type ExecutableCode struct {
 type CodeExecutionResult struct {
 	Outcome string `json:"outcome"`
 	Output  string `json:"output,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // SearchEntryPoint 表示 Google Search 返回的搜索入口
@@ -135,11 +137,25 @@ type ToolConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
 
+// GoogleSearchTimeRange 表示 Google Search 的检索时间范围
+type GoogleSearchTimeRange struct {
+	StartTime time.Time `json:"start_time,omitzero"`
+	EndTime   time.Time `json:"end_time,omitzero"`
+}
+
+// GoogleSearchOptions 表示 Google Search 的检索类型与时间范围
+type GoogleSearchOptions struct {
+	WebSearch   bool                   `json:"web_search,omitempty"`
+	ImageSearch bool                   `json:"image_search,omitempty"`
+	TimeRange   *GoogleSearchTimeRange `json:"time_range,omitempty"`
+}
+
 // Tools 表示一次请求启用的工具
 type Tools struct {
-	Functions  []FunctionDeclaration `json:"functions,omitempty"`
-	Google     []string              `json:"google,omitempty"`
-	ToolConfig ToolConfig            `json:"tool_config,omitempty"`
+	Functions    []FunctionDeclaration `json:"functions,omitempty"`
+	Google       []string              `json:"google,omitempty"`
+	GoogleSearch *GoogleSearchOptions  `json:"google_search,omitempty"`
+	ToolConfig   ToolConfig            `json:"tool_config,omitempty"`
 }
 
 // ResponseModality 表示模型输出模态
@@ -172,21 +188,31 @@ type SpeechConfig struct {
 	Speakers  []SpeakerVoiceConfig `json:"speakers,omitempty"`
 }
 
+// TranscriptionConfig 表示音频转录参数
+type TranscriptionConfig struct {
+	WordTimestamps     bool     `json:"word_timestamps,omitempty"`
+	SpeakerLabels      bool     `json:"speaker_labels,omitempty"`
+	CustomVocabulary   []string `json:"custom_vocabulary,omitempty"`
+	LanguageCodes      []string `json:"language_codes,omitempty"`
+	SmartTranscription bool     `json:"smart_transcription,omitempty"`
+}
+
 // GenerationConfig 表示已验证的生成参数
 type GenerationConfig struct {
-	Temperature        *float64           `json:"temperature,omitempty"`
-	TopP               *float64           `json:"top_p,omitempty"`
-	TopK               *int               `json:"top_k,omitempty"`
-	MaxOutputTokens    *int64             `json:"max_output_tokens,omitempty"`
-	StopSequences      []string           `json:"stop_sequences,omitempty"`
-	ResponseMIMEType   string             `json:"response_mime_type,omitempty"`
-	ResponseSchema     json.RawMessage    `json:"response_schema,omitempty"`
-	ResponseModalities []ResponseModality `json:"response_modalities,omitempty"`
-	ImageConfig        *ImageConfig       `json:"image_config,omitempty"`
-	SpeechConfig       *SpeechConfig      `json:"speech_config,omitempty"`
-	ReasoningEffort    string             `json:"reasoning_effort,omitempty"`
-	ThinkingBudget     *int64             `json:"thinking_budget,omitempty"`
-	Seed               *int64             `json:"seed,omitempty"`
+	Temperature         *float64             `json:"temperature,omitempty"`
+	TopP                *float64             `json:"top_p,omitempty"`
+	TopK                *int                 `json:"top_k,omitempty"`
+	MaxOutputTokens     *int64               `json:"max_output_tokens,omitempty"`
+	StopSequences       []string             `json:"stop_sequences,omitempty"`
+	ResponseMIMEType    string               `json:"response_mime_type,omitempty"`
+	ResponseSchema      json.RawMessage      `json:"response_schema,omitempty"`
+	ResponseModalities  []ResponseModality   `json:"response_modalities,omitempty"`
+	ImageConfig         *ImageConfig         `json:"image_config,omitempty"`
+	SpeechConfig        *SpeechConfig        `json:"speech_config,omitempty"`
+	TranscriptionConfig *TranscriptionConfig `json:"transcription_config,omitempty"`
+	ReasoningEffort     string               `json:"reasoning_effort,omitempty"`
+	ThinkingBudget      *int64               `json:"thinking_budget,omitempty"`
+	Seed                *int64               `json:"seed,omitempty"`
 }
 
 // GenerateRequest 表示供应商无关的生成请求
@@ -257,6 +283,25 @@ type Media struct {
 	Duration int64  `json:"duration_ms,omitempty"`
 }
 
+// TranscriptDuration 表示转录时间值
+type TranscriptDuration struct {
+	Seconds int64 `json:"seconds"`
+	Nanos   int64 `json:"nanos,omitempty"`
+}
+
+// TranscriptTimestamp 表示转录文本的时间范围
+type TranscriptTimestamp struct {
+	Start TranscriptDuration `json:"start"`
+	End   TranscriptDuration `json:"end"`
+}
+
+// TranscriptMetadata 表示转录正文附带的说话人和时间信息
+type TranscriptMetadata struct {
+	Text       string                `json:"text"`
+	Speaker    string                `json:"speaker,omitempty"`
+	Timestamps []TranscriptTimestamp `json:"timestamps,omitempty"`
+}
+
 // EventKind 表示规范流事件类型
 type EventKind string
 
@@ -297,8 +342,10 @@ type Event struct {
 	Grounding           *GroundingMetadata   `json:"grounding,omitempty"`
 	Citation            *Citation            `json:"citation,omitempty"`
 	Media               *Media               `json:"media,omitempty"`
+	Transcript          *TranscriptMetadata  `json:"transcript,omitempty"`
 	Usage               *Usage               `json:"usage,omitempty"`
 	FinishReason        string               `json:"finish_reason,omitempty"`
+	StopSequence        string               `json:"stop_sequence,omitempty"`
 	ProviderModel       string               `json:"provider_model,omitempty"`
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`
 	Err                 error                `json:"-"`

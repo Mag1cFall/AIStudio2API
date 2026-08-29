@@ -250,6 +250,7 @@ onMounted(async () => {
   await refreshAll()
   eventConnection = openAdminEvents(handleAdminEvent, () => {
     logs.value = []
+    requests.value = []
   })
 })
 

@@ -33,6 +33,7 @@ const modes: { id: PlaygroundMode; label?: TranslationKey }[] = [
 ]
 const tools: { id: Exclude<PlaygroundTool, ''>; label: string; capability: string }[] = [
   { id: 'web_search', label: 'Google Search', capability: 'google_search' },
+  { id: 'image_search', label: 'Image Search', capability: 'image_search' },
   { id: 'code_interpreter', label: 'Code Execution', capability: 'code_execution' },
   { id: 'url_context', label: 'URL Context', capability: 'browse' },
   { id: 'google_maps', label: 'Google Maps', capability: 'google_maps' },

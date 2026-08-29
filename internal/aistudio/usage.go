@@ -90,6 +90,30 @@ func localCompleteUsage(request GenerateRequest, output generatedOutputParts) *U
 	}
 }
 
+// countedCompleteUsage 使用权威输入总数补全本地停止用量
+func countedCompleteUsage(request GenerateRequest, output generatedOutputParts, count TokenCount) *Usage {
+	toolTokens := localToolTokens(request.Tools)
+	if toolTokens > count.InputTokens {
+		toolTokens = count.InputTokens
+	}
+	inputTokens := count.InputTokens - toolTokens
+	reasoningTokens := localPartsTokens(output.reasoning)
+	outputTokens := localPartsTokens(output.visible)
+	return &Usage{
+		InputTokens: inputTokens, ToolTokens: toolTokens, ReasoningTokens: reasoningTokens,
+		OutputTokens: outputTokens, TotalTokens: count.InputTokens + reasoningTokens + outputTokens,
+	}
+}
+
+// EstimatedInputTokens 返回文本、工具和引用元数据的本地输入 Token 估算
+func EstimatedInputTokens(request GenerateRequest) int64 {
+	inputTokens := localContentsTokens(request.Contents)
+	if request.System != "" {
+		inputTokens += localTextTokens(request.System) + 1
+	}
+	return inputTokens + localToolTokens(request.Tools)
+}
+
 func localContentsTokens(contents []Content) int64 {
 	var total int64
 	for _, content := range contents {
@@ -129,7 +153,8 @@ func localPartTokens(part Part) int64 {
 }
 
 func localToolTokens(tools Tools) int64 {
-	if len(tools.Functions) == 0 && len(tools.Google) == 0 {
+	if tools.ToolConfig.Mode == "none" ||
+		(len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil) {
 		return 0
 	}
 	encoded, _ := json.Marshal(tools)

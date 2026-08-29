@@ -1,6 +1,8 @@
-package main
+package camoufoxnative
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,8 +10,11 @@ import (
 	"strings"
 )
 
-// findCamoufoxExecutable 定位源码环境或 Release 自带的 Camoufox
-func findCamoufoxExecutable() (string, error) {
+// FindExecutable 定位源码环境或 Release 自带的 Camoufox
+func FindExecutable(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if configured := strings.TrimSpace(os.Getenv("CAMOUFOX_PATH")); configured != "" {
 		return validateCamoufoxExecutable(configured)
 	}
@@ -27,12 +32,15 @@ func findCamoufoxExecutable() (string, error) {
 		}
 	}
 	for _, candidate := range candidates {
-		path, err := validateCamoufoxExecutable(candidate)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		path, err := validateManagedCamoufoxExecutable(candidate)
 		if err == nil {
 			return path, nil
 		}
 	}
-	path, err := installCamoufox(name)
+	path, err := installCamoufox(ctx, name)
 	if err != nil {
 		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
 	}
@@ -65,4 +73,36 @@ func validateCamoufoxExecutable(path string) (string, error) {
 		return "", fmt.Errorf("Camoufox 路径是目录")
 	}
 	return absolute, nil
+}
+
+// validateManagedCamoufoxExecutable 校验自动管理的 Camoufox 发行版本
+func validateManagedCamoufoxExecutable(path string) (string, error) {
+	absolute, err := validateCamoufoxExecutable(path)
+	if err != nil {
+		return "", err
+	}
+	directory := filepath.Dir(absolute)
+	for range 6 {
+		data, readErr := os.ReadFile(filepath.Join(directory, "version.json"))
+		if readErr == nil {
+			var metadata struct {
+				Version string `json:"version"`
+				Release string `json:"release"`
+			}
+			if err := json.Unmarshal(data, &metadata); err != nil {
+				return "", fmt.Errorf("解析 Camoufox 版本: %w", err)
+			}
+			version := strings.TrimSpace(metadata.Version) + "-" + strings.TrimSpace(metadata.Release)
+			if version != camoufoxRelease {
+				return "", fmt.Errorf("Camoufox 版本 %s 与要求 %s 不一致", version, camoufoxRelease)
+			}
+			return absolute, nil
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			break
+		}
+		directory = parent
+	}
+	return "", fmt.Errorf("Camoufox 缺少 version.json")
 }

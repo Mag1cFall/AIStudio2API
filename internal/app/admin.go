@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -30,7 +30,6 @@ type runtimeAdmin struct {
 	workers    *accountWorkerManager
 	headers    *accountHeaderProvider
 	configPath string
-	configMu   sync.RWMutex
 	config     config.Config
 }
 
@@ -39,9 +38,27 @@ type requestRegistry struct {
 	mu          sync.Mutex
 	active      map[string]trackedRequest
 	logs        []api.AdminLog
-	subscribers map[chan api.AdminEvent]struct{}
+	subscribers map[*eventSubscriber]struct{}
 	console     chan api.AdminLog
 }
+
+type eventSubscriber struct {
+	ctx             context.Context
+	mu              sync.Mutex
+	events          chan api.AdminEvent
+	wake            chan struct{}
+	pending         []api.AdminEvent
+	pendingLogs     int
+	pendingRequests int
+}
+
+const (
+	adminLogRetain             = 2000
+	adminLogCompactAt          = 2200
+	adminRequestRetain         = 512
+	adminRequestCompactAt      = 640
+	adminRequestRefreshLatency = 50 * time.Millisecond
+)
 
 type trackedRequest struct {
 	request api.AdminRequest
@@ -90,7 +107,7 @@ func newRequestRegistry(ctx context.Context) *requestRegistry {
 	registry := &requestRegistry{
 		active:      make(map[string]trackedRequest),
 		logs:        make([]api.AdminLog, 0, 128),
-		subscribers: make(map[chan api.AdminEvent]struct{}),
+		subscribers: make(map[*eventSubscriber]struct{}),
 		console:     make(chan api.AdminLog, 256),
 	}
 	go registry.writeConsole(ctx)
@@ -133,7 +150,7 @@ func (admin *runtimeAdmin) Accounts(context.Context) ([]api.AdminAccount, error)
 	return accounts, nil
 }
 
-func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountInput) (api.AdminAccount, error) {
+func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountInput) (created api.AdminAccount, resultErr error) {
 	accountConfig := aistudio.DefaultAccountConfig(input.Label)
 	accountConfig.Enabled = input.Enabled
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
@@ -168,10 +185,15 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
 		return api.AdminAccount{}, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	account, err := admin.store.Create(accountConfig, result.StorageState)
+	account, publishLease, err := admin.store.Create(accountConfig, result.StorageState)
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
+	defer func() {
+		if publishLease != nil {
+			resultErr = errors.Join(resultErr, publishLease.Release())
+		}
+	}()
 	if err := camoufoxnative.PersistAccountFingerprint(directory, account.Directory); err != nil {
 		return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
 	}
@@ -181,16 +203,22 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 	if err := admin.workers.Add(account); err != nil {
 		return api.AdminAccount{}, errors.Join(err, admin.headers.Remove(account.ID), admin.store.Delete(account))
 	}
-	if err := admin.pool.Add(account); err != nil {
+	if err := admin.service.changeModels(func() error {
+		return admin.pool.Add(account)
+	}); err != nil {
 		return api.AdminAccount{}, errors.Join(
 			err, admin.workers.Remove(account.ID), admin.headers.Remove(account.ID), admin.store.Delete(account),
 		)
 	}
+	if err := publishLease.Release(); err != nil {
+		return api.AdminAccount{}, err
+	}
+	publishLease = nil
+	admin.syncAccountModelCatalog(ctx, account)
 	admin.requests.log("auth", "INFO", fmt.Sprintf(
 		"账户添加完成 | 账户=%s | 耗时=%s",
 		account.Config.Label, time.Since(startedAt).Round(time.Millisecond),
 	))
-	admin.syncModelCache(ctx)
 	return admin.account(account.ID)
 }
 
@@ -211,42 +239,55 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 		return api.AdminAccount{}, accountOperationError(err)
 	}
 	account := lease.Account()
-	if err := lease.SaveConfig(accountConfig); err != nil {
+	headerUpdate, err := admin.headers.prepareUpdate(account, accountConfig)
+	if err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if err := admin.workers.Update(account); err != nil {
+	workerUpdate, err := admin.workers.prepareUpdate(account, accountConfig)
+	if err != nil {
+		headerUpdate.Discard()
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if err := admin.headers.Update(account); err != nil {
+	if err := admin.service.changeModels(func() error {
+		return lease.SaveConfig(accountConfig)
+	}); err != nil {
+		workerUpdate.Discard()
+		headerUpdate.Discard()
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
+	workerUpdate.Commit()
+	headerUpdate.Commit()
 	if err := lease.Release(); err != nil {
 		return api.AdminAccount{}, err
 	}
+	admin.syncModelCache()
 	admin.requests.log("auth", "INFO", "账户配置已更新 | 账户="+accountConfig.Label)
-	admin.syncModelCache(ctx)
 	return admin.account(account.ID)
 }
 
-func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
+func (admin *runtimeAdmin) DeleteAccount(_ context.Context, accountID string) error {
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
 	}
-	_, err = admin.pool.Remove(accountID, func(account *aistudio.Account) error {
-		if err := admin.workers.Reset(account.ID); err != nil {
-			return err
-		}
-		return admin.store.Delete(account)
+	defer admin.syncModelCache()
+	err = admin.service.changeModels(func() error {
+		_, removeErr := admin.pool.Remove(accountID, func(account *aistudio.Account) error {
+			if workerErr := admin.workers.Reset(account.ID); workerErr != nil {
+				return workerErr
+			}
+			return admin.store.Delete(account)
+		})
+		return removeErr
 	})
 	if err != nil {
 		return accountOperationError(err)
 	}
+	admin.service.removeAccountModelRetry(accountID)
 	if err := errors.Join(admin.workers.Remove(accountID), admin.headers.Remove(accountID)); err != nil {
 		return err
 	}
 	admin.requests.log("auth", "INFO", "账户已删除 | 账户="+account.Label)
-	admin.syncModelCache(ctx)
 	return nil
 }
 
@@ -287,20 +328,23 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string) (
 	if err := lease.SaveStorageState(result.StorageState); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if err := admin.pool.MarkReady(account.ID); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := admin.pool.ResetModelAccess(account.ID); err != nil {
+	if err := admin.service.changeModels(func() error {
+		return errors.Join(
+			admin.pool.MarkReady(account.ID),
+			admin.pool.ResetModelAccess(account.ID),
+			admin.pool.SetCatalog(account.ID, account.BenefitTier, nil),
+		)
+	}); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
 	if err := lease.Release(); err != nil {
 		return api.AdminAccount{}, err
 	}
+	admin.syncAccountModelCatalog(ctx, account)
 	admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
 		"账户登录完成 | 耗时=%s",
 		time.Since(startedAt).Round(time.Millisecond),
 	))
-	admin.syncModelCache(ctx)
 	return admin.account(account.ID)
 }
 
@@ -320,29 +364,39 @@ func (admin *runtimeAdmin) VerifyAccount(ctx context.Context, accountID string) 
 		))
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if verification.Authenticated {
-		err = errors.Join(admin.pool.MarkReady(account.ID), admin.pool.ResetModelAccess(account.ID))
-	} else {
+	err = admin.service.changeModels(func() error {
+		if verification.Authenticated {
+			return errors.Join(
+				admin.pool.MarkReady(account.ID),
+				admin.pool.ResetModelAccess(account.ID),
+				admin.pool.SetCatalog(account.ID, account.BenefitTier, nil),
+			)
+		}
 		reason := strings.TrimSpace(verification.Reason)
 		if reason == "" {
 			reason = "AI Studio 登录已失效"
 		}
-		err = admin.pool.MarkAuthRequired(account.ID, reason)
-	}
+		return admin.pool.MarkAuthRequired(account.ID, reason)
+	})
 	if err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
 	if err := lease.Release(); err != nil {
 		return api.AdminAccount{}, err
 	}
+	if verification.Authenticated {
+		admin.syncAccountModelCatalog(ctx, account)
+	} else {
+		admin.service.publishModelAccess()
+	}
 	admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
 		"账户验证完成 | 已认证=%t | 耗时=%s",
 		verification.Authenticated, time.Since(startedAt).Round(time.Millisecond),
 	))
-	admin.syncModelCache(ctx)
 	return admin.account(account.ID)
 }
 
+// StartService 使用管理器提供的启动生命周期启动生成服务
 func (admin *runtimeAdmin) StartService(ctx context.Context) (api.AdminStatus, error) {
 	startedAt := time.Now()
 	models, started, err := admin.service.Start(ctx, func() {
@@ -462,7 +516,7 @@ func (admin *runtimeAdmin) RecordAccessStart(entry api.AccessLog) {
 func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
 	source := strings.TrimSpace(entry.Account)
 	if source == "" {
-		source = "service"
+		source = "request"
 	}
 	model := strings.TrimSpace(entry.Model)
 	if model == "" {
@@ -504,12 +558,27 @@ func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
 	admin.requests.log(source, level, message)
 }
 
-func (admin *runtimeAdmin) syncModelCache(ctx context.Context) {
+// syncModelCache 在账户写入后刷新权威快照
+func (admin *runtimeAdmin) syncModelCache() {
+	ctx := admin.lifecycle
 	_ = admin.service.SyncModels(ctx)
 	status, err := admin.Status(ctx)
 	if err == nil {
 		admin.publishRuntimeSnapshot(ctx, status)
 	}
+}
+
+func (admin *runtimeAdmin) syncAccountModelCatalog(ctx context.Context, account *aistudio.Account) {
+	models, err := admin.service.syncAccountModels(ctx, account.ID)
+	if err != nil {
+		admin.requests.log(account.Config.Label, "WARN", fmt.Sprintf(
+			"账户模型目录等待重试 | 错误=%s", strings.TrimSpace(err.Error()),
+		))
+		admin.service.publishModelAccess()
+		return
+	}
+	admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf("账户模型目录同步完成 | 模型=%d", len(models)))
+	admin.service.publishModelAccess()
 }
 
 // publishRuntimeSnapshot 推送管理页权威运行状态
@@ -540,10 +609,7 @@ func (admin *runtimeAdmin) effectiveProxy(accountProxy string) string {
 	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
 		return proxy
 	}
-	admin.configMu.RLock()
-	proxy := admin.config.Proxy
-	admin.configMu.RUnlock()
-	return strings.TrimSpace(proxy)
+	return strings.TrimSpace(admin.config.Proxy)
 }
 
 func (admin *runtimeAdmin) loginRequest(account *aistudio.Account, directory string) aistudio.IsolatedLoginRequest {
@@ -585,9 +651,10 @@ func accountOperationError(err error) error {
 }
 
 func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, error) {
-	admin.configMu.RLock()
-	cfg := admin.config
-	admin.configMu.RUnlock()
+	cfg, err := config.Load(admin.configPath)
+	if err != nil {
+		return api.RuntimeConfig{}, err
+	}
 	return runtimeConfigDTO(cfg), nil
 }
 
@@ -603,17 +670,15 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	cfg := config.Config{
 		AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, ProxyAPIKey: value.APIKey,
 		Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
-		WarmWorkerLimit: value.WarmWorkerLimit, WarmStartupConcurrency: value.WarmStartupConcurrency,
-		PerAccountConcurrency: value.PerAccountConcurrency,
-		TemporaryChat:         value.TemporaryChat,
+		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
+		WarmStartupConcurrency: value.WarmStartupConcurrency,
+		PerAccountConcurrency:  value.PerAccountConcurrency,
+		TemporaryChat:          value.TemporaryChat,
 	}
 	if err := cfg.Save(admin.configPath); err != nil {
 		return api.RuntimeConfig{}, err
 	}
-	admin.configMu.Lock()
-	admin.config = cfg
-	admin.configMu.Unlock()
-	admin.requests.log("service", "INFO", "服务配置已保存 | 重启后生效")
+	admin.requests.log("service", "INFO", "服务配置已保存")
 	return runtimeConfigDTO(cfg), nil
 }
 
@@ -667,58 +732,105 @@ func (admin *runtimeAdmin) CancelRequest(_ context.Context, id string) error {
 	return admin.requests.cancel(id)
 }
 
+// adminEventSource 提供管理事件流的当前快照
+type adminEventSource interface {
+	Models(context.Context) ([]aistudio.Model, error)
+	Status(context.Context) (api.AdminStatus, error)
+	Accounts(context.Context) ([]api.AdminAccount, error)
+	Cooldowns(context.Context) ([]api.AdminCooldown, error)
+}
+
+// Models 返回当前运行时模型快照
+func (admin *runtimeAdmin) Models(ctx context.Context) ([]aistudio.Model, error) {
+	return admin.service.Models(ctx)
+}
+
 func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, error) {
+	return openAdminEvents(ctx, admin.lifecycle, admin.requests, admin)
+}
+
+// openAdminEvents 创建绑定进程生命周期的管理事件流
+func openAdminEvents(
+	ctx context.Context,
+	lifecycle context.Context,
+	requests *requestRegistry,
+	source adminEventSource,
+) (<-chan api.AdminEvent, error) {
 	eventCtx, cancel := context.WithCancel(ctx)
-	stopLifecycle := context.AfterFunc(admin.lifecycle, cancel)
-	live := admin.requests.subscribe(eventCtx)
-	models, err := admin.service.Models(eventCtx)
+	stopLifecycle := context.AfterFunc(lifecycle, cancel)
+	subscriber := requests.subscribe(eventCtx)
+	models, err := source.Models(eventCtx)
 	if err != nil {
 		stopLifecycle()
 		cancel()
 		return nil, err
 	}
-	status, err := admin.Status(eventCtx)
+	status, err := source.Status(eventCtx)
 	if err != nil {
 		stopLifecycle()
 		cancel()
 		return nil, err
 	}
-	accounts, err := admin.Accounts(eventCtx)
+	accounts, err := source.Accounts(eventCtx)
 	if err != nil {
 		stopLifecycle()
 		cancel()
 		return nil, err
 	}
-	cooldowns, err := admin.Cooldowns(eventCtx)
+	cooldowns, err := source.Cooldowns(eventCtx)
 	if err != nil {
 		stopLifecycle()
 		cancel()
 		return nil, err
 	}
-	logs := admin.requests.logsSnapshot()
+	live := requests.activateSubscriber(
+		subscriber,
+		[]api.AdminEvent{
+			{Type: "status", Data: status},
+			{Type: "models", Data: map[string]any{"models": models}},
+			{Type: "accounts", Data: map[string]any{"accounts": accounts}},
+		},
+		[]api.AdminEvent{{Type: "cooldowns", Data: cooldowns}},
+	)
 	events := make(chan api.AdminEvent, 16)
 	go func() {
 		defer stopLifecycle()
 		defer cancel()
 		defer close(events)
-		initial := []api.AdminEvent{
-			{Type: "status", Data: status},
-			{Type: "models", Data: map[string]any{"models": models}},
-			{Type: "accounts", Data: map[string]any{"accounts": accounts}},
-		}
-		for _, entry := range logs {
-			initial = append(initial, api.AdminEvent{Type: "log", Data: entry})
-		}
-		initial = append(initial, api.AdminEvent{Type: "cooldowns", Data: cooldowns})
-		for _, request := range admin.requests.list() {
-			initial = append(initial, api.AdminEvent{Type: "request", Data: request})
-		}
-		for _, event := range initial {
+		var refreshTimer *time.Timer
+		var refresh <-chan time.Time
+		refreshAccounts := false
+		refreshCooldowns := false
+		defer func() {
+			if refreshTimer != nil {
+				refreshTimer.Stop()
+			}
+		}()
+		send := func(event api.AdminEvent) bool {
 			select {
 			case events <- event:
+				return true
 			case <-eventCtx.Done():
+				return false
+			}
+		}
+		scheduleRequestRefresh := func(event api.AdminEvent) {
+			request := event.Data.(api.AdminRequest)
+			if request.State != "queued" {
+				refreshAccounts = true
+			}
+			if request.State != "queued" && request.State != "running" {
+				refreshCooldowns = true
+			}
+			if refresh != nil {
 				return
 			}
+			if refreshTimer == nil {
+				refreshTimer = time.NewTimer(adminRequestRefreshLatency)
+			} else {
+				refreshTimer.Reset(adminRequestRefreshLatency)
+			}
+			refresh = refreshTimer.C
 		}
 		for {
 			select {
@@ -726,14 +838,24 @@ func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, e
 				if !ok {
 					return
 				}
-				updates, err := admin.requestUpdates(eventCtx, event)
+				if !send(event) {
+					return
+				}
+				if event.Type == "request" {
+					scheduleRequestRefresh(event)
+				}
+			case <-refresh:
+				refresh = nil
+				accountsChanged := refreshAccounts
+				cooldownsChanged := refreshCooldowns
+				refreshAccounts = false
+				refreshCooldowns = false
+				updates, err := adminRequestStateUpdates(eventCtx, source, accountsChanged, cooldownsChanged)
 				if err != nil {
 					return
 				}
 				for _, update := range updates {
-					select {
-					case events <- update:
-					case <-eventCtx.Done():
+					if !send(update) {
 						return
 					}
 				}
@@ -745,27 +867,31 @@ func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, e
 	return events, nil
 }
 
-func (admin *runtimeAdmin) requestUpdates(ctx context.Context, request api.AdminEvent) ([]api.AdminEvent, error) {
-	if request.Type != "request" {
-		return []api.AdminEvent{request}, nil
-	}
-	status, err := admin.Status(ctx)
+// adminRequestStateUpdates 合并请求状态引起的管理页快照变化
+func adminRequestStateUpdates(
+	ctx context.Context,
+	source adminEventSource,
+	accountsChanged bool,
+	cooldownsChanged bool,
+) ([]api.AdminEvent, error) {
+	status, err := source.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := admin.Accounts(ctx)
-	if err != nil {
-		return nil, err
+	updates := []api.AdminEvent{{Type: "status", Data: status}}
+	if accountsChanged {
+		accounts, accountsErr := source.Accounts(ctx)
+		if accountsErr != nil {
+			return nil, accountsErr
+		}
+		updates = append(updates, api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
 	}
-	cooldowns, err := admin.Cooldowns(ctx)
-	if err != nil {
-		return nil, err
-	}
-	updates := []api.AdminEvent{
-		request,
-		{Type: "status", Data: status},
-		{Type: "accounts", Data: map[string]any{"accounts": accounts}},
-		{Type: "cooldowns", Data: cooldowns},
+	if cooldownsChanged {
+		cooldowns, cooldownsErr := source.Cooldowns(ctx)
+		if cooldownsErr != nil {
+			return nil, cooldownsErr
+		}
+		updates = append(updates, api.AdminEvent{Type: "cooldowns", Data: cooldowns})
 	}
 	return updates, nil
 }
@@ -874,9 +1000,9 @@ func (registry *requestRegistry) log(source string, level string, message string
 func (registry *requestRegistry) appendLogLocked(source string, level string, message string) api.AdminLog {
 	entry := api.AdminLog{Time: time.Now().UTC(), Level: level, Source: source, Message: message}
 	registry.logs = append(registry.logs, entry)
-	if len(registry.logs) >= 2200 {
-		copy(registry.logs, registry.logs[len(registry.logs)-2000:])
-		registry.logs = registry.logs[:2000]
+	if len(registry.logs) >= adminLogCompactAt {
+		copy(registry.logs, registry.logs[len(registry.logs)-adminLogRetain:])
+		registry.logs = registry.logs[:adminLogRetain]
 	}
 	registry.publishLocked(api.AdminEvent{Type: "log", Data: entry})
 	return entry
@@ -900,44 +1026,191 @@ func (registry *requestRegistry) writeConsole(ctx context.Context) {
 	}
 }
 
-func (registry *requestRegistry) logsSnapshot() []api.AdminLog {
-	registry.mu.Lock()
-	logs := append([]api.AdminLog(nil), registry.logs...)
-	registry.mu.Unlock()
-	return logs
-}
-
 func (registry *requestRegistry) clearLogs() {
 	registry.mu.Lock()
 	registry.logs = registry.logs[:0]
 	registry.mu.Unlock()
 }
 
-func (registry *requestRegistry) subscribe(ctx context.Context) <-chan api.AdminEvent {
-	events := make(chan api.AdminEvent, 256)
+// newEventSubscriber 创建管理页有界事件队列
+func newEventSubscriber(ctx context.Context) *eventSubscriber {
+	return &eventSubscriber{
+		ctx: ctx, events: make(chan api.AdminEvent, 16), wake: make(chan struct{}, 1),
+		pending: make([]api.AdminEvent, 0, 256),
+	}
+}
+
+func (subscriber *eventSubscriber) enqueue(event api.AdminEvent) {
+	subscriber.mu.Lock()
+	subscriber.enqueueLocked(event)
+	subscriber.mu.Unlock()
+	subscriber.notify()
+}
+
+func (subscriber *eventSubscriber) enqueueLocked(event api.AdminEvent) {
+	switch event.Type {
+	case "status", "models", "accounts", "cooldowns":
+		for index := len(subscriber.pending) - 1; index >= 0; index-- {
+			if subscriber.pending[index].Type == event.Type {
+				subscriber.pending[index] = event
+				return
+			}
+		}
+	case "request":
+		request := event.Data.(api.AdminRequest)
+		for index := len(subscriber.pending) - 1; index >= 0; index-- {
+			pending := subscriber.pending[index]
+			if pending.Type == "request" && pending.Data.(api.AdminRequest).ID == request.ID {
+				subscriber.pending[index] = event
+				return
+			}
+		}
+		subscriber.pendingRequests++
+	case "log":
+		subscriber.pendingLogs++
+	}
+	subscriber.pending = append(subscriber.pending, event)
+	if subscriber.pendingLogs >= adminLogCompactAt {
+		subscriber.trimPendingLocked("log", adminLogRetain)
+	}
+	if subscriber.pendingRequests >= adminRequestCompactAt {
+		subscriber.trimPendingLocked("request", adminRequestRetain)
+	}
+}
+
+func (subscriber *eventSubscriber) trimPendingLocked(eventType string, retain int) {
+	count := subscriber.pendingLogs
+	if eventType == "request" {
+		count = subscriber.pendingRequests
+	}
+	drop := count - retain
+	compacted := subscriber.pending[:0]
+	for _, event := range subscriber.pending {
+		if event.Type == eventType && drop > 0 {
+			drop--
+			continue
+		}
+		compacted = append(compacted, event)
+	}
+	subscriber.pending = compacted
+	if eventType == "request" {
+		subscriber.pendingRequests = retain
+	} else {
+		subscriber.pendingLogs = retain
+	}
+}
+
+func (subscriber *eventSubscriber) activate(initial []api.AdminEvent) {
+	subscriber.mu.Lock()
+	buffered := append([]api.AdminEvent(nil), subscriber.pending...)
+	subscriber.pending = subscriber.pending[:0]
+	subscriber.pendingLogs = 0
+	subscriber.pendingRequests = 0
+	for _, event := range initial {
+		subscriber.enqueueLocked(event)
+	}
+	for _, event := range buffered {
+		if event.Type != "log" {
+			subscriber.enqueueLocked(event)
+		}
+	}
+	subscriber.mu.Unlock()
+	subscriber.notify()
+}
+
+func (subscriber *eventSubscriber) notify() {
+	select {
+	case subscriber.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (subscriber *eventSubscriber) next() (api.AdminEvent, bool) {
+	subscriber.mu.Lock()
+	defer subscriber.mu.Unlock()
+	if len(subscriber.pending) == 0 {
+		return api.AdminEvent{}, false
+	}
+	event := subscriber.pending[0]
+	subscriber.pending[0] = api.AdminEvent{}
+	subscriber.pending = subscriber.pending[1:]
+	if event.Type == "log" {
+		subscriber.pendingLogs--
+	}
+	if event.Type == "request" {
+		subscriber.pendingRequests--
+	}
+	if len(subscriber.pending) == 0 {
+		subscriber.pending = nil
+	}
+	return event, true
+}
+
+func (subscriber *eventSubscriber) run() {
+	defer close(subscriber.events)
+	for {
+		if event, ok := subscriber.next(); ok {
+			select {
+			case subscriber.events <- event:
+				continue
+			case <-subscriber.ctx.Done():
+				return
+			}
+		}
+		select {
+		case <-subscriber.wake:
+		case <-subscriber.ctx.Done():
+			return
+		}
+	}
+}
+
+func (registry *requestRegistry) subscribe(ctx context.Context) *eventSubscriber {
+	subscriber := newEventSubscriber(ctx)
 	registry.mu.Lock()
-	registry.subscribers[events] = struct{}{}
+	registry.subscribers[subscriber] = struct{}{}
 	registry.mu.Unlock()
 	go func() {
 		<-ctx.Done()
 		registry.mu.Lock()
-		if _, ok := registry.subscribers[events]; ok {
-			delete(registry.subscribers, events)
-			close(events)
-		}
+		delete(registry.subscribers, subscriber)
 		registry.mu.Unlock()
 	}()
-	return events
+	return subscriber
+}
+
+// activateSubscriber 原子衔接日志请求快照与实时事件
+func (registry *requestRegistry) activateSubscriber(
+	subscriber *eventSubscriber,
+	prefix []api.AdminEvent,
+	suffix []api.AdminEvent,
+) <-chan api.AdminEvent {
+	registry.mu.Lock()
+	initial := make([]api.AdminEvent, 0, len(prefix)+len(registry.logs)+len(suffix)+len(registry.active))
+	initial = append(initial, prefix...)
+	for _, entry := range registry.logs {
+		initial = append(initial, api.AdminEvent{Type: "log", Data: entry})
+	}
+	initial = append(initial, suffix...)
+	requests := make([]api.AdminRequest, 0, len(registry.active))
+	for _, tracked := range registry.active {
+		requests = append(requests, tracked.request)
+	}
+	sort.Slice(requests, func(left int, right int) bool {
+		return requests[left].StartedAt.Before(requests[right].StartedAt)
+	})
+	for _, request := range requests {
+		initial = append(initial, api.AdminEvent{Type: "request", Data: request})
+	}
+	subscriber.activate(initial)
+	registry.mu.Unlock()
+	go subscriber.run()
+	return subscriber.events
 }
 
 func (registry *requestRegistry) publishLocked(event api.AdminEvent) {
 	for subscriber := range registry.subscribers {
-		select {
-		case subscriber <- event:
-		default:
-			delete(registry.subscribers, subscriber)
-			close(subscriber)
-		}
+		subscriber.enqueue(event)
 	}
 }
 
@@ -959,10 +1232,12 @@ func buildVersion() string {
 func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 	return api.RuntimeConfig{
 		AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
+		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
-		WarmWorkerLimit: cfg.WarmWorkerLimit, WarmStartupConcurrency: cfg.WarmStartupConcurrency,
-		PerAccountConcurrency: cfg.PerAccountConcurrency,
-		TemporaryChat:         cfg.TemporaryChat,
+		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,
+		WarmStartupConcurrency: cfg.WarmStartupConcurrency,
+		PerAccountConcurrency:  cfg.PerAccountConcurrency,
+		TemporaryChat:          cfg.TemporaryChat,
 	}
 }
 

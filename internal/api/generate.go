@@ -27,6 +27,7 @@ type generationResult struct {
 	media         []aistudio.Media
 	usage         *aistudio.Usage
 	finishReason  string
+	stopSequence  string
 	providerModel string
 	finished      bool
 }
@@ -92,6 +93,7 @@ func (result *generationResult) apply(event aistudio.Event) error {
 		}
 	case aistudio.EventFinish:
 		result.finishReason = event.FinishReason
+		result.stopSequence = event.StopSequence
 		result.finished = true
 	}
 	result.events = append(result.events, event)
@@ -182,20 +184,12 @@ func inputTokens(usage *aistudio.Usage) int64 {
 	return usage.InputTokens + usage.ToolTokens
 }
 
-func normalizedFinish(reason string, hasTools bool) string {
-	if hasTools {
-		return "tool_calls"
+func providerFinishReason(reason string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	if strings.HasPrefix(normalized, "provider_") {
+		return normalized
 	}
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "max_tokens", "max_output_tokens", "length":
-		return "length"
-	case "content_filter", "safety", "blocked", "recitation", "blocklist", "prohibited_content", "spii", "image_safety", "image_prohibited_content", "no_image", "image_recitation":
-		return "content_filter"
-	case "stop_sequence":
-		return "stop"
-	default:
-		return "stop"
-	}
+	return ""
 }
 
 func normalizeFunctionResultContent(raw json.RawMessage) (json.RawMessage, error) {
@@ -267,10 +261,17 @@ func renderCodeExecution(event aistudio.Event) string {
 		}
 		return "```" + language + "\n" + strings.TrimSuffix(event.ExecutableCode.Code, "\n") + "\n```"
 	case aistudio.EventCodeExecutionResult:
-		if event.CodeExecutionResult == nil || event.CodeExecutionResult.Output == "" {
+		if event.CodeExecutionResult == nil {
 			return ""
 		}
-		return "```text\n" + strings.TrimSuffix(event.CodeExecutionResult.Output, "\n") + "\n```"
+		value := event.CodeExecutionResult.Output
+		if event.CodeExecutionResult.Outcome != "OUTCOME_OK" {
+			value = event.CodeExecutionResult.Error
+		}
+		if value == "" {
+			return ""
+		}
+		return "```text\n" + strings.TrimSuffix(value, "\n") + "\n```"
 	default:
 		return ""
 	}

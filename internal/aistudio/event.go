@@ -44,7 +44,7 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 	finishRaw := rawAt(candidate, 1)
 	events := make([]Event, 0, 4)
 	if len(candidate) > 0 && !isJSONNull(candidate[0]) {
-		contentEvents, err := d.decodeContent(candidate[0], !isJSONNull(finishRaw), raw)
+		contentEvents, err := d.decodeContent(candidate[0], raw)
 		if err != nil {
 			return nil, err
 		}
@@ -132,6 +132,8 @@ func decodeFinishReason(code int64) string {
 		return "no_image"
 	case 17:
 		return "image_recitation"
+	case 18:
+		return "missing_thought_signature"
 	default:
 		return fmt.Sprintf("provider_%d", code)
 	}
@@ -145,7 +147,7 @@ func (d *FrameDecoder) End() error {
 	return d.protocolError("$", "流结束前没有完成帧", d.lastFrame)
 }
 
-func (d *FrameDecoder) decodeContent(raw json.RawMessage, finished bool, evidence json.RawMessage) ([]Event, error) {
+func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
 	content, err := rawArray(raw, "$[0][][0][0][0]", evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
@@ -162,10 +164,7 @@ func (d *FrameDecoder) decodeContent(raw json.RawMessage, finished bool, evidenc
 	}
 	partsRaw := rawAt(content, 0)
 	if isJSONNull(partsRaw) {
-		if finished {
-			return nil, nil
-		}
-		return nil, d.protocolError("$[0][][0][0][0][0]", "模型内容缺少 parts", evidence)
+		return nil, nil
 	}
 	parts, err := rawArray(partsRaw, "$[0][][0][0][0][0]", evidence)
 	if err != nil {
@@ -203,6 +202,7 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 	}
 	events := make([]Event, 0, 2)
 	emptyText := false
+	textEvent := -1
 	if textRaw := rawAt(part, 1); !isJSONNull(textRaw) {
 		text, err := rawString(textRaw, path+"[1]", raw)
 		if err != nil {
@@ -214,6 +214,9 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 				kind = EventReasoning
 			}
 			events = append(events, Event{Kind: kind, Text: text, ThoughtSignature: signature})
+			if kind == EventText {
+				textEvent = len(events) - 1
+			}
 		} else {
 			emptyText = true
 		}
@@ -246,6 +249,19 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 		}
 		call.ThoughtSignature = signature
 		events = append(events, Event{Kind: EventToolCall, ToolCall: &call, ThoughtSignature: signature})
+	}
+	if transcriptRaw := rawAt(part, 22); !isJSONNull(transcriptRaw) {
+		transcript, err := decodeTranscriptMetadata(transcriptRaw, path+"[22]", raw)
+		if err != nil {
+			return nil, err
+		}
+		if textEvent >= 0 && events[textEvent].Text == transcript.Text {
+			events[textEvent].Transcript = &transcript
+		} else {
+			events = append(events, Event{
+				Kind: EventText, Text: transcript.Text, Transcript: &transcript, ThoughtSignature: signature,
+			})
+		}
 	}
 	if len(events) == 0 {
 		if signature != "" {
@@ -300,10 +316,7 @@ func decodeUsage(raw json.RawMessage, evidence json.RawMessage) (Usage, bool, er
 	if err != nil {
 		return Usage{}, false, withMethod(err, "GenerateContent")
 	}
-	if len(values) < 3 {
-		return Usage{}, false, &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0][][2]", Detail: "usage 字段不足", Raw: raw}
-	}
-	if isJSONNull(values[0]) || isJSONNull(values[2]) {
+	if isJSONNull(rawAt(values, 0)) || isJSONNull(rawAt(values, 2)) {
 		return Usage{}, false, nil
 	}
 	input, err := rawInt64(values[0], "$[0][][2][0]", raw)
