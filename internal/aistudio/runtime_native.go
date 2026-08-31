@@ -22,7 +22,6 @@ type NativeWorker struct {
 
 var _ ProtectedPreparer = (*NativeWorker)(nil)
 var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
-var _ ProtectedBrowserSender = (*NativeWorker)(nil)
 
 // NewNativeWorker 启动单个账户的纯 Go Camoufox runtime
 func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {

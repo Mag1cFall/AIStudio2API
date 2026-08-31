@@ -297,31 +297,13 @@ func (session *loginSession) captureCurrentOrigin(ctx context.Context, pageURL s
 }
 
 func (session *loginSession) exportStorageState(ctx context.Context, origins map[string]storageOrigin) (storageState, error) {
-	result, err := session.client.command(ctx, "storage.getCookies", map[string]any{})
+	cookies, err := session.client.storageCookies(ctx)
 	if err != nil {
 		return storageState{}, fmt.Errorf("导出 Cookie: %w", err)
-	}
-	items, _ := result["cookies"].([]any)
-	cookies := make([]storageCookie, 0, len(items))
-	for _, raw := range items {
-		value, _ := raw.(map[string]any)
-		cookie, ok := decodeStorageCookie(value)
-		if ok {
-			cookies = append(cookies, cookie)
-		}
 	}
 	if len(cookies) == 0 {
 		return storageState{}, errors.New("隔离浏览器没有可导出的 Cookie")
 	}
-	sort.SliceStable(cookies, func(left, right int) bool {
-		if cookies[left].Domain != cookies[right].Domain {
-			return cookies[left].Domain < cookies[right].Domain
-		}
-		if cookies[left].Name != cookies[right].Name {
-			return cookies[left].Name < cookies[right].Name
-		}
-		return cookies[left].Path < cookies[right].Path
-	})
 	storageOrigins := make([]storageOrigin, 0, len(origins))
 	for _, origin := range origins {
 		storageOrigins = append(storageOrigins, origin)

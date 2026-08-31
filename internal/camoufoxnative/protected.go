@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -156,27 +155,10 @@ func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 	}
 	client := worker.client
 	worker.mu.Unlock()
-	result, err := client.command(ctx, "storage.getCookies", map[string]any{})
+	cookies, err := client.storageCookies(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("导出浏览器 Cookie: %w", err)
 	}
-	items, _ := result["cookies"].([]any)
-	cookies := make([]storageCookie, 0, len(items))
-	for _, raw := range items {
-		value, _ := raw.(map[string]any)
-		if cookie, ok := decodeStorageCookie(value); ok {
-			cookies = append(cookies, cookie)
-		}
-	}
-	sort.SliceStable(cookies, func(left, right int) bool {
-		if cookies[left].Domain != cookies[right].Domain {
-			return cookies[left].Domain < cookies[right].Domain
-		}
-		if cookies[left].Name != cookies[right].Name {
-			return cookies[left].Name < cookies[right].Name
-		}
-		return cookies[left].Path < cookies[right].Path
-	})
 	return json.Marshal(cookies)
 }
 

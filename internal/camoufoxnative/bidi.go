@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,6 +151,31 @@ func (client *bidiClient) installCookies(ctx context.Context, cookies []storageC
 		}
 	}
 	return nil
+}
+
+func (client *bidiClient) storageCookies(ctx context.Context) ([]storageCookie, error) {
+	result, err := client.command(ctx, "storage.getCookies", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	items, _ := result["cookies"].([]any)
+	cookies := make([]storageCookie, 0, len(items))
+	for _, raw := range items {
+		value, _ := raw.(map[string]any)
+		if cookie, ok := decodeStorageCookie(value); ok {
+			cookies = append(cookies, cookie)
+		}
+	}
+	sort.SliceStable(cookies, func(left, right int) bool {
+		if cookies[left].Domain != cookies[right].Domain {
+			return cookies[left].Domain < cookies[right].Domain
+		}
+		if cookies[left].Name != cookies[right].Name {
+			return cookies[left].Name < cookies[right].Name
+		}
+		return cookies[left].Path < cookies[right].Path
+	})
+	return cookies, nil
 }
 
 // installLocalStorage 在站点脚本前恢复各 origin 的 localStorage

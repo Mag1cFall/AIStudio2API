@@ -93,8 +93,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		}
 		thinkingBudget = nil
 	}
-	omitDefaultMaxOutput := config.SpeechConfig != nil && config.MaxOutputTokens == nil
-	includeMaxOutput := !omitDefaultMaxOutput
+	includeMaxOutput := config.SpeechConfig == nil || config.MaxOutputTokens != nil
 	maxOutput := defaults.MaxOutputTokens
 	if config.MaxOutputTokens != nil {
 		maxOutput = *config.MaxOutputTokens
