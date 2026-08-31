@@ -168,9 +168,6 @@ func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 			cookies = append(cookies, cookie)
 		}
 	}
-	if len(cookies) == 0 {
-		return nil, errors.New("固定指纹浏览器没有可导出的 Cookie")
-	}
 	sort.SliceStable(cookies, func(left, right int) bool {
 		if cookies[left].Domain != cookies[right].Domain {
 			return cookies[left].Domain < cookies[right].Domain

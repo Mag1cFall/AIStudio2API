@@ -1350,7 +1350,7 @@ func (l *AccountLease) ReplaceCookies(cookies []StateCookie) error {
 		return fmt.Errorf("账户租约未初始化")
 	}
 	if len(cookies) == 0 {
-		return fmt.Errorf("浏览器 Cookie 为空")
+		return nil
 	}
 	l.operation.Lock()
 	defer l.operation.Unlock()
