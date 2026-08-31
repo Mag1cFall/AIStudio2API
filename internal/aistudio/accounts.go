@@ -1344,6 +1344,35 @@ func (l *AccountLease) ReloadStorageState() (StorageState, error) {
 	return state, nil
 }
 
+// ReplaceCookies 以固定指纹浏览器当前 Cookie 替换账户最新持久状态
+func (l *AccountLease) ReplaceCookies(cookies []StateCookie) error {
+	if l == nil || l.account == nil || l.pool == nil {
+		return fmt.Errorf("账户租约未初始化")
+	}
+	if len(cookies) == 0 {
+		return fmt.Errorf("浏览器 Cookie 为空")
+	}
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		return fmt.Errorf("账户租约已释放")
+	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	state, err := LoadStorageState(l.account.StoragePath)
+	if err != nil {
+		return err
+	}
+	state.Cookies = append([]StateCookie(nil), cookies...)
+	if err := WriteStorageState(l.account.StoragePath, state); err != nil {
+		return err
+	}
+	l.pool.mu.Lock()
+	l.account.StorageState = state
+	l.pool.mu.Unlock()
+	return nil
+}
+
 // BindResource 将资源固定到当前租约账户
 func (l *AccountLease) BindResource(resourceID string, kind string) error {
 	if l == nil || l.account == nil || l.pool == nil {

@@ -31,6 +31,7 @@ type ProtectedPreparer interface {
 
 // ProtectedBrowserSender 通过账户固定指纹浏览器发送已准备的请求
 type ProtectedBrowserSender interface {
+	BrowserStorageState(context.Context) (StorageState, error)
 	SendProtected(context.Context, ProtectedRequest) (*RPCResponse, error)
 }
 
@@ -165,12 +166,28 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	if err != nil {
 		return nil, err
 	}
+	browserState, err := sender.BrowserStorageState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+	}
+	authorization, err := t.transport.signer.Authorization(browserState)
+	if err != nil {
+		return nil, err
+	}
+	headers.Set("Authorization", authorization)
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := sender.SendProtected(ctx, ProtectedRequest{
 		URL: rpc.URL, Headers: headers, Body: rpc.Body,
 	})
 	if err != nil {
 		return nil, err
+	}
+	browserState, err = sender.BrowserStorageState(ctx)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("导出浏览器 Cookie: %w", err), response.Body.Close())
+	}
+	if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
+		return nil, errors.Join(fmt.Errorf("保存浏览器 Cookie: %w", err), response.Body.Close())
 	}
 	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil

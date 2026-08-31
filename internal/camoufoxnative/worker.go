@@ -127,12 +127,21 @@ func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (
 	if worker.closed {
 		return "", errors.New("Camoufox runtime 已关闭")
 	}
-	value, err := worker.client.evaluateString(ctx, worker.contextID, fillPromptExpression(prompt))
-	if err != nil {
-		return "", fmt.Errorf("同步官网 prompt: %w", err)
-	}
-	if value != prompt {
-		return "", errors.New("官网 prompt 状态未同步")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		value, err := worker.client.evaluateString(ctx, worker.contextID, fillPromptExpression(prompt))
+		if err != nil {
+			return "", fmt.Errorf("同步官网 prompt: %w", err)
+		}
+		if value == prompt {
+			break
+		}
+		if time.Now().After(deadline) {
+			return "", errors.New("官网 prompt 状态未同步")
+		}
+		if err := waitContext(ctx, 100*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 	proof, err := worker.client.evaluateString(ctx, worker.contextID, takeProofExpression(digest))
 	if err != nil {

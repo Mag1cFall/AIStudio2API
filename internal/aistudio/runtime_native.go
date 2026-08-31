@@ -106,6 +106,23 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 	}, nil
 }
 
+// BrowserStorageState 返回固定指纹浏览器当前 Cookie 状态
+func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageState, error) {
+	encoded, err := worker.runtime.StorageCookies(ctx)
+	if err != nil {
+		return StorageState{}, err
+	}
+	var cookies []StateCookie
+	if err := json.Unmarshal(encoded, &cookies); err != nil {
+		return StorageState{}, fmt.Errorf("解析浏览器 Cookie: %w", err)
+	}
+	state := StorageState{Cookies: cookies}
+	if err := state.Validate(); err != nil {
+		return StorageState{}, err
+	}
+	return state, nil
+}
+
 // ProtocolHeaders 返回当前账户官网请求的动态公共头
 func (worker *NativeWorker) ProtocolHeaders(ctx context.Context, accountID string) (http.Header, error) {
 	if accountID != "" && accountID != worker.accountID {

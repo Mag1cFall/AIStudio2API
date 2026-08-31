@@ -93,9 +93,8 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		}
 		thinkingBudget = nil
 	}
-	audioOnly := len(config.ResponseModalities) == 1 &&
-		strings.EqualFold(strings.TrimSpace(string(config.ResponseModalities[0])), string(ResponseModalityAudio))
-	includeMaxOutput := config.MaxOutputTokens != nil || !audioOnly
+	omitDefaultMaxOutput := config.SpeechConfig != nil && config.MaxOutputTokens == nil
+	includeMaxOutput := !omitDefaultMaxOutput
 	maxOutput := defaults.MaxOutputTokens
 	if config.MaxOutputTokens != nil {
 		maxOutput = *config.MaxOutputTokens

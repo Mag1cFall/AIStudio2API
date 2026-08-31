@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,10 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
         const reader = response.body.getReader();
         for (;;) {
           const {value, done} = await reader.read();
+          while (state.chunks.length >= 8) {
+            if (state.controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
           if (done) break;
           let binary = "";
           for (let offset = 0; offset < value.length; offset += 32768) {
@@ -95,9 +100,15 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	}
 	var metadata protectedResponseMetadata
 	if err := json.Unmarshal([]byte(value), &metadata); err != nil {
+		if metadata.ID != "" {
+			_ = worker.cancelProtectedRequest(metadata.ID)
+		}
 		return nil, fmt.Errorf("解析浏览器响应元数据: %w", err)
 	}
 	if metadata.ID == "" || metadata.Status <= 0 {
+		if metadata.ID != "" {
+			_ = worker.cancelProtectedRequest(metadata.ID)
+		}
 		return nil, errors.New("浏览器返回无效受保护响应")
 	}
 	responseHeaders := make(http.Header, len(metadata.Headers)+1)
@@ -136,6 +147,42 @@ func browserRequestHeaders(headers http.Header) [][2]string {
 	return result
 }
 
+// StorageCookies 导出当前固定指纹浏览器 Cookie，供账户状态签名和持久化
+func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return nil, errors.New("Camoufox runtime 已关闭")
+	}
+	client := worker.client
+	worker.mu.Unlock()
+	result, err := client.command(ctx, "storage.getCookies", map[string]any{})
+	if err != nil {
+		return nil, fmt.Errorf("导出浏览器 Cookie: %w", err)
+	}
+	items, _ := result["cookies"].([]any)
+	cookies := make([]storageCookie, 0, len(items))
+	for _, raw := range items {
+		value, _ := raw.(map[string]any)
+		if cookie, ok := decodeStorageCookie(value); ok {
+			cookies = append(cookies, cookie)
+		}
+	}
+	if len(cookies) == 0 {
+		return nil, errors.New("固定指纹浏览器没有可导出的 Cookie")
+	}
+	sort.SliceStable(cookies, func(left, right int) bool {
+		if cookies[left].Domain != cookies[right].Domain {
+			return cookies[left].Domain < cookies[right].Domain
+		}
+		if cookies[left].Name != cookies[right].Name {
+			return cookies[left].Name < cookies[right].Name
+		}
+		return cookies[left].Path < cookies[right].Path
+	})
+	return json.Marshal(cookies)
+}
+
 type protectedResponseBody struct {
 	ctx       context.Context
 	worker    *Worker
@@ -156,10 +203,12 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 		}
 		chunk, err := body.worker.readProtectedChunk(body.requestID)
 		if err != nil {
-			return 0, err
+			body.done = true
+			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.requestID))
 		}
 		if chunk.Error != "" {
-			return 0, errors.New(chunk.Error)
+			body.done = true
+			return 0, errors.Join(errors.New(chunk.Error), body.worker.cancelProtectedRequest(body.requestID))
 		}
 		if chunk.Data != "" {
 			body.buffer, err = base64.StdEncoding.DecodeString(chunk.Data)

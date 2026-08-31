@@ -53,3 +53,30 @@ func TestSpeechRequestMatchesOfficialWire(t *testing.T) {
 		t.Fatalf("speech transcript prefix missing: %s", encoded)
 	}
 }
+
+func TestMusicRequestKeepsDefaultMaxOutput(t *testing.T) {
+	request := GenerateRequest{
+		Model: "lyria-example",
+		Contents: []Content{{
+			Role:  RoleUser,
+			Parts: []Part{{Text: "Compose a short melody"}},
+		}},
+		Config: GenerationConfig{
+			ResponseModalities: []ResponseModality{ResponseModalityAudio},
+		},
+	}
+	encoded, err := EncodeGenerateContentRequest(request, GenerationDefaults{
+		MaxOutputTokens: 65536,
+	}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	config := wire[3].([]any)
+	if config[3] != float64(65536) {
+		t.Fatalf("music max output tokens = %v", config[3])
+	}
+}
