@@ -120,12 +120,19 @@ func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) 
 	return worker.state.Headers.Clone(), nil
 }
 
-// Proof 为给定 SHA-256 digest 生成一枚 fresh WAA proof
-func (worker *Worker) Proof(ctx context.Context, digest string) (string, error) {
+// Proof 同步官网 prompt 状态后为 SHA-256 digest 生成 fresh WAA proof
+func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (string, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if worker.closed {
 		return "", errors.New("Camoufox runtime 已关闭")
+	}
+	value, err := worker.client.evaluateString(ctx, worker.contextID, fillPromptExpression(prompt))
+	if err != nil {
+		return "", fmt.Errorf("同步官网 prompt: %w", err)
+	}
+	if value != prompt {
+		return "", errors.New("官网 prompt 状态未同步")
 	}
 	proof, err := worker.client.evaluateString(ctx, worker.contextID, takeProofExpression(digest))
 	if err != nil {

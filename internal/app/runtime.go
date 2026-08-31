@@ -188,6 +188,16 @@ func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aist
 	return preparer.worker.Prepare(ctx, request)
 }
 
+// SendProtected 保证浏览器请求仍绑定当前有效账户 Worker
+func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, request aistudio.ProtectedRequest) (*aistudio.RPCResponse, error) {
+	preparer.account.mu.Lock()
+	defer preparer.account.mu.Unlock()
+	if preparer.account.worker != preparer.worker || preparer.account.bootstrapModel != preparer.bootstrapModel {
+		return nil, errAccountWorkerReplaced
+	}
+	return preparer.worker.SendProtected(ctx, request)
+}
+
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
 type accountWorkerInitError struct {
 	err error

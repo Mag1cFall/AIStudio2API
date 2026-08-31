@@ -33,7 +33,7 @@ MakerSuite 请求使用以下公共头：
 
 请求头 `x-goog-api-key` 是 AI Studio 页面使用的动态公共值，与用户创建的 Google Cloud API key 不同；免费网页链仍依赖 Cookie、SAPISID 签名和 WAA proof。
 
-MakerSuite 与 Drive 业务请求使用和 Camoufox 对齐的 Firefox TLS、HTTP/2 与请求头顺序；WAA VM、fresh proof 和隔离登录由同一账户的 Camoufox 环境完成。
+受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS、HTTP/2、请求头、Cookie 与页面指纹；其他 MakerSuite 与 Drive 请求使用同账户固定出口的 Go HTTP transport。
 
 JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始，protobuf field 从 `1` 开始，因此 field `N` 对应索引 `N-1`。Google 响应允许省略空槽并形成 `[,value]`；解码器先把省略槽规范化为 `null`，再从完整 JSON 根值中提取 repeated message。HTTPS chunk 仅提供字节序列，业务事件起止由数组结构确定。
 
@@ -191,7 +191,7 @@ Waa/Create
   -> SHA-256(binding prompt) as lowercase hex
   -> snapshot({TYb:{content:<DIGEST>}})
   -> write fresh proof into request
-  -> Go HTTP transport sends MakerSuite RPC
+  -> fingerprinted Camoufox page sends MakerSuite RPC
 ```
 
 `Waa/Create` 响应第二槽经 Base64 解码后，对每个字节加 `97` 得到 challenge。归一化后的 Challenge 对象字段如下：
@@ -255,12 +255,13 @@ cold Create 固定使用上面的三个槽。下载 interpreter 后计算 SHA-25
 3. 定位页面 bundle 中调用 `.snapshot({` 且包含 `content` 的官方高层函数
 4. 为官网 `GenerateContent` 安装 `beforeRequestSent` BiDi 拦截，再填入唯一 bootstrap prompt 并执行官网 Run
 5. 页面调用官方 snapshot 时保存 WAA service；请求进入拦截阶段后保存动态头并通过 `network.failRequest` 在浏览器内终止
-6. 后续业务请求串行调用同一 service 获取 fresh proof
-7. `GenerateContent` 写入 field 5，`GenerateVideo` 写入 field 8，正文由 Go HTTP transport 发送
+6. 后续业务请求先把 binding prompt 同步到官网页面，再串行调用同一 service 获取 fresh proof
+7. `GenerateContent` 写入 field 5，并通过同一 Camoufox 页面原生 `fetch` 发送；响应流经 WebDriver BiDi 分块交回 Go
+8. `GenerateVideo` 写入 field 8，正文继续由 Go HTTP transport 发送
 
 运行时将 `gemini-flash-latest` 作为首选 bootstrap model；该别名未出现在实时目录时，使用首个支持文本生成的聊天模型。
 
-Camoufox 负责官方 VM 初始化与 WAA proof；Go 负责业务请求、增量解码和公开 API。运行期依赖 Go 与 Camoufox。官方 VM 初始化参数顺序为：
+Camoufox 负责官方 VM、WAA proof 与 `GenerateContent` 原生网络发送；Go 负责协议编码、账户调度、增量解码和公开 API。运行期依赖 Go 与 Camoufox。官方 VM 初始化参数顺序为：
 
 ```javascript
 initialize(program, ready, true, environment, passEvent, signalLists, persistentState, false, loggers)
@@ -1910,6 +1911,8 @@ File object：
 | `instructions` | 以 `instructions + "\n\n" + input` 形成提示 |
 
 `pcm` 返回上游 PCM body 与 MIME；`wav` 要求上游 `audio/l16` 和有效 rate，再封装 16-bit WAV；响应设置 `Content-Type` 与 `Content-Length`。
+
+语音请求按官网 wire 在首个文本前写入 `## Transcript:\n`，AUDIO-only generation config 不写默认 `maxOutputTokens`；`responseModalities` 与 `speechConfig` 分别写入官网确认的槽位。
 
 ### Video
 

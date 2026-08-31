@@ -93,14 +93,17 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		}
 		thinkingBudget = nil
 	}
+	audioOnly := len(config.ResponseModalities) == 1 &&
+		strings.EqualFold(strings.TrimSpace(string(config.ResponseModalities[0])), string(ResponseModalityAudio))
+	includeMaxOutput := config.MaxOutputTokens != nil || !audioOnly
 	maxOutput := defaults.MaxOutputTokens
 	if config.MaxOutputTokens != nil {
 		maxOutput = *config.MaxOutputTokens
 	}
-	if maxOutput <= 0 {
+	if includeMaxOutput && maxOutput <= 0 {
 		return nil, fmt.Errorf("模型目录缺少有效 output token limit")
 	}
-	if maxOutput > defaults.MaxOutputTokens {
+	if includeMaxOutput && maxOutput > defaults.MaxOutputTokens {
 		return nil, fmt.Errorf("max output tokens %d 超过模型上限 %d", maxOutput, defaults.MaxOutputTokens)
 	}
 	temperature := defaults.Temperature
@@ -165,7 +168,9 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if len(config.StopSequences) > 0 {
 		wire[1] = append([]string(nil), config.StopSequences...)
 	}
-	wire[3] = maxOutput
+	if includeMaxOutput {
+		wire[3] = maxOutput
+	}
 	if temperature != nil {
 		wire[4] = *temperature
 	}
@@ -315,6 +320,26 @@ func applyModelMediaDefaults(config GenerationConfig, model Model) GenerationCon
 	return config
 }
 
+func applySpeechTranscript(contents []Content, model Model, config GenerationConfig) []Content {
+	if !model.Capabilities["speech_route"] || config.SpeechConfig == nil {
+		return contents
+	}
+	result := append([]Content(nil), contents...)
+	for contentIndex, content := range result {
+		parts := append([]Part(nil), content.Parts...)
+		for partIndex, part := range parts {
+			text := strings.TrimSpace(part.Text)
+			if text == "" || strings.HasPrefix(text, "## Transcript:") {
+				continue
+			}
+			parts[partIndex].Text = "## Transcript:\n" + text
+			result[contentIndex].Parts = parts
+			return result
+		}
+	}
+	return result
+}
+
 func observedSafetySettings() []any {
 	settings := make([]any, 0, 4)
 	for category := int64(7); category <= 10; category++ {
@@ -335,6 +360,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
+	request.Contents = applySpeechTranscript(request.Contents, entry.model, request.Config)
 	runtime := RequestContext{}
 	if c.contextProvider != nil {
 		runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID)

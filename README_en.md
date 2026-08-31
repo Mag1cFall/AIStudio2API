@@ -415,7 +415,7 @@ Adding an account starts an isolated Camoufox login. `ready` accounts can be edi
 
 This project uses [Camoufox](https://camoufox.com/) to reduce automation detection. Camoufox is based on Firefox and changes lower-level browser behavior to retain a realistic device fingerprint.
 
-Go handles business requests with a Firefox TLS/HTTP2 profile aligned with Camoufox. Camoufox provides official WAA initialization, fresh proofs, and isolated account login.
+Go handles encoding, scheduling, streaming decode, and public protocols. WAA-protected `GenerateContent` requests are sent by the account's fingerprinted Camoufox page, preserving the native Firefox TLS/HTTP2 stack, headers, cookies, and page fingerprint.
 
 ### Limitations
 

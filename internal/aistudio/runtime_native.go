@@ -22,6 +22,7 @@ type NativeWorker struct {
 
 var _ ProtectedPreparer = (*NativeWorker)(nil)
 var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
+var _ ProtectedBrowserSender = (*NativeWorker)(nil)
 
 // NewNativeWorker 启动单个账户的纯 Go Camoufox runtime
 func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
@@ -56,7 +57,7 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		state.LastError = ""
 	})
 	digest := sha256.Sum256([]byte(request.Prompt))
-	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest))
+	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), request.Prompt)
 	if err != nil {
 		worker.fail(err)
 		return PreparedProtectedRequest{}, err
@@ -88,6 +89,20 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	return PreparedProtectedRequest{
 		Body:    body,
 		Headers: headers,
+	}, nil
+}
+
+// SendProtected 通过账户固定指纹 Camoufox 流式发送已准备的请求
+func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
+	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
+	if err != nil {
+		worker.fail(err)
+		return nil, err
+	}
+	return &RPCResponse{
+		StatusCode: response.StatusCode,
+		Header:     response.Header,
+		Body:       response.Body,
 	}, nil
 }
 
