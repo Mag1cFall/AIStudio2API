@@ -3,7 +3,6 @@ package aistudio
 import (
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -49,17 +48,23 @@ func TestSpeechRequestMatchesOfficialWire(t *testing.T) {
 	if !reflect.DeepEqual(config[15], expectedSpeech) {
 		t.Fatalf("speech config = %#v", config[15])
 	}
-	if !strings.Contains(string(encoded), `## Transcript:\nHello`) {
-		t.Fatalf("speech transcript prefix missing: %s", encoded)
+	expectedContents := []any{
+		[]any{
+			[]any{[]any{nil, "## Transcript:\nHello"}},
+			"user",
+		},
+	}
+	if !reflect.DeepEqual(wire[1], expectedContents) {
+		t.Fatalf("speech contents = %#v", wire[1])
 	}
 }
 
-func TestMusicRequestKeepsDefaultMaxOutput(t *testing.T) {
+func TestAudioWithoutSpeechConfigKeepsDefaultMaxOutput(t *testing.T) {
 	request := GenerateRequest{
-		Model: "lyria-example",
+		Model: "audio-model",
 		Contents: []Content{{
 			Role:  RoleUser,
-			Parts: []Part{{Text: "Compose a short melody"}},
+			Parts: []Part{{Text: "Generate audio"}},
 		}},
 		Config: GenerationConfig{
 			ResponseModalities: []ResponseModality{ResponseModalityAudio},
@@ -77,6 +82,6 @@ func TestMusicRequestKeepsDefaultMaxOutput(t *testing.T) {
 	}
 	config := wire[3].([]any)
 	if config[3] != float64(65536) {
-		t.Fatalf("music max output tokens = %v", config[3])
+		t.Fatalf("audio max output tokens = %v", config[3])
 	}
 }
