@@ -24,9 +24,11 @@ type PoolRequestContextProvider struct {
 	pool *AccountPool
 }
 
-// ProtectedPreparer 为一次请求写入 fresh WAA proof
+// ProtectedPreparer 为一次请求写入 fresh WAA proof 并通过账户固定指纹浏览器发送
 type ProtectedPreparer interface {
 	Prepare(context.Context, ProtectedRequest) (PreparedProtectedRequest, error)
+	BrowserStorageState(context.Context) (StorageState, error)
+	SendProtected(context.Context, ProtectedRequest) (*RPCResponse, error)
 }
 
 // ProtectedPreparerProvider 按账户返回 lazy WAA preparer
@@ -96,16 +98,97 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*Work
 	}, nil
 }
 
-// DoProtected 写入 fresh proof 后返回原生流式响应
+// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
 	prompt, err := bindingPrompt(request)
 	if err != nil {
 		return nil, err
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	return t.doPrepared(ctx, prompt, 5, AccountSelection{
+	return t.doBrowserPrepared(ctx, prompt, AccountSelection{
 		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
 	}, rpc)
+}
+
+func (t *WorkerProtectedTransport) doBrowserPrepared(
+	ctx context.Context,
+	prompt string,
+	selection AccountSelection,
+	rpc RPCRequest,
+) (*RPCResponse, error) {
+	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, 5, selection, rpc)
+	if err != nil {
+		return nil, err
+	}
+	browserState, err := worker.BrowserStorageState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+	}
+	authorization, err := t.transport.signer.Authorization(browserState)
+	if err != nil {
+		return nil, err
+	}
+	headers := rpc.Header.Clone()
+	headers.Set("Authorization", authorization)
+	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
+	response, err := worker.SendProtected(ctx, ProtectedRequest{
+		URL: rpc.URL, Headers: headers, Body: rpc.Body,
+	})
+	if err != nil {
+		return nil, err
+	}
+	browserState, err = worker.BrowserStorageState(ctx)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("导出浏览器 Cookie: %w", err), response.Body.Close())
+	}
+	if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
+		return nil, errors.Join(fmt.Errorf("保存浏览器 Cookie: %w", err), response.Body.Close())
+	}
+	reportRequestPhase(ctx, RequestPhaseStreaming)
+	return response, nil
+}
+
+func (t *WorkerProtectedTransport) prepareProtectedRequest(
+	ctx context.Context,
+	prompt string,
+	proofField int,
+	selection AccountSelection,
+	rpc RPCRequest,
+) (*AccountLease, ProtectedPreparer, RPCRequest, error) {
+	lease, ok := AccountLeaseFromContext(ctx)
+	if !ok {
+		return nil, nil, RPCRequest{}, fmt.Errorf("受保护请求缺少账户租约")
+	}
+	if err := validateLeaseSelection(lease, selection); err != nil {
+		return nil, nil, RPCRequest{}, err
+	}
+	worker, err := t.workers.Worker(ctx, lease.Account().ID, selection.ModelID)
+	if err != nil {
+		return nil, nil, RPCRequest{}, fmt.Errorf("获取账户 WAA preparer: %w", err)
+	}
+	reportRequestPhase(ctx, RequestPhasePreparingWAA)
+	prepared, err := worker.Prepare(ctx, ProtectedRequest{
+		URL: rpc.URL, Headers: rpc.Header.Clone(), Body: append([]byte(nil), rpc.Body...),
+		Prompt: prompt, ProofField: proofField,
+	})
+	if err != nil {
+		return nil, nil, RPCRequest{}, fmt.Errorf("准备 fresh WAA proof: %w", err)
+	}
+	if prepared.Headers == nil || len(prepared.Body) == 0 {
+		return nil, nil, RPCRequest{}, fmt.Errorf("WAA preparer 返回空请求")
+	}
+	requestHeaders := rpc.Header
+	rpc.AccountID = lease.Account().ID
+	rpc.Body = append([]byte(nil), prepared.Body...)
+	rpc.Header = prepared.Headers.Clone()
+	for name, values := range requestHeaders {
+		rpc.Header.Del(name)
+		for _, value := range values {
+			rpc.Header.Add(name, value)
+		}
+	}
+	rpc.Header.Set("Content-Type", JSONProtobufContentType)
+	return lease, worker, rpc, nil
 }
 
 // DoProtectedVideo 写入 Veo fresh proof 后发送请求
@@ -123,42 +206,10 @@ func (t *WorkerProtectedTransport) doPrepared(
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
-	lease, ok := AccountLeaseFromContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("受保护请求缺少账户租约")
-	}
-	if err := validateLeaseSelection(lease, selection); err != nil {
+	_, _, rpc, err := t.prepareProtectedRequest(ctx, prompt, proofField, selection, rpc)
+	if err != nil {
 		return nil, err
 	}
-	worker, err := t.workers.Worker(ctx, lease.Account().ID, selection.ModelID)
-	if err != nil {
-		return nil, fmt.Errorf("获取账户 WAA preparer: %w", err)
-	}
-	reportRequestPhase(ctx, RequestPhasePreparingWAA)
-	prepared, err := worker.Prepare(ctx, ProtectedRequest{
-		URL:        rpc.URL,
-		Headers:    rpc.Header.Clone(),
-		Body:       append([]byte(nil), rpc.Body...),
-		Prompt:     prompt,
-		ProofField: proofField,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("准备 fresh WAA proof: %w", err)
-	}
-	if prepared.Headers == nil || len(prepared.Body) == 0 {
-		return nil, fmt.Errorf("WAA preparer 返回空请求")
-	}
-	rpc.AccountID = lease.Account().ID
-	rpc.Body = append([]byte(nil), prepared.Body...)
-	requestHeaders := rpc.Header
-	rpc.Header = prepared.Headers.Clone()
-	for name, values := range requestHeaders {
-		rpc.Header.Del(name)
-		for _, value := range values {
-			rpc.Header.Add(name, value)
-		}
-	}
-	rpc.Header.Set("Content-Type", JSONProtobufContentType)
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := t.transport.Do(ctx, rpc)
 	if err != nil {

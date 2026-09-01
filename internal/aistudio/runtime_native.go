@@ -56,7 +56,7 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		state.LastError = ""
 	})
 	digest := sha256.Sum256([]byte(request.Prompt))
-	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest))
+	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), request.Prompt)
 	if err != nil {
 		worker.fail(err)
 		return PreparedProtectedRequest{}, err
@@ -89,6 +89,37 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		Body:    body,
 		Headers: headers,
 	}, nil
+}
+
+// SendProtected 通过账户固定指纹 Camoufox 流式发送已准备的请求
+func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
+	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
+	if err != nil {
+		worker.fail(err)
+		return nil, err
+	}
+	return &RPCResponse{
+		StatusCode: response.StatusCode,
+		Header:     response.Header,
+		Body:       response.Body,
+	}, nil
+}
+
+// BrowserStorageState 返回固定指纹浏览器当前 Cookie 状态
+func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageState, error) {
+	encoded, err := worker.runtime.StorageCookies(ctx)
+	if err != nil {
+		return StorageState{}, err
+	}
+	var cookies []StateCookie
+	if err := json.Unmarshal(encoded, &cookies); err != nil {
+		return StorageState{}, fmt.Errorf("解析浏览器 Cookie: %w", err)
+	}
+	state := StorageState{Cookies: cookies}
+	if err := state.Validate(); err != nil {
+		return StorageState{}, err
+	}
+	return state, nil
 }
 
 // ProtocolHeaders 返回当前账户官网请求的动态公共头
