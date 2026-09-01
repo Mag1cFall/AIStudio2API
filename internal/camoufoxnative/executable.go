@@ -2,7 +2,6 @@ package camoufoxnative
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +34,7 @@ func FindExecutable(ctx context.Context) (string, error) {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		path, err := validateManagedCamoufoxExecutable(candidate)
+		path, err := validateCamoufoxExecutable(candidate)
 		if err == nil {
 			return path, nil
 		}
@@ -44,7 +43,7 @@ func FindExecutable(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
 	}
-	return validateCamoufoxExecutable(path)
+	return path, nil
 }
 
 func camoufoxExecutablePath() (string, error) {
@@ -73,36 +72,4 @@ func validateCamoufoxExecutable(path string) (string, error) {
 		return "", fmt.Errorf("Camoufox 路径是目录")
 	}
 	return absolute, nil
-}
-
-// validateManagedCamoufoxExecutable 校验自动管理的 Camoufox 发行版本
-func validateManagedCamoufoxExecutable(path string) (string, error) {
-	absolute, err := validateCamoufoxExecutable(path)
-	if err != nil {
-		return "", err
-	}
-	directory := filepath.Dir(absolute)
-	for range 6 {
-		data, readErr := os.ReadFile(filepath.Join(directory, "version.json"))
-		if readErr == nil {
-			var metadata struct {
-				Version string `json:"version"`
-				Release string `json:"release"`
-			}
-			if err := json.Unmarshal(data, &metadata); err != nil {
-				return "", fmt.Errorf("解析 Camoufox 版本: %w", err)
-			}
-			version := strings.TrimSpace(metadata.Version) + "-" + strings.TrimSpace(metadata.Release)
-			if version != camoufoxRelease {
-				return "", fmt.Errorf("Camoufox 版本 %s 与要求 %s 不一致", version, camoufoxRelease)
-			}
-			return absolute, nil
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			break
-		}
-		directory = parent
-	}
-	return "", fmt.Errorf("Camoufox 缺少 version.json")
 }

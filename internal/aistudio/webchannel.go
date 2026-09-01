@@ -51,22 +51,21 @@ type BidiProtectedTransport interface {
 
 // BidiSession 保存一条 Google WebChannel 双向会话
 type BidiSession struct {
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	lease                *AccountLease
-	release              func() error
-	worker               ProtectedPreparer
-	client               *http.Client
-	headers              http.Header
-	gsessionID           string
-	sid                  string
-	model                string
-	mode                 BidiMode
-	modelAccessScope     string
-	accountID            string
-	modelAccessObserver  func()
-	modelFailureObserver func(string)
-	headerMu             sync.RWMutex
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	lease               *AccountLease
+	release             func() error
+	worker              ProtectedPreparer
+	client              *http.Client
+	headers             http.Header
+	gsessionID          string
+	sid                 string
+	model               string
+	mode                BidiMode
+	modelAccessScope    string
+	accountID           string
+	modelAccessObserver func()
+	headerMu            sync.RWMutex
 
 	stateMu                sync.Mutex
 	aid                    int64
@@ -181,13 +180,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			return session, nil
 		}
 		requestErr = err
-		if DefinitiveModelAccessFailure(err) && request.ObserveModelAccessFailure != nil {
-			request.ObserveModelAccessFailure(request.AccountID)
-		}
 		var stateErr error
-		if owned && DefinitiveModelAccessFailure(err) {
-			stateErr = s.markRetryableFailure(lease, modelAccessScope, err)
-		}
 		if owned {
 			requestErr = errors.Join(requestErr, stateErr, lease.Release())
 		}
@@ -214,9 +207,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 		if request.ObserveAccountFailure != nil {
 			request.ObserveAccountFailure(request.AccountID, err)
 		}
-		if !DefinitiveModelAccessFailure(err) {
-			stateErr = s.markRetryableFailure(lease, modelAccessScope, err)
-		}
+		stateErr = s.markRetryableFailure(lease, modelAccessScope, err)
 		if stateErr != nil {
 			return nil, errors.Join(requestErr, stateErr)
 		}
@@ -400,9 +391,8 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		ctx: requestCtx, cancel: cancel, lease: lease, release: release, worker: worker, client: client,
 		headers: webChannelHeaders(protocolHeaders), model: strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"),
 		mode: request.Mode, modelAccessScope: strings.TrimSpace(request.ModelAccessScope),
-		modelAccessObserver:  request.ObserveModelAccessChange,
-		modelFailureObserver: request.ObserveModelAccessFailure,
-		accountID:            lease.Account().ID, rid: rid, latestResumptionToken: strings.TrimSpace(request.SessionToken),
+		modelAccessObserver: request.ObserveModelAccessChange,
+		accountID:           lease.Account().ID, rid: rid, latestResumptionToken: strings.TrimSpace(request.SessionToken),
 		events: make(chan BidiEvent, 32), wireEvents: make(chan BidiEvent, 32),
 		forwarding: make(chan bool, 1), forwardDone: make(chan struct{}), done: make(chan struct{}),
 	}
@@ -847,23 +837,6 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 		checkedAt := s.finishQualificationAttempt(true)
 		if err := s.lease.markAuthenticationRequiredAt(event.Err.Error(), checkedAt); err != nil {
 			event.Err = errors.Join(event.Err, err)
-		}
-		return
-	}
-	if event.Kind == BidiEventError && DefinitiveModelAccessFailure(event.Err) {
-		if s.modelFailureObserver != nil {
-			s.modelFailureObserver(s.accountID)
-		}
-		checkedAt := s.finishQualificationAttempt(true)
-		changed, err := s.lease.pool.ForgetModelAccessVerifiedIfGeneration(
-			s.accountID, s.modelAccessScope, s.lease.ModelAccessGeneration(), checkedAt,
-		)
-		if err != nil {
-			event.Err = errors.Join(event.Err, err)
-			return
-		}
-		if changed {
-			s.notifyModelAccessChanged()
 		}
 		return
 	}

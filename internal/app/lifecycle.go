@@ -316,10 +316,24 @@ func (manager *runtimeManager) Accounts(ctx context.Context) ([]api.AdminAccount
 }
 
 // CreateAccount 在当前生成服务创建账户
-func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.AccountInput) (api.AdminAccount, error) {
+func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.AccountCreateInput) (api.AdminAccount, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.CreateAccount(ctx, input)
+}
+
+// ChromeImportProfiles 返回当前生成服务可导入的 Chrome 账号
+func (manager *runtimeManager) ChromeImportProfiles(ctx context.Context) ([]api.ChromeImportProfile, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.ChromeImportProfiles(ctx)
+}
+
+// ImportChromeAccounts 在当前生成服务批量导入 Chrome 账号
+func (manager *runtimeManager) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.ImportChromeAccounts(ctx, input)
 }
 
 // UpdateAccount 在当前生成服务更新账户

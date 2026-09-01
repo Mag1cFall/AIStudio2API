@@ -16,6 +16,8 @@ import (
 
 var firefoxVersionPattern = regexp.MustCompile(`\b1[0-9]{2}\.0\b`)
 
+const camoufoxFirefoxMajor = 152
+
 type savedFingerprint struct {
 	FirefoxVersion int            `json:"firefox_version"`
 	Locale         string         `json:"locale"`
@@ -41,38 +43,6 @@ func PersistAccountFingerprint(sourceDirectory string, targetDirectory string) e
 		return fmt.Errorf("隔离登录 Camoufox 指纹为空")
 	}
 	return writeAccountCamoufoxConfig(filepath.Join(targetDirectory, "camoufox-fingerprint.json"), saved)
-}
-
-// browserMajor 从 Camoufox 发行元数据读取实际 Firefox 主版本
-func browserMajor(executablePath string) (int, error) {
-	directory := filepath.Dir(executablePath)
-	var data []byte
-	var err error
-	for range 5 {
-		data, err = os.ReadFile(filepath.Join(directory, "version.json"))
-		if err == nil {
-			break
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			break
-		}
-		directory = parent
-	}
-	if err != nil {
-		return 0, fmt.Errorf("读取 Camoufox 版本: %w", err)
-	}
-	var metadata struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return 0, fmt.Errorf("解析 Camoufox 版本: %w", err)
-	}
-	var major int
-	if _, err := fmt.Sscanf(metadata.Version, "%d", &major); err != nil || major <= 0 {
-		return 0, fmt.Errorf("Camoufox 版本无效: %s", metadata.Version)
-	}
-	return major, nil
 }
 
 // buildCamoufoxConfig 生成与实际 Camoufox 版本一致的 Windows Firefox 指纹

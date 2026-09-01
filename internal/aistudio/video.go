@@ -293,15 +293,8 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 				applyVideoOperationBinding(&operation, binding)
 			}
 		}
-		var earlyStateErr error
-		if owned && DefinitiveModelAccessFailure(generateErr) {
-			earlyStateErr = s.markRetryableFailure(lease, modelID, generateErr)
-		}
 		if owned {
-			generateErr = errors.Join(generateErr, earlyStateErr, lease.Release())
-		}
-		if earlyStateErr != nil {
-			return operation, generateErr
+			generateErr = errors.Join(generateErr, lease.Release())
 		}
 		if generateErr == nil || !retryableAccountError(generateErr) {
 			if generateErr == nil {
@@ -325,10 +318,8 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 		if !retryableAccountError(generateErr) {
 			return operation, generateErr
 		}
-		if !DefinitiveModelAccessFailure(generateErr) {
-			if stateErr := s.markRetryableFailure(lease, modelID, generateErr); stateErr != nil {
-				return operation, errors.Join(generateErr, stateErr)
-			}
+		if stateErr := s.markRetryableFailure(lease, modelID, generateErr); stateErr != nil {
+			return operation, errors.Join(generateErr, stateErr)
 		}
 	}
 	return operation, generateErr

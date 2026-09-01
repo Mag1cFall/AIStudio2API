@@ -1,7 +1,10 @@
 import type {
   Account,
   AccountDraft,
+  AccountLoginInput,
   AdminEvent,
+  ChromeImportInput,
+  ChromeImportProfile,
   Model,
   PlaygroundInput,
   PlaygroundMedia,
@@ -13,6 +16,14 @@ import type {
 
 interface AccountsResponse {
   accounts: Account[]
+}
+
+interface AccountResponse {
+  account: Account
+}
+
+interface ChromeProfilesResponse {
+  profiles: ChromeImportProfile[]
 }
 
 interface ModelsResponse {
@@ -108,10 +119,17 @@ export const api = {
   cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,
   requests: async () => (await requestJSON<RequestsResponse>('/api/requests')).requests,
   config: () => requestJSON<ServiceConfig>('/api/config'),
-  createAccount: (draft: AccountDraft) =>
-    requestCommand('/api/accounts', {
+  createAccount: (input: AccountLoginInput) =>
+    requestJSON<AccountResponse>('/api/accounts', {
       method: 'POST',
-      body: JSON.stringify(draft),
+      body: JSON.stringify(input),
+    }),
+  chromeImportProfiles: async () =>
+    (await requestJSON<ChromeProfilesResponse>('/api/accounts/import/chrome')).profiles,
+  importChromeAccounts: (input: ChromeImportInput) =>
+    requestJSON<AccountsResponse>('/api/accounts/import/chrome', {
+      method: 'POST',
+      body: JSON.stringify(input),
     }),
   updateAccount: (id: string, draft: AccountDraft) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, {

@@ -402,13 +402,6 @@ func DefinitiveAuthenticationFailure(err error) bool {
 	return errors.As(err, &rpcError) && rpcError.StatusCode == 401
 }
 
-// DefinitiveModelAccessFailure 判断上游是否明确拒绝账户模型组合
-func DefinitiveModelAccessFailure(err error) bool {
-	var rpcError *RPCError
-	return errors.As(err, &rpcError) && modelBoundRPCMethod(rpcError.Method) &&
-		rpcError.StatusCode == http.StatusForbidden && rpcError.Code == 7
-}
-
 // DefinitiveWAARuntimeFailure 判断上游是否明确拒绝当前 WAA 运行态
 func DefinitiveWAARuntimeFailure(err error) bool {
 	var rpcError *RPCError
@@ -430,12 +423,6 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 	accountID := lease.Account().ID
 	if DefinitiveAuthenticationFailure(err) {
 		return lease.MarkAuthenticationRequired(err.Error())
-	}
-	if DefinitiveModelAccessFailure(err) {
-		_, stateErr := s.pool.ForgetModelAccessVerifiedIfGeneration(
-			accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
-		)
-		return stateErr
 	}
 	return s.pool.MarkCooldownIfGeneration(
 		accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),

@@ -105,16 +105,12 @@ func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionReq
 		attempted[accountID] = struct{}{}
 		result, requestErr = s.transcribeWithLease(ctx, lease, request, startedAt)
 		result.accessCheckedAt = checkedAt
-		var earlyStateErr error
-		if owned && DefinitiveModelAccessFailure(requestErr) {
-			earlyStateErr = s.markRetryableFailure(lease, modelID, requestErr)
-		}
 		var releaseErr error
 		if owned {
 			releaseErr = lease.Release()
 		}
-		if earlyStateErr != nil || releaseErr != nil {
-			return result, errors.Join(requestErr, earlyStateErr, releaseErr)
+		if releaseErr != nil {
+			return result, errors.Join(requestErr, releaseErr)
 		}
 		if requestErr == nil {
 			if stateErr := lease.MarkAuthenticationValid(); stateErr != nil {
@@ -154,9 +150,7 @@ func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionReq
 		}
 		var stateErr error
 		if TranscriptionGenerationFailure(requestErr) {
-			if !DefinitiveModelAccessFailure(requestErr) {
-				stateErr = s.markRetryableFailure(lease, modelID, requestErr)
-			}
+			stateErr = s.markRetryableFailure(lease, modelID, requestErr)
 		} else if DefinitiveAuthenticationFailure(requestErr) {
 			stateErr = lease.MarkAuthenticationRequired(requestErr.Error())
 		} else {

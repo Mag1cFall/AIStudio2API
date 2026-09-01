@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue'
 import { api } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
-import type { Account, AccountDraft, AccountState } from '@/types'
+import type { Account, AccountDraft, AccountState, ChromeImportProfile } from '@/types'
 import UiIcon from './UiIcon.vue'
 
 defineProps<{
@@ -19,9 +19,18 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const defaultAccountLocale = navigator.language || 'en-US'
 const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-const showAdd = ref(false)
+const showEditor = ref(false)
+const showBrowserLogin = ref(false)
+const showChromeImport = ref(false)
 const editingAccountID = ref('')
 const pendingAction = ref('')
+const chromeProfiles = ref<ChromeImportProfile[]>([])
+const selectedChromeProfiles = ref<string[]>([])
+const accountEnvironment = reactive({
+  proxy: '',
+  locale: defaultAccountLocale,
+  timezone: defaultAccountTimezone,
+})
 const draft = reactive<AccountDraft>({
   label: '',
   enabled: true,
@@ -44,20 +53,6 @@ function actionError(error: unknown): void {
   emit('notice', error instanceof Error ? error.message : t('common.error'), 'error')
 }
 
-function resetDraft(): void {
-  draft.label = ''
-  draft.enabled = true
-  draft.proxy = ''
-  draft.locale = defaultAccountLocale
-  draft.timezone = defaultAccountTimezone
-}
-
-function beginAdd(): void {
-  editingAccountID.value = ''
-  resetDraft()
-  showAdd.value = true
-}
-
 function beginEdit(account: Account): void {
   editingAccountID.value = account.id
   draft.label = account.label
@@ -65,23 +60,89 @@ function beginEdit(account: Account): void {
   draft.proxy = account.proxy
   draft.locale = account.locale
   draft.timezone = account.timezone
-  showAdd.value = true
+  showEditor.value = true
 }
 
 function closeEditor(): void {
-  showAdd.value = false
+  showEditor.value = false
   editingAccountID.value = ''
 }
 
-// saveAccount 保存账户并刷新产品数据
-async function saveAccount(): Promise<void> {
-  pendingAction.value = editingAccountID.value === '' ? 'create' : `edit:${editingAccountID.value}`
+function openBrowserLogin(): void {
+  showBrowserLogin.value = true
+}
+
+function closeBrowserLogin(): void {
+  if (pendingAction.value === 'browser-login') return
+  showBrowserLogin.value = false
+}
+
+// beginBrowserLogin 启动浏览器登录并使用返回身份创建账户
+async function beginBrowserLogin(): Promise<void> {
+  pendingAction.value = 'browser-login'
   try {
-    if (editingAccountID.value === '') {
-      await api.createAccount({ ...draft })
-    } else {
-      await api.updateAccount(editingAccountID.value, { ...draft })
-    }
+    await api.createAccount({ ...accountEnvironment })
+    showBrowserLogin.value = false
+    emit('refresh')
+    emit('notice', t('accounts.loginComplete'), 'success')
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+// openChromeImport 读取本机可导入的 Chrome 账户
+async function openChromeImport(): Promise<void> {
+  pendingAction.value = 'chrome-discover'
+  try {
+    chromeProfiles.value = await api.chromeImportProfiles()
+    selectedChromeProfiles.value = chromeProfiles.value.map((profile) => profile.profile)
+    showChromeImport.value = true
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+function closeChromeImport(): void {
+  if (pendingAction.value === 'chrome-import') return
+  showChromeImport.value = false
+  chromeProfiles.value = []
+  selectedChromeProfiles.value = []
+}
+
+// importChromeAccounts 导入用户选中的 Chrome 账户
+async function importChromeAccounts(): Promise<void> {
+  pendingAction.value = 'chrome-import'
+  try {
+    const result = await api.importChromeAccounts({
+      profiles: [...selectedChromeProfiles.value],
+      ...accountEnvironment,
+    })
+    showChromeImport.value = false
+    chromeProfiles.value = []
+    selectedChromeProfiles.value = []
+    emit('refresh')
+    emit(
+      'notice',
+      t('accounts.importComplete').replace('{count}', String(result.accounts.length)),
+      'success',
+    )
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+// saveAccount 保存已有账户配置并刷新产品数据
+async function saveAccount(): Promise<void> {
+  if (editingAccountID.value === '') return
+  pendingAction.value = `edit:${editingAccountID.value}`
+  try {
+    await api.updateAccount(editingAccountID.value, { ...draft })
     closeEditor()
     emit('refresh')
   } catch (error) {
@@ -144,16 +205,30 @@ async function removeAccount(account: Account): Promise<void> {
 
 <template>
   <section class="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4 md:p-8">
-    <div class="mb-6 flex items-center justify-between border-b border-[#30363d] pb-2">
+    <div
+      class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[#30363d] pb-2"
+    >
       <h2 class="text-2xl font-bold text-white">{{ t('section.accounts.title') }}</h2>
-      <button
-        class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500"
-        type="button"
-        @click="beginAdd"
-      >
-        <UiIcon name="info" :size="15" />
-        {{ t('common.add') }}
-      </button>
+      <div class="flex flex-wrap justify-end gap-2">
+        <button
+          class="flex items-center gap-2 rounded border border-[#30363d] bg-[#21262d] px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-[#30363d] disabled:opacity-50"
+          type="button"
+          :disabled="pendingAction !== ''"
+          @click="openChromeImport"
+        >
+          <UiIcon name="accounts" :size="15" />
+          {{ t('accounts.importChrome') }}
+        </button>
+        <button
+          class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:opacity-50"
+          type="button"
+          :disabled="pendingAction !== ''"
+          @click="openBrowserLogin"
+        >
+          <UiIcon name="login" :size="15" />
+          {{ t('accounts.browserLogin') }}
+        </button>
+      </div>
     </div>
 
     <div v-if="error" class="rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
@@ -284,15 +359,13 @@ async function removeAccount(account: Account): Promise<void> {
     </div>
 
     <Teleport to="body">
-      <div v-if="showAdd" class="modal-overlay" @click.self="closeEditor">
+      <div v-if="showEditor" class="modal-overlay" @click.self="closeEditor">
         <form
           class="mx-4 w-full max-w-md rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
           @submit.prevent="saveAccount"
         >
           <div class="mb-4 flex items-center justify-between">
-            <h3 class="text-lg font-bold text-white">
-              {{ t(editingAccountID === '' ? 'accounts.addTitle' : 'accounts.editTitle') }}
-            </h3>
+            <h3 class="text-lg font-bold text-white">{{ t('accounts.editTitle') }}</h3>
             <button
               class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white"
               type="button"
@@ -302,23 +375,11 @@ async function removeAccount(account: Account): Promise<void> {
               <UiIcon name="close" :size="16" />
             </button>
           </div>
+          <p class="mb-4 truncate font-mono text-sm text-gray-300">{{ draft.label }}</p>
           <div class="space-y-4">
-            <label v-if="editingAccountID !== ''" class="flex items-center justify-between">
+            <label class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-400">{{ t('common.enable') }}</span>
               <input v-model="draft.enabled" class="h-4 w-4 accent-blue-600" type="checkbox" />
-            </label>
-            <label class="block">
-              <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                t('accounts.label')
-              }}</span>
-              <input
-                v-model.trim="draft.label"
-                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                :disabled="editingAccountID !== ''"
-                type="email"
-                required
-                autocomplete="email"
-              />
             </label>
             <label class="block">
               <span class="mb-1 block text-sm font-medium text-gray-400">{{
@@ -366,8 +427,173 @@ async function removeAccount(account: Account): Promise<void> {
               type="submit"
               :disabled="pendingAction !== ''"
             >
-              <template v-if="editingAccountID === ''">{{ t('accounts.startLogin') }}</template>
-              <template v-else>{{ t('common.save') }}</template>
+              {{ t('common.save') }}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div v-if="showBrowserLogin" class="modal-overlay" @click.self="closeBrowserLogin">
+        <form
+          class="mx-4 w-full max-w-md rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
+          @submit.prevent="beginBrowserLogin"
+        >
+          <div class="mb-4 flex items-center justify-between">
+            <h3 class="text-lg font-bold text-white">{{ t('accounts.browserLogin') }}</h3>
+            <button
+              class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white disabled:opacity-50"
+              type="button"
+              :disabled="pendingAction === 'browser-login'"
+              :aria-label="t('common.close')"
+              @click="closeBrowserLogin"
+            >
+              <UiIcon name="close" :size="16" />
+            </button>
+          </div>
+          <div class="space-y-4">
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                t('accounts.proxy')
+              }}</span>
+              <input
+                v-model.trim="accountEnvironment.proxy"
+                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                placeholder="socks5://127.0.0.1:1080"
+              />
+            </label>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                  t('accounts.locale')
+                }}</span>
+                <input
+                  v-model.trim="accountEnvironment.locale"
+                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  required
+                />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                  t('accounts.timezone')
+                }}</span>
+                <input
+                  v-model.trim="accountEnvironment.timezone"
+                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  required
+                />
+              </label>
+            </div>
+          </div>
+          <div class="mt-6 flex gap-2">
+            <button
+              class="flex-1 rounded bg-[#21262d] py-2 text-sm text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              type="button"
+              :disabled="pendingAction === 'browser-login'"
+              @click="closeBrowserLogin"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+              type="submit"
+              :disabled="pendingAction !== ''"
+            >
+              {{ t('accounts.browserLogin') }}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div v-if="showChromeImport" class="modal-overlay" @click.self="closeChromeImport">
+        <form
+          class="mx-4 w-full max-w-lg rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
+          @submit.prevent="importChromeAccounts"
+        >
+          <div class="mb-4 flex items-center justify-between">
+            <h3 class="text-lg font-bold text-white">{{ t('accounts.chromeTitle') }}</h3>
+            <button
+              class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white disabled:opacity-50"
+              type="button"
+              :disabled="pendingAction === 'chrome-import'"
+              :aria-label="t('common.close')"
+              @click="closeChromeImport"
+            >
+              <UiIcon name="close" :size="16" />
+            </button>
+          </div>
+          <div class="mb-4 space-y-4">
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                t('accounts.proxy')
+              }}</span>
+              <input
+                v-model.trim="accountEnvironment.proxy"
+                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                placeholder="socks5://127.0.0.1:1080"
+              />
+            </label>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                  t('accounts.locale')
+                }}</span>
+                <input
+                  v-model.trim="accountEnvironment.locale"
+                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  required
+                />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-gray-400">{{
+                  t('accounts.timezone')
+                }}</span>
+                <input
+                  v-model.trim="accountEnvironment.timezone"
+                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  required
+                />
+              </label>
+            </div>
+          </div>
+          <div v-if="chromeProfiles.length === 0" class="py-8 text-center text-sm text-gray-500">
+            {{ t('accounts.chromeEmpty') }}
+          </div>
+          <div v-else class="max-h-[50vh] space-y-2 overflow-auto">
+            <label
+              v-for="profile in chromeProfiles"
+              :key="profile.profile"
+              class="flex cursor-pointer items-start gap-3 rounded border border-[#30363d] bg-[#0d1117] p-3 transition hover:border-[#4b5563]"
+            >
+              <input
+                v-model="selectedChromeProfiles"
+                class="mt-1 h-4 w-4 shrink-0 accent-blue-600"
+                type="checkbox"
+                :value="profile.profile"
+              />
+              <span class="min-w-0 flex-1">
+                <strong class="block truncate text-sm text-white">{{ profile.email }}</strong>
+                <span class="block truncate text-xs text-gray-400">{{ profile.display_name }}</span>
+                <span class="block truncate font-mono text-xs text-gray-500">{{
+                  profile.profile
+                }}</span>
+              </span>
+            </label>
+          </div>
+          <div class="mt-6 flex gap-2">
+            <button
+              class="flex-1 rounded bg-[#21262d] py-2 text-sm text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              type="button"
+              :disabled="pendingAction === 'chrome-import'"
+              @click="closeChromeImport"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+              type="submit"
+              :disabled="pendingAction !== '' || selectedChromeProfiles.length === 0"
+            >
+              {{ t('accounts.importSelected') }}
             </button>
           </div>
         </form>

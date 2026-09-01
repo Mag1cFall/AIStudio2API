@@ -32,9 +32,6 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 		workerGenerations[accountID] = generation
 	}
 	request.ObserveModelAccessChange = service.publishModelAccess
-	request.ObserveModelAccessFailure = func(accountID string) {
-		service.forgetPerformance(accountID, request.Model)
-	}
 	request.ObserveAccountFailure = func(accountID string, cause error) {
 		label := accountID
 		for _, status := range service.pool.Status() {

@@ -217,7 +217,7 @@ INFO  account@example.com  账户认证续签完成 | 耗时=1.116s
 ERROR account@example.com  账户认证续签失败 | 耗时=1.116s | 错误=<ERROR>
 ```
 
-HTTP `403` 与协议 Code 7 结束当前账户在本次模型或 scope 中的尝试，清除对应的 `verified` 排序记录，并让当前请求选择下一账户。后续真实成功重新写入 `verified`，账户的其他模型保持原状态。协议 Code 5、Worker 进程失败或 Worker 被替换时重建当前账户 Worker 并重放一次；其他可重试错误写入临时冷却。
+HTTP `403` 与协议 Code 7 保留当前账户和模型的 `verified` 记录，不标记永久权限失败。协议 Code 5、Worker 进程失败或 Worker 被替换时重建当前账户 Worker 并重放一次；其他可重试错误写入临时冷却。
 
 ```text
 WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
@@ -245,9 +245,8 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 | `临时文件清理失败` | 跨账户临时副本回收失败，原始错误保留 |
 | `转录账号切换` | 转录生成阶段在首个结果前切换候选 |
 | `Bidi 账号切换` | Live/Robotics setup 阶段切换候选 |
-| `模型成功记录更新失败` | `model_access` 持久写回失败 |
 
-较晚返回的认证结果只有在 `authGeneration` 和 `checkedAt` 均匹配当前账户时才应用；较晚返回的模型成功或冷却结果只有在 `modelAccessGeneration` 和 `checked_at` 均匹配当前模型目录时才应用。Bidi setup 使用账户租约取得时间，后续每个会更新模型状态的 turn 使用会话内递增时间，较晚成功优先于旧 Code 7。日志记录实际应用到当前状态的变更和持久化错误。
+较晚返回的认证结果只有在 `authGeneration` 和 `checkedAt` 均匹配当前账户时才应用；较晚返回的模型成功或冷却结果只有在 `modelAccessGeneration` 和 `checked_at` 均匹配当前模型目录时才应用。日志记录实际应用到当前状态的变更和持久化错误。
 
 ## 管理事件流
 

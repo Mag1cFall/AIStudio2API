@@ -53,10 +53,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 		options.BootstrapPrompt = fmt.Sprintf("AIStudio2API bootstrap %d", time.Now().UnixNano())
 	}
 	options.reportStartup(StartupPreparingBrowser)
-	ffVersion, err := browserMajor(options.ExecutablePath)
-	if err != nil {
-		return nil, err
-	}
+	ffVersion := camoufoxFirefoxMajor
 	fingerprint, err := loadAccountCamoufoxConfig(options.StorageStatePath, ffVersion, options.Locale, options.Timezone)
 	if err != nil {
 		return nil, err

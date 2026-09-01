@@ -26,6 +26,23 @@ export interface AccountDraft {
   timezone: string
 }
 
+export interface AccountLoginInput {
+  proxy: string
+  locale: string
+  timezone: string
+}
+
+export interface ChromeImportProfile {
+  profile: string
+  display_name: string
+  email: string
+  locale: string
+}
+
+export interface ChromeImportInput extends AccountLoginInput {
+  profiles: string[]
+}
+
 export interface AccountCounters {
   total: number
   ready: number
