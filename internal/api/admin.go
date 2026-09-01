@@ -57,13 +57,20 @@ type AccessLog struct {
 	Latency         time.Duration
 	FirstEvent      time.Duration
 	FirstContent    time.Duration
+	UpstreamBytes   int64
 	ContentChars    int
 	OutputTokens    int64
 	ReasoningTokens int64
+	InputMessages   int
+	InputTextChars  int
+	InputMedia      int
+	InputMediaBytes int64
+	InputFiles      int
 	Temperature     string
 	TopP            string
 	Thinking        string
 	MaxOutputTokens string
+	RequestID       string
 	Method          string
 	Path            string
 	Model           string

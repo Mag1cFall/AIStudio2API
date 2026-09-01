@@ -18,12 +18,28 @@ type ProtocolEvidenceError struct {
 	Raw    json.RawMessage
 }
 
+// PromptFeedbackError 表示上游拒绝当前输入且没有返回候选
+type PromptFeedbackError struct {
+	Reason string
+	Raw    json.RawMessage
+}
+
 // Error 返回协议证据错误
 func (e *ProtocolEvidenceError) Error() string {
 	if e.Method == "" {
 		return fmt.Sprintf("协议位置 %s: %s", e.Path, e.Detail)
 	}
 	return fmt.Sprintf("AI Studio %s 协议位置 %s: %s", e.Method, e.Path, e.Detail)
+}
+
+// Error 返回上游输入拒绝原因
+func (e *PromptFeedbackError) Error() string {
+	return fmt.Sprintf("AI Studio 拒绝当前输入: %s", e.Reason)
+}
+
+// Unwrap 将输入拒绝映射为无效请求
+func (e *PromptFeedbackError) Unwrap() error {
+	return ErrInvalidArgument
 }
 
 type sparseJSONReader struct {

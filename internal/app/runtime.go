@@ -2653,11 +2653,27 @@ func (activity *upstreamActivity) logFields(now time.Time) string {
 	)
 }
 
+func inlineImageInput(contents []aistudio.Content) (int, int64) {
+	count := 0
+	var bytes int64
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			if part.InlineData == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(part.InlineData.MIME)), "image/") {
+				continue
+			}
+			count++
+			bytes += int64(len(part.InlineData.Data))
+		}
+	}
+	return count, bytes
+}
+
 // Generate 获取唯一账户并转发规范事件流
 func (service *trackedService) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
 	generationStartedAt := time.Now()
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
+	api.SetAccessLogGenerationInput(ctx, request)
 	api.StartAccessLog(ctx)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
@@ -2762,6 +2778,44 @@ func (service *trackedService) generateWithRetry(
 		accountLabel := lease.Account().Config.Label
 		api.SetAccessLogTarget(requestCtx, modelID, accountLabel)
 		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
+		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
+		var attemptCopies *aistudio.TemporaryFileCopies
+		copiedFileCount := 0
+		if copyFiles {
+			fileCopies, ok := service.service.(interface {
+				CopyFileReferencesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
+			})
+			if !ok {
+				err = fmt.Errorf("文件引用跨账户服务不可用")
+			} else {
+				request.Contents, attemptCopies, err = fileCopies.CopyFileReferencesToLease(
+					requestCtx, lease, originalContents,
+				)
+				if err == nil {
+					copiedFileCount = attemptCopies.Count()
+				}
+			}
+		}
+		imageCount, imageBytes := inlineImageInput(request.Contents)
+		if err == nil && imageCount > 0 {
+			uploader, ok := service.service.(interface {
+				UploadInlineImagesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
+			})
+			if !ok {
+				err = fmt.Errorf("内联图片上传服务不可用")
+			} else {
+				uploadStartedAt := time.Now()
+				request.Contents, attemptCopies, err = uploader.UploadInlineImagesToLease(
+					requestCtx, lease, request.Contents, attemptCopies,
+				)
+				if err == nil {
+					service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+						"内联图片上传完成 | 图片=%d | 原始=%dB | 耗时=%s",
+						imageCount, imageBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
+					))
+				}
+			}
+		}
 		prepareStartedAt := time.Now()
 		prepareTiming := newRequestPreparationTiming(prepareStartedAt)
 		prepareWarningDone := make(chan struct{})
@@ -2774,26 +2828,12 @@ func (service *trackedService) generateWithRetry(
 			close(prepareWarningDone)
 		})
 		activity = &upstreamActivity{}
-		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
 		attemptCtx = aistudio.ContextWithStreamActivityObserver(attemptCtx, activity.observe)
 		attemptCtx = aistudio.ContextWithRequestPhaseObserver(attemptCtx, prepareTiming.observe)
-		var attemptCopies *aistudio.TemporaryFileCopies
-		if copyFiles {
-			fileCopies, ok := service.service.(interface {
-				CopyFileReferencesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
-			})
-			if !ok {
-				err = fmt.Errorf("文件引用跨账户服务不可用")
-			} else {
-				request.Contents, attemptCopies, err = fileCopies.CopyFileReferencesToLease(
-					requestCtx, lease, originalContents,
-				)
-			}
-		}
 		if err == nil {
 			source, err = service.service.Generate(attemptCtx, request)
 		}
-		if err == nil && attemptCopies != nil && attemptCopies.Count() > 0 {
+		if err == nil && copiedFileCount > 0 {
 			sourceLabels := make([]string, 0, len(attemptCopies.SourceAccountIDs()))
 			statuses := service.pool.Status()
 			for _, sourceID := range attemptCopies.SourceAccountIDs() {
@@ -2808,7 +2848,7 @@ func (service *trackedService) generateWithRetry(
 			}
 			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
 				"文件引用复制 | 来源=%s | 目标=%s | 文件=%d",
-				strings.Join(sourceLabels, ","), accountLabel, attemptCopies.Count(),
+				strings.Join(sourceLabels, ","), accountLabel, copiedFileCount,
 			))
 		}
 		prepareElapsed := time.Since(prepareStartedAt)
@@ -2902,6 +2942,9 @@ func (service *trackedService) generateWithRetry(
 		service.requests.log(accountLabel, "WARN", switchMessage)
 	}
 	if err != nil {
+		if activity != nil {
+			api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
+		}
 		api.SetAccessLogError(requestCtx, err)
 		service.requests.finish(request.ID, finalRequestState(err), err)
 		select {
@@ -3052,6 +3095,7 @@ func (service *trackedService) forwardEvents(
 	}
 	defer cancel()
 	defer func() {
+		api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
 		api.SetAccessLogGenerationResult(requestCtx, firstContent, contentChars, outputTokens, reasoningTokens)
 		if temporaryCopies != nil {
 			if err := temporaryCopies.Cleanup(); err != nil {

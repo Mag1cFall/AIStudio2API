@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -32,13 +33,20 @@ type accessLogMetadata struct {
 	failureStatus   int
 	firstEvent      time.Duration
 	firstContent    time.Duration
+	upstreamBytes   int64
 	contentChars    int
 	outputTokens    int64
 	reasoningTokens int64
+	inputMessages   int
+	inputTextChars  int
+	inputMedia      int
+	inputMediaBytes int64
+	inputFiles      int
 	temperature     string
 	topP            string
 	thinking        string
 	maxOutputTokens string
+	requestID       string
 }
 
 type accessLogSnapshot struct {
@@ -51,13 +59,20 @@ type accessLogSnapshot struct {
 	failureStatus   int
 	firstEvent      time.Duration
 	firstContent    time.Duration
+	upstreamBytes   int64
 	contentChars    int
 	outputTokens    int64
 	reasoningTokens int64
+	inputMessages   int
+	inputTextChars  int
+	inputMedia      int
+	inputMediaBytes int64
+	inputFiles      int
 	temperature     string
 	topP            string
 	thinking        string
 	maxOutputTokens string
+	requestID       string
 }
 
 type accessLogResponseWriter struct {
@@ -119,7 +134,9 @@ func (metadata *accessLogMetadata) start(force bool) {
 	entry := AccessLog{
 		Method: metadata.method, Path: metadata.path, Model: metadata.model, Account: metadata.account,
 		Temperature: metadata.temperature, TopP: metadata.topP, Thinking: metadata.thinking,
-		MaxOutputTokens: metadata.maxOutputTokens, Generation: metadata.generation,
+		MaxOutputTokens: metadata.maxOutputTokens, Generation: metadata.generation, RequestID: metadata.requestID,
+		InputMessages: metadata.inputMessages, InputTextChars: metadata.inputTextChars,
+		InputMedia: metadata.inputMedia, InputMediaBytes: metadata.inputMediaBytes, InputFiles: metadata.inputFiles,
 	}
 	metadata.mu.Unlock()
 	if admin != nil {
@@ -182,6 +199,42 @@ func (metadata *accessLogMetadata) setGenerationConfig(config aistudio.Generatio
 	metadata.mu.Unlock()
 }
 
+func (metadata *accessLogMetadata) setGenerationInput(request aistudio.GenerateRequest) {
+	textChars := utf8.RuneCountInString(request.System)
+	media := 0
+	var mediaBytes int64
+	files := 0
+	for _, content := range request.Contents {
+		for _, part := range content.Parts {
+			textChars += utf8.RuneCountInString(part.Text)
+			if part.InlineData != nil {
+				media++
+				mediaBytes += int64(len(part.InlineData.Data))
+			}
+			if part.ExternalMedia != nil {
+				media++
+			}
+			if part.File != nil {
+				files++
+			}
+		}
+	}
+	metadata.mu.Lock()
+	metadata.requestID = strings.TrimSpace(request.ID)
+	metadata.inputMessages = len(request.Contents)
+	metadata.inputTextChars = textChars
+	metadata.inputMedia = media
+	metadata.inputMediaBytes = mediaBytes
+	metadata.inputFiles = files
+	metadata.mu.Unlock()
+}
+
+func (metadata *accessLogMetadata) setUpstreamBytes(bytes int64) {
+	metadata.mu.Lock()
+	metadata.upstreamBytes = bytes
+	metadata.mu.Unlock()
+}
+
 func (metadata *accessLogMetadata) setFirstEvent(firstEvent time.Duration) {
 	metadata.mu.Lock()
 	if metadata.firstEvent == 0 {
@@ -198,9 +251,11 @@ func (metadata *accessLogMetadata) snapshot() accessLogSnapshot {
 		requestErr: metadata.err, canceled: metadata.canceled,
 		failureStatus: metadata.failureStatus,
 		firstEvent:    metadata.firstEvent, firstContent: metadata.firstContent, contentChars: metadata.contentChars,
-		outputTokens: metadata.outputTokens, reasoningTokens: metadata.reasoningTokens,
+		upstreamBytes: metadata.upstreamBytes, outputTokens: metadata.outputTokens, reasoningTokens: metadata.reasoningTokens,
+		inputMessages: metadata.inputMessages, inputTextChars: metadata.inputTextChars,
+		inputMedia: metadata.inputMedia, inputMediaBytes: metadata.inputMediaBytes, inputFiles: metadata.inputFiles,
 		temperature: metadata.temperature, topP: metadata.topP,
-		thinking: metadata.thinking, maxOutputTokens: metadata.maxOutputTokens,
+		thinking: metadata.thinking, maxOutputTokens: metadata.maxOutputTokens, requestID: metadata.requestID,
 	}
 	metadata.mu.Unlock()
 	return snapshot
@@ -217,6 +272,20 @@ func SetAccessLogFirstEvent(ctx context.Context, firstEvent time.Duration) {
 func SetAccessLogGenerationConfig(ctx context.Context, config aistudio.GenerationConfig) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setGenerationConfig(config)
+	}
+}
+
+// SetAccessLogGenerationInput 写入生成请求输入摘要
+func SetAccessLogGenerationInput(ctx context.Context, request aistudio.GenerateRequest) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.setGenerationInput(request)
+	}
+}
+
+// SetAccessLogUpstreamBytes 写入上游响应体字节数
+func SetAccessLogUpstreamBytes(ctx context.Context, bytes int64) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.setUpstreamBytes(bytes)
 	}
 }
 
@@ -308,12 +377,15 @@ func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handle
 		if admin != nil {
 			admin.RecordAccessLog(AccessLog{
 				Status: status, Latency: time.Since(started), FirstEvent: snapshot.firstEvent,
-				FirstContent: snapshot.firstContent,
+				FirstContent: snapshot.firstContent, UpstreamBytes: snapshot.upstreamBytes,
 				ContentChars: snapshot.contentChars, OutputTokens: snapshot.outputTokens,
 				ReasoningTokens: snapshot.reasoningTokens,
-				Temperature:     snapshot.temperature, TopP: snapshot.topP,
+				InputMessages:   snapshot.inputMessages, InputTextChars: snapshot.inputTextChars,
+				InputMedia: snapshot.inputMedia, InputMediaBytes: snapshot.inputMediaBytes, InputFiles: snapshot.inputFiles,
+				Temperature: snapshot.temperature, TopP: snapshot.topP,
 				Thinking: snapshot.thinking, MaxOutputTokens: snapshot.maxOutputTokens,
-				Method: r.Method, Path: r.URL.Path, Model: snapshot.model, Account: snapshot.account,
+				RequestID: snapshot.requestID,
+				Method:    r.Method, Path: r.URL.Path, Model: snapshot.model, Account: snapshot.account,
 				FinishReason: snapshot.finishReason, Error: snapshot.requestErr,
 				Canceled: snapshot.canceled, Generation: snapshot.generation,
 			})

@@ -129,7 +129,7 @@ type temporaryDriveCopy struct {
 	bound bool
 }
 
-// TemporaryFileCopies 保存一次请求创建的临时 Drive 副本
+// TemporaryFileCopies 保存一次请求创建的临时 Drive 文件
 type TemporaryFileCopies struct {
 	client  *Client
 	lease   *AccountLease
@@ -689,6 +689,128 @@ func (s *PooledService) CopyFileReferencesToLease(
 		}
 	}
 	return rewritten, copies, nil
+}
+
+// UploadInlineImagesToLease 将内联图片上传到目标账户并改写为临时 Drive 引用
+func (s *PooledService) UploadInlineImagesToLease(
+	ctx context.Context,
+	target *AccountLease,
+	contents []Content,
+	temporary *TemporaryFileCopies,
+) ([]Content, *TemporaryFileCopies, error) {
+	if s == nil || s.pool == nil || s.client == nil {
+		return nil, nil, fmt.Errorf("内联图片上传服务未初始化")
+	}
+	if target == nil || target.Account() == nil || target.pool != s.pool {
+		return nil, nil, fmt.Errorf("目标账户租约未初始化")
+	}
+	if temporary == nil {
+		temporary = &TemporaryFileCopies{
+			client: s.client, lease: target, sources: make(map[string]struct{}),
+		}
+	} else if temporary.client != s.client || temporary.lease != target {
+		return nil, nil, errors.Join(fmt.Errorf("临时文件账户不匹配"), temporary.Cleanup())
+	}
+	rewritten := cloneContentsForFileCopies(contents)
+	targetID := target.Account().ID
+	targetCtx := ContextWithAccountLease(ctx, target)
+	type uploadJob struct {
+		contentIndex int
+		partIndex    int
+		name         string
+		blob         *Blob
+	}
+	type uploadResult struct {
+		index int
+		file  FileRef
+		err   error
+	}
+	jobs := make([]uploadJob, 0)
+	imageIndex := 0
+	for contentIndex := range rewritten {
+		for partIndex := range rewritten[contentIndex].Parts {
+			part := &rewritten[contentIndex].Parts[partIndex]
+			if part.InlineData == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(part.InlineData.MIME)), "image/") {
+				continue
+			}
+			imageIndex++
+			jobs = append(jobs, uploadJob{
+				contentIndex: contentIndex,
+				partIndex:    partIndex,
+				name:         fmt.Sprintf("inline-image-%d", imageIndex),
+				blob:         part.InlineData,
+			})
+		}
+	}
+	token, uploadErr := s.client.GenerateAccessToken(targetCtx, targetID)
+	drive, ok := s.client.transport.(DriveTransport)
+	if uploadErr == nil && !ok {
+		uploadErr = fmt.Errorf("AI Studio transport 不支持 Drive")
+	}
+	if uploadErr != nil {
+		if DefinitiveAuthenticationFailure(uploadErr) {
+			uploadErr = errors.Join(uploadErr, target.MarkAuthenticationRequired(uploadErr.Error()))
+		}
+		return nil, nil, errors.Join(uploadErr, temporary.Cleanup())
+	}
+	uploadCtx, cancelUploads := context.WithCancel(targetCtx)
+	resultChannel := make(chan uploadResult, len(jobs))
+	for index, job := range jobs {
+		go func(index int, job uploadJob) {
+			file, err := drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
+				AccountID: targetID,
+				Name:      job.name,
+				MIME:      job.blob.MIME,
+				Size:      int64(len(job.blob.Data)),
+				Reader:    bytes.NewReader(job.blob.Data),
+			})
+			file.ID = strings.TrimSpace(file.ID)
+			if err == nil && file.ID == "" {
+				err = fmt.Errorf("临时 Drive 图片缺少 ID")
+			}
+			resultChannel <- uploadResult{index: index, file: file, err: err}
+		}(index, job)
+	}
+	results := make([]uploadResult, len(jobs))
+	for range jobs {
+		result := <-resultChannel
+		results[result.index] = result
+		if result.err != nil {
+			cancelUploads()
+		}
+	}
+	cancelUploads()
+	copyOffset := len(temporary.copies)
+	for _, result := range results {
+		if result.file.ID != "" {
+			temporary.copies = append(temporary.copies, temporaryDriveCopy{id: result.file.ID, token: token})
+		}
+		uploadErr = errors.Join(uploadErr, result.err)
+	}
+	if uploadErr != nil {
+		if DefinitiveAuthenticationFailure(uploadErr) {
+			uploadErr = errors.Join(uploadErr, target.MarkAuthenticationRequired(uploadErr.Error()))
+		}
+		return nil, nil, errors.Join(uploadErr, temporary.Cleanup())
+	}
+	for index, job := range jobs {
+		file := results[index].file
+		if bindErr := target.BindFileResource(targetCtx, file, int64(len(job.blob.Data)), "vision"); bindErr != nil {
+			return nil, nil, errors.Join(bindErr, temporary.Cleanup())
+		}
+		temporary.copies[copyOffset+index].bound = true
+		part := &rewritten[job.contentIndex].Parts[job.partIndex]
+		part.InlineData = nil
+		part.File = &file
+	}
+	stateErr := errors.Join(
+		target.MarkAuthenticationValid(),
+		s.pool.ClearCooldownIfGeneration(targetID, "", target.ModelAccessGeneration(), target.CheckedAt()),
+	)
+	if stateErr != nil {
+		return nil, nil, errors.Join(stateErr, temporary.Cleanup())
+	}
+	return rewritten, temporary, nil
 }
 
 func cloneContentsForFileCopies(contents []Content) []Content {
