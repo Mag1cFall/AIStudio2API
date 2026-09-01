@@ -60,7 +60,12 @@ func (driver *NativeLoginDriver) Login(ctx context.Context, request IsolatedLogi
 	if err := state.Validate(); err != nil {
 		return IsolatedLoginResult{}, err
 	}
-	return IsolatedLoginResult{StorageState: state, VerifiedAt: result.VerifiedAt}, nil
+	if err := state.SetAuthExtension(AuthExtension{
+		Source: AuthSource{Browser: "camoufox", Email: result.Email},
+	}); err != nil {
+		return IsolatedLoginResult{}, err
+	}
+	return IsolatedLoginResult{StorageState: state, Email: result.Email, VerifiedAt: result.VerifiedAt}, nil
 }
 
 // Verify 使用无头隔离 Camoufox 验证已有认证状态

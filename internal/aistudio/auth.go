@@ -120,6 +120,7 @@ type IsolatedLoginRequest struct {
 // IsolatedLoginResult 返回独立浏览器导出的认证状态
 type IsolatedLoginResult struct {
 	StorageState StorageState
+	Email        string
 	VerifiedAt   time.Time
 }
 

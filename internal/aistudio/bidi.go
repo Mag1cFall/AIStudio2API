@@ -20,18 +20,17 @@ const (
 
 // BidiRequest 定义一条双向实时会话
 type BidiRequest struct {
-	Model                     string
-	Mode                      BidiMode
-	Tools                     []FunctionDeclaration
-	AccountID                 string
-	AllowedAccountIDs         []string
-	SessionToken              string
-	ModelAccessScope          string
-	RecoverWAARuntime         func(context.Context, string, error) (bool, error)
-	ObserveWAARuntime         func(string, uint64)
-	ObserveModelAccessChange  func()
-	ObserveModelAccessFailure func(string)
-	ObserveAccountFailure     func(string, error)
+	Model                    string
+	Mode                     BidiMode
+	Tools                    []FunctionDeclaration
+	AccountID                string
+	AllowedAccountIDs        []string
+	SessionToken             string
+	ModelAccessScope         string
+	RecoverWAARuntime        func(context.Context, string, error) (bool, error)
+	ObserveWAARuntime        func(string, uint64)
+	ObserveModelAccessChange func()
+	ObserveAccountFailure    func(string, error)
 }
 
 // BidiEventKind 表示双向实时协议事件

@@ -80,7 +80,7 @@ func installCamoufox(ctx context.Context, executableName string) (string, error)
 			return "", fmt.Errorf("设置 Camoufox 执行权限: %w", err)
 		}
 	}
-	if _, err := validateManagedCamoufoxExecutable(stagedExecutable); err != nil {
+	if _, err := validateCamoufoxExecutable(stagedExecutable); err != nil {
 		return "", fmt.Errorf("校验 Camoufox 临时目录: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

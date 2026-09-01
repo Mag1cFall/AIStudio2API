@@ -22,6 +22,14 @@ const loginReadyExpression = `(() => {
   return Boolean(textarea && textarea.offsetParent !== null);
 })()`
 
+const loginEmailExpression = `(() => {
+  const values = [document.body?.innerText || ''];
+  for (const element of document.querySelectorAll('[aria-label]')) {
+    values.push(element.getAttribute('aria-label') || '');
+  }
+  return values.join('\n').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
+})()`
+
 // LoginOptions 定义纯 Go 隔离登录环境
 type LoginOptions struct {
 	ExecutablePath string
@@ -37,6 +45,7 @@ type LoginOptions struct {
 // LoginResult 返回隔离浏览器导出的 Playwright storage state
 type LoginResult struct {
 	StorageStateJSON []byte
+	Email            string
 	PageURL          string
 	VerifiedAt       time.Time
 }
@@ -76,6 +85,14 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 	if err != nil {
 		return LoginResult{}, err
 	}
+	email, err := session.client.evaluateString(loginCtx, session.contextID, loginEmailExpression)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("读取 AI Studio 登录邮箱: %w", err)
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return LoginResult{}, errors.New("AI Studio 页面没有登录邮箱")
+	}
 	state, err := session.exportStorageState(loginCtx, origins)
 	if err != nil {
 		return LoginResult{}, err
@@ -84,7 +101,7 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("编码 storage state: %w", err)
 	}
-	return LoginResult{StorageStateJSON: encoded, PageURL: pageURL, VerifiedAt: time.Now().UTC()}, nil
+	return LoginResult{StorageStateJSON: encoded, Email: email, PageURL: pageURL, VerifiedAt: time.Now().UTC()}, nil
 }
 
 // Verify 使用无头隔离 Camoufox 验证已有 Playwright storage state
@@ -145,10 +162,7 @@ func validateLoginOptions(options LoginOptions) (LoginOptions, error) {
 }
 
 func startLoginSession(ctx context.Context, options LoginOptions, headless bool, state storageState) (*loginSession, error) {
-	ffVersion, err := browserMajor(options.ExecutablePath)
-	if err != nil {
-		return nil, err
-	}
+	ffVersion := camoufoxFirefoxMajor
 	fingerprintPath := filepath.Join(options.Directory, "storage-state.json")
 	fingerprint, err := loadAccountCamoufoxConfig(fingerprintPath, ffVersion, options.Locale, options.Timezone)
 	if err != nil {

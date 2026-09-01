@@ -16,6 +16,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
@@ -150,9 +151,8 @@ func (admin *runtimeAdmin) Accounts(context.Context) ([]api.AdminAccount, error)
 	return accounts, nil
 }
 
-func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountInput) (created api.AdminAccount, resultErr error) {
-	accountConfig := aistudio.DefaultAccountConfig(input.Label)
-	accountConfig.Enabled = input.Enabled
+func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountCreateInput) (api.AdminAccount, error) {
+	accountConfig := aistudio.DefaultAccountConfig("")
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
 	if locale := strings.TrimSpace(input.Locale); locale != "" {
 		accountConfig.Locale = locale
@@ -160,7 +160,7 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 	if timezone := strings.TrimSpace(input.Timezone); timezone != "" {
 		accountConfig.Timezone = timezone
 	}
-	if err := accountConfig.Validate(); err != nil {
+	if err := config.ValidateProxy(accountConfig.Proxy); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
 	directory, err := os.MkdirTemp("", "aistudio2api-account-login-*")
@@ -185,7 +185,110 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
 		return api.AdminAccount{}, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	account, publishLease, err := admin.store.Create(accountConfig, result.StorageState)
+	accountConfig.Label = result.Email
+	if err := accountConfig.Validate(); err != nil {
+		return api.AdminAccount{}, invalidAccount(err)
+	}
+	created, err := admin.addAccount(ctx, accountConfig, result.StorageState, directory)
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	admin.requests.log("auth", "INFO", fmt.Sprintf(
+		"账户添加完成 | 账户=%s | 耗时=%s",
+		created.Label, time.Since(startedAt).Round(time.Millisecond),
+	))
+	return created, nil
+}
+
+func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error) {
+	root, err := chromeauth.DefaultChromeRoot()
+	if err != nil {
+		return nil, err
+	}
+	accounts, err := chromeauth.Discover(root)
+	if err != nil {
+		return nil, err
+	}
+	existing := make(map[string]struct{})
+	for _, status := range admin.pool.Status() {
+		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
+	}
+	profiles := make([]api.ChromeImportProfile, 0, len(accounts))
+	for _, account := range accounts {
+		email := strings.ToLower(strings.TrimSpace(account.Email))
+		if !account.Importable || email == "" {
+			continue
+		}
+		if _, exists := existing[email]; exists {
+			continue
+		}
+		profiles = append(profiles, api.ChromeImportProfile{
+			Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
+		})
+	}
+	return profiles, nil
+}
+
+func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
+	if len(input.Profiles) == 0 {
+		return nil, invalidAccount(fmt.Errorf("未选择 Chrome 账号"))
+	}
+	root, err := chromeauth.DefaultChromeRoot()
+	if err != nil {
+		return nil, err
+	}
+	accountProxy := strings.TrimSpace(input.Proxy)
+	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{
+		ChromeRoot: root, Proxy: admin.effectiveProxy(accountProxy), Profiles: input.Profiles,
+	})
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]aistudio.AccountConfig, len(results))
+	seen := make(map[string]struct{}, len(results))
+	for index, result := range results {
+		email := strings.ToLower(strings.TrimSpace(result.Email))
+		if _, exists := seen[email]; exists {
+			return nil, invalidAccount(fmt.Errorf("Chrome 账号重复: %s", email))
+		}
+		seen[email] = struct{}{}
+		accountConfig := aistudio.DefaultAccountConfig(email)
+		accountConfig.Proxy = accountProxy
+		if locale := strings.TrimSpace(input.Locale); locale != "" {
+			accountConfig.Locale = locale
+		} else if locale := strings.TrimSpace(result.Locale); locale != "" {
+			accountConfig.Locale = locale
+		}
+		if timezone := strings.TrimSpace(input.Timezone); timezone != "" {
+			accountConfig.Timezone = timezone
+		}
+		if err := accountConfig.Validate(); err != nil {
+			return nil, invalidAccount(err)
+		}
+		if _, err := aistudio.NewSigner().Sign(result.State); err != nil {
+			return nil, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
+		}
+		configs[index] = accountConfig
+	}
+	accounts := make([]api.AdminAccount, 0, len(results))
+	for index, result := range results {
+		account, err := admin.addAccount(ctx, configs[index], result.State, "")
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+		admin.requests.log("auth", "INFO", "Chrome 账户已导入 | 账户="+account.Label)
+	}
+	return accounts, nil
+}
+
+func (admin *runtimeAdmin) addAccount(
+	ctx context.Context,
+	accountConfig aistudio.AccountConfig,
+	state aistudio.StorageState,
+	fingerprintDirectory string,
+) (created api.AdminAccount, resultErr error) {
+	account, publishLease, err := admin.store.Create(accountConfig, state)
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
@@ -194,8 +297,10 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 			resultErr = errors.Join(resultErr, publishLease.Release())
 		}
 	}()
-	if err := camoufoxnative.PersistAccountFingerprint(directory, account.Directory); err != nil {
-		return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
+	if fingerprintDirectory != "" {
+		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
+			return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
+		}
 	}
 	if err := admin.headers.Add(account); err != nil {
 		return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
@@ -215,10 +320,6 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountI
 	}
 	publishLease = nil
 	admin.syncAccountModelCatalog(ctx, account)
-	admin.requests.log("auth", "INFO", fmt.Sprintf(
-		"账户添加完成 | 账户=%s | 耗时=%s",
-		account.Config.Label, time.Since(startedAt).Round(time.Millisecond),
-	))
 	return admin.account(account.ID)
 }
 
@@ -317,6 +418,11 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string) (
 			time.Since(startedAt).Round(time.Millisecond), strings.TrimSpace(err.Error()),
 		))
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Email), account.ID) {
+		return api.AdminAccount{}, errors.Join(
+			invalidAccount(fmt.Errorf("登录邮箱与账户不一致: %s", result.Email)), lease.Release(),
+		)
 	}
 	admin.requests.log(account.Config.Label, "INFO", "账户登录 | 2/2 | 保存认证状态")
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {

@@ -40,7 +40,7 @@ cd ..
 go run ./cmd/aistudio2api
 ```
 
-管理页面的“账户”页是默认认证入口，可以新增账户、重新登录、验证、编辑、启停和删除账户。新增账户时会直接启动隔离 Camoufox 登录。`setup` 保留以下四种命令行导入入口：
+管理页面的“账户”页提供 Chrome 批量导入和浏览器登录，也可以重新登录、验证、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。`setup` 保留以下四种命令行导入入口：
 
 | 入口 | 命令 | 适用场景 |
 | --- | --- | --- |
@@ -54,12 +54,11 @@ go run ./cmd/aistudio2api
 | 参数 | 作用 |
 | --- | --- |
 | `--chrome-root <DIR>` | 指定 Chrome User Data 根目录 |
-| `--label <EMAIL>` | 设置单个导入账户的标签；隔离登录时必须提供 Google 邮箱 |
 | `--proxy <URL>` | 固定到账户初始化、WAA 与业务请求 |
 | `--locale <LOCALE>` | 设置账户语言 |
 | `--timezone <IANA_ZONE>` | 设置账户时区 |
 
-`--storage-state`、`--login` 与 Chrome 导入参数分别构成文件导入、隔离登录和浏览器导入模式。`--label` 适用于单个 Chrome 导入结果；隔离登录使用 `--login --label <Google 邮箱>`。`setup` 要求 `AISTUDIO_AUTH_STATES` 指向一个账户目录。
+`--storage-state`、`--login` 与 Chrome 导入参数分别构成文件导入、隔离登录和浏览器导入模式。隔离登录使用 `--login`。`setup` 要求 `AISTUDIO_AUTH_STATES` 指向一个账户目录。
 
 `--proxy` 会同时固定到新账户的初始化、WAA 与业务请求，接受无认证信息的 HTTP、HTTPS 或 SOCKS5 URL。`--locale` 和 `--timezone` 设置账户环境；Chrome 导入未显式指定语言时读取 Profile 的首选语言。Camoufox 按以下顺序定位：进程环境变量 `CAMOUFOX_PATH`、`runtime/camoufox/`、可执行文件旁的同名目录、Windows 本机 Camoufox 缓存。全部不存在时自动下载当前平台的固定版本。
 
@@ -234,14 +233,14 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 
 | 操作 | scope | 成功与失败语义 |
 | --- | --- | --- |
-| 普通 GenerateContent | `<modelID>` | 规范 `EventFinish` 到达后写 `verified`；Code 7 清该模型成功记录 |
+| 普通 GenerateContent | `<modelID>` | 规范 `EventFinish` 到达后写 `verified`；Code 7 保留已有记录 |
 | CountTokens | `count-tokens:<modelID>` | 成功清该 scope 冷却，模型 `verified` 保持原值 |
-| Transcribe | `<modelID>` | 非空文本或 segments 写 `verified`；生成 Code 7 清该模型记录 |
+| Transcribe | `<modelID>` | 非空文本或 segments 写 `verified`；Code 7 保留已有记录 |
 | Live 纯文本 | `<modelID>` | setup 成功写 `verified`；每次 `SendText` 开始一次模型资格检查，`turn_complete` 更新成功 |
 | Live 音频或图像 | `bidi-media:<modelID>` | `SendMedia` 开始一次模型资格检查并更新媒体 scope |
 | Robotics | `bidi-media:<modelID>` | `SendText` 开始一次模型资格检查，`turn_complete` 更新成功 |
 
-`ModelAccessKey(scope, model)` 会移除 `models/` 前缀；空 scope 返回规范模型 ID，非空 scope 返回 `<scope>:<canonicalModelID>`。Bidi setup 使用 lease（账户租约）时间，会话内每个 qualifying turn（一次模型资格检查）分配严格递增的 attempt 时间，对应的 `turn_complete` 或 Code 7 消费同一次 attempt。普通流式生成在规范 `EventFinish` 到达时写 `verified`；此前的 text、reasoning、tool、usage 和首事件用于输出与性能统计，终态前断流、取消或错误保持原验证状态。
+`ModelAccessKey(scope, model)` 会移除 `models/` 前缀；空 scope 返回规范模型 ID，非空 scope 返回 `<scope>:<canonicalModelID>`。Bidi setup 使用 lease（账户租约）时间，会话内每个 qualifying turn（一次模型资格检查）分配严格递增的 attempt 时间，`turn_complete` 消费对应 attempt。普通流式生成在规范 `EventFinish` 到达时写 `verified`；此前的 text、reasoning、tool、usage 和首事件用于输出与性能统计，终态前断流、取消或错误保持原验证状态。
 
 模型目录刷新为全部 enabled ready/busy 账户并发执行。同步报错或返回空目录的账户进入 generation 内的 pending ID 集合；每个非空结果立即更新公共目录、账户状态并在 RUNNING 期间预热更多 Worker。初次 fan-out（同时向全部符合条件的账户发出 `ListModels`）结束后，单个 30 秒 ticker（定时器）对排序后的 pending ID 再次并发刷新，账户删除会同步移除 pending ID。`modelRevision` 跟踪账户和配置变化，生成服务开始接收请求前会确认已应用当前 revision。
 
@@ -267,7 +266,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 能力 | 路由 |
 | --- | --- |
 | 健康与状态 | `GET /health`、`GET /api/status` |
-| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`PUT/DELETE /api/accounts/{id}` |
+| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`PUT/DELETE /api/accounts/{id}` |
 | 登录与验证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 配置 | `GET /api/config`、`PUT /api/config` |

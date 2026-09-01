@@ -13,7 +13,9 @@ import (
 type AdminService interface {
 	Status(context.Context) (AdminStatus, error)
 	Accounts(context.Context) ([]AdminAccount, error)
-	CreateAccount(context.Context, AccountInput) (AdminAccount, error)
+	CreateAccount(context.Context, AccountCreateInput) (AdminAccount, error)
+	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
+	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string) (AdminAccount, error)
@@ -95,13 +97,36 @@ type AdminAccount struct {
 	Message     string   `json:"message"`
 }
 
-// AccountInput 表示新增账户配置
+// AccountInput 表示已有账户配置
 type AccountInput struct {
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
 	Timezone string `json:"timezone"`
+}
+
+// AccountCreateInput 表示浏览器登录的账户环境
+type AccountCreateInput struct {
+	Proxy    string `json:"proxy"`
+	Locale   string `json:"locale"`
+	Timezone string `json:"timezone"`
+}
+
+// ChromeImportProfile 表示可从本机 Chrome 导入的账号
+type ChromeImportProfile struct {
+	Profile     string `json:"profile"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	Locale      string `json:"locale"`
+}
+
+// ChromeImportInput 表示批量导入的 Chrome Profile 与账户环境
+type ChromeImportInput struct {
+	Profiles []string `json:"profiles"`
+	Proxy    string   `json:"proxy"`
+	Locale   string   `json:"locale"`
+	Timezone string   `json:"timezone"`
 }
 
 // RuntimeConfig 表示全局运行配置
@@ -151,6 +176,8 @@ type AdminEvent struct {
 func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
+	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
+	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
@@ -206,7 +233,7 @@ func (s *server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	var input AccountInput
+	var input AccountCreateInput
 	if err := decodeJSON(r, &input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -217,6 +244,29 @@ func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]AdminAccount{"account": account})
+}
+
+func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles, err := s.config.Admin.ChromeImportProfiles(r.Context())
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]ChromeImportProfile{"profiles": profiles})
+}
+
+func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Request) {
+	var input ChromeImportInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	accounts, err := s.config.Admin.ImportChromeAccounts(r.Context(), input)
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string][]AdminAccount{"accounts": accounts})
 }
 
 func (s *server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {

@@ -124,7 +124,7 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 	session, err := service.OpenBidi(ctx, request)
 	if err != nil {
 		SetAccessLogError(r.Context(), err)
-		_ = writeBidiJSON(connection, bidiErrorMessage(err, request.ModelAccessScope != ""))
+		_ = writeBidiJSON(connection, bidiErrorMessage(err))
 		_ = connection.Close()
 		cancel()
 		waitBidiRoutine(readerDone)
@@ -341,7 +341,7 @@ func (s *server) writeBidiEvents(
 		select {
 		case err := <-clientErrors:
 			SetAccessLogError(r.Context(), err)
-			_ = writeBidiJSON(connection, bidiErrorMessage(err, mediaScoped))
+			_ = writeBidiJSON(connection, bidiErrorMessage(err))
 			return
 		case event, ok := <-session.Events():
 			if !ok {
@@ -354,7 +354,7 @@ func (s *server) writeBidiEvents(
 			message := mapBidiServerEvent(event)
 			if event.Err != nil {
 				SetAccessLogError(r.Context(), event.Err)
-				message = bidiErrorMessage(event.Err, mediaScoped)
+				message = bidiErrorMessage(event.Err)
 				message.Raw = event.Raw
 			}
 			if err := writeBidiJSON(connection, message); err != nil {
@@ -369,18 +369,12 @@ func (s *server) writeBidiEvents(
 	}
 }
 
-func bidiErrorMessage(err error, mediaScoped bool) bidiServerMessage {
+func bidiErrorMessage(err error) bidiServerMessage {
 	message := bidiServerMessage{Type: "error"}
 	if err != nil {
 		message.Error = err.Error()
 	}
-	if aistudio.DefinitiveModelAccessFailure(err) {
-		message.Code = "bidi_account_denied"
-		if mediaScoped {
-			message.Code = "bidi_media_account_denied"
-		}
-		message.Retryable = true
-	} else if errors.Is(err, aistudio.ErrInvalidArgument) {
+	if errors.Is(err, aistudio.ErrInvalidArgument) {
 		message.Code = "invalid_request"
 	}
 	return message

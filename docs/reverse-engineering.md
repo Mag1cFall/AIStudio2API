@@ -419,9 +419,9 @@ successful model/scope history
 | Live 音频/图像 | `bidi-media:<modelID>` | media 开始媒体资格检查；Live text 使用普通模型 scope |
 | Robotics | `bidi-media:<modelID>` | text 开始模型资格检查 |
 
-`model_access` 保存 `state` 与 `checked_at`，`verified` 是当前唯一的非空 state。Code 7 写入空 state 和新的 `checked_at`，CountTokens 使用独立 scope 更新 `checked_at`。认证失败属于账户级状态。
+`model_access` 保存 `state` 与 `checked_at`，`verified` 是当前唯一的非空 state。Code 7 保留已有状态，CountTokens 使用独立 scope 更新 `checked_at`。认证失败属于账户级状态。
 
-普通流式请求的 text、reasoning、tool、usage 与首事件用于输出和性能统计；模型 verified 在 `EventFinish` 写入，HTTP 403 且 Code 7 写入空 state，其他终态前断流、取消和错误保留已有模型资格。
+普通流式请求的 text、reasoning、tool、usage 与首事件用于输出和性能统计；模型 verified 在 `EventFinish` 写入，终态前断流、取消和错误保留已有模型资格。
 
 调度顺序为：
 
@@ -430,11 +430,11 @@ successful model/scope history
 3. 已有 Worker 无可用槽位时，按活动 Worker 上限从待机账户启动 Worker；容量已满时先启动目标 Worker，再替换最久未用的空闲 Worker
 4. 目标 Worker 启动失败或请求取消时保留原 Worker；旧实例关闭失败时保留旧实例并回收目标 Worker，两者回收均失败时同时计入容量；候选均忙时等待槽位
 
-HTTP 403 且协议 Code 7 清除对应模型或 scope 的成功记录；未固定且首个上游语义事件尚未到达的请求继续尝试下一账户，固定请求、资源绑定请求和已开始的流返回上游错误。真实成功后重新写入记录。HTTP 404 且协议 Code 5 的消息包含 `Ambiguous request for service ''`、本地 Worker 失败或实例被替换时，运行时按 Worker generation 重建同一账户实例并重放一次。
+HTTP 403 且协议 Code 7 保留对应模型或 scope 的成功记录；未固定且首个上游语义事件尚未到达的请求继续尝试下一账户，固定请求、资源绑定请求和已开始的流返回上游错误。HTTP 404 且协议 Code 5 的消息包含 `Ambiguous request for service ''`、本地 Worker 失败或实例被替换时，运行时按 Worker generation 重建同一账户实例并重放一次。
 
 认证写回使用 `authGeneration` 与 `checkedAt`；模型资格和冷却使用 `modelAccessGeneration` 与 `checked_at`。结果仅在对应 generation 值匹配且时间不早于当前状态时应用，同一时间以成功状态为最终值。目录、权益或认证材料更新时递增对应 generation。
 
-Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked_at`；会话内资格请求使用严格递增的 `checked_at`。`turn_complete` 消费 pending 轮次，Code 7 消费 pending 轮次或生成晚于上一轮的新时间。结果按模型目录 generation 与 `checked_at` 顺序应用，较新的成功写入资格，较新的 Code 7 清除资格。认证成功与 401 复用该时序。
+Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked_at`；会话内资格请求使用严格递增的 `checked_at`。`turn_complete` 消费 pending 轮次并写入资格，Code 7 保留已有资格。认证成功与 401 复用该时序。
 
 `runtime-state.json` 保存 `benefit_tier`、`catalog_fingerprint`、`model_access:{state,checked_at,reason?}`、`cooldowns:{until,reason?}` 与 `resources:{kind?,name?,mime?,size?,purpose?,created_at,video?:{model,seconds,size}}`。`video-operation` 绑定把公开 video object 的 model、seconds、size、UTC 创建时间和创建账户一并持久化；重新建立账户池后，operation 轮询仍从该绑定恢复元数据。活动请求使用账户租约；读取最新磁盘状态、合并目标字段和原子写回使用独立短事务锁。该锁每 25ms 尝试一次并在 2 秒后超时；调用方 context（Go 取消上下文）可以更早取消等待。取得锁后必须重读磁盘值，写回后再更新内存与资源索引。跨进程读取资源未命中时刷新磁盘状态，防止旧内存覆盖另一个进程已经写入的绑定。
 

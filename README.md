@@ -114,10 +114,10 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
    Linux 与 macOS 使用隔离 Camoufox 登录：
 
    ```bash
-   ./aistudio2api setup --login --label name@gmail.com
+   ./aistudio2api setup --login
    ```
 
-   `--label` 填写登录的 Google 邮箱。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认读取当前电脑设置，也可以通过 `--locale`、`--timezone` 指定。
+   登录完成后会从 AI Studio 页面读取 Google 邮箱。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认读取当前电脑设置，也可以通过 `--locale`、`--timezone` 指定。
 
 2. **启动图形界面**:
    - Windows 双击 `start.bat`
@@ -126,10 +126,9 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
    - 页面初始状态为 `STOPPED`，默认显示“日志”页面
 
 3. **添加其他账户**:
-   - 打开“账户”页面并点击“新增账户”
-   - 填写 Google 邮箱、代理、语言和时区
-   - 提交后会打开独立 Camoufox 窗口，在其中登录 Google 并进入 AI Studio
-   - 登录完成后账户自动保存
+   - 打开“账户”页面
+   - “Chrome 批量导入”可多选本机 Chrome 账户
+   - “浏览器登录”会打开独立 Camoufox 窗口，登录完成后自动识别邮箱并保存
 
 4. **启动 API**:
    - 点击“启动服务”启动数据面
@@ -164,7 +163,7 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
 `start.bat -open-ui=false`：启动管理进程但不自动打开网页。
 
-`start.bat setup`：扫描本机 Chrome 账户；也可使用 `--email` 或 `--profile` 选择明确的 Chrome 账户。隔离登录使用 `start.bat setup --login --label name@gmail.com`；文件导入使用 `start.bat setup --storage-state <file> --label name@gmail.com`。
+`start.bat setup`：扫描本机 Chrome 账户；也可使用 `--email` 或 `--profile` 选择明确的 Chrome 账户。隔离登录使用 `start.bat setup --login`；文件导入使用 `start.bat setup --storage-state <file>`。
 
 ## API 使用
 
@@ -400,7 +399,7 @@ cp .env.example .env
 
 账户邮箱同时作为目录名、管理页面标识和日志来源，统一使用小写形式。`.leases` 协调账户目录读写，用户缓存中的 runtime lease 保证同一邮箱在当前电脑上只有一个 WAA Worker。
 
-新增账户会启动隔离 Camoufox 登录。`ready` 账户可以编辑、停用、验证和删除，`auth_required` 账户可以重新登录。
+账户页支持 Chrome 批量导入和隔离 Camoufox 登录。`ready` 账户可以编辑、停用、验证和删除，`auth_required` 账户可以重新登录。
 
 ## 详细文档
 

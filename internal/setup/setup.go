@@ -40,7 +40,6 @@ type setupOptions struct {
 	chromeRoot   string
 	profiles     setupStrings
 	emails       setupStrings
-	label        string
 	proxy        string
 	locale       string
 	localeSet    bool
@@ -78,9 +77,11 @@ func importStorageState(store *aistudio.AccountStore, options setupOptions) erro
 	if _, err := aistudio.NewSigner().Sign(state); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	label := options.label
-	if label == "" {
-		label = defaultSetupLabel(options.storageState)
+	label := defaultSetupLabel(options.storageState)
+	if extension, exists, err := state.AuthExtension(); err != nil {
+		return err
+	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
+		label = extension.Source.Email
 	}
 	account, publishLease, err := store.Create(setupAccountConfig(label, options), state)
 	if err != nil {
@@ -111,19 +112,10 @@ func importIsolatedLogin(
 	if err != nil {
 		return err
 	}
-	if err := result.StorageState.SetAuthExtension(aistudio.AuthExtension{
-		Source: aistudio.AuthSource{Browser: "camoufox"},
-	}); err != nil {
-		return err
-	}
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	label := options.label
-	if label == "" {
-		return fmt.Errorf("--login 必须同时提供 --label <Google 邮箱>")
-	}
-	account, publishLease, err := store.Create(setupAccountConfig(label, options), result.StorageState)
+	account, publishLease, err := store.Create(setupAccountConfig(result.Email, options), result.StorageState)
 	if err != nil {
 		return err
 	}
@@ -162,9 +154,6 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudi
 	if err != nil {
 		return err
 	}
-	if options.label != "" && len(results) != 1 {
-		return fmt.Errorf("--label 只能用于单个 Chrome 账号")
-	}
 	modelCounts := make([]int, len(results))
 	for index := range results {
 		verifyContext, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
@@ -176,15 +165,11 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudi
 		modelCounts[index] = verification.ModelCount
 	}
 	for index, result := range results {
-		label := result.Email
-		if options.label != "" {
-			label = options.label
-		}
 		accountOptions := options
 		if !options.localeSet && result.Locale != "" {
 			accountOptions.locale = result.Locale
 		}
-		_, publishLease, err := store.Create(setupAccountConfig(label, accountOptions), result.State)
+		_, publishLease, err := store.Create(setupAccountConfig(result.Email, accountOptions), result.State)
 		if err != nil {
 			return err
 		}
@@ -256,7 +241,6 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	storageState := flags.String("storage-state", "", "Playwright storage state 文件")
 	login := flags.Bool("login", false, "使用隔离 Camoufox 登录")
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
-	label := flags.String("label", "", "账户显示名称")
 	proxy := flags.String("proxy", cfg.Proxy, "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
 	locale := flags.String("locale", aistudio.DefaultAccountLocale(), "账户语言")
 	timezone := flags.String("timezone", aistudio.DefaultAccountTimezone(), "账户时区")
@@ -269,7 +253,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	options := setupOptions{
 		storageState: strings.TrimSpace(*storageState), login: *login,
 		chromeRoot: strings.TrimSpace(*chromeRoot), profiles: profiles, emails: emails,
-		label: strings.TrimSpace(*label), proxy: strings.TrimSpace(*proxy),
+		proxy:  strings.TrimSpace(*proxy),
 		locale: strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
 	}
 	flags.Visit(func(value *flag.Flag) {

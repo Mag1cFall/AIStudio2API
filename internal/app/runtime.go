@@ -1824,19 +1824,6 @@ func (service *trackedService) performanceForModelLocked(accountID string, model
 	return observed, ok
 }
 
-func (service *trackedService) forgetPerformance(accountID string, model string) {
-	accountID = strings.TrimSpace(accountID)
-	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
-	service.performanceMu.Lock()
-	if models := service.performance[accountID]; models != nil {
-		delete(models, model)
-		if len(models) == 0 {
-			delete(service.performance, accountID)
-		}
-	}
-	service.performanceMu.Unlock()
-}
-
 func (service *trackedService) markModelAccessVerifiedAsync(
 	accountID string,
 	accountLabel string,
@@ -2384,9 +2371,6 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 }
 
 func needsWAARuntimeRecovery(cause error, generationChanged bool, workerFailed bool, workerReplaced bool) bool {
-	if aistudio.DefinitiveModelAccessFailure(cause) {
-		return false
-	}
 	return generationChanged || workerFailed || workerReplaced ||
 		aistudio.DefinitiveWAARuntimeFailure(cause)
 }
@@ -2866,21 +2850,6 @@ func (service *trackedService) generateWithRetry(
 		}
 		workerFailed := service.workers.WorkerFailed(request.AccountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
-		permissionDenied := aistudio.DefinitiveModelAccessFailure(err)
-		if permissionDenied {
-			service.forgetPerformance(request.AccountID, modelID)
-			forgotten, stateErr := service.pool.ForgetModelAccessVerifiedIfGeneration(
-				request.AccountID, modelID, lease.ModelAccessGeneration(), lease.CheckedAt(),
-			)
-			if stateErr != nil {
-				service.requests.log(accountLabel, "ERROR", fmt.Sprintf(
-					"模型成功记录更新失败 | 模型=%s | 错误=%s",
-					modelID, strings.TrimSpace(stateErr.Error()),
-				))
-			} else if forgotten {
-				service.publishModelAccess()
-			}
-		}
 		workerReplaced := errors.Is(err, errAccountWorkerReplaced)
 		localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
 		retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
@@ -2890,7 +2859,7 @@ func (service *trackedService) generateWithRetry(
 			recoverWorker, _, resetErr = service.recoverWorkerOnce(
 				request.AccountID, workerGeneration, recoveredWorker,
 				needsWAARuntimeRecovery(err, false, workerFailed, workerReplaced),
-				workerFailed || waaRuntimeFailed || permissionDenied,
+				workerFailed || waaRuntimeFailed,
 			)
 			if resetErr != nil {
 				err = errors.Join(err, resetErr)
@@ -2902,9 +2871,6 @@ func (service *trackedService) generateWithRetry(
 				err = errors.Join(err, stateErr)
 				retryable = false
 			}
-		}
-		if fileBound && permissionDenied {
-			copyFiles = true
 		}
 		releaseErr := lease.Release()
 		lease = nil
@@ -3176,18 +3142,6 @@ func (service *trackedService) forwardEvents(
 		}
 		if event.Kind == aistudio.EventError {
 			requestErr = event.Err
-			if aistudio.DefinitiveModelAccessFailure(event.Err) {
-				service.forgetPerformance(lease.Account().ID, requestedModelID)
-				forgotten, stateErr := service.pool.ForgetModelAccessVerifiedIfGeneration(
-					lease.Account().ID, requestedModelID, accessGeneration, lease.CheckedAt(),
-				)
-				if stateErr != nil {
-					requestErr = errors.Join(requestErr, stateErr)
-					event.Err = requestErr
-				} else if forgotten {
-					service.publishModelAccess()
-				}
-			}
 			if aistudio.DefinitiveAuthenticationFailure(event.Err) {
 				if stateErr := lease.MarkAuthenticationRequired(event.Err.Error()); stateErr != nil {
 					requestErr = errors.Join(requestErr, stateErr)
