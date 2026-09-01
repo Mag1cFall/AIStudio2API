@@ -28,6 +28,9 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, d.protocolError("$[0][]", "空流帧", raw)
 	}
 	if isJSONNull(frame[0]) {
+		if feedbackRaw := rawAt(frame, 1); !isJSONNull(feedbackRaw) {
+			return nil, decodePromptFeedback(feedbackRaw, raw)
+		}
 		return nil, nil
 	}
 	candidates, err := rawArray(frame[0], "$[0][][0]", raw)
@@ -92,6 +95,37 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		}
 	}
 	return events, nil
+}
+
+func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) error {
+	feedback, err := rawArray(raw, "$[0][][1]", evidence)
+	if err != nil {
+		return withMethod(err, "GenerateContent")
+	}
+	reason, err := rawInt64(rawAt(feedback, 0), "$[0][][1][0]", evidence)
+	if err != nil {
+		return withMethod(err, "GenerateContent")
+	}
+	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Raw: append(json.RawMessage(nil), raw...)}
+}
+
+func decodePromptBlockReason(reason int64) string {
+	switch reason {
+	case 0:
+		return "unspecified"
+	case 1:
+		return "safety"
+	case 2:
+		return "other"
+	case 3:
+		return "blocklist"
+	case 4:
+		return "prohibited_content"
+	case 5:
+		return "image_safety"
+	default:
+		return fmt.Sprintf("provider_%d", reason)
+	}
 }
 
 func decodeFinishReason(code int64) string {

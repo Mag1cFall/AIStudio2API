@@ -606,12 +606,16 @@ func (admin *runtimeAdmin) RecordAccessStart(entry api.AccessLog) {
 		source = "request"
 	}
 	message := fmt.Sprintf("请求开始 | %s %q", entry.Method, entry.Path)
+	if requestID := strings.TrimSpace(entry.RequestID); requestID != "" {
+		message += " | ID=" + requestID
+	}
 	if model := strings.TrimSpace(entry.Model); model != "" {
 		message += " | " + model
 	}
 	if entry.Generation {
 		message += fmt.Sprintf(
-			" | 温度=%s | TopP=%s | 思考=%s | 最大=%s",
+			" | 输入=%d条/%d字/%d媒体/%dB/%d文件 | 温度=%s | TopP=%s | 思考=%s | 最大=%s",
+			entry.InputMessages, entry.InputTextChars, entry.InputMedia, entry.InputMediaBytes, entry.InputFiles,
 			entry.Temperature, entry.TopP, entry.Thinking, entry.MaxOutputTokens,
 		)
 	}
@@ -639,6 +643,9 @@ func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
 		"%3d | %s | %s %q",
 		entry.Status, entry.Latency.Round(time.Millisecond), entry.Method, entry.Path,
 	)
+	if requestID := strings.TrimSpace(entry.RequestID); requestID != "" {
+		message += " | ID=" + requestID
+	}
 	if entry.Generation {
 		message += fmt.Sprintf(
 			" | %s | 首事件=%s | 首正文=%s | %d字/正文%dt",
@@ -650,6 +657,9 @@ func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
 		}
 		if finishReason := strings.TrimSpace(entry.FinishReason); finishReason != "" {
 			message += " | 终止=" + finishReason
+		}
+		if entry.UpstreamBytes > 0 {
+			message += fmt.Sprintf(" | 上游=%dB", entry.UpstreamBytes)
 		}
 	} else if model != "-" {
 		message += " | " + model
