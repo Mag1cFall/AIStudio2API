@@ -415,7 +415,7 @@ cp .env.example .env
 
 本项目使用 [Camoufox](https://camoufox.com/) 浏览器来降低被检测为自动化脚本的风险。Camoufox 基于 Firefox，通过修改底层实现来保持真实的设备指纹。
 
-Go 直接处理业务请求，业务传输使用与 Camoufox 对齐的 Firefox TLS/HTTP2 配置；Camoufox 用于官方 WAA 初始化、fresh proof 和隔离账户登录。
+Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS/HTTP2、请求头、Cookie 与页面指纹。
 
 ### 使用限制
 

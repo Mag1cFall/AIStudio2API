@@ -188,6 +188,26 @@ func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aist
 	return preparer.worker.Prepare(ctx, request)
 }
 
+// SendProtected 保证浏览器请求仍绑定当前有效账户 Worker
+func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, request aistudio.ProtectedRequest) (*aistudio.RPCResponse, error) {
+	preparer.account.mu.Lock()
+	defer preparer.account.mu.Unlock()
+	if preparer.account.worker != preparer.worker || preparer.account.bootstrapModel != preparer.bootstrapModel {
+		return nil, errAccountWorkerReplaced
+	}
+	return preparer.worker.SendProtected(ctx, request)
+}
+
+// BrowserStorageState 返回同一有效账户 Worker 的浏览器 Cookie 状态
+func (preparer *accountWorkerPreparer) BrowserStorageState(ctx context.Context) (aistudio.StorageState, error) {
+	preparer.account.mu.Lock()
+	defer preparer.account.mu.Unlock()
+	if preparer.account.worker != preparer.worker || preparer.account.bootstrapModel != preparer.bootstrapModel {
+		return aistudio.StorageState{}, errAccountWorkerReplaced
+	}
+	return preparer.worker.BrowserStorageState(ctx)
+}
+
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
 type accountWorkerInitError struct {
 	err error
