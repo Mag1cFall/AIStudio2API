@@ -424,9 +424,19 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 	if DefinitiveAuthenticationFailure(err) {
 		return lease.MarkAuthenticationRequired(err.Error())
 	}
+	now := time.Now()
+	until := now.Add(30 * time.Second)
+	reason := err.Error()
+	if cooldown, ok := QuotaCooldownForError(err, now); ok {
+		until = cooldown.Until
+		reason = cooldown.Reason
+		if cooldown.Global {
+			modelAccessScope = ""
+		}
+	}
 	return s.pool.MarkCooldownIfGeneration(
 		accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
-		time.Now().Add(30*time.Second), err.Error(),
+		until, reason,
 	)
 }
 
@@ -492,10 +502,7 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 		} else if DefinitiveAuthenticationFailure(requestErr) {
 			stateErr = lease.MarkAuthenticationRequired(requestErr.Error())
 		} else if retryable {
-			stateErr = s.pool.MarkCooldownIfGeneration(
-				accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
-				time.Now().Add(30*time.Second), requestErr.Error(),
-			)
+			stateErr = s.markRetryableFailure(lease, modelAccessScope, requestErr)
 		}
 		var releaseErr error
 		if owned {

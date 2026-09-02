@@ -2912,6 +2912,27 @@ func (service *trackedService) generateWithRetry(
 				retryable = false
 			}
 		}
+		if cooldown, ok := aistudio.QuotaCooldownForError(err, time.Now()); ok {
+			modelAccessScope := modelID
+			scopeLabel := modelID
+			if cooldown.Global {
+				modelAccessScope = ""
+				scopeLabel = "全局"
+			}
+			stateErr := service.pool.MarkCooldownIfGeneration(
+				request.AccountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
+				cooldown.Until, cooldown.Reason,
+			)
+			if stateErr != nil {
+				err = errors.Join(err, stateErr)
+				retryable = false
+			} else {
+				service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
+					cooldown.Kind, scopeLabel, cooldown.Until.Format(time.RFC3339),
+				))
+			}
+		}
 		releaseErr := lease.Release()
 		lease = nil
 		if releaseErr != nil {

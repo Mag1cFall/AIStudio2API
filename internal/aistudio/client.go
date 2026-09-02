@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -119,6 +120,7 @@ type RPCError struct {
 	StatusCode int
 	Code       int64
 	Message    string
+	Metadata   map[string]string
 }
 
 // Error 返回结构化上游错误
@@ -227,5 +229,41 @@ func decodeRPCError(method string, statusCode int, raw []byte) error {
 	if message, err := rawString(provider[1], "$[1][1]", value); err == nil && message != "" {
 		rpcError.Message = message
 	}
+	if len(provider) > 2 && !isJSONNull(provider[2]) {
+		decodeRPCErrorMetadata(rpcError, provider[2])
+	}
 	return rpcError
+}
+
+func decodeRPCErrorMetadata(rpcError *RPCError, raw json.RawMessage) {
+	var details [][]json.RawMessage
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return
+	}
+	for _, detail := range details {
+		if len(detail) < 2 {
+			continue
+		}
+		var typeURL string
+		if err := json.Unmarshal(detail[0], &typeURL); err != nil || typeURL != "type.googleapis.com/google.rpc.ErrorInfo" {
+			continue
+		}
+		var info []json.RawMessage
+		if err := json.Unmarshal(detail[1], &info); err != nil || len(info) < 3 {
+			continue
+		}
+		var metadata [][]string
+		if err := json.Unmarshal(info[2], &metadata); err != nil {
+			continue
+		}
+		for _, pair := range metadata {
+			if len(pair) < 2 || pair[0] == "" {
+				continue
+			}
+			if rpcError.Metadata == nil {
+				rpcError.Metadata = make(map[string]string)
+			}
+			rpcError.Metadata[pair[0]] = pair[1]
+		}
+	}
 }
