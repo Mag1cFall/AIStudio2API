@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -80,6 +81,9 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		thinkingLevel = 4
 	default:
 		return nil, fmt.Errorf("reasoning effort 必须是 minimal、low、medium 或 high")
+	}
+	if hasReasoningEffort && defaults.ThinkingLevel {
+		thinkingLevel = closestSupportedThinkingLevel(thinkingLevel, defaults.ThinkingLevels)
 	}
 	if hasReasoningEffort && !defaults.ThinkingLevel {
 		if thinkingBudget == nil || !defaults.ThinkingBudget {
@@ -214,6 +218,26 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		wire[31] = transcriptionConfig
 	}
 	return wire, nil
+}
+
+var thinkingLevelsByEffort = []int64{4, 1, 2, 3}
+
+func closestSupportedThinkingLevel(requested int64, supported []int64) int64 {
+	requestedRank := slices.Index(thinkingLevelsByEffort, requested)
+	if requestedRank < 0 || len(supported) == 0 || slices.Contains(supported, requested) {
+		return requested
+	}
+	for distance := 1; distance < len(thinkingLevelsByEffort); distance++ {
+		lower := requestedRank - distance
+		if lower >= 0 && slices.Contains(supported, thinkingLevelsByEffort[lower]) {
+			return thinkingLevelsByEffort[lower]
+		}
+		upper := requestedRank + distance
+		if upper < len(thinkingLevelsByEffort) && slices.Contains(supported, thinkingLevelsByEffort[upper]) {
+			return thinkingLevelsByEffort[upper]
+		}
+	}
+	return requested
 }
 
 func encodeResponseModalities(modalities []ResponseModality) ([]int64, error) {

@@ -59,6 +59,7 @@ type GenerationDefaults struct {
 	ThinkingBudget       bool
 	ThinkingLevel        bool
 	DefaultThinkingLevel int64
+	ThinkingLevels       []int64
 }
 
 type modelEntry struct {
@@ -292,6 +293,11 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 		if level > 0 {
 			defaults.DefaultThinkingLevel = level
 		}
+		levels, err := intSliceField(thinking, 6, path+"[71]", evidence)
+		if err != nil {
+			return GenerationDefaults{}, err
+		}
+		defaults.ThinkingLevels = levels
 	}
 	return defaults, nil
 }
