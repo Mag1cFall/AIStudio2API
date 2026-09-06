@@ -100,7 +100,7 @@ func (service *trackedService) Transcribe(
 		result, err = transcriptions.Transcribe(observed, request)
 		api.SetAccessLogFirstEvent(requestCtx, result.FirstEvent)
 		api.SetAccessLogGenerationResult(
-			requestCtx, result.FirstContent, len(result.Text), result.Usage.OutputTokens, result.Usage.ReasoningTokens,
+			requestCtx, &result.Usage, 0,
 		)
 		api.SetAccessLogTarget(requestCtx, result.ProviderModel, "")
 		api.SetAccessLogFinishReason(requestCtx, result.FinishReason)

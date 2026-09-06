@@ -248,9 +248,13 @@ func anthropicRole(role string) (aistudio.Role, error) {
 	}
 }
 
+// anthropicParts 转换消息块并保留工具调用的思考签名
 func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
+		if text == "" {
+			return nil, nil
+		}
 		return []aistudio.Part{{Text: text}}, nil
 	}
 	var blocks []json.RawMessage
@@ -290,6 +294,9 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		}
 		switch block.Type {
 		case "text":
+			if block.Text == "" {
+				continue
+			}
 			flushPendingSignature()
 			parts = append(parts, aistudio.Part{Text: block.Text})
 		case "thinking":

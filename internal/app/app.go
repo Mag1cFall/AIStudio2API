@@ -30,6 +30,7 @@ type commandOptions struct {
 
 // Run 执行单二进制命令入口
 func Run(args []string) int {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	err := runCommand(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

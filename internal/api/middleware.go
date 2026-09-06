@@ -32,11 +32,9 @@ type accessLogMetadata struct {
 	canceled        bool
 	failureStatus   int
 	firstEvent      time.Duration
-	firstContent    time.Duration
 	upstreamBytes   int64
-	contentChars    int
-	outputTokens    int64
-	reasoningTokens int64
+	usage           *aistudio.Usage
+	toolCalls       int
 	inputMessages   int
 	inputTextChars  int
 	inputMedia      int
@@ -58,11 +56,9 @@ type accessLogSnapshot struct {
 	canceled        bool
 	failureStatus   int
 	firstEvent      time.Duration
-	firstContent    time.Duration
 	upstreamBytes   int64
-	contentChars    int
-	outputTokens    int64
-	reasoningTokens int64
+	usage           *aistudio.Usage
+	toolCalls       int
 	inputMessages   int
 	inputTextChars  int
 	inputMedia      int
@@ -176,16 +172,15 @@ func (metadata *accessLogMetadata) setFinishReason(reason string) {
 }
 
 func (metadata *accessLogMetadata) setGenerationResult(
-	firstContent time.Duration,
-	contentChars int,
-	outputTokens int64,
-	reasoningTokens int64,
+	usage *aistudio.Usage,
+	toolCalls int,
 ) {
 	metadata.mu.Lock()
-	metadata.firstContent = firstContent
-	metadata.contentChars = contentChars
-	metadata.outputTokens = outputTokens
-	metadata.reasoningTokens = reasoningTokens
+	if usage != nil {
+		value := *usage
+		metadata.usage = &value
+	}
+	metadata.toolCalls = toolCalls
 	metadata.mu.Unlock()
 }
 
@@ -250,8 +245,8 @@ func (metadata *accessLogMetadata) snapshot() accessLogSnapshot {
 		model:      metadata.model, account: metadata.account, finishReason: metadata.finishReason,
 		requestErr: metadata.err, canceled: metadata.canceled,
 		failureStatus: metadata.failureStatus,
-		firstEvent:    metadata.firstEvent, firstContent: metadata.firstContent, contentChars: metadata.contentChars,
-		upstreamBytes: metadata.upstreamBytes, outputTokens: metadata.outputTokens, reasoningTokens: metadata.reasoningTokens,
+		firstEvent:    metadata.firstEvent,
+		upstreamBytes: metadata.upstreamBytes, usage: metadata.usage, toolCalls: metadata.toolCalls,
 		inputMessages: metadata.inputMessages, inputTextChars: metadata.inputTextChars,
 		inputMedia: metadata.inputMedia, inputMediaBytes: metadata.inputMediaBytes, inputFiles: metadata.inputFiles,
 		temperature: metadata.temperature, topP: metadata.topP,
@@ -347,20 +342,18 @@ func SetAccessLogFinishReason(ctx context.Context, reason string) {
 // SetAccessLogGenerationResult 写入生成流的完成摘要
 func SetAccessLogGenerationResult(
 	ctx context.Context,
-	firstContent time.Duration,
-	contentChars int,
-	outputTokens int64,
-	reasoningTokens int64,
+	usage *aistudio.Usage,
+	toolCalls int,
 ) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setGenerationResult(firstContent, contentChars, outputTokens, reasoningTokens)
+		metadata.setGenerationResult(usage, toolCalls)
 	}
 }
 
 func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		metadata := &accessLogMetadata{admin: admin, method: r.Method, path: r.URL.Path}
+		metadata := &accessLogMetadata{admin: admin, method: r.Method, path: r.URL.Path, requestID: newID("req")}
 		writer := &accessLogResponseWriter{ResponseWriter: w, metadata: metadata}
 		request := r.WithContext(context.WithValue(r.Context(), accessLogContextKey{}, metadata))
 		next.ServeHTTP(writer, request)
@@ -377,10 +370,8 @@ func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handle
 		if admin != nil {
 			admin.RecordAccessLog(AccessLog{
 				Status: status, Latency: time.Since(started), FirstEvent: snapshot.firstEvent,
-				FirstContent: snapshot.firstContent, UpstreamBytes: snapshot.upstreamBytes,
-				ContentChars: snapshot.contentChars, OutputTokens: snapshot.outputTokens,
-				ReasoningTokens: snapshot.reasoningTokens,
-				InputMessages:   snapshot.inputMessages, InputTextChars: snapshot.inputTextChars,
+				UpstreamBytes: snapshot.upstreamBytes, Usage: snapshot.usage, ToolCalls: snapshot.toolCalls,
+				InputMessages: snapshot.inputMessages, InputTextChars: snapshot.inputTextChars,
 				InputMedia: snapshot.inputMedia, InputMediaBytes: snapshot.inputMediaBytes, InputFiles: snapshot.inputFiles,
 				Temperature: snapshot.temperature, TopP: snapshot.topP,
 				Thinking: snapshot.thinking, MaxOutputTokens: snapshot.maxOutputTokens,

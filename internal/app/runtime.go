@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
@@ -2778,6 +2777,7 @@ func (service *trackedService) generateWithRetry(
 		accountLabel := lease.Account().Config.Label
 		api.SetAccessLogTarget(requestCtx, modelID, accountLabel)
 		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
+		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
 		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
 		var attemptCopies *aistudio.TemporaryFileCopies
 		copiedFileCount := 0
@@ -2821,7 +2821,7 @@ func (service *trackedService) generateWithRetry(
 		prepareWarningDone := make(chan struct{})
 		prepareWarning := time.AfterFunc(streamStallThreshold, func() {
 			current, _, _ := prepareTiming.snapshot(time.Now())
-			service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 				"请求准备等待 | 已等待=%s | 当前=%s | 模型=%s",
 				streamStallThreshold, current, modelID,
 			))
@@ -2855,7 +2855,7 @@ func (service *trackedService) generateWithRetry(
 		if !prepareWarning.Stop() {
 			<-prepareWarningDone
 			_, waa, responseHeader := prepareTiming.snapshot(time.Now())
-			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 				"请求准备结束 | 等待=%s | WAA=%s | 响应头=%s | 模型=%s",
 				prepareElapsed.Round(time.Millisecond), waa.Round(time.Millisecond),
 				responseHeader.Round(time.Millisecond), modelID,
@@ -2866,13 +2866,13 @@ func (service *trackedService) generateWithRetry(
 			firstEventDelayed := false
 			first, err = firstGenerateEvent(requestCtx, source, func() {
 				firstEventDelayed = true
-				service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+				service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 					"上游首事件等待 | 已等待=%s | 模型=%s | %s",
 					streamStallThreshold, modelID, activity.logFields(time.Now()),
 				))
 			})
 			if firstEventDelayed && err == nil {
-				service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+				service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 					"上游首事件到达 | 等待=%s | 事件=%s | 模型=%s",
 					time.Since(upstreamStartedAt).Round(time.Millisecond), first.Kind, modelID,
 				))
@@ -2977,7 +2977,7 @@ func (service *trackedService) generateWithRetry(
 		return
 	}
 	service.forwardEvents(
-		clientCtx, requestCtx, cancel, request.ID, generationStartedAt,
+		clientCtx, requestCtx, cancel, request.ID,
 		first, source, destination, lease, temporaryCopies, activity, modelID,
 	)
 }
@@ -3063,7 +3063,6 @@ func (service *trackedService) forwardEvents(
 	requestCtx context.Context,
 	cancel context.CancelFunc,
 	requestID string,
-	generationStartedAt time.Time,
 	first aistudio.Event,
 	source <-chan aistudio.Event,
 	destination chan<- aistudio.Event,
@@ -3078,14 +3077,12 @@ func (service *trackedService) forwardEvents(
 	accountLabel := lease.Account().Config.Label
 	accessGeneration := lease.ModelAccessGeneration()
 	modelID := strings.TrimPrefix(strings.TrimSpace(first.ProviderModel), "models/")
-	var firstContent time.Duration
 	var lastEventAt time.Time
 	lastEventKind := "-"
 	reasoningEvents := 0
 	contentEvents := 0
-	contentChars := 0
-	var outputTokens int64
-	var reasoningTokens int64
+	var usage *aistudio.Usage
+	toolCalls := 0
 	stalled := false
 	stallTimer := time.NewTimer(streamStallThreshold)
 	if !stallTimer.Stop() {
@@ -3117,7 +3114,7 @@ func (service *trackedService) forwardEvents(
 	defer cancel()
 	defer func() {
 		api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
-		api.SetAccessLogGenerationResult(requestCtx, firstContent, contentChars, outputTokens, reasoningTokens)
+		api.SetAccessLogGenerationResult(requestCtx, usage, toolCalls)
 		if temporaryCopies != nil {
 			if err := temporaryCopies.Cleanup(); err != nil {
 				service.requests.log(accountLabel, "WARN", "临时文件清理失败 | 错误="+err.Error())
@@ -3152,7 +3149,7 @@ func (service *trackedService) forwardEvents(
 			case <-stall:
 				stalled = true
 				stall = nil
-				service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 					"事件流停顿 | 模型=%s | 已等待=%s | 最近事件=%s | 推理=%d | 正文=%d | %s",
 					modelID, streamStallThreshold, lastEventKind, reasoningEvents, contentEvents,
 					activity.logFields(time.Now()),
@@ -3178,7 +3175,7 @@ func (service *trackedService) forwardEvents(
 		}
 		now := time.Now()
 		if stalled {
-			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+			service.requests.logRequestProgress(requestID, accountLabel, "INFO", fmt.Sprintf(
 				"事件流恢复 | 模型=%s | 停顿=%s | 当前事件=%s",
 				modelID, now.Sub(lastEventAt).Round(time.Millisecond), event.Kind,
 			))
@@ -3191,14 +3188,13 @@ func (service *trackedService) forwardEvents(
 			reasoningEvents++
 		case aistudio.EventText:
 			contentEvents++
-			contentChars += utf8.RuneCountInString(event.Text)
-			if firstContent == 0 {
-				firstContent = now.Sub(generationStartedAt)
-			}
 		case aistudio.EventUsage:
 			if event.Usage != nil {
-				outputTokens = event.Usage.OutputTokens
-				reasoningTokens = event.Usage.ReasoningTokens
+				usage = event.Usage
+			}
+		case aistudio.EventToolCall:
+			if event.ToolCall != nil {
+				toolCalls++
 			}
 		}
 		api.SetAccessLogTarget(requestCtx, event.ProviderModel, lease.Account().Config.Label)
