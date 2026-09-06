@@ -295,12 +295,16 @@ func openAITextContent(raw json.RawMessage) (string, error) {
 	return text.String(), nil
 }
 
+// openAIContentParts 转换文本与媒体并省略空文本占位
 func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
+		if text == "" {
+			return nil, nil
+		}
 		return []aistudio.Part{{Text: text}}, nil
 	}
 	var blocks []json.RawMessage
@@ -312,6 +316,9 @@ func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		part, err := openAIContentPart(block)
 		if err != nil {
 			return nil, err
+		}
+		if part == (aistudio.Part{}) {
+			continue
 		}
 		parts = append(parts, part)
 	}

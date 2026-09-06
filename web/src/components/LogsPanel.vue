@@ -3,6 +3,8 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import type { AdminLog } from '@/types'
 import UiIcon from './UiIcon.vue'
+import RequestLogCard from './RequestLogCard.vue'
+import { groupLogs } from '@/logs'
 
 const props = defineProps<{
   logs: AdminLog[]
@@ -15,6 +17,7 @@ defineEmits<{
 const { t } = useI18n()
 const level = ref<'ALL' | 'INFO' | 'WARN' | 'ERROR'>('ALL')
 const source = ref('ALL')
+const search = ref('')
 const autoScroll = ref(true)
 const output = ref<HTMLElement>()
 const sourceWidth = ref(224)
@@ -30,13 +33,16 @@ const sources = computed(() =>
   Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort(),
 )
 
-const filteredLogs = computed(() =>
-  props.logs.filter(
-    (entry) =>
+const rows = computed(() => groupLogs(props.logs))
+const filteredLogs = computed(() => {
+  const query = search.value.trim().toLowerCase()
+  return rows.value.filter(
+    ({ entry, events }) =>
       (level.value === 'ALL' || entry.level.toUpperCase() === level.value) &&
-      (source.value === 'ALL' || entry.source === source.value),
-  ),
-)
+      (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
+      (query === '' || JSON.stringify(entry).toLowerCase().includes(query)),
+  )
+})
 
 const logGridStyle = computed(() => ({ '--log-source-width': `${sourceWidth.value}px` }))
 
@@ -142,6 +148,13 @@ watch(autoScroll, scrollToBottom)
             <option v-for="item in sources" :key="item" :value="item">{{ item }}</option>
           </select>
         </label>
+        <input
+          v-model="search"
+          type="search"
+          :placeholder="t('logs.search')"
+          :aria-label="t('logs.search')"
+          class="w-52 rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500"
+        />
       </div>
 
       <div class="flex items-center gap-2">
@@ -194,25 +207,28 @@ watch(autoScroll, scrollToBottom)
           @keydown="resizeSourceWithKeyboard"
         ></div>
         <div
-          v-for="(entry, index) in filteredLogs"
-          :key="`${entry.time}:${index}`"
+          v-for="row in filteredLogs"
+          :key="row.key"
           class="log-entry log-grid border-l-2 px-2 py-0.5 select-text"
           :class="{
-            'border-blue-500 text-gray-300': entry.level.toUpperCase() === 'INFO',
+            'border-blue-500 text-gray-300': row.entry.level.toUpperCase() === 'INFO',
             'border-yellow-500 bg-yellow-500/5 text-yellow-100':
-              entry.level.toUpperCase() === 'WARN',
-            'border-red-500 bg-red-500/10 text-red-100': entry.level.toUpperCase() === 'ERROR',
+              row.entry.level.toUpperCase() === 'WARN',
+            'border-red-500 bg-red-500/10 text-red-100': row.entry.level.toUpperCase() === 'ERROR',
             'border-gray-600 text-gray-300': !['INFO', 'WARN', 'ERROR'].includes(
-              entry.level.toUpperCase(),
+              row.entry.level.toUpperCase(),
             ),
           }"
         >
-          <span class="text-right text-gray-600">{{ displayTime(entry.time) }}</span>
-          <span class="font-semibold">{{ displayLevel(entry.level) }}</span>
-          <span class="log-cell log-source text-gray-500" :title="entry.source">{{
-            entry.source
+          <span class="text-right text-gray-500">{{ displayTime(row.entry.time) }}</span>
+          <span class="font-semibold">{{ displayLevel(row.entry.level) }}</span>
+          <span class="log-cell log-source text-gray-500" :title="row.entry.source">{{
+            row.entry.source
           }}</span>
-          <span class="log-cell log-message">{{ entry.message }}</span>
+          <div class="log-cell log-message">
+            <RequestLogCard v-if="row.entry.request" :row="row" />
+            <span v-else>{{ row.entry.message }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -223,12 +239,12 @@ watch(autoScroll, scrollToBottom)
 .log-table {
   position: relative;
   width: 100%;
-  min-width: calc(43.875rem + var(--log-source-width));
+  min-width: 0;
 }
 
 .log-grid {
   display: grid;
-  grid-template-columns: 5rem 3.5rem var(--log-source-width) minmax(32rem, 1fr);
+  grid-template-columns: 5rem 3.5rem var(--log-source-width) minmax(0, 1fr);
   column-gap: 0.75rem;
   align-items: start;
 }

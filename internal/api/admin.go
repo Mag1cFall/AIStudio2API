@@ -45,10 +45,45 @@ type AdminStatus struct {
 
 // AdminLog 表示管理页面展示的一条运行日志
 type AdminLog struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Source  string    `json:"source"`
-	Message string    `json:"message"`
+	Time    time.Time   `json:"time"`
+	Level   string      `json:"level"`
+	Source  string      `json:"source"`
+	Message string      `json:"message"`
+	Event   string      `json:"event"`
+	Request *RequestLog `json:"request,omitempty"`
+}
+
+// RequestLog 保存可关联的请求状态、用量与诊断字段
+type RequestLog struct {
+	ID              string            `json:"id"`
+	State           string            `json:"state"`
+	Model           string            `json:"model,omitempty"`
+	Method          string            `json:"method,omitempty"`
+	Path            string            `json:"path,omitempty"`
+	Status          int               `json:"status,omitempty"`
+	DurationMS      float64           `json:"duration_ms,omitempty"`
+	Usage           *RequestLogUsage  `json:"usage,omitempty"`
+	ToolCalls       int               `json:"tool_calls,omitempty"`
+	FinishReason    string            `json:"finish_reason,omitempty"`
+	Error           string            `json:"error,omitempty"`
+	InputMessages   int               `json:"input_messages,omitempty"`
+	InputTextChars  int               `json:"input_text_chars,omitempty"`
+	InputMedia      int               `json:"input_media,omitempty"`
+	InputMediaBytes int64             `json:"input_media_bytes,omitempty"`
+	InputFiles      int               `json:"input_files,omitempty"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	FirstEventMS    float64           `json:"first_event_ms,omitempty"`
+	UpstreamBytes   int64             `json:"upstream_bytes,omitempty"`
+}
+
+// RequestLogUsage 区分输入、思考、回复与端到端输出速率
+type RequestLogUsage struct {
+	InputTokens            int64   `json:"input_tokens"`
+	ReasoningTokens        int64   `json:"reasoning_tokens"`
+	ReplyTokens            int64   `json:"reply_tokens"`
+	OutputTokens           int64   `json:"output_tokens"`
+	TotalTokens            int64   `json:"total_tokens"`
+	AverageTokensPerSecond float64 `json:"average_tokens_per_second"`
 }
 
 // AccessLog 表示一次公开 API 请求的最终访问记录
@@ -56,11 +91,9 @@ type AccessLog struct {
 	Status          int
 	Latency         time.Duration
 	FirstEvent      time.Duration
-	FirstContent    time.Duration
 	UpstreamBytes   int64
-	ContentChars    int
-	OutputTokens    int64
-	ReasoningTokens int64
+	Usage           *aistudio.Usage
+	ToolCalls       int
 	InputMessages   int
 	InputTextChars  int
 	InputMedia      int

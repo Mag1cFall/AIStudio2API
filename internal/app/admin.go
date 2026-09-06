@@ -599,81 +599,6 @@ func (admin *runtimeAdmin) ClearLogs(context.Context) error {
 	return nil
 }
 
-// RecordAccessStart 保存公开 API 请求的开始记录
-func (admin *runtimeAdmin) RecordAccessStart(entry api.AccessLog) {
-	source := strings.TrimSpace(entry.Account)
-	if source == "" {
-		source = "request"
-	}
-	message := fmt.Sprintf("请求开始 | %s %q", entry.Method, entry.Path)
-	if requestID := strings.TrimSpace(entry.RequestID); requestID != "" {
-		message += " | ID=" + requestID
-	}
-	if model := strings.TrimSpace(entry.Model); model != "" {
-		message += " | " + model
-	}
-	if entry.Generation {
-		message += fmt.Sprintf(
-			" | 输入=%d条/%d字/%d媒体/%dB/%d文件 | 温度=%s | TopP=%s | 思考=%s | 最大=%s",
-			entry.InputMessages, entry.InputTextChars, entry.InputMedia, entry.InputMediaBytes, entry.InputFiles,
-			entry.Temperature, entry.TopP, entry.Thinking, entry.MaxOutputTokens,
-		)
-	}
-	admin.requests.log(source, "INFO", message)
-}
-
-// RecordAccessLog 保存公开 API 请求的最终访问记录
-func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
-	source := strings.TrimSpace(entry.Account)
-	if source == "" {
-		source = "request"
-	}
-	model := strings.TrimSpace(entry.Model)
-	if model == "" {
-		model = "-"
-	}
-	requestErr := strings.TrimSpace(entry.Error)
-	level := "INFO"
-	if entry.Canceled {
-		level = "WARN"
-	} else if entry.Status >= http.StatusBadRequest || requestErr != "" {
-		level = "ERROR"
-	}
-	message := fmt.Sprintf(
-		"%3d | %s | %s %q",
-		entry.Status, entry.Latency.Round(time.Millisecond), entry.Method, entry.Path,
-	)
-	if requestID := strings.TrimSpace(entry.RequestID); requestID != "" {
-		message += " | ID=" + requestID
-	}
-	if entry.Generation {
-		message += fmt.Sprintf(
-			" | %s | 首事件=%s | 首正文=%s | %d字/正文%dt",
-			model, logDuration(entry.FirstEvent), logDuration(entry.FirstContent),
-			entry.ContentChars, entry.OutputTokens,
-		)
-		if entry.ReasoningTokens > 0 {
-			message += fmt.Sprintf("/思考%dt", entry.ReasoningTokens)
-		}
-		if finishReason := strings.TrimSpace(entry.FinishReason); finishReason != "" {
-			message += " | 终止=" + finishReason
-		}
-		if entry.UpstreamBytes > 0 {
-			message += fmt.Sprintf(" | 上游=%dB", entry.UpstreamBytes)
-		}
-	} else if model != "-" {
-		message += " | " + model
-	}
-	if entry.Canceled {
-		message += " | client_canceled"
-	} else if requestErr != "" {
-		message += "\n错误: " + requestErr
-	} else if entry.Status >= http.StatusBadRequest {
-		message += fmt.Sprintf("\n错误: HTTP %d", entry.Status)
-	}
-	admin.requests.log(source, level, message)
-}
-
 // syncModelCache 在账户写入后刷新权威快照
 func (admin *runtimeAdmin) syncModelCache() {
 	ctx := admin.lifecycle
@@ -1084,13 +1009,6 @@ func (registry *requestRegistry) cancel(id string) error {
 	return nil
 }
 
-func logDuration(value time.Duration) string {
-	if value <= 0 {
-		return "-"
-	}
-	return value.Round(time.Millisecond).String()
-}
-
 func (registry *requestRegistry) cancelAll() {
 	registry.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(registry.active))
@@ -1104,8 +1022,19 @@ func (registry *requestRegistry) cancelAll() {
 }
 
 func (registry *requestRegistry) log(source string, level string, message string) {
+	registry.recordLog(api.AdminLog{Source: source, Level: level, Message: message, Event: "runtime.message"})
+}
+
+// recordLog 将同一结构化事件发布到管理页面与控制台
+func (registry *requestRegistry) recordLog(entry api.AdminLog) {
+	entry.Time = time.Now().UTC()
 	registry.mu.Lock()
-	entry := registry.appendLogLocked(source, level, message)
+	registry.logs = append(registry.logs, entry)
+	if len(registry.logs) >= adminLogCompactAt {
+		copy(registry.logs, registry.logs[len(registry.logs)-adminLogRetain:])
+		registry.logs = registry.logs[:adminLogRetain]
+	}
+	registry.publishLocked(api.AdminEvent{Type: "log", Data: entry})
 	registry.mu.Unlock()
 	select {
 	case registry.console <- entry:
@@ -1113,29 +1042,23 @@ func (registry *requestRegistry) log(source string, level string, message string
 	}
 }
 
-func (registry *requestRegistry) appendLogLocked(source string, level string, message string) api.AdminLog {
-	entry := api.AdminLog{Time: time.Now().UTC(), Level: level, Source: source, Message: message}
-	registry.logs = append(registry.logs, entry)
-	if len(registry.logs) >= adminLogCompactAt {
-		copy(registry.logs, registry.logs[len(registry.logs)-adminLogRetain:])
-		registry.logs = registry.logs[:adminLogRetain]
-	}
-	registry.publishLocked(api.AdminEvent{Type: "log", Data: entry})
-	return entry
-}
-
 func (registry *requestRegistry) writeConsole(ctx context.Context) {
 	for {
 		select {
 		case entry := <-registry.console:
+			level := slog.LevelInfo
 			switch strings.ToUpper(entry.Level) {
 			case "ERROR":
-				slog.Error(entry.Message, "source", entry.Source)
+				level = slog.LevelError
 			case "WARN":
-				slog.Warn(entry.Message, "source", entry.Source)
-			default:
-				slog.Info(entry.Message, "source", entry.Source)
+				level = slog.LevelWarn
 			}
+			record := slog.NewRecord(entry.Time, level, entry.Message, 0)
+			record.AddAttrs(slog.String("event", entry.Event), slog.String("source", entry.Source))
+			if entry.Request != nil {
+				record.AddAttrs(slog.Any("request", entry.Request))
+			}
+			_ = slog.Default().Handler().Handle(ctx, record)
 		case <-ctx.Done():
 			return
 		}

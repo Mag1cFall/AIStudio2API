@@ -526,7 +526,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 				ThoughtSignature: part.ThoughtSignature,
 			})
 		default:
-			if part.Thought {
+			if part.Thought || *part.Text == "" {
 				if part.ThoughtSignature != "" {
 					parts = append(parts, aistudio.Part{ThoughtSignature: part.ThoughtSignature})
 				}

@@ -65,6 +65,38 @@ export interface AdminLog {
   level: string
   source: string
   message: string
+  event: string
+  request?: RequestLog
+}
+
+// RequestLog 对应请求日志的结构化载荷
+export interface RequestLog {
+  id: string
+  state: 'running' | 'completed' | 'tool_calls' | 'limited' | 'blocked' | 'failed' | 'cancelled'
+  model?: string
+  method?: string
+  path?: string
+  status?: number
+  duration_ms?: number
+  tool_calls?: number
+  finish_reason?: string
+  error?: string
+  input_messages?: number
+  input_text_chars?: number
+  input_media?: number
+  input_media_bytes?: number
+  input_files?: number
+  parameters?: Record<string, string>
+  first_event_ms?: number
+  upstream_bytes?: number
+  usage?: {
+    input_tokens: number
+    reasoning_tokens: number
+    reply_tokens: number
+    output_tokens: number
+    total_tokens: number
+    average_tokens_per_second: number
+  }
 }
 
 export interface Model {

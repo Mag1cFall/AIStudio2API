@@ -1,6 +1,6 @@
 # 运行日志
 
-管理页面与控制台显示同一组运行事件。日志来源使用 `service`、`request` 或实际执行账户的 Google 邮箱。
+管理页面与控制台使用同一组结构化事件。页面按请求汇总展示，控制台向标准错误输出逐行 JSON。日志来源使用 `service`、`request` 或实际执行账户的 Google 邮箱。
 
 管理 API 通过 `GET /api/events` 推送历史快照和后续增量。账户创建等尚未绑定正式账户的认证操作使用 `auth` 来源。
 
@@ -21,10 +21,12 @@
 | `level` | 当前事件级别 | `WARN` |
 | `source` | `service`、`request`、`auth` 或账户 label | `request` |
 | `message` | 阶段、指标和原始错误 | `事件流停顿 | ...` |
+| `event` | 稳定事件名 | `request.started`、`request.progress`、`request.finished`、`runtime.message` |
+| `request` | 请求标识、状态、用量与诊断字段 | 请求事件携带该对象 |
 
 `INFO` 记录状态推进和完成结果，`WARN` 记录等待、切换与客户端取消，`ERROR` 记录失败结果。管理页面支持按级别、来源和消息文本筛选，日志正文可以选择和横向滚动。
 
-错误详情保留在同一条 message 的 `错误=` 字段或下一行 `错误:` 中。
+请求错误保存在 `request.error` 并直接展示在请求行下方。运行事件的错误详情保留在 `message` 中。
 
 ## 启动过程
 
@@ -126,43 +128,38 @@ ERROR  account@example.com  WAA Worker 停止失败 | PID=18240 | 耗时=10.002s
 
 ## API 请求
 
-生成请求完成解析后立即记录模型和生成参数。账户选定后，完成摘要的来源切换为 Google 邮箱。
+请求事件通过 `request.id` 关联。页面将开始、进展和结束合并为一行，展示最新账户、HTTP 状态、模型、耗时和输出统计。展开详情可查看接口、输入用量、原始终止原因、完整事件时间线与 JSON。
 
 ```text
-INFO  request              请求开始 | POST "/v1/chat/completions" | gemini-3.7-flash | 温度=1 | TopP=1 | 思考=high | 最大=64000
-INFO  account@example.com  200 | 34.898s | POST "/v1/chat/completions" | gemini-3.7-flash | 首事件=18.236s | 首正文=18.236s | 4414字/正文2092t | 终止=prohibited_content
+22:11:47  200  gemini-3.8-flash  4.76 s  工具调用 1
+思考 32 · 回复 38 · 输出合计 70 tokens · 平均速度 14.7 tokens/s
 ```
 
 | 字段 | 含义 |
 | --- | --- |
-| `温度`、`TopP` | 请求提交的采样参数；`默认` 表示使用实时模型目录的默认值 |
-| `思考` | thinking level；预算模式显示为 `预算8192`，未指定时显示 `默认` |
-| `最大` | 请求提交的最大输出 Token；未指定时显示 `默认` |
-| `34.898s` | 请求进入服务到流结束的总耗时 |
-| `首事件` | 第一个上游语义事件到达时间，事件可以是推理或正文 |
-| `首正文` | 第一段正文到达时间；只有推理事件时显示 `-` |
-| `4414字/正文2092t` | 正文 Unicode 字符数与上游正文 Token |
-| `思考61448t` | 上游 usage 返回的思考 Token，值大于零时追加 |
-| `终止` | AI Studio 返回的 finish reason |
+| HTTP 状态 | 请求结果；流式响应开始后的错误仍按实际失败状态记录 |
+| 耗时 | 从请求进入服务到处理结束，单位为秒 |
+| 思考 | `request.usage.reasoning_tokens` |
+| 回复 | `request.usage.reply_tokens`，包含文本、工具调用等非思考输出 |
+| 输出合计 | `request.usage.output_tokens`，等于思考加回复 |
+| 平均速度 | 输出合计除以请求总耗时，单位为 tokens/s，包含准备与等待时间 |
+| 工具调用 | 本次模型输出的函数调用事件数 |
+| 输入用量 | `request.usage.input_tokens`，包含输入消息与工具声明 |
+| 总用量 | `request.usage.total_tokens`，包含输入和输出 |
 
-`prohibited_content` 等策略终止属于已完成的上游终态，摘要保留 HTTP `200` 与原始 finish reason。未知整数终止原因显示为 `provider_<code>`。
+用量在生成服务返回 usage 后展示；用量未知时省略 `request.usage`。平均速度衡量端到端吞吐，网络缓冲或集中到达的响应也使用同一计算区间。
 
-快速目录查询和认证拒绝直接记录最终访问结果：
+`request.state` 区分 `running`、`completed`、`tool_calls`、`limited`、`blocked`、`failed` 和 `cancelled`。策略终止保留 HTTP `200` 并显示原始 `finish_reason`；达到输出上限时显示 `max_tokens`。未知终止原因保留为 `provider_<code>`。
 
-```text
-INFO  request  200 | 1ms | GET "/v1/models"
+控制台每行是一条独立 JSON 事件，请求数据与中文摘要分离：
+
+```json
+{"time":"2026-09-06T14:11:47Z","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
 ```
 
-客户端取消统一记录为 `499`。上游错误使用对应失败状态并在下一行保留错误详情。
+采样参数保存在 `request.parameters`。`first_event_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
 
-```text
-WARN  account@example.com  499 | 52.104s | POST "/v1/chat/completions" | gemini-3.7-flash | 首事件=18.236s | 首正文=- | 0字/正文0t/思考1260t | client_canceled
-```
-
-```text
-ERROR account@example.com  502 | 4m56.668s | POST "/v1/chat/completions" | gemini-3.6-flash | 首事件=18.104s | 首正文=- | 0字/正文0t/思考1260t
-                           错误: AI Studio stream closed before finish
-```
+客户端取消记录为 `499`；认证、额度和上游失败分别使用对应 HTTP 状态与 `request.error`。
 
 管理端取消活动请求或停止生成服务时，仍连接的客户端按公开协议收到 `503 request_canceled` 或对应的流式 error event。
 
@@ -204,7 +201,7 @@ INFO  account@example.com  事件流恢复 | 模型=gemini-3.7-flash | 停顿=1m
 
 ```
 
-SSE 客户端把该帧作为连接存活信号，正文、推理和 usage 继续使用各协议的 `data` 或命名事件。OpenAI Chat、Responses 与 Anthropic 还会在调度期间立即发送各自的起始事件。
+SSE 客户端把该帧作为连接存活信号，正文、推理和 usage 继续使用各协议的 `data` 或命名事件。Anthropic 在调用生成服务前发送起始事件；OpenAI Chat 与 Responses 在取得生成事件流后发送起始事件。
 
 ## 账户事件
 
@@ -250,7 +247,7 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 
 ## 管理事件流
 
-管理页面连接 `GET /api/events` 时先收到当前状态、模型、账户、最近约 2000 条日志、冷却和活动请求，随后接收增量事件。控制台按 Go `slog` 格式输出运行事件。
+管理页面连接 `GET /api/events` 时先收到当前状态、模型、账户、最近约 2000 条日志事件、冷却和活动请求，随后接收增量事件。请求事件在页面按 ID 汇总，控制台通过 Go `slog.JSONHandler` 输出逐行 JSON。
 
 初始事件顺序：
 
