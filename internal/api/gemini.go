@@ -985,7 +985,9 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 }
 
 func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, events <-chan aistudio.Event) {
-	streamHeaders(w)
+	if err := streamHeaders(w); err != nil {
+		return
+	}
 	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
 		response := map[string]any{"responseId": request.ID, "modelVersion": request.Model}
 		switch event.Kind {

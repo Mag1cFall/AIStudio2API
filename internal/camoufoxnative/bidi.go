@@ -218,8 +218,11 @@ func (client *bidiClient) evaluateBool(ctx context.Context, contextID, expressio
 	return value, nil
 }
 
+// waitFor 将页面条件的等待期限传递给 BiDi 命令
 func (client *bidiClient) waitFor(ctx context.Context, contextID, expression string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -238,8 +241,11 @@ func (client *bidiClient) waitFor(ctx context.Context, contextID, expression str
 	return fmt.Errorf("等待页面条件超时: %s", expression)
 }
 
+// waitSnapshotFunction 在阶段期限内定位页面函数
 func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	for time.Now().Before(deadline) {
 		key, err := client.evaluateString(ctx, contextID, snapshotHookExpression())
 		if err != nil && !retryablePageEvaluation(err) {
@@ -258,8 +264,11 @@ func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID st
 	return "", errors.New("官网高层 snapshot 函数定位超时")
 }
 
+// waitBlockedGenerateRequest 在阶段期限内接收网络拦截事件
 func (client *bidiClient) waitBlockedGenerateRequest(ctx context.Context, contextID string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	for time.Now().Before(deadline) {
 		if client.blockedGenerateRequestID != "" {
 			return client.blockedGenerateRequestID, nil

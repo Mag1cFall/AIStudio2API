@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import type { LogRow } from '@/logs'
+import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
 const { t, locale } = useI18n()
@@ -48,7 +49,11 @@ function number(value: number, digits = 0): string {
     </p>
     <details class="request-details">
       <summary>
-        {{ t('logs.details') }} <span>{{ request.method }} · HTTP {{ request.status || '…' }}</span>
+        <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+        {{ t('logs.details') }}
+        <span class="request-summary-meta"
+          >{{ request.method }} · HTTP {{ request.status || '…' }}</span
+        >
       </summary>
       <dl>
         <dt>ID</dt>
@@ -77,7 +82,10 @@ function number(value: number, digits = 0): string {
         </li>
       </ol>
       <details class="request-json">
-        <summary>JSON</summary>
+        <summary>
+          <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+          JSON
+        </summary>
         <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
       </details>
     </details>
@@ -156,12 +164,55 @@ function number(value: number, digits = 0): string {
   font-size: 11px;
 }
 .request-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 4px;
   cursor: pointer;
-  width: fit-content;
+  list-style: none;
+  user-select: none;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
-.request-details summary span {
-  margin-left: 10px;
+.request-details summary::-webkit-details-marker {
+  display: none;
+}
+.request-details summary:hover {
+  color: #c9d1d9;
+  background: #30363d66;
+}
+.request-details summary:focus-visible {
+  outline: 1px solid #79c0ff;
+  outline-offset: 2px;
+}
+.request-disclosure-icon {
   color: #6e7681;
+  transition: transform 120ms ease;
+}
+details[open] > summary > .request-disclosure-icon {
+  transform: rotate(90deg);
+}
+.request-summary-meta {
+  min-width: 0;
+  margin-left: 6px;
+  color: #6e7681;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .request-details summary {
+    min-height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .request-details summary,
+  .request-disclosure-icon {
+    transition: none;
+  }
 }
 .request-details dl {
   display: grid;
