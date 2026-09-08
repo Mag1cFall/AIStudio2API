@@ -225,11 +225,7 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
 		return fmt.Errorf("导航 AI Studio: %w", err)
 	}
-	if err := client.waitFor(ctx, contextID, `(() => {
-	  if (location.hostname === 'accounts.google.com') return true;
-  const item = document.querySelector('ms-prompt-box textarea:last-of-type') || [...document.querySelectorAll('ms-prompt-box textarea')].at(-1);
-  return Boolean(item && item.offsetParent !== null);
-})()`, 120*time.Second); err != nil {
+	if err := client.waitFor(ctx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
 		return fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)
 	}
@@ -279,14 +275,8 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if interceptID == "" {
 		return errors.New("GenerateContent 拦截 ID 无效")
 	}
-	clicked, err := client.evaluateBool(ctx, contextID, `(() => {
-  const button = [...document.querySelectorAll('ms-run-button button[type="submit"]')].at(-1);
-  if (!button || button.disabled) return false;
-  button.click();
-  return true;
-})()`)
-	if err != nil || !clicked {
-		return fmt.Errorf("官网 Run 按钮不可用 clicked=%t err=%v", clicked, err)
+	if _, err := client.evaluate(ctx, contextID, submitPromptExpression); err != nil {
+		return fmt.Errorf("提交官网提示词: %w", err)
 	}
 	if err := client.waitFor(ctx, contextID, "Boolean(window.__aistudioWaaService)", 60*time.Second); err != nil {
 		return fmt.Errorf("官网 WAA service 未暴露: %w", err)
@@ -349,29 +339,6 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		Timezone:    timezone,
 		SnapshotKey: snapshotKey,
 		Headers:     headers,
-	}
-	return nil
-}
-
-func dismissKnownOverlays(ctx context.Context, client *bidiClient, contextID string) error {
-	_, err := client.evaluate(ctx, contextID, `(() => {
-  const selectors = [
-    'ms-g1-welcome-dialog button[aria-label="Close dialog"]',
-    'button[aria-label="Close guided tour"]',
-    '#glue-cookie-notification-bar-1 .glue-cookie-notification-bar__reject'
-  ];
-  let clicked = 0;
-  for (const selector of selectors) {
-    const button = document.querySelector(selector);
-    if (button instanceof HTMLElement && button.offsetParent !== null && !button.disabled) {
-      button.click();
-      clicked++;
-    }
-  }
-  return clicked;
-})()`)
-	if err != nil {
-		return fmt.Errorf("处理 AI Studio 启动覆盖层: %w", err)
 	}
 	return nil
 }

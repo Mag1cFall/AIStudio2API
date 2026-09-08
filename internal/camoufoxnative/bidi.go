@@ -333,20 +333,6 @@ func snapshotHookExpression() string {
 })()`
 }
 
-func fillPromptExpression(prompt string) string {
-	encoded, _ := json.Marshal(prompt)
-	return fmt.Sprintf(`(() => {
-  const items = [...document.querySelectorAll('ms-prompt-box textarea')];
-  const textarea = items.at(-1);
-  if (!textarea) return '';
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(textarea, %s);
-  textarea.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: %s}));
-  textarea.dispatchEvent(new Event('change', {bubbles: true}));
-  return textarea.value;
-})()`, encoded, encoded)
-}
-
 func takeProofExpression(digest string) string {
 	encoded, _ := json.Marshal(digest)
 	return fmt.Sprintf(`(async () => {

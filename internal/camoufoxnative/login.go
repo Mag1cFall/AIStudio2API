@@ -16,12 +16,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const loginReadyExpression = `(() => {
-  const items = [...document.querySelectorAll('ms-prompt-box textarea')];
-  const textarea = items.at(-1);
-  return Boolean(textarea && textarea.offsetParent !== null);
-})()`
-
 const loginEmailExpression = `(() => {
   const values = [document.body?.innerText || ''];
   for (const element of document.querySelectorAll('[aria-label]')) {
@@ -248,7 +242,7 @@ func (session *loginSession) waitLogin(ctx context.Context, origins map[string]s
 			continue
 		}
 		session.captureCurrentOrigin(ctx, pageURL, origins)
-		ready, readyErr := session.client.evaluateBool(ctx, session.contextID, loginReadyExpression)
+		ready, readyErr := session.client.evaluateBool(ctx, session.contextID, promptReadyExpression)
 		if readyErr != nil && !retryablePageEvaluation(readyErr) {
 			return "", fmt.Errorf("检查隔离登录页面: %w", readyErr)
 		}
@@ -279,7 +273,7 @@ func (session *loginSession) waitVerification(ctx context.Context) (string, bool
 		if isGoogleLoginURL(pageURL) {
 			return pageURL, false, "AI Studio 登录已失效", nil
 		}
-		ready, err := session.client.evaluateBool(ctx, session.contextID, loginReadyExpression)
+		ready, err := session.client.evaluateBool(ctx, session.contextID, promptReadyExpression)
 		if err != nil && !retryablePageEvaluation(err) {
 			return "", false, "", fmt.Errorf("检查隔离验证页面: %w", err)
 		}
