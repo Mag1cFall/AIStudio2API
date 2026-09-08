@@ -42,16 +42,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func streamHeaders(w http.ResponseWriter) {
+// streamHeaders 写入并刷新流式响应头
+func streamHeaders(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	return http.NewResponseController(w).Flush()
 }
 
+// writeSSE 写入具名事件并传播缓冲刷新错误
 func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -65,30 +65,23 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 		return err
 	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return nil
+	return http.NewResponseController(w).Flush()
 }
 
+// writeSSEText 写入文本事件并刷新网络缓冲
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 		return err
 	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return nil
+	return http.NewResponseController(w).Flush()
 }
 
+// writeSSEHeartbeat 发送心跳并传播连接错误
 func writeSSEHeartbeat(w http.ResponseWriter) error {
 	if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 		return err
 	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return nil
+	return http.NewResponseController(w).Flush()
 }
 
 func statusFromError(err error) int {

@@ -645,7 +645,9 @@ func buildChatCompletion(id string, created int64, model string, result generati
 }
 
 func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, events <-chan aistudio.Event) {
-	streamHeaders(w)
+	if err := streamHeaders(w); err != nil {
+		return
+	}
 	if err := writeChatChunk(w, id, created, request.Model, map[string]any{"role": "assistant", "content": ""}, nil, request.StreamOptions.IncludeUsage); err != nil {
 		return
 	}

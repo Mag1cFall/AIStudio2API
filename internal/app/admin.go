@@ -612,13 +612,12 @@ func (admin *runtimeAdmin) syncModelCache() {
 func (admin *runtimeAdmin) syncAccountModelCatalog(ctx context.Context, account *aistudio.Account) {
 	models, err := admin.service.syncAccountModels(ctx, account.ID)
 	if err != nil {
-		admin.requests.log(account.Config.Label, "WARN", fmt.Sprintf(
-			"账户模型目录等待重试 | 错误=%s", strings.TrimSpace(err.Error()),
-		))
 		admin.service.publishModelAccess()
 		return
 	}
-	admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf("账户模型目录同步完成 | 模型=%d", len(models)))
+	if len(models) > 0 {
+		admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf("账户模型目录同步完成 | 模型=%d", len(models)))
+	}
 	admin.service.publishModelAccess()
 }
 

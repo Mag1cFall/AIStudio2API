@@ -170,7 +170,7 @@ function appendChunk(chunk: PlaygroundChunk): void {
 
 // execute 发送公开协议请求并实时追加结果
 async function execute(): Promise<void> {
-  if (form.model === '' || form.prompt.trim() === '') return
+  if (isRunning.value || form.model === '' || form.prompt.trim() === '') return
   const input = { ...form }
   controller = new AbortController()
   submittedPrompt.value = form.prompt

@@ -92,11 +92,12 @@ func (writer *accessLogResponseWriter) Write(data []byte) (int, error) {
 	return writer.ResponseWriter.Write(data)
 }
 
-func (writer *accessLogResponseWriter) Flush() {
+// FlushError 记录状态并向响应控制器返回底层刷新错误
+func (writer *accessLogResponseWriter) FlushError() error {
 	if writer.status == 0 {
 		writer.WriteHeader(http.StatusOK)
 	}
-	_ = http.NewResponseController(writer.ResponseWriter).Flush()
+	return http.NewResponseController(writer.ResponseWriter).Flush()
 }
 
 func (writer *accessLogResponseWriter) Unwrap() http.ResponseWriter {

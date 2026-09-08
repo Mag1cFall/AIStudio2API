@@ -12,6 +12,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "eventsource-parser": "4.1.0",
     "vue": "3.5.41"
   },
   "devDependencies": {

@@ -430,7 +430,9 @@ func (s *server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 		writeAdminUpstreamError(w, err)
 		return
 	}
-	streamHeaders(w)
+	if err := streamHeaders(w); err != nil {
+		return
+	}
 	for {
 		select {
 		case <-r.Context().Done():

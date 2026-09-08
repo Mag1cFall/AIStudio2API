@@ -1,3 +1,4 @@
+import { EventSourceParserStream } from 'eventsource-parser/stream'
 import type {
   Account,
   AccountDraft,
@@ -56,6 +57,7 @@ export class ApiError extends Error {
 async function responseErrorMessage(response: Response): Promise<string> {
   const body = await response.text()
   if (body === '') return response.statusText
+  if (!response.headers.get('content-type')?.includes('application/json')) return body
 
   const value: unknown = JSON.parse(body)
   const message = pathValue(value, ['error', 'message'])
@@ -603,32 +605,39 @@ async function readEventStream(
   input: PlaygroundInput,
   onDelta: (chunk: PlaygroundChunk, raw: string) => void,
 ): Promise<void> {
-  if (response.body === null) return
+  if (response.body === null) throw new Error('Empty event stream')
 
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
-  let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    buffer += value ?? ''
-
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary >= 0) {
-      const frame = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
-      const data = frame
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n')
-
-      if (data !== '' && data !== '[DONE]') {
-        const value: unknown = JSON.parse(data)
-        onDelta(responseChunk(input, value), data)
-      }
-      boundary = buffer.indexOf('\n\n')
+  const events = response.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(new EventSourceParserStream())
+  for await (const { data } of events) {
+    if (input.protocol === 'openai-chat' && data === '[DONE]') return
+    const value: unknown = JSON.parse(data)
+    const error = pathValue(value, ['error']) ?? pathValue(value, ['response', 'error'])
+    if (error != null) {
+      const message = pathValue(error, ['message'])
+      throw new ApiError(typeof message === 'string' ? message : data, response.status)
     }
+    onDelta(responseChunk(input, value), data)
+    if (streamFinished(input, value)) return
+  }
+  throw new Error('Event stream ended before the protocol completion event')
+}
 
-    if (done) break
+// streamFinished 按各公开协议的结束事件确认请求完成
+function streamFinished(input: PlaygroundInput, value: unknown): boolean {
+  const type = pathValue(value, ['type'])
+  switch (input.protocol) {
+    case 'openai-chat':
+      return false
+    case 'openai-responses':
+      return type === 'response.completed' || type === 'response.incomplete'
+    case 'anthropic':
+      return type === 'message_stop'
+    case 'gemini': {
+      const reason = pathValue(value, ['candidates', 0, 'finishReason'])
+      return typeof reason === 'string' && reason !== ''
+    }
   }
 }
 

@@ -96,7 +96,9 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if request.Stream {
-		streamHeaders(w)
+		if err := streamHeaders(w); err != nil {
+			return
+		}
 		writer := &anthropicStreamWriter{
 			w: w, id: messageID, model: request.Model,
 			inputTokens: aistudio.EstimatedInputTokens(generateRequest),

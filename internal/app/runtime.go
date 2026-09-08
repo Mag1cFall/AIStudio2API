@@ -2086,6 +2086,9 @@ func (service *trackedService) refreshAccountModelCatalog(ctx context.Context, a
 			service.modelRetries[accountID] = struct{}{}
 		}
 		service.modelRetriesMu.Unlock()
+		if ctx.Err() == nil {
+			service.requests.log(accountID, "WARN", "模型目录同步失败 | 错误="+err.Error())
+		}
 		return nil, err
 	}
 	if len(models) == 0 {
@@ -2094,6 +2097,9 @@ func (service *trackedService) refreshAccountModelCatalog(ctx context.Context, a
 		delete(service.modelRetries, accountID)
 	}
 	service.modelRetriesMu.Unlock()
+	if len(models) == 0 && ctx.Err() == nil {
+		service.requests.log(accountID, "WARN", "模型目录为空，等待重新同步")
+	}
 	return models, nil
 }
 
@@ -2133,34 +2139,25 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 }
 
 func (service *trackedService) retryAccountModelCatalogs(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	accountIDs := service.pendingModelRetryIDs()
 	authRequiredBefore := service.authRequiredAccountIDs()
-	synchronized := 0
-	refreshed := 0
 	for result := range service.refreshAccountModelCatalogs(ctx, accountIDs, true) {
 		if ctx.Err() != nil {
 			return false
 		}
-		if !result.skipped && result.err == nil {
-			synchronized++
-			if len(result.models) > 0 {
-				refreshed++
-				service.applyCachedModelCatalog()
-				service.publishModelAccess()
-			}
+		if !result.skipped && result.err == nil && len(result.models) > 0 {
+			service.applyCachedModelCatalog()
+			service.publishModelAccess()
+			service.requests.log(result.accountID, "INFO", fmt.Sprintf("模型目录已更新 | 模型=%d", len(result.models)))
 		}
 	}
 	authChanged := !maps.Equal(service.authRequiredAccountIDs(), authRequiredBefore)
 	if authChanged {
 		service.publishModelAccess()
 	}
-	if len(accountIDs) == 0 && !authChanged {
-		return true
-	}
-	service.requests.log("service", "INFO", fmt.Sprintf(
-		"模型目录重试完成 | 同步=%d | 非空=%d | 待重试账户=%d",
-		synchronized, refreshed, service.pendingModelRetryCount(),
-	))
 	return true
 }
 
@@ -2170,11 +2167,24 @@ func (service *trackedService) removeAccountModelRetry(accountID string) {
 	service.modelRetriesMu.Unlock()
 }
 
+// pendingModelRetryIDs 清理失效账户并返回当前可同步的重试任务
 func (service *trackedService) pendingModelRetryIDs() []string {
+	states := make(map[string]aistudio.AccountState)
+	for _, status := range service.pool.Status() {
+		if status.Enabled {
+			states[status.ID] = status.State
+		}
+	}
 	service.modelRetriesMu.Lock()
 	accountIDs := make([]string, 0, len(service.modelRetries))
 	for accountID := range service.modelRetries {
-		accountIDs = append(accountIDs, accountID)
+		switch states[accountID] {
+		case aistudio.AccountReady, aistudio.AccountBusy:
+			accountIDs = append(accountIDs, accountID)
+		case aistudio.AccountCooldown:
+		default:
+			delete(service.modelRetries, accountID)
+		}
 	}
 	service.modelRetriesMu.Unlock()
 	sort.Strings(accountIDs)
@@ -2182,6 +2192,7 @@ func (service *trackedService) pendingModelRetryIDs() []string {
 }
 
 func (service *trackedService) pendingModelRetryCount() int {
+	service.pendingModelRetryIDs()
 	service.modelRetriesMu.Lock()
 	pending := len(service.modelRetries)
 	service.modelRetriesMu.Unlock()
@@ -2985,6 +2996,7 @@ func (service *trackedService) generateWithRetry(
 var errStreamClosedBeforeFirstEvent = errors.New("AI Studio stream closed before first event")
 var errStreamClosedBeforeFinish = errors.New("AI Studio stream closed before finish")
 
+// firstGenerateEvent 等待首事件并在请求期限内完成错误流清理
 func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWait func()) (aistudio.Event, error) {
 	timer := time.NewTimer(streamStallThreshold)
 	defer timer.Stop()
@@ -2998,12 +3010,19 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 			if event.Kind != aistudio.EventError {
 				return event, nil
 			}
-			for range source {
+			if event.Err == nil {
+				event.Err = errors.New("AI Studio stream returned an empty error event")
 			}
-			if event.Err != nil {
-				return aistudio.Event{}, event.Err
+			for {
+				select {
+				case _, ok := <-source:
+					if !ok {
+						return aistudio.Event{}, event.Err
+					}
+				case <-ctx.Done():
+					return aistudio.Event{}, ctx.Err()
+				}
 			}
-			return aistudio.Event{}, errors.New("AI Studio stream returned an empty error event")
 		case <-wait:
 			if onWait != nil {
 				onWait()

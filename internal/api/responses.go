@@ -680,7 +680,9 @@ type responsesPendingCode struct {
 }
 
 func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request responsesRequest, contents []aistudio.Content, inlineInstructions []string, id string, created int64, events <-chan aistudio.Event) {
-	streamHeaders(w)
+	if err := streamHeaders(w); err != nil {
+		return
+	}
 	writer := &responsesStreamWriter{
 		w: w, id: id, created: created, request: request,
 		indexes: make(map[string]int), searchProbe: responsesUsesWebSearch(request.Tools),

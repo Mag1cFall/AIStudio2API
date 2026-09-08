@@ -609,6 +609,7 @@ func retryableAccountError(err error) bool {
 		rpcError.StatusCode == http.StatusTooManyRequests || rpcError.StatusCode >= http.StatusInternalServerError
 }
 
+// forwardEventsWithLease 转发事件并在结束或取消时释放账户租约
 func forwardEventsWithLease(
 	ctx context.Context,
 	source <-chan Event,
@@ -618,11 +619,29 @@ func forwardEventsWithLease(
 	modelID string,
 ) {
 	defer close(destination)
+	defer func() {
+		if err := lease.Release(); err != nil {
+			select {
+			case destination <- Event{Kind: EventError, Err: err}:
+			case <-ctx.Done():
+			}
+		}
+	}()
 	verified := false
 	accountID := lease.Account().ID
 	accessGeneration := lease.ModelAccessGeneration()
 	checkedAt := lease.CheckedAt()
-	for event := range source {
+	for {
+		var event Event
+		select {
+		case next, ok := <-source:
+			if !ok {
+				return
+			}
+			event = next
+		case <-ctx.Done():
+			return
+		}
 		if event.Kind == EventError {
 			if DefinitiveAuthenticationFailure(event.Err) {
 				if err := lease.MarkAuthenticationRequired(event.Err.Error()); err != nil {
@@ -633,7 +652,6 @@ func forwardEventsWithLease(
 		select {
 		case destination <- event:
 		case <-ctx.Done():
-			_ = lease.Release()
 			return
 		}
 		if event.Kind != EventError && !verified {
@@ -641,6 +659,8 @@ func forwardEventsWithLease(
 			if err := lease.MarkAuthenticationValid(); err != nil {
 				slog.Error("账户认证状态保存失败", "account", accountID, "error", err)
 			}
+		}
+		if event.Kind == EventFinish {
 			go func() {
 				if _, err := pool.MarkModelAccessVerifiedIfGeneration(
 					accountID, modelID, accessGeneration, checkedAt,
@@ -648,12 +668,6 @@ func forwardEventsWithLease(
 					slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
 				}
 			}()
-		}
-	}
-	if err := lease.Release(); err != nil {
-		select {
-		case destination <- Event{Kind: EventError, Err: err}:
-		case <-ctx.Done():
 		}
 	}
 }
