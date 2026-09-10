@@ -28,7 +28,7 @@
 ## 特性
 
 - **四套 API 协议**: 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini GenerateContent
-- **多账户运行**: 识别 Free、Pro、Ultra 与 Plus 权益，按模型实际资格、首事件速度和并发槽位调度
+- **多账户运行**: 识别 Free、Pro、Ultra 与 Plus 权益，在合资格账户间轮询或优先复用可用账户
 - **原生流式响应**: 实时输出正文、思考摘要、函数调用、Google 工具、媒体和 usage
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
@@ -220,6 +220,8 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
+生成请求中的内联附件会自动上传为临时 Drive 文件，随请求结束清理；图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
+
 ### TTS 语音生成
 
 ```bash
@@ -366,6 +368,7 @@ cp .env.example .env
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `2` | 同时初始化的预热账户数 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
+| `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制启动预热并发，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。

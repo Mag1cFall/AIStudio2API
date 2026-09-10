@@ -212,7 +212,8 @@ type AccountPool struct {
 	byID                  map[string]*Account
 	resources             map[string]string
 	perAccountConcurrency int
-	next                  int
+	routingStrategy       string
+	lastPicked            map[string]string
 	changed               chan struct{}
 }
 
@@ -610,6 +611,7 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 	p := &AccountPool{
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
+		routingStrategy: "round-robin", lastPicked: make(map[string]string),
 	}
 	for _, account := range p.accounts {
 		if account == nil {
@@ -799,9 +801,6 @@ func (p *AccountPool) Remove(accountID string, deleteDirectory func(*Account) er
 			p.accounts = append(p.accounts[:index], p.accounts[index+1:]...)
 			break
 		}
-	}
-	if p.next >= len(p.accounts) {
-		p.next = 0
 	}
 	p.notifyLocked()
 	p.mu.Unlock()
@@ -2187,7 +2186,7 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		}
 		account.active++
 		account.LastUsed = now
-		p.next = (index + 1) % max(1, len(p.accounts))
+		p.lastPicked[selectionAccessScope(selection)] = account.ID
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
@@ -2339,35 +2338,49 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 		}
 		return nil, ErrNoEligibleAccount
 	}
-	if selection.AllowedAccountIDs != nil {
-		indicesByID := make(map[string]int, len(p.accounts))
-		for index, account := range p.accounts {
-			if account != nil {
-				indicesByID[account.ID] = index
-			}
-		}
-		indices := make([]int, 0, len(selection.AllowedAccountIDs))
-		seen := make(map[string]struct{}, len(selection.AllowedAccountIDs))
-		for _, candidateID := range selection.AllowedAccountIDs {
-			candidateID = strings.TrimSpace(candidateID)
-			index, exists := indicesByID[candidateID]
-			if !exists {
-				continue
-			}
-			if _, duplicate := seen[candidateID]; duplicate {
-				continue
-			}
-			seen[candidateID] = struct{}{}
-			indices = append(indices, index)
-		}
-		return indices, nil
-	}
 	indices := make([]int, 0, len(p.accounts))
-	for offset := 0; offset < len(p.accounts); offset++ {
-		index := (p.next + offset) % len(p.accounts)
+	for index, account := range p.accounts {
+		if account == nil {
+			continue
+		}
+		if allowed != nil {
+			if _, exists := allowed[account.ID]; !exists {
+				continue
+			}
+		}
 		indices = append(indices, index)
 	}
+	sort.Slice(indices, func(left, right int) bool {
+		return p.accounts[indices[left]].ID < p.accounts[indices[right]].ID
+	})
+	if p.routingStrategy == "round-robin" {
+		last := p.lastPicked[selectionAccessScope(selection)]
+		start := sort.Search(len(indices), func(index int) bool { return p.accounts[indices[index]].ID > last })
+		indices = append(indices[start:], indices[:start]...)
+	}
 	return indices, nil
+}
+
+// SetRoutingStrategy 设置账户轮询或优先填满策略
+func (p *AccountPool) SetRoutingStrategy(strategy string) {
+	p.mu.Lock()
+	p.routingStrategy = strategy
+	p.mu.Unlock()
+}
+
+// OrderCandidates 按当前策略排列候选账户而不推进轮询位置
+func (p *AccountPool) OrderCandidates(accountIDs []string, modelAccessScope string) []string {
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	indices, _ := p.selectionIndicesLocked(AccountSelection{AllowedAccountIDs: accountIDs, ModelAccessScope: modelAccessScope})
+	ordered := make([]string, 0, len(indices))
+	for _, index := range indices {
+		ordered = append(ordered, p.accounts[index].ID)
+	}
+	return ordered
 }
 
 func (p *AccountPool) setAccountState(accountID string, state AccountState, reason string) error {

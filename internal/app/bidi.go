@@ -109,9 +109,13 @@ func (service *trackedService) bidiCandidates(ctx context.Context, model string,
 	return candidates, nil
 }
 
-// preferBidiAccounts 按实测资格与实时负载排列账户
+// preferBidiAccounts 在实测资格分组内按账户策略排列候选
 func (service *trackedService) preferBidiAccounts(accountIDs []string, modelID string, modelAccessScope string) []string {
-	candidates := service.preferFast(accountIDs, modelID)
+	scope := strings.TrimSpace(modelAccessScope)
+	if scope == "" {
+		scope = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	}
+	candidates := service.pool.OrderCandidates(accountIDs, scope)
 	if strings.TrimSpace(modelAccessScope) == "" {
 		return candidates
 	}

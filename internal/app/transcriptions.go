@@ -132,10 +132,10 @@ func (service *trackedService) transcriptionCandidates(ctx context.Context, mode
 		return nil, err
 	}
 	warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
-	candidates := service.preferFast(warmAvailable, modelID)
-	candidates = append(candidates, service.preferFast(groups.StandbyReady, modelID)...)
-	candidates = append(candidates, service.preferFast(groups.WarmBusy, modelID)...)
-	candidates = append(candidates, service.preferFast(groups.StandbyBusy, modelID)...)
+	candidates := service.pool.OrderCandidates(warmAvailable, modelID)
+	candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyReady, modelID)...)
+	candidates = append(candidates, service.pool.OrderCandidates(groups.WarmBusy, modelID)...)
+	candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyBusy, modelID)...)
 	if len(candidates) == 0 {
 		return nil, aistudio.ErrNoEligibleAccount
 	}

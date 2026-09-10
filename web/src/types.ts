@@ -146,6 +146,7 @@ export interface ServiceConfig {
   max_active_workers: number
   warm_startup_concurrency: number
   per_account_concurrency: number
+  routing_strategy: 'round-robin' | 'fill-first'
   temporary_chat: boolean
 }
 

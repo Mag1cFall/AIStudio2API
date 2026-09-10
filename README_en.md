@@ -28,7 +28,7 @@
 ## Features
 
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent
-- **Multi-Account Runtime**: Detects Free, Pro, Ultra, and Plus benefits and schedules by verified model access, first-event latency, and concurrency slots
+- **Multi-Account Runtime**: Detects Free, Pro, Ultra, and Plus benefits and selects eligible accounts with round-robin or fill-first routing
 - **Native Streaming**: Text, reasoning summaries, function calls, Google tools, media, and usage
 - **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
 - **Image Generation**: Nano Banana image generation
@@ -220,6 +220,8 @@ Main endpoints:
 
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
+Inline attachments in generation requests are uploaded as temporary Drive files and cleaned up when the request ends. Images, audio, video, PDFs, and other inputs must be supported by the selected model. Upload reusable attachments once through the Files API and reuse their file IDs.
+
 ### TTS Speech Generation
 
 ```bash
@@ -366,6 +368,7 @@ cp .env.example .env
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
+| `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.

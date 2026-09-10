@@ -36,6 +36,7 @@ var configKeys = [...]string{
 	"MAX_ACTIVE_WORKERS",
 	"WARM_STARTUP_CONCURRENCY",
 	"PER_ACCOUNT_CONCURRENCY",
+	"ROUTING_STRATEGY",
 	"TEMPORARY_CHAT",
 }
 
@@ -51,6 +52,7 @@ type Config struct {
 	MaxActiveWorkers       int           `json:"max_active_workers"`
 	WarmStartupConcurrency int           `json:"warm_startup_concurrency"`
 	PerAccountConcurrency  int           `json:"per_account_concurrency"`
+	RoutingStrategy        string        `json:"routing_strategy"`
 	TemporaryChat          bool          `json:"temporary_chat"`
 }
 
@@ -65,6 +67,7 @@ func Default() Config {
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
+		RoutingStrategy:        "round-robin",
 	}
 }
 
@@ -129,6 +132,9 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if value, ok := values["ROUTING_STRATEGY"]; ok {
+		cfg.RoutingStrategy = strings.TrimSpace(value)
+	}
 	if value, ok := values["TEMPORARY_CHAT"]; ok {
 		cfg.TemporaryChat, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -157,6 +163,7 @@ func (c Config) Save(path string) error {
 		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
 		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
+		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 	}
 
@@ -199,6 +206,9 @@ func (c Config) Validate() error {
 	if c.PerAccountConcurrency <= 0 {
 		return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
 	}
+	if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" {
+		return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin 或 fill-first")
+	}
 	return nil
 }
 
@@ -215,6 +225,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		MaxActiveWorkers       int    `json:"max_active_workers"`
 		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
+		RoutingStrategy        string `json:"routing_strategy"`
 		TemporaryChat          bool   `json:"temporary_chat"`
 	}
 	return json.Marshal(payload{
@@ -228,6 +239,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		MaxActiveWorkers:       c.MaxActiveWorkers,
 		WarmStartupConcurrency: c.WarmStartupConcurrency,
 		PerAccountConcurrency:  c.PerAccountConcurrency,
+		RoutingStrategy:        c.RoutingStrategy,
 		TemporaryChat:          c.TemporaryChat,
 	})
 }
@@ -245,6 +257,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		MaxActiveWorkers       int    `json:"max_active_workers"`
 		WarmStartupConcurrency int    `json:"warm_startup_concurrency"`
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
+		RoutingStrategy        string `json:"routing_strategy"`
 		TemporaryChat          bool   `json:"temporary_chat"`
 	}
 	var value payload
@@ -270,6 +283,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		MaxActiveWorkers:       value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
+		RoutingStrategy:        value.RoutingStrategy,
 		TemporaryChat:          value.TemporaryChat,
 	}
 	if err := parsed.Validate(); err != nil {
