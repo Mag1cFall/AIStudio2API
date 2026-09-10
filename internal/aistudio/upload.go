@@ -399,8 +399,9 @@ func (p *AccountPool) fileUploadAccountIDs() []string {
 	defer p.mu.Unlock()
 	available := make([]string, 0, len(p.accounts))
 	busy := make([]string, 0, len(p.accounts))
-	for offset := 0; offset < len(p.accounts); offset++ {
-		account := p.accounts[(p.next+offset)%len(p.accounts)]
+	indices, _ := p.selectionIndicesLocked(AccountSelection{})
+	for _, index := range indices {
+		account := p.accounts[index]
 		if account == nil || !account.Config.Enabled || account.State != AccountReady {
 			continue
 		}
@@ -617,7 +618,7 @@ func (s *PooledService) CopyFileReferencesToLease(
 					fmt.Errorf("%w: 文件引用缺少 ID", ErrInvalidArgument), copies.Cleanup(),
 				)
 			}
-			owner, metadata, err := s.pool.fileReferenceMetadata(ctx, fileID)
+			owner, metadata, err := s.pool.fileReferenceMetadata(ctx, fileID, targetID)
 			if err != nil {
 				return nil, nil, errors.Join(err, copies.Cleanup())
 			}
@@ -691,15 +692,15 @@ func (s *PooledService) CopyFileReferencesToLease(
 	return rewritten, copies, nil
 }
 
-// UploadInlineImagesToLease 将内联图片上传到目标账户并改写为临时 Drive 引用
-func (s *PooledService) UploadInlineImagesToLease(
+// UploadInlineMediaToLease 将内联附件上传到目标账户并改写为临时 Drive 引用
+func (s *PooledService) UploadInlineMediaToLease(
 	ctx context.Context,
 	target *AccountLease,
 	contents []Content,
 	temporary *TemporaryFileCopies,
 ) ([]Content, *TemporaryFileCopies, error) {
 	if s == nil || s.pool == nil || s.client == nil {
-		return nil, nil, fmt.Errorf("内联图片上传服务未初始化")
+		return nil, nil, fmt.Errorf("内联附件上传服务未初始化")
 	}
 	if target == nil || target.Account() == nil || target.pool != s.pool {
 		return nil, nil, fmt.Errorf("目标账户租约未初始化")
@@ -726,18 +727,21 @@ func (s *PooledService) UploadInlineImagesToLease(
 		err   error
 	}
 	jobs := make([]uploadJob, 0)
-	imageIndex := 0
+	mediaIndex := 0
 	for contentIndex := range rewritten {
 		for partIndex := range rewritten[contentIndex].Parts {
 			part := &rewritten[contentIndex].Parts[partIndex]
-			if part.InlineData == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(part.InlineData.MIME)), "image/") {
+			if part.InlineData == nil {
 				continue
 			}
-			imageIndex++
+			if part.InlineData.MIME == "" || len(part.InlineData.Data) == 0 {
+				return nil, nil, errors.Join(fmt.Errorf("%w: inline data 缺少 MIME 或数据", ErrInvalidArgument), temporary.Cleanup())
+			}
+			mediaIndex++
 			jobs = append(jobs, uploadJob{
 				contentIndex: contentIndex,
 				partIndex:    partIndex,
-				name:         fmt.Sprintf("inline-image-%d", imageIndex),
+				name:         fmt.Sprintf("inline-media-%d", mediaIndex),
 				blob:         part.InlineData,
 			})
 		}
@@ -766,7 +770,7 @@ func (s *PooledService) UploadInlineImagesToLease(
 			})
 			file.ID = strings.TrimSpace(file.ID)
 			if err == nil && file.ID == "" {
-				err = fmt.Errorf("临时 Drive 图片缺少 ID")
+				err = fmt.Errorf("临时 Drive 附件缺少 ID")
 			}
 			resultChannel <- uploadResult{index: index, file: file, err: err}
 		}(index, job)
@@ -795,7 +799,7 @@ func (s *PooledService) UploadInlineImagesToLease(
 	}
 	for index, job := range jobs {
 		file := results[index].file
-		if bindErr := target.BindFileResource(targetCtx, file, int64(len(job.blob.Data)), "vision"); bindErr != nil {
+		if bindErr := target.BindFileResource(targetCtx, file, int64(len(job.blob.Data)), "assistants"); bindErr != nil {
 			return nil, nil, errors.Join(bindErr, temporary.Cleanup())
 		}
 		temporary.copies[copyOffset+index].bound = true
@@ -822,7 +826,7 @@ func cloneContentsForFileCopies(contents []Content) []Content {
 	return cloned
 }
 
-func (p *AccountPool) fileReferenceMetadata(ctx context.Context, fileID string) (string, FileMetadata, error) {
+func (p *AccountPool) fileReferenceMetadata(ctx context.Context, fileID, targetID string) (string, FileMetadata, error) {
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
 		return "", FileMetadata{}, fmt.Errorf("%w: 文件 ID 为空", ErrResourceNotFound)
@@ -841,6 +845,9 @@ func (p *AccountPool) fileReferenceMetadata(ctx context.Context, fileID string) 
 		return "", FileMetadata{}, fmt.Errorf("资源账户不存在: %s", owner)
 	}
 	binding, exists := account.runtime.Resources[fileID]
+	if exists && owner == targetID && binding.Kind == "video-file" {
+		return owner, FileMetadata{}, nil
+	}
 	if !exists || binding.Kind != "drive-file" ||
 		binding.Name == "" || binding.MIME == "" || binding.Size <= 0 || binding.Purpose == "" {
 		return "", FileMetadata{}, &fileReferenceNotFoundError{fileID: fileID}
@@ -1149,7 +1156,7 @@ func driveFilename(disposition string) string {
 	return parameters["filename"]
 }
 
-// ResourceIDForContents 返回文件内容绑定的代表资源并校验账户一致性
+// ResourceIDForContents 校验全部文件引用并返回首个资源供生成账户选择
 func (pool *AccountPool) ResourceIDForContents(ctx context.Context, contents []Content) (string, error) {
 	for _, content := range contents {
 		for _, part := range content.Parts {
@@ -1166,7 +1173,6 @@ func (pool *AccountPool) ResourceIDForContents(ctx context.Context, contents []C
 		}
 	}
 	resourceID := ""
-	owner := ""
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	for _, content := range contents {
@@ -1187,12 +1193,8 @@ func (pool *AccountPool) ResourceIDForContents(ctx context.Context, contents []C
 			if !bound || binding.Kind != "drive-file" && binding.Kind != "video-file" {
 				return "", fmt.Errorf("%w: 资源 %s 不能作为文件引用", ErrInvalidArgument, id)
 			}
-			if owner != "" && owner != accountID {
-				return "", fmt.Errorf("%w: 文件引用绑定了不同账户", ErrInvalidArgument)
-			}
 			if resourceID == "" {
 				resourceID = id
-				owner = accountID
 			}
 		}
 	}

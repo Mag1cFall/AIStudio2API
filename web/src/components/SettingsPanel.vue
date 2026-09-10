@@ -34,6 +34,7 @@ const form = reactive<ServiceConfig>({
   max_active_workers: 10,
   warm_startup_concurrency: 2,
   per_account_concurrency: 2,
+  routing_strategy: 'round-robin',
   temporary_chat: false,
 })
 
@@ -246,6 +247,20 @@ async function saveConfig(): Promise<void> {
           />
         </label>
       </div>
+
+      <label class="block rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+        <span class="mb-2 block text-sm font-medium text-gray-300">{{
+          t('settings.routingStrategy')
+        }}</span>
+        <select
+          v-model="form.routing_strategy"
+          class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+        >
+          <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
+          <option value="fill-first">{{ t('settings.routingFillFirst') }}</option>
+        </select>
+        <span class="mt-2 block text-xs text-gray-500">{{ t('settings.routingHelp') }}</span>
+      </label>
 
       <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
         <input v-model="form.temporary_chat" class="h-4 w-4 accent-blue-500" type="checkbox" />

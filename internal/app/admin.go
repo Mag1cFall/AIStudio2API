@@ -713,6 +713,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
+		RoutingStrategy:        value.RoutingStrategy,
 		TemporaryChat:          value.TemporaryChat,
 	}
 	if err := cfg.Save(admin.configPath); err != nil {
@@ -1275,6 +1276,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,
 		WarmStartupConcurrency: cfg.WarmStartupConcurrency,
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,
+		RoutingStrategy:        cfg.RoutingStrategy,
 		TemporaryChat:          cfg.TemporaryChat,
 	}
 }

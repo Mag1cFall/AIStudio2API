@@ -51,6 +51,7 @@ func newRuntime(
 
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端")
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
+	pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	headers, err := newAccountHeaderProvider(accounts, cfg.Proxy)
 	if err != nil {
 		return nil, nil, nil, err
@@ -187,11 +188,12 @@ func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aist
 	return preparer.worker.Prepare(ctx, request)
 }
 
-// SendProtected 保证浏览器请求仍绑定当前有效账户 Worker
+// SendProtected 校验当前账户 Worker 后发送浏览器请求
 func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, request aistudio.ProtectedRequest) (*aistudio.RPCResponse, error) {
 	preparer.account.mu.Lock()
-	defer preparer.account.mu.Unlock()
-	if preparer.account.worker != preparer.worker || preparer.account.bootstrapModel != preparer.bootstrapModel {
+	current := preparer.account.worker == preparer.worker && preparer.account.bootstrapModel == preparer.bootstrapModel
+	preparer.account.mu.Unlock()
+	if !current {
 		return nil, errAccountWorkerReplaced
 	}
 	return preparer.worker.SendProtected(ctx, request)
@@ -1530,8 +1532,6 @@ type trackedService struct {
 	modelChangeMu      sync.Mutex
 	modelRevision      uint64
 	modelApplied       uint64
-	performanceMu      sync.RWMutex
-	performance        map[string]map[string]generationPerformance
 }
 
 type modelCatalogService interface {
@@ -1551,7 +1551,7 @@ func newTrackedService(
 	catalog := service.(modelCatalogService)
 	return &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
-		timeout: timeout, modelRetries: make(map[string]struct{}), performance: make(map[string]map[string]generationPerformance),
+		timeout: timeout, modelRetries: make(map[string]struct{}),
 	}
 }
 
@@ -1618,7 +1618,6 @@ func (service *trackedService) Start(ctx context.Context, launching func()) ([]a
 	service.state.Store(serviceLaunching)
 	service.lifecycleMu.Unlock()
 	stopCaller := context.AfterFunc(ctx, dataCancel)
-	service.clearPerformance()
 	service.replaceModelSnapshot(service.catalog.CachedModels())
 	if launching != nil {
 		launching()
@@ -1755,74 +1754,6 @@ func waitServiceTransition(done <-chan struct{}, timeout time.Duration, operatio
 	}
 }
 
-type generationPerformance struct {
-	firstEvent time.Duration
-	observedAt time.Time
-}
-
-func (service *trackedService) observePerformance(accountID string, model string, firstEvent time.Duration) {
-	accountID = strings.TrimSpace(accountID)
-	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
-	if accountID == "" || model == "" || firstEvent <= 0 {
-		return
-	}
-	service.performanceMu.Lock()
-	if service.performance[accountID] == nil {
-		service.performance[accountID] = make(map[string]generationPerformance)
-	}
-	observed := service.performance[accountID][model]
-	if observed.firstEvent == 0 {
-		observed.firstEvent = firstEvent
-	} else {
-		observed.firstEvent = (observed.firstEvent*3 + firstEvent) / 4
-	}
-	observed.observedAt = time.Now()
-	service.performance[accountID][model] = observed
-	service.performanceMu.Unlock()
-}
-
-func (service *trackedService) preferFast(accountIDs []string, model string) []string {
-	result := append([]string(nil), accountIDs...)
-	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
-	states := service.pool.CandidateStates(result, model)
-	service.performanceMu.RLock()
-	sort.SliceStable(result, func(left int, right int) bool {
-		leftState := states[result[left]]
-		rightState := states[result[right]]
-		leftPerformance, leftObserved := service.performanceForModelLocked(result[left], model)
-		rightPerformance, rightObserved := service.performanceForModelLocked(result[right], model)
-		leftVerified := leftState.ModelAccess == aistudio.ModelAccessVerified
-		rightVerified := rightState.ModelAccess == aistudio.ModelAccessVerified
-		if leftVerified != rightVerified {
-			return leftVerified
-		}
-		if leftObserved != rightObserved {
-			return leftObserved
-		}
-		if leftObserved && leftPerformance.firstEvent != rightPerformance.firstEvent {
-			return leftPerformance.firstEvent < rightPerformance.firstEvent
-		}
-		if leftState.AvailableSlot != rightState.AvailableSlot {
-			return leftState.AvailableSlot > rightState.AvailableSlot
-		}
-		if leftState.Active != rightState.Active {
-			return leftState.Active < rightState.Active
-		}
-		if leftObserved && !leftPerformance.observedAt.Equal(rightPerformance.observedAt) {
-			return leftPerformance.observedAt.After(rightPerformance.observedAt)
-		}
-		return false
-	})
-	service.performanceMu.RUnlock()
-	return result
-}
-
-func (service *trackedService) performanceForModelLocked(accountID string, model string) (generationPerformance, bool) {
-	models := service.performance[accountID]
-	observed, ok := models[model]
-	return observed, ok
-}
-
 func (service *trackedService) markModelAccessVerifiedAsync(
 	accountID string,
 	accountLabel string,
@@ -1844,12 +1775,6 @@ func (service *trackedService) markModelAccessVerifiedAsync(
 			service.publishModelAccess()
 		}
 	}()
-}
-
-func (service *trackedService) clearPerformance() {
-	service.performanceMu.Lock()
-	clear(service.performance)
-	service.performanceMu.Unlock()
 }
 
 // Stop 停止公开生成服务并释放活动 worker
@@ -2494,9 +2419,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		standbyReady, opening := service.workers.withoutOpening(groups.StandbyReady)
 		groups.StandbyReady = standbyReady
 		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
-		for _, accountID := range service.preferFast(warmAvailable, selection.ModelID) {
+		if len(warmAvailable) > 0 {
 			candidate := selection
-			candidate.AccountID = accountID
+			candidate.AllowedAccountIDs = warmAvailable
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
 			if errors.Is(acquireErr, aistudio.ErrAccountNotFound) && !fixedAccount {
 				continue
@@ -2518,7 +2443,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 					standby = cold
 				}
 			}
-			accountID := service.preferFast(standby, selection.ModelID)[0]
+			accountID := standby[0]
 			candidate := selection
 			candidate.AccountID = accountID
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
@@ -2663,12 +2588,13 @@ func (activity *upstreamActivity) logFields(now time.Time) string {
 	)
 }
 
-func inlineImageInput(contents []aistudio.Content) (int, int64) {
+// inlineMediaInput 统计规范消息中的内联附件数量和原始大小
+func inlineMediaInput(contents []aistudio.Content) (int, int64) {
 	count := 0
 	var bytes int64
 	for _, content := range contents {
 		for _, part := range content.Parts {
-			if part.InlineData == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(part.InlineData.MIME)), "image/") {
+			if part.InlineData == nil {
 				continue
 			}
 			count++
@@ -2792,7 +2718,7 @@ func (service *trackedService) generateWithRetry(
 		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
 		var attemptCopies *aistudio.TemporaryFileCopies
 		copiedFileCount := 0
-		if copyFiles {
+		if resourceID != "" {
 			fileCopies, ok := service.service.(interface {
 				CopyFileReferencesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
 			})
@@ -2807,22 +2733,22 @@ func (service *trackedService) generateWithRetry(
 				}
 			}
 		}
-		imageCount, imageBytes := inlineImageInput(request.Contents)
-		if err == nil && imageCount > 0 {
+		mediaCount, mediaBytes := inlineMediaInput(request.Contents)
+		if err == nil && mediaCount > 0 {
 			uploader, ok := service.service.(interface {
-				UploadInlineImagesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
+				UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
 			})
 			if !ok {
-				err = fmt.Errorf("内联图片上传服务不可用")
+				err = fmt.Errorf("内联附件上传服务不可用")
 			} else {
 				uploadStartedAt := time.Now()
-				request.Contents, attemptCopies, err = uploader.UploadInlineImagesToLease(
+				request.Contents, attemptCopies, err = uploader.UploadInlineMediaToLease(
 					requestCtx, lease, request.Contents, attemptCopies,
 				)
 				if err == nil {
 					service.requests.log(accountLabel, "INFO", fmt.Sprintf(
-						"内联图片上传完成 | 图片=%d | 原始=%dB | 耗时=%s",
-						imageCount, imageBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
+						"内联附件上传完成 | 附件=%d | 原始=%dB | 耗时=%s",
+						mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
 					))
 				}
 			}
@@ -2891,7 +2817,6 @@ func (service *trackedService) generateWithRetry(
 			if err == nil {
 				api.SetAccessLogFirstEvent(requestCtx, time.Since(generationStartedAt))
 				api.SetAccessLogTarget(requestCtx, first.ProviderModel, accountLabel)
-				service.observePerformance(request.AccountID, modelID, time.Since(prepareStartedAt))
 				temporaryCopies = attemptCopies
 				break
 			}

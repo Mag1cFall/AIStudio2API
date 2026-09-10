@@ -185,6 +185,7 @@ type RuntimeConfig struct {
 	MaxActiveWorkers          int    `json:"max_active_workers"`
 	WarmStartupConcurrency    int    `json:"warm_startup_concurrency"`
 	PerAccountConcurrency     int    `json:"per_account_concurrency"`
+	RoutingStrategy           string `json:"routing_strategy"`
 	TemporaryChat             bool   `json:"temporary_chat"`
 }
 

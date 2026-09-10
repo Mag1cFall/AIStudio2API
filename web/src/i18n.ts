@@ -123,6 +123,11 @@ const zhCN = {
   'settings.maxActiveWorkers': '峰值 Worker 上限',
   'settings.warmStartupConcurrency': '启动预热并发',
   'settings.perAccountConcurrency': '单账户请求并发',
+  'settings.routingStrategy': '账户选择策略',
+  'settings.routingRoundRobin': '轮询',
+  'settings.routingFillFirst': '账号粘性优先',
+  'settings.routingHelp':
+    '轮询依次分配请求；粘性优先持续使用首个可用账户，达到并发上限或不可用时切换。',
   'settings.temporaryChat': 'WAA 预热使用临时对话',
   'settings.activeValue': '当前生效',
   'settings.pendingService': '已保存值将在下次生成服务启动时生效',
@@ -301,6 +306,11 @@ const en: Record<TranslationKey, string> = {
   'settings.maxActiveWorkers': 'Active worker limit',
   'settings.warmStartupConcurrency': 'Startup prewarm concurrency',
   'settings.perAccountConcurrency': 'Concurrent requests per account',
+  'settings.routingStrategy': 'Account selection strategy',
+  'settings.routingRoundRobin': 'Round robin',
+  'settings.routingFillFirst': 'Fill first',
+  'settings.routingHelp':
+    'Round robin rotates requests. Fill first keeps using the first available account until it is unavailable or reaches its concurrency limit.',
   'settings.temporaryChat': 'Use temporary chat for WAA prewarming',
   'settings.activeValue': 'Active',
   'settings.pendingService': 'Saved values apply the next time the generation service starts',

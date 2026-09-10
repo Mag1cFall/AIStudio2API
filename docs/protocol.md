@@ -915,7 +915,9 @@ GenerateAccessToken ["users/me"]
   -> GenerateContent Part field 6 ["<FILE_ID>"]
 ```
 
-Drive token、上传、提示引用和下载使用创建账户固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；同一请求内的多个 Drive file 必须属于同一账户。
+Drive token、上传和下载使用文件所属账户的固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；生成请求可以组合不同账户的文件，其他账户的文件会临时复制到本次生成账户，并在请求结束后回收副本。
+
+生成请求的内联附件统一上传到本次生成账户，正文使用 Drive file Part。图片、音频、视频、PDF 等附件保留原 MIME 和内容，支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
 
 OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单文件上限为 512 MiB。未知长度的请求使用 Drive resumable upload 和 8 MiB 分块；上传完成后 `POST /v1/files` 返回持久文件对象，`GET /v1/files/{id}` 从资源绑定读取文件名、大小、purpose 与创建时间。客户端取消会终止上传并释放账户租约。
 
