@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-		"image/gif"
+	"image/gif"
 	"image/png"
-"mime"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -269,21 +269,23 @@ func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {
 	return buffer.Bytes()
 }
 
-
-// decodeBase64Flexible decodes standard or URL-safe base64 data, tolerating missing padding.
+// decodeBase64Flexible decodes standard or URL-safe base64 data, tolerating missing padding or data URL prefix.
 func decodeBase64Flexible(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, ","); idx != -1 && strings.HasPrefix(s, "data:") {
+		s = s[idx+1:]
+	}
 	if data, err := base64.StdEncoding.DecodeString(s); err == nil {
 		return data, nil
 	}
-	s = strings.ReplaceAll(s, "-", "+")
-	s = strings.ReplaceAll(s, "_", "/")
-	if pad := len(s) % 4; pad != 0 {
-		s += strings.Repeat("=", 4-pad)
+	if data, err := base64.RawStdEncoding.DecodeString(s); err == nil {
+		return data, nil
 	}
-	return base64.StdEncoding.DecodeString(s)
+	if data, err := base64.URLEncoding.DecodeString(s); err == nil {
+		return data, nil
+	}
+	return base64.RawURLEncoding.DecodeString(s)
 }
-
 
 // normalizeImagePayload detects unsupported image formats (such as image/gif) and converts them to image/png.
 func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {

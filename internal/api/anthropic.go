@@ -320,7 +320,8 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 				if err != nil {
 					return nil, fmt.Errorf("%s source data: %w", block.Type, err)
 				}
-				parts = append(parts, aistudio.Part{InlineData: &aistudio.Blob{MIME: block.Source.MediaType, Data: data}})
+				mediaType, data := normalizeImagePayload(block.Source.MediaType, data)
+				parts = append(parts, aistudio.Part{InlineData: &aistudio.Blob{MIME: mediaType, Data: data}})
 			case "url":
 				if media, ok := aistudio.ExternalMediaForURL(block.Source.URL); ok {
 					parts = append(parts, aistudio.Part{ExternalMedia: media})
