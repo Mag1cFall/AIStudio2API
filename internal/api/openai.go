@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -370,7 +369,7 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 		if block.InputAudio == nil {
 			return aistudio.Part{}, fmt.Errorf("input_audio is required")
 		}
-		data, err := base64.StdEncoding.DecodeString(block.InputAudio.Data)
+		data, err := decodeBase64Flexible(block.InputAudio.Data)
 		if err != nil {
 			return aistudio.Part{}, fmt.Errorf("input_audio.data: %w", err)
 		}
@@ -405,7 +404,7 @@ func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
 	if !ok || !strings.HasSuffix(metadata, ";base64") {
 		return aistudio.Part{}, fmt.Errorf("data URL must use base64")
 	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
+	data, err := decodeBase64Flexible(encoded)
 	if err != nil {
 		return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
 	}

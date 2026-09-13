@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,7 +107,7 @@ func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error
 		return nil, fmt.Errorf("image must contain exactly one of inlineData or fileData")
 	}
 	if input.InlineData != nil {
-		data, err := base64.StdEncoding.DecodeString(input.InlineData.Data)
+		data, err := decodeBase64Flexible(input.InlineData.Data)
 		if err != nil {
 			return nil, fmt.Errorf("image.inlineData.data: %w", err)
 		}

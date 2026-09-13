@@ -266,3 +266,18 @@ func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {
 	buffer.Write(pcm)
 	return buffer.Bytes()
 }
+
+
+// decodeBase64Flexible decodes standard or URL-safe base64 data, tolerating missing padding.
+func decodeBase64Flexible(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	if data, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return data, nil
+	}
+	s = strings.ReplaceAll(s, "-", "+")
+	s = strings.ReplaceAll(s, "_", "/")
+	if pad := len(s) % 4; pad != 0 {
+		s += strings.Repeat("=", 4-pad)
+	}
+	return base64.StdEncoding.DecodeString(s)
+}
