@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"mime"
+		"image/gif"
+	"image/png"
+"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -280,4 +282,19 @@ func decodeBase64Flexible(s string) ([]byte, error) {
 		s += strings.Repeat("=", 4-pad)
 	}
 	return base64.StdEncoding.DecodeString(s)
+}
+
+
+// normalizeImagePayload detects unsupported image formats (such as image/gif) and converts them to image/png.
+func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
+	lowerMIME := strings.ToLower(strings.TrimSpace(mimeType))
+	if lowerMIME == "image/gif" || (len(data) >= 3 && string(data[:3]) == "GIF") {
+		if img, err := gif.Decode(bytes.NewReader(data)); err == nil {
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, img); err == nil {
+				return "image/png", buf.Bytes()
+			}
+		}
+	}
+	return mimeType, data
 }
