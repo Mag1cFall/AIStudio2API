@@ -462,8 +462,9 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if err != nil {
 				return nil, false, fmt.Errorf("inlineData.data: %w", err)
 			}
+			mimeType, data := normalizeImagePayload(part.InlineData.MIMEType, data)
 			parts = append(parts, aistudio.Part{
-				InlineData:       &aistudio.Blob{MIME: part.InlineData.MIMEType, Data: data},
+				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
 				ThoughtSignature: part.ThoughtSignature,
 			})
 		case part.FileData != nil:

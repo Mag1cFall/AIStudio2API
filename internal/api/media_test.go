@@ -23,3 +23,20 @@ func TestDecodeBase64Flexible(t *testing.T) {
 		t.Fatalf("mismatch between std and url-safe decoded bytes")
 	}
 }
+
+
+func TestNormalizeImagePayload_GIF(t *testing.T) {
+	gifB64 := "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+	raw, err := decodeBase64Flexible(gifB64)
+	if err != nil {
+		t.Fatalf("decode gif failed: %v", err)
+	}
+
+	mimeType, outData := normalizeImagePayload("image/gif", raw)
+	if mimeType != "image/png" {
+		t.Fatalf("expected image/png, got %s", mimeType)
+	}
+	if len(outData) == 0 {
+		t.Fatalf("output png data is empty")
+	}
+}

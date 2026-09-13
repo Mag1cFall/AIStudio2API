@@ -408,7 +408,8 @@ func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
 	if err != nil {
 		return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
 	}
-	return aistudio.Part{InlineData: &aistudio.Blob{MIME: strings.TrimSuffix(metadata, ";base64"), Data: data}}, nil
+	mimeType, data := normalizeImagePayload(strings.TrimSuffix(metadata, ";base64"), data)
+	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}, nil
 }
 
 func audioMIME(format string) string {
