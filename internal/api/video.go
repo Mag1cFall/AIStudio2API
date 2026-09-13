@@ -28,18 +28,53 @@ type geminiVideoRequest struct {
 }
 
 type geminiVideoImageInput struct {
-	InlineData *geminiVideoInlineData `json:"inlineData"`
-	FileData   *geminiVideoFileData   `json:"fileData"`
+	InlineData      *geminiVideoInlineData `json:"inlineData"`
+	InlineDataSnake *geminiVideoInlineData `json:"inline_data"`
+	FileData        *geminiVideoFileData   `json:"fileData"`
+	FileDataSnake   *geminiVideoFileData   `json:"file_data"`
 }
 
 type geminiVideoInlineData struct {
-	MIMEType string `json:"mimeType"`
-	Data     string `json:"data"`
+	MIMEType      string `json:"mimeType"`
+	MIMETypeSnake string `json:"mime_type"`
+	Data          string `json:"data"`
+}
+
+func (b *geminiVideoInlineData) MIME() string {
+	if b == nil {
+		return ""
+	}
+	if b.MIMEType != "" {
+		return b.MIMEType
+	}
+	return b.MIMETypeSnake
 }
 
 type geminiVideoFileData struct {
-	MIMEType string `json:"mimeType"`
-	FileURI  string `json:"fileUri"`
+	MIMEType      string `json:"mimeType"`
+	MIMETypeSnake string `json:"mime_type"`
+	FileURI       string `json:"fileUri"`
+	FileURISnake  string `json:"file_uri"`
+}
+
+func (f *geminiVideoFileData) MIME() string {
+	if f == nil {
+		return ""
+	}
+	if f.MIMEType != "" {
+		return f.MIMEType
+	}
+	return f.MIMETypeSnake
+}
+
+func (f *geminiVideoFileData) URI() string {
+	if f == nil {
+		return ""
+	}
+	if f.FileURI != "" {
+		return f.FileURI
+	}
+	return f.FileURISnake
 }
 
 type openAIVideoRequest struct {
@@ -103,18 +138,31 @@ func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRe
 }
 
 func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error) {
-	if input.InlineData != nil && input.FileData != nil {
+	inline := input.InlineData
+	if inline == nil {
+		inline = input.InlineDataSnake
+	}
+	file := input.FileData
+	if file == nil {
+		file = input.FileDataSnake
+	}
+	if inline != nil && file != nil {
 		return nil, fmt.Errorf("image must contain exactly one of inlineData or fileData")
 	}
-	if input.InlineData != nil {
-		data, err := decodeBase64Flexible(input.InlineData.Data)
+	if inline != nil {
+		mime := inline.MIME()
+		if mime == "" || inline.Data == "" {
+			return nil, fmt.Errorf("inlineData requires mimeType and data")
+		}
+		data, err := decodeBase64Flexible(inline.Data)
 		if err != nil {
 			return nil, fmt.Errorf("image.inlineData.data: %w", err)
 		}
-		return &aistudio.VideoImage{InlineData: &aistudio.Blob{MIME: input.InlineData.MIMEType, Data: data}}, nil
+		mimeType, data := normalizeImagePayload(mime, data)
+		return &aistudio.VideoImage{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}, nil
 	}
-	if input.FileData != nil {
-		return &aistudio.VideoImage{File: &aistudio.FileRef{ID: input.FileData.FileURI, MIME: input.FileData.MIMEType}}, nil
+	if file != nil {
+		return &aistudio.VideoImage{File: &aistudio.FileRef{ID: file.URI(), MIME: file.MIME()}}, nil
 	}
 	return nil, fmt.Errorf("image requires inlineData or fileData")
 }
