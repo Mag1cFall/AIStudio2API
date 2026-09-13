@@ -458,7 +458,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if part.InlineData.MIMEType == "" || part.InlineData.Data == "" {
 				return nil, false, fmt.Errorf("inlineData requires mimeType and data")
 			}
-			data, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+			data, err := decodeBase64Flexible(part.InlineData.Data)
 			if err != nil {
 				return nil, false, fmt.Errorf("inlineData.data: %w", err)
 			}

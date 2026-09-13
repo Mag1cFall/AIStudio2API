@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -317,7 +316,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 			}
 			switch block.Source.Type {
 			case "base64":
-				data, err := base64.StdEncoding.DecodeString(block.Source.Data)
+				data, err := decodeBase64Flexible(block.Source.Data)
 				if err != nil {
 					return nil, fmt.Errorf("%s source data: %w", block.Type, err)
 				}
