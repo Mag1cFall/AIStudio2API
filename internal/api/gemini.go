@@ -24,20 +24,59 @@ type geminiContent struct {
 	Parts []geminiPart `json:"parts"`
 }
 
+type geminiBlobPart struct {
+	MIMEType      string `json:"mimeType"`
+	MIMETypeSnake string `json:"mime_type"`
+	Data          string `json:"data"`
+}
+
+func (b *geminiBlobPart) MIME() string {
+	if b == nil {
+		return ""
+	}
+	if b.MIMEType != "" {
+		return b.MIMEType
+	}
+	return b.MIMETypeSnake
+}
+
+type geminiFilePart struct {
+	MIMEType      string `json:"mimeType"`
+	MIMETypeSnake string `json:"mime_type"`
+	FileURI       string `json:"fileUri"`
+	FileURISnake  string `json:"file_uri"`
+	DisplayName   string `json:"displayName"`
+}
+
+func (f *geminiFilePart) MIME() string {
+	if f == nil {
+		return ""
+	}
+	if f.MIMEType != "" {
+		return f.MIMEType
+	}
+	return f.MIMETypeSnake
+}
+
+func (f *geminiFilePart) URI() string {
+	if f == nil {
+		return ""
+	}
+	if f.FileURI != "" {
+		return f.FileURI
+	}
+	return f.FileURISnake
+}
+
 type geminiPart struct {
-	Text             *string `json:"text"`
-	Thought          bool    `json:"thought"`
-	ThoughtSignature string  `json:"thoughtSignature"`
-	InlineData       *struct {
-		MIMEType string `json:"mimeType"`
-		Data     string `json:"data"`
-	} `json:"inlineData"`
-	FileData *struct {
-		MIMEType    string `json:"mimeType"`
-		FileURI     string `json:"fileUri"`
-		DisplayName string `json:"displayName"`
-	} `json:"fileData"`
-	FunctionCall *struct {
+	Text             *string         `json:"text"`
+	Thought          bool            `json:"thought"`
+	ThoughtSignature string          `json:"thoughtSignature"`
+	InlineData       *geminiBlobPart `json:"inlineData"`
+	InlineDataSnake  *geminiBlobPart `json:"inline_data"`
+	FileData         *geminiFilePart `json:"fileData"`
+	FileDataSnake    *geminiFilePart `json:"file_data"`
+	FunctionCall     *struct {
 		ID   string          `json:"id"`
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
@@ -56,6 +95,20 @@ type geminiPart struct {
 		Output  string `json:"output"`
 		Error   string `json:"error"`
 	} `json:"codeExecutionResult"`
+}
+
+func (p geminiPart) inline() *geminiBlobPart {
+	if p.InlineData != nil {
+		return p.InlineData
+	}
+	return p.InlineDataSnake
+}
+
+func (p geminiPart) file() *geminiFilePart {
+	if p.FileData != nil {
+		return p.FileData
+	}
+	return p.FileDataSnake
 }
 
 type geminiGenerationConfig struct {
@@ -428,10 +481,12 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 		if part.Text != nil {
 			variants++
 		}
-		if part.InlineData != nil {
+		inline := part.inline()
+		if inline != nil {
 			variants++
 		}
-		if part.FileData != nil {
+		file := part.file()
+		if file != nil {
 			variants++
 		}
 		if part.FunctionCall != nil {
@@ -454,28 +509,32 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			return nil, false, fmt.Errorf("parts[%d] must contain exactly one data field", index)
 		}
 		switch {
-		case part.InlineData != nil:
-			if part.InlineData.MIMEType == "" || part.InlineData.Data == "" {
+		case inline != nil:
+			mime := inline.MIME()
+			if mime == "" || inline.Data == "" {
 				return nil, false, fmt.Errorf("inlineData requires mimeType and data")
 			}
-			data, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+			data, err := decodeBase64Flexible(inline.Data)
 			if err != nil {
 				return nil, false, fmt.Errorf("inlineData.data: %w", err)
 			}
+			mimeType, data := normalizeImagePayload(mime, data)
 			parts = append(parts, aistudio.Part{
-				InlineData:       &aistudio.Blob{MIME: part.InlineData.MIMEType, Data: data},
+				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
 				ThoughtSignature: part.ThoughtSignature,
 			})
-		case part.FileData != nil:
-			if part.FileData.FileURI == "" || part.FileData.MIMEType == "" {
+		case file != nil:
+			uri := file.URI()
+			mime := file.MIME()
+			if uri == "" || mime == "" {
 				return nil, false, fmt.Errorf("fileData requires fileUri and mimeType")
 			}
-			if media, ok := aistudio.ExternalMediaForURL(part.FileData.FileURI); ok {
+			if media, ok := aistudio.ExternalMediaForURL(uri); ok {
 				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature})
 			} else {
 				parts = append(parts, aistudio.Part{
 					File: &aistudio.FileRef{
-						ID: part.FileData.FileURI, Name: part.FileData.DisplayName, MIME: part.FileData.MIMEType,
+						ID: uri, Name: file.DisplayName, MIME: mime,
 					},
 					ThoughtSignature: part.ThoughtSignature,
 				})
