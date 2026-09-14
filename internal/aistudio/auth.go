@@ -283,7 +283,7 @@ func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string,
 		}
 		index := -1
 		for existingIndex, existing := range s.Cookies {
-			if existing.Name == incoming.Name && strings.EqualFold(existing.Domain, domain) && existing.Path == cookiePath {
+			if existing.Name == incoming.Name && strings.EqualFold(existing.Domain, domain) && existing.Path == cookiePath && existing.PartitionKey == "" {
 				index = existingIndex
 				break
 			}

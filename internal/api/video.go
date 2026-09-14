@@ -279,6 +279,7 @@ func parseOpenAIVideoRequest(r *http.Request) (openAIVideoRequest, *aistudio.Vid
 			if mimeType == "" {
 				mimeType = http.DetectContentType(data)
 			}
+			mimeType, data = normalizeImagePayload(mimeType, data)
 			image = &aistudio.VideoImage{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}
 		} else if err != http.ErrMissingFile {
 			return request, nil, err

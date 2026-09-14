@@ -127,7 +127,7 @@ func (client *bidiClient) observe(message map[string]any) {
 	}
 }
 
-// installCookies 将 Playwright storage state Cookie 写入默认分区
+// installCookies 按 storage state 的分区恢复 Cookie
 func (client *bidiClient) installCookies(ctx context.Context, cookies []storageCookie) error {
 	for _, item := range cookies {
 		cookie := map[string]any{
@@ -145,7 +145,11 @@ func (client *bidiClient) installCookies(ctx context.Context, cookies []storageC
 		if sameSite == "strict" || sameSite == "lax" || sameSite == "none" && item.Secure {
 			cookie["sameSite"] = sameSite
 		}
-		if _, err := client.command(ctx, "storage.setCookie", map[string]any{"cookie": cookie}); err != nil {
+		params := map[string]any{"cookie": cookie}
+		if item.PartitionKey != "" {
+			params["partition"] = map[string]any{"type": "storageKey", "sourceOrigin": item.PartitionKey}
+		}
+		if _, err := client.command(ctx, "storage.setCookie", params); err != nil {
 			return fmt.Errorf("写入 Cookie %s: %w", item.Name, err)
 		}
 	}

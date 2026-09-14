@@ -45,7 +45,7 @@
 ## 系统要求
 
 - **Windows Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
-- **源码运行**: Go 1.26、Node.js 24 和 npm
+- **源码运行**: Go 1.25.0+、Node.js 22.13+ 或 24+，以及配套 npm
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
 - **网络**: 稳定的互联网连接访问 Google AI Studio
@@ -53,6 +53,10 @@
 ## 安装步骤
 
 ### 方式一：Windows 一键启动（推荐）
+
+从 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 下载 `windows-amd64.zip` 发布包，解压后运行 `start.bat`。发布包已包含管理界面，可直接运行。
+
+从源码启动时：
 
 ```powershell
 git clone https://github.com/Mag1cFall/AIStudio2API.git
@@ -74,8 +78,8 @@ copy .env.example .env
 
 #### 1. 安装依赖
 
-- Go 1.26
-- Node.js 24 与 npm
+- Go 1.25.0 或更高版本
+- Node.js 22.13+ 或 24+，以及配套 npm
 
 #### 2. 克隆项目
 
@@ -221,6 +225,8 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
 生成请求中的内联附件会自动上传为临时 Drive 文件，随请求结束清理；图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
+
+Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景。
 
 ### TTS 语音生成
 
@@ -478,7 +484,7 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 
 ### 纯协议 WAA 运行时
 
-目标是完整逆向并复现 WAA VM，使用 Go 执行 dynamic program、interpreter、challenge、persistent state、snapshot 与 proof 全链路。最终生产运行期只保留 Go 协议实现，无 Camoufox 进程、DOM 环境和 AI Studio 前端 bundle 依赖。
+目标是完整逆向并复现 WAA VM，由 Go 独立执行 dynamic program、interpreter、challenge、persistent state、snapshot 与 proof 全链路。最终生产运行期只保留 Go 协议实现，无 Camoufox 进程、DOM 环境和 AI Studio 前端 bundle 依赖。
 
 | 阶段 | 交付内容 |
 | --- | --- |

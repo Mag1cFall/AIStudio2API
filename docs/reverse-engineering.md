@@ -326,7 +326,7 @@ form:  count=1, ofs=<OFFSET>, req0___data__=<JSON_PROTOBUF>
 
 `RID` 标识前向请求，成功发送后递增。`ofs` 标识客户端消息 offset，成功 ACK 后递增。`AID` 是已消费的服务端 envelope ID，由 backchannel 中的 envelope 首槽推进。
 
-WebChannel ACK 是三个整数的数组。三个字段只按已观察形状校验；第二个整数不等于本地请求序号。将 ACK 字段强行绑定 RID、AID 或 ofs 会在合法响应上制造协议错误。
+WebChannel ACK 是三个整数的数组。三个字段按数组结构和整数类型校验；第二个整数独立于本地请求序号。将 ACK 字段强行绑定 RID、AID 或 ofs 会在合法响应上制造协议错误。
 
 RID、ofs 与 AID 在各自成功点提交：
 

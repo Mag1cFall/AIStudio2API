@@ -45,7 +45,7 @@
 ## System Requirements
 
 - **Windows Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
-- **Source Build**: Go 1.26, Node.js 24, and npm
+- **Source Build**: Go 1.25.0+, Node.js 22.13+ or 24+, and its bundled npm
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
 - **Network**: Stable internet connection to Google AI Studio
@@ -53,6 +53,10 @@
 ## Installation
 
 ### Method 1: Windows One-Click Start (Recommended)
+
+Download the `windows-amd64.zip` package from [Releases](https://github.com/Mag1cFall/AIStudio2API/releases), extract it, and run `start.bat`. The package includes the management interface and is ready to run.
+
+To start from source:
 
 ```powershell
 git clone https://github.com/Mag1cFall/AIStudio2API.git
@@ -74,8 +78,8 @@ The first launch downloads Camoufox for the current platform to `runtime/camoufo
 
 #### 1. Install Dependencies
 
-- Go 1.26
-- Node.js 24 and npm
+- Go 1.25.0 or later
+- Node.js 22.13+ or 24+, with its bundled npm
 
 #### 2. Clone the Project
 
@@ -221,6 +225,8 @@ Main endpoints:
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
 Inline attachments in generation requests are uploaded as temporary Drive files and cleaned up when the request ends. Images, audio, video, PDFs, and other inputs must be supported by the selected model. Upload reusable attachments once through the Files API and reuse their file IDs.
+
+Gemini attachments and video image inputs accept `inlineData` / `inline_data`, `fileData` / `file_data`, `mimeType` / `mime_type`, and `fileUri` / `file_uri`. Base64 media data supports standard and URL-safe alphabets, padded and unpadded forms, and the `data:<MIME>;base64,` prefix. Markdown images in OpenAI assistant history also support URL-safe Base64 and CR/LF line breaks. Inline GIFs and GIFs uploaded through video multipart requests are converted to PNG using the first frame, preserving the logical canvas, frame position, and transparency.
 
 ### TTS Speech Generation
 
@@ -478,7 +484,7 @@ Issues and Pull Requests are welcome!
 
 ### Pure-Protocol WAA Runtime
 
-The target is a complete reverse-engineered WAA VM implemented in Go, covering the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
+The target is a complete reverse-engineered WAA VM that independently executes the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline in Go. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
 
 | Stage | Deliverable |
 | --- | --- |

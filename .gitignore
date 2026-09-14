@@ -4,6 +4,7 @@
 *.so
 *.dylib
 /aistudio2api
+/dist/
 
 # 本地配置与运行状态
 .env
