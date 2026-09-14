@@ -9,7 +9,7 @@ AIStudio2API 使用 Go 直接调用 Google AI Studio 的 MakerSuite 私有协议
 | 场景 | 必需组件 | 说明 |
 | --- | --- | --- |
 | Release 运行 | `aistudio2api` | 首次启动自动准备 Camoufox，不需要 Python、Node.js 或 Playwright |
-| 源码运行 | Go 1.26、Node.js 24 与 npm | Node.js 只用于构建 Vue 管理端 |
+| 源码运行 | Go 1.25.0+、Node.js 22.13+ 或 24+、配套 npm | Node.js 只用于构建 Vue 管理端 |
 | Windows Chrome 导入 | Windows amd64、稳定版 Chrome | Go 程序直接读取本机 Profile 的 OAuth/DBSC 材料 |
 
 Windows 用户可以直接运行根目录的 `start.bat`。脚本优先启动已有的 `aistudio2api.exe`；源码目录缺少可执行文件时才执行 `npm ci`、前端构建与 Go 构建。程序启动后自动打开管理页面，生成服务初始保持停止；账户登录、日志查看和生成服务启停均在该页面完成。
@@ -134,7 +134,7 @@ HTTP route
 
 WebSocket 入口沿用相同分层：`internal/api` 解码公开协议，`internal/app` 绑定账户和运行状态，`internal/aistudio` 执行 WebChannel 与规范事件转换。公开适配器只消费规范请求与事件；账户文件、WAA 对象、原始数组和资源粘性由 `internal/aistudio` 与 `internal/app` 管理。
 
-Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 与 `WARM_STARTUP_CONCURRENCY` 准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。每个 runtime 在官网触发 GenerateContent 并于网络发送前拦截请求，以取得官方 WAA service 与动态请求头；后续业务正文由 Go 编码，在同步官网 prompt 状态并生成 fresh proof 后，通过同一固定指纹页面的原生 `fetch` 发送，响应流由 WebDriver BiDi 分块交回 Go。其他 MakerSuite、Drive 与媒体控制面请求继续使用账户固定出口的 Go HTTP transport。源码和 Release 均不包含 Python 数据面、Node.js 浏览器 worker 或 Playwright runtime。
+Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 与 `WARM_STARTUP_CONCURRENCY` 准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。每个 runtime 在官网触发 GenerateContent 并于网络发送前拦截请求，以取得官方 WAA service 与动态请求头；后续业务正文由 Go 编码，在同步官网 prompt 状态并生成 fresh proof 后，通过同一固定指纹页面的原生 `fetch` 发送，响应流由 WebDriver BiDi 分块交回 Go。其他 MakerSuite、Drive 与媒体控制面请求继续使用账户固定出口的 Go HTTP transport。
 
 ## 3. 配置、账户和持久状态
 
@@ -293,7 +293,7 @@ npm run format:check
 npm run build
 ```
 
-Vite 将生产产物写入 `internal/webui/dist`。管理端通过本机 `/api` 路由管理生成服务、日志、账户、配置、模型冷却、活动请求和 SSE 状态事件；认证状态与 WAA 对象不进入浏览器存储。视觉、布局、图标和多语言以旧版 `dashboard.html`、`i18n.js` 与 `icons.js` 为基线，新增界面只绑定现有结构化 API。
+Vite 将生产产物写入 `internal/webui/dist`。管理端通过本机 `/api` 路由管理生成服务、日志、账户、配置、模型冷却、活动请求和 SSE 状态事件；认证状态与 WAA 对象不进入浏览器存储。
 
 `internal/webui/embed.go` 使用 `//go:embed dist`，因此 Go 构建前必须生成当前前端产物。管理端从 `/api/events` 接收 `status`、`models`、`accounts`、`log`、`cooldowns` 和 `request` 事件。
 
@@ -325,12 +325,14 @@ cd ..
 go build -trimpath -o aistudio2api.exe ./cmd/aistudio2api
 ```
 
-提交前运行定向 Go 测试和前端检查；发布前可执行完整 Go 测试：
+提交前执行与修改相关的功能验收、前端检查及 Go 静态检查：
 
 ```powershell
-go test ./...
+go vet ./...
 ```
 
 Windows 发布包包含 `aistudio2api.exe` 与 `start.bat`；其他平台使用同一 Go 程序。Camoufox 在首次启动时自动准备。贡献内容聚焦单一功能或协议变更，并使用脱敏后的请求与响应样例。
+
+GitHub Actions 对 `main` 提交和 Pull Request 执行前端 lint、类型检查、构建，以及 `go.mod` 最低版本的 Go 检查。发布包使用当前稳定版 Go 构建，覆盖 Windows amd64、Linux amd64/arm64、macOS amd64/arm64。推送 `v*` 版本标签后自动创建 Release，附上二进制、启动文件、示例配置和文档；含 `-` 的标签发布为预发布版本。普通构建产物在 Actions 中保留七天，Release 附件长期保留。
 
 源码提交包含协议实现、前端源码和公开文档。本机账户状态、Cookie、token、proof、提示正文、响应正文和运行产物留在本机。

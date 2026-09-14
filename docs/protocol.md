@@ -143,7 +143,7 @@ Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存�
 }
 ```
 
-Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secure`、`sameSite` 与可选 `partitionKey` 原样持久化；`sameSite` 接受空值、`Lax`、`Strict` 或 `None`。origin 必须包含 scheme 与 host。请求 Cookie 过滤过期项与不匹配的 Secure/domain/path 条目，同名项按 path 长度降序发送；响应 `Set-Cookie` 以 name、domain、path 三元组替换或删除现有项。
+Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secure`、`sameSite` 与可选 `partitionKey` 原样持久化；`sameSite` 接受空值、`Lax`、`Strict` 或 `None`。origin 必须包含 scheme 与 host。请求 Cookie 过滤过期项与不匹配的 Secure/domain/path 条目，同名项按 path 长度降序发送；普通 HTTP 响应的 `Set-Cookie` 按 name、domain、path 替换或删除未分区项，同名分区项独立保留。浏览器恢复时，`partitionKey` 映射到 BiDi `storageKey.sourceOrigin`，空值使用默认分区。
 
 ### 账户持久状态
 
@@ -917,7 +917,7 @@ GenerateAccessToken ["users/me"]
 
 Drive token、上传和下载使用文件所属账户的固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；生成请求可以组合不同账户的文件，其他账户的文件会临时复制到本次生成账户，并在请求结束后回收副本。
 
-生成请求的内联附件统一上传到本次生成账户，正文使用 Drive file Part。图片、音频、视频、PDF 等附件保留原 MIME 和内容，支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
+生成请求的内联附件统一上传到本次生成账户，正文使用 Drive file Part。上传使用公开适配器输出的 MIME 和字节内容；内联 GIF 在适配层提取首帧并编码为 `image/png`。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
 
 OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单文件上限为 512 MiB。未知长度的请求使用 Drive resumable upload 和 8 MiB 分块；上传完成后 `POST /v1/files` 返回持久文件对象，`GET /v1/files/{id}` 从资源绑定读取文件名、大小、purpose 与创建时间。客户端取消会终止上传并释放账户租约。
 
@@ -1389,6 +1389,10 @@ Anthropic assistant prefill 以最后一条 `assistant` message 表示。AI Stud
 | structured output | `response_format` | `text.format` | — | `responseMimeType` 与 response schema |
 | thinking | `reasoning_effort` 或 `reasoning.effort` | `reasoning.effort` | `thinking.budget_tokens`、`output_config.effort` | `thinkingConfig` |
 
+Gemini 附件与 `predictLongRunning` 的图片输入接受 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。同一别名对同时出现时，外层优先选择驼峰对象，内层优先选择非空驼峰值。
+
+媒体 Base64 输入接受标准和 URL-safe 字母表、可选的 `=` 填充，以及 `data:<MIME>;base64,` 前缀。GIF 内联图片和 OpenAI 视频 `input_reference` 表单附件提取首帧，按逻辑画布尺寸与帧偏移编码为 PNG 后发送。透明首帧保留透明背景；不透明首帧的未覆盖区域使用全局色表中的背景色。
+
 生成参数映射：
 
 | 参数 | 规则 |
@@ -1699,7 +1703,7 @@ server tool 只接受对应 `type` 与 `name`。`description`、`input_schema` �
 
 content 输出 block 为 `text`、`thinking`、`redacted_thinking` 或 `tool_use`。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`。
 
-生成媒体、代码执行与来源不产生 Anthropic 专用媒体或 citation block：媒体编码为 text block 中的 Markdown data URL，代码编码为 fenced text，来源在末尾追加 `Sources:` Markdown 列表。
+Anthropic 响应中的媒体编码为 text block 中的 Markdown data URL，代码编码为 fenced text，来源在末尾追加 `Sources:` Markdown 列表。
 
 Anthropic SSE：
 
@@ -2086,7 +2090,7 @@ Responses 的 `web_search_call` 由实际 grounding query 触发。搜索发生�
 
 Responses 媒体使用 image generation item；Anthropic 媒体使用 text block 中的 data URL Markdown。Anthropic 来源在 text block 末尾使用 `Sources:` Markdown 列表。
 
-OpenAI Chat 使用 Markdown data URL 承载生成图片；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的图片恢复为 inline data Part，保留图片多轮上下文。
+OpenAI Chat 使用 Markdown data URL 承载生成图片；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的图片恢复为 inline data Part，保留图片多轮上下文。图片 Base64 支持标准与 URL-safe 字母表、可选填充及 CR/LF 换行；图片前后的文本保持原顺序。
 
 用户文本中的 `youtu.be/<ID>`、`youtube.com/watch?v=<ID>`、`/shorts/<ID>`、`/live/<ID>` 和 `/embed/<ID>` 会转换为 `video/*` 外部媒体 part，并从用户 text part 中移除；重复 URL 合并为一个附件。OpenAI `video_url`/`input_video`、Anthropic URL source 与 Gemini `fileData.fileUri` 使用相同的外部媒体编码。
 

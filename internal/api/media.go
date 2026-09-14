@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
 	"image/gif"
 	"image/png"
 	"mime"
@@ -269,31 +272,44 @@ func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {
 	return buffer.Bytes()
 }
 
-// decodeBase64Flexible decodes standard or URL-safe base64 data, tolerating missing padding or data URL prefix.
+// decodeBase64Flexible 根据字母表和填充形式解码 Base64 与 Data URL
 func decodeBase64Flexible(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
 	if idx := strings.Index(s, ","); idx != -1 && strings.HasPrefix(s, "data:") {
 		s = s[idx+1:]
 	}
-	if data, err := base64.StdEncoding.DecodeString(s); err == nil {
-		return data, nil
+	encoding := base64.StdEncoding
+	if index := strings.IndexAny(s, "+/-_"); index >= 0 && (s[index] == '-' || s[index] == '_') {
+		encoding = base64.URLEncoding
 	}
-	if data, err := base64.RawStdEncoding.DecodeString(s); err == nil {
-		return data, nil
+	if !strings.HasSuffix(s, "=") {
+		encoding = encoding.WithPadding(base64.NoPadding)
 	}
-	if data, err := base64.URLEncoding.DecodeString(s); err == nil {
-		return data, nil
-	}
-	return base64.RawURLEncoding.DecodeString(s)
+	return encoding.DecodeString(s)
 }
 
-// normalizeImagePayload detects unsupported image formats (such as image/gif) and converts them to image/png.
+// normalizeImagePayload 将 GIF 首帧按逻辑画布转换为 PNG 图片
 func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	lowerMIME := strings.ToLower(strings.TrimSpace(mimeType))
 	if lowerMIME == "image/gif" || (len(data) >= 3 && string(data[:3]) == "GIF") {
 		if img, err := gif.Decode(bytes.NewReader(data)); err == nil {
+			config, err := gif.DecodeConfig(bytes.NewReader(data))
+			if err != nil {
+				return mimeType, data
+			}
+			canvas := image.NewNRGBA(image.Rect(0, 0, config.Width, config.Height))
+			transparent := false
+			for _, entry := range img.(*image.Paletted).Palette {
+				_, _, _, alpha := entry.RGBA()
+				transparent = transparent || alpha == 0
+			}
+			// GIF 背景色来自全局色表，透明首帧保留透明画布
+			if palette, ok := config.ColorModel.(color.Palette); ok && !transparent && int(data[11]) < len(palette) {
+				draw.Draw(canvas, canvas.Bounds(), image.NewUniform(palette[data[11]]), image.Point{}, draw.Src)
+			}
+			draw.Draw(canvas, img.Bounds(), img, img.Bounds().Min, draw.Over)
 			var buf bytes.Buffer
-			if err := png.Encode(&buf, img); err == nil {
+			if err := png.Encode(&buf, canvas); err == nil {
 				return "image/png", buf.Bytes()
 			}
 		}

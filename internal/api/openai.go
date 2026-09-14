@@ -71,7 +71,7 @@ type openAITool struct {
 	} `json:"function"`
 }
 
-var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)\)`)
+var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/_=\r\n-]+)\)`)
 
 func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.service.Models(r.Context())
