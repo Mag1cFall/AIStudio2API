@@ -33,6 +33,22 @@ const sources = computed(() =>
   Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort(),
 )
 
+function matchLog(entry: AdminLog, query: string): boolean {
+  if (entry.message && entry.message.toLowerCase().includes(query)) return true
+  if (entry.source && entry.source.toLowerCase().includes(query)) return true
+  if (entry.event && entry.event.toLowerCase().includes(query)) return true
+  if (entry.request) {
+    const req = entry.request
+    if (req.id && req.id.toLowerCase().includes(query)) return true
+    if (req.model && req.model.toLowerCase().includes(query)) return true
+    if (req.path && req.path.toLowerCase().includes(query)) return true
+    if (req.status !== undefined && String(req.status).includes(query)) return true
+    if (req.error && req.error.toLowerCase().includes(query)) return true
+    if (req.finish_reason && req.finish_reason.toLowerCase().includes(query)) return true
+  }
+  return false
+}
+
 const rows = computed(() => groupLogs(props.logs))
 const filteredLogs = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -40,8 +56,25 @@ const filteredLogs = computed(() => {
     ({ entry, events }) =>
       (level.value === 'ALL' || entry.level.toUpperCase() === level.value) &&
       (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
-      (query === '' || JSON.stringify(entry).toLowerCase().includes(query)),
+      (query === '' || matchLog(entry, query)),
   )
+})
+
+const displayLimit = ref(200)
+const hasMore = computed(() => filteredLogs.value.length > displayLimit.value)
+const hiddenCount = computed(() => Math.max(0, filteredLogs.value.length - displayLimit.value))
+const visibleLogs = computed(() => {
+  const list = filteredLogs.value
+  if (list.length <= displayLimit.value) return list
+  return list.slice(list.length - displayLimit.value)
+})
+
+function loadOlder(): void {
+  displayLimit.value += 200
+}
+
+watch([level, source, search], () => {
+  displayLimit.value = 200
 })
 
 const logGridStyle = computed(() => ({ '--log-source-width': `${sourceWidth.value}px` }))
@@ -207,7 +240,19 @@ watch(autoScroll, scrollToBottom)
           @keydown="resizeSourceWithKeyboard"
         ></div>
         <div
-          v-for="row in filteredLogs"
+          v-if="hasMore"
+          class="flex items-center justify-center py-2 border-b border-[#30363d] bg-[#161b22]/60 text-xs my-1 rounded"
+        >
+          <button
+            type="button"
+            class="rounded border border-[#30363d] bg-[#0d1117] px-3 py-1 text-gray-400 hover:border-blue-500 hover:text-blue-400 transition"
+            @click="loadOlder"
+          >
+            {{ t('logs.loadOlder').replace('{count}', String(hiddenCount)) }}
+          </button>
+        </div>
+        <div
+          v-for="row in visibleLogs"
           :key="row.key"
           class="log-entry log-grid border-l-2 px-2 py-0.5 select-text"
           :class="{
