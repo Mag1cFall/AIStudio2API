@@ -56,6 +56,7 @@ type eventSubscriber struct {
 const (
 	adminLogRetain             = 2000
 	adminLogCompactAt          = 2200
+	adminLogInitialEvents      = 200
 	adminRequestRetain         = 512
 	adminRequestCompactAt      = 640
 	adminRequestRefreshLatency = 50 * time.Millisecond
@@ -1225,9 +1226,13 @@ func (registry *requestRegistry) activateSubscriber(
 	suffix []api.AdminEvent,
 ) <-chan api.AdminEvent {
 	registry.mu.Lock()
-	initial := make([]api.AdminEvent, 0, len(prefix)+len(registry.logs)+len(suffix)+len(registry.active))
+	initialLogs := registry.logs
+	if len(initialLogs) > adminLogInitialEvents {
+		initialLogs = initialLogs[len(initialLogs)-adminLogInitialEvents:]
+	}
+	initial := make([]api.AdminEvent, 0, len(prefix)+len(initialLogs)+len(suffix)+len(registry.active))
 	initial = append(initial, prefix...)
-	for _, entry := range registry.logs {
+	for _, entry := range initialLogs {
 		initial = append(initial, api.AdminEvent{Type: "log", Data: entry})
 	}
 	initial = append(initial, suffix...)

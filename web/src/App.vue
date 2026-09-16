@@ -22,7 +22,13 @@ import SettingsPanel from '@/components/SettingsPanel.vue'
 import UiIcon, { type IconName } from '@/components/UiIcon.vue'
 
 const { availableLocales, locale, setLocale, t } = useI18n()
-const currentTab = ref<TabID>('logs')
+const TAB_STORAGE_KEY = 'aistudio2api_active_tab'
+const validTabs: TabID[] = ['logs', 'accounts', 'models', 'requests', 'settings', 'playground']
+const savedTab = typeof window !== 'undefined' ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null) : null
+const currentTab = ref<TabID>(savedTab && validTabs.includes(savedTab) ? savedTab : 'logs')
+watch(currentTab, (tab) => {
+  window.localStorage.setItem(TAB_STORAGE_KEY, tab)
+})
 const status = ref<ServiceStatus | null>(null)
 const logs = ref<AdminLog[]>([])
 const accounts = ref<Account[]>([])
@@ -205,9 +211,25 @@ async function stopService(): Promise<void> {
   }
 }
 
+let pendingLogs: AdminLog[] = []
+let logFlushTimer: number | undefined
+
+function flushLogs(): void {
+  logFlushTimer = undefined
+  if (pendingLogs.length === 0) return
+  logs.value.push(...pendingLogs)
+  pendingLogs = []
+  if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
+}
+
 async function clearLogs(): Promise<void> {
   try {
     await api.clearLogs()
+    pendingLogs = []
+    if (logFlushTimer !== undefined) {
+      window.clearTimeout(logFlushTimer)
+      logFlushTimer = undefined
+    }
     logs.value = []
   } catch (error) {
     showNotice(messageOf(error), 'error')
@@ -226,8 +248,10 @@ function handleAdminEvent(event: AdminEvent): void {
     return
   }
   if (event.type === 'log') {
-    logs.value.push(event.data)
-    if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
+    pendingLogs.push(event.data)
+    if (logFlushTimer === undefined) {
+      logFlushTimer = window.setTimeout(flushLogs, 40)
+    }
     return
   }
   if (event.type === 'accounts') {
@@ -249,6 +273,11 @@ onMounted(async () => {
   document.title = t('app.title')
   await refreshAll()
   eventConnection = openAdminEvents(handleAdminEvent, () => {
+    pendingLogs = []
+    if (logFlushTimer !== undefined) {
+      window.clearTimeout(logFlushTimer)
+      logFlushTimer = undefined
+    }
     logs.value = []
     requests.value = []
   })
@@ -260,6 +289,7 @@ watch(locale, () => {
 
 onUnmounted(() => {
   eventConnection?.close()
+  if (logFlushTimer !== undefined) window.clearTimeout(logFlushTimer)
   if (noticeTimer !== undefined) window.clearTimeout(noticeTimer)
 })
 </script>
