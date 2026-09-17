@@ -519,7 +519,7 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 		return fmt.Errorf("读取 bidi WebChannel handshake: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
-		return decodeRPCError("BidiGenerateContent", response.StatusCode, body)
+		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}
 	if err := s.mergeCookies(response, requestURL); err != nil {
 		return err
@@ -618,7 +618,7 @@ func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies
 		return fmt.Errorf("读取 bidi WebChannel ACK: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
-		return decodeRPCError("BidiGenerateContent", response.StatusCode, body)
+		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}
 	if err := s.mergeCookies(response, requestURL); err != nil {
 		return err
@@ -739,7 +739,7 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 		if readErr != nil {
 			return 0, readErr
 		}
-		return 0, decodeRPCError("BidiGenerateContent", response.StatusCode, body)
+		return 0, DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}
 	if err := s.mergeCookies(response, requestURL); err != nil {
 		return 0, err

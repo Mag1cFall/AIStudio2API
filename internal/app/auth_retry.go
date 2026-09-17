@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -173,11 +174,12 @@ func (transport *authRetryTransport) Do(ctx context.Context, request aistudio.RP
 	if !transport.refresher.Available(ctx) {
 		return response, nil
 	}
-	if err := response.Body.Close(); err != nil {
-		return nil, fmt.Errorf("关闭认证失败响应: %w", err)
+	originalErr, err := readAuthenticationFailure(request.Method, response)
+	if err != nil {
+		return nil, err
 	}
 	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, authenticationRefreshError(request.Method, response.StatusCode, err)
+		return nil, errors.Join(originalErr, err)
 	}
 	return transport.transport.Do(ctx, request)
 }
@@ -195,11 +197,12 @@ func (transport *authRetryProtectedTransport) DoProtected(
 	if !transport.refresher.Available(ctx) {
 		return response, nil
 	}
-	if err := response.Body.Close(); err != nil {
-		return nil, fmt.Errorf("关闭认证失败响应: %w", err)
+	originalErr, err := readAuthenticationFailure(rpc.Method, response)
+	if err != nil {
+		return nil, err
 	}
 	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, authenticationRefreshError(rpc.Method, response.StatusCode, err)
+		return nil, errors.Join(originalErr, err)
 	}
 	return transport.transport.DoProtected(ctx, request, rpc)
 }
@@ -229,7 +232,7 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 	}
 	gate.Abandon()
 	if refreshErr := transport.refresher.Refresh(ctx); refreshErr != nil {
-		return nil, authenticationRefreshError("BidiGenerateContent", http.StatusUnauthorized, refreshErr)
+		return nil, errors.Join(err, refreshErr)
 	}
 	return bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, release)
 }
@@ -251,11 +254,12 @@ func (transport *authRetryProtectedTransport) DoProtectedVideo(
 	if !transport.refresher.Available(ctx) {
 		return response, nil
 	}
-	if err := response.Body.Close(); err != nil {
-		return nil, fmt.Errorf("关闭认证失败响应: %w", err)
+	originalErr, err := readAuthenticationFailure(rpc.Method, response)
+	if err != nil {
+		return nil, err
 	}
 	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, authenticationRefreshError(rpc.Method, response.StatusCode, err)
+		return nil, errors.Join(originalErr, err)
 	}
 	return videoTransport.DoProtectedVideo(ctx, request, rpc)
 }
@@ -332,10 +336,13 @@ func authenticationFailed(response *aistudio.RPCResponse) bool {
 	return response != nil && response.Body != nil && response.StatusCode == http.StatusUnauthorized
 }
 
-func authenticationRefreshError(method string, statusCode int, err error) error {
-	return errors.Join(&aistudio.RPCError{
-		Method: method, StatusCode: statusCode, Message: http.StatusText(statusCode),
-	}, err)
+// readAuthenticationFailure 读取并关闭认证失败响应以保留原始原因
+func readAuthenticationFailure(method string, response *aistudio.RPCResponse) (*aistudio.RPCError, error) {
+	body, readErr := io.ReadAll(response.Body)
+	if err := errors.Join(readErr, response.Body.Close()); err != nil {
+		return nil, fmt.Errorf("读取认证失败响应: %w", err)
+	}
+	return aistudio.DecodeRPCError(method, response.StatusCode, body), nil
 }
 
 var _ aistudio.RPCTransport = (*authRetryTransport)(nil)
