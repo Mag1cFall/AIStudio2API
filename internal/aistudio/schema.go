@@ -22,6 +22,9 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	if err := json.Unmarshal(raw, &schema); err != nil || schema == nil {
 		return nil, fmt.Errorf("schema 必须是 JSON object")
 	}
+	if err := normalizeConstAndMetadata(schema); err != nil {
+		return nil, err
+	}
 	if err := normalizeNullableVariants(schema); err != nil {
 		return nil, err
 	}
@@ -282,6 +285,72 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 	}
 	return nil
 }
+func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
+	delete(schema, "title")
+	delete(schema, "$id")
+	delete(schema, "$comment")
+	if constVal, ok := schema["const"]; ok {
+		delete(schema, "const")
+		var decoded any
+		if err := json.Unmarshal(constVal, &decoded); err == nil {
+			if _, hasEnum := schema["enum"]; !hasEnum {
+				strVal := fmt.Sprintf("%v", decoded)
+				if s, ok := decoded.(string); ok {
+					strVal = s
+				}
+				if encoded, err := json.Marshal([]string{strVal}); err == nil {
+					schema["enum"] = encoded
+				}
+			}
+			if _, hasType := schema["type"]; !hasType {
+				switch decoded.(type) {
+				case string:
+					schema["type"] = json.RawMessage(`"string"`)
+				case bool:
+					schema["type"] = json.RawMessage(`"boolean"`)
+				case float64:
+					if strings.Contains(string(constVal), ".") {
+						schema["type"] = json.RawMessage(`"number"`)
+					} else {
+						schema["type"] = json.RawMessage(`"integer"`)
+					}
+				default:
+					schema["type"] = json.RawMessage(`"string"`)
+				}
+			}
+		}
+	}
+	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
+		raw, ok := schema[name]
+		if !ok {
+			continue
+		}
+		var variants []json.RawMessage
+		if err := json.Unmarshal(raw, &variants); err != nil {
+			continue
+		}
+		modified := false
+		for i, v := range variants {
+			var subSchema map[string]json.RawMessage
+			if err := json.Unmarshal(v, &subSchema); err == nil && subSchema != nil {
+				if _, hasConst := subSchema["const"]; hasConst || subSchema["title"] != nil {
+					if err := normalizeConstAndMetadata(subSchema); err == nil {
+						if encoded, err := json.Marshal(subSchema); err == nil {
+							variants[i] = encoded
+							modified = true
+						}
+					}
+				}
+			}
+		}
+		if modified {
+			if encoded, err := json.Marshal(variants); err == nil {
+				schema[name] = encoded
+			}
+		}
+	}
+	return nil
+}
 
 func schemaType(schema map[string]json.RawMessage) (string, error) {
 	if value, ok := schema["type"]; ok {
@@ -290,6 +359,22 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 			return "", fmt.Errorf("schema.type 必须是字符串")
 		}
 		return typeName, nil
+	}
+	if constVal, ok := schema["const"]; ok {
+		var decoded any
+		if err := json.Unmarshal(constVal, &decoded); err == nil {
+			switch decoded.(type) {
+			case string:
+				return "string", nil
+			case bool:
+				return "boolean", nil
+			case float64:
+				if strings.Contains(string(constVal), ".") {
+					return "number", nil
+				}
+				return "integer", nil
+			}
+		}
 	}
 	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
 		value, ok := schema[name]
@@ -303,6 +388,22 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 		for _, variant := range variants {
 			if typeValue, exists := variant["type"]; exists {
 				return schemaString(typeValue, "type")
+			}
+			if constVal, exists := variant["const"]; exists {
+				var decoded any
+				if err := json.Unmarshal(constVal, &decoded); err == nil {
+					switch decoded.(type) {
+					case string:
+						return "string", nil
+					case bool:
+						return "boolean", nil
+					case float64:
+						if strings.Contains(string(constVal), ".") {
+							return "number", nil
+						}
+						return "integer", nil
+					}
+				}
 			}
 		}
 	}
