@@ -917,7 +917,7 @@ GenerateAccessToken ["users/me"]
 
 Drive token、上传和下载使用文件所属账户的固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；生成请求可以组合不同账户的文件，其他账户的文件会临时复制到本次生成账户，并在请求结束后回收副本。
 
-生成请求的内联附件统一上传到本次生成账户，正文使用 Drive file Part。上传使用公开适配器输出的 MIME 和字节内容；内联 GIF 在适配层提取首帧并编码为 `image/png`。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
+生成请求的内联附件优先上传到本次生成账户，正文使用 Drive file Part。`GenerateAccessToken` 明确返回 `401`、Code 16 和 `OAuth error: unauthorized_client` 时，正文保留原始 inline data Part，账户继续参与普通生成调度；其他令牌错误保持失败语义。上传使用公开适配器输出的 MIME 和字节内容；内联 GIF 在适配层提取首帧并编码为 `image/png`。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
 
 OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单文件上限为 512 MiB。未知长度的请求使用 Drive resumable upload 和 8 MiB 分块；上传完成后 `POST /v1/files` 返回持久文件对象，`GET /v1/files/{id}` 从资源绑定读取文件名、大小、purpose 与创建时间。客户端取消会终止上传并释放账户租约。
 
@@ -1180,7 +1180,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 `PUT /api/config` 原子保存配置。监听地址和 API key 在管理进程重启后生效；账户路径、代理、timeout、容量与临时对话在 Stop/Start 创建的新生成服务实例中生效。启动时读取最新配置；配置加载、校验、实例创建失败或启用前取消时保留原实例，切换到新实例后由它完成启动或进入 `STOPPED`。
 
-`GET /api/events` 的初始顺序为 `status`、`models`、`accounts`、最多 2000 条 `log`、`cooldowns`、按开始时间排序的活动 `request`。后续事件的 `data` 形状：
+`GET /api/events` 的初始顺序为 `status`、`models`、`accounts`、最近 200 条 `log`、`cooldowns`、按开始时间排序的活动 `request`。后续事件的 `data` 形状：
 
 | `type` | `data` |
 | --- | --- |

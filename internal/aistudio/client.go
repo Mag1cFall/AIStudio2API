@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -194,7 +195,7 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 		if readErr != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
 		}
-		return nil, decodeRPCError(method, response.StatusCode, raw)
+		return nil, DecodeRPCError(method, response.StatusCode, raw)
 	}
 	contentType := response.Header.Get("Content-Type")
 	mediaType, _, err := mime.ParseMediaType(contentType)
@@ -205,7 +206,8 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 	return response, nil
 }
 
-func decodeRPCError(method string, statusCode int, raw []byte) error {
+// DecodeRPCError 解析独立状态和流式封装中的上游错误
+func DecodeRPCError(method string, statusCode int, raw []byte) *RPCError {
 	rpcError := &RPCError{
 		Method:     method,
 		StatusCode: statusCode,
@@ -219,14 +221,18 @@ func decodeRPCError(method string, statusCode int, raw []byte) error {
 	if err != nil || len(root) < 2 || isJSONNull(root[1]) {
 		return rpcError
 	}
-	provider, err := rawArray(root[1], "$[1]", value)
-	if err != nil || len(provider) < 2 {
-		return rpcError
+	provider, providerPath := root, "$"
+	if bytes.HasPrefix(bytes.TrimSpace(root[1]), []byte("[")) {
+		provider, err = rawArray(root[1], "$[1]", value)
+		if err != nil || len(provider) < 2 {
+			return rpcError
+		}
+		providerPath = "$[1]"
 	}
-	if code, err := rawInt64(provider[0], "$[1][0]", value); err == nil {
+	if code, err := rawInt64(provider[0], providerPath+"[0]", value); err == nil {
 		rpcError.Code = code
 	}
-	if message, err := rawString(provider[1], "$[1][1]", value); err == nil && message != "" {
+	if message, err := rawString(provider[1], providerPath+"[1]", value); err == nil && message != "" {
 		rpcError.Message = message
 	}
 	if len(provider) > 2 && !isJSONNull(provider[2]) {

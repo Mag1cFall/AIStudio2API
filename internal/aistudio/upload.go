@@ -588,6 +588,14 @@ func driveFileNotFound(err error, method string) bool {
 	return errors.As(err, &rpcError) && rpcError.Method == method && rpcError.StatusCode == http.StatusNotFound
 }
 
+// driveAuthorizationMissing 判断账户仅缺少 Google Drive 授权
+func driveAuthorizationMissing(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.Method == "GenerateAccessToken" &&
+		rpcError.StatusCode == http.StatusUnauthorized && rpcError.Code == 16 &&
+		strings.Contains(strings.ToLower(rpcError.Message), "unauthorized_client")
+}
+
 // CopyFileReferencesToLease 将文件引用复制到目标账户并返回改写内容
 func (s *PooledService) CopyFileReferencesToLease(
 	ctx context.Context,
@@ -752,6 +760,9 @@ func (s *PooledService) UploadInlineMediaToLease(
 		uploadErr = fmt.Errorf("AI Studio transport 不支持 Drive")
 	}
 	if uploadErr != nil {
+		if driveAuthorizationMissing(uploadErr) {
+			return rewritten, temporary, nil
+		}
 		if DefinitiveAuthenticationFailure(uploadErr) {
 			uploadErr = errors.Join(uploadErr, target.MarkAuthenticationRequired(uploadErr.Error()))
 		}

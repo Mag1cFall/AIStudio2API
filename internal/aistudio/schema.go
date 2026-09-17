@@ -285,40 +285,35 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 	}
 	return nil
 }
+
+// normalizeConstAndMetadata 将字符串常量和说明字段转换为可发送结构
 func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 	delete(schema, "title")
 	delete(schema, "$id")
 	delete(schema, "$comment")
-	if constVal, ok := schema["const"]; ok {
-		delete(schema, "const")
+	if raw, ok := schema["const"]; ok {
 		var decoded any
-		if err := json.Unmarshal(constVal, &decoded); err == nil {
-			if _, hasEnum := schema["enum"]; !hasEnum {
-				strVal := fmt.Sprintf("%v", decoded)
-				if s, ok := decoded.(string); ok {
-					strVal = s
-				}
-				if encoded, err := json.Marshal([]string{strVal}); err == nil {
-					schema["enum"] = encoded
-				}
-			}
-			if _, hasType := schema["type"]; !hasType {
-				switch decoded.(type) {
-				case string:
-					schema["type"] = json.RawMessage(`"string"`)
-				case bool:
-					schema["type"] = json.RawMessage(`"boolean"`)
-				case float64:
-					if strings.Contains(string(constVal), ".") {
-						schema["type"] = json.RawMessage(`"number"`)
-					} else {
-						schema["type"] = json.RawMessage(`"integer"`)
-					}
-				default:
-					schema["type"] = json.RawMessage(`"string"`)
-				}
-			}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return fmt.Errorf("schema.const 必须是字符串")
 		}
+		value, ok := decoded.(string)
+		if !ok {
+			return fmt.Errorf("schema.const 只支持字符串")
+		}
+		if rawType, exists := schema["type"]; exists {
+			typeName, err := schemaString(rawType, "type")
+			if err != nil || !strings.EqualFold(typeName, "string") {
+				return fmt.Errorf("schema.const 只支持 string 类型")
+			}
+		} else {
+			schema["type"] = json.RawMessage(`"string"`)
+		}
+		enum, err := json.Marshal([]string{value})
+		if err != nil {
+			return err
+		}
+		schema["enum"] = enum
+		delete(schema, "const")
 	}
 	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
 		raw, ok := schema[name]
@@ -327,27 +322,27 @@ func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 		}
 		var variants []json.RawMessage
 		if err := json.Unmarshal(raw, &variants); err != nil {
-			continue
+			return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
 		}
-		modified := false
-		for i, v := range variants {
+		for index, variant := range variants {
 			var subSchema map[string]json.RawMessage
-			if err := json.Unmarshal(v, &subSchema); err == nil && subSchema != nil {
-				if _, hasConst := subSchema["const"]; hasConst || subSchema["title"] != nil {
-					if err := normalizeConstAndMetadata(subSchema); err == nil {
-						if encoded, err := json.Marshal(subSchema); err == nil {
-							variants[i] = encoded
-							modified = true
-						}
-					}
-				}
+			if err := json.Unmarshal(variant, &subSchema); err != nil || subSchema == nil {
+				return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
 			}
-		}
-		if modified {
-			if encoded, err := json.Marshal(variants); err == nil {
-				schema[name] = encoded
+			if err := normalizeConstAndMetadata(subSchema); err != nil {
+				return fmt.Errorf("schema.%s[%d]: %w", name, index, err)
 			}
+			encoded, err := json.Marshal(subSchema)
+			if err != nil {
+				return err
+			}
+			variants[index] = encoded
 		}
+		encoded, err := json.Marshal(variants)
+		if err != nil {
+			return err
+		}
+		schema[name] = encoded
 	}
 	return nil
 }
@@ -359,22 +354,6 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 			return "", fmt.Errorf("schema.type 必须是字符串")
 		}
 		return typeName, nil
-	}
-	if constVal, ok := schema["const"]; ok {
-		var decoded any
-		if err := json.Unmarshal(constVal, &decoded); err == nil {
-			switch decoded.(type) {
-			case string:
-				return "string", nil
-			case bool:
-				return "boolean", nil
-			case float64:
-				if strings.Contains(string(constVal), ".") {
-					return "number", nil
-				}
-				return "integer", nil
-			}
-		}
 	}
 	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
 		value, ok := schema[name]
@@ -388,22 +367,6 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 		for _, variant := range variants {
 			if typeValue, exists := variant["type"]; exists {
 				return schemaString(typeValue, "type")
-			}
-			if constVal, exists := variant["const"]; exists {
-				var decoded any
-				if err := json.Unmarshal(constVal, &decoded); err == nil {
-					switch decoded.(type) {
-					case string:
-						return "string", nil
-					case bool:
-						return "boolean", nil
-					case float64:
-						if strings.Contains(string(constVal), ".") {
-							return "number", nil
-						}
-						return "integer", nil
-					}
-				}
 			}
 		}
 	}

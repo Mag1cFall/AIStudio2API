@@ -2747,7 +2747,7 @@ func (service *trackedService) generateWithRetry(
 				)
 				if err == nil {
 					service.requests.log(accountLabel, "INFO", fmt.Sprintf(
-						"内联附件上传完成 | 附件=%d | 原始=%dB | 耗时=%s",
+						"内联附件处理完成 | 附件=%d | 原始=%dB | 耗时=%s",
 						mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
 					))
 				}
