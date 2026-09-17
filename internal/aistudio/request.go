@@ -223,6 +223,9 @@ func encodePart(part Part) ([]any, error) {
 		if signature == "" {
 			signature = part.FunctionCall.ThoughtSignature
 		}
+		if signature == "" {
+			signature = "skip_thought_signature_validator"
+		}
 		return setPartThoughtSignature(wire, signature), nil
 	}
 	if part.FunctionResult != nil {
