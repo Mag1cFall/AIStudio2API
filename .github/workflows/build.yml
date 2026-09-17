@@ -37,6 +37,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Run Unit Tests
+        run: go test -mod=readonly ./cmd/... ./internal/...
       - name: Check Minimum Go Version
         run: |
           go version
