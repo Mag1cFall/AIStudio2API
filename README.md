@@ -45,6 +45,7 @@
 ## 系统要求
 
 - **Windows Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
+- **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 fonts-liberation`
 - **源码运行**: Go 1.25.0+、Node.js 22.13+ 或 24+，以及配套 npm
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
@@ -467,6 +468,7 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 | `service_stopped` | 在管理页面点击“启动服务” |
 | 没有可用账户 | 在账户页新增、启用或重新登录账户 |
 | Camoufox 准备失败 | 检查 GitHub Release 访问，或设置 `CAMOUFOX_PATH` |
+| Linux 预热账户 `exit status 255` | 安装 Camoufox 运行库，见“系统要求”中的 apt 命令 |
 
 ## 贡献
 

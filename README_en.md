@@ -45,6 +45,7 @@
 ## System Requirements
 
 - **Windows Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
+- **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries, on Debian/Ubuntu run `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 fonts-liberation`
 - **Source Build**: Go 1.25.0+, Node.js 22.13+ or 24+, and its bundled npm
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
@@ -467,6 +468,7 @@ Common runtime states:
 | `service_stopped` | Click "Start service" in the management UI |
 | No account is available | Add, enable, or log in to an account from Accounts |
 | Camoufox preparation fails | Check access to GitHub Releases or set `CAMOUFOX_PATH` |
+| Linux account warmup `exit status 255` | Install the Camoufox runtime libraries, see the apt command in “System Requirements” |
 
 ## Contributing
 
