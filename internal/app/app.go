@@ -126,11 +126,10 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, m
 	manager.requests.log("service", "INFO", "管理服务就绪 | 地址=http://"+address)
 	if options.openUI {
 		if err := openBrowser("http://" + address); err != nil {
-			_ = server.Close()
-			<-serveError
-			return err
+			manager.requests.log("service", "WARN", "管理页面打开失败 | "+err.Error())
+		} else {
+			manager.requests.log("service", "INFO", "管理页面已打开 | 地址=http://"+address)
 		}
-		manager.requests.log("service", "INFO", "管理页面已打开 | 地址=http://"+address)
 	}
 
 	select {
