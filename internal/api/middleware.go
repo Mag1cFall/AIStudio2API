@@ -92,7 +92,7 @@ func (writer *accessLogResponseWriter) Write(data []byte) (int, error) {
 	return writer.ResponseWriter.Write(data)
 }
 
-// FlushError 记录状态并向响应控制器返回底层刷新错误
+// FlushError records the status and returns the underlying flush error to the response controller.
 func (writer *accessLogResponseWriter) FlushError() error {
 	if writer.status == 0 {
 		writer.WriteHeader(http.StatusOK)
@@ -257,35 +257,35 @@ func (metadata *accessLogMetadata) snapshot() accessLogSnapshot {
 	return snapshot
 }
 
-// SetAccessLogFirstEvent 写入首个上游语义事件耗时
+// SetAccessLogFirstEvent records the latency to the first upstream semantic event.
 func SetAccessLogFirstEvent(ctx context.Context, firstEvent time.Duration) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setFirstEvent(firstEvent)
 	}
 }
 
-// SetAccessLogGenerationConfig 写入生成请求采用的参数
+// SetAccessLogGenerationConfig records the parameters used by the generation request.
 func SetAccessLogGenerationConfig(ctx context.Context, config aistudio.GenerationConfig) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setGenerationConfig(config)
 	}
 }
 
-// SetAccessLogGenerationInput 写入生成请求输入摘要
+// SetAccessLogGenerationInput records the input summary of the generation request.
 func SetAccessLogGenerationInput(ctx context.Context, request aistudio.GenerateRequest) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setGenerationInput(request)
 	}
 }
 
-// SetAccessLogUpstreamBytes 写入上游响应体字节数
+// SetAccessLogUpstreamBytes records the byte count of the upstream response body.
 func SetAccessLogUpstreamBytes(ctx context.Context, bytes int64) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setUpstreamBytes(bytes)
 	}
 }
 
-// StartAccessLog 立即写入已经完成解析的请求开始记录
+// StartAccessLog immediately records the start of a parsed request.
 func StartAccessLog(ctx context.Context) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.start(true)
@@ -294,14 +294,14 @@ func StartAccessLog(ctx context.Context) {
 
 func formatLogFloat(value *float64) string {
 	if value == nil {
-		return "默认"
+		return "default"
 	}
 	return strconv.FormatFloat(*value, 'f', -1, 64)
 }
 
 func formatLogInt(value *int64) string {
 	if value == nil {
-		return "默认"
+		return "default"
 	}
 	return strconv.FormatInt(*value, 10)
 }
@@ -311,19 +311,19 @@ func formatLogThinking(config aistudio.GenerationConfig) string {
 		return effort
 	}
 	if config.ThinkingBudget != nil {
-		return "预算" + strconv.FormatInt(*config.ThinkingBudget, 10)
+		return "budget " + strconv.FormatInt(*config.ThinkingBudget, 10)
 	}
-	return "默认"
+	return "default"
 }
 
-// SetAccessLogTarget 写入请求实际使用的模型与账户
+// SetAccessLogTarget records the actual model and account used for the request.
 func SetAccessLogTarget(ctx context.Context, model string, account string) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setTarget(model, account)
 	}
 }
 
-// SetAccessLogError 写入请求最终错误
+// SetAccessLogError records the final error for the request.
 func SetAccessLogError(ctx context.Context, err error) {
 	if err == nil {
 		return
@@ -333,14 +333,14 @@ func SetAccessLogError(ctx context.Context, err error) {
 	}
 }
 
-// SetAccessLogFinishReason 写入生成请求的上游终止原因
+// SetAccessLogFinishReason records the upstream finish reason for the generation request.
 func SetAccessLogFinishReason(ctx context.Context, reason string) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.setFinishReason(reason)
 	}
 }
 
-// SetAccessLogGenerationResult 写入生成流的完成摘要
+// SetAccessLogGenerationResult records the completion summary of the generation stream.
 func SetAccessLogGenerationResult(
 	ctx context.Context,
 	usage *aistudio.Usage,

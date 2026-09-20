@@ -5,12 +5,12 @@ const (
 	fallbackAccountTimezone = "UTC"
 )
 
-// DefaultAccountLocale 返回当前用户的系统语言
+// DefaultAccountLocale returns the current user's system locale
 func DefaultAccountLocale() string {
 	return localAccountLocale()
 }
 
-// DefaultAccountTimezone 返回当前用户的 IANA 时区
+// DefaultAccountTimezone returns the current user's IANA timezone
 func DefaultAccountTimezone() string {
 	return localAccountTimezone()
 }

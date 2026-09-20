@@ -2,21 +2,21 @@ package aistudio
 
 import "context"
 
-// RequestPhase 表示受保护请求的当前准备阶段
+// RequestPhase represents the current preparation phase of a protected request
 type RequestPhase string
 
 const (
-	// RequestPhasePreparingWAA 表示正在生成 fresh WAA proof
+	// RequestPhasePreparingWAA indicates generating a fresh WAA proof
 	RequestPhasePreparingWAA RequestPhase = "preparing_waa"
-	// RequestPhaseSendingUpstream 表示正在等待 AI Studio 响应头
+	// RequestPhaseSendingUpstream indicates waiting for AI Studio response headers
 	RequestPhaseSendingUpstream RequestPhase = "sending_upstream"
-	// RequestPhaseStreaming 表示 AI Studio 已经返回流式响应
+	// RequestPhaseStreaming indicates AI Studio has returned a streaming response
 	RequestPhaseStreaming RequestPhase = "streaming"
 )
 
 type requestPhaseContextKey struct{}
 
-// ContextWithRequestPhaseObserver 记录受保护请求阶段
+// ContextWithRequestPhaseObserver records the protected request phase
 func ContextWithRequestPhaseObserver(ctx context.Context, observer func(RequestPhase)) context.Context {
 	return context.WithValue(ctx, requestPhaseContextKey{}, observer)
 }

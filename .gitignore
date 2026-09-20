@@ -1,4 +1,4 @@
-# 构建产物
+# Build artifacts
 *.exe
 *.dll
 *.so
@@ -6,20 +6,20 @@
 /aistudio2api
 /dist/
 
-# 本地配置与运行状态
+# Local configuration and runtime state
 .env
 /auth/
 /runtime/
 *.log
 
-# 前端产物
+# Frontend artifacts
 /web/node_modules/
 /internal/webui/dist/
 
-# Go 工作区
+# Go workspace
 go.work
 
-# 编辑器与系统文件
+# Editor and system files
 .vscode/
 .idea/
 .DS_Store

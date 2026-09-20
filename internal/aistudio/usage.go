@@ -90,7 +90,7 @@ func localCompleteUsage(request GenerateRequest, output generatedOutputParts) *U
 	}
 }
 
-// countedCompleteUsage 使用权威输入总数补全本地停止用量
+// countedCompleteUsage completes local stop usage with authoritative total input count
 func countedCompleteUsage(request GenerateRequest, output generatedOutputParts, count TokenCount) *Usage {
 	toolTokens := localToolTokens(request.Tools)
 	if toolTokens > count.InputTokens {
@@ -105,7 +105,7 @@ func countedCompleteUsage(request GenerateRequest, output generatedOutputParts, 
 	}
 }
 
-// EstimatedInputTokens 返回文本、工具和引用元数据的本地输入 Token 估算
+// EstimatedInputTokens returns local input token estimation for text, tools, and citation metadata
 func EstimatedInputTokens(request GenerateRequest) int64 {
 	inputTokens := localContentsTokens(request.Contents)
 	if request.System != "" {

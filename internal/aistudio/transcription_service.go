@@ -28,13 +28,13 @@ func (err *transcriptionStageError) Unwrap() error {
 	return err.err
 }
 
-// TranscriptionGenerationFailure 判断错误是否来自转录生成阶段
+// TranscriptionGenerationFailure determines whether an error originated from the transcription generation stage
 func TranscriptionGenerationFailure(err error) bool {
 	var stageError *transcriptionStageError
 	return errors.As(err, &stageError) && stageError.stage == "generate"
 }
 
-// TranscriptionRequest 表示一次音频上传与转录请求
+// TranscriptionRequest represents an audio upload and transcription request
 type TranscriptionRequest struct {
 	ID                    string
 	Model                 string
@@ -48,7 +48,7 @@ type TranscriptionRequest struct {
 	ObserveAccountFailure func(string, error)
 }
 
-// TranscriptionResult 表示完整转录及其上游元数据
+// TranscriptionResult represents full transcription and its upstream metadata
 type TranscriptionResult struct {
 	Text            string
 	Segments        []TranscriptMetadata
@@ -60,19 +60,19 @@ type TranscriptionResult struct {
 	accessCheckedAt time.Time
 }
 
-// TranscriptionService 定义音频转录公开端点所需能力
+// TranscriptionService defines capabilities required by the public audio transcription endpoint
 type TranscriptionService interface {
 	Transcribe(context.Context, TranscriptionRequest) (TranscriptionResult, error)
 }
 
-// Transcribe 在同一账户租约内完成上传与生成
+// Transcribe completes upload and generation within the same account lease
 func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionRequest) (TranscriptionResult, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
 		modelID = DefaultTranscriptionModel
 	}
 	if strings.TrimSpace(request.Name) == "" || strings.TrimSpace(request.MIME) == "" || request.Size <= 0 || request.Reader == nil {
-		return TranscriptionResult{}, fmt.Errorf("%w: 转录文件需要名称、MIME 和数据", ErrInvalidArgument)
+		return TranscriptionResult{}, fmt.Errorf("%w: transcription file requires name, MIME, and data", ErrInvalidArgument)
 	}
 	request.Model = modelID
 	selection := AccountSelection{
@@ -121,7 +121,7 @@ func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionReq
 					if _, err := s.pool.MarkModelAccessVerifiedIfGeneration(
 						accountID, modelID, accessGeneration, checkedAt,
 					); err != nil {
-						slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
+						slog.Error("failed to save account model access qualification", "account", accountID, "model", modelID, "error", err)
 					}
 				}()
 			}
@@ -180,7 +180,7 @@ func (s *PooledService) transcribeWithLease(
 	startedAt time.Time,
 ) (result TranscriptionResult, resultErr error) {
 	if _, err := request.Reader.Seek(0, io.SeekStart); err != nil {
-		return TranscriptionResult{}, fmt.Errorf("重置转录文件: %w", err)
+		return TranscriptionResult{}, fmt.Errorf("reset transcription file: %w", err)
 	}
 	accountID := lease.Account().ID
 	attemptCtx := ContextWithAccountLease(ctx, lease)
@@ -201,9 +201,9 @@ func (s *PooledService) transcribeWithLease(
 		if cleanupErr == nil {
 			return
 		}
-		cleanupErr = &transcriptionStageError{stage: "cleanup", err: fmt.Errorf("清理转录临时文件: %w", cleanupErr)}
+		cleanupErr = &transcriptionStageError{stage: "cleanup", err: fmt.Errorf("cleanup transcription temporary file: %w", cleanupErr)}
 		if resultErr != nil {
-			slog.Warn("转录临时文件回收失败", "account", accountID, "file", file.ID, "error", cleanupErr)
+			slog.Warn("failed to recycle transcription temporary file", "account", accountID, "file", file.ID, "error", cleanupErr)
 			return
 		}
 		resultErr = cleanupErr
@@ -309,7 +309,7 @@ func transcriptionRetryableAccountError(ctx context.Context, err error) bool {
 func incompleteTranscriptionStream(err error) bool {
 	var protocolError *ProtocolEvidenceError
 	return errors.As(err, &protocolError) && protocolError.Method == "GenerateContent" && protocolError.Path == "$" &&
-		protocolError.Detail == "流结束前没有完成帧"
+		protocolError.Detail == "stream ended without a completion frame"
 }
 
 var _ TranscriptionService = (*PooledService)(nil)

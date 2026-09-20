@@ -8,17 +8,17 @@ import (
 	"strings"
 )
 
-// BenefitTier 表示 AI Studio 返回的账户权益等级
+// BenefitTier represents the account benefit tier returned by AI Studio
 type BenefitTier int64
 
 const (
-	// BenefitTierFree 表示账户没有 Google AI 订阅权益
+	// BenefitTierFree indicates that the account has no Google AI subscription benefit
 	BenefitTierFree BenefitTier = 0
-	// BenefitTierPro 表示 Google AI Pro 权益
+	// BenefitTierPro indicates Google AI Pro benefit
 	BenefitTierPro BenefitTier = 1
-	// BenefitTierUltra 表示 Google AI Ultra 权益
+	// BenefitTierUltra indicates Google AI Ultra benefit
 	BenefitTierUltra BenefitTier = 2
-	// BenefitTierPlus 表示 Google AI Plus 权益
+	// BenefitTierPlus indicates Google AI Plus benefit
 	BenefitTierPlus BenefitTier = 3
 )
 
@@ -36,7 +36,7 @@ var tieredRPCMethods = map[string]struct{}{
 	"StreamExtractVideoFrames":  {},
 }
 
-// String 返回账户权益的稳定显示名称
+// String returns the stable display name of the benefit tier
 func (tier BenefitTier) String() string {
 	switch tier {
 	case BenefitTierPro:
@@ -50,7 +50,7 @@ func (tier BenefitTier) String() string {
 	}
 }
 
-// HeaderValue 返回官网 RPC 使用的权益请求头值
+// HeaderValue returns the header value used for official website RPC
 func (tier BenefitTier) HeaderValue() string {
 	switch tier {
 	case BenefitTierPro:
@@ -64,11 +64,11 @@ func (tier BenefitTier) HeaderValue() string {
 	}
 }
 
-// BenefitTierForAccount 读取并缓存指定账户的官网权益等级
+// BenefitTierForAccount reads and caches the official benefit tier for the specified account
 func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (BenefitTier, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
-		return BenefitTierFree, fmt.Errorf("GetAiStudioBenefitTier 缺少账户 ID")
+		return BenefitTierFree, fmt.Errorf("GetAiStudioBenefitTier missing account ID")
 	}
 	response, err := c.do(ctx, "GetAiStudioBenefitTier", accountID, "", []byte("[]"), false)
 	if err != nil {
@@ -77,7 +77,7 @@ func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (B
 	defer response.Body.Close()
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
-		return BenefitTierFree, fmt.Errorf("读取 GetAiStudioBenefitTier: %w", err)
+		return BenefitTierFree, fmt.Errorf("read GetAiStudioBenefitTier: %w", err)
 	}
 	tier, err := decodeBenefitTier(raw)
 	if err != nil {
@@ -110,7 +110,7 @@ func decodeBenefitTier(raw []byte) (BenefitTier, error) {
 		return BenefitTierFree, &ProtocolEvidenceError{
 			Method: "GetAiStudioBenefitTier",
 			Path:   "$[0]",
-			Detail: fmt.Sprintf("未识别的账户权益枚举 %d", wire),
+			Detail: fmt.Sprintf("unrecognized benefit tier enum %d", wire),
 			Raw:    append([]byte(nil), raw...),
 		}
 	}

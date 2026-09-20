@@ -33,10 +33,10 @@ type browserProcess struct {
 	closed  bool
 }
 
-// launchBrowser 启动 Camoufox 并返回原生 WebDriver BiDi 端点
+// launchBrowser starts Camoufox and returns the native WebDriver BiDi endpoint.
 func launchBrowser(ctx context.Context, options Options, config map[string]any) (*browserProcess, string, error) {
 	if _, err := os.Stat(options.ExecutablePath); err != nil {
-		return nil, "", fmt.Errorf("Camoufox 不可用: %w", err)
+		return nil, "", fmt.Errorf("camoufox is unavailable: %w", err)
 	}
 	environment, err := camoufoxEnvironment(config)
 	if err != nil {
@@ -44,7 +44,7 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	}
 	profile, err := os.MkdirTemp("", "aistudio-camoufox-*")
 	if err != nil {
-		return nil, "", fmt.Errorf("创建 Camoufox profile: %w", err)
+		return nil, "", fmt.Errorf("creating Camoufox profile: %w", err)
 	}
 	prefs, err := firefoxPreferences(options.Proxy, options.ProxyBypass)
 	if err != nil {
@@ -78,7 +78,7 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	}
 	if err := command.Start(); err != nil {
 		_ = os.RemoveAll(profile)
-		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
+		return nil, "", fmt.Errorf("starting Camoufox: %w", err)
 	}
 	process := &browserProcess{
 		command: command,
@@ -111,19 +111,19 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		process.mu.Unlock()
 		_ = os.RemoveAll(profile)
 		if err == nil {
-			err = errors.New("Camoufox 在报告 BiDi 端点前退出")
+			err = errors.New("camoufox exited before reporting BiDi endpoint")
 		}
 		return nil, "", err
 	case <-timer.C:
 		_ = process.Close()
-		return nil, "", fmt.Errorf("等待 Camoufox BiDi 端点超时: %s", timeout)
+		return nil, "", fmt.Errorf("timed out waiting for Camoufox BiDi endpoint: %s", timeout)
 	case <-ctx.Done():
 		_ = process.Close()
 		return nil, "", ctx.Err()
 	}
 }
 
-// Close 关闭 Camoufox 并删除隔离 profile
+// Close closes Camoufox and removes the isolated profile.
 func (process *browserProcess) Close() error {
 	return process.close(browserProcessCloseTimeout, terminateBrowserProcess)
 }
@@ -151,7 +151,7 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 		select {
 		case <-process.done:
 		case <-closeCtx.Done():
-			closeErr = errors.Join(closeErr, fmt.Errorf("等待 Camoufox 进程退出: %w", closeCtx.Err()))
+			closeErr = errors.Join(closeErr, fmt.Errorf("waiting for Camoufox process exit: %w", closeCtx.Err()))
 		}
 	}
 	closeErr = errors.Join(closeErr, removeProfile(process.profile))
@@ -217,14 +217,14 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 	}
 	parsed, err := url.Parse(proxyValue)
 	if err != nil || parsed.Hostname() == "" {
-		return nil, fmt.Errorf("Camoufox 代理 URL 无效")
+		return nil, fmt.Errorf("invalid Camoufox proxy URL")
 	}
 	if parsed.User != nil {
-		return nil, fmt.Errorf("Camoufox 原生代理暂不接受账号密码")
+		return nil, fmt.Errorf("native Camoufox proxy does not yet accept username and password")
 	}
 	port, err := strconv.Atoi(parsed.Port())
 	if err != nil || port <= 0 {
-		return nil, fmt.Errorf("Camoufox 代理缺少有效端口")
+		return nil, fmt.Errorf("camoufox proxy missing valid port")
 	}
 	prefs["network.proxy.type"] = 1
 	prefs["network.proxy.no_proxies_on"] = bypass
@@ -245,7 +245,7 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 			prefs["network.proxy.socks_version"] = 4
 		}
 	default:
-		return nil, fmt.Errorf("Camoufox 代理协议必须是 http、https、socks4 或 socks5")
+		return nil, fmt.Errorf("camoufox proxy scheme must be http, https, socks4, or socks5")
 	}
 	return prefs, nil
 }
@@ -269,7 +269,7 @@ func writeUserJS(profile string, prefs map[string]any) error {
 		builder.WriteString(");\n")
 	}
 	if err := os.WriteFile(filepath.Join(profile, "user.js"), []byte(builder.String()), 0o600); err != nil {
-		return fmt.Errorf("写入 Camoufox profile: %w", err)
+		return fmt.Errorf("writing Camoufox profile: %w", err)
 	}
 	return nil
 }
@@ -283,6 +283,6 @@ func firefoxPrefLiteral(value any) (string, error) {
 	case int:
 		return strconv.Itoa(typed), nil
 	default:
-		return "", fmt.Errorf("不支持 %T", value)
+		return "", fmt.Errorf("unsupported %T", value)
 	}
 }

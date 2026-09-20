@@ -9,17 +9,17 @@ import (
 	"strings"
 )
 
-// UnverifiedProtocolError 表示当前现场证据尚不足以发送某项能力
+// UnverifiedProtocolError indicates that current live evidence is insufficient to transmit a capability
 type UnverifiedProtocolError struct {
 	Feature string
 }
 
-// Error 返回未验证协议边界
+// Error returns the unverified protocol boundary
 func (e *UnverifiedProtocolError) Error() string {
-	return "AI Studio 协议能力尚无成功现场证据: " + e.Feature
+	return "AI Studio protocol feature lacks verified live evidence: " + e.Feature
 }
 
-// EncodeCountTokensRequest 编码现场确认的 CountTokens 请求
+// EncodeCountTokensRequest encodes the live-confirmed CountTokens request
 func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 	tools, explicitTools, err := encodeRequestedTools(request.Tools)
 	if err != nil {
@@ -30,7 +30,7 @@ func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 		return nil, err
 	}
 	if len(contents) == 0 && request.System == "" {
-		return nil, fmt.Errorf("CountTokens contents 不能为空")
+		return nil, fmt.Errorf("CountTokens contents cannot be empty")
 	}
 	if request.System != "" || explicitTools || countTokensNeedsGenerateRequest(request.Contents) {
 		length := 2
@@ -56,18 +56,18 @@ func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 	return json.Marshal([]any{wireModelName(request.Model), contents})
 }
 
-// ParseTokenCount 解码现场确认的 CountTokens field 1
+// ParseTokenCount decodes field 1 of live-confirmed CountTokens
 func ParseTokenCount(source io.Reader) (TokenCount, error) {
 	raw, err := io.ReadAll(newSparseJSONReader(source))
 	if err != nil {
-		return TokenCount{}, fmt.Errorf("读取 CountTokens: %w", err)
+		return TokenCount{}, fmt.Errorf("read CountTokens: %w", err)
 	}
 	root, err := rawArray(raw, "$", raw)
 	if err != nil {
 		return TokenCount{}, withMethod(err, "CountTokens")
 	}
 	if len(root) == 0 || isJSONNull(root[0]) {
-		return TokenCount{}, &ProtocolEvidenceError{Method: "CountTokens", Path: "$[0]", Detail: "缺少权威 token 总数", Raw: raw}
+		return TokenCount{}, &ProtocolEvidenceError{Method: "CountTokens", Path: "$[0]", Detail: "missing authoritative total token count", Raw: raw}
 	}
 	count, err := rawInt64(root[0], "$[0]", raw)
 	if err != nil {
@@ -80,7 +80,7 @@ func (c *Client) CountTokens(ctx context.Context, request TokenCountRequest) (To
 	return c.CountTokensForAccount(ctx, "", request)
 }
 
-// CountTokensForAccount 使用指定账户调用权威 token 计数
+// CountTokensForAccount calls authoritative token counting using the specified account
 func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, request TokenCountRequest) (TokenCount, error) {
 	body, err := EncodeCountTokensRequest(request)
 	if err != nil {
@@ -100,7 +100,7 @@ func encodeContents(contents []Content) ([]any, error) {
 	for index, content := range contents {
 		encoded, err := encodeContent(content, functionNames)
 		if err != nil {
-			return nil, fmt.Errorf("编码 content %d: %w", index, err)
+			return nil, fmt.Errorf("encode content %d: %w", index, err)
 		}
 		wire = append(wire, encoded)
 	}
@@ -118,10 +118,10 @@ func encodeContent(content Content, functionNames map[string]string) ([]any, err
 	case RoleTool:
 		role = "user"
 	default:
-		return nil, fmt.Errorf("未知 content role %q", content.Role)
+		return nil, fmt.Errorf("unknown content role %q", content.Role)
 	}
 	if len(content.Parts) == 0 {
-		return nil, fmt.Errorf("content parts 不能为空")
+		return nil, fmt.Errorf("content parts cannot be empty")
 	}
 	parts := make([]any, 0, len(content.Parts))
 	for index, part := range content.Parts {
@@ -134,7 +134,7 @@ func encodeContent(content Content, functionNames map[string]string) ([]any, err
 		}
 		encoded, err := encodePart(part)
 		if err != nil {
-			return nil, fmt.Errorf("编码 part %d: %w", index, err)
+			return nil, fmt.Errorf("encode part %d: %w", index, err)
 		}
 		parts = append(parts, encoded)
 	}
@@ -171,7 +171,7 @@ func encodePart(part Part) ([]any, error) {
 		return setPartThoughtSignature([]any{}, part.ThoughtSignature), nil
 	}
 	if variants != 1 {
-		return nil, fmt.Errorf("part 必须且只能设置一种内容")
+		return nil, fmt.Errorf("part must set exactly one variant")
 	}
 	if part.Text != "" {
 		wire := []any{nil, part.Text}
@@ -185,14 +185,14 @@ func encodePart(part Part) ([]any, error) {
 	}
 	if part.InlineData != nil {
 		if part.InlineData.MIME == "" || len(part.InlineData.Data) == 0 {
-			return nil, fmt.Errorf("inline data 缺少 MIME 或数据")
+			return nil, fmt.Errorf("inline data missing MIME or data")
 		}
 		wire := []any{nil, nil, []any{part.InlineData.MIME, base64.StdEncoding.EncodeToString(part.InlineData.Data)}}
 		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
 	if part.ExternalMedia != nil {
 		if part.ExternalMedia.MIME == "" || part.ExternalMedia.URL == "" {
-			return nil, fmt.Errorf("外部媒体缺少 MIME 或 URL")
+			return nil, fmt.Errorf("external media missing MIME or URL")
 		}
 		wire := make([]any, 7)
 		wire[6] = []any{part.ExternalMedia.MIME, part.ExternalMedia.URL}
@@ -230,7 +230,7 @@ func encodePart(part Part) ([]any, error) {
 	}
 	if part.FunctionResult != nil {
 		if part.FunctionResult.Name == "" {
-			return nil, fmt.Errorf("function result 缺少名称且无法按 call ID 解析")
+			return nil, fmt.Errorf("function result missing name and cannot be resolved by call ID")
 		}
 		response, err := encodeWireStructJSON(part.FunctionResult.Content)
 		if err != nil {
@@ -247,7 +247,7 @@ func encodePart(part Part) ([]any, error) {
 	if part.ExecutableCode != nil {
 		language, ok := map[string]int64{"LANGUAGE_UNSPECIFIED": 0, "PYTHON": 1}[part.ExecutableCode.Language]
 		if !ok {
-			return nil, fmt.Errorf("未识别的 executable code language %q", part.ExecutableCode.Language)
+			return nil, fmt.Errorf("unrecognized executable code language %q", part.ExecutableCode.Language)
 		}
 		wire := make([]any, 8)
 		wire[7] = []any{language, part.ExecutableCode.Code}
@@ -260,7 +260,7 @@ func encodePart(part Part) ([]any, error) {
 		"OUTCOME_DEADLINE_EXCEEDED": 3,
 	}[part.CodeExecutionResult.Outcome]
 	if !ok {
-		return nil, fmt.Errorf("未识别的 code execution outcome %q", part.CodeExecutionResult.Outcome)
+		return nil, fmt.Errorf("unrecognized code execution outcome %q", part.CodeExecutionResult.Outcome)
 	}
 	result := []any{outcome}
 	value := part.CodeExecutionResult.Output

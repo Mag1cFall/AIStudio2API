@@ -83,12 +83,12 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	}
 	challenge := findChallenge(first)
 	if first.Status != "RETRY" || challenge == "" {
-		return nil, fmt.Errorf("OAuthMultilogin challenge 阶段失败 HTTP %d status %s", firstStatus, first.Status)
+		return nil, fmt.Errorf("OAuthMultilogin challenge phase failed: HTTP %d status %s", firstStatus, first.Status)
 	}
 
 	ephemeralPrivateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("生成 HPKE 临时密钥: %w", err)
+		return nil, fmt.Errorf("generate ephemeral HPKE key: %w", err)
 	}
 	assertion, err := createAssertion(bindingKey, publicKey, spki, challenge, ephemeralPrivateKey.PublicKey().Bytes())
 	if err != nil {
@@ -99,33 +99,33 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 		return nil, err
 	}
 	if secondStatus != http.StatusOK || second.Status != "OK" {
-		return nil, fmt.Errorf("OAuthMultilogin assertion 阶段失败 HTTP %d status %s", secondStatus, second.Status)
+		return nil, fmt.Errorf("OAuthMultilogin assertion phase failed: HTTP %d status %s", secondStatus, second.Status)
 	}
 	if len(second.Directed) == 0 || bytes.Equal(second.Directed, []byte("null")) {
-		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 token_binding_directed_response")
+		return nil, fmt.Errorf("OAuthMultilogin response missing token_binding_directed_response")
 	}
 	if len(second.Cookies) == 0 {
-		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 Cookie")
+		return nil, fmt.Errorf("OAuthMultilogin response missing cookies")
 	}
 
 	names := make(map[string]struct{}, len(second.Cookies))
 	for index := range second.Cookies {
 		cookie := &second.Cookies[index]
 		if cookie.Name == "" || cookie.Value == "" {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 格式异常")
+			return nil, fmt.Errorf("invalid OAuthMultilogin cookie format")
 		}
 		cookie.Value, err = hpkeOpen(ephemeralPrivateKey, cookie.Value)
 		if err != nil {
 			return nil, err
 		}
 		if cookie.Domain == "" && (cookie.Host == "" || strings.HasPrefix(cookie.Host, ".")) {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 域格式异常")
+			return nil, fmt.Errorf("invalid OAuthMultilogin cookie domain format")
 		}
 		names[cookie.Name] = struct{}{}
 	}
 	for _, required := range []string{"SAPISID", "__Secure-1PSID"} {
 		if _, ok := names[required]; !ok {
-			return nil, fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
+			return nil, fmt.Errorf("OAuthMultilogin missing required cookie: %s", required)
 		}
 	}
 	return second.Cookies, nil
@@ -143,7 +143,7 @@ func newOAuthClient(proxyURL string) (tls_client.HttpClient, error) {
 	}
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
 	if err != nil {
-		return nil, fmt.Errorf("创建 OAuth HTTP 客户端: %w", err)
+		return nil, fmt.Errorf("create OAuth HTTP client: %w", err)
 	}
 	return client, nil
 }
@@ -152,19 +152,19 @@ func requestMultilogin(ctx context.Context, client tls_client.HttpClient, gaiaID
 	authorization := encodeMultiOAuthHeader(gaiaID, token, assertion)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, multiloginURL, strings.NewReader(" "))
 	if err != nil {
-		return 0, multiloginResponse{}, fmt.Errorf("创建 OAuthMultilogin 请求: %w", err)
+		return 0, multiloginResponse{}, fmt.Errorf("create OAuthMultilogin request: %w", err)
 	}
 	request.Header.Set("Authorization", "MultiOAuth "+authorization)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("User-Agent", userAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, multiloginResponse{}, fmt.Errorf("OAuthMultilogin 请求失败: %w", err)
+		return 0, multiloginResponse{}, fmt.Errorf("OAuthMultilogin request failed: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
 	if err != nil {
-		return response.StatusCode, multiloginResponse{}, fmt.Errorf("读取 OAuthMultilogin 响应: %w", err)
+		return response.StatusCode, multiloginResponse{}, fmt.Errorf("read OAuthMultilogin response: %w", err)
 	}
 	body = bytes.TrimSpace(body)
 	if bytes.HasPrefix(body, []byte(")]}'")) {
@@ -172,7 +172,7 @@ func requestMultilogin(ctx context.Context, client tls_client.HttpClient, gaiaID
 	}
 	var result multiloginResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return response.StatusCode, multiloginResponse{}, fmt.Errorf("OAuthMultilogin 返回无法解析的响应 HTTP %d", response.StatusCode)
+		return response.StatusCode, multiloginResponse{}, fmt.Errorf("OAuthMultilogin returned unparseable response HTTP %d", response.StatusCode)
 	}
 	return response.StatusCode, result, nil
 }
@@ -234,11 +234,11 @@ func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, sp
 	payload.EphemeralKey.KeyInfo = base64.RawURLEncoding.EncodeToString(createTinkHPKEKeyset(ephemeralPublicKey))
 	encodedHeader, err := json.Marshal(header)
 	if err != nil {
-		return "", fmt.Errorf("编码 token binding header: %w", err)
+		return "", fmt.Errorf("marshal token binding header: %w", err)
 	}
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("编码 token binding payload: %w", err)
+		return "", fmt.Errorf("marshal token binding payload: %w", err)
 	}
 	signingInput := base64.RawURLEncoding.EncodeToString(encodedHeader) + "." + base64.RawURLEncoding.EncodeToString(encodedPayload)
 	signature, err := bindingKey.SignSHA256([]byte(signingInput))
@@ -246,13 +246,13 @@ func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, sp
 		return "", err
 	}
 	if len(signature) != 64 {
-		return "", fmt.Errorf("NCrypt ECDSA 签名长度异常")
+		return "", fmt.Errorf("invalid NCrypt ECDSA signature length")
 	}
 	digest := sha256.Sum256([]byte(signingInput))
 	r := new(big.Int).SetBytes(signature[:32])
 	s := new(big.Int).SetBytes(signature[32:])
 	if !ecdsa.Verify(publicKey, digest[:], r, s) {
-		return "", fmt.Errorf("NCrypt ECDSA 签名校验失败")
+		return "", fmt.Errorf("NCrypt ECDSA signature verification failed")
 	}
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
@@ -260,16 +260,16 @@ func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, sp
 func hpkeOpen(privateKey *ecdh.PrivateKey, encodedValue string) (string, error) {
 	encrypted, err := base64.RawURLEncoding.DecodeString(encodedValue)
 	if err != nil || len(encrypted) <= 48 {
-		return "", fmt.Errorf("OAuthMultilogin Cookie 密文格式异常")
+		return "", fmt.Errorf("invalid OAuthMultilogin cookie ciphertext format")
 	}
 	encapsulatedKey := encrypted[:32]
 	senderPublicKey, err := ecdh.X25519().NewPublicKey(encapsulatedKey)
 	if err != nil {
-		return "", fmt.Errorf("解析 HPKE 封装密钥: %w", err)
+		return "", fmt.Errorf("parse HPKE encapsulated key: %w", err)
 	}
 	sharedDH, err := privateKey.ECDH(senderPublicKey)
 	if err != nil {
-		return "", fmt.Errorf("计算 HPKE 共享密钥: %w", err)
+		return "", fmt.Errorf("compute HPKE shared secret: %w", err)
 	}
 	kemSuite := append([]byte("KEM"), 0, 0x20)
 	hpkeSuite := append([]byte("HPKE"), 0, 0x20, 0, 1, 0, 1)
@@ -284,15 +284,15 @@ func hpkeOpen(privateKey *ecdh.PrivateKey, encodedValue string) (string, error) 
 	nonce := labeledExpand(secret, hpkeSuite, []byte("base_nonce"), keyScheduleContext, 12)
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("创建 HPKE AES 解密器: %w", err)
+		return "", fmt.Errorf("create HPKE AES cipher: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("创建 HPKE GCM 解密器: %w", err)
+		return "", fmt.Errorf("create HPKE GCM cipher: %w", err)
 	}
 	plaintext, err := gcm.Open(nil, nonce, encrypted[32:], []byte{})
 	if err != nil {
-		return "", fmt.Errorf("OAuthMultilogin Cookie 解密失败")
+		return "", fmt.Errorf("failed to decrypt OAuthMultilogin cookie")
 	}
 	return string(plaintext), nil
 }
@@ -358,17 +358,17 @@ func appendVarint(output []byte, value uint64) []byte {
 
 func parsePublicKeyBlob(blob []byte) (*ecdsa.PublicKey, []byte, error) {
 	if len(blob) != 72 || binary.LittleEndian.Uint32(blob[4:8]) != 32 {
-		return nil, nil, fmt.Errorf("NCrypt ECDSA 公钥格式异常")
+		return nil, nil, fmt.Errorf("invalid NCrypt ECDSA public key format")
 	}
 	x := new(big.Int).SetBytes(blob[8:40])
 	y := new(big.Int).SetBytes(blob[40:72])
 	if !elliptic.P256().IsOnCurve(x, y) {
-		return nil, nil, fmt.Errorf("NCrypt ECDSA 公钥曲线异常")
+		return nil, nil, fmt.Errorf("invalid NCrypt ECDSA public key curve")
 	}
 	publicKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	spki, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("编码 NCrypt ECDSA 公钥: %w", err)
+		return nil, nil, fmt.Errorf("marshal NCrypt ECDSA public key: %w", err)
 	}
 	return publicKey, spki, nil
 }

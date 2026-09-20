@@ -60,7 +60,7 @@ type bidiServerMessage struct {
 	Retryable     bool                        `json:"retryable,omitempty"`
 }
 
-// Hijack 让 WebSocket upgrade 穿过访问日志响应包装器
+// Hijack allows WebSocket upgrade to pass through the access log response wrapper.
 func (writer *accessLogResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	connection, readWriter, err := http.NewResponseController(writer.ResponseWriter).Hijack()
 	if err == nil && writer.status == 0 {
@@ -154,11 +154,11 @@ func bidiRequestFromSetup(
 	setup bidiClientSetup,
 ) (aistudio.BidiRequest, map[string]bool, error) {
 	if setup.Type != "setup" {
-		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: 首帧 type 必须是 setup", aistudio.ErrInvalidArgument)
+		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: initial frame type must be setup", aistudio.ErrInvalidArgument)
 	}
 	model := strings.TrimSpace(setup.Model)
 	if model == "" {
-		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: bidi model 不能为空", aistudio.ErrInvalidArgument)
+		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: bidi model cannot be empty", aistudio.ErrInvalidArgument)
 	}
 	input, err := bidiModalitySet(setup.InputModalities)
 	if err != nil {
@@ -175,25 +175,25 @@ func bidiRequestFromSetup(
 	case aistudio.BidiModeLive:
 		for modality := range input {
 			if modality != "text" && modality != "audio" && modality != "image" {
-				return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live input modality %q 不可用", aistudio.ErrInvalidArgument, modality)
+				return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live input modality %q is unavailable", aistudio.ErrInvalidArgument, modality)
 			}
 		}
 		if len(output) != 1 || !output["audio"] {
-			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live output_modalities 必须是 [audio]", aistudio.ErrInvalidArgument)
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live output_modalities must be [audio]", aistudio.ErrInvalidArgument)
 		}
 		if input["audio"] || input["image"] {
 			request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 		}
 	case aistudio.BidiModeRobotics:
 		if len(input) != 1 || !input["text"] {
-			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics input_modalities 必须是 [text]", aistudio.ErrInvalidArgument)
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics input_modalities must be [text]", aistudio.ErrInvalidArgument)
 		}
 		if len(output) != 1 || !output["text"] {
-			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics output_modalities 必须是 [text]", aistudio.ErrInvalidArgument)
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics output_modalities must be [text]", aistudio.ErrInvalidArgument)
 		}
 		request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 	default:
-		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: bidi mode %q 无效", aistudio.ErrInvalidArgument, mode)
+		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: invalid bidi mode %q", aistudio.ErrInvalidArgument, mode)
 	}
 	if _, _, err := aistudio.EncodeBidiSetupRequest(request, aistudio.RequestContext{}); err != nil {
 		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: %v", aistudio.ErrInvalidArgument, err)
@@ -203,13 +203,13 @@ func bidiRequestFromSetup(
 
 func bidiModalitySet(values []string) (map[string]bool, error) {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("%w: modality 列表不能为空", aistudio.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: modality list cannot be empty", aistudio.ErrInvalidArgument)
 	}
 	result := make(map[string]bool, len(values))
 	for _, value := range values {
 		value = strings.ToLower(strings.TrimSpace(value))
 		if value == "" || result[value] {
-			return nil, fmt.Errorf("%w: modality %q 无效", aistudio.ErrInvalidArgument, value)
+			return nil, fmt.Errorf("%w: invalid modality %q", aistudio.ErrInvalidArgument, value)
 		}
 		result[value] = true
 	}
@@ -269,13 +269,13 @@ func sendBidiClientMessages(
 			switch message.Type {
 			case "text":
 				if !inputModalities["text"] {
-					err = fmt.Errorf("%w: text 未在 setup input_modalities 中声明", aistudio.ErrInvalidArgument)
+					err = fmt.Errorf("%w: text is not declared in setup input_modalities", aistudio.ErrInvalidArgument)
 				} else {
 					err = session.SendText(ctx, message.Text)
 				}
 			case "audio":
 				if !inputModalities["audio"] {
-					err = fmt.Errorf("%w: audio 未在 setup input_modalities 中声明", aistudio.ErrInvalidArgument)
+					err = fmt.Errorf("%w: audio is not declared in setup input_modalities", aistudio.ErrInvalidArgument)
 				} else if message.MIMEType == "" {
 					message.MIMEType = "audio/pcm"
 				}
@@ -284,7 +284,7 @@ func sendBidiClientMessages(
 				}
 			case "image":
 				if !inputModalities["image"] {
-					err = fmt.Errorf("%w: image 未在 setup input_modalities 中声明", aistudio.ErrInvalidArgument)
+					err = fmt.Errorf("%w: image is not declared in setup input_modalities", aistudio.ErrInvalidArgument)
 				} else if message.MIMEType == "" {
 					message.MIMEType = "image/jpeg"
 				}
@@ -293,13 +293,13 @@ func sendBidiClientMessages(
 				}
 			case "media_end":
 				if !inputModalities["audio"] && !inputModalities["image"] {
-					err = fmt.Errorf("%w: media_end 未在 setup input_modalities 中声明", aistudio.ErrInvalidArgument)
+					err = fmt.Errorf("%w: media_end is not declared in setup input_modalities", aistudio.ErrInvalidArgument)
 				} else {
 					err = session.SendMediaEnd(ctx)
 				}
 			case "tool_response":
 				if !toolsEnabled {
-					err = fmt.Errorf("%w: tool_response 的 setup 未声明 tools", aistudio.ErrInvalidArgument)
+					err = fmt.Errorf("%w: setup for tool_response did not declare tools", aistudio.ErrInvalidArgument)
 				} else {
 					err = session.SendToolResponses(ctx, message.ToolResponses)
 				}

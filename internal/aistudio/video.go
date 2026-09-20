@@ -12,20 +12,20 @@ import (
 	"time"
 )
 
-// VideoService 定义长任务视频适配器依赖的能力
+// VideoService defines capabilities required by the long-running video adapter
 type VideoService interface {
 	GenerateVideo(context.Context, VideoRequest) (VideoOperation, error)
 	GetGenerateVideoOperation(context.Context, string) (VideoOperation, error)
 	DownloadFile(context.Context, string) (MediaStream, error)
 }
 
-// VideoImage 表示 Veo 起始帧
+// VideoImage represents a Veo start frame
 type VideoImage struct {
 	InlineData *Blob
 	File       *FileRef
 }
 
-// VideoRequest 表示一次 Veo 长任务请求
+// VideoRequest represents a Veo long-running operation request
 type VideoRequest struct {
 	Model             string
 	Prompt            string
@@ -39,7 +39,7 @@ type VideoRequest struct {
 	RecoverWAARuntime func(context.Context, string, error) (bool, error)
 }
 
-// VideoOperation 表示 Veo 私有长任务状态
+// VideoOperation represents Veo private long-running operation state
 type VideoOperation struct {
 	ID              string
 	Done            bool
@@ -51,19 +51,19 @@ type VideoOperation struct {
 	accessCheckedAt time.Time
 }
 
-// ModelAccessCheckedAt 返回上游接受视频任务的资格时间
+// ModelAccessCheckedAt returns the qualification time when upstream accepted the video operation
 func (operation VideoOperation) ModelAccessCheckedAt() time.Time {
 	return operation.accessCheckedAt
 }
 
-// EncodeGenerateVideoRequest 编码当前网页 GenerateVideo 数组协议
+// EncodeGenerateVideoRequest encodes the current web GenerateVideo array protocol
 func EncodeGenerateVideoRequest(request VideoRequest) ([]byte, error) {
 	if strings.TrimSpace(request.Model) == "" || strings.TrimSpace(request.Prompt) == "" {
-		return nil, fmt.Errorf("GenerateVideo 需要模型和提示词")
+		return nil, fmt.Errorf("GenerateVideo requires model and prompt")
 	}
 	request = normalizeVideoRequest(request)
 	if request.Count != 1 {
-		return nil, fmt.Errorf("GenerateVideo 当前模型只支持一个结果")
+		return nil, fmt.Errorf("GenerateVideo currently only supports a single result for this model")
 	}
 	config := []any{
 		int64(request.Count),
@@ -91,16 +91,16 @@ func encodeVideoImage(image *VideoImage) (any, any, error) {
 		return nil, nil, nil
 	}
 	if (image.InlineData == nil) == (image.File == nil) {
-		return nil, nil, fmt.Errorf("Veo 起始帧必须且只能设置 inline data 或 Drive file")
+		return nil, nil, fmt.Errorf("Veo start frame must set exactly one of inline data or Drive file")
 	}
 	if image.InlineData != nil {
 		if !strings.HasPrefix(strings.ToLower(image.InlineData.MIME), "image/") || len(image.InlineData.Data) == 0 {
-			return nil, nil, fmt.Errorf("Veo inline 起始帧需要图片 MIME 和数据")
+			return nil, nil, fmt.Errorf("Veo inline start frame requires image MIME and data")
 		}
 		return []any{image.InlineData.MIME, base64.StdEncoding.EncodeToString(image.InlineData.Data)}, nil, nil
 	}
 	if strings.TrimSpace(image.File.ID) == "" {
-		return nil, nil, fmt.Errorf("Veo Drive 起始帧缺少文件 ID")
+		return nil, nil, fmt.Errorf("Veo Drive start frame missing file ID")
 	}
 	return nil, []any{image.File.ID}, nil
 }
@@ -121,19 +121,19 @@ func normalizeVideoRequest(request VideoRequest) VideoRequest {
 	return request
 }
 
-// EncodeGetGenerateVideoOperationRequest 编码当前网页轮询数组协议
+// EncodeGetGenerateVideoOperationRequest encodes the current web polling array protocol
 func EncodeGetGenerateVideoOperationRequest(operationID string) ([]byte, error) {
 	if strings.TrimSpace(operationID) == "" {
-		return nil, fmt.Errorf("GetGenerateVideoOperation 需要 operation ID")
+		return nil, fmt.Errorf("GetGenerateVideoOperation requires operation ID")
 	}
 	return json.Marshal([]any{operationID})
 }
 
-// ParseVideoOperation 解码 GenerateVideo 与轮询返回的 operation
+// ParseVideoOperation decodes operation returned by GenerateVideo and polling
 func ParseVideoOperation(source io.Reader, method string) (VideoOperation, error) {
 	raw, err := io.ReadAll(newSparseJSONReader(source))
 	if err != nil {
-		return VideoOperation{}, fmt.Errorf("读取 %s: %w", method, err)
+		return VideoOperation{}, fmt.Errorf("read %s: %w", method, err)
 	}
 	root, err := rawArray(raw, "$", raw)
 	if err != nil {
@@ -148,7 +148,7 @@ func ParseVideoOperation(source io.Reader, method string) (VideoOperation, error
 			}
 		}
 		if operation.ID == "" {
-			return VideoOperation{}, &ProtocolEvidenceError{Method: method, Path: "$[0]", Detail: "缺少 operation ID", Raw: raw}
+			return VideoOperation{}, &ProtocolEvidenceError{Method: method, Path: "$[0]", Detail: "missing operation ID", Raw: raw}
 		}
 		return operation, nil
 	}
@@ -193,7 +193,7 @@ func decodePolledVideoOperation(operation VideoOperation, root []json.RawMessage
 	return operation, nil
 }
 
-// GenerateVideo 创建 Veo 长任务
+// GenerateVideo creates a Veo long-running operation
 func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (VideoOperation, error) {
 	request = normalizeVideoRequest(request)
 	entry, err := c.modelEntry(ctx, request.AccountID, request.Model)
@@ -201,7 +201,7 @@ func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (Video
 		return VideoOperation{}, err
 	}
 	if !hasMethod(entry.model, "predictLongRunning") {
-		return VideoOperation{}, fmt.Errorf("%w: 模型 %q 的实时目录没有 predictLongRunning 方法", ErrInvalidArgument, entry.model.ID)
+		return VideoOperation{}, fmt.Errorf("%w: live catalog for model %q has no predictLongRunning method", ErrInvalidArgument, entry.model.ID)
 	}
 	if err := validateVideoOptions(request, entry.model); err != nil {
 		return VideoOperation{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -223,7 +223,7 @@ func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (Video
 	return operation, nil
 }
 
-// GetGenerateVideoOperation 读取 Veo 长任务当前状态
+// GetGenerateVideoOperation reads the current status of a Veo long-running operation
 func (c *Client) GetGenerateVideoOperation(ctx context.Context, accountID string, operationID string) (VideoOperation, error) {
 	body, err := EncodeGetGenerateVideoOperationRequest(operationID)
 	if err != nil {
@@ -239,7 +239,7 @@ func (c *Client) GetGenerateVideoOperation(ctx context.Context, accountID string
 	return operation, err
 }
 
-// GenerateVideo 使用一个独占账户创建任务并保存 operation 绑定
+// GenerateVideo creates an operation using an exclusive account and saves operation binding
 func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest) (VideoOperation, error) {
 	request = normalizeVideoRequest(request)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
@@ -325,7 +325,7 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 	return operation, generateErr
 }
 
-// GetGenerateVideoOperation 使用 operation 创建账户轮询并绑定结果文件
+// GetGenerateVideoOperation polls using the operation creator account and binds result file
 func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operationID string) (VideoOperation, error) {
 	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{ResourceID: strings.TrimSpace(operationID)})
 	if err != nil {
@@ -407,7 +407,7 @@ func validateVideoOptions(request VideoRequest, model Model) error {
 			}
 		}
 		if !found {
-			return fmt.Errorf("模型 %q 不支持 %s=%s", model.ID, check.name, check.value)
+			return fmt.Errorf("model %q does not support %s=%s", model.ID, check.name, check.value)
 		}
 	}
 	return nil

@@ -47,7 +47,7 @@ var (
 //go:embed native/abe_helper_amd64.bin
 var abeHelperDLL []byte
 
-// retrieveV20Key 读取 Chrome App-Bound v20 主密钥
+// retrieveV20Key reads the Chrome App-Bound v20 master key.
 func retrieveV20Key(chromeRoot string) ([]byte, error) {
 	encrypted, err := readAppBoundCiphertext(chromeRoot)
 	if err != nil {
@@ -60,11 +60,11 @@ func retrieveV20Key(chromeRoot string) ([]byte, error) {
 	return decryptAppBoundCiphertext(chromePath, encrypted)
 }
 
-// readAppBoundCiphertext 从 Local State 提取 APPB 密文
+// readAppBoundCiphertext extracts the APPB ciphertext from Local State.
 func readAppBoundCiphertext(chromeRoot string) ([]byte, error) {
 	data, err := os.ReadFile(filepath.Join(chromeRoot, "Local State"))
 	if err != nil {
-		return nil, fmt.Errorf("读取 Chrome Local State: %w", err)
+		return nil, fmt.Errorf("read Chrome Local State: %w", err)
 	}
 	var state struct {
 		OSCrypt struct {
@@ -72,23 +72,23 @@ func readAppBoundCiphertext(chromeRoot string) ([]byte, error) {
 		} `json:"os_crypt"`
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("解析 Chrome Local State: %w", err)
+		return nil, fmt.Errorf("parse Chrome Local State: %w", err)
 	}
 	raw := strings.TrimSpace(state.OSCrypt.AppBoundEncryptedKey)
 	if raw == "" {
-		return nil, fmt.Errorf("Chrome Local State 缺少 app_bound_encrypted_key")
+		return nil, fmt.Errorf("Chrome Local State missing app_bound_encrypted_key")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return nil, fmt.Errorf("解析 app_bound_encrypted_key: %w", err)
+		return nil, fmt.Errorf("decode app_bound_encrypted_key: %w", err)
 	}
 	if len(decoded) <= len(appBoundPrefix) || string(decoded[:len(appBoundPrefix)]) != appBoundPrefix {
-		return nil, fmt.Errorf("app_bound_encrypted_key 缺少 APPB 前缀")
+		return nil, fmt.Errorf("app_bound_encrypted_key missing APPB prefix")
 	}
 	return decoded[len(appBoundPrefix):], nil
 }
 
-// findChromeExecutable 定位稳定版 Chrome 可执行文件
+// findChromeExecutable locates the stable Chrome executable.
 func findChromeExecutable() (string, error) {
 	for _, root := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
 		path, err := chromeExecutableFromRegistry(root)
@@ -101,10 +101,10 @@ func findChromeExecutable() (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("找不到 chrome.exe")
+	return "", fmt.Errorf("chrome.exe not found")
 }
 
-// chromeExecutableFromRegistry 读取 Windows App Paths
+// chromeExecutableFromRegistry reads the Windows App Paths.
 func chromeExecutableFromRegistry(root registry.Key) (string, error) {
 	key, err := registry.OpenKey(root, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, registry.QUERY_VALUE)
 	if err != nil {
@@ -117,15 +117,15 @@ func chromeExecutableFromRegistry(root registry.Key) (string, error) {
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", fmt.Errorf("Chrome App Paths 为空")
+		return "", fmt.Errorf("Chrome App Paths is empty")
 	}
 	if fileInfo, err := os.Stat(value); err != nil || fileInfo.IsDir() {
-		return "", fmt.Errorf("Chrome App Paths 不可用")
+		return "", fmt.Errorf("Chrome App Paths is unavailable")
 	}
 	return value, nil
 }
 
-// chromeExecutableFallbacks 返回常见安装位置
+// chromeExecutableFallbacks returns common installation locations.
 func chromeExecutableFallbacks() []string {
 	paths := make([]string, 0, 3)
 	if programFiles := strings.TrimSpace(os.Getenv("ProgramFiles")); programFiles != "" {
@@ -140,18 +140,18 @@ func chromeExecutableFallbacks() []string {
 	return paths
 }
 
-// decryptAppBoundCiphertext 在独立 Chrome 进程内解密主密钥
+// decryptAppBoundCiphertext decrypts the master key inside an isolated Chrome process.
 func decryptAppBoundCiphertext(chromePath string, encrypted []byte) ([]byte, error) {
 	tempDir, err := os.MkdirTemp("", "aistudio2api-abe-*")
 	if err != nil {
-		return nil, fmt.Errorf("创建 ABE 临时目录: %w", err)
+		return nil, fmt.Errorf("create ABE temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	helperPath := filepath.Join(tempDir, abeHelperDLLName)
 	outputPath := filepath.Join(tempDir, abeKeyFileName)
 	if err := os.WriteFile(helperPath, abeHelperDLL, 0o600); err != nil {
-		return nil, fmt.Errorf("写入 ABE helper: %w", err)
+		return nil, fmt.Errorf("write ABE helper: %w", err)
 	}
 
 	restoreEnv := setTemporaryEnv(map[string]string{
@@ -173,7 +173,7 @@ func decryptAppBoundCiphertext(chromePath string, encrypted []byte) ([]byte, err
 	defer closeChromeProcess(job, process, thread)
 
 	if _, err := windows.ResumeThread(thread); err != nil {
-		return nil, fmt.Errorf("启动临时 Chrome: %w", err)
+		return nil, fmt.Errorf("resume temporary Chrome: %w", err)
 	}
 	time.Sleep(750 * time.Millisecond)
 	if err := injectDLL(process, helperPath); err != nil {
@@ -184,20 +184,20 @@ func decryptAppBoundCiphertext(chromePath string, encrypted []byte) ([]byte, err
 		data, err := os.ReadFile(outputPath)
 		if err == nil {
 			if len(data) != 32 {
-				return nil, fmt.Errorf("Chrome ABE helper 返回异常: %s", strings.TrimSpace(string(data)))
+				return nil, fmt.Errorf("Chrome ABE helper returned abnormal output: %s", strings.TrimSpace(string(data)))
 			}
 			return data, nil
 		}
 		time.Sleep(abePollInterval)
 	}
-	return nil, fmt.Errorf("Chrome ABE helper 超时")
+	return nil, fmt.Errorf("Chrome ABE helper timed out")
 }
 
-// createKillOnCloseJob 将临时 Chrome 进程树绑定到独立 Job
+// createKillOnCloseJob binds the temporary Chrome process tree to an isolated Job.
 func createKillOnCloseJob(process windows.Handle) (windows.Handle, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
-		return 0, fmt.Errorf("创建 Chrome Job: %w", err)
+		return 0, fmt.Errorf("create Chrome Job: %w", err)
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -208,16 +208,16 @@ func createKillOnCloseJob(process windows.Handle) (windows.Handle, error) {
 		uint32(unsafe.Sizeof(info)),
 	); err != nil {
 		windows.CloseHandle(job)
-		return 0, fmt.Errorf("配置 Chrome Job: %w", err)
+		return 0, fmt.Errorf("configure Chrome Job: %w", err)
 	}
 	if err := windows.AssignProcessToJobObject(job, process); err != nil {
 		windows.CloseHandle(job)
-		return 0, fmt.Errorf("加入 Chrome Job: %w", err)
+		return 0, fmt.Errorf("assign to Chrome Job: %w", err)
 	}
 	return job, nil
 }
 
-// closeChromeProcess 终止临时 Chrome 进程树并释放句柄
+// closeChromeProcess terminates the temporary Chrome process tree and releases handles.
 func closeChromeProcess(job windows.Handle, process windows.Handle, thread windows.Handle) {
 	_ = windows.TerminateJobObject(job, 0)
 	_, _ = windows.WaitForSingleObject(process, uint32((5 * time.Second).Milliseconds()))
@@ -226,13 +226,13 @@ func closeChromeProcess(job windows.Handle, process windows.Handle, thread windo
 	windows.CloseHandle(process)
 }
 
-// temporaryEnvValue 保存父进程环境变量原值
+// temporaryEnvValue saves the original environment variable value of the parent process.
 type temporaryEnvValue struct {
 	value string
 	set   bool
 }
 
-// setTemporaryEnv 设置子进程继承用环境变量
+// setTemporaryEnv sets environment variables to be inherited by child processes.
 func setTemporaryEnv(values map[string]string) func() {
 	oldValues := make(map[string]temporaryEnvValue, len(values))
 	for key, value := range values {
@@ -251,7 +251,7 @@ func setTemporaryEnv(values map[string]string) func() {
 	}
 }
 
-// startHiddenChrome 创建隐藏的独立临时 Chrome
+// startHiddenChrome creates an isolated, hidden temporary Chrome instance.
 func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, windows.Handle, error) {
 	commandLine := strings.Join([]string{
 		quoteWindowsArg(chromePath),
@@ -269,11 +269,11 @@ func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, wi
 	}, " ")
 	commandLineUTF16, err := windows.UTF16PtrFromString(commandLine)
 	if err != nil {
-		return 0, 0, fmt.Errorf("编码 Chrome 命令行: %w", err)
+		return 0, 0, fmt.Errorf("encode Chrome command line: %w", err)
 	}
 	chromePathUTF16, err := windows.UTF16PtrFromString(chromePath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("编码 Chrome 路径: %w", err)
+		return 0, 0, fmt.Errorf("encode Chrome path: %w", err)
 	}
 	startupInfo := windows.StartupInfo{
 		Flags:      startfUseShowWindow,
@@ -293,23 +293,23 @@ func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, wi
 		&processInfo,
 	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("启动独立临时 Chrome: %w", err)
+		return 0, 0, fmt.Errorf("start isolated temporary Chrome: %w", err)
 	}
 	return processInfo.Process, processInfo.Thread, nil
 }
 
-// injectDLL 通过 LoadLibraryW 载入 helper
+// injectDLL loads the helper via LoadLibraryW.
 func injectDLL(process windows.Handle, dllPath string) error {
 	encodedPath, err := windows.UTF16FromString(dllPath)
 	if err != nil {
-		return fmt.Errorf("编码 ABE helper 路径: %w", err)
+		return fmt.Errorf("encode ABE helper path: %w", err)
 	}
 	size := uintptr(len(encodedPath) * 2)
 	remotePath, _, callErr := procVirtualAllocEx.Call(
 		uintptr(process), 0, size, memCommit|memReserve, pageReadwrite,
 	)
 	if remotePath == 0 {
-		return fmt.Errorf("VirtualAllocEx 失败: %w", callErr)
+		return fmt.Errorf("VirtualAllocEx failed: %w", callErr)
 	}
 	var written uintptr
 	ok, _, callErr := procWriteProcessMemory.Call(
@@ -320,7 +320,7 @@ func injectDLL(process windows.Handle, dllPath string) error {
 		uintptr(unsafe.Pointer(&written)),
 	)
 	if ok == 0 || written != size {
-		return fmt.Errorf("WriteProcessMemory 失败: %w", callErr)
+		return fmt.Errorf("WriteProcessMemory failed: %w", callErr)
 	}
 	thread, _, callErr := procCreateRemoteThread.Call(
 		uintptr(process),
@@ -332,17 +332,17 @@ func injectDLL(process windows.Handle, dllPath string) error {
 		0,
 	)
 	if thread == 0 {
-		return fmt.Errorf("CreateRemoteThread 失败: %w", callErr)
+		return fmt.Errorf("CreateRemoteThread failed: %w", callErr)
 	}
 	threadHandle := windows.Handle(thread)
 	defer windows.CloseHandle(threadHandle)
 	if _, err := windows.WaitForSingleObject(threadHandle, uint32((10 * time.Second).Milliseconds())); err != nil {
-		return fmt.Errorf("等待 ABE helper 注入: %w", err)
+		return fmt.Errorf("wait for ABE helper injection: %w", err)
 	}
 	return nil
 }
 
-// quoteWindowsArg 包裹 Windows 命令行参数
+// quoteWindowsArg wraps a Windows command line argument.
 func quoteWindowsArg(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 }
