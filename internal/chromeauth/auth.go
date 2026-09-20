@@ -18,7 +18,7 @@ const (
 	userAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 )
 
-// Account 描述本机 Chrome 中可发现的 Google 账号
+// Account describes a discoverable Google account in local Chrome.
 type Account struct {
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
@@ -27,7 +27,7 @@ type Account struct {
 	Importable  bool   `json:"importable"`
 }
 
-// ImportOptions 保存 Chrome 批量导入参数
+// ImportOptions holds parameters for batch importing Chrome accounts.
 type ImportOptions struct {
 	ChromeRoot string
 	Proxy      string
@@ -35,7 +35,7 @@ type ImportOptions struct {
 	Emails     []string
 }
 
-// ImportResult 返回一个已验证前的账号状态
+// ImportResult represents an account state before verification.
 type ImportResult struct {
 	Profile     string
 	DisplayName string
@@ -45,17 +45,17 @@ type ImportResult struct {
 	State       aistudio.StorageState
 }
 
-// DefaultChromeRoot 返回稳定版 Chrome User Data 目录
+// DefaultChromeRoot returns the default Chrome User Data directory for the stable channel.
 func DefaultChromeRoot() (string, error) {
 	return defaultChromeRoot()
 }
 
-// Discover 只读列出本机 Chrome Google 账号
+// Discover lists local Chrome Google accounts in read-only mode.
 func Discover(chromeRoot string) ([]Account, error) {
 	return discoverPlatform(chromeRoot)
 }
 
-// Import 通过设备绑定 OAuth 材料生成 Playwright storage state
+// Import generates Playwright storage state using device-bound OAuth credentials.
 func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) {
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err
@@ -77,20 +77,20 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 		return nil, err
 	}
 	if len(masterKey) != 32 {
-		return nil, fmt.Errorf("Chrome v20 主密钥长度异常")
+		return nil, fmt.Errorf("invalid Chrome v20 master key length")
 	}
 	results := make([]ImportResult, 0, len(selected))
 	for _, account := range selected {
 		result, err := importAccount(ctx, options.ChromeRoot, proxyURL, account, masterKey)
 		if err != nil {
-			return nil, fmt.Errorf("导入 %s: %w", account.Profile, err)
+			return nil, fmt.Errorf("import %s: %w", account.Profile, err)
 		}
 		results = append(results, result)
 	}
 	return results, nil
 }
 
-// Refresh 使用保存的设备绑定材料重新签发 Google Cookie
+// Refresh reissues Google cookies using stored device-bound credentials.
 func Refresh(ctx context.Context, material aistudio.ChromeOAuthMaterial, proxy string) ([]aistudio.StateCookie, error) {
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err
@@ -140,7 +140,7 @@ func selectAccounts(accounts []Account, profiles []string, emails []string) ([]A
 	requestedProfiles := normalizedSet(profiles)
 	requestedEmails := normalizedSet(emails)
 	if len(requestedProfiles) == 0 && len(requestedEmails) == 0 {
-		return nil, fmt.Errorf("未选择 Chrome 账号")
+		return nil, fmt.Errorf("no Chrome accounts selected")
 	}
 	selected := make([]Account, 0, len(accounts))
 	foundProfiles := make(map[string]struct{})
@@ -154,20 +154,20 @@ func selectAccounts(accounts []Account, profiles []string, emails []string) ([]A
 			continue
 		}
 		if !account.Importable {
-			return nil, fmt.Errorf("%s 缺少可导入的 OAuth 认证材料", account.Profile)
+			return nil, fmt.Errorf("%s missing importable OAuth credentials", account.Profile)
 		}
 		if !strings.Contains(email, "@") {
-			return nil, fmt.Errorf("%s 缺少账号邮箱", account.Profile)
+			return nil, fmt.Errorf("%s missing account email", account.Profile)
 		}
 		selected = append(selected, account)
 		foundProfiles[profile] = struct{}{}
 		foundEmails[email] = struct{}{}
 	}
 	if missing := missingValues(requestedProfiles, foundProfiles); len(missing) != 0 {
-		return nil, fmt.Errorf("找不到 Chrome Profile: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("Chrome profile not found: %s", strings.Join(missing, ", "))
 	}
 	if missing := missingValues(requestedEmails, foundEmails); len(missing) != 0 {
-		return nil, fmt.Errorf("找不到 Chrome 账号: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("Chrome account not found: %s", strings.Join(missing, ", "))
 	}
 	return selected, nil
 }
@@ -201,35 +201,35 @@ func validateProxy(value string) (string, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("proxy 必须是 http、https 或 socks5 URL")
+		return "", fmt.Errorf("proxy must be an http, https, or socks5 URL")
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https", "socks5":
 		return value, nil
 	default:
-		return "", fmt.Errorf("proxy 必须是 http、https 或 socks5 URL")
+		return "", fmt.Errorf("proxy must be an http, https, or socks5 URL")
 	}
 }
 
 func decryptV20Token(masterKey []byte, encrypted []byte) (string, error) {
 	if len(encrypted) < 3+12+16 || string(encrypted[:3]) != "v20" {
-		return "", fmt.Errorf("refresh token 密文版本不是 v20")
+		return "", fmt.Errorf("refresh token ciphertext version is not v20")
 	}
 	block, err := aes.NewCipher(masterKey)
 	if err != nil {
-		return "", fmt.Errorf("创建 AES 解密器: %w", err)
+		return "", fmt.Errorf("create AES cipher: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("创建 GCM 解密器: %w", err)
+		return "", fmt.Errorf("create GCM cipher: %w", err)
 	}
 	plaintext, err := gcm.Open(nil, encrypted[3:15], encrypted[15:], nil)
 	if err != nil {
-		return "", fmt.Errorf("refresh token 解密失败")
+		return "", fmt.Errorf("failed to decrypt refresh token")
 	}
 	token := string(plaintext)
 	if len(token) != 103 || !strings.HasPrefix(token, "1//0") {
-		return "", fmt.Errorf("refresh token 解密结果格式异常")
+		return "", fmt.Errorf("invalid decrypted refresh token format")
 	}
 	return token, nil
 }

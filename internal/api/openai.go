@@ -294,7 +294,7 @@ func openAITextContent(raw json.RawMessage) (string, error) {
 	return text.String(), nil
 }
 
-// openAIContentParts 转换文本与媒体并省略空文本占位
+// openAIContentParts converts text and media, omitting empty text placeholders.
 func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -593,7 +593,7 @@ func decodeStopSequences(raw json.RawMessage) ([]string, error) {
 	return normalizeStopSequences(multiple), nil
 }
 
-// normalizeStopSequences 删除不会形成停止条件的空字符串
+// normalizeStopSequences removes empty strings that do not form stop conditions.
 func normalizeStopSequences(values []string) []string {
 	var normalized []string
 	for _, value := range values {

@@ -8,7 +8,7 @@ import (
 
 var youtubeURLPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
 
-// ExternalMediaForURL 返回 AI Studio 可直接读取的外部媒体
+// ExternalMediaForURL returns external media directly readable by AI Studio
 func ExternalMediaForURL(raw string) (*ExternalMedia, bool) {
 	raw = strings.TrimRight(strings.TrimSpace(raw), ".,;:!?)]}")
 	parsed, err := url.Parse(raw)

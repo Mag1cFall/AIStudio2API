@@ -10,7 +10,7 @@ import (
 	"unicode"
 )
 
-// ProtocolEvidenceError 保存无法解释的协议位置和原始值
+// ProtocolEvidenceError stores unexplainable protocol positions and raw values
 type ProtocolEvidenceError struct {
 	Method string
 	Path   string
@@ -18,26 +18,26 @@ type ProtocolEvidenceError struct {
 	Raw    json.RawMessage
 }
 
-// PromptFeedbackError 表示上游拒绝当前输入且没有返回候选
+// PromptFeedbackError indicates that upstream rejected the prompt and returned no candidates
 type PromptFeedbackError struct {
 	Reason string
 	Raw    json.RawMessage
 }
 
-// Error 返回协议证据错误
+// Error returns the protocol evidence error
 func (e *ProtocolEvidenceError) Error() string {
 	if e.Method == "" {
-		return fmt.Sprintf("协议位置 %s: %s", e.Path, e.Detail)
+		return fmt.Sprintf("protocol path %s: %s", e.Path, e.Detail)
 	}
-	return fmt.Sprintf("AI Studio %s 协议位置 %s: %s", e.Method, e.Path, e.Detail)
+	return fmt.Sprintf("AI Studio %s protocol path %s: %s", e.Method, e.Path, e.Detail)
 }
 
-// Error 返回上游输入拒绝原因
+// Error returns the reason for upstream prompt rejection
 func (e *PromptFeedbackError) Error() string {
-	return fmt.Sprintf("AI Studio 拒绝当前输入: %s", e.Reason)
+	return fmt.Sprintf("AI Studio rejected prompt: %s", e.Reason)
 }
 
-// Unwrap 将输入拒绝映射为无效请求
+// Unwrap maps prompt rejection to invalid argument
 func (e *PromptFeedbackError) Unwrap() error {
 	return ErrInvalidArgument
 }
@@ -118,7 +118,7 @@ func decodeJSONValue(raw []byte) (json.RawMessage, error) {
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return nil, fmt.Errorf("JSON+protobuf 包含多个根值")
+			return nil, fmt.Errorf("JSON+protobuf contains multiple root values")
 		}
 		return nil, err
 	}
@@ -133,17 +133,17 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: err.Error()}
 	}
 	if delimiter, ok := rootStart.(json.Delim); !ok || delimiter != '[' {
-		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "根值不是数组"}
+		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "root value is not an array"}
 	}
 	if !decoder.More() {
-		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "根数组缺少 field 1"}
+		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "root array missing field 1"}
 	}
 	fieldStart, err := decoder.Token()
 	if err != nil {
 		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: err.Error()}
 	}
 	if delimiter, ok := fieldStart.(json.Delim); !ok || delimiter != '[' {
-		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: "field 1 不是 repeated 数组"}
+		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: "field 1 is not a repeated array"}
 	}
 	index := 0
 	for decoder.More() {
@@ -160,7 +160,7 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		if err != nil {
 			return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: err.Error()}
 		}
-		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: "field 1 没有正常结束"}
+		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$[0]", Detail: "field 1 did not close properly"}
 	}
 	fieldIndex := 1
 	for decoder.More() {
@@ -174,12 +174,12 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		if err != nil {
 			return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: err.Error()}
 		}
-		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "根数组没有正常结束"}
+		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "root array did not close properly"}
 	}
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "响应后存在第二个根值", Raw: extra}
+			return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: "extra root value after response", Raw: extra}
 		}
 		return &ProtocolEvidenceError{Method: "GenerateContent", Path: "$", Detail: err.Error()}
 	}
@@ -191,7 +191,7 @@ func rawArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]jso
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&values); err != nil {
-		return nil, &ProtocolEvidenceError{Path: path, Detail: "期望数组", Raw: cloneEvidence(raw, evidence)}
+		return nil, &ProtocolEvidenceError{Path: path, Detail: "expected array", Raw: cloneEvidence(raw, evidence)}
 	}
 	return values, nil
 }
@@ -199,7 +199,7 @@ func rawArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]jso
 func rawString(raw json.RawMessage, path string, evidence json.RawMessage) (string, error) {
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", &ProtocolEvidenceError{Path: path, Detail: "期望字符串", Raw: cloneEvidence(raw, evidence)}
+		return "", &ProtocolEvidenceError{Path: path, Detail: "expected string", Raw: cloneEvidence(raw, evidence)}
 	}
 	return value, nil
 }
@@ -209,11 +209,11 @@ func rawInt64(raw json.RawMessage, path string, evidence json.RawMessage) (int64
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&number); err != nil {
-		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望整数", Raw: cloneEvidence(raw, evidence)}
+		return 0, &ProtocolEvidenceError{Path: path, Detail: "expected integer", Raw: cloneEvidence(raw, evidence)}
 	}
 	value, err := strconv.ParseInt(number.String(), 10, 64)
 	if err != nil {
-		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望整数", Raw: cloneEvidence(raw, evidence)}
+		return 0, &ProtocolEvidenceError{Path: path, Detail: "expected integer", Raw: cloneEvidence(raw, evidence)}
 	}
 	return value, nil
 }
@@ -223,11 +223,11 @@ func rawFloat64(raw json.RawMessage, path string, evidence json.RawMessage) (flo
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&number); err != nil {
-		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望数字", Raw: cloneEvidence(raw, evidence)}
+		return 0, &ProtocolEvidenceError{Path: path, Detail: "expected number", Raw: cloneEvidence(raw, evidence)}
 	}
 	value, err := strconv.ParseFloat(number.String(), 64)
 	if err != nil {
-		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望数字", Raw: cloneEvidence(raw, evidence)}
+		return 0, &ProtocolEvidenceError{Path: path, Detail: "expected number", Raw: cloneEvidence(raw, evidence)}
 	}
 	return value, nil
 }
@@ -241,7 +241,7 @@ func rawBool(raw json.RawMessage, path string, evidence json.RawMessage) (bool, 
 	}
 	var value bool
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return false, &ProtocolEvidenceError{Path: path, Detail: "期望布尔值", Raw: cloneEvidence(raw, evidence)}
+		return false, &ProtocolEvidenceError{Path: path, Detail: "expected boolean", Raw: cloneEvidence(raw, evidence)}
 	}
 	return value, nil
 }

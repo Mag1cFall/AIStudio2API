@@ -14,7 +14,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 		return nil, true, nil
 	case "", "auto":
 	default:
-		return nil, false, fmt.Errorf("tool choice 只支持 auto 或 none")
+		return nil, false, fmt.Errorf("tool choice only supports auto or none")
 	}
 	if len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil {
 		return nil, false, nil
@@ -25,7 +25,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 		for index, declaration := range tools.Functions {
 			encoded, err := encodeFunctionDeclaration(declaration)
 			if err != nil {
-				return nil, false, fmt.Errorf("编码 function declaration %d: %w", index, err)
+				return nil, false, fmt.Errorf("encode function declaration %d: %w", index, err)
 			}
 			declarations = append(declarations, encoded)
 		}
@@ -63,7 +63,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 			tool[10] = []any{}
 			wire = append(wire, tool)
 		default:
-			return nil, false, fmt.Errorf("未知 Google tool %q", name)
+			return nil, false, fmt.Errorf("unknown Google tool %q", name)
 		}
 	}
 	if searchRequested && !searchEncoded {
@@ -108,7 +108,7 @@ func encodeGoogleTimestamp(value time.Time) []any {
 
 func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if declaration.Name == "" {
-		return nil, fmt.Errorf("function declaration 缺少名称")
+		return nil, fmt.Errorf("function declaration missing name")
 	}
 	length := 1
 	if declaration.Description != "" {
@@ -143,7 +143,7 @@ func hasMethod(model Model, method string) bool {
 
 func validateFunctionCall(call *FunctionCall) error {
 	if call == nil || call.Name == "" {
-		return fmt.Errorf("function call 缺少名称")
+		return fmt.Errorf("function call missing name")
 	}
 	return nil
 }
@@ -154,7 +154,7 @@ func decodeFunctionCall(raw json.RawMessage, path string, evidence json.RawMessa
 		return FunctionCall{}, withMethod(err, "GenerateContent")
 	}
 	if len(values) == 0 {
-		return FunctionCall{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "function call 缺少名称", Raw: raw}
+		return FunctionCall{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "function call missing name", Raw: raw}
 	}
 	name, err := rawString(values[0], path+"[0]", raw)
 	if err != nil {
@@ -184,7 +184,7 @@ func decodeFunctionCall(raw json.RawMessage, path string, evidence json.RawMessa
 func encodeWireStructJSON(raw json.RawMessage) ([]any, error) {
 	var object map[string]any
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return nil, fmt.Errorf("必须是 JSON object")
+		return nil, fmt.Errorf("must be a JSON object")
 	}
 	return encodeWireStruct(object), nil
 }
@@ -224,7 +224,7 @@ func encodeWireValue(value any) []any {
 		}
 		return []any{nil, nil, nil, nil, nil, []any{values}}
 	default:
-		panic(fmt.Sprintf("json.Unmarshal 返回未识别类型 %T", value))
+		panic(fmt.Sprintf("json.Unmarshal returned unrecognized type %T", value))
 	}
 }
 
@@ -235,7 +235,7 @@ func decodeWireStruct(raw json.RawMessage, path string, evidence json.RawMessage
 	}
 	encoded, err := json.Marshal(object)
 	if err != nil {
-		return nil, fmt.Errorf("编码 function arguments: %w", err)
+		return nil, fmt.Errorf("encode function arguments: %w", err)
 	}
 	return encoded, nil
 }
@@ -261,7 +261,7 @@ func decodeWireStructObject(raw json.RawMessage, path string, evidence json.RawM
 			return nil, withMethod(err, "GenerateContent")
 		}
 		if len(entry) != 2 {
-			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: entryPath, Detail: "Struct map entry 字段数量错误", Raw: evidence}
+			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: entryPath, Detail: "invalid field count for Struct map entry", Raw: evidence}
 		}
 		key, err := rawString(entry[0], entryPath+"[0]", evidence)
 		if err != nil {
@@ -285,7 +285,7 @@ func decodeWireValue(raw json.RawMessage, path string, evidence json.RawMessage)
 	for index := 0; index < 6; index++ {
 		if !isJSONNull(rawAt(fields, index)) {
 			if variant >= 0 {
-				return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "Value 同时设置多个 oneof 字段", Raw: evidence}
+				return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "Value has multiple oneof fields set", Raw: evidence}
 			}
 			variant = index
 		}
@@ -294,13 +294,13 @@ func decodeWireValue(raw json.RawMessage, path string, evidence json.RawMessage)
 	case 0:
 		code, err := rawInt64(fields[0], path+"[0]", evidence)
 		if err != nil || code != 0 {
-			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: "null Value 枚举无效", Raw: evidence}
+			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: "invalid null Value enum", Raw: evidence}
 		}
 		return nil, nil
 	case 1:
 		var number float64
 		if err := json.Unmarshal(fields[1], &number); err != nil {
-			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[1]", Detail: "number Value 无效", Raw: evidence}
+			return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[1]", Detail: "invalid number Value", Raw: evidence}
 		}
 		return number, nil
 	case 2:
@@ -320,7 +320,7 @@ func decodeWireValue(raw json.RawMessage, path string, evidence json.RawMessage)
 	case 5:
 		return decodeWireList(fields[5], path+"[5]", evidence)
 	default:
-		return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "Value 缺少 oneof 字段", Raw: evidence}
+		return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "Value missing oneof field", Raw: evidence}
 	}
 }
 

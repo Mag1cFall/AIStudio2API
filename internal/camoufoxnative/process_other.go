@@ -10,12 +10,12 @@ import (
 	"syscall"
 )
 
-// configureBrowserProcess 将 Camoufox 隔离到独立进程组
+// configureBrowserProcess isolates Camoufox into an independent process group.
 func configureBrowserProcess(command *exec.Cmd, _ bool) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-// terminateBrowserProcess 结束 Camoufox 进程组
+// terminateBrowserProcess terminates the Camoufox process group.
 func terminateBrowserProcess(ctx context.Context, command *exec.Cmd) error {
 	if command == nil || command.Process == nil {
 		return nil

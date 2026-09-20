@@ -31,20 +31,20 @@ type ncryptDeviceKey struct {
 func openDeviceBindingKey(wrappedKey []byte) (deviceBindingKey, error) {
 	providerName, err := windows.UTF16PtrFromString("Microsoft Platform Crypto Provider")
 	if err != nil {
-		return nil, fmt.Errorf("编码 NCrypt Provider 名称: %w", err)
+		return nil, fmt.Errorf("encode NCrypt provider name: %w", err)
 	}
 	var provider uintptr
 	status, _, _ := ncryptOpenStorageProvider.Call(
 		uintptr(unsafe.Pointer(&provider)), uintptr(unsafe.Pointer(providerName)), 0,
 	)
 	if uint32(status) != 0 {
-		return nil, fmt.Errorf("NCryptOpenStorageProvider 返回 %d", int32(status))
+		return nil, fmt.Errorf("NCryptOpenStorageProvider returned %d", int32(status))
 	}
 	key := &ncryptDeviceKey{provider: provider}
 	blobType, err := windows.UTF16PtrFromString("OpaqueKeyBlob")
 	if err != nil {
 		key.Close()
-		return nil, fmt.Errorf("编码 NCrypt Blob 类型: %w", err)
+		return nil, fmt.Errorf("encode NCrypt blob type: %w", err)
 	}
 	status, _, _ = ncryptImportKey.Call(
 		key.provider,
@@ -59,7 +59,7 @@ func openDeviceBindingKey(wrappedKey []byte) (deviceBindingKey, error) {
 	runtime.KeepAlive(wrappedKey)
 	if uint32(status) != 0 {
 		key.Close()
-		return nil, fmt.Errorf("NCryptImportKey 返回 %d", int32(status))
+		return nil, fmt.Errorf("NCryptImportKey returned %d", int32(status))
 	}
 	return key, nil
 }
@@ -67,7 +67,7 @@ func openDeviceBindingKey(wrappedKey []byte) (deviceBindingKey, error) {
 func (key *ncryptDeviceKey) PublicKey() (*ecdsa.PublicKey, []byte, error) {
 	blobType, err := windows.UTF16PtrFromString("ECCPUBLICBLOB")
 	if err != nil {
-		return nil, nil, fmt.Errorf("编码 NCrypt 公钥类型: %w", err)
+		return nil, nil, fmt.Errorf("encode NCrypt public key type: %w", err)
 	}
 	var size uint32
 	status, _, _ := ncryptExportKey.Call(
@@ -75,7 +75,7 @@ func (key *ncryptDeviceKey) PublicKey() (*ecdsa.PublicKey, []byte, error) {
 		uintptr(unsafe.Pointer(&size)), 0,
 	)
 	if uint32(status) != 0 {
-		return nil, nil, fmt.Errorf("NCryptExportKey 查询返回 %d", int32(status))
+		return nil, nil, fmt.Errorf("NCryptExportKey query returned %d", int32(status))
 	}
 	output := make([]byte, size)
 	status, _, _ = ncryptExportKey.Call(
@@ -84,7 +84,7 @@ func (key *ncryptDeviceKey) PublicKey() (*ecdsa.PublicKey, []byte, error) {
 	)
 	runtime.KeepAlive(output)
 	if uint32(status) != 0 {
-		return nil, nil, fmt.Errorf("NCryptExportKey 返回 %d", int32(status))
+		return nil, nil, fmt.Errorf("NCryptExportKey returned %d", int32(status))
 	}
 	return parsePublicKeyBlob(output[:size])
 }
@@ -97,7 +97,7 @@ func (key *ncryptDeviceKey) SignSHA256(value []byte) ([]byte, error) {
 		0, 0, uintptr(unsafe.Pointer(&size)), ncryptSilentFlag,
 	)
 	if uint32(status) != 0 {
-		return nil, fmt.Errorf("NCryptSignHash 查询返回 %d", int32(status))
+		return nil, fmt.Errorf("NCryptSignHash query returned %d", int32(status))
 	}
 	output := make([]byte, size)
 	status, _, _ = ncryptSignHash.Call(
@@ -106,7 +106,7 @@ func (key *ncryptDeviceKey) SignSHA256(value []byte) ([]byte, error) {
 	)
 	runtime.KeepAlive(output)
 	if uint32(status) != 0 {
-		return nil, fmt.Errorf("NCryptSignHash 返回 %d", int32(status))
+		return nil, fmt.Errorf("NCryptSignHash returned %d", int32(status))
 	}
 	return output[:size], nil
 }

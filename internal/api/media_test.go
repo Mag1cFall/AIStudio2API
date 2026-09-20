@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestGeminiInlineDataCompatibility 验证不同 SDK 的内联媒体字段与 Base64 形式
+// TestGeminiInlineDataCompatibility verifies inline media fields and Base64 formats across different SDKs.
 func TestGeminiInlineDataCompatibility(t *testing.T) {
 	want := []byte{0xfb, 0xff, 0xef}
 	for _, test := range []struct {

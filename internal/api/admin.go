@@ -9,7 +9,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// AdminService 定义管理端需要的权威状态能力
+// AdminService defines authoritative state operations required by the admin interface.
 type AdminService interface {
 	Status(context.Context) (AdminStatus, error)
 	Accounts(context.Context) ([]AdminAccount, error)
@@ -33,7 +33,7 @@ type AdminService interface {
 	RecordAccessLog(AccessLog)
 }
 
-// AdminStatus 表示管理端运行状态
+// AdminStatus represents the operational status of the admin interface.
 type AdminStatus struct {
 	State          string             `json:"state"`
 	Running        bool               `json:"running"`
@@ -43,7 +43,7 @@ type AdminStatus struct {
 	Accounts       AdminAccountCounts `json:"accounts"`
 }
 
-// AdminLog 表示管理页面展示的一条运行日志
+// AdminLog represents a runtime log entry displayed on the admin page.
 type AdminLog struct {
 	Time    time.Time   `json:"time"`
 	Level   string      `json:"level"`
@@ -53,7 +53,7 @@ type AdminLog struct {
 	Request *RequestLog `json:"request,omitempty"`
 }
 
-// RequestLog 保存可关联的请求状态、用量与诊断字段
+// RequestLog holds correlatable request status, usage, and diagnostic fields.
 type RequestLog struct {
 	ID              string            `json:"id"`
 	State           string            `json:"state"`
@@ -76,7 +76,7 @@ type RequestLog struct {
 	UpstreamBytes   int64             `json:"upstream_bytes,omitempty"`
 }
 
-// RequestLogUsage 区分输入、思考、回复与端到端输出速率
+// RequestLogUsage distinguishes input, thinking, reply, and end-to-end output token rates.
 type RequestLogUsage struct {
 	InputTokens            int64   `json:"input_tokens"`
 	ReasoningTokens        int64   `json:"reasoning_tokens"`
@@ -86,7 +86,7 @@ type RequestLogUsage struct {
 	AverageTokensPerSecond float64 `json:"average_tokens_per_second"`
 }
 
-// AccessLog 表示一次公开 API 请求的最终访问记录
+// AccessLog represents the final access record for a public API request.
 type AccessLog struct {
 	Status          int
 	Latency         time.Duration
@@ -114,7 +114,7 @@ type AccessLog struct {
 	Generation      bool
 }
 
-// AdminAccountCounts 表示账户状态计数
+// AdminAccountCounts represents account status counts.
 type AdminAccountCounts struct {
 	Total        int `json:"total"`
 	Ready        int `json:"ready"`
@@ -123,7 +123,7 @@ type AdminAccountCounts struct {
 	AuthRequired int `json:"auth_required"`
 }
 
-// AdminAccount 表示管理端账户摘要
+// AdminAccount represents an admin account summary.
 type AdminAccount struct {
 	ID          string   `json:"id"`
 	Label       string   `json:"label"`
@@ -137,7 +137,7 @@ type AdminAccount struct {
 	Message     string   `json:"message"`
 }
 
-// AccountInput 表示已有账户配置
+// AccountInput represents an existing account configuration.
 type AccountInput struct {
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`
@@ -146,14 +146,14 @@ type AccountInput struct {
 	Timezone string `json:"timezone"`
 }
 
-// AccountCreateInput 表示浏览器登录的账户环境
+// AccountCreateInput represents the account environment for browser login.
 type AccountCreateInput struct {
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
 	Timezone string `json:"timezone"`
 }
 
-// ChromeImportProfile 表示可从本机 Chrome 导入的账号
+// ChromeImportProfile represents an account that can be imported from local Chrome.
 type ChromeImportProfile struct {
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
@@ -161,7 +161,7 @@ type ChromeImportProfile struct {
 	Locale      string `json:"locale"`
 }
 
-// ChromeImportInput 表示批量导入的 Chrome Profile 与账户环境
+// ChromeImportInput represents Chrome profiles and account environment for batch import.
 type ChromeImportInput struct {
 	Profiles []string `json:"profiles"`
 	Proxy    string   `json:"proxy"`
@@ -169,7 +169,7 @@ type ChromeImportInput struct {
 	Timezone string   `json:"timezone"`
 }
 
-// RuntimeConfig 表示全局运行配置
+// RuntimeConfig represents global runtime configuration.
 type RuntimeConfig struct {
 	AuthStates                string `json:"auth_states"`
 	ListenAddr                string `json:"listen_addr"`
@@ -189,7 +189,7 @@ type RuntimeConfig struct {
 	TemporaryChat             bool   `json:"temporary_chat"`
 }
 
-// AdminCooldown 表示账户模型冷却
+// AdminCooldown represents account model cooldown.
 type AdminCooldown struct {
 	AccountID    string    `json:"account_id"`
 	AccountLabel string    `json:"account_label"`
@@ -198,7 +198,7 @@ type AdminCooldown struct {
 	Reason       string    `json:"reason,omitempty"`
 }
 
-// AdminRequest 表示活动请求摘要
+// AdminRequest represents an active request summary.
 type AdminRequest struct {
 	ID           string    `json:"id"`
 	Model        string    `json:"model"`
@@ -208,7 +208,7 @@ type AdminRequest struct {
 	StartedAt    time.Time `json:"started_at"`
 }
 
-// AdminEvent 表示管理端增量事件
+// AdminEvent represents an incremental admin event.
 type AdminEvent struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`

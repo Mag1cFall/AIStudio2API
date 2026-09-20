@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// ProtectedResponse 表示由固定指纹浏览器流式返回的 MakerSuite 响应
+// ProtectedResponse represents the MakerSuite response streamed from a fixed-fingerprint browser.
 type ProtectedResponse struct {
 	StatusCode int
 	Header     http.Header
@@ -34,7 +34,7 @@ type protectedChunk struct {
 	Error string   `json:"error"`
 }
 
-// SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹
+// SendProtected sends a request via the fixed-fingerprint Camoufox page, preserving native TLS, HTTP/2, headers, cookies, and page fingerprint.
 func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*ProtectedResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()
-		return nil, errors.New("Camoufox runtime 已关闭")
+		return nil, errors.New("Camoufox runtime is closed")
 	}
 	client := worker.client
 	contextID := worker.contextID
@@ -51,7 +51,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	encodedURL, _ := json.Marshal(rawURL)
 	encodedHeaders, err := json.Marshal(browserRequestHeaders(headers))
 	if err != nil {
-		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
+		return nil, fmt.Errorf("encoding browser request headers: %w", err)
 	}
 	encodedBody, _ := json.Marshal(string(body))
 	requestID := rand.Text()
@@ -99,7 +99,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	_, err = client.evaluateBool(startCtx, contextID, expression)
 	cancelStart()
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("浏览器发送受保护请求: %w", err), worker.cancelProtectedRequest(requestID))
+		return nil, errors.Join(fmt.Errorf("sending protected request via browser: %w", err), worker.cancelProtectedRequest(requestID))
 	}
 	metadata, err := worker.waitProtectedHeaders(ctx, requestID)
 	if err != nil {
@@ -122,7 +122,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	}, nil
 }
 
-// waitProtectedHeaders 通过短命令读取异步请求的响应头
+// waitProtectedHeaders reads the response headers of an asynchronous request via short-polling commands.
 func (worker *Worker) waitProtectedHeaders(ctx context.Context, requestID string) (protectedResponseMetadata, error) {
 	encodedID, _ := json.Marshal(requestID)
 	expression := fmt.Sprintf(`(() => {
@@ -141,7 +141,7 @@ func (worker *Worker) waitProtectedHeaders(ctx context.Context, requestID string
 		}
 		var metadata protectedResponseMetadata
 		if err := json.Unmarshal([]byte(value), &metadata); err != nil {
-			return metadata, fmt.Errorf("解析浏览器响应元数据: %w", err)
+			return metadata, fmt.Errorf("parsing browser response metadata: %w", err)
 		}
 		if metadata.Status > 0 {
 			return metadata, nil
@@ -175,18 +175,18 @@ func browserRequestHeaders(headers http.Header) [][2]string {
 	return result
 }
 
-// StorageCookies 导出当前固定指纹浏览器 Cookie，供账户状态签名和持久化
+// StorageCookies exports the current fixed-fingerprint browser cookies for account state signing and persistence.
 func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()
-		return nil, errors.New("Camoufox runtime 已关闭")
+		return nil, errors.New("Camoufox runtime is closed")
 	}
 	client := worker.client
 	worker.mu.Unlock()
 	result, err := client.command(ctx, "storage.getCookies", map[string]any{})
 	if err != nil {
-		return nil, fmt.Errorf("导出浏览器 Cookie: %w", err)
+		return nil, fmt.Errorf("exporting browser cookies: %w", err)
 	}
 	items, _ := result["cookies"].([]any)
 	cookies := make([]storageCookie, 0, len(items))
@@ -242,7 +242,7 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 		for _, data := range chunk.Data {
 			body.buffer, err = base64.StdEncoding.AppendDecode(body.buffer, []byte(data))
 			if err != nil {
-				return 0, fmt.Errorf("解码浏览器响应块: %w", err)
+				return 0, fmt.Errorf("decoding browser response chunk: %w", err)
 			}
 		}
 		body.done = chunk.Done
@@ -299,7 +299,7 @@ func (worker *Worker) readProtectedChunk(requestID string) (protectedChunk, erro
 	}
 	var chunk protectedChunk
 	if err := json.Unmarshal([]byte(value), &chunk); err != nil {
-		return protectedChunk{}, fmt.Errorf("解析浏览器响应块: %w", err)
+		return protectedChunk{}, fmt.Errorf("parsing browser response chunk: %w", err)
 	}
 	return chunk, nil
 }

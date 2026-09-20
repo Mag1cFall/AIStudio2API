@@ -39,17 +39,17 @@ func (err *bidiBackchannelNetworkError) Unwrap() error {
 	return err.err
 }
 
-// BidiService 创建 Gemini Live 或 Robotics Streaming 会话
+// BidiService creates Gemini Live or Robotics Streaming sessions
 type BidiService interface {
 	OpenBidi(context.Context, BidiRequest) (*BidiSession, error)
 }
 
-// BidiProtectedTransport 建立持有当前账户租约的 WebChannel 会话
+// BidiProtectedTransport establishes WebChannel sessions holding the current account lease
 type BidiProtectedTransport interface {
 	OpenBidiProtected(context.Context, BidiRequest, RequestContext, *AccountLease, func() error) (*BidiSession, error)
 }
 
-// BidiSession 保存一条 Google WebChannel 双向会话
+// BidiSession stores a Google WebChannel bidirectional session
 type BidiSession struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
@@ -91,11 +91,11 @@ type BidiSession struct {
 var _ BidiService = (*PooledService)(nil)
 var _ BidiProtectedTransport = (*WorkerProtectedTransport)(nil)
 
-// OpenBidi 使用支持目标模型的账户创建双向会话
+// OpenBidi creates a bidirectional session using an account that supports the target model
 func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*BidiSession, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
-		return nil, fmt.Errorf("%w: bidi model 不能为空", ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: bidi model cannot be empty", ErrInvalidArgument)
 	}
 	modelAccessScope := strings.TrimSpace(request.ModelAccessScope)
 	if modelAccessScope == "" {
@@ -104,7 +104,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 	request.ModelAccessScope = modelAccessScope
 	transport, ok := s.client.protected.(BidiProtectedTransport)
 	if !ok {
-		return nil, fmt.Errorf("AI Studio protected transport 不支持 bidiGenerateContent")
+		return nil, fmt.Errorf("AI Studio protected transport does not support bidiGenerateContent")
 	}
 	selection := AccountSelection{
 		ModelID: modelID, Method: "bidiGenerateContent", AccountID: strings.TrimSpace(request.AccountID),
@@ -141,7 +141,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 				if owned {
 					err = errors.Join(err, lease.Release())
 				}
-				return nil, fmt.Errorf("读取 AI Studio bidi 请求上下文: %w", err)
+				return nil, fmt.Errorf("read AI Studio bidi request context: %w", err)
 			}
 		}
 		var release func() error
@@ -152,7 +152,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 		session, err := transport.OpenBidiProtected(attemptCtx, request, runtime, lease, release)
 		if err == nil {
 			if stateErr := lease.MarkAuthenticationValid(); stateErr != nil {
-				slog.Error("Bidi 账户认证状态保存失败", "account", request.AccountID, "error", stateErr)
+				slog.Error("failed to save bidi account authentication state", "account", request.AccountID, "error", stateErr)
 			}
 			if modelAccessScope == modelID {
 				checkedAt := lease.CheckedAt()
@@ -163,7 +163,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 						accountID, modelAccessScope, accessGeneration, checkedAt,
 					)
 					if stateErr != nil {
-						slog.Error("Bidi 模型资格保存失败", "account", accountID, "model", modelID, "error", stateErr)
+						slog.Error("failed to save bidi model qualification", "account", accountID, "model", modelID, "error", stateErr)
 						return
 					}
 					if changed {
@@ -174,7 +174,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 				if stateErr := s.pool.ClearCooldownIfGeneration(
 					request.AccountID, "", lease.ModelAccessGeneration(), lease.CheckedAt(),
 				); stateErr != nil {
-					slog.Error("Bidi 账户冷却状态保存失败", "account", request.AccountID, "error", stateErr)
+					slog.Error("failed to save bidi account cooldown state", "account", request.AccountID, "error", stateErr)
 				}
 			}
 			return session, nil
@@ -241,7 +241,7 @@ func retryableBidiOpenError(ctx context.Context, err error) bool {
 	return !errors.As(err, &evidenceError)
 }
 
-// Events 返回上游按网络顺序产生的事件
+// Events returns events produced by upstream in network order
 func (s *BidiSession) Events() <-chan BidiEvent {
 	if s == nil {
 		return nil
@@ -249,7 +249,7 @@ func (s *BidiSession) Events() <-chan BidiEvent {
 	return s.events
 }
 
-// Done 在 WebChannel 释放账户后关闭
+// Done is closed after WebChannel releases the account
 func (s *BidiSession) Done() <-chan struct{} {
 	if s == nil {
 		closed := make(chan struct{})
@@ -259,7 +259,7 @@ func (s *BidiSession) Done() <-chan struct{} {
 	return s.done
 }
 
-// Model 返回会话使用的模型
+// Model returns the model used by the session
 func (s *BidiSession) Model() string {
 	if s == nil {
 		return ""
@@ -273,7 +273,7 @@ func (s *BidiSession) notifyModelAccessChanged() {
 	}
 }
 
-// SendText 发送一条官网文本输入帧
+// SendText sends an official text input frame
 func (s *BidiSession) SendText(ctx context.Context, text string) error {
 	body, binding, err := EncodeBidiTextRequest(text)
 	if err != nil {
@@ -285,7 +285,7 @@ func (s *BidiSession) SendText(ctx context.Context, text string) error {
 	)
 }
 
-// SendMedia 发送一条官网实时音频或图像输入帧
+// SendMedia sends an official real-time audio or image input frame
 func (s *BidiSession) SendMedia(ctx context.Context, mimeType string, data []byte) error {
 	body, binding, err := EncodeBidiMediaRequest(mimeType, data)
 	if err != nil {
@@ -294,7 +294,7 @@ func (s *BidiSession) SendMedia(ctx context.Context, mimeType string, data []byt
 	return s.sendProtected(ctx, body, binding, s.modelAccessScope != "")
 }
 
-// SendMediaEnd 发送官网实时媒体结束帧
+// SendMediaEnd sends an official real-time media end frame
 func (s *BidiSession) SendMediaEnd(ctx context.Context) error {
 	body, binding, err := EncodeBidiMediaEndRequest()
 	if err != nil {
@@ -303,7 +303,7 @@ func (s *BidiSession) SendMediaEnd(ctx context.Context) error {
 	return s.sendProtected(ctx, body, binding, false)
 }
 
-// SendToolResponses 发送官网函数响应帧
+// SendToolResponses sends official function response frames
 func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionResult) error {
 	body, binding, err := EncodeBidiToolResponseRequest(results)
 	if err != nil {
@@ -312,7 +312,7 @@ func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionR
 	return s.sendProtected(ctx, body, binding, false)
 }
 
-// Close 取消网络读取并等待账户租约释放
+// Close cancels network reading and waits for account lease release
 func (s *BidiSession) Close() error {
 	if s == nil {
 		return nil
@@ -328,14 +328,14 @@ func (s *BidiSession) Close() error {
 	select {
 	case <-s.done:
 	case <-timer.C:
-		return errors.Join(s.closeErr, fmt.Errorf("等待 bidi WebChannel 关闭超时"))
+		return errors.Join(s.closeErr, fmt.Errorf("timed out waiting for bidi WebChannel to close"))
 	}
 	s.releaseMu.Lock()
 	defer s.releaseMu.Unlock()
 	return errors.Join(s.closeErr, s.releaseErr)
 }
 
-// OpenBidiProtected 使用当前租约建立 WebChannel 会话
+// OpenBidiProtected establishes a WebChannel session using the current lease
 func (t *WorkerProtectedTransport) OpenBidiProtected(
 	ctx context.Context,
 	request BidiRequest,
@@ -349,7 +349,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 	}
 	worker, err := t.workers.Worker(ctx, lease.Account().ID, request.Model)
 	if err != nil {
-		return nil, fmt.Errorf("获取账户 WAA preparer: %w", err)
+		return nil, fmt.Errorf("get account WAA preparer: %w", err)
 	}
 	if request.ObserveWAARuntime != nil {
 		if observed, ok := worker.(interface{ WorkerGeneration() uint64 }); ok {
@@ -361,10 +361,10 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		Body: body, Prompt: binding, ProofField: 6,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("准备 bidi setup fresh WAA proof: %w", err)
+		return nil, fmt.Errorf("prepare bidi setup fresh WAA proof: %w", err)
 	}
 	if prepared.Headers == nil || len(prepared.Body) == 0 {
-		return nil, fmt.Errorf("WAA preparer 返回空 bidi setup")
+		return nil, fmt.Errorf("WAA preparer returned empty bidi setup")
 	}
 	headerProvider := ProtocolHeaderProviderFunc(func(context.Context, string) (http.Header, error) {
 		return prepared.Headers.Clone(), nil
@@ -449,7 +449,7 @@ func (s *BidiSession) awaitSetup(ctx context.Context) error {
 				if event.Err != nil {
 					return event.Err
 				}
-				return errors.New("bidi setup 返回错误事件")
+				return errors.New("bidi setup returned error event")
 			case BidiEventClosed:
 				return errBidiWebChannelClosed
 			}
@@ -505,18 +505,18 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	requestURL := bidiWebChannelURL + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader("count=0"))
 	if err != nil {
-		return fmt.Errorf("创建 bidi WebChannel handshake: %w", err)
+		return fmt.Errorf("create bidi WebChannel handshake: %w", err)
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("执行 bidi WebChannel handshake: %w", err)
+		return fmt.Errorf("execute bidi WebChannel handshake: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return fmt.Errorf("读取 bidi WebChannel handshake: %w", err)
+		return fmt.Errorf("read bidi WebChannel handshake: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
@@ -526,7 +526,7 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	}
 	s.gsessionID = strings.TrimSpace(response.Header.Get("X-HTTP-Session-Id"))
 	if s.gsessionID == "" {
-		return fmt.Errorf("bidi WebChannel handshake 缺少 gsessionid")
+		return fmt.Errorf("bidi WebChannel handshake missing gsessionid")
 	}
 	sid, err := parseWebChannelHandshake(bytes.NewReader(body))
 	if err != nil {
@@ -553,10 +553,10 @@ func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding st
 		Body: body, Prompt: binding, ProofField: 6,
 	})
 	if err != nil {
-		return fmt.Errorf("准备 bidi fresh WAA proof: %w", err)
+		return fmt.Errorf("prepare bidi fresh WAA proof: %w", err)
 	}
 	if len(prepared.Body) == 0 {
-		return fmt.Errorf("WAA preparer 返回空 bidi 请求")
+		return fmt.Errorf("WAA preparer returned empty bidi request")
 	}
 	return s.postMessage(requestCtx, prepared.Body, qualifies)
 }
@@ -604,18 +604,18 @@ func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies
 	requestURL := bidiWebChannelURL + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, requestURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("创建 bidi WebChannel message: %w", err)
+		return fmt.Errorf("create bidi WebChannel message: %w", err)
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("执行 bidi WebChannel message: %w", err)
+		return fmt.Errorf("execute bidi WebChannel message: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return fmt.Errorf("读取 bidi WebChannel ACK: %w", err)
+		return fmt.Errorf("read bidi WebChannel ACK: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
@@ -723,7 +723,7 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 	requestURL := bidiWebChannelURL + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(s.ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("创建 bidi WebChannel backchannel: %w", err)
+		return 0, fmt.Errorf("create bidi WebChannel backchannel: %w", err)
 	}
 	request.Header = s.cloneHeaders()
 	response, err := s.client.Do(request)
@@ -731,7 +731,7 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 		if first {
 			ready(err)
 		}
-		return 0, &bidiBackchannelNetworkError{err: fmt.Errorf("执行 bidi WebChannel backchannel: %w", err)}
+		return 0, &bidiBackchannelNetworkError{err: fmt.Errorf("execute bidi WebChannel backchannel: %w", err)}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -783,7 +783,7 @@ func (s *BidiSession) consumeBackchannelFrame(raw json.RawMessage) (int, error) 
 		if len(envelope) < 2 {
 			return parsed, &ProtocolEvidenceError{
 				Method: "BidiGenerateContent", Path: fmt.Sprintf("$webchannel[%d]", index),
-				Detail: "WebChannel envelope 字段不足", Raw: cloneRaw(envelopeRaw),
+				Detail: "insufficient WebChannel envelope fields", Raw: cloneRaw(envelopeRaw),
 			}
 		}
 		aid, err := rawInt64(envelope[0], fmt.Sprintf("$webchannel[%d][0]", index), raw)
@@ -810,7 +810,7 @@ func (s *BidiSession) consumeBackchannelFrame(raw json.RawMessage) (int, error) 
 					s.stateMu.Unlock()
 					if token != previous {
 						if err := s.lease.ReplaceResource(previous, token, "bidi-session"); err != nil {
-							return parsed, fmt.Errorf("绑定 bidi 恢复令牌: %w", err)
+							return parsed, fmt.Errorf("bind bidi resumption token: %w", err)
 						}
 						s.stateMu.Lock()
 						s.latestResumptionToken = token
@@ -848,7 +848,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 		return
 	}
 	if err := s.lease.markAuthenticationValidAt(checkedAt); err != nil {
-		slog.Error("Bidi 账户认证状态保存失败", "account", s.accountID, "error", err)
+		slog.Error("failed to save bidi account authentication state", "account", s.accountID, "error", err)
 	}
 	accountID := s.accountID
 	accessScope := s.modelAccessScope
@@ -858,7 +858,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 			accountID, accessScope, generation, checkedAt,
 		)
 		if err != nil {
-			slog.Error("Bidi 媒体资格保存失败", "account", accountID, "model", s.model, "error", err)
+			slog.Error("failed to save bidi media qualification", "account", accountID, "model", s.model, "error", err)
 			return
 		}
 		if changed {
@@ -867,7 +867,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 	}()
 }
 
-// beginQualificationAttempt 登记当前双向轮次中的资格请求
+// beginQualificationAttempt registers qualification requests in the current bidi turn
 func (s *BidiSession) beginQualificationAttempt() {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -877,7 +877,7 @@ func (s *BidiSession) beginQualificationAttempt() {
 	s.qualificationPending++
 }
 
-// rollbackQualificationAttempt 撤销发送失败的资格请求
+// rollbackQualificationAttempt rolls back failed qualification requests
 func (s *BidiSession) rollbackQualificationAttempt() {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -890,7 +890,7 @@ func (s *BidiSession) rollbackQualificationAttempt() {
 	}
 }
 
-// finishQualificationAttempt 结束当前资格轮次并返回其顺序时间
+// finishQualificationAttempt concludes current qualification round and returns its sequential time
 func (s *BidiSession) finishQualificationAttempt(allowUnbound bool) time.Time {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -912,7 +912,7 @@ func (s *BidiSession) finishQualificationAttempt(allowUnbound bool) time.Time {
 	return time.Time{}
 }
 
-// nextQualificationCheckedAtLocked 返回会话内严格递增的资格顺序时间
+// nextQualificationCheckedAtLocked returns strictly increasing qualification sequential time within session
 func (s *BidiSession) nextQualificationCheckedAtLocked() time.Time {
 	last := s.qualificationLastAt
 	if leaseCheckedAt := s.lease.CheckedAt(); last.Before(leaseCheckedAt) {
@@ -946,13 +946,13 @@ func (s *BidiSession) terminate() error {
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, bidiWebChannelURL+"?"+query.Encode(), nil)
 	if err != nil {
-		return fmt.Errorf("创建 bidi WebChannel terminate: %w", err)
+		return fmt.Errorf("create bidi WebChannel terminate: %w", err)
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "text/plain;charset=UTF-8")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("执行 bidi WebChannel terminate: %w", err)
+		return fmt.Errorf("execute bidi WebChannel terminate: %w", err)
 	}
 	defer response.Body.Close()
 	_, readErr := io.Copy(io.Discard, response.Body)
@@ -974,15 +974,15 @@ func (s *BidiSession) mergeCookies(response *http.Response, requestURL string) e
 		return nil
 	}
 	if err := s.lease.MergeSetCookieHeaders(setCookies, requestURL, time.Now()); err != nil {
-		return fmt.Errorf("合并 bidi WebChannel Cookie: %w", err)
+		return fmt.Errorf("merge bidi WebChannel cookies: %w", err)
 	}
 	state, err := s.lease.ReloadStorageState()
 	if err != nil {
-		return fmt.Errorf("读取 bidi WebChannel Cookie: %w", err)
+		return fmt.Errorf("read bidi WebChannel cookies: %w", err)
 	}
 	cookie, err := state.CookieHeader(bidiWebChannelURL, time.Now())
 	if err != nil {
-		return fmt.Errorf("构造 bidi WebChannel Cookie: %w", err)
+		return fmt.Errorf("construct bidi WebChannel cookies: %w", err)
 	}
 	s.headerMu.Lock()
 	s.headers.Set("Cookie", cookie)
@@ -1032,7 +1032,7 @@ func parseWebChannelHandshake(source io.Reader) (string, error) {
 		return "", withBidiMethod(err)
 	}
 	if len(root) != 1 {
-		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake", Detail: "握手 envelope 数量无效", Raw: frame}
+		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake", Detail: "invalid handshake envelope count", Raw: frame}
 	}
 	envelope, err := rawArray(root[0], "$handshake[0]", frame)
 	if err != nil {
@@ -1047,14 +1047,14 @@ func parseWebChannelHandshake(source io.Reader) (string, error) {
 		return "", withBidiMethod(err)
 	}
 	if marker != "c" {
-		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake[0][1][0]", Detail: "握手类型不是 c", Raw: frame}
+		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake[0][1][0]", Detail: "handshake type is not c", Raw: frame}
 	}
 	sid, err := rawString(rawAt(control, 1), "$handshake[0][1][1]", frame)
 	if err != nil || sid == "" {
 		if err != nil {
 			return "", withBidiMethod(err)
 		}
-		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake[0][1][1]", Detail: "握手 SID 为空", Raw: frame}
+		return "", &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$handshake[0][1][1]", Detail: "handshake SID is empty", Raw: frame}
 	}
 	return sid, nil
 }
@@ -1074,7 +1074,7 @@ func parseWebChannelACK(source io.Reader) error {
 		return withBidiMethod(err)
 	}
 	if len(ack) != 3 {
-		return &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$ack", Detail: "WebChannel ACK 字段数量无效", Raw: frame}
+		return &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$ack", Detail: "invalid WebChannel ACK field count", Raw: frame}
 	}
 	if _, err := rawInt64(ack[0], "$ack[0]", frame); err != nil {
 		return withBidiMethod(err)
@@ -1097,14 +1097,14 @@ func readWebChannelFrames(source io.Reader, emit func(json.RawMessage) error) er
 		}
 		length, err := strconv.Atoi(strings.TrimSpace(lengthLine))
 		if err != nil || length < 0 {
-			return fmt.Errorf("bidi WebChannel frame 长度无效: %q", strings.TrimSpace(lengthLine))
+			return fmt.Errorf("invalid bidi WebChannel frame length: %q", strings.TrimSpace(lengthLine))
 		}
 		frame := make([]byte, length)
 		if _, err := io.ReadFull(reader, frame); err != nil {
-			return fmt.Errorf("读取 bidi WebChannel frame: %w", err)
+			return fmt.Errorf("read bidi WebChannel frame: %w", err)
 		}
 		if !json.Valid(frame) {
-			return &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$webchannel", Detail: "frame 不是有效 JSON", Raw: cloneRaw(frame)}
+			return &ProtocolEvidenceError{Method: "BidiGenerateContent", Path: "$webchannel", Detail: "frame is not valid JSON", Raw: cloneRaw(frame)}
 		}
 		if err := emit(frame); err != nil {
 			return err
@@ -1115,7 +1115,7 @@ func readWebChannelFrames(source io.Reader, emit func(json.RawMessage) error) er
 func newWebChannelRID() (int64, error) {
 	var raw [4]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return 0, fmt.Errorf("生成 WebChannel RID: %w", err)
+		return 0, fmt.Errorf("generate WebChannel RID: %w", err)
 	}
 	return int64(binary.BigEndian.Uint32(raw[:])%90000) + 10000, nil
 }
@@ -1123,7 +1123,7 @@ func newWebChannelRID() (int64, error) {
 func newWebChannelZX() (string, error) {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("生成 WebChannel zx: %w", err)
+		return "", fmt.Errorf("generate WebChannel zx: %w", err)
 	}
 	return hex.EncodeToString(raw[:]), nil
 }

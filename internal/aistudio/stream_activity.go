@@ -12,7 +12,7 @@ type streamActivityReader struct {
 	notify func(int)
 }
 
-// ContextWithStreamActivityObserver 记录上游响应体实际到达的字节
+// ContextWithStreamActivityObserver records actual arriving bytes of upstream response body
 func ContextWithStreamActivityObserver(ctx context.Context, observer func(int)) context.Context {
 	if observer == nil {
 		return ctx

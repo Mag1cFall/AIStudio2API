@@ -5,19 +5,19 @@ import (
 	"fmt"
 )
 
-// FrameDecoder 将 field 1 repeated 帧转换为规范事件
+// FrameDecoder converts field 1 repeated frames into canonical events
 type FrameDecoder struct {
 	usage     *Usage
 	finished  bool
 	lastFrame json.RawMessage
 }
 
-// NewFrameDecoder 创建单次 GenerateContent 的有状态解码器
+// NewFrameDecoder creates a stateful decoder for a single GenerateContent call
 func NewFrameDecoder() *FrameDecoder {
 	return &FrameDecoder{}
 }
 
-// Decode 解码一条 repeated 流帧
+// Decode decodes a single repeated stream frame
 func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 	d.lastFrame = append(json.RawMessage(nil), raw...)
 	frame, err := rawArray(raw, "$[0][]", raw)
@@ -25,7 +25,7 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if len(frame) == 0 {
-		return nil, d.protocolError("$[0][]", "空流帧", raw)
+		return nil, d.protocolError("$[0][]", "empty stream frame", raw)
 	}
 	if isJSONNull(frame[0]) {
 		if feedbackRaw := rawAt(frame, 1); !isJSONNull(feedbackRaw) {
@@ -38,7 +38,7 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if len(candidates) != 1 {
-		return nil, d.protocolError("$[0][][0]", "候选数量不是现场确认的 1", raw)
+		return nil, d.protocolError("$[0][][0]", "candidate count is not the live-confirmed 1", raw)
 	}
 	candidate, err := rawArray(candidates[0], "$[0][][0][0]", raw)
 	if err != nil {
@@ -173,12 +173,12 @@ func decodeFinishReason(code int64) string {
 	}
 }
 
-// End 校验流已经出现正常完成帧
+// End validates that the stream encountered a normal completion frame
 func (d *FrameDecoder) End() error {
 	if d.finished {
 		return nil
 	}
-	return d.protocolError("$", "流结束前没有完成帧", d.lastFrame)
+	return d.protocolError("$", "stream ended without a completion frame", d.lastFrame)
 }
 
 func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
@@ -194,7 +194,7 @@ func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessa
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if role != "model" {
-		return nil, d.protocolError("$[0][][0][0][0][1]", "响应角色不是 model", rawAt(content, 1))
+		return nil, d.protocolError("$[0][][0][0][0][1]", "response role is not model", rawAt(content, 1))
 	}
 	partsRaw := rawAt(content, 0)
 	if isJSONNull(partsRaw) {

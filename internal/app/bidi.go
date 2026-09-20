@@ -10,14 +10,16 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 )
 
-// OpenBidi 将实时会话绑定到当前生成服务生命周期
+// OpenBidi binds a bidirectional streaming session to the current generation service lifecycle.
 func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.BidiRequest) (*aistudio.BidiSession, error) {
 	api.SetAccessLogTarget(ctx, request.Model, "")
+
 	requestCtx, cancel, err := service.bidiRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
 		return nil, err
 	}
+
 	if request.AccountID == "" && len(request.AllowedAccountIDs) == 0 {
 		request.AllowedAccountIDs, err = service.bidiCandidates(requestCtx, request.Model, request.ModelAccessScope)
 		if err != nil {
@@ -26,12 +28,15 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 			return nil, err
 		}
 	}
+
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
+
 	request.ObserveWAARuntime = func(accountID string, generation uint64) {
 		workerGenerations[accountID] = generation
 	}
 	request.ObserveModelAccessChange = service.publishModelAccess
+
 	request.ObserveAccountFailure = func(accountID string, cause error) {
 		label := accountID
 		for _, status := range service.pool.Status() {
@@ -40,55 +45,67 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 				break
 			}
 		}
+
 		service.requests.log(label, "WARN", fmt.Sprintf(
-			"账号切换 | 模型=%s\n原因: %s",
+			"Account switch | model=%s\nReason: %s",
 			strings.TrimPrefix(request.Model, "models/"), strings.TrimSpace(cause.Error()),
 		))
 	}
+
 	request.RecoverWAARuntime = func(recoveryCtx context.Context, accountID string, cause error) (bool, error) {
 		workerFailed := service.workers.WorkerFailed(accountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(cause)
 		workerReplaced := errors.Is(cause, errAccountWorkerReplaced)
 		recoverCurrentGeneration := needsWAARuntimeRecovery(cause, false, workerFailed, workerReplaced)
+
 		if recoveryCtx.Err() != nil || !recoverCurrentGeneration {
 			return false, nil
 		}
+
 		expectedGeneration := workerGenerations[accountID]
 		recovered, _, recoveryErr := service.recoverWorkerOnce(
 			accountID, expectedGeneration, recoveredWorkers,
 			recoverCurrentGeneration, workerFailed || waaRuntimeFailed,
 		)
+
 		return recovered, recoveryErr
 	}
+
 	requestCtx = aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
 		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
 		api.SetAccessLogTarget(ctx, request.Model, account.Config.Label)
 	})
+
 	bidi, ok := service.service.(aistudio.BidiService)
 	if !ok {
 		cancel()
-		return nil, fmt.Errorf("bidi service 不可用")
+		return nil, fmt.Errorf("bidi service is unavailable")
 	}
+
 	session, err := bidi.OpenBidi(requestCtx, request)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
 		cancel()
 		return nil, err
 	}
+
 	return session, nil
 }
 
-// WorkerGeneration 返回当前 preparer 对应的 Worker 版本号
+// WorkerGeneration returns the worker generation number corresponding to the current preparer.
 func (preparer *accountWorkerPreparer) WorkerGeneration() uint64 {
 	return preparer.account.generation.Load()
 }
 
 func (service *trackedService) bidiCandidates(ctx context.Context, model string, modelAccessScope string) ([]string, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(model), "models/")
+
 	groups, err := service.pool.ClassifyCandidates(
 		ctx,
 		aistudio.AccountSelection{
-			ModelID: modelID, ModelAccessScope: modelAccessScope, Method: "bidiGenerateContent",
+			ModelID:          modelID,
+			ModelAccessScope: modelAccessScope,
+			Method:           "bidiGenerateContent",
 		},
 		service.workers.WarmAccountIDs(),
 	)
@@ -98,30 +115,36 @@ func (service *trackedService) bidiCandidates(ctx context.Context, model string,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+
 	warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
 	candidates := service.preferBidiAccounts(warmAvailable, modelID, modelAccessScope)
 	candidates = append(candidates, service.preferBidiAccounts(groups.StandbyReady, modelID, modelAccessScope)...)
 	candidates = append(candidates, service.preferBidiAccounts(groups.WarmBusy, modelID, modelAccessScope)...)
 	candidates = append(candidates, service.preferBidiAccounts(groups.StandbyBusy, modelID, modelAccessScope)...)
+
 	if len(candidates) == 0 {
 		return nil, aistudio.ErrNoEligibleAccount
 	}
+
 	return candidates, nil
 }
 
-// preferBidiAccounts 在实测资格分组内按账户策略排列候选
+// preferBidiAccounts orders candidate accounts within verified qualification groups according to account policy.
 func (service *trackedService) preferBidiAccounts(accountIDs []string, modelID string, modelAccessScope string) []string {
 	scope := strings.TrimSpace(modelAccessScope)
 	if scope == "" {
 		scope = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
 	}
+
 	candidates := service.pool.OrderCandidates(accountIDs, scope)
 	if strings.TrimSpace(modelAccessScope) == "" {
 		return candidates
 	}
+
 	states := service.pool.CandidateStatesForScope(candidates, modelID, modelAccessScope)
 	verified := make([]string, 0, len(candidates))
 	unverified := make([]string, 0, len(candidates))
+
 	for _, accountID := range candidates {
 		if states[accountID].ModelAccess == aistudio.ModelAccessVerified {
 			verified = append(verified, accountID)
@@ -129,21 +152,27 @@ func (service *trackedService) preferBidiAccounts(accountIDs []string, modelID s
 		}
 		unverified = append(unverified, accountID)
 	}
+
 	return append(verified, unverified...)
 }
 
 func (service *trackedService) bidiRequestContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	service.lifecycleMu.Lock()
+
 	if service.state.Load() != serviceRunning || service.dataContext == nil {
 		service.lifecycleMu.Unlock()
 		return nil, nil, &serviceStoppedError{}
 	}
+
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopData := context.AfterFunc(service.dataContext, cancel)
+
 	context.AfterFunc(requestCtx, func() {
 		stopData()
 	})
+
 	service.lifecycleMu.Unlock()
+
 	return requestCtx, func() {
 		stopData()
 		cancel()

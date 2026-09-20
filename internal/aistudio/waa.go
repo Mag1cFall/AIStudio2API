@@ -2,7 +2,7 @@ package aistudio
 
 import "net/http"
 
-// ProtectedRequest 表示需要 WAA 保护的 AI Studio 请求
+// ProtectedRequest represents an AI Studio request requiring WAA protection
 type ProtectedRequest struct {
 	URL        string
 	Headers    http.Header
@@ -11,33 +11,33 @@ type ProtectedRequest struct {
 	ProofField int
 }
 
-// PreparedProtectedRequest 表示已写入 fresh proof 的请求
+// PreparedProtectedRequest represents a request with fresh proof written
 type PreparedProtectedRequest struct {
 	Body    []byte
 	Headers http.Header
 }
 
-// WorkerPhase 表示账户 runtime 当前阶段
+// WorkerPhase represents the current phase of account runtime
 type WorkerPhase string
 
 const (
-	// WorkerStarting 表示 runtime 进程正在启动
+	// WorkerStarting indicates runtime process is starting
 	WorkerStarting WorkerPhase = "starting"
-	// WorkerBootstrapping 表示官方页面正在初始化 WAA
+	// WorkerBootstrapping indicates official page is bootstrapping WAA
 	WorkerBootstrapping WorkerPhase = "bootstrapping"
-	// WorkerReady 表示 runtime 可以接受请求
+	// WorkerReady indicates runtime can accept requests
 	WorkerReady WorkerPhase = "ready"
-	// WorkerBusy 表示 runtime 正在处理受保护请求
+	// WorkerBusy indicates runtime is handling a protected request
 	WorkerBusy WorkerPhase = "busy"
-	// WorkerClosing 表示 runtime 正在关闭
+	// WorkerClosing indicates runtime is closing
 	WorkerClosing WorkerPhase = "closing"
-	// WorkerClosed 表示 runtime 已关闭
+	// WorkerClosed indicates runtime is closed
 	WorkerClosed WorkerPhase = "closed"
-	// WorkerFailed 表示 runtime 已失效
+	// WorkerFailed indicates runtime has failed
 	WorkerFailed WorkerPhase = "failed"
 )
 
-// WorkerState 表示账户 runtime 的可观察状态
+// WorkerState represents observable state of account runtime
 type WorkerState struct {
 	AccountID    string
 	Phase        WorkerPhase

@@ -9,7 +9,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// Config 定义公开 API 服务配置
+// Config defines public API server configuration.
 type Config struct {
 	APIKey string
 	Admin  AdminService
@@ -23,7 +23,7 @@ type server struct {
 
 var idSequence atomic.Uint64
 
-// NewHandler 创建公开 API 路由
+// NewHandler creates public API HTTP routing.
 func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{service: service, config: config, responseStates: newResponseStateStore()}
 	public := http.NewServeMux()

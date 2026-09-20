@@ -26,17 +26,17 @@ func validateResponsesCodeContainer(raw json.RawMessage) error {
 		if name == "auto" {
 			return nil
 		}
-		return fmt.Errorf("AI Studio Web 的 code_interpreter container 只支持 auto")
+		return fmt.Errorf("code_interpreter container only supports auto in AI Studio Web")
 	}
 	var container struct {
 		Type    string   `json:"type"`
 		FileIDs []string `json:"file_ids"`
 	}
 	if err := json.Unmarshal(raw, &container); err != nil || container.Type != "auto" {
-		return fmt.Errorf("AI Studio Web 的 code_interpreter container 只支持 auto")
+		return fmt.Errorf("code_interpreter container only supports auto in AI Studio Web")
 	}
 	if len(container.FileIDs) > 0 {
-		return fmt.Errorf("AI Studio Web 的 code_interpreter 不支持 container file_ids")
+		return fmt.Errorf("code_interpreter does not support container file_ids in AI Studio Web")
 	}
 	return nil
 }

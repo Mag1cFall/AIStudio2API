@@ -19,20 +19,20 @@ const publicDiscoveryUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:1
 
 var makerSuiteAPIKeyPattern = regexp.MustCompile(`"WIu0Nc":"([^"]+)"`)
 
-// ProtocolHeaderProvider 按账户提供官方运行时发现的动态公共头
+// ProtocolHeaderProvider provides dynamic common headers discovered by official runtimes per account
 type ProtocolHeaderProvider interface {
 	ProtocolHeaders(context.Context, string) (http.Header, error)
 }
 
-// ProtocolHeaderProviderFunc 将函数适配为 ProtocolHeaderProvider
+// ProtocolHeaderProviderFunc adapts a function to ProtocolHeaderProvider
 type ProtocolHeaderProviderFunc func(context.Context, string) (http.Header, error)
 
-// ProtocolHeaders 调用动态公共头函数
+// ProtocolHeaders invokes the dynamic common headers function
 func (f ProtocolHeaderProviderFunc) ProtocolHeaders(ctx context.Context, accountID string) (http.Header, error) {
 	return f(ctx, accountID)
 }
 
-// HTTPTransportOptions 定义普通 MakerSuite RPC 的账户与网络依赖
+// HTTPTransportOptions defines account and network dependencies for standard MakerSuite RPC
 type HTTPTransportOptions struct {
 	Pool        *AccountPool
 	Signer      *Signer
@@ -40,7 +40,7 @@ type HTTPTransportOptions struct {
 	GlobalProxy string
 }
 
-// MakerSuiteHTTPTransport 使用账户固定出口发送普通 RPC
+// MakerSuiteHTTPTransport sends standard RPC via account fixed egress
 type MakerSuiteHTTPTransport struct {
 	pool        *AccountPool
 	signer      *Signer
@@ -54,18 +54,18 @@ type MakerSuiteHTTPTransport struct {
 type accountLeaseContextKey struct{}
 type accountSelectionObserverContextKey struct{}
 
-// ContextWithAccountLease 将上层已持有的租约传给协议传输
+// ContextWithAccountLease passes an existing account lease to protocol transport
 func ContextWithAccountLease(ctx context.Context, lease *AccountLease) context.Context {
 	return context.WithValue(ctx, accountLeaseContextKey{}, lease)
 }
 
-// AccountLeaseFromContext 返回当前请求唯一的账户租约
+// AccountLeaseFromContext returns the unique account lease for the current request
 func AccountLeaseFromContext(ctx context.Context) (*AccountLease, bool) {
 	lease, ok := ctx.Value(accountLeaseContextKey{}).(*AccountLease)
 	return lease, ok && lease != nil && lease.Account() != nil
 }
 
-// ContextWithAccountSelectionObserver 观察请求最终选择的账户
+// ContextWithAccountSelectionObserver observes the account finally selected for the request
 func ContextWithAccountSelectionObserver(ctx context.Context, observer func(*Account)) context.Context {
 	return context.WithValue(ctx, accountSelectionObserverContextKey{}, observer)
 }
@@ -77,13 +77,13 @@ func observeAccountSelection(ctx context.Context, account *Account) {
 	}
 }
 
-// NewMakerSuiteHTTPTransport 创建普通 MakerSuite RPC 传输
+// NewMakerSuiteHTTPTransport creates standard MakerSuite RPC transport
 func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTransport, error) {
 	if options.Pool == nil {
-		return nil, fmt.Errorf("AI Studio account pool 不能为空")
+		return nil, fmt.Errorf("AI Studio account pool cannot be nil")
 	}
 	if options.Headers == nil {
-		return nil, fmt.Errorf("AI Studio protocol header provider 不能为空")
+		return nil, fmt.Errorf("AI Studio protocol header provider cannot be nil")
 	}
 	signer := options.Signer
 	if signer == nil {
@@ -103,10 +103,10 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 	return transport, nil
 }
 
-// DiscoverPublicHeaders 从 AI Studio 首页读取普通 RPC 所需的公开头
+// DiscoverPublicHeaders reads public headers needed for standard RPC from the AI Studio home page
 func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Header, error) {
 	if client == nil {
-		return nil, fmt.Errorf("HTTP client 不能为空")
+		return nil, fmt.Errorf("HTTP client cannot be nil")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, aiStudioOrigin+"/", nil)
 	if err != nil {
@@ -116,19 +116,19 @@ func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Heade
 	request.Header.Set("User-Agent", publicDiscoveryUserAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("读取 AI Studio 首页: %w", err)
+		return nil, fmt.Errorf("read AI Studio home page: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("AI Studio 首页返回 HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("AI Studio home page returned HTTP %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取 AI Studio 首页正文: %w", err)
+		return nil, fmt.Errorf("read AI Studio home page body: %w", err)
 	}
 	match := makerSuiteAPIKeyPattern.FindSubmatch(body)
 	if len(match) != 2 || len(match[1]) == 0 {
-		return nil, fmt.Errorf("AI Studio 首页缺少 WIu0Nc")
+		return nil, fmt.Errorf("AI Studio home page missing WIu0Nc")
 	}
 	visitID, err := newVisitID()
 	if err != nil {
@@ -146,7 +146,7 @@ func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Heade
 func newVisitID() (string, error) {
 	value := make([]byte, 16)
 	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("生成 AI Studio visit ID: %w", err)
+		return "", fmt.Errorf("generate AI Studio visit ID: %w", err)
 	}
 	value[6] = value[6]&0x0f | 0x40
 	value[8] = value[8]&0x3f | 0x80
@@ -156,7 +156,7 @@ func newVisitID() (string, error) {
 	return "v1_" + base64.StdEncoding.EncodeToString([]byte(uuid)), nil
 }
 
-// NewProxyHTTPClient 创建普通 HTTP、HTTPS 或 SOCKS5 固定出口客户端
+// NewProxyHTTPClient creates standard HTTP, HTTPS, or SOCKS5 fixed egress client
 func NewProxyHTTPClient(proxyURL string) (*http.Client, error) {
 	roundTripper, err := newBrowserRoundTripper(proxyURL)
 	if err != nil {
@@ -165,7 +165,7 @@ func NewProxyHTTPClient(proxyURL string) (*http.Client, error) {
 	return &http.Client{Transport: roundTripper}, nil
 }
 
-// Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
+// Do sends standard MakerSuite RPC and keeps the lease held by the response body
 func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
 	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: rpc.AccountID})
 	if err != nil {
@@ -184,7 +184,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, rpc.URL, bytes.NewReader(rpc.Body))
 	if err != nil {
-		return nil, releaseOnError(fmt.Errorf("创建 MakerSuite %s 请求: %w", rpc.Method, err))
+		return nil, releaseOnError(fmt.Errorf("create MakerSuite %s request: %w", rpc.Method, err))
 	}
 	request.Header = headers
 	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
@@ -193,13 +193,13 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, releaseOnError(fmt.Errorf("执行 MakerSuite %s 请求: %w", rpc.Method, err))
+		return nil, releaseOnError(fmt.Errorf("execute MakerSuite %s request: %w", rpc.Method, err))
 	}
 	setCookies := append([]string(nil), response.Header.Values("Set-Cookie")...)
 	if len(setCookies) > 0 {
 		if err := lease.MergeSetCookieHeaders(setCookies, rpc.URL, t.now()); err != nil {
 			_ = response.Body.Close()
-			return nil, releaseOnError(fmt.Errorf("合并 MakerSuite %s 响应 Cookie: %w", rpc.Method, err))
+			return nil, releaseOnError(fmt.Errorf("merge MakerSuite %s response cookies: %w", rpc.Method, err))
 		}
 	}
 	body := &leaseResponseBody{
@@ -215,7 +215,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 	return &RPCResponse{StatusCode: response.StatusCode, Header: response.Header.Clone(), Body: body}, nil
 }
 
-// CloseIdleConnections 关闭全部固定出口的空闲连接
+// CloseIdleConnections closes all idle connections for fixed egresses
 func (t *MakerSuiteHTTPTransport) CloseIdleConnections() {
 	t.clientsMu.Lock()
 	defer t.clientsMu.Unlock()
@@ -250,15 +250,15 @@ func prepareProtocolHeaders(
 ) (StorageState, http.Header, error) {
 	state, err := lease.ReloadStorageState()
 	if err != nil {
-		return StorageState{}, nil, fmt.Errorf("读取账户 storage state: %w", err)
+		return StorageState{}, nil, fmt.Errorf("read account storage state: %w", err)
 	}
 	account := lease.Account()
 	publicHeaders, err := provider.ProtocolHeaders(ctx, account.ID)
 	if err != nil {
-		return StorageState{}, nil, fmt.Errorf("读取账户动态公共头: %w", err)
+		return StorageState{}, nil, fmt.Errorf("read account dynamic headers: %w", err)
 	}
 	if publicHeaders == nil {
-		return StorageState{}, nil, fmt.Errorf("账户动态公共头为空")
+		return StorageState{}, nil, fmt.Errorf("account dynamic headers are empty")
 	}
 	headers := publicHeaders.Clone()
 	for name, values := range rpc.Header {
@@ -269,7 +269,7 @@ func prepareProtocolHeaders(
 	}
 	for _, name := range []string{"User-Agent", "X-Goog-Api-Key", "X-Goog-Authuser", "X-User-Agent"} {
 		if strings.TrimSpace(headers.Get(name)) == "" {
-			return StorageState{}, nil, fmt.Errorf("账户动态公共头缺少 %s", name)
+			return StorageState{}, nil, fmt.Errorf("account dynamic headers missing %s", name)
 		}
 	}
 	authorization, err := signer.Authorization(state)
@@ -314,16 +314,16 @@ func resolveAccountLease(ctx context.Context, pool *AccountPool, selection Accou
 
 func validateLeaseSelection(lease *AccountLease, selection AccountSelection) error {
 	if lease == nil || lease.pool == nil || lease.account == nil {
-		return fmt.Errorf("context 账户租约未初始化")
+		return fmt.Errorf("context account lease is not initialized")
 	}
 	lease.pool.mu.Lock()
 	defer lease.pool.mu.Unlock()
 	account := lease.Account()
 	if lease.pool.byID[account.ID] != account {
-		return fmt.Errorf("context 租约账户不存在: %s", account.ID)
+		return fmt.Errorf("context leased account not found: %s", account.ID)
 	}
 	if accountID := strings.TrimSpace(selection.AccountID); accountID != "" && account.ID != accountID {
-		return fmt.Errorf("context 租约账户 %s 与请求账户 %s 不一致", account.ID, accountID)
+		return fmt.Errorf("context leased account %s does not match requested account %s", account.ID, accountID)
 	}
 	if selection.AllowedAccountIDs != nil {
 		allowed := false
@@ -343,15 +343,15 @@ func validateLeaseSelection(lease *AccountLease, selection AccountSelection) err
 			return ErrResourceNotFound
 		}
 		if owner != account.ID {
-			return fmt.Errorf("资源 %s 绑定账户 %s", resourceID, owner)
+			return fmt.Errorf("resource %s is bound to account %s", resourceID, owner)
 		}
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	if modelID != "" && !account.SupportsModel(modelID) {
-		return fmt.Errorf("context 租约账户 %s 不支持模型 %s", account.ID, modelID)
+		return fmt.Errorf("context leased account %s does not support model %s", account.ID, modelID)
 	}
 	if selection.Method != "" && !account.SupportsMethod(modelID, selection.Method) {
-		return fmt.Errorf("context 租约账户 %s 不支持方法 %s", account.ID, selection.Method)
+		return fmt.Errorf("context leased account %s does not support method %s", account.ID, selection.Method)
 	}
 	capability := strings.TrimSpace(selection.Capability)
 	if capability != "" {
@@ -360,7 +360,7 @@ func validateLeaseSelection(lease *AccountLease, selection AccountSelection) err
 				return nil
 			}
 		}
-		return fmt.Errorf("context 租约账户 %s 不支持能力 %s", account.ID, capability)
+		return fmt.Errorf("context leased account %s does not support capability %s", account.ID, capability)
 	}
 	return nil
 }

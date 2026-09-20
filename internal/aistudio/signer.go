@@ -20,18 +20,18 @@ var signatureCookies = [...]struct {
 	{label: "SAPISID3PHASH", name: "__Secure-3PAPISID"},
 }
 
-// Signer 为 AI Studio 请求生成三段 SAPISID 授权头
+// Signer generates 3-part SAPISID authorization headers for AI Studio requests
 type Signer struct {
 	origin string
 	now    func() time.Time
 }
 
-// NewSigner 创建 AI Studio 官方来源的签名器
+// NewSigner creates a signer with the official AI Studio origin
 func NewSigner() *Signer {
 	return &Signer{origin: aiStudioOrigin, now: time.Now}
 }
 
-// NewSignerForOrigin 创建指定来源的签名器
+// NewSignerForOrigin creates a signer for the specified origin
 func NewSignerForOrigin(origin string) (*Signer, error) {
 	normalized, err := normalizeOrigin(origin)
 	if err != nil {
@@ -40,28 +40,28 @@ func NewSignerForOrigin(origin string) (*Signer, error) {
 	return &Signer{origin: normalized, now: time.Now}, nil
 }
 
-// Sign 使用当前时间生成授权头
+// Sign generates an authorization header using current time
 func (s *Signer) Sign(state StorageState) (string, error) {
 	return s.Authorization(state)
 }
 
-// Authorization 使用当前时间生成授权头
+// Authorization generates an authorization header using current time
 func (s *Signer) Authorization(state StorageState) (string, error) {
 	if s == nil || s.now == nil {
-		return "", fmt.Errorf("签名器未初始化")
+		return "", fmt.Errorf("signer is not initialized")
 	}
 	return s.AuthorizationAt(state, s.now())
 }
 
-// AuthorizationAt 使用指定时间生成授权头
+// AuthorizationAt generates an authorization header at the specified time
 func (s *Signer) AuthorizationAt(state StorageState, now time.Time) (string, error) {
 	if s == nil || s.origin == "" {
-		return "", fmt.Errorf("签名器未初始化")
+		return "", fmt.Errorf("signer is not initialized")
 	}
 	return SignAuthorization(state.Cookies, s.origin, now.Unix())
 }
 
-// SignAuthorization 为指定来源和时间生成三段授权头
+// SignAuthorization generates a 3-part authorization header for the specified origin and time
 func SignAuthorization(cookies []StateCookie, origin string, timestamp int64) (string, error) {
 	normalized, err := normalizeOrigin(origin)
 	if err != nil {
@@ -73,7 +73,7 @@ func SignAuthorization(cookies []StateCookie, origin string, timestamp int64) (s
 	for _, item := range signatureCookies {
 		value, ok := state.CookieValue(item.name, normalized+"/", now)
 		if !ok {
-			return "", fmt.Errorf("storage state 缺少有效 Cookie: %s", item.name)
+			return "", fmt.Errorf("storage state missing valid cookie: %s", item.name)
 		}
 		source := fmt.Sprintf("%d %s %s", timestamp, value, normalized)
 		digest := sha1.Sum([]byte(source))
@@ -85,10 +85,10 @@ func SignAuthorization(cookies []StateCookie, origin string, timestamp int64) (s
 func normalizeOrigin(origin string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(origin))
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
-		return "", fmt.Errorf("签名来源必须是 HTTPS origin")
+		return "", fmt.Errorf("signing origin must be an HTTPS origin")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
-		return "", fmt.Errorf("签名来源必须是 HTTPS origin")
+		return "", fmt.Errorf("signing origin must be an HTTPS origin")
 	}
 	return parsed.Scheme + "://" + parsed.Host, nil
 }
