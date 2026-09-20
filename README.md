@@ -375,9 +375,10 @@ cp .env.example .env
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `2` | 同时初始化的预热账户数 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
-| `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
+| `ROUTING_STRATEGY` | `round-robin` | 账户路由策略：`round-robin`（轮询分发，均摊速率限制与负载）；`fill-first`（粘性优先，满载或冷却时溢出） |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
-
+| `HEADLESS` | `true` | Camoufox 是否启用无头模式（`true` 后台静默；`false` 显示浏览器窗口） |
+| `CAMOUFOX_PATH` | 空 | 自定义 Camoufox 浏览器可执行文件路径（可选） |
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制启动预热并发，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。
 
 ### 端口配置
@@ -391,7 +392,7 @@ cp .env.example .env
 
 支持通过无认证信息的 HTTP、HTTPS 或 SOCKS5 代理访问 AI Studio：
 
-1. 在“服务配置”中设置全局代理
+1. 在 `.env` 中设置全局代理 `PROXY`
 2. 在“账户”页面编辑单个账户时可以设置账户专用代理
 3. 账户代理同时用于登录、WAA 与业务请求
 

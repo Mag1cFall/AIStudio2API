@@ -6,31 +6,31 @@ import (
 	"fmt"
 )
 
-// pageDOMHelpers 定义官网页面共用的可见目标与按钮状态判断
+// pageDOMHelpers defines shared visibility and button state checks for official web pages.
 const pageDOMHelpers = `
   const visible = element => element.checkVisibility({visibilityProperty: true});
   const uniqueVisible = (selector, label) => {
     const items = [...document.querySelectorAll(selector)].filter(visible);
-    if (items.length > 1) throw new Error(label + ' 匹配多个可见目标');
+    if (items.length > 1) throw new Error(label + ' matched multiple visible elements');
     return items[0];
   };
   const buttonEnabled = button => !button.matches(':disabled') && !button.closest('[aria-disabled="true"]');
 `
 
-// promptReadyExpression 检查登录与生成流程使用的同一个可见输入框
+// promptReadyExpression checks the visible input box used across login and generation flows.
 const promptReadyExpression = `(() => {` + pageDOMHelpers + `
-  return Boolean(uniqueVisible('ms-prompt-box textarea', '提示词输入框'));
+  return Boolean(uniqueVisible('ms-prompt-box textarea', 'prompt textarea'));
 })()`
 
-// workerPageReadyExpression 等待输入框出现或页面跳转到登录入口
+// workerPageReadyExpression waits for the prompt textarea to appear or page redirects to login.
 const workerPageReadyExpression = `(location.hostname === 'accounts.google.com' || ` + promptReadyExpression + `)`
 
-// fillPromptExpression 向当前可见提示框写入文本并通知页面表单
+// fillPromptExpression writes text to the currently visible prompt box and dispatches input events.
 func fillPromptExpression(prompt string) string {
 	encoded, _ := json.Marshal(prompt)
 	return fmt.Sprintf(`(() => {`+pageDOMHelpers+`
-  const textarea = uniqueVisible('ms-prompt-box textarea', '提示词输入框');
-  if (!textarea) throw new Error('提示词输入框不存在');
+  const textarea = uniqueVisible('ms-prompt-box textarea', 'prompt textarea');
+  if (!textarea) throw new Error('prompt textarea does not exist');
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
   setter.call(textarea, %s);
   textarea.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: %s}));
@@ -39,16 +39,16 @@ func fillPromptExpression(prompt string) string {
 })()`, encoded, encoded)
 }
 
-// submitPromptExpression 点击官网当前可见且启用的提交按钮
+// submitPromptExpression clicks the currently visible and enabled run button.
 const submitPromptExpression = `(() => {` + pageDOMHelpers + `
-  const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
-  if (!button) throw new Error('官网 Run 按钮不存在');
-  if (!buttonEnabled(button)) throw new Error('官网 Run 按钮已禁用');
+  const button = uniqueVisible('ms-run-button button', 'official Run button');
+  if (!button) throw new Error('official Run button does not exist');
+  if (!buttonEnabled(button)) throw new Error('official Run button is disabled');
   button.click();
   return true;
 })()`
 
-// dismissOverlaysExpression 关闭官网已知且可交互的启动弹层
+// dismissOverlaysExpression dismisses known and interactive startup overlays.
 const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   const selectors = [
     'ms-g1-welcome-dialog button[aria-label="Close dialog"]',
@@ -57,7 +57,7 @@ const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   ];
   let clicked = 0;
   for (const selector of selectors) {
-    const button = uniqueVisible(selector, '启动弹层按钮');
+    const button = uniqueVisible(selector, 'startup overlay button');
     if (button && buttonEnabled(button)) {
       button.click();
       clicked++;
@@ -66,10 +66,10 @@ const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   return clicked;
 })()`
 
-// dismissKnownOverlays 关闭官网已知启动弹层
+// dismissKnownOverlays dismisses known startup overlays.
 func dismissKnownOverlays(ctx context.Context, client *bidiClient, contextID string) error {
 	if _, err := client.evaluate(ctx, contextID, dismissOverlaysExpression); err != nil {
-		return fmt.Errorf("处理 AI Studio 启动覆盖层: %w", err)
+		return fmt.Errorf("handling AI Studio startup overlays: %w", err)
 	}
 	return nil
 }

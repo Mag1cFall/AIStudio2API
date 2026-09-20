@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
-import { api } from '@/api'
+import { ref } from 'vue'
 import { useI18n } from '@/i18n'
 import type { ServiceConfig } from '@/types'
 import UiIcon from './UiIcon.vue'
@@ -12,69 +11,34 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  saved: [config: ServiceConfig]
   notice: [message: string, tone: 'success' | 'error']
 }>()
 
 const { t } = useI18n()
-const saving = ref(false)
 const revealKey = ref(false)
-const form = reactive<ServiceConfig>({
-  auth_states: 'auth',
-  listen_addr: '127.0.0.1:2048',
-  proxy_api_key: '',
-  active_listen_addr: '127.0.0.1:2048',
-  active_proxy_api_key: '',
-  management_restart_required: false,
-  service_restart_required: false,
-  proxy: '',
-  init_timeout: '2m',
-  request_timeout: '5m',
-  warm_worker_limit: 5,
-  max_active_workers: 10,
-  warm_startup_concurrency: 2,
-  per_account_concurrency: 2,
-  routing_strategy: 'round-robin',
-  temporary_chat: false,
-})
+const copied = ref(false)
 
-watch(
-  () => props.config,
-  (config) => {
-    if (config !== null) Object.assign(form, config)
-  },
-  { immediate: true },
-)
-
-// saveConfig 原子保存全局配置
-async function saveConfig(): Promise<void> {
-  saving.value = true
+async function copyApiKey(): Promise<void> {
+  if (!props.config?.proxy_api_key) return
   try {
-    const saved = await api.saveConfig({ ...form })
-    emit('saved', saved)
-
-    if (saved.management_restart_required && saved.service_restart_required) {
-      emit('notice', t('settings.savedBoth'), 'success')
-    } else if (saved.management_restart_required) {
-      emit('notice', t('settings.savedManagement'), 'success')
-    } else if (saved.service_restart_required) {
-      emit('notice', t('settings.savedService'), 'success')
-    } else {
-      emit('notice', t('settings.saved'), 'success')
-    }
-  } catch (error) {
-    emit('notice', error instanceof Error ? error.message : t('common.error'), 'error')
-  } finally {
-    saving.value = false
+    await navigator.clipboard.writeText(props.config.proxy_api_key)
+    copied.value = true
+    emit('notice', t('settings.copied'), 'success')
+    setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  } catch {
+    emit('notice', t('common.error'), 'error')
   }
 }
 </script>
 
 <template>
   <section class="mx-auto w-full max-w-3xl flex-1 overflow-auto p-4 md:p-8">
-    <h2 class="mb-6 border-b border-[#30363d] pb-2 text-2xl font-bold text-white">
-      {{ t('section.settings.title') }}
-    </h2>
+    <div class="mb-6 border-b border-[#30363d] pb-3">
+      <h2 class="text-xl font-bold text-white">{{ t('section.settings.title') }}</h2>
+      <p class="mt-1 text-xs text-gray-400">{{ t('section.settings.description') }}</p>
+    </div>
 
     <div v-if="error" class="rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
       {{ error }}
@@ -82,201 +46,174 @@ async function saveConfig(): Promise<void> {
     <div v-else-if="loading || config === null" class="py-12 text-center text-gray-500">
       {{ t('common.loading') }}
     </div>
-    <form v-else class="space-y-6" @submit.prevent="saveConfig">
+    <div v-else class="space-y-6">
+      <!-- Read-Only Notice Callout Block -->
       <div
-        v-if="config.service_restart_required"
-        class="rounded border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200"
+        class="flex items-start gap-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200"
       >
-        {{ t('settings.pendingService') }}
-      </div>
-      <div
-        v-if="config.management_restart_required"
-        class="rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
-      >
-        {{ t('settings.pendingManagement') }}
+        <UiIcon name="info" :size="18" class="mt-0.5 shrink-0 text-blue-400" />
+        <span class="leading-relaxed">{{ t('settings.readOnlyNotice') }}</span>
       </div>
 
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.authPath')
-          }}</span>
-          <input
-            v-model.trim="form.auth_states"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            required
-            autocomplete="off"
-          />
-          <span
-            v-if="form.listen_addr !== config.active_listen_addr"
-            class="mt-1 block text-xs text-gray-500"
-          >
-            {{ t('settings.activeValue') }}: {{ config.active_listen_addr }}
-          </span>
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.listen')
-          }}</span>
-          <input
-            v-model.trim="form.listen_addr"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            required
-            autocomplete="off"
-          />
-        </label>
-      </div>
-
-      <div class="rounded-lg border border-[#30363d] bg-[#161b22] p-4">
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-300">{{
-            t('settings.apiKey')
-          }}</span>
-          <div class="flex gap-2">
-            <input
-              v-model="form.proxy_api_key"
-              :type="revealKey ? 'text' : 'password'"
-              class="min-w-0 flex-1 rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-              autocomplete="new-password"
-            />
-            <button
-              class="rounded border border-[#30363d] bg-[#21262d] px-3 text-xs text-gray-300 transition hover:bg-[#30363d]"
-              type="button"
-              @click="revealKey = !revealKey"
-            >
-              {{ revealKey ? t('settings.hide') : t('settings.reveal') }}
-            </button>
+      <!-- General & Network -->
+      <div>
+        <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
+          {{ t('settings.networkSection') }}
+        </h3>
+        <div class="divide-y divide-[#30363d] rounded-lg border border-[#30363d] bg-[#161b22]">
+          <!-- Listen Address -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <span class="text-sm text-gray-300">{{ t('settings.listen') }}</span>
+            <code class="text-sm font-mono text-white">{{ config.listen_addr }}</code>
           </div>
-          <span
-            v-if="form.proxy_api_key !== config.active_proxy_api_key"
-            class="mt-1 block text-xs text-gray-500"
+
+          <!-- API Key -->
+          <div
+            class="flex flex-col gap-1.5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
           >
-            {{ t('settings.activeValue') }}:
-            {{ revealKey ? config.active_proxy_api_key || t('common.empty') : '••••••••' }}
-          </span>
-        </label>
+            <span class="text-sm text-gray-300">{{ t('settings.apiKey') }}</span>
+            <div class="flex items-center gap-2">
+              <span v-if="!config.proxy_api_key" class="text-xs text-gray-500">
+                ({{ t('common.empty') }})
+              </span>
+              <template v-else>
+                <code class="text-xs font-mono text-white">
+                  {{ revealKey ? config.proxy_api_key : '••••••••••••••••' }}
+                </code>
+                <button
+                  class="rounded border border-[#30363d] bg-[#21262d] px-2 py-0.5 text-xs text-gray-300 transition hover:bg-[#30363d]"
+                  type="button"
+                  @click="revealKey = !revealKey"
+                >
+                  {{ revealKey ? t('settings.hide') : t('settings.reveal') }}
+                </button>
+                <button
+                  class="rounded border border-[#30363d] bg-[#21262d] px-2 py-0.5 text-xs text-gray-300 transition hover:bg-[#30363d]"
+                  type="button"
+                  @click="copyApiKey"
+                >
+                  {{ copied ? t('settings.copied') : t('settings.copyKey') }}
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- Proxy -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <span class="text-sm text-gray-300">{{ t('settings.proxy') }}</span>
+            <span v-if="config.proxy" class="font-mono text-sm text-white">{{ config.proxy }}</span>
+            <span v-else class="text-xs text-gray-500">{{ t('settings.noProxy') }}</span>
+          </div>
+
+          <!-- Auth States -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <span class="text-sm text-gray-300">{{ t('settings.authPath') }}</span>
+            <code class="text-sm font-mono text-white">{{ config.auth_states }}</code>
+          </div>
+        </div>
       </div>
 
-      <div class="rounded-lg border border-[#30363d] bg-[#161b22] p-4">
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-300">{{
-            t('settings.proxy')
-          }}</span>
-          <input
-            v-model.trim="form.proxy"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            placeholder="http://127.0.0.1:7890"
-            autocomplete="off"
-          />
-        </label>
+      <!-- Workers & Scheduling -->
+      <div>
+        <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
+          {{ t('settings.concurrencySection') }}
+        </h3>
+        <div class="divide-y divide-[#30363d] rounded-lg border border-[#30363d] bg-[#161b22]">
+          <!-- Routing Strategy -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <div>
+              <span class="text-sm text-gray-300">{{ t('settings.routingStrategy') }}</span>
+              <p class="text-xs text-gray-500">{{ t('settings.routingHelp') }}</p>
+            </div>
+            <span class="rounded bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300">
+              {{
+                config.routing_strategy === 'fill-first'
+                  ? t('settings.routingFillFirst')
+                  : t('settings.routingRoundRobin')
+              }}
+            </span>
+          </div>
+
+          <!-- Headless Mode -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <div>
+              <span class="text-sm text-gray-300">{{ t('settings.headless') }}</span>
+              <p class="text-xs text-gray-500">
+                {{ config.headless ? t('settings.headlessDesc') : t('settings.guiDesc') }}
+              </p>
+            </div>
+            <span
+              class="rounded px-2 py-0.5 text-xs font-medium"
+              :class="
+                config.headless
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'bg-amber-500/20 text-amber-300'
+              "
+            >
+              {{ config.headless ? t('settings.enabled') : t('settings.disabled') }}
+            </span>
+          </div>
+
+          <!-- Temporary Chat -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <span class="text-sm text-gray-300">{{ t('settings.temporaryChat') }}</span>
+            <span
+              class="rounded px-2 py-0.5 text-xs font-medium"
+              :class="
+                config.temporary_chat
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'bg-gray-500/20 text-gray-400'
+              "
+            >
+              {{ config.temporary_chat ? t('settings.enabled') : t('settings.disabled') }}
+            </span>
+          </div>
+
+          <!-- Workers stats -->
+          <div class="grid grid-cols-2 divide-x divide-[#30363d] sm:grid-cols-4">
+            <div class="p-3 text-center">
+              <span class="block text-xs text-gray-400">{{ t('settings.warmWorkerLimit') }}</span>
+              <span class="mt-1 font-mono text-lg font-semibold text-white">
+                {{ config.warm_worker_limit }}
+              </span>
+            </div>
+            <div class="p-3 text-center">
+              <span class="block text-xs text-gray-400">{{ t('settings.maxActiveWorkers') }}</span>
+              <span class="mt-1 font-mono text-lg font-semibold text-white">
+                {{ config.max_active_workers }}
+              </span>
+            </div>
+            <div class="p-3 text-center">
+              <span class="block text-xs text-gray-400">
+                {{ t('settings.warmStartupConcurrency') }}
+              </span>
+              <span class="mt-1 font-mono text-lg font-semibold text-white">
+                {{ config.warm_startup_concurrency }}
+              </span>
+            </div>
+            <div class="p-3 text-center">
+              <span class="block text-xs text-gray-400">
+                {{ t('settings.perAccountConcurrency') }}
+              </span>
+              <span class="mt-1 font-mono text-lg font-semibold text-white">
+                {{ config.per_account_concurrency }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Timeouts -->
+          <div class="grid grid-cols-2 divide-x divide-[#30363d]">
+            <div class="flex items-center justify-between p-3.5">
+              <span class="text-xs text-gray-400">{{ t('settings.initTimeout') }}</span>
+              <span class="font-mono text-sm text-white">{{ config.init_timeout }}</span>
+            </div>
+            <div class="flex items-center justify-between p-3.5">
+              <span class="text-xs text-gray-400">{{ t('settings.requestTimeout') }}</span>
+              <span class="font-mono text-sm text-white">{{ config.request_timeout }}</span>
+            </div>
+          </div>
+        </div>
       </div>
-
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.initTimeout')
-          }}</span>
-          <input
-            v-model.trim="form.init_timeout"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            required
-            autocomplete="off"
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.requestTimeout')
-          }}</span>
-          <input
-            v-model.trim="form.request_timeout"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            required
-            autocomplete="off"
-          />
-        </label>
-      </div>
-
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.warmWorkerLimit')
-          }}</span>
-          <input
-            v-model.number="form.warm_worker_limit"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            type="number"
-            min="1"
-            required
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.maxActiveWorkers')
-          }}</span>
-          <input
-            v-model.number="form.max_active_workers"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            type="number"
-            :min="form.warm_worker_limit"
-            required
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.warmStartupConcurrency')
-          }}</span>
-          <input
-            v-model.number="form.warm_startup_concurrency"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            type="number"
-            min="1"
-            :max="form.warm_worker_limit"
-            required
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-sm font-medium text-gray-400">{{
-            t('settings.perAccountConcurrency')
-          }}</span>
-          <input
-            v-model.number="form.per_account_concurrency"
-            class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-            type="number"
-            min="1"
-            required
-          />
-        </label>
-      </div>
-
-      <label class="block rounded-lg border border-[#30363d] bg-[#161b22] p-4">
-        <span class="mb-2 block text-sm font-medium text-gray-300">{{
-          t('settings.routingStrategy')
-        }}</span>
-        <select
-          v-model="form.routing_strategy"
-          class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-        >
-          <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
-          <option value="fill-first">{{ t('settings.routingFillFirst') }}</option>
-        </select>
-        <span class="mt-2 block text-xs text-gray-500">{{ t('settings.routingHelp') }}</span>
-      </label>
-
-      <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
-        <input v-model="form.temporary_chat" class="h-4 w-4 accent-blue-500" type="checkbox" />
-        <span class="text-sm font-medium text-gray-300">{{ t('settings.temporaryChat') }}</span>
-      </label>
-
-      <div class="flex justify-end pt-4">
-        <button
-          class="flex items-center gap-2 rounded bg-blue-600 px-6 py-2 font-medium text-white shadow-lg transition hover:bg-blue-500 disabled:opacity-50"
-          type="submit"
-          :disabled="saving"
-        >
-          <UiIcon :name="saving ? 'spinner' : 'check'" :size="16" />
-          {{ saving ? t('common.loading') : t('common.save') }}
-        </button>
-      </div>
-    </form>
+    </div>
   </section>
 </template>

@@ -49,7 +49,7 @@ var imageResolutions = map[int64]string{1: "1K", 2: "2K", 3: "4K", 4: "512"}
 var videoDurations = map[int64]string{1: "5", 2: "6", 3: "7", 4: "8", 5: "4"}
 var videoResolutions = map[int64]string{1: "720p", 2: "1080p", 3: "4k", 4: "368p", 5: "360p"}
 
-// GenerationDefaults 保存 ListModels 返回的生成默认值
+// GenerationDefaults stores generation defaults returned by ListModels
 type GenerationDefaults struct {
 	MaxOutputTokens      int64
 	Temperature          *float64
@@ -72,7 +72,7 @@ type modelCatalog struct {
 	entries map[string]modelEntry
 }
 
-// ParseModels 解码 ListModels 的现场数组协议
+// ParseModels decodes the live array protocol of ListModels
 func ParseModels(source io.Reader) ([]Model, error) {
 	catalog, err := parseModelCatalog(source)
 	if err != nil {
@@ -84,14 +84,14 @@ func ParseModels(source io.Reader) ([]Model, error) {
 func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 	raw, err := io.ReadAll(newSparseJSONReader(source))
 	if err != nil {
-		return modelCatalog{}, fmt.Errorf("读取 ListModels: %w", err)
+		return modelCatalog{}, fmt.Errorf("read ListModels: %w", err)
 	}
 	root, err := rawArray(raw, "$", raw)
 	if err != nil {
 		return modelCatalog{}, withMethod(err, "ListModels")
 	}
 	if len(root) == 0 || isJSONNull(root[0]) {
-		return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: "$[0]", Detail: "缺少模型列表", Raw: raw}
+		return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: "$[0]", Detail: "missing model list", Raw: raw}
 	}
 	rows, err := rawArray(root[0], "$[0]", raw)
 	if err != nil {
@@ -104,7 +104,7 @@ func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 			return modelCatalog{}, err
 		}
 		if _, exists := catalog.entries[entry.model.ID]; exists {
-			return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("$[0][%d][0]", index), Detail: "模型 ID 重复", Raw: rowRaw}
+			return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("$[0][%d][0]", index), Detail: "duplicate model ID", Raw: rowRaw}
 		}
 		catalog.models = append(catalog.models, entry.model)
 		catalog.entries[entry.model.ID] = entry
@@ -178,7 +178,7 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	}
 	id := strings.TrimPrefix(wireName, "models/")
 	if id == "" {
-		return modelEntry{}, &ProtocolEvidenceError{Method: "ListModels", Path: path + "[0]", Detail: "模型 ID 为空", Raw: raw}
+		return modelEntry{}, &ProtocolEvidenceError{Method: "ListModels", Path: path + "[0]", Detail: "model ID is empty", Raw: raw}
 	}
 	model := Model{
 		ID:                id,
@@ -306,7 +306,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	return c.ModelsForAccount(ctx, "")
 }
 
-// ModelsForAccount 读取指定账户的实时模型目录
+// ModelsForAccount reads the live model catalog for the specified account
 func (c *Client) ModelsForAccount(ctx context.Context, accountID string) ([]Model, error) {
 	catalog, err := c.loadModels(ctx, accountID)
 	if err != nil {
@@ -371,7 +371,7 @@ func requiredStringField(row []json.RawMessage, index int, path string, evidence
 		return "", err
 	}
 	if value == "" {
-		return "", &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("%s[%d]", path, index), Detail: "必需字符串为空", Raw: evidence}
+		return "", &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("%s[%d]", path, index), Detail: "required string is empty", Raw: evidence}
 	}
 	return value, nil
 }

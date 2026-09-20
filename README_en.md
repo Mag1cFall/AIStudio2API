@@ -375,9 +375,10 @@ cp .env.example .env
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
-| `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
+| `ROUTING_STRATEGY` | `round-robin` | Routing strategy: `round-robin` (balances load & rate limits across accounts); `fill-first` (sticky routing, spills over when full/cooling down) |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
-
+| `HEADLESS` | `true` | Run Camoufox in headless mode (`true` for silent background; `false` to display browser window) |
+| `CAMOUFOX_PATH` | empty | Custom path to Camoufox executable (optional) |
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
 
 ### Port Configuration
@@ -391,7 +392,7 @@ The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT`
 
 HTTP, HTTPS, and SOCKS5 proxies without embedded credentials are supported:
 
-1. Set the global proxy under Service Configuration
+1. Set the global proxy `PROXY` in `.env`
 2. Edit an account to set an account-specific proxy
 3. The account proxy is used for login, WAA, and business requests
 

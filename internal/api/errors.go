@@ -42,7 +42,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// streamHeaders 写入并刷新流式响应头
+// streamHeaders writes and flushes streaming response headers.
 func streamHeaders(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -51,7 +51,7 @@ func streamHeaders(w http.ResponseWriter) error {
 	return http.NewResponseController(w).Flush()
 }
 
-// writeSSE 写入具名事件并传播缓冲刷新错误
+// writeSSE writes a named event and propagates buffer flush errors.
 func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -68,7 +68,7 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	return http.NewResponseController(w).Flush()
 }
 
-// writeSSEText 写入文本事件并刷新网络缓冲
+// writeSSEText writes a text event and flushes the network buffer.
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 		return err
@@ -76,7 +76,7 @@ func writeSSEText(w http.ResponseWriter, data string) error {
 	return http.NewResponseController(w).Flush()
 }
 
-// writeSSEHeartbeat 发送心跳并传播连接错误
+// writeSSEHeartbeat sends a heartbeat and propagates connection errors.
 func writeSSEHeartbeat(w http.ResponseWriter) error {
 	if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 		return err
@@ -118,7 +118,7 @@ func statusFromError(err error) int {
 	return http.StatusBadGateway
 }
 
-// shouldWriteRequestError 判断仍在线的客户端是否需要收到结构化错误
+// shouldWriteRequestError determines whether a structured error should be written to a client that is still online.
 func shouldWriteRequestError(r *http.Request, err error) bool {
 	return err != nil && (!errors.Is(err, context.Canceled) || r.Context().Err() == nil)
 }

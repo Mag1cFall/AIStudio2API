@@ -12,13 +12,13 @@ import (
 
 var errStopSequenceMatched = errors.New("stop sequence matched")
 
-// tokenCountResult 保存并发输入计数结果
+// tokenCountResult stores concurrent input count results
 type tokenCountResult struct {
 	count TokenCount
 	err   error
 }
 
-// EncodeGenerateContentRequest 编码当前成功基线的 GenerateContent 数组
+// EncodeGenerateContentRequest encodes the GenerateContent array for the current baseline
 func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDefaults, runtime RequestContext) ([]byte, error) {
 	tools, explicitTools, err := encodeRequestedTools(request.Tools)
 	if err != nil {
@@ -29,7 +29,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		return nil, err
 	}
 	if len(contents) == 0 {
-		return nil, fmt.Errorf("GenerateContent contents 不能为空")
+		return nil, fmt.Errorf("GenerateContent contents cannot be empty")
 	}
 	config, err := encodeGenerationConfig(request.Config, defaults)
 	if err != nil {
@@ -80,20 +80,20 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	case "minimal":
 		thinkingLevel = 4
 	default:
-		return nil, fmt.Errorf("reasoning effort 必须是 minimal、low、medium 或 high")
+		return nil, fmt.Errorf("reasoning effort must be minimal, low, medium, or high")
 	}
 	if hasReasoningEffort && defaults.ThinkingLevel {
 		thinkingLevel = closestSupportedThinkingLevel(thinkingLevel, defaults.ThinkingLevels)
 	}
 	if hasReasoningEffort && !defaults.ThinkingLevel {
 		if thinkingBudget == nil || !defaults.ThinkingBudget {
-			return nil, fmt.Errorf("模型不支持 thinking level")
+			return nil, fmt.Errorf("model does not support thinking level")
 		}
 		hasReasoningEffort = false
 	}
 	if thinkingBudget != nil && !defaults.ThinkingBudget {
 		if !hasReasoningEffort || !defaults.ThinkingLevel {
-			return nil, fmt.Errorf("模型不支持 thinking budget")
+			return nil, fmt.Errorf("model does not support thinking budget")
 		}
 		thinkingBudget = nil
 	}
@@ -103,31 +103,31 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		maxOutput = *config.MaxOutputTokens
 	}
 	if includeMaxOutput && maxOutput <= 0 {
-		return nil, fmt.Errorf("模型目录缺少有效 output token limit")
+		return nil, fmt.Errorf("model catalog missing valid output token limit")
 	}
 	if includeMaxOutput && maxOutput > defaults.MaxOutputTokens {
-		return nil, fmt.Errorf("max output tokens %d 超过模型上限 %d", maxOutput, defaults.MaxOutputTokens)
+		return nil, fmt.Errorf("max output tokens %d exceeds model limit %d", maxOutput, defaults.MaxOutputTokens)
 	}
 	temperature := defaults.Temperature
 	if config.Temperature != nil {
 		temperature = config.Temperature
 	}
 	if temperature != nil && (*temperature < 0 || *temperature > 2) {
-		return nil, fmt.Errorf("temperature 必须在 0 到 2 之间")
+		return nil, fmt.Errorf("temperature must be between 0 and 2")
 	}
 	topP := defaults.TopP
 	if config.TopP != nil {
 		topP = config.TopP
 	}
 	if topP != nil && (*topP < 0 || *topP > 1) {
-		return nil, fmt.Errorf("top_p 必须在 0 到 1 之间")
+		return nil, fmt.Errorf("top_p must be between 0 and 1")
 	}
 	topK := defaults.TopK
 	if config.TopK != nil {
 		topK = config.TopK
 	}
 	if topK != nil && *topK < 0 {
-		return nil, fmt.Errorf("top_k 不能为负数")
+		return nil, fmt.Errorf("top_k cannot be negative")
 	}
 	responseModalities, err := encodeResponseModalities(config.ResponseModalities)
 	if err != nil {
@@ -256,11 +256,11 @@ func encodeResponseModalities(modalities []ResponseModality) ([]int64, error) {
 		case ResponseModalityAudio:
 			hasAudio = true
 		default:
-			return nil, fmt.Errorf("response modality %q 不受支持", modality)
+			return nil, fmt.Errorf("response modality %q is not supported", modality)
 		}
 	}
 	if hasAudio && (hasText || hasImage) {
-		return nil, fmt.Errorf("AUDIO 不能和其他 response modality 同时使用")
+		return nil, fmt.Errorf("AUDIO cannot be used together with other response modalities")
 	}
 	switch {
 	case hasAudio:
@@ -301,7 +301,7 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 	}
 	voiceName := strings.TrimSpace(config.VoiceName)
 	if voiceName != "" && len(config.Speakers) > 0 {
-		return nil, fmt.Errorf("speech config 不能同时设置 voice 和 multi-speaker")
+		return nil, fmt.Errorf("speech config cannot set both voice and multi-speaker")
 	}
 	var wire []any
 	if voiceName != "" {
@@ -313,7 +313,7 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 			name := strings.TrimSpace(speaker.Speaker)
 			voice := strings.TrimSpace(speaker.VoiceName)
 			if name == "" || voice == "" {
-				return nil, fmt.Errorf("speech config speakers[%d] 需要 speaker 和 voiceName", index)
+				return nil, fmt.Errorf("speech config speakers[%d] requires speaker and voiceName", index)
 			}
 			speakers = append(speakers, []any{name, []any{[]any{voice}}})
 		}
@@ -387,7 +387,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if c.contextProvider != nil {
 		runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID)
 		if err != nil {
-			return nil, fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
+			return nil, fmt.Errorf("read AI Studio request context: %w", err)
 		}
 	}
 	wireRequest := request
@@ -537,7 +537,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	return events, nil
 }
 
-// DecodeGenerateStream 按网络到达顺序解码 GenerateContent repeated 帧
+// DecodeGenerateStream decodes GenerateContent repeated frames in network arrival order
 func DecodeGenerateStream(source io.Reader, decoder *FrameDecoder, emit func(Event) error) error {
 	return decodeGenerateItems(source, func(raw json.RawMessage) error {
 		events, err := decoder.Decode(raw)

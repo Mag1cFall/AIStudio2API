@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	// LoginMethodIsolatedBrowser 表示独立浏览器登录
+	// LoginMethodIsolatedBrowser indicates isolated browser login
 	LoginMethodIsolatedBrowser = "isolated_browser"
 )
 
-// StateCookie 表示 Playwright storage state 中的 Cookie
+// StateCookie represents a cookie in Playwright storage state
 type StateCookie struct {
 	Name         string  `json:"name"`
 	Value        string  `json:"value"`
@@ -32,40 +32,40 @@ type StateCookie struct {
 	PartitionKey string  `json:"partitionKey,omitempty"`
 }
 
-// StorageItem 表示浏览器本地存储项
+// StorageItem represents a browser local storage item
 type StorageItem struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
 
-// StorageOrigin 表示 Playwright storage state 中的站点数据
+// StorageOrigin represents origin data in Playwright storage state
 type StorageOrigin struct {
 	Origin       string        `json:"origin"`
 	LocalStorage []StorageItem `json:"localStorage"`
 }
 
-// StorageState 表示可原样写回的 Playwright storage state
+// StorageState represents Playwright storage state that can be written back as-is
 type StorageState struct {
 	Cookies []StateCookie   `json:"cookies"`
 	Origins []StorageOrigin `json:"origins"`
 	extra   map[string]json.RawMessage
 }
 
-// AuthSource 记录认证状态的来源
+// AuthSource records the source of authentication state
 type AuthSource struct {
 	Browser string `json:"browser"`
 	Profile string `json:"profile,omitempty"`
 	Email   string `json:"email,omitempty"`
 }
 
-// ChromeOAuthMaterial 保存 Chrome DBSC 续签材料
+// ChromeOAuthMaterial stores Chrome DBSC renewal material
 type ChromeOAuthMaterial struct {
 	GaiaID            string `json:"gaia_id"`
 	RefreshToken      string `json:"refresh_token"`
 	WrappedBindingKey []byte `json:"wrapped_binding_key"`
 }
 
-// AuthExtension 保存 aistudio2api 认证扩展
+// AuthExtension stores aistudio2api auth extensions
 type AuthExtension struct {
 	Source AuthSource           `json:"source"`
 	OAuth  *ChromeOAuthMaterial `json:"oauth,omitempty"`
@@ -73,14 +73,14 @@ type AuthExtension struct {
 
 const authExtensionKey = "aistudio2api"
 
-// SetAuthExtension 写入 aistudio2api 认证扩展
+// SetAuthExtension writes an aistudio2api auth extension
 func (s *StorageState) SetAuthExtension(extension AuthExtension) error {
 	if s == nil {
-		return fmt.Errorf("storage state 为空")
+		return fmt.Errorf("storage state is empty")
 	}
 	raw, err := json.Marshal(extension)
 	if err != nil {
-		return fmt.Errorf("编码认证扩展: %w", err)
+		return fmt.Errorf("encode auth extension: %w", err)
 	}
 	if s.extra == nil {
 		s.extra = make(map[string]json.RawMessage)
@@ -89,7 +89,7 @@ func (s *StorageState) SetAuthExtension(extension AuthExtension) error {
 	return nil
 }
 
-// AuthExtension 返回 aistudio2api 认证扩展
+// AuthExtension returns the aistudio2api auth extension
 func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 	raw, exists := s.extra[authExtensionKey]
 	if !exists {
@@ -97,18 +97,18 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 	}
 	var extension AuthExtension
 	if err := json.Unmarshal(raw, &extension); err != nil {
-		return AuthExtension{}, true, fmt.Errorf("解析认证扩展: %w", err)
+		return AuthExtension{}, true, fmt.Errorf("parse auth extension: %w", err)
 	}
 	return extension, true, nil
 }
 
-// LoginMethod 描述可发布的账户登录入口
+// LoginMethod describes a publishable account login method
 type LoginMethod struct {
 	ID          string `json:"id"`
 	Interactive bool   `json:"interactive"`
 }
 
-// IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境
+// IsolatedLoginRequest describes the stable environment required for isolated browser login
 type IsolatedLoginRequest struct {
 	AccountID string
 	Directory string
@@ -117,40 +117,40 @@ type IsolatedLoginRequest struct {
 	Timezone  string
 }
 
-// IsolatedLoginResult 返回独立浏览器导出的认证状态
+// IsolatedLoginResult returns authentication state exported from an isolated browser
 type IsolatedLoginResult struct {
 	StorageState StorageState
 	Email        string
 	VerifiedAt   time.Time
 }
 
-// LoginVerification 表示隔离运行时对登录态的验证结果
+// LoginVerification represents verification result of login state by an isolated runtime
 type LoginVerification struct {
 	Authenticated bool      `json:"authenticated"`
 	VerifiedAt    time.Time `json:"verified_at"`
 	Reason        string    `json:"reason,omitempty"`
 }
 
-// IsolatedLoginDriver 定义独立浏览器登录与验证合同
+// IsolatedLoginDriver defines the contract for isolated browser login and verification
 type IsolatedLoginDriver interface {
 	Login(context.Context, IsolatedLoginRequest) (IsolatedLoginResult, error)
 	Verify(context.Context, IsolatedLoginRequest, StorageState) (LoginVerification, error)
 }
 
-// SupportedLoginMethods 返回当前可发布的登录入口
+// SupportedLoginMethods returns the login methods currently available for publishing
 func SupportedLoginMethods() []LoginMethod {
 	return []LoginMethod{{ID: LoginMethodIsolatedBrowser, Interactive: true}}
 }
 
-// LoadStorageState 读取并校验 Playwright storage state
+// LoadStorageState reads and validates Playwright storage state
 func LoadStorageState(filePath string) (StorageState, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return StorageState{}, fmt.Errorf("读取 storage state: %w", err)
+		return StorageState{}, fmt.Errorf("read storage state: %w", err)
 	}
 	var state StorageState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return StorageState{}, fmt.Errorf("解析 storage state: %w", err)
+		return StorageState{}, fmt.Errorf("parse storage state: %w", err)
 	}
 	if err := state.Validate(); err != nil {
 		return StorageState{}, err
@@ -158,48 +158,48 @@ func LoadStorageState(filePath string) (StorageState, error) {
 	return state, nil
 }
 
-// WriteStorageState 原子写回 Playwright storage state
+// WriteStorageState atomically writes back Playwright storage state
 func WriteStorageState(filePath string, state StorageState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("编码 storage state: %w", err)
+		return fmt.Errorf("encode storage state: %w", err)
 	}
 	data = append(data, '\n')
 	return atomicWriteFile(filePath, data, 0o600)
 }
 
-// Validate 校验 storage state 的浏览器字段
+// Validate validates browser fields of storage state
 func (s StorageState) Validate() error {
 	for index, cookie := range s.Cookies {
 		if strings.TrimSpace(cookie.Name) == "" || strings.TrimSpace(cookie.Domain) == "" {
-			return fmt.Errorf("storage state Cookie %d 缺少名称或域", index)
+			return fmt.Errorf("storage state cookie %d missing name or domain", index)
 		}
 		if cookie.Path == "" || cookie.Path[0] != '/' {
-			return fmt.Errorf("storage state Cookie %s 的路径无效", cookie.Name)
+			return fmt.Errorf("storage state cookie %s has invalid path", cookie.Name)
 		}
 		switch cookie.SameSite {
 		case "", "Lax", "Strict", "None":
 		default:
-			return fmt.Errorf("storage state Cookie %s 的 SameSite 无效", cookie.Name)
+			return fmt.Errorf("storage state cookie %s has invalid SameSite", cookie.Name)
 		}
 	}
 	for index, origin := range s.Origins {
 		parsed, err := url.Parse(origin.Origin)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return fmt.Errorf("storage state origin %d 无效", index)
+			return fmt.Errorf("storage state origin %d is invalid", index)
 		}
 	}
 	return nil
 }
 
-// CookieHeader 为目标 URL 构造当前有效的 Cookie 请求头
+// CookieHeader constructs currently valid Cookie request header for the target URL
 func (s StorageState) CookieHeader(targetURL string, now time.Time) (string, error) {
 	target, err := url.Parse(targetURL)
 	if err != nil || target.Scheme == "" || target.Hostname() == "" {
-		return "", fmt.Errorf("目标 URL 无效")
+		return "", fmt.Errorf("target URL is invalid")
 	}
 	type candidate struct {
 		cookie StateCookie
@@ -231,7 +231,7 @@ func (s StorageState) CookieHeader(targetURL string, now time.Time) (string, err
 	return strings.Join(parts, "; "), nil
 }
 
-// CookieValue 返回目标 URL 下最具体的同名 Cookie
+// CookieValue returns the most specific cookie with the given name for the target URL
 func (s StorageState) CookieValue(name string, targetURL string, now time.Time) (string, bool) {
 	target, err := url.Parse(targetURL)
 	if err != nil {
@@ -260,17 +260,17 @@ func (s StorageState) CookieValue(name string, targetURL string, now time.Time) 
 	return selected, selectedPath >= 0
 }
 
-// MergeSetCookieHeaders 将响应轮换的 Cookie 合并到 storage state
+// MergeSetCookieHeaders merges response rotated cookies into storage state
 func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string, now time.Time) error {
 	source, err := url.Parse(sourceURL)
 	if err != nil || source.Scheme == "" || source.Hostname() == "" {
-		return fmt.Errorf("来源 URL 无效")
+		return fmt.Errorf("source URL is invalid")
 	}
 	for _, header := range headers {
 		response := http.Response{Header: http.Header{"Set-Cookie": []string{header}}}
 		cookies := response.Cookies()
 		if len(cookies) != 1 {
-			return fmt.Errorf("Set-Cookie 格式无效")
+			return fmt.Errorf("invalid Set-Cookie format")
 		}
 		incoming := cookies[0]
 		domain := strings.ToLower(incoming.Domain)
@@ -314,7 +314,7 @@ func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string,
 	return nil
 }
 
-// MarshalJSON 保留 storage state 的扩展根字段
+// MarshalJSON preserves extension root fields of storage state
 func (s StorageState) MarshalJSON() ([]byte, error) {
 	value := make(map[string]json.RawMessage, len(s.extra)+2)
 	for key, raw := range s.extra {
@@ -341,7 +341,7 @@ func (s StorageState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(value)
 }
 
-// UnmarshalJSON 解析 storage state 并保存扩展根字段
+// UnmarshalJSON parses storage state and preserves extension root fields
 func (s *StorageState) UnmarshalJSON(data []byte) error {
 	var value map[string]json.RawMessage
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -411,34 +411,34 @@ func sameSiteText(value http.SameSite) string {
 func atomicWriteFile(filePath string, data []byte, mode os.FileMode) error {
 	target, err := filepath.Abs(filePath)
 	if err != nil {
-		return fmt.Errorf("解析文件路径: %w", err)
+		return fmt.Errorf("resolve file path: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("创建文件目录: %w", err)
+		return fmt.Errorf("create file directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+"-*.tmp")
 	if err != nil {
-		return fmt.Errorf("创建临时文件: %w", err)
+		return fmt.Errorf("create temporary file: %w", err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
-		return fmt.Errorf("设置文件权限: %w", err)
+		return fmt.Errorf("set file permissions: %w", err)
 	}
 	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
-		return fmt.Errorf("写入临时文件: %w", err)
+		return fmt.Errorf("write temporary file: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return fmt.Errorf("同步临时文件: %w", err)
+		return fmt.Errorf("sync temporary file: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("关闭临时文件: %w", err)
+		return fmt.Errorf("close temporary file: %w", err)
 	}
 	if err := os.Rename(temporaryPath, target); err != nil {
-		return fmt.Errorf("替换文件: %w", err)
+		return fmt.Errorf("replace file: %w", err)
 	}
 	return nil
 }

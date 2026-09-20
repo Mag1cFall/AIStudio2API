@@ -272,7 +272,7 @@ func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {
 	return buffer.Bytes()
 }
 
-// decodeBase64Flexible 根据字母表和填充形式解码 Base64 与 Data URL
+// decodeBase64Flexible decodes Base64 and Data URLs based on alphabet and padding variant.
 func decodeBase64Flexible(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
 	if idx := strings.Index(s, ","); idx != -1 && strings.HasPrefix(s, "data:") {
@@ -288,7 +288,7 @@ func decodeBase64Flexible(s string) ([]byte, error) {
 	return encoding.DecodeString(s)
 }
 
-// normalizeImagePayload 将 GIF 首帧按逻辑画布转换为 PNG 图片
+// normalizeImagePayload converts the first frame of a GIF to a PNG image based on its logical canvas.
 func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	lowerMIME := strings.ToLower(strings.TrimSpace(mimeType))
 	if lowerMIME == "image/gif" || (len(data) >= 3 && string(data[:3]) == "GIF") {
@@ -303,7 +303,7 @@ func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 				_, _, _, alpha := entry.RGBA()
 				transparent = transparent || alpha == 0
 			}
-			// GIF 背景色来自全局色表，透明首帧保留透明画布
+			// GIF background color comes from the global palette; transparent first frames keep a transparent canvas.
 			if palette, ok := config.ColorModel.(color.Palette); ok && !transparent && int(data[11]) < len(palette) {
 				draw.Draw(canvas, canvas.Bounds(), image.NewUniform(palette[data[11]]), image.Point{}, draw.Src)
 			}

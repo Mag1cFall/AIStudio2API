@@ -386,7 +386,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			})
 		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
 			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
-				return aistudio.Tools{}, fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
+				return aistudio.Tools{}, fmt.Errorf("web_search search_context_size, user_location, or filters are not supported by AI Studio Web")
 			}
 			mapped.Google = appendUnique(mapped.Google, "google_search")
 		case "code_interpreter":

@@ -245,7 +245,7 @@ func (s *server) handleOpenAIFileGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, openAIFileResponse(metadata))
 }
 
-// handleOpenAIFileContent 返回上传文件内容
+// handleOpenAIFileContent returns the uploaded file content.
 func (s *server) handleOpenAIFileContent(w http.ResponseWriter, r *http.Request) {
 	service, ok := s.service.(aistudio.FileService)
 	if !ok {
@@ -302,7 +302,7 @@ func (s *server) handleOpenAIFileContent(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleOpenAIFileDelete 删除上传文件
+// handleOpenAIFileDelete deletes an uploaded file.
 func (s *server) handleOpenAIFileDelete(w http.ResponseWriter, r *http.Request) {
 	service, ok := s.service.(aistudio.FileService)
 	if !ok {

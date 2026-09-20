@@ -249,7 +249,7 @@ func anthropicRole(role string) (aistudio.Role, error) {
 	}
 }
 
-// anthropicParts 转换消息块并保留工具调用的思考签名
+// anthropicParts converts message blocks and preserves thought signatures for tool calls.
 func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {

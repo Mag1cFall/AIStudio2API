@@ -13,45 +13,45 @@ import (
 	"time"
 )
 
-// PooledService 在账户租约内调用协议客户端
+// PooledService calls the protocol client within an account lease
 type PooledService struct {
 	pool   *AccountPool
 	client *Client
 }
 
-// PoolRequestContextProvider 从租约账户读取协议上下文
+// PoolRequestContextProvider reads protocol context from a leased account
 type PoolRequestContextProvider struct {
 	pool *AccountPool
 }
 
-// ProtectedPreparer 为一次请求写入 fresh WAA proof 并通过账户固定指纹浏览器发送
+// ProtectedPreparer writes fresh WAA proof for a request and transmits via the account's fixed-fingerprint browser
 type ProtectedPreparer interface {
 	Prepare(context.Context, ProtectedRequest) (PreparedProtectedRequest, error)
 	BrowserStorageState(context.Context) (StorageState, error)
 	SendProtected(context.Context, ProtectedRequest) (*RPCResponse, error)
 }
 
-// ProtectedPreparerProvider 按账户返回 lazy WAA preparer
+// ProtectedPreparerProvider returns a lazy WAA preparer for an account
 type ProtectedPreparerProvider interface {
 	Worker(context.Context, string, string) (ProtectedPreparer, error)
 }
 
-// ProtectedPreparerProviderFunc 将函数适配为 ProtectedPreparerProvider
+// ProtectedPreparerProviderFunc adapts a function to ProtectedPreparerProvider
 type ProtectedPreparerProviderFunc func(context.Context, string, string) (ProtectedPreparer, error)
 
-// Worker 返回账户的 lazy WAA preparer
+// Worker returns the lazy WAA preparer for an account
 func (f ProtectedPreparerProviderFunc) Worker(ctx context.Context, accountID string, modelID string) (ProtectedPreparer, error) {
 	return f(ctx, accountID, modelID)
 }
 
-// WorkerProtectedTransportOptions 定义受保护请求的 proof 与 HTTP 依赖
+// WorkerProtectedTransportOptions defines proof and HTTP dependencies for protected requests
 type WorkerProtectedTransportOptions struct {
 	Transport    *MakerSuiteHTTPTransport
 	Workers      ProtectedPreparerProvider
 	SetupTimeout time.Duration
 }
 
-// WorkerProtectedTransport 将 fresh proof 交给同租约 HTTP 传输
+// WorkerProtectedTransport passes fresh proof to same-lease HTTP transport
 type WorkerProtectedTransport struct {
 	transport    *MakerSuiteHTTPTransport
 	workers      ProtectedPreparerProvider
@@ -63,42 +63,42 @@ var _ RequestContextProvider = (*PoolRequestContextProvider)(nil)
 var _ ProtectedTransport = (*WorkerProtectedTransport)(nil)
 var _ VideoProtectedTransport = (*WorkerProtectedTransport)(nil)
 
-// NewPooledService 创建多账户协议服务
+// NewPooledService creates a multi-account protocol service
 func NewPooledService(pool *AccountPool, client *Client) (*PooledService, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("AI Studio account pool 不能为空")
+		return nil, fmt.Errorf("AI Studio account pool cannot be nil")
 	}
 	if client == nil {
-		return nil, fmt.Errorf("AI Studio client 不能为空")
+		return nil, fmt.Errorf("AI Studio client cannot be nil")
 	}
 	return &PooledService{pool: pool, client: client}, nil
 }
 
-// NewPoolRequestContextProvider 创建账户协议上下文提供者
+// NewPoolRequestContextProvider creates an account protocol context provider
 func NewPoolRequestContextProvider(pool *AccountPool) (*PoolRequestContextProvider, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("AI Studio account pool 不能为空")
+		return nil, fmt.Errorf("AI Studio account pool cannot be nil")
 	}
 	return &PoolRequestContextProvider{pool: pool}, nil
 }
 
-// NewWorkerProtectedTransport 创建基于 lazy WAA preparer 的受保护传输
+// NewWorkerProtectedTransport creates protected transport based on lazy WAA preparer
 func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*WorkerProtectedTransport, error) {
 	if options.Transport == nil {
-		return nil, fmt.Errorf("MakerSuite HTTP transport 不能为空")
+		return nil, fmt.Errorf("MakerSuite HTTP transport cannot be nil")
 	}
 	if options.Workers == nil {
-		return nil, fmt.Errorf("WAA preparer provider 不能为空")
+		return nil, fmt.Errorf("WAA preparer provider cannot be nil")
 	}
 	if options.SetupTimeout <= 0 {
-		return nil, fmt.Errorf("Bidi setup timeout 必须是正数时长")
+		return nil, fmt.Errorf("bidi setup timeout must be a positive duration")
 	}
 	return &WorkerProtectedTransport{
 		transport: options.Transport, workers: options.Workers, setupTimeout: options.SetupTimeout,
 	}, nil
 }
 
-// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent
+// DoProtected writes fresh proof and sends GenerateContent via Camoufox
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
 	prompt, err := bindingPrompt(request)
 	if err != nil {
@@ -122,7 +122,7 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	}
 	browserState, err := worker.BrowserStorageState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+		return nil, fmt.Errorf("read browser cookies: %w", err)
 	}
 	authorization, err := t.transport.signer.Authorization(browserState)
 	if err != nil {
@@ -139,10 +139,10 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	}
 	browserState, err = worker.BrowserStorageState(ctx)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("导出浏览器 Cookie: %w", err), response.Body.Close())
+		return nil, errors.Join(fmt.Errorf("export browser cookies: %w", err), response.Body.Close())
 	}
 	if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
-		return nil, errors.Join(fmt.Errorf("保存浏览器 Cookie: %w", err), response.Body.Close())
+		return nil, errors.Join(fmt.Errorf("save browser cookies: %w", err), response.Body.Close())
 	}
 	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil
@@ -157,14 +157,14 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 ) (*AccountLease, ProtectedPreparer, RPCRequest, error) {
 	lease, ok := AccountLeaseFromContext(ctx)
 	if !ok {
-		return nil, nil, RPCRequest{}, fmt.Errorf("受保护请求缺少账户租约")
+		return nil, nil, RPCRequest{}, fmt.Errorf("protected request missing account lease")
 	}
 	if err := validateLeaseSelection(lease, selection); err != nil {
 		return nil, nil, RPCRequest{}, err
 	}
 	worker, err := t.workers.Worker(ctx, lease.Account().ID, selection.ModelID)
 	if err != nil {
-		return nil, nil, RPCRequest{}, fmt.Errorf("获取账户 WAA preparer: %w", err)
+		return nil, nil, RPCRequest{}, fmt.Errorf("get account WAA preparer: %w", err)
 	}
 	reportRequestPhase(ctx, RequestPhasePreparingWAA)
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
@@ -172,10 +172,10 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 		Prompt: prompt, ProofField: proofField,
 	})
 	if err != nil {
-		return nil, nil, RPCRequest{}, fmt.Errorf("准备 fresh WAA proof: %w", err)
+		return nil, nil, RPCRequest{}, fmt.Errorf("prepare fresh WAA proof: %w", err)
 	}
 	if prepared.Headers == nil || len(prepared.Body) == 0 {
-		return nil, nil, RPCRequest{}, fmt.Errorf("WAA preparer 返回空请求")
+		return nil, nil, RPCRequest{}, fmt.Errorf("WAA preparer returned empty request")
 	}
 	requestHeaders := rpc.Header
 	rpc.AccountID = lease.Account().ID
@@ -191,7 +191,7 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	return lease, worker, rpc, nil
 }
 
-// DoProtectedVideo 写入 Veo fresh proof 后发送请求
+// DoProtectedVideo writes Veo fresh proof and sends request
 func (t *WorkerProtectedTransport) DoProtectedVideo(ctx context.Context, request VideoRequest, rpc RPCRequest) (*RPCResponse, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	return t.doPrepared(ctx, request.Prompt, 8, AccountSelection{
@@ -221,7 +221,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 
 func bindingPrompt(request GenerateRequest) (string, error) {
 	if len(request.Contents) == 0 {
-		return "", fmt.Errorf("GenerateContent contents 不能为空")
+		return "", fmt.Errorf("GenerateContent contents cannot be empty")
 	}
 	values := make([]string, 0)
 	for _, content := range request.Contents {
@@ -242,11 +242,11 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 	return strings.Join(values, " "), nil
 }
 
-// RequestContext 返回账户时区
+// RequestContext returns the account timezone
 func (p *PoolRequestContextProvider) RequestContext(_ context.Context, accountID string) (RequestContext, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
-		return RequestContext{}, fmt.Errorf("AI Studio 请求上下文缺少账户 ID")
+		return RequestContext{}, fmt.Errorf("AI Studio request context missing account ID")
 	}
 	p.pool.mu.Lock()
 	account := p.pool.byID[accountID]
@@ -256,12 +256,12 @@ func (p *PoolRequestContextProvider) RequestContext(_ context.Context, accountID
 	}
 	p.pool.mu.Unlock()
 	if account == nil {
-		return RequestContext{}, fmt.Errorf("账户不存在: %s", accountID)
+		return RequestContext{}, fmt.Errorf("account not found: %s", accountID)
 	}
 	return RequestContext{Timezone: timezone}, nil
 }
 
-// Models 刷新可用账户并返回实时模型并集
+// Models refreshes available accounts and returns the union of live models
 func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 	if lease, ok := AccountLeaseFromContext(ctx); ok {
 		return s.modelsForLease(ctx, lease)
@@ -297,7 +297,7 @@ func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 	return models, nil
 }
 
-// RefreshAccountModels 刷新指定账户的权益与模型目录
+// RefreshAccountModels refreshes the benefit tier and model catalog of the specified account
 func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID string) ([]Model, error) {
 	accountID = strings.TrimSpace(accountID)
 	lease, err := s.pool.AcquireAccount(ctx, accountID)
@@ -307,16 +307,16 @@ func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID stri
 	models, requestErr := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease)
 	releaseErr := lease.Release()
 	if requestErr != nil {
-		failure := fmt.Errorf("刷新账户 %s 的模型目录: %w", accountID, errors.Join(requestErr, releaseErr))
+		failure := fmt.Errorf("refresh model catalog for account %s: %w", accountID, errors.Join(requestErr, releaseErr))
 		return nil, failure
 	}
 	if releaseErr != nil {
-		return models, fmt.Errorf("释放账户 %s 的模型目录租约: %w", accountID, releaseErr)
+		return models, fmt.Errorf("release model catalog lease for account %s: %w", accountID, releaseErr)
 	}
 	return models, nil
 }
 
-// CachedModels 返回启用账户最近同步目录的并集
+// CachedModels returns the union of recently synced catalogs for enabled accounts
 func (s *PooledService) CachedModels() []Model {
 	s.pool.mu.Lock()
 	defer s.pool.mu.Unlock()
@@ -362,25 +362,25 @@ func (s *PooledService) modelsForStatus(ctx context.Context, status AccountStatu
 		if len(cached) > 0 {
 			return accountModelsResult{models: cached, available: true}
 		}
-		return accountModelsResult{err: fmt.Errorf("账户 %s 正在使用且没有缓存模型目录", status.ID)}
+		return accountModelsResult{err: fmt.Errorf("account %s is busy and has no cached model catalog", status.ID)}
 	}
 	lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: status.ID})
 	if err != nil {
 		return accountModelsResult{
 			models: cached, available: len(cached) > 0,
-			err: fmt.Errorf("获取账户 %s 的模型目录租约: %w", status.ID, err),
+			err: fmt.Errorf("acquire model catalog lease for account %s: %w", status.ID, err),
 		}
 	}
 	accountModels, requestErr := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease)
 	releaseErr := lease.Release()
 	if requestErr != nil {
-		failure := fmt.Errorf("刷新账户 %s 的模型目录: %w", status.ID, errors.Join(requestErr, releaseErr))
+		failure := fmt.Errorf("refresh model catalog for account %s: %w", status.ID, errors.Join(requestErr, releaseErr))
 		return accountModelsResult{models: cached, available: len(cached) > 0, err: failure}
 	}
 	if releaseErr != nil {
 		return accountModelsResult{
 			models: accountModels, available: true,
-			err: fmt.Errorf("释放账户 %s 的模型目录租约: %w", status.ID, releaseErr),
+			err: fmt.Errorf("release model catalog lease for account %s: %w", status.ID, releaseErr),
 		}
 	}
 	return accountModelsResult{models: accountModels, available: true}
@@ -396,13 +396,13 @@ func (s *PooledService) cachedModels(accountID string) []Model {
 	return cloneAccountModels(account.Models)
 }
 
-// DefinitiveAuthenticationFailure 判断上游是否明确要求重新认证
+// DefinitiveAuthenticationFailure determines whether upstream definitively requested re-authentication
 func DefinitiveAuthenticationFailure(err error) bool {
 	var rpcError *RPCError
 	return errors.As(err, &rpcError) && rpcError.StatusCode == 401
 }
 
-// DefinitiveWAARuntimeFailure 判断上游是否明确拒绝当前 WAA 运行态
+// DefinitiveWAARuntimeFailure determines whether upstream definitively rejected current WAA runtime
 func DefinitiveWAARuntimeFailure(err error) bool {
 	var rpcError *RPCError
 	return errors.As(err, &rpcError) && modelBoundRPCMethod(rpcError.Method) &&
@@ -470,11 +470,11 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease)
 	return models, nil
 }
 
-// CountTokens 使用支持目标模型的独占账户计数
+// CountTokens counts tokens using an exclusive account supporting the target model
 func (s *PooledService) CountTokens(ctx context.Context, request TokenCountRequest) (TokenCount, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
-		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
+		return TokenCount{}, fmt.Errorf("%w: CountTokens model cannot be empty", ErrInvalidArgument)
 	}
 	modelAccessScope := ModelAccessKey("count-tokens", modelID)
 	selection := AccountSelection{ModelID: modelID, ModelAccessScope: modelAccessScope, Method: "countTokens"}
@@ -522,11 +522,11 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	return count, requestErr
 }
 
-// Generate 使用支持目标模型的独占账户生成事件流
+// Generate generates an event stream using an exclusive account supporting the target model
 func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (<-chan Event, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
-		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: GenerateContent model cannot be empty", ErrInvalidArgument)
 	}
 	resourceID, err := s.pool.ResourceIDForContents(ctx, request.Contents)
 	if err != nil {
@@ -609,7 +609,7 @@ func retryableAccountError(err error) bool {
 		rpcError.StatusCode == http.StatusTooManyRequests || rpcError.StatusCode >= http.StatusInternalServerError
 }
 
-// forwardEventsWithLease 转发事件并在结束或取消时释放账户租约
+// forwardEventsWithLease forwards events and releases account lease upon completion or cancellation
 func forwardEventsWithLease(
 	ctx context.Context,
 	source <-chan Event,
@@ -657,7 +657,7 @@ func forwardEventsWithLease(
 		if event.Kind != EventError && !verified {
 			verified = true
 			if err := lease.MarkAuthenticationValid(); err != nil {
-				slog.Error("账户认证状态保存失败", "account", accountID, "error", err)
+				slog.Error("failed to save account authentication state", "account", accountID, "error", err)
 			}
 		}
 		if event.Kind == EventFinish {
@@ -665,7 +665,7 @@ func forwardEventsWithLease(
 				if _, err := pool.MarkModelAccessVerifiedIfGeneration(
 					accountID, modelID, accessGeneration, checkedAt,
 				); err != nil {
-					slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
+					slog.Error("failed to save account model access qualification", "account", accountID, "model", modelID, "error", err)
 				}
 			}()
 		}

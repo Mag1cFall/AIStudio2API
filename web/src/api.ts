@@ -147,11 +147,7 @@ export const api = {
   startService: () => requestJSON<ServiceStatus>('/api/control/start', { method: 'POST' }),
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
   clearLogs: () => requestCommand('/api/logs', { method: 'DELETE' }),
-  saveConfig: (config: ServiceConfig) =>
-    requestJSON<ServiceConfig>('/api/config', {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    }),
+
   cancelRequest: (id: string) =>
     requestCommand(`/api/requests/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',

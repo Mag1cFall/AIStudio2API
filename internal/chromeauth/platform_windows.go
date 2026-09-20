@@ -19,7 +19,7 @@ import (
 func defaultChromeRoot() (string, error) {
 	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 	if localAppData == "" {
-		return "", fmt.Errorf("环境变量 LOCALAPPDATA 为空")
+		return "", fmt.Errorf("environment variable LOCALAPPDATA is empty")
 	}
 	return filepath.Join(localAppData, "Google", "Chrome", "User Data"), nil
 }
@@ -31,7 +31,7 @@ func ensurePlatformImport() error {
 func discoverPlatform(chromeRoot string) ([]Account, error) {
 	data, err := os.ReadFile(filepath.Join(chromeRoot, "Local State"))
 	if err != nil {
-		return nil, fmt.Errorf("读取 Chrome Local State: %w", err)
+		return nil, fmt.Errorf("read Chrome Local State: %w", err)
 	}
 	var state struct {
 		Variations struct {
@@ -45,10 +45,10 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 		} `json:"profile"`
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("解析 Chrome Local State: %w", err)
+		return nil, fmt.Errorf("parse Chrome Local State: %w", err)
 	}
 	if state.Profile.InfoCache == nil {
-		return nil, fmt.Errorf("Chrome Local State 缺少 profile.info_cache")
+		return nil, fmt.Errorf("Chrome Local State missing profile.info_cache")
 	}
 
 	profiles := make([]string, 0, len(state.Profile.InfoCache))
@@ -101,39 +101,39 @@ func readTokenService(chromeRoot string, profile string) (string, []byte, []byte
 	uri := "file:" + filepath.ToSlash(databasePath) + "?mode=ro&immutable=1"
 	database, err := sql.Open("sqlite", uri)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("打开 %s Web Data: %w", profile, err)
+		return "", nil, nil, fmt.Errorf("open %s Web Data: %w", profile, err)
 	}
 	defer database.Close()
 	database.SetMaxOpenConns(1)
 
 	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service")
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+		return "", nil, nil, fmt.Errorf("read %s token_service: %w", profile, err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+			return "", nil, nil, fmt.Errorf("read %s token_service: %w", profile, err)
 		}
-		return "", nil, nil, fmt.Errorf("%s 的 token_service 记录数为 0", profile)
+		return "", nil, nil, fmt.Errorf("%s token_service record count is 0", profile)
 	}
 	var service string
 	var encryptedToken []byte
 	var bindingKey []byte
 	if err := rows.Scan(&service, &encryptedToken, &bindingKey); err != nil {
-		return "", nil, nil, fmt.Errorf("解析 %s token_service: %w", profile, err)
+		return "", nil, nil, fmt.Errorf("parse %s token_service: %w", profile, err)
 	}
 	if rows.Next() {
-		return "", nil, nil, fmt.Errorf("%s 的 token_service 记录数大于 1", profile)
+		return "", nil, nil, fmt.Errorf("%s token_service record count greater than 1", profile)
 	}
 	if err := rows.Err(); err != nil {
-		return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+		return "", nil, nil, fmt.Errorf("read %s token_service: %w", profile, err)
 	}
 	if !strings.HasPrefix(service, "AccountId-") {
-		return "", nil, nil, fmt.Errorf("%s 的 token_service service 格式异常", profile)
+		return "", nil, nil, fmt.Errorf("%s token_service service format is invalid", profile)
 	}
 	if len(encryptedToken) == 0 || len(bindingKey) == 0 {
-		return "", nil, nil, fmt.Errorf("%s 的 token_service 缺少认证材料", profile)
+		return "", nil, nil, fmt.Errorf("%s token_service missing authentication credentials", profile)
 	}
 	return strings.TrimPrefix(service, "AccountId-"), encryptedToken, bindingKey, nil
 }

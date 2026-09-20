@@ -11,18 +11,18 @@ import (
 
 const quotaResetTimezone = "America/Los_Angeles"
 
-// CooldownState 表示账户或模型暂时不可调度的状态
+// CooldownState represents the state where an account or model is temporarily unschedulable
 type CooldownState struct {
 	Until  time.Time `json:"until"`
 	Reason string    `json:"reason,omitempty"`
 }
 
-// Active 判断冷却状态当前是否生效
+// Active checks whether the cooldown state is currently active
 func (c CooldownState) Active(now time.Time) bool {
 	return !c.Until.IsZero() && now.Before(c.Until)
 }
 
-// QuotaCooldown 表示上游额度限制对应的调度冷却
+// QuotaCooldown represents the scheduling cooldown corresponding to upstream quota limits
 type QuotaCooldown struct {
 	Until  time.Time
 	Global bool
@@ -30,7 +30,7 @@ type QuotaCooldown struct {
 	Reason string
 }
 
-// QuotaCooldownForError 解析上游分钟或每日额度限制
+// QuotaCooldownForError parses upstream minute or daily quota limits
 func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 	var rpcError *RPCError
 	if !errors.As(err, &rpcError) || rpcError.StatusCode != http.StatusTooManyRequests {
@@ -48,14 +48,14 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		global := strings.Contains(metadata, "_global") || strings.Contains(metadata, "perprojectperuser") ||
 			!strings.Contains(evidence, "per_model") && !strings.Contains(evidence, "per model")
 		return QuotaCooldown{
-			Until: until, Global: global, Kind: "分钟限额",
-			Reason: "分钟限额: " + err.Error(),
+			Until: until, Global: global, Kind: "minute_quota",
+			Reason: "minute quota exceeded: " + err.Error(),
 		}, true
 	}
 	if dailyQuotaEvidence(evidence) || strings.Contains(message, "you exceeded your current quota") {
 		return QuotaCooldown{
-			Until: nextQuotaDay(now), Kind: "每日限额",
-			Reason: "每日限额: " + err.Error(),
+			Until: nextQuotaDay(now), Kind: "daily_quota",
+			Reason: "daily quota exceeded: " + err.Error(),
 		}, true
 	}
 	return QuotaCooldown{}, false

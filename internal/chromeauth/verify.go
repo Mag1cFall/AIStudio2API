@@ -14,15 +14,15 @@ import (
 
 const aiStudioChatURL = "https://aistudio.google.com/prompts/new_chat"
 
-// Verification 保存 AI Studio 登录页与模型目录验收结果
+// Verification holds acceptance results for the AI Studio login page and model catalog.
 type Verification struct {
 	ModelCount int
 }
 
-// Verify 验证账号可访问 WAA 页面并读取实时模型目录
+// Verify checks whether an account can access the WAA page and retrieve the real-time model catalog.
 func Verify(ctx context.Context, state *aistudio.StorageState, proxy string) (Verification, error) {
 	if state == nil {
-		return Verification{}, fmt.Errorf("storage state 为空")
+		return Verification{}, fmt.Errorf("storage state is nil")
 	}
 	if _, err := aistudio.NewSigner().Sign(*state); err != nil {
 		return Verification{}, err
@@ -63,12 +63,12 @@ func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.St
 	request.Header.Set("User-Agent", userAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("访问 AI Studio 登录页: %w", err)
+		return fmt.Errorf("access AI Studio login page: %w", err)
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("AI Studio 登录页返回 HTTP %d", response.StatusCode)
+		return fmt.Errorf("AI Studio login page returned HTTP %d", response.StatusCode)
 	}
 	return mergeResponseCookies(state, response, aiStudioChatURL)
 }
@@ -99,22 +99,22 @@ func verifyModels(ctx context.Context, client *http.Client, state *aistudio.Stor
 	request.Header.Set("Sec-Fetch-Site", "same-site")
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("读取 AI Studio 模型目录: %w", err)
+		return 0, fmt.Errorf("read AI Studio model catalog: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, response.Body)
-		return 0, fmt.Errorf("AI Studio ListModels 返回 HTTP %d", response.StatusCode)
+		return 0, fmt.Errorf("AI Studio ListModels returned HTTP %d", response.StatusCode)
 	}
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), aistudio.JSONProtobufContentType) {
-		return 0, fmt.Errorf("AI Studio ListModels 返回未识别的 Content-Type %q", response.Header.Get("Content-Type"))
+		return 0, fmt.Errorf("AI Studio ListModels returned unrecognized Content-Type %q", response.Header.Get("Content-Type"))
 	}
 	models, err := aistudio.ParseModels(response.Body)
 	if err != nil {
 		return 0, err
 	}
 	if len(models) == 0 {
-		return 0, fmt.Errorf("AI Studio ListModels 返回空目录")
+		return 0, fmt.Errorf("AI Studio ListModels returned empty catalog")
 	}
 	if err := mergeResponseCookies(state, response, url); err != nil {
 		return 0, err

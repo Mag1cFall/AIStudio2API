@@ -16,7 +16,7 @@ import (
 
 const windowsStillActive = 259
 
-// configureBrowserProcess 将 Camoufox 隔离到独立 Windows 进程组
+// configureBrowserProcess isolates Camoufox into an independent Windows process group.
 func configureBrowserProcess(command *exec.Cmd, headless bool) {
 	attributes := &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
 	if headless {
@@ -26,7 +26,7 @@ func configureBrowserProcess(command *exec.Cmd, headless bool) {
 	command.SysProcAttr = attributes
 }
 
-// terminateBrowserProcess 结束 Camoufox 及其全部子进程
+// terminateBrowserProcess terminates Camoufox and all of its child processes.
 func terminateBrowserProcess(ctx context.Context, command *exec.Cmd) error {
 	if command == nil || command.Process == nil {
 		return nil
@@ -44,12 +44,12 @@ func terminateBrowserProcess(ctx context.Context, command *exec.Cmd) error {
 		if !browserProcessActive(pid) {
 			return nil
 		}
-		taskkillErr := fmt.Errorf("taskkill 结束 Camoufox 进程树 PID=%d: %w: %s", pid, err, output)
+		taskkillErr := fmt.Errorf("taskkill terminating Camoufox process tree PID=%d: %w: %s", pid, err, output)
 		directKillErr := command.Process.Kill()
 		if directKillErr == nil || errors.Is(directKillErr, os.ErrProcessDone) || !browserProcessActive(pid) {
 			return nil
 		}
-		terminateErr := errors.Join(taskkillErr, fmt.Errorf("Process.Kill 结束 Camoufox PID=%d: %w", pid, directKillErr))
+		terminateErr := errors.Join(taskkillErr, fmt.Errorf("Process.Kill terminating Camoufox PID=%d: %w", pid, directKillErr))
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return errors.Join(terminateErr, ctxErr)
 		}

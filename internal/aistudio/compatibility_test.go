@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestAgentToolSchemaCompatibility 验证常见 Agent 工具 Schema 的稳定转换规则
+// TestAgentToolSchemaCompatibility verifies stable transformation rules for common agent tool schemas
 func TestAgentToolSchemaCompatibility(t *testing.T) {
 	t.Run("string const", func(t *testing.T) {
 		wire, err := encodeJSONSchema(json.RawMessage(`{
@@ -71,7 +71,7 @@ func TestAgentToolSchemaCompatibility(t *testing.T) {
 	})
 }
 
-// TestFunctionCallThoughtSignature 验证历史工具调用的签名补齐与原值保留
+// TestFunctionCallThoughtSignature verifies thought signature completion and original value preservation for historical tool calls
 func TestFunctionCallThoughtSignature(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -96,7 +96,7 @@ func TestFunctionCallThoughtSignature(t *testing.T) {
 	}
 }
 
-// TestRPCErrorCompatibility 验证真实错误帧解码和 Drive 授权边界
+// TestRPCErrorCompatibility verifies decoding of real error frames and Drive authorization boundaries
 func TestRPCErrorCompatibility(t *testing.T) {
 	t.Run("direct", func(t *testing.T) {
 		err := DecodeRPCError("GenerateAccessToken", http.StatusUnauthorized, []byte(

@@ -22,7 +22,7 @@ func validateTranscriptionConfig(config *TranscriptionConfig, model Model) error
 	}
 	for _, check := range checks {
 		if check.requested && !model.Capabilities[check.capability] {
-			return fmt.Errorf("模型 %s 不支持 %s", model.ID, check.setting)
+			return fmt.Errorf("model %s does not support %s", model.ID, check.setting)
 		}
 	}
 	return nil
@@ -33,7 +33,7 @@ func encodeTranscriptionConfig(config *TranscriptionConfig) ([]any, error) {
 		return nil, nil
 	}
 	if config.SmartTranscription && (config.WordTimestamps || config.SpeakerLabels) {
-		return nil, fmt.Errorf("smart transcription 不能同时启用 word timestamps 或 speaker labels")
+		return nil, fmt.Errorf("smart transcription cannot enable word timestamps or speaker labels at the same time")
 	}
 	length := 0
 	if config.WordTimestamps || config.SpeakerLabels {

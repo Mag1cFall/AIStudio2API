@@ -8,17 +8,17 @@ import (
 	"strings"
 )
 
-// BidiMode 区分 Gemini Live 与 Robotics Streaming 的独立会话配置
+// BidiMode distinguishes independent session configuration between Gemini Live and Robotics Streaming
 type BidiMode string
 
 const (
-	// BidiModeLive 表示音频输出的 Gemini Live 会话
+	// BidiModeLive indicates an audio-output Gemini Live session
 	BidiModeLive BidiMode = "live"
-	// BidiModeRobotics 表示文本输出的 Robotics Streaming 会话
+	// BidiModeRobotics indicates a text-output Robotics Streaming session
 	BidiModeRobotics BidiMode = "robotics"
 )
 
-// BidiRequest 定义一条双向实时会话
+// BidiRequest defines a bidirectional real-time session
 type BidiRequest struct {
 	Model                    string
 	Mode                     BidiMode
@@ -33,45 +33,45 @@ type BidiRequest struct {
 	ObserveAccountFailure    func(string, error)
 }
 
-// BidiEventKind 表示双向实时协议事件
+// BidiEventKind represents bidirectional real-time protocol event kinds
 type BidiEventKind string
 
 const (
-	// BidiEventSetupComplete 表示上游已接受会话配置
+	// BidiEventSetupComplete indicates that upstream accepted the session setup
 	BidiEventSetupComplete BidiEventKind = "setup_complete"
-	// BidiEventText 表示模型文本增量
+	// BidiEventText indicates model text delta
 	BidiEventText BidiEventKind = "text"
-	// BidiEventMedia 表示模型媒体增量
+	// BidiEventMedia indicates model media delta
 	BidiEventMedia BidiEventKind = "media"
-	// BidiEventInputTranscription 表示输入转写增量
+	// BidiEventInputTranscription indicates input transcription delta
 	BidiEventInputTranscription BidiEventKind = "input_transcription"
-	// BidiEventOutputTranscription 表示输出转写增量
+	// BidiEventOutputTranscription indicates output transcription delta
 	BidiEventOutputTranscription BidiEventKind = "output_transcription"
-	// BidiEventGenerationComplete 表示当前生成已完成
+	// BidiEventGenerationComplete indicates that current generation is complete
 	BidiEventGenerationComplete BidiEventKind = "generation_complete"
-	// BidiEventTurnComplete 表示当前对话轮次已完成
+	// BidiEventTurnComplete indicates that current conversation turn is complete
 	BidiEventTurnComplete BidiEventKind = "turn_complete"
-	// BidiEventInterrupted 表示当前模型输出被打断
+	// BidiEventInterrupted indicates that current model output was interrupted
 	BidiEventInterrupted BidiEventKind = "interrupted"
-	// BidiEventToolCall 表示模型发起函数调用
+	// BidiEventToolCall indicates that the model initiated a function call
 	BidiEventToolCall BidiEventKind = "tool_call"
-	// BidiEventToolCallCancellation 表示模型取消尚未完成的函数调用
+	// BidiEventToolCallCancellation indicates that the model canceled an uncompleted function call
 	BidiEventToolCallCancellation BidiEventKind = "tool_call_cancellation"
-	// BidiEventSessionResumption 表示上游更新恢复令牌
+	// BidiEventSessionResumption indicates that upstream updated the session resumption token
 	BidiEventSessionResumption BidiEventKind = "session_resumption"
-	// BidiEventGoAway 表示上游要求结束当前连接
+	// BidiEventGoAway indicates that upstream requested terminating the current connection
 	BidiEventGoAway BidiEventKind = "go_away"
-	// BidiEventUsage 表示上游返回用量字段
+	// BidiEventUsage indicates upstream returned usage fields
 	BidiEventUsage BidiEventKind = "usage"
-	// BidiEventProvider 表示已保留的未归一化上游字段
+	// BidiEventProvider indicates preserved unnormalized upstream fields
 	BidiEventProvider BidiEventKind = "provider"
-	// BidiEventClosed 表示 WebChannel 已结束
+	// BidiEventClosed indicates that the WebChannel connection closed
 	BidiEventClosed BidiEventKind = "closed"
-	// BidiEventError 表示双向实时协议错误
+	// BidiEventError represents a bidirectional real-time protocol error
 	BidiEventError BidiEventKind = "error"
 )
 
-// BidiTranscription 保存实时转写字段
+// BidiTranscription stores real-time transcription fields
 type BidiTranscription struct {
 	Text         string `json:"text"`
 	Finished     bool   `json:"finished,omitempty"`
@@ -79,7 +79,7 @@ type BidiTranscription struct {
 	LanguageCode string `json:"language_code,omitempty"`
 }
 
-// BidiEvent 保存按上游顺序输出的实时事件
+// BidiEvent stores real-time events emitted in upstream order
 type BidiEvent struct {
 	Kind          BidiEventKind      `json:"kind"`
 	Text          string             `json:"text,omitempty"`
@@ -93,11 +93,11 @@ type BidiEvent struct {
 	Err           error              `json:"-"`
 }
 
-// EncodeBidiSetupRequest 编码 Live 或 Robotics 的已验证 setup 帧
+// EncodeBidiSetupRequest encodes verified setup frame for Live or Robotics
 func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte, string, error) {
 	model := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if model == "" {
-		return nil, "", fmt.Errorf("%w: bidi model 不能为空", ErrInvalidArgument)
+		return nil, "", fmt.Errorf("%w: bidi model cannot be empty", ErrInvalidArgument)
 	}
 	configuration := make([]any, 18)
 	setup := make([]any, 16)
@@ -110,7 +110,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 		configuration[14] = []any{int64(1)}
 		configuration[16] = []any{int64(1), nil, nil, int64(3)}
 	default:
-		return nil, "", fmt.Errorf("%w: 未识别的 bidi mode %q", ErrInvalidArgument, request.Mode)
+		return nil, "", fmt.Errorf("%w: unrecognized bidi mode %q", ErrInvalidArgument, request.Mode)
 	}
 	configuration[17] = int64(2)
 	wireModel := wireModelName(model)
@@ -122,7 +122,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 		for _, declaration := range request.Tools {
 			encoded, err := encodeFunctionDeclaration(declaration)
 			if err != nil {
-				return nil, "", fmt.Errorf("编码 bidi function declaration: %w", err)
+				return nil, "", fmt.Errorf("encode bidi function declaration: %w", err)
 			}
 			declarations = append(declarations, encoded)
 			bindingParts = append(bindingParts, declaration.Name+" "+declaration.Description)
@@ -146,30 +146,30 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	wire[6] = setup
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi setup: %w", err)
+		return nil, "", fmt.Errorf("encode bidi setup: %w", err)
 	}
 	return body, strings.Join(bindingParts, " "), nil
 }
 
-// EncodeBidiTextRequest 编码官网文本输入帧
+// EncodeBidiTextRequest encodes official text input frame
 func EncodeBidiTextRequest(text string) ([]byte, string, error) {
 	if strings.TrimSpace(text) == "" {
-		return nil, "", fmt.Errorf("%w: bidi text 不能为空", ErrInvalidArgument)
+		return nil, "", fmt.Errorf("%w: bidi text cannot be empty", ErrInvalidArgument)
 	}
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, nil, nil, text}
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi text: %w", err)
+		return nil, "", fmt.Errorf("encode bidi text: %w", err)
 	}
 	return body, "", nil
 }
 
-// EncodeBidiMediaRequest 编码官网实时音频或图像输入帧
+// EncodeBidiMediaRequest encodes official real-time audio or image input frame
 func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error) {
 	mimeType = strings.TrimSpace(mimeType)
 	if len(data) == 0 {
-		return nil, "", fmt.Errorf("%w: bidi media 不能为空", ErrInvalidArgument)
+		return nil, "", fmt.Errorf("%w: bidi media cannot be empty", ErrInvalidArgument)
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	var realtimeInput []any
@@ -181,40 +181,40 @@ func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error
 		realtimeInput = make([]any, 4)
 		realtimeInput[3] = []any{mimeType, encoded}
 	default:
-		return nil, "", fmt.Errorf("%w: 未识别的 bidi media type %q", ErrInvalidArgument, mimeType)
+		return nil, "", fmt.Errorf("%w: unrecognized bidi media type %q", ErrInvalidArgument, mimeType)
 	}
 	wire := make([]any, 6)
 	wire[2] = realtimeInput
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi media: %w", err)
+		return nil, "", fmt.Errorf("encode bidi media: %w", err)
 	}
 	return body, "", nil
 }
 
-// EncodeBidiMediaEndRequest 编码官网实时媒体结束帧
+// EncodeBidiMediaEndRequest encodes official real-time media end frame
 func EncodeBidiMediaEndRequest() ([]byte, string, error) {
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, int64(1)}
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi media end: %w", err)
+		return nil, "", fmt.Errorf("encode bidi media end: %w", err)
 	}
 	return body, "", nil
 }
 
-// EncodeBidiToolResponseRequest 编码官网函数响应帧
+// EncodeBidiToolResponseRequest encodes official function response frame
 func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, error) {
 	if len(results) == 0 {
-		return nil, "", fmt.Errorf("%w: bidi function response 列表为空", ErrInvalidArgument)
+		return nil, "", fmt.Errorf("%w: bidi function response list is empty", ErrInvalidArgument)
 	}
 	functionResponses := make([]any, 0, len(results))
 	for _, result := range results {
 		if strings.TrimSpace(result.ID) == "" {
-			return nil, "", fmt.Errorf("%w: bidi function response 缺少调用 ID", ErrInvalidArgument)
+			return nil, "", fmt.Errorf("%w: bidi function response missing call ID", ErrInvalidArgument)
 		}
 		if strings.TrimSpace(result.Name) == "" {
-			return nil, "", fmt.Errorf("%w: bidi function response 缺少函数名", ErrInvalidArgument)
+			return nil, "", fmt.Errorf("%w: bidi function response missing function name", ErrInvalidArgument)
 		}
 		response, err := encodeWireStructJSON(result.Content)
 		if err != nil {
@@ -228,12 +228,12 @@ func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, er
 	wire[3] = responses
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi function response: %w", err)
+		return nil, "", fmt.Errorf("encode bidi function response: %w", err)
 	}
 	return body, results[0].ID, nil
 }
 
-// ParseBidiServerPayload 解码一条 WebChannel 业务 payload
+// ParseBidiServerPayload decodes a WebChannel business payload
 func ParseBidiServerPayload(raw json.RawMessage) ([]BidiEvent, error) {
 	if event, matched, err := parseBidiStatusPayload(raw); matched {
 		if err != nil {
@@ -284,31 +284,31 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 	var sm map[string]json.RawMessage
 	if err := json.Unmarshal(smRaw, &sm); err != nil {
 		return BidiEvent{}, true, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$.__sm__", Detail: "期望对象", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$.__sm__", Detail: "expected object", Raw: cloneRaw(raw),
 		}
 	}
 	statusRaw, exists := sm["status"]
 	if !exists {
 		return BidiEvent{}, true, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$.__sm__.status", Detail: "缺少状态", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$.__sm__.status", Detail: "missing status", Raw: cloneRaw(raw),
 		}
 	}
 	outer, err := rawArray(statusRaw, "$.__sm__.status", raw)
 	if err != nil || len(outer) != 1 {
 		return BidiEvent{}, true, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$.__sm__.status", Detail: "状态 envelope 无效", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$.__sm__.status", Detail: "invalid status envelope", Raw: cloneRaw(raw),
 		}
 	}
 	middle, err := rawArray(outer[0], "$.__sm__.status[0]", raw)
 	if err != nil || len(middle) != 1 {
 		return BidiEvent{}, true, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$.__sm__.status[0]", Detail: "状态 envelope 无效", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$.__sm__.status[0]", Detail: "invalid status envelope", Raw: cloneRaw(raw),
 		}
 	}
 	status, err := rawArray(middle[0], "$.__sm__.status[0][0]", raw)
 	if err != nil || len(status) < 2 {
 		return BidiEvent{}, true, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$.__sm__.status[0][0]", Detail: "状态字段不足", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$.__sm__.status[0][0]", Detail: "insufficient status fields", Raw: cloneRaw(raw),
 		}
 	}
 	code, err := rawInt64(status[0], "$.__sm__.status[0][0][0]", raw)
@@ -328,7 +328,7 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 	default:
 		return BidiEvent{}, true, &ProtocolEvidenceError{
 			Method: "BidiGenerateContent", Path: "$.__sm__.status[0][0][0]",
-			Detail: fmt.Sprintf("未识别的状态码 %d", code), Raw: cloneRaw(raw),
+			Detail: fmt.Sprintf("unrecognized status code %d", code), Raw: cloneRaw(raw),
 		}
 	}
 	return BidiEvent{
@@ -394,7 +394,7 @@ func parseBidiToolCalls(raw json.RawMessage, evidence json.RawMessage) ([]BidiEv
 	callsRaw := rawAt(values, 1)
 	if isJSONNull(callsRaw) {
 		return nil, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$message[3][1]", Detail: "tool call 列表为空", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$message[3][1]", Detail: "tool call list is empty", Raw: cloneRaw(raw),
 		}
 	}
 	calls, err := rawArray(callsRaw, "$message[3][1]", evidence)
@@ -403,7 +403,7 @@ func parseBidiToolCalls(raw json.RawMessage, evidence json.RawMessage) ([]BidiEv
 	}
 	if len(calls) == 0 {
 		return nil, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$message[3][1]", Detail: "tool call 列表为空", Raw: cloneRaw(callsRaw),
+			Method: "BidiGenerateContent", Path: "$message[3][1]", Detail: "tool call list is empty", Raw: cloneRaw(callsRaw),
 		}
 	}
 	events := make([]BidiEvent, 0, len(calls))
@@ -415,7 +415,7 @@ func parseBidiToolCalls(raw json.RawMessage, evidence json.RawMessage) ([]BidiEv
 		}
 		if strings.TrimSpace(call.ID) == "" {
 			return nil, &ProtocolEvidenceError{
-				Method: "BidiGenerateContent", Path: path + "[2]", Detail: "tool call 缺少调用 ID", Raw: cloneRaw(callRaw),
+				Method: "BidiGenerateContent", Path: path + "[2]", Detail: "tool call missing call ID", Raw: cloneRaw(callRaw),
 			}
 		}
 		events = append(events, BidiEvent{Kind: BidiEventToolCall, ToolCall: &call})
@@ -431,7 +431,7 @@ func parseBidiToolCallCancellation(raw json.RawMessage, evidence json.RawMessage
 	idsRaw := rawAt(values, 0)
 	if isJSONNull(idsRaw) {
 		return BidiEvent{}, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$message[4][0]", Detail: "tool call cancellation 列表为空", Raw: cloneRaw(raw),
+			Method: "BidiGenerateContent", Path: "$message[4][0]", Detail: "tool call cancellation list is empty", Raw: cloneRaw(raw),
 		}
 	}
 	encodedIDs, err := rawArray(idsRaw, "$message[4][0]", evidence)
@@ -440,7 +440,7 @@ func parseBidiToolCallCancellation(raw json.RawMessage, evidence json.RawMessage
 	}
 	if len(encodedIDs) == 0 {
 		return BidiEvent{}, &ProtocolEvidenceError{
-			Method: "BidiGenerateContent", Path: "$message[4][0]", Detail: "tool call cancellation 列表为空", Raw: cloneRaw(idsRaw),
+			Method: "BidiGenerateContent", Path: "$message[4][0]", Detail: "tool call cancellation list is empty", Raw: cloneRaw(idsRaw),
 		}
 	}
 	ids := make([]string, 0, len(encodedIDs))
@@ -452,7 +452,7 @@ func parseBidiToolCallCancellation(raw json.RawMessage, evidence json.RawMessage
 		if id == "" {
 			return BidiEvent{}, &ProtocolEvidenceError{
 				Method: "BidiGenerateContent", Path: fmt.Sprintf("$message[4][0][%d]", index),
-				Detail: "tool call cancellation ID 为空", Raw: cloneRaw(encoded),
+				Detail: "tool call cancellation ID is empty", Raw: cloneRaw(encoded),
 			}
 		}
 		ids = append(ids, id)
@@ -549,7 +549,7 @@ func parseBidiContent(raw json.RawMessage, evidence json.RawMessage) ([]BidiEven
 			default:
 				encoded, marshalErr := json.Marshal(event)
 				if marshalErr != nil {
-					return nil, fmt.Errorf("编码 bidi provider event: %w", marshalErr)
+					return nil, fmt.Errorf("encode bidi provider event: %w", marshalErr)
 				}
 				events = append(events, BidiEvent{Kind: BidiEventProvider, Raw: encoded})
 			}

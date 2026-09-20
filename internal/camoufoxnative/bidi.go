@@ -30,10 +30,10 @@ type bidiCommandError struct {
 }
 
 func (err *bidiCommandError) Error() string {
-	return fmt.Sprintf("BiDi %s 失败: %s", err.method, err.payload)
+	return fmt.Sprintf("bidi %s failed: %s", err.method, err.payload)
 }
 
-// newBiDiClient 创建串行 WebDriver BiDi 客户端
+// newBiDiClient creates a serialized WebDriver BiDi client.
 func newBiDiClient(connection *websocket.Conn) *bidiClient {
 	return &bidiClient{
 		connection:      connection,
@@ -42,7 +42,7 @@ func newBiDiClient(connection *websocket.Conn) *bidiClient {
 	}
 }
 
-// command 发送一条 BiDi 命令并消费穿插的网络事件
+// command sends a BiDi command and consumes interleaved network events.
 func (client *bidiClient) command(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
 	select {
 	case client.commandLock <- struct{}{}:
@@ -96,7 +96,7 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 	}
 }
 
-// observe 捕获官网 GenerateContent 的公共头和响应状态
+// observe captures common headers and response status from official GenerateContent.
 func (client *bidiClient) observe(message map[string]any) {
 	method, _ := message["method"].(string)
 	if !strings.HasPrefix(method, "network.") {
@@ -127,7 +127,7 @@ func (client *bidiClient) observe(message map[string]any) {
 	}
 }
 
-// installCookies 按 storage state 的分区恢复 Cookie
+// installCookies restores cookies partitioned by storage state.
 func (client *bidiClient) installCookies(ctx context.Context, cookies []storageCookie) error {
 	for _, item := range cookies {
 		cookie := map[string]any{
@@ -150,13 +150,13 @@ func (client *bidiClient) installCookies(ctx context.Context, cookies []storageC
 			params["partition"] = map[string]any{"type": "storageKey", "sourceOrigin": item.PartitionKey}
 		}
 		if _, err := client.command(ctx, "storage.setCookie", params); err != nil {
-			return fmt.Errorf("写入 Cookie %s: %w", item.Name, err)
+			return fmt.Errorf("writing cookie %s: %w", item.Name, err)
 		}
 	}
 	return nil
 }
 
-// installLocalStorage 在站点脚本前恢复各 origin 的 localStorage
+// installLocalStorage restores localStorage for each origin before site scripts run.
 func (client *bidiClient) installLocalStorage(ctx context.Context, contextID string, origins []storageOrigin) error {
 	values := make(map[string]map[string]string, len(origins))
 	for _, origin := range origins {
@@ -181,12 +181,12 @@ func (client *bidiClient) installLocalStorage(ctx context.Context, contextID str
 		"contexts":            []string{contextID},
 	})
 	if err != nil {
-		return fmt.Errorf("安装 localStorage preload: %w", err)
+		return fmt.Errorf("installing localStorage preload: %w", err)
 	}
 	return nil
 }
 
-// evaluate 在页面默认主世界执行表达式
+// evaluate executes an expression in the page default main realm.
 func (client *bidiClient) evaluate(ctx context.Context, contextID, expression string) (map[string]any, error) {
 	result, err := client.command(ctx, "script.evaluate", map[string]any{
 		"expression":   expression,
@@ -198,7 +198,7 @@ func (client *bidiClient) evaluate(ctx context.Context, contextID, expression st
 	}
 	if result["type"] == "exception" {
 		encoded, _ := json.Marshal(result)
-		return nil, fmt.Errorf("页面表达式异常: %s", encoded)
+		return nil, fmt.Errorf("page expression error: %s", encoded)
 	}
 	remote, _ := result["result"].(map[string]any)
 	return remote, nil
@@ -222,7 +222,7 @@ func (client *bidiClient) evaluateBool(ctx context.Context, contextID, expressio
 	return value, nil
 }
 
-// waitFor 将页面条件的等待期限传递给 BiDi 命令
+// waitFor passes the page condition timeout to BiDi commands.
 func (client *bidiClient) waitFor(ctx context.Context, contextID, expression string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
@@ -242,10 +242,10 @@ func (client *bidiClient) waitFor(ctx context.Context, contextID, expression str
 			return err
 		}
 	}
-	return fmt.Errorf("等待页面条件超时: %s", expression)
+	return fmt.Errorf("timed out waiting for page condition: %s", expression)
 }
 
-// waitSnapshotFunction 在阶段期限内定位页面函数
+// waitSnapshotFunction locates the page function within the stage deadline.
 func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
@@ -265,10 +265,10 @@ func (client *bidiClient) waitSnapshotFunction(ctx context.Context, contextID st
 			return "", err
 		}
 	}
-	return "", errors.New("官网高层 snapshot 函数定位超时")
+	return "", errors.New("timed out locating high-level snapshot function")
 }
 
-// waitBlockedGenerateRequest 在阶段期限内接收网络拦截事件
+// waitBlockedGenerateRequest receives network interception events within the stage deadline.
 func (client *bidiClient) waitBlockedGenerateRequest(ctx context.Context, contextID string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
@@ -284,7 +284,7 @@ func (client *bidiClient) waitBlockedGenerateRequest(ctx context.Context, contex
 			return "", err
 		}
 	}
-	return "", errors.New("官网 GenerateContent 拦截事件超时")
+	return "", errors.New("timed out waiting for GenerateContent interception event")
 }
 
 func retryablePageEvaluation(err error) bool {
@@ -353,7 +353,7 @@ func takeProofExpression(digest string) string {
   const service = window.__aistudioWaaService;
   const snapshotKey = window.__aistudioWaaSnapshotKey;
   if (!makerSuite || !service || !snapshotKey || typeof makerSuite[snapshotKey] !== 'function') {
-    throw new Error('官方 WAA service 尚未就绪');
+    throw new Error('official WAA service is not ready yet');
   }
   return await makerSuite[snapshotKey](service, %s);
 })()`, encoded)

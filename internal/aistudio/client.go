@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	// MakerSuiteRPCBase 是现场确认的 AI Studio RPC 根地址
+	// MakerSuiteRPCBase is the live-confirmed AI Studio RPC base URL
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
-	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
+	// JSONProtobufContentType is the array protocol media type used by MakerSuite
 	JSONProtobufContentType = "application/json+protobuf"
 )
 
-// RPCRequest 描述交给认证传输层的单次 MakerSuite 请求
+// RPCRequest describes a single MakerSuite request passed to the authenticated transport layer
 type RPCRequest struct {
 	Method    string
 	URL       string
@@ -30,62 +30,62 @@ type RPCRequest struct {
 	Streaming bool
 }
 
-// RPCResponse 描述认证传输层返回的响应头和实时正文
+// RPCResponse describes response headers and live body returned by the authenticated transport layer
 type RPCResponse struct {
 	StatusCode int
 	Header     http.Header
 	Body       io.ReadCloser
 }
 
-// RPCTransport 负责认证、账户租约、Cookie 写回和真实网络发送
+// RPCTransport is responsible for authentication, account lease, cookie write-back, and physical network dispatch
 type RPCTransport interface {
 	Do(context.Context, RPCRequest) (*RPCResponse, error)
 }
 
-// ProtectedTransport 原子完成 fresh WAA proof、field 5 写入和同 context 发送
+// ProtectedTransport atomically generates fresh WAA proof, writes field 5, and dispatches in the same context
 type ProtectedTransport interface {
 	DoProtected(context.Context, GenerateRequest, RPCRequest) (*RPCResponse, error)
 }
 
-// VideoProtectedTransport 原子完成 Veo fresh WAA proof、field 8 写入和同 context 发送
+// VideoProtectedTransport atomically generates Veo fresh WAA proof, writes field 8, and dispatches in the same context
 type VideoProtectedTransport interface {
 	DoProtectedVideo(context.Context, VideoRequest, RPCRequest) (*RPCResponse, error)
 }
 
-// ProtectedTransportFunc 将函数适配为 ProtectedTransport
+// ProtectedTransportFunc adapts a function to ProtectedTransport
 type ProtectedTransportFunc func(context.Context, GenerateRequest, RPCRequest) (*RPCResponse, error)
 
-// DoProtected 调用受保护传输函数
+// DoProtected invokes the protected transport function
 func (f ProtectedTransportFunc) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
 	return f(ctx, request, rpc)
 }
 
-// RequestContext 保存账户运行时提供的协议上下文
+// RequestContext stores protocol context provided by account runtime
 type RequestContext struct {
 	Timezone string
 }
 
-// RequestContextProvider 按账户返回当前协议上下文
+// RequestContextProvider returns the current protocol context for an account
 type RequestContextProvider interface {
 	RequestContext(context.Context, string) (RequestContext, error)
 }
 
-// RequestContextProviderFunc 将函数适配为 RequestContextProvider
+// RequestContextProviderFunc adapts a function to RequestContextProvider
 type RequestContextProviderFunc func(context.Context, string) (RequestContext, error)
 
-// RequestContext 调用上下文函数
+// RequestContext invokes the context function
 func (f RequestContextProviderFunc) RequestContext(ctx context.Context, accountID string) (RequestContext, error) {
 	return f(ctx, accountID)
 }
 
-// ClientOptions 定义协议客户端的窄依赖
+// ClientOptions defines narrow dependencies for the protocol client
 type ClientOptions struct {
 	Transport       RPCTransport
 	Protected       ProtectedTransport
 	ContextProvider RequestContextProvider
 }
 
-// Client 实现 AI Studio 私有协议核心
+// Client implements the AI Studio private protocol core
 type Client struct {
 	transport       RPCTransport
 	protected       ProtectedTransport
@@ -98,13 +98,13 @@ type Client struct {
 
 var _ Service = (*Client)(nil)
 
-// NewClient 创建协议客户端
+// NewClient creates a protocol client
 func NewClient(options ClientOptions) (*Client, error) {
 	if options.Transport == nil {
-		return nil, fmt.Errorf("AI Studio transport 不能为空")
+		return nil, fmt.Errorf("AI Studio transport cannot be nil")
 	}
 	if options.Protected == nil {
-		return nil, fmt.Errorf("AI Studio protected transport 不能为空")
+		return nil, fmt.Errorf("AI Studio protected transport cannot be nil")
 	}
 	return &Client{
 		transport:       options.Transport,
@@ -115,7 +115,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}, nil
 }
 
-// RPCError 保存上游状态和协议错误码
+// RPCError stores upstream status and protocol error code
 type RPCError struct {
 	Method     string
 	StatusCode int
@@ -124,15 +124,15 @@ type RPCError struct {
 	Metadata   map[string]string
 }
 
-// Error 返回结构化上游错误
+// Error returns a structured upstream error
 func (e *RPCError) Error() string {
 	if e.Code != 0 {
-		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s", e.Method, e.StatusCode, e.Code, e.Message)
+		return fmt.Sprintf("AI Studio %s returned HTTP %d, protocol error code %d: %s", e.Method, e.StatusCode, e.Code, e.Message)
 	}
-	return fmt.Sprintf("AI Studio %s 返回 HTTP %d: %s", e.Method, e.StatusCode, e.Message)
+	return fmt.Sprintf("AI Studio %s returned HTTP %d: %s", e.Method, e.StatusCode, e.Message)
 }
 
-// HTTPStatus 返回上游 HTTP 状态
+// HTTPStatus returns the upstream HTTP status
 func (e *RPCError) HTTPStatus() int {
 	return e.StatusCode
 }
@@ -142,7 +142,7 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 	c.applyBenefitTier(method, accountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
+		return nil, fmt.Errorf("send AI Studio %s: %w", method, err)
 	}
 	return validateRPCResponse(method, response)
 }
@@ -152,7 +152,7 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio GenerateContent: %w", err)
+		return nil, fmt.Errorf("send AI Studio GenerateContent: %w", err)
 	}
 	return validateRPCResponse("GenerateContent", response)
 }
@@ -160,13 +160,13 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 func (c *Client) doProtectedVideo(ctx context.Context, request VideoRequest, body []byte) (*RPCResponse, error) {
 	transport, ok := c.protected.(VideoProtectedTransport)
 	if !ok {
-		return nil, fmt.Errorf("AI Studio protected transport 不支持 GenerateVideo")
+		return nil, fmt.Errorf("AI Studio protected transport does not support GenerateVideo")
 	}
 	rpc := newRPCRequest("GenerateVideo", request.AccountID, "", body, false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := transport.DoProtectedVideo(ctx, request, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio GenerateVideo: %w", err)
+		return nil, fmt.Errorf("send AI Studio GenerateVideo: %w", err)
 	}
 	return validateRPCResponse("GenerateVideo", response)
 }
@@ -187,13 +187,13 @@ func newRPCRequest(method string, accountID string, requestID string, body []byt
 
 func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, error) {
 	if response == nil || response.Body == nil {
-		return nil, fmt.Errorf("AI Studio %s transport 返回空响应", method)
+		return nil, fmt.Errorf("AI Studio %s transport returned empty response", method)
 	}
 	if response.StatusCode != http.StatusOK {
 		defer response.Body.Close()
 		raw, readErr := io.ReadAll(response.Body)
 		if readErr != nil {
-			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
+			return nil, fmt.Errorf("read AI Studio %s error response: %w", method, readErr)
 		}
 		return nil, DecodeRPCError(method, response.StatusCode, raw)
 	}
@@ -201,12 +201,12 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.EqualFold(mediaType, JSONProtobufContentType) {
 		response.Body.Close()
-		return nil, fmt.Errorf("AI Studio %s 返回未识别的 Content-Type %q", method, contentType)
+		return nil, fmt.Errorf("AI Studio %s returned unrecognized Content-Type %q", method, contentType)
 	}
 	return response, nil
 }
 
-// DecodeRPCError 解析独立状态和流式封装中的上游错误
+// DecodeRPCError parses upstream errors in standalone status and streaming envelopes
 func DecodeRPCError(method string, statusCode int, raw []byte) *RPCError {
 	rpcError := &RPCError{
 		Method:     method,

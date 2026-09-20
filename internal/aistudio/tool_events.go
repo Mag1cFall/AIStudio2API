@@ -11,7 +11,7 @@ func decodeExecutableCode(raw json.RawMessage, path string, evidence json.RawMes
 		return ExecutableCode{}, withMethod(err, "GenerateContent")
 	}
 	if len(values) < 2 {
-		return ExecutableCode{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "executable code 字段不足", Raw: raw}
+		return ExecutableCode{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "insufficient executable code fields", Raw: raw}
 	}
 	languageCode, err := rawInt64(values[0], path+"[0]", evidence)
 	if err != nil {
@@ -19,7 +19,7 @@ func decodeExecutableCode(raw json.RawMessage, path string, evidence json.RawMes
 	}
 	language, ok := map[int64]string{0: "LANGUAGE_UNSPECIFIED", 1: "PYTHON"}[languageCode]
 	if !ok {
-		return ExecutableCode{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("未识别的 executable code language %d", languageCode), Raw: raw}
+		return ExecutableCode{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("unrecognized executable code language %d", languageCode), Raw: raw}
 	}
 	code, err := rawString(values[1], path+"[1]", evidence)
 	if err != nil {
@@ -34,7 +34,7 @@ func decodeCodeExecutionResult(raw json.RawMessage, path string, evidence json.R
 		return CodeExecutionResult{}, withMethod(err, "GenerateContent")
 	}
 	if len(values) == 0 {
-		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "code execution result 字段不足", Raw: raw}
+		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "insufficient code execution result fields", Raw: raw}
 	}
 	outcomeCode, err := rawInt64(values[0], path+"[0]", evidence)
 	if err != nil {
@@ -47,7 +47,7 @@ func decodeCodeExecutionResult(raw json.RawMessage, path string, evidence json.R
 		3: "OUTCOME_DEADLINE_EXCEEDED",
 	}[outcomeCode]
 	if !ok {
-		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("未识别的 code execution outcome %d", outcomeCode), Raw: raw}
+		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("unrecognized code execution outcome %d", outcomeCode), Raw: raw}
 	}
 	value := ""
 	if valueRaw := rawAt(values, 1); !isJSONNull(valueRaw) {
@@ -186,13 +186,13 @@ func decodeGroundingChunk(raw json.RawMessage, path string, evidence json.RawMes
 	for index := 0; index < 3; index++ {
 		if !isJSONNull(rawAt(values, index)) {
 			if variant >= 0 {
-				return GroundingChunk{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "grounding chunk 同时设置多个来源", Raw: raw}
+				return GroundingChunk{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "grounding chunk has multiple sources set", Raw: raw}
 			}
 			variant = index
 		}
 	}
 	if variant < 0 {
-		return GroundingChunk{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "grounding chunk 缺少来源", Raw: raw}
+		return GroundingChunk{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "grounding chunk missing source", Raw: raw}
 	}
 	fields, err := rawArray(values[variant], fmt.Sprintf("%s[%d]", path, variant), evidence)
 	if err != nil {

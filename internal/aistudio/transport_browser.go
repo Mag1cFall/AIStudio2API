@@ -62,19 +62,19 @@ type browserResponseBody struct {
 	trailer stdhttp.Header
 }
 
-// newBrowserRoundTripper 创建与当前 Camoufox 网络形状一致的传输
+// newBrowserRoundTripper creates transport matching current Camoufox network profile
 func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	proxyURL = strings.TrimSpace(proxyURL)
 	var proxyDialer proxy.ContextDialer
 	if proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil || parsed.Hostname() == "" {
-			return nil, fmt.Errorf("代理 URL 无效")
+			return nil, fmt.Errorf("invalid proxy URL")
 		}
 		switch strings.ToLower(parsed.Scheme) {
 		case "http", "https", "socks5":
 		default:
-			return nil, fmt.Errorf("代理协议必须是 http、https 或 socks5")
+			return nil, fmt.Errorf("proxy scheme must be http, https, or socks5")
 		}
 		proxyDialer, err = newBrowserProxyDialer(parsed)
 		if err != nil {
@@ -91,7 +91,7 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	}
 	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
 	if err != nil {
-		return nil, fmt.Errorf("创建浏览器网络传输: %w", err)
+		return nil, fmt.Errorf("create browser network transport: %w", err)
 	}
 	return &browserRoundTripper{client: client}, nil
 }
@@ -158,7 +158,7 @@ func newBrowserProxyDialer(proxyURL *url.URL) (proxy.ContextDialer, error) {
 		case "https":
 			proxyTarget = net.JoinHostPort(proxyURL.Hostname(), "443")
 		case "socks5":
-			return nil, fmt.Errorf("SOCKS5 代理 URL 缺少端口")
+			return nil, fmt.Errorf("SOCKS5 proxy URL missing port")
 		}
 	}
 	if strings.EqualFold(proxyURL.Scheme, "socks5") {
@@ -169,11 +169,11 @@ func newBrowserProxyDialer(proxyURL *url.URL) (proxy.ContextDialer, error) {
 		}
 		dialer, err := proxy.SOCKS5("tcp", proxyTarget, auth, direct)
 		if err != nil {
-			return nil, fmt.Errorf("创建 SOCKS5 代理连接: %w", err)
+			return nil, fmt.Errorf("create SOCKS5 proxy connection: %w", err)
 		}
 		contextDialer, ok := dialer.(proxy.ContextDialer)
 		if !ok {
-			return nil, fmt.Errorf("SOCKS5 代理不支持上下文取消")
+			return nil, fmt.Errorf("SOCKS5 proxy does not support context cancellation")
 		}
 		return contextDialer, nil
 	}
@@ -245,7 +245,7 @@ func (dialer *browserConnectDialer) DialContext(ctx context.Context, network, ad
 		if response.Body != nil {
 			_ = response.Body.Close()
 		}
-		return nil, fmt.Errorf("代理 CONNECT 返回 %s", response.Status)
+		return nil, fmt.Errorf("proxy CONNECT returned %s", response.Status)
 	}
 	if err := connection.SetDeadline(time.Time{}); err != nil {
 		return nil, err
