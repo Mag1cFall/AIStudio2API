@@ -24,7 +24,10 @@ import UiIcon, { type IconName } from '@/components/UiIcon.vue'
 const { availableLocales, locale, setLocale, t } = useI18n()
 const TAB_STORAGE_KEY = 'aistudio2api_active_tab'
 const validTabs: TabID[] = ['logs', 'accounts', 'models', 'requests', 'settings', 'playground']
-const savedTab = typeof window !== 'undefined' ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null) : null
+const savedTab =
+  typeof window !== 'undefined'
+    ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null)
+    : null
 const currentTab = ref<TabID>(savedTab && validTabs.includes(savedTab) ? savedTab : 'logs')
 watch(currentTab, (tab) => {
   window.localStorage.setItem(TAB_STORAGE_KEY, tab)
@@ -420,7 +423,6 @@ onUnmounted(() => {
         :config="config"
         :loading="loading.config"
         :error="errors.config"
-        @saved="config = $event"
         @notice="showNotice"
       />
       <PlaygroundPanel v-else :models="models" :api-key="config?.proxy_api_key ?? ''" />

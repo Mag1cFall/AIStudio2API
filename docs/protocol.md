@@ -1119,7 +1119,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 账户 | `GET /api/accounts`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
 | 账户认证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
-| 配置 | `GET /api/config`、`PUT /api/config` |
+| 配置 | `GET /api/config` |
 | 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
 
@@ -1137,7 +1137,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `POST /api/accounts/{id}/login`、`verify` | 200 | `{"account":AdminAccount}` |
 | `DELETE /api/accounts/{id}` | 204 | 空 body |
 | `POST /api/control/start`、`stop` | 200 | `AdminStatus` |
-| `GET /api/config`、`PUT /api/config` | 200 | `RuntimeConfig` |
+| `GET /api/config` | 200 | `RuntimeConfig` |
 | `GET /api/cooldowns` | 200 | `{"cooldowns":[AdminCooldown,...]}` |
 | `GET /api/requests` | 200 | `{"requests":[AdminRequest,...]}` |
 | `POST /api/requests/{id}/cancel` | 204 | 空 body |
@@ -1178,7 +1178,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `management_restart_required` | response-only；保存的 listen/key 与当前管理进程不同 |
 | `service_restart_required` | response-only；保存的生成服务配置与当前生成服务实例不同 |
 
-`PUT /api/config` 原子保存配置。监听地址和 API key 在管理进程重启后生效；账户路径、代理、timeout、容量与临时对话在 Stop/Start 创建的新生成服务实例中生效。启动时读取最新配置；配置加载、校验、实例创建失败或启用前取消时保留原实例，切换到新实例后由它完成启动或进入 `STOPPED`。
+`GET /api/config` 返回当前运行配置（只读）。配置在启动时从环境变量或 `.env` 加载，不支持通过 API 运行时修改。
 
 `GET /api/events` 的初始顺序为 `status`、`models`、`accounts`、最近 200 条 `log`、`cooldowns`、按开始时间排序的活动 `request`。后续事件的 `data` 形状：
 

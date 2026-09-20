@@ -152,32 +152,24 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `MAX_ACTIVE_WORKERS` | 活动 Worker 容量上限，必须不小于热池目标 | `10` |
 | `WARM_STARTUP_CONCURRENCY` | 同时初始化的预热账户数 | `2` |
 | `PER_ACCOUNT_CONCURRENCY` | 单账号同时执行的请求数 | `2` |
-| `ROUTING_STRATEGY` | 账户轮询 `round-robin` 或粘性优先 `fill-first` | `round-robin` |
+| `ROUTING_STRATEGY` | 账户选择策略：`round-robin`（轮询均衡，均摊限流与负载）；`fill-first`（粘性优先，满载或冷却后溢出） | `round-robin` |
 | `TEMPORARY_CHAT` | WAA 预热页是否使用临时对话 | `false` |
+| `HEADLESS` | Camoufox 是否启用无头模式（`true` 后台静默运行；`false` 弹出浏览器窗口） | `true` |
+| `CAMOUFOX_PATH` | 自定义 Camoufox 浏览器可执行文件路径（可选） | 空 |
 
 `LISTEN_ADDR` 使用 `host:port`，端口范围为 `1..65535`。时长和容量字段必须为正值，`WARM_STARTUP_CONCURRENCY` 的有效范围为 `1..WARM_WORKER_LIMIT`。全局代理 URL 使用 `http`、`https` 或 `socks5` 纯 origin 形状。命令行 `--auth` 与 `--proxy` 会覆盖每次启动生成服务时读取的保存值。
 
-`GET /api/config` 与 `PUT /api/config` 同时暴露保存值和当前生效值：
+`GET /api/config` 暴露当前运行配置（只读）。配置在服务启动时从环境变量或 `.env` 加载，不支持通过 API 运行时修改：
 
 | 字段 | 语义 |
 | --- | --- |
-| `auth_states`、`proxy`、`init_timeout`、`request_timeout` | 下一次启动生成服务时使用的保存值 |
-| `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 下一次启动生成服务时使用的容量参数 |
-| `temporary_chat` | 下一次启动生成服务时使用的 WAA 配置 |
-| `listen_addr`、`proxy_api_key` | 保存的管理监听配置 |
-| `active_listen_addr`、`active_proxy_api_key` | 当前管理进程固定使用的值 |
-| `management_restart_required` | 保存的监听地址或 API key 与当前管理进程不同 |
-| `service_restart_required` | 保存的生成服务配置与当前生成服务实例不同 |
-
-配置保存使用临时文件、`Sync` 和原子替换。监听地址与本地 API key 由管理进程持有，进程重启后应用；其余配置在停止并再次启动生成服务后应用。
-
+| `auth_states`、`proxy`、`init_timeout`、`request_timeout` | 当前生成服务实例使用的基础配置 |
+| `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 当前使用的容量与并发参数 |
+| `temporary_chat`、`headless` | WAA 预热临时对话与无头运行模式 |
+| `listen_addr`、`proxy_api_key` | 管理监听配置与 API 密钥 |
 生成服务启动顺序如下。源码中的 `generation` 表示一次 Stop/Start 创建的生成服务实例：
 
 ```text
-PUT /api/config
-  -> 校验并原子写入 .env
-  -> 返回 saved/active 差异
-
 POST /api/control/stop
   -> 取消 LAUNCHING 或活动请求
   -> 等待模型目录刷新退出并关闭当前 Worker
@@ -270,7 +262,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`PUT/DELETE /api/accounts/{id}` |
 | 登录与验证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 配置 | `GET /api/config`、`PUT /api/config` |
+| 配置 | `GET /api/config` |
 | 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
 

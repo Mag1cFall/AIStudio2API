@@ -148,6 +148,7 @@ export interface ServiceConfig {
   per_account_concurrency: number
   routing_strategy: 'round-robin' | 'fill-first'
   temporary_chat: boolean
+  headless: boolean
 }
 
 export type AdminEvent =

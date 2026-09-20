@@ -129,7 +129,11 @@ const zhCN = {
   'settings.routingRoundRobin': '轮询',
   'settings.routingFillFirst': '账号粘性优先',
   'settings.routingHelp':
-    '轮询依次分配请求；粘性优先持续使用首个可用账户，达到并发上限或不可用时切换。',
+    '轮询（round-robin）均衡负载并均摊限流；粘性优先（fill-first）持续使用首个账户直到满载或冷却。',
+  'settings.routingRoundRobinDesc':
+    '轮询模式：在所有就绪账户间轮流分配请求，均衡负载并均摊各账号的速率限制，推荐多账号并发池使用。',
+  'settings.routingFillFirstDesc':
+    '粘性优先模式：持续使用首个健康账户，达到单账户并发上限或进入冷却后才切换到下一账户。',
   'settings.temporaryChat': 'WAA 预热使用临时对话',
   'settings.activeValue': '当前生效',
   'settings.pendingService': '已保存值将在下次生成服务启动时生效',
@@ -140,6 +144,20 @@ const zhCN = {
   'settings.savedBoth': '配置已保存；重启生成服务后生效；监听地址或 API 密钥需重新运行 start.bat',
   'settings.reveal': '显示密钥',
   'settings.hide': '隐藏密钥',
+  'settings.readOnlyNotice':
+    '服务配置在启动时从环境变量或 .env 读取，运行期间为只读状态。如需修改，请调整环境或 .env 文件后重启服务。',
+  'settings.networkSection': '网络与认证',
+  'settings.concurrencySection': 'Worker 与并发',
+  'settings.behaviorSection': '调度与行为',
+  'settings.timeoutsSection': '超时与限制',
+  'settings.noProxy': '直连（未配置代理）',
+  'settings.enabled': '已启用',
+  'settings.disabled': '已禁用',
+  'settings.copyKey': '复制',
+  'settings.copied': '已复制',
+  'settings.headless': 'Camoufox 无头模式',
+  'settings.headlessDesc': '后台静默运行（无浏览器窗口），资源占用更低',
+  'settings.guiDesc': '显示浏览器窗口（调试模式），便于排查 WAA 运行状态',
   'playground.protocol': '协议',
   'playground.mode': '输出类型',
   'playground.modeText': '文本',
@@ -314,7 +332,11 @@ const en: Record<TranslationKey, string> = {
   'settings.routingRoundRobin': 'Round robin',
   'settings.routingFillFirst': 'Fill first',
   'settings.routingHelp':
-    'Round robin rotates requests. Fill first keeps using the first available account until it is unavailable or reaches its concurrency limit.',
+    'Round-robin balances load and spreads rate limits. Fill-first keeps using the first account until saturated or cooling down.',
+  'settings.routingRoundRobinDesc':
+    'Round-robin: Distributes requests evenly across all ready accounts to balance load and avoid per-account rate limits. Recommended for multi-account pools.',
+  'settings.routingFillFirstDesc':
+    'Fill-first (sticky): Continuously routes requests to the first healthy account until its concurrency limit is reached or it cools down before failing over.',
   'settings.temporaryChat': 'Use temporary chat for WAA prewarming',
   'settings.activeValue': 'Active',
   'settings.pendingService': 'Saved values apply the next time the generation service starts',
@@ -327,6 +349,21 @@ const en: Record<TranslationKey, string> = {
     'Configuration saved. Restart the generation service; use start.bat for the listen address or API key.',
   'settings.reveal': 'Reveal key',
   'settings.hide': 'Hide key',
+  'settings.readOnlyNotice':
+    'Configuration is loaded from environment variables or .env at startup and is read-only at runtime. Update environment variables or .env and restart to apply changes.',
+  'settings.networkSection': 'Network & Authentication',
+  'settings.concurrencySection': 'Workers & Concurrency',
+  'settings.behaviorSection': 'Scheduling & Behavior',
+  'settings.timeoutsSection': 'Timeouts & Limits',
+  'settings.noProxy': 'Direct (No proxy configured)',
+  'settings.enabled': 'Enabled',
+  'settings.disabled': 'Disabled',
+  'settings.copyKey': 'Copy',
+  'settings.copied': 'Copied',
+  'settings.headless': 'Camoufox Headless Mode',
+  'settings.headlessDesc':
+    'Runs silently in background without browser window (low resource usage)',
+  'settings.guiDesc': 'Shows browser window (debug mode) for troubleshooting WAA runtime',
   'playground.protocol': 'Protocol',
   'playground.mode': 'Output type',
   'playground.modeText': 'Text',

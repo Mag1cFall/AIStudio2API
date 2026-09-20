@@ -75,7 +75,7 @@ func newRuntime(
 
 	workers := newAccountWorkerManager(
 		pool, accounts, requests, camoufoxPath, cfg.Proxy, cfg.InitTimeout,
-		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency, cfg.TemporaryChat,
+		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency, cfg.TemporaryChat, cfg.Headless,
 	)
 
 	protected, err := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
@@ -148,6 +148,7 @@ type accountWorkerManager struct {
 	maxActive       int
 	warmConcurrency int
 	temporaryChat   bool
+	headless        bool
 	lifecycle       context.Context
 	cancel          context.CancelFunc
 	closed          bool
@@ -259,6 +260,7 @@ func newAccountWorkerManager(
 	maxActive int,
 	warmConcurrency int,
 	temporaryChat bool,
+	headless bool,
 ) *accountWorkerManager {
 	lifecycle, cancel := context.WithCancel(context.Background())
 
@@ -273,6 +275,7 @@ func newAccountWorkerManager(
 		maxActive:       maxActive,
 		warmConcurrency: warmConcurrency,
 		temporaryChat:   temporaryChat,
+		headless:        headless,
 		openings:        make(map[string]chan struct{}),
 		lifecycle:       lifecycle,
 		cancel:          cancel,
@@ -564,7 +567,7 @@ func (manager *accountWorkerManager) workerConfigFor(
 		Locale:           config.Locale,
 		Timezone:         config.Timezone,
 		Proxy:            proxy,
-		Headless:         false,
+		Headless:         manager.headless,
 		TemporaryChat:    manager.temporaryChat,
 	}
 }

@@ -835,40 +835,7 @@ func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, er
 	return runtimeConfigDTO(cfg), nil
 }
 
-func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
-	initTimeout, err := time.ParseDuration(value.InitTimeout)
-	if err != nil {
-		return api.RuntimeConfig{}, fmt.Errorf("invalid INIT_TIMEOUT: %w", err)
-	}
 
-	requestTimeout, err := time.ParseDuration(value.RequestTimeout)
-	if err != nil {
-		return api.RuntimeConfig{}, fmt.Errorf("invalid REQUEST_TIMEOUT: %w", err)
-	}
-
-	cfg := config.Config{
-		AuthStates:             value.AuthStates,
-		ListenAddr:             value.ListenAddr,
-		ProxyAPIKey:            value.APIKey,
-		Proxy:                  value.Proxy,
-		InitTimeout:            initTimeout,
-		RequestTimeout:         requestTimeout,
-		WarmWorkerLimit:        value.WarmWorkerLimit,
-		MaxActiveWorkers:       value.MaxActiveWorkers,
-		WarmStartupConcurrency: value.WarmStartupConcurrency,
-		PerAccountConcurrency:  value.PerAccountConcurrency,
-		RoutingStrategy:        value.RoutingStrategy,
-		TemporaryChat:          value.TemporaryChat,
-	}
-
-	if err := cfg.Save(admin.configPath); err != nil {
-		return api.RuntimeConfig{}, err
-	}
-
-	admin.requests.log("service", "INFO", "Service configuration saved")
-
-	return runtimeConfigDTO(cfg), nil
-}
 
 func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, error) {
 	statuses := admin.pool.Status()
@@ -1522,6 +1489,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,
 		RoutingStrategy:        cfg.RoutingStrategy,
 		TemporaryChat:          cfg.TemporaryChat,
+		Headless:               cfg.Headless,
 	}
 }
 

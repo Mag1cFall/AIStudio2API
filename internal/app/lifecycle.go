@@ -433,17 +433,7 @@ func (manager *runtimeManager) RuntimeConfig(ctx context.Context) (api.RuntimeCo
 	return value, err
 }
 
-// UpdateRuntimeConfig saves configuration to be used on the next generation service launch.
-func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
-	manager.mu.RLock()
-	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
-	if err == nil {
-		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
-	}
-	manager.mu.RUnlock()
 
-	return updated, err
-}
 
 // Cooldowns returns the cooldown states for the current generation service.
 func (manager *runtimeManager) Cooldowns(ctx context.Context) ([]api.AdminCooldown, error) {
@@ -517,6 +507,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		TemporaryChat:          value.TemporaryChat,
 		RoutingStrategy:        value.RoutingStrategy,
+		Headless:               value.Headless,
 	}
 
 	overrides.Apply(&saved)
@@ -530,7 +521,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
 		saved.PerAccountConcurrency == active.PerAccountConcurrency &&
 		saved.TemporaryChat == active.TemporaryChat &&
-		saved.RoutingStrategy == active.RoutingStrategy
+		saved.RoutingStrategy == active.RoutingStrategy &&
+		saved.Headless == active.Headless
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

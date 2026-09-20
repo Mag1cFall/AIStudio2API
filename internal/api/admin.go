@@ -24,7 +24,6 @@ type AdminService interface {
 	StopService(context.Context) (AdminStatus, error)
 	ClearLogs(context.Context) error
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
-	UpdateRuntimeConfig(context.Context, RuntimeConfig) (RuntimeConfig, error)
 	Cooldowns(context.Context) ([]AdminCooldown, error)
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
@@ -187,6 +186,7 @@ type RuntimeConfig struct {
 	PerAccountConcurrency     int    `json:"per_account_concurrency"`
 	RoutingStrategy           string `json:"routing_strategy"`
 	TemporaryChat             bool   `json:"temporary_chat"`
+	Headless                  bool   `json:"headless"`
 }
 
 // AdminCooldown represents account model cooldown.
@@ -227,7 +227,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
 	mux.HandleFunc("DELETE /api/logs", s.handleClearLogs)
 	mux.HandleFunc("GET /api/config", s.handleRuntimeConfig)
-	mux.HandleFunc("PUT /api/config", s.handleUpdateRuntimeConfig)
+
 	mux.HandleFunc("GET /api/cooldowns", s.handleCooldowns)
 	mux.HandleFunc("GET /api/requests", s.handleRequests)
 	mux.HandleFunc("POST /api/requests/{id}/cancel", s.handleCancelRequest)
@@ -385,19 +385,7 @@ func (s *server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, config)
 }
 
-func (s *server) handleUpdateRuntimeConfig(w http.ResponseWriter, r *http.Request) {
-	var config RuntimeConfig
-	if err := decodeJSON(r, &config); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	updated, err := s.config.Admin.UpdateRuntimeConfig(r.Context(), config)
-	if err != nil {
-		writeAdminUpstreamError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, updated)
-}
+
 
 func (s *server) handleCooldowns(w http.ResponseWriter, r *http.Request) {
 	cooldowns, err := s.config.Admin.Cooldowns(r.Context())

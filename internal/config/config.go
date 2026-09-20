@@ -2,13 +2,11 @@ package config
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +21,7 @@ const (
 	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 2
 	defaultAccountConcurrency = 2
+	defaultHeadless           = true
 )
 
 var configKeys = [...]string{
@@ -38,6 +37,8 @@ var configKeys = [...]string{
 	"PER_ACCOUNT_CONCURRENCY",
 	"ROUTING_STRATEGY",
 	"TEMPORARY_CHAT",
+	"HEADLESS",
+	"CAMOUFOX_PATH",
 }
 
 // Config holds the global configuration for the service.
@@ -54,6 +55,7 @@ type Config struct {
 	PerAccountConcurrency  int           `json:"per_account_concurrency"`
 	RoutingStrategy        string        `json:"routing_strategy"`
 	TemporaryChat          bool          `json:"temporary_chat"`
+	Headless               bool          `json:"headless"`
 }
 
 // Default returns a default configuration ready for startup.
@@ -68,6 +70,7 @@ func Default() Config {
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
+		Headless:               defaultHeadless,
 	}
 }
 
@@ -143,7 +146,17 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("TEMPORARY_CHAT must be true or false")
 		}
 	}
-
+	if value, ok := values["HEADLESS"]; ok {
+		cfg.Headless, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("HEADLESS must be true or false")
+		}
+	}
+	if value, ok := values["CAMOUFOX_PATH"]; ok && strings.TrimSpace(value) != "" {
+		if _, set := os.LookupEnv("CAMOUFOX_PATH"); !set {
+			_ = os.Setenv("CAMOUFOX_PATH", strings.TrimSpace(value))
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -151,37 +164,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// Save atomically writes the configuration to the specified env file.
-func (c Config) Save(path string) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
 
-	values := map[string]string{
-		"AISTUDIO_AUTH_STATES":     c.AuthStates,
-		"LISTEN_ADDR":              c.ListenAddr,
-		"PROXY_API_KEY":            c.ProxyAPIKey,
-		"PROXY":                    c.Proxy,
-		"INIT_TIMEOUT":             c.InitTimeout.String(),
-		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
-		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
-		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
-		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
-		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
-		"ROUTING_STRATEGY":         c.RoutingStrategy,
-		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
-	}
-
-	var output strings.Builder
-	for _, key := range configKeys {
-		output.WriteString(key)
-		output.WriteByte('=')
-		output.WriteString(formatEnvValue(values[key]))
-		output.WriteByte('\n')
-	}
-
-	return atomicWrite(path, []byte(output.String()), 0o600)
-}
 
 // Validate checks if the configuration values are valid for service startup.
 func (c Config) Validate() error {
@@ -243,6 +226,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
 		RoutingStrategy        string `json:"routing_strategy"`
 		TemporaryChat          bool   `json:"temporary_chat"`
+		Headless               bool   `json:"headless"`
 	}
 
 	return json.Marshal(payload{
@@ -258,6 +242,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		PerAccountConcurrency:  c.PerAccountConcurrency,
 		RoutingStrategy:        c.RoutingStrategy,
 		TemporaryChat:          c.TemporaryChat,
+		Headless:               c.Headless,
 	})
 }
 
@@ -276,6 +261,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		PerAccountConcurrency  int    `json:"per_account_concurrency"`
 		RoutingStrategy        string `json:"routing_strategy"`
 		TemporaryChat          bool   `json:"temporary_chat"`
+		Headless               bool   `json:"headless"`
 	}
 
 	var value payload
@@ -306,6 +292,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		RoutingStrategy:        value.RoutingStrategy,
 		TemporaryChat:          value.TemporaryChat,
+		Headless:               value.Headless,
 	}
 
 	if err := parsed.Validate(); err != nil {
@@ -429,17 +416,7 @@ func parseEnvValue(value string) (string, error) {
 	return value, nil
 }
 
-func formatEnvValue(value string) string {
-	if value == "" {
-		return ""
-	}
 
-	if strings.ContainsAny(value, " \t\r\n#\"'") {
-		return strconv.Quote(value)
-	}
-
-	return value
-}
 
 func parsePositiveDuration(key string, value string) (time.Duration, error) {
 	duration, err := time.ParseDuration(strings.TrimSpace(value))
@@ -476,45 +453,4 @@ func validateListenAddr(value string) error {
 	return nil
 }
 
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	target, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("resolve config path: %w", err)
-	}
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".env-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp config file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-
-	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return fmt.Errorf("chmod config file: %w", err)
-	}
-
-	if _, err := bytes.NewReader(data).WriteTo(temporary); err != nil {
-		temporary.Close()
-		return fmt.Errorf("write config file: %w", err)
-	}
-
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("sync config file: %w", err)
-	}
-
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close config file: %w", err)
-	}
-
-	if err := os.Rename(temporaryPath, target); err != nil {
-		return fmt.Errorf("replace config file: %w", err)
-	}
-
-	return nil
-}
