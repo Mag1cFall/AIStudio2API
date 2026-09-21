@@ -136,3 +136,41 @@ func TestRPCErrorCompatibility(t *testing.T) {
 		}
 	})
 }
+
+// TestEncodeContentsEmptyPartsFilter 验证多轮历史中空 parts 内容被自动忽略而不触发编码校验失败
+func TestEncodeContentsEmptyPartsFilter(t *testing.T) {
+	contents := []Content{
+		{Role: RoleUser, Parts: []Part{{Text: "hello"}}},
+		{Role: RoleAssistant, Parts: nil},
+		{Role: RoleAssistant, Parts: []Part{}},
+		{Role: RoleUser, Parts: []Part{{Text: "world"}}},
+	}
+	wire, err := encodeContents(contents)
+	if err != nil {
+		t.Fatalf("encodeContents failed: %v", err)
+	}
+	if len(wire) != 2 {
+		t.Fatalf("expected 2 valid wire contents, got %d: %#v", len(wire), wire)
+	}
+}
+
+// TestAttachYouTubeMediaPreservesText 验证普通文本与非空白字符在附加 YouTube 媒体时不被截断为空
+func TestAttachYouTubeMediaPreservesText(t *testing.T) {
+	content := Content{
+		Role: RoleUser,
+		Parts: []Part{
+			{Text: "  normal text with space  "},
+			{Text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+		},
+	}
+	attached := attachYouTubeMedia(content)
+	if len(attached.Parts) != 2 {
+		t.Fatalf("expected 2 parts (1 text + 1 external media), got %d: %#v", len(attached.Parts), attached.Parts)
+	}
+	if attached.Parts[0].Text != "  normal text with space  " {
+		t.Fatalf("unexpected text: %q", attached.Parts[0].Text)
+	}
+	if attached.Parts[1].ExternalMedia == nil {
+		t.Fatalf("expected external media part")
+	}
+}
