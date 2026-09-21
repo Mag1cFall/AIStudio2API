@@ -98,6 +98,9 @@ func encodeContents(contents []Content) ([]any, error) {
 	wire := make([]any, 0, len(contents))
 	functionNames := make(map[string]string)
 	for index, content := range contents {
+		if len(content.Parts) == 0 {
+			continue
+		}
 		encoded, err := encodeContent(content, functionNames)
 		if err != nil {
 			return nil, fmt.Errorf("编码 content %d: %w", index, err)

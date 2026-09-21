@@ -171,6 +171,9 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 		if err != nil {
 			return aistudio.GenerateRequest{}, err
 		}
+		if len(content.Parts) == 0 {
+			continue
+		}
 		contents = append(contents, content)
 	}
 	tools, err := mapOpenAITools(request.Tools, request.ToolChoice)
@@ -301,7 +304,7 @@ func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		if text == "" {
+		if strings.TrimSpace(text) == "" {
 			return nil, nil
 		}
 		return []aistudio.Part{{Text: text}}, nil
@@ -343,6 +346,9 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 	}
 	switch block.Type {
 	case "text", "input_text", "output_text":
+		if strings.TrimSpace(block.Text) == "" {
+			return aistudio.Part{}, nil
+		}
 		return aistudio.Part{Text: block.Text}, nil
 	case "image_url", "input_image":
 		url, err := imageURLString(block.ImageURL)

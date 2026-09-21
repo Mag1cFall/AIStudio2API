@@ -187,6 +187,9 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 		if err != nil {
 			return aistudio.GenerateRequest{}, fmt.Errorf("%s message: %w", message.Role, err)
 		}
+		if len(parts) == 0 {
+			continue
+		}
 		contents = append(contents, aistudio.Content{Role: role, Parts: parts})
 	}
 	tools, err := mapAnthropicTools(request.Tools, request.ToolChoice)
@@ -253,7 +256,7 @@ func anthropicRole(role string) (aistudio.Role, error) {
 func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		if text == "" {
+		if strings.TrimSpace(text) == "" {
 			return nil, nil
 		}
 		return []aistudio.Part{{Text: text}}, nil
@@ -295,7 +298,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		}
 		switch block.Type {
 		case "text":
-			if block.Text == "" {
+			if strings.TrimSpace(block.Text) == "" {
 				continue
 			}
 			flushPendingSignature()
