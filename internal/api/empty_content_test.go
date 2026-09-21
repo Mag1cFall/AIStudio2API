@@ -52,3 +52,47 @@ func TestAnthropicEmptyMessagesFiltered(t *testing.T) {
 		t.Fatalf("unexpected contents: %#v", genReq.Contents)
 	}
 }
+
+// TestOpenAIToolMessageNameInference 验证 tool 消息缺少 name 时自动关联前置工具调用名称
+func TestOpenAIToolMessageNameInference(t *testing.T) {
+	req := chatRequest{
+		Model: "gemini-3.8-flash",
+		Messages: []chatMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []openAIToolCall{
+					{
+						ID:   "call_abc_1",
+						Type: "function",
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{
+							Name:      "query_image_presets",
+							Arguments: `{"category":"preset"}`,
+						},
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "call_mismatched_xyz",
+				Content:    json.RawMessage(`"ok"`),
+			},
+		},
+	}
+	genReq, err := req.toGenerateRequest("test-id")
+	if err != nil {
+		t.Fatalf("toGenerateRequest failed: %v", err)
+	}
+	if len(genReq.Contents) != 2 {
+		t.Fatalf("expected 2 contents, got %d", len(genReq.Contents))
+	}
+	toolPart := genReq.Contents[1].Parts[0]
+	if toolPart.FunctionResult == nil {
+		t.Fatalf("expected FunctionResult part")
+	}
+	if toolPart.FunctionResult.Name != "query_image_presets" {
+		t.Fatalf("expected inferred name 'query_image_presets', got %q", toolPart.FunctionResult.Name)
+	}
+}

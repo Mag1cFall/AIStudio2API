@@ -156,6 +156,8 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
 	var system []string
 	contents := make([]aistudio.Content, 0, len(request.Messages))
+	toolCallMap := make(map[string]string)
+	var lastToolNames []string
 	for _, message := range request.Messages {
 		if message.Role == "system" || message.Role == "developer" {
 			text, err := openAITextContent(message.Content)
@@ -166,6 +168,24 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 				system = append(system, text)
 			}
 			continue
+		}
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			lastToolNames = nil
+			for _, call := range message.ToolCalls {
+				if call.Function.Name != "" {
+					lastToolNames = append(lastToolNames, call.Function.Name)
+					if call.ID != "" {
+						toolCallMap[call.ID] = call.Function.Name
+					}
+				}
+			}
+		}
+		if (message.Role == "tool" || message.Role == "function") && message.Name == "" {
+			if name, ok := toolCallMap[message.ToolCallID]; ok && name != "" {
+				message.Name = name
+			} else if len(lastToolNames) == 1 {
+				message.Name = lastToolNames[0]
+			}
 		}
 		content, err := chatMessageContent(message)
 		if err != nil {
