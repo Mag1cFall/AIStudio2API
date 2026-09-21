@@ -174,3 +174,58 @@ func TestAttachYouTubeMediaPreservesText(t *testing.T) {
 		t.Fatalf("expected external media part")
 	}
 }
+
+// TestFunctionResultNameInference 验证在 ID 丢失、不匹配或无前置调用时安全推断函数名称与兜底
+func TestFunctionResultNameInference(t *testing.T) {
+	t.Run("infer from previous function call when ID mismatches", func(t *testing.T) {
+		contents := []Content{
+			{
+				Role: RoleAssistant,
+				Parts: []Part{{
+					FunctionCall: &FunctionCall{
+						ID:        "call_1",
+						Name:      "query_image_presets",
+						Arguments: json.RawMessage(`{"category":"preset"}`),
+					},
+				}},
+			},
+			{
+				Role: RoleTool,
+				Parts: []Part{{
+					FunctionResult: &FunctionResult{
+						ID:      "call_mismatch_999",
+						Content: json.RawMessage(`{"result":"ok"}`),
+					},
+				}},
+			},
+		}
+		wire, err := encodeContents(contents)
+		if err != nil {
+			t.Fatalf("encodeContents should not fail: %v", err)
+		}
+		if len(wire) != 2 {
+			t.Fatalf("expected 2 wire items, got %d", len(wire))
+		}
+	})
+
+	t.Run("safe fallback when no preceding function call", func(t *testing.T) {
+		contents := []Content{
+			{
+				Role: RoleTool,
+				Parts: []Part{{
+					FunctionResult: &FunctionResult{
+						ID:      "call_isolated_123",
+						Content: json.RawMessage(`{"result":"ok"}`),
+					},
+				}},
+			},
+		}
+		wire, err := encodeContents(contents)
+		if err != nil {
+			t.Fatalf("encodeContents should not fail on isolated result: %v", err)
+		}
+		if len(wire) != 1 {
+			t.Fatalf("expected 1 wire item, got %d", len(wire))
+		}
+	})
+}
