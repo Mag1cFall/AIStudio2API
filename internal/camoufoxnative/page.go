@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // pageDOMHelpers 定义官网页面共用的可见目标与按钮状态判断
@@ -24,6 +25,11 @@ const promptReadyExpression = `(() => {` + pageDOMHelpers + `
 
 // workerPageReadyExpression 等待输入框出现或页面跳转到登录入口
 const workerPageReadyExpression = `(location.hostname === 'accounts.google.com' || ` + promptReadyExpression + `)`
+
+// normalizePromptNewlines 把 CRLF/CR 统一成 LF，官网 textarea 会把写入值规范化为 LF
+func normalizePromptNewlines(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
+}
 
 // fillPromptExpression 向当前可见提示框写入文本并通知页面表单
 func fillPromptExpression(prompt string) string {
