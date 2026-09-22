@@ -150,6 +150,11 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {
 	rpc := newRPCRequest("GenerateContent", request.AccountID, request.ID, body, true)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
+	if request.ImageRoute {
+		// 该头随 bootstrap 页面（gemini-flash-latest）采样，图像模型页面取值不同；
+		// 置空使其在头合并时被删除，官网实测缺省可通过（错值会被 Code 7 拒绝）
+		rpc.Header["X-Goog-Ext-519733851-Bin"] = nil
+	}
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio GenerateContent: %w", err)

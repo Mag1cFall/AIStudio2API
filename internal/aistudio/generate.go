@@ -42,13 +42,19 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	wire := make([]any, length)
 	wire[0] = wireModelName(request.Model)
 	wire[1] = contents
-	wire[2] = observedSafetySettings()
+	if !defaults.ImageRoute {
+		wire[2] = observedSafetySettings()
+	}
 	wire[3] = config
 	if request.System != "" {
 		wire[5] = encodeSystemInstruction(request.System)
 	}
-	if explicitTools {
+	switch {
+	case explicitTools:
 		wire[6] = tools
+	case defaults.OutputResolution:
+		// 官网对可设置分辨率的图像模型固定下发该槽位；缺失会被上游以 Code 7 拒绝
+		wire[6] = []any{[]any{nil, nil, nil, []any{nil, []any{}}}}
 	}
 	wire[10] = int64(1)
 	if runtime.Timezone != "" {
@@ -134,6 +140,13 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		return nil, err
 	}
 	imageConfig := encodeImageConfig(config.ImageConfig)
+	if defaults.OutputResolution && imageConfig == nil {
+		// 官网对可设置分辨率的图像模型固定带 imageConfig；缺失会被上游以 Code 7 拒绝
+		imageConfig = []any{nil, "1K"}
+	}
+	if !defaults.OutputResolution {
+		imageConfig = nil
+	}
 	speechConfig, err := encodeSpeechConfig(config.SpeechConfig)
 	if err != nil {
 		return nil, err
@@ -330,6 +343,11 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 }
 
 func applyModelMediaDefaults(config GenerationConfig, model Model) GenerationConfig {
+	if model.Capabilities["image_route"] && imageModalityNeedsText(config.ResponseModalities) {
+		// 官网对图像模型总是下发 [IMAGE, TEXT]；纯 IMAGE 会被上游以 Code 7 拒绝。
+		config.ResponseModalities = []ResponseModality{ResponseModalityImage, ResponseModalityText}
+		return config
+	}
 	if config.ResponseModalities != nil {
 		return config
 	}
@@ -337,9 +355,27 @@ func applyModelMediaDefaults(config GenerationConfig, model Model) GenerationCon
 	case model.Capabilities["speech_route"], model.Capabilities["music_route"]:
 		config.ResponseModalities = []ResponseModality{ResponseModalityAudio}
 	case model.Capabilities["image_route"]:
-		config.ResponseModalities = []ResponseModality{ResponseModalityImage}
+		config.ResponseModalities = []ResponseModality{ResponseModalityImage, ResponseModalityText}
 	}
 	return config
+}
+
+// imageModalityNeedsText 判断图像模型请求是否缺 TEXT 模态
+func imageModalityNeedsText(modalities []ResponseModality) bool {
+	if modalities == nil {
+		return true
+	}
+	hasImage := false
+	hasText := false
+	for _, modality := range modalities {
+		switch ResponseModality(strings.ToUpper(strings.TrimSpace(string(modality)))) {
+		case ResponseModalityImage:
+			hasImage = true
+		case ResponseModalityText:
+			hasText = true
+		}
+	}
+	return hasImage && !hasText
 }
 
 func applySpeechTranscript(contents []Content, model Model, config GenerationConfig) []Content {
@@ -382,6 +418,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
+	request.ImageRoute = entry.defaults.ImageRoute
 	request.Contents = applySpeechTranscript(request.Contents, entry.model, request.Config)
 	runtime := RequestContext{}
 	if c.contextProvider != nil {
