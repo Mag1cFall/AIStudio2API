@@ -151,8 +151,7 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 	rpc := newRPCRequest("GenerateContent", request.AccountID, request.ID, body, true)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	if request.ImageRoute {
-		// 该头随 bootstrap 页面（gemini-flash-latest）采样，图像模型页面取值不同；
-		// 置空使其在头合并时被删除，官网实测缺省可通过（错值会被 Code 7 拒绝）
+		// 图像请求使用独立于文本预热页的扩展头默认值
 		rpc.Header["X-Goog-Ext-519733851-Bin"] = nil
 	}
 	response, err := c.protected.DoProtected(ctx, request, rpc)

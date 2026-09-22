@@ -3,9 +3,11 @@ package api
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// TestOpenAIEmptyMessagesFiltered 验证 OpenAI 兼容协议中包含空字符串、null 或纯空白的消息自动跳过
+// TestOpenAIEmptyMessagesFiltered 验证 OpenAI 空历史消息的过滤
 func TestOpenAIEmptyMessagesFiltered(t *testing.T) {
 	req := chatRequest{
 		Model: "gemini-3.8-flash",
@@ -14,7 +16,8 @@ func TestOpenAIEmptyMessagesFiltered(t *testing.T) {
 			{Role: "user", Content: json.RawMessage(`"hello"`)},
 			{Role: "assistant", Content: json.RawMessage(`""`)},
 			{Role: "assistant", Content: json.RawMessage(`null`)},
-			{Role: "assistant", Content: json.RawMessage(`"   "`)},
+			{Role: "assistant", Content: json.RawMessage(`[]`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"text","text":""}]`)},
 			{Role: "user", Content: json.RawMessage(`"how are you?"`)},
 		},
 	}
@@ -30,14 +33,16 @@ func TestOpenAIEmptyMessagesFiltered(t *testing.T) {
 	}
 }
 
-// TestAnthropicEmptyMessagesFiltered 验证 Anthropic 协议中包含空字符串或纯空白的消息自动跳过
+// TestAnthropicEmptyMessagesFiltered 验证 Anthropic 空历史消息的过滤
 func TestAnthropicEmptyMessagesFiltered(t *testing.T) {
 	req := anthropicRequest{
 		Model: "gemini-3.8-flash",
 		Messages: []anthropicMessage{
 			{Role: "user", Content: json.RawMessage(`"hello"`)},
 			{Role: "assistant", Content: json.RawMessage(`""`)},
-			{Role: "assistant", Content: json.RawMessage(`"   "`)},
+			{Role: "assistant", Content: json.RawMessage(`null`)},
+			{Role: "assistant", Content: json.RawMessage(`[]`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"text","text":""}]`)},
 			{Role: "user", Content: json.RawMessage(`"world"`)},
 		},
 	}
@@ -50,6 +55,18 @@ func TestAnthropicEmptyMessagesFiltered(t *testing.T) {
 	}
 	if genReq.Contents[0].Parts[0].Text != "hello" || genReq.Contents[1].Parts[0].Text != "world" {
 		t.Fatalf("unexpected contents: %#v", genReq.Contents)
+	}
+}
+
+// TestMessageWhitespacePreserved 验证字符串与内容块保留空白文本
+func TestMessageWhitespacePreserved(t *testing.T) {
+	for name, convert := range map[string]func(json.RawMessage) ([]aistudio.Part, error){"openai": openAIContentParts, "anthropic": anthropicParts} {
+		for _, raw := range []json.RawMessage{json.RawMessage(`" \t "`), json.RawMessage(`[{"type":"text","text":" \t "}]`)} {
+			parts, err := convert(raw)
+			if err != nil || len(parts) != 1 || parts[0].Text != " \t " {
+				t.Errorf("%s whitespace=%#v err=%v", name, parts, err)
+			}
+		}
 	}
 }
 
@@ -88,11 +105,16 @@ func TestOpenAIToolMessageNameInference(t *testing.T) {
 	if len(genReq.Contents) != 2 {
 		t.Fatalf("expected 2 contents, got %d", len(genReq.Contents))
 	}
-	toolPart := genReq.Contents[1].Parts[0]
-	if toolPart.FunctionResult == nil {
-		t.Fatalf("expected FunctionResult part")
+	wire, err := aistudio.EncodeGenerateContentRequest(genReq, aistudio.GenerationDefaults{MaxOutputTokens: 1024}, aistudio.RequestContext{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if toolPart.FunctionResult.Name != "query_image_presets" {
-		t.Fatalf("expected inferred name 'query_image_presets', got %q", toolPart.FunctionResult.Name)
+	var root []any
+	if err := json.Unmarshal(wire, &root); err != nil {
+		t.Fatal(err)
+	}
+	result := root[1].([]any)[1].([]any)[0].([]any)[0].([]any)[11].([]any)
+	if result[0] != "query_image_presets" || result[2] != "call_mismatched_xyz" {
+		t.Fatalf("unexpected function result: %#v", result)
 	}
 }

@@ -256,7 +256,7 @@ func anthropicRole(role string) (aistudio.Role, error) {
 func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		if strings.TrimSpace(text) == "" {
+		if text == "" {
 			return nil, nil
 		}
 		return []aistudio.Part{{Text: text}}, nil
@@ -298,7 +298,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		}
 		switch block.Type {
 		case "text":
-			if strings.TrimSpace(block.Text) == "" {
+			if block.Text == "" {
 				continue
 			}
 			flushPendingSignature()

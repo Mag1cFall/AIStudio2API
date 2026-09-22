@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -96,13 +97,15 @@ func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, re
 
 func encodeContents(contents []Content) ([]any, error) {
 	wire := make([]any, 0, len(contents))
-	functionNames := make(map[string]string)
-	lastFunctionName := ""
+	var pendingCalls []FunctionCall
 	for index, content := range contents {
 		if len(content.Parts) == 0 {
 			continue
 		}
-		encoded, err := encodeContent(content, functionNames, &lastFunctionName)
+		if content.Role == RoleAssistant && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionCall != nil }) || content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
+			pendingCalls = nil
+		}
+		encoded, err := encodeContent(content, &pendingCalls)
 		if err != nil {
 			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
@@ -111,7 +114,7 @@ func encodeContents(contents []Content) ([]any, error) {
 	return wire, nil
 }
 
-func encodeContent(content Content, functionNames map[string]string, lastFunctionName *string) ([]any, error) {
+func encodeContent(content Content, pendingCalls *[]FunctionCall) ([]any, error) {
 	content = attachYouTubeMedia(content)
 	role := ""
 	switch content.Role {
@@ -130,23 +133,19 @@ func encodeContent(content Content, functionNames map[string]string, lastFunctio
 	parts := make([]any, 0, len(content.Parts))
 	for index, part := range content.Parts {
 		if part.FunctionCall != nil {
-			if part.FunctionCall.Name != "" {
-				*lastFunctionName = part.FunctionCall.Name
-			}
-			if part.FunctionCall.ID != "" {
-				functionNames[part.FunctionCall.ID] = part.FunctionCall.Name
-			}
+			*pendingCalls = append(*pendingCalls, *part.FunctionCall)
 		}
-		if part.FunctionResult != nil && part.FunctionResult.Name == "" {
-			part.FunctionResult = cloneFunctionResult(part.FunctionResult)
-			if name, ok := functionNames[part.FunctionResult.ID]; ok && name != "" {
-				part.FunctionResult.Name = name
-			} else if part.FunctionResult.ID != "" && !strings.HasPrefix(part.FunctionResult.ID, "call_") && !strings.HasPrefix(part.FunctionResult.ID, "tool_") {
-				part.FunctionResult.Name = part.FunctionResult.ID
-			} else if *lastFunctionName != "" {
-				part.FunctionResult.Name = *lastFunctionName
-			} else {
-				part.FunctionResult.Name = "unknown_function"
+		if result := part.FunctionResult; result != nil {
+			matched := slices.IndexFunc(*pendingCalls, func(call FunctionCall) bool { return result.ID != "" && call.ID == result.ID })
+			if matched < 0 && len(*pendingCalls) == 1 && (result.Name == "" || result.Name == (*pendingCalls)[0].Name) {
+				matched = 0
+			}
+			if matched >= 0 {
+				if result.Name == "" {
+					part.FunctionResult = cloneFunctionResult(result)
+					part.FunctionResult.Name = (*pendingCalls)[matched].Name
+				}
+				*pendingCalls = slices.Delete(*pendingCalls, matched, matched+1)
 			}
 		}
 		encoded, err := encodePart(part)
@@ -248,7 +247,7 @@ func encodePart(part Part) ([]any, error) {
 	if part.FunctionResult != nil {
 		name := part.FunctionResult.Name
 		if name == "" {
-			name = "unknown_function"
+			return nil, fmt.Errorf("function result 缺少名称且无法唯一关联调用")
 		}
 		response, err := encodeWireStructJSON(part.FunctionResult.Content)
 		if err != nil {

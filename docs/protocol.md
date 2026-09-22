@@ -901,7 +901,7 @@ AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7
 | Anthropic | 默认、`auto`、`none` | `any`、named `tool` |
 | Gemini | 默认、`AUTO`、`NONE` | `ANY`、`allowedFunctionNames` |
 
-函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。公开协议的 tool result 只有 call ID 时，实现从同一 contents 链的先前 function call 恢复函数名，查找失败返回参数错误。函数参数和结果使用 JSON object，标量或数组结果封装为 `{"result":<VALUE>}`。
+函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。tool result 显式提供函数名时保留该值；缺少名称时，先按 call ID 关联当前轮尚未返回结果的调用，未匹配且仅剩一个调用时使用其名称。每个结果对应一个调用，新一轮普通对话开始后重新建立关联；存在歧义或缺少调用记录时返回参数错误。函数参数和结果使用 JSON object，标量或数组结果封装为 `{"result":<VALUE>}`。
 
 ### Drive 上传与文件 Part
 
@@ -1393,6 +1393,8 @@ Gemini 附件与 `predictLongRunning` 的图片输入接受 `inlineData` / `inli
 
 媒体 Base64 输入接受标准和 URL-safe 字母表、可选的 `=` 填充，以及 `data:<MIME>;base64,` 前缀。GIF 内联图片和 OpenAI 视频 `input_reference` 表单附件提取首帧，按逻辑画布尺寸与帧偏移编码为 PNG 后发送。透明首帧保留透明背景；不透明首帧的未覆盖区域使用全局色表中的背景色。
 
+OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯空白文本、工具调用、工具结果及媒体保留原有内容。
+
 生成参数映射：
 
 | 参数 | 规则 |
@@ -1759,7 +1761,9 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | transcription | `transcriptionConfig:{languageCodes,customVocabulary,wordTimestamps,speakerLabels,smartTranscription}` |
 | speech | `speechConfig` |
 
-`responseModalities` 只接受 `TEXT`、`IMAGE` 与 `AUDIO`。`speechConfig.voiceConfig` 与 `multiSpeakerVoiceConfig` 互斥；单声音必须提供 `prebuiltVoiceConfig.voiceName`，每个多说话人条目必须提供非空 `speaker` 与 `voiceConfig.prebuiltVoiceConfig.voiceName`。`transcriptionConfig.smartTranscription=true` 与显式 true 的 `wordTimestamps` 或 `speakerLabels` 互斥；language code `detect` 归一为空自动检测。
+`responseModalities` 只接受 `TEXT`、`IMAGE` 与 `AUDIO`，`AUDIO` 与其他模态互斥。图像模型省略模态或仅请求 `IMAGE` 时发送 `[IMAGE,TEXT]`；`imageConfig` 保留显式宽高比与尺寸，支持输出分辨率的模型省略图片配置时使用 `1K`。
+
+`speechConfig.voiceConfig` 与 `multiSpeakerVoiceConfig` 互斥；单声音必须提供 `prebuiltVoiceConfig.voiceName`，每个多说话人条目必须提供非空 `speaker` 与 `voiceConfig.prebuiltVoiceConfig.voiceName`。`transcriptionConfig.smartTranscription=true` 与显式 true 的 `wordTimestamps` 或 `speakerLabels` 互斥；language code `detect` 归一为空自动检测。
 
 单声音 speech config：
 
