@@ -224,6 +224,8 @@ type GenerateRequest struct {
 	Config    GenerationConfig `json:"config,omitempty"`
 	Tools     Tools            `json:"tools,omitempty"`
 	AccountID string           `json:"account_id,omitempty"`
+	// ImageRoute 内部标记：图像生成模型（由模型目录能力推导）
+	ImageRoute bool `json:"-"`
 }
 
 // TokenCountRequest 表示计数请求
