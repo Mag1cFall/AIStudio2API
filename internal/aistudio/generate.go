@@ -53,7 +53,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	case explicitTools:
 		wire[6] = tools
 	case defaults.OutputResolution:
-		// 官网对可设置分辨率的图像模型固定下发该槽位；缺失会被上游以 Code 7 拒绝
+		// 可设置分辨率模型的默认扩展工具字段
 		wire[6] = []any{[]any{nil, nil, nil, []any{nil, []any{}}}}
 	}
 	wire[10] = int64(1)
@@ -141,11 +141,8 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	}
 	imageConfig := encodeImageConfig(config.ImageConfig)
 	if defaults.OutputResolution && imageConfig == nil {
-		// 官网对可设置分辨率的图像模型固定带 imageConfig；缺失会被上游以 Code 7 拒绝
+		// 可设置分辨率模型的默认输出尺寸
 		imageConfig = []any{nil, "1K"}
-	}
-	if !defaults.OutputResolution {
-		imageConfig = nil
 	}
 	speechConfig, err := encodeSpeechConfig(config.SpeechConfig)
 	if err != nil {
@@ -344,7 +341,7 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 
 func applyModelMediaDefaults(config GenerationConfig, model Model) GenerationConfig {
 	if model.Capabilities["image_route"] && imageModalityNeedsText(config.ResponseModalities) {
-		// 官网对图像模型总是下发 [IMAGE, TEXT]；纯 IMAGE 会被上游以 Code 7 拒绝。
+		// 图像输出同时请求文本模态
 		config.ResponseModalities = []ResponseModality{ResponseModalityImage, ResponseModalityText}
 		return config
 	}
@@ -373,6 +370,8 @@ func imageModalityNeedsText(modalities []ResponseModality) bool {
 			hasImage = true
 		case ResponseModalityText:
 			hasText = true
+		default:
+			return false
 		}
 	}
 	return hasImage && !hasText
