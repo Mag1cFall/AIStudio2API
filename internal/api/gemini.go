@@ -197,6 +197,7 @@ func (s *server) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	models = aistudio.ModelsWithSearchAliases(models)
 	data := make([]map[string]any, 0, len(models))
 	for _, model := range models {
 		data = append(data, geminiModelObject(model))
@@ -213,7 +214,7 @@ func (s *server) handleGeminiModel(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	for _, model := range models {
+	for _, model := range aistudio.ModelsWithSearchAliases(models) {
 		if model.ID == modelID {
 			writeJSON(w, http.StatusOK, geminiModelObject(model))
 			return
@@ -749,9 +750,10 @@ func geminiEmptyObjectPresent(raw json.RawMessage, field string) (bool, error) {
 }
 
 func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest) {
-	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
+	tokenRequest := resolveSearchTokenCountRequest(aistudio.TokenCountRequest{
 		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
 	})
+	count, err := s.service.CountTokens(r.Context(), tokenRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
@@ -762,7 +764,7 @@ func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, stream bool) {
-	events, err := s.service.Generate(r.Context(), request)
+	events, err := s.generate(r.Context(), request)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
