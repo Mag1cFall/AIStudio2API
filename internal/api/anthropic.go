@@ -167,10 +167,11 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 			if request.Thinking.BudgetTokens == nil {
 				return aistudio.GenerateRequest{}, fmt.Errorf("thinking.budget_tokens is required when thinking.type is enabled")
 			}
+		case "adaptive":
 		case "disabled":
 			return aistudio.GenerateRequest{}, fmt.Errorf("thinking.type disabled is not supported by the AI Studio upstream")
 		default:
-			return aistudio.GenerateRequest{}, fmt.Errorf("thinking.type must be enabled")
+			return aistudio.GenerateRequest{}, fmt.Errorf("thinking.type must be enabled or adaptive")
 		}
 	}
 	system, err := anthropicSystemText(request.System)
@@ -179,6 +180,16 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	}
 	contents := make([]aistudio.Content, 0, len(request.Messages))
 	for _, message := range request.Messages {
+		if message.Role == "system" {
+			text, err := anthropicSystemText(message.Content)
+			if err != nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("system message: %w", err)
+			}
+			if strings.TrimSpace(text) != "" {
+				contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: "<system-reminder>\n" + text + "\n</system-reminder>"}}})
+			}
+			continue
+		}
 		role, err := anthropicRole(message.Role)
 		if err != nil {
 			return aistudio.GenerateRequest{}, err
@@ -388,6 +399,7 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 		typeName := strings.ToLower(tool.Type)
 		switch {
 		case typeName == "web_search_20250305":
+			delete(tool.Options, "max_uses")
 			if err := validateAnthropicServerTool(tool, "web_search"); err != nil {
 				return aistudio.Tools{}, err
 			}
@@ -685,7 +697,7 @@ func (writer *anthropicStreamWriter) live(event aistudio.Event) error {
 			"delta": map[string]any{"type": "thinking_delta", "thinking": event.Text},
 		})
 	case aistudio.EventThoughtSignature:
-		if event.ThoughtSignature == "" {
+		if event.ThoughtSignature == "" || writer.currentBlock == "text" {
 			return nil
 		}
 		return writer.redactedThinking(event.ThoughtSignature)

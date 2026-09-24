@@ -42,6 +42,7 @@ type responsesTool struct {
 	Filters           json.RawMessage `json:"filters,omitempty"`
 	Container         json.RawMessage `json:"container,omitempty"`
 	Strict            *bool           `json:"strict,omitempty"`
+	Tools             []responsesTool `json:"tools,omitempty"`
 }
 
 type responsesInputItem struct {
@@ -368,22 +369,42 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 
 func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
+	names := make(map[string]bool)
+	addFunction := func(tool responsesTool) error {
+		if tool.Name == "" {
+			return fmt.Errorf("function tool name is required")
+		}
+		if names[tool.Name] {
+			return fmt.Errorf("function tool name %q is duplicated", tool.Name)
+		}
+		if tool.Strict != nil && *tool.Strict {
+			return fmt.Errorf("function tool strict is not supported by AI Studio Web")
+		}
+		parameters := tool.Parameters
+		if len(parameters) == 0 {
+			parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		names[tool.Name] = true
+		mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+			Name: tool.Name, Description: tool.Description, Parameters: parameters,
+		})
+		return nil
+	}
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function":
-			if tool.Name == "" {
-				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
+			if err := addFunction(tool); err != nil {
+				return aistudio.Tools{}, err
 			}
-			if tool.Strict != nil && *tool.Strict {
-				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
+		case "namespace":
+			for _, inner := range tool.Tools {
+				if inner.Type != "function" {
+					return aistudio.Tools{}, fmt.Errorf("namespace %q tool type %q is not supported", tool.Name, inner.Type)
+				}
+				if err := addFunction(inner); err != nil {
+					return aistudio.Tools{}, err
+				}
 			}
-			parameters := tool.Parameters
-			if len(parameters) == 0 {
-				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: tool.Name, Description: tool.Description, Parameters: parameters,
-			})
 		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
 			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
 				return aistudio.Tools{}, fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
@@ -449,7 +470,7 @@ func buildResponsesObject(id string, created int64, request responsesRequest, re
 		if call.ThoughtSignature != "" {
 			output = append(output, responseReasoningSignature(call))
 		}
-		output = append(output, responseFunctionCall(call))
+		output = append(output, responseFunctionCall(call, request.Tools))
 	}
 	for index, media := range result.media {
 		item, err := responseImageGenerationItem(id, index, media)
@@ -552,8 +573,8 @@ func rawJSONConfigured(raw json.RawMessage) bool {
 	return value != "" && value != "null"
 }
 
-func responseFunctionCall(call aistudio.FunctionCall) map[string]any {
-	return map[string]any{
+func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map[string]any {
+	item := map[string]any{
 		"id":        "fc_" + call.ID,
 		"type":      "function_call",
 		"status":    "completed",
@@ -561,6 +582,25 @@ func responseFunctionCall(call aistudio.FunctionCall) map[string]any {
 		"name":      call.Name,
 		"arguments": string(call.Arguments),
 	}
+	if namespace := responsesNamespace(tools, call.Name); namespace != "" {
+		item["namespace"] = namespace
+	}
+	return item
+}
+
+// responsesNamespace 返回函数所属的命名空间工具名
+func responsesNamespace(tools []responsesTool, name string) string {
+	for _, tool := range tools {
+		if tool.Type != "namespace" {
+			continue
+		}
+		for _, inner := range tool.Tools {
+			if inner.Name == name {
+				return tool.Name
+			}
+		}
+	}
+	return ""
 }
 
 func responseReasoningSignature(call aistudio.FunctionCall) map[string]any {
@@ -854,6 +894,9 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 		"id": id, "type": "function_call", "status": "in_progress",
 		"call_id": call.ID, "name": call.Name, "arguments": "",
 	}
+	if namespace := responsesNamespace(writer.request.Tools, call.Name); namespace != "" {
+		item["namespace"] = namespace
+	}
 	if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
 		return err
 	}
@@ -868,7 +911,7 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 	}); err != nil {
 		return err
 	}
-	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": responseFunctionCall(call)})
+	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": responseFunctionCall(call, writer.request.Tools)})
 }
 
 func (writer *responsesStreamWriter) emitMedia(media aistudio.Media) error {

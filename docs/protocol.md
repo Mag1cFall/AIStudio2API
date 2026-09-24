@@ -663,7 +663,7 @@ Part 文本带 `part[12]=true` 时属于 reasoning summary，普通文本属于�
 | Anthropic | `thinking` 或 `redacted_thinking` block 的 `signature` | thinking block 的 `signature` |
 | Gemini | 数据 Part 或独立 Part 的 `thoughtSignature` | Part 的 `thoughtSignature` |
 
-Anthropic redacted thinking block 以 `data` 承载同一份不透明状态；适配器在输入与输出两侧保留该值。
+Anthropic redacted thinking block 以 `data` 承载同一份不透明状态；适配器在输入与输出两侧保留该值。流式响应不输出文本之后到达的签名。
 
 reasoning summary 是服务端返回的摘要文本。thought signature 作为下一轮请求的协议状态字段原样回传。
 
@@ -797,7 +797,7 @@ Anthropic 接受的具体 server tool type 为：
 | Code Execution | `code_execution_20250522`、`code_execution_20250825` |
 | Google Maps | `google_maps` |
 
-根 field 7 按请求声明逐项编码，函数声明和各类 Google 工具按上表对应的 Tool entry 编码。模型的工具范围取自实时能力码。
+根 field 7 按请求声明逐项编码，函数声明和各类 Google 工具按上表对应的 Tool entry 编码。模型的工具范围取自实时能力码。根 field 14 为 ToolConfig；请求同时携带函数声明与 Google 工具时，其 field 3 `include_server_side_tool_invocations` 为 `true`，由上游在同一轮内执行 Google 工具并返回函数调用。
 
 编码器将全部函数声明合并为一个 Tool entry；Google Search 与 Image Search 合并为一个 search entry 并分别占用 `searchTypes` 索引 `0/1`；Code Execution、URL Context 与 Maps 各占一个 entry。Google Maps 与 Code Execution/URL Context 构成互斥工具组，每个请求选择其中一组。
 
@@ -886,11 +886,13 @@ Schema 归一化规则：
 
 | 输入结构 | 编码结果 |
 | --- | --- |
-| `$schema`、`default`、`additionalProperties`、`exclusiveMinimum` | 从 wire schema 中省略 |
+| `$schema`、`default`、`additionalProperties`、`exclusiveMinimum`、`propertyNames`、`prefixItems` | 从 wire schema 中省略 |
 | `type: [T, "null"]` | 根类型 `T` 与 `nullable=true` |
 | `anyOf` / `oneOf` 的 null 分支 | 移除 null 分支并设置 `nullable=true` |
 | 多个非 null `type` | 首项作为根类型，完整类型集合写入 `anyOf` |
-| 组合 Schema 缺少根 `type` | 首个带类型的分支作为根类型 |
+| 组合 Schema 缺少根 `type` | 首个带类型的分支作为根类型，该分支的 `items` 同时写入根节点 |
+| 其他节点缺少 `type` | 含 `properties` 为 object，含 `items` 或 `prefixItems` 为 array，其余为 string |
+| array 缺少 `items` | `prefixItems` 中带类型的项组成 `anyOf`；没有时为 string |
 | 其他 Schema 字段 | 返回 `400 invalid_request` / `INVALID_ARGUMENT` |
 
 AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7 的函数声明，由模型决定是否调用；none 省略 tools。客户端工具选择映射如下：
@@ -901,7 +903,7 @@ AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7
 | Anthropic | 默认、`auto`、`none` | `any`、named `tool` |
 | Gemini | 默认、`AUTO`、`NONE` | `ANY`、`allowedFunctionNames` |
 
-函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。tool result 显式提供函数名时保留该值；缺少名称时，先按 call ID 关联当前轮尚未返回结果的调用，未匹配且仅剩一个调用时使用其名称。每个结果对应一个调用，新一轮普通对话开始后重新建立关联；存在歧义或缺少调用记录时返回参数错误。函数参数和结果使用 JSON object，标量或数组结果封装为 `{"result":<VALUE>}`。
+函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。tool result 显式提供函数名时保留该值；缺少名称时，先按 call ID 关联当前轮尚未返回结果的调用，未匹配且仅剩一个调用时使用其名称。每个结果对应一个调用，调用与结果之间的助手文本不影响关联，新一轮普通对话开始后重新建立关联；存在歧义或缺少调用记录时返回参数错误。函数参数和结果使用 JSON object，标量或数组结果封装为 `{"result":<VALUE>}`。
 
 ### Drive 上传与文件 Part
 
@@ -1420,8 +1422,8 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 | Gemini `candidateCount` | 仅接受省略或 `1` |
 | Gemini `responseLogprobs` / `logprobs` | 分别接受省略或 `false`、省略或 `0` |
 | Gemini `googleSearchRetrieval` | 仅接受空对象；`dynamicRetrievalConfig` 返回 `400 INVALID_ARGUMENT` |
-| Anthropic `thinking` | `type` 为 `enabled` 且携带 `budget_tokens`；预算值直接写入 thinking budget |
-| Anthropic thinking capability | 模型缺少 thinking budget 能力时形成 `invalid_request_error`；非流式返回 HTTP 400，流式返回 Anthropic error event |
+| Anthropic `thinking` | `enabled` 携带 `budget_tokens`，支持 thinking budget 的模型直接写入预算，只支持 thinking level 的模型按 0、1024、8192 以内与更大预算分别使用 minimal、low、medium、high；`adaptive` 使用模型默认思考 |
+| Anthropic thinking capability | 模型既不支持 thinking budget 也不支持 thinking level 时形成 `invalid_request_error`；非流式返回 HTTP 400，流式返回 Anthropic error event |
 | Anthropic thinking type | `disabled` 与未知 type 返回 `400 invalid_request_error` |
 
 ### OpenAI Chat Completions
@@ -1436,6 +1438,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 | `stream_options.include_usage` | 在 finish chunk 后发送 usage-only chunk |
 | `tools` | function 或 Google server tool 数组 |
 | `tool_choice` | 省略/`auto`/`none` |
+| `web_search_options` | 对象，开启 Google Search；`search_context_size` 与 `user_location` 返回 400 |
 | `temperature`、`top_p` | 可选采样值 |
 | `max_tokens`、`max_completion_tokens` | 后者优先 |
 | `frequency_penalty`、`presence_penalty` | 省略或 `0` |
@@ -1527,7 +1530,7 @@ Chat SSE 顺序：
 | `input` | string 或 input item 数组 |
 | `instructions` | 顶层 system instruction |
 | `stream` | boolean |
-| `tools`、`tool_choice` | function 与 Google tools；choice 为 auto/none |
+| `tools`、`tool_choice` | function、namespace 与 Google tools；namespace 内的 function 展开为函数声明，调用结果以 `namespace` 字段标明所属命名空间，函数名重复时返回 400；choice 为 auto/none |
 | `temperature`、`top_p`、`max_output_tokens` | 生成参数 |
 | `reasoning` | `{"effort":"..."}` |
 | `text` | `{"format":{"type":"text|json_object|json_schema","schema":...}}` |
@@ -1646,14 +1649,14 @@ web search 发生时，search call item 排在 message 前；无 grounding query
 | 字段 | 类型与语义 |
 | --- | --- |
 | `model` | 必需模型 ID |
-| `messages` | 必需非空 `{role,content}` 数组 |
+| `messages` | 必需非空 `{role,content}` 数组；role 为 `user`、`assistant` 或 `system`，`system` 消息在原位置以 `<system-reminder>` 包裹的用户内容发送 |
 | `system` | string 或 text block 数组 |
 | `max_tokens` | 必需正整数 |
 | `stop_sequences` | string array |
 | `stream` | boolean |
 | `temperature`、`top_p`、`top_k` | 生成参数 |
 | `tools`、`tool_choice` | custom/server tools 与 auto/none |
-| `thinking` | `{type:"enabled",budget_tokens:<INT>}` |
+| `thinking` | `{type:"enabled",budget_tokens:<INT>}` 或 `{type:"adaptive"}` |
 | `output_config` | `{effort:"..."}` |
 
 message content 可以是 string 或 block 数组：
@@ -1679,6 +1682,8 @@ custom tool 为 `{name,description,input_schema}`，可选 `type:"custom"`。ser
 | `code_execution_20250522`、`code_execution_20250825` | `code_execution` |
 | `url_context` | `url_context` |
 | `google_maps` | `google_maps` |
+
+`web_search_20250305` 接受 `max_uses`，调用次数由上游决定。
 
 server tool 只接受对应 `type` 与 `name`。`description`、`input_schema` 或额外 option 返回 `invalid_request_error`。tool choice 接受省略、`{"type":"auto"}`、`{"type":"none"}`；`any` 和 named `tool` 返回 400。
 

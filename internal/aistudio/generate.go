@@ -35,8 +35,9 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if err != nil {
 		return nil, err
 	}
+	serverSideTools := explicitTools && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil)
 	length := 11
-	if runtime.Timezone != "" {
+	if runtime.Timezone != "" || serverSideTools {
 		length = 14
 	}
 	wire := make([]any, length)
@@ -57,8 +58,16 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		wire[6] = []any{[]any{nil, nil, nil, []any{nil, []any{}}}}
 	}
 	wire[10] = int64(1)
-	if runtime.Timezone != "" {
-		wire[13] = []any{[]any{nil, nil, runtime.Timezone}}
+	if runtime.Timezone != "" || serverSideTools {
+		toolConfig := []any{nil}
+		if runtime.Timezone != "" {
+			toolConfig[0] = []any{nil, nil, runtime.Timezone}
+		}
+		if serverSideTools {
+			// 同时使用内置工具与函数调用时开启 include_server_side_tool_invocations
+			toolConfig = append(toolConfig, nil, true)
+		}
+		wire[13] = toolConfig
 	}
 	return json.Marshal(wire)
 }
@@ -98,8 +107,11 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		hasReasoningEffort = false
 	}
 	if thinkingBudget != nil && !defaults.ThinkingBudget {
-		if !hasReasoningEffort || !defaults.ThinkingLevel {
+		if !defaults.ThinkingLevel {
 			return nil, fmt.Errorf("模型不支持 thinking budget")
+		}
+		if !hasReasoningEffort {
+			thinkingLevel = closestSupportedThinkingLevel(thinkingLevelForBudget(*thinkingBudget), defaults.ThinkingLevels)
 		}
 		thinkingBudget = nil
 	}
@@ -231,6 +243,20 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 }
 
 var thinkingLevelsByEffort = []int64{4, 1, 2, 3}
+
+// thinkingLevelForBudget 按 Gemini OpenAI 兼容层的 1024、8192、24576 档位把思考预算换算为 thinking level
+func thinkingLevelForBudget(budget int64) int64 {
+	switch {
+	case budget <= 0:
+		return 4
+	case budget <= 1024:
+		return 1
+	case budget <= 8192:
+		return 2
+	default:
+		return 3
+	}
+}
 
 func closestSupportedThinkingLevel(requested int64, supported []int64) int64 {
 	requestedRank := slices.Index(thinkingLevelsByEffort, requested)

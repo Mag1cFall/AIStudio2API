@@ -102,7 +102,7 @@ func encodeContents(contents []Content) ([]any, error) {
 		if len(content.Parts) == 0 {
 			continue
 		}
-		if content.Role == RoleAssistant && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionCall != nil }) || content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
+		if content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
 			pendingCalls = nil
 		}
 		encoded, err := encodeContent(content, &pendingCalls)

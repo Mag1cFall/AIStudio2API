@@ -28,6 +28,9 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	if err := normalizeNullableVariants(schema); err != nil {
 		return nil, err
 	}
+	if err := normalizeImplicitType(schema); err != nil {
+		return nil, err
+	}
 	allowed := map[string]bool{
 		"type": true, "format": true, "description": true, "nullable": true,
 		"enum": true, "items": true, "properties": true, "required": true,
@@ -36,6 +39,7 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		"pattern": true, "example": true, "oneOf": true, "anyOf": true,
 		"allOf": true, "not": true, "propertyOrdering": true,
 		"$schema": true, "additionalProperties": true, "default": true, "exclusiveMinimum": true,
+		"propertyNames": true, "prefixItems": true,
 	}
 	for name := range schema {
 		if !allowed[name] {
@@ -343,6 +347,59 @@ func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 			return err
 		}
 		schema[name] = encoded
+	}
+	return nil
+}
+
+// normalizeImplicitType 为未声明类型的节点和缺少元素定义的数组补齐 AI Studio 必需的字段
+func normalizeImplicitType(schema map[string]json.RawMessage) error {
+	if _, ok := schema["type"]; !ok {
+		var typed map[string]json.RawMessage
+		for _, name := range []string{"anyOf", "oneOf", "allOf"} {
+			var variants []map[string]json.RawMessage
+			if raw, ok := schema[name]; ok && json.Unmarshal(raw, &variants) == nil {
+				for _, variant := range variants {
+					if _, ok := variant["type"]; ok && typed == nil {
+						typed = variant
+					}
+				}
+			}
+		}
+		switch {
+		case schema["properties"] != nil:
+			schema["type"] = json.RawMessage(`"object"`)
+		case schema["items"] != nil || schema["prefixItems"] != nil:
+			schema["type"] = json.RawMessage(`"array"`)
+		default:
+			schema["type"] = json.RawMessage(`"string"`)
+		}
+		if typed != nil {
+			schema["type"] = typed["type"]
+			if items, ok := typed["items"]; ok && schema["items"] == nil {
+				schema["items"] = items
+			}
+		}
+	}
+	var typeName string
+	if json.Unmarshal(schema["type"], &typeName) != nil || !strings.EqualFold(typeName, "array") || schema["items"] != nil {
+		return nil
+	}
+	schema["items"] = json.RawMessage(`{"type":"string"}`)
+	var prefix []map[string]json.RawMessage
+	if raw, ok := schema["prefixItems"]; ok && json.Unmarshal(raw, &prefix) == nil {
+		typed := make([]map[string]json.RawMessage, 0, len(prefix))
+		for _, item := range prefix {
+			if _, ok := item["type"]; ok {
+				typed = append(typed, item)
+			}
+		}
+		if len(typed) > 0 {
+			encoded, err := json.Marshal(map[string]any{"anyOf": typed})
+			if err != nil {
+				return err
+			}
+			schema["items"] = encoded
+		}
 	}
 	return nil
 }
