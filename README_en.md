@@ -205,6 +205,39 @@ For Cherry Studio:
 4. Set the API key to `PROXY_API_KEY` from `.env`
 5. Load models from `/v1/models`, or add `gemini-3.6-flash` and `gemini-3.7-flash` manually
 
+[Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
+$env:ANTHROPIC_API_KEY = "<PROXY_API_KEY>"
+$env:ANTHROPIC_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL = "gemini-3.1-pro-preview"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "gemini-3.5-flash-lite"
+```
+
+[Codex](https://github.com/openai/codex) uses the Responses endpoint. Add a provider to `~/.codex/config.toml` and put `PROXY_API_KEY` in the `AISTUDIO2API_KEY` environment variable. Codex's `web_search` tool runs on Google Search:
+
+```toml
+model = "gemini-3.8-flash"
+model_provider = "aistudio"
+
+[model_providers.aistudio]
+name = "AIStudio2API"
+base_url = "http://127.0.0.1:2048/v1"
+env_key = "AISTUDIO2API_KEY"
+wire_api = "responses"
+```
+
+[omp](https://github.com/can1357/oh-my-pi) runs its `web_search` tool through its own provider order. Set `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:2048` and `GEMINI_API_KEY=<PROXY_API_KEY>`, and put the Gemini provider first in the omp config:
+
+```yaml
+providers:
+  webSearchOrder:
+    - gemini
+  webSearchGeminiModel: gemini-3.8-flash
+```
+
 Main endpoints:
 
 | Capability | Endpoint |
@@ -480,7 +513,6 @@ Issues and Pull Requests are welcome!
 - ✅ **Media Generation**: Supports Imagen 3, Veo 2, Nano Banana image/video generation
 - ✅ **Documentation**: Update and optimize documentation in `docs/` directory
 - **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
-- **Docker Support**: Provide standard Dockerfile and Docker Compose orchestration files
 - ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
 
