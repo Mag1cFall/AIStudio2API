@@ -162,10 +162,9 @@ type ChromeImportProfile struct {
 	Locale      string `json:"locale"`
 }
 
-// ChromeImportInput 表示批量导入的 Chrome Profile 与账户环境
+// ChromeImportInput 表示批量导入的 Chrome 账号与账户环境
 type ChromeImportInput struct {
 	AccountIDs []string `json:"account_ids"`
-	Profiles   []string `json:"profiles"`
 	Proxy      string   `json:"proxy"`
 	Locale     string   `json:"locale"`
 	Timezone   string   `json:"timezone"`

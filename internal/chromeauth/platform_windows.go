@@ -65,23 +65,15 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 		if locale == "" {
 			locale = state.Variations.SafeSeedLocale
 		}
-		// Preferences maps every Gaia identity to its own email; profile.user_name
-		// only describes the primary Chrome account and cannot label secondary tokens.
-		metadata, err := os.ReadFile(filepath.Join(chromeRoot, profile, "Preferences"))
+		identities, err := profileIdentities(chromeRoot, profile)
 		if err != nil {
-			return nil, fmt.Errorf("读取 %s Preferences: %w", profile, err)
-		}
-		var preferences struct {
-			Accounts []struct {
-				Gaia  string `json:"gaia"`
-				Email string `json:"email"`
-			} `json:"account_info"`
-		}
-		if err := json.Unmarshal(metadata, &preferences); err != nil {
-			return nil, fmt.Errorf("解析 %s Preferences: %w", profile, err)
+			accounts = append(accounts, Account{
+				ID: profile, Profile: profile, DisplayName: info.Name, Email: info.UserName, Locale: locale,
+			})
+			continue
 		}
 		seen := map[string]bool{}
-		for _, identity := range preferences.Accounts {
+		for _, identity := range identities {
 			if identity.Gaia == "" || seen[identity.Gaia] {
 				continue
 			}
@@ -95,6 +87,27 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 		}
 	}
 	return accounts, nil
+}
+
+// profileIdentity 为 Preferences.account_info 中的一个 Google 账号
+type profileIdentity struct {
+	Gaia  string `json:"gaia"`
+	Email string `json:"email"`
+}
+
+// profileIdentities 读取 Profile 内全部 Google 账号的 Gaia ID 与邮箱
+func profileIdentities(chromeRoot string, profile string) ([]profileIdentity, error) {
+	data, err := os.ReadFile(filepath.Join(chromeRoot, profile, "Preferences"))
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s Preferences: %w", profile, err)
+	}
+	var preferences struct {
+		Accounts []profileIdentity `json:"account_info"`
+	}
+	if err := json.Unmarshal(data, &preferences); err != nil {
+		return nil, fmt.Errorf("解析 %s Preferences: %w", profile, err)
+	}
+	return preferences.Accounts, nil
 }
 
 func profileLocale(chromeRoot string, profile string) string {

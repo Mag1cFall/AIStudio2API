@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { api } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { Account, AccountDraft, AccountState, ChromeImportProfile } from '@/types'
@@ -26,6 +26,17 @@ const editingAccountID = ref('')
 const pendingAction = ref('')
 const chromeProfiles = ref<ChromeImportProfile[]>([])
 const selectedChromeProfiles = ref<string[]>([])
+const allChromeProfilesSelected = computed(
+  () =>
+    chromeProfiles.value.length > 0 &&
+    selectedChromeProfiles.value.length === chromeProfiles.value.length,
+)
+
+function toggleAllChromeProfiles(): void {
+  selectedChromeProfiles.value = allChromeProfilesSelected.value
+    ? []
+    : chromeProfiles.value.map((profile) => profile.id)
+}
 const accountEnvironment = reactive({
   proxy: '',
   locale: defaultAccountLocale,
@@ -558,7 +569,16 @@ async function removeAccount(account: Account): Promise<void> {
           <div v-if="chromeProfiles.length === 0" class="py-8 text-center text-sm text-gray-500">
             {{ t('accounts.chromeEmpty') }}
           </div>
-          <div v-else class="max-h-[50vh] space-y-2 overflow-auto">
+          <div v-else class="mb-2 flex justify-end">
+            <button
+              class="text-xs text-blue-400 transition hover:text-blue-300"
+              type="button"
+              @click="toggleAllChromeProfiles"
+            >
+              {{ allChromeProfilesSelected ? t('accounts.deselectAll') : t('accounts.selectAll') }}
+            </button>
+          </div>
+          <div v-if="chromeProfiles.length > 0" class="max-h-[50vh] space-y-2 overflow-auto">
             <label
               v-for="profile in chromeProfiles"
               :key="profile.id"

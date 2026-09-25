@@ -1156,7 +1156,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AccountCreateInput` | `proxy`、`locale`、`timezone` |
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
 | `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`locale` |
-| `ChromeImportInput` | `account_ids`、`profiles`、`proxy`、`locale`、`timezone` |
+| `ChromeImportInput` | `account_ids`、`proxy`、`locale`、`timezone` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |
 | `AdminRequest` | `id`、`model`、`account_id`、`account_label`、`state`、`started_at` |
 | `AdminLog` | `time`、`level`、`source`、`message`、`event`；请求事件携带 `request`，包含 `id`、`state`、HTTP `status`、`model`、`duration_ms`、`tool_calls`、`usage` 与诊断字段，字段口径见 [logging.md](logging.md) |
@@ -1164,9 +1164,9 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 `AdminStatus.state` 为 `STOPPED`、`LAUNCHING` 或 `RUNNING`；`running` 只在 `RUNNING` 为 true；`ready` 要求 `RUNNING` 且至少一个账户处于 ready 或 busy；`version` 来自构建信息；`active_requests` 是当前进程请求注册表数量。`AdminAccount.message` 保存当前状态原因，`models` 是该账户实时目录 ID。`until` 与 `started_at` 使用 RFC 3339 JSON time。
 
-Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个展示账号。同一 Profile 可以包含多个账号；管理页提交选中的 `account_ids`（Profile/Gaia ID），导入时精确查询对应的 `token_service.service`，不会回退到其他账号。列表默认不勾选。CLI 的 Profile 选择仍表示选择该 Profile 下的账号。
+Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个列出账号，同一 Profile 可以包含多个账号，同一邮箱只列出一次。`ChromeImportProfile.id` 为 `<Profile>/<Gaia ID>`；导入读取 `token_service` 中 service 为 `AccountId-<Gaia ID>` 的凭据。管理页列表默认不勾选，并提供全选。CLI 的 `--profile` 导入该 Profile 下的全部账号，交互编号对应单个账号。
 
-`AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取。`ChromeImportInput.profiles` 可一次选择多个 Chrome Profile。`AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空，`proxy` 使用无 credentials、path、query 或 fragment 的 HTTP、HTTPS、SOCKS5 origin。新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
+`AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取。`ChromeImportInput.account_ids` 可一次选择多个账号。`AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空，`proxy` 使用无 credentials、path、query 或 fragment 的 HTTP、HTTPS、SOCKS5 origin。新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
 
 `PUT /api/accounts/{id}` 的提交顺序固定为：校验不可变邮箱 ID，取得账户独占租约，创建未发布的新固定出口，关闭当前 Worker 并把新 Worker 配置标记为 `pending`（尚未发布），在模型目录写锁内原子写入 `account.json` 并更新账户池，随后发布 Worker 配置、替换固定出口、释放租约并重建模型缓存。`account.json` 写入是唯一持久提交点。提交前的出口创建、Worker 关闭或写入错误会丢弃这份待发布配置并保持旧配置；已经关闭的 Worker 由后续请求按旧配置重建。持久写入后，新配置、Worker 配置与固定出口共同成为已提交状态。租约释放错误保留该提交状态并返回原始 unlock 错误；释放成功后记录完成日志并同步模型缓存。
 
@@ -1286,7 +1286,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 按需热替换先启动 pending Worker（正在启动、尚未发布的替代 Worker），再关闭旧 Worker；旧实例成功退出后，替代 Worker 才成为当前 Worker。旧实例关闭和替代 Worker 回收同时失败时，两者都保留等待再次清理，并各占一个活动容量槽；达到容量上限后停止新建 Worker。完整生成服务 Stop/Start 的顺序为：Start 创建新生成服务实例前先重试停止旧实例，旧 PID 未退出时返回停止错误并保留原实例。
 
-管理状态使用 `STOPPED`。该状态下生成与计数端点返回 `503 service_stopped`。Code 7 不清除账户或 operation scope 的成功状态。Worker 进程故障、Worker 被替换与协议 Code 5 会重建当前账户 Worker 并在原账户重放一次。候选耗尽且没有符合方法、能力、权益与运行状态的账户时返回 HTTP 400：OpenAI code 为 `account_required`，Anthropic type 为 `invalid_request_error`，Gemini status 为 `INVALID_ARGUMENT`。
+管理状态使用 `STOPPED`。该状态下生成与计数端点返回 `503 service_stopped`。Code 7 不清除账户或 operation scope 的成功状态。Worker 进程故障、Worker 被替换与协议 Code 5 会重建当前账户 Worker 并在原账户重放一次。候选耗尽且没有符合方法、能力与权益的账户时返回 HTTP 400：OpenAI code 为 `account_required`，Anthropic type 为 `invalid_request_error`，Gemini status 为 `INVALID_ARGUMENT`。支持请求的账户都处于需要重新登录、不可用或已停用状态时返回 HTTP 503，错误消息逐个列出账户、状态与原因：OpenAI code 为 `account_unavailable`，Anthropic type 为 `api_error`，Gemini status 为 `UNAVAILABLE`。
 
 模型目录重试的 pending 集合保存等待再次同步的账户 ID。启动期全账户 fan-out、以及新增、登录或验证后的单账户同步，遇到任意错误或成功返回空目录时加入；返回非空目录时移除；删除账户同时移除。全账户后台同步结束后启动单个 30 秒 ticker（Go 定时器），每次对排序后的待重试账户列表再次并发 fan-out，并在任务开始时复核该 ID 仍在 pending 集合中。错误或空目录继续保留；每个非空成功立即更新账户缓存与公共目录快照、发布 `accounts` 和 `models`，并在 `RUNNING` 状态触发 Worker 预热。批次结束时，`auth_required` 集合发生变化会补发当前账户与模型快照；即时单账户同步无论成功或失败都立即发布当前快照。
 
@@ -2117,6 +2117,7 @@ OpenAI Responses 的 `previous_response_id` 在进程内保存最多 256 个响�
 | --- | ---: | --- | --- | --- |
 | 参数、Schema、tool choice 无效 | 400 | `invalid_request` | `invalid_request_error` | `INVALID_ARGUMENT` |
 | 没有符合条件的账户 | 400 | `account_required` | `invalid_request_error` | `INVALID_ARGUMENT` |
+| 支持请求的账户均不可调度 | 503 | `account_unavailable` | `api_error` | `UNAVAILABLE` |
 | 本地 API key 无效 | 401 | `invalid_api_key` | `authentication_error` | `UNAUTHENTICATED` |
 | 模型或方法不存在 | 404 | `model_not_found` | `not_found_error` | `NOT_FOUND` |
 | 本地文件不存在 | 404 | `file_not_found` | `not_found_error` | `NOT_FOUND` |

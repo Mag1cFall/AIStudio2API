@@ -2487,7 +2487,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 			continue
 		}
-		return nil, aistudio.ErrNoEligibleAccount
+		return nil, service.pool.NoEligibleError(selection)
 	}
 }
 

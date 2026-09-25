@@ -64,6 +64,26 @@ var (
 	errAccountLeaseBusy = ErrAccountLeased
 )
 
+// AccountsNotReadyError 表示支持请求的账户都处于不可调度状态
+type AccountsNotReadyError struct {
+	Reasons []string
+}
+
+func (e *AccountsNotReadyError) Error() string {
+	return ErrNoEligibleAccount.Error() + "：" + strings.Join(e.Reasons, "；")
+}
+
+func (e *AccountsNotReadyError) Unwrap() error {
+	return ErrNoEligibleAccount
+}
+
+// accountStateLabels 为不可调度账户状态的中文说明
+var accountStateLabels = map[AccountState]string{
+	AccountAuthRequired: "需要重新登录",
+	AccountUnavailable:  "不可用",
+	AccountDisabled:     "已停用",
+}
+
 // AccountConfig 表示账户目录中的固定最小配置
 type AccountConfig struct {
 	Label    string `json:"label"`
@@ -928,8 +948,9 @@ func (p *AccountPool) AcquireFor(ctx context.Context, selection AccountSelection
 			continue
 		}
 		if !waitable {
+			err := p.noEligibleErrorLocked(selection)
 			p.mu.Unlock()
-			return nil, ErrNoEligibleAccount
+			return nil, err
 		}
 		changed := p.changed
 		p.mu.Unlock()
@@ -1052,6 +1073,45 @@ func (p *AccountPool) refreshAndValidateLease(
 		}
 	}
 	return true, nil
+}
+
+// NoEligibleError 返回列出候选账户不可调度原因的无账户错误
+func (p *AccountPool) NoEligibleError(selection AccountSelection) error {
+	if p == nil {
+		return ErrNoEligibleAccount
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.noEligibleErrorLocked(selection)
+}
+
+func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
+	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
+	var reasons []string
+	for _, account := range p.accounts {
+		if account == nil || account.Config.Enabled && account.State == AccountReady {
+			continue
+		}
+		if selection.ModelID != "" && !accountSupportsSelection(account, selection) {
+			continue
+		}
+		label, ok := accountStateLabels[account.State]
+		if !ok {
+			label = string(account.State)
+		}
+		if !account.Config.Enabled {
+			label = accountStateLabels[AccountDisabled]
+		}
+		reason := account.ID + " " + label
+		if message := strings.TrimSpace(account.stateMessage); message != "" {
+			reason += "（" + message + "）"
+		}
+		reasons = append(reasons, reason)
+	}
+	if len(reasons) == 0 {
+		return ErrNoEligibleAccount
+	}
+	return &AccountsNotReadyError{Reasons: reasons}
 }
 
 func (p *AccountPool) markStaleAccountUnavailable(account *Account) {
