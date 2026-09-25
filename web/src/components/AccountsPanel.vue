@@ -97,7 +97,7 @@ async function openChromeImport(): Promise<void> {
   pendingAction.value = 'chrome-discover'
   try {
     chromeProfiles.value = await api.chromeImportProfiles()
-    selectedChromeProfiles.value = chromeProfiles.value.map((profile) => profile.profile)
+    selectedChromeProfiles.value = []
     showChromeImport.value = true
   } catch (error) {
     actionError(error)
@@ -118,7 +118,7 @@ async function importChromeAccounts(): Promise<void> {
   pendingAction.value = 'chrome-import'
   try {
     const result = await api.importChromeAccounts({
-      profiles: [...selectedChromeProfiles.value],
+      account_ids: [...selectedChromeProfiles.value],
       ...accountEnvironment,
     })
     showChromeImport.value = false
@@ -561,14 +561,14 @@ async function removeAccount(account: Account): Promise<void> {
           <div v-else class="max-h-[50vh] space-y-2 overflow-auto">
             <label
               v-for="profile in chromeProfiles"
-              :key="profile.profile"
+              :key="profile.id"
               class="flex cursor-pointer items-start gap-3 rounded border border-[#30363d] bg-[#0d1117] p-3 transition hover:border-[#4b5563]"
             >
               <input
                 v-model="selectedChromeProfiles"
                 class="mt-1 h-4 w-4 shrink-0 accent-blue-600"
                 type="checkbox"
-                :value="profile.profile"
+                :value="profile.id"
               />
               <span class="min-w-0 flex-1">
                 <strong class="block truncate text-sm text-white">{{ profile.email }}</strong>
