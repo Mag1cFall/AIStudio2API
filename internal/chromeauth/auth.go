@@ -20,6 +20,8 @@ const (
 
 // Account 描述本机 Chrome 中可发现的 Google 账号
 type Account struct {
+	ID          string `json:"id"`
+	GaiaID      string `json:"-"`
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
@@ -29,6 +31,7 @@ type Account struct {
 
 // ImportOptions 保存 Chrome 批量导入参数
 type ImportOptions struct {
+	AccountIDs []string
 	ChromeRoot string
 	Proxy      string
 	Profiles   []string
@@ -68,7 +71,7 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	selected, err := selectAccounts(accounts, options.Profiles, options.Emails)
+	selected, err := selectAccounts(accounts, options.Profiles, options.Emails, options.AccountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +110,7 @@ func Refresh(ctx context.Context, material aistudio.ChromeOAuthMaterial, proxy s
 }
 
 func importAccount(ctx context.Context, chromeRoot string, proxy string, account Account, masterKey []byte) (ImportResult, error) {
-	gaiaID, encryptedToken, wrappedKey, err := readTokenService(chromeRoot, account.Profile)
+	gaiaID, encryptedToken, wrappedKey, err := readTokenService(chromeRoot, account.Profile, account.GaiaID)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -136,13 +139,15 @@ func importAccount(ctx context.Context, chromeRoot string, proxy string, account
 	}, nil
 }
 
-func selectAccounts(accounts []Account, profiles []string, emails []string) ([]Account, error) {
+func selectAccounts(accounts []Account, profiles []string, emails []string, ids []string) ([]Account, error) {
+	requestedIDs := normalizedSet(ids)
 	requestedProfiles := normalizedSet(profiles)
 	requestedEmails := normalizedSet(emails)
-	if len(requestedProfiles) == 0 && len(requestedEmails) == 0 {
+	if len(requestedProfiles) == 0 && len(requestedEmails) == 0 && len(requestedIDs) == 0 {
 		return nil, fmt.Errorf("未选择 Chrome 账号")
 	}
 	selected := make([]Account, 0, len(accounts))
+	foundIDs := make(map[string]struct{})
 	foundProfiles := make(map[string]struct{})
 	foundEmails := make(map[string]struct{})
 	for _, account := range accounts {
@@ -150,7 +155,8 @@ func selectAccounts(accounts []Account, profiles []string, emails []string) ([]A
 		email := strings.ToLower(strings.TrimSpace(account.Email))
 		_, profileMatch := requestedProfiles[profile]
 		_, emailMatch := requestedEmails[email]
-		if !profileMatch && !emailMatch {
+		_, idMatch := requestedIDs[strings.ToLower(account.ID)]
+		if !profileMatch && !emailMatch && !idMatch {
 			continue
 		}
 		if !account.Importable {
@@ -160,8 +166,12 @@ func selectAccounts(accounts []Account, profiles []string, emails []string) ([]A
 			return nil, fmt.Errorf("%s 缺少账号邮箱", account.Profile)
 		}
 		selected = append(selected, account)
+		foundIDs[strings.ToLower(account.ID)] = struct{}{}
 		foundProfiles[profile] = struct{}{}
 		foundEmails[email] = struct{}{}
+	}
+	if missing := missingValues(requestedIDs, foundIDs); len(missing) != 0 {
+		return nil, fmt.Errorf("找不到选中的 Chrome 账号")
 	}
 	if missing := missingValues(requestedProfiles, foundProfiles); len(missing) != 0 {
 		return nil, fmt.Errorf("找不到 Chrome Profile: %s", strings.Join(missing, ", "))
