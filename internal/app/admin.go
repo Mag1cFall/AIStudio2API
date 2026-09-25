@@ -224,14 +224,14 @@ func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeIm
 			continue
 		}
 		profiles = append(profiles, api.ChromeImportProfile{
-			Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
+			ID: account.ID, Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
 		})
 	}
 	return profiles, nil
 }
 
 func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
-	if len(input.Profiles) == 0 {
+	if len(input.Profiles) == 0 && len(input.AccountIDs) == 0 {
 		return nil, invalidAccount(fmt.Errorf("未选择 Chrome 账号"))
 	}
 	root, err := chromeauth.DefaultChromeRoot()
@@ -240,7 +240,7 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	}
 	accountProxy := strings.TrimSpace(input.Proxy)
 	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{
-		ChromeRoot: root, Proxy: admin.effectiveProxy(accountProxy), Profiles: input.Profiles,
+		ChromeRoot: root, Proxy: admin.effectiveProxy(accountProxy), Profiles: input.Profiles, AccountIDs: input.AccountIDs,
 	})
 	if err != nil {
 		return nil, err
