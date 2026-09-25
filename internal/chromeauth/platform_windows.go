@@ -65,11 +65,34 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 		if locale == "" {
 			locale = state.Variations.SafeSeedLocale
 		}
-		_, encrypted, bindingKey, tokenErr := readTokenService(chromeRoot, profile)
-		accounts = append(accounts, Account{
-			Profile: profile, DisplayName: info.Name, Email: info.UserName, Locale: locale,
-			Importable: tokenErr == nil && strings.HasPrefix(string(encrypted), "v20") && len(bindingKey) != 0,
-		})
+		// Preferences maps every Gaia identity to its own email; profile.user_name
+		// only describes the primary Chrome account and cannot label secondary tokens.
+		metadata, err := os.ReadFile(filepath.Join(chromeRoot, profile, "Preferences"))
+		if err != nil {
+			return nil, fmt.Errorf("读取 %s Preferences: %w", profile, err)
+		}
+		var preferences struct {
+			Accounts []struct {
+				Gaia  string `json:"gaia"`
+				Email string `json:"email"`
+			} `json:"account_info"`
+		}
+		if err := json.Unmarshal(metadata, &preferences); err != nil {
+			return nil, fmt.Errorf("解析 %s Preferences: %w", profile, err)
+		}
+		seen := map[string]bool{}
+		for _, identity := range preferences.Accounts {
+			if identity.Gaia == "" || seen[identity.Gaia] {
+				continue
+			}
+			seen[identity.Gaia] = true
+			_, encrypted, bindingKey, tokenErr := readTokenService(chromeRoot, profile, identity.Gaia)
+			accounts = append(accounts, Account{
+				ID: profile + "/" + identity.Gaia, GaiaID: identity.Gaia,
+				Profile: profile, DisplayName: info.Name, Email: identity.Email, Locale: locale,
+				Importable: tokenErr == nil && strings.HasPrefix(string(encrypted), "v20") && len(bindingKey) != 0,
+			})
+		}
 	}
 	return accounts, nil
 }
@@ -96,7 +119,7 @@ func profileLocale(chromeRoot string, profile string) string {
 	return ""
 }
 
-func readTokenService(chromeRoot string, profile string) (string, []byte, []byte, error) {
+func readTokenService(chromeRoot string, profile string, gaiaID string) (string, []byte, []byte, error) {
 	databasePath := filepath.Join(chromeRoot, profile, "Web Data")
 	uri := "file:" + filepath.ToSlash(databasePath) + "?mode=ro&immutable=1"
 	database, err := sql.Open("sqlite", uri)
@@ -106,7 +129,7 @@ func readTokenService(chromeRoot string, profile string) (string, []byte, []byte
 	defer database.Close()
 	database.SetMaxOpenConns(1)
 
-	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service")
+	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service WHERE service = ?", "AccountId-"+gaiaID)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
 	}

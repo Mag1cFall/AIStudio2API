@@ -155,6 +155,7 @@ type AccountCreateInput struct {
 
 // ChromeImportProfile 表示可从本机 Chrome 导入的账号
 type ChromeImportProfile struct {
+	ID          string `json:"id"`
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
@@ -163,10 +164,11 @@ type ChromeImportProfile struct {
 
 // ChromeImportInput 表示批量导入的 Chrome Profile 与账户环境
 type ChromeImportInput struct {
-	Profiles []string `json:"profiles"`
-	Proxy    string   `json:"proxy"`
-	Locale   string   `json:"locale"`
-	Timezone string   `json:"timezone"`
+	AccountIDs []string `json:"account_ids"`
+	Profiles   []string `json:"profiles"`
+	Proxy      string   `json:"proxy"`
+	Locale     string   `json:"locale"`
+	Timezone   string   `json:"timezone"`
 }
 
 // RuntimeConfig 表示全局运行配置
