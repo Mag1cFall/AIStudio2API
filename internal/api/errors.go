@@ -91,6 +91,10 @@ func statusFromError(err error) int {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return http.StatusGatewayTimeout
 	}
+	var notReady *aistudio.AccountsNotReadyError
+	if errors.As(err, &notReady) {
+		return http.StatusServiceUnavailable
+	}
 	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
 		return http.StatusBadRequest
 	}
@@ -218,6 +222,10 @@ func openAIErrorCode(err error) string {
 	}
 	if errors.Is(err, aistudio.ErrModelNotFound) {
 		return "model_not_found"
+	}
+	var notReady *aistudio.AccountsNotReadyError
+	if errors.As(err, &notReady) {
+		return "account_unavailable"
 	}
 	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
 		return "account_required"

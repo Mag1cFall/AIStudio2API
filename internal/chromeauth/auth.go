@@ -165,9 +165,12 @@ func selectAccounts(accounts []Account, profiles []string, emails []string, ids 
 		if !strings.Contains(email, "@") {
 			return nil, fmt.Errorf("%s 缺少账号邮箱", account.Profile)
 		}
-		selected = append(selected, account)
 		foundIDs[strings.ToLower(account.ID)] = struct{}{}
 		foundProfiles[profile] = struct{}{}
+		if _, exists := foundEmails[email]; exists {
+			continue
+		}
+		selected = append(selected, account)
 		foundEmails[email] = struct{}{}
 	}
 	if missing := missingValues(requestedIDs, foundIDs); len(missing) != 0 {
