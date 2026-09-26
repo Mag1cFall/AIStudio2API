@@ -72,6 +72,8 @@ type anthropicContentBlock struct {
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +91,10 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	messageID := newID("msg")
+	if err := s.decodeAnthropicSearchHistory(&request); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 	generateRequest, err := request.toGenerateRequest(messageID)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -101,6 +107,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writer := &anthropicStreamWriter{
 			w: w, id: messageID, model: request.Model,
 			inputTokens: aistudio.EstimatedInputTokens(generateRequest),
+			searchKey:   s.config.APIKey,
 		}
 		if err := writer.start(); err != nil {
 			return
@@ -129,7 +136,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, buildAnthropicResponse(messageID, request.Model, result))
+	writeJSON(w, http.StatusOK, buildAnthropicResponse(messageID, request.Model, result, s.config.APIKey))
 }
 
 func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +147,10 @@ func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 	}
 	if request.Model == "" || len(request.Messages) == 0 {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model and messages are required")
+		return
+	}
+	if err := s.decodeAnthropicSearchHistory(&request); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	generateRequest, err := request.toGenerateRequest(newID("count"))
@@ -506,14 +517,18 @@ func anthropicToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
 	}
 }
 
-func buildAnthropicResponse(id string, model string, result generationResult) map[string]any {
+func buildAnthropicResponse(id string, model string, result generationResult, searchKey string) map[string]any {
 	stopReason, stopSequence := anthropicStop(result.finishReason, len(result.toolCalls) > 0, result.stopSequence)
+	searchBlocks, searchCount := anthropicSearchBlocks(result.events, searchKey)
+	if searchCount > 0 {
+		result.citations = nil
+	}
 	response := map[string]any{
 		"id":            id,
 		"type":          "message",
 		"role":          "assistant",
 		"model":         model,
-		"content":       anthropicBlocks(result),
+		"content":       append(anthropicBlocks(result), searchBlocks...),
 		"stop_reason":   stopReason,
 		"stop_sequence": stopSequence,
 	}
@@ -525,6 +540,14 @@ func buildAnthropicResponse(id string, model string, result generationResult) ma
 	}
 	if result.usage != nil {
 		response["usage"] = anthropicUsage(result.usage)
+	}
+	if searchCount > 0 {
+		usage, ok := response["usage"].(map[string]any)
+		if !ok {
+			usage = map[string]any{"input_tokens": 0, "output_tokens": 0}
+			response["usage"] = usage
+		}
+		usage["server_tool_use"] = map[string]int{"web_search_requests": searchCount, "web_fetch_requests": 0}
 	}
 	return response
 }
@@ -647,6 +670,7 @@ type anthropicStreamWriter struct {
 	blockIndex        int
 	currentBlock      string
 	thinkingSignature string
+	searchKey         string
 }
 
 func (s *server) streamAnthropic(r *http.Request, writer *anthropicStreamWriter, events <-chan aistudio.Event) {
@@ -825,6 +849,10 @@ func (writer *anthropicStreamWriter) closeBlock() error {
 }
 
 func (writer *anthropicStreamWriter) finish(result generationResult) error {
+	searchBlocks, searchCount := anthropicSearchBlocks(result.events, writer.searchKey)
+	if searchCount > 0 {
+		result.citations = nil
+	}
 	if sources := renderCitationsMarkdown(result.citations); sources != "" {
 		prefix := ""
 		if writer.currentBlock == "text" {
@@ -843,10 +871,24 @@ func (writer *anthropicStreamWriter) finish(result generationResult) error {
 	if err := writer.closeBlock(); err != nil {
 		return err
 	}
-	usage := map[string]int64{"output_tokens": 0}
+	for _, block := range searchBlocks {
+		if err := writer.emit("content_block_start", map[string]any{
+			"type": "content_block_start", "index": writer.blockIndex, "content_block": block,
+		}); err != nil {
+			return err
+		}
+		writer.currentBlock = block.Type
+		if err := writer.closeBlock(); err != nil {
+			return err
+		}
+	}
+	usage := map[string]any{"output_tokens": 0}
 	if result.usage != nil {
 		usage["input_tokens"] = inputTokens(result.usage)
 		usage["output_tokens"] = outputTokens(result.usage)
+	}
+	if searchCount > 0 {
+		usage["server_tool_use"] = map[string]int{"web_search_requests": searchCount, "web_fetch_requests": 0}
 	}
 	stopReason, stopSequence := anthropicStop(result.finishReason, len(result.toolCalls) > 0, result.stopSequence)
 	delta := map[string]any{

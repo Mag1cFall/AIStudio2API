@@ -31,6 +31,7 @@ type BidiRequest struct {
 	ObserveWAARuntime        func(string, uint64)
 	ObserveModelAccessChange func()
 	ObserveAccountFailure    func(string, error)
+	generationDefaults       GenerationDefaults
 }
 
 // BidiEventKind 表示双向实时协议事件
@@ -105,7 +106,9 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	case BidiModeLive:
 		configuration[14] = []any{int64(3)}
 		configuration[15] = []any{[]any{[]any{"Zephyr"}}}
-		configuration[16] = []any{int64(1), nil, nil, int64(4)}
+		if request.generationDefaults.ThinkingLevel {
+			configuration[16] = []any{int64(1), nil, nil, request.generationDefaults.DefaultThinkingLevel}
+		}
 	case BidiModeRobotics:
 		configuration[14] = []any{int64(1)}
 		configuration[16] = []any{int64(1), nil, nil, int64(3)}
@@ -129,7 +132,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 		}
 		tool := make([]any, 2)
 		tool[1] = declarations
-		setup[2] = []any{tool}
+		setup[3] = []any{tool}
 	}
 	if sessionToken := strings.TrimSpace(request.SessionToken); sessionToken != "" {
 		setup[6] = []any{sessionToken}
@@ -321,6 +324,8 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 	}
 	statusCode := 0
 	switch code {
+	case 3:
+		statusCode = 400
 	case 5:
 		statusCode = 404
 	case 7:

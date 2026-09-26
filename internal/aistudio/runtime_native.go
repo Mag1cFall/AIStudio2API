@@ -58,7 +58,11 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	digest := sha256.Sum256([]byte(request.Prompt))
 	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), request.Prompt)
 	if err != nil {
-		worker.fail(err)
+		if ctx.Err() != nil {
+			worker.updateState(func(state *WorkerState) { state.Phase = WorkerReady })
+		} else {
+			worker.fail(err)
+		}
 		return PreparedProtectedRequest{}, err
 	}
 	var payload []any
@@ -79,7 +83,11 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	}
 	headers, err := worker.runtime.ProtocolHeaders(ctx)
 	if err != nil {
-		worker.fail(err)
+		if ctx.Err() != nil {
+			worker.updateState(func(state *WorkerState) { state.Phase = WorkerReady })
+		} else {
+			worker.fail(err)
+		}
 		return PreparedProtectedRequest{}, err
 	}
 	worker.updateState(func(state *WorkerState) {
@@ -95,7 +103,9 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
 	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
 	if err != nil {
-		worker.fail(err)
+		if ctx.Err() == nil {
+			worker.fail(err)
+		}
 		return nil, err
 	}
 	return &RPCResponse{

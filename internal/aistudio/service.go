@@ -130,6 +130,9 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	}
 	headers := rpc.Header.Clone()
 	headers.Set("Authorization", authorization)
+	if lease.CoolingDown(selection.ModelID) {
+		return nil, ErrAccountCoolingDown
+	}
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := worker.SendProtected(ctx, ProtectedRequest{
 		URL: rpc.URL, Headers: headers, Body: rpc.Body,
