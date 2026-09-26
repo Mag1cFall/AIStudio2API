@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import type { Model } from '@/types'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   models: Model[]
@@ -68,14 +69,14 @@ function tokenLimit(value: number | undefined): string {
         :placeholder="t('models.search')"
         type="search"
       />
-      <select
+      <UiSelect
         v-model="selectedMethod"
         class="rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-sm text-gray-300 focus:border-blue-500 focus:outline-none"
         :aria-label="t('models.methods')"
       >
         <option value="">{{ t('models.allMethods') }}</option>
         <option v-for="method in methods" :key="method" :value="method">{{ method }}</option>
-      </select>
+      </UiSelect>
       <span class="font-mono text-xs text-gray-500">{{ filteredModels.length }}</span>
     </div>
 

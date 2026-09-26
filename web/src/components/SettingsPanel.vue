@@ -4,6 +4,7 @@ import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { ServiceConfig } from '@/types'
 import UiIcon from './UiIcon.vue'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   config: ServiceConfig | null
@@ -252,13 +253,13 @@ async function saveConfig(): Promise<void> {
         <span class="mb-2 block text-sm font-medium text-gray-300">{{
           t('settings.routingStrategy')
         }}</span>
-        <select
+        <UiSelect
           v-model="form.routing_strategy"
           class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
         >
           <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
           <option value="fill-first">{{ t('settings.routingFillFirst') }}</option>
-        </select>
+        </UiSelect>
         <span class="mt-2 block text-xs text-gray-500">{{ t('settings.routingHelp') }}</span>
       </label>
 

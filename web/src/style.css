@@ -139,6 +139,168 @@ pre,
   transform: translateY(8px);
 }
 
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #30363d transparent;
+  }
+
+  button:not(:disabled):active,
+  [role='option']:active {
+    transform: scale(0.97);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+
+  input[type='checkbox'] {
+    display: inline-grid;
+    place-content: center;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    border: 1px solid #484f58;
+    border-radius: 4px;
+    appearance: none;
+    background-color: #0d1117;
+    cursor: pointer;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease;
+  }
+
+  input[type='checkbox']:hover:not(:disabled) {
+    border-color: #6b7280;
+  }
+
+  input[type='checkbox']::after {
+    width: 0.55rem;
+    height: 0.3rem;
+    border-bottom: 2px solid #fff;
+    border-left: 2px solid #fff;
+    content: '';
+    transform: translateY(-1px) rotate(-45deg) scale(0);
+    transition: transform 120ms ease;
+  }
+
+  input[type='checkbox']:checked {
+    border-color: #2563eb;
+    background-color: #2563eb;
+  }
+
+  input[type='checkbox']:checked::after {
+    transform: translateY(-1px) rotate(-45deg) scale(1);
+  }
+
+  input[type='checkbox']:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+
+  input[type='number'] {
+    appearance: textfield;
+  }
+
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    margin: 0;
+    appearance: none;
+  }
+}
+
+button[aria-busy='true'] {
+  cursor: progress;
+  opacity: 1;
+}
+
+button[aria-busy='true']::before {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.4em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: busy-spin 700ms linear infinite;
+  content: '';
+  vertical-align: -0.12em;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.modal-overlay > * {
+  animation: dialog-in 160ms ease-out;
+}
+
+.modal-overlay {
+  animation: overlay-in 160ms ease-out;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.dialog-leave-active {
+  transition: opacity 120ms ease;
+}
+
+.dialog-leave-to {
+  opacity: 0;
+}
+
+.ui-select-enter-active,
+.ui-select-leave-active {
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.ui-select-enter-from,
+.ui-select-leave-to {
+  opacity: 0;
+  transform: scaleY(0.96);
+}
+
+.ui-tooltip {
+  position: fixed;
+  z-index: 80;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #1c2128;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 40%);
+  color: #c9d1d9;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  word-break: break-all;
+}
+
+.ui-tooltip.visible {
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

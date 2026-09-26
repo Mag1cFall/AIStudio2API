@@ -1113,7 +1113,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 动态路由的注册形状为 `GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}` 与 `GET /v1beta/operations/{operation}`；端点表中的 `{id}` 表示对应资源标识。
 
-公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，读取优先级为 `?key=`、`X-Goog-API-Key`、`X-API-Key`、`Authorization: Bearer`；配置为空时关闭本地 API key 校验。`/v1*` 响应允许任意 origin，允许 `GET/POST/PUT/DELETE/OPTIONS` 与 `Authorization`、`Content-Type`、`X-API-Key`、`X-Goog-API-Key`、`Anthropic-Version`、`Anthropic-Beta` headers。`/api` 控制面仅允许 loopback，携带 Origin 时执行 same-origin 校验。`GET /health` 返回 `{"status":"ok"}`。
+公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，读取优先级为 `?key=`、`X-Goog-API-Key`、`X-API-Key`、`Authorization: Bearer`；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求返回 401，不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*` 响应允许任意 origin，允许 `GET/POST/PUT/DELETE/OPTIONS` 与 `Authorization`、`Content-Type`、`X-API-Key`、`X-Goog-API-Key`、`Anthropic-Version`、`Anthropic-Beta` headers。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。`/api` 控制面要求来源地址为 loopback 且 `Host` 为 localhost 或回环地址，携带 Origin 时执行 same-origin 校验。全部响应携带 `X-Frame-Options: DENY`、`Content-Security-Policy: frame-ancestors 'none'`、`X-Content-Type-Options: nosniff` 与 `Referrer-Policy: no-referrer`。`GET /health` 返回 `{"status":"ok"}`。
 
 | 控制能力 | 端点 |
 | --- | --- |
@@ -1357,7 +1357,7 @@ OpenAI `GET /v1/models`：
 
 Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返回一个对象。字段为 `name`、`displayName`、`description`、`supportedGenerationMethods`、`inputTokenLimit`、`outputTokenLimit`、可选 `capabilities`、`capabilityOptions`、`accessModes`、`paid`。
 
-`GET /v1beta/models/{model}` 只按 canonical model ID 查找；生成、计数、视频与 Bidi 调度同时接受 canonical ID 和 `capability_options.aliases` 中的 alias。
+`GET /v1beta/models/{model}` 只按 canonical model ID 查找；生成、计数、视频、转录与 Bidi 同时接受 canonical ID 和 `capability_options.aliases` 中的 alias；alias 在调度和发送上游前换成对应的 canonical ID。
 
 管理模型中的 `description`、token limits、capabilities、capability options、access modes 与 false `paid` 使用 `omitempty`；OpenAI 和 Gemini 响应始终包含身份、methods 与 token limits，并在 map/slice 非空或 `paid=true` 时增加对应扩展字段。
 

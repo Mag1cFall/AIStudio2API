@@ -407,10 +407,56 @@ func corsMiddleware(next http.Handler) http.Handler {
 func loopbackMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || !net.ParseIP(host).IsLoopback() {
+		if err != nil || !net.ParseIP(host).IsLoopback() || !loopbackHost(r.Host) {
 			writeAdminError(w, http.StatusForbidden, "control_plane_forbidden", "Control plane is only available from loopback")
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackHost 判断 Host 或 Origin 主机名是否为 localhost 或回环地址
+func loopbackHost(host string) bool {
+	name := host
+	if hostname, _, err := net.SplitHostPort(host); err == nil {
+		name = hostname
+	}
+	name = strings.Trim(name, "[]")
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
+}
+
+// browserOriginMiddleware 在未配置 API key 时拒绝外部网页与 null 来源的浏览器请求
+func browserOriginMiddleware(requiredKey string, next http.Handler) http.Handler {
+	if strings.TrimSpace(requiredKey) != "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originValue := strings.TrimSpace(r.Header.Get("Origin"))
+		if originValue == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin, err := url.Parse(originValue)
+		webOrigin := err != nil || originValue == "null" || origin.Scheme == "http" || origin.Scheme == "https"
+		if webOrigin && (err != nil || !loopbackHost(origin.Host)) {
+			writeAuthError(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxPublicBodyBytes 为公开接口请求体上限，可容纳 Base64 编码后的最大文件
+const maxPublicBodyBytes = openAIFileMaxBytes/3*4 + openAIFileRequestOverhead
+
+// bodyLimitMiddleware 限制公开接口请求体大小
+func bodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxPublicBodyBytes)
 		next.ServeHTTP(w, r)
 	})
 }

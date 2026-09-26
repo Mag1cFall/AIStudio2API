@@ -18,6 +18,7 @@ func (service *trackedService) Transcribe(
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.StartAccessLog(ctx)
+	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)

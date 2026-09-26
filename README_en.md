@@ -195,7 +195,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 | Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 
-Read model names from `GET /v1/models` or `GET /v1beta/models`.
+Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set.
 
 For Cherry Studio:
 

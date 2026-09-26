@@ -21,6 +21,7 @@ const emit = defineEmits<{
 
 const { locale, t } = useI18n()
 const cancelling = ref('')
+const refreshing = ref(false)
 
 const requestStateKeys: Record<RequestState, TranslationKey> = {
   queued: 'state.queued',
@@ -52,6 +53,13 @@ function formatTime(value: string): string {
   }).format(new Date(value))
 }
 
+// refresh 请求刷新数据，图标短暂旋转确认点击
+function refresh(): void {
+  refreshing.value = true
+  emit('refresh')
+  window.setTimeout(() => (refreshing.value = false), 600)
+}
+
 // cancelRequest 停止活动请求并刷新摘要
 async function cancelRequest(request: RequestSummary): Promise<void> {
   cancelling.value = request.id
@@ -73,9 +81,9 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
       <button
         class="flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition hover:bg-blue-500"
         type="button"
-        @click="emit('refresh')"
+        @click="refresh"
       >
-        <UiIcon name="refresh" :size="13" />
+        <UiIcon name="refresh" :size="13" :class="{ 'animate-spin': refreshing }" />
         {{ t('app.refresh') }}
       </button>
     </div>
@@ -167,6 +175,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
               class="rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
               type="button"
               :disabled="cancelling !== ''"
+              :aria-busy="cancelling === request.id"
               @click="cancelRequest(request)"
             >
               {{ t('requests.stop') }}

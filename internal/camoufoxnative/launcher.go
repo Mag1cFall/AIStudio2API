@@ -51,6 +51,9 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		_ = os.RemoveAll(profile)
 		return nil, "", err
 	}
+	if options.Headless {
+		prefs["layout.frame_rate"] = headlessFrameRate
+	}
 	if err := writeUserJS(profile, prefs); err != nil {
 		_ = os.RemoveAll(profile)
 		return nil, "", err
@@ -79,6 +82,12 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if err := command.Start(); err != nil {
 		_ = os.RemoveAll(profile)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
+	}
+	if err := attachBrowserProcess(command); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		_ = os.RemoveAll(profile)
+		return nil, "", fmt.Errorf("绑定 Camoufox 进程: %w", err)
 	}
 	process := &browserProcess{
 		command: command,
@@ -203,6 +212,9 @@ func normalizeBiDiEndpoint(endpoint string) string {
 	}
 	return endpoint
 }
+
+// headlessFrameRate 为无头 Worker 的页面刷新帧率
+const headlessFrameRate = 1
 
 func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 	prefs := map[string]any{

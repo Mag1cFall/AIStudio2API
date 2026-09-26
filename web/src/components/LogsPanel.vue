@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import type { AdminLog } from '@/types'
 import UiIcon from './UiIcon.vue'
+import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import { groupLogs } from '@/logs'
 
@@ -173,13 +174,13 @@ watch(autoScroll, scrollToBottom)
         </div>
         <label class="flex items-center gap-2 text-xs text-gray-400">
           {{ t('logs.source') }}:
-          <select
+          <UiSelect
             v-model="source"
             class="max-w-48 rounded border border-[#30363d] bg-[#0d1117] px-2 py-0.5 text-gray-200 outline-none"
           >
             <option value="ALL">{{ t('logs.allSources') }}</option>
             <option v-for="item in sources" :key="item" :value="item">{{ item }}</option>
-          </select>
+          </UiSelect>
         </label>
         <input
           v-model="search"
@@ -192,9 +193,9 @@ watch(autoScroll, scrollToBottom)
 
       <div class="flex items-center gap-2">
         <button
+          v-tooltip="t('logs.clear')"
           class="rounded px-2 py-1 text-gray-400 transition hover:bg-[#30363d] hover:text-white"
           type="button"
-          :title="t('logs.clear')"
           :aria-label="t('logs.clear')"
           @click="$emit('clear')"
         >
@@ -267,7 +268,7 @@ watch(autoScroll, scrollToBottom)
         >
           <span class="text-right text-gray-500">{{ displayTime(row.entry.time) }}</span>
           <span class="font-semibold">{{ displayLevel(row.entry.level) }}</span>
-          <span class="log-cell log-source text-gray-500" :title="row.entry.source">{{
+          <span v-tooltip="row.entry.source" class="log-cell log-source text-gray-500">{{
             row.entry.source
           }}</span>
           <div class="log-cell log-message">
