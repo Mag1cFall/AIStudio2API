@@ -135,6 +135,8 @@ type accountWorkerManager struct {
 	signalMu        sync.Mutex
 	signal          chan struct{}
 	dispatch        *dispatchQueue
+	victimMu        sync.Mutex
+	victims         map[string]struct{}
 }
 
 type accountWorker struct {
@@ -249,6 +251,7 @@ func newAccountWorkerManager(
 		warmTarget: warmTarget, maxActive: maxActive, warmConcurrency: warmConcurrency, temporaryChat: temporaryChat,
 		openings:  make(map[string]chan struct{}),
 		lifecycle: lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
+		victims: make(map[string]struct{}),
 	}
 	for _, account := range accounts {
 		if account == nil {
@@ -424,8 +427,13 @@ func (manager *accountWorkerManager) WorkerGeneration(accountID string) uint64 {
 	return account.generation.Load()
 }
 
-// ResetIfGeneration 仅关闭产生当前失败的 Worker
-func (manager *accountWorkerManager) ResetIfGeneration(accountID string, generation uint64) (bool, error) {
+// ResetIfGeneration 等待活动请求结束后仅关闭产生当前失败的 Worker
+func (manager *accountWorkerManager) ResetIfGeneration(ctx context.Context, accountID string, generation uint64) (reset bool, err error) {
+	lease, err := manager.pool.AcquireAccount(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = errors.Join(err, lease.Release()) }()
 	manager.mu.RLock()
 	account := manager.accounts[accountID]
 	manager.mu.RUnlock()
@@ -1001,11 +1009,38 @@ func workerStartupProgress(stage camoufoxnative.StartupStage) (int, string) {
 }
 
 func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
+	return manager.idleWarmVictimFor(excludeID, "", false)
+}
+
+// reserveVictim 标记已被某次替换选中的旧 Worker，避免并行替换选中同一个
+func (manager *accountWorkerManager) reserveVictim(accountID string) {
+	manager.victimMu.Lock()
+	manager.victims[accountID] = struct{}{}
+	manager.victimMu.Unlock()
+}
+
+// releaseVictim 解除旧 Worker 的替换标记
+func (manager *accountWorkerManager) releaseVictim(accountID string) {
+	manager.victimMu.Lock()
+	delete(manager.victims, accountID)
+	manager.victimMu.Unlock()
+}
+
+func (manager *accountWorkerManager) victimReserved(accountID string) bool {
+	manager.victimMu.Lock()
+	defer manager.victimMu.Unlock()
+	_, reserved := manager.victims[accountID]
+	return reserved
+}
+
+// idleWarmVictimFor 选择空闲热 Worker，优先冷却中的账户，其次最久未用；coolingOnly 时只返回冷却中的账户
+func (manager *accountWorkerManager) idleWarmVictimFor(excludeID string, modelID string, coolingOnly bool) string {
 	warm := manager.WarmAccountIDs()
 	var selected string
 	var selectedUsed time.Time
+	selectedCooling := false
 	for _, accountID := range warm {
-		if accountID == excludeID {
+		if accountID == excludeID || manager.victimReserved(accountID) {
 			continue
 		}
 		manager.mu.RLock()
@@ -1024,9 +1059,14 @@ func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
 		if busy {
 			continue
 		}
-		if selected == "" || lastUsed.Before(selectedUsed) {
+		cooling := manager.pool.AccountCoolingDown(accountID, modelID)
+		if coolingOnly && !cooling {
+			continue
+		}
+		if selected == "" || cooling && !selectedCooling || cooling == selectedCooling && lastUsed.Before(selectedUsed) {
 			selected = accountID
 			selectedUsed = lastUsed
+			selectedCooling = cooling
 		}
 	}
 	return selected
@@ -1128,6 +1168,8 @@ func (manager *accountWorkerManager) ensureWorker(
 		victim := ""
 		if len(manager.openings) == 0 {
 			victim = manager.idleWarmVictim(accountID)
+		} else {
+			victim = manager.idleWarmVictimFor(accountID, "", true)
 		}
 		if victim == "" {
 			manager.rebalanceMu.Unlock()
@@ -1139,6 +1181,8 @@ func (manager *accountWorkerManager) ensureWorker(
 			}
 			continue
 		}
+		manager.reserveVictim(victim)
+		defer func() { manager.releaseVictim(victim) }()
 		opening := make(chan struct{})
 		manager.openings[accountID] = opening
 		manager.rebalanceMu.Unlock()
@@ -1179,7 +1223,11 @@ func (manager *accountWorkerManager) ensureWorker(
 				manager.rebalanceMu.Unlock()
 				return nil, errors.Join(evictionErr, ctx.Err(), discardErr)
 			}
+			manager.releaseVictim(victim)
 			victim = manager.idleWarmVictim(accountID)
+			if victim != "" {
+				manager.reserveVictim(victim)
+			}
 			manager.rebalanceMu.Unlock()
 			if victim == "" {
 				if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
@@ -1189,7 +1237,12 @@ func (manager *accountWorkerManager) ensureWorker(
 					manager.rebalanceMu.Unlock()
 					return nil, errors.Join(err, discardErr)
 				}
+				manager.rebalanceMu.Lock()
 				victim = manager.idleWarmVictim(accountID)
+				if victim != "" {
+					manager.reserveVictim(victim)
+				}
+				manager.rebalanceMu.Unlock()
 			}
 		}
 	}
@@ -1967,9 +2020,9 @@ func (service *trackedService) finishStop(transitionDone chan struct{}, modelRef
 	service.lifecycleMu.Unlock()
 }
 
-// Models 返回最近一次成功同步的模型目录
+// Models 返回启用账户具有模型资格的公开目录
 func (service *trackedService) Models(context.Context) ([]aistudio.Model, error) {
-	return service.modelSnapshot(), nil
+	return service.pool.EligibleModels(service.modelSnapshot()), nil
 }
 
 func (service *trackedService) modelSnapshot() []aistudio.Model {
@@ -2380,7 +2433,7 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(cause)
 		expectedGeneration := workerGenerations[accountID]
 		recovered, _, recoveryErr := service.recoverWorkerOnce(
-			accountID, expectedGeneration, recoveredWorkers,
+			recoveryCtx, accountID, expectedGeneration, recoveredWorkers,
 			recoverCurrentGeneration, workerFailed || waaRuntimeFailed,
 		)
 		return recovered, recoveryErr
@@ -2408,6 +2461,7 @@ func needsWAARuntimeRecovery(cause error, generationChanged bool, workerFailed b
 
 // recoverWorkerOnce 对指定账户的失败 Worker 版本执行至多一次恢复
 func (service *trackedService) recoverWorkerOnce(
+	ctx context.Context,
 	accountID string,
 	expectedGeneration uint64,
 	recoveredWorkers map[string]struct{},
@@ -2425,7 +2479,7 @@ func (service *trackedService) recoverWorkerOnce(
 		return false, false, nil
 	}
 	if resetCurrentGeneration {
-		reset, err := service.workers.ResetIfGeneration(accountID, expectedGeneration)
+		reset, err := service.workers.ResetIfGeneration(ctx, accountID, expectedGeneration)
 		if err != nil {
 			return false, false, err
 		}
@@ -2544,7 +2598,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		warmCandidates := len(warmAvailable) + len(groups.WarmBusy)
-		if len(groups.StandbyReady) > 0 && len(active) < service.workers.maxActive && warmCandidates > 0 && !fixedAccount {
+		coolingVictim := len(active) >= service.workers.maxActive &&
+			service.workers.idleWarmVictimFor("", selection.ModelID, true) != ""
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.maxActive || coolingVictim) && warmCandidates > 0 && !fixedAccount {
 			standby := groups.StandbyReady
 			if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 				standby = cold
@@ -2981,18 +3037,6 @@ func (service *trackedService) generateWithRetry(
 		localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
 		retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
 		recoverWorker := false
-		if requestCtx.Err() == nil {
-			var resetErr error
-			recoverWorker, _, resetErr = service.recoverWorkerOnce(
-				request.AccountID, workerGeneration, recoveredWorker,
-				needsWAARuntimeRecovery(err, false, workerFailed, workerReplaced),
-				workerFailed || waaRuntimeFailed,
-			)
-			if resetErr != nil {
-				err = errors.Join(err, resetErr)
-				retryable = false
-			}
-		}
 		if aistudio.DefinitiveAuthenticationFailure(err) {
 			if stateErr := lease.MarkAuthenticationRequired(err.Error()); stateErr != nil {
 				err = errors.Join(err, stateErr)
@@ -3026,6 +3070,18 @@ func (service *trackedService) generateWithRetry(
 			err = errors.Join(err, releaseErr)
 			break
 		}
+		if requestCtx.Err() == nil {
+			var resetErr error
+			recoverWorker, _, resetErr = service.recoverWorkerOnce(
+				requestCtx, request.AccountID, workerGeneration, recoveredWorker,
+				needsWAARuntimeRecovery(err, false, workerFailed, workerReplaced),
+				workerFailed || waaRuntimeFailed,
+			)
+			if resetErr != nil {
+				err = errors.Join(err, resetErr)
+				retryable = false
+			}
+		}
 		if !retryable {
 			break
 		}
@@ -3039,7 +3095,7 @@ func (service *trackedService) generateWithRetry(
 		}
 		if recoverWorker {
 			service.requests.log(accountLabel, "WARN", fmt.Sprintf(
-				"WAA Worker 重建 | 模型=%s | 重放当前请求", modelID,
+				"WAA Worker 重建 | 模型=%s | 重放当前请求\n原因: %s", modelID, strings.TrimSpace(err.Error()),
 			))
 			continue
 		}
@@ -3111,7 +3167,7 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 }
 
 func retryableGenerateAccountError(ctx context.Context, err error) bool {
-	if errors.Is(err, errStreamClosedBeforeFirstEvent) {
+	if errors.Is(err, errStreamClosedBeforeFirstEvent) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
 		return true
 	}
 	var workerInitError *accountWorkerInitError

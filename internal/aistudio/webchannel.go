@@ -134,6 +134,14 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			return nil, err
 		}
 		request.AccountID = lease.Account().ID
+		entry, err := s.client.modelEntry(ctx, request.AccountID, modelID)
+		if err != nil {
+			if owned {
+				err = errors.Join(err, lease.Release())
+			}
+			return nil, err
+		}
+		request.generationDefaults = entry.defaults
 		runtime := RequestContext{}
 		if s.client.contextProvider != nil {
 			runtime, err = s.client.contextProvider.RequestContext(ctx, request.AccountID)
@@ -158,18 +166,14 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 				checkedAt := lease.CheckedAt()
 				accountID := request.AccountID
 				accessGeneration := lease.ModelAccessGeneration()
-				go func() {
-					changed, stateErr := s.pool.MarkModelAccessVerifiedIfGeneration(
-						accountID, modelAccessScope, accessGeneration, checkedAt,
-					)
-					if stateErr != nil {
-						slog.Error("Bidi 模型资格保存失败", "account", accountID, "model", modelID, "error", stateErr)
-						return
-					}
-					if changed {
-						session.notifyModelAccessChanged()
-					}
-				}()
+				changed, stateErr := s.pool.MarkModelAccessVerifiedIfGeneration(
+					accountID, modelAccessScope, accessGeneration, checkedAt,
+				)
+				if stateErr != nil {
+					slog.Error("Bidi 模型资格保存失败", "account", accountID, "model", modelID, "error", stateErr)
+				} else if changed {
+					session.notifyModelAccessChanged()
+				}
 			} else {
 				if stateErr := s.pool.ClearCooldownIfGeneration(
 					request.AccountID, "", lease.ModelAccessGeneration(), lease.CheckedAt(),

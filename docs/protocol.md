@@ -534,7 +534,7 @@ generation config 字段：
 | thinking level | ListModels field 72 | Low=`1`、Medium=`2`、High=`3`、Minimal=`4` |
 | thinking budget | 请求值 | 模型能力码包含 thinking budget |
 
-`reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `minimal`、`low`、`medium`、`high`。模型只有 thinking budget 能力时，显式 effort 需要同时提供 budget；模型只有 thinking level 能力时，显式 budget 退化为 level。两类能力都缺少时返回参数错误。
+`reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level，不支持思考的模型忽略该值。模型只有 thinking budget 能力时，显式 effort 需要同时提供 budget；模型只有 thinking level 能力时，显式 budget 退化为 level。两类能力都缺少时返回参数错误。
 
 response modalities：
 
@@ -1361,7 +1361,7 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 
 管理模型中的 `description`、token limits、capabilities、capability options、access modes 与 false `paid` 使用 `omitempty`；OpenAI 和 Gemini 响应始终包含身份、methods 与 token limits，并在 map/slice 非空或 `paid=true` 时增加对应扩展字段。
 
-公开目录是上游实时模型集合的完整合并结果，并按 ID 排序。多账户同 ID 的 methods、capabilities、capability options 和 access modes 取并集，`paid` 取逻辑 OR，正数 token limit 取最小值。调度使用上游 methods、capabilities、access modes、账户权益和当前运行状态。
+管理目录合并全部账户的上游实时模型集合，并按 ID 排序。公开目录保留至少一个启用账户具有访问资格、且当前公开协议承载其调用方法的模型。短期冷却和忙碌状态由请求调度处理。多账户同 ID 的 methods、capabilities、capability options 和 access modes 取并集，`paid` 取逻辑 OR，正数 token limit 取最小值。调度使用上游 methods、capabilities、access modes、账户权益和当前运行状态。
 
 主要请求格式：
 
@@ -1671,6 +1671,8 @@ message content 可以是 string 或 block 数组：
 | `image`、`document` | `source:{type,media_type,data,url}` |
 | `tool_use` | `id`、`name`、object `input` |
 | `tool_result` | `tool_use_id`、`content`、`is_error` |
+| `server_tool_use` | `id`、`name:"web_search"`、`input:{query}` |
+| `web_search_tool_result` | `tool_use_id`、`content:[{type:"web_search_result",url,title,encrypted_content,page_age}]` |
 
 `image` / `document` 的 Base64 source 使用 `type:"base64"`、`media_type`、`data`；URL source 使用 `type:"url"` 与非空 `url`，省略 media type 时 image 默认 `image/*`、document 默认 `application/pdf`。`tool_result.is_error=true` 把合法 JSON content 包装为 `{"error":<CONTENT>}`；普通标量或数组结果包装为 `{"result":<CONTENT>}`。
 
@@ -1710,9 +1712,11 @@ server tool 只接受对应 `type` 与 `name`。`description`、`input_schema` �
 }
 ```
 
-content 输出 block 为 `text`、`thinking`、`redacted_thinking` 或 `tool_use`。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`。
+content 输出 block 为 `text`、`thinking`、`redacted_thinking`、`tool_use`、`server_tool_use` 或 `web_search_tool_result`。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`；它提供独立计数估算，PDF 等媒体请求的最终用量以生成响应 `usage.input_tokens` 为准。
 
-Anthropic 响应中的媒体编码为 text block 中的 Markdown data URL，代码编码为 fenced text，来源在末尾追加 `Sources:` Markdown 列表。
+Anthropic 响应中的媒体编码为 text block 中的 Markdown data URL，代码编码为 fenced text。Google Search 的每个去重查询生成一组 `server_tool_use` 和 `web_search_tool_result`，结果按 URL 去重，来源集合覆盖本次搜索的全部查询。`usage.server_tool_use.web_search_requests` 记录上游报告的去重查询数，`web_fetch_requests` 为 `0`。URL Context 等其余引用在末尾追加 `Sources:` Markdown 列表。
+
+搜索来源的 `encrypted_content` 由本服务生成，保存上游返回的 URL、标题与可用摘要。客户端在下一轮 assistant 消息中原样回传相互关联的两个搜索块；服务使用相同的 `PROXY_API_KEY` 恢复来源上下文。更换 API key 后，先前的搜索上下文返回 `400 invalid_request_error`。该字段用于本服务的多轮会话，和 Anthropic 服务的来源令牌分别使用。
 
 Anthropic SSE：
 
@@ -1726,7 +1730,7 @@ Anthropic SSE：
 | `message_stop` | `{type:"message_stop"}` |
 | `error` | `{type:"error",error:{type,message}}` |
 
-delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signature_delta{signature}`、`input_json_delta{partial_json}`。thinking signature 在对应 thinking block 关闭前发送；redacted thinking 使用一个 start/stop block；tool_use 先发送空 input，再通过 `input_json_delta` 发送完整参数 JSON。
+delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signature_delta{signature}`、`input_json_delta{partial_json}`。thinking signature 在对应 thinking block 关闭前发送；redacted thinking 使用一个 start/stop block；tool_use 先发送空 input，再通过 `input_json_delta` 发送完整参数 JSON。搜索块在来源汇总后以完整的 start/stop block 输出，查询计数随最终 `message_delta.usage` 返回。
 
 ### Gemini GenerateContent
 

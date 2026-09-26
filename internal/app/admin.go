@@ -785,7 +785,7 @@ type adminEventSource interface {
 
 // Models 返回当前运行时模型快照
 func (admin *runtimeAdmin) Models(ctx context.Context) ([]aistudio.Model, error) {
-	return admin.service.Models(ctx)
+	return admin.service.modelSnapshot(), nil
 }
 
 func (admin *runtimeAdmin) Events(ctx context.Context) (<-chan api.AdminEvent, error) {

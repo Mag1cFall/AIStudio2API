@@ -45,6 +45,12 @@ func fillPromptExpression(prompt string) string {
 })()`, encoded, encoded)
 }
 
+// runButtonEnabledExpression 检查官网 Run 按钮是否可见且已启用
+const runButtonEnabledExpression = `(() => {` + pageDOMHelpers + `
+  const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
+  return Boolean(button && buttonEnabled(button));
+})()`
+
 // submitPromptExpression 点击官网当前可见且启用的提交按钮
 const submitPromptExpression = `(() => {` + pageDOMHelpers + `
   const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
