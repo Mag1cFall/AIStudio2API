@@ -19,12 +19,16 @@ import ModelsTable from '@/components/ModelsTable.vue'
 import PlaygroundPanel from '@/components/PlaygroundPanel.vue'
 import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
+import UiConfirm from '@/components/UiConfirm.vue'
 import UiIcon, { type IconName } from '@/components/UiIcon.vue'
 
 const { availableLocales, locale, setLocale, t } = useI18n()
 const TAB_STORAGE_KEY = 'aistudio2api_active_tab'
 const validTabs: TabID[] = ['logs', 'accounts', 'models', 'requests', 'settings', 'playground']
-const savedTab = typeof window !== 'undefined' ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null) : null
+const savedTab =
+  typeof window !== 'undefined'
+    ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null)
+    : null
 const currentTab = ref<TabID>(savedTab && validTabs.includes(savedTab) ? savedTab : 'logs')
 watch(currentTab, (tab) => {
   window.localStorage.setItem(TAB_STORAGE_KEY, tab)
@@ -359,10 +363,10 @@ onUnmounted(() => {
             {{ serviceState.toUpperCase() }}
           </span>
           <span
+            v-tooltip="status?.version || ''"
             class="max-w-[65%] truncate font-mono text-xs text-gray-500"
-            :title="status?.version || ''"
           >
-            v{{ status?.version || '—' }}
+            {{ status?.version || '—' }}
           </span>
         </div>
         <button
@@ -439,6 +443,7 @@ onUnmounted(() => {
         {{ notice.message }}
       </div>
     </Transition>
+    <UiConfirm />
   </div>
 </template>
 

@@ -132,6 +132,9 @@ type accountWorkerManager struct {
 	lifecycle       context.Context
 	cancel          context.CancelFunc
 	closed          bool
+	signalMu        sync.Mutex
+	signal          chan struct{}
+	dispatch        *dispatchQueue
 }
 
 type accountWorker struct {
@@ -146,6 +149,7 @@ type accountWorker struct {
 	cleanupWorker  *aistudio.NativeWorker
 	cleanupLease   *aistudio.AccountRuntimeLease
 	warm           atomic.Bool
+	readyAt        atomic.Int64
 	generation     atomic.Uint64
 }
 
@@ -169,6 +173,9 @@ type accountWorkerUpdate struct {
 
 var errAccountWorkerReplaced = errors.New("WAA worker 已更新")
 var errAccountWorkerOpening = errors.New("WAA worker 正在启动")
+
+// errAccountWorkerCapacity 表示当前没有可立即使用的 Worker 槽位
+var errAccountWorkerCapacity = errors.New("WAA worker 槽位已满")
 var errAccountWorkerCleanupPending = errors.New("WAA worker 清理未完成")
 
 const (
@@ -241,7 +248,7 @@ func newAccountWorkerManager(
 		globalProxy: globalProxy, initTimeout: initTimeout,
 		warmTarget: warmTarget, maxActive: maxActive, warmConcurrency: warmConcurrency, temporaryChat: temporaryChat,
 		openings:  make(map[string]chan struct{}),
-		lifecycle: lifecycle, cancel: cancel,
+		lifecycle: lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
 	}
 	for _, account := range accounts {
 		if account == nil {
@@ -249,7 +256,106 @@ func newAccountWorkerManager(
 		}
 		manager.accounts[account.ID] = manager.newAccountWorker(account)
 	}
+	go manager.forwardPoolChanges()
+	go manager.reapIdleWorkers()
 	return manager
+}
+
+// expandInBackground 在后台为账户启动 Worker，就绪后由调度信号唤醒排队请求
+func (manager *accountWorkerManager) expandInBackground(accountID string) {
+	go func() {
+		_, err := manager.ensureWorker(manager.lifecycle, accountID, false)
+		if err == nil || manager.lifecycle.Err() != nil ||
+			errors.Is(err, errAccountWorkerOpening) || errors.Is(err, errAccountWorkerCapacity) {
+			return
+		}
+		manager.requests.log(accountID, "WARN", fmt.Sprintf("WAA Worker 后台扩容失败 | 错误=%v", err))
+	}()
+}
+
+// workerIdleTimeout 为超出热池目标的 Worker 空闲多久后关闭
+const workerIdleTimeout = 5 * time.Minute
+
+// reapIdleWorkers 定期关闭超出热池目标且空闲超时的 Worker
+func (manager *accountWorkerManager) reapIdleWorkers() {
+	ticker := time.NewTicker(workerIdleTimeout / 10)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-manager.lifecycle.Done():
+			return
+		case <-ticker.C:
+			for manager.reapIdleWorker(time.Now().Add(-workerIdleTimeout)) {
+			}
+		}
+	}
+}
+
+// reapIdleWorker 关闭一个最近使用早于 before 的多余空闲 Worker，并返回是否关闭
+func (manager *accountWorkerManager) reapIdleWorker(before time.Time) bool {
+	manager.rebalanceMu.Lock()
+	defer manager.rebalanceMu.Unlock()
+	if len(manager.openings) > 0 || len(manager.WarmAccountIDs()) <= manager.warmTarget {
+		return false
+	}
+	victim := manager.idleWarmVictim("")
+	if victim == "" {
+		return false
+	}
+	manager.mu.RLock()
+	account := manager.accounts[victim]
+	manager.mu.RUnlock()
+	_, lastUsed := manager.pool.Activity(victim)
+	if lastUsed.After(before) || account != nil && time.Unix(0, account.readyAt.Load()).After(before) {
+		return false
+	}
+	evicted, err := manager.evictIdleWorker(manager.lifecycle, victim)
+	if err != nil {
+		manager.requests.log(victim, "WARN", fmt.Sprintf("WAA Worker 空闲回收失败 | 错误=%v", err))
+		return false
+	}
+	if evicted {
+		manager.requests.log("service", "INFO", fmt.Sprintf(
+			"WAA Worker 空闲回收 | Worker=%d/%d", len(manager.WarmAccountIDs()), manager.maxActive,
+		))
+	}
+	return evicted
+}
+
+// forwardPoolChanges 在账户池租约或状态变化后唤醒排队请求
+func (manager *accountWorkerManager) forwardPoolChanges() {
+	for {
+		changed := manager.pool.Changed()
+		select {
+		case <-manager.lifecycle.Done():
+			return
+		case <-changed:
+			manager.dispatch.wakeHeads()
+		}
+	}
+}
+
+// schedulingChanged 返回下一次 Worker 容量或热池状态变化时关闭的通道
+func (manager *accountWorkerManager) schedulingChanged() <-chan struct{} {
+	manager.signalMu.Lock()
+	defer manager.signalMu.Unlock()
+	return manager.signal
+}
+
+// notifyScheduling 在 Worker 容量或热池变化后唤醒等待请求
+func (manager *accountWorkerManager) notifyScheduling() {
+	manager.signalMu.Lock()
+	close(manager.signal)
+	manager.signal = make(chan struct{})
+	manager.signalMu.Unlock()
+	manager.dispatch.wakeHeads()
+}
+
+// finishOpening 结束账户 Worker 启动占位并唤醒等待容量的请求
+func (manager *accountWorkerManager) finishOpening(accountID string, opening chan struct{}) {
+	delete(manager.openings, accountID)
+	close(opening)
+	manager.notifyScheduling()
 }
 
 // Add 注册新账户的 WAA worker 配置
@@ -292,7 +398,7 @@ func (manager *accountWorkerManager) Reset(accountID string) error {
 		pid = account.cleanupWorker.State().PID
 	}
 	manager.requests.log(account.label, "INFO", fmt.Sprintf("WAA Worker 停止 | PID=%d", pid))
-	err := closeAccountWorker(account)
+	err := manager.closeAccountWorker(account)
 	if err != nil {
 		manager.requests.log(account.label, "ERROR", fmt.Sprintf(
 			"WAA Worker 停止失败 | PID=%d | 耗时=%s | 错误=%s",
@@ -344,7 +450,7 @@ func (manager *accountWorkerManager) ResetIfGeneration(accountID string, generat
 		pid = account.cleanupWorker.State().PID
 	}
 	manager.requests.log(account.label, "INFO", fmt.Sprintf("WAA Worker 停止 | PID=%d", pid))
-	if err := closeAccountWorker(account); err != nil {
+	if err := manager.closeAccountWorker(account); err != nil {
 		manager.requests.log(account.label, "ERROR", fmt.Sprintf(
 			"WAA Worker 停止失败 | PID=%d | 耗时=%s | 错误=%s",
 			pid, time.Since(startedAt).Round(time.Millisecond), strings.TrimSpace(err.Error()),
@@ -378,7 +484,7 @@ func (manager *accountWorkerManager) prepareUpdate(
 	worker.startupMu.Lock()
 	worker.mu.Lock()
 	if worker.worker != nil || worker.cleanupWorker != nil || worker.runtimeLease != nil || worker.cleanupLease != nil {
-		if err := closeAccountWorker(worker); err != nil {
+		if err := manager.closeAccountWorker(worker); err != nil {
 			worker.mu.Unlock()
 			worker.startupMu.Unlock()
 			return nil, err
@@ -454,7 +560,7 @@ func (manager *accountWorkerManager) Remove(accountID string) error {
 	defer account.startupMu.Unlock()
 	account.mu.Lock()
 	defer account.mu.Unlock()
-	return closeAccountWorker(account)
+	return manager.closeAccountWorker(account)
 }
 
 func (manager *accountWorkerManager) newAccountWorker(account *aistudio.Account) *accountWorker {
@@ -830,8 +936,10 @@ func activateAccountWorker(preparer *accountWorkerPreparer) error {
 		preparer.account.generation.Add(1)
 	}
 	preparer.account.warm.Store(true)
+	preparer.account.readyAt.Store(time.Now().UnixNano())
 	label := preparer.account.label
 	preparer.account.mu.Unlock()
+	preparer.manager.notifyScheduling()
 	preparer.manager.requests.log(label, "INFO", fmt.Sprintf(
 		"WAA Worker 就绪 | 页面模型=%s | PID=%d | 耗时=%s",
 		preparer.bootstrapModel, preparer.worker.State().PID, time.Since(preparer.startedAt).Round(time.Millisecond),
@@ -893,10 +1001,6 @@ func workerStartupProgress(stage camoufoxnative.StartupStage) (int, string) {
 }
 
 func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
-	statusByID := make(map[string]aistudio.AccountStatus)
-	for _, status := range manager.pool.Status() {
-		statusByID[status.ID] = status
-	}
 	warm := manager.WarmAccountIDs()
 	var selected string
 	var selectedUsed time.Time
@@ -916,13 +1020,9 @@ func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
 		if cleanupPending {
 			continue
 		}
-		status := statusByID[accountID]
-		if status.State == aistudio.AccountBusy {
+		busy, lastUsed := manager.pool.Activity(accountID)
+		if busy {
 			continue
-		}
-		lastUsed := time.Time{}
-		if status.LastUsed != nil {
-			lastUsed = *status.LastUsed
 		}
 		if selected == "" || lastUsed.Before(selectedUsed) {
 			selected = accountID
@@ -1015,8 +1115,7 @@ func (manager *accountWorkerManager) ensureWorker(
 					err = activateAccountWorker(preparer)
 				}
 			}
-			delete(manager.openings, accountID)
-			close(opening)
+			manager.finishOpening(accountID, opening)
 			warmCount := len(manager.WarmAccountIDs())
 			manager.rebalanceMu.Unlock()
 			if err == nil && warmCount > manager.warmTarget {
@@ -1026,16 +1125,15 @@ func (manager *accountWorkerManager) ensureWorker(
 			}
 			return preparer, err
 		}
-		if len(manager.openings) > 0 {
-			manager.rebalanceMu.Unlock()
-			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
-				return nil, err
-			}
-			continue
+		victim := ""
+		if len(manager.openings) == 0 {
+			victim = manager.idleWarmVictim(accountID)
 		}
-		victim := manager.idleWarmVictim(accountID)
 		if victim == "" {
 			manager.rebalanceMu.Unlock()
+			if !waitForOpening {
+				return nil, errAccountWorkerCapacity
+			}
 			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
 				return nil, err
 			}
@@ -1047,8 +1145,7 @@ func (manager *accountWorkerManager) ensureWorker(
 		pending, startErr := manager.startReservedWorker(ctx, accountID, bootstrapModel)
 		if startErr != nil {
 			manager.rebalanceMu.Lock()
-			delete(manager.openings, accountID)
-			close(opening)
+			manager.finishOpening(accountID, opening)
 			manager.rebalanceMu.Unlock()
 			return nil, startErr
 		}
@@ -1056,16 +1153,14 @@ func (manager *accountWorkerManager) ensureWorker(
 			manager.rebalanceMu.Lock()
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				discardErr := discardAccountWorker(pending)
-				delete(manager.openings, accountID)
-				close(opening)
+				manager.finishOpening(accountID, opening)
 				manager.rebalanceMu.Unlock()
 				return nil, errors.Join(ctxErr, discardErr)
 			}
 			evicted, evictionErr := manager.evictIdleWorker(ctx, victim)
 			if evictionErr == nil && evicted {
 				activationErr := activateAccountWorker(pending)
-				delete(manager.openings, accountID)
-				close(opening)
+				manager.finishOpening(accountID, opening)
 				warmCount := len(manager.WarmAccountIDs())
 				manager.rebalanceMu.Unlock()
 				if activationErr != nil {
@@ -1080,8 +1175,7 @@ func (manager *accountWorkerManager) ensureWorker(
 			}
 			if evictionErr != nil || ctx.Err() != nil {
 				discardErr := discardAccountWorker(pending)
-				delete(manager.openings, accountID)
-				close(opening)
+				manager.finishOpening(accountID, opening)
 				manager.rebalanceMu.Unlock()
 				return nil, errors.Join(evictionErr, ctx.Err(), discardErr)
 			}
@@ -1091,8 +1185,7 @@ func (manager *accountWorkerManager) ensureWorker(
 				if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
 					manager.rebalanceMu.Lock()
 					discardErr := discardAccountWorker(pending)
-					delete(manager.openings, accountID)
-					close(opening)
+					manager.finishOpening(accountID, opening)
 					manager.rebalanceMu.Unlock()
 					return nil, errors.Join(err, discardErr)
 				}
@@ -1293,7 +1386,7 @@ func (manager *accountWorkerManager) Close() error {
 			account.mu.Lock()
 			defer account.mu.Unlock()
 			if account.worker != nil || account.cleanupWorker != nil || account.runtimeLease != nil || account.cleanupLease != nil {
-				closeResults <- closeAccountWorker(account)
+				closeResults <- manager.closeAccountWorker(account)
 			}
 		}(account)
 	}
@@ -1306,7 +1399,7 @@ func (manager *accountWorkerManager) Close() error {
 	return errors.Join(closeErrors...)
 }
 
-func closeAccountWorker(account *accountWorker) error {
+func (manager *accountWorkerManager) closeAccountWorker(account *accountWorker) error {
 	var closeErrors []error
 	if account.worker != nil {
 		if closeErr := account.worker.Close(); closeErr != nil {
@@ -1339,6 +1432,7 @@ func closeAccountWorker(account *accountWorker) error {
 	}
 	if account.worker == nil && account.cleanupWorker == nil && account.runtimeLease == nil && account.cleanupLease == nil {
 		account.warm.Store(false)
+		manager.notifyScheduling()
 	}
 	return errors.Join(closeErrors...)
 }
@@ -1880,7 +1974,7 @@ func (service *trackedService) Models(context.Context) ([]aistudio.Model, error)
 
 func (service *trackedService) modelSnapshot() []aistudio.Model {
 	service.modelsMu.RLock()
-	models := append([]aistudio.Model(nil), service.models...)
+	models := append([]aistudio.Model{}, service.models...)
 	service.modelsMu.RUnlock()
 	return models
 }
@@ -2243,6 +2337,7 @@ func (service *trackedService) observedDataRequestContext(
 
 // CountTokens 返回上游权威输入 token 数
 func (service *trackedService) CountTokens(ctx context.Context, request aistudio.TokenCountRequest) (aistudio.TokenCount, error) {
+	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
 	if err != nil {
 		return aistudio.TokenCount{}, err
@@ -2256,6 +2351,7 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 // GenerateVideo 创建一个 Veo 长任务
 func (service *trackedService) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
 	api.SetAccessLogTarget(ctx, request.Model, "")
+	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
@@ -2401,6 +2497,15 @@ func (closer *trackedMediaReadCloser) Close() error {
 func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection) (*aistudio.AccountLease, error) {
 	fixedAccount := strings.TrimSpace(selection.AccountID) != "" || strings.TrimSpace(selection.ResourceID) != ""
 	failedWorkers := make(map[string]struct{})
+	var promoteFailure error
+	var waiter *dispatchWaiter
+	defer func() { service.workers.dispatch.leave(waiter) }()
+	wait := func(delay time.Duration) error {
+		if waiter == nil {
+			waiter = service.workers.dispatch.join(dispatchKey(selection))
+		}
+		return waitScheduling(ctx, waiter.wake, delay)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -2416,6 +2521,8 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		groups.WarmBusy = excludeAccountIDs(groups.WarmBusy, failedWorkers)
 		groups.StandbyReady = excludeAccountIDs(groups.StandbyReady, failedWorkers)
 		groups.StandbyBusy = excludeAccountIDs(groups.StandbyBusy, failedWorkers)
+		candidates := len(groups.WarmReady) + len(groups.WarmAvailable) + len(groups.WarmBusy) +
+			len(groups.StandbyReady) + len(groups.StandbyBusy)
 		standbyReady, opening := service.workers.withoutOpening(groups.StandbyReady)
 		groups.StandbyReady = standbyReady
 		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
@@ -2431,12 +2538,25 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 		}
 		if len(groups.StandbyReady) == 0 && opening {
-			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
+			if err := wait(schedulingRecheck); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.maxActive || service.workers.idleWarmVictim("") != "") {
+		warmCandidates := len(warmAvailable) + len(groups.WarmBusy)
+		if len(groups.StandbyReady) > 0 && len(active) < service.workers.maxActive && warmCandidates > 0 && !fixedAccount {
+			standby := groups.StandbyReady
+			if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
+				standby = cold
+			}
+			service.workers.expandInBackground(standby[0])
+			if err := wait(schedulingRecheck); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.maxActive ||
+			warmCandidates == 0 && service.workers.idleWarmVictim("") != "") {
 			standby := groups.StandbyReady
 			if len(active) < service.workers.maxActive {
 				if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
@@ -2454,11 +2574,12 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 				return nil, acquireErr
 			}
 			if lease == nil {
-				if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
+				if err := wait(schedulingRecheck); err != nil {
 					return nil, err
 				}
 				continue
 			}
+			workersChanged := service.workers.schedulingChanged()
 			_, promoteErr := service.workers.promote(ctx, accountID, selection.ModelID)
 			if promoteErr == nil {
 				return lease, nil
@@ -2469,25 +2590,58 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			if errors.Is(promoteErr, errAccountWorkerOpening) {
 				continue
 			}
+			if errors.Is(promoteErr, errAccountWorkerCapacity) {
+				if err := waitScheduling(ctx, workersChanged, schedulingRecheck); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if fixedAccount {
 				return nil, promoteErr
 			}
 			failedWorkers[accountID] = struct{}{}
+			promoteFailure = promoteErr
 			continue
 		}
 		if len(groups.WarmBusy) > 0 || len(groups.StandbyBusy) > 0 || opening {
-			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil {
+			if err := wait(schedulingRecheck); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		if !groups.EarliestCooldown.IsZero() {
-			if err := waitWarmCandidate(ctx, min(time.Until(groups.EarliestCooldown), 100*time.Millisecond)); err != nil {
+			if err := wait(min(time.Until(groups.EarliestCooldown), schedulingRecheck)); err != nil {
 				return nil, err
 			}
 			continue
 		}
+		if candidates > 0 {
+			if err := wait(schedulingRecheck); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if promoteFailure != nil {
+			return nil, promoteFailure
+		}
 		return nil, service.pool.NoEligibleError(selection)
+	}
+}
+
+// schedulingRecheck 为等待调度信号时的兜底复查间隔
+const schedulingRecheck = time.Second
+
+// waitScheduling 等待账户或 Worker 可调度状态变化、兜底复查或请求取消
+func waitScheduling(ctx context.Context, changed <-chan struct{}, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-changed:
+		return nil
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -2611,6 +2765,7 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.SetAccessLogGenerationInput(ctx, request)
 	api.StartAccessLog(ctx)
+	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
@@ -2646,12 +2801,7 @@ func (service *trackedService) generateWithRetry(
 	unbound := requestedAccountID == "" && resourceID == ""
 	fileBound := requestedAccountID == "" && resourceID != ""
 	if unbound || fileBound {
-		eligible := 0
-		for _, status := range service.pool.Status() {
-			if status.Enabled && (status.State == aistudio.AccountReady || status.State == aistudio.AccountBusy) {
-				eligible++
-			}
-		}
+		_, eligible := service.pool.EnabledAccounts()
 		if eligible > 1 {
 			maxAttempts = eligible
 		}
@@ -2684,9 +2834,10 @@ func (service *trackedService) generateWithRetry(
 			AccountID: selectionAccountID, ResourceID: selectionResourceID,
 		}
 		if (unbound || fileBound) && len(attempted) > 0 {
-			for _, status := range service.pool.Status() {
-				if _, exists := attempted[status.ID]; status.Enabled && !exists {
-					selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, status.ID)
+			enabled, _ := service.pool.EnabledAccounts()
+			for _, accountID := range enabled {
+				if _, exists := attempted[accountID]; !exists {
+					selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
 				}
 			}
 		}

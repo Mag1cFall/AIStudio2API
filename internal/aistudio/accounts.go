@@ -614,6 +614,34 @@ func accountSupportsSelection(account *Account, selection AccountSelection) bool
 	return false
 }
 
+// CanonicalModelID 把实时目录中的模型别名换成上游接受的正式模型 ID
+func (p *AccountPool) CanonicalModelID(modelID string) string {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	if p == nil || trimmed == "" {
+		return modelID
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	canonical := ""
+	for _, account := range p.accounts {
+		if account == nil {
+			continue
+		}
+		for _, model := range account.Models {
+			if model.ID == trimmed {
+				return modelID
+			}
+			if canonical == "" && modelMatchesID(model, trimmed) {
+				canonical = model.ID
+			}
+		}
+	}
+	if canonical == "" {
+		return modelID
+	}
+	return canonical
+}
+
 func modelMatchesID(model Model, modelID string) bool {
 	if model.ID == modelID {
 		return true
@@ -2458,6 +2486,44 @@ func (p *AccountPool) setAccountState(accountID string, state AccountState, reas
 	account.stateMessage = strings.TrimSpace(reason)
 	p.notifyLocked()
 	return nil
+}
+
+// EnabledAccounts 返回已启用账户 ID 与其中 ready 或 busy 的账户数量
+func (p *AccountPool) EnabledAccounts() ([]string, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	ids := make([]string, 0, len(p.accounts))
+	schedulable := 0
+	for _, account := range p.accounts {
+		if account == nil || !account.Config.Enabled {
+			continue
+		}
+		ids = append(ids, account.ID)
+		_, cooling := accountCooldown(account, "", now)
+		if account.exclusive || account.authRefreshers > 0 || account.active > 0 || account.State == AccountReady && !cooling {
+			schedulable++
+		}
+	}
+	return ids, schedulable
+}
+
+// Activity 返回账户是否存在活动租约或独占操作及最近使用时间
+func (p *AccountPool) Activity(accountID string) (bool, time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[accountID]
+	if account == nil {
+		return false, time.Time{}
+	}
+	return account.exclusive || account.authRefreshers > 0 || account.active > 0, account.LastUsed
+}
+
+// Changed 返回账户池下一次租约或状态变化时关闭的通道
+func (p *AccountPool) Changed() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.changed
 }
 
 func (p *AccountPool) notifyLocked() {

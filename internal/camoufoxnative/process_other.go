@@ -15,6 +15,11 @@ func configureBrowserProcess(command *exec.Cmd, _ bool) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+// attachBrowserProcess 在非 Windows 平台由进程组负责回收
+func attachBrowserProcess(*exec.Cmd) error {
+	return nil
+}
+
 // terminateBrowserProcess 结束 Camoufox 进程组
 func terminateBrowserProcess(ctx context.Context, command *exec.Cmd) error {
 	if command == nil || command.Process == nil {

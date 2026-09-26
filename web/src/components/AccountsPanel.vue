@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { api } from '@/api'
+import { confirmAction } from '@/confirm'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { Account, AccountDraft, AccountState, ChromeImportProfile } from '@/types'
 import UiIcon from './UiIcon.vue'
@@ -156,6 +157,7 @@ async function saveAccount(): Promise<void> {
     await api.updateAccount(editingAccountID.value, { ...draft })
     closeEditor()
     emit('refresh')
+    emit('notice', t('accounts.saved'), 'success')
   } catch (error) {
     actionError(error)
   } finally {
@@ -192,6 +194,11 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
       await api.verifyAccount(account.id)
     }
     emit('refresh')
+    emit(
+      'notice',
+      t(action === 'login' ? 'accounts.loginComplete' : 'accounts.verified'),
+      'success',
+    )
   } catch (error) {
     actionError(error)
   } finally {
@@ -201,11 +208,12 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
 
 // removeAccount 删除用户确认的账户
 async function removeAccount(account: Account): Promise<void> {
-  if (!window.confirm(t('accounts.deleteConfirm'))) return
+  if (!(await confirmAction(t('accounts.deleteConfirm'), t('common.delete')))) return
   pendingAction.value = `delete:${account.id}`
   try {
     await api.deleteAccount(account.id)
     emit('refresh')
+    emit('notice', t('accounts.deleted'), 'success')
   } catch (error) {
     actionError(error)
   } finally {
@@ -225,6 +233,7 @@ async function removeAccount(account: Account): Promise<void> {
           class="flex items-center gap-2 rounded border border-[#30363d] bg-[#21262d] px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-[#30363d] disabled:opacity-50"
           type="button"
           :disabled="pendingAction !== ''"
+          :aria-busy="pendingAction === 'chrome-discover'"
           @click="openChromeImport"
         >
           <UiIcon name="accounts" :size="15" />
@@ -335,6 +344,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="rounded border border-[#30363d] bg-[#21262d] px-3 py-1 text-xs text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== ''"
+              :aria-busy="pendingAction === `toggle:${account.id}`"
               @click="toggleAccount(account)"
             >
               {{ t(account.enabled ? 'common.disable' : 'common.enable') }}
@@ -344,6 +354,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="rounded bg-green-600 px-3 py-1 text-xs text-white transition hover:bg-green-500 disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== '' || !account.enabled"
+              :aria-busy="pendingAction === `login:${account.id}`"
               @click="runAccountAction(account, 'login')"
             >
               {{ t('common.relogin') }}
@@ -352,6 +363,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="rounded border border-[#30363d] bg-[#21262d] px-3 py-1 text-xs text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== '' || !account.enabled"
+              :aria-busy="pendingAction === `verify:${account.id}`"
               @click="runAccountAction(account, 'verify')"
             >
               {{ t('common.verify') }}
@@ -360,6 +372,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== ''"
+              :aria-busy="pendingAction === `delete:${account.id}`"
               @click="removeAccount(account)"
             >
               {{ t('common.delete') }}
@@ -437,6 +450,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
               type="submit"
               :disabled="pendingAction !== ''"
+              :aria-busy="pendingAction.startsWith('edit:')"
             >
               {{ t('common.save') }}
             </button>
@@ -508,6 +522,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
               type="submit"
               :disabled="pendingAction !== ''"
+              :aria-busy="pendingAction === 'browser-login'"
             >
               {{ t('accounts.browserLogin') }}
             </button>
@@ -612,6 +627,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
               type="submit"
               :disabled="pendingAction !== '' || selectedChromeProfiles.length === 0"
+              :aria-busy="pendingAction === 'chrome-import'"
             >
               {{ t('accounts.importSelected') }}
             </button>

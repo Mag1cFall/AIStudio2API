@@ -159,7 +159,19 @@ func rootHandler(apiHandler http.Handler) http.Handler {
 	root.Handle("/v1/", apiHandler)
 	root.Handle("/v1beta/", apiHandler)
 	root.Handle("/", webui.Handler())
-	return root
+	return securityHeaders(root)
+}
+
+// securityHeaders 禁止页面被其他站点嵌入并关闭 MIME 嗅探与 Referer
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		header.Set("X-Frame-Options", "DENY")
+		header.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // browserAddress 将通配监听地址转换为本机可访问地址
