@@ -86,6 +86,7 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicModels(w, models)
 		return
 	}
+	models = aistudio.ModelsWithSearchAliases(models)
 	data := make([]map[string]any, 0, len(models))
 	for _, model := range models {
 		item := map[string]any{
@@ -132,7 +133,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	events, err := s.service.Generate(r.Context(), generateRequest)
+	events, err := s.generate(r.Context(), generateRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())

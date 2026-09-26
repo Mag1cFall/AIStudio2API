@@ -164,7 +164,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		instructions = append(instructions, inlineInstructions...)
 		generateRequest.System = strings.Join(instructions, "\n")
 	}
-	events, err := s.service.Generate(r.Context(), generateRequest)
+	events, err := s.generate(r.Context(), generateRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
