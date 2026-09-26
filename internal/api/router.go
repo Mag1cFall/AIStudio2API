@@ -16,16 +16,17 @@ type Config struct {
 }
 
 type server struct {
-	service        aistudio.Service
-	config         Config
-	responseStates *responseStateStore
+	service           aistudio.Service
+	config            Config
+	responseStates    *responseStateStore
+	thoughtSignatures *thoughtSignatureStore
 }
 
 var idSequence atomic.Uint64
 
 // NewHandler 创建公开 API 路由
 func NewHandler(service aistudio.Service, config Config) http.Handler {
-	s := &server{service: service, config: config, responseStates: newResponseStateStore()}
+	s := &server{service: service, config: config, responseStates: newResponseStateStore(), thoughtSignatures: newThoughtSignatureStore()}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	public.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)

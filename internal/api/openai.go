@@ -132,6 +132,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	s.thoughtSignatures.Restore(generateRequest.Contents)
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -151,6 +152,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.thoughtSignatures.Remember(result.toolCalls)
 	writeJSON(w, http.StatusOK, buildChatCompletion(requestID, created, request.Model, result))
 }
 
@@ -245,18 +247,11 @@ func chatMessageContent(message chatMessage) (aistudio.Content, error) {
 		if !json.Valid(arguments) {
 			return aistudio.Content{}, fmt.Errorf("tool call %q arguments must be JSON", call.Function.Name)
 		}
-		signature := call.ExtraContent.Google.ThoughtSignature
-		if signature == "" {
-			// A client that does not echo extra_content (every ordinary
-			// OpenAI client, litellm included) still gets its round trip:
-			// the signature was kept when this call was emitted.
-			signature = thoughtSignatureFor(call.ID)
-		}
 		parts = append(parts, aistudio.Part{FunctionCall: &aistudio.FunctionCall{
 			ID:               call.ID,
 			Name:             call.Function.Name,
 			Arguments:        arguments,
-			ThoughtSignature: signature,
+			ThoughtSignature: call.ExtraContent.Google.ThoughtSignature,
 		}})
 	}
 	return aistudio.Content{Role: role, Parts: parts}, nil
@@ -691,7 +686,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 				return nil
 			}
 			call := event.ToolCall
-			rememberThoughtSignature(call.ID, call.ThoughtSignature)
+			s.thoughtSignatures.Remember([]aistudio.FunctionCall{*call})
 			toolCall := map[string]any{
 				"index": toolIndex,
 				"id":    call.ID,
@@ -812,7 +807,6 @@ func openAIFinishReason(reason string, hasTools bool) string {
 }
 
 func openAIToolCallOutput(calls []aistudio.FunctionCall) []map[string]any {
-	rememberThoughtSignatures(calls)
 	output := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {
 		item := map[string]any{
