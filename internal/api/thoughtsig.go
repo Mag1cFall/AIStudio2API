@@ -1,75 +1,72 @@
 package api
 
-// Gemini 3 refuses a functionCall that comes back in history without the
-// thought signature it was issued with:
-//
-//	AI Studio GenerateContent 返回 HTTP 400、协议错误码 3:
-//	[original: beyond::dependency::INVALID_ARGUMENT]
-//	Function call is missing a thought signature. (qos=CRITICAL_PLUS)
-//
-// The signature does reach the client - this proxy hands it over as
-// extra_content.google.thought_signature on every tool call - but no ordinary
-// OpenAI client (OpenAI SDKs, litellm, most agent frameworks) echoes unknown
-// fields back. By the next turn of a tool round trip the signature is gone,
-// so every agent loop dies on the second request while both tool-call checks
-// pass.
-//
-// Keep it server-side instead, keyed by the tool call id the client saw, and
-// put it back when the assistant message comes home without one. A client that
-// does echo extra_content still wins: chatMessageContent only consults this
-// store when the field is missing, and a call this process never emitted still
-// falls through to the skip_thought_signature_validator placeholder in
-// internal/aistudio/request.go.
-
 import (
+	"bytes"
+	"encoding/json"
 	"sync"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// thoughtSignatureLimit bounds the store. Tool call ids are unique per call
-// and a client only ever echoes back ids from the recent past, so a plain FIFO
-// cap is enough - it keeps a long-lived process from growing one entry per
-// tool call forever.
-const thoughtSignatureLimit = 1024
+// thoughtSignatureCapacity 是 Chat 工具调用思考签名的保留条数
+const thoughtSignatureCapacity = 4096
 
-var thoughtSignatures = struct {
-	mu      sync.Mutex
-	entries map[string]string
-	order   []string
-}{entries: make(map[string]string)}
-
-func rememberThoughtSignature(id, signature string) {
-	if id == "" || signature == "" {
-		return
-	}
-	thoughtSignatures.mu.Lock()
-	defer thoughtSignatures.mu.Unlock()
-	if _, seen := thoughtSignatures.entries[id]; !seen {
-		thoughtSignatures.order = append(thoughtSignatures.order, id)
-	}
-	thoughtSignatures.entries[id] = signature
-	for len(thoughtSignatures.order) > thoughtSignatureLimit {
-		oldest := thoughtSignatures.order[0]
-		thoughtSignatures.order = thoughtSignatures.order[1:]
-		delete(thoughtSignatures.entries, oldest)
-	}
+// thoughtSignatureStore 保存本进程 Chat 响应中工具调用的思考签名
+type thoughtSignatureStore struct {
+	mu         sync.Mutex
+	signatures map[string]string
+	order      []string
 }
 
-func thoughtSignatureFor(id string) string {
-	if id == "" {
-		return ""
-	}
-	thoughtSignatures.mu.Lock()
-	defer thoughtSignatures.mu.Unlock()
-	return thoughtSignatures.entries[id]
+func newThoughtSignatureStore() *thoughtSignatureStore {
+	return &thoughtSignatureStore{signatures: make(map[string]string)}
 }
 
-// rememberThoughtSignatures stores every signed call of one model response.
-// Calls the model did not sign are skipped, so a parallel response can leave
-// some ids unknown - that is the model's choice, not something to invent here.
-func rememberThoughtSignatures(calls []aistudio.FunctionCall) {
+// Remember 保存一次响应中带签名的工具调用
+func (store *thoughtSignatureStore) Remember(calls []aistudio.FunctionCall) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	for _, call := range calls {
-		rememberThoughtSignature(call.ID, call.ThoughtSignature)
+		if call.ID == "" || call.ThoughtSignature == "" {
+			continue
+		}
+		key := thoughtSignatureKey(call)
+		if _, exists := store.signatures[key]; !exists {
+			store.order = append(store.order, key)
+		}
+		store.signatures[key] = call.ThoughtSignature
 	}
+	for len(store.order) > thoughtSignatureCapacity {
+		delete(store.signatures, store.order[0])
+		store.order = store.order[1:]
+	}
+}
+
+// Restore 为客户端未回传签名的历史工具调用补回本进程保存的签名
+func (store *thoughtSignatureStore) Restore(contents []aistudio.Content) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			call := part.FunctionCall
+			if call == nil || call.ID == "" || call.ThoughtSignature != "" || part.ThoughtSignature != "" {
+				continue
+			}
+			call.ThoughtSignature = store.signatures[thoughtSignatureKey(*call)]
+		}
+	}
+}
+
+// thoughtSignatureKey 以调用 ID、函数名和规范化参数标识一次工具调用
+func thoughtSignatureKey(call aistudio.FunctionCall) string {
+	arguments := []byte(call.Arguments)
+	decoder := json.NewDecoder(bytes.NewReader(arguments))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) == nil {
+		if canonical, err := json.Marshal(value); err == nil {
+			arguments = canonical
+		}
+	}
+	return call.ID + "\x00" + call.Name + "\x00" + string(arguments)
 }
