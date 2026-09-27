@@ -39,10 +39,17 @@ var configKeys = [...]string{
 	"ROUTING_STRATEGY",
 	"UPSTREAM_CHANNELS",
 	"TEMPORARY_CHAT",
+	"WAA_BACKEND",
 }
 
 // upstreamChannels 表示生成请求可启用的上游通道
 var upstreamChannels = []string{"playground", "build"}
+
+// WAABackendCamoufox 表示由 Camoufox 页面承担 WAA 生命周期
+const WAABackendCamoufox = "camoufox"
+
+// WAABackendGo 表示由纯 Go VM 承担 WAA 生命周期
+const WAABackendGo = "go"
 
 // Config 保存服务的全局配置
 type Config struct {
@@ -59,6 +66,7 @@ type Config struct {
 	RoutingStrategy        string        `json:"routing_strategy"`
 	UpstreamChannels       []string      `json:"upstream_channels"`
 	TemporaryChat          bool          `json:"temporary_chat"`
+	WAABackend             string        `json:"waa_backend"`
 }
 
 // Default 返回可直接启动的默认配置
@@ -74,6 +82,7 @@ func Default() Config {
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
 		UpstreamChannels:       append([]string(nil), upstreamChannels...),
+		WAABackend:             WAABackendCamoufox,
 	}
 }
 
@@ -150,6 +159,9 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("TEMPORARY_CHAT 必须是 true 或 false")
 		}
 	}
+	if value, ok := values["WAA_BACKEND"]; ok {
+		cfg.WAABackend = strings.ToLower(strings.TrimSpace(value))
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -175,6 +187,7 @@ func (c Config) Save(path string) error {
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
+		"WAA_BACKEND":              c.WAABackend,
 	}
 
 	var output strings.Builder
@@ -221,6 +234,9 @@ func (c Config) Validate() error {
 	}
 	if err := validateUpstreamChannels(c.UpstreamChannels); err != nil {
 		return err
+	}
+	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
+		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
 	}
 	return nil
 }
@@ -274,6 +290,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
+		WAABackend             string   `json:"waa_backend"`
 	}
 	return json.Marshal(payload{
 		AuthStates:             c.AuthStates,
@@ -289,6 +306,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		RoutingStrategy:        c.RoutingStrategy,
 		UpstreamChannels:       c.UpstreamChannels,
 		TemporaryChat:          c.TemporaryChat,
+		WAABackend:             c.WAABackend,
 	})
 }
 
@@ -308,6 +326,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
+		WAABackend             string   `json:"waa_backend"`
 	}
 	var value payload
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -335,6 +354,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
 		TemporaryChat:          value.TemporaryChat,
+		WAABackend:             strings.ToLower(strings.TrimSpace(value.WAABackend)),
 	}
 	if err := parsed.Validate(); err != nil {
 		return err

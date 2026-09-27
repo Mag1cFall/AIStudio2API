@@ -15,7 +15,8 @@
 
 <p>
   Playground + Build 双额度通道 &nbsp;•&nbsp;
-  多账户高并发<br>
+  多账户高并发 &nbsp;•&nbsp;
+  Camoufox 与纯 Go 双 WAA 后端<br>
   Claude Code、Codex 等 7 款 agent 客户端实测 &nbsp;•&nbsp;
   Nano Banana、Veo、TTS 与 Omni
 </p>
@@ -28,6 +29,7 @@
 
 - **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；实测同一账户 Playground 触发每日限额后，同一请求由 Build 完成
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用；实测 28 个账户下 200 个并发请求全部返回完整正文，热态 60 至 74 秒完成，服务进程常驻约 180 MB
+- **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=go` 后由纯 Go 生成官方 proof，运行时不下载、不启动浏览器
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Anthropic 官方 SDK 23 个场景实测通过
 - **主流 agent 客户端**: Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的读写文件工具往返均实测通过，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
@@ -414,6 +416,7 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `UPSTREAM_CHANNELS` | `playground,build` | 生成请求使用的上游通道，可只保留其一 |
+| `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制启动预热并发，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。
@@ -454,6 +457,7 @@ cp .env.example .env
 
 - [开发与贡献](docs/development.md)
 - [Google AI Studio 协议规范](docs/protocol.md)
+- [WAA 实现](docs/waa.md)
 - [Build 通道](docs/build.md)
 - [运行日志说明](docs/logging.md)
 - [可复用逆向开发指南](docs/reverse-engineering.md)
@@ -465,6 +469,8 @@ cp .env.example .env
 本项目使用 [Camoufox](https://camoufox.com/) 浏览器来降低被检测为自动化脚本的风险。Camoufox 基于 Firefox，通过修改底层实现来保持真实的设备指纹。
 
 Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS/HTTP2、请求头、Cookie 与页面指纹。
+
+`WAA_BACKEND=go` 时，WAA 在服务进程内运行，按账户指纹模拟 Firefox 页面环境并以 Firefox 请求头直接发送，运行时不下载也不启动 Camoufox。账户页的浏览器登录仍使用 Camoufox，首次登录时按需准备。
 
 ### 使用限制
 
@@ -523,12 +529,7 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 - ✅ **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
 - ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性
 
-### 纯协议 WAA 运行时
+### 纯 Go WAA 运行时
 
-目标是完整逆向并复现 WAA VM，由 Go 独立执行 dynamic program、interpreter、challenge、persistent state、snapshot 与 proof 全链路。最终生产运行期只保留 Go 协议实现，无 Camoufox 进程、DOM 环境和 AI Studio 前端 bundle 依赖。
-
-| 阶段 | 交付内容 |
-| --- | --- |
-| 协议固化 | 归档 dynamic program、challenge、状态迁移、snapshot 与 proof 的完整输入输出，建立可重复验证的协议样本 |
-| Go 执行器 | 实现 dynamic program 加载、interpreter、challenge 求值、persistent state、snapshot 恢复与 proof 生成，并与协议样本逐项一致 |
-| 运行时切换 | 将账户初始化和 proof 刷新接入 Go 原生运行时，通过全部已知 challenge 验证后删除 Camoufox、DOM 与前端 bundle 运行链路 |
+- ✅ **纯 Go 后端**: `WAA_BACKEND=go` 在服务进程内执行官方 interpreter 与 program，按账户指纹模拟 Firefox 页面环境，运行时不下载、不启动 Camoufox；账户登录仍使用 Camoufox
+- **Firefox 引擎细节**: 补齐 `Intl` 格式化、正则字面量的全局解析时机与 `RegExp.prototype` 的 Symbol 键顺序

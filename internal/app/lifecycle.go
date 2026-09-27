@@ -456,6 +456,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency, TemporaryChat: value.TemporaryChat,
 		RoutingStrategy: value.RoutingStrategy, UpstreamChannels: value.UpstreamChannels,
+		WAABackend: value.WAABackend,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -464,7 +465,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
 		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
 		saved.RoutingStrategy == active.RoutingStrategy &&
-		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels)
+		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

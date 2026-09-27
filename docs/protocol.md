@@ -19,13 +19,13 @@ MakerSuite 请求使用以下公共头：
 | Header | 来源 |
 | --- | --- |
 | `content-type` | 固定为 `application/json+protobuf` |
-| `user-agent` | 当前账户 Camoufox 官网请求 |
+| `user-agent` | 账户固定指纹的 Firefox UA |
 | `x-user-agent` | 官网 gRPC-Web 标识 |
 | `x-goog-api-key` | AI Studio 首页或当前官网请求动态值 |
 | `x-goog-authuser` | 当前账户官网请求 |
 | `x-aistudio-visit-id` | 首页初始化或当前官网请求 |
 | `x-aistudio-g1-tier` | `GetAiStudioBenefitTier` 返回值映射为 `TIER0`、`TIER1` 或 `TIER2` |
-| `x-goog-ext-519733851-bin` | 当前官网请求动态值 |
+| `x-goog-ext-519733851-bin` | 当前官网请求动态值；纯 Go WAA 后端由 `GetLoggingContext` 编码 |
 | `authorization` | 三段 SAPISID 签名 |
 | `cookie` | 当前账户对目标 RPC 可见的 Cookie |
 | `origin`、`referer` | `https://aistudio.google.com` |
@@ -33,7 +33,7 @@ MakerSuite 请求使用以下公共头：
 
 请求头 `x-goog-api-key` 是 AI Studio 页面使用的动态公共值，与用户创建的 Google Cloud API key 不同；免费网页链仍依赖 Cookie、SAPISID 签名和 WAA proof。
 
-受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS、HTTP/2、请求头、Cookie 与页面指纹；其他 MakerSuite 与 Drive 请求使用同账户固定出口的 Go HTTP transport。
+受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS、HTTP/2、请求头、Cookie 与页面指纹；其他 MakerSuite 与 Drive 请求使用同账户固定出口的 Go HTTP transport。`WAA_BACKEND=go` 时受保护请求由服务进程以 Firefox 152 网络形状经同一固定出口发送，见 [WAA 实现](waa.md)。
 
 JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始，protobuf field 从 `1` 开始，因此 field `N` 对应索引 `N-1`。Google 响应允许省略空槽并形成 `[,value]`；解码器先把省略槽规范化为 `null`，再从完整 JSON 根值中提取 repeated message。HTTPS chunk 仅提供字节序列，业务事件起止由数组结构确定。
 
@@ -188,93 +188,30 @@ Waa/Create
   -> decode challenge
   -> load interpreter by current hash
   -> initialize official VM lifecycle
-  -> expose official snapshot service
   -> SHA-256(binding prompt) as lowercase hex
   -> snapshot({TYb:{content:<DIGEST>}})
   -> write fresh proof into request
-  -> fingerprinted Camoufox page sends MakerSuite RPC
+  -> send protected MakerSuite RPC
 ```
 
-`Waa/Create` 响应第二槽经 Base64 解码后，对每个字节加 `97` 得到 challenge。归一化后的 Challenge 对象字段如下：
+`WAA_BACKEND=camoufox` 时官方 VM 运行在账户固定指纹的 Camoufox 页面，受保护请求由页面原生 `fetch` 发送；`WAA_BACKEND=go` 时 VM 运行在服务进程内的 goja 与 Firefox 形状宿主中，受保护请求由 Go HTTP 以 Firefox 152 网络形状发送。bootstrap、challenge 解码、解释器、初始化参数、宿主、生命周期、失败处理与上游变化的定位方法见 [WAA 实现](waa.md)。
+
+`Waa/Create` 请求是 JSON+protobuf 数组。Worker 启动时只带 request key，VM 刷新时追加当前 interpreter hash 与上一 VM 的无绑定 snapshot：
 
 ```json
-{
-  "messageId": "<MESSAGE_ID>",
-  "globalName": "<GLOBAL_NAME>",
-  "interpreterHash": "<INTERPRETER_HASH>",
-  "interpreterUrl": "https://www.google.com/js/bg/<INTERPRETER_HASH>.js",
-  "program": "<DYNAMIC_PROGRAM>"
-}
+["lmnUSbltwc5ULv48iKLX"]
+["lmnUSbltwc5ULv48iKLX", "<INTERPRETER_HASH>", "<PREVIOUS_SNAPSHOT>"]
 ```
 
-`Waa/Create` 请求是三槽 JSON+protobuf 数组：
-
-```json
-["lmnUSbltwc5ULv48iKLX", null, null]
-```
-
-| protobuf field | 内容 |
-| ---: | --- |
-| 1 | bundle 固定 request key `lmnUSbltwc5ULv48iKLX` |
-| 2 | 缓存的 interpreter hash 或 null |
-| 3 | 前一轮 empty snapshot 或 null |
-
-cold Create 固定使用上面的三个槽。下载 interpreter 后计算 SHA-256，并使用 Base64URL 无 padding 编码；结果必须等于 challenge 的 interpreter hash。一份 fresh challenge 复核样例包含 33,695 个字符的 program 与 65,831 字节的 interpreter，下载内容摘要与 challenge hash 相等。
-
-`Waa/Create` 响应外层索引 `1` 是 Base64 challenge。Base64 解码后对每个字节加 `97`，再把结果解析为稀疏数组：
-
-| JSON 索引 | 内容 |
-| ---: | --- |
-| 0 | message ID |
-| 1 | interpreter JavaScript 列表，取第一个非空字符串 |
-| 2 | interpreter 路径列表，取第一个非空字符串并补全 `https:` |
-| 3 | interpreter hash |
-| 4 | dynamic program |
-| 5 | global function name |
-| 6 | 未识别槽，原样保留 |
-| 7 | client experiments state blob |
-
-```json
-[
-  "<MESSAGE_ID>",
-  ["<INTERPRETER_JAVASCRIPT>"],
-  ["//www.google.com/js/bg/<INTERPRETER_HASH>.js"],
-  "<INTERPRETER_HASH>",
-  "<DYNAMIC_PROGRAM>",
-  "<GLOBAL_NAME>",
-  null,
-  "<CLIENT_EXPERIMENTS_STATE_BLOB>"
-]
-```
-
-`program` 与 challenge 属于当前 Create 生命周期，interpreter 按 hash 缓存。proof 绑定当前 prompt 摘要与 VM 内部状态，每个请求生成新的 proof。
-
-生成服务启动时按配置的常驻数与启动并发数预热账户 WAA runtime：
-
-1. Go 启动隔离、无头 Camoufox，并通过原生 WebDriver BiDi 建立 session
-2. 写入账户 Cookie 与 localStorage，先尝试实时目录中的 `gemini-flash-latest`，再按目录顺序尝试其余支持 generateContent、账户权益和 chat model 能力的模型；`TEMPORARY_CHAT=true` 时 URL 携带 `temporary=true`
-3. 定位页面 bundle 中调用 `.snapshot({` 且包含 `content` 的官方高层函数
-4. 为官网 `GenerateContent` 安装 `beforeRequestSent` BiDi 拦截，再填入唯一 bootstrap prompt 并执行官网 Run
-5. 页面调用官方 snapshot 时保存 WAA service；请求进入拦截阶段后保存动态头并通过 `network.failRequest` 在浏览器内终止
-6. 后续业务请求先把 binding prompt 同步到官网页面，再串行调用同一 service 获取 fresh proof
-7. `GenerateContent` 写入 field 5，并通过同一 Camoufox 页面原生 `fetch` 发送；响应流经 WebDriver BiDi 分块交回 Go
-8. `GenerateVideo` 写入 field 8，正文继续由 Go HTTP transport 发送
-
-运行时将 `gemini-flash-latest` 作为首选 bootstrap model；该别名未出现在实时目录时，使用首个支持文本生成的聊天模型。
-
-Camoufox 负责官方 VM、WAA proof 与 `GenerateContent` 原生网络发送；Go 负责协议编码、账户调度、增量解码和公开 API。运行期依赖 Go 与 Camoufox。官方 VM 初始化参数顺序为：
-
-```javascript
-initialize(program, ready, true, environment, passEvent, signalLists, persistentState, false, loggers)
-```
-
-`passEvent` 是解释器事件回调，`signalLists` 为两组 signal callback，`persistentState` 是当前 challenge 生命周期的状态输入，`loggers` 是四个 logger callback。VM 生命周期参数为 `43,200,000ms`，检查间隔为 `300,000ms`。页面生命周期中断、snapshot 错误、计时器到期、认证续签或进程关闭会使 runtime 失效，下一次请求重新 bootstrap。bundle 定义 `Waa/Create` 与 `Waa/Ping`；页面初始化调用 Create，业务请求 proof 由 snapshot 生成。
+响应外层索引 `1` 是 Base64 challenge，解码后每个字节加 `97`，得到 message ID、interpreter、program、全局函数名与 client experiments 状态。interpreter 按 hash 缓存，摘要为 SHA-256 的 Base64URL 无 padding 编码；program 属于当前 Create 生命周期，proof 绑定当前 prompt 摘要与 VM 内部状态，每个请求生成新的 proof。
 
 snapshot 的底层输入是四槽数组，首槽承载 binding：
 
 ```javascript
 [{content: sha256(bindingPrompt)}, undefined, undefined, undefined]
 ```
+
+返回值是 `!` 开头的 proof。`GenerateContent` 与 `CreateInteractionStream` 写入 field 5，Build 代理写入 field 3，`GenerateVideo` 写入 field 8，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。各 RPC 的 binding prompt 见 [WAA 实现](waa.md)，GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
 
 `Waa/Ping` 请求和成功响应：
 
@@ -285,21 +222,7 @@ snapshot 的底层输入是四槽数组，首槽承载 binding：
 
 field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损坏 proof、省略 field 2、错误 request key 与无账户认证均可返回 HTTP 200 和 `[]`。Ping 成功表示 WAA RPC、API consumer identity 与字段类型可达；Worker VM、snapshot proof、binding、账户会话、模型资格和 GenerateContent 接受状态由实际受保护业务 RPC 判定。
 
-Bootstrap 使用的 `GenerateContent` 在发往上游前终止，模型输出量为零。一个账户 Worker 为该账户的所有普通生成模型提供 proof，业务模型切换直接复用当前 Worker。临时对话关闭预热页的自动保存。
-
-取消 Worker 启动会关闭 BiDi、终止 Camoufox 进程树并删除临时 profile。页面状态识别 Google 登录跳转与网页 Cookie 拒绝条；其他页面状态返回包含当前 URL 的启动错误。
-
-同一账户的 snapshot 必须串行。GenerateContent 的 binding prompt 按 contents 和 parts 的原顺序展开，再以单个空格连接：
-
-| Part | 写入 binding prompt 的值 |
-| --- | --- |
-| text | 原始文本 |
-| inline data | 原始二进制的标准 Base64 |
-| external media | 空字符串 |
-| Drive file | file ID |
-| function、function result、code、thought signature | 空字符串 |
-
-binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prompt 的 SHA-256 小写十六进制摘要交给官方 snapshot，返回值是 `!` 开头的字符串；编码器随后把 proof 写入目标 protobuf field，原请求的其他槽位保持不变。worker 状态为 `starting`、`bootstrapping`、`ready`、`busy`、`closing`、`closed` 和 `failed`。
+生成服务启动时按配置的常驻数与启动并发数预热账户 WAA Worker。一个账户 Worker 为该账户的所有普通生成模型提供 proof，业务模型切换直接复用当前 Worker；同一账户的 snapshot 串行执行。
 
 ## 4. ListModels、CountTokens 与 GenerateContent 请求
 

@@ -10,7 +10,7 @@ AI Studio 网页将认证、JSON+protobuf RPC、WAA 内容证明和 WebChannel �
 | --- | --- | --- | --- |
 | 认证 | Cookie、SAPISID、DBSC、Authorization、动态请求头 | `internal/chromeauth`、`internal/aistudio/auth.go`、`internal/aistudio/transport_http.go` | 可发送的账户状态与请求头 |
 | 权益与目录 | BenefitTier、ListModels、AccessModes、方法与能力码 | `internal/aistudio/benefit.go`、`internal/aistudio/models.go` | 每账户完整模型目录、权益与能力字段 |
-| WAA | 官网高层 snapshot service、binding prompt digest、proof | `internal/camoufoxnative`、`internal/aistudio/runtime_native.go` | 与 binding prompt 的 SHA-256 绑定的 fresh proof |
+| WAA | 官网高层 snapshot service 或纯 Go BotGuard VM、binding prompt digest、proof | `internal/camoufoxnative`、`internal/waa`、`internal/aistudio/runtime_native.go`、`internal/aistudio/runtime_go.go` | 与 binding prompt 的 SHA-256 绑定的 fresh proof |
 | 请求编码 | 稀疏 JSON+protobuf 数组、媒体与工具字段 | `internal/aistudio/generate.go`、`internal/aistudio/tools.go` | MakerSuite 请求正文 |
 | 传输 | HTTP、SSE、WebChannel、Cookie 写回 | `internal/aistudio/transport_http.go`、`internal/aistudio/webchannel.go` | 原始增量帧 |
 | 统一事件 | text、reasoning、tool、media、usage、finish、error | `internal/aistudio/event.go`、`internal/aistudio/bidi.go` | 与客户端协议无关的事件流 |
@@ -146,7 +146,7 @@ func WireField(values []json.RawMessage, field int) (json.RawMessage, bool) {
 
 ## 3. WAA 运行时
 
-受保护请求的完整链路如下。Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入：
+受保护请求的完整链路如下。`WAA_BACKEND=camoufox` 时 Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入；`WAA_BACKEND=go` 时这些环节由服务进程内的 goja 与 Firefox 形状宿主执行。两种后端的实现规格见 [WAA 实现](waa.md)：
 
 ```text
 Waa/Create
@@ -164,65 +164,26 @@ Waa/Create
 
 ### Challenge
 
-`Waa/Create` 请求为 `["lmnUSbltwc5ULv48iKLX",interpreterHash|null,previousEmptySnapshot|null]`。cold 请求固定保留三个槽并在后两槽使用 null。interpreter 下载后以 SHA-256 + Base64URL 无 padding 计算摘要，摘要必须等于 challenge hash。previous empty snapshot 属于下一次 Create 的持久输入。一份 fresh challenge 复核样例包含 33,695 个字符的 program 与 65,831 字节的 interpreter。
+`Waa/Create` 请求 field 1 为 request key `lmnUSbltwc5ULv48iKLX`，field 2、3 为当前 VM 的 interpreter hash 与无绑定 snapshot；Worker 启动时只设置 field 1，请求为 `["lmnUSbltwc5ULv48iKLX"]`。interpreter 下载后以 SHA-256 + Base64URL 无 padding 计算摘要，摘要必须等于 challenge hash。一份 fresh challenge 复核样例包含 33,695 个字符的 program 与 65,831 字节的 interpreter。
 
-`Waa/Create` 响应的第二槽是 Base64 字符串。解码后每个字节加 `97`，结果是 challenge 数组。解码结果包含：
+`Waa/Create` 响应的第二槽是 Base64 字符串。解码后每个字节加 `97`，结果是 challenge 数组，字段表见 [WAA 实现](waa.md)。
 
-| JSON 索引 | 字段 |
-| ---: | --- |
-| 0 | `MessageID` |
-| 1 | `InterpreterJavaScript` 列表 |
-| 2 | interpreter URL path 列表 |
-| 3 | `InterpreterHash` |
-| 4 | `Program` |
-| 5 | `GlobalName` |
-| 6 | 未识别槽 |
-| 7 | `ClientExperimentsStateBlob` |
-
-```go
-// Challenge 保存一次 Waa/Create 生命周期
-type Challenge struct {
-	MessageID                  string
-	InterpreterJavaScript      string
-	InterpreterURL             string
-	InterpreterHash            string
-	Program                    string
-	GlobalName                 string
-	ClientExperimentsStateBlob string
-}
-```
-
-interpreter 可以按 hash 缓存。program、message ID、实验状态和 snapshot 状态属于当前 challenge 生命周期。每次从 challenge 读取全局函数名称。
-
-初始化调用的参数顺序：
-
-```javascript
-initialize(
-  program,
-  readyCallback,
-  true,
-  environment,
-  passEvent,
-  signalLists,
-  persistentState,
-  false,
-  loggers
-)
-```
-
-program、environment、passEvent、signal lists、persistent state、callback Realm 和两个 boolean 都参与状态推进。loggers 是四个回调。生命周期时长为 43,200,000ms，检查间隔为 300,000ms。
+interpreter 可以按 hash 缓存。program、message ID、实验状态和 snapshot 状态属于当前 challenge 生命周期。每次从 challenge 读取全局函数名称。初始化参数、signal lists 与 persistent state 的派生规则见 [WAA 实现](waa.md)；官网 VM 生命周期参数为 43,200,000ms，检查间隔为 300,000ms。
 
 `Waa/Ping` wire 为 `[request_key,botguard_response]`，成功响应为 `[]`。以下输入都能得到成功空响应：正确 proof、损坏 proof、省略 proof、任意 request key、无账户 Cookie。Ping 只验证 WAA RPC consumer identity 与字段类型，业务 proof 资格使用实际 GenerateContent、GenerateVideo 或 Bidi 请求判定。
 
 ### Host 与 Realm
 
-dynamic program 会读取以下浏览器宿主语义，Camoufox runtime 负责提供：
+dynamic program 会读取以下浏览器宿主语义。Camoufox 后端由真实 Firefox 页面提供；纯 Go 后端由 `internal/waa` 按 Firefox 形状表与 goja 分叉实现，规格见 [WAA 实现](waa.md)：
 
 - navigator、screen、window、document、location、performance 与 timezone
 - TextEncoder、TextDecoder、Base64、TypedArray、ArrayBuffer、Blob 与 URL
 - Promise、microtask、timer、事件循环顺序与高精度时间
 - iframe 的独立 global、prototype、constructor、eval 与 Trusted Types 语义
 - DOM 属性描述符、原生对象字符串化、getter 副作用与访问顺序
+- 全局对象与内建对象的自有键顺序、惰性全局名称解析时机
+- 错误类型与消息、`Error.stack` 格式、Date 字符串的时区显示名
+- 提示词输入框的 `input`、`change` 事件与 `/generate_204` 图片请求
 - persistent state 的输入、写回和下一次 snapshot 读取
 
 发送入口分为三条链：
@@ -253,9 +214,11 @@ dynamic program 会读取以下浏览器宿主语义，Camoufox runtime 负责�
 WAA 通过 `ProtectedPreparer` 向请求编码器提供 proof。以下签名与 `internal/aistudio/service.go`、`internal/aistudio/waa.go` 一致：
 
 ```go
-// ProtectedPreparer 为一次请求写入 fresh WAA proof
+// ProtectedPreparer 为一次请求写入 fresh WAA proof 并通过账户固定指纹浏览器发送
 type ProtectedPreparer interface {
 	Prepare(context.Context, ProtectedRequest) (PreparedProtectedRequest, error)
+	BrowserStorageState(context.Context) (StorageState, error)
+	SendProtected(context.Context, ProtectedRequest) (*RPCResponse, error)
 }
 
 // ProtectedRequest 表示需要 WAA 保护的请求
@@ -268,9 +231,7 @@ type ProtectedRequest struct {
 }
 ```
 
-GenerateContent 的 proof field 为 5，Veo GenerateVideo 为 8，Bidi setup 与实时输入为 6。请求编码器先形成无 proof 正文和 binding prompt，WAA Worker 串行调用 snapshot，再原位写入 proof。
-
-GenerateContent 的 binding prompt 按 contents 和 parts 原顺序展开，以单个空格连接：文本使用原文、inline data 使用标准 Base64、Drive file 使用 file ID；external media、function、result、code 和 thought signature 贡献空字符串。Veo 使用视频提示词。摘要是 binding prompt 的 SHA-256 小写十六进制。
+GenerateContent 与 CreateInteractionStream 的 proof field 为 5，Build 代理为 3，Veo GenerateVideo 为 8，Bidi setup 与实时输入为 6。请求编码器先形成无 proof 正文和 binding prompt，WAA Worker 串行调用 snapshot，再原位写入 proof。各 RPC 的 binding prompt 见 [WAA 实现](waa.md)；摘要是 binding prompt 的 SHA-256 小写十六进制。
 
 官方 snapshot 的底层输入保持四个槽：
 
@@ -292,6 +253,8 @@ ready -> closing -> closed
 同一账户的 snapshot 串行执行。页面生命周期中断、snapshot 错误、VM 到期、认证续签或进程关闭使当前 runtime 进入 failed/closed。调度层为每个 Worker 实例维护 generation（递增版本号），需要重建时创建新 generation；较晚返回的旧实例错误按旧 generation 处理，新实例状态保持不变。
 
 Camoufox bootstrap 通过官方页面取得 snapshot service 和动态请求头。页面 GenerateContent 在 `network.beforeRequestSent` 阶段由 `network.failRequest` 结束，因此 bootstrap 没有上游模型输出。同一账户的普通业务模型共享该 snapshot service。交互式登录、Cookie 导出和官方运行时位于 `internal/camoufoxnative`。
+
+纯 Go bootstrap 在服务进程内请求官网页面与 `GetLoggingContext` 取得公共请求头，调用 `Waa/Create`，按 hash 加载解释器并在 goja 中执行 program，随后写入 bootstrap 提示词并派发交互事件；VM 每 12 小时按官网流程刷新。实现位于 `internal/waa` 与 `internal/aistudio/runtime_go.go`。
 
 ## 4. WebChannel、Live 与 Robotics
 
@@ -450,12 +413,13 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | --- | --- | --- |
 | 模型增删、别名、token 上限、默认采样值 | 刷新 ListModels 并重建目录 | 否 |
 | BenefitTier 当前值、AccessModes 当前组合 | 重新计算账户候选 | 否 |
-| challenge message ID、program、interpreter hash | 官网 WAA runtime 在页面 bootstrap 时重新取得 | 否 |
+| challenge message ID、program、interpreter hash | Worker 启动、VM 刷新或重建时重新调用 Waa/Create，新 interpreter 按 hash 下载执行 | 否 |
 | Cookie、visit ID、Set-Cookie 与动态请求头值 | 账户状态和响应头写回 | 否 |
 | 已知数组 field 的值或省略尾字段 | 现有字段解析与默认值语义 | 否 |
 | 数组嵌套层级、field 类型、oneof 或已消费槽位变化 | 更新对应编码器或解码器 | 是 |
 | 新 finish enum 的业务语义 | 更新统一终止原因和公开响应 | 是 |
 | 高层 snapshot 定位或页面交互 | 更新 Camoufox 运行时定位与交互 | 是 |
+| program 读取的 Firefox 宿主取值、键顺序或引擎语义 | 更新形状表、纯 Go 宿主或 goja 分叉 | 是 |
 | WebChannel control、ACK、envelope 或 payload shape | 更新 WebChannel 与 Bidi parser | 是 |
 
 | 失效信号 | 变化层 | 最短恢复动作 |
@@ -463,6 +427,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | 上游 401 | Cookie、SAPISID 或 DBSC | 对照登录态、续签响应、Authorization 与 Set-Cookie |
 | 页面成功，协议请求 403 | 动态头、TLS、请求正文或 WAA binding | 对照官方请求头顺序、proof field 与无 proof 正文 |
 | 输入框、Run 或 snapshot 定位失败 | AI Studio 页面与 bundle | 重新定位稳定组件和高层 snapshot 调用 |
+| 纯 Go proof 稳定 403，Camoufox 同账户 200 | 纯 Go 宿主或 goja 分叉 | 按 [WAA 实现](waa.md) 的方法对照同一 challenge |
 | 带 JSON 路径的字段类型错误 | protobuf 数组或新 oneof | 保存原始帧，更新单一字段解析器 |
 | `provider_<code>` | finish enum | 确认官方页面表现并更新四套公开响应 |
 | ACK、setup 或 backchannel 失败 | WebChannel | 对照 RID、AID、ofs、frame 长度和 payload 形状 |

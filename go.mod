@@ -7,11 +7,15 @@ require (
 	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/bogdanfinn/utls v1.7.7-barnius
 	github.com/brainplusplus/go-browserforge v0.1.0
+	github.com/dlclark/regexp2/v2 v2.5.2
 	github.com/eliben/go-sentencepiece v0.7.0
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible
 	github.com/gofrs/flock v0.13.0
+	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.57.0
 )
 
@@ -30,7 +34,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

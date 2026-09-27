@@ -14,7 +14,7 @@ import (
 // NativeWorker 将纯 Go Camoufox runtime 适配为 WAA preparer
 type NativeWorker struct {
 	accountID   string
-	runtime     *camoufoxnative.Worker
+	runtime     workerRuntime
 	operationMu sync.Mutex
 	stateMu     sync.RWMutex
 	state       WorkerState
