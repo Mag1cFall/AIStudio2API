@@ -122,7 +122,7 @@ The first Linux or macOS launch also prepares the matching Camoufox build automa
    ./aistudio2api setup --login
    ```
 
-   The Google email is read from AI Studio after login. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the current computer and can be set with `--locale` and `--timezone`.
+   The Google email is read from AI Studio after login, and Google Drive is authorized for the account. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the current computer and can be set with `--locale` and `--timezone`.
 
 2. **Start the management UI**:
    - Double-click `start.bat` on Windows
@@ -133,7 +133,7 @@ The first Linux or macOS launch also prepares the matching Camoufox build automa
 3. **Add another account**:
    - Open Accounts
    - "Import Chrome accounts" supports selecting multiple local Chrome accounts
-   - "Browser login" opens an isolated Camoufox window and saves the detected email after login
+   - "Browser login" opens an isolated Camoufox window, detects the email after login, authorizes Google Drive, and saves the account; when Google asks to verify your identity, confirm it in that window or on your phone
 
 4. **Start the API**:
    - Click "Start service" to start the data plane
@@ -437,6 +437,7 @@ Authentication files are stored in `auth/` by default:
 | `auth/<Google email>/account.json` | Account email, proxy, locale, timezone, and enabled state |
 | `auth/<Google email>/storage-state.json` | Google cookies and authentication renewal material |
 | `auth/<Google email>/runtime-state.json` | Benefit tier, model eligibility, cooldowns, and resource ownership |
+| `auth/<Google email>/camoufox-cache/` | Web cache of that account's browser; can be deleted while the service is stopped |
 | `auth/.leases/<Google email>.lock` | Cross-process lease for the account directory |
 | `[user cache]/AIStudio2API/runtime-leases/<Google email>.lock` | WAA Worker lease for that email on the current computer |
 

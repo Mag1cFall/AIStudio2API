@@ -42,6 +42,7 @@ type LoginResult struct {
 	Email            string
 	PageURL          string
 	VerifiedAt       time.Time
+	DriveError       string
 }
 
 // LoginVerification 返回已有登录态的页面验证结果
@@ -87,6 +88,10 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 	if email == "" {
 		return LoginResult{}, errors.New("AI Studio 页面没有登录邮箱")
 	}
+	driveErr := session.authorizeDrive(loginCtx, email)
+	if err := loginCtx.Err(); err != nil {
+		return LoginResult{}, err
+	}
 	state, err := session.exportStorageState(loginCtx, origins)
 	if err != nil {
 		return LoginResult{}, err
@@ -95,7 +100,13 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("编码 storage state: %w", err)
 	}
-	return LoginResult{StorageStateJSON: encoded, Email: email, PageURL: pageURL, VerifiedAt: time.Now().UTC()}, nil
+	return LoginResult{
+		StorageStateJSON: encoded,
+		Email:            email,
+		PageURL:          pageURL,
+		VerifiedAt:       time.Now().UTC(),
+		DriveError:       errorText(driveErr),
+	}, nil
 }
 
 // Verify 使用无头隔离 Camoufox 验证已有 Playwright storage state
@@ -130,6 +141,14 @@ func Verify(ctx context.Context, options LoginOptions, storageStateJSON []byte) 
 		VerifiedAt:    time.Now().UTC(),
 		Reason:        reason,
 	}, nil
+}
+
+// errorText 返回错误文本，nil 返回空字符串
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func validateLoginOptions(options LoginOptions) (LoginOptions, error) {
@@ -214,6 +233,12 @@ func startLoginSession(ctx context.Context, options LoginOptions, headless bool,
 		if err := session.client.installCookies(ctx, state.Cookies); err != nil {
 			return nil, err
 		}
+	}
+	if _, err := session.client.command(ctx, "session.subscribe", map[string]any{
+		"events":   []string{"network.responseCompleted"},
+		"contexts": []string{session.contextID},
+	}); err != nil {
+		return nil, err
 	}
 	if _, err := session.client.command(ctx, "browsingContext.navigate", map[string]any{
 		"context": session.contextID,

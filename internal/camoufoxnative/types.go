@@ -36,6 +36,7 @@ type Options struct {
 	ProxyBypass      string
 	Headless         bool
 	TemporaryChat    bool
+	CacheDirectory   string
 	ReadyTimeout     time.Duration
 	Log              io.Writer
 	StartupProgress  func(StartupStage)

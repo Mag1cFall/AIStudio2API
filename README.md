@@ -122,7 +122,7 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
    ./aistudio2api setup --login
    ```
 
-   登录完成后会从 AI Studio 页面读取 Google 邮箱。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认读取当前电脑设置，也可以通过 `--locale`、`--timezone` 指定。
+   登录完成后会从 AI Studio 页面读取 Google 邮箱，并为账户授权 Google Drive。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认读取当前电脑设置，也可以通过 `--locale`、`--timezone` 指定。
 
 2. **启动图形界面**:
    - Windows 双击 `start.bat`
@@ -133,7 +133,7 @@ Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 3. **添加其他账户**:
    - 打开“账户”页面
    - “Chrome 批量导入”可多选本机 Chrome 账户
-   - “浏览器登录”会打开独立 Camoufox 窗口，登录完成后自动识别邮箱并保存
+   - “浏览器登录”会打开独立 Camoufox 窗口，登录完成后自动识别邮箱、授权 Google Drive 并保存；Google 要求验证身份时，在该窗口或手机上确认
 
 4. **启动 API**:
    - 点击“启动服务”启动数据面
@@ -437,6 +437,7 @@ cp .env.example .env
 | `auth/<Google 邮箱>/account.json` | 账户邮箱、代理、语言、时区和启用状态 |
 | `auth/<Google 邮箱>/storage-state.json` | Google Cookie 与认证续签材料 |
 | `auth/<Google 邮箱>/runtime-state.json` | 权益等级、模型资格、冷却状态与资源所属账户 |
+| `auth/<Google 邮箱>/camoufox-cache/` | 该账户浏览器的网页缓存，服务停止时可删除 |
 | `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
 | `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
 

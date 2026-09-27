@@ -122,6 +122,7 @@ type IsolatedLoginResult struct {
 	StorageState StorageState
 	Email        string
 	VerifiedAt   time.Time
+	DriveError   string
 }
 
 // LoginVerification 表示隔离运行时对登录态的验证结果

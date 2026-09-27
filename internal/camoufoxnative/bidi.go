@@ -20,6 +20,7 @@ type bidiClient struct {
 	nextID                   int
 	generateHeaders          map[string]string
 	blockedGenerateRequestID string
+	accessTokenStatus        int
 }
 
 type bidiCommandError struct {
@@ -96,7 +97,7 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 	}
 }
 
-// observe 捕获官网 GenerateContent 的公共头和响应状态
+// observe 捕获官网 GenerateContent 的公共头和 GenerateAccessToken 的响应状态
 func (client *bidiClient) observe(message map[string]any) {
 	method, _ := message["method"].(string)
 	if !strings.HasPrefix(method, "network.") {
@@ -107,7 +108,17 @@ func (client *bidiClient) observe(message map[string]any) {
 	rawURL, _ := request["url"].(string)
 	requestMethod, _ := request["method"].(string)
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Hostname(), "alkalimakersuite-pa.clients6.google.com") || parsed.Path != generateContentPath || requestMethod != http.MethodPost {
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "alkalimakersuite-pa.clients6.google.com") || requestMethod != http.MethodPost {
+		return
+	}
+	if parsed.Path == accessTokenPath {
+		response, _ := params["response"].(map[string]any)
+		if status, ok := number(response["status"]); ok && method == "network.responseCompleted" {
+			client.accessTokenStatus = int(status)
+		}
+		return
+	}
+	if parsed.Path != generateContentPath {
 		return
 	}
 	if headers, ok := request["headers"].([]any); ok {

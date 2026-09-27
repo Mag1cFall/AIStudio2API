@@ -255,7 +255,7 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			emptyText = true
 		}
 	}
-	if inlineRaw := rawAt(part, 2); !isJSONNull(inlineRaw) {
+	if inlineRaw := rawAt(part, 2); !isJSONNull(inlineRaw) && !thought {
 		media, err := decodeInlineMedia(inlineRaw, path+"[2]", raw)
 		if err != nil {
 			return nil, err
