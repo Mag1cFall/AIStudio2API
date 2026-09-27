@@ -2,9 +2,11 @@
 
 AI Studio 的 Build 应用经官网宿主页调用 MakerSuite 代理 RPC 访问 Gemini API，这部分调用使用与 Playground 分开计算的额度。服务把 Build 作为与 Playground 对等的生成通道：同一账户同时拥有两份额度，生成请求按账户与通道的组合调度。本文定义代理 RPC 的 wire、请求头与 WAA、模型目录与资格、调度与冷却、Gemini API JSON 的逐字段映射、响应解码、错误与额度处理，以及通道的配置与显示。WAA proof 的生成见 [WAA 实现](waa.md)，Playground 的 `GenerateContent` 见 [协议规范](protocol.md)。
 
-## 1. 官网机制
+## 1. 官网机制与通道配置
 
-Build 应用运行在独立 origin 的沙箱 iframe 中。应用的 `fetch` 被 shim 替换，发往 Gemini API 的请求经 `MessageChannel` 交给宿主页。用户在应用中没有选择付费 API key 时，宿主页调用 MakerSuite 代理 RPC，并对生成类路径（`:generateContent`、`:streamGenerateContent` 等）生成 WAA proof。宿主页在转发前检查页面的用户激活状态，这项检查只在页面内等待，代理 RPC 的字段与请求头不携带激活状态；服务不打开 Build 页，由账户 Worker 直接发送代理 RPC。
+Build 应用运行在 `*.scf.usercontent.goog` 的 blob 沙箱 iframe 中。宿主页先向 iframe 发送 `bootstrap` 消息与 `MessagePort`，iframe 内的 shim 接管匹配 `https://generativelanguage.googleapis.com/.*`、`https://ai.studio/.*` 与 `applet:.*` 的 `fetch`，再通过端口发送 `fetch`、`websocket_open`、`get_host_url`、`get_model_quota` 等消息。用户选择付费 API key 时，宿主页携带该 key 直连 Gemini API；AIStudio2API 实现无 key 的 MakerSuite 代理分支。
+
+宿主页转发前要求 `navigator.userActivation.hasBeenActive` 为真，同时满足累计 30 次可信 `mousemove`、5 次可信 `keydown` 或处于移动设备中的任一条件。未满足时 iframe 的 `fetch` 保持等待；这个状态只存在于页面桥接层，代理 RPC 的字段和请求头不携带激活标记。服务由账户 Worker 直接发送代理 RPC，以 RPC wire 为实现边界，无需复制 iframe 的交互门控。
 
 | Gemini API 请求 | 代理 RPC |
 | --- | --- |
@@ -13,9 +15,9 @@ Build 应用运行在独立 origin 的沙箱 iframe 中。应用的 `fetch` 被 
 | Files 与缓存上传 | `ProxyUnaryFileApiCall` |
 | Live WebSocket | 宿主页 WebChannel 转发 |
 
-服务接入 `ProxyStreamedCall` 与 `ProxyUnaryCall` 上的生成和模型目录。
+服务接入 `ProxyStreamedCall` 与 `ProxyUnaryCall` 上的生成和模型目录。`ProxyUnaryFileApiCall` 与 Live 桥接的处理见“能力路由与边界”。
 
-## 2. 配置与显示
+### 配置与显示
 
 `UPSTREAM_CHANNELS` 列出启用的生成通道：
 
@@ -32,12 +34,12 @@ Build 应用运行在独立 origin 的沙箱 iframe 中。应用的 `fetch` 被 
 
 | 位置 | 字段 |
 | --- | --- |
-| OpenAI 格式 `GET /v1/models`、`GET /v1beta/models` | 模型对象的 `channels`，列出至少一个启用账户可调用该模型的通道 |
+| `GET /v1/models`（OpenAI 格式）、`GET /v1beta/models`（Gemini 格式）、管理端 `GET /api/models` 与管理页面模型列表 | 模型对象的 `channels`，列出至少一个启用账户可调用该模型的通道 |
 | `GET /api/requests` 与管理页面请求列表 | 请求当前尝试的 `channel` |
 | 请求日志 `request.channel` 与管理页面日志 | 请求实际使用的通道 |
 | `GET /api/cooldowns` 与管理页面冷却列表 | `channel` 与去掉 `build:` 前缀的 `model_id` |
 
-## 3. 代理 RPC
+## 2. 代理 RPC 与 WAA
 
 两个 RPC 位于 MakerSuite 服务：
 
@@ -64,7 +66,7 @@ https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.appl
 
 ### 请求头
 
-代理 RPC 的请求头集合、顺序与取值和 Playground `GenerateContent` 相同：`content-type`、`x-goog-api-key`、`x-goog-authuser`、`x-user-agent`、`x-aistudio-visit-id`、`x-goog-ext-519733851-bin`、`authorization` 与账户 Cookie。权益头 `X-AIStudio-G1-Tier` 只随 `ProxyUnaryCall` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带），`ProxyStreamedCall` 不带该头。需订阅权益的模型经 `ProxyStreamedCall` 调用时上游返回 HTTP 403 与 Code 7，因此这类模型固定使用 `ProxyUnaryCall`。
+代理 RPC 的请求头集合、顺序与取值和 Playground 文本请求的 `GenerateContent` 相同：`content-type`、`x-goog-api-key`、`x-goog-authuser`、`x-user-agent`、`x-aistudio-visit-id`、`x-goog-ext-519733851-bin`、`authorization` 与账户 Cookie。Playground 图片请求不带 `x-goog-ext-519733851-bin`，Build 代理请求生成图片时仍携带该头。权益头 `X-AIStudio-G1-Tier` 只随 `ProxyUnaryCall` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带），`ProxyStreamedCall` 不带该头。需订阅权益的模型经 `ProxyStreamedCall` 调用时上游返回 HTTP 403 与 Code 7，因此这类模型固定使用 `ProxyUnaryCall`。
 
 ### WAA
 
@@ -93,7 +95,7 @@ proof 位于 field 3，由账户的同一个 WAA Worker 生成，与 Playground 
 
 ProxyResponse 的索引 `0` 是 JSON 字符串正文，索引 `2` 是 Base64 字节正文，两者取其一。每个正文是一段完整的 Gemini API `GenerateContentResponse`。流式解码器在响应列表中每出现一个完整元素时立即解码。
 
-## 4. 模型目录与资格
+## 3. 模型、资格与调度
 
 ### Build 目录
 
@@ -131,7 +133,7 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 
 公开目录是已启用通道的并集。Build 独有且至少一个启用账户可经 Build 调用的可生成模型加入公开目录。模型出现在 Playground 目录时，Build 请求使用 Playground 目录的默认参数与能力；Build 独有模型的默认输出上限为 `outputTokenLimit`，思考能力取 `thinking`。每个模型的 `channels` 列出可调用它的通道。
 
-## 5. 调度与冷却
+### 调度与冷却
 
 候选单位为账户与通道的组合，组合按账户 ID 升序、同一账户内按 `UPSTREAM_CHANNELS` 顺序排列。调度仍先尝试已有热 Worker 的账户，再按需启动待机账户的 Worker，规则见 [开发与贡献](development.md)。
 
@@ -157,9 +159,9 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 
 带 Drive 文件引用的生成固定走 Playground。文件所属账户没有可调度的 Playground 候选，或其冷却在 1 分钟后才恢复时，文件临时复制到其他账户，由该账户的 Playground 生成，请求结束后回收副本。
 
-## 6. 请求映射
+## 4. 请求映射
 
-Build 请求与 Playground 共用同一预处理：工具可用性校验、模型媒体默认值、TTS 台词处理、参数校验与目录默认值。停止序列不发送，由本地匹配截断（见第 8 节）。请求体顶层字段：
+Build 请求与 Playground 共用同一预处理：工具可用性校验、模型媒体默认值、TTS 台词处理、参数校验与目录默认值。停止序列不发送，由本地匹配截断（见本节“停止序列、usage 与终态”）。请求体顶层字段：
 
 | 字段 | 取值 |
 | --- | --- |
@@ -240,7 +242,7 @@ TTS 模型带 `speech_metadata` 能力时，`说话人: 台词` 文本按多说�
 
 Playground 私有字段在 Build 请求中不发送：账户时区、GenerateContent 与 generation config 的固定槽、可设置分辨率图片模型的默认工具槽。不等于 1 的 `candidateCount` 与 logprobs 由公开适配器拒绝。
 
-## 7. 响应解码
+## 5. 响应、终止与 usage
 
 每段 `GenerateContentResponse` 解码为规范事件：
 
@@ -266,7 +268,7 @@ Playground 私有字段在 Build 请求中不发送：账户时区、GenerateCon
 - 没有 candidate 且带 `promptFeedback.blockReason` 时返回 prompt feedback 错误，原因为去掉 `BLOCK_REASON_` 前缀的小写枚举名
 - candidate 数量不是 1、正文不是 JSON 或 Base64 无效时返回带路径的协议错误；流结束时没有 `finishReason` 同样为协议错误
 
-## 8. 停止序列、usage 与终态
+### 停止序列、usage 与终态
 
 Build 与 Playground 的事件流经过同一处理：
 
@@ -275,7 +277,7 @@ Build 与 Playground 的事件流经过同一处理：
 3. 上游没有返回 usage 时在本地统计输入、工具声明、思考与输出
 4. usage 在 finish 之前发出
 
-## 9. 错误与额度
+## 6. 错误、额度与能力边界
 
 HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code、消息与 `ErrorInfo` 元数据。错误正文有两种形状：
 
@@ -303,18 +305,18 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 - HTTP 403 与 Code 7 保留账户与模型资格，请求切换到其他账户
 - 模型不存在返回 404 Code 5；只能配合 Computer Use 的模型在纯文本请求时返回 400 Code 3，这类模型不进入 Build 通道
 
-## 10. 未接入范围
+### 能力路由与边界
 
 | 能力 | 当前处理 |
 | --- | --- |
 | Live WebSocket | 使用 Playground `BidiGenerateContent` |
 | Files 与缓存上传（`ProxyUnaryFileApiCall`） | 未接入；附件以 `inlineData` 发送 |
-| embedding（`batchEmbedContents`，`embedContent` 返回 404） | 未接入 |
+| embedding | 上游 `batchEmbedContents` 返回 200，`embedContent` 返回 404；服务未公开接入 |
 | Interactions（`/v1beta/interactions` 返回 404） | 使用 Playground `CreateInteractionStream` |
 | Free 账户的订阅图片模型 | 上游返回 403，调度按 AccessModes 排除 |
 | 付费 API key 直连 | 不使用 |
 
-## 11. 实现位置
+## 7. 实现位置
 
 | 路径 | 职责 |
 | --- | --- |
@@ -329,3 +331,27 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | `internal/app/runtime.go` | 重试、冷却写入、同账户换通道、文件引用复制 |
 | `internal/app/admin.go`、`internal/api` | 冷却、请求、日志与模型目录中的通道字段 |
 | `web/src` | 设置页通道选择与各列表的通道显示 |
+
+### 协议实现
+
+新增一个 Build 代理方法或把现有公开能力接到 Build 时，按以下顺序落点：
+
+1. 在 `internal/aistudio/build.go` 定义 Gemini API 路径、HTTP 方法、JSON 请求体与 `ProxyStreamedCall` 或 `ProxyUnaryCall` 外层；binding 始终取最终路径和最终 JSON 文本，避免编码后再改正文
+2. 在 `internal/aistudio/channel.go` 声明候选资格与 Playground 固定条件；文件归属、专用 scope、模型方法和账户权益必须在取得租约前确定
+3. 在 `internal/aistudio/generate.go` 复用规范请求预处理，并为 Build 编码器只映射 Gemini API 公开字段；Playground 私有槽位留在 Playground 编码器
+4. 在 `DecodeBuildStream` 或 `DecodeBuildUnary` 把完整 Gemini API 响应转成规范事件；流式外层按完整 ProxyResponse 元素切分，不能按网络 chunk 猜测 JSON 边界
+5. 把错误映射到统一的 HTTP 状态、重试阶段与通道冷却 scope；首个语义事件之后的错误只能作为流内终态
+6. 将模型 `channels`、请求 `channel` 与冷却 `channel` 暴露到管理 API 和页面，使实际路由可以直接观察
+
+### 最小验收矩阵
+
+| 范围 | 必须确认的结果 |
+| --- | --- |
+| 通道选择 | `playground`、`build` 单独启用和同时启用时，目录与实际路由一致 |
+| 额度隔离 | 一个通道进入模型冷却后，同一账户的另一个通道仍可承担请求；全局冷却同时作用于两者 |
+| 协议 | Chat、Responses、Anthropic 与 Gemini 的非流式、流式正文和终态一致 |
+| 内容 | system、多轮、函数、Google 工具、图片输入、TTS 与图片输出按模型能力编码 |
+| 生命周期 | 取消、客户端断开、停止序列与流尾错误都释放租约和账户并发槽位 |
+| 可观测性 | 模型目录、请求列表、请求日志和冷却列表显示同一个实际通道 |
+
+调试代理正文时先保存最终 Gemini API JSON、外层数组和解码后的 google.rpc 状态。HTTP 200 只表示代理 RPC 到达；业务通过条件是收到预期内容、合法 usage 和唯一终态。

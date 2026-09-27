@@ -17,7 +17,7 @@
   Playground + Build Dual Quota Channels &nbsp;•&nbsp;
   High-Concurrency Multi-Account &nbsp;•&nbsp;
   Camoufox and Pure Go WAA Backends<br>
-  Tested with 7 Agent Clients Including Claude Code and Codex &nbsp;•&nbsp;
+  Claude Code, Codex, and Other Agent Clients &nbsp;•&nbsp;
   Nano Banana, Veo, TTS, and Omni
 </p>
 
@@ -27,11 +27,11 @@
 
 ## Core Capabilities
 
-- **Dual Quota Channels**: Every account has separate Playground and Build app proxy quotas, and `UPSTREAM_CHANNELS` enables either or both; in testing, when an account's Playground hit its daily limit, Build completed the same request
-- **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first; in testing, 200 concurrent requests across 28 accounts all returned complete text, finishing in 60 to 74 seconds when warm with about 180 MB resident service memory
+- **Dual Quota Channels**: Every account has separate Playground and Build app proxy quotas, and `UPSTREAM_CHANNELS` enables either or both; when one channel hits its limit, the same account continues on the other
+- **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: Camoufox holds the official WAA lifecycle by default; with `WAA_BACKEND=go`, pure Go generates the official proof and no browser is downloaded or launched at runtime
-- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; all 23 official Anthropic SDK scenarios pass
-- **Mainstream Agent Clients**: Claude Code, Codex, OpenCode, pi, omp, OpenClaw, and Hermes pass real file read and write tool round trips, and native web search works in Claude Code, Codex, and omp
+- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent
+- **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, OpenClaw, and Hermes, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
 
 ## Features
 
