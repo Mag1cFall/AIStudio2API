@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useI18n } from '@/i18n'
+import { channelLabelKey, useI18n } from '@/i18n'
 import type { Model } from '@/types'
 import UiSelect from './UiSelect.vue'
 
@@ -132,6 +132,18 @@ function tokenLimit(value: number | undefined): string {
           <p v-if="model.description" class="text-xs leading-5 text-gray-500">
             {{ model.description }}
           </p>
+          <div v-if="model.channels?.length">
+            <span class="mb-2 block text-xs text-gray-500">{{ t('models.channels') }}</span>
+            <div class="flex flex-wrap gap-2">
+              <span
+                v-for="channel in model.channels"
+                :key="channel"
+                class="rounded border border-green-900/50 bg-green-900/20 px-2 py-1 text-xs text-green-300"
+              >
+                {{ t(channelLabelKey(channel)) }}
+              </span>
+            </div>
+          </div>
           <div>
             <span class="mb-2 block text-xs text-gray-500">{{ t('models.methods') }}</span>
             <div class="flex flex-wrap gap-2">

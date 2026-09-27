@@ -35,12 +35,14 @@ type bidiClientMessage struct {
 }
 
 type bidiClientSetup struct {
-	Type             string                         `json:"type"`
-	Model            string                         `json:"model"`
-	InputModalities  []string                       `json:"input_modalities"`
-	OutputModalities []string                       `json:"output_modalities"`
-	Tools            []aistudio.FunctionDeclaration `json:"tools"`
-	SessionToken     string                         `json:"session_token,omitempty"`
+	Type             string                            `json:"type"`
+	Model            string                            `json:"model"`
+	InputModalities  []string                          `json:"input_modalities"`
+	OutputModalities []string                          `json:"output_modalities"`
+	Tools            []aistudio.FunctionDeclaration    `json:"tools"`
+	SessionToken     string                            `json:"session_token,omitempty"`
+	Translation      *aistudio.BidiTranslationConfig   `json:"translation,omitempty"`
+	Transcription    *aistudio.BidiTranscriptionConfig `json:"transcription,omitempty"`
 }
 
 type bidiServerMessage struct {
@@ -178,9 +180,15 @@ func bidiRequestFromSetup(
 				return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live input modality %q 不可用", aistudio.ErrInvalidArgument, modality)
 			}
 		}
-		if len(output) != 1 || !output["audio"] {
-			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live output_modalities 必须是 [audio]", aistudio.ErrInvalidArgument)
+		if len(output) != 1 || !output["audio"] && !output["text"] {
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: live output_modalities 必须是 [audio] 或 [text]", aistudio.ErrInvalidArgument)
 		}
+		request.OutputModality = "audio"
+		if output["text"] {
+			request.OutputModality = "text"
+		}
+		request.Translation = setup.Translation
+		request.Transcription = setup.Transcription
 		if input["audio"] || input["image"] {
 			request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 		}
@@ -190,6 +198,9 @@ func bidiRequestFromSetup(
 		}
 		if len(output) != 1 || !output["text"] {
 			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics output_modalities 必须是 [text]", aistudio.ErrInvalidArgument)
+		}
+		if setup.Translation != nil || setup.Transcription != nil {
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics 不支持 translation 或 transcription", aistudio.ErrInvalidArgument)
 		}
 		request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 	default:

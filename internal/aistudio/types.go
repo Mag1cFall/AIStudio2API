@@ -117,6 +117,13 @@ type Part struct {
 	CodeExecutionResult *CodeExecutionResult `json:"code_execution_result,omitempty"`
 	Thought             bool                 `json:"thought,omitempty"`
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`
+	SpeechMetadata      *SpeechMetadata      `json:"speech_metadata,omitempty"`
+}
+
+// SpeechMetadata 表示语音文本分段的说话人与风格
+type SpeechMetadata struct {
+	Speaker string `json:"speaker,omitempty"`
+	Style   string `json:"style,omitempty"`
 }
 
 // Content 表示一条规范消息
@@ -186,6 +193,8 @@ type SpeakerVoiceConfig struct {
 type SpeechConfig struct {
 	VoiceName string               `json:"voice_name,omitempty"`
 	Speakers  []SpeakerVoiceConfig `json:"speakers,omitempty"`
+	// Mode 表示多说话人朗读模式 VERBATIM 或 CONVERSATIONAL
+	Mode string `json:"mode,omitempty"`
 }
 
 // TranscriptionConfig 表示音频转录参数
@@ -253,6 +262,7 @@ type Model struct {
 	CapabilityOptions map[string][]string `json:"capability_options,omitempty"`
 	AccessModes       []int64             `json:"access_modes,omitempty"`
 	Paid              bool                `json:"paid,omitempty"`
+	Channels          []string            `json:"channels,omitempty"`
 }
 
 // Usage 表示一次生成的 token 用量

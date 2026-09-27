@@ -197,6 +197,20 @@ func encodePart(part Part) ([]any, error) {
 			}
 			wire[12] = true
 		}
+		if metadata := part.SpeechMetadata; metadata != nil && (metadata.Speaker != "" || metadata.Style != "") {
+			for len(wire) <= 40 {
+				wire = append(wire, nil)
+			}
+			// Part field 41 SpeechMetadata：speaker、style
+			encoded := []any{nil}
+			if metadata.Speaker != "" {
+				encoded[0] = metadata.Speaker
+			}
+			if metadata.Style != "" {
+				encoded = append(encoded, metadata.Style)
+			}
+			wire[40] = encoded
+		}
 		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
 	if part.InlineData != nil {

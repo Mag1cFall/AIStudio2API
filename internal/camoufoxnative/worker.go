@@ -24,7 +24,6 @@ var publicHeaderNames = []string{
 	"x-goog-api-key",
 	"x-goog-authuser",
 	"x-user-agent",
-	"x-aistudio-g1-tier",
 	"x-aistudio-visit-id",
 	"x-goog-ext-519733851-bin",
 	"user-agent",
@@ -114,7 +113,7 @@ func (worker *Worker) abort() error {
 	return releaseAccountCache(worker.cacheLock)
 }
 
-// ProtocolHeaders 返回官网为 GenerateContent 构造的七个公共头
+// ProtocolHeaders 返回官网为 GenerateContent 构造的六个公共头
 func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()

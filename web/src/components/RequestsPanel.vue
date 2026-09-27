@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { api } from '@/api'
-import { useI18n, type TranslationKey } from '@/i18n'
+import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import UiIcon from './UiIcon.vue'
 
@@ -109,7 +109,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
         <div v-else class="space-y-3">
           <div
             v-for="cooldown in cooldowns"
-            :key="`${cooldown.account_id}:${cooldown.model_id}`"
+            :key="`${cooldown.account_id}:${cooldown.channel}:${cooldown.model_id}`"
             class="overflow-hidden rounded border border-[#30363d] bg-[#0d1117]"
           >
             <div
@@ -119,9 +119,10 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
                 <strong class="block truncate text-sm text-gray-200">{{
                   cooldown.model_id
                 }}</strong>
-                <span class="text-xs text-gray-500">{{
-                  accountLabel(cooldown.account_id, cooldown.account_label)
-                }}</span>
+                <span class="text-xs text-gray-500"
+                  >{{ accountLabel(cooldown.account_id, cooldown.account_label) }} ·
+                  {{ t(channelLabelKey(cooldown.channel)) }}</span
+                >
               </div>
               <span class="shrink-0 text-xs text-yellow-400">
                 {{ t('state.cooldown') }}
@@ -165,9 +166,12 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
               </div>
             </div>
             <div class="text-right text-xs text-gray-500">
-              <span class="block">{{
-                accountLabel(request.account_id, request.account_label)
-              }}</span>
+              <span class="block"
+                >{{ accountLabel(request.account_id, request.account_label)
+                }}<template v-if="request.channel">
+                  · {{ t(channelLabelKey(request.channel)) }}</template
+                ></span
+              >
               <time class="font-mono">{{ formatTime(request.started_at) }}</time>
             </div>
             <button

@@ -1,6 +1,6 @@
 import { readonly, ref } from 'vue'
 import { legacyLocales } from '@/legacy-locales'
-import type { Locale } from '@/types'
+import type { Locale, UpstreamChannel } from '@/types'
 
 const zhCN = {
   'app.title': 'AI Studio 控制台',
@@ -135,6 +135,13 @@ const zhCN = {
   'settings.routingFillFirst': '账号粘性优先',
   'settings.routingHelp':
     '轮询依次分配请求；粘性优先持续使用首个可用账户，达到并发上限或不可用时切换。',
+  'settings.upstreamChannels': '上游通道',
+  'settings.upstreamChannelsHelp':
+    'Playground 与 Build 是同一账户的两份独立额度，同时启用时按账户与通道组合调度，一个通道冷却后由另一个通道继续；至少启用一个。',
+  'channel.playground': 'Playground',
+  'channel.build': 'Build',
+  'logs.channel': '通道',
+  'models.channels': '通道',
   'settings.temporaryChat': 'WAA 预热使用临时对话',
   'settings.activeValue': '当前生效',
   'settings.pendingService': '已保存值将在下次生成服务启动时生效',
@@ -325,6 +332,13 @@ const en: Record<TranslationKey, string> = {
   'settings.routingFillFirst': 'Fill first',
   'settings.routingHelp':
     'Round robin rotates requests. Fill first keeps using the first available account until it is unavailable or reaches its concurrency limit.',
+  'settings.upstreamChannels': 'Upstream channels',
+  'settings.upstreamChannelsHelp':
+    'Playground and Build are two independent quotas of the same account. With both enabled, requests are scheduled per account and channel, and the other channel continues when one cools down. Enable at least one.',
+  'channel.playground': 'Playground',
+  'channel.build': 'Build',
+  'logs.channel': 'Channel',
+  'models.channels': 'Channels',
   'settings.temporaryChat': 'Use temporary chat for WAA prewarming',
   'settings.activeValue': 'Active',
   'settings.pendingService': 'Saved values apply the next time the generation service starts',
@@ -447,6 +461,11 @@ function legacyTranslation(value: Locale, key: string): string | undefined {
     current = (current as Record<string, unknown>)[part]
   }
   return typeof current === 'string' ? current : undefined
+}
+
+// channelLabelKey 返回上游通道的翻译键
+export function channelLabelKey(channel: UpstreamChannel): TranslationKey {
+  return channel === 'build' ? 'channel.build' : 'channel.playground'
 }
 
 // useI18n 提供旧控制台语言与新增字段翻译

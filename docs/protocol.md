@@ -334,6 +334,7 @@ binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prom
 | 75 | 76 | 图片宽高比码 |
 | 76 | 77 | 图片输出分辨率码 |
 | 77 | 78 | Paid 标记，值 `2` 时显示 Paid |
+| 78 | 79 | Interaction 配置：索引 2 为后台任务，索引 3 类型 `1` 为 agent、`2` 为模型 |
 | 82 | 83 | 模型访问方式 |
 
 能力码映射：
@@ -349,7 +350,8 @@ binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prom
 | 47 | aspect ratio | 49 | output resolution |
 | 52 | thinking level | 53 | music route |
 | 54 | image search | 58 | Google Maps |
-| 59 | private Interaction route | | |
+| 59 | private Interaction route | 85 | TTS 分段说话人 |
+| 46 | Live 实时翻译 | | |
 
 未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
 
@@ -369,7 +371,8 @@ binding prompt 的输入域为 contents parts；Veo 使用视频提示词。prom
 | 59 | `interaction_route` | 74 | `transcription_word_timestamps` |
 | 76 | `transcription_language_codes` | 77 | `transcription_output` |
 | 80 | `transcription_speaker_labels` | 81 | `transcription_custom_vocabulary` |
-| 84 | `transcription_smart` | | |
+| 84 | `transcription_smart` | 85 | `speech_metadata` |
+| 46 | `speech_translation` | | |
 
 每个主能力码都保留为 `capability_code_<N>`，同时为上表中的已知码增加语义键；次能力码保留为 `secondary_capability_code_<N>`。
 
@@ -952,7 +955,7 @@ OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单�
 | TTS | modalities `[3]`，speech config | Part field 3 音频 chunk |
 | Lyria | modalities `[3]` | Part field 3 音频 chunk |
 
-单声音 speech config 为 `[[[voiceName]]]`。多说话人 speech config 为 `[null,null,[null,[[speaker,[[voiceName]]],...]]]`。相邻且 MIME 相同的音频 Part 按到达顺序拼接。图片宽高比、图片分辨率与 TTS voice 必须来自当前模型能力选项。
+单声音 speech config 为 `[[[voiceName]]]`。多说话人 speech config 为 `[null,null,[null,[[speaker,[[voiceName]]],...],mode?]]`，mode `1` 为 `VERBATIM`、`2` 为 `CONVERSATIONAL`。文本 Part field 41 为 SpeechMetadata `[speaker?, style?]`；能力码 85 的 TTS 模型要求多说话人请求的每个文本 Part 带 speaker，且台词不写 `## Transcript:`。相邻且 MIME 相同的音频 Part 按到达顺序拼接。图片宽高比、图片分辨率与 TTS voice 必须来自当前模型能力选项。
 
 ### Veo
 
@@ -973,6 +976,36 @@ OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单�
 
 起始帧的图像来源 oneof 为 inline image 或 Drive file。创建响应 field 1 是 operation ID。轮询请求为 `["<OPERATION_ID>"]`；轮询响应 field 1 是 done，产物 Drive file ID 位于 `$[1][0][0][0]`。operation 与结果 file 均绑定创建账户，再通过 Drive bearer 下载媒体。count、宽高比、秒数和分辨率按实时模型 field 71 校验。
 
+### Omni Interaction
+
+模型目录 field 79 类型为 `2` 且不是后台任务的模型（`gemini-omni-1.1-flash`、`gemini-omni-flash-preview`）不接受 `GenerateContent`，四套公开生成接口对这类模型改用 `CreateInteractionStream`，账户选择、Worker 与 WAA 与 GenerateContent 相同，WAA proof 位于 field 5，binding 为发送的全部文本以空格连接：
+
+```json
+[1, 1, null, <INTERACTION>, "<WAA_PROOF>", 1]
+```
+
+| interaction 索引 | 内容 |
+| ---: | --- |
+| 6 | system instruction |
+| 17 | `["models/<MODEL_ID>", [null,null,null,null,null,<THINKING_LEVEL>,1,<MAX_OUTPUT_TOKENS>]]`，历史中没有模型输出时配置索引 24 为 `[]` |
+| 26 | `[[<STEP>...]]`，用户 step 为 `[[<CONTENT>...]]`，模型 step 为 `[null,[<CONTENT>...]]`；文本 content 为 `[[<TEXT>]]`，Drive 附件 content 为 `[null×8,["<DRIVE_FILE_ID>"]]` |
+| 53 | 视频输出配置 `[[[null,null,null,[null,null,null,null,null,1]]]]` |
+
+thinking level 取值 MINIMAL=1、LOW=2、MEDIUM=3、HIGH=4，由 `reasoning_effort` 或思考预算按模型支持的等级换算，默认使用目录默认等级。Interaction 请求接受 user 与 assistant 的文本内容，以及 user 的图片与视频附件；内联附件先上传到所选账户的 Drive，再以 file ID 引用，文件 ID 不参与 binding。音频附件由上游以 code 3 `Audio input modality is not enabled for this model` 拒绝，映射为 HTTP 400；函数、工具与 stop sequences 返回参数错误，temperature、topP、topK 与 seed 不发送。
+
+响应为 `[[<EVENT>...], <STATUS>?]`。事件索引 10 的 content delta 中 field 1 为正文、field 5 为视频 `[1,"<BASE64 MP4>"]`、field 6 为思考摘要，分别映射为 text、`video/mp4` 媒体与 reasoning 事件；索引 19 的最终 interaction 状态 `3` 产生 usage（输入、输出、思考、总 token 位于 usage 索引 0、4、8、9）与 `stop` 终态，状态 `4`、`5` 返回错误。事件列表后的 google.rpc 状态按 code 映射 HTTP 状态，额度 code 8 为 429；首个正文事件之前的错误进入换号与冷却，之后的错误以流内 error 结束。
+
+### Build 代理
+
+官网 Build 应用经宿主页调用 MakerSuite 代理 RPC 访问 Gemini API，额度与 Playground 分开计算。`UPSTREAM_CHANNELS` 启用 `build` 时，生成请求在 Build 通道上编码为 Gemini API JSON：
+
+```json
+["/v1beta/models/<MODEL_ID>:streamGenerateContent", "<GEMINI_API_JSON>", "<WAA_PROOF>"]
+["/v1beta/models/<MODEL_ID>:generateContent", "<GEMINI_API_JSON>", "<WAA_PROOF>", "POST"]
+```
+
+前者发往 `ProxyStreamedCall`，后者发往 `ProxyUnaryCall`。WAA proof 位于 field 3，binding 为路径与请求体以空格连接后的 SHA-256。权益头 `X-AIStudio-G1-Tier` 只随 `ProxyUnaryCall` 发送，需订阅权益的模型经 `ProxyUnaryCall` 生成，其余经 `ProxyStreamedCall`。模型目录、资格、调度与冷却、请求字段映射、响应解码、错误映射与未接入范围见 [Build 通道](build.md)。
+
 ### Live 与 Robotics WebSocket
 
 `GET /v1/live` 与 `GET /v1/robotics/stream` 升级为 WebSocket。连接建立后的首个客户端 JSON 必须是 setup：
@@ -981,7 +1014,7 @@ OpenAI 文件入口接收 `multipart/form-data` 的 `file` 与 `purpose`，单�
 {"type":"setup","model":"gemini-3.1-flash-live-preview","input_modalities":["text"],"output_modalities":["audio"],"tools":[{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],"session_token":""}
 ```
 
-Live 的 input modalities 可以由 text、audio、image 组成，output modalities 固定为 audio。Robotics 输入输出均为 text。两个入口都使用客户端提供的模型，并由实时模型目录的 `bidiGenerateContent` 方法选择账户。客户端在 WebSocket 建立后 10 秒内发送 setup 首帧；上游握手、backchannel 就绪和 setup complete 共用 `INIT_TIMEOUT`，随后依次发送 `session_opened` 与 `setup_complete`。
+Live 的 input modalities 可以由 text、audio、image 组成，output modalities 为 `["audio"]` 或 `["text"]`，按模型能力确定：能力码 46 的实时翻译模型输出 audio 并要求 `translation`，能力码 77 的实时转录模型输出 text 并可带 `transcription`，其他 Live 模型输出 audio。Robotics 输入输出均为 text。两个入口都使用客户端提供的模型，并由实时模型目录的 `bidiGenerateContent` 方法选择账户。客户端在 WebSocket 建立后 10 秒内发送 setup 首帧；上游握手、backchannel 就绪和 setup complete 共用 `INIT_TIMEOUT`，随后依次发送 `session_opened` 与 `setup_complete`。
 
 上游 WebChannel 由握手、前向 POST、长轮询 backchannel 与 terminate 组成。握手 query 使用 `VER=8`、随机 `RID`、`CVER=22`、`X-HTTP-Session-Id=gsessionid` 与 `count=0`；响应 header 给出 gsessionid，首个控制 envelope 为：
 
@@ -989,13 +1022,13 @@ Live 的 input modalities 可以由 text、audio、image 组成，output modalit
 [[0,["c","<SID>","",8]]]
 ```
 
-后续前向请求的 query 字段为 `VER`、`gsessionid`、`SID`、`RID`、`AID`、`zx`、`t`；form 字段为 `count=1`、`ofs=<OFFSET>`、`req0___data__=<JSON_PROTOBUF>`。成功响应是三个整数的 ACK 数组，三个槽只校验整数形状，第二槽不绑定本地 RID、AID 或 ofs。HTTP 200 且 ACK 合法后提交 `RID+1` 与 `ofs+1`；失败、取消或 ACK 无效时保持原值。
+后续前向请求的 query 字段为 `VER`、`gsessionid`、`SID`、`RID`、`AID`、`zx`、`t`；form 字段依次为 `count=<N>`、`ofs=<OFFSET>`、`req0___data__` 至 `req<N-1>___data__`。客户端消息按到达顺序排队，同一时间只有一个前向 POST，在途期间到达的消息合并进下一个 POST，每个 POST 最多 25 条，与官网页面一致。audio 与 image 帧入队即返回，text、tool_response、media_end 等待自身所在 POST 的 ACK，因此 media_end 返回时此前的媒体帧均已送达；前向 POST 失败后，队列内与后续发送均返回该错误。成功响应是三个整数的 ACK 数组，三个槽只校验整数形状，第二槽不绑定本地 RID、AID 或 ofs。HTTP 200 且 ACK 合法后提交 `RID+1` 与 `ofs+N`；失败、取消或 ACK 无效时保持原值。
 
-backchannel 使用 `RID=rpc`、当前 SID、gsessionid 与 AID。每个网络帧为十进制字节数、LF 和对应 JSON 字节：
+backchannel 使用 `RID=rpc`、当前 SID、gsessionid 与 AID。每个网络帧为十进制长度、LF 和对应 JSON 文本，长度按 UTF-16 码元计数：
 
 ```text
-<DECIMAL_LENGTH><LF>
-<JSON_BYTES>
+<DECIMAL_UTF16_LENGTH><LF>
+<JSON_TEXT>
 ```
 
 JSON 根值包含 repeated `[serverAID,payload]` envelope。payload 解码成功并按顺序发布后，将 AID 提交为 `max(currentAID,serverAID)`。首次 backchannel 建立后的临时读取失败保留 SID、gsessionid 与已提交 AID 并重新连接；首次建立失败、协议终态、显式 close 或不可恢复错误进入关闭链。会话状态为 `new -> handshaking -> ready -> reconnecting -> ready`，关闭路径依次进入 `closing -> closed`。
@@ -1017,7 +1050,7 @@ JSON 根值包含 repeated `[serverAID,payload]` envelope。payload 解码成功
 {"type":"tool_response","tool_responses":[{"id":"call-1","name":"get_weather","content":{"temperature":26}}]}
 ```
 
-服务端事件使用 `session_opened`、`setup_complete`、`text`、`media`、`input_transcription`、`output_transcription`、`tool_call`、`tool_call_cancellation`、`interrupted`、`generation_complete`、`turn_complete`、`session_resumption`、`usage`、`go_away`、`provider`、`closed` 和 `error`。`tool_call` 携带单个函数调用；一条上游消息包含多个调用时按顺序发送多条事件。`tool_call_cancellation.tool_call_ids` 携带被取消的调用 ID。新的 `session_resumption.session_token` 原子替换上一枚 token；后续 setup 携带该 token 时绑定原账户恢复。
+服务端事件使用 `session_opened`、`setup_complete`、`text`、`media`、`input_transcription`、`output_transcription`、`interim_input_transcription`、`tool_call`、`tool_call_cancellation`、`interrupted`、`generation_complete`、`turn_complete`、`session_resumption`、`usage`、`go_away`、`provider`、`closed` 和 `error`。`tool_call` 携带单个函数调用；一条上游消息包含多个调用时按顺序发送多条事件。`tool_call_cancellation.tool_call_ids` 携带被取消的调用 ID。新的 `session_resumption.session_token` 原子替换上一枚 token；后续 setup 携带该 token 时绑定原账户恢复。
 
 Live 纯文本使用模型 scope，Live 音频/图像和 Robotics 使用 `bidi-media:<modelID>` scope。上游 Code 7 通过 `error` 事件返回并结束当前连接。客户端单帧上限为 8 MiB，超限使用 WebSocket close code `1009`。
 
@@ -1028,20 +1061,22 @@ Live 纯文本使用模型 scope，Live 音频/图像和 Robotics 使用 `bidi-m
 | 0 | 1 | `models/<MODEL_ID>` |
 | 1 | 2 | generation configuration |
 | 2 | 3 | tools |
-| 6 | 7 | `[sessionToken]`；无 token 时为 `[]` |
-| 7 | 8 | `[104857,[52428]]` buffering 参数 |
-| 9 | 10 | 固定空数组 |
+| 6 | 7 | `[sessionToken]`；无 token 时 Live 对话与 Robotics 为 `[]`，实时翻译与转录省略 |
+| 7 | 8 | `[104857,[52428]]` buffering 参数；实时翻译与转录省略 |
+| 9 | 10 | 输入音频转录参数；空数组，实时转录的语言写在子索引 `7` |
 | 10 | 11 | 固定空数组 |
 | 15 | 16 | timezone `[null,null,null,null,[zone]]` |
 
-configuration 使用 18 槽数组：
+Live 对话与 Robotics 的 configuration 使用 18 槽数组：
 
 | JSON 索引 | 内容 |
 | ---: | --- |
 | 14 | 输出 modalities；TEXT=`[1]`、AUDIO=`[3]` |
 | 15 | Live voice `[[["Zephyr"]]]` |
 | 16 | thinking `[1,null,null,level]`；Live Minimal=`4`、Robotics High=`3` |
-| 17 | 固定值 `2` |
+| 17 | MediaResolution 固定值 `2` |
+
+实时翻译模型不接受 MediaResolution，configuration 使用 31 槽：索引 13 为 `0`、14 为 `[3]`、30 为 TranslationConfig `[echoTargetLanguage 0/1, targetLanguageCode]`。实时转录模型只接受 TEXT 输出，configuration 为 `[null×14,[1]]`。两者均不带 voice 与 thinking。上游在 serverContent 索引 5、6 返回输入与翻译文本，实时转录在索引 10 返回当前累计的临时输入转写，映射为 `interim_input_transcription`，音频结束后在索引 5 返回最终输入转写。
 
 最小 setup 外层形状：
 
@@ -1342,7 +1377,8 @@ OpenAI `GET /v1/models`：
     "capabilities": {},
     "capability_options": {},
     "access_modes": [],
-    "paid": true
+    "paid": true,
+    "channels": ["playground", "build"]
   }]
 }
 ```
@@ -1358,13 +1394,13 @@ OpenAI `GET /v1/models`：
 }
 ```
 
-Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返回一个对象。字段为 `name`、`displayName`、`description`、`supportedGenerationMethods`、`inputTokenLimit`、`outputTokenLimit`、可选 `capabilities`、`capabilityOptions`、`accessModes`、`paid`。
+Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返回一个对象。字段为 `name`、`displayName`、`description`、`supportedGenerationMethods`、`inputTokenLimit`、`outputTokenLimit`、可选 `capabilities`、`capabilityOptions`、`accessModes`、`paid`、`channels`。
 
 `GET /v1beta/models/{model}` 只按 canonical model ID 查找；生成、计数、视频、转录与 Bidi 同时接受 canonical ID 和 `capability_options.aliases` 中的 alias；alias 在调度和发送上游前换成对应的 canonical ID。
 
 管理模型中的 `description`、token limits、capabilities、capability options、access modes 与 false `paid` 使用 `omitempty`；OpenAI 和 Gemini 响应始终包含身份、methods 与 token limits，并在 map/slice 非空或 `paid=true` 时增加对应扩展字段。
 
-管理目录合并全部账户的上游实时模型集合，并按 ID 排序。公开目录保留至少一个启用账户具有访问资格、且当前公开协议承载其调用方法的模型。短期冷却和忙碌状态由请求调度处理。多账户同 ID 的 methods、capabilities、capability options 和 access modes 取并集，`paid` 取逻辑 OR，正数 token limit 取最小值。调度使用上游 methods、capabilities、access modes、账户权益和当前运行状态。
+管理目录合并全部账户的上游实时模型集合，并按 ID 排序。公开目录保留至少一个启用账户具有访问资格、且当前公开协议承载其调用方法的模型；启用 Build 通道时同时包含 Build 独有的可生成模型，`channels` 列出可调用该模型的通道，见 [Build 通道](build.md)。短期冷却和忙碌状态由请求调度处理。多账户同 ID 的 methods、capabilities、capability options 和 access modes 取并集，`paid` 取逻辑 OR，正数 token limit 取最小值。调度使用上游 methods、capabilities、access modes、账户权益和当前运行状态。
 
 主要请求格式：
 
@@ -1777,7 +1813,7 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 
 `responseModalities` 只接受 `TEXT`、`IMAGE` 与 `AUDIO`，`AUDIO` 与其他模态互斥。图像模型省略模态或仅请求 `IMAGE` 时发送 `[IMAGE,TEXT]`；`imageConfig` 保留显式宽高比与尺寸，支持输出分辨率的模型省略图片配置时使用 `1K`。
 
-`speechConfig.voiceConfig` 与 `multiSpeakerVoiceConfig` 互斥；单声音必须提供 `prebuiltVoiceConfig.voiceName`，每个多说话人条目必须提供非空 `speaker` 与 `voiceConfig.prebuiltVoiceConfig.voiceName`。`transcriptionConfig.smartTranscription=true` 与显式 true 的 `wordTimestamps` 或 `speakerLabels` 互斥；language code `detect` 归一为空自动检测。
+`speechConfig.voiceConfig` 与 `multiSpeakerVoiceConfig` 互斥；单声音必须提供 `prebuiltVoiceConfig.voiceName`，每个多说话人条目必须提供非空 `speaker` 与 `voiceConfig.prebuiltVoiceConfig.voiceName`；`multiSpeakerVoiceConfig.mode` 可选 `VERBATIM` 或 `CONVERSATIONAL`。文本 part 的 `speechMetadata`（或 `speech_metadata`）`{speaker,style}` 写入 Part field 41。能力码 85 的模型把未带 speaker 的文本按行拆分，以配置中说话人名加冒号开头的行开始新分段，续行并入上一分段，首个说话人行之前的文本不发送；没有匹配行的文本原样发送。旧 TTS 模型把 `speechMetadata` 写回 `speaker: 台词` 前缀与 `style\n\n` 说明段落。`transcriptionConfig.smartTranscription=true` 与显式 true 的 `wordTimestamps` 或 `speakerLabels` 互斥；language code `detect` 归一为空自动检测。
 
 单声音 speech config：
 
@@ -1937,11 +1973,11 @@ File object：
 | `voice` | 默认 `Zephyr` |
 | `response_format` | 默认 `wav`；支持 `wav`、`pcm`，上游已经返回 `audio/mpeg` 时支持 `mp3` |
 | `speed` | 省略/`0` 或 `1` |
-| `instructions` | 以 `instructions + "\n\n" + input` 形成提示 |
+| `instructions` | 作为文本 part 的 `speechMetadata.style`；旧 TTS 模型以 `instructions + "\n\n" + input` 形成提示 |
 
 `pcm` 返回上游 PCM body 与 MIME；`wav` 要求上游 `audio/l16` 和有效 rate，再封装 16-bit WAV；响应设置 `Content-Type` 与 `Content-Length`。
 
-语音请求按官网 wire 在首个文本前写入 `## Transcript:\n`，AUDIO-only generation config 不写默认 `maxOutputTokens`；`responseModalities` 与 `speechConfig` 分别写入官网确认的槽位。
+旧 TTS 模型的语音请求按官网 wire 在首个文本前写入 `## Transcript:\n`，AUDIO-only generation config 不写默认 `maxOutputTokens`；`responseModalities` 与 `speechConfig` 分别写入官网确认的槽位。
 
 ### Video
 
@@ -2042,7 +2078,7 @@ Gemini `:predictLongRunning` 请求：
 }
 ```
 
-Live input modalities 是 text/audio/image 的非空子集，output 必须为 `["audio"]`。Robotics input/output 必须分别为 `["text"]` 与 `["text"]`。数组不接受空字符串或重复项。
+Live input modalities 是 text/audio/image 的非空子集，output 为 `["audio"]` 或 `["text"]`。实时翻译模型要求 output `["audio"]` 与 `"translation":{"target_language_code":"es","echo_target_language":false}`，输入音频的原文经 `input_transcription`、译文经 `output_transcription` 与 `media` 返回；实时转录模型要求 output `["text"]`，可带 `"transcription":{"language_codes":["en"]}`，转写经 `interim_input_transcription`（当前累计文本）与 `input_transcription`（最终文本）返回。两类模型不接受 tools。Robotics input/output 必须分别为 `["text"]` 与 `["text"]`，不接受 translation 与 transcription。数组不接受空字符串或重复项。
 
 setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_type`、Base64 `data`、`tool_responses`。各帧字段：
 
@@ -2076,7 +2112,7 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 }
 ```
 
-按 type 使用对应字段：`session_opened{model}`、`setup_complete`、`text{text}`、`media{mime_type,data}`、`input_transcription/output_transcription{transcription}`、`tool_call{tool_call}`、`tool_call_cancellation{tool_call_ids}`、`interrupted`、`generation_complete`、`turn_complete`、`session_resumption{session_token,resumable}`、`usage{raw}`、`go_away{raw}`、`provider{raw}`、`closed`、`error{error,code,retryable,raw?}`。
+按 type 使用对应字段：`session_opened{model}`、`setup_complete`、`text{text}`、`media{mime_type,data}`、`input_transcription/output_transcription/interim_input_transcription{transcription}`、`tool_call{tool_call}`、`tool_call_cancellation{tool_call_ids}`、`interrupted`、`generation_complete`、`turn_complete`、`session_resumption{session_token,resumable}`、`usage{raw}`、`go_away{raw}`、`provider{raw}`、`closed`、`error{error,code,retryable,raw?}`。
 
 首帧或后续客户端字段无效时发送 `{type:"error",code:"invalid_request",error:"..."}`。上游错误保留原始 `error` 内容。客户端单帧上限 8 MiB，超限发送 WebSocket close code 1009。每次写操作上限 10 秒；会话结束等待读取和发送 goroutine（Go 协程）的上限各 5 秒。
 

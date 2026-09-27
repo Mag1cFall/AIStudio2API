@@ -2,6 +2,7 @@ package app
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,7 +31,7 @@ func dispatchKey(selection aistudio.AccountSelection) string {
 	slices.Sort(allowed)
 	return strings.Join([]string{
 		selection.ModelID, selection.Method, selection.Capability, selection.AccountID, selection.ResourceID,
-		strings.Join(allowed, ","),
+		strings.Join(allowed, ","), strconv.FormatBool(selection.PlaygroundOnly),
 	}, "\x00")
 }
 

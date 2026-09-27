@@ -22,6 +22,7 @@ var capabilityNames = map[int64]string{
 	35: "thinking_budget",
 	37: "speech_route",
 	43: "media_resolution",
+	46: "speech_translation",
 	47: "aspect_ratio",
 	49: "output_resolution",
 	52: "thinking_level",
@@ -35,6 +36,7 @@ var capabilityNames = map[int64]string{
 	80: "transcription_speaker_labels",
 	81: "transcription_custom_vocabulary",
 	84: "transcription_smart",
+	85: "speech_metadata",
 }
 
 var secondaryCapabilityNames = map[int64]string{}
@@ -64,6 +66,8 @@ type GenerationDefaults struct {
 	ImageRoute bool
 	// OutputResolution 表示支持输出分辨率（官网会带 imageConfig 与扩展槽位）
 	OutputResolution bool
+	// InteractionStream 表示官网经 CreateInteractionStream 生成的模型
+	InteractionStream bool
 }
 
 type modelEntry struct {
@@ -167,6 +171,10 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 			capabilities[name] = true
 		}
 		capabilities["secondary_capability_code_"+strconv.FormatInt(code, 10)] = true
+	}
+	if !isJSONNull(rawAt(row, 78)) {
+		// field 79 InteractionConfig 表示模型只经 Interactions API 生成
+		capabilities["interactions_api"] = true
 	}
 	accessModes, err := intSliceField(row, 82, path, raw)
 	if err != nil {
@@ -285,6 +293,25 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 		}
 		converted := int(value)
 		defaults.TopK = &converted
+	}
+	if raw := rawAt(row, 78); !isJSONNull(raw) {
+		// field 79 InteractionConfig：field 3 为后台任务，field 4 类型 1 为 agent、2 为模型
+		interaction, err := rawArray(raw, path+"[78]", evidence)
+		if err != nil {
+			return GenerationDefaults{}, withMethod(err, "ListModels")
+		}
+		kind, err := optionalIntField(interaction, 3, path+"[78]", evidence)
+		if err != nil {
+			return GenerationDefaults{}, err
+		}
+		background := false
+		if value := rawAt(interaction, 2); !isJSONNull(value) {
+			background, err = rawBool(value, path+"[78][2]", evidence)
+			if err != nil {
+				return GenerationDefaults{}, withMethod(err, "ListModels")
+			}
+		}
+		defaults.InteractionStream = kind == 2 && !background
 	}
 	if raw := rawAt(row, 71); !isJSONNull(raw) {
 		thinking, err := rawArray(raw, path+"[71]", evidence)

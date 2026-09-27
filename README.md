@@ -14,25 +14,29 @@
 </p>
 
 <p>
-  多账户轮询 &nbsp;•&nbsp;
-  Nano Banana 图片生成 &nbsp;•&nbsp;
-  Google 工具<br>
-  Veo 视频生成 &nbsp;•&nbsp;
-  Gemini TTS 语音生成
+  Playground + Build 双额度通道 &nbsp;•&nbsp;
+  多账户高并发<br>
+  Claude Code、Codex 等 7 款 agent 客户端实测 &nbsp;•&nbsp;
+  Nano Banana、Veo、TTS 与 Omni
 </p>
 
 </div>
 
 ---
 
+## 核心能力
+
+- **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；实测同一账户 Playground 触发每日限额后，同一请求由 Build 完成
+- **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用；实测 28 个账户下 200 个并发请求全部返回完整正文，热态 60 至 74 秒完成，服务进程常驻约 180 MB
+- **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Anthropic 官方 SDK 23 个场景实测通过
+- **主流 agent 客户端**: Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的读写文件工具往返均实测通过，Claude Code、Codex、omp 的原生联网搜索可直接使用
+
 ## 特性
 
-- **四套 API 协议**: 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini GenerateContent
-- **多账户运行**: 识别 Free、Pro、Ultra 与 Plus 权益，在合资格账户间轮询或优先复用可用账户
 - **原生流式响应**: 实时输出正文、思考摘要、函数调用、Google 工具、媒体和 usage
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
-- **视频生成**: 支持 Veo 视频生成和图片转视频
+- **视频生成**: 支持 Veo 视频生成和图片转视频；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
 - **YouTube 输入**: 粘贴视频 URL 即可作为外部视频附件读取
 - **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
@@ -254,7 +258,7 @@ providers:
 | 音乐 | Gemini `generateContent` + `responseModalities: ["AUDIO"]` |
 | 视频 | `POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | Gemini 视频 | `POST /v1beta/models/{model}:predictLongRunning`、`GET /v1beta/operations/{id}` |
-| Live / Robotics | `GET /v1/live`、`GET /v1/robotics/stream` |
+| Live（含实时翻译与实时转录）/ Robotics | `GET /v1/live`、`GET /v1/robotics/stream` |
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
@@ -299,7 +303,7 @@ curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateCo
   }' --output speech.json
 ```
 
-可用语音由实时模型目录中的 `capability_options.voices` 返回。
+可用语音由实时模型目录中的 `capability_options.voices` 返回。`gemini-3.8-flash-tts` 等带 `speech_metadata` 能力的模型同样接受上面的 `说话人: 台词` 写法，也可以为每个文本 part 设置 `speechMetadata.speaker` 与 `speechMetadata.style`，并用 `multiSpeakerVoiceConfig.mode` 选择 `VERBATIM` 或 `CONVERSATIONAL`；OpenAI `instructions` 在这些模型上作为语音风格。
 
 ### 图片生成 (Nano Banana)
 
@@ -409,6 +413,7 @@ cp .env.example .env
 | `WARM_STARTUP_CONCURRENCY` | `2` | 同时初始化的预热账户数 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
+| `UPSTREAM_CHANNELS` | `playground,build` | 生成请求使用的上游通道，可只保留其一 |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制启动预热并发，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。
@@ -449,6 +454,7 @@ cp .env.example .env
 
 - [开发与贡献](docs/development.md)
 - [Google AI Studio 协议规范](docs/protocol.md)
+- [Build 通道](docs/build.md)
 - [运行日志说明](docs/logging.md)
 - [可复用逆向开发指南](docs/reverse-engineering.md)
 

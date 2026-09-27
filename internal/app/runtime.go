@@ -52,6 +52,7 @@ func newRuntime(
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端")
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	headers, err := newAccountHeaderProvider(accounts, cfg.Proxy)
 	if err != nil {
 		return nil, nil, nil, err
@@ -2159,6 +2160,11 @@ func (service *trackedService) Models(context.Context) ([]aistudio.Model, error)
 	return service.pool.EligibleModels(service.modelSnapshot()), nil
 }
 
+// catalogModels 返回管理页使用的完整目录与各模型可用通道
+func (service *trackedService) catalogModels() []aistudio.Model {
+	return service.pool.CatalogModels(service.modelSnapshot())
+}
+
 func (service *trackedService) modelSnapshot() []aistudio.Model {
 	service.modelsMu.RLock()
 	models := append([]aistudio.Model{}, service.models...)
@@ -2176,7 +2182,7 @@ func (service *trackedService) publishModelAccess() {
 		accounts = append(accounts, adminAccountDTO(status))
 	}
 	service.requests.publish(api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
-	service.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": service.modelSnapshot()}})
+	service.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": service.catalogModels()}})
 }
 
 type accountModelRefreshResult struct {
@@ -3039,6 +3045,9 @@ func (service *trackedService) generateWithRetry(
 			ModelID: modelID, Method: "generateContent",
 			AccountID: selectionAccountID, ResourceID: selectionResourceID,
 		}
+		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
+			selection.PlaygroundOnly = true
+		}
 		if (unbound || fileBound) && len(attempted) > 0 {
 			enabled, _ := service.pool.EnabledAccounts()
 			for _, accountID := range enabled {
@@ -3070,8 +3079,10 @@ func (service *trackedService) generateWithRetry(
 		workerGeneration := service.workers.WorkerGeneration(request.AccountID)
 		attempted[request.AccountID] = struct{}{}
 		accountLabel := lease.Account().Config.Label
+		api.SetAccessLogChannel(requestCtx, string(lease.Channel()))
 		api.SetAccessLogTarget(requestCtx, modelID, accountLabel)
 		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
+		service.requests.markChannel(request.ID, string(lease.Channel()))
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
 		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
 		var attemptCopies *aistudio.TemporaryFileCopies
@@ -3195,8 +3206,8 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		if cooldown, ok := aistudio.QuotaCooldownForError(err, time.Now()); ok {
-			modelAccessScope := modelID
-			scopeLabel := modelID
+			modelAccessScope := lease.CooldownScope(modelID)
+			scopeLabel := modelAccessScope
 			if cooldown.Global {
 				modelAccessScope = ""
 				scopeLabel = "全局"
@@ -3213,6 +3224,10 @@ func (service *trackedService) generateWithRetry(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, cooldown.Until.Format(time.RFC3339),
 				))
+				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, selection) {
+					delete(attempted, request.AccountID)
+					maxAttempts++
+				}
 			}
 		}
 		releaseErr := lease.Release()
@@ -3533,7 +3548,7 @@ func (service *trackedService) forwardEvents(
 		if !verified && event.Kind == aistudio.EventFinish {
 			verified = true
 			service.markModelAccessVerifiedAsync(
-				lease.Account().ID, accountLabel, requestedModelID, accessGeneration, lease.CheckedAt(),
+				lease.Account().ID, accountLabel, lease.CooldownScope(requestedModelID), accessGeneration, lease.CheckedAt(),
 			)
 		}
 	}
