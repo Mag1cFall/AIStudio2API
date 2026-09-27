@@ -101,7 +101,11 @@ func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
 		data = append(data, item)
 	}
 	if len(data) == 0 {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "AI Studio did not return an image")
+		message := "AI Studio did not return an image"
+		if reason := result.finishReason; reason != "" && reason != "stop" {
+			message += ": finish reason " + reason
+		}
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", message)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": data})

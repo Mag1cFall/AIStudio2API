@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -65,6 +66,26 @@ var (
 	ErrResourceNotFound = errors.New("资源账户映射不存在")
 	errAccountLeaseBusy = ErrAccountLeased
 )
+
+// AllCoolingError 表示请求的全部候选账户都在冷却且不会很快恢复
+type AllCoolingError struct {
+	ModelID string
+	Until   time.Time
+}
+
+func (e *AllCoolingError) Error() string {
+	return fmt.Sprintf("模型 %s 的可用账户均在冷却，最早恢复时间 %s", e.ModelID, e.Until.Local().Format(time.RFC3339))
+}
+
+// HTTPStatus 返回额度耗尽对应的公开状态码
+func (e *AllCoolingError) HTTPStatus() int {
+	return http.StatusTooManyRequests
+}
+
+// ErrorCode 返回 OpenAI 兼容的额度错误代码
+func (e *AllCoolingError) ErrorCode() string {
+	return "rate_limit_exceeded"
+}
 
 // AccountsNotReadyError 表示支持请求的账户都处于不可调度状态
 type AccountsNotReadyError struct {

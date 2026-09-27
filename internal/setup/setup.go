@@ -126,6 +126,9 @@ func importIsolatedLogin(
 		return errors.Join(err, store.Delete(account))
 	}
 	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
+	if result.DriveError != "" {
+		fmt.Fprintf(os.Stdout, "Drive 授权失败: %s\n", result.DriveError)
+	}
 	return nil
 }
 

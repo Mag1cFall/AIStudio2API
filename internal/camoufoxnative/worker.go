@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 )
 
@@ -38,6 +39,7 @@ type Worker struct {
 	contextID  string
 	state      State
 	closed     bool
+	cacheLock  *flock.Flock
 }
 
 // Start 启动隔离 Camoufox 并完成一次官网 WAA bootstrap
@@ -58,12 +60,17 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
-	options.reportStartup(StartupLaunchingBrowser)
-	process, endpoint, err := launchBrowser(ctx, options, fingerprint)
+	cacheDirectory, cacheLock, err := lockAccountCache(options.StorageStatePath)
 	if err != nil {
 		return nil, err
 	}
-	worker := &Worker{process: process}
+	options.CacheDirectory = cacheDirectory
+	options.reportStartup(StartupLaunchingBrowser)
+	process, endpoint, err := launchBrowser(ctx, options, fingerprint)
+	if err != nil {
+		return nil, errors.Join(err, releaseAccountCache(cacheLock))
+	}
+	worker := &Worker{process: process, cacheLock: cacheLock}
 	failed := true
 	defer func() {
 		if failed {
@@ -101,7 +108,10 @@ func (worker *Worker) abort() error {
 	if connection != nil {
 		_ = connection.Close()
 	}
-	return process.Close()
+	if err := process.Close(); err != nil {
+		return err
+	}
+	return releaseAccountCache(worker.cacheLock)
 }
 
 // ProtocolHeaders 返回官网为 GenerateContent 构造的七个公共头
@@ -180,6 +190,9 @@ func (worker *Worker) Close() error {
 		_ = connection.Close()
 	}
 	if err := process.Close(); err != nil {
+		return err
+	}
+	if err := releaseAccountCache(worker.cacheLock); err != nil {
 		return err
 	}
 	worker.mu.Lock()

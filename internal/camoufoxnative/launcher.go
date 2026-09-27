@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 var bidiEndpointPattern = regexp.MustCompile(`ws://[^\s]+`)
@@ -29,6 +31,7 @@ type browserProcess struct {
 	done    chan struct{}
 	waitErr error
 	profile string
+	lock    *flock.Flock
 	mu      sync.Mutex
 	closed  bool
 }
@@ -42,20 +45,25 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if err != nil {
 		return nil, "", err
 	}
-	profile, err := os.MkdirTemp("", "aistudio-camoufox-*")
+	profile, profileLock, err := createProfile()
 	if err != nil {
-		return nil, "", fmt.Errorf("创建 Camoufox profile: %w", err)
+		return nil, "", err
 	}
 	prefs, err := firefoxPreferences(options.Proxy, options.ProxyBypass)
 	if err != nil {
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
 	if options.Headless {
 		prefs["layout.frame_rate"] = headlessFrameRate
 	}
+	if options.CacheDirectory != "" {
+		for key, value := range cachePreferences(options.CacheDirectory) {
+			prefs[key] = value
+		}
+	}
 	if err := writeUserJS(profile, prefs); err != nil {
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
 
@@ -71,28 +79,29 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	configureBrowserProcess(command, options.Headless)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
 	if err := command.Start(); err != nil {
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
 	}
 	if err := attachBrowserProcess(command); err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("绑定 Camoufox 进程: %w", err)
 	}
 	process := &browserProcess{
 		command: command,
 		done:    make(chan struct{}),
 		profile: profile,
+		lock:    profileLock,
 	}
 	go func() {
 		waitErr := command.Wait()
@@ -118,7 +127,7 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		err := process.waitErr
 		process.closed = true
 		process.mu.Unlock()
-		_ = os.RemoveAll(profile)
+		_ = removeProfile(profile, profileLock)
 		if err == nil {
 			err = errors.New("Camoufox 在报告 BiDi 端点前退出")
 		}
@@ -163,7 +172,7 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 			closeErr = errors.Join(closeErr, fmt.Errorf("等待 Camoufox 进程退出: %w", closeCtx.Err()))
 		}
 	}
-	closeErr = errors.Join(closeErr, removeProfile(process.profile))
+	closeErr = errors.Join(closeErr, removeProfile(process.profile, process.lock))
 	if closeErr != nil {
 		return closeErr
 	}
@@ -171,20 +180,6 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 	process.closed = true
 	process.mu.Unlock()
 	return nil
-}
-
-func removeProfile(profile string) error {
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		err := os.RemoveAll(profile)
-		if err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return err
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 func scanBrowserOutput(reader io.Reader, mirror io.Writer, endpoints chan<- string) {
