@@ -39,12 +39,7 @@ func newRuntime(
 	if err := launchCtx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | 校验 Camoufox | 账户=%d", len(accounts)))
-	camoufoxPath, err := camoufoxnative.FindExecutable(launchCtx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	login, err := aistudio.NewNativeLoginDriver(camoufoxPath, cfg.RequestTimeout)
+	camoufoxPath, login, err := prepareWAABackend(launchCtx, cfg, requests, len(accounts))
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -992,7 +987,7 @@ func (manager *accountWorkerManager) startReservedWorker(
 		step, message := workerStartupProgress(stage)
 		manager.requests.log(label, "INFO", fmt.Sprintf("WAA Worker 启动 | %d/7 | %s", step, message))
 	}
-	worker, initErr := aistudio.NewNativeWorker(initCtx, account.id, options)
+	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	cancel()
 	if initErr != nil {
 		if ownsLease {

@@ -74,7 +74,7 @@ proof 位于 field 3，由账户的同一个 WAA Worker 生成，与 Playground 
 /v1beta/models/<MODEL_ID>:streamGenerateContent {"contents":[...],"generationConfig":{...}}
 ```
 
-摘要为 binding 的 SHA-256 小写十六进制。受保护请求由 Worker 通过 Camoufox 页面原生 `fetch` 发送。
+摘要为 binding 的 SHA-256 小写十六进制。受保护请求由 Worker 发送，Camoufox 后端经页面原生 `fetch`，纯 Go 后端经账户固定出口的 Go HTTP。
 
 ### 响应
 

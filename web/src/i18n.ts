@@ -135,6 +135,11 @@ const zhCN = {
   'settings.routingFillFirst': '账号粘性优先',
   'settings.routingHelp':
     '轮询依次分配请求；粘性优先持续使用首个可用账户，达到并发上限或不可用时切换。',
+  'settings.waaBackend': 'WAA 后端',
+  'settings.waaBackendCamoufox': 'Camoufox 浏览器',
+  'settings.waaBackendGo': '纯 Go',
+  'settings.waaBackendHelp':
+    'Camoufox 在后台浏览器页面中运行 WAA；纯 Go 在服务进程内运行 WAA，不下载也不启动 Camoufox。登录账户始终需要浏览器。切换后重启生成服务生效。',
   'settings.upstreamChannels': '上游通道',
   'settings.upstreamChannelsHelp':
     'Playground 与 Build 是同一账户的两份独立额度，同时启用时按账户与通道组合调度，一个通道冷却后由另一个通道继续；至少启用一个。',
@@ -332,6 +337,11 @@ const en: Record<TranslationKey, string> = {
   'settings.routingFillFirst': 'Fill first',
   'settings.routingHelp':
     'Round robin rotates requests. Fill first keeps using the first available account until it is unavailable or reaches its concurrency limit.',
+  'settings.waaBackend': 'WAA backend',
+  'settings.waaBackendCamoufox': 'Camoufox browser',
+  'settings.waaBackendGo': 'Pure Go',
+  'settings.waaBackendHelp':
+    'Camoufox runs WAA in a background browser page. Pure Go runs WAA inside the service process and neither downloads nor starts Camoufox. Account login always needs a browser. Restart the generation service to apply a change.',
   'settings.upstreamChannels': 'Upstream channels',
   'settings.upstreamChannelsHelp':
     'Playground and Build are two independent quotas of the same account. With both enabled, requests are scheduled per account and channel, and the other channel continues when one cools down. Enable at least one.',

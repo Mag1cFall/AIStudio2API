@@ -192,6 +192,7 @@ type RuntimeConfig struct {
 	RoutingStrategy           string   `json:"routing_strategy"`
 	UpstreamChannels          []string `json:"upstream_channels"`
 	TemporaryChat             bool     `json:"temporary_chat"`
+	WAABackend                string   `json:"waa_backend"`
 }
 
 // AdminCooldown 表示账户模型冷却

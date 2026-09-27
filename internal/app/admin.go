@@ -724,6 +724,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
 		TemporaryChat:          value.TemporaryChat,
+		WAABackend:             value.WAABackend,
 	}
 	if err := cfg.Save(admin.configPath); err != nil {
 		return api.RuntimeConfig{}, err
@@ -1309,6 +1310,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		RoutingStrategy:        cfg.RoutingStrategy,
 		UpstreamChannels:       cfg.UpstreamChannels,
 		TemporaryChat:          cfg.TemporaryChat,
+		WAABackend:             cfg.WAABackend,
 	}
 }
 

@@ -155,6 +155,7 @@ export interface ServiceConfig {
   per_account_concurrency: number
   routing_strategy: 'round-robin' | 'fill-first'
   upstream_channels: UpstreamChannel[]
+  waa_backend: 'camoufox' | 'go'
   temporary_chat: boolean
 }
 

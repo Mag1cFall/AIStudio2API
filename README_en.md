@@ -15,7 +15,8 @@
 
 <p>
   Playground + Build Dual Quota Channels &nbsp;•&nbsp;
-  High-Concurrency Multi-Account<br>
+  High-Concurrency Multi-Account &nbsp;•&nbsp;
+  Camoufox and Pure Go WAA Backends<br>
   Tested with 7 Agent Clients Including Claude Code and Codex &nbsp;•&nbsp;
   Nano Banana, Veo, TTS, and Omni
 </p>
@@ -28,6 +29,7 @@
 
 - **Dual Quota Channels**: Every account has separate Playground and Build app proxy quotas, and `UPSTREAM_CHANNELS` enables either or both; in testing, when an account's Playground hit its daily limit, Build completed the same request
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first; in testing, 200 concurrent requests across 28 accounts all returned complete text, finishing in 60 to 74 seconds when warm with about 180 MB resident service memory
+- **Two WAA Backends**: Camoufox holds the official WAA lifecycle by default; with `WAA_BACKEND=go`, pure Go generates the official proof and no browser is downloaded or launched at runtime
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; all 23 official Anthropic SDK scenarios pass
 - **Mainstream Agent Clients**: Claude Code, Codex, OpenCode, pi, omp, OpenClaw, and Hermes pass real file read and write tool round trips, and native web search works in Claude Code, Codex, and omp
 
@@ -414,6 +416,7 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
+| `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
@@ -454,6 +457,7 @@ The Accounts page supports Chrome batch import and isolated Camoufox login. `rea
 
 - [Development and contribution](docs/development.md)
 - [Google AI Studio protocol specification](docs/protocol.md)
+- [WAA implementation](docs/waa.md)
 - [Build channel](docs/build.md)
 - [Runtime logging](docs/logging.md)
 - [Reusable reverse-engineering development guide](docs/reverse-engineering.md)
@@ -465,6 +469,8 @@ The Accounts page supports Chrome batch import and isolated Camoufox login. `rea
 This project uses [Camoufox](https://camoufox.com/) to reduce automation detection. Camoufox is based on Firefox and changes lower-level browser behavior to retain a realistic device fingerprint.
 
 Go handles encoding, scheduling, streaming decode, and public protocols. WAA-protected `GenerateContent` requests are sent by the account's fingerprinted Camoufox page, preserving the native Firefox TLS/HTTP2 stack, headers, cookies, and page fingerprint.
+
+With `WAA_BACKEND=go`, WAA runs inside the service process, emulates the Firefox page environment from the account fingerprint, and sends requests with Firefox request headers; Camoufox is neither downloaded nor started at runtime. Browser login on the Accounts page still uses Camoufox and prepares it on first login.
 
 ### Limitations
 
@@ -523,12 +529,7 @@ Issues and Pull Requests are welcome!
 - ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
 
-### Pure-Protocol WAA Runtime
+### Pure Go WAA Runtime
 
-The target is a complete reverse-engineered WAA VM that independently executes the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
-
-| Stage | Deliverable |
-| --- | --- |
-| Protocol fixtures | Archive complete inputs and outputs for the dynamic program, challenges, state transitions, snapshots, and proofs as reproducible protocol fixtures |
-| Go executor | Implement dynamic-program loading, interpretation, challenge evaluation, persistent state, snapshot restoration, and proof generation with fixture-level parity |
-| Runtime cutover | Move account initialization and proof refresh to the native Go runtime, validate every known challenge, then remove the Camoufox, DOM, and frontend-bundle runtime path |
+- ✅ **Pure Go backend**: `WAA_BACKEND=go` runs the official interpreter and program inside the service process, emulating the Firefox page environment from each account fingerprint; it neither downloads nor starts Camoufox at runtime, while account login still uses Camoufox
+- **Firefox engine details**: implement `Intl` formatting, the global resolution timing of regular-expression literals, and the Symbol key order of `RegExp.prototype`
