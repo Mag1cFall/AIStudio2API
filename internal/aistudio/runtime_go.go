@@ -67,6 +67,18 @@ type goWAARuntime struct {
 	refreshTimer    *time.Timer
 }
 
+// newGoWAAHTTPClient 创建由 runtime 手动处理重定向的固定出口客户端
+func newGoWAAHTTPClient(proxyURL string) (*http.Client, error) {
+	client, err := NewProxyHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client, nil
+}
+
 // NewGoWorker 启动单个账户的纯 Go WAA runtime，不启动浏览器
 func NewGoWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
 	if accountID == "" {
@@ -105,7 +117,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	if err != nil {
 		return nil, err
 	}
-	client, err := NewProxyHTTPClient(options.Proxy)
+	client, err := newGoWAAHTTPClient(options.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +468,9 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 // loadInterpreter 按 challenge 指定的 hash 读取缓存或下载解释器并校验摘要
 func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.Challenge) (string, error) {
 	if challenge.InterpreterJavaScript != "" {
+		if hash := waa.InterpreterHash([]byte(challenge.InterpreterJavaScript)); hash != challenge.InterpreterHash {
+			return "", fmt.Errorf("WAA 解释器摘要不一致 expected=%s actual=%s", challenge.InterpreterHash, hash)
+		}
 		return challenge.InterpreterJavaScript, nil
 	}
 	if runtime.interpreterHash == challenge.InterpreterHash && runtime.interpreter != "" {

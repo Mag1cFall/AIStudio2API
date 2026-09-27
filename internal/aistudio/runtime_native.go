@@ -11,7 +11,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
-// NativeWorker 将纯 Go Camoufox runtime 适配为 WAA preparer
+// NativeWorker 将单个账户的 Camoufox 或纯 Go WAA runtime 适配为受保护请求 preparer
 type NativeWorker struct {
 	accountID   string
 	runtime     workerRuntime
@@ -23,7 +23,7 @@ type NativeWorker struct {
 var _ ProtectedPreparer = (*NativeWorker)(nil)
 var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
 
-// NewNativeWorker 启动单个账户的纯 Go Camoufox runtime
+// NewNativeWorker 启动单个账户的 Camoufox WAA runtime
 func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
 	if accountID == "" {
 		return nil, fmt.Errorf("缺少账户 ID")
@@ -46,7 +46,7 @@ func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnati
 	}, nil
 }
 
-// Prepare 生成 fresh proof 并写入 GenerateContent 第五槽
+// Prepare 生成 fresh proof 并写入请求指定的 WAA field
 func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedRequest) (PreparedProtectedRequest, error) {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
@@ -99,7 +99,7 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	}, nil
 }
 
-// SendProtected 通过账户固定指纹 Camoufox 流式发送已准备的请求
+// SendProtected 经账户 WAA runtime 流式发送已准备的请求
 func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
 	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
 	if err != nil {
@@ -115,7 +115,7 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 	}, nil
 }
 
-// BrowserStorageState 返回固定指纹浏览器当前 Cookie 状态
+// BrowserStorageState 返回账户 WAA runtime 当前 Cookie 状态
 func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageState, error) {
 	encoded, err := worker.runtime.StorageCookies(ctx)
 	if err != nil {
@@ -140,14 +140,14 @@ func (worker *NativeWorker) ProtocolHeaders(ctx context.Context, accountID strin
 	return worker.runtime.ProtocolHeaders(ctx)
 }
 
-// State 返回纯 Go runtime 状态
+// State 返回账户 WAA runtime 状态
 func (worker *NativeWorker) State() WorkerState {
 	worker.stateMu.RLock()
 	defer worker.stateMu.RUnlock()
 	return worker.state
 }
 
-// Close 关闭纯 Go runtime
+// Close 关闭账户 WAA runtime
 func (worker *NativeWorker) Close() error {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()

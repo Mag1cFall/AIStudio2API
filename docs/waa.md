@@ -68,7 +68,9 @@ user 文本中的 YouTube 链接先转为 external media part，链接从文本�
 
 bootstrap 模型优先使用实时目录中的 `gemini-flash-latest`，否则按目录顺序选择支持 `generateContent`、账户权益与聊天能力的模型。两种后端使用同一选择规则，一个账户 Worker 为该账户的全部普通生成模型提供 proof，切换业务模型直接复用当前 Worker。
 
-## 2. 纯 Go 链路
+## 2. 纯 Go bootstrap 与网络输入
+
+### 运行链
 
 ```text
 Worker 启动
@@ -107,13 +109,13 @@ Worker 启动日志与 Camoufox 后端共用 7 个阶段编号，纯 Go 后端�
 | 6 | `定位 WAA 服务` | 调用 `Waa/Create` |
 | 7 | `执行 WAA Bootstrap` | 加载解释器、初始化 VM、bootstrap 交互与静置 |
 
-## 3. 账户输入与网络形状
+### 账户、指纹与网络形状
 
-### Cookie
+#### Cookie
 
 Worker 启动时把 `storage-state.json` 的 Cookie 读入 runtime 内存。每个出站请求按目标 URL 过滤过期、domain、path 与 Secure 条件后生成 `Cookie` 头；响应 `Set-Cookie` 在响应头到达时合并回 runtime。页面 `document.cookie` 为 domain 匹配 `aistudio.google.com` 且非 HttpOnly 的 Cookie，以 `; ` 连接。页面 `localStorage` 的读写使用 VM 内存存储，初始为空。
 
-### 指纹与宿主现场值
+#### 指纹与宿主现场值
 
 `camoufox-fingerprint.json` 不存在时按 Firefox 152、账户 locale 与 timezone 生成；两种后端使用同一份配置。纯 Go 后端的映射：
 
@@ -133,7 +135,7 @@ Worker 启动时把 `storage-state.json` 的 Cookie 读入 runtime 内存。每�
 - `location` 与 `document.URL` 为 bootstrap 页面地址
 - 指纹缺少 UA 时使用 Windows Firefox 152 UA，缺少 `Accept-Language` 时使用 `en-US,en;q=0.5`，缺少时区时使用 `UTC`
 
-### 网络形状
+#### 网络形状
 
 所有出站请求经账户代理（未设置时使用全局 `PROXY`），使用 Firefox 152 的 TLS ClientHello、HTTP/2 设置与伪头顺序，不自动跟随跳转。请求头按以下顺序发送，未列出的头排在其后：
 
@@ -156,13 +158,13 @@ origin, sec-fetch-dest, sec-fetch-mode, sec-fetch-site, priority, te
 
 RPC 头为 `Accept: */*`、`Referer: https://aistudio.google.com/`、`Content-Type: application/json+protobuf`、`X-Goog-Api-Key`、`X-Goog-AuthUser: 0`、`X-User-Agent: grpc-web-javascript/0.1`、`Authorization`、`Origin: https://aistudio.google.com`、`Sec-Fetch-Dest: empty`、`Sec-Fetch-Mode: cors`、`Sec-Fetch-Site: same-site`。`Authorization` 为三段 SAPISID 签名，算法见 [协议规范](protocol.md)。
 
-## 4. 首页 bootstrap 与 Waa/Create
+### 首页、公共头与 Waa/Create
 
-### 首页
+#### 首页
 
 runtime 以浏览器导航形状请求 `https://aistudio.google.com/prompts/new_chat?model=<bootstrap 模型>`，`TEMPORARY_CHAT=true` 时追加 `&temporary=true`。3xx 按 `Location` 继续，最多 5 次；跳转到 `accounts.google.com` 时启动失败并报告登录态失效。HTTP 200 页面中 `"WIu0Nc":"<值>"` 的值为页面 API key，缺失时启动失败。
 
-### GetLoggingContext 与扩展头
+#### GetLoggingContext 与扩展头
 
 `GetLoggingContext` 使用页面 API key 与 RPC 头，正文为 `[]`。响应是 JSON+protobuf 数组，runtime 把它逐字段编码为 protobuf 二进制，再用标准 Base64 编码为 `x-goog-ext-519733851-bin`：
 
@@ -175,7 +177,7 @@ runtime 以浏览器导航形状请求 `https://aistudio.google.com/prompts/new_
 
 field number 为 JSON 索引加 1。其他 JSON 类型使编码失败。
 
-### 公共协议头
+#### 公共协议头
 
 `ProtocolHeaders` 返回以下 6 个头，受保护请求在其上叠加 RPC 自身的 `Content-Type` 与权益头：
 
@@ -190,7 +192,7 @@ field number 为 JSON 索引加 1。其他 JSON 类型使编码失败。
 
 图片路由的 `GenerateContent` 不带 `x-goog-ext-519733851-bin`。
 
-### Waa/Create 请求
+#### Waa/Create 请求
 
 `POST https://waa-pa.clients6.google.com/$rpc/google.internal.waa.v1.Waa/Create` 使用 RPC 头，`X-Goog-Api-Key` 为 WAA 专用的公开 key（代码常量 `waaAPIKey`，与页面 API key 不同）：
 
@@ -206,13 +208,13 @@ Worker 启动时只设置 field 1，末尾未设置的 field 省略：
 ["lmnUSbltwc5ULv48iKLX"]
 ```
 
-VM 刷新时三个 field 都设置；无绑定 snapshot 生成失败时 field 3 写 `E:UCE`：
+VM 刷新时三个 field 都设置。官网在 snapshot 超时时写 `E:CTO`，其他异常写 `E:UCE`；当前纯 Go runtime 的 snapshot 错误统一写 `E:UCE`：
 
 ```json
 ["lmnUSbltwc5ULv48iKLX", "<INTERPRETER_HASH>", "<PREVIOUS_SNAPSHOT>"]
 ```
 
-### challenge 解码
+#### challenge 解码
 
 响应外层索引 `1` 是 Base64 字符串。标准 Base64 解码后每个字节加 97（按字节回绕），得到 UTF-8 JSON 数组。外层索引 `1` 为空或缺失时，外层索引 `0` 是明文 challenge 数组，字段布局相同；两者都为空时 Create 失败：
 
@@ -227,9 +229,9 @@ VM 刷新时三个 field 都设置；无绑定 snapshot 生成失败时 field 3 
 | 6 | 未使用 | |
 | 7 | `ClientExperimentsStateBlob` | 字符串 |
 
-数组少于 8 项或必需字段为空时 Create 失败。当前 challenge 的 `MessageID` 为 `bfkj`，`GlobalName` 为 `botguard`，interpreter 路径为 `//www.google.com/js/bg/<INTERPRETER_HASH>.js`。program 每次 Create 都不同，属于当前 VM 生命周期。
+数组少于 8 项或必需字段为空时 Create 失败。当前捕获样本的 `MessageID` 为 `bfkj`，`GlobalName` 为 `botguard`，interpreter 路径为 `//www.google.com/js/bg/<INTERPRETER_HASH>.js`。runtime 始终从每次 challenge 动态读取这些字段；program 每次 Create 都不同，属于当前 VM 生命周期。
 
-### client experiments
+#### client experiments
 
 `ClientExperimentsStateBlob` 是 JSON 数组，派生初始化参数中的 signal lists 与 persistent state：
 
@@ -238,9 +240,9 @@ VM 刷新时三个 field 都设置；无绑定 snapshot 生成失败时 field 3 
 - 索引 4 为非空字符串时作为 persistent state，否则为 `undefined`
 - blob 为空时 signal lists 为 `[[], []]`
 
-当前 blob 为 `[null,null,null,null,null,null,null,[],[]]`，对应 `[[], []]` 与 `undefined`。
+当前捕获样本的 blob 为 `[null,null,null,null,null,null,null,[],[]]`，对应 `[[], []]` 与 `undefined`。runtime 从 challenge 动态解析该字段，不固定样本值。
 
-## 5. 解释器与 VM 初始化
+## 3. 解释器、VM 与 Realm
 
 ### 解释器
 
@@ -294,7 +296,7 @@ ready 回调收到函数后 VM 进入可用状态。解释器没有定义全局�
 
 初始化后 runtime 向页面输入框写入 bootstrap 提示词（默认 `AIStudio2API bootstrap <UnixNano>`），派发 `input` 与 `change` 并点击 Run 按钮，然后等待 VM 发出的全部图片请求完成，再静置 3 秒。纯 Go 页面没有 Angular 应用，点击只产生事件，不发送 `GenerateContent`。
 
-## 6. Firefox 形状宿主
+## 4. Firefox 宿主与键顺序
 
 `internal/waa/dom.js` 在每个 Realm 中按形状表 `firefox152.json` 生成 Window、WebIDL 接口对象与实例。宿主脚本的来源名为 `\x00waa-host`，这些帧不出现在 `Error.stack` 中，宿主脚本执行期间也不触发惰性全局名称解析。
 
@@ -436,11 +438,11 @@ Date 的本地时间使用指纹 `timezone`。`Date.prototype.toString` 与 `toT
 3. 有两个名称时，当前时刻的夏令时状态与当年 1 月 15 日 12:00 相同时使用第一个（1 月名称），否则使用第二个（7 月名称）
 4. 表中没有该时区时使用 `GMT±HH:MM`，零偏移为 `GMT`
 
-## 7. 惰性全局名称与内建键顺序
+### 惰性全局名称与内建键顺序
 
 program 在自建 iframe 中调用 `Object.getOwnPropertyNames(window)`，按随机下标取接口名，再枚举这些接口 prototype 的成员名写入 proof。全局对象与内建对象的自有键顺序因此必须与 Firefox 一致。
 
-### 惰性全局名称
+#### 惰性全局名称
 
 SpiderMonkey 与 Gecko 惰性定义标准类和 WebIDL 名称：名称在首次使用时才成为已定义属性，并追加到已定义属性的末尾。每个 Realm 的全局对象由 `firefoxGlobalOrder` 维护两张表：
 
@@ -471,7 +473,7 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 
 脚本定义的新全局属性追加到已定义属性末尾，被删除的属性从中移除。
 
-### 全局枚举顺序
+#### 全局枚举顺序
 
 `Object.getOwnPropertyNames`、`Object.keys`、`Reflect.ownKeys` 与 `for-in` 枚举全局对象时，字符串键按以下顺序排列，Symbol 键排在其后：
 
@@ -482,7 +484,7 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 5. 已定义属性，按定义顺序
 6. 其余键
 
-### 内建对象成员与键顺序
+#### 内建对象成员与键顺序
 
 宿主按形状表 `builtins` 逐个对齐内建对象（构造器、prototype、命名空间与 `%TypedArray%`、`%IteratorPrototype%` 等内在对象）：
 
@@ -492,7 +494,7 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 
 宿主实现覆盖 `String.prototype` 的 HTML 方法与 `isWellFormed`、`toWellFormed`，`Date.prototype.getYear`、`setYear`、`toGMTString`，`Object.prototype.__defineGetter__` 系列，`Object.groupBy`、`Map.groupBy`、`Array.fromAsync`、`Promise.withResolvers`、`Promise.try`、`Error.captureStackTrace`、`Math.f16round`、`Math.sumPrecise`、Set 集合运算、`getOrInsert` 系列、`RegExp.escape`、`Uint8Array` Base64 方法、`Atomics` 基本操作、Iterator helper 与 dispose 方法，以及 `RegExp.prototype.hasIndices`、`unicodeSets` 和 `ArrayBuffer.prototype` 的 `maxByteLength`、`resizable`、`detached` 访问器。goja 的 `Iterator` 与 `%IteratorPrototype%` 不对应时替换为 Firefox 形状的 `Iterator` 构造器。
 
-## 8. 提示词、事件与页面资源
+## 5. 提示词、事件与受保护请求
 
 ### 提示词写入
 
@@ -538,9 +540,9 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 
 VM 初始化时 program 创建图片元素请求 `/generate_204?<令牌>` 并等待 `error` 事件。宿主把 `src` 解析为绝对地址（`//` 补 `https:`，`/` 补页面 origin，相对路径基于页面地址），经账户出口以 Firefox 图片请求头发送。响应为 HTTP 200、`Content-Type` 以 `image/` 开头且正文非空时派发 `load`，其他结果（包括 `generate_204` 的 204）派发 `error`。runtime 在 bootstrap 与 VM 刷新后等待全部图片请求完成再静置。
 
-## 9. snapshot、proof 与受保护请求
+### snapshot、proof 与发送
 
-### proof
+#### proof
 
 ```text
 digest = lowercase_hex(SHA256(binding))
@@ -556,7 +558,7 @@ Build 代理的 binding 为代理请求正文前两个字符串以单个空格�
 /v1beta/models/<MODEL_ID>:streamGenerateContent {"contents":[...],...}
 ```
 
-### 发送与 Cookie 写回
+#### 发送与 Cookie 写回
 
 受保护请求由 `WorkerProtectedTransport` 组装：
 
@@ -566,7 +568,7 @@ Build 代理的 binding 为代理请求正文前两个字符串以单个空格�
 4. 纯 Go runtime 追加 Firefox fetch 头与 runtime Cookie，经账户固定出口 POST，响应体交给流式解码器
 5. 响应头到达后，Worker 的 Cookie 原子替换账户 `storage-state.json` 中的 Cookie
 
-## 10. 生命周期、失败处理与日志
+## 6. 生命周期、运行数据与失败处理
 
 ### VM 生命周期
 
@@ -582,6 +584,34 @@ Build 代理的 binding 为代理请求正文前两个字符串以单个空格�
 ### Worker 状态
 
 Worker 状态为 `starting`、`bootstrapping`、`ready`、`busy`、`closing`、`closed` 与 `failed`。取 proof 期间为 `busy`，完成后回到 `ready`；非取消错误进入 `failed`。Worker 以 generation 区分实例，替换或重建时 generation 递增，较晚返回的旧实例错误按旧 generation 处理。
+
+### Ping 与 Worker 就绪
+
+官网 bundle 定义了 `Waa/Ping`，自然页面与服务运行链都不调用它。该 RPC 适合检查 WAA endpoint 与公开 API key 的可达性：
+
+```text
+POST https://waa-pa.clients6.google.com/$rpc/google.internal.waa.v1.Waa/Ping
+Content-Type: application/json+protobuf
+```
+
+```json
+["lmnUSbltwc5ULv48iKLX", "<BOTGUARD_PROOF>"]
+```
+
+| field | 类型 | 内容 |
+| ---: | --- | --- |
+| 1 | string | request key |
+| 2 | string | 调用者提供的 BotGuard proof |
+
+成功响应为 `[]`。正确 proof、末字符损坏的 proof、省略 field 2、任意 field 1 以及没有账户 Cookie/Authorization 的请求都可返回 HTTP 200；移除 WAA API key 返回 HTTP 403，字段类型错误返回 HTTP 400。因此 Ping 只验证 RPC 与 API consumer identity，不参与 Worker readiness。
+
+| 层级 | 通过条件 | 失败含义 |
+| --- | --- | --- |
+| VM 初始化 | ready 回调提供 snapshot 函数，bootstrap 图片已完成并静置 | challenge、解释器、宿主或事件循环失败 |
+| 本地 proof | snapshot 返回 `!` 开头的字符串 | 当前 Worker 需要重建 |
+| 业务接受 | 使用该 proof 的受保护业务 RPC 返回预期语义事件与终态 | 按 HTTP/code 区分账户、模型、额度与 Worker |
+
+bootstrap 模型只负责建立账户 Worker，不是业务模型白名单，一个 Worker 可跨普通生成模型复用。proof 长度或 hash、bootstrap 与业务模型一致、`capability_code_83`、固定等待、Ping、sentinel 请求和 `sD()` 都不能预测下一次业务请求；真正的本地就绪条件是 VM 与 snapshot 成功，业务接受由实际受保护 RPC 的语义事件和终态判定。当前上游没有零生成用量的业务就绪 RPC。
 
 ### 失败分类
 
@@ -608,7 +638,7 @@ Code 7 表示本次上游调用被拒绝。它可以是账户或模型级结果�
 
 同一 runtime 的 VM 刷新得到不同 hash 时输出 `WAA 解释器版本变化`（`previous`、`current`）。解释器 hash 随上游发布变化，新 hash 在 Worker 启动、VM 刷新或 Worker 重建时自动下载执行。
 
-## 11. 形状数据与时区数据
+### 形状数据与时区数据
 
 `internal/waa` 的数据文件由真实 Firefox 页面采集生成：
 
@@ -618,11 +648,11 @@ Code 7 表示本次上游调用被拒绝。它可以是账户或模型级结果�
 | `timezones.json.gz` | Firefox Intl 长时区名 | gzip 压缩的 JSON，键排序，gzip 时间戳为 0 |
 | `dom.js` | 宿主生成脚本 | JavaScript 源码 |
 
-### 采集环境
+#### 采集环境
 
 在 Camoufox 中用已登录账户打开 AI Studio 聊天页面（Firefox 152，Windows 指纹，未检测到触控设备），通过 WebDriver BiDi 或远程调试在页面上下文中执行采集脚本。`Touch`、`TouchEvent`、`TouchList` 是否暴露取决于宿主机是否检测到触控设备，形状表按未检测到触控设备的环境采集。
 
-### 形状表采集内容
+#### 形状表采集内容
 
 | 部分 | 采集方法 |
 | --- | --- |
@@ -637,7 +667,7 @@ Code 7 表示本次上游调用被拒绝。它可以是账户或模型级结果�
 | `namespaces` | `CSS`、`console`、`WebAssembly`、`Intl` 的自有成员 |
 | `builtins` | 在新 iframe 中对 ECMAScript 内建构造器及其 prototype、`Intl`、`WebAssembly`、`Temporal` 的成员与内在对象，按 `Reflect.ownKeys` 记录成员描述 |
 
-### 整理与导出
+#### 整理与导出
 
 整理步骤把原始采集转换为上述结构：接口按父接口优先排序并并入 `call`、`construct`；实例取值按接口写入 `defaults` 与 `own`，单例写入 `singletons` 与 `topSingletons`，顶层单例中超过 4096 字符的字符串截断。导出到正式仓库前去除账户与页面状态：
 
@@ -650,7 +680,7 @@ Code 7 表示本次上游调用被拒绝。它可以是账户或模型级结果�
 - `top.global` 以及 `top`、`frame` 的 `windowValues` 删除采集工具与 bootstrap 注入的全局名以及 `botguard`
 - 导出脚本断言结果中不含邮箱、账户 Cookie 名值对（`SID`、`HSID`、`SSID`、`APISID`、`SAPISID`、`SIDCC`、`NID`、`OSID`、`AEC`、`__Secure-*`、`__Host-*`）、`PSID`、注入名与官网 localStorage 键名
 
-### 时区显示名表
+#### 时区显示名表
 
 在同一页面对 21 个区域设置（`en-US`、`en-GB`、`zh-CN`、`zh-TW`、`zh-HK`、`ja-JP`、`ko-KR`、`de-DE`、`fr-FR`、`es-ES`、`it-IT`、`pt-BR`、`ru-RU`、`vi-VN`、`th-TH`、`id-ID`、`tr-TR`、`pl-PL`、`nl-NL`、`ar-SA`、`hi-IN`）与 `Intl.supportedValuesOf('timeZone')` 加 `UTC` 的全部时区执行：
 
@@ -662,13 +692,13 @@ new Intl.DateTimeFormat(locale, {timeZone, timeZoneName: 'long'})
 
 `date` 分别取 2026-01-15 12:00 UTC 与 2026-07-15 12:00 UTC；两个名称相同时保存 `[名称]`，不同时保存 `[1 月名称, 7 月名称]`。文件结构为 `{区域设置: {IANA 时区: [名称...]}}`，当前为 21 个区域设置 × 445 个时区。
 
-### 更新后的检查
+#### 数据更新验收
 
 - `go build ./...` 与 `go vet ./...`
 - 纯 Go 与 Camoufox 在同一账户、同一模型下分别完成冷启动首请求、连续请求、模型切换、并发请求与服务重启
-- 按第 12 节的方法对若干 fresh challenge 做页面与纯 Go 双侧对照
+- 按“上游变化定位与引擎对照”的方法对若干 fresh challenge 做页面与纯 Go 双侧对照
 
-## 12. 上游变化的定位方法
+## 7. 上游变化定位与引擎对照
 
 ### 信号
 
@@ -684,7 +714,7 @@ new Intl.DateTimeFormat(locale, {timeZone, timeZoneName: 'long'})
 ### 同 challenge 双侧对照
 
 1. 在 Camoufox 页面中用同一账户调用 `Waa/Create`，保存原始响应与解释器
-2. 页面侧用已加载的解释器以该 challenge 新建 VM，按第 5 节的参数初始化，派发 `input`、`change` 后取 proof
+2. 页面侧用已加载的解释器以该 challenge 新建 VM，按“解释器、VM 与 Realm”的参数初始化，派发 `input`、`change` 后取 proof
 3. Go 侧用 `waa.ParseChallenge` 解析同一响应，以相同解释器与账户 Profile 调用 `waa.NewRuntime`、`FillPrompt`、`Settle` 与 `Proof`
 4. 两份 proof 用同一账户、同一模型与同一提示词分别发送 `GenerateContent`
 
@@ -713,7 +743,7 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 
 修正落在形状表、`dom.js`、`internal/waa` 的 Go 宿主或 goja 分叉中产生差异的一层。
 
-## 13. goja 分叉
+### goja 分叉
 
 `internal/waa/goja` 是 `github.com/dop251/goja` 在 `v0.0.0-20260826204918-8f1c0696a37b` 上的 MIT 分叉，模块路径为 `github.com/Mag1cFall/AIStudio2API/internal/waa/goja`。分叉只包含上游的非测试 Go 源码；上游源码与注释保持原样，分叉自有代码使用单行中文 Go Doc 注释。`LICENSE`、`ftoa/LICENSE_LUCENE` 与 `ftoa/internal/fast/LICENSE_V8` 随分叉源码保留。
 
@@ -723,7 +753,7 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | --- | --- | --- |
 | 多 Realm | `NewAgent`、`NewWithAgent`、`NewRealm` 让多个 Runtime 共享堆、调用栈与微任务队列；跨 Realm 调用切换当前 Runtime；Promise 可在同一 agent 的 Realm 间解析 | `runtime.go`、`vm.go`、`func.go`、`proxy.go`、`object_template.go`、`builtin_promise.go` |
 | 微任务 | `QueueMicrotask` 按 agent 排队，最外层脚本返回时统一执行 | `runtime.go`、`builtin_promise.go` |
-| eval | `SetEvalTransformer` 在原生 eval 前转换参数；eval 源码名为 `<调用文件> line <行> > eval` | `runtime.go`、`vm.go` |
+| eval | `SetEvalTransformer` 在原生 eval 前转换参数；eval 源码名为 `<调用文件> line <行> > eval` | `runtime.go` |
 | 错误栈 | `Error.prototype.stack` 为访问器，格式为 `函数名@文件:行:列`；来源名以 `\x00` 开头的脚本帧不出现；Error 实例带 `fileName`、`lineNumber`、`columnNumber` | `builtin_error.go` |
 | 函数名推断 | 按 SpiderMonkey NameFunctions 规则推断匿名函数的栈显示名，如 `a.b/<` | `names.go`、`compiler.go`、`compiler_expr.go` |
 | 调用位置 | 调用帧列号取被调属性名、字符串键或 eval 标识符的位置 | `compiler_expr.go`、`compiler_stmt.go` |
@@ -742,9 +772,9 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 - SpiderMonkey 在编译期解析正则字面量对应的全局 `RegExp`，分叉在首次使用正则原型时解析
 - `RegExp.prototype` 的 Symbol 键顺序与 Firefox 不同
 
-升级上游版本时，用 `go mod download github.com/dop251/goja@<版本>` 取得上游源码，逐文件比较当前分叉与原上游版本的差异，把上表的行为改动合并到新版本，替换模块路径并执行 gofmt，再按第 11 节的检查验收。
+升级上游版本时，用 `go mod download github.com/dop251/goja@<版本>` 取得上游源码，逐文件比较当前分叉与原上游版本的差异，把上表的行为改动合并到新版本，替换模块路径并执行 gofmt，再按“数据更新验收”检查。
 
-## 14. 代码地图
+## 8. 实现位置
 
 | 路径 | 职责 |
 | --- | --- |

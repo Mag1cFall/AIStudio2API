@@ -17,7 +17,7 @@
   Playground + Build 双额度通道 &nbsp;•&nbsp;
   多账户高并发 &nbsp;•&nbsp;
   Camoufox 与纯 Go 双 WAA 后端<br>
-  Claude Code、Codex 等 7 款 agent 客户端实测 &nbsp;•&nbsp;
+  Claude Code、Codex 等 agent 客户端 &nbsp;•&nbsp;
   Nano Banana、Veo、TTS 与 Omni
 </p>
 
@@ -27,11 +27,11 @@
 
 ## 核心能力
 
-- **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；实测同一账户 Playground 触发每日限额后，同一请求由 Build 完成
-- **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用；实测 28 个账户下 200 个并发请求全部返回完整正文，热态 60 至 74 秒完成，服务进程常驻约 180 MB
+- **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；一个通道触发限额后，同一账户由另一个通道继续
+- **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=go` 后由纯 Go 生成官方 proof，运行时不下载、不启动浏览器
-- **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Anthropic 官方 SDK 23 个场景实测通过
-- **主流 agent 客户端**: Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的读写文件工具往返均实测通过，Claude Code、Codex、omp 的原生联网搜索可直接使用
+- **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent
+- **主流 agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
 
