@@ -108,6 +108,9 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		if len(model.AccessModes) > 0 {
 			item["access_modes"] = model.AccessModes
 		}
+		if len(model.Channels) > 0 {
+			item["channels"] = model.Channels
+		}
 		if model.Paid {
 			item["paid"] = true
 		}

@@ -347,6 +347,12 @@ func validateLeaseSelection(lease *AccountLease, selection AccountSelection) err
 		}
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
+	if lease.Channel() == ChannelBuild {
+		if modelID != "" && !lease.pool.channelSupportsLocked(account, ChannelBuild, selection) {
+			return fmt.Errorf("context 租约账户 %s 的 Build 通道不支持模型 %s", account.ID, modelID)
+		}
+		return nil
+	}
 	if modelID != "" && !account.SupportsModel(modelID) {
 		return fmt.Errorf("context 租约账户 %s 不支持模型 %s", account.ID, modelID)
 	}

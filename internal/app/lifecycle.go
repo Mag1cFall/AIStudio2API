@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -454,7 +455,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency, TemporaryChat: value.TemporaryChat,
-		RoutingStrategy: value.RoutingStrategy,
+		RoutingStrategy: value.RoutingStrategy, UpstreamChannels: value.UpstreamChannels,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -462,7 +463,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WarmWorkerLimit == active.WarmWorkerLimit && saved.MaxActiveWorkers == active.MaxActiveWorkers &&
 		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
 		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
-		saved.RoutingStrategy == active.RoutingStrategy
+		saved.RoutingStrategy == active.RoutingStrategy &&
+		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels)
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

@@ -14,25 +14,29 @@
 </p>
 
 <p>
-  Multi-Account Rotation &nbsp;•&nbsp;
-  Nano Banana Image Generation &nbsp;•&nbsp;
-  Google Tools<br>
-  Veo Video Generation &nbsp;•&nbsp;
-  Gemini TTS Speech Synthesis
+  Playground + Build Dual Quota Channels &nbsp;•&nbsp;
+  High-Concurrency Multi-Account<br>
+  Tested with 7 Agent Clients Including Claude Code and Codex &nbsp;•&nbsp;
+  Nano Banana, Veo, TTS, and Omni
 </p>
 
 </div>
 
 ---
 
+## Core Capabilities
+
+- **Dual Quota Channels**: Every account has separate Playground and Build app proxy quotas, and `UPSTREAM_CHANNELS` enables either or both; in testing, when an account's Playground hit its daily limit, Build completed the same request
+- **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first; in testing, 200 concurrent requests across 28 accounts all returned complete text, finishing in 60 to 74 seconds when warm with about 180 MB resident service memory
+- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; all 23 official Anthropic SDK scenarios pass
+- **Mainstream Agent Clients**: Claude Code, Codex, OpenCode, pi, omp, OpenClaw, and Hermes pass real file read and write tool round trips, and native web search works in Claude Code, Codex, and omp
+
 ## Features
 
-- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent
-- **Multi-Account Runtime**: Detects Free, Pro, Ultra, and Plus benefits and selects eligible accounts with round-robin or fill-first routing
 - **Native Streaming**: Text, reasoning summaries, function calls, Google tools, media, and usage
 - **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
 - **Image Generation**: Nano Banana image generation
-- **Video Generation**: Veo video generation and image-to-video
+- **Video Generation**: Veo video generation and image-to-video; Gemini Omni accepts text, image, and video input and returns text and MP4 video through the four generation APIs
 - **YouTube Input**: Paste a video URL to attach and read the external video
 - **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
 - **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
@@ -254,7 +258,7 @@ Main endpoints:
 | Music | Gemini `generateContent` with `responseModalities: ["AUDIO"]` |
 | Video | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
 | Gemini Video | `POST /v1beta/models/{model}:predictLongRunning`, `GET /v1beta/operations/{id}` |
-| Live / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
+| Live (including live translation and live transcription) / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
 
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
@@ -299,7 +303,7 @@ curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateCo
   }' --output speech.json
 ```
 
-Available voices are returned by `capability_options.voices` in the live model catalog.
+Available voices are returned by `capability_options.voices` in the live model catalog. Models with the `speech_metadata` capability, such as `gemini-3.8-flash-tts`, accept the same `Speaker: line` script, and each text part can also set `speechMetadata.speaker` and `speechMetadata.style`, with `multiSpeakerVoiceConfig.mode` selecting `VERBATIM` or `CONVERSATIONAL`; OpenAI `instructions` become the speech style on these models.
 
 ### Image Generation (Nano Banana)
 
@@ -409,6 +413,7 @@ cp .env.example .env
 | `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
+| `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
@@ -449,6 +454,7 @@ The Accounts page supports Chrome batch import and isolated Camoufox login. `rea
 
 - [Development and contribution](docs/development.md)
 - [Google AI Studio protocol specification](docs/protocol.md)
+- [Build channel](docs/build.md)
 - [Runtime logging](docs/logging.md)
 - [Reusable reverse-engineering development guide](docs/reverse-engineering.md)
 
@@ -519,7 +525,7 @@ Issues and Pull Requests are welcome!
 
 ### Pure-Protocol WAA Runtime
 
-The target is a complete reverse-engineered WAA VM that independently executes the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline in Go. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
+The target is a complete reverse-engineered WAA VM that independently executes the dynamic program, interpreter, challenge, persistent state, snapshot, and proof pipeline. The final production runtime contains only the Go protocol implementation, with no Camoufox process, DOM environment, or AI Studio frontend bundle dependency.
 
 | Stage | Deliverable |
 | --- | --- |

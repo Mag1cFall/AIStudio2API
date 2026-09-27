@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from '@/i18n'
+import { channelLabelKey, useI18n } from '@/i18n'
 import type { LogRow } from '@/logs'
 import UiIcon from './UiIcon.vue'
 
@@ -52,7 +52,10 @@ function number(value: number, digits = 0): string {
         <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
         {{ t('logs.details') }}
         <span class="request-summary-meta"
-          >{{ request.method }} · HTTP {{ request.status || '…' }}</span
+          >{{ request.method }} · HTTP {{ request.status || '…'
+          }}<template v-if="request.channel">
+            · {{ t(channelLabelKey(request.channel)) }}</template
+          ></span
         >
       </summary>
       <dl>
@@ -60,6 +63,10 @@ function number(value: number, digits = 0): string {
         <dd>{{ request.id }}</dd>
         <dt>{{ t('logs.endpoint') }}</dt>
         <dd>{{ request.method }} {{ request.path }}</dd>
+        <template v-if="request.channel">
+          <dt>{{ t('logs.channel') }}</dt>
+          <dd>{{ t(channelLabelKey(request.channel)) }}</dd>
+        </template>
         <template v-if="request.usage">
           <dt>{{ t('logs.inputTokens') }}</dt>
           <dd>{{ number(request.usage.input_tokens) }} tokens</dd>

@@ -159,15 +159,15 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	if voice == "" {
 		voice = "Zephyr"
 	}
-	input := strings.TrimSpace(request.Input)
+	part := aistudio.Part{Text: strings.TrimSpace(request.Input)}
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
-		input = instructions + "\n\n" + input
+		part.SpeechMetadata = &aistudio.SpeechMetadata{Style: instructions}
 	}
 	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
 		ID:    newID("speech"),
 		Model: request.Model,
 		Contents: []aistudio.Content{{
-			Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: input}},
+			Role: aistudio.RoleUser, Parts: []aistudio.Part{part},
 		}},
 		Config: aistudio.GenerationConfig{
 			ResponseModalities: []aistudio.ResponseModality{aistudio.ResponseModalityAudio},

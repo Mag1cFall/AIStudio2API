@@ -90,6 +90,7 @@ export interface RequestLog {
   parameters?: Record<string, string>
   first_event_ms?: number
   upstream_bytes?: number
+  channel?: UpstreamChannel
   usage?: {
     input_tokens: number
     reasoning_tokens: number
@@ -111,11 +112,15 @@ export interface Model {
   capability_options?: Record<string, string[]>
   access_modes?: number[]
   paid?: boolean
+  channels?: UpstreamChannel[]
 }
+
+export type UpstreamChannel = 'playground' | 'build'
 
 export interface Cooldown {
   account_id: string
   account_label: string
+  channel: UpstreamChannel
   model_id: string
   until: string
   reason?: string
@@ -128,6 +133,7 @@ export interface RequestSummary {
   model: string
   account_id: string
   account_label: string
+  channel?: UpstreamChannel
   state: RequestState
   started_at: string
 }
@@ -148,6 +154,7 @@ export interface ServiceConfig {
   warm_startup_concurrency: number
   per_account_concurrency: number
   routing_strategy: 'round-robin' | 'fill-first'
+  upstream_channels: UpstreamChannel[]
   temporary_chat: boolean
 }
 

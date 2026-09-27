@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -369,7 +370,19 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 				wire = append(wire, nil)
 			}
 		}
-		wire[2] = []any{nil, speakers}
+		multi := []any{nil, speakers}
+		switch strings.ToUpper(strings.TrimSpace(config.Mode)) {
+		case "":
+		case "VERBATIM":
+			multi = append(multi, int64(1))
+		case "CONVERSATIONAL":
+			multi = append(multi, int64(2))
+		default:
+			return nil, fmt.Errorf("speech config mode 必须是 VERBATIM 或 CONVERSATIONAL")
+		}
+		wire[2] = multi
+	} else if strings.TrimSpace(config.Mode) != "" {
+		return nil, fmt.Errorf("speech config mode 只能用于 multi-speaker")
 	}
 	return wire, nil
 }
@@ -416,7 +429,10 @@ func applySpeechTranscript(contents []Content, model Model, config GenerationCon
 	if !model.Capabilities["speech_route"] || config.SpeechConfig == nil {
 		return contents
 	}
-	result := append([]Content(nil), contents...)
+	if model.Capabilities["speech_metadata"] {
+		return splitSpeakerSegments(contents, config.SpeechConfig.Speakers)
+	}
+	result := foldSpeechMetadata(contents)
 	for contentIndex, content := range result {
 		parts := append([]Part(nil), content.Parts...)
 		for partIndex, part := range parts {
@@ -432,6 +448,93 @@ func applySpeechTranscript(contents []Content, model Model, config GenerationCon
 	return result
 }
 
+// foldSpeechMetadata 把分段说话人与风格写回旧 TTS 模型的台词文本
+func foldSpeechMetadata(contents []Content) []Content {
+	result := append([]Content(nil), contents...)
+	for contentIndex, content := range result {
+		if !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.SpeechMetadata != nil }) {
+			continue
+		}
+		parts := append([]Part(nil), content.Parts...)
+		for index, part := range parts {
+			if part.SpeechMetadata == nil {
+				continue
+			}
+			if part.SpeechMetadata.Speaker != "" {
+				part.Text = part.SpeechMetadata.Speaker + ": " + part.Text
+			}
+			if part.SpeechMetadata.Style != "" {
+				part.Text = part.SpeechMetadata.Style + "\n\n" + part.Text
+			}
+			part.SpeechMetadata = nil
+			parts[index] = part
+		}
+		result[contentIndex].Parts = parts
+	}
+	return result
+}
+
+// splitSpeakerSegments 把 "说话人: 台词" 文本按多说话人配置拆成带 SpeechMetadata 的分段
+func splitSpeakerSegments(contents []Content, speakers []SpeakerVoiceConfig) []Content {
+	if len(speakers) == 0 {
+		return contents
+	}
+	names := make([]string, 0, len(speakers))
+	for _, speaker := range speakers {
+		names = append(names, regexp.QuoteMeta(strings.TrimSpace(speaker.Speaker)))
+	}
+	pattern := regexp.MustCompile(`^\s*(` + strings.Join(names, "|") + `)\s*:\s*(.*)$`)
+	result := append([]Content(nil), contents...)
+	for contentIndex, content := range result {
+		parts := make([]Part, 0, len(content.Parts))
+		changed := false
+		for _, part := range content.Parts {
+			if part.Text == "" || part.SpeechMetadata != nil && part.SpeechMetadata.Speaker != "" {
+				parts = append(parts, part)
+				continue
+			}
+			segments := speakerSegments(part, pattern)
+			if len(segments) == 0 {
+				parts = append(parts, part)
+				continue
+			}
+			parts = append(parts, segments...)
+			changed = true
+		}
+		if changed {
+			result[contentIndex].Parts = parts
+		}
+	}
+	return result
+}
+
+// speakerSegments 返回文本中以说话人开头的各段台词，首个说话人之前的文本不进入分段
+func speakerSegments(part Part, pattern *regexp.Regexp) []Part {
+	style := ""
+	if part.SpeechMetadata != nil {
+		style = part.SpeechMetadata.Style
+	}
+	var segments []Part
+	for _, line := range strings.Split(part.Text, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if match := pattern.FindStringSubmatch(line); match != nil {
+			segments = append(segments, Part{Text: match[2], SpeechMetadata: &SpeechMetadata{Speaker: match[1], Style: style}})
+			continue
+		}
+		if len(segments) > 0 {
+			segments[len(segments)-1].Text += "\n" + line
+		}
+	}
+	result := segments[:0]
+	for _, segment := range segments {
+		segment.Text = strings.TrimSpace(segment.Text)
+		if segment.Text != "" {
+			result = append(result, segment)
+		}
+	}
+	return result
+}
+
 func observedSafetySettings() []any {
 	settings := make([]any, 0, 4)
 	for category := int64(7); category <= 10; category++ {
@@ -441,7 +544,15 @@ func observedSafetySettings() []any {
 }
 
 func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan Event, error) {
-	entry, err := c.modelEntry(ctx, request.AccountID, request.Model)
+	lease, leased := AccountLeaseFromContext(ctx)
+	build := leased && lease.Channel() == ChannelBuild
+	var entry modelEntry
+	var err error
+	if build {
+		entry, err = c.buildModelEntry(ctx, request, lease)
+	} else {
+		entry, err = c.modelEntry(ctx, request.AccountID, request.Model)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -451,23 +562,21 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
+	if entry.defaults.InteractionStream && !build {
+		return c.generateInteraction(ctx, request, entry)
+	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
 	request.ImageRoute = entry.defaults.ImageRoute
 	request.Contents = applySpeechTranscript(request.Contents, entry.model, request.Config)
-	runtime := RequestContext{}
-	if c.contextProvider != nil {
-		runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID)
-		if err != nil {
-			return nil, fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
-		}
-	}
 	wireRequest := request
 	wireRequest.Config.StopSequences = nil
-	body, err := EncodeGenerateContentRequest(wireRequest, entry.defaults, runtime)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	var response *RPCResponse
+	var decodeStream func(io.Reader, func(Event) error) error
+	if build {
+		response, decodeStream, err = c.sendBuild(ctx, wireRequest, entry)
+	} else {
+		response, decodeStream, err = c.sendPlayground(ctx, wireRequest, entry)
 	}
-	response, err := c.doProtected(ctx, request, body)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +605,6 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			_ = response.Body.Close()
 		})
 		defer stopClose()
-		decoder := NewFrameDecoder()
 		send := func(event Event) error {
 			event.ProviderModel = entry.model.ID
 			select {
@@ -552,7 +660,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			return nil
 		}
-		err := DecodeGenerateStream(observeStreamActivity(ctx, response.Body), decoder, emit)
+		err := decodeStream(observeStreamActivity(ctx, response.Body), emit)
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
 			select {
@@ -568,9 +676,6 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			_ = send(Event{Kind: EventFinish, FinishReason: "stop_sequence", StopSequence: matchedStopSequence})
 			return
-		}
-		if err == nil {
-			err = decoder.End()
 		}
 		if closeErr := response.Body.Close(); err == nil {
 			err = closeErr
@@ -606,6 +711,33 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 	}()
 	return events, nil
+}
+
+// sendPlayground 编码并发送 Playground GenerateContent，返回响应与含完成帧校验的流解码
+func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
+	runtime := RequestContext{}
+	if c.contextProvider != nil {
+		var err error
+		runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
+		}
+	}
+	body, err := EncodeGenerateContentRequest(request, entry.defaults, runtime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	response, err := c.doProtected(ctx, request, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	decoder := NewFrameDecoder()
+	return response, func(source io.Reader, emit func(Event) error) error {
+		if err := DecodeGenerateStream(source, decoder, emit); err != nil {
+			return err
+		}
+		return decoder.End()
+	}, nil
 }
 
 // DecodeGenerateStream 按网络到达顺序解码 GenerateContent repeated 帧

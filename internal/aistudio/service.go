@@ -98,14 +98,19 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*Work
 	}, nil
 }
 
-// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent
+// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent 或 Build 代理请求
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
 	prompt, err := bindingPrompt(request)
+	proofField := 5
+	if rpc.Method == buildProxyStreamedMethod || rpc.Method == buildProxyUnaryMethod {
+		prompt, err = buildBindingPrompt(rpc.Body)
+		proofField = buildProofField
+	}
 	if err != nil {
 		return nil, err
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	return t.doBrowserPrepared(ctx, prompt, AccountSelection{
+	return t.doBrowserPrepared(ctx, prompt, proofField, AccountSelection{
 		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
 	}, rpc)
 }
@@ -113,10 +118,11 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 func (t *WorkerProtectedTransport) doBrowserPrepared(
 	ctx context.Context,
 	prompt string,
+	proofField int,
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
-	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, 5, selection, rpc)
+	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, proofField, selection, rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +335,7 @@ func (s *PooledService) CachedModels() []Model {
 			models = mergeModels(models, account.Models)
 		}
 	}
-	return models
+	return mergeModels(models, s.pool.buildOnlyModelsLocked())
 }
 
 type accountModelsResult struct {
@@ -470,6 +476,15 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease)
 	if err := s.pool.SetCatalog(account.ID, tier, models); err != nil {
 		return nil, err
 	}
+	if s.pool.BuildEnabled() {
+		buildModels, err := s.client.BuildModelsForAccount(ContextWithAccountLease(ctx, lease), account.ID)
+		if err != nil {
+			return models, fmt.Errorf("读取 Build 模型目录: %w", err)
+		}
+		if err := s.pool.SetBuildCatalog(account.ID, buildModels); err != nil {
+			return models, err
+		}
+	}
 	return models, nil
 }
 
@@ -569,7 +584,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		retryable := retryableAccountError(err)
 		var stateErr error
 		if owned && retryable {
-			stateErr = s.markRetryableFailure(lease, modelID, err)
+			stateErr = s.markRetryableFailure(lease, lease.CooldownScope(modelID), err)
 		}
 		if owned {
 			requestErr = errors.Join(requestErr, stateErr, lease.Release())
@@ -666,7 +681,7 @@ func forwardEventsWithLease(
 		if event.Kind == EventFinish {
 			go func() {
 				if _, err := pool.MarkModelAccessVerifiedIfGeneration(
-					accountID, modelID, accessGeneration, checkedAt,
+					accountID, lease.CooldownScope(modelID), accessGeneration, checkedAt,
 				); err != nil {
 					slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
 				}

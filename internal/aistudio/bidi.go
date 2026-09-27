@@ -18,10 +18,35 @@ const (
 	BidiModeRobotics BidiMode = "robotics"
 )
 
+// bidiVariant 表示按模型能力选择的 Live setup 形态
+type bidiVariant int
+
+const (
+	bidiVariantUnknown bidiVariant = iota
+	bidiVariantConversation
+	bidiVariantTranslation
+	bidiVariantTranscription
+)
+
+// BidiTranslationConfig 表示实时翻译模型的目标语言
+type BidiTranslationConfig struct {
+	TargetLanguageCode string `json:"target_language_code"`
+	EchoTargetLanguage bool   `json:"echo_target_language,omitempty"`
+}
+
+// BidiTranscriptionConfig 表示实时转录模型的输入转录参数
+type BidiTranscriptionConfig struct {
+	LanguageCodes []string `json:"language_codes,omitempty"`
+}
+
 // BidiRequest 定义一条双向实时会话
 type BidiRequest struct {
-	Model                    string
-	Mode                     BidiMode
+	Model string
+	Mode  BidiMode
+	// OutputModality 表示 Live 会话输出 audio 或 text
+	OutputModality           string
+	Translation              *BidiTranslationConfig
+	Transcription            *BidiTranscriptionConfig
 	Tools                    []FunctionDeclaration
 	AccountID                string
 	AllowedAccountIDs        []string
@@ -32,6 +57,57 @@ type BidiRequest struct {
 	ObserveModelAccessChange func()
 	ObserveAccountFailure    func(string, error)
 	generationDefaults       GenerationDefaults
+	variant                  bidiVariant
+}
+
+// bidiVariantFor 按模型能力选择 Live setup 形态
+func bidiVariantFor(model Model) bidiVariant {
+	switch {
+	case model.Capabilities["speech_translation"]:
+		return bidiVariantTranslation
+	case model.Capabilities["transcription_output"]:
+		return bidiVariantTranscription
+	default:
+		return bidiVariantConversation
+	}
+}
+
+// validateLiveVariant 核对输出模态、翻译与转录参数是否符合模型形态
+func validateLiveVariant(request BidiRequest) error {
+	output := strings.ToLower(strings.TrimSpace(request.OutputModality))
+	if output != "" && output != "audio" && output != "text" {
+		return fmt.Errorf("%w: live output modality %q 不可用", ErrInvalidArgument, request.OutputModality)
+	}
+	if request.variant == bidiVariantUnknown {
+		return nil
+	}
+	if request.variant != bidiVariantTranslation && request.Translation != nil {
+		return fmt.Errorf("%w: 模型 %s 不支持 translation", ErrInvalidArgument, request.Model)
+	}
+	if request.variant != bidiVariantTranscription && request.Transcription != nil {
+		return fmt.Errorf("%w: 模型 %s 不支持 transcription", ErrInvalidArgument, request.Model)
+	}
+	if request.variant != bidiVariantConversation && len(request.Tools) > 0 {
+		return fmt.Errorf("%w: 模型 %s 不支持 tools", ErrInvalidArgument, request.Model)
+	}
+	switch request.variant {
+	case bidiVariantTranslation:
+		if output == "text" {
+			return fmt.Errorf("%w: 模型 %s 的 output_modalities 必须是 [audio]", ErrInvalidArgument, request.Model)
+		}
+		if request.Translation == nil || strings.TrimSpace(request.Translation.TargetLanguageCode) == "" {
+			return fmt.Errorf("%w: 模型 %s 需要 translation.target_language_code", ErrInvalidArgument, request.Model)
+		}
+	case bidiVariantTranscription:
+		if output != "text" {
+			return fmt.Errorf("%w: 模型 %s 的 output_modalities 必须是 [text]", ErrInvalidArgument, request.Model)
+		}
+	default:
+		if output == "text" {
+			return fmt.Errorf("%w: 模型 %s 的 output_modalities 必须是 [audio]", ErrInvalidArgument, request.Model)
+		}
+	}
+	return nil
 }
 
 // BidiEventKind 表示双向实时协议事件
@@ -48,6 +124,8 @@ const (
 	BidiEventInputTranscription BidiEventKind = "input_transcription"
 	// BidiEventOutputTranscription 表示输出转写增量
 	BidiEventOutputTranscription BidiEventKind = "output_transcription"
+	// BidiEventInterimInputTranscription 表示实时转录模型当前累计的临时输入转写
+	BidiEventInterimInputTranscription BidiEventKind = "interim_input_transcription"
 	// BidiEventGenerationComplete 表示当前生成已完成
 	BidiEventGenerationComplete BidiEventKind = "generation_complete"
 	// BidiEventTurnComplete 表示当前对话轮次已完成
@@ -102,12 +180,35 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	}
 	configuration := make([]any, 18)
 	setup := make([]any, 16)
+	conversation := true
 	switch request.Mode {
 	case BidiModeLive:
-		configuration[14] = []any{int64(3)}
-		configuration[15] = []any{[]any{[]any{"Zephyr"}}}
-		if request.generationDefaults.ThinkingLevel {
-			configuration[16] = []any{int64(1), nil, nil, request.generationDefaults.DefaultThinkingLevel}
+		if err := validateLiveVariant(request); err != nil {
+			return nil, "", err
+		}
+		switch request.variant {
+		case bidiVariantTranslation:
+			// 官网实时翻译 setup：无声音、思考与 MediaResolution，field 31 为 TranslationConfig
+			conversation = false
+			configuration = make([]any, 31)
+			configuration[13] = int64(0)
+			configuration[14] = []any{int64(3)}
+			echo := int64(0)
+			if request.Translation.EchoTargetLanguage {
+				echo = 1
+			}
+			configuration[30] = []any{echo, strings.TrimSpace(request.Translation.TargetLanguageCode)}
+		case bidiVariantTranscription:
+			// 官网实时转录 setup：只输出 TEXT，setup field 10 为输入转录参数
+			conversation = false
+			configuration = make([]any, 15)
+			configuration[14] = []any{int64(1)}
+		default:
+			configuration[14] = []any{int64(3)}
+			configuration[15] = []any{[]any{[]any{"Zephyr"}}}
+			if request.generationDefaults.ThinkingLevel {
+				configuration[16] = []any{int64(1), nil, nil, request.generationDefaults.DefaultThinkingLevel}
+			}
 		}
 	case BidiModeRobotics:
 		configuration[14] = []any{int64(1)}
@@ -115,7 +216,9 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	default:
 		return nil, "", fmt.Errorf("%w: 未识别的 bidi mode %q", ErrInvalidArgument, request.Mode)
 	}
-	configuration[17] = int64(2)
+	if conversation {
+		configuration[17] = int64(2)
+	}
 	wireModel := wireModelName(model)
 	setup[0] = wireModel
 	setup[1] = configuration
@@ -136,11 +239,19 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	}
 	if sessionToken := strings.TrimSpace(request.SessionToken); sessionToken != "" {
 		setup[6] = []any{sessionToken}
-	} else {
+	} else if conversation {
 		setup[6] = []any{}
 	}
-	setup[7] = []any{int64(104857), []any{int64(52428)}}
+	if conversation {
+		setup[7] = []any{int64(104857), []any{int64(52428)}}
+	}
 	setup[9] = []any{}
+	if request.Transcription != nil && len(request.Transcription.LanguageCodes) > 0 {
+		// AudioTranscriptionConfig field 8 为 language codes
+		transcription := make([]any, 8)
+		transcription[7] = append([]string(nil), request.Transcription.LanguageCodes...)
+		setup[9] = transcription
+	}
 	setup[10] = []any{}
 	if timezone := strings.TrimSpace(runtime.Timezone); timezone != "" {
 		setup[15] = []any{nil, nil, nil, nil, []any{timezone}}
@@ -484,6 +595,7 @@ func parseBidiServerContent(raw json.RawMessage, evidence json.RawMessage) ([]Bi
 	}{
 		{index: 5, kind: BidiEventInputTranscription},
 		{index: 6, kind: BidiEventOutputTranscription},
+		{index: 10, kind: BidiEventInterimInputTranscription},
 	} {
 		transcriptionRaw := rawAt(content, field.index)
 		if isJSONNull(transcriptionRaw) {

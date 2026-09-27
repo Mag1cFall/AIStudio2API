@@ -95,6 +95,19 @@ type geminiPart struct {
 		Output  string `json:"output"`
 		Error   string `json:"error"`
 	} `json:"codeExecutionResult"`
+	SpeechMetadata      *aistudio.SpeechMetadata `json:"speechMetadata"`
+	SpeechMetadataSnake *aistudio.SpeechMetadata `json:"speech_metadata"`
+}
+
+func (p geminiPart) speechMetadata() *aistudio.SpeechMetadata {
+	metadata := p.SpeechMetadata
+	if metadata == nil {
+		metadata = p.SpeechMetadataSnake
+	}
+	if metadata == nil || strings.TrimSpace(metadata.Speaker) == "" && strings.TrimSpace(metadata.Style) == "" {
+		return nil
+	}
+	return &aistudio.SpeechMetadata{Speaker: strings.TrimSpace(metadata.Speaker), Style: strings.TrimSpace(metadata.Style)}
 }
 
 func (p geminiPart) inline() *geminiBlobPart {
@@ -163,6 +176,7 @@ type geminiSpeakerVoiceConfig struct {
 type geminiSpeechConfig struct {
 	VoiceConfig             *geminiVoiceConfig `json:"voiceConfig"`
 	MultiSpeakerVoiceConfig *struct {
+		Mode                string                     `json:"mode"`
 		SpeakerVoiceConfigs []geminiSpeakerVoiceConfig `json:"speakerVoiceConfigs"`
 	} `json:"multiSpeakerVoiceConfig"`
 }
@@ -239,6 +253,9 @@ func geminiModelObject(model aistudio.Model) map[string]any {
 	}
 	if len(model.AccessModes) > 0 {
 		item["accessModes"] = model.AccessModes
+	}
+	if len(model.Channels) > 0 {
+		item["channels"] = model.Channels
 	}
 	if model.Paid {
 		item["paid"] = true
@@ -448,6 +465,7 @@ func mapGeminiSpeechConfig(input *geminiSpeechConfig) (*aistudio.SpeechConfig, e
 		config.VoiceName = input.VoiceConfig.PrebuiltVoiceConfig.VoiceName
 	}
 	if input.MultiSpeakerVoiceConfig != nil {
+		config.Mode = input.MultiSpeakerVoiceConfig.Mode
 		for index, speaker := range input.MultiSpeakerVoiceConfig.SpeakerVoiceConfigs {
 			if strings.TrimSpace(speaker.Speaker) == "" || speaker.VoiceConfig.PrebuiltVoiceConfig == nil || strings.TrimSpace(speaker.VoiceConfig.PrebuiltVoiceConfig.VoiceName) == "" {
 				return nil, fmt.Errorf("speechConfig.multiSpeakerVoiceConfig.speakerVoiceConfigs[%d] requires speaker and voiceName", index)
@@ -591,7 +609,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 				}
 				continue
 			}
-			parts = append(parts, aistudio.Part{Text: *part.Text, ThoughtSignature: part.ThoughtSignature})
+			parts = append(parts, aistudio.Part{Text: *part.Text, ThoughtSignature: part.ThoughtSignature, SpeechMetadata: part.speechMetadata()})
 		}
 	}
 	return parts, hasResult, nil

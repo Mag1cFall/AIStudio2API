@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 const (
@@ -77,6 +79,12 @@ type BidiSession struct {
 	qualificationCheckedAt time.Time
 	qualificationLastAt    time.Time
 
+	outboxMu   sync.Mutex
+	outbox     []bidiOutgoing
+	outboxErr  error
+	outboxWake chan struct{}
+	outboxOnce sync.Once
+
 	events      chan BidiEvent
 	wireEvents  chan BidiEvent
 	forwarding  chan bool
@@ -86,6 +94,16 @@ type BidiSession struct {
 	releaseErr  error
 	closeErr    error
 	closeOnce   sync.Once
+}
+
+// bidiForwardBatchLimit 是官网前向通道单次 POST 携带的最大消息数
+const bidiForwardBatchLimit = 25
+
+// bidiOutgoing 表示等待前向通道发送的一条 WebChannel 消息
+type bidiOutgoing struct {
+	payload   []byte
+	qualifies bool
+	done      chan error
 }
 
 var _ BidiService = (*PooledService)(nil)
@@ -142,6 +160,9 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			return nil, err
 		}
 		request.generationDefaults = entry.defaults
+		if request.Mode == BidiModeLive {
+			request.variant = bidiVariantFor(entry.model)
+		}
 		runtime := RequestContext{}
 		if s.client.contextProvider != nil {
 			runtime, err = s.client.contextProvider.RequestContext(ctx, request.AccountID)
@@ -285,26 +306,26 @@ func (s *BidiSession) SendText(ctx context.Context, text string) error {
 	}
 	return s.sendProtected(
 		ctx, body, binding,
-		s.modelAccessScope != "" && (s.mode == BidiModeRobotics || s.modelAccessScope == s.model),
+		s.modelAccessScope != "" && (s.mode == BidiModeRobotics || s.modelAccessScope == s.model), true,
 	)
 }
 
-// SendMedia 发送一条官网实时音频或图像输入帧
+// SendMedia 把一条官网实时音频或图像输入帧排入前向通道，发送失败在后续调用返回
 func (s *BidiSession) SendMedia(ctx context.Context, mimeType string, data []byte) error {
 	body, binding, err := EncodeBidiMediaRequest(mimeType, data)
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, s.modelAccessScope != "")
+	return s.sendProtected(ctx, body, binding, s.modelAccessScope != "", false)
 }
 
-// SendMediaEnd 发送官网实时媒体结束帧
+// SendMediaEnd 发送官网实时媒体结束帧并等待此前排队的媒体帧送达
 func (s *BidiSession) SendMediaEnd(ctx context.Context) error {
 	body, binding, err := EncodeBidiMediaEndRequest()
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, false)
+	return s.sendProtected(ctx, body, binding, false, true)
 }
 
 // SendToolResponses 发送官网函数响应帧
@@ -313,7 +334,7 @@ func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionR
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, false)
+	return s.sendProtected(ctx, body, binding, false, true)
 }
 
 // Close 取消网络读取并等待账户租约释放
@@ -545,7 +566,7 @@ func (s *BidiSession) sendPreparedSetup(ctx context.Context, body []byte) error 
 	return s.postMessage(ctx, body, false)
 }
 
-func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding string, qualifies bool) error {
+func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding string, qualifies bool, wait bool) error {
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopSession := context.AfterFunc(s.ctx, cancel)
 	defer func() {
@@ -562,20 +583,111 @@ func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding st
 	if len(prepared.Body) == 0 {
 		return fmt.Errorf("WAA preparer 返回空 bidi 请求")
 	}
-	return s.postMessage(requestCtx, prepared.Body, qualifies)
+	return s.enqueueMessage(requestCtx, prepared.Body, qualifies, wait)
 }
 
-func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies bool) (resultErr error) {
+// enqueueMessage 按调用顺序把消息交给前向通道，wait 为 true 时等待该消息的 ACK
+func (s *BidiSession) enqueueMessage(ctx context.Context, payload []byte, qualifies bool, wait bool) error {
+	s.outboxOnce.Do(func() {
+		s.outboxWake = make(chan struct{}, 1)
+		go s.runForwardChannel()
+	})
+	entry := bidiOutgoing{payload: payload, qualifies: qualifies}
+	if wait {
+		entry.done = make(chan error, 1)
+	}
+	s.outboxMu.Lock()
+	if s.outboxErr != nil {
+		err := s.outboxErr
+		s.outboxMu.Unlock()
+		return err
+	}
+	s.outbox = append(s.outbox, entry)
+	s.outboxMu.Unlock()
+	select {
+	case s.outboxWake <- struct{}{}:
+	default:
+	}
+	if !wait {
+		return nil
+	}
+	select {
+	case err := <-entry.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runForwardChannel 像官网 WebChannel 一样把排队消息合并为多条 req 的 POST 发送
+func (s *BidiSession) runForwardChannel() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.failOutbox(s.ctx.Err())
+			return
+		case <-s.outboxWake:
+		}
+		for {
+			s.outboxMu.Lock()
+			count := min(len(s.outbox), bidiForwardBatchLimit)
+			batch := append([]bidiOutgoing(nil), s.outbox[:count]...)
+			s.outbox = s.outbox[count:]
+			s.outboxMu.Unlock()
+			if count == 0 {
+				break
+			}
+			err := s.postBatch(s.ctx, batch)
+			for _, entry := range batch {
+				if entry.done != nil {
+					entry.done <- err
+				}
+			}
+			if err != nil {
+				s.failOutbox(err)
+				return
+			}
+		}
+	}
+}
+
+// failOutbox 让尚未发送与后续排队的消息返回前向通道错误
+func (s *BidiSession) failOutbox(err error) {
+	s.outboxMu.Lock()
+	pending := s.outbox
+	s.outbox = nil
+	if s.outboxErr == nil {
+		s.outboxErr = err
+	}
+	s.outboxMu.Unlock()
+	for _, entry := range pending {
+		if entry.done != nil {
+			entry.done <- err
+		}
+	}
+}
+
+func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies bool) error {
+	return s.postBatch(ctx, []bidiOutgoing{{payload: payload, qualifies: qualifies}})
+}
+
+func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resultErr error) {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
-	if qualifies {
-		s.beginQualificationAttempt()
-		defer func() {
-			if resultErr != nil {
+	qualifying := 0
+	for _, entry := range batch {
+		if entry.qualifies {
+			s.beginQualificationAttempt()
+			qualifying++
+		}
+	}
+	defer func() {
+		if resultErr != nil {
+			for range qualifying {
 				s.rollbackQualificationAttempt()
 			}
-		}()
-	}
+		}
+	}()
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopSession := context.AfterFunc(s.ctx, cancel)
 	defer func() {
@@ -600,13 +712,13 @@ func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies
 		"zx":         []string{zx},
 		"t":          []string{"1"},
 	}
-	form := url.Values{
-		"count":         []string{"1"},
-		"ofs":           []string{strconv.FormatInt(offset, 10)},
-		"req0___data__": []string{string(payload)},
+	var form strings.Builder
+	form.WriteString("count=" + strconv.Itoa(len(batch)) + "&ofs=" + strconv.FormatInt(offset, 10))
+	for index, entry := range batch {
+		form.WriteString("&req" + strconv.Itoa(index) + "___data__=" + url.QueryEscape(string(entry.payload)))
 	}
 	requestURL := bidiWebChannelURL + "?" + query.Encode()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, requestURL, strings.NewReader(form.Encode()))
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, requestURL, strings.NewReader(form.String()))
 	if err != nil {
 		return fmt.Errorf("创建 bidi WebChannel message: %w", err)
 	}
@@ -632,7 +744,7 @@ func (s *BidiSession) postMessage(ctx context.Context, payload []byte, qualifies
 	}
 	s.stateMu.Lock()
 	s.rid++
-	s.offset++
+	s.offset += int64(len(batch))
 	s.stateMu.Unlock()
 	return nil
 }
@@ -1103,8 +1215,8 @@ func readWebChannelFrames(source io.Reader, emit func(json.RawMessage) error) er
 		if err != nil || length < 0 {
 			return fmt.Errorf("bidi WebChannel frame 长度无效: %q", strings.TrimSpace(lengthLine))
 		}
-		frame := make([]byte, length)
-		if _, err := io.ReadFull(reader, frame); err != nil {
+		frame, err := readUTF16Units(reader, length)
+		if err != nil {
 			return fmt.Errorf("读取 bidi WebChannel frame: %w", err)
 		}
 		if !json.Valid(frame) {
@@ -1114,6 +1226,29 @@ func readWebChannelFrames(source io.Reader, emit func(json.RawMessage) error) er
 			return err
 		}
 	}
+}
+
+// readUTF16Units 读取 WebChannel 长度前缀所计的 UTF-16 码元数对应的 UTF-8 文本
+func readUTF16Units(reader *bufio.Reader, units int) ([]byte, error) {
+	frame := make([]byte, 0, units)
+	for units > 0 {
+		value, size, err := reader.ReadRune()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		if value == utf8.RuneError && size == 1 {
+			return nil, fmt.Errorf("bidi WebChannel frame 含无效 UTF-8")
+		}
+		frame = utf8.AppendRune(frame, value)
+		units -= utf16.RuneLen(value)
+	}
+	if units < 0 {
+		return nil, fmt.Errorf("bidi WebChannel frame 长度截断代理对")
+	}
+	return frame, nil
 }
 
 func newWebChannelRID() (int64, error) {
