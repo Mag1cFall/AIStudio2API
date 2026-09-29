@@ -270,6 +270,26 @@ Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileDat
 
 ### TTS 语音生成
 
+TalkifyTTS 与新版 Google Gen AI SDK 可连接 `http://127.0.0.1:2048/v1beta/interactions`，稳定版入口为 `/v1/interactions`。请求使用 `x-goog-api-key`，支持 `gemini-3.8-flash-tts` 与 `gemini-3.8-flash-lite-tts`：
+
+```python
+from google import genai
+
+client = genai.Client(api_key="123", http_options={"base_url": "http://127.0.0.1:2048"})
+stream = client.interactions.create(
+    model="gemini-3.8-flash-tts",
+    input="Hello, this is a test.",
+    response_format={"type": "audio"},
+    generation_config={"speech_config": [{"voice": "Kore"}]},
+    stream=True,
+)
+for event in stream:
+    if event.event_type == "step.delta" and event.delta.type == "audio":
+        print(event.delta.data)
+```
+
+流式音频默认为 Base64 编码的 24 kHz、16-bit 小端、单声道 PCM；非流式默认为完整 WAV，通过 `interaction.output_audio.data` 读取。`response_format.mime_type` 可显式选择 `audio/l16` 或 `audio/wav`。风格与多说话人输入见 [Interactions 协议](docs/protocol.md#gemini-interactions)。
+
 ```bash
 curl http://127.0.0.1:2048/v1/audio/speech \
   -H "Authorization: Bearer 123" \

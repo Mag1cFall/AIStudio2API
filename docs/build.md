@@ -230,7 +230,7 @@ user 与 tool 角色写为 `user`，assistant 写为 `model`，没有 part 的 c
 | `maxOutputTokens` | 请求值或目录默认值，按模型上限校验；带语音配置且未显式设置时不发送 |
 | `temperature`、`topP`、`topK`、`seed` | 请求值或目录默认值 |
 | `responseMimeType` | 请求值 |
-| `responseJsonSchema` | 请求的 JSON Schema 原样发送 |
+| `responseSchema` | 复用 Playground 的 Schema 校验与规范化，转换为 protobuf JSON；嵌套 `type` 使用大写枚举，字符串 `const` 转为 `enum`，null 联合转为 `nullable` |
 | `responseModalities` | 大写模态名；图片模型补 `IMAGE`、`TEXT`，TTS 与音乐模型补 `AUDIO` |
 | `imageConfig` | `{aspectRatio?, imageSize?}`；可设置分辨率的图片模型默认 `1K` |
 | `speechConfig` | 单声音为 `voiceConfig.prebuiltVoiceConfig.voiceName`；多说话人为 `multiSpeakerVoiceConfig.speakerVoiceConfigs[{speaker, voiceConfig}]` |

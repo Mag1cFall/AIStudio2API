@@ -338,9 +338,7 @@ func encodeBuildTools(tools Tools) ([]any, bool, error) {
 
 // encodeBuildGenerationConfig 复用 Playground 的参数校验与默认值，并转换为 Gemini API 字段
 func encodeBuildGenerationConfig(config GenerationConfig, defaults GenerationDefaults) (map[string]any, error) {
-	validationConfig := config
-	validationConfig.ResponseSchema = nil
-	wire, err := encodeGenerationConfig(validationConfig, defaults)
+	wire, err := encodeGenerationConfig(config, defaults)
 	if err != nil {
 		return nil, err
 	}
@@ -360,8 +358,8 @@ func encodeBuildGenerationConfig(config GenerationConfig, defaults GenerationDef
 	if config.ResponseMIMEType != "" {
 		encoded["responseMimeType"] = config.ResponseMIMEType
 	}
-	if len(bytes.TrimSpace(config.ResponseSchema)) > 0 {
-		encoded["responseJsonSchema"] = json.RawMessage(config.ResponseSchema)
+	if wire[8] != nil {
+		encoded["responseSchema"] = buildResponseSchema(wire[8].([]any))
 	}
 	if config.ResponseModalities != nil {
 		modalities := make([]string, 0, len(config.ResponseModalities))

@@ -270,6 +270,26 @@ Gemini attachments and video image inputs accept `inlineData` / `inline_data`, `
 
 ### TTS Speech Generation
 
+TalkifyTTS and the Google Gen AI SDK can connect to `http://127.0.0.1:2048/v1beta/interactions`; the stable endpoint is `/v1/interactions`. Authenticate with `x-goog-api-key`. Both `gemini-3.8-flash-tts` and `gemini-3.8-flash-lite-tts` support single-speaker and multi-speaker synthesis.
+
+```python
+from google import genai
+
+client = genai.Client(api_key="123", http_options={"base_url": "http://127.0.0.1:2048"})
+stream = client.interactions.create(
+    model="gemini-3.8-flash-tts",
+    input="Hello, this is a test.",
+    response_format={"type": "audio"},
+    generation_config={"speech_config": [{"voice": "Kore"}]},
+    stream=True,
+)
+for event in stream:
+    if event.event_type == "step.delta" and event.delta.type == "audio":
+        print(event.delta.data)
+```
+
+Streaming defaults to Base64-encoded 24 kHz, 16-bit little-endian mono PCM. Non-streaming defaults to a complete WAV file, available through `interaction.output_audio.data`. Set `response_format.mime_type` to `audio/l16` or `audio/wav` to select the format. See the [Interactions protocol](docs/protocol.md#gemini-interactions) for style annotations and multi-speaker input.
+
 ```bash
 curl http://127.0.0.1:2048/v1/audio/speech \
   -H "Authorization: Bearer 123" \

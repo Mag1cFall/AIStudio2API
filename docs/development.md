@@ -263,6 +263,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | --- | --- |
 | OpenAI Chat | `GET /v1/models`、`POST /v1/chat/completions` |
 | OpenAI Responses | `POST /v1/responses` |
+| Gemini Interactions | `POST /v1beta/interactions`、`POST /v1/interactions` |
 | OpenAI Files | `POST /v1/files`、`GET/DELETE /v1/files/{file}`、`GET /v1/files/{file}/content` |
 | OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/audio/speech`、`POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | OpenAI Transcribe | `POST /v1/audio/transcriptions` |
@@ -284,7 +285,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 
 `/api` 接受 loopback 请求，并在请求带 `Origin` 时执行 same-origin 校验。`/v1` 与 `/v1beta` 使用公开 API key 与 CORS。
 
-OpenAI Responses 的 `previous_response_id` 在当前进程内保存最多 256 个响应节点，用于重建下一轮完整 contents；进程重启后客户端应重新提交完整上下文。Drive 文件、Veo operation 和产物文件的账户绑定写入 `runtime-state.json`，重启后仍可轮询和下载。
+OpenAI Responses 的 `previous_response_id` 与 Gemini Interactions 的 `previous_interaction_id` 共用当前服务实例内最多 256 个响应节点，用于重建下一轮完整 contents；服务重启后客户端应重新提交完整上下文。Drive 文件、Veo operation 和产物文件的账户绑定写入 `runtime-state.json`，重启后仍可轮询和下载。
 
 新增上游能力从 `internal/aistudio` 开始：编码真实数组槽位、解码服务器事件，再由 `internal/api` 投影到公开协议。模型方法、上下文、输出上限、工具、声音、图片规格和视频规格均来自实时 `ListModels`。
 
