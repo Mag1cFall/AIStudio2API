@@ -162,7 +162,7 @@ func writeAuthError(w http.ResponseWriter, r *http.Request) {
 
 func protocolForRequest(r *http.Request) string {
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/v1beta/"):
+	case strings.HasPrefix(r.URL.Path, "/v1beta/"), r.URL.Path == "/v1/interactions":
 		return "gemini"
 	case strings.HasPrefix(r.URL.Path, "/v1/messages"), r.Header.Get("Anthropic-Version") != "":
 		return "anthropic"

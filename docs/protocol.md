@@ -1694,6 +1694,42 @@ Anthropic SSE：
 
 delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signature_delta{signature}`、`input_json_delta{partial_json}`。thinking signature 在对应 thinking block 关闭前发送；redacted thinking 使用一个 start/stop block；tool_use 先发送空 input，再通过 `input_json_delta` 发送完整参数 JSON。搜索块在来源汇总后以完整的 start/stop block 输出，查询计数随最终 `message_delta.usage` 返回。
 
+### Gemini Interactions
+
+`POST /v1beta/interactions` 与 `POST /v1/interactions` 接受同一创建请求，通过 `x-goog-api-key`、Bearer 或 `key` 查询参数认证。
+
+```json
+{
+  "model": "gemini-3.8-flash-tts",
+  "input": [{"type":"user_input","content":[{
+    "type":"text","text":"Have a wonderful day!",
+    "annotations":[{"type":"speech_metadata","style":"cheerful and friendly"}]
+  }]}],
+  "response_format": {"type":"audio","mime_type":"audio/l16","sample_rate":24000},
+  "generation_config": {"speech_config":[{"voice":"Kore"}]},
+  "stream": true
+}
+```
+
+| 字段 | 映射 |
+| --- | --- |
+| `input` | 字符串、单个内容块、内容块数组或步骤数组；内容类型为 `text`、`image`、`audio`、`video`、`document` |
+| 媒体内容 | `mime_type` 与 `data`（Base64）或 `uri` 二选一，复用 Gemini 文件与内联媒体解析 |
+| 输入步骤 | `user_input`、`model_output`、`thought`、`function_call`、`function_result`；函数结果通过 `call_id` 匹配历史调用 |
+| `system_instruction` | 当前请求的系统指令 |
+| `generation_config` | `temperature`、`top_p`、`top_k`、`max_output_tokens`、`seed`、`stop_sequences`、`thinking_level`、`thinking_summaries`、`speech_config`、`tool_choice` |
+| `response_format` | 单对象或数组；文本使用 `{type:"text",mime_type:"application/json",schema:{...}}` 请求结构化输出；图片使用 `{type:"image",aspect_ratio?,image_size?}` |
+| 语音配置 | `speech_config:[{voice}]`；多说话人使用 `{speakers:[{speaker,voice}],mode?}`，`mode` 为 `verbatim` 或 `conversational` |
+| 语音文本 | 文本块 `annotations` 中的 `{type:"speech_metadata",speaker?,style?}` 保留说话人与风格 |
+| 函数与工具 | `tools:[{type:"function",name,description?,parameters?}]`；另接受 `google_search`、`url_context`、`code_execution`、`google_maps`；`tool_choice` 为 `auto` 或 `none` |
+| 续接 | 默认保存；`previous_interaction_id` 重建前序内容，`store:false` 仅返回本次响应；当前服务实例最多保存 256 个响应节点 |
+
+音频输出为 24 kHz、16-bit 小端、单声道。非流式默认 `audio/wav`，流式默认 `audio/l16`；显式 WAV 流在音频汇总完成后发送一个有效 WAV 块。`sample_rate` 可省略或设为 `24000`，`delivery` 可省略或设为 `inline`。创建请求在当前连接内执行，`background` 可省略或设为 `false`。
+
+非流式响应包含 `id`、`object:"interaction"`、`model`、`created`、`updated`、`status`、`steps` 与 `usage`。`steps` 的 `model_output.content` 保存文本或媒体，音频位于 `{type:"audio",data,mime_type,sample_rate,channels}`；SDK 的 `output_audio` 与 `output_text` 从这些步骤读取。函数调用作为 `function_call` 步骤返回，状态为 `requires_action`；正常生成状态为 `completed`，输出限额等提前终止状态为 `incomplete`。
+
+SSE 使用相同的事件名与 JSON `event_type`：`interaction.created` → `step.start` → `step.delta` → `step.stop` → `interaction.completed`。步骤以 `index` 对应，音频增量为 `{type:"audio",data,mime_type,sample_rate,channels}`。10 秒无语义事件时发送 `: ping`，上游错误或缺失终态发送 `error` 事件并结束；客户端断开会取消上游生成。流开始前使用 Gemini HTTP 错误对象。
+
 ### Gemini GenerateContent
 
 `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent` 与 `:countTokens` 接受：
