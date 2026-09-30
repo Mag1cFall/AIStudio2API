@@ -100,6 +100,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	generateRequest.Unary = !request.Stream
 	if request.Stream {
 		if err := streamHeaders(w); err != nil {
 			return

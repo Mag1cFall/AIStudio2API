@@ -214,6 +214,7 @@ type AccountSelection struct {
 	ResourceID        string
 	AllowedAccountIDs []string
 	PlaygroundOnly    bool
+	Channel           Channel
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
