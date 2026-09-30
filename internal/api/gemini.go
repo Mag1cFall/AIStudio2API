@@ -828,45 +828,108 @@ func buildGeminiResponse(request aistudio.GenerateRequest, result generationResu
 
 func geminiOutputParts(result generationResult) []map[string]any {
 	parts := make([]map[string]any, 0)
+	var pendingSignature string
+
 	for _, event := range result.events {
 		switch event.Kind {
 		case aistudio.EventText:
-			parts = append(parts, geminiSignedPart(geminiTextPart(event), event.ThoughtSignature))
+			if len(parts) > 0 {
+				last := parts[len(parts)-1]
+				if lastText, ok := last["text"].(string); ok && last["thought"] != true && last["transcriptionMetadata"] == nil && event.Transcript == nil {
+					last["text"] = lastText + event.Text
+					if event.ThoughtSignature != "" {
+						last["thoughtSignature"] = event.ThoughtSignature
+					}
+					continue
+				}
+			}
+			part := geminiSignedPart(geminiTextPart(event), event.ThoughtSignature)
+			if event.ThoughtSignature == "" && pendingSignature != "" {
+				part["thoughtSignature"] = pendingSignature
+				pendingSignature = ""
+			}
+			parts = append(parts, part)
 		case aistudio.EventReasoning:
-			parts = append(parts, geminiSignedPart(map[string]any{"text": event.Text, "thought": true}, event.ThoughtSignature))
+			if len(parts) > 0 {
+				last := parts[len(parts)-1]
+				if lastText, ok := last["text"].(string); ok && last["thought"] == true {
+					last["text"] = lastText + event.Text
+					if event.ThoughtSignature != "" {
+						last["thoughtSignature"] = event.ThoughtSignature
+					}
+					continue
+				}
+			}
+			part := geminiSignedPart(map[string]any{"text": event.Text, "thought": true}, event.ThoughtSignature)
+			if event.ThoughtSignature == "" && pendingSignature != "" {
+				part["thoughtSignature"] = pendingSignature
+				pendingSignature = ""
+			}
+			parts = append(parts, part)
 		case aistudio.EventToolCall:
 			if event.ToolCall != nil {
-				parts = append(parts, geminiSignedPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature))
+				part := geminiSignedPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature)
+				if event.ThoughtSignature == "" && pendingSignature != "" {
+					part["thoughtSignature"] = pendingSignature
+					pendingSignature = ""
+				}
+				parts = append(parts, part)
 			}
 		case aistudio.EventExecutableCode:
 			if event.ExecutableCode != nil {
-				parts = append(parts, geminiSignedPart(map[string]any{"executableCode": map[string]any{
+				part := geminiSignedPart(map[string]any{"executableCode": map[string]any{
 					"language": event.ExecutableCode.Language, "code": event.ExecutableCode.Code,
-				}}, event.ThoughtSignature))
+				}}, event.ThoughtSignature)
+				if event.ThoughtSignature == "" && pendingSignature != "" {
+					part["thoughtSignature"] = pendingSignature
+					pendingSignature = ""
+				}
+				parts = append(parts, part)
 			}
 		case aistudio.EventCodeExecutionResult:
 			if event.CodeExecutionResult != nil {
-				parts = append(parts, geminiSignedPart(map[string]any{
+				part := geminiSignedPart(map[string]any{
 					"codeExecutionResult": geminiCodeExecutionResult(*event.CodeExecutionResult),
-				}, event.ThoughtSignature))
+				}, event.ThoughtSignature)
+				if event.ThoughtSignature == "" && pendingSignature != "" {
+					part["thoughtSignature"] = pendingSignature
+					pendingSignature = ""
+				}
+				parts = append(parts, part)
 			}
 		case aistudio.EventMedia:
 			if event.Media != nil {
+				var part map[string]any
 				if len(event.Media.Data) > 0 {
-					parts = append(parts, geminiSignedPart(map[string]any{"inlineData": map[string]any{
+					part = geminiSignedPart(map[string]any{"inlineData": map[string]any{
 						"mimeType": event.Media.MIME, "data": base64.StdEncoding.EncodeToString(event.Media.Data),
-					}}, event.ThoughtSignature))
+					}}, event.ThoughtSignature)
 				} else if event.Media.URL != "" {
-					parts = append(parts, geminiSignedPart(map[string]any{"fileData": map[string]any{
+					part = geminiSignedPart(map[string]any{"fileData": map[string]any{
 						"mimeType": event.Media.MIME, "fileUri": event.Media.URL, "displayName": event.Media.Name,
-					}}, event.ThoughtSignature))
+					}}, event.ThoughtSignature)
+				}
+				if part != nil {
+					if event.ThoughtSignature == "" && pendingSignature != "" {
+						part["thoughtSignature"] = pendingSignature
+						pendingSignature = ""
+					}
+					parts = append(parts, part)
 				}
 			}
 		case aistudio.EventThoughtSignature:
-			if event.ThoughtSignature != "" {
-				parts = append(parts, map[string]any{"thoughtSignature": event.ThoughtSignature})
+			if event.ThoughtSignature == "" {
+				continue
+			}
+			if len(parts) > 0 {
+				parts[len(parts)-1]["thoughtSignature"] = event.ThoughtSignature
+			} else {
+				pendingSignature = event.ThoughtSignature
 			}
 		}
+	}
+	if len(parts) == 0 && pendingSignature != "" {
+		parts = append(parts, map[string]any{"thoughtSignature": pendingSignature})
 	}
 	return parts
 }
