@@ -779,7 +779,7 @@ func buildTrailerError(raw json.RawMessage) error {
 
 // sendBuild 编码并发送 Build 代理请求，返回响应与含 finishReason 校验的解码
 func (c *Client) sendBuild(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
-	unary := buildUsesUnary(entry.model)
+	unary := request.Unary || buildUsesUnary(entry.model)
 	path, body, err := EncodeBuildGenerateRequest(request, entry.defaults, request.ImageRoute, unary)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)

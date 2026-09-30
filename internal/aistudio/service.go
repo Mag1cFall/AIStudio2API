@@ -550,11 +550,16 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	if err != nil {
 		return nil, err
 	}
+	channel := request.Channel
+	if request.Unary && channel == "" {
+		channel = ChannelBuild
+	}
 	selection := AccountSelection{
 		ModelID:    modelID,
 		Method:     "generateContent",
 		AccountID:  strings.TrimSpace(request.AccountID),
 		ResourceID: resourceID,
+		Channel:    channel,
 	}
 	pinned := selection.AccountID != "" || selection.ResourceID != ""
 	if _, ok := AccountLeaseFromContext(ctx); ok {
