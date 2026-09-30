@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
-import App from './App.vue'
+import ConsoleRoot from './ConsoleRoot.vue'
 import { vTooltip } from './tooltip'
 import './style.css'
 
-createApp(App).directive('tooltip', vTooltip).mount('#app')
+createApp(ConsoleRoot).directive('tooltip', vTooltip).mount('#app')

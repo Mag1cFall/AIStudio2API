@@ -30,6 +30,10 @@ Build 应用运行在 `*.scf.usercontent.goog` 的 blob 沙箱 iframe 中。宿�
 - 列表顺序即同一账户内的通道顺序
 - 配置来源为 `.env`、管理页面设置中的“上游通道”（至少保留一个，保存为 `playground,build` 顺序）或 `PUT /api/config` 的 `upstream_channels`；保存值在下一次启动生成服务时生效
 
+`BUILD_NATIVE_NONSTREAM=true` 为默认值：Gemini、Chat、Responses、Anthropic、Interactions、图片和语音端点的非流式请求先选择具备资格的 Build 通道，执行 `ProxyUnaryCall` 与 `:generateContent`。该通道未启用、模型不支持或额度冷却时，调度到其余可用通道；文件引用与专用能力按其 Playground 路由执行。关闭该选项后按原通道顺序调度，选中 Build 的非流式请求仍执行单次调用。
+
+Playground `GenerateContent` 的响应为 repeated 流帧，完整收集后转换为公开非流式响应。日志的“上游调用”记录实际通道、`native` / `stream` 模式和 RPC；非流式请求使用流式传输时，以 WARN 记录“回退流式”与原因。Build 明确返回单次方法不支持时，尝试该通道的 `ProxyStreamedCall`；参数错误按原错误返回。
+
 通道在以下位置显示：
 
 | 位置 | 字段 |
@@ -62,7 +66,7 @@ https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.appl
 ["/v1beta/models/<MODEL_ID>:generateContent", "<GEMINI_API_JSON>", "<WAA_PROOF>", "POST"]
 ```
 
-模型的 AccessModes 非空且 Free 权益不能使用时（需要 Pro、Ultra 等订阅），生成经 `ProxyUnaryCall` 与 `:generateContent`；其余模型经 `ProxyStreamedCall` 与 `:streamGenerateContent`。
+非流式请求以及 AccessModes 非空且 Free 权益不能使用的模型，经 `ProxyUnaryCall` 与 `:generateContent`；其余流式请求经 `ProxyStreamedCall` 与 `:streamGenerateContent`。
 
 ### 请求头
 

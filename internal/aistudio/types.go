@@ -237,8 +237,6 @@ type GenerateRequest struct {
 	ImageRoute bool `json:"-"`
 	// Unary 标记单次非流式请求（在 Build 代理中使用 ProxyUnaryCall）
 	Unary bool `json:"-"`
-	// Channel 指定请求优先或强制使用的上游通道（为空时按 AccountPool 规则调度）
-	Channel Channel `json:"-"`
 }
 
 // TokenCountRequest 表示计数请求

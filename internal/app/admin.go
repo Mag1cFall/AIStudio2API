@@ -707,6 +707,14 @@ func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, er
 }
 
 func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
+	saved, err := config.Load(admin.configPath)
+	if err != nil {
+		return api.RuntimeConfig{}, err
+	}
+	password := saved.AdminPassword
+	if value.AdminPassword != nil {
+		password = *value.AdminPassword
+	}
 	initTimeout, err := time.ParseDuration(value.InitTimeout)
 	if err != nil {
 		return api.RuntimeConfig{}, fmt.Errorf("INIT_TIMEOUT 无效: %w", err)
@@ -716,7 +724,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		return api.RuntimeConfig{}, fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err)
 	}
 	cfg := config.Config{
-		AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, ProxyAPIKey: value.APIKey,
+		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password,
+		BuildNativeNonstream: value.BuildNativeNonstream,
+		AuthStates:           value.AuthStates, ListenAddr: value.ListenAddr, ProxyAPIKey: value.APIKey,
 		Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
@@ -1301,7 +1311,10 @@ func buildVersion() string {
 
 func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 	return api.RuntimeConfig{
-		AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
+		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername,
+		AdminPasswordSet: cfg.AdminPassword != "", SavedAdminPassword: cfg.AdminPassword,
+		BuildNativeNonstream: cfg.BuildNativeNonstream,
+		AuthStates:           cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
 		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,

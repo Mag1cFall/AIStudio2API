@@ -43,6 +43,19 @@ export interface EventConnection {
   close: () => void
 }
 
+export interface AdminSession {
+  enabled: boolean
+  authenticated: boolean
+  username: string
+}
+
+// checkSessionResponse 通知页面清理失效会话中的管理数据
+function checkSessionResponse(path: string, response: Response): void {
+  if (response.status === 401 && !path.startsWith('/api/auth/')) {
+    window.dispatchEvent(new Event('admin-session-expired'))
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -72,6 +85,7 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const response = await fetch(path, { ...init, headers })
+  checkSessionResponse(path, response)
   if (!response.ok) {
     throw new ApiError(await responseErrorMessage(response), response.status)
   }
@@ -87,6 +101,7 @@ async function requestCommand(path: string, init: RequestInit): Promise<void> {
   }
 
   const response = await fetch(path, { ...init, headers })
+  checkSessionResponse(path, response)
   if (!response.ok) {
     throw new ApiError(await responseErrorMessage(response), response.status)
   }
@@ -115,6 +130,13 @@ function parseAdminEvent(raw: string): AdminEvent | undefined {
 }
 
 export const api = {
+  session: () => requestJSON<AdminSession>('/api/auth/session'),
+  login: (username: string, password: string) =>
+    requestJSON<AdminSession>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => requestCommand('/api/auth/logout', { method: 'POST' }),
   status: () => requestJSON<ServiceStatus>('/api/status'),
   accounts: async () => (await requestJSON<AccountsResponse>('/api/accounts')).accounts,
   models: async () => (await requestJSON<ModelsResponse>('/api/models')).models,
@@ -165,6 +187,14 @@ export function openAdminEvents(
 ): EventConnection {
   const source = new EventSource('/api/events')
   source.onopen = onOpen
+  source.onerror = () => {
+    void api
+      .session()
+      .then((session) => {
+        if (!session.authenticated) window.dispatchEvent(new Event('admin-session-expired'))
+      })
+      .catch(() => {})
+  }
   source.onmessage = (message) => {
     const event = parseAdminEvent(message.data)
     if (event !== undefined) {

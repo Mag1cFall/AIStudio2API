@@ -427,6 +427,9 @@ cp .env.example .env
 | `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
 | `PROXY_API_KEY` | empty | Public API key |
+| `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
+| `ADMIN_USERNAME` | `admin` | Administrator username |
+| `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `5m` | Maximum request execution time |
@@ -436,12 +439,17 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
+| `BUILD_NATIVE_NONSTREAM` | `true` | Prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
 
 ### Port Configuration
+
+The console allows passwordless loopback access by default. For remote management, set `ADMIN_AUTH_ENABLED=true`, configure the administrator username and password, and restart the process. The separate `/login` page creates a 12-hour session with sign-out support. Administrators share the instance's account pool, configuration, and logs. Public APIs use the separate `PROXY_API_KEY`.
+
+Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Console login settings can also be saved from the settings page and take effect after restarting the process.
 
 - **Management UI and APIs**: Default port `2048`
 - **Camoufox**: Local ports are allocated dynamically

@@ -17,6 +17,8 @@ import (
 type PooledService struct {
 	pool   *AccountPool
 	client *Client
+	// BuildNativeNonstream 让非流式请求优先使用具备资格的 Build 通道
+	BuildNativeNonstream bool
 }
 
 // PoolRequestContextProvider 从租约账户读取协议上下文
@@ -550,8 +552,8 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	if err != nil {
 		return nil, err
 	}
-	channel := request.Channel
-	if request.Unary && channel == "" {
+	var channel Channel
+	if request.Unary && s.BuildNativeNonstream {
 		channel = ChannelBuild
 	}
 	selection := AccountSelection{
@@ -568,6 +570,13 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	var requestErr error
 	for attempt := 0; attempt < accountAttemptLimit(s.pool, pinned); attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
+		if err != nil && selection.Channel == ChannelBuild && ctx.Err() == nil {
+			var cooling *AllCoolingError
+			if errors.Is(err, ErrNoEligibleAccount) || errors.As(err, &cooling) {
+				selection.Channel = ""
+				lease, owned, err = resolveAccountLease(ctx, s.pool, selection)
+			}
+		}
 		if err != nil {
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
 				return nil, requestErr

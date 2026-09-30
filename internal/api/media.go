@@ -61,6 +61,7 @@ func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
 		ID:    newID("image"),
+		Unary: true,
 		Model: request.Model,
 		Contents: []aistudio.Content{{
 			Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: request.Prompt}},
@@ -165,6 +166,7 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
 		ID:    newID("speech"),
+		Unary: true,
 		Model: request.Model,
 		Contents: []aistudio.Content{{
 			Role: aistudio.RoleUser, Parts: []aistudio.Part{part},
@@ -206,6 +208,13 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 func joinedAudio(values []aistudio.Media) (aistudio.Media, error) {
 	var joined aistudio.Media
 	for _, media := range values {
+		if strings.HasPrefix(strings.ToLower(media.MIME), "audio/wav") || strings.HasPrefix(strings.ToLower(media.MIME), "audio/x-wav") {
+			var err error
+			media, err = wavPCM(media)
+			if err != nil {
+				return aistudio.Media{}, err
+			}
+		}
 		if !strings.HasPrefix(media.MIME, "audio/") || len(media.Data) == 0 {
 			continue
 		}
@@ -231,6 +240,15 @@ func encodeSpeechResponse(media aistudio.Media, format string) ([]byte, string, 
 	baseType, parameters, err := mime.ParseMediaType(media.MIME)
 	if err != nil {
 		return nil, "", fmt.Errorf("AI Studio returned invalid audio MIME %q", media.MIME)
+	}
+	if baseType == "audio/wav" || baseType == "audio/x-wav" {
+		if format == "wav" {
+			return media.Data, "audio/wav", nil
+		}
+		if format == "pcm" {
+			pcm, err := wavPCM(media)
+			return pcm.Data, pcm.MIME, err
+		}
 	}
 	if format == "pcm" {
 		return media.Data, media.MIME, nil
@@ -274,6 +292,45 @@ func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {
 	_ = binary.Write(buffer, binary.LittleEndian, uint32(len(pcm)))
 	buffer.Write(pcm)
 	return buffer.Bytes()
+}
+
+// wavPCM 提取 RIFF WAVE 的 PCM16 数据并保留采样率与声道
+func wavPCM(media aistudio.Media) (aistudio.Media, error) {
+	data := media.Data
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return aistudio.Media{}, fmt.Errorf("AI Studio returned invalid WAV audio")
+	}
+	end := uint64(binary.LittleEndian.Uint32(data[4:8])) + 8
+	if end > uint64(len(data)) || end < 12 {
+		return aistudio.Media{}, fmt.Errorf("AI Studio returned truncated WAV audio")
+	}
+	var pcm []byte
+	var rate uint32
+	var channels uint16
+	for offset := uint64(12); offset+8 <= end; {
+		kind := string(data[offset : offset+4])
+		size := uint64(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		start := offset + 8
+		if size > end-start {
+			return aistudio.Media{}, fmt.Errorf("AI Studio returned a truncated WAV chunk")
+		}
+		chunk := data[start : start+size]
+		switch kind {
+		case "fmt ":
+			if len(chunk) < 16 || binary.LittleEndian.Uint16(chunk[:2]) != 1 || binary.LittleEndian.Uint16(chunk[14:16]) != 16 {
+				return aistudio.Media{}, fmt.Errorf("AI Studio WAV audio must use PCM16")
+			}
+			channels = binary.LittleEndian.Uint16(chunk[2:4])
+			rate = binary.LittleEndian.Uint32(chunk[4:8])
+		case "data":
+			pcm = append(pcm, chunk...)
+		}
+		offset = start + size + size%2
+	}
+	if rate == 0 || channels == 0 || len(pcm) == 0 || len(pcm)%(int(channels)*2) != 0 {
+		return aistudio.Media{}, fmt.Errorf("AI Studio WAV audio is missing valid PCM data or format")
+	}
+	return aistudio.Media{MIME: fmt.Sprintf("audio/l16;rate=%d;channels=%d", rate, channels), Data: pcm}, nil
 }
 
 // decodeBase64Flexible 根据字母表和填充形式解码 Base64 与 Data URL

@@ -148,6 +148,9 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `AISTUDIO_AUTH_STATES` | 账户文件、目录或逗号分隔的多个路径 | `auth` |
 | `LISTEN_ADDR` | HTTP 服务监听地址 | `127.0.0.1:2048` |
 | `PROXY_API_KEY` | 公开 API 访问密钥 | 空 |
+| `ADMIN_AUTH_ENABLED` | 管理员账号密码登录开关 | `false` |
+| `ADMIN_USERNAME` | 管理员账号 | `admin` |
+| `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
 | `PROXY` | setup 与未设置账户代理时使用的固定出口 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间 | `5m` |
@@ -157,6 +160,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `PER_ACCOUNT_CONCURRENCY` | 单账号同时执行的请求数 | `2` |
 | `ROUTING_STRATEGY` | 账户轮询 `round-robin` 或粘性优先 `fill-first` | `round-robin` |
 | `UPSTREAM_CHANNELS` | 生成请求的上游通道 `playground`、`build`，逗号分隔 | `playground,build` |
+| `BUILD_NATIVE_NONSTREAM` | 非流式请求优先选择 Build 原生单次调用 | `true` |
 | `WAA_BACKEND` | WAA 后端 `camoufox` 或 `go` | `camoufox` |
 | `TEMPORARY_CHAT` | WAA 预热页是否使用临时对话 | `false` |
 
@@ -168,13 +172,17 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | --- | --- |
 | `auth_states`、`proxy`、`init_timeout`、`request_timeout` | 下一次启动生成服务时使用的保存值 |
 | `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 下一次启动生成服务时使用的容量参数 |
-| `temporary_chat`、`waa_backend`、`upstream_channels` | 下一次启动生成服务时使用的 WAA 与上游通道配置 |
+| `temporary_chat`、`waa_backend`、`upstream_channels`、`build_native_nonstream` | 下一次启动生成服务时使用的 WAA 与上游通道配置 |
+| `admin_auth_enabled`、`admin_username`、`admin_password` | 保存的管理登录配置；省略密码保留现值，密码只接受写入 |
+| `admin_password_set` | 是否已配置管理密码 |
 | `listen_addr`、`proxy_api_key` | 保存的管理监听配置 |
 | `active_listen_addr`、`active_proxy_api_key` | 当前管理进程固定使用的值 |
-| `management_restart_required` | 保存的监听地址或 API key 与当前管理进程不同 |
+| `management_restart_required` | 保存的监听地址、API key 或管理登录配置与当前管理进程不同 |
 | `service_restart_required` | 保存的生成服务配置与当前生成服务实例不同 |
 
-配置保存使用临时文件、`Sync` 和原子替换。监听地址与本地 API key 由管理进程持有，进程重启后应用；其余配置在停止并再次启动生成服务后应用。
+配置保存使用临时文件、`Sync` 和原子替换。监听地址、本地 API key 和管理登录配置由管理进程持有，进程重启后应用；其余配置在停止并再次启动生成服务后应用。
+
+管理登录开启后，`/api` 使用独立的 HttpOnly、SameSite=Strict 会话 Cookie，登录有效期为 12 小时。退出登录撤销会话并结束它的管理 SSE 订阅。登录关闭时，管理 API 使用回环来源与回环 Host 校验。远程管理通过 HTTPS 反向代理，代理保留 `Host` 并设置 `X-Forwarded-Proto: https`。生成 API 的访问密钥独立配置。
 
 生成服务启动顺序如下。源码中的 `generation` 表示一次 Stop/Start 创建的生成服务实例：
 

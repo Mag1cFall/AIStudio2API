@@ -1,4 +1,6 @@
 <script setup lang="ts">
+defineProps<{ adminUsername?: string }>()
+const emit = defineEmits<{ logout: [] }>()
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, openAdminEvents, type EventConnection } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
@@ -53,6 +55,7 @@ const loading = reactive({
 })
 const errors = reactive({ accounts: '', models: '', requests: '', cooldowns: '', config: '' })
 let eventConnection: EventConnection | undefined
+let mounted = false
 let noticeTimer: number | undefined
 
 const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
@@ -274,8 +277,10 @@ function handleAdminEvent(event: AdminEvent): void {
 }
 
 onMounted(async () => {
+  mounted = true
   document.title = t('app.title')
   await refreshAll()
+  if (!mounted) return
   eventConnection = openAdminEvents(handleAdminEvent, () => {
     pendingLogs = []
     if (logFlushTimer !== undefined) {
@@ -292,6 +297,7 @@ watch(locale, () => {
 })
 
 onUnmounted(() => {
+  mounted = false
   eventConnection?.close()
   if (logFlushTimer !== undefined) window.clearTimeout(logFlushTimer)
   if (noticeTimer !== undefined) window.clearTimeout(noticeTimer)
@@ -351,6 +357,15 @@ onUnmounted(() => {
           {{ t(item.label) }}
         </button>
       </nav>
+
+      <button
+        v-if="adminUsername"
+        type="button"
+        class="mx-4 mb-3 rounded border border-[#30363d] px-3 py-2 text-gray-400 hover:bg-[#21262d] hover:text-white"
+        @click="emit('logout')"
+      >
+        {{ adminUsername }} · {{ t('auth.logout') }}
+      </button>
 
       <div
         class="relative min-w-0 overflow-hidden border-t border-[#30363d] p-2 md:p-4"

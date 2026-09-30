@@ -94,7 +94,9 @@ func newRuntime(
 		headers.Close()
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
+	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
+	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	requests.log("service", "INFO", fmt.Sprintf(
 		"协议运行时就绪 | 账户=%d | 耗时=%s",
@@ -1763,29 +1765,30 @@ func (provider *accountHeaderProvider) ProtocolHeaders(ctx context.Context, acco
 
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
-	lifecycle          context.Context
-	service            aistudio.Service
-	catalog            modelCatalogService
-	pool               *aistudio.AccountPool
-	requests           *requestRegistry
-	workers            *accountWorkerManager
-	timeout            time.Duration
-	state              atomic.Int32
-	lifecycleMu        sync.Mutex
-	transitionDone     chan struct{}
-	transitionErr      error
-	transitionTimedOut bool
-	dataContext        context.Context
-	dataCancel         context.CancelFunc
-	modelsMu           sync.RWMutex
-	models             []aistudio.Model
-	modelSyncMu        sync.Mutex
-	modelRetriesMu     sync.Mutex
-	modelRetries       map[string]struct{}
-	modelRefreshDone   <-chan struct{}
-	modelChangeMu      sync.Mutex
-	modelRevision      uint64
-	modelApplied       uint64
+	buildNativeNonstream bool
+	lifecycle            context.Context
+	service              aistudio.Service
+	catalog              modelCatalogService
+	pool                 *aistudio.AccountPool
+	requests             *requestRegistry
+	workers              *accountWorkerManager
+	timeout              time.Duration
+	state                atomic.Int32
+	lifecycleMu          sync.Mutex
+	transitionDone       chan struct{}
+	transitionErr        error
+	transitionTimedOut   bool
+	dataContext          context.Context
+	dataCancel           context.CancelFunc
+	modelsMu             sync.RWMutex
+	models               []aistudio.Model
+	modelSyncMu          sync.Mutex
+	modelRetriesMu       sync.Mutex
+	modelRetries         map[string]struct{}
+	modelRefreshDone     <-chan struct{}
+	modelChangeMu        sync.Mutex
+	modelRevision        uint64
+	modelApplied         uint64
 }
 
 type modelCatalogService interface {
@@ -3043,6 +3046,17 @@ func (service *trackedService) generateWithRetry(
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
 		}
+		fallbackReason := ""
+		if request.Unary {
+			switch {
+			case selection.PlaygroundOnly:
+				fallbackReason = "请求包含 Playground 专用能力或文件引用"
+			case !service.buildNativeNonstream:
+				fallbackReason = "Build 非流式优先选项已关闭"
+			default:
+				selection.Channel = aistudio.ChannelBuild
+			}
+		}
 		if (unbound || fileBound) && len(attempted) > 0 {
 			enabled, _ := service.pool.EnabledAccounts()
 			for _, accountID := range enabled {
@@ -3052,6 +3066,14 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		nextLease, acquireErr := service.acquireWarmLease(requestCtx, selection)
+		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil {
+			var cooling *aistudio.AllCoolingError
+			if errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &cooling) {
+				fallbackReason = "原生 Build 通道不可用: " + acquireErr.Error()
+				selection.Channel = ""
+				nextLease, acquireErr = service.acquireWarmLease(requestCtx, selection)
+			}
+		}
 		if acquireErr != nil {
 			var ownerCooling *aistudio.AllCoolingError
 			if fileBound && !copyFiles && (errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &ownerCooling)) && requestCtx.Err() == nil {
@@ -3080,6 +3102,18 @@ func (service *trackedService) generateWithRetry(
 		service.requests.markChannel(request.ID, string(lease.Channel()))
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
 		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
+		attemptCtx = aistudio.ContextWithUpstreamModeObserver(attemptCtx, func(method, mode, reason string) {
+			level := "INFO"
+			message := fmt.Sprintf("上游调用 | 通道=%s | 模式=%s | RPC=%s", lease.Channel(), mode, method)
+			if reason != "" {
+				level = "WARN"
+				if fallbackReason != "" {
+					reason = fallbackReason + "; " + reason
+				}
+				message += " | 回退流式 | 原因=" + reason
+			}
+			service.requests.logRequestProgress(request.ID, accountLabel, level, message)
+		})
 		var attemptCopies *aistudio.TemporaryFileCopies
 		copiedFileCount := 0
 		if resourceID != "" {
@@ -3219,7 +3253,9 @@ func (service *trackedService) generateWithRetry(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, cooldown.Until.Format(time.RFC3339),
 				))
-				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, selection) {
+				availableSelection := selection
+				availableSelection.Channel = ""
+				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, availableSelection) {
 					delete(attempted, request.AccountID)
 					maxAttempts++
 				}

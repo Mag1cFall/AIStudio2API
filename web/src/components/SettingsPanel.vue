@@ -20,7 +20,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const saving = ref(false)
 const revealKey = ref(false)
+const adminPassword = ref('')
 const form = reactive<ServiceConfig>({
+  admin_auth_enabled: false,
+  admin_username: 'admin',
+  admin_password_set: false,
+  build_native_nonstream: true,
   auth_states: 'auth',
   listen_addr: '127.0.0.1:2048',
   proxy_api_key: '',
@@ -63,7 +68,11 @@ watch(
 async function saveConfig(): Promise<void> {
   saving.value = true
   try {
-    const saved = await api.saveConfig({ ...form })
+    const saved = await api.saveConfig({
+      ...form,
+      ...(adminPassword.value ? { admin_password: adminPassword.value } : {}),
+    })
+    adminPassword.value = ''
     emit('saved', saved)
 
     if (saved.management_restart_required && saved.service_restart_required) {
@@ -108,6 +117,42 @@ async function saveConfig(): Promise<void> {
       >
         {{ t('settings.pendingManagement') }}
       </div>
+
+      <fieldset class="space-y-4 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+        <legend class="sr-only">{{ t('settings.adminAuth') }}</legend>
+        <label class="flex items-center gap-3 text-sm font-medium text-gray-300">
+          <input
+            v-model="form.admin_auth_enabled"
+            type="checkbox"
+            class="h-4 w-4 accent-blue-500"
+          />
+          {{ t('settings.adminAuth') }}
+        </label>
+        <div v-if="form.admin_auth_enabled" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label class="block">
+            <span class="mb-1 block text-sm text-gray-400">{{ t('auth.username') }}</span>
+            <input
+              v-model.trim="form.admin_username"
+              name="admin_username"
+              autocomplete="username"
+              required
+              class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+            />
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-sm text-gray-400">{{ t('settings.adminPassword') }}</span>
+            <input
+              v-model="adminPassword"
+              name="admin_password"
+              type="password"
+              autocomplete="new-password"
+              :required="!form.admin_password_set"
+              :placeholder="form.admin_password_set ? t('settings.keepPassword') : ''"
+              class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+            />
+          </label>
+        </div>
+      </fieldset>
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <label class="block">
@@ -316,6 +361,15 @@ async function saveConfig(): Promise<void> {
           t('settings.upstreamChannelsHelp')
         }}</span>
       </fieldset>
+
+      <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+        <input
+          v-model="form.build_native_nonstream"
+          class="h-4 w-4 accent-blue-500"
+          type="checkbox"
+        />
+        <span class="text-sm font-medium text-gray-300">{{ t('settings.buildNative') }}</span>
+      </label>
 
       <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
         <input v-model="form.temporary_chat" class="h-4 w-4 accent-blue-500" type="checkbox" />

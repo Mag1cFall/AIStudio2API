@@ -22,6 +22,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
+	generate.Unary = !request.Stream
 	current := cloneResponseContents(generate.Contents)
 	if request.PreviousID != "" {
 		previous, _, ok := s.responseStates.Load(request.PreviousID)

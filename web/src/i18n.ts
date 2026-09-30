@@ -3,6 +3,14 @@ import { legacyLocales } from '@/legacy-locales'
 import type { Locale, UpstreamChannel } from '@/types'
 
 const zhCN = {
+  'auth.username': '管理员账号',
+  'auth.password': '密码',
+  'auth.login': '登录',
+  'auth.logout': '退出登录',
+  'settings.adminAuth': '开启管理登录',
+  'settings.adminPassword': '管理密码',
+  'settings.keepPassword': '留空保留现有密码',
+  'settings.buildNative': '非流式请求优先使用 Build',
   'app.title': 'AI Studio 控制台',
   'app.console': '控制台',
   'app.gateway': '协议网关',
@@ -205,6 +213,14 @@ const zhCN = {
 export type TranslationKey = keyof typeof zhCN
 
 const en: Record<TranslationKey, string> = {
+  'auth.username': 'Administrator',
+  'auth.password': 'Password',
+  'auth.login': 'Sign in',
+  'auth.logout': 'Sign out',
+  'settings.adminAuth': 'Enable console login',
+  'settings.adminPassword': 'Console password',
+  'settings.keepPassword': 'Leave blank to keep the current password',
+  'settings.buildNative': 'Prefer Build for non-streaming requests',
   'app.title': 'AI Studio Console',
   'app.console': 'Console',
   'app.gateway': 'Protocol gateway',
