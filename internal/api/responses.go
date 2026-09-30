@@ -164,6 +164,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		instructions = append(instructions, inlineInstructions...)
 		generateRequest.System = strings.Join(instructions, "\n")
 	}
+	generateRequest.Unary = !request.Stream
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {

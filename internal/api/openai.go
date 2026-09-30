@@ -135,6 +135,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	generateRequest.Unary = !request.Stream
 	s.thoughtSignatures.Restore(generateRequest.Contents)
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
