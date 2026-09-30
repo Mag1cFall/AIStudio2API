@@ -17,6 +17,16 @@ func interactionMedia(media aistudio.Media, audioFormat string) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
+	if media.URL == "" && (baseType == "audio/wav" || baseType == "audio/x-wav") {
+		media, err = wavPCM(media)
+		if err != nil {
+			return nil, err
+		}
+		baseType, parameters, err = mime.ParseMediaType(media.MIME)
+		if err != nil {
+			return nil, err
+		}
+	}
 	typeName := strings.SplitN(baseType, "/", 2)[0]
 	if typeName != "audio" && typeName != "video" && typeName != "image" {
 		typeName = "document"

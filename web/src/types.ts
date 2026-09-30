@@ -139,6 +139,11 @@ export interface RequestSummary {
 }
 
 export interface ServiceConfig {
+  admin_auth_enabled: boolean
+  admin_username: string
+  admin_password?: string
+  admin_password_set: boolean
+  build_native_nonstream: boolean
   auth_states: string
   listen_addr: string
   proxy_api_key: string

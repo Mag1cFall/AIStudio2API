@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
 // TestGeminiInlineDataCompatibility 验证不同 SDK 的内联媒体字段与 Base64 形式
@@ -33,5 +35,31 @@ func TestGeminiInlineDataCompatibility(t *testing.T) {
 				t.Fatalf("inline data=%#v", parts[0].InlineData)
 			}
 		})
+	}
+}
+
+// TestSpeechWAV 验证原生 WAV 的 PCM 输出、容器合并与音频元数据
+func TestSpeechWAV(t *testing.T) {
+	pcm := []byte{1, 2, 3, 4}
+	wav := pcmWAV(pcm, 24000, 1)
+	media := aistudio.Media{MIME: "audio/wav", Data: wav}
+	data, mime, err := encodeSpeechResponse(media, "pcm")
+	if err != nil || !bytes.Equal(data, pcm) || mime != "audio/l16;rate=24000;channels=1" {
+		t.Fatalf("pcm=%v mime=%s err=%v", data, mime, err)
+	}
+	data, mime, err = encodeSpeechResponse(media, "wav")
+	if err != nil || !bytes.Equal(data, wav) || mime != "audio/wav" {
+		t.Fatalf("wav mime=%s err=%v", mime, err)
+	}
+	joined, err := joinedAudio([]aistudio.Media{media, media})
+	if err != nil || !bytes.Equal(joined.Data, []byte{1, 2, 3, 4, 1, 2, 3, 4}) {
+		t.Fatalf("joined=%v err=%v", joined.Data, err)
+	}
+	if _, err := wavPCM(aistudio.Media{MIME: "audio/wav", Data: wav[:20]}); err == nil {
+		t.Fatal("truncated WAV accepted")
+	}
+	content, err := interactionMedia(media, "pcm")
+	if err != nil || content["mime_type"] != "audio/l16" || content["sample_rate"] != 24000 || content["channels"] != 1 {
+		t.Fatalf("interaction audio=%v err=%v", content, err)
 	}
 }

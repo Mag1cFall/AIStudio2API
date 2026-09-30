@@ -141,6 +141,11 @@ func interactionThinkingLevel(config GenerationConfig, defaults GenerationDefaul
 
 // generateInteraction 经 CreateInteractionStream 生成并映射为规范事件
 func (c *Client) generateInteraction(ctx context.Context, request GenerateRequest, entry modelEntry) (<-chan Event, error) {
+	reason := ""
+	if request.Unary {
+		reason = "该模型使用 CreateInteractionStream，收集完成后返回"
+	}
+	reportUpstreamMode(ctx, "CreateInteractionStream", "stream", reason)
 	body, binding, err := EncodeCreateInteractionStreamRequest(request, entry.defaults)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)

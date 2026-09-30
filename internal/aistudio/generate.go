@@ -715,6 +715,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 
 // sendPlayground 编码并发送 Playground GenerateContent，返回响应与含完成帧校验的流解码
 func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
+	reason := ""
+	if request.Unary {
+		reason = "Playground GenerateContent 使用服务端流，收集完成后返回"
+	}
+	reportUpstreamMode(ctx, "GenerateContent", "stream", reason)
 	runtime := RequestContext{}
 	if c.contextProvider != nil {
 		var err error

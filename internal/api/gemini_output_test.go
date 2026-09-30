@@ -25,7 +25,7 @@ func TestGeminiOutputParts_MergeTextAndReasoning(t *testing.T) {
 		t.Fatalf("expected 2 parts, got %d: %+v", len(parts), parts)
 	}
 
-	// First part: merged thought
+	// 合并相邻思考并挂载签名
 	expectedThought := map[string]any{
 		"thought":          true,
 		"text":             "I think therefore I am.",
@@ -35,7 +35,7 @@ func TestGeminiOutputParts_MergeTextAndReasoning(t *testing.T) {
 		t.Errorf("parts[0] = %+v, want %+v", parts[0], expectedThought)
 	}
 
-	// Second part: merged text
+	// 合并相邻正文
 	expectedText := map[string]any{
 		"text": "Hello world!",
 	}
@@ -105,6 +105,9 @@ func TestGeminiOutputParts_StandaloneThoughtSignatureFallback(t *testing.T) {
 	if parts[0]["thoughtSignature"] != "sig_only" {
 		t.Errorf("expected thoughtSignature 'sig_only', got %v", parts[0]["thoughtSignature"])
 	}
+	if parts[0]["thought"] != true || parts[0]["text"] != "" {
+		t.Errorf("expected empty thought part, got %+v", parts[0])
+	}
 }
 
 func TestGeminiOutputParts_WithToolCall(t *testing.T) {
@@ -134,5 +137,83 @@ func TestGeminiOutputParts_WithToolCall(t *testing.T) {
 	}
 	if parts[1]["functionCall"] == nil {
 		t.Errorf("expected functionCall on parts[1], got %+v", parts[1])
+	}
+}
+
+// TestGeminiOutputParts_SignedBoundaries 保留相邻内容的签名边界
+func TestGeminiOutputParts_SignedBoundaries(t *testing.T) {
+	for _, kind := range []aistudio.EventKind{aistudio.EventText, aistudio.EventReasoning} {
+		parts := geminiOutputParts(generationResult{events: []aistudio.Event{
+			{Kind: kind, Text: "first", ThoughtSignature: "sig-a"},
+			{Kind: kind, Text: "second", ThoughtSignature: "sig-b"},
+		}})
+		if len(parts) != 2 || parts[0]["text"] != "first" || parts[1]["text"] != "second" || parts[0]["thoughtSignature"] != "sig-a" || parts[1]["thoughtSignature"] != "sig-b" {
+			t.Fatalf("kind=%s signed parts=%+v", kind, parts)
+		}
+	}
+}
+
+// TestGeminiOutputParts_PendingSignature 保留前置签名与已有签名
+func TestGeminiOutputParts_PendingSignature(t *testing.T) {
+	parts := geminiOutputParts(generationResult{events: []aistudio.Event{
+		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-a"},
+		{Kind: aistudio.EventReasoning, Text: "reason", ThoughtSignature: "sig-b"},
+		{Kind: aistudio.EventText, Text: "answer"},
+	}})
+	want := []map[string]any{
+		{"text": "", "thought": true, "thoughtSignature": "sig-a"},
+		{"text": "reason", "thought": true, "thoughtSignature": "sig-b"},
+		{"text": "answer"},
+	}
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("parts=%+v want=%+v", parts, want)
+	}
+}
+
+// TestGeminiOutputParts_TrailingSignatures 保留尾部签名与已有签名的顺序
+func TestGeminiOutputParts_TrailingSignatures(t *testing.T) {
+	parts := geminiOutputParts(generationResult{events: []aistudio.Event{
+		{Kind: aistudio.EventText, Text: "answer", ThoughtSignature: "sig-a"},
+		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-b"},
+	}})
+	want := []map[string]any{
+		{"text": "answer", "thoughtSignature": "sig-a"},
+		{"text": "", "thought": true, "thoughtSignature": "sig-b"},
+	}
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("parts=%+v want=%+v", parts, want)
+	}
+}
+
+// TestGeminiOutputParts_LeadingSignatures 保留连续前置签名的原始顺序
+func TestGeminiOutputParts_LeadingSignatures(t *testing.T) {
+	parts := geminiOutputParts(generationResult{events: []aistudio.Event{
+		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-a"},
+		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-b"},
+		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-c"},
+		{Kind: aistudio.EventText, Text: "answer"},
+	}})
+	want := []map[string]any{
+		{"text": "", "thought": true, "thoughtSignature": "sig-a"},
+		{"text": "", "thought": true, "thoughtSignature": "sig-b"},
+		{"text": "", "thought": true, "thoughtSignature": "sig-c"},
+		{"text": "answer"},
+	}
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("parts=%+v want=%+v", parts, want)
+	}
+}
+
+// TestGeminiOutputParts_SignedAudio 保留 PCM 音频片段的独立签名
+func TestGeminiOutputParts_SignedAudio(t *testing.T) {
+	var result generationResult
+	for _, sig := range []string{"audio-a", "audio-b"} {
+		if err := result.apply(aistudio.Event{Kind: aistudio.EventMedia, ThoughtSignature: sig, Media: &aistudio.Media{MIME: "audio/l16;rate=24000", Data: []byte{1, 2}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parts := geminiOutputParts(result)
+	if len(parts) != 2 || parts[0]["thoughtSignature"] != "audio-a" || parts[1]["thoughtSignature"] != "audio-b" {
+		t.Fatalf("signed audio=%+v", parts)
 	}
 }

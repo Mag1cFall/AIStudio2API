@@ -474,13 +474,17 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 
 func sameOriginMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeAdminError(w, http.StatusForbidden, "control_plane_origin_forbidden", "Control plane requires a same-origin browser request")
+			return
+		}
 		originValue := strings.TrimSpace(r.Header.Get("Origin"))
 		if originValue == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		origin, err := url.Parse(originValue)
-		if err != nil || origin.Host == "" || !strings.EqualFold(origin.Host, r.Host) {
+		if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") || origin.User != nil || origin.Host == "" || !strings.EqualFold(origin.Host, r.Host) {
 			writeAdminError(w, http.StatusForbidden, "control_plane_origin_forbidden", "Control plane requires a same-origin browser request")
 			return
 		}

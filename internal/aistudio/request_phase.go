@@ -16,6 +16,20 @@ const (
 
 type requestPhaseContextKey struct{}
 
+type upstreamModeContextKey struct{}
+
+// ContextWithUpstreamModeObserver 记录实际 RPC、传输模式与流式回退原因
+func ContextWithUpstreamModeObserver(ctx context.Context, observer func(string, string, string)) context.Context {
+	return context.WithValue(ctx, upstreamModeContextKey{}, observer)
+}
+
+// reportUpstreamMode 在发送请求前报告实际采用的上游调用方式
+func reportUpstreamMode(ctx context.Context, method, mode, reason string) {
+	if observer, ok := ctx.Value(upstreamModeContextKey{}).(func(string, string, string)); ok {
+		observer(method, mode, reason)
+	}
+}
+
 // ContextWithRequestPhaseObserver 记录受保护请求阶段
 func ContextWithRequestPhaseObserver(ctx context.Context, observer func(RequestPhase)) context.Context {
 	return context.WithValue(ctx, requestPhaseContextKey{}, observer)

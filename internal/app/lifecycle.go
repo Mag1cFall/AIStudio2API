@@ -384,12 +384,12 @@ func (manager *runtimeManager) RuntimeConfig(ctx context.Context) (api.RuntimeCo
 
 // UpdateRuntimeConfig 保存下一次启动生成服务时使用的配置
 func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
-	manager.mu.RLock()
+	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
 	}
-	manager.mu.RUnlock()
+	manager.mu.Unlock()
 	return updated, err
 }
 
@@ -438,6 +438,10 @@ func (manager *runtimeManager) decorateRuntimeConfig(value api.RuntimeConfig, ac
 	value.ActiveListenAddr = manager.activeManagement.ListenAddr
 	value.ActiveAPIKey = manager.activeManagement.ProxyAPIKey
 	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr || value.APIKey != value.ActiveAPIKey
+	value.ManagementRestartRequired = value.ManagementRestartRequired ||
+		value.AdminAuthEnabled != manager.activeManagement.AdminAuthEnabled ||
+		value.AdminUsername != manager.activeManagement.AdminUsername ||
+		value.SavedAdminPassword != manager.activeManagement.AdminPassword
 	value.ServiceRestartRequired = !sameDataConfig(value, active, manager.overrides)
 	return value
 }
@@ -456,7 +460,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency, TemporaryChat: value.TemporaryChat,
 		RoutingStrategy: value.RoutingStrategy, UpstreamChannels: value.UpstreamChannels,
-		WAABackend: value.WAABackend,
+		WAABackend:           value.WAABackend,
+		BuildNativeNonstream: value.BuildNativeNonstream,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -465,7 +470,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
 		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
 		saved.RoutingStrategy == active.RoutingStrategy &&
-		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend
+		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend &&
+		saved.BuildNativeNonstream == active.BuildNativeNonstream
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

@@ -780,6 +780,21 @@ func buildTrailerError(raw json.RawMessage) error {
 // sendBuild 编码并发送 Build 代理请求，返回响应与含 finishReason 校验的解码
 func (c *Client) sendBuild(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	unary := request.Unary || buildUsesUnary(entry.model)
+	response, decoder, err := c.sendBuildMode(ctx, request, entry, unary, "")
+	var rpcErr *RPCError
+	if err != nil && request.Unary && !buildUsesUnary(entry.model) && ctx.Err() == nil && errors.As(err, &rpcErr) {
+		message := strings.ToLower(rpcErr.Message)
+		unsupported := rpcErr.StatusCode == http.StatusMethodNotAllowed || rpcErr.StatusCode == http.StatusNotImplemented ||
+			rpcErr.Code == 12 || rpcErr.StatusCode == http.StatusBadRequest && strings.Contains(message, "support") && (strings.Contains(message, "stream") || strings.Contains(message, "unary"))
+		if unsupported {
+			return c.sendBuildMode(ctx, request, entry, false, "Build 原生单次调用不可用: "+rpcErr.Error())
+		}
+	}
+	return response, decoder, err
+}
+
+// sendBuildMode 按选定模式发送 Build 请求
+func (c *Client) sendBuildMode(ctx context.Context, request GenerateRequest, entry modelEntry, unary bool, reason string) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	path, body, err := EncodeBuildGenerateRequest(request, entry.defaults, request.ImageRoute, unary)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -792,6 +807,11 @@ func (c *Client) sendBuild(ctx context.Context, request GenerateRequest, entry m
 	if unary {
 		method = buildProxyUnaryMethod
 	}
+	mode := "stream"
+	if unary {
+		mode = "native"
+	}
+	reportUpstreamMode(ctx, method, mode, reason)
 	rpc := newRPCRequest(method, request.AccountID, request.ID, proxy, !unary)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)

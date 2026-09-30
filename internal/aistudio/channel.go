@@ -96,11 +96,14 @@ func generationChannelSelection(selection AccountSelection) bool {
 
 // selectionChannelsLocked 返回选择可使用的通道顺序；非生成请求只使用 Playground RPC
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
-	if selection.Channel != "" && p.channelEnabledLocked(selection.Channel) {
-		return []Channel{selection.Channel}
-	}
 	if !generationChannelSelection(selection) {
 		return []Channel{ChannelPlayground}
+	}
+	if selection.Channel != "" {
+		if p.channelEnabledLocked(selection.Channel) {
+			return []Channel{selection.Channel}
+		}
+		return nil
 	}
 	return p.enabledChannelsLocked()
 }
