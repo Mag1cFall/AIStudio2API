@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
 // PooledService 在账户租约内调用协议客户端
@@ -409,8 +411,12 @@ func (s *PooledService) cachedModels(accountID string) []Model {
 
 // DefinitiveAuthenticationFailure 判断上游是否明确要求重新认证
 func DefinitiveAuthenticationFailure(err error) bool {
+	if errors.Is(err, camoufoxnative.ErrAuthenticationRequired) {
+		return true
+	}
 	var rpcError *RPCError
-	return errors.As(err, &rpcError) && rpcError.StatusCode == 401
+	return errors.As(err, &rpcError) && !driveAuthorizationMissing(err) &&
+		(rpcError.StatusCode == http.StatusUnauthorized || rpcError.Code == 16)
 }
 
 // DefinitiveWAARuntimeFailure 判断上游是否明确拒绝当前 WAA 运行态
@@ -633,6 +639,9 @@ func accountAttemptLimit(pool *AccountPool, pinned bool) int {
 }
 
 func retryableAccountError(err error) bool {
+	if driveAuthorizationMissing(err) {
+		return false
+	}
 	var rpcError *RPCError
 	if !errors.As(err, &rpcError) {
 		return false
@@ -659,7 +668,7 @@ func forwardEventsWithLease(
 			}
 		}
 	}()
-	verified := false
+	terminal := false
 	accountID := lease.Account().ID
 	accessGeneration := lease.ModelAccessGeneration()
 	checkedAt := lease.CheckedAt()
@@ -674,7 +683,11 @@ func forwardEventsWithLease(
 		case <-ctx.Done():
 			return
 		}
+		if terminal {
+			continue
+		}
 		if event.Kind == EventError {
+			terminal = true
 			if DefinitiveAuthenticationFailure(event.Err) {
 				if err := lease.MarkAuthenticationRequired(event.Err.Error()); err != nil {
 					event.Err = errors.Join(event.Err, err)
@@ -686,8 +699,8 @@ func forwardEventsWithLease(
 		case <-ctx.Done():
 			return
 		}
-		if event.Kind != EventError && !verified {
-			verified = true
+		if event.Kind == EventFinish {
+			terminal = true
 			if err := lease.MarkAuthenticationValid(); err != nil {
 				slog.Error("账户认证状态保存失败", "account", accountID, "error", err)
 			}

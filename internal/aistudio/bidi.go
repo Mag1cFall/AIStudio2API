@@ -441,6 +441,8 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 		statusCode = 404
 	case 7:
 		statusCode = 403
+	case 16:
+		statusCode = 401
 	default:
 		return BidiEvent{}, true, &ProtocolEvidenceError{
 			Method: "BidiGenerateContent", Path: "$.__sm__.status[0][0][0]",

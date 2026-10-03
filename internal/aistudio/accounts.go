@@ -1338,9 +1338,6 @@ func (l *AccountLease) markAuthenticationStateAt(required bool, reason string, c
 		checkedAt.Before(l.account.authCheckedAt) {
 		return nil
 	}
-	if required && checkedAt.Equal(l.account.authCheckedAt) && l.account.State == AccountReady {
-		return nil
-	}
 	l.account.authCheckedAt = checkedAt
 	if !l.account.Config.Enabled {
 		l.account.State = AccountDisabled
@@ -1389,8 +1386,35 @@ func (l *AccountLease) SaveStorageState(state StorageState) error {
 	}
 	l.pool.mu.Lock()
 	l.account.StorageState = state
+	l.account.authGeneration++
+	l.authGeneration = l.account.authGeneration
+	l.account.authCheckedAt = time.Time{}
 	l.pool.mu.Unlock()
 	return nil
+}
+
+// WaitForAuthRefresh 等待其他正常请求释放并复用已经提交的新认证
+func (l *AccountLease) WaitForAuthRefresh(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		l.operation.Lock()
+		generation := l.authGeneration
+		l.operation.Unlock()
+		l.pool.mu.Lock()
+		ready := l.exclusive || generation != l.account.authGeneration || l.account.active <= l.account.authRefreshers
+		changed := l.pool.changed
+		l.pool.mu.Unlock()
+		if ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
 }
 
 // RefreshStorageState 保证并发认证失效只提交一次
@@ -2198,7 +2222,7 @@ func (p *AccountPool) Status() []AccountStatus {
 		_, active := accountCooldown(account, "", now)
 		if !account.Config.Enabled {
 			state = AccountDisabled
-		} else if account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0 {
+		} else if state == AccountReady && (account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0) {
 			state = AccountBusy
 		} else if state == AccountReady && active {
 			state = AccountCooldown
@@ -2582,6 +2606,9 @@ func (p *AccountPool) setAccountState(accountID string, state AccountState, reas
 		account.State = state
 	}
 	account.stateMessage = strings.TrimSpace(reason)
+	if state == AccountReady || state == AccountAuthRequired {
+		account.authCheckedAt = time.Now().UTC()
+	}
 	p.notifyLocked()
 	return nil
 }

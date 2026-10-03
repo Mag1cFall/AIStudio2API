@@ -78,6 +78,7 @@ func newRuntime(
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
 	refresher := newAuthRuntimeRefresher(workers, headers, requests, cfg.Proxy)
+	workers.refresher = refresher
 	client, err := aistudio.NewClient(aistudio.ClientOptions{
 		Transport:       &authRetryTransport{transport: transport, refresher: refresher},
 		Protected:       &authRetryProtectedTransport{transport: protected, refresher: refresher},
@@ -120,6 +121,7 @@ type accountWorkerManager struct {
 	accounts        map[string]*accountWorker
 	openings        map[string]chan struct{}
 	requests        *requestRegistry
+	refresher       *authRuntimeRefresher
 	camoufox        string
 	globalProxy     string
 	initTimeout     time.Duration
@@ -234,7 +236,8 @@ func (preparer *accountWorkerPreparer) BrowserStorageState(ctx context.Context) 
 
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
 type accountWorkerInitError struct {
-	err error
+	err         error
+	authHandled bool
 }
 
 func (err *accountWorkerInitError) Error() string {
@@ -1197,10 +1200,6 @@ func (manager *accountWorkerManager) ensureWorker(
 	modelID string,
 	waitForOpening bool,
 ) (aistudio.ProtectedPreparer, error) {
-	bootstrapModel, err := manager.pool.BootstrapModel(accountID)
-	if err != nil {
-		return nil, err
-	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	stopLifecycle := context.AfterFunc(manager.lifecycle, cancel)
 	defer func() {
@@ -1208,6 +1207,10 @@ func (manager *accountWorkerManager) ensureWorker(
 		cancel()
 	}()
 	ctx = workerCtx
+	bootstrapModel, err := manager.pool.BootstrapModel(accountID)
+	if err != nil {
+		return nil, err
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1248,7 +1251,7 @@ func (manager *accountWorkerManager) ensureWorker(
 			opening := make(chan struct{})
 			manager.openings[accountID] = opening
 			manager.rebalanceMu.Unlock()
-			preparer, err := manager.startReservedWorker(ctx, accountID, bootstrapModel)
+			preparer, err := manager.startAuthenticatedWorker(ctx, accountID, bootstrapModel)
 			manager.rebalanceMu.Lock()
 			if err == nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
@@ -1288,7 +1291,7 @@ func (manager *accountWorkerManager) ensureWorker(
 		opening := make(chan struct{})
 		manager.openings[accountID] = opening
 		manager.rebalanceMu.Unlock()
-		pending, startErr := manager.startReservedWorker(ctx, accountID, bootstrapModel)
+		pending, startErr := manager.startAuthenticatedWorker(ctx, accountID, bootstrapModel)
 		if startErr != nil {
 			manager.rebalanceMu.Lock()
 			manager.finishOpening(accountID, opening)
@@ -1347,6 +1350,44 @@ func (manager *accountWorkerManager) ensureWorker(
 			manager.rebalanceMu.Unlock()
 		}
 	}
+}
+
+// startAuthenticatedWorker 在启动锁释放后恢复同一账户的认证
+func (manager *accountWorkerManager) startAuthenticatedWorker(ctx context.Context, accountID, model string) (*accountWorkerPreparer, error) {
+	lease, leased := aistudio.AccountLeaseFromContext(ctx)
+	if !leased {
+		var err error
+		lease, err = manager.pool.AcquireFor(ctx, aistudio.AccountSelection{AccountID: accountID})
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Release()
+		ctx = aistudio.ContextWithAccountLease(ctx, lease)
+	}
+	if lease.Account().ID != accountID {
+		return nil, fmt.Errorf("Worker 与账户租约不匹配: %s", accountID)
+	}
+	if _, busyErr := manager.runtimeAvailable([]string{accountID}); busyErr != nil {
+		return nil, busyErr
+	}
+	worker, err := manager.startReservedWorker(ctx, accountID, model)
+	if !aistudio.DefinitiveAuthenticationFailure(err) {
+		return worker, err
+	}
+	if manager.refresher != nil {
+		if recoverErr := manager.refresher.Recover(ctx, err); recoverErr == nil {
+			worker, err = manager.startReservedWorker(ctx, accountID, model)
+			if err == nil {
+				return worker, nil
+			}
+			err = manager.refresher.markAuthenticationRequired(ctx, err)
+		} else {
+			err = recoverErr
+		}
+	} else if lease, ok := aistudio.AccountLeaseFromContext(ctx); ok && ctx.Err() == nil {
+		err = errors.Join(err, lease.MarkAuthenticationRequired(err.Error()))
+	}
+	return nil, &accountWorkerInitError{err: err, authHandled: true}
 }
 
 func (manager *accountWorkerManager) promote(ctx context.Context, accountID string, modelID string) (aistudio.ProtectedPreparer, error) {
@@ -2780,7 +2821,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 				continue
 			}
 			workersChanged := service.workers.schedulingChanged()
-			_, promoteErr := service.workers.promote(ctx, accountID, selection.ModelID)
+			_, promoteErr := service.workers.promote(aistudio.ContextWithAccountLease(ctx, lease), accountID, selection.ModelID)
 			if promoteErr == nil {
 				return lease, nil
 			}
@@ -2826,6 +2867,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		if promoteFailure != nil {
+			if aistudio.DefinitiveAuthenticationFailure(promoteFailure) {
+				return nil, errors.Join(service.pool.NoEligibleError(selection), promoteFailure)
+			}
 			return nil, promoteFailure
 		}
 		if runtimeBusyErr != nil {
