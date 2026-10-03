@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 )
 
@@ -17,7 +19,9 @@ type chromeCookieRefreshFunc func(context.Context, aistudio.ChromeOAuthMaterial,
 
 // authRuntimeRefresher 使用账户保存的 Chrome OAuth 材料原地续签
 type authRuntimeRefresher struct {
+	pool           *aistudio.AccountPool
 	refresh        chromeCookieRefreshFunc
+	importCurrent  func(context.Context, aistudio.AuthSource, *aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
 	reset          func(string) error
 	prepareHeaders func(string) (func(bool), error)
 	globalProxy    string
@@ -141,9 +145,102 @@ func newAuthRuntimeRefresher(
 	globalProxy string,
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
-		refresh: chromeauth.Refresh, reset: workers.Reset, prepareHeaders: headers.prepareInvalidate,
+		pool:    workers.pool,
+		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState,
+		reset: workers.Reset, prepareHeaders: headers.prepareInvalidate,
 		globalProxy: globalProxy,
 		requests:    requests,
+	}
+}
+
+// importCurrentChromeState 从原来源中更新同一 Google 账户的认证材料
+func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, material *aistudio.ChromeOAuthMaterial, proxy string) (aistudio.StorageState, error) {
+	root, err := chromeauth.DefaultChromeRoot()
+	if err != nil {
+		return aistudio.StorageState{}, err
+	}
+	accounts, err := chromeauth.Discover(root)
+	if err != nil {
+		return aistudio.StorageState{}, err
+	}
+	var selected string
+	for _, account := range accounts {
+		if !account.Importable || !strings.EqualFold(account.Email, source.Email) || material != nil && account.GaiaID != material.GaiaID {
+			continue
+		}
+		selected = account.ID
+		if account.Profile == source.Profile {
+			break
+		}
+	}
+	if selected == "" {
+		return aistudio.StorageState{}, fmt.Errorf("Chrome 中没有可更新的原账户 %s", source.Email)
+	}
+	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{ChromeRoot: root, Proxy: proxy, AccountIDs: []string{selected}})
+	if err != nil {
+		return aistudio.StorageState{}, err
+	}
+	if len(results) != 1 || !strings.EqualFold(results[0].Email, source.Email) {
+		return aistudio.StorageState{}, fmt.Errorf("Chrome 更新账户与原账户不匹配")
+	}
+	return results[0].State, nil
+}
+
+// markAuthenticationRequired 发布当前认证代际的账户状态
+func (refresher *authRuntimeRefresher) markAuthenticationRequired(ctx context.Context, cause error) error {
+	lease, ok := aistudio.AccountLeaseFromContext(ctx)
+	if !ok || ctx.Err() != nil || !aistudio.DefinitiveAuthenticationFailure(cause) {
+		return cause
+	}
+	err := lease.MarkAuthenticationRequired(cause.Error())
+	if refresher.pool != nil {
+		statuses := refresher.pool.Status()
+		accounts := make([]api.AdminAccount, 0, len(statuses))
+		for _, status := range statuses {
+			accounts = append(accounts, adminAccountDTO(status))
+		}
+		refresher.requests.publish(api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
+	}
+	return errors.Join(cause, err)
+}
+
+// Recover 为当前认证代际恢复一次登录并保留最终失败原因
+func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error) error {
+	var startup *accountWorkerInitError
+	if errors.As(cause, &startup) && startup.authHandled {
+		return cause
+	}
+	if refresher.Available(ctx) {
+		if err := refresher.Refresh(ctx); err == nil {
+			return nil
+		} else {
+			cause = errors.Join(cause, err)
+		}
+	}
+	return refresher.markAuthenticationRequired(ctx, cause)
+}
+
+// do 重放认证恢复前尚未产生语义输出的普通或受保护 RPC
+func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, send func() (*aistudio.RPCResponse, error)) (*aistudio.RPCResponse, error) {
+	for attempt := 0; ; attempt++ {
+		response, err := send()
+		if err == nil && authenticationFailed(response) {
+			original, readErr := readAuthenticationFailure(method, response)
+			if readErr != nil {
+				return nil, readErr
+			}
+			err = original
+			response = nil
+		}
+		if !aistudio.DefinitiveAuthenticationFailure(err) {
+			return response, err
+		}
+		if attempt == 1 {
+			return nil, refresher.markAuthenticationRequired(ctx, err)
+		}
+		if err := refresher.Recover(ctx, err); err != nil {
+			return nil, err
+		}
 	}
 }
 
@@ -167,21 +264,9 @@ func (provider *accountHeaderProvider) prepareInvalidate(accountID string) (func
 
 // Do 在 401 后续签同一账户并重放一次请求
 func (transport *authRetryTransport) Do(ctx context.Context, request aistudio.RPCRequest) (*aistudio.RPCResponse, error) {
-	response, err := transport.transport.Do(ctx, request)
-	if err != nil || !authenticationFailed(response) {
-		return response, err
-	}
-	if !transport.refresher.Available(ctx) {
-		return response, nil
-	}
-	originalErr, err := readAuthenticationFailure(request.Method, response)
-	if err != nil {
-		return nil, err
-	}
-	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, errors.Join(originalErr, err)
-	}
-	return transport.transport.Do(ctx, request)
+	return transport.refresher.do(ctx, request.Method, func() (*aistudio.RPCResponse, error) {
+		return transport.transport.Do(ctx, request)
+	})
 }
 
 // DoProtected 在 401 后续签同一账户并重放一次受保护请求
@@ -190,21 +275,9 @@ func (transport *authRetryProtectedTransport) DoProtected(
 	request aistudio.GenerateRequest,
 	rpc aistudio.RPCRequest,
 ) (*aistudio.RPCResponse, error) {
-	response, err := transport.transport.DoProtected(ctx, request, rpc)
-	if err != nil || !authenticationFailed(response) {
-		return response, err
-	}
-	if !transport.refresher.Available(ctx) {
-		return response, nil
-	}
-	originalErr, err := readAuthenticationFailure(rpc.Method, response)
-	if err != nil {
-		return nil, err
-	}
-	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, errors.Join(originalErr, err)
-	}
-	return transport.transport.DoProtected(ctx, request, rpc)
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return transport.transport.DoProtected(ctx, request, rpc)
+	})
 }
 
 // OpenBidiProtected 在 401 后续签同一账户并重新建立 WebChannel
@@ -227,14 +300,18 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 		}
 		return session, nil
 	}
-	if !aistudio.DefinitiveAuthenticationFailure(err) || transport.refresher == nil || !transport.refresher.Available(ctx) {
+	if !aistudio.DefinitiveAuthenticationFailure(err) || transport.refresher == nil {
 		return nil, errors.Join(err, gate.Commit())
 	}
 	gate.Abandon()
-	if refreshErr := transport.refresher.Refresh(ctx); refreshErr != nil {
-		return nil, errors.Join(err, refreshErr)
+	if recoverErr := transport.refresher.Recover(ctx, err); recoverErr != nil {
+		return nil, recoverErr
 	}
-	return bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, release)
+	session, err = bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, release)
+	if aistudio.DefinitiveAuthenticationFailure(err) {
+		err = transport.refresher.markAuthenticationRequired(ctx, err)
+	}
+	return session, err
 }
 
 // DoProtectedVideo 在认证失败后续签同一账户并重放 Veo 请求
@@ -247,21 +324,9 @@ func (transport *authRetryProtectedTransport) DoProtectedVideo(
 	if !ok {
 		return nil, fmt.Errorf("protected transport 不支持 GenerateVideo")
 	}
-	response, err := videoTransport.DoProtectedVideo(ctx, request, rpc)
-	if err != nil || !authenticationFailed(response) {
-		return response, err
-	}
-	if !transport.refresher.Available(ctx) {
-		return response, nil
-	}
-	originalErr, err := readAuthenticationFailure(rpc.Method, response)
-	if err != nil {
-		return nil, err
-	}
-	if err := transport.refresher.Refresh(ctx); err != nil {
-		return nil, errors.Join(originalErr, err)
-	}
-	return videoTransport.DoProtectedVideo(ctx, request, rpc)
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return videoTransport.DoProtectedVideo(ctx, request, rpc)
+	})
 }
 
 // Refresh 续签当前租约账户并保存新的 storage state
@@ -275,6 +340,9 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		return fmt.Errorf("%w: 账户存在活动生成", aistudio.ErrAccountLeased)
 	}
 	defer endRefresh()
+	if err := lease.WaitForAuthRefresh(ctx); err != nil {
+		return err
+	}
 	account := lease.Account()
 	startedAt := time.Now()
 	refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
@@ -283,15 +351,39 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if !exists || extension.OAuth == nil {
+		if !exists {
 			return fmt.Errorf("账户 %s 缺少 Chrome OAuth 续签材料", account.ID)
 		}
-		cookies, err := refresher.refresh(ctx, *extension.OAuth, account.EffectiveProxy(refresher.globalProxy))
+		proxy := account.EffectiveProxy(refresher.globalProxy)
+		var cookies []aistudio.StateCookie
+		if extension.OAuth != nil {
+			cookies, err = refresher.refresh(ctx, *extension.OAuth, proxy)
+		}
+		if extension.OAuth == nil || errors.Is(err, chromeauth.ErrCredentialsRejected) {
+			if extension.Source.Browser != "chrome" || !strings.EqualFold(extension.Source.Email, account.ID) {
+				return errors.Join(fmt.Errorf("账户 %s 缺少可更新的 Chrome 来源", account.ID), err)
+			}
+			refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 更新 Chrome 来源材料")
+			updated, importErr := refresher.importCurrent(ctx, extension.Source, extension.OAuth, proxy)
+			if importErr != nil {
+				return errors.Join(err, importErr)
+			}
+			current, exists, importErr := updated.AuthExtension()
+			if importErr != nil || !exists || current.OAuth == nil || !strings.EqualFold(current.Source.Email, account.ID) ||
+				extension.OAuth != nil && current.OAuth.GaiaID != extension.OAuth.GaiaID {
+				return fmt.Errorf("Chrome 更新结果与账户 %s 不匹配", account.ID)
+			}
+			if err := state.SetAuthExtension(current); err != nil {
+				return err
+			}
+			cookies, err = updated.Cookies, nil
+		}
 		if err != nil {
 			return fmt.Errorf("续签账户 %s: %w", account.ID, err)
 		}
 		state.Cookies = cookies
-		return nil
+		_, err = aistudio.NewSigner().Sign(*state)
+		return err
 	}, func() (func(bool), error) {
 		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")
 		if err := refresher.reset(account.ID); err != nil {
@@ -329,7 +421,7 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 		return false
 	}
 	extension, exists, err := state.AuthExtension()
-	return err == nil && exists && extension.OAuth != nil
+	return err == nil && exists && (extension.OAuth != nil || extension.Source.Browser == "chrome")
 }
 
 func authenticationFailed(response *aistudio.RPCResponse) bool {

@@ -1,10 +1,14 @@
 package camoufoxnative
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"time"
 )
+
+// ErrAuthenticationRequired 表示隔离账户需要恢复登录
+var ErrAuthenticationRequired = errors.New("隔离登录态失效")
 
 // StartupStage 表示 Camoufox runtime 的启动阶段
 type StartupStage string

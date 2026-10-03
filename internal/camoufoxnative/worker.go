@@ -245,8 +245,8 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err != nil {
 		return err
 	}
-	if strings.Contains(pageURL, "accounts.google.com") {
-		return fmt.Errorf("隔离登录态失效 url=%s", pageURL)
+	if location, parseErr := url.Parse(pageURL); parseErr == nil && location.Hostname() == "accounts.google.com" {
+		return fmt.Errorf("%w url=%s", ErrAuthenticationRequired, pageURL)
 	}
 	if err := dismissKnownOverlays(ctx, client, contextID); err != nil {
 		return err

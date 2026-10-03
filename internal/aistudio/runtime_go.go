@@ -328,8 +328,8 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("AI Studio 页面跳转无效: %w", err)
 			}
-			if strings.Contains(location.Host, "accounts.google.com") {
-				return "", fmt.Errorf("隔离登录态失效 url=%s", location.String())
+			if location.Hostname() == "accounts.google.com" {
+				return "", fmt.Errorf("%w url=%s", camoufoxnative.ErrAuthenticationRequired, location.String())
 			}
 			target = location.String()
 			continue
