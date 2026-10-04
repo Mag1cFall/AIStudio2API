@@ -19,23 +19,41 @@ var schemaTypeCodes = map[string]int64{
 }
 
 func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		raw = json.RawMessage(`{"type":"object","properties":{}}`)
+	var err error
+	raw, err = cleanJSONSchemaInput(raw)
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(raw, []byte("true")) {
+		return []any{int64(0)}, nil
+	}
+	if bytes.Equal(raw, []byte("false")) {
+		return nil, fmt.Errorf("schema false 禁止所有值")
 	}
 	var schema map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &schema); err != nil || schema == nil {
 		return nil, fmt.Errorf("schema 必须是 JSON object")
-	}
-	cleanNullFields(schema)
-	if err := normalizeNot(schema); err != nil {
-		return nil, err
 	}
 	if err := normalizeConstAndMetadata(schema); err != nil {
 		return nil, err
 	}
 	if err := normalizeNullableVariants(schema); err != nil {
 		return nil, err
+	}
+	if err := normalizeNotSchema(schema); err != nil {
+		return nil, err
+	}
+	if raw, ok := schema["items"]; ok && bytes.Equal(bytes.TrimSpace(raw), []byte("false")) {
+		if schema["prefixItems"] != nil {
+			return nil, &UnverifiedProtocolError{Feature: "prefixItems 与 items=false 的位置约束"}
+		}
+		if minimum, ok := schema["minItems"]; ok {
+			value, err := schemaInteger(minimum, "minItems")
+			if err != nil || value > 0 {
+				return nil, fmt.Errorf("schema.items=false 与 minItems 不兼容")
+			}
+		}
+		schema["items"], schema["maxItems"] = json.RawMessage("true"), json.RawMessage("0")
 	}
 	if err := normalizeImplicitType(schema); err != nil {
 		return nil, err
@@ -61,7 +79,7 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	}
 	typeName = strings.ToLower(typeName)
 	typeCode, ok := schemaTypeCodes[typeName]
-	if !ok {
+	if !ok && typeName != "" {
 		return nil, fmt.Errorf("未知 schema.type %q", typeName)
 	}
 	wire := []any{typeCode}
@@ -94,20 +112,11 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		wire = setWireField(wire, 4, values)
 	}
 	if value, ok := schema["items"]; ok {
-		itemTrimmed := bytes.TrimSpace(value)
-		if bytes.Equal(itemTrimmed, []byte("true")) {
-			value = json.RawMessage(`{}`)
-		} else if bytes.Equal(itemTrimmed, []byte("false")) {
-			delete(schema, "items")
-			value = nil
+		items, err := encodeJSONSchema(value)
+		if err != nil {
+			return nil, fmt.Errorf("schema.items: %w", err)
 		}
-		if value != nil {
-			items, err := encodeJSONSchema(value)
-			if err != nil {
-				return nil, fmt.Errorf("schema.items: %w", err)
-			}
-			wire = setWireField(wire, 5, items)
-		}
+		wire = setWireField(wire, 5, items)
 	}
 	for _, field := range []struct {
 		name  string
@@ -132,15 +141,6 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		var properties map[string]json.RawMessage
 		if err := json.Unmarshal(value, &properties); err != nil || properties == nil {
 			return nil, fmt.Errorf("schema.properties 必须是 JSON object")
-		}
-		cleanNullFields(properties)
-		for name, rawProperty := range properties {
-			propTrimmed := bytes.TrimSpace(rawProperty)
-			if bytes.Equal(propTrimmed, []byte("true")) {
-				properties[name] = json.RawMessage(`{}`)
-			} else if bytes.Equal(propTrimmed, []byte("false")) {
-				delete(properties, name)
-			}
 		}
 		names := make([]string, 0, len(properties))
 		for name := range properties {
@@ -257,6 +257,7 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 			}
 			schema["type"] = encodedType
 			if len(nonNull) > 1 {
+				delete(schema, "type")
 				variants := make([]map[string]string, 0, len(nonNull))
 				for _, name := range nonNull {
 					variants = append(variants, map[string]string{"type": name})
@@ -284,6 +285,10 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 		filtered := variants[:0]
 		nullable := false
 		for _, variant := range variants {
+			if bytes.Equal(bytes.TrimSpace(variant), []byte("true")) || bytes.Equal(bytes.TrimSpace(variant), []byte("false")) {
+				filtered = append(filtered, variant)
+				continue
+			}
 			var value map[string]json.RawMessage
 			if err := json.Unmarshal(variant, &value); err != nil || value == nil {
 				return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
@@ -356,6 +361,9 @@ func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 			return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
 		}
 		for index, variant := range variants {
+			if bytes.Equal(bytes.TrimSpace(variant), []byte("true")) || bytes.Equal(bytes.TrimSpace(variant), []byte("false")) {
+				continue
+			}
 			var subSchema map[string]json.RawMessage
 			if err := json.Unmarshal(variant, &subSchema); err != nil || subSchema == nil {
 				return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
@@ -378,16 +386,142 @@ func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 	return nil
 }
 
-// normalizeImplicitType 为未声明类型的节点和缺少元素定义的数组补齐 AI Studio 必需的字段
+// cleanJSONSchemaInput 清理 Schema 可选空值并保留数据值与属性名称
+func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return json.RawMessage(`{"type":"object"}`), nil
+	}
+	if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
+		return raw, nil
+	}
+	var schema map[string]json.RawMessage
+	if json.Unmarshal(raw, &schema) != nil || schema == nil {
+		return nil, fmt.Errorf("schema 必须是 JSON object 或 boolean")
+	}
+	for _, name := range []string{"type", "format", "description", "nullable", "enum", "items", "properties", "required", "minItems", "maxItems", "minProperties", "maxProperties", "minimum", "maximum", "minLength", "maxLength", "pattern", "oneOf", "anyOf", "allOf", "not", "propertyOrdering"} {
+		if bytes.Equal(bytes.TrimSpace(schema[name]), []byte("null")) {
+			delete(schema, name)
+		}
+	}
+	for _, name := range []string{"items", "not"} {
+		if nested := bytes.TrimSpace(schema[name]); len(nested) > 0 && nested[0] == '{' {
+			cleaned, err := cleanJSONSchemaInput(nested)
+			if err != nil {
+				return nil, fmt.Errorf("schema.%s: %w", name, err)
+			}
+			schema[name] = cleaned
+		}
+	}
+	if value, ok := schema["properties"]; ok {
+		var properties map[string]json.RawMessage
+		if json.Unmarshal(value, &properties) != nil || properties == nil {
+			return nil, fmt.Errorf("schema.properties 必须是 JSON object")
+		}
+		for name, property := range properties {
+			if bytes.Equal(bytes.TrimSpace(property), []byte("null")) {
+				property = json.RawMessage("true")
+			}
+			cleaned, err := cleanJSONSchemaInput(property)
+			if err != nil {
+				return nil, fmt.Errorf("schema.properties.%s: %w", name, err)
+			}
+			properties[name] = cleaned
+		}
+		schema["properties"], _ = json.Marshal(properties)
+	}
+	for _, name := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
+		if raw, ok := schema[name]; ok {
+			var variants []json.RawMessage
+			if json.Unmarshal(raw, &variants) != nil {
+				return nil, fmt.Errorf("schema.%s 必须是 Schema 数组", name)
+			}
+			filtered := make([]json.RawMessage, 0, len(variants))
+			unrestricted := false
+			for index, variant := range variants {
+				cleaned, err := cleanJSONSchemaInput(variant)
+				if err != nil {
+					return nil, fmt.Errorf("schema.%s[%d]: %w", name, index, err)
+				}
+				if name == "anyOf" && bytes.Equal(cleaned, []byte("true")) {
+					unrestricted = true
+					break
+				}
+				if name == "allOf" && bytes.Equal(cleaned, []byte("false")) {
+					return nil, fmt.Errorf("schema.allOf 禁止所有值")
+				}
+				if (name == "anyOf" || name == "oneOf") && bytes.Equal(cleaned, []byte("false")) || name == "allOf" && bytes.Equal(cleaned, []byte("true")) {
+					continue
+				}
+				filtered = append(filtered, cleaned)
+			}
+			if unrestricted || name == "allOf" && len(filtered) == 0 {
+				delete(schema, name)
+			} else if len(filtered) == 0 && (name == "anyOf" || name == "oneOf") {
+				return nil, fmt.Errorf("schema.%s 禁止所有值", name)
+			} else {
+				schema[name], _ = json.Marshal(filtered)
+			}
+		}
+	}
+	return json.Marshal(schema)
+}
+
+// normalizeNotSchema 保留排除值并处理不接受任何值的约束
+func normalizeNotSchema(schema map[string]json.RawMessage) error {
+	raw, ok := schema["not"]
+	if !ok {
+		return nil
+	}
+	raw = bytes.TrimSpace(raw)
+	if bytes.Equal(raw, []byte("false")) {
+		delete(schema, "not")
+		return nil
+	}
+	if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("{}")) {
+		return fmt.Errorf("schema.not 禁止所有值")
+	}
+	var sub map[string]json.RawMessage
+	if json.Unmarshal(raw, &sub) == nil && sub != nil {
+		var typeName string
+		if len(sub) == 1 && json.Unmarshal(sub["type"], &typeName) == nil && strings.EqualFold(typeName, "null") {
+			delete(schema, "not")
+			schema["nullable"] = json.RawMessage("false")
+		}
+		return nil
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil {
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return fmt.Errorf("schema.not 必须是 Schema 或字符串排除值")
+		}
+		values = []string{value}
+	}
+	if len(values) == 0 {
+		delete(schema, "not")
+		return nil
+	}
+	schema["not"], _ = json.Marshal(map[string]any{"type": "string", "enum": values})
+	return nil
+}
+
+// normalizeImplicitType 从节点约束推导类型并保留开放的数组元素
 func normalizeImplicitType(schema map[string]json.RawMessage) error {
 	if _, ok := schema["type"]; !ok {
 		var typed map[string]json.RawMessage
+		conflictingType, conflictingItems := false, false
 		for _, name := range []string{"anyOf", "oneOf", "allOf"} {
 			var variants []map[string]json.RawMessage
 			if raw, ok := schema[name]; ok && json.Unmarshal(raw, &variants) == nil {
 				for _, variant := range variants {
-					if _, ok := variant["type"]; ok && typed == nil {
-						typed = variant
+					if value, ok := variant["type"]; ok {
+						if typed == nil {
+							typed = variant
+						} else {
+							conflictingType = conflictingType || !bytes.Equal(bytes.TrimSpace(value), bytes.TrimSpace(typed["type"]))
+							conflictingItems = conflictingItems || !bytes.Equal(bytes.TrimSpace(variant["items"]), bytes.TrimSpace(typed["items"]))
+						}
 					}
 				}
 			}
@@ -398,11 +532,13 @@ func normalizeImplicitType(schema map[string]json.RawMessage) error {
 		case schema["items"] != nil || schema["prefixItems"] != nil:
 			schema["type"] = json.RawMessage(`"array"`)
 		default:
-			schema["type"] = json.RawMessage(`"string"`)
+			if schema["enum"] != nil || schema["pattern"] != nil || schema["format"] != nil || schema["minLength"] != nil || schema["maxLength"] != nil {
+				schema["type"] = json.RawMessage(`"string"`)
+			}
 		}
-		if typed != nil {
+		if typed != nil && !conflictingType {
 			schema["type"] = typed["type"]
-			if items, ok := typed["items"]; ok && schema["items"] == nil {
+			if items, ok := typed["items"]; ok && schema["items"] == nil && !conflictingItems {
 				schema["items"] = items
 			}
 		}
@@ -411,7 +547,7 @@ func normalizeImplicitType(schema map[string]json.RawMessage) error {
 	if json.Unmarshal(schema["type"], &typeName) != nil || !strings.EqualFold(typeName, "array") || schema["items"] != nil {
 		return nil
 	}
-	schema["items"] = json.RawMessage(`{"type":"string"}`)
+	schema["items"] = json.RawMessage(`true`)
 	var prefix []map[string]json.RawMessage
 	if raw, ok := schema["prefixItems"]; ok && json.Unmarshal(raw, &prefix) == nil {
 		typed := make([]map[string]json.RawMessage, 0, len(prefix))
@@ -439,22 +575,7 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 		}
 		return typeName, nil
 	}
-	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
-		value, ok := schema[name]
-		if !ok {
-			continue
-		}
-		var variants []map[string]json.RawMessage
-		if err := json.Unmarshal(value, &variants); err != nil {
-			return "", fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
-		}
-		for _, variant := range variants {
-			if typeValue, exists := variant["type"]; exists {
-				return schemaString(typeValue, "type")
-			}
-		}
-	}
-	return "", fmt.Errorf("schema.type 必须是字符串")
+	return "", nil
 }
 
 func schemaInteger(raw json.RawMessage, name string) (int64, error) {
@@ -513,69 +634,104 @@ func setWireField(wire []any, index int, value any) []any {
 	return wire
 }
 
-// cleanNullFields removes keys with explicit null values so optional schema fields do not fail validation
-func cleanNullFields(schema map[string]json.RawMessage) {
-	for name, value := range schema {
-		if name == "const" {
-			continue
-		}
-		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			delete(schema, name)
-		}
+// normalizeFunctionParameters 将零参数定义归一化为对象
+func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
+	cleaned, err := cleanJSONSchemaInput(raw)
+	if err == nil && (bytes.Equal(cleaned, []byte("{}")) || bytes.Equal(cleaned, []byte("true"))) {
+		cleaned = json.RawMessage(`{"type":"object"}`)
 	}
+	return cleaned, err
 }
 
-// normalizeNot normalizes JSON Schema "not" constraints into supported structures or discards no-op forms
-func normalizeNot(schema map[string]json.RawMessage) error {
-	raw, ok := schema["not"]
-	if !ok {
-		return nil
-	}
-	trimmed := bytes.TrimSpace(raw)
-	if bytes.Equal(trimmed, []byte("null")) ||
-		bytes.Equal(trimmed, []byte("false")) ||
-		bytes.Equal(trimmed, []byte("true")) ||
-		bytes.Equal(trimmed, []byte(`""`)) ||
-		len(trimmed) == 0 {
-		delete(schema, "not")
-		return nil
-	}
-	if trimmed[0] == '[' {
-		var arr []any
-		if err := json.Unmarshal(trimmed, &arr); err == nil {
-			wrapped, err := json.Marshal(map[string]any{"enum": arr})
-			if err != nil {
-				return err
+// requestNeedsBuildSchema 按开放节点选择可表达该结构的通道
+func requestNeedsBuildSchema(request GenerateRequest) bool {
+	schemas := []json.RawMessage{request.Config.ResponseSchema}
+	for _, declaration := range request.Tools.Functions {
+		if request.Tools.ToolConfig.Mode == "none" {
+			break
+		}
+		raw, err := normalizeFunctionParameters(declaration.Parameters)
+		if err == nil {
+			if schemaHasBooleanNode(raw) {
+				return true
 			}
-			schema["not"] = wrapped
-			return nil
+			schemas = append(schemas, raw)
 		}
 	}
-	if trimmed[0] != '{' {
-		var val any
-		if err := json.Unmarshal(trimmed, &val); err == nil {
-			wrapped, err := json.Marshal(map[string]any{"enum": []any{val}})
-			if err != nil {
-				return err
+	for _, raw := range schemas {
+		if len(raw) == 0 {
+			continue
+		}
+		wire, err := encodeJSONSchema(raw)
+		if err == nil && schemaWireNeedsBuild(wire) {
+			return true
+		}
+	}
+	return false
+}
+
+// schemaHasBooleanNode 查找函数参数中需要原生 JSON Schema 的布尔节点
+func schemaHasBooleanNode(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
+		return true
+	}
+	var schema map[string]json.RawMessage
+	if json.Unmarshal(raw, &schema) != nil {
+		return false
+	}
+	for _, name := range []string{"items", "not"} {
+		if name == "not" && (bytes.Equal(bytes.TrimSpace(schema[name]), []byte("false")) || bytes.Equal(bytes.TrimSpace(schema[name]), []byte("true"))) {
+			continue
+		}
+		if schemaHasBooleanNode(schema[name]) {
+			return true
+		}
+	}
+	var properties map[string]json.RawMessage
+	_ = json.Unmarshal(schema["properties"], &properties)
+	for _, property := range properties {
+		if schemaHasBooleanNode(property) {
+			return true
+		}
+	}
+	for _, name := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
+		var variants []json.RawMessage
+		_ = json.Unmarshal(schema[name], &variants)
+		for _, variant := range variants {
+			if schemaHasBooleanNode(variant) {
+				return true
 			}
-			schema["not"] = wrapped
-			return nil
 		}
 	}
-	var sub map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &sub); err == nil && sub != nil {
-		cleanNullFields(sub)
-		if len(sub) == 0 {
-			delete(schema, "not")
-			return nil
+	return false
+}
+
+// schemaWireNeedsBuild 查找 Playground 不接受的无类型节点
+func schemaWireNeedsBuild(wire []any) bool {
+	if len(wire) > 0 && wire[0] == int64(0) {
+		return true
+	}
+	for _, index := range []int{5, 19} {
+		if len(wire) > index && wire[index] != nil && schemaWireNeedsBuild(wire[index].([]any)) {
+			return true
 		}
-		if typeRaw, ok := sub["type"]; ok {
-			var typeName string
-			if json.Unmarshal(typeRaw, &typeName) == nil && strings.EqualFold(typeName, "null") {
-				delete(schema, "not")
-				return nil
+	}
+	if len(wire) > 6 && wire[6] != nil {
+		for _, entry := range wire[6].([]any) {
+			if schemaWireNeedsBuild(entry.([]any)[1].([]any)) {
+				return true
 			}
 		}
 	}
-	return nil
+	for _, index := range []int{16, 17, 18} {
+		if len(wire) > index && wire[index] != nil {
+			for _, variant := range wire[index].([]any) {
+				if schemaWireNeedsBuild(variant.([]any)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

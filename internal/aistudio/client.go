@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -122,6 +123,7 @@ type RPCError struct {
 	Code       int64
 	Message    string
 	Metadata   map[string]string
+	RetryDelay time.Duration
 }
 
 // Error 返回结构化上游错误
@@ -199,7 +201,16 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 		if readErr != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
 		}
-		return nil, DecodeRPCError(method, response.StatusCode, raw)
+		rpcError := DecodeRPCError(method, response.StatusCode, raw)
+		if rpcError.RetryDelay <= 0 {
+			value := strings.TrimSpace(response.Header.Get("Retry-After"))
+			if delay, err := time.ParseDuration(value + "s"); err == nil && delay > 0 {
+				rpcError.RetryDelay = delay
+			} else if until, err := http.ParseTime(value); err == nil {
+				rpcError.RetryDelay = max(0, time.Until(until))
+			}
+		}
+		return nil, rpcError
 	}
 	contentType := response.Header.Get("Content-Type")
 	mediaType, _, err := mime.ParseMediaType(contentType)
@@ -255,7 +266,17 @@ func decodeRPCErrorMetadata(rpcError *RPCError, raw json.RawMessage) {
 			continue
 		}
 		var typeURL string
-		if err := json.Unmarshal(detail[0], &typeURL); err != nil || typeURL != "type.googleapis.com/google.rpc.ErrorInfo" {
+		if err := json.Unmarshal(detail[0], &typeURL); err != nil {
+			continue
+		}
+		if typeURL == "type.googleapis.com/google.rpc.RetryInfo" {
+			var info []json.RawMessage
+			if json.Unmarshal(detail[1], &info) == nil && len(info) > 0 {
+				rpcError.RetryDelay = max(rpcError.RetryDelay, decodeRPCRetryDuration(info[0]))
+			}
+			continue
+		}
+		if typeURL != "type.googleapis.com/google.rpc.ErrorInfo" {
 			continue
 		}
 		var info []json.RawMessage
@@ -276,4 +297,28 @@ func decodeRPCErrorMetadata(rpcError *RPCError, raw json.RawMessage) {
 			rpcError.Metadata[pair[0]] = pair[1]
 		}
 	}
+}
+
+// decodeRPCRetryDuration 读取 RetryInfo 中的秒与纳秒
+func decodeRPCRetryDuration(raw json.RawMessage) time.Duration {
+	var fields []json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) == 0 {
+		return 0
+	}
+	var seconds json.Number
+	if json.Unmarshal(fields[0], &seconds) != nil {
+		return 0
+	}
+	delay, err := time.ParseDuration(seconds.String() + "s")
+	if err != nil || delay < 0 {
+		return 0
+	}
+	if len(fields) > 1 && !isJSONNull(fields[1]) {
+		var nanos int64
+		if json.Unmarshal(fields[1], &nanos) != nil || nanos < 0 || nanos >= int64(time.Second) {
+			return 0
+		}
+		delay += time.Duration(nanos)
+	}
+	return delay
 }

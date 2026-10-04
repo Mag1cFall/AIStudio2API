@@ -42,46 +42,42 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		rpcError.Metadata["quota_unit"],
 	}, " "))
 	message := strings.ToLower(rpcError.Message)
-	evidence := metadata + " " + message
-	if minuteQuotaEvidence(evidence) {
-		until := minuteQuotaReset(rpcError.Metadata["window_start_time"], now)
-		global := strings.Contains(metadata, "_global") || strings.Contains(metadata, "perprojectperuser") ||
-			!strings.Contains(evidence, "per_model") && !strings.Contains(evidence, "per model")
-		return QuotaCooldown{
-			Until: until, Global: global, Kind: "分钟限额",
-			Reason: "分钟限额: " + err.Error(),
-		}, true
+	global := (strings.Contains(metadata, "_global") || strings.Contains(metadata, "perprojectperuser")) &&
+		!strings.Contains(metadata, "per_model") && !strings.Contains(metadata, "permodel") && !strings.Contains(metadata, "{model}")
+	until, kind := now.Add(time.Minute), "短期限额"
+	for _, evidence := range []string{rpcError.Metadata["quota_unit"], rpcError.Metadata["quota_limit"], rpcError.Metadata["quota_metric"], message} {
+		evidence = strings.ToLower(evidence)
+		if dailyQuotaEvidence(evidence) {
+			until, kind = nextQuotaDay(now), "每日限额"
+			break
+		}
+		if minuteQuotaEvidence(evidence) {
+			until, kind = minuteQuotaReset(rpcError.Metadata["window_start_time"], now), "分钟限额"
+			break
+		}
 	}
-	if dailyQuotaEvidence(evidence) || strings.Contains(message, "you exceeded your current quota") {
-		return QuotaCooldown{
-			Until: nextQuotaDay(now), Kind: "每日限额",
-			Reason: "每日限额: " + err.Error(),
-		}, true
+	if rpcError.RetryDelay > 0 {
+		until = now.Add(rpcError.RetryDelay)
 	}
-	return QuotaCooldown{}, false
+	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error()}, true
 }
 
 func minuteQuotaEvidence(value string) bool {
 	return strings.Contains(value, "/min/") || strings.Contains(value, "perminute") ||
-		strings.Contains(value, "per_min") || strings.Contains(value, "per minute") ||
-		strings.Contains(value, "generate_requests_per_model ") ||
-		strings.Contains(value, "generate_content_paid_tier_input_token_count")
+		strings.Contains(value, "per_min") || strings.Contains(value, "per minute")
 }
 
 func dailyQuotaEvidence(value string) bool {
 	return strings.Contains(value, "/day/") || strings.Contains(value, "perday") ||
 		strings.Contains(value, "per_day") || strings.Contains(value, "per day") ||
-		strings.Contains(value, "daily limit") || strings.Contains(value, "try again tomorrow") ||
-		strings.Contains(value, "generate_content_free_tier_requests") ||
-		strings.Contains(value, "generate_requests_per_model_per_user") ||
-		strings.Contains(value, "generate_content_tokens_per_model_per_user")
+		strings.Contains(value, "daily limit") || strings.Contains(value, "try again tomorrow")
 }
 
 func minuteQuotaReset(windowStart string, now time.Time) time.Time {
 	seconds, err := strconv.ParseInt(strings.TrimSpace(windowStart), 10, 64)
 	if err == nil {
 		until := time.Unix(seconds, 0).Add(time.Minute)
-		if until.After(now) {
+		if until.After(now) && !until.After(now.Add(time.Minute)) {
 			return until
 		}
 	}

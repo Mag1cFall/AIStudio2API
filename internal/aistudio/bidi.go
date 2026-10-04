@@ -429,7 +429,7 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 	if err != nil {
 		return BidiEvent{}, true, withBidiMethod(err)
 	}
-	message, err := rawString(status[1], "$.__sm__.status[0][0][1]", raw)
+	_, err = rawString(status[1], "$.__sm__.status[0][0][1]", raw)
 	if err != nil {
 		return BidiEvent{}, true, withBidiMethod(err)
 	}
@@ -441,6 +441,8 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 		statusCode = 404
 	case 7:
 		statusCode = 403
+	case 8:
+		statusCode = 429
 	case 16:
 		statusCode = 401
 	default:
@@ -451,7 +453,7 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 	}
 	return BidiEvent{
 		Kind: BidiEventError,
-		Err:  &RPCError{Method: "BidiGenerateContent", StatusCode: statusCode, Code: code, Message: message},
+		Err:  DecodeRPCError("BidiGenerateContent", statusCode, middle[0]),
 		Raw:  cloneRaw(raw),
 	}, true, nil
 }
