@@ -248,7 +248,7 @@ providers:
 
 | 能力 | 端点 |
 | --- | --- |
-| 模型 | `GET /v1/models`、`GET /v1beta/models` |
+| 模型 | `GET /v1/models`、`GET /v1/models/{model}`、`GET /v1beta/models`、`GET /v1beta/models/{model}` |
 | OpenAI Chat | `POST /v1/chat/completions` |
 | OpenAI Responses | `POST /v1/responses` |
 | Files | `POST /v1/files`、`GET /v1/files/{id}`、`GET /v1/files/{id}/content`、`DELETE /v1/files/{id}` |

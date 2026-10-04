@@ -663,6 +663,15 @@ func writeAnthropicModels(w http.ResponseWriter, models []aistudio.Model) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func writeAnthropicModel(w http.ResponseWriter, model aistudio.Model) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":           model.ID,
+		"type":         "model",
+		"display_name": model.Name,
+		"created_at":   "1970-01-01T00:00:00Z",
+	})
+}
+
 type anthropicStreamWriter struct {
 	w                 http.ResponseWriter
 	id                string
