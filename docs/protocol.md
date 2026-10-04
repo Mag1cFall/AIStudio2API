@@ -817,13 +817,21 @@ Schema 归一化规则：
 
 | 输入结构 | 编码结果 |
 | --- | --- |
+| 可选字段显式 `null` | 移除未设置字段；`example:null` 保留为数据值，`const` 按常量规则校验，属性名称保留 |
+| 零参数函数的空定义、`null`、`{}` 或 `true` | object 参数结构 |
+| 开放的 `{}`、`true` 与缺少元素定义的 array | 开放节点使用 `TYPE_UNSPECIFIED`，生成选择 Build 通道 |
+| `items:false` | 空数组约束 `maxItems=0`；与正数 `minItems` 同时设置时返回参数错误 |
+| `not:false` | 移除空否定约束 |
+| `not:true`、`not:{}`、根 `false`、必填属性的 `false` | 返回禁止所有值的参数错误 |
+| `not:{type:"null"}` | 设置 `nullable=false` |
+| 字符串或字符串数组形式的 `not` | 字符串枚举排除约束 |
 | `$schema`、`default`、`additionalProperties`、`exclusiveMinimum`、`propertyNames`、`prefixItems` | 从 wire schema 中省略 |
 | `type: [T, "null"]` | 根类型 `T` 与 `nullable=true` |
 | `anyOf` / `oneOf` 的 null 分支 | 移除 null 分支并设置 `nullable=true` |
-| 多个非 null `type` | 首项作为根类型，完整类型集合写入 `anyOf` |
-| 组合 Schema 缺少根 `type` | 首个带类型的分支作为根类型，该分支的 `items` 同时写入根节点 |
-| 其他节点缺少 `type` | 含 `properties` 为 object，含 `items` 或 `prefixItems` 为 array，其余为 string |
-| array 缺少 `items` | `prefixItems` 中带类型的项组成 `anyOf`；没有时为 string |
+| 多个非 null `type` | 开放根节点与完整类型集合的 `anyOf` |
+| 组合 Schema 缺少根 `type` | 相同类型的分支推导根类型；混合类型保留开放根节点，相同 `items` 可写入根节点 |
+| 其他节点缺少 `type` | 含 `properties` 为 object，含 `items` 或 `prefixItems` 为 array；字符串约束推导 string，其余为开放节点 |
+| array 缺少 `items` | `prefixItems` 中带类型的项组成 `anyOf`；其余使用开放元素节点 |
 | 其他 Schema 字段 | 返回 `400 invalid_request` / `INVALID_ARGUMENT` |
 
 AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7 的函数声明，由模型决定是否调用；none 省略 tools。客户端工具选择映射如下：
@@ -1074,7 +1082,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | OpenAI 转录 | `POST /v1/audio/transcriptions` |
 | 实时 WebSocket | `GET /v1/live`、`GET /v1/robotics/stream` |
 
-动态路由的注册形状为 `GET /v1/models/{model...}`、`GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}` 与 `GET /v1beta/operations/{operation}`；端点表中的 `{id}` 表示对应资源标识。
+动态路由的注册形状为 `GET /v1/models/{model...}`、`GET /v1beta/models/{model...}`、`GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}` 与 `GET /v1beta/operations/{operation}`；端点表中的 `{id}` 表示对应资源标识。
 
 公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，读取优先级为 `?key=`、`X-Goog-API-Key`、`X-API-Key`、`Authorization: Bearer`；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求返回 401，不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*` 响应允许任意 origin，允许 `GET/POST/PUT/DELETE/OPTIONS` 与 `Authorization`、`Content-Type`、`X-API-Key`、`X-Goog-API-Key`、`Anthropic-Version`、`Anthropic-Beta` headers。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。
 
@@ -1266,9 +1274,10 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 | 规则 | 结果 |
 | --- | --- |
-| OpenAI | `GET /v1/models` 返回 OpenAI model list，`GET /v1/models/{model}` 返回单个 model 对象 |
-| Anthropic | `GET /v1/models` 与 `GET /v1/models/{model}` 携带 `Anthropic-Version` 时返回 Anthropic 格式 |
+| OpenAI | `GET /v1/models` 返回 model list，`GET /v1/models/{model}` 返回单个同形 model 对象 |
+| Anthropic | 上述模型列表与查询携带 `Anthropic-Version` 时返回 Anthropic 格式，失败响应使用对应错误格式 |
 | Gemini | 模型名称使用 `models/<ID>` |
+| 单模型解析 | 正式 ID 优先于别名，两个模型查询入口均接受 `models/` 前缀与实时目录别名 |
 | 多账户同模型 | generation methods 与能力选项取并集 |
 | 多账户 token limit | 输入和输出上限分别取正数最小值 |
 | 模型别名 | 来自 ListModels field 57 |

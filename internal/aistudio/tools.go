@@ -123,7 +123,11 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 		wire[1] = declaration.Description
 	}
 	if len(declaration.Parameters) > 0 {
-		parameters, err := encodeJSONSchema(declaration.Parameters)
+		raw, err := normalizeFunctionParameters(declaration.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("parameters: %w", err)
+		}
+		parameters, err := encodeJSONSchema(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parameters: %w", err)
 		}

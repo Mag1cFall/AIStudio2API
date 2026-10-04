@@ -282,7 +282,11 @@ func encodeBuildTools(tools Tools) ([]any, bool, error) {
 				encoded["description"] = declaration.Description
 			}
 			if len(bytes.TrimSpace(declaration.Parameters)) > 0 {
-				encoded["parametersJsonSchema"] = json.RawMessage(declaration.Parameters)
+				parameters, err := normalizeFunctionParameters(declaration.Parameters)
+				if err != nil {
+					return nil, false, fmt.Errorf("function declaration %d parameters: %w", index, err)
+				}
+				encoded["parametersJsonSchema"] = parameters
 			}
 			declarations = append(declarations, encoded)
 		}
@@ -767,14 +771,11 @@ func buildTrailerError(raw json.RawMessage) error {
 	if code == 0 {
 		return nil
 	}
-	rpcError := &RPCError{Method: buildProxyStreamedMethod, StatusCode: http.StatusBadGateway, Code: code}
+	statusCode := http.StatusBadGateway
 	if mapped, ok := interactionStatusHTTP[code]; ok {
-		rpcError.StatusCode = mapped
+		statusCode = mapped
 	}
-	if len(status) > 1 {
-		rpcError.Message, _ = rawString(status[1], "$[1][1]", raw)
-	}
-	return rpcError
+	return DecodeRPCError(buildProxyStreamedMethod, statusCode, raw)
 }
 
 // sendBuild 编码并发送 Build 代理请求，返回响应与含 finishReason 校验的解码

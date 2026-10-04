@@ -219,7 +219,7 @@ func (s *server) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGeminiModel(w http.ResponseWriter, r *http.Request) {
-	modelID := strings.TrimPrefix(r.PathValue("model"), "models/")
+	modelID := r.PathValue("model")
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -227,11 +227,9 @@ func (s *server) handleGeminiModel(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	for _, model := range models {
-		if model.ID == modelID {
-			writeJSON(w, http.StatusOK, geminiModelObject(model))
-			return
-		}
+	if model, ok := lookupPublicModel(models, modelID); ok {
+		writeJSON(w, http.StatusOK, geminiModelObject(model))
+		return
 	}
 	writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("model %q is unavailable", modelID))
 }

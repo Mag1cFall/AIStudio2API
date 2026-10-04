@@ -559,7 +559,11 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		return nil, err
 	}
 	var channel Channel
-	if request.Unary && s.BuildNativeNonstream {
+	nativeSchema := requestNeedsBuildSchema(request)
+	if nativeSchema && !s.pool.BuildEnabled() {
+		return nil, fmt.Errorf("%w: 此 JSON Schema 需要 Build 通道", ErrInvalidArgument)
+	}
+	if nativeSchema || request.Unary && s.BuildNativeNonstream {
 		channel = ChannelBuild
 	}
 	selection := AccountSelection{
@@ -576,7 +580,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	var requestErr error
 	for attempt := 0; attempt < accountAttemptLimit(s.pool, pinned); attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
-		if err != nil && selection.Channel == ChannelBuild && ctx.Err() == nil {
+		if err != nil && selection.Channel == ChannelBuild && !nativeSchema && ctx.Err() == nil {
 			var cooling *AllCoolingError
 			if errors.Is(err, ErrNoEligibleAccount) || errors.As(err, &cooling) {
 				selection.Channel = ""
@@ -690,6 +694,14 @@ func forwardEventsWithLease(
 			terminal = true
 			if DefinitiveAuthenticationFailure(event.Err) {
 				if err := lease.MarkAuthenticationRequired(event.Err.Error()); err != nil {
+					event.Err = errors.Join(event.Err, err)
+				}
+			} else if cooldown, ok := QuotaCooldownForError(event.Err, time.Now()); ok {
+				scope := lease.CooldownScope(modelID)
+				if cooldown.Global {
+					scope = ""
+				}
+				if err := pool.MarkCooldownIfGeneration(accountID, scope, accessGeneration, checkedAt, cooldown.Until, cooldown.Reason); err != nil {
 					event.Err = errors.Join(event.Err, err)
 				}
 			}

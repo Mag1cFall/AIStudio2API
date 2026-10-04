@@ -74,17 +74,13 @@ type openAITool struct {
 
 var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/_=\r\n-]+)\)`)
 
+// openAIModelObject 投影列表与单模型共用的公开字段
 func openAIModelObject(model aistudio.Model) map[string]any {
 	item := map[string]any{
-		"id":                           model.ID,
-		"object":                       "model",
-		"created":                      0,
-		"owned_by":                     "google",
-		"name":                         model.Name,
-		"description":                  model.Description,
+		"id": model.ID, "object": "model", "created": 0, "owned_by": "google",
+		"name": model.Name, "description": model.Description,
 		"supported_generation_methods": model.Methods,
-		"input_token_limit":            model.InputTokenLimit,
-		"output_token_limit":           model.OutputTokenLimit,
+		"input_token_limit":            model.InputTokenLimit, "output_token_limit": model.OutputTokenLimit,
 	}
 	if len(model.Capabilities) > 0 {
 		item["capabilities"] = model.Capabilities
@@ -104,11 +100,36 @@ func openAIModelObject(model aistudio.Model) map[string]any {
 	return item
 }
 
+// lookupPublicModel 按正式 ID 优先于别名解析同一实时目录
+func lookupPublicModel(models []aistudio.Model, id string) (aistudio.Model, bool) {
+	id = strings.TrimPrefix(strings.TrimSpace(id), "models/")
+	if id == "" {
+		return aistudio.Model{}, false
+	}
+	for _, model := range models {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	for _, model := range models {
+		for _, alias := range model.CapabilityOptions["aliases"] {
+			if strings.TrimPrefix(strings.TrimSpace(alias), "models/") == id {
+				return model, true
+			}
+		}
+	}
+	return aistudio.Model{}, false
+}
+
 func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			if r.Header.Get("Anthropic-Version") != "" {
+				writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
+			} else {
+				writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			}
 		}
 		return
 	}
@@ -123,8 +144,8 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
+// handleOpenAIModel 返回实时目录中的单模型或协议化错误
 func (s *server) handleOpenAIModel(w http.ResponseWriter, r *http.Request) {
-	modelID := strings.TrimPrefix(r.PathValue("model"), "models/")
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -136,32 +157,20 @@ func (s *server) handleOpenAIModel(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	for _, model := range models {
-		if model.ID == modelID {
-			if r.Header.Get("Anthropic-Version") != "" {
-				writeAnthropicModel(w, model)
-			} else {
-				writeJSON(w, http.StatusOK, openAIModelObject(model))
-			}
-			return
+	model, ok := lookupPublicModel(models, r.PathValue("model"))
+	if !ok {
+		message := fmt.Sprintf("model %q is unavailable", r.PathValue("model"))
+		if r.Header.Get("Anthropic-Version") != "" {
+			writeAnthropicError(w, http.StatusNotFound, "not_found_error", message)
+		} else {
+			writeOpenAIError(w, http.StatusNotFound, "model_not_found", message)
 		}
-	}
-	for _, model := range models {
-		for _, alias := range model.CapabilityOptions["aliases"] {
-			if alias == modelID {
-				if r.Header.Get("Anthropic-Version") != "" {
-					writeAnthropicModel(w, model)
-				} else {
-					writeJSON(w, http.StatusOK, openAIModelObject(model))
-				}
-				return
-			}
-		}
+		return
 	}
 	if r.Header.Get("Anthropic-Version") != "" {
-		writeAnthropicError(w, http.StatusNotFound, "not_found_error", fmt.Sprintf("model not found: %s", modelID))
+		writeJSON(w, http.StatusOK, anthropicModelObject(model))
 	} else {
-		writeOpenAIError(w, http.StatusNotFound, "model_not_found", fmt.Sprintf("The model '%s' does not exist", modelID))
+		writeJSON(w, http.StatusOK, openAIModelObject(model))
 	}
 }
 
