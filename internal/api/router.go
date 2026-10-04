@@ -32,6 +32,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{service: service, config: config, responseStates: newResponseStateStore(), thoughtSignatures: newThoughtSignatureStore()}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
+	public.HandleFunc("GET /v1/models/{model...}", s.handleOpenAIModel)
 	public.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	public.HandleFunc("POST /v1/responses", s.handleResponses)
 	public.HandleFunc("POST /v1/interactions", s.handleInteraction)

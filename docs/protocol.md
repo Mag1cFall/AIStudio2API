@@ -1060,7 +1060,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 | 协议 | 端点 |
 | --- | --- |
-| OpenAI Chat | `GET /v1/models`、`POST /v1/chat/completions` |
+| OpenAI Chat | `GET /v1/models`、`GET /v1/models/{id}`、`POST /v1/chat/completions` |
 | OpenAI Responses | `POST /v1/responses` |
 | OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/audio/speech`、`POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
@@ -1074,7 +1074,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | OpenAI 转录 | `POST /v1/audio/transcriptions` |
 | 实时 WebSocket | `GET /v1/live`、`GET /v1/robotics/stream` |
 
-动态路由的注册形状为 `GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}` 与 `GET /v1beta/operations/{operation}`；端点表中的 `{id}` 表示对应资源标识。
+动态路由的注册形状为 `GET /v1/models/{model...}`、`GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}` 与 `GET /v1beta/operations/{operation}`；端点表中的 `{id}` 表示对应资源标识。
 
 公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，读取优先级为 `?key=`、`X-Goog-API-Key`、`X-API-Key`、`Authorization: Bearer`；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求返回 401，不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*` 响应允许任意 origin，允许 `GET/POST/PUT/DELETE/OPTIONS` 与 `Authorization`、`Content-Type`、`X-API-Key`、`X-Goog-API-Key`、`Anthropic-Version`、`Anthropic-Beta` headers。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。
 
@@ -1266,8 +1266,8 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 | 规则 | 结果 |
 | --- | --- |
-| OpenAI | `GET /v1/models` 返回 OpenAI model list |
-| Anthropic | `GET /v1/models` 携带 `Anthropic-Version` 时返回 Anthropic model list |
+| OpenAI | `GET /v1/models` 返回 OpenAI model list，`GET /v1/models/{model}` 返回单个 model 对象 |
+| Anthropic | `GET /v1/models` 与 `GET /v1/models/{model}` 携带 `Anthropic-Version` 时返回 Anthropic 格式 |
 | Gemini | 模型名称使用 `models/<ID>` |
 | 多账户同模型 | generation methods 与能力选项取并集 |
 | 多账户 token limit | 输入和输出上限分别取正数最小值 |
