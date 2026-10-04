@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -18,9 +19,17 @@ var schemaTypeCodes = map[string]int64{
 }
 
 func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		raw = json.RawMessage(`{"type":"object","properties":{}}`)
+	}
 	var schema map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &schema); err != nil || schema == nil {
 		return nil, fmt.Errorf("schema 必须是 JSON object")
+	}
+	cleanNullFields(schema)
+	if err := normalizeNot(schema); err != nil {
+		return nil, err
 	}
 	if err := normalizeConstAndMetadata(schema); err != nil {
 		return nil, err
@@ -85,11 +94,20 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		wire = setWireField(wire, 4, values)
 	}
 	if value, ok := schema["items"]; ok {
-		items, err := encodeJSONSchema(value)
-		if err != nil {
-			return nil, fmt.Errorf("schema.items: %w", err)
+		itemTrimmed := bytes.TrimSpace(value)
+		if bytes.Equal(itemTrimmed, []byte("true")) {
+			value = json.RawMessage(`{}`)
+		} else if bytes.Equal(itemTrimmed, []byte("false")) {
+			delete(schema, "items")
+			value = nil
 		}
-		wire = setWireField(wire, 5, items)
+		if value != nil {
+			items, err := encodeJSONSchema(value)
+			if err != nil {
+				return nil, fmt.Errorf("schema.items: %w", err)
+			}
+			wire = setWireField(wire, 5, items)
+		}
 	}
 	for _, field := range []struct {
 		name  string
@@ -114,6 +132,15 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		var properties map[string]json.RawMessage
 		if err := json.Unmarshal(value, &properties); err != nil || properties == nil {
 			return nil, fmt.Errorf("schema.properties 必须是 JSON object")
+		}
+		cleanNullFields(properties)
+		for name, rawProperty := range properties {
+			propTrimmed := bytes.TrimSpace(rawProperty)
+			if bytes.Equal(propTrimmed, []byte("true")) {
+				properties[name] = json.RawMessage(`{}`)
+			} else if bytes.Equal(propTrimmed, []byte("false")) {
+				delete(properties, name)
+			}
 		}
 		names := make([]string, 0, len(properties))
 		for name := range properties {
@@ -484,4 +511,71 @@ func setWireField(wire []any, index int, value any) []any {
 	}
 	wire[index] = value
 	return wire
+}
+
+// cleanNullFields removes keys with explicit null values so optional schema fields do not fail validation
+func cleanNullFields(schema map[string]json.RawMessage) {
+	for name, value := range schema {
+		if name == "const" {
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			delete(schema, name)
+		}
+	}
+}
+
+// normalizeNot normalizes JSON Schema "not" constraints into supported structures or discards no-op forms
+func normalizeNot(schema map[string]json.RawMessage) error {
+	raw, ok := schema["not"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) ||
+		bytes.Equal(trimmed, []byte("false")) ||
+		bytes.Equal(trimmed, []byte("true")) ||
+		bytes.Equal(trimmed, []byte(`""`)) ||
+		len(trimmed) == 0 {
+		delete(schema, "not")
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var arr []any
+		if err := json.Unmarshal(trimmed, &arr); err == nil {
+			wrapped, err := json.Marshal(map[string]any{"enum": arr})
+			if err != nil {
+				return err
+			}
+			schema["not"] = wrapped
+			return nil
+		}
+	}
+	if trimmed[0] != '{' {
+		var val any
+		if err := json.Unmarshal(trimmed, &val); err == nil {
+			wrapped, err := json.Marshal(map[string]any{"enum": []any{val}})
+			if err != nil {
+				return err
+			}
+			schema["not"] = wrapped
+			return nil
+		}
+	}
+	var sub map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &sub); err == nil && sub != nil {
+		cleanNullFields(sub)
+		if len(sub) == 0 {
+			delete(schema, "not")
+			return nil
+		}
+		if typeRaw, ok := sub["type"]; ok {
+			var typeName string
+			if json.Unmarshal(typeRaw, &typeName) == nil && strings.EqualFold(typeName, "null") {
+				delete(schema, "not")
+				return nil
+			}
+		}
+	}
+	return nil
 }
