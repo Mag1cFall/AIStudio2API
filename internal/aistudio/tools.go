@@ -3,8 +3,10 @@ package aistudio
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,9 +14,9 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 	switch tools.ToolConfig.Mode {
 	case "none":
 		return nil, true, nil
-	case "", "auto":
+	case "", "auto", "required", "validated":
 	default:
-		return nil, false, fmt.Errorf("tool choice 只支持 auto 或 none")
+		return nil, false, fmt.Errorf("未知 tool choice %q", tools.ToolConfig.Mode)
 	}
 	if len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil {
 		return nil, false, nil
@@ -110,30 +112,146 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if declaration.Name == "" {
 		return nil, fmt.Errorf("function declaration 缺少名称")
 	}
-	length := 1
-	if declaration.Description != "" {
-		length = 2
+	raw, err := normalizeFunctionParameters(declaration.Parameters)
+	if err != nil {
+		return nil, fmt.Errorf("parameters: %w", err)
 	}
-	if len(declaration.Parameters) > 0 {
-		length = 3
-	}
-	wire := make([]any, length)
-	wire[0] = declaration.Name
-	if declaration.Description != "" {
-		wire[1] = declaration.Description
-	}
-	if len(declaration.Parameters) > 0 {
-		raw, err := normalizeFunctionParameters(declaration.Parameters)
+	parameters, encodingError := encodeJSONSchema(raw)
+	description := declaration.Description
+	if encodingError != nil {
+		var schema any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			return nil, err
+		}
+		shape, err := json.Marshal(toolSchemaShape(schema))
+		if err != nil {
+			return nil, err
+		}
+		parameters, err = encodeJSONSchema(shape)
 		if err != nil {
 			return nil, fmt.Errorf("parameters: %w", err)
 		}
-		parameters, err := encodeJSONSchema(raw)
-		if err != nil {
-			return nil, fmt.Errorf("parameters: %w", err)
-		}
-		wire[2] = parameters
 	}
-	return wire, nil
+	if encodingError != nil || schemaWireNeedsBuild(parameters) || declaration.Strict || strings.Contains(string(raw), `"additionalProperties"`) || strings.Contains(string(raw), `"prefixItems"`) || strings.Contains(string(raw), `"exclusiveMinimum"`) || strings.Contains(string(raw), `"propertyNames"`) {
+		description += "\nArguments must follow this JSON Schema: " + string(raw)
+	}
+	projectToolSchema(parameters)
+	return []any{declaration.Name, description, parameters}, nil
+}
+
+// toolSchemaShape 提取工具参数的层级与类型供 Playground 编码
+func toolSchemaShape(value any) map[string]any {
+	result := map[string]any{}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return result
+	}
+	for _, key := range []string{"type", "format", "nullable", "description", "required", "minimum", "maximum", "minLength", "maxLength", "pattern", "minItems", "maxItems", "minProperties", "maxProperties", "propertyOrdering"} {
+		if item, exists := object[key]; exists {
+			result[key] = item
+		}
+	}
+	if constant, exists := object["const"]; exists && constant != nil {
+		encoded, _ := json.Marshal(constant)
+		description, _ := result["description"].(string)
+		result["description"] = description + "\nThe value must be: " + string(encoded)
+		switch value := constant.(type) {
+		case float64:
+			result["type"] = "number"
+			if math.Trunc(value) == value {
+				result["type"] = "integer"
+			}
+			result["minimum"], result["maximum"] = value, value
+		case bool:
+			result["type"] = "boolean"
+		case string:
+			result["type"], result["enum"] = "string", []any{value}
+		case []any:
+			result["type"] = "array"
+		case map[string]any:
+			result["type"] = "object"
+		}
+	}
+	if values, ok := object["enum"].([]any); ok && len(values) > 0 {
+		stringsOnly := true
+		for _, value := range values {
+			_, isString := value.(string)
+			stringsOnly = stringsOnly && isString
+		}
+		if stringsOnly {
+			result["enum"] = values
+		}
+	}
+	if typeName, ok := result["type"].(string); ok && strings.EqualFold(typeName, "null") {
+		result["type"], result["nullable"] = "string", true
+		result["description"] = "The value must be JSON null"
+	}
+	if types, ok := result["type"].([]any); ok && len(types) > 0 {
+		nullOnly := true
+		for _, name := range types {
+			nullOnly = nullOnly && strings.EqualFold(fmt.Sprint(name), "null")
+		}
+		if nullOnly {
+			result["type"], result["nullable"] = "string", true
+			result["description"] = "The value must be JSON null"
+		}
+	}
+	if constant, exists := object["const"]; exists && constant == nil {
+		result["type"], result["nullable"] = "string", true
+		result["description"] = "The value must be JSON null"
+	}
+	if properties, ok := object["properties"].(map[string]any); ok {
+		children := map[string]any{}
+		for key, child := range properties {
+			children[key] = toolSchemaShape(child)
+		}
+		result["properties"] = children
+	}
+	if child, exists := object["items"]; exists {
+		result["items"] = toolSchemaShape(child)
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if branches, ok := object[key].([]any); ok {
+			children := make([]any, len(branches))
+			for index, branch := range branches {
+				children[index] = toolSchemaShape(branch)
+			}
+			result[key] = children
+		}
+	}
+	return result
+}
+
+// projectToolSchema 补齐 Playground 载体类型并保留联合分支
+func projectToolSchema(wire []any) {
+	for _, index := range []int{5, 19} {
+		if len(wire) > index && wire[index] != nil {
+			projectToolSchema(wire[index].([]any))
+		}
+	}
+	if len(wire) > 6 && wire[6] != nil {
+		for _, property := range wire[6].([]any) {
+			projectToolSchema(property.([]any)[1].([]any))
+		}
+	}
+	for _, index := range []int{16, 17, 18} {
+		if len(wire) <= index || wire[index] == nil {
+			continue
+		}
+		for _, variant := range wire[index].([]any) {
+			projectToolSchema(variant.([]any))
+		}
+		if wire[0] == int64(0) {
+			first := wire[index].([]any)[0].([]any)
+			wire[0] = first[0]
+			if first[0] == int64(5) && len(first) > 5 {
+				setWireField(wire, 5, first[5])
+			}
+		}
+	}
+	if wire[0] == int64(0) {
+		wire[0] = int64(1)
+	}
 }
 
 func hasMethod(model Model, method string) bool {

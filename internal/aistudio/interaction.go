@@ -172,6 +172,12 @@ func (c *Client) generateInteraction(ctx context.Context, request GenerateReques
 		defer stopClose()
 		committed := false
 		send := func(event Event) error {
+			if request.Config.HideThinking && event.Kind == EventReasoning {
+				if event.ThoughtSignature == "" {
+					return nil
+				}
+				event.Kind, event.Text = EventThoughtSignature, ""
+			}
 			if !committed {
 				committed = true
 				ready <- nil

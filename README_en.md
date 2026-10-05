@@ -36,6 +36,7 @@
 ## Features
 
 - **Native Streaming**: Text, reasoning summaries, function calls, Google tools, media, and usage
+- **Function Tools**: Tool calls, continuation, selection, and strict argument validation across all four protocols, including union types and open parameter schemas
 - **TTS Speech Generation**: Gemini TTS models for single-speaker and multi-speaker audio
 - **Image Generation**: Nano Banana image generation
 - **Video Generation**: Veo video generation and image-to-video; Gemini Omni accepts text, image, and video input and returns text and MP4 video through the four generation APIs
@@ -440,7 +441,6 @@ cp .env.example .env
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
 | `BUILD_NATIVE_NONSTREAM` | `true` | Prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
-| `PLAYGROUND_SCHEMA_FALLBACK` | `false` | Opt-in, lossy legacy defaults for missing tool types and typed anyOf/oneOf roots, only when Build is disabled. Keeps branch constraints; never rewrites response schemas or prohibitions. Restart the generation service after changing. |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 

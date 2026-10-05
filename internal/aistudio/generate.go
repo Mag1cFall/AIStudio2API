@@ -562,6 +562,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
+	if request.Truncate && entry.model.InputTokenLimit > 0 {
+		request, err = c.truncateRequest(ctx, request, entry.model.InputTokenLimit)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if entry.defaults.InteractionStream && !build {
 		return c.generateInteraction(ctx, request, entry)
 	}
@@ -632,6 +638,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return nil
 			default:
 				output.observe(event)
+				if request.Config.HideThinking && event.Kind == EventReasoning {
+					if event.ThoughtSignature == "" {
+						return nil
+					}
+					event.Kind, event.Text = EventThoughtSignature, ""
+				}
 				return send(event)
 			}
 		}
@@ -711,6 +723,36 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 	}()
 	return events, nil
+}
+
+// truncateRequest 按权威计数删除最早的完整对话轮次
+func (c *Client) truncateRequest(ctx context.Context, request GenerateRequest, limit int64) (GenerateRequest, error) {
+	for {
+		count, err := c.CountTokensForAccount(ctx, request.AccountID, TokenCountRequest{
+			Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
+		})
+		if err != nil {
+			return request, err
+		}
+		if count.InputTokens <= limit {
+			return request, nil
+		}
+		start := nextConversationTurn(request.Contents)
+		if start < 0 {
+			return request, fmt.Errorf("%w: 最新对话轮次超过模型上下文窗口 %d", ErrInvalidArgument, limit)
+		}
+		request.Contents = request.Contents[start:]
+	}
+}
+
+// nextConversationTurn 查找保留工具调用与结果配对的下一轮用户消息
+func nextConversationTurn(contents []Content) int {
+	for index := 1; index < len(contents); index++ {
+		if contents[index].Role == RoleUser && !slices.ContainsFunc(contents[index].Parts, func(part Part) bool { return part.FunctionResult != nil }) {
+			return index
+		}
+	}
+	return -1
 }
 
 // sendPlayground 编码并发送 Playground GenerateContent，返回响应与含完成帧校验的流解码

@@ -62,34 +62,3 @@ func TestAdminConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestSchemaFallbackRuntimeConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	active := config.Default()
-	if err := active.Save(path); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	admin := &runtimeAdmin{configPath: path, requests: newRequestRegistry(ctx)}
-	value := runtimeConfigDTO(active)
-	if !sameDataConfig(value, active, dataConfigOverrides{}) {
-		t.Fatal("unchanged config requires restart")
-	}
-	value.SchemaFallback = true
-	saved, err := admin.UpdateRuntimeConfig(ctx, value)
-	if err != nil || !saved.SchemaFallback {
-		t.Fatalf("fallback not saved: %v", err)
-	}
-	if sameDataConfig(saved, active, dataConfigOverrides{}) {
-		t.Fatal("fallback change must require a data-plane restart")
-	}
-	loaded, err := admin.RuntimeConfig(ctx)
-	if err != nil || !loaded.SchemaFallback {
-		t.Fatalf("fallback not read back: %v", err)
-	}
-	loaded.TemporaryChat = !loaded.TemporaryChat
-	if saved, err = admin.UpdateRuntimeConfig(ctx, loaded); err != nil || !saved.SchemaFallback {
-		t.Fatalf("unrelated settings save lost fallback: %v", err)
-	}
-}
