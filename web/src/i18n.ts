@@ -11,6 +11,9 @@ const zhCN = {
   'settings.adminPassword': '管理密码',
   'settings.keepPassword': '留空保留现有密码',
   'settings.buildNative': '非流式请求优先使用 Build',
+  'settings.schemaFallback': 'Playground 工具 Schema 兼容回退（有损）',
+  'settings.schemaFallbackHelp':
+    '仅在未启用 Build 时生效。将缺省类型收窄为 string；不改写结构化输出、混合类型或禁止约束。建议优先补全工具定义。',
   'app.title': 'AI Studio 控制台',
   'app.console': '控制台',
   'app.gateway': '协议网关',
@@ -221,6 +224,9 @@ const en: Record<TranslationKey, string> = {
   'settings.adminPassword': 'Console password',
   'settings.keepPassword': 'Leave blank to keep the current password',
   'settings.buildNative': 'Prefer Build for non-streaming requests',
+  'settings.schemaFallback': 'Playground tool schema fallback (lossy)',
+  'settings.schemaFallbackHelp':
+    'Only when Build is disabled. Narrows missing types to string; does not rewrite response schemas, mixed types or prohibitions. Prefer explicit tool types.',
   'app.title': 'AI Studio Console',
   'app.console': 'Console',
   'app.gateway': 'Protocol gateway',
