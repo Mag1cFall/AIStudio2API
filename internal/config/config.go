@@ -44,6 +44,7 @@ var configKeys = [...]string{
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"BUILD_NATIVE_NONSTREAM",
+	"PLAYGROUND_SCHEMA_FALLBACK",
 }
 
 // upstreamChannels 表示生成请求可启用的上游通道
@@ -61,6 +62,7 @@ type Config struct {
 	AdminUsername          string        `json:"admin_username"`
 	AdminPassword          string        `json:"-"`
 	BuildNativeNonstream   bool          `json:"build_native_nonstream"`
+	SchemaFallback         bool          `json:"playground_schema_fallback"`
 	AuthStates             string        `json:"auth_states"`
 	ListenAddr             string        `json:"listen_addr"`
 	ProxyAPIKey            string        `json:"proxy_api_key"`
@@ -125,6 +127,12 @@ func Load(path string) (Config, error) {
 		cfg.BuildNativeNonstream, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
 			return Config{}, fmt.Errorf("BUILD_NATIVE_NONSTREAM 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["PLAYGROUND_SCHEMA_FALLBACK"]; ok {
+		cfg.SchemaFallback, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("PLAYGROUND_SCHEMA_FALLBACK 必须是 true 或 false")
 		}
 	}
 	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
@@ -202,24 +210,25 @@ func (c Config) Save(path string) error {
 		return err
 	}
 	values := map[string]string{
-		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
-		"ADMIN_USERNAME":           c.AdminUsername,
-		"ADMIN_PASSWORD":           c.AdminPassword,
-		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
-		"AISTUDIO_AUTH_STATES":     c.AuthStates,
-		"LISTEN_ADDR":              c.ListenAddr,
-		"PROXY_API_KEY":            c.ProxyAPIKey,
-		"PROXY":                    c.Proxy,
-		"INIT_TIMEOUT":             c.InitTimeout.String(),
-		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
-		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
-		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
-		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
-		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
-		"ROUTING_STRATEGY":         c.RoutingStrategy,
-		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
-		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
-		"WAA_BACKEND":              c.WAABackend,
+		"ADMIN_AUTH_ENABLED":         strconv.FormatBool(c.AdminAuthEnabled),
+		"ADMIN_USERNAME":             c.AdminUsername,
+		"ADMIN_PASSWORD":             c.AdminPassword,
+		"BUILD_NATIVE_NONSTREAM":     strconv.FormatBool(c.BuildNativeNonstream),
+		"PLAYGROUND_SCHEMA_FALLBACK": strconv.FormatBool(c.SchemaFallback),
+		"AISTUDIO_AUTH_STATES":       c.AuthStates,
+		"LISTEN_ADDR":                c.ListenAddr,
+		"PROXY_API_KEY":              c.ProxyAPIKey,
+		"PROXY":                      c.Proxy,
+		"INIT_TIMEOUT":               c.InitTimeout.String(),
+		"REQUEST_TIMEOUT":            c.RequestTimeout.String(),
+		"WARM_WORKER_LIMIT":          strconv.Itoa(c.WarmWorkerLimit),
+		"MAX_ACTIVE_WORKERS":         strconv.Itoa(c.MaxActiveWorkers),
+		"WARM_STARTUP_CONCURRENCY":   strconv.Itoa(c.WarmStartupConcurrency),
+		"PER_ACCOUNT_CONCURRENCY":    strconv.Itoa(c.PerAccountConcurrency),
+		"ROUTING_STRATEGY":           c.RoutingStrategy,
+		"UPSTREAM_CHANNELS":          strings.Join(c.UpstreamChannels, ","),
+		"TEMPORARY_CHAT":             strconv.FormatBool(c.TemporaryChat),
+		"WAA_BACKEND":                c.WAABackend,
 	}
 
 	var output strings.Builder
@@ -315,6 +324,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		SchemaFallback         bool     `json:"playground_schema_fallback"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
@@ -334,6 +344,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled:       c.AdminAuthEnabled,
 		AdminUsername:          c.AdminUsername,
 		BuildNativeNonstream:   c.BuildNativeNonstream,
+		SchemaFallback:         c.SchemaFallback,
 		AuthStates:             c.AuthStates,
 		ListenAddr:             c.ListenAddr,
 		ProxyAPIKey:            c.ProxyAPIKey,
@@ -358,6 +369,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername          string   `json:"admin_username"`
 		AdminPassword          string   `json:"admin_password"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		SchemaFallback         bool     `json:"playground_schema_fallback"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
@@ -390,6 +402,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername:          strings.TrimSpace(value.AdminUsername),
 		AdminPassword:          value.AdminPassword,
 		BuildNativeNonstream:   value.BuildNativeNonstream,
+		SchemaFallback:         value.SchemaFallback,
 		AuthStates:             strings.TrimSpace(value.AuthStates),
 		ListenAddr:             strings.TrimSpace(value.ListenAddr),
 		ProxyAPIKey:            strings.TrimSpace(value.ProxyAPIKey),

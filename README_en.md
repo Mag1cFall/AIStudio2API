@@ -440,6 +440,7 @@ cp .env.example .env
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
 | `BUILD_NATIVE_NONSTREAM` | `true` | Prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
+| `PLAYGROUND_SCHEMA_FALLBACK` | `false` | Opt-in, lossy legacy string defaults for missing tool types, only when Build is disabled. Never rewrites response schemas or mixed/negative constraints; restart the generation service after changing. Prefer explicit tool types. |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 

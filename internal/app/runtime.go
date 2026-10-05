@@ -96,6 +96,7 @@ func newRuntime(
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
+	pooled.SchemaFallback = cfg.SchemaFallback
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)

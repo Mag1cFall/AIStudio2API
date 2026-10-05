@@ -834,6 +834,21 @@ Schema 归一化规则：
 | array 缺少 `items` | `prefixItems` 中带类型的项组成 `anyOf`；其余使用开放元素节点 |
 | 其他 Schema 字段 | 返回 `400 invalid_request` / `INVALID_ARGUMENT` |
 
+<a id="playground-schema-fallback"></a>
+
+**Playground-only 工具兼容回退（显式启用、有损）**
+
+v0.2.4 默认保留开放 Schema 的真实语义，因此 `UPSTREAM_CHANNELS=playground` 下，带 `{"type":"array"}` 等工具参数的请求可能返回“此 JSON Schema 需要 Build 通道”。优先在客户端显式声明真实类型（例如确实为字符串数组时添加 `"items":{"type":"string"}`），或使用有资格的 Build 通道。
+
+无法立即修改旧客户端时，可设置 `PLAYGROUND_SCHEMA_FALLBACK=true` 并重启生成服务（也可在设置页保存后停止、启动生成服务）。该开关默认关闭，仅在 Build **未启用** 时，将工具参数的无约束缺省节点和未提供 `items` 的数组元素按旧版 string 默认值编码。这会收窄合法参数范围，并非等价 Schema 转换；每次发生回退都会写入 WARN。兼容处理使用独立请求副本，不修改调用者持有的工具声明、聊天正文或工具返回数据。
+
+- 不改写结构化输出 `response schema`；不近似混合类型、数值约束或否定约束。参数中的原生布尔 Schema（如 `items:true/false`、`properties.x:true/false`）不做此回退，零参数根 `{}`/`true` 仍沿用已有 object 归一化；`{"type":"boolean"}` 的普通布尔参数不受影响。
+- 开启 Build 后保持原生 Schema 路由，即使 Build 忙碌、冷却或没有可用账户也不因此降级；不会自动打开 Build 或跨通道消耗额度。`tool_choice:none` 忽略的声明不会触发回退。
+- 一项声明无法回退时，拒绝整个请求，不部分修改、不吞掉 `false`、`not:true` 等禁止约束，也不删除 required 属性。
+- 恢复严格模式：将 `PLAYGROUND_SCHEMA_FALLBACK=false` 保存并重启生成服务，无需迁移账号或聊天数据。此设置不能保证所有旧客户端 Schema 都可用于 Playground；超出边界时应修正工具定义或使用 Build。
+
+例如 `{"type":"object","properties":{"tags":{"type":"array"}}}` 在此模式下会变为 `{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}`。只有接受字符串元素限制的工具才适合开启。
+
 AI Studio 网页协议使用自动函数调用：auto 请求只携带根 field 7 的函数声明，由模型决定是否调用；none 省略 tools。客户端工具选择映射如下：
 
 | 公开协议 | 接受 | 返回 400 |

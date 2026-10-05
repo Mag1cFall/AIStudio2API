@@ -21,6 +21,8 @@ type PooledService struct {
 	client *Client
 	// BuildNativeNonstream 让非流式请求优先使用具备资格的 Build 通道
 	BuildNativeNonstream bool
+	// SchemaFallback opts into lossy legacy tool schemas when Build is disabled.
+	SchemaFallback bool
 }
 
 // PoolRequestContextProvider 从租约账户读取协议上下文
@@ -554,15 +556,19 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	if modelID == "" {
 		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
+	request, fallback, err := s.prepareSchemaRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	if fallback {
+		slog.Warn("Playground 工具 Schema 兼容回退：缺省类型按 string 收窄；原请求未修改")
+	}
 	resourceID, err := s.pool.ResourceIDForContents(ctx, request.Contents)
 	if err != nil {
 		return nil, err
 	}
 	var channel Channel
 	nativeSchema := requestNeedsBuildSchema(request)
-	if nativeSchema && !s.pool.BuildEnabled() {
-		return nil, fmt.Errorf("%w: 此 JSON Schema 需要 Build 通道", ErrInvalidArgument)
-	}
 	if nativeSchema || request.Unary && s.BuildNativeNonstream {
 		channel = ChannelBuild
 	}
