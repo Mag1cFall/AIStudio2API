@@ -388,6 +388,11 @@ func normalizeConstAndMetadata(schema map[string]json.RawMessage) error {
 
 // cleanJSONSchemaInput 清理 Schema 可选空值并保留数据值与属性名称
 func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
+	return cleanSchemaInput(raw, false)
+}
+
+// cleanSchemaInput 清理可选空值并按工具与输出契约保留组合节点
+func cleanSchemaInput(raw json.RawMessage, preserveCombinations bool) (json.RawMessage, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return json.RawMessage(`{"type":"object"}`), nil
@@ -406,7 +411,7 @@ func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	for _, name := range []string{"items", "not"} {
 		if nested := bytes.TrimSpace(schema[name]); len(nested) > 0 && nested[0] == '{' {
-			cleaned, err := cleanJSONSchemaInput(nested)
+			cleaned, err := cleanSchemaInput(nested, preserveCombinations)
 			if err != nil {
 				return nil, fmt.Errorf("schema.%s: %w", name, err)
 			}
@@ -422,7 +427,7 @@ func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
 			if bytes.Equal(bytes.TrimSpace(property), []byte("null")) {
 				property = json.RawMessage("true")
 			}
-			cleaned, err := cleanJSONSchemaInput(property)
+			cleaned, err := cleanSchemaInput(property, preserveCombinations)
 			if err != nil {
 				return nil, fmt.Errorf("schema.properties.%s: %w", name, err)
 			}
@@ -439,9 +444,13 @@ func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
 			filtered := make([]json.RawMessage, 0, len(variants))
 			unrestricted := false
 			for index, variant := range variants {
-				cleaned, err := cleanJSONSchemaInput(variant)
+				cleaned, err := cleanSchemaInput(variant, preserveCombinations)
 				if err != nil {
 					return nil, fmt.Errorf("schema.%s[%d]: %w", name, index, err)
+				}
+				if preserveCombinations {
+					filtered = append(filtered, cleaned)
+					continue
 				}
 				if name == "anyOf" && bytes.Equal(cleaned, []byte("true")) {
 					unrestricted = true
@@ -636,75 +645,20 @@ func setWireField(wire []any, index int, value any) []any {
 
 // normalizeFunctionParameters 将零参数定义归一化为对象
 func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
-	cleaned, err := cleanJSONSchemaInput(raw)
+	cleaned, err := cleanSchemaInput(raw, true)
 	if err == nil && (bytes.Equal(cleaned, []byte("{}")) || bytes.Equal(cleaned, []byte("true"))) {
 		cleaned = json.RawMessage(`{"type":"object"}`)
 	}
 	return cleaned, err
 }
 
-// requestNeedsBuildSchema 按开放节点选择可表达该结构的通道
+// requestNeedsBuildSchema 为结构化输出的开放节点选择原生通道
 func requestNeedsBuildSchema(request GenerateRequest) bool {
-	schemas := []json.RawMessage{request.Config.ResponseSchema}
-	for _, declaration := range request.Tools.Functions {
-		if request.Tools.ToolConfig.Mode == "none" {
-			break
-		}
-		raw, err := normalizeFunctionParameters(declaration.Parameters)
-		if err == nil {
-			if schemaHasBooleanNode(raw) {
-				return true
-			}
-			schemas = append(schemas, raw)
-		}
-	}
-	for _, raw := range schemas {
-		if len(raw) == 0 {
-			continue
-		}
-		wire, err := encodeJSONSchema(raw)
-		if err == nil && schemaWireNeedsBuild(wire) {
-			return true
-		}
-	}
-	return false
-}
-
-// schemaHasBooleanNode 查找函数参数中需要原生 JSON Schema 的布尔节点
-func schemaHasBooleanNode(raw json.RawMessage) bool {
-	raw = bytes.TrimSpace(raw)
-	if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
-		return true
-	}
-	var schema map[string]json.RawMessage
-	if json.Unmarshal(raw, &schema) != nil {
+	if len(request.Config.ResponseSchema) == 0 {
 		return false
 	}
-	for _, name := range []string{"items", "not"} {
-		if name == "not" && (bytes.Equal(bytes.TrimSpace(schema[name]), []byte("false")) || bytes.Equal(bytes.TrimSpace(schema[name]), []byte("true"))) {
-			continue
-		}
-		if schemaHasBooleanNode(schema[name]) {
-			return true
-		}
-	}
-	var properties map[string]json.RawMessage
-	_ = json.Unmarshal(schema["properties"], &properties)
-	for _, property := range properties {
-		if schemaHasBooleanNode(property) {
-			return true
-		}
-	}
-	for _, name := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
-		var variants []json.RawMessage
-		_ = json.Unmarshal(schema[name], &variants)
-		for _, variant := range variants {
-			if schemaHasBooleanNode(variant) {
-				return true
-			}
-		}
-	}
-	return false
+	wire, err := encodeJSONSchema(request.Config.ResponseSchema)
+	return err == nil && schemaWireNeedsBuild(wire)
 }
 
 // schemaWireNeedsBuild 查找 Playground 不接受的无类型节点

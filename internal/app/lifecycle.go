@@ -462,7 +462,6 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		RoutingStrategy: value.RoutingStrategy, UpstreamChannels: value.UpstreamChannels,
 		WAABackend:           value.WAABackend,
 		BuildNativeNonstream: value.BuildNativeNonstream,
-		SchemaFallback:       value.SchemaFallback,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -472,7 +471,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
 		saved.RoutingStrategy == active.RoutingStrategy &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend &&
-		saved.BuildNativeNonstream == active.BuildNativeNonstream && saved.SchemaFallback == active.SchemaFallback
+		saved.BuildNativeNonstream == active.BuildNativeNonstream
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

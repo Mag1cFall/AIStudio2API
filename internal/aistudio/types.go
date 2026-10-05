@@ -137,11 +137,14 @@ type FunctionDeclaration struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      bool            `json:"strict,omitempty"`
 }
 
 // ToolConfig 表示工具启用策略
 type ToolConfig struct {
-	Mode string `json:"mode,omitempty"`
+	Mode                 string   `json:"mode,omitempty"`
+	AllowedFunctionNames []string `json:"allowed_function_names,omitempty"`
+	ParallelCalls        *bool    `json:"parallel_calls,omitempty"`
 }
 
 // GoogleSearchTimeRange 表示 Google Search 的检索时间范围
@@ -152,9 +155,12 @@ type GoogleSearchTimeRange struct {
 
 // GoogleSearchOptions 表示 Google Search 的检索类型与时间范围
 type GoogleSearchOptions struct {
-	WebSearch   bool                   `json:"web_search,omitempty"`
-	ImageSearch bool                   `json:"image_search,omitempty"`
-	TimeRange   *GoogleSearchTimeRange `json:"time_range,omitempty"`
+	WebSearch      bool                   `json:"web_search,omitempty"`
+	ImageSearch    bool                   `json:"image_search,omitempty"`
+	TimeRange      *GoogleSearchTimeRange `json:"time_range,omitempty"`
+	ContextSize    string                 `json:"context_size,omitempty"`
+	UserLocation   json.RawMessage        `json:"user_location,omitempty"`
+	AllowedDomains []string               `json:"allowed_domains,omitempty"`
 }
 
 // Tools 表示一次请求启用的工具
@@ -222,6 +228,8 @@ type GenerationConfig struct {
 	ReasoningEffort     string               `json:"reasoning_effort,omitempty"`
 	ThinkingBudget      *int64               `json:"thinking_budget,omitempty"`
 	Seed                *int64               `json:"seed,omitempty"`
+	// HideThinking 控制公开响应的思考块可见性
+	HideThinking bool `json:"hide_thinking,omitempty"`
 }
 
 // GenerateRequest 表示供应商无关的生成请求
@@ -237,6 +245,8 @@ type GenerateRequest struct {
 	ImageRoute bool `json:"-"`
 	// Unary 标记单次非流式请求（在 Build 代理中使用 ProxyUnaryCall）
 	Unary bool `json:"-"`
+	// Truncate 在生成前按模型上下文窗口移除最早的完整轮次
+	Truncate bool `json:"-"`
 }
 
 // TokenCountRequest 表示计数请求

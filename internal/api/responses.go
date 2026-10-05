@@ -51,6 +51,7 @@ type responsesInputItem struct {
 	Content          json.RawMessage `json:"content"`
 	CallID           string          `json:"call_id"`
 	Name             string          `json:"name"`
+	Namespace        string          `json:"namespace"`
 	Arguments        string          `json:"arguments"`
 	Output           json.RawMessage `json:"output"`
 	EncryptedContent string          `json:"encrypted_content"`
@@ -235,13 +236,8 @@ func responseHistoryOutput(result generationResult) aistudio.Content {
 }
 
 func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, []string, error) {
-	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
-		return aistudio.GenerateRequest{}, nil, fmt.Errorf("parallel_tool_calls must be true")
-	}
 	switch request.Truncation {
-	case "", "disabled":
-	case "auto":
-		return aistudio.GenerateRequest{}, nil, fmt.Errorf("truncation auto is unsupported")
+	case "", "disabled", "auto":
 	default:
 		return aistudio.GenerateRequest{}, nil, fmt.Errorf("unsupported truncation %q", request.Truncation)
 	}
@@ -258,6 +254,7 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
 	}
+	tools.ToolConfig.ParallelCalls = request.ParallelToolCalls
 	config := aistudio.GenerationConfig{
 		Temperature:     request.Temperature,
 		TopP:            request.TopP,
@@ -300,6 +297,7 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 		Contents: contents,
 		Config:   config,
 		Tools:    tools,
+		Truncate: request.Truncation == "auto",
 	}, inlineInstructions, nil
 }
 
@@ -339,6 +337,9 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 			}
 			contents = append(contents, aistudio.Content{Role: role, Parts: parts})
 		case "function_call":
+			if item.Namespace != "" {
+				item.Name = item.Namespace + "." + item.Name
+			}
 			arguments := json.RawMessage(item.Arguments)
 			if len(arguments) == 0 {
 				arguments = json.RawMessage(`{}`)
@@ -378,16 +379,13 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 		if names[tool.Name] {
 			return fmt.Errorf("function tool name %q is duplicated", tool.Name)
 		}
-		if tool.Strict != nil && *tool.Strict {
-			return fmt.Errorf("function tool strict is not supported by AI Studio Web")
-		}
 		parameters := tool.Parameters
 		if len(parameters) == 0 {
 			parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		names[tool.Name] = true
 		mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-			Name: tool.Name, Description: tool.Description, Parameters: parameters,
+			Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.Strict != nil && *tool.Strict,
 		})
 		return nil
 	}
@@ -398,18 +396,24 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 				return aistudio.Tools{}, err
 			}
 		case "namespace":
+			if tool.Name == "" {
+				return aistudio.Tools{}, fmt.Errorf("namespace name is required")
+			}
 			for _, inner := range tool.Tools {
 				if inner.Type != "function" {
 					return aistudio.Tools{}, fmt.Errorf("namespace %q tool type %q is not supported", tool.Name, inner.Type)
 				}
+				inner.Name = tool.Name + "." + inner.Name
 				if err := addFunction(inner); err != nil {
 					return aistudio.Tools{}, err
 				}
 			}
 		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
-			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
-				return aistudio.Tools{}, fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
+			search, err := mapSearchOptions(tool.SearchContextSize, tool.UserLocation, tool.Filters)
+			if err != nil {
+				return aistudio.Tools{}, err
 			}
+			mapped.GoogleSearch = search
 			mapped.Google = appendUnique(mapped.Google, "google_search")
 		case "code_interpreter":
 			if err := validateResponsesCodeContainer(tool.Container); err != nil {
@@ -429,9 +433,6 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 	config, err := openAIToolChoice(choice)
 	if err != nil {
 		return aistudio.Tools{}, err
-	}
-	if len(mapped.Functions) == 0 && len(mapped.Google) == 0 {
-		return mapped, nil
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
@@ -585,6 +586,7 @@ func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map
 	}
 	if namespace := responsesNamespace(tools, call.Name); namespace != "" {
 		item["namespace"] = namespace
+		item["name"] = strings.TrimPrefix(call.Name, namespace+".")
 	}
 	return item
 }
@@ -596,7 +598,7 @@ func responsesNamespace(tools []responsesTool, name string) string {
 			continue
 		}
 		for _, inner := range tool.Tools {
-			if inner.Name == name {
+			if tool.Name+"."+inner.Name == name {
 				return tool.Name
 			}
 		}
@@ -897,6 +899,7 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 	}
 	if namespace := responsesNamespace(writer.request.Tools, call.Name); namespace != "" {
 		item["namespace"] = namespace
+		item["name"] = strings.TrimPrefix(call.Name, namespace+".")
 	}
 	if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
 		return err
@@ -908,7 +911,7 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 		return err
 	}
 	if err := writer.emit("response.function_call_arguments.done", map[string]any{
-		"item_id": id, "output_index": index, "arguments": arguments, "name": call.Name,
+		"item_id": id, "output_index": index, "arguments": arguments, "name": item["name"],
 	}); err != nil {
 		return err
 	}

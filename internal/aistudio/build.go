@@ -61,8 +61,27 @@ func EncodeBuildGenerateRequest(request GenerateRequest, defaults GenerationDefa
 	if len(tools) > 0 {
 		body["tools"] = tools
 	}
+	toolConfig := map[string]any{}
 	if serverSide {
-		body["toolConfig"] = map[string]any{"includeServerSideToolInvocations": true}
+		toolConfig["includeServerSideToolInvocations"] = true
+	}
+	mode := request.Tools.ToolConfig.Mode
+	if len(request.Tools.Functions) > 0 && mode != "none" {
+		calling := map[string]any{"mode": "AUTO"}
+		if mode == "required" {
+			calling["mode"] = "ANY"
+		} else if mode == "validated" || slices.ContainsFunc(request.Tools.Functions, func(value FunctionDeclaration) bool { return value.Strict }) {
+			calling["mode"] = "VALIDATED"
+		}
+		if mode == "required" && len(request.Tools.ToolConfig.AllowedFunctionNames) > 0 {
+			calling["allowedFunctionNames"] = request.Tools.ToolConfig.AllowedFunctionNames
+		}
+		if mode != "" && mode != "auto" || calling["mode"] != "AUTO" || len(request.Tools.ToolConfig.AllowedFunctionNames) > 0 {
+			toolConfig["functionCallingConfig"] = calling
+		}
+	}
+	if len(toolConfig) > 0 {
+		body["toolConfig"] = toolConfig
 	}
 	config, err := encodeBuildGenerationConfig(request.Config, defaults)
 	if err != nil {
@@ -266,9 +285,9 @@ func encodeBuildTools(tools Tools) ([]any, bool, error) {
 	switch tools.ToolConfig.Mode {
 	case "none":
 		return nil, false, nil
-	case "", "auto":
+	case "", "auto", "required", "validated":
 	default:
-		return nil, false, fmt.Errorf("tool choice 只支持 auto 或 none")
+		return nil, false, fmt.Errorf("未知 tool choice %q", tools.ToolConfig.Mode)
 	}
 	var wire []any
 	if len(tools.Functions) > 0 {
@@ -405,7 +424,7 @@ func encodeBuildGenerationConfig(config GenerationConfig, defaults GenerationDef
 	}
 	if len(wire) > 16 && wire[16] != nil {
 		thinking := wire[16].([]any)
-		thinkingConfig := map[string]any{"includeThoughts": true}
+		thinkingConfig := map[string]any{"includeThoughts": !config.HideThinking}
 		if len(thinking) > 1 && thinking[1] != nil {
 			thinkingConfig["thinkingBudget"] = thinking[1]
 		}

@@ -730,21 +730,18 @@ func mapGeminiTools(groups []geminiToolGroup, config geminiToolConfig) (aistudio
 		}
 	}
 	var toolConfig aistudio.ToolConfig
-	if len(config.FunctionCallingConfig.AllowedFunctionNames) > 0 {
-		return aistudio.Tools{}, fmt.Errorf("allowedFunctionNames is not supported by AI Studio Web")
-	}
+	toolConfig.AllowedFunctionNames = config.FunctionCallingConfig.AllowedFunctionNames
 	switch strings.ToUpper(config.FunctionCallingConfig.Mode) {
 	case "", "AUTO":
 		toolConfig.Mode = "auto"
 	case "ANY":
-		return aistudio.Tools{}, fmt.Errorf("functionCallingConfig mode ANY is not supported by AI Studio Web")
+		toolConfig.Mode = "required"
+	case "VALIDATED":
+		toolConfig.Mode = "validated"
 	case "NONE":
 		toolConfig.Mode = "none"
 	default:
 		return aistudio.Tools{}, fmt.Errorf("unsupported functionCallingConfig mode %q", config.FunctionCallingConfig.Mode)
-	}
-	if len(mapped.Functions) == 0 && len(mapped.Google) == 0 && mapped.GoogleSearch == nil {
-		return mapped, nil
 	}
 	mapped.ToolConfig = toolConfig
 	return mapped, nil

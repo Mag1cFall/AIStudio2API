@@ -250,11 +250,13 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 		if err := json.Unmarshal(request.WebSearchOptions, &options); err != nil {
 			return aistudio.GenerateRequest{}, fmt.Errorf("web_search_options must be an object")
 		}
-		if options.SearchContextSize != "" || rawJSONConfigured(options.UserLocation) {
-			return aistudio.GenerateRequest{}, fmt.Errorf("AI Studio Web 不支持 web_search_options 的 search_context_size 或 user_location")
+		tools.GoogleSearch, err = mapSearchOptions(options.SearchContextSize, options.UserLocation, nil)
+		if err != nil {
+			return aistudio.GenerateRequest{}, err
 		}
 		tools.Google = appendUnique(tools.Google, "google_search")
 	}
+	tools.ToolConfig.ParallelCalls = request.ParallelToolCalls
 	config, err := request.generationConfig()
 	if err != nil {
 		return aistudio.GenerateRequest{}, err
@@ -509,9 +511,6 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 			if tool.Function.Name == "" {
 				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
 			}
-			if tool.Function.Strict != nil && *tool.Function.Strict {
-				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
-			}
 			parameters := tool.Function.Parameters
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -520,6 +519,7 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
 				Parameters:  parameters,
+				Strict:      tool.Function.Strict != nil && *tool.Function.Strict,
 			})
 		case "web_search", "web_search_preview":
 			mapped.Google = appendUnique(mapped.Google, "google_search")
@@ -539,9 +539,6 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 	if err != nil {
 		return aistudio.Tools{}, err
 	}
-	if len(mapped.Functions) == 0 && len(mapped.Google) == 0 {
-		return mapped, nil
-	}
 	mapped.ToolConfig = config
 	return mapped, nil
 }
@@ -553,22 +550,33 @@ func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
 	var mode string
 	if err := json.Unmarshal(raw, &mode); err == nil {
 		switch mode {
-		case "auto", "none":
+		case "auto", "none", "required":
 			return aistudio.ToolConfig{Mode: mode}, nil
-		case "required":
-			return aistudio.ToolConfig{}, fmt.Errorf("tool_choice required is not supported by AI Studio Web")
 		default:
 			return aistudio.ToolConfig{}, fmt.Errorf("unsupported tool_choice %q", mode)
 		}
 	}
-	var object map[string]any
+	var object struct {
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		Function  *struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return aistudio.ToolConfig{}, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	if object == nil {
-		return aistudio.ToolConfig{}, fmt.Errorf("invalid tool_choice")
+	if object.Function != nil {
+		object.Name = object.Function.Name
 	}
-	return aistudio.ToolConfig{}, fmt.Errorf("named tool_choice is not supported by AI Studio Web")
+	if object.Type != "function" || object.Name == "" {
+		return aistudio.ToolConfig{}, fmt.Errorf("named tool_choice requires type function and a name")
+	}
+	if object.Namespace != "" {
+		object.Name = object.Namespace + "." + object.Name
+	}
+	return aistudio.ToolConfig{Mode: "required", AllowedFunctionNames: []string{object.Name}}, nil
 }
 
 func appendUnique(values []string, value string) []string {
@@ -583,9 +591,6 @@ func appendUnique(values []string, value string) []string {
 func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error) {
 	if request.N != nil && *request.N != 1 {
 		return aistudio.GenerationConfig{}, fmt.Errorf("n must be 1")
-	}
-	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
-		return aistudio.GenerationConfig{}, fmt.Errorf("parallel_tool_calls must be true")
 	}
 	if request.Logprobs != nil && *request.Logprobs {
 		return aistudio.GenerationConfig{}, fmt.Errorf("logprobs must be false")
