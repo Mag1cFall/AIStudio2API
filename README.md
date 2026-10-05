@@ -440,6 +440,7 @@ cp .env.example .env
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `UPSTREAM_CHANNELS` | `playground,build` | 生成请求使用的上游通道，可只保留其一 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
+| `PLAYGROUND_SCHEMA_FALLBACK` | `false` | Build 未启用时，对工具缺省类型及明确的联合类型执行有损旧版回退；保留分支约束，不改写结构化输出或禁止约束，详见[兼容边界](docs/protocol.md#playground-schema-fallback) |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
