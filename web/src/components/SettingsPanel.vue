@@ -26,6 +26,7 @@ const form = reactive<ServiceConfig>({
   admin_username: 'admin',
   admin_password_set: false,
   build_native_nonstream: true,
+  playground_schema_fallback: false,
   auth_states: 'auth',
   listen_addr: '127.0.0.1:2048',
   proxy_api_key: '',
@@ -369,6 +370,21 @@ async function saveConfig(): Promise<void> {
           type="checkbox"
         />
         <span class="text-sm font-medium text-gray-300">{{ t('settings.buildNative') }}</span>
+      </label>
+
+      <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+        <input
+          v-model="form.playground_schema_fallback"
+          class="h-4 w-4 accent-blue-500"
+          type="checkbox"
+          aria-describedby="schema-fallback-help"
+        />
+        <span>
+          <span class="text-sm font-medium text-gray-300">{{ t('settings.schemaFallback') }}</span>
+          <span id="schema-fallback-help" class="mt-1 block text-xs text-amber-400">{{
+            t('settings.schemaFallbackHelp')
+          }}</span>
+        </span>
       </label>
 
       <label class="flex items-center gap-3 rounded-lg border border-[#30363d] bg-[#161b22] p-4">
