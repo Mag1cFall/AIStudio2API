@@ -9,7 +9,7 @@ import (
 )
 
 // prepareSchemaRequest never changes Build routing or response schemas. The opt-in
-// fallback narrows only missing tool parameter types, on a private request copy.
+// fallback narrows missing tool types and typed unions on a private request copy.
 func (s *PooledService) prepareSchemaRequest(request GenerateRequest) (GenerateRequest, bool, error) {
 	if s.pool.BuildEnabled() || !requestNeedsBuildSchema(request) {
 		return request, false, nil
@@ -40,14 +40,14 @@ func (s *PooledService) prepareSchemaRequest(request GenerateRequest) (GenerateR
 		}
 	}
 	if requestNeedsBuildSchema(request) {
-		return original, false, fmt.Errorf("%w: 此 JSON Schema 需要 Build 通道；兼容回退不改写 response schema、组合类型或否定约束", ErrInvalidArgument)
+		return original, false, fmt.Errorf("%w: 此 JSON Schema 需要 Build 通道；兼容回退不改写 response schema 或无法表示的约束", ErrInvalidArgument)
 	}
 	return request, true, nil
 }
 
-// fallbackToolSchema restores the legacy string default only at positive,
-// unconstrained tool nodes. Boolean schemas and numeric/compound/negative
-// constraints are not approximated. Ordinary boolean-typed parameters are valid.
+// fallbackToolSchema restores legacy root types only at positive tool nodes.
+// Typed disjunctions retain every branch/constraint and gain a root type. This
+// narrows alternatives; it is not lossless native JSON Schema support.
 func fallbackToolSchema(raw json.RawMessage) (json.RawMessage, error) {
 	var schema map[string]json.RawMessage
 	if json.Unmarshal(raw, &schema) != nil || schema == nil {
@@ -60,6 +60,9 @@ func fallbackToolSchema(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	if err := normalizeNotSchema(schema); err != nil {
+		return nil, err
+	}
+	if err := fallbackUnionRootType(schema); err != nil {
 		return nil, err
 	}
 	_, hadItems := schema["items"]
@@ -112,4 +115,58 @@ func fallbackToolSchema(raw json.RawMessage) (json.RawMessage, error) {
 		_, err = encodeJSONSchema(result)
 	}
 	return result, err
+}
+
+// fallbackUnionRootType narrows a single anyOf/oneOf to its first concrete type,
+// as legacy Playground encoding did, without deleting any alternative. Keeping
+// oneOf intact also preserves exclusivity rather than flattening overlapping cases.
+func fallbackUnionRootType(schema map[string]json.RawMessage) error {
+	if _, typed := schema["type"]; typed {
+		return nil
+	}
+	name := "anyOf"
+	if _, exists := schema[name]; !exists {
+		name = "oneOf"
+	}
+	raw, exists := schema[name]
+	if !exists {
+		return nil
+	}
+	for key := range schema {
+		if key == name {
+			continue
+		}
+		switch key {
+		case "description", "nullable", "example", "default", "$schema":
+		default:
+			return fmt.Errorf("含 %s 的组合节点需要显式类型或 Build 通道", key)
+		}
+	}
+	var variants []json.RawMessage
+	if json.Unmarshal(raw, &variants) != nil || len(variants) == 0 {
+		return fmt.Errorf("schema.%s 必须是非空 Schema 数组", name)
+	}
+	var first map[string]json.RawMessage
+	if json.Unmarshal(variants[0], &first) != nil || first == nil {
+		return fmt.Errorf("schema.%s 首个分支需要明确类型", name)
+	}
+	if err := normalizeConstAndMetadata(first); err != nil {
+		return err
+	}
+	if err := normalizeImplicitType(first); err != nil {
+		return err
+	}
+	var typeName string
+	if json.Unmarshal(first["type"], &typeName) != nil || schemaTypeCodes[strings.ToLower(typeName)] == 0 {
+		return fmt.Errorf("schema.%s 首个分支需要明确类型", name)
+	}
+	schema["type"] = first["type"]
+	if strings.EqualFold(typeName, "array") {
+		items, err := encodeJSONSchema(first["items"])
+		if err != nil || schemaWireNeedsBuild(items) {
+			return fmt.Errorf("schema.%s 首个数组分支需要可由 Playground 表达的明确 items", name)
+		}
+		schema["items"] = first["items"]
+	}
+	return nil
 }

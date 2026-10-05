@@ -561,7 +561,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		return nil, err
 	}
 	if fallback {
-		slog.Warn("Playground 工具 Schema 兼容回退：缺省类型按 string 收窄；原请求未修改")
+		slog.Warn("Playground 工具 Schema 兼容回退：缺省类型或联合根类型按旧版规则收窄；原请求及分支约束保留")
 	}
 	resourceID, err := s.pool.ResourceIDForContents(ctx, request.Contents)
 	if err != nil {
