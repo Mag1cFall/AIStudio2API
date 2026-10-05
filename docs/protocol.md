@@ -842,7 +842,9 @@ v0.2.4 默认保留开放 Schema 的真实语义，因此 `UPSTREAM_CHANNELS=pla
 
 无法立即修改旧客户端时，可设置 `PLAYGROUND_SCHEMA_FALLBACK=true` 并重启生成服务（也可在设置页保存后停止、启动生成服务）。该开关默认关闭，仅在 Build **未启用** 时，将工具参数的无约束缺省节点和未提供 `items` 的数组元素按旧版 string 默认值编码。这会收窄合法参数范围，并非等价 Schema 转换；每次发生回退都会写入 WARN。兼容处理使用独立请求副本，不修改调用者持有的工具声明、聊天正文或工具返回数据。
 
-- 不改写结构化输出 `response schema`；不近似混合类型、数值约束或否定约束。参数中的原生布尔 Schema（如 `items:true/false`、`properties.x:true/false`）不做此回退，零参数根 `{}`/`true` 仍沿用已有 object 归一化；`{"type":"boolean"}` 的普通布尔参数不受影响。
+- `anyOf` / `oneOf` 的首个分支能推导出具体类型时，可为联合节点补该根类型（数组同时保留首分支的 items）。所有原有分支及其 required、enum、数值和排他条件仍保留，不丢弃分支。此举收窄可用类型，不是无损转换。例如提问工具的 `options.items = {"anyOf":[{"type":"string"},{"type":"object","properties":{"label":{"type":"string"}},"required":["label"]}]}` 会额外得到根 `type:string`，模型可生成纯文本选项。
+- 不改写结构化输出 `response schema`；不近似缺少明确首分支类型、叠加其他组合/否定约束的联合根节点。参数中的原生布尔 Schema（如 `items:true/false`、`properties.x:true/false`）不做此回退，零参数根 `{}`/`true` 仍沿用已有 object 归一化；`{"type":"boolean"}` 的普通布尔参数不受影响。
+- 首个联合分支为 array 时，必须有 Playground 可编码的明确 items；不通过丢弃未声明元素类型的分支来放行。
 - 开启 Build 后保持原生 Schema 路由，即使 Build 忙碌、冷却或没有可用账户也不因此降级；不会自动打开 Build 或跨通道消耗额度。`tool_choice:none` 忽略的声明不会触发回退。
 - 一项声明无法回退时，拒绝整个请求，不部分修改、不吞掉 `false`、`not:true` 等禁止约束，也不删除 required 属性。
 - 恢复严格模式：将 `PLAYGROUND_SCHEMA_FALLBACK=false` 保存并重启生成服务，无需迁移账号或聊天数据。此设置不能保证所有旧客户端 Schema 都可用于 Playground；超出边界时应修正工具定义或使用 Build。

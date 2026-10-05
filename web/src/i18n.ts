@@ -13,7 +13,7 @@ const zhCN = {
   'settings.buildNative': '非流式请求优先使用 Build',
   'settings.schemaFallback': 'Playground 工具 Schema 兼容回退（有损）',
   'settings.schemaFallbackHelp':
-    '仅在未启用 Build 时生效。将缺省类型收窄为 string；不改写结构化输出、混合类型或禁止约束。建议优先补全工具定义。',
+    '仅在未启用 Build 时生效。缺省类型补 string；有明确类型的 anyOf/oneOf 按首个分支收窄根类型，保留分支约束。不改写结构化输出或禁止约束。',
   'app.title': 'AI Studio 控制台',
   'app.console': '控制台',
   'app.gateway': '协议网关',
@@ -226,7 +226,7 @@ const en: Record<TranslationKey, string> = {
   'settings.buildNative': 'Prefer Build for non-streaming requests',
   'settings.schemaFallback': 'Playground tool schema fallback (lossy)',
   'settings.schemaFallbackHelp':
-    'Only when Build is disabled. Narrows missing types to string; does not rewrite response schemas, mixed types or prohibitions. Prefer explicit tool types.',
+    'Only when Build is disabled. Defaults missing types to string and narrows typed anyOf/oneOf roots to the first variant type, retaining all branch constraints. No response-schema or prohibition rewrite.',
   'app.title': 'AI Studio Console',
   'app.console': 'Console',
   'app.gateway': 'Protocol gateway',
