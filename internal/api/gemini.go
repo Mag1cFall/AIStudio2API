@@ -286,10 +286,6 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	if len(request.Contents) == 0 {
-		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "contents is required")
-		return
-	}
 	generateRequest, err := request.toGenerateRequest(newID("resp"), model)
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -790,6 +786,9 @@ func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, stream bool) {
 	request.Unary = !stream
 	events, err := s.service.Generate(r.Context(), request)
+	if err == nil && stream {
+		events, err = awaitStreamStart(r.Context(), events)
+	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
