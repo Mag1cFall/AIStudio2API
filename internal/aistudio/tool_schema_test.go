@@ -27,11 +27,11 @@ func TestToolSchemaMixedOptions(t *testing.T) {
 		t.Fatalf("完整约束或可发送的参数结构缺失: %#v", wire)
 	}
 	request := GenerateRequest{Tools: Tools{Functions: []FunctionDeclaration{declaration}}}
-	if requestNeedsBuildSchema(request) {
+	if RequestNeedsBuildSchema(request) {
 		t.Fatal("工具声明触发 Build 分流")
 	}
 	request.Config.ResponseSchema = json.RawMessage(`{"type":"object","properties":{"value":{}}}`)
-	if !requestNeedsBuildSchema(request) {
+	if !RequestNeedsBuildSchema(request) {
 		t.Fatal("结构化输出的原生通道选择丢失")
 	}
 }

@@ -4,7 +4,7 @@ import { api, type AdminSession } from '@/api'
 import { useI18n } from '@/i18n'
 
 const emit = defineEmits<{ authenticated: [session: AdminSession] }>()
-const { t } = useI18n()
+const { t, errorText } = useI18n()
 const username = ref('')
 const password = ref('')
 const busy = ref(false)
@@ -17,7 +17,7 @@ async function login(): Promise<void> {
   try {
     emit('authenticated', await api.login(username.value, password.value))
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t('common.error')
+    error.value = errorText(cause)
   } finally {
     password.value = ''
     busy.value = false
@@ -26,9 +26,9 @@ async function login(): Promise<void> {
 </script>
 
 <template>
-  <main class="flex h-full items-center justify-center overflow-auto bg-[#0d1117] p-6">
+  <main class="flex h-full items-center justify-center overflow-auto bg-canvas p-6">
     <form
-      class="w-full max-w-sm space-y-5 rounded-lg border border-[#30363d] bg-[#161b22] p-7"
+      class="w-full max-w-sm space-y-5 rounded-lg border border-line bg-panel p-7"
       @submit.prevent="login"
     >
       <h1 class="text-xl font-semibold text-white">AI Studio Proxy</h1>
@@ -40,7 +40,7 @@ async function login(): Promise<void> {
           autocomplete="username"
           autofocus
           required
-          class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+          class="w-full rounded border border-line bg-canvas px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
         />
       </label>
       <label class="block">
@@ -51,7 +51,7 @@ async function login(): Promise<void> {
           type="password"
           autocomplete="current-password"
           required
-          class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+          class="w-full rounded border border-line bg-canvas px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
         />
       </label>
       <p v-if="error" role="alert" class="text-sm text-red-300">{{ error }}</p>

@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { api } from '@/api'
-import { confirmAction } from '@/confirm'
 import { useI18n, type TranslationKey } from '@/i18n'
-import type { Account, AccountDraft, AccountState, ChromeImportProfile } from '@/types'
+import type {
+  Account,
+  AccountDraft,
+  AccountState,
+  ChromeImportProfile,
+  PairingToken,
+} from '@/types'
 import UiIcon from './UiIcon.vue'
 
 defineProps<{
@@ -15,9 +20,10 @@ defineProps<{
 const emit = defineEmits<{
   refresh: []
   notice: [message: string, tone: 'success' | 'error']
+  delete: [account: Account]
 }>()
 
-const { t } = useI18n()
+const { t, locale, errorText } = useI18n()
 const defaultAccountLocale = navigator.language || 'en-US'
 const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const showEditor = ref(false)
@@ -26,6 +32,17 @@ const showChromeImport = ref(false)
 const editingAccountID = ref('')
 const pendingAction = ref('')
 const chromeProfiles = ref<ChromeImportProfile[]>([])
+const pairing = ref<PairingToken | null>(null)
+const copiedPairing = ref('')
+const pairingCommand = `${navigator.userAgent.includes('Windows') ? 'start.bat' : './aistudio2api'} setup --remote ${window.location.origin}`
+const pairingHost = window.location.hostname.replace(/^\[|\]$/g, '')
+const pairingInsecure =
+  window.location.protocol !== 'https:' &&
+  pairingHost !== 'localhost' &&
+  pairingHost !== '::1' &&
+  !/^127\.\d+\.\d+\.\d+$/.test(pairingHost)
+// clipboardAvailable 表示页面处于可使用剪贴板 API 的安全上下文
+const clipboardAvailable = window.isSecureContext
 const selectedChromeProfiles = ref<string[]>([])
 const allChromeProfilesSelected = computed(
   () =>
@@ -60,9 +77,14 @@ const stateKeys: Record<AccountState, TranslationKey> = {
   disabled: 'state.disabled',
 }
 
+// maskedProxy 隐藏代理地址中的密码，编辑表单仍使用完整地址
+function maskedProxy(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):[^@/]*@/i, '$1:•••@')
+}
+
 // actionError 将账户写操作错误发送到全局通知
 function actionError(error: unknown): void {
-  emit('notice', error instanceof Error ? error.message : t('common.error'), 'error')
+  emit('notice', errorText(error), 'error')
 }
 
 function beginEdit(account: Account): void {
@@ -101,6 +123,31 @@ async function beginBrowserLogin(): Promise<void> {
     actionError(error)
   } finally {
     pendingAction.value = ''
+  }
+}
+
+// openPairing 生成远程配对令牌，旧令牌随之失效
+async function openPairing(): Promise<void> {
+  pendingAction.value = 'pairing'
+  try {
+    pairing.value = await api.createPairing()
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+// copyPairing 复制配对命令或令牌
+async function copyPairing(kind: 'command' | 'token', text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedPairing.value = kind
+    window.setTimeout(() => {
+      if (copiedPairing.value === kind) copiedPairing.value = ''
+    }, 1200)
+  } catch (error) {
+    actionError(error)
   }
 }
 
@@ -205,32 +252,25 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
     pendingAction.value = ''
   }
 }
-
-// removeAccount 删除用户确认的账户
-async function removeAccount(account: Account): Promise<void> {
-  if (!(await confirmAction(t('accounts.deleteConfirm'), t('common.delete')))) return
-  pendingAction.value = `delete:${account.id}`
-  try {
-    await api.deleteAccount(account.id)
-    emit('refresh')
-    emit('notice', t('accounts.deleted'), 'success')
-  } catch (error) {
-    actionError(error)
-  } finally {
-    pendingAction.value = ''
-  }
-}
 </script>
 
 <template>
   <section class="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4 md:p-8">
-    <div
-      class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[#30363d] pb-2"
-    >
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-2">
       <h2 class="text-2xl font-bold text-white">{{ t('section.accounts.title') }}</h2>
       <div class="flex flex-wrap justify-end gap-2">
         <button
-          class="flex items-center gap-2 rounded border border-[#30363d] bg-[#21262d] px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-[#30363d] disabled:opacity-50"
+          class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
+          type="button"
+          :disabled="pendingAction !== ''"
+          :aria-busy="pendingAction === 'pairing'"
+          @click="openPairing"
+        >
+          <UiIcon name="remote" :size="15" />
+          {{ t('accounts.remoteAdd') }}
+        </button>
+        <button
+          class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
           type="button"
           :disabled="pendingAction !== ''"
           :aria-busy="pendingAction === 'chrome-discover'"
@@ -259,7 +299,7 @@ async function removeAccount(account: Account): Promise<void> {
     </div>
     <div
       v-else-if="accounts.length === 0"
-      class="rounded border border-[#30363d] bg-[#161b22] py-10 text-center text-gray-500"
+      class="rounded border border-line bg-panel py-10 text-center text-gray-500"
     >
       <p class="mb-2">{{ t('accounts.empty') }}</p>
       <p class="text-xs">{{ t('accounts.emptyHint') }}</p>
@@ -268,7 +308,7 @@ async function removeAccount(account: Account): Promise<void> {
       <article
         v-for="account in accounts"
         :key="account.id"
-        class="rounded-lg border border-[#30363d] bg-[#161b22] p-4"
+        class="rounded-lg border border-line bg-panel p-4"
         :class="{ 'opacity-60': !account.enabled }"
       >
         <div class="mb-2 flex items-center justify-between gap-4">
@@ -294,11 +334,13 @@ async function removeAccount(account: Account): Promise<void> {
         </div>
 
         <div
-          class="grid grid-cols-1 gap-2 border-t border-[#30363d] pt-3 text-xs sm:grid-cols-2 md:grid-cols-4"
+          class="grid grid-cols-1 gap-2 border-t border-line pt-3 text-xs sm:grid-cols-2 md:grid-cols-4"
         >
           <div>
             <span class="text-gray-500">{{ t('accounts.proxy') }}</span>
-            <div class="truncate text-gray-300">{{ account.proxy || t('accounts.direct') }}</div>
+            <div class="truncate text-gray-300">
+              {{ account.proxy ? maskedProxy(account.proxy) : t('accounts.direct') }}
+            </div>
           </div>
           <div>
             <span class="text-gray-500">{{ t('accounts.locale') }}</span>
@@ -318,7 +360,7 @@ async function removeAccount(account: Account): Promise<void> {
           {{ account.message }}
         </p>
 
-        <div class="mt-3 flex items-center justify-between gap-3 border-t border-[#30363d] pt-3">
+        <div class="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
           <span
             class="text-xs font-medium uppercase"
             :class="{
@@ -333,7 +375,7 @@ async function removeAccount(account: Account): Promise<void> {
           </span>
           <div class="flex flex-wrap justify-end gap-2">
             <button
-              class="rounded border border-[#30363d] bg-[#21262d] px-3 py-1 text-xs text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== ''"
               @click="beginEdit(account)"
@@ -341,7 +383,7 @@ async function removeAccount(account: Account): Promise<void> {
               {{ t('common.edit') }}
             </button>
             <button
-              class="rounded border border-[#30363d] bg-[#21262d] px-3 py-1 text-xs text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== ''"
               :aria-busy="pendingAction === `toggle:${account.id}`"
@@ -360,7 +402,7 @@ async function removeAccount(account: Account): Promise<void> {
               {{ t('common.relogin') }}
             </button>
             <button
-              class="rounded border border-[#30363d] bg-[#21262d] px-3 py-1 text-xs text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== '' || !account.enabled"
               :aria-busy="pendingAction === `verify:${account.id}`"
@@ -372,8 +414,7 @@ async function removeAccount(account: Account): Promise<void> {
               class="rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
               type="button"
               :disabled="pendingAction !== ''"
-              :aria-busy="pendingAction === `delete:${account.id}`"
-              @click="removeAccount(account)"
+              @click="emit('delete', account)"
             >
               {{ t('common.delete') }}
             </button>
@@ -385,13 +426,13 @@ async function removeAccount(account: Account): Promise<void> {
     <Teleport to="body">
       <div v-if="showEditor" class="modal-overlay" @click.self="closeEditor">
         <form
-          class="mx-4 w-full max-w-md rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
+          class="mx-4 w-full max-w-md rounded-lg border border-line bg-panel p-6 shadow-xl"
           @submit.prevent="saveAccount"
         >
           <div class="mb-4 flex items-center justify-between">
             <h3 class="text-lg font-bold text-white">{{ t('accounts.editTitle') }}</h3>
             <button
-              class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white"
+              class="rounded p-1 text-gray-500 hover:bg-line hover:text-white"
               type="button"
               :aria-label="t('common.close')"
               @click="closeEditor"
@@ -411,7 +452,7 @@ async function removeAccount(account: Account): Promise<void> {
               }}</span>
               <input
                 v-model.trim="draft.proxy"
-                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                 placeholder="socks5://127.0.0.1:1080"
               />
             </label>
@@ -422,7 +463,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="draft.locale"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -432,7 +473,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="draft.timezone"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -440,7 +481,7 @@ async function removeAccount(account: Account): Promise<void> {
           </div>
           <div class="mt-6 flex gap-2">
             <button
-              class="flex-1 rounded bg-[#21262d] py-2 text-sm text-gray-300 transition hover:bg-[#30363d]"
+              class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line"
               type="button"
               @click="closeEditor"
             >
@@ -460,13 +501,13 @@ async function removeAccount(account: Account): Promise<void> {
 
       <div v-if="showBrowserLogin" class="modal-overlay" @click.self="closeBrowserLogin">
         <form
-          class="mx-4 w-full max-w-md rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
+          class="mx-4 w-full max-w-md rounded-lg border border-line bg-panel p-6 shadow-xl"
           @submit.prevent="beginBrowserLogin"
         >
           <div class="mb-4 flex items-center justify-between">
             <h3 class="text-lg font-bold text-white">{{ t('accounts.browserLogin') }}</h3>
             <button
-              class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white disabled:opacity-50"
+              class="rounded p-1 text-gray-500 hover:bg-line hover:text-white disabled:opacity-50"
               type="button"
               :disabled="pendingAction === 'browser-login'"
               :aria-label="t('common.close')"
@@ -482,7 +523,7 @@ async function removeAccount(account: Account): Promise<void> {
               }}</span>
               <input
                 v-model.trim="accountEnvironment.proxy"
-                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                 placeholder="socks5://127.0.0.1:1080"
               />
             </label>
@@ -493,7 +534,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="accountEnvironment.locale"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -503,7 +544,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="accountEnvironment.timezone"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -511,7 +552,7 @@ async function removeAccount(account: Account): Promise<void> {
           </div>
           <div class="mt-6 flex gap-2">
             <button
-              class="flex-1 rounded bg-[#21262d] py-2 text-sm text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="pendingAction === 'browser-login'"
               @click="closeBrowserLogin"
@@ -532,13 +573,13 @@ async function removeAccount(account: Account): Promise<void> {
 
       <div v-if="showChromeImport" class="modal-overlay" @click.self="closeChromeImport">
         <form
-          class="mx-4 w-full max-w-lg rounded-lg border border-[#30363d] bg-[#161b22] p-6 shadow-xl"
+          class="mx-4 w-full max-w-lg rounded-lg border border-line bg-panel p-6 shadow-xl"
           @submit.prevent="importChromeAccounts"
         >
           <div class="mb-4 flex items-center justify-between">
             <h3 class="text-lg font-bold text-white">{{ t('accounts.chromeTitle') }}</h3>
             <button
-              class="rounded p-1 text-gray-500 hover:bg-[#30363d] hover:text-white disabled:opacity-50"
+              class="rounded p-1 text-gray-500 hover:bg-line hover:text-white disabled:opacity-50"
               type="button"
               :disabled="pendingAction === 'chrome-import'"
               :aria-label="t('common.close')"
@@ -554,7 +595,7 @@ async function removeAccount(account: Account): Promise<void> {
               }}</span>
               <input
                 v-model.trim="accountEnvironment.proxy"
-                class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                 placeholder="socks5://127.0.0.1:1080"
               />
             </label>
@@ -565,7 +606,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="accountEnvironment.locale"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -575,7 +616,7 @@ async function removeAccount(account: Account): Promise<void> {
                 }}</span>
                 <input
                   v-model.trim="accountEnvironment.timezone"
-                  class="w-full rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
                   required
                 />
               </label>
@@ -597,7 +638,7 @@ async function removeAccount(account: Account): Promise<void> {
             <label
               v-for="profile in chromeProfiles"
               :key="profile.id"
-              class="flex cursor-pointer items-start gap-3 rounded border border-[#30363d] bg-[#0d1117] p-3 transition hover:border-[#4b5563]"
+              class="flex cursor-pointer items-start gap-3 rounded border border-line bg-canvas p-3 transition hover:border-gray-600"
             >
               <input
                 v-model="selectedChromeProfiles"
@@ -616,7 +657,7 @@ async function removeAccount(account: Account): Promise<void> {
           </div>
           <div class="mt-6 flex gap-2">
             <button
-              class="flex-1 rounded bg-[#21262d] py-2 text-sm text-gray-300 transition hover:bg-[#30363d] disabled:opacity-50"
+              class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="pendingAction === 'chrome-import'"
               @click="closeChromeImport"
@@ -633,6 +674,75 @@ async function removeAccount(account: Account): Promise<void> {
             </button>
           </div>
         </form>
+      </div>
+      <div v-if="pairing" class="modal-overlay" @click.self="pairing = null">
+        <div
+          class="mx-4 w-full max-w-lg rounded-lg border border-line bg-panel p-6 shadow-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pairing-title"
+        >
+          <div class="mb-3 flex items-center justify-between">
+            <h3 id="pairing-title" class="text-lg font-bold text-white">
+              {{ t('accounts.remoteAdd') }}
+            </h3>
+            <button
+              class="rounded p-1 text-gray-500 hover:bg-line hover:text-white"
+              type="button"
+              :aria-label="t('common.close')"
+              @click="pairing = null"
+            >
+              <UiIcon name="close" :size="16" />
+            </button>
+          </div>
+          <p class="mb-4 text-sm leading-6 text-gray-400">{{ t('accounts.remoteHelp') }}</p>
+          <p
+            v-if="pairingInsecure"
+            class="mb-4 flex gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200"
+          >
+            <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />
+            {{ t('accounts.remoteHttps') }}
+          </p>
+          <div
+            v-for="item in [
+              {
+                kind: 'command' as const,
+                label: t('accounts.remoteCommand'),
+                text: pairingCommand,
+              },
+              { kind: 'token' as const, label: t('accounts.remoteToken'), text: pairing.token },
+            ]"
+            :key="item.kind"
+            class="mb-3"
+          >
+            <span class="mb-1 block text-xs font-medium text-gray-500">{{ item.label }}</span>
+            <div
+              class="flex items-center gap-2 rounded border border-line bg-canvas py-1.5 pr-1.5 pl-3"
+            >
+              <code
+                class="min-w-0 flex-1 overflow-x-auto font-mono text-sm whitespace-nowrap text-gray-200 select-all"
+                >{{ item.text }}</code
+              >
+              <button
+                v-if="clipboardAvailable"
+                class="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 transition hover:bg-raised hover:text-white"
+                type="button"
+                @click="copyPairing(item.kind, item.text)"
+              >
+                <UiIcon :name="copiedPairing === item.kind ? 'check' : 'copy'" :size="13" />
+                {{ copiedPairing === item.kind ? t('common.copied') : t('common.copy') }}
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-gray-500">
+            {{
+              t('accounts.remoteExpires').replace(
+                '{time}',
+                new Date(pairing.expires_at).toLocaleTimeString(locale, { hour12: false }),
+              )
+            }}
+          </p>
+        </div>
       </div>
     </Teleport>
   </section>

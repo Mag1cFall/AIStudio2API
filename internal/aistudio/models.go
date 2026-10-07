@@ -253,6 +253,14 @@ func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.R
 		if err != nil {
 			return nil, err
 		}
+		selectable, err := decodeMappedCodes(rawAt(video, 7), path+"[70][7]", evidence, map[int64]string{3: "resolution"})
+		if err != nil {
+			return nil, err
+		}
+		if len(resolutions) == 0 && len(selectable) > 0 {
+			// 视频能力含编号 3 而未列出分辨率时，官网提供 720p、1080p、4k
+			resolutions = []string{"720p", "1080p", "4k"}
+		}
 		appendOption(options, "video_output_resolutions", resolutions)
 	}
 	if len(options) == 0 {

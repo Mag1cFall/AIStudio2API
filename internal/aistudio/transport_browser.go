@@ -1,10 +1,7 @@
 package aistudio
 
 import (
-	"bufio"
 	"context"
-	cryptotls "crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -14,14 +11,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 	fhttp "github.com/bogdanfinn/fhttp"
-	tlsclient "github.com/bogdanfinn/tls-client"
+	"github.com/bogdanfinn/fhttp/http2"
 	"github.com/bogdanfinn/tls-client/profiles"
 	tls "github.com/bogdanfinn/utls"
 	"golang.org/x/net/proxy"
 )
 
-const browserProxyConnectTimeout = 30 * time.Second
+const (
+	// firefoxPingThreshold 是 Firefox network.http.http2.ping-threshold，连接持续未收到帧达到该时长时发送 PING
+	firefoxPingThreshold = 58 * time.Second
+	// firefoxPingTimeout 是 Firefox network.http.http2.ping-timeout，PING 超过该时长未应答时关闭连接
+	firefoxPingTimeout = 8 * time.Second
+	// firefoxTLSHandshakeTimeout 是 Firefox network.http.tls-handshake-timeout
+	firefoxTLSHandshakeTimeout = 30 * time.Second
+	// browserIdleConnTimeout 是空闲 HTTP/2 连接的保留时长
+	browserIdleConnTimeout = 90 * time.Second
+)
 
 var firefoxRequestHeaderOrder = []string{
 	"user-agent",
@@ -47,13 +54,7 @@ var firefoxRequestHeaderOrder = []string{
 }
 
 type browserRoundTripper struct {
-	client tlsclient.HttpClient
-}
-
-type browserConnectDialer struct {
-	proxyURL    *url.URL
-	proxyTarget string
-	direct      *net.Dialer
+	transport *http2.Transport
 }
 
 type browserResponseBody struct {
@@ -62,10 +63,10 @@ type browserResponseBody struct {
 	trailer stdhttp.Header
 }
 
-// newBrowserRoundTripper 创建与当前 Camoufox 网络形状一致的传输
+// newBrowserRoundTripper 创建与当前 Camoufox 网络形状一致的 HTTP/2 传输
 func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	proxyURL = strings.TrimSpace(proxyURL)
-	var proxyDialer proxy.ContextDialer
+	var proxyDialer proxy.ContextDialer = &net.Dialer{}
 	if proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil || parsed.Hostname() == "" {
@@ -76,24 +77,53 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 		default:
 			return nil, fmt.Errorf("代理协议必须是 http、https 或 socks5")
 		}
-		proxyDialer, err = newBrowserProxyDialer(parsed)
+		proxyDialer, err = proxydial.Dialer(parsed)
 		if err != nil {
 			return nil, err
 		}
 	}
-	options := []tlsclient.HttpClientOption{
-		tlsclient.WithClientProfile(firefox152Profile()),
-		tlsclient.WithTimeoutMilliseconds(0),
-		tlsclient.WithNotFollowRedirects(),
-	}
-	if proxyDialer != nil {
-		options = append(options, tlsclient.WithDialContext(proxyDialer.DialContext))
-	}
-	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
+	profile := firefox152Profile()
+	hello := profile.GetClientHelloId()
+	return &browserRoundTripper{transport: &http2.Transport{
+		DialTLS: func(network, address string, _ *tls.Config) (net.Conn, error) {
+			return dialBrowserTLS(proxyDialer, hello, network, address)
+		},
+		ConnectionFlow:    profile.GetConnectionFlow(),
+		HeaderPriority:    profile.GetHeaderPriority(),
+		IdleConnTimeout:   browserIdleConnTimeout,
+		InitialStreamID:   profile.GetStreamID(),
+		PingTimeout:       firefoxPingTimeout,
+		Priorities:        profile.GetPriorities(),
+		PseudoHeaderOrder: profile.GetPseudoHeaderOrder(),
+		PushHandler:       &http2.DefaultPushHandler{},
+		ReadIdleTimeout:   firefoxPingThreshold,
+		Settings:          profile.GetSettings(),
+		SettingsOrder:     profile.GetSettingsOrder(),
+	}}, nil
+}
+
+// dialBrowserTLS 以 Firefox ClientHello 建立 TLS 连接并要求协商 HTTP/2
+func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, network string, address string) (net.Conn, error) {
+	raw, err := dialer.DialContext(context.Background(), network, address)
 	if err != nil {
-		return nil, fmt.Errorf("创建浏览器网络传输: %w", err)
+		return nil, err
 	}
-	return &browserRoundTripper{client: client}, nil
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true}, hello, false, false, false)
+	ctx, cancel := context.WithTimeout(context.Background(), firefoxTLSHandshakeTimeout)
+	defer cancel()
+	if err := connection.HandshakeContext(ctx); err != nil {
+		_ = connection.Close()
+		return nil, err
+	}
+	if protocol := connection.ConnectionState().NegotiatedProtocol; protocol != http2.NextProtoTLS {
+		_ = connection.Close()
+		return nil, fmt.Errorf("%s 未协商 HTTP/2，实际协议为 %q", address, protocol)
+	}
+	return connection, nil
 }
 
 func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdhttp.Response, error) {
@@ -115,7 +145,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 		upstream.Header[name] = append([]string(nil), values...)
 	}
 	upstream.Header[fhttp.HeaderOrderKey] = orderedHeaderNames(upstream.Header)
-	response, err := transport.client.Do(upstream)
+	response, err := transport.roundTrip(upstream)
 	if err != nil {
 		return nil, err
 	}
@@ -148,110 +178,28 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	}, nil
 }
 
-func newBrowserProxyDialer(proxyURL *url.URL) (proxy.ContextDialer, error) {
-	direct := &net.Dialer{Timeout: browserProxyConnectTimeout, KeepAlive: 30 * time.Second}
-	proxyTarget := proxyURL.Host
-	if proxyURL.Port() == "" {
-		switch strings.ToLower(proxyURL.Scheme) {
-		case "http":
-			proxyTarget = net.JoinHostPort(proxyURL.Hostname(), "80")
-		case "https":
-			proxyTarget = net.JoinHostPort(proxyURL.Hostname(), "443")
-		case "socks5":
-			return nil, fmt.Errorf("SOCKS5 代理 URL 缺少端口")
-		}
+// roundTrip 执行上游请求，请求 context 结束时立即返回，未完成的拨号在后台结束
+func (transport *browserRoundTripper) roundTrip(request *fhttp.Request) (*fhttp.Response, error) {
+	type result struct {
+		response *fhttp.Response
+		err      error
 	}
-	if strings.EqualFold(proxyURL.Scheme, "socks5") {
-		var auth *proxy.Auth
-		if proxyURL.User != nil {
-			password, _ := proxyURL.User.Password()
-			auth = &proxy.Auth{User: proxyURL.User.Username(), Password: password}
-		}
-		dialer, err := proxy.SOCKS5("tcp", proxyTarget, auth, direct)
-		if err != nil {
-			return nil, fmt.Errorf("创建 SOCKS5 代理连接: %w", err)
-		}
-		contextDialer, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			return nil, fmt.Errorf("SOCKS5 代理不支持上下文取消")
-		}
-		return contextDialer, nil
-	}
-	return &browserConnectDialer{
-		proxyURL:    proxyURL,
-		proxyTarget: proxyTarget,
-		direct:      direct,
-	}, nil
-}
-
-func (dialer *browserConnectDialer) Dial(network, address string) (net.Conn, error) {
-	return dialer.DialContext(context.Background(), network, address)
-}
-
-func (dialer *browserConnectDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	var connection net.Conn
-	var err error
-	if strings.EqualFold(dialer.proxyURL.Scheme, "https") {
-		tlsDialer := cryptotls.Dialer{
-			NetDialer: dialer.direct,
-			Config: &cryptotls.Config{
-				ServerName: dialer.proxyURL.Hostname(),
-				NextProtos: []string{"http/1.1"},
-			},
-		}
-		connection, err = tlsDialer.DialContext(ctx, network, dialer.proxyTarget)
-	} else {
-		connection, err = dialer.direct.DialContext(ctx, network, dialer.proxyTarget)
-	}
-	if err != nil {
-		return nil, err
-	}
-	success := false
-	defer func() {
-		if !success {
-			_ = connection.Close()
-		}
+	done := make(chan result, 1)
+	go func() {
+		response, err := transport.transport.RoundTrip(request)
+		done <- result{response, err}
 	}()
-	deadline := time.Now().Add(browserProxyConnectTimeout)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
-		deadline = contextDeadline
+	select {
+	case value := <-done:
+		return value.response, value.err
+	case <-request.Context().Done():
+		go func() {
+			if value := <-done; value.response != nil {
+				_ = value.response.Body.Close()
+			}
+		}()
+		return nil, request.Context().Err()
 	}
-	if err := connection.SetDeadline(deadline); err != nil {
-		return nil, err
-	}
-	stopCancel := context.AfterFunc(ctx, func() {
-		_ = connection.Close()
-	})
-	defer stopCancel()
-	request := (&stdhttp.Request{
-		Method: stdhttp.MethodConnect,
-		URL:    &url.URL{Host: address},
-		Host:   address,
-		Header: make(stdhttp.Header),
-	}).WithContext(ctx)
-	if dialer.proxyURL.User != nil && dialer.proxyURL.User.Username() != "" {
-		password, _ := dialer.proxyURL.User.Password()
-		credentials := dialer.proxyURL.User.Username() + ":" + password
-		request.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(credentials)))
-	}
-	if err := request.Write(connection); err != nil {
-		return nil, err
-	}
-	response, err := stdhttp.ReadResponse(bufio.NewReader(connection), request)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != stdhttp.StatusOK {
-		if response.Body != nil {
-			_ = response.Body.Close()
-		}
-		return nil, fmt.Errorf("代理 CONNECT 返回 %s", response.Status)
-	}
-	if err := connection.SetDeadline(time.Time{}); err != nil {
-		return nil, err
-	}
-	success = true
-	return connection, nil
 }
 
 func (body *browserResponseBody) Read(buffer []byte) (int, error) {
@@ -276,7 +224,7 @@ func (body *browserResponseBody) syncTrailer() {
 }
 
 func (transport *browserRoundTripper) CloseIdleConnections() {
-	transport.client.CloseIdleConnections()
+	transport.transport.CloseIdleConnections()
 }
 
 func standardHeader(source fhttp.Header) stdhttp.Header {

@@ -107,9 +107,9 @@ Chrome Local State + Profile Preferences + Web Data/token_service
 
 OAuthMultilogin 使用 `MultiOAuth` 头。第一次 assertion 为 `DBSC_CHALLENGE_IF_REQUIRED`，响应提供 challenge；第二次 assertion 的 JWT header 使用 `ES256` 与 `DEVICE_BOUND_SESSION_CREDENTIALS_ASSERTION`。payload 绑定 Google OAuth client、challenge、设备公钥 issuer 和临时 HPKE 公钥。Cookie 密文使用 X25519、HKDF-SHA256 与 AES-128-GCM 解密。
 
-Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源、Gaia ID、refresh token 与 wrapped binding key。登录页跳转、签名 Cookie 失效、HTTP `401` 与协议 Code 16 进入同一认证恢复流程，覆盖 Worker 预热、按需启动、普通 RPC、受保护 RPC 与 Live 建连。服务优先在同一账户出口续签 Cookie；保存的 OAuth 材料被拒绝时，从当前 Chrome 匹配原账户邮箱与 Gaia ID，更新来源材料。有效 Cookie 提交后使动态头失效、关闭该账户 WAA runtime，并重放一次。恢复失败的账户标为 `auth_required`，管理事件同步发布账户状态，后续调度使用其他合格账户。
+Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源、Gaia ID、refresh token 与 wrapped binding key。登录页跳转、签名 Cookie 失效、HTTP `401` 与协议 Code 16 进入同一认证恢复流程，覆盖 Worker 预热、按需启动、普通 RPC、受保护 RPC 与 Live 建连。服务优先在同一账户出口续签 Cookie；保存的 OAuth 材料被拒绝时，从当前 Chrome 匹配原账户邮箱与 Gaia ID，更新来源材料。没有 `aistudio2api` 扩展的账户在本机 Chrome 登录着同一邮箱时，从 Chrome 导入该邮箱的材料并写入扩展，此后按 Chrome 导入账户续签。有效 Cookie 提交后使动态头失效、关闭该账户 WAA runtime，并重放一次。恢复失败的账户标为 `auth_required`，管理事件同步发布账户状态，后续调度使用其他合格账户。
 
-认证恢复等待同账户的正常请求结束；并发失效复用一次提交结果。替换登录材料推进认证代际，旧请求的认证结果按代际和请求顺序写回；生成正常结束后确认认证有效。HTTP `403`、协议 Code 7 与 Drive `unauthorized_client` 保留模型权限或 Drive 授权含义。隔离 Camoufox 登录和外部 storage state 使用各自的登录材料。
+认证恢复等待同账户的正常请求结束；并发失效复用一次提交结果。替换登录材料推进认证代际，旧请求的认证结果按代际和请求顺序写回；生成正常结束后确认认证有效。HTTP `403`、协议 Code 7 与 Drive `unauthorized_client` 保留模型权限或 Drive 授权含义。隔离 Camoufox 登录和外部 storage state 在本机 Chrome 没有同一邮箱时只使用各自的登录材料。
 
 `storage-state.json` 保留 Playwright 根字段和未知扩展字段，已定义形状如下。`wrapped_binding_key` 是 Go `[]byte` 的 Base64 JSON 字符串。
 
@@ -310,7 +310,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 视频时长 | `1=5s`、`2=6s`、`3=7s`、`4=8s`、`5=4s` |
 | 视频分辨率 | `1=720p`、`2=1080p`、`3=4k`、`4=368p`、`5=360p` |
 
-Veo field 71 的宽高比、时长和分辨率分别位于子索引 `4`、`5`、`9`。TTS field 67 是 repeated voice row，每行索引 `0` 为 voice name。thinking field 72 的默认 level 位于子索引 `5`。
+Veo field 71 的宽高比、时长和分辨率分别位于子索引 `4`、`5`、`9`；子索引 `7` 含 `3` 而子索引 `9` 为空时，分辨率为官网默认的 `720p`、`1080p`、`4k`。TTS field 67 是 repeated voice row，每行索引 `0` 为 voice name。thinking field 72 的默认 level 位于子索引 `5`。
 
 field 57 alias 可以是 `["models/<ALIAS>"]`，也可以是 repeated row；row 形状时取每行索引 `0` 并移除 `models/` 前缀。公开 `capability_options` 的键全集为 `aliases`、`voices`、`image_aspect_ratios`、`image_output_resolutions`、`video_aspect_ratios`、`video_durations_seconds` 和 `video_output_resolutions`；没有值的键省略。
 
@@ -433,6 +433,8 @@ safety settings：
 ]
 ```
 
+每项为 `[null, null, 类别, 阈值]`，编号与 Gemini API 枚举相同：类别 `HARM_CATEGORY_HARASSMENT`=7、`HATE_SPEECH`=8、`SEXUALLY_EXPLICIT`=9、`DANGEROUS_CONTENT`=10、`CIVIC_INTEGRITY`=11；阈值 `BLOCK_LOW_AND_ABOVE`=1、`BLOCK_MEDIUM_AND_ABOVE`=2、`BLOCK_ONLY_HIGH`=3、`BLOCK_NONE`=4、`OFF`=5。非图片模型默认发送上面 7–10 四类 `OFF`，Gemini 协议请求中的类别按名称覆盖或追加；图片模型只发送请求中的类别，没有时为 `null`。上游对 `HARM_CATEGORY_UNSPECIFIED`（0）与 `DEROGATORY` 至 `DANGEROUS`（1–6）返回 400，这些类别与其他未知名称在发送前返回 400 并列出可用类别。
+
 generation config 字段：
 
 | JSON 索引 | protobuf field | 内容 |
@@ -448,6 +450,7 @@ generation config 字段：
 | 14 | 15 | response modalities：TEXT=`1`、IMAGE=`2`、AUDIO=`3` |
 | 15 | 16 | speech config |
 | 16 | 17 | thinking config `[1, budget?, null, level]` |
+| 17 | 18 | media resolution：LOW=`1`、MEDIUM=`2`、HIGH=`3` |
 | 18 | 19 | seed |
 | 26 | 27 | image config `[aspectRatio?, imageSize?]` |
 | 31 | 32 | transcription config |
@@ -1099,8 +1102,10 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 账户 | `GET /api/accounts`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
 | 账户认证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
+| 远程配对 | `POST /api/pairing`、`POST /api/pairing/accounts` |
 | 配置 | `GET /api/config`、`PUT /api/config` |
 | 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
+| 用量与正文 | `GET /api/usage`、`GET /api/usage/records`、`GET /api/usage/records.csv`、`GET /api/requests/{id}/body` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
 
 管理 API 使用 DTO（data transfer object）表示请求、响应和事件对象。端点结果：
@@ -1113,6 +1118,8 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `POST /api/accounts` | 201 | `{"account":AdminAccount}` |
 | `GET /api/accounts/import/chrome` | 200 | `{"profiles":[ChromeImportProfile,...]}` |
 | `POST /api/accounts/import/chrome` | 201 | `{"accounts":[AdminAccount,...]}` |
+| `POST /api/pairing` | 201 | `PairingToken` |
+| `POST /api/pairing/accounts` | 201 | `{"account":AdminAccount}`；令牌无效或过期返回 401 `pairing_token_invalid`，账户已存在返回 409 `account_exists` |
 | `PUT /api/accounts/{id}` | 200 | `{"account":AdminAccount}` |
 | `POST /api/accounts/{id}/login`、`verify` | 200 | `{"account":AdminAccount}` |
 | `DELETE /api/accounts/{id}` | 204 | 空 body |
@@ -1121,6 +1128,10 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `GET /api/cooldowns` | 200 | `{"cooldowns":[AdminCooldown,...]}` |
 | `GET /api/requests` | 200 | `{"requests":[AdminRequest,...]}` |
 | `POST /api/requests/{id}/cancel` | 204 | 空 body |
+| `GET /api/usage` | 200 | `UsageReport` |
+| `GET /api/usage/records` | 200 | `UsageRecordPage` |
+| `GET /api/usage/records.csv` | 200 | 带 UTF-8 BOM 的 CSV 附件 |
+| `GET /api/requests/{id}/body` | 200 | `RequestBody`；没有保存正文时返回 404 `request_body_not_found` |
 | `DELETE /api/logs` | 204 | 空 body |
 | `GET /api/events` | 200 SSE | `{"type":"<TYPE>","data":<DTO>}` |
 
@@ -1135,16 +1146,40 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
 | `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`locale` |
 | `ChromeImportInput` | `account_ids`、`proxy`、`locale`、`timezone` |
+| `PairingToken` | `token`、`expires_at` |
+| `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `fingerprint` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |
 | `AdminRequest` | `id`、`model`、`account_id`、`account_label`、`state`、`started_at` |
 | `AdminLog` | `time`、`level`、`source`、`message`、`event`；请求事件携带 `request`，包含 `id`、`state`、HTTP `status`、`model`、`duration_ms`、`tool_calls`、`usage` 与诊断字段，字段口径见 [logging.md](logging.md) |
 | `AdminEvent` | `type`、`data` |
+| `UsageLatency` | `avg_ms`、`p50_ms`、`p95_ms`、`p99_ms` |
+| `UsageStats` | `requests`、`succeeded`、`failed`、`canceled`、`rate_limited`、`input_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`duration`、`first_event`、`queue_avg_ms`、可选 `last_at` |
+| `UsageReport` | `from`、`to`、`bucket_seconds`、`generated_at`、可选 `latest_at`、`totals`、`previous`、`recent`、`buckets`、`stack_by`、`series`、`groups`、`pairs`、`options` |
+| `UsageRecord` | `id`、`time`、`protocol`、`path`、`model`、`account`、`channel`、`status`、`state`、`duration_ms`、`first_event_ms`、`queue_ms`、`input_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`tool_calls`、`error`、`attempts`、`has_body` |
+| `UsageRecordPage` | `items`、可选 `next_cursor` |
+| `RequestBody` | `id`、`time`、`request`、`request_size`、`response`、`response_size` |
 
 `AdminStatus.state` 为 `STOPPED`、`LAUNCHING` 或 `RUNNING`；`running` 只在 `RUNNING` 为 true；`ready` 要求 `RUNNING` 且至少一个账户处于 ready 或 busy；`version` 来自构建信息；`active_requests` 是当前进程请求注册表数量。`AdminAccount.message` 保存当前状态原因，`models` 是该账户实时目录 ID。`until` 与 `started_at` 使用 RFC 3339 JSON time。
 
+`GET /api/usage` 的参数：
+
+| 参数 | 含义 |
+| --- | --- |
+| `from`、`to` | 必填，RFC 3339 时间，统计 `[from, to)`，长度不超过 93 天 |
+| `tz` | IANA 时区，决定按天分桶的自然日与分钟、小时分桶的对齐，默认 UTC |
+| `bucket` | 分桶秒数 `60`、`300`、`900`、`3600`、`86400`，或 `auto`；分桶数不超过 1500 |
+| `model`、`account`、`channel`、`protocol`、`state` | 维度筛选，逗号分隔多个取值；同一维度为或，不同维度为且 |
+| `stack` | `series` 的堆叠维度，取上述五个维度之一，默认 `model` |
+
+`auto` 按范围长度选择粒度：2 小时以内 1 分钟，12 小时以内 5 分钟，8 天以内 1 小时，更长按天。`buckets` 从包含 `from` 的对齐分桶开始，空分桶补零；`previous` 是紧邻 `from` 之前的等长周期；`recent` 统计最近 5 分钟。`succeeded` 包含 `completed`、`tool_calls`、`limited` 与 `blocked`，`rate_limited` 是 HTTP 429 的失败数；`duration` 与 `first_event` 只统计成功请求，分位数相对误差约 0.5%。`groups` 按 `model`、`account`、`channel`、`protocol`、`state` 与 HTTP 状态码 `status` 列出全部取值，`pairs` 是账户与模型的组合，`series` 取请求数前 8 的取值，其余合并为 `other: true` 的一组。`options` 列出范围内出现过的维度取值，不受筛选影响。`latest_at` 是账本中最新一条记录的完成时间。
+
+`GET /api/usage/records` 与 `records.csv` 接受同样的 `from`、`to` 与维度筛选，另有 `status`（HTTP 状态码）与 `q`（匹配请求 ID 或错误文本的子串）。记录按完成时间与 ID 倒序；`limit` 为 1 到 200，默认 50；`next_cursor` 原样传回 `cursor` 读取更早的一页。`attempts` 列出本次请求在最终结果之前未成功的上游尝试（`account`、`channel`、`error`、`duration_ms`）。CSV 导出范围内全部符合条件的记录，以 `=`、`+`、`-`、`@`、制表符或回车开头的文本加单引号前缀。
+
 Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个列出账号，同一 Profile 可以包含多个账号，同一邮箱只列出一次。`ChromeImportProfile.id` 为 `<Profile>/<Gaia ID>`；导入读取 `token_service` 中 service 为 `AccountId-<Gaia ID>` 的凭据。管理页列表默认不勾选，并提供全选。CLI 的 `--profile` 导入该 Profile 下的全部账号，交互编号对应单个账号。
 
-`AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取。`ChromeImportInput.account_ids` 可一次选择多个账号。`AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空，`proxy` 使用无 credentials、path、query 或 fragment 的 HTTP、HTTPS、SOCKS5 origin。新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
+`POST /api/pairing` 需要管理会话，签发 10 分钟内有效的配对令牌；再次签发使上一令牌失效。服务只在内存中保存令牌的 SHA-256 摘要，管理进程重启后令牌失效。`POST /api/pairing/accounts` 不经过管理会话、loopback 与 same-origin 检查，凭 `Authorization: Bearer <token>` 导入一个账户，令牌有效期内可多次调用；body 上限 1 MiB。`AccountStateInput.storage_state` 必须能生成 SAPISID 授权，邮箱取认证扩展中的来源邮箱，没有时取 `label`；`fingerprint` 是隔离登录生成的 `camoufox-fingerprint.json` 内容。配对导入的账户使用服务端默认代理。
+
+`AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取。`ChromeImportInput.account_ids` 可一次选择多个账号。`AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空，`proxy` 使用 HTTP、HTTPS 或 SOCKS5 origin，可带 `user:password@`，不含 path、query 或 fragment。新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
 
 `PUT /api/accounts/{id}` 的提交顺序固定为：校验不可变邮箱 ID，取得账户独占租约，创建未发布的新固定出口，关闭当前 Worker 并把新 Worker 配置标记为 `pending`（尚未发布），在模型目录写锁内原子写入 `account.json` 并更新账户池，随后发布 Worker 配置、替换固定出口、释放租约并重建模型缓存。`account.json` 写入是唯一持久提交点。提交前的出口创建、Worker 关闭或写入错误会丢弃这份待发布配置并保持旧配置；已经关闭的 Worker 由后续请求按旧配置重建。持久写入后，新配置、Worker 配置与固定出口共同成为已提交状态。租约释放错误保留该提交状态并返回原始 unlock 错误；释放成功后记录完成日志并同步模型缓存。
 
@@ -1156,6 +1191,8 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 | `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 保存值；下一次启动生成服务时使用 |
 | `temporary_chat` | 保存值；下一次启动生成服务时使用 |
 | `build_native_nonstream` | 保存值；下一次启动生成服务时决定非流式请求是否优先选择 Build |
+| `auto_start` | 保存值；下一管理进程就绪后是否自动启动生成服务 |
+| `request_body_log` | 保存值；保存后立即决定是否保存请求与响应正文 |
 | `admin_auth_enabled`、`admin_username` | 保存值；下一管理进程使用 |
 | `admin_password` | 只写；省略时保留现值，下一管理进程使用 |
 | `admin_password_set` | response-only；是否已保存管理密码 |
@@ -1761,7 +1798,8 @@ SSE 使用相同的事件名与 JSON `event_type`：`interaction.created` → `s
   "systemInstruction": {"role":"user","parts":[{"text":"Be concise"}]},
   "generationConfig": {},
   "tools": [],
-  "toolConfig": {}
+  "toolConfig": {},
+  "safetySettings": [{"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_ONLY_HIGH"}]
 }
 ```
 
@@ -1782,6 +1820,7 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | 类别 | 字段 |
 | --- | --- |
 | sampling | `temperature`、`topP`、`topK`、`frequencyPenalty`、`presencePenalty`、`seed` |
+| media | `mediaResolution`：`MEDIA_RESOLUTION_LOW`、`MEDIA_RESOLUTION_MEDIUM`、`MEDIA_RESOLUTION_HIGH` |
 | output limits | `candidateCount`、`maxOutputTokens`、`stopSequences` |
 | log probabilities | `responseLogprobs`、`logprobs` |
 | structured output | `responseMimeType`、`responseSchema`、`responseJsonSchema` |
@@ -1791,7 +1830,7 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | transcription | `transcriptionConfig:{languageCodes,customVocabulary,wordTimestamps,speakerLabels,smartTranscription}` |
 | speech | `speechConfig` |
 
-`responseModalities` 只接受 `TEXT`、`IMAGE` 与 `AUDIO`，`AUDIO` 与其他模态互斥。图像模型省略模态或仅请求 `IMAGE` 时发送 `[IMAGE,TEXT]`；`imageConfig` 保留显式宽高比与尺寸，支持输出分辨率的模型省略图片配置时使用 `1K`。
+`responseModalities` 只接受 `TEXT`、`IMAGE` 与 `AUDIO`，`AUDIO` 与其他模态互斥。图像模型省略模态时发送 `[IMAGE,TEXT]`，仅请求 `IMAGE` 时发送 `[IMAGE]`；`imageConfig` 保留显式宽高比与尺寸，支持输出分辨率的模型省略图片配置时使用 `1K`。
 
 `speechConfig.voiceConfig` 与 `multiSpeakerVoiceConfig` 互斥；单声音必须提供 `prebuiltVoiceConfig.voiceName`，每个多说话人条目必须提供非空 `speaker` 与 `voiceConfig.prebuiltVoiceConfig.voiceName`；`multiSpeakerVoiceConfig.mode` 可选 `VERBATIM` 或 `CONVERSATIONAL`。文本 part 的 `speechMetadata`（或 `speech_metadata`）`{speaker,style}` 写入 Part field 41。能力码 85 的模型把未带 speaker 的文本按行拆分，以配置中说话人名加冒号开头的行开始新分段，续行并入上一分段，首个说话人行之前的文本不发送；没有匹配行的文本原样发送。旧 TTS 模型把 `speechMetadata` 写回 `speaker: 台词` 前缀与 `style\n\n` 说明段落。`transcriptionConfig.smartTranscription=true` 与显式 true 的 `wordTimestamps` 或 `speakerLabels` 互斥；language code `detect` 归一为空自动检测。
 

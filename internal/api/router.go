@@ -16,6 +16,7 @@ type Config struct {
 	AdminAuthEnabled bool
 	AdminUsername    string
 	AdminPassword    string
+	Ledger           RequestLedger
 }
 
 type server struct {
@@ -23,13 +24,17 @@ type server struct {
 	config            Config
 	responseStates    *responseStateStore
 	thoughtSignatures *thoughtSignatureStore
+	pairing           *pairingTokens
 }
 
 var idSequence atomic.Uint64
 
 // NewHandler 创建公开 API 路由
 func NewHandler(service aistudio.Service, config Config) http.Handler {
-	s := &server{service: service, config: config, responseStates: newResponseStateStore(), thoughtSignatures: newThoughtSignatureStore()}
+	s := &server{
+		service: service, config: config, responseStates: newResponseStateStore(),
+		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{},
+	}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	public.HandleFunc("GET /v1/models/{model...}", s.handleOpenAIModel)
@@ -62,13 +67,20 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	if config.Admin != nil {
 		s.registerAdmin(control)
 	}
+	if config.Ledger != nil {
+		s.registerLedger(control)
+	}
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, public)))
-	root.Handle("/v1/", requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler)))
-	root.Handle("/v1beta/", requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler)))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, requestBodyMiddleware(config.Ledger, public))))
+	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
+	root.Handle("/v1/", loggedHandler)
+	root.Handle("/v1beta/", loggedHandler)
 	root.Handle("/api/", newAdminAuth(config).handler(control))
+	if config.Admin != nil {
+		root.HandleFunc("POST /api/pairing/accounts", s.handlePairingAccount)
+	}
 	return root
 }
 

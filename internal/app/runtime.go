@@ -128,6 +128,7 @@ type accountWorkerManager struct {
 	warmTarget      int
 	maxActive       int
 	warmConcurrency int
+	startupSlots    chan struct{}
 	temporaryChat   bool
 	lifecycle       context.Context
 	cancel          context.CancelFunc
@@ -202,23 +203,21 @@ const (
 
 // Prepare 在账户 Worker 有效期间生成 proof
 func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aistudio.ProtectedRequest) (aistudio.PreparedProtectedRequest, error) {
-	preparer.account.mu.Lock()
-	defer preparer.account.mu.Unlock()
-	if preparer.account.worker != preparer.worker {
+	if !preparer.current() {
 		return aistudio.PreparedProtectedRequest{}, errAccountWorkerReplaced
 	}
-	if preparer.account.bootstrapModel != preparer.bootstrapModel {
+	startedAt := time.Now()
+	defer func() { api.AddAccessLogProof(ctx, time.Since(startedAt)) }()
+	prepared, err := preparer.worker.Prepare(ctx, request)
+	if err != nil && !preparer.current() {
 		return aistudio.PreparedProtectedRequest{}, errAccountWorkerReplaced
 	}
-	return preparer.worker.Prepare(ctx, request)
+	return prepared, err
 }
 
 // SendProtected 校验当前账户 Worker 后发送浏览器请求
 func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, request aistudio.ProtectedRequest) (*aistudio.RPCResponse, error) {
-	preparer.account.mu.Lock()
-	current := preparer.account.worker == preparer.worker && preparer.account.bootstrapModel == preparer.bootstrapModel
-	preparer.account.mu.Unlock()
-	if !current {
+	if !preparer.current() {
 		return nil, errAccountWorkerReplaced
 	}
 	return preparer.worker.SendProtected(ctx, request)
@@ -226,12 +225,21 @@ func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, reques
 
 // BrowserStorageState 返回同一有效账户 Worker 的浏览器 Cookie 状态
 func (preparer *accountWorkerPreparer) BrowserStorageState(ctx context.Context) (aistudio.StorageState, error) {
-	preparer.account.mu.Lock()
-	defer preparer.account.mu.Unlock()
-	if preparer.account.worker != preparer.worker || preparer.account.bootstrapModel != preparer.bootstrapModel {
+	if !preparer.current() {
 		return aistudio.StorageState{}, errAccountWorkerReplaced
 	}
-	return preparer.worker.BrowserStorageState(ctx)
+	state, err := preparer.worker.BrowserStorageState(ctx)
+	if err != nil && !preparer.current() {
+		return aistudio.StorageState{}, errAccountWorkerReplaced
+	}
+	return state, err
+}
+
+// current 在账户锁内核对 Worker 与页面模型未被替换，浏览器 RPC 在锁外执行，失败后再次核对以识别执行期间的替换
+func (preparer *accountWorkerPreparer) current() bool {
+	preparer.account.mu.Lock()
+	defer preparer.account.mu.Unlock()
+	return preparer.account.worker == preparer.worker && preparer.account.bootstrapModel == preparer.bootstrapModel
 }
 
 // accountWorkerInitError 表示单个账户的 WAA worker 初始化失败
@@ -248,7 +256,7 @@ func (err *accountWorkerInitError) Unwrap() error {
 	return err.err
 }
 
-// newAccountWorkerManager 创建账户 worker 配置
+// newAccountWorkerManager 创建账户 worker 配置，纯 Go 后端同时启动的 Worker 数只受活动上限约束
 func newAccountWorkerManager(
 	pool *aistudio.AccountPool,
 	accounts []*aistudio.Account,
@@ -261,13 +269,17 @@ func newAccountWorkerManager(
 	warmConcurrency int,
 	temporaryChat bool,
 ) *accountWorkerManager {
+	if camoufoxPath == "" {
+		warmConcurrency = max(maxActive, 1)
+	}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	manager := &accountWorkerManager{
 		pool: pool, accounts: make(map[string]*accountWorker, len(accounts)), requests: requests, camoufox: camoufoxPath,
 		globalProxy: globalProxy, initTimeout: initTimeout,
 		warmTarget: warmTarget, maxActive: maxActive, warmConcurrency: warmConcurrency, temporaryChat: temporaryChat,
-		openings:  make(map[string]chan struct{}),
-		lifecycle: lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
+		startupSlots: make(chan struct{}, max(warmConcurrency, 1)),
+		openings:     make(map[string]chan struct{}),
+		lifecycle:    lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
 		victims: make(map[string]struct{}),
 	}
 	manager.background, manager.stopBackground = context.WithCancel(lifecycle)
@@ -985,6 +997,15 @@ func (manager *accountWorkerManager) startReservedWorker(
 		ownsLease = true
 		manager.clearRuntimeBusy(account)
 	}
+	select {
+	case manager.startupSlots <- struct{}{}:
+	case <-ctx.Done():
+		if ownsLease {
+			_ = runtimeLease.Release()
+		}
+		account.startupMu.Unlock()
+		return nil, ctx.Err()
+	}
 	manager.requests.log(label, "INFO", "WAA Worker 启动 | 1/7 | 初始化页面 | 页面模型="+bootstrapModel)
 	initCtx, cancel := context.WithTimeout(ctx, manager.initTimeout)
 	options.Model = bootstrapModel
@@ -994,6 +1015,7 @@ func (manager *accountWorkerManager) startReservedWorker(
 	}
 	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	cancel()
+	<-manager.startupSlots
 	if initErr != nil {
 		if ownsLease {
 			_ = runtimeLease.Release()
@@ -3090,15 +3112,21 @@ func (service *trackedService) generateWithRetry(
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
 		}
+		if !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuildSchema(request) {
+			selection.Channel = aistudio.ChannelBuild
+		}
 		fallbackReason := ""
 		if request.Unary {
 			switch {
 			case selection.PlaygroundOnly:
 				fallbackReason = "请求包含 Playground 专用能力或文件引用"
+			case selection.Channel != "":
+			case !service.pool.BuildEnabled():
+				fallbackReason = "Build 通道未启用"
 			case !service.buildNativeNonstream:
 				fallbackReason = "Build 非流式优先选项已关闭"
 			default:
-				selection.Channel = aistudio.ChannelBuild
+				selection.PreferredChannel = aistudio.ChannelBuild
 			}
 		}
 		if (unbound || fileBound) && len(attempted) > 0 {
@@ -3110,13 +3138,8 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		nextLease, acquireErr := service.acquireWarmLease(requestCtx, selection)
-		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil {
-			var cooling *aistudio.AllCoolingError
-			if errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &cooling) {
-				fallbackReason = "原生 Build 通道不可用: " + acquireErr.Error()
-				selection.Channel = ""
-				nextLease, acquireErr = service.acquireWarmLease(requestCtx, selection)
-			}
+		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && nextLease.Channel() != aistudio.ChannelBuild {
+			fallbackReason = "账户 Build 通道冷却或不支持此模型"
 		}
 		if acquireErr != nil {
 			var ownerCooling *aistudio.AllCoolingError
@@ -3134,6 +3157,7 @@ func (service *trackedService) generateWithRetry(
 			break
 		}
 		lease = nextLease
+		attemptStartedAt := time.Now()
 		err = nil
 		source = nil
 		request.AccountID = lease.Account().ID
@@ -3142,6 +3166,7 @@ func (service *trackedService) generateWithRetry(
 		accountLabel := lease.Account().Config.Label
 		api.SetAccessLogChannel(requestCtx, string(lease.Channel()))
 		api.SetAccessLogTarget(requestCtx, modelID, accountLabel)
+		api.MarkAccessLogScheduled(requestCtx)
 		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
 		service.requests.markChannel(request.ID, string(lease.Channel()))
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
@@ -3266,6 +3291,10 @@ func (service *trackedService) generateWithRetry(
 		if attemptCopies != nil {
 			err = errors.Join(err, attemptCopies.Cleanup())
 		}
+		api.AddAccessLogAttempt(requestCtx, api.RequestAttempt{
+			Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
+			DurationMS: time.Since(attemptStartedAt).Milliseconds(),
+		})
 		workerFailed := service.workers.WorkerFailed(request.AccountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
 		workerReplaced := errors.Is(err, errAccountWorkerReplaced)
@@ -3297,9 +3326,7 @@ func (service *trackedService) generateWithRetry(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, cooldown.Until.Format(time.RFC3339),
 				))
-				availableSelection := selection
-				availableSelection.Channel = ""
-				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, availableSelection) {
+				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, selection) {
 					delete(attempted, request.AccountID)
 					maxAttempts++
 				}

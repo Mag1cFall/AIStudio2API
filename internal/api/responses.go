@@ -65,6 +65,13 @@ type responseState struct {
 
 const responseStateCapacity = 256
 
+// responseHistory 是续接起点的响应 ID 及其按顺序展开的完整上下文
+type responseHistory struct {
+	ID                 string
+	Contents           []aistudio.Content
+	InlineInstructions []string
+}
+
 type responseStateStore struct {
 	mu     sync.Mutex
 	states map[string]responseState
@@ -75,32 +82,39 @@ func newResponseStateStore() *responseStateStore {
 	return &responseStateStore{states: make(map[string]responseState, responseStateCapacity)}
 }
 
-func (store *responseStateStore) Load(id string) ([]aistudio.Content, []string, bool) {
+func (store *responseStateStore) Load(id string) (responseHistory, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	history := responseHistory{ID: id, Contents: make([]aistudio.Content, 0), InlineInstructions: make([]string, 0)}
 	chain := make([]responseState, 0)
 	for id != "" {
 		state, exists := store.states[id]
 		if !exists {
-			return nil, nil, false
+			return responseHistory{}, false
 		}
 		chain = append(chain, state)
 		id = state.ParentID
 	}
-	contents := make([]aistudio.Content, 0)
-	instructions := make([]string, 0)
 	for index := len(chain) - 1; index >= 0; index-- {
-		contents = append(contents, cloneResponseContents(chain[index].Contents)...)
-		instructions = append(instructions, chain[index].InlineInstructions...)
+		history.Contents = append(history.Contents, cloneResponseContents(chain[index].Contents)...)
+		history.InlineInstructions = append(history.InlineInstructions, chain[index].InlineInstructions...)
 	}
-	return contents, instructions, true
+	return history, true
 }
 
-func (store *responseStateStore) Store(id string, state responseState) {
+// Store 保存一条响应；续接起点在生成期间已被淘汰时，把请求开始时读取的完整上下文并入该响应
+func (store *responseStateStore) Store(id string, previous responseHistory, contents []aistudio.Content, inlineInstructions []string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	state.Contents = cloneResponseContents(state.Contents)
-	state.InlineInstructions = append([]string(nil), state.InlineInstructions...)
+	state := responseState{
+		ParentID: previous.ID, Contents: cloneResponseContents(contents),
+		InlineInstructions: append([]string(nil), inlineInstructions...),
+	}
+	if _, exists := store.states[previous.ID]; previous.ID != "" && !exists {
+		state.ParentID = ""
+		state.Contents = append(cloneResponseContents(previous.Contents), state.Contents...)
+		state.InlineInstructions = append(append([]string(nil), previous.InlineInstructions...), state.InlineInstructions...)
+	}
 	store.states[id] = state
 	store.order = append(store.order, id)
 	for len(store.order) > responseStateCapacity {
@@ -150,14 +164,16 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	currentContents := cloneResponseContents(generateRequest.Contents)
 	currentInlineInstructions := append([]string(nil), inlineInstructions...)
+	var previous responseHistory
 	if request.PreviousResponseID != "" {
-		previousContents, previousInstructions, ok := s.responseStates.Load(request.PreviousResponseID)
+		var ok bool
+		previous, ok = s.responseStates.Load(request.PreviousResponseID)
 		if !ok {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("previous response %q was not found", request.PreviousResponseID))
 			return
 		}
-		generateRequest.Contents = append(previousContents, generateRequest.Contents...)
-		inlineInstructions = append(previousInstructions, inlineInstructions...)
+		generateRequest.Contents = append(cloneResponseContents(previous.Contents), generateRequest.Contents...)
+		inlineInstructions = append(append([]string(nil), previous.InlineInstructions...), inlineInstructions...)
 		instructions := make([]string, 0, 1+len(inlineInstructions))
 		if request.Instructions != "" {
 			instructions = append(instructions, request.Instructions)
@@ -175,7 +191,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	created := time.Now().Unix()
 	if request.Stream {
-		s.streamResponses(w, r, request, currentContents, currentInlineInstructions, responseID, created, events)
+		s.streamResponses(w, r, request, previous, currentContents, currentInlineInstructions, responseID, created, events)
 		return
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
@@ -191,20 +207,16 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Store == nil || *request.Store {
-		s.storeResponseState(responseID, request.PreviousResponseID, currentContents, currentInlineInstructions, result)
+		s.storeResponseState(responseID, previous, currentContents, currentInlineInstructions, result)
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s *server) storeResponseState(id string, parentID string, contents []aistudio.Content, inlineInstructions []string, result generationResult) {
+func (s *server) storeResponseState(id string, previous responseHistory, contents []aistudio.Content, inlineInstructions []string, result generationResult) {
 	if output := responseHistoryOutput(result); len(output.Parts) > 0 {
 		contents = append(contents, output)
 	}
-	s.responseStates.Store(id, responseState{
-		ParentID:           parentID,
-		Contents:           contents,
-		InlineInstructions: append([]string(nil), inlineInstructions...),
-	})
+	s.responseStates.Store(id, previous, contents, inlineInstructions)
 }
 
 func responseHistoryOutput(result generationResult) aistudio.Content {
@@ -722,7 +734,7 @@ type responsesPendingCode struct {
 	code  string
 }
 
-func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request responsesRequest, contents []aistudio.Content, inlineInstructions []string, id string, created int64, events <-chan aistudio.Event) {
+func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request responsesRequest, previous responseHistory, contents []aistudio.Content, inlineInstructions []string, id string, created int64, events <-chan aistudio.Event) {
 	if err := streamHeaders(w); err != nil {
 		return
 	}
@@ -750,7 +762,7 @@ func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request
 		return
 	}
 	if request.Store == nil || *request.Store {
-		s.storeResponseState(id, request.PreviousResponseID, contents, inlineInstructions, result)
+		s.storeResponseState(id, previous, contents, inlineInstructions, result)
 	}
 	if err := writer.finish(result, response); err != nil {
 		_ = writer.failed(err)

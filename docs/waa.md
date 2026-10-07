@@ -137,7 +137,7 @@ Worker 启动时把 `storage-state.json` 的 Cookie 读入 runtime 内存。每�
 
 #### 网络形状
 
-所有出站请求经账户代理（未设置时使用全局 `PROXY`），使用 Firefox 152 的 TLS ClientHello、HTTP/2 设置与伪头顺序，不自动跟随跳转。请求头按以下顺序发送，未列出的头排在其后：
+所有出站请求经账户代理（未设置时使用全局 `PROXY`），使用 Firefox 152 的 TLS ClientHello、HTTP/2 设置与伪头顺序，不自动跟随跳转。与 Firefox 默认的 `network.http.http2.ping-threshold` 与 `ping-timeout` 一致，连接 58 秒未收到任何帧时发送 HTTP/2 PING，8 秒内未收到应答则关闭连接。请求取消或到期时立即返回，尚未完成的连接建立在后台结束。请求头按以下顺序发送，未列出的头排在其后：
 
 ```text
 user-agent, accept, accept-language, accept-encoding, referer, content-type,
@@ -622,7 +622,7 @@ bootstrap 模型只负责建立账户 Worker，不是业务模型白名单，一
 | `GenerateContent`、`GenerateVideo`、Bidi 返回 HTTP 404、Code 5 且消息含 `Ambiguous request for service ''` | 同账户重建 Worker 并重放一次 |
 | HTTP 403 或 Code 7 | 保留账户与模型资格，首个上游事件前切换到未尝试的同能力账户；不重建 Worker |
 | HTTP 429 | 按分钟或每日限额写入冷却（Build 通道为 `build:<模型>`），同账户另一通道可用时在同账户重试 |
-| HTTP 401 | Chrome 导入账户在同一出口续签，重建 WAA runtime 后重放一次；没有续签材料或续签后仍为 401 的账户进入 `auth_required` |
+| HTTP 401 | 在同一出口续签：使用账户保存的 Chrome 材料，或从本机 Chrome 导入同一邮箱的材料；重建 WAA runtime 后重放一次。两者都不可用或续签后仍为 401 的账户进入 `auth_required` |
 | Worker 启动失败 | 记录 `WAA Worker 启动失败`，请求可切换账户 |
 | runtime 租约由其他进程持有 | 账户暂停调度，首次 5 秒后重试，间隔翻倍到 1 分钟 |
 
@@ -786,7 +786,7 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | `internal/aistudio/runtime_native.go` | `NativeWorker`：proof 写入与状态 |
 | `internal/aistudio/service.go` | `WorkerProtectedTransport`、binding、失败判定 |
 | `internal/aistudio/build.go` | Build binding 与 proof field |
-| `internal/aistudio/transport_browser.go` | Firefox 152 TLS 与请求头顺序 |
+| `internal/aistudio/transport_browser.go` | Firefox 152 TLS、HTTP/2 帧参数与 PING、请求头顺序 |
 | `internal/aistudio/transport_http.go` | visit ID、页面 API key 提取与默认 UA |
 | `internal/camoufoxnative/` | Camoufox 后端、账户指纹与隔离登录 |
 | `internal/waa/challenge.go` | challenge 解码与解释器摘要 |

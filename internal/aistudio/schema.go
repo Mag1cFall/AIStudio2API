@@ -652,8 +652,8 @@ func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
 	return cleaned, err
 }
 
-// requestNeedsBuildSchema 为结构化输出的开放节点选择原生通道
-func requestNeedsBuildSchema(request GenerateRequest) bool {
+// RequestNeedsBuildSchema 判断结构化输出 Schema 是否含 Playground 不接受的开放节点
+func RequestNeedsBuildSchema(request GenerateRequest) bool {
 	if len(request.Config.ResponseSchema) == 0 {
 		return false
 	}

@@ -62,20 +62,36 @@ const filteredLogs = computed(() => {
 })
 
 const displayLimit = ref(200)
-const hasMore = computed(() => filteredLogs.value.length > displayLimit.value)
-const hiddenCount = computed(() => Math.max(0, filteredLogs.value.length - displayLimit.value))
-const visibleLogs = computed(() => {
+// pinnedKey 自动滚动关闭时固定为窗口首行的日志行，新日志只追加在末尾
+const pinnedKey = ref<string>()
+const firstVisible = computed(() => {
   const list = filteredLogs.value
-  if (list.length <= displayLimit.value) return list
-  return list.slice(list.length - displayLimit.value)
+  if (pinnedKey.value !== undefined)
+    return Math.max(
+      0,
+      list.findIndex((row) => row.key === pinnedKey.value),
+    )
+  return Math.max(0, list.length - displayLimit.value)
 })
+const hasMore = computed(() => firstVisible.value > 0)
+const hiddenCount = computed(() => firstVisible.value)
+const visibleLogs = computed(() => filteredLogs.value.slice(firstVisible.value))
+
+// pinWindow 自动滚动关闭时固定当前窗口首行，开启时恢复跟随末尾
+function pinWindow(): void {
+  pinnedKey.value = autoScroll.value ? undefined : visibleLogs.value[0]?.key
+}
 
 function loadOlder(): void {
-  displayLimit.value += 200
+  displayLimit.value = visibleLogs.value.length + 200
+  pinnedKey.value = undefined
+  pinWindow()
 }
 
 watch([level, source, search], () => {
   displayLimit.value = 200
+  pinnedKey.value = undefined
+  pinWindow()
 })
 
 const logGridStyle = computed(() => ({ '--log-source-width': `${sourceWidth.value}px` }))
@@ -104,9 +120,17 @@ function scrollToBottom(): void {
   })
 }
 
+// timeFormat 格式化日志行的 24 小时制时间
+const timeFormat = new Intl.DateTimeFormat('en-GB', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
 function displayTime(value: string): string {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('en-GB', { hour12: false })
+  return Number.isNaN(date.getTime()) ? value : timeFormat.format(date)
 }
 
 function clampSourceWidth(value: number): number {
@@ -141,18 +165,22 @@ function resizeSourceWithKeyboard(event: KeyboardEvent): void {
   sourceWidth.value = clampSourceWidth(sourceWidth.value + (event.key === 'ArrowRight' ? 16 : -16))
 }
 
-watch(() => props.logs.length, scrollToBottom)
-watch(autoScroll, scrollToBottom)
+watch(() => props.logs, scrollToBottom)
+watch(autoScroll, () => {
+  displayLimit.value = Math.max(200, visibleLogs.value.length)
+  pinWindow()
+  scrollToBottom()
+})
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 flex-col bg-[#0d1117]">
+  <section class="flex min-h-0 flex-1 flex-col bg-canvas">
     <div
-      class="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-[#30363d] bg-[#161b22] px-4 py-1"
+      class="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-line bg-panel px-4 py-1"
     >
       <div class="flex min-w-0 flex-wrap items-center gap-3">
         <span class="text-xs text-gray-400">{{ t('logs.level') }}:</span>
-        <div class="flex rounded border border-[#30363d] bg-[#0d1117] p-0.5">
+        <div class="flex rounded border border-line bg-canvas p-0.5">
           <button
             v-for="item in levels"
             :key="item"
@@ -176,7 +204,7 @@ watch(autoScroll, scrollToBottom)
           {{ t('logs.source') }}:
           <UiSelect
             v-model="source"
-            class="max-w-48 rounded border border-[#30363d] bg-[#0d1117] px-2 py-0.5 text-gray-200 outline-none"
+            class="max-w-48 rounded border border-line bg-canvas px-2 py-0.5 text-gray-200 outline-none"
           >
             <option value="ALL">{{ t('logs.allSources') }}</option>
             <option v-for="item in sources" :key="item" :value="item">{{ item }}</option>
@@ -187,14 +215,14 @@ watch(autoScroll, scrollToBottom)
           type="search"
           :placeholder="t('logs.search')"
           :aria-label="t('logs.search')"
-          class="w-52 rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500"
+          class="w-52 rounded border border-line bg-canvas px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500"
         />
       </div>
 
       <div class="flex items-center gap-2">
         <button
           v-tooltip="t('logs.clear')"
-          class="rounded px-2 py-1 text-gray-400 transition hover:bg-[#30363d] hover:text-white"
+          class="rounded px-2 py-1 text-gray-400 transition hover:bg-line hover:text-white"
           type="button"
           :aria-label="t('logs.clear')"
           @click="$emit('clear')"
@@ -218,7 +246,7 @@ watch(autoScroll, scrollToBottom)
 
     <div
       ref="output"
-      class="min-h-0 flex-1 overflow-auto bg-[#0d1117] p-2 font-mono text-[13px] leading-5"
+      class="min-h-0 flex-1 overflow-auto bg-canvas p-2 font-mono text-[13px] leading-5"
     >
       <div v-if="filteredLogs.length === 0" class="mt-10 text-center text-gray-600 italic">
         {{ t('logs.waiting') }}
@@ -242,11 +270,11 @@ watch(autoScroll, scrollToBottom)
         ></div>
         <div
           v-if="hasMore"
-          class="flex items-center justify-center py-2 border-b border-[#30363d] bg-[#161b22]/60 text-xs my-1 rounded"
+          class="flex items-center justify-center py-2 border-b border-line bg-panel/60 text-xs my-1 rounded"
         >
           <button
             type="button"
-            class="rounded border border-[#30363d] bg-[#0d1117] px-3 py-1 text-gray-400 hover:border-blue-500 hover:text-blue-400 transition"
+            class="rounded border border-line bg-canvas px-3 py-1 text-gray-400 hover:border-blue-500 hover:text-blue-400 transition"
             @click="loadOlder"
           >
             {{ t('logs.loadOlder').replace('{count}', String(hiddenCount)) }}
@@ -309,6 +337,7 @@ watch(autoScroll, scrollToBottom)
   left: calc(10.5rem + var(--log-source-width) + 2px);
   width: 0.75rem;
   cursor: col-resize;
+  overflow-anchor: none;
   touch-action: none;
   user-select: none;
 }

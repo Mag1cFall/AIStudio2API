@@ -30,7 +30,7 @@ Build 应用运行在 `*.scf.usercontent.goog` 的 blob 沙箱 iframe 中。宿�
 - 列表顺序即同一账户内的通道顺序
 - 配置来源为 `.env`、管理页面设置中的“上游通道”（至少保留一个，保存为 `playground,build` 顺序）或 `PUT /api/config` 的 `upstream_channels`；保存值在下一次启动生成服务时生效
 
-`BUILD_NATIVE_NONSTREAM=true` 为默认值：Gemini、Chat、Responses、Anthropic、Interactions、图片和语音端点的非流式请求先选择具备资格的 Build 通道，执行 `ProxyUnaryCall` 与 `:generateContent`。该通道未启用、模型不支持或额度冷却时，调度到其余可用通道；文件引用与专用能力按其 Playground 路由执行。关闭该选项后按原通道顺序调度，选中 Build 的非流式请求仍执行单次调用。
+`BUILD_NATIVE_NONSTREAM=true` 为默认值：Gemini、Chat、Responses、Anthropic、Interactions、图片和语音端点的非流式请求在每个账户上优先使用 Build 通道，执行 `ProxyUnaryCall` 与 `:generateContent`。Build 通道未启用、该账户的 Build 目录不支持模型或该账户的 Build 额度冷却时，由同一账户的其余可用通道执行；文件引用与专用能力按其 Playground 路由执行。关闭该选项后按原通道顺序调度，选中 Build 的非流式请求仍执行单次调用。
 
 Playground `GenerateContent` 的响应为 repeated 流帧，完整收集后转换为公开非流式响应。日志的“上游调用”记录实际通道、`native` / `stream` 模式和 RPC；非流式请求使用流式传输时，以 WARN 记录“回退流式”与原因。Build 明确返回单次方法不支持时，尝试该通道的 `ProxyStreamedCall`；参数错误按原错误返回。
 
@@ -174,7 +174,7 @@ Build 请求与 Playground 共用同一预处理：工具可用性校验、模�
 | `tools` | 工具声明 |
 | `toolConfig` | 同时声明函数与 Google 工具时为 `{"includeServerSideToolInvocations":true}` |
 | `generationConfig` | 生成参数 |
-| `safetySettings` | 骚扰、仇恨、色情、危险四类 `OFF`；图片路由不发送 |
+| `safetySettings` | 骚扰、仇恨、色情、危险四类 `OFF`，请求中的类别按名称覆盖或追加；图片路由只发送请求中的类别 |
 
 ```json
 {

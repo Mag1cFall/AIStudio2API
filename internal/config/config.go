@@ -21,7 +21,7 @@ const (
 	defaultRequestTimeout     = 5 * time.Minute
 	defaultWarmWorkerLimit    = 5
 	defaultMaxActiveWorkers   = 10
-	defaultWarmConcurrency    = 2
+	defaultWarmConcurrency    = 5
 	defaultAccountConcurrency = 2
 )
 
@@ -40,6 +40,8 @@ var configKeys = [...]string{
 	"UPSTREAM_CHANNELS",
 	"TEMPORARY_CHAT",
 	"WAA_BACKEND",
+	"AUTO_START",
+	"REQUEST_BODY_LOG",
 	"ADMIN_AUTH_ENABLED",
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
@@ -57,6 +59,8 @@ const WAABackendGo = "go"
 
 // Config 保存服务的全局配置
 type Config struct {
+	AutoStart              bool          `json:"auto_start"`
+	RequestBodyLog         bool          `json:"request_body_log"`
 	AdminAuthEnabled       bool          `json:"admin_auth_enabled"`
 	AdminUsername          string        `json:"admin_username"`
 	AdminPassword          string        `json:"-"`
@@ -109,6 +113,18 @@ func Load(path string) (Config, error) {
 	}
 
 	cfg := Default()
+	if value, ok := values["AUTO_START"]; ok {
+		cfg.AutoStart, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("AUTO_START 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["REQUEST_BODY_LOG"]; ok {
+		cfg.RequestBodyLog, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("REQUEST_BODY_LOG 必须是 true 或 false")
+		}
+	}
 	if value, ok := values["ADMIN_AUTH_ENABLED"]; ok {
 		cfg.AdminAuthEnabled, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -202,6 +218,8 @@ func (c Config) Save(path string) error {
 		return err
 	}
 	values := map[string]string{
+		"AUTO_START":               strconv.FormatBool(c.AutoStart),
+		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
 		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
@@ -258,8 +276,8 @@ func (c Config) Validate() error {
 	if c.MaxActiveWorkers < c.WarmWorkerLimit {
 		return fmt.Errorf("MAX_ACTIVE_WORKERS 必须大于或等于 WARM_WORKER_LIMIT")
 	}
-	if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.WarmWorkerLimit {
-		return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 WARM_WORKER_LIMIT")
+	if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.MaxActiveWorkers {
+		return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 MAX_ACTIVE_WORKERS")
 	}
 	if c.PerAccountConcurrency <= 0 {
 		return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
@@ -312,6 +330,8 @@ func validateUpstreamChannels(channels []string) error {
 // MarshalJSON 将时长输出为 env 使用的文本格式
 func (c Config) MarshalJSON() ([]byte, error) {
 	type payload struct {
+		AutoStart              bool     `json:"auto_start"`
+		RequestBodyLog         bool     `json:"request_body_log"`
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
@@ -331,6 +351,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		WAABackend             string   `json:"waa_backend"`
 	}
 	return json.Marshal(payload{
+		AutoStart:              c.AutoStart,
+		RequestBodyLog:         c.RequestBodyLog,
 		AdminAuthEnabled:       c.AdminAuthEnabled,
 		AdminUsername:          c.AdminUsername,
 		BuildNativeNonstream:   c.BuildNativeNonstream,
@@ -354,6 +376,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON 从管理接口使用的文本时长解析配置
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type payload struct {
+		AutoStart              bool     `json:"auto_start"`
+		RequestBodyLog         bool     `json:"request_body_log"`
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		AdminPassword          string   `json:"admin_password"`
@@ -386,6 +410,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	parsed := Config{
+		AutoStart:              value.AutoStart,
+		RequestBodyLog:         value.RequestBodyLog,
 		AdminAuthEnabled:       value.AdminAuthEnabled,
 		AdminUsername:          strings.TrimSpace(value.AdminUsername),
 		AdminPassword:          value.AdminPassword,
@@ -427,8 +453,8 @@ func ValidateProxy(value string) error {
 	default:
 		return fmt.Errorf("PROXY 必须是 http、https 或 socks5 URL")
 	}
-	if parsed.User != nil {
-		return fmt.Errorf("PROXY 不能包含认证信息")
+	if parsed.User != nil && parsed.User.Username() == "" {
+		return fmt.Errorf("PROXY 认证信息缺少用户名")
 	}
 	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("PROXY 不能包含路径、查询参数或片段")

@@ -17,6 +17,12 @@ type geminiRequest struct {
 	GenerationConfig  geminiGenerationConfig `json:"generationConfig"`
 	Tools             []geminiToolGroup      `json:"tools"`
 	ToolConfig        geminiToolConfig       `json:"toolConfig"`
+	SafetySettings    []geminiSafetySetting  `json:"safetySettings"`
+}
+
+type geminiSafetySetting struct {
+	Category  string `json:"category"`
+	Threshold string `json:"threshold"`
 }
 
 type geminiContent struct {
@@ -143,6 +149,7 @@ type geminiGenerationConfig struct {
 	SpeechConfig        *geminiSpeechConfig        `json:"speechConfig"`
 	TranscriptionConfig *geminiTranscriptionConfig `json:"transcriptionConfig"`
 	Seed                *int64                     `json:"seed"`
+	MediaResolution     string                     `json:"mediaResolution"`
 	ThinkingConfig      *struct {
 		ThinkingBudget *int64 `json:"thinkingBudget"`
 		ThinkingLevel  string `json:"thinkingLevel"`
@@ -350,6 +357,7 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		ResponseMIMEType: request.GenerationConfig.ResponseMIMEType,
 		ResponseSchema:   request.GenerationConfig.ResponseSchema,
 		Seed:             request.GenerationConfig.Seed,
+		MediaResolution:  request.GenerationConfig.MediaResolution,
 	}
 	config.ResponseModalities, err = mapGeminiResponseModalities(request.GenerationConfig.ResponseModalities)
 	if err != nil {
@@ -373,8 +381,13 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		config.ThinkingBudget = request.GenerationConfig.ThinkingConfig.ThinkingBudget
 		config.ReasoningEffort = request.GenerationConfig.ThinkingConfig.ThinkingLevel
 	}
+	safety := make([]aistudio.SafetySetting, 0, len(request.SafetySettings))
+	for _, setting := range request.SafetySettings {
+		safety = append(safety, aistudio.SafetySetting{Category: setting.Category, Threshold: setting.Threshold})
+	}
 	return aistudio.GenerateRequest{
 		ID: id, Model: model, System: system, Contents: contents, Config: config, Tools: tools,
+		SafetySettings: safety,
 	}, nil
 }
 

@@ -67,7 +67,7 @@ func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
 			Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: request.Prompt}},
 		}},
 		Config: aistudio.GenerationConfig{
-			ResponseModalities: []aistudio.ResponseModality{aistudio.ResponseModalityImage},
+			ResponseModalities: []aistudio.ResponseModality{aistudio.ResponseModalityImage, aistudio.ResponseModalityText},
 			ImageConfig:        imageConfig,
 		},
 	})

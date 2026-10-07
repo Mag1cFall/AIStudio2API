@@ -46,7 +46,7 @@
 - **Files and Transcribe**: File upload, metadata, content, deletion, and audio transcription
 - **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
 - **Anti-Fingerprinting**: Camoufox holds the official WAA lifecycle with a stable browser fingerprint and network exit per account
-- **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, and configuration in the web UI
+- **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, usage statistics, and configuration in the web UI
 - **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; Camoufox hosts WAA and isolated login
 
 ## System Requirements
@@ -161,11 +161,11 @@ Account actions depend on state:
 ### Daily Use (With Existing Authentication)
 
 1. Double-click `start.bat` on Windows; run `./aistudio2api` on Linux or macOS
-2. Click "Start service" to enable the APIs
+2. Click "Start service" to enable the APIs; with `AUTO_START=true`, the service starts together with the manager
 3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
-Starting again loads the latest data-plane settings from `.env`. Changes to `LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
+Starting again loads the latest data-plane settings from `.env`; the account selection strategy applies as soon as it is saved. Changes to `LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
 
 Press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
 
@@ -176,6 +176,8 @@ Press `Ctrl+C` in the launch window or close that window to exit the manager. Cl
 `start.bat -open-ui=false`: Starts the manager without opening the web UI.
 
 `start.bat setup`: Scans local Chrome accounts. Use `--email` or `--profile` to select a Chrome account. Run `start.bat setup --login` for an isolated login, or `start.bat setup --storage-state <file>` to import a file.
+
+`start.bat setup --remote https://<remote-instance>`: Adds accounts to a remote instance. Click "Add remotely" on the remote instance's Accounts page to get a pairing token, then run the command on a computer that can sign in to Google and paste the token. It combines with options such as `--login`.
 
 ## API Usage
 
@@ -236,13 +238,23 @@ env_key = "AISTUDIO2API_KEY"
 wire_api = "responses"
 ```
 
-[omp](https://github.com/can1357/oh-my-pi) runs its `web_search` tool through its own provider order. Set `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:2048` and `GEMINI_API_KEY=<PROXY_API_KEY>`, and put the Gemini provider first in the omp config:
+[omp](https://github.com/can1357/oh-my-pi) runs its `web_search` tool with the model of the `web` role. Add a Gemini provider that points to this service in omp's `models.yml` (`apiKey` is the name of the environment variable holding `PROXY_API_KEY`), then set the `web` role to that model in `config.yml`:
 
 ```yaml
+# models.yml
 providers:
-  webSearchOrder:
-    - gemini
-  webSearchGeminiModel: gemini-3.8-flash
+  aistudio-gemini:
+    baseUrl: http://127.0.0.1:2048/v1beta
+    api: google-generative-ai
+    apiKey: AISTUDIO2API_KEY
+    models:
+      - id: gemini-3.8-flash
+```
+
+```yaml
+# config.yml
+modelRoles:
+  web: aistudio-gemini/gemini-3.8-flash
 ```
 
 Main endpoints:
@@ -428,6 +440,8 @@ cp .env.example .env
 | `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
 | `PROXY_API_KEY` | empty | Public API key |
+| `AUTO_START` | `false` | Start the generation service when the manager starts |
+| `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
 | `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
 | `ADMIN_USERNAME` | `admin` | Administrator username |
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
@@ -436,7 +450,7 @@ cp .env.example .env
 | `REQUEST_TIMEOUT` | `5m` | Maximum request execution time |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
-| `WARM_STARTUP_CONCURRENCY` | `2` | Accounts initialized concurrently during prewarming |
+| `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=go` |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
@@ -444,7 +458,7 @@ cp .env.example .env
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
-The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls concurrent prewarming, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
+The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
 
 ### Port Configuration
 
@@ -459,11 +473,12 @@ Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: ht
 
 ### Proxy Configuration
 
-HTTP, HTTPS, and SOCKS5 proxies without embedded credentials are supported:
+HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authentication, include the credentials in the URL, for example `socks5://user:password@host:1080`:
 
 1. Set the global proxy under Service Configuration
 2. Edit an account to set an account-specific proxy
 3. The account proxy is used for login, WAA, and business requests
+4. For authenticated proxies, the program gives Camoufox a credential-free SOCKS5 relay on the loopback address; the credentials are not written to the browser profile. While the relay runs, other local processes can also use the proxy through it
 
 ### Authentication File Management
 
@@ -506,7 +521,7 @@ With `WAA_BACKEND=go`, WAA runs inside the service process, emulates the Firefox
 - **Client-Managed History**: Clients submit complete conversation context for Chat, Anthropic, and Gemini requests
 - **AI Studio History**: API requests are not saved to website history; `TEMPORARY_CHAT=true` also disables autosave for the WAA prewarm page
 - **Responses Sessions**: `previous_response_id` is stored only in the current process and is cleared on restart
-- **Authentication Expiry**: Chrome imports retain DBSC renewal material; isolated-login accounts must log in again after authentication expires
+- **Authentication Expiry**: Chrome imports retain DBSC renewal material. When another account expires and the local Chrome is signed in to the same email, the service renews it with that email's material from Chrome and renews it as a Chrome import from then on; otherwise log in again on the Accounts page
 
 ## Troubleshooting
 

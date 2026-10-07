@@ -346,6 +346,9 @@ func validateLeaseSelection(lease *AccountLease, selection AccountSelection) err
 			return fmt.Errorf("资源 %s 绑定账户 %s", resourceID, owner)
 		}
 	}
+	if selection.Channel != "" && generationChannelSelection(selection) && lease.Channel() != selection.Channel {
+		return fmt.Errorf("context 租约账户 %s 的 %s 通道不满足请求要求的 %s 通道", account.ID, lease.Channel(), selection.Channel)
+	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	if lease.Channel() == ChannelBuild {
 		if modelID != "" && !lease.pool.channelSupportsLocked(account, ChannelBuild, selection) {
