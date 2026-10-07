@@ -42,6 +42,9 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 	events, err := s.service.Generate(ctx, generate)
+	if err == nil && request.Stream {
+		events, err = awaitStreamStart(ctx, events)
+	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())

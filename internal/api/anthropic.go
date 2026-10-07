@@ -82,8 +82,8 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	if request.Model == "" || len(request.Messages) == 0 || request.MaxTokens == nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model, messages and max_tokens are required")
+	if request.Model == "" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
 	messageID := newID("msg")
@@ -99,6 +99,15 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	generateRequest.Unary = !request.Stream
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err == nil && request.Stream {
+		events, err = awaitStreamStart(r.Context(), events)
+	}
+	if err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
+		}
+		return
+	}
+	if request.Stream {
 		if err := streamHeaders(w); err != nil {
 			return
 		}
@@ -111,12 +120,6 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		s.streamAnthropic(r, writer, events)
-		return
-	}
-	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
-		}
 		return
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
@@ -135,8 +138,8 @@ func (s *server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	if request.Model == "" || len(request.Messages) == 0 {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model and messages are required")
+	if request.Model == "" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
 	if err := s.decodeAnthropicSearchHistory(&request); err != nil {
@@ -223,20 +226,6 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	}
 	if request.OutputConfig != nil {
 		config.ReasoningEffort = request.OutputConfig.Effort
-	}
-	if len(contents) > 0 && contents[len(contents)-1].Role == aistudio.RoleAssistant {
-		last := contents[len(contents)-1]
-		var prefix strings.Builder
-		for _, part := range last.Parts {
-			if part.FunctionCall != nil || part.InlineData != nil || part.File != nil {
-				return aistudio.GenerateRequest{}, fmt.Errorf("assistant prefill requires text content")
-			}
-			if !part.Thought {
-				prefix.WriteString(part.Text)
-			}
-		}
-		contents = contents[:len(contents)-1]
-		system += "\nContinue the assistant response after the following prefix. Return only the continuation, without repeating the prefix.\n<assistant_prefix>" + prefix.String() + "</assistant_prefix>"
 	}
 	return aistudio.GenerateRequest{
 		ID: id, Model: request.Model, System: system, Contents: contents, Config: config, Tools: tools,

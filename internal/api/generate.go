@@ -100,6 +100,42 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	return nil
 }
 
+// awaitStreamStart 在写出流式响应头前等待首个事件，首个事件为错误时返回该错误，心跳间隔内没有事件时直接返回原事件流
+func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan aistudio.Event, error) {
+	timer := time.NewTimer(streamHeartbeatInterval)
+	defer timer.Stop()
+	var first aistudio.Event
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return events, nil
+	case event, ok := <-events:
+		if !ok {
+			return nil, errIncompleteStream
+		}
+		if event.Kind == aistudio.EventError {
+			if event.Err != nil {
+				return nil, event.Err
+			}
+			return nil, errUpstreamStream
+		}
+		first = event
+	}
+	replay := make(chan aistudio.Event)
+	go func() {
+		defer close(replay)
+		for event, ok := first, true; ok; event, ok = <-events {
+			select {
+			case replay <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return replay, nil
+}
+
 func consumeEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (result generationResult, resultErr error) {
 	return consumeEventsWithHeartbeat(ctx, events, emit, nil)
 }

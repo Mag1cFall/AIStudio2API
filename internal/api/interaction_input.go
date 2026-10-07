@@ -88,8 +88,8 @@ func interactionList[T any](raw json.RawMessage) ([]T, error) {
 // toGenerateRequest 映射模型、结构化输入、生成参数与函数声明
 func (request interactionRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
 	generate := aistudio.GenerateRequest{ID: id, Model: strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"), System: request.System}
-	if generate.Model == "" || len(request.Input) == 0 {
-		return generate, fmt.Errorf("model and input are required")
+	if generate.Model == "" {
+		return generate, fmt.Errorf("model is required")
 	}
 	if request.Background {
 		return generate, fmt.Errorf("background must be false")
@@ -98,9 +98,6 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	generate.Contents, err = interactionContents(request.Input)
 	if err != nil {
 		return generate, err
-	}
-	if len(generate.Contents) == 0 {
-		return generate, fmt.Errorf("input must contain content")
 	}
 	generation := request.Generation
 	generate.Config = aistudio.GenerationConfig{
@@ -179,7 +176,7 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		if strings.TrimSpace(text) == "" {
-			return nil, fmt.Errorf("input text is empty")
+			return nil, nil
 		}
 		return []aistudio.Content{{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: text}}}}, nil
 	}
