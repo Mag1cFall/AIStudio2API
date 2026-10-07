@@ -1404,6 +1404,10 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 
 Anthropic assistant prefill 以最后一条 `assistant` text message 表示。适配器将前缀放入续写指令，响应正文返回前缀之后的内容。
 
+OpenAI Chat (`/v1/chat/completions`) 对末尾纯文本 assistant 提供续写兼容：先按原规则提取 system/developer 提示并过滤空消息，再保留 assistant 原文和角色，追加一个独立 user 指令，要求遵循已有提示继续并避免重复前缀。流式与非流式共用此转换。它是提示驱动的续写而非原生 token 级 prefill，不保证模型逐字衔接，也不会在响应中强行拼接或删除前缀。
+
+兼容仅用于末尾连续 assistant 轮均为纯文本且最后一轮有非空白文本的情况。user/tool 结尾、尚未回传结果的末尾工具调用、媒体、推理和代码执行内容不改写；不会伪造 function result。末尾 system/developer 提示仍保留在系统提示中，不会丢弃。其他协议入口保持原有行为。
+
 四套生成入口共享同一规范请求，输入映射如下：
 
 | 能力 | OpenAI Chat | OpenAI Responses | Anthropic | Gemini |
