@@ -680,6 +680,8 @@ Anthropic 流式 `message_start` 写入即时输入估算，最终 `message_delt
 | 18 | missing_thought_signature | 19 | `provider_19` |
 | 其他整数 | `provider_<code>` | | |
 
+generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过；流式与非流式请求的这类参数错误都在写出响应头前返回 HTTP 400；上游开始响应后的错误以各协议的流内错误事件返回。
+
 错误响应根形状为 `[null,[code,message,...]]`。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
 各协议的具体终态转换如下：
@@ -822,7 +824,7 @@ Playground 的函数参数载体和结构化输出 Schema 使用以下 protobuf 
 | --- | --- |
 | 可选字段显式 `null` | 移除未设置字段；`example:null` 保留为数据值，`const` 按常量规则校验，属性名称保留 |
 | 零参数函数的空定义、`null`、`{}` 或 `true` | object 参数结构 |
-| 开放的 `{}`、`true` 与缺少元素定义的 array | 开放节点使用 `TYPE_UNSPECIFIED`，生成选择 Build 通道 |
+| 开放的 `{}`、`true` 与缺少元素定义的 array | 开放节点使用 `TYPE_UNSPECIFIED`；Build 启用时结构化输出使用 Build 通道，没有账户能经 Build 服务时使用 Playground |
 | `items:false` | 空数组约束 `maxItems=0`；与正数 `minItems` 同时设置时返回参数错误 |
 | `not:false` | 移除空否定约束 |
 | `not:true`、`not:{}`、根 `false`、必填属性的 `false` | 返回禁止所有值的参数错误 |
@@ -835,7 +837,9 @@ Playground 的函数参数载体和结构化输出 Schema 使用以下 protobuf 
 | 组合 Schema 缺少根 `type` | 相同类型的分支推导根类型；混合类型保留开放根节点，相同 `items` 可写入根节点 |
 | 其他节点缺少 `type` | 含 `properties` 为 object，含 `items` 或 `prefixItems` 为 array；字符串约束推导 string，其余为开放节点 |
 | array 缺少 `items` | `prefixItems` 中带类型的项组成 `anyOf`；其余使用开放元素节点 |
-| 其他 Schema 字段 | 返回 `400 invalid_request` / `INVALID_ARGUMENT` |
+| 其他 Schema 字段 | 按层级与类型编码，完整 Schema 写入说明 |
+
+结构化输出以客户端的 JSON Schema 为输出契约：无法直接编码的 Schema（如数值 `const`、单独的 `null` 类型）按层级与类型编码，根说明附完整 Schema，两个通道使用同一结果；Playground 将开放节点补为 string，根说明附完整 Schema，Build 原样发送开放节点。根 `false` 与非对象 Schema 返回参数错误。
 
 函数声明以客户端的 JSON Schema 为参数契约。Playground 对开放节点、混合联合、引用、数值枚举与常量生成可发送的参数载体，将完整 Schema 放入工具说明；普通可表达声明保持原编码，历史调用与工具结果保持原值。Build 使用 `parametersJsonSchema`，保留组合分支与约束。`strict:true` 和 Gemini `VALIDATED` 在完整工具事件返回前校验原始参数契约；不符合契约的上游调用返回协议错误。
 

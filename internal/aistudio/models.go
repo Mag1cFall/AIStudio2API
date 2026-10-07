@@ -391,6 +391,20 @@ func (c *Client) modelEntry(ctx context.Context, accountID string, modelID strin
 	return entry, nil
 }
 
+// cachedModelEntries 返回各账户已载入目录中的模型条目，不发起网络请求
+func (c *Client) cachedModelEntries(modelID string) []modelEntry {
+	normalized := strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	var entries []modelEntry
+	for _, catalog := range c.catalogs {
+		if entry, exists := catalog.lookup(normalized); exists {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
 func (catalog modelCatalog) lookup(modelID string) (modelEntry, bool) {
 	if entry, exists := catalog.entries[modelID]; exists {
 		return entry, true

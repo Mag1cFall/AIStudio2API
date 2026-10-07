@@ -36,6 +36,9 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if err != nil {
 		return nil, err
 	}
+	if len(config) > 8 && config[8] != nil {
+		config[8] = projectPlaygroundResponseSchema(config[8].([]any), request.Config.ResponseSchema)
+	}
 	serverSideTools := explicitTools && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil)
 	length := 11
 	if runtime.Timezone != "" || serverSideTools {
@@ -81,7 +84,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	var responseSchema []any
 	var err error
 	if len(config.ResponseSchema) > 0 {
-		responseSchema, err = encodeJSONSchema(config.ResponseSchema)
+		responseSchema, err = encodeResponseSchema(config.ResponseSchema)
 		if err != nil {
 			return nil, fmt.Errorf("response schema: %w", err)
 		}
@@ -538,6 +541,41 @@ func speakerSegments(part Part, pattern *regexp.Regexp) []Part {
 		}
 	}
 	return result
+}
+
+// validateGenerateRequest 用各账户已载入的模型条目校验请求，任一条目接受即通过，目录未载入时交给生成路径
+func (c *Client) validateGenerateRequest(request GenerateRequest) error {
+	var first error
+	for _, entry := range c.cachedModelEntries(request.Model) {
+		err := validateGenerateEntry(request, entry)
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// validateGenerateEntry 按 Generate 的顺序校验工具、转写、生成参数与安全设置
+func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
+	if err := validateRequestedTools(request.Tools, entry.model); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	if entry.defaults.InteractionStream {
+		return nil
+	}
+	if _, err := encodeGenerationConfig(applyModelMediaDefaults(request.Config, entry.model), entry.defaults); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	if _, err := resolveSafetySettings(request.SafetySettings, entry.defaults.ImageRoute); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	return nil
 }
 
 func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan Event, error) {
