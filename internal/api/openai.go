@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -265,10 +266,38 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 		ID:       id,
 		Model:    request.Model,
 		System:   strings.Join(system, "\n"),
-		Contents: contents,
+		Contents: continueChatAssistantTail(contents),
 		Config:   config,
 		Tools:    tools,
 	}, nil
+}
+
+// continueChatAssistantTail approximates text prefill with an explicit user turn.
+// Keep the assistant text and system instructions intact; never invent tool results.
+func continueChatAssistantTail(contents []aistudio.Content) []aistudio.Content {
+	if len(contents) == 0 || contents[len(contents)-1].Role != aistudio.RoleAssistant {
+		return contents
+	}
+	hasText := false
+	for index := len(contents) - 1; index >= 0 && contents[index].Role == aistudio.RoleAssistant; index-- {
+		for _, part := range contents[index].Parts {
+			if part.InlineData != nil || part.ExternalMedia != nil || part.File != nil ||
+				part.FunctionCall != nil || part.FunctionResult != nil || part.ExecutableCode != nil ||
+				part.CodeExecutionResult != nil || part.Thought || part.ThoughtSignature != "" || part.SpeechMetadata != nil {
+				return contents
+			}
+			if index == len(contents)-1 && strings.TrimSpace(part.Text) != "" {
+				hasText = true
+			}
+		}
+	}
+	if !hasText {
+		return contents
+	}
+	return append(slices.Clone(contents), aistudio.Content{
+		Role:  aistudio.RoleUser,
+		Parts: []aistudio.Part{{Text: "Continue the preceding assistant response from where it ended, following the existing instructions. Return only the continuation; do not repeat the text already provided."}},
+	})
 }
 
 func chatMessageContent(message chatMessage) (aistudio.Content, error) {
