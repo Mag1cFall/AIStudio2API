@@ -17,6 +17,7 @@ type AdminService interface {
 	CreateAccount(context.Context, AccountCreateInput) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
+	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string) (AdminAccount, error)
@@ -74,6 +75,8 @@ type RequestLog struct {
 	InputFiles      int               `json:"input_files,omitempty"`
 	Parameters      map[string]string `json:"parameters,omitempty"`
 	FirstEventMS    float64           `json:"first_event_ms,omitempty"`
+	QueueMS         float64           `json:"queue_ms,omitempty"`
+	ProofMS         float64           `json:"proof_ms,omitempty"`
 	UpstreamBytes   int64             `json:"upstream_bytes,omitempty"`
 	Channel         string            `json:"channel,omitempty"`
 }
@@ -93,6 +96,8 @@ type AccessLog struct {
 	Status          int
 	Latency         time.Duration
 	FirstEvent      time.Duration
+	QueueWait       time.Duration
+	Proof           time.Duration
 	UpstreamBytes   int64
 	Usage           *aistudio.Usage
 	ToolCalls       int
@@ -115,6 +120,8 @@ type AccessLog struct {
 	Error           string
 	Canceled        bool
 	Generation      bool
+	Attempts        []RequestAttempt
+	Authorized      bool
 }
 
 // AdminAccountCounts 表示账户状态计数
@@ -175,6 +182,8 @@ type ChromeImportInput struct {
 
 // RuntimeConfig 表示全局运行配置
 type RuntimeConfig struct {
+	AutoStart                 bool     `json:"auto_start"`
+	RequestBodyLog            bool     `json:"request_body_log"`
 	AdminAuthEnabled          bool     `json:"admin_auth_enabled"`
 	AdminUsername             string   `json:"admin_username"`
 	AdminPassword             *string  `json:"admin_password,omitempty"`
@@ -233,6 +242,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
+	mux.HandleFunc("POST /api/pairing", s.handleCreatePairing)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)

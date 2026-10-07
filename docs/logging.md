@@ -158,7 +158,7 @@ ERROR  account@example.com  WAA Worker 停止失败 | PID=18240 | 耗时=10.002s
 {"time":"2026-09-06T14:11:47Z","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
 ```
 
-采样参数保存在 `request.parameters`。`first_event_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
+采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
 
 客户端取消记录为 `499`；认证、额度和上游失败分别使用对应 HTTP 状态与 `request.error`。
 
@@ -206,10 +206,11 @@ SSE 客户端把该帧作为连接存活信号，正文、推理和 usage 继续
 
 ## 账户事件
 
-HTTP `401` 会使用该 Chrome 导入账户保存的 OAuth/DBSC 材料续签 Cookie、重置 WAA Worker并重放一次请求。
+HTTP `401` 会使用账户保存的 OAuth/DBSC 材料续签 Cookie；账户没有材料或材料被拒绝时，从本机 Chrome 导入同一邮箱的材料。随后重置 WAA Worker 并重放一次请求。
 
 ```text
 INFO  account@example.com  账户认证续签 | 1/2 | 刷新 Cookie
+INFO  account@example.com  账户认证续签 | 更新 Chrome 来源材料
 INFO  account@example.com  账户认证续签 | 2/2 | 重置协议运行时
 INFO  account@example.com  账户认证续签完成 | 耗时=1.116s
 ERROR account@example.com  账户认证续签失败 | 耗时=1.116s | 错误=<ERROR>
@@ -246,6 +247,19 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 | `Bidi 账号切换` | Live/Robotics setup 阶段切换候选 |
 
 较晚返回的认证结果只有在 `authGeneration` 和 `checkedAt` 均匹配当前账户时才应用；较晚返回的模型成功或冷却结果只有在 `modelAccessGeneration` 和 `checked_at` 均匹配当前模型目录时才应用。日志记录实际应用到当前状态的变更和持久化错误。
+
+## 用量账本
+
+`runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage` 与 `GET /api/usage/records` 查询。
+
+```text
+INFO  service  请求账本已按服务器时区重建本地日汇总 | 天数=<COUNT>
+WARN  service  请求账本写入队列已满 | 丢弃=<COUNT>
+ERROR service  请求账本写入失败 | 记录=<COUNT> | 错误=<ERROR>
+ERROR service  请求账本清理失败 | 错误=<ERROR>
+```
+
+`REQUEST_BODY_LOG=true` 时，账本同时保存通过 API key 校验的 POST 请求与响应的原始正文，各截断到 64 KiB 并记录原始字节数，只保留最近 1000 条；流式响应保存 SSE 原文。正文包含提示词与模型输出，以明文保存在本机。请求日志展开后或用量页的请求详情中按请求 ID 查看正文。
 
 ## 管理事件流
 

@@ -5,14 +5,14 @@ import { useI18n } from '@/i18n'
 import App from './App.vue'
 import LoginPage from './components/LoginPage.vue'
 
-const { t } = useI18n()
+const { t, errorText } = useI18n()
 const session = ref<AdminSession | null>(null)
 const error = ref('')
 
-// setSession 根据会话切换独立登录页与管理控制台
+// setSession 根据会话切换独立登录页与管理控制台，保留地址栏中的页面状态
 function setSession(value: AdminSession): void {
   session.value = value
-  history.replaceState(null, '', value.authenticated ? '/' : '/login')
+  history.replaceState(null, '', (value.authenticated ? '/' : '/login') + window.location.search)
 }
 
 // expireSession 卸载控制台及其事件订阅
@@ -26,7 +26,7 @@ async function loadSession(): Promise<void> {
   try {
     setSession(await api.session())
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t('common.error')
+    error.value = errorText(cause)
   }
 }
 
@@ -36,7 +36,7 @@ async function logout(): Promise<void> {
     await api.logout()
     expireSession()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t('common.error')
+    error.value = errorText(cause)
   }
 }
 
@@ -52,7 +52,7 @@ onUnmounted(() => window.removeEventListener('admin-session-expired', expireSess
   <div
     v-if="error"
     role="alert"
-    class="fixed top-4 right-4 z-50 max-w-sm rounded border border-red-500/40 bg-[#161b22] p-4 text-red-300"
+    class="fixed top-4 right-4 z-50 max-w-sm rounded border border-red-500/40 bg-panel p-4 text-red-300"
   >
     {{ error }}
     <button type="button" class="ml-3 underline" @click="loadSession">

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 )
 
 // managedService 表示可整体替换的生成服务
@@ -69,6 +71,7 @@ type runtimeManager struct {
 	mu               sync.RWMutex
 	current          *runtimeGeneration
 	startCancel      context.CancelFunc
+	ledger           *requestdb.Store
 }
 
 // newRuntimeManager 创建进程级管理器与初始生成服务
@@ -337,6 +340,13 @@ func (manager *runtimeManager) ImportChromeAccounts(ctx context.Context, input a
 	return manager.current.admin.ImportChromeAccounts(ctx, input)
 }
 
+// ImportAccountState 在当前生成服务导入远程配对账户
+func (manager *runtimeManager) ImportAccountState(ctx context.Context, input api.AccountStateInput) (api.AdminAccount, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.ImportAccountState(ctx, input)
+}
+
 // UpdateAccount 在当前生成服务更新账户
 func (manager *runtimeManager) UpdateAccount(ctx context.Context, id string, input api.AccountInput) (api.AdminAccount, error) {
 	manager.mu.RLock()
@@ -382,12 +392,13 @@ func (manager *runtimeManager) RuntimeConfig(ctx context.Context) (api.RuntimeCo
 	return value, err
 }
 
-// UpdateRuntimeConfig 保存下一次启动生成服务时使用的配置
+// UpdateRuntimeConfig 保存生成服务配置，账户选择策略立即作用于当前账户池
 func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
 	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
+		manager.ledger.SetBodyCapture(updated.RequestBodyLog)
 	}
 	manager.mu.Unlock()
 	return updated, err
@@ -426,11 +437,14 @@ func (manager *runtimeManager) RecordAccessStart(entry api.AccessLog) {
 	manager.mu.RUnlock()
 }
 
-// RecordAccessLog 记录公开 API 请求结果
+// RecordAccessLog 记录公开 API 请求结果，通过 API key 校验的 POST 请求同时写入用量账本
 func (manager *runtimeManager) RecordAccessLog(entry api.AccessLog) {
 	manager.mu.RLock()
 	manager.current.admin.RecordAccessLog(entry)
 	manager.mu.RUnlock()
+	if entry.Method == http.MethodPost && entry.Authorized {
+		manager.ledger.Record(requestRow(entry, time.Now().UTC()))
+	}
 }
 
 // decorateRuntimeConfig 标记配置所属的进程级与生成服务生效时机
@@ -459,7 +473,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency, TemporaryChat: value.TemporaryChat,
-		RoutingStrategy: value.RoutingStrategy, UpstreamChannels: value.UpstreamChannels,
+		UpstreamChannels:     value.UpstreamChannels,
 		WAABackend:           value.WAABackend,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 	}
@@ -469,7 +483,6 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WarmWorkerLimit == active.WarmWorkerLimit && saved.MaxActiveWorkers == active.MaxActiveWorkers &&
 		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
 		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
-		saved.RoutingStrategy == active.RoutingStrategy &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream
 }

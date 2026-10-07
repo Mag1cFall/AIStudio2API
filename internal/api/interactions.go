@@ -24,13 +24,15 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}
 	generate.Unary = !request.Stream
 	current := cloneResponseContents(generate.Contents)
+	var previous responseHistory
 	if request.PreviousID != "" {
-		previous, _, ok := s.responseStates.Load(request.PreviousID)
+		var ok bool
+		previous, ok = s.responseStates.Load(request.PreviousID)
 		if !ok || !strings.HasPrefix(request.PreviousID, "int_") {
 			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "previous_interaction_id was not found")
 			return
 		}
-		generate.Contents = append(previous, generate.Contents...)
+		generate.Contents = append(cloneResponseContents(previous.Contents), generate.Contents...)
 	}
 	if err := resolveInteractionResults(generate.Contents); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -48,7 +50,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}
 	created := time.Now().UTC().Format(time.RFC3339)
 	if request.Stream {
-		s.streamInteraction(w, r, request, generate, current, created, events)
+		s.streamInteraction(w, r, request, generate, previous, current, created, events)
 		return
 	}
 	result, err := consumeEvents(ctx, events, nil)
@@ -60,7 +62,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		steps, err = interactionSteps(result, request.audioFormat(), request.Generation.ThinkingSummaries != "none")
 		if err == nil {
 			if request.Store == nil || *request.Store {
-				s.storeResponseState(generate.ID, request.PreviousID, current, nil, result)
+				s.storeResponseState(generate.ID, previous, current, nil, result)
 			}
 			response := interactionObject(generate, created, interactionStatus(result), result.usage)
 			response["steps"] = steps

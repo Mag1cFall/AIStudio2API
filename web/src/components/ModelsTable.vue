@@ -58,20 +58,20 @@ function tokenLimit(value: number | undefined): string {
 
 <template>
   <section class="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4 md:p-8">
-    <h2 class="mb-6 border-b border-[#30363d] pb-2 text-2xl font-bold text-white">
+    <h2 class="mb-6 border-b border-line pb-2 text-2xl font-bold text-white">
       {{ t('section.models.title') }}
     </h2>
 
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <input
         v-model="query"
-        class="min-w-0 flex-1 rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64"
+        class="min-w-0 flex-1 rounded border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64"
         :placeholder="t('models.search')"
         type="search"
       />
       <UiSelect
         v-model="selectedMethod"
-        class="rounded border border-[#30363d] bg-[#0d1117] px-3 py-2 text-sm text-gray-300 focus:border-blue-500 focus:outline-none"
+        class="rounded border border-line bg-canvas px-3 py-2 text-sm text-gray-300 focus:border-blue-500 focus:outline-none"
         :aria-label="t('models.methods')"
       >
         <option value="">{{ t('models.allMethods') }}</option>
@@ -88,7 +88,7 @@ function tokenLimit(value: number | undefined): string {
     </div>
     <div
       v-else-if="filteredModels.length === 0"
-      class="rounded border border-[#30363d] bg-[#161b22] py-10 text-center text-gray-500"
+      class="rounded border border-line bg-panel py-10 text-center text-gray-500"
     >
       {{ t('models.empty') }}
     </div>
@@ -96,10 +96,10 @@ function tokenLimit(value: number | undefined): string {
       <article
         v-for="model in filteredModels"
         :key="model.id"
-        class="overflow-hidden rounded border border-[#30363d] bg-[#0d1117]"
+        class="overflow-hidden rounded border border-line bg-canvas"
       >
         <div
-          class="flex flex-wrap items-start justify-between gap-3 border-b border-[#30363d] bg-[#21262d] px-4 py-2"
+          class="flex flex-wrap items-start justify-between gap-3 border-b border-line bg-raised px-4 py-2"
         >
           <div class="min-w-0">
             <div class="flex items-center gap-2">
@@ -162,7 +162,7 @@ function tokenLimit(value: number | undefined): string {
               <span
                 v-for="capability in capabilityNames(model)"
                 :key="capability"
-                class="rounded border border-[#30363d] bg-[#161b22] px-2 py-1 font-mono text-xs text-gray-300"
+                class="rounded border border-line bg-panel px-2 py-1 font-mono text-xs text-gray-300"
               >
                 {{ capability }}
               </span>

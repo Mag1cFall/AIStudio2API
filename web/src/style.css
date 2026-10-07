@@ -1,6 +1,13 @@
 @import 'tailwindcss';
 
 @theme {
+  --color-canvas: #0d1117;
+  --color-panel: #161b22;
+  --color-raised: #21262d;
+  --color-overlay: #1c2128;
+  --color-line: #30363d;
+  --color-line-strong: #484f58;
+  --color-fg: #c9d1d9;
   --color-gray-200: #e5e7eb;
   --color-gray-300: #d1d5db;
   --color-gray-400: #9ca3af;
@@ -23,6 +30,14 @@
   --color-red-500: #ef4444;
   --color-red-600: #dc2626;
   --color-red-900: #7f1d1d;
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --radius-2xl: 6px;
+  --radius-3xl: 8px;
+  --radius-4xl: 8px;
 }
 
 :root {
@@ -32,8 +47,8 @@
     'Noto Color Emoji';
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--color-canvas);
+  color: var(--color-fg);
 }
 
 * {
@@ -52,8 +67,8 @@ body,
 body {
   display: flex;
   overflow: hidden;
-  background-color: #0d1117;
-  color: #c9d1d9;
+  background-color: var(--color-canvas);
+  color: var(--color-fg);
   font-size: 0.875rem;
   line-height: 1.25rem;
 }
@@ -89,29 +104,20 @@ pre,
 }
 
 ::-webkit-scrollbar-track {
-  background: #0d1117;
+  background: var(--color-canvas);
 }
 
 ::-webkit-scrollbar-thumb {
   border-radius: 4px;
-  background-color: #30363d;
+  background-color: var(--color-line);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #484f58;
+  background-color: var(--color-line-strong);
 }
 
 .log-entry:hover {
-  background-color: #161b22;
-}
-
-.app-icon svg {
-  width: var(--icon-size) !important;
-  height: var(--icon-size) !important;
-}
-
-.group\/thinking[open] .group-open\/thinking\:rotate-90 {
-  transform: rotate(90deg);
+  background-color: var(--color-panel);
 }
 
 .modal-overlay {
@@ -142,12 +148,11 @@ pre,
 @layer base {
   * {
     scrollbar-width: thin;
-    scrollbar-color: #30363d transparent;
+    scrollbar-color: var(--color-line) transparent;
   }
 
-  button:not(:disabled):active,
-  [role='option']:active {
-    transform: scale(0.97);
+  button:not(:disabled):active {
+    filter: brightness(0.9);
   }
 
   button:focus-visible,
@@ -164,10 +169,10 @@ pre,
     width: 1rem;
     height: 1rem;
     margin: 0;
-    border: 1px solid #484f58;
+    border: 1px solid var(--color-line-strong);
     border-radius: 4px;
     appearance: none;
-    background-color: #0d1117;
+    background-color: var(--color-canvas);
     cursor: pointer;
     transition:
       background-color 120ms ease,
@@ -258,25 +263,20 @@ button[aria-busy='true']::before {
   }
 }
 
-.dialog-leave-active {
-  transition: opacity 120ms ease;
+.page-enter-active {
+  animation: overlay-in 120ms ease-out;
 }
 
-.dialog-leave-to {
-  opacity: 0;
+.page-leave-active {
+  display: none;
 }
 
-.ui-select-enter-active,
-.ui-select-leave-active {
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
+.ui-select-content[data-state='open'] {
+  animation: overlay-in 120ms ease-out;
 }
 
-.ui-select-enter-from,
-.ui-select-leave-to {
-  opacity: 0;
-  transform: scaleY(0.96);
+.ui-select-content [data-reka-select-viewport] {
+  scrollbar-width: thin;
 }
 
 .ui-tooltip {
@@ -284,11 +284,11 @@ button[aria-busy='true']::before {
   z-index: 80;
   max-width: 320px;
   padding: 4px 8px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--color-line);
   border-radius: 6px;
-  background: #1c2128;
+  background: var(--color-overlay);
   box-shadow: 0 4px 12px rgb(0 0 0 / 40%);
-  color: #c9d1d9;
+  color: var(--color-fg);
   font-size: 0.75rem;
   line-height: 1rem;
   opacity: 0;
@@ -310,4 +310,102 @@ button[aria-busy='true']::before {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.markdown > * + * {
+  margin-top: 0.75rem;
+}
+
+.markdown :is(h1, h2, h3, h4) {
+  margin-top: 1.25rem;
+  font-weight: 600;
+  color: #f3f4f6;
+}
+
+.markdown h1 {
+  font-size: 1.25rem;
+}
+
+.markdown h2 {
+  font-size: 1.125rem;
+}
+
+.markdown :is(h3, h4) {
+  font-size: 1rem;
+}
+
+.markdown ul {
+  padding-left: 1.5rem;
+  list-style: disc;
+}
+
+.markdown ol {
+  padding-left: 1.5rem;
+  list-style: decimal;
+}
+
+.markdown li + li {
+  margin-top: 0.25rem;
+}
+
+.markdown a {
+  color: var(--color-blue-400);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown strong {
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+.markdown code {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 7%);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.markdown blockquote {
+  padding-left: 1rem;
+  border-left: 2px solid var(--color-line-strong);
+  color: var(--color-gray-400);
+}
+
+.markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.markdown :is(th, td) {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--color-line);
+}
+
+.markdown th {
+  background: var(--color-panel);
+  font-weight: 600;
+}
+
+.markdown hr {
+  border-color: var(--color-line);
 }

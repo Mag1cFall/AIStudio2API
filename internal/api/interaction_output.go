@@ -165,7 +165,7 @@ func interactionSteps(result generationResult, audioFormat string, summaries boo
 }
 
 // streamInteraction 输出创建、步骤增量、步骤结束与交互终态
-func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, current []aistudio.Content, created string, events <-chan aistudio.Event) {
+func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) {
 	if err := streamHeaders(w); err != nil {
 		return
 	}
@@ -262,7 +262,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 		return
 	}
 	if request.Store == nil || *request.Store {
-		s.storeResponseState(generate.ID, request.PreviousID, current, nil, result)
+		s.storeResponseState(generate.ID, previous, current, nil, result)
 	}
 	if err := send("interaction.completed", map[string]any{"interaction": interactionObject(generate, created, interactionStatus(result), result.usage)}); err != nil {
 		SetAccessLogError(r.Context(), fmt.Errorf("interaction completion: %w", err))

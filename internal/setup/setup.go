@@ -2,11 +2,16 @@ package setup
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +19,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -44,32 +50,167 @@ type setupOptions struct {
 	locale       string
 	localeSet    bool
 	timezone     string
+	remote       string
+	token        string
 }
 
-// Run 执行本机 Chrome 导入、文件导入或隔离登录
+// accountTarget 保存 setup 得到的账户并返回账户名称
+type accountTarget interface {
+	Save(ctx context.Context, accountConfig aistudio.AccountConfig, state aistudio.StorageState, fingerprintDirectory string) (string, error)
+}
+
+// Run 执行本机 Chrome 导入、文件导入或隔离登录，结果写入本机账户目录或远程实例
 func Run(ctx context.Context, cfg config.Config, args []string) error {
 	options, err := parseSetupFlags(args, cfg)
 	if err != nil {
 		return err
 	}
-	if err := validateSetupRoot(cfg.AuthStates); err != nil {
-		return err
+	input := bufio.NewReader(os.Stdin)
+	var target accountTarget
+	if options.remote != "" {
+		token := options.token
+		if token == "" {
+			if token, err = readPairingToken(input, os.Stdout); err != nil {
+				return err
+			}
+		}
+		target = remoteTarget{
+			client: &http.Client{Timeout: cfg.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			}},
+			origin: options.remote, token: token,
+		}
+	} else {
+		if err := validateSetupRoot(cfg.AuthStates); err != nil {
+			return err
+		}
+		target = localTarget{store: aistudio.NewAccountStore(cfg.AuthStates)}
 	}
-	store := aistudio.NewAccountStore(cfg.AuthStates)
 	if options.storageState != "" {
-		return importStorageState(store, options)
+		return importStorageState(ctx, target, options)
 	}
 	if options.login {
 		driver, err := defaultSetupLoginDriver(ctx, cfg)
 		if err != nil {
 			return err
 		}
-		return importIsolatedLogin(ctx, store, options, driver)
+		return importIsolatedLogin(ctx, target, options, driver)
 	}
-	return importChromeAccounts(ctx, cfg, store, options, os.Stdin, os.Stdout)
+	return importChromeAccounts(ctx, cfg, target, options, input, os.Stdout)
 }
 
-func importStorageState(store *aistudio.AccountStore, options setupOptions) error {
+// localTarget 将账户写入本机账户目录
+type localTarget struct {
+	store *aistudio.AccountStore
+}
+
+// Save 创建本机账户目录并保存隔离登录指纹
+func (target localTarget) Save(
+	_ context.Context,
+	accountConfig aistudio.AccountConfig,
+	state aistudio.StorageState,
+	fingerprintDirectory string,
+) (string, error) {
+	account, publishLease, err := target.store.Create(accountConfig, state)
+	if err != nil {
+		return "", err
+	}
+	if fingerprintDirectory != "" {
+		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
+			return "", errors.Join(err, target.store.Delete(account), publishLease.Release())
+		}
+	}
+	return account.Config.Label, publishLease.Release()
+}
+
+// remoteTarget 凭配对令牌将账户上传到远程实例
+type remoteTarget struct {
+	client *http.Client
+	origin string
+	token  string
+}
+
+// Save 上传认证状态与隔离登录指纹
+func (target remoteTarget) Save(
+	ctx context.Context,
+	accountConfig aistudio.AccountConfig,
+	state aistudio.StorageState,
+	fingerprintDirectory string,
+) (string, error) {
+	input := api.AccountStateInput{
+		Label: accountConfig.Label, Locale: accountConfig.Locale, Timezone: accountConfig.Timezone, StorageState: state,
+	}
+	if fingerprintDirectory != "" {
+		data, err := os.ReadFile(filepath.Join(fingerprintDirectory, "camoufox-fingerprint.json"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("读取 Camoufox 指纹: %w", err)
+		}
+		input.Fingerprint = data
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("编码账户: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.origin+"/api/pairing/accounts", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", "Bearer "+target.token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := target.client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("连接远程实例: %w", err)
+	}
+	defer response.Body.Close()
+	var result struct {
+		Account api.AdminAccount `json:"account"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result)
+	if response.StatusCode != http.StatusCreated {
+		if result.Error.Message != "" {
+			return "", fmt.Errorf("远程实例导入失败: HTTP %d: %s", response.StatusCode, result.Error.Message)
+		}
+		return "", fmt.Errorf("远程实例导入失败: HTTP %d", response.StatusCode)
+	}
+	if decodeErr != nil {
+		return "", fmt.Errorf("解析远程实例响应: %w", decodeErr)
+	}
+	return result.Account.Label, nil
+}
+
+// readPairingToken 从标准输入读取配对令牌，令牌不进入命令历史
+func readPairingToken(input *bufio.Reader, output io.Writer) (string, error) {
+	fmt.Fprint(output, "请粘贴远程实例账户页生成的配对令牌: ")
+	line, err := input.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("读取配对令牌: %w", err)
+	}
+	token := strings.TrimSpace(line)
+	if token == "" {
+		return "", fmt.Errorf("配对令牌不能为空")
+	}
+	return token, nil
+}
+
+// remoteOrigin 校验远程实例地址只含协议与主机，非本机地址必须使用 HTTPS
+func remoteOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil ||
+		parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("--remote 必须是远程实例的 origin，例如 https://example.com")
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	loopback := strings.EqualFold(parsed.Hostname(), "localhost") || ip != nil && ip.IsLoopback()
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !loopback) {
+		return "", fmt.Errorf("--remote 必须使用 HTTPS；只有本机地址可以使用 HTTP")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+func importStorageState(ctx context.Context, target accountTarget, options setupOptions) error {
 	state, err := aistudio.LoadStorageState(options.storageState)
 	if err != nil {
 		return err
@@ -83,23 +224,20 @@ func importStorageState(store *aistudio.AccountStore, options setupOptions) erro
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
 		label = extension.Source.Email
 	}
-	account, publishLease, err := store.Create(setupAccountConfig(label, options), state)
+	saved, err := target.Save(ctx, setupAccountConfig(label, options), state, "")
 	if err != nil {
 		return err
 	}
-	if err := publishLease.Release(); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
+	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
 	return nil
 }
 
 func importIsolatedLogin(
 	ctx context.Context,
-	store *aistudio.AccountStore,
+	target accountTarget,
 	options setupOptions,
 	driver aistudio.IsolatedLoginDriver,
-) (resultErr error) {
+) error {
 	loginDirectory, err := os.MkdirTemp("", "aistudio2api-login-*")
 	if err != nil {
 		return fmt.Errorf("创建隔离登录目录: %w", err)
@@ -115,24 +253,18 @@ func importIsolatedLogin(
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	account, publishLease, err := store.Create(setupAccountConfig(result.Email, options), result.StorageState)
+	saved, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.StorageState, loginDirectory)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, publishLease.Release())
-	}()
-	if err := camoufoxnative.PersistAccountFingerprint(loginDirectory, account.Directory); err != nil {
-		return errors.Join(err, store.Delete(account))
-	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", account.Config.Label)
+	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
 	if result.DriveError != "" {
 		fmt.Fprintf(os.Stdout, "Drive 授权失败: %s\n", result.DriveError)
 	}
 	return nil
 }
 
-func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudio.AccountStore, options setupOptions, input io.Reader, output io.Writer) error {
+func importChromeAccounts(ctx context.Context, cfg config.Config, target accountTarget, options setupOptions, input io.Reader, output io.Writer) error {
 	root := options.chromeRoot
 	if root == "" {
 		var err error
@@ -173,11 +305,7 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, store *aistudi
 		if !options.localeSet && result.Locale != "" {
 			accountOptions.locale = result.Locale
 		}
-		_, publishLease, err := store.Create(setupAccountConfig(result.Email, accountOptions), result.State)
-		if err != nil {
-			return err
-		}
-		if err := publishLease.Release(); err != nil {
+		if _, err := target.Save(ctx, setupAccountConfig(result.Email, accountOptions), result.State, ""); err != nil {
 			return err
 		}
 		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, modelCounts[index])
@@ -236,6 +364,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		fmt.Fprintln(flags.Output(), "Chrome 导入: aistudio2api setup")
 		fmt.Fprintln(flags.Output(), "文件导入: aistudio2api setup --storage-state <file>")
 		fmt.Fprintln(flags.Output(), "隔离登录: aistudio2api setup --login")
+		fmt.Fprintln(flags.Output(), "导入远程实例: 以上命令加 --remote <origin>")
 		flags.PrintDefaults()
 	}
 	var profiles setupStrings
@@ -248,6 +377,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	proxy := flags.String("proxy", cfg.Proxy, "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
 	locale := flags.String("locale", aistudio.DefaultAccountLocale(), "账户语言")
 	timezone := flags.String("timezone", aistudio.DefaultAccountTimezone(), "账户时区")
+	remote := flags.String("remote", "", "远程实例 origin，账户上传到该实例")
+	token := flags.String("token", "", "远程实例账户页生成的配对令牌，省略时从标准输入读取")
 	if err := flags.Parse(args); err != nil {
 		return setupOptions{}, err
 	}
@@ -259,6 +390,16 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		chromeRoot: strings.TrimSpace(*chromeRoot), profiles: profiles, emails: emails,
 		proxy:  strings.TrimSpace(*proxy),
 		locale: strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
+		token: strings.TrimSpace(*token),
+	}
+	if strings.TrimSpace(*remote) != "" {
+		origin, err := remoteOrigin(*remote)
+		if err != nil {
+			return setupOptions{}, err
+		}
+		options.remote = origin
+	} else if options.token != "" {
+		return setupOptions{}, fmt.Errorf("--token 需要与 --remote 同时使用")
 	}
 	flags.Visit(func(value *flag.Flag) {
 		if value.Name == "locale" {

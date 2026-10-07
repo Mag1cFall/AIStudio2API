@@ -1,17 +1,80 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n } from '@/i18n'
-import type { LogRow } from '@/logs'
+import { formatLogNumber, type LogRow } from '@/logs'
+import type { RequestBody } from '@/types'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
-const { t, locale } = useI18n()
+const { t, locale, errorText } = useI18n()
 const request = computed(() => props.row.entry.request!)
+
+const body = ref<RequestBody | null>(null)
+const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle')
+const bodyError = ref('')
+// detailsRendered 记录详情是否展开过，未展开的详情不渲染
+const detailsRendered = ref(false)
 
 // number 按当前语言格式化统计数值
 function number(value: number, digits = 0): string {
-  return value.toLocaleString(locale.value, { maximumFractionDigits: digits })
+  return formatLogNumber(value, locale.value, digits)
 }
+
+// renderDetails 在详情首次展开时开始渲染内容
+function renderDetails(event: Event): void {
+  if ((event.target as HTMLDetailsElement).open) detailsRendered.value = true
+}
+
+// loadBody 在首次展开时读取账本保存的请求与响应正文
+async function loadBody(event: Event): Promise<void> {
+  if (!(event.target as HTMLDetailsElement).open) return
+  if (bodyState.value === 'loading' || bodyState.value === 'ready') return
+  bodyState.value = 'loading'
+  try {
+    body.value = await api.requestBody(request.value.id)
+    bodyState.value = 'ready'
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404) {
+      bodyState.value = 'missing'
+      return
+    }
+    bodyError.value = errorText(reason)
+    bodyState.value = 'error'
+  }
+}
+
+// pretty 缩进 JSON 正文，非 JSON 保持原文
+function pretty(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+// bodySize 显示保存字节数与原始字节数
+function bodySize(saved: string, total: number): string {
+  const bytes = new TextEncoder().encode(saved).length
+  return bytes < total ? `${number(bytes)} / ${number(total)} B` : `${number(total)} B`
+}
+
+const bodyParts = computed(() =>
+  body.value === null
+    ? []
+    : [
+        {
+          label: t('logs.requestBody'),
+          text: pretty(body.value.request),
+          size: bodySize(body.value.request, body.value.request_size),
+        },
+        {
+          label: t('logs.responseBody'),
+          text: pretty(body.value.response),
+          size: bodySize(body.value.response, body.value.response_size),
+        },
+      ],
+)
 </script>
 
 <template>
@@ -47,7 +110,7 @@ function number(value: number, digits = 0): string {
     <p v-else-if="request.state === 'blocked' || request.state === 'limited'" class="request-error">
       {{ request.finish_reason }}
     </p>
-    <details class="request-details">
+    <details class="request-details" @toggle="renderDetails">
       <summary>
         <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
         {{ t('logs.details') }}
@@ -58,43 +121,69 @@ function number(value: number, digits = 0): string {
           ></span
         >
       </summary>
-      <dl>
-        <dt>ID</dt>
-        <dd>{{ request.id }}</dd>
-        <dt>{{ t('logs.endpoint') }}</dt>
-        <dd>{{ request.method }} {{ request.path }}</dd>
-        <template v-if="request.channel">
-          <dt>{{ t('logs.channel') }}</dt>
-          <dd>{{ t(channelLabelKey(request.channel)) }}</dd>
-        </template>
-        <template v-if="request.usage">
-          <dt>{{ t('logs.inputTokens') }}</dt>
-          <dd>{{ number(request.usage.input_tokens) }} tokens</dd>
-          <dt>{{ t('logs.totalTokens') }}</dt>
-          <dd>{{ number(request.usage.total_tokens) }} tokens</dd>
-        </template>
-        <template v-if="request.input_messages">
-          <dt>{{ t('logs.inputMessages') }}</dt>
-          <dd>{{ number(request.input_messages) }}</dd>
-        </template>
-        <template v-if="request.finish_reason">
-          <dt>{{ t('logs.finishReason') }}</dt>
-          <dd>{{ request.finish_reason }}</dd>
-        </template>
-      </dl>
-      <ol class="request-timeline">
-        <li v-for="(event, index) in row.events" :key="index">
-          <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
-          <span>{{ event.message }}</span>
-        </li>
-      </ol>
-      <details class="request-json">
-        <summary>
-          <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
-          JSON
-        </summary>
-        <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
-      </details>
+      <template v-if="detailsRendered">
+        <dl>
+          <dt>ID</dt>
+          <dd>{{ request.id }}</dd>
+          <dt>{{ t('logs.endpoint') }}</dt>
+          <dd>{{ request.method }} {{ request.path }}</dd>
+          <template v-if="request.channel">
+            <dt>{{ t('logs.channel') }}</dt>
+            <dd>{{ t(channelLabelKey(request.channel)) }}</dd>
+          </template>
+          <template v-if="request.usage">
+            <dt>{{ t('logs.inputTokens') }}</dt>
+            <dd>{{ number(request.usage.input_tokens) }} tokens</dd>
+            <dt>{{ t('logs.totalTokens') }}</dt>
+            <dd>{{ number(request.usage.total_tokens) }} tokens</dd>
+          </template>
+          <template v-if="request.input_messages">
+            <dt>{{ t('logs.inputMessages') }}</dt>
+            <dd>{{ number(request.input_messages) }}</dd>
+          </template>
+          <template v-if="request.finish_reason">
+            <dt>{{ t('logs.finishReason') }}</dt>
+            <dd>{{ request.finish_reason }}</dd>
+          </template>
+        </dl>
+        <ol class="request-timeline">
+          <li v-for="(event, index) in row.events" :key="index">
+            <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
+            <span>{{ event.message }}</span>
+          </li>
+        </ol>
+        <details class="request-json">
+          <summary>
+            <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+            JSON
+          </summary>
+          <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
+        </details>
+        <details
+          v-if="request.state !== 'running' && request.method === 'POST'"
+          class="request-json"
+          @toggle="loadBody"
+        >
+          <summary>
+            <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+            {{ t('logs.body') }}
+          </summary>
+          <p v-if="bodyState === 'loading'" class="request-body-note">{{ t('common.loading') }}</p>
+          <p v-else-if="bodyState === 'missing'" class="request-body-note">
+            {{ t('logs.bodyMissing') }}
+          </p>
+          <p v-else-if="bodyState === 'error'" class="request-body-note text-red-300">
+            {{ bodyError }}
+          </p>
+          <div v-for="part in bodyParts" v-else :key="part.label" class="request-body-part">
+            <div class="request-body-heading">
+              <span>{{ part.label }}</span>
+              <span>{{ part.size }}</span>
+            </div>
+            <pre>{{ part.text }}</pre>
+          </div>
+        </details>
+      </template>
     </details>
   </div>
 </template>
@@ -255,6 +344,19 @@ details[open] > summary > .request-disclosure-icon {
   border-radius: 4px;
   margin-top: 6px;
   white-space: pre;
+}
+.request-body-note {
+  margin-top: 6px;
+  color: #8b949e;
+}
+.request-body-part {
+  margin-top: 8px;
+}
+.request-body-heading {
+  display: flex;
+  justify-content: space-between;
+  color: #8b949e;
+  font-size: 11px;
 }
 @media (max-width: 767px) {
   .request-duration {

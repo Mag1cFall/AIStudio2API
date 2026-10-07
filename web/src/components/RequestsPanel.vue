@@ -19,7 +19,7 @@ const emit = defineEmits<{
   notice: [message: string, tone: 'success' | 'error']
 }>()
 
-const { locale, t } = useI18n()
+const { locale, t, errorText } = useI18n()
 const cancelling = ref('')
 const refreshing = ref(false)
 
@@ -67,7 +67,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
     await api.cancelRequest(request.id)
     emit('refresh')
   } catch (error) {
-    emit('notice', error instanceof Error ? error.message : t('common.error'), 'error')
+    emit('notice', errorText(error), 'error')
   } finally {
     cancelling.value = ''
   }
@@ -76,7 +76,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
 
 <template>
   <section class="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4 md:p-8">
-    <div class="mb-6 flex items-center justify-between border-b border-[#30363d] pb-2">
+    <div class="mb-6 flex items-center justify-between border-b border-line pb-2">
       <h2 class="text-2xl font-bold text-white">{{ t('section.requests.title') }}</h2>
       <button
         class="flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition hover:bg-blue-500"
@@ -89,7 +89,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
     </div>
 
     <div class="space-y-6">
-      <article class="rounded-lg border border-[#30363d] bg-[#161b22] p-4">
+      <article class="rounded-lg border border-line bg-panel p-4">
         <div class="mb-4 flex items-center justify-between">
           <h3 class="font-bold text-gray-300">{{ t('cooldowns.title') }}</h3>
           <span class="font-mono text-xs text-gray-500">{{ cooldowns.length }}</span>
@@ -110,10 +110,10 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
           <div
             v-for="cooldown in cooldowns"
             :key="`${cooldown.account_id}:${cooldown.channel}:${cooldown.model_id}`"
-            class="overflow-hidden rounded border border-[#30363d] bg-[#0d1117]"
+            class="overflow-hidden rounded border border-line bg-canvas"
           >
             <div
-              class="flex items-center justify-between gap-3 border-b border-[#30363d] bg-[#21262d] px-4 py-2"
+              class="flex items-center justify-between gap-3 border-b border-line bg-raised px-4 py-2"
             >
               <div class="min-w-0">
                 <strong class="block truncate text-sm text-gray-200">{{
@@ -136,8 +136,8 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
         </div>
       </article>
 
-      <article class="overflow-hidden rounded-lg border border-[#30363d] bg-[#161b22]">
-        <div class="flex items-center justify-between border-b border-[#30363d] px-4 py-3">
+      <article class="overflow-hidden rounded-lg border border-line bg-panel">
+        <div class="flex items-center justify-between border-b border-line px-4 py-3">
           <h3 class="font-bold text-gray-300">{{ t('requests.history') }}</h3>
           <span class="text-xs text-green-400"> {{ t('requests.live') }}: {{ activeCount }} </span>
         </div>
@@ -157,7 +157,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
           <div
             v-for="request in requests"
             :key="request.id"
-            class="flex flex-wrap items-center justify-between gap-3 rounded p-2 transition hover:bg-[#21262d]"
+            class="flex flex-wrap items-center justify-between gap-3 rounded p-2 transition hover:bg-raised"
           >
             <div class="min-w-0 flex-1">
               <div class="flex min-w-0 items-center gap-2">

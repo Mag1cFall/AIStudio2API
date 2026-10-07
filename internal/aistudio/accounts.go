@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -215,6 +217,7 @@ type AccountSelection struct {
 	AllowedAccountIDs []string
 	PlaygroundOnly    bool
 	Channel           Channel
+	PreferredChannel  Channel
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
@@ -2375,6 +2378,9 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 				continue
 			}
 		}
+		if candidate.channel != selection.PreferredChannel && p.preferredChannelOpenLocked(account, selection, now) {
+			continue
+		}
 		refreshRuntime := false
 		if account.active == 0 {
 			leaseLock, leasePath, err := acquireAccountFileLease(account.StoragePath)
@@ -3270,7 +3276,7 @@ func AcquireAccountRuntimeLease(accountID string) (*AccountRuntimeLease, error) 
 	if err != nil {
 		return nil, err
 	}
-	cacheRoot, err := os.UserCacheDir()
+	cacheRoot, err := userCacheRoot()
 	if err != nil {
 		return nil, fmt.Errorf("读取用户缓存目录: %w", err)
 	}
@@ -3287,6 +3293,28 @@ func AcquireAccountRuntimeLease(accountID string) (*AccountRuntimeLease, error) 
 		return nil, fmt.Errorf("%w: %s 已由另一个 AIStudio2API runtime 使用", ErrAccountLeased, accountID)
 	}
 	return &AccountRuntimeLease{lock: lock}, nil
+}
+
+// userCacheRoot 返回当前用户的缓存目录，目录环境变量缺失时按系统账户主目录推导同一位置
+func userCacheRoot() (string, error) {
+	if directory, err := os.UserCacheDir(); err == nil {
+		return directory, nil
+	}
+	current, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(current.HomeDir) {
+		return "", fmt.Errorf("当前用户主目录无效: %q", current.HomeDir)
+	}
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(current.HomeDir, "AppData", "Local"), nil
+	case "darwin", "ios":
+		return filepath.Join(current.HomeDir, "Library", "Caches"), nil
+	default:
+		return filepath.Join(current.HomeDir, ".cache"), nil
+	}
 }
 
 // Release 释放账户 WAA runtime 锁

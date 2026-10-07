@@ -563,11 +563,11 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		return nil, err
 	}
 	var channel Channel
-	nativeSchema := requestNeedsBuildSchema(request)
+	nativeSchema := RequestNeedsBuildSchema(request)
 	if nativeSchema && !s.pool.BuildEnabled() {
 		return nil, fmt.Errorf("%w: 此结构化输出 Schema 需要 Build 通道", ErrInvalidArgument)
 	}
-	if nativeSchema || request.Unary && s.BuildNativeNonstream {
+	if nativeSchema {
 		channel = ChannelBuild
 	}
 	selection := AccountSelection{
@@ -577,6 +577,9 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		ResourceID: resourceID,
 		Channel:    channel,
 	}
+	if !nativeSchema && request.Unary && s.BuildNativeNonstream {
+		selection.PreferredChannel = ChannelBuild
+	}
 	pinned := selection.AccountID != "" || selection.ResourceID != ""
 	if _, ok := AccountLeaseFromContext(ctx); ok {
 		pinned = true
@@ -584,13 +587,6 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	var requestErr error
 	for attempt := 0; attempt < accountAttemptLimit(s.pool, pinned); attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
-		if err != nil && selection.Channel == ChannelBuild && !nativeSchema && ctx.Err() == nil {
-			var cooling *AllCoolingError
-			if errors.Is(err, ErrNoEligibleAccount) || errors.As(err, &cooling) {
-				selection.Channel = ""
-				lease, owned, err = resolveAccountLease(ctx, s.pool, selection)
-			}
-		}
 		if err != nil {
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
 				return nil, requestErr

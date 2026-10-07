@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/setup"
 	"github.com/Mag1cFall/AIStudio2API/internal/webui"
 )
@@ -62,7 +64,15 @@ func runCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(runServer(ctx, cfg, options, manager), manager.Close())
+	ledger, err := requestdb.Open(filepath.Join("runtime", "requests.db"), func(level, message string) {
+		manager.requests.log("service", level, message)
+	})
+	if err != nil {
+		return errors.Join(fmt.Errorf("打开请求账本: %w", err), manager.Close())
+	}
+	ledger.SetBodyCapture(cfg.RequestBodyLog)
+	manager.ledger = ledger
+	return errors.Join(runServer(ctx, cfg, options, manager), manager.Close(), ledger.Close())
 }
 
 // parseFlags 使用命令行参数覆盖本次启动配置
@@ -112,7 +122,7 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, m
 		return fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
 	apiHandler := api.NewHandler(manager, api.Config{
-		APIKey: cfg.ProxyAPIKey, Admin: manager,
+		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 	})
 	server := &http.Server{
@@ -135,6 +145,10 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, m
 		}
 	}
 
+	if cfg.AutoStart {
+		go autoStartService(ctx, manager)
+	}
+
 	select {
 	case err := <-serveError:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -151,6 +165,14 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, m
 			return err
 		}
 		return nil
+	}
+}
+
+// autoStartService 在管理服务就绪后按配置启动生成服务
+func autoStartService(ctx context.Context, manager *runtimeManager) {
+	manager.requests.log("service", "INFO", "自动启动生成服务")
+	if _, err := manager.StartService(ctx); err != nil && ctx.Err() == nil {
+		manager.requests.log("service", "ERROR", "自动启动生成服务失败 | 错误="+err.Error())
 	}
 }
 

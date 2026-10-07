@@ -1,7 +1,17 @@
 <script setup lang="ts">
 defineProps<{ adminUsername?: string }>()
 const emit = defineEmits<{ logout: [] }>()
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  h,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 import { api, openAdminEvents, type EventConnection } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type {
@@ -21,22 +31,35 @@ import ModelsTable from '@/components/ModelsTable.vue'
 import PlaygroundPanel from '@/components/PlaygroundPanel.vue'
 import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
-import UiConfirm from '@/components/UiConfirm.vue'
-import UiIcon, { type IconName } from '@/components/UiIcon.vue'
+import UiIcon from '@/components/UiIcon.vue'
+import { useTabParam } from '@/url'
+import type { IconName } from '@/icons'
 
-const { availableLocales, locale, setLocale, t } = useI18n()
-const TAB_STORAGE_KEY = 'aistudio2api_active_tab'
-const validTabs: TabID[] = ['logs', 'accounts', 'models', 'requests', 'settings', 'playground']
-const savedTab =
-  typeof window !== 'undefined'
-    ? (window.localStorage.getItem(TAB_STORAGE_KEY) as TabID | null)
-    : null
-const currentTab = ref<TabID>(savedTab && validTabs.includes(savedTab) ? savedTab : 'logs')
-watch(currentTab, (tab) => {
-  window.localStorage.setItem(TAB_STORAGE_KEY, tab)
+const { availableLocales, locale, setLocale, t, errorText } = useI18n()
+const UsagePanel = defineAsyncComponent({
+  loader: () => import('@/components/UsagePanel.vue'),
+  delay: 150,
+  loadingComponent: {
+    render: () =>
+      h('p', { class: 'p-8 text-sm text-gray-500', role: 'status' }, t('usage.panelLoading')),
+  },
+  errorComponent: {
+    render: () =>
+      h('p', { class: 'p-8 text-sm text-red-300', role: 'alert' }, t('usage.panelFailed')),
+  },
 })
+const validTabs: TabID[] = [
+  'logs',
+  'accounts',
+  'models',
+  'requests',
+  'usage',
+  'settings',
+  'playground',
+]
+const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
 const status = ref<ServiceStatus | null>(null)
-const logs = ref<AdminLog[]>([])
+const logs = shallowRef<AdminLog[]>([])
 const accounts = ref<Account[]>([])
 const models = ref<Model[]>([])
 const cooldowns = ref<Cooldown[]>([])
@@ -57,14 +80,23 @@ const errors = reactive({ accounts: '', models: '', requests: '', cooldowns: '',
 let eventConnection: EventConnection | undefined
 let mounted = false
 let noticeTimer: number | undefined
+const pendingDelete = shallowRef<{ account: Account; timer: number } | null>(null)
+const deletingAccounts = ref(new Set<string>())
+const visibleAccounts = computed(() =>
+  accounts.value.filter(
+    (account) =>
+      account.id !== pendingDelete.value?.account.id && !deletingAccounts.value.has(account.id),
+  ),
+)
 
 const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
-  { id: 'logs', label: 'nav.logs', icon: 'dashboard' },
-  { id: 'accounts', label: 'nav.accounts', icon: 'key' },
-  { id: 'models', label: 'nav.models', icon: 'dashboard' },
-  { id: 'requests', label: 'nav.requests', icon: 'info' },
+  { id: 'logs', label: 'nav.logs', icon: 'logs' },
+  { id: 'accounts', label: 'nav.accounts', icon: 'accounts' },
+  { id: 'models', label: 'nav.models', icon: 'models' },
+  { id: 'requests', label: 'nav.requests', icon: 'requests' },
+  { id: 'usage', label: 'nav.usage', icon: 'usage' },
   { id: 'settings', label: 'nav.settings', icon: 'settings' },
-  { id: 'playground', label: 'nav.playground', icon: 'chat' },
+  { id: 'playground', label: 'nav.playground', icon: 'playground' },
 ]
 
 const serviceState = computed(() => {
@@ -87,7 +119,7 @@ const statusTextColor = computed(() => {
 
 // messageOf 统一呈现服务端错误内容
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : t('common.error')
+  return errorText(error)
 }
 
 // showNotice 显示一次短暂操作结果
@@ -98,6 +130,50 @@ function showNotice(message: string, tone: 'success' | 'error'): void {
   noticeTimer = window.setTimeout(() => {
     notice.message = ''
   }, 3200)
+}
+
+// deleteAccount 隐藏账户并在撤销时限结束后删除，新的删除会先提交上一项
+function deleteAccount(account: Account): void {
+  void commitDelete()
+  pendingDelete.value = { account, timer: window.setTimeout(() => void commitDelete(), 6000) }
+}
+
+// undoDelete 撤销尚未提交的账户删除
+function undoDelete(): void {
+  if (pendingDelete.value === null) return
+  window.clearTimeout(pendingDelete.value.timer)
+  pendingDelete.value = null
+}
+
+// commitDelete 立即提交等待中的账户删除，页面关闭时使用 keepalive 请求
+async function commitDelete(keepalive = false): Promise<void> {
+  const pending = pendingDelete.value
+  if (pending === null) return
+  window.clearTimeout(pending.timer)
+  pendingDelete.value = null
+  const id = pending.account.id
+  deletingAccounts.value = new Set(deletingAccounts.value).add(id)
+  try {
+    await api.deleteAccount(id, keepalive)
+    await loadAccountData()
+  } catch (error) {
+    showNotice(messageOf(error), 'error')
+  } finally {
+    const deleting = new Set(deletingAccounts.value)
+    deleting.delete(id)
+    deletingAccounts.value = deleting
+  }
+}
+
+// flushDelete 在页面隐藏时提交等待中的删除
+function flushDelete(): void {
+  void commitDelete(true)
+}
+
+// logout 先在当前会话内提交等待中的删除再退出登录
+async function logout(): Promise<void> {
+  await commitDelete()
+  emit('logout')
 }
 
 async function loadStatus(): Promise<void> {
@@ -224,9 +300,8 @@ let logFlushTimer: number | undefined
 function flushLogs(): void {
   logFlushTimer = undefined
   if (pendingLogs.length === 0) return
-  logs.value.push(...pendingLogs)
+  logs.value = logs.value.concat(pendingLogs).slice(-2000)
   pendingLogs = []
-  if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
 }
 
 async function clearLogs(): Promise<void> {
@@ -278,6 +353,7 @@ function handleAdminEvent(event: AdminEvent): void {
 
 onMounted(async () => {
   mounted = true
+  window.addEventListener('pagehide', flushDelete)
   document.title = t('app.title')
   await refreshAll()
   if (!mounted) return
@@ -301,15 +377,17 @@ onUnmounted(() => {
   eventConnection?.close()
   if (logFlushTimer !== undefined) window.clearTimeout(logFlushTimer)
   if (noticeTimer !== undefined) window.clearTimeout(noticeTimer)
+  window.removeEventListener('pagehide', flushDelete)
+  flushDelete()
 })
 </script>
 
 <template>
   <div class="flex h-full w-full flex-col md:flex-row">
     <aside
-      class="flex min-w-0 w-full shrink-0 flex-col border-b border-[#30363d] bg-[#161b22] md:w-64 md:border-r md:border-b-0"
+      class="flex min-w-0 w-full shrink-0 flex-col border-b border-line bg-panel md:w-64 md:border-r md:border-b-0"
     >
-      <div class="flex h-14 items-center justify-between gap-2 border-b border-[#30363d] px-4">
+      <div class="flex h-14 items-center justify-between gap-2 border-b border-line px-4">
         <div class="flex min-w-0 items-center gap-2">
           <div class="h-3 w-3 rounded-full" :class="statusColor"></div>
           <h1 class="whitespace-nowrap text-lg font-bold text-white">AI Studio Proxy</h1>
@@ -323,7 +401,7 @@ onUnmounted(() => {
             <UiIcon name="chevronDown" :size="12" />
           </button>
           <div class="absolute top-full right-0 z-50 hidden pt-1 group-hover:block">
-            <div class="overflow-hidden rounded border border-[#30363d] bg-[#161b22] shadow-xl">
+            <div class="overflow-hidden rounded border border-line bg-panel shadow-xl">
               <button
                 v-for="item in availableLocales"
                 :key="item.code"
@@ -348,10 +426,11 @@ onUnmounted(() => {
             'flex w-auto shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left whitespace-nowrap transition md:w-full',
             currentTab === item.id
               ? 'bg-blue-600 text-white'
-              : 'text-gray-400 hover:bg-[#21262d] hover:text-white',
+              : 'text-gray-400 hover:bg-raised hover:text-white',
           ]"
           type="button"
-          @click="currentTab = item.id"
+          :aria-current="currentTab === item.id ? 'page' : undefined"
+          @click="selectTab(item.id)"
         >
           <UiIcon :name="item.icon" :size="16" />
           {{ t(item.label) }}
@@ -361,14 +440,14 @@ onUnmounted(() => {
       <button
         v-if="adminUsername"
         type="button"
-        class="mx-4 mb-3 rounded border border-[#30363d] px-3 py-2 text-gray-400 hover:bg-[#21262d] hover:text-white"
-        @click="emit('logout')"
+        class="mx-4 mb-3 rounded border border-line px-3 py-2 text-gray-400 hover:bg-raised hover:text-white"
+        @click="logout"
       >
         {{ adminUsername }} · {{ t('auth.logout') }}
       </button>
 
       <div
-        class="relative min-w-0 overflow-hidden border-t border-[#30363d] p-2 md:p-4"
+        class="relative min-w-0 overflow-hidden border-t border-line p-2 md:p-4"
         :class="serviceState === 'launching' ? 'launching-shell' : ''"
       >
         <div v-if="serviceState === 'launching'" class="launching-scan" aria-hidden="true"></div>
@@ -407,58 +486,87 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <main class="flex min-w-0 flex-1 flex-col bg-[#0d1117]">
-      <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
-      <AccountsPanel
-        v-else-if="currentTab === 'accounts'"
-        :accounts="accounts"
-        :loading="loading.accounts"
-        :error="errors.accounts"
-        @refresh="loadAccountData"
-        @notice="showNotice"
-      />
-      <ModelsTable
-        v-else-if="currentTab === 'models'"
-        :models="models"
-        :loading="loading.models"
-        :error="errors.models"
-      />
-      <RequestsPanel
-        v-else-if="currentTab === 'requests'"
-        :accounts="accounts"
-        :cooldowns="cooldowns"
-        :requests="requests"
-        :loading="loading.requests || loading.cooldowns"
-        :cooldown-error="errors.cooldowns"
-        :request-error="errors.requests"
-        @refresh="loadRequestData"
-        @notice="showNotice"
-      />
-      <SettingsPanel
-        v-else-if="currentTab === 'settings'"
-        :config="config"
-        :loading="loading.config"
-        :error="errors.config"
-        @saved="config = $event"
-        @notice="showNotice"
-      />
-      <PlaygroundPanel v-else :models="models" :api-key="config?.proxy_api_key ?? ''" />
+    <main class="flex min-w-0 flex-1 flex-col bg-canvas">
+      <Transition name="page">
+        <KeepAlive include="SettingsPanel">
+          <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
+          <AccountsPanel
+            v-else-if="currentTab === 'accounts'"
+            :accounts="visibleAccounts"
+            :loading="loading.accounts"
+            :error="errors.accounts"
+            @refresh="loadAccountData"
+            @notice="showNotice"
+            @delete="deleteAccount"
+          />
+          <ModelsTable
+            v-else-if="currentTab === 'models'"
+            :models="models"
+            :loading="loading.models"
+            :error="errors.models"
+          />
+          <RequestsPanel
+            v-else-if="currentTab === 'requests'"
+            :accounts="accounts"
+            :cooldowns="cooldowns"
+            :requests="requests"
+            :loading="loading.requests || loading.cooldowns"
+            :cooldown-error="errors.cooldowns"
+            :request-error="errors.requests"
+            @refresh="loadRequestData"
+            @notice="showNotice"
+          />
+          <UsagePanel v-else-if="currentTab === 'usage'" />
+          <SettingsPanel
+            v-else-if="currentTab === 'settings'"
+            :config="config"
+            :loading="loading.config"
+            :error="errors.config"
+            @saved="config = $event"
+            @notice="showNotice"
+          />
+          <PlaygroundPanel v-else :models="models" :api-key="config?.proxy_api_key ?? ''" />
+        </KeepAlive>
+      </Transition>
     </main>
 
-    <Transition name="notice">
-      <div
-        v-if="notice.message"
-        class="fixed right-5 bottom-5 z-50 max-w-md rounded border bg-[#161b22] px-4 py-3 text-sm shadow-xl"
-        :class="
-          notice.tone === 'error'
-            ? 'border-red-500/50 text-red-300'
-            : 'border-green-500/50 text-green-300'
-        "
-      >
-        {{ notice.message }}
-      </div>
-    </Transition>
-    <UiConfirm />
+    <div
+      class="pointer-events-none fixed right-5 bottom-5 z-50 flex max-w-md flex-col items-end gap-2"
+    >
+      <Transition name="notice">
+        <div
+          v-if="notice.message"
+          role="status"
+          class="pointer-events-auto rounded border bg-panel px-4 py-3 text-sm shadow-xl"
+          :class="
+            notice.tone === 'error'
+              ? 'border-red-500/50 text-red-300'
+              : 'border-green-500/50 text-green-300'
+          "
+        >
+          {{ notice.message }}
+        </div>
+      </Transition>
+      <Transition name="notice">
+        <div
+          v-if="pendingDelete"
+          class="pointer-events-auto flex max-w-md items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
+          role="status"
+        >
+          <span class="min-w-0 truncate">{{
+            t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label)
+          }}</span>
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 font-medium text-blue-400 hover:bg-raised"
+            @click="undoDelete"
+          >
+            <UiIcon name="undo" :size="14" />
+            {{ t('common.undo') }}
+          </button>
+        </div>
+      </Transition>
+    </div>
   </div>
 </template>
 
