@@ -97,7 +97,8 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	generateRequest.Unary = !request.Stream
-	if request.Stream {
+	events, err := s.service.Generate(r.Context(), generateRequest)
+	if err == nil && request.Stream {
 		if err := streamHeaders(w); err != nil {
 			return
 		}
@@ -109,17 +110,9 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		if err := writer.start(); err != nil {
 			return
 		}
-		events, err := s.service.Generate(r.Context(), generateRequest)
-		if err != nil {
-			if shouldWriteRequestError(r, err) {
-				_ = writer.error(err)
-			}
-			return
-		}
 		s.streamAnthropic(r, writer, events)
 		return
 	}
-	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())

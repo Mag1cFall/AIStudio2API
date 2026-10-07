@@ -3043,6 +3043,13 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	api.StartAccessLog(ctx)
 	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
+	if validator, ok := service.service.(interface {
+		ValidateGenerateRequest(aistudio.GenerateRequest) error
+	}); ok && err == nil {
+		if err = validator.ValidateGenerateRequest(request); err != nil {
+			cancel()
+		}
+	}
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
 		service.requests.start(request, func() {})
@@ -3138,6 +3145,14 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		nextLease, acquireErr := service.acquireWarmLease(requestCtx, selection)
+		var buildCooling *aistudio.AllCoolingError
+		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil &&
+			(errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &buildCooling)) {
+			// 没有账户能经 Build 服务时，结构化输出 Schema 改用 Playground 载体
+			selection.Channel = ""
+			fallbackReason = "Build 通道没有可用账户"
+			nextLease, acquireErr = service.acquireWarmLease(requestCtx, selection)
+		}
 		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && nextLease.Channel() != aistudio.ChannelBuild {
 			fallbackReason = "账户 Build 通道冷却或不支持此模型"
 		}

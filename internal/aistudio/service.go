@@ -548,6 +548,18 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	return count, requestErr
 }
 
+// ValidateGenerateRequest 在选择账户前校验与上游通道无关的生成参数
+func (s *PooledService) ValidateGenerateRequest(request GenerateRequest) error {
+	if strings.TrimPrefix(strings.TrimSpace(request.Model), "models/") == "" {
+		return fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
+	}
+	request, _, err := prepareToolRequest(request)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	return s.client.validateGenerateRequest(request)
+}
+
 // Generate 使用支持目标模型的独占账户生成事件流
 func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (<-chan Event, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
@@ -562,22 +574,13 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	if err != nil {
 		return nil, err
 	}
-	var channel Channel
-	nativeSchema := RequestNeedsBuildSchema(request)
-	if nativeSchema && !s.pool.BuildEnabled() {
-		return nil, fmt.Errorf("%w: 此结构化输出 Schema 需要 Build 通道", ErrInvalidArgument)
-	}
-	if nativeSchema {
-		channel = ChannelBuild
-	}
 	selection := AccountSelection{
 		ModelID:    modelID,
 		Method:     "generateContent",
 		AccountID:  strings.TrimSpace(request.AccountID),
 		ResourceID: resourceID,
-		Channel:    channel,
 	}
-	if !nativeSchema && request.Unary && s.BuildNativeNonstream {
+	if RequestNeedsBuildSchema(request) || request.Unary && s.BuildNativeNonstream {
 		selection.PreferredChannel = ChannelBuild
 	}
 	pinned := selection.AccountID != "" || selection.ResourceID != ""

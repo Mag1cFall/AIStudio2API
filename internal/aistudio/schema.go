@@ -652,12 +652,65 @@ func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
 	return cleaned, err
 }
 
-// RequestNeedsBuildSchema 判断结构化输出 Schema 是否含 Playground 不接受的开放节点
+// responseSchemaNote 为附加在结构化输出根说明中的完整 Schema 前缀
+const responseSchemaNote = "The response must follow this JSON Schema: "
+
+// encodeResponseSchema 编码结构化输出 Schema；无法直接表达的 Schema 按层级与类型编码并在根说明附完整 Schema
+func encodeResponseSchema(raw json.RawMessage) ([]any, error) {
+	wire, err := encodeJSONSchema(raw)
+	if err == nil {
+		return wire, nil
+	}
+	var schema any
+	if json.Unmarshal(raw, &schema) != nil {
+		return nil, err
+	}
+	if _, ok := schema.(map[string]any); !ok {
+		return nil, err
+	}
+	shape, shapeErr := json.Marshal(toolSchemaShape(schema))
+	if shapeErr != nil {
+		return nil, err
+	}
+	wire, shapeErr = encodeJSONSchema(shape)
+	if shapeErr != nil {
+		return nil, err
+	}
+	return describeResponseSchema(wire, raw), nil
+}
+
+// describeResponseSchema 在根节点说明中附加完整 JSON Schema
+func describeResponseSchema(wire []any, raw json.RawMessage) []any {
+	description := ""
+	if len(wire) > 2 {
+		description, _ = wire[2].(string)
+	}
+	if strings.Contains(description, responseSchemaNote) {
+		return wire
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) != nil {
+		compact.Reset()
+		compact.Write(raw)
+	}
+	return setWireField(wire, 2, strings.TrimSpace(description+"\n"+responseSchemaNote+compact.String()))
+}
+
+// projectPlaygroundResponseSchema 为 Playground 补齐开放节点的载体类型并附完整 Schema
+func projectPlaygroundResponseSchema(wire []any, raw json.RawMessage) []any {
+	if !schemaWireNeedsBuild(wire) {
+		return wire
+	}
+	projectToolSchema(wire)
+	return describeResponseSchema(wire, raw)
+}
+
+// RequestNeedsBuildSchema 判断结构化输出 Schema 是否含 Playground 需要补齐类型的开放节点
 func RequestNeedsBuildSchema(request GenerateRequest) bool {
 	if len(request.Config.ResponseSchema) == 0 {
 		return false
 	}
-	wire, err := encodeJSONSchema(request.Config.ResponseSchema)
+	wire, err := encodeResponseSchema(request.Config.ResponseSchema)
 	return err == nil && schemaWireNeedsBuild(wire)
 }
 
