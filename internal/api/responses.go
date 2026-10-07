@@ -152,8 +152,8 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if request.Model == "" || len(request.Input) == 0 {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model and input are required")
+	if request.Model == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
 	responseID := newID("resp")
@@ -183,6 +183,9 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	generateRequest.Unary = !request.Stream
 	events, err := s.service.Generate(r.Context(), generateRequest)
+	if err == nil && request.Stream {
+		events, err = awaitStreamStart(r.Context(), events)
+	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
@@ -314,6 +317,9 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 }
 
 func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error) {
+	if value := strings.TrimSpace(string(raw)); value == "" || value == "null" {
+		return nil, nil, nil
+	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		return []aistudio.Content{{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: text}}}}, nil, nil

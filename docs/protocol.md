@@ -680,7 +680,7 @@ Anthropic 流式 `message_start` 写入即时输入估算，最终 `message_delt
 | 18 | missing_thought_signature | 19 | `provider_19` |
 | 其他整数 | `provider_<code>` | | |
 
-generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过；流式与非流式请求的这类参数错误都在写出响应头前返回 HTTP 400；上游开始响应后的错误以各协议的流内错误事件返回。
+generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过。流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回。
 
 错误响应根形状为 `[null,[code,message,...]]`。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
@@ -1392,21 +1392,17 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 
 | 端点 | 必需字段 | 主要结果 |
 | --- | --- | --- |
-| `/v1/chat/completions` | `model`、非空 `messages` | Chat completion 或增量 chunk |
-| `/v1/responses` | `model`、`input` | Response object 或 `response.*` 事件 |
+| `/v1/chat/completions` | `model` | Chat completion 或增量 chunk |
+| `/v1/responses` | `model` | Response object 或 `response.*` 事件 |
 | `/v1/files` | multipart `file`、`purpose` | OpenAI file object |
-| `/v1/messages` | `model`、非空 `messages`、`max_tokens` | Anthropic message 或 message 事件 |
-| `:generateContent` / `:streamGenerateContent` | 非空 `contents` | Gemini candidates、usage 与 grounding metadata |
+| `/v1/messages` | `model` | Anthropic message 或 message 事件 |
+| `:generateContent` / `:streamGenerateContent` | 路径中的模型 | Gemini candidates、usage 与 grounding metadata |
 | `/v1/images/generations` | `model`、`prompt`、固定 `n=1` | `b64_json` 或 data URL |
 | `/v1/audio/speech` | `model`、`input` | WAV、PCM 或 MP3 body |
 | `/v1/audio/transcriptions` | multipart `file`；`model` 默认 `gemini-3.5-transcribe` | 文本或转录 JSON |
 | `/v1/videos` | `model`、`prompt` | 长任务对象，随后轮询并下载内容 |
 
-Anthropic assistant prefill 以最后一条 `assistant` text message 表示。适配器将前缀放入续写指令，响应正文返回前缀之后的内容。
-
-OpenAI Chat (`/v1/chat/completions`) 对末尾纯文本 assistant 提供续写兼容：先按原规则提取 system/developer 提示并过滤空消息，再保留 assistant 原文和角色，追加一个独立 user 指令，要求遵循已有提示继续并避免重复前缀。流式与非流式共用此转换。它是提示驱动的续写而非原生 token 级 prefill，不保证模型逐字衔接，也不会在响应中强行拼接或删除前缀。
-
-兼容仅用于末尾连续 assistant 轮均为纯文本且最后一轮有非空白文本的情况。user/tool 结尾、尚未回传结果的末尾工具调用、媒体、推理和代码执行内容不改写；不会伪造 function result。末尾 system/developer 提示仍保留在系统提示中，不会丢弃。其他协议入口保持原有行为。
+生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，末尾连续 assistant 轮的正文与代码执行内容作为前缀写入系统指令，模型从前缀之后续写，响应只返回续写部分；末尾未回传结果的函数调用由模型重新生成。各生成入口与计数接口使用同一转换。
 
 四套生成入口共享同一规范请求，输入映射如下：
 
@@ -1463,7 +1459,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 | 字段 | 类型与语义 |
 | --- | --- |
 | `model` | 必需模型 ID |
-| `messages` | 必需非空 message 数组 |
+| `messages` | message 数组 |
 | `stream` | boolean |
 | `stream_options.include_usage` | 在 finish chunk 后发送 usage-only chunk |
 | `tools` | function 或 Google server tool 数组 |
@@ -1679,9 +1675,9 @@ web search 发生时，search call item 排在 message 前；无 grounding query
 | 字段 | 类型与语义 |
 | --- | --- |
 | `model` | 必需模型 ID |
-| `messages` | 必需非空 `{role,content}` 数组；role 为 `user`、`assistant` 或 `system`，`system` 消息在原位置以 `<system-reminder>` 包裹的用户内容发送 |
+| `messages` | `{role,content}` 数组；role 为 `user`、`assistant` 或 `system`，`system` 消息在原位置以 `<system-reminder>` 包裹的用户内容发送 |
 | `system` | string 或 text block 数组 |
-| `max_tokens` | 必需正整数 |
+| `max_tokens` | 正整数，省略时使用模型默认输出上限 |
 | `stop_sequences` | string array |
 | `stream` | boolean |
 | `temperature`、`top_p`、`top_k` | 生成参数 |

@@ -502,6 +502,10 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	if modelID == "" {
 		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
 	}
+	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if len(request.Contents) == 0 {
+		return TokenCount{}, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
+	}
 	modelAccessScope := ModelAccessKey("count-tokens", modelID)
 	selection := AccountSelection{ModelID: modelID, ModelAccessScope: modelAccessScope, Method: "countTokens"}
 	var count TokenCount
@@ -553,6 +557,10 @@ func (s *PooledService) ValidateGenerateRequest(request GenerateRequest) error {
 	if strings.TrimPrefix(strings.TrimSpace(request.Model), "models/") == "" {
 		return fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
+	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if len(request.Contents) == 0 {
+		return fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
+	}
 	request, _, err := prepareToolRequest(request)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -565,6 +573,10 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
 		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
+	}
+	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if len(request.Contents) == 0 {
+		return nil, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
 	request, contract, err := prepareToolRequest(request)
 	if err != nil {
