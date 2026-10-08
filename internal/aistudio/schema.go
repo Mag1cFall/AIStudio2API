@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -409,6 +410,15 @@ func cleanSchemaInput(raw json.RawMessage, preserveCombinations bool) (json.RawM
 			delete(schema, name)
 		}
 	}
+	var typeName string
+	if json.Unmarshal(schema["type"], &typeName) == nil && strings.EqualFold(typeName, "TYPE_UNSPECIFIED") {
+		delete(schema, "type")
+	}
+	for _, name := range []string{"minItems", "maxItems", "minProperties", "maxProperties", "minLength", "maxLength"} {
+		if value, ok := schema[name]; ok {
+			schema[name] = canonicalSchemaInteger(value)
+		}
+	}
 	for _, name := range []string{"items", "not"} {
 		if nested := bytes.TrimSpace(schema[name]); len(nested) > 0 && nested[0] == '{' {
 			cleaned, err := cleanSchemaInput(nested, preserveCombinations)
@@ -585,6 +595,23 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 		return typeName, nil
 	}
 	return "", nil
+}
+
+// canonicalSchemaInteger 把 Gemini Schema 的字符串 int64 与零小数数字改写为整数字面量，其他值保持原样
+func canonicalSchemaInteger(raw json.RawMessage) json.RawMessage {
+	value := string(bytes.TrimSpace(raw))
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		value = text
+	}
+	if integer, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return json.RawMessage(strconv.FormatInt(integer, 10))
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil || number != math.Trunc(number) || math.Abs(number) > 1<<53 {
+		return raw
+	}
+	return json.RawMessage(strconv.FormatInt(int64(number), 10))
 }
 
 func schemaInteger(raw json.RawMessage, name string) (int64, error) {

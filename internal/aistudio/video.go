@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +20,25 @@ type VideoService interface {
 	GenerateVideo(context.Context, VideoRequest) (VideoOperation, error)
 	GetGenerateVideoOperation(context.Context, string) (VideoOperation, error)
 	DownloadFile(context.Context, string) (MediaStream, error)
+	ListVideos(context.Context) ([]VideoOperation, error)
+	DeleteVideo(context.Context, string) error
+}
+
+// videoNotFinishedError 表示视频任务尚未结束，结果文件还不能删除
+type videoNotFinishedError struct {
+	operationID string
+}
+
+func (err *videoNotFinishedError) Error() string {
+	return fmt.Sprintf("视频任务 %s 尚未结束", err.operationID)
+}
+
+func (err *videoNotFinishedError) HTTPStatus() int {
+	return http.StatusConflict
+}
+
+func (err *videoNotFinishedError) ErrorCode() string {
+	return "video_not_ready"
 }
 
 // VideoImage 表示 Veo 起始帧
@@ -25,15 +47,13 @@ type VideoImage struct {
 	File       *FileRef
 }
 
-// VideoRequest 表示一次 Veo 长任务请求
+// VideoRequest 表示一次生成一个视频的 Veo 长任务请求
 type VideoRequest struct {
 	Model             string
 	Prompt            string
-	Count             int
 	AspectRatio       string
 	DurationSeconds   int
 	Resolution        string
-	Size              string
 	AccountID         string
 	StartImage        *VideoImage
 	RecoverWAARuntime func(context.Context, string, error) (bool, error)
@@ -49,6 +69,8 @@ type VideoOperation struct {
 	Size            string
 	CreatedAt       time.Time
 	accessCheckedAt time.Time
+	// Missing 为上游已找不到该任务时的上游错误说明
+	Missing string
 }
 
 // ModelAccessCheckedAt 返回上游接受视频任务的资格时间
@@ -62,11 +84,8 @@ func EncodeGenerateVideoRequest(request VideoRequest) ([]byte, error) {
 		return nil, fmt.Errorf("GenerateVideo 需要模型和提示词")
 	}
 	request = normalizeVideoRequest(request)
-	if request.Count != 1 {
-		return nil, fmt.Errorf("GenerateVideo 当前模型只支持一个结果")
-	}
 	config := []any{
-		int64(request.Count),
+		int64(1),
 		request.AspectRatio,
 		[]any{strconv.Itoa(request.DurationSeconds)},
 		request.Resolution,
@@ -106,9 +125,6 @@ func encodeVideoImage(image *VideoImage) (any, any, error) {
 }
 
 func normalizeVideoRequest(request VideoRequest) VideoRequest {
-	if request.Count == 0 {
-		request.Count = 1
-	}
 	if strings.TrimSpace(request.AspectRatio) == "" {
 		request.AspectRatio = "16:9"
 	}
@@ -203,7 +219,8 @@ func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (Video
 	if !hasMethod(entry.model, "predictLongRunning") {
 		return VideoOperation{}, fmt.Errorf("%w: 模型 %q 的实时目录没有 predictLongRunning 方法", ErrInvalidArgument, entry.model.ID)
 	}
-	if err := validateVideoOptions(request, entry.model); err != nil {
+	request, err = fitVideoOptions(request, entry.model)
+	if err != nil {
 		return VideoOperation{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	body, err := EncodeGenerateVideoRequest(request)
@@ -220,6 +237,8 @@ func (c *Client) GenerateVideo(ctx context.Context, request VideoRequest) (Video
 		return VideoOperation{}, err
 	}
 	operation.accessCheckedAt = time.Now().UTC()
+	operation.Seconds = strconv.Itoa(request.DurationSeconds)
+	operation.Size = videoOutputSize(request)
 	return operation, nil
 }
 
@@ -282,12 +301,8 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 		}
 		if generateErr == nil {
 			var binding ResourceBinding
-			size := strings.TrimSpace(request.Size)
-			if size == "" {
-				size = videoOutputSize(request)
-			}
 			binding, generateErr = lease.BindVideoOperation(attemptCtx, operation.ID, VideoResourceMetadata{
-				Model: request.Model, Seconds: strconv.Itoa(request.DurationSeconds), Size: size,
+				Model: request.Model, Seconds: operation.Seconds, Size: operation.Size,
 			})
 			if generateErr == nil {
 				applyVideoOperationBinding(&operation, binding)
@@ -340,6 +355,10 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 		return VideoOperation{}, bindingErr
 	}
 	operation, pollErr := s.client.GetGenerateVideoOperation(ContextWithAccountLease(ctx, lease), accountID, operationID)
+	var rpcError *RPCError
+	if errors.As(pollErr, &rpcError) && rpcError.StatusCode == http.StatusNotFound {
+		operation, pollErr = VideoOperation{ID: operationID, Done: true, Missing: rpcError.Message}, nil
+	}
 	applyVideoOperationBinding(&operation, binding)
 	if pollErr == nil {
 		pollErr = errors.Join(
@@ -359,6 +378,57 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 	}
 	return operation, pollErr
 }
+
+// ListVideos 返回全部视频任务的持久元数据
+func (s *PooledService) ListVideos(ctx context.Context) ([]VideoOperation, error) {
+	return s.pool.ListVideos(ctx)
+}
+
+// ListVideos 刷新全部账户 runtime-state 后返回视频任务，按创建时间从新到旧排列
+func (p *AccountPool) ListVideos(ctx context.Context) ([]VideoOperation, error) {
+	if err := p.refreshAllRuntimes(ctx); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	videos := []VideoOperation{}
+	for resourceID, accountID := range p.resources {
+		binding := p.byID[accountID].runtime.Resources[resourceID]
+		if binding.Kind != "video-operation" || binding.Video == nil {
+			continue
+		}
+		operation := VideoOperation{ID: resourceID}
+		applyVideoOperationBinding(&operation, binding)
+		videos = append(videos, operation)
+	}
+	sort.Slice(videos, func(i, j int) bool {
+		if !videos[i].CreatedAt.Equal(videos[j].CreatedAt) {
+			return videos[i].CreatedAt.After(videos[j].CreatedAt)
+		}
+		return videos[i].ID < videos[j].ID
+	})
+	return videos, nil
+}
+
+// DeleteVideo 删除已结束视频任务的 Drive 结果文件与任务绑定，任务未结束时返回 409
+func (s *PooledService) DeleteVideo(ctx context.Context, operationID string) error {
+	operationID = strings.TrimSpace(operationID)
+	operation, err := s.GetGenerateVideoOperation(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	if !operation.Done {
+		return &videoNotFinishedError{operationID: operationID}
+	}
+	if operation.File != nil {
+		if err := s.deleteDriveResource(ctx, operation.File.ID); err != nil && !errors.Is(err, ErrResourceNotFound) {
+			return err
+		}
+	}
+	return s.pool.unbindResourceContext(ctx, operationID)
+}
+
+var _ VideoService = (*PooledService)(nil)
 
 func applyVideoOperationBinding(operation *VideoOperation, binding ResourceBinding) {
 	operation.Model = binding.Video.Model
@@ -382,33 +452,78 @@ func videoOutputSize(request VideoRequest) string {
 	return width + "x" + height
 }
 
-func validateVideoOptions(request VideoRequest, model Model) error {
-	checks := []struct {
-		name  string
-		value string
-	}{
-		{name: "video_aspect_ratios", value: request.AspectRatio},
-		{name: "video_durations_seconds", value: strconv.Itoa(request.DurationSeconds)},
-		{name: "video_output_resolutions", value: request.Resolution},
+// fitVideoOptions 将时长、宽高比与分辨率换成模型选项中最接近的取值
+func fitVideoOptions(request VideoRequest, model Model) (VideoRequest, error) {
+	if request.DurationSeconds < 0 {
+		return request, fmt.Errorf("视频时长不能为负数")
 	}
-	for _, check := range checks {
-		if check.value == "" {
+	if options := model.CapabilityOptions["video_durations_seconds"]; len(options) > 0 {
+		request.DurationSeconds, _ = strconv.Atoi(NearestOption(float64(request.DurationSeconds), options, videoDurationSeconds))
+	}
+	if options := model.CapabilityOptions["video_aspect_ratios"]; len(options) > 0 {
+		ratio, ok := AspectRatioLog(request.AspectRatio)
+		if !ok {
+			return request, fmt.Errorf("无法解析视频宽高比 %q", request.AspectRatio)
+		}
+		request.AspectRatio = NearestOption(ratio, options, AspectRatioLog)
+	}
+	if options := model.CapabilityOptions["video_output_resolutions"]; len(options) > 0 {
+		height, ok := videoResolutionHeight(request.Resolution)
+		if !ok {
+			return request, fmt.Errorf("无法解析视频分辨率 %q", request.Resolution)
+		}
+		request.Resolution = NearestOption(height, options, videoResolutionHeight)
+	}
+	return request, nil
+}
+
+// NearestOption 返回度量值与目标最接近的选项，距离相同时取度量值较大者
+func NearestOption(target float64, options []string, measure func(string) (float64, bool)) string {
+	nearest := ""
+	nearestDistance, nearestValue := math.Inf(1), math.Inf(-1)
+	for _, option := range options {
+		value, ok := measure(option)
+		if !ok {
 			continue
 		}
-		allowed := model.CapabilityOptions[check.name]
-		if len(allowed) == 0 {
-			continue
-		}
-		found := false
-		for _, value := range allowed {
-			if strings.EqualFold(value, check.value) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("模型 %q 不支持 %s=%s", model.ID, check.name, check.value)
+		distance := math.Abs(value - target)
+		if distance < nearestDistance || distance == nearestDistance && value > nearestValue {
+			nearest, nearestDistance, nearestValue = option, distance, value
 		}
 	}
-	return nil
+	return nearest
+}
+
+// AspectRatioLog 返回 W:H 宽高比的自然对数
+func AspectRatioLog(value string) (float64, bool) {
+	widthText, heightText, ok := strings.Cut(strings.TrimSpace(value), ":")
+	width, widthErr := strconv.ParseFloat(strings.TrimSpace(widthText), 64)
+	height, heightErr := strconv.ParseFloat(strings.TrimSpace(heightText), 64)
+	if !ok || widthErr != nil || heightErr != nil || !(width > 0) || !(height > 0) {
+		return 0, false
+	}
+	return math.Log(width) - math.Log(height), true
+}
+
+// videoDurationSeconds 解析视频时长选项的秒数
+func videoDurationSeconds(value string) (float64, bool) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	return float64(seconds), err == nil
+}
+
+// videoResolutionHeight 返回 720p、4k 等视频分辨率的像素高度
+func videoResolutionHeight(value string) (float64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	scale := 0
+	switch {
+	case strings.HasSuffix(value, "p"):
+		scale = 1
+	case strings.HasSuffix(value, "k"):
+		scale = 540
+	}
+	number, err := strconv.Atoi(value[:max(len(value)-1, 0)])
+	if scale == 0 || err != nil || number <= 0 {
+		return 0, false
+	}
+	return float64(number * scale), true
 }

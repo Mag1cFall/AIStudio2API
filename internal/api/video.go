@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -96,45 +97,66 @@ func (s *server) handleGeminiVideoCreate(w http.ResponseWriter, r *http.Request,
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	videoRequest, err := request.toVideoRequest(model)
+	videoRequest, count, err := request.toVideoRequest(model)
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
 	videoRequest = normalizeVideoDefaults(videoRequest)
-	operation, err := service.GenerateVideo(r.Context(), videoRequest)
-	if err != nil {
+	ids := make([]string, 0, count)
+	for range count {
+		operation, createErr := service.GenerateVideo(r.Context(), videoRequest)
+		if createErr != nil {
+			err = createErr
+			break
+		}
+		ids = append(ids, operation.ID)
+	}
+	if len(ids) == 0 {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": "operations/" + operation.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"name": "operations/" + strings.Join(ids, videoOperationSeparator)})
 }
 
-func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRequest, error) {
+// maxVideoCount 是 Gemini numberOfVideos 与 sampleCount 的上限
+const maxVideoCount = 4
+
+// videoOperationSeparator 连接同一 Gemini 操作内各上游视频任务的 ID
+const videoOperationSeparator = "~"
+
+// toVideoRequest 返回单个上游视频任务的请求与要创建的任务数
+func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRequest, int, error) {
 	if len(request.Instances) != 1 || strings.TrimSpace(request.Instances[0].Prompt) == "" {
-		return aistudio.VideoRequest{}, fmt.Errorf("instances must contain one prompt")
+		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances must contain one prompt")
 	}
 	count := request.Parameters.NumberOfVideos
 	if count == 0 {
 		count = request.Parameters.SampleCount
 	}
+	if count == 0 {
+		count = 1
+	}
+	if count < 1 || count > maxVideoCount {
+		return aistudio.VideoRequest{}, 0, fmt.Errorf("numberOfVideos must be between 1 and %d", maxVideoCount)
+	}
 	duration, err := videoDuration(request.Parameters.Duration)
 	if err != nil {
-		return aistudio.VideoRequest{}, err
+		return aistudio.VideoRequest{}, 0, err
 	}
 	result := aistudio.VideoRequest{
-		Model: model, Prompt: request.Instances[0].Prompt, Count: count,
+		Model: model, Prompt: request.Instances[0].Prompt,
 		AspectRatio: request.Parameters.AspectRatio, DurationSeconds: duration, Resolution: request.Parameters.Resolution,
 	}
 	if request.Instances[0].Image != nil {
 		result.StartImage, err = geminiVideoImage(request.Instances[0].Image)
 		if err != nil {
-			return aistudio.VideoRequest{}, err
+			return aistudio.VideoRequest{}, 0, err
 		}
 	}
-	return result, nil
+	return result, count, nil
 }
 
 func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error) {
@@ -193,21 +215,25 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	operationID := cleanOperationID(r.PathValue("operation"))
-	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
-	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+	done := true
+	samples := []any{}
+	for _, id := range strings.Split(operationID, videoOperationSeparator) {
+		operation, err := service.GetGenerateVideoOperation(r.Context(), id)
+		if err != nil {
+			if shouldWriteRequestError(r, err) {
+				writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			}
+			return
 		}
-		return
-	}
-	response := map[string]any{"name": "operations/" + operationID, "done": operation.Done}
-	if operation.Done {
-		samples := []any{}
-		if operation.File != nil {
+		done = done && operation.Done
+		if operation.Done && operation.File != nil {
 			samples = append(samples, map[string]any{"video": map[string]any{
-				"uri": videoContentURL(r, operationID), "mimeType": "video/mp4",
+				"uri": videoContentURL(r, id), "mimeType": "video/mp4",
 			}})
 		}
+	}
+	response := map[string]any{"name": "operations/" + operationID, "done": done}
+	if done {
 		response["response"] = map[string]any{"generateVideoResponse": map[string]any{"generatedSamples": samples}}
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -223,6 +249,18 @@ func (s *server) handleOpenAIVideoCreate(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
+	}
+	if strings.TrimSpace(request.Model) == "" {
+		models, err := s.service.Models(r.Context())
+		if err != nil {
+			if shouldWriteRequestError(r, err) {
+				writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			}
+			return
+		}
+		request.Model = defaultCatalogModel(models, func(model aistudio.Model) bool {
+			return slices.Contains(model.Methods, "predictLongRunning")
+		})
 	}
 	videoRequest, err := request.toVideoRequest(image)
 	if err != nil {
@@ -275,7 +313,7 @@ func parseOpenAIVideoRequest(r *http.Request) (openAIVideoRequest, *aistudio.Vid
 			if readErr != nil {
 				return request, nil, readErr
 			}
-			mimeType := header.Header.Get("Content-Type")
+			mimeType := declaredMediaType(header.Header.Get("Content-Type"))
 			if mimeType == "" {
 				mimeType = http.DetectContentType(data)
 			}
@@ -310,8 +348,8 @@ func (request openAIVideoRequest) toVideoRequest(image *aistudio.VideoImage) (ai
 		return aistudio.VideoRequest{}, err
 	}
 	return aistudio.VideoRequest{
-		Model: request.Model, Prompt: request.Prompt, Count: 1, DurationSeconds: duration,
-		AspectRatio: aspectRatio, Resolution: resolution, Size: strings.TrimSpace(request.Size), StartImage: image,
+		Model: request.Model, Prompt: request.Prompt, DurationSeconds: duration,
+		AspectRatio: aspectRatio, Resolution: resolution, StartImage: image,
 	}, nil
 }
 
@@ -341,12 +379,70 @@ func (s *server) handleOpenAIVideoGet(w http.ResponseWriter, r *http.Request) {
 	operationID := cleanOperationID(r.PathValue("video"))
 	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
 	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
-		}
+		writeOpenAIVideoError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, openAIVideoObject(operation))
+}
+
+// handleOpenAIVideoList 按 after、limit 与 order 分页列出视频，页内各对象经上游轮询返回当前状态
+func (s *server) handleOpenAIVideoList(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service.(aistudio.VideoService)
+	if !ok {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "video listing is unavailable")
+		return
+	}
+	operations, err := service.ListVideos(r.Context())
+	if err != nil {
+		writeOpenAIVideoError(w, r, err)
+		return
+	}
+	page, hasMore, err := openAIListPage(r.URL.Query(), operations, func(operation aistudio.VideoOperation) string { return operation.ID }, listLimits{fallback: 20, min: 0, max: 100})
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	data := make([]map[string]any, 0, len(page))
+	for _, operation := range page {
+		polled, err := service.GetGenerateVideoOperation(r.Context(), operation.ID)
+		if err != nil {
+			writeOpenAIVideoError(w, r, err)
+			return
+		}
+		data = append(data, openAIVideoObject(polled))
+	}
+	body := map[string]any{"object": "list", "data": data, "first_id": nil, "last_id": nil, "has_more": hasMore}
+	if len(page) > 0 {
+		body["first_id"], body["last_id"] = page[0].ID, page[len(page)-1].ID
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// handleOpenAIVideoDelete 删除已结束的视频任务及其结果文件
+func (s *server) handleOpenAIVideoDelete(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service.(aistudio.VideoService)
+	if !ok {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "video deletion is unavailable")
+		return
+	}
+	operationID := cleanOperationID(r.PathValue("video"))
+	if err := service.DeleteVideo(r.Context(), operationID); err != nil {
+		writeOpenAIVideoError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": operationID, "object": "video.deleted", "deleted": true})
+}
+
+// writeOpenAIVideoError 写入视频接口错误，视频任务不存在时返回 404
+func writeOpenAIVideoError(w http.ResponseWriter, r *http.Request, err error) {
+	if !shouldWriteRequestError(r, err) {
+		return
+	}
+	if errors.Is(err, aistudio.ErrResourceNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "video_not_found", "video not found")
+		return
+	}
+	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 }
 
 func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
@@ -360,11 +456,15 @@ func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 			status = "failed"
 		}
 	}
-	return map[string]any{
+	object := map[string]any{
 		"id": operation.ID, "object": "video", "model": operation.Model,
 		"status": status, "progress": progress, "created_at": operation.CreatedAt.Unix(),
 		"size": operation.Size, "seconds": operation.Seconds,
 	}
+	if operation.Missing != "" {
+		object["error"] = map[string]any{"code": "video_not_found", "message": operation.Missing}
+	}
+	return object
 }
 
 func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request) {
@@ -380,9 +480,7 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	operationID := cleanOperationID(r.PathValue("video"))
 	operation, err := service.GetGenerateVideoOperation(r.Context(), operationID)
 	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
-		}
+		writeOpenAIVideoError(w, r, err)
 		return
 	}
 	if !operation.Done || operation.File == nil {
@@ -418,14 +516,7 @@ func cleanOperationID(value string) string {
 }
 
 func videoContentURL(r *http.Request, operationID string) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
-		scheme = forwarded
-	}
-	return scheme + "://" + r.Host + "/v1/videos/" + operationID + "/content"
+	return requestOrigin(r) + "/v1/videos/" + operationID + "/content"
 }
 
 func normalizeVideoDefaults(request aistudio.VideoRequest) aistudio.VideoRequest {

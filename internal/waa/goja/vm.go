@@ -951,7 +951,13 @@ func (vm *vm) toCallee(v Value) *Object {
 		unresolved.throw()
 		panic("Unreachable")
 	case memberUnresolved:
-		panic(vm.r.NewTypeError("Object has no member '%s'", unresolved.ref))
+		text := unresolved.ref.String()
+		if vm.prg != nil && vm.prg.calleeText != nil {
+			if decompiled, ok := vm.prg.calleeText[vm.pc]; ok {
+				text = decompiled
+			}
+		}
+		panic(vm.r.NewTypeError("%s is not a function", text))
 	}
 	panic(vm.r.NewTypeError("%s is not a function", vm.calleeText(v)))
 }

@@ -17,6 +17,14 @@ var harmCategories = []struct {
 	{"HARM_CATEGORY_CIVIC_INTEGRITY", 11},
 }
 
+// ignoredHarmCategories 为 Gemini API 中合法但 Gemini 模型不接受或没有已知 wire 编号的安全类别
+var ignoredHarmCategories = map[string]bool{
+	"HARM_CATEGORY_UNSPECIFIED": true, "HARM_CATEGORY_DEROGATORY": true, "HARM_CATEGORY_TOXICITY": true,
+	"HARM_CATEGORY_VIOLENCE": true, "HARM_CATEGORY_SEXUAL": true, "HARM_CATEGORY_MEDICAL": true,
+	"HARM_CATEGORY_DANGEROUS": true, "HARM_CATEGORY_IMAGE_HATE": true, "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT": true,
+	"HARM_CATEGORY_IMAGE_HARASSMENT": true, "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT": true, "HARM_CATEGORY_JAILBREAK": true,
+}
+
 // harmThresholds 为 Gemini API 拦截阈值名与 wire 编号
 var harmThresholds = map[string]int64{
 	"BLOCK_LOW_AND_ABOVE": 1, "BLOCK_MEDIUM_AND_ABOVE": 2, "BLOCK_ONLY_HIGH": 3, "BLOCK_NONE": 4, "OFF": 5,
@@ -37,7 +45,7 @@ func resolveSafetySettings(settings []SafetySetting, imageRoute bool) ([]SafetyS
 		for _, item := range harmCategories {
 			known = known || item.name == category
 		}
-		if !known {
+		if !known && !ignoredHarmCategories[category] {
 			return nil, fmt.Errorf("safetySettings category %q 不受支持，可用类别为 HARM_CATEGORY_HARASSMENT、HARM_CATEGORY_HATE_SPEECH、HARM_CATEGORY_SEXUALLY_EXPLICIT、HARM_CATEGORY_DANGEROUS_CONTENT、HARM_CATEGORY_CIVIC_INTEGRITY", setting.Category)
 		}
 		if threshold == "HARM_BLOCK_THRESHOLD_UNSPECIFIED" {
@@ -45,6 +53,9 @@ func resolveSafetySettings(settings []SafetySetting, imageRoute bool) ([]SafetyS
 		}
 		if _, ok := harmThresholds[threshold]; !ok {
 			return nil, fmt.Errorf("safetySettings threshold %q 不受支持", setting.Threshold)
+		}
+		if !known {
+			continue
 		}
 		thresholds[category] = threshold
 	}

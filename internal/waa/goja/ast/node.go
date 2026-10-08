@@ -151,6 +151,8 @@ type (
 		DeclarationList []*VariableDeclaration
 
 		Async, Generator bool
+		// Invoked 表示函数是括号表达式最左侧的函数表达式，SpiderMonkey 预测其立即调用并随外层代码编译
+		Invoked bool
 	}
 
 	ClassLiteral struct {

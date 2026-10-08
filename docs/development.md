@@ -9,7 +9,7 @@ AIStudio2API 使用 Go 直接调用 Google AI Studio 的 MakerSuite 私有协议
 | 场景 | 必需组件 | 说明 |
 | --- | --- | --- |
 | Release 运行 | `aistudio2api` | 首次启动自动准备 Camoufox，不需要 Python、Node.js 或 Playwright |
-| 源码运行 | Go 1.25.0+、Node.js 22.13+ 或 24+、配套 npm | Node.js 只用于构建 Vue 管理端 |
+| 源码运行 | Go 1.26.0+、Node.js 22.13+ 或 24+、配套 npm | Node.js 只用于构建 Vue 管理端 |
 | Windows Chrome 导入 | Windows amd64、稳定版 Chrome | Go 程序直接读取本机 Profile 的 OAuth/DBSC 材料 |
 
 Windows 用户可以直接运行根目录的 `start.bat`。脚本优先启动已有的 `aistudio2api.exe`；源码目录缺少可执行文件时才执行 `npm ci`、前端构建与 Go 构建。程序启动后自动打开管理页面，生成服务初始保持停止；账户登录、日志查看和生成服务启停均在该页面完成。
@@ -283,13 +283,15 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 协议 | 端点 |
 | --- | --- |
 | OpenAI Chat | `GET /v1/models`、`GET /v1/models/{model}`、`POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses` |
-| Gemini Interactions | `POST /v1beta/interactions`、`POST /v1/interactions` |
-| OpenAI Files | `POST /v1/files`、`GET/DELETE /v1/files/{file}`、`GET /v1/files/{file}/content` |
-| OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/audio/speech`、`POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
-| OpenAI Transcribe | `POST /v1/audio/transcriptions` |
+| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`GET/DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
+| Gemini Interactions | `POST /v1beta/interactions`、`GET/DELETE /v1beta/interactions/{id}`、`POST /v1beta/interactions/{id}/cancel`，`/v1/interactions` 下路径相同 |
+| OpenAI 与 Anthropic Files | `POST/GET /v1/files`、`GET/DELETE /v1/files/{file}`、`GET /v1/files/{file}/content` |
+| OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/audio/speech`、`POST/GET /v1/videos`、`GET/DELETE /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
+| OpenAI Transcribe | `POST /v1/audio/transcriptions`、`POST /v1/audio/translations` |
+| OpenAI Embeddings | `POST /v1/embeddings` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
-| Gemini | `GET /v1beta/models`、`GET /v1beta/models/{model}`、`POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`、`:predictLongRunning`、`GET /v1beta/operations/{id}` |
+| Gemini | `GET /v1beta/models`、`GET /v1beta/models/{model}`、`POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`、`:embedContent`、`:batchEmbedContents`、`:predictLongRunning`、`GET /v1beta/operations/{id}` |
+| Gemini Files | `POST /upload/v1beta/files`、`GET /v1beta/files`、`GET/DELETE /v1beta/files/{file}` |
 | Realtime | `GET /v1/live`、`GET /v1/robotics/stream` |
 
 管理端路由：

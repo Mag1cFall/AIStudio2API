@@ -239,6 +239,28 @@ func (manager *runtimeManager) GetGenerateVideoOperation(ctx context.Context, id
 	return service.GetGenerateVideoOperation(ctx, id)
 }
 
+// ListVideos 由当前生成服务列出视频任务
+func (manager *runtimeManager) ListVideos(ctx context.Context) ([]aistudio.VideoOperation, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	service, ok := manager.current.service.(aistudio.VideoService)
+	if !ok {
+		return nil, fmt.Errorf("video service 不可用")
+	}
+	return service.ListVideos(ctx)
+}
+
+// DeleteVideo 由当前生成服务删除视频任务
+func (manager *runtimeManager) DeleteVideo(ctx context.Context, id string) error {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	service, ok := manager.current.service.(aistudio.VideoService)
+	if !ok {
+		return fmt.Errorf("video service 不可用")
+	}
+	return service.DeleteVideo(ctx, id)
+}
+
 // DownloadFile 由当前生成服务下载文件
 func (manager *runtimeManager) DownloadFile(ctx context.Context, id string) (aistudio.MediaStream, error) {
 	manager.mu.RLock()
@@ -270,6 +292,17 @@ func (manager *runtimeManager) FileMetadata(ctx context.Context, id string) (ais
 		return aistudio.FileMetadata{}, fmt.Errorf("file service 不可用")
 	}
 	return service.FileMetadata(ctx, id)
+}
+
+// ListFiles 由当前生成服务列出上传文件
+func (manager *runtimeManager) ListFiles(ctx context.Context) ([]aistudio.FileMetadata, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	service, ok := manager.current.service.(aistudio.FileService)
+	if !ok {
+		return nil, fmt.Errorf("file service 不可用")
+	}
+	return service.ListFiles(ctx)
 }
 
 // DeleteFile 由当前生成服务删除文件

@@ -38,9 +38,9 @@ func decompileExpression(expression ast.Expression) string {
 	case *ast.BracketExpression:
 		return decompileExpression(node.Left) + decompileMember(node.Member)
 	case *ast.CallExpression:
-		return decompileExpression(node.Callee) + "()"
+		return decompileExpression(node.Callee) + argumentsText(node.ArgumentList)
 	case *ast.NewExpression:
-		return "(new " + decompileExpression(node.Callee) + "())"
+		return "(new " + decompileExpression(node.Callee) + argumentsText(node.ArgumentList) + ")"
 	case *ast.SequenceExpression:
 		if len(node.Sequence) > 0 {
 			return decompileExpression(node.Sequence[len(node.Sequence)-1])
@@ -122,4 +122,12 @@ func numericConstant(expression ast.Expression) (float64, bool) {
 		return foldNumeric(node)
 	}
 	return 0, false
+}
+
+// argumentsText 按 SpiderMonkey 反编译规则返回调用的实参部分，有实参时省略为 (...)
+func argumentsText(arguments []ast.Expression) string {
+	if len(arguments) > 0 {
+		return "(...)"
+	}
+	return "()"
 }

@@ -20,8 +20,9 @@ type ProtocolEvidenceError struct {
 
 // PromptFeedbackError 表示上游拒绝当前输入且没有返回候选
 type PromptFeedbackError struct {
-	Reason string
-	Raw    json.RawMessage
+	Reason  string
+	Message string
+	Raw     json.RawMessage
 }
 
 // Error 返回协议证据错误
@@ -34,6 +35,9 @@ func (e *ProtocolEvidenceError) Error() string {
 
 // Error 返回上游输入拒绝原因
 func (e *PromptFeedbackError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("AI Studio 拒绝当前输入: %s: %s", e.Reason, e.Message)
+	}
 	return fmt.Sprintf("AI Studio 拒绝当前输入: %s", e.Reason)
 }
 

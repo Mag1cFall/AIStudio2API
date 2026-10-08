@@ -248,7 +248,12 @@ func anthropicErrorType(err error) string {
 	if isUnverifiedProtocolError(err) {
 		return "invalid_request_error"
 	}
-	switch statusFromError(err) {
+	return anthropicStatusErrorType(statusFromError(err))
+}
+
+// anthropicStatusErrorType 返回 HTTP 状态对应的 Anthropic 错误类型
+func anthropicStatusErrorType(status int) string {
+	switch status {
 	case http.StatusBadRequest:
 		return "invalid_request_error"
 	case http.StatusUnauthorized:

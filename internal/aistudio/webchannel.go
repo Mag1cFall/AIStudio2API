@@ -64,6 +64,7 @@ type BidiSession struct {
 	sid                 string
 	model               string
 	mode                BidiMode
+	buildPath           string
 	modelAccessScope    string
 	accountID           string
 	modelAccessObserver func()
@@ -124,8 +125,9 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 	if !ok {
 		return nil, fmt.Errorf("AI Studio protected transport 不支持 bidiGenerateContent")
 	}
+	request.method = s.pool.BidiMethod(modelID)
 	selection := AccountSelection{
-		ModelID: modelID, Method: "bidiGenerateContent", AccountID: strings.TrimSpace(request.AccountID),
+		ModelID: modelID, Method: request.method, AccountID: strings.TrimSpace(request.AccountID),
 		ModelAccessScope:  modelAccessScope,
 		ResourceID:        strings.TrimSpace(request.SessionToken),
 		AllowedAccountIDs: append([]string(nil), request.AllowedAccountIDs...),
@@ -152,16 +154,18 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			return nil, err
 		}
 		request.AccountID = lease.Account().ID
-		entry, err := s.client.modelEntry(ctx, request.AccountID, modelID)
-		if err != nil {
-			if owned {
-				err = errors.Join(err, lease.Release())
+		if lease.Channel() == ChannelPlayground {
+			entry, err := s.client.modelEntry(ctx, request.AccountID, modelID)
+			if err != nil {
+				if owned {
+					err = errors.Join(err, lease.Release())
+				}
+				return nil, err
 			}
-			return nil, err
-		}
-		request.generationDefaults = entry.defaults
-		if request.Mode == BidiModeLive {
-			request.variant = bidiVariantFor(entry.model)
+			request.generationDefaults = entry.defaults
+			if request.Mode == BidiModeLive {
+				request.variant = bidiVariantFor(entry.model)
+			}
 		}
 		runtime := RequestContext{}
 		if s.client.contextProvider != nil {
@@ -188,7 +192,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 				accountID := request.AccountID
 				accessGeneration := lease.ModelAccessGeneration()
 				changed, stateErr := s.pool.MarkModelAccessVerifiedIfGeneration(
-					accountID, modelAccessScope, accessGeneration, checkedAt,
+					accountID, lease.CooldownScope(modelAccessScope), accessGeneration, checkedAt,
 				)
 				if stateErr != nil {
 					slog.Error("Bidi 模型资格保存失败", "account", accountID, "model", modelID, "error", stateErr)
@@ -232,7 +236,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 		if request.ObserveAccountFailure != nil {
 			request.ObserveAccountFailure(request.AccountID, err)
 		}
-		stateErr = s.markRetryableFailure(lease, modelAccessScope, err)
+		stateErr = s.markRetryableFailure(lease, lease.CooldownScope(modelAccessScope), err)
 		if stateErr != nil {
 			return nil, errors.Join(requestErr, stateErr)
 		}
@@ -300,41 +304,52 @@ func (s *BidiSession) notifyModelAccessChanged() {
 
 // SendText 发送一条官网文本输入帧
 func (s *BidiSession) SendText(ctx context.Context, text string) error {
-	body, binding, err := EncodeBidiTextRequest(text)
+	body, binding, err := s.liveFrame(
+		func() ([]byte, string, error) { return EncodeBidiTextRequest(text) },
+		func() ([]byte, string, error) { return encodeBuildLiveText(text) },
+	)
 	if err != nil {
 		return err
 	}
 	return s.sendProtected(
-		ctx, body, binding,
+		ctx, body, binding, text,
 		s.modelAccessScope != "" && (s.mode == BidiModeRobotics || s.modelAccessScope == s.model), true,
 	)
 }
 
 // SendMedia 把一条官网实时音频或图像输入帧排入前向通道，发送失败在后续调用返回
 func (s *BidiSession) SendMedia(ctx context.Context, mimeType string, data []byte) error {
-	body, binding, err := EncodeBidiMediaRequest(mimeType, data)
+	body, binding, err := s.liveFrame(
+		func() ([]byte, string, error) { return EncodeBidiMediaRequest(mimeType, data) },
+		func() ([]byte, string, error) { return encodeBuildLiveMedia(mimeType, data) },
+	)
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, s.modelAccessScope != "", false)
+	return s.sendProtected(ctx, body, binding, "", s.modelAccessScope != "", false)
 }
 
 // SendMediaEnd 发送官网实时媒体结束帧并等待此前排队的媒体帧送达
 func (s *BidiSession) SendMediaEnd(ctx context.Context) error {
-	body, binding, err := EncodeBidiMediaEndRequest()
+	body, binding, err := s.liveFrame(EncodeBidiMediaEndRequest, func() ([]byte, string, error) {
+		return encodeBuildBidiMessage(buildLivePath, map[string]any{"realtimeInput": map[string]any{"audioStreamEnd": true}})
+	})
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, false, true)
+	return s.sendProtected(ctx, body, binding, "", false, true)
 }
 
 // SendToolResponses 发送官网函数响应帧
 func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionResult) error {
-	body, binding, err := EncodeBidiToolResponseRequest(results)
+	body, binding, err := s.liveFrame(
+		func() ([]byte, string, error) { return EncodeBidiToolResponseRequest(results) },
+		func() ([]byte, string, error) { return encodeBuildLiveToolResponses(results) },
+	)
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, false, true)
+	return s.sendProtected(ctx, body, binding, "", false, true)
 }
 
 // Close 取消网络读取并等待账户租约释放
@@ -368,7 +383,17 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 	lease *AccountLease,
 	release func() error,
 ) (*BidiSession, error) {
-	body, binding, err := EncodeBidiSetupRequest(request, runtime)
+	webChannelURL, buildPath, page := bidiWebChannelURL, "", ""
+	var body []byte
+	var binding string
+	var err error
+	if lease.Channel() == ChannelBuild {
+		webChannelURL, buildPath = buildBidiWebChannelURL, buildBidiPath(request.method)
+		body, binding, err = EncodeBuildBidiSetup(request)
+	} else {
+		body, binding, err = EncodeBidiSetupRequest(request, runtime)
+		page = binding
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -382,8 +407,8 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		}
 	}
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
-		URL: bidiWebChannelURL, Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
-		Body: body, Prompt: binding, ProofField: 6,
+		URL: webChannelURL, Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
+		Body: body, Prompt: binding, PagePrompt: page, ProofField: bidiProofField(buildPath != ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("准备 bidi setup fresh WAA proof: %w", err)
@@ -395,7 +420,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		return prepared.Headers.Clone(), nil
 	})
 	_, protocolHeaders, err := prepareProtocolHeaders(
-		ctx, lease, RPCRequest{Method: "BidiGenerateContent", URL: bidiWebChannelURL},
+		ctx, lease, RPCRequest{Method: "BidiGenerateContent", URL: webChannelURL},
 		t.transport.signer, headerProvider, t.transport.now(), true,
 	)
 	if err != nil {
@@ -415,7 +440,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 	session := &BidiSession{
 		ctx: requestCtx, cancel: cancel, lease: lease, release: release, worker: worker, client: client,
 		headers: webChannelHeaders(protocolHeaders), model: strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"),
-		mode: request.Mode, modelAccessScope: strings.TrimSpace(request.ModelAccessScope),
+		mode: request.Mode, buildPath: buildPath, modelAccessScope: strings.TrimSpace(request.ModelAccessScope),
 		modelAccessObserver: request.ObserveModelAccessChange,
 		accountID:           lease.Account().ID, rid: rid, latestResumptionToken: strings.TrimSpace(request.SessionToken),
 		events: make(chan BidiEvent, 32), wireEvents: make(chan BidiEvent, 32),
@@ -527,7 +552,7 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 		"zx":                []string{zx},
 		"t":                 []string{"1"},
 	}
-	requestURL := bidiWebChannelURL + "?" + query.Encode()
+	requestURL := s.webChannelURL() + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader("count=0"))
 	if err != nil {
 		return fmt.Errorf("创建 bidi WebChannel handshake: %w", err)
@@ -566,16 +591,21 @@ func (s *BidiSession) sendPreparedSetup(ctx context.Context, body []byte) error 
 	return s.postMessage(ctx, body, false)
 }
 
-func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding string, qualifies bool, wait bool) error {
+// sendProtected 为客户端消息写入 fresh proof 后排入前向通道，页面提示词在 Playground 为 binding，在 Build 为消息中的用户文本 text
+func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding string, text string, qualifies bool, wait bool) error {
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopSession := context.AfterFunc(s.ctx, cancel)
 	defer func() {
 		stopSession()
 		cancel()
 	}()
+	page := binding
+	if s.buildPath != "" {
+		page = text
+	}
 	prepared, err := s.worker.Prepare(requestCtx, ProtectedRequest{
-		URL: bidiWebChannelURL, Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
-		Body: body, Prompt: binding, ProofField: 6,
+		URL: s.webChannelURL(), Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
+		Body: body, Prompt: binding, PagePrompt: page, ProofField: bidiProofField(s.buildPath != ""),
 	})
 	if err != nil {
 		return fmt.Errorf("准备 bidi fresh WAA proof: %w", err)
@@ -717,7 +747,7 @@ func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resu
 	for index, entry := range batch {
 		form.WriteString("&req" + strconv.Itoa(index) + "___data__=" + url.QueryEscape(string(entry.payload)))
 	}
-	requestURL := bidiWebChannelURL + "?" + query.Encode()
+	requestURL := s.webChannelURL() + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, requestURL, strings.NewReader(form.String()))
 	if err != nil {
 		return fmt.Errorf("创建 bidi WebChannel message: %w", err)
@@ -836,7 +866,7 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 		"zx":         []string{zx},
 		"t":          []string{"1"},
 	}
-	requestURL := bidiWebChannelURL + "?" + query.Encode()
+	requestURL := s.webChannelURL() + "?" + query.Encode()
 	request, err := http.NewRequestWithContext(s.ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建 bidi WebChannel backchannel: %w", err)
@@ -906,7 +936,7 @@ func (s *BidiSession) consumeBackchannelFrame(raw json.RawMessage) (int, error) 
 		if err != nil {
 			return parsed, withBidiMethod(err)
 		}
-		events, err := ParseBidiServerPayload(envelope[1])
+		events, err := s.parsePayload(envelope[1])
 		if err != nil {
 			return parsed, err
 		}
@@ -955,6 +985,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 			if scope == "" {
 				scope = s.model
 			}
+			scope = s.lease.CooldownScope(scope)
 			if cooldown.Global {
 				scope = ""
 			}
@@ -988,7 +1019,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 		slog.Error("Bidi 账户认证状态保存失败", "account", s.accountID, "error", err)
 	}
 	accountID := s.accountID
-	accessScope := s.modelAccessScope
+	accessScope := s.lease.CooldownScope(s.modelAccessScope)
 	generation := s.lease.ModelAccessGeneration()
 	go func() {
 		changed, err := s.lease.pool.MarkModelAccessVerifiedIfGeneration(
@@ -1081,7 +1112,7 @@ func (s *BidiSession) terminate() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, bidiWebChannelURL+"?"+query.Encode(), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.webChannelURL()+"?"+query.Encode(), nil)
 	if err != nil {
 		return fmt.Errorf("创建 bidi WebChannel terminate: %w", err)
 	}
@@ -1117,7 +1148,7 @@ func (s *BidiSession) mergeCookies(response *http.Response, requestURL string) e
 	if err != nil {
 		return fmt.Errorf("读取 bidi WebChannel Cookie: %w", err)
 	}
-	cookie, err := state.CookieHeader(bidiWebChannelURL, time.Now())
+	cookie, err := state.CookieHeader(s.webChannelURL(), time.Now())
 	if err != nil {
 		return fmt.Errorf("构造 bidi WebChannel Cookie: %w", err)
 	}

@@ -65,7 +65,7 @@ function tokenLimit(value: number | undefined): string {
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <input
         v-model="query"
-        class="min-w-0 flex-1 rounded border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64"
+        class="min-w-0 flex-1 basis-full rounded border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64 sm:basis-0"
         :placeholder="t('models.search')"
         type="search"
       />

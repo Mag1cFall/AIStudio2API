@@ -74,11 +74,9 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 		if err := compiler.AddResource(resource, document); err != nil {
 			return request, nil, err
 		}
-		schema, err := compiler.Compile(resource)
-		if err != nil {
-			return request, nil, fmt.Errorf("function %q schema: %w", declaration.Name, err)
+		if schema, err := compiler.Compile(resource); err == nil {
+			contract.schemas[declaration.Name] = schema
 		}
-		contract.schemas[declaration.Name] = schema
 	}
 	for _, name := range config.AllowedFunctionNames {
 		if !contract.names[name] {

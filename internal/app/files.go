@@ -40,6 +40,22 @@ func (service *trackedService) FileMetadata(ctx context.Context, fileID string) 
 	return metadata, requestErr
 }
 
+// ListFiles 列出上传文件
+func (service *trackedService) ListFiles(ctx context.Context) ([]aistudio.FileMetadata, error) {
+	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	files, ok := service.service.(aistudio.FileService)
+	if !ok {
+		return nil, fmt.Errorf("file service 不可用")
+	}
+	list, requestErr := files.ListFiles(requestCtx)
+	api.SetAccessLogError(requestCtx, requestErr)
+	return list, requestErr
+}
+
 // DeleteFile 删除上传文件并记录结果
 func (service *trackedService) DeleteFile(ctx context.Context, fileID string) error {
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")

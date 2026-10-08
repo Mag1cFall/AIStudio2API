@@ -1,6 +1,6 @@
 module github.com/Mag1cFall/AIStudio2API
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/bogdanfinn/fhttp v0.6.8
@@ -13,7 +13,13 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/gorilla/websocket v1.5.3
+	github.com/mewkiz/flac v1.0.14
+	github.com/oov/audio v0.0.0-20171004131523-88a2be6dbe38
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	github.com/thesyncim/gopus v0.1.2
+	github.com/tphakala/go-aac v0.7.0
+	github.com/tphakala/go-mp3 v0.1.0
+	github.com/zaf/g711 v1.4.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
@@ -28,12 +34,16 @@ require (
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/icza/bitio v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
+	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
+	github.com/tphakala/simd v1.9.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	modernc.org/libc v1.74.4 // indirect

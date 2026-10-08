@@ -17,28 +17,22 @@ func responsesUsesWebSearch(tools []responsesTool) bool {
 	return false
 }
 
-func validateResponsesCodeContainer(raw json.RawMessage) error {
+// responsesContainerFiles 返回 code_interpreter 自动容器携带的文件 ID，容器 ID 字符串不携带文件
+func responsesContainerFiles(raw json.RawMessage) ([]string, error) {
 	if !rawJSONConfigured(raw) {
-		return nil
+		return nil, nil
 	}
-	var name string
-	if err := json.Unmarshal(raw, &name); err == nil {
-		if name == "auto" {
-			return nil
-		}
-		return fmt.Errorf("AI Studio Web 的 code_interpreter container 只支持 auto")
+	var id string
+	if json.Unmarshal(raw, &id) == nil {
+		return nil, nil
 	}
 	var container struct {
-		Type    string   `json:"type"`
 		FileIDs []string `json:"file_ids"`
 	}
-	if err := json.Unmarshal(raw, &container); err != nil || container.Type != "auto" {
-		return fmt.Errorf("AI Studio Web 的 code_interpreter container 只支持 auto")
+	if err := json.Unmarshal(raw, &container); err != nil {
+		return nil, fmt.Errorf("code_interpreter container must be a container ID or object")
 	}
-	if len(container.FileIDs) > 0 {
-		return fmt.Errorf("AI Studio Web 的 code_interpreter 不支持 container file_ids")
-	}
-	return nil
+	return container.FileIDs, nil
 }
 
 func responseWebSearchItems(responseID string, events []aistudio.Event) []any {

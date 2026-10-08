@@ -92,8 +92,9 @@ type _parser struct {
 	parsedLiteral unistring.String
 
 	scope             *_scope
-	insertSemicolon   bool // If we see a newline, then insert an implicit semicolon
-	implicitSemicolon bool // An implicit semicolon exists
+	parenStart        file.Idx // parenStart 是最近一个括号表达式内首个记号的位置
+	insertSemicolon   bool     // If we see a newline, then insert an implicit semicolon
+	implicitSemicolon bool     // An implicit semicolon exists
 
 	errors ErrorList
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,7 +58,7 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 		if r.MultipartForm != nil {
 			_ = r.MultipartForm.RemoveAll()
 		}
-		writeOpenAIFileParseError(w, err)
+		writeFileParseError(w, r, err)
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
@@ -65,16 +66,12 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 	if model == "" {
 		model = aistudio.DefaultTranscriptionModel
 	}
-	if strings.TrimSpace(r.FormValue("prompt")) != "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "prompt is not supported by the observed transcription protocol")
-		return
-	}
 	responseFormat := strings.TrimSpace(r.FormValue("response_format"))
 	if responseFormat == "" {
 		responseFormat = "json"
 	}
 	if !supportedTranscriptionResponseFormat(responseFormat) {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "response_format must be json, text, verbose_json, or diarized_json")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "response_format must be json, text, srt, verbose_json, vtt, or diarized_json")
 		return
 	}
 	wordTimestamps, wordTimestampsSet, err := transcriptionBool(r, "word_timestamps", false)
@@ -111,37 +108,18 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if subtitleFormat(responseFormat) && !wordTimestampsSet && !smartTranscription && len(vocabulary) == 0 {
+		wordTimestamps = true
+	}
 	if len(vocabulary) > 0 && wordTimestamps {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "custom_vocabulary cannot be combined with word_timestamps")
 		return
 	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "file is required")
+	file, header, mimeType, ok := openAIAudioFile(w, r)
+	if !ok {
 		return
 	}
 	defer file.Close()
-	if strings.TrimSpace(header.Filename) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "filename is required")
-		return
-	}
-	if header.Size <= 0 {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "file must not be empty")
-		return
-	}
-	if header.Size > openAIFileMaxBytes {
-		writeOpenAIError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds 512 MB")
-		return
-	}
-	mimeType, err := multipartFileMIME(file, header.Header.Get("Content-Type"))
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if !supportedTranscriptionMIME(mimeType) {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "file must contain supported audio")
-		return
-	}
 	config := aistudio.GenerationConfig{
 		Temperature: temperature,
 		TranscriptionConfig: &aistudio.TranscriptionConfig{
@@ -166,13 +144,49 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 	writeTranscriptionResponse(w, responseFormat, language, result)
 }
 
+// openAIAudioFile 读取 multipart 的 file 段并识别音频 MIME，失败时写入 OpenAI 错误并返回 false
+func openAIAudioFile(w http.ResponseWriter, r *http.Request) (multipart.File, *multipart.FileHeader, string, bool) {
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "file is required")
+		return nil, nil, "", false
+	}
+	fail := func(status int, code string, message string) (multipart.File, *multipart.FileHeader, string, bool) {
+		_ = file.Close()
+		writeOpenAIError(w, status, code, message)
+		return nil, nil, "", false
+	}
+	if strings.TrimSpace(header.Filename) == "" {
+		return fail(http.StatusBadRequest, "invalid_request", "filename is required")
+	}
+	if header.Size <= 0 {
+		return fail(http.StatusBadRequest, "invalid_request", "file must not be empty")
+	}
+	if header.Size > openAIFileMaxBytes {
+		return fail(http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds 512 MB")
+	}
+	mimeType, err := multipartFileMIME(file, header.Header.Get("Content-Type"), header.Filename)
+	if err != nil {
+		return fail(http.StatusBadRequest, "invalid_request", err.Error())
+	}
+	if !supportedTranscriptionMIME(mimeType) {
+		return fail(http.StatusBadRequest, "invalid_request", "file must contain supported audio")
+	}
+	return file, header, mimeType, true
+}
+
 func supportedTranscriptionResponseFormat(value string) bool {
 	switch value {
-	case "json", "text", "verbose_json", "diarized_json":
+	case "json", "text", "srt", "verbose_json", "vtt", "diarized_json":
 		return true
 	default:
 		return false
 	}
+}
+
+// subtitleFormat 判断转录格式是否为需要时间戳的字幕
+func subtitleFormat(value string) bool {
+	return value == "srt" || value == "vtt"
 }
 
 func transcriptionBool(r *http.Request, name string, defaultValue bool) (bool, bool, error) {
@@ -249,6 +263,16 @@ func writeTranscriptionResponse(
 		_, _ = io.WriteString(w, result.Text)
 		return
 	}
+	if subtitleFormat(responseFormat) {
+		contentType := "text/plain; charset=utf-8"
+		if responseFormat == "vtt" {
+			contentType = "text/vtt; charset=utf-8"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, transcriptionSubtitles(responseFormat, result.Segments))
+		return
+	}
 	response := openAITranscriptionResponse{Text: result.Text}
 	if responseFormat != "json" {
 		response.Task = "transcribe"
@@ -290,6 +314,32 @@ func openAITranscriptionMetadata(
 		}
 	}
 	return segments, words, duration
+}
+
+// transcriptionSubtitles 按转录分段渲染 SRT 或 WebVTT 字幕
+func transcriptionSubtitles(format string, metadata []aistudio.TranscriptMetadata) string {
+	segments, _, _ := openAITranscriptionMetadata(metadata)
+	var builder strings.Builder
+	separator := ","
+	if format == "vtt" {
+		builder.WriteString("WEBVTT\n\n")
+		separator = "."
+	}
+	for index, segment := range segments {
+		if format == "srt" {
+			fmt.Fprintf(&builder, "%d\n", index+1)
+		}
+		fmt.Fprintf(&builder, "%s --> %s\n%s\n\n",
+			subtitleTimestamp(segment.Start, separator), subtitleTimestamp(segment.End, separator), strings.TrimSpace(segment.Text))
+	}
+	return builder.String()
+}
+
+// subtitleTimestamp 将秒数格式化为字幕时间戳
+func subtitleTimestamp(seconds float64, separator string) string {
+	milliseconds := int64(math.Round(seconds * 1000))
+	return fmt.Sprintf("%02d:%02d:%02d%s%03d",
+		milliseconds/3_600_000, milliseconds/60_000%60, milliseconds/1000%60, separator, milliseconds%1000)
 }
 
 func transcriptBounds(timestamps []aistudio.TranscriptTimestamp) (float64, float64) {

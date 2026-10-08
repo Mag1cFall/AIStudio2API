@@ -104,17 +104,22 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*Work
 
 // DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent 或 Build 代理请求
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
-	prompt, err := bindingPrompt(request)
+	var prompt, page string
+	var err error
 	proofField := 5
 	if rpc.Method == buildProxyStreamedMethod || rpc.Method == buildProxyUnaryMethod {
 		prompt, err = buildBindingPrompt(rpc.Body)
+		page = contentsText(request.Contents)
 		proofField = buildProofField
+	} else {
+		prompt, err = bindingPrompt(request)
+		page = prompt
 	}
 	if err != nil {
 		return nil, err
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	return t.doBrowserPrepared(ctx, prompt, proofField, AccountSelection{
+	return t.doBrowserPrepared(ctx, prompt, page, proofField, AccountSelection{
 		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
 	}, rpc)
 }
@@ -122,11 +127,12 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 func (t *WorkerProtectedTransport) doBrowserPrepared(
 	ctx context.Context,
 	prompt string,
+	page string,
 	proofField int,
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
-	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, proofField, selection, rpc)
+	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, selection, rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +170,7 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	ctx context.Context,
 	prompt string,
+	page string,
 	proofField int,
 	selection AccountSelection,
 	rpc RPCRequest,
@@ -181,8 +188,8 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	}
 	reportRequestPhase(ctx, RequestPhasePreparingWAA)
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
-		URL: rpc.URL, Headers: rpc.Header.Clone(), Body: append([]byte(nil), rpc.Body...),
-		Prompt: prompt, ProofField: proofField,
+		URL: rpc.URL, Headers: rpc.Header.Clone(), Body: rpc.Body,
+		Prompt: prompt, PagePrompt: page, ProofField: proofField,
 	})
 	if err != nil {
 		return nil, nil, RPCRequest{}, fmt.Errorf("准备 fresh WAA proof: %w", err)
@@ -192,7 +199,7 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	}
 	requestHeaders := rpc.Header
 	rpc.AccountID = lease.Account().ID
-	rpc.Body = append([]byte(nil), prepared.Body...)
+	rpc.Body = prepared.Body
 	rpc.Header = prepared.Headers.Clone()
 	for name, values := range requestHeaders {
 		rpc.Header.Del(name)
@@ -219,7 +226,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
-	_, _, rpc, err := t.prepareProtectedRequest(ctx, prompt, proofField, selection, rpc)
+	_, _, rpc, err := t.prepareProtectedRequest(ctx, prompt, prompt, proofField, selection, rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +260,19 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 		}
 	}
 	return strings.Join(values, " "), nil
+}
+
+// contentsText 返回各 Part 的文本以空格连接，作为 Build 请求写入页面的提示词
+func contentsText(contents []Content) string {
+	values := make([]string, 0)
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			if part.Text != "" {
+				values = append(values, part.Text)
+			}
+		}
+	}
+	return strings.Join(values, " ")
 }
 
 // RequestContext 返回账户时区
@@ -578,10 +598,6 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 	if len(request.Contents) == 0 {
 		return nil, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
-	request, contract, err := prepareToolRequest(request)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
-	}
 	resourceID, err := s.pool.ResourceIDForContents(ctx, request.Contents)
 	if err != nil {
 		return nil, err
@@ -612,7 +628,6 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		request.AccountID = accountID
 		events, err := s.client.Generate(ContextWithAccountLease(ctx, lease), request)
 		if err == nil {
-			events = contract.forward(ctx, events)
 			if !owned {
 				return events, nil
 			}
@@ -822,13 +837,6 @@ func unionStrings(left []string, right []string) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func appendStatusError(failures []error, err error) []error {
-	if err != nil {
-		return append(failures, err)
-	}
-	return failures
 }
 
 func minimumPositive(left int64, right int64) int64 {

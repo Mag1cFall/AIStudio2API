@@ -3042,8 +3042,8 @@ func (p *AccountPool) refreshResource(ctx context.Context, resourceID string) er
 	p.mu.Lock()
 	ownerID, exists := p.resources[resourceID]
 	owner := p.byID[ownerID]
+	p.mu.Unlock()
 	if exists && owner != nil {
-		p.mu.Unlock()
 		if err := p.refreshAccountRuntime(ctx, owner); err != nil {
 			if errors.Is(err, ErrAccountNotFound) {
 				p.markStaleAccountUnavailable(owner)
@@ -3053,26 +3053,14 @@ func (p *AccountPool) refreshResource(ctx context.Context, resourceID string) er
 		}
 		return nil
 	}
-	accounts := append([]*Account(nil), p.accounts...)
-	p.mu.Unlock()
-	var failures []error
-	for _, result := range p.refreshAccountRuntimes(ctx, accounts) {
-		if result.err == nil {
-			continue
-		}
-		if errors.Is(result.err, ErrAccountNotFound) {
-			p.markStaleAccountUnavailable(result.account)
-			continue
-		}
-		failures = append(failures, result.err)
-	}
+	refreshErr := p.refreshAllRuntimes(ctx)
 	p.mu.Lock()
 	_, found := p.resources[resourceID]
 	p.mu.Unlock()
 	if found {
 		return nil
 	}
-	return errors.Join(failures...)
+	return refreshErr
 }
 
 func (p *AccountPool) refreshSelectionRuntimes(ctx context.Context, selection AccountSelection) error {

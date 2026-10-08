@@ -2711,6 +2711,38 @@ func (service *trackedService) GetGenerateVideoOperation(ctx context.Context, op
 	return operation, requestErr
 }
 
+// ListVideos 列出视频任务
+func (service *trackedService) ListVideos(ctx context.Context) ([]aistudio.VideoOperation, error) {
+	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	video, ok := service.service.(aistudio.VideoService)
+	if !ok {
+		return nil, fmt.Errorf("video service 不可用")
+	}
+	videos, requestErr := video.ListVideos(requestCtx)
+	api.SetAccessLogError(requestCtx, requestErr)
+	return videos, requestErr
+}
+
+// DeleteVideo 删除视频任务及其结果文件
+func (service *trackedService) DeleteVideo(ctx context.Context, operationID string) error {
+	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	video, ok := service.service.(aistudio.VideoService)
+	if !ok {
+		return fmt.Errorf("video service 不可用")
+	}
+	requestErr := video.DeleteVideo(requestCtx, operationID)
+	api.SetAccessLogError(requestCtx, requestErr)
+	return requestErr
+}
+
 // DownloadFile 下载生成任务绑定的 Drive 文件
 func (service *trackedService) DownloadFile(ctx context.Context, fileID string) (aistudio.MediaStream, error) {
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")

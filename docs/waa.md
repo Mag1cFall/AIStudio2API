@@ -36,10 +36,12 @@ WAA（Web Application Attestation）为 AI Studio 的受保护 RPC 提供 BotGua
 | `GenerateContent` | 5 | contents 各 part 以空格连接 | Worker `SendProtected` |
 | `CreateInteractionStream` | 5 | 发送的全部文本以空格连接 | Worker `SendProtected` |
 | `ProxyStreamedCall`、`ProxyUnaryCall` | 3 | `<路径> <请求体>` | Worker `SendProtected` |
+| Build embedding `ProxyUnaryCall` | 3 | `<路径> <请求体>`，路径为 `:batchEmbedContents` | Worker `SendProtected` |
 | `GenerateVideo` | 8 | 视频提示词 | MakerSuite Go HTTP transport |
 | Bidi setup | 6 | `models/<模型>` 与每个函数的 `名称 描述`，以空格连接 | WebChannel |
 | Bidi text、audio、image、media end | 6 | 空字符串 | WebChannel |
 | Bidi tool response | 6 | 第一条 function response 的 call ID | WebChannel |
+| Build WebChannel 各条消息 | 3 | `<路径> <JSON>` | WebChannel |
 
 `GenerateContent` 的 part 取值：
 
@@ -113,7 +115,7 @@ Worker 启动日志与 Camoufox 后端共用 7 个阶段编号，纯 Go 后端�
 
 #### Cookie
 
-Worker 启动时把 `storage-state.json` 的 Cookie 读入 runtime 内存。每个出站请求按目标 URL 过滤过期、domain、path 与 Secure 条件后生成 `Cookie` 头；响应 `Set-Cookie` 在响应头到达时合并回 runtime。页面 `document.cookie` 为 domain 匹配 `aistudio.google.com` 且非 HttpOnly 的 Cookie，以 `; ` 连接。页面 `localStorage` 的读写使用 VM 内存存储，初始为空。
+Worker 启动时把 `storage-state.json` 的 Cookie 读入 runtime 内存。每个出站请求按目标 URL 过滤过期、domain、path 与 Secure 条件后生成 `Cookie` 头；响应 `Set-Cookie` 在响应头到达时合并回 runtime。页面 `document.cookie` 为 domain 匹配 `aistudio.google.com` 且非 HttpOnly 的 Cookie，以 `; ` 连接。页面 `localStorage` 初始为 `storage-state.json` 中 `https://aistudio.google.com` 源的条目，读写只在 VM 内存中进行；`sessionStorage` 初始为空。
 
 #### 指纹与宿主现场值
 
@@ -298,7 +300,7 @@ ready 回调收到函数后 VM 进入可用状态。解释器没有定义全局�
 
 ## 4. Firefox 宿主与键顺序
 
-`internal/waa/dom.js` 在每个 Realm 中按形状表 `firefox152.json` 生成 Window、WebIDL 接口对象与实例。宿主脚本的来源名为 `\x00waa-host`，这些帧不出现在 `Error.stack` 中，宿主脚本执行期间也不触发惰性全局名称解析。
+`internal/waa/dom.js` 在每个 Realm 中按形状表 `firefox152.json.gz` 生成 Window、WebIDL 接口对象与实例。宿主脚本的来源名为 `\x00waa-host`，这些帧不出现在 `Error.stack` 中，宿主脚本执行期间也不触发惰性全局名称解析。
 
 ### 形状表结构
 
@@ -406,13 +408,22 @@ ready 回调收到函数后 VM 进入可用状态。解释器没有定义全局�
 | 布局 | 顶层 `html` 与 `body` 的矩形为视口大小，其余为 0；`offsetHeight` 按内联样式、子元素与文本行高计算 |
 | `IntersectionObserver` | `observe` 后 16 ms 回调一次，时间戳对齐 60 Hz 帧 |
 | `getComputedStyle`、`matchMedia` | 使用采集默认值与媒体查询表；未收录的 `min/max-width/height` 按视口计算 |
-| Storage | `getItem`、`setItem`、`removeItem`、`key`、`clear` 使用内存存储 |
+| Storage | 共享存储区、命名属性与键顺序，见下文 |
 | Location | `toString` 返回 `href`，`assign`、`replace`、`reload` 不导航 |
 | Performance | `now`、`timeOrigin`、`toJSON`，`getEntries*` 只返回导航条目 |
 | Navigator | `javaEnabled` 为 `false`，`sendBeacon` 为 `true`，`getGamepads` 为空，`permissions.query` 返回 `prompt` |
 | Canvas、GPU | `getContext('2d')` 返回 `CanvasRenderingContext2D` 实例，`requestAdapter` 返回 `null` |
 | Trusted Types | `createPolicy` 与 `createHTML`、`createScript`、`createScriptURL`；`TrustedScript` 传给 `eval` 时解包为源码 |
 | 图片 | 设置 `src` 后经宿主网络请求，完成后派发 `load` 或 `error` |
+
+`localStorage` 与 `sessionStorage` 各一个存储区，顶层与 iframe Realm 共享。Storage 实例按 WebIDL legacy platform object 提供命名属性：
+
+- 存储中存在、且不在实例自有属性与原型链上的键可见：读取返回取值，`in`、`Object.keys`、`for...in` 与 `Object.getOwnPropertyDescriptor` 将其视为可写、可枚举、可配置的数据属性；与原型成员同名的键（如 `getItem`、`length`）只能经方法访问
+- 赋值与 `Object.defineProperty` 的数据描述符写入条目，取值按 DOMString 转换；访问器描述符抛出 `TypeError: can't define a getter/setter for element '"<键>"' of Storage object`；Symbol 键与原型上的只读访问器按普通对象处理
+- `delete` 删除可见条目；`Object.preventExtensions`、`Object.freeze`、`Object.seal` 抛出 `TypeError: can't prevent extensions on this object`
+- 方法参数不足时抛出 `TypeError: Storage.<方法>: At least N argument(s) required, but only M passed`；`key(index)` 按 `unsigned long` 转换下标
+
+键的枚举顺序与 `key(index)` 按 Firefox `PLDHashTable` 的槽位排列：键哈希为 `nsStringHashKey`，初始 8 个槽位，已用与删除标记达到 3/4 时扩容（删除标记达到 1/4 时原容量重排），删除冲突链上的键留下标记，删除标记达到 1/4 或条目不超过 1/4 时收缩。`localStorage` 的键表对应 LSNG 快照：空闲 5 秒后的下一次访问按存储区写入顺序重建键表，账户条目按键名顺序写入；`sessionStorage` 的键表一直保留。
 
 ### Realm 基础能力
 
@@ -437,6 +448,27 @@ Date 的本地时间使用指纹 `timezone`。`Date.prototype.toString` 与 `toT
 2. 表中该时区只有一个名称时始终使用它
 3. 有两个名称时，当前时刻的夏令时状态与当年 1 月 15 日 12:00 相同时使用第一个（1 月名称），否则使用第二个（7 月名称）
 4. 表中没有该时区时使用 `GMT±HH:MM`，零偏移为 `GMT`
+
+### Intl
+
+`intl.js` 在每个 Realm 的形状对齐之前安装 `Intl` 的全部构造器、`getCanonicalLocales` 与 `supportedValuesOf`，并替换 `Date.prototype.toLocaleString`、`toLocaleDateString`、`toLocaleTimeString`、`Number.prototype.toLocaleString`、`BigInt.prototype.toLocaleString` 与 `String.prototype.localeCompare`。实例状态保存在宿主 WeakMap 中，函数名、长度、源码与错误消息按 Firefox 呈现，内部访问不触发 `Intl` 的全局解析。
+
+| 部分 | 实现 |
+| --- | --- |
+| 区域设置协商 | `golang.org/x/text/language` 与 BCP 47 Lookup |
+| `supportedValuesOf`、默认历法与数字系统 | 查 `intl/common.json.gz` |
+| DateTimeFormat 与 Date 的 toLocale 方法 | Go 按 Firefox 的 ICU 模式表格式化，时区名与偏移取自同一数据 |
+| Collator 与 `localeCompare` | `golang.org/x/text/collate` |
+| Locale | Go 解析与组装 |
+| NumberFormat、PluralRules、RelativeTimeFormat、ListFormat、DisplayNames、Segmenter、DurationFormat | FormatJS 按构造器打包 |
+
+- 区域设置由 `golang.org/x/text/language` 规范化，在 Firefox 可用区域设置中按 BCP 47 Lookup 选择；默认区域设置为账户语言，中文补全书写系统（`zh-TW` 为 `zh-Hant-TW`）
+- 小时制取自各区域模式表
+- Collator 对中文、日文、韩文按 CLDR 把本书写系统排在拉丁字母之前，`caseFirst: "upper"` 时交换大小写后比较
+- `Locale.prototype.maximize`、`minimize` 按 Camoufox 行为把语言与地区替换为账户的语言与地区后补全
+- FormatJS 构造器首次使用时在当前 Realm 加载构造器与所需 locale 数据，预编译结果进程内共享；`DisplayNames` 的 `region` 类型按 Camoufox 行为返回账户地区的名称
+
+FormatJS 构造器与日期数据只在页面脚本首次调用对应构造器时读取。格式化数据覆盖与时区显示名表相同的 21 个区域设置，按上节第 1 步的规则选择；`resolvedOptions().locale` 与 Firefox 一致。
 
 ### 惰性全局名称与内建键顺序
 
@@ -521,7 +553,7 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 })
 ```
 
-`textarea` 写入时把 CRLF 与 CR 规范为 LF，脚本返回值必须等于按此规则规范后的提示词，否则本次 proof 失败。第一次调用在 `body` 下创建输入框与 Run 按钮，之后复用。写入的是 binding 使用的真实提示词。
+`textarea` 写入时把 CRLF 与 CR 规范为 LF，脚本返回值必须等于按此规则规范后的提示词，否则本次 proof 失败。第一次调用在 `body` 下创建输入框与 Run 按钮，之后复用。Build 通道以外的请求写入 binding 使用的提示词；Build 通道写入请求中的用户文本：生成取 contents 各 part 的文本，embedding 取输入文本，Live 取文本输入，实时音乐取加权提示词的文本，多段以空格连接，setup、媒体与函数响应等没有文本的消息写入空字符串。
 
 ### 事件语义
 
@@ -644,9 +676,13 @@ Code 7 表示本次上游调用被拒绝。它可以是账户或模型级结果�
 
 | 文件 | 内容 | 格式 |
 | --- | --- | --- |
-| `firefox152.json` | Firefox 形状表 | 单行 JSON，UTF-8，LF |
+| `firefox152.json.gz` | Firefox 形状表 | gzip 压缩的单行 JSON，UTF-8，LF，gzip 时间戳为 0 |
 | `timezones.json.gz` | Firefox Intl 长时区名 | gzip 压缩的 JSON，键排序，gzip 时间戳为 0 |
 | `dom.js` | 宿主生成脚本 | JavaScript 源码 |
+| `intl.js` | Intl 宿主脚本 | JavaScript 源码 |
+| `intl/common.json.gz` | Firefox Intl 取值列表、可用区域设置、默认值、数字系统与时区别名 | gzip 压缩的 JSON |
+| `intl/<区域设置>.json.gz` | 该区域设置的 DateTimeFormat 模式表、日期符号与时区名 | gzip 压缩的 JSON |
+| `intl/formatjs.json.gz`、`intl/formatjs-<区域设置>.json.gz` | 按构造器打包的 FormatJS 脚本与各区域设置的 locale 数据 | gzip 压缩的 JSON |
 
 #### 采集环境
 
@@ -691,6 +727,10 @@ new Intl.DateTimeFormat(locale, {timeZone, timeZoneName: 'long'})
 ```
 
 `date` 分别取 2026-01-15 12:00 UTC 与 2026-07-15 12:00 UTC；两个名称相同时保存 `[名称]`，不同时保存 `[1 月名称, 7 月名称]`。文件结构为 `{区域设置: {IANA 时区: [名称...]}}`，当前为 21 个区域设置 × 445 个时区。
+
+#### Intl 数据
+
+在同一页面对上述 21 个区域设置采集 `Intl.supportedValuesOf` 各类取值、可用区域设置与默认 `resolvedOptions()`，以及 DateTimeFormat 各选项组合的 ICU 模式与月份、星期、纪元等日期符号和时区名，整理为 `intl/common.json.gz` 与各区域设置的模式表。FormatJS 的构造器与 locale 数据由固定版本的 `@formatjs/intl-*` 包打包生成。
 
 #### 数据更新验收
 
@@ -757,20 +797,23 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | 错误栈 | `Error.prototype.stack` 为访问器，格式为 `函数名@文件:行:列`；来源名以 `\x00` 开头的脚本帧不出现；Error 实例带 `fileName`、`lineNumber`、`columnNumber` | `builtin_error.go` |
 | 函数名推断 | 按 SpiderMonkey NameFunctions 规则推断匿名函数的栈显示名，如 `a.b/<` | `names.go`、`compiler.go`、`compiler_expr.go` |
 | 调用位置 | 调用帧列号取被调属性名、字符串键或 eval 标识符的位置 | `compiler_expr.go`、`compiler_stmt.go` |
-| 错误消息 | `x is not a function`、`can't access property "p", x is undefined`、`can't convert x to object`、`invalid array length`、`radix must be an integer at least 2 and no greater than 36`、`Function.prototype.toString called on incompatible object`；被调表达式按 SpiderMonkey 规则反编译 | `vm.go`、`decompile.go`、`value.go`、`object.go`、`runtime.go`、`builtin_array.go`、`builtin_number.go`、`builtin_function.go` |
+| 错误消息 | `x is not a function`（含调用不存在的成员）、`can't access property "p", x is undefined`、`can't convert x to object`、`invalid array length`、`radix must be an integer at least 2 and no greater than 36`、`Function.prototype.toString called on incompatible object`；被调表达式按 SpiderMonkey 规则反编译，带实参的调用与 new 表达式写作 `f(...)`、`(new X(...))` | `vm.go`、`decompile.go`、`value.go`、`object.go`、`runtime.go`、`builtin_array.go`、`builtin_number.go`、`builtin_function.go` |
 | 递归上限 | 栈溢出抛出 `InternalError: too much recursion`，全局提供 `InternalError` | `vm.go`、`builtin_global.go`、`builtin_error.go`、`runtime.go` |
 | SyntaxError | 消息为 `unexpected token: identifier`、`unexpected token: numeric literal`、`unexpected token: string literal` 与未终止字符串的 SpiderMonkey 文案；位置写入 `fileName`、`lineNumber`、`columnNumber` | `parser/error.go`、`parser/lexer.go`、`compiler.go`、`runtime.go` |
 | 全局键顺序 | `SetGlobalObserver` 接收全局属性的解析、定义、删除与枚举；引擎内部使用内建原型时通知解析；宿主脚本执行期间不通知 | `global_order.go`、`string.go` 与各 `builtin_*.go` |
+| 实例化时机 | 执行前按代码内容解析 `RegExp` 与 `Iterator`，见表下 | `compiler.go`、`compiler_expr.go`、`compiler_stmt.go`、`parser/parser.go`、`parser/expression.go`、`ast/node.go`、`runtime.go`、`func.go`、`global_order.go` |
 | 自有键顺序 | `Object.OrderOwnKeys` 按给定顺序重排自有字符串键 | `order.go` |
 | Symbol | 提供 `Symbol.asyncIterator`、`Symbol.dispose`、`Symbol.asyncDispose`，Symbol 构造器键顺序与 SpiderMonkey 一致 | `builtin_symbol.go` |
 | Date | `SetTimeLocation` 设置本地时区，`SetTimeZoneName` 设置 `toString` 与 `toTimeString` 的时区注释；解析与格式化使用 Runtime 时区 | `date.go`、`builtin_date.go`、`runtime.go` |
 | 数值转换 | 负数的非十进制 `toString(radix)` 输出 `-` 前缀 | `ftoa/ftobasestr.go` |
+| RegExp | `u` 模式支持 `\p{…}` 与 `\P{…}` 的一般类别（短名、长名与 `General_Category=`）和 `Script=` 书写系统属性，`Script_Extensions=` 按 `Script=` 处理；`RegExp.prototype` 的 Symbol 键顺序为 match、matchAll、replace、search、split | `parser/regexp.go`、`builtin_regexp.go` |
+| toLocaleString | `Array.prototype.toLocaleString` 与 `%TypedArray%.prototype.toLocaleString` 把 locales、options 传给各元素的 `toLocaleString` | `builtin_array.go`、`builtin_typedarrays.go` |
+
+实例化时机：脚本、eval 代码与 `Function` 函数体执行前，代码含正则字面量时解析 `RegExp`，代码及其嵌套函数含同步生成器函数时解析 `Iterator`；其余函数在首次调用时解析自身的正则字面量。括号内最左侧的函数表达式（如 `(function () {...})()`）随外层代码实例化；未调用的函数、常量条件 `if`、`?:`、`for (;false;)`、`while (false)` 的不可达分支与函数内无副作用的表达式语句中的正则字面量不计入。
 
 分叉独有的文件为 `doc.go`、`decompile.go`、`global_order.go`、`names.go` 与 `order.go`。已知差异：
 
-- `Intl` 只有命名空间与成员形状，没有格式化实现
-- SpiderMonkey 在编译期解析正则字面量对应的全局 `RegExp`，分叉在首次使用正则原型时解析
-- `RegExp.prototype` 的 Symbol 键顺序与 Firefox 不同
+- goja 不支持异步生成器函数
 
 升级上游版本时，用 `go mod download github.com/dop251/goja@<版本>` 取得上游源码，逐文件比较当前分叉与原上游版本的差异，把上表的行为改动合并到新版本，替换模块路径并执行 gofmt，再按“数据更新验收”检查。
 
@@ -782,7 +825,7 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | `internal/app/waa_backend.go` | 按后端准备 Camoufox 或按需登录驱动，选择 Worker 实现 |
 | `internal/app/runtime.go` | Worker 热池、启动日志、runtime 租约、失败重建与换号 |
 | `internal/app/auth_retry.go` | 401 续签、重建 runtime 与重放 |
-| `internal/aistudio/runtime_go.go` | 纯 Go runtime：首页、`GetLoggingContext`、`Waa/Create`、解释器缓存、VM 刷新、proof、受保护请求与 Cookie |
+| `internal/aistudio/runtime_go.go` | 纯 Go runtime：首页、`GetLoggingContext`、`Waa/Create`、解释器缓存、VM 刷新、proof、受保护请求、Cookie 与 localStorage 条目 |
 | `internal/aistudio/runtime_native.go` | `NativeWorker`：proof 写入与状态 |
 | `internal/aistudio/service.go` | `WorkerProtectedTransport`、binding、失败判定 |
 | `internal/aistudio/build.go` | Build binding 与 proof field |
@@ -796,7 +839,9 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | `internal/waa/loop.go` | VM 事件循环 |
 | `internal/waa/global_order.go` | 惰性全局名称与枚举顺序 |
 | `internal/waa/timezone.go` | 时区与显示名选择 |
+| `internal/waa/intl.go`、`internal/waa/intl_date.go` | Intl 区域设置协商、Collator、Locale、DateTimeFormat 与 FormatJS 按需加载 |
+| `internal/waa/intl.js`、`internal/waa/intl/` | Intl 宿主脚本与数据 |
 | `internal/waa/dom.js` | 按形状表生成 Window、接口、实例与宿主对象 |
-| `internal/waa/firefox152.json` | Firefox 形状表 |
+| `internal/waa/firefox152.json.gz` | Firefox 形状表 |
 | `internal/waa/timezones.json.gz` | 时区显示名表 |
 | `internal/waa/goja/` | goja 分叉 |

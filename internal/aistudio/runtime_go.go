@@ -131,6 +131,15 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	runtime.profile.HasFocus = true
 	runtime.profile.Locale, _ = fingerprint["navigator.language"].(string)
 	runtime.profile.TimeZone, _ = fingerprint["timezone"].(string)
+	for _, origin := range storage.Origins {
+		if origin.Origin != aiStudioOrigin {
+			continue
+		}
+		runtime.profile.LocalStorage = make(map[string]string, len(origin.LocalStorage))
+		for _, item := range origin.LocalStorage {
+			runtime.profile.LocalStorage[item.Name] = item.Value
+		}
+	}
 	runtime.cacheDirectory = filepath.Join(filepath.Dir(filepath.Dir(options.StorageStatePath)), ".waa-interpreters")
 	reportGoStartup(options, camoufoxnative.StartupLoadingAIStudio)
 	apiKey, err := runtime.loadPage(ctx)

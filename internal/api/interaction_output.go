@@ -59,7 +59,7 @@ func interactionMedia(media aistudio.Media, audioFormat string) (map[string]any,
 }
 
 // interactionStep 将单个规范事件投影为步骤内容与对应增量
-func interactionStep(event aistudio.Event, audioFormat string) (map[string]any, map[string]any, error) {
+func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[string]any, map[string]any, error) {
 	var content map[string]any
 	switch event.Kind {
 	case aistudio.EventText:
@@ -86,8 +86,14 @@ func interactionStep(event aistudio.Event, audioFormat string) (map[string]any, 
 		if event.Media == nil {
 			return nil, nil, nil
 		}
+		media := *event.Media
 		var err error
-		content, err = interactionMedia(*event.Media, audioFormat)
+		if strings.HasPrefix(media.MIME, "audio/") {
+			if media, err = audio.encode(media); err != nil {
+				return nil, nil, err
+			}
+		}
+		content, err = interactionMedia(media, audio.container())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -103,7 +109,7 @@ func interactionStep(event aistudio.Event, audioFormat string) (map[string]any, 
 }
 
 // interactionSteps 汇总完整内容并将所有 PCM 分块封装为一段音频
-func interactionSteps(result generationResult, audioFormat string, summaries bool) ([]map[string]any, error) {
+func interactionSteps(result generationResult, audio interactionAudioFormat, summaries bool) ([]map[string]any, error) {
 	steps := make([]map[string]any, 0)
 	audioWritten := false
 	for _, event := range result.events {
@@ -129,7 +135,7 @@ func interactionSteps(result generationResult, audioFormat string, summaries boo
 			event.Media = &audio
 			audioWritten = true
 		}
-		step, _, err := interactionStep(event, audioFormat)
+		step, _, err := interactionStep(event, audio)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +171,7 @@ func interactionSteps(result generationResult, audioFormat string, summaries boo
 }
 
 // streamInteraction 输出创建、步骤增量、步骤结束与交互终态
-func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) {
+func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, audioExpected bool, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) {
 	if err := streamHeaders(w); err != nil {
 		return
 	}
@@ -176,6 +182,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err := send("interaction.created", map[string]any{"interaction": interactionObject(generate, created, "in_progress", nil)}); err != nil {
 		return
 	}
+	audio := request.audioFormat()
 	index := -1
 	active := ""
 	closeStep := func() error {
@@ -198,7 +205,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 				return err
 			}
 		}
-		step, delta, err := interactionStep(event, request.audioFormat())
+		step, delta, err := interactionStep(event, audio)
 		if err != nil || step == nil {
 			return err
 		}
@@ -228,16 +235,15 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 		}
 		return nil
 	}
-	bufferWAV := request.audioFormat() == "wav"
 	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
-		if bufferWAV && event.Kind == aistudio.EventMedia && event.Media != nil && strings.HasPrefix(event.Media.MIME, "audio/") {
+		if event.Kind == aistudio.EventMedia && event.Media != nil && strings.HasPrefix(event.Media.MIME, "audio/") && !audio.streams(*event.Media) {
 			return nil
 		}
 		return emit(event)
 	}, func() error { return writeSSEHeartbeat(w) })
-	if err == nil && bufferWAV {
+	if err == nil {
 		for _, media := range result.media {
-			if !strings.HasPrefix(media.MIME, "audio/") {
+			if !strings.HasPrefix(media.MIME, "audio/") || audio.streams(media) {
 				continue
 			}
 			var audio aistudio.Media
@@ -249,7 +255,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 		}
 	}
 	if err == nil {
-		err = validateInteractionResult(generate, result)
+		err = validateInteractionResult(audioExpected, result)
 	}
 	if err != nil {
 		SetAccessLogError(r.Context(), err)
@@ -261,10 +267,11 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err := closeStep(); err != nil {
 		return
 	}
+	completed := interactionObject(generate, created, interactionStatus(result), result.usage)
 	if request.Store == nil || *request.Store {
-		s.storeResponseState(generate.ID, previous, current, nil, result)
+		s.storeInteraction(request, previous, current, result, completed)
 	}
-	if err := send("interaction.completed", map[string]any{"interaction": interactionObject(generate, created, interactionStatus(result), result.usage)}); err != nil {
+	if err := send("interaction.completed", map[string]any{"interaction": completed}); err != nil {
 		SetAccessLogError(r.Context(), fmt.Errorf("interaction completion: %w", err))
 	}
 }

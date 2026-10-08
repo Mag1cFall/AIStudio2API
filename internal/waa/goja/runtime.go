@@ -974,6 +974,7 @@ func (r *Runtime) eval(srcVal String, direct, strict bool) Value {
 	if err != nil {
 		panic(err)
 	}
+	r.instantiate(p, true)
 
 	vm.prg = p
 	vm.pc = 0
@@ -1560,6 +1561,7 @@ func (r *Runtime) RunProgram(p *Program) (result Value, err error) {
 		vm.stash = &r.global.stash
 		vm.privEnv = nil
 	}
+	r.instantiate(p, true)
 	vm.prg = p
 	vm.pc = 0
 	vm.result = _undefined

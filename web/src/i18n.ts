@@ -432,8 +432,8 @@ const zhCN = {
   'usage.emptyFiltered': '没有符合筛选条件的请求',
   'usage.emptyFilteredHelp': '调整筛选或时间范围后再试。',
   'usage.retry': '重试',
-  'usage.panelLoading': '正在加载用量页面',
-  'usage.panelFailed': '用量页面加载失败，请刷新浏览器重试',
+  'app.panelLoading': '正在加载页面',
+  'app.panelFailed': '页面加载失败，请刷新浏览器重试',
 } as const
 
 export type TranslationKey = keyof typeof zhCN
@@ -878,8 +878,8 @@ const en: Record<TranslationKey, string> = {
   'usage.emptyFiltered': 'No requests match the filters',
   'usage.emptyFilteredHelp': 'Adjust the filters or the time range and try again.',
   'usage.retry': 'Retry',
-  'usage.panelLoading': 'Loading the usage page',
-  'usage.panelFailed': 'The usage page failed to load. Reload the browser and try again',
+  'app.panelLoading': 'Loading the page',
+  'app.panelFailed': 'The page failed to load. Reload the browser and try again',
 }
 
 const legacyKeyMap: Partial<Record<TranslationKey, string>> = {

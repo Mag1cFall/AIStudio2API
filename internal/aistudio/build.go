@@ -140,8 +140,9 @@ func encodeBuildContents(contents []Content) ([]any, error) {
 		if len(content.Parts) == 0 {
 			continue
 		}
-		if content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
-			pendingCalls = nil
+		content, err := linkFunctionResults(content, &pendingCalls)
+		if err != nil {
+			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
 		content = attachYouTubeMedia(content)
 		role := "user"
@@ -154,19 +155,6 @@ func encodeBuildContents(contents []Content) ([]any, error) {
 		}
 		parts := make([]any, 0, len(content.Parts))
 		for partIndex, part := range content.Parts {
-			if part.FunctionCall != nil {
-				pendingCalls = append(pendingCalls, *part.FunctionCall)
-			}
-			if result := part.FunctionResult; result != nil && result.Name == "" {
-				matched := slices.IndexFunc(pendingCalls, func(call FunctionCall) bool { return result.ID != "" && call.ID == result.ID })
-				if matched < 0 && len(pendingCalls) == 1 {
-					matched = 0
-				}
-				if matched >= 0 {
-					part.FunctionResult = cloneFunctionResult(result)
-					part.FunctionResult.Name = pendingCalls[matched].Name
-				}
-			}
 			encoded, err := encodeBuildPart(part)
 			if err != nil {
 				return nil, fmt.Errorf("编码 content %d part %d: %w", index, partIndex, err)
@@ -447,6 +435,7 @@ type buildResponse struct {
 			Parts []buildResponsePart `json:"parts"`
 		} `json:"content"`
 		FinishReason     string `json:"finishReason"`
+		FinishMessage    string `json:"finishMessage"`
 		CitationMetadata *struct {
 			CitationSources []struct {
 				URI        string `json:"uri"`
@@ -458,7 +447,8 @@ type buildResponse struct {
 		GroundingMetadata *buildGrounding `json:"groundingMetadata"`
 	} `json:"candidates"`
 	PromptFeedback *struct {
-		BlockReason string `json:"blockReason"`
+		BlockReason        string `json:"blockReason"`
+		BlockReasonMessage string `json:"blockReasonMessage"`
 	} `json:"promptFeedback"`
 	UsageMetadata *struct {
 		PromptTokenCount        int64  `json:"promptTokenCount"`
@@ -539,7 +529,7 @@ func (d *BuildStreamDecoder) Decode(raw []byte) ([]Event, error) {
 	}
 	if len(response.Candidates) == 0 {
 		if response.PromptFeedback != nil && response.PromptFeedback.BlockReason != "" {
-			return nil, &PromptFeedbackError{Reason: buildEnumName(response.PromptFeedback.BlockReason, "BLOCK_REASON_"), Raw: cloneRaw(raw)}
+			return nil, &PromptFeedbackError{Reason: buildEnumName(response.PromptFeedback.BlockReason, "BLOCK_REASON_"), Message: response.PromptFeedback.BlockReasonMessage, Raw: cloneRaw(raw)}
 		}
 		return nil, nil
 	}
@@ -574,7 +564,7 @@ func (d *BuildStreamDecoder) Decode(raw []byte) ([]Event, error) {
 			usage := *d.usage
 			events = append(events, Event{Kind: EventUsage, Usage: &usage})
 		}
-		events = append(events, Event{Kind: EventFinish, FinishReason: buildEnumName(candidate.FinishReason, "FINISH_REASON_")})
+		events = append(events, Event{Kind: EventFinish, FinishReason: buildEnumName(candidate.FinishReason, "FINISH_REASON_"), FinishMessage: candidate.FinishMessage})
 		d.finished = true
 	}
 	return events, nil

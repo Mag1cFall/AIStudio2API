@@ -103,12 +103,14 @@ func requestProtocol(path string) string {
 	switch {
 	case path == "/v1/chat/completions":
 		return "openai-chat"
-	case path == "/v1/responses":
+	case strings.HasPrefix(path, "/v1/responses"):
 		return "openai-responses"
 	case strings.HasPrefix(path, "/v1/messages"):
 		return "anthropic"
-	case strings.HasSuffix(path, "/interactions"):
+	case strings.Contains(path, "/interactions"):
 		return "interactions"
+	case strings.Contains(path, "/files"):
+		return "files"
 	case strings.HasPrefix(path, "/v1beta/"):
 		return "gemini"
 	case strings.HasPrefix(path, "/v1/images/"):
@@ -117,8 +119,6 @@ func requestProtocol(path string) string {
 		return "audio"
 	case strings.HasPrefix(path, "/v1/videos"):
 		return "videos"
-	case strings.HasPrefix(path, "/v1/files"):
-		return "files"
 	}
 	return "other"
 }

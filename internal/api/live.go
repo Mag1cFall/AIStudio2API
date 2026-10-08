@@ -27,11 +27,14 @@ var bidiUpgrader = websocket.Upgrader{
 }
 
 type bidiClientMessage struct {
-	Type          string                    `json:"type"`
-	Text          string                    `json:"text,omitempty"`
-	MIMEType      string                    `json:"mime_type,omitempty"`
-	Data          []byte                    `json:"data,omitempty"`
-	ToolResponses []aistudio.FunctionResult `json:"tool_responses,omitempty"`
+	Type            string                    `json:"type"`
+	Text            string                    `json:"text,omitempty"`
+	MIMEType        string                    `json:"mime_type,omitempty"`
+	Data            []byte                    `json:"data,omitempty"`
+	ToolResponses   []aistudio.FunctionResult `json:"tool_responses,omitempty"`
+	WeightedPrompts []aistudio.WeightedPrompt `json:"weighted_prompts,omitempty"`
+	MusicConfig     json.RawMessage           `json:"music_config,omitempty"`
+	PlaybackControl string                    `json:"playback_control,omitempty"`
 }
 
 type bidiClientSetup struct {
@@ -314,6 +317,16 @@ func sendBidiClientMessages(
 				} else {
 					err = session.SendToolResponses(ctx, message.ToolResponses)
 				}
+			case "music_prompts":
+				err = session.SendMusicPrompts(ctx, message.WeightedPrompts)
+			case "music_config":
+				var config []byte
+				config, _, err = geminiCamelKeys(message.MusicConfig)
+				if err == nil {
+					err = session.SendMusicConfig(ctx, config)
+				}
+			case "playback":
+				err = session.SendPlaybackControl(ctx, message.PlaybackControl)
 			case "close":
 				err = session.Close()
 				cancel()

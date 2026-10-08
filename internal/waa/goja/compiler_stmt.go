@@ -294,7 +294,7 @@ func (c *compiler) compileLabeledForStatement(v *ast.ForStatement, needResult bo
 				if r.ToBoolean() {
 					testConst = true
 				} else {
-					leave := c.enterDummyMode()
+					leave := c.enterUnreachableMode()
 					c.compileStatement(v.Body, false)
 					if v.Update != nil {
 						c.compileExpression(v.Update).emitGetter(false)
@@ -921,7 +921,7 @@ func (c *compiler) compileStatementsNeedResult(list []ast.Statement, lastProduci
 		c.compileStatement(st, false)
 		if leave == nil {
 			if _, ok := st.(*ast.BranchStatement); ok {
-				leave = c.enterDummyMode()
+				leave = c.enterUnreachableMode()
 			}
 		}
 	}
@@ -988,10 +988,55 @@ func (c *compiler) compileExpressionStatement(v *ast.ExpressionStatement, needRe
 	c.separator = v.Expression.Idx0()
 	expr := c.compileExpression(v.Expression)
 	c.separator = saved
+	regexps := c.p.regexps
 	c.emitExpr(expr, needResult)
 	if needResult {
 		c.emit(saveResult)
+	} else if c.inFunc && sideEffectFree(v.Expression) {
+		c.p.regexps = regexps
 	}
+}
+
+// sideEffectFree 按 SpiderMonkey checkSideEffects 判断函数体中的表达式语句是否不生成字节码
+func sideEffectFree(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.RegExpLiteral, *ast.StringLiteral, *ast.NumberLiteral, *ast.BooleanLiteral, *ast.NullLiteral, *ast.FunctionLiteral, *ast.ArrowFunctionLiteral, *ast.ThisExpression:
+		return true
+	case *ast.TemplateLiteral:
+		return e.Tag == nil && len(e.Expressions) == 0
+	case *ast.UnaryExpression:
+		return (e.Operator == token.NOT || e.Operator == token.TYPEOF || e.Operator == token.VOID) && sideEffectFree(e.Operand)
+	case *ast.ArrayLiteral:
+		for _, item := range e.Value {
+			if item != nil && !sideEffectFree(item) {
+				return false
+			}
+		}
+		return true
+	case *ast.ObjectLiteral:
+		for _, property := range e.Value {
+			keyed, ok := property.(*ast.PropertyKeyed)
+			if !ok || keyed.Computed && !sideEffectFree(keyed.Key) || !sideEffectFree(keyed.Value) {
+				return false
+			}
+		}
+		return true
+	case *ast.SequenceExpression:
+		for _, item := range e.Sequence {
+			if !sideEffectFree(item) {
+				return false
+			}
+		}
+		return true
+	case *ast.ConditionalExpression:
+		return sideEffectFree(e.Test) && sideEffectFree(e.Consequent) && sideEffectFree(e.Alternate)
+	case *ast.BinaryExpression:
+		switch e.Operator {
+		case token.LOGICAL_AND, token.LOGICAL_OR, token.COALESCE, token.STRICT_EQUAL, token.STRICT_NOT_EQUAL:
+			return sideEffectFree(e.Left) && sideEffectFree(e.Right)
+		}
+	}
+	return false
 }
 
 func (c *compiler) compileWithStatement(v *ast.WithStatement, needResult bool) {

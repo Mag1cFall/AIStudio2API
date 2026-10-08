@@ -69,7 +69,7 @@ const numericFields: {
 ]
 // pill 是输入框底栏中紧凑选择器的样式
 const pill =
-  'max-w-48 rounded-md border border-white/10 bg-transparent px-3 py-1 text-xs text-gray-300 transition-colors hover:bg-white/5'
+  'max-w-full rounded-md border border-white/10 bg-transparent px-3 py-1 text-xs text-gray-300 transition-colors hover:bg-white/5'
 // field 是参数浮层中输入控件的样式
 const field =
   'w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none'

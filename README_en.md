@@ -53,7 +53,7 @@
 
 - **Windows Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
 - **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries, on Debian/Ubuntu run `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 fonts-liberation`
-- **Source Build**: Go 1.25.0+, Node.js 22.13+ or 24+, and its bundled npm
+- **Source Build**: Go 1.26.0+, Node.js 22.13+ or 24+, and its bundled npm
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
 - **Network**: Stable internet connection to Google AI Studio
@@ -86,7 +86,7 @@ The first launch downloads Camoufox for the current platform to `runtime/camoufo
 
 #### 1. Install Dependencies
 
-- Go 1.25.0 or later
+- Go 1.26.0 or later
 - Node.js 22.13+ or 24+, with its bundled npm
 
 #### 2. Clone the Project
@@ -263,17 +263,18 @@ Main endpoints:
 | --- | --- |
 | Models | `GET /v1/models`, `GET /v1/models/{model}`, `GET /v1beta/models`, `GET /v1beta/models/{model}` |
 | OpenAI Chat | `POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses` |
-| Files | `POST /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}` |
+| OpenAI Responses | `POST /v1/responses`, `POST /v1/responses/input_tokens`, `GET`/`DELETE /v1/responses/{id}`, `GET /v1/responses/{id}/input_items`, `POST /v1/responses/{id}/cancel` |
+| Files | `POST /v1/files`, `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}` (OpenAI and Anthropic formats); `POST /upload/v1beta/files`, `GET /v1beta/files`, `GET`/`DELETE /v1beta/files/{id}` |
 | Anthropic | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
 | Gemini | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` |
-| Images | `POST /v1/images/generations` |
+| Embeddings | `POST /v1/embeddings`, `POST /v1beta/models/{model}:embedContent`, `:batchEmbedContents` |
+| Images | `POST /v1/images/generations`, `POST /v1/images/edits` |
 | Speech | `POST /v1/audio/speech` |
-| Transcription | `POST /v1/audio/transcriptions` |
+| Transcription and translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` |
 | Music | Gemini `generateContent` with `responseModalities: ["AUDIO"]` |
-| Video | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
+| Video | `POST /v1/videos`, `GET /v1/videos`, `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
 | Gemini Video | `POST /v1beta/models/{model}:predictLongRunning`, `GET /v1beta/operations/{id}` |
-| Live (including live translation and live transcription) / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
+| Live (including live translation, live transcription, and live music) / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
 
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
@@ -407,7 +408,7 @@ The model catalog follows AI Studio updates; clients read the current values fro
 | `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
 | `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
 
-Public endpoints implement `generateContent`, `countTokens`, and `predictLongRunning`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
+Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, and `predictLongRunning`; `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
 ## Project Architecture
 
@@ -570,11 +571,10 @@ Issues and Pull Requests are welcome!
 - ✅ **TTS Support**: Adapted `gemini-2.5-flash/pro-preview-tts` speech generation models
 - ✅ **Media Generation**: Supports Imagen 3, Veo 2, Nano Banana image/video generation
 - ✅ **Documentation**: Update and optimize documentation in `docs/` directory
-- **One-Click Deployment**: Provide fully automated install and launch scripts for Windows/Linux/macOS
 - ✅ **Go Refactoring**: Migrate core proxy service to Go for improved concurrency and reduced resource usage
 - ✅ **Multi-Worker Load Balancing**: Support multi-Google account rotation pool for higher concurrency limits
 
 ### Pure Go WAA Runtime
 
 - ✅ **Pure Go backend**: `WAA_BACKEND=go` runs the official interpreter and program inside the service process, emulating the Firefox page environment from each account fingerprint; it neither downloads nor starts Camoufox at runtime, while account login still uses Camoufox
-- **Firefox engine details**: implement `Intl` formatting, the global resolution timing of regular-expression literals, and the Symbol key order of `RegExp.prototype`
+- ✅ **Firefox engine details**: implement `Intl` formatting, the global resolution timing of regular-expression literals, and the Symbol key order of `RegExp.prototype`
