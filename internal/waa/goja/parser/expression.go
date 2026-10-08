@@ -92,7 +92,10 @@ func (self *_parser) parsePrimaryExpression() ast.Expression {
 			return f
 		}
 	case token.FUNCTION:
-		return self.parseFunction(false, false, idx)
+		invoked := idx == self.parenStart
+		function := self.parseFunction(false, false, idx)
+		function.Invoked = invoked && !function.Generator
+		return function
 	case token.CLASS:
 		return self.parseClass(false)
 	}
@@ -177,6 +180,7 @@ func (self *_parser) reinterpretSequenceAsArrowFuncParams(list []ast.Expression)
 func (self *_parser) parseParenthesisedExpression() ast.Expression {
 	opening := self.idx
 	self.expect(token.LEFT_PARENTHESIS)
+	self.parenStart = self.idx
 	var list []ast.Expression
 	if self.token != token.RIGHT_PARENTHESIS {
 		for {

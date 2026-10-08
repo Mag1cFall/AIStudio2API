@@ -204,6 +204,7 @@
     const object = Object.create(proto);
     const brand = { iface: info ? info.cn : iface, values: values || shape.defaults[iface] || {}, over: Object.create(null), cache: new Map(), children: null, parent: null, attrs: null, listeners: null, realm: api };
     if (host.resolveInterface && !quietCreate) host.resolveInterface(brand.iface);
+    if (brand.iface === 'Storage') return storageProxy(object, brand);
     brands.set(object, brand);
     let own = shape.own[iface];
     for (let current = parentOf[iface]; !own && current; current = parentOf[current]) own = shape.own[current];
@@ -338,6 +339,7 @@
       if (!spec) return undefined;
       const values = Object.assign({}, spec.values);
       const object = create(spec.iface, values);
+      if (spec.iface === 'Storage') brands.get(object).area = path;
       const overrides = (profile.values || {})[path];
       if (overrides) { const brand = brands.get(object); for (const [name, value] of Object.entries(overrides)) brand.over[name] = value; }
       if (path === 'location' && profile.location) Object.assign(brands.get(object).over, profile.location);
@@ -589,7 +591,7 @@
     'HTMLElement.offsetHeight': function () { return layoutHeight(this); },
     'HTMLIFrameElement.contentDocument': function (brand) { const window = getters['HTMLIFrameElement.contentWindow'].call(this, brand); return window ? window.document : null; },
     'Event.target': brand => brand.over.target === undefined ? null : brand.over.target,
-    'Storage.length': brand => Object.keys(storageOf(brand)).length,
+    'Storage.length': brand => storageKeys(storageArea(brand)).length,
     'Performance.timeOrigin': () => host.timeOrigin,
     'Document.cookie': () => '',
   });
@@ -658,7 +660,159 @@
     host.trust(object, text);
     return object;
   };
-  const storageOf = brand => brand.store || (brand.store = Object.assign({}, brand === brandFor(api.singleton('localStorage')) ? (profile.localStorage || {}) : {}));
+  // keyHash 是 nsStringHashKey 经 PLDHashTable 混淆后的键哈希，低位留作冲突标记
+  const keyHash = key => {
+    let hash = 0;
+    for (let index = 0; index < key.length; index++) hash = Math.imul(0x9E3779B9, ((hash << 5) | (hash >>> 27)) ^ key.charCodeAt(index));
+    hash = Math.imul(hash, 0x9E3779B9) >>> 0;
+    if (hash < 2) hash = (hash - 2) >>> 0;
+    return (hash & ~1) >>> 0;
+  };
+  // keyTable 按 Firefox PLDHashTable 的槽位保存 Storage 键，键顺序即槽位顺序
+  const keyTable = log2 => ({ log2, hashes: new Array(2 ** log2).fill(0), keys: new Array(2 ** log2).fill(null), count: 0, removed: 0 });
+  const tableSlot = (table, key, hash, adding) => {
+    const mask = table.hashes.length - 1;
+    const step = (hash & mask) | 1;
+    let index = hash >>> (32 - table.log2);
+    let removed = -1;
+    for (;;) {
+      const stored = table.hashes[index];
+      if (stored === 0) return adding && removed >= 0 ? removed : index;
+      if (stored > 1 && (stored & ~1) >>> 0 === hash && table.keys[index] === key) return index;
+      if (adding && removed < 0) {
+        if (stored === 1) removed = index;
+        else table.hashes[index] = (stored | 1) >>> 0;
+      }
+      index = (index - step) & mask;
+    }
+  };
+  const tableResize = (table, log2) => {
+    const { hashes, keys } = table;
+    Object.assign(table, keyTable(log2), { count: table.count });
+    const mask = table.hashes.length - 1;
+    for (let index = 0; index < hashes.length; index++) {
+      if (hashes[index] < 2) continue;
+      const hash = (hashes[index] & ~1) >>> 0;
+      const step = (hash & mask) | 1;
+      let slot = hash >>> (32 - log2);
+      while (table.hashes[slot] > 1) {
+        table.hashes[slot] = (table.hashes[slot] | 1) >>> 0;
+        slot = (slot - step) & mask;
+      }
+      table.hashes[slot] = hash;
+      table.keys[slot] = keys[index];
+    }
+  };
+  const tableAdd = (table, key) => {
+    const capacity = table.hashes.length;
+    if (table.count + table.removed >= capacity - (capacity >> 2)) tableResize(table, table.log2 + (table.removed >= capacity >> 2 ? 0 : 1));
+    let hash = keyHash(key);
+    const index = tableSlot(table, key, hash, true);
+    if (table.hashes[index] > 1) return;
+    if (table.hashes[index] === 1) {
+      table.removed--;
+      hash = (hash | 1) >>> 0;
+    }
+    table.hashes[index] = hash;
+    table.keys[index] = key;
+    table.count++;
+  };
+  const tableRemove = (table, key) => {
+    const index = tableSlot(table, key, keyHash(key), false);
+    if (table.hashes[index] < 2) return;
+    if (table.hashes[index] & 1) {
+      table.hashes[index] = 1;
+      table.removed++;
+    } else table.hashes[index] = 0;
+    table.keys[index] = null;
+    table.count--;
+    const capacity = table.hashes.length;
+    if (table.removed >= capacity >> 2 || (capacity > 8 && table.count <= capacity >> 2)) tableResize(table, Math.max(3, Math.ceil(Math.log2(Math.ceil(table.count * 4 / 3)))));
+  };
+  // storageArea 返回同一 agent 内同源 Realm 共享的存储区，localStorage 按键名顺序写入账户条目
+  const storageArea = brand => {
+    const name = brand.area;
+    if (!host.storage[name]) {
+      const items = new Map();
+      const restored = name === 'localStorage' ? profile.localStorage || {} : {};
+      for (const key of Object.keys(restored).sort()) items.set(key, String(restored[key]));
+      host.storage[name] = { items, table: null, used: 0, snapshot: name === 'localStorage' };
+    }
+    return host.storage[name];
+  };
+  // storageTable 返回当前键表；localStorage 的快照在空闲 5 秒后结束，下次访问按存储区写入顺序重建
+  const storageTable = area => {
+    const now = Date.now();
+    if (!area.table || (area.snapshot && now - area.used >= 5000)) {
+      area.table = keyTable(3);
+      for (const key of area.items.keys()) tableAdd(area.table, key);
+    }
+    area.used = now;
+    return area.table;
+  };
+  const storageKeys = area => storageTable(area).keys.filter(key => key !== null);
+  const storageSet = (area, key, value) => {
+    const table = storageTable(area);
+    if (!area.items.has(key)) tableAdd(table, key);
+    area.items.set(key, value);
+  };
+  const storageRemove = (area, key) => {
+    const table = storageTable(area);
+    if (!area.items.has(key)) return;
+    tableRemove(table, key);
+    area.items.delete(key);
+  };
+  const domString = value => {
+    if (typeof value === 'symbol') throw new TypeError("can't convert symbol to string");
+    return String(value);
+  };
+  const requireArguments = (member, args, count) => {
+    if (args.length < count) throw new TypeError(member + ': At least ' + count + (count === 1 ? ' argument' : ' arguments') + ' required, but only ' + args.length + ' passed');
+  };
+  const HostProxy = Proxy;
+  const { has: reflectHas, get: reflectGet, getOwnPropertyDescriptor: reflectDescriptor, defineProperty: reflectDefine, deleteProperty: reflectDelete, ownKeys: reflectOwnKeys, getPrototypeOf: reflectPrototype } = Reflect;
+  const hasOwn = (object, key) => reflectDescriptor(object, key) !== undefined;
+  // storageProxy 为 Storage 实例提供 WebIDL 命名属性：原型链与自有属性上没有的键名可见，赋值与 defineProperty 写入存储，delete 删除条目
+  function storageProxy(target, brand) {
+    const named = key => {
+      if (typeof key !== 'string') return false;
+      const area = storageArea(brand);
+      storageTable(area);
+      if (!area.items.has(key) || hasOwn(target, key)) return false;
+      const proto = reflectPrototype(target);
+      return proto === null || !reflectHas(proto, key);
+    };
+    const proxy = new HostProxy(target, {
+      get(target, key, receiver) {
+        return named(key) ? storageArea(brand).items.get(key) : reflectGet(target, key, receiver);
+      },
+      has(target, key) {
+        return named(key) || reflectHas(target, key);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        return named(key) ? { value: storageArea(brand).items.get(key), writable: true, enumerable: true, configurable: true } : reflectDescriptor(target, key);
+      },
+      defineProperty(target, key, descriptor) {
+        if (typeof key !== 'string' || hasOwn(target, key)) return reflectDefine(target, key, descriptor);
+        if (!('value' in descriptor) && !('writable' in descriptor)) throw new TypeError("can't define a getter/setter for element '" + JSON.stringify(key) + "' of Storage object");
+        storageSet(storageArea(brand), key, domString(descriptor.value));
+        return true;
+      },
+      deleteProperty(target, key) {
+        if (!named(key)) return reflectDelete(target, key);
+        storageRemove(storageArea(brand), key);
+        return true;
+      },
+      ownKeys(target) {
+        return storageKeys(storageArea(brand)).filter(named).concat(reflectOwnKeys(target));
+      },
+      preventExtensions() {
+        throw new TypeError("can't prevent extensions on this object");
+      },
+    });
+    brands.set(proxy, brand);
+    return proxy;
+  }
   Object.assign(methods, {
     'EventTarget.addEventListener': (brand, [type, listener, options]) => {
       if (listener == null) return;
@@ -739,11 +893,11 @@
     'Event.stopPropagation': brand => { brand.stop = true; },
     'Event.stopImmediatePropagation': brand => { brand.stop = true; brand.stopImmediate = true; },
     'Event.composedPath': () => [],
-    'Storage.getItem': (brand, [key]) => { const store = storageOf(brand); return Object.prototype.hasOwnProperty.call(store, String(key)) ? store[String(key)] : null; },
-    'Storage.setItem': (brand, [key, value]) => { storageOf(brand)[String(key)] = String(value); },
-    'Storage.removeItem': (brand, [key]) => { delete storageOf(brand)[String(key)]; },
-    'Storage.key': (brand, [index]) => Object.keys(storageOf(brand))[index] ?? null,
-    'Storage.clear': brand => { brand.store = {}; },
+    'Storage.getItem': (brand, args) => { requireArguments('Storage.getItem', args, 1); const area = storageArea(brand); const key = domString(args[0]); storageTable(area); return area.items.has(key) ? area.items.get(key) : null; },
+    'Storage.setItem': (brand, args) => { requireArguments('Storage.setItem', args, 2); storageSet(storageArea(brand), domString(args[0]), domString(args[1])); },
+    'Storage.removeItem': (brand, args) => { requireArguments('Storage.removeItem', args, 1); storageRemove(storageArea(brand), domString(args[0])); },
+    'Storage.key': (brand, args) => { requireArguments('Storage.key', args, 1); const keys = storageKeys(storageArea(brand)); const index = args[0] >>> 0; return index < keys.length ? keys[index] : null; },
+    'Storage.clear': brand => { const area = storageArea(brand); storageTable(area); area.items.clear(); area.table = keyTable(3); },
     'Location.toString': function (brand) { return readValue(this, brand, 'href'); },
     'Location.valueOf': function () { return this; },
     'Location.assign': () => {},
@@ -1014,6 +1168,7 @@
     ctors.Iterator = Iterator;
     protos.Iterator = iteratorPrototype;
   }
+  if (host.intl) host.intl(g.Intl, host.intlHost, { native, setLength, define });
   for (const item of shape.builtins || []) alignBuiltinObject(item.path, item.own);
   host.onInstalled && host.onInstalled(api);
   return api;

@@ -90,9 +90,10 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		}
 	}
 	thinkingLevel := defaults.DefaultThinkingLevel
-	hasReasoningEffort := strings.TrimSpace(config.ReasoningEffort) != ""
+	effort := normalizedReasoningEffort(config.ReasoningEffort)
+	hasReasoningEffort := effort != ""
 	thinkingBudget := config.ThinkingBudget
-	switch strings.ToLower(strings.TrimSpace(config.ReasoningEffort)) {
+	switch effort {
 	case "":
 	case "low":
 		thinkingLevel = 1
@@ -104,30 +105,21 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		thinkingLevel = 4
 	case "none":
 		thinkingLevel = 4
-		if !defaults.ThinkingLevel {
-			hasReasoningEffort = false
-			if defaults.ThinkingBudget && thinkingBudget == nil {
-				zero := int64(0)
-				thinkingBudget = &zero
-			}
+		if !defaults.ThinkingLevel && defaults.ThinkingBudget && thinkingBudget == nil {
+			zero := int64(0)
+			thinkingBudget = &zero
 		}
 	default:
-		return nil, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium 或 high")
+		return nil, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh 或 max")
 	}
 	if hasReasoningEffort && defaults.ThinkingLevel {
 		thinkingLevel = closestSupportedThinkingLevel(thinkingLevel, defaults.ThinkingLevels)
 	}
-	if hasReasoningEffort && !defaults.ThinkingLevel {
-		if thinkingBudget == nil || !defaults.ThinkingBudget {
-			return nil, fmt.Errorf("模型不支持 thinking level")
-		}
+	if !defaults.ThinkingLevel {
 		hasReasoningEffort = false
 	}
 	if thinkingBudget != nil && !defaults.ThinkingBudget {
-		if !defaults.ThinkingLevel {
-			return nil, fmt.Errorf("模型不支持 thinking budget")
-		}
-		if !hasReasoningEffort {
+		if defaults.ThinkingLevel && !hasReasoningEffort {
 			thinkingLevel = closestSupportedThinkingLevel(thinkingLevelForBudget(*thinkingBudget), defaults.ThinkingLevels)
 		}
 		thinkingBudget = nil
@@ -137,11 +129,11 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if config.MaxOutputTokens != nil {
 		maxOutput = *config.MaxOutputTokens
 	}
+	if includeMaxOutput && maxOutput > defaults.MaxOutputTokens {
+		maxOutput = defaults.MaxOutputTokens
+	}
 	if includeMaxOutput && maxOutput <= 0 {
 		return nil, fmt.Errorf("模型目录缺少有效 output token limit")
-	}
-	if includeMaxOutput && maxOutput > defaults.MaxOutputTokens {
-		return nil, fmt.Errorf("max output tokens %d 超过模型上限 %d", maxOutput, defaults.MaxOutputTokens)
 	}
 	temperature := defaults.Temperature
 	if config.Temperature != nil {
@@ -270,6 +262,18 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 }
 
 var thinkingLevelsByEffort = []int64{4, 1, 2, 3}
+
+// normalizedReasoningEffort 把各协议的思考强度归一为 none、minimal、low、medium、high，xhigh 与 max 取 high，未设置时为空
+func normalizedReasoningEffort(value string) string {
+	effort := strings.ToLower(strings.TrimSpace(value))
+	switch effort {
+	case "thinking_level_unspecified":
+		return ""
+	case "xhigh", "max":
+		return "high"
+	}
+	return effort
+}
 
 // thinkingLevelForBudget 按 Gemini OpenAI 兼容层的 1024、8192、24576 档位把思考预算换算为 thinking level
 func thinkingLevelForBudget(budget int64) int64 {
@@ -420,17 +424,48 @@ func encodeMediaResolution(value string) (any, error) {
 	return code, nil
 }
 
+// defaultSpeechVoice 是官网单说话人的默认声音
+const defaultSpeechVoice = "Zephyr"
+
+// applyModelMediaDefaults 按 EffectiveResponseModalities 设置输出模态，TTS 模型未设置声音时使用默认声音
 func applyModelMediaDefaults(config GenerationConfig, model Model) GenerationConfig {
-	if config.ResponseModalities != nil {
-		return config
-	}
-	switch {
-	case model.Capabilities["speech_route"], model.Capabilities["music_route"]:
-		config.ResponseModalities = []ResponseModality{ResponseModalityAudio}
-	case model.Capabilities["image_route"]:
-		config.ResponseModalities = []ResponseModality{ResponseModalityImage, ResponseModalityText}
+	config.ResponseModalities = EffectiveResponseModalities(config.ResponseModalities, model)
+	if speech := config.SpeechConfig; model.Capabilities["speech_route"] && (speech == nil || strings.TrimSpace(speech.VoiceName) == "" && len(speech.Speakers) == 0) {
+		config.SpeechConfig = &SpeechConfig{VoiceName: defaultSpeechVoice}
 	}
 	return config
+}
+
+// EffectiveResponseModalities 返回对模型实际生效的输出模态：未指定时为媒体模型的默认模态，指定时去掉模型不能生成的模态，与模型能力没有交集时保持原样
+func EffectiveResponseModalities(modalities []ResponseModality, model Model) []ResponseModality {
+	supported := []ResponseModality{ResponseModalityText}
+	switch {
+	case model.Capabilities["speech_route"], model.Capabilities["music_route"]:
+		supported = []ResponseModality{ResponseModalityAudio}
+	case model.Capabilities["image_route"]:
+		supported = []ResponseModality{ResponseModalityImage, ResponseModalityText}
+	}
+	if modalities == nil {
+		if !slices.Equal(supported, []ResponseModality{ResponseModalityText}) {
+			return supported
+		}
+		return nil
+	}
+	kept := make([]ResponseModality, 0, len(modalities))
+	matched := false
+	for _, modality := range modalities {
+		switch name := ResponseModality(strings.ToUpper(strings.TrimSpace(string(modality)))); {
+		case slices.Contains(supported, name):
+			matched = true
+		case name == ResponseModalityText || name == ResponseModalityImage || name == ResponseModalityAudio:
+			continue
+		}
+		kept = append(kept, modality)
+	}
+	if matched {
+		return kept
+	}
+	return modalities
 }
 
 func applySpeechTranscript(contents []Content, model Model, config GenerationConfig) []Content {
@@ -560,7 +595,7 @@ func (c *Client) validateGenerateRequest(request GenerateRequest) error {
 
 // validateGenerateEntry 按 Generate 的顺序校验工具、转写、生成参数与安全设置
 func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
-	if err := validateRequestedTools(request.Tools, entry.model); err != nil {
+	if _, err := supportedTools(request.Tools, entry.model); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
@@ -591,7 +626,22 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateRequestedTools(request.Tools, entry.model); err != nil {
+	request.Tools, err = supportedTools(request.Tools, entry.model)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	if !entry.model.Capabilities["function_declarations"] {
+		request.Contents, err = transcribeFunctionParts(request.Contents)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		}
+	}
+	interaction := entry.defaults.InteractionStream && !build
+	if interaction {
+		request.Tools = Tools{}
+	}
+	request, contract, err := prepareToolRequest(request)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
@@ -603,7 +653,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return nil, err
 		}
 	}
-	if entry.defaults.InteractionStream && !build {
+	if interaction {
 		return c.generateInteraction(ctx, request, entry)
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
@@ -623,20 +673,9 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	}
 	matcher := newStopSequenceMatcher(request.Config.StopSequences)
 	var stopTokenCount <-chan tokenCountResult
-	cancelTokenCount := func() {}
+	cancelTokenCount := context.CancelFunc(func() {})
 	if matcher != nil {
-		countContext, cancel := context.WithCancel(ctx)
-		cancelTokenCount = cancel
-		results := make(chan tokenCountResult, 1)
-		stopTokenCount = results
-		countRequest := TokenCountRequest{
-			Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
-		}
-		go func() {
-			count, countErr := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
-			results <- tokenCountResult{count: count, err: countErr}
-			close(results)
-		}()
+		stopTokenCount, cancelTokenCount = c.countStopInput(ctx, request)
 	}
 	events := make(chan Event, 8)
 	go func() {
@@ -682,46 +721,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return send(event)
 			}
 		}
-		emit := func(event Event) error {
-			if matcher == nil {
-				return emitEvent(event)
-			}
-			if pending := matcher.boundary(event.Kind); pending != "" {
-				if err := emitEvent(Event{Kind: EventText, Text: pending, ProviderModel: event.ProviderModel}); err != nil {
-					return err
-				}
-			}
-			if event.Kind != EventText {
-				return emitEvent(event)
-			}
-			text, matched := matcher.write(event.Text)
-			if text != "" {
-				event.Text = text
-				if err := emitEvent(event); err != nil {
-					return err
-				}
-			}
-			if matched != "" {
-				matchedStopSequence = matched
-				return errStopSequenceMatched
-			}
-			return nil
-		}
+		emit := stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
 		err := decodeStream(observeStreamActivity(ctx, response.Body), emit)
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
-			select {
-			case result := <-stopTokenCount:
-				if result.err == nil {
-					usage = countedCompleteUsage(request, output, result.count)
-					if err := send(Event{Kind: EventUsage, Usage: usage}); err != nil {
-						return
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
-			_ = send(Event{Kind: EventFinish, FinishReason: "stop_sequence", StopSequence: matchedStopSequence})
+			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
 			return
 		}
 		if closeErr := response.Body.Close(); err == nil {
@@ -757,27 +761,117 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			_ = send(*finish)
 		}
 	}()
-	return events, nil
+	return contract.forward(ctx, events), nil
 }
 
-// truncateRequest 按权威计数删除最早的完整对话轮次
+// countStopInput 并发计数请求输入，供本地命中 stop sequence 后补全用量
+func (c *Client) countStopInput(ctx context.Context, request GenerateRequest) (<-chan tokenCountResult, context.CancelFunc) {
+	countContext, cancel := context.WithCancel(ctx)
+	results := make(chan tokenCountResult, 1)
+	countRequest := TokenCountRequest{
+		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
+	}
+	go func() {
+		count, err := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
+		results <- tokenCountResult{count: count, err: err}
+		close(results)
+	}()
+	return results, cancel
+}
+
+// stopSequenceEmitter 在 stop sequence 处截断正文，非正文事件前补发暂存文本，命中时记录序列并返回 errStopSequenceMatched
+func stopSequenceEmitter(matcher *stopSequenceMatcher, forward func(Event) error, matched *string) func(Event) error {
+	return func(event Event) error {
+		if matcher == nil {
+			return forward(event)
+		}
+		if pending := matcher.boundary(event.Kind); pending != "" {
+			if err := forward(Event{Kind: EventText, Text: pending, ProviderModel: event.ProviderModel}); err != nil {
+				return err
+			}
+		}
+		if event.Kind != EventText {
+			return forward(event)
+		}
+		text, sequence := matcher.write(event.Text)
+		if text != "" {
+			event.Text = text
+			if err := forward(event); err != nil {
+				return err
+			}
+		}
+		if sequence != "" {
+			*matched = sequence
+			return errStopSequenceMatched
+		}
+		return nil
+	}
+}
+
+// finishAtStopSequence 以权威输入计数补发用量，再发送 stop_sequence 终态；计数失败时只发送终态
+func finishAtStopSequence(ctx context.Context, request GenerateRequest, output generatedOutputParts, counts <-chan tokenCountResult, sequence string, send func(Event) error) {
+	select {
+	case result := <-counts:
+		if result.err == nil {
+			if err := send(Event{Kind: EventUsage, Usage: countedCompleteUsage(request, output, result.count)}); err != nil {
+				return
+			}
+		}
+	case <-ctx.Done():
+		return
+	}
+	_ = send(Event{Kind: EventFinish, FinishReason: "stop_sequence", StopSequence: sequence})
+}
+
+// truncateRequest 按权威计数删除最早的完整对话轮次，倍增定位后二分查找最少的删除轮数
 func (c *Client) truncateRequest(ctx context.Context, request GenerateRequest, limit int64) (GenerateRequest, error) {
-	for {
+	starts := []int{0}
+	for start := 0; ; {
+		next := nextConversationTurn(request.Contents[start:])
+		if next < 0 {
+			break
+		}
+		start += next
+		starts = append(starts, start)
+	}
+	fits := func(index int) (bool, error) {
 		count, err := c.CountTokensForAccount(ctx, request.AccountID, TokenCountRequest{
-			Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
+			Model: request.Model, System: request.System, Contents: request.Contents[starts[index]:], Tools: request.Tools,
 		})
+		return err == nil && count.InputTokens <= limit, err
+	}
+	if ok, err := fits(0); err != nil || ok {
+		return request, err
+	}
+	failed, fitted := 0, 1
+	for {
+		fitted = min(fitted, len(starts)-1)
+		if fitted == failed {
+			return request, fmt.Errorf("%w: 最新对话轮次超过模型上下文窗口 %d", ErrInvalidArgument, limit)
+		}
+		ok, err := fits(fitted)
 		if err != nil {
 			return request, err
 		}
-		if count.InputTokens <= limit {
-			return request, nil
+		if ok {
+			break
 		}
-		start := nextConversationTurn(request.Contents)
-		if start < 0 {
-			return request, fmt.Errorf("%w: 最新对话轮次超过模型上下文窗口 %d", ErrInvalidArgument, limit)
-		}
-		request.Contents = request.Contents[start:]
+		failed, fitted = fitted, fitted*2
 	}
+	for fitted-failed > 1 {
+		middle := (failed + fitted) / 2
+		ok, err := fits(middle)
+		if err != nil {
+			return request, err
+		}
+		if ok {
+			fitted = middle
+		} else {
+			failed = middle
+		}
+	}
+	request.Contents = request.Contents[starts[fitted]:]
+	return request, nil
 }
 
 // nextConversationTurn 查找保留工具调用与结果配对的下一轮用户消息

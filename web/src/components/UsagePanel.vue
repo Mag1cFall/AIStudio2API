@@ -368,7 +368,7 @@ const statusOptions = computed(() =>
           v-if="live"
           :model-value="autoRefresh"
           :aria-label="t('usage.autoRefresh')"
-          class="w-32 rounded-md border border-line bg-canvas px-2 py-1 text-xs text-gray-200"
+          class="w-max rounded-md border border-line bg-canvas px-2 py-1 text-xs text-gray-200"
           @update:model-value="autoRefresh = Number($event)"
         >
           <option v-for="choice in refreshChoices" :key="choice" :value="choice">

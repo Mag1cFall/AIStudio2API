@@ -12,6 +12,7 @@ import {
   shallowRef,
   watch,
 } from 'vue'
+import type { AsyncComponentLoader } from 'vue'
 import { api, openAdminEvents, type EventConnection } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type {
@@ -28,7 +29,6 @@ import type {
 import AccountsPanel from '@/components/AccountsPanel.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
 import ModelsTable from '@/components/ModelsTable.vue'
-import PlaygroundPanel from '@/components/PlaygroundPanel.vue'
 import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import UiIcon from '@/components/UiIcon.vue'
@@ -36,18 +36,23 @@ import { useTabParam } from '@/url'
 import type { IconName } from '@/icons'
 
 const { availableLocales, locale, setLocale, t, errorText } = useI18n()
-const UsagePanel = defineAsyncComponent({
-  loader: () => import('@/components/UsagePanel.vue'),
-  delay: 150,
-  loadingComponent: {
-    render: () =>
-      h('p', { class: 'p-8 text-sm text-gray-500', role: 'status' }, t('usage.panelLoading')),
-  },
-  errorComponent: {
-    render: () =>
-      h('p', { class: 'p-8 text-sm text-red-300', role: 'alert' }, t('usage.panelFailed')),
-  },
-})
+// lazyPanel 创建按需加载的页面组件
+function lazyPanel(loader: AsyncComponentLoader) {
+  return defineAsyncComponent({
+    loader,
+    delay: 150,
+    loadingComponent: {
+      render: () =>
+        h('p', { class: 'p-8 text-sm text-gray-500', role: 'status' }, t('app.panelLoading')),
+    },
+    errorComponent: {
+      render: () =>
+        h('p', { class: 'p-8 text-sm text-red-300', role: 'alert' }, t('app.panelFailed')),
+    },
+  })
+}
+const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
+const PlaygroundPanel = lazyPanel(() => import('@/components/PlaygroundPanel.vue'))
 const validTabs: TabID[] = [
   'logs',
   'accounts',
@@ -58,6 +63,19 @@ const validTabs: TabID[] = [
   'playground',
 ]
 const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
+const navigationBar = ref<HTMLElement | null>(null)
+
+// revealCurrentTab 把窄屏横向导航的当前项横向滚入视野
+function revealCurrentTab(): void {
+  const bar = navigationBar.value
+  const item = bar?.querySelector<HTMLElement>('[aria-current="page"]')
+  if (!bar || !item) return
+  const barRect = bar.getBoundingClientRect()
+  const itemRect = item.getBoundingClientRect()
+  if (itemRect.left < barRect.left) bar.scrollLeft -= barRect.left - itemRect.left
+  else if (itemRect.right > barRect.right) bar.scrollLeft += itemRect.right - barRect.right
+}
+watch(currentTab, revealCurrentTab, { flush: 'post' })
 const status = ref<ServiceStatus | null>(null)
 const logs = shallowRef<AdminLog[]>([])
 const accounts = ref<Account[]>([])
@@ -355,6 +373,7 @@ onMounted(async () => {
   mounted = true
   window.addEventListener('pagehide', flushDelete)
   document.title = t('app.title')
+  revealCurrentTab()
   await refreshAll()
   if (!mounted) return
   eventConnection = openAdminEvents(handleAdminEvent, () => {
@@ -417,6 +436,7 @@ onUnmounted(() => {
       </div>
 
       <nav
+        ref="navigationBar"
         class="flex w-full min-w-0 flex-none gap-1 overflow-x-auto p-2 md:flex-1 md:flex-col md:space-y-1"
       >
         <button
@@ -531,13 +551,13 @@ onUnmounted(() => {
     </main>
 
     <div
-      class="pointer-events-none fixed right-5 bottom-5 z-50 flex max-w-md flex-col items-end gap-2"
+      class="pointer-events-none fixed right-5 bottom-5 left-5 z-50 flex flex-col items-end gap-2 sm:left-auto sm:max-w-md"
     >
       <Transition name="notice">
         <div
           v-if="notice.message"
           role="status"
-          class="pointer-events-auto rounded border bg-panel px-4 py-3 text-sm shadow-xl"
+          class="pointer-events-auto max-w-full rounded border bg-panel px-4 py-3 text-sm break-words shadow-xl"
           :class="
             notice.tone === 'error'
               ? 'border-red-500/50 text-red-300'
@@ -550,7 +570,7 @@ onUnmounted(() => {
       <Transition name="notice">
         <div
           v-if="pendingDelete"
-          class="pointer-events-auto flex max-w-md items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
+          class="pointer-events-auto flex max-w-full items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
           role="status"
         >
           <span class="min-w-0 truncate">{{

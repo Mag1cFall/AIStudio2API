@@ -125,6 +125,7 @@ type compiledFunctionLiteral struct {
 	homeObjOffset   uint32
 	typ             funcType
 	isExpr          bool
+	invoked         bool
 
 	isAsync, isGenerator bool
 }
@@ -1350,6 +1351,11 @@ func (e *compiledFunctionLiteral) compile() (prg *Program, name unistring.String
 	e.c.assert(e.typ != funcNone, e.offset, "compiledFunctionLiteral.typ is not set")
 
 	savedPrg := e.c.p
+	savedLazy, savedInFunc := e.c.lazy, e.c.inFunc
+	e.c.lazy, e.c.inFunc = savedLazy || !e.invoked, true
+	defer func() {
+		e.c.lazy, e.c.inFunc = savedLazy, savedInFunc
+	}()
 	preambleLen := 8 // enter, boxThis, loadStack(0), initThis, createArgs, set, loadCallee, init
 	e.c.p = &Program{
 		src:    e.c.p.src,
@@ -1728,6 +1734,8 @@ func (e *compiledFunctionLiteral) compile() (prg *Program, name unistring.String
 	}
 	e.c.popScope()
 	e.c.p = savedPrg
+	savedPrg.regexps = savedPrg.regexps || !e.c.lazy && prg.regexps
+	savedPrg.generators = savedPrg.generators || prg.generators || e.isGenerator && !e.isAsync
 
 	return
 }
@@ -1789,6 +1797,7 @@ func (c *compiler) compileFunctionLiteral(v *ast.FunctionLiteral, isExpr bool) *
 		strict:          strictBody,
 		isAsync:         v.Async,
 		isGenerator:     v.Generator,
+		invoked:         v.Invoked,
 	}
 	r.init(c, v.Idx0())
 	return r
@@ -2574,6 +2583,19 @@ func (c *compiler) compileUnaryExpression(v *ast.UnaryExpression) compiledExpr {
 }
 
 func (e *compiledConditionalExpr) emitGetter(putOnStack bool) {
+	if e.test.constant() {
+		if v, ex := e.c.evalConst(e.test); ex == nil {
+			live, dead := e.consequent, e.alternate
+			if !v.ToBoolean() {
+				live, dead = dead, live
+			}
+			e.c.emitExpr(live, putOnStack)
+			leave := e.c.enterDummyMode()
+			dead.emitGetter(false)
+			leave()
+			return
+		}
+	}
 	e.test.emitGetter(true)
 	j := len(e.c.p.code)
 	e.c.emit(nil)
@@ -3008,6 +3030,7 @@ func (c *compiler) compileArrayLiteral(v *ast.ArrayLiteral) compiledExpr {
 }
 
 func (e *compiledRegexpLiteral) emitGetter(putOnStack bool) {
+	e.c.p.regexps = true
 	if putOnStack {
 		pattern, err := compileRegexp(e.expr.Pattern, e.expr.Flags)
 		if err != nil {

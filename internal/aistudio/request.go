@@ -102,10 +102,11 @@ func encodeContents(contents []Content) ([]any, error) {
 		if len(content.Parts) == 0 {
 			continue
 		}
-		if content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
-			pendingCalls = nil
+		linked, err := linkFunctionResults(content, &pendingCalls)
+		if err != nil {
+			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
-		encoded, err := encodeContent(content, &pendingCalls)
+		encoded, err := encodeContent(linked)
 		if err != nil {
 			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
@@ -114,7 +115,45 @@ func encodeContents(contents []Content) ([]any, error) {
 	return wire, nil
 }
 
-func encodeContent(content Content, pendingCalls *[]FunctionCall) ([]any, error) {
+// linkFunctionResults 记录 content 中的函数调用，为缺少名称的函数结果先按调用 ID、再按唯一待返回调用补齐名称；不含函数结果的 user 轮清空待返回调用，无法关联时返回错误
+func linkFunctionResults(content Content, pendingCalls *[]FunctionCall) (Content, error) {
+	if content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
+		*pendingCalls = nil
+	}
+	cloned := false
+	for index, part := range content.Parts {
+		if part.FunctionCall != nil {
+			*pendingCalls = append(*pendingCalls, *part.FunctionCall)
+		}
+		result := part.FunctionResult
+		if result == nil {
+			continue
+		}
+		matched := slices.IndexFunc(*pendingCalls, func(call FunctionCall) bool { return result.ID != "" && call.ID == result.ID })
+		if matched < 0 && len(*pendingCalls) == 1 && (result.Name == "" || result.Name == (*pendingCalls)[0].Name) {
+			matched = 0
+		}
+		if matched < 0 {
+			if result.Name == "" {
+				return Content{}, fmt.Errorf("part %d: function result 缺少名称且无法唯一关联调用", index)
+			}
+			continue
+		}
+		if result.Name == "" {
+			if !cloned {
+				content.Parts = slices.Clone(content.Parts)
+				cloned = true
+			}
+			named := cloneFunctionResult(result)
+			named.Name = (*pendingCalls)[matched].Name
+			content.Parts[index].FunctionResult = named
+		}
+		*pendingCalls = slices.Delete(*pendingCalls, matched, matched+1)
+	}
+	return content, nil
+}
+
+func encodeContent(content Content) ([]any, error) {
 	content = attachYouTubeMedia(content)
 	role := ""
 	switch content.Role {
@@ -132,22 +171,6 @@ func encodeContent(content Content, pendingCalls *[]FunctionCall) ([]any, error)
 	}
 	parts := make([]any, 0, len(content.Parts))
 	for index, part := range content.Parts {
-		if part.FunctionCall != nil {
-			*pendingCalls = append(*pendingCalls, *part.FunctionCall)
-		}
-		if result := part.FunctionResult; result != nil {
-			matched := slices.IndexFunc(*pendingCalls, func(call FunctionCall) bool { return result.ID != "" && call.ID == result.ID })
-			if matched < 0 && len(*pendingCalls) == 1 && (result.Name == "" || result.Name == (*pendingCalls)[0].Name) {
-				matched = 0
-			}
-			if matched >= 0 {
-				if result.Name == "" {
-					part.FunctionResult = cloneFunctionResult(result)
-					part.FunctionResult.Name = (*pendingCalls)[matched].Name
-				}
-				*pendingCalls = slices.Delete(*pendingCalls, matched, matched+1)
-			}
-		}
 		encoded, err := encodePart(part)
 		if err != nil {
 			return nil, fmt.Errorf("编码 part %d: %w", index, err)
@@ -259,15 +282,11 @@ func encodePart(part Part) ([]any, error) {
 		return setPartThoughtSignature(wire, signature), nil
 	}
 	if part.FunctionResult != nil {
-		name := part.FunctionResult.Name
-		if name == "" {
-			return nil, fmt.Errorf("function result 缺少名称且无法唯一关联调用")
-		}
 		response, err := encodeWireStructJSON(part.FunctionResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("function result content: %w", err)
 		}
-		result := []any{name, response}
+		result := []any{part.FunctionResult.Name, response}
 		if part.FunctionResult.ID != "" {
 			result = append(result, part.FunctionResult.ID)
 		}

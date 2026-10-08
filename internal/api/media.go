@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -10,8 +12,10 @@ import (
 	"image/draw"
 	"image/gif"
 	"image/png"
+	"math"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +30,7 @@ type openAIImageRequest struct {
 	Size           string `json:"size"`
 	Quality        string `json:"quality"`
 	ResponseFormat string `json:"response_format"`
+	Stream         bool   `json:"stream"`
 }
 
 type openAISpeechRequest struct {
@@ -43,87 +48,157 @@ func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if request.Model == "" || strings.TrimSpace(request.Prompt) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model and prompt are required")
+	s.writeOpenAIImages(w, r, request, nil, "image_generation")
+}
+
+// writeOpenAIImages 按 n 生成图片并写入 OpenAI 图片响应，inputs 为写在提示词之前的参考图片与说明，流式时每张图片发送一个 <event>.completed 事件
+func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, request openAIImageRequest, inputs []aistudio.Part, event string) {
+	if strings.TrimSpace(request.Prompt) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "prompt is required")
 		return
 	}
 	if request.N == 0 {
 		request.N = 1
 	}
-	if request.N != 1 {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "AI Studio image models generate one image per request")
+	if request.N < 1 || request.N > maxImageCount {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("n must be between 1 and %d", maxImageCount))
 		return
 	}
-	imageConfig, err := openAIImageConfig(request.Size, request.Quality)
+	models, err := s.service.Models(r.Context())
+	if err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+		}
+		return
+	}
+	if request.Model == "" {
+		request.Model = defaultCatalogModel(models, func(model aistudio.Model) bool {
+			return model.Capabilities["image_route"] && slices.Contains(model.Methods, "generateContent")
+		})
+	}
+	if request.Model == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model is required")
+		return
+	}
+	model, _ := lookupPublicModel(models, request.Model)
+	imageConfig, err := openAIImageConfig(request.Size, request.Quality, model.CapabilityOptions)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
-		ID:    newID("image"),
+	results, err := s.generateImages(r.Context(), aistudio.GenerateRequest{
 		Unary: true,
 		Model: request.Model,
 		Contents: []aistudio.Content{{
-			Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: request.Prompt}},
+			Role: aistudio.RoleUser, Parts: append(inputs, aistudio.Part{Text: request.Prompt}),
 		}},
 		Config: aistudio.GenerationConfig{
 			ResponseModalities: []aistudio.ResponseModality{aistudio.ResponseModalityImage, aistudio.ResponseModalityText},
 			ImageConfig:        imageConfig,
 		},
-	})
+	}, request.N)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
 	}
-	result, err := consumeEvents(r.Context(), events, nil)
-	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+	created := time.Now().Unix()
+	data := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		images := 0
+		for _, media := range result.media {
+			if !strings.HasPrefix(media.MIME, "image/") || len(media.Data) == 0 {
+				continue
+			}
+			encoded := base64.StdEncoding.EncodeToString(media.Data)
+			item := map[string]any{}
+			if request.Stream {
+				item["type"] = event + ".completed"
+				item["b64_json"] = encoded
+				item["created_at"] = created
+				item["output_format"] = strings.TrimPrefix(media.MIME, "image/")
+				item["size"], item["quality"], item["background"] = cmp.Or(request.Size, "auto"), cmp.Or(request.Quality, "auto"), "auto"
+			} else if request.ResponseFormat == "b64_json" {
+				item["b64_json"] = encoded
+			} else {
+				item["url"] = "data:" + media.MIME + ";base64," + encoded
+			}
+			if result.text.Len() > 0 {
+				item["revised_prompt"] = result.text.String()
+			}
+			data = append(data, item)
+			images++
 		}
+		if images == 0 {
+			message := "AI Studio did not return an image"
+			if reason := result.finishReason; reason != "" && reason != "stop" {
+				message += ": finish reason " + reason
+			}
+			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", message)
+			return
+		}
+	}
+	if !request.Stream {
+		writeJSON(w, http.StatusOK, map[string]any{"created": created, "data": data})
 		return
 	}
-	data := make([]map[string]any, 0, len(result.media))
-	for _, media := range result.media {
-		if !strings.HasPrefix(media.MIME, "image/") || len(media.Data) == 0 {
-			continue
-		}
-		encoded := base64.StdEncoding.EncodeToString(media.Data)
-		item := map[string]any{}
-		if request.ResponseFormat == "b64_json" {
-			item["b64_json"] = encoded
-		} else {
-			item["url"] = "data:" + media.MIME + ";base64," + encoded
-		}
-		if result.text.Len() > 0 {
-			item["revised_prompt"] = result.text.String()
-		}
-		data = append(data, item)
-	}
-	if len(data) == 0 {
-		message := "AI Studio did not return an image"
-		if reason := result.finishReason; reason != "" && reason != "stop" {
-			message += ": finish reason " + reason
-		}
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", message)
+	if err := streamHeaders(w); err != nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": data})
+	for _, item := range data {
+		if err := writeSSE(w, item["type"].(string), item); err != nil {
+			return
+		}
+	}
 }
 
-func openAIImageConfig(size string, quality string) (*aistudio.ImageConfig, error) {
+// maxImageCount 是 OpenAI Images n 的上限
+const maxImageCount = 10
+
+// generateImages 按 count 并发生成图片并按序返回结果，任一生成失败时取消其余生成并返回首个错误
+func (s *server) generateImages(ctx context.Context, request aistudio.GenerateRequest, count int) ([]generationResult, error) {
+	request.ID = newID("image")
+	images := s.startChatChoices(ctx, request, count, false)
+	defer images.cancel()
+	if err := images.err; err != nil {
+		images.settle(ctx)
+		return nil, err
+	}
+	results, err := images.run(func(_ int, events <-chan aistudio.Event) (generationResult, error) {
+		return consumeEvents(images.ctx, events, nil)
+	})
+	images.settle(ctx)
+	images.record(ctx, results)
+	return results, err
+}
+
+// defaultCatalogModel 返回实时目录中首个满足条件的模型 ID
+func defaultCatalogModel(models []aistudio.Model, match func(aistudio.Model) bool) string {
+	for _, model := range models {
+		if match(model) {
+			return model.ID
+		}
+	}
+	return ""
+}
+
+// openAIImageAspectRatios 为模型目录未列出宽高比时的候选宽高比
+var openAIImageAspectRatios = []string{"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+
+// openAIImageConfig 将 OpenAI size 与 quality 换成模型选项中最接近的宽高比与分辨率
+func openAIImageConfig(size string, quality string, options map[string][]string) (*aistudio.ImageConfig, error) {
 	config := &aistudio.ImageConfig{}
-	switch strings.ToLower(strings.TrimSpace(size)) {
-	case "", "auto":
-	case "1024x1024":
-		config.AspectRatio = "1:1"
-	case "1536x1024":
-		config.AspectRatio = "3:2"
-	case "1024x1536":
-		config.AspectRatio = "2:3"
-	default:
-		return nil, fmt.Errorf("size must be auto, 1024x1024, 1536x1024 or 1024x1536")
+	if size = strings.ToLower(strings.TrimSpace(size)); size != "" && size != "auto" {
+		width, height, ok := imageDimensions(size)
+		if !ok {
+			return nil, fmt.Errorf("size must be auto or WIDTHxHEIGHT")
+		}
+		ratios := options["image_aspect_ratios"]
+		if len(ratios) == 0 {
+			ratios = openAIImageAspectRatios
+		}
+		config.AspectRatio = aistudio.NearestOption(math.Log(width)-math.Log(height), ratios, aistudio.AspectRatioLog)
 	}
 	switch strings.ToLower(strings.TrimSpace(quality)) {
 	case "", "auto":
@@ -131,15 +206,44 @@ func openAIImageConfig(size string, quality string) (*aistudio.ImageConfig, erro
 		config.ImageSize = "1K"
 	case "medium", "hd":
 		config.ImageSize = "2K"
-	case "high":
+	case "high", "xhigh", "max":
 		config.ImageSize = "4K"
 	default:
-		return nil, fmt.Errorf("quality must be auto, low, medium or high")
+		return nil, fmt.Errorf("quality must be auto, low, medium, high, xhigh, max, standard or hd")
+	}
+	if resolutions := options["image_output_resolutions"]; config.ImageSize != "" && len(resolutions) > 0 {
+		pixels, _ := imageResolutionPixels(config.ImageSize)
+		config.ImageSize = aistudio.NearestOption(pixels, resolutions, imageResolutionPixels)
 	}
 	if config.AspectRatio == "" && config.ImageSize == "" {
 		return nil, nil
 	}
 	return config, nil
+}
+
+// imageDimensions 解析 WIDTHxHEIGHT 形式的图片尺寸
+func imageDimensions(size string) (float64, float64, bool) {
+	widthText, heightText, ok := strings.Cut(size, "x")
+	width, widthErr := strconv.Atoi(widthText)
+	height, heightErr := strconv.Atoi(heightText)
+	if !ok || widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return float64(width), float64(height), true
+}
+
+// imageResolutionPixels 返回 512、1K 等图片分辨率的长边像素
+func imageResolutionPixels(value string) (float64, bool) {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	scale := 1
+	if strings.HasSuffix(value, "K") {
+		scale = 1024
+	}
+	number, err := strconv.Atoi(strings.TrimSuffix(value, "K"))
+	if err != nil || number <= 0 {
+		return 0, false
+	}
+	return float64(number * scale), true
 }
 
 func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
@@ -152,17 +256,25 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model and input are required")
 		return
 	}
-	if request.Speed != 0 && request.Speed != 1 {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "AI Studio TTS does not expose speech speed")
+	if request.Speed != 0 && (request.Speed < 0.25 || request.Speed > 4) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "speed must be between 0.25 and 4.0")
 		return
 	}
-	voice := strings.TrimSpace(request.Voice)
-	if voice == "" {
-		voice = "Zephyr"
+	format := strings.ToLower(strings.TrimSpace(request.ResponseFormat))
+	if format == "" {
+		format = "wav"
+	}
+	if err := speechFormatError(format); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
 	}
 	part := aistudio.Part{Text: strings.TrimSpace(request.Input)}
-	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
-		part.SpeechMetadata = &aistudio.SpeechMetadata{Style: instructions}
+	style := strings.TrimSpace(request.Instructions)
+	if request.Speed != 0 && request.Speed != 1 {
+		style = strings.TrimSpace(fmt.Sprintf("%s Speak at %g times the normal speaking rate.", style, request.Speed))
+	}
+	if style != "" {
+		part.SpeechMetadata = &aistudio.SpeechMetadata{Style: style}
 	}
 	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
 		ID:    newID("speech"),
@@ -173,7 +285,7 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		}},
 		Config: aistudio.GenerationConfig{
 			ResponseModalities: []aistudio.ResponseModality{aistudio.ResponseModalityAudio},
-			SpeechConfig:       &aistudio.SpeechConfig{VoiceName: voice},
+			SpeechConfig:       &aistudio.SpeechConfig{VoiceName: request.Voice},
 		},
 	})
 	if err != nil {
@@ -194,15 +306,23 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
-	data, contentType, err := encodeSpeechResponse(media, request.ResponseFormat)
+	data, contentType, err := encodeSpeechResponse(media, format)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// speechFormatError 在生成前拒绝 OpenAI Speech 未定义的 response_format
+func speechFormatError(format string) error {
+	if _, ok := audioContentTypes[format]; ok || format == "wav" || format == "pcm" {
+		return nil
+	}
+	return fmt.Errorf("response_format must be mp3, opus, aac, flac, wav or pcm")
 }
 
 func joinedAudio(values []aistudio.Media) (aistudio.Media, error) {
@@ -233,47 +353,30 @@ func joinedAudio(values []aistudio.Media) (aistudio.Media, error) {
 }
 
 func encodeSpeechResponse(media aistudio.Media, format string) ([]byte, string, error) {
-	format = strings.ToLower(strings.TrimSpace(format))
-	if format == "" {
-		format = "wav"
-	}
-	baseType, parameters, err := mime.ParseMediaType(media.MIME)
+	baseType, _, err := mime.ParseMediaType(media.MIME)
 	if err != nil {
 		return nil, "", fmt.Errorf("AI Studio returned invalid audio MIME %q", media.MIME)
 	}
-	if baseType == "audio/wav" || baseType == "audio/x-wav" {
-		if format == "wav" {
-			return media.Data, "audio/wav", nil
-		}
-		if format == "pcm" {
-			pcm, err := wavPCM(media)
-			return pcm.Data, pcm.MIME, err
-		}
-	}
-	if format == "pcm" {
+	switch {
+	case format == "wav" && (baseType == "audio/wav" || baseType == "audio/x-wav"):
+		return media.Data, "audio/wav", nil
+	case format == "mp3" && baseType == "audio/mpeg":
+		return media.Data, "audio/mpeg", nil
+	case format == "pcm" && baseType != "audio/wav" && baseType != "audio/x-wav" && baseType != "audio/mpeg":
 		return media.Data, media.MIME, nil
 	}
-	if format == "mp3" && baseType == "audio/mpeg" {
-		return media.Data, "audio/mpeg", nil
+	audio, err := mediaPCM(media)
+	if err != nil {
+		return nil, "", err
 	}
-	if format != "wav" {
-		return nil, "", fmt.Errorf("response_format must be wav or pcm for AI Studio TTS")
+	switch format {
+	case "pcm":
+		return audio.Data, fmt.Sprintf("audio/l16;rate=%d;channels=%d", audio.SampleRate, audio.Channels), nil
+	case "wav":
+		return pcmWAV(audio.Data, audio.SampleRate, audio.Channels), "audio/wav", nil
 	}
-	if baseType != "audio/l16" {
-		return nil, "", fmt.Errorf("AI Studio returned %s, which cannot be wrapped as WAV", media.MIME)
-	}
-	sampleRate, err := strconv.Atoi(parameters["rate"])
-	if err != nil || sampleRate <= 0 {
-		return nil, "", fmt.Errorf("AI Studio audio MIME is missing a valid rate")
-	}
-	channels := 1
-	if value := parameters["channels"]; value != "" {
-		channels, err = strconv.Atoi(value)
-		if err != nil || channels <= 0 {
-			return nil, "", fmt.Errorf("AI Studio audio MIME has invalid channels")
-		}
-	}
-	return pcmWAV(media.Data, sampleRate, channels), "audio/wav", nil
+	data, _, err := encodeAudio(audio, audioOutput{Format: format})
+	return data, audioContentTypes[format], err
 }
 
 func pcmWAV(pcm []byte, sampleRate int, channels int) []byte {

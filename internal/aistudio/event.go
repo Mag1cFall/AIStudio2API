@@ -85,12 +85,14 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 			return nil, withMethod(err, "GenerateContent")
 		}
 		finishReason := decodeFinishReason(finishCode)
+		var finishMessage string
+		_ = json.Unmarshal(rawAt(candidate, 3), &finishMessage)
 		if !d.finished {
 			if d.usage != nil {
 				usage := *d.usage
 				events = append(events, Event{Kind: EventUsage, Usage: &usage})
 			}
-			events = append(events, Event{Kind: EventFinish, FinishReason: finishReason})
+			events = append(events, Event{Kind: EventFinish, FinishReason: finishReason, FinishMessage: finishMessage})
 			d.finished = true
 		}
 	}
@@ -106,7 +108,9 @@ func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) error {
 	if err != nil {
 		return withMethod(err, "GenerateContent")
 	}
-	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Raw: append(json.RawMessage(nil), raw...)}
+	var message string
+	_ = json.Unmarshal(rawAt(feedback, 2), &message)
+	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Message: message, Raw: append(json.RawMessage(nil), raw...)}
 }
 
 func decodePromptBlockReason(reason int64) string {

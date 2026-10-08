@@ -215,7 +215,7 @@ watch(autoScroll, () => {
           type="search"
           :placeholder="t('logs.search')"
           :aria-label="t('logs.search')"
-          class="w-52 rounded border border-line bg-canvas px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500"
+          class="w-full rounded border border-line bg-canvas px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500 sm:w-64"
         />
       </div>
 

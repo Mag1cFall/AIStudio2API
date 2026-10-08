@@ -33,15 +33,6 @@ func NewSigner() *Signer {
 	return &Signer{origin: aiStudioOrigin, now: time.Now}
 }
 
-// NewSignerForOrigin 创建指定来源的签名器
-func NewSignerForOrigin(origin string) (*Signer, error) {
-	normalized, err := normalizeOrigin(origin)
-	if err != nil {
-		return nil, err
-	}
-	return &Signer{origin: normalized, now: time.Now}, nil
-}
-
 // Sign 使用当前时间生成授权头
 func (s *Signer) Sign(state StorageState) (string, error) {
 	return s.Authorization(state)

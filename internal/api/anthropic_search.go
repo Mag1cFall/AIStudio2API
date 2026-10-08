@@ -78,8 +78,9 @@ func anthropicSearchBlocks(events []aistudio.Event, apiKey string) ([]anthropicC
 	return blocks, len(queries)
 }
 
-// decodeAnthropicSearchHistory 还原搜索历史中的来源文本并保持普通消息块
+// decodeAnthropicSearchHistory 将搜索历史改写为文本块，查询与其结果合并到同一块
 func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
+	aead := anthropicSearchCipher(s.config.APIKey)
 	for index := range request.Messages {
 		message := &request.Messages[index]
 		if !strings.HasPrefix(strings.TrimSpace(string(message.Content)), "[") {
@@ -89,8 +90,8 @@ func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
 		if err := json.Unmarshal(message.Content, &blocks); err != nil {
 			return err
 		}
-		calls := make(map[string]string)
-		converted := make([]json.RawMessage, 0, len(blocks))
+		calls := make(map[string]int)
+		converted := make([]any, 0, len(blocks))
 		for _, raw := range blocks {
 			var block anthropicContentBlock
 			if err := json.Unmarshal(raw, &block); err != nil {
@@ -98,56 +99,71 @@ func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
 			}
 			switch block.Type {
 			case "server_tool_use":
-				if message.Role != "assistant" || block.Name != "web_search" || block.ID == "" {
-					return fmt.Errorf("invalid web_search server_tool_use")
-				}
 				var input struct {
 					Query string `json:"query"`
 				}
-				if err := json.Unmarshal(block.Input, &input); err != nil {
-					return fmt.Errorf("web_search input: %w", err)
+				if block.Name != "web_search" || json.Unmarshal(block.Input, &input) != nil {
+					converted = append(converted, raw)
+					continue
 				}
-				calls[block.ID] = input.Query
+				calls[block.ID] = len(converted)
+				converted = append(converted, anthropicContentBlock{Type: "text", Text: "Web search: " + input.Query})
 			case "web_search_tool_result":
-				query, exists := calls[block.ToolUseID]
-				if message.Role != "assistant" || !exists {
-					return fmt.Errorf("web_search_tool_result requires its server_tool_use")
+				text, err := anthropicSearchResultText(aead, block.Content)
+				if err != nil {
+					return err
 				}
-				delete(calls, block.ToolUseID)
-				var results []anthropicSearchResult
-				if err := json.Unmarshal(block.Content, &results); err != nil {
-					return fmt.Errorf("web_search_tool_result content: %w", err)
+				if position, exists := calls[block.ToolUseID]; exists {
+					call := converted[position].(anthropicContentBlock)
+					call.Text += text
+					converted[position] = call
+					continue
 				}
-				aead := anthropicSearchCipher(s.config.APIKey)
-				text := "Web search: " + query
-				for _, result := range results {
-					sealed, err := base64.StdEncoding.DecodeString(result.EncryptedContent)
-					if err != nil {
-						return fmt.Errorf("invalid web_search encrypted_content")
-					}
-					payload, err := aead.Open(nil, nil, sealed, nil)
-					if err != nil {
-						return fmt.Errorf("invalid web_search encrypted_content")
-					}
-					var source aistudio.GroundingChunk
-					if err := json.Unmarshal(payload, &source); err != nil {
-						return fmt.Errorf("invalid web_search source")
-					}
-					if result.Type != "web_search_result" || result.URL != source.URI || result.Title != source.Title {
-						return fmt.Errorf("web_search source does not match encrypted_content")
-					}
-					text += "\n" + source.Title + "\n" + source.URI + "\n" + source.Text
-				}
-				encoded, _ := json.Marshal(anthropicContentBlock{Type: "text", Text: text})
-				converted = append(converted, encoded)
+				converted = append(converted, anthropicContentBlock{Type: "text", Text: "Web search results:" + text})
 			default:
 				converted = append(converted, raw)
 			}
 		}
-		if len(calls) > 0 {
-			return fmt.Errorf("web_search server_tool_use requires its result")
-		}
 		message.Content, _ = json.Marshal(converted)
 	}
 	return nil
+}
+
+// anthropicSearchResultText 渲染搜索结果或失败原因，摘要只从本服务签发的来源中恢复
+func anthropicSearchResultText(aead cipher.AEAD, content json.RawMessage) (string, error) {
+	var results []anthropicSearchResult
+	if err := json.Unmarshal(content, &results); err != nil {
+		var failure struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if json.Unmarshal(content, &failure) != nil || failure.ErrorCode == "" {
+			return "", fmt.Errorf("web_search_tool_result content: %w", err)
+		}
+		return "\nWeb search failed: " + failure.ErrorCode, nil
+	}
+	text := ""
+	for _, result := range results {
+		text += "\n" + result.Title + "\n" + result.URL
+		if snippet := anthropicSearchSnippet(aead, result); snippet != "" {
+			text += "\n" + snippet
+		}
+	}
+	return text, nil
+}
+
+// anthropicSearchSnippet 用当前凭证解出来源摘要，来源来自其他服务或凭证时返回空
+func anthropicSearchSnippet(aead cipher.AEAD, result anthropicSearchResult) string {
+	sealed, err := base64.StdEncoding.DecodeString(result.EncryptedContent)
+	if err != nil {
+		return ""
+	}
+	payload, err := aead.Open(nil, nil, sealed, nil)
+	if err != nil {
+		return ""
+	}
+	var source aistudio.GroundingChunk
+	if json.Unmarshal(payload, &source) != nil || source.URI != result.URL {
+		return ""
+	}
+	return source.Text
 }

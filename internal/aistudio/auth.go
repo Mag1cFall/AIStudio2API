@@ -14,11 +14,6 @@ import (
 	"time"
 )
 
-const (
-	// LoginMethodIsolatedBrowser 表示独立浏览器登录
-	LoginMethodIsolatedBrowser = "isolated_browser"
-)
-
 // StateCookie 表示 Playwright storage state 中的 Cookie
 type StateCookie struct {
 	Name         string  `json:"name"`
@@ -102,12 +97,6 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 	return extension, true, nil
 }
 
-// LoginMethod 描述可发布的账户登录入口
-type LoginMethod struct {
-	ID          string `json:"id"`
-	Interactive bool   `json:"interactive"`
-}
-
 // IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境
 type IsolatedLoginRequest struct {
 	AccountID string
@@ -136,11 +125,6 @@ type LoginVerification struct {
 type IsolatedLoginDriver interface {
 	Login(context.Context, IsolatedLoginRequest) (IsolatedLoginResult, error)
 	Verify(context.Context, IsolatedLoginRequest, StorageState) (LoginVerification, error)
-}
-
-// SupportedLoginMethods 返回当前可发布的登录入口
-func SupportedLoginMethods() []LoginMethod {
-	return []LoginMethod{{ID: LoginMethodIsolatedBrowser, Interactive: true}}
 }
 
 // LoadStorageState 读取并校验 Playwright storage state

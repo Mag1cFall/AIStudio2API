@@ -1,11 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -22,12 +28,8 @@ type chatRequest struct {
 	TopP                *float64          `json:"top_p"`
 	MaxTokens           *int64            `json:"max_tokens"`
 	MaxCompletionTokens *int64            `json:"max_completion_tokens"`
-	FrequencyPenalty    *float64          `json:"frequency_penalty"`
-	PresencePenalty     *float64          `json:"presence_penalty"`
 	N                   *int64            `json:"n"`
 	ParallelToolCalls   *bool             `json:"parallel_tool_calls"`
-	Logprobs            *bool             `json:"logprobs"`
-	LogitBias           json.RawMessage   `json:"logit_bias"`
 	Stop                json.RawMessage   `json:"stop"`
 	ResponseFormat      json.RawMessage   `json:"response_format"`
 	ReasoningEffort     string            `json:"reasoning_effort"`
@@ -55,6 +57,10 @@ type openAIToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	Custom struct {
+		Name  string `json:"name"`
+		Input string `json:"input"`
+	} `json:"custom"`
 	ExtraContent struct {
 		Google struct {
 			ThoughtSignature string `json:"thought_signature"`
@@ -70,6 +76,11 @@ type openAITool struct {
 		Parameters  json.RawMessage `json:"parameters"`
 		Strict      *bool           `json:"strict"`
 	} `json:"function"`
+	Custom struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Format      json.RawMessage `json:"format"`
+	} `json:"custom"`
 }
 
 var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/_=\r\n-]+)\)`)
@@ -134,7 +145,7 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("Anthropic-Version") != "" {
-		writeAnthropicModels(w, models)
+		writeAnthropicModels(w, r, models)
 		return
 	}
 	data := make([]map[string]any, 0, len(models))
@@ -190,13 +201,22 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if err := inlineRemoteMedia(r.Context(), generateRequest.Contents); err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		}
+		return
+	}
 	generateRequest.Unary = !request.Stream
 	s.thoughtSignatures.Restore(generateRequest.Contents)
-	events, err := s.service.Generate(r.Context(), generateRequest)
-	if err == nil && request.Stream {
-		events, err = awaitStreamStart(r.Context(), events)
+	count := 1
+	if request.N != nil {
+		count = int(*request.N)
 	}
-	if err != nil {
+	choices := s.startChatChoices(r.Context(), generateRequest, count, request.Stream)
+	defer choices.cancel()
+	if err := choices.err; err != nil {
+		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
@@ -204,18 +224,24 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	created := time.Now().Unix()
 	if request.Stream {
-		s.streamChatCompletion(w, r, request, requestID, created, events)
+		s.streamChatCompletion(w, r, request, requestID, created, choices)
 		return
 	}
-	result, err := consumeEvents(r.Context(), events, nil)
+	results, err := choices.run(func(_ int, events <-chan aistudio.Event) (generationResult, error) {
+		return consumeEvents(choices.ctx, events, nil)
+	})
 	if err != nil {
+		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 		}
 		return
 	}
-	s.thoughtSignatures.Remember(result.toolCalls)
-	writeJSON(w, http.StatusOK, buildChatCompletion(requestID, created, request.Model, result))
+	for index := range results {
+		s.thoughtSignatures.Remember(results[index].toolCalls)
+	}
+	choices.record(r.Context(), results)
+	writeJSON(w, http.StatusOK, buildChatCompletion(requestID, created, request.Model, results, request.Tools))
 }
 
 func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
@@ -301,22 +327,18 @@ func chatMessageContent(message chatMessage) (aistudio.Content, error) {
 		}
 	}
 	for _, call := range message.ToolCalls {
-		if call.Type != "" && call.Type != "function" {
+		functionCall := aistudio.FunctionCall{ID: call.ID, ThoughtSignature: call.ExtraContent.Google.ThoughtSignature}
+		switch call.Type {
+		case "", "function":
+			functionCall.Name = call.Function.Name
+			functionCall.Arguments = functionCallArguments(call.Function.Arguments)
+		case "custom":
+			functionCall.Name = call.Custom.Name
+			functionCall.Arguments = customToolArguments(call.Custom.Input)
+		default:
 			return aistudio.Content{}, fmt.Errorf("unsupported tool call type %q", call.Type)
 		}
-		arguments := json.RawMessage(call.Function.Arguments)
-		if len(arguments) == 0 {
-			arguments = json.RawMessage(`{}`)
-		}
-		if !json.Valid(arguments) {
-			return aistudio.Content{}, fmt.Errorf("tool call %q arguments must be JSON", call.Function.Name)
-		}
-		parts = append(parts, aistudio.Part{FunctionCall: &aistudio.FunctionCall{
-			ID:               call.ID,
-			Name:             call.Function.Name,
-			Arguments:        arguments,
-			ThoughtSignature: call.ExtraContent.Google.ThoughtSignature,
-		}})
+		parts = append(parts, aistudio.Part{FunctionCall: &functionCall})
 	}
 	return aistudio.Content{Role: role, Parts: parts}, nil
 }
@@ -409,13 +431,20 @@ func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 
 func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 	var block struct {
-		Type       string          `json:"type"`
-		Text       string          `json:"text"`
-		ImageURL   json.RawMessage `json:"image_url"`
-		VideoURL   json.RawMessage `json:"video_url"`
-		FileID     string          `json:"file_id"`
-		Filename   string          `json:"filename"`
-		FileData   string          `json:"file_data"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		Refusal  string          `json:"refusal"`
+		ImageURL json.RawMessage `json:"image_url"`
+		VideoURL json.RawMessage `json:"video_url"`
+		FileID   string          `json:"file_id"`
+		Filename string          `json:"filename"`
+		FileData string          `json:"file_data"`
+		FileURL  string          `json:"file_url"`
+		File     *struct {
+			FileID   string `json:"file_id"`
+			Filename string `json:"filename"`
+			FileData string `json:"file_data"`
+		} `json:"file"`
 		InputAudio *struct {
 			Data   string `json:"data"`
 			Format string `json:"format"`
@@ -427,7 +456,12 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 	switch block.Type {
 	case "text", "input_text", "output_text":
 		return aistudio.Part{Text: block.Text}, nil
+	case "refusal":
+		return aistudio.Part{Text: block.Refusal}, nil
 	case "image_url", "input_image":
+		if !rawJSONConfigured(block.ImageURL) && block.FileID != "" {
+			return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID}}, nil
+		}
 		url, err := imageURLString(block.ImageURL)
 		if err != nil {
 			return aistudio.Part{}, err
@@ -444,8 +478,14 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 		}
 		return aistudio.Part{ExternalMedia: media}, nil
 	case "file", "input_file":
+		if block.File != nil {
+			block.FileID, block.Filename, block.FileData = block.File.FileID, block.File.Filename, block.File.FileData
+		}
 		if block.FileData != "" {
-			return fileOrInlinePart(block.FileData, "")
+			return fileDataPart(block.FileData, block.Filename)
+		}
+		if block.FileID == "" {
+			block.FileID = block.FileURL
 		}
 		return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID, Name: block.Filename}}, nil
 	case "input_audio":
@@ -484,15 +524,67 @@ func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
 		return aistudio.Part{File: &aistudio.FileRef{ID: value, Name: name}}, nil
 	}
 	metadata, encoded, ok := strings.Cut(strings.TrimPrefix(value, "data:"), ",")
-	if !ok || !strings.HasSuffix(metadata, ";base64") {
-		return aistudio.Part{}, fmt.Errorf("data URL must use base64")
+	if !ok {
+		return aistudio.Part{}, fmt.Errorf("data URL must contain a comma")
 	}
-	data, err := decodeBase64Flexible(encoded)
+	var data []byte
+	if mediaType, isBase64 := strings.CutSuffix(metadata, ";base64"); isBase64 {
+		decoded, err := decodeBase64Flexible(encoded)
+		if err != nil {
+			return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
+		}
+		metadata, data = mediaType, decoded
+	} else {
+		decoded, err := url.PathUnescape(encoded)
+		if err != nil {
+			return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
+		}
+		data = []byte(decoded)
+	}
+	mimeType, _, err := mime.ParseMediaType(metadata)
 	if err != nil {
-		return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
+		mimeType = detectMediaType(name, data)
 	}
-	mimeType, data := normalizeImagePayload(strings.TrimSuffix(metadata, ";base64"), data)
+	mimeType, data = normalizeImagePayload(mimeType, data)
 	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}, nil
+}
+
+// fileDataPart 解析 data URL 或 base64 文件内容
+func fileDataPart(value string, name string) (aistudio.Part, error) {
+	if strings.HasPrefix(value, "data:") {
+		return fileOrInlinePart(value, name)
+	}
+	data, err := decodeBase64Flexible(value)
+	if err != nil {
+		return aistudio.Part{}, fmt.Errorf("file_data: %w", err)
+	}
+	mimeType, data := normalizeImagePayload(detectMediaType(name, data), data)
+	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}, nil
+}
+
+// detectMediaType 按内容前缀判断不带参数的 MIME，无法识别时依次按 FLAC 头、MPEG 音频帧头与扩展名判断
+func detectMediaType(name string, data []byte) string {
+	detected, _, _ := mime.ParseMediaType(http.DetectContentType(data))
+	switch {
+	case detected == "application/ogg":
+		return "audio/ogg"
+	case detected == "audio/wave":
+		return "audio/wav"
+	case detected != "application/octet-stream":
+		return detected
+	case bytes.HasPrefix(data, []byte("fLaC")):
+		return "audio/flac"
+	case len(data) >= 2 && data[0] == 0xff && data[1]&0xe0 == 0xe0 && data[1]&0x06 != 0:
+		return "audio/mpeg"
+	}
+	extension := strings.ToLower(path.Ext(name))
+	if mediaType := audioExtensionTypes[extension]; mediaType != "" {
+		return mediaType
+	}
+	if mediaType, _, err := mime.ParseMediaType(mime.TypeByExtension(extension)); err == nil {
+		return mediaType
+	}
+	return detected
 }
 
 func audioMIME(format string) string {
@@ -524,6 +616,11 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 				Parameters:  parameters,
 				Strict:      tool.Function.Strict != nil && *tool.Function.Strict,
 			})
+		case "custom":
+			if tool.Custom.Name == "" {
+				return aistudio.Tools{}, fmt.Errorf("custom tool name is required")
+			}
+			mapped.Functions = append(mapped.Functions, customToolDeclaration(tool.Custom.Name, tool.Custom.Description, tool.Custom.Format))
 		case "web_search", "web_search_preview":
 			mapped.Google = appendUnique(mapped.Google, "google_search")
 		case "code_interpreter":
@@ -538,48 +635,129 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
 		}
 	}
-	config, err := openAIToolChoice(choice)
+	config, allowed, err := openAIToolChoice(choice)
 	if err != nil {
 		return aistudio.Tools{}, err
+	}
+	if allowed != nil {
+		mapped = restrictAllowedTools(mapped, allowed)
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
 }
 
-func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
+// openAIToolChoice 转换 tool_choice，类型为 allowed_tools 时另外返回允许的工具引用
+func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, []toolReference, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return aistudio.ToolConfig{Mode: "auto"}, nil
+		return aistudio.ToolConfig{Mode: "auto"}, nil, nil
 	}
 	var mode string
 	if err := json.Unmarshal(raw, &mode); err == nil {
 		switch mode {
 		case "auto", "none", "required":
-			return aistudio.ToolConfig{Mode: mode}, nil
+			return aistudio.ToolConfig{Mode: mode}, nil, nil
 		default:
-			return aistudio.ToolConfig{}, fmt.Errorf("unsupported tool_choice %q", mode)
+			return aistudio.ToolConfig{}, nil, fmt.Errorf("unsupported tool_choice %q", mode)
 		}
 	}
 	var object struct {
-		Type      string `json:"type"`
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-		Function  *struct {
-			Name string `json:"name"`
-		} `json:"function"`
+		toolReference
+		Mode         string          `json:"mode"`
+		Tools        []toolReference `json:"tools"`
+		AllowedTools *struct {
+			Mode  string          `json:"mode"`
+			Tools []toolReference `json:"tools"`
+		} `json:"allowed_tools"`
 	}
 	if err := json.Unmarshal(raw, &object); err != nil {
-		return aistudio.ToolConfig{}, fmt.Errorf("invalid tool_choice: %w", err)
+		return aistudio.ToolConfig{}, nil, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	if object.Function != nil {
-		object.Name = object.Function.Name
+	switch object.Type {
+	case "allowed_tools":
+		if object.AllowedTools != nil {
+			object.Mode, object.Tools = object.AllowedTools.Mode, object.AllowedTools.Tools
+		}
+		if object.Mode != "auto" && object.Mode != "required" {
+			return aistudio.ToolConfig{}, nil, fmt.Errorf("allowed_tools mode must be auto or required")
+		}
+		config := aistudio.ToolConfig{Mode: object.Mode}
+		for _, tool := range object.Tools {
+			if name := tool.functionName(); name != "" {
+				config.AllowedFunctionNames = append(config.AllowedFunctionNames, name)
+			}
+		}
+		return config, append([]toolReference{}, object.Tools...), nil
+	case "web_search_preview", "web_search_preview_2025_03_11", "code_interpreter":
+		return aistudio.ToolConfig{Mode: "required"}, nil, nil
+	case "file_search", "computer", "computer_use", "computer_use_preview", "image_generation", "mcp", "programmatic_tool_calling", "tool_search":
+		return aistudio.ToolConfig{Mode: "auto"}, nil, nil
 	}
-	if object.Type != "function" || object.Name == "" {
-		return aistudio.ToolConfig{}, fmt.Errorf("named tool_choice requires type function and a name")
+	if name := object.functionName(); name != "" {
+		return aistudio.ToolConfig{Mode: "required", AllowedFunctionNames: []string{name}}, nil, nil
 	}
-	if object.Namespace != "" {
-		object.Name = object.Namespace + "." + object.Name
+	if object.Type == "function" || object.Type == "custom" {
+		return aistudio.ToolConfig{}, nil, fmt.Errorf("named tool_choice requires a name")
 	}
-	return aistudio.ToolConfig{Mode: "required", AllowedFunctionNames: []string{object.Name}}, nil
+	return aistudio.ToolConfig{}, nil, fmt.Errorf("unsupported tool_choice type %q", object.Type)
+}
+
+// hostedGoogleTools 为托管工具类型对应的 Google 工具
+var hostedGoogleTools = map[string]string{
+	"web_search": "google_search", "web_search_2025_08_26": "google_search", "web_search_preview": "google_search",
+	"web_search_preview_2025_03_11": "google_search", "code_interpreter": "code_execution", "url_context": "url_context",
+	"google_maps": "google_maps", "image_search": "image_search",
+}
+
+// restrictAllowedTools 只保留 allowed_tools 引用的函数与托管工具对应的 Google 工具
+func restrictAllowedTools(tools aistudio.Tools, allowed []toolReference) aistudio.Tools {
+	names, google := make(map[string]bool), make(map[string]bool)
+	for _, reference := range allowed {
+		if name := reference.functionName(); name != "" {
+			names[name] = true
+		} else if tool := hostedGoogleTools[reference.Type]; tool != "" {
+			google[tool] = true
+		}
+	}
+	tools.Functions = slices.DeleteFunc(tools.Functions, func(declaration aistudio.FunctionDeclaration) bool { return !names[declaration.Name] })
+	tools.Google = slices.DeleteFunc(tools.Google, func(tool string) bool { return !google[tool] })
+	if !google["google_search"] {
+		tools.GoogleSearch = nil
+	}
+	return tools
+}
+
+// toolReference 是 tool_choice 与 allowed_tools 中对单个工具的引用
+type toolReference struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Function  *struct {
+		Name string `json:"name"`
+	} `json:"function"`
+	Custom *struct {
+		Name string `json:"name"`
+	} `json:"custom"`
+}
+
+// functionName 返回引用对应的声明函数名，客户端执行工具使用固定函数名，托管工具返回空串
+func (reference toolReference) functionName() string {
+	switch reference.Type {
+	case "function", "custom":
+		name := reference.Name
+		if reference.Function != nil {
+			name = reference.Function.Name
+		}
+		if reference.Custom != nil {
+			name = reference.Custom.Name
+		}
+		if reference.Namespace != "" && name != "" {
+			name = reference.Namespace + "." + name
+		}
+		return name
+	case "local_shell", "shell", "apply_patch":
+		return reference.Type
+	}
+	return ""
 }
 
 func appendUnique(values []string, value string) []string {
@@ -592,26 +770,8 @@ func appendUnique(values []string, value string) []string {
 }
 
 func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error) {
-	if request.N != nil && *request.N != 1 {
-		return aistudio.GenerationConfig{}, fmt.Errorf("n must be 1")
-	}
-	if request.Logprobs != nil && *request.Logprobs {
-		return aistudio.GenerationConfig{}, fmt.Errorf("logprobs must be false")
-	}
-	if rawJSONConfigured(request.LogitBias) {
-		var biases map[string]json.RawMessage
-		if err := json.Unmarshal(request.LogitBias, &biases); err != nil || biases == nil {
-			return aistudio.GenerationConfig{}, fmt.Errorf("logit_bias must be an empty object")
-		}
-		if len(biases) != 0 {
-			return aistudio.GenerationConfig{}, fmt.Errorf("logit_bias must be empty")
-		}
-	}
-	if request.FrequencyPenalty != nil && *request.FrequencyPenalty != 0 {
-		return aistudio.GenerationConfig{}, fmt.Errorf("frequency_penalty must be 0")
-	}
-	if request.PresencePenalty != nil && *request.PresencePenalty != 0 {
-		return aistudio.GenerationConfig{}, fmt.Errorf("presence_penalty must be 0")
+	if request.N != nil && (*request.N < 1 || *request.N > maxChatChoices) {
+		return aistudio.GenerationConfig{}, fmt.Errorf("n must be between 1 and %d", maxChatChoices)
 	}
 	config := aistudio.GenerationConfig{
 		Temperature:     request.Temperature,
@@ -690,7 +850,29 @@ func normalizeStopSequences(values []string) []string {
 	return normalized
 }
 
-func buildChatCompletion(id string, created int64, model string, result generationResult) map[string]any {
+func buildChatCompletion(id string, created int64, model string, results []generationResult, tools []openAITool) map[string]any {
+	choices := make([]any, 0, len(results))
+	response := map[string]any{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": created,
+		"model":   model,
+	}
+	for index := range results {
+		choices = append(choices, chatCompletionChoice(index, results[index], tools))
+		if results[index].providerModel != "" && response["provider_model"] == nil {
+			response["provider_model"] = results[index].providerModel
+		}
+	}
+	response["choices"] = choices
+	if usage := sumUsage(results); usage != nil {
+		response["usage"] = openAIUsage(usage)
+	}
+	return response
+}
+
+// chatCompletionChoice 构造非流式响应中第 index 个 choice
+func chatCompletionChoice(index int, result generationResult, tools []openAITool) map[string]any {
 	rendered := renderedContent(result.events)
 	content := any(rendered)
 	if rendered == "" && len(result.toolCalls) > 0 {
@@ -701,101 +883,61 @@ func buildChatCompletion(id string, created int64, model string, result generati
 		message["reasoning_content"] = result.reasoning.String()
 	}
 	if len(result.toolCalls) > 0 {
-		message["tool_calls"] = openAIToolCallOutput(result.toolCalls)
+		message["tool_calls"] = openAIToolCallOutput(result.toolCalls, tools)
 	}
 	if len(result.citations) > 0 {
 		message["annotations"] = openAICitations(result.citations)
 	}
 	choice := map[string]any{
-		"index":         0,
+		"index":         index,
 		"message":       message,
+		"logprobs":      nil,
 		"finish_reason": openAIFinishReason(result.finishReason, len(result.toolCalls) > 0),
 	}
 	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
 		choice["provider_finish_reason"] = providerReason
 	}
-	response := map[string]any{
-		"id":      id,
-		"object":  "chat.completion",
-		"created": created,
-		"model":   model,
-		"choices": []any{choice},
-	}
-	if result.providerModel != "" {
-		response["provider_model"] = result.providerModel
-	}
-	if result.usage != nil {
-		response["usage"] = openAIUsage(result.usage)
-	}
-	return response
+	return choice
 }
 
-func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, events <-chan aistudio.Event) {
+func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, choices *chatChoices) {
 	if err := streamHeaders(w); err != nil {
 		return
 	}
-	if err := writeChatChunk(w, id, created, request.Model, map[string]any{"role": "assistant", "content": ""}, nil, request.StreamOptions.IncludeUsage); err != nil {
-		return
+	var writing sync.Mutex
+	write := func(index int, delta map[string]any, finish *string) error {
+		writing.Lock()
+		defer writing.Unlock()
+		return writeChatChunk(w, id, created, request.Model, index, delta, finish, request.StreamOptions.IncludeUsage)
 	}
-	toolIndex := 0
-	hasContent := false
-	contentEndsWithNewline := false
-	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
-		switch event.Kind {
-		case aistudio.EventText:
-			hasContent = hasContent || event.Text != ""
-			contentEndsWithNewline = strings.HasSuffix(event.Text, "\n")
-			return writeChatChunk(w, id, created, request.Model, map[string]any{"content": event.Text}, nil, request.StreamOptions.IncludeUsage)
-		case aistudio.EventReasoning:
-			return writeChatChunk(w, id, created, request.Model, map[string]any{"reasoning_content": event.Text}, nil, request.StreamOptions.IncludeUsage)
-		case aistudio.EventToolCall:
-			if event.ToolCall == nil {
-				return nil
-			}
-			call := event.ToolCall
-			s.thoughtSignatures.Remember([]aistudio.FunctionCall{*call})
-			toolCall := map[string]any{
-				"index": toolIndex,
-				"id":    call.ID,
-				"type":  "function",
-				"function": map[string]any{
-					"name":      call.Name,
-					"arguments": string(call.Arguments),
-				},
-			}
-			if call.ThoughtSignature != "" {
-				toolCall["extra_content"] = openAIGoogleThoughtSignature(call.ThoughtSignature)
-			}
-			delta := map[string]any{"tool_calls": []any{toolCall}}
-			toolIndex++
-			return writeChatChunk(w, id, created, request.Model, delta, nil, request.StreamOptions.IncludeUsage)
-		case aistudio.EventMedia:
-			if event.Media == nil {
-				return nil
-			}
-			content := renderMediaMarkdown(*event.Media)
-			if hasContent && !contentEndsWithNewline {
-				content = "\n" + content
-			}
-			hasContent = true
-			contentEndsWithNewline = false
-			return writeChatChunk(w, id, created, request.Model, map[string]any{"content": content}, nil, request.StreamOptions.IncludeUsage)
-		case aistudio.EventExecutableCode, aistudio.EventCodeExecutionResult:
-			content := renderCodeExecution(event)
-			if content == "" {
-				return nil
-			}
-			if hasContent && !contentEndsWithNewline {
-				content = "\n" + content
-			}
-			content += "\n"
-			hasContent = true
-			contentEndsWithNewline = true
-			return writeChatChunk(w, id, created, request.Model, map[string]any{"content": content}, nil, request.StreamOptions.IncludeUsage)
+	for index := range choices.events {
+		if err := write(index, map[string]any{"role": "assistant", "content": ""}, nil); err != nil {
+			return
 		}
-		return nil
-	}, func() error { return writeSSEHeartbeat(w) })
+	}
+	heartbeat := func() error {
+		writing.Lock()
+		defer writing.Unlock()
+		return writeSSEHeartbeat(w)
+	}
+	results, err := choices.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
+		choice := &chatStreamChoice{server: s, tools: request.Tools, index: index, write: write}
+		result, err := consumeStreamEvents(choices.ctx, events, choice.emit, heartbeat)
+		if err != nil {
+			return result, err
+		}
+		if len(result.citations) > 0 {
+			_ = write(index, map[string]any{"annotations": openAICitations(result.citations)}, nil)
+		}
+		finish := openAIFinishReason(result.finishReason, len(result.toolCalls) > 0)
+		finalDelta := map[string]any{}
+		if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
+			finalDelta["provider_finish_reason"] = providerReason
+		}
+		return result, write(index, finalDelta, &finish)
+	})
 	if err != nil {
+		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
 			status := statusFromError(err)
 			code := openAIErrorCode(err)
@@ -807,25 +949,15 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 		}
 		return
 	}
-	if len(result.citations) > 0 {
-		_ = writeChatChunk(w, id, created, request.Model, map[string]any{"annotations": openAICitations(result.citations)}, nil, request.StreamOptions.IncludeUsage)
-	}
-	finish := openAIFinishReason(result.finishReason, len(result.toolCalls) > 0)
-	finalDelta := map[string]any{}
-	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
-		finalDelta["provider_finish_reason"] = providerReason
-	}
-	if err := writeChatChunk(w, id, created, request.Model, finalDelta, &finish, request.StreamOptions.IncludeUsage); err != nil {
-		return
-	}
-	if request.StreamOptions.IncludeUsage && result.usage != nil {
+	choices.record(r.Context(), results)
+	if usage := sumUsage(results); request.StreamOptions.IncludeUsage && usage != nil {
 		chunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",
 			"created": created,
 			"model":   request.Model,
 			"choices": []any{},
-			"usage":   openAIUsage(result.usage),
+			"usage":   openAIUsage(usage),
 		}
 		if err := writeSSE(w, "", chunk); err != nil {
 			return
@@ -834,9 +966,66 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 	_ = writeSSEText(w, "[DONE]")
 }
 
-func writeChatChunk(w http.ResponseWriter, id string, created int64, model string, delta map[string]any, finish *string, includeUsage bool) error {
+// chatStreamChoice 把一个 choice 的事件写成带 index 的 Chat chunk
+type chatStreamChoice struct {
+	server                 *server
+	tools                  []openAITool
+	index                  int
+	write                  func(int, map[string]any, *string) error
+	toolIndex              int
+	hasContent             bool
+	contentEndsWithNewline bool
+}
+
+// emit 写出一个上游事件对应的 delta
+func (choice *chatStreamChoice) emit(event aistudio.Event) error {
+	switch event.Kind {
+	case aistudio.EventText:
+		choice.hasContent = choice.hasContent || event.Text != ""
+		choice.contentEndsWithNewline = strings.HasSuffix(event.Text, "\n")
+		return choice.write(choice.index, map[string]any{"content": event.Text}, nil)
+	case aistudio.EventReasoning:
+		return choice.write(choice.index, map[string]any{"reasoning_content": event.Text}, nil)
+	case aistudio.EventToolCall:
+		if event.ToolCall == nil {
+			return nil
+		}
+		call := event.ToolCall
+		choice.server.thoughtSignatures.Remember([]aistudio.FunctionCall{*call})
+		toolCall := openAIToolCallItem(*call, choice.tools)
+		toolCall["index"] = choice.toolIndex
+		choice.toolIndex++
+		return choice.write(choice.index, map[string]any{"tool_calls": []any{toolCall}}, nil)
+	case aistudio.EventMedia:
+		if event.Media == nil {
+			return nil
+		}
+		content := renderMediaMarkdown(*event.Media)
+		if choice.hasContent && !choice.contentEndsWithNewline {
+			content = "\n" + content
+		}
+		choice.hasContent = true
+		choice.contentEndsWithNewline = false
+		return choice.write(choice.index, map[string]any{"content": content}, nil)
+	case aistudio.EventExecutableCode, aistudio.EventCodeExecutionResult:
+		content := renderCodeExecution(event)
+		if content == "" {
+			return nil
+		}
+		if choice.hasContent && !choice.contentEndsWithNewline {
+			content = "\n" + content
+		}
+		content += "\n"
+		choice.hasContent = true
+		choice.contentEndsWithNewline = true
+		return choice.write(choice.index, map[string]any{"content": content}, nil)
+	}
+	return nil
+}
+
+func writeChatChunk(w http.ResponseWriter, id string, created int64, model string, index int, delta map[string]any, finish *string, includeUsage bool) error {
 	choice := map[string]any{
-		"index":         0,
+		"index":         index,
 		"delta":         delta,
 		"finish_reason": finish,
 	}
@@ -873,23 +1062,27 @@ func openAIFinishReason(reason string, hasTools bool) string {
 	}
 }
 
-func openAIToolCallOutput(calls []aistudio.FunctionCall) []map[string]any {
+func openAIToolCallOutput(calls []aistudio.FunctionCall, tools []openAITool) []map[string]any {
 	output := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {
-		item := map[string]any{
-			"id":   call.ID,
-			"type": "function",
-			"function": map[string]any{
-				"name":      call.Name,
-				"arguments": string(call.Arguments),
-			},
-		}
-		if call.ThoughtSignature != "" {
-			item["extra_content"] = openAIGoogleThoughtSignature(call.ThoughtSignature)
-		}
-		output = append(output, item)
+		output = append(output, openAIToolCallItem(call, tools))
 	}
 	return output
+}
+
+// openAIToolCallItem 把函数调用投影为 Chat tool_calls 项，custom 工具使用 custom 形状
+func openAIToolCallItem(call aistudio.FunctionCall, tools []openAITool) map[string]any {
+	item := map[string]any{"id": call.ID, "type": "function"}
+	if chatCustomTool(tools, call.Name) {
+		item["type"] = "custom"
+		item["custom"] = map[string]any{"name": call.Name, "input": customToolInput(call.Arguments)}
+	} else {
+		item["function"] = map[string]any{"name": call.Name, "arguments": string(call.Arguments)}
+	}
+	if call.ThoughtSignature != "" {
+		item["extra_content"] = openAIGoogleThoughtSignature(call.ThoughtSignature)
+	}
+	return item
 }
 
 func openAIGoogleThoughtSignature(signature string) map[string]any {

@@ -8,6 +8,7 @@ type ProtectedRequest struct {
 	Headers    http.Header
 	Body       []byte
 	Prompt     string
+	PagePrompt string
 	ProofField int
 }
 

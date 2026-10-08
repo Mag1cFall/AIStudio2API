@@ -76,6 +76,10 @@ type Program struct {
 	src         *file.File
 	srcMap      []srcMapItem
 	calleeText  map[int]string
+	// regexps 表示实例化本段代码时需要创建正则字面量对象，包含随其编译的立即调用函数
+	regexps bool
+	// generators 表示本段代码及其全部嵌套函数中含有同步生成器函数
+	generators bool
 }
 
 type compiler struct {
@@ -96,6 +100,11 @@ type compiler struct {
 	codeScratchpad []instruction
 
 	stringCache map[unistring.String]Value
+
+	// lazy 表示当前编译的代码属于 SpiderMonkey 首次调用时才编译的函数
+	lazy bool
+	// inFunc 表示当前编译的代码位于函数体内
+	inFunc bool
 }
 
 type binding struct {
@@ -1359,15 +1368,27 @@ func (c *compiler) enterDummyMode() (leaveFunc func()) {
 	c.p = &Program{
 		src: c.p.src,
 	}
+	dummy := c.p
 	c.newScope()
 	return func() {
 		c.block, c.p = savedBlock, savedProgram
+		c.p.generators = c.p.generators || dummy.generators
 		c.popScope()
 	}
 }
 
-func (c *compiler) compileStatementDummy(statement ast.Statement) {
+// enterUnreachableMode 编译 SpiderMonkey 不折叠的不可达代码，保留其正则字面量标记
+func (c *compiler) enterUnreachableMode() (leaveFunc func()) {
 	leave := c.enterDummyMode()
+	dummy := c.p
+	return func() {
+		leave()
+		c.p.regexps = c.p.regexps || dummy.regexps
+	}
+}
+
+func (c *compiler) compileStatementDummy(statement ast.Statement) {
+	leave := c.enterUnreachableMode()
 	c.compileStatement(statement, false)
 	leave()
 }

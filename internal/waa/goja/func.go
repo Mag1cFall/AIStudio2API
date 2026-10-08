@@ -425,6 +425,7 @@ func (f *baseJsFuncObject) __call(args []Value, newTarget, this Value) (Value, *
 		vm.pushCtx()
 	}
 	vm.r = f.val.runtime
+	f.val.runtime.instantiate(f.prg, false)
 
 	vm.args = len(args)
 	vm.prg = f.prg
@@ -483,6 +484,7 @@ func (f *funcObject) assertConstructor() func(args []Value, newTarget *Object) *
 func (f *baseJsFuncObject) vmCall(vm *vm, n int) {
 	vm.pushCtx()
 	vm.r = f.val.runtime
+	f.val.runtime.instantiate(f.prg, false)
 	vm.args = n
 	vm.prg = f.prg
 	vm.stash = f.stash
@@ -498,6 +500,7 @@ func (f *arrowFuncObject) assertCallable() (func(FunctionCall) Value, bool) {
 func (f *arrowFuncObject) vmCall(vm *vm, n int) {
 	vm.pushCtx()
 	vm.r = f.val.runtime
+	f.val.runtime.instantiate(f.prg, false)
 	vm.args = n
 	vm.prg = f.prg
 	vm.stash = f.stash

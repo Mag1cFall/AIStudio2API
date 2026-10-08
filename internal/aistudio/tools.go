@@ -303,12 +303,13 @@ func decodeFunctionCall(raw json.RawMessage, path string, evidence json.RawMessa
 	return call, nil
 }
 
+// encodeWireStructJSON 与 Build 相同把 JSON 值编码为 Struct，非对象值放在 result 字段
 func encodeWireStructJSON(raw json.RawMessage) ([]any, error) {
-	var object map[string]any
-	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return nil, fmt.Errorf("必须是 JSON object")
+	object, err := buildJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("必须是 JSON: %w", err)
 	}
-	return encodeWireStruct(object), nil
+	return encodeWireStruct(object.(map[string]any)), nil
 }
 
 func encodeWireStruct(object map[string]any) []any {

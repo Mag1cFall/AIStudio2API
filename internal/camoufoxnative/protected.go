@@ -34,39 +34,17 @@ type protectedChunk struct {
 	Error string   `json:"error"`
 }
 
-// SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹
-func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*ProtectedResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	worker.mu.Lock()
-	if worker.closed {
-		worker.mu.Unlock()
-		return nil, errors.New("Camoufox runtime 已关闭")
-	}
-	client := worker.client
-	contextID := worker.contextID
-	worker.mu.Unlock()
-
-	encodedURL, _ := json.Marshal(rawURL)
-	encodedHeaders, err := json.Marshal(browserRequestHeaders(headers))
-	if err != nil {
-		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
-	}
-	encodedBody, _ := json.Marshal(string(body))
-	requestID := rand.Text()
-	encodedID, _ := json.Marshal(requestID)
-	expression := fmt.Sprintf(`(() => {
-  const id = %s;
+// protectedFetch 是页面内发起受保护请求并分块缓存响应的函数声明，参数依次为请求 ID、URL、请求头 JSON 与正文
+const protectedFetch = `(id, url, headers, body) => {
   const requests = window.__aistudioProtectedRequests ||= new Map();
   const state = {controller: new AbortController(), status: 0, headers: [], chunks: [], done: false, error: ""};
   requests.set(id, state);
   (async () => {
     try {
-      const response = await fetch(%s, {
+      const response = await fetch(url, {
         method: "POST",
-        headers: %s,
-        body: %s,
+        headers: JSON.parse(headers),
+        body,
         credentials: "include",
         signal: state.controller.signal
       });
@@ -94,9 +72,29 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
     }
   })();
   return true;
-})()`, encodedID, encodedURL, encodedHeaders, encodedBody)
+}`
+
+// SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹
+func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*ProtectedResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return nil, errors.New("Camoufox runtime 已关闭")
+	}
+	client := worker.client
+	contextID := worker.contextID
+	worker.mu.Unlock()
+
+	encodedHeaders, err := json.Marshal(browserRequestHeaders(headers))
+	if err != nil {
+		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
+	}
+	requestID := rand.Text()
 	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err = client.evaluateBool(startCtx, contextID, expression)
+	err = client.callFunction(startCtx, contextID, protectedFetch, requestID, rawURL, string(encodedHeaders), string(body))
 	cancelStart()
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("浏览器发送受保护请求: %w", err), worker.cancelProtectedRequest(requestID))

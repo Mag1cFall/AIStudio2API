@@ -27,6 +27,7 @@ type generationResult struct {
 	media         []aistudio.Media
 	usage         *aistudio.Usage
 	finishReason  string
+	finishMessage string
 	stopSequence  string
 	providerModel string
 	finished      bool
@@ -93,6 +94,7 @@ func (result *generationResult) apply(event aistudio.Event) error {
 		}
 	case aistudio.EventFinish:
 		result.finishReason = event.FinishReason
+		result.finishMessage = event.FinishMessage
 		result.stopSequence = event.StopSequence
 		result.finished = true
 	}

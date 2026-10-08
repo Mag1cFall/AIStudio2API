@@ -94,9 +94,24 @@ func generationChannelSelection(selection AccountSelection) bool {
 		strings.TrimSpace(selection.Capability) == "" && !selection.PlaygroundOnly
 }
 
-// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位；非生成请求只使用 Playground RPC
+// buildMethods 表示经 Build 代理调用、只服务 Playground 目录没有的模型的上游方法
+var buildMethods = []string{"embedContent", "bidiGenerateContent", "bidiGenerateMusic"}
+
+// buildMethodSelection 判断选择是否为 embedding 或实时方法，这类选择的 Build 组合只服务 Build 独有模型
+func buildMethodSelection(selection AccountSelection) bool {
+	return strings.TrimSpace(selection.ModelID) != "" && slices.Contains(buildMethods, selection.Method) &&
+		strings.TrimSpace(selection.Capability) == "" && !selection.PlaygroundOnly
+}
+
+// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位；embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
 	if !generationChannelSelection(selection) {
+		if buildMethodSelection(selection) && p.channelEnabledLocked(ChannelBuild) {
+			if selection.Method == "embedContent" {
+				return []Channel{ChannelBuild}
+			}
+			return []Channel{ChannelPlayground, ChannelBuild}
+		}
 		return []Channel{ChannelPlayground}
 	}
 	if selection.Channel != "" {
@@ -141,6 +156,9 @@ func (p *AccountPool) channelSupportsLocked(account *Account, channel Channel, s
 		}
 		return accountSupportsSelection(account, selection)
 	case ChannelBuild:
+		if buildMethodSelection(selection) {
+			return p.channelEnabledLocked(ChannelBuild) && p.buildSupportsMethodLocked(account, selection.ModelID, selection.Method)
+		}
 		return generationChannelSelection(selection) && p.channelEnabledLocked(ChannelBuild) &&
 			p.buildSupportsModelLocked(account, selection.ModelID)
 	default:
@@ -247,7 +265,36 @@ func buildRequiresSpecialTool(modelID string) bool {
 	return strings.Contains(modelID, "computer-use")
 }
 
-// buildOnlyModelsLocked 返回启用账户 Build 目录中 Playground 目录没有的可生成模型
+// buildSupportsMethodLocked 判断账户 Build 目录可经 embedding 或实时方法调用 Playground 目录没有的模型
+func (p *AccountPool) buildSupportsMethodLocked(account *Account, modelID string, method string) bool {
+	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	if p.hasPlaygroundModelLocked(modelID) {
+		return false
+	}
+	for _, model := range account.buildModels {
+		if model.ID == modelID && hasMethod(model, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildPublicMethods 返回 Build 独有 embedding 与实时模型在公开目录中可调用的方法
+func buildPublicMethods(model Model) []string {
+	var methods []string
+	for _, method := range buildMethods {
+		if !hasMethod(model, method) {
+			continue
+		}
+		if method == "embedContent" {
+			methods = append(methods, "batchEmbedContents")
+		}
+		methods = append(methods, method)
+	}
+	return methods
+}
+
+// buildOnlyModelsLocked 返回启用账户 Build 目录中 Playground 目录没有的可生成、embedding 与实时模型
 func (p *AccountPool) buildOnlyModelsLocked() []Model {
 	if !p.channelEnabledLocked(ChannelBuild) {
 		return nil
@@ -262,11 +309,17 @@ func (p *AccountPool) buildOnlyModelsLocked() []Model {
 			if _, exists := seen[model.ID]; exists || p.hasPlaygroundModelLocked(model.ID) {
 				continue
 			}
-			if !p.buildSupportsModelLocked(account, model.ID) {
+			listed := cloneAccountModels([]Model{model})[0]
+			if !hasMethod(model, "generateContent") {
+				listed.Methods = buildPublicMethods(model)
+			} else if !p.buildSupportsModelLocked(account, model.ID) {
+				continue
+			}
+			if len(listed.Methods) == 0 {
 				continue
 			}
 			seen[model.ID] = struct{}{}
-			models = append(models, cloneAccountModels([]Model{model})[0])
+			models = append(models, listed)
 		}
 	}
 	return models
@@ -286,6 +339,16 @@ func (p *AccountPool) hasPlaygroundModelLocked(modelID string) bool {
 	return false
 }
 
+// BidiMethod 返回模型的实时方法：Build 目录以 bidiGenerateMusic 提供的模型为实时音乐，其余为 bidiGenerateContent
+func (p *AccountPool) BidiMethod(modelID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.hasBuildModelLocked(strings.TrimPrefix(strings.TrimSpace(modelID), "models/"), "bidiGenerateMusic") {
+		return "bidiGenerateMusic"
+	}
+	return "bidiGenerateContent"
+}
+
 func (p *AccountPool) hasBuildModelLocked(modelID string, method string) bool {
 	if !p.channelEnabledLocked(ChannelBuild) {
 		return false
@@ -295,8 +358,16 @@ func (p *AccountPool) hasBuildModelLocked(modelID string, method string) bool {
 			continue
 		}
 		for _, model := range account.buildModels {
-			if model.ID == modelID && (method == "" || hasMethod(model, method)) && p.buildSupportsModelLocked(account, modelID) {
+			if model.ID != modelID || method != "" && !hasMethod(model, method) {
+				continue
+			}
+			if hasMethod(model, "generateContent") && p.buildSupportsModelLocked(account, modelID) {
 				return true
+			}
+			for _, served := range buildMethods {
+				if (method == "" || method == served) && p.buildSupportsMethodLocked(account, modelID, served) {
+					return true
+				}
 			}
 		}
 	}
@@ -308,6 +379,8 @@ func (p *AccountPool) modelChannelsLocked(model Model) []string {
 	selection := AccountSelection{ModelID: model.ID}
 	if hasMethod(model, "generateContent") {
 		selection.Method = "generateContent"
+	} else if index := slices.IndexFunc(buildMethods, func(method string) bool { return hasMethod(model, method) }); index >= 0 {
+		selection.Method = buildMethods[index]
 	}
 	var channels []string
 	for _, channel := range p.selectionChannelsLocked(selection) {

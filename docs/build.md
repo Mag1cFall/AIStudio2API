@@ -15,7 +15,7 @@ Build 应用运行在 `*.scf.usercontent.goog` 的 blob 沙箱 iframe 中。宿�
 | Files 与缓存上传 | `ProxyUnaryFileApiCall` |
 | Live WebSocket | 宿主页 WebChannel 转发 |
 
-服务接入 `ProxyStreamedCall` 与 `ProxyUnaryCall` 上的生成和模型目录。`ProxyUnaryFileApiCall` 与 Live 桥接的处理见“能力路由与边界”。
+服务接入 `ProxyStreamedCall` 与 `ProxyUnaryCall` 上的生成、embedding 和模型目录，以及宿主页 WebChannel 转发的 Live 与实时音乐。`ProxyUnaryFileApiCall` 的处理见“能力路由与边界”。
 
 ### 配置与显示
 
@@ -38,7 +38,7 @@ Playground `GenerateContent` 的响应为 repeated 流帧，完整收集后转�
 
 | 位置 | 字段 |
 | --- | --- |
-| `GET /v1/models`（OpenAI 格式）、`GET /v1beta/models`（Gemini 格式）、管理端 `GET /api/models` 与管理页面模型列表 | 模型对象的 `channels`，列出至少一个启用账户可调用该模型的通道 |
+| `GET /v1/models`（OpenAI 格式）、`GET /v1beta/models`（Gemini 格式）、管理端 `GET /api/models` 与管理页面模型列表 | 模型对象的 `channels` |
 | `GET /api/requests` 与管理页面请求列表 | 请求当前尝试的 `channel` |
 | 请求日志 `request.channel` 与管理页面日志 | 请求实际使用的通道 |
 | `GET /api/cooldowns` 与管理页面冷却列表 | `channel` 与去掉 `build:` 前缀的 `model_id` |
@@ -70,7 +70,7 @@ https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.appl
 
 ### 请求头
 
-代理 RPC 的请求头集合、顺序与取值和 Playground 文本请求的 `GenerateContent` 相同：`content-type`、`x-goog-api-key`、`x-goog-authuser`、`x-user-agent`、`x-aistudio-visit-id`、`x-goog-ext-519733851-bin`、`authorization` 与账户 Cookie。Playground 图片请求不带 `x-goog-ext-519733851-bin`，Build 代理请求生成图片时仍携带该头。权益头 `X-AIStudio-G1-Tier` 只随 `ProxyUnaryCall` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带），`ProxyStreamedCall` 不带该头。需订阅权益的模型经 `ProxyStreamedCall` 调用时上游返回 HTTP 403 与 Code 7，因此这类模型固定使用 `ProxyUnaryCall`。
+代理 RPC 的请求头集合、顺序与取值和 Playground 文本请求的 `GenerateContent` 相同：`content-type`、`x-goog-api-key`、`x-goog-authuser`、`x-user-agent`、`x-aistudio-visit-id`、`x-goog-ext-519733851-bin`、`authorization` 与账户 Cookie。Playground 图片请求不带 `x-goog-ext-519733851-bin`，Build 代理请求生成图片时仍携带该头。权益头 `X-AIStudio-G1-Tier` 只随 `ProxyUnaryCall` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带），`ProxyStreamedCall` 不带该头。需订阅权益的模型经 `ProxyStreamedCall` 调用时上游返回 HTTP 403 与 Code 7。
 
 ### WAA
 
@@ -98,6 +98,81 @@ proof 位于 field 3，由账户的同一个 WAA Worker 生成，与 Playground 
 ```
 
 ProxyResponse 的索引 `0` 是 JSON 字符串正文，索引 `2` 是 Base64 字节正文，两者取其一。每个正文是一段完整的 Gemini API `GenerateContentResponse`。流式解码器在响应列表中每出现一个完整元素时立即解码。
+
+### embedding
+
+`POST /v1/embeddings`、`:embedContent` 与 `:batchEmbedContents` 都经 `ProxyUnaryCall` 调用上游 `:batchEmbedContents`；上游的 `:embedContent` 与 `/v1beta/openai/embeddings` 返回 404。
+
+```json
+["/v1beta/models/<MODEL_ID>:batchEmbedContents", "{\"requests\":[{\"content\":{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]},\"taskType\":\"RETRIEVAL_QUERY\",\"outputDimensionality\":256,\"model\":\"models/<MODEL_ID>\"}]}", "<WAA_PROOF>", "POST"]
+```
+
+- 每条请求都带 `model`，`taskType`、`title`、`outputDimensionality` 有值时写入
+- 上游单批最多 100 条；更多输入按顺序分批发送，各批取 fresh proof，向量与 `tokenCount` 按输入顺序合并
+- 响应为 `{"embeddings":[{"values":[...]}],"tokenCount":"<N>"}`；向量数与输入数不一致时返回协议错误；`tokenCount` 计为请求的输入 token
+
+### Live 与实时音乐
+
+Build 应用的 Gemini Live WebSocket 由宿主页经 WebChannel 转发：
+
+```text
+https://webchannel-alkalimakersuite-pa.clients6.google.com/v1/proxy:proxyBidiStreamedCall
+```
+
+握手、前向 POST、backchannel、terminate 的 query、form 与帧格式和 Playground `BidiGenerateContent` 相同，见 [协议规范](protocol.md)。每条客户端消息为 `[路径, Gemini Live JSON, WAA proof]`：proof 位于 field 3，binding 为路径与 JSON 文本以空格连接，setup 和之后的每条消息各取一次 fresh proof。
+
+| 方法 | 路径 |
+| --- | --- |
+| `bidiGenerateContent` | `/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` |
+| `bidiGenerateMusic` | `/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateMusic` |
+
+Live setup 与 Playground setup 的语义一致：
+
+```json
+{"setup":{"model":"models/<MODEL_ID>","generationConfig":{"responseModalities":["AUDIO"],"speechConfig":{"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":"Zephyr"}}},"mediaResolution":"MEDIA_RESOLUTION_MEDIUM"},"tools":[{"functionDeclarations":[...]}],"sessionResumption":{"handle":"<SESSION_TOKEN>"},"contextWindowCompression":{"triggerTokens":"104857","slidingWindow":{"targetTokens":"52428"}},"inputAudioTranscription":{},"outputAudioTranscription":{}}}
+```
+
+- `tools` 只在声明函数时出现，函数参数写入 `parametersJsonSchema`；无 session token 时 `sessionResumption` 为 `{}`
+- 输出模态为 audio，不接受 translation 与 transcription
+- 实时音乐 setup 只有 `{"setup":{"model":"models/<MODEL_ID>"}}`，不接受 tools、translation、transcription 与 text 输出
+
+| 公开客户端帧 | Gemini Live JSON |
+| --- | --- |
+| `text` | `{"realtimeInput":{"text":"..."}}` |
+| `audio` | `realtimeInput.audio`，`mimeType` 为 `audio/pcm;rate=16000` |
+| `image` | `realtimeInput.video`，`mimeType` 为 `image/jpeg` |
+| `media_end` | `{"realtimeInput":{"audioStreamEnd":true}}` |
+| `tool_response` | `toolResponse.functionResponses[{id,name,response}]`，非对象结果包装为 `{"result":...}` |
+| `music_prompts` | `clientContent.weightedPrompts` |
+| `music_config` | `musicGenerationConfig` |
+| `playback` | `playbackControl`：`PLAY`、`PAUSE`、`STOP`、`RESET_CONTEXT` |
+
+Live 会话只接受前五种帧，实时音乐会话只接受后三种。
+
+backchannel envelope 的 payload 是 ProxyResponse 列表，每个元素的索引 `0` 是一条 Gemini Live 服务端 JSON；`["noop"]`、`["close"]` 与 `{"__sm__":{"status":...}}` 和 Playground 相同：
+
+```json
+[[3,[["{\"serverContent\":{\"outputTranscription\":{\"text\":\"Hello\"}}}"]]]]
+```
+
+| 服务端字段 | 公开事件 |
+| --- | --- |
+| `setupComplete` | `setup_complete` |
+| `serverContent.modelTurn.parts[].text` | `text`；`thought` 为真时为 `provider`，`raw` 为 `{"kind":"reasoning","text":...}` |
+| `serverContent.modelTurn.parts[].inlineData` | `media`，Live 音频为 `audio/pcm;rate=24000` |
+| `serverContent.audioChunks[]` | `media`，实时音乐为 `audio/l16;rate=48000;channels=2` |
+| `serverContent.inputTranscription`、`outputTranscription` | `input_transcription`、`output_transcription` |
+| `serverContent.interrupted`、`generationComplete`、`turnComplete` | `interrupted`、`generation_complete`、`turn_complete` |
+| `toolCall.functionCalls[]` | 每个调用一条 `tool_call` |
+| `toolCallCancellation.ids` | `tool_call_cancellation` |
+| `usageMetadata` | `usage`，`raw` 为 Gemini API JSON |
+| `goAway` | `go_away` |
+| `sessionResumptionUpdate` | `session_resumption` |
+| 其他 | `provider` |
+
+- native audio 模型在轮次结束后经 `sessionResumptionUpdate` 下发 `newHandle`
+
+一条消息内的事件顺序与 Playground 相同：setup、模型内容、转写、打断与完成标志、函数调用、usage、go away、恢复令牌。
 
 ## 3. 模型、资格与调度
 
@@ -131,11 +206,13 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 4. M 出现在任一账户的 Playground 目录时：M 不是 Interactions 或转录模型，且账户权益满足 M 的 AccessModes
 5. M 只在 Build 目录中时：M 不是只能配合 Computer Use 工具的模型
 
-以下请求只使用 Playground：CountTokens、Live 与 Robotics、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。embedding、`aqa` 与只支持实时方法的模型没有 `generateContent`，不进入 Build 通道。
+以下请求只使用 Playground：CountTokens、Playground 目录中的 Live 与 Robotics 模型、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。
+
+Playground 目录没有的 embedding（`embedContent`）、Live（`bidiGenerateContent`）与实时音乐（`bidiGenerateMusic`）模型只经 Build 通道调用：`UPSTREAM_CHANNELS` 启用 `build`，且账户的 Build 目录包含该模型与方法时，账户可以承担请求。`aqa` 等其他方法不进入 Build 通道。
 
 ### 公开目录
 
-公开目录是已启用通道的并集。Build 独有且至少一个启用账户可经 Build 调用的可生成模型加入公开目录。模型出现在 Playground 目录时，Build 请求使用 Playground 目录的默认参数与能力；Build 独有模型的默认输出上限为 `outputTokenLimit`，思考能力取 `thinking`。每个模型的 `channels` 列出可调用它的通道。
+公开目录是已启用通道的并集。Build 独有且至少一个启用账户可经 Build 调用的可生成、embedding、Live 与实时音乐模型加入公开目录；embedding 模型的 methods 为 `batchEmbedContents, embedContent`，实时模型为 `bidiGenerateContent` 或 `bidiGenerateMusic`。Build 未启用时这些模型不在目录中，请求返回模型不存在。模型出现在 Playground 目录时，Build 请求使用 Playground 目录的默认参数与能力；Build 独有模型的默认输出上限为 `outputTokenLimit`，思考能力取 `thinking`。每个模型的 `channels` 列出至少一个启用账户可调用它的通道。
 
 ### 调度与冷却
 
@@ -147,7 +224,7 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 | `fill-first` | 始终从首个可用组合开始 |
 
 - 并发槽位、Worker 与 WAA 按账户共享，两个通道占用同一组请求槽位
-- 冷却按通道记录：Playground 为 `<模型>`，Build 为 `build:<模型>`；全局 `*` 冷却对两个通道都生效
+- 冷却按通道记录：Playground 为 `<模型>`，Build 为 `build:<模型>`；Live 媒体输入的 scope 为 `bidi-media:<模型>`，经 Build 时为 `build:bidi-media:<模型>`；全局 `*` 冷却对两个通道都生效
 - 账户只有在其全部支持的通道都冷却时才视为该模型冷却
 - 一个通道返回额度错误后写入该通道冷却；同一账户另一通道可用时，请求在同一账户的另一通道重试，不计为已尝试账户
 - 全部候选组合冷却时，最早恢复时间在 1 分钟内的请求排队等待，更晚的请求返回 HTTP 429 `rate_limit_exceeded`，消息给出最早恢复时间
@@ -174,7 +251,9 @@ Build 请求与 Playground 共用同一预处理：工具可用性校验、模�
 | `tools` | 工具声明 |
 | `toolConfig` | 同时声明函数与 Google 工具时为 `{"includeServerSideToolInvocations":true}` |
 | `generationConfig` | 生成参数 |
-| `safetySettings` | 骚扰、仇恨、色情、危险四类 `OFF`，请求中的类别按名称覆盖或追加；图片路由只发送请求中的类别 |
+| `safetySettings` | 安全设置 |
+
+- `safetySettings` 默认为骚扰、仇恨、色情、危险四类 `OFF`，请求中的类别按名称覆盖或追加；图片路由只发送请求中的类别
 
 ```json
 {
@@ -231,20 +310,26 @@ user 与 tool 角色写为 `user`，assistant 写为 `model`，没有 part 的 c
 
 | 字段 | 取值 |
 | --- | --- |
-| `maxOutputTokens` | 请求值或目录默认值，按模型上限校验；带语音配置且未显式设置时不发送 |
+| `maxOutputTokens` | 请求值或目录默认值 |
 | `temperature`、`topP`、`topK`、`seed` | 请求值或目录默认值 |
 | `responseMimeType` | 请求值 |
-| `responseSchema` | 复用 Playground 的 Schema 校验与规范化，转换为 protobuf JSON；嵌套 `type` 使用大写枚举，字符串 `const` 转为 `enum`，null 联合转为 `nullable` |
-| `responseModalities` | 大写模态名；图片模型补 `IMAGE`、`TEXT`，TTS 与音乐模型补 `AUDIO` |
-| `imageConfig` | `{aspectRatio?, imageSize?}`；可设置分辨率的图片模型默认 `1K` |
+| `responseSchema` | protobuf JSON 形式的 Schema |
+| `responseModalities` | 大写模态名 |
+| `imageConfig` | `{aspectRatio?, imageSize?}` |
 | `speechConfig` | 单声音为 `voiceConfig.prebuiltVoiceConfig.voiceName`；多说话人为 `multiSpeakerVoiceConfig.speakerVoiceConfigs[{speaker, voiceConfig}]` |
-| `thinkingConfig` | 模型支持思考时发送：`includeThoughts: true`、`thinkingBudget`、`thinkingLevel` |
+| `thinkingConfig` | `includeThoughts: true`、`thinkingBudget`、`thinkingLevel` |
+
+- `maxOutputTokens` 按模型上限校验；带语音配置且未显式设置时不发送
+- `responseSchema` 复用 Playground 的 Schema 校验与规范化：嵌套 `type` 使用大写枚举，字符串 `const` 转为 `enum`，null 联合转为 `nullable`
+- `responseModalities` 为图片模型补 `IMAGE`、`TEXT`，为 TTS 与音乐模型补 `AUDIO`
+- 可设置分辨率的图片模型的 `imageSize` 默认 `1K`
+- `thinkingConfig` 只在模型支持思考时发送
 
 thinking level 由 Playground 枚举换算：Low=`LOW`、Medium=`MEDIUM`、High=`HIGH`、Minimal=`MINIMAL`。`reasoning_effort`、预算与等级之间的换算规则与 Playground 相同。
 
 TTS 模型带 `speech_metadata` 能力时，`说话人: 台词` 文本按多说话人配置拆成带 `speechMetadata` 的分段；其他 TTS 模型把分段的说话人与风格折叠回台词文本。Build 代理请求的 `multiSpeakerVoiceConfig` 只含 `speakerVoiceConfigs`，带 `mode` 的请求走 Playground。
 
-Playground 私有字段在 Build 请求中不发送：账户时区、GenerateContent 与 generation config 的固定槽、可设置分辨率图片模型的默认工具槽。不等于 1 的 `candidateCount` 与 logprobs 由公开适配器拒绝。
+Playground 私有字段在 Build 请求中不发送：账户时区、GenerateContent 与 generation config 的固定槽、可设置分辨率图片模型的默认工具槽。
 
 ## 5. 响应、终止与 usage
 
@@ -313,12 +398,15 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 
 | 能力 | 当前处理 |
 | --- | --- |
-| Live WebSocket | 使用 Playground `BidiGenerateContent` |
-| Files 与缓存上传（`ProxyUnaryFileApiCall`） | 未接入；附件以 `inlineData` 发送 |
-| embedding | 上游 `batchEmbedContents` 返回 200，`embedContent` 返回 404；服务未公开接入 |
-| Interactions（`/v1beta/interactions` 返回 404） | 使用 Playground `CreateInteractionStream` |
-| Free 账户的订阅图片模型 | 上游返回 403，调度按 AccessModes 排除 |
+| Live WebSocket | Playground `BidiGenerateContent` 或 Build WebChannel |
+| Files 与缓存上传（`ProxyUnaryFileApiCall`） | 不使用 |
+| embedding | 上游 `batchEmbedContents` |
+| Interactions（`/v1beta/interactions` 返回 404） | Playground `CreateInteractionStream` |
+| Free 账户的订阅图片模型 | 按 AccessModes 排除 |
 | 付费 API key 直连 | 不使用 |
+
+- Live 与实时音乐按模型所在目录选择通道，见“通道资格”；附件处理见“附件与文件引用”；embedding 见“embedding”
+- Free 账户调用订阅图片模型时上游返回 403
 
 ## 7. 实现位置
 
@@ -332,6 +420,11 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | `internal/aistudio/generate.go` | 通道分派、共用预处理、停止序列与 usage |
 | `internal/aistudio/service.go` | 受保护发送与 Build proof field |
 | `internal/aistudio/upload.go` | Build 通道保留内联附件 |
+| `internal/aistudio/build_embed.go` | embedding 编码、分批、发送、解码与换号 |
+| `internal/aistudio/build_bidi.go` | Build Live 与实时音乐的代理外层、客户端帧编码与 backchannel 解码 |
+| `internal/aistudio/webchannel.go` | WebChannel 会话按租约通道选择地址、proof field、帧编码与解码 |
+| `internal/app/embeddings.go` | embedding 候选、通道日志与输入 token |
+| `internal/api/embeddings.go`、`internal/api/live.go` | OpenAI 与 Gemini embedding 端点、实时音乐客户端帧 |
 | `internal/app/runtime.go` | 重试、冷却写入、同账户换通道、文件引用复制 |
 | `internal/app/admin.go`、`internal/api` | 冷却、请求、日志与模型目录中的通道字段 |
 | `web/src` | 设置页通道选择与各列表的通道显示 |
@@ -357,5 +450,6 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | 内容 | system、多轮、函数、Google 工具、图片输入、TTS 与图片输出按模型能力编码 |
 | 生命周期 | 取消、客户端断开、停止序列与流尾错误都释放租约和账户并发槽位 |
 | 可观测性 | 模型目录、请求列表、请求日志和冷却列表显示同一个实际通道 |
+| embedding 与实时 | embedding、Live 与实时音乐经 Build 返回预期向量、音频与终态，请求日志通道为 `build` |
 
 调试代理正文时先保存最终 Gemini API JSON、外层数组和解码后的 google.rpc 状态。HTTP 200 只表示代理 RPC 到达；业务通过条件是收到预期内容、合法 usage 和唯一终态。

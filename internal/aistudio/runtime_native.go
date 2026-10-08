@@ -48,6 +48,25 @@ func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnati
 
 // Prepare 生成 fresh proof 并写入请求指定的 WAA field
 func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedRequest) (PreparedProtectedRequest, error) {
+	start, end, err := arrayElementSpan(request.Body, request.ProofField-1)
+	if err != nil {
+		return PreparedProtectedRequest{}, fmt.Errorf("受保护请求缺少 WAA field %d: %w", request.ProofField, err)
+	}
+	proof, headers, err := worker.proofAndHeaders(ctx, request.Prompt, request.PagePrompt)
+	if err != nil {
+		return PreparedProtectedRequest{}, err
+	}
+	encoded, err := json.Marshal(proof)
+	if err != nil {
+		return PreparedProtectedRequest{}, fmt.Errorf("编码 WAA proof: %w", err)
+	}
+	body := make([]byte, 0, len(request.Body)-(end-start)+len(encoded))
+	body = append(append(append(body, request.Body[:start]...), encoded...), request.Body[end:]...)
+	return PreparedProtectedRequest{Body: body, Headers: headers}, nil
+}
+
+// proofAndHeaders 把 page 写入页面提示词后为 binding 的 SHA-256 生成 fresh proof，再取公共协议头
+func (worker *NativeWorker) proofAndHeaders(ctx context.Context, binding, page string) (string, http.Header, error) {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
 	worker.updateState(func(state *WorkerState) {
@@ -55,31 +74,15 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		state.RequestCount++
 		state.LastError = ""
 	})
-	digest := sha256.Sum256([]byte(request.Prompt))
-	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), request.Prompt)
+	digest := sha256.Sum256([]byte(binding))
+	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), page)
 	if err != nil {
 		if ctx.Err() != nil {
 			worker.updateState(func(state *WorkerState) { state.Phase = WorkerReady })
 		} else {
 			worker.fail(err)
 		}
-		return PreparedProtectedRequest{}, err
-	}
-	var payload []any
-	if err := json.Unmarshal(request.Body, &payload); err != nil {
-		worker.fail(err)
-		return PreparedProtectedRequest{}, fmt.Errorf("解析受保护请求: %w", err)
-	}
-	if request.ProofField < 1 || len(payload) < request.ProofField {
-		err := fmt.Errorf("受保护请求缺少 WAA field %d", request.ProofField)
-		worker.fail(err)
-		return PreparedProtectedRequest{}, err
-	}
-	payload[request.ProofField-1] = proof
-	body, err := json.Marshal(payload)
-	if err != nil {
-		worker.fail(err)
-		return PreparedProtectedRequest{}, fmt.Errorf("编码受保护请求: %w", err)
+		return "", nil, err
 	}
 	headers, err := worker.runtime.ProtocolHeaders(ctx)
 	if err != nil {
@@ -88,15 +91,61 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 		} else {
 			worker.fail(err)
 		}
-		return PreparedProtectedRequest{}, err
+		return "", nil, err
 	}
 	worker.updateState(func(state *WorkerState) {
 		state.Phase = WorkerReady
 	})
-	return PreparedProtectedRequest{
-		Body:    body,
-		Headers: headers,
-	}, nil
+	return proof, headers, nil
+}
+
+// arrayElementSpan 返回紧凑 JSON 顶层数组第 index 个元素的字节范围
+func arrayElementSpan(body []byte, index int) (int, int, error) {
+	depth, element, start := 0, 0, -1
+	inString, escaped := false, false
+	for position, char := range body {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case char == '\\':
+				escaped = true
+			case char == '"':
+				inString = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+			if depth == 1 {
+				continue
+			}
+		case ']', '}':
+			depth--
+			if depth == 0 {
+				if element == index && start >= 0 {
+					return start, position, nil
+				}
+				return 0, 0, fmt.Errorf("顶层数组只有 %d 个元素", element+1)
+			}
+		case ',':
+			if depth == 1 {
+				if element == index {
+					return start, position, nil
+				}
+				element++
+				start = -1
+				continue
+			}
+		}
+		if depth >= 1 && element == index && start < 0 {
+			start = position
+		}
+	}
+	return 0, 0, fmt.Errorf("JSON 顶层数组不完整")
 }
 
 // SendProtected 经账户 WAA runtime 流式发送已准备的请求

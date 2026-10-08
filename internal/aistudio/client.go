@@ -71,14 +71,6 @@ type RequestContextProvider interface {
 	RequestContext(context.Context, string) (RequestContext, error)
 }
 
-// RequestContextProviderFunc 将函数适配为 RequestContextProvider
-type RequestContextProviderFunc func(context.Context, string) (RequestContext, error)
-
-// RequestContext 调用上下文函数
-func (f RequestContextProviderFunc) RequestContext(ctx context.Context, accountID string) (RequestContext, error) {
-	return f(ctx, accountID)
-}
-
 // ClientOptions 定义协议客户端的窄依赖
 type ClientOptions struct {
 	Transport       RPCTransport
@@ -186,7 +178,7 @@ func newRPCRequest(method string, accountID string, requestID string, body []byt
 		Header: http.Header{
 			"Content-Type": []string{JSONProtobufContentType},
 		},
-		Body:      append([]byte(nil), body...),
+		Body:      body,
 		Streaming: streaming,
 	}
 }

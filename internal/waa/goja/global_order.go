@@ -42,6 +42,19 @@ func (r *Runtime) resolveBuiltin(name string) {
 	}
 }
 
+// instantiate 按 SpiderMonkey 实例化字节码的时机解析代码使用的内建类，top 为脚本、eval 代码与 Function 函数体，否则为惰性编译函数的调用
+func (r *Runtime) instantiate(p *Program, top bool) {
+	if !p.regexps && !(top && p.generators) || r.globalObserver == nil || r.resolveMuted != 0 || p.src != nil && strings.HasPrefix(p.src.Name(), hostSourcePrefix) {
+		return
+	}
+	if top && p.generators {
+		r.globalObserver.Resolve("Iterator")
+	}
+	if p.regexps {
+		r.globalObserver.Resolve("RegExp")
+	}
+}
+
 // inHostScript 判断最近的脚本帧是否属于宿主脚本
 func (vm *vm) inHostScript() bool {
 	prg := vm.prg

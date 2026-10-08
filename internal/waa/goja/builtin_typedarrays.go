@@ -1187,6 +1187,7 @@ func (r *Runtime) typedArrayProto_subarray(call FunctionCall) Value {
 func (r *Runtime) typedArrayProto_toLocaleString(call FunctionCall) Value {
 	if ta, ok := r.toObject(call.This).self.(*typedArrayObject); ok {
 		length := ta.length
+		args := []Value{call.Argument(0), call.Argument(1)}
 		var buf StringBuilder
 		for i := 0; i < length; i++ {
 			ta.viewedArrayBuf.ensureNotDetached(true)
@@ -1194,7 +1195,7 @@ func (r *Runtime) typedArrayProto_toLocaleString(call FunctionCall) Value {
 				buf.WriteRune(',')
 			}
 			item := ta.typedArray.get(ta.offset + i)
-			r.writeItemLocaleString(item, &buf)
+			r.writeItemLocaleString(item, &buf, args)
 		}
 		return buf.String()
 	}

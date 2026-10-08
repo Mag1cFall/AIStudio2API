@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -433,6 +434,37 @@ func (self *_RegExp_parser) scanEscape(inClass bool) {
 		// The rules are too complicated to implement here, so we pass it on to regexp2
 		self.error(false, "named group back-reference")
 		return
+	case 'p', 'P':
+		if !self.unicode {
+			self.pass()
+			return
+		}
+		negate := self.chr == 'P'
+		self.read()
+		if self.chr != '{' {
+			self.error(true, "invalid property name in regular expression")
+			return
+		}
+		start := self.offset
+		for self.chr != '}' && self.chr != -1 {
+			self.read()
+		}
+		if self.chr != '}' {
+			self.error(true, "invalid property name in regular expression")
+			return
+		}
+		name, ok := unicodePropertyName(self.str[start:self.chrOffset])
+		if !ok {
+			self.error(true, "invalid property name in regular expression")
+			return
+		}
+		if negate {
+			self.writeString(`\P{` + name + "}")
+		} else {
+			self.writeString(`\p{` + name + "}")
+		}
+		self.read()
+		return
 	default:
 		// $ is an identifier character, so we have to have
 		// a special case for it here
@@ -535,4 +567,36 @@ func (self *_RegExp_parser) error(fatal bool, msg string, msgValues ...interface
 	}
 	self.offset = self.length
 	self.chr = -1
+}
+
+// generalCategoryAliases 把 Unicode 一般类别的长名称映射为 Go 正则使用的短名称
+var generalCategoryAliases = map[string]string{
+	"Letter": "L", "Uppercase_Letter": "Lu", "Lowercase_Letter": "Ll", "Titlecase_Letter": "Lt", "Modifier_Letter": "Lm", "Other_Letter": "Lo",
+	"Mark": "M", "Combining_Mark": "M", "Nonspacing_Mark": "Mn", "Spacing_Mark": "Mc", "Enclosing_Mark": "Me",
+	"Number": "N", "Decimal_Number": "Nd", "digit": "Nd", "Letter_Number": "Nl", "Other_Number": "No",
+	"Punctuation": "P", "punct": "P", "Connector_Punctuation": "Pc", "Dash_Punctuation": "Pd", "Open_Punctuation": "Ps", "Close_Punctuation": "Pe", "Initial_Punctuation": "Pi", "Final_Punctuation": "Pf", "Other_Punctuation": "Po",
+	"Symbol": "S", "Math_Symbol": "Sm", "Currency_Symbol": "Sc", "Modifier_Symbol": "Sk", "Other_Symbol": "So",
+	"Separator": "Z", "Space_Separator": "Zs", "Line_Separator": "Zl", "Paragraph_Separator": "Zp",
+	"Other": "C", "Control": "Cc", "cntrl": "Cc", "Format": "Cf", "Surrogate": "Cs", "Private_Use": "Co",
+}
+
+// unicodePropertyName 把 \p{...} 中的一般类别或书写系统属性转换为 Go 正则的属性名
+func unicodePropertyName(text string) (string, bool) {
+	key, value, hasValue := strings.Cut(text, "=")
+	if hasValue {
+		switch key {
+		case "Script", "sc", "Script_Extensions", "scx":
+			_, ok := unicode.Scripts[value]
+			return value, ok
+		case "General_Category", "gc":
+			text = value
+		default:
+			return "", false
+		}
+	}
+	if short, ok := generalCategoryAliases[text]; ok {
+		text = short
+	}
+	_, ok := unicode.Categories[text]
+	return text, ok
 }

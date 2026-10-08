@@ -379,6 +379,7 @@ type Event struct {
 	Transcript          *TranscriptMetadata  `json:"transcript,omitempty"`
 	Usage               *Usage               `json:"usage,omitempty"`
 	FinishReason        string               `json:"finish_reason,omitempty"`
+	FinishMessage       string               `json:"finish_message,omitempty"`
 	StopSequence        string               `json:"stop_sequence,omitempty"`
 	ProviderModel       string               `json:"provider_model,omitempty"`
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`

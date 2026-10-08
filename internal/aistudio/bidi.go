@@ -58,6 +58,7 @@ type BidiRequest struct {
 	ObserveAccountFailure    func(string, error)
 	generationDefaults       GenerationDefaults
 	variant                  bidiVariant
+	method                   string
 }
 
 // bidiVariantFor 按模型能力选择 Live setup 形态
@@ -265,10 +266,45 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	return body, strings.Join(bindingParts, " "), nil
 }
 
+// validateBidiText 校验实时文本输入非空
+func validateBidiText(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("%w: bidi text 不能为空", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// validateBidiMedia 校验实时媒体输入非空且为 16 kHz PCM 音频或 JPEG 图像
+func validateBidiMedia(mimeType string, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("%w: bidi media 不能为空", ErrInvalidArgument)
+	}
+	if mimeType != "audio/pcm" && mimeType != "image/jpeg" {
+		return fmt.Errorf("%w: 未识别的 bidi media type %q", ErrInvalidArgument, mimeType)
+	}
+	return nil
+}
+
+// validateBidiToolResponses 校验函数响应列表非空且每条都带调用 ID 与函数名
+func validateBidiToolResponses(results []FunctionResult) error {
+	if len(results) == 0 {
+		return fmt.Errorf("%w: bidi function response 列表为空", ErrInvalidArgument)
+	}
+	for _, result := range results {
+		if strings.TrimSpace(result.ID) == "" {
+			return fmt.Errorf("%w: bidi function response 缺少调用 ID", ErrInvalidArgument)
+		}
+		if strings.TrimSpace(result.Name) == "" {
+			return fmt.Errorf("%w: bidi function response 缺少函数名", ErrInvalidArgument)
+		}
+	}
+	return nil
+}
+
 // EncodeBidiTextRequest 编码官网文本输入帧
 func EncodeBidiTextRequest(text string) ([]byte, string, error) {
-	if strings.TrimSpace(text) == "" {
-		return nil, "", fmt.Errorf("%w: bidi text 不能为空", ErrInvalidArgument)
+	if err := validateBidiText(text); err != nil {
+		return nil, "", err
 	}
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, nil, nil, text}
@@ -282,20 +318,17 @@ func EncodeBidiTextRequest(text string) ([]byte, string, error) {
 // EncodeBidiMediaRequest 编码官网实时音频或图像输入帧
 func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error) {
 	mimeType = strings.TrimSpace(mimeType)
-	if len(data) == 0 {
-		return nil, "", fmt.Errorf("%w: bidi media 不能为空", ErrInvalidArgument)
+	if err := validateBidiMedia(mimeType, data); err != nil {
+		return nil, "", err
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	var realtimeInput []any
-	switch mimeType {
-	case "audio/pcm":
+	if mimeType == "audio/pcm" {
 		realtimeInput = make([]any, 2)
 		realtimeInput[1] = []any{mimeType, encoded}
-	case "image/jpeg":
+	} else {
 		realtimeInput = make([]any, 4)
 		realtimeInput[3] = []any{mimeType, encoded}
-	default:
-		return nil, "", fmt.Errorf("%w: 未识别的 bidi media type %q", ErrInvalidArgument, mimeType)
 	}
 	wire := make([]any, 6)
 	wire[2] = realtimeInput
@@ -319,17 +352,11 @@ func EncodeBidiMediaEndRequest() ([]byte, string, error) {
 
 // EncodeBidiToolResponseRequest 编码官网函数响应帧
 func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, error) {
-	if len(results) == 0 {
-		return nil, "", fmt.Errorf("%w: bidi function response 列表为空", ErrInvalidArgument)
+	if err := validateBidiToolResponses(results); err != nil {
+		return nil, "", err
 	}
 	functionResponses := make([]any, 0, len(results))
 	for _, result := range results {
-		if strings.TrimSpace(result.ID) == "" {
-			return nil, "", fmt.Errorf("%w: bidi function response 缺少调用 ID", ErrInvalidArgument)
-		}
-		if strings.TrimSpace(result.Name) == "" {
-			return nil, "", fmt.Errorf("%w: bidi function response 缺少函数名", ErrInvalidArgument)
-		}
 		response, err := encodeWireStructJSON(result.Content)
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
@@ -349,6 +376,13 @@ func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, er
 
 // ParseBidiServerPayload 解码一条 WebChannel 业务 payload
 func ParseBidiServerPayload(raw json.RawMessage) ([]BidiEvent, error) {
+	return parseWebChannelPayload(raw, func(message []json.RawMessage, messageRaw json.RawMessage, _ string) ([]BidiEvent, error) {
+		return parseBidiServerMessage(message, messageRaw)
+	})
+}
+
+// parseWebChannelPayload 解码 WebChannel 业务 payload 的状态帧与 noop、close、stop 标记，其余按外层数组逐条交给 decode
+func parseWebChannelPayload(raw json.RawMessage, decode func(message []json.RawMessage, messageRaw json.RawMessage, path string) ([]BidiEvent, error)) ([]BidiEvent, error) {
 	if event, matched, err := parseBidiStatusPayload(raw); matched {
 		if err != nil {
 			return nil, err
@@ -373,11 +407,12 @@ func ParseBidiServerPayload(raw json.RawMessage) ([]BidiEvent, error) {
 	}
 	events := make([]BidiEvent, 0, len(messages))
 	for index, messageRaw := range messages {
-		message, err := rawArray(messageRaw, fmt.Sprintf("$payload[%d]", index), raw)
+		path := fmt.Sprintf("$payload[%d]", index)
+		message, err := rawArray(messageRaw, path, raw)
 		if err != nil {
 			return nil, withBidiMethod(err)
 		}
-		decoded, err := parseBidiServerMessage(message, messageRaw)
+		decoded, err := decode(message, messageRaw, path)
 		if err != nil {
 			return nil, err
 		}
@@ -443,6 +478,8 @@ func parseBidiStatusPayload(raw json.RawMessage) (BidiEvent, bool, error) {
 		statusCode = 403
 	case 8:
 		statusCode = 429
+	case 13:
+		statusCode = 500
 	case 16:
 		statusCode = 401
 	default:
