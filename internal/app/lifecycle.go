@@ -430,6 +430,9 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
+		if tracked, ok := manager.current.service.(*trackedService); ok {
+			tracked.SetIgnoreThoughtSignature(updated.IgnoreThoughtSignature)
+		}
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
 		manager.ledger.SetBodyCapture(updated.RequestBodyLog)
 	}

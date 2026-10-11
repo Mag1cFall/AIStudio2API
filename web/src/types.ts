@@ -152,6 +152,7 @@ export interface ServiceConfig {
   admin_password?: string
   admin_password_set: boolean
   build_native_nonstream: boolean
+  ignore_thought_signature: boolean
   auth_states: string
   listen_addr: string
   proxy_api_key: string

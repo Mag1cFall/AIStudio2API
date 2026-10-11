@@ -32,6 +32,7 @@ const form = reactive<ServiceConfig>({
   admin_username: 'admin',
   admin_password_set: false,
   build_native_nonstream: true,
+  ignore_thought_signature: true,
   auth_states: 'auth',
   listen_addr: '127.0.0.1:2048',
   proxy_api_key: '',
@@ -90,6 +91,7 @@ const sections: {
     fields: [
       'upstream_channels',
       'build_native_nonstream',
+      'ignore_thought_signature',
       'waa_backend',
       'temporary_chat',
       'init_timeout',
@@ -462,6 +464,15 @@ async function saveConfig(): Promise<void> {
               :changed="changedFields.has('build_native_nonstream')"
             >
               <UiSwitch id="setting-build-native" v-model="form.build_native_nonstream" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.ignoreThoughtSignature')"
+              control-id="setting-ignore-thought-signature"
+              :description="t('settings.ignoreThoughtSignatureHelp')"
+              effect="immediate"
+              :changed="changedFields.has('ignore_thought_signature')"
+            >
+              <UiSwitch id="setting-ignore-thought-signature" v-model="form.ignore_thought_signature" />
             </SettingRow>
             <SettingRow
               :label="t('settings.waaBackend')"

@@ -46,6 +46,7 @@ var configKeys = [...]string{
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"BUILD_NATIVE_NONSTREAM",
+	"IGNORE_THOUGHT_SIGNATURE",
 }
 
 // upstreamChannels 表示生成请求可启用的上游通道
@@ -65,6 +66,7 @@ type Config struct {
 	AdminUsername          string        `json:"admin_username"`
 	AdminPassword          string        `json:"-"`
 	BuildNativeNonstream   bool          `json:"build_native_nonstream"`
+	IgnoreThoughtSignature bool          `json:"ignore_thought_signature"`
 	AuthStates             string        `json:"auth_states"`
 	ListenAddr             string        `json:"listen_addr"`
 	ProxyAPIKey            string        `json:"proxy_api_key"`
@@ -86,6 +88,7 @@ func Default() Config {
 	return Config{
 		AdminUsername:          "admin",
 		BuildNativeNonstream:   true,
+		IgnoreThoughtSignature: true,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
 		InitTimeout:            defaultInitTimeout,
@@ -141,6 +144,12 @@ func Load(path string) (Config, error) {
 		cfg.BuildNativeNonstream, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
 			return Config{}, fmt.Errorf("BUILD_NATIVE_NONSTREAM 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["IGNORE_THOUGHT_SIGNATURE"]; ok {
+		cfg.IgnoreThoughtSignature, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("IGNORE_THOUGHT_SIGNATURE 必须是 true 或 false")
 		}
 	}
 	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
@@ -224,6 +233,7 @@ func (c Config) Save(path string) error {
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
 		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
+		"IGNORE_THOUGHT_SIGNATURE": strconv.FormatBool(c.IgnoreThoughtSignature),
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
 		"LISTEN_ADDR":              c.ListenAddr,
 		"PROXY_API_KEY":            c.ProxyAPIKey,
@@ -335,6 +345,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		IgnoreThoughtSignature bool     `json:"ignore_thought_signature"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
@@ -356,6 +367,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled:       c.AdminAuthEnabled,
 		AdminUsername:          c.AdminUsername,
 		BuildNativeNonstream:   c.BuildNativeNonstream,
+		IgnoreThoughtSignature: c.IgnoreThoughtSignature,
 		AuthStates:             c.AuthStates,
 		ListenAddr:             c.ListenAddr,
 		ProxyAPIKey:            c.ProxyAPIKey,
@@ -382,6 +394,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername          string   `json:"admin_username"`
 		AdminPassword          string   `json:"admin_password"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		IgnoreThoughtSignature bool     `json:"ignore_thought_signature"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
@@ -416,6 +429,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername:          strings.TrimSpace(value.AdminUsername),
 		AdminPassword:          value.AdminPassword,
 		BuildNativeNonstream:   value.BuildNativeNonstream,
+		IgnoreThoughtSignature: value.IgnoreThoughtSignature,
 		AuthStates:             strings.TrimSpace(value.AuthStates),
 		ListenAddr:             strings.TrimSpace(value.ListenAddr),
 		ProxyAPIKey:            strings.TrimSpace(value.ProxyAPIKey),
