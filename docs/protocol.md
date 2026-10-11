@@ -1064,7 +1064,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 动态路由的注册形状为 `GET /v1/models/{model...}`、`GET /v1beta/models/{model...}`、`GET /v1/responses/{response}`、`DELETE /v1/responses/{response}`、`GET /v1/responses/{response}/input_items`、`POST /v1/responses/{response}/cancel`、`GET /v1/files/{file}`、`GET /v1/files/{file}/content`、`DELETE /v1/files/{file}`、`GET /v1/videos/{video}`、`DELETE /v1/videos/{video}`、`GET /v1/videos/{video}/content`、`POST /v1beta/models/{action}`、`GET /v1beta/operations/{operation}`、`GET/DELETE /v1/interactions/{id}`、`GET/DELETE /v1beta/interactions/{id}`、`POST /v1/interactions/{id}/cancel`、`POST /v1beta/interactions/{id}/cancel` 与 `GET/DELETE /v1beta/files/{file}`；端点表中的 `{id}` 表示对应资源标识。
 
-公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，读取优先级为 `?key=`、`X-Goog-API-Key`、`X-API-Key`、`Authorization: Bearer`；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求返回 401，不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*`、`/upload/` 与 `/health` 响应允许任意 origin，并以 `Access-Control-Expose-Headers: *` 暴露响应头；OPTIONS 预检不经过 API key 校验，允许 `GET/POST/PUT/DELETE/OPTIONS`，`Access-Control-Allow-Headers` 回显请求的 `Access-Control-Request-Headers`。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。`/upload/v1beta/files` 使用相同的认证与请求体上限；可续传上传的分块请求发往 start 响应 `X-Goog-Upload-URL` 给出的地址，凭其中的 `upload_id` 鉴权，不需要 API key。
+公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，任一来源与配置的 key 相同即通过；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求返回 401，不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*`、`/upload/` 与 `/health` 响应允许任意 origin，并以 `Access-Control-Expose-Headers: *` 暴露响应头；OPTIONS 预检不经过 API key 校验，允许 `GET/POST/PUT/DELETE/OPTIONS`，`Access-Control-Allow-Headers` 回显请求的 `Access-Control-Request-Headers`。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。`/upload/v1beta/files` 使用相同的认证与请求体上限；可续传上传的分块请求发往 start 响应 `X-Goog-Upload-URL` 给出的地址，凭其中的 `upload_id` 鉴权，不需要 API key。
 
 `/api` 控制面在 `ADMIN_AUTH_ENABLED=false` 时要求来源地址为 loopback 且 `Host` 为 localhost 或回环地址；开启登录后，通过管理员账号和密码签发的 Cookie 会话访问。管理请求执行 same-origin 校验并携带 `Cache-Control: no-store`。全部响应携带 `X-Frame-Options: DENY`、`Content-Security-Policy: frame-ancestors 'none'`、`X-Content-Type-Options: nosniff` 与 `Referrer-Policy: no-referrer`。`GET /health` 返回 `{"status":"ok"}`。
 
@@ -1978,7 +1978,7 @@ tool group 字段：
 
 `groundingMetadata` 字段为 `searchEntryPoint`、`groundingChunks`、`groundingSupports`、`retrievalMetadata`、`webSearchQueries`、`googleMapsWidgetContextToken`。`searchEntryPoint` 包含 `renderedContent`、`sdkBlob`；`groundingChunks` 元素的 oneof 为 `web:{uri,title}`、`retrievedContext:{uri,title,text}` 或 `maps:{uri,title,text,placeId}`；`groundingSupports` 元素包含 `segment:{partIndex,startIndex,endIndex,text}`、`groundingChunkIndices` 和可选 `confidenceScores`；`retrievalMetadata` 包含 `googleSearchDynamicRetrievalScore`。`citationMetadata.citationSources` 的元素包含 `uri`、`title`、`startIndex`、`endIndex`。
 
-非流式结果合并相邻、同类且无签名边界的正文或思考片段。工具、媒体与带转录元数据的 Part 保持独立；独立签名附着于前一未签名 Part，缺少可附着内容时用 `{"text":"","thought":true,"thoughtSignature":"..."}` 承载。
+非流式结果合并相邻、同类且无签名边界的正文或思考片段。工具、媒体与带转录元数据的 Part 保持独立；独立签名附着于前一未签名 Part，缺少可附着内容时用 `{"text":"","thoughtSignature":"..."}` 承载。
 
 `:streamGenerateContent` 使用 SSE。每个语义事件发送一个部分 `GenerateContentResponse`，包含 `responseId`、`modelVersion` 与一个 candidate Part、grounding 或 citation；最后一帧包含 candidate `finishReason`、可选 `finishMessage` 和 `usageMetadata`。响应头后的错误帧为 `data: {"error":{"code","message","status"}}`。
 

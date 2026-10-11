@@ -105,8 +105,8 @@ func TestGeminiOutputParts_StandaloneThoughtSignatureFallback(t *testing.T) {
 	if parts[0]["thoughtSignature"] != "sig_only" {
 		t.Errorf("expected thoughtSignature 'sig_only', got %v", parts[0]["thoughtSignature"])
 	}
-	if parts[0]["thought"] != true || parts[0]["text"] != "" {
-		t.Errorf("expected empty thought part, got %+v", parts[0])
+	if _, ok := parts[0]["thought"]; ok || parts[0]["text"] != "" {
+		t.Errorf("expected empty text part without thought, got %+v", parts[0])
 	}
 }
 
@@ -161,7 +161,7 @@ func TestGeminiOutputParts_PendingSignature(t *testing.T) {
 		{Kind: aistudio.EventText, Text: "answer"},
 	}})
 	want := []map[string]any{
-		{"text": "", "thought": true, "thoughtSignature": "sig-a"},
+		{"text": "", "thoughtSignature": "sig-a"},
 		{"text": "reason", "thought": true, "thoughtSignature": "sig-b"},
 		{"text": "answer"},
 	}
@@ -178,7 +178,7 @@ func TestGeminiOutputParts_TrailingSignatures(t *testing.T) {
 	}})
 	want := []map[string]any{
 		{"text": "answer", "thoughtSignature": "sig-a"},
-		{"text": "", "thought": true, "thoughtSignature": "sig-b"},
+		{"text": "", "thoughtSignature": "sig-b"},
 	}
 	if !reflect.DeepEqual(parts, want) {
 		t.Fatalf("parts=%+v want=%+v", parts, want)
@@ -194,9 +194,9 @@ func TestGeminiOutputParts_LeadingSignatures(t *testing.T) {
 		{Kind: aistudio.EventText, Text: "answer"},
 	}})
 	want := []map[string]any{
-		{"text": "", "thought": true, "thoughtSignature": "sig-a"},
-		{"text": "", "thought": true, "thoughtSignature": "sig-b"},
-		{"text": "", "thought": true, "thoughtSignature": "sig-c"},
+		{"text": "", "thoughtSignature": "sig-a"},
+		{"text": "", "thoughtSignature": "sig-b"},
+		{"text": "", "thoughtSignature": "sig-c"},
 		{"text": "answer"},
 	}
 	if !reflect.DeepEqual(parts, want) {
