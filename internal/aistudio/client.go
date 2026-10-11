@@ -245,7 +245,18 @@ func DecodeRPCError(method string, statusCode int, raw []byte) *RPCError {
 	if len(provider) > 2 && !isJSONNull(provider[2]) {
 		decodeRPCErrorMetadata(rpcError, provider[2])
 	}
+	if rpcError.RetryDelay <= 0 {
+		rpcError.RetryDelay = messageRetryDelay(rpcError.Message)
+	}
 	return rpcError
+}
+
+// messageRetryDelay 读取错误消息中 retry in 之后的等待时长
+func messageRetryDelay(message string) time.Duration {
+	_, rest, _ := strings.Cut(strings.ToLower(message), "retry in ")
+	value, _, _ := strings.Cut(rest, " ")
+	delay, _ := time.ParseDuration(strings.TrimRight(value, "."))
+	return delay
 }
 
 func decodeRPCErrorMetadata(rpcError *RPCError, raw json.RawMessage) {
