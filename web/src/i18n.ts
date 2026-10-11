@@ -11,6 +11,7 @@ const zhCN = {
   'settings.adminPassword': '管理密码',
   'settings.keepPassword': '留空保留现有密码',
   'settings.buildNative': '非流式请求优先使用 Build',
+  'settings.ignoreThoughtSignature': '忽略历史思考签名',
   'app.title': 'AI Studio 控制台',
   'app.console': '控制台',
   'app.gateway': '协议网关',
@@ -289,6 +290,8 @@ const zhCN = {
   'settings.perAccountConcurrencyHelp': '单个账户同时执行的请求数。',
   'settings.buildNativeHelp':
     '非流式请求优先使用账户的 Build 原生单次调用；该账户 Build 冷却或不支持模型时，使用同一账户的 Playground。',
+  'settings.ignoreThoughtSignatureHelp':
+    '多轮对话中自动剥离客户端传入的历史思考签名，避免联网搜索或多轮提问时触发 Google 的 400 签名校验错误。',
   'settings.temporaryChatHelp': 'WAA 预热页使用临时对话。',
   'settings.initTimeoutHelp': '单个账户 WAA 初始化的最长时间，例如 2m。',
   'settings.requestTimeoutHelp': '单次请求的最长执行时间，例如 5m。',
@@ -447,6 +450,7 @@ const en: Record<TranslationKey, string> = {
   'settings.adminPassword': 'Console password',
   'settings.keepPassword': 'Leave blank to keep the current password',
   'settings.buildNative': 'Prefer Build for non-streaming requests',
+  'settings.ignoreThoughtSignature': 'Ignore Thought Signatures',
   'app.title': 'AI Studio Console',
   'app.console': 'Console',
   'app.gateway': 'Protocol gateway',
@@ -732,6 +736,8 @@ const en: Record<TranslationKey, string> = {
   'settings.perAccountConcurrencyHelp': 'Requests one account runs at the same time.',
   'settings.buildNativeHelp':
     "Non-streaming requests prefer the account's native Build call; when that account's Build is cooling down or lacks the model, the same account's Playground is used.",
+  'settings.ignoreThoughtSignatureHelp':
+    'Strip thought signatures from client history in multi-turn chats to prevent Google 400 signature validation errors with search/grounding.',
   'settings.temporaryChatHelp': 'The WAA prewarm page uses a temporary chat.',
   'settings.initTimeoutHelp': 'Maximum WAA initialization time per account, such as 2m.',
   'settings.requestTimeoutHelp': 'Maximum run time of one request, such as 5m.',

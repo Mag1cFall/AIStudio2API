@@ -49,3 +49,34 @@ func assistantPrefix(contents []Content) string {
 	}
 	return prefix.String()
 }
+
+// sanitizeThoughtSignatures 清理对话历史中的思考签名与空签名块，避免上游 400 签名校验错误
+func sanitizeThoughtSignatures(contents []Content) []Content {
+	cleanedContents := make([]Content, 0, len(contents))
+	for _, content := range contents {
+		cleanedParts := make([]Part, 0, len(content.Parts))
+		for _, part := range content.Parts {
+			// 如果该 Part 没有任何实质内容（仅作为签名占位符），直接丢弃
+			if part.Text == "" && part.InlineData == nil && part.File == nil &&
+				part.FunctionCall == nil && part.FunctionResult == nil &&
+				part.ExecutableCode == nil && part.CodeExecutionResult == nil {
+				continue
+			}
+			if part.FunctionCall != nil {
+				part.ThoughtSignature = "skip_thought_signature_validator"
+				call := *part.FunctionCall
+				call.ThoughtSignature = "skip_thought_signature_validator"
+				part.FunctionCall = &call
+			} else {
+				part.ThoughtSignature = ""
+			}
+			cleanedParts = append(cleanedParts, part)
+		}
+		if len(cleanedParts) > 0 {
+			content.Parts = cleanedParts
+			cleanedContents = append(cleanedContents, content)
+		}
+	}
+	return cleanedContents
+}
+

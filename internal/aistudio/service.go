@@ -21,6 +21,8 @@ type PooledService struct {
 	client *Client
 	// BuildNativeNonstream 让非流式请求优先使用具备资格的 Build 通道
 	BuildNativeNonstream bool
+	// IgnoreThoughtSignature 忽略历史消息中的思考签名以避免 400 校验错误
+	IgnoreThoughtSignature bool
 }
 
 // PoolRequestContextProvider 从租约账户读取协议上下文
@@ -523,6 +525,9 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
 	}
 	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if s.IgnoreThoughtSignature {
+		request.Contents = sanitizeThoughtSignatures(request.Contents)
+	}
 	if len(request.Contents) == 0 {
 		return TokenCount{}, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
@@ -578,6 +583,9 @@ func (s *PooledService) ValidateGenerateRequest(request GenerateRequest) error {
 		return fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
 	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if s.IgnoreThoughtSignature {
+		request.Contents = sanitizeThoughtSignatures(request.Contents)
+	}
 	if len(request.Contents) == 0 {
 		return fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
@@ -595,6 +603,9 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
 	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if s.IgnoreThoughtSignature {
+		request.Contents = sanitizeThoughtSignatures(request.Contents)
+	}
 	if len(request.Contents) == 0 {
 		return nil, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}

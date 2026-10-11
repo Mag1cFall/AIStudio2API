@@ -96,8 +96,10 @@ func newRuntime(
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
+	pooled.IgnoreThoughtSignature = cfg.IgnoreThoughtSignature
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
+	service.ignoreThoughtSignature = cfg.IgnoreThoughtSignature
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	requests.log("service", "INFO", fmt.Sprintf(
 		"协议运行时就绪 | 账户=%d | 耗时=%s",
@@ -1828,8 +1830,9 @@ func (provider *accountHeaderProvider) ProtocolHeaders(ctx context.Context, acco
 
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
-	buildNativeNonstream bool
-	lifecycle            context.Context
+	buildNativeNonstream   bool
+	ignoreThoughtSignature bool
+	lifecycle              context.Context
 	service              aistudio.Service
 	catalog              modelCatalogService
 	pool                 *aistudio.AccountPool
@@ -1903,6 +1906,14 @@ func (*serviceStoppedError) ErrorCode() string {
 // Running 返回公开生成服务是否接受请求
 func (service *trackedService) Running() bool {
 	return service.state.Load() == serviceRunning
+}
+
+// SetIgnoreThoughtSignature 动态更新是否忽略历史思考签名
+func (service *trackedService) SetIgnoreThoughtSignature(enabled bool) {
+	service.ignoreThoughtSignature = enabled
+	if pooled, ok := service.service.(*aistudio.PooledService); ok {
+		pooled.IgnoreThoughtSignature = enabled
+	}
 }
 
 // State 返回生成服务生命周期状态

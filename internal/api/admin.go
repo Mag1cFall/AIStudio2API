@@ -190,6 +190,7 @@ type RuntimeConfig struct {
 	AdminPasswordSet          bool     `json:"admin_password_set"`
 	SavedAdminPassword        string   `json:"-"`
 	BuildNativeNonstream      bool     `json:"build_native_nonstream"`
+	IgnoreThoughtSignature    bool     `json:"ignore_thought_signature"`
 	AuthStates                string   `json:"auth_states"`
 	ListenAddr                string   `json:"listen_addr"`
 	APIKey                    string   `json:"proxy_api_key"`
