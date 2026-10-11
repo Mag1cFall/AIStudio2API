@@ -1039,9 +1039,9 @@ func geminiOutputParts(result generationResult) []map[string]any {
 	return parts
 }
 
-// geminiSignaturePart 用空思考 Part 承载没有正文的独立签名
+// geminiSignaturePart 用空文本 Part 承载没有正文的独立签名
 func geminiSignaturePart(signature string) map[string]any {
-	return map[string]any{"text": "", "thought": true, "thoughtSignature": signature}
+	return map[string]any{"text": "", "thoughtSignature": signature}
 }
 
 func geminiTextPart(event aistudio.Event) map[string]any {
