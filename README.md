@@ -111,6 +111,47 @@ chmod +x ./aistudio2api
 
 Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
 
+### 方式三：Docker 部署（推荐 Linux / 服务器）
+
+项目已内置多阶段构建 `Dockerfile` 与 `docker-compose.yml`，无需在宿主机安装 Go 与 Node.js 环境。
+
+#### 1. 准备配置
+
+```bash
+git clone https://github.com/In-dor/AIStudio2API.git
+cd AIStudio2API
+cp .env.example .env
+mkdir -p auth runtime
+```
+
+根据需要编辑 `.env` 中的配置项（如设置 `PROXY_API_KEY`、`AISTUDIO_AUTH_PASSWORD` 等）。
+
+#### 2. 使用 Docker Compose 一键构建与启动
+
+```bash
+docker compose up -d --build
+```
+
+服务启动后默认监听 `http://0.0.0.0:2048`，管理后台与 API 接口均可通过该端口访问。
+
+> **持久化说明**：
+> - `./auth`：保存 Google 账户登录凭据
+> - `./runtime`：保存请求记录、统计数据库及系统运行状态
+> - `./.env`：保存系统配置与 WebUI 动态调整的设置
+
+#### 3. 容器管理常用命令
+
+```bash
+# 查看实时日志
+docker compose logs -f
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+```
+
 ## 快速开始
 
 ### 首次使用（需要认证）
