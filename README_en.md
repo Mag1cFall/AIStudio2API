@@ -111,6 +111,27 @@ chmod +x ./aistudio2api
 
 The first Linux or macOS launch also prepares the matching Camoufox build automatically.
 
+### Method 3: Docker
+
+```bash
+mkdir aistudio2api && cd aistudio2api
+curl -fsSLO https://raw.githubusercontent.com/Mag1cFall/AIStudio2API/main/docker-compose.yml
+mkdir data
+cat > data/.env <<'EOF'
+PROXY_API_KEY=<API key>
+ADMIN_AUTH_ENABLED=true
+ADMIN_PASSWORD=<console password>
+EOF
+docker compose up -d
+```
+
+The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.0.0:2048` inside the container. `data/` holds `.env`, `auth/`, and `runtime/`; with the Camoufox backend, the first start downloads Camoufox to `data/runtime/camoufox/`. To migrate an existing installation, copy these three items into `data/`. The container runs as root, so files the service writes in `data/` are owned by root; edit them with `sudo` on Linux hosts.
+
+- Set `PROXY_API_KEY` when the port is reachable from other machines. Opening the console from outside the container requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
+- Add accounts: copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`, or click "Add remotely" on the console Accounts page to get a pairing token, open an SSH tunnel with `ssh -L 2048:127.0.0.1:2048 <server>`, and run `setup --remote http://127.0.0.1:2048` on that computer.
+- `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy.
+- Run `docker compose restart` after editing `data/.env`, `docker compose pull && docker compose up -d` to update the image, and `docker compose up -d --build` in the source directory to build from source.
+
 ## Quick Start
 
 ### First-Time Use (Authentication Required)
