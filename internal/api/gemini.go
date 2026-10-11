@@ -912,30 +912,15 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 		return
 	}
 	candidates.record(r.Context(), results)
-	writeJSON(w, http.StatusOK, s.buildGeminiResponse(request, results))
-}
-
-func (s *server) ignoreThoughtSignature() bool {
-	if provider, ok := s.service.(interface{ IgnoreThoughtSignature() bool }); ok {
-		return provider.IgnoreThoughtSignature()
-	}
-	return false
-}
-
-func (s *server) buildGeminiResponse(request aistudio.GenerateRequest, results []generationResult) map[string]any {
-	return buildGeminiResponseFiltered(request, results, s.ignoreThoughtSignature())
+	writeJSON(w, http.StatusOK, buildGeminiResponse(request, results))
 }
 
 // buildGeminiResponse 按候选序号输出各候选内容与终止原因，用量为全部候选之和
 func buildGeminiResponse(request aistudio.GenerateRequest, results []generationResult) map[string]any {
-	return buildGeminiResponseFiltered(request, results, false)
-}
-
-func buildGeminiResponseFiltered(request aistudio.GenerateRequest, results []generationResult, ignoreSignature bool) map[string]any {
 	candidates := make([]any, 0, len(results))
 	for index, result := range results {
 		candidate := map[string]any{"index": index}
-		if parts := geminiOutputPartsFiltered(result, ignoreSignature); len(parts) > 0 {
+		if parts := geminiOutputParts(result); len(parts) > 0 {
 			candidate["content"] = map[string]any{"role": "model", "parts": parts}
 		}
 		setGeminiFinish(candidate, result.finishReason, result.finishMessage)
@@ -961,18 +946,14 @@ func buildGeminiResponseFiltered(request aistudio.GenerateRequest, results []gen
 }
 
 func geminiOutputParts(result generationResult) []map[string]any {
-	return geminiOutputPartsFiltered(result, false)
-}
-
-func geminiOutputPartsFiltered(result generationResult, ignoreSignature bool) []map[string]any {
 	parts := make([]map[string]any, 0)
 	var pendingSignature string
 
 	appendPart := func(part map[string]any, sig string) {
-		if sig != "" && !ignoreSignature {
+		if sig != "" {
 			part["thoughtSignature"] = sig
 		}
-		if pendingSignature != "" && !ignoreSignature {
+		if pendingSignature != "" {
 			if part["thoughtSignature"] == nil {
 				part["thoughtSignature"] = pendingSignature
 			} else {
@@ -1036,7 +1017,7 @@ func geminiOutputPartsFiltered(result generationResult, ignoreSignature bool) []
 				}
 			}
 		case aistudio.EventThoughtSignature:
-			if ignoreSignature || event.ThoughtSignature == "" {
+			if event.ThoughtSignature == "" {
 				continue
 			}
 			if pendingSignature != "" {
@@ -1052,15 +1033,15 @@ func geminiOutputPartsFiltered(result generationResult, ignoreSignature bool) []
 			}
 		}
 	}
-	if !ignoreSignature && pendingSignature != "" {
+	if pendingSignature != "" {
 		parts = append(parts, geminiSignaturePart(pendingSignature))
 	}
 	return parts
 }
 
-// geminiSignaturePart 用空思考 Part 承载没有正文的独立签名
+// geminiSignaturePart 用空文本 Part 承载没有正文的独立签名
 func geminiSignaturePart(signature string) map[string]any {
-	return map[string]any{"text": "", "thought": true, "thoughtSignature": signature}
+	return map[string]any{"text": "", "thoughtSignature": signature}
 }
 
 func geminiTextPart(event aistudio.Event) map[string]any {
@@ -1273,7 +1254,7 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	}
 	results, err := candidates.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		return consumeStreamEvents(candidates.ctx, events, func(event aistudio.Event) error {
-			candidate := s.geminiStreamCandidate(event, index)
+			candidate := geminiStreamCandidate(event, index)
 			if candidate == nil {
 				return nil
 			}
@@ -1310,16 +1291,8 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	_ = write(final)
 }
 
-func (s *server) geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
-	return geminiStreamCandidateFiltered(event, index, s.ignoreThoughtSignature())
-}
-
 // geminiStreamCandidate 把规范事件投影为指定序号候选的流式内容，没有可输出内容时返回 nil
 func geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
-	return geminiStreamCandidateFiltered(event, index, false)
-}
-
-func geminiStreamCandidateFiltered(event aistudio.Event, index int, ignoreSignature bool) map[string]any {
 	var part map[string]any
 	switch event.Kind {
 	case aistudio.EventText:
@@ -1372,7 +1345,7 @@ func geminiStreamCandidateFiltered(event aistudio.Event, index int, ignoreSignat
 		}
 		part = geminiSignedPart(part, event.ThoughtSignature)
 	case aistudio.EventThoughtSignature:
-		if ignoreSignature || event.ThoughtSignature == "" {
+		if event.ThoughtSignature == "" {
 			return nil
 		}
 		part = geminiSignaturePart(event.ThoughtSignature)
