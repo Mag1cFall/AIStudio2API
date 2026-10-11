@@ -10,6 +10,7 @@
 .env
 /auth/
 /runtime/
+/data/
 *.log
 
 # 前端产物
