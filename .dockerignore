@@ -1,0 +1,15 @@
+.git
+.github
+*.log
+runtime/
+auth/
+dist/
+internal/webui/dist/
+web/node_modules/
+web/dist/
+aistudio2api
+aistudio2api-new
+aistudio2api.exe
+.env
+.env.local
+*.tmp
