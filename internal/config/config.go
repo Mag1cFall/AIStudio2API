@@ -605,10 +605,6 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("关闭配置: %w", err)
 	}
 	if err := os.Rename(temporaryPath, target); err != nil {
-		// 单文件 Docker 挂载时，跨设备重命名可能报 device or resource busy / invalid cross-device link，降级为覆盖写目标文件
-		if writeErr := os.WriteFile(target, data, mode); writeErr == nil {
-			return nil
-		}
 		return fmt.Errorf("替换配置: %w", err)
 	}
 	return nil

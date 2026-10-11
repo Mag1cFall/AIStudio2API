@@ -1,18 +1,13 @@
-name: aistudio2api
-
 services:
   aistudio2api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: aistudio2api:latest
+    image: ghcr.io/mag1cfall/aistudio2api:latest
+    build: .
     container_name: aistudio2api
     restart: unless-stopped
+    init: true
     ports:
       - "2048:2048"
-    volumes:
-      - ./auth:/app/auth
-      - ./runtime:/app/runtime
-      - ./.env:/app/.env
     environment:
-      - TZ=Asia/Shanghai
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
