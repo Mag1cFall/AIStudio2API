@@ -1,0 +1,9 @@
+data/
+auth/
+runtime/
+dist/
+web/node_modules/
+internal/webui/dist/
+.env
+*.exe
+aistudio2api

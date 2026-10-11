@@ -1,0 +1,13 @@
+services:
+  aistudio2api:
+    image: ghcr.io/mag1cfall/aistudio2api:latest
+    build: .
+    container_name: aistudio2api
+    restart: unless-stopped
+    init: true
+    ports:
+      - "2048:2048"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
