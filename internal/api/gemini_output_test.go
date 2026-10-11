@@ -217,3 +217,57 @@ func TestGeminiOutputParts_SignedAudio(t *testing.T) {
 		t.Fatalf("signed audio=%+v", parts)
 	}
 }
+
+func TestGeminiIgnoreThoughtSignature(t *testing.T) {
+	result := generationResult{
+		events: []aistudio.Event{
+			{Kind: aistudio.EventReasoning, Text: "Thinking deeply..."},
+			{Kind: aistudio.EventText, Text: "Answer text"},
+			{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig_trailing"},
+		},
+	}
+
+	// ignoreSignature = false: 签名挂载到正文上
+	partsWithSig := geminiOutputPartsFiltered(result, false)
+	if len(partsWithSig) != 2 || partsWithSig[1]["thoughtSignature"] != "sig_trailing" {
+		t.Fatalf("expected signature attached on part 1 with signature enabled, got %+v", partsWithSig)
+	}
+
+	// ignoreSignature = true: 签名不挂载，不产生任何签名数据
+	partsFiltered := geminiOutputPartsFiltered(result, true)
+	if len(partsFiltered) != 2 {
+		t.Fatalf("expected 2 parts with signature ignored, got %d: %+v", len(partsFiltered), partsFiltered)
+	}
+	if partsFiltered[0]["thought"] != true || partsFiltered[0]["text"] != "Thinking deeply..." {
+		t.Errorf("thinking part corrupted: %+v", partsFiltered[0])
+	}
+	if partsFiltered[1]["text"] != "Answer text" || partsFiltered[1]["thoughtSignature"] != nil {
+		t.Errorf("text part should not have thoughtSignature: %+v", partsFiltered[1])
+	}
+
+	// 当已有签名的独立签名事件到来时：ignoreSignature = false 产生独立空 Part，ignoreSignature = true 完全过滤
+	resultStandalone := generationResult{
+		events: []aistudio.Event{
+			{Kind: aistudio.EventReasoning, Text: "Thinking deeply...", ThoughtSignature: "sig_1"},
+			{Kind: aistudio.EventText, Text: "Answer text", ThoughtSignature: "sig_2"},
+			{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig_standalone"},
+		},
+	}
+	standaloneWithSig := geminiOutputPartsFiltered(resultStandalone, false)
+	if len(standaloneWithSig) != 3 {
+		t.Fatalf("expected 3 parts for standalone signature, got %d", len(standaloneWithSig))
+	}
+	standaloneFiltered := geminiOutputPartsFiltered(resultStandalone, true)
+	if len(standaloneFiltered) != 2 {
+		t.Fatalf("expected 2 parts with standalone signature filtered, got %d: %+v", len(standaloneFiltered), standaloneFiltered)
+	}
+
+	// 流式输出中：EventThoughtSignature 在 ignoreSignature = true 时必须返回 nil
+	streamCandidate := geminiStreamCandidateFiltered(aistudio.Event{
+		Kind:             aistudio.EventThoughtSignature,
+		ThoughtSignature: "sig_trailing",
+	}, 0, true)
+	if streamCandidate != nil {
+		t.Fatalf("expected nil stream candidate for trailing signature when ignored, got %+v", streamCandidate)
+	}
+}
