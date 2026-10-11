@@ -523,7 +523,7 @@ With `WAA_BACKEND=go`, WAA runs inside the service process, emulates the Firefox
 - **Client-Managed History**: Clients submit complete conversation context for Chat, Anthropic, and Gemini requests
 - **AI Studio History**: API requests are not saved to website history; `TEMPORARY_CHAT=true` also disables autosave for the WAA prewarm page
 - **Responses Sessions**: `previous_response_id` is stored only in the current process and is cleared on restart
-- **Authentication Expiry**: Chrome imports retain DBSC renewal material. When another account expires and the local Chrome is signed in to the same email, the service renews it with that email's material from Chrome and renews it as a Chrome import from then on; otherwise log in again on the Accounts page
+- **Authentication Expiry**: Chrome imports retain DBSC renewal material and renew on Windows; when a Chrome import on Linux, macOS, or Docker expires, copy it from Windows again. When another account expires and the local Chrome is signed in to the same email, the service renews it with that email's material from Chrome and renews it as a Chrome import from then on; otherwise log in again on the Accounts page
 
 ## Troubleshooting
 

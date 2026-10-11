@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -100,11 +101,8 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 	var setup bidiClientSetup
 	if err := connection.ReadJSON(&setup); err != nil {
 		if errors.Is(err, websocket.ErrReadLimit) {
-			_ = connection.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseMessageTooBig, "message too big"),
-				time.Now().Add(bidiWriteTimeout),
-			)
+			closeBidiTooBig(connection)
+			return
 		}
 		_ = connection.Close()
 		return
@@ -244,11 +242,7 @@ func readBidiClientMessages(
 		var message bidiClientMessage
 		if err := connection.ReadJSON(&message); err != nil {
 			if errors.Is(err, websocket.ErrReadLimit) {
-				_ = connection.WriteControl(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseMessageTooBig, "message too big"),
-					time.Now().Add(bidiWriteTimeout),
-				)
+				closeBidiTooBig(connection)
 			}
 			return
 		}
@@ -258,6 +252,19 @@ func readBidiClientMessages(
 			return
 		}
 	}
+}
+
+// closeBidiTooBig 发送 1009 关闭帧，读完客户端已发出的数据后关闭连接
+func closeBidiTooBig(connection *websocket.Conn) {
+	_ = connection.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseMessageTooBig, "message too big"),
+		time.Now().Add(bidiWriteTimeout),
+	)
+	raw := connection.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(bidiWriteTimeout))
+	_, _ = io.Copy(io.Discard, raw)
+	_ = connection.Close()
 }
 
 func sendBidiClientMessages(
