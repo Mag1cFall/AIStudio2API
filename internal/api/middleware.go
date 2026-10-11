@@ -564,6 +564,7 @@ func authMiddleware(requiredKey string, next http.Handler) http.Handler {
 	})
 }
 
+// checkAPIKeyMatches 判断请求头或 URL 中任一 API key 是否与配置的 key 相同
 func checkAPIKeyMatches(r *http.Request, requiredKey string) bool {
 	requiredBytes := []byte(requiredKey)
 	candidates := []string{
@@ -581,26 +582,11 @@ func checkAPIKeyMatches(r *http.Request, requiredKey string) bool {
 	return false
 }
 
+// bearerToken 返回 Authorization Bearer 凭据
 func bearerToken(authorization string) string {
 	scheme, key, ok := strings.Cut(strings.TrimSpace(authorization), " ")
 	if ok && strings.EqualFold(scheme, "Bearer") {
 		return strings.TrimSpace(key)
-	}
-	return ""
-}
-
-func requestAPIKey(r *http.Request) string {
-	if key := strings.TrimSpace(r.Header.Get("X-Goog-API-Key")); key != "" {
-		return key
-	}
-	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
-		return key
-	}
-	if key := bearerToken(r.Header.Get("Authorization")); key != "" {
-		return key
-	}
-	if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
-		return key
 	}
 	return ""
 }

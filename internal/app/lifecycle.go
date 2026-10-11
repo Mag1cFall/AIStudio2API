@@ -430,9 +430,6 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
-		if tracked, ok := manager.current.service.(*trackedService); ok {
-			tracked.SetIgnoreThoughtSignature(updated.IgnoreThoughtSignature)
-		}
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
 		manager.ledger.SetBodyCapture(updated.RequestBodyLog)
 	}
@@ -445,16 +442,6 @@ func (manager *runtimeManager) Cooldowns(ctx context.Context) ([]api.AdminCooldo
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.Cooldowns(ctx)
-}
-
-// IgnoreThoughtSignature 返回当前是否忽略历史思考签名
-func (manager *runtimeManager) IgnoreThoughtSignature() bool {
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
-	if tracked, ok := manager.current.service.(*trackedService); ok {
-		return tracked.ignoreThoughtSignature
-	}
-	return false
 }
 
 // Requests 返回进程级活动请求
