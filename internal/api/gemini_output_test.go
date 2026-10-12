@@ -217,3 +217,29 @@ func TestGeminiOutputParts_SignedAudio(t *testing.T) {
 		t.Fatalf("signed audio=%+v", parts)
 	}
 }
+
+// TestGeminiGroundingMetadataInResponse 验证候选包含 groundingMetadata
+func TestGeminiGroundingMetadataInResponse(t *testing.T) {
+	grounding := aistudio.GroundingMetadata{
+		WebSearchQueries: []string{"test query"},
+		Chunks: []aistudio.GroundingChunk{
+			{Source: "web", URI: "https://example.com", Title: "Example"},
+		},
+	}
+	result := generationResult{
+		grounding: &grounding,
+		events: []aistudio.Event{
+			{Kind: aistudio.EventText, Text: "Answer"},
+		},
+	}
+	resp := buildGeminiResponse(aistudio.GenerateRequest{ID: "req-1", Model: "gemini-3.8-flash"}, []generationResult{result})
+	candidates, ok := resp["candidates"].([]any)
+	if !ok || len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %#v", resp["candidates"])
+	}
+	cand := candidates[0].(map[string]any)
+	if cand["groundingMetadata"] == nil {
+		t.Fatalf("expected groundingMetadata in candidate, got %#v", cand)
+	}
+}
+

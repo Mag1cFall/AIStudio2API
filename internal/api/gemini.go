@@ -1277,8 +1277,16 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	}
 	finished := make([]any, 0, len(results))
 	for index, result := range results {
-		candidate := map[string]any{"index": index}
+		candidate := map[string]any{
+			"index":   index,
+			"content": map[string]any{"role": "model", "parts": []any{}},
+		}
 		setGeminiFinish(candidate, result.finishReason, result.finishMessage)
+		if result.grounding != nil {
+			candidate["groundingMetadata"] = geminiGroundingMetadata(*result.grounding)
+		} else if len(result.citations) > 0 {
+			candidate["citationMetadata"] = geminiCitationMetadata(result.citations)
+		}
 		finished = append(finished, candidate)
 	}
 	final := map[string]any{
@@ -1322,12 +1330,20 @@ func geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
 		if event.Grounding == nil {
 			return nil
 		}
-		return map[string]any{"index": index, "groundingMetadata": geminiGroundingMetadata(*event.Grounding)}
+		return map[string]any{
+			"index":             index,
+			"content":           map[string]any{"role": "model", "parts": []any{}},
+			"groundingMetadata": geminiGroundingMetadata(*event.Grounding),
+		}
 	case aistudio.EventCitation:
 		if event.Citation == nil {
 			return nil
 		}
-		return map[string]any{"index": index, "citationMetadata": geminiCitationMetadata([]aistudio.Citation{*event.Citation})}
+		return map[string]any{
+			"index":            index,
+			"content":          map[string]any{"role": "model", "parts": []any{}},
+			"citationMetadata": geminiCitationMetadata([]aistudio.Citation{*event.Citation}),
+		}
 	case aistudio.EventMedia:
 		if event.Media == nil {
 			return nil
