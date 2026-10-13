@@ -685,7 +685,7 @@ Anthropic 流式 `message_start` 写入即时输入估算，最终 `message_delt
 
 generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过。流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回。
 
-错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`，返回 400，错误消息包含拒绝原因与上游说明。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
+错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`：Gemini GenerateContent 返回 200 与不含 `candidates` 的 `promptFeedback:{blockReason,blockReasonMessage}`，流式时作为唯一一帧发送；其他协议返回 400，错误消息包含拒绝原因与上游说明。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
 各协议的具体终态转换如下：
 
@@ -694,9 +694,10 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 | `stop` 且包含函数调用 | `tool_calls` | `completed`，保留 function call item | `tool_use` | `STOP`，保留 functionCall Part |
 | `stop_sequence` | `stop` | `completed` | `stop_sequence` 与实际序列 | `STOP` |
 | `max_tokens` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `MAX_TOKENS` |
-| policy、refusal、签名缺失及其他异常终态 | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
+| safety、recitation、blocklist、prohibited_content、spii、图片对应原因与 `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
+| other、language、malformed_function_call、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
 
-异常终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 使用 `finishMessage` 保留编号。`provider_19` 对应 AI Studio 页面的 `Content blocked`。
+内容拦截终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 使用 `finishMessage` 保留编号。`provider_19` 对应 AI Studio 页面的 `Content blocked`。
 
 ## 6. 函数、Google 工具、Drive 与媒体
 
@@ -1429,7 +1430,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 
 - OpenAI Chat 与 Responses 的 `parallel_tool_calls` 省略或为 `true` 时允许并行；Responses 同时把该值写入响应元数据
 - Responses `truncation:auto` 按上游权威计数移除最早的完整对话轮次，保留最新轮次与工具调用/结果配对；省略或 `disabled` 时保留完整输入
-- Anthropic `thinking.type:"disabled"` 同时隐藏思考正文，续接签名保持；未知 type 返回 `400 invalid_request_error`
+- Anthropic 省略 `thinking` 或 `thinking.type:"disabled"` 时不返回思考正文，续接签名以 `redacted_thinking` 保持；未知 type 返回 `400 invalid_request_error`
 - Chat、Responses 与 Gemini 的协议专属参数见各协议小节
 
 ### OpenAI Chat Completions
@@ -1456,6 +1457,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 | `reasoning_effort` | thinking effort |
 | `reasoning.effort` | nested thinking effort |
 | `seed` | 64 位整数 |
+| `functions`、`function_call` | 旧式函数声明与函数选择 |
 
 - `allowed_tools` 的 mode 与工具列表映射为调用模式与允许的函数名，请求只发送列表中的函数与托管工具对应的 Google 工具
 - `web_search_options` 的搜索深度与近似位置写入搜索指令
@@ -1463,8 +1465,9 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 - `frequency_penalty`、`presence_penalty`、`logprobs`、`top_logprobs` 与 `logit_bias` 接受任意值；非流式响应的 `choices[].logprobs` 为 `null`
 - `stop` 中的空字符串从停止条件中移除
 - `reasoning.effort` 与 `reasoning_effort` 映射到同一配置，两者同时提供时以 `reasoning.effort` 为准
+- `functions` 按 function 工具发送，`function_call` 的 `none`、`auto` 与 `{name}` 按 `tool_choice` 处理，每轮最多一个调用；带 `functions` 的请求以 assistant `function_call:{name,arguments}` 返回调用，`finish_reason` 为 `function_call`，流式为 `delta.function_call`。历史中的 assistant `function_call` 与 `function` 角色消息按函数调用与函数结果发送
 
-message 字段为 `role`、`content`、可选 `name`、`tool_call_id`、`tool_calls`。assistant tool call：
+message 字段为 `role`、`content`、可选 `name`、`tool_call_id`、`tool_calls`、`function_call`。assistant tool call：
 
 ```json
 {
@@ -1645,7 +1648,7 @@ output item 联合类型：
 
 | type | 字段 |
 | --- | --- |
-| `reasoning` | `id`、`status`、`summary:[{type:"summary_text",text}]`、可选 `encrypted_content` |
+| `reasoning` | `id`、`status`、`summary:[{type:"summary_text",text}]`、可选 `encrypted_content`；摘要文本只在请求 `reasoning.summary`（或 `generate_summary`）为 `auto`、`concise`、`detailed` 时返回 |
 | `message` | `id`、`status`、`role:"assistant"`、`content:[{type:"output_text",text,annotations}]` |
 | `function_call` | `id`、`status`、`call_id`、`name`、`arguments` |
 | `custom_tool_call` | `id`、`status`、`call_id`、`name`、`input`，可选 `namespace` |
@@ -1885,9 +1888,11 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | structured output | `responseMimeType`、`responseSchema`、`responseJsonSchema` |
 | modalities | `responseModalities` |
 | image | `imageConfig:{aspectRatio,imageSize}` |
-| thinking | `thinkingConfig:{thinkingBudget,thinkingLevel}` |
+| thinking | `thinkingConfig:{thinkingBudget,thinkingLevel,includeThoughts}` |
 | transcription | `transcriptionConfig:{languageCodes,customVocabulary,wordTimestamps,speakerLabels,smartTranscription}` |
 | speech | `speechConfig` |
+
+`thinkingConfig.includeThoughts` 为 `true` 时输出 `thought:true` 的思考 Part，省略或为 `false` 时不输出思考正文；思考签名照常随 Part 返回，`thoughtsTokenCount` 照常统计。
 
 `candidateCount` 取省略、`0` 或 `1` 至 `8`；大于 1 时每个候选单独生成，候选 0 沿用请求 ID，候选 i 的请求 ID 为 `<id>-<i>`，带 `seed` 时使用 `seed+i`；任一候选失败时整个请求返回该错误，`:streamGenerateContent` 在首个候选就绪后开始输出，其余候选的启动错误以流内错误返回；用量为全部候选之和。`frequencyPenalty`、`presencePenalty`、`responseLogprobs` 与 `logprobs` 接受任意值，不发送上游，响应不含 logprobs。
 
@@ -1959,7 +1964,7 @@ tool group 字段：
 }
 ```
 
-`finishMessage` 为上游给出的结束说明，例如上游过滤生成结果时的原因；没有上游说明时，`provider_*` 与缺少思维签名的结束原因写入固定说明。候选没有输出 Part 时省略 `content`。`candidateCount` 大于 1 时，`candidates` 按 `index` 0 到 n-1 排列，各自携带 `finishReason`。`:streamGenerateContent` 按到达顺序输出各候选的增量块，每块只含一个带 `index` 的候选；最后一块列出全部候选的 `finishReason` 与合计的 `usageMetadata`。
+`finishMessage` 为上游给出的结束说明，例如上游过滤生成结果时的原因；没有上游说明时，`provider_*` 与缺少思维签名的结束原因写入固定说明。候选没有输出 Part 时省略 `content`。`candidateCount` 大于 1 时，`candidates` 按 `index` 0 到 n-1 排列，各自携带 `finishReason`。`:streamGenerateContent` 按到达顺序输出各候选的增量块，每块只含一个带 `index` 的候选；最后一块列出全部候选，各自带 `content`、`finishReason` 与该候选的 `groundingMetadata`、`citationMetadata`，并带合计的 `usageMetadata`。非流式候选同时返回 `groundingMetadata` 与上游引用的 `citationMetadata`。
 
 输出 Part 使用与输入相同的 `text`、`thought`、`thoughtSignature`、`inlineData`、`fileData`、`functionCall`、`executableCode`、`codeExecutionResult`。转录文本可以携带：
 
@@ -1980,7 +1985,7 @@ tool group 字段：
 
 非流式结果合并相邻、同类且无签名边界的正文或思考片段。工具、媒体与带转录元数据的 Part 保持独立；独立签名附着于前一未签名 Part，缺少可附着内容时用 `{"text":"","thoughtSignature":"..."}` 承载。
 
-`:streamGenerateContent` 使用 SSE。每个语义事件发送一个部分 `GenerateContentResponse`，包含 `responseId`、`modelVersion` 与一个 candidate Part、grounding 或 citation；最后一帧包含 candidate `finishReason`、可选 `finishMessage` 和 `usageMetadata`。响应头后的错误帧为 `data: {"error":{"code","message","status"}}`。
+`:streamGenerateContent` 使用 SSE。每个内容事件发送一个部分 `GenerateContentResponse`，包含 `responseId`、`modelVersion` 与一个带 `content` 的 candidate Part；最后一帧的每个候选包含 `content`、`finishReason`、可选 `finishMessage`、`groundingMetadata` 与 `citationMetadata`，并带 `usageMetadata`。响应头后的错误帧为 `data: {"error":{"code","message","status"}}`。
 
 ### Files、Transcribe 与媒体
 

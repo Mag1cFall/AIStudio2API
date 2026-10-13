@@ -36,6 +36,8 @@ type chatRequest struct {
 	Reasoning           json.RawMessage   `json:"reasoning"`
 	Seed                *int64            `json:"seed"`
 	WebSearchOptions    json.RawMessage   `json:"web_search_options"`
+	Functions           []json.RawMessage `json:"functions"`
+	FunctionCall        json.RawMessage   `json:"function_call"`
 }
 
 type chatStreamOptions struct {
@@ -43,11 +45,15 @@ type chatStreamOptions struct {
 }
 
 type chatMessage struct {
-	Role       string           `json:"role"`
-	Content    json.RawMessage  `json:"content"`
-	Name       string           `json:"name"`
-	ToolCallID string           `json:"tool_call_id"`
-	ToolCalls  []openAIToolCall `json:"tool_calls"`
+	Role         string           `json:"role"`
+	Content      json.RawMessage  `json:"content"`
+	Name         string           `json:"name"`
+	ToolCallID   string           `json:"tool_call_id"`
+	ToolCalls    []openAIToolCall `json:"tool_calls"`
+	FunctionCall *struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function_call"`
 }
 
 type openAIToolCall struct {
@@ -81,6 +87,7 @@ type openAITool struct {
 		Description string          `json:"description"`
 		Format      json.RawMessage `json:"format"`
 	} `json:"custom"`
+	legacy bool
 }
 
 var assistantImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/_=\r\n-]+)\)`)
@@ -195,6 +202,10 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
+	if err := request.mergeLegacyFunctions(); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	requestID := newID("chatcmpl")
 	generateRequest, err := request.toGenerateRequest(requestID)
 	if err != nil {
@@ -242,6 +253,31 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	choices.record(r.Context(), results)
 	writeJSON(w, http.StatusOK, buildChatCompletion(requestID, created, request.Model, results, request.Tools))
+}
+
+// mergeLegacyFunctions 把旧式 functions 与 function_call 并入 tools 与 tool_choice，旧式函数每轮最多一个调用
+func (request *chatRequest) mergeLegacyFunctions() error {
+	for _, raw := range request.Functions {
+		tool := openAITool{Type: "function", legacy: true}
+		if err := json.Unmarshal(raw, &tool.Function); err != nil {
+			return fmt.Errorf("functions: %w", err)
+		}
+		request.Tools = append(request.Tools, tool)
+	}
+	if len(request.ToolChoice) == 0 && len(request.FunctionCall) > 0 {
+		request.ToolChoice = request.FunctionCall
+		var call struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(request.FunctionCall, &call) == nil && call.Name != "" {
+			request.ToolChoice, _ = json.Marshal(map[string]any{"type": "function", "function": map[string]string{"name": call.Name}})
+		}
+	}
+	if len(request.Functions) > 0 {
+		single := false
+		request.ParallelToolCalls = &single
+	}
+	return nil
 }
 
 func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
@@ -339,6 +375,11 @@ func chatMessageContent(message chatMessage) (aistudio.Content, error) {
 			return aistudio.Content{}, fmt.Errorf("unsupported tool call type %q", call.Type)
 		}
 		parts = append(parts, aistudio.Part{FunctionCall: &functionCall})
+	}
+	if message.FunctionCall != nil {
+		parts = append(parts, aistudio.Part{FunctionCall: &aistudio.FunctionCall{
+			Name: message.FunctionCall.Name, Arguments: functionCallArguments(message.FunctionCall.Arguments),
+		}})
 	}
 	return aistudio.Content{Role: role, Parts: parts}, nil
 }
@@ -882,7 +923,9 @@ func chatCompletionChoice(index int, result generationResult, tools []openAITool
 	if result.reasoning.Len() > 0 {
 		message["reasoning_content"] = result.reasoning.String()
 	}
-	if len(result.toolCalls) > 0 {
+	if len(result.toolCalls) > 0 && legacyFunctionTools(tools) {
+		message["function_call"] = legacyFunctionCall(result.toolCalls[0])
+	} else if len(result.toolCalls) > 0 {
 		message["tool_calls"] = openAIToolCallOutput(result.toolCalls, tools)
 	}
 	if len(result.citations) > 0 {
@@ -892,7 +935,7 @@ func chatCompletionChoice(index int, result generationResult, tools []openAITool
 		"index":         index,
 		"message":       message,
 		"logprobs":      nil,
-		"finish_reason": openAIFinishReason(result.finishReason, len(result.toolCalls) > 0),
+		"finish_reason": chatFinishReason(result, tools),
 	}
 	if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
 		choice["provider_finish_reason"] = providerReason
@@ -929,7 +972,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 		if len(result.citations) > 0 {
 			_ = write(index, map[string]any{"annotations": openAICitations(result.citations)}, nil)
 		}
-		finish := openAIFinishReason(result.finishReason, len(result.toolCalls) > 0)
+		finish := chatFinishReason(result, request.Tools)
 		finalDelta := map[string]any{}
 		if providerReason := providerFinishReason(result.finishReason); providerReason != "" {
 			finalDelta["provider_finish_reason"] = providerReason
@@ -992,6 +1035,9 @@ func (choice *chatStreamChoice) emit(event aistudio.Event) error {
 		}
 		call := event.ToolCall
 		choice.server.thoughtSignatures.Remember([]aistudio.FunctionCall{*call})
+		if legacyFunctionTools(choice.tools) {
+			return choice.write(choice.index, map[string]any{"function_call": legacyFunctionCall(*call)}, nil)
+		}
 		toolCall := openAIToolCallItem(*call, choice.tools)
 		toolCall["index"] = choice.toolIndex
 		choice.toolIndex++
@@ -1052,14 +1098,45 @@ func openAIFinishReason(reason string, hasTools bool) string {
 		return "length"
 	case "stop_sequence":
 		return "stop"
-	case "", "stop":
+	default:
+		if contentFilterFinishReason(reason) {
+			return "content_filter"
+		}
 		if hasTools {
 			return "tool_calls"
 		}
 		return "stop"
-	default:
-		return "content_filter"
 	}
+}
+
+// chatFinishReason 返回 choice 的 finish_reason，旧式函数调用为 function_call
+func chatFinishReason(result generationResult, tools []openAITool) string {
+	finish := openAIFinishReason(result.finishReason, len(result.toolCalls) > 0)
+	if finish == "tool_calls" && legacyFunctionTools(tools) {
+		return "function_call"
+	}
+	return finish
+}
+
+// legacyFunctionTools 判断工具是否来自旧式 functions
+func legacyFunctionTools(tools []openAITool) bool {
+	return slices.ContainsFunc(tools, func(tool openAITool) bool { return tool.legacy })
+}
+
+// legacyFunctionCall 把函数调用投影为旧式 function_call
+func legacyFunctionCall(call aistudio.FunctionCall) map[string]any {
+	return map[string]any{"name": call.Name, "arguments": string(call.Arguments)}
+}
+
+// contentFilterFinishReason 判断上游结束原因是否表示内容策略拦截，未知编号按官网默认的 Content blocked 处理
+func contentFilterFinishReason(reason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
+	case "safety", "content_filter", "blocked", "recitation", "blocklist", "prohibited_content", "spii",
+		"image_safety", "image_prohibited_content", "image_recitation":
+		return true
+	}
+	return strings.HasPrefix(normalized, "provider_")
 }
 
 func openAIToolCallOutput(calls []aistudio.FunctionCall, tools []openAITool) []map[string]any {
