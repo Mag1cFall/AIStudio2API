@@ -344,7 +344,7 @@ API 试用通过 `eventsource-parser` 读取 SSE，以各协议完成事件结�
 1. 在 `internal/aistudio` 定义规范请求、响应类型与模型能力
 2. 编码 [protocol.md](protocol.md) 中对应的 JSON+protobuf 数组
 3. 将网络增量解码为规范事件
-4. 由 `internal/api` 分别投影 OpenAI、Responses、Anthropic 和 Gemini 协议
+4. 由 `internal/api` 分别投影 OpenAI、Responses、Anthropic 和 Gemini 协议，响应的块、字段与顺序与各协议官方服务的输出一致
 5. 将结构化状态与操作入口绑定到管理端
 
 `internal/api` 消费规范请求与事件，`internal/aistudio` 管理账户文件、WAA runtime、原始上游数组和实时模型能力。资源型操作在创建时记录账户 ID，后续轮询、下载与提示引用使用该账户。
