@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -549,14 +550,19 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 		TopP:            request.TopP,
 		MaxOutputTokens: request.MaxOutputTokens,
 	}
+	config.HideThinking = true
 	if len(request.Reasoning) > 0 && string(request.Reasoning) != "null" {
 		var reasoning struct {
-			Effort string `json:"effort"`
+			Effort          string `json:"effort"`
+			Summary         string `json:"summary"`
+			GenerateSummary string `json:"generate_summary"`
 		}
 		if err := json.Unmarshal(request.Reasoning, &reasoning); err != nil {
 			return aistudio.GenerateRequest{}, nil, fmt.Errorf("invalid reasoning: %w", err)
 		}
 		config.ReasoningEffort = reasoning.Effort
+		summary := cmp.Or(reasoning.Summary, reasoning.GenerateSummary)
+		config.HideThinking = summary == "" || summary == "none"
 	}
 	if len(request.Text) > 0 && string(request.Text) != "null" {
 		var text struct {

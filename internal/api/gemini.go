@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -154,8 +155,9 @@ type geminiGenerationConfig struct {
 	Seed                *int64                     `json:"seed"`
 	MediaResolution     string                     `json:"mediaResolution"`
 	ThinkingConfig      *struct {
-		ThinkingBudget *int64 `json:"thinkingBudget"`
-		ThinkingLevel  string `json:"thinkingLevel"`
+		ThinkingBudget  *int64 `json:"thinkingBudget"`
+		ThinkingLevel   string `json:"thinkingLevel"`
+		IncludeThoughts bool   `json:"includeThoughts"`
 	} `json:"thinkingConfig"`
 }
 
@@ -485,9 +487,11 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 	if len(request.GenerationConfig.ResponseJSONSchema) > 0 {
 		config.ResponseSchema = request.GenerationConfig.ResponseJSONSchema
 	}
+	config.HideThinking = true
 	if request.GenerationConfig.ThinkingConfig != nil {
 		config.ThinkingBudget = request.GenerationConfig.ThinkingConfig.ThinkingBudget
 		config.ReasoningEffort = request.GenerationConfig.ThinkingConfig.ThinkingLevel
+		config.HideThinking = !request.GenerationConfig.ThinkingConfig.IncludeThoughts
 	}
 	safety := make([]aistudio.SafetySetting, 0, len(request.SafetySettings))
 	for _, setting := range request.SafetySettings {
@@ -892,9 +896,7 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	defer candidates.cancel()
 	if err := candidates.err; err != nil {
 		candidates.settle(r.Context())
-		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
-		}
+		writeGeminiFailure(w, r, request, err, stream)
 		return
 	}
 	if stream {
@@ -906,13 +908,46 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	})
 	if err != nil {
 		candidates.settle(r.Context())
-		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
-		}
+		writeGeminiFailure(w, r, request, err, false)
 		return
 	}
 	candidates.record(r.Context(), results)
 	writeJSON(w, http.StatusOK, buildGeminiResponse(request, results))
+}
+
+// writeGeminiFailure 写出响应头之前的生成失败，上游拒绝输入时按 Gemini API 返回 200 与 promptFeedback
+func writeGeminiFailure(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, err error, stream bool) {
+	if !shouldWriteRequestError(r, err) {
+		return
+	}
+	response, ok := geminiPromptFeedback(request, err)
+	switch {
+	case !ok:
+		writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+	case stream:
+		if streamHeaders(w) == nil {
+			_ = writeSSE(w, "", response)
+		}
+	default:
+		writeJSON(w, http.StatusOK, response)
+	}
+}
+
+// geminiPromptFeedback 把上游输入拒绝投影为不含候选的 Gemini 响应
+func geminiPromptFeedback(request aistudio.GenerateRequest, err error) (map[string]any, bool) {
+	var feedback *aistudio.PromptFeedbackError
+	if !errors.As(err, &feedback) {
+		return nil, false
+	}
+	reason := strings.ToUpper(strings.TrimSpace(feedback.Reason))
+	if reason == "" || reason == "UNSPECIFIED" {
+		reason = "BLOCK_REASON_UNSPECIFIED"
+	}
+	block := map[string]any{"blockReason": reason}
+	if feedback.Message != "" {
+		block["blockReasonMessage"] = feedback.Message
+	}
+	return map[string]any{"promptFeedback": block, "modelVersion": request.Model, "responseId": request.ID}, true
 }
 
 // buildGeminiResponse 按候选序号输出各候选内容与终止原因，用量为全部候选之和
@@ -923,12 +958,7 @@ func buildGeminiResponse(request aistudio.GenerateRequest, results []generationR
 		if parts := geminiOutputParts(result); len(parts) > 0 {
 			candidate["content"] = map[string]any{"role": "model", "parts": parts}
 		}
-		setGeminiFinish(candidate, result.finishReason, result.finishMessage)
-		if result.grounding != nil {
-			candidate["groundingMetadata"] = geminiGroundingMetadata(*result.grounding)
-		} else if len(result.citations) > 0 {
-			candidate["citationMetadata"] = geminiCitationMetadata(result.citations)
-		}
+		setGeminiCandidateEnd(candidate, result)
 		candidates = append(candidates, candidate)
 	}
 	response := map[string]any{
@@ -1214,6 +1244,23 @@ func geminiFinishReason(reason string) string {
 	}
 }
 
+// setGeminiCandidateEnd 写入候选的终止原因、搜索来源与上游引用
+func setGeminiCandidateEnd(candidate map[string]any, result generationResult) {
+	setGeminiFinish(candidate, result.finishReason, result.finishMessage)
+	if result.grounding != nil {
+		candidate["groundingMetadata"] = geminiGroundingMetadata(*result.grounding)
+	}
+	citations := make([]aistudio.Citation, 0)
+	for _, event := range result.events {
+		if event.Kind == aistudio.EventCitation && event.Citation != nil {
+			citations = append(citations, *event.Citation)
+		}
+	}
+	if len(citations) > 0 {
+		candidate["citationMetadata"] = geminiCitationMetadata(citations)
+	}
+}
+
 func setGeminiFinish(candidate map[string]any, reason, message string) {
 	candidate["finishReason"] = geminiFinishReason(reason)
 	normalized := strings.ToLower(strings.TrimSpace(reason))
@@ -1236,7 +1283,7 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 	}
 }
 
-// streamGemini 按到达顺序输出各候选的增量块，最后一块携带全部候选的终止原因与用量之和
+// streamGemini 按到达顺序输出各候选的增量块，最后一块携带全部候选的终止原因、来源与用量之和
 func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, candidates *chatChoices) {
 	if err := streamHeaders(w); err != nil {
 		return
@@ -1263,11 +1310,16 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	})
 	if err != nil {
 		candidates.settle(r.Context())
-		if shouldWriteRequestError(r, err) {
-			_ = write(map[string]any{"error": map[string]any{
-				"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err),
-			}})
+		if !shouldWriteRequestError(r, err) {
+			return
 		}
+		if response, ok := geminiPromptFeedback(request, err); ok {
+			_ = write(response)
+			return
+		}
+		_ = write(map[string]any{"error": map[string]any{
+			"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err),
+		}})
 		return
 	}
 	candidates.record(r.Context(), results)
@@ -1277,16 +1329,8 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	}
 	finished := make([]any, 0, len(results))
 	for index, result := range results {
-		candidate := map[string]any{
-			"index":   index,
-			"content": map[string]any{"role": "model", "parts": []any{}},
-		}
-		setGeminiFinish(candidate, result.finishReason, result.finishMessage)
-		if result.grounding != nil {
-			candidate["groundingMetadata"] = geminiGroundingMetadata(*result.grounding)
-		} else if len(result.citations) > 0 {
-			candidate["citationMetadata"] = geminiCitationMetadata(result.citations)
-		}
+		candidate := map[string]any{"index": index, "content": map[string]any{"role": "model", "parts": []any{}}}
+		setGeminiCandidateEnd(candidate, result)
 		finished = append(finished, candidate)
 	}
 	final := map[string]any{
@@ -1326,24 +1370,6 @@ func geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
 		part = geminiSignedPart(map[string]any{
 			"codeExecutionResult": geminiCodeExecutionResult(*event.CodeExecutionResult),
 		}, event.ThoughtSignature)
-	case aistudio.EventGrounding:
-		if event.Grounding == nil {
-			return nil
-		}
-		return map[string]any{
-			"index":             index,
-			"content":           map[string]any{"role": "model", "parts": []any{}},
-			"groundingMetadata": geminiGroundingMetadata(*event.Grounding),
-		}
-	case aistudio.EventCitation:
-		if event.Citation == nil {
-			return nil
-		}
-		return map[string]any{
-			"index":            index,
-			"content":          map[string]any{"role": "model", "parts": []any{}},
-			"citationMetadata": geminiCitationMetadata([]aistudio.Citation{*event.Citation}),
-		}
 	case aistudio.EventMedia:
 		if event.Media == nil {
 			return nil
