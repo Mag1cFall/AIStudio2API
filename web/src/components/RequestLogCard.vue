@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { api, ApiError } from '@/api'
-import { channelLabelKey, useI18n } from '@/i18n'
+import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { formatLogNumber, type LogRow } from '@/logs'
 import type { RequestBody } from '@/types'
 import UiIcon from './UiIcon.vue'
@@ -15,6 +15,39 @@ const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle'
 const bodyError = ref('')
 // detailsRendered 记录详情是否展开过，未展开的详情不渲染
 const detailsRendered = ref(false)
+
+// finishKeys 是上游终止原因的显示文案键
+const finishKeys: Record<string, TranslationKey> = {
+  stop: 'logs.finish.stop',
+  stop_sequence: 'logs.finish.stop_sequence',
+  max_tokens: 'logs.finish.max_tokens',
+  unspecified: 'logs.finish.unspecified',
+  other: 'logs.finish.other',
+  safety: 'logs.finish.safety',
+  recitation: 'logs.finish.recitation',
+  language: 'logs.finish.language',
+  blocklist: 'logs.finish.blocklist',
+  prohibited_content: 'logs.finish.prohibited_content',
+  spii: 'logs.finish.spii',
+  malformed_function_call: 'logs.finish.malformed_function_call',
+  image_safety: 'logs.finish.image_safety',
+  unexpected_tool_call: 'logs.finish.unexpected_tool_call',
+  too_many_tool_calls: 'logs.finish.too_many_tool_calls',
+  image_prohibited_content: 'logs.finish.image_prohibited_content',
+  image_other: 'logs.finish.image_other',
+  no_image: 'logs.finish.no_image',
+  image_recitation: 'logs.finish.image_recitation',
+  missing_thought_signature: 'logs.finish.missing_thought_signature',
+}
+
+// finishLabel 是终止原因的显示文案，上游未命名的编号显示为内容被拦截，未知原因显示原始值
+const finishLabel = computed(() => {
+  const reason = request.value.finish_reason ?? ''
+  const code = /^provider_(\d+)$/.exec(reason)?.[1]
+  if (code !== undefined) return t('logs.finish.provider').replace('{code}', code)
+  const key = finishKeys[reason]
+  return key === undefined ? reason : t(key)
+})
 
 // number 按当前语言格式化统计数值
 function number(value: number, digits = 0): string {
@@ -105,10 +138,13 @@ const bodyParts = computed(() =>
         >{{ t('logs.averageSpeed') }}
         <b>{{ number(request.usage.average_tokens_per_second, 1) }}</b> tokens/s</span
       >
+      <span v-if="request.first_event_ms !== undefined"
+        >{{ t('logs.firstToken') }} <b>{{ number(request.first_event_ms / 1000, 1) }}</b> s</span
+      >
     </div>
     <p v-if="request.error" class="request-error">{{ request.error }}</p>
     <p v-else-if="request.state === 'blocked' || request.state === 'limited'" class="request-error">
-      {{ request.finish_reason }}
+      {{ finishLabel }}
     </p>
     <details class="request-details" @toggle="renderDetails">
       <summary>
@@ -134,6 +170,10 @@ const bodyParts = computed(() =>
           <template v-if="request.usage">
             <dt>{{ t('logs.inputTokens') }}</dt>
             <dd>{{ number(request.usage.input_tokens) }} tokens</dd>
+            <template v-if="request.usage.cached_tokens">
+              <dt>{{ t('logs.cachedTokens') }}</dt>
+              <dd>{{ number(request.usage.cached_tokens) }} tokens</dd>
+            </template>
             <dt>{{ t('logs.totalTokens') }}</dt>
             <dd>{{ number(request.usage.total_tokens) }} tokens</dd>
           </template>
@@ -143,7 +183,12 @@ const bodyParts = computed(() =>
           </template>
           <template v-if="request.finish_reason">
             <dt>{{ t('logs.finishReason') }}</dt>
-            <dd>{{ request.finish_reason }}</dd>
+            <dd>
+              {{ finishLabel
+              }}<span v-if="finishLabel !== request.finish_reason" class="text-gray-500">
+                · {{ request.finish_reason }}</span
+              >
+            </dd>
           </template>
         </dl>
         <ol class="request-timeline">

@@ -212,7 +212,7 @@ Playground 目录没有的 embedding（`embedContent`）、Live（`bidiGenerateC
 
 ### 公开目录
 
-公开目录是已启用通道的并集。Build 独有且至少一个启用账户可经 Build 调用的可生成、embedding、Live 与实时音乐模型加入公开目录；embedding 模型的 methods 为 `batchEmbedContents, embedContent`，实时模型为 `bidiGenerateContent` 或 `bidiGenerateMusic`。Build 未启用时这些模型不在目录中，请求返回模型不存在。模型出现在 Playground 目录时，Build 请求使用 Playground 目录的默认参数与能力；Build 独有模型的默认输出上限为 `outputTokenLimit`，思考能力取 `thinking`。每个模型的 `channels` 列出至少一个启用账户可调用它的通道。
+公开目录是已启用通道的并集。Build 独有且至少一个启用账户可经 Build 调用的可生成、embedding、Live 与实时音乐模型加入公开目录；embedding 模型的 methods 为 `batchEmbedContents, embedContent`，实时模型为 `bidiGenerateContent` 或 `bidiGenerateMusic`。Build 未启用时这些模型不在目录中，请求返回模型不存在。模型出现在 Playground 目录时，Build 请求使用 Playground 目录的默认参数与能力；Build 独有模型的默认输出上限为 `outputTokenLimit`，思考能力取 `thinking`。每个模型的 `channels` 列出至少一个启用账户可调用它的通道，启用账户的权益都不满足 AccessModes 时不含 `channels`。
 
 ### 调度与冷却
 
@@ -317,7 +317,7 @@ user 与 tool 角色写为 `user`，assistant 写为 `model`，没有 part 的 c
 | `responseModalities` | 大写模态名 |
 | `imageConfig` | `{aspectRatio?, imageSize?}` |
 | `speechConfig` | 单声音为 `voiceConfig.prebuiltVoiceConfig.voiceName`；多说话人为 `multiSpeakerVoiceConfig.speakerVoiceConfigs[{speaker, voiceConfig}]` |
-| `thinkingConfig` | `includeThoughts: true`、`thinkingBudget`、`thinkingLevel` |
+| `thinkingConfig` | `includeThoughts`（请求要求输出思考时为 true）、`thinkingBudget`、`thinkingLevel` |
 
 - `maxOutputTokens` 按模型上限校验；带语音配置且未显式设置时不发送
 - `responseSchema` 复用 Playground 的 Schema 校验与规范化：嵌套 `type` 使用大写枚举，字符串 `const` 转为 `enum`，null 联合转为 `nullable`

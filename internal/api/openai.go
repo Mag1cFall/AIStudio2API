@@ -1187,6 +1187,9 @@ func openAIUsage(usage *aistudio.Usage) map[string]any {
 		"prompt_tokens":     inputTokens(usage),
 		"completion_tokens": outputTokens(usage),
 		"total_tokens":      usage.TotalTokens,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens": usage.CachedTokens,
+		},
 		"completion_tokens_details": map[string]any{
 			"reasoning_tokens": usage.ReasoningTokens,
 		},

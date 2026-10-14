@@ -30,7 +30,7 @@
 - **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；一个通道触发限额后，同一账户由另一个通道继续
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=go` 后由纯 Go 生成官方 proof，运行时不下载、不启动浏览器
-- **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent
+- **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩
 - **主流 agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
@@ -284,7 +284,7 @@ modelRoles:
 | --- | --- |
 | 模型 | `GET /v1/models`、`GET /v1/models/{model}`、`GET /v1beta/models`、`GET /v1beta/models/{model}` |
 | OpenAI Chat | `POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`GET`/`DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
+| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`POST /v1/responses/compact`、`GET`/`DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
 | Files | `POST /v1/files`、`GET /v1/files`、`GET /v1/files/{id}`、`GET /v1/files/{id}/content`、`DELETE /v1/files/{id}`（OpenAI 与 Anthropic 格式）；`POST /upload/v1beta/files`、`GET /v1beta/files`、`GET`/`DELETE /v1beta/files/{id}` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
 | Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens` |
@@ -431,6 +431,8 @@ curl http://127.0.0.1:2048/v1/videos \
 
 公开端点实现标准 `generateContent`、`countTokens`、`embedContent`、`batchEmbedContents` 和 `predictLongRunning`；`bidiGenerateContent` 与 `bidiGenerateMusic` 模型经 `/v1/live` 调用。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
+启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。
+
 ## 项目架构
 
 ```text
@@ -470,7 +472,7 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
-| `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间 |
+| `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 |
 | `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=go` 时不限制 |

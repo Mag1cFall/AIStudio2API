@@ -55,7 +55,7 @@ function toggle(value: string, checked: boolean): void {
         align="start"
         :side-offset="6"
         :collision-padding="12"
-        class="ui-popover z-[60] w-72 rounded-lg border border-line bg-panel p-2 shadow-xl shadow-black/40"
+        class="ui-popover z-[60] w-80 max-w-[var(--reka-popover-content-available-width)] rounded-lg border border-line bg-panel p-2 shadow-xl shadow-black/40"
       >
         <label class="relative mb-2 block">
           <span class="sr-only">{{ t('usage.filterSearch') }}</span>
@@ -71,7 +71,7 @@ function toggle(value: string, checked: boolean): void {
             class="w-full rounded-md border border-line bg-canvas py-1.5 pr-2 pl-7 text-xs text-white focus:border-blue-500 focus:outline-none"
           />
         </label>
-        <fieldset class="max-h-64 overflow-y-auto">
+        <fieldset class="max-h-64 min-w-0 overflow-y-auto">
           <legend class="sr-only">{{ label }}</legend>
           <p v-if="visible.length === 0" class="px-2 py-3 text-center text-xs text-gray-500">
             {{ t('usage.filterNone') }}
@@ -88,7 +88,9 @@ function toggle(value: string, checked: boolean): void {
               :checked="selected.includes(value)"
               @change="toggle(value, ($event.target as HTMLInputElement).checked)"
             />
-            <span class="min-w-0 flex-1 truncate">{{ format(value) }}</span>
+            <span v-tooltip.overflow="format(value)" class="min-w-0 flex-1 truncate">{{
+              format(value)
+            }}</span>
           </label>
         </fieldset>
         <div v-if="selected.length > 0" class="mt-2 border-t border-line pt-2">

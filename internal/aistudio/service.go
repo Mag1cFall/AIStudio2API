@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -347,6 +348,27 @@ func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID stri
 		return models, fmt.Errorf("释放账户 %s 的模型目录租约: %w", accountID, releaseErr)
 	}
 	return models, nil
+}
+
+// RefreshAccountTier 以普通并发槽位读取账户权益，权益变化时沿用当前目录写回，返回读取前后的权益；账户没有空闲槽位时跳过
+func (s *PooledService) RefreshAccountTier(ctx context.Context, accountID string) (BenefitTier, BenefitTier, error) {
+	lease, _, err := s.pool.TryAcquireFor(ctx, AccountSelection{AccountID: strings.TrimSpace(accountID)})
+	if lease == nil {
+		return BenefitTierFree, BenefitTierFree, err
+	}
+	account := lease.Account()
+	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
+	s.pool.mu.Lock()
+	previous := account.BenefitTier
+	models := cloneAccountModels(account.Models)
+	s.pool.mu.Unlock()
+	if err == nil && tier != previous {
+		err = s.pool.SetCatalog(account.ID, tier, models)
+	}
+	if err != nil {
+		return previous, previous, errors.Join(err, lease.Release())
+	}
+	return previous, tier, lease.Release()
 }
 
 // CachedModels 返回启用账户最近同步目录的并集
@@ -794,17 +816,35 @@ func mergeModels(base []Model, additions []Model) []Model {
 		merged[model.ID] = current
 	}
 	result := make([]Model, 0, len(merged))
-	for _, model := range merged {
+	for _, id := range upstreamModelOrder(base, additions) {
+		model := merged[id]
 		model.Methods = unionStrings(nil, model.Methods)
 		for name, values := range model.CapabilityOptions {
 			model.CapabilityOptions[name] = unionStrings(nil, values)
 		}
 		result = append(result, model)
 	}
-	sort.Slice(result, func(left int, right int) bool {
-		return result[left].ID < result[right].ID
-	})
 	return result
+}
+
+// upstreamModelOrder 按各目录的上游顺序合并模型 ID，只出现在后一个目录的模型排在它在该目录中的前一个模型之后，没有前一个已知模型时排在该目录首个已知模型之前，该目录没有已知模型时排在末尾
+func upstreamModelOrder(lists ...[]Model) []string {
+	var order []string
+	for _, models := range lists {
+		previous := len(order) - 1
+		if index := slices.IndexFunc(models, func(model Model) bool { return slices.Contains(order, model.ID) }); index >= 0 {
+			previous = slices.Index(order, models[index].ID) - 1
+		}
+		for _, model := range models {
+			if index := slices.Index(order, model.ID); index >= 0 {
+				previous = index
+				continue
+			}
+			previous++
+			order = slices.Insert(order, previous, model.ID)
+		}
+	}
+	return order
 }
 
 func unionInt64(left []int64, right []int64) []int64 {

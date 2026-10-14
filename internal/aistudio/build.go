@@ -348,6 +348,7 @@ func encodeBuildTools(tools Tools) ([]any, bool, error) {
 
 // encodeBuildGenerationConfig 复用 Playground 的参数校验与默认值，并转换为 Gemini API 字段
 func encodeBuildGenerationConfig(config GenerationConfig, defaults GenerationDefaults) (map[string]any, error) {
+	defaults.ContinuedOutputTokens = 0
 	wire, err := encodeGenerationConfig(config, defaults)
 	if err != nil {
 		return nil, err
@@ -454,6 +455,7 @@ type buildResponse struct {
 		PromptTokenCount        int64  `json:"promptTokenCount"`
 		CandidatesTokenCount    *int64 `json:"candidatesTokenCount"`
 		TotalTokenCount         int64  `json:"totalTokenCount"`
+		CachedContentTokenCount int64  `json:"cachedContentTokenCount"`
 		ThoughtsTokenCount      int64  `json:"thoughtsTokenCount"`
 		ToolUsePromptTokenCount int64  `json:"toolUsePromptTokenCount"`
 	} `json:"usageMetadata"`
@@ -517,7 +519,7 @@ func (d *BuildStreamDecoder) Decode(raw []byte) ([]Event, error) {
 	if response.UsageMetadata != nil && response.UsageMetadata.TotalTokenCount > 0 {
 		metadata := response.UsageMetadata
 		usage := Usage{
-			InputTokens: metadata.PromptTokenCount, ReasoningTokens: metadata.ThoughtsTokenCount,
+			InputTokens: metadata.PromptTokenCount, CachedTokens: metadata.CachedContentTokenCount, ReasoningTokens: metadata.ThoughtsTokenCount,
 			ToolTokens: metadata.ToolUsePromptTokenCount, TotalTokens: metadata.TotalTokenCount,
 		}
 		if metadata.CandidatesTokenCount != nil {

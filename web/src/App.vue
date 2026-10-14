@@ -536,7 +536,7 @@ onUnmounted(() => {
             @refresh="loadRequestData"
             @notice="showNotice"
           />
-          <UsagePanel v-else-if="currentTab === 'usage'" />
+          <UsagePanel v-else-if="currentTab === 'usage'" :models="models" />
           <SettingsPanel
             v-else-if="currentTab === 'settings'"
             :config="config"
@@ -573,9 +573,13 @@ onUnmounted(() => {
           class="pointer-events-auto flex max-w-full items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
           role="status"
         >
-          <span class="min-w-0 truncate">{{
-            t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label)
-          }}</span>
+          <span
+            v-tooltip.overflow="
+              t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label)
+            "
+            class="min-w-0 truncate"
+            >{{ t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label) }}</span
+          >
           <button
             type="button"
             class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 font-medium text-blue-400 hover:bg-raised"

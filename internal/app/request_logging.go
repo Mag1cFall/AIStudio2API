@@ -31,7 +31,7 @@ func requestLogData(entry api.AccessLog) *api.RequestLog {
 	if usage := entry.Usage; usage != nil {
 		output := usage.OutputTokens + usage.ReasoningTokens
 		data.Usage = &api.RequestLogUsage{
-			InputTokens: usage.InputTokens + usage.ToolTokens, ReasoningTokens: usage.ReasoningTokens,
+			InputTokens: usage.InputTokens + usage.ToolTokens, CachedTokens: usage.CachedTokens, ReasoningTokens: usage.ReasoningTokens,
 			ReplyTokens: usage.OutputTokens, OutputTokens: output, TotalTokens: usage.TotalTokens,
 		}
 		if entry.Latency > 0 {
@@ -92,8 +92,8 @@ func requestRow(entry api.AccessLog, finished time.Time) requestdb.Row {
 		Attempts: entry.Attempts,
 	}
 	if usage := data.Usage; usage != nil {
-		row.InputTokens, row.ReasoningTokens, row.ReplyTokens, row.TotalTokens =
-			usage.InputTokens, usage.ReasoningTokens, usage.ReplyTokens, usage.TotalTokens
+		row.InputTokens, row.CachedTokens, row.ReasoningTokens, row.ReplyTokens, row.TotalTokens =
+			usage.InputTokens, usage.CachedTokens, usage.ReasoningTokens, usage.ReplyTokens, usage.TotalTokens
 	}
 	return row
 }

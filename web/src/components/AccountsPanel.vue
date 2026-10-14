@@ -186,7 +186,9 @@ async function importChromeAccounts(): Promise<void> {
     emit('refresh')
     emit(
       'notice',
-      t('accounts.importComplete').replace('{count}', String(result.accounts.length)),
+      t(
+        result.accounts.length === 1 ? 'accounts.importCompleteOne' : 'accounts.importComplete',
+      ).replace('{count}', String(result.accounts.length)),
       'success',
     )
   } catch (error) {
@@ -324,7 +326,11 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
               }"
             ></div>
             <div class="min-w-0">
-              <strong class="block truncate font-mono text-white">{{ account.label }}</strong>
+              <strong
+                v-tooltip.overflow="account.label"
+                class="block truncate font-mono text-white"
+                >{{ account.label }}</strong
+              >
             </div>
           </div>
           <div class="shrink-0 text-xs text-gray-500">
@@ -338,7 +344,10 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
         >
           <div>
             <span class="text-gray-500">{{ t('accounts.proxy') }}</span>
-            <div class="truncate text-gray-300">
+            <div
+              v-tooltip.overflow="account.proxy ? maskedProxy(account.proxy) : ''"
+              class="truncate text-gray-300"
+            >
               {{ account.proxy ? maskedProxy(account.proxy) : t('accounts.direct') }}
             </div>
           </div>
@@ -440,7 +449,9 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
               <UiIcon name="close" :size="16" />
             </button>
           </div>
-          <p class="mb-4 truncate font-mono text-sm text-gray-300">{{ draft.label }}</p>
+          <p v-tooltip.overflow="draft.label" class="mb-4 truncate font-mono text-sm text-gray-300">
+            {{ draft.label }}
+          </p>
           <div class="space-y-4">
             <label class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-400">{{ t('common.enable') }}</span>
@@ -647,11 +658,21 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
                 :value="profile.id"
               />
               <span class="min-w-0 flex-1">
-                <strong class="block truncate text-sm text-white">{{ profile.email }}</strong>
-                <span class="block truncate text-xs text-gray-400">{{ profile.display_name }}</span>
-                <span class="block truncate font-mono text-xs text-gray-500">{{
-                  profile.profile
-                }}</span>
+                <strong
+                  v-tooltip.overflow="profile.email"
+                  class="block truncate text-sm text-white"
+                  >{{ profile.email }}</strong
+                >
+                <span
+                  v-tooltip.overflow="profile.display_name"
+                  class="block truncate text-xs text-gray-400"
+                  >{{ profile.display_name }}</span
+                >
+                <span
+                  v-tooltip.overflow="profile.profile"
+                  class="block truncate font-mono text-xs text-gray-500"
+                  >{{ profile.profile }}</span
+                >
               </span>
             </label>
           </div>

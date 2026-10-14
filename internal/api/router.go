@@ -43,6 +43,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	public.HandleFunc("POST /v1/embeddings", s.handleOpenAIEmbeddings)
 	public.HandleFunc("POST /v1/responses", s.handleResponses)
 	public.HandleFunc("POST /v1/responses/input_tokens", s.handleResponsesInputTokens)
+	public.HandleFunc("POST /v1/responses/compact", s.handleResponsesCompact)
 	public.HandleFunc("GET /v1/responses/{response}", s.handleResponseGet)
 	public.HandleFunc("DELETE /v1/responses/{response}", s.handleResponseDelete)
 	public.HandleFunc("GET /v1/responses/{response}/input_items", s.handleResponseInputItems)

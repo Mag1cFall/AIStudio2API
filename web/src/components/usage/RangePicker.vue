@@ -74,9 +74,11 @@ function applyCustom(): void {
     >
       <UiIcon name="calendar" :size="14" class="text-gray-400" />
       <span class="font-medium whitespace-nowrap">{{ t(`usage.range.${range}`) }}</span>
-      <span class="hidden truncate text-xs text-gray-500 tabular-nums sm:inline">{{
-        summary
-      }}</span>
+      <span
+        v-tooltip.overflow="summary"
+        class="hidden truncate text-xs text-gray-500 tabular-nums sm:inline"
+        >{{ summary }}</span
+      >
       <UiIcon name="chevronDown" :size="12" class="text-gray-500" />
     </PopoverTrigger>
     <PopoverPortal>

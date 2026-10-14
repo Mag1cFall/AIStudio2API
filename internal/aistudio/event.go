@@ -10,6 +10,16 @@ type FrameDecoder struct {
 	usage     *Usage
 	finished  bool
 	lastFrame json.RawMessage
+	// continuable 表示请求开启了自动续写
+	continuable bool
+	// continueAtMaxTokens 表示本轮输出上限低于请求的输出总上限
+	continueAtMaxTokens bool
+	// latestToken 为已出现的最近一个续写 token
+	latestToken string
+	// continuation 为本轮结束后下一轮使用的续写 token
+	continuation string
+	// continuationRequired 表示上游要求续写
+	continuationRequired bool
 }
 
 // NewFrameDecoder 创建单次 GenerateContent 的有状态解码器
@@ -45,6 +55,13 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	finishRaw := rawAt(candidate, 1)
+	frameToken := ""
+	if d.continuable {
+		_ = json.Unmarshal(rawAt(candidate, 8), &frameToken)
+		if frameToken != "" {
+			d.latestToken = frameToken
+		}
+	}
 	events := make([]Event, 0, 4)
 	if len(candidate) > 0 && !isJSONNull(candidate[0]) {
 		contentEvents, err := d.decodeContent(candidate[0], raw)
@@ -83,6 +100,12 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		finishCode, err := rawInt64(finishRaw, "$[0][][0][0][1]", raw)
 		if err != nil {
 			return nil, withMethod(err, "GenerateContent")
+		}
+		if d.continuable && (finishCode == 22 || finishCode == 2 && frameToken != "" && d.continueAtMaxTokens) {
+			d.continuationRequired = true
+			d.continuation = d.latestToken
+			d.finished = true
+			return events, nil
 		}
 		finishReason := decodeFinishReason(finishCode)
 		var finishMessage string
@@ -179,6 +202,9 @@ func decodeFinishReason(code int64) string {
 
 // End 校验流已经出现正常完成帧
 func (d *FrameDecoder) End() error {
+	if d.continuationRequired && d.continuation == "" {
+		return d.protocolError("$[0][][0][0][8]", "上游要求续写但响应没有续写 token", d.lastFrame)
+	}
 	if d.finished {
 		return nil
 	}
@@ -373,6 +399,13 @@ func decodeUsage(raw json.RawMessage, evidence json.RawMessage) (Usage, bool, er
 	if err != nil {
 		return Usage{}, false, withMethod(err, "GenerateContent")
 	}
+	cached := int64(0)
+	if cachedRaw := rawAt(values, 3); !isJSONNull(cachedRaw) {
+		cached, err = rawInt64(cachedRaw, "$[0][][2][3]", raw)
+		if err != nil {
+			return Usage{}, false, withMethod(err, "GenerateContent")
+		}
+	}
 	reasoning := int64(0)
 	toolTokens := int64(0)
 	if toolRaw := rawAt(values, 7); !isJSONNull(toolRaw) {
@@ -388,7 +421,7 @@ func decodeUsage(raw json.RawMessage, evidence json.RawMessage) (Usage, bool, er
 		}
 	}
 	return Usage{
-		InputTokens: input, OutputTokens: output, ReasoningTokens: reasoning,
+		InputTokens: input, CachedTokens: cached, OutputTokens: output, ReasoningTokens: reasoning,
 		ToolTokens: toolTokens, TotalTokens: total, OutputTokensMissing: outputMissing,
 	}, true, nil
 }

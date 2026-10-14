@@ -96,6 +96,7 @@ internal/camoufoxnative/ 原生 WebDriver BiDi、WAA bootstrap 与隔离登录
 internal/waa/            纯 Go WAA：BotGuard VM、Firefox 形状宿主与 goja 分叉
 internal/proxydial/      上游代理拨号与带认证代理的本机 SOCKS5 中转
 internal/requestdb/      请求用量账本与可选正文的 SQLite 存储
+internal/pricing/        用量估算费用使用的 Gemini API 单价表
 internal/chromeauth/     Windows Chrome OAuth/DBSC 发现、导入和续签
 internal/config/         全局配置的读取、校验和原子写回
 internal/webui/          嵌入并提供 Vue 构建产物
@@ -162,7 +163,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
 | `PROXY` | setup 与未设置账户代理时使用的固定出口 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
-| `REQUEST_TIMEOUT` | 单次请求最大执行时间 | `5m` |
+| `REQUEST_TIMEOUT` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 | `5m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `5` |
 | `MAX_ACTIVE_WORKERS` | 活动 Worker 容量上限，必须不小于热池目标 | `10` |
 | `WARM_STARTUP_CONCURRENCY` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=go` 时不限制 | `5` |
@@ -272,7 +273,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 
 `ModelAccessKey(scope, model)` 会移除 `models/` 前缀；空 scope 返回规范模型 ID，非空 scope 返回 `<scope>:<canonicalModelID>`。Bidi setup 使用 lease（账户租约）时间，会话内每个 qualifying turn（一次模型资格检查）分配严格递增的 attempt 时间，`turn_complete` 消费对应 attempt。普通流式生成在规范 `EventFinish` 到达时写 `verified`；此前的 text、reasoning、tool、usage 和首事件用于输出与性能统计，终态前断流、取消或错误保持原验证状态。
 
-模型目录刷新为全部 enabled ready/busy 账户并发执行。同步报错或返回空目录的账户进入 generation 内的 pending ID 集合；每个非空结果立即更新公共目录、账户状态并在 RUNNING 期间预热更多 Worker。初次 fan-out（同时向全部符合条件的账户发出 `ListModels`）结束后，单个 30 秒 ticker（定时器）对可用的 pending 账户再次并发刷新。冷却中的任务保留到期再试；需要登录、停用、不可用或已删除的账户退出重试，重新登录或启用后由账户更新流程重新同步。失败日志记录账户与原因，恢复成功记录模型数量。`modelRevision` 跟踪账户和配置变化，生成服务开始接收请求前会确认已应用当前 revision。
+模型目录刷新为全部 enabled ready/busy 账户并发执行。同步报错或返回空目录的账户进入 generation 内的 pending ID 集合；每个非空结果立即更新公共目录、账户状态并在 RUNNING 期间预热更多 Worker。初次 fan-out（同时向全部符合条件的账户发出 `ListModels`）结束后，单个 30 秒 ticker（定时器）对可用的 pending 账户再次并发刷新；同一循环的 10 分钟 ticker 对全部 enabled ready/busy 账户并发读取 `GetAiStudioBenefitTier`，每个账户占用一个普通并发槽位，槽位已满的账户跳过本轮，权益变化时沿用账户当前目录写回权益并发布账户与模型快照。冷却中的任务保留到期再试；需要登录、停用、不可用或已删除的账户退出重试，重新登录或启用后由账户更新流程重新同步。失败日志记录账户与原因，恢复成功记录模型数量。`modelRevision` 跟踪账户和配置变化，生成服务开始接收请求前会确认已应用当前 revision。
 
 认证状态包含长期凭证和设备绑定材料，保存在本机受控目录。提交、Issue、CI 和普通日志使用脱敏材料，保留字段形状并替换 Cookie、token、proof、邮箱、账户 ID、提示词、响应正文和完整原始帧。
 
@@ -283,7 +284,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 协议 | 端点 |
 | --- | --- |
 | OpenAI Chat | `GET /v1/models`、`GET /v1/models/{model}`、`POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`GET/DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
+| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`POST /v1/responses/compact`、`GET/DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
 | Gemini Interactions | `POST /v1beta/interactions`、`GET/DELETE /v1beta/interactions/{id}`、`POST /v1beta/interactions/{id}/cancel`，`/v1/interactions` 下路径相同 |
 | OpenAI 与 Anthropic Files | `POST/GET /v1/files`、`GET/DELETE /v1/files/{file}`、`GET /v1/files/{file}/content` |
 | OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/audio/speech`、`POST/GET /v1/videos`、`GET/DELETE /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
@@ -335,7 +336,7 @@ API 试用通过 `eventsource-parser` 读取 SSE，以各协议完成事件结�
 
 试用页的运行设置由 `web/src/api.ts` 的 `playgroundSettings` 按输出类型与协议列出公开 API 接受的参数，界面只显示这些参数，请求只发送这些参数。文本的四套协议均可设置温度、Top P、输出长度、思考强度、内置工具与函数声明，另按协议提供 Top K、停止序列、随机种子与结构化输出；Gemini 协议另有四个类别的安全设置，模型目录含 `media_resolution` 能力时提供媒体分辨率。图片与视频默认使用 Gemini 端点，宽高比、分辨率与时长取自模型目录的 `capability_options`，Gemini 图片可选仅输出图片，视频的 720p 以上分辨率只与 8 秒时长组合，也可切换到 OpenAI Images 与 OpenAI Videos。语音默认使用 `/v1/audio/speech`，切换到 Gemini 端点后可设置温度与多说话人，返回的 `audio/L16` 在页面封装为 WAV。未填写的数值参数不发送，由模型默认值决定。
 
-日志页保留最近 2000 条事件，按请求合并后先显示最近 200 行。关闭自动滚动时，当前首行保持固定，新日志追加在末尾。请求详情在首次展开时渲染。
+日志页保留最近 2000 条事件，按请求与运行阶段合并后先显示最近 200 行。关闭自动滚动时，当前首行保持固定，新日志追加在末尾。请求详情与阶段步骤在首次展开时渲染。
 
 ## 5. 协议实现
 

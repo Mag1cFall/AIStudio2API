@@ -1274,13 +1274,17 @@ func setGeminiFinish(candidate map[string]any, reason, message string) {
 }
 
 func geminiUsage(usage *aistudio.Usage) map[string]any {
-	return map[string]any{
+	metadata := map[string]any{
 		"promptTokenCount":        usage.InputTokens,
 		"candidatesTokenCount":    usage.OutputTokens,
 		"thoughtsTokenCount":      usage.ReasoningTokens,
 		"toolUsePromptTokenCount": usage.ToolTokens,
 		"totalTokenCount":         usage.TotalTokens,
 	}
+	if usage.CachedTokens > 0 {
+		metadata["cachedContentTokenCount"] = usage.CachedTokens
+	}
+	return metadata
 }
 
 // streamGemini 按到达顺序输出各候选的增量块，最后一块携带全部候选的终止原因、来源与用量之和

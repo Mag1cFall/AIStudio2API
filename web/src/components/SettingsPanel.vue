@@ -291,7 +291,7 @@ async function saveConfig(): Promise<void> {
               />
               <p
                 v-if="form.listen_addr !== config.active_listen_addr"
-                class="mt-1 text-xs text-gray-500"
+                class="mt-1 text-xs break-all text-gray-500"
               >
                 {{ t('settings.activeValue') }}: {{ config.active_listen_addr }}
               </p>
@@ -322,7 +322,7 @@ async function saveConfig(): Promise<void> {
               </div>
               <p
                 v-if="form.proxy_api_key !== config.active_proxy_api_key"
-                class="mt-1 text-xs text-gray-500"
+                class="mt-1 text-xs break-all text-gray-500"
               >
                 {{ t('settings.activeValue') }}:
                 {{ revealKey ? config.active_proxy_api_key || t('common.empty') : '••••••••' }}
@@ -599,7 +599,12 @@ async function saveConfig(): Promise<void> {
         >
           <span class="h-2 w-2 shrink-0 rounded-full bg-amber-400"></span>
           <span class="flex-1 text-sm text-gray-300">
-            {{ t('settings.unsavedCount').replace('{count}', String(changedCount)) }}
+            {{
+              t(changedCount === 1 ? 'settings.unsavedCountOne' : 'settings.unsavedCount').replace(
+                '{count}',
+                String(changedCount),
+              )
+            }}
           </span>
           <button
             type="button"

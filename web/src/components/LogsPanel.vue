@@ -5,6 +5,7 @@ import type { AdminLog } from '@/types'
 import UiIcon from './UiIcon.vue'
 import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
+import StageLogCard from './StageLogCard.vue'
 import { groupLogs } from '@/logs'
 
 const props = defineProps<{
@@ -51,14 +52,18 @@ function matchLog(entry: AdminLog, query: string): boolean {
 }
 
 const rows = computed(() => groupLogs(props.logs))
+// filteredLogs 按级别、来源与搜索筛选日志行，阶段卡片的任一步骤命中即显示
 const filteredLogs = computed(() => {
   const query = search.value.trim().toLowerCase()
-  return rows.value.filter(
-    ({ entry, events }) =>
-      (level.value === 'ALL' || entry.level.toUpperCase() === level.value) &&
+  return rows.value.filter(({ entry, events, stage }) => {
+    const checked = stage ? events : [entry]
+    return (
+      (level.value === 'ALL' ||
+        checked.some((event) => event.level.toUpperCase() === level.value)) &&
       (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
-      (query === '' || matchLog(entry, query)),
-  )
+      (query === '' || checked.some((event) => matchLog(event, query)))
+    )
+  })
 })
 
 const displayLimit = ref(200)
@@ -301,6 +306,7 @@ watch(autoScroll, () => {
           }}</span>
           <div class="log-cell log-message">
             <RequestLogCard v-if="row.entry.request" :row="row" />
+            <StageLogCard v-else-if="row.stage" :row="row" />
             <span v-else>{{ row.entry.message }}</span>
           </div>
         </div>

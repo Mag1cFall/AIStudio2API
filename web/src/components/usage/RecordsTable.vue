@@ -183,7 +183,12 @@ function latencyWidth(milliseconds: number): number {
           {{ t('usage.records') }}
         </h3>
         <p v-if="!filtered" class="text-xs text-gray-500">
-          {{ t('usage.recordsCount').replace('{count}', integer(total)) }}
+          {{
+            t(total === 1 ? 'usage.recordsCountOne' : 'usage.recordsCount').replace(
+              '{count}',
+              integer(total),
+            )
+          }}
         </p>
       </div>
       <label class="relative">
@@ -395,9 +400,13 @@ function latencyWidth(milliseconds: number): number {
                 dateTime(record.time, true)
               }}</span>
             </div>
-            <div class="mt-1.5 truncate text-gray-200">{{ record.model || '—' }}</div>
+            <div v-tooltip.overflow="record.model" class="mt-1.5 truncate text-gray-200">
+              {{ record.model || '—' }}
+            </div>
             <div class="mt-0.5 flex gap-3 text-gray-500 tabular-nums">
-              <span class="truncate">{{ record.account || '—' }}</span>
+              <span v-tooltip.overflow="record.account" class="truncate">{{
+                record.account || '—'
+              }}</span>
               <span class="ml-auto shrink-0">{{ duration(record.duration_ms) }}</span>
               <span class="shrink-0">{{ compact(record.total_tokens) }}</span>
             </div>
