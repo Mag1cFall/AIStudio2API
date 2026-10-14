@@ -203,6 +203,13 @@ func (manager *runtimeManager) Models(ctx context.Context) ([]aistudio.Model, er
 	return manager.current.service.Models(ctx)
 }
 
+// CatalogModels 返回当前生成服务的管理目录
+func (manager *runtimeManager) CatalogModels(ctx context.Context) ([]aistudio.Model, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.CatalogModels(ctx)
+}
+
 // CountTokens 由当前生成服务计数
 func (manager *runtimeManager) CountTokens(ctx context.Context, request aistudio.TokenCountRequest) (aistudio.TokenCount, error) {
 	manager.mu.RLock()

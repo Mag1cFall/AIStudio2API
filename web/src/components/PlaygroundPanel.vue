@@ -28,7 +28,7 @@ const props = defineProps<{
   apiKey: string
 }>()
 
-const { t, errorText } = useI18n()
+const { locale, t, errorText } = useI18n()
 const protocolLabels: Record<PlaygroundProtocol, string> = {
   'openai-chat': 'OpenAI Chat',
   'openai-responses': 'OpenAI Responses',
@@ -134,6 +134,16 @@ const copied = ref(false)
 const hasRun = ref(false)
 const submittedPrompt = ref('')
 const submittedModel = ref('')
+// resultMeta 是回复下方的模型、状态码与耗时
+const resultMeta = computed(() =>
+  [
+    submittedModel.value,
+    result.status ? `HTTP ${result.status}` : '',
+    result.durationMs ? `${result.durationMs} ms` : '',
+  ]
+    .filter(Boolean)
+    .join(' · '),
+)
 const promptInput = ref<HTMLTextAreaElement>()
 const scroller = ref<HTMLElement>()
 let controller: AbortController | undefined
@@ -156,6 +166,22 @@ const availableModels = computed(() =>
   }),
 )
 const selectedModel = computed(() => availableModels.value.find((model) => model.id === form.model))
+// outputTokenLimit 是所选模型可设置的输出长度上限，自动续写模型为输入上限
+const outputTokenLimit = computed(() => {
+  const model = selectedModel.value
+  return model?.capabilities?.output_continuation
+    ? model.input_token_limit
+    : model?.output_token_limit
+})
+// outputContinuationHint 是自动续写模型输出长度下方的说明
+const outputContinuationHint = computed(() => {
+  const limit = outputTokenLimit.value
+  if (!selectedModel.value?.capabilities?.output_continuation || limit === undefined) return ''
+  return t('playground.outputContinuation').replace(
+    '{limit}',
+    new Intl.NumberFormat(locale.value).format(limit),
+  )
+})
 const supportsThinking = computed(() => {
   const capabilities = selectedModel.value?.capabilities ?? {}
   return (
@@ -459,6 +485,7 @@ onUnmounted(() => {
         </div>
         <div class="hidden min-w-0 flex-1 justify-end sm:flex">
           <code
+            v-tooltip.overflow="`POST ${endpoint}`"
             class="min-w-0 truncate rounded-md border border-line px-2 py-1 font-mono text-[11px] text-gray-400"
             ><span class="text-blue-400">POST</span> {{ endpoint }}</code
           >
@@ -481,7 +508,7 @@ onUnmounted(() => {
           class="flex h-full flex-col items-center justify-center px-6 text-center"
         >
           <h2 class="text-2xl font-semibold text-gray-100">{{ t('playground.emptyTitle') }}</h2>
-          <p class="mt-2 max-w-md text-sm text-gray-500">
+          <p class="mt-2 max-w-md text-sm break-words text-gray-500">
             {{ t('playground.emptyHelp').replace('{endpoint}', endpoint) }}
           </p>
         </div>
@@ -508,7 +535,7 @@ onUnmounted(() => {
                 />
               </summary>
               <div
-                class="mt-2 border-l-2 border-line pl-4 text-[13px] leading-6 whitespace-pre-wrap text-gray-400"
+                class="mt-2 border-l-2 border-line pl-4 text-[13px] leading-6 break-words whitespace-pre-wrap text-gray-400"
                 v-text="result.reasoning"
               ></div>
             </details>
@@ -596,11 +623,9 @@ onUnmounted(() => {
               >
                 <UiIcon name="raw" :size="14" />
               </button>
-              <span class="ml-1.5 truncate tabular-nums">
-                {{ submittedModel }}
-                <template v-if="result.status"> · HTTP {{ result.status }}</template>
-                <template v-if="result.durationMs"> · {{ result.durationMs }} ms</template>
-              </span>
+              <span v-tooltip.overflow="resultMeta" class="ml-1.5 truncate tabular-nums">{{
+                resultMeta
+              }}</span>
             </div>
           </article>
         </div>
@@ -823,7 +848,7 @@ onUnmounted(() => {
               <input
                 type="number"
                 :min="item.min"
-                :max="item.max"
+                :max="item.key === 'maxOutputTokens' ? outputTokenLimit : item.max"
                 :step="item.step"
                 :value="form[item.key] ?? ''"
                 :placeholder="numberPlaceholder(item.key)"
@@ -832,6 +857,9 @@ onUnmounted(() => {
               />
             </label>
           </div>
+          <p v-if="settings.has('maxOutputTokens') && outputContinuationHint" class="text-gray-500">
+            {{ outputContinuationHint }}
+          </p>
           <div v-if="settings.has('stopSequences')" class="space-y-1.5">
             <label for="playground-stop" class="text-gray-400">
               {{ t('playground.stopSequences') }}
@@ -842,7 +870,7 @@ onUnmounted(() => {
                 :key="value"
                 class="inline-flex max-w-full items-center gap-1 rounded-md bg-white/[0.07] py-0.5 pr-0.5 pl-2 font-mono text-gray-200"
               >
-                <span class="truncate">{{ value }}</span>
+                <span v-tooltip.overflow="value" class="truncate">{{ value }}</span>
                 <button
                   type="button"
                   class="rounded-sm p-0.5 text-gray-500 hover:bg-white/10 hover:text-white"

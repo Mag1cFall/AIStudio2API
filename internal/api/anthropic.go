@@ -753,8 +753,10 @@ func anthropicStop(reason string, hasTools bool, stopSequence string) (string, *
 
 func anthropicUsage(usage *aistudio.Usage) map[string]any {
 	return map[string]any{
-		"input_tokens":  inputTokens(usage),
-		"output_tokens": outputTokens(usage),
+		"input_tokens":                inputTokens(usage) - usage.CachedTokens,
+		"cache_creation_input_tokens": 0,
+		"cache_read_input_tokens":     usage.CachedTokens,
+		"output_tokens":               outputTokens(usage),
 	}
 }
 
@@ -1020,8 +1022,7 @@ func (writer *anthropicStreamWriter) finish(result generationResult) error {
 	}
 	usage := map[string]any{"output_tokens": 0}
 	if result.usage != nil {
-		usage["input_tokens"] = inputTokens(result.usage)
-		usage["output_tokens"] = outputTokens(result.usage)
+		usage = anthropicUsage(result.usage)
 	}
 	if searchCount > 0 {
 		usage["server_tool_use"] = map[string]int{"web_search_requests": searchCount, "web_fetch_requests": 0}

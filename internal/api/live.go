@@ -405,8 +405,12 @@ func bidiErrorMessage(err error) bidiServerMessage {
 	if err != nil {
 		message.Error = err.Error()
 	}
-	if errors.Is(err, aistudio.ErrInvalidArgument) {
+	var coded errorCodeProvider
+	switch {
+	case errors.Is(err, aistudio.ErrInvalidArgument):
 		message.Code = "invalid_request"
+	case errors.As(err, &coded):
+		message.Code = coded.ErrorCode()
 	}
 	return message
 }

@@ -37,6 +37,7 @@ var capabilityNames = map[int64]string{
 	81: "transcription_custom_vocabulary",
 	84: "transcription_smart",
 	85: "speech_metadata",
+	91: "output_continuation",
 }
 
 var secondaryCapabilityNames = map[int64]string{}
@@ -68,6 +69,8 @@ type GenerationDefaults struct {
 	OutputResolution bool
 	// InteractionStream 表示官网经 CreateInteractionStream 生成的模型
 	InteractionStream bool
+	// ContinuedOutputTokens 表示自动续写模型的输出总上限，其他模型为 0
+	ContinuedOutputTokens int64
 }
 
 type modelEntry struct {
@@ -207,6 +210,9 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	defaults, err := decodeGenerationDefaults(row, path, raw, capabilities)
 	if err != nil {
 		return modelEntry{}, err
+	}
+	if capabilities["output_continuation"] {
+		defaults.ContinuedOutputTokens = inputLimit
 	}
 	return modelEntry{model: model, defaults: defaults}, nil
 }

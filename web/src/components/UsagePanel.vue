@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
-import type { UsageDimension, UsageReport, UsageStats } from '@/types'
+import type { Model, UsageDimension, UsageReport, UsageStats } from '@/types'
 import UiIcon from './UiIcon.vue'
 import UiSelect from './UiSelect.vue'
 import FilterMenu from './usage/FilterMenu.vue'
@@ -24,10 +24,20 @@ import {
   type RangePreset,
 } from './usage/model'
 
+const props = defineProps<{ models: Model[] }>()
 const { t, errorText } = useI18n()
-const { compact, integer, percent, duration, dateTime, clock, ago, dimensionLabel } =
+const { compact, integer, usd, percent, duration, dateTime, clock, ago, dimensionLabel } =
   useUsageFormat()
 const state = useUsageState()
+
+// filterOptions 返回筛选候选，模型按模型目录顺序排列，目录外的取值排在最后
+function filterOptions(dimension: UsageDimension): string[] {
+  const options = report.value?.options[dimension] ?? []
+  if (dimension !== 'model') return options
+  const order = new Map(props.models.map((model, index) => [model.id, index]))
+  const rank = (value: string) => order.get(value) ?? order.size
+  return [...options].sort((left, right) => rank(left) - rank(right))
+}
 const report = shallowRef<UsageReport | null>(null)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const loading = ref(false)
@@ -212,30 +222,26 @@ const kpis = computed(() => {
   const value = report.value
   if (value === null) return []
   const { totals, previous, buckets, recent } = value
-  const minutes = Math.max(
-    1,
-    (Math.min(new Date(value.to).getTime(), new Date(value.generated_at).getTime()) -
-      new Date(value.from).getTime()) /
-      60_000,
-  )
   const rate = successRate(totals)
   const previousRate = successRate(previous)
   const series = (pick: (bucket: UsageStats) => number | null) =>
     buckets.map(pick).filter((item): item is number => item !== null)
+  const otherErrors = totals.failed - totals.rate_limited
+  const first = totals.first_event
   return [
     {
       label: t('usage.requests'),
       icon: 'requests' as const,
       value: integer(totals.requests),
+      raw: totals.requests,
       help: t('usage.requestsHelp'),
       details: [
-        { label: t('usage.succeeded'), value: compact(totals.succeeded) },
         {
           label: t('usage.failed'),
-          value: compact(totals.failed),
+          value: integer(totals.failed),
           tone: totals.failed > 0 ? 'text-red-400' : undefined,
         },
-        { label: t('usage.canceled'), value: compact(totals.canceled) },
+        { label: t('usage.canceled'), value: integer(totals.canceled) },
       ],
       delta: delta(relative(totals.requests, previous.requests), (item) => percent(item), 'none'),
       spark: buckets.map((bucket) => bucket.requests),
@@ -245,17 +251,18 @@ const kpis = computed(() => {
       label: t('usage.successRate'),
       icon: 'success' as const,
       value: percent(rate),
+      raw: rate,
       help: t('usage.successRateHelp'),
       details: [
         {
-          label: t('usage.rateLimited'),
-          value: compact(totals.rate_limited),
+          label: t('usage.rateLimitedShort'),
+          value: integer(totals.rate_limited),
           tone: totals.rate_limited > 0 ? 'text-yellow-400' : undefined,
         },
         {
           label: t('usage.otherErrors'),
-          value: compact(totals.failed - totals.rate_limited),
-          tone: totals.failed - totals.rate_limited > 0 ? 'text-red-400' : undefined,
+          value: integer(otherErrors),
+          tone: otherErrors > 0 ? 'text-red-400' : undefined,
         },
       ],
       delta: delta(
@@ -274,11 +281,12 @@ const kpis = computed(() => {
       label: t('usage.tokens'),
       icon: 'tokens' as const,
       value: compact(totals.total_tokens),
-      help: `${t('usage.input')} + ${t('usage.reasoning')} + ${t('usage.reply')}`,
+      raw: totals.total_tokens,
+      help: `${t('usage.input')} + ${t('usage.output')}`,
       details: [
         { label: t('usage.input'), value: compact(totals.input_tokens) },
-        { label: t('usage.reasoning'), value: compact(totals.reasoning_tokens) },
-        { label: t('usage.reply'), value: compact(totals.reply_tokens) },
+        { label: t('usage.cached'), value: compact(totals.cached_tokens) },
+        { label: t('usage.output'), value: compact(totals.reasoning_tokens + totals.reply_tokens) },
       ],
       delta: delta(
         relative(totals.total_tokens, previous.total_tokens),
@@ -291,54 +299,48 @@ const kpis = computed(() => {
     {
       label: t('usage.throughput'),
       icon: 'throughput' as const,
-      value: `${compact(totals.requests / minutes)} RPM`,
+      value: `${compact(recent.requests / recent.minutes)} RPM`,
+      raw: recent.requests / recent.minutes,
       help: t('usage.throughputHelp').replace('{minutes}', String(recent.minutes)),
       details: [
-        { label: 'TPM', value: compact(totals.total_tokens / minutes) },
-        {
-          label: `${t('usage.current')} RPM`,
-          value: compact(recent.requests / recent.minutes),
-        },
-        { label: `${t('usage.current')} TPM`, value: compact(recent.tokens / recent.minutes) },
+        { label: t('usage.recentMinutes').replace('{minutes}', String(recent.minutes)), value: '' },
+        { label: 'TPM', value: compact(recent.tokens / recent.minutes) },
       ],
       spark: buckets.map((bucket) => bucket.requests),
       color: '#f59e0b',
     },
     {
-      label: `${t('usage.duration')} P95`,
-      icon: 'latency' as const,
-      value: duration(totals.duration.p95_ms),
-      help: t('usage.durationHelp'),
+      label: t('usage.cost'),
+      icon: 'cost' as const,
+      value: usd(value.cost),
+      raw: value.cost,
+      help: t('usage.costHelp'),
       details: [
-        { label: 'P50', value: duration(totals.duration.p50_ms) },
-        { label: 'P99', value: duration(totals.duration.p99_ms) },
-        { label: t('usage.average'), value: duration(totals.duration.avg_ms) },
+        { label: t('usage.input'), value: compact(totals.input_tokens) },
+        { label: t('usage.cached'), value: compact(totals.cached_tokens) },
+        {
+          label: t('usage.output'),
+          value: compact(totals.reasoning_tokens + totals.reply_tokens),
+        },
       ],
-      delta: delta(
-        relative(totals.duration.p95_ms, previous.duration.p95_ms),
-        (item) => percent(item),
-        'down',
-      ),
-      spark: series((bucket) => (bucket.duration.p95_ms > 0 ? bucket.duration.p95_ms : null)),
-      color: '#a78bfa',
+      delta: delta(relative(value.cost, value.previous_cost), (item) => percent(item), 'none'),
+      spark: buckets.map((bucket) => bucket.cost),
+      color: '#34d399',
     },
     {
-      label: `${t('usage.firstEvent')} P95`,
+      label: `${t('usage.firstEvent')} P50`,
       icon: 'firstEvent' as const,
-      value: duration(totals.first_event.p95_ms),
+      value: duration(first.p50_ms),
+      raw: first.p50_ms > 0 ? first.p50_ms : null,
       help: t('usage.firstEventHelp'),
-      details: [
-        { label: 'P50', value: duration(totals.first_event.p50_ms) },
-        { label: t('usage.average'), value: duration(totals.first_event.avg_ms) },
-        { label: t('usage.queue'), value: duration(totals.queue_avg_ms) },
-      ],
+      details: [{ label: 'P95', value: duration(first.p95_ms) }],
       delta: delta(
-        relative(totals.first_event.p95_ms, previous.first_event.p95_ms),
+        relative(first.p50_ms, previous.first_event.p50_ms),
         (item) => percent(item),
         'down',
       ),
-      spark: series((bucket) => (bucket.first_event.p95_ms > 0 ? bucket.first_event.p95_ms : null)),
-      color: '#34d399',
+      spark: series((bucket) => (bucket.first_event.p50_ms > 0 ? bucket.first_event.p50_ms : null)),
+      color: '#a78bfa',
     },
   ]
 })
@@ -398,7 +400,7 @@ const statusOptions = computed(() =>
         v-for="dimension in dimensions"
         :key="dimension"
         :label="t(`usage.dimension.${dimension}`)"
-        :options="report?.options[dimension] ?? []"
+        :options="filterOptions(dimension)"
         :selected="state.filters[dimension] ?? []"
         :format="(value: string) => dimensionLabel(dimension, value)"
         @change="setFilter(dimension, $event)"
@@ -416,13 +418,17 @@ const statusOptions = computed(() =>
       <span
         v-for="chip in activeChips"
         :key="`${chip.dimension}:${chip.value}`"
-        class="flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-600/10 py-0.5 pr-1 pl-2.5 text-xs text-blue-200"
+        class="flex max-w-full items-center gap-1 rounded-md border border-blue-500/40 bg-blue-600/10 py-0.5 pr-1 pl-2.5 text-xs text-blue-200"
       >
-        <span class="text-blue-300/70">{{ t(`usage.dimension.${chip.dimension}`) }}:</span>
-        {{ dimensionLabel(chip.dimension, chip.value) }}
+        <span class="shrink-0 text-blue-300/70">{{ t(`usage.dimension.${chip.dimension}`) }}:</span>
+        <span
+          v-tooltip.overflow="dimensionLabel(chip.dimension, chip.value)"
+          class="min-w-0 truncate"
+          >{{ dimensionLabel(chip.dimension, chip.value) }}</span
+        >
         <button
           type="button"
-          class="rounded-sm p-0.5 hover:bg-blue-500/20"
+          class="shrink-0 rounded-sm p-0.5 hover:bg-blue-500/20"
           :aria-label="`${t('common.close')} ${dimensionLabel(chip.dimension, chip.value)}`"
           @click="
             setFilter(
@@ -436,7 +442,7 @@ const statusOptions = computed(() =>
       </span>
     </div>
 
-    <div class="mx-auto w-full max-w-[96rem] space-y-4 p-4 md:p-8">
+    <div class="w-full space-y-4 p-4 md:p-8">
       <div
         v-if="error && status !== 'error'"
         class="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
@@ -510,6 +516,7 @@ const statusOptions = computed(() =>
                 :label="kpi.label"
                 :icon="kpi.icon"
                 :value="kpi.value"
+                :raw="kpi.raw"
                 :help="kpi.help"
                 :details="kpi.details"
                 :delta="kpi.delta"

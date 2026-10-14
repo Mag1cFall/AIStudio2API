@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, useTemplateRef, watch } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, LineChart } from 'echarts/charts'
@@ -10,10 +10,11 @@ import {
   MarkLineComponent,
   TooltipComponent,
 } from 'echarts/components'
-import VChart from 'vue-echarts'
+import VChart, { type Exposed } from 'vue-echarts'
 import { useI18n } from '@/i18n'
 import type { UsageDimension, UsageReport } from '@/types'
 import UiSelect from '../UiSelect.vue'
+import ChartLegend from './ChartLegend.vue'
 import { useUsageFormat } from './format'
 import {
   assignColors,
@@ -46,6 +47,54 @@ const metric = ref<'requests' | 'tokens'>(
   ),
 )
 watch(metric, (value) => writePreference('usage.trafficMetric', value))
+
+type ChartKey = 'traffic' | 'outcomes' | 'latency' | 'tokens'
+// hidden 是各图在图例中关闭的序列名
+const hidden = reactive<Record<ChartKey, string[]>>({
+  traffic: [],
+  outcomes: [],
+  latency: [],
+  tokens: [],
+})
+const charts: Record<ChartKey, Readonly<{ value: Exposed | null }>> = {
+  traffic: useTemplateRef<Exposed>('traffic'),
+  outcomes: useTemplateRef<Exposed>('outcomes'),
+  latency: useTemplateRef<Exposed>('latency'),
+  tokens: useTemplateRef<Exposed>('tokens'),
+}
+
+// Series 是图例需要的序列名与颜色
+interface Series {
+  name: string
+  color?: string | undefined
+}
+
+// withLegend 用页面图例的开关状态生成 ECharts 图例选择，图表内不绘制图例
+function withLegend<T extends { series: Series[] }>(key: ChartKey, option: T) {
+  const selected = Object.fromEntries(
+    option.series.map((item) => [item.name, !hidden[key].includes(item.name)]),
+  )
+  return { ...option, legend: { show: false, selected } }
+}
+
+// legendItems 返回页面图例的条目
+function legendItems(option: { series: Series[] }): { name: string; color: string }[] {
+  return option.series.map((item) => ({ name: item.name, color: item.color ?? otherColor }))
+}
+
+// toggle 切换一个序列的显示
+function toggle(key: ChartKey, name: string): void {
+  hidden[key] = hidden[key].includes(name)
+    ? hidden[key].filter((item) => item !== name)
+    : [...hidden[key], name]
+}
+
+// focus 在悬停图例时突出对应序列，离开时恢复
+function focus(key: ChartKey, name: string | null): void {
+  charts[key].value?.dispatchAction(
+    name === null ? { type: 'downplay' } : { type: 'highlight', seriesName: name },
+  )
+}
 
 const theme = {
   axis: '#6b7280',
@@ -102,16 +151,7 @@ function base(format: (value: number) => string, rightAxis?: (value: number) => 
   return {
     animationDuration: 250,
     aria: { enabled: true },
-    grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
-    legend: {
-      type: 'scroll',
-      top: 0,
-      left: 0,
-      textStyle: { color: theme.axis },
-      pageTextStyle: { color: theme.axis },
-      itemWidth: 10,
-      itemHeight: 10,
-    },
+    grid: { left: 8, right: 8, top: 12, bottom: 4, containLabel: true },
     tooltip: {
       trigger: 'axis',
       confine: true,
@@ -133,7 +173,7 @@ function base(format: (value: number) => string, rightAxis?: (value: number) => 
 const trafficOption = computed(() => {
   const { series, stack_by: stackBy } = props.report
   const colors = assignColors(series.filter((item) => !item.other).map((item) => item.key))
-  return {
+  return withLegend('traffic', {
     ...base(compact),
     tooltip: {
       ...base(compact).tooltip,
@@ -149,7 +189,7 @@ const trafficOption = computed(() => {
       color: item.other ? otherColor : colors.get(item.key),
       data: metric.value === 'tokens' ? item.tokens : item.requests,
     })),
-  }
+  })
 })
 
 const outcomesOption = computed(() => {
@@ -164,7 +204,7 @@ const outcomesOption = computed(() => {
     color,
     data,
   })
-  return {
+  return withLegend('outcomes', {
     ...base(compact, rate),
     tooltip: {
       ...base(compact).tooltip,
@@ -220,12 +260,44 @@ const outcomesOption = computed(() => {
         }),
       },
     ],
-  }
+  })
 })
+
+// durationSteps 是耗时坐标轴可选的刻度间隔，单位毫秒
+const durationSteps = [
+  100, 200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000,
+  900_000, 1_800_000, 3_600_000,
+]
+
+// latencyRows 是耗时分位表的各行，排队只有平均值，分位列为 null
+const latencyRows = computed(() => {
+  const { duration: total, first_event: first, queue_avg_ms: queue } = props.report.totals
+  return [
+    {
+      label: t('usage.duration'),
+      help: t('usage.durationHelp'),
+      values: [total.p50_ms, total.p95_ms, total.p99_ms, total.avg_ms],
+    },
+    {
+      label: t('usage.firstEvent'),
+      help: t('usage.firstEventHelp'),
+      values: [first.p50_ms, first.p95_ms, first.p99_ms, first.avg_ms],
+    },
+    { label: t('usage.queue'), help: t('usage.queueHelp'), values: [null, null, null, queue] },
+  ]
+})
+
+// axisDuration 格式化耗时坐标轴刻度，零刻度显示 0
+const axisDuration = (value: number): string => (value === 0 ? '0' : duration(value))
 
 const latencyOption = computed(() => {
   const { buckets, totals } = props.report
   const zeroToNull = (value: number) => (value > 0 ? Math.round(value) : null)
+  const peak = Math.max(
+    totals.duration.p95_ms,
+    ...buckets.flatMap((item) => [item.duration.p95_ms, item.first_event.p95_ms]),
+  )
+  const step = durationSteps.find((item) => peak / item <= 5) ?? 3_600_000
   const line = (name: string, color: string, data: (number | null)[]) => ({
     name,
     type: 'line',
@@ -236,10 +308,18 @@ const latencyOption = computed(() => {
     color,
     data,
   })
-  return {
-    ...base(duration),
+  const options = base(axisDuration)
+  return withLegend('latency', {
+    ...options,
+    grid: totals.duration.p95_ms > 0 ? { ...options.grid, right: 72 } : options.grid,
+    yAxis: [
+      {
+        ...options.yAxis[0],
+        ...(peak > 0 ? { interval: step, max: Math.ceil(peak / step) * step } : {}),
+      },
+    ],
     tooltip: {
-      ...base(duration).tooltip,
+      ...options.tooltip,
       formatter: (items: TooltipItem[]) => tooltipRows(items, duration),
     },
     series: [
@@ -262,7 +342,8 @@ const latencyOption = computed(() => {
                 lineStyle: { type: 'dashed', color: '#a78bfa', opacity: 0.6 },
                 label: {
                   color: theme.axis,
-                  formatter: () => `P95 ${duration(totals.duration.p95_ms)}`,
+                  position: 'end',
+                  formatter: () => `P95\n${duration(totals.duration.p95_ms)}`,
                 },
                 data: [{ yAxis: Math.round(totals.duration.p95_ms) }],
               }
@@ -274,7 +355,7 @@ const latencyOption = computed(() => {
         buckets.map((item) => zeroToNull(item.first_event.p95_ms)),
       ),
     ],
-  }
+  })
 })
 
 const tokensOption = computed(() => {
@@ -289,7 +370,7 @@ const tokensOption = computed(() => {
     areaStyle: { opacity: 0.35 },
     data,
   })
-  return {
+  return withLegend('tokens', {
     ...base(compact),
     tooltip: {
       ...base(compact).tooltip,
@@ -312,7 +393,7 @@ const tokensOption = computed(() => {
         buckets.map((item) => item.reply_tokens),
       ),
     ],
-  }
+  })
 })
 </script>
 
@@ -353,25 +434,88 @@ const tokensOption = computed(() => {
           </button>
         </div>
       </div>
-      <div class="h-72"><VChart :option="trafficOption" autoresize /></div>
+      <ChartLegend
+        :items="legendItems(trafficOption)"
+        :hidden="hidden.traffic"
+        @toggle="toggle('traffic', $event)"
+        @focus="focus('traffic', $event)"
+      />
+      <div class="h-72"><VChart ref="traffic" :option="trafficOption" autoresize /></div>
     </figure>
-    <figure class="min-w-0 rounded-lg border border-line bg-panel p-4">
+    <figure class="flex min-w-0 flex-col rounded-lg border border-line bg-panel p-4">
       <figcaption class="mb-2 text-sm font-medium text-gray-200">
         {{ t('usage.chartOutcomes') }}
       </figcaption>
-      <div class="h-60"><VChart :option="outcomesOption" autoresize /></div>
+      <ChartLegend
+        :items="legendItems(outcomesOption)"
+        :hidden="hidden.outcomes"
+        @toggle="toggle('outcomes', $event)"
+        @focus="focus('outcomes', $event)"
+      />
+      <div class="min-h-60 flex-1">
+        <VChart ref="outcomes" :option="outcomesOption" autoresize />
+      </div>
     </figure>
-    <figure class="min-w-0 rounded-lg border border-line bg-panel p-4">
+    <figure class="flex min-w-0 flex-col rounded-lg border border-line bg-panel p-4">
       <figcaption class="mb-2 text-sm font-medium text-gray-200">
         {{ t('usage.chartLatency') }}
       </figcaption>
-      <div class="h-60"><VChart :option="latencyOption" autoresize /></div>
+      <table class="mb-3 w-full text-xs tabular-nums">
+        <thead class="text-gray-500">
+          <tr>
+            <th scope="col" class="py-1 pr-2 text-left font-normal">
+              <span class="sr-only">{{ t('usage.metric') }}</span>
+            </th>
+            <th
+              v-for="column in ['P50', 'P95', 'P99', t('usage.average')]"
+              :key="column"
+              scope="col"
+              class="py-1 pl-2 text-right font-normal"
+            >
+              {{ column }}
+            </th>
+          </tr>
+        </thead>
+        <tbody class="text-gray-300">
+          <tr v-for="row in latencyRows" :key="row.label" class="border-t border-line/60">
+            <th scope="row" class="py-1 pr-2 text-left font-normal text-gray-400">
+              <span
+                v-tooltip="row.help"
+                class="cursor-help underline decoration-gray-700 decoration-dotted underline-offset-4"
+                >{{ row.label }}</span
+              >
+            </th>
+            <td
+              v-for="(value, index) in row.values"
+              :key="index"
+              class="py-1 pl-2 text-right whitespace-nowrap"
+            >
+              {{ value === null ? '' : duration(value) }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <ChartLegend
+        :items="legendItems(latencyOption)"
+        :hidden="hidden.latency"
+        @toggle="toggle('latency', $event)"
+        @focus="focus('latency', $event)"
+      />
+      <div class="min-h-60 flex-1">
+        <VChart ref="latency" :option="latencyOption" autoresize />
+      </div>
     </figure>
     <figure class="min-w-0 rounded-lg border border-line bg-panel p-4 xl:col-span-2">
       <figcaption class="mb-2 text-sm font-medium text-gray-200">
         {{ t('usage.chartTokens') }}
       </figcaption>
-      <div class="h-56"><VChart :option="tokensOption" autoresize /></div>
+      <ChartLegend
+        :items="legendItems(tokensOption)"
+        :hidden="hidden.tokens"
+        @toggle="toggle('tokens', $event)"
+        @focus="focus('tokens', $event)"
+      />
+      <div class="h-56"><VChart ref="tokens" :option="tokensOption" autoresize /></div>
     </figure>
   </div>
 </template>

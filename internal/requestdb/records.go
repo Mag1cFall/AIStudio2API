@@ -16,7 +16,7 @@ import (
 
 // recordColumns 是请求记录查询读取的列，最后一列表示是否保存了正文
 const recordColumns = `r.id, r.time, r.protocol, r.path, r.model, r.account, r.channel, r.status, r.state,
- r.duration_ms, r.first_event_ms, r.queue_ms, r.input_tokens, r.reasoning_tokens, r.reply_tokens, r.total_tokens,
+ r.duration_ms, r.first_event_ms, r.queue_ms, r.input_tokens, r.cached_tokens, r.reasoning_tokens, r.reply_tokens, r.total_tokens,
  r.tool_calls, r.error, r.attempts, EXISTS(SELECT 1 FROM bodies b WHERE b.id = r.id)`
 
 // recordFilter 返回请求记录的范围、维度筛选、状态码与关键字条件
@@ -42,7 +42,7 @@ func scanRecord(rows *sql.Rows) (api.UsageRecord, error) {
 	var at int64
 	var attempts string
 	err := rows.Scan(&record.ID, &at, &record.Protocol, &record.Path, &record.Model, &record.Account, &record.Channel,
-		&record.Status, &record.State, &record.DurationMS, &record.FirstEventMS, &record.QueueMS, &record.InputTokens,
+		&record.Status, &record.State, &record.DurationMS, &record.FirstEventMS, &record.QueueMS, &record.InputTokens, &record.CachedTokens,
 		&record.ReasoningTokens, &record.ReplyTokens, &record.TotalTokens, &record.ToolCalls, &record.Error, &attempts, &record.HasBody)
 	if err != nil {
 		return record, err
@@ -88,7 +88,7 @@ func (store *Store) Records(ctx context.Context, query api.UsageRecordQuery) (ap
 // csvHeader 是导出文件的列名
 var csvHeader = []string{
 	"time", "id", "protocol", "path", "model", "account", "channel", "status", "state", "duration_ms", "first_event_ms",
-	"queue_ms", "input_tokens", "reasoning_tokens", "reply_tokens", "total_tokens", "tool_calls", "error", "attempts",
+	"queue_ms", "input_tokens", "cached_tokens", "reasoning_tokens", "reply_tokens", "total_tokens", "tool_calls", "error", "attempts",
 }
 
 // csvText 为可能被电子表格当作公式的文本加单引号前缀
@@ -126,7 +126,7 @@ func (store *Store) ExportRecords(ctx context.Context, query api.UsageRecordQuer
 		if err := writer.Write([]string{
 			record.Time.Format(time.RFC3339Nano), record.ID, record.Protocol, csvText(record.Path), csvText(record.Model),
 			csvText(record.Account), record.Channel, strconv.Itoa(record.Status), record.State, integer(record.DurationMS),
-			integer(record.FirstEventMS), integer(record.QueueMS), integer(record.InputTokens), integer(record.ReasoningTokens),
+			integer(record.FirstEventMS), integer(record.QueueMS), integer(record.InputTokens), integer(record.CachedTokens), integer(record.ReasoningTokens),
 			integer(record.ReplyTokens), integer(record.TotalTokens), strconv.Itoa(record.ToolCalls), csvText(record.Error), string(attempts),
 		}); err != nil {
 			return errors.Join(err, rows.Close())

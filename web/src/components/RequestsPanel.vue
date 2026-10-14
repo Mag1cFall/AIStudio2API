@@ -116,9 +116,11 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
               class="flex items-center justify-between gap-3 border-b border-line bg-raised px-4 py-2"
             >
               <div class="min-w-0">
-                <strong class="block truncate text-sm text-gray-200">{{
-                  cooldown.model_id
-                }}</strong>
+                <strong
+                  v-tooltip.overflow="cooldown.model_id"
+                  class="block truncate text-sm text-gray-200"
+                  >{{ cooldown.model_id }}</strong
+                >
                 <span class="text-xs text-gray-500"
                   >{{ accountLabel(cooldown.account_id, cooldown.account_label) }} ·
                   {{ t(channelLabelKey(cooldown.channel)) }}</span
@@ -161,7 +163,9 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
           >
             <div class="min-w-0 flex-1">
               <div class="flex min-w-0 items-center gap-2">
-                <strong class="truncate text-sm text-gray-300">{{ request.model }}</strong>
+                <strong v-tooltip.overflow="request.model" class="truncate text-sm text-gray-300">{{
+                  request.model
+                }}</strong>
                 <span class="text-xs text-gray-500">{{ t(requestStateKeys[request.state]) }}</span>
               </div>
             </div>

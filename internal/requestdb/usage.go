@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/pricing"
 )
 
 // stackLimit 是堆叠趋势单独显示的维度取值数，其余合并为其他
@@ -32,6 +33,7 @@ type entry struct {
 	status          int
 	requests        int64
 	inputTokens     int64
+	cachedTokens    int64
 	reasoningTokens int64
 	replyTokens     int64
 	totalTokens     int64
@@ -48,7 +50,7 @@ type entry struct {
 func rowEntry(row *Row) *entry {
 	value := &entry{
 		time: row.Time.UnixMilli(), model: row.Model, account: row.Account, channel: row.Channel, protocol: row.Protocol,
-		state: row.State, status: row.Status, requests: 1, inputTokens: row.InputTokens, reasoningTokens: row.ReasoningTokens,
+		state: row.State, status: row.Status, requests: 1, inputTokens: row.InputTokens, cachedTokens: row.CachedTokens, reasoningTokens: row.ReasoningTokens,
 		replyTokens: row.ReplyTokens, totalTokens: row.TotalTokens, durationMS: row.Duration.Milliseconds(),
 		queueMS: row.Queue.Milliseconds(), duration: single(row.Duration.Milliseconds()), lastTime: row.Time.UnixMilli(),
 	}
@@ -69,6 +71,7 @@ func (value *entry) clone() *entry {
 func (value *entry) combine(other *entry) {
 	value.requests += other.requests
 	value.inputTokens += other.inputTokens
+	value.cachedTokens += other.cachedTokens
 	value.reasoningTokens += other.reasoningTokens
 	value.replyTokens += other.replyTokens
 	value.totalTokens += other.totalTokens
@@ -108,6 +111,7 @@ type aggregate struct {
 	canceled        int64
 	rateLimited     int64
 	inputTokens     int64
+	cachedTokens    int64
 	reasoningTokens int64
 	replyTokens     int64
 	totalTokens     int64
@@ -140,6 +144,7 @@ func (total *aggregate) add(value *entry) {
 		total.rateLimited += value.requests
 	}
 	total.inputTokens += value.inputTokens
+	total.cachedTokens += value.cachedTokens
 	total.reasoningTokens += value.reasoningTokens
 	total.replyTokens += value.replyTokens
 	total.totalTokens += value.totalTokens
@@ -151,7 +156,7 @@ func (total *aggregate) add(value *entry) {
 func (total *aggregate) stats() api.UsageStats {
 	stats := api.UsageStats{
 		Requests: total.requests, Succeeded: total.succeeded, Failed: total.failed, Canceled: total.canceled,
-		RateLimited: total.rateLimited, InputTokens: total.inputTokens, ReasoningTokens: total.reasoningTokens,
+		RateLimited: total.rateLimited, InputTokens: total.inputTokens, CachedTokens: total.cachedTokens, ReasoningTokens: total.reasoningTokens,
 		ReplyTokens: total.replyTokens, TotalTokens: total.totalTokens,
 	}
 	if total.succeeded > 0 {
@@ -307,7 +312,7 @@ func (store *Store) scan(ctx context.Context, part segment, filters api.UsageFil
 	if part.source != fromRequests {
 		rows, err := store.db.QueryContext(ctx, `SELECT start, model, account, channel, protocol, state, status, requests,
  input_tokens, reasoning_tokens, reply_tokens, total_tokens, duration_ms, first_event_ms, first_events, queue_ms,
- duration_hist, first_event_hist, last_time FROM `+table+` WHERE `+column+` >= ? AND `+column+` < ?`+clause, args...)
+ duration_hist, first_event_hist, last_time, cached_tokens FROM `+table+` WHERE `+column+` >= ? AND `+column+` < ?`+clause, args...)
 		if err != nil {
 			return err
 		}
@@ -315,7 +320,8 @@ func (store *Store) scan(ctx context.Context, part segment, filters api.UsageFil
 		for rows.Next() {
 			if err := rows.Scan(&value.time, &value.model, &value.account, &value.channel, &value.protocol, &value.state,
 				&value.status, &value.requests, &value.inputTokens, &value.reasoningTokens, &value.replyTokens, &value.totalTokens,
-				&value.durationMS, &value.firstEventMS, &value.firstEvents, &value.queueMS, &durations, &firstEvents, &value.lastTime); err != nil {
+				&value.durationMS, &value.firstEventMS, &value.firstEvents, &value.queueMS, &durations, &firstEvents, &value.lastTime,
+				&value.cachedTokens); err != nil {
 				return errors.Join(err, rows.Close())
 			}
 			if value.duration, err = decodeCounts(durations); err != nil {
@@ -329,7 +335,7 @@ func (store *Store) scan(ctx context.Context, part segment, filters api.UsageFil
 		return errors.Join(rows.Err(), rows.Close())
 	}
 	rows, err := store.db.QueryContext(ctx, `SELECT time, model, account, channel, protocol, state, status,
- duration_ms, first_event_ms, queue_ms, input_tokens, reasoning_tokens, reply_tokens, total_tokens
+ duration_ms, first_event_ms, queue_ms, input_tokens, reasoning_tokens, reply_tokens, total_tokens, cached_tokens
  FROM requests WHERE time >= ? AND time < ?`+clause, args...)
 	if err != nil {
 		return err
@@ -339,7 +345,7 @@ func (store *Store) scan(ctx context.Context, part segment, filters api.UsageFil
 	for rows.Next() {
 		if err := rows.Scan(&value.time, &value.model, &value.account, &value.channel, &value.protocol, &value.state, &value.status,
 			&value.durationMS, &value.firstEventMS, &value.queueMS, &value.inputTokens, &value.reasoningTokens, &value.replyTokens,
-			&value.totalTokens); err != nil {
+			&value.totalTokens, &value.cachedTokens); err != nil {
 			return errors.Join(err, rows.Close())
 		}
 		value.lastTime = value.time
@@ -356,10 +362,40 @@ func (store *Store) scan(ctx context.Context, part segment, filters api.UsageFil
 	return errors.Join(rows.Err(), rows.Close())
 }
 
+// cost 是一段时间内按 API 单价估算的美元费用与各分桶费用
+type cost struct {
+	total   float64
+	buckets []float64
+}
+
+// scanCost 从原始记录逐条按模型单价累加 [from, to) 内符合筛选的费用，starts 非空时同时累加到各分桶
+func (store *Store) scanCost(ctx context.Context, from, to int64, starts []int64, filters api.UsageFilters) (cost, error) {
+	clause, filterArgs := filterSQL(filters)
+	rows, err := store.db.QueryContext(ctx, `SELECT time, model, input_tokens, cached_tokens, reasoning_tokens + reply_tokens
+ FROM requests WHERE time >= ? AND time < ?`+clause, append([]any{from, to}, filterArgs...)...)
+	if err != nil {
+		return cost{}, err
+	}
+	result := cost{buckets: make([]float64, len(starts))}
+	var at, input, cached, output int64
+	var model string
+	for rows.Next() {
+		if err := rows.Scan(&at, &model, &input, &cached, &output); err != nil {
+			return cost{}, errors.Join(err, rows.Close())
+		}
+		value := pricing.Cost(model, input, cached, output)
+		result.total += value
+		if starts != nil {
+			result.buckets[bucketIndex(starts, at)] += value
+		}
+	}
+	return result, errors.Join(rows.Err(), rows.Close())
+}
+
 // usageDimensions 是报告分项包含的维度，比筛选维度多出 HTTP 状态码
 var usageDimensions = append(slices.Clone(api.UsageDimensions), "status")
 
-// Usage 返回时间范围内的汇总、上一周期、逐桶趋势、堆叠序列、分项与筛选候选
+// Usage 返回时间范围内的汇总、上一周期、估算费用、逐桶趋势、堆叠序列、分项与筛选候选
 func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageReport, error) {
 	location := query.Location
 	if location == nil {
@@ -420,14 +456,22 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 	if err := store.scan(ctx, segment{from: now.Add(-recentWindow).UnixMilli(), to: now.UnixMilli() + 1}, query.Filters, recent.add); err != nil {
 		return api.UsageReport{}, err
 	}
+	current, err := store.scanCost(ctx, from, to, starts, query.Filters)
+	if err != nil {
+		return api.UsageReport{}, err
+	}
+	before, err := store.scanCost(ctx, from-(to-from), from, nil, query.Filters)
+	if err != nil {
+		return api.UsageReport{}, err
+	}
 	report := api.UsageReport{
 		From: query.From.UTC(), To: query.To.UTC(), BucketSeconds: int64(query.Bucket / time.Second), GeneratedAt: now.UTC(),
-		Totals: totals.stats(), Previous: previous.stats(), StackBy: query.Stack,
+		Totals: totals.stats(), Previous: previous.stats(), Cost: current.total, PreviousCost: before.total, StackBy: query.Stack,
 		Recent:  api.UsageRecent{Minutes: int(recentWindow / time.Minute), Requests: recent.requests, Tokens: recent.totalTokens},
 		Buckets: make([]api.UsageBucket, len(starts)), Groups: map[string][]api.UsageGroup{}, Pairs: []api.UsagePair{},
 	}
 	for index, start := range starts {
-		report.Buckets[index] = api.UsageBucket{At: time.UnixMilli(start).UTC(), UsageStats: buckets[index].stats()}
+		report.Buckets[index] = api.UsageBucket{At: time.UnixMilli(start).UTC(), Cost: current.buckets[index], UsageStats: buckets[index].stats()}
 	}
 	for _, dimension := range usageDimensions {
 		report.Groups[dimension] = rankGroups(groups[dimension])

@@ -68,6 +68,7 @@ type UsageStats struct {
 	Canceled        int64        `json:"canceled"`
 	RateLimited     int64        `json:"rate_limited"`
 	InputTokens     int64        `json:"input_tokens"`
+	CachedTokens    int64        `json:"cached_tokens"`
 	ReasoningTokens int64        `json:"reasoning_tokens"`
 	ReplyTokens     int64        `json:"reply_tokens"`
 	TotalTokens     int64        `json:"total_tokens"`
@@ -77,9 +78,10 @@ type UsageStats struct {
 	LastAt          *time.Time   `json:"last_at,omitempty"`
 }
 
-// UsageBucket 保存一个时间分桶的汇总
+// UsageBucket 保存一个时间分桶的汇总与按 API 单价估算的美元费用
 type UsageBucket struct {
-	At time.Time `json:"at"`
+	At   time.Time `json:"at"`
+	Cost float64   `json:"cost"`
 	UsageStats
 }
 
@@ -111,7 +113,7 @@ type UsageRecent struct {
 	Tokens   int64 `json:"tokens"`
 }
 
-// UsageReport 返回用量看板的汇总、上一周期、逐桶趋势、堆叠序列、分项与筛选候选
+// UsageReport 返回用量看板的汇总、上一周期、当前吞吐、估算费用、逐桶趋势、堆叠序列、分项与筛选候选
 type UsageReport struct {
 	From          time.Time               `json:"from"`
 	To            time.Time               `json:"to"`
@@ -120,6 +122,8 @@ type UsageReport struct {
 	LatestAt      *time.Time              `json:"latest_at,omitempty"`
 	Totals        UsageStats              `json:"totals"`
 	Previous      UsageStats              `json:"previous"`
+	Cost          float64                 `json:"cost"`
+	PreviousCost  float64                 `json:"previous_cost"`
 	Recent        UsageRecent             `json:"recent"`
 	Buckets       []UsageBucket           `json:"buckets"`
 	StackBy       string                  `json:"stack_by"`
@@ -188,6 +192,7 @@ type UsageRecord struct {
 	FirstEventMS    int64            `json:"first_event_ms"`
 	QueueMS         int64            `json:"queue_ms"`
 	InputTokens     int64            `json:"input_tokens"`
+	CachedTokens    int64            `json:"cached_tokens"`
 	ReasoningTokens int64            `json:"reasoning_tokens"`
 	ReplyTokens     int64            `json:"reply_tokens"`
 	TotalTokens     int64            `json:"total_tokens"`

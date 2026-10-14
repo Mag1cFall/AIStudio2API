@@ -17,6 +17,8 @@ function tooltipElement(): HTMLDivElement {
 function show(target: HTMLElement): void {
   const text = target.dataset.tooltip
   if (!text) return
+  if (target.dataset.tooltipOverflow !== undefined && target.scrollWidth <= target.clientWidth)
+    return
   window.clearTimeout(timer)
   timer = window.setTimeout(() => {
     const element = tooltipElement()
@@ -39,10 +41,11 @@ function hide(): void {
   tip?.classList.remove('visible')
 }
 
-// vTooltip 以站内样式显示悬停与键盘聚焦提示，值为空时不显示
-export const vTooltip: Directive<HTMLElement, string | undefined> = {
+// vTooltip 以站内样式显示悬停与键盘聚焦提示，值为空时不显示；overflow 修饰符只在文字被截断时显示
+export const vTooltip: Directive<HTMLElement, string | undefined, 'overflow'> = {
   mounted(element, binding) {
     element.dataset.tooltip = binding.value ?? ''
+    if (binding.modifiers.overflow) element.dataset.tooltipOverflow = ''
     element.addEventListener('pointerenter', () => show(element))
     element.addEventListener('pointerleave', hide)
     element.addEventListener('focus', () => show(element))

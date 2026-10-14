@@ -257,6 +257,10 @@ type GenerateRequest struct {
 	Unary bool `json:"-"`
 	// Truncate 在生成前按模型上下文窗口移除最早的完整轮次
 	Truncate bool `json:"-"`
+	// continuationRound 为自动续写的轮次，首轮为 0
+	continuationRound int
+	// continuationToken 为上一轮响应给出的续写 token
+	continuationToken string
 }
 
 // TokenCountRequest 表示计数请求
@@ -287,9 +291,10 @@ type Model struct {
 	Channels          []string            `json:"channels,omitempty"`
 }
 
-// Usage 表示一次生成的 token 用量
+// Usage 表示一次生成的 token 用量，CachedTokens 是 InputTokens 中命中上游缓存的部分
 type Usage struct {
 	InputTokens         int64 `json:"input_tokens"`
+	CachedTokens        int64 `json:"cached_tokens,omitempty"`
 	OutputTokens        int64 `json:"output_tokens"`
 	ReasoningTokens     int64 `json:"reasoning_tokens,omitempty"`
 	ToolTokens          int64 `json:"tool_tokens,omitempty"`

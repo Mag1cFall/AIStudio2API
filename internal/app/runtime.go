@@ -1856,6 +1856,7 @@ type trackedService struct {
 
 type modelCatalogService interface {
 	RefreshAccountModels(context.Context, string) ([]aistudio.Model, error)
+	RefreshAccountTier(context.Context, string) (aistudio.BenefitTier, aistudio.BenefitTier, error)
 	CachedModels() []aistudio.Model
 }
 
@@ -1884,6 +1885,7 @@ const (
 	serviceLaunching
 	serviceRunning
 	modelCatalogRetryInterval        = 30 * time.Second
+	benefitTierRefreshInterval       = 10 * time.Minute
 	modelCatalogShutdownTimeout      = 2 * time.Second
 	serviceTransitionShutdownTimeout = 12 * time.Second
 )
@@ -2216,9 +2218,9 @@ func (service *trackedService) finishStop(transitionDone chan struct{}, modelRef
 	service.lifecycleMu.Unlock()
 }
 
-// Models 返回启用账户具有模型资格的公开目录
+// Models 返回已启用通道可以提供的公开目录
 func (service *trackedService) Models(context.Context) ([]aistudio.Model, error) {
-	return service.pool.EligibleModels(service.modelSnapshot()), nil
+	return service.pool.PublicModels(service.modelSnapshot()), nil
 }
 
 // catalogModels 返回管理页使用的完整目录与各模型可用通道
@@ -2398,19 +2400,42 @@ func (service *trackedService) syncAccountModels(ctx context.Context, accountID 
 	return models, err
 }
 
+// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益
 func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 	ticker := time.NewTicker(modelCatalogRetryInterval)
 	defer ticker.Stop()
+	tierTicker := time.NewTicker(benefitTierRefreshInterval)
+	defer tierTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-tierTicker.C:
+			service.refreshAccountTiers(ctx)
 		case <-ticker.C:
-		}
-		if !service.retryAccountModelCatalogs(ctx) {
-			return
+			if !service.retryAccountModelCatalogs(ctx) {
+				return
+			}
 		}
 	}
+}
+
+// refreshAccountTiers 并发读取启用账户的权益，权益变化时发布账户与模型事件并记录日志
+func (service *trackedService) refreshAccountTiers(ctx context.Context) {
+	var refreshes sync.WaitGroup
+	for _, accountID := range service.modelCatalogAccountIDs() {
+		refreshes.Go(func() {
+			requestCtx, cancel := service.lifecycleRequestContext(ctx)
+			defer cancel()
+			previous, tier, err := service.catalog.RefreshAccountTier(requestCtx, accountID)
+			if err != nil || previous == tier || ctx.Err() != nil {
+				return
+			}
+			service.publishModelAccess()
+			service.requests.log(accountID, "INFO", fmt.Sprintf("账户权益已更新 | 权益=%s→%s", previous, tier))
+		})
+	}
+	refreshes.Wait()
 }
 
 func (service *trackedService) retryAccountModelCatalogs(ctx context.Context) bool {
@@ -2593,7 +2618,11 @@ func (service *trackedService) observedDataRequestContext(
 
 // CountTokens 返回上游权威输入 token 数
 func (service *trackedService) CountTokens(ctx context.Context, request aistudio.TokenCountRequest) (aistudio.TokenCount, error) {
-	request.Model = service.pool.CanonicalModelID(request.Model)
+	model, _, err := aistudio.ApplyModelSuffix(request.Model, aistudio.GenerationConfig{})
+	if err != nil {
+		return aistudio.TokenCount{}, err
+	}
+	request.Model = service.pool.CanonicalModelID(model)
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
 	if err != nil {
 		return aistudio.TokenCount{}, err
@@ -3069,12 +3098,18 @@ func inlineMediaInput(contents []aistudio.Content) (int, int64) {
 // Generate 获取唯一账户并转发规范事件流
 func (service *trackedService) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
 	generationStartedAt := time.Now()
+	model, config, suffixErr := aistudio.ApplyModelSuffix(request.Model, request.Config)
+	request.Model, request.Config = model, config
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.SetAccessLogGenerationInput(ctx, request)
 	api.StartAccessLog(ctx)
 	request.Model = service.pool.CanonicalModelID(request.Model)
-	requestCtx, cancel, err := service.dataRequestContext(ctx)
+	requestCtx, cancel, err := service.dataRequestContextFor(ctx, service.generateTimeout(request))
+	if err == nil && suffixErr != nil {
+		err = suffixErr
+		cancel()
+	}
 	if validator, ok := service.service.(interface {
 		ValidateGenerateRequest(aistudio.GenerateRequest) error
 	}); ok && err == nil {
@@ -3101,6 +3136,11 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	return events, nil
 }
 
+// generateTimeout 返回生成请求的期限，自动续写请求按续写轮数倍增
+func (service *trackedService) generateTimeout(request aistudio.GenerateRequest) time.Duration {
+	return service.timeout * time.Duration(service.pool.OutputContinuationRounds(request.Model, request.Config.MaxOutputTokens))
+}
+
 func (service *trackedService) generateWithRetry(
 	clientCtx context.Context,
 	requestCtx context.Context,
@@ -3113,6 +3153,7 @@ func (service *trackedService) generateWithRetry(
 	maxAttempts := 1
 	requestedAccountID := strings.TrimSpace(request.AccountID)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
+	continuationRounds := service.pool.OutputContinuationRounds(modelID, request.Config.MaxOutputTokens)
 	unbound := requestedAccountID == "" && resourceID == ""
 	fileBound := requestedAccountID == "" && resourceID != ""
 	if unbound || fileBound {
@@ -3149,6 +3190,9 @@ func (service *trackedService) generateWithRetry(
 			AccountID: selectionAccountID, ResourceID: selectionResourceID,
 		}
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
+			selection.PlaygroundOnly = true
+		}
+		if continuationRounds > 1 {
 			selection.PlaygroundOnly = true
 		}
 		if !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuildSchema(request) {
@@ -3510,12 +3554,17 @@ func (service *trackedService) lifecycleRequestContext(ctx context.Context) (con
 }
 
 func (service *trackedService) dataRequestContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	return service.dataRequestContextFor(ctx, service.timeout)
+}
+
+// dataRequestContextFor 返回绑定数据面生命周期、期限为 timeout 的请求上下文
+func (service *trackedService) dataRequestContextFor(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc, error) {
 	service.lifecycleMu.Lock()
 	if service.state.Load() != serviceRunning || service.dataContext == nil {
 		service.lifecycleMu.Unlock()
 		return nil, nil, &serviceStoppedError{}
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, service.timeout)
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	stopData := context.AfterFunc(service.dataContext, cancel)
 	service.lifecycleMu.Unlock()
 	return requestCtx, func() {

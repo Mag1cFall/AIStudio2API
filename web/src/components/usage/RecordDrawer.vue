@@ -64,6 +64,7 @@ const summary = computed(() => {
     { label: t('usage.queue'), value: duration(record.queue_ms) },
     { label: t('usage.toolCalls'), value: integer(record.tool_calls) },
     { label: t('usage.input'), value: integer(record.input_tokens) },
+    { label: t('usage.cached'), value: integer(record.cached_tokens) },
     { label: t('usage.reasoning'), value: integer(record.reasoning_tokens) },
     { label: t('usage.reply'), value: integer(record.reply_tokens) },
     { label: t('usage.tokens'), value: integer(record.total_tokens) },

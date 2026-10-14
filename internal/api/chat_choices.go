@@ -159,6 +159,7 @@ func sumUsage(results []generationResult) *aistudio.Usage {
 			total = &aistudio.Usage{}
 		}
 		total.InputTokens += usage.InputTokens
+		total.CachedTokens += usage.CachedTokens
 		total.OutputTokens += usage.OutputTokens
 		total.ReasoningTokens += usage.ReasoningTokens
 		total.ToolTokens += usage.ToolTokens

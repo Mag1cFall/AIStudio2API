@@ -19,12 +19,20 @@ export function useUsageFormat() {
     () => new Intl.NumberFormat(locale.value, { notation: 'compact', maximumFractionDigits: 1 }),
   )
   const integerFormat = computed(() => new Intl.NumberFormat(locale.value))
+  const usdFormat = computed(
+    () =>
+      new Intl.NumberFormat(locale.value, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  )
 
   // compact 以紧凑格式显示数量
   const compact = (value: number): string => compactFormat.value.format(value)
 
   // integer 以千分位显示整数
   const integer = (value: number): string => integerFormat.value.format(value)
+
+  // usd 以千分位与两位小数显示美元金额，不足 1 美分的正数显示为 < $0.01
+  const usd = (value: number): string =>
+    value > 0 && value < 0.01 ? '< $0.01' : `$${usdFormat.value.format(value)}`
 
   // percent 显示比例，空值显示破折号
   const percent = (value: number | null, digits = 1): string =>
@@ -38,9 +46,10 @@ export function useUsageFormat() {
     if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`
     if (milliseconds < 60_000)
       return `${(milliseconds / 1000).toLocaleString(locale.value, { maximumFractionDigits: 1 })} s`
-    const minutes = Math.floor(milliseconds / 60_000)
-    const seconds = Math.round((milliseconds % 60_000) / 1000)
-    return `${minutes} min ${seconds} s`
+    const total = Math.round(milliseconds / 1000)
+    const minutes = Math.floor(total / 60)
+    const seconds = total % 60
+    return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`
   }
 
   // dateTime 显示带月日的本地时间，seconds 为真时显示秒
@@ -96,6 +105,7 @@ export function useUsageFormat() {
   return {
     compact,
     integer,
+    usd,
     percent,
     duration,
     dateTime,

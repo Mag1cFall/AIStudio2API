@@ -132,6 +132,39 @@ func (c *Client) applyBenefitTier(method string, accountID string, header http.H
 	}
 }
 
+// ModelAccessError 表示模型只对启用账户都不具备的权益开放
+type ModelAccessError struct {
+	Model       string
+	AccessModes []int64
+}
+
+func (e *ModelAccessError) Error() string {
+	names := make([]string, 0, len(e.AccessModes))
+	for _, mode := range e.AccessModes {
+		switch mode {
+		case 1:
+			names = append(names, "付费 API key")
+		case 3:
+			names = append(names, "Google AI Pro 或 Ultra 订阅")
+		case 4:
+			names = append(names, "Google AI Ultra 订阅")
+		default:
+			names = append(names, fmt.Sprintf("访问方式 %d", mode))
+		}
+	}
+	return fmt.Sprintf("模型 %s 需要 %s，启用的账户都不具备", e.Model, strings.Join(names, " 或 "))
+}
+
+// HTTPStatus 返回权益不足对应的状态码
+func (e *ModelAccessError) HTTPStatus() int {
+	return http.StatusForbidden
+}
+
+// ErrorCode 返回 OpenAI 兼容的错误代码
+func (e *ModelAccessError) ErrorCode() string {
+	return "account_required"
+}
+
 func modelAllowedByTier(model Model, tier BenefitTier) bool {
 	if len(model.AccessModes) == 0 {
 		return true

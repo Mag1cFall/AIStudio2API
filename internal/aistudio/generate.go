@@ -8,10 +8,14 @@ import (
 	"io"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 var errStopSequenceMatched = errors.New("stop sequence matched")
+
+// continuationRoundTokens 为官网自动续写每轮增加的输出上限
+const continuationRoundTokens = 32768
 
 // tokenCountResult 保存并发输入计数结果
 type tokenCountResult struct {
@@ -39,10 +43,16 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if len(config) > 8 && config[8] != nil {
 		config[8] = projectPlaygroundResponseSchema(config[8].([]any), request.Config.ResponseSchema)
 	}
+	if defaults.ContinuedOutputTokens > 0 {
+		config = continueGenerationConfig(config, request.continuationRound)
+	}
 	serverSideTools := explicitTools && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil)
 	length := 11
 	if runtime.Timezone != "" || serverSideTools {
 		length = 14
+	}
+	if request.continuationToken != "" {
+		length = 17
 	}
 	wire := make([]any, length)
 	wire[0] = wireModelName(request.Model)
@@ -65,7 +75,9 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		// 可设置分辨率模型的默认扩展工具字段
 		wire[6] = []any{[]any{nil, nil, nil, []any{nil, []any{}}}}
 	}
-	wire[10] = int64(1)
+	if defaults.ContinuedOutputTokens == 0 {
+		wire[10] = int64(1)
+	}
 	if runtime.Timezone != "" || serverSideTools {
 		toolConfig := []any{nil}
 		if runtime.Timezone != "" {
@@ -77,7 +89,22 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		}
 		wire[13] = toolConfig
 	}
+	if request.continuationToken != "" {
+		wire[16] = request.continuationToken
+	}
 	return json.Marshal(wire)
+}
+
+// continueGenerationConfig 为自动续写模型开启续写，并把输出总上限换算为第 round 轮的累计上限
+func continueGenerationConfig(config []any, round int) []any {
+	for len(config) < 46 {
+		config = append(config, nil)
+	}
+	config[45] = int64(1)
+	if total, ok := config[3].(int64); ok {
+		config[3] = min(total, int64(round+1)*continuationRoundTokens)
+	}
+	return config
 }
 
 func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults) ([]any, error) {
@@ -129,8 +156,8 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if config.MaxOutputTokens != nil {
 		maxOutput = *config.MaxOutputTokens
 	}
-	if includeMaxOutput && maxOutput > defaults.MaxOutputTokens {
-		maxOutput = defaults.MaxOutputTokens
+	if includeMaxOutput && maxOutput > max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens) {
+		maxOutput = max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens)
 	}
 	if includeMaxOutput && maxOutput <= 0 {
 		return nil, fmt.Errorf("模型目录缺少有效 output token limit")
@@ -273,6 +300,29 @@ func normalizedReasoningEffort(value string) string {
 		return "high"
 	}
 	return effort
+}
+
+// ApplyModelSuffix 把模型名末尾的 (思考设置) 写入生成参数并返回去掉后缀的模型 ID，后缀优先于请求体中的思考参数
+func ApplyModelSuffix(model string, config GenerationConfig) (string, GenerationConfig, error) {
+	open := strings.LastIndex(model, "(")
+	if open < 0 || !strings.HasSuffix(model, ")") {
+		return model, config, nil
+	}
+	value := strings.ToLower(strings.TrimSpace(model[open+1 : len(model)-1]))
+	model = strings.TrimSpace(model[:open])
+	switch value {
+	case "auto", "-1":
+		config.ReasoningEffort, config.ThinkingBudget = "", nil
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		config.ReasoningEffort, config.ThinkingBudget = value, nil
+	default:
+		budget, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || budget < 0 {
+			return model, config, fmt.Errorf("%w: 模型名后缀 (%s) 必须是 none、auto、minimal、low、medium、high、xhigh、max 或非负整数思考预算", ErrInvalidArgument, value)
+		}
+		config.ReasoningEffort, config.ThinkingBudget = "", &budget
+	}
+	return model, config, nil
 }
 
 // thinkingLevelForBudget 按 Gemini OpenAI 兼容层的 1024、8192、24576 档位把思考预算换算为 thinking level
@@ -907,13 +957,88 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 	if err != nil {
 		return nil, nil, err
 	}
-	decoder := NewFrameDecoder()
 	return response, func(source io.Reader, emit func(Event) error) error {
-		if err := DecodeGenerateStream(source, decoder, emit); err != nil {
+		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, emit)
+	}, nil
+}
+
+// decodePlaygroundRounds 解码 GenerateContent 流，上游要求续写时携带续写 token 发送下一轮，各轮输出依次转发，用量按官网规则合并
+func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateRequest, defaults GenerationDefaults, runtime RequestContext, source io.Reader, emit func(Event) error) error {
+	total := int64(0)
+	if defaults.ContinuedOutputTokens > 0 {
+		config, err := encodeGenerationConfig(request.Config, defaults)
+		if err != nil {
 			return err
 		}
-		return decoder.End()
-	}, nil
+		total, _ = config[3].(int64)
+	}
+	var previous *Usage
+	for {
+		decoder := NewFrameDecoder()
+		decoder.continuable = defaults.ContinuedOutputTokens > 0
+		decoder.continueAtMaxTokens = int64(request.continuationRound+1)*continuationRoundTokens < total
+		forward := emit
+		if previous != nil {
+			forward = func(event Event) error {
+				if event.Kind == EventUsage && event.Usage != nil {
+					merged := mergeContinuedUsage(*previous, *event.Usage)
+					event.Usage = &merged
+				}
+				return emit(event)
+			}
+		}
+		if err := DecodeGenerateStream(source, decoder, forward); err != nil {
+			return err
+		}
+		if err := decoder.End(); err != nil {
+			return err
+		}
+		if decoder.continuation == "" {
+			return nil
+		}
+		if decoder.usage != nil {
+			merged := *decoder.usage
+			if previous != nil {
+				merged = mergeContinuedUsage(*previous, merged)
+			}
+			previous = &merged
+		}
+		request.continuationRound++
+		request.continuationToken = decoder.continuation
+		reportUpstreamMode(ctx, "GenerateContent", fmt.Sprintf("stream | 续写=%d", request.continuationRound), "")
+		body, err := EncodeGenerateContentRequest(request, defaults, runtime)
+		if err != nil {
+			return err
+		}
+		response, err := c.doProtected(ctx, request, body)
+		if err != nil {
+			return err
+		}
+		stopClose := context.AfterFunc(ctx, func() {
+			_ = response.Body.Close()
+		})
+		defer stopClose()
+		defer response.Body.Close()
+		source = observeStreamActivity(ctx, response.Body)
+	}
+}
+
+// mergeContinuedUsage 合并续写前后两轮用量，以新一轮为基础累加输出、思考与工具用量，总量为新一轮总量加上之前各轮的这三项
+func mergeContinuedUsage(previous Usage, next Usage) Usage {
+	if next.OutputTokensMissing {
+		next.OutputTokens = max(0, next.TotalTokens-next.InputTokens-next.ToolTokens-next.ReasoningTokens)
+	}
+	if previous.OutputTokensMissing {
+		previous.OutputTokens = max(0, previous.TotalTokens-previous.InputTokens-previous.ToolTokens-previous.ReasoningTokens)
+	}
+	return Usage{
+		InputTokens:     next.InputTokens,
+		CachedTokens:    next.CachedTokens,
+		OutputTokens:    previous.OutputTokens + next.OutputTokens,
+		ReasoningTokens: previous.ReasoningTokens + next.ReasoningTokens,
+		ToolTokens:      previous.ToolTokens + next.ToolTokens,
+		TotalTokens:     next.TotalTokens + previous.OutputTokens + previous.ReasoningTokens + previous.ToolTokens,
+	}
 }
 
 // DecodeGenerateStream 按网络到达顺序解码 GenerateContent repeated 帧

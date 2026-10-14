@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -218,6 +219,7 @@ type AccountSelection struct {
 	PlaygroundOnly    bool
 	Channel           Channel
 	PreferredChannel  Channel
+	anyTier           bool
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
@@ -636,7 +638,7 @@ func accountSupportsSelection(account *Account, selection AccountSelection) bool
 		if !modelMatchesID(model, modelID) {
 			continue
 		}
-		if !modelAllowedByTier(model, account.BenefitTier) {
+		if !selection.anyTier && !modelAllowedByTier(model, account.BenefitTier) {
 			return false
 		}
 		if strings.TrimSpace(selection.Method) != "" && !hasMethod(model, selection.Method) {
@@ -647,30 +649,48 @@ func accountSupportsSelection(account *Account, selection AccountSelection) bool
 	return false
 }
 
-// CatalogModels 返回完整目录，每项带有启用账户可以调用的通道
+// CatalogModels 返回完整目录，每项带有启用账户可以调用的通道，按 callableFirst 排列
 func (p *AccountPool) CatalogModels(models []Model) []Model {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	catalog := make([]Model, len(models))
 	for index, model := range models {
-		model.Channels = p.modelChannelsLocked(model)
+		model.Channels = p.modelChannelsLocked(model, false)
 		catalog[index] = model
 	}
-	return catalog
+	return callableFirst(catalog)
 }
 
-// EligibleModels 返回至少一个启用账户具有模型资格的目录项
-func (p *AccountPool) EligibleModels(models []Model) []Model {
+// PublicModels 返回已启用通道可以提供的目录项，只因账户权益不足而无法调用的模型同样列出且通道为空，按 callableFirst 排列
+func (p *AccountPool) PublicModels(models []Model) []Model {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	eligible := make([]Model, 0, len(models))
+	public := make([]Model, 0, len(models))
 	for _, model := range models {
-		if channels := p.modelChannelsLocked(model); len(channels) > 0 {
-			model.Channels = channels
-			eligible = append(eligible, model)
+		model.Channels = p.modelChannelsLocked(model, false)
+		if len(model.Channels) == 0 && len(p.modelChannelsLocked(model, true)) == 0 {
+			continue
+		}
+		public = append(public, model)
+	}
+	return callableFirst(public)
+}
+
+// callableFirst 保持原顺序依次排列有通道的普通模型、有通道的 Interactions 代理模型与没有通道的模型
+func callableFirst(models []Model) []Model {
+	ordered := make([]Model, 0, len(models))
+	var agents, restricted []Model
+	for _, model := range models {
+		switch {
+		case len(model.Channels) == 0:
+			restricted = append(restricted, model)
+		case model.Capabilities["interaction_route"]:
+			agents = append(agents, model)
+		default:
+			ordered = append(ordered, model)
 		}
 	}
-	return eligible
+	return slices.Concat(ordered, agents, restricted)
 }
 
 // CanonicalModelID 把实时目录中的模型别名换成上游接受的正式模型 ID
@@ -1252,7 +1272,41 @@ func (p *AccountPool) validateSelectionLocked(selection AccountSelection) error 
 	if selection.Capability != "" && !p.hasModelCapabilityLocked(modelID, selection.Capability) {
 		return fmt.Errorf("%w: 模型 %s 不支持 %s", ErrModelNotFound, modelID, selection.Capability)
 	}
-	return nil
+	return p.modelAccessErrorLocked(selection)
+}
+
+// modelAccessErrorLocked 返回只因启用账户权益不足而无法调用模型时的错误
+func (p *AccountPool) modelAccessErrorLocked(selection AccountSelection) error {
+	if p.enabledAccountSupportsLocked(selection) {
+		return nil
+	}
+	selection.anyTier = true
+	if !p.enabledAccountSupportsLocked(selection) {
+		return nil
+	}
+	modelID := strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
+	var modes []int64
+	for _, account := range p.accounts {
+		if account == nil {
+			continue
+		}
+		for _, model := range account.Models {
+			if modelMatchesID(model, modelID) {
+				modes = unionInt64(modes, model.AccessModes)
+			}
+		}
+	}
+	return &ModelAccessError{Model: modelID, AccessModes: modes}
+}
+
+// enabledAccountSupportsLocked 判断是否有启用账户的某个通道支持选择
+func (p *AccountPool) enabledAccountSupportsLocked(selection AccountSelection) bool {
+	for _, account := range p.accounts {
+		if account != nil && account.Config.Enabled && p.accountSupportsAnyChannelLocked(account, selection) {
+			return true
+		}
+	}
+	return false
 }
 
 // AcquireResource 获取创建资源的固定账户
@@ -2305,6 +2359,9 @@ func (p *AccountPool) classifyCandidatesLocked(
 		}
 		if selection.Method != "" && !p.hasModelMethodLocked(modelID, selection.Method) {
 			return AccountCandidateGroups{}, fmt.Errorf("%w: 模型 %s 不支持 %s", ErrModelNotFound, modelID, selection.Method)
+		}
+		if err := p.modelAccessErrorLocked(selection); err != nil {
+			return AccountCandidateGroups{}, err
 		}
 	}
 	indices, err := p.selectionIndicesLocked(selection)

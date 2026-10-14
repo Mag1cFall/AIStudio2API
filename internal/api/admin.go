@@ -12,7 +12,7 @@ import (
 // AdminService 定义管理端需要的权威状态能力
 type AdminService interface {
 	Status(context.Context) (AdminStatus, error)
-	Models(context.Context) ([]aistudio.Model, error)
+	CatalogModels(context.Context) ([]aistudio.Model, error)
 	Accounts(context.Context) ([]AdminAccount, error)
 	CreateAccount(context.Context, AccountCreateInput) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
@@ -81,9 +81,10 @@ type RequestLog struct {
 	Channel         string            `json:"channel,omitempty"`
 }
 
-// RequestLogUsage 区分输入、思考、回复与端到端输出速率
+// RequestLogUsage 区分输入、缓存命中、思考、回复与端到端输出速率
 type RequestLogUsage struct {
 	InputTokens            int64   `json:"input_tokens"`
+	CachedTokens           int64   `json:"cached_tokens"`
 	ReasoningTokens        int64   `json:"reasoning_tokens"`
 	ReplyTokens            int64   `json:"reply_tokens"`
 	OutputTokens           int64   `json:"output_tokens"`
@@ -280,7 +281,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
-	models, err := s.config.Admin.Models(r.Context())
+	models, err := s.config.Admin.CatalogModels(r.Context())
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return

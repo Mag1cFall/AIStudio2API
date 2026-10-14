@@ -418,9 +418,10 @@ system instruction：
 | 4 | 5 | fresh WAA proof |
 | 5 | 6 | system instruction |
 | 6 | 7 | tools |
-| 10 | 11 | 固定值 `1` |
+| 10 | 11 | 固定值 `1`，自动续写模型省略 |
 | 13 | 14 | `[[null,null,<TIMEZONE>]]` |
 | 14 | 15 | 用户 Cloud API key，免费网页链保持 `null` |
+| 16 | 17 | 自动续写轮的续写 token |
 
 safety settings：
 
@@ -447,6 +448,7 @@ generation config 字段：
 | 7 | 8 | response MIME type |
 | 8 | 9 | response schema |
 | 13 | 14 | 固定值 `1` |
+| 45 | 46 | 自动续写模型为 `1` |
 | 14 | 15 | response modalities：TEXT=`1`、IMAGE=`2`、AUDIO=`3` |
 | 15 | 16 | speech config |
 | 16 | 17 | thinking config `[1, budget?, null, level]` |
@@ -459,7 +461,7 @@ generation config 字段：
 
 | 参数 | 默认来源 | 有效值 |
 | --- | --- | --- |
-| max output | ListModels field 7 | `1..model.outputTokenLimit` |
+| max output | ListModels field 7 | `1..model.outputTokenLimit`，自动续写模型为 `1..model.inputTokenLimit` |
 | temperature | ListModels field 9 | `0..2` |
 | topP | ListModels field 10 | `0..1` |
 | topK | ListModels field 11 | 非负整数 |
@@ -469,6 +471,8 @@ generation config 字段：
 - max output 大于模型上限时按上限发送
 
 `reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，`xhigh` 与 `max` 按 `high` 处理，`THINKING_LEVEL_UNSPECIFIED` 视为未设置。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level。模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high；没有 thinking level 能力的模型忽略其余 effort，两类能力都缺少时同时忽略 budget。
+
+生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
 
 response modalities：
 
@@ -656,16 +660,28 @@ Code Execution 的 language code 为 `0=LANGUAGE_UNSPECIFIED`、`1=PYTHON`。执
 | 0 | input tokens | `input_tokens` |
 | 1 | visible output tokens | `output_tokens` |
 | 2 | total tokens | `total_tokens` |
+| 3 | 输入中命中上游隐式缓存的 tokens | `cached_tokens` |
 | 7 | tool tokens | `tool_tokens` |
 | 9 | thought tokens | `reasoning_tokens` |
 
 完整 usage 直接按上游原值返回。完成帧省略 visible output tokens 时，服务按上游 total 与其余分类字段恢复该值。完整 usage 缺失时，内置 Gemini SentencePiece tokenizer 在本地统计可观测输入、工具声明、reasoning summary 和实际输出。
 
-OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible output + reasoning。Gemini 分别投影 `promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount` 与 `totalTokenCount`。隐藏思考用量来自上游 usage field 9；本地 fallback 统计服务端返回的 reasoning summary。
+OpenAI 与 Anthropic 的输入统计为 input + tool，输出统计为 visible output + reasoning。Gemini 分别投影 `promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount` 与 `totalTokenCount`。缓存命中数在 Chat 中为 `prompt_tokens_details.cached_tokens`，在 Responses 中为 `input_tokens_details.cached_tokens`，两者都包含在输入统计内；Anthropic 的 `cache_read_input_tokens` 为缓存命中数，`input_tokens` 为输入统计减去缓存命中数，`cache_creation_input_tokens` 为 0；Gemini 在命中时输出 `cachedContentTokenCount`。Build 通道的缓存命中数来自 `usageMetadata.cachedContentTokenCount`。隐藏思考用量来自上游 usage field 9；本地 fallback 统计服务端返回的 reasoning summary。
 
 Anthropic 流式 `message_start` 写入即时输入估算，最终 `message_delta` 使用完成 usage 覆盖为权威输入与输出统计。
 
 携带 stop sequence 的 GenerateContent 与 CreateInteractionStream 请求并行执行同账户 `CountTokens`。正文匹配实际序列时，协议核心关闭生成流，使用 `CountTokens` 的输入总数以及已输出的正文、reasoning 和工具统计构造最终 usage；计数失败时仍返回 `stop_sequence` 终态并省略 usage。
+
+### 自动续写
+
+ListModels 能力码 91（目录能力 `output_continuation`）的模型由官网分轮生成超过 32768 token 的输出，输出长度上限为该模型的 `inputTokenLimit`：
+
+1. 请求的 generation config field 46 为 `1`，根 field 11 省略；max output 大于 32768 时首轮发送 32768
+2. 候选 field 9（JSON 索引 8）给出续写 token。完成帧以 `max_tokens` 结束且同一帧带 token、本轮上限小于请求的输出总量，或以终止原因 22 结束时，本轮不形成终态
+3. 下一轮复制原请求，根消息 field 17 写入最近的 token，max output 为 `min(输出总量, (轮次 + 1) × 32768)`，轮次从 0 计
+4. 终止原因 22 而响应没有 token 时请求失败
+
+各轮正文、思考与工具事件按顺序输出为一个响应，终态取最后一轮。usage 以最后一轮为基础，visible output、thought 与 tool tokens 逐轮累加，total 为最后一轮 total 加之前各轮的这三项。输出上限超过 32768 的自动续写请求只经 Playground 调度，请求期限为 `REQUEST_TIMEOUT` 乘以 `⌈输出总量 / 32768⌉`，未指定输出上限时输出总量取目录的 output token limit。每个续写轮在日志中记一条“上游调用”，模式后附 `续写=<轮次>`。
 
 ### Finish 与错误
 
@@ -691,7 +707,7 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 
 | 上游终态 | OpenAI Chat | OpenAI Responses | Anthropic Messages | Gemini GenerateContent |
 | --- | --- | --- | --- | --- |
-| `stop` 且包含函数调用 | `tool_calls` | `completed`，保留 function call item | `tool_use` | `STOP`，保留 functionCall Part |
+| `stop` 且包含函数调用 | `tool_calls`，旧式 `functions` 请求为 `function_call` | `completed`，保留 function call item | `tool_use` | `STOP`，保留 functionCall Part |
 | `stop_sequence` | `stop` | `completed` | `stop_sequence` 与实际序列 | `STOP` |
 | `max_tokens` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `MAX_TOKENS` |
 | safety、recitation、blocklist、prohibited_content、spii、图片对应原因与 `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
@@ -1047,7 +1063,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | 协议 | 端点 |
 | --- | --- |
 | OpenAI Chat | `GET /v1/models`、`GET /v1/models/{id}`、`POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`GET /v1/responses/{id}`、`DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
+| OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`POST /v1/responses/compact`、`GET /v1/responses/{id}`、`DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
 | OpenAI Embeddings | `POST /v1/embeddings` |
 | OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/audio/speech`、`POST /v1/videos`、`GET /v1/videos`、`GET /v1/videos/{id}`、`DELETE /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
@@ -1132,9 +1148,9 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AdminLog` | `time`、`level`、`source`、`message`、`event`；请求事件携带 `request`，包含 `id`、`state`、HTTP `status`、`model`、`duration_ms`、`tool_calls`、`usage` 与诊断字段，字段口径见 [logging.md](logging.md) |
 | `AdminEvent` | `type`、`data` |
 | `UsageLatency` | `avg_ms`、`p50_ms`、`p95_ms`、`p99_ms` |
-| `UsageStats` | `requests`、`succeeded`、`failed`、`canceled`、`rate_limited`、`input_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`duration`、`first_event`、`queue_avg_ms`、可选 `last_at` |
-| `UsageReport` | `from`、`to`、`bucket_seconds`、`generated_at`、可选 `latest_at`、`totals`、`previous`、`recent`、`buckets`、`stack_by`、`series`、`groups`、`pairs`、`options` |
-| `UsageRecord` | `id`、`time`、`protocol`、`path`、`model`、`account`、`channel`、`status`、`state`、`duration_ms`、`first_event_ms`、`queue_ms`、`input_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`tool_calls`、`error`、`attempts`、`has_body` |
+| `UsageStats` | `requests`、`succeeded`、`failed`、`canceled`、`rate_limited`、`input_tokens`、`cached_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`duration`、`first_event`、`queue_avg_ms`、可选 `last_at` |
+| `UsageReport` | `from`、`to`、`bucket_seconds`、`generated_at`、可选 `latest_at`、`totals`、`previous`、`recent`、`cost`、`previous_cost`、`buckets`、`stack_by`、`series`、`groups`、`pairs`、`options` |
+| `UsageRecord` | `id`、`time`、`protocol`、`path`、`model`、`account`、`channel`、`status`、`state`、`duration_ms`、`first_event_ms`、`queue_ms`、`input_tokens`、`cached_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`tool_calls`、`error`、`attempts`、`has_body` |
 | `UsageRecordPage` | `items`、可选 `next_cursor` |
 | `RequestBody` | `id`、`time`、`request`、`request_size`、`response`、`response_size` |
 
@@ -1155,7 +1171,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 - 同一维度的多个取值为或，不同维度之间为且
 - `stack` 取上述五个筛选维度之一
 
-`auto` 按范围长度选择粒度：2 小时以内 1 分钟，12 小时以内 5 分钟，8 天以内 1 小时，更长按天。`buckets` 从包含 `from` 的对齐分桶开始，空分桶补零；`previous` 是紧邻 `from` 之前的等长周期；`recent` 统计最近 5 分钟。`succeeded` 包含 `completed`、`tool_calls`、`limited` 与 `blocked`，`rate_limited` 是 HTTP 429 的失败数；`duration` 与 `first_event` 只统计成功请求，分位数相对误差约 0.5%。`groups` 按 `model`、`account`、`channel`、`protocol`、`state` 与 HTTP 状态码 `status` 列出全部取值，`pairs` 是账户与模型的组合，`series` 取请求数前 8 的取值，其余合并为 `other: true` 的一组。`options` 列出范围内出现过的维度取值，不受筛选影响。`latest_at` 是账本中最新一条记录的完成时间。
+`auto` 按范围长度选择粒度：2 小时以内 1 分钟，12 小时以内 5 分钟，8 天以内 1 小时，更长按天。`buckets` 从包含 `from` 的对齐分桶开始，空分桶补零；`previous` 是紧邻 `from` 之前的等长周期；`recent` 统计最近 5 分钟。`cost`、`previous_cost` 与每个分桶的 `cost` 是按 Gemini API 与 Vertex AI 公布的当前文本单价估算的美元费用：未命中缓存的输入 token × 输入单价 + 缓存命中 token × 缓存单价 +（推理 + 回复）token × 输出单价，按提示长度分档的模型按每个请求的输入 token 选档，单价表只含文本生成模型，图片、音频、视频、语音与嵌入模型计为 0。`succeeded` 包含 `completed`、`tool_calls`、`limited` 与 `blocked`，`rate_limited` 是 HTTP 429 的失败数；`duration` 与 `first_event` 只统计成功请求，分位数相对误差约 0.5%。`groups` 按 `model`、`account`、`channel`、`protocol`、`state` 与 HTTP 状态码 `status` 列出全部取值，`pairs` 是账户与模型的组合，`series` 取请求数前 8 的取值，其余合并为 `other: true` 的一组。`options` 列出范围内出现过的维度取值，不受筛选影响。`latest_at` 是账本中最新一条记录的完成时间。
 
 `GET /api/usage/records` 与 `records.csv` 接受同样的 `from`、`to` 与维度筛选，另有 `status`（HTTP 状态码）与 `q`（匹配请求 ID 或错误文本的子串）。记录按完成时间与 ID 倒序；`limit` 为 1 到 200，默认 50；`next_cursor` 原样传回 `cursor` 读取更早的一页。`attempts` 列出本次请求在最终结果之前未成功的上游尝试（`account`、`channel`、`error`、`duration_ms`）。CSV 导出范围内全部符合条件的记录，以 `=`、`+`、`-`、`@`、制表符或回车开头的文本加单引号前缀。
 
@@ -1294,7 +1310,9 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 Worker 进程故障、Worker 被替换与协议 Code 5 会重建当前账户 Worker 并在原账户重放一次。
 
-模型目录重试的 pending 集合保存等待再次同步的账户 ID。启动期全账户 fan-out、以及新增、登录或验证后的单账户同步，遇到任意错误或成功返回空目录时加入；返回非空目录时移除；删除账户同时移除。全账户后台同步结束后启动单个 30 秒 ticker（Go 定时器），每次对排序后的待重试账户列表再次并发 fan-out，并在任务开始时复核该 ID 仍在 pending 集合中。错误或空目录继续保留；每个非空成功立即更新账户缓存与公共目录快照、发布 `accounts` 和 `models`，并在 `RUNNING` 状态触发 Worker 预热。批次结束时，`auth_required` 集合发生变化会补发当前账户与模型快照；即时单账户同步无论成功或失败都立即发布当前快照。
+模型目录重试的 pending 集合保存等待再次同步的账户 ID。启动期全账户 fan-out、以及新增、登录、验证或在管理端启用后的单账户同步，遇到任意错误或成功返回空目录时加入；返回非空目录时移除；删除账户同时移除。全账户后台同步结束后启动单个 30 秒 ticker（Go 定时器），每次对排序后的待重试账户列表再次并发 fan-out，并在任务开始时复核该 ID 仍在 pending 集合中。错误或空目录继续保留；每个非空成功立即更新账户缓存与公共目录快照、发布 `accounts` 和 `models`，并在 `RUNNING` 状态触发 Worker 预热。批次结束时，`auth_required` 集合发生变化会补发当前账户与模型快照；即时单账户同步无论成功或失败都立即发布当前快照。
+
+同一循环另有 10 分钟 ticker，对全部 enabled 且处于 `ready` 或 `busy` 的账户并发调用 `GetAiStudioBenefitTier`。每个账户占用一个普通并发槽位，与生成请求共用 `PER_ACCOUNT_CONCURRENCY`，槽位已满的账户跳过本轮。权益变化时沿用该账户当前目录写回 `benefit_tier`，清除该账户的模型资格记录，发布 `accounts` 和 `models`。
 
 模型目录投影：
 
@@ -1373,7 +1391,7 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 
 管理模型中的 `description`、token limits、capabilities、capability options、access modes 与 false `paid` 使用 `omitempty`；OpenAI 和 Gemini 响应始终包含身份、methods 与 token limits，并在 map/slice 非空或 `paid=true` 时增加对应扩展字段。
 
-管理目录合并全部账户的上游实时模型集合，并按 ID 排序。公开目录保留至少一个启用账户具有访问资格、且当前公开协议承载其调用方法的模型；启用 Build 通道时同时包含 Build 独有的可生成模型，`channels` 列出可调用该模型的通道，见 [Build 通道](build.md)。短期冷却和忙碌状态由请求调度处理。
+管理目录合并全部账户的上游实时模型集合，顺序沿用各账户 `ListModels` 的上游顺序：只出现在后一个账户目录中的模型排在它在该目录中的前一个模型之后，没有前一个已知模型时排在该目录首个已知模型之前，该目录没有已知模型时排在末尾；在此顺序上依次排列有可用通道的普通模型、有可用通道的 Interactions 代理模型（`interaction_route`，如 Deep Research）与没有可用通道的模型。公开目录保留当前公开协议承载其调用方法、且已启用通道可以提供的模型；启用 Build 通道时同时包含 Build 独有的可生成模型，`channels` 列出可调用该模型的通道，见 [Build 通道](build.md)。启用账户的权益都不满足 AccessModes 的模型同样列出，不含 `channels`。短期冷却和忙碌状态由请求调度处理。
 
 主要请求格式：
 
@@ -1401,10 +1419,10 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 | image/document | Base64 data URL、`file_id` | `input_image`、`input_file` | base64、URL 或 file source | `inlineData`、`fileData` |
 | audio input | `input_audio` Base64 | message content 中的 `input_audio` | base64 document source | `inlineData` |
 | YouTube | `video_url` / `input_video` | `input_video` | URL source | `fileData.fileUri` |
-| function call | assistant `tool_calls` | `function_call` item | `tool_use` block | `functionCall` Part |
+| function call | assistant `tool_calls` 或旧式 `function_call` | `function_call` item | `tool_use` block | `functionCall` Part |
 | function result | tool message | `function_call_output` item | `tool_result` block | `functionResponse` Part |
 | structured output | `response_format` | `text.format` | — | `responseMimeType` 与 response schema |
-| thinking | `reasoning_effort` 或 `reasoning.effort` | `reasoning.effort` | `thinking.budget_tokens`、`output_config.effort` | `thinkingConfig` |
+| thinking | `reasoning_effort` 或 `reasoning.effort` | `reasoning.effort`；`reasoning.summary` 决定是否输出思考摘要 | `thinking.budget_tokens`、`output_config.effort`；`thinking.type` 决定是否输出思考 | `thinkingConfig`；`includeThoughts` 决定是否输出思考 |
 
 Gemini 附件与 `predictLongRunning` 的图片输入接受 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。同一别名对同时出现时，外层优先选择驼峰对象，内层优先选择非空驼峰值。
 
@@ -1549,7 +1567,7 @@ Chat SSE 顺序：
 | `stream` | boolean |
 | `tools`、`tool_choice` | function、custom、namespace（可含 custom）、local_shell/shell/apply_patch 与 Google tools；choice 支持 auto/none/required、named function/custom、allowed_tools、apply_patch/shell 与托管工具类型 |
 | `temperature`、`top_p`、`max_output_tokens` | 生成参数 |
-| `reasoning` | `{"effort":"..."}` |
+| `reasoning` | `{"effort":"...","summary":"..."}`，`generate_summary` 与 `summary` 同义 |
 | `text` | `{"format":{"type":"text|json_object|json_schema","schema":...}}` |
 | `previous_response_id` | 当前进程内已保存的前一响应 ID |
 | `parallel_tool_calls` | 省略/`true`/`false` |
@@ -1589,7 +1607,8 @@ Responses 的图片、视频与文件 Part 复用上述 data URL、file ID 与 Y
 | `image_generation_call` | assistant 文本摘要与 `result` 图片 |
 | `computer_call_output`、`mcp_approval_response` | user 文本摘要，截图作为图片 |
 | `item_reference` | 当前进程保存的同 ID 输入项或输出项 |
-| `compaction`、`compaction_trigger` | 不发送 |
+| `compaction` | 摘要 user 轮与原样保留的条目，见下文上下文压缩 |
+| `compaction_trigger` | 压缩当前上下文，必须是最后一个输入项，其他位置返回 400 |
 
 文本摘要的 JSON 省略 `id`、`type` 与 `status`。函数结果项缺少 `call_id` 时使用 `id`；`apply_patch_call_output` 的结果为 `{"status","output"}`。没有 `type` 与 `role`、只带 `id` 的项按 `item_reference` 展开，找不到同 ID 的项时返回 400。system/developer message 的图片与文件在没有 user 轮时单独组成首个 user 轮。
 
@@ -1698,6 +1717,16 @@ Responses usage：
 | `response.completed`、`response.incomplete`、`response.failed` | 完整 `response` |
 
 `web_search_call` 由实际 grounding query 触发。搜索发生时，先输出 index 0 的 search call item，再输出 index 1 的 message；无 grounding query 时只输出 message，并按正文事件逐块发送。上游在正文后失败时，已产生的 delta 按原顺序位于 `response.failed` 之前。
+
+上下文压缩：
+
+- `POST /v1/responses/compact` 为无状态端点，接受 `model`（必需）、`input`、`instructions`、`tools` 与 `previous_response_id`；`input` 的转换、`item_reference`、媒体与续接链同 `POST /v1/responses`
+- 压缩先在续接链与输入的条目中确定原样保留部分：从最新条目向前，以完整的模型侧条目组（reasoning、assistant 消息与各类调用，连同其后的工具输出）或 user 消息为单位累计，约 20000 token 内的部分原样保留，最新一组总是保留，切点不落在工具输出上；token 按每 4 字节 1 个估算，消息只计文本、每张图片计 765，其他条目不计 `encrypted_content`
+- 原样保留部分之前的条目由请求的模型非流式生成摘要：系统指令与工具同请求，`tool_choice` 为 `none`，末尾追加一个 user 轮，为 OMP 的结构化交接摘要提示词（Goal、Constraints & Preferences、Progress、Key Decisions、Next Steps、Critical Context、Additional Notes）；输入已含 compaction 项时，只摘要其原样条目与之后的新条目，旧摘要以 `<previous-summary>` 包裹作为首个 user 轮，末尾改用增量摘要提示词；没有需要摘要的条目时不调用上游；摘要的结束原因不是 `stop` 时返回错误
+- compaction 项为 `{"id":"cmp_...","type":"compaction","encrypted_content":"<明文 JSON>"}`，`encrypted_content` 为 `{"v":1,"summary":"<摘要>","items":[<原样保留的条目>]}`，条目保持输入原文，含 reasoning 的 `encrypted_content` 思考签名与调用 ID
+- compact 响应为 `{"id":"resp_...","object":"response.compaction","created_at":0,"output":[...],"usage":{...}}`；`output` 先是原样保留部分之前的 user 消息：从最新向前累计到 64000 token，跨预算的一条只保留首尾文本并在中间写入 `…N tokens truncated…`，跳过以 `<environment_context>`、`<user_instructions>`、`<additional_context>`、`<skills`、`<token_budget>`、`<model_switch>` 开头的上下文消息；最后是 compaction 项；`usage` 为生成摘要的用量
+- 输入中的 compaction 项只展开最后一个：其前的条目保留，与原样条目中 user 消息文本相同的 user 消息各去掉一条，更早的 compaction 项丢弃；之后依次接摘要 user 轮（`Prior model work/tool state available.`、`MUST build on prior work; NEVER duplicate prior work.` 与 `<summary>` 包裹的摘要）、原样条目与 compaction 项之后的条目；`encrypted_content` 不是本服务生成的 JSON 时返回 400
+- `POST /v1/responses` 以 `compaction_trigger` 结尾时按 compact 的方式压缩，响应 `output` 只有一个 compaction 项，`output_text` 为空；流式事件依次为 `response.created`、`response.in_progress`、`response.output_item.added`（`encrypted_content:""`）、`response.output_item.done` 与 `response.completed`，调用上游生成摘要时带 usage；保存的响应不接续前序节点，续接上下文为 compact 输出的条目展开后的内容
 
 ### Anthropic Messages
 
@@ -2058,7 +2087,7 @@ File 为 `{name:"files/<id>",displayName,mimeType,sizeBytes,createTime,updateTim
 
 | 字段 | 取值与处理 |
 | --- | --- |
-| `model` | 省略时取实时目录按 ID 排序、支持 `generateContent` 的首个 `image_route` 模型 |
+| `model` | 省略时取公开目录顺序中支持 `generateContent` 的首个 `image_route` 模型 |
 | `prompt` | 必需 |
 | `n` | 默认 `1`，范围 1–10 |
 | `size` | `auto` 或 `WIDTHxHEIGHT` |
@@ -2098,7 +2127,7 @@ OpenAI `POST /v1/videos` 接受 JSON 或 multipart：
 
 | 字段 | 取值与处理 |
 | --- | --- |
-| `model` | 省略时取实时目录按 ID 排序的首个具有 `predictLongRunning` 方法的模型 |
+| `model` | 省略时取公开目录顺序中首个具有 `predictLongRunning` 方法的模型 |
 | `prompt` | 必需 |
 | `seconds` | 整数字符串；默认 4；按模型选项取最接近值 |
 | `size` | `1280x720`、`720x1280`、`1792x1024`、`1920x1080`、`1024x1792`、`1080x1920` |
@@ -2247,7 +2276,7 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 
 按 type 使用对应字段：`session_opened{model}`、`setup_complete`、`text{text}`、`media{mime_type,data}`、`input_transcription/output_transcription/interim_input_transcription{transcription}`、`tool_call{tool_call}`、`tool_call_cancellation{tool_call_ids}`、`interrupted`、`generation_complete`、`turn_complete`、`session_resumption{session_token,resumable}`、`usage{raw}`、`go_away{raw}`、`provider{raw}`、`closed`、`error{error,code,retryable,raw?}`。
 
-首帧或后续客户端字段无效时发送 `{type:"error",code:"invalid_request",error:"..."}`。上游错误保留原始 `error` 内容。客户端单帧上限 8 MiB，超限发送 WebSocket close code 1009。每次写操作上限 10 秒；会话结束等待读取和发送 goroutine（Go 协程）的上限各 5 秒。
+首帧或后续客户端字段无效时发送 `{type:"error",code:"invalid_request",error:"..."}`。权益不足、候选账户均在冷却与生成服务已停止时，`code` 与 HTTP 错误表的 OpenAI 列相同。上游错误保留原始 `error` 内容。客户端单帧上限 8 MiB，超限发送 WebSocket close code 1009。每次写操作上限 10 秒；会话结束等待读取和发送 goroutine（Go 协程）的上限各 5 秒。
 
 流式端点统一使用 `text/event-stream`，每个 SSE frame 以空行结束：
 
@@ -2265,8 +2294,8 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | 规范事件 | OpenAI Chat | Responses | Anthropic | Gemini |
 | --- | --- | --- | --- | --- |
 | text | message/content delta | output_text | text block | candidate text Part |
-| reasoning | `reasoning_content` | reasoning summary | thinking block | thought Part |
-| function | `tool_calls` | function_call item | tool_use block | functionCall Part |
+| reasoning | `reasoning_content` | reasoning summary，请求设置 `reasoning.summary` 时输出 | thinking block，请求启用 `thinking` 时输出 | thought Part，`includeThoughts` 为 true 时输出 |
+| function | `tool_calls`，旧式 `functions` 请求为 `function_call` | function_call item | tool_use block | functionCall Part |
 | function result | tool message | function_call_output | tool_result | functionResponse Part |
 | code execution | 可读 Markdown | code_interpreter item | text block | executableCode/result Part |
 | grounding/citation | annotations | output annotations | text sources | groundingMetadata |
@@ -2295,6 +2324,7 @@ OpenAI Responses 的 `previous_response_id` 与 Interactions 的 `previous_inter
 | --- | ---: | --- | --- | --- |
 | 参数、Schema、tool choice 无效 | 400 | `invalid_request` | `invalid_request_error` | `INVALID_ARGUMENT` |
 | 没有符合条件的账户 | 400 | `account_required` | `invalid_request_error` | `INVALID_ARGUMENT` |
+| 启用账户的权益都不满足模型 AccessModes | 403 | `account_required` | `permission_error` | `PERMISSION_DENIED` |
 | 支持请求的账户均不可调度 | 503 | `account_unavailable` | `api_error` | `UNAVAILABLE` |
 | 本地 API key 无效 | 401 | `invalid_api_key` | `authentication_error` | `UNAUTHENTICATED` |
 | 模型或方法不存在 | 404 | `model_not_found` | `not_found_error` | `NOT_FOUND` |
@@ -2310,7 +2340,8 @@ OpenAI Responses 的 `previous_response_id` 与 Interactions 的 `previous_inter
 | 请求期限到期 | 504 | `upstream_error` | `api_error` | `DEADLINE_EXCEEDED` |
 | 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 
-- “没有符合条件的账户”指候选耗尽且没有符合方法、能力与权益的账户
+- “没有符合条件的账户”指候选耗尽且没有符合方法与能力的账户
+- 权益不满足时错误消息写明模型需要的权益：`1` 为付费 API key，`3` 为 Google AI Pro 或 Ultra 订阅，`4` 为 Google AI Ultra 订阅
 - “支持请求的账户均不可调度”指这些账户都处于需要重新登录、不可用或已停用状态，错误消息逐个列出账户、状态与原因
 - 生成服务处于 `STOPPED` 时，生成与计数端点返回 `service_stopped`
 

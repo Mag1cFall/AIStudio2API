@@ -111,7 +111,9 @@ function tokenLimit(value: number | undefined): string {
                 {{ t('models.paid') }}
               </span>
             </div>
-            <code class="block truncate text-xs text-blue-400">{{ model.id }}</code>
+            <code v-tooltip.overflow="model.id" class="block truncate text-xs text-blue-400">{{
+              model.id
+            }}</code>
           </div>
           <div class="flex gap-4 text-right font-mono text-xs text-gray-500">
             <span>

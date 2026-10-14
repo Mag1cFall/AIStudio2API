@@ -26,6 +26,8 @@
 
 `INFO` 记录状态推进和完成结果，`WARN` 记录等待、切换与客户端取消，`ERROR` 记录失败结果。管理页面支持按级别、来源和消息文本筛选，日志正文可以选择和横向滚动。
 
+形如 `阶段名 | i/N | 详情` 的运行事件在页面上按来源与阶段名合并为一张卡片，显示阶段名、当前进度 `i/N` 与最新一步的详情。同一来源随后的结束消息并入同一卡片并显示结束状态：`协议运行时就绪`、`生成服务就绪`、`WAA Worker 就绪` 与阶段名加 `完成` 为已完成，阶段名加 `失败` 为失败，阶段名加 `已取消` 为已取消。同一来源再次从 `1/N` 开始时另起一张卡片。卡片位于首条消息的时间位置，展开详情可查看每一步的时间与内容；级别、来源和文本筛选在任一步命中时显示该卡片。
+
 请求错误保存在 `request.error` 并直接展示在请求行下方。运行事件的错误详情保留在 `message` 中。
 
 ## 启动过程
@@ -58,7 +60,13 @@ INFO  service              WAA Worker 预热完成 | Worker=5/5 | 耗时=34.903s
 目录为空、单账户同步失败或单账户同步成功但仍为空的账户进入 pending ID 集合。初次 `fan-out`（同时向全部符合条件的账户发出 `ListModels`）结束后，处于 `RUNNING` 的生成服务使用单个 30 秒 ticker（定时器）对全部 pending ID 再次并发执行 `ListModels`；非空成功立即更新账户、模型和 Worker 选择，失败与空结果继续保留：
 
 ```text
-INFO  service  模型目录重试完成 | 同步=2 | 非空=2 | 待重试账户=0
+INFO  account@example.com  模型目录已更新 | 模型=39
+```
+
+同一循环每 10 分钟对全部 `enabled`、`ready` 或 `busy` 账户并发读取 `GetAiStudioBenefitTier`，并发槽位已满的账户跳过本轮。权益变化时更新账户调度与公开目录的可用通道：
+
+```text
+INFO  account@example.com  账户权益已更新 | 权益=Free→Ultra
 ```
 
 取消与失败日志：
@@ -146,6 +154,7 @@ ERROR  account@example.com  WAA Worker 停止失败 | PID=18240 | 耗时=10.002s
 | 平均速度 | 输出合计除以请求总耗时，单位为 tokens/s，包含准备与等待时间 |
 | 工具调用 | 本次模型输出的函数调用事件数 |
 | 输入用量 | `request.usage.input_tokens`，包含输入消息与工具声明 |
+| 缓存命中 | `request.usage.cached_tokens`，输入用量中命中上游隐式缓存的部分，为 0 时不显示 |
 | 总用量 | `request.usage.total_tokens`，包含输入和输出 |
 
 用量在生成服务返回 usage 后展示；用量未知时省略 `request.usage`。平均速度衡量端到端吞吐，网络缓冲或集中到达的响应也使用同一计算区间。
@@ -155,7 +164,7 @@ ERROR  account@example.com  WAA Worker 停止失败 | PID=18240 | 耗时=10.002s
 控制台每行是一条独立 JSON 事件，请求数据与中文摘要分离：
 
 ```json
-{"time":"2026-09-06T14:11:47Z","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
+{"time":"2026-09-06T14:11:47Z","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"cached_tokens":0,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
 ```
 
 采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
@@ -250,7 +259,7 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 
 ## 用量账本
 
-`runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage` 与 `GET /api/usage/records` 查询。
+`runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量（含缓存命中数）、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage` 与 `GET /api/usage/records` 查询。看板的估算费用按 Gemini API 与 Vertex AI 公布的当前文本单价从原始记录逐条计算，缓存命中的输入按缓存单价计算。
 
 ```text
 INFO  service  请求账本已按服务器时区重建本地日汇总 | 天数=<COUNT>
