@@ -2,6 +2,8 @@
 
 管理页面与控制台使用同一组结构化事件。页面按请求汇总展示，控制台向标准错误输出逐行 JSON。日志来源使用 `service`、`request` 或实际执行账户的 Google 邮箱。
 
+`LOG_FILE=true` 时控制台的 JSON 行同时写入 `runtime/logs/aistudio2api.log`。单个文件 10 MB 轮转，轮转文件名带本地时间，目录总量超过 `LOG_MAX_TOTAL_MB` 时删除最旧的文件。两项在管理端设置页保存后立即生效。
+
 管理 API 通过 `GET /api/events` 推送历史快照和后续增量。账户创建等尚未绑定正式账户的认证操作使用 `auth` 来源。
 
 ## 日志结构
@@ -63,10 +65,11 @@ INFO  service              WAA Worker 预热完成 | Worker=5/5 | 耗时=34.903s
 INFO  account@example.com  模型目录已更新 | 模型=39
 ```
 
-同一循环每 10 分钟对全部 `enabled`、`ready` 或 `busy` 账户并发读取 `GetAiStudioBenefitTier`，并发槽位已满的账户跳过本轮。权益变化时更新账户调度与公开目录的可用通道：
+同一循环每 10 分钟对全部 `enabled`、`ready` 或 `busy` 账户并发读取权益与 `ListModels` 目录，并发槽位已满的账户跳过本轮；订阅模型遇到额度错误时同样刷新该账户。权益或模型数变化时更新账户调度与公开目录，读取失败时记录原因，登录失效的账户转为需要登录：
 
 ```text
-INFO  account@example.com  账户权益已更新 | 权益=Free→Ultra
+INFO  account@example.com  账户状态已更新 | 权益=Free→Ultra | 模型=46→47
+WARN  account@example.com  账户状态刷新失败 | 错误=...
 ```
 
 取消与失败日志：
@@ -240,7 +243,6 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 | --- | --- |
 | `账户添加 | 1/2`、`2/2`、`账户添加完成` | 隔离登录、保存认证状态、同步模型目录 |
 | `账户登录 | 1/2`、`2/2`、`账户登录完成` | 更新当前账户认证材料与 Worker 实例 |
-| `账户验证`、`账户验证完成` | 验证 AI Studio、权益与实时目录 |
 | `账户配置已更新`、`账户已删除` | 账户配置与运行对象已更新 |
 | `账户模型目录同步完成` | 新目录已写入当前模型目录和账户调度状态 |
 | `账户模型目录等待重试` | 当前同步失败，运行期重试继续处理 |

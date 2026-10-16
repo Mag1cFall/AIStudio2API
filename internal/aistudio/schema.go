@@ -3,12 +3,17 @@ package aistudio
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+// errSchemaForbidsAll 表示 Schema 不接受任何值
+var errSchemaForbidsAll = errors.New("禁止所有值")
 
 var schemaTypeCodes = map[string]int64{
 	"string":  1,
@@ -29,7 +34,7 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		return []any{int64(0)}, nil
 	}
 	if bytes.Equal(raw, []byte("false")) {
-		return nil, fmt.Errorf("schema false 禁止所有值")
+		return nil, fmt.Errorf("schema false %w", errSchemaForbidsAll)
 	}
 	var schema map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &schema); err != nil || schema == nil {
@@ -148,8 +153,14 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		var required []string
+		_ = json.Unmarshal(schema["required"], &required)
 		entries := make([]any, 0, len(names))
 		for _, name := range names {
+			// 可选属性为 false 表示该属性不出现
+			if bytes.Equal(bytes.TrimSpace(properties[name]), []byte("false")) && !slices.Contains(required, name) {
+				continue
+			}
 			property, err := encodeJSONSchema(properties[name])
 			if err != nil {
 				return nil, fmt.Errorf("schema.properties.%s: %w", name, err)
@@ -467,7 +478,7 @@ func cleanSchemaInput(raw json.RawMessage, preserveCombinations bool) (json.RawM
 					break
 				}
 				if name == "allOf" && bytes.Equal(cleaned, []byte("false")) {
-					return nil, fmt.Errorf("schema.allOf 禁止所有值")
+					return nil, fmt.Errorf("schema.allOf %w", errSchemaForbidsAll)
 				}
 				if (name == "anyOf" || name == "oneOf") && bytes.Equal(cleaned, []byte("false")) || name == "allOf" && bytes.Equal(cleaned, []byte("true")) {
 					continue
@@ -477,7 +488,7 @@ func cleanSchemaInput(raw json.RawMessage, preserveCombinations bool) (json.RawM
 			if unrestricted || name == "allOf" && len(filtered) == 0 {
 				delete(schema, name)
 			} else if len(filtered) == 0 && (name == "anyOf" || name == "oneOf") {
-				return nil, fmt.Errorf("schema.%s 禁止所有值", name)
+				return nil, fmt.Errorf("schema.%s %w", name, errSchemaForbidsAll)
 			} else {
 				schema[name], _ = json.Marshal(filtered)
 			}
@@ -498,7 +509,7 @@ func normalizeNotSchema(schema map[string]json.RawMessage) error {
 		return nil
 	}
 	if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("{}")) {
-		return fmt.Errorf("schema.not 禁止所有值")
+		return fmt.Errorf("schema.not %w", errSchemaForbidsAll)
 	}
 	var sub map[string]json.RawMessage
 	if json.Unmarshal(raw, &sub) == nil && sub != nil {
@@ -687,6 +698,9 @@ func encodeResponseSchema(raw json.RawMessage) ([]any, error) {
 	wire, err := encodeJSONSchema(raw)
 	if err == nil {
 		return wire, nil
+	}
+	if errors.Is(err, errSchemaForbidsAll) {
+		return nil, err
 	}
 	var schema any
 	if json.Unmarshal(raw, &schema) != nil {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ type geminiRequest struct {
 	Tools             []geminiToolGroup      `json:"tools"`
 	ToolConfig        geminiToolConfig       `json:"toolConfig"`
 	SafetySettings    []geminiSafetySetting  `json:"safetySettings"`
+	CachedContent     string                 `json:"cachedContent"`
 	// GenerateContentRequest 为 countTokens 携带的完整生成请求
 	GenerateContentRequest *geminiRequest `json:"generateContentRequest"`
 }
@@ -99,6 +101,7 @@ type geminiPart struct {
 		ID       string          `json:"id"`
 		Name     string          `json:"name"`
 		Response json.RawMessage `json:"response"`
+		Parts    []geminiPart    `json:"parts"`
 	} `json:"functionResponse"`
 	ExecutableCode *struct {
 		Language string `json:"language"`
@@ -219,7 +222,7 @@ func (s *server) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}
@@ -235,11 +238,11 @@ func (s *server) handleGeminiModel(w http.ResponseWriter, r *http.Request) {
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}
-	if model, ok := lookupPublicModel(models, modelID); ok {
+	if model, ok := LookupPublicModel(models, modelID); ok {
 		writeJSON(w, http.StatusOK, geminiModelObject(model))
 		return
 	}
@@ -304,6 +307,10 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if method == "countTokens" && request.GenerateContentRequest != nil {
 		request = *request.GenerateContentRequest
+	}
+	if request.CachedContent != "" {
+		writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("cachedContent %q was not found: this service does not store cached contents", request.CachedContent))
+		return
 	}
 	generateRequest, err := request.toGenerateRequest(newID("resp"), model)
 	if err != nil {
@@ -422,6 +429,7 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		return aistudio.GenerateRequest{}, err
 	}
 	var system string
+	var systemMedia []aistudio.Part
 	if request.SystemInstruction != nil {
 		parts, _, err := mapGeminiParts(request.SystemInstruction.Parts)
 		if err != nil {
@@ -429,8 +437,11 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		}
 		var text strings.Builder
 		for _, part := range parts {
-			if part.Text == "" && (part.InlineData != nil || part.File != nil || part.FunctionCall != nil || part.FunctionResult != nil) {
-				return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction must contain text")
+			if part.FunctionCall != nil || part.FunctionResult != nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction cannot contain function calls or responses")
+			}
+			if part.Text == "" && (part.InlineData != nil || part.File != nil || part.ExternalMedia != nil) {
+				systemMedia = append(systemMedia, part)
 			}
 			text.WriteString(part.Text)
 		}
@@ -454,6 +465,7 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		}
 		contents = append(contents, aistudio.Content{Role: role, Parts: parts})
 	}
+	contents = prependSystemMedia(contents, systemMedia)
 	tools, err := mapGeminiTools(request.Tools, request.ToolConfig)
 	if err != nil {
 		return aistudio.GenerateRequest{}, err
@@ -710,12 +722,17 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
+			media, _, err := mapGeminiParts(part.FunctionResponse.Parts)
+			if err != nil {
+				return nil, false, fmt.Errorf("functionResponse.parts: %w", err)
+			}
 			parts = append(parts, aistudio.Part{
 				FunctionResult: &aistudio.FunctionResult{
 					ID: part.FunctionResponse.ID, Name: part.FunctionResponse.Name, Content: response,
 				},
 				ThoughtSignature: part.ThoughtSignature,
 			})
+			parts = append(parts, media...)
 			hasResult = true
 		case part.ExecutableCode != nil:
 			parts = append(parts, aistudio.Part{
@@ -882,7 +899,7 @@ func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 	})
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}
@@ -923,10 +940,11 @@ func writeGeminiFailure(w http.ResponseWriter, r *http.Request, request aistudio
 	response, ok := geminiPromptFeedback(request, err)
 	switch {
 	case !ok:
-		writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		writeGeminiRequestError(w, err)
 	case stream:
-		if streamHeaders(w) == nil {
-			_ = writeSSE(w, "", response)
+		if output, err := openGeminiStream(w, r); err == nil {
+			_ = output.write(response)
+			output.close()
 		}
 	default:
 		writeJSON(w, http.StatusOK, response)
@@ -977,19 +995,10 @@ func buildGeminiResponse(request aistudio.GenerateRequest, results []generationR
 
 func geminiOutputParts(result generationResult) []map[string]any {
 	parts := make([]map[string]any, 0)
-	var pendingSignature string
 
 	appendPart := func(part map[string]any, sig string) {
 		if sig != "" {
 			part["thoughtSignature"] = sig
-		}
-		if pendingSignature != "" {
-			if part["thoughtSignature"] == nil {
-				part["thoughtSignature"] = pendingSignature
-			} else {
-				parts = append(parts, geminiSignaturePart(pendingSignature))
-			}
-			pendingSignature = ""
 		}
 		parts = append(parts, part)
 	}
@@ -1050,21 +1059,12 @@ func geminiOutputParts(result generationResult) []map[string]any {
 			if event.ThoughtSignature == "" {
 				continue
 			}
-			if pendingSignature != "" {
-				parts = append(parts, geminiSignaturePart(pendingSignature))
-				pendingSignature = ""
-			}
 			if len(parts) > 0 && parts[len(parts)-1]["thoughtSignature"] == nil {
 				parts[len(parts)-1]["thoughtSignature"] = event.ThoughtSignature
-			} else if len(parts) > 0 {
-				parts = append(parts, geminiSignaturePart(event.ThoughtSignature))
 			} else {
-				pendingSignature = event.ThoughtSignature
+				parts = append(parts, geminiSignaturePart(event.ThoughtSignature))
 			}
 		}
-	}
-	if pendingSignature != "" {
-		parts = append(parts, geminiSignaturePart(pendingSignature))
 	}
 	return parts
 }
@@ -1287,29 +1287,87 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 	return metadata
 }
 
-// streamGemini 按到达顺序输出各候选的增量块，最后一块携带全部候选的终止原因、来源与用量之和
-func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, candidates *chatChoices) {
-	if err := streamHeaders(w); err != nil {
+// geminiStream 写出 streamGenerateContent 的响应块：alt=sse 时为 SSE，否则与官方 REST 一样为逐个对象写出的 JSON 数组
+type geminiStream struct {
+	w       http.ResponseWriter
+	sse     bool
+	mu      sync.Mutex
+	written bool
+}
+
+// openGeminiStream 按 alt 参数写出流式响应头
+func openGeminiStream(w http.ResponseWriter, r *http.Request) (*geminiStream, error) {
+	stream := &geminiStream{w: w, sse: r.URL.Query().Get("alt") == "sse"}
+	if stream.sse {
+		return stream, streamHeaders(w)
+	}
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	return stream, http.NewResponseController(w).Flush()
+}
+
+// write 写出一个响应块
+func (stream *geminiStream) write(value map[string]any) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.sse {
+		return writeSSE(stream.w, "", value)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	prefix := "["
+	if stream.written {
+		prefix = "\r\n,\r\n"
+	}
+	stream.written = true
+	if _, err := io.WriteString(stream.w, prefix+string(data)); err != nil {
+		return err
+	}
+	return http.NewResponseController(stream.w).Flush()
+}
+
+// heartbeat 在 SSE 流静默时写出空行，JSON 数组不写
+func (stream *geminiStream) heartbeat() error {
+	if !stream.sse {
+		return nil
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return writeGeminiHeartbeat(stream.w)
+}
+
+// close 结束 JSON 数组
+func (stream *geminiStream) close() {
+	if stream.sse {
 		return
 	}
-	var writing sync.Mutex
-	write := func(value map[string]any) error {
-		writing.Lock()
-		defer writing.Unlock()
-		return writeSSE(w, "", value)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	tail := "\r\n]"
+	if !stream.written {
+		tail = "[]"
 	}
-	heartbeat := func() error {
-		writing.Lock()
-		defer writing.Unlock()
-		return writeSSEHeartbeat(w)
+	_, _ = io.WriteString(stream.w, tail)
+}
+
+// streamGemini 按到达顺序输出各候选的增量块，最后一块携带全部候选的终止原因、来源与用量之和
+func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, candidates *chatChoices) {
+	stream, err := openGeminiStream(w, r)
+	if err != nil {
+		return
 	}
+	defer stream.close()
+	write, heartbeat := stream.write, stream.heartbeat
 	results, err := candidates.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		return consumeStreamEvents(candidates.ctx, events, func(event aistudio.Event) error {
 			candidate := geminiStreamCandidate(event, index)
 			if candidate == nil {
 				return nil
 			}
-			return write(map[string]any{"responseId": request.ID, "modelVersion": request.Model, "candidates": []any{candidate}})
+			return write(map[string]any{"responseId": request.ID, "modelVersion": cmp.Or(event.ProviderModel, request.Model), "candidates": []any{candidate}})
 		}, heartbeat)
 	})
 	if err != nil {

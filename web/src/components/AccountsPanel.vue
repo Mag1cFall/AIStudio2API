@@ -5,13 +5,14 @@ import { useI18n, type TranslationKey } from '@/i18n'
 import type {
   Account,
   AccountDraft,
+  AccountRefresh,
   AccountState,
   ChromeImportProfile,
   PairingToken,
 } from '@/types'
 import UiIcon from './UiIcon.vue'
 
-defineProps<{
+const props = defineProps<{
   accounts: Account[]
   loading: boolean
   error: string
@@ -31,6 +32,8 @@ const showBrowserLogin = ref(false)
 const showChromeImport = ref(false)
 const editingAccountID = ref('')
 const pendingAction = ref('')
+const refreshing = reactive(new Set<string>())
+const refreshingAll = ref(false)
 const chromeProfiles = ref<ChromeImportProfile[]>([])
 const pairing = ref<PairingToken | null>(null)
 const copiedPairing = ref('')
@@ -233,26 +236,62 @@ async function toggleAccount(account: Account): Promise<void> {
   }
 }
 
-// runAccountAction 执行登录或会话验证
-async function runAccountAction(account: Account, action: 'login' | 'verify'): Promise<void> {
-  pendingAction.value = `${action}:${account.id}`
+// loginAccount 打开浏览器重新登录账户
+async function loginAccount(account: Account): Promise<void> {
+  pendingAction.value = `login:${account.id}`
   try {
-    if (action === 'login') {
-      await api.loginAccount(account.id)
-    } else {
-      await api.verifyAccount(account.id)
-    }
+    await api.loginAccount(account.id)
     emit('refresh')
-    emit(
-      'notice',
-      t(action === 'login' ? 'accounts.loginComplete' : 'accounts.verified'),
-      'success',
-    )
+    emit('notice', t('accounts.loginComplete'), 'success')
   } catch (error) {
     actionError(error)
   } finally {
     pendingAction.value = ''
   }
+}
+
+// refreshNotice 返回刷新结果提示，写出权益与模型数的变化
+function refreshNotice(result: AccountRefresh): string {
+  const change = (before: string, after: string) =>
+    before === after ? after : `${before} → ${after}`
+  const tier = (value: string) => (value === 'Unknown' ? t('accounts.tierUnknown') : value)
+  return t('accounts.refreshed')
+    .replace('{name}', result.account.label)
+    .replace('{tier}', change(tier(result.previous_tier), tier(result.tier)))
+    .replace('{models}', change(String(result.previous_models), String(result.models)))
+}
+
+// refreshAccount 立即读取账户权益与模型目录，执行期间只禁用该账户的按钮
+async function refreshAccount(account: Account): Promise<void> {
+  refreshing.add(account.id)
+  try {
+    const result = await api.refreshAccount(account.id)
+    emit('refresh')
+    emit('notice', refreshNotice(result), 'success')
+  } catch (error) {
+    actionError(error)
+  } finally {
+    refreshing.delete(account.id)
+  }
+}
+
+// refreshAllAccounts 并发刷新全部启用账户，结束后提示成功与失败的数量
+async function refreshAllAccounts(): Promise<void> {
+  const targets = props.accounts.filter((account) => account.enabled && !refreshing.has(account.id))
+  refreshingAll.value = true
+  targets.forEach((account) => refreshing.add(account.id))
+  const results = await Promise.allSettled(targets.map((account) => api.refreshAccount(account.id)))
+  targets.forEach((account) => refreshing.delete(account.id))
+  refreshingAll.value = false
+  emit('refresh')
+  const failed = results.filter((result) => result.status === 'rejected').length
+  emit(
+    'notice',
+    t('accounts.refreshedAll')
+      .replace('{count}', String(targets.length - failed))
+      .replace('{failed}', String(failed)),
+    failed === 0 ? 'success' : 'error',
+  )
 }
 </script>
 
@@ -261,6 +300,16 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
     <div class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-2">
       <h2 class="text-2xl font-bold text-white">{{ t('section.accounts.title') }}</h2>
       <div class="flex flex-wrap justify-end gap-2">
+        <button
+          class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
+          type="button"
+          :disabled="refreshingAll"
+          :aria-busy="refreshingAll"
+          @click="refreshAllAccounts"
+        >
+          <UiIcon name="refresh" :size="15" />
+          {{ t('accounts.refreshAll') }}
+        </button>
         <button
           class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
           type="button"
@@ -361,7 +410,13 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
           </div>
           <div>
             <span class="text-gray-500">{{ t('accounts.benefitTier') }}</span>
-            <div class="text-gray-300">{{ account.benefit_tier }}</div>
+            <div class="text-gray-300">
+              {{
+                account.benefit_tier === 'Unknown'
+                  ? t('accounts.tierUnknown')
+                  : account.benefit_tier
+              }}
+            </div>
           </div>
         </div>
 
@@ -386,7 +441,7 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
             <button
               class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
-              :disabled="pendingAction !== ''"
+              :disabled="pendingAction !== '' || refreshing.has(account.id)"
               @click="beginEdit(account)"
             >
               {{ t('common.edit') }}
@@ -394,7 +449,7 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
             <button
               class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
-              :disabled="pendingAction !== ''"
+              :disabled="pendingAction !== '' || refreshing.has(account.id)"
               :aria-busy="pendingAction === `toggle:${account.id}`"
               @click="toggleAccount(account)"
             >
@@ -404,25 +459,29 @@ async function runAccountAction(account: Account, action: 'login' | 'verify'): P
               v-if="account.state === 'auth_required'"
               class="rounded bg-green-600 px-3 py-1 text-xs text-white transition hover:bg-green-500 disabled:opacity-50"
               type="button"
-              :disabled="pendingAction !== '' || !account.enabled"
+              :disabled="pendingAction !== '' || refreshing.has(account.id) || !account.enabled"
               :aria-busy="pendingAction === `login:${account.id}`"
-              @click="runAccountAction(account, 'login')"
+              @click="loginAccount(account)"
             >
               {{ t('common.relogin') }}
             </button>
             <button
               class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
-              :disabled="pendingAction !== '' || !account.enabled"
-              :aria-busy="pendingAction === `verify:${account.id}`"
-              @click="runAccountAction(account, 'verify')"
+              :disabled="
+                refreshing.has(account.id) ||
+                pendingAction === `login:${account.id}` ||
+                !account.enabled
+              "
+              :aria-busy="refreshing.has(account.id)"
+              @click="refreshAccount(account)"
             >
-              {{ t('common.verify') }}
+              {{ t('accounts.refresh') }}
             </button>
             <button
               class="rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
               type="button"
-              :disabled="pendingAction !== ''"
+              :disabled="pendingAction !== '' || refreshing.has(account.id)"
               @click="emit('delete', account)"
             >
               {{ t('common.delete') }}

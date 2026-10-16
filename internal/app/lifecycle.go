@@ -18,6 +18,7 @@ import (
 type managedService interface {
 	aistudio.Service
 	State() string
+	ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int)
 }
 
 // runtimeGeneration 保存同一份配置装配的完整运行时
@@ -72,6 +73,7 @@ type runtimeManager struct {
 	current          *runtimeGeneration
 	startCancel      context.CancelFunc
 	ledger           *requestdb.Store
+	logs             *logOutput
 }
 
 // newRuntimeManager 创建进程级管理器与初始生成服务
@@ -408,11 +410,11 @@ func (manager *runtimeManager) LoginAccount(ctx context.Context, id string) (api
 	return manager.current.admin.LoginAccount(ctx, id)
 }
 
-// VerifyAccount 在当前生成服务验证账户
-func (manager *runtimeManager) VerifyAccount(ctx context.Context, id string) (api.AdminAccount, error) {
+// RefreshAccount 在当前生成服务立即刷新账户状态
+func (manager *runtimeManager) RefreshAccount(ctx context.Context, id string) (api.AdminAccountRefresh, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
-	return manager.current.admin.VerifyAccount(ctx, id)
+	return manager.current.admin.RefreshAccount(ctx, id)
 }
 
 // ClearLogs 清空进程级管理日志
@@ -432,13 +434,17 @@ func (manager *runtimeManager) RuntimeConfig(ctx context.Context) (api.RuntimeCo
 	return value, err
 }
 
-// UpdateRuntimeConfig 保存生成服务配置，账户选择策略立即作用于当前账户池
+// UpdateRuntimeConfig 保存生成服务配置，账户选择策略与容量设置立即作用于当前生成服务
 func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
 	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
+		manager.current.service.ApplyCapacity(
+			updated.WarmWorkerLimit, updated.MaxActiveWorkers, updated.WarmStartupConcurrency, updated.PerAccountConcurrency,
+		)
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
 		manager.ledger.SetBodyCapture(updated.RequestBodyLog)
+		err = manager.logs.set(updated.LogFile, updated.LogMaxTotalMB)
 	}
 	manager.mu.Unlock()
 	return updated, err
@@ -509,21 +515,18 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	}
 	saved := config.Config{
 		AuthStates: value.AuthStates, Proxy: value.Proxy,
-		InitTimeout: initTimeout, RequestTimeout: requestTimeout,
-		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
-		WarmStartupConcurrency: value.WarmStartupConcurrency,
-		PerAccountConcurrency:  value.PerAccountConcurrency, TemporaryChat: value.TemporaryChat,
+		InitTimeout: initTimeout, RequestTimeout: requestTimeout, TemporaryChat: value.TemporaryChat,
 		UpstreamChannels:     value.UpstreamChannels,
+		ModelMapping:         value.ModelMapping,
 		WAABackend:           value.WAABackend,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
 		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
-		saved.WarmWorkerLimit == active.WarmWorkerLimit && saved.MaxActiveWorkers == active.MaxActiveWorkers &&
-		saved.WarmStartupConcurrency == active.WarmStartupConcurrency &&
-		saved.PerAccountConcurrency == active.PerAccountConcurrency && saved.TemporaryChat == active.TemporaryChat &&
-		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.WAABackend == active.WAABackend &&
+		saved.TemporaryChat == active.TemporaryChat &&
+		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
+		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream
 }
 

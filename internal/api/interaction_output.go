@@ -113,10 +113,8 @@ func interactionSteps(result generationResult, audio interactionAudioFormat, sum
 	steps := make([]map[string]any, 0)
 	audioWritten := false
 	for _, event := range result.events {
-		if event.Kind == aistudio.EventToolCall && event.ToolCall != nil {
-			if signature := interactionCallSignature(event); signature != "" {
-				steps = append(steps, map[string]any{"type": "thought", "signature": signature})
-			}
+		if signature := interactionOutputSignature(event); signature != "" {
+			steps = append(steps, map[string]any{"type": "thought", "signature": signature})
 		}
 		if event.Kind == aistudio.EventReasoning && !summaries {
 			if event.ThoughtSignature == "" {
@@ -200,7 +198,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			event.Kind = aistudio.EventThoughtSignature
 		}
-		if signature := interactionCallSignature(event); signature != "" {
+		if signature := interactionOutputSignature(event); signature != "" {
 			if err := emit(aistudio.Event{Kind: aistudio.EventThoughtSignature, ThoughtSignature: signature}); err != nil {
 				return err
 			}
@@ -276,13 +274,16 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	}
 }
 
-// interactionCallSignature 提取函数调用携带的可回传思考签名
-func interactionCallSignature(event aistudio.Event) string {
-	if event.Kind != aistudio.EventToolCall || event.ToolCall == nil {
-		return ""
+// interactionOutputSignature 提取函数调用、正文与媒体携带的可回传思考签名，输出为其前的 thought 步骤
+func interactionOutputSignature(event aistudio.Event) string {
+	switch event.Kind {
+	case aistudio.EventToolCall:
+		if event.ToolCall != nil && event.ToolCall.ThoughtSignature != "" {
+			return event.ToolCall.ThoughtSignature
+		}
+		return event.ThoughtSignature
+	case aistudio.EventText, aistudio.EventMedia:
+		return event.ThoughtSignature
 	}
-	if event.ToolCall.ThoughtSignature != "" {
-		return event.ToolCall.ThoughtSignature
-	}
-	return event.ThoughtSignature
+	return ""
 }

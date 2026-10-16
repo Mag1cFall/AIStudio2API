@@ -46,7 +46,7 @@ func (s *server) handleOpenAITranslation(w http.ResponseWriter, r *http.Request)
 	transcribeModel, translateModel, err := s.translationModels(r.Context(), r.FormValue("model"))
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -66,7 +66,7 @@ func (s *server) handleOpenAITranslation(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -84,7 +84,7 @@ func (s *server) handleOpenAITranslation(w http.ResponseWriter, r *http.Request)
 		translated, err := s.translateSegments(r.Context(), translateModel, sources, strings.TrimSpace(r.FormValue("prompt")), temperature)
 		if err != nil {
 			if shouldWriteRequestError(r, err) {
-				writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+				writeOpenAIRequestError(w, err)
 			}
 			return
 		}
@@ -117,7 +117,7 @@ func (s *server) translationModels(ctx context.Context, model string) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	if entry, ok := lookupPublicModel(models, model); ok && !entry.Capabilities["transcription_output"] {
+	if entry, ok := LookupPublicModel(models, model); ok && !entry.Capabilities["transcription_output"] {
 		return aistudio.DefaultTranscriptionModel, entry.ID, nil
 	}
 	return model, openAITranslationModel, nil

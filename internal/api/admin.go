@@ -21,7 +21,7 @@ type AdminService interface {
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string) (AdminAccount, error)
-	VerifyAccount(context.Context, string) (AdminAccount, error)
+	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
 	ClearLogs(context.Context) error
@@ -148,6 +148,15 @@ type AdminAccount struct {
 	Message     string   `json:"message"`
 }
 
+// AdminAccountRefresh 表示一次手动刷新后的账户与刷新前后的权益和模型数
+type AdminAccountRefresh struct {
+	Account        AdminAccount `json:"account"`
+	PreviousTier   string       `json:"previous_tier"`
+	Tier           string       `json:"tier"`
+	PreviousModels int          `json:"previous_models"`
+	Models         int          `json:"models"`
+}
+
 // AccountInput 表示已有账户配置
 type AccountInput struct {
 	Label    string `json:"label"`
@@ -191,6 +200,8 @@ type RuntimeConfig struct {
 	AdminPasswordSet          bool     `json:"admin_password_set"`
 	SavedAdminPassword        string   `json:"-"`
 	BuildNativeNonstream      bool     `json:"build_native_nonstream"`
+	LogFile                   bool     `json:"log_file"`
+	LogMaxTotalMB             int      `json:"log_max_total_mb"`
 	AuthStates                string   `json:"auth_states"`
 	ListenAddr                string   `json:"listen_addr"`
 	APIKey                    string   `json:"proxy_api_key"`
@@ -199,6 +210,7 @@ type RuntimeConfig struct {
 	ManagementRestartRequired bool     `json:"management_restart_required"`
 	ServiceRestartRequired    bool     `json:"service_restart_required"`
 	Proxy                     string   `json:"proxy"`
+	ActiveProxy               string   `json:"active_proxy"`
 	InitTimeout               string   `json:"init_timeout"`
 	RequestTimeout            string   `json:"request_timeout"`
 	WarmWorkerLimit           int      `json:"warm_worker_limit"`
@@ -207,6 +219,7 @@ type RuntimeConfig struct {
 	PerAccountConcurrency     int      `json:"per_account_concurrency"`
 	RoutingStrategy           string   `json:"routing_strategy"`
 	UpstreamChannels          []string `json:"upstream_channels"`
+	ModelMapping              string   `json:"model_mapping"`
 	TemporaryChat             bool     `json:"temporary_chat"`
 	WAABackend                string   `json:"waa_backend"`
 }
@@ -247,7 +260,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
-	mux.HandleFunc("POST /api/accounts/{id}/verify", s.handleVerifyAccount)
+	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
 	mux.HandleFunc("DELETE /api/logs", s.handleClearLogs)
@@ -366,13 +379,13 @@ func (s *server) handleLoginAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]AdminAccount{"account": account})
 }
 
-func (s *server) handleVerifyAccount(w http.ResponseWriter, r *http.Request) {
-	account, err := s.config.Admin.VerifyAccount(r.Context(), r.PathValue("id"))
+func (s *server) handleRefreshAccount(w http.ResponseWriter, r *http.Request) {
+	refresh, err := s.config.Admin.RefreshAccount(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]AdminAccount{"account": account})
+	writeJSON(w, http.StatusOK, refresh)
 }
 
 func (s *server) handleStartService(w http.ResponseWriter, r *http.Request) {

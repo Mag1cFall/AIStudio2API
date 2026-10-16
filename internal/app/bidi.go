@@ -12,6 +12,7 @@ import (
 
 // OpenBidi 将实时会话绑定到当前生成服务生命周期
 func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.BidiRequest) (*aistudio.BidiSession, error) {
+	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.bidiRequestContext(ctx)

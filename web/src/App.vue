@@ -13,6 +13,13 @@ import {
   watch,
 } from 'vue'
 import type { AsyncComponentLoader } from 'vue'
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
+} from 'reka-ui'
 import { api, openAdminEvents, type EventConnection } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type {
@@ -411,28 +418,30 @@ onUnmounted(() => {
           <div class="h-3 w-3 rounded-full" :class="statusColor"></div>
           <h1 class="whitespace-nowrap text-lg font-bold text-white">AI Studio Proxy</h1>
         </div>
-        <div class="group relative">
-          <button
-            class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 font-mono text-xs text-gray-500 transition hover:text-white"
-            type="button"
+        <DropdownMenuRoot :modal="false">
+          <DropdownMenuTrigger
+            class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 font-mono text-xs text-gray-500 transition hover:text-white data-[state=open]:text-white"
           >
             {{ locale }}
             <UiIcon name="chevronDown" :size="12" />
-          </button>
-          <div class="absolute top-full right-0 z-50 hidden pt-1 group-hover:block">
-            <div class="overflow-hidden rounded border border-line bg-panel shadow-xl">
-              <button
+          </DropdownMenuTrigger>
+          <DropdownMenuPortal>
+            <DropdownMenuContent
+              align="end"
+              :side-offset="4"
+              class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
+            >
+              <DropdownMenuItem
                 v-for="item in availableLocales"
                 :key="item.code"
-                class="block w-full px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 hover:bg-blue-600 hover:text-white"
-                type="button"
-                @click="setLocale(item.code)"
+                class="block w-full cursor-pointer px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 outline-none data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
+                @select="setLocale(item.code)"
               >
                 {{ item.label }}
-              </button>
-            </div>
-          </div>
-        </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenuPortal>
+        </DropdownMenuRoot>
       </div>
 
       <nav
@@ -545,7 +554,11 @@ onUnmounted(() => {
             @saved="config = $event"
             @notice="showNotice"
           />
-          <PlaygroundPanel v-else :models="models" :api-key="config?.proxy_api_key ?? ''" />
+          <PlaygroundPanel
+            v-else
+            :models="models"
+            :api-key="(config?.proxy_api_key ?? '').split(',')[0]?.trim() ?? ''"
+          />
         </KeepAlive>
       </Transition>
     </main>

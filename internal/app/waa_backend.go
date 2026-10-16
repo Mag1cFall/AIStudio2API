@@ -83,12 +83,3 @@ func (lazy *lazyLoginDriver) Login(ctx context.Context, request aistudio.Isolate
 	}
 	return driver.Login(ctx, request)
 }
-
-// Verify 使用按需准备的 Camoufox 校验账户登录态
-func (lazy *lazyLoginDriver) Verify(ctx context.Context, request aistudio.IsolatedLoginRequest, state aistudio.StorageState) (aistudio.LoginVerification, error) {
-	driver, err := lazy.resolve(ctx)
-	if err != nil {
-		return aistudio.LoginVerification{}, err
-	}
-	return driver.Verify(ctx, request, state)
-}

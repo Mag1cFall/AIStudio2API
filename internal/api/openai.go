@@ -118,8 +118,8 @@ func openAIModelObject(model aistudio.Model) map[string]any {
 	return item
 }
 
-// lookupPublicModel 按正式 ID 优先于别名解析同一实时目录
-func lookupPublicModel(models []aistudio.Model, id string) (aistudio.Model, bool) {
+// LookupPublicModel 按正式 ID 优先于别名解析同一实时目录
+func LookupPublicModel(models []aistudio.Model, id string) (aistudio.Model, bool) {
 	id = strings.TrimPrefix(strings.TrimSpace(id), "models/")
 	if id == "" {
 		return aistudio.Model{}, false
@@ -144,9 +144,9 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			if r.Header.Get("Anthropic-Version") != "" {
-				writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
+				writeAnthropicRequestError(w, err)
 			} else {
-				writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+				writeOpenAIRequestError(w, err)
 			}
 		}
 		return
@@ -168,14 +168,14 @@ func (s *server) handleOpenAIModel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			if r.Header.Get("Anthropic-Version") != "" {
-				writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), err.Error())
+				writeAnthropicRequestError(w, err)
 			} else {
-				writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+				writeOpenAIRequestError(w, err)
 			}
 		}
 		return
 	}
-	model, ok := lookupPublicModel(models, r.PathValue("model"))
+	model, ok := LookupPublicModel(models, r.PathValue("model"))
 	if !ok {
 		message := fmt.Sprintf("model %q is unavailable", r.PathValue("model"))
 		if r.Header.Get("Anthropic-Version") != "" {
@@ -229,7 +229,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err := choices.err; err != nil {
 		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -244,7 +244,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -342,15 +342,15 @@ func chatMessageContent(message chatMessage) (aistudio.Content, error) {
 		return aistudio.Content{}, err
 	}
 	if role == aistudio.RoleTool {
-		content, err := normalizeFunctionResultContent(message.Content)
+		content, media, err := functionResultParts(message.Content, false, openAIContentParts)
 		if err != nil {
 			return aistudio.Content{}, fmt.Errorf("tool message content: %w", err)
 		}
-		return aistudio.Content{Role: role, Parts: []aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
+		return aistudio.Content{Role: role, Parts: append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
 			ID:      message.ToolCallID,
 			Name:    message.Name,
 			Content: content,
-		}}}}, nil
+		}}}, media...)}, nil
 	}
 	parts, err := openAIContentParts(message.Content)
 	if err != nil {
@@ -914,7 +914,7 @@ func buildChatCompletion(id string, created int64, model string, results []gener
 
 // chatCompletionChoice 构造非流式响应中第 index 个 choice
 func chatCompletionChoice(index int, result generationResult, tools []openAITool) map[string]any {
-	rendered := renderedContent(result.events)
+	rendered, spans := renderedContent(result.events)
 	content := any(rendered)
 	if rendered == "" && len(result.toolCalls) > 0 {
 		content = nil
@@ -929,7 +929,7 @@ func chatCompletionChoice(index int, result generationResult, tools []openAITool
 		message["tool_calls"] = openAIToolCallOutput(result.toolCalls, tools)
 	}
 	if len(result.citations) > 0 {
-		message["annotations"] = openAICitations(result.citations)
+		message["annotations"] = openAICitations(result.citations, rendered, spans)
 	}
 	choice := map[string]any{
 		"index":         index,
@@ -970,7 +970,8 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			return result, err
 		}
 		if len(result.citations) > 0 {
-			_ = write(index, map[string]any{"annotations": openAICitations(result.citations)}, nil)
+			rendered, spans := renderedContent(result.events)
+			_ = write(index, map[string]any{"annotations": openAICitations(result.citations, rendered, spans)}, nil)
 		}
 		finish := chatFinishReason(result, request.Tools)
 		finalDelta := map[string]any{}
@@ -987,6 +988,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			_ = writeSSE(w, "", map[string]any{"error": map[string]any{
 				"message": err.Error(),
 				"type":    openAIErrorType(status, code),
+				"param":   nil,
 				"code":    code,
 			}})
 		}
@@ -1166,14 +1168,22 @@ func openAIGoogleThoughtSignature(signature string) map[string]any {
 	return map[string]any{"google": map[string]string{"thought_signature": signature}}
 }
 
-func openAICitations(citations []aistudio.Citation) []map[string]any {
+// openAICitations 返回 Chat 消息的 url_citation 注释，下标为渲染后 content 中的字符位置
+func openAICitations(citations []aistudio.Citation, content string, spans []textSpan) []map[string]any {
 	output := make([]map[string]any, 0, len(citations))
 	for _, citation := range citations {
+		start, end, ok := 0, 0, citation.End == 0
+		if citation.End > 0 {
+			start, end, ok = spanCitation(content, spans, citation)
+		}
+		if !ok {
+			continue
+		}
 		output = append(output, map[string]any{
 			"type": "url_citation",
 			"url_citation": map[string]any{
-				"start_index": citation.Start,
-				"end_index":   citation.End,
+				"start_index": start,
+				"end_index":   end,
 				"title":       citation.Title,
 				"url":         citation.URL,
 			},
@@ -1196,16 +1206,27 @@ func openAIUsage(usage *aistudio.Usage) map[string]any {
 	}
 }
 
-func renderedContent(events []aistudio.Event) string {
+// renderedContent 返回 Chat 消息正文与其中各段连续正文的位置：正文原样拼接，媒体与代码执行渲染为 Markdown
+func renderedContent(events []aistudio.Event) (string, []textSpan) {
 	var content strings.Builder
+	var spans []textSpan
+	source, joined := 0, false
 	for _, event := range events {
 		switch event.Kind {
 		case aistudio.EventText:
+			if joined {
+				spans[len(spans)-1].length += len(event.Text)
+			} else {
+				spans = append(spans, textSpan{source: source, output: content.Len(), length: len(event.Text)})
+				joined = true
+			}
+			source += len(event.Text)
 			content.WriteString(event.Text)
 		case aistudio.EventMedia:
 			if event.Media == nil {
 				continue
 			}
+			joined = false
 			if content.Len() > 0 && !strings.HasSuffix(content.String(), "\n") {
 				content.WriteByte('\n')
 			}
@@ -1215,6 +1236,7 @@ func renderedContent(events []aistudio.Event) string {
 			if rendered == "" {
 				continue
 			}
+			joined = false
 			if content.Len() > 0 && !strings.HasSuffix(content.String(), "\n") {
 				content.WriteByte('\n')
 			}
@@ -1222,5 +1244,5 @@ func renderedContent(events []aistudio.Event) string {
 			content.WriteByte('\n')
 		}
 	}
-	return content.String()
+	return content.String(), spans
 }

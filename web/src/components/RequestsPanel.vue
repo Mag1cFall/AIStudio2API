@@ -19,9 +19,17 @@ const emit = defineEmits<{
   notice: [message: string, tone: 'success' | 'error']
 }>()
 
-const { locale, t, errorText } = useI18n()
+const { locale, t, errorText, logText } = useI18n()
 const cancelling = ref('')
 const refreshing = ref(false)
+
+// cooldownReason 把冷却原因开头的冷却类型换成当前语言，上游错误原文保持原样
+function cooldownReason(reason: string | undefined): string {
+  if (!reason) return '—'
+  const separator = reason.indexOf(': ')
+  if (separator <= 0) return reason
+  return `${logText(reason.slice(0, separator))}: ${reason.slice(separator + 2)}`
+}
 
 const requestStateKeys: Record<RequestState, TranslationKey> = {
   queued: 'state.queued',
@@ -131,7 +139,7 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
               </span>
             </div>
             <div class="flex flex-wrap justify-between gap-2 p-3 text-xs text-gray-500">
-              <span class="min-w-0 break-words">{{ cooldown.reason || '—' }}</span>
+              <span class="min-w-0 break-words">{{ cooldownReason(cooldown.reason) }}</span>
               <span>{{ t('cooldowns.until') }}: {{ formatTime(cooldown.until) }}</span>
             </div>
           </div>

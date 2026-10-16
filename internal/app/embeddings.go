@@ -12,6 +12,7 @@ import (
 
 // Embed 跟踪 Build 通道 embedding 使用的账户、通道与输入 token
 func (service *trackedService) Embed(ctx context.Context, request aistudio.EmbeddingRequest) (aistudio.EmbeddingResult, error) {
+	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.StartAccessLog(ctx)
 	request.Model = service.pool.CanonicalModelID(request.Model)

@@ -118,6 +118,11 @@ type RPCError struct {
 	RetryDelay time.Duration
 }
 
+// ContextOverflow 返回错误是否为上游报告的输入 token 超过模型上限
+func (e *RPCError) ContextOverflow() bool {
+	return e.StatusCode == http.StatusBadRequest && strings.Contains(e.Message, "input token count exceeds the maximum number of tokens allowed")
+}
+
 // Error 返回结构化上游错误
 func (e *RPCError) Error() string {
 	if e.Code != 0 {
@@ -129,6 +134,14 @@ func (e *RPCError) Error() string {
 // HTTPStatus 返回上游 HTTP 状态
 func (e *RPCError) HTTPStatus() int {
 	return e.StatusCode
+}
+
+// RetryAt 返回上游给出的可重试时刻，没有重试时长时返回零值
+func (e *RPCError) RetryAt(now time.Time) time.Time {
+	if e.RetryDelay <= 0 {
+		return time.Time{}
+	}
+	return now.Add(e.RetryDelay)
 }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {

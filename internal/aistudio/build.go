@@ -566,7 +566,7 @@ func (d *BuildStreamDecoder) Decode(raw []byte) ([]Event, error) {
 			usage := *d.usage
 			events = append(events, Event{Kind: EventUsage, Usage: &usage})
 		}
-		events = append(events, Event{Kind: EventFinish, FinishReason: buildEnumName(candidate.FinishReason, "FINISH_REASON_"), FinishMessage: candidate.FinishMessage})
+		events = append(events, Event{Kind: EventFinish, FinishReason: buildFinishReason(candidate.FinishReason), FinishMessage: candidate.FinishMessage})
 		d.finished = true
 	}
 	return events, nil
@@ -587,6 +587,20 @@ func buildEnumName(value string, prefix string) string {
 		return "unspecified"
 	}
 	return strings.ToLower(value)
+}
+
+// buildFinishReason 把 Gemini API 终止原因转换为 Playground 同名原因，Playground 没有的原因加 provider_ 前缀
+func buildFinishReason(value string) string {
+	name := buildEnumName(value, "FINISH_REASON_")
+	for code := int64(0); ; code++ {
+		known := decodeFinishReason(code)
+		if known == name {
+			return name
+		}
+		if strings.HasPrefix(known, "provider_") {
+			return "provider_" + name
+		}
+	}
 }
 
 func decodeBuildPart(part buildResponsePart, index int, raw []byte) ([]Event, error) {

@@ -54,11 +54,11 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		models, err := s.service.Models(r.Context())
 		if err != nil {
 			if shouldWriteRequestError(r, err) {
-				writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+				writeGeminiRequestError(w, err)
 			}
 			return
 		}
-		model, _ := lookupPublicModel(models, generate.Model)
+		model, _ := LookupPublicModel(models, generate.Model)
 		audioExpected = interactionAudioExpected(generate.Config.ResponseModalities, model)
 	}
 	ctx, cancel := context.WithCancel(r.Context())
@@ -70,7 +70,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}
@@ -100,7 +100,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if shouldWriteRequestError(r, err) {
-		writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+		writeGeminiRequestError(w, err)
 	}
 }
 
@@ -181,7 +181,7 @@ func interactionObject(request aistudio.GenerateRequest, created, status string,
 	}
 	if usage != nil {
 		object["usage"] = map[string]any{
-			"total_input_tokens": usage.InputTokens, "total_output_tokens": usage.OutputTokens,
+			"total_input_tokens": usage.InputTokens, "total_cached_tokens": usage.CachedTokens, "total_output_tokens": usage.OutputTokens,
 			"total_thought_tokens": usage.ReasoningTokens, "total_tool_use_tokens": usage.ToolTokens,
 			"total_tokens": usage.TotalTokens,
 		}
@@ -189,12 +189,12 @@ func interactionObject(request aistudio.GenerateRequest, created, status string,
 	return object
 }
 
-// interactionStatus 将生成终态转换为交互资源状态
+// interactionStatus 将生成终态转换为交互资源状态，输出上限与内容拦截为 incomplete
 func interactionStatus(result generationResult) string {
-	if result.finishReason != "stop" && result.finishReason != "tool_calls" {
+	switch openAIFinishReason(result.finishReason, len(result.toolCalls) > 0) {
+	case "length", "content_filter":
 		return "incomplete"
-	}
-	if len(result.toolCalls) > 0 {
+	case "tool_calls":
 		return "requires_action"
 	}
 	return "completed"

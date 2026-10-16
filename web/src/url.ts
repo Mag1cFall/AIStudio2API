@@ -16,22 +16,36 @@ function writeQuery(values: Record<string, string | null>): void {
   if (url.href !== window.location.href) window.history.replaceState(null, '', url)
 }
 
-// useQueryParam 将页面内状态同步到地址栏查询参数，浏览器前进后退时更新，缓存页面重新显示时写回
+// bindQuery 将页面内状态同步到地址栏查询参数，等于 fallback 时不写入，浏览器前进后退时更新，缓存页面重新显示时写回
+function bindQuery<T extends string>(name: string, read: () => T, fallback: T): Ref<T> {
+  const state = ref(read()) as Ref<T>
+  const write = (value: T): void => writeQuery({ [name]: value === fallback ? null : value })
+  watch(state, write)
+  onActivated(() => write(state.value))
+  const sync = (): void => {
+    state.value = read()
+  }
+  window.addEventListener('popstate', sync)
+  onUnmounted(() => window.removeEventListener('popstate', sync))
+  return state
+}
+
+// useQueryParam 以限定取值的查询参数保存页面内状态
 export function useQueryParam<T extends string>(
   name: string,
   allowed: readonly T[],
   fallback: T,
 ): Ref<T> {
-  const state = ref(queryValue(name, allowed, fallback)) as Ref<T>
-  const write = (value: T): void => writeQuery({ [name]: value === fallback ? null : value })
-  watch(state, write)
-  onActivated(() => write(state.value))
-  const sync = (): void => {
-    state.value = queryValue(name, allowed, fallback)
-  }
-  window.addEventListener('popstate', sync)
-  onUnmounted(() => window.removeEventListener('popstate', sync))
-  return state
+  return bindQuery(name, () => queryValue(name, allowed, fallback), fallback)
+}
+
+// useQueryText 以任意文本的查询参数保存页面内状态
+export function useQueryText(name: string, fallback = ''): Ref<string> {
+  return bindQuery(
+    name,
+    () => new URLSearchParams(window.location.search).get(name) ?? fallback,
+    fallback,
+  )
 }
 
 // useTabParam 以 tab 查询参数保存当前页面，切换页面时清除上一页面的查询参数

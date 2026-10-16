@@ -542,7 +542,7 @@ func (s *server) handleGeminiFileList(w http.ResponseWriter, r *http.Request) {
 	files, err := service.ListFiles(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}
@@ -577,7 +577,7 @@ func writeGeminiFileError(w http.ResponseWriter, r *http.Request, err error) {
 		writeGeminiFileNotFound(w, r.PathValue("file"))
 		return
 	}
-	writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+	writeGeminiRequestError(w, err)
 }
 
 // writeGeminiFileNotFound 返回文件不存在的 404

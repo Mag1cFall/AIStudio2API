@@ -70,29 +70,6 @@ func (driver *NativeLoginDriver) Login(ctx context.Context, request IsolatedLogi
 	}, nil
 }
 
-// Verify 使用无头隔离 Camoufox 验证已有认证状态
-func (driver *NativeLoginDriver) Verify(ctx context.Context, request IsolatedLoginRequest, state StorageState) (LoginVerification, error) {
-	if driver == nil {
-		return LoginVerification{}, errors.New("纯 Go Camoufox 登录驱动未初始化")
-	}
-	if err := state.Validate(); err != nil {
-		return LoginVerification{}, err
-	}
-	encoded, err := json.Marshal(state)
-	if err != nil {
-		return LoginVerification{}, fmt.Errorf("编码隔离验证状态: %w", err)
-	}
-	verification, err := camoufoxnative.Verify(ctx, driver.options(request), encoded)
-	if err != nil {
-		return LoginVerification{}, err
-	}
-	return LoginVerification{
-		Authenticated: verification.Authenticated,
-		VerifiedAt:    verification.VerifiedAt,
-		Reason:        verification.Reason,
-	}, nil
-}
-
 func (driver *NativeLoginDriver) options(request IsolatedLoginRequest) camoufoxnative.LoginOptions {
 	return camoufoxnative.LoginOptions{
 		ExecutablePath: driver.camoufox,

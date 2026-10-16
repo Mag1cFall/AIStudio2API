@@ -7,6 +7,8 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,7 +46,16 @@ func newRuntime(
 		return nil, nil, nil, err
 	}
 
-	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端")
+	egress := "直连"
+	if cfg.Proxy == "" {
+		cfg.Proxy = systemProxy()
+		if cfg.Proxy != "" {
+			egress = redactedProxy(cfg.Proxy) + " | 来源=系统代理"
+		}
+	} else {
+		egress = redactedProxy(cfg.Proxy)
+	}
+	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
@@ -98,6 +109,7 @@ func newRuntime(
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
+	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	requests.log("service", "INFO", fmt.Sprintf(
 		"协议运行时就绪 | 账户=%d | 耗时=%s",
@@ -114,33 +126,32 @@ func newRuntime(
 
 // accountWorkerManager 管理每账户的长驻 WAA worker
 type accountWorkerManager struct {
-	mu              sync.RWMutex
-	fillMu          sync.Mutex
-	rebalanceMu     sync.Mutex
-	pool            *aistudio.AccountPool
-	accounts        map[string]*accountWorker
-	openings        map[string]chan struct{}
-	requests        *requestRegistry
-	refresher       *authRuntimeRefresher
-	camoufox        string
-	globalProxy     string
-	initTimeout     time.Duration
-	warmTarget      int
-	maxActive       int
-	warmConcurrency int
-	startupSlots    chan struct{}
-	temporaryChat   bool
-	lifecycle       context.Context
-	cancel          context.CancelFunc
-	closed          bool
-	signalMu        sync.Mutex
-	signal          chan struct{}
-	dispatch        *dispatchQueue
-	victimMu        sync.Mutex
-	victims         map[string]struct{}
-	backgroundMu    sync.Mutex
-	background      context.Context
-	stopBackground  context.CancelFunc
+	mu             sync.RWMutex
+	fillMu         sync.Mutex
+	rebalanceMu    sync.Mutex
+	pool           *aistudio.AccountPool
+	accounts       map[string]*accountWorker
+	openings       map[string]chan struct{}
+	requests       *requestRegistry
+	refresher      *authRuntimeRefresher
+	camoufox       string
+	globalProxy    string
+	initTimeout    time.Duration
+	warmTarget     atomic.Int64
+	maxActive      atomic.Int64
+	startup        startupLimiter
+	temporaryChat  bool
+	lifecycle      context.Context
+	cancel         context.CancelFunc
+	closed         bool
+	signalMu       sync.Mutex
+	signal         chan struct{}
+	dispatch       *dispatchQueue
+	victimMu       sync.Mutex
+	victims        map[string]struct{}
+	backgroundMu   sync.Mutex
+	background     context.Context
+	stopBackground context.CancelFunc
 }
 
 type accountWorker struct {
@@ -256,7 +267,7 @@ func (err *accountWorkerInitError) Unwrap() error {
 	return err.err
 }
 
-// newAccountWorkerManager 创建账户 worker 配置，纯 Go 后端同时启动的 Worker 数只受活动上限约束
+// newAccountWorkerManager 创建账户 worker 配置
 func newAccountWorkerManager(
 	pool *aistudio.AccountPool,
 	accounts []*aistudio.Account,
@@ -269,19 +280,15 @@ func newAccountWorkerManager(
 	warmConcurrency int,
 	temporaryChat bool,
 ) *accountWorkerManager {
-	if camoufoxPath == "" {
-		warmConcurrency = max(maxActive, 1)
-	}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	manager := &accountWorkerManager{
 		pool: pool, accounts: make(map[string]*accountWorker, len(accounts)), requests: requests, camoufox: camoufoxPath,
-		globalProxy: globalProxy, initTimeout: initTimeout,
-		warmTarget: warmTarget, maxActive: maxActive, warmConcurrency: warmConcurrency, temporaryChat: temporaryChat,
-		startupSlots: make(chan struct{}, max(warmConcurrency, 1)),
-		openings:     make(map[string]chan struct{}),
-		lifecycle:    lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
+		globalProxy: globalProxy, initTimeout: initTimeout, temporaryChat: temporaryChat,
+		openings:  make(map[string]chan struct{}),
+		lifecycle: lifecycle, cancel: cancel, signal: make(chan struct{}), dispatch: newDispatchQueue(),
 		victims: make(map[string]struct{}),
 	}
+	manager.setLimits(warmTarget, maxActive, warmConcurrency)
 	manager.background, manager.stopBackground = context.WithCancel(lifecycle)
 	for _, account := range accounts {
 		if account == nil {
@@ -292,6 +299,36 @@ func newAccountWorkerManager(
 	go manager.forwardPoolChanges()
 	go manager.reapIdleWorkers()
 	return manager
+}
+
+// SetCapacity 设置常驻 Worker 数、峰值 Worker 上限与 Camoufox 启动并发，随后关闭超出峰值上限的空闲 Worker
+func (manager *accountWorkerManager) SetCapacity(warmTarget int, maxActive int, startupConcurrency int) {
+	manager.setLimits(warmTarget, maxActive, startupConcurrency)
+	manager.dispatch.wakeHeads()
+	go func() {
+		for manager.reapIdleWorker(time.Now().Add(-workerIdleTimeout)) {
+		}
+	}()
+}
+
+// setLimits 保存 Worker 数量上限，纯 Go 后端同时启动的 Worker 数只受峰值上限约束
+func (manager *accountWorkerManager) setLimits(warmTarget int, maxActive int, startupConcurrency int) {
+	if manager.camoufox == "" {
+		startupConcurrency = maxActive
+	}
+	manager.warmTarget.Store(int64(warmTarget))
+	manager.maxActive.Store(int64(maxActive))
+	manager.startup.setLimit(max(startupConcurrency, 1))
+}
+
+// warmLimit 返回常驻 Worker 数
+func (manager *accountWorkerManager) warmLimit() int {
+	return int(manager.warmTarget.Load())
+}
+
+// activeLimit 返回峰值 Worker 上限
+func (manager *accountWorkerManager) activeLimit() int {
+	return int(manager.maxActive.Load())
 }
 
 // expandInBackground 在后台为账户启动 Worker，就绪后由调度信号唤醒排队请求
@@ -404,11 +441,12 @@ func (manager *accountWorkerManager) reapIdleWorkers() {
 	}
 }
 
-// reapIdleWorker 关闭一个最近使用早于 before 的多余空闲 Worker，并返回是否关闭
+// reapIdleWorker 关闭一个多余的空闲 Worker 并返回是否关闭：超出峰值上限时立即关闭，否则只关闭最近使用早于 before 的
 func (manager *accountWorkerManager) reapIdleWorker(before time.Time) bool {
 	manager.rebalanceMu.Lock()
 	defer manager.rebalanceMu.Unlock()
-	if len(manager.openings) > 0 || len(manager.WarmAccountIDs()) <= manager.warmTarget {
+	warm := len(manager.WarmAccountIDs())
+	if len(manager.openings) > 0 || warm <= manager.warmLimit() {
 		return false
 	}
 	victim := manager.idleWarmVictim("")
@@ -419,7 +457,8 @@ func (manager *accountWorkerManager) reapIdleWorker(before time.Time) bool {
 	account := manager.accounts[victim]
 	manager.mu.RUnlock()
 	_, lastUsed := manager.pool.Activity(victim)
-	if lastUsed.After(before) || account != nil && time.Unix(0, account.readyAt.Load()).After(before) {
+	if warm <= manager.activeLimit() &&
+		(lastUsed.After(before) || account != nil && time.Unix(0, account.readyAt.Load()).After(before)) {
 		return false
 	}
 	evicted, err := manager.evictIdleWorker(manager.lifecycle, victim)
@@ -429,7 +468,7 @@ func (manager *accountWorkerManager) reapIdleWorker(before time.Time) bool {
 	}
 	if evicted {
 		manager.requests.log("service", "INFO", fmt.Sprintf(
-			"WAA Worker 空闲回收 | Worker=%d/%d", len(manager.WarmAccountIDs()), manager.maxActive,
+			"WAA Worker 空闲回收 | Worker=%d/%d", len(manager.WarmAccountIDs()), manager.activeLimit(),
 		))
 	}
 	return evicted
@@ -814,7 +853,7 @@ func (manager *accountWorkerManager) PrewarmTarget() int {
 			available++
 		}
 	}
-	return min(manager.warmTarget, available)
+	return min(manager.warmLimit(), available)
 }
 
 func (manager *accountWorkerManager) classifyBootstrapCandidates(
@@ -997,14 +1036,12 @@ func (manager *accountWorkerManager) startReservedWorker(
 		ownsLease = true
 		manager.clearRuntimeBusy(account)
 	}
-	select {
-	case manager.startupSlots <- struct{}{}:
-	case <-ctx.Done():
+	if err := manager.startup.acquire(ctx); err != nil {
 		if ownsLease {
 			_ = runtimeLease.Release()
 		}
 		account.startupMu.Unlock()
-		return nil, ctx.Err()
+		return nil, err
 	}
 	manager.requests.log(label, "INFO", "WAA Worker 启动 | 1/7 | 初始化页面 | 页面模型="+bootstrapModel)
 	initCtx, cancel := context.WithTimeout(ctx, manager.initTimeout)
@@ -1015,7 +1052,7 @@ func (manager *accountWorkerManager) startReservedWorker(
 	}
 	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	cancel()
-	<-manager.startupSlots
+	manager.startup.release()
 	if initErr != nil {
 		if ownsLease {
 			_ = runtimeLease.Release()
@@ -1269,7 +1306,7 @@ func (manager *accountWorkerManager) ensureWorker(
 			occupancy.slots++
 		}
 		_, replacing := occupied[accountID]
-		if replacing || occupancy.slots < manager.maxActive {
+		if replacing || occupancy.slots < manager.activeLimit() {
 			opening := make(chan struct{})
 			manager.openings[accountID] = opening
 			manager.rebalanceMu.Unlock()
@@ -1285,9 +1322,9 @@ func (manager *accountWorkerManager) ensureWorker(
 			manager.finishOpening(accountID, opening)
 			warmCount := len(manager.WarmAccountIDs())
 			manager.rebalanceMu.Unlock()
-			if err == nil && warmCount > manager.warmTarget {
+			if err == nil && warmCount > manager.warmLimit() {
 				manager.requests.log("service", "INFO", fmt.Sprintf(
-					"WAA Worker 按需扩容 | Worker=%d/%d", warmCount, manager.maxActive,
+					"WAA Worker 按需扩容 | Worker=%d/%d", warmCount, manager.activeLimit(),
 				))
 			}
 			return preparer, err
@@ -1354,9 +1391,9 @@ func (manager *accountWorkerManager) ensureWorker(
 				if activationErr != nil {
 					return nil, activationErr
 				}
-				if warmCount > manager.warmTarget {
+				if warmCount > manager.warmLimit() {
 					manager.requests.log("service", "INFO", fmt.Sprintf(
-						"WAA Worker 按需替换 | Worker=%d/%d", warmCount, manager.maxActive,
+						"WAA Worker 按需替换 | Worker=%d/%d", warmCount, manager.activeLimit(),
 					))
 				}
 				return pending, nil
@@ -1483,7 +1520,8 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			return
 		}
 		warm := manager.WarmAccountIDs()
-		if len(warm) >= manager.warmTarget {
+		limit := manager.warmLimit()
+		if len(warm) >= limit {
 			manager.requests.log("service", "INFO", fmt.Sprintf(
 				"WAA Worker 预热完成 | Worker=%d/%d | 耗时=%s",
 				len(warm), manager.PrewarmTarget(), time.Since(startedAt).Round(time.Millisecond),
@@ -1491,8 +1529,8 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			notify(nil)
 			return
 		}
-		remaining := manager.warmTarget - len(warm)
-		batchSize := min(manager.warmConcurrency, remaining)
+		remaining := limit - len(warm)
+		batchSize := min(manager.startup.size(), remaining)
 		groups, err := manager.classifyBootstrapCandidates(ctx, warm)
 		var runtimeBusyErr error
 		if err != nil {
@@ -1829,6 +1867,7 @@ func (provider *accountHeaderProvider) ProtocolHeaders(ctx context.Context, acco
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
 	buildNativeNonstream bool
+	modelMapping         []config.ModelAlias
 	lifecycle            context.Context
 	service              aistudio.Service
 	catalog              modelCatalogService
@@ -1852,11 +1891,13 @@ type trackedService struct {
 	modelChangeMu        sync.Mutex
 	modelRevision        uint64
 	modelApplied         uint64
+	stateRefreshMu       sync.Mutex
+	stateRefreshAt       map[string]time.Time
 }
 
 type modelCatalogService interface {
 	RefreshAccountModels(context.Context, string) ([]aistudio.Model, error)
-	RefreshAccountTier(context.Context, string) (aistudio.BenefitTier, aistudio.BenefitTier, error)
+	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
 	CachedModels() []aistudio.Model
 }
 
@@ -1872,7 +1913,7 @@ func newTrackedService(
 	catalog := service.(modelCatalogService)
 	return &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
-		timeout: timeout, modelRetries: make(map[string]struct{}),
+		timeout: timeout, modelRetries: make(map[string]struct{}), stateRefreshAt: make(map[string]time.Time),
 	}
 }
 
@@ -1885,7 +1926,7 @@ const (
 	serviceLaunching
 	serviceRunning
 	modelCatalogRetryInterval        = 30 * time.Second
-	benefitTierRefreshInterval       = 10 * time.Minute
+	accountStateRefreshInterval      = 10 * time.Minute
 	modelCatalogShutdownTimeout      = 2 * time.Second
 	serviceTransitionShutdownTimeout = 12 * time.Second
 )
@@ -2218,9 +2259,64 @@ func (service *trackedService) finishStop(transitionDone chan struct{}, modelRef
 	service.lifecycleMu.Unlock()
 }
 
-// Models 返回已启用通道可以提供的公开目录
+// Models 返回已启用通道可以提供的公开目录，生成服务未运行且目录为空时返回服务停止错误
 func (service *trackedService) Models(context.Context) ([]aistudio.Model, error) {
-	return service.pool.PublicModels(service.modelSnapshot()), nil
+	models := service.modelSnapshot()
+	if len(models) == 0 && service.state.Load() != serviceRunning {
+		return nil, &serviceStoppedError{}
+	}
+	return service.withAliases(service.pool.PublicModels(models)), nil
+}
+
+// withAliases 把 MODEL_MAPPING 中目标在目录内的别名加入公开目录，字段取自目标模型，与目录 ID 同名的别名替换该条目，同名别名以先写的为准
+func (service *trackedService) withAliases(models []aistudio.Model) []aistudio.Model {
+	index := make(map[string]int, len(models))
+	for i, model := range models {
+		index[model.ID] = i
+	}
+	targets := slices.Clone(models)
+	done := make(map[string]bool)
+	for _, alias := range service.modelMapping {
+		if done[alias.Alias] {
+			continue
+		}
+		done[alias.Alias] = true
+		target, _, _ := aistudio.ApplyModelSuffix(alias.Model, aistudio.GenerationConfig{})
+		model, ok := api.LookupPublicModel(targets, target)
+		if !ok {
+			continue
+		}
+		model.ID = alias.Alias
+		if i, ok := index[alias.Alias]; ok {
+			models[i] = model
+			continue
+		}
+		index[alias.Alias] = len(models)
+		models = append(models, model)
+	}
+	return models
+}
+
+// mappedModel 返回 MODEL_MAPPING 中别名映射到的模型名，别名带思考后缀时该后缀替换目标自带的后缀，不是别名时原样返回
+func (service *trackedService) mappedModel(name string) string {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(name), "models/")
+	for _, alias := range service.modelMapping {
+		if alias.Alias == trimmed {
+			return alias.Model
+		}
+	}
+	open := strings.LastIndex(trimmed, "(")
+	if open <= 0 || !strings.HasSuffix(trimmed, ")") {
+		return name
+	}
+	base := strings.TrimSpace(trimmed[:open])
+	for _, alias := range service.modelMapping {
+		if alias.Alias == base {
+			target, _, _ := aistudio.ApplyModelSuffix(alias.Model, aistudio.GenerationConfig{})
+			return target + trimmed[open:]
+		}
+	}
+	return name
 }
 
 // catalogModels 返回管理页使用的完整目录与各模型可用通道
@@ -2392,6 +2488,19 @@ func (service *trackedService) applyCachedModelCatalog() {
 	}
 }
 
+// ApplyCapacity 让容量设置作用于后续调度，常驻 Worker 数调高时补足预热
+func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int) {
+	service.pool.SetPerAccountConcurrency(perAccountConcurrency)
+	service.workers.SetCapacity(warmTarget, maxActive, startupConcurrency)
+	service.lifecycleMu.Lock()
+	dataContext := service.dataContext
+	running := service.state.Load() == serviceRunning && dataContext != nil && dataContext.Err() == nil
+	service.lifecycleMu.Unlock()
+	if running && len(service.workers.WarmAccountIDs()) < warmTarget {
+		service.workers.StartPrewarm(dataContext)
+	}
+}
+
 func (service *trackedService) syncAccountModels(ctx context.Context, accountID string) ([]aistudio.Model, error) {
 	models, err := service.refreshAccountModelCatalog(ctx, accountID)
 	service.modelSyncMu.Lock()
@@ -2400,18 +2509,18 @@ func (service *trackedService) syncAccountModels(ctx context.Context, accountID 
 	return models, err
 }
 
-// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益
+// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益与目录
 func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 	ticker := time.NewTicker(modelCatalogRetryInterval)
 	defer ticker.Stop()
-	tierTicker := time.NewTicker(benefitTierRefreshInterval)
-	defer tierTicker.Stop()
+	stateTicker := time.NewTicker(accountStateRefreshInterval)
+	defer stateTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tierTicker.C:
-			service.refreshAccountTiers(ctx)
+		case <-stateTicker.C:
+			service.refreshAccountStates(ctx)
 		case <-ticker.C:
 			if !service.retryAccountModelCatalogs(ctx) {
 				return
@@ -2420,22 +2529,52 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 	}
 }
 
-// refreshAccountTiers 并发读取启用账户的权益，权益变化时发布账户与模型事件并记录日志
-func (service *trackedService) refreshAccountTiers(ctx context.Context) {
+// refreshAccountStates 并发读取启用账户的权益与模型目录，没有空闲槽位的账户跳过本轮
+func (service *trackedService) refreshAccountStates(ctx context.Context) {
 	var refreshes sync.WaitGroup
 	for _, accountID := range service.modelCatalogAccountIDs() {
-		refreshes.Go(func() {
-			requestCtx, cancel := service.lifecycleRequestContext(ctx)
-			defer cancel()
-			previous, tier, err := service.catalog.RefreshAccountTier(requestCtx, accountID)
-			if err != nil || previous == tier || ctx.Err() != nil {
-				return
-			}
-			service.publishModelAccess()
-			service.requests.log(accountID, "INFO", fmt.Sprintf("账户权益已更新 | 权益=%s→%s", previous, tier))
-		})
+		refreshes.Go(func() { _, _ = service.refreshAccountState(ctx, accountID, false) })
 	}
 	refreshes.Wait()
+}
+
+// refreshAccountState 读取账户权益与模型目录，失败或变化时发布账户与模型事件并记录日志
+func (service *trackedService) refreshAccountState(ctx context.Context, accountID string, wait bool) (aistudio.AccountRefresh, error) {
+	requestCtx, cancel := service.lifecycleRequestContext(ctx)
+	defer cancel()
+	refresh, err := service.catalog.RefreshAccountState(requestCtx, accountID, wait)
+	if ctx.Err() != nil || refresh.Skipped {
+		return refresh, err
+	}
+	if err != nil {
+		service.publishModelAccess()
+		service.requests.log(accountID, "WARN", "账户状态刷新失败 | 错误="+err.Error())
+		return refresh, err
+	}
+	if refresh.PreviousTier == refresh.Tier && !refresh.ModelsChanged {
+		return refresh, nil
+	}
+	service.modelSyncMu.Lock()
+	service.applyCachedModelCatalog()
+	service.modelSyncMu.Unlock()
+	service.publishModelAccess()
+	service.requests.log(accountID, "INFO", fmt.Sprintf(
+		"账户状态已更新 | 权益=%s→%s | 模型=%d→%d", refresh.PreviousTier, refresh.Tier, refresh.PreviousModels, refresh.Models,
+	))
+	return refresh, nil
+}
+
+// refreshAccountStateAfterLimit 在订阅模型撞到额度限制后于后台读取该账户权益与目录，同一账户每分钟最多一次
+func (service *trackedService) refreshAccountStateAfterLimit(accountID string) {
+	now := time.Now()
+	service.stateRefreshMu.Lock()
+	if now.Sub(service.stateRefreshAt[accountID]) < time.Minute {
+		service.stateRefreshMu.Unlock()
+		return
+	}
+	service.stateRefreshAt[accountID] = now
+	service.stateRefreshMu.Unlock()
+	go func() { _, _ = service.refreshAccountState(service.lifecycle, accountID, false) }()
 }
 
 func (service *trackedService) retryAccountModelCatalogs(ctx context.Context) bool {
@@ -2618,7 +2757,7 @@ func (service *trackedService) observedDataRequestContext(
 
 // CountTokens 返回上游权威输入 token 数
 func (service *trackedService) CountTokens(ctx context.Context, request aistudio.TokenCountRequest) (aistudio.TokenCount, error) {
-	model, _, err := aistudio.ApplyModelSuffix(request.Model, aistudio.GenerationConfig{})
+	model, _, err := aistudio.ApplyModelSuffix(service.mappedModel(request.Model), aistudio.GenerationConfig{})
 	if err != nil {
 		return aistudio.TokenCount{}, err
 	}
@@ -2635,6 +2774,7 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 
 // GenerateVideo 创建一个 Veo 长任务
 func (service *trackedService) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
+	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	request.Model = service.pool.CanonicalModelID(request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
@@ -2866,9 +3006,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		warmCandidates := len(warmAvailable) + len(groups.WarmBusy)
-		coolingVictim := len(active) >= service.workers.maxActive &&
+		coolingVictim := len(active) >= service.workers.activeLimit() &&
 			service.workers.idleWarmVictimFor("", selection.ModelID, true) != ""
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.maxActive || coolingVictim) && warmCandidates > 0 && !fixedAccount {
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() || coolingVictim) && warmCandidates > 0 && !fixedAccount {
 			standby := groups.StandbyReady
 			if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 				standby = cold
@@ -2879,10 +3019,10 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 			continue
 		}
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.maxActive ||
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() ||
 			warmCandidates == 0 && service.workers.idleWarmVictim("") != "") {
 			standby := groups.StandbyReady
-			if len(active) < service.workers.maxActive {
+			if len(active) < service.workers.activeLimit() {
 				if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 					standby = cold
 				}
@@ -3098,7 +3238,7 @@ func inlineMediaInput(contents []aistudio.Content) (int, int64) {
 // Generate 获取唯一账户并转发规范事件流
 func (service *trackedService) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
 	generationStartedAt := time.Now()
-	model, config, suffixErr := aistudio.ApplyModelSuffix(request.Model, request.Config)
+	model, config, suffixErr := aistudio.ApplyModelSuffix(service.mappedModel(request.Model), request.Config)
 	request.Model, request.Config = model, config
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
@@ -3405,9 +3545,8 @@ func (service *trackedService) generateWithRetry(
 				modelAccessScope = ""
 				scopeLabel = "全局"
 			}
-			stateErr := service.pool.MarkCooldownIfGeneration(
-				request.AccountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
-				cooldown.Until, cooldown.Reason,
+			until, stateErr := service.pool.MarkQuotaCooldownIfGeneration(
+				request.AccountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown,
 			)
 			if stateErr != nil {
 				err = errors.Join(err, stateErr)
@@ -3415,8 +3554,11 @@ func (service *trackedService) generateWithRetry(
 			} else {
 				service.requests.log(accountLabel, "WARN", fmt.Sprintf(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
-					cooldown.Kind, scopeLabel, cooldown.Until.Format(time.RFC3339),
+					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
 				))
+				if service.pool.ModelRequiresSubscription(request.AccountID, modelID) {
+					service.refreshAccountStateAfterLimit(request.AccountID)
+				}
 				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, selection) {
 					delete(attempted, request.AccountID)
 					maxAttempts++
@@ -3535,6 +3677,10 @@ func retryableGenerateAccountError(ctx context.Context, err error) bool {
 	}
 	if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+	var transportError *url.Error
+	if errors.As(err, &transportError) {
+		return ctx.Err() == nil
 	}
 	var rpcError *aistudio.RPCError
 	if !errors.As(err, &rpcError) {

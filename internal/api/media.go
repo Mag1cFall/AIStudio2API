@@ -67,7 +67,7 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 	models, err := s.service.Models(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -80,7 +80,7 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
-	model, _ := lookupPublicModel(models, request.Model)
+	model, _ := LookupPublicModel(models, request.Model)
 	imageConfig, err := openAIImageConfig(request.Size, request.Quality, model.CapabilityOptions)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -99,7 +99,7 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 	}, request.N)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -290,14 +290,14 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
 	result, err := consumeEvents(r.Context(), events, nil)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}

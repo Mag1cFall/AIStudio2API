@@ -7,7 +7,7 @@ import type { RequestBody } from '@/types'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
-const { t, locale, errorText } = useI18n()
+const { t, locale, errorText, logText } = useI18n()
 const request = computed(() => props.row.entry.request!)
 
 const body = ref<RequestBody | null>(null)
@@ -194,7 +194,7 @@ const bodyParts = computed(() =>
         <ol class="request-timeline">
           <li v-for="(event, index) in row.events" :key="index">
             <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
-            <span>{{ event.message }}</span>
+            <span>{{ logText(event.message) }}</span>
           </li>
         </ol>
         <details class="request-json">

@@ -5,7 +5,7 @@ import type { LogRow, LogStageState } from '@/logs'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
-const { t, locale } = useI18n()
+const { t, locale, logText } = useI18n()
 const stage = computed(() => props.row.stage!)
 // detailsRendered 记录步骤列表是否展开过，未展开的列表不渲染
 const detailsRendered = ref(false)
@@ -32,7 +32,7 @@ function renderDetails(event: Event): void {
       <span class="stage-state" :class="`state-${stage.state}`">{{
         stage.state === 'running' ? progress : t(stateKeys[stage.state])
       }}</span>
-      <strong>{{ stage.name }}</strong>
+      <strong>{{ logText(stage.name) }}</strong>
       <span v-if="stage.state !== 'running'" class="stage-progress">{{ progress }}</span>
     </div>
     <p
@@ -40,7 +40,7 @@ function renderDetails(event: Event): void {
       class="stage-detail"
       :class="{ 'stage-error': stage.state === 'failed' }"
     >
-      {{ stage.detail }}
+      {{ logText(stage.detail) }}
     </p>
     <details class="stage-details" @toggle="renderDetails">
       <summary>
@@ -50,7 +50,7 @@ function renderDetails(event: Event): void {
       <ol v-if="detailsRendered" class="stage-timeline">
         <li v-for="(event, index) in row.events" :key="index">
           <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
-          <span>{{ event.message }}</span>
+          <span>{{ logText(event.message) }}</span>
         </li>
       </ol>
     </details>

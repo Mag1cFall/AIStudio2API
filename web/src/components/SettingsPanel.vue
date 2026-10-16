@@ -28,6 +28,8 @@ const adminPassword = ref('')
 const form = reactive<ServiceConfig>({
   auto_start: false,
   request_body_log: false,
+  log_file: true,
+  log_max_total_mb: 500,
   admin_auth_enabled: false,
   admin_username: 'admin',
   admin_password_set: false,
@@ -40,6 +42,7 @@ const form = reactive<ServiceConfig>({
   management_restart_required: false,
   service_restart_required: false,
   proxy: '',
+  active_proxy: '',
   init_timeout: '2m',
   request_timeout: '5m',
   warm_worker_limit: 5,
@@ -48,6 +51,7 @@ const form = reactive<ServiceConfig>({
   per_account_concurrency: 2,
   routing_strategy: 'round-robin',
   upstream_channels: ['playground', 'build'],
+  model_mapping: '',
   waa_backend: 'camoufox',
   temporary_chat: false,
 })
@@ -89,6 +93,7 @@ const sections: {
     icon: 'channel',
     fields: [
       'upstream_channels',
+      'model_mapping',
       'build_native_nonstream',
       'waa_backend',
       'temporary_chat',
@@ -108,7 +113,13 @@ const sections: {
     label: 'settings.section.security',
     description: 'settings.section.securityHelp',
     icon: 'security',
-    fields: ['admin_auth_enabled', 'admin_username', 'request_body_log'],
+    fields: [
+      'admin_auth_enabled',
+      'admin_username',
+      'request_body_log',
+      'log_file',
+      'log_max_total_mb',
+    ],
   },
 ]
 const section = useQueryParam<SectionID>(
@@ -350,7 +361,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.warmWorkerLimit')"
               control-id="setting-warm"
               :description="t('settings.warmWorkerLimitHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('warm_worker_limit')"
             >
               <input
@@ -365,7 +376,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.maxActiveWorkers')"
               control-id="setting-max"
               :description="t('settings.maxActiveWorkersHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('max_active_workers')"
             >
               <input
@@ -380,7 +391,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.warmStartupConcurrency')"
               control-id="setting-startup"
               :description="t('settings.warmStartupConcurrencyHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('warm_startup_concurrency')"
             >
               <input
@@ -396,7 +407,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.perAccountConcurrency')"
               control-id="setting-per-account"
               :description="t('settings.perAccountConcurrencyHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('per_account_concurrency')"
             >
               <input
@@ -453,6 +464,22 @@ async function saveConfig(): Promise<void> {
                   {{ t(channelLabelKey(channel)) }}
                 </label>
               </div>
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.modelMapping')"
+              control-id="setting-model-mapping"
+              :description="t('settings.modelMappingHelp')"
+              effect="service"
+              :changed="changedFields.has('model_mapping')"
+            >
+              <input
+                id="setting-model-mapping"
+                v-model.trim="form.model_mapping"
+                :class="inputClass"
+                placeholder="claude-haiku-5-5:gemini-3.8-flash"
+                autocomplete="off"
+                spellcheck="false"
+              />
             </SettingRow>
             <SettingRow
               :label="t('settings.buildNative')"
@@ -532,6 +559,10 @@ async function saveConfig(): Promise<void> {
                 autocomplete="off"
                 spellcheck="false"
               />
+              <p class="mt-1 text-xs break-all text-gray-500">
+                {{ t('settings.activeProxy') }}:
+                {{ config.active_proxy || t('settings.proxyDirect') }}
+              </p>
             </SettingRow>
           </template>
 
@@ -585,6 +616,30 @@ async function saveConfig(): Promise<void> {
               :changed="changedFields.has('request_body_log')"
             >
               <UiSwitch id="setting-body-log" v-model="form.request_body_log" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.logFile')"
+              control-id="setting-log-file"
+              :description="t('settings.logFileHelp')"
+              effect="immediate"
+              :changed="changedFields.has('log_file')"
+            >
+              <UiSwitch id="setting-log-file" v-model="form.log_file" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.logMaxTotal')"
+              control-id="setting-log-max-total"
+              :description="t('settings.logMaxTotalHelp')"
+              effect="immediate"
+              :changed="changedFields.has('log_max_total_mb')"
+            >
+              <input
+                id="setting-log-max-total"
+                v-model.number="form.log_max_total_mb"
+                :class="inputClass"
+                type="number"
+                min="20"
+              />
             </SettingRow>
           </template>
         </div>

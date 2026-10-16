@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { channelLabelKey, useI18n } from '@/i18n'
 import type { Model } from '@/types'
+import { useQueryText } from '@/url'
 import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
@@ -11,8 +12,8 @@ const props = defineProps<{
 }>()
 
 const { locale, t } = useI18n()
-const query = ref('')
-const selectedMethod = ref('')
+const query = useQueryText('q')
+const selectedMethod = useQueryText('method')
 
 const methods = computed(() =>
   [...new Set(props.models.flatMap((model) => model.methods))].sort((left, right) =>
