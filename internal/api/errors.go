@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -71,6 +74,14 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 // writeSSEText 写入文本事件并刷新网络缓冲
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	return http.NewResponseController(w).Flush()
+}
+
+// writeGeminiHeartbeat 发送不触发事件的空行并传播连接错误
+func writeGeminiHeartbeat(w http.ResponseWriter) error {
+	if _, err := io.WriteString(w, "\n"); err != nil {
 		return err
 	}
 	return http.NewResponseController(w).Flush()
@@ -178,6 +189,7 @@ func writeOpenAIError(w http.ResponseWriter, status int, code string, message st
 	writeJSON(w, status, map[string]any{"error": map[string]any{
 		"message": message,
 		"type":    openAIErrorType(status, code),
+		"param":   nil,
 		"code":    code,
 	}})
 }
@@ -186,7 +198,10 @@ func openAIErrorType(status int, code string) string {
 	if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound || code == "invalid_request" || code == "invalid_api_key" || code == "model_not_found" {
 		return "invalid_request_error"
 	}
-	return "api_error"
+	if code == "rate_limit_exceeded" {
+		return "requests"
+	}
+	return "server_error"
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, errorType string, message string) {
@@ -207,6 +222,59 @@ func writeGeminiError(w http.ResponseWriter, status int, statusName string, mess
 		"message": message,
 		"status":  statusName,
 	}})
+}
+
+// writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After
+func writeOpenAIRequestError(w http.ResponseWriter, err error) {
+	setRetryAfter(w, err)
+	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+}
+
+// writeAnthropicRequestError 以 Anthropic 错误体写出请求失败，可重试时带 Retry-After
+func writeAnthropicRequestError(w http.ResponseWriter, err error) {
+	setRetryAfter(w, err)
+	writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), anthropicErrorMessage(err))
+}
+
+// contextOverflow 判断错误是否为上游的上下文超限
+func contextOverflow(err error) bool {
+	var rpc *aistudio.RPCError
+	return errors.As(err, &rpc) && rpc.ContextOverflow()
+}
+
+// anthropicErrorMessage 返回 Anthropic 错误消息，上下文超限时以 prompt is too long 开头
+func anthropicErrorMessage(err error) string {
+	if contextOverflow(err) {
+		return "prompt is too long: " + err.Error()
+	}
+	return err.Error()
+}
+
+// writeGeminiRequestError 以 Gemini 错误体写出请求失败，可重试时带 Retry-After 与 RetryInfo
+func writeGeminiRequestError(w http.ResponseWriter, err error) {
+	status := statusFromError(err)
+	payload := map[string]any{"code": status, "message": err.Error(), "status": geminiErrorStatus(err)}
+	if seconds := setRetryAfter(w, err); seconds > 0 {
+		payload["details"] = []any{map[string]any{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": strconv.FormatInt(seconds, 10) + "s"}}
+	}
+	setAccessLogResponseError(w, err.Error())
+	writeJSON(w, status, map[string]any{"error": payload})
+}
+
+// setRetryAfter 在错误给出可重试时刻时写入 Retry-After 秒数并返回它，否则返回 0
+func setRetryAfter(w http.ResponseWriter, err error) int64 {
+	var retry interface{ RetryAt(time.Time) time.Time }
+	if !errors.As(err, &retry) {
+		return 0
+	}
+	now := time.Now()
+	at := retry.RetryAt(now)
+	if !at.After(now) {
+		return 0
+	}
+	seconds := int64(math.Ceil(at.Sub(now).Seconds()))
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	return seconds
 }
 
 func writeAdminError(w http.ResponseWriter, status int, code string, message string) {
@@ -236,9 +304,14 @@ func openAIErrorCode(err error) string {
 	if isUnverifiedProtocolError(err) {
 		return "invalid_request"
 	}
+	if contextOverflow(err) {
+		return "context_length_exceeded"
+	}
 	switch statusFromError(err) {
 	case http.StatusNotFound:
 		return codeFromError(err, "model_not_found")
+	case http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
 	default:
 		return codeFromError(err, "upstream_error")
 	}
@@ -266,6 +339,8 @@ func anthropicStatusErrorType(status int) string {
 		return "request_too_large"
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
+	case http.StatusGatewayTimeout:
+		return "timeout_error"
 	case 529:
 		return "overloaded_error"
 	default:

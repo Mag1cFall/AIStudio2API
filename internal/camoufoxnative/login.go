@@ -45,14 +45,6 @@ type LoginResult struct {
 	DriveError       string
 }
 
-// LoginVerification 返回已有登录态的页面验证结果
-type LoginVerification struct {
-	Authenticated bool
-	PageURL       string
-	VerifiedAt    time.Time
-	Reason        string
-}
-
 type loginSession struct {
 	process    *browserProcess
 	connection *websocket.Conn
@@ -106,40 +98,6 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 		PageURL:          pageURL,
 		VerifiedAt:       time.Now().UTC(),
 		DriveError:       errorText(driveErr),
-	}, nil
-}
-
-// Verify 使用无头隔离 Camoufox 验证已有 Playwright storage state
-func Verify(ctx context.Context, options LoginOptions, storageStateJSON []byte) (verification LoginVerification, err error) {
-	options, err = validateLoginOptions(options)
-	if err != nil {
-		return LoginVerification{}, err
-	}
-	var state storageState
-	if err := json.Unmarshal(storageStateJSON, &state); err != nil {
-		return LoginVerification{}, fmt.Errorf("解析 storage state: %w", err)
-	}
-	if len(state.Cookies) == 0 {
-		return LoginVerification{}, errors.New("storage state 没有 Cookie")
-	}
-	verifyCtx, cancel := context.WithTimeout(ctx, options.Timeout)
-	defer cancel()
-	session, err := startLoginSession(verifyCtx, options, true, state)
-	if err != nil {
-		return LoginVerification{}, err
-	}
-	defer func() {
-		err = errors.Join(err, session.Close())
-	}()
-	pageURL, authenticated, reason, err := session.waitVerification(verifyCtx)
-	if err != nil {
-		return LoginVerification{}, err
-	}
-	return LoginVerification{
-		Authenticated: authenticated,
-		PageURL:       pageURL,
-		VerifiedAt:    time.Now().UTC(),
-		Reason:        reason,
 	}, nil
 }
 
@@ -276,37 +234,6 @@ func (session *loginSession) waitLogin(ctx context.Context, origins map[string]s
 		}
 		if err := waitContext(ctx, 300*time.Millisecond); err != nil {
 			return "", err
-		}
-	}
-}
-
-func (session *loginSession) waitVerification(ctx context.Context) (string, bool, string, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", false, "", err
-		}
-		pageURL, err := session.client.evaluateString(ctx, session.contextID, "location.href")
-		if err != nil {
-			if !retryablePageEvaluation(err) {
-				return "", false, "", fmt.Errorf("读取隔离验证页面: %w", err)
-			}
-			if err := waitContext(ctx, 200*time.Millisecond); err != nil {
-				return "", false, "", err
-			}
-			continue
-		}
-		if isGoogleLoginURL(pageURL) {
-			return pageURL, false, "AI Studio 登录已失效", nil
-		}
-		ready, err := session.client.evaluateBool(ctx, session.contextID, promptReadyExpression)
-		if err != nil && !retryablePageEvaluation(err) {
-			return "", false, "", fmt.Errorf("检查隔离验证页面: %w", err)
-		}
-		if err == nil && ready && strings.HasPrefix(pageURL, aiStudioOrigin+"/") {
-			return pageURL, true, "", nil
-		}
-		if err := waitContext(ctx, 200*time.Millisecond); err != nil {
-			return "", false, "", err
 		}
 	}
 }

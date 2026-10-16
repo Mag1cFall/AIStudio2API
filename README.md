@@ -186,7 +186,7 @@ docker compose up -d
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
-停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略保存后立即生效；管理页面地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址和 `PROXY_API_KEY` 在管理进程重启后生效。
 
 在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
@@ -225,7 +225,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 | Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 
-模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用。
 
 以 Cherry Studio 为例：
 
@@ -431,7 +431,7 @@ curl http://127.0.0.1:2048/v1/videos \
 
 公开端点实现标准 `generateContent`、`countTokens`、`embedContent`、`batchEmbedContents` 和 `predictLongRunning`；`bidiGenerateContent` 与 `bidiGenerateMusic` 模型经 `/v1/live` 调用。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
-启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。
+启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。客户端写死的模型名可用 `MODEL_MAPPING` 映射到目录中的模型，例如 `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`，别名以目标模型的字段列在模型目录中。
 
 ## 项目架构
 
@@ -467,10 +467,12 @@ cp .env.example .env
 | `PROXY_API_KEY` | 空 | 公开 API key |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
+| `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
+| `LOG_MAX_TOTAL_MB` | `500` | 日志目录总量上限，超出时删除最旧的文件，不小于 20 |
 | `ADMIN_AUTH_ENABLED` | `false` | 管理控制台账号密码登录开关 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
-| `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理 |
+| `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 |
 | `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
@@ -479,11 +481,12 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `UPSTREAM_CHANNELS` | `playground,build` | 生成请求使用的上游通道，可只保留其一 |
+| `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 
-服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制同时冷启动的 Camoufox Worker 数，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位。
+服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制同时冷启动的 Camoufox Worker 数，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位；这四项在管理页面保存后立即作用于后续调度，峰值上限调低时关闭多出的空闲 Worker，常驻数调高时补足预热。
 
 ### 端口配置
 
@@ -500,7 +503,7 @@ cp .env.example .env
 
 支持通过 HTTP、HTTPS 或 SOCKS5 代理访问 AI Studio，代理需要认证时在 URL 中填写账号密码，例如 `socks5://user:password@host:1080`：
 
-1. 在“服务配置”中设置全局代理
+1. 在“服务配置”中设置全局代理；留空时使用系统代理，先读 `HTTPS_PROXY` 环境变量，未设置时读 Windows 系统代理设置，代理输入框下方显示当前生成服务实际使用的出口
 2. 在“账户”页面编辑单个账户时可以设置账户专用代理
 3. 账户代理同时用于登录、WAA 与业务请求
 4. 带账号密码的代理由程序在本机回环地址提供无认证 SOCKS5 中转供 Camoufox 使用，账号密码不写入浏览器 profile；中转运行期间，本机其他进程也能经它使用该代理
@@ -520,7 +523,7 @@ cp .env.example .env
 
 账户邮箱同时作为目录名、管理页面标识和日志来源，统一使用小写形式。`.leases` 协调账户目录读写，用户缓存中的 runtime lease 保证同一邮箱在当前电脑上只有一个 WAA Worker。
 
-账户页支持 Chrome 批量导入和隔离 Camoufox 登录。`ready` 账户可以编辑、停用、验证和删除，`auth_required` 账户可以重新登录。
+账户页支持 Chrome 批量导入和隔离 Camoufox 登录。`ready` 账户可以编辑、停用、立即刷新和删除，`auth_required` 账户可以重新登录；“刷新全部”立即读取全部启用账户的权益与模型目录，后台每 10 分钟也会读取一次。从未读取成功的账户权益显示为未知，并显示最近一次失败原因。
 
 ## 详细文档
 

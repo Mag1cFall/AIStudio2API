@@ -29,6 +29,12 @@ var prices = map[string]price{
 	"gemini-robotics-er-2-streaming-preview": {input: 1, cached: 0.10, output: 5},
 }
 
+// Priced 返回模型是否有单价
+func Priced(model string) bool {
+	_, ok := prices[model]
+	return ok
+}
+
 // Cost 返回一个请求按模型单价估算的美元费用，cached 为 input 中命中缓存的部分，output 为思考与回复 token 之和，模型没有单价时为 0
 func Cost(model string, input, cached, output int64) float64 {
 	value := prices[model]

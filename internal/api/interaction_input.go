@@ -67,6 +67,23 @@ type interactionInput struct {
 	} `json:"annotations"`
 }
 
+// interactionContentParts 把 Interactions 内容块数组转成 part
+func interactionContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
+	var contents []interactionInput
+	if err := json.Unmarshal(raw, &contents); err != nil {
+		return nil, err
+	}
+	var parts []aistudio.Part
+	for _, content := range contents {
+		converted, err := content.parts()
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, converted...)
+	}
+	return parts, nil
+}
+
 // interactionList 解析协议中的单对象或数组联合字段
 func interactionList[T any](raw json.RawMessage) ([]T, error) {
 	value := strings.TrimSpace(string(raw))
@@ -249,12 +266,12 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 			if item.CallID == "" || len(item.Result) == 0 {
 				return nil, fmt.Errorf("function_result requires call_id and result")
 			}
-			result, mapErr := normalizeFunctionResultContent(item.Result)
+			result, media, mapErr := functionResultParts(item.Result, item.IsError, interactionContentParts)
 			if mapErr != nil {
 				return nil, mapErr
 			}
 			role = aistudio.RoleTool
-			parts = []aistudio.Part{{FunctionResult: &aistudio.FunctionResult{ID: item.CallID, Name: item.Name, Content: result}}}
+			parts = append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{ID: item.CallID, Name: item.Name, Content: result}}}, media...)
 		case "thought":
 			role = aistudio.RoleAssistant
 			if item.Signature != "" {

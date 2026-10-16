@@ -539,59 +539,20 @@ func keepAuthExtension(next *aistudio.StorageState, current aistudio.StorageStat
 	return next.SetAuthExtension(extension)
 }
 
-func (admin *runtimeAdmin) VerifyAccount(ctx context.Context, accountID string) (api.AdminAccount, error) {
-	lease, err := admin.pool.AcquireAccount(ctx, accountID)
+// RefreshAccount 在服务生命周期中立即读取账户权益与模型目录，管理页断开不中止
+func (admin *runtimeAdmin) RefreshAccount(_ context.Context, accountID string) (api.AdminAccountRefresh, error) {
+	refresh, err := admin.service.refreshAccountState(admin.service.lifecycle, accountID, true)
 	if err != nil {
-		return api.AdminAccount{}, accountOperationError(err)
+		return api.AdminAccountRefresh{}, accountOperationError(err)
 	}
-	account := lease.Account()
-	startedAt := time.Now()
-	admin.requests.log(account.Config.Label, "INFO", "账户验证 | 访问 AI Studio")
-	verification, err := admin.login.Verify(ctx, admin.loginRequest(account, account.Directory), account.StorageState)
-	if err == nil && !verification.Authenticated && admin.workers != nil && admin.workers.refresher != nil {
-		renewCtx := aistudio.ContextWithAccountLease(ctx, lease)
-		if admin.workers.refresher.Available(renewCtx) && admin.workers.refresher.Refresh(renewCtx) == nil {
-			admin.requests.log(account.Config.Label, "INFO", "账户验证 | 续签后重新访问 AI Studio")
-			verification, err = admin.login.Verify(ctx, admin.loginRequest(account, account.Directory), account.StorageState)
-		}
-	}
+	account, err := admin.account(accountID)
 	if err != nil {
-		admin.requests.log(account.Config.Label, "ERROR", fmt.Sprintf(
-			"账户验证失败 | 耗时=%s | 错误=%s",
-			time.Since(startedAt).Round(time.Millisecond), strings.TrimSpace(err.Error()),
-		))
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return api.AdminAccountRefresh{}, err
 	}
-	err = admin.service.changeModels(func() error {
-		if verification.Authenticated {
-			return errors.Join(
-				admin.pool.MarkReady(account.ID),
-				admin.pool.ResetModelAccess(account.ID),
-				admin.pool.SetCatalog(account.ID, account.BenefitTier, nil),
-			)
-		}
-		reason := strings.TrimSpace(verification.Reason)
-		if reason == "" {
-			reason = "AI Studio 登录已失效"
-		}
-		return admin.pool.MarkAuthRequired(account.ID, reason)
-	})
-	if err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := lease.Release(); err != nil {
-		return api.AdminAccount{}, err
-	}
-	if verification.Authenticated {
-		admin.syncAccountModelCatalog(ctx, account)
-	} else {
-		admin.service.publishModelAccess()
-	}
-	admin.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
-		"账户验证完成 | 已认证=%t | 耗时=%s",
-		verification.Authenticated, time.Since(startedAt).Round(time.Millisecond),
-	))
-	return admin.account(account.ID)
+	return api.AdminAccountRefresh{
+		Account: account, PreviousTier: refresh.PreviousTier.String(), Tier: refresh.Tier.String(),
+		PreviousModels: refresh.PreviousModels, Models: refresh.Models,
+	}, nil
 }
 
 // StartService 使用管理器提供的启动生命周期启动生成服务
@@ -787,7 +748,9 @@ func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, er
 	if err != nil {
 		return api.RuntimeConfig{}, err
 	}
-	return runtimeConfigDTO(cfg), nil
+	value := runtimeConfigDTO(cfg)
+	value.ActiveProxy = admin.config.Proxy
+	return value, nil
 }
 
 func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
@@ -808,8 +771,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
 	cfg := config.Config{
-		AutoStart:        value.AutoStart,
-		RequestBodyLog:   value.RequestBodyLog,
+		AutoStart:      value.AutoStart,
+		RequestBodyLog: value.RequestBodyLog,
+		LogFile:        value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
 		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		AuthStates:           value.AuthStates, ListenAddr: value.ListenAddr, ProxyAPIKey: value.APIKey,
@@ -819,6 +783,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
+		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             value.WAABackend,
 	}
@@ -830,7 +795,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	}
 	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	admin.requests.log("service", "INFO", "服务配置已保存")
-	return runtimeConfigDTO(cfg), nil
+	value = runtimeConfigDTO(cfg)
+	value.ActiveProxy = admin.config.Proxy
+	return value, nil
 }
 
 func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, error) {
@@ -1401,8 +1368,9 @@ func buildVersion() string {
 
 func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 	return api.RuntimeConfig{
-		AutoStart:        cfg.AutoStart,
-		RequestBodyLog:   cfg.RequestBodyLog,
+		AutoStart:      cfg.AutoStart,
+		RequestBodyLog: cfg.RequestBodyLog,
+		LogFile:        cfg.LogFile, LogMaxTotalMB: cfg.LogMaxTotalMB,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername,
 		AdminPasswordSet: cfg.AdminPassword != "", SavedAdminPassword: cfg.AdminPassword,
 		BuildNativeNonstream: cfg.BuildNativeNonstream,
@@ -1414,6 +1382,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,
 		RoutingStrategy:        cfg.RoutingStrategy,
 		UpstreamChannels:       cfg.UpstreamChannels,
+		ModelMapping:           cfg.ModelMapping,
 		TemporaryChat:          cfg.TemporaryChat,
 		WAABackend:             cfg.WAABackend,
 	}

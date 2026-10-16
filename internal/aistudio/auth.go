@@ -114,17 +114,9 @@ type IsolatedLoginResult struct {
 	DriveError   string
 }
 
-// LoginVerification 表示隔离运行时对登录态的验证结果
-type LoginVerification struct {
-	Authenticated bool      `json:"authenticated"`
-	VerifiedAt    time.Time `json:"verified_at"`
-	Reason        string    `json:"reason,omitempty"`
-}
-
-// IsolatedLoginDriver 定义独立浏览器登录与验证合同
+// IsolatedLoginDriver 定义独立浏览器登录
 type IsolatedLoginDriver interface {
 	Login(context.Context, IsolatedLoginRequest) (IsolatedLoginResult, error)
-	Verify(context.Context, IsolatedLoginRequest, StorageState) (LoginVerification, error)
 }
 
 // LoadStorageState 读取并校验 Playwright storage state

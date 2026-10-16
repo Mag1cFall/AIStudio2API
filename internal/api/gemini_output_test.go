@@ -76,18 +76,13 @@ func TestGeminiOutputParts_LeadingThoughtSignature(t *testing.T) {
 	}
 
 	parts := geminiOutputParts(result)
-	if len(parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d: %+v", len(parts), parts)
+	want := []map[string]any{
+		{"text": "", "thoughtSignature": "sig_pre"},
+		{"text": "Thinking step.", "thought": true},
+		{"text": "Final text."},
 	}
-
-	if parts[0]["thoughtSignature"] != "sig_pre" {
-		t.Errorf("expected thoughtSignature 'sig_pre' on parts[0], got %v", parts[0]["thoughtSignature"])
-	}
-	if parts[0]["text"] != "Thinking step." {
-		t.Errorf("expected text 'Thinking step.', got %v", parts[0]["text"])
-	}
-	if parts[1]["text"] != "Final text." {
-		t.Errorf("expected text 'Final text.', got %v", parts[1]["text"])
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("parts=%+v want=%+v", parts, want)
 	}
 }
 

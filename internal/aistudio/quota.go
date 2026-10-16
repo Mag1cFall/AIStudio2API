@@ -11,10 +11,14 @@ import (
 
 const quotaResetTimezone = "America/Los_Angeles"
 
+// planLimitBackoff 为没有恢复时间的套餐限额按连续次数递增的冷却时长
+var planLimitBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
+
 // CooldownState 表示账户或模型暂时不可调度的状态
 type CooldownState struct {
 	Until  time.Time `json:"until"`
 	Reason string    `json:"reason,omitempty"`
+	Level  int       `json:"level,omitempty"`
 }
 
 // Active 判断冷却状态当前是否生效
@@ -24,10 +28,11 @@ func (c CooldownState) Active(now time.Time) bool {
 
 // QuotaCooldown 表示上游额度限制对应的调度冷却
 type QuotaCooldown struct {
-	Until  time.Time
-	Global bool
-	Kind   string
-	Reason string
+	Until    time.Time
+	Global   bool
+	Kind     string
+	Reason   string
+	Escalate bool
 }
 
 // QuotaCooldownForError 解析上游分钟或每日额度限制
@@ -56,10 +61,25 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 			break
 		}
 	}
+	escalate := false
 	if rpcError.RetryDelay > 0 {
 		until = now.Add(rpcError.RetryDelay)
+	} else if kind == "短期限额" && strings.Contains(message, "reached your usage limit") {
+		kind, escalate = "套餐限额", true
 	}
-	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error()}, true
+	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error(), Escalate: escalate}, true
+}
+
+// planLimitCooldown 按同一范围上一次套餐限额冷却计算本次冷却；上一次仍未结束时沿用它
+func planLimitCooldown(previous CooldownState, exists bool, now time.Time, reason string) CooldownState {
+	level := 1
+	if exists && previous.Level > 0 {
+		if previous.Active(now) {
+			return previous
+		}
+		level = min(previous.Level+1, len(planLimitBackoff))
+	}
+	return CooldownState{Until: now.Add(planLimitBackoff[level-1]).UTC(), Reason: reason, Level: level}
 }
 
 func minuteQuotaEvidence(value string) bool {

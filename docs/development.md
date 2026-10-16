@@ -40,7 +40,7 @@ cd ..
 go run ./cmd/aistudio2api
 ```
 
-管理页面的“账户”页提供 Chrome 批量导入、浏览器登录和远程添加，也可以重新登录、验证、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。`setup` 保留以下四种命令行导入入口：
+管理页面的“账户”页提供 Chrome 批量导入、浏览器登录和远程添加，也可以重新登录、立即刷新、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。`setup` 保留以下四种命令行导入入口：
 
 | 入口 | 命令 | 适用场景 |
 | --- | --- | --- |
@@ -155,13 +155,15 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | 账户文件、目录或逗号分隔的多个路径 | `auth` |
 | `LISTEN_ADDR` | HTTP 服务监听地址 | `127.0.0.1:2048` |
-| `PROXY_API_KEY` | 公开 API 访问密钥 | 空 |
+| `PROXY_API_KEY` | 公开 API 访问密钥，多个用逗号分隔 | 空 |
 | `AUTO_START` | 管理服务就绪后自动启动生成服务；失败记录 `ERROR` 日志，管理服务继续运行 | `false` |
 | `REQUEST_BODY_LOG` | 保存公开 API 的 POST 请求与响应正文，各截断到 64 KiB，只保留最近 1000 条；保存后立即生效 | `false` |
+| `LOG_FILE` | 同时把服务日志写入 `runtime/logs/aistudio2api.log`，单文件 10 MB 轮转；保存后立即生效 | `true` |
+| `LOG_MAX_TOTAL_MB` | 日志目录总量上限，超出时删除最旧的文件，不小于 20；保存后立即生效 | `500` |
 | `ADMIN_AUTH_ENABLED` | 管理员账号密码登录开关 | `false` |
 | `ADMIN_USERNAME` | 管理员账号 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
-| `PROXY` | setup 与未设置账户代理时使用的固定出口 | 空 |
+| `PROXY` | setup 与未设置账户代理时使用的固定出口；留空时生成服务使用系统代理 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 | `5m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `5` |
@@ -170,6 +172,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `PER_ACCOUNT_CONCURRENCY` | 单账号同时执行的请求数 | `2` |
 | `ROUTING_STRATEGY` | 账户轮询 `round-robin` 或粘性优先 `fill-first` | `round-robin` |
 | `UPSTREAM_CHANNELS` | 生成请求的上游通道 `playground`、`build`，逗号分隔 | `playground,build` |
+| `MODEL_MAPPING` | 逗号分隔，每项以最后一个 `:` 分成别名与模型 ID | 空 |
 | `BUILD_NATIVE_NONSTREAM` | 非流式请求优先选择 Build 原生单次调用 | `true` |
 | `WAA_BACKEND` | WAA 后端 `camoufox` 或 `go` | `camoufox` |
 | `TEMPORARY_CHAT` | WAA 预热页是否使用临时对话 | `false` |
@@ -181,14 +184,17 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | 字段 | 语义 |
 | --- | --- |
 | `auth_states`、`proxy`、`init_timeout`、`request_timeout` | 下一次启动生成服务时使用的保存值 |
-| `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 下一次启动生成服务时使用的容量参数 |
+| `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 保存后立即作用于当前生成服务的容量参数 |
 | `temporary_chat`、`waa_backend`、`upstream_channels`、`build_native_nonstream` | 下一次启动生成服务时使用的 WAA 与上游通道配置 |
+| `model_mapping` | 下一次启动生成服务时使用的模型别名映射 |
 | `auto_start` | 下一次启动管理进程时是否自动启动生成服务 |
 | `request_body_log` | 保存后立即决定是否保存请求与响应正文 |
+| `log_file`、`log_max_total_mb` | 保存后立即开关日志文件并按新的总量上限轮转 |
 | `admin_auth_enabled`、`admin_username`、`admin_password` | 保存的管理登录配置；省略密码保留现值，密码只接受写入 |
 | `admin_password_set` | 是否已配置管理密码 |
 | `listen_addr`、`proxy_api_key` | 保存的管理监听配置 |
 | `active_listen_addr`、`active_proxy_api_key` | 当前管理进程固定使用的值 |
+| `active_proxy` | 当前生成服务使用的默认出口，`proxy` 为空时为系统代理，没有系统代理时为空 |
 | `management_restart_required` | 保存的监听地址、API key 或管理登录配置与当前管理进程不同 |
 | `service_restart_required` | 保存的生成服务配置与当前生成服务实例不同 |
 
@@ -239,13 +245,13 @@ POST /api/control/start
 
 账户更新以 `account.json` 原子写入为持久提交点。`internal/app` 先准备 `pending`（尚未提交）的固定出口，关闭旧 Worker并锁定该账户的 Worker 配置，再调用 `AccountLease.SaveConfig`；保存成功后依次提交 Worker 配置与固定出口。准备、关闭或保存失败时丢弃 pending 更新；保存后的租约释放错误原样返回，已发布配置继续生效。
 
-账户调度先按每个账户实时 `ListModels` 返回的模型和方法筛选，再选择已经就绪且有并发槽位的 Worker。`ROUTING_STRATEGY=round-robin` 在每个模型的候选账户间轮询，按上次选中的账户 ID 继续；`fill-first` 持续使用 ID 排序后的首个可用账户，并在并发槽位用满、冷却或不可用时切换。生成请求的候选为账户与 `UPSTREAM_CHANNELS` 所启用通道的组合：Playground 按 `ListModels` 与权益判断，Build 按 Build 代理返回的 Gemini API 模型目录与相同权益判断；轮询与粘性在组合间按账户 ID 与通道顺序推进，冷却按通道记录（Build 为 `build:<模型>`），一个通道冷却后同一账户可由另一通道继续，全部启用通道都冷却时按下文的冷却规则排队或返回 429，通道规格见 [Build 通道](build.md)。并发槽位、Worker 与 WAA 按账户共享；计数、Live、Veo、转录与 Drive 文件引用使用 Playground RPC。每个账号最多同时租用 `PER_ACCOUNT_CONCURRENCY` 个请求槽位；首个请求获取跨进程文件锁，最后一个请求释放。WAA proof 由账号 worker 串行生成，`GenerateContent` 由同一 Camoufox 页面并发发送并流式读取（`WAA_BACKEND=go` 时由账户 runtime 的 Go HTTP 发送）；请求前使用 Worker 当前 Cookie 生成 Authorization，响应头到达后把 Worker Cookie 原子同步到账户持久状态。其他 MakerSuite HTTP 响应的 Cookie 在响应头到达时与最新账户状态合并。未固定账户的请求遇到可重试的 401、403、404、429、5xx 或单账户初始化超时时，可以在首个上游语义事件前继续切换尚未尝试的同能力账户；Drive 引用随需要临时复制到生成账户，显式账户和 Veo operation 保持账户绑定。Chrome 导入状态保留续签材料，HTTP `401` 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
+账户调度先按每个账户实时 `ListModels` 返回的模型和方法筛选，再选择已经就绪且有并发槽位的 Worker。`ROUTING_STRATEGY=round-robin` 在每个模型的候选账户间轮询，按上次选中的账户 ID 继续；`fill-first` 持续使用 ID 排序后的首个可用账户，并在并发槽位用满、冷却或不可用时切换。生成请求的候选为账户与 `UPSTREAM_CHANNELS` 所启用通道的组合：Playground 按 `ListModels` 与权益判断，Build 按 Build 代理返回的 Gemini API 模型目录与相同权益判断；轮询与粘性在组合间按账户 ID 与通道顺序推进，冷却按通道记录（Build 为 `build:<模型>`），一个通道冷却后同一账户可由另一通道继续，全部启用通道都冷却时按下文的冷却规则排队或返回 429，通道规格见 [Build 通道](build.md)。并发槽位、Worker 与 WAA 按账户共享；计数、Live、Veo、转录与 Drive 文件引用使用 Playground RPC。每个账号最多同时租用 `PER_ACCOUNT_CONCURRENCY` 个请求槽位；首个请求获取跨进程文件锁，最后一个请求释放。WAA proof 由账号 worker 串行生成，`GenerateContent` 由同一 Camoufox 页面并发发送并流式读取（`WAA_BACKEND=go` 时由账户 runtime 的 Go HTTP 发送）；请求前使用 Worker 当前 Cookie 生成 Authorization，响应头到达后把 Worker Cookie 原子同步到账户持久状态。其他 MakerSuite HTTP 响应的 Cookie 在响应头到达时与最新账户状态合并。未固定账户的请求遇到可重试的 401、403、404、429、5xx、收到响应前的连接断开或单账户初始化超时时，可以在首个上游语义事件前继续切换尚未尝试的同能力账户；Drive 引用随需要临时复制到生成账户，显式账户和 Veo operation 保持账户绑定。Chrome 导入状态保留续签材料，HTTP `401` 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
 
-Worker 容量由热池目标、活动上限和单账户并发共同约束。活动数低于 `MAX_ACTIVE_WORKERS` 时直接启动并发布新 Worker。容量已满且存在空闲旧实例时，先启动 pending Worker（正在启动、尚未发布的替代 Worker），再关闭旧实例并发布替代 Worker；对请求模型处于冷却（全局或该模型限额）的空闲实例优先，同类中最久未用者优先，其次为最久未用实例。多个冷却实例可并行替换，每次替换预留独立的旧实例，启动期间新旧进程会短暂共存。启动失败或取消时现有 Worker 继续服务。请求只在取得容量槽位时占用冷账户；没有可立即使用的槽位时释放该账户并重新分类，由任一空闲的热 Worker 或新释放的槽位接收。存在可调度账户但暂时没有空闲槽位的请求按相同选择条件先到先服务排队，在租约释放或 Worker 状态变化时唤醒，直到请求超时。候选账户全部处于冷却时，最早恢复时间在 1 分钟内的请求排队等待恢复，更晚的请求直接返回 429，错误信息给出最早恢复时间。超出 `WARM_WORKER_LIMIT` 的 Worker 空闲 5 分钟后关闭，热池保持目标数量。旧 Worker 与 pending 回收同时失败时，两份进程与租约均保留为 cleanup pending（仍待关闭）并占用容量槽，后续 Stop 会重试关闭。账户的 WAA runtime 租约由其他进程持有时，该账户退出预热与调度候选，首次 5 秒后重新探测，每次仍被占用时间隔翻倍、上限 1 分钟，每段占用只记录一条日志；指定该账户或只剩该类账户的请求返回账户正在使用的错误。
+Worker 容量由热池目标、活动上限和单账户并发共同约束。活动数低于 `MAX_ACTIVE_WORKERS` 时直接启动并发布新 Worker。容量已满且存在空闲旧实例时，先启动 pending Worker（正在启动、尚未发布的替代 Worker），再关闭旧实例并发布替代 Worker；对请求模型处于冷却（全局或该模型限额）的空闲实例优先，同类中最久未用者优先，其次为最久未用实例。多个冷却实例可并行替换，每次替换预留独立的旧实例，启动期间新旧进程会短暂共存。启动失败或取消时现有 Worker 继续服务。请求只在取得容量槽位时占用冷账户；没有可立即使用的槽位时释放该账户并重新分类，由任一空闲的热 Worker 或新释放的槽位接收。存在可调度账户但暂时没有空闲槽位的请求按相同选择条件先到先服务排队，在租约释放或 Worker 状态变化时唤醒，直到请求超时。候选账户全部处于冷却时，最早恢复时间在 1 分钟内的请求排队等待恢复，更晚的请求直接返回 429，错误信息给出最早恢复时间。超出 `WARM_WORKER_LIMIT` 的 Worker 空闲 5 分钟后关闭，热池保持目标数量。管理端保存容量设置后立即作用于当前生成服务：Worker 数超过新的 `MAX_ACTIVE_WORKERS` 时立即关闭多出的空闲 Worker，忙碌的在请求结束后的回收检查中关闭；热池少于新的 `WARM_WORKER_LIMIT` 时补足预热；等待中的启动与请求按新的 `WARM_STARTUP_CONCURRENCY` 与 `PER_ACCOUNT_CONCURRENCY` 放行。旧 Worker 与 pending 回收同时失败时，两份进程与租约均保留为 cleanup pending（仍待关闭）并占用容量槽，后续 Stop 会重试关闭。账户的 WAA runtime 租约由其他进程持有时，该账户退出预热与调度候选，首次 5 秒后重新探测，每次仍被占用时间隔翻倍、上限 1 分钟，每段占用只记录一条日志；指定该账户或只剩该类账户的请求返回账户正在使用的错误。
 
 故障重置先等待同账户的活动请求释放租约；等待期间该账户暂停接收新请求。客户端取消只结束自身请求。启动预热在官网 Run 按钮启用后提交，请求在发送前再次检查账户冷却状态。
 
-额度冷却按 `quota_unit`、`quota_limit`、`quota_metric`、错误文案依次判定周期。明确的每日限额在美国太平洋时间次日零点恢复；分钟限额按有效的 `window_start_time` 恢复；通用 429 冷却一分钟。`RetryInfo` 与 `Retry-After` 提供的重试时间优先。全局范围由额度元数据确认，其余错误只冷却失败模型或能力 scope；正文后的额度错误与 Live 会话错误使用同一规则。
+额度冷却按 `quota_unit`、`quota_limit`、`quota_metric`、错误文案依次判定周期。明确的每日限额在美国太平洋时间次日零点恢复；分钟限额按有效的 `window_start_time` 恢复；通用 429 冷却一分钟。没有重试时间的套餐限额（`You've reached your usage limit`）按同一账户同一 scope 的连续次数冷却 1、5、15、30、60 分钟，冷却未结束时的并发失败沿用当前期限，该 scope 成功一次后从 1 分钟重新开始；订阅模型遇到额度错误时，后台立即刷新该账户的权益与目录，同一账户每分钟最多一次。`RetryInfo` 与 `Retry-After` 提供的重试时间优先。全局范围由额度元数据确认，其余错误只冷却失败模型或能力 scope；正文后的额度错误与 Live 会话错误使用同一规则。
 
 账户状态：
 
@@ -301,7 +307,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | --- | --- |
 | 健康与状态 | `GET /health`、`GET /api/status` |
 | 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`PUT/DELETE /api/accounts/{id}` |
-| 登录与验证 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/verify` |
+| 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh` |
 | 远程配对 | `POST /api/pairing`、`POST /api/pairing/accounts` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 配置 | `GET /api/config`、`PUT /api/config` |
@@ -329,6 +335,8 @@ npm run build
 ```
 
 Vite 将生产产物写入 `internal/webui/dist`。管理端通过本机 `/api` 路由管理生成服务、日志、账户、配置、模型冷却、活动请求和 SSE 状态事件；认证状态与 WAA 对象不进入浏览器存储。
+
+管理端提供简体中文、繁體中文、English、日本語、한국어、Français 与 Deutsch，所选语言保存在浏览器的 `user_lang`。文案位于 `web/src/locales/<语言>.ts`，`zh-CN.ts` 定义全部键，其他语言按同一键集合提供 `messages` 与 `logs`，缺键时类型检查失败。管理接口错误体的 `error.code` 对应 `error.<code>` 文案，`{detail}` 填入服务返回的 `error.message`，未收录的错误码显示服务原文。服务日志按“阶段 | 键=值”拆分，阶段名、键名与固定取值按 `logs` 表显示为当前语言，错误原文、账户与数值保持原样，日志文件与控制台输出保持中文。
 
 `internal/webui/embed.go` 使用 `//go:embed dist`，因此 Go 构建前必须生成当前前端产物。管理端从 `/api/events` 接收 `status`、`models`、`accounts`、`log`、`cooldowns` 和 `request` 事件。
 

@@ -312,10 +312,19 @@ const kpis = computed(() => {
     {
       label: t('usage.cost'),
       icon: 'cost' as const,
-      value: usd(value.cost),
-      raw: value.cost,
+      value: value.cost === 0 && value.unpriced_models.length > 0 ? '—' : usd(value.cost),
+      raw: value.cost === 0 && value.unpriced_models.length > 0 ? null : value.cost,
       help: t('usage.costHelp'),
       details: [
+        ...(value.unpriced_models.length > 0
+          ? [
+              {
+                label: t('usage.unpriced'),
+                value: value.unpriced_models.join(', '),
+                tone: 'text-amber-300',
+              },
+            ]
+          : []),
         { label: t('usage.input'), value: compact(totals.input_tokens) },
         { label: t('usage.cached'), value: compact(totals.cached_tokens) },
         {
@@ -461,7 +470,7 @@ const statusOptions = computed(() =>
 
       <template v-if="status === 'loading'">
         <div
-          class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
+          class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
           aria-hidden="true"
         >
           <div v-for="index in 6" :key="index" class="h-32 animate-pulse rounded-lg bg-panel"></div>
@@ -509,7 +518,7 @@ const statusOptions = computed(() =>
             </button>
           </div>
           <template v-else>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               <KpiCard
                 v-for="kpi in kpis"
                 :key="kpi.label"

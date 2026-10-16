@@ -186,7 +186,7 @@ Account actions depend on state:
 3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
-Starting again loads the latest data-plane settings from `.env`; the account selection strategy applies as soon as it is saved. Changes to `LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
+Starting again loads the latest data-plane settings from `.env`; the account selection strategy and worker capacity apply as soon as they are saved. Changes to `LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
 
 Press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
 
@@ -225,7 +225,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 | Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 
-Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set.
+Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted.
 
 For Cherry Studio:
 
@@ -431,7 +431,7 @@ The model catalog follows AI Studio updates; clients read the current values fro
 
 Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, and `predictLongRunning`; `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
-Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body.
+Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
 
 ## Project Architecture
 
@@ -467,10 +467,12 @@ cp .env.example .env
 | `PROXY_API_KEY` | empty | Public API key |
 | `AUTO_START` | `false` | Start the generation service when the manager starts |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
+| `LOG_FILE` | `true` | Also write service logs to `runtime/logs/`, rotating at 10 MB per file |
+| `LOG_MAX_TOTAL_MB` | `500` | Total size limit of the log directory; the oldest files are removed beyond it; at least 20 |
 | `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
 | `ADMIN_USERNAME` | `admin` | Administrator username |
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
-| `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override |
+| `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `5m` | Maximum request execution time, multiplied by the number of rounds for auto-continued requests |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
@@ -479,11 +481,12 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground,build` | Upstream channels for generation requests; either one can be used alone |
+| `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `BUILD_NATIVE_NONSTREAM` | `true` | Prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 
-The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account.
+The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
 
 ### Port Configuration
 
@@ -500,7 +503,7 @@ Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: ht
 
 HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authentication, include the credentials in the URL, for example `socks5://user:password@host:1080`:
 
-1. Set the global proxy under Service Configuration
+1. Set the global proxy under Service Configuration. When it is empty, the system proxy is used: the `HTTPS_PROXY` environment variable first, then the Windows system proxy setting. The egress the running generation service actually uses is shown below the proxy field
 2. Edit an account to set an account-specific proxy
 3. The account proxy is used for login, WAA, and business requests
 4. For authenticated proxies, the program gives Camoufox a credential-free SOCKS5 relay on the loopback address; the credentials are not written to the browser profile. While the relay runs, other local processes can also use the proxy through it
@@ -520,7 +523,7 @@ Authentication files are stored in `auth/` by default:
 
 The lowercase Google email is the account directory, management UI identity, and log source. `.leases` coordinates account-directory access, while the runtime lease in the user cache allows one WAA Worker per email on the current computer.
 
-The Accounts page supports Chrome batch import and isolated Camoufox login. `ready` accounts can be edited, disabled, verified, and deleted; `auth_required` accounts can log in again.
+The Accounts page supports Chrome batch import and isolated Camoufox login. `ready` accounts can be edited, disabled, refreshed, and deleted; `auth_required` accounts can log in again. Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 10 minutes. An account whose catalog has never been read shows an unknown tier and the reason for the last failed read.
 
 ## Documentation
 

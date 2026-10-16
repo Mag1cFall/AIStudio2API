@@ -95,7 +95,7 @@ func (s *server) handleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) 
 	result, err := s.embed(r, model, requests)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
@@ -171,7 +171,7 @@ func (s *server) handleGeminiEmbed(w http.ResponseWriter, r *http.Request, model
 	result, err := s.embed(r, model, requests)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, statusFromError(err), geminiErrorStatus(err), err.Error())
+			writeGeminiRequestError(w, err)
 		}
 		return
 	}

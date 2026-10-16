@@ -45,13 +45,15 @@ const note = computed(() =>
 
 <template>
   <article class="flex min-w-0 flex-col rounded-lg border border-line bg-panel p-4">
-    <div class="flex items-center gap-2 text-xs text-gray-500">
-      <UiIcon :name="icon" :size="14" class="shrink-0" />
-      <span
-        v-tooltip="help"
-        class="cursor-help underline decoration-gray-700 decoration-dotted underline-offset-4"
-        >{{ label }}</span
-      >
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+      <span class="flex min-w-0 items-center gap-2">
+        <UiIcon :name="icon" :size="14" class="shrink-0" />
+        <span
+          v-tooltip="help"
+          class="cursor-help underline decoration-gray-700 decoration-dotted underline-offset-4"
+          >{{ label }}</span
+        >
+      </span>
       <span
         v-if="delta"
         v-tooltip="delta.help"

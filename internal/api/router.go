@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,8 @@ type server struct {
 	uploads           *geminiUploads
 	thoughtSignatures *thoughtSignatureStore
 	pairing           *pairingTokens
+	// background 按响应 ID 保存进行中的 Responses 后台响应
+	background sync.Map
 }
 
 var idSequence atomic.Uint64

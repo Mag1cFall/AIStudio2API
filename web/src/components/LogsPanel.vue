@@ -7,6 +7,7 @@ import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import StageLogCard from './StageLogCard.vue'
 import { groupLogs } from '@/logs'
+import { useQueryParam, useQueryText } from '@/url'
 
 const props = defineProps<{
   logs: AdminLog[]
@@ -16,15 +17,15 @@ defineEmits<{
   clear: []
 }>()
 
-const { t } = useI18n()
-const level = ref<'ALL' | 'INFO' | 'WARN' | 'ERROR'>('ALL')
-const source = ref('ALL')
-const search = ref('')
+const { t, logText } = useI18n()
+const levels = ['ALL', 'INFO', 'WARN', 'ERROR'] as const
+const level = useQueryParam('level', levels, 'ALL')
+const source = useQueryText('source', 'ALL')
+const search = useQueryText('q')
 const autoScroll = ref(true)
 const output = ref<HTMLElement>()
 const sourceWidth = ref(224)
 const resizingSource = ref(false)
-const levels = ['ALL', 'INFO', 'WARN', 'ERROR'] as const
 const minSourceWidth = 128
 const maxSourceWidth = 512
 
@@ -37,6 +38,7 @@ const sources = computed(() =>
 
 function matchLog(entry: AdminLog, query: string): boolean {
   if (entry.message && entry.message.toLowerCase().includes(query)) return true
+  if (entry.message && logText(entry.message).toLowerCase().includes(query)) return true
   if (entry.source && entry.source.toLowerCase().includes(query)) return true
   if (entry.event && entry.event.toLowerCase().includes(query)) return true
   if (entry.request) {
@@ -307,7 +309,7 @@ watch(autoScroll, () => {
           <div class="log-cell log-message">
             <RequestLogCard v-if="row.entry.request" :row="row" />
             <StageLogCard v-else-if="row.stage" :row="row" />
-            <span v-else>{{ row.entry.message }}</span>
+            <span v-else>{{ logText(row.entry.message) }}</span>
           </div>
         </div>
       </div>

@@ -32,9 +32,12 @@ func TestEncodeJSONSchema_NotVariants(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{`{"type":"string","not":true}`, `{"type":"string","not":{}}`, `{"type":"object","properties":{"deny":false},"required":["deny"]}`} {
-		if wire, err := encodeJSONSchema(json.RawMessage(raw)); err == nil {
+		if wire, err := encodeResponseSchema(json.RawMessage(raw)); err == nil {
 			t.Fatalf("forbidden schema=%s wire=%#v", raw, wire)
 		}
+	}
+	if _, err := encodeResponseSchema(json.RawMessage(`{"type":"object","properties":{"deny":false}}`)); err != nil {
+		t.Fatalf("optional false property: %v", err)
 	}
 	wire, err := encodeJSONSchema(json.RawMessage(`{"type":["string","null"],"not":{"type":"null"}}`))
 	if err != nil || len(wire) <= 3 || wire[3] != false {

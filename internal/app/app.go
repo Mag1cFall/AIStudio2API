@@ -32,8 +32,9 @@ type commandOptions struct {
 
 // Run 执行单二进制命令入口
 func Run(args []string) int {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	err := runCommand(args)
+	logs := &logOutput{dir: filepath.Join("runtime", "logs")}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	err := runCommand(args, logs)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -45,11 +46,15 @@ func Run(args []string) int {
 }
 
 // runCommand 分派首次配置与默认服务
-func runCommand(args []string) error {
+func runCommand(args []string, logs *logOutput) error {
 	cfg, err := config.Load(".env")
 	if err != nil {
 		return err
 	}
+	if err := logs.set(cfg.LogFile, cfg.LogMaxTotalMB); err != nil {
+		return err
+	}
+	defer logs.set(false, 0)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -72,6 +77,7 @@ func runCommand(args []string) error {
 	}
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
+	manager.logs = logs
 	return errors.Join(runServer(ctx, cfg, options, manager), manager.Close(), ledger.Close())
 }
 

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -230,6 +232,101 @@ func providerFinishReason(reason string) string {
 	return ""
 }
 
+// addSystemReminder 把对话中途的系统消息以 system-reminder 追加到上一个 user 轮，上一轮不是 user 时返回待并入下一个 user 轮的 reminder
+func addSystemReminder(contents []aistudio.Content, pending []aistudio.Part, text string) []aistudio.Part {
+	reminder := aistudio.Part{Text: "<system-reminder>\n" + text + "\n</system-reminder>"}
+	if last := len(contents) - 1; last >= 0 && contents[last].Role == aistudio.RoleUser {
+		contents[last].Parts = append(contents[last].Parts, reminder)
+		return pending
+	}
+	return append(pending, reminder)
+}
+
+// appendWithReminders 追加一条消息，待并入的 reminder 排在下一个 user 消息的函数结果之后
+func appendWithReminders(contents []aistudio.Content, content aistudio.Content, reminders []aistudio.Part) ([]aistudio.Content, []aistudio.Part) {
+	if content.Role == aistudio.RoleUser && len(reminders) > 0 {
+		results := 0
+		for index, part := range content.Parts {
+			if part.FunctionResult != nil {
+				results = index + 1
+			}
+		}
+		content.Parts = slices.Concat(content.Parts[:results], reminders, content.Parts[results:])
+		reminders = nil
+	}
+	return append(contents, content), reminders
+}
+
+// prependSystemMedia 把系统指令中的媒体放到首个 user 轮开头，没有 user 轮时作为第一轮
+func prependSystemMedia(contents []aistudio.Content, media []aistudio.Part) []aistudio.Content {
+	if len(media) == 0 {
+		return contents
+	}
+	index := slices.IndexFunc(contents, func(content aistudio.Content) bool { return content.Role == aistudio.RoleUser })
+	if index < 0 {
+		return append([]aistudio.Content{{Role: aistudio.RoleUser, Parts: media}}, contents...)
+	}
+	contents[index].Parts = append(slices.Clone(media), contents[index].Parts...)
+	return contents
+}
+
+// functionResultMediaTypes 是工具结果内容块中按媒体发送的块类型
+var functionResultMediaTypes = map[string]bool{
+	"image": true, "document": true, "audio": true, "video": true, "file": true,
+	"image_url": true, "input_image": true, "input_file": true, "input_audio": true, "video_url": true, "input_video": true,
+}
+
+// functionResultParts 把工具结果转成函数结果内容与紧随其后的媒体 part：内容块数组中的文本块以换行相连作为结果文本，媒体块由 parse 转成 part，其余块以 JSON 文本并入结果；isError 时结果写在 error 键下
+func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawMessage) ([]aistudio.Part, error)) (json.RawMessage, []aistudio.Part, error) {
+	key := "result"
+	if isError {
+		key = "error"
+	}
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
+		var texts []string
+		var media []aistudio.Part
+		contentBlocks := true
+		for _, block := range blocks {
+			var head struct {
+				Type string  `json:"type"`
+				Text *string `json:"text"`
+			}
+			if json.Unmarshal(block, &head) != nil || head.Type == "" {
+				contentBlocks = false
+				break
+			}
+			switch {
+			case head.Text != nil:
+				texts = append(texts, *head.Text)
+			case functionResultMediaTypes[head.Type]:
+				parts, err := parse(json.RawMessage("[" + string(block) + "]"))
+				if err != nil {
+					return nil, nil, err
+				}
+				media = append(media, parts...)
+			default:
+				texts = append(texts, string(block))
+			}
+		}
+		if contentBlocks {
+			content, _ := json.Marshal(map[string]string{key: strings.Join(texts, "\n")})
+			return content, media, nil
+		}
+	}
+	if isError {
+		if len(raw) == 0 {
+			raw = json.RawMessage("null")
+		}
+		if !json.Valid(raw) {
+			return nil, nil, fmt.Errorf("function result must be JSON")
+		}
+		return json.RawMessage(`{"error":` + strings.TrimSpace(string(raw)) + `}`), nil, nil
+	}
+	content, err := normalizeFunctionResultContent(raw)
+	return content, nil, err
+}
+
 func normalizeFunctionResultContent(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage("null")
@@ -285,6 +382,24 @@ func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation
 		}
 	}
 	return citations
+}
+
+// textSpan 表示上游正文中一段连续文字在输出文本中的位置：source 与 output 分别为它在上游全文与输出文本中的字节偏移
+type textSpan struct {
+	source int
+	output int
+	length int
+}
+
+// spanCitation 把上游按全文字节计的引用区间换算为 output 文本中的字符下标，区间不在任何一段文字内时返回 false
+func spanCitation(output string, spans []textSpan, citation aistudio.Citation) (int, int, bool) {
+	for _, span := range spans {
+		start, end := citation.Start-span.source, citation.End-span.source
+		if start >= 0 && start <= end && end <= span.length {
+			return utf8.RuneCountInString(output[:span.output+start]), utf8.RuneCountInString(output[:span.output+end]), true
+		}
+	}
+	return 0, 0, false
 }
 
 func renderCodeExecution(event aistudio.Event) string {

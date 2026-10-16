@@ -113,24 +113,25 @@ type UsageRecent struct {
 	Tokens   int64 `json:"tokens"`
 }
 
-// UsageReport 返回用量看板的汇总、上一周期、当前吞吐、估算费用、逐桶趋势、堆叠序列、分项与筛选候选
+// UsageReport 返回用量看板的汇总、上一周期、当前吞吐、估算费用与未计价模型、逐桶趋势、堆叠序列、分项与筛选候选
 type UsageReport struct {
-	From          time.Time               `json:"from"`
-	To            time.Time               `json:"to"`
-	BucketSeconds int64                   `json:"bucket_seconds"`
-	GeneratedAt   time.Time               `json:"generated_at"`
-	LatestAt      *time.Time              `json:"latest_at,omitempty"`
-	Totals        UsageStats              `json:"totals"`
-	Previous      UsageStats              `json:"previous"`
-	Cost          float64                 `json:"cost"`
-	PreviousCost  float64                 `json:"previous_cost"`
-	Recent        UsageRecent             `json:"recent"`
-	Buckets       []UsageBucket           `json:"buckets"`
-	StackBy       string                  `json:"stack_by"`
-	Series        []UsageSeries           `json:"series"`
-	Groups        map[string][]UsageGroup `json:"groups"`
-	Pairs         []UsagePair             `json:"pairs"`
-	Options       map[string][]string     `json:"options"`
+	From           time.Time               `json:"from"`
+	To             time.Time               `json:"to"`
+	BucketSeconds  int64                   `json:"bucket_seconds"`
+	GeneratedAt    time.Time               `json:"generated_at"`
+	LatestAt       *time.Time              `json:"latest_at,omitempty"`
+	Totals         UsageStats              `json:"totals"`
+	Previous       UsageStats              `json:"previous"`
+	Cost           float64                 `json:"cost"`
+	PreviousCost   float64                 `json:"previous_cost"`
+	UnpricedModels []string                `json:"unpriced_models"`
+	Recent         UsageRecent             `json:"recent"`
+	Buckets        []UsageBucket           `json:"buckets"`
+	StackBy        string                  `json:"stack_by"`
+	Series         []UsageSeries           `json:"series"`
+	Groups         map[string][]UsageGroup `json:"groups"`
+	Pairs          []UsagePair             `json:"pairs"`
+	Options        map[string][]string     `json:"options"`
 }
 
 // RequestAttempt 记录一次未成功的上游尝试

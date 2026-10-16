@@ -80,6 +80,11 @@ func (e *AllCoolingError) Error() string {
 	return fmt.Sprintf("模型 %s 的可用账户均在冷却，最早恢复时间 %s", e.ModelID, e.Until.Local().Format(time.RFC3339))
 }
 
+// RetryAt 返回最早恢复的时刻
+func (e *AllCoolingError) RetryAt(time.Time) time.Time {
+	return e.Until
+}
+
 // HTTPStatus 返回额度耗尽对应的公开状态码
 func (e *AllCoolingError) HTTPStatus() int {
 	return http.StatusTooManyRequests
@@ -187,6 +192,7 @@ type Account struct {
 	authCheckedAt         time.Time
 	modelAccessGeneration uint64
 	stateMessage          string
+	catalogError          string
 	initializedAt         time.Time
 	buildModels           []Model
 }
@@ -1796,6 +1802,7 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 			}
 			account.BenefitTier = tier
 			account.Models = cloneAccountModels(models)
+			account.catalogError = ""
 			account.initializedAt = time.Now()
 			if account.State == AccountUnavailable {
 				account.State = AccountReady
@@ -2061,6 +2068,63 @@ func (p *AccountPool) MarkCooldownIfGeneration(
 	return err
 }
 
+// ModelRequiresSubscription 判断账户实时目录中的模型是否只对 Pro 或 Ultra 权益开放
+func (p *AccountPool) ModelRequiresSubscription(accountID string, modelID string) bool {
+	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[accountID]
+	if account == nil {
+		return false
+	}
+	for _, model := range account.Models {
+		if modelMatchesID(model, modelID) {
+			return !modelAllowedByTier(model, BenefitTierFree)
+		}
+	}
+	return false
+}
+
+// MarkQuotaCooldownIfGeneration 保存当前目录代际中的额度冷却，返回实际生效的冷却期限
+func (p *AccountPool) MarkQuotaCooldownIfGeneration(
+	accountID string,
+	modelAccessScope string,
+	generation uint64,
+	checkedAt time.Time,
+	cooldown QuotaCooldown,
+) (time.Time, error) {
+	if !cooldown.Escalate {
+		return cooldown.Until, p.MarkCooldownIfGeneration(accountID, modelAccessScope, generation, checkedAt, cooldown.Until, cooldown.Reason)
+	}
+	checkedAt = checkedAt.UTC()
+	if checkedAt.IsZero() {
+		return time.Time{}, fmt.Errorf("冷却检查时间不能为空")
+	}
+	modelAccessScope = strings.TrimSpace(modelAccessScope)
+	if modelAccessScope == "" {
+		modelAccessScope = globalCooldownKey
+	}
+	until := cooldown.Until
+	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if generation != account.modelAccessGeneration {
+			return false, nil, nil
+		}
+		modelAccessScope = canonicalAccountModelID(account, modelAccessScope)
+		currentAccess := runtimeState.ModelAccess[modelAccessScope]
+		if !currentAccess.CheckedAt.Before(checkedAt) {
+			return false, nil, nil
+		}
+		previous, exists := runtimeState.Cooldowns[modelAccessScope]
+		next := planLimitCooldown(previous, exists, time.Now(), cooldown.Reason)
+		until = next.Until
+		currentAccess.CheckedAt = checkedAt
+		runtimeState.ModelAccess[modelAccessScope] = currentAccess
+		runtimeState.Cooldowns[modelAccessScope] = next
+		return true, nil, nil
+	})
+	return until, err
+}
+
 // ClearCooldownIfGeneration 清除当前目录代际中的作用域冷却
 func (p *AccountPool) ClearCooldownIfGeneration(
 	accountID string,
@@ -2252,6 +2316,15 @@ func (p *AccountPool) MarkAuthRequired(accountID string, reason string) error {
 	return p.setAccountState(accountID, AccountAuthRequired, reason)
 }
 
+// recordCatalogFailure 记录账户最近一次权益或目录读取失败的原因
+func (p *AccountPool) recordCatalogFailure(accountID string, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if account := p.byID[accountID]; account != nil {
+		account.catalogError = err.Error()
+	}
+}
+
 // MarkUnavailable 将账户标记为初始化或运行失败
 func (p *AccountPool) MarkUnavailable(accountID string, reason string) error {
 	return p.setAccountState(accountID, AccountUnavailable, reason)
@@ -2289,6 +2362,14 @@ func (p *AccountPool) Status() []AccountStatus {
 			models = append(models, model.ID)
 		}
 		sort.Strings(models)
+		tier := account.BenefitTier.String()
+		message := account.stateMessage
+		if account.runtime.CatalogFingerprint == "" {
+			tier = "Unknown"
+			if message == "" {
+				message = account.catalogError
+			}
+		}
 		status := AccountStatus{
 			ID:          account.ID,
 			Label:       account.Config.Label,
@@ -2298,9 +2379,9 @@ func (p *AccountPool) Status() []AccountStatus {
 			Locale:      account.Config.Locale,
 			Timezone:    account.Config.Timezone,
 			Models:      models,
-			BenefitTier: account.BenefitTier.String(),
+			BenefitTier: tier,
 			Cooldowns:   cloneCooldowns(account.runtime.Cooldowns),
-			Message:     account.stateMessage,
+			Message:     message,
 		}
 		if !account.LastUsed.IsZero() {
 			status.LastUsed = timePointer(account.LastUsed)
@@ -2638,6 +2719,14 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 func (p *AccountPool) SetRoutingStrategy(strategy string) {
 	p.mu.Lock()
 	p.routingStrategy = strategy
+	p.mu.Unlock()
+}
+
+// SetPerAccountConcurrency 设置单账户同时处理的请求数并唤醒等待中的请求
+func (p *AccountPool) SetPerAccountConcurrency(limit int) {
+	p.mu.Lock()
+	p.perAccountConcurrency = limit
+	p.notifyLocked()
 	p.mu.Unlock()
 }
 

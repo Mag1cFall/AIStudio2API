@@ -15,6 +15,7 @@ func (service *trackedService) Transcribe(
 	ctx context.Context,
 	request aistudio.TranscriptionRequest,
 ) (aistudio.TranscriptionResult, error) {
+	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.StartAccessLog(ctx)

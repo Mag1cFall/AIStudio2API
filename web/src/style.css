@@ -189,8 +189,8 @@ pre,
     border-bottom: 2px solid #fff;
     border-left: 2px solid #fff;
     content: '';
-    transform: translateY(-1px) rotate(-45deg) scale(0);
-    transition: transform 120ms ease;
+    opacity: 0;
+    transform: translateY(-1px) rotate(-45deg);
   }
 
   input[type='checkbox']:checked {
@@ -199,7 +199,7 @@ pre,
   }
 
   input[type='checkbox']:checked::after {
-    transform: translateY(-1px) rotate(-45deg) scale(1);
+    opacity: 1;
   }
 
   input[type='checkbox']:focus-visible {
@@ -259,7 +259,7 @@ button[aria-busy='true']::before {
 @keyframes dialog-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.98);
+    transform: translateY(6px);
   }
 }
 

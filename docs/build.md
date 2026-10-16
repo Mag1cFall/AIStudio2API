@@ -227,7 +227,7 @@ Playground 目录没有的 embedding（`embedContent`）、Live（`bidiGenerateC
 - 冷却按通道记录：Playground 为 `<模型>`，Build 为 `build:<模型>`；Live 媒体输入的 scope 为 `bidi-media:<模型>`，经 Build 时为 `build:bidi-media:<模型>`；全局 `*` 冷却对两个通道都生效
 - 账户只有在其全部支持的通道都冷却时才视为该模型冷却
 - 一个通道返回额度错误后写入该通道冷却；同一账户另一通道可用时，请求在同一账户的另一通道重试，不计为已尝试账户
-- 全部候选组合冷却时，最早恢复时间在 1 分钟内的请求排队等待，更晚的请求返回 HTTP 429 `rate_limit_exceeded`，消息给出最早恢复时间
+- 全部候选组合冷却时，最早恢复时间在 1 分钟内的请求排队等待，更晚的请求返回 HTTP 429 `rate_limit_exceeded`，消息给出最早恢复时间，`Retry-After` 为距最早恢复的秒数
 - 生成成功在该通道的 scope（`<模型>` 或 `build:<模型>`）上写入 `verified`
 
 ### 附件与文件引用

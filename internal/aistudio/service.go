@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -350,25 +351,44 @@ func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID stri
 	return models, nil
 }
 
-// RefreshAccountTier 以普通并发槽位读取账户权益，权益变化时沿用当前目录写回，返回读取前后的权益；账户没有空闲槽位时跳过
-func (s *PooledService) RefreshAccountTier(ctx context.Context, accountID string) (BenefitTier, BenefitTier, error) {
-	lease, _, err := s.pool.TryAcquireFor(ctx, AccountSelection{AccountID: strings.TrimSpace(accountID)})
+// AccountRefresh 为一次账户状态刷新前后的权益与模型数，ModelsChanged 表示该账户的目录条目有变化
+type AccountRefresh struct {
+	PreviousTier   BenefitTier
+	Tier           BenefitTier
+	PreviousModels int
+	Models         int
+	ModelsChanged  bool
+	Skipped        bool
+}
+
+// RefreshAccountState 读取账户权益与模型目录，登录失效时标记账户需要登录；wait 为 true 时等待独占租约，任何状态的账户都会刷新，否则只用就绪账户的空闲槽位，没有时跳过
+func (s *PooledService) RefreshAccountState(ctx context.Context, accountID string, wait bool) (AccountRefresh, error) {
+	accountID = strings.TrimSpace(accountID)
+	var lease *AccountLease
+	var err error
+	if wait {
+		lease, err = s.pool.AcquireAccount(ctx, accountID)
+	} else {
+		lease, _, err = s.pool.TryAcquireFor(ctx, AccountSelection{AccountID: accountID})
+	}
 	if lease == nil {
-		return BenefitTierFree, BenefitTierFree, err
+		return AccountRefresh{Skipped: err == nil}, err
 	}
 	account := lease.Account()
-	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
 	s.pool.mu.Lock()
-	previous := account.BenefitTier
-	models := cloneAccountModels(account.Models)
+	refresh := AccountRefresh{PreviousTier: account.BenefitTier, PreviousModels: len(account.Models)}
+	previous := slices.Clone(account.Models)
 	s.pool.mu.Unlock()
-	if err == nil && tier != previous {
-		err = s.pool.SetCatalog(account.ID, tier, models)
-	}
+	models, err := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease)
 	if err != nil {
-		return previous, previous, errors.Join(err, lease.Release())
+		return refresh, errors.Join(err, lease.Release())
 	}
-	return previous, tier, lease.Release()
+	s.pool.mu.Lock()
+	refresh.Tier = account.BenefitTier
+	refresh.ModelsChanged = !reflect.DeepEqual(previous, account.Models)
+	s.pool.mu.Unlock()
+	refresh.Models = len(models)
+	return refresh, lease.Release()
 }
 
 // CachedModels 返回启用账户最近同步目录的并集
@@ -484,36 +504,28 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 		return lease.MarkAuthenticationRequired(err.Error())
 	}
 	now := time.Now()
-	until := now.Add(30 * time.Second)
-	reason := err.Error()
-	if cooldown, ok := QuotaCooldownForError(err, now); ok {
-		until = cooldown.Until
-		reason = cooldown.Reason
-		if cooldown.Global {
-			modelAccessScope = ""
-		}
+	cooldown, ok := QuotaCooldownForError(err, now)
+	if !ok {
+		cooldown = QuotaCooldown{Until: now.Add(30 * time.Second), Reason: err.Error()}
 	}
-	return s.pool.MarkCooldownIfGeneration(
-		accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(),
-		until, reason,
+	if cooldown.Global {
+		modelAccessScope = ""
+	}
+	_, markErr := s.pool.MarkQuotaCooldownIfGeneration(
+		accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown,
 	)
+	return markErr
 }
 
 func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease) ([]Model, error) {
 	account := lease.Account()
 	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
 	if err != nil {
-		if DefinitiveAuthenticationFailure(err) {
-			err = errors.Join(err, lease.MarkAuthenticationRequired(err.Error()))
-		}
-		return nil, err
+		return nil, s.catalogFailure(lease, err)
 	}
 	models, err := s.client.ModelsForAccount(ContextWithAccountLease(ctx, lease), account.ID)
 	if err != nil {
-		if DefinitiveAuthenticationFailure(err) {
-			err = errors.Join(err, lease.MarkAuthenticationRequired(err.Error()))
-		}
-		return nil, err
+		return nil, s.catalogFailure(lease, err)
 	}
 	if err := errors.Join(
 		lease.MarkAuthenticationValid(),
@@ -536,6 +548,15 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease)
 		}
 	}
 	return models, nil
+}
+
+// catalogFailure 把认证失效的账户标为需要登录，其余失败记为该账户最近一次目录读取错误
+func (s *PooledService) catalogFailure(lease *AccountLease, err error) error {
+	if DefinitiveAuthenticationFailure(err) {
+		return errors.Join(err, lease.MarkAuthenticationRequired(err.Error()))
+	}
+	s.pool.recordCatalogFailure(lease.Account().ID, err)
+	return err
 }
 
 // CountTokens 使用支持目标模型的独占账户计数
@@ -754,7 +775,7 @@ func forwardEventsWithLease(
 				if cooldown.Global {
 					scope = ""
 				}
-				if err := pool.MarkCooldownIfGeneration(accountID, scope, accessGeneration, checkedAt, cooldown.Until, cooldown.Reason); err != nil {
+				if _, err := pool.MarkQuotaCooldownIfGeneration(accountID, scope, accessGeneration, checkedAt, cooldown); err != nil {
 					event.Err = errors.Join(event.Err, err)
 				}
 			}

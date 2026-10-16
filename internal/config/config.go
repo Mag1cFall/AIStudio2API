@@ -38,15 +38,21 @@ var configKeys = [...]string{
 	"PER_ACCOUNT_CONCURRENCY",
 	"ROUTING_STRATEGY",
 	"UPSTREAM_CHANNELS",
+	"MODEL_MAPPING",
 	"TEMPORARY_CHAT",
 	"WAA_BACKEND",
 	"AUTO_START",
 	"REQUEST_BODY_LOG",
+	"LOG_FILE",
+	"LOG_MAX_TOTAL_MB",
 	"ADMIN_AUTH_ENABLED",
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"BUILD_NATIVE_NONSTREAM",
 }
+
+// LogFileMB 是单个日志文件的轮转大小
+const LogFileMB = 10
 
 // upstreamChannels 表示生成请求可启用的上游通道
 var upstreamChannels = []string{"playground", "build"}
@@ -61,6 +67,8 @@ const WAABackendGo = "go"
 type Config struct {
 	AutoStart              bool          `json:"auto_start"`
 	RequestBodyLog         bool          `json:"request_body_log"`
+	LogFile                bool          `json:"log_file"`
+	LogMaxTotalMB          int           `json:"log_max_total_mb"`
 	AdminAuthEnabled       bool          `json:"admin_auth_enabled"`
 	AdminUsername          string        `json:"admin_username"`
 	AdminPassword          string        `json:"-"`
@@ -77,6 +85,7 @@ type Config struct {
 	PerAccountConcurrency  int           `json:"per_account_concurrency"`
 	RoutingStrategy        string        `json:"routing_strategy"`
 	UpstreamChannels       []string      `json:"upstream_channels"`
+	ModelMapping           string        `json:"model_mapping"`
 	TemporaryChat          bool          `json:"temporary_chat"`
 	WAABackend             string        `json:"waa_backend"`
 }
@@ -85,6 +94,8 @@ type Config struct {
 func Default() Config {
 	return Config{
 		AdminUsername:          "admin",
+		LogFile:                true,
+		LogMaxTotalMB:          500,
 		BuildNativeNonstream:   true,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
@@ -123,6 +134,18 @@ func Load(path string) (Config, error) {
 		cfg.RequestBodyLog, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
 			return Config{}, fmt.Errorf("REQUEST_BODY_LOG 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["LOG_FILE"]; ok {
+		cfg.LogFile, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("LOG_FILE 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["LOG_MAX_TOTAL_MB"]; ok {
+		cfg.LogMaxTotalMB, err = parsePositiveInt("LOG_MAX_TOTAL_MB", value)
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	if value, ok := values["ADMIN_AUTH_ENABLED"]; ok {
@@ -197,6 +220,9 @@ func Load(path string) (Config, error) {
 	if value, ok := values["UPSTREAM_CHANNELS"]; ok {
 		cfg.UpstreamChannels = ParseUpstreamChannels(value)
 	}
+	if value, ok := values["MODEL_MAPPING"]; ok {
+		cfg.ModelMapping = strings.TrimSpace(value)
+	}
 	if value, ok := values["TEMPORARY_CHAT"]; ok {
 		cfg.TemporaryChat, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -220,6 +246,8 @@ func (c Config) Save(path string) error {
 	values := map[string]string{
 		"AUTO_START":               strconv.FormatBool(c.AutoStart),
 		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
+		"LOG_FILE":                 strconv.FormatBool(c.LogFile),
+		"LOG_MAX_TOTAL_MB":         strconv.Itoa(c.LogMaxTotalMB),
 		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
@@ -236,6 +264,7 @@ func (c Config) Save(path string) error {
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
+		"MODEL_MAPPING":            c.ModelMapping,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 		"WAA_BACKEND":              c.WAABackend,
 	}
@@ -288,10 +317,40 @@ func (c Config) Validate() error {
 	if err := validateUpstreamChannels(c.UpstreamChannels); err != nil {
 		return err
 	}
+	if _, err := ParseModelMapping(c.ModelMapping); err != nil {
+		return err
+	}
 	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
 		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
 	}
+	if c.LogMaxTotalMB < 2*LogFileMB {
+		return fmt.Errorf("LOG_MAX_TOTAL_MB 不能小于 %d", 2*LogFileMB)
+	}
 	return nil
+}
+
+// ModelAlias 表示客户端模型名到目录模型 ID 的一项映射
+type ModelAlias struct {
+	Alias string
+	Model string
+}
+
+// ParseModelMapping 解析逗号分隔的 别名:模型 ID，别名可含冒号，以最后一个冒号分隔
+func ParseModelMapping(value string) ([]ModelAlias, error) {
+	var mapping []ModelAlias
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		index := strings.LastIndexByte(item, ':')
+		alias, model := strings.TrimSpace(item[:max(index, 0)]), strings.TrimSpace(item[index+1:])
+		if index < 0 || alias == "" || model == "" {
+			return nil, fmt.Errorf("MODEL_MAPPING 的每一项写成 别名:模型 ID，%q 不符合", item)
+		}
+		mapping = append(mapping, ModelAlias{Alias: alias, Model: strings.TrimPrefix(model, "models/")})
+	}
+	return mapping, nil
 }
 
 // ParseUpstreamChannels 把逗号分隔的通道列表拆成去空白的小写名称
@@ -332,6 +391,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	type payload struct {
 		AutoStart              bool     `json:"auto_start"`
 		RequestBodyLog         bool     `json:"request_body_log"`
+		LogFile                bool     `json:"log_file"`
+		LogMaxTotalMB          int      `json:"log_max_total_mb"`
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
@@ -347,12 +408,15 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		PerAccountConcurrency  int      `json:"per_account_concurrency"`
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
+		ModelMapping           string   `json:"model_mapping"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
 	}
 	return json.Marshal(payload{
 		AutoStart:              c.AutoStart,
 		RequestBodyLog:         c.RequestBodyLog,
+		LogFile:                c.LogFile,
+		LogMaxTotalMB:          c.LogMaxTotalMB,
 		AdminAuthEnabled:       c.AdminAuthEnabled,
 		AdminUsername:          c.AdminUsername,
 		BuildNativeNonstream:   c.BuildNativeNonstream,
@@ -368,6 +432,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		PerAccountConcurrency:  c.PerAccountConcurrency,
 		RoutingStrategy:        c.RoutingStrategy,
 		UpstreamChannels:       c.UpstreamChannels,
+		ModelMapping:           c.ModelMapping,
 		TemporaryChat:          c.TemporaryChat,
 		WAABackend:             c.WAABackend,
 	})
@@ -378,6 +443,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	type payload struct {
 		AutoStart              bool     `json:"auto_start"`
 		RequestBodyLog         bool     `json:"request_body_log"`
+		LogFile                bool     `json:"log_file"`
+		LogMaxTotalMB          int      `json:"log_max_total_mb"`
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		AdminPassword          string   `json:"admin_password"`
@@ -394,6 +461,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		PerAccountConcurrency  int      `json:"per_account_concurrency"`
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
+		ModelMapping           string   `json:"model_mapping"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
 	}
@@ -412,6 +480,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	parsed := Config{
 		AutoStart:              value.AutoStart,
 		RequestBodyLog:         value.RequestBodyLog,
+		LogFile:                value.LogFile,
+		LogMaxTotalMB:          value.LogMaxTotalMB,
 		AdminAuthEnabled:       value.AdminAuthEnabled,
 		AdminUsername:          strings.TrimSpace(value.AdminUsername),
 		AdminPassword:          value.AdminPassword,
@@ -428,6 +498,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
+		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             strings.ToLower(strings.TrimSpace(value.WAABackend)),
 	}
