@@ -12,6 +12,7 @@ import {
 } from 'echarts/components'
 import VChart, { type Exposed } from 'vue-echarts'
 import { useI18n } from '@/i18n'
+import { useTheme } from '@/theme'
 import type { UsageDimension, UsageReport } from '@/types'
 import UiSelect from '../UiSelect.vue'
 import ChartLegend from './ChartLegend.vue'
@@ -40,6 +41,7 @@ const props = defineProps<{ report: UsageReport; stack: UsageDimension }>()
 const emit = defineEmits<{ 'update:stack': [value: UsageDimension] }>()
 
 const { t } = useI18n()
+const { theme: uiTheme } = useTheme()
 const { compact, integer, duration, percent, bucketLabel, dimensionLabel } = useUsageFormat()
 const metric = ref<'requests' | 'tokens'>(
   readPreference('usage.trafficMetric', 'requests', (value) =>
@@ -96,13 +98,23 @@ function focus(key: ChartKey, name: string | null): void {
   )
 }
 
-const theme = {
-  axis: '#6b7280',
-  grid: '#21262d',
-  line: '#30363d',
-  surface: '#1c2128',
-  text: '#c9d1d9',
-}
+const theme = computed(() =>
+  uiTheme.value === 'light'
+    ? {
+        axis: '#57606a',
+        grid: '#eef1f5',
+        line: '#d0d7de',
+        surface: '#ffffff',
+        text: '#1f2328',
+      }
+    : {
+        axis: '#6b7280',
+        grid: '#21262d',
+        line: '#30363d',
+        surface: '#1c2128',
+        text: '#c9d1d9',
+      },
+)
 
 const labels = computed(() => {
   const { buckets, bucket_seconds: seconds, from, to } = props.report
@@ -135,18 +147,19 @@ function tooltipRows(
   if (options.total && rows[0]) {
     const total = rows.reduce((sum, item) => sum + (item.value ?? 0), 0)
     lines.push(
-      `<div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid ${theme.line}"><span>${escape(t('usage.total'))}</span><span style="font-variant-numeric:tabular-nums">${format(total, rows[0])}</span></div>`,
+      `<div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid ${theme.value.line}"><span>${escape(t('usage.total'))}</span><span style="font-variant-numeric:tabular-nums">${format(total, rows[0])}</span></div>`,
     )
   }
-  return `<div style="min-width:180px"><div style="margin-bottom:4px;color:${theme.axis}">${escape(items[0]?.axisValueLabel ?? '')}</div>${lines.join('')}</div>`
+  return `<div style="min-width:180px"><div style="margin-bottom:4px;color:${theme.value.axis}">${escape(items[0]?.axisValueLabel ?? '')}</div>${lines.join('')}</div>`
 }
 
 // base 返回各图共用的坐标轴、网格与提示框配置
 function base(format: (value: number) => string, rightAxis?: (value: number) => string) {
+  const palette = theme.value
   const axis = (formatter: (value: number) => string, split: boolean) => ({
     type: 'value',
-    splitLine: split ? { lineStyle: { color: theme.grid } } : { show: false },
-    axisLabel: { color: theme.axis, formatter },
+    splitLine: split ? { lineStyle: { color: palette.grid } } : { show: false },
+    axisLabel: { color: palette.axis, formatter },
   })
   return {
     animationDuration: 250,
@@ -155,16 +168,16 @@ function base(format: (value: number) => string, rightAxis?: (value: number) => 
     tooltip: {
       trigger: 'axis',
       confine: true,
-      backgroundColor: theme.surface,
-      borderColor: theme.line,
-      textStyle: { color: theme.text, fontSize: 12 },
+      backgroundColor: palette.surface,
+      borderColor: palette.line,
+      textStyle: { color: palette.text, fontSize: 12 },
     },
     xAxis: {
       type: 'category',
       data: labels.value,
-      axisLine: { lineStyle: { color: theme.line } },
+      axisLine: { lineStyle: { color: palette.line } },
       axisTick: { show: false },
-      axisLabel: { color: theme.axis, hideOverlap: true },
+      axisLabel: { color: palette.axis, hideOverlap: true },
     },
     yAxis: rightAxis ? [axis(format, true), axis(rightAxis, false)] : [axis(format, true)],
   }
@@ -221,7 +234,7 @@ const outcomesOption = computed(() => {
         min: 0,
         max: 100,
         splitLine: { show: false },
-        axisLabel: { color: theme.axis, formatter: rate },
+        axisLabel: { color: theme.value.axis, formatter: rate },
       },
     ],
     series: [
@@ -341,7 +354,7 @@ const latencyOption = computed(() => {
                 symbol: 'none',
                 lineStyle: { type: 'dashed', color: '#a78bfa', opacity: 0.6 },
                 label: {
-                  color: theme.axis,
+                  color: theme.value.axis,
                   position: 'end',
                   formatter: () => `P95\n${duration(totals.duration.p95_ms)}`,
                 },

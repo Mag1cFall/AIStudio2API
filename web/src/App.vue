@@ -22,6 +22,7 @@ import {
 } from 'reka-ui'
 import { api, openAdminEvents, type EventConnection } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
+import { useTheme } from '@/theme'
 import type {
   Account,
   AdminLog,
@@ -43,6 +44,7 @@ import { useTabParam } from '@/url'
 import type { IconName } from '@/icons'
 
 const { availableLocales, locale, setLocale, t, errorText } = useI18n()
+const { theme, toggleTheme } = useTheme()
 // lazyPanel 创建按需加载的页面组件
 function lazyPanel(loader: AsyncComponentLoader) {
   return defineAsyncComponent({
@@ -413,35 +415,48 @@ onUnmounted(() => {
     <aside
       class="flex min-w-0 w-full shrink-0 flex-col border-b border-line bg-panel md:w-64 md:border-r md:border-b-0"
     >
-      <div class="flex h-14 items-center justify-between gap-2 border-b border-line px-4">
-        <div class="flex min-w-0 items-center gap-2">
-          <div class="h-3 w-3 rounded-full" :class="statusColor"></div>
-          <h1 class="whitespace-nowrap text-lg font-bold text-white">AI Studio Proxy</h1>
+      <div class="flex h-14 items-center justify-between gap-1.5 border-b border-line px-3">
+        <div class="flex min-w-0 items-center gap-1.5">
+          <div class="h-2.5 w-2.5 shrink-0 rounded-full" :class="statusColor"></div>
+          <h1 class="whitespace-nowrap text-[15px] font-bold tracking-tight text-white">
+            AI Studio Proxy
+          </h1>
         </div>
-        <DropdownMenuRoot :modal="false">
-          <DropdownMenuTrigger
-            class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 font-mono text-xs text-gray-500 transition hover:text-white data-[state=open]:text-white"
+        <div class="flex shrink-0 items-center gap-1">
+          <button
+            v-tooltip="t(theme === 'dark' ? 'app.lightMode' : 'app.darkMode')"
+            type="button"
+            :aria-label="t(theme === 'dark' ? 'app.lightMode' : 'app.darkMode')"
+            class="flex h-6 w-6 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white"
+            @click="toggleTheme"
           >
-            {{ locale }}
-            <UiIcon name="chevronDown" :size="12" />
-          </DropdownMenuTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuContent
-              align="end"
-              :side-offset="4"
-              class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
+            <UiIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="13" />
+          </button>
+          <DropdownMenuRoot :modal="false">
+            <DropdownMenuTrigger
+              class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 font-mono text-xs text-gray-500 transition hover:text-white data-[state=open]:text-white"
             >
-              <DropdownMenuItem
-                v-for="item in availableLocales"
-                :key="item.code"
-                class="block w-full cursor-pointer px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 outline-none data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
-                @select="setLocale(item.code)"
+              {{ locale }}
+              <UiIcon name="chevronDown" :size="12" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent
+                align="end"
+                :side-offset="4"
+                class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
               >
-                {{ item.label }}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenuPortal>
-        </DropdownMenuRoot>
+                <DropdownMenuItem
+                  v-for="item in availableLocales"
+                  :key="item.code"
+                  class="block w-full cursor-pointer px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 outline-none data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
+                  @select="setLocale(item.code)"
+                >
+                  {{ item.label }}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
+        </div>
       </div>
 
       <nav
@@ -609,7 +624,8 @@ onUnmounted(() => {
 
 <style scoped>
 .launching-shell {
-  background: radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), #161b22;
+  background:
+    radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), var(--color-panel);
 }
 
 .launching-scan {

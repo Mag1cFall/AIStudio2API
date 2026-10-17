@@ -25,6 +25,8 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': '서비스 상태',
   'app.start': '서비스 시작',
   'app.stop': '서비스 중지',
+  'app.lightMode': '라이트 모드로 전환',
+  'app.darkMode': '다크 모드로 전환',
   'nav.logs': '로그',
   'nav.accounts': '계정',
   'nav.models': '모델 목록',
