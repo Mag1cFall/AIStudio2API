@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -148,6 +148,7 @@ type accountRuntimeState struct {
 	ModelAccess        map[string]ModelAccess     `json:"model_access,omitempty"`
 	BenefitTier        BenefitTier                `json:"benefit_tier,omitempty"`
 	CatalogFingerprint string                     `json:"catalog_fingerprint,omitempty"`
+	Proxy              string                     `json:"proxy,omitempty"`
 }
 
 // ModelAccessState 表示账户对单个模型的实测调用资格
@@ -195,6 +196,7 @@ type Account struct {
 	catalogError          string
 	initializedAt         time.Time
 	buildModels           []Model
+	boundProxy            atomic.Pointer[string]
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
@@ -204,6 +206,7 @@ type AccountStatus struct {
 	State       AccountState             `json:"state"`
 	Enabled     bool                     `json:"enabled"`
 	Proxy       string                   `json:"proxy"`
+	Egress      string                   `json:"egress"`
 	Locale      string                   `json:"locale"`
 	Timezone    string                   `json:"timezone"`
 	Models      []string                 `json:"models"`
@@ -578,10 +581,27 @@ func (c AccountConfig) Validate() error {
 	return nil
 }
 
-// EffectiveProxy 返回账户固定代理或全局代理
+// EffectiveProxy 返回账户固定代理、代理池绑定或全局代理
 func (a *Account) EffectiveProxy(globalProxy string) string {
 	if a != nil && strings.TrimSpace(a.Config.Proxy) != "" {
 		return strings.TrimSpace(a.Config.Proxy)
+	}
+	return a.PoolProxy(globalProxy)
+}
+
+// SetPoolProxy 设置账户加入账户池前使用的代理池绑定
+func (a *Account) SetPoolProxy(proxy string) {
+	if proxy = strings.TrimSpace(proxy); proxy != "" {
+		a.boundProxy.Store(&proxy)
+	}
+}
+
+// PoolProxy 返回账户的代理池绑定，未绑定时返回全局代理
+func (a *Account) PoolProxy(globalProxy string) string {
+	if a != nil {
+		if bound := a.boundProxy.Load(); bound != nil && *bound != "" {
+			return *bound
+		}
 	}
 	return strings.TrimSpace(globalProxy)
 }
@@ -696,7 +716,7 @@ func callableFirst(models []Model) []Model {
 			ordered = append(ordered, model)
 		}
 	}
-	return slices.Concat(ordered, agents, restricted)
+	return append(append(ordered, agents...), restricted...)
 }
 
 // CanonicalModelID 把实时目录中的模型别名换成上游接受的正式模型 ID
@@ -2085,7 +2105,7 @@ func (p *AccountPool) ModelRequiresSubscription(accountID string, modelID string
 	return false
 }
 
-// MarkQuotaCooldownIfGeneration 保存当前目录代际中的额度冷却，返回实际生效的冷却期限
+// MarkQuotaCooldownIfGeneration 保存当前目录代际中的额度冷却，返回实际生效的冷却期限；递增冷却被较新结果跳过时返回零值
 func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 	accountID string,
 	modelAccessScope string,
@@ -2104,7 +2124,7 @@ func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 	if modelAccessScope == "" {
 		modelAccessScope = globalCooldownKey
 	}
-	until := cooldown.Until
+	var until time.Time
 	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
 		if generation != account.modelAccessGeneration {
 			return false, nil, nil
@@ -2376,6 +2396,7 @@ func (p *AccountPool) Status() []AccountStatus {
 			State:       state,
 			Enabled:     account.Config.Enabled,
 			Proxy:       account.Config.Proxy,
+			Egress:      account.EffectiveProxy(""),
 			Locale:      account.Config.Locale,
 			Timezone:    account.Config.Timezone,
 			Models:      models,
@@ -3269,6 +3290,7 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 		ModelAccess:        make(map[string]ModelAccess, len(value.ModelAccess)),
 		BenefitTier:        value.BenefitTier,
 		CatalogFingerprint: value.CatalogFingerprint,
+		Proxy:              value.Proxy,
 	}
 	for key, cooldown := range value.Cooldowns {
 		result.Cooldowns[key] = cooldown

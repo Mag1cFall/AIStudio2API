@@ -13,9 +13,9 @@ function applyTheme(next: Theme): void {
   window.localStorage.setItem('user_theme', next)
 }
 
-// useTheme 提供当前界面配色模式与整页淡入淡出的切换方法
+// useTheme 提供当前界面配色模式与切换方法，切到浅色时浅色画面从 origin 圆形展开铺满全屏，切到深色时收回 origin
 export function useTheme() {
-  const toggleTheme = (): void => {
+  const toggleTheme = (origin: { x: number; y: number }): void => {
     const next: Theme = theme.value === 'dark' ? 'light' : 'dark'
     const root = document.documentElement
     // themeSwitching 期间停用元素自身的颜色过渡，全部元素在同一帧换色
@@ -32,7 +32,26 @@ export function useTheme() {
       finish()
       return
     }
-    void document.startViewTransition(() => applyTheme(next)).finished.finally(finish)
+    const radius = Math.hypot(
+      Math.max(origin.x, window.innerWidth - origin.x),
+      Math.max(origin.y, window.innerHeight - origin.y),
+    )
+    const circle = [
+      `circle(0px at ${origin.x}px ${origin.y}px)`,
+      `circle(${radius}px at ${origin.x}px ${origin.y}px)`,
+    ]
+    const transition = document.startViewTransition(() => applyTheme(next))
+    void transition.ready.then(() => {
+      root.animate(
+        { clipPath: next === 'light' ? circle : [...circle].reverse() },
+        {
+          duration: 420,
+          easing: next === 'light' ? 'ease-out' : 'ease-in',
+          pseudoElement: `::view-transition-${next === 'light' ? 'new' : 'old'}(root)`,
+        },
+      )
+    })
+    void transition.finished.finally(finish)
   }
 
   return { theme: readonly(theme), toggleTheme }

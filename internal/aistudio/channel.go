@@ -60,6 +60,13 @@ func (p *AccountPool) BuildEnabled() bool {
 	return p.channelEnabledLocked(ChannelBuild)
 }
 
+// PlaygroundEnabled 返回 Playground 通道是否启用
+func (p *AccountPool) PlaygroundEnabled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.channelEnabledLocked(ChannelPlayground)
+}
+
 // Channel 返回租约本次使用的上游通道
 func (l *AccountLease) Channel() Channel {
 	if l == nil || l.channel == "" {

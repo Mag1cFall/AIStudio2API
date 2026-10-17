@@ -64,31 +64,71 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 		return nil, err
 	}
 	options.CacheDirectory = cacheDirectory
-	options.reportStartup(StartupLaunchingBrowser)
-	process, endpoint, err := launchBrowser(ctx, options, fingerprint)
-	if err != nil {
-		return nil, errors.Join(err, releaseAccountCache(cacheLock))
-	}
-	worker := &Worker{process: process, cacheLock: cacheLock}
+	worker := &Worker{cacheLock: cacheLock}
 	failed := true
 	defer func() {
 		if failed {
 			_ = worker.abort()
 		}
 	}()
-	options.reportStartup(StartupConnectingBiDi)
-	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
-	connection, _, err := dialer.DialContext(ctx, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("连接 Camoufox BiDi: %w", err)
+	for {
+		err := worker.launch(ctx, options, fingerprint)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errBrowserStartupStalled) {
+			return nil, err
+		}
+		if err := worker.closeBrowser(); err != nil {
+			return nil, err
+		}
 	}
-	worker.connection = connection
-	worker.client = newBiDiClient(connection)
 	if err := worker.bootstrap(ctx, options, state); err != nil {
 		return nil, err
 	}
 	failed = false
 	return worker, nil
+}
+
+// browserStartupTimeout 为 Camoufox 完成启动并响应 session.new 的最长等待
+const browserStartupTimeout = 30 * time.Second
+
+// errBrowserStartupStalled 表示 Camoufox 未在 browserStartupTimeout 内完成启动
+var errBrowserStartupStalled = errors.New("Camoufox 启动未完成")
+
+// launch 启动 Camoufox、连接 BiDi 并创建 session
+func (worker *Worker) launch(ctx context.Context, options Options, fingerprint map[string]any) error {
+	options.reportStartup(StartupLaunchingBrowser)
+	process, endpoint, err := launchBrowser(ctx, options, fingerprint)
+	if err != nil {
+		return err
+	}
+	worker.process = process
+	options.reportStartup(StartupConnectingBiDi)
+	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
+	connection, _, err := dialer.DialContext(ctx, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("连接 Camoufox BiDi: %w", err)
+	}
+	worker.connection = connection
+	worker.client = newBiDiClient(connection)
+	sessionCtx, cancel := context.WithTimeout(ctx, browserStartupTimeout)
+	defer cancel()
+	if _, err := worker.client.command(sessionCtx, "session.new", map[string]any{"capabilities": map[string]any{}}); err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return errBrowserStartupStalled
+		}
+		return err
+	}
+	return nil
+}
+
+// closeBrowser 关闭未完成启动的 Camoufox，保留账户缓存锁
+func (worker *Worker) closeBrowser() error {
+	_ = worker.connection.Close()
+	err := worker.process.Close()
+	worker.connection, worker.client, worker.process = nil, nil, nil
+	return err
 }
 
 func (worker *Worker) abort() error {
@@ -202,9 +242,6 @@ func (worker *Worker) Close() error {
 
 func (worker *Worker) bootstrap(ctx context.Context, options Options, storage storageState) error {
 	client := worker.client
-	if _, err := client.command(ctx, "session.new", map[string]any{"capabilities": map[string]any{}}); err != nil {
-		return err
-	}
 	tree, err := client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0})
 	if err != nil {
 		return err

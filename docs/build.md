@@ -32,7 +32,7 @@ Build 应用运行在 `*.scf.usercontent.goog` 的 blob 沙箱 iframe 中。宿�
 
 `BUILD_NATIVE_NONSTREAM=true` 为默认值：Gemini、Chat、Responses、Anthropic、Interactions、图片和语音端点的非流式请求在每个账户上优先使用 Build 通道，执行 `ProxyUnaryCall` 与 `:generateContent`。Build 通道未启用、该账户的 Build 目录不支持模型或该账户的 Build 额度冷却时，由同一账户的其余可用通道执行；文件引用与专用能力按其 Playground 路由执行。关闭该选项后按原通道顺序调度，选中 Build 的非流式请求仍执行单次调用。
 
-Playground `GenerateContent` 的响应为 repeated 流帧，完整收集后转换为公开非流式响应。日志的“上游调用”记录实际通道、`native` / `stream` 模式和 RPC；非流式请求使用流式传输时，以 WARN 记录“回退流式”与原因。Build 明确返回单次方法不支持时，尝试该通道的 `ProxyStreamedCall`；参数错误按原错误返回。
+Playground `GenerateContent` 的响应为 repeated 流帧，完整收集后转换为公开非流式响应。日志的“上游调用”记录实际通道、`native` / `stream` 模式和 RPC；非流式请求使用流式传输时，以 WARN 记录“回退流式”与原因。Build 明确返回单次方法不支持时，尝试该通道的 `ProxyStreamedCall`；参数错误按“错误、额度与能力边界”一节处理。
 
 通道在以下位置显示：
 
@@ -389,7 +389,8 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | 16 | 401 |
 | 其他 | 502 |
 
-- HTTP 429 按元数据或消息识别分钟限额与每日限额：分钟限额冷却到窗口重置，每日限额冷却到下一个额度日；非全局限额写入 `build:<模型>`，全局限额写入账户 `*`
+- HTTP 429 按元数据或消息识别分钟限额与每日限额：分钟限额冷却到窗口重置，每日限额冷却到下一个额度日；非全局限额写入 `build:<模型>`，全局限额写入账户 `*`；列出的额度项上限全部为 `limit: 0` 时冷却类型为“无配额”
+- HTTP 400、Code 3 发生在可经 Playground 完成的请求上且 Playground 通道启用时，同一账户改经 Playground 重试，需要 Build 的结构化输出改用 Playground 载体；只启用 Build 时返回 Build 的错误。Playground 返回首个事件后按 `build:<模型>` 递增冷却 1、5、15、30、60 分钟，该范围成功一次后从 1 分钟开始；Playground 同样拒绝时返回 Playground 的错误
 - 流尾错误按换算后的 HTTP 状态处理；首个上游语义事件之前的 401、403、404、429 与 5xx 进入换号、换通道与冷却流程，之后的错误以流内 error 结束
 - HTTP 403 与 Code 7 保留账户与模型资格，请求切换到其他账户
 - 模型不存在返回 404 Code 5；只能配合 Computer Use 的模型在纯文本请求时返回 400 Code 3，这类模型不进入 Build 通道

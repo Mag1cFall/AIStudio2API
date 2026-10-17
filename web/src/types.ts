@@ -12,11 +12,20 @@ export interface Account {
   enabled: boolean
   state: AccountState
   proxy: string
+  egress: string
   locale: string
   timezone: string
   models: string[]
   benefit_tier: string
   message: string
+}
+
+export interface ProxyPoolEntry {
+  proxy: string
+  available: boolean
+  accounts: number
+  checked_at?: string
+  error?: string
 }
 
 export interface AccountRefresh {
@@ -172,6 +181,7 @@ export interface ServiceConfig {
   service_restart_required: boolean
   proxy: string
   active_proxy: string
+  proxy_pool: ProxyPoolEntry[]
   init_timeout: string
   request_timeout: string
   warm_worker_limit: number

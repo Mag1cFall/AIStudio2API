@@ -67,6 +67,7 @@ user 文本中的 YouTube 链接先转为 external media part，链接从文本�
 
 - bootstrap 的 `GenerateContent` 在发往上游前终止，不产生生成用量；`TEMPORARY_CHAT=true` 同时关闭预热页的自动保存
 - 取消 Worker 启动会关闭 BiDi、终止 Camoufox 进程树并删除临时 profile；启动页面停在其他状态时返回包含当前 URL 的启动错误
+- Camoufox 在 BiDi 连接后 30 秒内没有响应 `session.new` 时，Worker 关闭该进程并重新启动 Camoufox，日志重新输出第 3、4 阶段
 
 bootstrap 模型优先使用实时目录中的 `gemini-flash-latest`，否则按目录顺序选择支持 `generateContent`、账户权益与聊天能力的模型。两种后端使用同一选择规则，一个账户 Worker 为该账户的全部普通生成模型提供 proof，切换业务模型直接复用当前 Worker。
 
@@ -654,6 +655,7 @@ bootstrap 模型只负责建立账户 Worker，不是业务模型白名单，一
 | `GenerateContent`、`GenerateVideo`、Bidi 返回 HTTP 404、Code 5 且消息含 `Ambiguous request for service ''` | 同账户重建 Worker 并重放一次 |
 | HTTP 403 或 Code 7 | 保留账户与模型资格，首个上游事件前切换到未尝试的同能力账户；不重建 Worker |
 | HTTP 429 | 按分钟或每日限额写入冷却（Build 通道为 `build:<模型>`），同账户另一通道可用时在同账户重试 |
+| Build 返回 HTTP 400、Code 3 | Playground 通道启用且请求可经 Playground 完成时在同账户经 Playground 重试；Playground 返回首个事件后递增冷却 `build:<模型>` |
 | HTTP 401 | 在同一出口续签：使用账户保存的 Chrome 材料，或从本机 Chrome 导入同一邮箱的材料；重建 WAA runtime 后重放一次。两者都不可用或续签后仍为 401 的账户进入 `auth_required` |
 | Worker 启动失败 | 记录 `WAA Worker 启动失败`，请求可切换账户 |
 | runtime 租约由其他进程持有 | 账户暂停调度，首次 5 秒后重试，间隔翻倍到 1 分钟 |

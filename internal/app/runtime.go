@@ -47,31 +47,50 @@ func newRuntime(
 	}
 
 	egress := "直连"
-	if cfg.Proxy == "" {
-		cfg.Proxy = systemProxy()
-		if cfg.Proxy != "" {
-			egress = redactedProxy(cfg.Proxy) + " | 来源=系统代理"
+	proxyList := config.ProxyList(cfg.Proxy)
+	if len(proxyList) == 0 {
+		if system := systemProxy(); system != "" {
+			proxyList = []string{system}
+			egress = redactedProxy(system) + " | 来源=系统代理"
 		}
 	} else {
-		egress = redactedProxy(cfg.Proxy)
+		redacted := make([]string, 0, len(proxyList))
+		for _, proxy := range proxyList {
+			redacted = append(redacted, redactedProxy(proxy))
+		}
+		egress = strings.Join(redacted, ",")
 	}
+	globalProxy := ""
+	if len(proxyList) > 0 {
+		globalProxy = proxyList[0]
+	}
+	cfg.Proxy = strings.Join(proxyList, ",")
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
-	headers, err := newAccountHeaderProvider(accounts, cfg.Proxy)
+	proxies := aistudio.NewProxyPool(pool, proxyList)
+	if len(proxyList) > 1 {
+		if _, err := proxies.Probe(launchCtx, checkProxy); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if _, err := proxies.Assign(); err != nil {
+		return nil, nil, nil, err
+	}
+	headers, err := newAccountHeaderProvider(accounts, globalProxy)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	transport, err := aistudio.NewMakerSuiteHTTPTransport(aistudio.HTTPTransportOptions{
-		Pool: pool, Signer: aistudio.NewSigner(), Headers: headers, GlobalProxy: cfg.Proxy,
+		Pool: pool, Signer: aistudio.NewSigner(), Headers: headers, GlobalProxy: globalProxy,
 	})
 	if err != nil {
 		headers.Close()
 		return nil, nil, nil, err
 	}
 	workers := newAccountWorkerManager(
-		pool, accounts, requests, camoufoxPath, cfg.Proxy, cfg.InitTimeout,
+		pool, accounts, requests, camoufoxPath, globalProxy, cfg.InitTimeout,
 		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency, cfg.TemporaryChat,
 	)
 	protected, err := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
@@ -88,7 +107,7 @@ func newRuntime(
 		headers.Close()
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
-	refresher := newAuthRuntimeRefresher(workers, headers, requests, cfg.Proxy)
+	refresher := newAuthRuntimeRefresher(workers, headers, requests, globalProxy)
 	workers.refresher = refresher
 	client, err := aistudio.NewClient(aistudio.ClientOptions{
 		Transport:       &authRetryTransport{transport: transport, refresher: refresher},
@@ -111,11 +130,18 @@ func newRuntime(
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
+	admin.proxies, admin.globalProxy = proxies, globalProxy
+	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
+	probeCtx, stopProbe := context.WithCancel(lifecycle)
+	if len(proxyList) > 1 {
+		go admin.probeProxies(probeCtx)
+	}
 	requests.log("service", "INFO", fmt.Sprintf(
 		"协议运行时就绪 | 账户=%d | 耗时=%s",
 		len(accounts), time.Since(startedAt).Round(time.Millisecond),
 	))
 	closeRuntime := func() error {
+		stopProbe()
 		err := workers.Close()
 		transport.CloseIdleConnections()
 		headers.Close()
@@ -735,7 +761,7 @@ func (manager *accountWorkerManager) workerConfigFor(
 ) camoufoxnative.Options {
 	proxy := strings.TrimSpace(config.Proxy)
 	if proxy == "" {
-		proxy = strings.TrimSpace(manager.globalProxy)
+		proxy = account.PoolProxy(manager.globalProxy)
 	}
 	return camoufoxnative.Options{
 		ExecutablePath:   manager.camoufox,
@@ -1771,7 +1797,7 @@ func (provider *accountHeaderProvider) prepareUpdate(
 	}
 	proxy := strings.TrimSpace(config.Proxy)
 	if proxy == "" {
-		proxy = strings.TrimSpace(provider.globalProxy)
+		proxy = account.PoolProxy(provider.globalProxy)
 	}
 	client, err := aistudio.NewProxyHTTPClient(proxy)
 	if err != nil {
@@ -1868,6 +1894,8 @@ func (provider *accountHeaderProvider) ProtocolHeaders(ctx context.Context, acco
 type trackedService struct {
 	buildNativeNonstream bool
 	modelMapping         []config.ModelAlias
+	proxies              *aistudio.ProxyPool
+	rebindAccounts       func([]string)
 	lifecycle            context.Context
 	service              aistudio.Service
 	catalog              modelCatalogService
@@ -3313,6 +3341,7 @@ func (service *trackedService) generateWithRetry(
 	recoveredWorker := make(map[string]struct{})
 	recoveryAccountID := ""
 	copyFiles := false
+	var buildRejection *rejectedBuildAttempt
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		request.Contents = originalContents
 		selectionAccountID := requestedAccountID
@@ -3351,6 +3380,11 @@ func (service *trackedService) generateWithRetry(
 			default:
 				selection.PreferredChannel = aistudio.ChannelBuild
 			}
+		}
+		if buildRejection != nil && buildRejection.accountID == selectionAccountID {
+			selection.PlaygroundOnly = true
+			selection.PreferredChannel = ""
+			fallbackReason = "Build 拒绝请求参数"
 		}
 		if (unbound || fileBound) && len(attempted) > 0 {
 			enabled, _ := service.pool.EnabledAccounts()
@@ -3392,6 +3426,7 @@ func (service *trackedService) generateWithRetry(
 		err = nil
 		source = nil
 		request.AccountID = lease.Account().ID
+		attemptProxy := service.proxies.Binding(request.AccountID)
 		workerGeneration := service.workers.WorkerGeneration(request.AccountID)
 		attempted[request.AccountID] = struct{}{}
 		accountLabel := lease.Account().Config.Label
@@ -3516,6 +3551,10 @@ func (service *trackedService) generateWithRetry(
 				api.SetAccessLogFirstEvent(requestCtx, time.Since(generationStartedAt))
 				api.SetAccessLogTarget(requestCtx, first.ProviderModel, accountLabel)
 				temporaryCopies = attemptCopies
+				service.proxies.ReportSuccess(attemptProxy)
+				if buildRejection != nil && buildRejection.accountID == request.AccountID {
+					service.coolRejectedBuild(buildRejection, modelID, accountLabel)
+				}
 				break
 			}
 		}
@@ -3526,6 +3565,15 @@ func (service *trackedService) generateWithRetry(
 			Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
 			DurationMS: time.Since(attemptStartedAt).Milliseconds(),
 		})
+		if proxyNetworkError(requestCtx, err) {
+			changed, proxyErr := service.proxies.ReportFailure(attemptProxy, err)
+			if proxyErr != nil {
+				service.requests.log(accountLabel, "WARN", "代理改绑 | 错误="+proxyErr.Error())
+			}
+			if len(changed) > 0 && service.rebindAccounts != nil {
+				service.rebindAccounts(changed)
+			}
+		}
 		workerFailed := service.workers.WorkerFailed(request.AccountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
 		workerReplaced := errors.Is(err, errAccountWorkerReplaced)
@@ -3552,10 +3600,12 @@ func (service *trackedService) generateWithRetry(
 				err = errors.Join(err, stateErr)
 				retryable = false
 			} else {
-				service.requests.log(accountLabel, "WARN", fmt.Sprintf(
-					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
-					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
-				))
+				if !until.IsZero() {
+					service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+						"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
+						cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
+					))
+				}
 				if service.pool.ModelRequiresSubscription(request.AccountID, modelID) {
 					service.refreshAccountStateAfterLimit(request.AccountID)
 				}
@@ -3564,6 +3614,17 @@ func (service *trackedService) generateWithRetry(
 					maxAttempts++
 				}
 			}
+		}
+		var rpcErr *aistudio.RPCError
+		if lease.Channel() == aistudio.ChannelBuild && service.pool.PlaygroundEnabled() && requestCtx.Err() == nil &&
+			errors.As(err, &rpcErr) && rpcErr.StatusCode == http.StatusBadRequest && rpcErr.Code == 3 {
+			buildRejection = &rejectedBuildAttempt{
+				accountID: request.AccountID, generation: lease.ModelAccessGeneration(), checkedAt: lease.CheckedAt(), err: err,
+			}
+			recoveryAccountID = request.AccountID
+			delete(attempted, request.AccountID)
+			maxAttempts++
+			retryable = true
 		}
 		releaseErr := lease.Release()
 		lease = nil
@@ -3624,6 +3685,34 @@ func (service *trackedService) generateWithRetry(
 		clientCtx, requestCtx, cancel, request.ID,
 		first, source, destination, lease, temporaryCopies, activity, modelID,
 	)
+}
+
+// rejectedBuildAttempt 表示 Build 以参数错误拒绝、正在由同账户 Playground 重试的尝试
+type rejectedBuildAttempt struct {
+	accountID  string
+	generation uint64
+	checkedAt  time.Time
+	err        error
+}
+
+// coolRejectedBuild 在同账户 Playground 对被 Build 拒绝的请求返回首个事件后递增冷却该模型的 Build 通道
+func (service *trackedService) coolRejectedBuild(rejection *rejectedBuildAttempt, modelID string, accountLabel string) {
+	cooldown, ok := aistudio.BuildRejectionCooldown(rejection.err)
+	if !ok {
+		return
+	}
+	scope := aistudio.ChannelCooldownScope(aistudio.ChannelBuild, modelID)
+	until, err := service.pool.MarkQuotaCooldownIfGeneration(rejection.accountID, scope, rejection.generation, rejection.checkedAt, cooldown)
+	if err != nil {
+		service.requests.log(accountLabel, "WARN", fmt.Sprintf("账号冷却 | 类型=%s | 范围=%s | 错误=%s", cooldown.Kind, scope, err))
+		return
+	}
+	if until.IsZero() {
+		return
+	}
+	service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+		"账号冷却 | 类型=%s | 范围=%s | 恢复=%s", cooldown.Kind, scope, until.Local().Format(time.RFC3339),
+	))
 }
 
 var errStreamClosedBeforeFirstEvent = errors.New("AI Studio stream closed before first event")

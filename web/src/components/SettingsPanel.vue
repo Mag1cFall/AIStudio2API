@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
+import { maskedProxy } from '@/proxy'
 import type { ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryParam } from '@/url'
 import SettingRow from './SettingRow.vue'
@@ -43,6 +44,7 @@ const form = reactive<ServiceConfig>({
   service_restart_required: false,
   proxy: '',
   active_proxy: '',
+  proxy_pool: [],
   init_timeout: '2m',
   request_timeout: '5m',
   warm_worker_limit: 5,
@@ -563,6 +565,32 @@ async function saveConfig(): Promise<void> {
                 {{ t('settings.activeProxy') }}:
                 {{ config.active_proxy || t('settings.proxyDirect') }}
               </p>
+              <div v-if="config.proxy_pool.length > 1" class="mt-2 text-xs">
+                <p class="text-gray-500">{{ t('settings.proxyPool') }}</p>
+                <ul class="mt-1 space-y-1">
+                  <li
+                    v-for="entry in config.proxy_pool"
+                    :key="entry.proxy"
+                    class="flex flex-wrap items-center gap-x-2 gap-y-0.5"
+                    data-proxy-pool-entry
+                  >
+                    <span class="break-all text-gray-300">{{ maskedProxy(entry.proxy) }}</span>
+                    <span
+                      v-tooltip="entry.error || ''"
+                      :class="entry.available ? 'text-green-400' : 'text-red-400'"
+                    >
+                      {{
+                        entry.available
+                          ? t('settings.proxyAvailable')
+                          : t('settings.proxyUnavailable')
+                      }}
+                    </span>
+                    <span class="text-gray-500">
+                      {{ t('settings.proxyAccounts').replace('{count}', String(entry.accounts)) }}
+                    </span>
+                  </li>
+                </ul>
+              </div>
             </SettingRow>
           </template>
 

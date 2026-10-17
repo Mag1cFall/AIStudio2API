@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { api } from '@/api'
 import { useI18n, type TranslationKey } from '@/i18n'
+import { maskedProxy } from '@/proxy'
 import type {
   Account,
   AccountDraft,
@@ -78,11 +79,6 @@ const stateKeys: Record<AccountState, TranslationKey> = {
   auth_required: 'state.auth_required',
   unavailable: 'state.unavailable',
   disabled: 'state.disabled',
-}
-
-// maskedProxy 隐藏代理地址中的密码，编辑表单仍使用完整地址
-function maskedProxy(value: string): string {
-  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):[^@/]*@/i, '$1:•••@')
 }
 
 // actionError 将账户写操作错误发送到全局通知
@@ -392,12 +388,12 @@ async function refreshAllAccounts(): Promise<void> {
           class="grid grid-cols-1 gap-2 border-t border-line pt-3 text-xs sm:grid-cols-2 md:grid-cols-4"
         >
           <div>
-            <span class="text-gray-500">{{ t('accounts.proxy') }}</span>
+            <span class="text-gray-500">{{ t('accounts.egress') }}</span>
             <div
-              v-tooltip.overflow="account.proxy ? maskedProxy(account.proxy) : ''"
+              v-tooltip.overflow="account.egress ? maskedProxy(account.egress) : ''"
               class="truncate text-gray-300"
             >
-              {{ account.proxy ? maskedProxy(account.proxy) : t('accounts.direct') }}
+              {{ account.egress ? maskedProxy(account.egress) : t('accounts.direct') }}
             </div>
           </div>
           <div>

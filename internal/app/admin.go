@@ -23,16 +23,18 @@ import (
 
 // runtimeAdmin 投影运行时权威状态
 type runtimeAdmin struct {
-	lifecycle  context.Context
-	pool       *aistudio.AccountPool
-	store      *aistudio.AccountStore
-	service    *trackedService
-	requests   *requestRegistry
-	login      aistudio.IsolatedLoginDriver
-	workers    *accountWorkerManager
-	headers    *accountHeaderProvider
-	configPath string
-	config     config.Config
+	lifecycle   context.Context
+	pool        *aistudio.AccountPool
+	store       *aistudio.AccountStore
+	service     *trackedService
+	requests    *requestRegistry
+	login       aistudio.IsolatedLoginDriver
+	workers     *accountWorkerManager
+	headers     *accountHeaderProvider
+	configPath  string
+	config      config.Config
+	proxies     *aistudio.ProxyPool
+	globalProxy string
 }
 
 // requestRegistry 保存活动请求与事件订阅
@@ -364,6 +366,9 @@ func (admin *runtimeAdmin) addAccount(
 			return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
 		}
 	}
+	if strings.TrimSpace(account.Config.Proxy) == "" {
+		account.SetPoolProxy(admin.proxies.Next())
+	}
 	if err := admin.headers.Add(account); err != nil {
 		return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
 	}
@@ -381,6 +386,9 @@ func (admin *runtimeAdmin) addAccount(
 		return api.AdminAccount{}, err
 	}
 	publishLease = nil
+	if _, err := admin.proxies.Assign(); err != nil {
+		return api.AdminAccount{}, err
+	}
 	admin.syncAccountModelCatalog(ctx, account)
 	return admin.account(account.ID)
 }
@@ -403,6 +411,9 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	}
 	account := lease.Account()
 	enabling := accountConfig.Enabled && !account.Config.Enabled
+	if accountConfig.Proxy == "" && !admin.proxies.Available(account.PoolProxy("")) {
+		account.SetPoolProxy(admin.proxies.Next())
+	}
 	headerUpdate, err := admin.headers.prepareUpdate(account, accountConfig)
 	if err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
@@ -422,6 +433,9 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	workerUpdate.Commit()
 	headerUpdate.Commit()
 	if err := lease.Release(); err != nil {
+		return api.AdminAccount{}, err
+	}
+	if _, err := admin.proxies.Assign(); err != nil {
 		return api.AdminAccount{}, err
 	}
 	admin.syncModelCache()
@@ -698,16 +712,30 @@ func (admin *runtimeAdmin) account(accountID string) (api.AdminAccount, error) {
 	return api.AdminAccount{}, accountOperationError(fmt.Errorf("%w: %s", aistudio.ErrAccountNotFound, accountID))
 }
 
+func (admin *runtimeAdmin) proxyPoolStatus() []api.AdminProxy {
+	statuses := admin.proxies.Status()
+	pool := make([]api.AdminProxy, 0, len(statuses))
+	for _, status := range statuses {
+		pool = append(pool, api.AdminProxy{
+			Proxy: status.Proxy, Available: status.Available, Accounts: status.Accounts, CheckedAt: status.CheckedAt, Error: status.Error,
+		})
+	}
+	return pool
+}
+
 func (admin *runtimeAdmin) effectiveProxy(accountProxy string) string {
 	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
 		return proxy
 	}
-	return strings.TrimSpace(admin.config.Proxy)
+	if proxy := admin.proxies.Next(); proxy != "" {
+		return proxy
+	}
+	return admin.globalProxy
 }
 
 func (admin *runtimeAdmin) loginRequest(account *aistudio.Account, directory string) aistudio.IsolatedLoginRequest {
 	return aistudio.IsolatedLoginRequest{
-		AccountID: account.ID, Directory: directory, Proxy: admin.effectiveProxy(account.Config.Proxy),
+		AccountID: account.ID, Directory: directory, Proxy: account.EffectiveProxy(admin.globalProxy),
 		Locale: account.Config.Locale, Timezone: account.Config.Timezone,
 	}
 }
@@ -717,7 +745,7 @@ func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
 	copy(models, status.Models)
 	return api.AdminAccount{
 		ID: status.ID, Label: status.Label, Enabled: status.Enabled, State: string(status.State),
-		Proxy: status.Proxy, Locale: status.Locale, Timezone: status.Timezone,
+		Proxy: status.Proxy, Egress: status.Egress, Locale: status.Locale, Timezone: status.Timezone,
 		Models: models, BenefitTier: status.BenefitTier, Message: status.Message,
 	}
 }
@@ -750,6 +778,7 @@ func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, er
 	}
 	value := runtimeConfigDTO(cfg)
 	value.ActiveProxy = admin.config.Proxy
+	value.ProxyPool = admin.proxyPoolStatus()
 	return value, nil
 }
 
@@ -797,6 +826,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	admin.requests.log("service", "INFO", "服务配置已保存")
 	value = runtimeConfigDTO(cfg)
 	value.ActiveProxy = admin.config.Proxy
+	value.ProxyPool = admin.proxyPoolStatus()
 	return value, nil
 }
 
