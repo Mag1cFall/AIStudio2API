@@ -25,6 +25,7 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': '服務狀態',
   'app.start': '啟動服務',
   'app.stop': '停止服務',
+  'app.language': '介面語言',
   'app.lightMode': '切換為淺色模式',
   'app.darkMode': '切換為深色模式',
   'nav.logs': '記錄',

@@ -193,6 +193,18 @@ pre,
   background-color: rgb(0 0 0 / 70%);
 }
 
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 400ms;
+  animation-timing-function: ease-in-out;
+}
+
+:root[data-theme-switching] *:not(.theme-icon),
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}
+
 :root[data-theme='light'] .modal-overlay {
   background-color: rgb(15 23 42 / 40%);
 }

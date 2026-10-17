@@ -25,6 +25,7 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': 'Service status',
   'app.start': 'Start service',
   'app.stop': 'Stop service',
+  'app.language': 'Language',
   'app.lightMode': 'Switch to light mode',
   'app.darkMode': 'Switch to dark mode',
   'nav.logs': 'Logs',

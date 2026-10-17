@@ -29,6 +29,7 @@ import {
   Gauge,
   Inbox,
   KeyRound,
+  Languages,
   ListFilter,
   LoaderCircle,
   LogIn,
@@ -111,6 +112,7 @@ export const icons = {
   modeVideo: Clapperboard,
   sun: Sun,
   moon: Moon,
+  language: Languages,
 } as const
 
 // IconName 是界面可用的图标语义名
