@@ -129,7 +129,7 @@ function applyCustom(): void {
                 v-model="customFrom"
                 type="datetime-local"
                 :max="localInput(now)"
-                class="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-sm text-white [color-scheme:dark] focus:border-blue-500 focus:outline-none"
+                class="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
               />
             </label>
             <label class="block text-xs text-gray-400">
@@ -137,7 +137,7 @@ function applyCustom(): void {
               <input
                 v-model="customTo"
                 type="datetime-local"
-                class="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-sm text-white [color-scheme:dark] focus:border-blue-500 focus:outline-none"
+                class="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
               />
             </label>
             <p v-if="customError" class="text-xs text-red-400" role="alert">{{ customError }}</p>

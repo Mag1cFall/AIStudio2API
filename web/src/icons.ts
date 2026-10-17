@@ -35,6 +35,7 @@ import {
   MessageSquare,
   MessagesSquare,
   MonitorUp,
+  Moon,
   Network,
   Play,
   Power,
@@ -45,6 +46,7 @@ import {
   Settings,
   Shield,
   Square,
+  Sun,
   Trash2,
   TriangleAlert,
   Undo2,
@@ -107,6 +109,8 @@ export const icons = {
   modeSpeech: AudioLines,
   modeMusic: Music,
   modeVideo: Clapperboard,
+  sun: Sun,
+  moon: Moon,
 } as const
 
 // IconName 是界面可用的图标语义名
