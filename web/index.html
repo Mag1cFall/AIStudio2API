@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0d1117" />
     <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <title>AI Studio 控制台</title>
+    <script>
+      document.documentElement.dataset.theme =
+        localStorage.getItem('user_theme') === 'light' ? 'light' : 'dark'
+    </script>
   </head>
   <body>
     <div id="app"></div>

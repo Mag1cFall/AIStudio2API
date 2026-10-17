@@ -38,6 +38,7 @@ import LogsPanel from '@/components/LogsPanel.vue'
 import ModelsTable from '@/components/ModelsTable.vue'
 import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import { useTabParam } from '@/url'
 import type { IconName } from '@/icons'
@@ -414,34 +415,48 @@ onUnmounted(() => {
       class="flex min-w-0 w-full shrink-0 flex-col border-b border-line bg-panel md:w-64 md:border-r md:border-b-0"
     >
       <div class="flex h-14 items-center justify-between gap-2 border-b border-line px-4">
-        <div class="flex min-w-0 items-center gap-2">
-          <div class="h-3 w-3 rounded-full" :class="statusColor"></div>
-          <h1 class="whitespace-nowrap text-lg font-bold text-white">AI Studio Proxy</h1>
-        </div>
-        <DropdownMenuRoot :modal="false">
-          <DropdownMenuTrigger
-            class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 font-mono text-xs text-gray-500 transition hover:text-white data-[state=open]:text-white"
+        <div class="flex min-w-0 items-center gap-2.5">
+          <span
+            v-tooltip="`${t('app.status')}: ${serviceState.toUpperCase()}`"
+            class="relative shrink-0"
           >
-            {{ locale }}
-            <UiIcon name="chevronDown" :size="12" />
-          </DropdownMenuTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuContent
-              align="end"
-              :side-offset="4"
-              class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
+            <img src="/favicon.png" alt="" class="h-6 w-6" />
+            <span
+              class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-panel"
+              :class="statusColor"
+            ></span>
+          </span>
+          <h1 class="whitespace-nowrap text-base font-bold text-white">AI Studio Proxy</h1>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <ThemeToggle />
+          <DropdownMenuRoot :modal="false">
+            <DropdownMenuTrigger
+              v-tooltip="t('app.language')"
+              :aria-label="t('app.language')"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white data-[state=open]:text-white"
             >
-              <DropdownMenuItem
-                v-for="item in availableLocales"
-                :key="item.code"
-                class="block w-full cursor-pointer px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 outline-none data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
-                @select="setLocale(item.code)"
+              <UiIcon name="language" :size="13" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent
+                align="end"
+                :side-offset="4"
+                class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
               >
-                {{ item.label }}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenuPortal>
-        </DropdownMenuRoot>
+                <DropdownMenuItem
+                  v-for="item in availableLocales"
+                  :key="item.code"
+                  class="flex w-full cursor-pointer items-center justify-between gap-4 px-4 py-2 text-left text-xs whitespace-nowrap text-gray-300 outline-none data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
+                  @select="setLocale(item.code)"
+                >
+                  {{ item.label }}
+                  <UiIcon v-if="item.code === locale" name="check" :size="12" />
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
+        </div>
       </div>
 
       <nav
@@ -609,7 +624,8 @@ onUnmounted(() => {
 
 <style scoped>
 .launching-shell {
-  background: radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), #161b22;
+  background:
+    radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), var(--color-panel);
 }
 
 .launching-scan {
