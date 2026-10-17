@@ -132,6 +132,7 @@ func newRuntime(
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
 	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
+	workers.proxyFailed = service.reportProxyFailure
 	probeCtx, stopProbe := context.WithCancel(lifecycle)
 	if len(proxyList) > 1 {
 		go admin.probeProxies(probeCtx)
@@ -160,6 +161,7 @@ type accountWorkerManager struct {
 	openings       map[string]chan struct{}
 	requests       *requestRegistry
 	refresher      *authRuntimeRefresher
+	proxyFailed    func(proxy string, accountID string, err error)
 	camoufox       string
 	globalProxy    string
 	initTimeout    time.Duration
@@ -283,6 +285,7 @@ func (preparer *accountWorkerPreparer) current() bool {
 type accountWorkerInitError struct {
 	err         error
 	authHandled bool
+	proxy       string
 }
 
 func (err *accountWorkerInitError) Error() string {
@@ -367,6 +370,10 @@ func (manager *accountWorkerManager) expandInBackground(accountID string, modelI
 			return
 		}
 		manager.requests.log(accountID, "WARN", fmt.Sprintf("WAA Worker 后台扩容失败 | 错误=%v", err))
+		var startup *accountWorkerInitError
+		if manager.proxyFailed != nil && errors.As(err, &startup) && proxyNetworkError(ctx, err) {
+			manager.proxyFailed(startup.proxy, accountID, err)
+		}
 	}()
 }
 
@@ -1091,7 +1098,7 @@ func (manager *accountWorkerManager) startReservedWorker(
 			"WAA Worker 启动失败 | 页面模型=%s | 耗时=%s | 错误=%s",
 			bootstrapModel, time.Since(startedAt).Round(time.Millisecond), strings.TrimSpace(initErr.Error()),
 		))
-		return nil, &accountWorkerInitError{err: initErr}
+		return nil, &accountWorkerInitError{err: initErr, proxy: options.Proxy}
 	}
 	return &accountWorkerPreparer{
 		account: account, worker: worker, bootstrapModel: bootstrapModel, manager: manager,
@@ -3566,13 +3573,7 @@ func (service *trackedService) generateWithRetry(
 			DurationMS: time.Since(attemptStartedAt).Milliseconds(),
 		})
 		if proxyNetworkError(requestCtx, err) {
-			changed, proxyErr := service.proxies.ReportFailure(attemptProxy, err)
-			if proxyErr != nil {
-				service.requests.log(accountLabel, "WARN", "代理改绑 | 错误="+proxyErr.Error())
-			}
-			if len(changed) > 0 && service.rebindAccounts != nil {
-				service.rebindAccounts(changed)
-			}
+			service.reportProxyFailure(attemptProxy, accountLabel, err)
 		}
 		workerFailed := service.workers.WorkerFailed(request.AccountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)

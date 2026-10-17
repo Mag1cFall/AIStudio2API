@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 )
@@ -95,6 +97,44 @@ const browserStartupTimeout = 30 * time.Second
 
 // errBrowserStartupStalled 表示 Camoufox 未在 browserStartupTimeout 内完成启动
 var errBrowserStartupStalled = errors.New("Camoufox 启动未完成")
+
+// ErrProxyUnreachable 表示 Worker 载入 AI Studio 期间无法连接代理
+var ErrProxyUnreachable = errors.New("代理不可达")
+
+// proxyWatchInterval 为载入 AI Studio 期间检查代理连接的间隔
+const proxyWatchInterval = 2 * time.Second
+
+// watchProxy 在返回的 context 结束前定期连接代理，连接失败时以 ErrProxyUnreachable 取消该 context
+func watchProxy(ctx context.Context, proxy string) (context.Context, func()) {
+	watchCtx, cancel := context.WithCancelCause(ctx)
+	stop := func() { cancel(nil) }
+	parsed, err := url.Parse(strings.TrimSpace(proxy))
+	if err != nil || parsed.Host == "" {
+		return watchCtx, stop
+	}
+	address := proxydial.Address(parsed)
+	go func() {
+		ticker := time.NewTicker(proxyWatchInterval)
+		defer ticker.Stop()
+		dialer := net.Dialer{Timeout: proxyWatchInterval}
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			connection, err := dialer.DialContext(watchCtx, "tcp", address)
+			if err != nil {
+				if watchCtx.Err() == nil {
+					cancel(fmt.Errorf("%w %s: %v", ErrProxyUnreachable, address, err))
+				}
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
+	return watchCtx, stop
+}
 
 // launch 启动 Camoufox、连接 BiDi 并创建 session
 func (worker *Worker) launch(ctx context.Context, options Options, fingerprint map[string]any) error {
@@ -267,17 +307,29 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if options.TemporaryChat {
 		target += "&temporary=true"
 	}
-	if _, err := client.command(ctx, "browsingContext.navigate", map[string]any{
+	pageCtx, stopWatch := watchProxy(ctx, options.Proxy)
+	defer stopWatch()
+	if _, err := client.command(pageCtx, "browsingContext.navigate", map[string]any{
 		"context": contextID,
 		"url":     target,
 		"wait":    "interactive",
 	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
+		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
+			return cause
+		}
+		if strings.Contains(err.Error(), "NS_ERROR_PROXY_") {
+			return fmt.Errorf("%w: 导航 AI Studio: %v", ErrProxyUnreachable, err)
+		}
 		return fmt.Errorf("导航 AI Studio: %w", err)
 	}
-	if err := client.waitFor(ctx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
+	if err := client.waitFor(pageCtx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
+		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
+			return cause
+		}
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
 		return fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)
 	}
+	stopWatch()
 	pageURL, err := client.evaluateString(ctx, contextID, "location.href")
 	if err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
 // proxyProbeInterval 为代理池的定时检测间隔
@@ -44,7 +45,18 @@ func proxyNetworkError(ctx context.Context, err error) bool {
 		return false
 	}
 	var transportError *url.Error
-	return errors.As(err, &transportError) || strings.Contains(err.Error(), "NetworkError when attempting to fetch resource")
+	return errors.As(err, &transportError) || errors.Is(err, camoufoxnative.ErrProxyUnreachable) || strings.Contains(err.Error(), "NetworkError when attempting to fetch resource")
+}
+
+// reportProxyFailure 记录经 proxy 的网络错误，代理被判定不可用时改绑其上的账户
+func (service *trackedService) reportProxyFailure(proxy string, label string, err error) {
+	changed, proxyErr := service.proxies.ReportFailure(proxy, err)
+	if proxyErr != nil {
+		service.requests.log(label, "WARN", "代理改绑 | 错误="+proxyErr.Error())
+	}
+	if len(changed) > 0 && service.rebindAccounts != nil {
+		service.rebindAccounts(changed)
+	}
 }
 
 // probeProxies 定时检测代理池并改绑不可用代理上的账户
