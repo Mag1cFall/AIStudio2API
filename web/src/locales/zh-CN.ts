@@ -23,6 +23,7 @@ export const messages = {
   'app.status': '服务状态',
   'app.start': '启动服务',
   'app.stop': '停止服务',
+  'app.language': '界面语言',
   'app.lightMode': '切换到浅色模式',
   'app.darkMode': '切换到深色模式',
   'nav.logs': '日志',

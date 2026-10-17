@@ -2,12 +2,10 @@
 import { ref } from 'vue'
 import { api, type AdminSession } from '@/api'
 import { useI18n } from '@/i18n'
-import { useTheme } from '@/theme'
-import UiIcon from './UiIcon.vue'
+import ThemeToggle from './ThemeToggle.vue'
 
 const emit = defineEmits<{ authenticated: [session: AdminSession] }>()
 const { t, errorText } = useI18n()
-const { theme, toggleTheme } = useTheme()
 const username = ref('')
 const password = ref('')
 const busy = ref(false)
@@ -36,15 +34,7 @@ async function login(): Promise<void> {
     >
       <div class="flex items-center justify-between gap-2">
         <h1 class="text-xl font-semibold text-white">AI Studio Proxy</h1>
-        <button
-          v-tooltip="t(theme === 'dark' ? 'app.lightMode' : 'app.darkMode')"
-          type="button"
-          :aria-label="t(theme === 'dark' ? 'app.lightMode' : 'app.darkMode')"
-          class="flex h-6 w-6 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white"
-          @click="toggleTheme"
-        >
-          <UiIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="13" />
-        </button>
+        <ThemeToggle />
       </div>
       <label class="block">
         <span class="mb-2 block text-sm text-gray-300">{{ t('auth.username') }}</span>
