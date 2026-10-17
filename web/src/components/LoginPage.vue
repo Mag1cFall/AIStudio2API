@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { api, type AdminSession } from '@/api'
 import { useI18n } from '@/i18n'
+import ThemeToggle from './ThemeToggle.vue'
 
 const emit = defineEmits<{ authenticated: [session: AdminSession] }>()
 const { t, errorText } = useI18n()
@@ -31,7 +32,10 @@ async function login(): Promise<void> {
       class="w-full max-w-sm space-y-5 rounded-lg border border-line bg-panel p-7"
       @submit.prevent="login"
     >
-      <h1 class="text-xl font-semibold text-white">AI Studio Proxy</h1>
+      <div class="flex items-center justify-between gap-2">
+        <h1 class="text-xl font-semibold text-white">AI Studio Proxy</h1>
+        <ThemeToggle />
+      </div>
       <label class="block">
         <span class="mb-2 block text-sm text-gray-300">{{ t('auth.username') }}</span>
         <input

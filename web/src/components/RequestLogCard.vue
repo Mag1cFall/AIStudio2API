@@ -244,7 +244,7 @@ const bodyParts = computed(() =>
   gap: 8px 12px;
 }
 .request-heading strong {
-  color: #e6edf3;
+  color: var(--color-gray-200);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -257,28 +257,28 @@ const bodyParts = computed(() =>
 }
 .state-completed,
 .state-tool_calls {
-  color: #56d4a0;
-  background: #56d4a00c;
+  color: var(--color-green-400);
+  background: color-mix(in oklab, var(--color-green-400) 8%, transparent);
 }
 .state-running {
-  color: #79c0ff;
+  color: var(--color-blue-400);
 }
 .state-limited,
 .state-blocked,
 .state-cancelled {
-  color: #e3b341;
+  color: var(--color-yellow-400);
 }
 .state-failed,
 .request-error {
-  color: #ff7b72;
+  color: var(--color-red-400);
 }
 .request-duration {
-  color: #c9d1d9;
+  color: var(--color-fg);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
 .tool-count {
-  color: #a5d6ff;
+  color: var(--color-blue-300);
   font-size: 12px;
 }
 .request-metrics {
@@ -286,12 +286,12 @@ const bodyParts = computed(() =>
   flex-wrap: wrap;
   gap: 4px 18px;
   margin-top: 6px;
-  color: #8b949e;
+  color: var(--color-gray-400);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .request-metrics b {
-  color: #d2dae3;
+  color: var(--color-gray-200);
   font-weight: 500;
 }
 .request-error {
@@ -301,7 +301,7 @@ const bodyParts = computed(() =>
 }
 .request-details {
   margin-top: 5px;
-  color: #8b949e;
+  color: var(--color-gray-400);
   font-size: 11px;
 }
 .request-details summary {
@@ -322,15 +322,15 @@ const bodyParts = computed(() =>
   display: none;
 }
 .request-details summary:hover {
-  color: #c9d1d9;
-  background: #30363d66;
+  color: var(--color-fg);
+  background: color-mix(in oklab, var(--color-line) 40%, transparent);
 }
 .request-details summary:focus-visible {
-  outline: 1px solid #79c0ff;
+  outline: 1px solid var(--color-blue-400);
   outline-offset: 2px;
 }
 .request-disclosure-icon {
-  color: #6e7681;
+  color: var(--color-gray-500);
   transition: transform 120ms ease;
 }
 details[open] > summary > .request-disclosure-icon {
@@ -339,7 +339,7 @@ details[open] > summary > .request-disclosure-icon {
 .request-summary-meta {
   min-width: 0;
   margin-left: 6px;
-  color: #6e7681;
+  color: var(--color-gray-500);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -362,11 +362,11 @@ details[open] > summary > .request-disclosure-icon {
   margin: 10px 0;
 }
 .request-details dd {
-  color: #c9d1d9;
+  color: var(--color-fg);
   overflow-wrap: anywhere;
 }
 .request-timeline {
-  border-left: 1px solid #30363d;
+  border-left: 1px solid var(--color-line);
   padding-left: 12px;
   margin: 10px 0;
 }
@@ -378,21 +378,21 @@ details[open] > summary > .request-disclosure-icon {
 }
 .request-timeline time {
   flex-shrink: 0;
-  color: #6e7681;
+  color: var(--color-gray-500);
 }
 .request-json pre {
   overflow: auto;
   max-height: 320px;
   padding: 12px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
   border-radius: 4px;
   margin-top: 6px;
   white-space: pre;
 }
 .request-body-note {
   margin-top: 6px;
-  color: #8b949e;
+  color: var(--color-gray-400);
 }
 .request-body-part {
   margin-top: 8px;
@@ -400,7 +400,7 @@ details[open] > summary > .request-disclosure-icon {
 .request-body-heading {
   display: flex;
   justify-content: space-between;
-  color: #8b949e;
+  color: var(--color-gray-400);
   font-size: 11px;
 }
 @media (max-width: 767px) {
