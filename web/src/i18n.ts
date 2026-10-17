@@ -31,6 +31,7 @@ document.documentElement.lang = locale.value
 
 // channelLabelKey 返回上游通道的翻译键
 export function channelLabelKey(channel: UpstreamChannel): TranslationKey {
+  if (channel === 'assistant') return 'channel.assistant'
   return channel === 'build' ? 'channel.build' : 'channel.playground'
 }
 

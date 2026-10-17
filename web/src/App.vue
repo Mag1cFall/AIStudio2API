@@ -32,6 +32,7 @@ import type {
   ServiceConfig,
   ServiceStatus,
   TabID,
+  UpdateStatus,
 } from '@/types'
 import AccountsPanel from '@/components/AccountsPanel.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
@@ -61,6 +62,7 @@ function lazyPanel(loader: AsyncComponentLoader) {
 }
 const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
 const PlaygroundPanel = lazyPanel(() => import('@/components/PlaygroundPanel.vue'))
+const VersionPanel = lazyPanel(() => import('@/components/VersionPanel.vue'))
 const validTabs: TabID[] = [
   'logs',
   'accounts',
@@ -69,6 +71,7 @@ const validTabs: TabID[] = [
   'usage',
   'settings',
   'playground',
+  'version',
 ]
 const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
 const navigationBar = ref<HTMLElement | null>(null)
@@ -91,6 +94,7 @@ const models = ref<Model[]>([])
 const cooldowns = ref<Cooldown[]>([])
 const requests = ref<RequestSummary[]>([])
 const config = ref<ServiceConfig | null>(null)
+const update = ref<UpdateStatus | null>(null)
 const startPending = ref(false)
 const stopPending = ref(false)
 const launchCancellationRequested = ref(false)
@@ -123,6 +127,7 @@ const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
   { id: 'usage', label: 'nav.usage', icon: 'usage' },
   { id: 'settings', label: 'nav.settings', icon: 'settings' },
   { id: 'playground', label: 'nav.playground', icon: 'playground' },
+  { id: 'version', label: 'nav.version', icon: 'version' },
 ]
 
 const serviceState = computed(() => {
@@ -350,6 +355,22 @@ function replaceByID<T extends { id: string }>(items: T[], incoming: T): void {
   else items[index] = incoming
 }
 
+// waitForRestart 在线更新后等新进程接管再刷新页面：状态接口返回其他版本或要求重新登录都表示旧进程已退出
+function waitForRestart(previous = status.value?.version): void {
+  eventConnection?.close()
+  window.setTimeout(async () => {
+    const response = await fetch('/api/status', { cache: 'no-store' }).catch(() => undefined)
+    const current: ServiceStatus | undefined = response?.ok
+      ? await response.json().catch(() => undefined)
+      : undefined
+    if (response?.status === 401 || (current !== undefined && current.version !== previous)) {
+      window.location.reload()
+      return
+    }
+    waitForRestart(previous)
+  }, 1000)
+}
+
 function handleAdminEvent(event: AdminEvent): void {
   if (event.type === 'status') {
     status.value = event.data
@@ -384,6 +405,10 @@ onMounted(async () => {
   revealCurrentTab()
   await refreshAll()
   if (!mounted) return
+  api.updateStatus().then(
+    (value) => (update.value = value),
+    () => undefined,
+  )
   eventConnection = openAdminEvents(handleAdminEvent, () => {
     pendingLogs = []
     if (logFlushTimer !== undefined) {
@@ -429,6 +454,16 @@ onUnmounted(() => {
           <h1 class="whitespace-nowrap text-base font-bold text-white">AI Studio Proxy</h1>
         </div>
         <div class="flex shrink-0 items-center gap-1">
+          <button
+            v-if="adminUsername"
+            v-tooltip="`${adminUsername} · ${t('auth.logout')}`"
+            type="button"
+            :aria-label="`${adminUsername} · ${t('auth.logout')}`"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white md:hidden"
+            @click="logout"
+          >
+            <UiIcon name="login" :size="13" />
+          </button>
           <ThemeToggle />
           <DropdownMenuRoot :modal="false">
             <DropdownMenuTrigger
@@ -478,13 +513,19 @@ onUnmounted(() => {
         >
           <UiIcon :name="item.icon" :size="16" />
           {{ t(item.label) }}
+          <span
+            v-if="item.id === 'version' && update?.available"
+            class="size-2 shrink-0 rounded-full bg-amber-400 md:ml-auto"
+            aria-hidden="true"
+            :title="t('version.available').replace('{version}', update.latest ?? '')"
+          />
         </button>
       </nav>
 
       <button
         v-if="adminUsername"
         type="button"
-        class="mx-4 mb-3 rounded border border-line px-3 py-2 text-gray-400 hover:bg-raised hover:text-white"
+        class="mx-4 mb-3 hidden rounded border border-line px-3 py-2 text-gray-400 hover:bg-raised hover:text-white md:block"
         @click="logout"
       >
         {{ adminUsername }} · {{ t('auth.logout') }}
@@ -495,21 +536,43 @@ onUnmounted(() => {
         :class="serviceState === 'launching' ? 'launching-shell' : ''"
       >
         <div v-if="serviceState === 'launching'" class="launching-scan" aria-hidden="true"></div>
-        <div class="mb-2 text-xs text-gray-500">{{ t('app.status') }}</div>
-        <div class="mb-4 flex items-center justify-between">
-          <span class="font-mono font-bold" :class="statusTextColor">
-            {{ serviceState.toUpperCase() }}
-          </span>
-          <span
-            v-tooltip="status?.version || ''"
-            class="max-w-[65%] truncate font-mono text-xs text-gray-500"
+        <div class="mb-2 hidden text-xs text-gray-500 md:block">{{ t('app.status') }}</div>
+        <div class="flex items-center justify-between gap-2 md:mb-4">
+          <div class="flex min-w-0 items-center gap-2 md:contents">
+            <span class="font-mono font-bold" :class="statusTextColor">
+              {{ serviceState.toUpperCase() }}
+            </span>
+            <span
+              v-tooltip="status?.version || ''"
+              class="max-w-[65%] truncate font-mono text-xs text-gray-500"
+            >
+              {{ status?.version || '—' }}
+            </span>
+          </div>
+          <button
+            v-if="serviceState === 'stopped'"
+            class="flex shrink-0 items-center gap-1.5 rounded bg-green-600 px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50 md:hidden"
+            type="button"
+            :disabled="startPending || stopPending"
+            @click="startService"
           >
-            {{ status?.version || '—' }}
-          </span>
+            <UiIcon :name="startPending ? 'spinner' : 'play'" :size="13" />
+            {{ t('app.start') }}
+          </button>
+          <button
+            v-else-if="serviceState === 'launching' || serviceState === 'running'"
+            class="flex shrink-0 items-center gap-1.5 rounded bg-red-600 px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50 md:hidden"
+            type="button"
+            :disabled="stopPending"
+            @click="stopService"
+          >
+            <UiIcon :name="stopPending ? 'spinner' : 'stop'" :size="13" />
+            {{ t('app.stop') }}
+          </button>
         </div>
         <button
           v-if="serviceState === 'stopped'"
-          class="flex w-full items-center justify-center gap-2 rounded bg-green-600 py-2 font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50"
+          class="hidden w-full items-center justify-center gap-2 rounded bg-green-600 py-2 font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50 md:flex"
           type="button"
           :disabled="startPending || stopPending"
           @click="startService"
@@ -519,7 +582,7 @@ onUnmounted(() => {
         </button>
         <button
           v-else-if="serviceState === 'launching' || serviceState === 'running'"
-          class="flex w-full items-center justify-center gap-2 rounded bg-red-600 py-2 font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50"
+          class="hidden w-full items-center justify-center gap-2 rounded bg-red-600 py-2 font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50 md:flex"
           type="button"
           :disabled="stopPending"
           @click="stopService"
@@ -530,9 +593,9 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <main class="flex min-w-0 flex-1 flex-col bg-canvas">
+    <main class="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Transition name="page">
-        <KeepAlive include="SettingsPanel">
+        <KeepAlive include="SettingsPanel,VersionPanel">
           <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
           <AccountsPanel
             v-else-if="currentTab === 'accounts'"
@@ -568,6 +631,13 @@ onUnmounted(() => {
             :error="errors.config"
             @saved="config = $event"
             @notice="showNotice"
+          />
+          <VersionPanel
+            v-else-if="currentTab === 'version'"
+            :status="update"
+            :active-requests="status?.active_requests ?? 0"
+            @status="update = $event"
+            @restarting="waitForRestart"
           />
           <PlaygroundPanel
             v-else

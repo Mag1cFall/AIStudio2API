@@ -153,7 +153,7 @@ Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secu
 | --- | --- |
 | `auth/<Google 邮箱>/account.json` | 邮箱、enabled、proxy、locale、timezone |
 | `auth/<Google 邮箱>/storage-state.json` | Cookie、localStorage 和可选 Chrome 续签材料 |
-| `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、语言、地区和时区配置 |
+| `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、WebGL、语言、地区和时区配置 |
 | `auth/<Google 邮箱>/runtime-state.json` | 账户权益、实测模型资格、冷却与 Drive/Veo 资源绑定 |
 | `auth/<Google 邮箱>/camoufox-cache/` | 该账户 Camoufox 的 HTTP 磁盘缓存，运行中的 WAA Worker 独占 |
 | `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
@@ -213,7 +213,7 @@ snapshot 的底层输入是四槽数组，首槽承载 binding：
 [{content: sha256(bindingPrompt)}, undefined, undefined, undefined]
 ```
 
-返回值是 `!` 开头的 proof。`GenerateContent` 与 `CreateInteractionStream` 写入 field 5，Build 代理写入 field 3，`GenerateVideo` 写入 field 8，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。各 RPC 的 binding prompt 见 [WAA 实现](waa.md)，GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
+返回值是 `!` 开头的 proof。`GenerateContent` 与 `CreateInteractionStream` 写入 field 5，Build 代理写入 field 3，Build 写代码助手 `CodeAssistantOffline` 写入 field 2，`GenerateVideo` 写入 field 8，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。各 RPC 的 binding prompt 见 [WAA 实现](waa.md)，GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
 
 `Waa/Ping` 请求和成功响应：
 
@@ -276,7 +276,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 52 | thinking level | 53 | music route |
 | 54 | image search | 58 | Google Maps |
 | 59 | private Interaction route | 85 | TTS 分段说话人 |
-| 46 | Live 实时翻译 | | |
+| 46 | Live 实时翻译 | 48 | Build 写代码助手可选 |
 
 未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
 
@@ -297,7 +297,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 76 | `transcription_language_codes` | 77 | `transcription_output` |
 | 80 | `transcription_speaker_labels` | 81 | `transcription_custom_vocabulary` |
 | 84 | `transcription_smart` | 85 | `speech_metadata` |
-| 46 | `speech_translation` | | |
+| 46 | `speech_translation` | 48 | `code_assistant` |
 
 每个主能力码都保留为 `capability_code_<N>`，同时为上表中的已知码增加语义键；次能力码保留为 `secondary_capability_code_<N>`。
 
@@ -397,6 +397,7 @@ Content 形状：
 | 11 | 12 | function result `[name, Struct, callId?]` |
 | 12 | 13 | thought boolean |
 | 14 | 15 | thought signature |
+| 17 | 18 | 上传附件 `[mime, 上传路径, 文件名, 字节数]`，字节数为十进制字符串；用于 Build 写代码助手，见 [Build 通道](build.md) 第 8 节 |
 | 22 | 23 | transcription metadata `[text, speaker?, timestamp spans?]` |
 
 system instruction：
@@ -473,6 +474,8 @@ generation config 字段：
 `reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，`xhigh` 与 `max` 按 `high` 处理，`THINKING_LEVEL_UNSPECIFIED` 视为未设置。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level。模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high；没有 thinking level 能力的模型忽略其余 effort，两类能力都缺少时同时忽略 budget。
 
 生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
+
+能力码 48 的模型在目录中另有 `<模型 ID>-build` 条目，经 Build 写代码助手生成，思考后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`；条目定义、请求与流格式见 [Build 通道](build.md) 第 8 节。
 
 模型名等于 `MODEL_MAPPING` 中的别名（可带 `models/` 前缀）时，生成、计数、embedding、Live、Veo 与转录请求先换成映射的模型名，再解析思考后缀，映射目标可以带后缀，例如 `fast:gemini-4-argon(low)`；别名本身带后缀时以该后缀替换目标自带的后缀，例如 `fast(high)` 按 `gemini-4-argon(high)` 处理。同一别名写了多次时以第一项为准，映射只替换一次。`/v1/models` 与 `/v1beta/models` 在目录之后列出目标在目录中的别名，字段取自目标模型；与目录 ID 同名的别名替换该条目。
 
@@ -703,9 +706,9 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 
 Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。
 
-generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过。流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回。
+generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过。流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回。非流式请求收齐上游事件后再输出，上游流中途中断时换号重发。
 
-错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`：Gemini GenerateContent 返回 200 与不含 `candidates` 的 `promptFeedback:{blockReason,blockReasonMessage}`，流式时作为唯一一帧发送；其他协议返回 400，错误消息包含拒绝原因与上游说明。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败；上游 finish reason 作为正常终态保留并映射到各公开协议。
+错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`：Gemini GenerateContent 返回 200 与不含 `candidates` 的 `promptFeedback:{blockReason,blockReasonMessage}`，流式时作为唯一一帧发送；其他协议返回 400，错误消息包含拒绝原因与上游说明。协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。HTTP/协议错误或缺失完成帧形成失败，读取上游响应时连接中断报告为上游流中断与已接收帧数；上游 finish reason 作为正常终态保留并映射到各公开协议。
 
 各协议的具体终态转换如下：
 
@@ -846,6 +849,8 @@ Playground 的函数参数载体和结构化输出 Schema 使用以下 protobuf 
 | `not:{type:"null"}` | 设置 `nullable=false` |
 | 字符串或字符串数组形式的 `not` | 字符串枚举排除约束 |
 | `$schema`、`default`、`additionalProperties`、`exclusiveMinimum`、`propertyNames`、`prefixItems` | 从 wire schema 中省略 |
+| `required` 中未在 `properties` 定义的属性 | 补充不限类型的属性定义 |
+| 指向根 `$defs` 或 `definitions` 的本地 `$ref` | Playground 展开为被引用的定义，完整 Schema 写入说明；循环引用保留开放节点 |
 | `type: [T, "null"]` | 根类型 `T` 与 `nullable=true` |
 | `anyOf` / `oneOf` 的 null 分支 | 移除 null 分支并设置 `nullable=true` |
 | 多个非 null `type` | 开放根节点与完整类型集合的 `anyOf` |
@@ -1430,7 +1435,7 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 | YouTube | `video_url` / `input_video` | `input_video` | URL source | `fileData.fileUri` |
 | function call | assistant `tool_calls` 或旧式 `function_call` | `function_call` item | `tool_use` block | `functionCall` Part |
 | function result | tool message | `function_call_output` item | `tool_result` block | `functionResponse` Part |
-| structured output | `response_format` | `text.format` | — | `responseMimeType` 与 response schema |
+| structured output | `response_format` | `text.format` | `output_config.format` 或 beta `output_format` | `responseMimeType` 与 response schema，或 `responseFormat` 的 `text` 项；`image` 项为图片比例与尺寸 |
 | thinking | `reasoning_effort` 或 `reasoning.effort` | `reasoning.effort`；`reasoning.summary` 决定是否输出思考摘要 | `thinking.budget_tokens`、`output_config.effort`；`thinking.type` 决定是否输出思考 | `thinkingConfig`；`includeThoughts` 决定是否输出思考 |
 
 Gemini 附件与 `predictLongRunning` 的图片输入接受 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。同一别名对同时出现时，外层优先选择驼峰对象，内层优先选择非空驼峰值。
@@ -1938,14 +1943,16 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | media | `mediaResolution`：`MEDIA_RESOLUTION_LOW`、`MEDIA_RESOLUTION_MEDIUM`、`MEDIA_RESOLUTION_HIGH` |
 | output limits | `candidateCount`、`maxOutputTokens`、`stopSequences` |
 | log probabilities | `responseLogprobs`、`logprobs` |
-| structured output | `responseMimeType`、`responseSchema`、`responseJsonSchema` |
+| structured output | `responseMimeType`、`responseSchema`、`responseJsonSchema`、`responseFormat.text` |
 | modalities | `responseModalities` |
-| image | `imageConfig:{aspectRatio,imageSize}` |
+| image | `imageConfig:{aspectRatio,imageSize}`、`responseFormat.image` |
 | thinking | `thinkingConfig:{thinkingBudget,thinkingLevel,includeThoughts}` |
 | transcription | `transcriptionConfig:{languageCodes,customVocabulary,wordTimestamps,speakerLabels,smartTranscription}` |
 | speech | `speechConfig` |
 
-`thinkingConfig.includeThoughts` 为 `true` 时输出 `thought:true` 的思考 Part，省略或为 `false` 时不输出思考正文；思考签名照常随 Part 返回，`thoughtsTokenCount` 照常统计。
+`thinkingConfig.includeThoughts` 为 `true` 时输出 `thought:true` 的思考 Part，省略或为 `false` 时不输出思考正文；思考签名照常随 Part 返回，`thoughtsTokenCount` 照常统计。`thinkingConfig.thinkingBudget` 为 `-1`（动态思考）时使用模型默认思考设置，与模型名后缀 `(-1)` 相同。
+
+`responseFormat` 取单个对象 `{text?,image?,audio?}` 或这类对象的数组。`text.mimeType` 取 `application/json`、`text/plain` 或 `APPLICATION_JSON`、`TEXT_PLAIN`，与 `text.schema` 一起按 `responseMimeType` 与 `responseJsonSchema` 发送；`image.aspectRatio` 取 `ASPECT_RATIO_SIXTEEN_BY_NINE` 这类枚举名或 `16:9`，`image.imageSize` 取 `IMAGE_SIZE_FIVE_TWELVE`、`IMAGE_SIZE_ONE_K`、`IMAGE_SIZE_TWO_K`、`IMAGE_SIZE_FOUR_K` 或 `512`、`1K`、`2K`、`4K`，按 `imageConfig` 发送；`audio` 项不发送上游。
 
 `candidateCount` 取省略、`0` 或 `1` 至 `8`；大于 1 时每个候选单独生成，候选 0 沿用请求 ID，候选 i 的请求 ID 为 `<id>-<i>`，带 `seed` 时使用 `seed+i`；任一候选失败时整个请求返回该错误，`:streamGenerateContent` 在首个候选就绪后开始输出，其余候选的启动错误以流内错误返回；用量为全部候选之和。`frequencyPenalty`、`presencePenalty`、`responseLogprobs` 与 `logprobs` 接受任意值，不发送上游，响应不含 logprobs。
 
@@ -2364,13 +2371,14 @@ OpenAI Responses 的 `previous_response_id` 与 Interactions 的 `previous_inter
 | 上游过载 | 529 | `upstream_error` | `overloaded_error` | `INTERNAL` |
 | 当前客户端请求被管理端取消 | 503 | `request_canceled` | `api_error` | `UNAVAILABLE` |
 | 生成服务已停止 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
+| 生成服务正在启动且模型目录尚未就绪 | 503 | `service_starting` | `api_error` | `UNAVAILABLE` |
 | 请求期限到期 | 504 | `upstream_error` | `timeout_error` | `DEADLINE_EXCEEDED` |
 | 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 
 - “没有符合条件的账户”指候选耗尽且没有符合方法与能力的账户
 - 权益不满足时错误消息写明模型需要的权益：`1` 为付费 API key，`3` 为 Google AI Pro 或 Ultra 订阅，`4` 为 Google AI Ultra 订阅
 - “支持请求的账户均不可调度”指这些账户都处于需要重新登录、不可用或已停用状态，错误消息逐个列出账户、状态与原因
-- 生成服务处于 `STOPPED` 时，生成与计数端点返回 `service_stopped`
+- 生成服务处于 `STOPPED` 时，生成与计数端点返回 `service_stopped`；处于 `LAUNCHING` 时返回 `service_starting`
 - OpenAI 错误对象的 `type` 在参数、认证、权限与资源不存在时为 `invalid_request_error`，429 为 `requests`，其余为 `server_error`；`param` 为 `null`
 - Responses 流中的 `response.failed` 的 `error.code` 取官方枚举：429 为 `rate_limit_exceeded`，400 为 `invalid_prompt`，其余为 `server_error`
 - 错误消息以服务的中文说明开头，上游错误随后附上游方法、HTTP 状态、协议错误码与上游原文，例如 `AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: You've reached your usage limit…`

@@ -127,6 +127,15 @@ function scrollToBottom(): void {
   })
 }
 
+// followScroll 在日志区离开末尾时关闭自动滚动，回到末尾时开启
+function followScroll(): void {
+  if (output.value === undefined) return
+  const element = output.value
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+  if (autoScroll.value && distance > 40) autoScroll.value = false
+  else if (!autoScroll.value && distance <= 10) autoScroll.value = true
+}
+
 // timeFormat 格式化日志行的 24 小时制时间
 const timeFormat = new Intl.DateTimeFormat('en-GB', {
   hour: '2-digit',
@@ -254,6 +263,7 @@ watch(autoScroll, () => {
     <div
       ref="output"
       class="min-h-0 flex-1 overflow-auto bg-canvas p-2 font-mono text-[13px] leading-5"
+      @scroll.passive="followScroll"
     >
       <div v-if="filteredLogs.length === 0" class="mt-10 text-center text-gray-600 italic">
         {{ t('logs.waiting') }}

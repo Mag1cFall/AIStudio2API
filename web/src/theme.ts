@@ -42,14 +42,16 @@ export function useTheme() {
     ]
     const transition = document.startViewTransition(() => applyTheme(next))
     void transition.ready.then(() => {
-      root.animate(
+      const reveal = root.animate(
         { clipPath: next === 'light' ? circle : [...circle].reverse() },
         {
           duration: 420,
           easing: next === 'light' ? 'ease-out' : 'ease-in',
+          fill: 'forwards',
           pseudoElement: `::view-transition-${next === 'light' ? 'new' : 'old'}(root)`,
         },
       )
+      void transition.finished.finally(() => reveal.cancel())
     })
     void transition.finished.finally(finish)
   }

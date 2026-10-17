@@ -116,11 +116,15 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parameters: %w", err)
 	}
-	parameters, encodingError := encodeJSONSchema(raw)
+	inlined, err := inlineSchemaRefs(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parameters: %w", err)
+	}
+	parameters, encodingError := encodeJSONSchema(inlined)
 	description := declaration.Description
 	if encodingError != nil {
 		var schema any
-		if err := json.Unmarshal(raw, &schema); err != nil {
+		if err := json.Unmarshal(inlined, &schema); err != nil {
 			return nil, err
 		}
 		shape, err := json.Marshal(toolSchemaShape(schema))
@@ -132,7 +136,7 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 			return nil, fmt.Errorf("parameters: %w", err)
 		}
 	}
-	if encodingError != nil || schemaWireNeedsBuild(parameters) || declaration.Strict || strings.Contains(string(raw), `"additionalProperties"`) || strings.Contains(string(raw), `"prefixItems"`) || strings.Contains(string(raw), `"exclusiveMinimum"`) || strings.Contains(string(raw), `"propertyNames"`) {
+	if encodingError != nil || schemaWireNeedsBuild(parameters) || declaration.Strict || strings.Contains(string(raw), `"additionalProperties"`) || strings.Contains(string(raw), `"prefixItems"`) || strings.Contains(string(raw), `"exclusiveMinimum"`) || strings.Contains(string(raw), `"propertyNames"`) || strings.Contains(string(raw), `"$ref"`) {
 		description += "\nArguments must follow this JSON Schema: " + string(raw)
 	}
 	projectToolSchema(parameters)

@@ -688,21 +688,26 @@ func decodeBuildGrounding(value buildGrounding) *GroundingMetadata {
 
 // DecodeBuildStream 解码 ProxyStreamedCall 响应：field 1 为 [["<JSON>"]...]，其后可带 google.rpc 状态
 func DecodeBuildStream(source io.Reader, decoder *BuildStreamDecoder, emit func(Event) error) error {
-	stream := json.NewDecoder(newSparseJSONReader(source))
+	reader := &streamReadRecorder{source: source}
+	stream := json.NewDecoder(newSparseJSONReader(reader))
 	stream.UseNumber()
+	index := 0
+	fail := func(path string, detail string) error {
+		return reader.failure(buildProxyStreamedMethod, index, &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: path, Detail: detail})
+	}
 	if token, err := stream.Token(); err != nil || token != json.Delim('[') {
-		return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: "$", Detail: "根值不是数组"}
+		return fail("$", "根值不是数组")
 	}
 	if !stream.More() {
-		return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: "$", Detail: "根数组缺少响应列表"}
+		return fail("$", "根数组缺少响应列表")
 	}
 	if token, err := stream.Token(); err != nil || token != json.Delim('[') {
-		return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: "$[0]", Detail: "响应列表不是数组"}
+		return fail("$[0]", "响应列表不是数组")
 	}
-	for index := 0; stream.More(); index++ {
+	for ; stream.More(); index++ {
 		var raw json.RawMessage
 		if err := stream.Decode(&raw); err != nil {
-			return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: fmt.Sprintf("$[0][%d]", index), Detail: err.Error()}
+			return fail(fmt.Sprintf("$[0][%d]", index), err.Error())
 		}
 		chunk, err := buildProxyResponseBody(raw, fmt.Sprintf("$[0][%d]", index))
 		if err != nil {
@@ -719,16 +724,19 @@ func DecodeBuildStream(source io.Reader, decoder *BuildStreamDecoder, emit func(
 		}
 	}
 	if token, err := stream.Token(); err != nil || token != json.Delim(']') {
-		return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: "$[0]", Detail: "响应列表没有正常结束"}
+		return fail("$[0]", "响应列表没有正常结束")
 	}
 	for stream.More() {
 		var raw json.RawMessage
 		if err := stream.Decode(&raw); err != nil {
-			return &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: "$", Detail: err.Error()}
+			return fail("$", err.Error())
 		}
 		if err := buildTrailerError(raw); err != nil {
 			return err
 		}
+	}
+	if err := reader.failure(buildProxyStreamedMethod, index, nil); err != nil {
+		return err
 	}
 	return decoder.End()
 }

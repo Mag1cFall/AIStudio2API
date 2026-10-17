@@ -138,6 +138,15 @@ func (transport *authRetryTransport) DeleteDrive(
 	return drive.DeleteDrive(ctx, accountID, token, fileID)
 }
 
+// UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
+func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
+	uploader, ok := transport.transport.(aistudio.AssistantUploader)
+	if !ok {
+		return "", fmt.Errorf("transport 不支持写代码助手附件上传")
+	}
+	return uploader.UploadAssistantFile(ctx, accountID, blob)
+}
+
 // newAuthRuntimeRefresher 创建生产环境认证续签器
 func newAuthRuntimeRefresher(
 	workers *accountWorkerManager,

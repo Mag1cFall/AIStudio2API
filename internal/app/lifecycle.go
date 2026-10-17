@@ -347,6 +347,17 @@ func (manager *runtimeManager) Transcribe(ctx context.Context, request aistudio.
 	return service.Transcribe(ctx, request)
 }
 
+// egressProxy 返回管理进程访问外网的代理：PROXY 的第一个代理，未设置时为系统代理
+func (manager *runtimeManager) egressProxy() string {
+	manager.mu.RLock()
+	proxies := config.ProxyList(manager.current.config.Proxy)
+	manager.mu.RUnlock()
+	if len(proxies) > 0 {
+		return proxies[0]
+	}
+	return systemProxy()
+}
+
 // Status 返回当前生成服务状态
 func (manager *runtimeManager) Status(ctx context.Context) (api.AdminStatus, error) {
 	manager.mu.RLock()

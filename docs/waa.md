@@ -36,6 +36,7 @@ WAA（Web Application Attestation）为 AI Studio 的受保护 RPC 提供 BotGua
 | `GenerateContent` | 5 | contents 各 part 以空格连接 | Worker `SendProtected` |
 | `CreateInteractionStream` | 5 | 发送的全部文本以空格连接 | Worker `SendProtected` |
 | `ProxyStreamedCall`、`ProxyUnaryCall` | 3 | `<路径> <请求体>` | Worker `SendProtected` |
+| `CodeAssistantOffline` | 2 | 与 `GenerateContent` 相同 | Worker `SendProtected` |
 | Build embedding `ProxyUnaryCall` | 3 | `<路径> <请求体>`，路径为 `:batchEmbedContents` | Worker `SendProtected` |
 | `GenerateVideo` | 8 | 视频提示词 | MakerSuite Go HTTP transport |
 | Bidi setup | 6 | `models/<模型>` 与每个函数的 `名称 描述`，以空格连接 | WebChannel |
@@ -555,7 +556,7 @@ iframe 惰性名称表依次为 `undefined`、`globalThis`、SpiderMonkey 标准
 })
 ```
 
-`textarea` 写入时把 CRLF 与 CR 规范为 LF，脚本返回值必须等于按此规则规范后的提示词，否则本次 proof 失败。第一次调用在 `body` 下创建输入框与 Run 按钮，之后复用。Build 通道以外的请求写入 binding 使用的提示词；Build 通道写入请求中的用户文本：生成取 contents 各 part 的文本，embedding 取输入文本，Live 取文本输入，实时音乐取加权提示词的文本，多段以空格连接，setup、媒体与函数响应等没有文本的消息写入空字符串。
+`textarea` 写入时把 CRLF 与 CR 规范为 LF，脚本返回值必须等于按此规则规范后的提示词，否则本次 proof 失败。第一次调用在 `body` 下创建输入框与 Run 按钮，之后复用。Build 通道与写代码助手以外的请求写入 binding 使用的提示词；Build 通道与写代码助手写入请求中的用户文本：生成取 contents 各 part 的文本，embedding 取输入文本，Live 取文本输入，实时音乐取加权提示词的文本，多段以空格连接，setup、媒体与函数响应等没有文本的消息写入空字符串。
 
 ### 事件语义
 

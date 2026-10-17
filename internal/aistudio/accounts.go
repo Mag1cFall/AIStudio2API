@@ -2671,7 +2671,7 @@ func accountBootstrapModels(account *Account) []string {
 func waaBootstrapModelEligible(account *Account, modelID string) bool {
 	for _, model := range account.Models {
 		if !modelMatchesID(model, modelID) || !hasMethod(model, "generateContent") ||
-			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] {
+			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] || model.Capabilities["assistant_route"] {
 			continue
 		}
 		return true

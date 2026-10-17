@@ -46,7 +46,7 @@ const form = reactive<ServiceConfig>({
   active_proxy: '',
   proxy_pool: [],
   init_timeout: '2m',
-  request_timeout: '5m',
+  request_timeout: '30m',
   warm_worker_limit: 5,
   max_active_workers: 10,
   warm_startup_concurrency: 5,

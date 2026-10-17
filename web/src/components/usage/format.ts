@@ -95,7 +95,7 @@ export function useUsageFormat() {
   // dimensionLabel 返回维度取值的显示名
   const dimensionLabel = (dimension: UsageDimension | 'status', key: string): string => {
     if (key === '') return t('usage.unassigned')
-    if (dimension === 'channel' && (key === 'build' || key === 'playground'))
+    if (dimension === 'channel' && (key === 'build' || key === 'playground' || key === 'assistant'))
       return t(channelLabelKey(key as UpstreamChannel))
     if (dimension === 'protocol') return protocolLabels[key] ?? key
     if (dimension === 'state') return stateKeys[key] ? t(stateKeys[key]) : key

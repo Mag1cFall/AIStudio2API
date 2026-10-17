@@ -393,7 +393,7 @@ successful model/scope history
 3. 已有 Worker 无可用槽位时，按活动 Worker 上限从待机账户启动 Worker；容量已满时先启动目标 Worker，再替换最久未用的空闲 Worker
 4. 目标 Worker 启动失败或请求取消时保留原 Worker；旧实例关闭失败时保留旧实例并回收目标 Worker，两者回收均失败时同时计入容量；候选均忙时等待槽位
 
-HTTP 403 且协议 Code 7 保留对应模型或 scope 的成功记录；未固定且首个上游语义事件尚未到达的请求继续尝试下一账户，固定请求、资源绑定请求和已开始的流返回上游错误。HTTP 404 且协议 Code 5 的消息包含 `Ambiguous request for service ''`、本地 Worker 失败或实例被替换时，运行时按 Worker generation 重建同一账户实例并重放一次。
+HTTP 403 且协议 Code 7 保留对应模型或 scope 的成功记录；未固定且首个上游语义事件尚未到达的请求，以及上游流中途中断的未固定非流式请求，继续尝试下一账户，固定请求、资源绑定请求和已开始的流返回上游错误。HTTP 404 且协议 Code 5 的消息包含 `Ambiguous request for service ''`、本地 Worker 失败或实例被替换时，运行时按 Worker generation 重建同一账户实例并重放一次。
 
 认证写回使用 `authGeneration` 与 `checkedAt`；模型资格和冷却使用 `modelAccessGeneration` 与 `checked_at`。结果仅在对应 generation 值匹配且时间不早于当前状态时应用，同一时间以成功状态为最终值。目录、权益或认证材料更新时递增对应 generation。
 

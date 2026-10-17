@@ -868,6 +868,8 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			modelID, build := strings.CutPrefix(key, string(aistudio.ChannelBuild)+":")
 			if build {
 				channel = string(aistudio.ChannelBuild)
+			} else if admin.pool.AssistantModel(modelID) {
+				channel = string(aistudio.ChannelAssistant)
 			}
 			cooldowns = append(cooldowns, api.AdminCooldown{
 				AccountID: account.ID, AccountLabel: account.Label, Channel: channel,

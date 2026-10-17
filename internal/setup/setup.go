@@ -91,7 +91,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 		return importStorageState(ctx, target, options)
 	}
 	if options.login {
-		driver, err := defaultSetupLoginDriver(ctx, cfg)
+		driver, err := defaultSetupLoginDriver(ctx, cfg, options.egress)
 		if err != nil {
 			return err
 		}
@@ -443,8 +443,8 @@ func defaultSetupLabel(storageState string) string {
 	return parent
 }
 
-func defaultSetupLoginDriver(ctx context.Context, cfg config.Config) (aistudio.IsolatedLoginDriver, error) {
-	camoufoxPath, err := camoufoxnative.FindExecutable(ctx)
+func defaultSetupLoginDriver(ctx context.Context, cfg config.Config, egress string) (aistudio.IsolatedLoginDriver, error) {
+	camoufoxPath, err := camoufoxnative.FindExecutable(ctx, egress)
 	if err != nil {
 		return nil, err
 	}

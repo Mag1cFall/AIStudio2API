@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,7 +35,8 @@ type commandOptions struct {
 func Run(args []string) int {
 	logs := &logOutput{dir: filepath.Join("runtime", "logs")}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
-	err := runCommand(args, logs)
+	executable, executableErr := os.Executable()
+	restart, err := runCommand(args, logs, executable)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -42,43 +44,59 @@ func Run(args []string) int {
 		slog.Error("AIStudio2API 启动失败", "error", err)
 		return 1
 	}
+	if restart {
+		if err := errors.Join(executableErr, relaunch(executable, args)); err != nil {
+			slog.Error("AIStudio2API 重新启动失败", "error", err)
+			return 1
+		}
+	}
 	return 0
 }
 
-// runCommand 分派首次配置与默认服务
-func runCommand(args []string, logs *logOutput) error {
+// runCommand 分派首次配置与默认服务，返回值 restart 表示在线更新后需要重新启动
+func runCommand(args []string, logs *logOutput, executable string) (restart bool, err error) {
 	cfg, err := config.Load(".env")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := logs.set(cfg.LogFile, cfg.LogMaxTotalMB); err != nil {
-		return err
+		return false, err
 	}
 	defer logs.set(false, 0)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(signals)
+	defer cancel()
 
 	if len(args) != 0 && args[0] == "setup" {
-		return setup.Run(ctx, cfg, args[1:])
+		return false, setup.Run(ctx, cfg, args[1:])
 	}
 	options, err := parseFlags(args, &cfg)
 	if err != nil {
-		return err
+		return false, err
 	}
 	manager, err := newRuntimeManager(ctx, ".env", cfg, options.overrides)
 	if err != nil {
-		return err
+		return false, err
 	}
 	ledger, err := requestdb.Open(filepath.Join("runtime", "requests.db"), func(level, message string) {
 		manager.requests.log("service", level, message)
 	})
 	if err != nil {
-		return errors.Join(fmt.Errorf("打开请求账本: %w", err), manager.Close())
+		return false, errors.Join(fmt.Errorf("打开请求账本: %w", err), manager.Close())
 	}
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
 	manager.logs = logs
-	return errors.Join(runServer(ctx, cfg, options, manager), manager.Close(), ledger.Close())
+	var restarting atomic.Bool
+	updater := newSelfUpdater(buildVersion(), executable, manager.egressProxy, func(level, message string) {
+		manager.requests.log("service", level, message)
+	}, func() {
+		restarting.Store(true)
+		cancel()
+	})
+	err = errors.Join(runServer(ctx, cfg, options, manager, updater), manager.Close(), ledger.Close())
+	return restarting.Load(), err
 }
 
 // parseFlags 使用命令行参数覆盖本次启动配置
@@ -121,14 +139,14 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 }
 
 // runServer 管理 HTTP 监听与优雅退出
-func runServer(ctx context.Context, cfg config.Config, options commandOptions, manager *runtimeManager) error {
+func runServer(ctx context.Context, cfg config.Config, options commandOptions, manager *runtimeManager, updater api.UpdateService) error {
 	manager.requests.log("service", "INFO", fmt.Sprintf("管理监听启动 | 地址=%s", cfg.ListenAddr))
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
 	apiHandler := api.NewHandler(manager, api.Config{
-		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger,
+		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 	})
 	server := &http.Server{
@@ -165,7 +183,8 @@ func runServer(ctx context.Context, cfg config.Config, options commandOptions, m
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("关闭 HTTP 服务: %w", err)
+			server.Close()
+			slog.Warn("管理监听关闭超时，断开剩余连接", "error", err)
 		}
 		if err := <-serveError; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err

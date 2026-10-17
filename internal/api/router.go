@@ -18,6 +18,7 @@ type Config struct {
 	AdminUsername    string
 	AdminPassword    string
 	Ledger           RequestLedger
+	Updates          UpdateService
 }
 
 type server struct {
@@ -95,6 +96,9 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	}
 	if config.Ledger != nil {
 		s.registerLedger(control)
+	}
+	if config.Updates != nil {
+		s.registerUpdates(control)
 	}
 
 	root := http.NewServeMux()

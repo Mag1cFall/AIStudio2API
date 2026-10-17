@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,8 +17,8 @@ import (
 
 const camoufoxRelease = "152.0.4-beta.29"
 
-// installCamoufox 下载当前协议传输已对齐的 Camoufox 版本
-func installCamoufox(ctx context.Context, executableName string) (string, error) {
+// installCamoufox 经出口代理下载当前协议传输已对齐的 Camoufox 版本
+func installCamoufox(ctx context.Context, executableName string, proxy string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -32,39 +33,10 @@ func installCamoufox(ctx context.Context, executableName string) (string, error)
 	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
 		return "", fmt.Errorf("创建 Camoufox 目录: %w", err)
 	}
-	archive, err := os.CreateTemp(filepath.Dir(root), "camoufox-*.zip")
-	if err != nil {
-		return "", fmt.Errorf("创建 Camoufox 下载文件: %w", err)
-	}
-	archivePath := archive.Name()
-	defer os.Remove(archivePath)
-	url := fmt.Sprintf("https://github.com/daijro/camoufox/releases/download/v%s/%s", camoufoxRelease, asset)
-	slog.Info("正在下载 Camoufox", "version", camoufoxRelease, "platform", runtime.GOOS+"/"+runtime.GOARCH)
-	client := &http.Client{Timeout: 30 * time.Minute}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		archive.Close()
+	archivePath := filepath.Join(filepath.Dir(root), asset+".part")
+	address := fmt.Sprintf("https://github.com/daijro/camoufox/releases/download/v%s/%s", camoufoxRelease, asset)
+	if err := downloadCamoufoxArchive(ctx, address, archivePath, proxy); err != nil {
 		return "", err
-	}
-	request.Header.Set("User-Agent", "AIStudio2API")
-	response, err := client.Do(request)
-	if err != nil {
-		archive.Close()
-		return "", fmt.Errorf("下载 Camoufox: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		response.Body.Close()
-		archive.Close()
-		return "", fmt.Errorf("下载 Camoufox: HTTP %d", response.StatusCode)
-	}
-	if response.ContentLength > 0 {
-		slog.Info("Camoufox 下载已开始", "size_mib", response.ContentLength/(1024*1024))
-	}
-	_, copyErr := io.Copy(archive, contextReader{ctx: ctx, reader: response.Body})
-	closeErr := response.Body.Close()
-	archiveCloseErr := archive.Close()
-	if copyErr != nil || closeErr != nil || archiveCloseErr != nil {
-		return "", fmt.Errorf("保存 Camoufox: %w", firstError(copyErr, closeErr, archiveCloseErr))
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(root), ".camoufox-stage-*")
 	if err != nil {
@@ -72,6 +44,9 @@ func installCamoufox(ctx context.Context, executableName string) (string, error)
 	}
 	defer os.RemoveAll(staging)
 	if err := extractCamoufoxArchive(ctx, archivePath, staging); err != nil {
+		if ctx.Err() == nil {
+			os.Remove(archivePath)
+		}
 		return "", err
 	}
 	stagedExecutable := filepath.Join(staging, executableName)
@@ -92,9 +67,66 @@ func installCamoufox(ctx context.Context, executableName string) (string, error)
 	if err := os.Rename(staging, root); err != nil {
 		return "", fmt.Errorf("发布 Camoufox 目录: %w", err)
 	}
+	os.Remove(archivePath)
 	executable := filepath.Join(root, executableName)
 	slog.Info("Camoufox 已就绪", "path", executable)
 	return executable, nil
+}
+
+// downloadCamoufoxArchive 经出口代理把发行包写入 archivePath，文件已有部分内容时从末尾续传
+func downloadCamoufoxArchive(ctx context.Context, address string, archivePath string, proxy string) error {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	egress := "直连"
+	if proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err != nil {
+			return fmt.Errorf("解析 Camoufox 下载代理: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		egress = proxyURL.Redacted()
+	}
+	var offset int64
+	if info, err := os.Stat(archivePath); err == nil {
+		offset = info.Size()
+	}
+	slog.Info("正在下载 Camoufox", "version", camoufoxRelease, "platform", runtime.GOOS+"/"+runtime.GOARCH, "egress", egress)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", "AIStudio2API")
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	response, err := (&http.Client{Timeout: 30 * time.Minute, Transport: transport}).Do(request)
+	if err != nil {
+		return fmt.Errorf("下载 Camoufox: %w", err)
+	}
+	defer response.Body.Close()
+	flags := os.O_CREATE | os.O_WRONLY
+	switch response.StatusCode {
+	case http.StatusOK:
+		offset = 0
+		flags |= os.O_TRUNC
+	case http.StatusPartialContent:
+		flags |= os.O_APPEND
+	case http.StatusRequestedRangeNotSatisfiable:
+		return nil
+	default:
+		return fmt.Errorf("下载 Camoufox: HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > 0 {
+		slog.Info("Camoufox 下载已开始", "size_mib", (offset+response.ContentLength)/(1024*1024), "resume_mib", offset/(1024*1024))
+	}
+	archive, err := os.OpenFile(archivePath, flags, 0o644)
+	if err != nil {
+		return fmt.Errorf("创建 Camoufox 下载文件: %w", err)
+	}
+	_, copyErr := io.Copy(archive, contextReader{ctx: ctx, reader: response.Body})
+	if closeErr := archive.Close(); copyErr != nil || closeErr != nil {
+		return fmt.Errorf("保存 Camoufox: %w", firstError(copyErr, closeErr))
+	}
+	return nil
 }
 
 func camoufoxInstallRoot() (string, error) {

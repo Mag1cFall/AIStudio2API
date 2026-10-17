@@ -15,6 +15,8 @@ const (
 	ChannelPlayground Channel = "playground"
 	// ChannelBuild 表示官网 Build 应用代理的 Gemini API 调用
 	ChannelBuild Channel = "build"
+	// ChannelAssistant 表示官网 Build 写代码助手，只服务 -build 模型
+	ChannelAssistant Channel = "assistant"
 )
 
 // ChannelCooldownScope 返回通道在作用域上的冷却键，Build 使用 build:<作用域>
@@ -81,6 +83,9 @@ func (l *AccountLease) CooldownScope(scope string) string {
 }
 
 func (p *AccountPool) channelEnabledLocked(channel Channel) bool {
+	if channel == ChannelAssistant {
+		return true
+	}
 	if len(p.channels) == 0 {
 		return channel == ChannelPlayground
 	}
@@ -110,8 +115,11 @@ func buildMethodSelection(selection AccountSelection) bool {
 		strings.TrimSpace(selection.Capability) == "" && !selection.PlaygroundOnly
 }
 
-// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位；embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
+// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位；-build 模型只使用写代码助手，embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
+	if p.assistantModelLocked(selection.ModelID) {
+		return []Channel{ChannelAssistant}
+	}
 	if !generationChannelSelection(selection) {
 		if buildMethodSelection(selection) && p.channelEnabledLocked(ChannelBuild) {
 			if selection.Method == "embedContent" {
@@ -168,6 +176,8 @@ func (p *AccountPool) channelSupportsLocked(account *Account, channel Channel, s
 		}
 		return generationChannelSelection(selection) && p.channelEnabledLocked(ChannelBuild) &&
 			p.buildSupportsModelLocked(account, selection.ModelID, selection.anyTier)
+	case ChannelAssistant:
+		return accountSupportsSelection(account, selection)
 	default:
 		return false
 	}
@@ -233,6 +243,31 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		return lastChannel != "" && rank(candidates[position].channel) > rank(lastChannel)
 	})
 	return append(candidates[start:], candidates[:start]...)
+}
+
+// AssistantModel 判断模型是否为经 Build 写代码助手生成的 -build 模型
+func (p *AccountPool) AssistantModel(modelID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.assistantModelLocked(modelID)
+}
+
+func (p *AccountPool) assistantModelLocked(modelID string) bool {
+	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	if modelID == "" {
+		return false
+	}
+	for _, account := range p.accounts {
+		if account == nil {
+			continue
+		}
+		for _, model := range account.Models {
+			if model.ID == modelID {
+				return model.Capabilities["assistant_route"]
+			}
+		}
+	}
+	return false
 }
 
 // buildSupportsModelLocked 判断账户 Build 目录可经生成请求调用模型，anyTier 为 true 时不检查账户权益

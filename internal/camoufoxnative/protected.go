@@ -228,7 +228,7 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 		if err := body.ctx.Err(); err != nil {
 			return 0, err
 		}
-		chunk, err := body.worker.readProtectedChunk(body.requestID)
+		chunk, err := body.worker.readProtectedChunk(body.ctx, body.requestID)
 		if err != nil {
 			body.done = true
 			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.requestID))
@@ -278,7 +278,7 @@ func (body *protectedResponseBody) Close() error {
 	return body.worker.cancelProtectedRequest(body.requestID)
 }
 
-func (worker *Worker) readProtectedChunk(requestID string) (protectedChunk, error) {
+func (worker *Worker) readProtectedChunk(ctx context.Context, requestID string) (protectedChunk, error) {
 	encodedID, _ := json.Marshal(requestID)
 	expression := fmt.Sprintf(`(() => {
   const state = window.__aistudioProtectedRequests?.get(%s);
@@ -289,8 +289,6 @@ func (worker *Worker) readProtectedChunk(requestID string) (protectedChunk, erro
   if (done) window.__aistudioProtectedRequests.delete(%s);
   return JSON.stringify({data, done, error});
 })()`, encodedID, encodedID)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	value, err := worker.client.evaluateString(ctx, worker.contextID, expression)
 	if err != nil {
 		return protectedChunk{}, err

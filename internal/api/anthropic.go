@@ -29,12 +29,16 @@ type anthropicRequest struct {
 		Display      string `json:"display"`
 	} `json:"thinking"`
 	OutputConfig *struct {
-		Effort string `json:"effort"`
-		Format *struct {
-			Type   string          `json:"type"`
-			Schema json.RawMessage `json:"schema"`
-		} `json:"format"`
+		Effort string                 `json:"effort"`
+		Format *anthropicOutputFormat `json:"format"`
 	} `json:"output_config"`
+	OutputFormat *anthropicOutputFormat `json:"output_format"`
+}
+
+// anthropicOutputFormat 为 output_config.format 与 beta output_format 的结构化输出格式
+type anthropicOutputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // thinkingOmitted 判断请求是否要求思考块不带正文
@@ -247,14 +251,18 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	if request.Thinking != nil && request.Thinking.Type == "disabled" {
 		config.ReasoningEffort = "none"
 	}
+	format := request.OutputFormat
 	if request.OutputConfig != nil {
 		config.ReasoningEffort = request.OutputConfig.Effort
-		if format := request.OutputConfig.Format; format != nil {
-			if format.Type != "json_schema" {
-				return aistudio.GenerateRequest{}, fmt.Errorf("unsupported output_config.format type %q", format.Type)
-			}
-			config.ResponseMIMEType, config.ResponseSchema = "application/json", format.Schema
+		if request.OutputConfig.Format != nil {
+			format = request.OutputConfig.Format
 		}
+	}
+	if format != nil {
+		if format.Type != "json_schema" {
+			return aistudio.GenerateRequest{}, fmt.Errorf("unsupported output format type %q", format.Type)
+		}
+		config.ResponseMIMEType, config.ResponseSchema = "application/json", format.Schema
 	}
 	return aistudio.GenerateRequest{
 		ID: id, Model: request.Model, System: system, Contents: contents, Config: config, Tools: tools,

@@ -15,8 +15,9 @@
 
 <p>
   Playground + Build Dual Quota Channels &nbsp;•&nbsp;
-  High-Concurrency Multi-Account &nbsp;•&nbsp;
-  Camoufox and Pure Go WAA Backends<br>
+  Build Code Assistant Chat Channel &nbsp;•&nbsp;
+  High-Concurrency Multi-Account<br>
+  Camoufox and Pure Go WAA Backends &nbsp;•&nbsp;
   Claude Code, Codex, and Other Agent Clients &nbsp;•&nbsp;
   Nano Banana, Veo, TTS, and Omni
 </p>
@@ -28,6 +29,7 @@
 ## Core Capabilities
 
 - **Dual Quota Channels**: Every account has separate Playground and Build app proxy quotas, and `UPSTREAM_CHANNELS` enables either or both; when one channel hits its limit, the same account continues on the other
+- **Build Chat Models**: Every model selectable in the Build chat panel is also listed as `<model>-build` (for example `gemini-3.8-flash-build`), answered by the Build code assistant with its system prompt and billed to the Build chat quota (free requests or the Google AI subscription). ⚠️ Every request to these models carries the Build code assistant's own injected system prompt, which shapes the answer's style, format, and persona; evaluate whether that fits your use
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: Camoufox holds the official WAA lifecycle by default; with `WAA_BACKEND=go`, pure Go generates the official proof and no browser is downloaded or launched at runtime
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items
@@ -47,12 +49,13 @@
 - **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
 - **Anti-Fingerprinting**: Camoufox holds the official WAA lifecycle with a stable browser fingerprint and network exit per account
 - **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, usage statistics, and configuration in the web UI, with dark and light color themes
+- **Online Update**: The Version page shows the latest release and its notes; Windows, Linux, and macOS release packages download, verify, and restart into the new version in one click
 - **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; Camoufox hosts WAA and isolated login
 
 ## System Requirements
 
 - **Windows Release Runtime**: Windows 10 or later, `aistudio2api.exe`, and `start.bat`
-- **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries, on Debian/Ubuntu run `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 fonts-liberation`
+- **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries, on Debian/Ubuntu run `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
 - **Source Build**: Go 1.26.0+, Node.js 22.13+ or 24+, and its bundled npm
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
@@ -80,7 +83,7 @@ Then double-click `start.bat`. You can also run it from PowerShell:
 
 The script runs an existing `aistudio2api.exe` immediately. In a source checkout without the executable, it installs frontend dependencies and builds the frontend and Go program.
 
-The first launch downloads Camoufox for the current platform to `runtime/camoufox/`. Set `CAMOUFOX_PATH` to use an existing executable instead.
+The first launch downloads Camoufox for the current platform to `runtime/camoufox/` through the first proxy in `PROXY`, or the system proxy when it is unset; an interrupted download resumes from the downloaded part on the next launch. Set `CAMOUFOX_PATH` to use an existing executable instead.
 
 ### Method 2: Linux and macOS Source Build
 
@@ -474,7 +477,7 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
-| `REQUEST_TIMEOUT` | `5m` | Maximum request execution time, multiplied by the number of rounds for auto-continued requests |
+| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, multiplied by the number of rounds for auto-continued requests |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=go` |
@@ -585,6 +588,7 @@ Common runtime states:
 | --- | --- |
 | The page does not open automatically | Open the address configured by `LISTEN_ADDR` in `.env` |
 | `service_stopped` | Click "Start service" in the management UI |
+| `service_starting` | The generation service is starting; retry shortly |
 | No account is available | Add, enable, or log in to an account from Accounts |
 | Camoufox preparation fails | Check access to GitHub Releases or set `CAMOUFOX_PATH` |
 | Linux account warmup `exit status 255` | Install the Camoufox runtime libraries, see the apt command in “System Requirements” |

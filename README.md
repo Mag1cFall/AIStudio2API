@@ -15,8 +15,9 @@
 
 <p>
   Playground + Build 双额度通道 &nbsp;•&nbsp;
-  多账户高并发 &nbsp;•&nbsp;
-  Camoufox 与纯 Go 双 WAA 后端<br>
+  Build 代码助手对话通道 &nbsp;•&nbsp;
+  多账户高并发<br>
+  Camoufox 与纯 Go 双 WAA 后端 &nbsp;•&nbsp;
   Claude Code、Codex 等 agent 客户端 &nbsp;•&nbsp;
   Nano Banana、Veo、TTS 与 Omni
 </p>
@@ -28,6 +29,7 @@
 ## 核心能力
 
 - **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；一个通道触发限额后，同一账户由另一个通道继续
+- **Build 对话模型**: Build 对话面板可选的模型各提供一个 `<模型>-build`（如 `gemini-3.8-flash-build`），由 Build 写代码助手连同其系统提示词回复，用量计入 Build 对话额度（免费请求或 Google AI 订阅额度）。⚠️ 这类模型的每次请求都带有 Build 写代码助手自带的系统提示词注入，回答风格、格式与身份会受其影响，请按用途自行评估
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=go` 后由纯 Go 生成官方 proof，运行时不下载、不启动浏览器
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩
@@ -47,12 +49,13 @@
 - **Live 与 Robotics**: 通过 WebSocket 支持文本、音频、JPEG、媒体结束、工具调用、恢复和中断
 - **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
 - **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求、用量统计和配置，界面提供深色与浅色两种配色
+- **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，Windows、Linux 与 macOS 发行包一键下载、校验并重启到新版本
 - **模块化架构**: Go 负责协议、调度、API 与管理端，Camoufox 负责 WAA 运行时和隔离登录
 
 ## 系统要求
 
 - **Windows Release 运行**: Windows 10 或更高版本、`aistudio2api.exe` 和 `start.bat`
-- **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 fonts-liberation`
+- **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
 - **源码运行**: Go 1.26.0+、Node.js 22.13+ 或 24+，以及配套 npm
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
@@ -80,7 +83,7 @@ copy .env.example .env
 
 已有 `aistudio2api.exe` 时脚本立即运行；源码目录缺少可执行文件时，脚本自动安装前端依赖并构建前端与 Go 程序。
 
-首次启动会自动下载当前平台的 Camoufox 到 `runtime/camoufox/`。也可以通过环境变量 `CAMOUFOX_PATH` 指定已有可执行文件。
+首次启动会自动下载当前平台的 Camoufox 到 `runtime/camoufox/`，下载经 `PROXY` 的第一个代理发出，未设置时使用系统代理；下载中断后，下次启动从已下载的部分继续。也可以通过环境变量 `CAMOUFOX_PATH` 指定已有可执行文件。
 
 ### 方式二：Linux 与 macOS 源码构建
 
@@ -474,7 +477,7 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
-| `REQUEST_TIMEOUT` | `5m` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 |
+| `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写请求按续写轮数倍增 |
 | `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=go` 时不限制 |
@@ -585,6 +588,7 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 | --- | --- |
 | 页面未自动打开 | 手动打开 `.env` 中 `LISTEN_ADDR` 对应的地址 |
 | `service_stopped` | 在管理页面点击“启动服务” |
+| `service_starting` | 生成服务正在启动，稍后重试 |
 | 没有可用账户 | 在账户页新增、启用或重新登录账户 |
 | Camoufox 准备失败 | 检查 GitHub Release 访问，或设置 `CAMOUFOX_PATH` |
 | Linux 预热账户 `exit status 255` | 安装 Camoufox 运行库，见“系统要求”中的 apt 命令 |
