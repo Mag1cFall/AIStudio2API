@@ -24,6 +24,7 @@ var capabilityNames = map[int64]string{
 	43: "media_resolution",
 	46: "speech_translation",
 	47: "aspect_ratio",
+	48: "code_assistant",
 	49: "output_resolution",
 	52: "thinking_level",
 	53: "music_route",
@@ -116,6 +117,17 @@ func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 		}
 		if _, exists := catalog.entries[entry.model.ID]; exists {
 			return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("$[0][%d][0]", index), Detail: "模型 ID 重复", Raw: rowRaw}
+		}
+		catalog.models = append(catalog.models, entry.model)
+		catalog.entries[entry.model.ID] = entry
+	}
+	for _, base := range catalog.models {
+		if !base.Capabilities["code_assistant"] {
+			continue
+		}
+		entry := assistantModelEntry(catalog.entries[base.ID])
+		if _, exists := catalog.entries[entry.model.ID]; exists {
+			continue
 		}
 		catalog.models = append(catalog.models, entry.model)
 		catalog.entries[entry.model.ID] = entry

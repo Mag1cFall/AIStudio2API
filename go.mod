@@ -12,14 +12,17 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible
 	github.com/gofrs/flock v0.13.0
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mewkiz/flac v1.0.14
+	github.com/minio/selfupdate v0.6.0
 	github.com/oov/audio v0.0.0-20171004131523-88a2be6dbe38
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/thesyncim/gopus v0.1.2
 	github.com/tphakala/go-aac v0.7.0
 	github.com/tphakala/go-mp3 v0.1.0
 	github.com/zaf/g711 v1.4.0
+	golang.org/x/mod v0.38.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
@@ -28,13 +31,13 @@ require (
 )
 
 require (
+	aead.dev/minisign v0.2.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
 	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect

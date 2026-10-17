@@ -41,11 +41,6 @@ func newRuntime(
 	if err := launchCtx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	camoufoxPath, login, err := prepareWAABackend(launchCtx, cfg, requests, len(accounts))
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
 	egress := "直连"
 	proxyList := config.ProxyList(cfg.Proxy)
 	if len(proxyList) == 0 {
@@ -65,6 +60,10 @@ func newRuntime(
 		globalProxy = proxyList[0]
 	}
 	cfg.Proxy = strings.Join(proxyList, ",")
+	camoufoxPath, login, err := prepareWAABackend(launchCtx, cfg, requests, len(accounts), globalProxy)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
@@ -1952,7 +1951,10 @@ func newTrackedService(
 	}
 }
 
-type serviceStoppedError struct{}
+// serviceStoppedError 表示生成服务未运行，launching 表示正在启动
+type serviceStoppedError struct {
+	launching bool
+}
 
 var errServiceTransitioning = errors.New("生成服务正在切换状态")
 
@@ -1966,7 +1968,10 @@ const (
 	serviceTransitionShutdownTimeout = 12 * time.Second
 )
 
-func (*serviceStoppedError) Error() string {
+func (e *serviceStoppedError) Error() string {
+	if e.launching {
+		return "AIStudio2API 生成服务正在启动"
+	}
 	return "AIStudio2API 服务已停止"
 }
 
@@ -1974,7 +1979,10 @@ func (*serviceStoppedError) HTTPStatus() int {
 	return http.StatusServiceUnavailable
 }
 
-func (*serviceStoppedError) ErrorCode() string {
+func (e *serviceStoppedError) ErrorCode() string {
+	if e.launching {
+		return "service_starting"
+	}
 	return "service_stopped"
 }
 
@@ -2298,7 +2306,7 @@ func (service *trackedService) finishStop(transitionDone chan struct{}, modelRef
 func (service *trackedService) Models(context.Context) ([]aistudio.Model, error) {
 	models := service.modelSnapshot()
 	if len(models) == 0 && service.state.Load() != serviceRunning {
-		return nil, &serviceStoppedError{}
+		return nil, &serviceStoppedError{launching: service.state.Load() == serviceLaunching}
 	}
 	return service.withAliases(service.pool.PublicModels(models)), nil
 }
@@ -3095,6 +3103,10 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 				}
 				continue
 			}
+			var startup *accountWorkerInitError
+			if errors.As(promoteErr, &startup) && proxyNetworkError(ctx, promoteErr) {
+				service.reportProxyFailure(startup.proxy, lease.Account().Config.Label, promoteErr)
+			}
 			if fixedAccount {
 				return nil, promoteErr
 			}
@@ -3371,12 +3383,14 @@ func (service *trackedService) generateWithRetry(
 		if continuationRounds > 1 {
 			selection.PlaygroundOnly = true
 		}
-		if !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuildSchema(request) {
+		assistant := service.pool.AssistantModel(modelID)
+		if !assistant && !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuildSchema(request) {
 			selection.Channel = aistudio.ChannelBuild
 		}
 		fallbackReason := ""
 		if request.Unary {
 			switch {
+			case assistant:
 			case selection.PlaygroundOnly:
 				fallbackReason = "请求包含 Playground 专用能力或文件引用"
 			case selection.Channel != "":
@@ -3557,6 +3571,11 @@ func (service *trackedService) generateWithRetry(
 			if err == nil {
 				api.SetAccessLogFirstEvent(requestCtx, time.Since(generationStartedAt))
 				api.SetAccessLogTarget(requestCtx, first.ProviderModel, accountLabel)
+				if request.Unary {
+					source, err = collectGenerateEvents(requestCtx, source)
+				}
+			}
+			if err == nil {
 				temporaryCopies = attemptCopies
 				service.proxies.ReportSuccess(attemptProxy)
 				if buildRejection != nil && buildRejection.accountID == request.AccountID {
@@ -3757,9 +3776,40 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 	}
 }
 
+// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误以便换号重试
+func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event) (<-chan aistudio.Event, error) {
+	var events []aistudio.Event
+	for {
+		select {
+		case event, ok := <-source:
+			if !ok {
+				replay := make(chan aistudio.Event, len(events))
+				for _, event := range events {
+					replay <- event
+				}
+				close(replay)
+				return replay, nil
+			}
+			var interrupted *aistudio.StreamInterruptedError
+			if event.Kind == aistudio.EventError && errors.As(event.Err, &interrupted) {
+				for range source {
+				}
+				return nil, event.Err
+			}
+			events = append(events, event)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
 func retryableGenerateAccountError(ctx context.Context, err error) bool {
 	if errors.Is(err, errStreamClosedBeforeFirstEvent) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
 		return true
+	}
+	var interrupted *aistudio.StreamInterruptedError
+	if errors.As(err, &interrupted) {
+		return ctx.Err() == nil
 	}
 	var workerInitError *accountWorkerInitError
 	if errors.As(err, &workerInitError) {
@@ -3798,7 +3848,7 @@ func (service *trackedService) dataRequestContextFor(ctx context.Context, timeou
 	service.lifecycleMu.Lock()
 	if service.state.Load() != serviceRunning || service.dataContext == nil {
 		service.lifecycleMu.Unlock()
-		return nil, nil, &serviceStoppedError{}
+		return nil, nil, &serviceStoppedError{launching: service.state.Load() == serviceLaunching}
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	stopData := context.AfterFunc(service.dataContext, cancel)

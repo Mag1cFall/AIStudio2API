@@ -37,6 +37,14 @@ type FileRef struct {
 	MIME string `json:"mime,omitempty"`
 }
 
+// UploadRef 表示经 AI Studio /_/upload 上传的附件引用
+type UploadRef struct {
+	MIME string `json:"mime"`
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
 // FunctionCall 表示模型发起的函数调用
 type FunctionCall struct {
 	ID               string          `json:"id"`
@@ -111,6 +119,7 @@ type Part struct {
 	InlineData          *Blob                `json:"inline_data,omitempty"`
 	ExternalMedia       *ExternalMedia       `json:"external_media,omitempty"`
 	File                *FileRef             `json:"file,omitempty"`
+	Upload              *UploadRef           `json:"upload,omitempty"`
 	FunctionCall        *FunctionCall        `json:"function_call,omitempty"`
 	FunctionResult      *FunctionResult      `json:"function_result,omitempty"`
 	ExecutableCode      *ExecutableCode      `json:"executable_code,omitempty"`

@@ -767,8 +767,8 @@ func (s *PooledService) UploadInlineMediaToLease(
 	if target == nil || target.Account() == nil || target.pool != s.pool {
 		return nil, nil, fmt.Errorf("目标账户租约未初始化")
 	}
-	if target.Channel() == ChannelBuild {
-		// Build 代理的 Gemini API 请求直接携带 inlineData
+	if target.Channel() == ChannelBuild || target.Channel() == ChannelAssistant {
+		// Build 代理的 Gemini API 请求直接携带 inlineData，写代码助手在发送时把内联数据上传为附件引用
 		return contents, temporary, nil
 	}
 	if temporary == nil {

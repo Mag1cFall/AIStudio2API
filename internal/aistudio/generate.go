@@ -713,9 +713,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	wireRequest.Config.StopSequences = nil
 	var response *RPCResponse
 	var decodeStream func(io.Reader, func(Event) error) error
-	if build {
+	switch {
+	case entry.model.Capabilities["assistant_route"]:
+		response, decodeStream, err = c.sendAssistant(ctx, wireRequest, entry)
+	case build:
 		response, decodeStream, err = c.sendBuild(ctx, wireRequest, entry)
-	} else {
+	default:
 		response, decodeStream, err = c.sendPlayground(ctx, wireRequest, entry)
 	}
 	if err != nil {

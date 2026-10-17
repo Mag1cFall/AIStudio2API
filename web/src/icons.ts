@@ -54,6 +54,7 @@ import {
   Timer,
   Zap,
   X,
+  Tag,
 } from '@lucide/vue'
 
 // icons 将界面语义名映射到 Lucide 图标
@@ -65,6 +66,7 @@ export const icons = {
   usage: ChartColumn,
   settings: Settings,
   playground: MessagesSquare,
+  version: Tag,
   chevronDown: ChevronDown,
   chevronRight: ChevronRight,
   close: X,

@@ -1,7 +1,7 @@
 export type Locale = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'fr' | 'de'
 
 export type TabID =
-  'logs' | 'accounts' | 'models' | 'requests' | 'usage' | 'settings' | 'playground'
+  'logs' | 'accounts' | 'models' | 'requests' | 'usage' | 'settings' | 'playground' | 'version'
 
 export type AccountState =
   'ready' | 'busy' | 'cooldown' | 'auth_required' | 'unavailable' | 'disabled'
@@ -84,6 +84,19 @@ export interface ServiceStatus {
   accounts: AccountCounters
 }
 
+export interface UpdateStatus {
+  current: string
+  latest?: string
+  available: boolean
+  mode: 'binary' | 'container' | 'development'
+  notes?: string
+  url?: string
+  published_at?: string
+  checked_at?: string
+  error?: string
+  updating: boolean
+}
+
 export interface AdminLog {
   time: string
   level: string
@@ -139,7 +152,7 @@ export interface Model {
   channels?: UpstreamChannel[]
 }
 
-export type UpstreamChannel = 'playground' | 'build'
+export type UpstreamChannel = 'playground' | 'build' | 'assistant'
 
 export interface Cooldown {
   account_id: string

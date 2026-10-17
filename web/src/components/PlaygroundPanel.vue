@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
-import MarkdownIt from 'markdown-it'
 import {
   ApiError,
   playgroundPath,
@@ -9,6 +8,7 @@ import {
   runPlayground,
   type PlaygroundChunk,
 } from '@/api'
+import { markdown } from '@/markdown'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
 import type {
@@ -74,17 +74,6 @@ const pill =
 const field =
   'w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none'
 
-// markdown 渲染回复正文，原始 HTML 按文本转义，链接在新标签页打开
-const markdown = new MarkdownIt({ linkify: true, breaks: true })
-const renderLink =
-  markdown.renderer.rules.link_open ??
-  ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options))
-markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
-  tokens[index]?.attrSet('target', '_blank')
-  tokens[index]?.attrSet('rel', 'noreferrer')
-  return renderLink(tokens, index, options, env, self)
-}
-
 const form = reactive<PlaygroundInput>({
   mode: 'text',
   protocol: 'openai-chat',
@@ -146,6 +135,7 @@ const resultMeta = computed(() =>
 )
 const promptInput = ref<HTMLTextAreaElement>()
 const scroller = ref<HTMLElement>()
+const thinkingBox = ref<HTMLElement>()
 let controller: AbortController | undefined
 
 const availableModels = computed(() =>
@@ -349,15 +339,23 @@ watch(
   () => void nextTick(resizePrompt),
 )
 
+// followBottom 在阅读位置接近底部时把元素滚动到新内容的末尾
+function followBottom(element: HTMLElement | undefined, threshold: number): void {
+  if (element === undefined) return
+  const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < threshold
+  if (nearBottom) void nextTick(() => element.scrollTo({ top: element.scrollHeight }))
+}
+
 // followOutput 在阅读位置接近底部时随新输出滚动
 watch(
   () => [result.text.length, result.reasoning.length, result.media.length, result.raw.length],
-  () => {
-    const element = scroller.value
-    if (element === undefined) return
-    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120
-    if (nearBottom) void nextTick(() => element.scrollTo({ top: element.scrollHeight }))
-  },
+  () => followBottom(scroller.value, 120),
+)
+
+// followThinking 在思考框阅读位置接近底部时随新思考滚动
+watch(
+  () => result.reasoning.length,
+  () => followBottom(thinkingBox.value, 48),
 )
 
 // clearMedia 释放浏览器创建的媒体资源
@@ -459,7 +457,7 @@ onUnmounted(() => {
 
 <template>
   <section class="flex min-h-0 flex-1 bg-canvas">
-    <div class="flex min-w-0 flex-1 flex-col">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       <header class="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 md:px-4">
         <div
           class="flex min-w-0 items-center gap-1 overflow-x-auto"
@@ -535,7 +533,8 @@ onUnmounted(() => {
                 />
               </summary>
               <div
-                class="mt-2 border-l-2 border-line pl-4 text-[13px] leading-6 break-words whitespace-pre-wrap text-gray-400"
+                ref="thinkingBox"
+                class="thinking-box mt-2 max-h-72 overflow-y-auto border-l-2 border-line pr-2 pl-4 text-[13px] leading-6 break-words whitespace-pre-wrap text-gray-400"
                 v-text="result.reasoning"
               ></div>
             </details>

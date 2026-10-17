@@ -104,16 +104,21 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*Work
 	}, nil
 }
 
-// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent 或 Build 代理请求
+// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent、Build 代理或写代码助手请求
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
 	var prompt, page string
 	var err error
 	proofField := 5
-	if rpc.Method == buildProxyStreamedMethod || rpc.Method == buildProxyUnaryMethod {
+	switch rpc.Method {
+	case buildProxyStreamedMethod, buildProxyUnaryMethod:
 		prompt, err = buildBindingPrompt(rpc.Body)
 		page = contentsText(request.Contents)
 		proofField = buildProofField
-	} else {
+	case assistantOfflineMethod:
+		prompt, err = bindingPrompt(request)
+		page = contentsText(request.Contents)
+		proofField = assistantProofField
+	default:
 		prompt, err = bindingPrompt(request)
 		page = prompt
 	}

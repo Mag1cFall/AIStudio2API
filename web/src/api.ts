@@ -19,6 +19,7 @@ import type {
   RequestSummary,
   ServiceConfig,
   ServiceStatus,
+  UpdateStatus,
   UsageRecordPage,
   UsageReport,
 } from '@/types'
@@ -155,6 +156,9 @@ export const api = {
     }),
   logout: () => requestCommand('/api/auth/logout', { method: 'POST' }),
   status: () => requestJSON<ServiceStatus>('/api/status'),
+  updateStatus: (refresh = false) =>
+    requestJSON<UpdateStatus>(refresh ? '/api/update?refresh=1' : '/api/update'),
+  applyUpdate: () => requestJSON<UpdateStatus>('/api/update', { method: 'POST' }),
   accounts: async () => (await requestJSON<AccountsResponse>('/api/accounts')).accounts,
   models: async () => (await requestJSON<ModelsResponse>('/api/models')).models,
   cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,

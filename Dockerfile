@@ -17,9 +17,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata fonts-liberation \
+    ca-certificates tzdata \
     libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 \
     libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 libx11-xcb1 \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/aistudio2api /usr/local/bin/aistudio2api
 WORKDIR /data

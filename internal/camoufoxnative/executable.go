@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// FindExecutable 定位源码环境或 Release 自带的 Camoufox
-func FindExecutable(ctx context.Context) (string, error) {
+// FindExecutable 定位源码环境或 Release 自带的 Camoufox，都没有时经 proxy 下载，proxy 为空时直连
+func FindExecutable(ctx context.Context, proxy string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -39,7 +39,7 @@ func FindExecutable(ctx context.Context) (string, error) {
 			return path, nil
 		}
 	}
-	path, err := installCamoufox(ctx, name)
+	path, err := installCamoufox(ctx, name, proxy)
 	if err != nil {
 		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
 	}

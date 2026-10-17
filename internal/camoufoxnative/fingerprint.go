@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -314,6 +315,94 @@ var windowsProfile = func() windowsProfileData {
 	return profile
 }()
 
+// windowsWebGLJSON 为 Camoufox 官方 WebGL 数据中支持 WebGL2 的 Windows 条目及其权重
+//
+//go:embed windows_webgl.json
+var windowsWebGLJSON []byte
+
+// windowsWebGLProfile 为一组 Windows 显卡的 WebGL 配置及其出现权重
+type windowsWebGLProfile struct {
+	Weight float64        `json:"weight"`
+	Config map[string]any `json:"config"`
+}
+
+var windowsWebGLProfiles = func() []windowsWebGLProfile {
+	var profiles []windowsWebGLProfile
+	if err := json.Unmarshal(windowsWebGLJSON, &profiles); err != nil {
+		panic(err)
+	}
+	return profiles
+}()
+
+// windowsWebGL 按官方启动器的权重抽取一组 Windows WebGL 配置
+func windowsWebGL() map[string]any {
+	total := 0.0
+	for _, profile := range windowsWebGLProfiles {
+		total += profile.Weight
+	}
+	point := rand.Float64() * total
+	selected := windowsWebGLProfiles[len(windowsWebGLProfiles)-1]
+	for _, profile := range windowsWebGLProfiles {
+		if point < profile.Weight {
+			selected = profile
+			break
+		}
+		point -= profile.Weight
+	}
+	return maps.Clone(selected.Config)
+}
+
+// windowsFontsJSON 为 Windows 版 Firefox 字体偏好、Camoufox 发行包 Windows 字体的字体族名分组与 Windows 字体替换表
+//
+//go:embed windows_fonts.json
+var windowsFontsJSON []byte
+
+// windowsFontTable 为 Linux 上按 Windows 解析字体所需的偏好、字体族名分组与替换表
+type windowsFontTable struct {
+	Prefs       map[string]any    `json:"prefs"`
+	Families    [][]string        `json:"families"`
+	Substitutes map[string]string `json:"substitutes"`
+}
+
+var windowsFontData = func() windowsFontTable {
+	var table windowsFontTable
+	if err := json.Unmarshal(windowsFontsJSON, &table); err != nil {
+		panic(err)
+	}
+	for key, value := range table.Prefs {
+		if number, ok := value.(float64); ok {
+			table.Prefs[key] = int(number)
+		}
+	}
+	return table
+}()
+
+// windowsFontAliases 返回发行包中所在字体文件都带有已声明名称的其他字体族名
+func windowsFontAliases(fonts []string) []string {
+	declared := map[string]bool{}
+	for _, font := range fonts {
+		declared[strings.ToLower(font)] = true
+	}
+	allowed := map[string]bool{}
+	var names []string
+	for _, family := range windowsFontData.Families {
+		hit := slices.ContainsFunc(family, func(name string) bool { return declared[strings.ToLower(name)] })
+		for _, name := range family {
+			key := strings.ToLower(name)
+			if declared[key] {
+				continue
+			}
+			if previous, seen := allowed[key]; seen {
+				allowed[key] = previous && hit
+				continue
+			}
+			allowed[key] = hit
+			names = append(names, name)
+		}
+	}
+	return slices.DeleteFunc(names, func(name string) bool { return !allowed[strings.ToLower(name)] })
+}
+
 // windowsEssentialFonts 为 Windows 字体子集必须包含的字体
 var windowsEssentialFonts = []string{
 	"Arial", "Times New Roman", "Courier New", "Verdana", "Georgia",
@@ -323,8 +412,6 @@ var windowsEssentialFonts = []string{
 
 // windowsMarkerFonts 为识别 Windows 系统的标记字体
 var windowsMarkerFonts = []string{"Segoe UI", "Tahoma", "Cambria Math", "Nirmala UI"}
-
-var voiceSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 // windowsFontSubset 按官方启动器规则生成必需字体加 30% 至 78% 其余字体的子集
 func windowsFontSubset() []string {
@@ -348,8 +435,8 @@ func windowsFontSubset() []string {
 	return result
 }
 
-// windowsFonts 判断字体列表是否全部来自官方 Windows 字体清单
-func windowsFonts(value any) bool {
+// fontList 读取配置中的字体名列表
+func fontList(value any) []string {
 	var fonts []string
 	switch items := value.(type) {
 	case []string:
@@ -360,6 +447,12 @@ func windowsFonts(value any) bool {
 			fonts = append(fonts, font)
 		}
 	}
+	return fonts
+}
+
+// windowsFonts 判断字体列表是否全部来自官方 Windows 字体清单
+func windowsFonts(value any) bool {
+	fonts := fontList(value)
 	if len(fonts) == 0 {
 		return false
 	}
@@ -378,11 +471,10 @@ func windowsVoices(locale string) []map[string]any {
 		last := strings.LastIndex(entry, ":")
 		separator := strings.LastIndex(entry[:last], ":")
 		name, language := entry[:separator], entry[separator+1:last]
-		slug := strings.Trim(voiceSlugPattern.ReplaceAllString(strings.ToLower(name), "."), ".")
 		voices = append(voices, map[string]any{
 			"name":           name,
 			"lang":           language,
-			"voiceUri":       "urn:moz-tts:sapi:" + slug,
+			"voiceUri":       "urn:moz-tts:sapi:" + name + "?" + language,
 			"isDefault":      false,
 			"isLocalService": entry[last+1:] == "local",
 		})
@@ -451,7 +543,7 @@ func applyScreenXY(config map[string]any, screen fingerprints.ScreenFingerprint)
 	}
 }
 
-// normalizeCamoufoxConfig 按官方启动器修正指纹中的空值、窗口几何、字体、语音、媒体设备与噪声种子
+// normalizeCamoufoxConfig 按官方启动器修正指纹中的空值、窗口几何、字体、语音、WebGL、媒体设备与噪声种子
 func normalizeCamoufoxConfig(config map[string]any) {
 	for key, value := range config {
 		derived := strings.HasPrefix(key, "navigator.") || strings.HasPrefix(key, "screen.") ||
@@ -468,6 +560,9 @@ func normalizeCamoufoxConfig(config map[string]any) {
 	}
 	language, _ := config["navigator.language"].(string)
 	config["voices"] = windowsVoices(language)
+	if _, ok := config["webGl:renderer"]; !ok {
+		maps.Copy(config, windowsWebGL())
+	}
 	hasMediaDevices := false
 	for key := range config {
 		hasMediaDevices = hasMediaDevices || strings.HasPrefix(key, "mediaDevices:")

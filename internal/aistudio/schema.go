@@ -681,13 +681,142 @@ func setWireField(wire []any, index int, value any) []any {
 	return wire
 }
 
-// normalizeFunctionParameters 将零参数定义归一化为对象
+// normalizeFunctionParameters 将零参数定义归一化为对象，并为 required 中未定义的属性补充不限类型的定义
 func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
 	cleaned, err := cleanSchemaInput(raw, true)
-	if err == nil && (bytes.Equal(cleaned, []byte("{}")) || bytes.Equal(cleaned, []byte("true"))) {
-		cleaned = json.RawMessage(`{"type":"object"}`)
+	if err != nil {
+		return nil, err
 	}
-	return cleaned, err
+	if bytes.Equal(cleaned, []byte("{}")) || bytes.Equal(cleaned, []byte("true")) {
+		return json.RawMessage(`{"type":"object"}`), nil
+	}
+	schema, err := decodeSchemaValue(cleaned)
+	if err != nil {
+		return nil, err
+	}
+	if !defineRequiredProperties(schema) {
+		return cleaned, nil
+	}
+	return json.Marshal(schema)
+}
+
+// decodeSchemaValue 解码 Schema 并保留数值原文
+func decodeSchemaValue(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// defineRequiredProperties 为 required 列出而 properties 未定义的属性补充不限类型的定义，返回是否修改
+func defineRequiredProperties(value any) bool {
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	if required, ok := schema["required"].([]any); ok {
+		properties, _ := schema["properties"].(map[string]any)
+		for _, item := range required {
+			name, ok := item.(string)
+			if !ok {
+				continue
+			}
+			if _, defined := properties[name]; defined {
+				continue
+			}
+			if properties == nil {
+				properties = map[string]any{}
+				schema["properties"] = properties
+			}
+			properties[name] = map[string]any{}
+			changed = true
+		}
+	}
+	for key, child := range schema {
+		switch key {
+		case "properties", "$defs", "definitions":
+			if children, ok := child.(map[string]any); ok {
+				for _, nested := range children {
+					changed = defineRequiredProperties(nested) || changed
+				}
+			}
+		case "items", "additionalProperties", "not":
+			changed = defineRequiredProperties(child) || changed
+		case "anyOf", "oneOf", "allOf", "prefixItems":
+			if children, ok := child.([]any); ok {
+				for _, nested := range children {
+					changed = defineRequiredProperties(nested) || changed
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// inlineSchemaRefs 把指向根 $defs 或 definitions 的本地 $ref 替换为被引用的定义，循环引用保留原节点
+func inlineSchemaRefs(raw json.RawMessage) (json.RawMessage, error) {
+	value, err := decodeSchemaValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	root, ok := value.(map[string]any)
+	if !ok {
+		return raw, nil
+	}
+	definitions := map[string]any{}
+	for _, key := range []string{"$defs", "definitions"} {
+		if entries, ok := root[key].(map[string]any); ok {
+			for name, definition := range entries {
+				definitions["#/"+key+"/"+name] = definition
+			}
+		}
+	}
+	if len(definitions) == 0 {
+		return raw, nil
+	}
+	resolved := resolveSchemaRefs(root, definitions, nil).(map[string]any)
+	delete(resolved, "$defs")
+	delete(resolved, "definitions")
+	return json.Marshal(resolved)
+}
+
+// resolveSchemaRefs 递归替换本地 $ref，节点自身的其他字段优先于被引用定义的同名字段
+func resolveSchemaRefs(value any, definitions map[string]any, active []string) any {
+	switch node := value.(type) {
+	case map[string]any:
+		if ref, ok := node["$ref"].(string); ok {
+			if definition, ok := definitions[ref]; ok && !slices.Contains(active, ref) {
+				merged := map[string]any{}
+				if target, ok := resolveSchemaRefs(definition, definitions, append(slices.Clip(active), ref)).(map[string]any); ok {
+					for key, item := range target {
+						merged[key] = item
+					}
+				}
+				for key, item := range node {
+					if key != "$ref" {
+						merged[key] = resolveSchemaRefs(item, definitions, active)
+					}
+				}
+				return merged
+			}
+		}
+		result := make(map[string]any, len(node))
+		for key, item := range node {
+			result[key] = resolveSchemaRefs(item, definitions, active)
+		}
+		return result
+	case []any:
+		result := make([]any, len(node))
+		for index, item := range node {
+			result[index] = resolveSchemaRefs(item, definitions, active)
+		}
+		return result
+	}
+	return value
 }
 
 // responseSchemaNote 为附加在结构化输出根说明中的完整 Schema 前缀
