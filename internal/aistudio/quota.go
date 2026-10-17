@@ -3,6 +3,7 @@ package aistudio
 import (
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,9 @@ const quotaResetTimezone = "America/Los_Angeles"
 
 // planLimitBackoff 为没有恢复时间的套餐限额按连续次数递增的冷却时长
 var planLimitBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
+
+// quotaLimitPattern 匹配额度错误中逐项列出的额度上限
+var quotaLimitPattern = regexp.MustCompile(`limit: (\d+)`)
 
 // CooldownState 表示账户或模型暂时不可调度的状态
 type CooldownState struct {
@@ -61,6 +65,9 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 			break
 		}
 	}
+	if zeroQuotaLimit(rpcError.Message) {
+		kind = "无配额"
+	}
 	escalate := false
 	if rpcError.RetryDelay > 0 {
 		until = now.Add(rpcError.RetryDelay)
@@ -68,6 +75,26 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		kind, escalate = "套餐限额", true
 	}
 	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error(), Escalate: escalate}, true
+}
+
+// BuildRejectionCooldown 返回 Build 代理以参数错误拒绝、同账户 Playground 完成的请求对应的 Build 递增冷却
+func BuildRejectionCooldown(err error) (QuotaCooldown, bool) {
+	var rpcError *RPCError
+	if !errors.As(err, &rpcError) || rpcError.StatusCode != http.StatusBadRequest || rpcError.Code != 3 {
+		return QuotaCooldown{}, false
+	}
+	return QuotaCooldown{Kind: "Build 拒绝", Reason: "Build 拒绝: " + err.Error(), Escalate: true}, true
+}
+
+// zeroQuotaLimit 判断额度错误列出的每个额度项上限都为 0
+func zeroQuotaLimit(message string) bool {
+	matches := quotaLimitPattern.FindAllStringSubmatch(message, -1)
+	for _, match := range matches {
+		if match[1] != "0" {
+			return false
+		}
+	}
+	return len(matches) > 0
 }
 
 // planLimitCooldown 按同一范围上一次套餐限额冷却计算本次冷却；上一次仍未结束时沿用它

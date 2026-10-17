@@ -47,6 +47,7 @@ type setupOptions struct {
 	profiles     setupStrings
 	emails       setupStrings
 	proxy        string
+	egress       string
 	locale       string
 	localeSet    bool
 	timezone     string
@@ -244,7 +245,7 @@ func importIsolatedLogin(
 	}
 	defer os.RemoveAll(loginDirectory)
 	result, err := driver.Login(ctx, aistudio.IsolatedLoginRequest{
-		AccountID: "setup", Directory: loginDirectory, Proxy: options.proxy,
+		AccountID: "setup", Directory: loginDirectory, Proxy: options.egress,
 		Locale: options.locale, Timezone: options.timezone,
 	})
 	if err != nil {
@@ -285,7 +286,7 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 		}
 	}
 	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{
-		ChromeRoot: root, Proxy: options.proxy, Profiles: options.profiles, Emails: options.emails, AccountIDs: accountIDs,
+		ChromeRoot: root, Proxy: options.egress, Profiles: options.profiles, Emails: options.emails, AccountIDs: accountIDs,
 	})
 	if err != nil {
 		return err
@@ -293,7 +294,7 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 	modelCounts := make([]int, len(results))
 	for index := range results {
 		verifyContext, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-		verification, verifyErr := chromeauth.Verify(verifyContext, &results[index].State, options.proxy)
+		verification, verifyErr := chromeauth.Verify(verifyContext, &results[index].State, options.egress)
 		cancel()
 		if verifyErr != nil {
 			return fmt.Errorf("验证 %s: %w", results[index].Email, verifyErr)
@@ -374,7 +375,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	storageState := flags.String("storage-state", "", "Playwright storage state 文件")
 	login := flags.Bool("login", false, "使用隔离 Camoufox 登录")
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
-	proxy := flags.String("proxy", cfg.Proxy, "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
+	proxy := flags.String("proxy", "", "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
 	locale := flags.String("locale", aistudio.DefaultAccountLocale(), "账户语言")
 	timezone := flags.String("timezone", aistudio.DefaultAccountTimezone(), "账户时区")
 	remote := flags.String("remote", "", "远程实例 origin，账户上传到该实例")
@@ -391,6 +392,10 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		proxy:  strings.TrimSpace(*proxy),
 		locale: strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
 		token: strings.TrimSpace(*token),
+	}
+	options.egress = options.proxy
+	if proxies := config.ProxyList(cfg.Proxy); options.egress == "" && len(proxies) > 0 {
+		options.egress = proxies[0]
 	}
 	if strings.TrimSpace(*remote) != "" {
 		origin, err := remoteOrigin(*remote)

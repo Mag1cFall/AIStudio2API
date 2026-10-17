@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -290,8 +291,10 @@ func (c Config) Validate() error {
 	if err := validateListenAddr(c.ListenAddr); err != nil {
 		return err
 	}
-	if err := ValidateProxy(c.Proxy); err != nil {
-		return err
+	for _, proxy := range ProxyList(c.Proxy) {
+		if err := ValidateProxy(proxy); err != nil {
+			return err
+		}
 	}
 	if c.InitTimeout <= 0 {
 		return fmt.Errorf("INIT_TIMEOUT 必须是正数时长")
@@ -507,6 +510,17 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	}
 	*c = parsed
 	return nil
+}
+
+// ProxyList 返回 PROXY 中以逗号分隔的代理 URL
+func ProxyList(value string) []string {
+	var proxies []string
+	for proxy := range strings.SplitSeq(value, ",") {
+		if proxy = strings.TrimSpace(proxy); proxy != "" && !slices.Contains(proxies, proxy) {
+			proxies = append(proxies, proxy)
+		}
+	}
+	return proxies
 }
 
 // ValidateProxy 校验账户或全局代理 URL

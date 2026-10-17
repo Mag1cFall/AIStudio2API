@@ -314,9 +314,17 @@ const kpis = computed(() => {
       icon: 'cost' as const,
       value: value.cost === 0 && value.unpriced_models.length > 0 ? '—' : usd(value.cost),
       raw: value.cost === 0 && value.unpriced_models.length > 0 ? null : value.cost,
-      help: t('usage.costHelp'),
+      help:
+        value.unpriced_models.length > 0
+          ? `${t('usage.costHelp')} · ${t('usage.unpriced')} ${value.unpriced_models.join(', ')}`
+          : t('usage.costHelp'),
       details: [
-        ...(value.unpriced_models.length > 0
+        {
+          label: t('usage.cacheHitRate'),
+          value:
+            totals.input_tokens > 0 ? percent(totals.cached_tokens / totals.input_tokens) : '—',
+        },
+        ...(value.cost === 0 && value.unpriced_models.length > 0
           ? [
               {
                 label: t('usage.unpriced'),
@@ -325,12 +333,6 @@ const kpis = computed(() => {
               },
             ]
           : []),
-        { label: t('usage.input'), value: compact(totals.input_tokens) },
-        { label: t('usage.cached'), value: compact(totals.cached_tokens) },
-        {
-          label: t('usage.output'),
-          value: compact(totals.reasoning_tokens + totals.reply_tokens),
-        },
       ],
       delta: delta(relative(value.cost, value.previous_cost), (item) => percent(item), 'none'),
       spark: buckets.map((bucket) => bucket.cost),
