@@ -25,19 +25,26 @@ type connectDialer struct {
 	direct      *net.Dialer
 }
 
+// Address 返回代理的拨号地址，HTTP 与 HTTPS 代理省略端口时补齐默认端口
+func Address(proxyURL *url.URL) string {
+	if proxyURL.Port() != "" {
+		return proxyURL.Host
+	}
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "http":
+		return net.JoinHostPort(proxyURL.Hostname(), "80")
+	case "https":
+		return net.JoinHostPort(proxyURL.Hostname(), "443")
+	}
+	return proxyURL.Host
+}
+
 // Dialer 返回经代理建立 TCP 连接的拨号器，支持 HTTP、HTTPS CONNECT 与 SOCKS5 及其账号密码
 func Dialer(proxyURL *url.URL) (proxy.ContextDialer, error) {
 	direct := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
-	proxyTarget := proxyURL.Host
-	if proxyURL.Port() == "" {
-		switch strings.ToLower(proxyURL.Scheme) {
-		case "http":
-			proxyTarget = net.JoinHostPort(proxyURL.Hostname(), "80")
-		case "https":
-			proxyTarget = net.JoinHostPort(proxyURL.Hostname(), "443")
-		case "socks5":
-			return nil, fmt.Errorf("SOCKS5 代理 URL 缺少端口")
-		}
+	proxyTarget := Address(proxyURL)
+	if proxyURL.Port() == "" && strings.EqualFold(proxyURL.Scheme, "socks5") {
+		return nil, fmt.Errorf("SOCKS5 代理 URL 缺少端口")
 	}
 	if strings.EqualFold(proxyURL.Scheme, "socks5") {
 		var auth *proxy.Auth

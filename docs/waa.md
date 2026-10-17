@@ -68,6 +68,7 @@ user 文本中的 YouTube 链接先转为 external media part，链接从文本�
 - bootstrap 的 `GenerateContent` 在发往上游前终止，不产生生成用量；`TEMPORARY_CHAT=true` 同时关闭预热页的自动保存
 - 取消 Worker 启动会关闭 BiDi、终止 Camoufox 进程树并删除临时 profile；启动页面停在其他状态时返回包含当前 URL 的启动错误
 - Camoufox 在 BiDi 连接后 30 秒内没有响应 `session.new` 时，Worker 关闭该进程并重新启动 Camoufox，日志重新输出第 3、4 阶段
+- Worker 载入 AI Studio 期间每 2 秒连接一次账户代理，代理连不上或导航返回 `NS_ERROR_PROXY_*` 时该次启动立即以“代理不可达”失败
 
 bootstrap 模型优先使用实时目录中的 `gemini-flash-latest`，否则按目录顺序选择支持 `generateContent`、账户权益与聊天能力的模型。两种后端使用同一选择规则，一个账户 Worker 为该账户的全部普通生成模型提供 proof，切换业务模型直接复用当前 Worker。
 
