@@ -26,7 +26,13 @@ import (
 
 var bidiEndpointPattern = regexp.MustCompile(`ws://[^\s]+`)
 
-const browserProcessCloseTimeout = 5 * time.Second
+// browserProcessCloseTimeout 是等待 Camoufox 进程退出的上限。
+//
+// 原值 5s 对 900MB 级的浏览器太短：登录流程走完后浏览器要落盘 profile、
+// 回收渲染进程，实测经常超过 5 秒。超时本身不致命（登录状态早已抓到），
+// 但会让日志刷出「等待 Camoufox 进程退出」的假失败。放到 20s 覆盖正常关闭，
+// 真正的僵死进程仍会在这里被截断。
+const browserProcessCloseTimeout = 20 * time.Second
 
 type browserProcessTerminator func(context.Context, *exec.Cmd) error
 
