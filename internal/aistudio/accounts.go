@@ -2193,6 +2193,18 @@ func (p *AccountPool) ClearCooldownIfGeneration(
 	return err
 }
 
+// ClearCooldown 清除账户在作用域上的冷却，作用域为全局 *、模型 ID 或 build:<模型 ID>
+func (p *AccountPool) ClearCooldown(accountID string, scope string) error {
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if _, exists := runtimeState.Cooldowns[scope]; !exists {
+			return false, nil, nil
+		}
+		delete(runtimeState.Cooldowns, scope)
+		return true, nil, nil
+	})
+	return err
+}
+
 // BindResource 将资源 ID 固定到创建账户
 func (p *AccountPool) BindResource(resourceID string, accountID string) error {
 	return p.BindResourceKind(resourceID, accountID, "")

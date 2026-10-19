@@ -193,6 +193,10 @@ export const messages: Record<TranslationKey, string> = {
   'requests.empty': 'Aucune requête en cours',
   'cooldowns.title': 'Refroidissements par modèle',
   'cooldowns.until': 'Disponible à',
+  'cooldowns.clear': 'Lever le refroidissement',
+  'cooldowns.cleared': 'Refroidissement levé',
+  'cooldowns.clearAccountHint':
+    'Refroidissement de tout le compte, appliqué à tous les modèles de ce compte ; les refroidissements propres à un modèle sont listés à part',
   'cooldowns.all': 'Tout',
   'cooldowns.other': 'Autre',
   'cooldowns.category': 'Catégorie',

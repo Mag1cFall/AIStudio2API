@@ -243,42 +243,27 @@ func importIsolatedLogin(
 	if err != nil {
 		return fmt.Errorf("创建隔离登录目录: %w", err)
 	}
-	// 只在成功时删临时目录。
-	//
-	// 原实现无条件 defer os.RemoveAll，于是推送失败（pairing 409、令牌过期、
-	// 网络不通）时，刚抓到的 storage-state 连同指纹一起被删 —— 用户白登一次。
-	// 实测踩过两次：一次 409「账户已存在」，一次令牌过期。
-	//
-	// 失败时保留目录并把路径打出来，用户可以手工导入：
-	//   aistudio2api setup --storage-state <路径>/storage-state.json
-	keepOnFailure := true
-	defer func() {
-		if keepOnFailure {
-			return
-		}
-		_ = os.RemoveAll(loginDirectory)
-	}()
+	defer os.RemoveAll(loginDirectory)
 	result, err := driver.Login(ctx, aistudio.IsolatedLoginRequest{
 		AccountID: "setup", Directory: loginDirectory, Proxy: options.egress,
 		Locale: options.locale, Timezone: options.timezone,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "隔离登录失败，临时目录已保留: %s\n", loginDirectory)
 		return err
 	}
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
-		fmt.Fprintf(os.Stderr, "认证状态不可用，临时目录已保留: %s\n", loginDirectory)
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
 	saved, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.StorageState, loginDirectory)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "保存账户失败，临时目录已保留: %s\n", loginDirectory)
 		return err
 	}
-	keepOnFailure = false
 	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
 	if result.DriveError != "" {
 		fmt.Fprintf(os.Stdout, "Drive 授权失败: %s\n", result.DriveError)
+	}
+	if result.CloseError != "" {
+		fmt.Fprintf(os.Stdout, "关闭 Camoufox 失败: %s\n", result.CloseError)
 	}
 	return nil
 }

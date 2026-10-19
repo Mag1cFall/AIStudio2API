@@ -193,6 +193,10 @@ export const messages: Record<TranslationKey, string> = {
   'requests.empty': '現在リクエストはありません',
   'cooldowns.title': 'モデルのクールダウン',
   'cooldowns.until': '回復予定',
+  'cooldowns.clear': 'クールダウンを解除',
+  'cooldowns.cleared': 'クールダウンを解除しました',
+  'cooldowns.clearAccountHint':
+    'アカウント全体のクールダウンで、このアカウントのすべてのモデルに適用されます。モデル個別のクールダウンは別に表示されます',
   'cooldowns.all': 'すべて',
   'cooldowns.other': 'その他',
   'cooldowns.category': '種類',

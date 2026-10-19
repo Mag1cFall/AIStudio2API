@@ -43,6 +43,7 @@ type LoginResult struct {
 	PageURL          string
 	VerifiedAt       time.Time
 	DriveError       string
+	CloseError       string
 }
 
 type loginSession struct {
@@ -65,24 +66,12 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 		return LoginResult{}, err
 	}
 	defer func() {
-		// Close 失败不能污染登录结果。
-		//
-		// Camoufox 是 900MB 级的浏览器进程，关闭经常超过
-		// browserProcessCloseTimeout（5s）。原实现把 Close 的错误
-		// errors.Join 进返回值，于是「登录成功、状态已抓到、只差关窗口」
-		// 被判为整体失败，调用方 importIsolatedLogin 随即 defer
-		// os.RemoveAll(loginDirectory) 把刚抓到的 storage-state 删掉。
-		//
-		// 实测：登录页正常走完、自动关闭窗口，最后报
-		// 「等待 Camoufox 进程退出: context deadline exceeded」，
-		// 而 auth 目录里的文件时间戳没变 —— 状态确实被丢了。
-		//
-		// 关闭失败只说明进程回收不干净，与登录结果无关：
-		// 状态已经在上面的 exportStorageState 里拿到并编码完毕。
-		// 这里只记录，不改变 err。
-		if closeErr := session.Close(); closeErr != nil && err == nil {
-			fmt.Fprintf(os.Stderr, "警告: 关闭 Camoufox 失败（不影响登录结果）: %v\n", closeErr)
+		closeErr := session.Close()
+		if err == nil && closeErr != nil {
+			result.CloseError = closeErr.Error()
+			return
 		}
+		err = errors.Join(err, closeErr)
 	}()
 	origins := make(map[string]storageOrigin)
 	pageURL, err := session.waitLogin(loginCtx, origins)
