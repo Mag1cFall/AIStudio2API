@@ -262,6 +262,9 @@ func importIsolatedLogin(
 	if result.DriveError != "" {
 		fmt.Fprintf(os.Stdout, "Drive 授权失败: %s\n", result.DriveError)
 	}
+	if result.CloseError != "" {
+		fmt.Fprintf(os.Stdout, "关闭 Camoufox 失败: %s\n", result.CloseError)
+	}
 	return nil
 }
 

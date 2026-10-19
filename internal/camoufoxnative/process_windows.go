@@ -4,19 +4,15 @@ package camoufoxnative
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"strconv"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
-
-const windowsStillActive = 259
 
 var (
 	browserJobOnce   sync.Once
@@ -58,67 +54,75 @@ func serviceBrowserJob() (windows.Handle, error) {
 	return browserJob, browserJobErr
 }
 
-// attachBrowserProcess 把挂起的 Camoufox 加入服务 Job 后恢复执行
-func attachBrowserProcess(command *exec.Cmd) error {
+// browserTree 是只含一个 Camoufox 及其全部子孙进程的嵌套 Job
+type browserTree windows.Handle
+
+// jobAccountingInformation 是 JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+type jobAccountingInformation struct {
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
+}
+
+// attachBrowserProcess 把挂起的 Camoufox 加入服务 Job 与它自己的嵌套 Job 后恢复执行，返回该嵌套 Job
+func attachBrowserProcess(command *exec.Cmd) (browserTree, error) {
 	job, err := serviceBrowserJob()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	process, err := windows.OpenProcess(browserJobAccess, false, uint32(command.Process.Pid))
 	if err != nil {
-		return fmt.Errorf("打开 Camoufox 进程: %w", err)
+		return 0, fmt.Errorf("打开 Camoufox 进程: %w", err)
 	}
 	defer windows.CloseHandle(process)
 	if err := windows.AssignProcessToJobObject(job, process); err != nil {
-		return fmt.Errorf("加入 Camoufox Job: %w", err)
+		return 0, fmt.Errorf("加入 Camoufox Job: %w", err)
+	}
+	tree, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, fmt.Errorf("创建 Camoufox 进程树 Job: %w", err)
+	}
+	if err := windows.AssignProcessToJobObject(tree, process); err != nil {
+		windows.CloseHandle(tree)
+		return 0, fmt.Errorf("加入 Camoufox 进程树 Job: %w", err)
 	}
 	if status, _, _ := ntResumeProcess.Call(uintptr(process)); status != 0 {
-		return fmt.Errorf("恢复 Camoufox 进程: NTSTATUS 0x%x", status)
+		windows.CloseHandle(tree)
+		return 0, fmt.Errorf("恢复 Camoufox 进程: NTSTATUS 0x%x", status)
 	}
-	return nil
+	return browserTree(tree), nil
 }
 
-// terminateBrowserProcess 结束 Camoufox 及其全部子进程
-func terminateBrowserProcess(ctx context.Context, command *exec.Cmd) error {
-	if command == nil || command.Process == nil {
-		return nil
+// terminateBrowserProcess 结束 Camoufox 嵌套 Job 中的全部进程并等待它们退出
+func terminateBrowserProcess(ctx context.Context, process *browserProcess) error {
+	tree := windows.Handle(process.tree)
+	if err := windows.TerminateJobObject(tree, 1); err != nil {
+		return fmt.Errorf("结束 Camoufox 进程树: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	pid := command.Process.Pid
-	if !browserProcessActive(pid) {
-		return nil
-	}
-	kill := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
-	kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
-	if output, err := kill.CombinedOutput(); err != nil {
-		if !browserProcessActive(pid) {
+	for {
+		var info jobAccountingInformation
+		if err := windows.QueryInformationJobObject(
+			tree, windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil,
+		); err != nil {
+			return fmt.Errorf("查询 Camoufox 进程树: %w", err)
+		}
+		if info.ActiveProcesses == 0 {
 			return nil
 		}
-		taskkillErr := fmt.Errorf("taskkill 结束 Camoufox 进程树 PID=%d: %w: %s", pid, err, output)
-		directKillErr := command.Process.Kill()
-		if directKillErr == nil || errors.Is(directKillErr, os.ErrProcessDone) || !browserProcessActive(pid) {
-			return nil
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("等待 Camoufox 进程树退出: %d 个进程仍在运行: %w", info.ActiveProcesses, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
 		}
-		terminateErr := errors.Join(taskkillErr, fmt.Errorf("Process.Kill 结束 Camoufox PID=%d: %w", pid, directKillErr))
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(terminateErr, ctxErr)
-		}
-		return terminateErr
 	}
-	return nil
 }
 
-func browserProcessActive(pid int) bool {
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
-	if err != nil {
-		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
-	}
-	defer windows.CloseHandle(handle)
-	var exitCode uint32
-	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
-		return true
-	}
-	return exitCode == windowsStillActive
+// releaseBrowserTree 关闭嵌套 Job 句柄
+func releaseBrowserTree(tree browserTree) {
+	windows.CloseHandle(windows.Handle(tree))
 }

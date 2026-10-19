@@ -211,6 +211,11 @@ export const api = {
     requestCommand(`/api/requests/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
     }),
+  clearCooldown: (accountID: string, scope: string) =>
+    requestCommand(
+      `/api/accounts/${encodeURIComponent(accountID)}/cooldowns/${encodeURIComponent(scope)}`,
+      { method: 'DELETE' },
+    ),
 }
 
 // openAdminEvents 建立唯一的管理状态 SSE 连接

@@ -66,7 +66,8 @@ func (driver *NativeLoginDriver) Login(ctx context.Context, request IsolatedLogi
 		return IsolatedLoginResult{}, err
 	}
 	return IsolatedLoginResult{
-		StorageState: state, Email: result.Email, VerifiedAt: result.VerifiedAt, DriveError: result.DriveError,
+		StorageState: state, Email: result.Email, VerifiedAt: result.VerifiedAt,
+		DriveError: result.DriveError, CloseError: result.CloseError,
 	}, nil
 }
 

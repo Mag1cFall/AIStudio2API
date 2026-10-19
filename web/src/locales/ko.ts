@@ -191,6 +191,10 @@ export const messages: Record<TranslationKey, string> = {
   'requests.empty': '현재 요청이 없습니다',
   'cooldowns.title': '모델 쿨다운',
   'cooldowns.until': '복구 시간',
+  'cooldowns.clear': '쿨다운 해제',
+  'cooldowns.cleared': '쿨다운을 해제했습니다',
+  'cooldowns.clearAccountHint':
+    '계정 전체 쿨다운으로 이 계정의 모든 모델에 적용됩니다. 모델별 쿨다운은 따로 표시됩니다',
   'cooldowns.all': '전체',
   'cooldowns.other': '기타',
   'cooldowns.category': '유형',
