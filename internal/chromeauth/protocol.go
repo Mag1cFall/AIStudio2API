@@ -75,6 +75,35 @@ type deviceBindingKey interface {
 }
 
 func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappedKey []byte, proxyURL string) ([]multiloginCookie, error) {
+	client, err := newOAuthClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+
+	if len(wrappedKey) == 0 {
+		status, resp, err := requestMultilogin(ctx, client, gaiaID, token, "")
+		if err != nil {
+			return nil, err
+		}
+		if status == http.StatusOK && resp.Status == "OK" && len(resp.Cookies) > 0 {
+			for _, required := range []string{"SAPISID", "__Secure-1PSID"} {
+				found := false
+				for _, c := range resp.Cookies {
+					if c.Name == required {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
+				}
+			}
+			return resp.Cookies, nil
+		}
+		return nil, multiloginStatusError("multilogin", status, resp.Status)
+	}
+
 	bindingKey, err := openDeviceBindingKey(wrappedKey)
 	if err != nil {
 		return nil, err
@@ -84,11 +113,6 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	if err != nil {
 		return nil, err
 	}
-	client, err := newOAuthClient(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	defer client.CloseIdleConnections()
 
 	firstStatus, first, err := requestMultilogin(ctx, client, gaiaID, token, assertionSentinel)
 	if err != nil {
@@ -202,7 +226,9 @@ func findChallenge(response multiloginResponse) string {
 func encodeMultiOAuthHeader(gaiaID string, token string, assertion string) string {
 	account := appendBytesField(nil, 1, []byte(gaiaID))
 	account = appendBytesField(account, 2, []byte(token))
-	account = appendBytesField(account, 3, []byte(assertion))
+	if assertion != "" {
+		account = appendBytesField(account, 3, []byte(assertion))
+	}
 	return base64.RawURLEncoding.EncodeToString(appendBytesField(nil, 1, account))
 }
 
