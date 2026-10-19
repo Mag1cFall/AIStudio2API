@@ -112,6 +112,7 @@ type IsolatedLoginResult struct {
 	Email        string
 	VerifiedAt   time.Time
 	DriveError   string
+	CloseError   string
 }
 
 // IsolatedLoginDriver 定义独立浏览器登录

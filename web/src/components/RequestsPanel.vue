@@ -25,6 +25,7 @@ const cancelling = ref('')
 const refreshing = ref(false)
 const selectedCategory = ref('')
 const detail = ref<Cooldown | null>(null)
+const clearing = ref(false)
 
 // splitReason 把冷却原因拆成冷却类型与上游错误原文
 function splitReason(reason: string | undefined): { category: string; text: string } {
@@ -115,6 +116,21 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
     emit('notice', errorText(error), 'error')
   } finally {
     cancelling.value = ''
+  }
+}
+
+// clearCooldown 手动清除详情中的冷却，成功后关闭详情并刷新列表
+async function clearCooldown(cooldown: Cooldown): Promise<void> {
+  clearing.value = true
+  try {
+    await api.clearCooldown(cooldown.account_id, cooldown.scope)
+    detail.value = null
+    emit('notice', t('cooldowns.cleared'), 'success')
+    emit('refresh')
+  } catch (error) {
+    emit('notice', errorText(error), 'error')
+  } finally {
+    clearing.value = false
   }
 }
 </script>
@@ -295,6 +311,20 @@ async function cancelRequest(request: RequestSummary): Promise<void> {
         <pre
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-gray-300"
           >{{ splitReason(detail.reason).text || '—' }}</pre>
+        <div class="mt-4 flex items-center justify-end gap-3">
+          <span v-if="detail.scope === '*'" class="text-xs text-gray-500">{{
+            t('cooldowns.clearAccountHint')
+          }}</span>
+          <button
+            type="button"
+            class="shrink-0 rounded border border-line bg-raised px-3 py-1.5 text-sm text-gray-200 transition hover:bg-line disabled:opacity-50"
+            :disabled="clearing"
+            :aria-busy="clearing"
+            @click="clearCooldown(detail)"
+          >
+            {{ t('cooldowns.clear') }}
+          </button>
+        </div>
       </template>
     </DetailDialog>
   </section>

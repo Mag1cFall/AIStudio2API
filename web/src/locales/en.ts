@@ -190,6 +190,10 @@ export const messages: Record<TranslationKey, string> = {
   'requests.empty': 'No current requests',
   'cooldowns.title': 'Model cooldowns',
   'cooldowns.until': 'Available at',
+  'cooldowns.clear': 'Clear cooldown',
+  'cooldowns.cleared': 'Cooldown cleared',
+  'cooldowns.clearAccountHint':
+    'Account-wide cooldown that applies to every model on this account; model-specific cooldowns are listed separately',
   'cooldowns.all': 'All',
   'cooldowns.other': 'Other',
   'cooldowns.category': 'Category',

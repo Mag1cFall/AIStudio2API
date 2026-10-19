@@ -28,6 +28,7 @@ type AdminService interface {
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, RuntimeConfig) (RuntimeConfig, error)
 	Cooldowns(context.Context) ([]AdminCooldown, error)
+	ClearCooldown(ctx context.Context, accountID string, scope string) error
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
 	Events(context.Context) (<-chan AdminEvent, error)
@@ -241,6 +242,7 @@ type AdminCooldown struct {
 	AccountLabel string    `json:"account_label"`
 	Channel      string    `json:"channel"`
 	ModelID      string    `json:"model_id"`
+	Scope        string    `json:"scope"`
 	Until        time.Time `json:"until"`
 	Reason       string    `json:"reason,omitempty"`
 }
@@ -278,6 +280,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", s.handleRuntimeConfig)
 	mux.HandleFunc("PUT /api/config", s.handleUpdateRuntimeConfig)
 	mux.HandleFunc("GET /api/cooldowns", s.handleCooldowns)
+	mux.HandleFunc("DELETE /api/accounts/{id}/cooldowns/{scope}", s.handleClearCooldown)
 	mux.HandleFunc("GET /api/requests", s.handleRequests)
 	mux.HandleFunc("POST /api/requests/{id}/cancel", s.handleCancelRequest)
 	mux.HandleFunc("GET /api/events", s.handleAdminEvents)
@@ -455,6 +458,14 @@ func (s *server) handleCooldowns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]AdminCooldown{"cooldowns": cooldowns})
+}
+
+func (s *server) handleClearCooldown(w http.ResponseWriter, r *http.Request) {
+	if err := s.config.Admin.ClearCooldown(r.Context(), r.PathValue("id"), r.PathValue("scope")); err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleRequests(w http.ResponseWriter, r *http.Request) {
