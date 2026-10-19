@@ -468,6 +468,13 @@ func (manager *runtimeManager) Cooldowns(ctx context.Context) ([]api.AdminCooldo
 	return manager.current.admin.Cooldowns(ctx)
 }
 
+// ClearCooldown 手动清除账户在一个作用域上的冷却
+func (manager *runtimeManager) ClearCooldown(ctx context.Context, accountID string, scope string) error {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.ClearCooldown(ctx, accountID, scope)
+}
+
 // Requests 返回进程级活动请求
 func (manager *runtimeManager) Requests(ctx context.Context) ([]api.AdminRequest, error) {
 	manager.mu.RLock()

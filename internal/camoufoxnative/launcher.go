@@ -28,7 +28,7 @@ var bidiEndpointPattern = regexp.MustCompile(`ws://[^\s]+`)
 
 const browserProcessCloseTimeout = 5 * time.Second
 
-type browserProcessTerminator func(context.Context, *exec.Cmd) error
+type browserProcessTerminator func(context.Context, *browserProcess) error
 
 type browserProcess struct {
 	command *exec.Cmd
@@ -36,6 +36,7 @@ type browserProcess struct {
 	waitErr error
 	profile string
 	lock    *flock.Flock
+	tree    browserTree
 	mu      sync.Mutex
 	closed  bool
 }
@@ -140,7 +141,8 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
 	}
-	if err := attachBrowserProcess(command); err != nil {
+	tree, err := attachBrowserProcess(command)
+	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		_ = removeProfile(profile, profileLock)
@@ -151,6 +153,7 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		done:    make(chan struct{}),
 		profile: profile,
 		lock:    profileLock,
+		tree:    tree,
 	}
 	launched = true
 	go func() {
@@ -181,9 +184,8 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	case <-process.done:
 		process.mu.Lock()
 		err := process.waitErr
-		process.closed = true
 		process.mu.Unlock()
-		_ = removeProfile(profile, profileLock)
+		_ = process.Close()
 		if err == nil {
 			err = errors.New("Camoufox 在报告 BiDi 端点前退出")
 		}
@@ -217,16 +219,11 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 	}
 	closeCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	var closeErr error
+	closeErr := terminate(closeCtx, process)
 	select {
 	case <-process.done:
-	default:
-		closeErr = terminate(closeCtx, process.command)
-		select {
-		case <-process.done:
-		case <-closeCtx.Done():
-			closeErr = errors.Join(closeErr, fmt.Errorf("等待 Camoufox 进程退出: %w", closeCtx.Err()))
-		}
+	case <-closeCtx.Done():
+		closeErr = errors.Join(closeErr, fmt.Errorf("等待 Camoufox 进程退出: %w", closeCtx.Err()))
 	}
 	closeErr = errors.Join(closeErr, removeProfile(process.profile, process.lock))
 	if closeErr != nil {
@@ -235,6 +232,7 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 	process.mu.Lock()
 	process.closed = true
 	process.mu.Unlock()
+	releaseBrowserTree(process.tree)
 	return nil
 }
 

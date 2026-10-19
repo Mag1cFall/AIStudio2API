@@ -193,6 +193,10 @@ export const messages: Record<TranslationKey, string> = {
   'requests.empty': 'Keine laufenden Anfragen',
   'cooldowns.title': 'Modell-Cooldowns',
   'cooldowns.until': 'Verfügbar ab',
+  'cooldowns.clear': 'Cooldown aufheben',
+  'cooldowns.cleared': 'Cooldown aufgehoben',
+  'cooldowns.clearAccountHint':
+    'Cooldown für das ganze Konto, gilt für alle Modelle dieses Kontos; modellspezifische Cooldowns stehen separat',
   'cooldowns.all': 'Alle',
   'cooldowns.other': 'Sonstige',
   'cooldowns.category': 'Kategorie',

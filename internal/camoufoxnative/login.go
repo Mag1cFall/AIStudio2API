@@ -43,6 +43,7 @@ type LoginResult struct {
 	PageURL          string
 	VerifiedAt       time.Time
 	DriveError       string
+	CloseError       string
 }
 
 type loginSession struct {
@@ -65,7 +66,12 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 		return LoginResult{}, err
 	}
 	defer func() {
-		err = errors.Join(err, session.Close())
+		closeErr := session.Close()
+		if err == nil && closeErr != nil {
+			result.CloseError = closeErr.Error()
+			return
+		}
+		err = errors.Join(err, closeErr)
 	}()
 	origins := make(map[string]storageOrigin)
 	pageURL, err := session.waitLogin(loginCtx, origins)

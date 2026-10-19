@@ -193,6 +193,9 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountC
 	if result.DriveError != "" {
 		admin.requests.log("auth", "WARN", "账户添加 | Drive 授权失败 | 错误="+result.DriveError)
 	}
+	if result.CloseError != "" {
+		admin.requests.log("auth", "WARN", "账户添加 | 关闭 Camoufox 失败 | 错误="+result.CloseError)
+	}
 	admin.requests.log("auth", "INFO", "账户添加 | 2/2 | 保存认证状态")
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
 		return api.AdminAccount{}, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
@@ -506,6 +509,9 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string) (
 	}
 	if result.DriveError != "" {
 		admin.requests.log(account.Config.Label, "WARN", "账户登录 | Drive 授权失败 | 错误="+result.DriveError)
+	}
+	if result.CloseError != "" {
+		admin.requests.log(account.Config.Label, "WARN", "账户登录 | 关闭 Camoufox 失败 | 错误="+result.CloseError)
 	}
 	admin.requests.log(account.Config.Label, "INFO", "账户登录 | 2/2 | 保存认证状态")
 	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
@@ -840,9 +846,11 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			models[modelID] = struct{}{}
 		}
 		effective := make(map[string]aistudio.CooldownState)
+		scopes := make(map[string]string)
 		if global, ok := account.Cooldowns["*"]; ok && global.Active(now) {
 			for modelID := range models {
 				effective[modelID] = global
+				scopes[modelID] = "*"
 			}
 		}
 		for key, cooldown := range account.Cooldowns {
@@ -855,6 +863,7 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			}
 			if current, ok := effective[key]; !ok || cooldown.Until.After(current.Until) {
 				effective[key] = cooldown
+				scopes[key] = key
 			}
 		}
 		modelIDs := make([]string, 0, len(effective))
@@ -873,11 +882,30 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			}
 			cooldowns = append(cooldowns, api.AdminCooldown{
 				AccountID: account.ID, AccountLabel: account.Label, Channel: channel,
-				ModelID: modelID, Until: cooldown.Until, Reason: cooldown.Reason,
+				ModelID: modelID, Scope: scopes[key], Until: cooldown.Until, Reason: cooldown.Reason,
 			})
 		}
 	}
 	return cooldowns, nil
+}
+
+// ClearCooldown 手动清除账户在一个作用域上的冷却，并推送新的冷却列表与账户状态
+func (admin *runtimeAdmin) ClearCooldown(ctx context.Context, accountID string, scope string) error {
+	account, err := admin.account(accountID)
+	if err != nil {
+		return err
+	}
+	if err := admin.pool.ClearCooldown(accountID, scope); err != nil {
+		return err
+	}
+	admin.requests.log(account.Label, "INFO", "冷却已手动清除 | 范围="+scope)
+	if cooldowns, err := admin.Cooldowns(ctx); err == nil {
+		admin.requests.publish(api.AdminEvent{Type: "cooldowns", Data: cooldowns})
+	}
+	if accounts, err := admin.Accounts(ctx); err == nil {
+		admin.requests.publish(api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
+	}
+	return nil
 }
 
 func (admin *runtimeAdmin) Requests(context.Context) ([]api.AdminRequest, error) {

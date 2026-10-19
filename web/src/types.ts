@@ -159,6 +159,7 @@ export interface Cooldown {
   account_label: string
   channel: UpstreamChannel
   model_id: string
+  scope: string
   until: string
   reason?: string
 }
