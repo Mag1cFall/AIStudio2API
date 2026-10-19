@@ -68,6 +68,25 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 	if zeroQuotaLimit(rpcError.Message) {
 		kind = "无配额"
 	}
+	if kind == "无配额" {
+		// 上游把所有额度项都报成 limit: 0 —— 这是**账号没有该模型的访问权限**，
+		// 不是额度用完了。两者的区别在恢复方式上：
+		//   额度用完   到额度日重置（次日）恢复，等是对的
+		//   limit: 0   权限问题，等多久都不会变
+		//
+		// 原实现把 until 交给 RetryDelay（上游给的 "retry in 19h"），于是
+		// 每天只探测一次、撞一次、再等一天。实测 9/9 条 retry in 精确指向
+		// UTC 零点，但次日同一模型仍是 limit: 0 —— 白白浪费一天。
+		//
+		// 改为走递增退避（1m → 5m → 15m → 30m → 1h），一小时内最多重探一次。
+		// 权限若真的开通了，一小时内就能发现；若没开通，代价也只是每小时一次
+		// 失败的尝试，远小于每天干等 19 小时。
+		//
+		// Escalate 让 MarkQuotaCooldownIfGeneration 走 planLimitCooldown 分支，
+		// 那里会读上一次的 Level 并递增。
+		return QuotaCooldown{Until: now.Add(planLimitBackoff[0]), Global: global,
+			Kind: kind, Reason: kind + ": " + err.Error(), Escalate: true}, true
+	}
 	escalate := false
 	if rpcError.RetryDelay > 0 {
 		until = now.Add(rpcError.RetryDelay)
