@@ -57,7 +57,7 @@ type AuthSource struct {
 type ChromeOAuthMaterial struct {
 	GaiaID            string `json:"gaia_id"`
 	RefreshToken      string `json:"refresh_token"`
-	WrappedBindingKey []byte `json:"wrapped_binding_key"`
+	WrappedBindingKey []byte `json:"wrapped_binding_key,omitempty"`
 }
 
 // AuthExtension 保存 aistudio2api 认证扩展

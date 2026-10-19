@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,11 +79,11 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 				continue
 			}
 			seen[identity.Gaia] = true
-			_, encrypted, bindingKey, tokenErr := readTokenService(chromeRoot, profile, identity.Gaia)
+			_, encrypted, _, tokenErr := readTokenService(chromeRoot, profile, identity.Gaia)
 			accounts = append(accounts, Account{
 				ID: profile + "/" + identity.Gaia, GaiaID: identity.Gaia,
 				Profile: profile, DisplayName: info.Name, Email: identity.Email, Locale: locale,
-				Importable: tokenErr == nil && strings.HasPrefix(string(encrypted), "v20") && len(bindingKey) != 0,
+				Importable: tokenErr == nil && strings.HasPrefix(string(encrypted), "v20"),
 			})
 		}
 	}
@@ -132,15 +133,61 @@ func profileLocale(chromeRoot string, profile string) string {
 	return ""
 }
 
-func readTokenService(chromeRoot string, profile string, gaiaID string) (string, []byte, []byte, error) {
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func openWebData(chromeRoot string, profile string) (*sql.DB, func(), error) {
 	databasePath := filepath.Join(chromeRoot, profile, "Web Data")
-	uri := "file:" + filepath.ToSlash(databasePath) + "?mode=ro&immutable=1"
+	cleanup := func() {}
+
+	tempDir, err := os.MkdirTemp("", "aistudio2api-webdata-*")
+	if err == nil {
+		tempDb := filepath.Join(tempDir, "Web Data")
+		if copyFile(databasePath, tempDb) == nil {
+			_ = copyFile(databasePath+"-wal", tempDb+"-wal")
+			_ = copyFile(databasePath+"-shm", tempDb+"-shm")
+			databasePath = tempDb
+			cleanup = func() {
+				_ = os.RemoveAll(tempDir)
+			}
+		} else {
+			_ = os.RemoveAll(tempDir)
+		}
+	}
+
+	uri := "file:" + filepath.ToSlash(databasePath) + "?mode=ro"
 	database, err := sql.Open("sqlite", uri)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("打开 %s Web Data: %w", profile, err)
+		cleanup()
+		return nil, nil, fmt.Errorf("打开 %s Web Data: %w", profile, err)
 	}
-	defer database.Close()
 	database.SetMaxOpenConns(1)
+	return database, func() {
+		database.Close()
+		cleanup()
+	}, nil
+}
+
+func readTokenService(chromeRoot string, profile string, gaiaID string) (string, []byte, []byte, error) {
+	database, closeDb, err := openWebData(chromeRoot, profile)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	defer closeDb()
 
 	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service WHERE service = ?", "AccountId-"+gaiaID)
 	if err != nil {
@@ -168,7 +215,7 @@ func readTokenService(chromeRoot string, profile string, gaiaID string) (string,
 	if !strings.HasPrefix(service, "AccountId-") {
 		return "", nil, nil, fmt.Errorf("%s 的 token_service service 格式异常", profile)
 	}
-	if len(encryptedToken) == 0 || len(bindingKey) == 0 {
+	if len(encryptedToken) == 0 {
 		return "", nil, nil, fmt.Errorf("%s 的 token_service 缺少认证材料", profile)
 	}
 	return strings.TrimPrefix(service, "AccountId-"), encryptedToken, bindingKey, nil
