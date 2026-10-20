@@ -244,6 +244,14 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMapping': '모델 매핑',
   'settings.modelMappingHelp': '각 항목을 별칭:모델 ID로 쓰고 쉼표로 구분',
   'settings.modelChannels': '모델 채널',
+  'settings.mediaOutput': '미디어 출력',
+  'settings.mediaOutputHelp':
+    'Chat Completions와 Messages 본문에 생성된 이미지와 오디오를 넣는 방식입니다.',
+  'settings.mediaOutputInline': 'data URI로 포함',
+  'settings.mediaOutputURL': '이 서비스 링크',
+  'settings.mediaBaseURL': '미디어 링크 주소',
+  'settings.mediaBaseURLHelp':
+    '미디어 링크에 쓰는 서비스 주소입니다. 비워 두면 각 요청이 접속한 주소를 씁니다.',
   'settings.modelChannelsHelp':
     '모델을 한 채널로 제한: 각 항목은 모델 ID:playground 또는 build, 모델 상세에서도 선택 가능',
   'channel.playground': 'Playground',

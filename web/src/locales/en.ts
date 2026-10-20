@@ -244,6 +244,14 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMapping': 'Model mapping',
   'settings.modelMappingHelp': 'Write each item as alias:model ID, separated by commas',
   'settings.modelChannels': 'Model channels',
+  'settings.mediaOutput': 'Media output',
+  'settings.mediaOutputHelp':
+    'How Chat Completions and Messages include generated images and audio.',
+  'settings.mediaOutputInline': 'Inline data URI',
+  'settings.mediaOutputURL': 'Link to this service',
+  'settings.mediaBaseURL': 'Media link address',
+  'settings.mediaBaseURLHelp':
+    'Service address used in media links. Empty uses the address of each request.',
   'settings.modelChannelsHelp':
     'Limit a model to one channel: model ID:playground or build per item; also selectable in model details',
   'channel.playground': 'Playground',

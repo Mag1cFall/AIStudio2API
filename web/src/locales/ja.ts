@@ -248,6 +248,14 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMapping': 'モデルのマッピング',
   'settings.modelMappingHelp': '各項目を エイリアス:モデル ID の形で書き、カンマで区切る',
   'settings.modelChannels': 'モデルのチャネル',
+  'settings.mediaOutput': 'メディアの出力',
+  'settings.mediaOutputHelp':
+    'Chat Completions と Messages の本文で生成した画像と音声を含める方法です。',
+  'settings.mediaOutputInline': 'data URI で埋め込む',
+  'settings.mediaOutputURL': 'このサービスへのリンク',
+  'settings.mediaBaseURL': 'メディアリンクのアドレス',
+  'settings.mediaBaseURLHelp':
+    'メディアリンクに使うサービスのアドレスです。空欄の場合は各リクエストのアクセス先を使います。',
   'settings.modelChannelsHelp':
     'モデルを 1 つのチャネルに限定：各項目は モデル ID:playground または build。モデル詳細でも選べます',
   'channel.playground': 'Playground',

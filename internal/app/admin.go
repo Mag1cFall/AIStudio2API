@@ -890,6 +890,8 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             value.WAABackend,
+		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
+		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
 	}
 	if err := cfg.Validate(); err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(err)
@@ -1529,6 +1531,8 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		ModelChannels:          cfg.ModelChannels,
 		TemporaryChat:          cfg.TemporaryChat,
 		WAABackend:             cfg.WAABackend,
+		MediaOutput:            cfg.MediaOutput,
+		MediaBaseURL:           cfg.MediaBaseURL,
 	}
 }
 

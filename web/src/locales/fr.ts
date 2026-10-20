@@ -251,6 +251,14 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMappingHelp':
     'Chaque entrée au format alias:ID du modèle, séparées par des virgules',
   'settings.modelChannels': 'Canaux des modèles',
+  'settings.mediaOutput': 'Sortie des médias',
+  'settings.mediaOutputHelp':
+    'Manière dont Chat Completions et Messages incluent les images et l’audio générés.',
+  'settings.mediaOutputInline': 'Intégré en data URI',
+  'settings.mediaOutputURL': 'Lien vers ce service',
+  'settings.mediaBaseURL': 'Adresse des liens média',
+  'settings.mediaBaseURLHelp':
+    'Adresse du service utilisée dans les liens média. Vide : adresse de chaque requête.',
   'settings.modelChannelsHelp':
     'Limiter un modèle à un canal : ID du modèle:playground ou build par entrée ; aussi dans les détails du modèle',
   'channel.playground': 'Playground',

@@ -200,6 +200,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
+		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),
@@ -254,6 +255,7 @@ func rootHandler(apiHandler http.Handler) http.Handler {
 	root.Handle("/v1/", apiHandler)
 	root.Handle("/v1beta/", apiHandler)
 	root.Handle("/upload/", apiHandler)
+	root.Handle("/media/", apiHandler)
 	root.Handle("/", webui.Handler())
 	return securityHeaders(root)
 }

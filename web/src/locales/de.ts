@@ -248,6 +248,14 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMapping': 'Modellzuordnung',
   'settings.modelMappingHelp': 'Jeden Eintrag als Alias:Modell-ID schreiben, durch Kommas getrennt',
   'settings.modelChannels': 'Modellkanäle',
+  'settings.mediaOutput': 'Medienausgabe',
+  'settings.mediaOutputHelp':
+    'Wie Chat Completions und Messages generierte Bilder und Audio einbinden.',
+  'settings.mediaOutputInline': 'Inline als data-URI',
+  'settings.mediaOutputURL': 'Link auf diesen Dienst',
+  'settings.mediaBaseURL': 'Adresse für Medienlinks',
+  'settings.mediaBaseURLHelp':
+    'Dienstadresse in Medienlinks. Leer verwendet die Adresse der jeweiligen Anfrage.',
   'settings.modelChannelsHelp':
     'Modell auf einen Kanal beschränken: je Eintrag Modell-ID:playground oder build; auch in den Modelldetails wählbar',
   'channel.playground': 'Playground',

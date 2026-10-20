@@ -552,6 +552,8 @@ cp .env.example .env
 | `BUILD_NATIVE_NONSTREAM` | `true` | 非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
+| `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |
+| `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，经反向代理时跟随 `X-Forwarded-Proto` |
 
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制同时冷启动的 Camoufox Worker 数，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位；这四项在管理页面保存后立即作用于后续调度，峰值上限调低时关闭多出的空闲 Worker，常驻数调高时补足预热。
 

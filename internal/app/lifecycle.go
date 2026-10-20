@@ -201,6 +201,13 @@ func (manager *runtimeManager) Close() error {
 	return manager.current.Close()
 }
 
+// mediaLinks 返回当前生成服务的媒体输出是否使用 URL 与设置的服务地址
+func (manager *runtimeManager) mediaLinks() (bool, string) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.config.MediaOutput == config.MediaOutputURL, manager.current.config.MediaBaseURL
+}
+
 // Models 返回当前生成服务模型
 func (manager *runtimeManager) Models(ctx context.Context) ([]aistudio.Model, error) {
 	manager.mu.RLock()
@@ -548,6 +555,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		ModelMapping:         value.ModelMapping,
 		WAABackend:           value.WAABackend,
 		BuildNativeNonstream: value.BuildNativeNonstream,
+		MediaOutput:          value.MediaOutput,
+		MediaBaseURL:         value.MediaBaseURL,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -555,7 +564,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.TemporaryChat == active.TemporaryChat &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
 		saved.WAABackend == active.WAABackend &&
-		saved.BuildNativeNonstream == active.BuildNativeNonstream
+		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
+		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

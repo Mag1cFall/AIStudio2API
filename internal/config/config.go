@@ -43,6 +43,8 @@ var configKeys = [...]string{
 	"MODEL_CHANNELS",
 	"TEMPORARY_CHAT",
 	"WAA_BACKEND",
+	"MEDIA_OUTPUT",
+	"MEDIA_BASE_URL",
 	"AUTO_START",
 	"REQUEST_BODY_LOG",
 	"LOG_FILE",
@@ -64,6 +66,12 @@ const WAABackendCamoufox = "camoufox"
 
 // WAABackendGo 表示由纯 Go VM 承担 WAA 生命周期
 const WAABackendGo = "go"
+
+// MediaOutputInline 表示 Chat 与 Messages 正文以 data URI 内联生成的媒体
+const MediaOutputInline = "inline"
+
+// MediaOutputURL 表示生成的媒体保存到本地，Chat 与 Messages 正文以 URL 引用
+const MediaOutputURL = "url"
 
 // Config 保存服务的全局配置
 type Config struct {
@@ -91,6 +99,8 @@ type Config struct {
 	ModelChannels          string        `json:"model_channels"`
 	TemporaryChat          bool          `json:"temporary_chat"`
 	WAABackend             string        `json:"waa_backend"`
+	MediaOutput            string        `json:"media_output"`
+	MediaBaseURL           string        `json:"media_base_url"`
 }
 
 // Default 返回可直接启动的默认配置
@@ -111,6 +121,7 @@ func Default() Config {
 		RoutingStrategy:        "round-robin",
 		UpstreamChannels:       append([]string(nil), upstreamChannels...),
 		WAABackend:             WAABackendCamoufox,
+		MediaOutput:            MediaOutputInline,
 	}
 }
 
@@ -238,6 +249,12 @@ func Load(path string) (Config, error) {
 	if value, ok := values["WAA_BACKEND"]; ok {
 		cfg.WAABackend = strings.ToLower(strings.TrimSpace(value))
 	}
+	if value, ok := values["MEDIA_OUTPUT"]; ok {
+		cfg.MediaOutput = strings.ToLower(strings.TrimSpace(value))
+	}
+	if value, ok := values["MEDIA_BASE_URL"]; ok {
+		cfg.MediaBaseURL = strings.TrimSpace(value)
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -274,6 +291,8 @@ func (c Config) Save(path string) error {
 		"MODEL_CHANNELS":           c.ModelChannels,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 		"WAA_BACKEND":              c.WAABackend,
+		"MEDIA_OUTPUT":             c.MediaOutput,
+		"MEDIA_BASE_URL":           c.MediaBaseURL,
 	}
 
 	var output strings.Builder
@@ -334,6 +353,15 @@ func (c Config) Validate() error {
 	}
 	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
 		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
+	}
+	if c.MediaOutput != MediaOutputInline && c.MediaOutput != MediaOutputURL {
+		return fmt.Errorf("MEDIA_OUTPUT 必须是 inline 或 url")
+	}
+	if c.MediaBaseURL != "" {
+		base, err := url.Parse(c.MediaBaseURL)
+		if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+			return fmt.Errorf("MEDIA_BASE_URL 必须是 http 或 https 地址")
+		}
 	}
 	if c.LogMaxTotalMB < 2*LogFileMB {
 		return fmt.Errorf("LOG_MAX_TOTAL_MB 不能小于 %d", 2*LogFileMB)
@@ -446,6 +474,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ModelChannels          string   `json:"model_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
+		MediaOutput            string   `json:"media_output"`
+		MediaBaseURL           string   `json:"media_base_url"`
 	}
 	return json.Marshal(payload{
 		AutoStart:              c.AutoStart,
@@ -471,6 +501,8 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ModelChannels:          c.ModelChannels,
 		TemporaryChat:          c.TemporaryChat,
 		WAABackend:             c.WAABackend,
+		MediaOutput:            c.MediaOutput,
+		MediaBaseURL:           c.MediaBaseURL,
 	})
 }
 
@@ -501,6 +533,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		ModelChannels          string   `json:"model_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
+		MediaOutput            string   `json:"media_output"`
+		MediaBaseURL           string   `json:"media_base_url"`
 	}
 	var value payload
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -539,6 +573,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             strings.ToLower(strings.TrimSpace(value.WAABackend)),
+		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
+		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
 	}
 	if err := parsed.Validate(); err != nil {
 		return err

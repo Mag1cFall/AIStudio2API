@@ -1920,7 +1920,7 @@ server tool 接受对应 `type`、`name` 与 Anthropic 工具定义中的选项 
 
 content 输出 block 为 `text`、`thinking`、`redacted_thinking`、`tool_use`、`server_tool_use` 或 `web_search_tool_result`；thinking block 总带 `signature`，签名不在该 block 上时为空字符串。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`；它提供独立计数估算，PDF 等媒体请求的最终用量以生成响应 `usage.input_tokens` 为准。
 
-Anthropic 响应中的媒体编码为 text block 中的 Markdown data URL，代码编码为 fenced text。Google Search 的每个去重查询生成一组 `server_tool_use` 和 `web_search_tool_result`，结果按 URL 去重，来源集合覆盖本次搜索的全部查询。`usage.server_tool_use.web_search_requests` 记录上游报告的去重查询数，`web_fetch_requests` 为 `0`。URL Context 等其余引用在末尾追加 `Sources:` Markdown 列表。
+Anthropic 响应中的媒体编码为 text block 中的 Markdown 链接，`MEDIA_OUTPUT=inline` 时为 data URL，`url` 时为本服务的 `/media/<文件名>` URL，代码编码为 fenced text。Google Search 的每个去重查询生成一组 `server_tool_use` 和 `web_search_tool_result`，结果按 URL 去重，来源集合覆盖本次搜索的全部查询。`usage.server_tool_use.web_search_requests` 记录上游报告的去重查询数，`web_fetch_requests` 为 `0`。URL Context 等其余引用在末尾追加 `Sources:` Markdown 列表。
 
 搜索来源的 `encrypted_content` 由本服务生成，保存上游返回的 URL、标题与可用摘要。客户端回传的搜索块以文本续接：查询写为 `Web search: <query>`，配对结果追加到同一文本，每个来源写标题与 URL，能用当前 `PROXY_API_KEY` 解开的 `encrypted_content` 追加摘要；来自 Anthropic 服务或以其他 `PROXY_API_KEY` 生成的来源只保留标题与 URL。错误结果写为 `Web search failed: <error_code>`；没有配对调用的结果与没有结果的调用（`pause_turn` 续接）分别单独成文。该字段用于本服务的多轮会话，和 Anthropic 服务的来源令牌分别使用。
 
@@ -2426,12 +2426,12 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | function result | tool message | function_call_output | tool_result | functionResponse Part |
 | code execution | 可读 Markdown | code_interpreter item | text block | executableCode/result Part |
 | grounding/citation | annotations | output annotations | text sources | groundingMetadata |
-| media | data URL/媒体端点 | output content | content block | inlineData Part |
+| media | data URL、`/media/` URL 或媒体端点 | output content | content block | inlineData Part |
 | usage | prompt/completion/total | input/output/total | input/output | prompt/candidates/thoughts/total |
 
 Responses 媒体使用 image generation item。
 
-OpenAI Chat 使用 Markdown data URL 承载生成图片；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的图片恢复为 inline data Part，保留图片多轮上下文。图片 Base64 支持标准与 URL-safe 字母表、可选填充及 CR/LF 换行；图片前后的文本保持原顺序。
+OpenAI Chat 使用 Markdown 图片承载生成图片，`MEDIA_OUTPUT=inline` 时为 data URL，`url` 时为本服务的 `/media/<文件名>` URL；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的 data URL 图片与本服务已保存的媒体 URL 图片恢复为 inline data Part，保留图片多轮上下文。`GET /media/<文件名>` 返回保存的媒体，不校验 API key，响应带 immutable 缓存头。图片 Base64 支持标准与 URL-safe 字母表、可选填充及 CR/LF 换行；图片前后的文本保持原顺序。
 
 用户文本中的 `youtu.be/<ID>`、`youtube.com/watch?v=<ID>`、`/shorts/<ID>`、`/live/<ID>` 和 `/embed/<ID>` 会转换为 `video/*` 外部媒体 part，并从用户 text part 中移除；重复 URL 合并为一个附件。OpenAI `video_url`/`input_video`、Anthropic URL source 与 Gemini `fileData.fileUri` 使用相同的外部媒体编码。
 

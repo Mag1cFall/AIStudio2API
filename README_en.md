@@ -552,6 +552,8 @@ cp .env.example .env
 | `BUILD_NATIVE_NONSTREAM` | `true` | Prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
+| `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key |
+| `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
 

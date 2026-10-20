@@ -57,6 +57,8 @@ const form = reactive<ServiceConfig>({
   model_channels: '',
   waa_backend: 'camoufox',
   temporary_chat: false,
+  media_output: 'inline',
+  media_base_url: '',
 })
 
 type SectionID = 'service' | 'capacity' | 'upstream' | 'network' | 'security'
@@ -74,7 +76,14 @@ const sections: {
     label: 'settings.section.service',
     description: 'settings.section.serviceHelp',
     icon: 'service',
-    fields: ['auto_start', 'listen_addr', 'proxy_api_key', 'auth_states'],
+    fields: [
+      'auto_start',
+      'listen_addr',
+      'proxy_api_key',
+      'auth_states',
+      'media_output',
+      'media_base_url',
+    ],
   },
   {
     id: 'capacity',
@@ -354,6 +363,35 @@ async function saveConfig(): Promise<void> {
                 id="setting-auth-path"
                 v-model.trim="form.auth_states"
                 :class="inputClass"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.mediaOutput')"
+              control-id="setting-media-output"
+              :description="t('settings.mediaOutputHelp')"
+              effect="service"
+              :changed="changedFields.has('media_output')"
+            >
+              <UiSelect id="setting-media-output" v-model="form.media_output" :class="inputClass">
+                <option value="inline">{{ t('settings.mediaOutputInline') }}</option>
+                <option value="url">{{ t('settings.mediaOutputURL') }}</option>
+              </UiSelect>
+            </SettingRow>
+            <SettingRow
+              v-if="form.media_output === 'url'"
+              :label="t('settings.mediaBaseURL')"
+              control-id="setting-media-base-url"
+              :description="t('settings.mediaBaseURLHelp')"
+              effect="service"
+              :changed="changedFields.has('media_base_url')"
+            >
+              <input
+                id="setting-media-base-url"
+                v-model.trim="form.media_base_url"
+                :class="inputClass"
+                placeholder="https://example.com"
                 autocomplete="off"
                 spellcheck="false"
               />

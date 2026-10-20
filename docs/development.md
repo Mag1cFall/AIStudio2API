@@ -133,6 +133,7 @@ build/                   应用图标、Windows 资源、macOS Info.plist 与 Li
 auth/                    每账户配置、认证状态和可恢复运行状态
 runtime/camoufox/        Release 使用的 Camoufox 运行时
 runtime/requests.db      请求用量账本与可选正文
+runtime/media/           MEDIA_OUTPUT=url 时按内容命名保存的生成媒体
 ```
 
 主依赖方向：
@@ -205,6 +206,8 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `BUILD_NATIVE_NONSTREAM` | 非流式请求优先选择 Build 原生单次调用 | `true` |
 | `WAA_BACKEND` | WAA 后端 `camoufox` 或 `go` | `camoufox` |
 | `TEMPORARY_CHAT` | WAA 预热页是否使用临时对话 | `false` |
+| `MEDIA_OUTPUT` | Chat Completions 与 Messages 正文中生成媒体的引用方式 `inline` 或 `url` | `inline` |
+| `MEDIA_BASE_URL` | 媒体 URL 的服务地址，`http` 或 `https`；留空时取请求的协议与 Host | 空 |
 
 `LISTEN_ADDR` 使用 `host:port`，端口范围为 `1..65535`。时长和容量字段必须为正值，`WARM_STARTUP_CONCURRENCY` 的有效范围为 `1..MAX_ACTIVE_WORKERS`。全局代理 URL 使用 `http`、`https` 或 `socks5` 的 origin 形状，可带 `user:password@` 认证信息。命令行 `--auth` 与 `--proxy` 会覆盖每次启动生成服务时读取的保存值。
 

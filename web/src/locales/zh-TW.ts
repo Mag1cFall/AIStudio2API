@@ -232,6 +232,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.modelMapping': '模型對應',
   'settings.modelMappingHelp': '每項寫成 別名:模型 ID，多項以逗號分隔',
   'settings.modelChannels': '模型通道',
+  'settings.mediaOutput': '媒體輸出',
+  'settings.mediaOutputHelp': 'Chat Completions 與 Messages 正文中引用生成圖片與音訊的方式。',
+  'settings.mediaOutputInline': '內嵌 data URI',
+  'settings.mediaOutputURL': '本服務連結',
+  'settings.mediaBaseURL': '媒體連結位址',
+  'settings.mediaBaseURLHelp': '媒體連結使用的服務位址，留空時使用每個請求存取的位址。',
   'settings.modelChannelsHelp':
     '限定模型只走一個通道，每項寫成 模型 ID:playground 或 build，也可在模型詳情中選擇',
   'channel.playground': 'Playground',
