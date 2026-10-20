@@ -307,9 +307,7 @@ func transcriptionRetryableAccountError(ctx context.Context, err error) bool {
 }
 
 func incompleteTranscriptionStream(err error) bool {
-	var protocolError *ProtocolEvidenceError
-	return errors.As(err, &protocolError) && protocolError.Method == "GenerateContent" && protocolError.Path == "$" &&
-		protocolError.Detail == "流结束前没有完成帧"
+	return errors.Is(err, errMissingFinishFrame)
 }
 
 var _ TranscriptionService = (*PooledService)(nil)

@@ -524,6 +524,9 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 
 func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease) ([]Model, error) {
 	account := lease.Account()
+	if err := s.client.EnsureTermsAccepted(ContextWithAccountLease(ctx, lease), account.ID); err != nil {
+		return nil, s.catalogFailure(lease, err)
+	}
 	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
 	if err != nil {
 		return nil, s.catalogFailure(lease, err)
@@ -836,6 +839,12 @@ func mergeModels(base []Model, additions []Model) []Model {
 		}
 		for name, values := range model.CapabilityOptions {
 			current.CapabilityOptions[name] = unionStrings(current.CapabilityOptions[name], values)
+		}
+		if len(current.VoiceDetails) == 0 {
+			current.VoiceDetails = model.VoiceDetails
+		}
+		if len(current.Languages) == 0 {
+			current.Languages = model.Languages
 		}
 		current.AccessModes = unionInt64(current.AccessModes, model.AccessModes)
 		current.Paid = current.Paid || model.Paid

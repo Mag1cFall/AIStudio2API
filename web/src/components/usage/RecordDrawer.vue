@@ -57,7 +57,7 @@ const summary = computed(() => {
     { label: t('usage.dimension.account'), value: record.account || '—' },
     { label: t('usage.dimension.channel'), value: dimensionLabel('channel', record.channel) },
     { label: t('usage.dimension.protocol'), value: dimensionLabel('protocol', record.protocol) },
-    { label: t('usage.path'), value: record.path },
+    { label: t('usage.path'), value: record.path, wide: true },
     { label: t('usage.dimension.status'), value: String(record.status) },
     { label: t('usage.duration'), value: duration(record.duration_ms) },
     { label: t('usage.firstEvent'), value: duration(record.first_event_ms) },
@@ -159,6 +159,7 @@ async function copy(kind: string, text: string): Promise<void> {
                 v-for="item in summary"
                 :key="item.label"
                 class="flex min-w-0 justify-between gap-3"
+                :class="item.wide ? 'sm:col-span-2' : ''"
               >
                 <dt class="shrink-0 text-gray-500">{{ item.label }}</dt>
                 <dd v-tooltip="item.value" class="truncate text-right text-gray-200 tabular-nums">

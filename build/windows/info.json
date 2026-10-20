@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.0.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.0.0",
+			"CompanyName": "Mag1cFall",
+			"FileDescription": "AIStudio2API",
+			"LegalCopyright": "Mag1cFall",
+			"ProductName": "AIStudio2API",
+			"OriginalFilename": "aistudio2api.exe"
+		}
+	}
+}

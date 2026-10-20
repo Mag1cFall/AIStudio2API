@@ -9,6 +9,7 @@ import (
 type FrameDecoder struct {
 	usage     *Usage
 	finished  bool
+	frames    int
 	lastFrame json.RawMessage
 	// continuable 表示请求开启了自动续写
 	continuable bool
@@ -29,6 +30,7 @@ func NewFrameDecoder() *FrameDecoder {
 
 // Decode 解码一条 repeated 流帧
 func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
+	d.frames++
 	d.lastFrame = append(json.RawMessage(nil), raw...)
 	frame, err := rawArray(raw, "$[0][]", raw)
 	if err != nil {
@@ -208,7 +210,7 @@ func (d *FrameDecoder) End() error {
 	if d.finished {
 		return nil
 	}
-	return d.protocolError("$", "流结束前没有完成帧", d.lastFrame)
+	return &StreamInterruptedError{Method: "GenerateContent", Frames: d.frames, Err: errMissingFinishFrame}
 }
 
 func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {

@@ -62,7 +62,7 @@ func (session *loginSession) authorizeDrive(ctx context.Context, email string) e
 	if err := session.completeConsent(ctx, popup, email); err != nil {
 		return err
 	}
-	session.client.accessTokenStatus = 0
+	session.client.accessTokenStatus.Store(0)
 	if err := session.navigate(ctx, aiStudioOrigin+"/prompts/new_chat"); err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (session *loginSession) authorizeDrive(ctx context.Context, email string) e
 
 // waitAccessTokenStatus 等待官网页面完成一次 GenerateAccessToken
 func (session *loginSession) waitAccessTokenStatus(ctx context.Context) (int, error) {
-	for session.client.accessTokenStatus == 0 {
+	for session.client.accessTokenStatus.Load() == 0 {
 		if _, err := session.client.evaluate(ctx, session.contextID, "0"); err != nil && !retryablePageEvaluation(err) {
 			return 0, fmt.Errorf("等待 GenerateAccessToken: %w", err)
 		}
@@ -86,7 +86,7 @@ func (session *loginSession) waitAccessTokenStatus(ctx context.Context) (int, er
 			return 0, fmt.Errorf("等待 GenerateAccessToken: %w", err)
 		}
 	}
-	return session.client.accessTokenStatus, nil
+	return int(session.client.accessTokenStatus.Load()), nil
 }
 
 // navigate 在登录 tab 打开官网页面

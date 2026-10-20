@@ -35,6 +35,8 @@ WAA（Web Application Attestation）为 AI Studio 的受保护 RPC 提供 BotGua
 | --- | ---: | --- | --- |
 | `GenerateContent` | 5 | contents 各 part 以空格连接 | Worker `SendProtected` |
 | `CreateInteractionStream` | 5 | 发送的全部文本以空格连接 | Worker `SendProtected` |
+| `CreateInteraction` | 5 | 发送的全部文本以空格连接 | Worker `SendProtected` |
+| `GetInteractionStream` | 5 | interaction ID | Worker `SendProtected` |
 | `ProxyStreamedCall`、`ProxyUnaryCall` | 3 | `<路径> <请求体>` | Worker `SendProtected` |
 | `CodeAssistantOffline` | 2 | 与 `GenerateContent` 相同 | Worker `SendProtected` |
 | Build embedding `ProxyUnaryCall` | 3 | `<路径> <请求体>`，路径为 `:batchEmbedContents` | Worker `SendProtected` |

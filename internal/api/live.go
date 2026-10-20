@@ -39,14 +39,20 @@ type bidiClientMessage struct {
 }
 
 type bidiClientSetup struct {
-	Type             string                            `json:"type"`
-	Model            string                            `json:"model"`
-	InputModalities  []string                          `json:"input_modalities"`
-	OutputModalities []string                          `json:"output_modalities"`
-	Tools            []aistudio.FunctionDeclaration    `json:"tools"`
-	SessionToken     string                            `json:"session_token,omitempty"`
-	Translation      *aistudio.BidiTranslationConfig   `json:"translation,omitempty"`
-	Transcription    *aistudio.BidiTranscriptionConfig `json:"transcription,omitempty"`
+	Type              string                            `json:"type"`
+	Model             string                            `json:"model"`
+	InputModalities   []string                          `json:"input_modalities"`
+	OutputModalities  []string                          `json:"output_modalities"`
+	Tools             []aistudio.FunctionDeclaration    `json:"tools"`
+	SessionToken      string                            `json:"session_token,omitempty"`
+	Translation       *aistudio.BidiTranslationConfig   `json:"translation,omitempty"`
+	Transcription     *aistudio.BidiTranscriptionConfig `json:"transcription,omitempty"`
+	SystemInstruction string                            `json:"system_instruction,omitempty"`
+	Voice             string                            `json:"voice,omitempty"`
+	MediaResolution   string                            `json:"media_resolution,omitempty"`
+	ThinkingLevel     string                            `json:"thinking_level,omitempty"`
+	ContextWindow     *aistudio.BidiContextWindow       `json:"context_window_compression,omitempty"`
+	GoogleSearch      bool                              `json:"google_search,omitempty"`
 }
 
 type bidiServerMessage struct {
@@ -190,6 +196,12 @@ func bidiRequestFromSetup(
 		}
 		request.Translation = setup.Translation
 		request.Transcription = setup.Transcription
+		request.SystemInstruction = setup.SystemInstruction
+		request.Voice = strings.TrimSpace(setup.Voice)
+		request.MediaResolution = strings.ToLower(strings.TrimSpace(setup.MediaResolution))
+		request.ThinkingLevel = strings.ToLower(strings.TrimSpace(setup.ThinkingLevel))
+		request.ContextWindow = setup.ContextWindow
+		request.GoogleSearch = setup.GoogleSearch
 		if input["audio"] || input["image"] {
 			request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 		}
@@ -202,6 +214,9 @@ func bidiRequestFromSetup(
 		}
 		if setup.Translation != nil || setup.Transcription != nil {
 			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics 不支持 translation 或 transcription", aistudio.ErrInvalidArgument)
+		}
+		if setup.SystemInstruction != "" || setup.Voice != "" || setup.MediaResolution != "" || setup.ThinkingLevel != "" || setup.ContextWindow != nil || setup.GoogleSearch {
+			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics 不支持 system_instruction、voice、media_resolution、thinking_level、context_window_compression 与 google_search", aistudio.ErrInvalidArgument)
 		}
 		request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
 	default:

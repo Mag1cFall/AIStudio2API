@@ -38,6 +38,18 @@ type chatRequest struct {
 	WebSearchOptions    json.RawMessage   `json:"web_search_options"`
 	Functions           []json.RawMessage `json:"functions"`
 	FunctionCall        json.RawMessage   `json:"function_call"`
+	ExtraBody           chatExtraBody     `json:"extra_body"`
+}
+
+// chatExtraBody 是 Gemini OpenAI 兼容层的 extra_body 扩展
+type chatExtraBody struct {
+	Google struct {
+		ThinkingConfig *struct {
+			IncludeThoughts *bool  `json:"include_thoughts"`
+			ThinkingLevel   string `json:"thinking_level"`
+			ThinkingBudget  *int64 `json:"thinking_budget"`
+		} `json:"thinking_config"`
+	} `json:"google"`
 }
 
 type chatStreamOptions struct {
@@ -841,6 +853,18 @@ func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error)
 			config.ReasoningEffort = reasoning.Effort
 		}
 	}
+	if thinking := request.ExtraBody.Google.ThinkingConfig; thinking != nil {
+		if thinking.ThinkingLevel != "" {
+			config.ReasoningEffort = thinking.ThinkingLevel
+		}
+		// thinking_budget -1 为动态思考，使用模型默认思考设置
+		if thinking.ThinkingBudget != nil && *thinking.ThinkingBudget != -1 {
+			config.ThinkingBudget = thinking.ThinkingBudget
+		}
+		if thinking.IncludeThoughts != nil {
+			config.HideThinking = !*thinking.IncludeThoughts
+		}
+	}
 	if len(request.ResponseFormat) > 0 && string(request.ResponseFormat) != "null" {
 		var format struct {
 			Type       string `json:"type"`
@@ -986,7 +1010,7 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			status := statusFromError(err)
 			code := openAIErrorCode(err)
 			_ = writeSSE(w, "", map[string]any{"error": map[string]any{
-				"message": err.Error(),
+				"message": publicErrorMessage(status, err.Error()),
 				"type":    openAIErrorType(status, code),
 				"param":   nil,
 				"code":    code,

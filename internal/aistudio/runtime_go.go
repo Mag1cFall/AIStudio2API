@@ -392,7 +392,7 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 		return "", err
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GetLoggingContext 返回 HTTP %d", response.StatusCode)
+		return "", DecodeRPCError("GetLoggingContext", response.StatusCode, body)
 	}
 	encoded, err := encodeJSPBFields(body)
 	if err != nil {

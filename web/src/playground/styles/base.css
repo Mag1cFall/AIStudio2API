@@ -1,0 +1,445 @@
+/* base 为 API 试用页与官网 AI Studio 一致的排版与 ms-button 按钮样式，进入 API 试用页时根元素带 studio 类 */
+html.studio {
+  --font-sans: 'Inter Variable', Inter, sans-serif;
+  --font-heading: 'Inter Tight Variable', 'Inter Tight', sans-serif;
+  --font-mono: 'Google Sans Code Variable', 'Google Sans Mono', monospace;
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-optical-sizing: auto;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  scrollbar-color: var(--color-v3-outline) transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html.studio[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html.studio * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.studio body {
+  flex-direction: column;
+  background-color: var(--color-v3-surface-container);
+  color: var(--color-v3-text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+html.studio #app {
+  display: flex;
+  flex-direction: column;
+}
+
+:where(html.studio) :where(button, input, select, textarea) {
+  color: inherit;
+  font: inherit;
+}
+
+html.studio :is(code, pre, kbd) {
+  font-family: var(--font-mono);
+}
+
+[ms-button] {
+  --ms-button-height: var(--ms-button-height-override, 32px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--ms-button-height);
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background-color: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-decoration: none;
+  user-select: none;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out,
+    color 0.15s ease-in-out,
+    box-shadow 0.1s ease-in-out;
+}
+
+[ms-button].ms-button-primary {
+  border-color: var(--color-v3-outline);
+  background-color: var(--color-v3-button-container);
+  color: var(--color-v3-text-on-button);
+}
+
+[ms-button].ms-button-secondary {
+  border-color: var(--color-v3-outline-var);
+}
+
+[ms-button].ms-button-secondary:not(.ms-button-icon) {
+  background-color: transparent;
+  color: var(--color-v3-text);
+}
+
+[ms-button].ms-button-borderless {
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--color-v3-text);
+}
+
+[ms-button].ms-button-icon {
+  aspect-ratio: 1 / 1;
+  padding: 0;
+}
+
+[ms-button].ms-button-icon.ms-button-small {
+  border-radius: 8px;
+}
+
+[ms-button].ms-button-icon.ms-button-borderless {
+  border-radius: 50%;
+}
+
+[ms-button].ms-button-link {
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--color-v3-text-link);
+}
+
+[ms-button].ms-button-filter-chip {
+  padding: 8px 12px;
+  border-color: var(--color-v3-outline-var);
+  background-color: var(--color-v3-surface-container);
+  background-image: radial-gradient(
+    circle at 16px center,
+    var(--color-v3-text) 3px,
+    transparent 3.4px
+  );
+  background-repeat: no-repeat;
+  background-size: 0;
+  color: var(--color-v3-text);
+  transition:
+    background-color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out,
+    color 0.15s ease-in-out,
+    box-shadow 0.1s ease-in-out,
+    padding-left 0.2s ease-in-out,
+    background-size 0.2s ease-in-out;
+}
+
+:root:not([data-theme='dark']) [ms-button].ms-button-filter-chip {
+  box-shadow: var(--shadow-v3-xs);
+}
+
+[ms-button].ms-button-filter-chip.ms-button-active {
+  padding-left: 26px;
+  border-color: var(--color-v3-outline);
+  background-color: var(--color-v3-surface-container-highest);
+  background-size: 100%;
+}
+
+[ms-button].ms-button-filter-chip.ms-button-active-border {
+  background-image: none;
+}
+
+[ms-button].ms-button-filter-chip.ms-button-active-border.ms-button-active {
+  padding-left: 12px;
+  border-color: var(--color-v3-outline-accent);
+  background-size: 0;
+}
+
+[ms-button].ms-button-large {
+  --ms-button-height: 36px;
+}
+
+[ms-button].ms-button-small {
+  --ms-button-height: 28px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+[ms-button]:where(:not(.ms-button-link, [aria-disabled='true'], :disabled)):is(
+    :hover,
+    :focus-visible
+  ) {
+  background-color: var(--color-v3-button-container-high);
+  color: var(--color-v3-text-on-button);
+}
+
+[ms-button].ms-button-link:where(:not([aria-disabled='true'], :disabled)):is(
+    :hover,
+    :focus-visible
+  ) {
+  text-decoration: underline;
+}
+
+[ms-button]:where(:not(.ms-button-link)).ms-button-active,
+[ms-button].ms-button-icon.ms-button-borderless:where(:not(.ms-button-link)).ms-button-active {
+  background-color: var(--color-v3-button-container-accent);
+  color: var(--color-v3-text-on-button);
+}
+
+[ms-button]:where(:not(.ms-button-link)):is([aria-disabled='true'], :disabled) {
+  background-color: var(--color-v3-surface-container);
+  color: var(--color-v3-text-disable);
+  cursor: not-allowed;
+}
+
+[ms-button].ms-button-borderless:where(:not(.ms-button-link)):is([aria-disabled='true'], :disabled),
+[ms-button].ms-button-secondary:is([aria-disabled='true'], :disabled) {
+  background-color: transparent;
+}
+
+[ms-button].ms-button-link:is([aria-disabled='true'], :disabled) {
+  color: var(--color-v3-outline);
+}
+
+[ms-button]:focus-visible {
+  outline: 2px solid var(--color-v3-outline);
+  outline-offset: -2px;
+}
+
+[ms-button]:focus:not(:focus-visible) {
+  outline: none;
+}
+
+[ms-button] .ms-button-icon-symbol {
+  width: 18px;
+  height: 18px;
+}
+
+.ms-menu-panel {
+  position: relative;
+  z-index: 1000;
+  min-width: 112px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  border: 1px solid var(--color-v3-outline-var);
+  border-radius: 8px;
+  background-color: var(--color-v3-surface-container);
+  box-shadow: var(--shadow-v3-dropdown);
+  color: var(--color-v3-text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ms-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 32px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--color-v3-text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+}
+
+.ms-menu-item[data-highlighted] {
+  background-color: var(--color-v3-hover);
+}
+
+.ms-menu-item[data-disabled] {
+  color: var(--color-v3-text-disable);
+  cursor: default;
+}
+
+.ms-menu-item .ms-menu-item-text {
+  flex: 1;
+}
+
+.ms-menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background-color: var(--color-v3-outline-var);
+}
+
+:root[data-theme='dark'] .ms-menu-divider {
+  background-color: #444748;
+}
+
+.ms-menu-radio {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-radius: 9999px;
+}
+
+.ms-menu-radio.selected {
+  background-color: currentColor;
+}
+
+.ms-tooltip {
+  position: fixed;
+  z-index: 1100;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-v3-outline-var);
+  border-radius: 12px;
+  background-color: var(--color-v3-surface-container);
+  box-shadow: var(--shadow-v3-md);
+  color: var(--color-v3-text-on-button);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: pre-line;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.ms-tooltip.visible {
+  opacity: 1;
+}
+
+label:has(+ [ms-input]) {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--color-v3-text);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+[ms-input] {
+  width: var(--ms-input-width, 100%);
+  border: 1px solid var(--color-v3-outline-var);
+  border-radius: 8px;
+  background-color: transparent;
+  font-size: 14px;
+  line-height: 21px;
+  transition: border-color 0.15s ease-in-out;
+}
+
+[ms-input]:focus {
+  border-color: var(--color-v3-outline-active);
+  outline: none;
+}
+
+[ms-input].small {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+[ms-input]:disabled {
+  color: var(--ms-input-disabled-color, var(--color-v3-text-disable));
+  cursor: not-allowed;
+}
+
+[ms-input]::placeholder {
+  color: var(--color-v3-text-var);
+}
+
+input[ms-input] {
+  height: 32px;
+  padding-inline: 8px;
+}
+
+input[ms-input].small {
+  height: 28px;
+}
+
+textarea[ms-input] {
+  padding: 8px;
+  resize: none;
+}
+
+html.studio .hljs {
+  color: light-dark(#24292e, #adbac7);
+}
+
+html.studio .hljs-doctag,
+html.studio .hljs-keyword,
+html.studio .hljs-meta .hljs-keyword,
+html.studio .hljs-template-tag,
+html.studio .hljs-template-variable,
+html.studio .hljs-type,
+html.studio .hljs-variable.language_ {
+  color: light-dark(#d73a49, #f47067);
+}
+
+html.studio .hljs-title,
+html.studio .hljs-title.class_,
+html.studio .hljs-title.class_.inherited__,
+html.studio .hljs-title.function_ {
+  color: light-dark(#6f42c1, #dcbdfb);
+}
+
+html.studio .hljs-attr,
+html.studio .hljs-attribute,
+html.studio .hljs-literal,
+html.studio .hljs-meta,
+html.studio .hljs-number,
+html.studio .hljs-operator,
+html.studio .hljs-selector-attr,
+html.studio .hljs-selector-class,
+html.studio .hljs-selector-id,
+html.studio .hljs-variable {
+  color: light-dark(#005cc5, #6cb6ff);
+}
+
+html.studio .hljs-meta .hljs-string,
+html.studio .hljs-regexp,
+html.studio .hljs-string {
+  color: light-dark(#032f62, #96d0ff);
+}
+
+html.studio .hljs-built_in,
+html.studio .hljs-symbol {
+  color: light-dark(#e36209, #f69d50);
+}
+
+html.studio .hljs-code,
+html.studio .hljs-comment,
+html.studio .hljs-formula {
+  color: light-dark(#6a737d, #768390);
+}
+
+html.studio .hljs-name,
+html.studio .hljs-quote,
+html.studio .hljs-selector-pseudo,
+html.studio .hljs-selector-tag {
+  color: light-dark(#22863a, #8ddb8c);
+}
+
+html.studio .hljs-subst {
+  color: light-dark(#24292e, #adbac7);
+}
+
+html.studio .hljs-section {
+  color: light-dark(#005cc5, #316dca);
+  font-weight: 700;
+}
+
+html.studio .hljs-bullet {
+  color: light-dark(#735c0f, #eac55f);
+}
+
+html.studio .hljs-emphasis {
+  color: light-dark(#24292e, #adbac7);
+  font-style: italic;
+}
+
+html.studio .hljs-strong {
+  color: light-dark(#24292e, #adbac7);
+  font-weight: 700;
+}
+
+html.studio .hljs-addition {
+  background-color: light-dark(#f0fff4, #1b4721);
+  color: light-dark(#22863a, #b4f1b4);
+}
+
+html.studio .hljs-deletion {
+  background-color: light-dark(#ffeef0, #78191b);
+  color: light-dark(#b31d28, #ffd8d3);
+}

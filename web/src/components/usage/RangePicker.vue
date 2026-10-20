@@ -97,7 +97,7 @@ function applyCustom(): void {
               ]"
               :key="group.label"
             >
-              <h4 class="mb-1.5 text-[11px] font-medium tracking-wide text-gray-500 uppercase">
+              <h4 class="mb-1.5 text-xs font-medium tracking-wide text-gray-500 uppercase">
                 {{ t(group.label) }}
               </h4>
               <div class="grid grid-cols-2 gap-1">
@@ -120,7 +120,7 @@ function applyCustom(): void {
             </section>
           </div>
           <form class="space-y-2 border-line sm:border-l sm:pl-4" @submit.prevent="applyCustom">
-            <h4 class="mb-1.5 text-[11px] font-medium tracking-wide text-gray-500 uppercase">
+            <h4 class="mb-1.5 text-xs font-medium tracking-wide text-gray-500 uppercase">
               {{ t('usage.rangeCustom') }}
             </h4>
             <label class="block text-xs text-gray-400">

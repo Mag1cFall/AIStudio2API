@@ -18,6 +18,7 @@ type UpdateStatus struct {
 	Latest      string    `json:"latest,omitempty"`
 	Available   bool      `json:"available"`
 	Mode        string    `json:"mode"`
+	ManagedBy   string    `json:"managed_by,omitempty"`
 	Notes       string    `json:"notes,omitempty"`
 	URL         string    `json:"url,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitzero"`

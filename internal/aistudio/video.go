@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -41,7 +42,7 @@ func (err *videoNotFinishedError) ErrorCode() string {
 	return "video_not_ready"
 }
 
-// VideoImage 表示 Veo 起始帧
+// VideoImage 表示 Veo 帧图片
 type VideoImage struct {
 	InlineData *Blob
 	File       *FileRef
@@ -55,7 +56,10 @@ type VideoRequest struct {
 	DurationSeconds   int
 	Resolution        string
 	AccountID         string
+	NegativePrompt    string
 	StartImage        *VideoImage
+	LastImage         *VideoImage
+	ReferenceImages   []*VideoImage
 	RecoverWAARuntime func(context.Context, string, error) (bool, error)
 }
 
@@ -90,7 +94,14 @@ func EncodeGenerateVideoRequest(request VideoRequest) ([]byte, error) {
 		[]any{strconv.Itoa(request.DurationSeconds)},
 		request.Resolution,
 	}
-	wire := make([]any, 8)
+	if request.LastImage != nil {
+		inline, file, err := encodeVideoImage(request.LastImage)
+		if err != nil {
+			return nil, err
+		}
+		config = append(config, inline, file)
+	}
+	wire := make([]any, 8, 9)
 	wire[0] = wireModelName(request.Model)
 	wire[1] = request.Prompt
 	wire[2] = config
@@ -102,6 +113,24 @@ func EncodeGenerateVideoRequest(request VideoRequest) ([]byte, error) {
 		wire[3] = inline
 		wire[4] = file
 	}
+	if request.NegativePrompt != "" {
+		wire[5] = request.NegativePrompt
+	}
+	if len(request.ReferenceImages) > 0 {
+		references := make([]any, 0, len(request.ReferenceImages))
+		for _, image := range request.ReferenceImages {
+			inline, file, err := encodeVideoImage(image)
+			if err != nil {
+				return nil, err
+			}
+			if file != nil {
+				references = append(references, []any{nil, file})
+			} else {
+				references = append(references, []any{inline})
+			}
+		}
+		wire = append(wire, references)
+	}
 	return json.Marshal(wire)
 }
 
@@ -110,16 +139,16 @@ func encodeVideoImage(image *VideoImage) (any, any, error) {
 		return nil, nil, nil
 	}
 	if (image.InlineData == nil) == (image.File == nil) {
-		return nil, nil, fmt.Errorf("Veo 起始帧必须且只能设置 inline data 或 Drive file")
+		return nil, nil, fmt.Errorf("Veo 帧图片必须且只能设置 inline data 或 Drive file")
 	}
 	if image.InlineData != nil {
 		if !strings.HasPrefix(strings.ToLower(image.InlineData.MIME), "image/") || len(image.InlineData.Data) == 0 {
-			return nil, nil, fmt.Errorf("Veo inline 起始帧需要图片 MIME 和数据")
+			return nil, nil, fmt.Errorf("Veo inline 帧图片需要图片 MIME 和数据")
 		}
 		return []any{image.InlineData.MIME, base64.StdEncoding.EncodeToString(image.InlineData.Data)}, nil, nil
 	}
 	if strings.TrimSpace(image.File.ID) == "" {
-		return nil, nil, fmt.Errorf("Veo Drive 起始帧缺少文件 ID")
+		return nil, nil, fmt.Errorf("Veo Drive 帧图片缺少文件 ID")
 	}
 	return nil, []any{image.File.ID}, nil
 }
@@ -263,8 +292,11 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 	request = normalizeVideoRequest(request)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	resourceID := ""
-	if request.StartImage != nil && request.StartImage.File != nil {
-		resourceID = strings.TrimSpace(request.StartImage.File.ID)
+	for _, image := range append([]*VideoImage{request.StartImage, request.LastImage}, request.ReferenceImages...) {
+		if image != nil && image.File != nil {
+			resourceID = strings.TrimSpace(image.File.ID)
+			break
+		}
 	}
 	requestedAccountID := strings.TrimSpace(request.AccountID)
 	selection := AccountSelection{
@@ -340,7 +372,7 @@ func (s *PooledService) GenerateVideo(ctx context.Context, request VideoRequest)
 	return operation, generateErr
 }
 
-// GetGenerateVideoOperation 使用 operation 创建账户轮询并绑定结果文件
+// GetGenerateVideoOperation 使用 operation 创建账户轮询，首次完成时把临时结果文件复制为账户 Drive 中的视频并绑定，此后直接返回该视频；临时文件暂不可复制时报告未完成
 func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operationID string) (VideoOperation, error) {
 	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{ResourceID: strings.TrimSpace(operationID)})
 	if err != nil {
@@ -353,6 +385,16 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 			bindingErr = errors.Join(bindingErr, lease.Release())
 		}
 		return VideoOperation{}, bindingErr
+	}
+	if binding.Video.File != "" {
+		operation := VideoOperation{ID: operationID, Done: true, File: &FileRef{ID: binding.Video.File, MIME: "video/mp4"}}
+		applyVideoOperationBinding(&operation, binding)
+		if owned {
+			if err := lease.Release(); err != nil {
+				return VideoOperation{}, err
+			}
+		}
+		return operation, nil
 	}
 	operation, pollErr := s.client.GetGenerateVideoOperation(ContextWithAccountLease(ctx, lease), accountID, operationID)
 	var rpcError *RPCError
@@ -368,7 +410,15 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 			),
 		)
 		if pollErr == nil && operation.Done && operation.File != nil {
-			pollErr = lease.BindResource(operation.File.ID, "video-file")
+			var fileID string
+			fileID, pollErr = s.client.saveVideoResult(ContextWithAccountLease(ctx, lease), lease.Account(), operation.File.ID, time.Now())
+			if videoResultNotReady(pollErr) {
+				slog.Warn("视频结果临时文件暂不可复制，下次轮询重新获取", "operation", operationID, "file", operation.File.ID, "error", pollErr)
+				operation.Done, operation.File, pollErr = false, nil, nil
+			} else if pollErr == nil {
+				operation.File.ID = fileID
+				pollErr = lease.BindVideoResult(ctx, operationID, fileID)
+			}
 		}
 	} else if DefinitiveAuthenticationFailure(pollErr) {
 		pollErr = errors.Join(pollErr, lease.MarkAuthenticationRequired(pollErr.Error()))
@@ -377,6 +427,30 @@ func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operation
 		pollErr = errors.Join(pollErr, lease.Release())
 	}
 	return operation, pollErr
+}
+
+// videoResultNotReady 判断刚完成任务的临时结果文件在 Drive 复制时返回 400 或 404
+func videoResultNotReady(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.Method == "DriveCopy" &&
+		(rpcError.StatusCode == http.StatusBadRequest || rpcError.StatusCode == http.StatusNotFound)
+}
+
+// saveVideoResult 按官网视频页把任务的临时结果文件复制为以账户本地时间命名的视频并返回副本 ID
+func (c *Client) saveVideoResult(ctx context.Context, account *Account, fileID string, now time.Time) (string, error) {
+	location, err := time.LoadLocation(account.Config.Timezone)
+	if err != nil {
+		return "", err
+	}
+	token, err := c.GenerateAccessToken(ctx, account.ID)
+	if err != nil {
+		return "", err
+	}
+	drive, ok := c.transport.(DriveTransport)
+	if !ok {
+		return "", fmt.Errorf("AI Studio transport 不支持 Drive")
+	}
+	return drive.CopyDrive(ctx, account.ID, token, fileID, "Video "+now.In(location).Format("January 02, 2006 - 3:04PM")+".mp4")
 }
 
 // ListVideos 返回全部视频任务的持久元数据

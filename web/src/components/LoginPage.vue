@@ -8,6 +8,7 @@ const emit = defineEmits<{ authenticated: [session: AdminSession] }>()
 const { t, errorText } = useI18n()
 const username = ref('')
 const password = ref('')
+const remember = ref(false)
 const busy = ref(false)
 const error = ref('')
 
@@ -16,7 +17,7 @@ async function login(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    emit('authenticated', await api.login(username.value, password.value))
+    emit('authenticated', await api.login(username.value, password.value, remember.value))
   } catch (cause) {
     error.value = errorText(cause)
   } finally {
@@ -33,7 +34,7 @@ async function login(): Promise<void> {
       @submit.prevent="login"
     >
       <div class="flex items-center justify-between gap-2">
-        <h1 class="text-xl font-semibold text-white">AI Studio Proxy</h1>
+        <h1 class="text-xl font-semibold text-white">AIStudio2API</h1>
         <ThemeToggle />
       </div>
       <label class="block">
@@ -57,6 +58,10 @@ async function login(): Promise<void> {
           required
           class="w-full rounded border border-line bg-canvas px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
         />
+      </label>
+      <label class="flex w-fit cursor-pointer items-center gap-2 text-sm text-gray-300">
+        <input v-model="remember" type="checkbox" name="remember" class="size-4 accent-blue-600" />
+        {{ t('auth.remember') }}
       </label>
       <p v-if="error" role="alert" class="text-sm text-red-300">{{ error }}</p>
       <button

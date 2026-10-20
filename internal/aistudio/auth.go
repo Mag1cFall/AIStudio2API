@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
 // StateCookie 表示 Playwright storage state 中的 Cookie
@@ -97,13 +99,14 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 	return extension, true, nil
 }
 
-// IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境
+// IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境，View 不为空时登录画面显示在管理页登录窗口
 type IsolatedLoginRequest struct {
 	AccountID string
 	Directory string
 	Proxy     string
 	Locale    string
 	Timezone  string
+	View      *camoufoxnative.LiveView
 }
 
 // IsolatedLoginResult 返回独立浏览器导出的认证状态

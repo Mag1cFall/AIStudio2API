@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,23 +17,39 @@ import (
 
 type geminiVideoRequest struct {
 	Instances []struct {
-		Prompt string                 `json:"prompt"`
-		Image  *geminiVideoImageInput `json:"image"`
+		Prompt               string                      `json:"prompt"`
+		Image                *geminiVideoImageInput      `json:"image"`
+		LastFrame            *geminiVideoImageInput      `json:"lastFrame"`
+		LastFrameSnake       *geminiVideoImageInput      `json:"last_frame"`
+		ReferenceImages      []geminiVideoReferenceImage `json:"referenceImages"`
+		ReferenceImagesSnake []geminiVideoReferenceImage `json:"reference_images"`
 	} `json:"instances"`
 	Parameters struct {
-		NumberOfVideos int             `json:"numberOfVideos"`
-		SampleCount    int             `json:"sampleCount"`
-		AspectRatio    string          `json:"aspectRatio"`
-		Duration       json.RawMessage `json:"durationSeconds"`
-		Resolution     string          `json:"resolution"`
+		NumberOfVideos      int             `json:"numberOfVideos"`
+		SampleCount         int             `json:"sampleCount"`
+		AspectRatio         string          `json:"aspectRatio"`
+		Duration            json.RawMessage `json:"durationSeconds"`
+		Resolution          string          `json:"resolution"`
+		NegativePrompt      string          `json:"negativePrompt"`
+		NegativePromptSnake string          `json:"negative_prompt"`
 	} `json:"parameters"`
 }
 
+// geminiVideoImageInput 是 Veo 帧图片，接受 Gemini API 的 bytesBase64Encoded 与 Part 形式的 inlineData、fileData
 type geminiVideoImageInput struct {
+	Bytes           string                 `json:"bytesBase64Encoded"`
+	BytesSnake      string                 `json:"bytes_base64_encoded"`
+	MIMEType        string                 `json:"mimeType"`
+	MIMETypeSnake   string                 `json:"mime_type"`
 	InlineData      *geminiVideoInlineData `json:"inlineData"`
 	InlineDataSnake *geminiVideoInlineData `json:"inline_data"`
 	FileData        *geminiVideoFileData   `json:"fileData"`
 	FileDataSnake   *geminiVideoFileData   `json:"file_data"`
+}
+
+// geminiVideoReferenceImage 是 Veo 参考图
+type geminiVideoReferenceImage struct {
+	Image *geminiVideoImageInput `json:"image"`
 }
 
 type geminiVideoInlineData struct {
@@ -146,15 +163,42 @@ func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRe
 	if err != nil {
 		return aistudio.VideoRequest{}, 0, err
 	}
+	instance := request.Instances[0]
+	negative := request.Parameters.NegativePrompt
+	if negative == "" {
+		negative = request.Parameters.NegativePromptSnake
+	}
 	result := aistudio.VideoRequest{
-		Model: model, Prompt: request.Instances[0].Prompt,
+		Model: model, Prompt: instance.Prompt, NegativePrompt: negative,
 		AspectRatio: request.Parameters.AspectRatio, DurationSeconds: duration, Resolution: request.Parameters.Resolution,
 	}
-	if request.Instances[0].Image != nil {
-		result.StartImage, err = geminiVideoImage(request.Instances[0].Image)
-		if err != nil {
-			return aistudio.VideoRequest{}, 0, err
+	if instance.Image != nil {
+		if result.StartImage, err = geminiVideoImage(instance.Image); err != nil {
+			return aistudio.VideoRequest{}, 0, fmt.Errorf("image: %w", err)
 		}
+	}
+	last := instance.LastFrame
+	if last == nil {
+		last = instance.LastFrameSnake
+	}
+	if last != nil {
+		if result.LastImage, err = geminiVideoImage(last); err != nil {
+			return aistudio.VideoRequest{}, 0, fmt.Errorf("lastFrame: %w", err)
+		}
+	}
+	references := instance.ReferenceImages
+	if references == nil {
+		references = instance.ReferenceImagesSnake
+	}
+	for index, reference := range references {
+		if reference.Image == nil {
+			return aistudio.VideoRequest{}, 0, fmt.Errorf("referenceImages[%d].image is required", index)
+		}
+		image, err := geminiVideoImage(reference.Image)
+		if err != nil {
+			return aistudio.VideoRequest{}, 0, fmt.Errorf("referenceImages[%d].image: %w", index, err)
+		}
+		result.ReferenceImages = append(result.ReferenceImages, image)
 	}
 	return result, count, nil
 }
@@ -164,17 +208,23 @@ func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error
 	if inline == nil {
 		inline = input.InlineDataSnake
 	}
+	if bytes := cmp.Or(input.Bytes, input.BytesSnake); bytes != "" {
+		if inline != nil {
+			return nil, fmt.Errorf("image must contain exactly one of bytesBase64Encoded, inlineData or fileData")
+		}
+		inline = &geminiVideoInlineData{MIMEType: cmp.Or(input.MIMEType, input.MIMETypeSnake), Data: bytes}
+	}
 	file := input.FileData
 	if file == nil {
 		file = input.FileDataSnake
 	}
 	if inline != nil && file != nil {
-		return nil, fmt.Errorf("image must contain exactly one of inlineData or fileData")
+		return nil, fmt.Errorf("image must contain exactly one of bytesBase64Encoded, inlineData or fileData")
 	}
 	if inline != nil {
 		mime := inline.MIME()
 		if mime == "" || inline.Data == "" {
-			return nil, fmt.Errorf("inlineData requires mimeType and data")
+			return nil, fmt.Errorf("image requires mimeType and data")
 		}
 		data, err := decodeBase64Flexible(inline.Data)
 		if err != nil {
@@ -186,7 +236,7 @@ func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error
 	if file != nil {
 		return &aistudio.VideoImage{File: &aistudio.FileRef{ID: file.URI(), MIME: file.MIME()}}, nil
 	}
-	return nil, fmt.Errorf("image requires inlineData or fileData")
+	return nil, fmt.Errorf("image requires bytesBase64Encoded, inlineData or fileData")
 }
 
 func videoDuration(raw json.RawMessage) (int, error) {
@@ -228,7 +278,7 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 		done = done && operation.Done
 		if operation.Done && operation.File != nil {
 			samples = append(samples, map[string]any{"video": map[string]any{
-				"uri": videoContentURL(r, id), "mimeType": "video/mp4",
+				"uri": geminiVideoURI(r, operation.File.ID), "mimeType": "video/mp4",
 			}})
 		}
 	}
@@ -365,6 +415,10 @@ func openAIVideoSize(size string) (string, string, error) {
 		return "16:9", "1080p", nil
 	case "1024x1792", "1080x1920":
 		return "9:16", "1080p", nil
+	case "3840x2160":
+		return "16:9", "4k", nil
+	case "2160x3840":
+		return "9:16", "4k", nil
 	default:
 		return "", "", fmt.Errorf("unsupported size %q", size)
 	}
@@ -515,8 +569,9 @@ func cleanOperationID(value string) string {
 	return strings.TrimPrefix(strings.TrimSpace(value), "operations/")
 }
 
-func videoContentURL(r *http.Request, operationID string) string {
-	return requestOrigin(r) + "/v1/videos/" + operationID + "/content"
+// geminiVideoURI 返回视频结果的 Files API 下载地址
+func geminiVideoURI(r *http.Request, driveID string) string {
+	return requestOrigin(r) + "/v1beta/files/" + geminiFileID(driveID) + ":download?alt=media"
 }
 
 func normalizeVideoDefaults(request aistudio.VideoRequest) aistudio.VideoRequest {

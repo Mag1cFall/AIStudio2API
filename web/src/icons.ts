@@ -24,6 +24,7 @@ import {
   CircleStop,
   Coins,
   Columns3,
+  Cookie,
   Copy,
   Download,
   Gauge,
@@ -34,6 +35,7 @@ import {
   LoaderCircle,
   LogIn,
   MessageSquare,
+  Minus,
   MessagesSquare,
   MonitorUp,
   Moon,
@@ -47,6 +49,7 @@ import {
   Settings,
   Shield,
   Square,
+  SquareStack,
   Sun,
   Trash2,
   TriangleAlert,
@@ -55,6 +58,12 @@ import {
   Zap,
   X,
   Tag,
+  Plus,
+  Import,
+  Fingerprint,
+  Lock,
+  Expand,
+  Shrink,
 } from '@lucide/vue'
 
 // icons 将界面语义名映射到 Lucide 图标
@@ -115,6 +124,16 @@ export const icons = {
   sun: Sun,
   moon: Moon,
   language: Languages,
+  cookie: Cookie,
+  add: Plus,
+  importAccounts: Import,
+  fingerprint: Fingerprint,
+  windowMinimise: Minus,
+  windowMaximise: Square,
+  windowRestore: SquareStack,
+  lock: Lock,
+  zoomActual: Expand,
+  zoomFit: Shrink,
 } as const
 
 // IconName 是界面可用的图标语义名

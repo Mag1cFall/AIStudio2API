@@ -214,12 +214,14 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
                 {{ t(channelLabelKey(cooldown.channel)) }}</span
               >
             </div>
-            <span class="shrink-0 rounded bg-yellow-500/10 px-2 py-0.5 text-xs text-yellow-300">{{
-              categoryLabel(splitReason(cooldown.reason).category)
-            }}</span>
-            <time class="w-28 shrink-0 text-right font-mono text-xs text-gray-400">{{
-              formatTime(cooldown.until)
-            }}</time>
+            <div class="flex shrink-0 flex-col items-end gap-1">
+              <span class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs text-yellow-300">{{
+                categoryLabel(splitReason(cooldown.reason).category)
+              }}</span>
+              <time class="font-mono text-xs whitespace-nowrap text-gray-400">{{
+                formatTime(cooldown.until)
+              }}</time>
+            </div>
             <UiIcon name="chevronRight" :size="14" class="shrink-0 text-gray-600" />
           </button>
         </div>
@@ -272,7 +274,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
                 ></span
               >
             </div>
-            <time class="shrink-0 font-mono text-xs text-gray-500">{{
+            <time class="shrink-0 font-mono text-xs whitespace-nowrap text-gray-500">{{
               formatTime(request.started_at)
             }}</time>
             <button

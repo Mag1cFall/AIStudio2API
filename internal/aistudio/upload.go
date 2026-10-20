@@ -236,6 +236,7 @@ type DriveTransport interface {
 	UploadDrive(context.Context, string, string, UploadRequest) (FileRef, error)
 	DownloadDrive(context.Context, string, string, string) (MediaStream, error)
 	DeleteDrive(context.Context, string, string, string) error
+	CopyDrive(context.Context, string, string, string, string) (string, error)
 }
 
 // GenerateAccessToken 获取网页账户授权的短期 bearer token
@@ -1215,6 +1216,57 @@ func (t *MakerSuiteHTTPTransport) DeleteDrive(ctx context.Context, accountID str
 		return release(driveUploadRPCError("DriveDelete", response.StatusCode, responseBody))
 	}
 	return release(nil)
+}
+
+// CopyDrive 通过当前账户固定出口复制 Drive 文件并返回副本 ID
+func (t *MakerSuiteHTTPTransport) CopyDrive(ctx context.Context, accountID string, token string, fileID string, name string) (string, error) {
+	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: accountID})
+	if err != nil {
+		return "", err
+	}
+	release := func(operationErr error) error {
+		if !owned {
+			return operationErr
+		}
+		return errors.Join(operationErr, lease.Release())
+	}
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return "", release(err)
+	}
+	endpoint := driveAPIBase + "/" + url.PathEscape(strings.TrimSpace(fileID)) + "/copy"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", release(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "text/plain;charset=UTF-8")
+	client, err := t.clientForProxy(lease.Account().EffectiveProxy(t.globalProxy))
+	if err != nil {
+		return "", release(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", release(fmt.Errorf("复制 Drive 文件: %w", err))
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", release(err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", release(driveUploadRPCError("DriveCopy", response.StatusCode, responseBody))
+	}
+	var copied struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(responseBody, &copied); err != nil {
+		return "", release(fmt.Errorf("解析 Drive 复制响应: %w", err))
+	}
+	if copied.ID == "" {
+		return "", release(fmt.Errorf("Drive 复制响应缺少文件 ID"))
+	}
+	return copied.ID, release(nil)
 }
 
 func driveFilename(disposition string) string {

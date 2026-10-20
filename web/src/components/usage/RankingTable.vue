@@ -4,7 +4,8 @@ import { useI18n } from '@/i18n'
 import type { UsageDimension, UsageReport, UsageStats } from '@/types'
 import UiIcon from '../UiIcon.vue'
 import { useUsageFormat } from './format'
-import { rateTone, readPreference, successRate, writePreference } from './model'
+import { readPreference, writePreference } from '@/preference'
+import { rateTone, successRate } from './model'
 
 type Tab = UsageDimension | 'status'
 type SortKey = 'key' | 'requests' | 'rate' | 'tokens' | 'p50' | 'p95' | 'first' | 'last'
@@ -149,15 +150,15 @@ const total = computed(() => props.report.totals.requests)
       :aria-labelledby="`${id}-tab-${tab}`"
       class="relative overflow-x-auto"
     >
-      <table class="w-full min-w-[56rem] text-left text-xs">
+      <table class="w-full min-w-[56rem] text-left text-xs whitespace-nowrap">
         <thead class="text-gray-500">
           <tr>
             <th
               v-for="column in columns"
               :key="column.key"
               scope="col"
-              class="px-4 py-2 font-normal"
-              :class="column.numeric ? 'text-right' : ''"
+              class="py-2 font-normal"
+              :class="column.numeric ? 'px-2 text-right' : 'px-4'"
               :aria-sort="
                 sort.key === column.key ? (sort.descending ? 'descending' : 'ascending') : 'none'
               "
@@ -216,22 +217,22 @@ const total = computed(() => props.report.totals.requests)
                   ></div>
                 </div>
               </th>
-              <td class="px-4 py-2 text-right tabular-nums">
+              <td class="px-2 py-2 text-right tabular-nums">
                 {{ integer(row.requests) }}
                 <span class="ml-1 text-gray-500">{{
                   percent(row.requests / Math.max(total, 1), 0)
                 }}</span>
               </td>
-              <td class="px-4 py-2 text-right tabular-nums" :class="rateTone(successRate(row))">
+              <td class="px-2 py-2 text-right tabular-nums" :class="rateTone(successRate(row))">
                 {{ percent(successRate(row)) }}
               </td>
-              <td class="px-4 py-2 text-right tabular-nums">{{ compact(row.total_tokens) }}</td>
-              <td class="px-4 py-2 text-right tabular-nums">{{ duration(row.duration.p50_ms) }}</td>
-              <td class="px-4 py-2 text-right tabular-nums">{{ duration(row.duration.p95_ms) }}</td>
-              <td class="px-4 py-2 text-right tabular-nums">
+              <td class="px-2 py-2 text-right tabular-nums">{{ compact(row.total_tokens) }}</td>
+              <td class="px-2 py-2 text-right tabular-nums">{{ duration(row.duration.p50_ms) }}</td>
+              <td class="px-2 py-2 text-right tabular-nums">{{ duration(row.duration.p95_ms) }}</td>
+              <td class="px-2 py-2 text-right tabular-nums">
                 {{ duration(row.first_event.p95_ms) }}
               </td>
-              <td class="px-4 py-2 text-right whitespace-nowrap text-gray-400">
+              <td class="px-2 py-2 text-right text-gray-400">
                 {{ row.last_at ? ago(row.last_at, now) : '—' }}
               </td>
               <td class="px-2 py-2 text-right">
@@ -255,28 +256,28 @@ const total = computed(() => props.report.totals.requests)
                 <th scope="row" class="max-w-72 py-1.5 pr-4 pl-11 font-normal">
                   <span v-tooltip="child.label" class="block truncate">{{ child.label }}</span>
                 </th>
-                <td class="px-4 py-1.5 text-right tabular-nums">
+                <td class="px-2 py-1.5 text-right tabular-nums">
                   {{ integer(child.stats.requests) }}
                 </td>
                 <td
-                  class="px-4 py-1.5 text-right tabular-nums"
+                  class="px-2 py-1.5 text-right tabular-nums"
                   :class="rateTone(successRate(child.stats))"
                 >
                   {{ percent(successRate(child.stats)) }}
                 </td>
-                <td class="px-4 py-1.5 text-right tabular-nums">
+                <td class="px-2 py-1.5 text-right tabular-nums">
                   {{ compact(child.stats.total_tokens) }}
                 </td>
-                <td class="px-4 py-1.5 text-right tabular-nums">
+                <td class="px-2 py-1.5 text-right tabular-nums">
                   {{ duration(child.stats.duration.p50_ms) }}
                 </td>
-                <td class="px-4 py-1.5 text-right tabular-nums">
+                <td class="px-2 py-1.5 text-right tabular-nums">
                   {{ duration(child.stats.duration.p95_ms) }}
                 </td>
-                <td class="px-4 py-1.5 text-right tabular-nums">
+                <td class="px-2 py-1.5 text-right tabular-nums">
                   {{ duration(child.stats.first_event.p95_ms) }}
                 </td>
-                <td class="px-4 py-1.5 text-right whitespace-nowrap">
+                <td class="px-2 py-1.5 text-right">
                   {{ child.stats.last_at ? ago(child.stats.last_at, now) : '—' }}
                 </td>
                 <td></td>

@@ -10,7 +10,9 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 )
 
@@ -73,6 +75,7 @@ type runtimeManager struct {
 	current          *runtimeGeneration
 	startCancel      context.CancelFunc
 	ledger           *requestdb.Store
+	prompts          *promptdb.Store
 	logs             *logOutput
 }
 
@@ -373,10 +376,10 @@ func (manager *runtimeManager) Accounts(ctx context.Context) ([]api.AdminAccount
 }
 
 // CreateAccount 在当前生成服务创建账户
-func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.AccountCreateInput) (api.AdminAccount, error) {
+func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.AccountCreateInput, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
-	return manager.current.admin.CreateAccount(ctx, input)
+	return manager.current.admin.CreateAccount(ctx, input, view)
 }
 
 // ChromeImportProfiles 返回当前生成服务可导入的 Chrome 账号
@@ -386,6 +389,13 @@ func (manager *runtimeManager) ChromeImportProfiles(ctx context.Context) ([]api.
 	return manager.current.admin.ChromeImportProfiles(ctx)
 }
 
+// CookieBrowsers 返回当前生成服务发现的本机调试浏览器
+func (manager *runtimeManager) CookieBrowsers(ctx context.Context) ([]api.CookieBrowser, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.CookieBrowsers(ctx)
+}
+
 // ImportChromeAccounts 在当前生成服务批量导入 Chrome 账号
 func (manager *runtimeManager) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
 	manager.mu.RLock()
@@ -393,7 +403,7 @@ func (manager *runtimeManager) ImportChromeAccounts(ctx context.Context, input a
 	return manager.current.admin.ImportChromeAccounts(ctx, input)
 }
 
-// ImportAccountState 在当前生成服务导入远程配对账户
+// ImportAccountState 在当前生成服务导入远程配对或 Cookie 导入的账户
 func (manager *runtimeManager) ImportAccountState(ctx context.Context, input api.AccountStateInput) (api.AdminAccount, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
@@ -415,10 +425,10 @@ func (manager *runtimeManager) DeleteAccount(ctx context.Context, id string) err
 }
 
 // LoginAccount 在当前生成服务登录账户
-func (manager *runtimeManager) LoginAccount(ctx context.Context, id string) (api.AdminAccount, error) {
+func (manager *runtimeManager) LoginAccount(ctx context.Context, id string, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
-	return manager.current.admin.LoginAccount(ctx, id)
+	return manager.current.admin.LoginAccount(ctx, id, view)
 }
 
 // RefreshAccount 在当前生成服务立即刷新账户状态

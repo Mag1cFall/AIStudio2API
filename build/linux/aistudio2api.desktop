@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=AIStudio2API
+Comment=Google AI Studio to OpenAI, Anthropic and Gemini compatible API
+Exec=aistudio2api
+Terminal=false
+Type=Application
+Icon=aistudio2api
+Categories=Network;Development;
+StartupWMClass=aistudio2api

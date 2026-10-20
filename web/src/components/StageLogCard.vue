@@ -76,7 +76,7 @@ function renderDetails(event: Event): void {
   border: 1px solid currentColor;
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 19px;
   font-variant-numeric: tabular-nums;
 }
@@ -96,7 +96,7 @@ function renderDetails(event: Event): void {
 }
 .stage-progress {
   color: var(--color-gray-400);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .stage-detail {
@@ -108,7 +108,7 @@ function renderDetails(event: Event): void {
 .stage-details {
   margin-top: 5px;
   color: var(--color-gray-400);
-  font-size: 11px;
+  font-size: 13px;
 }
 .stage-details summary {
   display: flex;

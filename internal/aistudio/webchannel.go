@@ -166,6 +166,12 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			if request.Mode == BidiModeLive {
 				request.variant = bidiVariantFor(entry.model)
 			}
+			if err := s.client.EnsureDisclaimerAcknowledged(ContextWithAccountLease(ctx, lease), request.AccountID, request.Mode); err != nil {
+				if owned {
+					err = errors.Join(err, lease.Release())
+				}
+				return nil, err
+			}
 		}
 		runtime := RequestContext{}
 		if s.client.contextProvider != nil {

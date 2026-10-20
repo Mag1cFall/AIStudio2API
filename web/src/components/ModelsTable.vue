@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { api } from '@/api'
 import { channelLabelKey, useI18n } from '@/i18n'
-import type { Model } from '@/types'
+import type { Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
 import DetailDialog from './DetailDialog.vue'
 import UiIcon from './UiIcon.vue'
@@ -11,12 +12,64 @@ const props = defineProps<{
   models: Model[]
   loading: boolean
   error: string
+  config: ServiceConfig | null
+}>()
+const emit = defineEmits<{
+  saved: [config: ServiceConfig]
+  notice: [message: string, type: 'success' | 'error']
 }>()
 
-const { locale, t } = useI18n()
+const { locale, t, errorText } = useI18n()
 const query = useQueryText('q')
 const selectedMethod = useQueryText('method')
 const detail = ref<Model | null>(null)
+const savingChannel = ref(false)
+
+// modelChannels 与服务端一致解析 MODEL_CHANNELS 为模型到限定通道的映射：模型 ID 去掉 models/ 前缀，通道转为小写
+function modelChannels(value: string): Map<string, string> {
+  const channels = new Map<string, string>()
+  for (const item of value.split(',')) {
+    const index = item.lastIndexOf(':')
+    if (index > 0)
+      channels.set(
+        item.slice(0, index).trim().replace(/^models\//, ''),
+        item.slice(index + 1).trim().toLowerCase(),
+      )
+  }
+  return channels
+}
+
+// channelChoices 是详情中可选的通道：全部通道与每个已启用通道
+const channelChoices = computed<('' | UpstreamChannel)[]>(() => [
+  '',
+  ...(props.config?.upstream_channels ?? []),
+])
+
+// modelChannel 返回模型限定的通道，未限定时为空
+function modelChannel(model: Model): string {
+  return modelChannels(props.config?.model_channels ?? '').get(model.id) ?? ''
+}
+
+// setModelChannel 保存模型限定的通道，空值表示使用全部已启用通道
+async function setModelChannel(model: Model, channel: string): Promise<void> {
+  if (props.config === null || modelChannel(model) === channel) return
+  const channels = modelChannels(props.config.model_channels)
+  if (channel === '') channels.delete(model.id)
+  else channels.set(model.id, channel)
+  savingChannel.value = true
+  try {
+    const saved = await api.saveConfig({
+      ...props.config,
+      model_channels: [...channels].map(([id, value]) => `${id}:${value}`).join(','),
+    })
+    emit('saved', saved)
+    emit('notice', t('models.channelSaved'), 'success')
+  } catch (error) {
+    emit('notice', errorText(error), 'error')
+  } finally {
+    savingChannel.value = false
+  }
+}
 
 const methods = computed(() =>
   [...new Set(props.models.flatMap((model) => model.methods))].sort((left, right) =>
@@ -136,7 +189,7 @@ function tokenLimit(value: number | undefined): string {
               }}</span>
               <span
                 v-if="model.paid"
-                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
               >
                 {{ t('models.paid') }}
               </span>
@@ -149,17 +202,21 @@ function tokenLimit(value: number | undefined): string {
             <span
               v-for="channel in model.channels ?? []"
               :key="channel"
-              class="rounded border border-green-900/50 bg-green-900/20 px-1.5 py-0.5 text-[11px] text-green-300"
+              class="rounded border border-green-900/50 bg-green-900/20 px-1.5 py-0.5 text-xs text-green-300"
             >
               {{ t(channelLabelKey(channel)) }}
             </span>
           </div>
-          <span class="w-24 shrink-0 text-right font-mono text-xs text-gray-400">
-            <span class="block text-[10px] text-gray-600">{{ t('models.context') }}</span>
+          <span class="hidden w-28 shrink-0 text-right font-mono text-xs text-gray-400 sm:block">
+            <span class="block font-sans whitespace-nowrap text-gray-600">{{
+              t('models.context')
+            }}</span>
             {{ tokenLimit(model.input_token_limit) }}
           </span>
-          <span class="w-20 shrink-0 text-right font-mono text-xs text-gray-400">
-            <span class="block text-[10px] text-gray-600">{{ t('models.output') }}</span>
+          <span class="hidden w-28 shrink-0 text-right font-mono text-xs text-gray-400 sm:block">
+            <span class="block font-sans whitespace-nowrap text-gray-600">{{
+              t('models.output')
+            }}</span>
             {{ tokenLimit(outputLimit(model)) }}
           </span>
           <UiIcon name="chevronRight" :size="14" class="shrink-0 text-gray-600" />
@@ -190,15 +247,40 @@ function tokenLimit(value: number | undefined): string {
             <dd class="text-gray-200">{{ tokenLimit(outputLimit(detail)) }}</dd>
             <dd
               v-if="detail.capabilities?.output_continuation"
-              class="mt-0.5 font-sans text-[11px] text-gray-500"
+              class="mt-0.5 font-sans text-xs text-gray-500"
             >
               {{ t('models.continuation') }}
             </dd>
           </div>
         </dl>
         <div v-if="detail.channels?.length">
-          <span class="mb-2 block text-xs text-gray-500">{{ t('models.channels') }}</span>
-          <div class="flex flex-wrap gap-2">
+          <span id="model-channel-label" class="mb-2 block text-xs text-gray-500">{{
+            t('models.channels')
+          }}</span>
+          <div
+            v-if="config && channelChoices.length > 2 && detail.methods.includes('generateContent')"
+            role="group"
+            aria-labelledby="model-channel-label"
+            class="flex flex-wrap gap-2"
+          >
+            <button
+              v-for="channel in channelChoices"
+              :key="channel"
+              type="button"
+              class="rounded px-2.5 py-1 text-xs transition disabled:opacity-50"
+              :class="
+                modelChannel(detail) === channel
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-raised text-gray-400 hover:text-gray-200'
+              "
+              :aria-pressed="modelChannel(detail) === channel"
+              :disabled="savingChannel"
+              @click="setModelChannel(detail, channel)"
+            >
+              {{ channel === '' ? t('models.channelAll') : t(channelLabelKey(channel)) }}
+            </button>
+          </div>
+          <div v-else class="flex flex-wrap gap-2">
             <span
               v-for="channel in detail.channels"
               :key="channel"

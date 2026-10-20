@@ -52,6 +52,11 @@ var aspectRatios = map[int64]string{
 var imageResolutions = map[int64]string{1: "1K", 2: "2K", 3: "4K", 4: "512"}
 var videoDurations = map[int64]string{1: "5", 2: "6", 3: "7", 4: "8", 5: "4"}
 var videoResolutions = map[int64]string{1: "720p", 2: "1080p", 3: "4k", 4: "368p", 5: "360p"}
+var videoFrameRates = map[int64]string{1: "24fps"}
+var videoTasks = map[int64]string{1: "text_to_video", 2: "image_to_video", 3: "reference_to_video", 4: "edit", 5: "extend"}
+
+// videoInputs 为视频能力 field 70[7] 中的输入方式编号，4 为起始帧与尾帧，5 为参考图
+var videoInputs = map[int64]string{4: "frames", 5: "reference_images"}
 
 // GenerationDefaults 保存 ListModels 返回的生成默认值
 type GenerationDefaults struct {
@@ -70,6 +75,10 @@ type GenerationDefaults struct {
 	OutputResolution bool
 	// InteractionStream 表示官网经 CreateInteractionStream 生成的模型
 	InteractionStream bool
+	// InteractionTask 表示官网经 CreateInteraction 创建后台任务、经 GetInteractionStream 读取结果的模型
+	InteractionTask bool
+	// VideoResolution 为视频输出分辨率选项中的第一项，Interaction 视频输出格式的默认分辨率
+	VideoResolution string
 	// ContinuedOutputTokens 表示自动续写模型的输出总上限，其他模型为 0
 	ContinuedOutputTokens int64
 }
@@ -203,6 +212,18 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	if err != nil {
 		return modelEntry{}, err
 	}
+	voices, err := decodeVoiceDetails(rawAt(row, 66), path+"[66]", raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	liveVoices, err := decodeVoiceDetails(rawAt(row, 65), path+"[65]", raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	languages, err := decodeLanguages(rawAt(row, 67), path+"[67]", raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
 	id := strings.TrimPrefix(wireName, "models/")
 	if id == "" {
 		return modelEntry{}, &ProtocolEvidenceError{Method: "ListModels", Path: path + "[0]", Detail: "模型 ID 为空", Raw: raw}
@@ -216,6 +237,8 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		OutputTokenLimit:  outputLimit,
 		Capabilities:      capabilities,
 		CapabilityOptions: options,
+		VoiceDetails:      append(voices, liveVoices...),
+		Languages:         languages,
 		AccessModes:       append([]int64(nil), accessModes...),
 		Paid:              paidCode == 2,
 	}
@@ -226,7 +249,114 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	if capabilities["output_continuation"] {
 		defaults.ContinuedOutputTokens = inputLimit
 	}
+	model.Temperature, model.TopP, model.TopK = defaults.Temperature, defaults.TopP, defaults.TopK
+	if field := rawAt(row, 27); !isJSONNull(field) {
+		value, err := rawFloat64(field, path+"[27]", raw)
+		if err != nil {
+			return modelEntry{}, withMethod(err, "ListModels")
+		}
+		model.MaxTemperature = &value
+	}
+	compatibility, err := decodeToolCompatibility(rawAt(row, 47), path+"[47]", raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	model.ToolCompatibility = compatibility
+	if model.Details, err = decodeModelDetails(rawAt(row, 38), path+"[38]", raw); err != nil {
+		return modelEntry{}, err
+	}
+	if defaults.ThinkingLevel {
+		for _, level := range defaults.ThinkingLevels {
+			if name, ok := buildThinkingLevels[level]; ok {
+				model.ThinkingLevels = append(model.ThinkingLevels, name)
+			}
+		}
+		model.DefaultThinkingLevel = buildThinkingLevels[defaults.DefaultThinkingLevel]
+	}
+	if defaults.ThinkingBudget {
+		if model.ThinkingBudget, err = decodeThinkingBudget(rawAt(row, 71), path+"[71]", raw); err != nil {
+			return modelEntry{}, err
+		}
+	}
 	return modelEntry{model: model, defaults: defaults}, nil
+}
+
+// decodeThinkingBudget 解析 field 72 的思考预算：field 1 默认值、2 上限、3 下限、4 能否关闭思考
+func decodeThinkingBudget(value json.RawMessage, path string, evidence json.RawMessage) (*ThinkingBudget, error) {
+	if isJSONNull(value) {
+		return nil, nil
+	}
+	message, err := rawArray(value, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "ListModels")
+	}
+	budget := &ThinkingBudget{}
+	for index, target := range []**int64{&budget.Default, &budget.Max, &budget.Min} {
+		if field := rawAt(message, index); !isJSONNull(field) {
+			number, err := rawInt64(field, fmt.Sprintf("%s[%d]", path, index), evidence)
+			if err != nil {
+				return nil, withMethod(err, "ListModels")
+			}
+			*target = &number
+		}
+	}
+	if field := rawAt(message, 3); !isJSONNull(field) {
+		flag, err := rawInt64(field, path+"[3]", evidence)
+		if err != nil {
+			return nil, withMethod(err, "ListModels")
+		}
+		disable := flag != 0
+		budget.CanDisable = &disable
+	}
+	return budget, nil
+}
+
+// toolNames 是 ListModels field 48 工具兼容对中的工具编号
+var toolNames = map[int64]string{
+	1: "code_execution", 2: "function_declarations", 3: "structured_output", 5: "google_search",
+	6: "url_context", 7: "image_search", 8: "google_maps",
+}
+
+// decodeToolCompatibility 解析 field 48 的工具兼容对，未知编号写为 tool_<N>
+func decodeToolCompatibility(value json.RawMessage, path string, evidence json.RawMessage) ([][2]string, error) {
+	if isJSONNull(value) {
+		return nil, nil
+	}
+	message, err := rawArray(value, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "ListModels")
+	}
+	if isJSONNull(rawAt(message, 0)) {
+		return nil, nil
+	}
+	pairs, err := rawArray(rawAt(message, 0), path+"[0]", evidence)
+	if err != nil {
+		return nil, withMethod(err, "ListModels")
+	}
+	name := func(code int64) string {
+		if known, ok := toolNames[code]; ok {
+			return known
+		}
+		return "tool_" + strconv.FormatInt(code, 10)
+	}
+	result := make([][2]string, 0, len(pairs))
+	for index, pair := range pairs {
+		pairPath := fmt.Sprintf("%s[0][%d]", path, index)
+		fields, err := rawArray(pair, pairPath, evidence)
+		if err != nil {
+			return nil, withMethod(err, "ListModels")
+		}
+		first, err := optionalIntField(fields, 0, pairPath, evidence)
+		if err != nil {
+			return nil, err
+		}
+		second, err := optionalIntField(fields, 1, pairPath, evidence)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, [2]string{name(first), name(second)})
+	}
+	return result, nil
 }
 
 func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.RawMessage) (map[string][]string, error) {
@@ -240,7 +370,16 @@ func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.R
 	if err != nil {
 		return nil, err
 	}
-	appendOption(options, "voices", voices)
+	liveVoices, err := decodeFirstStrings(rawAt(row, 65), path+"[65]", evidence)
+	if err != nil {
+		return nil, err
+	}
+	appendOption(options, "voices", append(voices, liveVoices...))
+	languages, err := decodeFirstStrings(rawAt(row, 67), path+"[67]", evidence)
+	if err != nil {
+		return nil, err
+	}
+	appendOption(options, "languages", languages)
 	imageRatios, err := decodeMappedCodes(rawAt(row, 75), path+"[75]", evidence, aspectRatios)
 	if err != nil {
 		return nil, err
@@ -280,7 +419,33 @@ func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.R
 			resolutions = []string{"720p", "1080p", "4k"}
 		}
 		appendOption(options, "video_output_resolutions", resolutions)
+		inputs, err := decodeMappedCodes(rawAt(video, 7), path+"[70][7]", evidence, videoInputs)
+		if err != nil {
+			return nil, err
+		}
+		appendOption(options, "video_inputs", inputs)
+		// field 70[10] 为时长滑块的下限、上限、步长与默认值，记为 名称=秒数
+		durationRange, err := decodeMappedCodes(rawAt(video, 10), path+"[70][10]", evidence, nil)
+		if err != nil {
+			return nil, err
+		}
+		for index, name := range []string{"min", "max", "step", "default"} {
+			if index < len(durationRange) {
+				durationRange[index] = name + "=" + durationRange[index]
+			}
+		}
+		appendOption(options, "video_duration_range", durationRange)
+		frameRates, err := decodeMappedCodes(rawAt(video, 11), path+"[70][11]", evidence, videoFrameRates)
+		if err != nil {
+			return nil, err
+		}
+		appendOption(options, "video_frame_rates", frameRates)
 	}
+	tasks, err := decodeMappedCodes(rawAt(row, 84), path+"[84]", evidence, videoTasks)
+	if err != nil {
+		return nil, err
+	}
+	appendOption(options, "video_tasks", tasks)
 	if len(options) == 0 {
 		return nil, nil
 	}
@@ -338,6 +503,20 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 			}
 		}
 		defaults.InteractionStream = kind == 2 && !background
+		defaults.InteractionTask = background
+	}
+	if video := rawAt(row, 70); !isJSONNull(video) {
+		items, err := rawArray(video, path+"[70]", evidence)
+		if err != nil {
+			return GenerationDefaults{}, withMethod(err, "ListModels")
+		}
+		resolutions, err := decodeMappedCodes(rawAt(items, 9), path+"[70][9]", evidence, videoResolutions)
+		if err != nil {
+			return GenerationDefaults{}, err
+		}
+		if len(resolutions) > 0 {
+			defaults.VideoResolution = resolutions[0]
+		}
 	}
 	if raw := rawAt(row, 71); !isJSONNull(raw) {
 		thinking, err := rawArray(raw, path+"[71]", evidence)
@@ -545,6 +724,93 @@ func decodeAliases(raw json.RawMessage, path string, evidence json.RawMessage) (
 	return aliases, nil
 }
 
+// decodeVoiceDetails 读取 field 67（TTS）或 field 66（Live）的音色介绍：名称、试听地址、音高、描述列表、语言、口音、性别、特质与用途
+func decodeVoiceDetails(raw json.RawMessage, path string, evidence json.RawMessage) ([]VoiceDetail, error) {
+	if isJSONNull(raw) {
+		return nil, nil
+	}
+	items, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "ListModels")
+	}
+	voices := make([]VoiceDetail, 0, len(items))
+	for index, item := range items {
+		itemPath := fmt.Sprintf("%s[%d]", path, index)
+		row, err := rawArray(item, itemPath, evidence)
+		if err != nil {
+			return nil, withMethod(err, "ListModels")
+		}
+		text := func(field int) (string, error) {
+			value := rawAt(row, field)
+			if isJSONNull(value) {
+				return "", nil
+			}
+			result, err := rawString(value, fmt.Sprintf("%s[%d]", itemPath, field), evidence)
+			return result, withMethod(err, "ListModels")
+		}
+		var voice VoiceDetail
+		for field, target := range []*string{&voice.Name, &voice.SampleURL, &voice.Pitch} {
+			if *target, err = text(field); err != nil {
+				return nil, err
+			}
+		}
+		if voice.Name == "" {
+			continue
+		}
+		if descriptions := rawAt(row, 3); !isJSONNull(descriptions) {
+			list, err := rawArray(descriptions, itemPath+"[3]", evidence)
+			if err != nil {
+				return nil, withMethod(err, "ListModels")
+			}
+			for position, entry := range list {
+				description, err := rawString(entry, fmt.Sprintf("%s[3][%d]", itemPath, position), evidence)
+				if err != nil {
+					return nil, withMethod(err, "ListModels")
+				}
+				voice.Descriptions = append(voice.Descriptions, description)
+			}
+		}
+		for field, target := range map[int]*string{4: &voice.Locale, 5: &voice.Accent, 6: &voice.Gender, 7: &voice.Trait, 8: &voice.UseCase} {
+			if *target, err = text(field); err != nil {
+				return nil, err
+			}
+		}
+		voices = append(voices, voice)
+	}
+	return voices, nil
+}
+
+// decodeLanguages 解析 ListModels field 68 的 [语言代码, 显示名] 列表
+func decodeLanguages(raw json.RawMessage, path string, evidence json.RawMessage) ([]Language, error) {
+	if isJSONNull(raw) {
+		return nil, nil
+	}
+	items, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "ListModels")
+	}
+	languages := make([]Language, 0, len(items))
+	for index, item := range items {
+		itemPath := fmt.Sprintf("%s[%d]", path, index)
+		row, err := rawArray(item, itemPath, evidence)
+		if err != nil {
+			return nil, withMethod(err, "ListModels")
+		}
+		var language Language
+		for field, target := range []*string{&language.Code, &language.Name} {
+			if value := rawAt(row, field); !isJSONNull(value) {
+				if *target, err = rawString(value, fmt.Sprintf("%s[%d]", itemPath, field), evidence); err != nil {
+					return nil, withMethod(err, "ListModels")
+				}
+			}
+		}
+		if language.Code != "" {
+			languages = append(languages, language)
+		}
+	}
+	return languages, nil
+}
+
 func decodeFirstStrings(raw json.RawMessage, path string, evidence json.RawMessage) ([]string, error) {
 	if isJSONNull(raw) {
 		return nil, nil
@@ -571,6 +837,7 @@ func decodeFirstStrings(raw json.RawMessage, path string, evidence json.RawMessa
 	return values, nil
 }
 
+// decodeMappedCodes 把枚举数组按 mapping 换成名称，mapping 为 nil 时保留数值
 func decodeMappedCodes(raw json.RawMessage, path string, evidence json.RawMessage, mapping map[int64]string) ([]string, error) {
 	if isJSONNull(raw) {
 		return nil, nil
@@ -585,7 +852,9 @@ func decodeMappedCodes(raw json.RawMessage, path string, evidence json.RawMessag
 		if err != nil {
 			return nil, withMethod(err, "ListModels")
 		}
-		if value, exists := mapping[code]; exists {
+		if mapping == nil {
+			values = append(values, strconv.FormatInt(code, 10))
+		} else if value, exists := mapping[code]; exists {
 			values = append(values, value)
 		}
 	}
@@ -604,6 +873,8 @@ func cloneModels(models []Model) []Model {
 		result[index] = model
 		result[index].Methods = append([]string(nil), model.Methods...)
 		result[index].AccessModes = append([]int64(nil), model.AccessModes...)
+		result[index].ThinkingLevels = append([]string(nil), model.ThinkingLevels...)
+		result[index].ToolCompatibility = append([][2]string(nil), model.ToolCompatibility...)
 		if model.Capabilities != nil {
 			result[index].Capabilities = make(map[string]bool, len(model.Capabilities))
 			for key, value := range model.Capabilities {

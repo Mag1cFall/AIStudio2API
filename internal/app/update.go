@@ -24,7 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/minio/selfupdate"
 	"golang.org/x/mod/semver"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
@@ -84,8 +83,11 @@ func newSelfUpdater(version, executable string, proxy func() string, log func(le
 	}
 }
 
-// updateMode 返回更新方式：binary 可原地替换，container 随镜像更新，development 为源码构建
+// updateMode 返回更新方式：managed 由分发方更新，binary 可原地替换，download 下载新版本安装，container 随镜像更新，development 为源码构建
 func updateMode(version string) string {
+	if managedBy != "" {
+		return "managed"
+	}
 	if !semver.IsValid(version) || semver.Prerelease(version) != "" || semver.Build(version) != "" {
 		return "development"
 	}
@@ -94,13 +96,13 @@ func updateMode(version string) string {
 			return "container"
 		}
 	}
-	return "binary"
+	return platformUpdateMode()
 }
 
 // UpdateStatus 返回当前版本与最新发行版本，refresh 为 true 或缓存过期时重新读取
 func (u *selfUpdater) UpdateStatus(ctx context.Context, refresh bool) (api.UpdateStatus, error) {
 	u.mu.Lock()
-	stale := refresh || time.Since(u.checked) >= releaseCheckInterval
+	stale := u.mode != "managed" && (refresh || time.Since(u.checked) >= releaseCheckInterval)
 	u.mu.Unlock()
 	if stale {
 		release, err := u.fetchRelease(ctx)
@@ -122,6 +124,10 @@ func (u *selfUpdater) UpdateStatus(ctx context.Context, refresh bool) (api.Updat
 // ApplyUpdate 下载最新发行包，校验摘要后替换当前可执行文件并重启管理进程
 func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error) {
 	u.mu.Lock()
+	if u.mode == "managed" {
+		u.mu.Unlock()
+		return api.UpdateStatus{}, updateConflictError("在线更新由 " + managedBy + " 管理")
+	}
 	if u.mode != "binary" {
 		u.mu.Unlock()
 		return api.UpdateStatus{}, updateConflictError("当前运行方式不支持在线更新")
@@ -156,7 +162,7 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 
 // statusLocked 在持有锁时生成更新状态
 func (u *selfUpdater) statusLocked() api.UpdateStatus {
-	status := api.UpdateStatus{Current: u.version, Mode: u.mode, CheckedAt: u.checked, Updating: u.updating}
+	status := api.UpdateStatus{Current: u.version, Mode: u.mode, ManagedBy: managedBy, CheckedAt: u.checked, Updating: u.updating}
 	if u.checkErr != nil {
 		status.Error = u.checkErr.Error()
 	}
@@ -181,42 +187,30 @@ func (u *selfUpdater) fetchRelease(ctx context.Context) (*githubRelease, error) 
 	return &release, nil
 }
 
-// install 下载当前系统与架构的发行包，校验 SHA-256 后替换可执行文件
-func (u *selfUpdater) install(ctx context.Context, release *githubRelease) error {
-	name, binary := releasePackage(release.TagName)
+// download 下载 release 中名为 name 的发行包并按发行版本记录的 SHA-256 校验
+func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name string) ([]byte, error) {
 	index := slices.IndexFunc(release.Assets, func(asset githubAsset) bool { return asset.Name == name })
 	if index < 0 {
-		return fmt.Errorf("发行版本 %s 没有 %s", release.TagName, name)
+		return nil, fmt.Errorf("发行版本 %s 没有 %s", release.TagName, name)
 	}
 	asset := release.Assets[index]
 	expected, ok := strings.CutPrefix(asset.Digest, "sha256:")
 	if !ok {
-		return fmt.Errorf("发行包 %s 缺少 SHA-256 摘要", name)
+		return nil, fmt.Errorf("发行包 %s 缺少 SHA-256 摘要", name)
 	}
 	response, err := u.get(ctx, asset.URL, "application/octet-stream")
 	if err != nil {
-		return fmt.Errorf("下载 %s: %w", name, err)
+		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
 	archive, err := io.ReadAll(response.Body)
 	response.Body.Close()
 	if err != nil {
-		return fmt.Errorf("下载 %s: %w", name, err)
+		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
 	if sum := sha256.Sum256(archive); hex.EncodeToString(sum[:]) != expected {
-		return fmt.Errorf("发行包 %s 的 SHA-256 与发行版本记录不一致", name)
+		return nil, fmt.Errorf("发行包 %s 的 SHA-256 与发行版本记录不一致", name)
 	}
-	executable, err := extractExecutable(archive, name, binary)
-	if err != nil {
-		return err
-	}
-	u.log("INFO", "在线更新 | 2/2 | 替换可执行文件 | 版本="+release.TagName)
-	if err := selfupdate.Apply(bytes.NewReader(executable), selfupdate.Options{TargetPath: u.executable}); err != nil {
-		if rollback := selfupdate.RollbackError(err); rollback != nil {
-			return fmt.Errorf("替换可执行文件: %w；恢复原文件失败: %v", err, rollback)
-		}
-		return fmt.Errorf("替换可执行文件: %w", err)
-	}
-	return nil
+	return archive, nil
 }
 
 // get 经管理进程出口发出 GET，非 200 响应返回错误
@@ -244,15 +238,6 @@ func (u *selfUpdater) get(ctx context.Context, address, accept string) (*http.Re
 		return nil, fmt.Errorf("HTTP %d %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return response, nil
-}
-
-// releasePackage 返回当前系统与架构的发行包文件名与其中的可执行文件名
-func releasePackage(tag string) (string, string) {
-	base := fmt.Sprintf("aistudio2api-%s-%s-%s", tag, runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		return base + ".zip", "aistudio2api.exe"
-	}
-	return base + ".tar.gz", "aistudio2api"
 }
 
 // extractExecutable 从 zip 或 tar.gz 发行包中取出可执行文件

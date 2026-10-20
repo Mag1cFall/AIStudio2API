@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base32"
@@ -473,11 +474,15 @@ func requestOrigin(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// handleGeminiFileGet 返回上传文件的 File 资源
+// handleGeminiFileGet 返回上传文件的 File 资源，files/{name}:download 返回文件内容
 func (s *server) handleGeminiFileGet(w http.ResponseWriter, r *http.Request) {
 	service, ok := s.service.(aistudio.FileService)
 	if !ok {
 		writeGeminiError(w, http.StatusBadRequest, "FAILED_PRECONDITION", "file metadata is unavailable")
+		return
+	}
+	if name, download := strings.CutSuffix(r.PathValue("file"), ":download"); download {
+		s.handleGeminiFileDownload(w, r, service, name)
 		return
 	}
 	driveID, ok := geminiDriveID(r.PathValue("file"))
@@ -491,6 +496,42 @@ func (s *server) handleGeminiFileGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, geminiFileObject(metadata))
+}
+
+// handleGeminiFileURIGet 处理官方 Python SDK 对非 https 文件 uri 拼出的 files/<uri> 路径，取 uri 中最后一个 files/ 之后的文件名
+func (s *server) handleGeminiFileURIGet(w http.ResponseWriter, r *http.Request) {
+	uri := r.PathValue("uri")
+	index := strings.LastIndex(uri, "/files/")
+	if index < 0 {
+		writeGeminiFileNotFound(w, uri)
+		return
+	}
+	r.SetPathValue("file", uri[index+len("/files/"):])
+	s.handleGeminiFileGet(w, r)
+}
+
+// handleGeminiFileDownload 返回文件内容
+func (s *server) handleGeminiFileDownload(w http.ResponseWriter, r *http.Request, service aistudio.FileService, name string) {
+	driveID, ok := geminiDriveID(name)
+	if !ok {
+		writeGeminiFileNotFound(w, name)
+		return
+	}
+	media, err := service.DownloadFile(r.Context(), driveID)
+	if err != nil {
+		writeGeminiFileError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", cmp.Or(strings.TrimSpace(media.MIME), "application/octet-stream"))
+	if media.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(media.Size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, copyErr := io.Copy(w, media.Body)
+	closeErr := media.Body.Close()
+	if requestErr := errors.Join(copyErr, closeErr); requestErr != nil {
+		SetAccessLogError(r.Context(), requestErr)
+	}
 }
 
 // handleGeminiFileDelete 删除上传文件并返回空对象

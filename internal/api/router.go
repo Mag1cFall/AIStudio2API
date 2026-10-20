@@ -17,7 +17,10 @@ type Config struct {
 	AdminAuthEnabled bool
 	AdminUsername    string
 	AdminPassword    string
+	// AdminSessionPath 是记住我的管理会话文件
+	AdminSessionPath string
 	Ledger           RequestLedger
+	Prompts          PromptStore
 	Updates          UpdateService
 }
 
@@ -28,6 +31,7 @@ type server struct {
 	uploads           *geminiUploads
 	thoughtSignatures *thoughtSignatureStore
 	pairing           *pairingTokens
+	loginViews        *loginViews
 	// background 按响应 ID 保存进行中的 Responses 后台响应
 	background sync.Map
 }
@@ -38,7 +42,7 @@ var idSequence atomic.Uint64
 func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{
 		service: service, config: config, responseStates: newResponseStateStore(), uploads: newGeminiUploads(),
-		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{},
+		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{},
 	}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
@@ -86,6 +90,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	public.HandleFunc("POST /upload/v1beta/files", s.handleGeminiFileUpload)
 	public.HandleFunc("GET /v1beta/files", s.handleGeminiFileList)
 	public.HandleFunc("GET /v1beta/files/{file}", s.handleGeminiFileGet)
+	public.HandleFunc("GET /v1beta/files/{uri...}", s.handleGeminiFileURIGet)
 	public.HandleFunc("DELETE /v1beta/files/{file}", s.handleGeminiFileDelete)
 
 	control := http.NewServeMux()
@@ -96,6 +101,9 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	}
 	if config.Ledger != nil {
 		s.registerLedger(control)
+	}
+	if config.Prompts != nil {
+		s.registerPrompts(control)
 	}
 	if config.Updates != nil {
 		s.registerUpdates(control)

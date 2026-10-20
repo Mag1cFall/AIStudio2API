@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0d1117" />
-    <meta name="color-scheme" content="dark" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <title>AI Studio 控制台</title>
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>AIStudio2API</title>
     <script>
       document.documentElement.dataset.theme =
-        localStorage.getItem('user_theme') === 'light' ? 'light' : 'dark'
+        { light: 'light', dark: 'dark' }[localStorage.getItem('user_theme')] ??
+        (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
     </script>
   </head>
   <body>

@@ -2,6 +2,7 @@ package camoufoxnative
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,13 +10,17 @@ import (
 	"strings"
 )
 
-// FindExecutable 定位源码环境或 Release 自带的 Camoufox，都没有时经 proxy 下载，proxy 为空时直连
+// FindExecutable 定位与 camoufoxRelease 同版本的 Camoufox，都没有时经 proxy 下载，proxy 为空时直连
 func FindExecutable(ctx context.Context, proxy string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if configured := strings.TrimSpace(os.Getenv("CAMOUFOX_PATH")); configured != "" {
-		return validateCamoufoxExecutable(configured)
+		path, err := validateCamoufoxExecutable(configured)
+		if err != nil {
+			return "", fmt.Errorf("CAMOUFOX_PATH: %w", err)
+		}
+		return path, nil
 	}
 	name, err := camoufoxExecutablePath()
 	if err != nil {
@@ -71,5 +76,35 @@ func validateCamoufoxExecutable(path string) (string, error) {
 	if info.IsDir() {
 		return "", fmt.Errorf("Camoufox 路径是目录")
 	}
+	version, err := camoufoxVersion(absolute)
+	if err != nil {
+		return "", err
+	}
+	if version != camoufoxRelease {
+		return "", fmt.Errorf("Camoufox 版本 %s 与要求的 %s 不一致", version, camoufoxRelease)
+	}
 	return absolute, nil
+}
+
+// camoufoxVersion 读取发行目录 application.ini 中的 Camoufox 版本
+func camoufoxVersion(executable string) (string, error) {
+	directory := filepath.Dir(executable)
+	for _, candidate := range []string{
+		filepath.Join(directory, "application.ini"),
+		filepath.Join(filepath.Dir(directory), "Resources", "application.ini"),
+	} {
+		data, err := os.ReadFile(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("读取 Camoufox 版本: %w", err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if version, found := strings.CutPrefix(strings.TrimSpace(line), "Version="); found {
+				return strings.TrimSpace(version), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("Camoufox 缺少 application.ini 版本")
 }

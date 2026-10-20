@@ -108,9 +108,29 @@ func encodeGoogleTimestamp(value time.Time) []any {
 	return []any{strconv.FormatInt(value.Unix(), 10)}
 }
 
+// functionBehaviors 是 FunctionDeclaration field 5 的取值
+var functionBehaviors = map[string]int64{"BLOCKING": 1, "NON_BLOCKING": 2}
+
+// functionBehavior 返回函数调用方式的规范名称与 wire 取值，未设置或为 UNSPECIFIED 时返回空名称
+func functionBehavior(declaration FunctionDeclaration) (string, int64, error) {
+	name := strings.ToUpper(declaration.Behavior)
+	if name == "" || name == "UNSPECIFIED" {
+		return "", 0, nil
+	}
+	value, ok := functionBehaviors[name]
+	if !ok {
+		return "", 0, fmt.Errorf("behavior %q 无效，可用 BLOCKING 或 NON_BLOCKING", declaration.Behavior)
+	}
+	return name, value, nil
+}
+
 func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if declaration.Name == "" {
 		return nil, fmt.Errorf("function declaration 缺少名称")
+	}
+	behavior, behaviorValue, err := functionBehavior(declaration)
+	if err != nil {
+		return nil, err
 	}
 	raw, err := normalizeFunctionParameters(declaration.Parameters)
 	if err != nil {
@@ -140,6 +160,9 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 		description += "\nArguments must follow this JSON Schema: " + string(raw)
 	}
 	projectToolSchema(parameters)
+	if behavior != "" {
+		return []any{declaration.Name, description, parameters, nil, behaviorValue}, nil
+	}
 	return []any{declaration.Name, description, parameters}, nil
 }
 
