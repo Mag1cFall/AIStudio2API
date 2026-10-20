@@ -58,7 +58,7 @@ func Discover(chromeRoot string) ([]Account, error) {
 	return discoverPlatform(chromeRoot)
 }
 
-// Import 通过设备绑定 OAuth 材料生成 Playwright storage state
+// Import 用本机 Chrome 的 OAuth 续签材料生成 Playwright storage state
 func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) {
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 	return results, nil
 }
 
-// Refresh 使用保存的设备绑定材料重新签发 Google Cookie
+// Refresh 使用保存的 OAuth 续签材料重新签发 Google Cookie
 func Refresh(ctx context.Context, material aistudio.ChromeOAuthMaterial, proxy string) ([]aistudio.StateCookie, error) {
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err

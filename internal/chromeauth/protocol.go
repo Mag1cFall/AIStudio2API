@@ -38,8 +38,10 @@ func multiloginStatusError(phase string, statusCode int, status string) error {
 	return err
 }
 
+// multiloginURL 是 OAuthMultilogin 的地址
+var multiloginURL = "https://accounts.google.com/oauth/multilogin?source=ChromiumAccountReconcilorDice&reuseCookies=0"
+
 const (
-	multiloginURL     = "https://accounts.google.com/oauth/multilogin?source=ChromiumAccountReconcilorDice&reuseCookies=0"
 	oauthClientID     = "77185425430.apps.googleusercontent.com"
 	assertionAudience = "https://accounts.google.com/accountmanager"
 	assertionSentinel = "DBSC_CHALLENGE_IF_REQUIRED"
@@ -74,7 +76,36 @@ type deviceBindingKey interface {
 	Close()
 }
 
+// fetchGoogleCookies 用 refresh token 经 OAuthMultilogin 取得 Google Cookie，有设备绑定密钥时走 DBSC 挑战与 HPKE 解密，没有时一次 MultiBearer 请求取得明文 Cookie
 func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappedKey []byte, proxyURL string) ([]multiloginCookie, error) {
+	client, err := newOAuthClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	if len(wrappedKey) == 0 {
+		return fetchBearerCookies(ctx, client, gaiaID, token)
+	}
+	return fetchBoundCookies(ctx, client, gaiaID, token, wrappedKey)
+}
+
+// fetchBearerCookies 为没有设备绑定的 token 请求一次 OAuthMultilogin，返回明文 Cookie
+func fetchBearerCookies(ctx context.Context, client tls_client.HttpClient, gaiaID string, token string) ([]multiloginCookie, error) {
+	status, response, err := requestMultilogin(ctx, client, gaiaID, token, "")
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK || response.Status != "OK" {
+		return nil, multiloginStatusError("bearer", status, response.Status)
+	}
+	if err := checkMultiloginCookies(response.Cookies); err != nil {
+		return nil, err
+	}
+	return response.Cookies, nil
+}
+
+// fetchBoundCookies 为设备绑定的 token 取得 DBSC challenge、以设备密钥签发 assertion，再解密服务端返回的 Cookie
+func fetchBoundCookies(ctx context.Context, client tls_client.HttpClient, gaiaID string, token string, wrappedKey []byte) ([]multiloginCookie, error) {
 	bindingKey, err := openDeviceBindingKey(wrappedKey)
 	if err != nil {
 		return nil, err
@@ -84,11 +115,6 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	if err != nil {
 		return nil, err
 	}
-	client, err := newOAuthClient(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	defer client.CloseIdleConnections()
 
 	firstStatus, first, err := requestMultilogin(ctx, client, gaiaID, token, assertionSentinel)
 	if err != nil {
@@ -117,31 +143,38 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	if len(second.Directed) == 0 || bytes.Equal(second.Directed, []byte("null")) {
 		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 token_binding_directed_response")
 	}
-	if len(second.Cookies) == 0 {
-		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 Cookie")
+	if err := checkMultiloginCookies(second.Cookies); err != nil {
+		return nil, err
 	}
-
-	names := make(map[string]struct{}, len(second.Cookies))
 	for index := range second.Cookies {
-		cookie := &second.Cookies[index]
-		if cookie.Name == "" || cookie.Value == "" {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 格式异常")
-		}
-		cookie.Value, err = hpkeOpen(ephemeralPrivateKey, cookie.Value)
-		if err != nil {
+		if second.Cookies[index].Value, err = hpkeOpen(ephemeralPrivateKey, second.Cookies[index].Value); err != nil {
 			return nil, err
 		}
+	}
+	return second.Cookies, nil
+}
+
+// checkMultiloginCookies 核对 OAuthMultilogin 返回的 Cookie 带有名称、值、域，并包含 SAPISID 与 __Secure-1PSID
+func checkMultiloginCookies(cookies []multiloginCookie) error {
+	if len(cookies) == 0 {
+		return fmt.Errorf("OAuthMultilogin 响应缺少 Cookie")
+	}
+	names := make(map[string]struct{}, len(cookies))
+	for _, cookie := range cookies {
+		if cookie.Name == "" || cookie.Value == "" {
+			return fmt.Errorf("OAuthMultilogin Cookie 格式异常")
+		}
 		if cookie.Domain == "" && (cookie.Host == "" || strings.HasPrefix(cookie.Host, ".")) {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 域格式异常")
+			return fmt.Errorf("OAuthMultilogin Cookie 域格式异常")
 		}
 		names[cookie.Name] = struct{}{}
 	}
 	for _, required := range []string{"SAPISID", "__Secure-1PSID"} {
 		if _, ok := names[required]; !ok {
-			return nil, fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
+			return fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
 		}
 	}
-	return second.Cookies, nil
+	return nil
 }
 
 func newOAuthClient(proxyURL string) (tls_client.HttpClient, error) {
@@ -161,13 +194,17 @@ func newOAuthClient(proxyURL string) (tls_client.HttpClient, error) {
 	return client, nil
 }
 
+// requestMultilogin 发送一次 OAuthMultilogin：带 assertion 时用 MultiOAuth 头，没有设备绑定的 token 用 MultiBearer 头
 func requestMultilogin(ctx context.Context, client tls_client.HttpClient, gaiaID string, token string, assertion string) (int, multiloginResponse, error) {
-	authorization := encodeMultiOAuthHeader(gaiaID, token, assertion)
+	authorization := "MultiBearer " + token + ":" + gaiaID
+	if assertion != "" {
+		authorization = "MultiOAuth " + encodeMultiOAuthHeader(gaiaID, token, assertion)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, multiloginURL, strings.NewReader(" "))
 	if err != nil {
 		return 0, multiloginResponse{}, fmt.Errorf("创建 OAuthMultilogin 请求: %w", err)
 	}
-	request.Header.Set("Authorization", "MultiOAuth "+authorization)
+	request.Header.Set("Authorization", authorization)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("User-Agent", userAgent)
 	response, err := client.Do(request)
