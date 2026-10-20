@@ -229,6 +229,12 @@ export const messages = {
   'settings.modelMapping': '模型映射',
   'settings.modelMappingHelp': '每项写成 别名:模型 ID，多项用逗号分隔',
   'settings.modelChannels': '模型通道',
+  'settings.mediaOutput': '媒体输出',
+  'settings.mediaOutputHelp': 'Chat Completions 与 Messages 正文中引用生成图片与音频的方式。',
+  'settings.mediaOutputInline': '内联 data URI',
+  'settings.mediaOutputURL': '本服务链接',
+  'settings.mediaBaseURL': '媒体链接地址',
+  'settings.mediaBaseURLHelp': '媒体链接使用的服务地址，留空时使用每个请求访问的地址。',
   'settings.modelChannelsHelp':
     '限定模型只走一个通道，每项写成 模型 ID:playground 或 build，也可在模型详情中选择',
   'channel.playground': 'Playground',

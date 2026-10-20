@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -339,21 +338,6 @@ func normalizeFunctionResultContent(raw json.RawMessage) (json.RawMessage, error
 		return raw, nil
 	}
 	return json.RawMessage(`{"result":` + trimmed + `}`), nil
-}
-
-func renderMediaMarkdown(media aistudio.Media) string {
-	url := media.URL
-	if len(media.Data) > 0 {
-		url = "data:" + media.MIME + ";base64," + base64.StdEncoding.EncodeToString(media.Data)
-	}
-	label := media.Name
-	if label == "" {
-		label = "media"
-	}
-	if strings.HasPrefix(media.MIME, "image/") {
-		return fmt.Sprintf("![%s](%s)", label, url)
-	}
-	return fmt.Sprintf("[%s](%s)", label, url)
 }
 
 func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation {

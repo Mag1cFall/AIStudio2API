@@ -22,6 +22,10 @@ type Config struct {
 	Ledger           RequestLedger
 	Prompts          PromptStore
 	Updates          UpdateService
+	// MediaDir 是媒体 URL 模式下生成媒体的保存目录
+	MediaDir string
+	// MediaLinks 返回媒体输出是否使用 URL 与设置的服务地址
+	MediaLinks func() (enabled bool, base string)
 }
 
 type server struct {
@@ -117,6 +121,9 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	root.Handle("/v1beta/", loggedHandler)
 	root.Handle("/upload/", requestLoggingMiddleware(config.Admin, corsMiddleware(s.geminiUploadHandler(publicHandler))))
 	root.Handle("/api/", newAdminAuth(config).handler(control))
+	if config.MediaDir != "" {
+		root.Handle("GET /media/{file}", corsMiddleware(http.HandlerFunc(s.handleMedia)))
+	}
 	if config.Admin != nil {
 		root.HandleFunc("POST /api/pairing/accounts", s.handlePairingAccount)
 	}

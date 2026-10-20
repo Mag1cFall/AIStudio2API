@@ -304,6 +304,8 @@ export interface ServiceConfig {
   model_channels: string
   waa_backend: 'camoufox' | 'go'
   temporary_chat: boolean
+  media_output: 'inline' | 'url'
+  media_base_url: string
 }
 
 export type UsageDimension = 'model' | 'account' | 'channel' | 'protocol' | 'state'

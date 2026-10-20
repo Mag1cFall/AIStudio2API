@@ -261,6 +261,8 @@ type RuntimeConfig struct {
 	ModelChannels             string       `json:"model_channels"`
 	TemporaryChat             bool         `json:"temporary_chat"`
 	WAABackend                string       `json:"waa_backend"`
+	MediaOutput               string       `json:"media_output"`
+	MediaBaseURL              string       `json:"media_base_url"`
 }
 
 // AdminCooldown 表示账户模型冷却
