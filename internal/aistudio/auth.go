@@ -53,7 +53,7 @@ type AuthSource struct {
 	Email   string `json:"email,omitempty"`
 }
 
-// ChromeOAuthMaterial 保存 Chrome DBSC 续签材料
+// ChromeOAuthMaterial 保存 Chrome OAuth 续签材料，设备绑定密钥可为空
 type ChromeOAuthMaterial struct {
 	GaiaID            string `json:"gaia_id"`
 	RefreshToken      string `json:"refresh_token"`

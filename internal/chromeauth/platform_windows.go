@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,17 +74,18 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 			})
 			continue
 		}
+		records, recordsErr := readTokenServices(chromeRoot, profile)
 		seen := map[string]bool{}
 		for _, identity := range identities {
 			if identity.Gaia == "" || seen[identity.Gaia] {
 				continue
 			}
 			seen[identity.Gaia] = true
-			_, encrypted, _, tokenErr := readTokenService(chromeRoot, profile, identity.Gaia)
+			record, found := records[identity.Gaia]
 			accounts = append(accounts, Account{
 				ID: profile + "/" + identity.Gaia, GaiaID: identity.Gaia,
 				Profile: profile, DisplayName: info.Name, Email: identity.Email, Locale: locale,
-				Importable: tokenErr == nil && strings.HasPrefix(string(encrypted), "v20"),
+				Importable: recordsErr == nil && found && strings.HasPrefix(string(record.encryptedToken), "v20"),
 			})
 		}
 	}
@@ -133,92 +135,99 @@ func profileLocale(chromeRoot string, profile string) string {
 	return ""
 }
 
-func copyFile(src, dst string) error {
+// copyFile 把 src 复制为 dst
+func copyFile(src string, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-
 	_, err = io.Copy(out, in)
 	return err
 }
 
-func openWebData(chromeRoot string, profile string) (*sql.DB, func(), error) {
-	databasePath := filepath.Join(chromeRoot, profile, "Web Data")
-	cleanup := func() {}
-
+// openWebData 把 Profile 的 Web Data 与其 WAL 日志复制到临时目录后只读打开，绕过运行中 Chrome 的排他锁并包含尚未检查点的写入
+func openWebData(chromeRoot string, profile string) (database *sql.DB, closeDatabase func(), err error) {
 	tempDir, err := os.MkdirTemp("", "aistudio2api-webdata-*")
-	if err == nil {
-		tempDb := filepath.Join(tempDir, "Web Data")
-		if copyFile(databasePath, tempDb) == nil {
-			_ = copyFile(databasePath+"-wal", tempDb+"-wal")
-			_ = copyFile(databasePath+"-shm", tempDb+"-shm")
-			databasePath = tempDb
-			cleanup = func() {
-				_ = os.RemoveAll(tempDir)
-			}
-		} else {
-			_ = os.RemoveAll(tempDir)
-		}
-	}
-
-	uri := "file:" + filepath.ToSlash(databasePath) + "?mode=ro"
-	database, err := sql.Open("sqlite", uri)
 	if err != nil {
-		cleanup()
+		return nil, nil, fmt.Errorf("创建 Web Data 临时目录: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			os.RemoveAll(tempDir)
+		}
+	}()
+	databasePath := filepath.Join(chromeRoot, profile, "Web Data")
+	copyPath := filepath.Join(tempDir, "Web Data")
+	if err = copyFile(databasePath, copyPath); err != nil {
+		return nil, nil, fmt.Errorf("复制 %s Web Data: %w", profile, err)
+	}
+	if err = copyFile(databasePath+"-wal", copyPath+"-wal"); err != nil && !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("复制 %s Web Data-wal: %w", profile, err)
+	}
+	uri := url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(copyPath), RawQuery: "mode=ro"}
+	if database, err = sql.Open("sqlite", uri.String()); err != nil {
 		return nil, nil, fmt.Errorf("打开 %s Web Data: %w", profile, err)
 	}
 	database.SetMaxOpenConns(1)
 	return database, func() {
 		database.Close()
-		cleanup()
+		os.RemoveAll(tempDir)
 	}, nil
 }
 
+// tokenRecord 是 token_service 中一个账号的加密 refresh token 与 wrapped binding key
+type tokenRecord struct {
+	encryptedToken []byte
+	bindingKey     []byte
+}
+
+// readTokenServices 读取 Profile 中全部 Google 账号的 token_service 记录，键为 Gaia ID
+func readTokenServices(chromeRoot string, profile string) (map[string]tokenRecord, error) {
+	database, closeDatabase, err := openWebData(chromeRoot, profile)
+	if err != nil {
+		return nil, err
+	}
+	defer closeDatabase()
+	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service WHERE service LIKE 'AccountId-%'")
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+	}
+	defer rows.Close()
+	records := map[string]tokenRecord{}
+	for rows.Next() {
+		var service string
+		var record tokenRecord
+		if err := rows.Scan(&service, &record.encryptedToken, &record.bindingKey); err != nil {
+			return nil, fmt.Errorf("解析 %s token_service: %w", profile, err)
+		}
+		records[strings.TrimPrefix(service, "AccountId-")] = record
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+	}
+	return records, nil
+}
+
+// readTokenService 返回一个账号的 Gaia ID、加密 refresh token 与 wrapped binding key
 func readTokenService(chromeRoot string, profile string, gaiaID string) (string, []byte, []byte, error) {
-	database, closeDb, err := openWebData(chromeRoot, profile)
+	records, err := readTokenServices(chromeRoot, profile)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	defer closeDb()
-
-	rows, err := database.Query("SELECT service, encrypted_token, binding_key FROM token_service WHERE service = ?", "AccountId-"+gaiaID)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
+	record, found := records[gaiaID]
+	if !found {
+		return "", nil, nil, fmt.Errorf("%s 的 token_service 没有 %s 的记录", profile, gaiaID)
 	}
-	defer rows.Close()
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
-		}
-		return "", nil, nil, fmt.Errorf("%s 的 token_service 记录数为 0", profile)
-	}
-	var service string
-	var encryptedToken []byte
-	var bindingKey []byte
-	if err := rows.Scan(&service, &encryptedToken, &bindingKey); err != nil {
-		return "", nil, nil, fmt.Errorf("解析 %s token_service: %w", profile, err)
-	}
-	if rows.Next() {
-		return "", nil, nil, fmt.Errorf("%s 的 token_service 记录数大于 1", profile)
-	}
-	if err := rows.Err(); err != nil {
-		return "", nil, nil, fmt.Errorf("读取 %s token_service: %w", profile, err)
-	}
-	if !strings.HasPrefix(service, "AccountId-") {
-		return "", nil, nil, fmt.Errorf("%s 的 token_service service 格式异常", profile)
-	}
-	if len(encryptedToken) == 0 {
+	if len(record.encryptedToken) == 0 {
 		return "", nil, nil, fmt.Errorf("%s 的 token_service 缺少认证材料", profile)
 	}
-	return strings.TrimPrefix(service, "AccountId-"), encryptedToken, bindingKey, nil
+	return gaiaID, record.encryptedToken, record.bindingKey, nil
 }
 
 func naturalLess(left string, right string) bool {
