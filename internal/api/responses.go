@@ -1662,7 +1662,7 @@ func (writer *responsesStreamWriter) terminal(response map[string]any) error {
 func (writer *responsesStreamWriter) failed(err error) error {
 	response := responseShell(writer.id, writer.created, "failed", writer.request)
 	response["output"] = writer.items()
-	response["error"] = map[string]any{"code": responsesErrorCode(err), "message": err.Error()}
+	response["error"] = map[string]any{"code": responsesErrorCode(err), "message": publicErrorMessage(statusFromError(err), err.Error())}
 	return writer.emit("response.failed", map[string]any{"response": response})
 }
 

@@ -9,18 +9,26 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type bidiClient struct {
-	connection               *websocket.Conn
-	commandLock              chan struct{}
+	connection  *websocket.Conn
+	commandLock chan struct{}
+	// writeLock 串行化连接写入，dispatch 可在其他命令等待响应期间写出命令
+	writeLock                sync.Mutex
 	nextID                   int
 	generateHeaders          map[string]string
 	blockedGenerateRequestID string
-	accessTokenStatus        int
+	// accessTokenStatus 为最近一次 GenerateAccessToken 的响应状态
+	accessTokenStatus atomic.Int64
+	regionURL         string
+	// listener 接收命令响应之间穿插的 BiDi 事件，在读取连接的协程中调用
+	listener func(map[string]any)
 }
 
 type bidiCommandError struct {
@@ -59,12 +67,14 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 		<-client.commandLock
 		return nil, err
 	}
-	client.nextID++
-	id := client.nextID
+	if client.regionURL != "" {
+		<-client.commandLock
+		return nil, fmt.Errorf("%w，官网跳转 %s", ErrRegionNotSupported, client.regionURL)
+	}
 	done := make(chan bidiResponse, 1)
 	go func() {
 		defer func() { <-client.commandLock }()
-		result, err := client.exchange(id, method, params)
+		result, err := client.exchange(method, params)
 		done <- bidiResponse{result: result, err: err}
 	}()
 	select {
@@ -75,13 +85,29 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 	}
 }
 
-// exchange 写出命令并消费穿插的网络事件，直到读到同 ID 的响应
-func (client *bidiClient) exchange(id int, method string, params map[string]any) (map[string]any, error) {
-	deadline := time.Now().Add(150 * time.Second)
+// send 分配命令 ID 并写出一条命令
+func (client *bidiClient) send(method string, params map[string]any, deadline time.Time) (int, error) {
+	client.writeLock.Lock()
+	defer client.writeLock.Unlock()
+	client.nextID++
+	id := client.nextID
 	if err := client.connection.SetWriteDeadline(deadline); err != nil {
-		return nil, err
+		return 0, err
 	}
-	if err := client.connection.WriteJSON(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+	return id, client.connection.WriteJSON(map[string]any{"id": id, "method": method, "params": params})
+}
+
+// dispatch 不经命令锁写出一条命令且不等待响应，响应由正在等待的命令读取后丢弃
+func (client *bidiClient) dispatch(method string, params map[string]any) error {
+	_, err := client.send(method, params, time.Now().Add(10*time.Second))
+	return err
+}
+
+// exchange 写出命令并消费穿插的网络事件，直到读到同 ID 的响应
+func (client *bidiClient) exchange(method string, params map[string]any) (map[string]any, error) {
+	deadline := time.Now().Add(150 * time.Second)
+	id, err := client.send(method, params, deadline)
+	if err != nil {
 		return nil, err
 	}
 	if err := client.connection.SetReadDeadline(deadline); err != nil {
@@ -108,9 +134,20 @@ func (client *bidiClient) exchange(id int, method string, params map[string]any)
 	}
 }
 
-// observe 捕获官网 GenerateContent 的公共头和 GenerateAccessToken 的响应状态
+// observe 把事件交给 listener，并捕获官网 GenerateContent 的公共头、GenerateAccessToken 的响应状态和跳转到地区不可用页的导航
 func (client *bidiClient) observe(message map[string]any) {
+	if client.listener != nil && message["type"] == "event" {
+		client.listener(message)
+	}
 	method, _ := message["method"].(string)
+	if method == "browsingContext.navigationStarted" {
+		params, _ := message["params"].(map[string]any)
+		rawURL, _ := params["url"].(string)
+		if parsed, err := url.Parse(rawURL); err == nil && strings.HasSuffix(parsed.Path, "/available-regions") {
+			client.regionURL = rawURL
+		}
+		return
+	}
 	if !strings.HasPrefix(method, "network.") {
 		return
 	}
@@ -125,7 +162,7 @@ func (client *bidiClient) observe(message map[string]any) {
 	if parsed.Path == accessTokenPath {
 		response, _ := params["response"].(map[string]any)
 		if status, ok := number(response["status"]); ok && method == "network.responseCompleted" {
-			client.accessTokenStatus = int(status)
+			client.accessTokenStatus.Store(int64(status))
 		}
 		return
 	}

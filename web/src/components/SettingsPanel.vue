@@ -54,6 +54,7 @@ const form = reactive<ServiceConfig>({
   routing_strategy: 'round-robin',
   upstream_channels: ['playground', 'build'],
   model_mapping: '',
+  model_channels: '',
   waa_backend: 'camoufox',
   temporary_chat: false,
 })
@@ -96,6 +97,7 @@ const sections: {
     fields: [
       'upstream_channels',
       'model_mapping',
+      'model_channels',
       'build_native_nonstream',
       'waa_backend',
       'temporary_chat',
@@ -240,7 +242,7 @@ async function saveConfig(): Promise<void> {
           v-for="item in sections"
           :key="item.id"
           type="button"
-          class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors"
+          class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors md:whitespace-normal"
           :class="
             section === item.id
               ? 'bg-raised text-white'
@@ -479,6 +481,22 @@ async function saveConfig(): Promise<void> {
                 v-model.trim="form.model_mapping"
                 :class="inputClass"
                 placeholder="claude-haiku-5-5:gemini-3.8-flash"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.modelChannels')"
+              control-id="setting-model-channels"
+              :description="t('settings.modelChannelsHelp')"
+              effect="immediate"
+              :changed="changedFields.has('model_channels')"
+            >
+              <input
+                id="setting-model-channels"
+                v-model.trim="form.model_channels"
+                :class="inputClass"
+                placeholder="gemini-4-argon:playground"
                 autocomplete="off"
                 spellcheck="false"
               />

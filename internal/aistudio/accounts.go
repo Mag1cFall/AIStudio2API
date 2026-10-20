@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
 	"github.com/gofrs/flock"
 )
@@ -135,11 +136,12 @@ type ResourceBinding struct {
 	Video     *VideoResourceMetadata `json:"video,omitempty"`
 }
 
-// VideoResourceMetadata 保存 OpenAI 视频对象的持久字段
+// VideoResourceMetadata 保存 OpenAI 视频对象的持久字段与可下载的结果文件
 type VideoResourceMetadata struct {
 	Model   string `json:"model"`
 	Seconds string `json:"seconds"`
 	Size    string `json:"size"`
+	File    string `json:"file,omitempty"`
 }
 
 type accountRuntimeState struct {
@@ -193,7 +195,7 @@ type Account struct {
 	authCheckedAt         time.Time
 	modelAccessGeneration uint64
 	stateMessage          string
-	catalogError          string
+	catalogErr            error
 	initializedAt         time.Time
 	buildModels           []Model
 	boundProxy            atomic.Pointer[string]
@@ -277,6 +279,7 @@ type AccountPool struct {
 	lastPicked            map[string]string
 	lastPickedChannel     map[string]Channel
 	channels              []Channel
+	modelChannels         map[string]Channel
 	changed               chan struct{}
 }
 
@@ -1298,6 +1301,10 @@ func (p *AccountPool) validateSelectionLocked(selection AccountSelection) error 
 	if selection.Capability != "" && !p.hasModelCapabilityLocked(modelID, selection.Capability) {
 		return fmt.Errorf("%w: 模型 %s 不支持 %s", ErrModelNotFound, modelID, selection.Capability)
 	}
+	if limited, ok := p.modelChannels[modelID]; ok && limited != ChannelPlayground && selection.Method == "generateContent" &&
+		(strings.TrimSpace(selection.ResourceID) != "" || selection.PlaygroundOnly) {
+		return fmt.Errorf("%w: 模型 %s 限定使用 %s 通道，此请求含文件引用或只有 Playground 支持的参数，只能经 Playground 发送", ErrInvalidArgument, modelID, limited)
+	}
 	return p.modelAccessErrorLocked(selection)
 }
 
@@ -1698,6 +1705,21 @@ func (l *AccountLease) BindVideoOperation(
 	return l.pool.bindVideoOperation(ctx, resourceID, l.account.ID, metadata)
 }
 
+// BindVideoResult 保存视频任务可下载的结果文件并绑定该文件
+func (l *AccountLease) BindVideoResult(ctx context.Context, operationID string, fileID string) error {
+	if l == nil || l.account == nil || l.pool == nil {
+		return fmt.Errorf("账户租约未初始化")
+	}
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		return fmt.Errorf("账户租约已释放")
+	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	return l.pool.bindVideoResult(ctx, strings.TrimSpace(operationID), strings.TrimSpace(fileID), l.account.ID)
+}
+
 // VideoOperationBinding 返回当前账户持有的视频任务元数据
 func (l *AccountLease) VideoOperationBinding(resourceID string) (ResourceBinding, error) {
 	if l == nil || l.account == nil || l.pool == nil {
@@ -1822,7 +1844,7 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 			}
 			account.BenefitTier = tier
 			account.Models = cloneAccountModels(models)
-			account.catalogError = ""
+			account.catalogErr = nil
 			account.initializedAt = time.Now()
 			if account.State == AccountUnavailable {
 				account.State = AccountReady
@@ -2269,6 +2291,27 @@ func (p *AccountPool) bindVideoOperation(
 	return bound, nil
 }
 
+func (p *AccountPool) bindVideoResult(ctx context.Context, operationID string, fileID string, accountID string) error {
+	_, err := p.updateRuntimeContext(ctx, accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if owner, exists := p.resources[fileID]; exists && owner != accountID {
+			return false, nil, fmt.Errorf("资源 %s 已绑定账户 %s", fileID, owner)
+		}
+		operation, exists := runtimeState.Resources[operationID]
+		if !exists || operation.Kind != "video-operation" || operation.Video == nil {
+			return false, nil, fmt.Errorf("%w: %s", ErrResourceNotFound, operationID)
+		}
+		metadata := *operation.Video
+		metadata.File = fileID
+		operation.Video = &metadata
+		runtimeState.Resources[operationID] = operation
+		if _, exists := runtimeState.Resources[fileID]; !exists {
+			runtimeState.Resources[fileID] = ResourceBinding{Kind: "video-file", CreatedAt: time.Now().UTC()}
+		}
+		return true, nil, nil
+	})
+	return err
+}
+
 func (p *AccountPool) replaceResource(previousResourceID string, resourceID string, accountID string, kind string) error {
 	previousResourceID = strings.TrimSpace(previousResourceID)
 	resourceID = strings.TrimSpace(resourceID)
@@ -2353,7 +2396,7 @@ func (p *AccountPool) recordCatalogFailure(accountID string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if account := p.byID[accountID]; account != nil {
-		account.catalogError = err.Error()
+		account.catalogErr = err
 	}
 }
 
@@ -2398,9 +2441,9 @@ func (p *AccountPool) Status() []AccountStatus {
 		message := account.stateMessage
 		if account.runtime.CatalogFingerprint == "" {
 			tier = "Unknown"
-			if message == "" {
-				message = account.catalogError
-			}
+		}
+		if message == "" && account.catalogErr != nil && (account.runtime.CatalogFingerprint == "" || errors.Is(account.catalogErr, camoufoxnative.ErrRegionNotSupported)) {
+			message = account.catalogErr.Error()
 		}
 		status := AccountStatus{
 			ID:          account.ID,

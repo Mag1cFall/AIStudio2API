@@ -1,24 +1,19 @@
-import eslint from '@eslint/js'
-import eslintConfigPrettier from 'eslint-config-prettier'
+import tsParser from '@typescript-eslint/parser'
+import skipFormatting from 'eslint-config-prettier/flat'
+import oxlint from 'eslint-plugin-oxlint'
 import pluginVue from 'eslint-plugin-vue'
-import globals from 'globals'
-import tseslint from 'typescript-eslint'
 
-// eslintConfig 定义 Vue 和 TypeScript 的统一静态检查
-export default tseslint.config(
+// eslintConfig 只运行 eslint-plugin-vue 的模板规则，格式规则由 eslint-config-prettier 关闭、交给 Oxfmt
+export default [
   {
-    ignores: ['node_modules', '../internal/webui/dist'],
+    ignores: ['node_modules'],
   },
-  eslint.configs.recommended,
-  ...tseslint.configs.recommended,
   ...pluginVue.configs['flat/recommended'],
   {
-    files: ['**/*.ts', '**/*.vue'],
+    files: ['**/*.vue'],
     languageOptions: {
-      globals: globals.browser,
       parserOptions: {
-        parser: tseslint.parser,
-        extraFileExtensions: ['.vue'],
+        parser: tsParser,
       },
     },
     rules: {
@@ -26,5 +21,6 @@ export default tseslint.config(
       'vue/no-v-html': 'off',
     },
   },
-  eslintConfigPrettier,
-)
+  ...oxlint.configs['flat/vue'],
+  skipFormatting,
+]

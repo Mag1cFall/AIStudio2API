@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -39,6 +40,14 @@ func (p *AccountPool) SetUpstreamChannels(channels []Channel) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.channels = append([]Channel(nil), channels...)
+	p.notifyLocked()
+}
+
+// SetModelChannels 设置模型限定使用的上游通道，键为模型 ID
+func (p *AccountPool) SetModelChannels(channels map[string]Channel) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelChannels = maps.Clone(channels)
 	p.notifyLocked()
 }
 
@@ -115,7 +124,7 @@ func buildMethodSelection(selection AccountSelection) bool {
 		strings.TrimSpace(selection.Capability) == "" && !selection.PlaygroundOnly
 }
 
-// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位；-build 模型只使用写代码助手，embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
+// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位，限定通道的模型只使用该通道；-build 模型只使用写代码助手，embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
 	if p.assistantModelLocked(selection.ModelID) {
 		return []Channel{ChannelAssistant}
@@ -129,13 +138,20 @@ func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Chan
 		}
 		return []Channel{ChannelPlayground}
 	}
+	limited, restricted := p.modelChannels[strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")]
 	if selection.Channel != "" {
-		if p.channelEnabledLocked(selection.Channel) {
+		if p.channelEnabledLocked(selection.Channel) && (!restricted || limited == selection.Channel) {
 			return []Channel{selection.Channel}
 		}
 		return nil
 	}
 	channels := p.enabledChannelsLocked()
+	if restricted {
+		if slices.Contains(channels, limited) {
+			return []Channel{limited}
+		}
+		return nil
+	}
 	if selection.PreferredChannel == "" || !slices.Contains(channels, selection.PreferredChannel) {
 		return channels
 	}

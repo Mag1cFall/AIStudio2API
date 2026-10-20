@@ -40,6 +40,7 @@ var configKeys = [...]string{
 	"ROUTING_STRATEGY",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
+	"MODEL_CHANNELS",
 	"TEMPORARY_CHAT",
 	"WAA_BACKEND",
 	"AUTO_START",
@@ -87,6 +88,7 @@ type Config struct {
 	RoutingStrategy        string        `json:"routing_strategy"`
 	UpstreamChannels       []string      `json:"upstream_channels"`
 	ModelMapping           string        `json:"model_mapping"`
+	ModelChannels          string        `json:"model_channels"`
 	TemporaryChat          bool          `json:"temporary_chat"`
 	WAABackend             string        `json:"waa_backend"`
 }
@@ -224,6 +226,9 @@ func Load(path string) (Config, error) {
 	if value, ok := values["MODEL_MAPPING"]; ok {
 		cfg.ModelMapping = strings.TrimSpace(value)
 	}
+	if value, ok := values["MODEL_CHANNELS"]; ok {
+		cfg.ModelChannels = strings.TrimSpace(value)
+	}
 	if value, ok := values["TEMPORARY_CHAT"]; ok {
 		cfg.TemporaryChat, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -266,6 +271,7 @@ func (c Config) Save(path string) error {
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
+		"MODEL_CHANNELS":           c.ModelChannels,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 		"WAA_BACKEND":              c.WAABackend,
 	}
@@ -323,6 +329,9 @@ func (c Config) Validate() error {
 	if _, err := ParseModelMapping(c.ModelMapping); err != nil {
 		return err
 	}
+	if _, err := ParseModelChannels(c.ModelChannels); err != nil {
+		return err
+	}
 	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
 		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
 	}
@@ -354,6 +363,28 @@ func ParseModelMapping(value string) ([]ModelAlias, error) {
 		mapping = append(mapping, ModelAlias{Alias: alias, Model: strings.TrimPrefix(model, "models/")})
 	}
 	return mapping, nil
+}
+
+// ParseModelChannels 解析逗号分隔的 模型 ID:通道，返回每个模型限定使用的通道
+func ParseModelChannels(value string) (map[string]string, error) {
+	channels := make(map[string]string)
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		index := strings.LastIndexByte(item, ':')
+		model := strings.TrimPrefix(strings.TrimSpace(item[:max(index, 0)]), "models/")
+		channel := strings.ToLower(strings.TrimSpace(item[index+1:]))
+		if index < 0 || model == "" || !slices.Contains(upstreamChannels, channel) {
+			return nil, fmt.Errorf("MODEL_CHANNELS 的每一项写成 模型 ID:playground 或 模型 ID:build，%q 不符合", item)
+		}
+		if _, exists := channels[model]; exists {
+			return nil, fmt.Errorf("MODEL_CHANNELS 中模型 %s 重复", model)
+		}
+		channels[model] = channel
+	}
+	return channels, nil
 }
 
 // ParseUpstreamChannels 把逗号分隔的通道列表拆成去空白的小写名称
@@ -412,6 +443,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
 		ModelMapping           string   `json:"model_mapping"`
+		ModelChannels          string   `json:"model_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
 	}
@@ -436,6 +468,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		RoutingStrategy:        c.RoutingStrategy,
 		UpstreamChannels:       c.UpstreamChannels,
 		ModelMapping:           c.ModelMapping,
+		ModelChannels:          c.ModelChannels,
 		TemporaryChat:          c.TemporaryChat,
 		WAABackend:             c.WAABackend,
 	})
@@ -465,6 +498,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		RoutingStrategy        string   `json:"routing_strategy"`
 		UpstreamChannels       []string `json:"upstream_channels"`
 		ModelMapping           string   `json:"model_mapping"`
+		ModelChannels          string   `json:"model_channels"`
 		TemporaryChat          bool     `json:"temporary_chat"`
 		WAABackend             string   `json:"waa_backend"`
 	}
@@ -502,6 +536,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
+		ModelChannels:          strings.TrimSpace(value.ModelChannels),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             strings.ToLower(strings.TrimSpace(value.WAABackend)),
 	}

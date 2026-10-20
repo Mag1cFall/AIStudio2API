@@ -651,7 +651,7 @@ func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if entry.defaults.InteractionStream {
+	if entry.defaults.InteractionStream || entry.defaults.InteractionTask {
 		return nil
 	}
 	if _, err := encodeGenerationConfig(applyModelMediaDefaults(request.Config, entry.model), entry.defaults); err != nil {
@@ -687,7 +687,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 	}
 	interaction := entry.defaults.InteractionStream && !build
-	if interaction {
+	task := entry.defaults.InteractionTask && !build
+	if interaction || task {
 		request.Tools = Tools{}
 	}
 	request, contract, err := prepareToolRequest(request)
@@ -705,6 +706,9 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	}
 	if interaction {
 		return c.generateInteraction(ctx, request, entry)
+	}
+	if task {
+		return c.generateInteractionTask(ctx, request, entry)
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
 	request.ImageRoute = entry.defaults.ImageRoute

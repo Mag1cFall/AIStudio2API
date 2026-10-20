@@ -184,7 +184,31 @@ func protocolForRequest(r *http.Request) string {
 	}
 }
 
+// serverErrorPrefix 返回 5xx 状态对应的官方英文错误开头，其余状态返回空
+func serverErrorPrefix(status int) string {
+	switch {
+	case status == http.StatusServiceUnavailable:
+		return "Service unavailable"
+	case status == http.StatusGatewayTimeout:
+		return "Request timed out"
+	case status == 529:
+		return "Overloaded"
+	case status >= 500:
+		return "Internal server error"
+	}
+	return ""
+}
+
+// publicErrorMessage 在 5xx 错误原因前加官方英文开头
+func publicErrorMessage(status int, message string) string {
+	if prefix := serverErrorPrefix(status); prefix != "" && !strings.HasPrefix(message, prefix) {
+		return prefix + ": " + message
+	}
+	return message
+}
+
 func writeOpenAIError(w http.ResponseWriter, status int, code string, message string) {
+	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
 	writeJSON(w, status, map[string]any{"error": map[string]any{
 		"message": message,
@@ -205,6 +229,7 @@ func openAIErrorType(status int, code string) string {
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, errorType string, message string) {
+	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
 	writeJSON(w, status, map[string]any{
 		"type": "error",

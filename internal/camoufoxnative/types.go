@@ -10,6 +10,12 @@ import (
 // ErrAuthenticationRequired 表示隔离账户需要恢复登录
 var ErrAuthenticationRequired = errors.New("隔离登录态失效")
 
+// ErrRegionNotSupported 表示 AI Studio 不支持当前出口地区或账户
+var ErrRegionNotSupported = errors.New("AI Studio 不支持当前出口地区或账户")
+
+// AvailableRegionsURL 是官网在地区或账户不受支持时跳转的页面
+const AvailableRegionsURL = "https://aistudio.google.com/docs/available-regions"
+
 // StartupStage 表示 Camoufox runtime 的启动阶段
 type StartupStage string
 
@@ -44,6 +50,8 @@ type Options struct {
 	ReadyTimeout     time.Duration
 	Log              io.Writer
 	StartupProgress  func(StartupStage)
+	// liveView 表示无头画面实时显示在管理页登录窗口，页面保持 Firefox 默认刷新帧率
+	liveView bool
 }
 
 func (options Options) reportStartup(stage StartupStage) {

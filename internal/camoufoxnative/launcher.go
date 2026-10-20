@@ -46,9 +46,10 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if _, err := os.Stat(options.ExecutablePath); err != nil {
 		return nil, "", fmt.Errorf("Camoufox 不可用: %w", err)
 	}
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS != "windows" {
 		config = maps.Clone(config)
 		config["AudioContext:maxChannelCount"] = windowsAudioChannels
+		config["AudioContext:sampleRate"] = windowsAudioSampleRate
 		fonts := fontList(config["fonts"])
 		config["fonts"] = slices.Concat(fonts, windowsFontAliases(fonts))
 		if outer, ok := integer(config, "window.outerHeight"); ok && config["window.innerHeight"] == nil {
@@ -83,13 +84,24 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
-	if options.Headless {
+	if options.Headless && !options.liveView {
 		prefs["layout.frame_rate"] = headlessFrameRate
 	}
 	if options.CacheDirectory != "" {
 		for key, value := range cachePreferences(options.CacheDirectory) {
 			prefs[key] = value
 		}
+	}
+	if runtime.GOOS != "windows" {
+		prefs["dom.webgpu.enabled"] = true
+		prefs["widget.non-native-theme.scrollbar.style"] = windowsScrollbarStyle
+		prefs["dom.quotaManager.temporaryStorage.fixedLimit"] = windowsStorageLimit
+		prefs["ui.prefersReducedMotion"] = 0
+		maps.Copy(prefs, windowsFontData.Prefs)
+	}
+	if runtime.GOOS == "darwin" {
+		// gfx.font_loader.delay 为 0 时 Firefox 同步加载本地化与带字重的字体族名
+		prefs["gfx.font_loader.delay"] = 0
 	}
 	if runtime.GOOS == "linux" {
 		fontconfig, err := windowsFontconfig(options.ExecutablePath, profile)
@@ -98,10 +110,6 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 			return nil, "", err
 		}
 		environment = append(environment, "FONTCONFIG_FILE="+fontconfig)
-		prefs["dom.webgpu.enabled"] = true
-		prefs["widget.non-native-theme.scrollbar.style"] = windowsScrollbarStyle
-		prefs["dom.quotaManager.temporaryStorage.fixedLimit"] = windowsStorageLimit
-		maps.Copy(prefs, windowsFontData.Prefs)
 		if options.Headless && os.Getenv("DISPLAY") == "" {
 			var name string
 			display, name, err = startVirtualDisplay()
@@ -270,6 +278,9 @@ const windowsScrollbarStyle = 4
 
 // windowsAudioChannels 为 Windows 立体声输出设备的 AudioContext 最大声道数
 const windowsAudioChannels = 2
+
+// windowsAudioSampleRate 为 Windows 默认输出设备的 AudioContext 采样率
+const windowsAudioSampleRate = 48000
 
 // windowsChromeHeight 为 Windows 版 Camoufox 窗口中浏览器界面占用的高度
 const windowsChromeHeight = 57

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-//go:embed dist
+//go:embed all:dist
 var embedded embed.FS
 
 // Files 返回管理端构建产物文件系统

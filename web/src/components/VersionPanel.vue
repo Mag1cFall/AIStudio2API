@@ -86,7 +86,7 @@ onActivated(() => void check(false))
               {{ status?.current ?? '—' }}
             </dd>
           </div>
-          <div>
+          <div v-if="status?.mode !== 'managed'">
             <dt class="text-xs text-gray-500">{{ t('version.latest') }}</dt>
             <dd class="mt-1 font-mono text-lg text-white">{{ latest || '—' }}</dd>
             <dd v-if="publishedAt" class="mt-0.5 text-xs text-gray-500">{{ publishedAt }}</dd>
@@ -104,6 +104,7 @@ onActivated(() => void check(false))
 
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <button
+            v-if="status?.mode !== 'managed'"
             type="button"
             class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
             :disabled="checking || phase !== 'idle'"
@@ -166,6 +167,12 @@ onActivated(() => void check(false))
         </div>
         <p v-else-if="status?.mode === 'development'" class="mt-4 text-sm text-gray-400">
           {{ t('version.development') }}
+        </p>
+        <p v-else-if="status?.mode === 'managed'" class="mt-4 text-sm text-gray-400">
+          {{ t('version.managed').replaceAll('{name}', status.managed_by ?? '') }}
+        </p>
+        <p v-else-if="status?.mode === 'download'" class="mt-4 text-sm text-gray-400">
+          {{ t('version.download') }}
         </p>
 
         <p

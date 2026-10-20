@@ -58,6 +58,8 @@ type FunctionResult struct {
 	ID      string          `json:"id"`
 	Name    string          `json:"name,omitempty"`
 	Content json.RawMessage `json:"content"`
+	// WillContinue 表示非阻塞函数之后还会发送同一调用的响应
+	WillContinue bool `json:"will_continue,omitempty"`
 }
 
 // ExecutableCode 表示 AI Studio 内置代码执行器生成的代码
@@ -111,6 +113,13 @@ type GroundingMetadata struct {
 	DynamicRetrievalScore  *float64           `json:"dynamic_retrieval_score,omitempty"`
 	WebSearchQueries       []string           `json:"web_search_queries,omitempty"`
 	MapsWidgetContextToken string             `json:"maps_widget_context_token,omitempty"`
+	URLContext             []URLMetadata      `json:"url_context,omitempty"`
+}
+
+// URLMetadata 表示 URL context 工具读取的一个网址与读取结果
+type URLMetadata struct {
+	RetrievedURL string `json:"retrieved_url"`
+	Status       string `json:"status"`
 }
 
 // Part 表示规范消息中的一个内容块
@@ -147,6 +156,8 @@ type FunctionDeclaration struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      bool            `json:"strict,omitempty"`
+	// Behavior 为 Live 函数的调用方式 BLOCKING 或 NON_BLOCKING，不区分大小写
+	Behavior string `json:"behavior,omitempty"`
 }
 
 // ToolConfig 表示工具启用策略
@@ -198,6 +209,14 @@ type ImageConfig struct {
 	ImageSize   string `json:"image_size,omitempty"`
 }
 
+// VideoConfig 是 Omni 视频输出设置：宽高比、时长秒数、分辨率与任务，未设置的项使用模型默认值
+type VideoConfig struct {
+	AspectRatio     string `json:"aspect_ratio,omitempty"`
+	DurationSeconds int64  `json:"duration_seconds,omitempty"`
+	Resolution      string `json:"resolution,omitempty"`
+	Task            string `json:"task,omitempty"`
+}
+
 // SafetySetting 表示一个安全类别的拦截阈值，取 Gemini API 枚举名
 type SafetySetting struct {
 	Category  string `json:"category"`
@@ -238,6 +257,7 @@ type GenerationConfig struct {
 	ResponseSchema      json.RawMessage      `json:"response_schema,omitempty"`
 	ResponseModalities  []ResponseModality   `json:"response_modalities,omitempty"`
 	ImageConfig         *ImageConfig         `json:"image_config,omitempty"`
+	VideoConfig         *VideoConfig         `json:"video_config,omitempty"`
 	SpeechConfig        *SpeechConfig        `json:"speech_config,omitempty"`
 	TranscriptionConfig *TranscriptionConfig `json:"transcription_config,omitempty"`
 	ReasoningEffort     string               `json:"reasoning_effort,omitempty"`
@@ -287,17 +307,86 @@ type TokenCount struct {
 
 // Model 表示实时模型目录中的模型
 type Model struct {
-	ID                string              `json:"id"`
-	Name              string              `json:"name"`
-	Description       string              `json:"description,omitempty"`
-	Methods           []string            `json:"methods"`
-	InputTokenLimit   int64               `json:"input_token_limit,omitempty"`
-	OutputTokenLimit  int64               `json:"output_token_limit,omitempty"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description,omitempty"`
+	Methods          []string `json:"methods"`
+	InputTokenLimit  int64    `json:"input_token_limit,omitempty"`
+	OutputTokenLimit int64    `json:"output_token_limit,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	MaxTemperature   *float64 `json:"max_temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	TopK             *int     `json:"top_k,omitempty"`
+	// ThinkingLevels 是模型支持的思考档位，按 MINIMAL、LOW、MEDIUM、HIGH 排列
+	ThinkingLevels       []string `json:"thinking_levels,omitempty"`
+	DefaultThinkingLevel string   `json:"default_thinking_level,omitempty"`
+	// ThinkingBudget 是可设思考预算的模型的预算默认值、上下限与能否关闭思考，上游未给出的项省略
+	ThinkingBudget *ThinkingBudget `json:"thinking_budget,omitempty"`
+	// ToolCompatibility 是可同时开启的工具对
+	ToolCompatibility [][2]string         `json:"tool_compatibility,omitempty"`
+	Details           *ModelDetails       `json:"details,omitempty"`
 	Capabilities      map[string]bool     `json:"capabilities,omitempty"`
 	CapabilityOptions map[string][]string `json:"capability_options,omitempty"`
-	AccessModes       []int64             `json:"access_modes,omitempty"`
-	Paid              bool                `json:"paid,omitempty"`
-	Channels          []string            `json:"channels,omitempty"`
+	// VoiceDetails 是 TTS 与 Live 模型的音色介绍，顺序与官网音色列表一致
+	VoiceDetails []VoiceDetail `json:"voice_details,omitempty"`
+	// Languages 是实时翻译与转录模型可选的语言，顺序与官网语言列表一致
+	Languages   []Language `json:"languages,omitempty"`
+	AccessModes []int64    `json:"access_modes,omitempty"`
+	Paid        bool       `json:"paid,omitempty"`
+	Channels    []string   `json:"channels,omitempty"`
+}
+
+// ThinkingBudget 是 ListModels field 72 的思考预算配置
+type ThinkingBudget struct {
+	Default    *int64 `json:"default,omitempty"`
+	Max        *int64 `json:"max,omitempty"`
+	Min        *int64 `json:"min,omitempty"`
+	CanDisable *bool  `json:"can_disable,omitempty"`
+}
+
+// Language 是模型可选语言的代码与显示名
+type Language struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// VoiceDetail 是一个音色的试听地址、音高、描述、口音、性别、特质与用途
+type VoiceDetail struct {
+	Name         string   `json:"name"`
+	SampleURL    string   `json:"sample_url,omitempty"`
+	Pitch        string   `json:"pitch,omitempty"`
+	Descriptions []string `json:"descriptions,omitempty"`
+	Locale       string   `json:"locale,omitempty"`
+	Accent       string   `json:"accent,omitempty"`
+	Gender       string   `json:"gender,omitempty"`
+	Trait        string   `json:"trait,omitempty"`
+	UseCase      string   `json:"use_case,omitempty"`
+}
+
+// ModelDetails 是 ListModels field 39 的模型说明，日期为 Unix 秒
+type ModelDetails struct {
+	Summary         string       `json:"summary,omitempty"`
+	Alias           string       `json:"alias,omitempty"`
+	Warning         string       `json:"warning,omitempty"`
+	DocsURL         string       `json:"docs_url,omitempty"`
+	ModelCardURL    string       `json:"model_card_url,omitempty"`
+	ReleaseDate     int64        `json:"release_date,omitempty"`
+	KnowledgeCutoff int64        `json:"knowledge_cutoff,omitempty"`
+	Pricing         []ModelPrice `json:"pricing,omitempty"`
+	PricingURL      string       `json:"pricing_url,omitempty"`
+	PricingNote     string       `json:"pricing_note,omitempty"`
+}
+
+// ModelPrice 是模型价格的一行：Text 为上游给出的整句说明；Input、Output 为每百万 token 美元，按次计价时对应 PerRequest 为真；UpTo 为该档输入 token 上限，Thinking 标记思考档
+type ModelPrice struct {
+	Text             string   `json:"text,omitempty"`
+	Label            string   `json:"label,omitempty"`
+	UpTo             int64    `json:"up_to,omitempty"`
+	Thinking         bool     `json:"thinking,omitempty"`
+	Input            *float64 `json:"input,omitempty"`
+	InputPerRequest  bool     `json:"input_per_request,omitempty"`
+	Output           *float64 `json:"output,omitempty"`
+	OutputPerRequest bool     `json:"output_per_request,omitempty"`
 }
 
 // Usage 表示一次生成的 token 用量，CachedTokens 是 InputTokens 中命中上游缓存的部分

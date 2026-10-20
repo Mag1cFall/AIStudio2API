@@ -307,6 +307,12 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if options.TemporaryChat {
 		target += "&temporary=true"
 	}
+	if _, err := client.command(ctx, "session.subscribe", map[string]any{
+		"events":   []string{"browsingContext.navigationStarted"},
+		"contexts": []string{contextID},
+	}); err != nil {
+		return err
+	}
 	pageCtx, stopWatch := watchProxy(ctx, options.Proxy)
 	defer stopWatch()
 	if _, err := client.command(pageCtx, "browsingContext.navigate", map[string]any{
@@ -325,6 +331,9 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err := client.waitFor(pageCtx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
 		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
 			return cause
+		}
+		if errors.Is(err, ErrRegionNotSupported) {
+			return err
 		}
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
 		return fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)

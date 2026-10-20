@@ -42,6 +42,8 @@ func (values *setupStrings) Set(value string) error {
 
 type setupOptions struct {
 	storageState string
+	cookies      string
+	cdp          string
 	login        bool
 	chromeRoot   string
 	profiles     setupStrings
@@ -51,6 +53,7 @@ type setupOptions struct {
 	locale       string
 	localeSet    bool
 	timezone     string
+	timezoneSet  bool
 	remote       string
 	token        string
 }
@@ -90,7 +93,13 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 	if options.storageState != "" {
 		return importStorageState(ctx, target, options)
 	}
+	if options.cookies != "" || options.cdp != "" {
+		return importCookies(ctx, target, options)
+	}
 	if options.login {
+		if !camoufoxnative.HasDisplay() {
+			return camoufoxnative.ErrNoDisplay
+		}
 		driver, err := defaultSetupLoginDriver(ctx, cfg, options.egress)
 		if err != nil {
 			return err
@@ -233,6 +242,46 @@ func importStorageState(ctx context.Context, target accountTarget, options setup
 	return nil
 }
 
+// importCookies 把 --cookie、--cookie-file 或 --cdp 浏览器中的 Cookie 导入为账户，未给 --email 时以 Cookie 登录的账户邮箱为账户；--cdp 未给 --locale、--timezone 时沿用该浏览器页面的语言与时区
+func importCookies(ctx context.Context, target accountTarget, options setupOptions) error {
+	if options.cdp != "" {
+		browser, err := chromeauth.ReadCDPBrowser(ctx, options.cdp)
+		if err != nil {
+			return err
+		}
+		options.cookies = browser.Cookies
+		if !options.localeSet && browser.Locale != "" {
+			options.locale = browser.Locale
+		}
+		if !options.timezoneSet && browser.Timezone != "" {
+			options.timezone = browser.Timezone
+		}
+	}
+	state, err := aistudio.ParseCookieText(options.cookies)
+	if err != nil {
+		return err
+	}
+	if _, err := aistudio.NewSigner().Sign(state); err != nil {
+		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
+	}
+	var email string
+	if len(options.emails) == 1 {
+		email = options.emails[0]
+	} else {
+		verification, err := chromeauth.Verify(ctx, &state, options.egress)
+		if err != nil {
+			return fmt.Errorf("识别 Cookie 登录的账户: %w", err)
+		}
+		email = strings.ToLower(verification.Email)
+	}
+	saved, err := target.Save(ctx, setupAccountConfig(email, options), state, "")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
+	return nil
+}
+
 func importIsolatedLogin(
 	ctx context.Context,
 	target accountTarget,
@@ -367,6 +416,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Chrome 导入: aistudio2api setup")
 		fmt.Fprintln(flags.Output(), "文件导入: aistudio2api setup --storage-state <file>")
+		fmt.Fprintln(flags.Output(), "Cookie 导入: aistudio2api setup --cookie <Cookie 请求头>、--cookie-file <file> 或 --cdp <调试地址>")
 		fmt.Fprintln(flags.Output(), "隔离登录: aistudio2api setup --login")
 		fmt.Fprintln(flags.Output(), "导入远程实例: 以上命令加 --remote <origin>")
 		flags.PrintDefaults()
@@ -374,8 +424,11 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	var profiles setupStrings
 	var emails setupStrings
 	flags.Var(&profiles, "profile", "要导入的 Chrome Profile，可重复")
-	flags.Var(&emails, "email", "要导入的 Google 邮箱，可重复")
+	flags.Var(&emails, "email", "要导入的 Google 邮箱，可重复；Cookie 导入时指定账户邮箱，省略时按 Cookie 识别")
 	storageState := flags.String("storage-state", "", "Playwright storage state 文件")
+	cookieHeader := flags.String("cookie", "", "一行 Cookie 请求头")
+	cookieFile := flags.String("cookie-file", "", "浏览器导出的 Cookie JSON 或 Netscape cookies.txt 文件")
+	cdp := flags.String("cdp", "", "指纹浏览器或 Chromium 的远程调试地址，读取其中的 Cookie")
 	login := flags.Bool("login", false, "使用隔离 Camoufox 登录")
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
 	proxy := flags.String("proxy", "", "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
@@ -409,12 +462,40 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	} else if options.token != "" {
 		return setupOptions{}, fmt.Errorf("--token 需要与 --remote 同时使用")
 	}
+	options.cookies = strings.TrimSpace(*cookieHeader)
+	if path := strings.TrimSpace(*cookieFile); path != "" {
+		if options.cookies != "" {
+			return setupOptions{}, fmt.Errorf("--cookie 与 --cookie-file 只能选一个")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return setupOptions{}, fmt.Errorf("读取 Cookie 文件: %w", err)
+		}
+		if options.cookies = strings.TrimSpace(string(data)); options.cookies == "" {
+			return setupOptions{}, fmt.Errorf("Cookie 文件为空")
+		}
+	}
+	options.cdp = strings.TrimSpace(*cdp)
+	if options.cdp != "" && options.cookies != "" {
+		return setupOptions{}, fmt.Errorf("--cdp 不能与 --cookie、--cookie-file 同时使用")
+	}
+	if options.cookies != "" || options.cdp != "" {
+		if options.storageState != "" || options.login || options.chromeRoot != "" || len(options.profiles) != 0 {
+			return setupOptions{}, fmt.Errorf("--cookie、--cookie-file、--cdp 不能与 --storage-state、--login 或 Chrome 导入参数同时使用")
+		}
+		if len(options.emails) > 1 {
+			return setupOptions{}, fmt.Errorf("Cookie 导入最多用 --email 指定一个账户邮箱")
+		}
+	}
 	flags.Visit(func(value *flag.Flag) {
-		if value.Name == "locale" {
+		switch value.Name {
+		case "locale":
 			options.localeSet = true
+		case "timezone":
+			options.timezoneSet = true
 		}
 	})
-	chromeSelection := options.chromeRoot != "" || len(options.profiles) != 0 || len(options.emails) != 0
+	chromeSelection := options.cookies == "" && options.cdp == "" && (options.chromeRoot != "" || len(options.profiles) != 0 || len(options.emails) != 0)
 	if options.storageState != "" && (options.login || chromeSelection) {
 		return setupOptions{}, fmt.Errorf("--storage-state 不能与 Chrome 导入或 --login 同时使用")
 	}

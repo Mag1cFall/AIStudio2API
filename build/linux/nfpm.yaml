@@ -1,0 +1,35 @@
+name: aistudio2api
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: Mag1cFall <noreply@github.com>
+description: Google AI Studio to OpenAI, Anthropic and Gemini compatible API
+vendor: Mag1cFall
+homepage: https://github.com/Mag1cFall/AIStudio2API
+license: MIT
+contents:
+  - src: ./bin/aistudio2api
+    dst: /usr/bin/aistudio2api
+  - src: ./build/appicon.png
+    dst: /usr/share/icons/hicolor/1024x1024/apps/aistudio2api.png
+  - src: ./build/linux/aistudio2api.desktop
+    dst: /usr/share/applications/aistudio2api.desktop
+depends:
+  - "libgtk-4-1"
+  - "libwebkitgtk-6.0-4"
+  - "libgtk-3-0"
+  - "libasound2t64 | libasound2"
+  - "libnss3"
+  - "libdbus-glib-1-2"
+  - "libxtst6"
+  - "libxrandr2"
+  - "libgbm1"
+  - "libxkbcommon0"
+  - "libpango-1.0-0"
+  - "libcairo2"
+  - "libxcomposite1"
+  - "libxdamage1"
+  - "libxfixes3"
+  - "xvfb"

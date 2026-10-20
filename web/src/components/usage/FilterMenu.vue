@@ -45,7 +45,7 @@ function toggle(value: string, checked: boolean): void {
       {{ label }}
       <span
         v-if="selected.length > 0"
-        class="rounded bg-blue-600/30 px-1 text-[10px] text-blue-100 tabular-nums"
+        class="rounded bg-blue-600/30 px-1 text-xs text-blue-100 tabular-nums"
         >{{ selected.length }}</span
       >
       <UiIcon name="chevronDown" :size="12" class="text-gray-500" />

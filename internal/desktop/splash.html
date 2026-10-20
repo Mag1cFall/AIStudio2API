@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>AIStudio2API</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; overflow: hidden; user-select: none; }
+      #bar { position: fixed; inset: 0 0 auto 0; height: 36px; display: flex; justify-content: flex-end; }
+      #close { width: 44px; border: 0; background: none; color: #8b949e; font-size: 18px; cursor: default; }
+      #close:hover { background: #dc2626; color: #fff; }
+      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+      main svg { width: 72px; height: 72px; }
+      h1 { margin: 0; font-size: 18px; font-weight: 600; }
+      .spinner { width: 22px; height: 22px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+      #status { font-size: 13px; color: #8b949e; }
+      #hint { font-size: 12px; color: #6e7681; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div id="bar"><button id="close" type="button" aria-label="Close">&#x2715;</button></div>
+    <main>
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024"><rect x="64" y="64" width="896" height="896" rx="200" fill="#0057CE"/><g transform="translate(134.39999999999998 234.39999999999998) scale(3.6)" fill="#fff"><path d="M161.23 55.76 79.92 98.11C53.06 112.1 21.01 92.5 21.01 62.08c0-22.42 18.08-40.59 40.37-40.58l91.57.04c18.88 0 25.04 25.5 8.28 34.22Z"/><path d="m30.77 136.24 81.31-42.35c26.86-13.99 58.91 5.61 58.91 36.03 0 22.42-18.08 40.59-40.37 40.58l-91.57-.04c-18.88 0-25.04-25.5-8.28-34.22Z"/></g><path transform="translate(566.4007 152) scale(1.05)" fill="#fff" d="M281.333 71.524c-12.327-5.306-23.112-12.586-32.361-21.83-9.244-9.244-16.524-20.034-21.83-32.36a95.928 95.928 0 0 1-4.929-14.56A3.661 3.661 0 0 0 218.666 0a3.66 3.66 0 0 0-3.546 2.774 96.096 96.096 0 0 1-4.929 14.56c-5.307 12.326-12.586 23.116-21.831 32.36-9.244 9.244-20.034 16.524-32.361 21.83a95.894 95.894 0 0 1-14.559 4.93A3.661 3.661 0 0 0 138.666 80a3.661 3.661 0 0 0 2.774 3.547 96.044 96.044 0 0 1 14.559 4.929c12.327 5.306 23.113 12.586 32.361 21.83 9.249 9.244 16.524 20.034 21.831 32.361a95.906 95.906 0 0 1 4.929 14.559 3.66 3.66 0 0 0 3.546 2.774 3.661 3.661 0 0 0 3.547-2.774 96.092 96.092 0 0 1 4.929-14.559c5.306-12.327 12.586-23.113 21.83-32.361 9.244-9.244 20.034-16.524 32.361-21.83a95.906 95.906 0 0 1 14.56-4.93A3.662 3.662 0 0 0 298.666 80a3.662 3.662 0 0 0-2.773-3.547 96.093 96.093 0 0 1-14.56-4.929Z"/></svg>
+      <h1>AIStudio2API</h1>
+      <div class="spinner"></div>
+      <div id="status"></div>
+      <div id="hint"></div>
+    </main>
+    <script>
+      const zh = navigator.language.toLowerCase().startsWith('zh')
+      document.getElementById('status').textContent = zh ? '正在启动' : 'Starting'
+      document.getElementById('hint').textContent = zh ? '首次启动时会下载 Camoufox（约 470 MB）' : 'The first start downloads Camoufox (about 470 MB)'
+      const bar = document.getElementById('bar')
+      let pressed = false
+      bar.addEventListener('mousedown', (event) => { pressed = event.button === 0 && event.target === bar })
+      window.addEventListener('mouseup', () => { pressed = false })
+      window.addEventListener('mousemove', () => {
+        if (!pressed) return
+        pressed = false
+        window._wails?.invoke?.('wails:drag')
+      })
+      document.getElementById('close').addEventListener('click', () => window._wails?.invoke?.('aistudio2api:close'))
+      // ready 通知桌面壳启动画面已加载，macOS 隐藏自绘标题栏；注入早于本脚本时立即执行，否则在注入完成时执行
+      const ready = () => {
+        window._wails?.invoke?.('aistudio2api:splash')
+        if (window._wails?.environment?.OS === 'darwin') bar.hidden = true
+      }
+      if (window._wails?.invoke) ready()
+      window.addEventListener('wails:runtime-config-ready', ready)
+    </script>
+  </body>
+</html>

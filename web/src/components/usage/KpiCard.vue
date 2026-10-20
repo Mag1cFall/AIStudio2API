@@ -37,10 +37,6 @@ const deltaClass = computed(() => {
   if (props.delta === undefined) return ''
   return { good: 'text-green-400', bad: 'text-red-400', neutral: 'text-gray-500' }[props.delta.tone]
 })
-// note 是补充行的完整文本
-const note = computed(() =>
-  props.details.map((detail) => `${detail.label} ${detail.value}`.trim()).join(' · '),
-)
 </script>
 
 <template>
@@ -71,7 +67,7 @@ const note = computed(() =>
       :class="tone ?? 'text-white'"
       >{{ value }}</data
     >
-    <p v-tooltip.overflow="note" class="mt-1 truncate text-xs text-gray-500">
+    <p class="mt-1 text-xs text-gray-500">
       <template v-for="(detail, index) in details" :key="detail.label">
         <span v-if="index > 0" aria-hidden="true"> · </span>{{ detail.label }}
         <span v-if="detail.value" class="tabular-nums" :class="detail.tone ?? 'text-gray-300'">{{

@@ -252,7 +252,7 @@ const bodyParts = computed(() =>
   border: 1px solid currentColor;
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 19px;
 }
 .state-completed,
@@ -279,7 +279,7 @@ const bodyParts = computed(() =>
 }
 .tool-count {
   color: var(--color-blue-300);
-  font-size: 12px;
+  font-size: 13px;
 }
 .request-metrics {
   display: flex;
@@ -287,7 +287,7 @@ const bodyParts = computed(() =>
   gap: 4px 18px;
   margin-top: 6px;
   color: var(--color-gray-400);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .request-metrics b {
@@ -302,7 +302,7 @@ const bodyParts = computed(() =>
 .request-details {
   margin-top: 5px;
   color: var(--color-gray-400);
-  font-size: 11px;
+  font-size: 13px;
 }
 .request-details summary {
   display: flex;
@@ -401,7 +401,7 @@ details[open] > summary > .request-disclosure-icon {
   display: flex;
   justify-content: space-between;
   color: var(--color-gray-400);
-  font-size: 11px;
+  font-size: 13px;
 }
 @media (max-width: 767px) {
   .request-duration {

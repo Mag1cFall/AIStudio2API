@@ -138,6 +138,21 @@ func (transport *authRetryTransport) DeleteDrive(
 	return drive.DeleteDrive(ctx, accountID, token, fileID)
 }
 
+// CopyDrive 将 Drive 复制委托给同一认证传输
+func (transport *authRetryTransport) CopyDrive(
+	ctx context.Context,
+	accountID string,
+	token string,
+	fileID string,
+	name string,
+) (string, error) {
+	drive, ok := transport.transport.(aistudio.DriveTransport)
+	if !ok {
+		return "", fmt.Errorf("transport 不支持 Drive 复制")
+	}
+	return drive.CopyDrive(ctx, accountID, token, fileID, name)
+}
+
 // UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
 func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
 	uploader, ok := transport.transport.(aistudio.AssistantUploader)

@@ -3,9 +3,17 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,12 +21,26 @@ import (
 
 const adminCookieName = "aistudio_admin"
 const adminSessionLifetime = 12 * time.Hour
+const adminRememberLifetime = 30 * 24 * time.Hour
 
-// adminSession 保存管理会话及其关联请求的取消信号
+// adminSession 保存管理会话及其关联请求的取消信号，remembered 为登录时勾选记住我、写入会话文件的会话
 type adminSession struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	expires time.Time
+	ctx        context.Context
+	cancel     context.CancelFunc
+	expires    time.Time
+	remembered bool
+}
+
+// rememberedSessions 是会话文件内容，credential 随管理员账号或密码变化
+type rememberedSessions struct {
+	Credential string                 `json:"credential"`
+	Sessions   []rememberedSessionRow `json:"sessions"`
+}
+
+// rememberedSessionRow 是会话文件中的一条会话
+type rememberedSessionRow struct {
+	Token   string    `json:"token"`
+	Expires time.Time `json:"expires"`
 }
 
 // loginAttempt 保存来源地址在一分钟内的失败次数
@@ -35,9 +57,71 @@ type adminAuth struct {
 	attempts map[string]loginAttempt
 }
 
-// newAdminAuth 创建进程级管理认证
+// newAdminAuth 创建进程级管理认证，载入会话文件中账号密码未变且未到期的会话
 func newAdminAuth(config Config) *adminAuth {
-	return &adminAuth{config: config, sessions: make(map[string]*adminSession), attempts: make(map[string]loginAttempt)}
+	auth := &adminAuth{config: config, sessions: make(map[string]*adminSession), attempts: make(map[string]loginAttempt)}
+	if !config.AdminAuthEnabled || config.AdminSessionPath == "" {
+		return auth
+	}
+	data, err := os.ReadFile(config.AdminSessionPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return auth
+	}
+	var saved rememberedSessions
+	if err == nil {
+		err = json.Unmarshal(data, &saved)
+	}
+	if err != nil {
+		slog.Warn("读取管理会话文件失败", "path", config.AdminSessionPath, "error", err)
+		return auth
+	}
+	if saved.Credential != auth.credential() {
+		return auth
+	}
+	now := time.Now()
+	for _, row := range saved.Sessions {
+		if row.Expires.After(now) {
+			auth.addSession(row.Token, row.Expires, true)
+		}
+	}
+	return auth
+}
+
+// credential 是管理员账号与密码的摘要，二者变化时已保存的会话失效
+func (auth *adminAuth) credential() string {
+	sum := sha256.Sum256([]byte(auth.config.AdminUsername + "\x00" + auth.config.AdminPassword))
+	return hex.EncodeToString(sum[:])
+}
+
+// addSession 在持锁期间登记会话
+func (auth *adminAuth) addSession(token string, expires time.Time, remembered bool) {
+	ctx, cancel := context.WithDeadline(context.Background(), expires)
+	auth.sessions[token] = &adminSession{ctx: ctx, cancel: cancel, expires: expires, remembered: remembered}
+}
+
+// saveRemembered 在持锁期间把记住我的会话写入会话文件
+func (auth *adminAuth) saveRemembered() error {
+	if auth.config.AdminSessionPath == "" {
+		return nil
+	}
+	saved := rememberedSessions{Credential: auth.credential(), Sessions: []rememberedSessionRow{}}
+	for token, session := range auth.sessions {
+		if session.remembered {
+			saved.Sessions = append(saved.Sessions, rememberedSessionRow{Token: token, Expires: session.expires})
+		}
+	}
+	data, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(auth.config.AdminSessionPath), 0o755); err != nil {
+		return err
+	}
+	temporary := auth.config.AdminSessionPath + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, auth.config.AdminSessionPath)
 }
 
 // handler 统一管理认证、同源检查与会话接口
@@ -53,7 +137,11 @@ func (auth *adminAuth) handler(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		limit := int64(1 << 20)
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/prompts/") {
+			limit = maxPublicBodyBytes
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		handler.ServeHTTP(w, r)
 	})
 }
@@ -68,8 +156,7 @@ func (auth *adminAuth) session(r *http.Request) *adminSession {
 	defer auth.mu.Unlock()
 	session := auth.sessions[cookie.Value]
 	if session != nil && !time.Now().Before(session.expires) {
-		session.cancel()
-		delete(auth.sessions, cookie.Value)
+		auth.removeSession(cookie.Value)
 		return nil
 	}
 	return session
@@ -116,6 +203,7 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Remember bool   `json:"remember"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := decodeJSON(r, &input); err != nil {
@@ -164,18 +252,34 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 		auth.removeSession(oldest)
 	}
 	token := rand.Text()
-	expires := now.Add(adminSessionLifetime)
-	ctx, cancel := context.WithDeadline(context.Background(), expires)
-	auth.sessions[token] = &adminSession{ctx: ctx, cancel: cancel, expires: expires}
-	auth.setCookie(w, r, token, int(adminSessionLifetime.Seconds()))
+	lifetime := adminSessionLifetime
+	if input.Remember {
+		lifetime = adminRememberLifetime
+	}
+	auth.addSession(token, now.Add(lifetime), input.Remember)
+	if input.Remember {
+		if err := auth.saveRemembered(); err != nil {
+			auth.removeSession(token)
+			writeAdminError(w, http.StatusInternalServerError, "session_save_failed", "Failed to save the session: "+err.Error())
+			return
+		}
+	}
+	auth.setCookie(w, r, token, int(lifetime.Seconds()))
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "authenticated": true, "username": auth.config.AdminUsername})
 }
 
-// removeSession 在持锁期间撤销会话
+// removeSession 在持锁期间撤销会话，记住我的会话同时从会话文件删除
 func (auth *adminAuth) removeSession(token string) {
-	if session := auth.sessions[token]; session != nil {
-		session.cancel()
-		delete(auth.sessions, token)
+	session := auth.sessions[token]
+	if session == nil {
+		return
+	}
+	session.cancel()
+	delete(auth.sessions, token)
+	if session.remembered {
+		if err := auth.saveRemembered(); err != nil {
+			slog.Warn("写入管理会话文件失败", "path", auth.config.AdminSessionPath, "error", err)
+		}
 	}
 }
 

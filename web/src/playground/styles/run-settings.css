@@ -1,0 +1,123 @@
+/* 运行设置面板内各页面共用的分组、卡片与设置项 */
+.ms-run-settings .field-group:not(:empty):has(~ .field-group:not(:empty)) {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-v3-outline-var);
+}
+
+.ms-run-settings .settings-card {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 12px;
+  background: var(--color-v3-surface-container);
+  box-shadow: var(--shadow-v3-card);
+  color: var(--color-v3-text);
+  cursor: pointer;
+  font-weight: 500;
+  text-align: start;
+  transition: all 0.2s ease;
+}
+
+.ms-run-settings .settings-card:hover {
+  box-shadow: var(--shadow-v3-card-hover);
+}
+
+.ms-run-settings .settings-card .title {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--color-v3-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 21px;
+}
+
+.ms-run-settings .settings-card .subtitle {
+  display: block;
+  overflow: hidden;
+  color: var(--color-v3-text-var);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+
+.ms-run-settings .settings-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.ms-run-settings .settings-item-column {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ms-run-settings .item-description-title {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 21px;
+}
+
+.ms-run-settings .ms-slider {
+  --ms-input-width: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ms-run-settings .ms-slider > :first-child {
+  width: 65%;
+}
+
+.ms-run-settings .slider-number-input {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ms-run-settings .settings-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 8px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ms-run-settings .group-title {
+  color: var(--color-v3-text-var);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ms-run-settings .expand-icon {
+  margin-right: 6px;
+  transition: transform 0.2s;
+}
+
+.ms-run-settings .settings-group-header.expanded .expand-icon {
+  transform: rotate(180deg);
+}
+
+.ms-run-settings .settings-note {
+  margin: 8px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-v3-outline-var);
+  color: var(--color-v3-text-var);
+  font-size: 12px;
+  line-height: 18px;
+}

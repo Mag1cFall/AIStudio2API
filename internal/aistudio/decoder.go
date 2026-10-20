@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -46,7 +47,10 @@ func (e *PromptFeedbackError) Unwrap() error {
 	return ErrInvalidArgument
 }
 
-// StreamInterruptedError 表示读取上游生成流时连接在流结束前中断
+// errMissingFinishFrame 表示上游生成流在完成帧之前正常结束
+var errMissingFinishFrame = errors.New("流结束前没有完成帧")
+
+// StreamInterruptedError 表示上游生成流在完成帧之前中断或结束
 type StreamInterruptedError struct {
 	Method string
 	Frames int

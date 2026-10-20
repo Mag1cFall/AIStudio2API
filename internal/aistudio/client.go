@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
 const (
@@ -87,6 +89,9 @@ type Client struct {
 	catalogs        map[string]modelCatalog
 	tierMu          sync.RWMutex
 	tiers           map[string]BenefitTier
+	termsMu         sync.Mutex
+	termsAccepted   map[string]struct{}
+	disclaimers     map[string]struct{}
 }
 
 var _ Service = (*Client)(nil)
@@ -105,6 +110,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		contextProvider: options.ContextProvider,
 		catalogs:        make(map[string]modelCatalog),
 		tiers:           make(map[string]BenefitTier),
+		termsAccepted:   make(map[string]struct{}),
+		disclaimers:     make(map[string]struct{}),
 	}, nil
 }
 
@@ -123,12 +130,28 @@ func (e *RPCError) ContextOverflow() bool {
 	return e.StatusCode == http.StatusBadRequest && strings.Contains(e.Message, "input token count exceeds the maximum number of tokens allowed")
 }
 
+// regionNotSupported 返回上游是否以官网跳转地区不可用页的错误拒绝当前出口地区或账户
+func (e *RPCError) regionNotSupported() bool {
+	return e.StatusCode == http.StatusForbidden && e.Code == 7 && (e.Message == "Region not supported." || e.Message == "Account not supported.")
+}
+
 // Error 返回结构化上游错误
 func (e *RPCError) Error() string {
+	if e.regionNotSupported() {
+		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s（%v，官网跳转 %s）", e.Method, e.StatusCode, e.Code, e.Message, camoufoxnative.ErrRegionNotSupported, camoufoxnative.AvailableRegionsURL)
+	}
 	if e.Code != 0 {
 		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s", e.Method, e.StatusCode, e.Code, e.Message)
 	}
 	return fmt.Sprintf("AI Studio %s 返回 HTTP %d: %s", e.Method, e.StatusCode, e.Message)
+}
+
+// Unwrap 把地区或账户不受支持的错误映射为 camoufoxnative.ErrRegionNotSupported
+func (e *RPCError) Unwrap() error {
+	if e.regionNotSupported() {
+		return camoufoxnative.ErrRegionNotSupported
+	}
+	return nil
 }
 
 // HTTPStatus 返回上游 HTTP 状态

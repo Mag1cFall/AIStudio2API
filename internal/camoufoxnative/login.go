@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ const loginEmailExpression = `(() => {
   return values.join('\n').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
 })()`
 
-// LoginOptions 定义纯 Go 隔离登录环境
+// LoginOptions 定义纯 Go 隔离登录环境，View 不为空时浏览器以无头方式运行，画面与输入经管理页登录窗口传递
 type LoginOptions struct {
 	ExecutablePath string
 	Directory      string
@@ -34,6 +35,7 @@ type LoginOptions struct {
 	ProxyBypass    string
 	Timeout        time.Duration
 	Log            io.Writer
+	View           *LiveView
 }
 
 // LoginResult 返回隔离浏览器导出的 Playwright storage state
@@ -51,17 +53,31 @@ type loginSession struct {
 	connection *websocket.Conn
 	client     *bidiClient
 	contextID  string
+	// stopView 停止登录窗口的截图与输入转发
+	stopView func()
 }
 
-// Login 启动可见隔离 Camoufox 并在 AI Studio 可用后导出认证状态
+// ErrNoDisplay 表示本机没有图形界面，无法打开可见的登录窗口
+var ErrNoDisplay = errors.New("当前环境没有图形界面，无法打开 Camoufox 登录窗口：启动服务后在管理页面“添加账户”中选择“浏览器登录”，登录窗口显示在管理页面中")
+
+// HasDisplay 判断本机能否显示可见的浏览器窗口，Linux 上需要 DISPLAY 或 WAYLAND_DISPLAY
+func HasDisplay() bool {
+	return runtime.GOOS != "linux" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+}
+
+// Login 启动隔离 Camoufox 供用户登录 Google，并在 AI Studio 可用后导出认证状态
 func Login(ctx context.Context, options LoginOptions) (result LoginResult, err error) {
 	options, err = validateLoginOptions(options)
 	if err != nil {
 		return LoginResult{}, err
 	}
+	if options.View == nil && !HasDisplay() {
+		return LoginResult{}, ErrNoDisplay
+	}
+	options.View.setStatus(liveViewStarting)
 	loginCtx, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
-	session, err := startLoginSession(loginCtx, options, false, storageState{})
+	session, err := startLoginSession(loginCtx, options, storageState{})
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -73,11 +89,13 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 		}
 		err = errors.Join(err, closeErr)
 	}()
+	options.View.setStatus(liveViewWaiting)
 	origins := make(map[string]storageOrigin)
 	pageURL, err := session.waitLogin(loginCtx, origins)
 	if err != nil {
 		return LoginResult{}, err
 	}
+	options.View.setStatus(liveViewSaving)
 	email, err := session.client.evaluateString(loginCtx, session.contextID, loginEmailExpression)
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("读取 AI Studio 登录邮箱: %w", err)
@@ -138,7 +156,7 @@ func validateLoginOptions(options LoginOptions) (LoginOptions, error) {
 	return options, nil
 }
 
-func startLoginSession(ctx context.Context, options LoginOptions, headless bool, state storageState) (*loginSession, error) {
+func startLoginSession(ctx context.Context, options LoginOptions, state storageState) (*loginSession, error) {
 	ffVersion := camoufoxFirefoxMajor
 	fingerprintPath := filepath.Join(options.Directory, "storage-state.json")
 	fingerprint, err := loadAccountCamoufoxConfig(fingerprintPath, ffVersion, options.Locale, options.Timezone)
@@ -151,9 +169,10 @@ func startLoginSession(ctx context.Context, options LoginOptions, headless bool,
 		Timezone:       options.Timezone,
 		Proxy:          options.Proxy,
 		ProxyBypass:    options.ProxyBypass,
-		Headless:       headless,
+		Headless:       options.View != nil,
 		ReadyTimeout:   options.Timeout,
 		Log:            options.Log,
+		liveView:       options.View != nil,
 	}, fingerprint)
 	if err != nil {
 		return nil, err
@@ -172,7 +191,11 @@ func startLoginSession(ctx context.Context, options LoginOptions, headless bool,
 	}
 	session.connection = connection
 	session.client = newBiDiClient(connection)
-	if _, err := session.client.command(ctx, "session.new", map[string]any{"capabilities": map[string]any{}}); err != nil {
+	capabilities := map[string]any{}
+	if options.View != nil {
+		capabilities = liveViewCapabilities
+	}
+	if _, err := session.client.command(ctx, "session.new", map[string]any{"capabilities": capabilities}); err != nil {
 		return nil, err
 	}
 	tree, err := session.client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0})
@@ -204,10 +227,18 @@ func startLoginSession(ctx context.Context, options LoginOptions, headless bool,
 	}); err != nil {
 		return nil, err
 	}
+	wait := "interactive"
+	if options.View != nil {
+		session.stopView, err = options.View.attach(ctx, session.client, session.contextID)
+		if err != nil {
+			return nil, err
+		}
+		wait = "none"
+	}
 	if _, err := session.client.command(ctx, "browsingContext.navigate", map[string]any{
 		"context": session.contextID,
 		"url":     aiStudioOrigin + "/prompts/new_chat",
-		"wait":    "interactive",
+		"wait":    wait,
 	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
 		return nil, fmt.Errorf("导航 AI Studio: %w", err)
 	}
@@ -338,6 +369,9 @@ func decodeStorageCookie(value map[string]any) (storageCookie, bool) {
 func (session *loginSession) Close() error {
 	if session == nil {
 		return nil
+	}
+	if session.stopView != nil {
+		session.stopView()
 	}
 	if session.client != nil && session.connection != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

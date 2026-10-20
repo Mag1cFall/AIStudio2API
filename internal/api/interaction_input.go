@@ -1,9 +1,13 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"math"
 	"mime"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -11,14 +15,18 @@ import (
 
 // interactionRequest 表示公开 Interactions 创建请求
 type interactionRequest struct {
-	Model      string          `json:"model"`
-	Input      json.RawMessage `json:"input"`
-	System     string          `json:"system_instruction"`
-	Stream     bool            `json:"stream"`
-	Store      *bool           `json:"store"`
-	PreviousID string          `json:"previous_interaction_id"`
-	Formats    json.RawMessage `json:"response_format"`
-	Tools      []responsesTool `json:"tools"`
+	Model      string                     `json:"model"`
+	Agent      string                     `json:"agent"`
+	Input      json.RawMessage            `json:"input"`
+	System     string                     `json:"system_instruction"`
+	Stream     bool                       `json:"stream"`
+	Store      *bool                      `json:"store"`
+	PreviousID string                     `json:"previous_interaction_id"`
+	Formats    json.RawMessage            `json:"response_format"`
+	MIME       string                     `json:"response_mime_type"`
+	Modalities []string                   `json:"response_modalities"`
+	Safety     []interactionSafetySetting `json:"safety_settings"`
+	Tools      []responsesTool            `json:"tools"`
 	Generation struct {
 		Temperature       *float64        `json:"temperature"`
 		TopP              *float64        `json:"top_p"`
@@ -30,10 +38,23 @@ type interactionRequest struct {
 		ThinkingSummaries string          `json:"thinking_summaries"`
 		Speech            json.RawMessage `json:"speech_config"`
 		ToolChoice        json.RawMessage `json:"tool_choice"`
+		Image             *struct {
+			AspectRatio string `json:"aspect_ratio"`
+			ImageSize   string `json:"image_size"`
+		} `json:"image_config"`
+		Video *struct {
+			Task string `json:"task"`
+		} `json:"video_config"`
 	} `json:"generation_config"`
 }
 
-// interactionFormat 表示文本、图片与音频的返回配置
+// interactionSafetySetting 表示 Interactions 的安全类别与拦截阈值，取值为小写枚举名
+type interactionSafetySetting struct {
+	Type      string `json:"type"`
+	Threshold string `json:"threshold"`
+}
+
+// interactionFormat 表示文本、图片、音频与视频的返回配置
 type interactionFormat struct {
 	Type        string          `json:"type"`
 	MIME        string          `json:"mime_type"`
@@ -42,6 +63,8 @@ type interactionFormat struct {
 	BitRate     int             `json:"bit_rate"`
 	AspectRatio string          `json:"aspect_ratio"`
 	ImageSize   string          `json:"image_size"`
+	Duration    string          `json:"duration"`
+	Resolution  string          `json:"resolution"`
 }
 
 // interactionInput 表示输入内容块或执行步骤
@@ -104,9 +127,13 @@ func interactionList[T any](raw json.RawMessage) ([]T, error) {
 
 // toGenerateRequest 映射模型、结构化输入、生成参数与函数声明
 func (request interactionRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
-	generate := aistudio.GenerateRequest{ID: id, Model: strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"), System: request.System}
+	model := request.Model
+	if strings.TrimSpace(model) == "" {
+		model = request.Agent
+	}
+	generate := aistudio.GenerateRequest{ID: id, Model: strings.TrimPrefix(strings.TrimSpace(model), "models/"), System: request.System}
 	if generate.Model == "" {
-		return generate, fmt.Errorf("model is required")
+		return generate, fmt.Errorf("model or agent is required")
 	}
 	var err error
 	generate.Contents, err = interactionContents(request.Input)
@@ -167,9 +194,24 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 			}
 			generate.Config.ResponseModalities = append(generate.Config.ResponseModalities, aistudio.ResponseModalityImage)
 			generate.Config.ImageConfig = &aistudio.ImageConfig{AspectRatio: format.AspectRatio, ImageSize: format.ImageSize}
+		case "video":
+			seconds, err := videoDurationSeconds(format.Duration)
+			if err != nil {
+				return generate, fmt.Errorf("response_format: %w", err)
+			}
+			generate.Config.VideoConfig = &aistudio.VideoConfig{AspectRatio: format.AspectRatio, DurationSeconds: seconds, Resolution: format.Resolution}
 		default:
 			return generate, fmt.Errorf("unsupported response_format type %q", format.Type)
 		}
+	}
+	if video := generation.Video; video != nil && video.Task != "" {
+		if generate.Config.VideoConfig == nil {
+			generate.Config.VideoConfig = &aistudio.VideoConfig{}
+		}
+		generate.Config.VideoConfig.Task = video.Task
+	}
+	if err := request.applyLegacyOutput(&generate); err != nil {
+		return generate, err
 	}
 	tools := make([]responsesTool, 0, len(request.Tools))
 	for _, tool := range request.Tools {
@@ -192,6 +234,47 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	}
 	generate.Tools.ToolConfig, err = interactionToolChoice(generation.ToolChoice)
 	return generate, err
+}
+
+// interactionModalities 是 response_modalities 取值对应的输出类型
+var interactionModalities = map[string]aistudio.ResponseModality{
+	"text":  aistudio.ResponseModalityText,
+	"image": aistudio.ResponseModalityImage,
+	"audio": aistudio.ResponseModalityAudio,
+}
+
+// applyLegacyOutput 映射 response_modalities、response_mime_type、safety_settings 与 generation_config.image_config，response_format 中的同项优先
+func (request interactionRequest) applyLegacyOutput(generate *aistudio.GenerateRequest) error {
+	for _, name := range request.Modalities {
+		modality, ok := interactionModalities[strings.ToLower(name)]
+		if !ok {
+			return fmt.Errorf("unsupported response_modalities value %q", name)
+		}
+		if !slices.Contains(generate.Config.ResponseModalities, modality) {
+			generate.Config.ResponseModalities = append(generate.Config.ResponseModalities, modality)
+		}
+	}
+	if request.MIME != "" && generate.Config.ResponseMIMEType == "" {
+		if request.MIME != "text/plain" && request.MIME != "application/json" {
+			return fmt.Errorf("response_mime_type must be text/plain or application/json")
+		}
+		generate.Config.ResponseMIMEType = request.MIME
+	}
+	if image := request.Generation.Image; image != nil {
+		config := aistudio.ImageConfig{AspectRatio: image.AspectRatio, ImageSize: image.ImageSize}
+		if format := generate.Config.ImageConfig; format != nil {
+			config.AspectRatio = cmp.Or(format.AspectRatio, config.AspectRatio)
+			config.ImageSize = cmp.Or(format.ImageSize, config.ImageSize)
+		}
+		generate.Config.ImageConfig = &config
+	}
+	for _, setting := range request.Safety {
+		generate.SafetySettings = append(generate.SafetySettings, aistudio.SafetySetting{
+			Category:  "HARM_CATEGORY_" + strings.ToUpper(setting.Type),
+			Threshold: strings.ToUpper(setting.Threshold),
+		})
+	}
+	return nil
 }
 
 // interactionToolChoice 将调用模式或 allowed_tools 配置映射为统一工具选择
@@ -500,4 +583,17 @@ func (audio interactionAudioFormat) streams(media aistudio.Media) bool {
 		return err != nil || audio.SampleRate == 0 || audio.SampleRate == source.SampleRate
 	}
 	return false
+}
+
+// videoDurationSeconds 把 "4s" 或 "4" 形式的视频时长四舍五入为秒数，空值为 0
+func videoDurationSeconds(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSuffix(value, "s"), 64)
+	if err != nil || seconds < 0 {
+		return 0, fmt.Errorf("duration %q must be a non-negative number of seconds such as \"4s\"", value)
+	}
+	return int64(math.Round(seconds)), nil
 }

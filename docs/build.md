@@ -208,6 +208,8 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 
 以下请求只使用 Playground：CountTokens、Playground 目录中的 Live 与 Robotics 模型、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。
 
+`MODEL_CHANNELS` 限定的模型只经所列通道调用。限定为 `build` 的模型收到带文件引用或只有 Playground 支持的参数的 `generateContent` 请求时，在选择账户前返回 400，错误写明该模型限定的通道。
+
 Playground 目录没有的 embedding（`embedContent`）、Live（`bidiGenerateContent`）与实时音乐（`bidiGenerateMusic`）模型只经 Build 通道调用：`UPSTREAM_CHANNELS` 启用 `build`，且账户的 Build 目录包含该模型与方法时，账户可以承担请求。`aqa` 等其他方法不进入 Build 通道。
 
 ### 公开目录
@@ -346,6 +348,7 @@ Playground 私有字段在 Build 请求中不发送：账户时区、GenerateCon
 | 只有 `thoughtSignature` 的 Part | thought signature |
 | `citationMetadata.citationSources` | citation（`uri`、`title`、`startIndex`、`endIndex`） |
 | `groundingMetadata` | grounding |
+| `urlContextMetadata.urlMetadata` | grounding 的 URL 读取结果（`retrievedUrl`、`urlRetrievalStatus`） |
 | `usageMetadata` | usage |
 | `finishReason` | usage 与 finish |
 
@@ -355,7 +358,7 @@ Playground 私有字段在 Build 请求中不发送：账户时区、GenerateCon
 - `usageMetadata` 的 `totalTokenCount` 大于 0 时记录：`promptTokenCount` 为输入，`candidatesTokenCount` 为输出，`thoughtsTokenCount` 为思考，`toolUsePromptTokenCount` 为工具；缺少 `candidatesTokenCount` 时输出为总数减去其余三项
 - 第一次出现 `finishReason` 时先发出最近的 usage，再发出 finish；终止原因为去掉 `FINISH_REASON_` 前缀后的小写枚举名，与 Playground 的规范终止原因一致，`UNSPECIFIED` 为 `unspecified`
 - 没有 candidate 且带 `promptFeedback.blockReason` 时返回 prompt feedback 错误，原因为去掉 `BLOCK_REASON_` 前缀的小写枚举名
-- candidate 数量不是 1、正文不是 JSON 或 Base64 无效时返回带路径的协议错误；流结束时没有 `finishReason` 同样为协议错误
+- candidate 数量不是 1、正文不是 JSON 或 Base64 无效时返回带路径的协议错误；流结束时没有 `finishReason` 与读取中断相同，报告为上游流中断与已接收帧数
 
 ### 停止序列、usage 与终态
 

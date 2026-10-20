@@ -2,11 +2,13 @@ package aistudio
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -57,6 +59,9 @@ func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
 		if len(request.Tools) > 0 || request.Translation != nil || request.Transcription != nil {
 			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 tools、translation 或 transcription", ErrInvalidArgument, model)
 		}
+		if request.SystemInstruction != "" || request.Voice != "" || request.MediaResolution != "" || request.ThinkingLevel != "" || request.ContextWindow != nil || request.GoogleSearch {
+			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 system_instruction、voice、media_resolution、thinking_level、context_window_compression 与 google_search", ErrInvalidArgument, model)
+		}
 		if output := strings.ToLower(strings.TrimSpace(request.OutputModality)); output != "" && output != "audio" {
 			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 的 output_modalities 必须是 [audio]", ErrInvalidArgument, model)
 		}
@@ -66,24 +71,39 @@ func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
 	if err := validateLiveVariant(request); err != nil {
 		return nil, "", err
 	}
-	setup["generationConfig"] = map[string]any{
+	generation := map[string]any{
 		"responseModalities": []string{"AUDIO"},
-		"speechConfig":       map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": "Zephyr"}}},
-		"mediaResolution":    "MEDIA_RESOLUTION_MEDIUM",
+		"speechConfig":       map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": cmp.Or(request.Voice, "Zephyr")}}},
+		"mediaResolution":    "MEDIA_RESOLUTION_" + strings.ToUpper(cmp.Or(request.MediaResolution, "medium")),
 	}
-	if len(request.Tools) > 0 {
-		tools, _, err := encodeBuildTools(Tools{Functions: request.Tools})
+	if request.ThinkingLevel != "" {
+		generation["thinkingConfig"] = map[string]any{"thinkingLevel": strings.ToUpper(request.ThinkingLevel)}
+	}
+	setup["generationConfig"] = generation
+	if request.SystemInstruction != "" {
+		setup["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": request.SystemInstruction}}}
+	}
+	if len(request.Tools) > 0 || request.GoogleSearch {
+		tools := Tools{Functions: request.Tools}
+		if request.GoogleSearch {
+			tools.Google = []string{"google_search"}
+		}
+		wire, _, err := encodeBuildTools(tools)
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 		}
-		setup["tools"] = tools
+		setup["tools"] = wire
 	}
 	resumption := map[string]any{}
 	if token := strings.TrimSpace(request.SessionToken); token != "" {
 		resumption["handle"] = token
 	}
 	setup["sessionResumption"] = resumption
-	setup["contextWindowCompression"] = map[string]any{"triggerTokens": "104857", "slidingWindow": map[string]any{"targetTokens": "52428"}}
+	window := BidiContextWindow{TriggerTokens: 104857, TargetTokens: 52428}
+	if request.ContextWindow != nil {
+		window = *request.ContextWindow
+	}
+	setup["contextWindowCompression"] = map[string]any{"triggerTokens": strconv.FormatInt(window.TriggerTokens, 10), "slidingWindow": map[string]any{"targetTokens": strconv.FormatInt(window.TargetTokens, 10)}}
 	setup["inputAudioTranscription"] = map[string]any{}
 	setup["outputAudioTranscription"] = map[string]any{}
 	return encodeBuildBidiMessage(buildLivePath, map[string]any{"setup": setup})
@@ -123,7 +143,11 @@ func encodeBuildLiveToolResponses(results []FunctionResult) ([]byte, string, err
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
 		}
-		responses = append(responses, map[string]any{"id": result.ID, "name": result.Name, "response": response})
+		entry := map[string]any{"id": result.ID, "name": result.Name, "response": response}
+		if result.WillContinue {
+			entry["willContinue"] = true
+		}
+		responses = append(responses, entry)
 	}
 	return encodeBuildBidiMessage(buildLivePath, map[string]any{"toolResponse": map[string]any{"functionResponses": responses}})
 }

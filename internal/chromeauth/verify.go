@@ -3,9 +3,12 @@ package chromeauth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,8 +17,15 @@ import (
 
 const aiStudioChatURL = "https://aistudio.google.com/prompts/new_chat"
 
+// ErrSignedOut 表示 Cookie 打开 AI Studio 时被转到登录页
+var ErrSignedOut = errors.New("Cookie 未登录 AI Studio 或已失效")
+
+// accountEmailPattern 匹配 AI Studio 页面全局数据中当前登录账户的邮箱
+var accountEmailPattern = regexp.MustCompile(`"oPEP7c":("(?:[^"\\]|\\.)*")`)
+
 // Verification 保存 AI Studio 登录页与模型目录验收结果
 type Verification struct {
+	Email      string
 	ModelCount int
 }
 
@@ -39,38 +49,50 @@ func Verify(ctx context.Context, state *aistudio.StorageState, proxy string) (Ve
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	if err := verifyChatPage(ctx, client, state, headers.Get("User-Agent")); err != nil {
+	email, err := verifyChatPage(ctx, client, state, headers.Get("User-Agent"))
+	if err != nil {
 		return Verification{}, err
 	}
 	models, err := verifyModels(ctx, client, state, headers)
 	if err != nil {
 		return Verification{}, err
 	}
-	return Verification{ModelCount: models}, nil
+	return Verification{Email: email, ModelCount: models}, nil
 }
 
-func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.StorageState, userAgent string) error {
+// verifyChatPage 以账户 Cookie 打开对话页并返回页面中登录账户的邮箱
+func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.StorageState, userAgent string) (string, error) {
 	cookie, err := state.CookieHeader(aiStudioChatURL, time.Now())
 	if err != nil {
-		return err
+		return "", err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, aiStudioChatURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	request.Header.Set("Cookie", cookie)
 	request.Header.Set("User-Agent", userAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("访问 AI Studio 登录页: %w", err)
+		return "", fmt.Errorf("访问 AI Studio 登录页: %w", err)
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("AI Studio 登录页返回 HTTP %d", response.StatusCode)
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取 AI Studio 登录页: %w", err)
 	}
-	return mergeResponseCookies(state, response, aiStudioChatURL)
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return "", ErrSignedOut
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("AI Studio 登录页返回 HTTP %d", response.StatusCode)
+	}
+	var email string
+	if match := accountEmailPattern.FindSubmatch(body); match == nil || json.Unmarshal(match[1], &email) != nil || !strings.Contains(email, "@") {
+		return "", fmt.Errorf("AI Studio 页面缺少登录账户")
+	}
+	return email, mergeResponseCookies(state, response, aiStudioChatURL)
 }
 
 func verifyModels(ctx context.Context, client *http.Client, state *aistudio.StorageState, headers http.Header) (int, error) {

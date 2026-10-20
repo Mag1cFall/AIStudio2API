@@ -154,6 +154,7 @@ type geminiGenerationConfig struct {
 	ResponseFormat      geminiResponseFormats      `json:"responseFormat"`
 	ResponseModalities  []string                   `json:"responseModalities"`
 	ImageConfig         *geminiImageConfig         `json:"imageConfig"`
+	VideoConfig         *geminiVideoConfig         `json:"videoConfig"`
 	SpeechConfig        *geminiSpeechConfig        `json:"speechConfig"`
 	TranscriptionConfig *geminiTranscriptionConfig `json:"transcriptionConfig"`
 	Seed                *int64                     `json:"seed"`
@@ -178,6 +179,11 @@ type geminiImageConfig struct {
 	ImageSize   string `json:"imageSize"`
 }
 
+// geminiVideoConfig 为 generationConfig.videoConfig 扩展字段，task 取 Interactions API video_config.task 的取值
+type geminiVideoConfig struct {
+	Task string `json:"task"`
+}
+
 // geminiResponseFormat 为 generationConfig.responseFormat 的一项输出格式
 type geminiResponseFormat struct {
 	Text *struct {
@@ -185,6 +191,11 @@ type geminiResponseFormat struct {
 		Schema   json.RawMessage `json:"schema"`
 	} `json:"text"`
 	Image *geminiImageConfig `json:"image"`
+	Video *struct {
+		AspectRatio string `json:"aspectRatio"`
+		Duration    string `json:"duration"`
+		Resolution  string `json:"resolution"`
+	} `json:"video"`
 }
 
 // geminiResponseFormats 为 generationConfig.responseFormat，REST 写法为单个对象，SDK 写法为数组
@@ -315,6 +326,21 @@ func geminiModelObject(model aistudio.Model) map[string]any {
 		"supportedGenerationMethods": model.Methods,
 		"inputTokenLimit":            model.InputTokenLimit,
 		"outputTokenLimit":           model.OutputTokenLimit,
+	}
+	if model.Temperature != nil {
+		item["temperature"] = *model.Temperature
+	}
+	if model.MaxTemperature != nil {
+		item["maxTemperature"] = *model.MaxTemperature
+	}
+	if model.TopP != nil {
+		item["topP"] = *model.TopP
+	}
+	if model.TopK != nil {
+		item["topK"] = *model.TopK
+	}
+	if model.Capabilities["thinking"] {
+		item["thinking"] = true
 	}
 	if len(model.Capabilities) > 0 {
 		item["capabilities"] = model.Capabilities
@@ -569,6 +595,19 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		if image := format.Image; image != nil {
 			config.ImageConfig = &aistudio.ImageConfig{AspectRatio: geminiResponseFormatValue(image.AspectRatio), ImageSize: geminiResponseFormatValue(image.ImageSize)}
 		}
+		if video := format.Video; video != nil {
+			seconds, err := videoDurationSeconds(video.Duration)
+			if err != nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("generationConfig.responseFormat.video: %w", err)
+			}
+			config.VideoConfig = &aistudio.VideoConfig{AspectRatio: geminiResponseFormatValue(video.AspectRatio), DurationSeconds: seconds, Resolution: video.Resolution}
+		}
+	}
+	if video := request.GenerationConfig.VideoConfig; video != nil && video.Task != "" {
+		if config.VideoConfig == nil {
+			config.VideoConfig = &aistudio.VideoConfig{}
+		}
+		config.VideoConfig.Task = video.Task
 	}
 	config.HideThinking = true
 	if request.GenerationConfig.ThinkingConfig != nil {
@@ -1322,7 +1361,16 @@ func geminiFinishReason(reason string) string {
 func setGeminiCandidateEnd(candidate map[string]any, result generationResult) {
 	setGeminiFinish(candidate, result.finishReason, result.finishMessage)
 	if result.grounding != nil {
-		candidate["groundingMetadata"] = geminiGroundingMetadata(*result.grounding)
+		if grounding := geminiGroundingMetadata(*result.grounding); len(grounding) > 0 {
+			candidate["groundingMetadata"] = grounding
+		}
+		if len(result.grounding.URLContext) > 0 {
+			urls := make([]map[string]any, 0, len(result.grounding.URLContext))
+			for _, item := range result.grounding.URLContext {
+				urls = append(urls, map[string]any{"retrievedUrl": item.RetrievedURL, "urlRetrievalStatus": item.Status})
+			}
+			candidate["urlContextMetadata"] = map[string]any{"urlMetadata": urls}
+		}
 	}
 	citations := make([]aistudio.Citation, 0)
 	for _, event := range result.events {

@@ -41,7 +41,9 @@ import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import UiIcon from '@/components/UiIcon.vue'
+import { readPreference, writePreference } from '@/preference'
 import { useTabParam } from '@/url'
+import { useRouter } from 'vue-router'
 import type { IconName } from '@/icons'
 
 const { availableLocales, locale, setLocale, t, errorText } = useI18n()
@@ -61,7 +63,6 @@ function lazyPanel(loader: AsyncComponentLoader) {
   })
 }
 const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
-const PlaygroundPanel = lazyPanel(() => import('@/components/PlaygroundPanel.vue'))
 const VersionPanel = lazyPanel(() => import('@/components/VersionPanel.vue'))
 const validTabs: TabID[] = [
   'logs',
@@ -74,6 +75,20 @@ const validTabs: TabID[] = [
   'version',
 ]
 const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
+const router = useRouter()
+
+// openTab 切换页面，API 试用进入独立的试用页
+function openTab(tab: TabID): void {
+  if (tab === 'playground') void router.push('/prompts/new_chat')
+  else selectTab(tab)
+}
+watch(
+  currentTab,
+  (tab) => {
+    if (tab === 'playground') void router.replace('/prompts/new_chat')
+  },
+  { immediate: true },
+)
 const navigationBar = ref<HTMLElement | null>(null)
 
 // revealCurrentTab 把窄屏横向导航的当前项横向滚入视野
@@ -87,6 +102,55 @@ function revealCurrentTab(): void {
   else if (itemRect.right > barRect.right) bar.scrollLeft += itemRect.right - barRect.right
 }
 watch(currentTab, revealCurrentTab, { flush: 'post' })
+
+// defaultSidebarWidth 是宽屏侧栏的默认宽度，双击拖动条恢复
+const defaultSidebarWidth = 256
+const minSidebarWidth = 176
+const maxSidebarWidth = 360
+const sidebarWidth = ref(
+  readPreference('app.sidebarWidth', defaultSidebarWidth, (value) => typeof value === 'number'),
+)
+const resizingSidebar = ref(false)
+let sidebarResizeStartX = 0
+let sidebarResizeStartWidth = 0
+watch(sidebarWidth, (value) => writePreference('app.sidebarWidth', value))
+
+function clampSidebarWidth(value: number): number {
+  return Math.round(Math.min(maxSidebarWidth, Math.max(minSidebarWidth, value)))
+}
+sidebarWidth.value = clampSidebarWidth(sidebarWidth.value)
+
+function startSidebarResize(event: PointerEvent): void {
+  if (event.button !== 0) return
+  const handle = event.currentTarget as HTMLElement
+  handle.setPointerCapture(event.pointerId)
+  sidebarResizeStartX = event.clientX
+  sidebarResizeStartWidth = sidebarWidth.value
+  resizingSidebar.value = true
+  event.preventDefault()
+}
+
+function moveSidebarResize(event: PointerEvent): void {
+  if (!resizingSidebar.value) return
+  sidebarWidth.value = clampSidebarWidth(
+    sidebarResizeStartWidth + event.clientX - sidebarResizeStartX,
+  )
+}
+
+function stopSidebarResize(event: PointerEvent): void {
+  if (!resizingSidebar.value) return
+  const handle = event.currentTarget as HTMLElement
+  if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+  resizingSidebar.value = false
+}
+
+function resizeSidebarWithKeyboard(event: KeyboardEvent): void {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  sidebarWidth.value = clampSidebarWidth(
+    sidebarWidth.value + (event.key === 'ArrowRight' ? 16 : -16),
+  )
+}
 const status = ref<ServiceStatus | null>(null)
 const logs = shallowRef<AdminLog[]>([])
 const accounts = ref<Account[]>([])
@@ -401,7 +465,7 @@ function handleAdminEvent(event: AdminEvent): void {
 onMounted(async () => {
   mounted = true
   window.addEventListener('pagehide', flushDelete)
-  document.title = t('app.title')
+  document.title = 'AIStudio2API'
   revealCurrentTab()
   await refreshAll()
   if (!mounted) return
@@ -420,10 +484,6 @@ onMounted(async () => {
   })
 })
 
-watch(locale, () => {
-  document.title = t('app.title')
-})
-
 onUnmounted(() => {
   mounted = false
   eventConnection?.close()
@@ -437,33 +497,26 @@ onUnmounted(() => {
 <template>
   <div class="flex h-full w-full flex-col md:flex-row">
     <aside
-      class="flex min-w-0 w-full shrink-0 flex-col border-b border-line bg-panel md:w-64 md:border-r md:border-b-0"
+      class="app-sidebar relative grid w-full min-w-0 shrink-0 border-b border-line bg-panel md:border-r md:border-b-0"
+      :style="{ '--sidebar-width': `${sidebarWidth}px` }"
     >
-      <div class="flex h-14 items-center justify-between gap-2 border-b border-line px-4">
-        <div class="flex min-w-0 items-center gap-2.5">
+      <div
+        class="flex h-14 min-w-0 items-center gap-2.5 border-b border-line px-4 [grid-area:brand]"
+      >
+        <span
+          v-tooltip="`${t('app.status')}: ${serviceState.toUpperCase()}`"
+          class="relative shrink-0"
+        >
+          <img src="/favicon.svg" alt="" class="h-6 w-6" />
           <span
-            v-tooltip="`${t('app.status')}: ${serviceState.toUpperCase()}`"
-            class="relative shrink-0"
-          >
-            <img src="/favicon.png" alt="" class="h-6 w-6" />
-            <span
-              class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-panel"
-              :class="statusColor"
-            ></span>
-          </span>
-          <h1 class="whitespace-nowrap text-base font-bold text-white">AI Studio Proxy</h1>
-        </div>
+            class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-panel"
+            :class="statusColor"
+          ></span>
+        </span>
+        <h1 class="relative top-px min-w-0 flex-1 truncate text-base font-bold text-white">
+          AIStudio2API
+        </h1>
         <div class="flex shrink-0 items-center gap-1">
-          <button
-            v-if="adminUsername"
-            v-tooltip="`${adminUsername} · ${t('auth.logout')}`"
-            type="button"
-            :aria-label="`${adminUsername} · ${t('auth.logout')}`"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white md:hidden"
-            @click="logout"
-          >
-            <UiIcon name="login" :size="13" />
-          </button>
           <ThemeToggle />
           <DropdownMenuRoot :modal="false">
             <DropdownMenuTrigger
@@ -494,9 +547,29 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <div
+        v-if="adminUsername"
+        class="flex min-w-0 items-center gap-1 border-b border-line pr-4 [grid-area:controls] md:border-t md:border-b-0 md:px-3 md:py-2"
+      >
+        <span
+          v-tooltip.overflow="adminUsername"
+          class="hidden min-w-0 flex-1 truncate text-xs text-gray-400 md:block"
+          >{{ adminUsername }}</span
+        >
+        <button
+          v-tooltip="t('auth.logout')"
+          type="button"
+          :aria-label="`${adminUsername} · ${t('auth.logout')}`"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-700 text-gray-500 transition hover:text-white"
+          @click="logout"
+        >
+          <UiIcon name="login" :size="13" />
+        </button>
+      </div>
+
       <nav
         ref="navigationBar"
-        class="flex w-full min-w-0 flex-none gap-1 overflow-x-auto p-2 md:flex-1 md:flex-col md:space-y-1"
+        class="flex w-full min-w-0 gap-1 overflow-x-auto p-2 [grid-area:nav] md:flex-col md:overflow-x-hidden md:overflow-y-auto"
       >
         <button
           v-for="item in navigation"
@@ -509,10 +582,12 @@ onUnmounted(() => {
           ]"
           type="button"
           :aria-current="currentTab === item.id ? 'page' : undefined"
-          @click="selectTab(item.id)"
+          @click="openTab(item.id)"
         >
-          <UiIcon :name="item.icon" :size="16" />
-          {{ t(item.label) }}
+          <UiIcon :name="item.icon" :size="16" class="shrink-0" />
+          <span v-tooltip.overflow="t(item.label)" class="min-w-0 truncate md:whitespace-normal">{{
+            t(item.label)
+          }}</span>
           <span
             v-if="item.id === 'version' && update?.available"
             class="size-2 shrink-0 rounded-full bg-amber-400 md:ml-auto"
@@ -522,17 +597,8 @@ onUnmounted(() => {
         </button>
       </nav>
 
-      <button
-        v-if="adminUsername"
-        type="button"
-        class="mx-4 mb-3 hidden rounded border border-line px-3 py-2 text-gray-400 hover:bg-raised hover:text-white md:block"
-        @click="logout"
-      >
-        {{ adminUsername }} · {{ t('auth.logout') }}
-      </button>
-
       <div
-        class="relative min-w-0 overflow-hidden border-t border-line p-2 md:p-4"
+        class="relative min-w-0 overflow-hidden border-t border-line p-2 [grid-area:status] md:p-4"
         :class="serviceState === 'launching' ? 'launching-shell' : ''"
       >
         <div v-if="serviceState === 'launching'" class="launching-scan" aria-hidden="true"></div>
@@ -591,6 +657,23 @@ onUnmounted(() => {
           {{ t('app.stop') }}
         </button>
       </div>
+      <div
+        class="sidebar-resizer"
+        :class="{ 'is-resizing': resizingSidebar }"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        :aria-label="t('app.resizeSidebar')"
+        :aria-valuemin="minSidebarWidth"
+        :aria-valuemax="maxSidebarWidth"
+        :aria-valuenow="sidebarWidth"
+        @pointerdown="startSidebarResize"
+        @pointermove="moveSidebarResize"
+        @pointerup="stopSidebarResize"
+        @pointercancel="stopSidebarResize"
+        @dblclick="sidebarWidth = defaultSidebarWidth"
+        @keydown="resizeSidebarWithKeyboard"
+      ></div>
     </aside>
 
     <main class="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
@@ -611,6 +694,9 @@ onUnmounted(() => {
             :models="models"
             :loading="loading.models"
             :error="errors.models"
+            :config="config"
+            @saved="config = $event"
+            @notice="showNotice"
           />
           <RequestsPanel
             v-else-if="currentTab === 'requests'"
@@ -638,11 +724,6 @@ onUnmounted(() => {
             :active-requests="status?.active_requests ?? 0"
             @status="update = $event"
             @restarting="waitForRestart"
-          />
-          <PlaygroundPanel
-            v-else
-            :models="models"
-            :api-key="(config?.proxy_api_key ?? '').split(',')[0]?.trim() ?? ''"
           />
         </KeepAlive>
       </Transition>
@@ -693,6 +774,67 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.app-sidebar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'brand controls'
+    'nav nav'
+    'status status';
+}
+
+@media (width >= 48rem) {
+  .app-sidebar {
+    width: var(--sidebar-width);
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'brand'
+      'nav'
+      'controls'
+      'status';
+  }
+}
+
+.sidebar-resizer {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  right: -0.375rem;
+  bottom: 0;
+  width: 0.75rem;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(50% - 1px);
+  width: 2px;
+  background: transparent;
+  content: '';
+  transition: background-color 150ms ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.sidebar-resizer.is-resizing::after {
+  background: var(--color-blue-500);
+}
+
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+
+@media (width >= 48rem) {
+  .sidebar-resizer {
+    display: block;
+  }
+}
+
 .launching-shell {
   background:
     radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), var(--color-panel);

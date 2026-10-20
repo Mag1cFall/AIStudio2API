@@ -12,15 +12,14 @@ import RankingTable from './usage/RankingTable.vue'
 import RecordsTable from './usage/RecordsTable.vue'
 import UsageCharts from './usage/UsageCharts.vue'
 import { useUsageFormat } from './usage/format'
+import { readPreference, writePreference } from '@/preference'
 import {
   dimensions,
   liveRange,
   rateTone,
-  readPreference,
   resolveRange,
   successRate,
   useUsageState,
-  writePreference,
   type RangePreset,
 } from './usage/model'
 
@@ -453,7 +452,7 @@ const statusOptions = computed(() =>
       </span>
     </div>
 
-    <div class="w-full space-y-4 p-4 md:p-8">
+    <div class="@container w-full space-y-4 p-4 md:p-8">
       <div
         v-if="error && status !== 'error'"
         class="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
@@ -472,7 +471,7 @@ const statusOptions = computed(() =>
 
       <template v-if="status === 'loading'">
         <div
-          class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+          class="grid grid-cols-1 gap-3 @min-[37rem]:grid-cols-2 @min-[56rem]:grid-cols-3 @min-[110rem]:grid-cols-6"
           aria-hidden="true"
         >
           <div v-for="index in 6" :key="index" class="h-32 animate-pulse rounded-lg bg-panel"></div>
@@ -520,7 +519,9 @@ const statusOptions = computed(() =>
             </button>
           </div>
           <template v-else>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <div
+              class="grid grid-cols-1 gap-3 @min-[37rem]:grid-cols-2 @min-[56rem]:grid-cols-3 @min-[110rem]:grid-cols-6"
+            >
               <KpiCard
                 v-for="kpi in kpis"
                 :key="kpi.label"

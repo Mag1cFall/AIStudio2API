@@ -22,9 +22,10 @@ type PairingToken struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// AccountStateInput 是远程配对上传的账户认证状态与 Camoufox 指纹
+// AccountStateInput 是远程配对上传或管理端 Cookie 导入的账户认证状态与 Camoufox 指纹
 type AccountStateInput struct {
 	Label        string                `json:"label"`
+	Proxy        string                `json:"-"`
 	Locale       string                `json:"locale"`
 	Timezone     string                `json:"timezone"`
 	StorageState aistudio.StorageState `json:"storage_state"`

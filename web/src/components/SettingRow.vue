@@ -31,7 +31,7 @@ const { t } = useI18n()
         >
       </div>
       <p v-if="description" class="mt-1 text-xs leading-5 text-gray-500">{{ description }}</p>
-      <p class="mt-1 text-[11px] text-gray-600">{{ t(`settings.effect.${effect}`) }}</p>
+      <p class="mt-1 text-xs text-gray-600">{{ t(`settings.effect.${effect}`) }}</p>
     </div>
     <div class="w-full md:w-80 md:shrink-0">
       <slot />
