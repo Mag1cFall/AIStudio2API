@@ -553,7 +553,7 @@ Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `Gene
 - **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
 - **AI Studio 历史**: API 请求不保存到官网历史；`TEMPORARY_CHAT=true` 还会关闭 WAA 预热页的自动保存
 - **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
-- **认证有效期**: Chrome 导入账户保留 DBSC 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
+- **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
 
 ## 故障排除
 
