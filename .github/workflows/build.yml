@@ -128,7 +128,7 @@ jobs:
           mkdir dist/dmg
           cp -R "$app" dist/dmg/
           ln -s /Applications dist/dmg/Applications
-          hdiutil create -volname AIStudio2API -srcfolder dist/dmg -ov -format UDZO "dist/aistudio2api-${version}-darwin-universal.dmg"
+          hdiutil create -volname AIStudio2API -srcfolder dist/dmg -fs HFS+ -ov -format UDZO "dist/aistudio2api-${version}-darwin-universal.dmg"
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-macos

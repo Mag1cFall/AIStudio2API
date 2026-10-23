@@ -26,17 +26,17 @@
 
 <table>
   <tr>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/accounts-dark.webp"><img src="docs/images/accounts-light.webp" alt="Accounts"></picture><br><b>Accounts</b>: Tier, egress and state of every account; add, sign in and refresh from here</td>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/usage-dark.webp"><img src="docs/images/usage-light.webp" alt="Usage"></picture><br><b>Usage</b>: Requests, success rate, tokens, estimated cost and first-token latency, filtered by model, account or channel</td>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/logs-dark.webp"><img src="docs/images/logs-light.webp" alt="Logs"></picture><br><b>Logs</b>: Model, account, tokens, speed and first-token time of every request</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/accounts-dark.webp"><img src="docs/images/accounts-light.webp" alt="Accounts"></picture><br><b>Accounts</b><br>Tier, state</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/usage-dark.webp"><img src="docs/images/usage-light.webp" alt="Usage"></picture><br><b>Usage</b><br>Cost, latency</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/logs-dark.webp"><img src="docs/images/logs-light.webp" alt="Logs"></picture><br><b>Logs</b><br>Per request</td>
   </tr>
   <tr>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models-dark.webp"><img src="docs/images/models-light.webp" alt="Model catalog"></picture><br><b>Model catalog</b>: Models and capabilities merged from each account’s live catalog</td>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/settings-dark.webp"><img src="docs/images/settings-light.webp" alt="Settings"></picture><br><b>Settings</b>: Every <code>.env</code> option can be changed in the UI</td>
-    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/image-dark.webp"><img src="docs/images/image-light.webp" alt="Image generation"></picture><br><b>Image generation</b>: Nano Banana text-to-image and editing with the same run settings as AI Studio</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models-dark.webp"><img src="docs/images/models-light.webp" alt="Models"></picture><br><b>Models</b><br>Live catalog</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/settings-dark.webp"><img src="docs/images/settings-light.webp" alt="Settings"></picture><br><b>Settings</b><br>All options</td>
+    <td width="33%" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/image-dark.webp"><img src="docs/images/image-light.webp" alt="Images"></picture><br><b>Images</b><br>Create, edit</td>
   </tr>
   <tr>
-    <td colspan="3"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-dark.webp"><img src="docs/images/chat-light.webp" alt="API playground: chat with thinking, math tables and code blocks" width="100%"></picture><br><b>API playground</b>: The AI Studio chat page with thinking, math tables and code blocks</td>
+    <td colspan="3" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-dark.webp"><img src="docs/images/chat-light.webp" alt="API playground" width="100%"></picture><br><b>API playground</b><br>AI Studio chat with thinking and code</td>
   </tr>
 </table>
 
