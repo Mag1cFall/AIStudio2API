@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import { vTooltip } from '@/playground/ui/tooltip'
@@ -17,7 +17,6 @@ const props = defineProps<{
 }>()
 const { t, locale } = useI18n()
 const expanded = ref(false)
-const outline = ref<HTMLElement>()
 // bodyMounted 表示思考正文已渲染；折叠动画结束后卸载，生成中折叠时不解析正文
 const bodyMounted = ref(false)
 
@@ -29,26 +28,27 @@ watch(expanded, (open) => {
     }, 225)
 })
 
-// headings 按官网取小标题的规则列出思考中每个含粗体的行的粗体文字，相邻重复的只保留一个
-const headings = computed(() =>
-  props.text
-    .split('\n')
-    .map(
-      (line) =>
-        line
-          .trim()
-          .match(/\*\*(.*)\*\*/)?.[1]
-          ?.trim() ?? '',
-    )
-    .filter(Boolean)
-    .filter((heading, index, list) => heading !== list[index - 1]),
+// heading 按官网取小标题的规则取思考中最后一个含粗体的行的粗体文字
+const heading = computed(
+  () =>
+    props.text
+      .split('\n')
+      .map(
+        (line) =>
+          line
+            .trim()
+            .match(/\*\*(.*)\*\*/)?.[1]
+            ?.trim() ?? '',
+      )
+      .filter(Boolean)
+      .at(-1) ?? '',
 )
 // toggleText 是底栏的展开或折叠提示
 const toggleText = computed(() =>
   expanded.value ? t('pg.collapseThoughts') : t('pg.expandThoughts'),
 )
-// showOutline 表示折叠的底栏列出思考小标题，没有小标题时提示展开
-const showOutline = computed(() => !expanded.value && headings.value.length > 0)
+// showHeading 表示折叠的底栏显示最新的思考小标题，没有小标题时提示展开
+const showHeading = computed(() => !expanded.value && heading.value !== '')
 // meta 是思考结束后标题行右侧的思考耗时与思考 token 数
 const meta = computed(() =>
   [
@@ -59,16 +59,6 @@ const meta = computed(() =>
   ]
     .filter(Boolean)
     .join(' · '),
-)
-
-// 生成中新小标题出现时列表滚到最新一行
-watch(
-  () => headings.value.length,
-  async () => {
-    if (!props.streaming) return
-    await nextTick()
-    if (outline.value) outline.value.scrollTop = outline.value.scrollHeight
-  },
 )
 
 // onKey 以回车或空格切换展开
@@ -117,18 +107,9 @@ function onKey(event: KeyboardEvent): void {
         @keydown="onKey"
       >
         <div class="thought-collapsed-text-container">
-          <ol v-if="showOutline" ref="outline" class="thought-outline">
-            <TransitionGroup name="fade-slide">
-              <li
-                v-for="(heading, index) in headings"
-                :key="index"
-                class="thought-collapsed-text"
-                :class="{ latest: streaming && index === headings.length - 1 }"
-              >
-                {{ heading }}
-              </li>
-            </TransitionGroup>
-          </ol>
+          <Transition v-if="showHeading" name="fade-slide" mode="out-in">
+            <p :key="heading" class="thought-collapsed-text">{{ heading }}</p>
+          </Transition>
           <p v-else class="thought-collapsed-text">{{ toggleText }}</p>
         </div>
         <UiIcon name="chevronRight" :size="20" class="footer-icon" :class="{ expanded }" />
@@ -244,25 +225,6 @@ function onKey(event: KeyboardEvent): void {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.thought-outline {
-  max-height: 100px;
-  margin: 0;
-  padding: 8px 0;
-  overflow-y: auto;
-  list-style: none;
-  scrollbar-width: thin;
-}
-
-.thought-outline .thought-collapsed-text {
-  color: var(--color-v3-text-var);
-  font-weight: 400;
-}
-
-.thought-outline .thought-collapsed-text.latest {
-  color: var(--color-v3-text);
-  font-weight: 500;
 }
 
 .footer-icon {
