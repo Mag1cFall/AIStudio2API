@@ -1,5 +1,13 @@
-// SchemaType 是可视化编辑器中属性的类型，enum 写为带 enum 的 string
-export type SchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'enum'
+// SchemaType 是可视化编辑器中属性的类型，enum 按原类型写出 enum 取值，array 只出现在多维数组的元素上，空串表示原 Schema 未声明类型
+export type SchemaType =
+  | 'string'
+  | 'number'
+  | 'integer'
+  | 'boolean'
+  | 'object'
+  | 'enum'
+  | 'array'
+  | ''
 
 // schemaTypes 是可视化编辑器可选的属性类型
 export const schemaTypes: SchemaType[] = [
@@ -11,7 +19,7 @@ export const schemaTypes: SchemaType[] = [
   'enum',
 ]
 
-// SchemaEntry 是可视化编辑器中的一个属性；extra 保留编辑器不显示的 schema 字段
+// SchemaEntry 是可视化编辑器中的一个属性；extra 与 itemExtra 保留属性与数组元素上编辑器不显示的 schema 字段（元素本身为数组时含其 items），enumType 为枚举的原类型（空串为未声明类型），enumValues 为读入时各枚举项的原始取值
 export interface SchemaEntry {
   key: string
   type: SchemaType
@@ -19,7 +27,10 @@ export interface SchemaEntry {
   isRequired: boolean
   children?: SchemaEntry[]
   values?: string[]
+  enumType?: string | string[]
+  enumValues?: unknown[]
   extra?: Record<string, unknown>
+  itemExtra?: Record<string, unknown>
 }
 
 // SchemaTree 是可视化编辑器的根对象
@@ -30,8 +41,8 @@ export interface SchemaTree {
 
 // JSONSchema 是编辑器读写的 OpenAPI schema 片段
 interface JSONSchema {
-  type?: string
-  enum?: string[]
+  type?: string | string[]
+  enum?: unknown[]
   items?: JSONSchema
   properties?: Record<string, JSONSchema>
   propertyOrdering?: string[]
@@ -49,11 +60,12 @@ const structuralKeys = new Set([
   'required',
 ])
 
-// extras 返回 schema 中编辑器不显示的字段
-function extras(schema: JSONSchema): Record<string, unknown> | undefined {
-  const result = Object.fromEntries(
-    Object.entries(schema).filter(([key]) => !structuralKeys.has(key)),
-  )
+// arrayKeys 是由编辑器的数组开关生成的字段，数组自身的其余字段原样保留
+const arrayKeys = new Set(['type', 'items'])
+
+// extras 返回 schema 中除 keys 以外编辑器不显示的字段
+function extras(schema: JSONSchema, keys = structuralKeys): Record<string, unknown> | undefined {
+  const result = Object.fromEntries(Object.entries(schema).filter(([key]) => !keys.has(key)))
   return Object.keys(result).length > 0 ? result : undefined
 }
 
@@ -67,16 +79,30 @@ function entries(schema: JSONSchema): SchemaEntry[] {
 
 // entry 把一个属性的 schema 读为编辑器条目
 function entry(key: string, schema: JSONSchema, isRequired: boolean): SchemaEntry {
-  const extra = extras(schema)
+  const isArray = schema.items !== undefined
+  const extra = extras(schema, isArray ? arrayKeys : structuralKeys)
   const base = { key, isRequired, ...(extra ? { extra } : {}) }
   const source = schema.items ?? schema
-  const isArray = schema.items !== undefined
+  const itemExtra = isArray
+    ? { ...extras(source), ...(source.items === undefined ? {} : { items: source.items }) }
+    : undefined
+  const array = {
+    ...(isArray ? { isArray } : {}),
+    ...(itemExtra && Object.keys(itemExtra).length > 0 ? { itemExtra } : {}),
+  }
   if (source.enum?.length)
-    return { ...base, type: 'enum', values: [...source.enum], ...(isArray ? { isArray } : {}) }
+    return {
+      ...base,
+      type: 'enum',
+      values: source.enum.map(String),
+      ...(source.type !== 'string' ? { enumType: source.type ?? '' } : {}),
+      enumValues: source.enum,
+      ...array,
+    }
   return {
     ...base,
-    type: (source.type ?? 'string') as SchemaType,
-    ...(isArray ? { isArray } : {}),
+    type: (source.type ?? '') as SchemaType,
+    ...array,
     ...(source.properties ? { children: entries(source) } : {}),
   }
 }
@@ -93,10 +119,27 @@ export function parseSchema(text: string): SchemaTree {
   return { children: schema.properties ? entries(schema) : [], ...(extra ? { extra } : {}) }
 }
 
+// enumValue 把编辑过的枚举文本按枚举类型转换，类型数组按其中非 null 的类型
+function enumValue(type: string | string[] | undefined, value: string): unknown {
+  const base = Array.isArray(type) ? type.find((item) => item !== 'null') : type
+  if (base === 'number' || base === 'integer') return Number(value)
+  if (base === 'boolean') return value === 'true'
+  return value
+}
+
 // node 把条目写为不含数组包装的 schema
 function node(item: SchemaEntry): JSONSchema {
-  if (item.type === 'enum') return { type: 'string', enum: item.values ?? [] }
-  const result: JSONSchema = { type: item.type }
+  if (item.type === 'enum') {
+    const values = (item.values ?? []).map((value, index) =>
+      item.enumValues && index < item.enumValues.length && String(item.enumValues[index]) === value
+        ? item.enumValues[index]
+        : enumValue(item.enumType, value),
+    )
+    return item.enumType === ''
+      ? { enum: values }
+      : { type: item.enumType ?? 'string', enum: values }
+  }
+  const result: JSONSchema = item.type ? { type: item.type } : {}
   if (item.children) Object.assign(result, objectBody(item.children))
   return result
 }
@@ -107,7 +150,9 @@ function objectBody(children: SchemaEntry[]): JSONSchema {
   return {
     properties: Object.fromEntries(
       children.map((item) => {
-        const schema = item.isArray ? { type: 'array', items: node(item) } : node(item)
+        const schema = item.isArray
+          ? { type: 'array', items: { ...node(item), ...item.itemExtra } }
+          : node(item)
         return [item.key, { ...schema, ...item.extra }]
       }),
     ),

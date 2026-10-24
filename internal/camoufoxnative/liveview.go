@@ -269,7 +269,7 @@ func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, view
 	}
 }
 
-// answerDialog 按登录窗口的选择关闭页面对话框；打开对话框的命令仍在等待响应，因此不经命令锁发送
+// answerDialog 按登录窗口的选择关闭页面对话框，打开对话框的命令仍在等待响应
 func (view *LiveView) answerDialog(accept bool, text string) {
 	view.mu.Lock()
 	dialog, client := view.dialog, view.client
@@ -281,7 +281,9 @@ func (view *LiveView) answerDialog(accept bool, text string) {
 	if dialog.Kind == "prompt" && accept {
 		params["userText"] = text
 	}
-	_ = client.dispatch("browsingContext.handleUserPrompt", params)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = client.command(ctx, "browsingContext.handleUserPrompt", params)
 }
 
 // observe 跟踪顶层页面的打开与关闭和等待用户处理的页面对话框
@@ -332,7 +334,7 @@ func (view *LiveView) attach(ctx context.Context, client *bidiClient, root strin
 	view.contexts = []string{root}
 	view.client = client
 	view.mu.Unlock()
-	client.listener = view.observe
+	client.setListener(view.observe)
 	if _, err := client.command(ctx, "session.subscribe", map[string]any{"events": liveViewEvents}); err != nil {
 		return nil, err
 	}

@@ -18,7 +18,7 @@ import { useCompare, usePlayground } from './session'
 
 defineProps<{ settingsOpen: boolean; narrow: boolean }>()
 const emit = defineEmits<{ newChat: []; toggleSettings: [] }>()
-const { t, locale } = useI18n()
+const { t, tokenLabel } = useI18n()
 const router = useRouter()
 const playground = usePlayground()
 const { session } = playground
@@ -46,12 +46,7 @@ const title = computed(() =>
 )
 // tokens 是当前对话的 token 数
 const tokens = computed(() =>
-  session.promptTokens === null
-    ? ''
-    : t('pg.tokens').replace(
-        '{count}',
-        new Intl.NumberFormat(locale.value).format(session.promptTokens),
-      ),
+  session.promptTokens === null ? '' : tokenLabel(session.promptTokens),
 )
 
 // openRename 打开标题编辑对话框
@@ -156,13 +151,22 @@ async function removePrompt(): Promise<void> {
         <DropdownMenuPortal>
           <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
             <DropdownMenuItem
+              v-if="handset"
+              v-tooltip.left="session.id === null ? t('pg.shareNeedsRun') : ''"
+              class="ms-menu-item"
+              disabled
+            >
+              <UiIcon name="share" :size="18" />
+              <span class="ms-menu-item-text">{{ t('pg.share') }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
               class="ms-menu-item"
               :disabled="session.id !== null || isOmniModel(playground.currentModel.value)"
               @select="session.temporary = !session.temporary"
             >
               <UiIcon name="incognito" :size="18" />
               <span class="ms-menu-item-text">{{ temporaryLabel }}</span>
-              <span class="ms-menu-radio" :class="{ selected: session.temporary }"></span>
+              <UiIcon v-if="session.temporary" name="check" :size="18" />
             </DropdownMenuItem>
             <DropdownMenuItem
               class="ms-menu-item"
@@ -173,7 +177,9 @@ async function removePrompt(): Promise<void> {
             >
               <UiIcon name="save" :size="18" />
               <span class="ms-menu-item-text">{{
-                session.saveState === 'saved' ? t('pg.noChanges') : t('pg.savePrompt')
+                session.turns.length === 0 || session.saveState === 'saved'
+                  ? t('pg.noChanges')
+                  : t('pg.savePrompt')
               }}</span>
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -195,7 +201,7 @@ async function removePrompt(): Promise<void> {
             <DropdownMenuItem class="ms-menu-item" @select="toggleRaw">
               <UiIcon name="rawMode" :size="18" />
               <span class="ms-menu-item-text">{{ t('pg.rawMode') }}</span>
-              <span class="ms-menu-radio" :class="{ selected: session.rawMode }"></span>
+              <UiIcon v-if="session.rawMode" name="check" :size="18" />
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenuPortal>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n, type TranslationKey } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
@@ -13,16 +14,19 @@ import RunSettingsFrame from './RunSettingsFrame.vue'
 import SafetyDialog from './SafetyDialog.vue'
 import SystemInstructions from './SystemInstructions.vue'
 import ThinkingBudgetSetting from './ThinkingBudgetSetting.vue'
-import { hasCode, thinkingLevelLabels, thinkingLevelTooltips } from './catalog'
+import { Capability, hasCode, thinkingLevelLabels, thinkingLevelTooltips } from './catalog'
 import { protocolOptions, protocolsFor, protocolSupports, type ProtocolSetting } from './protocols'
 import { defaultSettings, outputLimit, useCompare, usePlayground } from './session'
 import { useTools } from './tools'
 import type { ImageOutput, ImageQuality, MediaResolution } from './types'
+import type { Model } from '@/types'
 import type { IconName } from '@/playground/ui/icons'
 
 defineProps<{ open: boolean; narrow: boolean; title?: string | undefined }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const playground = usePlayground()
 const { session, currentModel } = playground
 const { panes, comparing, syncInstructions, setSync } = useCompare()
@@ -61,7 +65,7 @@ const mediaResolutions: { value: MediaResolution; label: string }[] = [
   { value: 'MEDIA_RESOLUTION_HIGH', label: 'pg.high' },
 ]
 // imageModel 表示所选模型输出图片
-const imageModel = computed(() => can(21))
+const imageModel = computed(() => can(Capability.ImageRoute))
 // videoOptions 是 Omni 模型目录中的视频输出选项，没有视频任务的模型为 undefined
 const videoOptions = computed(() => {
   const options = model.value?.capability_options
@@ -89,6 +93,13 @@ const videoTaskLabels: Record<string, TranslationKey> = {
   reference_to_video: 'pg.videoTaskReference',
   edit: 'pg.videoTaskEdit',
   extend: 'pg.videoTaskExtend',
+}
+
+// selectModel 切换对话模型，新对话与官网一样把模型写入地址
+function selectModel(model: Model): void {
+  playground.selectModel(model.id)
+  if (route.params.id === undefined)
+    void router.push({ query: { ...route.query, model: model.id } })
 }
 
 // setVideoDuration 设置视频时长，与默认值相同时不发送
@@ -155,7 +166,7 @@ const systemSubtitle = computed(
 )
 // temperatureTooltip 是温度滑块的说明
 const temperatureTooltip = computed(() => {
-  if (can(27)) return t('pg.temperatureFixed')
+  if (can(Capability.FixedTemperature)) return t('pg.temperatureFixed')
   return /gemini-3/.test(model.value?.id ?? '')
     ? t('pg.temperatureGemini3')
     : t('pg.temperatureTip')
@@ -232,25 +243,27 @@ watch(schemaOpen, (open) => {
     :open="open"
     :narrow="narrow"
     :title="title"
+    :code-button="!comparing"
     @close="emit('close')"
     @code="codeOpen = true"
     @reset="reset"
   >
     <div class="field-group">
       <ModelCard
+        v-if="!comparing"
         :model="model"
         kind="chat"
         :has-content="session.turns.length > 0"
-        @select="playground.selectModel($event.id)"
+        @select="selectModel"
       />
       <div class="system-instructions-panel">
         <button
-          v-tooltip.left="can(8) ? '' : t('pg.systemUnsupported')"
+          v-tooltip.left="can(Capability.SystemInstruction) ? '' : t('pg.systemUnsupported')"
           type="button"
           class="settings-card system-instructions-card"
-          :class="{ 'disabled-interactive': !can(8) }"
+          :class="{ 'disabled-interactive': !can(Capability.SystemInstruction) }"
           :aria-label="t('pg.systemInstructions')"
-          @click="can(8) && (systemOpen = true)"
+          @click="can(Capability.SystemInstruction) && (systemOpen = true)"
         >
           <span class="title">{{ t('pg.systemInstructions') }}</span>
           <span class="subtitle">{{ systemSubtitle }}</span>
@@ -259,15 +272,22 @@ watch(schemaOpen, (open) => {
           v-if="comparing"
           v-tooltip.below="t('pg.syncInstructionsTip')"
           class="sync-button"
-          :class="{ disabled: !can(8) }"
+          :class="{ disabled: !can(Capability.SystemInstruction) }"
         >
-          <input
-            type="checkbox"
-            :checked="can(8) && syncInstructions"
-            :disabled="!can(8)"
-            :aria-label="t('pg.syncInstructions')"
-            @change="setSync(paneIndex, ($event.target as HTMLInputElement).checked)"
-          />
+          <span class="checkbox">
+            <input
+              type="checkbox"
+              :checked="can(Capability.SystemInstruction) && syncInstructions"
+              :disabled="!can(Capability.SystemInstruction)"
+              :aria-label="t('pg.syncInstructions')"
+              @change="setSync(paneIndex, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="checkbox-background" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" />
+              </svg>
+            </span>
+          </span>
           <span class="sync-checkbox-label">{{ t('pg.sync') }}</span>
         </label>
       </div>
@@ -354,10 +374,16 @@ watch(schemaOpen, (open) => {
       </div>
 
       <div
-        v-if="can(62) || (imageModel && (aspectRatios.length || imageSizes.length))"
+        v-if="
+          can(Capability.Temperature) || (imageModel && (aspectRatios.length || imageSizes.length))
+        "
         class="field-group"
       >
-        <div v-if="can(62)" v-tooltip.left="temperatureTooltip" class="settings-item-column">
+        <div
+          v-if="can(Capability.Temperature)"
+          v-tooltip.left="temperatureTooltip"
+          class="settings-item-column"
+        >
           <h3 class="item-description-title">{{ t('pg.temperature') }}</h3>
           <div class="ms-slider">
             <UiSlider
@@ -365,7 +391,7 @@ watch(schemaOpen, (open) => {
               :min="0"
               :max="model?.max_temperature ?? 1"
               :step="0.05"
-              :disabled="can(27)"
+              :disabled="can(Capability.FixedTemperature)"
               :label="t('pg.temperature')"
               @update:model-value="settings.temperature = $event"
             />
@@ -376,7 +402,7 @@ watch(schemaOpen, (open) => {
               :min="0"
               :max="model?.max_temperature ?? 1"
               step="0.05"
-              :disabled="can(27)"
+              :disabled="can(Capability.FixedTemperature)"
               :aria-label="t('pg.temperature')"
               :value="settings.temperature ?? model?.temperature ?? 1"
               @change="settings.temperature = numberInput($event)"
@@ -472,7 +498,10 @@ watch(schemaOpen, (open) => {
         </div>
       </div>
 
-      <div v-if="can(52) && model?.thinking_levels?.length" class="field-group">
+      <div
+        v-if="can(Capability.ThinkingLevel) && model?.thinking_levels?.length"
+        class="field-group"
+      >
         <div v-tooltip.left="t('pg.thinkingLevelTip')" class="settings-item-column">
           <h3 class="item-description-title">{{ t('pg.thinkingLevel') }}</h3>
           <UiSelect
@@ -494,7 +523,7 @@ watch(schemaOpen, (open) => {
           </UiSelect>
         </div>
       </div>
-      <div v-else-if="can(35)" class="field-group">
+      <div v-else-if="can(Capability.ThinkingBudget)" class="field-group">
         <ThinkingBudgetSetting
           v-model="settings.thinkingBudget"
           :config="model?.thinking_budget"
@@ -577,7 +606,7 @@ watch(schemaOpen, (open) => {
         </button>
         <template v-if="advancedOpen">
           <div
-            v-if="can(43)"
+            v-if="can(Capability.MediaResolution)"
             v-tooltip.left="settingTip('mediaResolution', t('pg.mediaResolutionTip'))"
             class="settings-item-column"
           >
@@ -594,7 +623,7 @@ watch(schemaOpen, (open) => {
             </UiSelect>
           </div>
           <div
-            v-if="can(28)"
+            v-if="can(Capability.SafetySettings)"
             v-tooltip.left="settingTip('safety', t('pg.safetyTip'))"
             class="settings-item"
           >
@@ -611,7 +640,7 @@ watch(schemaOpen, (open) => {
             </button>
           </div>
           <div
-            v-if="can(63)"
+            v-if="can(Capability.StopSequences)"
             v-tooltip.left="settingTip('stopSequences', t('pg.stopTip'))"
             class="stop-sequences"
           >
@@ -648,7 +677,7 @@ watch(schemaOpen, (open) => {
             </div>
           </div>
           <div
-            v-if="can(64)"
+            v-if="can(Capability.MaxOutputTokens)"
             v-tooltip.left="t('pg.outputLengthTip')"
             class="settings-item output-length"
           >
@@ -669,7 +698,7 @@ watch(schemaOpen, (open) => {
             </p>
           </div>
           <div
-            v-if="can(24)"
+            v-if="can(Capability.TopK)"
             v-tooltip.left="settingTip('topK', t('pg.topKTip'))"
             class="settings-item"
           >
@@ -686,7 +715,11 @@ watch(schemaOpen, (open) => {
               @change="setTopK"
             />
           </div>
-          <div v-if="can(23)" v-tooltip.left="t('pg.topPTip')" class="settings-item-column">
+          <div
+            v-if="can(Capability.TopP)"
+            v-tooltip.left="t('pg.topPTip')"
+            class="settings-item-column"
+          >
             <h3 class="item-description-title">{{ t('pg.topP') }}</h3>
             <div class="ms-slider">
               <UiSlider
@@ -779,16 +812,66 @@ watch(schemaOpen, (open) => {
   justify-self: end;
   height: 40px;
   padding-right: 12px;
+  line-height: 17.5px;
   color: var(--color-run-settings-text);
   cursor: pointer;
 }
 
-.sync-button input {
+.checkbox {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
+.checkbox input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.checkbox-background {
+  display: flex;
   width: 18px;
   height: 18px;
-  margin: 11px;
-  accent-color: var(--color-v3-outline-accent);
-  cursor: inherit;
+  border: 2px solid var(--color-v3-outline);
+  border-radius: 2px;
+  pointer-events: none;
+  transition:
+    background-color 90ms cubic-bezier(0.4, 0, 0.6, 1),
+    border-color 90ms cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.checkbox-background svg {
+  width: 100%;
+  opacity: 0;
+  color: var(--mat-sys-on-primary);
+  stroke: currentColor;
+  stroke-width: 3.12px;
+}
+
+.checkbox input:checked + .checkbox-background {
+  border-color: var(--color-v3-text);
+  background-color: var(--color-v3-text);
+}
+
+.checkbox:hover input:checked + .checkbox-background {
+  border-color: var(--color-v3-text-var);
+  background-color: var(--color-v3-text-var);
+}
+
+.checkbox input:checked + .checkbox-background svg {
+  opacity: 1;
+}
+
+.checkbox input:disabled + .checkbox-background {
+  border-color: var(--color-v3-outline-var);
 }
 
 .sync-button.disabled {
@@ -797,8 +880,8 @@ watch(schemaOpen, (open) => {
 }
 
 .sync-checkbox-label {
-  font-size: 12px;
-  line-height: 16px;
+  padding-left: 4px;
+  font-size: 12.25px;
 }
 
 .protocol-setting {

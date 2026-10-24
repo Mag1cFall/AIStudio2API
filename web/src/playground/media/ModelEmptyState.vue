@@ -6,7 +6,6 @@ import UiIcon from '@/playground/ui/UiIcon.vue'
 export interface Starter {
   title: string
   prompt: string
-  thumb?: string
 }
 
 // Example 是右侧的示例卡片，悬停时播放视频
@@ -20,7 +19,7 @@ export interface Example {
 }
 
 defineProps<{
-  kind: 'video' | 'music' | 'chat' | 'images' | 'robotics' | 'live'
+  kind: 'music' | 'chat' | 'images' | 'robotics' | 'live'
   title: string
   description: string
   starters: readonly Starter[]
@@ -46,7 +45,6 @@ const { t } = useI18n()
         <ul v-if="starters.length" class="starters" :aria-label="t('pg.promptsToTry')">
           <li v-for="(item, index) in starters" :key="item.title" :style="{ '--i': index }">
             <button type="button" class="starter" @click="emit('starter', item)">
-              <img v-if="item.thumb" class="starter__thumb" :src="item.thumb" alt="" />
               <span>{{ item.title }}</span>
             </button>
           </li>
@@ -261,15 +259,6 @@ const { t } = useI18n()
 
 .starter:hover {
   background: var(--fill);
-}
-
-.starter__thumb {
-  flex: none;
-  width: 24px;
-  height: 18px;
-  border-radius: 5px;
-  box-shadow: 0 0 0 1px var(--line);
-  object-fit: cover;
 }
 
 .empty-state__examples {
@@ -542,22 +531,6 @@ const { t } = useI18n()
   white-space: nowrap;
 }
 
-.empty-state[data-kind='video'] .empty-state__examples {
-  grid-template-columns: 1.4fr 1fr;
-}
-
-.empty-state[data-kind='video'] .tile__frame {
-  aspect-ratio: 4 / 3;
-}
-
-.empty-state[data-kind='video'] .tile:nth-child(2) .tile__frame {
-  aspect-ratio: auto;
-}
-
-.empty-state[data-kind='video'] img {
-  animation: empty-push-in calc(var(--empty-duration, 10s) * 2.5) ease-in-out infinite alternate;
-}
-
 @keyframes empty-detect {
   0% {
     opacity: 0;
@@ -567,16 +540,6 @@ const { t } = useI18n()
   to {
     opacity: 1;
     transform: none;
-  }
-}
-
-@keyframes empty-push-in {
-  0% {
-    transform: scale(1.02);
-  }
-
-  to {
-    transform: scale(1.1) translate(-1.5%, 1%);
   }
 }
 
@@ -620,7 +583,6 @@ const { t } = useI18n()
   .empty-state h3,
   .detection,
   .empty-state__docs-link,
-  .empty-state[data-kind='video'] img,
   .empty-state__description,
   .starter,
   .starters li,

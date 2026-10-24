@@ -75,10 +75,15 @@ var (
 type AllCoolingError struct {
 	ModelID string
 	Until   time.Time
+	Reason  string
 }
 
 func (e *AllCoolingError) Error() string {
-	return fmt.Sprintf("模型 %s 的可用账户均在冷却，最早恢复时间 %s", e.ModelID, e.Until.Local().Format(time.RFC3339))
+	message := fmt.Sprintf("模型 %s 的可用账户均在冷却，最早恢复时间 %s", e.ModelID, e.Until.Local().Format(time.RFC3339))
+	if e.Reason == "" {
+		return message
+	}
+	return message + "；" + e.Reason
 }
 
 // RetryAt 返回最早恢复的时刻
@@ -252,7 +257,7 @@ type AccountCandidateGroups struct {
 	WarmBusy         []string
 	StandbyReady     []string
 	StandbyBusy      []string
-	EarliestCooldown time.Time
+	EarliestCooldown CooldownState
 	Eligible         bool
 }
 
@@ -2491,7 +2496,7 @@ func (p *AccountPool) ClassifyCandidates(
 		}
 		available := len(groups.WarmReady)+len(groups.WarmAvailable)+len(groups.WarmBusy)+
 			len(groups.StandbyReady)+len(groups.StandbyBusy) > 0
-		if attempt == 0 && (!groups.Eligible || !available && !groups.EarliestCooldown.IsZero()) {
+		if attempt == 0 && (!groups.Eligible || !available && !groups.EarliestCooldown.Until.IsZero()) {
 			if err := p.refreshSelectionRuntimes(ctx, selection); err != nil {
 				return AccountCandidateGroups{}, err
 			}
@@ -2542,9 +2547,9 @@ func (p *AccountPool) classifyCandidatesLocked(
 			continue
 		}
 		groups.Eligible = true
-		if until, active := p.accountChannelCooldownLocked(account, selection, now); active {
-			if groups.EarliestCooldown.IsZero() || until.Before(groups.EarliestCooldown) {
-				groups.EarliestCooldown = until
+		if cooldown, active := p.accountChannelCooldownLocked(account, selection, now); active {
+			if groups.EarliestCooldown.Until.IsZero() || cooldown.Until.Before(groups.EarliestCooldown.Until) {
+				groups.EarliestCooldown = cooldown
 			}
 			continue
 		}

@@ -201,6 +201,13 @@ func (manager *runtimeManager) Close() error {
 	return manager.current.Close()
 }
 
+// responseModes 返回当前生成服务的非流式保活与假流式设置
+func (manager *runtimeManager) responseModes() api.ResponseModes {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return api.ResponseModes{NonstreamKeepalive: manager.current.config.NonstreamKeepalive, FakeStream: manager.current.config.FakeStream}
+}
+
 // mediaLinks 返回当前生成服务的媒体输出是否使用 URL 与设置的服务地址
 func (manager *runtimeManager) mediaLinks() (bool, string) {
 	manager.mu.RLock()
@@ -234,6 +241,17 @@ func (manager *runtimeManager) Generate(ctx context.Context, request aistudio.Ge
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.service.Generate(ctx, request)
+}
+
+// GenerateTitle 由当前生成服务生成试用页页头标题
+func (manager *runtimeManager) GenerateTitle(ctx context.Context, request aistudio.TitleRequest) (string, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	service, ok := manager.current.service.(aistudio.TitleService)
+	if !ok {
+		return "", fmt.Errorf("title service 不可用")
+	}
+	return service.GenerateTitle(ctx, request)
 }
 
 // GenerateVideo 由当前生成服务创建视频任务
@@ -532,7 +550,9 @@ func (manager *runtimeManager) RecordAccessLog(entry api.AccessLog) {
 func (manager *runtimeManager) decorateRuntimeConfig(value api.RuntimeConfig, active config.Config) api.RuntimeConfig {
 	value.ActiveListenAddr = manager.activeManagement.ListenAddr
 	value.ActiveAPIKey = manager.activeManagement.ProxyAPIKey
-	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr || value.APIKey != value.ActiveAPIKey
+	value.ActivePreviewListenAddr = manager.activeManagement.PreviewListenAddr
+	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr || value.APIKey != value.ActiveAPIKey ||
+		value.PreviewListenAddr != value.ActivePreviewListenAddr
 	value.ManagementRestartRequired = value.ManagementRestartRequired ||
 		value.AdminAuthEnabled != manager.activeManagement.AdminAuthEnabled ||
 		value.AdminUsername != manager.activeManagement.AdminUsername ||
@@ -555,6 +575,9 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		ModelMapping:         value.ModelMapping,
 		WAABackend:           value.WAABackend,
 		BuildNativeNonstream: value.BuildNativeNonstream,
+		NonstreamKeepalive:   value.NonstreamKeepalive,
+		FakeStream:           value.FakeStream,
+		YouTubeLinks:         value.YouTubeLinks,
 		MediaOutput:          value.MediaOutput,
 		MediaBaseURL:         value.MediaBaseURL,
 	}
@@ -565,6 +588,8 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
+		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
+		saved.YouTubeLinks == active.YouTubeLinks &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL
 }
 

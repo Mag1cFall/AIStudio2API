@@ -113,6 +113,8 @@ type iterStackItem struct {
 	val  Value
 	f    iterNextFunc
 	iter *iteratorRecord
+	// aiter 是 for await 的异步迭代器，由编译出的代码关闭
+	aiter *iteratorRecord
 }
 
 type ref interface {
@@ -381,8 +383,6 @@ type vm struct {
 	interruptVal  interface{}
 	interruptLock sync.Mutex
 
-	curAsyncRunner *asyncRunner
-
 	profTracker *profTracker
 }
 
@@ -391,8 +391,8 @@ type instruction interface {
 }
 
 func intToValue(i int64) Value {
-	if idx := 256 + i; idx >= 0 && idx < 256 {
-		return intCache[idx]
+	if i >= intCacheLo && i < intCacheHi {
+		return intCache[i-intCacheLo]
 	}
 	if i >= -maxInt && i <= maxInt {
 		return valueInt(i)
@@ -729,31 +729,6 @@ func (vm *vm) captureStack(stack []StackFrame, ctxOffset int) []StackFrame {
 			stack = append(stack, StackFrame{prg: vm.callStack[i].prg, pc: frame.pc, funcName: funcName})
 		}
 	}
-	if ctxOffset == 0 && vm.curAsyncRunner != nil {
-		stack = vm.captureAsyncStack(stack, vm.curAsyncRunner)
-	}
-	return stack
-}
-
-func (vm *vm) captureAsyncStack(stack []StackFrame, runner *asyncRunner) []StackFrame {
-	if promise, _ := runner.promiseCap.promise.self.(*Promise); promise != nil {
-		if len(promise.fulfillReactions) == 1 {
-			if r := promise.fulfillReactions[0].asyncRunner; r != nil {
-				ctx := &r.gen.ctx
-				if ctx.prg != nil || ctx.sb > 0 {
-					var funcName unistring.String
-					if prg := ctx.prg; prg != nil {
-						funcName = prg.funcName
-					} else {
-						funcName = getFuncName(ctx.stack, 1)
-					}
-					stack = append(stack, StackFrame{prg: ctx.prg, pc: ctx.pc, funcName: funcName})
-				}
-				stack = vm.captureAsyncStack(stack, r)
-			}
-		}
-	}
-
 	return stack
 }
 
@@ -2538,13 +2513,130 @@ func (s *defineSetter) exec(vm *vm) {
 	vm.pc++
 }
 
+// baseSource 返回属性访问报错中的基址表达式，Ion 代码在触发编译前出过错的位置报错时为空
+func (vm *vm) baseSource(source string) string {
+	if !vm.prg.host && vm.prg.failAccess(vm.pc) {
+		return ""
+	}
+	return source
+}
+
+// loopHead 是循环每次经过循环头时累计预热计数的指令
+type loopHead struct{}
+
+func (loopHead) exec(vm *vm) {
+	vm.prg.countWarmUp()
+	vm.pc++
+}
+
+// propertyAccessError 返回 SpiderMonkey 访问 undefined 或 null 基址属性时的 TypeError，baseSource 为可反编译的基址表达式
+func (r *Runtime) propertyAccessError(key string, baseSource string, base Value) *Object {
+	if baseSource != "" && baseSource != "null" && baseSource != "undefined" {
+		return r.NewTypeError("can't access property %s, %s is %s", key, baseSource, base)
+	}
+	return r.NewTypeError("can't access property %s of %s", key, base)
+}
+
+// elementAccessError 返回以 key 取 undefined 或 null 基址元素时的 TypeError，对象键不做键转换，报基址本身
+func (r *Runtime) elementAccessError(key Value, baseSource string, base Value) *Object {
+	if _, ok := key.(*Object); ok {
+		if baseSource != "" && baseSource != "null" && baseSource != "undefined" {
+			return r.NewTypeError("%s is %s", baseSource, base)
+		}
+		return r.NewTypeError("%s has no properties", base)
+	}
+	return r.propertyAccessError(propertyKeyText(key), baseSource, base)
+}
+
+// spiderMonkeyQuote 按 SpiderMonkey QuoteString 给字符串加双引号，转义引号、反斜杠与控制字符，其余不可打印字符写作 \xHH 或 \uHHHH
+func spiderMonkeyQuote(s String) string {
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for i := 0; i < s.Length(); i++ {
+		c := s.CharAt(i)
+		switch {
+		case c >= 0x20 && c < 0x7F && c != '"' && c != '\\':
+			builder.WriteByte(byte(c))
+		case c == '"' || c == '\\':
+			builder.WriteByte('\\')
+			builder.WriteByte(byte(c))
+		case c == '\b':
+			builder.WriteString(`\b`)
+		case c == '\f':
+			builder.WriteString(`\f`)
+		case c == '\n':
+			builder.WriteString(`\n`)
+		case c == '\r':
+			builder.WriteString(`\r`)
+		case c == '\t':
+			builder.WriteString(`\t`)
+		case c == '\v':
+			builder.WriteString(`\v`)
+		case c < 0x100:
+			fmt.Fprintf(&builder, `\x%02X`, c)
+		default:
+			fmt.Fprintf(&builder, `\u%04X`, c)
+		}
+	}
+	builder.WriteByte('"')
+	return builder.String()
+}
+
+// truncateForMessage 按 SpiderMonkey 报错文案的规则把超过 16 个字符的字符串截为前 16 个字符加 ...
+func truncateForMessage(s String) String {
+	if s.Length() <= 16 {
+		return s
+	}
+	return s.Substring(0, 16).Concat(asciiString("..."))
+}
+
+// propertyKeyText 返回 SpiderMonkey 报错文案中的属性键：0 到 2^31-1 的整数下标写数字，Symbol 写作 Symbol("描述")，其余转为字符串后加引号
+func propertyKeyText(key Value) string {
+	if symbol, ok := key.(*Symbol); ok {
+		if symbol.desc == nil {
+			return "Symbol()"
+		}
+		return "Symbol(" + spiderMonkeyQuote(symbol.desc) + ")"
+	}
+	text := key.toString()
+	if index, err := strconv.ParseUint(text.String(), 10, 31); err == nil && strconv.FormatUint(index, 10) == text.String() {
+		return text.String()
+	}
+	return spiderMonkeyQuote(text)
+}
+
+// checkBase 在方法调用、成员赋值与删除前检查距栈顶 depth 的基址，为 undefined 或 null 时按 SpiderMonkey 文案抛出 TypeError；name 为点号访问的属性名，为空时键位于基址之上一格，assign 表示成员赋值
+type checkBase struct {
+	name       unistring.String
+	depth      int
+	baseSource string
+	assign     bool
+}
+
+func (c checkBase) exec(vm *vm) {
+	base := vm.stack[vm.sp-1-c.depth]
+	if base == _undefined || base == _null {
+		source := c.baseSource
+		if !c.assign {
+			source = vm.baseSource(source)
+		}
+		if c.name == "" {
+			vm.throw(vm.r.elementAccessError(vm.stack[vm.sp-c.depth], source, base))
+		} else {
+			vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(c.name)), source, base))
+		}
+		return
+	}
+	vm.pc++
+}
+
 type getProp unistring.String
 
 func (g getProp) exec(vm *vm) {
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", g))
+		vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(unistring.String(g))), "", v))
 		return
 	}
 	vm.stack[vm.sp-1] = nilSafe(obj.self.getStr(unistring.String(g), v))
@@ -2559,13 +2651,9 @@ type getPropSource struct {
 
 func (g getPropSource) exec(vm *vm) {
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		if g.baseSource != "" && g.baseSource != "null" && g.baseSource != "undefined" {
-			vm.throw(vm.r.NewTypeError("can't access property %q, %s is %s", string(g.name), g.baseSource, v))
-		} else {
-			vm.throw(vm.r.NewTypeError("can't access property %q of %s", string(g.name), v))
-		}
+		vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(g.name)), vm.baseSource(g.baseSource), v))
 		return
 	}
 	vm.stack[vm.sp-1] = nilSafe(obj.self.getStr(g.name, v))
@@ -2577,9 +2665,9 @@ type getPropRecv unistring.String
 func (g getPropRecv) exec(vm *vm) {
 	recv := vm.stack[vm.sp-2]
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", g))
+		vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(unistring.String(g))), "", v))
 		return
 	}
 	vm.stack[vm.sp-2] = nilSafe(obj.self.getStr(unistring.String(g), recv))
@@ -2592,9 +2680,9 @@ type getPropRecvCallee unistring.String
 func (g getPropRecvCallee) exec(vm *vm) {
 	recv := vm.stack[vm.sp-2]
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", g))
+		vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(unistring.String(g))), "", v))
 		return
 	}
 
@@ -2612,10 +2700,10 @@ type getPropCallee unistring.String
 
 func (g getPropCallee) exec(vm *vm) {
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	n := unistring.String(g)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined or null", n))
+		vm.throw(vm.r.propertyAccessError(spiderMonkeyQuote(stringValueFromRaw(n)), "", v))
 		return
 	}
 	prop := obj.self.getStr(n, v)
@@ -2635,13 +2723,9 @@ var getElem _getElem
 
 func (g _getElem) exec(vm *vm) {
 	v := vm.stack[vm.sp-2]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		if g.baseSource != "" && g.baseSource != "null" && g.baseSource != "undefined" {
-			vm.throw(vm.r.NewTypeError("can't access property %s, %s is %s", vm.stack[vm.sp-1], g.baseSource, v))
-		} else {
-			vm.throw(vm.r.NewTypeError("can't access property %s of %s", vm.stack[vm.sp-1], v))
-		}
+		vm.throw(vm.r.elementAccessError(vm.stack[vm.sp-1], vm.baseSource(g.baseSource), v))
 		return
 	}
 	propName := toPropertyKey(vm.stack[vm.sp-1])
@@ -2659,9 +2743,9 @@ var getElemRecv _getElemRecv
 func (_getElemRecv) exec(vm *vm) {
 	recv := vm.stack[vm.sp-3]
 	v := vm.stack[vm.sp-1]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", vm.stack[vm.sp-2]))
+		vm.throw(vm.r.elementAccessError(vm.stack[vm.sp-2], "", v))
 		return
 	}
 	propName := toPropertyKey(vm.stack[vm.sp-2])
@@ -2678,10 +2762,10 @@ var getKey _getKey
 
 func (_getKey) exec(vm *vm) {
 	v := vm.stack[vm.sp-2]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	propName := vm.stack[vm.sp-1]
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", propName.String()))
+		vm.throw(vm.r.elementAccessError(propName, "", v))
 		return
 	}
 
@@ -2697,9 +2781,9 @@ var getElemCallee _getElemCallee
 
 func (_getElemCallee) exec(vm *vm) {
 	v := vm.stack[vm.sp-2]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", vm.stack[vm.sp-1]))
+		vm.throw(vm.r.elementAccessError(vm.stack[vm.sp-1], "", v))
 		return
 	}
 
@@ -2720,9 +2804,9 @@ var getElemRecvCallee _getElemRecvCallee
 func (_getElemRecvCallee) exec(vm *vm) {
 	recv := vm.stack[vm.sp-3]
 	v := vm.stack[vm.sp-2]
-	obj := v.baseObject(vm.r)
+	obj := vm.r.primitiveBase(v)
 	if obj == nil {
-		vm.throw(vm.r.NewTypeError("Cannot read property '%s' of undefined", vm.stack[vm.sp-1]))
+		vm.throw(vm.r.elementAccessError(vm.stack[vm.sp-1], "", v))
 		return
 	}
 
@@ -4117,6 +4201,8 @@ func getHomeObject(v Value) *Object {
 			return fn.homeObject
 		case *generatorMethodFuncObject:
 			return fn.homeObject
+		case *asyncGeneratorMethodFuncObject:
+			return fn.homeObject
 		case *asyncMethodFuncObject:
 			return fn.homeObject
 		case *classFuncObject:
@@ -4788,7 +4874,17 @@ var op_in _op_in
 
 func (_op_in) exec(vm *vm) {
 	left := vm.stack[vm.sp-2]
-	right := vm.r.toObject(vm.stack[vm.sp-1])
+	right, ok := vm.stack[vm.sp-1].(*Object)
+	if !ok {
+		leftString, leftIsString := left.(String)
+		rightString, rightIsString := vm.stack[vm.sp-1].(String)
+		if leftIsString && rightIsString {
+			vm.throw(vm.r.NewTypeError("cannot use 'in' operator to search for %s in %s", spiderMonkeyQuote(truncateForMessage(leftString)), spiderMonkeyQuote(truncateForMessage(rightString))))
+		} else {
+			vm.throw(vm.r.NewTypeError("right-hand side of 'in' should be an object, got %s", informalTypeName(vm.stack[vm.sp-1])))
+		}
+		return
+	}
 
 	if right.hasProperty(left) {
 		vm.stack[vm.sp-2] = valueTrue
@@ -4798,6 +4894,25 @@ func (_op_in) exec(vm *vm) {
 
 	vm.sp--
 	vm.pc++
+}
+
+// informalTypeName 返回 SpiderMonkey InformalValueTypeName 给原始值的类型名，null 为 "null"
+func informalTypeName(v Value) string {
+	switch v.(type) {
+	case valueNull:
+		return "null"
+	case valueBool:
+		return "boolean"
+	case String:
+		return "string"
+	case valueInt, valueFloat:
+		return "number"
+	case *valueBigInt:
+		return "bigint"
+	case *Symbol:
+		return "symbol"
+	}
+	return "undefined"
 }
 
 type try struct {
@@ -4885,6 +5000,7 @@ func (_throw) exec(vm *vm) {
 	if ex.stack == nil {
 		ex.stack = vm.captureStack(make([]StackFrame, 0, len(vm.callStack)+1), 0)
 	}
+	vm.r.agent.lastThrow = ex
 
 	if ex = vm.handleThrow(ex); ex != nil {
 		panic(ex)
@@ -5153,6 +5269,74 @@ func (_iterateP) exec(vm *vm) {
 	iter := vm.r.getIterator(vm.stack[vm.sp-1], nil)
 	vm.iterStack = append(vm.iterStack, iterStackItem{iter: iter})
 	vm.sp--
+	vm.pc++
+}
+
+// _iterateAsyncP 取得栈顶值的异步迭代器并放入迭代栈
+type _iterateAsyncP struct{}
+
+var iterateAsyncP _iterateAsyncP
+
+func (_iterateAsyncP) exec(vm *vm) {
+	value := vm.stack[vm.sp-1]
+	iter := vm.r.getAsyncIteratorFor(value, vm.calleeText(value))
+	vm.iterStack = append(vm.iterStack, iterStackItem{aiter: iter})
+	vm.sp--
+	vm.pc++
+}
+
+// _asyncIterNext 调用 for await 迭代器的 next() 并压入结果
+type _asyncIterNext struct{}
+
+var asyncIterNext _asyncIterNext
+
+func (_asyncIterNext) exec(vm *vm) {
+	iter := vm.iterStack[len(vm.iterStack)-1].aiter
+	if iter.next == nil {
+		panic(vm.r.NewTypeError("(intermediate value).next is not a function"))
+	}
+	vm.push(iter.next(FunctionCall{This: iter.iterator}))
+	vm.pc++
+}
+
+// asyncIterStep 处理 next() 等待后的结果，迭代结束时跳转
+type asyncIterStep int32
+
+func (jmp asyncIterStep) exec(vm *vm) {
+	res, ok := vm.pop().(*Object)
+	if !ok {
+		panic(vm.r.NewTypeError("iterator.next() returned a non-object value"))
+	}
+	if iteratorComplete(res) {
+		vm.pc += int(jmp)
+		return
+	}
+	vm.iterStack[len(vm.iterStack)-1].val = iteratorValue(res)
+	vm.pc++
+}
+
+// asyncIterClose 调用 return() 并压入待等待的结果，没有 return 方法时跳转
+type asyncIterClose int32
+
+func (jmp asyncIterClose) exec(vm *vm) {
+	iter := vm.iterStack[len(vm.iterStack)-1].aiter
+	if ret := toMethod(iter.iterator.self.getStr("return", nil)); ret != nil {
+		vm.push(ret(FunctionCall{This: iter.iterator}))
+		vm.pc++
+	} else {
+		vm.pc += int(jmp)
+	}
+}
+
+// _checkObjectP 弹出栈顶值，不是对象时抛出 TypeError
+type _checkObjectP struct{}
+
+var checkObjectP _checkObjectP
+
+func (_checkObjectP) exec(vm *vm) {
+	if _, ok := vm.pop().(*Object); !ok {
+		panic(vm.r.NewTypeError("iterator.return() returned a non-object value"))
+	}
 	vm.pc++
 }
 

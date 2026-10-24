@@ -1,3 +1,5 @@
+import { bytesToBase64 } from '../bytes'
+
 // captureProcessor 是把输入音频按 100 ms 切成 16 位小端 PCM 的 AudioWorklet 处理器
 const captureProcessor = `
 class PcmCapture extends AudioWorkletProcessor {
@@ -23,14 +25,6 @@ class PcmCapture extends AudioWorkletProcessor {
 }
 registerProcessor('pcm-capture', PcmCapture)
 `
-
-// bytesToBase64 把字节编码为 Base64
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
-  return btoa(binary)
-}
 
 // PcmCapture 是一路正在采集的音频
 export interface PcmCapture {
@@ -62,28 +56,4 @@ export async function startPcmCapture(
       void context.close()
     },
   }
-}
-
-// pcmToWav 把 16 位小端单声道 PCM 片段封装为 WAV
-export function pcmToWav(chunks: readonly Uint8Array<ArrayBuffer>[], rate: number): Blob {
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
-  const header = new DataView(new ArrayBuffer(44))
-  const text = (offset: number, value: string) => {
-    for (let index = 0; index < value.length; index++)
-      header.setUint8(offset + index, value.charCodeAt(index))
-  }
-  text(0, 'RIFF')
-  header.setUint32(4, 36 + size, true)
-  text(8, 'WAVE')
-  text(12, 'fmt ')
-  header.setUint32(16, 16, true)
-  header.setUint16(20, 1, true)
-  header.setUint16(22, 1, true)
-  header.setUint32(24, rate, true)
-  header.setUint32(28, rate * 2, true)
-  header.setUint16(32, 2, true)
-  header.setUint16(34, 16, true)
-  text(36, 'data')
-  header.setUint32(40, size, true)
-  return new Blob([header, ...chunks], { type: 'audio/wav' })
 }

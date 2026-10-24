@@ -17,11 +17,12 @@ withDefaults(
   defineProps<{
     icon: IconName
     label: string
+    tooltip?: string | undefined
     chip?: boolean
     disabled?: boolean
     multiple?: boolean
   }>(),
-  { chip: false, disabled: false, multiple: false },
+  { tooltip: undefined, chip: false, disabled: false, multiple: false },
 )
 const emit = defineEmits<{ images: [images: File[]] }>()
 const { t } = useI18n()
@@ -47,7 +48,7 @@ function onCapture(photo: Blob): void {
   <DropdownMenuRoot>
     <DropdownMenuTrigger as-child :disabled="disabled">
       <button
-        v-tooltip.below="label"
+        v-tooltip.below="tooltip ?? label"
         type="button"
         ms-button
         :class="

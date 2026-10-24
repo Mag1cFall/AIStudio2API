@@ -491,9 +491,7 @@ func (o *baseObject) setOwnStr(name unistring.String, val Value, throw bool) boo
 			o.val.runtime.typeErrorResult(throw, "Cannot add property %s, object is not extensible", name)
 			return false
 		} else {
-			o.values[name] = val
-			names := copyNamesIfNeeded(o.propNames, 1)
-			o.propNames = append(names, name)
+			o._put(name, val)
 		}
 		return true
 	}
@@ -658,6 +656,7 @@ func (o *baseObject) _defineOwnProperty(name unistring.String, existingValue Val
 
 	getterObj, _ := descr.Getter.(*Object)
 	setterObj, _ := descr.Setter.(*Object)
+	plain := descr.Writable == FLAG_TRUE && descr.Enumerable == FLAG_TRUE && descr.Configurable == FLAG_TRUE && descr.Value != nil
 
 	var existing *valueProperty
 
@@ -665,6 +664,9 @@ func (o *baseObject) _defineOwnProperty(name unistring.String, existingValue Val
 		if !o.extensible {
 			o.val.runtime.typeErrorResult(throw, "Cannot define property %s, object is not extensible", name)
 			return nil, false
+		}
+		if plain {
+			return descr.Value, true
 		}
 		existing = &valueProperty{}
 	} else {
@@ -709,7 +711,7 @@ func (o *baseObject) _defineOwnProperty(name unistring.String, existingValue Val
 		}
 	}
 
-	if descr.Writable == FLAG_TRUE && descr.Enumerable == FLAG_TRUE && descr.Configurable == FLAG_TRUE && descr.Value != nil {
+	if plain {
 		return descr.Value, true
 	}
 
@@ -760,11 +762,7 @@ Reject:
 func (o *baseObject) defineOwnPropertyStr(name unistring.String, descr PropertyDescriptor, throw bool) bool {
 	existingVal := o.values[name]
 	if v, ok := o._defineOwnProperty(name, existingVal, descr, throw); ok {
-		o.values[name] = v
-		if existingVal == nil {
-			names := copyNamesIfNeeded(o.propNames, 1)
-			o.propNames = append(names, name)
-		}
+		o._put(name, v)
 		return true
 	}
 	return false
@@ -790,6 +788,9 @@ func (o *baseObject) defineOwnPropertySym(s *Symbol, descr PropertyDescriptor, t
 }
 
 func (o *baseObject) _put(name unistring.String, v Value) {
+	if o.values == nil {
+		o.values = make(map[unistring.String]Value)
+	}
 	if _, exists := o.values[name]; !exists {
 		names := copyNamesIfNeeded(o.propNames, 1)
 		o.propNames = append(names, name)

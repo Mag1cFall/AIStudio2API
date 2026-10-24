@@ -13,13 +13,16 @@ import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import CodeBlock from './CodeBlock.vue'
+import FileChunk from './FileChunk.vue'
 import { driveNames } from './drive'
 import LoadingIndicator from './LoadingIndicator.vue'
 import MarkdownView from './MarkdownView.vue'
 import RunStats from './RunStats.vue'
 import ThoughtChunk from './ThoughtChunk.vue'
+import VideoResult from './media/VideoResult.vue'
 import { insertCitations } from './markdown'
 import { useReveal } from './reveal'
+import { youtubeVideoID } from './sample-media'
 import { usePlayground } from './session'
 import type { Part, Turn } from './types'
 
@@ -451,13 +454,12 @@ onUnmounted(() => {
                 controls
                 :src="mediaURL(part)"
               ></audio>
-              <video
+              <VideoResult
                 v-else-if="mediaKind(part) === 'video' && part.inlineData"
-                controls
                 :src="mediaURL(part)"
-              ></video>
+              />
               <a
-                v-else-if="part.fileData"
+                v-else-if="part.fileData && !youtubeVideoID(part.fileData.fileUri)"
                 class="file-chip"
                 :href="part.fileData.fileUri"
                 target="_blank"
@@ -468,9 +470,11 @@ onUnmounted(() => {
                   :size="18"
                 />{{ driveNames.get(part.fileData.fileUri) ?? part.fileData.fileUri }}
               </a>
-              <span v-else class="file-chip"
-                ><UiIcon name="upload" :size="18" />{{ part.inlineData?.mimeType }}</span
-              >
+              <FileChunk
+                v-else
+                :part="part"
+                :class="{ 'chunk-gap': partIndex < answerParts.length - 1 }"
+              />
             </template>
             <CodeBlock
               v-else-if="part.functionCall"
@@ -881,10 +885,16 @@ onUnmounted(() => {
 }
 
 .media-image {
-  max-width: min(100%, 480px);
-  max-height: 480px;
+  max-width: 100%;
+  max-height: min(30vh, 358px);
+  object-fit: cover;
   margin: 4px 0 8px;
   border-radius: 8px;
+}
+
+/* chunk-gap 为官网相邻两个用户轮次之间的间距：下内边距 24 px、上外边距 8 px、上内边距 8 px 与两条 1 px 边框 */
+.chunk-gap {
+  margin-bottom: 42px;
 }
 
 .file-chip {

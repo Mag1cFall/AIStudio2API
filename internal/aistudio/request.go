@@ -158,7 +158,6 @@ func linkFunctionResults(content Content, pendingCalls *[]FunctionCall) (Content
 }
 
 func encodeContent(content Content) ([]any, error) {
-	content = attachYouTubeMedia(content)
 	role := ""
 	switch content.Role {
 	case RoleUser:
@@ -351,7 +350,6 @@ func wireModelName(model string) string {
 
 func countTokensNeedsGenerateRequest(contents []Content) bool {
 	for _, content := range contents {
-		content = attachYouTubeMedia(content)
 		for _, part := range content.Parts {
 			if part.InlineData != nil || part.ExternalMedia != nil || part.File != nil || part.FunctionCall != nil || part.FunctionResult != nil ||
 				part.ExecutableCode != nil || part.CodeExecutionResult != nil {

@@ -62,7 +62,7 @@ function saveAlias(index: number, event: Event): void {
       <ModelCard
         :model="currentModel"
         kind="speech"
-        :has-content="state.blocks.length > 0"
+        has-content
         @select="speech.setModel($event.id)"
       />
       <div

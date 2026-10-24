@@ -37,6 +37,7 @@ import symbol_deployed_code_history from '@material-symbols/svg-300/outlined/dep
 import symbol_developer_guide from '@material-symbols/svg-300/outlined/developer_guide.svg?raw'
 import symbol_devices from '@material-symbols/svg-300/outlined/devices.svg?raw'
 import symbol_diamond_shine from '@material-symbols/svg-300/outlined/diamond_shine.svg?raw'
+import symbol_docs from '@material-symbols/svg-300/outlined/docs.svg?raw'
 import symbol_domino_mask from '@material-symbols/svg-300/outlined/domino_mask.svg?raw'
 import symbol_download from '@material-symbols/svg-300/outlined/download.svg?raw'
 import symbol_edit from '@material-symbols/svg-300/outlined/edit.svg?raw'
@@ -143,6 +144,7 @@ import symbol_drag_indicator from '@material-symbols/svg-300/outlined/drag_indic
 import symbol_edit_note from '@material-symbols/svg-300/outlined/edit_note.svg?raw'
 import symbol_schedule from '@material-symbols/svg-300/outlined/schedule.svg?raw'
 import symbol_volume_up from '@material-symbols/svg-300/outlined/volume_up.svg?raw'
+import symbol_video_audio_call from './video_audio_call.svg?raw'
 
 // icons 将界面语义名映射到 Material Symbols Outlined 300 字重图标的 SVG 文本
 export const icons = {
@@ -230,6 +232,7 @@ export const icons = {
   addToDrive: symbol_add_to_drive,
   tools: symbol_widgets,
   mic: symbol_mic,
+  audioEnabled: symbol_video_audio_call,
   keyboardReturn: symbol_keyboard_return,
   keyboardCommandKey: symbol_keyboard_command_key,
   code: symbol_code,
@@ -259,6 +262,7 @@ export const icons = {
   modelAudio: symbol_graphic_eq,
   star: symbol_star,
   docs: symbol_developer_guide,
+  document: symbol_docs,
   price: symbol_attach_money,
   cutoff: symbol_network_intelligence_history,
   release: symbol_rocket_launch,

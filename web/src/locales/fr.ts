@@ -14,6 +14,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.adminPassword': 'Mot de passe de la console',
   'settings.keepPassword': 'Laisser vide pour conserver le mot de passe actuel',
   'settings.buildNative': 'Privilégier Build pour les requêtes sans streaming',
+  'settings.nonstreamKeepalive': 'Maintenir les requêtes sans streaming',
+  'settings.fakeStream': 'Streaming simulé',
+  'settings.youtubeLinks': 'Reconnaître les liens YouTube',
   'app.offline': 'Service hors ligne',
   'app.refresh': 'Actualiser les données',
   'app.status': 'État du service',
@@ -226,6 +229,7 @@ export const messages: Record<TranslationKey, string> = {
     'Refroidissement de tout le compte, appliqué à tous les modèles de ce compte ; les refroidissements propres à un modèle sont listés à part',
   'settings.authPath': 'Chemin des états de compte',
   'settings.listen': 'Adresse d’écoute',
+  'settings.previewListen': 'Adresse d’écoute de l’aperçu',
   'settings.apiKey': 'Clé API locale',
   'settings.proxy': 'Proxy par défaut',
   'settings.initTimeout': 'Délai d’initialisation',
@@ -437,6 +441,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.model': 'Modèle',
   'pg.modelSelection': 'Sélection du modèle',
   'pg.moreActions': 'Plus d’actions',
+  'pg.share': 'Partager',
+  'pg.shareNeedsRun': 'Vous devez créer et exécuter un prompt pour pouvoir le partager',
   'pg.moreOptions': 'Plus d’options',
   'pg.name': 'Nom',
   'pg.newChat': 'Nouvelle discussion',
@@ -688,6 +694,9 @@ export const messages: Record<TranslationKey, string> = {
   'pg.seek': 'Position de lecture',
   'pg.protocolUnsupported': 'Non disponible avec {protocol}',
   'pg.addReferenceImages': 'Ajouter des images de référence (3 maximum)',
+  'pg.addImageToPrompt': 'Ajouter une image au prompt',
+  'pg.imagesCannotBeAdded': "Impossible d'ajouter des images",
+  'pg.videoFailed': 'Impossible de générer la vidéo : {error}',
   'pg.alreadyNewChat': 'Déjà dans une nouvelle discussion',
   'pg.aspectRatio': 'Format',
   'pg.videoDurationSeconds': 'Durée de la vidéo en secondes',
@@ -726,7 +735,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.videoDuration': 'Durée de la vidéo',
   'pg.videoDurationTip': 'Durée des vidéos',
   'pg.videoEmptyDescription':
-    'Génération vidéo cinématographique de pointe avec physique réaliste, contrôle de la caméra et audio synchronisé.',
+    'Générez des médias et développez de nouvelles idées créatives grâce à des capacités avancées de génération vidéo.',
   'pg.videoEmptyTitle': 'Générer des vidéos avec {model}',
   'pg.videoInterpolationOnly8s': 'L’interpolation d’images ne prend en charge qu’une durée de 8 s',
   'pg.videoNoHistory':
@@ -785,7 +794,6 @@ export const messages: Record<TranslationKey, string> = {
   'pg.searchModels': 'Rechercher un modèle ou un agent',
   'pg.seeModelCard': 'Voir la fiche du modèle',
   'pg.selectModel': 'Sélectionner un modèle',
-  'pg.selectedModel': '{name} sélectionné',
   'pg.sexuallyExplicit': 'Contenu sexuellement explicite',
   'pg.source': 'Source :',
   'pg.speechToText': 'Saisie vocale',
@@ -890,7 +898,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.topP': 'Top P',
   'pg.topPTip': 'Seuil de probabilité pour l’échantillonnage top-p',
   'pg.unstar': 'Retirer des favoris',
-  'pg.untitled': 'Sans titre',
+  'pg.untitled': 'Prompt sans titre',
   'pg.untitledInstruction': 'Instruction sans titre',
   'pg.uploadFiles': 'Importer des fichiers',
   'pg.urlContext': 'Contexte d’URL',
@@ -960,6 +968,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.autoStartHelp':
     'Démarre le service de génération dès le lancement du programme de gestion.',
   'settings.listenHelp': 'Adresse d’écoute partagée par la console et l’API publique.',
+  'settings.previewListenHelp':
+    'Origine distincte des aperçus HTML du bac à sable API, ouverts avec le nom d’hôte actuel et ce port, différent du port d’écoute.',
   'settings.apiKeyHelp':
     'Séparez plusieurs clés par des virgules. Vide, seules les pages de cette machine peuvent appeler l’API',
   'settings.authPathHelp':
@@ -971,6 +981,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrencyHelp': 'Nombre de requêtes qu’un compte traite en même temps.',
   'settings.buildNativeHelp':
     'Les requêtes sans streaming utilisent Build en priorité, sinon Playground',
+  'settings.nonstreamKeepaliveHelp':
+    'Envoie un saut de ligne toutes les 10 secondes pendant l’attente pour que les proxys inverses gardent la connexion',
+  'settings.fakeStreamHelp':
+    'Les requêtes en streaming diffusent le résultat une fois complet, avec des pulsations pendant l’attente et un autre compte en cas d’échec',
+  'settings.youtubeLinksHelp':
+    'Les liens YouTube du texte des messages utilisateur sont envoyés au modèle sous forme de vidéo',
   'settings.temporaryChatHelp': 'La page de préchauffage WAA utilise une discussion temporaire.',
   'settings.initTimeoutHelp': 'Durée maximale de l’initialisation WAA d’un compte, par exemple 2m.',
   'settings.requestTimeoutHelp': 'Durée d’exécution maximale d’une requête, par exemple 5m.',
@@ -1179,6 +1195,7 @@ export const logs: Record<LogPhrase, string> = {
   '校验 Camoufox': 'Vérification de Camoufox',
   创建协议客户端: 'Création du client de protocole',
   管理监听启动: 'Démarrage de l’écoute de la console',
+  预览监听启动: 'Démarrage de l’écoute de l’aperçu',
   管理服务就绪: 'Console prête',
   管理页面已打开: 'Console ouverte',
   管理页面打开失败: 'Impossible d’ouvrir la console',
@@ -1241,8 +1258,10 @@ export const logs: Record<LogPhrase, string> = {
   等待隔离登录: 'En attente de la connexion isolée',
   保存认证状态: 'Enregistrement de l’état de connexion',
   'Drive 授权失败': 'Échec de l’autorisation Drive',
+  '关闭 Camoufox 失败': 'Échec de la fermeture de Camoufox',
   'Chrome 账户已导入': 'Compte Chrome importé',
   远程配对账户已导入: 'Compte associé à distance importé',
+  认证状态账户已导入: 'Compte importé depuis l’état de connexion',
   账户配置已更新: 'Paramètres du compte mis à jour',
   账户已删除: 'Compte supprimé',
   账户认证续签: 'Renouvellement des identifiants du compte',
@@ -1291,6 +1310,7 @@ export const logs: Record<LogPhrase, string> = {
   暂停调度: 'Répartition suspendue',
   类型: 'Type',
   范围: 'Portée',
+  冷却已手动清除: 'Refroidissement levé manuellement',
   恢复: 'Disponible à',
   权益: 'Forfait',
   同步: 'Synchronisés',
@@ -1336,7 +1356,9 @@ export const logs: Record<LogPhrase, string> = {
   在线更新: 'Mise à jour en ligne',
   下载发行包: 'Téléchargement du paquet',
   替换可执行文件: 'Remplacement de l’exécutable',
+  暂存新版本: 'Préparation de la nouvelle version',
   在线更新完成: 'Mise à jour en ligne terminée',
   在线更新失败: 'Échec de la mise à jour en ligne',
+  在线更新重启失败: 'Échec du redémarrage après la mise à jour en ligne',
   版本: 'Version',
 }

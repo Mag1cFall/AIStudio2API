@@ -34,6 +34,9 @@ const (
 	StartupBootstrappingWAA StartupStage = "bootstrapping_waa"
 )
 
+// DefaultBootstrapPrompt 是 Options 未指定 BootstrapPrompt 时 WAA bootstrap 写入官网输入框并提交的提示词
+const DefaultBootstrapPrompt = "Hello"
+
 // Options 定义单个 AI Studio 账户的原生 Camoufox runtime
 type Options struct {
 	ExecutablePath   string
@@ -65,8 +68,6 @@ type State struct {
 	PID         int
 	PageURL     string
 	UserAgent   string
-	Platform    string
-	Timezone    string
 	SnapshotKey string
 	Headers     http.Header
 }

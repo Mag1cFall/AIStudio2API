@@ -71,3 +71,10 @@ export const sampleCategories: SampleCategory[] = [
   sampleCategory('transportation', 'pg.sampleTransportation'),
   sampleCategory('space', 'pg.sampleSpace'),
 ]
+
+// youtubeVideoID 返回 YouTube 视频链接中的视频 ID，不是 YouTube 视频链接时为空
+export function youtubeVideoID(uri: string): string {
+  return (
+    /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/.exec(uri)?.[1] ?? ''
+  )
+}

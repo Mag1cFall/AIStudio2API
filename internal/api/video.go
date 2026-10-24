@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -146,8 +145,8 @@ const videoOperationSeparator = "~"
 
 // toVideoRequest 返回单个上游视频任务的请求与要创建的任务数
 func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRequest, int, error) {
-	if len(request.Instances) != 1 || strings.TrimSpace(request.Instances[0].Prompt) == "" {
-		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances must contain one prompt")
+	if len(request.Instances) != 1 {
+		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances must contain one instance")
 	}
 	count := request.Parameters.NumberOfVideos
 	if count == 0 {
@@ -199,6 +198,9 @@ func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRe
 			return aistudio.VideoRequest{}, 0, fmt.Errorf("referenceImages[%d].image: %w", index, err)
 		}
 		result.ReferenceImages = append(result.ReferenceImages, image)
+	}
+	if strings.TrimSpace(result.Prompt) == "" && result.StartImage == nil && result.LastImage == nil && len(result.ReferenceImages) == 0 {
+		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances[0] must contain a prompt or an image")
 	}
 	return result, count, nil
 }
@@ -267,6 +269,8 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	operationID := cleanOperationID(r.PathValue("operation"))
 	done := true
 	samples := []any{}
+	var failure error
+	missing := ""
 	for _, id := range strings.Split(operationID, videoOperationSeparator) {
 		operation, err := service.GetGenerateVideoOperation(r.Context(), id)
 		if err != nil {
@@ -276,6 +280,8 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		done = done && operation.Done
+		failure = cmp.Or(failure, operation.Failure)
+		missing = cmp.Or(missing, operation.Missing)
 		if operation.Done && operation.File != nil {
 			samples = append(samples, map[string]any{"video": map[string]any{
 				"uri": geminiVideoURI(r, operation.File.ID), "mimeType": "video/mp4",
@@ -283,7 +289,11 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	response := map[string]any{"name": "operations/" + operationID, "done": done}
-	if done {
+	if done && failure != nil {
+		response["error"] = map[string]any{"code": statusFromError(failure), "message": failure.Error(), "status": geminiErrorStatus(failure)}
+	} else if done && missing != "" {
+		response["error"] = map[string]any{"code": http.StatusNotFound, "message": missing, "status": "NOT_FOUND"}
+	} else if done {
 		response["response"] = map[string]any{"generateVideoResponse": map[string]any{"generatedSamples": samples}}
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -308,9 +318,7 @@ func (s *server) handleOpenAIVideoCreate(w http.ResponseWriter, r *http.Request)
 			}
 			return
 		}
-		request.Model = defaultCatalogModel(models, func(model aistudio.Model) bool {
-			return slices.Contains(model.Methods, "predictLongRunning")
-		})
+		request.Model = defaultCatalogModel(models, aistudio.IsVideoModel)
 	}
 	videoRequest, err := request.toVideoRequest(image)
 	if err != nil {
@@ -379,8 +387,8 @@ func parseOpenAIVideoRequest(r *http.Request) (openAIVideoRequest, *aistudio.Vid
 }
 
 func (request openAIVideoRequest) toVideoRequest(image *aistudio.VideoImage) (aistudio.VideoRequest, error) {
-	if strings.TrimSpace(request.Prompt) == "" {
-		return aistudio.VideoRequest{}, fmt.Errorf("prompt is required")
+	if strings.TrimSpace(request.Prompt) == "" && image == nil {
+		return aistudio.VideoRequest{}, fmt.Errorf("prompt or input_reference is required")
 	}
 	if strings.TrimSpace(request.Model) == "" {
 		return aistudio.VideoRequest{}, fmt.Errorf("model is required")
@@ -517,6 +525,9 @@ func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 	}
 	if operation.Missing != "" {
 		object["error"] = map[string]any{"code": "video_not_found", "message": operation.Missing}
+	}
+	if operation.Failure != nil {
+		object["error"] = map[string]any{"code": "video_generation_failed", "message": operation.Failure.Error()}
 	}
 	return object
 }

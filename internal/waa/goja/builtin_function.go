@@ -6,6 +6,9 @@ import (
 )
 
 func (r *Runtime) functionCtor(args []Value, proto *Object, async, generator bool) *Object {
+	if r.functionTransformer != nil {
+		args = r.functionTransformer(args)
+	}
 	var sb StringBuilder
 	if async {
 		if generator {
@@ -313,7 +316,7 @@ func (r *Runtime) getAsyncFunctionPrototype() *Object {
 
 func (r *Runtime) createAsyncFunction(val *Object) objectImpl {
 	o := r.newNativeFuncConstructObj(val, r.builtin_asyncFunction, "AsyncFunction", r.getAsyncFunctionPrototype(), 1)
-
+	o.prototype = r.getFunction()
 	return o
 }
 
@@ -376,6 +379,7 @@ func (r *Runtime) getGeneratorFunctionPrototype() *Object {
 
 func (r *Runtime) createGeneratorFunction(val *Object) objectImpl {
 	o := r.newNativeFuncConstructObj(val, r.builtin_generatorFunction, "GeneratorFunction", r.getGeneratorFunctionPrototype(), 1)
+	o.prototype = r.getFunction()
 	return o
 }
 

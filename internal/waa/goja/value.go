@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/goja/ftoa"
@@ -57,7 +58,12 @@ var (
 	reflectTypeError    = reflect.TypeOf((*error)(nil)).Elem()
 )
 
-var intCache [256]Value
+const (
+	intCacheLo = -256
+	intCacheHi = 1536
+)
+
+var intCache [intCacheHi - intCacheLo]Value
 
 // Value represents an ECMAScript value.
 //
@@ -209,7 +215,7 @@ func (i valueInt) ToObject(r *Runtime) *Object {
 }
 
 func (i valueInt) ToNumber() Value {
-	return i
+	return intToValue(int64(i))
 }
 
 func (i valueInt) SameAs(other Value) bool {
@@ -973,6 +979,59 @@ func (o *Object) ClassName() string {
 	return o.self.className()
 }
 
+// InternalKind 返回结构化克隆区分对象所用的内部种类，普通对象为 Object，其余为 Proxy、Array、Map、Function 等内建种类
+func (o *Object) InternalKind() string {
+	switch self := o.self.(type) {
+	case *proxyObject:
+		return "Proxy"
+	case *arrayObject, *sparseArrayObject:
+		return "Array"
+	case *arrayBufferObject:
+		return "ArrayBuffer"
+	case *dataViewObject:
+		return "DataView"
+	case *typedArrayObject:
+		return "TypedArray"
+	case *mapObject:
+		return "Map"
+	case *setObject:
+		return "Set"
+	case *weakMapObject:
+		return "WeakMap"
+	case *weakSetObject:
+		return "WeakSet"
+	case *dateObject:
+		return "Date"
+	case *regexpObject:
+		return "RegExp"
+	case *errorObject:
+		return "Error"
+	case *Promise:
+		return "Promise"
+	case *argumentsObject:
+		return "Arguments"
+	case *stringObject:
+		return "String"
+	case funcObjectImpl:
+		return "Function"
+	case *primitiveValueObject:
+		switch self.pValue.(type) {
+		case valueBool:
+			return "Boolean"
+		case valueInt, valueFloat:
+			return "Number"
+		case *valueBigInt:
+			return "BigInt"
+		case *Symbol:
+			return "Symbol"
+		}
+	}
+	if class := o.self.className(); strings.Contains(class, "Iterator") || strings.Contains(class, "Generator") {
+		return class
+	}
+	return "Object"
+}
+
 func (o valueUnresolved) throw() {
 	o.r.throwReferenceError(o.ref)
 }
@@ -1195,7 +1254,7 @@ func typeErrorResult(throw bool, args ...interface{}) {
 }
 
 func init() {
-	for i := 0; i < 256; i++ {
-		intCache[i] = valueInt(i - 256)
+	for i := range intCache {
+		intCache[i] = valueInt(i + intCacheLo)
 	}
 }

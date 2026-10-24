@@ -47,6 +47,9 @@ JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始�
 | `GenerateAccessToken` | 获取 Drive bearer token |
 | `GenerateVideo` | 创建 Veo 长任务 |
 | `GetGenerateVideoOperation` | 轮询 Veo 长任务 |
+| `GenerateTitle` | 生成 API 试用页的对话标题 |
+
+`GenerateTitle` 正文为 `["<提示词>","<回答>","<WAA_PROOF>"]`，没有回答时回答位为 null，响应为 `["<标题>"]`。
 
 AI Studio 页面初始化还包含以下控制面 RPC：
 
@@ -223,7 +226,7 @@ Waa/Create
   -> send protected MakerSuite RPC
 ```
 
-`WAA_BACKEND=camoufox` 时官方 VM 运行在账户固定指纹的 Camoufox 页面，受保护请求由页面原生 `fetch` 发送；`WAA_BACKEND=go` 时 VM 运行在服务进程内的 goja 与 Firefox 形状宿主中，受保护请求由 Go HTTP 以 Firefox 152 网络形状发送。bootstrap、challenge 解码、解释器、初始化参数、宿主、生命周期、失败处理与上游变化的定位方法见 [WAA 实现](waa.md)。
+`WAA_BACKEND=camoufox` 时官方 VM 运行在账户固定指纹的 Camoufox 页面，受保护请求由页面 `XMLHttpRequest` 发送；`WAA_BACKEND=go` 时 VM 运行在服务进程内的 goja 与 Firefox 形状宿主中，受保护请求由 Go HTTP 以 Firefox 152 网络形状发送。bootstrap、challenge 解码、解释器、初始化参数、宿主、生命周期、失败处理与上游变化的定位方法见 [WAA 实现](waa.md)。
 
 `Waa/Create` 请求是 JSON+protobuf 数组。Worker 启动时只带 request key，VM 刷新时追加当前 interpreter hash 与上一 VM 的无绑定 snapshot：
 
@@ -339,7 +342,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 
 Veo field 71 的宽高比、时长和分辨率分别位于子索引 `4`、`5`、`9`；子索引 `7` 含 `3` 而子索引 `9` 为空时，分辨率为官网默认的 `720p`、`1080p`、`4k`。子索引 `7` 含 `4` 时模型接受起始帧与尾帧，含 `5` 时接受参考图，公开为 `video_inputs` 的 `frames` 与 `reference_images`。TTS field 67 是 repeated voice row，每行索引 `0` 为 voice name。thinking field 72 的默认 level 位于子索引 `5`。
 
-field 57 alias 可以是 `["models/<ALIAS>"]`，也可以是 repeated row；row 形状时取每行索引 `0` 并移除 `models/` 前缀。公开 `capability_options` 的键全集为 `aliases`、`voices`、`image_aspect_ratios`、`image_output_resolutions`、`video_aspect_ratios`、`video_durations_seconds`、`video_output_resolutions`、`video_inputs`、`video_duration_range`、`video_frame_rates` 和 `video_tasks`；没有值的键省略。Omni 的 field 71 子索引 `10` 为时长滑块的下限、上限、步长与默认值，公开为 `video_duration_range` 的 `min=`、`max=`、`step=`、`default=` 四项；子索引 `11` 为帧率，`1` 公开为 `24fps`；field 85 为视频任务，`1`–`5` 公开为 `text_to_video`、`image_to_video`、`reference_to_video`、`edit`、`extend`。
+field 57 alias 可以是 `["models/<ALIAS>"]`，也可以是 repeated row；row 形状时取每行索引 `0` 并移除 `models/` 前缀。公开 `capability_options` 的键全集为 `aliases`、`voices`、`image_aspect_ratios`、`image_output_resolutions`、`video_aspect_ratios`、`video_durations_seconds`、`video_output_resolutions`、`video_inputs`、`video_duration_range`、`video_frame_rates` 和 `video_tasks`；没有值的键省略。Omni 的 field 71 子索引 `10` 为时长滑块的下限、上限、步长与默认值，公开为 `video_duration_range` 的 `min=`、`max=`、`step=`、`default=` 四项；子索引 `11` 为帧率，`1` 公开为 `24fps`；field 85 为视频任务，`1`–`5` 公开为 `text_to_video`、`image_to_video`、`reference_to_video`、`edit`、`extend`。各键的取值保持上游目录的顺序，多个账户的目录合并时按首次出现的顺序去重；API 试用页以 `video_output_resolutions` 的第一项为 Omni 的默认分辨率。
 
 ### CountTokens
 
@@ -737,6 +740,8 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 
 - 流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回
 - 非流式请求收齐上游事件后再输出，上游流中途中断或在完成帧之前结束时换号重发
+- `NONSTREAM_KEEPALIVE=true` 时，Chat Completions、Responses、Messages、Gemini `generateContent`、Interactions 与图片生成的非流式请求在 10 秒内没有结果时先写出 `200` 与 `Content-Type: application/json`，之后每 10 秒写出一个换行，结果就绪后写出 JSON 正文；此后的错误以各协议的错误对象作为正文，访问日志与请求账本记录错误的 HTTP 状态
+- `FAKE_STREAM=true` 时，上述协议的流式请求按非流式方式生成：收齐上游事件、中途中断时换号重发，再以各协议的流式事件输出；等待期间按下文的流式心跳保持连接
 
 错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`：
 
@@ -1282,6 +1287,8 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 | `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 保存值；下一次启动生成服务时使用 |
 | `temporary_chat` | 保存值；下一次启动生成服务时使用 |
 | `build_native_nonstream` | 保存值；下一次启动生成服务时决定非流式请求是否优先选择 Build |
+| `nonstream_keepalive`、`fake_stream` | 保存值；下一次启动生成服务时决定非流式请求是否保活、流式请求是否按非流式生成 |
+| `youtube_links` | 保存值；下一次启动生成服务时决定是否把用户消息文本中的 YouTube 链接作为视频外部媒体发送 |
 | `auto_start` | 保存值；下一管理进程就绪后是否自动启动生成服务 |
 | `request_body_log` | 保存值；保存后立即决定是否保存请求与响应正文 |
 | `admin_auth_enabled`、`admin_username` | 保存值；下一管理进程使用 |
@@ -1506,7 +1513,7 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 | `/v1/images/generations` | `prompt` | `b64_json` 或 data URL |
 | `/v1/audio/speech` | `model`、`input` | MP3、Opus、AAC、FLAC、WAV 或 PCM body |
 | `/v1/audio/transcriptions` | multipart `file` | 文本或转录 JSON |
-| `/v1/videos` | `prompt` | 长任务对象，随后轮询并下载内容 |
+| `/v1/videos` | `prompt` 或 `input_reference` | 长任务对象，随后轮询并下载内容 |
 
 生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，末尾连续 assistant 轮的正文与代码执行内容作为前缀写入系统指令，模型从前缀之后续写，响应只返回续写部分；末尾未回传结果的函数调用由模型重新生成。各生成入口与计数接口使用同一转换。
 
@@ -1564,7 +1571,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 | `tools` | function、custom 或 Google server tool 数组 |
 | `tool_choice` | 省略/`auto`/`none`/`required`、named function 或 custom 对象、`allowed_tools` |
 | `web_search_options` | 对象，开启 Google Search |
-| `temperature`、`top_p` | 可选采样值 |
+| `temperature`、`top_p`、`top_k` | 可选采样值 |
 | `max_tokens`、`max_completion_tokens` | 后者优先 |
 | `frequency_penalty`、`presence_penalty` | 不影响生成 |
 | `n` | 1–128 |
@@ -1587,7 +1594,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 - `extra_body.google.thinking_config` 按 Gemini `thinkingConfig` 处理：`thinking_level` 优先于 `reasoning_effort`，`thinking_budget` 为 -1 时使用模型默认思考设置，`include_thoughts` 为 false 时不输出 `reasoning_content`
 - `functions` 按 function 工具发送，`function_call` 的 `none`、`auto` 与 `{name}` 按 `tool_choice` 处理，每轮最多一个调用；带 `functions` 的请求以 assistant `function_call:{name,arguments}` 返回调用，`finish_reason` 为 `function_call`，流式为 `delta.function_call`。历史中的 assistant `function_call` 与 `function` 角色消息按函数调用与函数结果发送
 
-message 字段为 `role`、`content`、可选 `name`、`tool_call_id`、`tool_calls`、`function_call`。assistant tool call：
+message 字段为 `role`、`content`、可选 `name`、`tool_call_id`、`tool_calls`、`function_call`。system、developer、user 与 assistant 消息的 `name` 以 `<name>: ` 写在该消息第一段文本前，例如 `{"role":"system","name":"example_user","content":"Hi"}` 在系统指令中为 `example_user: Hi`；tool 消息的 `name` 为函数名。assistant tool call：
 
 ```json
 {
@@ -2144,7 +2151,7 @@ tool group 字段：
 
 ### Files、Transcribe 与媒体
 
-`POST /v1/files` 接受 multipart `file` 与可选 `purpose`，两者可以按任意顺序到达。文件上限 512 MiB，请求额外允许 1 MiB multipart overhead；普通 scalar part 上限 64 KiB。filename 与非空 file 必需；`purpose` 省略或为空时为 `user_data`。Content-Type 为空、无效、不含子类型或为 `application/octet-stream` 时从文件前缀检测不带参数的 MIME，Ogg 前缀记为 `audio/ogg`，WAV 前缀记为 `audio/wav`；前缀无法识别时依次按 FLAC 头、MPEG 音频帧头与扩展名（flac、mp3、mp4、mpeg、mpga、m4a、ogg、wav、webm，其余扩展名查系统 MIME 表）确定。
+`POST /v1/files` 接受 multipart `file` 与可选 `purpose`，两者可以按任意顺序到达。文件上限 512 MiB，请求额外允许 1 MiB multipart overhead；普通 scalar part 上限 64 KiB。filename 与非空 file 必需；`purpose` 省略或为空时为 `user_data`。Content-Type 为空、无效、不含子类型或为 `application/octet-stream` 时从文件前缀检测不带参数的 MIME，Ogg 前缀记为 `audio/ogg`，WAV 前缀记为 `audio/wav`；前缀无法识别时依次按 FLAC 头、MPEG 音频帧头与扩展名（flac、mp3、mp4、mpeg、mpga、m4a、ogg、wav、webm，其余扩展名查系统 MIME 表）确定。`/v1/files` 与 `/upload/v1beta/files` 收到的 GIF 按首帧画在逻辑画布尺寸的白底上，编码为质量 92 的 JPEG 后保存，文件名不变，MIME 为 `image/jpeg`。
 
 File object：
 
@@ -2253,8 +2260,8 @@ OpenAI `POST /v1/videos` 接受 JSON 或 multipart：
 
 | 字段 | 取值与处理 |
 | --- | --- |
-| `model` | 省略时取公开目录顺序中首个具有 `predictLongRunning` 方法的模型 |
-| `prompt` | 必需 |
+| `model` | 省略时取公开目录顺序中首个视频模型（具有 `predictLongRunning` 方法，或 `generateContent` 模型列出 `video_output_resolutions`） |
+| `prompt` | 有 `input_reference` 时可以为空，否则必需 |
 | `seconds` | 整数字符串；默认 4；按模型选项取最接近值 |
 | `size` | `1280x720`、`720x1280`、`1792x1024`、`1920x1080`、`1024x1792`、`1080x1920` |
 | `input_reference` | JSON 中为 file ID/data URL；multipart 中为文件 |
@@ -2316,7 +2323,7 @@ Gemini `:predictLongRunning` 请求：
 }
 ```
 
-`instances` 必须只有一个非空 prompt；image 必须在 `inlineData` 与 `fileData:{mimeType,fileUri}` 中选择一个。`numberOfVideos` 为 0 时读取 `sampleCount`，两者均为 0 时默认 1，范围 1–4；每个视频创建一个上游任务。`durationSeconds` 接受 JSON integer 或十进制字符串。duration、aspect ratio 与 resolution 省略时分别为 `4`、`16:9`、`720p`，并换成实时模型 `video_durations_seconds`、`video_aspect_ratios`、`video_output_resolutions` 中最接近的取值（时长按秒数、宽高比按比值对数、分辨率按像素高度，距离相同时取较大值）；负数时长返回 400，模型列出对应选项时无法解析的宽高比与分辨率返回 400，未列出时原样发送。创建返回 `{"name":"operations/<ID>"}`，多个视频时 `<ID>` 为各任务 ID 以 `~` 连接；中途创建失败时停止，已创建的任务照常返回，第一个即失败时返回该错误。Gemini operation 使用同一份持久元数据恢复创建账户与轮询上下文；Gemini 响应只包含 `name`、`done` 与完成后的 `response.generateVideoResponse.generatedSamples`。
+`instances` 必须只有一个，其中至少有非空 prompt、image、lastFrame 或 referenceImages 之一；prompt 为空时上游请求的提示词位为 null，与官网视频页只有图片时相同；image 必须在 `inlineData` 与 `fileData:{mimeType,fileUri}` 中选择一个。`numberOfVideos` 为 0 时读取 `sampleCount`，两者均为 0 时默认 1，范围 1–4；每个视频创建一个上游任务。`durationSeconds` 接受 JSON integer 或十进制字符串。duration、aspect ratio 与 resolution 省略时分别为 `4`、`16:9`、`720p`，并换成实时模型 `video_durations_seconds`、`video_aspect_ratios`、`video_output_resolutions` 中最接近的取值（时长按秒数、宽高比按比值对数、分辨率按像素高度，距离相同时取较大值）；负数时长返回 400，模型列出对应选项时无法解析的宽高比与分辨率返回 400，未列出时原样发送。创建返回 `{"name":"operations/<ID>"}`，多个视频时 `<ID>` 为各任务 ID 以 `~` 连接；中途创建失败时停止，已创建的任务照常返回，第一个即失败时返回该错误。Gemini operation 使用同一份持久元数据恢复创建账户与轮询上下文；Gemini 响应只包含 `name`、`done` 与完成后的 `response.generateVideoResponse.generatedSamples`。
 
 `GET /v1beta/operations/{id}`：
 
@@ -2335,6 +2342,14 @@ Gemini `:predictLongRunning` 请求：
 ```
 
 `response` 在全部任务 done 时出现，`generatedSamples` 按创建顺序列出有产物的任务，uri 指向各任务的 `/v1/videos/<任务ID>/content`；无产物时为空。上游已找不到的任务按已结束且无产物处理；其他任务查询失败时返回该错误。
+
+账户目录中没有 `predictLongRunning` 模型时，两个入口按模型 ID 或目录别名找到能输出视频的 Omni 模型（`generateContent` 模型列出 `video_output_resolutions`，如 `gemini-omni-1.1-flash` 及其别名 `veo-3.1-fast-generate-preview`），在可调用该模型的账户上创建 `omni-` 开头的任务 ID 并立即返回，服务在后台按 [Omni Interaction](#omni-interaction) 生成：
+
+- 宽高比与分辨率换成模型选项中最接近的取值，时长换成 `video_duration_range` 范围内的秒数
+- 按输入核对模型目录的 `video_tasks`：有参考图时为 `reference_to_video`，只有起始图时为 `image_to_video`，没有图片时为 `text_to_video`，目录没有列出该任务时返回 400；请求带参考图或起始图任务，文字生成视频以及提示词为空、只有图片时与官网一样不带任务；图片在提示词之前，提示词为空时内容只有图片；反向提示词以 `\n\nNegative prompt: <文本>` 附加在提示词末尾；尾帧返回 400
+- 生成的 MP4 上传到创建账户的 Drive，以官网视频页的文件名绑定为任务结果，之后的查询、下载、列出与删除与 Veo 任务相同
+- 生成失败时 Gemini operation 为 `done` 并带 `error:{code,message,status}`，OpenAI 对象 status 为 `failed` 并带 `error:{"code":"video_generation_failed","message"}`
+- 服务重启时尚未完成的任务按上游已找不到处理，说明为 `服务重启前任务没有生成完成`
 
 ### Live 与 Robotics 公开帧
 
@@ -2433,7 +2448,7 @@ Responses 媒体使用 image generation item。
 
 OpenAI Chat 使用 Markdown 图片承载生成图片，`MEDIA_OUTPUT=inline` 时为 data URL，`url` 时为本服务的 `/media/<文件名>` URL；客户端把 assistant `message.content` 回传下一轮时，适配器将其中的 data URL 图片与本服务已保存的媒体 URL 图片恢复为 inline data Part，保留图片多轮上下文。`GET /media/<文件名>` 返回保存的媒体，不校验 API key，响应带 immutable 缓存头。图片 Base64 支持标准与 URL-safe 字母表、可选填充及 CR/LF 换行；图片前后的文本保持原顺序。
 
-用户文本中的 `youtu.be/<ID>`、`youtube.com/watch?v=<ID>`、`/shorts/<ID>`、`/live/<ID>` 和 `/embed/<ID>` 会转换为 `video/*` 外部媒体 part，并从用户 text part 中移除；重复 URL 合并为一个附件。OpenAI `video_url`/`input_video`、Anthropic URL source 与 Gemini `fileData.fileUri` 使用相同的外部媒体编码。
+`YOUTUBE_LINKS=true` 时，用户文本中的 `youtu.be/<ID>`、`youtube.com/watch?v=<ID>`、`/shorts/<ID>`、`/live/<ID>` 和 `/embed/<ID>` 会转换为 `video/*` 外部媒体 part，并从用户 text part 中移除；重复 URL 合并为一个附件。OpenAI `video_url`/`input_video`、Anthropic URL source 与 Gemini `fileData.fileUri` 使用相同的外部媒体编码。
 
 OpenAI Responses 的 `previous_response_id` 与 Interactions 的 `previous_interaction_id` 在进程内共用最多 256 个响应节点并重建完整 contents；重启后客户端重新提交完整上下文。Drive 与 Veo 资源绑定持久化到磁盘。
 
@@ -2476,6 +2491,7 @@ OpenAI Responses 的 `previous_response_id` 与 Interactions 的 `previous_inter
 - OpenAI 错误对象的 `type` 在参数、认证、权限与资源不存在时为 `invalid_request_error`，429 为 `requests`，其余为 `server_error`；`param` 为 `null`
 - Responses 流中的 `response.failed` 的 `error.code` 取官方枚举：429 为 `rate_limit_exceeded`，400 为 `invalid_prompt`，其余为 `server_error`
 - 错误消息以服务的中文说明开头，上游错误随后附上游方法、HTTP 状态、协议错误码与上游原文，例如 `AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: You've reached your usage limit…`
+- 候选账户均在冷却时，消息在最早恢复时间后附上该冷却的类型与触发它的上游错误，例如 `每日限额: AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: … limit: 100, model: gemini-3.8-flash …`
 - OpenAI 与 Anthropic 的 5xx 错误消息（含已开始流式响应后的终止事件）在说明前加官方英文开头与冒号：503 为 `Service unavailable`，504 为 `Request timed out`，529 为 `Overloaded`，其余为 `Internal server error`
 
 上游 RPC 的 HTTP 404 表示传输或上游失败，默认映射为 502；公开 404 对应本地模型目录或本地资源查找失败。客户端自身断开时，访问日志记录 499 并结束响应写入。

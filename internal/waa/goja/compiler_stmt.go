@@ -223,6 +223,7 @@ func (c *compiler) compileLabeledDoWhileStatement(v *ast.DoWhileStatement, needR
 	}
 
 	start := len(c.p.code)
+	c.emit(loopHead{})
 	c.compileStatement(v.Body, needResult)
 	c.block.cont = len(c.p.code)
 	c.emitExpr(c.compileExpression(v.Test), true)
@@ -284,6 +285,7 @@ func (c *compiler) compileLabeledForStatement(v *ast.ForStatement, needResult bo
 	}
 
 	start := len(c.p.code)
+	c.emit(loopHead{})
 	var j int
 	testConst := false
 	if v.Test != nil {
@@ -404,12 +406,13 @@ func (c *compiler) compileForInto(into ast.ForInto, needResult bool) (enter *ent
 	return
 }
 
-func (c *compiler) compileLabeledForInOfStatement(into ast.ForInto, source ast.Expression, body ast.Statement, iter, needResult bool, label unistring.String) {
+func (c *compiler) compileLabeledForInOfStatement(into ast.ForInto, source ast.Expression, body ast.Statement, iter, async, needResult bool, label unistring.String) {
 	c.block = &block{
 		typ:        blockLoopEnum,
 		outer:      c.block,
 		label:      label,
 		needResult: needResult,
+		async:      async,
 	}
 	enterPos := -1
 	if forDecl, ok := into.(*ast.ForDeclaration); ok {
@@ -449,7 +452,10 @@ func (c *compiler) compileLabeledForInOfStatement(into ast.ForInto, source ast.E
 		}
 		c.popScope()
 	}
-	if iter {
+	if async {
+		c.setOperandText(decompileExpression(source))
+		c.emit(iterateAsyncP)
+	} else if iter {
 		c.emit(iterateP)
 	} else {
 		c.emit(enumerate)
@@ -459,7 +465,20 @@ func (c *compiler) compileLabeledForInOfStatement(into ast.ForInto, source ast.E
 	}
 	start := len(c.p.code)
 	c.block.cont = start
+	c.emit(loopHead{})
+	if async {
+		c.emit(asyncIterNext, await)
+	}
+	next := len(c.p.code)
 	c.emit(nil)
+	tryPos := len(c.p.code)
+	if async {
+		c.block = &block{
+			typ:   blockTry,
+			outer: c.block,
+		}
+		c.emit(nil)
+	}
 	enterIterBlock := c.compileForInto(into, needResult)
 	if needResult {
 		c.emit(clearResult)
@@ -469,19 +488,54 @@ func (c *compiler) compileLabeledForInOfStatement(into ast.ForInto, source ast.E
 		c.leaveScopeBlock(enterIterBlock)
 		c.popScope()
 	}
-	c.emit(jump(start - len(c.p.code)))
-	if iter {
-		c.p.code[start] = iterNext(len(c.p.code) - start)
-	} else {
-		c.p.code[start] = enumNext(len(c.p.code) - start)
+	if async {
+		c.emit(leaveTry{})
+		c.block = c.block.outer
 	}
-	c.emit(enumPop, jump(2))
+	c.emit(jump(start - len(c.p.code)))
+	if async {
+		catch := len(c.p.code)
+		c.emit(try{catchOffset: 6}, asyncIterClose(3), await, pop, leaveTry{}, jump(2), pop, throw)
+		var finally int32
+		if hasYield(c.p.code[tryPos:catch]) {
+			finally = int32(len(c.p.code) - tryPos)
+			c.emit(genClosing(4), asyncIterClose(3), await, checkObjectP, leaveFinally{})
+		}
+		c.p.code[tryPos] = try{catchOffset: int32(catch - tryPos), finallyOffset: finally}
+		c.p.code[next] = asyncIterStep(len(c.p.code) - next)
+	} else if iter {
+		c.p.code[next] = iterNext(len(c.p.code) - next)
+	} else {
+		c.p.code[next] = enumNext(len(c.p.code) - next)
+	}
+	c.emit(enumPop)
+	end := len(c.p.code)
+	c.emit(nil)
 	c.leaveBlock()
-	c.emit(enumPopClose)
+	c.emitIterClose(async)
+	c.p.code[end] = jump(len(c.p.code) - end)
+}
+
+// hasYield 判断指令序列中是否有 yield 或 yield*
+func hasYield(code []instruction) bool {
+	for _, ins := range code {
+		if y, ok := ins.(*yieldMarker); ok && y.resultType != resultAwait {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *compiler) emitIterClose(async bool) {
+	if async {
+		c.emit(asyncIterClose(3), await, checkObjectP, enumPop)
+	} else {
+		c.emit(enumPopClose)
+	}
 }
 
 func (c *compiler) compileLabeledForInStatement(v *ast.ForInStatement, needResult bool, label unistring.String) {
-	c.compileLabeledForInOfStatement(v.Into, v.Source, v.Body, false, needResult, label)
+	c.compileLabeledForInOfStatement(v.Into, v.Source, v.Body, false, false, needResult, label)
 }
 
 func (c *compiler) compileForOfStatement(v *ast.ForOfStatement, needResult bool) {
@@ -489,7 +543,7 @@ func (c *compiler) compileForOfStatement(v *ast.ForOfStatement, needResult bool)
 }
 
 func (c *compiler) compileLabeledForOfStatement(v *ast.ForOfStatement, needResult bool, label unistring.String) {
-	c.compileLabeledForInOfStatement(v.Into, v.Source, v.Body, true, needResult, label)
+	c.compileLabeledForInOfStatement(v.Into, v.Source, v.Body, true, v.Await, needResult, label)
 }
 
 func (c *compiler) compileWhileStatement(v *ast.WhileStatement, needResult bool) {
@@ -509,6 +563,7 @@ func (c *compiler) compileLabeledWhileStatement(v *ast.WhileStatement, needResul
 	}
 	start := len(c.p.code)
 	c.block.cont = start
+	c.emit(loopHead{})
 	expr := c.compileExpression(v.Test)
 	testTrue := false
 	var j int
@@ -640,7 +695,7 @@ L:
 		case blockWith:
 			c.emit(leaveWith)
 		case blockLoopEnum:
-			c.emit(enumPopClose)
+			c.emitIterClose(b.async)
 		}
 	}
 	return block
@@ -733,6 +788,9 @@ func (c *compiler) compileReturnStatement(v *ast.ReturnStatement) {
 	}
 	if v.Argument != nil {
 		c.emitExpr(c.compileExpression(v.Argument), true)
+		if s := c.scope.nearestFunction(); s != nil && s.asyncGenerator {
+			c.emit(await)
+		}
 	} else {
 		c.emit(loadUndef)
 	}
@@ -741,7 +799,7 @@ func (c *compiler) compileReturnStatement(v *ast.ReturnStatement) {
 		case blockTry:
 			c.emit(saveResult, leaveTry{}, loadResult)
 		case blockLoopEnum:
-			c.emit(enumPopClose)
+			c.emitIterClose(b.async)
 		}
 	}
 	if s := c.scope.nearestFunction(); s != nil && s.funcType == funcDerivedCtor {
@@ -821,6 +879,9 @@ func (c *compiler) emitPatternAssign(target, init compiledExpr) {
 	if id, ok := target.(*compiledIdentifierExpr); ok {
 		b, noDyn := c.scope.lookupName(id.name)
 		if noDyn {
+			if c.scope.strict {
+				c.checkIdentifierLName(id.name, id.offset)
+			}
 			c.emitNamedOrConst(init, id.name)
 			b.emitSetP()
 		} else {

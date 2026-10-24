@@ -412,6 +412,15 @@ func SetAccessLogError(ctx context.Context, err error) {
 	}
 }
 
+// setAccessLogFailureStatus 记录响应头以 200 提交后才确定的失败状态
+func setAccessLogFailureStatus(ctx context.Context, status int) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok && status >= http.StatusBadRequest {
+		metadata.mu.Lock()
+		metadata.failureStatus = status
+		metadata.mu.Unlock()
+	}
+}
+
 // SetAccessLogFinishReason 写入生成请求的上游终止原因
 func SetAccessLogFinishReason(ctx context.Context, reason string) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {

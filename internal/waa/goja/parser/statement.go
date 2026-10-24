@@ -655,6 +655,13 @@ func (self *_parser) parseFor(idx file.Idx, initializer ast.ForLoopInitializer) 
 
 func (self *_parser) parseForOrForInStatement() ast.Statement {
 	idx := self.expect(token.FOR)
+	forAwait := self.token == token.AWAIT
+	if forAwait {
+		if !self.scope.inAsync {
+			self.error(self.idx, "for await (... of ...) is only valid in async functions and async generators")
+		}
+		self.next()
+	}
 	self.expect(token.LEFT_PARENTHESIS)
 
 	var initializer ast.ForLoopInitializer
@@ -724,7 +731,21 @@ func (self *_parser) parseForOrForInStatement() ast.Statement {
 				}
 			}
 		} else {
-			expr := self.parseExpression()
+			var expr ast.Expression
+			if forAwait && self.token == token.ASYNC {
+				var state parserState
+				self.mark(&state)
+				id := &ast.Identifier{Name: "async", Idx: self.idx}
+				self.next()
+				if self.token == token.IDENTIFIER && self.literal == "of" {
+					expr = id
+				} else {
+					self.restore(&state)
+				}
+			}
+			if expr == nil {
+				expr = self.parseExpression()
+			}
 			if self.token == token.IN {
 				self.next()
 				forIn = true
@@ -757,11 +778,16 @@ func (self *_parser) parseForOrForInStatement() ast.Statement {
 		self.scope.allowIn = allowIn
 	}
 
+	if forAwait && !forOf {
+		self.error(idx, "'for await' loop should be used with 'of'")
+	}
 	if forIn {
 		return self.parseForIn(idx, into)
 	}
 	if forOf {
-		return self.parseForOf(idx, into)
+		node := self.parseForOf(idx, into)
+		node.Await = forAwait
+		return node
 	}
 
 	self.expect(token.SEMICOLON)

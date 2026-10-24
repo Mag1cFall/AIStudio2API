@@ -7,37 +7,27 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/vearutop/statigz"
 )
 
 //go:embed all:dist
 var embedded embed.FS
 
-// Files 返回管理端构建产物文件系统
-func Files() fs.FS {
-	dist, err := fs.Sub(embedded, "dist")
-	if err != nil {
-		panic(err)
-	}
-	return dist
-}
-
-// Handler 返回管理端静态文件处理器
+// Handler 返回管理端静态文件处理器，gzip 构建产物直接返回给接受 gzip 的客户端，其余客户端收到解压后的内容
 func Handler() http.Handler {
-	files := Files()
-	index, err := fs.ReadFile(files, "index.html")
+	index, err := fs.ReadFile(embedded, "dist/index.html")
 	if err != nil {
 		panic(err)
 	}
 	return &spaHandler{
-		files:  files,
-		static: http.FileServer(http.FS(files)),
+		static: statigz.FileServer(embedded, statigz.FSPrefix("dist")),
 		index:  index,
 	}
 }
 
 type spaHandler struct {
-	files  fs.FS
-	static http.Handler
+	static *statigz.Server
 	index  []byte
 }
 
@@ -53,11 +43,7 @@ func (handler *spaHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	name := strings.TrimPrefix(requestPath, "/")
-	if name == "." {
-		name = "index.html"
-	}
-	if _, err := fs.Stat(handler.files, name); err == nil {
+	if handler.static.Found(request) {
 		handler.static.ServeHTTP(writer, request)
 		return
 	}

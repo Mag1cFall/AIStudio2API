@@ -2,7 +2,7 @@ import type { ThinkingLevel } from '@/types'
 import type { Tool } from './catalog'
 import type { Protocol } from './protocols'
 
-// Part 是 Gemini API 的内容片段
+// Part 是 Gemini API 的内容片段；fileName 与 tokenCount 是试用页附件显示的文件名与 token 数，不随请求发送
 export interface Part {
   text?: string
   thought?: boolean
@@ -13,6 +13,8 @@ export interface Part {
   functionResponse?: { name: string; response: Record<string, unknown>; id?: string }
   executableCode?: { language: string; code: string }
   codeExecutionResult?: { outcome: string; output?: string }
+  fileName?: string
+  tokenCount?: number
 }
 
 // Source 是搜索与地图依据中的一个来源

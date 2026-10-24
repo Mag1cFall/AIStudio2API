@@ -145,12 +145,14 @@ watch(open, (value) => {
         <template v-else>{{ part.text }}</template>
       </template>
     </p>
-    <div class="mode-switch">
+    <div class="mode-switch" role="tablist">
       <button
         type="button"
         ms-button
+        role="tab"
         class="ms-button-filter-chip"
         :class="{ 'ms-button-active': mode === 'code' }"
+        :aria-selected="mode === 'code'"
         @click="switchMode('code')"
       >
         {{ t('pg.codeEditor') }}
@@ -158,8 +160,10 @@ watch(open, (value) => {
       <button
         type="button"
         ms-button
+        role="tab"
         class="ms-button-filter-chip"
         :class="{ 'ms-button-active': mode === 'visual' }"
+        :aria-selected="mode === 'visual'"
         @click="switchMode('visual')"
       >
         {{ t('pg.visualEditor') }}

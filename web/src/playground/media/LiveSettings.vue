@@ -107,18 +107,12 @@ function addVocabulary(): void {
         @select="live.selectModel($event.id)"
       />
       <button
-        v-tooltip.left="
-          variant === 'transcription'
-            ? t('pg.systemUnsupported')
-            : locked
-              ? t('pg.liveSystemLocked')
-              : ''
-        "
+        v-tooltip.left="variant === 'transcription' ? t('pg.systemUnsupported') : ''"
         type="button"
         class="settings-card system-instructions-card"
-        :class="{ 'disabled-interactive': variant === 'transcription' || locked }"
+        :class="{ 'disabled-interactive': variant === 'transcription' }"
         :aria-label="t('pg.systemInstructions')"
-        @click="variant !== 'transcription' && !locked && (systemOpen = true)"
+        @click="variant !== 'transcription' && (systemOpen = true)"
       >
         <span class="title">{{ t('pg.systemInstructions') }}</span>
         <span class="subtitle">{{ systemSubtitle }}</span>
@@ -460,7 +454,11 @@ function addVocabulary(): void {
     </div>
   </RunSettingsFrame>
 
-  <LiveSystemInstructions v-model:open="systemOpen" v-model:text="settings.systemInstruction" />
+  <LiveSystemInstructions
+    v-model:open="systemOpen"
+    v-model:text="settings.systemInstruction"
+    :locked="locked"
+  />
   <JsonEditorDialog
     v-model:open="functionsOpen"
     v-model:text="settings.functionDeclarations"
@@ -469,8 +467,30 @@ function addVocabulary(): void {
 </template>
 
 <style scoped>
+.field-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.field-group :deep(.model-selector-card) {
+  margin-bottom: 8px;
+}
+
 .system-instructions-card {
   margin-block: 8px;
+}
+
+.field-group .settings-item-column {
+  gap: 8px;
+  margin-block: 8px;
+}
+
+.field-group .item-description-title {
+  margin: 0;
+}
+
+.settings-group-header {
+  min-height: 32px;
 }
 
 .system-instructions-card.disabled-interactive {
@@ -528,8 +548,13 @@ function addVocabulary(): void {
   margin-block: 8px;
 }
 
+.vocabulary .settings-item {
+  margin: 8px 0 0;
+}
+
 .vocabulary-input {
-  --ms-input-width: 140px;
+  flex: 1 0;
+  min-width: 0;
 }
 
 .chips {

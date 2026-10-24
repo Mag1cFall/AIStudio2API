@@ -372,6 +372,21 @@ func (transport *authRetryProtectedTransport) DoProtectedVideo(
 	})
 }
 
+// DoProtectedTitle 在认证失败后续签同一账户并重放 GenerateTitle 请求
+func (transport *authRetryProtectedTransport) DoProtectedTitle(
+	ctx context.Context,
+	request aistudio.TitleRequest,
+	rpc aistudio.RPCRequest,
+) (*aistudio.RPCResponse, error) {
+	titleTransport, ok := transport.transport.(aistudio.TitleProtectedTransport)
+	if !ok {
+		return nil, fmt.Errorf("protected transport 不支持 GenerateTitle")
+	}
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return titleTransport.DoProtectedTitle(ctx, request, rpc)
+	})
+}
+
 // Refresh 续签当前租约账户并保存新的 storage state
 func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)

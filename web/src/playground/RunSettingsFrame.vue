@@ -9,9 +9,10 @@ withDefaults(
     open: boolean
     narrow: boolean
     resettable?: boolean
+    codeButton?: boolean
     title?: string | undefined
   }>(),
-  { resettable: true, title: '' },
+  { resettable: true, codeButton: true, title: '' },
 )
 const emit = defineEmits<{ close: []; code: []; reset: [] }>()
 const { t } = useI18n()
@@ -23,6 +24,7 @@ const { t } = useI18n()
       <h2 class="header-label">{{ title || t('pg.runSettings') }}</h2>
       <div class="right">
         <button
+          v-if="codeButton"
           v-tooltip.below="t('pg.getCodeTip')"
           type="button"
           ms-button

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import hljs from 'highlight.js/lib/common'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import { vTooltip } from '@/playground/ui/tooltip'
-import { previewDocument } from '@/playground/preview'
+import { previewOrigin } from '@/playground/preview'
 
 const props = withDefaults(
   defineProps<{
@@ -30,7 +30,7 @@ const props = withDefaults(
   },
 )
 const { t } = useI18n()
-const { showNotice } = useConsole()
+const { showNotice, config } = useConsole()
 
 // languageNames 是官网代码块标题中与语言标识不同写法的显示名
 const languageNames: Record<string, string> = {
@@ -75,6 +75,13 @@ const downloadTypes: Record<string, [string, string]> = {
 
 const expanded = ref(true)
 const previewing = ref(false)
+// frame 是预览框，指向预览来源的 shim 页
+const frame = ref<HTMLIFrameElement>()
+// preview 是 HTML 预览的独立来源
+const preview = computed(() => previewOrigin(config.value?.active_preview_listen_addr ?? ''))
+const shim = computed(
+  () => `${preview.value}/shim.html?origin=${encodeURIComponent(location.origin)}`,
+)
 const trimmed = computed(() => props.code.trim())
 // title 是标题栏文字：指定标题优先，其次为语言显示名，都为空时为 Code
 const title = computed(() => {
@@ -98,6 +105,16 @@ const previewable = computed(
     (props.language === 'html' && props.code.split('\n').length >= 15) ||
     props.code.startsWith('<svg '),
 )
+
+// sendPreview 在预览页就绪后把代码发给它，由它以 blob 文档打开
+function sendPreview(event: MessageEvent): void {
+  const target = frame.value?.contentWindow
+  if (!target || event.source !== target || event.origin !== preview.value) return
+  if (event.data?.type === 'preview-ready') target.postMessage({ html: props.code }, preview.value)
+}
+
+onMounted(() => window.addEventListener('message', sendPreview))
+onUnmounted(() => window.removeEventListener('message', sendPreview))
 
 // escapeHTML 转义文本中的 HTML 特殊字符
 function escapeHTML(text: string): string {
@@ -207,9 +224,11 @@ function download(): void {
           <div class="code-body-inner">
             <div v-if="previewing" class="preview">
               <iframe
+                :key="code"
+                ref="frame"
                 :title="t('pg.preview')"
-                sandbox="allow-scripts allow-forms allow-popups"
-                :srcdoc="previewDocument(code)"
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                :src="shim"
               ></iframe>
             </div>
             <template v-else>

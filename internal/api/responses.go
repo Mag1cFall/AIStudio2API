@@ -367,6 +367,11 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		s.streamBackground(w, r, request, prepared, responseID)
 		return
 	}
+	if !request.Stream {
+		var stopKeepalive func()
+		w, stopKeepalive = s.nonstreamKeepalive(w, r)
+		defer stopKeepalive()
+	}
 	compaction, err := s.compactOverThreshold(r.Context(), &request, &prepared, responseID)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -375,7 +380,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generateRequest := prepared.generate
-	generateRequest.Unary = !request.Stream
+	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err == nil && request.Stream {
 		events, err = awaitStreamStart(r.Context(), events)

@@ -39,8 +39,19 @@ defineProps<{ id?: string; disabled?: boolean; label?: string }>()
 }
 
 .ms-switch:disabled {
-  opacity: 0.38;
   cursor: default;
+}
+
+.ms-switch:disabled[data-state='checked'] {
+  opacity: 0.38;
+}
+
+.ms-switch:disabled[data-state='unchecked'] {
+  background-color: color-mix(in srgb, var(--color-v3-surface-container-highest) 38%, transparent);
+}
+
+.ms-switch:disabled[data-state='unchecked'] .ms-switch-handle {
+  background-color: color-mix(in srgb, var(--color-on-surface) 38%, transparent);
 }
 
 .ms-switch:focus-visible {

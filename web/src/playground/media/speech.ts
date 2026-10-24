@@ -4,6 +4,7 @@ import type { Model, VoiceDetail } from '@/types'
 import { apiKey, errorMessage, StreamError } from '../request'
 import { newTurnID } from '../session'
 import { audioBlob, generateContent } from './api'
+import { modelMatches } from '../catalog'
 import { pageKindOf } from './kinds'
 import type { SpeechTemplate } from './speech-templates'
 
@@ -188,7 +189,7 @@ function ensureVoices(): void {
 // ensureModel 在目录变化后选定模型：地址中的模型优先，其次保留当前模型，否则用第一个语音模型
 function ensureModel(requested?: string): void {
   const list = models()
-  const wanted = list.find((model) => model.id === requested)
+  const wanted = list.find((model) => modelMatches(model, requested))
   if (wanted) setModel(wanted.id)
   else if (!list.some((model) => model.id === state.settings.model) && list[0]) setModel(list[0].id)
   else ensureVoices()

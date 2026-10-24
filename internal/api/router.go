@@ -26,6 +26,16 @@ type Config struct {
 	MediaDir string
 	// MediaLinks 返回媒体输出是否使用 URL 与设置的服务地址
 	MediaLinks func() (enabled bool, base string)
+	// ResponseModes 返回非流式保活与假流式设置
+	ResponseModes func() ResponseModes
+}
+
+// ResponseModes 是生成请求的响应方式设置
+type ResponseModes struct {
+	// NonstreamKeepalive 让非流式请求在等待结果期间定时写出换行
+	NonstreamKeepalive bool
+	// FakeStream 让流式请求收齐完整结果后再按流式输出
+	FakeStream bool
 }
 
 type server struct {

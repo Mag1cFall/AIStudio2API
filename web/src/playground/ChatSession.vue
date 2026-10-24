@@ -62,7 +62,7 @@ const userScrolling = ref(false)
 // measure 记录对话是否可滚动、是否位于底部
 function measure(): void {
   const element = scroller.value
-  if (element === undefined) return
+  if (!element) return
   scrollable.value = element.scrollHeight > element.clientHeight
   atBottom.value = element.scrollTop >= element.scrollHeight - element.clientHeight
 }
@@ -70,7 +70,7 @@ function measure(): void {
 // follow 与官网 ms-autoscroll-container 一致：没有停止跟随时滚到底部，force 先恢复跟随
 function follow(force = false): void {
   const element = scroller.value
-  if (element === undefined) return
+  if (!element) return
   if (force) detached = false
   if (detached) return
   const max = element.scrollHeight - element.clientHeight
@@ -84,7 +84,7 @@ function follow(force = false): void {
 // onScroll 用户向上滚动任意距离即停止跟随，滚到底部恢复跟随；可见高度增加使位置被截短的距离不算向上滚动
 function onScroll(): void {
   const element = scroller.value
-  if (element === undefined) return
+  if (!element) return
   const max = element.scrollHeight - element.clientHeight
   const top = Math.max(0, Math.floor(element.scrollTop))
   const bottom = top >= max
@@ -238,12 +238,6 @@ onUnmounted(() => {
 
 .side-by-side .chat-session-content {
   padding: 0 0 24px;
-}
-
-@media screen and (max-width: 480px) {
-  .chat-session-content {
-    padding: 0 8px 24px;
-  }
 }
 
 .bottom-overlay {

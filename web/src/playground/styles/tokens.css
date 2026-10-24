@@ -83,6 +83,8 @@
   --color-v3-text-var: #565b61;
   --color-v3-warning-container: #ffddb7;
   --color-v3-warning-text: #2a1700;
+  --mat-sys-on-primary: #fff;
+  --mat-sys-on-surface-variant: #45474a;
   --shadow-v3-card: 0px 2px 1px 0px rgba(27, 27, 30, 0.04), 0px 0px 1px 0px rgba(27, 27, 30, 0.4);
   --shadow-v3-card-hover:
     0px 3px 6px 0px rgba(27, 27, 30, 0.08), 0px 0px 1px 0px rgba(27, 27, 30, 0.4);
@@ -175,6 +177,8 @@
   --color-v3-text-link: #87a9ff;
   --color-v3-text-on-button: #fcfcfc;
   --color-v3-text-var: #8c8c8c;
+  --mat-sys-on-primary: #1b1c1c;
+  --mat-sys-on-surface-variant: #c4c7c7;
   --shadow-v3-card:
     0px 2px 1px 0px rgba(252, 252, 252, 0), 0px 0px 1px 0px rgba(252, 252, 252, 0.4);
   --shadow-v3-card-hover:

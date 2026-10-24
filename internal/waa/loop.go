@@ -5,14 +5,15 @@ import (
 	"time"
 )
 
-// eventLoop 在单个 goroutine 中按到达顺序串行执行 VM 任务与计时器回调
+// eventLoop 在单个 goroutine 中按到达顺序串行执行 VM 任务与计时器回调，afterTask 在每个任务结束后执行
 type eventLoop struct {
-	mu     sync.Mutex
-	queue  []func()
-	wake   chan struct{}
-	done   chan struct{}
-	closed bool
-	timers map[*time.Timer]struct{}
+	mu        sync.Mutex
+	queue     []func()
+	wake      chan struct{}
+	done      chan struct{}
+	closed    bool
+	timers    map[*time.Timer]struct{}
+	afterTask func()
 }
 
 func newEventLoop() *eventLoop {
@@ -42,6 +43,9 @@ func (loop *eventLoop) run() {
 		loop.queue = loop.queue[1:]
 		loop.mu.Unlock()
 		job()
+		if loop.afterTask != nil {
+			loop.afterTask()
+		}
 	}
 }
 

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -18,6 +17,7 @@ import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSwitch from '@/playground/ui/UiSwitch.vue'
+import ApiKeyButton from './ApiKeyButton.vue'
 import CameraDialog from './CameraDialog.vue'
 import DriveDialog from './DriveDialog.vue'
 import SampleMediaDialog, { type SampleSelection } from './SampleMediaDialog.vue'
@@ -31,9 +31,9 @@ import { appends, submits, useRunTooltip } from './run-keys'
 import { useTools } from './tools'
 import type { Part } from './types'
 
-const { t } = useI18n()
+const { t, tokenLabel } = useI18n()
 const { showNotice, config } = useConsole()
-const { session } = usePlayground()
+const { session, countAttachment } = usePlayground()
 const { panes, comparing, running, submitAll, appendAll, stopAll } = useCompare()
 const { tools, setTool } = useTools()
 
@@ -45,7 +45,6 @@ const driveOpen = ref(false)
 const sampleOpen = ref(false)
 // preparing 为正在下载的示例图片数，下载完成前与官网一样不能运行
 const preparing = ref(0)
-const router = useRouter()
 
 // addDriveFile 把从 Drive 选中的已上传文件作为文件引用加入附件
 function addDriveFile(file: DriveFile): void {
@@ -61,7 +60,9 @@ async function addSample(selection: SampleSelection): Promise<void> {
         mimeType: 'video/*',
         fileUri: `https://www.youtube.com/watch?v=${selection.video.id}`,
       },
+      fileName: selection.video.name,
     })
+    void countAttachment(session.attachments.at(-1)!)
     return
   }
   preparing.value++
@@ -76,12 +77,6 @@ async function addSample(selection: SampleSelection): Promise<void> {
   }
 }
 
-// openApiKey 打开管理端设置页中的 API 密钥设置
-async function openApiKey(): Promise<void> {
-  await router.push({ path: '/', query: { tab: 'settings' } })
-  await nextTick()
-  document.getElementById('setting-api-key')?.scrollIntoView({ block: 'center' })
-}
 const youtubeURL = ref('')
 const camera = ref<InstanceType<typeof CameraDialog>>()
 // recording 表示正在录音：attach 为插入音频附件，transcribe 为语音转文字
@@ -196,9 +191,20 @@ function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'
   })
 }
 
-// addFiles 把文件加入待发送附件
+// documentPart 表示片段是图片、音频与视频以外的内联文件，与官网一样显示文件名与 token 数
+function documentPart(part: Part): boolean {
+  const mime = part.inlineData?.mimeType
+  return mime !== undefined && !/^(image|audio|video)\//.test(mime)
+}
+
+// addFiles 把文件加入待发送附件，文件附件随后统计 token 数
 async function addFiles(files: Iterable<File>): Promise<void> {
-  for (const file of files) session.attachments.push(await readFile(file))
+  for (const file of files) {
+    const part = await readFile(file)
+    part.fileName = file.name
+    session.attachments.push(part)
+    if (documentPart(part)) void countAttachment(session.attachments.at(-1)!)
+  }
 }
 
 // onFileChange 读取文件选择框中的文件
@@ -330,14 +336,44 @@ defineExpose({ focus })
       {{ t('pg.dropFiles') }}
     </div>
     <div class="prompt-box-container">
+      <div class="textarea-row">
+        <div class="text-wrapper">
+          <textarea
+            ref="textarea"
+            v-model="session.draft"
+            rows="1"
+            class="textarea"
+            :placeholder="t('pg.placeholder')"
+            :aria-label="t('pg.enterPrompt')"
+            @keydown="onKeydown"
+            @paste="onPaste"
+          ></textarea>
+        </div>
+      </div>
       <div v-if="session.attachments.length || preparing" class="multi-media-row">
-        <div v-for="(part, index) in session.attachments" :key="index" class="attachment">
+        <div
+          v-for="(part, index) in session.attachments"
+          :key="index"
+          class="attachment"
+          :class="{ 'attachment-document': documentPart(part) }"
+        >
           <img
             v-if="part.inlineData?.mimeType.startsWith('image/')"
             :src="attachmentURL(part)"
             alt=""
             class="attachment-image"
           />
+          <template v-else-if="documentPart(part)">
+            <span class="document-preview"><UiIcon name="document" :size="24" /></span>
+            <span class="document-content">
+              <span class="document-name" :title="part.fileName">{{
+                part.fileName ?? part.inlineData?.mimeType
+              }}</span>
+              <span v-if="part.tokenCount !== undefined" class="document-tokens">{{
+                tokenLabel(part.tokenCount)
+              }}</span>
+            </span>
+          </template>
           <span v-else class="attachment-file">
             <UiIcon
               :name="
@@ -360,29 +396,16 @@ defineExpose({ focus })
           <button
             type="button"
             ms-button
-            class="attachment-remove ms-button-borderless ms-button-icon ms-button-small"
+            class="attachment-remove ms-button-borderless ms-button-icon"
+            :class="{ 'ms-button-small': !documentPart(part) }"
             :aria-label="t('pg.removeAttachment')"
             @click="session.attachments.splice(index, 1)"
           >
-            <UiIcon name="close" :size="16" />
+            <UiIcon name="close" :size="documentPart(part) ? 20 : 16" />
           </button>
         </div>
         <div v-for="index in preparing" :key="`preparing-${index}`" class="attachment">
           <span class="attachment-file attachment-preparing">{{ t('common.loading') }}…</span>
-        </div>
-      </div>
-      <div class="textarea-row">
-        <div class="text-wrapper">
-          <textarea
-            ref="textarea"
-            v-model="session.draft"
-            rows="1"
-            class="textarea"
-            :placeholder="t('pg.placeholder')"
-            :aria-label="t('pg.enterPrompt')"
-            @keydown="onKeydown"
-            @paste="onPaste"
-          ></textarea>
         </div>
       </div>
       <div class="buttons-row">
@@ -425,16 +448,7 @@ defineExpose({ focus })
               </DropdownMenuContent>
             </DropdownMenuPortal>
           </DropdownMenuRoot>
-          <button
-            v-tooltip.below="t('pg.apiKey')"
-            type="button"
-            ms-button
-            class="ms-button-filter-chip"
-            :aria-label="t('pg.apiKey')"
-            @click="openApiKey"
-          >
-            <UiIcon name="keyOff" :size="18" />
-          </button>
+          <ApiKeyButton />
           <input ref="fileInput" type="file" class="file-input" multiple @change="onFileChange" />
           <PopoverRoot v-if="tools.length && !comparing">
             <PopoverTrigger
@@ -635,6 +649,43 @@ defineExpose({ focus })
   border: 1px solid var(--color-v3-outline-var);
   border-radius: 8px;
   background-color: var(--color-v3-surface-container);
+}
+
+.attachment-document {
+  gap: 8px;
+  height: 56px;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.document-preview {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background-color: var(--color-v3-surface-container-highest);
+}
+
+.document-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.document-name {
+  overflow: hidden;
+  line-height: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-tokens {
+  color: var(--color-v3-text-var);
+  line-height: 16px;
 }
 
 .attachment-image {

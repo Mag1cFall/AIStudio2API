@@ -1,5 +1,5 @@
 import type { Model } from '@/types'
-import { hasCategory, hasCode } from '../catalog'
+import { Capability, hasCategory, hasCode } from '../catalog'
 
 // PageKind 是 Playground 的页面类型
 export type PageKind = 'chat' | 'live' | 'image' | 'video' | 'speech' | 'music'
@@ -20,11 +20,11 @@ export const unsavedKinds: readonly PageKind[] = ['live', 'speech', 'music']
 // pageKindOf 按官网规则返回模型所属页面：能力码 26 实时、19 图片、20 视频、37 语音、53 且属音乐分类为音乐，只有实时音乐方法的模型为音乐，其余为对话
 export function pageKindOf(model: Model | undefined): PageKind {
   if (model === undefined) return 'chat'
-  if (hasCode(model, 26)) return 'live'
-  if (hasCode(model, 19)) return 'image'
-  if (hasCode(model, 20)) return 'video'
-  if (hasCode(model, 37)) return 'speech'
-  if (hasCode(model, 53) && hasCategory(model, 16)) return 'music'
+  if (hasCode(model, Capability.LiveRoute)) return 'live'
+  if (hasCode(model, Capability.ImageGeneration)) return 'image'
+  if (hasCode(model, Capability.VideoRoute)) return 'video'
+  if (hasCode(model, Capability.SpeechRoute)) return 'speech'
+  if (hasCode(model, Capability.MusicRoute) && hasCategory(model, 16)) return 'music'
   if (model.methods.includes('bidiGenerateMusic')) return 'music'
   return 'chat'
 }

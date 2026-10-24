@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useI18n } from '@/i18n'
 import { vTooltip } from '@/playground/ui/tooltip'
 import type { Model } from '@/types'
-import ModelSelector from './ModelSelector.vue'
 import type { PageKind } from './media/kinds'
+import { openModelSelector } from './model-selector'
 
-defineProps<{
+const props = defineProps<{
   model: Model | undefined
   kind: PageKind
   hasContent: boolean
@@ -15,8 +13,16 @@ defineProps<{
   lockedTip?: string
 }>()
 const emit = defineEmits<{ select: [model: Model] }>()
-const { t } = useI18n()
-const open = ref(false)
+
+// openSelector 为本页面打开共用的模型选择面板，选中本页面的模型时以 select 事件交给页面
+function openSelector(): void {
+  openModelSelector({
+    kind: props.kind,
+    selected: props.model?.id ?? '',
+    hasContent: () => props.hasContent,
+    select: (model) => emit('select', model),
+  })
+}
 </script>
 
 <template>
@@ -26,23 +32,14 @@ const open = ref(false)
     class="settings-card model-selector-card"
     :class="{ 'side-by-side': sideBySide, locked: Boolean(lockedTip) }"
     :aria-disabled="Boolean(lockedTip)"
-    @click="!lockedTip && (open = true)"
+    @click="!lockedTip && openSelector()"
   >
-    <span class="title" :class="{ 'is-side-by-side': sideBySide }">{{
-      model?.name ?? t('pg.selectModel')
-    }}</span>
+    <span class="title" :class="{ 'is-side-by-side': sideBySide }">{{ model?.name }}</span>
     <template v-if="!sideBySide">
       <span class="subtitle">{{ model?.id }}</span>
       <span v-if="model?.details?.summary" class="subtitle">{{ model.details.summary }}</span>
     </template>
   </button>
-  <ModelSelector
-    v-model:open="open"
-    :kind="kind"
-    :has-content="hasContent"
-    :selected="model?.id ?? ''"
-    @select="emit('select', $event)"
-  />
 </template>
 
 <style scoped>

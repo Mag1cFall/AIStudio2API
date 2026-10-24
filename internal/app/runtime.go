@@ -126,6 +126,7 @@ func newRuntime(
 		return nil, nil, nil, errors.Join(err, workers.Close())
 	}
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
+	pooled.YouTubeLinks = cfg.YouTubeLinks
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
@@ -936,7 +937,7 @@ func (manager *accountWorkerManager) classifyBootstrapCandidates(
 		}
 		matched = true
 		combined.Eligible = combined.Eligible || groups.Eligible
-		if combined.EarliestCooldown.IsZero() || !groups.EarliestCooldown.IsZero() && groups.EarliestCooldown.Before(combined.EarliestCooldown) {
+		if combined.EarliestCooldown.Until.IsZero() || !groups.EarliestCooldown.Until.IsZero() && groups.EarliestCooldown.Until.Before(combined.EarliestCooldown.Until) {
 			combined.EarliestCooldown = groups.EarliestCooldown
 		}
 		appendUnique(&combined.WarmReady, seenWarmReady, groups.WarmReady)
@@ -2816,6 +2817,21 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 	return count, requestErr
 }
 
+// GenerateTitle 生成试用页页头标题
+func (service *trackedService) GenerateTitle(ctx context.Context, request aistudio.TitleRequest) (string, error) {
+	titles, ok := service.service.(aistudio.TitleService)
+	if !ok {
+		return "", fmt.Errorf("title service 不可用")
+	}
+	request.Model = service.pool.CanonicalModelID(service.mappedModel(request.Model))
+	requestCtx, cancel, err := service.dataRequestContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	return titles.GenerateTitle(requestCtx, request)
+}
+
 // GenerateVideo 创建一个 Veo 长任务
 func (service *trackedService) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
 	request.Model = service.mappedModel(request.Model)
@@ -2827,6 +2843,10 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 		return aistudio.VideoOperation{}, err
 	}
 	defer cancel()
+	if err := service.videoCooling(requestCtx, request); err != nil {
+		api.SetAccessLogError(requestCtx, err)
+		return aistudio.VideoOperation{}, err
+	}
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
 	selectedAccountID := ""
@@ -2854,12 +2874,15 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 		)
 		return recovered, recoveryErr
 	}
+	request.TaskContext = func() (context.Context, context.CancelFunc, error) {
+		return service.dataRequestContext(context.Background())
+	}
 	video, ok := service.service.(aistudio.VideoService)
 	if !ok {
 		return aistudio.VideoOperation{}, fmt.Errorf("video service 不可用")
 	}
 	operation, requestErr := video.GenerateVideo(requestCtx, request)
-	if requestErr == nil && selectedAccountID != "" {
+	if requestErr == nil && selectedAccountID != "" && !operation.ModelAccessCheckedAt().IsZero() {
 		service.markModelAccessVerifiedAsync(
 			selectedAccountID, selectedAccountLabel,
 			strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"),
@@ -2868,6 +2891,23 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 	}
 	api.SetAccessLogError(requestCtx, requestErr)
 	return operation, requestErr
+}
+
+// videoCooling 在视频任务的全部候选账户都冷却且最早恢复晚于排队上限时返回 AllCoolingError
+func (service *trackedService) videoCooling(ctx context.Context, request aistudio.VideoRequest) error {
+	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
+	groups, err := service.pool.ClassifyCandidates(ctx, aistudio.AccountSelection{
+		ModelID: modelID, Method: service.pool.VideoMethod(modelID), AccountID: strings.TrimSpace(request.AccountID),
+	}, nil)
+	if err != nil {
+		return err
+	}
+	available := len(groups.WarmReady) + len(groups.WarmAvailable) + len(groups.WarmBusy) +
+		len(groups.StandbyReady) + len(groups.StandbyBusy)
+	if available > 0 || groups.EarliestCooldown.Until.IsZero() || time.Until(groups.EarliestCooldown.Until) <= cooldownQueueLimit {
+		return nil
+	}
+	return &aistudio.AllCoolingError{ModelID: modelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 }
 
 func needsWAARuntimeRecovery(cause error, generationChanged bool, workerFailed bool, workerReplaced bool) bool {
@@ -3121,10 +3161,10 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 			continue
 		}
-		if !groups.EarliestCooldown.IsZero() {
-			remaining := time.Until(groups.EarliestCooldown)
+		if !groups.EarliestCooldown.Until.IsZero() {
+			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit {
-				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown}
+				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 			}
 			if err := wait(min(remaining, schedulingRecheck)); err != nil {
 				return nil, err
@@ -3362,6 +3402,8 @@ func (service *trackedService) generateWithRetry(
 	recoveryAccountID := ""
 	copyFiles := false
 	var buildRejection *rejectedBuildAttempt
+	// attemptFailure 是最近一次既非额度冷却也非 Build 参数拒绝的尝试错误
+	var attemptFailure error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		request.Contents = originalContents
 		selectionAccountID := requestedAccountID
@@ -3434,7 +3476,12 @@ func (service *trackedService) generateWithRetry(
 				copyFiles = true
 				continue
 			}
-			if err == nil || !errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) {
+			var cooling *aistudio.AllCoolingError
+			switch {
+			case err != nil && errors.Is(acquireErr, aistudio.ErrNoEligibleAccount):
+			case attemptFailure != nil && errors.As(acquireErr, &cooling):
+				err = attemptFailure
+			default:
 				err = acquireErr
 			}
 			if recoveringAccount && unbound && requestCtx.Err() == nil {
@@ -3607,7 +3654,8 @@ func (service *trackedService) generateWithRetry(
 				retryable = false
 			}
 		}
-		if cooldown, ok := aistudio.QuotaCooldownForError(err, time.Now()); ok {
+		cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
+		if quotaFailure {
 			modelAccessScope := lease.CooldownScope(modelID)
 			scopeLabel := modelAccessScope
 			if cooldown.Global {
@@ -3637,8 +3685,9 @@ func (service *trackedService) generateWithRetry(
 			}
 		}
 		var rpcErr *aistudio.RPCError
-		if lease.Channel() == aistudio.ChannelBuild && service.pool.PlaygroundEnabled() && requestCtx.Err() == nil &&
-			errors.As(err, &rpcErr) && rpcErr.StatusCode == http.StatusBadRequest && rpcErr.Code == 3 {
+		buildRejected := lease.Channel() == aistudio.ChannelBuild && service.pool.PlaygroundEnabled() && requestCtx.Err() == nil &&
+			errors.As(err, &rpcErr) && rpcErr.StatusCode == http.StatusBadRequest && rpcErr.Code == 3
+		if buildRejected {
 			buildRejection = &rejectedBuildAttempt{
 				accountID: request.AccountID, generation: lease.ModelAccessGeneration(), checkedAt: lease.CheckedAt(), err: err,
 			}
@@ -3646,6 +3695,9 @@ func (service *trackedService) generateWithRetry(
 			delete(attempted, request.AccountID)
 			maxAttempts++
 			retryable = true
+		}
+		if !quotaFailure && !buildRejected {
+			attemptFailure = err
 		}
 		releaseErr := lease.Release()
 		lease = nil

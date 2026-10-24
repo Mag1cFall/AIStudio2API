@@ -9,7 +9,7 @@ import PlaygroundToolbar from './PlaygroundToolbar.vue'
 import PromptBox from './PromptBox.vue'
 import RunSettings from './RunSettings.vue'
 import ZeroState from './ZeroState.vue'
-import { defaultImageModel, isChatModel } from './catalog'
+import { defaultChatModel, defaultImageModel, isChatModel, modelMatches } from './catalog'
 import type { ZeroStarter } from './zero-configs'
 import { useCompare, usePlayground } from './session'
 import type { PromptData } from './types'
@@ -43,11 +43,21 @@ function useStarter(item: ZeroStarter): void {
   promptBox.value?.focus()
   void playground.applyStarter(item)
 }
+// otherModel 返回地址不带 model 的新对话页上，空白对话是否仍是目录默认模型以外的模型
+function otherModel(): boolean {
+  const model = defaultChatModel(store.models.value)
+  return (
+    route.name === 'prompt' &&
+    route.query.model === undefined &&
+    model !== undefined &&
+    session.settings.model !== model.id
+  )
+}
 watch(
   () => route.params.id,
   async (id) => {
     if (typeof id === 'string' && id !== '') await playground.open(id, props.prompt)
-    else if (session.id !== null || session.turns.length > 0) playground.newChat()
+    else if (session.id !== null || session.turns.length > 0 || otherModel()) playground.newChat()
   },
   { immediate: true },
 )
@@ -59,18 +69,13 @@ watch(
 watch(
   () => [route.query.model, store.models.value] as const,
   ([id, models]) => {
-    if (
-      typeof id === 'string' &&
-      route.params.id === undefined &&
-      session.turns.length === 0 &&
-      session.settings.model !== id &&
-      models.some((model) => model.id === id && isChatModel(model))
-    )
-      playground.selectModel(id)
+    if (typeof id !== 'string' || route.params.id !== undefined || session.turns.length > 0) return
+    const model = models.find((model) => modelMatches(model, id) && isChatModel(model))
+    if (model !== undefined && session.settings.model !== model.id) playground.selectModel(model.id)
   },
   { immediate: true },
 )
-// 图片页没有指定模型时与官网一样使用目录中的图片模型，不改变对话页记住的模型；从空白图片页回到对话页时恢复对话模型
+// 图片页没有指定模型时与官网一样使用目录中的图片模型；从空白图片页回到对话页时恢复对话模型
 watch(
   () => [route.name, route.query.model, store.models.value] as const,
   ([name, id, models], previous) => {
@@ -80,8 +85,7 @@ watch(
       return
     }
     const model = defaultImageModel(models)
-    if (model !== undefined && session.settings.model !== model.id)
-      playground.selectModel(model.id, false)
+    if (model !== undefined && session.settings.model !== model.id) playground.selectModel(model.id)
   },
   { immediate: true },
 )

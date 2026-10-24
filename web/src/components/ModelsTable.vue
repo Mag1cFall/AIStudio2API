@@ -32,8 +32,14 @@ function modelChannels(value: string): Map<string, string> {
     const index = item.lastIndexOf(':')
     if (index > 0)
       channels.set(
-        item.slice(0, index).trim().replace(/^models\//, ''),
-        item.slice(index + 1).trim().toLowerCase(),
+        item
+          .slice(0, index)
+          .trim()
+          .replace(/^models\//, ''),
+        item
+          .slice(index + 1)
+          .trim()
+          .toLowerCase(),
       )
   }
   return channels

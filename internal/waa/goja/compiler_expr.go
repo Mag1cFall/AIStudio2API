@@ -99,6 +99,8 @@ type compiledYieldExpression struct {
 	baseCompiledExpr
 	arg      compiledExpr
 	delegate bool
+	// argText 是 yield* 操作数的反编译文本
+	argText string
 }
 
 type funcType uint8
@@ -293,6 +295,9 @@ func (c *compiler) compileExpression(v ast.Expression) compiledExpr {
 		r := &compiledYieldExpression{
 			arg:      c.compileExpression(v.Argument),
 			delegate: v.Delegate,
+		}
+		if v.Delegate {
+			r.argText = decompileExpression(v.Argument)
 		}
 		r.init(c, v.Yield)
 		return r
@@ -955,6 +960,7 @@ func (e *compiledDotExpr) emitSetter(valueExpr compiledExpr, putOnStack bool) {
 	e.left.emitGetter(true)
 	valueExpr.emitGetter(true)
 	e.addSrcMap()
+	e.c.emit(checkBase{name: e.name, depth: 1, baseSource: e.baseSource, assign: true})
 	if e.c.scope.strict {
 		if putOnStack {
 			e.c.emit(setPropStrict(e.name))
@@ -974,7 +980,7 @@ func (e *compiledDotExpr) emitUnary(prepare, body func(), postfix, putOnStack bo
 	if !putOnStack {
 		e.left.emitGetter(true)
 		e.c.emit(dup)
-		e.c.emit(getProp(e.name))
+		e.c.emit(getPropSource{name: e.name, baseSource: e.baseSource})
 		body()
 		e.addSrcMap()
 		if e.c.scope.strict {
@@ -986,7 +992,7 @@ func (e *compiledDotExpr) emitUnary(prepare, body func(), postfix, putOnStack bo
 		if !postfix {
 			e.left.emitGetter(true)
 			e.c.emit(dup)
-			e.c.emit(getProp(e.name))
+			e.c.emit(getPropSource{name: e.name, baseSource: e.baseSource})
 			if prepare != nil {
 				prepare()
 			}
@@ -1001,7 +1007,7 @@ func (e *compiledDotExpr) emitUnary(prepare, body func(), postfix, putOnStack bo
 			e.c.emit(loadUndef)
 			e.left.emitGetter(true)
 			e.c.emit(dup)
-			e.c.emit(getProp(e.name))
+			e.c.emit(getPropSource{name: e.name, baseSource: e.baseSource})
 			if prepare != nil {
 				prepare()
 			}
@@ -1020,6 +1026,7 @@ func (e *compiledDotExpr) emitUnary(prepare, body func(), postfix, putOnStack bo
 func (e *compiledDotExpr) emitDelete(putOnStack bool) {
 	e.left.emitGetter(true)
 	e.addSrcMap()
+	e.c.emit(checkBase{name: e.name, baseSource: e.baseSource})
 	if e.c.scope.strict {
 		e.c.emit(deletePropStrict(e.name))
 	} else {
@@ -1055,6 +1062,7 @@ func (e *compiledBracketExpr) emitSetter(valueExpr compiledExpr, putOnStack bool
 	e.member.emitGetter(true)
 	valueExpr.emitGetter(true)
 	e.addSrcMap()
+	e.c.emit(checkBase{depth: 2, baseSource: e.baseSource, assign: true})
 	if e.c.scope.strict {
 		if putOnStack {
 			e.c.emit(setElemStrict)
@@ -1074,7 +1082,7 @@ func (e *compiledBracketExpr) emitUnary(prepare, body func(), postfix, putOnStac
 	if !putOnStack {
 		e.left.emitGetter(true)
 		e.member.emitGetter(true)
-		e.c.emit(dupLast(2), getElem)
+		e.c.emit(dupLast(2), _getElem{baseSource: e.baseSource})
 		body()
 		e.addSrcMap()
 		if e.c.scope.strict {
@@ -1086,7 +1094,7 @@ func (e *compiledBracketExpr) emitUnary(prepare, body func(), postfix, putOnStac
 		if !postfix {
 			e.left.emitGetter(true)
 			e.member.emitGetter(true)
-			e.c.emit(dupLast(2), getElem)
+			e.c.emit(dupLast(2), _getElem{baseSource: e.baseSource})
 			if prepare != nil {
 				prepare()
 			}
@@ -1101,7 +1109,7 @@ func (e *compiledBracketExpr) emitUnary(prepare, body func(), postfix, putOnStac
 			e.c.emit(loadUndef)
 			e.left.emitGetter(true)
 			e.member.emitGetter(true)
-			e.c.emit(dupLast(2), getElem)
+			e.c.emit(dupLast(2), _getElem{baseSource: e.baseSource})
 			if prepare != nil {
 				prepare()
 			}
@@ -1121,6 +1129,7 @@ func (e *compiledBracketExpr) emitDelete(putOnStack bool) {
 	e.left.emitGetter(true)
 	e.member.emitGetter(true)
 	e.addSrcMap()
+	e.c.emit(checkBase{depth: 1, baseSource: e.baseSource})
 	if e.c.scope.strict {
 		e.c.emit(deleteElemStrict)
 	} else {
@@ -1361,10 +1370,12 @@ func (e *compiledFunctionLiteral) compile() (prg *Program, name unistring.String
 		src:    e.c.p.src,
 		code:   e.c.newCode(preambleLen, 16),
 		srcMap: []srcMapItem{{srcPos: e.offset}},
+		host:   e.c.host,
 	}
 	e.c.newScope()
 	s := e.c.scope
 	s.funcType = e.typ
+	s.asyncGenerator = e.isAsync && e.isGenerator
 
 	if e.name != nil {
 		name = e.name.Name
@@ -1750,7 +1761,9 @@ func (e *compiledFunctionLiteral) emitGetter(putOnStack bool) {
 			e.c.emit(&newArrowFunc{newFunc: newFunc{prg: p, length: length, name: name, source: e.source, strict: strict}})
 		}
 	case funcMethod, funcClsInit:
-		if e.isAsync {
+		if e.isAsync && e.isGenerator {
+			e.c.emit(&newAsyncGeneratorMethod{newMethod: newMethod{newFunc: newFunc{prg: p, length: length, name: name, source: e.source, strict: strict}, homeObjOffset: e.homeObjOffset}})
+		} else if e.isAsync {
 			e.c.emit(&newAsyncMethod{newMethod: newMethod{newFunc: newFunc{prg: p, length: length, name: name, source: e.source, strict: strict}, homeObjOffset: e.homeObjOffset}})
 		} else {
 			if e.isGenerator {
@@ -1760,7 +1773,9 @@ func (e *compiledFunctionLiteral) emitGetter(putOnStack bool) {
 			}
 		}
 	case funcRegular:
-		if e.isAsync {
+		if e.isAsync && e.isGenerator {
+			e.c.emit(&newAsyncGeneratorFunc{newFunc: newFunc{prg: p, length: length, name: name, source: e.source, strict: strict}})
+		} else if e.isAsync {
 			e.c.emit(&newAsyncFunc{newFunc: newFunc{prg: p, length: length, name: name, source: e.source, strict: strict}})
 		} else {
 			if e.isGenerator {
@@ -1782,9 +1797,6 @@ func (c *compiler) compileFunctionLiteral(v *ast.FunctionLiteral, isExpr bool) *
 	if v.Name != nil && (c.scope.strict || strictBody != nil) {
 		c.checkIdentifierName(v.Name.Name, int(v.Name.Idx)-1)
 		c.checkIdentifierLName(v.Name.Name, int(v.Name.Idx)-1)
-	}
-	if v.Async && v.Generator {
-		c.throwSyntaxError(int(v.Function)-1, "Async generators are not supported yet")
 	}
 	r := &compiledFunctionLiteral{
 		name:            v.Name,
@@ -2194,6 +2206,7 @@ func (e *compiledClassLiteral) compileFieldsAndStaticBlocks(elements []clsElemen
 		src:      savedPrg.src,
 		funcName: funcName,
 		code:     e.c.newCode(2, 16),
+		host:     e.c.host,
 	}
 
 	e.c.newScope()
@@ -2930,7 +2943,7 @@ func (e *compiledObjectLiteral) emitGetter(putOnStack bool) {
 					panic("unreachable")
 				}
 			} else {
-				isProto := key == __proto__ && !prop.Computed
+				isProto := key == __proto__ && !prop.Computed && prop.Kind == ast.PropertyKindValue
 				if isProto {
 					if hasProto {
 						e.c.throwSyntaxError(int(prop.Idx0())-1, "Duplicate __proto__ fields are not allowed in object literals")
@@ -3053,7 +3066,7 @@ func (c *compiler) emitCallee(callee compiledExpr) (calleeName unistring.String)
 	switch callee := callee.(type) {
 	case *compiledDotExpr:
 		callee.left.emitGetter(true)
-		c.emit(getPropCallee(callee.name))
+		c.emit(checkBase{name: callee.name, baseSource: callee.baseSource}, getPropCallee(callee.name))
 	case *compiledPrivateDotExpr:
 		callee.left.emitGetter(true)
 		rn, id := c.resolvePrivateName(callee.name, callee.offset)
@@ -3069,7 +3082,7 @@ func (c *compiler) emitCallee(callee compiledExpr) (calleeName unistring.String)
 	case *compiledBracketExpr:
 		callee.left.emitGetter(true)
 		callee.member.emitGetter(true)
-		c.emit(getElemCallee)
+		c.emit(checkBase{depth: 1, baseSource: callee.baseSource}, getElemCallee)
 	case *compiledSuperBracketExpr:
 		c.emitLoadThis()
 		c.emit(loadSuper)
@@ -3093,6 +3106,14 @@ func (c *compiler) emitCallee(callee compiledExpr) (calleeName unistring.String)
 		callee.emitGetter(true)
 	}
 	return
+}
+
+// setOperandText 记录下一条指令报错时使用的操作数反编译文本
+func (c *compiler) setOperandText(text string) {
+	if c.p.calleeText == nil {
+		c.p.calleeText = make(map[int]string)
+	}
+	c.p.calleeText[len(c.p.code)] = text
 }
 
 func (e *compiledCallExpr) emitGetter(putOnStack bool) {
@@ -3640,6 +3661,14 @@ func (e *compiledYieldExpression) emitGetter(putOnStack bool) {
 		e.arg.emitGetter(true)
 	} else {
 		e.c.emit(loadUndef)
+	}
+	if s := e.c.scope.nearestFunction(); s != nil && s.asyncGenerator {
+		if e.delegate {
+			e.c.setOperandText(e.argText)
+			e.c.emit(getAsyncDelegate{})
+		} else {
+			e.c.emit(await)
+		}
 	}
 	if putOnStack {
 		if e.delegate {

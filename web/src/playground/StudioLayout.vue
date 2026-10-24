@@ -12,6 +12,7 @@ import UiIcon from '@/playground/ui/UiIcon.vue'
 import { vTooltip } from '@/playground/ui/tooltip'
 import CommandPalette, { type PaletteMode } from '@/playground/shell/CommandPalette.vue'
 import LeftNav from '@/playground/shell/LeftNav.vue'
+import ModelSelector from '@/playground/ModelSelector.vue'
 
 defineProps<{ adminUsername?: string }>()
 const emit = defineEmits<{ logout: [] }>()
@@ -100,6 +101,7 @@ onUnmounted(() => {
     </main>
 
     <CommandPalette v-model:open="paletteOpen" v-model:mode="paletteMode" />
+    <ModelSelector />
 
     <div class="notice-stack">
       <Transition name="studio-notice">

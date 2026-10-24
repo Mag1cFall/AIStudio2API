@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -391,10 +394,31 @@ func multipartStreamMIME(file io.Reader, value string, filename string) (string,
 		return "", nil, errors.New("file must not be empty")
 	}
 	stream := io.MultiReader(bytes.NewReader(probe[:count]), file)
-	if mediaType := declaredMediaType(value); mediaType != "" {
+	mediaType := declaredMediaType(value)
+	if mediaType == "" {
+		mediaType = detectMediaType(filename, probe[:count])
+	}
+	if mediaType != "image/gif" {
 		return mediaType, stream, nil
 	}
-	return detectMediaType(filename, probe[:count]), stream, nil
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		return "", nil, err
+	}
+	if frame, config, ok := decodeGIFFrame(data); ok {
+		data, mediaType = gifJPEG(frame, config), "image/jpeg"
+	}
+	return mediaType, bytes.NewReader(data), nil
+}
+
+// gifJPEG 与官网上传 GIF 时一样把首帧画在同尺寸白底上，编码为质量 92 的 JPEG
+func gifJPEG(frame *image.Paletted, config image.Config) []byte {
+	canvas := image.NewRGBA(image.Rect(0, 0, config.Width, config.Height))
+	draw.Draw(canvas, canvas.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
+	var buf bytes.Buffer
+	_ = jpeg.Encode(&buf, canvas, &jpeg.Options{Quality: 92})
+	return buf.Bytes()
 }
 
 func multipartFileMIME(file io.ReadSeeker, value string, filename string) (string, error) {

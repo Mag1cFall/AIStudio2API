@@ -50,14 +50,21 @@ const { state, currentModel, openAIFrames, aspectRatios, durations, resolutions 
         <h3 class="item-description-title">{{ t('pg.numberOfResults') }}</h3>
         <div v-tooltip.left="t('pg.videoCountFixed')" class="ms-slider">
           <UiSlider
-            :model-value="1"
+            :model-value="currentModel ? 1 : 0"
             :min="0"
             :max="1"
             :step="1"
             disabled
             :label="t('pg.numberOfResults')"
           />
-          <input ms-input class="small slider-number-input" type="text" value="1" disabled />
+          <input
+            ms-input
+            class="small slider-number-input"
+            type="text"
+            value="1"
+            readonly
+            :disabled="currentModel !== undefined"
+          />
         </div>
       </div>
       <div v-tooltip.left="t('pg.videoAspectTip')" class="settings-item-column">
@@ -117,6 +124,9 @@ const { state, currentModel, openAIFrames, aspectRatios, durations, resolutions 
             :disabled="option.disabled"
           >
             {{ option.value }}
+          </option>
+          <option v-if="resolutions.length === 0" :value="state.settings.resolution">
+            {{ state.settings.resolution }}
           </option>
         </UiSelect>
       </div>

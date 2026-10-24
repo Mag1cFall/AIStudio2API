@@ -17,7 +17,7 @@ import type { Model, SavedPrompt } from '@/types'
 import { defaultChatModel, hasCode, toolCodes, toolCompatible, type Tool } from './catalog'
 import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
-import { apiKey, appendParts, buildRequest, countTokens, StreamError } from './request'
+import { apiKey, apiPart, appendParts, buildRequest, countTokens, StreamError } from './request'
 import type {
   CompareData,
   PaneData,
@@ -28,6 +28,7 @@ import type {
   SafetyThreshold,
   Turn,
 } from './types'
+import { requestTitle } from './title'
 import type { ZeroStarter } from './zero-configs'
 
 // safetyCategories 是官网安全设置对话框的类别顺序
@@ -46,9 +47,6 @@ export const safetyThresholds: SafetyThreshold[] = [
   'BLOCK_MEDIUM_AND_ABOVE',
   'BLOCK_LOW_AND_ABOVE',
 ]
-
-// lastModelKey 是记住上次所选模型的本机存储键
-const lastModelKey = 'playground_model'
 
 // outputLimit 返回模型输出长度上限，自动续写模型为输入上限
 export function outputLimit(model: Model | undefined): number | undefined {
@@ -139,17 +137,6 @@ function models(): Model[] {
   return useConsole().models.value
 }
 
-// startingModel 返回新对话的模型：上次所选且仍在目录中，否则为默认对话模型
-function startingModel(): Model | undefined {
-  let remembered = ''
-  try {
-    remembered = localStorage.getItem(lastModelKey) ?? ''
-  } catch {
-    remembered = ''
-  }
-  return models().find((model) => model.id === remembered) ?? defaultChatModel(models())
-}
-
 // SessionLinks 是对话实例与页面其他窗格的关联：compare 返回随对话一起保存的右侧窗格，save 是右侧窗格变化时保存页面对话的函数
 interface SessionLinks {
   compare?: () => CompareData | undefined
@@ -191,7 +178,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     Object.assign(session, {
       id: null,
       title: '',
-      settings: { ...defaultSettings(startingModel()), systemInstruction },
+      settings: { ...defaultSettings(defaultChatModel(models())), systemInstruction },
       turns: [],
       draft: '',
       attachments: [],
@@ -206,7 +193,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // ensureModel 在目录到达后为没有模型的对话补上默认模型
   function ensureModel(): void {
     if (session.settings.model === '' && models().length > 0) {
-      const model = startingModel()
+      const model = defaultChatModel(models())
       session.settings = {
         ...defaultSettings(model),
         systemInstruction: session.settings.systemInstruction,
@@ -214,8 +201,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     }
   }
 
-  // selectModel 切换模型：参数换为新模型默认值，去掉新模型不支持的工具；remember 为真时记为下次新对话的模型
-  function selectModel(id: string, remember = true): void {
+  // selectModel 切换模型：参数换为新模型默认值，去掉新模型不支持的工具
+  function selectModel(id: string): void {
     const model = models().find((item) => item.id === id)
     Object.assign(session.settings, modelDefaults(model))
     session.settings.tools = session.settings.tools.filter((tool) =>
@@ -223,12 +210,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     )
     if (!protocolsFor(model).some((item) => item.value === session.settings.protocol))
       session.settings.protocol = 'gemini'
-    if (!remember) return
-    try {
-      localStorage.setItem(lastModelKey, id)
-    } catch {
-      // 本机存储不可用时只影响下次默认模型
-    }
   }
 
   // open 读取对话库中的对话并返回其内容，loaded 为已读取的内容，读取失败时返回 undefined
@@ -282,7 +263,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     if (session.temporary || session.turns.length === 0) return
     const compare = links.compare?.()
     session.id ??= newTurnID()
-    if (session.title === '') session.title = promptTitle()
     const id = session.id
     session.saveState = 'saving'
     try {
@@ -339,6 +319,22 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       if (!counter.signal.aborted) session.promptTokens = count
     } catch {
       // 统计失败时保留上一次的数字
+    }
+  }
+
+  // countAttachment 与官网一致：附件加入时单独统计它的 token 数，写入片段的 tokenCount
+  async function countAttachment(part: Part): Promise<void> {
+    const model = currentModel.value
+    if (model === undefined) return
+    try {
+      part.tokenCount = await countTokens(
+        model.id,
+        apiKey(),
+        { contents: [{ role: 'user', parts: [apiPart(part)] }], generationConfig: {} },
+        new AbortController().signal,
+      )
+    } catch {
+      // 统计失败时附件不显示 token 数
     }
   }
 
@@ -433,8 +429,29 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         turn.finishReason === undefined
       )
         session.turns.splice(index, 1)
+      if (!links.save && session.title === '' && session.turns.includes(turn))
+        void generateTitle(model.id)
       scheduleSave()
     }
+  }
+
+  // generateTitle 与官网一样在对话未命名时以最后一轮用户文本与模型回答生成标题，失败时保持未命名
+  async function generateTitle(model: string): Promise<void> {
+    const turns = session.turns
+    const text = (role: Turn['role']) =>
+      turns
+        .filter((turn) => turn.role === role)
+        .at(-1)
+        ?.parts.filter((part) => part.text && !part.thought)
+        .map((part) => part.text)
+        .join('') ?? ''
+    const title = await requestTitle(model, text('user'), text('model'), () => ({
+      owner: session.turns,
+      title: session.title,
+    }))
+    if (title === '') return
+    session.title = title
+    scheduleSave()
   }
 
   // stop 中止当前生成
@@ -585,6 +602,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     save,
     pending,
     refreshTokens,
+    countAttachment,
     dispose,
   }
 }

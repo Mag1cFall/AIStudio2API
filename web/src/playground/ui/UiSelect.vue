@@ -132,8 +132,9 @@ const selectedKey = computed({
 }
 
 .ms-select-trigger[data-disabled] {
+  border-color: var(--color-v3-text-disable);
   background-color: var(--color-v3-surface-container);
-  color: var(--color-v3-outline);
+  color: color-mix(in srgb, var(--color-on-surface) 38%, transparent);
   cursor: default;
 }
 

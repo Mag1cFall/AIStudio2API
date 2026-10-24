@@ -123,6 +123,11 @@ type global struct {
 	GeneratorFunction          *Object
 	GeneratorPrototype         *Object
 
+	AsyncGeneratorFunctionPrototype *Object
+	AsyncGeneratorFunction          *Object
+	AsyncGeneratorPrototype         *Object
+	AsyncIteratorPrototype          *Object
+
 	AsyncFunctionPrototype *Object
 
 	IteratorPrototype             *Object
@@ -146,6 +151,7 @@ type global struct {
 	setAdder      *Object
 	arrayValues   *Object
 	arrayToString *Object
+	arrayIterNext *Object
 
 	stringproto_trimEnd   *Object
 	stringproto_trimStart *Object
@@ -201,8 +207,9 @@ type Runtime struct {
 	vm   *vm
 	hash *maphash.Hash
 
-	agent           *Agent
-	evalTransformer func(Value) Value
+	agent               *Agent
+	evalTransformer     func(Value) Value
+	functionTransformer func([]Value) []Value
 
 	promiseRejectionTracker PromiseRejectionTracker
 	asyncContextTracker     AsyncContextTracker
@@ -210,6 +217,9 @@ type Runtime struct {
 	// Stack for tracking objects currently being converted to string
 	// to detect and handle circular references
 	toStringStack []*Object
+
+	// templateResolver 生成 ObjectTemplate 中按需访问的属性
+	templateResolver func(id string, index int) TemplateProperty
 }
 
 type agentJob struct {
@@ -219,9 +229,10 @@ type agentJob struct {
 
 // Agent 在多个 Runtime 之间共享 JavaScript 微任务队列
 type Agent struct {
-	depth    int
-	draining bool
-	jobs     []agentJob
+	depth     int
+	draining  bool
+	jobs      []agentJob
+	lastThrow *Exception
 }
 
 type StackFrame struct {
@@ -1040,8 +1051,17 @@ func (r *Runtime) checkObjectCoercible(v Value) {
 	}
 }
 
+// toNumberValue 返回 v 的 Number 值，v 已是 Number 时原样返回
+func toNumberValue(v Value) Value {
+	switch v.(type) {
+	case valueInt, valueFloat:
+		return v
+	}
+	return v.ToNumber()
+}
+
 func toInt8(v Value) int8 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return int8(i)
 	}
@@ -1056,7 +1076,7 @@ func toInt8(v Value) int8 {
 }
 
 func toUint8(v Value) uint8 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return uint8(i)
 	}
@@ -1071,7 +1091,7 @@ func toUint8(v Value) uint8 {
 }
 
 func toUint8Clamp(v Value) uint8 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		if i < 0 {
 			return 0
@@ -1110,7 +1130,7 @@ func toUint8Clamp(v Value) uint8 {
 }
 
 func toInt16(v Value) int16 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return int16(i)
 	}
@@ -1125,7 +1145,7 @@ func toInt16(v Value) int16 {
 }
 
 func toUint16(v Value) uint16 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return uint16(i)
 	}
@@ -1140,7 +1160,7 @@ func toUint16(v Value) uint16 {
 }
 
 func toInt32(v Value) int32 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return int32(i)
 	}
@@ -1155,7 +1175,7 @@ func toInt32(v Value) int32 {
 }
 
 func toUint32(v Value) uint32 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return uint32(i)
 	}
@@ -1170,7 +1190,7 @@ func toUint32(v Value) uint32 {
 }
 
 func toInt64(v Value) int64 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return int64(i)
 	}
@@ -1185,7 +1205,7 @@ func toInt64(v Value) int64 {
 }
 
 func toUint64(v Value) uint64 {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return uint64(i)
 	}
@@ -1200,7 +1220,7 @@ func toUint64(v Value) uint64 {
 }
 
 func toInt(v Value) int {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return int(i)
 	}
@@ -1215,7 +1235,7 @@ func toInt(v Value) int {
 }
 
 func toUint(v Value) uint {
-	v = v.ToNumber()
+	v = toNumberValue(v)
 	if i, ok := v.(valueInt); ok {
 		return uint(i)
 	}
@@ -1370,6 +1390,35 @@ func (r *Runtime) SetEvalTransformer(transformer func(Value) Value) {
 	r.evalTransformer = transformer
 }
 
+// LastThrowPosition 返回最近一次 throw 语句所在的脚本来源名、行号与列号
+func (r *Runtime) LastThrowPosition() (string, int, int) {
+	ex := r.agent.lastThrow
+	if ex == nil || len(ex.stack) == 0 {
+		return "", 0, 0
+	}
+	frame := ex.stack[0]
+	position := frame.Position()
+	return frame.SrcName(), position.Line, position.Column
+}
+
+// SetFunctionTransformer 设置 Function 系列构造器参数的转换函数
+func (r *Runtime) SetFunctionTransformer(transformer func([]Value) []Value) {
+	r.functionTransformer = transformer
+}
+
+// IncumbentGlobal 返回调用栈上最近一帧非宿主脚本所属 Realm 的全局对象，isHost 按脚本来源名判断宿主脚本
+func (r *Runtime) IncumbentGlobal(isHost func(string) bool) *Object {
+	stack := r.vm.callStack
+	for index := len(stack) - 1; index >= 0; index-- {
+		frame := &stack[index]
+		if frame.prg == nil || frame.r == nil || isHost(frame.prg.src.Name()) {
+			continue
+		}
+		return frame.r.globalObject
+	}
+	return r.globalObject
+}
+
 func (r *Runtime) transformEvalArgument(value Value) Value {
 	if r.evalTransformer != nil {
 		return r.evalTransformer(value)
@@ -1439,9 +1488,36 @@ func compile(name, src string, strict, inGlobal bool, evalVm *vm, parserOptions 
 	return compileAST(prg, strict, inGlobal, evalVm)
 }
 
-func compileAST(prg *js_ast.Program, strict, inGlobal bool, evalVm *vm) (p *Program, err error) {
-	c := newCompiler()
+// CompileHost 编译代表浏览器原生实现的宿主脚本，其中的函数不计 SpiderMonkey 预热，结果可在多个 Runtime 中共享
+func CompileHost(name, src string, strict bool) (*Program, error) {
+	prg, err := Parse(name, src)
+	if err != nil {
+		return nil, err
+	}
+	return compileHostAST(prg, strict, true)
+}
 
+// MustCompileHost 与 CompileHost 相同，编译失败时 panic
+func MustCompileHost(name, src string, strict bool) *Program {
+	prg, err := CompileHost(name, src, strict)
+	if err != nil {
+		panic(err)
+	}
+	return prg
+}
+
+func compileAST(prg *js_ast.Program, strict, inGlobal bool, evalVm *vm) (p *Program, err error) {
+	return compileWith(newCompiler(), prg, strict, inGlobal, evalVm)
+}
+
+func compileHostAST(prg *js_ast.Program, strict, inGlobal bool) (p *Program, err error) {
+	c := newCompiler()
+	c.host = true
+	c.p.host = true
+	return compileWith(c, prg, strict, inGlobal, nil)
+}
+
+func compileWith(c *compiler, prg *js_ast.Program, strict, inGlobal bool, evalVm *vm) (p *Program, err error) {
 	defer func() {
 		if x := recover(); x != nil {
 			p = nil
@@ -2780,6 +2856,10 @@ func createDataPropertyOrThrow(o *Object, p Value, v Value) {
 }
 
 func toPropertyKey(key Value) Value {
+	switch key.(type) {
+	case valueInt, String:
+		return key
+	}
 	return key.ToString()
 }
 
@@ -2796,6 +2876,8 @@ func (r *Runtime) getV(v Value, p Value) Value {
 type iteratorRecord struct {
 	iterator *Object
 	next     func(FunctionCall) Value
+	// arrayIter 在 next 为内置 %ArrayIteratorPrototype%.next 时指向该数组迭代器
+	arrayIter *arrayIterObject
 }
 
 func (r *Runtime) getIterator(obj Value, method func(FunctionCall) Value) *iteratorRecord {
@@ -2811,17 +2893,101 @@ func (r *Runtime) getIterator(obj Value, method func(FunctionCall) Value) *itera
 	}))
 
 	var next func(FunctionCall) Value
+	var arrayIter *arrayIterObject
 
 	if obj, ok := iter.self.getStr("next", nil).(*Object); ok {
 		if call, ok := obj.self.assertCallable(); ok {
 			next = call
 		}
+		if ai, ok := iter.self.(*arrayIterObject); ok && obj == r.global.arrayIterNext {
+			arrayIter = ai
+		}
 	}
 
 	return &iteratorRecord{
-		iterator: iter,
-		next:     next,
+		iterator:  iter,
+		next:      next,
+		arrayIter: arrayIter,
 	}
+}
+
+// createAsyncFromSyncIterator 是 CreateAsyncFromSyncIterator，返回的迭代器带 next、throw 与 return
+func (r *Runtime) createAsyncFromSyncIterator(syncIter *iteratorRecord) *iteratorRecord {
+	continuation := func(result *Object, pcap *promiseCapability, closeOnRejection bool) {
+		done := iteratorComplete(result)
+		value := iteratorValue(result)
+		closeOnRejection = closeOnRejection && !done
+		var valueWrapper *Object
+		if ex := r.vm.try(func() {
+			valueWrapper = r.promiseResolve(r.getPromise(), value)
+		}); ex != nil {
+			if closeOnRejection {
+				_ = r.vm.try(syncIter.returnIter)
+			}
+			panic(ex)
+		}
+		onFulfilled := r.newNativeFunc(func(call FunctionCall) Value {
+			return r.createIterResultObject(call.Argument(0), done)
+		}, "", 1)
+		var onRejected Value = _undefined
+		if closeOnRejection {
+			onRejected = r.newNativeFunc(func(call FunctionCall) Value {
+				_ = r.vm.try(syncIter.returnIter)
+				panic(call.Argument(0))
+			}, "", 1)
+		}
+		r.performPromiseThen(valueWrapper.self.(*Promise), onFulfilled, onRejected, pcap)
+	}
+
+	method := func(completion completionType) func(FunctionCall) Value {
+		return func(call FunctionCall) Value {
+			pcap := r.newPromiseCapability(r.getPromise())
+			pcap.try(func() {
+				var fn func(FunctionCall) Value
+				switch completion {
+				case completionNormal:
+					if syncIter.next == nil {
+						panic(r.NewTypeError("(intermediate value).next is not a function"))
+					}
+					fn = syncIter.next
+				case completionReturn:
+					m := nilSafe(syncIter.iterator.self.getStr("return", nil))
+					if m == _undefined || m == _null {
+						pcap.resolve(r.createIterResultObject(call.Argument(0), true))
+						return
+					}
+					fn = r.toCallable(m)
+				default:
+					m := nilSafe(syncIter.iterator.self.getStr("throw", nil))
+					if m == _undefined || m == _null {
+						if ret := nilSafe(syncIter.iterator.self.getStr("return", nil)); ret != _undefined && ret != _null {
+							if _, ok := r.toCallable(ret)(FunctionCall{This: syncIter.iterator}).(*Object); !ok {
+								panic(r.NewTypeError("iterator.return() returned a non-object value"))
+							}
+						}
+						panic(r.NewTypeError("iterator does not have a 'throw' method"))
+					}
+					fn = r.toCallable(m)
+				}
+				args := call.Arguments
+				if len(args) > 1 {
+					args = args[:1]
+				}
+				result, ok := fn(FunctionCall{This: syncIter.iterator, Arguments: args}).(*Object)
+				if !ok {
+					panic(r.NewTypeError("iterator.%s() returned a non-object value", completionMethodName(completion)))
+				}
+				continuation(result, pcap, completion != completionReturn)
+			})
+			return pcap.promise
+		}
+	}
+	next := method(completionNormal)
+	iter := r.NewObject()
+	iter.self._putProp("next", r.newNativeFunc(next, "next", 1), true, false, true)
+	iter.self._putProp("throw", r.newNativeFunc(method(completionThrow), "throw", 1), true, false, true)
+	iter.self._putProp("return", r.newNativeFunc(method(completionReturn), "return", 1), true, false, true)
+	return &iteratorRecord{iterator: iter, next: next}
 }
 
 func iteratorComplete(iterResult *Object) bool {
@@ -2832,17 +2998,28 @@ func iteratorValue(iterResult *Object) Value {
 	return nilSafe(iterResult.self.getStr("value", nil))
 }
 
+// nextValue 调用迭代器的 next，返回本步的值与是否结束；内置数组迭代器直接推进，不创建结果对象
+func (ir *iteratorRecord) nextValue() (Value, bool) {
+	if ir.arrayIter != nil {
+		return ir.arrayIter.step()
+	}
+	res := ir.iterator.runtime.toObject(ir.next(FunctionCall{This: ir.iterator}))
+	if iteratorComplete(res) {
+		return nil, true
+	}
+	return iteratorValue(res), false
+}
+
 func (ir *iteratorRecord) iterate(step func(Value)) {
 	r := ir.iterator.runtime
 	for {
 		if ir.next == nil {
 			panic(r.NewTypeError("iterator.next is missing or not a function"))
 		}
-		res := r.toObject(ir.next(FunctionCall{This: ir.iterator}))
-		if iteratorComplete(res) {
+		value, done := ir.nextValue()
+		if done {
 			break
 		}
-		value := iteratorValue(res)
 		ret := tryFunc(func() {
 			step(value)
 		})
@@ -2858,11 +3035,10 @@ func (ir *iteratorRecord) iterate(step func(Value)) {
 func (ir *iteratorRecord) step() (value Value, ex *Exception) {
 	r := ir.iterator.runtime
 	ex = r.vm.try(func() {
-		res := r.toObject(ir.next(FunctionCall{This: ir.iterator}))
-		done := iteratorComplete(res)
-		if !done {
-			value = iteratorValue(res)
-		} else {
+		var done bool
+		value, done = ir.nextValue()
+		if done {
+			value = nil
 			ir.close()
 		}
 	})
@@ -2879,11 +3055,13 @@ func (ir *iteratorRecord) returnIter() {
 	}
 	ir.iterator = nil
 	ir.next = nil
+	ir.arrayIter = nil
 }
 
 func (ir *iteratorRecord) close() {
 	ir.iterator = nil
 	ir.next = nil
+	ir.arrayIter = nil
 }
 
 // ForOf is a Go equivalent of for-of loop. The function panics if an exception is thrown at any point

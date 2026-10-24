@@ -24,7 +24,7 @@ var intlJavaScript string
 const intlScriptName = hostScriptName + "-intl"
 
 // intlInstaller 是预编译的 intl.js，各 Realm 共享
-var intlInstaller = goja.MustCompile(intlScriptName, intlJavaScript, false)
+var intlInstaller = goja.MustCompileHost(intlScriptName, intlJavaScript, false)
 
 // intlCommonData 是 Firefox Intl 的取值列表、可用区域设置、默认值、数字系统与时区别名
 type intlCommonData struct {
@@ -212,63 +212,6 @@ func likelyTag(tag string) (language.Base, language.Script, language.Region) {
 	return base, script, region
 }
 
-// spoofedTag 按 Camoufox 的区域设置伪装把标签的语言与地区替换为账户的语言与地区
-func spoofedTag(tag string, account string) string {
-	parsed := language.Make(tag)
-	_, script, _ := parsed.Raw()
-	accountBase, _, accountRegion := language.Make(account).Raw()
-	parts := []any{accountBase}
-	if script.String() != "Zzzz" {
-		parts = append(parts, script)
-	}
-	if accountRegion.String() != "ZZ" {
-		parts = append(parts, accountRegion)
-	}
-	for _, variant := range parsed.Variants() {
-		parts = append(parts, variant)
-	}
-	composed, err := language.Compose(parts...)
-	if err != nil {
-		return tag
-	}
-	return composed.String()
-}
-
-// maximizeLocale 返回 Camoufox 中 Intl.Locale.prototype.maximize 的基础标签
-func maximizeLocale(tag, account string) string {
-	base, script, region := likelyTag(spoofedTag(tag, account))
-	composed, err := language.Compose(base, script, region)
-	if err != nil {
-		return tag
-	}
-	return composed.String()
-}
-
-// minimizeLocale 返回 Camoufox 中 Intl.Locale.prototype.minimize 的基础标签
-func minimizeLocale(tag, account string) string {
-	spoofed := spoofedTag(tag, account)
-	base, script, region := likelyTag(spoofed)
-	full := base.String() + "-" + script.String() + "-" + region.String()
-	maximized := func(parts ...any) string {
-		composed, err := language.Compose(parts...)
-		if err != nil {
-			return ""
-		}
-		b, s, r := likelyTag(composed.String())
-		return b.String() + "-" + s.String() + "-" + r.String()
-	}
-	if maximized(base) == full {
-		return base.String()
-	}
-	if maximized(base, region) == full {
-		return base.String() + "-" + region.String()
-	}
-	if maximized(base, script) == full {
-		return base.String() + "-" + script.String()
-	}
-	return spoofed
-}
-
 // collatorScriptOrder 是 CLDR 中文、日文与韩文排序规则提前到拉丁字母之前的书写系统
 var collatorScriptOrder = map[string][]*unicode.RangeTable{
 	"zh": {unicode.Han, unicode.Bopomofo},
@@ -378,7 +321,7 @@ func intlProgram(name string, source func() (string, error)) (*goja.Program, err
 	if err != nil {
 		return nil, err
 	}
-	program, err := goja.Compile(intlScriptName, text, false)
+	program, err := goja.CompileHost(intlScriptName, text, false)
 	if err != nil {
 		return nil, fmt.Errorf("编译 %s: %w", name, err)
 	}
@@ -445,8 +388,8 @@ func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) 
 	set("lookup", lookupLocale)
 	set("timeZone", timeZoneID)
 	set("localeParts", localeParts)
-	set("maximize", func(tag string) string { return maximizeLocale(tag, account) })
-	set("minimize", func(tag string) string { return minimizeLocale(tag, account) })
+	set("maximize", func(tag string) string { return spoofedLikelyTag(tag, account, true) })
+	set("minimize", func(tag string) string { return spoofedLikelyTag(tag, account, false) })
 	set("localeDefaults", func(tag string) []any {
 		if values, ok := common.LocaleDefaults[tag]; ok {
 			return values
@@ -464,6 +407,18 @@ func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) 
 	})
 	set("formatDate", func(tag, pattern string, epoch float64, zoneName, calendar, numbering string) [][2]string {
 		return dateData(tag).format(pattern, epoch, zoneName, calendar, common.Digits[numbering])
+	})
+	set("segment", func(granularity, locale string, value goja.Value) []any {
+		text := value.ToString().(goja.String)
+		units := make([]uint16, text.Length())
+		for index := range units {
+			units[index] = text.CharAt(index)
+		}
+		starts, wordLike := segmentText(granularity, locale, units)
+		if wordLike == nil {
+			return []any{starts, nil}
+		}
+		return []any{starts, wordLike}
 	})
 	set("formatjsChunk", func(name string) goja.Value {
 		program, err := intlProgram("chunk/"+name, func() (string, error) {

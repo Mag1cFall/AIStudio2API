@@ -291,7 +291,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <MediaLayout>
+  <MediaLayout fade-title>
     <template #actions>
       <div
         v-if="state.editing && !realtime"
@@ -559,7 +559,6 @@ onUnmounted(() => {
   min-height: 0;
   padding-bottom: 150px;
   overflow-y: auto;
-  animation: fade-in 0.3s ease-in-out;
 }
 
 @media screen and (max-width: 600px) {

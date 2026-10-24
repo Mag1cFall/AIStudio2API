@@ -1,6 +1,6 @@
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
-import { hasCode, toolCodes, type Tool } from './catalog'
+import { Capability, hasCode, toolCodes, type Tool } from './catalog'
 import type { Part, RunSettings, Source, Support, Turn } from './types'
 
 // GenerateRequest 是一次 Gemini API 生成请求的正文
@@ -30,16 +30,21 @@ export function parseJSON(text: string): unknown {
   }
 }
 
-// requestContents 把对话轮次写为 contents：去掉思考正文与出错的空轮次
+// requestContents 把对话轮次写为 contents：去掉思考正文、出错的空轮次与附件的显示字段
 export function requestContents(turns: readonly Turn[]): GenerateRequest['contents'] {
   return turns
     .map((turn) => ({
       role: turn.role,
-      parts: turn.parts.filter(
-        (part) => !(part.thought && part.text !== undefined && !part.thoughtSignature),
-      ),
+      parts: turn.parts
+        .filter((part) => !(part.thought && part.text !== undefined && !part.thoughtSignature))
+        .map(apiPart),
     }))
     .filter((turn) => turn.parts.length > 0)
+}
+
+// apiPart 返回去掉试用页显示字段的片段
+export function apiPart({ fileName: _fileName, tokenCount: _tokenCount, ...part }: Part): Part {
+  return part
 }
 
 // buildRequest 按模型能力把运行设置写为 Gemini API 请求，模型不支持的设置不发送
@@ -49,29 +54,30 @@ export function buildRequest(
   turns: readonly Turn[],
 ): GenerateRequest {
   const config: Record<string, unknown> = {}
-  if (hasCode(model, 62) && settings.temperature !== null) config.temperature = settings.temperature
-  if (hasCode(model, 23) && settings.topP !== null) config.topP = settings.topP
-  if (hasCode(model, 24) && settings.topK !== null) config.topK = settings.topK
-  if (hasCode(model, 64) && settings.maxOutputTokens !== null)
+  if (hasCode(model, Capability.Temperature) && settings.temperature !== null)
+    config.temperature = settings.temperature
+  if (hasCode(model, Capability.TopP) && settings.topP !== null) config.topP = settings.topP
+  if (hasCode(model, Capability.TopK) && settings.topK !== null) config.topK = settings.topK
+  if (hasCode(model, Capability.MaxOutputTokens) && settings.maxOutputTokens !== null)
     config.maxOutputTokens = settings.maxOutputTokens
-  if (hasCode(model, 63) && settings.stopSequences.length > 0)
+  if (hasCode(model, Capability.StopSequences) && settings.stopSequences.length > 0)
     config.stopSequences = settings.stopSequences
-  if (hasCode(model, 43) && settings.mediaResolution !== '')
+  if (hasCode(model, Capability.MediaResolution) && settings.mediaResolution !== '')
     config.mediaResolution = settings.mediaResolution
-  if (hasCode(model, 52)) {
+  if (hasCode(model, Capability.ThinkingLevel)) {
     config.thinkingConfig = {
       includeThoughts: true,
       ...(settings.thinkingLevel === null ? {} : { thinkingLevel: settings.thinkingLevel }),
     }
-  } else if (hasCode(model, 35)) {
+  } else if (hasCode(model, Capability.ThinkingBudget)) {
     config.thinkingConfig = {
       includeThoughts: true,
       ...(settings.thinkingBudget === -1 ? {} : { thinkingBudget: settings.thinkingBudget }),
     }
-  } else if (hasCode(model, 25)) {
+  } else if (hasCode(model, Capability.Thinking)) {
     config.thinkingConfig = { includeThoughts: true }
   }
-  if (hasCode(model, 21)) {
+  if (hasCode(model, Capability.ImageRoute)) {
     config.responseModalities = settings.imageOutput === 'IMAGE' ? ['IMAGE'] : ['IMAGE', 'TEXT']
     const imageConfig: Record<string, string> = {}
     if (model?.capabilities?.aspect_ratio && settings.aspectRatio !== '')
@@ -114,10 +120,10 @@ export function buildRequest(
       tools.push({ functionDeclarations: declarations })
   }
   const request: GenerateRequest = { contents: requestContents(turns), generationConfig: config }
-  if (settings.systemInstruction.trim() !== '' && hasCode(model, 8)) {
+  if (settings.systemInstruction.trim() !== '' && hasCode(model, Capability.SystemInstruction)) {
     request.systemInstruction = { parts: [{ text: settings.systemInstruction }] }
   }
-  if (hasCode(model, 28)) {
+  if (hasCode(model, Capability.SafetySettings)) {
     request.safetySettings = Object.entries(settings.safety).map(([category, threshold]) => ({
       category,
       threshold,

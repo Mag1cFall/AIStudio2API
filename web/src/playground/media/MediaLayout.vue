@@ -4,7 +4,8 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 
-defineProps<{ title?: string }>()
+// fadeTitle 为真时页头标题与官网音乐、Live 页一样在进入页面时淡入
+defineProps<{ title?: string; fadeTitle?: boolean }>()
 const { t } = useI18n()
 
 // narrowQuery 与官网一致，960 px 以下运行设置为右侧滑出面板
@@ -57,7 +58,7 @@ onUnmounted(() => {
   <div class="playground">
     <div ref="column" class="chat-column">
       <header class="ms-header">
-        <div class="page-title">
+        <div class="page-title" :class="{ 'title-enter': fadeTitle }">
           <h1 class="mode-title">{{ title || t('nav.playground') }}</h1>
           <slot name="title" />
         </div>
@@ -137,6 +138,7 @@ onUnmounted(() => {
   grid-column: 3;
   align-items: center;
   gap: 4px;
+  min-height: 32px;
 }
 
 .page-title {
@@ -157,10 +159,24 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+.title-enter {
+  animation: fade-in 225ms cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
 .settings-overlay {
   position: fixed;
   z-index: 4;
   inset: 0;
   background-color: var(--color-overlay-background);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 </style>
