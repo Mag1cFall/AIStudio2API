@@ -1,3 +1,4 @@
+import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
 import { apiKey, errorMessage, StreamError } from '../request'
 import type { Part } from '../types'
 
@@ -106,21 +107,26 @@ export async function createOpenAIVideo(form: FormData, signal: AbortSignal): Pr
   return (await response.json()) as OpenAIVideo
 }
 
+// pollDelay 等待一个视频轮询间隔，signal 取消时以 AbortError 结束，到时与取消后都移除取消监听
+function pollDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, 5000)
+    signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 // waitOpenAIVideo 每 5 秒轮询 OpenAI 视频对象直到完成，返回结果视频地址
 export async function waitOpenAIVideo(video: OpenAIVideo, signal: AbortSignal): Promise<string> {
   let current = video
   while (current.status !== 'completed' && current.status !== 'failed') {
-    await new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(resolve, 5000)
-      signal.addEventListener(
-        'abort',
-        () => {
-          window.clearTimeout(timer)
-          reject(new DOMException('Aborted', 'AbortError'))
-        },
-        { once: true },
-      )
-    })
+    await pollDelay(signal)
     const response = await fetch(`/v1/videos/${encodeURIComponent(video.id)}`, {
       headers: headers(false),
       signal,
@@ -146,17 +152,7 @@ export function createVideo(
 export async function waitVideo(operation: VideoOperation, signal: AbortSignal): Promise<string[]> {
   let current = operation
   while (current.done !== true) {
-    await new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(resolve, 5000)
-      signal.addEventListener(
-        'abort',
-        () => {
-          window.clearTimeout(timer)
-          reject(new DOMException('Aborted', 'AbortError'))
-        },
-        { once: true },
-      )
-    })
+    await pollDelay(signal)
     const response = await fetch(`/v1beta/${current.name}`, { headers: headers(false), signal })
     if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
     current = (await response.json()) as VideoOperation
@@ -175,17 +171,10 @@ export async function downloadMedia(url: string, signal?: AbortSignal): Promise<
 
 // readImage 把图片文件读为内联图片
 export async function readImage(file: Blob): Promise<InlineImage> {
-  const buffer = new Uint8Array(await file.arrayBuffer())
-  let binary = ''
-  for (let index = 0; index < buffer.length; index += 0x8000) {
-    binary += String.fromCharCode(...buffer.subarray(index, index + 0x8000))
+  return {
+    mimeType: file.type || 'image/png',
+    data: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
   }
-  return { mimeType: file.type || 'image/png', data: btoa(binary) }
-}
-
-// base64Bytes 把 base64 文本解码为字节
-export function base64Bytes(data: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
 }
 
 // audioBlob 把响应中的音频片段合成一个可播放文件：audio/L16 PCM 封装为 16 位 WAV，其余格式按原样拼接
@@ -203,25 +192,7 @@ export function audioBlob(parts: readonly Part[]): Blob | undefined {
   )
   const rate = Number(parameters.get('rate') ?? 24000)
   const channels = Number(parameters.get('channels') ?? 1)
-  const length = chunks.reduce((total, chunk) => total + chunk.length, 0)
-  const header = new DataView(new ArrayBuffer(44))
-  const text = (offset: number, value: string): void => {
-    for (let index = 0; index < value.length; index++)
-      header.setUint8(offset + index, value.charCodeAt(index))
-  }
-  text(0, 'RIFF')
-  header.setUint32(4, 36 + length, true)
-  text(8, 'WAVEfmt ')
-  header.setUint32(16, 16, true)
-  header.setUint16(20, 1, true)
-  header.setUint16(22, channels, true)
-  header.setUint32(24, rate, true)
-  header.setUint32(28, rate * channels * 2, true)
-  header.setUint16(32, channels * 2, true)
-  header.setUint16(34, 16, true)
-  text(36, 'data')
-  header.setUint32(40, length, true)
-  return new Blob([header, ...chunks], { type: 'audio/wav' })
+  return pcmToWav(chunks, rate, channels)
 }
 
 // responseText 返回响应正文中的文本

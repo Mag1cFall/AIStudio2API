@@ -3,7 +3,9 @@ import { useConsole } from '@/console'
 import type { Model } from '@/types'
 import { newTurnID } from '../session'
 import { audioBlob, generateContent, responseText, type InlineImage } from './api'
+import { modelMatches } from '../catalog'
 import { pageKindOf } from './kinds'
+import { requestTitle } from '../title'
 
 // MusicImage 是音乐提示中的参考图片
 export interface MusicImage extends InlineImage {
@@ -115,13 +117,15 @@ const state = reactive({
   error: '',
 })
 let controller: AbortController | undefined
+// sessionEpoch 在每次回到空态时递增，标识标题请求所属的会话
+let sessionEpoch = 0
 
 const currentModel = computed(() => models().find((model) => model.id === state.model))
 
 // ensureModel 选定模型：地址中的模型优先，其次保留当前模型，再次为官网默认模型
 function ensureModel(requested?: string): void {
   const list = models()
-  const wanted = list.find((model) => model.id === requested)
+  const wanted = list.find((model) => modelMatches(model, requested))
   if (wanted) state.model = wanted.id
   else if (!list.some((model) => model.id === state.model))
     state.model = (list.find((model) => model.id === defaultModel) ?? list[0])?.id ?? ''
@@ -145,6 +149,7 @@ function edit(prompt = '', sample?: MusicAudio): void {
 // newSession 回到空态
 function newSession(): void {
   controller?.abort()
+  sessionEpoch++
   Object.assign(state, {
     editing: false,
     view: 'text',
@@ -234,10 +239,20 @@ function requestBody(model: Model | undefined = currentModel.value): Record<stri
   }
 }
 
+// generateTitle 与官网一样在歌曲未命名时于提交时以提示词生成歌名，失败时保持未命名
+async function generateTitle(model: string, prompt: string): Promise<void> {
+  const title = await requestTitle(model, prompt, prompt, () => ({
+    owner: sessionEpoch,
+    title: state.title,
+  }))
+  if (title !== '') state.title = title
+}
+
 // run 生成音乐，结果放入播放栏，文字部分作为歌词与段落说明
 async function run(): Promise<void> {
   const model = currentModel.value
   if (state.running || model === undefined || state.prompt.trim() === '') return
+  if (state.title === '') void generateTitle(model.id, state.prompt)
   state.running = true
   state.error = ''
   controller = new AbortController()

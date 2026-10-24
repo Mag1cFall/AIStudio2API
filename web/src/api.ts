@@ -239,6 +239,13 @@ export const api = {
     }),
   deletePrompt: (id: string) =>
     requestCommand(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  generateTitle: async (model: string, prompt: string, answer: string) =>
+    (
+      await requestJSON<{ title: string }>('/api/prompts/title', {
+        method: 'POST',
+        body: JSON.stringify({ model, prompt, answer }),
+      })
+    ).title,
 }
 
 // openAdminEvents 建立唯一的管理状态 SSE 连接

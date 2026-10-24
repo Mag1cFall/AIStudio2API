@@ -23,6 +23,10 @@ type PooledService struct {
 	client *Client
 	// BuildNativeNonstream 让非流式请求优先使用具备资格的 Build 通道
 	BuildNativeNonstream bool
+	// YouTubeLinks 把 user 文本中的 YouTube 链接作为视频外部媒体发送
+	YouTubeLinks bool
+	// omniVideos 记录本进程中尚无结果文件的 Omni 视频任务：值为 nil 时仍在生成，为 error 时生成失败
+	omniVideos sync.Map
 }
 
 // PoolRequestContextProvider 从租约账户读取协议上下文
@@ -68,6 +72,7 @@ var _ Service = (*PooledService)(nil)
 var _ RequestContextProvider = (*PoolRequestContextProvider)(nil)
 var _ ProtectedTransport = (*WorkerProtectedTransport)(nil)
 var _ VideoProtectedTransport = (*WorkerProtectedTransport)(nil)
+var _ TitleProtectedTransport = (*WorkerProtectedTransport)(nil)
 
 // NewPooledService 创建多账户协议服务
 func NewPooledService(pool *AccountPool, client *Client) (*PooledService, error) {
@@ -104,27 +109,25 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) (*Work
 	}, nil
 }
 
-// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent、Build 代理或写代码助手请求
+// DoProtected 写入 fresh proof 后通过 Camoufox 发送 GenerateContent、Build 代理或写代码助手请求，写入页面输入框的提示词为最后一个轮次的文本
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
-	var prompt, page string
+	var prompt string
 	var err error
 	proofField := 5
 	switch rpc.Method {
 	case buildProxyStreamedMethod, buildProxyUnaryMethod:
 		prompt, err = buildBindingPrompt(rpc.Body)
-		page = contentsText(request.Contents)
 		proofField = buildProofField
 	case assistantOfflineMethod:
 		prompt, err = bindingPrompt(request)
-		page = contentsText(request.Contents)
 		proofField = assistantProofField
 	default:
 		prompt, err = bindingPrompt(request)
-		page = prompt
 	}
 	if err != nil {
 		return nil, err
 	}
+	page := contentsText(request.Contents[max(len(request.Contents)-1, 0):])
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	return t.doBrowserPrepared(ctx, prompt, page, proofField, AccountSelection{
 		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
@@ -158,7 +161,7 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	}
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := worker.SendProtected(ctx, ProtectedRequest{
-		URL: rpc.URL, Headers: headers, Body: rpc.Body,
+		URL: rpc.URL, Headers: headers, Body: rpc.Body, PagePrompt: page,
 	})
 	if err != nil {
 		return nil, err
@@ -218,32 +221,17 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	return lease, worker, rpc, nil
 }
 
-// DoProtectedVideo 写入 Veo fresh proof 后发送请求
+// DoProtectedVideo 写入 Veo fresh proof 后经 Worker 页面发送请求，页面输入框的提示词为视频提示词
 func (t *WorkerProtectedTransport) DoProtectedVideo(ctx context.Context, request VideoRequest, rpc RPCRequest) (*RPCResponse, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	return t.doPrepared(ctx, request.Prompt, 8, AccountSelection{
+	return t.doBrowserPrepared(ctx, request.Prompt, request.Prompt, 8, AccountSelection{
 		ModelID: modelID, Method: "predictLongRunning", AccountID: strings.TrimSpace(request.AccountID),
 	}, rpc)
 }
 
-func (t *WorkerProtectedTransport) doPrepared(
-	ctx context.Context,
-	prompt string,
-	proofField int,
-	selection AccountSelection,
-	rpc RPCRequest,
-) (*RPCResponse, error) {
-	_, _, rpc, err := t.prepareProtectedRequest(ctx, prompt, prompt, proofField, selection, rpc)
-	if err != nil {
-		return nil, err
-	}
-	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
-	response, err := t.transport.Do(ctx, rpc)
-	if err != nil {
-		return nil, err
-	}
-	reportRequestPhase(ctx, RequestPhaseStreaming)
-	return response, nil
+// DoProtectedTitle 写入 GenerateTitle fresh proof 后经 Worker 页面发送请求，binding 为提示词与回答以空格连接，页面输入框为空
+func (t *WorkerProtectedTransport) DoProtectedTitle(ctx context.Context, request TitleRequest, rpc RPCRequest) (*RPCResponse, error) {
+	return t.doBrowserPrepared(ctx, request.Prompt+" "+request.Answer, "", 3, AccountSelection{ModelID: request.Model}, rpc)
 }
 
 func bindingPrompt(request GenerateRequest) (string, error) {
@@ -252,7 +240,6 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 	}
 	values := make([]string, 0)
 	for _, content := range request.Contents {
-		content = attachYouTubeMedia(content)
 		for _, part := range content.Parts {
 			switch {
 			case part.Text != "":
@@ -269,7 +256,7 @@ func bindingPrompt(request GenerateRequest) (string, error) {
 	return strings.Join(values, " "), nil
 }
 
-// contentsText 返回各 Part 的文本以空格连接，作为 Build 请求写入页面的提示词
+// contentsText 返回各 Part 的文本以空格连接，作为写入页面输入框的提示词
 func contentsText(contents []Content) string {
 	values := make([]string, 0)
 	for _, content := range contents {
@@ -574,6 +561,9 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
 	}
 	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if s.YouTubeLinks {
+		request.Contents = attachYouTubeLinks(request.Contents)
+	}
 	if len(request.Contents) == 0 {
 		return TokenCount{}, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
@@ -646,6 +636,9 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
 	request.System, request.Contents = normalizeTurns(request.System, request.Contents)
+	if s.YouTubeLinks {
+		request.Contents = attachYouTubeLinks(request.Contents)
+	}
 	if len(request.Contents) == 0 {
 		return nil, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}
@@ -838,7 +831,7 @@ func mergeModels(base []Model, additions []Model) []Model {
 			current.CapabilityOptions = make(map[string][]string, len(model.CapabilityOptions))
 		}
 		for name, values := range model.CapabilityOptions {
-			current.CapabilityOptions[name] = unionStrings(current.CapabilityOptions[name], values)
+			current.CapabilityOptions[name] = unionOrdered(current.CapabilityOptions[name], values)
 		}
 		if len(current.VoiceDetails) == 0 {
 			current.VoiceDetails = model.VoiceDetails
@@ -854,9 +847,6 @@ func mergeModels(base []Model, additions []Model) []Model {
 	for _, id := range upstreamModelOrder(base, additions) {
 		model := merged[id]
 		model.Methods = unionStrings(nil, model.Methods)
-		for name, values := range model.CapabilityOptions {
-			model.CapabilityOptions[name] = unionStrings(nil, values)
-		}
 		result = append(result, model)
 	}
 	return result
@@ -895,6 +885,17 @@ func unionInt64(left []int64, right []int64) []int64 {
 		result = append(result, value)
 	}
 	sort.Slice(result, func(left int, right int) bool { return result[left] < result[right] })
+	return result
+}
+
+// unionOrdered 按首次出现的顺序合并两组取值并去重
+func unionOrdered(left []string, right []string) []string {
+	result := slices.Clone(left)
+	for _, value := range right {
+		if !slices.Contains(result, value) {
+			result = append(result, value)
+		}
+	}
 	return result
 }
 

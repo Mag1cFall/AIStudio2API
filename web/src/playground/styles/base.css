@@ -268,18 +268,6 @@ html.studio :is(code, pre, kbd) {
   background-color: #444748;
 }
 
-.ms-menu-radio {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border: 1px solid currentColor;
-  border-radius: 9999px;
-}
-
-.ms-menu-radio.selected {
-  background-color: currentColor;
-}
-
 .ms-tooltip {
   position: fixed;
   z-index: 1100;
@@ -350,6 +338,7 @@ input[ms-input].small {
 
 textarea[ms-input] {
   padding: 8px;
+  color: var(--color-v3-text);
   resize: none;
 }
 

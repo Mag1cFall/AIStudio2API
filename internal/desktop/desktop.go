@@ -61,7 +61,7 @@ func HandleUpdateHelper() {
 	updater.HandleHelperMode()
 }
 
-// New 创建桌面应用、主窗口与托盘，show 为 false 时主窗口保持隐藏，WebView 数据写入 webviewDir；已有实例运行时把它的窗口带到前台并结束当前进程；Windows 缺少 WebView2 运行时时只创建托盘，show 为 true 时服务就绪后在默认浏览器打开管理页面
+// New 创建桌面应用、主窗口与托盘，show 为 false 时主窗口保持隐藏，WebView 数据写入 webviewDir；已有实例运行时把它的窗口带到前台并结束当前进程；Windows 缺少 WebView2 运行时且 show 为 true 时询问用户并下载安装，没有安装时只创建托盘，show 为 true 时服务就绪后在默认浏览器打开管理页面
 func New(show bool, webviewDir string) *App {
 	shell := &App{}
 	shell.app = application.New(application.Options{
@@ -84,7 +84,7 @@ func New(show bool, webviewDir string) *App {
 		},
 		RawMessageHandler: shell.handleMessage,
 	})
-	if runtime.GOOS == "windows" && shell.app.Env.Info().PlatformInfo["WebView2"] == "" {
+	if runtime.GOOS == "windows" && shell.app.Env.Info().PlatformInfo["WebView2"] == "" && !(show && installWebView2()) {
 		slog.Warn("没有找到 WebView2 运行时，管理页面在默认浏览器中打开")
 		shell.open = show
 		shell.createTray()

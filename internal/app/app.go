@@ -196,20 +196,35 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	if err != nil {
 		return false, fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
+	manager.requests.log("service", "INFO", fmt.Sprintf("预览监听启动 | 地址=%s", cfg.PreviewListenAddr))
+	previewListener, err := net.Listen("tcp", cfg.PreviewListenAddr)
+	if err != nil {
+		listener.Close()
+		return false, fmt.Errorf("监听 %s: %w", cfg.PreviewListenAddr, err)
+	}
 	apiHandler := api.NewHandler(manager, api.Config{
 		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
+		ResponseModes: manager.responseModes,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	serveError := make(chan error, 1)
+	previewServer := &http.Server{
+		Handler:           webui.PreviewHandler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	serveError := make(chan error, 2)
 	go func() {
 		serveError <- server.Serve(listener)
+	}()
+	go func() {
+		serveError <- previewServer.Serve(previewListener)
 	}()
 
 	address := "http://" + browserAddress(listener.Addr().String())
@@ -219,24 +234,30 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		go autoStartService(ctx, manager)
 	}
 
+	var serveErr error
+	received := 0
 	select {
-	case err := <-serveError:
-		if errors.Is(err, http.ErrServerClosed) {
-			return true, nil
-		}
-		return true, err
+	case serveErr = <-serveError:
+		received++
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			server.Close()
-			slog.Warn("管理监听关闭超时，断开剩余连接", "error", err)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, current := range []*http.Server{server, previewServer} {
+		if err := current.Shutdown(shutdownCtx); err != nil {
+			current.Close()
+			slog.Warn("监听关闭超时，断开剩余连接", "error", err)
 		}
-		if err := <-serveError; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return true, err
+	}
+	for ; received < cap(serveError); received++ {
+		if err := <-serveError; serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = err
 		}
+	}
+	if serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
 		return true, nil
 	}
+	return true, serveErr
 }
 
 // autoStartService 在管理服务就绪后按配置启动生成服务

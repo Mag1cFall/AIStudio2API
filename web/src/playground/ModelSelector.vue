@@ -17,14 +17,11 @@ import {
   priceLines,
   type ModelCategory,
 } from './catalog'
-import { pageKindOf, pageRoutes, unsavedKinds, type PageKind } from './media/kinds'
+import { pageKindOf, pageRoutes, unsavedKinds } from './media/kinds'
+import { modelChoice, modelSelectorOpen } from './model-selector'
 
-const open = defineModel<boolean>('open', { required: true })
-const props = withDefaults(
-  defineProps<{ kind?: PageKind; hasContent?: boolean; selected?: string }>(),
-  { kind: 'chat', hasContent: false, selected: '' },
-)
-const emit = defineEmits<{ select: [model: Model] }>()
+const open = modelSelectorOpen
+const choice = modelChoice
 const { t, locale } = useI18n()
 const router = useRouter()
 const { models, showNotice } = useConsole()
@@ -89,27 +86,21 @@ function categoryLabel(item: ModelCategory): string {
   return label === undefined ? String(item) : t(label)
 }
 
-// notifySelected 显示官网的模型选中提示
-function notifySelected(model: Model): void {
-  showNotice(t('pg.selectedModel').replace('{name}', model.name), 'success')
-}
-
 // switchPage 打开模型所属页面的新会话
 function switchPage(model: Model): void {
   pending.value = undefined
-  notifySelected(model)
   void router.push({ path: pageRoutes[pageKindOf(model)], query: { model: model.id } })
 }
 
 // choose 选择模型：属于当前页面时在当前会话使用，属于其他页面时打开该页面的新会话，当前会话有内容时先确认
 function choose(model: Model): void {
+  const current = choice.value!
   open.value = false
-  if (pageKindOf(model) === props.kind) {
-    emit('select', model)
-    notifySelected(model)
+  if (pageKindOf(model) === current.kind) {
+    current.select(model)
     return
   }
-  if (props.hasContent) pending.value = model
+  if (current.hasContent()) pending.value = model
   else switchPage(model)
 }
 
@@ -141,6 +132,7 @@ async function copyID(model: Model): Promise<void> {
         <input
           v-model="search"
           ms-input
+          autofocus
           class="has-icon"
           type="text"
           :placeholder="t('pg.searchModels')"
@@ -175,7 +167,7 @@ async function copyID(model: Model): Promise<void> {
         <p v-if="visibleModels.length === 0" class="empty">{{ t('pg.noModels') }}</p>
         <template v-for="(model, index) in visibleModels" :key="model.id">
           <div v-if="index > 0" class="row-divider"></div>
-          <div class="model-row" :class="{ selected: model.id === selected }">
+          <div class="model-row" :class="{ selected: model.id === choice?.selected }">
             <button type="button" class="content-button" @click="choose(model)">
               <div class="row-header">
                 <span class="model-icon"><UiIcon :name="modelIcon(model)" :size="20" /></span>
@@ -316,7 +308,7 @@ async function copyID(model: Model): Promise<void> {
   >
     <p class="switch-text">
       {{ t('pg.switchModelNewChat') }}
-      <template v-if="unsavedKinds.includes(props.kind)">{{ t('pg.switchModelLost') }}</template>
+      <template v-if="unsavedKinds.includes(choice!.kind)">{{ t('pg.switchModelLost') }}</template>
       {{ t('pg.switchModelContinue') }}
     </p>
     <template #actions>

@@ -12,7 +12,7 @@ import UiDialog from '@/playground/ui/UiDialog.vue'
 import CodeDialog from '../CodeDialog.vue'
 import MarkdownView from '../MarkdownView.vue'
 import ThoughtChunk from '../ThoughtChunk.vue'
-import { hasCode } from '../catalog'
+import { Capability, hasCode, modelMatches } from '../catalog'
 import LiveSettings from './LiveSettings.vue'
 import MediaLayout from './MediaLayout.vue'
 import MediaPromptBox from './MediaPromptBox.vue'
@@ -112,10 +112,11 @@ const outputs = computed(outputParagraphs)
 // chips 是 Try the Live API 下方的入口按钮，按模型能力列出
 const chips = computed(() => {
   const items: { source: LiveSource; icon: IconName; label: string }[] = []
-  if (can(66)) items.push({ source: 'mic', icon: 'mic', label: t('pg.talk') })
-  if (conversation.value && can(67))
+  if (can(Capability.LiveMicrophone))
+    items.push({ source: 'mic', icon: 'mic', label: t('pg.talk') })
+  if (conversation.value && can(Capability.LiveCamera))
     items.push({ source: 'camera', icon: 'webcam', label: t('pg.webcam') })
-  if (can(68))
+  if (can(Capability.LiveScreen))
     items.push({
       source: conversation.value ? 'screen' : 'tab',
       icon: 'screenShare',
@@ -126,10 +127,11 @@ const chips = computed(() => {
 // streamButtons 是输入框右侧的实时输入按钮：对话模型为麦克风、摄像头与屏幕，翻译与转录模型为麦克风与标签页音频
 const streamButtons = computed(() => {
   const items: { source: LiveSource; icon: IconName; label: string }[] = []
-  if (can(66)) items.push({ source: 'mic', icon: 'mic', label: t('pg.microphone') })
-  if (conversation.value && can(67))
+  if (can(Capability.LiveMicrophone))
+    items.push({ source: 'mic', icon: 'mic', label: t('pg.microphone') })
+  if (conversation.value && can(Capability.LiveCamera))
     items.push({ source: 'camera', icon: 'webcam', label: t('pg.camera') })
-  if (can(68))
+  if (can(Capability.LiveScreen))
     items.push({
       source: conversation.value ? 'screen' : 'tab',
       icon: 'screenShare',
@@ -167,6 +169,14 @@ function sourceTip(source: LiveSource): string {
   if (source === 'camera') return active ? t('pg.stopCamera') : t('pg.startCamera')
   if (source === 'tab') return active ? t('pg.stopTabAudio') : t('pg.shareAudioFromTab')
   return active ? t('pg.stopScreen') : t('pg.startScreen')
+}
+
+// videoLocked 与官网一致，摄像头与屏幕共享其中一路打开时另一路按钮不可用
+function videoLocked(source: LiveSource): boolean {
+  return (
+    (source === 'camera' && state.sources.includes('screen')) ||
+    (source === 'screen' && state.sources.includes('camera'))
+  )
 }
 
 // submit 发送输入框中的文本
@@ -273,7 +283,8 @@ watch(
   [() => route.query.model, liveModels],
   () => {
     const requested = typeof route.query.model === 'string' ? route.query.model : ''
-    const target = liveModels.value.find((model) => model.id === requested) ?? liveModels.value[0]
+    const target =
+      liveModels.value.find((model) => modelMatches(model, requested)) ?? liveModels.value[0]
     if (target && target.id !== state.model && (requested !== '' || state.model === ''))
       live.selectModel(target.id)
   },
@@ -308,7 +319,7 @@ onUnmounted(() => live.disconnect())
 </script>
 
 <template>
-  <MediaLayout>
+  <MediaLayout fade-title>
     <template #actions>
       <button
         v-if="!zero"
@@ -488,7 +499,10 @@ onUnmounted(() => live.disconnect())
                 }}</span>
                 {{ paragraph.text }}
               </p>
-              <p v-if="state.interim && can(78)" class="transcript-paragraph interim-transcript">
+              <p
+                v-if="state.interim && can(Capability.InterimTranscription)"
+                class="transcript-paragraph interim-transcript"
+              >
                 {{ state.interim }}
               </p>
             </div>
@@ -608,6 +622,12 @@ onUnmounted(() => live.disconnect())
               <div class="streaming-buttons-container">
                 <template v-for="button in streamButtons" :key="button.source">
                   <div v-if="button.source === 'mic'" class="audio-button-wrapper">
+                    <UiIcon
+                      v-if="state.sources.includes('mic')"
+                      class="audio-enabled-icon"
+                      name="audioEnabled"
+                      :size="18"
+                    />
                     <button
                       v-tooltip.below="sourceTip('mic')"
                       type="button"
@@ -618,7 +638,7 @@ onUnmounted(() => live.disconnect())
                       :aria-pressed="state.sources.includes('mic')"
                       @click="live.toggleSource('mic')"
                     >
-                      <UiIcon :name="button.icon" :size="20" />
+                      <UiIcon :name="button.icon" :size="18" />
                     </button>
                   </div>
                   <button
@@ -630,9 +650,10 @@ onUnmounted(() => live.disconnect())
                     :class="{ 'ms-button-active': state.sources.includes(button.source) }"
                     :aria-label="button.label"
                     :aria-pressed="state.sources.includes(button.source)"
-                    @click="live.toggleSource(button.source)"
+                    :aria-disabled="videoLocked(button.source)"
+                    @click="videoLocked(button.source) || live.toggleSource(button.source)"
                   >
-                    <UiIcon :name="button.icon" :size="20" />
+                    <UiIcon :name="button.icon" :size="18" />
                   </button>
                 </template>
               </div>
@@ -643,6 +664,12 @@ onUnmounted(() => live.disconnect())
             <div class="streaming-buttons-container">
               <template v-for="button in streamButtons" :key="button.source">
                 <div v-if="button.source === 'mic'" class="audio-button-wrapper">
+                  <UiIcon
+                    v-if="state.sources.includes('mic')"
+                    class="audio-enabled-icon"
+                    name="audioEnabled"
+                    :size="18"
+                  />
                   <button
                     v-tooltip="sourceTip('mic')"
                     type="button"
@@ -653,7 +680,7 @@ onUnmounted(() => live.disconnect())
                     :aria-pressed="state.sources.includes('mic')"
                     @click="live.toggleSource('mic')"
                   >
-                    <UiIcon :name="button.icon" :size="20" />
+                    <UiIcon :name="button.icon" :size="18" />
                   </button>
                 </div>
                 <button
@@ -665,9 +692,10 @@ onUnmounted(() => live.disconnect())
                   :class="{ 'ms-button-active': state.sources.includes(button.source) }"
                   :aria-label="button.label"
                   :aria-pressed="state.sources.includes(button.source)"
-                  @click="live.toggleSource(button.source)"
+                  :aria-disabled="videoLocked(button.source)"
+                  @click="videoLocked(button.source) || live.toggleSource(button.source)"
                 >
-                  <UiIcon :name="button.icon" :size="20" />
+                  <UiIcon :name="button.icon" :size="18" />
                 </button>
               </template>
             </div>
@@ -1220,6 +1248,14 @@ onUnmounted(() => live.disconnect())
 .audio-button-wrapper > button {
   height: 100%;
   border: none;
+}
+
+.audio-enabled-icon {
+  box-sizing: content-box;
+  padding-right: 4px;
+  padding-left: 8px;
+  color: var(--color-v3-text-link);
+  cursor: default;
 }
 
 .tools-button {

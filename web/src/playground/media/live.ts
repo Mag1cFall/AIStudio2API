@@ -3,20 +3,21 @@ import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import { readPreference, writePreference } from '@/preference'
 import type { Model, ThinkingLevel } from '@/types'
-import { defaultChatModel, hasCode } from '../catalog'
+import { Capability, defaultChatModel, hasCode } from '../catalog'
 import { apiKey, errorMessage } from '../request'
 import { parseFunctions } from '../schema'
 import { audioInput } from '../shell/preferences'
 import { openLiveSocket, type LiveServerMessage } from './live-socket'
 import { createPcmPlayer } from './pcm-player'
-import { bytesToBase64, pcmToWav, startPcmCapture, type PcmCapture } from './pcm-capture'
+import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
+import { startPcmCapture, type PcmCapture } from './pcm-capture'
 
 // LiveVariant 是 Live 模型的会话形态：对话、实时翻译或实时转录
 export type LiveVariant = 'conversation' | 'translation' | 'transcription'
 
 // liveVariantOf 按能力码返回模型的会话形态：46 为实时翻译，77 为实时转录
 export function liveVariantOf(model: Model | undefined): LiveVariant {
-  if (hasCode(model, 46)) return 'translation'
+  if (hasCode(model, Capability.SpeechTranslation)) return 'translation'
   if (model?.capabilities?.transcription_output) return 'transcription'
   return 'conversation'
 }
@@ -354,7 +355,7 @@ function onMessage(message: LiveServerMessage): void {
       if (!message.data || !message.mime_type?.startsWith('audio/')) break
       player.enqueue(message.data, message.mime_type)
       audioRate = Number(/rate=(\d+)/.exec(message.mime_type)?.[1] ?? 24000)
-      modelAudio.push(Uint8Array.from(atob(message.data), (char) => char.charCodeAt(0)))
+      modelAudio.push(base64Bytes(message.data))
       modelAudioPart()
       break
     case 'output_transcription':
@@ -660,22 +661,32 @@ function stopSource(source: LiveSource): void {
   )
 }
 
-// startAudio 采集麦克风或标签页音频并按 16 kHz PCM 发送
+// startAudio 采集麦克风或标签页音频并按 16 kHz PCM 发送，替换正在采集的音频；采集启动期间被新的音频替换时释放本路
 async function startAudio(stream: MediaStream, source: 'mic' | 'tab'): Promise<void> {
   if (stream.getAudioTracks().length === 0) {
     stream.getTracks().forEach((track) => track.stop())
     throw new Error(useI18n().t('pg.tabNoAudio'))
   }
+  capture?.stop()
+  capture = undefined
+  captureStream?.getTracks().forEach((track) => track.stop())
   captureStream = stream
-  capture = await startPcmCapture(new MediaStream(stream.getAudioTracks()), (data) =>
+  const started = await startPcmCapture(new MediaStream(stream.getAudioTracks()), (data) =>
     send({ type: 'audio', mime_type: 'audio/pcm', data }),
   )
+  if (captureStream !== stream) {
+    started.stop()
+    return
+  }
+  capture = started
   stream.getAudioTracks()[0]?.addEventListener('ended', () => stopSource(source))
-  state.sources.push(source)
+  state.sources = [...state.sources.filter((item) => item !== 'mic' && item !== 'tab'), source]
 }
 
-// startVideo 预览摄像头或屏幕，每秒发送一帧 JPEG
+// startVideo 预览摄像头或屏幕并替换正在采集的画面，每秒发送一帧 JPEG
 function startVideo(stream: MediaStream, source: 'camera' | 'screen'): void {
+  window.clearInterval(frameTimer)
+  videoStream?.getTracks().forEach((track) => track.stop())
   videoStream = stream
   state.preview = stream
   const video = document.createElement('video')
@@ -703,7 +714,10 @@ function startVideo(stream: MediaStream, source: 'camera' | 'screen'): void {
     )
   }, 1000)
   stream.getVideoTracks()[0]?.addEventListener('ended', () => stopSource(source))
-  state.sources.push(source)
+  state.sources = [
+    ...state.sources.filter((item) => item !== 'camera' && item !== 'screen'),
+    source,
+  ]
 }
 
 // toggleSource 打开或关闭一路实时输入，打开前先建立会话
@@ -737,9 +751,10 @@ async function toggleSource(source: LiveSource): Promise<void> {
       if (state.sources.includes('tab')) stopSource('tab')
       await startAudio(stream, source)
     } else {
-      if (state.sources.includes('camera')) stopSource('camera')
-      if (state.sources.includes('screen')) stopSource('screen')
       startVideo(stream, source)
+      // 与官网一样，打开摄像头或屏幕共享时一并打开麦克风
+      if (!state.sources.includes('mic') && hasCode(currentModel.value, Capability.LiveMicrophone))
+        await startAudio(await navigator.mediaDevices.getUserMedia({ audio: audioInput() }), 'mic')
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error)

@@ -52,7 +52,13 @@ const promptScript = `((prompt, submit) => {
 })`
 
 // promptProgram 是预编译的 promptScript，各 Runtime 共享
-var promptProgram = goja.MustCompile(hostScriptName, promptScript, false)
+var promptProgram = goja.MustCompileHost(hostScriptName, promptScript, false)
+
+// clearPromptProgram 以原生 setter 清空提示词输入框，与 Camoufox 页面 proof 调用结束时相同，不派发事件
+var clearPromptProgram = goja.MustCompileHost(hostScriptName, `(() => {
+  const box = document.querySelector('ms-prompt-box');
+  if (box) Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box.querySelector('textarea'), '');
+})()`, false)
 
 // NewRuntime 在 Firefox 宿主中加载解释器并初始化 challenge program
 func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
@@ -85,7 +91,8 @@ func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
 		}
 		vm.SetRandSource(source)
 		vm.SetMaxCallStackSize(maxCallStackDepth)
-		state := &hostState{registry: newHostRegistry(), profile: options.Profile, loadImage: options.LoadImage, schedule: loop.schedule, location: location, zoneName: zoneName, pending: &runtime.pending}
+		state := &hostState{registry: newHostRegistry(), rejections: &rejectionQueue{}, profile: options.Profile, loadImage: options.LoadImage, schedule: loop.schedule, location: location, zoneName: zoneName, pending: &runtime.pending}
+		loop.afterTask = state.rejections.notify
 		createIframe := func() *goja.Object {
 			window, err := newIframeWindow(vm, state)
 			if err != nil {
@@ -99,7 +106,8 @@ func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
 			return
 		}
 		state.topAPI = api
-		vm.SetEvalTransformer(state.registry.evalTransformer(vm, false))
+		vm.SetEvalTransformer(state.registry.evalTransformer(vm, options.Profile.TrustedTypes))
+		vm.SetFunctionTransformer(state.registry.functionTransformer(vm, options.Profile.TrustedTypes))
 		if _, err := vm.RunScript(sourceName, options.Interpreter); err != nil {
 			complete(fmt.Errorf("执行 WAA 解释器: %w", err))
 			return
@@ -208,8 +216,8 @@ func experimentSignals(vm *goja.Runtime, blob string) (goja.Value, goja.Value, e
 	return vm.NewArray(vm.NewArray(list...), vm.NewArray(types...)), state, nil
 }
 
-// Settle 等待 VM 发出的页面资源请求完成，再保持 quiet 时长让异步回调落定
-func (runtime *Runtime) Settle(ctx context.Context, quiet time.Duration) error {
+// Settle 等待 VM 发出的页面资源请求完成
+func (runtime *Runtime) Settle(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		runtime.pending.Wait()
@@ -217,13 +225,6 @@ func (runtime *Runtime) Settle(ctx context.Context, quiet time.Duration) error {
 	}()
 	select {
 	case <-done:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	timer := time.NewTimer(quiet)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -238,8 +239,13 @@ func (runtime *Runtime) FillPrompt(ctx context.Context, prompt string, submit bo
 }
 
 func (runtime *Runtime) fillPrompt(ctx context.Context, prompt string, submit bool) error {
+	prompt = textareaValue(prompt)
 	result := make(chan error, 1)
 	if !runtime.loop.post(func() {
+		if err := ctx.Err(); err != nil {
+			result <- err
+			return
+		}
 		function, err := runtime.vm.RunProgram(promptProgram)
 		if err != nil {
 			result <- err
@@ -251,7 +257,7 @@ func (runtime *Runtime) fillPrompt(ctx context.Context, prompt string, submit bo
 			result <- fmt.Errorf("写入页面提示词: %w", err)
 			return
 		}
-		if value.String() != textareaValue(prompt) {
+		if value.String() != prompt {
 			result <- errors.New("页面提示词状态未同步")
 			return
 		}
@@ -267,15 +273,16 @@ func (runtime *Runtime) fillPrompt(ctx context.Context, prompt string, submit bo
 	}
 }
 
-// textareaValue 返回 Firefox textarea 写入后的取值，CRLF 与 CR 规范为 LF
+// textareaValue 返回按 Firefox textarea 取值规则把 CRLF 与 CR 规范为 LF 的文本
 func textareaValue(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
 }
 
-// Proof 同步页面提示词后为 SHA-256 digest 生成 snapshot proof
+// Proof 同步页面提示词后为 SHA-256 digest 生成 snapshot proof，结束后清空输入框
 func (runtime *Runtime) Proof(ctx context.Context, digest string, prompt string) (string, error) {
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
+	defer runtime.loop.post(func() { _, _ = runtime.vm.RunProgram(clearPromptProgram) })
 	if err := runtime.fillPrompt(ctx, prompt, false); err != nil {
 		return "", err
 	}
@@ -310,6 +317,10 @@ func (runtime *Runtime) snapshotWith(ctx context.Context, options func(*goja.Run
 		})
 	}
 	if !runtime.loop.post(func() {
+		if err := ctx.Err(); err != nil {
+			finish("", err)
+			return
+		}
 		callback := func(call goja.FunctionCall) goja.Value {
 			finish(call.Argument(0).String(), nil)
 			return goja.Undefined()

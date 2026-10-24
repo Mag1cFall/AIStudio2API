@@ -277,7 +277,7 @@ Build 请求与 Playground 共用同一预处理：工具可用性校验、模�
 
 ### contents
 
-user 与 tool 角色写为 `user`，assistant 写为 `model`，没有 part 的 content 省略。user 文本中的 YouTube 链接先转为 external media part。
+user 与 tool 角色写为 `user`，assistant 写为 `model`，没有 part 的 content 省略。`YOUTUBE_LINKS=true` 时 user 文本中的 YouTube 链接先转为 external media part。
 
 | 规范 Part | Gemini API Part |
 | --- | --- |

@@ -56,6 +56,8 @@ const serviceState = computed<'unavailable' | 'running' | 'launching' | 'stopped
 })
 
 let eventConnection: EventConnection | undefined
+// consoleGeneration 为 startConsole 与 stopConsole 的调用序号，离开后才完成的初始化据此不再订阅事件
+let consoleGeneration = 0
 let noticeTimer: number | undefined
 let pendingLogs: AdminLog[] = []
 let logFlushTimer: number | undefined
@@ -291,6 +293,7 @@ function handleAdminEvent(event: AdminEvent): void {
 
 // startConsole 加载全部管理数据并订阅管理事件
 async function startConsole(): Promise<void> {
+  const generation = ++consoleGeneration
   window.addEventListener('pagehide', flushDelete)
   await Promise.all([
     loadStatus(),
@@ -300,6 +303,7 @@ async function startConsole(): Promise<void> {
     loadRequests(),
     loadConfig(),
   ])
+  if (generation !== consoleGeneration) return
   api.updateStatus().then(
     (value) => (update.value = value),
     () => undefined,
@@ -312,6 +316,7 @@ async function startConsole(): Promise<void> {
 
 // stopConsole 关闭事件订阅并提交等待中的删除
 function stopConsole(): void {
+  consoleGeneration++
   eventConnection?.close()
   eventConnection = undefined
   if (logFlushTimer !== undefined) window.clearTimeout(logFlushTimer)

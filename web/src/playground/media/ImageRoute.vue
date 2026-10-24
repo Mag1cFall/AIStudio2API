@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
+import { modelMatches } from '../catalog'
 import { pageKindOf } from './kinds'
 
 const PlaygroundPage = defineAsyncComponent(() => import('../PlaygroundPage.vue'))
@@ -14,7 +15,7 @@ const imagen = computed(() => {
   const models = store.models.value
   const requested = typeof route.query.model === 'string' ? route.query.model : ''
   const model = requested
-    ? models.find((item) => item.id === requested)
+    ? models.find((item) => modelMatches(item, requested))
     : models.find((item) => pageKindOf(item) === 'image')
   return model !== undefined && pageKindOf(model) === 'image'
 })

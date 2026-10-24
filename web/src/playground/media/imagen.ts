@@ -5,7 +5,9 @@ import type { CodeOption } from '../code'
 import { newTurnID } from '../session'
 import { predictImages } from './api'
 import { pyTriple, tsTemplate } from './code'
+import { modelMatches } from '../catalog'
 import { pageKindOf } from './kinds'
+import { requestTitle } from '../title'
 
 // ImagenTurn 是 Imagen 页的一轮：用户轮次记录提示词，模型轮次记录生成的图片
 export interface ImagenTurn {
@@ -48,15 +50,21 @@ export function imagenModels(): Model[] {
   return useConsole().models.value.filter((model) => pageKindOf(model) === 'image')
 }
 
+// generateTitle 与官网一样在会话未命名时于提交时以提示词生成标题，失败时保持未命名
+async function generateTitle(model: string, prompt: string): Promise<void> {
+  const title = await requestTitle(model, prompt, '', () => ({
+    owner: state.turns,
+    title: state.title,
+  }))
+  if (title !== '') state.title = title
+}
+
 // run 以当前提示词与设置调用本服务的 predict 接口，结果写入新的模型轮次；与官网一样失败时撤下本轮并抛出上游说明，取消时只撤下本轮
 async function run(): Promise<void> {
   const prompt = state.draft.trim()
   if (prompt === '' || state.running || state.model === '') return
   const model = imagenModels().find((item) => item.id === state.model)
-  if (state.title === '') {
-    const line = prompt.split('\n')[0] ?? ''
-    state.title = line.length > 60 ? `${line.slice(0, 60)}…` : line
-  }
+  if (state.title === '') void generateTitle(state.model, prompt)
   state.turns.push({ id: newTurnID(), role: 'user', prompt })
   const turn = reactive<ImagenTurn>({
     id: newTurnID(),
@@ -157,7 +165,7 @@ export function useImagen() {
     ensureModel(requested?: string): void {
       const list = imagenModels()
       const wanted =
-        list.find((model) => model.id === requested) ??
+        list.find((model) => modelMatches(model, requested)) ??
         list.find((model) => model.id === state.model) ??
         list[0]
       if (wanted) state.model = wanted.id

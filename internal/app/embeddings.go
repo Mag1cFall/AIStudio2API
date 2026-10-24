@@ -99,8 +99,8 @@ func (service *trackedService) embeddingCandidates(ctx context.Context, modelID 
 	candidates = append(candidates, service.pool.OrderCandidates(groups.WarmBusy, modelID)...)
 	candidates = append(candidates, service.pool.OrderCandidates(standbyBusy, modelID)...)
 	if len(candidates) == 0 {
-		if !groups.EarliestCooldown.IsZero() {
-			return nil, &aistudio.AllCoolingError{ModelID: modelID, Until: groups.EarliestCooldown}
+		if !groups.EarliestCooldown.Until.IsZero() {
+			return nil, &aistudio.AllCoolingError{ModelID: modelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 		}
 		if busyErr := errors.Join(readyBusyErr, standbyBusyErr); busyErr != nil {
 			return nil, busyErr

@@ -97,7 +97,8 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
   min-height: 0;
   overflow: auto;
   padding: 0 16px;
-  color: var(--color-v3-text);
+  color: var(--mat-sys-on-surface-variant);
+  line-height: 17.5px;
 }
 
 .ms-dialog-actions {

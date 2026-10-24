@@ -59,9 +59,9 @@
 - **函数工具**: 四协议支持工具调用与续接、工具选择和严格参数校验；支持联合类型与开放参数定义
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
-- **视频生成**: 支持 Veo 视频生成和图片转视频；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
+- **视频生成**: 支持 Veo 视频生成和图片转视频，目录中没有 Veo 时视频长任务由 Gemini Omni 生成；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
 - **Deep Research**: Pro 与 Ultra 账户可通过四套生成接口与 Interactions 的 `agent` 字段调用 Deep Research，输出研究过程、带引用的报告与图表
-- **YouTube 输入**: 粘贴视频 URL 即可作为外部视频附件读取
+- **YouTube 输入**: YouTube 视频 URL 作为外部视频附件读取；开启 `YOUTUBE_LINKS` 后，消息文本中的 YouTube 链接同样作为视频读取
 - **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
 - **Files 与 Transcribe**: 支持文件上传、查询、内容读取、删除和音频转录
@@ -74,11 +74,11 @@
 
 ## 系统要求
 
-- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版在默认浏览器中打开管理页面
+- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载并静默安装，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
 - **macOS 桌面版**: macOS 12 或更高版本，Apple 芯片与 Intel 通用
 - **Linux 桌面版**: GTK 4 与 WebKitGTK 6.0，例如 Ubuntu 24.04、Debian 13 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
 - **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
-- **源码运行**: Go 1.26.0+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm
+- **源码运行**: Go 1.27+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
 - **网络**: 稳定的互联网连接访问 Google AI Studio
@@ -140,7 +140,7 @@ sudo apt install ./aistudio2api-<版本>-linux-amd64.deb
 
 #### 1. 安装依赖
 
-- Go 1.26.0 或更高版本
+- Go 1.27 或更高版本
 - Node.js 22.18+、24.11+ 或 26+，以及配套 npm
 
 #### 2. 克隆项目
@@ -244,7 +244,7 @@ docker compose up -d
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
-停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址、预览地址和 `PROXY_API_KEY` 在管理进程重启后生效。
 
 桌面版关闭窗口后在系统托盘继续运行，从托盘菜单“退出”结束管理进程；命令行版在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
@@ -366,7 +366,7 @@ modelRoles:
 
 生成请求中的内联附件会优先上传为临时 Drive 文件，随请求结束清理；账户未授予 Drive 权限时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
 
-Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景。
+Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景；经 Files API 上传的 GIF 按首帧转换为白底 JPEG。
 
 ### TTS 语音生成
 
@@ -453,7 +453,7 @@ curl http://127.0.0.1:2048/v1/videos \
   }'
 ```
 
-创建操作后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果。
+创建操作后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果。目录中没有 Veo 模型时，`gemini-omni-1.1-flash` 等能输出视频的 Omni 模型及其 `veo-*` 别名同样经 `/v1/videos` 与 `:predictLongRunning` 创建任务。
 
 ## 模型
 
@@ -530,6 +530,7 @@ cp .env.example .env
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
+| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同；页面以当前访问的主机名加此端口打开预览 |
 | `PROXY_API_KEY` | 空 | 公开 API key |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
@@ -550,6 +551,9 @@ cp .env.example .env
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
+| `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
+| `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |
+| `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |
@@ -569,7 +573,10 @@ cp .env.example .env
 
 反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。管理页“服务配置”可调整登录开关及凭据，保存后重启程序生效。
 
+API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来源，页面以当前访问的主机名加该端口打开预览。从其他电脑访问时，`PREVIEW_LISTEN_ADDR` 与 `LISTEN_ADDR` 一样监听可访问的地址；经反向代理访问时，在同一主机名的同一端口号上再代理到 `PREVIEW_LISTEN_ADDR`，例如管理页面为 `https://ai.example.com` 时，代理 `https://ai.example.com:2050` 到本机 `2050`。
+
 - **管理页面与 API**: 默认端口 `2048`
+- **HTML 预览**: 默认端口 `2050`
 - **Camoufox**: 由程序动态分配本机端口
 
 ## 高级功能
@@ -690,3 +697,4 @@ netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1
 
 - ✅ **纯 Go 后端**: `WAA_BACKEND=go` 在服务进程内执行官方 interpreter 与 program，按账户指纹模拟 Firefox 页面环境，运行时不下载、不启动 Camoufox；账户登录仍使用 Camoufox
 - ✅ **Firefox 引擎细节**: 补齐 `Intl` 格式化、正则字面量的全局解析时机与 `RegExp.prototype` 的 Symbol 键顺序
+- ✅ **页面环境对齐**: 文档节点、子窗口、页面全局与全局键顺序与官网页面一致，固定随机种子下 proof 与官网页面逐字节相同

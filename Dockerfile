@@ -5,7 +5,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
@@ -25,5 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /out/aistudio2api /usr/local/bin/aistudio2api
 WORKDIR /data
 ENV LISTEN_ADDR=0.0.0.0:2048
-EXPOSE 2048
+ENV PREVIEW_LISTEN_ADDR=0.0.0.0:2050
+EXPOSE 2048 2050
 CMD ["aistudio2api", "-open-ui=false"]

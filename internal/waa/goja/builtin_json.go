@@ -362,7 +362,7 @@ func (ctx *_builtinJSON_stringifyContext) str(key Value, holder *Object) bool {
 	case valueNull:
 		ctx.buf.WriteString("null")
 	case *valueBigInt:
-		ctx.r.typeErrorResult(true, "Do not know how to serialize a BigInt")
+		ctx.r.typeErrorResult(true, "BigInt value can't be serialized in JSON")
 	case *Object:
 		if value1.self.className() == classRawJSON {
 			ctx.buf.WriteString(value1.self.getStr("rawJSON", nil).String())

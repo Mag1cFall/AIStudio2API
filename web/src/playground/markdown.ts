@@ -1,6 +1,6 @@
 import MarkdownIt, { type Env, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
-import 'katex/dist/katex.min.css'
+import './katex.scss'
 import type { Support } from './types'
 
 // markdown 是 Playground 正文解析器：原始 HTML 按文本转义，公式由 KaTeX 渲染

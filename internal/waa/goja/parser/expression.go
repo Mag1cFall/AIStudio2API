@@ -450,6 +450,10 @@ func (self *_parser) parseObjectProperty() ast.Property {
 				self.errorUnexpectedToken(self.token)
 			}
 		case (literal == "get" || literal == "set" || tkn == token.ASYNC) && self.token != token.COLON:
+			if tkn == token.ASYNC && self.token == token.MULTIPLY {
+				generator = true
+				self.next()
+			}
 			_, _, keyValue, tkn1 := self.parseObjectPropertyKey()
 			if keyValue == nil {
 				return nil
@@ -469,7 +473,7 @@ func (self *_parser) parseObjectProperty() ast.Property {
 			return &ast.PropertyKeyed{
 				Key:      keyValue,
 				Kind:     kind,
-				Value:    self.parseMethodDefinition(keyStartIdx, kind, false, async),
+				Value:    self.parseMethodDefinition(keyStartIdx, kind, generator, async),
 				Computed: tkn1 == token.ILLEGAL,
 			}
 		}
@@ -1382,6 +1386,8 @@ func (self *_parser) parseYieldExpression() ast.Expression {
 	if !self.implicitSemicolon && self.token == token.MULTIPLY {
 		node.Delegate = true
 		self.next()
+		node.Argument = self.parseAssignmentExpression()
+		return node
 	}
 
 	if !self.implicitSemicolon && self.token != token.SEMICOLON && self.token != token.RIGHT_BRACE && self.token != token.EOF {

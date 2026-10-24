@@ -33,7 +33,12 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	generate.Unary = !request.Stream
+	generate.Unary = !request.Stream || s.responseModes().FakeStream
+	if !request.Stream {
+		var stopKeepalive func()
+		w, stopKeepalive = s.nonstreamKeepalive(w, r)
+		defer stopKeepalive()
+	}
 	current := cloneResponseContents(generate.Contents)
 	var previous responseHistory
 	if request.PreviousID != "" {

@@ -80,6 +80,11 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
+	if !request.Stream {
+		var stopKeepalive func()
+		w, stopKeepalive = s.nonstreamKeepalive(w, r)
+		defer stopKeepalive()
+	}
 	model, _ := LookupPublicModel(models, request.Model)
 	imageConfig, err := openAIImageConfig(request.Size, request.Quality, model.CapabilityOptions)
 	if err != nil {
@@ -456,14 +461,10 @@ func decodeBase64Flexible(s string) ([]byte, error) {
 func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	lowerMIME := strings.ToLower(strings.TrimSpace(mimeType))
 	if lowerMIME == "image/gif" || (len(data) >= 3 && string(data[:3]) == "GIF") {
-		if img, err := gif.Decode(bytes.NewReader(data)); err == nil {
-			config, err := gif.DecodeConfig(bytes.NewReader(data))
-			if err != nil {
-				return mimeType, data
-			}
+		if frame, config, ok := decodeGIFFrame(data); ok {
 			canvas := image.NewNRGBA(image.Rect(0, 0, config.Width, config.Height))
 			transparent := false
-			for _, entry := range img.(*image.Paletted).Palette {
+			for _, entry := range frame.Palette {
 				_, _, _, alpha := entry.RGBA()
 				transparent = transparent || alpha == 0
 			}
@@ -471,7 +472,7 @@ func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 			if palette, ok := config.ColorModel.(color.Palette); ok && !transparent && int(data[11]) < len(palette) {
 				draw.Draw(canvas, canvas.Bounds(), image.NewUniform(palette[data[11]]), image.Point{}, draw.Src)
 			}
-			draw.Draw(canvas, img.Bounds(), img, img.Bounds().Min, draw.Over)
+			draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
 			var buf bytes.Buffer
 			if err := png.Encode(&buf, canvas); err == nil {
 				return "image/png", buf.Bytes()
@@ -479,4 +480,17 @@ func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 		}
 	}
 	return mimeType, data
+}
+
+// decodeGIFFrame 解码 GIF 的首帧与逻辑画布配置
+func decodeGIFFrame(data []byte) (*image.Paletted, image.Config, bool) {
+	img, err := gif.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, image.Config{}, false
+	}
+	config, err := gif.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, image.Config{}, false
+	}
+	return img.(*image.Paletted), config, true
 }

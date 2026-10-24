@@ -209,23 +209,23 @@ func (p *AccountPool) accountSupportsAnyChannelLocked(account *Account, selectio
 	return false
 }
 
-// accountChannelCooldownLocked 返回账户全部支持通道都冷却时的最早恢复时间
-func (p *AccountPool) accountChannelCooldownLocked(account *Account, selection AccountSelection, now time.Time) (time.Time, bool) {
+// accountChannelCooldownLocked 返回账户全部支持通道都冷却时最早恢复的冷却
+func (p *AccountPool) accountChannelCooldownLocked(account *Account, selection AccountSelection, now time.Time) (CooldownState, bool) {
 	scope := selectionAccessScope(selection)
-	var earliest time.Time
+	var earliest CooldownState
 	for _, channel := range p.selectionChannelsLocked(selection) {
 		if !p.channelSupportsLocked(account, channel, selection) {
 			continue
 		}
 		cooldown, active := accountCooldown(account, ChannelCooldownScope(channel, scope), now)
 		if !active {
-			return time.Time{}, false
+			return CooldownState{}, false
 		}
-		if earliest.IsZero() || cooldown.Until.Before(earliest) {
-			earliest = cooldown.Until
+		if earliest.Until.IsZero() || cooldown.Until.Before(earliest.Until) {
+			earliest = cooldown
 		}
 	}
-	return earliest, !earliest.IsZero()
+	return earliest, !earliest.Until.IsZero()
 }
 
 // channelCandidatesLocked 按账户 ID 与通道顺序展开候选，轮询策略从上次选中组合之后开始

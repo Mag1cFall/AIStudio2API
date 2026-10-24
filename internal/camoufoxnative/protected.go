@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,56 +23,98 @@ type ProtectedResponse struct {
 	Body       io.ReadCloser
 }
 
-type protectedResponseMetadata struct {
+// protectedMessage 是受保护请求通道上以 { 开头的控制消息：先是状态码与响应头，之后是结束标记或错误；其余消息为 Base64 正文块
+type protectedMessage struct {
 	Status  int         `json:"status"`
 	Headers [][2]string `json:"headers"`
+	Done    bool        `json:"done"`
 	Error   string      `json:"error"`
 }
 
-type protectedChunk struct {
-	Data  []string `json:"data"`
-	Done  bool     `json:"done"`
-	Error string   `json:"error"`
-}
+// protectedGrantBatch 是 Go 端每消费多少个正文块向页面授予一次额度，页面的初始额度为它的两倍
+const protectedGrantBatch = 4
 
-// protectedFetch 是页面内发起受保护请求并分块缓存响应的函数声明，参数依次为请求 ID、URL、请求头 JSON 与正文
-const protectedFetch = `(id, url, headers, body) => {
-  const requests = window.__aistudioProtectedRequests ||= new Map();
-  const state = {controller: new AbortController(), status: 0, headers: [], chunks: [], done: false, error: ""};
-  requests.set(id, state);
+// protectedSend 是页面内以官网页面同样的 XMLHttpRequest 发起受保护请求并经通道依次发出响应头、正文块与结束标记的函数声明，参数依次为 Worker 页面对象、请求 ID、URL、请求头 JSON、正文与通道；响应文本按 65536 个 UTF-16 码元分块、以 UTF-8 发出，每块消耗一份 Go 端授予的额度
+const protectedSend = `(page, id, url, headers, body, emit) => {
+  const xhr = new XMLHttpRequest();
+  const request = {xhr, credit: 8, resume: null};
+  (page.requests ||= new Map()).set(id, request);
+  let loaded = false, failure = "", wake = null;
+  const changed = () => {
+    wake?.();
+    wake = null;
+  };
+  const next = () => new Promise(resolve => wake = resolve);
+  xhr.open("POST", url);
+  xhr.withCredentials = true;
+  for (const [name, value] of JSON.parse(headers)) xhr.setRequestHeader(name, value);
+  xhr.onreadystatechange = xhr.onprogress = changed;
+  xhr.onload = () => {
+    loaded = true;
+    changed();
+  };
+  xhr.onerror = () => {
+    failure = "NetworkError when attempting to fetch resource.";
+    changed();
+  };
+  xhr.onabort = () => {
+    failure = "AbortError: The operation was aborted.";
+    changed();
+    request.resume?.();
+  };
+  xhr.send(body);
   (async () => {
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: JSON.parse(headers),
-        body,
-        credentials: "include",
-        signal: state.controller.signal
-      });
-      state.status = response.status;
-      state.headers = [...response.headers.entries()];
-      if (!response.body) return;
-      const reader = response.body.getReader();
-      for (;;) {
-        const {value, done} = await reader.read();
-        while (state.chunks.length >= 8) {
-          if (state.controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-          await new Promise(resolve => setTimeout(resolve, 5));
+      while (xhr.readyState < 2 && !failure) await next();
+      if (failure) throw new Error(failure);
+      const lines = xhr.getAllResponseHeaders().split(/\r\n/).filter(Boolean);
+      emit(JSON.stringify({status: xhr.status, headers: lines.map(line => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()])}));
+      const encoder = new TextEncoder();
+      for (let sent = 0;;) {
+        const text = xhr.responseText;
+        if (sent < text.length) {
+          while (request.credit <= 0 && !failure) await new Promise(resolve => request.resume = resolve);
+          if (failure) throw new Error(failure);
+          let end = Math.min(text.length, sent + 65536);
+          if (end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
+          const block = encoder.encode(text.slice(sent, end));
+          let binary = "";
+          for (let start = 0; start < block.length; start += 32768) {
+            binary += String.fromCharCode(...block.subarray(start, start + 32768));
+          }
+          emit(btoa(binary));
+          request.credit--;
+          sent = end;
+          continue;
         }
-        if (done) break;
-        let binary = "";
-        for (let offset = 0; offset < value.length; offset += 32768) {
-          binary += String.fromCharCode(...value.subarray(offset, offset + 32768));
-        }
-        state.chunks.push(btoa(binary));
+        if (failure) throw new Error(failure);
+        if (loaded) break;
+        await next();
       }
+      emit(JSON.stringify({done: true}));
     } catch (error) {
-      state.error = String(error);
+      emit(JSON.stringify({error: String(error)}));
     } finally {
-      state.done = true;
+      page.requests.delete(id);
     }
   })();
-  return true;
+}`
+
+// protectedCancel 是中止并删除受保护请求的函数声明
+const protectedCancel = `(page, id) => {
+  const request = page.requests?.get(id);
+  request?.xhr.abort();
+  request?.resume?.();
+  page.requests?.delete(id);
+}`
+
+// protectedGrant 是为受保护请求增加正文块额度并唤醒等待中的读取的函数声明
+const protectedGrant = `(page, id, count) => {
+  const request = page.requests?.get(id);
+  if (!request) return;
+  request.credit += Number(count);
+  request.resume?.();
+  request.resume = null;
 }`
 
 // SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹
@@ -86,6 +129,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	}
 	client := worker.client
 	contextID := worker.contextID
+	page := worker.page
 	worker.mu.Unlock()
 
 	encodedHeaders, err := json.Marshal(browserRequestHeaders(headers))
@@ -93,15 +137,22 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
 	}
 	requestID := rand.Text()
-	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
-	err = client.callFunction(startCtx, contextID, protectedFetch, requestID, rawURL, string(encodedHeaders), string(body))
+	channel, err := client.openChannel(requestID)
+	if err != nil {
+		return nil, fmt.Errorf("浏览器发送受保护请求: %w", err)
+	}
+	startCtx, cancelStart := context.WithTimeout(ctx, 5*time.Second)
+	_, err = client.callFunction(startCtx, contextID, protectedSend, page, requestID, rawURL, string(encodedHeaders), string(body), bidiChannelArgument(requestID))
 	cancelStart()
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("浏览器发送受保护请求: %w", err), worker.cancelProtectedRequest(requestID))
+		return nil, worker.abandonProtectedRequest(ctx, requestID, fmt.Errorf("浏览器发送受保护请求: %w", err))
 	}
-	metadata, err := worker.waitProtectedHeaders(ctx, requestID)
+	metadata, err := readProtectedMessage(ctx, channel)
+	if err == nil && metadata.Error != "" {
+		err = errors.New(metadata.Error)
+	}
 	if err != nil {
-		return nil, errors.Join(err, worker.cancelProtectedRequest(requestID))
+		return nil, worker.abandonProtectedRequest(ctx, requestID, err)
 	}
 	responseHeaders := make(http.Header, len(metadata.Headers)+1)
 	for _, pair := range metadata.Headers {
@@ -115,42 +166,22 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 		StatusCode: metadata.Status,
 		Header:     responseHeaders,
 		Body: &protectedResponseBody{
-			ctx: bodyCtx, cancel: cancelBody, worker: worker, requestID: requestID,
+			ctx: bodyCtx, cancel: cancelBody, worker: worker, requestID: requestID, channel: channel,
 		},
 	}, nil
 }
 
-// waitProtectedHeaders 通过短命令读取异步请求的响应头
-func (worker *Worker) waitProtectedHeaders(ctx context.Context, requestID string) (protectedResponseMetadata, error) {
-	encodedID, _ := json.Marshal(requestID)
-	expression := fmt.Sprintf(`(() => {
-  const state = window.__aistudioProtectedRequests.get(%s);
-  return JSON.stringify({status: state.status, headers: state.headers, error: state.error});
-})()`, encodedID)
-	for {
-		if err := ctx.Err(); err != nil {
-			return protectedResponseMetadata{}, err
-		}
-		pollCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		value, err := worker.client.evaluateString(pollCtx, worker.contextID, expression)
-		cancel()
-		if err != nil {
-			return protectedResponseMetadata{}, err
-		}
-		var metadata protectedResponseMetadata
-		if err := json.Unmarshal([]byte(value), &metadata); err != nil {
-			return metadata, fmt.Errorf("解析浏览器响应元数据: %w", err)
-		}
-		if metadata.Status > 0 {
-			return metadata, nil
-		}
-		if metadata.Error != "" {
-			return metadata, errors.New(metadata.Error)
-		}
-		if err := waitContext(ctx, 10*time.Millisecond); err != nil {
-			return metadata, err
-		}
+// readProtectedMessage 等待受保护请求通道上的下一条控制消息
+func readProtectedMessage(ctx context.Context, channel *bidiChannel) (protectedMessage, error) {
+	value, err := channel.next(ctx)
+	if err != nil {
+		return protectedMessage{}, err
 	}
+	var message protectedMessage
+	if err := json.Unmarshal([]byte(value), &message); err != nil {
+		return message, fmt.Errorf("解析浏览器响应消息: %w", err)
+	}
+	return message, nil
 }
 
 func browserRequestHeaders(headers http.Header) [][2]string {
@@ -211,11 +242,13 @@ type protectedResponseBody struct {
 	cancel    context.CancelFunc
 	worker    *Worker
 	requestID string
+	channel   *bidiChannel
 
-	mu     sync.Mutex
-	buffer []byte
-	done   bool
-	closed bool
+	mu       sync.Mutex
+	buffer   []byte
+	consumed int
+	done     bool
+	closed   bool
 }
 
 func (body *protectedResponseBody) Read(target []byte) (int, error) {
@@ -225,33 +258,37 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	for len(body.buffer) == 0 && !body.done {
+		value, err := body.channel.next(body.ctx)
 		if err := body.ctx.Err(); err != nil {
 			return 0, err
 		}
-		chunk, err := body.worker.readProtectedChunk(body.ctx, body.requestID)
 		if err != nil {
 			body.done = true
 			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.requestID))
 		}
-		if chunk.Error != "" {
-			body.done = true
-			return 0, errors.Join(errors.New(chunk.Error), body.worker.cancelProtectedRequest(body.requestID))
-		}
-		for _, data := range chunk.Data {
-			body.buffer, err = base64.StdEncoding.AppendDecode(body.buffer, []byte(data))
+		if !strings.HasPrefix(value, "{") {
+			body.buffer, err = base64.StdEncoding.AppendDecode(body.buffer, []byte(value))
 			if err != nil {
 				return 0, fmt.Errorf("解码浏览器响应块: %w", err)
 			}
-		}
-		body.done = chunk.Done
-		if len(body.buffer) == 0 && !body.done {
-			timer := time.NewTimer(10 * time.Millisecond)
-			select {
-			case <-body.ctx.Done():
-				timer.Stop()
-				return 0, body.ctx.Err()
-			case <-timer.C:
+			if body.consumed++; body.consumed == protectedGrantBatch {
+				body.consumed = 0
+				if _, err := body.worker.client.callFunction(body.ctx, body.worker.contextID, protectedGrant, body.worker.page, body.requestID, strconv.Itoa(protectedGrantBatch)); err != nil {
+					return 0, fmt.Errorf("浏览器继续读取受保护响应: %w", err)
+				}
 			}
+			continue
+		}
+		var message protectedMessage
+		if err := json.Unmarshal([]byte(value), &message); err != nil {
+			return 0, fmt.Errorf("解析浏览器响应消息: %w", err)
+		}
+		if message.Error != "" || message.Done {
+			body.done = true
+			body.worker.client.closeChannel(body.requestID)
+		}
+		if message.Error != "" {
+			return 0, errors.New(message.Error)
 		}
 	}
 	if len(body.buffer) == 0 {
@@ -278,39 +315,20 @@ func (body *protectedResponseBody) Close() error {
 	return body.worker.cancelProtectedRequest(body.requestID)
 }
 
-func (worker *Worker) readProtectedChunk(ctx context.Context, requestID string) (protectedChunk, error) {
-	encodedID, _ := json.Marshal(requestID)
-	expression := fmt.Sprintf(`(() => {
-  const state = window.__aistudioProtectedRequests?.get(%s);
-  if (!state) return JSON.stringify({done: true});
-  const data = state.chunks.splice(0);
-  const done = state.done && state.chunks.length === 0;
-  const error = state.error;
-  if (done) window.__aistudioProtectedRequests.delete(%s);
-  return JSON.stringify({data, done, error});
-})()`, encodedID, encodedID)
-	value, err := worker.client.evaluateString(ctx, worker.contextID, expression)
-	if err != nil {
-		return protectedChunk{}, err
+// abandonProtectedRequest 在受保护请求出错时中止页面请求并返回 err，请求已取消时在后台中止，不等待忙碌的页面
+func (worker *Worker) abandonProtectedRequest(ctx context.Context, requestID string, err error) error {
+	if ctx.Err() != nil {
+		go func() { _ = worker.cancelProtectedRequest(requestID) }()
+		return err
 	}
-	var chunk protectedChunk
-	if err := json.Unmarshal([]byte(value), &chunk); err != nil {
-		return protectedChunk{}, fmt.Errorf("解析浏览器响应块: %w", err)
-	}
-	return chunk, nil
+	return errors.Join(err, worker.cancelProtectedRequest(requestID))
 }
 
+// cancelProtectedRequest 注销通道并在页面中中止受保护请求
 func (worker *Worker) cancelProtectedRequest(requestID string) error {
-	encodedID, _ := json.Marshal(requestID)
-	expression := fmt.Sprintf(`(() => {
-  const state = window.__aistudioProtectedRequests?.get(%s);
-  if (!state) return true;
-  state.controller.abort();
-  window.__aistudioProtectedRequests.delete(%s);
-  return true;
-})()`, encodedID, encodedID)
+	worker.client.closeChannel(requestID)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := worker.client.evaluateBool(ctx, worker.contextID, expression)
+	_, err := worker.client.callFunction(ctx, worker.contextID, protectedCancel, worker.page, requestID)
 	return err
 }

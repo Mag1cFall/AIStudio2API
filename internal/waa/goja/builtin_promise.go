@@ -39,11 +39,10 @@ type promiseCapability struct {
 }
 
 type promiseReaction struct {
-	capability  *promiseCapability
-	typ         promiseReactionType
-	handler     *jobCallback
-	asyncRunner *asyncRunner
-	asyncCtx    interface{}
+	capability *promiseCapability
+	typ        promiseReactionType
+	handler    *jobCallback
+	asyncCtx   interface{}
 }
 
 var typePromise = reflect.TypeOf((*Promise)(nil))
@@ -342,9 +341,11 @@ func (r *Runtime) promiseProto_catch(call FunctionCall) Value {
 
 func (r *Runtime) promiseResolve(c *Object, x Value) *Object {
 	if obj, ok := x.(*Object); ok {
-		xConstructor := nilSafe(obj.self.getStr("constructor", nil))
-		if xConstructor.SameAs(c) {
-			return obj
+		if _, ok := obj.self.(*Promise); ok {
+			xConstructor := nilSafe(obj.self.getStr("constructor", nil))
+			if xConstructor.SameAs(c) {
+				return obj
+			}
 		}
 	}
 	pcap := r.newPromiseCapability(c)

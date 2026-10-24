@@ -1,5 +1,6 @@
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 import type { Model } from '@/types'
+import { base64Bytes } from './bytes'
 import {
   errorMessage,
   StreamError,
@@ -732,7 +733,7 @@ function imagesCall(
   images.forEach((image, index) =>
     form.append(
       'image[]',
-      new Blob([Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0))], {
+      new Blob([base64Bytes(image.data)], {
         type: image.mimeType,
       }),
       fileName(image.mimeType, index),

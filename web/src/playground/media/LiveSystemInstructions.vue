@@ -16,7 +16,11 @@ interface Preset {
 
 const open = defineModel<boolean>('open', { required: true })
 const text = defineModel<string>('text', { required: true })
+// locked 表示会话进行中，指令只读
+const props = defineProps<{ locked: boolean }>()
 const { t } = useI18n()
+// lockedTip 是会话进行中编辑区的官网提示
+const lockedTip = computed(() => (props.locked ? t('pg.liveSystemLocked') : ''))
 
 // presetsKey 是系统指令预设的本机存储键，与对话页相同
 const presetsKey = 'playground_system_instructions'
@@ -105,6 +109,7 @@ watch(open, (value) => {
       <UiSelect
         :model-value="selected"
         class="w-full"
+        :disabled="locked"
         :aria-label="t('pg.systemPresets')"
         @update:model-value="choose"
       >
@@ -117,26 +122,29 @@ watch(open, (value) => {
         <input
           v-model="title"
           ms-input
+          :disabled="locked"
           :placeholder="t('pg.title')"
           :aria-label="t('pg.title')"
           @input="remember"
         />
         <button
-          v-tooltip.below="t('common.delete')"
+          v-tooltip.below="lockedTip || t('common.delete')"
           type="button"
           ms-button
           class="ms-button-icon"
           :aria-label="t('common.delete')"
-          :aria-disabled="currentPreset === undefined"
-          @click="currentPreset && remove()"
+          :aria-disabled="currentPreset === undefined || locked"
+          @click="currentPreset && !locked && remove()"
         >
           <UiIcon name="delete" :size="18" />
         </button>
       </div>
       <textarea
         v-model="text"
+        v-tooltip="lockedTip"
         ms-input
         class="instructions"
+        :disabled="locked"
         :placeholder="t('pg.systemPlaceholder')"
         :aria-label="t('pg.systemInstructions')"
         @input="remember"

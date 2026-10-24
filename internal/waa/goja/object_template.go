@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 type templatePropFactory func(*Runtime) Value
@@ -41,6 +42,71 @@ type templatedFuncObject struct {
 // uses Array.prototype as an actual array.
 type templatedArrayObject struct {
 	templatedObject
+}
+
+// TemplateProperty 是对象模板按需生成的属性，Accessor 为真时取 Getter 与 Setter
+type TemplateProperty struct {
+	Value          Value
+	Getter, Setter *Object
+	Accessor       bool
+	Writable       bool
+	Enumerable     bool
+	Configurable   bool
+}
+
+// ObjectTemplate 是按键顺序在首次访问时生成属性的对象模板，可在多个 Runtime 间共享
+type ObjectTemplate struct {
+	tmpl *objectTemplate
+}
+
+// wellKnownSymbols 按名称索引 well-known Symbol
+var wellKnownSymbols = map[string]*Symbol{
+	"hasInstance": SymHasInstance, "isConcatSpreadable": SymIsConcatSpreadable, "iterator": SymIterator,
+	"match": SymMatch, "matchAll": SymMatchAll, "replace": SymReplace, "search": SymSearch, "species": SymSpecies,
+	"split": SymSplit, "toPrimitive": SymToPrimitive, "toStringTag": SymToStringTag, "unscopables": SymUnscopables,
+	"asyncIterator": SymAsyncIterator, "dispose": SymDispose, "asyncDispose": SymAsyncDispose,
+}
+
+// NewObjectTemplate 以 id 与键顺序创建对象模板，以 @@ 开头的键为同名 well-known Symbol；属性由所在 Runtime 的模板解析函数按键的序号生成
+func NewObjectTemplate(id string, keys []string) *ObjectTemplate {
+	t := newObjectTemplate()
+	for index, key := range keys {
+		factory := func(r *Runtime) Value { return r.templateResolver(id, index).value() }
+		if name, ok := strings.CutPrefix(key, "@@"); ok {
+			t.putSym(wellKnownSymbols[name], factory)
+		} else {
+			t.putStr(unistring.NewFromString(key), factory)
+		}
+	}
+	return &ObjectTemplate{tmpl: t}
+}
+
+// value 把模板属性转为对象中保存的属性值
+func (p TemplateProperty) value() Value {
+	if p.Accessor {
+		return &valueProperty{accessor: true, getterFunc: p.Getter, setterFunc: p.Setter, enumerable: p.Enumerable, configurable: p.Configurable}
+	}
+	value := p.Value
+	if value == nil {
+		value = _undefined
+	}
+	if p.Writable && p.Enumerable && p.Configurable {
+		return value
+	}
+	return &valueProperty{value: value, writable: p.Writable, enumerable: p.Enumerable, configurable: p.Configurable}
+}
+
+// SetTemplateResolver 设置本 Runtime 生成模板属性的函数
+func (r *Runtime) SetTemplateResolver(resolve func(id string, index int) TemplateProperty) {
+	r.templateResolver = resolve
+}
+
+// NewTemplatedObject 以模板与原型创建对象
+func (r *Runtime) NewTemplatedObject(t *ObjectTemplate, proto *Object) *Object {
+	o := r.newTemplatedObject(t.tmpl, nil)
+	o.prototype = proto
+	o.protoMaterialised = true
+	return o.val
 }
 
 func newObjectTemplate() *objectTemplate {

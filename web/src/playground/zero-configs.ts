@@ -1,5 +1,5 @@
 import type { Model, ThinkingLevel } from '@/types'
-import { hasCode } from './catalog'
+import { Capability, hasCode } from './catalog'
 
 // ZeroStarter 是对话空态的示例提示词：可带参考图片、思考档位与开启的工具
 export interface ZeroStarter {
@@ -243,7 +243,9 @@ export const zeroConfigs: ZeroConfig[] = [
       !model.id.includes('nano-banana-2.1') &&
       !model.id.includes('flash-lite-image') &&
       !model.id.includes('nano-banana-lite') &&
-      (hasCode(model, 21) || model.id.includes('image') || model.id.includes('nano-banana')),
+      (hasCode(model, Capability.ImageRoute) ||
+        model.id.includes('image') ||
+        model.id.includes('nano-banana')),
   },
   {
     id: 'flash-lite',

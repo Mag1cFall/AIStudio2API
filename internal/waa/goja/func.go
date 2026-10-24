@@ -429,6 +429,7 @@ func (f *baseJsFuncObject) __call(args []Value, newTarget, this Value) (Value, *
 
 	vm.args = len(args)
 	vm.prg = f.prg
+	f.prg.enterFunction()
 	vm.stash = f.stash
 	vm.privEnv = f.privEnv
 	vm.newTarget = newTarget
@@ -487,6 +488,7 @@ func (f *baseJsFuncObject) vmCall(vm *vm, n int) {
 	f.val.runtime.instantiate(f.prg, false)
 	vm.args = n
 	vm.prg = f.prg
+	f.prg.enterFunction()
 	vm.stash = f.stash
 	vm.privEnv = f.privEnv
 	vm.pc = 0
@@ -503,6 +505,7 @@ func (f *arrowFuncObject) vmCall(vm *vm, n int) {
 	f.val.runtime.instantiate(f.prg, false)
 	vm.args = n
 	vm.prg = f.prg
+	f.prg.enterFunction()
 	vm.stash = f.stash
 	vm.privEnv = f.privEnv
 	vm.pc = 0
@@ -696,10 +699,6 @@ type asyncRunner struct {
 }
 
 func (ar *asyncRunner) onFulfilled(call FunctionCall) Value {
-	ar.gen.vm.curAsyncRunner = ar
-	defer func() {
-		ar.gen.vm.curAsyncRunner = nil
-	}()
 	arg := call.Argument(0)
 	res, resType, ex := ar.gen.next(arg)
 	ar.step(res, resType == resultNormal, ex)
@@ -707,10 +706,6 @@ func (ar *asyncRunner) onFulfilled(call FunctionCall) Value {
 }
 
 func (ar *asyncRunner) onRejected(call FunctionCall) Value {
-	ar.gen.vm.curAsyncRunner = ar
-	defer func() {
-		ar.gen.vm.curAsyncRunner = nil
-	}()
 	reason := call.Argument(0)
 	res, resType, ex := ar.gen.nextThrow(reason)
 	ar.step(res, resType == resultNormal, ex)
@@ -731,13 +726,11 @@ func (ar *asyncRunner) step(res Value, done bool, ex *Exception) {
 	// await
 	promise := r.promiseResolve(r.getPromise(), res)
 	promise.self.(*Promise).addReactions(&promiseReaction{
-		typ:         promiseReactionFulfill,
-		handler:     &jobCallback{callback: ar.onFulfilled},
-		asyncRunner: ar,
+		typ:     promiseReactionFulfill,
+		handler: &jobCallback{callback: ar.onFulfilled},
 	}, &promiseReaction{
-		typ:         promiseReactionReject,
-		handler:     &jobCallback{callback: ar.onRejected},
-		asyncRunner: ar,
+		typ:     promiseReactionReject,
+		handler: &jobCallback{callback: ar.onRejected},
 	})
 }
 
@@ -826,6 +819,8 @@ func (g *generator) step() (res Value, resultType resultType, ex *Exception) {
 					// The exception was thrown in the outermost finally block, it never got to leaveFinally
 					// which does popTryFrame()
 					vm.popTryFrame()
+					vm.sp = vm.sb - 1
+					vm.callStack = vm.callStack[:len(vm.callStack)-1]
 				}
 				return
 			}

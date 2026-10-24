@@ -25,6 +25,8 @@
   const singletons = Object.create(null);
   const getterCache = new Map();
   const promiseMembers = new Set(shape.promises || []);
+  // overloaded 是参数不足时按重载报错的方法
+  const overloaded = new Set(['Window.postMessage']);
   const pending = () => new Promise(() => {});
   const define = Object.defineProperty;
   const keyOf = name => name.startsWith('@@') ? Symbol[name.slice(2)] : name;
@@ -48,7 +50,7 @@
     return false;
   };
   const brandCheck = (self, iface) => {
-    if ((self === undefined || self === null) && iface === 'Window') self = g;
+    if (self === undefined || self === null) self = g;
     const brand = self !== null && (typeof self === 'object' || typeof self === 'function') ? brands.get(self) : undefined;
     return brand && isA(brand.iface, iface) ? brand : null;
   };
@@ -86,6 +88,7 @@
     }
   };
   const plainObject = tag => {
+    if (tag === 'Array') return [];
     const object = {};
     if (tag && tag !== 'Object') define(object, Symbol.toStringTag, { configurable: true, value: tag });
     return object;
@@ -124,9 +127,11 @@
   const write = (self, brand, name, value, declared) => {
     const special = (declared && setters[declared + '.' + name]) || setters[brand.iface + '.' + name] || setters['*.' + name];
     if (special) return special.call(self, brand, value);
+    if (/^on[a-z]+$/.test(name) && !brand.owner) return setEventHandler(brand, name, value);
     const encoded = Object.prototype.hasOwnProperty.call(brand.values, name) ? brand.values[name] : defaultFor(brand.iface, name);
     brand.over[name] = coerceLike(encoded, value);
     brand.cache.delete(name);
+    if (brand.owner) (brand.owner.attrs || (brand.owner.attrs = new Map())).set('style', inlineStyle(brand));
   };
   const invoke = (self, brand, iface, name, args) => {
     const implementation = methods[iface + '.' + name] || methods['*.' + name];
@@ -139,8 +144,8 @@
     const name = entry.n;
     const promise = promiseMembers.has(iface + '.' + name + ':get');
     const getter = promise
-      ? Object.getOwnPropertyDescriptor({ get [name]() { const brand = brandCheck(this, iface); if (!brand) return Promise.reject(brandError(iface, entry.g)); const value = read(this, brand, name, iface); return value === undefined ? pending() : value; } }, name).get
-      : Object.getOwnPropertyDescriptor({ get [name]() { return read(this === undefined && iface === 'Window' ? g : this, brandOf(this, iface, entry.g), name, iface); } }, name).get;
+      ? Object.getOwnPropertyDescriptor({ get [name]() { const self = this == null ? g : this; const brand = brandCheck(self, iface); if (!brand) return Promise.reject(brandError(iface, entry.g)); const value = read(self, brand, name, iface); return host.kindOf(value) === 'Promise' ? value : pending(); } }, name).get
+      : Object.getOwnPropertyDescriptor({ get [name]() { const self = this == null ? g : this; return read(self, brandOf(self, iface, entry.g), name, iface); } }, name).get;
     native(getter, entry.g, name);
     setLength(getter, entry.gl || 0);
     getterCache.set(cacheKey, getter);
@@ -150,46 +155,80 @@
     const cacheKey = 's:' + iface + ':' + entry.n;
     if (getterCache.has(cacheKey)) return getterCache.get(cacheKey);
     const name = entry.n;
-    const setter = Object.getOwnPropertyDescriptor({ set [name](value) { const self = this === undefined && iface === 'Window' ? g : this; write(self, brandOf(this, iface, entry.s), name, value, iface); } }, name).set;
+    const setter = Object.getOwnPropertyDescriptor({ set [name](value) { const self = this == null ? g : this; write(self, brandOf(self, iface, entry.s), name, value, iface); } }, name).set;
     native(setter, entry.s, name);
     setLength(setter, entry.sl === undefined ? 1 : entry.sl);
     getterCache.set(cacheKey, setter);
     return setter;
   };
-  const makeMethod = (iface, entry) => {
+  // arityError 在实参少于 WebIDL 必需参数时返回 Firefox 的 TypeError，页面替换过的方法不检查
+  const arityError = (iface, member, entry, args) => {
+    const required = entry.nat === false ? 0 : entry.l || 0;
+    if (args.length >= required) return null;
+    if (overloaded.has(iface + '.' + member)) return new TypeError(iface + '.' + member + ': ' + args.length + ' is not a valid argument count for any overload.');
+    return new TypeError(iface + '.' + member + ': At least ' + required + (required === 1 ? ' argument' : ' arguments') + ' required, but only ' + args.length + ' passed');
+  };
+  // makeStaticGetter 生成接口构造器上的静态 getter，不做 this 品牌检查
+  const makeStaticGetter = (iface, entry) => {
     const name = entry.n;
-    if (name === '@@iterator' && (entry.fn === 'values' || entry.fn === 'entries')) return entry.fn === 'values' ? Array.prototype.values : Array.prototype.entries;
-    const key = keyOf(name);
-    const member = typeof key === 'symbol' ? entry.fn : name;
-    const promise = promiseMembers.has(iface + '.' + name);
-    const method = promise
-      ? ({ [member](...args) { const brand = brandCheck(this, iface); if (!brand) return Promise.reject(brandError(iface, member)); const value = invoke(this, brand, iface, member, args); return value === undefined ? pending() : value; } })[member]
-      : ({ [member](...args) { const self = this === undefined && iface === 'Window' ? g : this; return invoke(self, brandOf(this, iface, member), iface, member, args); } })[member];
+    const getter = Object.getOwnPropertyDescriptor({ get [name]() { const implementation = getters[iface + '.' + name + ':static']; return implementation ? implementation() : undefined; } }, name).get;
+    native(getter, entry.g, name);
+    setLength(getter, entry.gl || 0);
+    return getter;
+  };
+  // makeStatic 生成接口构造器上的静态方法，不做 this 品牌检查
+  const makeStatic = (iface, entry) => {
+    const member = entry.n;
+    const method = ({ [member](...args) {
+      const error = arityError(iface, member, entry, args);
+      if (error) throw error;
+      const implementation = methods[iface + '.' + member + ':static'];
+      return implementation ? implementation.call(this, null, args) : undefined;
+    } })[member];
     nativeFunction(entry.fn || member, method);
     setLength(method, entry.l || 0);
     return method;
   };
-  const installEntry = (target, iface, entry, ctor) => {
-    const key = keyOf(entry.n);
-    if (key === undefined) return;
-    const flags = entry.f || '';
-    if (entry.err) return;
-    if (entry.k === 'i') {
-      if (entry.n === 'constructor') define(target, 'constructor', { configurable: has(flags, 'c'), enumerable: has(flags, 'e'), writable: has(flags, 'w'), value: ctor });
-      return;
-    }
-    if (entry.k === 'v') {
-      define(target, key, { configurable: has(flags, 'c'), enumerable: has(flags, 'e'), writable: has(flags, 'w'), value: entry.v.t === 'ref' || entry.v.t === 'o' ? undefined : decode(entry.v) });
-      return;
-    }
-    if (entry.k === 'm') {
-      define(target, key, { configurable: has(flags, 'c'), enumerable: has(flags, 'e'), writable: has(flags, 'w'), value: makeMethod(iface, entry) });
-      return;
-    }
-    if (entry.k === 'a') {
-      define(target, key, { configurable: has(flags, 'c'), enumerable: has(flags, 'e'), get: entry.g ? makeGetter(iface, entry) : undefined, set: entry.s ? makeSetter(iface, entry) : undefined });
-    }
+  const makeMethod = (iface, entry) => {
+    const name = entry.n;
+    if (name === '@@iterator' && entry.fn === 'values') return Array.prototype.values;
+    if (name === '@@iterator' && entry.fn === 'entries') return makeMethod(iface, { n: 'entries', f: entry.f, k: 'm', l: 0, fn: 'entries', nat: true });
+    const cacheKey = 'm:' + iface + ':' + name;
+    if (name === 'entries' && getterCache.has(cacheKey)) return getterCache.get(cacheKey);
+    const key = keyOf(name);
+    const member = typeof key === 'symbol' ? entry.fn : name;
+    const promise = promiseMembers.has(iface + '.' + name);
+    const arity = args => arityError(iface, member, entry, args);
+    const method = promise
+      ? ({ [member](...args) { const self = this == null ? g : this; const brand = brandCheck(self, iface); if (!brand) return Promise.reject(brandError(iface, member)); const error = arity(args); if (error) return Promise.reject(error); const value = invoke(self, brand, iface, member, args); return value === undefined ? pending() : value; } })[member]
+      : ({ [member](...args) { const self = this == null ? g : this; const brand = brandOf(self, iface, member); const error = arity(args); if (error) throw error; return invoke(self, brand, iface, member, args); } })[member];
+    nativeFunction(entry.fn || member, method);
+    setLength(method, entry.l || 0);
+    if (name === 'entries') getterCache.set(cacheKey, method);
+    return method;
   };
+  // installable 判断形状表条目是否在目标对象上定义属性
+  const installable = entry => keyOf(entry.n) !== undefined && !entry.err && (entry.k === 'v' || entry.k === 'm' || entry.k === 'a' || (entry.k === 'i' && entry.n === 'constructor'));
+  // entryDescriptor 返回可安装条目在 target 上的属性描述符
+  const entryDescriptor = (target, iface, entry, ctor) => {
+    const flags = entry.f || '';
+    const configurable = has(flags, 'c'), enumerable = has(flags, 'e'), writable = has(flags, 'w');
+    if (entry.k === 'i') return { configurable, enumerable, writable, value: ctor };
+    if (entry.k === 'v') return { configurable, enumerable, writable, value: entry.v.t === 'ref' || entry.v.t === 'o' ? undefined : decode(entry.v) };
+    if (entry.k === 'm') return { configurable, enumerable, writable, value: target === ctor ? makeStatic(iface, entry) : makeMethod(iface, entry) };
+    return { configurable, enumerable, get: entry.g ? (target === ctor ? makeStaticGetter(iface, entry) : makeGetter(iface, entry)) : undefined, set: entry.s ? makeSetter(iface, entry) : undefined };
+  };
+  const installEntry = (target, iface, entry, ctor) => {
+    if (installable(entry)) define(target, keyOf(entry.n), entryDescriptor(target, iface, entry, ctor));
+  };
+  // templateEntries 保存各接口原型按需生成的条目，与模板键顺序一致
+  const templateEntries = Object.create(null);
+  // templateProperty 生成接口原型模板中第 index 个成员，返回是否访问器、值、getter、setter 与三个属性标志
+  const templateProperty = (iface, index) => {
+    const descriptor = entryDescriptor(protos[iface], iface, templateEntries[iface][index], ctors[iface]);
+    return ['get' in descriptor, descriptor.value, descriptor.get, descriptor.set, Boolean(descriptor.writable), descriptor.enumerable, descriptor.configurable];
+  };
+  host.setTemplateResolver(templateProperty);
   let quietCreate = 0;
   const exposed = value => {
     if (host.resolveInterface && value !== null && typeof value === 'object') {
@@ -207,7 +246,7 @@
     if (brand.iface === 'Storage') return storageProxy(object, brand);
     brands.set(object, brand);
     let own = shape.own[iface];
-    for (let current = parentOf[iface]; !own && current; current = parentOf[current]) own = shape.own[current];
+    for (let current = parentOf[iface]; !own && current && !ES.has(current); current = parentOf[current]) own = shape.own[current];
     if (own) for (const entry of own) installEntry(object, brand.iface, entry, null);
     return object;
   };
@@ -247,11 +286,11 @@
       protos[info.n] = g[info.n].prototype;
       continue;
     }
-    const proto = Object.create(info.pp && protos[info.pp] ? protos[info.pp] : Object.prototype);
+    templateEntries[info.cn] = info.pr.filter(installable);
+    const proto = host.templatedObject(info.cn, templateEntries[info.cn].map(entry => entry.n), info.pp && protos[info.pp] ? protos[info.pp] : Object.prototype);
     const ctor = makeConstructor(info, proto);
     if (info.p && ctors[info.p]) Object.setPrototypeOf(ctor, ctors[info.p]);
     for (const entry of info.st) installEntry(ctor, info.cn, entry, ctor);
-    for (const entry of info.pr) installEntry(proto, info.cn, entry, ctor);
     ctors[info.n] = ctor;
     protos[info.n] = proto;
   }
@@ -275,6 +314,7 @@
   const existing = Object.create(null);
   for (const key of Reflect.ownKeys(g)) existing[typeof key === 'symbol' ? '@@' + key.description.replace(/^Symbol\./, '') : key] = Object.getOwnPropertyDescriptor(g, key);
   const keep = Object.create(null);
+  const pageGlobals = profile.globals || {};
   for (const entry of realmShape.global) {
     const name = entry.n;
     if (/^\d+$/.test(name) || name === 'undefined' || name === 'NaN' || name === 'Infinity') continue;
@@ -302,7 +342,8 @@
     }
     if (entry.k === 'v') {
       let value = previous && 'value' in previous ? previous.value : undefined;
-      if (value === undefined && name !== 'undefined') {
+      if (Object.prototype.hasOwnProperty.call(pageGlobals, name)) value = Array.isArray(pageGlobals[name]) ? Array.from(pageGlobals[name]) : pageGlobals[name];
+      else if (value === undefined && name !== 'undefined') {
         const namespace = shape.namespaces[name];
         value = namespace ? namespaceObject(name, namespace) : entry.v.t === 'o' ? plainObject(entry.v.c) : entry.v.t === 'ref' ? undefined : decode(entry.v);
       }
@@ -347,13 +388,17 @@
       singletons[path] = object;
       if (path === 'document') {
         quietCreate++;
+        const doctype = create('DocumentType', { nodeType: { t: 'n', v: 10 }, nodeName: { t: 's', v: 'html' }, nodeValue: { t: 'null' }, textContent: { t: 'null' }, name: { t: 's', v: 'html' }, publicId: { t: 's', v: '' }, systemId: { t: 's', v: '' } });
         const root = elementFor(object, 'html');
         const head = elementFor(object, 'head');
         const body = elementFor(object, 'body');
         quietCreate--;
+        brands.get(doctype).document = object;
+        brands.get(object).over.doctype = doctype;
         singletons['document.documentElement'] = root;
         singletons['document.head'] = head;
         singletons['document.body'] = body;
+        insert(object, doctype, null);
         insert(object, root, null);
         insert(root, head, null);
         insert(root, body, null);
@@ -362,6 +407,15 @@
     },
     ctor: name => ctors[name],
     proto: name => protos[name],
+    pageOrigin: () => pageOrigin(),
+    reportException: error => reportException(error),
+    reportRejection: (type, promise, reason) => reportRejection(type, promise, reason),
+    idleDeadline: (didTimeout, remaining) => {
+      const deadline = create('IdleDeadline');
+      brandFor(deadline).over.didTimeout = didTimeout;
+      brandFor(deadline).remaining = remaining;
+      return deadline;
+    },
   };
   windowBrand.realm = api;
   const childrenOf = brand => brand.children || (brand.children = []);
@@ -379,10 +433,31 @@
   const detach = node => {
     const brand = brandFor(node);
     if (!brand || !brand.parent) return;
+    const wasConnected = connected(node);
     const parentChildren = childrenOf(brandFor(brand.parent));
     const index = parentChildren.indexOf(node);
     if (index >= 0) parentChildren.splice(index, 1);
     brand.parent = null;
+    if (!wasConnected) return;
+    const discard = current => {
+      const frame = brandFor(current);
+      if (frame.iface !== 'HTMLIFrameElement' || !frame.contentWindow) return;
+      Object.assign(brandFor(frame.contentWindow).over, { closed: true, parent: null, top: null, frameElement: null });
+      frame.contentWindow = null;
+    };
+    discard(node);
+    walk(node, discard);
+    syncFrames();
+  };
+  const syncFrames = () => {
+    for (const name of Object.getOwnPropertyNames(g)) if (/^\d+$/.test(name)) delete g[name];
+    const document = singletons.document;
+    if (!document) return;
+    let index = 0;
+    walk(document, node => {
+      const brand = brandFor(node);
+      if (brand.iface === 'HTMLIFrameElement' && brand.contentWindow) define(g, String(index++), { configurable: true, enumerable: true, writable: false, value: brand.contentWindow });
+    });
   };
   const insert = (parent, node, before) => {
     const parentBrand = brandFor(parent);
@@ -404,7 +479,8 @@
     const brand = brandFor(node);
     if (brand.iface === 'HTMLIFrameElement' && !brand.contentWindow && host.createIframeWindow) {
       brand.contentWindow = host.createIframeWindow();
-      host.setTimeout(() => { const event = create('Event', undefined); brandFor(event).over.isTrusted = true; dispatch(node, event, 'load'); }, 0);
+      syncFrames();
+      host.queueTask(0, () => { const event = create('Event', undefined); brandFor(event).over.isTrusted = true; dispatch(node, event, 'load'); });
     }
     for (const child of childrenOf(brand)) attached(child);
   };
@@ -433,6 +509,13 @@
     });
   };
   const attribute = (brand, name) => brand.attrs ? brand.attrs.get(name) ?? null : null;
+  const inlineStyle = brand => Object.entries(brand.over).filter(([, value]) => value !== '').map(([name, value]) => name.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()) + ': ' + value + ';').join(' ');
+  const resolveURL = value => {
+    if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+    const origin = profile.location ? profile.location.origin : '';
+    if (value.startsWith('//')) return origin.slice(0, origin.indexOf('//')) + value;
+    return origin + (value.startsWith('/') ? '' : '/') + value;
+  };
   const collection = (iface, items) => {
     const object = create(iface);
     items.forEach((item, index) => define(object, index, { configurable: true, enumerable: true, value: item }));
@@ -441,8 +524,80 @@
   };
   const listenersOf = brand => brand.listeners || (brand.listeners = new Map());
   const listenerOptions = options => {
-    if (options === null || typeof options !== 'object') return { capture: Boolean(options), once: false };
-    return { capture: Boolean(options.capture), once: Boolean(options.once) };
+    if (options === null || typeof options !== 'object') return { capture: Boolean(options), once: false, passive: null, signal: null };
+    const capture = Boolean(options.capture);
+    const once = Boolean(options.once);
+    const passive = options.passive === undefined ? null : Boolean(options.passive);
+    const signal = options.signal;
+    if (signal !== undefined && !brandCheck(signal, 'AbortSignal')) throw new TypeError("EventTarget.addEventListener: 'signal' member of AddEventListenerOptions does not implement interface AbortSignal.");
+    return { capture, once, passive, signal: signal === undefined ? null : signal };
+  };
+  const captureOption = options => options === null || typeof options !== 'object' ? Boolean(options) : Boolean(options.capture);
+  // passiveTypes 是在 window、document、根元素与 body 上默认 passive 的事件类型
+  const passiveTypes = new Set(['touchstart', 'touchmove', 'wheel', 'mousewheel', 'DOMMouseScroll', 'MozMousePixelScroll']);
+  const defaultPassive = (target, type) => passiveTypes.has(type) && (target === g || target === api.singleton('document') || target === api.singleton('document.documentElement') || target === api.singleton('document.body'));
+  const removeListener = (brand, type, entry) => {
+    entry.removed = true;
+    const list = listenersOf(brand).get(type);
+    if (list) listenersOf(brand).set(type, list.filter(item => item !== entry));
+  };
+  const setEventHandler = (brand, name, value) => {
+    const type = name.slice(2);
+    const handler = value !== null && (typeof value === 'object' || typeof value === 'function') ? value : null;
+    brand.over[name] = handler;
+    const list = listenersOf(brand).get(type) || [];
+    const entry = list.find(item => item.handler);
+    if (handler === null) {
+      if (entry) removeListener(brand, type, entry);
+      return;
+    }
+    if (!entry) listenersOf(brand).set(type, [...list, { handler: true, listener: null, capture: false, once: false, passive: false, removed: false }]);
+  };
+  const cancelEvent = eventBrand => {
+    if (readValue(null, eventBrand, 'cancelable') && !eventBrand.passive) eventBrand.over.defaultPrevented = true;
+  };
+  const callHandler = (node, event, eventBrand, name) => {
+    const handler = brandFor(node).over['on' + name];
+    if (typeof handler !== 'function') return;
+    if (name === 'error' && node === g && isA(eventBrand.iface, 'ErrorEvent')) {
+      const field = key => readValue(event, eventBrand, key);
+      if (handler.call(node, field('message'), field('filename'), field('lineno'), field('colno'), field('error')) === true) cancelEvent(eventBrand);
+      return;
+    }
+    if (handler.call(node, event) === false) cancelEvent(eventBrand);
+  };
+  let reporting = false;
+  // reportException 按 Firefox 报告未捕获异常：在本 Realm 的 window 上派发 ErrorEvent 并调用 onerror
+  const reportException = error => {
+    if (reporting) return;
+    reporting = true;
+    try {
+      const isError = error !== null && typeof error === 'object' && Object.prototype.toString.call(error) === '[object Error]';
+      let message;
+      try {
+        message = isError ? Error.prototype.toString.call(error) : 'uncaught exception: ' + String(error);
+      } catch (e) {
+        message = 'uncaught exception: ' + Object.prototype.toString.call(error);
+      }
+      const [thrownFile, thrownLine, thrownColumn] = host.throwLocation();
+      const event = create('ErrorEvent');
+      Object.assign(brandFor(event).over, {
+        type: 'error', message, error,
+        filename: isError && typeof error.fileName === 'string' ? error.fileName : thrownFile,
+        lineno: isError && typeof error.lineNumber === 'number' ? error.lineNumber : thrownLine,
+        colno: isError && typeof error.columnNumber === 'number' ? error.columnNumber : thrownColumn,
+        isTrusted: true, bubbles: true, cancelable: true, timeStamp: host.performanceNow(),
+      });
+      dispatch(g, event);
+    } finally {
+      reporting = false;
+    }
+  };
+  // reportRejection 在本 Realm 的 window 上派发 unhandledrejection 或 rejectionhandled
+  const reportRejection = (type, promise, reason) => {
+    const event = create('PromiseRejectionEvent');
+    Object.assign(brandFor(event).over, { type, promise, reason, isTrusted: true, bubbles: false, cancelable: type === 'unhandledrejection', timeStamp: host.performanceNow() });
+    dispatch(g, event);
   };
   const eventPath = target => {
     const path = [target];
@@ -454,23 +609,29 @@
     if (lastBrand && isA(lastBrand.iface, 'Document') && last === api.singleton('document')) path.push(g);
     return path;
   };
-  const invokeListeners = (node, event, eventBrand, name, phase) => {
+  const invokeListeners = (node, event, eventBrand, name, capture) => {
     const nodeBrand = brandFor(node);
     if (!nodeBrand) return;
     eventBrand.over.currentTarget = node;
     const list = nodeBrand.listeners ? (nodeBrand.listeners.get(name) || []).slice() : [];
     for (const entry of list) {
       if (eventBrand.stopImmediate) break;
-      if (phase === 1 && !entry.capture) continue;
-      if (phase === 3 && entry.capture) continue;
-      if (entry.once) nodeBrand.listeners.set(name, nodeBrand.listeners.get(name).filter(item => item !== entry));
-      const listener = entry.listener;
-      if (typeof listener === 'function') listener.call(node, event);
-      else if (listener && typeof listener.handleEvent === 'function') listener.handleEvent(event);
-    }
-    if (phase !== 1) {
-      const handler = nodeBrand.over['on' + name];
-      if (typeof handler === 'function' && !eventBrand.stopImmediate) handler.call(node, event);
+      if (entry.removed || entry.capture !== capture) continue;
+      if (entry.once) removeListener(nodeBrand, name, entry);
+      eventBrand.passive = entry.passive;
+      try {
+        const listener = entry.listener;
+        if (entry.handler) callHandler(node, event, eventBrand, name);
+        else if (typeof listener === 'function') listener.call(node, event);
+        else if (listener !== null && typeof listener === 'object') {
+          const handleEvent = listener.handleEvent;
+          if (typeof handleEvent !== 'function') throw new TypeError("Property 'handleEvent' is not callable.");
+          handleEvent.call(listener, event);
+        }
+      } catch (error) {
+        reportException(error);
+      }
+      eventBrand.passive = false;
     }
   };
   const dispatch = (target, event, type) => {
@@ -482,23 +643,421 @@
     eventBrand.stop = false;
     eventBrand.stopImmediate = false;
     const path = eventPath(target);
+    eventBrand.path = path;
     for (let index = path.length - 1; index > 0 && !eventBrand.stop; index--) {
       eventBrand.over.eventPhase = 1;
-      invokeListeners(path[index], event, eventBrand, name, 1);
+      invokeListeners(path[index], event, eventBrand, name, true);
     }
-    if (!eventBrand.stop) {
-      eventBrand.over.eventPhase = 2;
-      invokeListeners(target, event, eventBrand, name, 2);
-    }
+    eventBrand.over.eventPhase = 2;
+    if (!eventBrand.stop) invokeListeners(target, event, eventBrand, name, true);
+    if (!eventBrand.stop) invokeListeners(target, event, eventBrand, name, false);
     if (bubbles) {
       for (let index = 1; index < path.length && !eventBrand.stop; index++) {
         eventBrand.over.eventPhase = 3;
-        invokeListeners(path[index], event, eventBrand, name, 3);
+        invokeListeners(path[index], event, eventBrand, name, false);
       }
     }
+    eventBrand.path = null;
     eventBrand.over.currentTarget = null;
     eventBrand.over.eventPhase = 0;
     return !eventBrand.over.defaultPrevented;
+  };
+  const abortSignal = (signal, reason) => {
+    const brand = brandFor(signal);
+    if (brand.over.aborted) return;
+    brand.over.aborted = true;
+    brand.over.reason = reason === undefined ? new g.DOMException('The operation was aborted. ', 'AbortError') : reason;
+    for (const algorithm of (brand.abortAlgorithms || []).splice(0)) algorithm();
+    const event = create('Event');
+    Object.assign(brandFor(event).over, { type: 'abort', isTrusted: true, timeStamp: host.performanceNow() });
+    dispatch(signal, event);
+  };
+  const onAbort = (signal, algorithm) => {
+    const brand = brandFor(signal);
+    (brand.abortAlgorithms || (brand.abortAlgorithms = [])).push(algorithm);
+  };
+  const newSignal = () => {
+    const signal = create('AbortSignal');
+    Object.assign(brandFor(signal).over, { aborted: false, reason: undefined });
+    return signal;
+  };
+  const dataCloneError = text => new g.DOMException(text, 'DataCloneError');
+  // serializableInterfaces 是可经结构化克隆复制的平台对象接口
+  const serializableInterfaces = new Set(['Blob', 'File', 'FileList', 'ImageData', 'ImageBitmap', 'DOMException', 'DOMRect', 'DOMRectReadOnly', 'DOMPoint', 'DOMPointReadOnly', 'DOMQuad', 'DOMMatrix', 'DOMMatrixReadOnly', 'CryptoKey']);
+  const nativeErrorNames = new Set(['EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError']);
+  const ownDataValue = (object, key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  };
+  const cloneProperties = (value, copy, memory) => {
+    for (const key of Object.keys(value)) define(copy, key, { configurable: true, enumerable: true, writable: true, value: cloneValue(value[key], memory) });
+    return copy;
+  };
+  // cloneValue 按 Firefox 结构化克隆复制值，memory 保存已复制的对象以保留共享与循环引用
+  const cloneValue = (value, memory) => {
+    if (typeof value === 'symbol') throw dataCloneError('unsupported type for structured data');
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+    if (memory.has(value)) return memory.get(value);
+    const brand = brands.get(value);
+    if (brand) {
+      if (!serializableInterfaces.has(brand.iface)) throw dataCloneError(brand.iface + ' object could not be cloned.');
+      const copy = create(brand.iface, brand.values);
+      Object.assign(brandFor(copy).over, brand.over);
+      memory.set(value, copy);
+      return copy;
+    }
+    const kind = host.kindOf(value);
+    let copy;
+    switch (kind) {
+      case 'Boolean': copy = Object(Boolean.prototype.valueOf.call(value)); break;
+      case 'Number': copy = Object(Number.prototype.valueOf.call(value)); break;
+      case 'String': copy = Object(String.prototype.valueOf.call(value)); break;
+      case 'BigInt': copy = Object(BigInt.prototype.valueOf.call(value)); break;
+      case 'Date': copy = new Date(Date.prototype.getTime.call(value)); break;
+      case 'RegExp': copy = new RegExp(value.source, value.flags); break;
+      case 'ArrayBuffer': copy = ArrayBuffer.prototype.slice.call(value, 0); break;
+      case 'DataView': {
+        const buffer = cloneValue(value.buffer, memory);
+        copy = new DataView(buffer, value.byteOffset, value.byteLength);
+        break;
+      }
+      case 'TypedArray': {
+        const buffer = cloneValue(value.buffer, memory);
+        copy = new g[value[Symbol.toStringTag]](buffer, value.byteOffset, value.length);
+        break;
+      }
+      case 'Map': {
+        const entries = [...Map.prototype.entries.call(value)];
+        copy = new Map();
+        memory.set(value, copy);
+        for (const [key, item] of entries) copy.set(cloneValue(key, memory), cloneValue(item, memory));
+        return copy;
+      }
+      case 'Set': {
+        const items = [...Set.prototype.values.call(value)];
+        copy = new Set();
+        memory.set(value, copy);
+        for (const item of items) copy.add(cloneValue(item, memory));
+        return copy;
+      }
+      case 'Error': {
+        const name = value.name;
+        const message = ownDataValue(value, 'message');
+        copy = new g[nativeErrorNames.has(name) ? name : 'Error'](message === undefined ? undefined : String(message));
+        for (const key of ['fileName', 'lineNumber', 'columnNumber']) {
+          const field = ownDataValue(value, key);
+          if (field !== undefined) define(copy, key, { configurable: true, enumerable: false, writable: true, value: field });
+        }
+        break;
+      }
+      case 'Array':
+        copy = new Array(value.length);
+        memory.set(value, copy);
+        return cloneProperties(value, copy, memory);
+      case 'Object': case 'Math': case 'JSON': case 'Arguments':
+        copy = {};
+        memory.set(value, copy);
+        return cloneProperties(value, copy, memory);
+      case 'Function': case 'AsyncFunction': case 'GeneratorFunction': case 'AsyncGeneratorFunction':
+        throw dataCloneError('Function object could not be cloned.');
+      default:
+        throw dataCloneError(kind + ' object could not be cloned.');
+    }
+    memory.set(value, copy);
+    return copy;
+  };
+  const transferMemory = transfer => {
+    const memory = new Map();
+    for (const item of transfer) {
+      if (host.kindOf(item) !== 'ArrayBuffer') throw dataCloneError('Transferable object could not be cloned.');
+      memory.set(item, item.transfer());
+    }
+    return memory;
+  };
+  const pageOrigin = () => profile.location ? profile.location.origin : (topRealm ? topRealm.pageOrigin() : '');
+  const urlOrigin = text => {
+    const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\\]+)/i.exec(text);
+    if (!match) return null;
+    const scheme = match[1].toLowerCase();
+    let hostPart = match[2].replace(/^[^@]*@/, '').toLowerCase();
+    if ((scheme === 'https' && hostPart.endsWith(':443')) || (scheme === 'http' && hostPart.endsWith(':80'))) hostPart = hostPart.replace(/:\d+$/, '');
+    return scheme + '://' + hostPart;
+  };
+  const liveCollection = (owner, key, iface, compute) => {
+    const ownerBrand = brandFor(owner);
+    const cache = ownerBrand.live || (ownerBrand.live = new Map());
+    if (cache.has(key)) return cache.get(key);
+    const object = create(iface);
+    const brand = brandFor(object);
+    define(brand, 'items', { get: compute });
+    const indexOf = property => typeof property === 'string' && /^(0|[1-9]\d*)$/.test(property) ? Number(property) : -1;
+    const proxy = new HostProxy(object, {
+      get: (target, property, receiver) => { const index = indexOf(property); return index >= 0 ? compute()[index] : reflectGet(target, property, receiver); },
+      has: (target, property) => { const index = indexOf(property); return index >= 0 ? index < compute().length : reflectHas(target, property); },
+      ownKeys: target => [...compute().map((item, index) => String(index)), ...reflectOwnKeys(target)],
+      getOwnPropertyDescriptor: (target, property) => {
+        const index = indexOf(property);
+        if (index < 0) return reflectDescriptor(target, property);
+        const items = compute();
+        return index < items.length ? { value: items[index], writable: false, enumerable: true, configurable: true } : undefined;
+      },
+    });
+    brands.set(proxy, brand);
+    cache.set(key, proxy);
+    return proxy;
+  };
+  const cloneTree = (brand, deep) => {
+    const clone = create(brand.iface, brand.values);
+    const cloneBrand = brandFor(clone);
+    Object.assign(cloneBrand, { tag: brand.tag, document: brand.document, attrs: brand.attrs ? new Map(brand.attrs) : null });
+    for (const name of ['data', 'textContent', 'nodeValue', 'value', 'checked']) if (Object.prototype.hasOwnProperty.call(brand.over, name)) cloneBrand.over[name] = brand.over[name];
+    if (deep) for (const child of childrenOf(brand)) insert(clone, cloneTree(brandFor(child), true), null);
+    return clone;
+  };
+  const isCharacterData = brand => isA(brand.iface, 'CharacterData');
+  const dataOf = brand => brand.over.data === undefined ? '' : String(brand.over.data);
+  const textOf = brand => {
+    if (isCharacterData(brand)) return dataOf(brand);
+    let text = '';
+    for (const child of childrenOf(brand)) {
+      const childBrand = brandFor(child);
+      if (childBrand.iface === 'Text' || childBrand.iface === 'CDATASection') text += dataOf(childBrand);
+      else if (!isCharacterData(childBrand)) text += textOf(childBrand);
+    }
+    return text;
+  };
+  const setCharacterData = (brand, value) => Object.assign(brand.over, { data: value, nodeValue: value, textContent: value });
+  // voidElements 与 rawTextElements 是 HTML 序列化时不写结束标签与不转义文本的元素
+  const voidElements = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+  const rawTextElements = new Set(['style', 'script', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext', 'noscript']);
+  const escapeText = text => text.replace(/&/g, '&amp;').replace(/\u00a0/g, '&nbsp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escapeAttribute = text => escapeText(text).replace(/"/g, '&quot;');
+  const serializeChildren = brand => childrenOf(brand).map(child => serializeNode(child, brand)).join('');
+  const serializeNode = (node, parentBrand) => {
+    const brand = brandFor(node);
+    if (isA(brand.iface, 'Element')) {
+      const attributes = brand.attrs ? [...brand.attrs].map(([name, value]) => ' ' + name + '="' + escapeAttribute(String(value)) + '"').join('') : '';
+      if (voidElements.has(brand.tag)) return '<' + brand.tag + attributes + '>';
+      return '<' + brand.tag + attributes + '>' + serializeChildren(brand) + '</' + brand.tag + '>';
+    }
+    if (brand.iface === 'Text' || brand.iface === 'CDATASection') return parentBrand && rawTextElements.has(parentBrand.tag) ? dataOf(brand) : escapeText(dataOf(brand));
+    if (brand.iface === 'Comment') return '<!--' + dataOf(brand) + '-->';
+    if (brand.iface === 'DocumentType') return '<!DOCTYPE html>';
+    return '';
+  };
+  const domExceptionCodes = { IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9, InUseAttributeError: 10, InvalidStateError: 11, SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15, TypeMismatchError: 17, SecurityError: 18, NetworkError: 19, AbortError: 20, URLMismatchError: 21, QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25 };
+  const bytesOf = value => {
+    const kind = host.kindOf(value);
+    if (kind === 'ArrayBuffer') return new Uint8Array(value.slice(0));
+    if (kind === 'TypedArray' || kind === 'DataView') return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    return null;
+  };
+  const utf8Encode = text => {
+    const bytes = [];
+    for (let index = 0; index < text.length; index++) {
+      let code = text.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) code = 0x10000 + ((code - 0xd800) << 10) + (text.charCodeAt(++index) - 0xdc00);
+      else if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+      if (code < 0x80) bytes.push(code);
+      else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+      else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+      else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 63), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+    }
+    return new Uint8Array(bytes);
+  };
+  // utf8Decode 按 WHATWG UTF-8 解码器把字节解码为字符串，stream 为真时把末尾不完整的序列留在 state.pending
+  const utf8Decode = (bytes, state, stream, fatal) => {
+    const input = [...state.pending, ...bytes];
+    state.pending = [];
+    let output = '';
+    let needed = 0, seen = 0, code = 0, lower = 0x80, upper = 0xbf, start = 0;
+    const fail = () => { if (fatal) throw new TypeError('TextDecoder.decode: Decoding failed.'); output += '\ufffd'; };
+    for (let index = 0; index < input.length; index++) {
+      const byte = input[index];
+      if (needed === 0) {
+        start = index;
+        if (byte <= 0x7f) { output += String.fromCharCode(byte); continue; }
+        if (byte >= 0xc2 && byte <= 0xdf) { needed = 1; code = byte & 0x1f; }
+        else if (byte >= 0xe0 && byte <= 0xef) { if (byte === 0xe0) lower = 0xa0; if (byte === 0xed) upper = 0x9f; needed = 2; code = byte & 0xf; }
+        else if (byte >= 0xf0 && byte <= 0xf4) { if (byte === 0xf0) lower = 0x90; if (byte === 0xf4) upper = 0x8f; needed = 3; code = byte & 0x7; }
+        else fail();
+        continue;
+      }
+      if (byte < lower || byte > upper) {
+        needed = seen = code = 0; lower = 0x80; upper = 0xbf;
+        fail();
+        index--;
+        continue;
+      }
+      lower = 0x80; upper = 0xbf;
+      code = (code << 6) | (byte & 0x3f);
+      if (++seen !== needed) continue;
+      output += String.fromCodePoint(code);
+      needed = seen = code = 0;
+    }
+    if (needed !== 0) {
+      if (stream) state.pending = input.slice(start);
+      else fail();
+    }
+    return output;
+  };
+  const bodyText = bytes => utf8Decode(bytes, { pending: [] }, false, false);
+  const blobFromParts = (iface, parts, type) => {
+    const chunks = [];
+    for (const part of parts) {
+      const raw = bytesOf(part);
+      if (raw) chunks.push(raw);
+      else if (part !== null && typeof part === 'object' && brandFor(part) && brandFor(part).bytes) chunks.push(brandFor(part).bytes);
+      else chunks.push(utf8Encode(String(part)));
+    }
+    const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const blob = create(iface);
+    brandFor(blob).bytes = bytes;
+    Object.assign(brandFor(blob).over, { size: bytes.length, type: blobType(type) });
+    return blob;
+  };
+  const blobType = type => {
+    const text = type === undefined ? '' : String(type);
+    return /^[\u0020-\u007e]*$/.test(text) ? text.toLowerCase() : '';
+  };
+  const blobParts = (iface, parts) => {
+    if (parts === undefined) return [];
+    if (parts === null || typeof parts !== 'object' || typeof parts[Symbol.iterator] !== 'function') throw new TypeError(iface + " constructor: Argument 1 can't be converted to a sequence.");
+    return [...parts];
+  };
+  const consumeBody = (brand, iface, member) => {
+    if (brand.over.bodyUsed) return Promise.reject(new TypeError(iface + '.' + member + ': Body has already been consumed.'));
+    brand.over.bodyUsed = true;
+    return Promise.resolve(brand.bytes || new Uint8Array(0));
+  };
+  const headerList = headers => brandFor(headers).list || (brandFor(headers).list = []);
+  const newHeaders = init => {
+    const headers = create('Headers');
+    const list = headerList(headers);
+    if (init !== undefined && init !== null) {
+      const entries = typeof init[Symbol.iterator] === 'function' ? [...init] : Object.keys(init).map(name => [name, init[name]]);
+      for (const [name, value] of entries) list.push([String(name).toLowerCase(), String(value).trim()]);
+    }
+    return headers;
+  };
+  // pairIterables 是 WebIDL 声明 iterable<K, V> 的接口，其余以 entries 为 @@iterator 的接口是 maplike
+  const pairIterables = new Set(['URLSearchParams', 'Headers', 'FormData']);
+  const iteratorStates = new WeakMap();
+  const iteratorProtos = Object.create(null);
+  // pairsOf 返回接口实例当前要迭代的键值对，Headers 按名称排序并合并同名值
+  const pairsOf = (iface, brand) => {
+    const list = brand.list || [];
+    if (iface !== 'Headers') return list;
+    const names = [...new Set(list.map(([name]) => name))].sort();
+    return names.flatMap(name => {
+      const values = list.filter(([item]) => item === name).map(([, value]) => value);
+      return name === 'set-cookie' ? values.map(value => [name, value]) : [[name, values.join(', ')]];
+    });
+  };
+  // iteratorProto 返回接口默认迭代器的原型，原型链接到 %IteratorPrototype%
+  const iteratorProto = iface => {
+    if (iteratorProtos[iface]) return iteratorProtos[iface];
+    const proto = Object.create(iteratorPrototype);
+    const next = nativeFunction('next', function next() {
+      const state = iteratorStates.get(this);
+      const pairs = pairsOf(state.iface, state.brand);
+      if (state.index >= pairs.length) return { value: undefined, done: true };
+      const [key, value] = pairs[state.index++];
+      return { value: state.kind === 'key' ? key : state.kind === 'value' ? value : [key, value], done: false };
+    });
+    setLength(next, 0);
+    define(proto, 'next', { configurable: true, enumerable: true, writable: true, value: next });
+    define(proto, Symbol.toStringTag, { configurable: true, value: iface + ' Iterator' });
+    return (iteratorProtos[iface] = proto);
+  };
+  // pairIterator 返回 entries、keys 或 values 的迭代器，maplike 接口用 Map 迭代器
+  const pairIterator = (iface, brand, kind) => {
+    if (!pairIterables.has(iface)) {
+      const map = new Map(pairsOf(iface, brand));
+      return kind === 'key' ? map.keys() : kind === 'value' ? map.values() : map.entries();
+    }
+    const iterator = Object.create(iteratorProto(iface));
+    iteratorStates.set(iterator, { iface, brand, kind, index: 0 });
+    return iterator;
+  };
+  // percentDecodeText 按 application/x-www-form-urlencoded 解析器解码一个名称或值
+  const percentDecodeText = text => {
+    const bytes = utf8Encode(text.replace(/\+/g, ' '));
+    const output = [];
+    const hex = byte => (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x46) || (byte >= 0x61 && byte <= 0x66);
+    for (let index = 0; index < bytes.length; index++) {
+      if (bytes[index] === 0x25 && index + 2 < bytes.length && hex(bytes[index + 1]) && hex(bytes[index + 2])) {
+        output.push(parseInt(String.fromCharCode(bytes[index + 1], bytes[index + 2]), 16));
+        index += 2;
+      } else output.push(bytes[index]);
+    }
+    return utf8Decode(output, { pending: [] }, false, false);
+  };
+  const parseQuery = text => text.split('&').filter(Boolean).map(part => {
+    const index = part.indexOf('=');
+    return index < 0 ? [percentDecodeText(part), ''] : [percentDecodeText(part.slice(0, index)), percentDecodeText(part.slice(index + 1))];
+  });
+  // serializeForm 按 application/x-www-form-urlencoded 序列化器编码一个名称或值
+  const serializeForm = text => {
+    let output = '';
+    for (const byte of utf8Encode(text)) {
+      if (byte === 0x20) output += '+';
+      else if ((byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a) || byte === 0x2a || byte === 0x2d || byte === 0x2e || byte === 0x5f) output += String.fromCharCode(byte);
+      else output += '%' + (byte < 16 ? '0' : '') + byte.toString(16).toUpperCase();
+    }
+    return output;
+  };
+  const serializeQuery = list => list.map(([name, value]) => serializeForm(name) + '=' + serializeForm(value)).join('&');
+  // updateQuery 把 URLSearchParams 的列表写回所属 URL 的查询部分
+  const updateQuery = brand => {
+    if (!brand.url) return;
+    const owner = brandFor(brand.url);
+    owner.url = host.updateURL(owner.url.href, 'search', serializeQuery(brand.list));
+  };
+  const newParams = (list, url) => {
+    const params = create('URLSearchParams');
+    Object.assign(brandFor(params), { list, url });
+    return params;
+  };
+  const urlFields = ['href', 'origin', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash'];
+  // parseURLRecord 以可选基址解析地址，返回解析结果与出错时报告的输入
+  const parseURLRecord = (input, base) => {
+    const text = String(input);
+    if (base === undefined) return [host.parseURL(text), text];
+    const baseRecord = host.parseURL(String(base));
+    if (baseRecord === null) return [null, String(base)];
+    return [host.parseURL(text, baseRecord.href), text];
+  };
+  const newURL = record => {
+    const url = create('URL');
+    const brand = brandFor(url);
+    brand.url = record;
+    brand.params = newParams(parseQuery(record.search.slice(1)), url);
+    return url;
+  };
+  // setURLField 按 URL 接口的 setter 修改地址并同步 searchParams
+  const setURLField = (brand, field, value) => {
+    const record = host.updateURL(brand.url.href, field, String(value));
+    if (record === null) throw new TypeError('URL.href setter: ' + String(value) + ' is not a valid URL.');
+    brand.url = record;
+    if (field === 'href' || field === 'search') brandFor(brand.params).list = parseQuery(record.search.slice(1));
+  };
+  const typedArrayTag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int8Array.prototype), Symbol.toStringTag).get;
+  const integerArrays = new Set(['Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array', 'BigInt64Array', 'BigUint64Array']);
+  const cookieItems = () => {
+    const document = api.singleton('document');
+    const text = String(readValue(document, brandFor(document), 'cookie') || '');
+    return text.split(';').map(part => part.trim()).filter(Boolean).map(part => { const index = part.indexOf('='); return index < 0 ? { name: '', value: part } : { name: part.slice(0, index), value: part.slice(index + 1) }; });
+  };
+  const digestNames = { 'SHA-1': 'SHA-1', 'SHA-256': 'SHA-256', 'SHA-384': 'SHA-384', 'SHA-512': 'SHA-512' };
+  let animationHandle = 0;
+  const animationCallbacks = new Set();
+  const descendants = (root, accept) => {
+    const found = [];
+    walk(root, node => { if (accept(node)) found.push(node); });
+    return found;
   };
   const layoutRect = element => {
     if (realmName === 'top' && (element === api.singleton('document.body') || element === api.singleton('document.documentElement'))) {
@@ -568,8 +1127,10 @@
   Object.assign(getters, {
     '*.parentNode': brand => brand.parent || null,
     '*.parentElement': brand => brand.parent && isElement(brand.parent) ? brand.parent : null,
-    '*.childNodes': brand => collection('NodeList', childrenOf(brand).slice()),
-    '*.children': brand => collection('HTMLCollection', childrenOf(brand).filter(isElement)),
+    '*.childNodes': function (brand) { return liveCollection(this, 'childNodes', 'NodeList', () => childrenOf(brand).slice()); },
+    'NodeList.length': brand => brand.items ? brand.items.length : 0,
+    'HTMLCollection.length': brand => brand.items ? brand.items.length : 0,
+    '*.children': function (brand) { return liveCollection(this, 'children', 'HTMLCollection', () => childrenOf(brand).filter(isElement)); },
     '*.firstChild': brand => childrenOf(brand)[0] || null,
     '*.lastChild': brand => childrenOf(brand)[childrenOf(brand).length - 1] || null,
     '*.firstElementChild': brand => childrenOf(brand).find(isElement) || null,
@@ -583,12 +1144,28 @@
     'Document.body': brand => { const root = childrenOf(brand).find(isElement); return root ? childrenOf(brandFor(root)).find(node => brandFor(node).tag === 'body') || null : null; },
     '*.ownerDocument': brand => isA(brand.iface, 'Document') ? null : (brand.document || api.singleton('document')),
     'Element.tagName': brand => tagName(brand),
+    '*.textContent': brand => isA(brand.iface, 'Document') || isA(brand.iface, 'DocumentType') ? null : textOf(brand),
+    'Element.innerHTML': brand => serializeChildren(brand),
+    'Element.outerHTML': function () { return serializeNode(this, null); },
+    'FontFaceSet.ready': function (brand) { return brand.ready || (brand.ready = Promise.resolve(this)); },
     'Element.localName': brand => brand.tag,
+    'Node.baseURI': brand => { if (profile.location) return profile.location.origin + '/'; const encoded = brand.values.baseURI || defaultFor(brand.iface, 'baseURI'); return encoded ? decode(encoded) : undefined; },
     'Node.nodeName': function (brand) { if (isA(brand.iface, 'Element') && brand.tag) return tagName(brand); const encoded = brand.values.nodeName || defaultFor(brand.iface, 'nodeName'); return encoded ? decode(encoded) : undefined; },
     'Element.id': brand => attribute(brand, 'id') || '',
     'Element.className': brand => attribute(brand, 'class') || '',
     'HTMLIFrameElement.contentWindow': function (brand) { if (!brand.contentWindow && connected(this) && host.createIframeWindow) brand.contentWindow = host.createIframeWindow(); return brand.contentWindow || null; },
     'HTMLElement.offsetHeight': function () { return layoutHeight(this); },
+    'HTMLIFrameElement.src': brand => resolveURL(attribute(brand, 'src') || ''),
+    'Window.length': () => Object.getOwnPropertyNames(g).filter(name => /^\d+$/.test(name)).length,
+    'HTMLElement.style': brand => {
+      let style = brand.cache.get('style');
+      if (!style) {
+        style = create('CSSStyleProperties');
+        brandFor(style).owner = brand;
+        brand.cache.set('style', style);
+      }
+      return style;
+    },
     'HTMLIFrameElement.contentDocument': function (brand) { const window = getters['HTMLIFrameElement.contentWindow'].call(this, brand); return window ? window.document : null; },
     'Event.target': brand => brand.over.target === undefined ? null : brand.over.target,
     'Storage.length': brand => storageKeys(storageArea(brand)).length,
@@ -597,10 +1174,39 @@
   });
   Object.assign(setters, {
     'HTMLImageElement.src': function (brand, value) { trustedImage(this, brand, String(value)); },
+    'HTMLIFrameElement.src': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('src', String(value)); },
     'Element.id': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('id', String(value)); },
+    'CharacterData.data': (brand, value) => setCharacterData(brand, String(value)),
+    'Node.nodeValue': (brand, value) => { if (isCharacterData(brand)) setCharacterData(brand, value === null ? '' : String(value)); },
+    '*.textContent': function (brand, value) {
+      const text = value === null ? '' : String(value);
+      if (isCharacterData(brand)) return setCharacterData(brand, text);
+      if (isA(brand.iface, 'Document') || isA(brand.iface, 'DocumentType')) return;
+      for (const child of childrenOf(brand).slice()) detach(child);
+      if (text !== '') insert(this, api.singleton('document').createTextNode(text), null);
+    },
     'Element.className': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('class', String(value)); },
     'HTMLTextAreaElement.value': (brand, value) => { brand.over.value = String(value).replace(/\r\n?/g, '\n'); },
-    'Document.cookie': () => {},
+    'Document.cookie': (brand, value) => {
+      const [pair, ...attributes] = String(value).split(';');
+      const index = pair.indexOf('=');
+      const name = index < 0 ? '' : pair.slice(0, index).trim();
+      const content = (index < 0 ? pair : pair.slice(index + 1)).trim();
+      let expired = false;
+      for (const attribute of attributes) {
+        const separator = attribute.indexOf('=');
+        const key = (separator < 0 ? attribute : attribute.slice(0, separator)).trim().toLowerCase();
+        const setting = separator < 0 ? '' : attribute.slice(separator + 1).trim();
+        if (key === 'max-age' && /^-?\d+$/.test(setting) && Number(setting) <= 0) expired = true;
+        if (key === 'expires' && Date.parse(setting) <= Date.now()) expired = true;
+      }
+      const items = cookieItems();
+      const existing = items.find(item => item.name === name);
+      if (expired) items.splice(items.indexOf(existing), existing ? 1 : 0);
+      else if (existing) existing.value = content;
+      else items.push({ name, value: content });
+      brand.over.cookie = items.map(item => item.name === '' ? item.value : item.name + '=' + item.value).join('; ');
+    },
   });
   const navigationEntries = () => {
     const entry = api.singleton('performance.navigationEntry');
@@ -627,7 +1233,7 @@
     if (explicit !== null) return explicit;
     const elements = childrenOf(brand).filter(isElement);
     if (elements.length) return elements.reduce((sum, child) => sum + layoutHeight(child), 0);
-    const text = brand.over.textContent;
+    const text = textOf(brand);
     if (!text) return 0;
     return pixels(style.lineHeight) ?? Math.round((pixels(style.fontSize) || 16) * 1.2);
   };
@@ -648,7 +1254,7 @@
       dispatch(element, event);
     };
     if (host.loadImage) host.loadImage(absolute, finish);
-    else host.setTimeout(() => finish(false), 0);
+    else host.queueTask(0, () => finish(false));
   };
   const trusted = (brand, method, iface, args) => {
     const rule = brand.rules[method];
@@ -657,7 +1263,7 @@
     const text = value === undefined || value === null ? '' : String(value);
     const object = create(iface);
     brandFor(object).text = text;
-    host.trust(object, text);
+    if (iface === 'TrustedScript') host.trust(object, text);
     return object;
   };
   // keyHash 是 nsStringHashKey 经 PLDHashTable 混淆后的键哈希，低位留作冲突标记
@@ -814,17 +1420,22 @@
     return proxy;
   }
   Object.assign(methods, {
-    'EventTarget.addEventListener': (brand, [type, listener, options]) => {
-      if (listener == null) return;
+    'EventTarget.addEventListener': function (brand, [type, listener, options]) {
+      const name = String(type);
       const parsed = listenerOptions(options);
-      const list = listenersOf(brand).get(String(type)) || [];
-      if (!list.some(entry => entry.listener === listener && entry.capture === parsed.capture)) list.push({ listener, capture: parsed.capture, once: parsed.once });
-      listenersOf(brand).set(String(type), list);
+      if (listener == null) return;
+      if (parsed.signal && brandFor(parsed.signal).over.aborted) return;
+      const list = listenersOf(brand).get(name) || [];
+      if (list.some(entry => !entry.handler && entry.listener === listener && entry.capture === parsed.capture)) return;
+      const entry = { listener, capture: parsed.capture, once: parsed.once, passive: parsed.passive === null ? defaultPassive(this, name) : parsed.passive, removed: false };
+      listenersOf(brand).set(name, [...list, entry]);
+      if (parsed.signal) onAbort(parsed.signal, () => removeListener(brand, name, entry));
     },
     'EventTarget.removeEventListener': (brand, [type, listener, options]) => {
-      const capture = listenerOptions(options).capture;
-      const list = listenersOf(brand).get(String(type)) || [];
-      listenersOf(brand).set(String(type), list.filter(entry => entry.listener !== listener || entry.capture !== capture));
+      const name = String(type);
+      const capture = captureOption(options);
+      const entry = (listenersOf(brand).get(name) || []).find(item => !item.handler && item.listener === listener && item.capture === capture);
+      if (entry) removeListener(brand, name, entry);
     },
     'EventTarget.dispatchEvent': function (brand, [event]) { brandOf(event, 'Event', 'dispatchEvent'); return dispatch(this, event); },
     'Node.appendChild': function (brand, [node]) { return insert(this, node, null); },
@@ -833,7 +1444,7 @@
     'Node.replaceChild': function (brand, [node, old]) { insert(this, node, old); detach(old); return old; },
     'Node.contains': function (brand, [node]) { if (node === this) return true; return walk(this, child => child === node); },
     'Node.hasChildNodes': brand => childrenOf(brand).length > 0,
-    'Node.cloneNode': function (brand) { const clone = create(brand.iface, brand.values); Object.assign(brandFor(clone), { tag: brand.tag, document: brand.document, attrs: brand.attrs ? new Map(brand.attrs) : null }); return clone; },
+    'Node.cloneNode': function (brand, [deep]) { return cloneTree(brand, Boolean(deep)); },
     'Element.remove': function () { detach(this); },
     'Element.append': function (brand, nodes) { for (const node of nodes) insert(this, typeof node === 'string' ? api.singleton('document').createTextNode(node) : node, null); },
     'Element.prepend': function (brand, nodes) { for (const node of nodes.reverse()) insert(this, typeof node === 'string' ? api.singleton('document').createTextNode(node) : node, childrenOf(brand)[0] || null); },
@@ -843,8 +1454,16 @@
     'Element.hasAttribute': (brand, [name]) => Boolean(brand.attrs && brand.attrs.has(String(name).toLowerCase())),
     'Element.getAttributeNames': brand => brand.attrs ? [...brand.attrs.keys()] : [],
     'Element.matches': function (brand, [selector]) { return matchesSelector(this, String(selector)); },
-    'Element.getElementsByTagName': function (brand, [name]) { const found = []; walk(this, node => { if (isElement(node) && (name === '*' || brandFor(node).tag === String(name).toLowerCase())) found.push(node); }); return collection('HTMLCollection', found); },
-    'Element.getElementsByClassName': function (brand, [name]) { const found = []; walk(this, node => { if (matchesSelector(node, '.' + String(name).trim().split(/\s+/).join('.'))) found.push(node); }); return collection('HTMLCollection', found); },
+    'Element.getElementsByTagName': function (brand, [name]) {
+      const tag = String(name);
+      const lower = tag.toLowerCase();
+      return liveCollection(this, 'tag:' + tag, 'HTMLCollection', () => descendants(this, node => isElement(node) && (tag === '*' || brandFor(node).tag === lower)));
+    },
+    'Element.getElementsByClassName': function (brand, [name]) {
+      const text = String(name);
+      const classes = text.split(/[ \t\n\f\r]+/).filter(Boolean);
+      return liveCollection(this, 'class:' + text, 'HTMLCollection', () => classes.length ? descendants(this, node => isElement(node) && classes.every(item => String(attribute(brandFor(node), 'class') || '').split(/[ \t\n\f\r]+/).includes(item))) : []);
+    },
     'Element.querySelector': function (brand, [selector]) { let found = null; walk(this, node => { if (matchesSelector(node, String(selector))) { found = node; return true; } }); return found; },
     'Element.querySelectorAll': function (brand, [selector]) { const found = []; walk(this, node => { if (matchesSelector(node, String(selector))) found.push(node); }); return collection('NodeList', found); },
     'Element.getBoundingClientRect': function () { return rect('DOMRect', layoutRect(this)); },
@@ -857,7 +1476,7 @@
       brandOf(target, 'Element', 'observe');
       if (!brand.targets.includes(target)) brand.targets.push(target);
       const observer = this;
-      host.setTimeout(() => { if (brand.targets.includes(target)) brand.callback.call(observer, intersectionEntries([target]), observer); }, 16);
+      host.queueTask(16, () => { if (brand.targets.includes(target)) brand.callback.call(observer, intersectionEntries([target]), observer); });
     },
     'IntersectionObserver.unobserve': (brand, [target]) => { brand.targets = brand.targets.filter(item => item !== target); },
     'IntersectionObserver.disconnect': brand => { brand.targets = []; },
@@ -889,10 +1508,29 @@
       const names = ['type', 'bubbles', 'cancelable', 'view', 'detail', 'screenX', 'screenY', 'clientX', 'clientY', 'ctrlKey', 'altKey', 'shiftKey', 'metaKey', 'button', 'relatedTarget'];
       names.forEach((name, index) => { if (index < args.length) brand.over[name] = coerceLike(brand.values[name], args[index]); });
     },
-    'Event.preventDefault': brand => { if (readValue(null, brand, 'cancelable')) brand.over.defaultPrevented = true; },
+    'Event.preventDefault': brand => cancelEvent(brand),
     'Event.stopPropagation': brand => { brand.stop = true; },
     'Event.stopImmediatePropagation': brand => { brand.stop = true; brand.stopImmediate = true; },
-    'Event.composedPath': () => [],
+    'Event.composedPath': brand => brand.path ? brand.path.slice() : [],
+    'IdleDeadline.timeRemaining': brand => brand.remaining(),
+    'NodeList.item': (brand, [index]) => brand.items ? brand.items[index >>> 0] ?? null : null,
+    'HTMLCollection.item': (brand, [index]) => brand.items ? brand.items[index >>> 0] ?? null : null,
+    'HTMLCollection.namedItem': (brand, [name]) => { const key = String(name); return key && brand.items ? brand.items.find(node => attribute(brandFor(node), 'id') === key || attribute(brandFor(node), 'name') === key) ?? null : null; },
+    'AbortController.abort': (brand, [reason]) => abortSignal(brand.over.signal, reason),
+    'AbortSignal.throwIfAborted': brand => { if (brand.over.aborted) throw brand.over.reason; },
+    'AbortSignal.abort:static': (brand, [reason]) => { const signal = newSignal(); Object.assign(brandFor(signal).over, { aborted: true, reason: reason === undefined ? new g.DOMException('The operation was aborted. ', 'AbortError') : reason }); return signal; },
+    'AbortSignal.timeout:static': (brand, [milliseconds]) => { const signal = newSignal(); host.queueTask(Number(milliseconds), () => abortSignal(signal, new g.DOMException('The operation timed out.', 'TimeoutError'))); return signal; },
+    'AbortSignal.any:static': (brand, [signals]) => {
+      const sources = [...signals];
+      const signal = newSignal();
+      const aborted = sources.find(source => brandFor(source).over.aborted);
+      if (aborted) {
+        Object.assign(brandFor(signal).over, { aborted: true, reason: brandFor(aborted).over.reason });
+        return signal;
+      }
+      for (const source of sources) onAbort(source, () => abortSignal(signal, brandFor(source).over.reason));
+      return signal;
+    },
     'Storage.getItem': (brand, args) => { requireArguments('Storage.getItem', args, 1); const area = storageArea(brand); const key = domString(args[0]); storageTable(area); return area.items.has(key) ? area.items.get(key) : null; },
     'Storage.setItem': (brand, args) => { requireArguments('Storage.setItem', args, 2); storageSet(storageArea(brand), domString(args[0]), domString(args[1])); },
     'Storage.removeItem': (brand, args) => { requireArguments('Storage.removeItem', args, 1); storageRemove(storageArea(brand), domString(args[0])); },
@@ -927,11 +1565,40 @@
       const frame = 1000 / 60;
       const now = host.performanceNow();
       const next = Math.floor((now - 0.66) / frame) * frame + 0.66 + frame;
-      return host.setTimeout(() => callback(Math.round(next * 100) / 100), Math.max(0, Math.ceil(next - now)));
+      const handle = ++animationHandle;
+      animationCallbacks.add(handle);
+      host.queueTask(Math.max(0, Math.ceil(next - now)), () => { if (animationCallbacks.delete(handle)) callback(Math.round(next * 100) / 100); });
+      return handle;
     },
-    'Window.cancelAnimationFrame': (brand, [id]) => host.clearTimeout(id),
-    'Window.postMessage': () => {},
-    'Window.structuredClone': (brand, [value]) => value,
+    'Window.cancelAnimationFrame': (brand, [id]) => { animationCallbacks.delete(id); },
+    'Window.postMessage': function (brand, args) {
+      const [message, second, third] = args;
+      let targetOrigin = '/';
+      let transfer = [];
+      if (args.length >= 3 || (second !== undefined && second !== null && typeof second !== 'object' && typeof second !== 'function')) {
+        targetOrigin = String(second);
+        if (third !== undefined) transfer = [...third];
+      } else if (second !== undefined && second !== null) {
+        if (second.targetOrigin !== undefined) targetOrigin = String(second.targetOrigin);
+        if (second.transfer !== undefined) transfer = [...second.transfer];
+      }
+      const origin = pageOrigin();
+      let accepted = true;
+      if (targetOrigin !== '*' && targetOrigin !== '/') {
+        const parsed = urlOrigin(targetOrigin);
+        if (parsed === null) throw new g.DOMException('An invalid or illegal string was specified', 'SyntaxError');
+        accepted = parsed === origin;
+      }
+      const data = cloneValue(message, transferMemory(transfer));
+      if (!accepted) return;
+      const source = host.incumbent();
+      host.queueTask(0, () => {
+        const event = create('MessageEvent');
+        Object.assign(brandFor(event).over, { type: 'message', data, origin, lastEventId: '', source, ports: Object.freeze([]), isTrusted: true, bubbles: false, cancelable: false, timeStamp: host.performanceNow() });
+        dispatch(g, event);
+      });
+    },
+    'Window.structuredClone': (brand, [value, options]) => cloneValue(value, transferMemory(options && options.transfer !== undefined ? [...options.transfer] : [])),
     'TrustedTypePolicyFactory.createPolicy': (brand, [name, rules]) => { const policy = create('TrustedTypePolicy'); brandFor(policy).rules = rules || {}; brandFor(policy).over.name = String(name); return policy; },
     'TrustedTypePolicyFactory.isHTML': (brand, [value]) => Boolean(value && brandFor(value) && brandFor(value).iface === 'TrustedHTML'),
     'TrustedTypePolicyFactory.isScript': (brand, [value]) => Boolean(value && brandFor(value) && brandFor(value).iface === 'TrustedScript'),
@@ -946,9 +1613,229 @@
     'TrustedScriptURL.toString': brand => brand.text,
     'TrustedScriptURL.toJSON': brand => brand.text,
     'Window.focus': () => {},
+    'Element.requestFullscreen': () => Promise.reject(new TypeError('Fullscreen request denied')),
+    'Element.mozRequestFullScreen': () => Promise.reject(new TypeError('Fullscreen request denied')),
+    'Element.requestPointerLock': () => Promise.reject(new g.DOMException('The document is not focused.', 'WrongDocumentError')),
+    'Document.exitFullscreen': () => Promise.reject(new TypeError('Not in fullscreen mode')),
+    'Document.mozCancelFullScreen': () => Promise.reject(new TypeError('Not in fullscreen mode')),
+    'Document.hasStorageAccess': () => Promise.resolve(true),
+    'Document.requestStorageAccess': () => Promise.resolve(undefined),
+    'WakeLock.request': () => {
+      const sentinel = create('WakeLockSentinel');
+      Object.assign(brandFor(sentinel).over, { released: false, type: 'screen', onrelease: null });
+      return Promise.resolve(sentinel);
+    },
+    'WakeLockSentinel.release': function (brand) {
+      if (!brand.over.released) {
+        brand.over.released = true;
+        const event = create('Event');
+        Object.assign(brandFor(event).over, { type: 'release', isTrusted: true, timeStamp: host.performanceNow() });
+        dispatch(this, event);
+      }
+      return Promise.resolve(undefined);
+    },
+    'CookieStore.get': (brand, args) => {
+      if (args.length === 0) return Promise.reject(new TypeError('CookieStore.get: CookieStoreGetOptions must not be empty'));
+      const name = args[0] !== null && typeof args[0] === 'object' ? String(args[0].name) : String(args[0]);
+      return Promise.resolve(cookieItems().find(item => item.name === name) || null);
+    },
+    'CookieStore.getAll': (brand, args) => {
+      const name = args.length === 0 || args[0] === undefined ? undefined : args[0] !== null && typeof args[0] === 'object' ? args[0].name : String(args[0]);
+      return Promise.resolve(cookieItems().filter(item => name === undefined || item.name === String(name)));
+    },
+    'GPU.requestAdapter': () => Promise.resolve(null),
+    'MediaDevices.enumerateDevices': () => Promise.resolve(['audioinput', 'videoinput'].map(kind => {
+      const device = create('MediaDeviceInfo');
+      Object.assign(brandFor(device).over, { deviceId: '', kind, label: '', groupId: '' });
+      return device;
+    })),
+    'MediaDevices.getUserMedia': (brand, [constraints]) => {
+      if (!constraints || (!constraints.audio && !constraints.video)) return Promise.reject(new TypeError('audio and/or video is required'));
+      return pending();
+    },
+    'MediaDevices.getDisplayMedia': () => Promise.reject(new g.DOMException('getDisplayMedia requires transient activation from a user gesture.', 'InvalidStateError')),
+    'MediaDevices.selectAudioOutput': () => Promise.reject(new g.DOMException('selectAudioOutput requires transient user activation.', 'InvalidStateError')),
+    'StorageManager.persisted': () => Promise.resolve(false),
+    'StorageManager.estimate': () => Promise.resolve({ quota: 10737418240, usage: 0 }),
+    'StorageManager.getDirectory': () => {
+      const handle = create('FileSystemDirectoryHandle');
+      Object.assign(brandFor(handle).over, { kind: 'directory', name: '' });
+      return Promise.resolve(handle);
+    },
+    'Scheduler.yield': () => new Promise(resolve => host.queueTask(0, () => resolve(undefined))),
+    'Scheduler.postTask': (brand, [callback, options]) => new Promise((resolve, reject) => host.queueTask(options && options.delay > 0 ? Number(options.delay) : 0, () => {
+      try { resolve(callback()); } catch (error) { reject(error); }
+    })),
+    'IDBFactory.databases': () => Promise.resolve([]),
+    'ServiceWorkerContainer.getRegistration': () => Promise.resolve(undefined),
+    'ServiceWorkerContainer.getRegistrations': () => Promise.resolve([]),
+    'LockManager.query': () => Promise.resolve({ held: [], pending: [] }),
+    'CredentialsContainer.get': () => Promise.reject(new g.DOMException('CredentialsContainer request is not supported.', 'NotSupportedError')),
+    'CredentialsContainer.create': () => Promise.reject(new g.DOMException('CredentialsContainer request is not supported.', 'NotSupportedError')),
+    'CredentialsContainer.preventSilentAccess': () => Promise.resolve(undefined),
+    'CacheStorage.keys': () => Promise.resolve([]),
+    'CacheStorage.has': () => Promise.resolve(false),
+    'CacheStorage.match': () => Promise.resolve(undefined),
+    'CacheStorage.delete': () => Promise.resolve(false),
+    'Response.error:static': () => {
+      const response = constructors.Response([null, { status: 200 }]);
+      Object.assign(brandFor(response).over, { type: 'error', status: 0, ok: false, statusText: '' });
+      return response;
+    },
+    'Response.json:static': (brand, [data, init]) => {
+      const text = JSON.stringify(data);
+      if (text === undefined) throw new TypeError('Response.json: Value could not be serialized as JSON.');
+      const supplied = headerList(newHeaders(init && init.headers)).some(([name]) => name === 'content-type');
+      const response = constructors.Response([text, init]);
+      if (!supplied) {
+        const headers = brandFor(response).over.headers;
+        brandFor(headers).list = headerList(headers).filter(([name]) => name !== 'content-type');
+        headerList(headers).push(['content-type', 'application/json']);
+      }
+      return response;
+    },
+    'Notification.requestPermission:static': (brand, [callback]) => {
+      if (typeof callback === 'function') host.queueTask(0, () => callback('default'));
+      return Promise.resolve('default');
+    },
+    'Clipboard.read': () => Promise.reject(new g.DOMException('Clipboard read request was blocked due to lack of user activation.', 'NotAllowedError')),
+    'Clipboard.readText': () => Promise.reject(new g.DOMException('Clipboard read request was blocked due to lack of user activation.', 'NotAllowedError')),
+    'Blob.text': brand => Promise.resolve(bodyText(brand.bytes || new Uint8Array(0))),
+    'Blob.arrayBuffer': brand => Promise.resolve((brand.bytes || new Uint8Array(0)).slice().buffer),
+    'Blob.bytes': brand => Promise.resolve((brand.bytes || new Uint8Array(0)).slice()),
+    'Blob.slice': (brand, [start, end, contentType]) => {
+      const bytes = brand.bytes || new Uint8Array(0);
+      const size = bytes.length;
+      const clamp = (value, fallback) => { if (value === undefined) return fallback; const number = Math.trunc(Number(value)) || 0; return number < 0 ? Math.max(size + number, 0) : Math.min(number, size); };
+      const from = clamp(start, 0);
+      const to = clamp(end, size);
+      const blob = blobFromParts('Blob', [bytes.slice(from, Math.max(from, to))], contentType);
+      return blob;
+    },
+    'Response.text': (brand, args) => consumeBody(brand, 'Response', 'text').then(bodyText),
+    'Response.json': (brand, args) => consumeBody(brand, 'Response', 'json').then(bytes => JSON.parse(bodyText(bytes))),
+    'Response.arrayBuffer': (brand, args) => consumeBody(brand, 'Response', 'arrayBuffer').then(bytes => bytes.slice().buffer),
+    'Response.bytes': (brand, args) => consumeBody(brand, 'Response', 'bytes').then(bytes => bytes.slice()),
+    'Response.blob': (brand, args) => consumeBody(brand, 'Response', 'blob').then(bytes => { const type = brand.over.headers ? methods['Headers.get'](brandFor(brand.over.headers), ['content-type']) : null; return blobFromParts('Blob', [bytes], type === null ? '' : type); }),
+    'URL.toString': brand => brand.url.href,
+    'URL.toJSON': brand => brand.url.href,
+    'URL.parse:static': (brand, [input, base]) => { const [record] = parseURLRecord(input, base); return record === null ? null : newURL(record); },
+    'URL.canParse:static': (brand, [input, base]) => parseURLRecord(input, base)[0] !== null,
+    'URL.createObjectURL:static': () => 'blob:' + pageOrigin() + '/' + host.randomUUID(),
+    'URL.revokeObjectURL:static': () => undefined,
+    'URLSearchParams.append': (brand, [name, value]) => { brand.list.push([String(name), String(value)]); updateQuery(brand); },
+    'URLSearchParams.delete': (brand, [name, value]) => {
+      const key = String(name);
+      brand.list = brand.list.filter(([item, itemValue]) => item !== key || (value !== undefined && itemValue !== String(value)));
+      updateQuery(brand);
+    },
+    'URLSearchParams.get': (brand, [name]) => { const pair = brand.list.find(([item]) => item === String(name)); return pair ? pair[1] : null; },
+    'URLSearchParams.getAll': (brand, [name]) => brand.list.filter(([item]) => item === String(name)).map(([, value]) => value),
+    'URLSearchParams.has': (brand, [name, value]) => brand.list.some(([item, itemValue]) => item === String(name) && (value === undefined || itemValue === String(value))),
+    'URLSearchParams.set': (brand, [name, value]) => {
+      const key = String(name);
+      const index = brand.list.findIndex(([item]) => item === key);
+      if (index < 0) brand.list.push([key, String(value)]);
+      else brand.list = brand.list.filter(([item], position) => item !== key || position === index).map((pair, position) => position === index ? [key, String(value)] : pair);
+      updateQuery(brand);
+    },
+    'URLSearchParams.sort': brand => {
+      brand.list = brand.list.map((pair, index) => [pair, index]).sort(([a, i], [b, j]) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : i - j).map(([pair]) => pair);
+      updateQuery(brand);
+    },
+    'URLSearchParams.toString': brand => serializeQuery(brand.list),
+    'Crypto.getRandomValues': (brand, [array]) => {
+      if (array === null || typeof array !== 'object') throw new TypeError('Crypto.getRandomValues: Argument 1 is not an object.');
+      if (!integerArrays.has(typedArrayTag.call(array))) throw new g.DOMException('The type of an object is incompatible with the expected type of the parameter associated to the object', 'TypeMismatchError');
+      if (array.byteLength > 65536) throw new g.DOMException('Crypto.getRandomValues: getRandomValues can only generate maximum 65536 bytes', 'QuotaExceededError');
+      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(new Uint8Array(host.randomBytes(array.byteLength)));
+      return array;
+    },
+    'Crypto.randomUUID': () => host.randomUUID(),
+    'Headers.get': (brand, [name]) => { const key = String(name).toLowerCase(); const values = (brand.list || []).filter(([item]) => item === key).map(([, value]) => value); return values.length ? values.join(', ') : null; },
+    'Headers.has': (brand, [name]) => (brand.list || []).some(([item]) => item === String(name).toLowerCase()),
+    'Headers.set': (brand, [name, value]) => { const key = String(name).toLowerCase(); brand.list = (brand.list || []).filter(([item]) => item !== key); brand.list.push([key, String(value).trim()]); },
+    'Headers.append': (brand, [name, value]) => { (brand.list || (brand.list = [])).push([String(name).toLowerCase(), String(value).trim()]); },
+    'Headers.delete': (brand, [name]) => { const key = String(name).toLowerCase(); brand.list = (brand.list || []).filter(([item]) => item !== key); },
+    'SubtleCrypto.digest': (brand, [algorithm, data]) => {
+      const bytes = bytesOf(data);
+      if (bytes === null) return Promise.reject(new TypeError('SubtleCrypto.digest: Argument 2 could not be converted to any of: ArrayBufferView, ArrayBuffer.'));
+      const name = String(algorithm !== null && typeof algorithm === 'object' ? algorithm.name : algorithm).toUpperCase();
+      if (!digestNames[name]) return Promise.reject(new g.DOMException('Operation is not supported', 'NotSupportedError'));
+      return Promise.resolve(host.digest(digestNames[name], bytes.buffer));
+    },
+    'TextEncoder.encode': (brand, [text]) => utf8Encode(text === undefined ? '' : String(text)),
+    'TextEncoder.encodeInto': (brand, [text, target]) => {
+      const source = String(text);
+      let read = 0, written = 0;
+      for (const character of source) {
+        const encoded = utf8Encode(character);
+        if (written + encoded.length > target.length) break;
+        target.set(encoded, written);
+        written += encoded.length;
+        read += character.length;
+      }
+      return { read, written };
+    },
+    'TextDecoder.decode': (brand, [input, options]) => {
+      const bytes = input === undefined ? new Uint8Array(0) : bytesOf(input);
+      const stream = Boolean(options && options.stream);
+      let text;
+      if (brand.over.encoding === 'utf-8') text = utf8Decode(bytes, brand.state, stream, brand.over.fatal);
+      else text = host.decodeText(brand.over.encoding, bytes.buffer, brand.over.fatal);
+      if (!brand.over.ignoreBOM && !brand.bomSeen && text.length > 0) {
+        brand.bomSeen = true;
+        if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+      }
+      if (!stream) brand.bomSeen = false;
+      return text;
+    },
     'Window.blur': () => {},
   });
+  for (const info of shape.interfaces) {
+    if (ES.has(info.n) || !info.pr.some(entry => entry.n === '@@iterator' && entry.fn === 'entries')) continue;
+    const iface = info.n;
+    methods[iface + '.entries'] = brand => pairIterator(iface, brand, 'key+value');
+    methods[iface + '.keys'] = brand => pairIterator(iface, brand, 'key');
+    methods[iface + '.values'] = brand => pairIterator(iface, brand, 'value');
+    methods[iface + '.forEach'] = function (brand, [callback, thisArg]) {
+      if (typeof callback !== 'function') throw new TypeError(iface + '.forEach: Argument 1 is not callable.');
+      for (let index = 0; index < pairsOf(iface, brand).length; index++) {
+        const [key, value] = pairsOf(iface, brand)[index];
+        callback.call(thisArg, value, key, this);
+      }
+    };
+  }
+  for (const field of urlFields) {
+    getters['URL.' + field] = brand => brand.url[field];
+    if (field !== 'origin') setters['URL.' + field] = (brand, value) => setURLField(brand, field, value);
+  }
+  getters['URL.searchParams'] = brand => brand.params;
+  getters['URLSearchParams.size'] = brand => brand.list.length;
+  getters['PerformanceObserver.supportedEntryTypes:static'] = () => ['event', 'first-input', 'largest-contentful-paint', 'mark', 'measure', 'navigation', 'paint', 'resource'];
+  getters['PushManager.supportedContentEncodings:static'] = () => Object.freeze(['aes128gcm']);
+  getters['Notification.permission:static'] = () => 'default';
+  getters['Notification.maxActions:static'] = () => 2;
   Object.assign(constructors, {
+    URL: args => {
+      if (args.length < 1) throw new TypeError('URL constructor: At least 1 argument required, but only 0 passed');
+      const [record, text] = parseURLRecord(args[0], args[1]);
+      if (record === null) throw new TypeError('URL constructor: ' + text + ' is not a valid URL.');
+      return newURL(record);
+    },
+    URLSearchParams: ([init]) => {
+      if (init === undefined) return newParams([], null);
+      if (init === null || (typeof init !== 'object' && typeof init !== 'function')) {
+        const text = String(init);
+        return newParams(parseQuery(text.startsWith('?') ? text.slice(1) : text), null);
+      }
+      if (typeof init[Symbol.iterator] !== 'function') return newParams(Object.keys(init).map(name => [name, String(init[name])]), null);
+      return newParams([...init].map(pair => {
+        const items = [...pair];
+        if (items.length !== 2) throw new TypeError('URLSearchParams constructor: Expected 2 items in pair but got ' + items.length);
+        return [String(items[0]), String(items[1])];
+      }), null);
+    },
     Event: ([type, init]) => { if (type === undefined) throw new TypeError('Event constructor: At least 1 argument required, but only 0 passed'); return eventInit(create('Event'), type, init); },
     CustomEvent: ([type, init]) => { if (type === undefined) throw new TypeError('CustomEvent constructor: At least 1 argument required, but only 0 passed'); return eventInit(create('CustomEvent'), type, init); },
     UIEvent: ([type, init]) => { if (type === undefined) throw new TypeError('UIEvent constructor: At least 1 argument required, but only 0 passed'); return eventInit(create('UIEvent'), type, init); },
@@ -968,6 +1855,47 @@
     },
     Audio: () => elementFor(api.singleton('document'), 'audio'),
     Option: () => elementFor(api.singleton('document'), 'option'),
+    DOMException: ([message, name]) => {
+      const error = create('DOMException');
+      const kind = name === undefined ? 'Error' : String(name);
+      Object.assign(brandFor(error).over, { message: message === undefined ? '' : String(message), name: kind, code: domExceptionCodes[kind] || 0 });
+      return error;
+    },
+    Blob: ([parts, options]) => blobFromParts('Blob', blobParts('Blob', parts), options && options.type),
+    File: ([parts, name, options]) => {
+      const file = blobFromParts('File', blobParts('File', parts), options && options.type);
+      Object.assign(brandFor(file).over, { name: String(name), lastModified: options && options.lastModified !== undefined ? Number(options.lastModified) : Date.now(), webkitRelativePath: '' });
+      return file;
+    },
+    Response: ([body, init]) => {
+      const response = create('Response');
+      const brand = brandFor(response);
+      const headers = newHeaders(init && init.headers);
+      if (body !== undefined && body !== null) {
+        const raw = bytesOf(body);
+        const blob = brandFor(body);
+        brand.bytes = raw || (blob && blob.bytes) || utf8Encode(String(body));
+        if (!raw && !(blob && blob.bytes) && !headerList(headers).some(([name]) => name === 'content-type')) headerList(headers).push(['content-type', 'text/plain;charset=UTF-8']);
+      }
+      const status = init && init.status !== undefined ? Number(init.status) : 200;
+      Object.assign(brand.over, { headers, status, ok: status >= 200 && status < 300, statusText: init && init.statusText !== undefined ? String(init.statusText) : '', type: 'default', url: '', redirected: false, bodyUsed: false });
+      return response;
+    },
+    Headers: ([init]) => newHeaders(init),
+    TextEncoder: () => create('TextEncoder'),
+    TextDecoder: ([label, options]) => {
+      const encoding = host.encodingName(label === undefined ? 'utf-8' : String(label));
+      if (encoding === '') throw new RangeError("TextDecoder constructor: The given encoding '" + String(label).trim() + "' is not supported.");
+      const decoder = create('TextDecoder');
+      Object.assign(brandFor(decoder).over, { encoding, fatal: Boolean(options && options.fatal), ignoreBOM: Boolean(options && options.ignoreBOM) });
+      brandFor(decoder).state = { pending: [] };
+      return decoder;
+    },
+    AbortController: () => {
+      const controller = create('AbortController');
+      brandFor(controller).over.signal = newSignal();
+      return controller;
+    },
   });
   const iteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
   const intrinsicPaths = {
@@ -1060,6 +1988,8 @@
     'Object.groupBy': (items, callback) => { const groups = Object.create(null); let index = 0; for (const item of items) { const key = callback(item, index++); const property = typeof key === 'symbol' ? key : String(key); (groups[property] || (groups[property] = [])).push(item); } return groups; },
     'Map.groupBy': (items, callback) => { const groups = new Map(); let index = 0; for (const item of items) { const key = callback(item, index++); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); } return groups; },
     'Array.fromAsync': items => Promise.resolve(Array.from(items)),
+    'ArrayBuffer.prototype.transfer': function (length) { return host.transferBuffer(this, length); },
+    'ArrayBuffer.prototype.transferToFixedLength': function (length) { return host.transferBuffer(this, length); },
     'Promise.withResolvers': function () { let resolve; let reject; const promise = new this((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; },
     'Promise.try': function (callback, ...args) { return new this(resolve => resolve(callback(...args))); },
     'Error.captureStackTrace': object => { if (object === null || typeof object !== 'object') throw new TypeError('Error.captureStackTrace: Argument 1 is not an object.'); define(object, 'stack', { value: new Error().stack.split('\n').slice(1).join('\n'), writable: true, configurable: true }); },
@@ -1111,7 +2041,7 @@
     'RegExp.prototype.unicodeSets': [function () { if (this === RegExp.prototype) return undefined; if (!(this instanceof RegExp)) throw new TypeError('RegExp.prototype.unicodeSets getter called on non-RegExp object'); return false; }, null],
     'ArrayBuffer.prototype.maxByteLength': [function () { return this.byteLength; }, null],
     'ArrayBuffer.prototype.resizable': [function () { return false; }, null],
-    'ArrayBuffer.prototype.detached': [function () { return false; }, null],
+    'ArrayBuffer.prototype.detached': [function () { return host.bufferDetached(this); }, null],
   };
   const stubFunction = (entry, constructor) => {
     const implementation = constructor ? function () {} : { [entry.fn || 'value']() { return undefined; } }[entry.fn || 'value'];

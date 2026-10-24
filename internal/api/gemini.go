@@ -1021,7 +1021,12 @@ func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 
 // handleGeminiGenerate 为每个候选启动一次生成，任一候选失败时整个请求按首个错误失败
 func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, stream bool, count int) {
-	request.Unary = !stream
+	request.Unary = !stream || s.responseModes().FakeStream
+	if !stream {
+		var stopKeepalive func()
+		w, stopKeepalive = s.nonstreamKeepalive(w, r)
+		defer stopKeepalive()
+	}
 	candidates := s.startChatChoices(r.Context(), request, count, stream)
 	defer candidates.cancel()
 	if err := candidates.err; err != nil {

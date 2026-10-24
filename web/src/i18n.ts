@@ -78,5 +78,17 @@ export function useI18n() {
       .join('\n')
   }
 
-  return { availableLocales, locale: readonly(locale), setLocale, t, errorText, logText }
+  // tokenLabel 返回按当前语言分组的 token 数文案
+  const tokenLabel = (count: number): string =>
+    t('pg.tokens').replace('{count}', new Intl.NumberFormat(locale.value).format(count))
+
+  return {
+    availableLocales,
+    locale: readonly(locale),
+    setLocale,
+    t,
+    errorText,
+    logText,
+    tokenLabel,
+  }
 }

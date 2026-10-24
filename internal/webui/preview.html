@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <script>
+      const opener = new URLSearchParams(location.search).get('origin')
+      addEventListener('message', async (event) => {
+        if (event.source !== parent || event.origin !== opener || typeof event.data?.html !== 'string')
+          return
+        localStorage.clear()
+        sessionStorage.clear()
+        for (const cookie of document.cookie.split(';')) {
+          const name = cookie.split('=')[0].trim()
+          if (name) document.cookie = `${name}=; max-age=0; path=/`
+        }
+        for (const database of await indexedDB.databases())
+          if (database.name) indexedDB.deleteDatabase(database.name)
+        location.replace(URL.createObjectURL(new Blob([event.data.html], { type: 'text/html' })))
+      })
+      parent.postMessage({ type: 'preview-ready' }, opener)
+    </script>
+  </body>
+</html>

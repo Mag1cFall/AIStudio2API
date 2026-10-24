@@ -13,6 +13,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +29,8 @@ const (
 	waaRequestKey          = "lmnUSbltwc5ULv48iKLX"
 	waaAPIKey              = "AIzaSyBGb5fGAyC-pRcRU6MUHb__b_vKha71HRE"
 	waaLifetime            = 12 * time.Hour
-	waaSettleQuiet         = 3 * time.Second
-	loggingContextURL      = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/GetLoggingContext"
+	makerSuiteRPCURL       = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
+	loggingContextURL      = makerSuiteRPCURL + "GetLoggingContext"
 	firefoxInnerHeightDiff = 57
 )
 
@@ -52,6 +55,7 @@ type goWAARuntime struct {
 	userAgent      string
 	acceptLanguage string
 	pageURL        string
+	pageLoaded     time.Time
 	headers        http.Header
 	cacheDirectory string
 
@@ -65,6 +69,53 @@ type goWAARuntime struct {
 	interpreter     string
 	closed          bool
 	refreshTimer    *time.Timer
+}
+
+// pageRPC 是官网页面自身发出的 MakerSuite 请求方法与正文
+type pageRPC struct {
+	method string
+	body   string
+}
+
+// pageStartupRPCs 是官网页面启动时与 GetLoggingContext、Waa/Create 并发发出的请求
+var pageStartupRPCs = []pageRPC{
+	{"GetUserPreferences", "[]"},
+	{"GetAiStudioBenefitTier", "[]"},
+	{"ListModels", "[]"},
+	{"GenerateAccessToken", `["users/me"]`},
+	{"ListIncidentsHistory", "[]"},
+	{"ListPromos", "[]"},
+	{"GenerateAccessToken", `["users/me"]`},
+}
+
+// pageFollowupRPCs 是官网页面在启动请求完成后接着发出的请求
+var pageFollowupRPCs = []pageRPC{
+	{"ListRecentApplets", "[]"},
+	{"ListPrompts", "[100]"},
+}
+
+// pageTogglesPattern 匹配官网页面内联脚本写入的构建开关数组
+var pageTogglesPattern = regexp.MustCompile(`window\["_F_toggles_default_MakerSuite"\] = \[([^\]]*)\]`)
+
+// pageStringGlobalPattern 匹配官网页面内联脚本以 var 声明的构建字符串
+var pageStringGlobalPattern = regexp.MustCompile(`var (_F_cssRowKey|_F_combinedSignature) = '([^']*)'`)
+
+// pageGlobals 返回官网页面内联脚本声明的当前构建全局值
+func pageGlobals(body []byte) map[string]any {
+	globals := map[string]any{}
+	if match := pageTogglesPattern.FindSubmatch(body); match != nil {
+		toggles := []any{}
+		for _, item := range strings.Split(string(match[1]), ",") {
+			if value, err := strconv.ParseInt(strings.TrimSpace(item), 0, 64); err == nil {
+				toggles = append(toggles, float64(value))
+			}
+		}
+		globals["_F_toggles_default_MakerSuite"] = toggles
+	}
+	for _, match := range pageStringGlobalPattern.FindAllSubmatch(body, -1) {
+		globals[string(match[1])] = string(match[2])
+	}
+	return globals
 }
 
 // newGoWAAHTTPClient 创建由 runtime 手动处理重定向的固定出口客户端
@@ -106,7 +157,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		return nil, errors.New("WAA bootstrap 缺少实时目录聊天模型")
 	}
 	if options.BootstrapPrompt == "" {
-		options.BootstrapPrompt = fmt.Sprintf("AIStudio2API bootstrap %d", time.Now().UnixNano())
+		options.BootstrapPrompt = camoufoxnative.DefaultBootstrapPrompt
 	}
 	reportGoStartup(options, camoufoxnative.StartupPreparingBrowser)
 	storage, err := LoadStorageState(options.StorageStatePath)
@@ -146,14 +197,35 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	if err != nil {
 		return nil, err
 	}
-	extension, err := runtime.loggingContextHeader(ctx, apiKey)
-	if err != nil {
-		return nil, err
-	}
 	visitID, err := newVisitID()
 	if err != nil {
 		return nil, err
 	}
+	reportGoStartup(options, camoufoxnative.StartupLocatingWAA)
+	type loggingContext struct {
+		extension string
+		err       error
+	}
+	loggingDone := make(chan loggingContext, 1)
+	go func() {
+		extension, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
+		loggingDone <- loggingContext{extension, err}
+	}()
+	pageDone := make(chan struct{})
+	go func() {
+		runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
+		close(pageDone)
+	}()
+	challenge, err := runtime.createChallenge(ctx, nil)
+	logging := <-loggingDone
+	<-pageDone
+	if err != nil {
+		return nil, err
+	}
+	if logging.err != nil {
+		return nil, logging.err
+	}
+	extension := logging.extension
 	runtime.headers = http.Header{}
 	runtime.headers.Set("user-agent", runtime.userAgent)
 	runtime.headers.Set("x-goog-api-key", apiKey)
@@ -163,13 +235,14 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	if extension != "" {
 		runtime.headers.Set("x-goog-ext-519733851-bin", extension)
 	}
-	reportGoStartup(options, camoufoxnative.StartupLocatingWAA)
-	challenge, err := runtime.createChallenge(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
 	reportGoStartup(options, camoufoxnative.StartupBootstrappingWAA)
+	followupDone := make(chan struct{})
+	go func() {
+		runtime.sendPageRPCs(ctx, apiKey, visitID, pageFollowupRPCs)
+		close(followupDone)
+	}()
 	vm, err := runtime.startVM(ctx, challenge)
+	<-followupDone
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +250,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		vm.Close()
 		return nil, fmt.Errorf("填写 bootstrap 提示词失败: %w", err)
 	}
-	if err := vm.Settle(ctx, waaSettleQuiet); err != nil {
+	if err := vm.Settle(ctx); err != nil {
 		vm.Close()
 		return nil, err
 	}
@@ -224,6 +297,11 @@ func profileFromFingerprint(config map[string]any) (waa.Profile, string, string)
 			profile.Screen[name] = value
 		case "window":
 			profile.Window[name] = value
+		}
+	}
+	for _, name := range []string{"availLeft", "availTop"} {
+		if _, ok := profile.Screen[name]; !ok {
+			profile.Screen[name] = 0
 		}
 	}
 	profile.Navigator["doNotTrack"] = "unspecified"
@@ -322,6 +400,7 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
 	headers.Set("Sec-Fetch-User", "?1")
 	headers.Set("Priority", "u=0, i")
 	target := runtime.pageURL
+	navigationStart := time.Now()
 	for redirect := 0; redirect < 5; redirect++ {
 		response, err := runtime.do(ctx, http.MethodGet, target, nil, headers)
 		if err != nil {
@@ -350,9 +429,26 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
 		if len(match) != 2 || len(match[1]) == 0 {
 			return "", fmt.Errorf("AI Studio 页面缺少 WIu0Nc")
 		}
+		runtime.pageLoaded = time.Now()
+		runtime.profile.Globals = pageGlobals(body)
+		runtime.profile.NavigationStart = navigationStart
+		runtime.profile.TrustedTypes = requiresTrustedScripts(response.Header.Values("Content-Security-Policy"))
 		return string(match[1]), nil
 	}
 	return "", errors.New("AI Studio 页面跳转次数过多")
+}
+
+// requiresTrustedScripts 判断页面 CSP 是否含 require-trusted-types-for 'script'
+func requiresTrustedScripts(policies []string) bool {
+	for _, policy := range policies {
+		for _, directive := range strings.FieldsFunc(policy, func(character rune) bool { return character == ';' || character == ',' }) {
+			fields := strings.Fields(directive)
+			if len(fields) > 1 && strings.EqualFold(fields[0], "require-trusted-types-for") && slices.Contains(fields[1:], "'script'") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rpcHeaders 返回官网页面 grpc-web 请求的公共头
@@ -376,12 +472,13 @@ func (runtime *goWAARuntime) rpcHeaders(apiKey string) (http.Header, error) {
 	return headers, nil
 }
 
-// loggingContextHeader 调用 GetLoggingContext 并编码为官网的 X-Goog-Ext-519733851-Bin
-func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey string) (string, error) {
+// loggingContextHeader 以官网页面的 visit ID 调用 GetLoggingContext 并编码为官网的 X-Goog-Ext-519733851-Bin
+func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey string, visitID string) (string, error) {
 	headers, err := runtime.rpcHeaders(apiKey)
 	if err != nil {
 		return "", err
 	}
+	headers.Set("X-AIStudio-Visit-Id", visitID)
 	response, err := runtime.do(ctx, http.MethodPost, loggingContextURL, []byte("[]"), headers)
 	if err != nil {
 		return "", fmt.Errorf("读取官网日志上下文: %w", err)
@@ -399,6 +496,48 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 		return "", fmt.Errorf("编码官网日志上下文: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(encoded), nil
+}
+
+// sendPageRPCs 以官网页面的请求头并发发出页面自身的 MakerSuite 请求，与页面一样不依赖其结果
+func (runtime *goWAARuntime) sendPageRPCs(ctx context.Context, apiKey string, visitID string, rpcs []pageRPC) {
+	var group sync.WaitGroup
+	for _, rpc := range rpcs {
+		group.Go(func() {
+			headers, err := runtime.rpcHeaders(apiKey)
+			if err != nil {
+				return
+			}
+			headers.Set("X-AIStudio-Visit-Id", visitID)
+			runtime.drain(runtime.do(ctx, http.MethodPost, makerSuiteRPCURL+rpc.method, []byte(rpc.body), headers))
+		})
+	}
+	group.Wait()
+}
+
+// drain 读完并关闭页面自身请求的响应
+func (runtime *goWAARuntime) drain(response *http.Response, err error) {
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+}
+
+// pagePromptKey 是请求上下文中页面输入框提示词的键
+type pagePromptKey struct{}
+
+// countTokens 按官网页面对输入框内容 prompt 的统计，以 GenerateContent 的请求头与模型发出 CountTokens
+func (runtime *goWAARuntime) countTokens(ctx context.Context, headers http.Header, generateBody []byte, prompt string) {
+	var fields []json.RawMessage
+	var model string
+	if json.Unmarshal(generateBody, &fields) != nil || len(fields) == 0 || json.Unmarshal(fields[0], &model) != nil {
+		return
+	}
+	body, err := json.Marshal([]any{model, []any{[]any{[]any{[]any{nil, prompt}}, "user"}}})
+	if err != nil {
+		return
+	}
+	runtime.drain(runtime.do(ctx, http.MethodPost, makerSuiteRPCURL+"CountTokens", body, headers))
 }
 
 // encodeJSPBFields 按字段顺序把 JSPB 数组中的数字与字符串编码为 protobuf 二进制
@@ -531,7 +670,11 @@ func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challeng
 	runtime.interpreterHash, runtime.interpreter = challenge.InterpreterHash, interpreter
 	cookie, _ := documentCookie(runtime.cookies())
 	profile := runtime.profile
-	profile.Document = map[string]any{"cookie": cookie}
+	location, err := time.LoadLocation(profile.TimeZone)
+	if err != nil {
+		location = time.Local
+	}
+	profile.Document = map[string]any{"cookie": cookie, "lastModified": runtime.pageLoaded.In(location).Format("01/02/2006 15:04:05")}
 	return waa.NewRuntime(ctx, waa.Options{Challenge: challenge, Interpreter: interpreter, Profile: profile, LoadImage: runtime.loadImage})
 }
 
@@ -557,6 +700,7 @@ func (runtime *goWAARuntime) loadImage(address string) bool {
 	headers.Set("Sec-Fetch-Dest", "image")
 	headers.Set("Sec-Fetch-Mode", "no-cors")
 	headers.Set("Sec-Fetch-Site", "same-origin")
+	headers.Set("Priority", "u=5, i")
 	response, err := runtime.do(ctx, http.MethodGet, address, nil, headers)
 	if err != nil {
 		return false
@@ -590,7 +734,7 @@ func (runtime *goWAARuntime) currentVM(ctx context.Context, force bool) (*waa.Ru
 	if err != nil {
 		return nil, err
 	}
-	if err := vm.Settle(ctx, waaSettleQuiet); err != nil {
+	if err := vm.Settle(ctx); err != nil {
 		vm.Close()
 		return nil, err
 	}
@@ -628,7 +772,7 @@ func (runtime *goWAARuntime) ProtocolHeaders(ctx context.Context) (http.Header, 
 	return runtime.headers.Clone(), nil
 }
 
-// SendProtected 以官网页面 fetch 的 Firefox 请求形状流式发送受保护请求
+// SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求，GenerateContent 伴随的 CountTokens 统计 ctx 中的页面提示词
 func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*camoufoxnative.ProtectedResponse, error) {
 	request := headers.Clone()
 	request.Set("Accept", "*/*")
@@ -638,6 +782,10 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 	request.Set("Sec-Fetch-Mode", "cors")
 	request.Set("Sec-Fetch-Site", "same-site")
 	request.Del("Cookie")
+	if strings.HasSuffix(rawURL, "/GenerateContent") {
+		page, _ := ctx.Value(pagePromptKey{}).(string)
+		go runtime.countTokens(context.WithoutCancel(ctx), request.Clone(), body, page)
+	}
 	response, err := runtime.do(ctx, http.MethodPost, rawURL, body, request)
 	if err != nil {
 		return nil, err
@@ -659,8 +807,6 @@ func (runtime *goWAARuntime) State() camoufoxnative.State {
 		PID:       os.Getpid(),
 		PageURL:   runtime.pageURL,
 		UserAgent: runtime.userAgent,
-		Platform:  fmt.Sprint(runtime.profile.Navigator["platform"]),
-		Timezone:  runtime.options.Timezone,
 		Headers:   runtime.headers.Clone(),
 	}
 }

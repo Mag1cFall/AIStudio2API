@@ -303,10 +303,7 @@ func (s asciiString) StrictEquals(other Value) bool {
 }
 
 func (s asciiString) baseObject(r *Runtime) *Object {
-	ss := r.getStringSingleton()
-	ss.value = s
-	ss.setLength()
-	return ss.val
+	return r.stringBase(s)
 }
 
 func (s asciiString) hash(hash *maphash.Hash) uint64 {

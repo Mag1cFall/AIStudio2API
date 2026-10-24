@@ -468,7 +468,7 @@ button[aria-busy='true']::before {
   border-radius: var(--radius-md);
   background: color-mix(in oklab, var(--color-fg) 8%, transparent);
   font-family: var(--font-mono);
-  font-size: 0.85em;
+  font-size: 0.9em;
 }
 
 .markdown pre {

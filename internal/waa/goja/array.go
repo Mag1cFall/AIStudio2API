@@ -18,8 +18,14 @@ type arrayIterObject struct {
 }
 
 func (ai *arrayIterObject) next() Value {
+	value, done := ai.step()
+	return ai.val.runtime.createIterResultObject(value, done)
+}
+
+// step 推进数组迭代器，返回本步的值与是否结束
+func (ai *arrayIterObject) step() (Value, bool) {
 	if ai.obj == nil {
-		return ai.val.runtime.createIterResultObject(_undefined, true)
+		return _undefined, true
 	}
 	if ta, ok := ai.obj.self.(*typedArrayObject); ok {
 		ta.viewedArrayBuf.ensureNotDetached(true)
@@ -28,21 +34,18 @@ func (ai *arrayIterObject) next() Value {
 	index := ai.nextIdx
 	if index >= l {
 		ai.obj = nil
-		return ai.val.runtime.createIterResultObject(_undefined, true)
+		return _undefined, true
 	}
 	ai.nextIdx++
 	idxVal := valueInt(index)
 	if ai.kind == iterationKindKey {
-		return ai.val.runtime.createIterResultObject(idxVal, false)
+		return idxVal, false
 	}
 	elementValue := nilSafe(ai.obj.self.getIdx(idxVal, nil))
-	var result Value
 	if ai.kind == iterationKindValue {
-		result = elementValue
-	} else {
-		result = ai.val.runtime.newArrayValues([]Value{idxVal, elementValue})
+		return elementValue, false
 	}
-	return ai.val.runtime.createIterResultObject(result, false)
+	return ai.val.runtime.newArrayValues([]Value{idxVal, elementValue}), false
 }
 
 func (r *Runtime) createArrayIterator(iterObj *Object, kind iterationKind) Value {
@@ -71,11 +74,9 @@ type arrayObject struct {
 	lengthProp     valueProperty
 }
 
+// init 初始化数组，length 由 lengthProp 单独保存，命名属性表在首次写入时创建
 func (a *arrayObject) init() {
-	a.baseObject.init()
 	a.lengthProp.writable = true
-
-	a._put("length", &a.lengthProp)
 }
 
 func (a *arrayObject) _setLengthInt(l uint32, throw bool) bool {
@@ -292,7 +293,7 @@ func (i *arrayPropIter) next() (propIterItem, iterNextFunc) {
 		}
 	}
 
-	return i.a.baseObject.iterateStringKeys()()
+	return propIterItem{name: asciiString("length"), value: i.a.getLengthProp()}, i.a.baseObject.iterateStringKeys()
 }
 
 func (a *arrayObject) iterateStringKeys() iterNextFunc {
@@ -314,6 +315,9 @@ func (a *arrayObject) stringKeys(all bool, accum []Value) []Value {
 			accum = append(accum, asciiString(name))
 		}
 	}
+	if all {
+		accum = append(accum, asciiString("length"))
+	}
 	return a.baseObject.stringKeys(all, accum)
 }
 
@@ -321,7 +325,7 @@ func (a *arrayObject) hasOwnPropertyStr(name unistring.String) bool {
 	if idx := strToArrayIdx(name); idx != math.MaxUint32 {
 		return idx < uint32(len(a.values)) && a.values[idx] != nil
 	} else {
-		return a.baseObject.hasOwnPropertyStr(name)
+		return name == "length" || a.baseObject.hasOwnPropertyStr(name)
 	}
 }
 
@@ -360,7 +364,6 @@ func (a *arrayObject) expand(idx uint32) bool {
 				sa.setValues(a.values, a.objCount+1)
 				sa.val.self = sa
 				sa.lengthProp.writable = a.lengthProp.writable
-				sa._put("length", &sa.lengthProp)
 				return false
 			} else {
 				if bits.UintSize == 32 {
@@ -481,6 +484,9 @@ func (a *arrayObject) _deleteIdxProp(idx uint32, throw bool) bool {
 func (a *arrayObject) deleteStr(name unistring.String, throw bool) bool {
 	if idx := strToArrayIdx(name); idx != math.MaxUint32 {
 		return a._deleteIdxProp(idx, throw)
+	}
+	if name == "length" {
+		return a.checkDeleteProp(name, &a.lengthProp, throw)
 	}
 	return a.baseObject.deleteStr(name, throw)
 }

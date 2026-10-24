@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite-plus'
+import { compression, defineAlgorithm } from 'vite-plugin-compression2'
 import { fileURLToPath, URL } from 'node:url'
 
 const serviceTarget = 'http://127.0.0.1:2048'
@@ -187,7 +188,15 @@ export default defineConfig({
     sortPackageJson: false,
     ignorePatterns: ['node_modules'],
   },
-  plugins: [vue(), tailwindcss()],
+  plugins: [
+    vue(),
+    tailwindcss(),
+    compression({
+      algorithms: [defineAlgorithm('gzip', { level: 9 })],
+      exclude: /index\.html$/,
+      deleteOriginalAssets: true,
+    }),
+  ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -448,10 +448,7 @@ func (s unicodeString) StrictEquals(other Value) bool {
 }
 
 func (s unicodeString) baseObject(r *Runtime) *Object {
-	ss := r.getStringSingleton()
-	ss.value = s
-	ss.setLength()
-	return ss.val
+	return r.stringBase(s)
 }
 
 func (s unicodeString) CharAt(idx int) uint16 {

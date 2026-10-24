@@ -102,7 +102,7 @@ func (r *Runtime) stringproto_valueOf(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_iterator(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	return r.createStringIterator(call.This.toString())
+	return r.createStringIterator(toStringValue(call.This))
 }
 
 func (r *Runtime) string_fromcharcode(call FunctionCall) Value {
@@ -172,7 +172,7 @@ func (r *Runtime) string_raw(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_at(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	pos := call.Argument(0).ToInteger()
 	length := int64(s.Length())
 	if pos < 0 {
@@ -186,7 +186,7 @@ func (r *Runtime) stringproto_at(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_charAt(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	pos := call.Argument(0).ToInteger()
 	if pos < 0 || pos >= int64(s.Length()) {
 		return stringEmpty
@@ -196,7 +196,7 @@ func (r *Runtime) stringproto_charAt(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_charCodeAt(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	pos := call.Argument(0).ToInteger()
 	if pos < 0 || pos >= int64(s.Length()) {
 		return _NaN
@@ -206,7 +206,7 @@ func (r *Runtime) stringproto_charCodeAt(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_codePointAt(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	p := call.Argument(0).ToInteger()
 	size := s.Length()
 	if p < 0 || p >= int64(size) {
@@ -229,7 +229,7 @@ func (r *Runtime) stringproto_codePointAt(call FunctionCall) Value {
 func (r *Runtime) stringproto_concat(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
 	strs := make([]String, len(call.Arguments)+1)
-	a, u := devirtualizeString(call.This.toString())
+	a, u := devirtualizeString(toStringValue(call.This))
 	allAscii := true
 	totalLen := 0
 	if u == nil {
@@ -281,7 +281,7 @@ func (r *Runtime) stringproto_concat(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_endsWith(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	searchString := call.Argument(0)
 	if isRegexp(searchString) {
 		panic(r.NewTypeError("First argument to String.prototype.endsWith must not be a regular expression"))
@@ -310,7 +310,7 @@ func (r *Runtime) stringproto_endsWith(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_includes(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	searchString := call.Argument(0)
 	if isRegexp(searchString) {
 		panic(r.NewTypeError("First argument to String.prototype.includes must not be a regular expression"))
@@ -331,8 +331,8 @@ func (r *Runtime) stringproto_includes(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_indexOf(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	value := call.This.toString()
-	target := call.Argument(0).toString()
+	value := toStringValue(call.This)
+	target := toStringValue(call.Argument(0))
 	pos := call.Argument(1).ToNumber().ToInteger()
 
 	if pos < 0 {
@@ -349,8 +349,8 @@ func (r *Runtime) stringproto_indexOf(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_lastIndexOf(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	value := call.This.toString()
-	target := call.Argument(0).toString()
+	value := toStringValue(call.This)
+	target := toStringValue(call.Argument(0))
 	numPos := call.Argument(1).ToNumber()
 
 	var pos int64
@@ -373,8 +373,8 @@ func (r *Runtime) stringproto_lastIndexOf(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_localeCompare(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	this := norm.NFD.String(call.This.toString().String())
-	that := norm.NFD.String(call.Argument(0).toString().String())
+	this := norm.NFD.String(toStringValue(call.This).String())
+	that := norm.NFD.String(toStringValue(call.Argument(0)).String())
 	return intToValue(int64(r.collator().CompareString(this, that)))
 }
 
@@ -402,7 +402,7 @@ func (r *Runtime) stringproto_match(call FunctionCall) Value {
 	if matcher, ok := r.toObject(rx.getSym(SymMatch, nil)).self.assertCallable(); ok {
 		return matcher(FunctionCall{
 			This:      rx.val,
-			Arguments: []Value{call.This.toString()},
+			Arguments: []Value{toStringValue(call.This)},
 		})
 	}
 
@@ -433,7 +433,7 @@ func (r *Runtime) stringproto_matchAll(call FunctionCall) Value {
 	if matcher, ok := r.toObject(rx.getSym(SymMatchAll, nil)).self.assertCallable(); ok {
 		return matcher(FunctionCall{
 			This:      rx.val,
-			Arguments: []Value{call.This.toString()},
+			Arguments: []Value{toStringValue(call.This)},
 		})
 	}
 
@@ -442,7 +442,7 @@ func (r *Runtime) stringproto_matchAll(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_normalize(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	var form string
 	if formArg := call.Argument(0); formArg != _undefined {
 		form = formArg.toString().toString().String()
@@ -481,7 +481,7 @@ func (r *Runtime) stringproto_normalize(call FunctionCall) Value {
 
 func (r *Runtime) _stringPad(call FunctionCall, start bool) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	maxLength := toLength(call.Argument(0))
 	stringLength := int64(s.Length())
 	if maxLength <= stringLength {
@@ -551,7 +551,7 @@ func (r *Runtime) stringproto_padStart(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_repeat(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	n := call.Argument(0).ToNumber()
 	if n == _positiveInf {
 		panic(r.newError(r.getRangeError(), "Invalid count value"))
@@ -692,7 +692,7 @@ func (r *Runtime) stringproto_replace(call FunctionCall) Value {
 		}
 	}
 
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	var found []regexpResult
 	searchStr := searchValue.toString()
 	pos := s.index(searchStr, 0)
@@ -724,7 +724,7 @@ func (r *Runtime) stringproto_replaceAll(call FunctionCall) Value {
 		}
 	}
 
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	var found []regexpResult
 	searchStr := searchValue.toString()
 	searchLength := searchStr.Length()
@@ -764,7 +764,7 @@ func (r *Runtime) stringproto_search(call FunctionCall) Value {
 	if searcher, ok := r.toObject(rx.getSym(SymSearch, nil)).self.assertCallable(); ok {
 		return searcher(FunctionCall{
 			This:      rx.val,
-			Arguments: []Value{call.This.toString()},
+			Arguments: []Value{toStringValue(call.This)},
 		})
 	}
 
@@ -773,7 +773,7 @@ func (r *Runtime) stringproto_search(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_slice(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	l := int64(s.Length())
 	start := call.Argument(0).ToInteger()
@@ -824,7 +824,7 @@ func (r *Runtime) stringproto_split(call FunctionCall) Value {
 			})
 		}
 	}
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	limit := -1
 	if limitValue != _undefined {
@@ -930,7 +930,7 @@ func (r *Runtime) stringproto_split(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_startsWith(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	searchString := call.Argument(0)
 	if isRegexp(searchString) {
 		panic(r.NewTypeError("First argument to String.prototype.startsWith must not be a regular expression"))
@@ -956,7 +956,7 @@ func (r *Runtime) stringproto_startsWith(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_substring(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	l := int64(s.Length())
 	intStart := call.Argument(0).ToInteger()
@@ -987,21 +987,21 @@ func (r *Runtime) stringproto_substring(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_toLowerCase(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	return s.toLower()
 }
 
 func (r *Runtime) stringproto_toUpperCase(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	return s.toUpper()
 }
 
 func (r *Runtime) stringproto_trim(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	// TODO handle invalid UTF-16
 	return newStringValue(strings.Trim(s.String(), parser.WhitespaceChars))
@@ -1009,7 +1009,7 @@ func (r *Runtime) stringproto_trim(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_trimEnd(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	// TODO handle invalid UTF-16
 	return newStringValue(strings.TrimRight(s.String(), parser.WhitespaceChars))
@@ -1017,7 +1017,7 @@ func (r *Runtime) stringproto_trimEnd(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_trimStart(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 
 	// TODO handle invalid UTF-16
 	return newStringValue(strings.TrimLeft(s.String(), parser.WhitespaceChars))
@@ -1025,7 +1025,7 @@ func (r *Runtime) stringproto_trimStart(call FunctionCall) Value {
 
 func (r *Runtime) stringproto_substr(call FunctionCall) Value {
 	r.checkObjectCoercible(call.This)
-	s := call.This.toString()
+	s := toStringValue(call.This)
 	start := call.Argument(0).ToInteger()
 	var length int64
 	sl := int64(s.Length())
@@ -1155,6 +1155,31 @@ func (r *Runtime) getStringSingleton() *stringObject {
 		r.stringSingleton = ret
 	}
 	return ret
+}
+
+// stringBase 返回装入 s 的 String 单例，用于原始字符串取属性
+func (r *Runtime) stringBase(s String) *Object {
+	ss := r.getStringSingleton()
+	ss.value = s
+	ss.setLength()
+	return ss.val
+}
+
+// primitiveBase 返回原始值 v 取属性时使用的对象，字符串直接装入 String 单例
+func (r *Runtime) primitiveBase(v Value) *Object {
+	switch v.(type) {
+	case asciiString, unicodeString:
+		return r.stringBase(v.(String))
+	}
+	return v.baseObject(r)
+}
+
+// toStringValue 返回 v 的字符串值，v 已是字符串时原样返回
+func toStringValue(v Value) String {
+	if s, ok := v.(String); ok {
+		return s
+	}
+	return v.toString()
 }
 
 func (r *Runtime) getString() *Object {

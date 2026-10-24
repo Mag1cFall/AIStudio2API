@@ -282,10 +282,15 @@ export interface ServiceConfig {
   admin_password?: string
   admin_password_set: boolean
   build_native_nonstream: boolean
+  nonstream_keepalive: boolean
+  fake_stream: boolean
+  youtube_links: boolean
   auth_states: string
   listen_addr: string
+  preview_listen_addr: string
   proxy_api_key: string
   active_listen_addr: string
+  active_preview_listen_addr: string
   active_proxy_api_key: string
   management_restart_required: boolean
   service_restart_required: boolean

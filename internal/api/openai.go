@@ -26,6 +26,7 @@ type chatRequest struct {
 	ToolChoice          json.RawMessage   `json:"tool_choice"`
 	Temperature         *float64          `json:"temperature"`
 	TopP                *float64          `json:"top_p"`
+	TopK                *int              `json:"top_k"`
 	MaxTokens           *int64            `json:"max_tokens"`
 	MaxCompletionTokens *int64            `json:"max_completion_tokens"`
 	N                   *int64            `json:"n"`
@@ -234,7 +235,12 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	generateRequest.Unary = !request.Stream
+	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
+	if !request.Stream {
+		var stopKeepalive func()
+		w, stopKeepalive = s.nonstreamKeepalive(w, r)
+		defer stopKeepalive()
+	}
 	s.thoughtSignatures.Restore(generateRequest.Contents)
 	count := 1
 	if request.N != nil {
@@ -312,6 +318,9 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 			if err != nil {
 				return aistudio.GenerateRequest{}, fmt.Errorf("%s message: %w", message.Role, err)
 			}
+			if message.Name != "" && text != "" {
+				text = message.Name + ": " + text
+			}
 			if text != "" {
 				system = append(system, text)
 			}
@@ -383,6 +392,11 @@ func chatMessageContent(message chatMessage) (aistudio.Content, error) {
 		parts, err = openAIAssistantContentParts(message.Content, parts)
 		if err != nil {
 			return aistudio.Content{}, fmt.Errorf("assistant message content: %w", err)
+		}
+	}
+	if message.Name != "" {
+		if index := slices.IndexFunc(parts, func(part aistudio.Part) bool { return part.Text != "" }); index >= 0 {
+			parts[index].Text = message.Name + ": " + parts[index].Text
 		}
 	}
 	for _, call := range message.ToolCalls {
@@ -840,6 +854,7 @@ func (request chatRequest) generationConfig() (aistudio.GenerationConfig, error)
 	config := aistudio.GenerationConfig{
 		Temperature:     request.Temperature,
 		TopP:            request.TopP,
+		TopK:            request.TopK,
 		ReasoningEffort: request.ReasoningEffort,
 		Seed:            request.Seed,
 	}

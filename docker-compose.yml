@@ -7,6 +7,7 @@ services:
     init: true
     ports:
       - "2048:2048"
+      - "2050:2050"
     environment:
       TZ: Asia/Shanghai
     volumes:

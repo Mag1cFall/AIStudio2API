@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
 // ErrPromptNotFound 表示对话不存在
@@ -44,6 +46,31 @@ func (s *server) registerPrompts(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/prompts/{id}", s.handlePrompt)
 	mux.HandleFunc("PUT /api/prompts/{id}", s.handleSavePrompt)
 	mux.HandleFunc("DELETE /api/prompts/{id}", s.handleDeletePrompt)
+	mux.HandleFunc("POST /api/prompts/title", s.handleGenerateTitle)
+}
+
+// handleGenerateTitle 按本次运行的模型、提示词与回答经 GenerateTitle 生成对话标题
+func (s *server) handleGenerateTitle(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service.(aistudio.TitleService)
+	if !ok {
+		writeAdminError(w, http.StatusNotImplemented, "title_unavailable", "生成服务不支持生成标题")
+		return
+	}
+	var request struct {
+		Model  string `json:"model"`
+		Prompt string `json:"prompt"`
+		Answer string `json:"answer"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	title, err := service.GenerateTitle(r.Context(), aistudio.TitleRequest{Model: request.Model, Prompt: request.Prompt, Answer: request.Answer})
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"title": title})
 }
 
 func (s *server) handlePrompts(w http.ResponseWriter, r *http.Request) {

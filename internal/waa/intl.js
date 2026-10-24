@@ -504,26 +504,70 @@
   // Segmenter
   const segmentsPrototype = {};
   const segmentIteratorPrototype = Object.create(Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())));
-  const segmentData = segment => segment === undefined ? undefined : Object.assign({ segment: segment.segment, index: segment.index, input: segment.input }, segment.isWordLike === undefined ? {} : { isWordLike: segment.isWordLike });
+  const segmentBoundaries = slot => {
+    if (!slot.starts) {
+      const [starts, wordLike] = host.segment(slot.granularity, slot.found, slot.string);
+      slot.starts = starts;
+      slot.wordLike = wordLike;
+    }
+    return slot.starts;
+  };
+  const segmentData = (slot, index) => {
+    const starts = segmentBoundaries(slot);
+    const start = starts[index];
+    const data = { segment: slot.string.slice(start, index + 1 < starts.length ? starts[index + 1] : slot.string.length), index: start, input: slot.string };
+    if (slot.wordLike) data.isWordLike = slot.wordLike[index];
+    return data;
+  };
   install(segmentsPrototype, {
-    containing(index) { return segmentData(implOf(this, 'Segments', 'containing').containing(index)); },
+    containing(index) {
+      const slot = slotOf(this, 'Segments', 'containing');
+      const position = Math.trunc(Number(index)) || 0;
+      if (position < 0 || position >= slot.string.length) return undefined;
+      const starts = segmentBoundaries(slot);
+      let low = 0;
+      let high = starts.length - 1;
+      while (low < high) {
+        const middle = (low + high + 1) >> 1;
+        if (starts[middle] <= position) low = middle; else high = middle - 1;
+      }
+      return segmentData(slot, low);
+    },
     [Symbol.iterator]() {
       const iterator = Object.create(segmentIteratorPrototype);
-      slots.set(iterator, { kind: 'SegmentIterator', impl: implOf(this, 'Segments', '[Symbol.iterator]')[Symbol.iterator]() });
+      slots.set(iterator, { kind: 'SegmentIterator', segments: slotOf(this, 'Segments', '[Symbol.iterator]'), next: 0 });
       return iterator;
     },
   }, { containing: 1 });
   install(segmentIteratorPrototype, {
-    next() { const step = implOf(this, 'SegmentIterator', 'next').next(); return step.done ? { value: undefined, done: true } : { value: segmentData(step.value), done: false }; },
+    next() {
+      const slot = slotOf(this, 'SegmentIterator', 'next');
+      if (slot.next >= segmentBoundaries(slot.segments).length) return { value: undefined, done: true };
+      return { value: segmentData(slot.segments, slot.next++), done: false };
+    },
   });
   define(segmentIteratorPrototype, Symbol.toStringTag, { value: 'Segmenter String Iterator', writable: false, enumerable: false, configurable: true });
-  formatjsClass('Segmenter', 0, [], ['granularity'], {
+  const Segmenter = function Segmenter(locales, options) {
+    requireNew(new.target, 'Segmenter');
+    const requested = canonicalList(locales);
+    let granularity = 'grapheme';
+    if (options !== undefined) {
+      if (options === null || typeof options !== 'object' && typeof options !== 'function') throw new TypeError('options argument of Intl.Segmenter must be an object, got ' + (options === null ? 'null' : typeof options));
+      getOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+      granularity = getOption(options, 'granularity', 'string', ['grapheme', 'word', 'sentence'], 'grapheme');
+    }
+    const resolved = resolveLocale(requested, false, [], {});
+    slots.set(this, { kind: 'Segmenter', locale: resolved.locale, found: resolved.found, granularity });
+  };
+  makeClass(Segmenter, 'Segmenter', 0, {
+    resolvedOptions() { const slot = slotOf(this, 'Segmenter', 'resolvedOptions'); return { locale: slot.locale, granularity: slot.granularity }; },
     segment(string) {
+      const slot = slotOf(this, 'Segmenter', 'segment');
       const segments = Object.create(segmentsPrototype);
-      slots.set(segments, { kind: 'Segments', impl: implOf(this, 'Segmenter', 'segment').segment(String(string)) });
+      slots.set(segments, { kind: 'Segments', granularity: slot.granularity, found: slot.found, string: String(string) });
       return segments;
     },
-  }, { segment: 1 });
+  }, { segment: 1 }, false);
 
   install(Intl, {
     getCanonicalLocales(locales) { return canonicalList(locales); },

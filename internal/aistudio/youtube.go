@@ -43,6 +43,15 @@ func ExternalMediaForURL(raw string) (*ExternalMedia, bool) {
 	return &ExternalMedia{MIME: "video/*", URL: "https://www.youtube.com/watch?v=" + url.QueryEscape(videoID)}, true
 }
 
+// attachYouTubeLinks 返回把各 user content 文本中的 YouTube 链接转为视频外部媒体后的 contents
+func attachYouTubeLinks(contents []Content) []Content {
+	converted := make([]Content, len(contents))
+	for index, content := range contents {
+		converted[index] = attachYouTubeMedia(content)
+	}
+	return converted
+}
+
 func attachYouTubeMedia(content Content) Content {
 	if content.Role != RoleUser {
 		return content

@@ -12,11 +12,16 @@ const props = defineProps<{ path: string }>()
 const emit = defineEmits<{ change: [] }>()
 const { t } = useI18n()
 
-// setType 修改属性类型，离开 object 与 enum 时清除子属性与枚举值
+// setType 修改属性类型，离开 object、enum 与多维数组元素时清除子属性、枚举值与枚举原类型及原始取值、内层数组
 function setType(item: SchemaEntry, type: SchemaType): void {
   item.type = type
   if (type !== 'object') delete item.children
-  if (type !== 'enum') delete item.values
+  if (type !== 'enum') {
+    delete item.values
+    delete item.enumType
+    delete item.enumValues
+  }
+  if (type !== 'array') delete item.itemExtra?.items
   emit('change')
 }
 
@@ -38,9 +43,10 @@ function addValue(item: SchemaEntry): void {
   emit('change')
 }
 
-// removeValue 删除枚举值
+// removeValue 删除枚举值及其原始取值
 function removeValue(item: SchemaEntry, index: number): void {
   item.values?.splice(index, 1)
+  item.enumValues?.splice(index, 1)
   emit('change')
 }
 </script>
@@ -68,6 +74,9 @@ function removeValue(item: SchemaEntry, index: number): void {
           @update:model-value="setType(item, $event as SchemaType)"
         >
           <option v-for="type in schemaTypes" :key="type" :value="type">{{ type }}</option>
+          <option v-if="!schemaTypes.includes(item.type)" :value="item.type" disabled>
+            {{ item.type }}
+          </option>
         </UiSelect>
       </div>
       <button

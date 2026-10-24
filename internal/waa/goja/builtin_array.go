@@ -1716,7 +1716,8 @@ func (r *Runtime) createArray(val *Object) objectImpl {
 func (r *Runtime) createArrayIterProto(val *Object) objectImpl {
 	o := newBaseObjectObj(val, r.getIteratorPrototype(), classObject)
 
-	o._putProp("next", r.newNativeFunc(r.arrayIterProto_next, "next", 0), true, false, true)
+	r.global.arrayIterNext = r.newNativeFunc(r.arrayIterProto_next, "next", 0)
+	o._putProp("next", r.global.arrayIterNext, true, false, true)
 	o._putSym(SymToStringTag, valueProp(asciiString(classArrayIterator), false, false, true))
 
 	return o

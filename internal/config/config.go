@@ -18,6 +18,7 @@ import (
 const (
 	defaultAuthStates         = "auth"
 	defaultListenAddr         = "127.0.0.1:2048"
+	defaultPreviewListenAddr  = "127.0.0.1:2050"
 	defaultInitTimeout        = 2 * time.Minute
 	defaultRequestTimeout     = 30 * time.Minute
 	defaultWarmWorkerLimit    = 5
@@ -29,6 +30,7 @@ const (
 var configKeys = [...]string{
 	"AISTUDIO_AUTH_STATES",
 	"LISTEN_ADDR",
+	"PREVIEW_LISTEN_ADDR",
 	"PROXY_API_KEY",
 	"PROXY",
 	"INIT_TIMEOUT",
@@ -53,6 +55,9 @@ var configKeys = [...]string{
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"BUILD_NATIVE_NONSTREAM",
+	"NONSTREAM_KEEPALIVE",
+	"FAKE_STREAM",
+	"YOUTUBE_LINKS",
 }
 
 // LogFileMB 是单个日志文件的轮转大小
@@ -83,8 +88,12 @@ type Config struct {
 	AdminUsername          string        `json:"admin_username"`
 	AdminPassword          string        `json:"-"`
 	BuildNativeNonstream   bool          `json:"build_native_nonstream"`
+	NonstreamKeepalive     bool          `json:"nonstream_keepalive"`
+	FakeStream             bool          `json:"fake_stream"`
+	YouTubeLinks           bool          `json:"youtube_links"`
 	AuthStates             string        `json:"auth_states"`
 	ListenAddr             string        `json:"listen_addr"`
+	PreviewListenAddr      string        `json:"preview_listen_addr"`
 	ProxyAPIKey            string        `json:"proxy_api_key"`
 	Proxy                  string        `json:"proxy"`
 	InitTimeout            time.Duration `json:"-"`
@@ -110,8 +119,10 @@ func Default() Config {
 		LogFile:                true,
 		LogMaxTotalMB:          500,
 		BuildNativeNonstream:   true,
+		NonstreamKeepalive:     true,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
+		PreviewListenAddr:      defaultPreviewListenAddr,
 		InitTimeout:            defaultInitTimeout,
 		RequestTimeout:         defaultRequestTimeout,
 		WarmWorkerLimit:        defaultWarmWorkerLimit,
@@ -180,11 +191,32 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("BUILD_NATIVE_NONSTREAM 必须是 true 或 false")
 		}
 	}
+	if value, ok := values["NONSTREAM_KEEPALIVE"]; ok {
+		cfg.NonstreamKeepalive, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("NONSTREAM_KEEPALIVE 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["FAKE_STREAM"]; ok {
+		cfg.FakeStream, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("FAKE_STREAM 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["YOUTUBE_LINKS"]; ok {
+		cfg.YouTubeLinks, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("YOUTUBE_LINKS 必须是 true 或 false")
+		}
+	}
 	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
 		cfg.AuthStates = strings.TrimSpace(value)
 	}
 	if value, ok := values["LISTEN_ADDR"]; ok {
 		cfg.ListenAddr = strings.TrimSpace(value)
+	}
+	if value, ok := values["PREVIEW_LISTEN_ADDR"]; ok {
+		cfg.PreviewListenAddr = strings.TrimSpace(value)
 	}
 	if value, ok := values["PROXY_API_KEY"]; ok {
 		cfg.ProxyAPIKey = strings.TrimSpace(value)
@@ -275,8 +307,12 @@ func (c Config) Save(path string) error {
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
 		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
+		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),
+		"FAKE_STREAM":              strconv.FormatBool(c.FakeStream),
+		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
 		"LISTEN_ADDR":              c.ListenAddr,
+		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
 		"PROXY_API_KEY":            c.ProxyAPIKey,
 		"PROXY":                    c.Proxy,
 		"INIT_TIMEOUT":             c.InitTimeout.String(),
@@ -313,8 +349,14 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.AuthStates) == "" {
 		return fmt.Errorf("AISTUDIO_AUTH_STATES 不能为空")
 	}
-	if err := validateListenAddr(c.ListenAddr); err != nil {
+	if err := validateListenAddr("LISTEN_ADDR", c.ListenAddr); err != nil {
 		return err
+	}
+	if err := validateListenAddr("PREVIEW_LISTEN_ADDR", c.PreviewListenAddr); err != nil {
+		return err
+	}
+	if listenPort(c.ListenAddr) == listenPort(c.PreviewListenAddr) {
+		return fmt.Errorf("PREVIEW_LISTEN_ADDR 的端口不能与 LISTEN_ADDR 相同")
 	}
 	for _, proxy := range ProxyList(c.Proxy) {
 		if err := ValidateProxy(proxy); err != nil {
@@ -458,8 +500,12 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
 		AdminUsername          string   `json:"admin_username"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
+		FakeStream             bool     `json:"fake_stream"`
+		YouTubeLinks           bool     `json:"youtube_links"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
+		PreviewListenAddr      string   `json:"preview_listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
 		Proxy                  string   `json:"proxy"`
 		InitTimeout            string   `json:"init_timeout"`
@@ -485,8 +531,12 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		AdminAuthEnabled:       c.AdminAuthEnabled,
 		AdminUsername:          c.AdminUsername,
 		BuildNativeNonstream:   c.BuildNativeNonstream,
+		NonstreamKeepalive:     c.NonstreamKeepalive,
+		FakeStream:             c.FakeStream,
+		YouTubeLinks:           c.YouTubeLinks,
 		AuthStates:             c.AuthStates,
 		ListenAddr:             c.ListenAddr,
+		PreviewListenAddr:      c.PreviewListenAddr,
 		ProxyAPIKey:            c.ProxyAPIKey,
 		Proxy:                  c.Proxy,
 		InitTimeout:            c.InitTimeout.String(),
@@ -517,8 +567,12 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername          string   `json:"admin_username"`
 		AdminPassword          string   `json:"admin_password"`
 		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
+		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
+		FakeStream             bool     `json:"fake_stream"`
+		YouTubeLinks           bool     `json:"youtube_links"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
+		PreviewListenAddr      string   `json:"preview_listen_addr"`
 		ProxyAPIKey            string   `json:"proxy_api_key"`
 		Proxy                  string   `json:"proxy"`
 		InitTimeout            string   `json:"init_timeout"`
@@ -557,8 +611,12 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AdminUsername:          strings.TrimSpace(value.AdminUsername),
 		AdminPassword:          value.AdminPassword,
 		BuildNativeNonstream:   value.BuildNativeNonstream,
+		NonstreamKeepalive:     value.NonstreamKeepalive,
+		FakeStream:             value.FakeStream,
+		YouTubeLinks:           value.YouTubeLinks,
 		AuthStates:             strings.TrimSpace(value.AuthStates),
 		ListenAddr:             strings.TrimSpace(value.ListenAddr),
+		PreviewListenAddr:      strings.TrimSpace(value.PreviewListenAddr),
 		ProxyAPIKey:            strings.TrimSpace(value.ProxyAPIKey),
 		Proxy:                  strings.TrimSpace(value.Proxy),
 		InitTimeout:            initTimeout,
@@ -716,18 +774,21 @@ func parsePositiveInt(key string, value string) (int, error) {
 	return parsed, nil
 }
 
-func validateListenAddr(value string) error {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(value))
+func validateListenAddr(key, value string) error {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(value))
 	if err != nil || port == "" {
-		return fmt.Errorf("LISTEN_ADDR 必须是 host:port")
-	}
-	if host == "" {
-		host = "0.0.0.0"
+		return fmt.Errorf("%s 必须是 host:port", key)
 	}
 	if parsed, err := strconv.ParseUint(port, 10, 16); err != nil || parsed == 0 {
-		return fmt.Errorf("LISTEN_ADDR 端口必须是 1 到 65535")
+		return fmt.Errorf("%s 端口必须是 1 到 65535", key)
 	}
 	return nil
+}
+
+// listenPort 返回监听地址中的端口
+func listenPort(value string) string {
+	_, port, _ := net.SplitHostPort(strings.TrimSpace(value))
+	return port
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

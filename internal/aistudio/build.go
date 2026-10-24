@@ -144,7 +144,6 @@ func encodeBuildContents(contents []Content) ([]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
-		content = attachYouTubeMedia(content)
 		role := "user"
 		switch content.Role {
 		case RoleUser, RoleTool:

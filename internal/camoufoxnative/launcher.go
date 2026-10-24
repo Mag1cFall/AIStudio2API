@@ -102,6 +102,11 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if runtime.GOOS == "darwin" {
 		// gfx.font_loader.delay 为 0 时 Firefox 同步加载本地化与带字重的字体族名
 		prefs["gfx.font_loader.delay"] = 0
+		if !options.Headless {
+			// layers.gpu-process.enabled 为 false 时由注册了随包字体的主进程绘制窗口，webgl.allow-in-parent 让 WebGL 随之在主进程运行
+			prefs["layers.gpu-process.enabled"] = false
+			prefs["webgl.allow-in-parent"] = true
+		}
 	}
 	if runtime.GOOS == "linux" {
 		fontconfig, err := windowsFontconfig(options.ExecutablePath, profile)

@@ -82,7 +82,6 @@ const heading = computed(() =>
   min-height: 0;
   overflow: auto;
   padding: 20px 20px 0;
-  animation: host-enter 0.3s cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
 .ms-model-empty-state {
@@ -177,13 +176,6 @@ h3,
     filter: blur(6px);
     opacity: 0;
     transform: translateY(10px);
-  }
-}
-
-@keyframes host-enter {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
   }
 }
 </style>
