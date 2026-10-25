@@ -172,11 +172,12 @@ HTTP/2 实现为 [Mag1cFall/fhttp](https://github.com/Mag1cFall/fhttp) v0.6.8-fi
 - QUIC 首航与 neqo 0.28 相同：DCID 长度与首个包号按 neqo 取随机值，ClientHello 在 SNI 中点切开分到前两个 Initial 包，数据报补零到 1252 字节（IPv6 为 1232），不做 PMTU 探测
 - ClientHello 为 13 个随机排列的扩展，其后依次为 QUIC 传输参数、ECH GREASE 与恢复会话时的 `pre_shared_key`；X25519MLKEM768 与 X25519 共用一把 X25519 密钥，ECH GREASE 长度按 NSS 由内层 ClientHello 的长度补齐得出
 - 传输参数与 Firefox 默认值相同：空闲超时 30 秒、连接接收窗口 25165824、本端双向流窗口 12582912、对端双向流与单向流窗口 1048576、各 100 条流、`max_ack_delay` 20、连接 ID 上限 8、`min_ack_delay` 1000 微秒与 `max_datagram_frame_size` 65535
+- 与 neqo 一样，有请求进行中时，自最近一次收到数据包或其后首次发出数据起经过空闲超时的一半仍没有收发，就发送一个保活 PING；没有请求时连接按空闲超时关闭
 - 控制流 SETTINGS 依次为 QPACK 动态表容量 65536、阻塞流 20、WebTransport、两个 H3 DATAGRAM 设置与扩展 CONNECT，其后跟一个保留类型的 GREASE 帧；QPACK 按 neqo 把静态表中没有的头名插入动态表，字符串一律 Huffman 编码，并回送 Section Acknowledgment 与 Insert Count Increment
 - 每类连接保存会话票据与服务端下发的 `NEW_TOKEN`。之后的连接带令牌与 `pre_shared_key` 恢复会话；票据允许 0-RTT 时 ClientHello 带 `early_data`，控制流与 QPACK 流在 0-RTT 中发出并沿用上次的服务端 QPACK 设置；GET、HEAD、OPTIONS 等安全方法的请求在 0-RTT 中发出，其余请求等握手完成；服务端拒绝 0-RTT 时重新打开控制流与 QPACK 流，并重发 0-RTT 中的请求
 - 恢复会话的首航与 Firefox 相同：第三个 Initial 数据报在 Initial 包之后带首个 0-RTT 包（控制流与 QPACK 流），再补零到 1252 字节
 
-QUIC 与 TLS 实现为 [Mag1cFall/uquic](https://github.com/Mag1cFall/uquic) v0.0.6-firefox.4 与 [Mag1cFall/utls](https://github.com/Mag1cFall/utls) v1.8.2-firefox.3，分别基于 refraction-networking 的 uquic 与 utls；utls 分叉在自定义 ClientHello 恢复会话时保留 `early_data`，握手中途关闭连接时结束握手；uquic 分叉在 1-RTT 超时探测没有可发数据时发 PING，并把恢复会话的首个 0-RTT 包并入首航最后一个 Initial 数据报。HTTP/3 与 QPACK 由服务自行实现。
+QUIC 与 TLS 实现为 [Mag1cFall/uquic](https://github.com/Mag1cFall/uquic) v0.0.6-firefox.6 与 [Mag1cFall/utls](https://github.com/Mag1cFall/utls) v1.8.2-firefox.3，分别基于 refraction-networking 的 uquic 与 utls；utls 分叉在自定义 ClientHello 恢复会话时保留 `early_data`，握手中途关闭连接时结束握手；uquic 分叉在 1-RTT 超时探测没有可发数据时发 PING，把恢复会话的首个 0-RTT 包并入首航最后一个 Initial 数据报，并提供按 neqo 只在请求流进行中保活的选项。HTTP/3 与 QPACK 由服务自行实现。
 
 `Origin` 与目标主机不同的请求先发 CORS 预检：`OPTIONS` 带 `Accept: */*`、`Access-Control-Request-Method`、按字母序以逗号连接的小写 `Access-Control-Request-Headers`（页面脚本设置的头）、原请求的 `User-Agent`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin` 与 `Sec-Fetch-*`，以及 `Priority: u=4`，不带 Cookie。预检按方法、URL 与请求头集合缓存，有效期取响应的 `Access-Control-Max-Age`（缺省 5 秒，上限 24 小时）；非 2xx 预检使原请求失败。
 
