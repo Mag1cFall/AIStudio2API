@@ -114,25 +114,8 @@ func profileIdentities(chromeRoot string, profile string) ([]profileIdentity, er
 }
 
 func profileLocale(chromeRoot string, profile string) string {
-	data, err := os.ReadFile(filepath.Join(chromeRoot, profile, "Preferences"))
-	if err != nil {
-		return ""
-	}
-	var preferences struct {
-		Intl struct {
-			AcceptLanguages   string `json:"accept_languages"`
-			SelectedLanguages string `json:"selected_languages"`
-		} `json:"intl"`
-	}
-	if json.Unmarshal(data, &preferences) != nil {
-		return ""
-	}
-	for _, value := range []string{preferences.Intl.AcceptLanguages, preferences.Intl.SelectedLanguages} {
-		if locale := strings.TrimSpace(strings.Split(value, ",")[0]); locale != "" {
-			return locale
-		}
-	}
-	return ""
+	locale, _, _ := strings.Cut(profileLanguages(chromeRoot, profile), ",")
+	return strings.TrimSpace(locale)
 }
 
 // copyFile 把 src 复制为 dst

@@ -131,8 +131,11 @@ func (admin *runtimeAdmin) recordRequestLog(source, level, event, message string
 	admin.requests.recordLog(api.AdminLog{Source: source, Level: level, Event: event, Message: message, Request: data})
 }
 
-// logRequestProgress 将等待与恢复事件关联到所属请求
+// logRequestProgress 将等待与恢复事件关联到所属请求，并带上登记时的模型与开始时间
 func (registry *requestRegistry) logRequestProgress(id, source, level, message string) {
+	registry.mu.Lock()
+	request := registry.active[id].request
+	registry.mu.Unlock()
 	registry.recordLog(api.AdminLog{Source: source, Level: level, Event: "request.progress", Message: message,
-		Request: &api.RequestLog{ID: id, State: "running"}})
+		Request: &api.RequestLog{ID: id, State: "running", StartedAt: request.StartedAt, Model: request.Model}})
 }

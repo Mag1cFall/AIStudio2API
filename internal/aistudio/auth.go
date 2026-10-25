@@ -51,6 +51,7 @@ type StorageState struct {
 // AuthSource 记录认证状态的来源
 type AuthSource struct {
 	Browser string `json:"browser"`
+	Root    string `json:"root,omitempty"`
 	Profile string `json:"profile,omitempty"`
 	Email   string `json:"email,omitempty"`
 }

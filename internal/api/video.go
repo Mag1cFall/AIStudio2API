@@ -273,6 +273,10 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	missing := ""
 	for _, id := range strings.Split(operationID, videoOperationSeparator) {
 		operation, err := service.GetGenerateVideoOperation(r.Context(), id)
+		if errors.Is(err, aistudio.ErrResourceNotFound) {
+			writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", "Requested entity was not found.")
+			return
+		}
 		if err != nil {
 			if shouldWriteRequestError(r, err) {
 				writeGeminiRequestError(w, err)

@@ -15,7 +15,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 )
 
-type chromeCookieRefreshFunc func(context.Context, aistudio.ChromeOAuthMaterial, string) ([]aistudio.StateCookie, error)
+type chromeCookieRefreshFunc func(context.Context, aistudio.AuthSource, aistudio.ChromeOAuthMaterial, string) ([]aistudio.StateCookie, error)
 
 // authRuntimeRefresher 使用账户保存的 Chrome OAuth 材料原地续签
 type authRuntimeRefresher struct {
@@ -415,7 +415,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		proxy := account.EffectiveProxy(refresher.globalProxy)
 		var cookies []aistudio.StateCookie
 		if extension.OAuth != nil {
-			cookies, err = refresher.refresh(ctx, *extension.OAuth, proxy)
+			cookies, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
 		}
 		if extension.OAuth == nil || errors.Is(err, chromeauth.ErrCredentialsRejected) {
 			if extension.Source.Browser != "chrome" || !strings.EqualFold(extension.Source.Email, account.ID) {

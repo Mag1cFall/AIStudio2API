@@ -9,7 +9,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/Mag1cFall/AIStudio2API/internal/waa/goja"
+	"github.com/Mag1cFall/goja"
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
 )

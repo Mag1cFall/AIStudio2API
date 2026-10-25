@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/Mag1cFall/fhttp v0.6.8-firefox.1
+	github.com/Mag1cFall/goja v0.0.0-firefox.1
 	github.com/Mag1cFall/uquic v0.0.6-firefox.6
 	github.com/Mag1cFall/utls v1.8.2-firefox.3
 	github.com/bogdanfinn/fhttp v0.6.8
@@ -12,9 +13,7 @@ require (
 	github.com/brainplusplus/go-browserforge v0.1.0
 	github.com/dlclark/regexp2/v2 v2.5.2
 	github.com/eliben/go-sentencepiece v0.7.0
-	github.com/go-sourcemap/sourcemap v2.1.3+incompatible
 	github.com/gofrs/flock v0.13.0
-	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mewkiz/flac v1.0.14
@@ -50,7 +49,9 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect

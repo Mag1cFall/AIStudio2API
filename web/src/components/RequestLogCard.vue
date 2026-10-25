@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { formatLogNumber, type LogRow } from '@/logs'
@@ -9,6 +9,37 @@ import UiIcon from './UiIcon.vue'
 const props = defineProps<{ row: LogRow }>()
 const { t, locale, errorText, logText } = useI18n()
 const request = computed(() => props.row.entry.request!)
+const running = computed(() => request.value.state === 'running')
+
+// now 是运行中请求每秒更新的当前时间
+const now = ref(Date.now())
+let ticker: number | undefined
+watch(
+  running,
+  (active) => {
+    window.clearInterval(ticker)
+    ticker = active ? window.setInterval(() => (now.value = Date.now()), 1000) : undefined
+    now.value = Date.now()
+  },
+  { immediate: true },
+)
+onUnmounted(() => window.clearInterval(ticker))
+
+// runningSeconds 是运行中请求自开始起经过的秒数
+const runningSeconds = computed(() =>
+  Math.max(
+    0,
+    Math.floor(
+      (now.value - Date.parse(request.value.started_at ?? props.row.events[0]!.time)) / 1000,
+    ),
+  ),
+)
+
+// currentStep 是运行中请求最近一条进度日志的首行
+const currentStep = computed(() => {
+  const latest = props.row.events.at(-1)!
+  return latest.event === 'request.started' ? '' : logText(latest.message.split('\n')[0]!)
+})
 
 const body = ref<RequestBody | null>(null)
 const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle')
@@ -120,10 +151,12 @@ const bodyParts = computed(() =>
       <span v-if="request.duration_ms !== undefined" class="request-duration"
         >{{ number(request.duration_ms / 1000, 2) }} s</span
       >
+      <span v-else-if="running" class="request-duration">{{ number(runningSeconds) }} s</span>
       <span v-if="request.tool_calls" class="tool-count"
         >{{ t('logs.tools') }} {{ number(request.tool_calls) }}</span
       >
     </div>
+    <p v-if="running && currentStep" class="request-step">{{ currentStep }}</p>
     <div v-if="request.usage" class="request-metrics">
       <span
         >{{ t('logs.reasoning') }} <b>{{ number(request.usage.reasoning_tokens) }}</b></span
@@ -276,6 +309,12 @@ const bodyParts = computed(() =>
   color: var(--color-fg);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
+}
+.request-step {
+  margin: 4px 0 0;
+  color: var(--color-gray-400);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .tool-count {
   color: var(--color-blue-300);

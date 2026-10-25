@@ -3223,6 +3223,45 @@ func waitWarmCandidate(ctx context.Context, delay time.Duration) error {
 
 const streamStallThreshold = 15 * time.Second
 
+// waitReportInterval 是等待超过 streamStallThreshold 后重复记录仍在等待的间隔
+const waitReportInterval = 30 * time.Second
+
+// waitReporter 在等待达到 streamStallThreshold 时与之后每隔 waitReportInterval 记录一次已等待时长
+type waitReporter struct {
+	stop     chan struct{}
+	done     chan struct{}
+	reported bool
+}
+
+// startWaitReporter 开始计时，report 收到自开始起已等待的时长
+func startWaitReporter(report func(waited time.Duration)) *waitReporter {
+	reporter := &waitReporter{stop: make(chan struct{}), done: make(chan struct{})}
+	started := time.Now()
+	go func() {
+		defer close(reporter.done)
+		timer := time.NewTimer(streamStallThreshold)
+		defer timer.Stop()
+		for {
+			select {
+			case <-reporter.stop:
+				return
+			case <-timer.C:
+				reporter.reported = true
+				report(time.Since(started).Round(time.Second))
+				timer.Reset(waitReportInterval)
+			}
+		}
+	}()
+	return reporter
+}
+
+// finish 停止计时，返回等待期间是否记录过
+func (reporter *waitReporter) finish() bool {
+	close(reporter.stop)
+	<-reporter.done
+	return reporter.reported
+}
+
 type upstreamActivity struct {
 	bytes    atomic.Int64
 	lastNano atomic.Int64
@@ -3458,6 +3497,12 @@ func (service *trackedService) generateWithRetry(
 				}
 			}
 		}
+		queueStartedAt := time.Now()
+		queueWait := startWaitReporter(func(waited time.Duration) {
+			service.requests.logRequestProgress(request.ID, "request", "WARN", fmt.Sprintf(
+				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
+			))
+		})
 		nextLease, acquireErr := service.acquireWarmLease(requestCtx, selection)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil &&
@@ -3467,6 +3512,7 @@ func (service *trackedService) generateWithRetry(
 			fallbackReason = "Build 通道没有可用账户"
 			nextLease, acquireErr = service.acquireWarmLease(requestCtx, selection)
 		}
+		queueDelayed := queueWait.finish()
 		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && nextLease.Channel() != aistudio.ChannelBuild {
 			fallbackReason = "账户 Build 通道冷却或不支持此模型"
 		}
@@ -3504,6 +3550,11 @@ func (service *trackedService) generateWithRetry(
 		api.MarkAccessLogScheduled(requestCtx)
 		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
 		service.requests.markChannel(request.ID, string(lease.Channel()))
+		if queueDelayed {
+			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
+				"排队结束 | 等待=%s | 账户=%s", time.Since(queueStartedAt).Round(time.Millisecond), accountLabel,
+			))
+		}
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
 		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
 		attemptCtx = aistudio.ContextWithUpstreamModeObserver(attemptCtx, func(method, mode, reason string) {
@@ -3557,14 +3608,11 @@ func (service *trackedService) generateWithRetry(
 		}
 		prepareStartedAt := time.Now()
 		prepareTiming := newRequestPreparationTiming(prepareStartedAt)
-		prepareWarningDone := make(chan struct{})
-		prepareWarning := time.AfterFunc(streamStallThreshold, func() {
+		prepareWait := startWaitReporter(func(waited time.Duration) {
 			current, _, _ := prepareTiming.snapshot(time.Now())
 			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
-				"请求准备等待 | 已等待=%s | 当前=%s | 模型=%s",
-				streamStallThreshold, current, modelID,
+				"请求准备等待 | 已等待=%s | 当前=%s | 模型=%s", waited, current, modelID,
 			))
-			close(prepareWarningDone)
 		})
 		activity = &upstreamActivity{}
 		attemptCtx = aistudio.ContextWithStreamActivityObserver(attemptCtx, activity.observe)
@@ -3591,8 +3639,7 @@ func (service *trackedService) generateWithRetry(
 			))
 		}
 		prepareElapsed := time.Since(prepareStartedAt)
-		if !prepareWarning.Stop() {
-			<-prepareWarningDone
+		if prepareWait.finish() {
 			_, waa, responseHeader := prepareTiming.snapshot(time.Now())
 			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 				"请求准备结束 | 等待=%s | WAA=%s | 响应头=%s | 模型=%s",
@@ -3603,11 +3650,11 @@ func (service *trackedService) generateWithRetry(
 		if err == nil {
 			upstreamStartedAt := time.Now()
 			firstEventDelayed := false
-			first, err = firstGenerateEvent(requestCtx, source, func() {
+			first, err = firstGenerateEvent(requestCtx, source, func(waited time.Duration) {
 				firstEventDelayed = true
 				service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 					"上游首事件等待 | 已等待=%s | 模型=%s | %s",
-					streamStallThreshold, modelID, activity.logFields(time.Now()),
+					waited, modelID, activity.logFields(time.Now()),
 				))
 			})
 			if firstEventDelayed && err == nil {
@@ -3620,14 +3667,28 @@ func (service *trackedService) generateWithRetry(
 				api.SetAccessLogFirstEvent(requestCtx, time.Since(generationStartedAt))
 				api.SetAccessLogTarget(requestCtx, first.ProviderModel, accountLabel)
 				if request.Unary {
-					source, err = collectGenerateEvents(requestCtx, source)
+					source, err = collectGenerateEvents(requestCtx, source, func(waited time.Duration, events []aistudio.Event) {
+						reasoning, content := 0, 0
+						for _, event := range events {
+							switch event.Kind {
+							case aistudio.EventReasoning:
+								reasoning++
+							case aistudio.EventText:
+								content++
+							}
+						}
+						service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
+							"收集完整响应 | 已等待=%s | 推理=%d | 正文=%d | 模型=%s | %s",
+							waited, reasoning, content, modelID, activity.logFields(time.Now()),
+						))
+					})
 				}
 			}
 			if err == nil {
 				temporaryCopies = attemptCopies
 				service.proxies.ReportSuccess(attemptProxy)
 				if buildRejection != nil && buildRejection.accountID == request.AccountID {
-					service.coolRejectedBuild(buildRejection, modelID, accountLabel)
+					service.coolRejectedBuild(request.ID, buildRejection, modelID, accountLabel)
 				}
 				break
 			}
@@ -3670,7 +3731,7 @@ func (service *trackedService) generateWithRetry(
 				retryable = false
 			} else {
 				if !until.IsZero() {
-					service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+					service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 						"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 						cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
 					))
@@ -3729,7 +3790,7 @@ func (service *trackedService) generateWithRetry(
 			break
 		}
 		if recoverWorker {
-			service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 				"WAA Worker 重建 | 模型=%s | 重放当前请求\n原因: %s", modelID, strings.TrimSpace(err.Error()),
 			))
 			continue
@@ -3738,7 +3799,7 @@ func (service *trackedService) generateWithRetry(
 			"账号切换 | 模型=%s\n原因: %s",
 			modelID, strings.TrimSpace(err.Error()),
 		)
-		service.requests.log(accountLabel, "WARN", switchMessage)
+		service.requests.logRequestProgress(request.ID, accountLabel, "WARN", switchMessage)
 	}
 	if err != nil {
 		if activity != nil {
@@ -3769,7 +3830,7 @@ type rejectedBuildAttempt struct {
 }
 
 // coolRejectedBuild 在同账户 Playground 对被 Build 拒绝的请求返回首个事件后递增冷却该模型的 Build 通道
-func (service *trackedService) coolRejectedBuild(rejection *rejectedBuildAttempt, modelID string, accountLabel string) {
+func (service *trackedService) coolRejectedBuild(requestID string, rejection *rejectedBuildAttempt, modelID string, accountLabel string) {
 	cooldown, ok := aistudio.BuildRejectionCooldown(rejection.err)
 	if !ok {
 		return
@@ -3777,13 +3838,13 @@ func (service *trackedService) coolRejectedBuild(rejection *rejectedBuildAttempt
 	scope := aistudio.ChannelCooldownScope(aistudio.ChannelBuild, modelID)
 	until, err := service.pool.MarkQuotaCooldownIfGeneration(rejection.accountID, scope, rejection.generation, rejection.checkedAt, cooldown)
 	if err != nil {
-		service.requests.log(accountLabel, "WARN", fmt.Sprintf("账号冷却 | 类型=%s | 范围=%s | 错误=%s", cooldown.Kind, scope, err))
+		service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf("账号冷却 | 类型=%s | 范围=%s | 错误=%s", cooldown.Kind, scope, err))
 		return
 	}
 	if until.IsZero() {
 		return
 	}
-	service.requests.log(accountLabel, "WARN", fmt.Sprintf(
+	service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 		"账号冷却 | 类型=%s | 范围=%s | 恢复=%s", cooldown.Kind, scope, until.Local().Format(time.RFC3339),
 	))
 }
@@ -3791,11 +3852,11 @@ func (service *trackedService) coolRejectedBuild(rejection *rejectedBuildAttempt
 var errStreamClosedBeforeFirstEvent = errors.New("AI Studio stream closed before first event")
 var errStreamClosedBeforeFinish = errors.New("AI Studio stream closed before finish")
 
-// firstGenerateEvent 等待首事件并在请求期限内完成错误流清理
-func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWait func()) (aistudio.Event, error) {
+// firstGenerateEvent 等待首事件并在请求期限内完成错误流清理，等待达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长调用 onWait
+func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWait func(time.Duration)) (aistudio.Event, error) {
+	startedAt := time.Now()
 	timer := time.NewTimer(streamStallThreshold)
 	defer timer.Stop()
-	wait := timer.C
 	for {
 		select {
 		case event, ok := <-source:
@@ -3818,19 +3879,20 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 					return aistudio.Event{}, ctx.Err()
 				}
 			}
-		case <-wait:
-			if onWait != nil {
-				onWait()
-			}
-			wait = nil
+		case <-timer.C:
+			onWait(time.Since(startedAt).Round(time.Second))
+			timer.Reset(waitReportInterval)
 		case <-ctx.Done():
 			return aistudio.Event{}, ctx.Err()
 		}
 	}
 }
 
-// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误以便换号重试
-func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event) (<-chan aistudio.Event, error) {
+// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误以便换号重试；收集达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长与已收到的事件调用 onWait
+func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, onWait func(time.Duration, []aistudio.Event)) (<-chan aistudio.Event, error) {
+	startedAt := time.Now()
+	timer := time.NewTimer(streamStallThreshold)
+	defer timer.Stop()
 	var events []aistudio.Event
 	for {
 		select {
@@ -3850,6 +3912,9 @@ func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event) (<
 				return nil, event.Err
 			}
 			events = append(events, event)
+		case <-timer.C:
+			onWait(time.Since(startedAt).Round(time.Second), events)
+			timer.Reset(waitReportInterval)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -4002,10 +4067,10 @@ func (service *trackedService) forwardEvents(
 			case event, ok = <-source:
 			case <-stall:
 				stalled = true
-				stall = nil
+				stallTimer.Reset(waitReportInterval)
 				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 					"事件流停顿 | 模型=%s | 已等待=%s | 最近事件=%s | 推理=%d | 正文=%d | %s",
-					modelID, streamStallThreshold, lastEventKind, reasoningEvents, contentEvents,
+					modelID, time.Since(lastEventAt).Round(time.Second), lastEventKind, reasoningEvents, contentEvents,
 					activity.logFields(time.Now()),
 				))
 				continue

@@ -41,7 +41,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 		return accountID
 	}
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		service.requests.log(accountLabel(accountID), "WARN", fmt.Sprintf(
+		service.requests.logRequestProgress(request.ID, accountLabel(accountID), "WARN", fmt.Sprintf(
 			"账号切换 | 模型=%s\n原因: %s", modelID, strings.TrimSpace(cause.Error()),
 		))
 	}
@@ -56,7 +56,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 			true, workerFailed || aistudio.DefinitiveWAARuntimeFailure(cause),
 		)
 		if recovered && recoveryErr == nil {
-			service.requests.log(accountLabel(accountID), "WARN", "WAA Worker 重建 | 模型="+modelID+" | 重放当前请求")
+			service.requests.logRequestProgress(request.ID, accountLabel(accountID), "WARN", "WAA Worker 重建 | 模型="+modelID+" | 重放当前请求")
 		}
 		return recovered, recoveryErr
 	}

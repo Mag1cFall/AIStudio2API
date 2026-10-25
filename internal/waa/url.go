@@ -4,7 +4,7 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 
-	"github.com/Mag1cFall/AIStudio2API/internal/waa/goja"
+	"github.com/Mag1cFall/goja"
 	whatwgurl "github.com/nlnwa/whatwg-url/url"
 )
 
