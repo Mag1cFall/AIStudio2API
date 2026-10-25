@@ -140,12 +140,14 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 	return connection, settings, nil
 }
 
+// firefoxQUICConfig 返回 Firefox 152 的 QUIC 连接配置：空闲超时 30 秒，与 neqo 一样只在请求流尚未完成时每半个空闲超时发送保活 PING
 func firefoxQUICConfig(datagram int, tokens quic.TokenStore) *quic.Config {
 	return &quic.Config{
 		Versions:                       []quic.Version{quic.Version1},
 		HandshakeIdleTimeout:           firefoxQUICIdleTimeout,
 		MaxIdleTimeout:                 firefoxQUICIdleTimeout,
-		KeepAlivePeriod:                10 * time.Second,
+		KeepAlivePeriod:                firefoxQUICIdleTimeout / 2,
+		KeepAliveStreamsOnly:           true,
 		InitialStreamReceiveWindow:     firefoxQUICMaxStreamData,
 		MaxStreamReceiveWindow:         firefoxQUICMaxStreamData,
 		InitialConnectionReceiveWindow: firefoxQUICMaxData,

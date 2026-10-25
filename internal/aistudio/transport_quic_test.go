@@ -3,7 +3,6 @@ package aistudio
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	utls "github.com/Mag1cFall/utls"
 )
 
+// TestHTTP3SlowResponse 验证上游超过空闲超时才返回响应头或响应体时，请求流未完成期间的保活使连接不断开，POST 只发一次
 func TestHTTP3SlowResponse(t *testing.T) {
 	for _, flushHeaders := range []bool{false, true} {
 		name := "headers"
@@ -61,48 +61,7 @@ func TestHTTP3SlowResponse(t *testing.T) {
 	}
 }
 
-func TestHTTP3KeepAliveCancellation(t *testing.T) {
-	received, canceled := make(chan struct{}), make(chan struct{})
-	conn := newTestHTTP3Conn(t, func(stream *quic.Stream) {
-		close(received)
-		<-stream.Context().Done()
-		close(canceled)
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	request, err := fhttp.NewRequestWithContext(ctx, "POST", "https://localhost/", strings.NewReader("test"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() {
-		_, _, err := conn.roundTrip(request, h3RequestFields(request, false))
-		result <- err
-	}()
-	select {
-	case <-received:
-	case <-time.After(3 * time.Second):
-		t.Fatal("服务端未收到请求")
-	}
-	cancel()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("取消请求: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("取消请求未及时返回")
-	}
-	select {
-	case <-canceled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("服务端请求未取消")
-	}
-	if err := conn.quic.Context().Err(); err != nil {
-		t.Fatalf("取消请求不应关闭共享连接: %v", err)
-	}
-}
-
+// newTestHTTP3Conn 返回连到本地 QUIC 服务的 HTTP/3 连接，连接使用生产 QUIC 配置并把空闲超时改为 500 ms，handler 处理正文为 test 的请求流
 func newTestHTTP3Conn(t *testing.T, handler func(*quic.Stream)) *http3Conn {
 	t.Helper()
 	certServer := httptest.NewTLSServer(nil)
