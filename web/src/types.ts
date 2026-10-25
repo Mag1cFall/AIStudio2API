@@ -140,6 +140,7 @@ export interface AdminLog {
 export interface RequestLog {
   id: string
   state: 'running' | 'completed' | 'tool_calls' | 'limited' | 'blocked' | 'failed' | 'cancelled'
+  started_at?: string
   model?: string
   method?: string
   path?: string

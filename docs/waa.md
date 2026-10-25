@@ -63,7 +63,7 @@ WAA（Web Application Attestation）为 AI Studio 的受保护 RPC 提供 BotGua
 ### Camoufox 后端
 
 1. Go 启动隔离、无头的 Camoufox，通过 WebDriver BiDi 建立 session，写入账户 Cookie 与 localStorage
-2. 打开 `/prompts/new_chat?model=<bootstrap 模型>`，`TEMPORARY_CHAT=true` 时追加 `&temporary=true`；等待提示词输入框，识别 Google 登录跳转并关闭已知弹层
+2. 打开 `/prompts/new_chat?model=<bootstrap 模型>`，`TEMPORARY_CHAT=true` 时追加 `&temporary=true`；等待提示词输入框，识别 Google 登录跳转，等页面收到 `GetLoggingContext` 响应（页面此后的 RPC 才带 `x-goog-ext-519733851-bin`），再关闭已知弹层
 3. 在页面 bundle 的 `default_MakerSuite` 命名空间中定位调用 `.snapshot({` 且包含 `content` 的高层函数，以 `script.callFunction` 的 `resultOwnership: "root"` 取得一个由 BiDi 句柄持有的页面对象，并把该函数临时替换为捕获函数
 4. 填入 bootstrap 提示词 `Hello`，为官网 `GenerateContent` 安装 `network.addDataCollector` 请求正文收集与 `beforeRequestSent` 拦截并点击 Run
 5. 页面首次以 WAA service 调用 snapshot 时，捕获函数把 service 存入句柄对象并换回原函数；请求进入拦截阶段后保存公共请求头，以 `network.getData` 读取请求正文并校验实际模型，再点击官网 Stop 按钮让页面按用户停止的流程中止该请求，最后以 `network.failRequest` 释放被拦截的请求
@@ -848,7 +848,7 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 
 ### goja 分叉
 
-`internal/waa/goja` 是 `github.com/dop251/goja` 在 `v0.0.0-20260826204918-8f1c0696a37b` 上的 MIT 分叉，模块路径为 `github.com/Mag1cFall/AIStudio2API/internal/waa/goja`。分叉只包含上游的非测试 Go 源码；上游源码与注释保持原样，分叉自有代码使用单行中文 Go Doc 注释。`LICENSE`、`ftoa/LICENSE_LUCENE` 与 `ftoa/internal/fast/LICENSE_V8` 随分叉源码保留。
+JavaScript 引擎为 [Mag1cFall/goja](https://github.com/Mag1cFall/goja) v0.0.0-firefox.1，是 `github.com/dop251/goja` 在提交 `8f1c0696a37b` 上的 MIT 分叉。上游源码、注释与测试保持原样，分叉自有代码使用单行中文 Go Doc 注释。
 
 与上游的行为差异：
 
@@ -933,4 +933,3 @@ program 大量依赖异常路径探测宿主。页面侧通过 Firefox 远程调
 | `internal/waa/dom.js` | 按形状表生成 Window、接口、实例与宿主对象 |
 | `internal/waa/firefox152.json.gz` | Firefox 形状表 |
 | `internal/waa/timezones.json.gz` | 时区显示名表 |
-| `internal/waa/goja/` | goja 分叉 |

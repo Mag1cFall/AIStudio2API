@@ -97,7 +97,7 @@ func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 		writeResponseNotFound(w, id)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "object": "response", "deleted": true})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "object": "response.deleted", "deleted": true})
 }
 
 // handleResponseCancel 终止进行中的后台响应并返回保存的 cancelled 对象，已结束的后台响应返回最终对象，其他响应不可取消

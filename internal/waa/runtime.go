@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mag1cFall/AIStudio2API/internal/waa/goja"
+	"github.com/Mag1cFall/goja"
 )
 
 // Options 定义一份 BotGuard VM 的解释器、宿主现场与网络依赖

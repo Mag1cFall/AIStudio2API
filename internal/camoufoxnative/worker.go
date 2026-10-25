@@ -360,6 +360,9 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if location, parseErr := url.Parse(pageURL); parseErr == nil && location.Hostname() == "accounts.google.com" {
 		return fmt.Errorf("%w url=%s", ErrAuthenticationRequired, pageURL)
 	}
+	if err := client.waitFor(ctx, contextID, loggingContextReadyExpression, 30*time.Second); err != nil {
+		return fmt.Errorf("等待官网 GetLoggingContext 响应: %w", err)
+	}
 	if err := dismissKnownOverlays(ctx, client, contextID); err != nil {
 		return err
 	}

@@ -64,6 +64,7 @@ type AdminLog struct {
 type RequestLog struct {
 	ID              string            `json:"id"`
 	State           string            `json:"state"`
+	StartedAt       time.Time         `json:"started_at,omitzero"`
 	Model           string            `json:"model,omitempty"`
 	Method          string            `json:"method,omitempty"`
 	Path            string            `json:"path,omitempty"`
