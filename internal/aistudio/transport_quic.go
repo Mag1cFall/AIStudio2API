@@ -126,20 +126,7 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 		MinVersion:         utls.VersionTLS13,
 		ClientSessionCache: resumption.sessions,
 		OmitEmptyPsk:       true,
-	}, &quic.Config{
-		Versions:                       []quic.Version{quic.Version1},
-		HandshakeIdleTimeout:           firefoxQUICIdleTimeout,
-		MaxIdleTimeout:                 firefoxQUICIdleTimeout,
-		InitialStreamReceiveWindow:     firefoxQUICMaxStreamData,
-		MaxStreamReceiveWindow:         firefoxQUICMaxStreamData,
-		InitialConnectionReceiveWindow: firefoxQUICMaxData,
-		MaxConnectionReceiveWindow:     firefoxQUICMaxData,
-		MaxIncomingStreams:             neqoMaxStreams,
-		MaxIncomingUniStreams:          neqoMaxStreams,
-		InitialPacketSize:              uint16(datagram),
-		DisablePathMTUDiscovery:        true,
-		TokenStore:                     resumption.tokens,
-	})
+	}, firefoxQUICConfig(datagram, resumption.tokens))
 	if err != nil {
 		_ = transport.Close()
 		_ = socket.Close()
@@ -151,6 +138,26 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 		_ = socket.Close()
 	}()
 	return connection, settings, nil
+}
+
+// firefoxQUICConfig 返回 Firefox 152 的 QUIC 连接配置：空闲超时 30 秒，与 neqo 一样只在请求流尚未完成时每半个空闲超时发送保活 PING
+func firefoxQUICConfig(datagram int, tokens quic.TokenStore) *quic.Config {
+	return &quic.Config{
+		Versions:                       []quic.Version{quic.Version1},
+		HandshakeIdleTimeout:           firefoxQUICIdleTimeout,
+		MaxIdleTimeout:                 firefoxQUICIdleTimeout,
+		KeepAlivePeriod:                firefoxQUICIdleTimeout / 2,
+		KeepAliveStreamsOnly:           true,
+		InitialStreamReceiveWindow:     firefoxQUICMaxStreamData,
+		MaxStreamReceiveWindow:         firefoxQUICMaxStreamData,
+		InitialConnectionReceiveWindow: firefoxQUICMaxData,
+		MaxConnectionReceiveWindow:     firefoxQUICMaxData,
+		MaxIncomingStreams:             neqoMaxStreams,
+		MaxIncomingUniStreams:          neqoMaxStreams,
+		InitialPacketSize:              uint16(datagram),
+		DisablePathMTUDiscovery:        true,
+		TokenStore:                     tokens,
+	}
 }
 
 // firefoxQUICSpec 返回 Firefox 152（neqo 0.28）一次直连的 QUIC 首航：随机 DCID 长度与首个包号、SNI 切分的 CRYPTO 帧、Initial 数据报补零到 datagram 字节，psk 与 early 决定 ClientHello 是否带 pre_shared_key 与 early_data
