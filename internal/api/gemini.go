@@ -112,8 +112,61 @@ type geminiPart struct {
 		Output  string `json:"output"`
 		Error   string `json:"error"`
 	} `json:"codeExecutionResult"`
-	SpeechMetadata      *aistudio.SpeechMetadata `json:"speechMetadata"`
-	SpeechMetadataSnake *aistudio.SpeechMetadata `json:"speech_metadata"`
+	SpeechMetadata       *aistudio.SpeechMetadata `json:"speechMetadata"`
+	SpeechMetadataSnake  *aistudio.SpeechMetadata `json:"speech_metadata"`
+	VideoMetadata        *geminiVideoMetadata     `json:"videoMetadata"`
+	VideoMetadataSnake   *geminiVideoMetadata     `json:"video_metadata"`
+	MediaProcessing      string                   `json:"mediaProcessing"`
+	MediaProcessingSnake string                   `json:"media_processing"`
+	ToolCall             *geminiProcessingStep    `json:"toolCall"`
+	ToolCallSnake        *geminiProcessingStep    `json:"tool_call"`
+	ToolResponse         *geminiProcessingStep    `json:"toolResponse"`
+	ToolResponseSnake    *geminiProcessingStep    `json:"tool_response"`
+}
+
+type geminiProcessingStep struct {
+	ID            string          `json:"id"`
+	ToolType      string          `json:"toolType"`
+	ToolTypeSnake string          `json:"tool_type"`
+	ToolName      string          `json:"toolName"`
+	ToolNameSnake string          `json:"tool_name"`
+	Args          json.RawMessage `json:"args"`
+	Response      json.RawMessage `json:"response"`
+}
+
+type geminiVideoMetadata struct {
+	StartOffset      string   `json:"startOffset"`
+	StartOffsetSnake string   `json:"start_offset"`
+	EndOffset        string   `json:"endOffset"`
+	EndOffsetSnake   string   `json:"end_offset"`
+	FPS              *float64 `json:"fps"`
+}
+
+// videoMetadata maps the Gemini metadata field names to canonical video options.
+func (part geminiPart) videoMetadata() *aistudio.VideoMetadata {
+	video := part.VideoMetadata
+	if video == nil {
+		video = part.VideoMetadataSnake
+	}
+	if video == nil {
+		return nil
+	}
+	start, end := video.StartOffset, video.EndOffset
+	if start == "" {
+		start = video.StartOffsetSnake
+	}
+	if end == "" {
+		end = video.EndOffsetSnake
+	}
+	return &aistudio.VideoMetadata{StartOffset: start, EndOffset: end, FPS: video.FPS}
+}
+
+// mediaProcessing selects the Gemini media processing field spelling.
+func (part geminiPart) mediaProcessing() string {
+	if part.MediaProcessing != "" {
+		return part.MediaProcessing
+	}
+	return part.MediaProcessingSnake
 }
 
 func (p geminiPart) speechMetadata() *aistudio.SpeechMetadata {
@@ -770,6 +823,23 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 		if part.CodeExecutionResult != nil {
 			variants++
 		}
+		processingCall, processingResult := part.ToolCall, part.ToolResponse
+		if processingCall == nil {
+			processingCall = part.ToolCallSnake
+		}
+		if processingResult == nil {
+			processingResult = part.ToolResponseSnake
+		}
+		if processingCall != nil {
+			variants++
+		}
+		if processingResult != nil {
+			variants++
+		}
+		video, processing := part.videoMetadata(), part.mediaProcessing()
+		if (video != nil || processing != "") && inline == nil && file == nil {
+			return nil, false, fmt.Errorf("parts[%d] video metadata requires inlineData or fileData", index)
+		}
 		if variants == 0 {
 			if part.ThoughtSignature != "" {
 				parts = append(parts, aistudio.Part{ThoughtSignature: part.ThoughtSignature})
@@ -793,6 +863,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			parts = append(parts, aistudio.Part{
 				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
 				ThoughtSignature: part.ThoughtSignature,
+				VideoMetadata:    video, MediaProcessing: processing,
 			})
 		case file != nil:
 			uri := file.URI()
@@ -804,13 +875,14 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 				uri = driveID
 			}
 			if media, ok := aistudio.ExternalMediaForURL(uri); ok {
-				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature})
+				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature, VideoMetadata: video, MediaProcessing: processing})
 			} else {
 				parts = append(parts, aistudio.Part{
 					File: &aistudio.FileRef{
 						ID: uri, Name: file.DisplayName, MIME: mime,
 					},
 					ThoughtSignature: part.ThoughtSignature,
+					VideoMetadata:    video, MediaProcessing: processing,
 				})
 			}
 		case part.FunctionCall != nil:
@@ -847,6 +919,22 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			})
 			parts = append(parts, media...)
 			hasResult = true
+		case processingCall != nil || processingResult != nil:
+			value := processingCall
+			if value == nil {
+				value = processingResult
+			}
+			step, err := value.canonical(processingCall != nil)
+			if err != nil {
+				return nil, false, fmt.Errorf("parts[%d]: %w", index, err)
+			}
+			mapped := aistudio.Part{ThoughtSignature: part.ThoughtSignature}
+			if processingCall != nil {
+				mapped.ProcessingCall = step
+			} else {
+				mapped.ProcessingResult = step
+			}
+			parts = append(parts, mapped)
 		case part.ExecutableCode != nil:
 			parts = append(parts, aistudio.Part{
 				ExecutableCode: &aistudio.ExecutableCode{
@@ -1144,6 +1232,10 @@ func geminiOutputParts(result generationResult) []map[string]any {
 		case aistudio.EventToolCall:
 			if event.ToolCall != nil {
 				appendPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature)
+			}
+		case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+			if part := geminiProcessingPart(event); part != nil {
+				appendPart(part, event.ThoughtSignature)
 			}
 		case aistudio.EventExecutableCode:
 			if event.ExecutableCode != nil {
@@ -1545,6 +1637,12 @@ func geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
 			return nil
 		}
 		part = geminiSignedPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature)
+	case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+		part = geminiProcessingPart(event)
+		if part == nil {
+			return nil
+		}
+		part = geminiSignedPart(part, event.ThoughtSignature)
 	case aistudio.EventExecutableCode:
 		if event.ExecutableCode == nil {
 			return nil

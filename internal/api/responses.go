@@ -575,6 +575,18 @@ func responseHistoryOutput(result generationResult) aistudio.Content {
 				call.Arguments = append(json.RawMessage(nil), call.Arguments...)
 				output.Parts = append(output.Parts, aistudio.Part{FunctionCall: &call, ThoughtSignature: event.ThoughtSignature})
 			}
+		case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+			if event.MediaProcessing != nil {
+				step := *event.MediaProcessing
+				step.Data = append(json.RawMessage(nil), step.Data...)
+				part := aistudio.Part{ThoughtSignature: event.ThoughtSignature}
+				if event.Kind == aistudio.EventMediaProcessingCall {
+					part.ProcessingCall = &step
+				} else {
+					part.ProcessingResult = &step
+				}
+				output.Parts = append(output.Parts, part)
+			}
 		case aistudio.EventMedia:
 			if event.Media != nil && len(event.Media.Data) > 0 {
 				blob := &aistudio.Blob{MIME: event.Media.MIME, Data: append([]byte(nil), event.Media.Data...)}

@@ -74,6 +74,7 @@ type interactionInput struct {
 	Data        string             `json:"data"`
 	URI         string             `json:"uri"`
 	MIME        string             `json:"mime_type"`
+	Processing  json.RawMessage    `json:"processing"`
 	Content     []interactionInput `json:"content"`
 	Summary     []interactionInput `json:"summary"`
 	ID          string             `json:"id"`
@@ -360,6 +361,22 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 			if item.Signature != "" {
 				pendingSignature = item.Signature
 			}
+		case "processing_call", "processing_result":
+			role = aistudio.RoleAssistant
+			if item.Type == "processing_call" && item.ID == "" || item.Type == "processing_result" && item.CallID == "" {
+				return nil, fmt.Errorf("processing step requires its call identifier")
+			}
+			mapped := aistudio.Part{ThoughtSignature: item.Signature}
+			if item.Type == "processing_call" {
+				mapped.ProcessingCall = &aistudio.MediaProcessingStep{ID: item.ID}
+			} else {
+				mapped.ProcessingResult = &aistudio.MediaProcessingStep{ID: item.CallID}
+			}
+			if pendingSignature != "" {
+				parts = append(parts, aistudio.Part{ThoughtSignature: pendingSignature})
+				pendingSignature = ""
+			}
+			parts = append(parts, mapped)
 		case "code_execution_call", "code_execution_result":
 			role = aistudio.RoleAssistant
 			if text := item.codeExecutionText(); text != "" {
@@ -367,8 +384,7 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 			}
 		case "google_search_call", "google_search_result", "url_context_call", "url_context_result",
 			"google_maps_call", "google_maps_result", "file_search_call", "file_search_result",
-			"mcp_server_tool_call", "mcp_server_tool_result", "retrieval_call", "retrieval_result",
-			"processing_call", "processing_result":
+			"mcp_server_tool_call", "mcp_server_tool_result", "retrieval_call", "retrieval_result":
 			continue
 		default:
 			parts, err = item.parts()
@@ -422,6 +438,16 @@ func (item interactionInput) codeExecutionText() string {
 // parts 复用 Gemini 的文本、媒体与文件输入映射
 func (content interactionInput) parts() ([]aistudio.Part, error) {
 	var part geminiPart
+	if rawJSONConfigured(content.Processing) {
+		if content.Type != "video" {
+			return nil, fmt.Errorf("processing requires video content")
+		}
+		var err error
+		part.VideoMetadata, part.MediaProcessing, err = interactionVideoProcessing(content.Processing)
+		if err != nil {
+			return nil, err
+		}
+	}
 	switch content.Type {
 	case "text":
 		if content.Text == nil {

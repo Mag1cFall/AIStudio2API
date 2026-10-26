@@ -252,6 +252,17 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
+	if !isJSONNull(rawAt(part, 25)) || !isJSONNull(rawAt(part, 26)) {
+		variants := 0
+		for _, index := range []int{1, 2, 5, 6, 7, 8, 10, 11, 17, 25, 26} {
+			if !isJSONNull(rawAt(part, index)) {
+				variants++
+			}
+		}
+		if variants != 1 {
+			return nil, d.protocolError(path, "media processing part contains multiple data variants", raw)
+		}
+	}
 	thought := false
 	if thoughtRaw := rawAt(part, 12); !isJSONNull(thoughtRaw) {
 		thought, err = rawBool(thoughtRaw, path+"[12]", raw)
@@ -327,6 +338,20 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			events = append(events, Event{
 				Kind: EventText, Text: transcript.Text, Transcript: &transcript, ThoughtSignature: signature,
 			})
+		}
+	}
+	for _, field := range []struct {
+		index int
+		kind  EventKind
+	}{{25, EventMediaProcessingCall}, {26, EventMediaProcessingResult}} {
+		if value := rawAt(part, field.index); !isJSONNull(value) {
+			step, err := decodeMediaProcessingStep(value, fmt.Sprintf("%s[%d]", path, field.index), raw)
+			if err != nil {
+				return nil, err
+			}
+			if step != nil {
+				events = append(events, Event{Kind: field.kind, MediaProcessing: step, ThoughtSignature: signature})
+			}
 		}
 	}
 	if len(events) == 0 {

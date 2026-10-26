@@ -82,6 +82,22 @@ func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[st
 		}
 		call := event.ToolCall
 		return map[string]any{"type": "function_call", "id": call.ID, "name": call.Name, "arguments": call.Arguments}, nil, nil
+	case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+		if event.MediaProcessing == nil {
+			return nil, nil, nil
+		}
+		stepType := "processing_call"
+		step := map[string]any{"type": stepType, "id": event.MediaProcessing.ID}
+		if event.Kind == aistudio.EventMediaProcessingResult {
+			stepType = "processing_result"
+			step = map[string]any{"type": stepType, "call_id": event.MediaProcessing.ID}
+		}
+		delta := map[string]any{"type": stepType}
+		if event.ThoughtSignature != "" {
+			step["signature"] = event.ThoughtSignature
+			delta["signature"] = event.ThoughtSignature
+		}
+		return step, delta, nil
 	case aistudio.EventMedia:
 		if event.Media == nil {
 			return nil, nil, nil
@@ -333,7 +349,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			textLength += length
 		}
-		if active != kind || kind == "function_call" {
+		if active != kind || kind == "function_call" || kind == "processing_call" || kind == "processing_result" {
 			if err := closeStep(); err != nil {
 				return err
 			}
@@ -348,6 +364,14 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			if kind == "function_call" {
 				start = step
+			}
+			if kind == "processing_call" || kind == "processing_result" {
+				start = map[string]any{"type": kind}
+				for _, field := range []string{"id", "call_id"} {
+					if value, ok := step[field]; ok {
+						start[field] = value
+					}
+				}
 			}
 			if err := send("step.start", map[string]any{"index": index, "step": start}); err != nil {
 				return err

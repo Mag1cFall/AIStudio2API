@@ -45,6 +45,20 @@ type UploadRef struct {
 	Size int64  `json:"size"`
 }
 
+// VideoMetadata configures static input-video clipping and frame sampling.
+type VideoMetadata struct {
+	StartOffset string   `json:"start_offset,omitempty"`
+	EndOffset   string   `json:"end_offset,omitempty"`
+	FPS         *float64 `json:"fps,omitempty"`
+}
+
+// MediaProcessingStep represents a server-owned video navigation call or result.
+type MediaProcessingStep struct {
+	ID   string          `json:"id,omitempty"`
+	Name string          `json:"name,omitempty"`
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
 // FunctionCall 表示模型发起的函数调用
 type FunctionCall struct {
 	ID               string          `json:"id"`
@@ -136,6 +150,10 @@ type Part struct {
 	Thought             bool                 `json:"thought,omitempty"`
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`
 	SpeechMetadata      *SpeechMetadata      `json:"speech_metadata,omitempty"`
+	VideoMetadata       *VideoMetadata       `json:"video_metadata,omitempty"`
+	MediaProcessing     string               `json:"media_processing,omitempty"`
+	ProcessingCall      *MediaProcessingStep `json:"processing_call,omitempty"`
+	ProcessingResult    *MediaProcessingStep `json:"processing_result,omitempty"`
 }
 
 // SpeechMetadata 表示语音文本分段的说话人与风格
@@ -449,6 +467,10 @@ const (
 	EventReasoning EventKind = "reasoning"
 	// EventToolCall 表示函数调用
 	EventToolCall EventKind = "tool_call"
+	// EventMediaProcessingCall identifies server-owned video navigation.
+	EventMediaProcessingCall EventKind = "media_processing_call"
+	// EventMediaProcessingResult identifies the server's navigation result.
+	EventMediaProcessingResult EventKind = "media_processing_result"
 	// EventExecutableCode 表示内置代码执行器生成代码
 	EventExecutableCode EventKind = "executable_code"
 	// EventCodeExecutionResult 表示内置代码执行结果
@@ -474,6 +496,7 @@ type Event struct {
 	Kind                EventKind            `json:"kind"`
 	Text                string               `json:"text,omitempty"`
 	ToolCall            *FunctionCall        `json:"tool_call,omitempty"`
+	MediaProcessing     *MediaProcessingStep `json:"media_processing,omitempty"`
 	ExecutableCode      *ExecutableCode      `json:"executable_code,omitempty"`
 	CodeExecutionResult *CodeExecutionResult `json:"code_execution_result,omitempty"`
 	Grounding           *GroundingMetadata   `json:"grounding,omitempty"`
