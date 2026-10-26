@@ -166,6 +166,10 @@ func encodeBuildContents(contents []Content) ([]any, error) {
 }
 
 func encodeBuildPart(part Part) (map[string]any, error) {
+	metadata, processing, err := videoPartOptions(part)
+	if err != nil {
+		return nil, err
+	}
 	wire := map[string]any{}
 	signature := part.ThoughtSignature
 	switch {
@@ -240,6 +244,29 @@ func encodeBuildPart(part Part) (map[string]any, error) {
 			result["output"] = output
 		}
 		wire["codeExecutionResult"] = result
+	case part.ProcessingCall != nil:
+		step := part.ProcessingCall
+		if _, err := encodeMediaProcessingStep(step); err != nil {
+			return nil, err
+		}
+		value := map[string]any{"toolType": "MEDIA_PROCESSING", "id": step.ID}
+		if step.Name != "" {
+			value["toolName"] = step.Name
+		}
+		if len(step.Data) != 0 {
+			value["args"] = step.Data
+		}
+		wire["toolCall"] = value
+	case part.ProcessingResult != nil:
+		step := part.ProcessingResult
+		if _, err := encodeMediaProcessingStep(step); err != nil {
+			return nil, err
+		}
+		value := map[string]any{"toolType": "MEDIA_PROCESSING", "id": step.ID}
+		if len(step.Data) != 0 {
+			value["response"] = step.Data
+		}
+		wire["toolResponse"] = value
 	case signature != "":
 		wire["text"] = ""
 	default:
@@ -247,6 +274,23 @@ func encodeBuildPart(part Part) (map[string]any, error) {
 	}
 	if signature != "" {
 		wire["thoughtSignature"] = signature
+	}
+	if len(metadata) > 0 {
+		video := part.VideoMetadata
+		value := map[string]any{}
+		if video.StartOffset != "" {
+			value["startOffset"] = video.StartOffset
+		}
+		if video.EndOffset != "" {
+			value["endOffset"] = video.EndOffset
+		}
+		if video.FPS != nil {
+			value["fps"] = *video.FPS
+		}
+		wire["videoMetadata"] = value
+	}
+	if processing != 0 {
+		wire["mediaProcessing"] = part.MediaProcessing
 	}
 	return wire, nil
 }
@@ -491,6 +535,16 @@ type buildResponsePart struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
 	} `json:"functionCall"`
+	ToolCall     *buildProcessingStep `json:"toolCall"`
+	ToolResponse *buildProcessingStep `json:"toolResponse"`
+}
+
+type buildProcessingStep struct {
+	ID       string          `json:"id"`
+	ToolType string          `json:"toolType"`
+	ToolName string          `json:"toolName"`
+	Args     json.RawMessage `json:"args"`
+	Response json.RawMessage `json:"response"`
 }
 
 type buildGrounding struct {
@@ -663,6 +717,32 @@ func decodeBuildPart(part buildResponsePart, index int, raw []byte) ([]Event, er
 		}
 		call := FunctionCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Arguments: arguments, ThoughtSignature: signature}
 		events = append(events, Event{Kind: EventToolCall, ToolCall: &call, ThoughtSignature: signature})
+	}
+	for _, field := range []struct {
+		step *buildProcessingStep
+		kind EventKind
+		name string
+	}{{part.ToolCall, EventMediaProcessingCall, "toolCall"}, {part.ToolResponse, EventMediaProcessingResult, "toolResponse"}} {
+		if field.step == nil || field.step.ToolType != "MEDIA_PROCESSING" {
+			continue
+		}
+		if len(events) != 0 {
+			return nil, &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: fmt.Sprintf("$chunk.parts[%d]", index), Detail: "media processing part contains multiple data variants", Raw: cloneRaw(raw)}
+		}
+		step := field.step
+		data := step.Args
+		if field.kind == EventMediaProcessingResult {
+			data = step.Response
+		}
+		if isJSONNull(data) {
+			data = nil
+		} else {
+			var object map[string]json.RawMessage
+			if err := json.Unmarshal(data, &object); err != nil {
+				return nil, &ProtocolEvidenceError{Method: buildProxyStreamedMethod, Path: fmt.Sprintf("$chunk.parts[%d].%s", index, field.name), Detail: "media processing payload must be an object", Raw: cloneRaw(raw)}
+			}
+		}
+		events = append(events, Event{Kind: field.kind, MediaProcessing: &MediaProcessingStep{ID: step.ID, Name: step.ToolName, Data: data}, ThoughtSignature: signature})
 	}
 	if len(events) == 0 && signature != "" {
 		events = append(events, Event{Kind: EventThoughtSignature, ThoughtSignature: signature})

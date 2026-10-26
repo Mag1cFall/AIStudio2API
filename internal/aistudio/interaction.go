@@ -158,6 +158,9 @@ func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) 
 		parts := make([]any, 0, len(content.Parts))
 		texts := make([]Part, 0, len(content.Parts))
 		for _, part := range content.Parts {
+			if part.VideoMetadata != nil || part.MediaProcessing != "" || part.ProcessingCall != nil || part.ProcessingResult != nil {
+				return nil, nil, false, fmt.Errorf("Interaction-routed models do not support GenerateContent video processing options or navigation history")
+			}
 			switch {
 			case part.Thought:
 				continue
