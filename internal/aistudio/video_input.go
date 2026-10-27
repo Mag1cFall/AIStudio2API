@@ -1,24 +1,31 @@
 package aistudio
 
 import (
+	"encoding/json"
 	"fmt"
-	"math"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
+// videoOffsetPattern 匹配秒数后带 s 的 Duration 字符串，小数最多九位
 var videoOffsetPattern = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]{1,9}))?s$`)
 
-// videoOffset parses the protobuf Duration representation used for video offsets.
+// mediaProcessingCodes 是 Part field 40 视频处理方式的枚举值
+var mediaProcessingCodes = map[string]int64{"MEDIA_PROCESSING_UNSPECIFIED": 0, "STATIC": 1, "AGENTIC": 2}
+
+// mediaProcessingToolType 是 ToolCall 与 ToolResponse field 1 中视频理解处理的工具类型
+const mediaProcessingToolType = 13
+
+// videoOffset 把 Duration 字符串解析为秒与纳秒
 func videoOffset(value string) (int64, int64, error) {
 	match := videoOffsetPattern.FindStringSubmatch(value)
 	if match == nil {
-		return 0, 0, fmt.Errorf("video offset must be a nonnegative duration in seconds: %q", value)
+		return 0, 0, fmt.Errorf("video offset %q 必须是秒数加 s 的 Duration，例如 \"2.5s\"", value)
 	}
 	seconds, err := strconv.ParseInt(match[1], 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("video offset: %w", err)
+		return 0, 0, fmt.Errorf("video offset %q: %w", value, err)
 	}
 	var nanos int64
 	if match[2] != "" {
@@ -27,117 +34,119 @@ func videoOffset(value string) (int64, int64, error) {
 	return seconds, nanos, nil
 }
 
-// videoPartOptions validates and encodes the metadata shared by video media parts.
-func videoPartOptions(part Part) ([]any, int64, error) {
-	var metadata []any
-	if video := part.VideoMetadata; video != nil {
-		var startSeconds, startNanos int64
-		if video.StartOffset != "" {
-			seconds, nanos, err := videoOffset(video.StartOffset)
-			if err != nil {
-				return nil, 0, err
-			}
-			startSeconds, startNanos = seconds, nanos
-			metadata = []any{videoDurationWire(seconds, nanos)}
-		}
-		if video.EndOffset != "" {
-			seconds, nanos, err := videoOffset(video.EndOffset)
-			if err != nil {
-				return nil, 0, err
-			}
-			if seconds < startSeconds || seconds == startSeconds && nanos <= startNanos {
-				return nil, 0, fmt.Errorf("video end offset must be greater than its start offset")
-			}
-			for len(metadata) < 2 {
-				metadata = append(metadata, nil)
-			}
-			metadata[1] = videoDurationWire(seconds, nanos)
-		}
-		if video.FPS != nil {
-			fps := *video.FPS
-			if math.IsNaN(fps) || math.IsInf(fps, 0) || fps <= 0 || fps > 24 {
-				return nil, 0, fmt.Errorf("video fps must be greater than 0 and at most 24")
-			}
-			for len(metadata) < 3 {
-				metadata = append(metadata, nil)
-			}
-			metadata[2] = fps
-		}
-	}
-	var processing int64
-	switch part.MediaProcessing {
-	case "", "MEDIA_PROCESSING_UNSPECIFIED":
-	case "STATIC":
-		processing = 1
-	case "AGENTIC":
-		if len(metadata) != 0 {
-			return nil, 0, fmt.Errorf("agentic video processing cannot use static clipping or fps")
-		}
-		processing = 2
-	default:
-		return nil, 0, fmt.Errorf("unknown video mediaProcessing %q", part.MediaProcessing)
-	}
-	if len(metadata) != 0 || processing != 0 {
-		mime := ""
-		switch {
-		case part.InlineData != nil:
-			mime = part.InlineData.MIME
-		case part.ExternalMedia != nil:
-			mime = part.ExternalMedia.MIME
-		case part.File != nil:
-			mime = part.File.MIME
-		case part.Upload != nil:
-			mime = part.Upload.MIME
-		default:
-			return nil, 0, fmt.Errorf("video metadata requires a video media part")
-		}
-		if !strings.HasPrefix(mime, "video/") && !(mime == "" && part.File != nil) {
-			return nil, 0, fmt.Errorf("video metadata requires a video MIME type")
-		}
-	}
-	return metadata, processing, nil
-}
-
-// videoDurationWire encodes seconds and optional nanoseconds without losing zero.
-func videoDurationWire(seconds, nanos int64) []any {
-	if nanos == 0 {
-		return []any{seconds}
-	}
-	return []any{seconds, nanos}
-}
-
-// encodeVideoPart attaches input-video options and the existing thought signature.
-func encodeVideoPart(wire []any, part Part) ([]any, error) {
-	metadata, processing, err := videoPartOptions(part)
+// videoOffsetWire 把 Duration 字符串编码为 google.protobuf.Duration 的 [seconds, nanos]
+func videoOffsetWire(value string) ([]any, error) {
+	seconds, nanos, err := videoOffset(value)
 	if err != nil {
 		return nil, err
 	}
-	if len(metadata) > 0 {
-		for len(wire) < 16 {
-			wire = append(wire, nil)
-		}
-		wire[15] = metadata
+	if nanos == 0 {
+		return []any{seconds}, nil
 	}
-	if processing != 0 {
-		for len(wire) < 40 {
-			wire = append(wire, nil)
-		}
-		wire[39] = processing
-	}
-	return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+	return []any{seconds, nanos}, nil
 }
 
-// validateVideoInputs checks requested agentic processing against the live model.
-func validateVideoInputs(contents []Content, model Model) error {
+// validateVideoOffsets 校验视频截取同时设置起止时终点晚于起点
+func validateVideoOffsets(contents []Content) error {
 	for _, content := range contents {
 		for _, part := range content.Parts {
-			if _, _, err := videoPartOptions(part); err != nil {
+			video := part.VideoMetadata
+			if video == nil || video.StartOffset == "" || video.EndOffset == "" {
+				continue
+			}
+			startSeconds, startNanos, err := videoOffset(video.StartOffset)
+			if err != nil {
 				return err
 			}
-			if part.MediaProcessing == "AGENTIC" && !model.Capabilities["agentic_video"] {
-				return fmt.Errorf("model %s does not support agentic video processing", model.ID)
+			endSeconds, endNanos, err := videoOffset(video.EndOffset)
+			if err != nil {
+				return err
+			}
+			if endSeconds < startSeconds || endSeconds == startSeconds && endNanos <= startNanos {
+				return fmt.Errorf("video endOffset %s 必须晚于 startOffset %s", video.EndOffset, video.StartOffset)
 			}
 		}
 	}
 	return nil
+}
+
+// encodeVideoPart 为媒体 Part 写入 field 16 视频元数据与 field 40 处理方式，再写入思考签名
+func encodeVideoPart(wire []any, part Part) ([]any, error) {
+	if video := part.VideoMetadata; video != nil {
+		var metadata []any
+		for index, offset := range []string{video.StartOffset, video.EndOffset} {
+			if offset == "" {
+				continue
+			}
+			value, err := videoOffsetWire(offset)
+			if err != nil {
+				return nil, err
+			}
+			metadata = setWireField(metadata, index, value)
+		}
+		if video.FPS != nil {
+			metadata = setWireField(metadata, 2, *video.FPS)
+		}
+		if metadata != nil {
+			wire = setWireField(wire, 15, metadata)
+		}
+	}
+	if part.MediaProcessing != "" {
+		code, ok := mediaProcessingCodes[part.MediaProcessing]
+		if !ok {
+			return nil, fmt.Errorf("未知 mediaProcessing %q", part.MediaProcessing)
+		}
+		if code != 0 {
+			wire = setWireField(wire, 39, code)
+		}
+	}
+	return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+}
+
+// encodeMediaProcessingStep 编码 ToolCall 或 ToolResponse：工具类型、名称、Struct 与调用 ID
+func encodeMediaProcessingStep(step *MediaProcessingStep) ([]any, error) {
+	wire := []any{int64(mediaProcessingToolType), nil, nil, step.ID}
+	if step.Name != "" {
+		wire[1] = step.Name
+	}
+	if len(step.Data) != 0 {
+		value, err := encodeWireStructJSON(step.Data)
+		if err != nil {
+			return nil, fmt.Errorf("media processing data: %w", err)
+		}
+		wire[2] = value
+	}
+	return wire, nil
+}
+
+// decodeMediaProcessingStep 解码视频理解处理类型的 ToolCall 或 ToolResponse，其他工具类型返回 nil
+func decodeMediaProcessingStep(raw json.RawMessage, path string, evidence json.RawMessage) (*MediaProcessingStep, error) {
+	fields, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "GenerateContent")
+	}
+	toolType, err := rawInt64(rawAt(fields, 0), path+"[0]", evidence)
+	if err != nil {
+		return nil, withMethod(err, "GenerateContent")
+	}
+	if toolType != mediaProcessingToolType {
+		return nil, nil
+	}
+	step := &MediaProcessingStep{}
+	if value := rawAt(fields, 1); !isJSONNull(value) {
+		if step.Name, err = rawString(value, path+"[1]", evidence); err != nil {
+			return nil, withMethod(err, "GenerateContent")
+		}
+	}
+	if value := rawAt(fields, 2); !isJSONNull(value) {
+		if step.Data, err = decodeWireStruct(value, path+"[2]", evidence); err != nil {
+			return nil, err
+		}
+	}
+	if value := rawAt(fields, 3); !isJSONNull(value) {
+		if step.ID, err = rawString(value, path+"[3]", evidence); err != nil {
+			return nil, withMethod(err, "GenerateContent")
+		}
+	}
+	return step, nil
 }

@@ -252,17 +252,6 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
-	if !isJSONNull(rawAt(part, 25)) || !isJSONNull(rawAt(part, 26)) {
-		variants := 0
-		for _, index := range []int{1, 2, 5, 6, 7, 8, 10, 11, 17, 25, 26} {
-			if !isJSONNull(rawAt(part, index)) {
-				variants++
-			}
-		}
-		if variants != 1 {
-			return nil, d.protocolError(path, "media processing part contains multiple data variants", raw)
-		}
-	}
 	thought := false
 	if thoughtRaw := rawAt(part, 12); !isJSONNull(thoughtRaw) {
 		thought, err = rawBool(thoughtRaw, path+"[12]", raw)

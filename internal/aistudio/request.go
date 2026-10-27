@@ -184,11 +184,6 @@ func encodeContent(content Content) ([]any, error) {
 }
 
 func encodePart(part Part) ([]any, error) {
-	if part.VideoMetadata != nil || part.MediaProcessing != "" {
-		if _, _, err := videoPartOptions(part); err != nil {
-			return nil, err
-		}
-	}
 	variants := 0
 	if part.Text != "" {
 		variants++
@@ -217,10 +212,7 @@ func encodePart(part Part) ([]any, error) {
 	if part.CodeExecutionResult != nil {
 		variants++
 	}
-	if part.ProcessingCall != nil {
-		variants++
-	}
-	if part.ProcessingResult != nil {
+	if part.ProcessingCall != nil || part.ProcessingResult != nil {
 		variants++
 	}
 	if variants == 0 && part.ThoughtSignature != "" {

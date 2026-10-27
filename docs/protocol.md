@@ -1975,7 +1975,7 @@ delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signatu
 | --- | --- |
 | `input` | 字符串、单个内容块、内容块数组或步骤数组；内容类型为 `text`、`image`、`audio`、`video`、`document` |
 | 媒体内容 | `data`（Base64）或 `uri`，可选 `mime_type` |
-| 视频处理 | `processing:"static"`、`"agentic"` 或 `{type:"static",start_offset?,end_offset?,fps?}`；offset 接受秒数或带 `s` 的 Duration 字符串 |
+| 视频处理 | `processing:"static"`、`"agentic"` 或 `{type:"static",start_offset?,end_offset?,fps?}`；offset 为带 `s` 的 Duration 字符串，例如 `"2.5s"` |
 | 输入步骤 | `user_input`、`model_output`、`thought`、`function_call`、`function_result`、`code_execution_call`、`code_execution_result` 与工具 call/result 步骤 |
 | `system_instruction` | 当前请求的系统指令 |
 | `generation_config` | `temperature`、`top_p`、`top_k`、`max_output_tokens`、`seed`、`stop_sequences`、`thinking_level`、`thinking_summaries`、`speech_config`、`tool_choice`、`image_config:{aspect_ratio?,image_size?}` |

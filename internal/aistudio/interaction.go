@@ -158,10 +158,9 @@ func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) 
 		parts := make([]any, 0, len(content.Parts))
 		texts := make([]Part, 0, len(content.Parts))
 		for _, part := range content.Parts {
-			if part.VideoMetadata != nil || part.MediaProcessing != "" || part.ProcessingCall != nil || part.ProcessingResult != nil {
-				return nil, nil, false, fmt.Errorf("Interaction-routed models do not support GenerateContent video processing options or navigation history")
-			}
 			switch {
+			case part.VideoMetadata != nil || part.MediaProcessing != "" || part.ProcessingCall != nil || part.ProcessingResult != nil:
+				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 不接受视频截取、采样、处理方式与处理步骤", index)
 			case part.Thought:
 				continue
 			case part.ExecutableCode != nil || part.CodeExecutionResult != nil:
