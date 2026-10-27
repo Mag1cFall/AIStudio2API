@@ -45,14 +45,14 @@ type UploadRef struct {
 	Size int64  `json:"size"`
 }
 
-// VideoMetadata configures static input-video clipping and frame sampling.
+// VideoMetadata 是视频 Part 的截取起止与采样帧率，起止为 Duration 字符串
 type VideoMetadata struct {
 	StartOffset string   `json:"start_offset,omitempty"`
 	EndOffset   string   `json:"end_offset,omitempty"`
 	FPS         *float64 `json:"fps,omitempty"`
 }
 
-// MediaProcessingStep represents a server-owned video navigation call or result.
+// MediaProcessingStep 是上游视频理解发起的一次服务端处理调用或其结果
 type MediaProcessingStep struct {
 	ID   string          `json:"id,omitempty"`
 	Name string          `json:"name,omitempty"`
@@ -151,9 +151,10 @@ type Part struct {
 	ThoughtSignature    string               `json:"thought_signature,omitempty"`
 	SpeechMetadata      *SpeechMetadata      `json:"speech_metadata,omitempty"`
 	VideoMetadata       *VideoMetadata       `json:"video_metadata,omitempty"`
-	MediaProcessing     string               `json:"media_processing,omitempty"`
-	ProcessingCall      *MediaProcessingStep `json:"processing_call,omitempty"`
-	ProcessingResult    *MediaProcessingStep `json:"processing_result,omitempty"`
+	// MediaProcessing 为视频处理方式 STATIC 或 AGENTIC
+	MediaProcessing  string               `json:"media_processing,omitempty"`
+	ProcessingCall   *MediaProcessingStep `json:"processing_call,omitempty"`
+	ProcessingResult *MediaProcessingStep `json:"processing_result,omitempty"`
 }
 
 // SpeechMetadata 表示语音文本分段的说话人与风格
@@ -467,9 +468,9 @@ const (
 	EventReasoning EventKind = "reasoning"
 	// EventToolCall 表示函数调用
 	EventToolCall EventKind = "tool_call"
-	// EventMediaProcessingCall identifies server-owned video navigation.
+	// EventMediaProcessingCall 表示视频理解的服务端处理调用
 	EventMediaProcessingCall EventKind = "media_processing_call"
-	// EventMediaProcessingResult identifies the server's navigation result.
+	// EventMediaProcessingResult 表示视频理解的服务端处理结果
 	EventMediaProcessingResult EventKind = "media_processing_result"
 	// EventExecutableCode 表示内置代码执行器生成代码
 	EventExecutableCode EventKind = "executable_code"

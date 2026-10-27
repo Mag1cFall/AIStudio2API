@@ -645,7 +645,7 @@ func (c *Client) validateGenerateRequest(request GenerateRequest) error {
 
 // validateGenerateEntry 按 Generate 的顺序校验工具、转写、生成参数与安全设置
 func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
-	if err := validateVideoInputs(request.Contents, entry.model); err != nil {
+	if err := validateVideoOffsets(request.Contents); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	if _, err := supportedTools(request.Tools, entry.model); err != nil {
@@ -679,7 +679,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateVideoInputs(request.Contents, entry.model); err != nil {
+	if err := validateVideoOffsets(request.Contents); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	request.Tools, err = supportedTools(request.Tools, entry.model)

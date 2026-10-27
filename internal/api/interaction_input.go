@@ -439,12 +439,8 @@ func (item interactionInput) codeExecutionText() string {
 func (content interactionInput) parts() ([]aistudio.Part, error) {
 	var part geminiPart
 	if rawJSONConfigured(content.Processing) {
-		if content.Type != "video" {
-			return nil, fmt.Errorf("processing requires video content")
-		}
 		var err error
-		part.VideoMetadata, part.MediaProcessing, err = interactionVideoProcessing(content.Processing)
-		if err != nil {
+		if part.VideoMetadata, part.MediaProcessing, err = interactionVideoProcessing(content.Processing); err != nil {
 			return nil, err
 		}
 	}
