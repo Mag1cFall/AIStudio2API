@@ -128,6 +128,7 @@ type AccountConfig struct {
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
 	Timezone string `json:"timezone"`
+	AuthUser int    `json:"auth_user,omitempty"`
 }
 
 // ResourceBinding 记录上游资源的创建账户
@@ -582,6 +583,9 @@ func (c AccountConfig) Validate() error {
 	}
 	if strings.TrimSpace(c.Timezone) == "" {
 		return fmt.Errorf("账户 timezone 不能为空")
+	}
+	if c.AuthUser < 0 || c.AuthUser > 9 {
+		return fmt.Errorf("账户 auth_user 无效: %d", c.AuthUser)
 	}
 	if err := appconfig.ValidateProxy(c.Proxy); err != nil {
 		return fmt.Errorf("账户 proxy 无效: %w", err)

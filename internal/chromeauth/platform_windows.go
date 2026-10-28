@@ -77,14 +77,22 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 		records, recordsErr := readTokenServices(chromeRoot, profile)
 		seen := map[string]bool{}
 		for _, identity := range identities {
-			if identity.Gaia == "" || seen[identity.Gaia] {
+			gaia := strings.TrimSpace(identity.Gaia)
+			if gaia == "" {
+				gaia = strings.TrimSpace(identity.AccountID)
+			}
+			if gaia == "" || seen[gaia] {
 				continue
 			}
-			seen[identity.Gaia] = true
-			record, found := records[identity.Gaia]
+			seen[gaia] = true
+			displayName := info.Name
+			if fullName := strings.TrimSpace(identity.FullName); fullName != "" && !strings.EqualFold(fullName, info.Name) {
+				displayName = fullName + " (" + info.Name + ")"
+			}
+			record, found := records[gaia]
 			accounts = append(accounts, Account{
-				ID: profile + "/" + identity.Gaia, GaiaID: identity.Gaia,
-				Profile: profile, DisplayName: info.Name, Email: identity.Email, Locale: locale,
+				ID: profile + "/" + gaia, GaiaID: gaia,
+				Profile: profile, DisplayName: displayName, Email: identity.Email, Locale: locale,
 				Importable: recordsErr == nil && found && strings.HasPrefix(string(record.encryptedToken), "v20"),
 			})
 		}
@@ -94,8 +102,10 @@ func discoverPlatform(chromeRoot string) ([]Account, error) {
 
 // profileIdentity 为 Preferences.account_info 中的一个 Google 账号
 type profileIdentity struct {
-	Gaia  string `json:"gaia"`
-	Email string `json:"email"`
+	Gaia      string `json:"gaia"`
+	AccountID string `json:"account_id"`
+	Email     string `json:"email"`
+	FullName  string `json:"full_name"`
 }
 
 // profileIdentities 读取 Profile 内全部 Google 账号的 Gaia ID 与邮箱
