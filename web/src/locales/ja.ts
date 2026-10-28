@@ -93,6 +93,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserLogin': 'ブラウザでログイン',
   'accounts.importChrome': 'Chrome からインポート',
   'accounts.chromeTitle': 'Chrome のアカウントを選択',
+  'accounts.cookieAccounts': 'Cookie 内のアカウント',
   'accounts.chromeEmpty': 'インポートできる Chrome のアカウントがありません',
   'accounts.importSelected': '選択したアカウントをインポート',
   'accounts.cookies': 'Cookie',

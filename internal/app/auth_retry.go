@@ -24,6 +24,7 @@ type authRuntimeRefresher struct {
 	importCurrent  func(context.Context, aistudio.AuthSource, *aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
 	chromeHas      func(string) bool
 	reset          func(string) error
+	prepareWorker  func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)
 	prepareHeaders func(string) (func(bool), error)
 	globalProxy    string
 	requests       *requestRegistry
@@ -172,7 +173,7 @@ func newAuthRuntimeRefresher(
 	return &authRuntimeRefresher{
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
-		reset: workers.Reset, prepareHeaders: headers.prepareInvalidate,
+		reset: workers.Reset, prepareWorker: workers.prepareUpdate, prepareHeaders: headers.prepareInvalidate,
 		globalProxy: globalProxy,
 		requests:    requests,
 	}
@@ -460,6 +461,9 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 			time.Since(startedAt).Round(time.Millisecond), wrapped.Error(),
 		))
 		return wrapped
+	}
+	if err := resetCookieAuthUser(lease, refresher.prepareWorker); err != nil {
+		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
 	refresher.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
 		"账户认证续签完成 | 耗时=%s",

@@ -158,7 +158,7 @@ Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secu
 
 | 文件 | 内容 |
 | --- | --- |
-| `auth/<Google 邮箱>/account.json` | 邮箱、enabled、proxy、locale、timezone |
+| `auth/<Google 邮箱>/account.json` | 邮箱、enabled、proxy、locale、timezone、auth_user |
 | `auth/<Google 邮箱>/storage-state.json` | Cookie、localStorage 和可选 Chrome 续签材料 |
 | `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、WebGL、语言、地区和时区配置 |
 | `auth/<Google 邮箱>/runtime-state.json` | 账户权益、实测模型资格、冷却与 Drive/Veo 资源绑定 |
@@ -1184,7 +1184,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | 管理登录 | `GET /api/auth/session`、`POST /api/auth/login`、`POST /api/auth/logout` |
 | 状态与模型 | `GET /api/status`、`GET /api/models` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 账户 | `GET /api/accounts`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
+| 账户 | `GET /api/accounts`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
 | 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `POST /api/pairing`、`POST /api/pairing/accounts` |
 | 配置 | `GET /api/config`、`PUT /api/config` |
@@ -1203,6 +1203,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `GET /api/accounts/import/chrome` | 200 | `{"profiles":[ChromeImportProfile,...]}` |
 | `POST /api/accounts/import/chrome` | 201 | `{"accounts":[AdminAccount,...]}` |
 | `GET /api/accounts/import/browsers` | 200 | `{"browsers":[CookieBrowser,...]}` |
+| `POST /api/accounts/import/cookies/discover` | 200 | `{"accounts":[CookieBrowser,...]}` |
 | `POST /api/accounts/import/cookies` | 201 | `{"account":AdminAccount}` |
 | `POST /api/pairing` | 201 | `PairingToken` |
 | `POST /api/pairing/accounts` | 201 | `{"account":AdminAccount}` |
@@ -1222,6 +1223,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `GET /api/events` | 200 SSE | `{"type":"<TYPE>","data":<DTO>}` |
 
 - `POST /api/pairing/accounts` 的令牌无效或过期时返回 401 `pairing_token_invalid`，账户已存在时返回 409 `account_exists`
+- 一份 Cookie 可包含同一浏览器中多个 Google 账户的会话，第 N 个会话对应官网 `/u/N/` 与请求头 `X-Goog-AuthUser: N`。`POST /api/accounts/import/cookies/discover` 从 u/0 起依次打开各会话的对话页，列出每个会话登录的账户；`GET /api/accounts/import/browsers` 为每个浏览器的每个会话各列一项。`POST /api/accounts/import/cookies` 的 `auth_user` 选择导入的会话，省略时为 0；账户的 `auth_user` 写入 `account.json`，运行时以 `/u/N/` 页面与 `X-Goog-AuthUser: N` 访问官网，浏览器重新登录后为 0
 - `POST /api/accounts/import/cookies` 的 Cookie 无法解析或缺少登录 Cookie 时返回 400 `invalid_cookies`，调试地址连接或读取失败时返回 502 `cdp_unavailable`，账户已存在时返回 409 `account_exists`
 - `GET /api/requests/{id}/body` 在没有保存正文时返回 404 `request_body_not_found`
 - `POST /api/accounts` 与 `POST /api/accounts/{id}/login` 的 body 可带 `view`，即管理页面为本次登录生成的登录窗口 ID；`POST /api/accounts/{id}/login` 也接受空 body。服务器没有图形界面，或请求来自非回环地址、带 `Forwarded` 或 `X-Forwarded-For` 时，登录画面经同一 ID 的 `GET /api/login-view/{view}` 传递，请求在登录结束后返回
@@ -1238,10 +1240,10 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
 | `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`locale` |
 | `ChromeImportInput` | `account_ids`、`proxy`、`locale`、`timezone` |
-| `CookieImportInput` | `label`、`cookies` 或 `cdp`、`proxy`、`locale`、`timezone`；`cdp` 导入时 `locale`、`timezone` 为空则取该浏览器页面的语言与时区 |
-| `CookieBrowser` | `address`、`browser`、`email`、`locale`、`timezone`、`imported`、`signed_out`、`error` |
+| `CookieImportInput` | `label`、`cookies` 或 `cdp`、`proxy`、`locale`、`timezone`、可选 `auth_user`（Cookie 中的会话序号 0–9，默认 0）；`cdp` 导入时 `locale`、`timezone` 为空则取该浏览器页面的语言与时区 |
+| `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`locale`、`timezone`、`imported`、`signed_out`、`error` |
 | `PairingToken` | `token`、`expires_at` |
-| `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `fingerprint` |
+| `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `auth_user`（默认 0）、可选 `fingerprint` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |
 | `AdminRequest` | `id`、`model`、`account_id`、`account_label`、`state`、`started_at` |
 | `AdminLog` | `time`、`level`、`source`、`message`、`event`；请求事件携带 `request`，包含 `id`、`state`、HTTP `status`、`model`、`duration_ms`、`tool_calls`、`usage` 与诊断字段，字段口径见 [logging.md](logging.md) |

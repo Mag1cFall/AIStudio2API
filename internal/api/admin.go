@@ -20,6 +20,7 @@ type AdminService interface {
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
 	CookieBrowsers(context.Context) ([]CookieBrowser, error)
+	DiscoverCookieAccounts(context.Context, CookieImportInput) ([]CookieBrowser, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
 	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
@@ -197,6 +198,7 @@ type CookieImportInput struct {
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
 	Timezone string `json:"timezone"`
+	AuthUser int    `json:"auth_user"`
 }
 
 // ChromeImportProfile 表示可从本机 Chrome 导入的账号
@@ -213,6 +215,7 @@ type CookieBrowser struct {
 	Address   string `json:"address"`
 	Browser   string `json:"browser"`
 	Email     string `json:"email"`
+	AuthUser  int    `json:"auth_user"`
 	Locale    string `json:"locale"`
 	Timezone  string `json:"timezone"`
 	Imported  bool   `json:"imported"`
@@ -305,6 +308,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
 	mux.HandleFunc("GET /api/accounts/import/browsers", s.handleCookieBrowsers)
+	mux.HandleFunc("POST /api/accounts/import/cookies/discover", s.handleDiscoverCookieAccounts)
 	mux.HandleFunc("POST /api/accounts/import/cookies", s.handleImportCookieAccount)
 	mux.HandleFunc("POST /api/pairing", s.handleCreatePairing)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
@@ -414,6 +418,20 @@ func (s *server) handleCookieBrowsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]CookieBrowser{"browsers": browsers})
 }
 
+func (s *server) handleDiscoverCookieAccounts(w http.ResponseWriter, r *http.Request) {
+	var input CookieImportInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	accounts, err := s.config.Admin.DiscoverCookieAccounts(r.Context(), input)
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]CookieBrowser{"accounts": accounts})
+}
+
 func (s *server) handleImportCookieAccount(w http.ResponseWriter, r *http.Request) {
 	var input CookieImportInput
 	if err := decodeJSON(r, &input); err != nil {
@@ -440,7 +458,8 @@ func (s *server) handleImportCookieAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	account, err := s.config.Admin.ImportAccountState(r.Context(), AccountStateInput{
-		Label: input.Label, Proxy: input.Proxy, Locale: input.Locale, Timezone: input.Timezone, StorageState: state,
+		Label: input.Label, Proxy: input.Proxy, Locale: input.Locale, Timezone: input.Timezone,
+		AuthUser: input.AuthUser, StorageState: state,
 	})
 	if err != nil {
 		writeAdminUpstreamError(w, err)

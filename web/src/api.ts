@@ -187,6 +187,13 @@ export const api = {
     }),
   cookieBrowsers: async () =>
     (await requestJSON<{ browsers: CookieBrowser[] }>('/api/accounts/import/browsers')).browsers,
+  discoverCookieAccounts: async (input: CookieImportInput) =>
+    (
+      await requestJSON<{ accounts: CookieBrowser[] }>('/api/accounts/import/cookies/discover', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+    ).accounts,
   importCookieAccount: (input: CookieImportInput) =>
     requestJSON<AccountResponse>('/api/accounts/import/cookies', {
       method: 'POST',

@@ -262,7 +262,7 @@ Windows 桌面版在命令行中运行以下命令时写作 `cmd /c start /wait 
 - 不带参数时扫描本机 Chrome 账户，`--email` 或 `--profile` 选择明确的 Chrome 账户
 - 隔离登录：`aistudio2api setup --login`，需要图形界面；没有图形界面时启动服务，在管理页面的“浏览器登录”中登录
 - 文件导入：`aistudio2api setup --storage-state <file>`
-- Cookie 导入：`aistudio2api setup --cookie-file <file>`、`aistudio2api setup --cookie "<Cookie 请求头>"` 或 `aistudio2api setup --cdp <调试地址>`，账户邮箱按 Cookie 识别，`--cdp` 导入的账户沿用该浏览器的语言与时区
+- Cookie 导入：`aistudio2api setup --cookie-file <file>`、`aistudio2api setup --cookie "<Cookie 请求头>"` 或 `aistudio2api setup --cdp <调试地址>`，账户邮箱按 Cookie 识别，`--cdp` 导入的账户沿用该浏览器的语言与时区；Cookie 来自同时登录多个 Google 账户的浏览器时，以 `--authuser N` 选择官网地址 `/u/N/` 中第 N 个账户
 
 `aistudio2api setup --remote https://<远程实例>`：向远程实例添加账户。先在远程实例的账户页点击“远程添加”取得配对令牌，再在能登录 Google 的电脑上运行该命令并粘贴令牌；可与 `--login` 等参数组合。
 

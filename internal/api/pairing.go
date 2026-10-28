@@ -28,6 +28,7 @@ type AccountStateInput struct {
 	Proxy        string                `json:"-"`
 	Locale       string                `json:"locale"`
 	Timezone     string                `json:"timezone"`
+	AuthUser     int                   `json:"auth_user"`
 	StorageState aistudio.StorageState `json:"storage_state"`
 	Fingerprint  json.RawMessage       `json:"fingerprint,omitempty"`
 }
