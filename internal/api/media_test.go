@@ -63,3 +63,24 @@ func TestSpeechWAV(t *testing.T) {
 		t.Fatalf("interaction audio=%v err=%v", content, err)
 	}
 }
+
+// TestOpenAIVideoContentParts 验证 video_url 与 input_video 支持 data URL、file_id 与 YouTube 链接
+func TestOpenAIVideoContentParts(t *testing.T) {
+	parts, err := openAIContentParts(json.RawMessage(`[
+		{"type":"video_url","video_url":{"url":"data:video/mp4;base64,+//v"}},
+		{"type":"input_video","file_id":"file-123"},
+		{"type":"video_url","video_url":"https://www.youtube.com/watch?v=rOVtjJkqtiA"}
+	]`))
+	if err != nil || len(parts) != 3 {
+		t.Fatalf("parts=%#v err=%v", parts, err)
+	}
+	if parts[0].InlineData == nil || parts[0].InlineData.MIME != "video/mp4" || !bytes.Equal(parts[0].InlineData.Data, []byte{0xfb, 0xff, 0xef}) {
+		t.Fatalf("inline video=%#v", parts[0])
+	}
+	if parts[1].File == nil || parts[1].File.ID != "file-123" {
+		t.Fatalf("file video=%#v", parts[1])
+	}
+	if parts[2].ExternalMedia == nil || parts[2].ExternalMedia.URL != "https://www.youtube.com/watch?v=rOVtjJkqtiA" {
+		t.Fatalf("youtube video=%#v", parts[2])
+	}
+}
