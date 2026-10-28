@@ -83,12 +83,14 @@ export interface CookieImportInput extends AccountLoginInput {
   label: string
   cookies: string
   cdp: string
+  auth_user?: number
 }
 
 export interface CookieBrowser {
   address: string
   browser: string
   email: string
+  auth_user: number
   locale: string
   timezone: string
   imported: boolean

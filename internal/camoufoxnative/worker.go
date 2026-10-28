@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -323,7 +324,11 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		return err
 	}
 	options.reportStartup(StartupLoadingAIStudio)
-	target := aiStudioOrigin + "/prompts/new_chat?model=" + url.QueryEscape(options.Model)
+	pagePath := "/prompts/new_chat"
+	if options.AuthUser > 0 {
+		pagePath = fmt.Sprintf("/u/%d/prompts/new_chat", options.AuthUser)
+	}
+	target := aiStudioOrigin + pagePath + "?model=" + url.QueryEscape(options.Model)
 	if options.TemporaryChat {
 		target += "&temporary=true"
 	}
@@ -490,6 +495,9 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		if value := blocked.headers[name]; value != "" {
 			headers.Set(name, value)
 		}
+	}
+	if options.AuthUser > 0 {
+		headers.Set("x-goog-authuser", strconv.Itoa(options.AuthUser))
 	}
 	for _, name := range []string{"user-agent", "x-goog-api-key", "x-goog-authuser", "x-user-agent"} {
 		if headers.Get(name) == "" {

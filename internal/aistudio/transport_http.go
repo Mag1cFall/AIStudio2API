@@ -203,6 +203,9 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 		header.Set("Sec-Fetch-Dest", "empty")
 		header.Set("Sec-Fetch-Mode", "cors")
 		header.Set("Sec-Fetch-Site", "same-origin")
+		if account.Config.AuthUser > 0 {
+			header.Set("X-Goog-Authuser", strconv.Itoa(account.Config.AuthUser))
+		}
 		if language := account.AcceptLanguage(); language != "" {
 			header.Set("Accept-Language", language)
 		}
@@ -362,6 +365,9 @@ func prepareProtocolHeaders(
 		for _, value := range values {
 			headers.Add(name, value)
 		}
+	}
+	if account.Config.AuthUser > 0 {
+		headers.Set("X-Goog-Authuser", strconv.Itoa(account.Config.AuthUser))
 	}
 	for _, name := range []string{"User-Agent", "X-Goog-Api-Key", "X-Goog-Authuser", "X-User-Agent"} {
 		if strings.TrimSpace(headers.Get(name)) == "" {

@@ -421,6 +421,13 @@ func (manager *runtimeManager) CookieBrowsers(ctx context.Context) ([]api.Cookie
 	return manager.current.admin.CookieBrowsers(ctx)
 }
 
+// DiscoverCookieAccounts 返回粘贴 Cookie 中尚未导入的会话槽位账户
+func (manager *runtimeManager) DiscoverCookieAccounts(ctx context.Context, input api.CookieImportInput) ([]api.CookieBrowser, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.DiscoverCookieAccounts(ctx, input)
+}
+
 // ImportChromeAccounts 在当前生成服务批量导入 Chrome 账号
 func (manager *runtimeManager) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
 	manager.mu.RLock()
