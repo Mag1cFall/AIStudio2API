@@ -114,6 +114,34 @@ type geminiPart struct {
 	} `json:"codeExecutionResult"`
 	SpeechMetadata      *aistudio.SpeechMetadata `json:"speechMetadata"`
 	SpeechMetadataSnake *aistudio.SpeechMetadata `json:"speech_metadata"`
+	VideoMetadata       *geminiVideoMetadata     `json:"videoMetadata"`
+	MediaProcessing     string                   `json:"mediaProcessing"`
+	ToolCall            *geminiToolStep          `json:"toolCall"`
+	ToolResponse        *geminiToolStep          `json:"toolResponse"`
+}
+
+// geminiVideoMetadata 为 Part.videoMetadata 的截取起止与采样帧率
+type geminiVideoMetadata struct {
+	StartOffset string   `json:"startOffset"`
+	EndOffset   string   `json:"endOffset"`
+	FPS         *float64 `json:"fps"`
+}
+
+// geminiToolStep 为 Part.toolCall 与 Part.toolResponse 的服务端工具步骤
+type geminiToolStep struct {
+	ID       string          `json:"id"`
+	ToolType string          `json:"toolType"`
+	ToolName string          `json:"toolName"`
+	Args     json.RawMessage `json:"args"`
+	Response json.RawMessage `json:"response"`
+}
+
+// mediaProcessing 把视频理解处理类型的服务端工具步骤转为规范步骤，payload 为 args 或 response
+func (step geminiToolStep) mediaProcessing(payload json.RawMessage) (*aistudio.MediaProcessingStep, error) {
+	if step.ToolType != "MEDIA_PROCESSING" {
+		return nil, fmt.Errorf("unsupported server tool type %q", step.ToolType)
+	}
+	return &aistudio.MediaProcessingStep{ID: step.ID, Name: step.ToolName, Data: payload}, nil
 }
 
 func (p geminiPart) speechMetadata() *aistudio.SpeechMetadata {
@@ -770,6 +798,13 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 		if part.CodeExecutionResult != nil {
 			variants++
 		}
+		if part.ToolCall != nil {
+			variants++
+		}
+		if part.ToolResponse != nil {
+			variants++
+		}
+		video, processing := (*aistudio.VideoMetadata)(part.VideoMetadata), part.MediaProcessing
 		if variants == 0 {
 			if part.ThoughtSignature != "" {
 				parts = append(parts, aistudio.Part{ThoughtSignature: part.ThoughtSignature})
@@ -793,6 +828,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			parts = append(parts, aistudio.Part{
 				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
 				ThoughtSignature: part.ThoughtSignature,
+				VideoMetadata:    video, MediaProcessing: processing,
 			})
 		case file != nil:
 			uri := file.URI()
@@ -804,13 +840,14 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 				uri = driveID
 			}
 			if media, ok := aistudio.ExternalMediaForURL(uri); ok {
-				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature})
+				parts = append(parts, aistudio.Part{ExternalMedia: media, ThoughtSignature: part.ThoughtSignature, VideoMetadata: video, MediaProcessing: processing})
 			} else {
 				parts = append(parts, aistudio.Part{
 					File: &aistudio.FileRef{
 						ID: uri, Name: file.DisplayName, MIME: mime,
 					},
 					ThoughtSignature: part.ThoughtSignature,
+					VideoMetadata:    video, MediaProcessing: processing,
 				})
 			}
 		case part.FunctionCall != nil:
@@ -847,6 +884,18 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			})
 			parts = append(parts, media...)
 			hasResult = true
+		case part.ToolCall != nil:
+			step, err := part.ToolCall.mediaProcessing(part.ToolCall.Args)
+			if err != nil {
+				return nil, false, fmt.Errorf("parts[%d]: %w", index, err)
+			}
+			parts = append(parts, aistudio.Part{ProcessingCall: step, ThoughtSignature: part.ThoughtSignature})
+		case part.ToolResponse != nil:
+			step, err := part.ToolResponse.mediaProcessing(part.ToolResponse.Response)
+			if err != nil {
+				return nil, false, fmt.Errorf("parts[%d]: %w", index, err)
+			}
+			parts = append(parts, aistudio.Part{ProcessingResult: step, ThoughtSignature: part.ThoughtSignature})
 		case part.ExecutableCode != nil:
 			parts = append(parts, aistudio.Part{
 				ExecutableCode: &aistudio.ExecutableCode{
@@ -1145,6 +1194,8 @@ func geminiOutputParts(result generationResult) []map[string]any {
 			if event.ToolCall != nil {
 				appendPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature)
 			}
+		case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+			appendPart(geminiProcessingPart(event), event.ThoughtSignature)
 		case aistudio.EventExecutableCode:
 			if event.ExecutableCode != nil {
 				appendPart(map[string]any{"executableCode": map[string]any{
@@ -1545,6 +1596,8 @@ func geminiStreamCandidate(event aistudio.Event, index int) map[string]any {
 			return nil
 		}
 		part = geminiSignedPart(geminiFunctionCallPart(*event.ToolCall), event.ThoughtSignature)
+	case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+		part = geminiSignedPart(geminiProcessingPart(event), event.ThoughtSignature)
 	case aistudio.EventExecutableCode:
 		if event.ExecutableCode == nil {
 			return nil

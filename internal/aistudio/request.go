@@ -212,6 +212,9 @@ func encodePart(part Part) ([]any, error) {
 	if part.CodeExecutionResult != nil {
 		variants++
 	}
+	if part.ProcessingCall != nil || part.ProcessingResult != nil {
+		variants++
+	}
 	if variants == 0 && part.ThoughtSignature != "" {
 		return setPartThoughtSignature([]any{}, part.ThoughtSignature), nil
 	}
@@ -247,7 +250,7 @@ func encodePart(part Part) ([]any, error) {
 			return nil, fmt.Errorf("inline data 缺少 MIME 或数据")
 		}
 		wire := []any{nil, nil, []any{part.InlineData.MIME, base64.StdEncoding.EncodeToString(part.InlineData.Data)}}
-		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+		return encodeVideoPart(wire, part)
 	}
 	if part.ExternalMedia != nil {
 		if part.ExternalMedia.MIME == "" || part.ExternalMedia.URL == "" {
@@ -255,20 +258,20 @@ func encodePart(part Part) ([]any, error) {
 		}
 		wire := make([]any, 7)
 		wire[6] = []any{part.ExternalMedia.MIME, part.ExternalMedia.URL}
-		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+		return encodeVideoPart(wire, part)
 	}
 	if part.File != nil {
 		wire, err := encodeFilePart(part.File)
 		if err != nil {
 			return nil, err
 		}
-		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+		return encodeVideoPart(wire, part)
 	}
 	if upload := part.Upload; upload != nil {
 		// Part field 18 上传附件：MIME、上传路径、文件名、字节数
 		wire := make([]any, 18)
 		wire[17] = []any{upload.MIME, upload.Path, upload.Name, strconv.FormatInt(upload.Size, 10)}
-		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+		return encodeVideoPart(wire, part)
 	}
 	if part.FunctionCall != nil {
 		if err := validateFunctionCall(part.FunctionCall); err != nil {
@@ -304,6 +307,19 @@ func encodePart(part Part) ([]any, error) {
 		}
 		wire := make([]any, 12)
 		wire[11] = result
+		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
+	}
+	if part.ProcessingCall != nil || part.ProcessingResult != nil {
+		step, index := part.ProcessingCall, 25
+		if step == nil {
+			step, index = part.ProcessingResult, 26
+		}
+		value, err := encodeMediaProcessingStep(step)
+		if err != nil {
+			return nil, err
+		}
+		wire := make([]any, index+1)
+		wire[index] = value
 		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
 	if part.ExecutableCode != nil {
@@ -352,7 +368,7 @@ func countTokensNeedsGenerateRequest(contents []Content) bool {
 	for _, content := range contents {
 		for _, part := range content.Parts {
 			if part.InlineData != nil || part.ExternalMedia != nil || part.File != nil || part.FunctionCall != nil || part.FunctionResult != nil ||
-				part.ExecutableCode != nil || part.CodeExecutionResult != nil {
+				part.ExecutableCode != nil || part.CodeExecutionResult != nil || part.ProcessingCall != nil || part.ProcessingResult != nil {
 				return true
 			}
 		}

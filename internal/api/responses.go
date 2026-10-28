@@ -579,7 +579,20 @@ func responseHistoryOutput(result generationResult) aistudio.Content {
 			if event.Media != nil && len(event.Media.Data) > 0 {
 				blob := &aistudio.Blob{MIME: event.Media.MIME, Data: append([]byte(nil), event.Media.Data...)}
 				output.Parts = append(output.Parts, aistudio.Part{InlineData: blob, ThoughtSignature: event.ThoughtSignature})
+			} else if event.Media != nil && event.Media.URL != "" {
+				file := &aistudio.FileRef{ID: event.Media.URL, Name: event.Media.Name, MIME: event.Media.MIME}
+				output.Parts = append(output.Parts, aistudio.Part{File: file, ThoughtSignature: event.ThoughtSignature})
 			}
+		case aistudio.EventExecutableCode:
+			code := *event.ExecutableCode
+			output.Parts = append(output.Parts, aistudio.Part{ExecutableCode: &code, ThoughtSignature: event.ThoughtSignature})
+		case aistudio.EventCodeExecutionResult:
+			result := *event.CodeExecutionResult
+			output.Parts = append(output.Parts, aistudio.Part{CodeExecutionResult: &result, ThoughtSignature: event.ThoughtSignature})
+		case aistudio.EventMediaProcessingCall:
+			output.Parts = append(output.Parts, aistudio.Part{ProcessingCall: event.MediaProcessing, ThoughtSignature: event.ThoughtSignature})
+		case aistudio.EventMediaProcessingResult:
+			output.Parts = append(output.Parts, aistudio.Part{ProcessingResult: event.MediaProcessing, ThoughtSignature: event.ThoughtSignature})
 		case aistudio.EventReasoning, aistudio.EventThoughtSignature:
 			if event.ThoughtSignature != "" {
 				output.Parts = append(output.Parts, aistudio.Part{ThoughtSignature: event.ThoughtSignature})
