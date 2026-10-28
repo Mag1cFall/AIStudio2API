@@ -87,6 +87,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserLogin': '使用瀏覽器登入',
   'accounts.importChrome': '從 Chrome 匯入',
   'accounts.chromeTitle': '選擇 Chrome 帳號',
+  'accounts.cookieAccounts': 'Cookie 中的帳號',
   'accounts.chromeEmpty': '沒有可匯入的 Chrome 帳號',
   'accounts.importSelected': '匯入所選帳號',
   'accounts.cookies': 'Cookie',

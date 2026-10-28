@@ -174,7 +174,11 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	}
 	runtime := &goWAARuntime{options: options, client: client, storage: storage}
 	runtime.profile, runtime.userAgent, runtime.acceptLanguage = profileFromFingerprint(fingerprint)
-	runtime.pageURL = aiStudioOrigin + "/prompts/new_chat?model=" + url.QueryEscape(options.Model)
+	pagePath := "/prompts/new_chat"
+	if options.AuthUser > 0 {
+		pagePath = fmt.Sprintf("/u/%d/prompts/new_chat", options.AuthUser)
+	}
+	runtime.pageURL = aiStudioOrigin + pagePath + "?model=" + url.QueryEscape(options.Model)
 	if options.TemporaryChat {
 		runtime.pageURL += "&temporary=true"
 	}
@@ -229,7 +233,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	runtime.headers = http.Header{}
 	runtime.headers.Set("user-agent", runtime.userAgent)
 	runtime.headers.Set("x-goog-api-key", apiKey)
-	runtime.headers.Set("x-goog-authuser", "0")
+	runtime.headers.Set("x-goog-authuser", strconv.Itoa(options.AuthUser))
 	runtime.headers.Set("x-user-agent", "grpc-web-javascript/0.1")
 	runtime.headers.Set("x-aistudio-visit-id", visitID)
 	if extension != "" {
@@ -462,7 +466,7 @@ func (runtime *goWAARuntime) rpcHeaders(apiKey string) (http.Header, error) {
 	headers.Set("Referer", aiStudioOrigin+"/")
 	headers.Set("Content-Type", "application/json+protobuf")
 	headers.Set("X-Goog-Api-Key", apiKey)
-	headers.Set("X-Goog-AuthUser", "0")
+	headers.Set("X-Goog-AuthUser", strconv.Itoa(runtime.options.AuthUser))
 	headers.Set("X-User-Agent", "grpc-web-javascript/0.1")
 	headers.Set("Authorization", authorization)
 	headers.Set("Origin", aiStudioOrigin)

@@ -91,6 +91,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserLogin': '브라우저로 로그인',
   'accounts.importChrome': 'Chrome에서 가져오기',
   'accounts.chromeTitle': 'Chrome 계정 선택',
+  'accounts.cookieAccounts': 'Cookie의 계정',
   'accounts.chromeEmpty': '가져올 수 있는 Chrome 계정이 없습니다',
   'accounts.importSelected': '선택한 계정 가져오기',
   'accounts.cookies': '쿠키',
