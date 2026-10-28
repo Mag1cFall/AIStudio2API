@@ -4,9 +4,13 @@ import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { formatLogNumber, type LogRow } from '@/logs'
 import type { RequestBody } from '@/types'
+import LogCollapse from './LogCollapse.vue'
+import LogDisclosure from './LogDisclosure.vue'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
+// open 是详情是否展开，由日志页按行保存
+const open = defineModel<boolean>('open', { required: true })
 const { t, locale, errorText, logText } = useI18n()
 const request = computed(() => props.row.entry.request!)
 const running = computed(() => request.value.state === 'running')
@@ -44,8 +48,9 @@ const currentStep = computed(() => {
 const body = ref<RequestBody | null>(null)
 const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle')
 const bodyError = ref('')
-// detailsRendered 记录详情是否展开过，未展开的详情不渲染
-const detailsRendered = ref(false)
+// jsonOpen 与 bodyOpen 是详情中 JSON 与正文两节是否展开
+const jsonOpen = ref(false)
+const bodyOpen = ref(false)
 
 // finishKeys 是上游终止原因的显示文案键
 const finishKeys: Record<string, TranslationKey> = {
@@ -85,15 +90,10 @@ function number(value: number, digits = 0): string {
   return formatLogNumber(value, locale.value, digits)
 }
 
-// renderDetails 在详情首次展开时开始渲染内容
-function renderDetails(event: Event): void {
-  if ((event.target as HTMLDetailsElement).open) detailsRendered.value = true
-}
-
-// loadBody 在首次展开时读取账本保存的请求与响应正文
-async function loadBody(event: Event): Promise<void> {
-  if (!(event.target as HTMLDetailsElement).open) return
-  if (bodyState.value === 'loading' || bodyState.value === 'ready') return
+// toggleBody 展开或收起正文一节，首次展开时读取账本保存的请求与响应正文
+async function toggleBody(): Promise<void> {
+  bodyOpen.value = !bodyOpen.value
+  if (!bodyOpen.value || bodyState.value === 'loading' || bodyState.value === 'ready') return
   bodyState.value = 'loading'
   try {
     body.value = await api.requestBody(request.value.id)
@@ -144,10 +144,14 @@ const bodyParts = computed(() =>
 <template>
   <div class="request-log">
     <div class="request-heading">
+      <LogDisclosure v-model="open" />
       <span class="request-state" :class="`state-${request.state}`">{{
         request.status ?? t('logs.running')
       }}</span>
       <strong>{{ request.model || `${request.method} ${request.path}` }}</strong>
+      <span v-if="request.channel" class="request-channel">{{
+        t(channelLabelKey(request.channel))
+      }}</span>
       <span v-if="request.duration_ms !== undefined" class="request-duration"
         >{{ number(request.duration_ms / 1000, 2) }} s</span
       >
@@ -175,27 +179,21 @@ const bodyParts = computed(() =>
         >{{ t('logs.firstToken') }} <b>{{ number(request.first_event_ms / 1000, 1) }}</b> s</span
       >
     </div>
-    <p v-if="request.error" class="request-error">{{ request.error }}</p>
+    <p v-if="request.error" class="request-error">{{ logText(request.error) }}</p>
     <p v-else-if="request.state === 'blocked' || request.state === 'limited'" class="request-error">
       {{ finishLabel }}
     </p>
-    <details class="request-details" @toggle="renderDetails">
-      <summary>
-        <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
-        {{ t('logs.details') }}
-        <span class="request-summary-meta"
-          >{{ request.method }} · HTTP {{ request.status || '…'
-          }}<template v-if="request.channel">
-            · {{ t(channelLabelKey(request.channel)) }}</template
-          ></span
-        >
-      </summary>
-      <template v-if="detailsRendered">
+    <LogCollapse :open="open">
+      <div class="request-details">
         <dl>
           <dt>ID</dt>
           <dd>{{ request.id }}</dd>
           <dt>{{ t('logs.endpoint') }}</dt>
           <dd>{{ request.method }} {{ request.path }}</dd>
+          <template v-if="request.status !== undefined">
+            <dt>HTTP</dt>
+            <dd>{{ request.status }}</dd>
+          </template>
           <template v-if="request.channel">
             <dt>{{ t('logs.channel') }}</dt>
             <dd>{{ t(channelLabelKey(request.channel)) }}</dd>
@@ -230,51 +228,63 @@ const bodyParts = computed(() =>
             <span>{{ logText(event.message) }}</span>
           </li>
         </ol>
-        <details class="request-json">
-          <summary>
+        <section class="request-json">
+          <button
+            type="button"
+            class="request-section-toggle"
+            :aria-expanded="jsonOpen"
+            @click="jsonOpen = !jsonOpen"
+          >
             <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
             JSON
-          </summary>
-          <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
-        </details>
-        <details
+          </button>
+          <LogCollapse :open="jsonOpen">
+            <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
+          </LogCollapse>
+        </section>
+        <section
           v-if="request.state !== 'running' && request.method === 'POST'"
           class="request-json"
-          @toggle="loadBody"
         >
-          <summary>
+          <button
+            type="button"
+            class="request-section-toggle"
+            :aria-expanded="bodyOpen"
+            @click="toggleBody"
+          >
             <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
             {{ t('logs.body') }}
-          </summary>
-          <p v-if="bodyState === 'loading'" class="request-body-note">{{ t('common.loading') }}</p>
-          <p v-else-if="bodyState === 'missing'" class="request-body-note">
-            {{ t('logs.bodyMissing') }}
-          </p>
-          <p v-else-if="bodyState === 'error'" class="request-body-note text-red-300">
-            {{ bodyError }}
-          </p>
-          <div v-for="part in bodyParts" v-else :key="part.label" class="request-body-part">
-            <div class="request-body-heading">
-              <span>{{ part.label }}</span>
-              <span>{{ part.size }}</span>
+          </button>
+          <LogCollapse :open="bodyOpen">
+            <p v-if="bodyState === 'loading'" class="request-body-note">
+              {{ t('common.loading') }}
+            </p>
+            <p v-else-if="bodyState === 'missing'" class="request-body-note">
+              {{ t('logs.bodyMissing') }}
+            </p>
+            <p v-else-if="bodyState === 'error'" class="request-body-note text-red-300">
+              {{ bodyError }}
+            </p>
+            <div v-for="part in bodyParts" v-else :key="part.label" class="request-body-part">
+              <div class="request-body-heading">
+                <span>{{ part.label }}</span>
+                <span>{{ part.size }}</span>
+              </div>
+              <pre>{{ part.text }}</pre>
             </div>
-            <pre>{{ part.text }}</pre>
-          </div>
-        </details>
-      </template>
-    </details>
+          </LogCollapse>
+        </section>
+      </div>
+    </LogCollapse>
   </div>
 </template>
 
 <style scoped>
-.request-log {
-  padding: 4px 0 6px;
-}
 .request-heading {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 2px 10px;
 }
 .request-heading strong {
   color: var(--color-gray-200);
@@ -286,7 +296,8 @@ const bodyParts = computed(() =>
   border-radius: 4px;
   padding: 0 6px;
   font-size: 13px;
-  line-height: 19px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
 .state-completed,
 .state-tool_calls {
@@ -305,13 +316,17 @@ const bodyParts = computed(() =>
 .request-error {
   color: var(--color-red-400);
 }
+.request-channel {
+  color: var(--color-gray-500);
+  font-size: 13px;
+}
 .request-duration {
   color: var(--color-fg);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
 .request-step {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--color-gray-400);
   font-size: 13px;
   overflow-wrap: anywhere;
@@ -323,8 +338,8 @@ const bodyParts = computed(() =>
 .request-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 18px;
-  margin-top: 6px;
+  gap: 2px 18px;
+  margin-top: 2px;
   color: var(--color-gray-400);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -334,71 +349,23 @@ const bodyParts = computed(() =>
   font-weight: 500;
 }
 .request-error {
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .request-details {
-  margin-top: 5px;
+  margin: 6px 0 4px;
+  padding: 8px 12px;
+  border-left: 1px solid var(--color-line);
+  background: color-mix(in oklab, var(--color-panel) 70%, transparent);
   color: var(--color-gray-400);
   font-size: 13px;
-}
-.request-details summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-.request-details summary::-webkit-details-marker {
-  display: none;
-}
-.request-details summary:hover {
-  color: var(--color-fg);
-  background: color-mix(in oklab, var(--color-line) 40%, transparent);
-}
-.request-details summary:focus-visible {
-  outline: 1px solid var(--color-blue-400);
-  outline-offset: 2px;
-}
-.request-disclosure-icon {
-  color: var(--color-gray-500);
-  transition: transform 120ms ease;
-}
-details[open] > summary > .request-disclosure-icon {
-  transform: rotate(90deg);
-}
-.request-summary-meta {
-  min-width: 0;
-  margin-left: 6px;
-  color: var(--color-gray-500);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@media (pointer: coarse) {
-  .request-details summary {
-    min-height: 40px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .request-details summary,
-  .request-disclosure-icon {
-    transition: none;
-  }
 }
 .request-details dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 4px 16px;
-  margin: 10px 0;
+  margin: 0 0 8px;
 }
 .request-details dd {
   color: var(--color-fg);
@@ -407,7 +374,7 @@ details[open] > summary > .request-disclosure-icon {
 .request-timeline {
   border-left: 1px solid var(--color-line);
   padding-left: 12px;
-  margin: 10px 0;
+  margin: 8px 0;
 }
 .request-timeline li {
   display: flex;
@@ -419,14 +386,56 @@ details[open] > summary > .request-disclosure-icon {
   flex-shrink: 0;
   color: var(--color-gray-500);
 }
+.request-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% + 6px);
+  min-height: 28px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: start;
+  user-select: none;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.request-section-toggle:hover {
+  color: var(--color-fg);
+  background: color-mix(in oklab, var(--color-line) 40%, transparent);
+}
+.request-section-toggle:focus-visible {
+  outline: 1px solid var(--color-blue-400);
+  outline-offset: 2px;
+}
+.request-disclosure-icon {
+  color: var(--color-gray-500);
+  transition: transform 120ms ease;
+}
+.request-section-toggle[aria-expanded='true'] > .request-disclosure-icon {
+  transform: rotate(90deg);
+}
+@media (pointer: coarse) {
+  .request-section-toggle {
+    min-height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .request-section-toggle,
+  .request-disclosure-icon {
+    transition: none;
+  }
+}
 .request-json pre {
   overflow: auto;
   max-height: 320px;
   padding: 12px;
-  background: var(--color-panel);
+  background: var(--color-canvas);
   border: 1px solid var(--color-line);
   border-radius: 4px;
-  margin-top: 6px;
+  margin: 4px 0 6px;
   white-space: pre;
 }
 .request-body-note {
@@ -447,7 +456,7 @@ details[open] > summary > .request-disclosure-icon {
     margin-left: 0;
   }
   .request-metrics {
-    gap: 4px 12px;
+    gap: 2px 12px;
   }
 }
 </style>

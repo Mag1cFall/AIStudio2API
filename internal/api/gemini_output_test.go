@@ -11,9 +11,9 @@ import (
 func TestGeminiOutputParts_MergeTextAndReasoning(t *testing.T) {
 	result := generationResult{
 		events: []aistudio.Event{
-			{Kind: aistudio.EventReasoning, Text: "I think "},
-			{Kind: aistudio.EventReasoning, Text: "therefore "},
-			{Kind: aistudio.EventReasoning, Text: "I am."},
+			{Kind: aistudio.EventReasoning, Thought: true, Text: "I think "},
+			{Kind: aistudio.EventReasoning, Thought: true, Text: "therefore "},
+			{Kind: aistudio.EventReasoning, Thought: true, Text: "I am."},
 			{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig_abc123"},
 			{Kind: aistudio.EventText, Text: "Hello "},
 			{Kind: aistudio.EventText, Text: "world!"},
@@ -70,7 +70,7 @@ func TestGeminiOutputParts_LeadingThoughtSignature(t *testing.T) {
 	result := generationResult{
 		events: []aistudio.Event{
 			{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig_pre"},
-			{Kind: aistudio.EventReasoning, Text: "Thinking step."},
+			{Kind: aistudio.EventReasoning, Thought: true, Text: "Thinking step."},
 			{Kind: aistudio.EventText, Text: "Final text."},
 		},
 	}
@@ -113,9 +113,9 @@ func TestGeminiOutputParts_WithToolCall(t *testing.T) {
 	}
 	result := generationResult{
 		events: []aistudio.Event{
-			{Kind: aistudio.EventReasoning, Text: "Need weather for Tokyo."},
+			{Kind: aistudio.EventReasoning, Thought: true, Text: "Need weather for Tokyo."},
 			{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig_call"},
-			{Kind: aistudio.EventToolCall, ToolCall: &call},
+			{Kind: aistudio.EventToolCall, FunctionCall: &call},
 		},
 	}
 
@@ -152,7 +152,7 @@ func TestGeminiOutputParts_SignedBoundaries(t *testing.T) {
 func TestGeminiOutputParts_PendingSignature(t *testing.T) {
 	parts := geminiOutputParts(generationResult{events: []aistudio.Event{
 		{Kind: aistudio.EventThoughtSignature, ThoughtSignature: "sig-a"},
-		{Kind: aistudio.EventReasoning, Text: "reason", ThoughtSignature: "sig-b"},
+		{Kind: aistudio.EventReasoning, Thought: true, Text: "reason", ThoughtSignature: "sig-b"},
 		{Kind: aistudio.EventText, Text: "answer"},
 	}})
 	want := []map[string]any{
@@ -203,7 +203,7 @@ func TestGeminiOutputParts_LeadingSignatures(t *testing.T) {
 func TestGeminiOutputParts_SignedAudio(t *testing.T) {
 	var result generationResult
 	for _, sig := range []string{"audio-a", "audio-b"} {
-		if err := result.apply(aistudio.Event{Kind: aistudio.EventMedia, ThoughtSignature: sig, Media: &aistudio.Media{MIME: "audio/l16;rate=24000", Data: []byte{1, 2}}}); err != nil {
+		if err := result.apply(aistudio.Event{Kind: aistudio.EventMedia, ThoughtSignature: sig, InlineData: &aistudio.Blob{MIME: "audio/l16;rate=24000", Data: []byte{1, 2}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

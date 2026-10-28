@@ -15,6 +15,7 @@ import MediaPromptBox from './MediaPromptBox.vue'
 import PaidUsageZeroState, { type Suggestion } from './PaidUsageZeroState.vue'
 import { imagenCode, imagenCodeOptions, useImagen, type ImagenLanguage } from './imagen'
 import { useMediaQuery } from '../media-query'
+import { failureText } from '../request'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,32 +27,35 @@ const codeOpen = ref(false)
 // handset 与官网一致，768 px 及以下 Tools 只显示图标
 const handset = useMediaQuery('(max-width: 768px)')
 
-// short 与官网示例卡片一致截取提示词开头
+// short 与官网示例卡片一致截取提示词开头，引号按界面语言
 function short(prompt: string): string {
-  return `“${prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt}”`
+  return t('pg.quotedText').replace(
+    '{text}',
+    prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
+  )
 }
 
-// suggestions 是官网 Imagen 页空态的四个示例
-const suggestions: Suggestion[] = [
-  {
-    prompt: 'Create an image of fuzzy bunnies next to a glass of wine in my kitchen.',
-    image: 'https://www.gstatic.com/aistudio/zero-state/bunnies_opt_162x162.png',
-  },
-  {
-    prompt: 'Create an image of sushi on a table, oil painting style.',
-    image: 'https://www.gstatic.com/aistudio/zero-state/sushi_opt_162x162.png',
-  },
-  {
-    prompt:
-      'Create an image of a fancy house by a pond in the forest in front of grassland with wildflowers, close up view.',
-    image: 'https://www.gstatic.com/aistudio/zero-state/house_in_forest_opt_288x162.png',
-  },
-  {
-    prompt:
-      'Create an image of a futuristic cityscape with tall holographic billboards, sleek flying cars, and neon lights.',
-    image: 'https://www.gstatic.com/aistudio/zero-state/futuristic_city_opt_162x162.png',
-  },
-].map((item) => ({ ...item, label: short(item.prompt) }))
+// suggestions 是当前界面语言的官网 Imagen 页空态四个示例
+const suggestions = computed<Suggestion[]>(() =>
+  [
+    {
+      prompt: t('zero.imagen.example1Prompt'),
+      image: 'https://www.gstatic.com/aistudio/zero-state/bunnies_opt_162x162.png',
+    },
+    {
+      prompt: t('zero.imagen.example2Prompt'),
+      image: 'https://www.gstatic.com/aistudio/zero-state/sushi_opt_162x162.png',
+    },
+    {
+      prompt: t('zero.imagen.example3Prompt'),
+      image: 'https://www.gstatic.com/aistudio/zero-state/house_in_forest_opt_288x162.png',
+    },
+    {
+      prompt: t('zero.imagen.example4Prompt'),
+      image: 'https://www.gstatic.com/aistudio/zero-state/futuristic_city_opt_162x162.png',
+    },
+  ].map((item) => ({ ...item, label: short(item.prompt) })),
+)
 
 const canRun = computed(() => currentModel.value !== undefined && state.draft.trim() !== '')
 
@@ -90,8 +94,7 @@ function code(language: ImagenLanguage): string {
 // generate 运行一次生成，失败时与官网一样以提示条显示上游说明
 function generate(): void {
   imagen.run().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error)
-    store.showNotice(t('pg.imageFailed').replace('{error}', message), 'error')
+    store.showNotice(failureText(error, t('pg.imageUnreachable'), t('pg.imageFailed')), 'error')
   })
 }
 

@@ -5,7 +5,7 @@ let nextID = 0
 // pending 是等待 Worker 应答的渲染请求
 const pending = new Map<number, (svg: string) => void>()
 
-// createWorker 创建渲染 Mermaid 的 Worker，首次渲染时才加载
+// createWorker 创建渲染 Mermaid 的 Worker
 function createWorker(): Worker {
   const created = new Worker(new URL('./mermaid-worker.ts', import.meta.url), { type: 'module' })
   created.onmessage = (event: MessageEvent<{ id: number; svg: string }>) => {

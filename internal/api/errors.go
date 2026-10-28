@@ -210,12 +210,15 @@ func publicErrorMessage(status int, message string) string {
 func writeOpenAIError(w http.ResponseWriter, status int, code string, message string) {
 	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
-	writeJSON(w, status, map[string]any{"error": map[string]any{
-		"message": message,
-		"type":    openAIErrorType(status, code),
-		"param":   nil,
-		"code":    code,
-	}})
+	writeJSON(w, status, map[string]any{"error": openAIErrorBody{Message: message, Type: openAIErrorType(status, code), Code: code}})
+}
+
+// openAIErrorBody 是 OpenAI 错误对象，字段顺序与官方相同
+type openAIErrorBody struct {
+	Message string  `json:"message"`
+	Type    string  `json:"type"`
+	Param   *string `json:"param"`
+	Code    string  `json:"code"`
 }
 
 func openAIErrorType(status int, code string) string {
@@ -231,22 +234,28 @@ func openAIErrorType(status int, code string) string {
 func writeAnthropicError(w http.ResponseWriter, status int, errorType string, message string) {
 	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
-	writeJSON(w, status, map[string]any{
-		"type": "error",
-		"error": map[string]string{
-			"type":    errorType,
-			"message": message,
-		},
-	})
+	writeJSON(w, status, anthropicErrorResponse{Type: "error", Error: anthropicErrorBody{Type: errorType, Message: message}})
+}
+
+// anthropicErrorResponse 是 Anthropic 错误响应，字段顺序与官方相同
+type anthropicErrorResponse struct {
+	Type  string             `json:"type"`
+	Error anthropicErrorBody `json:"error"`
+}
+
+// anthropicErrorBody 是 Anthropic 错误对象
+type anthropicErrorBody struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 func writeGeminiError(w http.ResponseWriter, status int, statusName string, message string) {
 	setAccessLogResponseError(w, message)
-	writeJSON(w, status, map[string]any{"error": map[string]any{
+	writeJSON(w, status, officialOrder("gemini", map[string]any{"error": map[string]any{
 		"code":    status,
 		"message": message,
 		"status":  statusName,
-	}})
+	}}))
 }
 
 // writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After
@@ -283,7 +292,7 @@ func writeGeminiRequestError(w http.ResponseWriter, err error) {
 		payload["details"] = []any{map[string]any{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": strconv.FormatInt(seconds, 10) + "s"}}
 	}
 	setAccessLogResponseError(w, err.Error())
-	writeJSON(w, status, map[string]any{"error": payload})
+	writeJSON(w, status, officialOrder("gemini", map[string]any{"error": payload}))
 }
 
 // setRetryAfter 在错误给出可重试时刻时写入 Retry-After 秒数并返回它，否则返回 0
@@ -383,6 +392,8 @@ func geminiErrorStatus(err error) string {
 		return "PERMISSION_DENIED"
 	case http.StatusNotFound:
 		return "NOT_FOUND"
+	case http.StatusConflict:
+		return "ALREADY_EXISTS"
 	case http.StatusTooManyRequests:
 		return "RESOURCE_EXHAUSTED"
 	case http.StatusServiceUnavailable:

@@ -76,6 +76,7 @@ func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	go loadIntlICU()
 	loop := newEventLoop()
 	runtime := &Runtime{loop: loop}
 	ready := make(chan error, 1)

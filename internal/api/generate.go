@@ -25,18 +25,34 @@ type generationResult struct {
 	toolCalls     []aistudio.FunctionCall
 	citations     []aistudio.Citation
 	grounding     *aistudio.GroundingMetadata
-	media         []aistudio.Media
+	media         []aistudio.Blob
 	usage         *aistudio.Usage
 	finishReason  string
 	finishMessage string
 	stopSequence  string
 	providerModel string
 	finished      bool
+	// safetyRatings 是候选的安全评级
+	safetyRatings []aistudio.SafetyRating
+	// responseID、turnToken、debugInfo 与 detailedFinishReason 是上游最后给出的 responseId、轮次令牌、调试信息与细分结束原因
+	responseID           string
+	turnToken            string
+	debugInfo            json.RawMessage
+	detailedFinishReason json.RawMessage
 }
 
 func (result *generationResult) apply(event aistudio.Event) error {
 	if event.ProviderModel != "" {
 		result.providerModel = event.ProviderModel
+	}
+	if event.ResponseID != "" {
+		result.responseID = event.ResponseID
+	}
+	if event.TurnToken != "" {
+		result.turnToken = event.TurnToken
+	}
+	if len(event.DebugInfo) > 0 {
+		result.debugInfo = event.DebugInfo
 	}
 	if event.Usage != nil {
 		usage := *event.Usage
@@ -54,15 +70,15 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	case aistudio.EventReasoning:
 		result.reasoning.WriteString(event.Text)
 	case aistudio.EventToolCall:
-		if event.ToolCall != nil {
-			call := *event.ToolCall
+		if event.FunctionCall != nil {
+			call := *event.FunctionCall
 			if len(call.Arguments) == 0 {
 				call.Arguments = json.RawMessage(`{}`)
 			}
 			if !json.Valid(call.Arguments) {
 				return fmt.Errorf("upstream tool call %q arguments are not JSON", call.Name)
 			}
-			event.ToolCall = &call
+			event.FunctionCall = &call
 			result.toolCalls = append(result.toolCalls, call)
 		}
 	case aistudio.EventGrounding:
@@ -76,27 +92,32 @@ func (result *generationResult) apply(event aistudio.Event) error {
 			result.citations = append(result.citations, *event.Citation)
 		}
 	case aistudio.EventMedia:
-		if event.Media != nil {
-			if event.Media.MIME == "" || (len(event.Media.Data) == 0 && event.Media.URL == "") {
+		if event.ExternalMedia != nil && (event.ExternalMedia.MIME == "" || event.ExternalMedia.URL == "") {
+			return fmt.Errorf("upstream media is missing MIME or content")
+		}
+		if event.InlineData != nil {
+			if event.InlineData.MIME == "" || len(event.InlineData.Data) == 0 {
 				return fmt.Errorf("upstream media is missing MIME or content")
 			}
-			media := *event.Media
+			media := *event.InlineData
 			media.Data = append([]byte(nil), media.Data...)
-			if strings.HasPrefix(media.MIME, "audio/l16") && len(media.Data) > 0 && media.URL == "" && len(result.events) > 0 {
+			if strings.HasPrefix(media.MIME, "audio/l16") && len(result.events) > 0 {
 				previous := &result.events[len(result.events)-1]
-				if previous.Kind == aistudio.EventMedia && previous.Media != nil && previous.Media.MIME == media.MIME && previous.Media.URL == "" && previous.ThoughtSignature == "" && event.ThoughtSignature == "" {
-					previous.Media.Data = append(previous.Media.Data, media.Data...)
+				if previous.Kind == aistudio.EventMedia && previous.InlineData != nil && previous.InlineData.MIME == media.MIME && previous.ThoughtSignature == "" && event.ThoughtSignature == "" {
+					previous.InlineData.Data = append(previous.InlineData.Data, media.Data...)
 					result.media[len(result.media)-1].Data = append(result.media[len(result.media)-1].Data, media.Data...)
 					return nil
 				}
 			}
-			event.Media = &media
+			event.InlineData = &media
 			result.media = append(result.media, media)
 		}
 	case aistudio.EventFinish:
 		result.finishReason = event.FinishReason
 		result.finishMessage = event.FinishMessage
 		result.stopSequence = event.StopSequence
+		result.safetyRatings = event.SafetyRatings
+		result.detailedFinishReason = event.DetailedFinishReason
 		result.finished = true
 	}
 	result.events = append(result.events, event)
@@ -275,7 +296,7 @@ var functionResultMediaTypes = map[string]bool{
 	"image_url": true, "input_image": true, "input_file": true, "input_audio": true, "video_url": true, "input_video": true,
 }
 
-// functionResultParts 把工具结果转成函数结果内容与紧随其后的媒体 part：内容块数组中的文本块以换行相连作为结果文本，媒体块由 parse 转成 part，其余块以 JSON 文本并入结果；isError 时结果写在 error 键下
+// functionResultParts 把工具结果转成函数结果内容与紧随其后的媒体 part，文本块以换行相连作为结果文本，isError 时结果写在 error 键下
 func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawMessage) ([]aistudio.Part, error)) (json.RawMessage, []aistudio.Part, error) {
 	key := "result"
 	if isError {
@@ -402,9 +423,6 @@ func renderCodeExecution(event aistudio.Event) string {
 			return ""
 		}
 		value := event.CodeExecutionResult.Output
-		if event.CodeExecutionResult.Outcome != "OUTCOME_OK" {
-			value = event.CodeExecutionResult.Error
-		}
 		if value == "" {
 			return ""
 		}

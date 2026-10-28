@@ -1,8 +1,11 @@
 package aistudio
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // FrameDecoder 将 field 1 repeated 帧转换为规范事件
@@ -21,6 +24,10 @@ type FrameDecoder struct {
 	continuation string
 	// continuationRequired 表示上游要求续写
 	continuationRequired bool
+	// safetyRatings 是最近一帧候选的安全评级
+	safetyRatings []SafetyRating
+	// systemRoleTokens 是请求系统指令的 user 角色计入上游输入用量的 token 数
+	systemRoleTokens int64
 }
 
 // NewFrameDecoder 创建单次 GenerateContent 的有状态解码器
@@ -57,6 +64,8 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	finishRaw := rawAt(candidate, 1)
+	var turnToken string
+	_ = json.Unmarshal(rawAt(frame, 7), &turnToken)
 	frameToken := ""
 	if d.continuable {
 		_ = json.Unmarshal(rawAt(candidate, 8), &frameToken)
@@ -89,13 +98,21 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 		}
 		events = append(events, Event{Kind: EventGrounding, Grounding: &grounding})
 	}
+	if ratingsRaw := rawAt(candidate, 4); !isJSONNull(ratingsRaw) {
+		if d.safetyRatings, err = decodeSafetyRatings(ratingsRaw, "$[0][][0][0][4]", raw); err != nil {
+			return nil, err
+		}
+	}
+	var frameUsage *Usage
 	if usageRaw := rawAt(frame, 2); !isJSONNull(usageRaw) {
 		usage, complete, err := decodeUsage(usageRaw, raw)
 		if err != nil {
 			return nil, err
 		}
 		if complete {
+			usage = excludeSystemRole(usage, d.systemRoleTokens)
 			d.usage = &usage
+			frameUsage = &usage
 		}
 	}
 	if !isJSONNull(finishRaw) {
@@ -107,21 +124,71 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 			d.continuationRequired = true
 			d.continuation = d.latestToken
 			d.finished = true
-			return events, nil
+			return withFrame(events, turnToken, frameUsage), nil
 		}
 		finishReason := decodeFinishReason(finishCode)
 		var finishMessage string
 		_ = json.Unmarshal(rawAt(candidate, 3), &finishMessage)
 		if !d.finished {
+			for index := range events {
+				events[index].FinishFrame = true
+			}
 			if d.usage != nil {
 				usage := *d.usage
 				events = append(events, Event{Kind: EventUsage, Usage: &usage})
 			}
-			events = append(events, Event{Kind: EventFinish, FinishReason: finishReason, FinishMessage: finishMessage})
+			events = append(events, Event{Kind: EventFinish, FinishReason: finishReason, FinishMessage: finishMessage, SafetyRatings: d.safetyRatings})
 			d.finished = true
 		}
 	}
-	return events, nil
+	return withFrame(events, turnToken, frameUsage), nil
+}
+
+// withFrame 把流帧 field 8 的轮次令牌、令牌中的 responseId 与该帧用量写入该帧的全部事件
+func withFrame(events []Event, token string, usage *Usage) []Event {
+	responseID := turnResponseID(token)
+	for index := range events {
+		events[index].TurnToken = token
+		events[index].ResponseID = responseID
+		events[index].FrameUsage = usage
+	}
+	return events
+}
+
+// turnResponseID 返回轮次令牌 v1_ 之后 Base64 protobuf 的 field 2，即该响应的 responseId
+func turnResponseID(token string) string {
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(token, "v1_"))
+	if err != nil {
+		return ""
+	}
+	for len(data) > 0 {
+		tag, n := binary.Uvarint(data)
+		if n <= 0 || tag&7 != 2 {
+			return ""
+		}
+		size, m := binary.Uvarint(data[n:])
+		if m <= 0 || size > uint64(len(data)-n-m) {
+			return ""
+		}
+		value := data[n+m : n+m+int(size)]
+		if tag>>3 == 2 {
+			return string(value)
+		}
+		data = data[n+m+int(size):]
+	}
+	return ""
+}
+
+// excludeSystemRole 从上游用量的输入、总量与 TEXT 输入模态中减去系统指令的角色 token
+func excludeSystemRole(usage Usage, tokens int64) Usage {
+	usage.InputTokens -= tokens
+	usage.TotalTokens -= tokens
+	if usage.Details != nil {
+		details := *usage.Details
+		details.PromptTokensDetails = subtractTextTokens(details.PromptTokensDetails, tokens)
+		usage.Details = &details
+	}
+	return usage
 }
 
 func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) error {
@@ -135,7 +202,13 @@ func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) error {
 	}
 	var message string
 	_ = json.Unmarshal(rawAt(feedback, 2), &message)
-	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Message: message, Raw: append(json.RawMessage(nil), raw...)}
+	var ratings []SafetyRating
+	if ratingsRaw := rawAt(feedback, 1); !isJSONNull(ratingsRaw) {
+		if ratings, err = decodeSafetyRatings(ratingsRaw, "$[0][][1][1]", evidence); err != nil {
+			return err
+		}
+	}
+	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Message: message, SafetyRatings: ratings, Raw: append(json.RawMessage(nil), raw...)}
 }
 
 func decodePromptBlockReason(reason int64) string {
@@ -197,6 +270,10 @@ func decodeFinishReason(code int64) string {
 		return "image_recitation"
 	case 18:
 		return "missing_thought_signature"
+	case 19:
+		return "malformed_response"
+	case 22:
+		return "continuation"
 	default:
 		return fmt.Sprintf("provider_%d", code)
 	}
@@ -279,7 +356,7 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			if thought {
 				kind = EventReasoning
 			}
-			events = append(events, Event{Kind: kind, Text: text, ThoughtSignature: signature})
+			events = append(events, Event{Kind: kind, Text: text, Thought: thought, ThoughtSignature: signature})
 			if kind == EventText {
 				textEvent = len(events) - 1
 			}
@@ -287,12 +364,12 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			emptyText = true
 		}
 	}
-	if inlineRaw := rawAt(part, 2); !isJSONNull(inlineRaw) && !thought {
+	if inlineRaw := rawAt(part, 2); !isJSONNull(inlineRaw) {
 		media, err := decodeInlineMedia(inlineRaw, path+"[2]", raw)
 		if err != nil {
 			return nil, err
 		}
-		events = append(events, Event{Kind: EventMedia, Media: &media, ThoughtSignature: signature})
+		events = append(events, mediaEvent(Part{InlineData: &media, Thought: thought, ThoughtSignature: signature}))
 	}
 	if codeRaw := rawAt(part, 7); !isJSONNull(codeRaw) {
 		code, err := decodeExecutableCode(codeRaw, path+"[7]", raw)
@@ -314,7 +391,7 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			return nil, err
 		}
 		call.ThoughtSignature = signature
-		events = append(events, Event{Kind: EventToolCall, ToolCall: &call, ThoughtSignature: signature})
+		events = append(events, Event{Kind: EventToolCall, FunctionCall: &call, ThoughtSignature: signature})
 	}
 	if transcriptRaw := rawAt(part, 22); !isJSONNull(transcriptRaw) {
 		transcript, err := decodeTranscriptMetadata(transcriptRaw, path+"[22]", raw)
@@ -332,15 +409,19 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 	for _, field := range []struct {
 		index int
 		kind  EventKind
-	}{{25, EventMediaProcessingCall}, {26, EventMediaProcessingResult}} {
+	}{{25, EventServerToolCall}, {26, EventServerToolResponse}} {
 		if value := rawAt(part, field.index); !isJSONNull(value) {
-			step, err := decodeMediaProcessingStep(value, fmt.Sprintf("%s[%d]", path, field.index), raw)
+			step, err := decodeServerToolStep(value, fmt.Sprintf("%s[%d]", path, field.index), raw)
 			if err != nil {
 				return nil, err
 			}
-			if step != nil {
-				events = append(events, Event{Kind: field.kind, MediaProcessing: step, ThoughtSignature: signature})
+			event := Event{Kind: field.kind, ThoughtSignature: signature}
+			if field.kind == EventServerToolCall {
+				event.ToolCall = step
+			} else {
+				event.ToolResponse = step
 			}
+			events = append(events, event)
 		}
 	}
 	if len(events) == 0 {
@@ -436,10 +517,62 @@ func decodeUsage(raw json.RawMessage, evidence json.RawMessage) (Usage, bool, er
 			return Usage{}, false, withMethod(err, "GenerateContent")
 		}
 	}
-	return Usage{
+	usage := Usage{
 		InputTokens: input, CachedTokens: cached, OutputTokens: output, ReasoningTokens: reasoning,
 		ToolTokens: toolTokens, TotalTokens: total, OutputTokensMissing: outputMissing,
-	}, true, nil
+	}
+	var details UsageDetails
+	for index, target := range []*[]ModalityTokenCount{&details.PromptTokensDetails, &details.CacheTokensDetails, &details.CandidatesTokensDetails, nil, &details.ToolUsePromptTokensDetails} {
+		if target == nil {
+			continue
+		}
+		path := fmt.Sprintf("$[0][][2][%d]", index+4)
+		if *target, err = decodeModalityTokenCounts(rawAt(values, index+4), path, raw); err != nil {
+			return Usage{}, false, withMethod(err, "GenerateContent")
+		}
+	}
+	if details.present() {
+		usage.Details = &details
+	}
+	return usage, true, nil
+}
+
+// modalityNames 是 ModalityTokenCount.modality 的枚举名
+var modalityNames = map[int64]string{0: "MODALITY_UNSPECIFIED", 1: "TEXT", 2: "IMAGE", 3: "VIDEO", 4: "AUDIO", 5: "DOCUMENT"}
+
+// decodeModalityTokenCounts 解码 repeated ModalityTokenCount 的 [modality, token_count] 数组，字段为空时返回 nil
+func decodeModalityTokenCounts(raw json.RawMessage, path string, evidence json.RawMessage) ([]ModalityTokenCount, error) {
+	if isJSONNull(raw) {
+		return nil, nil
+	}
+	items, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, err
+	}
+	counts := make([]ModalityTokenCount, 0, len(items))
+	for index, item := range items {
+		fields, err := rawArray(item, fmt.Sprintf("%s[%d]", path, index), evidence)
+		if err != nil {
+			return nil, err
+		}
+		var code, count int64
+		if value := rawAt(fields, 0); !isJSONNull(value) {
+			if code, err = rawInt64(value, fmt.Sprintf("%s[%d][0]", path, index), evidence); err != nil {
+				return nil, err
+			}
+		}
+		if value := rawAt(fields, 1); !isJSONNull(value) {
+			if count, err = rawInt64(value, fmt.Sprintf("%s[%d][1]", path, index), evidence); err != nil {
+				return nil, err
+			}
+		}
+		name, ok := modalityNames[code]
+		if !ok {
+			return nil, &ProtocolEvidenceError{Path: fmt.Sprintf("%s[%d][0]", path, index), Detail: fmt.Sprintf("未识别的 modality %d", code), Raw: evidence}
+		}
+		counts = append(counts, ModalityTokenCount{Modality: name, TokenCount: count})
+	}
+	return counts, nil
 }
 
 func (d *FrameDecoder) protocolError(path string, detail string, raw json.RawMessage) error {

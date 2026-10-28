@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
 				}
 				downloaded[part.File.ID] = blob
 			}
+			part.DisplayName = cmp.Or(part.DisplayName, part.File.Name)
 			part.File, part.InlineData = nil, blob
 		}
 	}

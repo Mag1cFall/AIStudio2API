@@ -24,7 +24,7 @@ import { minContext, useLive } from './live'
 
 defineProps<{ open: boolean; narrow: boolean }>()
 const emit = defineEmits<{ close: []; code: [] }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const live = useLive()
 const { state, currentModel, variant } = live
 const settings = computed(() => state.settings)
@@ -49,12 +49,25 @@ const mediaOptions: { value: 'low' | 'medium'; label: TranslationKey }[] = [
   { value: 'low', label: 'pg.liveMediaLow' },
   { value: 'medium', label: 'pg.liveMediaMedium' },
 ]
+// languages 是模型支持的语言：英文界面用目录名称，其余界面用 Intl.DisplayNames 的菜单写法，首项保持目录首位，其余按界面语言排序
+const languages = computed(() => {
+  const names = new Intl.DisplayNames([locale.value], { type: 'language' })
+  const [first, ...rest] = (currentModel.value?.languages ?? []).map((language) => {
+    const name = locale.value === 'en' ? language.name : (names.of(language.code) ?? language.name)
+    return {
+      code: language.code,
+      name: name.charAt(0).toLocaleUpperCase(locale.value) + name.slice(1),
+    }
+  })
+  const collator = new Intl.Collator(locale.value)
+  return first ? [first, ...rest.sort((a, b) => collator.compare(a.name, b.name))] : []
+})
 // languageLabel 是转录语言的选择结果：未选为 Detect，否则列出所选语言
 const languageLabel = computed(() => {
-  const selected = currentModel.value?.languages?.filter((language) =>
+  const selected = languages.value.filter((language) =>
     settings.value.languages.includes(language.code),
   )
-  if (!selected?.length) return t('pg.detect')
+  if (!selected.length) return t('pg.detect')
   return selected.map((language) => language.name).join(', ')
 })
 
@@ -319,11 +332,7 @@ function addVocabulary(): void {
           :disabled="locked"
           :aria-label="t('pg.targetLanguage')"
         >
-          <option
-            v-for="language in currentModel?.languages ?? []"
-            :key="language.code"
-            :value="language.code"
-          >
+          <option v-for="language in languages" :key="language.code" :value="language.code">
             {{ language.name }}
           </option>
         </UiSelect>
@@ -392,7 +401,7 @@ function addVocabulary(): void {
                 {{ t('pg.selectAll') }}
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem
-                v-for="language in currentModel?.languages ?? []"
+                v-for="language in languages"
                 :key="language.code"
                 class="ms-select-option"
                 :model-value="settings.languages.includes(language.code)"

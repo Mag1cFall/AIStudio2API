@@ -1,3 +1,7 @@
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
+
 // SchemaType 是可视化编辑器中属性的类型，enum 按原类型写出 enum 取值，array 只出现在多维数组的元素上，空串表示原 Schema 未声明类型
 export type SchemaType =
   | 'string'
@@ -107,14 +111,25 @@ function entry(key: string, schema: JSONSchema, isRequired: boolean): SchemaEntr
   }
 }
 
+// parseJSON 解析 JSON 文本，语法错误时抛出按界面语言的说明并附浏览器原文
+function parseJSON(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(t('pg.invalidJson').replace('{detail}', (error as Error).message), {
+      cause: error,
+    })
+  }
+}
+
 // parseSchema 把 schema JSON 读为编辑器根对象，空文本为空对象
 export function parseSchema(text: string): SchemaTree {
   if (text.trim() === '') return { children: [] }
-  const value: unknown = JSON.parse(text)
+  const value = parseJSON(text)
   if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Schema must be a JSON object')
+    throw new Error(t('pg.schemaNotObject'))
   const schema = value as JSONSchema
-  if (schema.type && schema.type !== 'object') throw new Error('Schema type must be object')
+  if (schema.type && schema.type !== 'object') throw new Error(t('pg.schemaTypeObject'))
   const extra = extras(schema)
   return { children: schema.properties ? entries(schema) : [], ...(extra ? { extra } : {}) }
 }
@@ -175,8 +190,8 @@ export function schemaText(tree: SchemaTree): string {
 export function schemaIssue(children: SchemaEntry[]): string {
   const keys = new Set<string>()
   for (const item of children) {
-    if (item.key.trim() === '') return 'Property name must be specified'
-    if (keys.has(item.key)) return `Duplicate property "${item.key}"`
+    if (item.key.trim() === '') return t('pg.propertyNameRequired')
+    if (keys.has(item.key)) return t('pg.propertyDuplicate').replace('{name}', item.key)
     keys.add(item.key)
     const nested = schemaIssue(item.children ?? [])
     if (nested !== '') return nested
@@ -203,19 +218,21 @@ const functionBehaviors = new Set(['BLOCKING', 'NON_BLOCKING'])
 // parseFunctions 把函数声明 JSON 数组读为编辑器条目
 export function parseFunctions(text: string): FunctionDeclaration[] {
   if (text.trim() === '') return []
-  const value: unknown = JSON.parse(text)
-  if (!Array.isArray(value)) throw new Error('Function declarations must be a JSON array')
+  const value = parseJSON(text)
+  if (!Array.isArray(value)) throw new Error(t('pg.functionsNotArray'))
   return value.map((item: unknown) => {
     if (typeof item !== 'object' || item === null || Array.isArray(item))
-      throw new Error('Function declaration must be an object')
+      throw new Error(t('pg.functionNotObject'))
     const { name, description, parameters, ...extra } = item as Record<string, unknown>
-    if (typeof name !== 'string') throw new Error('"name" string must be specified')
-    if (typeof description !== 'string') throw new Error('"description" string must be specified')
+    if (typeof name !== 'string') throw new Error(t('pg.functionNameString'))
+    if (typeof description !== 'string') throw new Error(t('pg.functionDescriptionString'))
     if (
       extra.behavior !== undefined &&
       !(typeof extra.behavior === 'string' && functionBehaviors.has(extra.behavior.toUpperCase()))
     )
-      throw new Error(`Invalid behavior: ${JSON.stringify(extra.behavior)}`)
+      throw new Error(
+        t('pg.functionBehaviorInvalid').replace('{value}', JSON.stringify(extra.behavior)),
+      )
     return {
       name,
       description,
@@ -259,8 +276,8 @@ export function functionsText(declarations: FunctionDeclaration[]): string {
   if (declarations.length === 0) return ''
   return JSON.stringify(
     declarations.map((item) => {
-      if (item.name === '') throw new Error('"name" must be specified')
-      if (item.description === '') throw new Error('"description" must be specified')
+      if (item.name === '') throw new Error(t('pg.functionNameRequired'))
+      if (item.description === '') throw new Error(t('pg.functionDescriptionRequired'))
       return {
         name: item.name,
         description: item.description,

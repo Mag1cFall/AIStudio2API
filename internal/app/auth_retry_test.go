@@ -53,7 +53,7 @@ func TestAuthRefreshWithoutExtension(t *testing.T) {
 	if !refresher.Available(ctx) {
 		t.Fatal("账户在 Chrome 中登录但被判定为不可续签")
 	}
-	if err := refresher.Refresh(ctx); err != nil {
+	if err := refresher.Refresh(ctx, lease.AuthGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := aistudio.LoadStorageState(storage)

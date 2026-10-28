@@ -285,7 +285,7 @@ func writeTranscriptionResponse(
 			TotalTokens: result.Usage.TotalTokens,
 		}
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("openai", response))
 }
 
 func openAITranscriptionMetadata(
@@ -295,21 +295,16 @@ func openAITranscriptionMetadata(
 	words := make([]openAITranscriptionWord, 0)
 	duration := 0.0
 	for index, item := range metadata {
-		start, end := transcriptBounds(item.Timestamps)
+		start, end := transcriptBounds(item.Words)
 		segments = append(segments, openAITranscriptionSegment{
 			ID: index, Start: start, End: end, Text: item.Text, Speaker: item.Speaker,
 		})
 		if end > duration {
 			duration = end
 		}
-		parts := strings.Fields(item.Text)
-		if len(parts) != len(item.Timestamps) {
-			continue
-		}
-		for timestampIndex, timestamp := range item.Timestamps {
+		for _, word := range item.Words {
 			words = append(words, openAITranscriptionWord{
-				Word: parts[timestampIndex], Start: transcriptSeconds(timestamp.Start),
-				End: transcriptSeconds(timestamp.End), Speaker: item.Speaker,
+				Word: word.Word, Start: transcriptSeconds(word.Start), End: transcriptSeconds(word.End), Speaker: item.Speaker,
 			})
 		}
 	}
@@ -342,11 +337,11 @@ func subtitleTimestamp(seconds float64, separator string) string {
 		milliseconds/3_600_000, milliseconds/60_000%60, milliseconds/1000%60, separator, milliseconds%1000)
 }
 
-func transcriptBounds(timestamps []aistudio.TranscriptTimestamp) (float64, float64) {
-	if len(timestamps) == 0 {
+func transcriptBounds(words []aistudio.TranscriptWord) (float64, float64) {
+	if len(words) == 0 {
 		return 0, 0
 	}
-	return transcriptSeconds(timestamps[0].Start), transcriptSeconds(timestamps[len(timestamps)-1].End)
+	return transcriptSeconds(words[0].Start), transcriptSeconds(words[len(words)-1].End)
 }
 
 func transcriptSeconds(duration aistudio.TranscriptDuration) float64 {

@@ -20,22 +20,18 @@ var intlFiles embed.FS
 //go:embed intl.js
 var intlJavaScript string
 
-// intlScriptName 是 Intl 宿主脚本与 FormatJS 的来源名
+// intlScriptName 是 Intl 宿主脚本的来源名
 const intlScriptName = hostScriptName + "-intl"
 
 // intlInstaller 是预编译的 intl.js，各 Realm 共享
 var intlInstaller = goja.MustCompileHost(intlScriptName, intlJavaScript, false)
 
-// intlCommonData 是 Firefox Intl 的取值列表、可用区域设置、默认值、数字系统与时区别名
+// intlCommonData 是 Firefox Intl 的取值列表、Collator 可用区域设置、各区域设置默认值与时区别名
 type intlCommonData struct {
 	Lists          map[string][]string `json:"lists"`
-	Available      []string            `json:"available"`
 	Collator       []string            `json:"collator"`
 	LocaleDefaults map[string][]any    `json:"localeDefaults"`
-	Digits         map[string]string   `json:"digits"`
 	TimeZones      map[string]string   `json:"timeZones"`
-	DataLocales    []string            `json:"dataLocales"`
-	available      map[string]bool
 	collator       map[string]bool
 	zoneByLower    map[string]string
 }
@@ -58,10 +54,6 @@ var intlCommon = sync.OnceValues(func() (*intlCommonData, error) {
 	var data intlCommonData
 	if err := readIntlFile("common", &data); err != nil {
 		return nil, fmt.Errorf("读取 Intl 公共数据: %w", err)
-	}
-	data.available = make(map[string]bool, len(data.Available))
-	for _, tag := range data.Available {
-		data.available[tag] = true
 	}
 	data.collator = make(map[string]bool, len(data.Collator))
 	for _, tag := range data.Collator {
@@ -113,9 +105,9 @@ func baseLocale(tag string) string {
 
 // lookupLocale 按 BCP 47 Lookup 规则在 Firefox 可用区域设置中查找，未找到时返回空串
 func lookupLocale(tag string, collator bool) string {
-	data, _ := intlCommon()
-	available := data.available
+	available, _ := intlAvailable()
 	if collator {
+		data, _ := intlCommon()
 		available = data.collator
 	}
 	candidate := baseLocale(tag)
@@ -182,34 +174,6 @@ func offsetTimeZone(name string) (string, bool) {
 		return "", false
 	}
 	return name[:1] + digits[:2] + ":" + digits[2:], true
-}
-
-// localeParts 拆分规范化标签的语言、书写系统、地区与变体
-func localeParts(tag string) map[string]any {
-	parsed := language.Make(tag)
-	base, script, region := parsed.Raw()
-	result := map[string]any{"language": base.String(), "script": "", "region": ""}
-	if script.String() != "Zzzz" {
-		result["script"] = script.String()
-	}
-	if region.String() != "ZZ" {
-		result["region"] = region.String()
-	}
-	variants := make([]string, 0, len(parsed.Variants()))
-	for _, variant := range parsed.Variants() {
-		variants = append(variants, variant.String())
-	}
-	result["variants"] = strings.Join(variants, "-")
-	return result
-}
-
-// likelyTag 按 CLDR 似然子标签补全语言、书写系统与地区
-func likelyTag(tag string) (language.Base, language.Script, language.Region) {
-	parsed := language.Make(tag)
-	base, _ := parsed.Base()
-	script, _ := parsed.Script()
-	region, _ := parsed.Region()
-	return base, script, region
 }
 
 // collatorScriptOrder 是 CLDR 中文、日文与韩文排序规则提前到拉丁字母之前的书写系统
@@ -300,55 +264,6 @@ func baseCollator(locale, sensitivity string, ignorePunctuation, numeric bool, c
 	}
 }
 
-// formatjsSources 是按构造器打包的 FormatJS 宿主脚本源码
-var formatjsSources = sync.OnceValues(func() (map[string]string, error) {
-	var sources map[string]string
-	if err := readIntlFile("formatjs", &sources); err != nil {
-		return nil, fmt.Errorf("读取 FormatJS: %w", err)
-	}
-	return sources, nil
-})
-
-// intlPrograms 缓存进程内共享的 FormatJS 预编译脚本
-var intlPrograms sync.Map
-
-// intlProgram 返回指定名称的预编译宿主脚本
-func intlProgram(name string, source func() (string, error)) (*goja.Program, error) {
-	if cached, ok := intlPrograms.Load(name); ok {
-		return cached.(*goja.Program), nil
-	}
-	text, err := source()
-	if err != nil {
-		return nil, err
-	}
-	program, err := goja.CompileHost(intlScriptName, text, false)
-	if err != nil {
-		return nil, fmt.Errorf("编译 %s: %w", name, err)
-	}
-	actual, _ := intlPrograms.LoadOrStore(name, program)
-	return actual.(*goja.Program), nil
-}
-
-// formatjsLocaleData 缓存各数据区域设置的 FormatJS locale 数据
-var formatjsLocaleData sync.Map
-
-// formatjsData 返回数据区域设置在 FormatJS 某个包中的 locale 名称与数据脚本源码
-func formatjsData(locale, pkg string) (string, string, error) {
-	cached, ok := formatjsLocaleData.Load(locale)
-	if !ok {
-		var data map[string][2]string
-		if err := readIntlFile("formatjs-"+locale, &data); err != nil {
-			return "", "", fmt.Errorf("读取 FormatJS %s 数据: %w", locale, err)
-		}
-		cached, _ = formatjsLocaleData.LoadOrStore(locale, data)
-	}
-	entry, ok := cached.(map[string][2]string)[pkg]
-	if !ok {
-		return "", "", fmt.Errorf("FormatJS %s 缺少 %s 数据", locale, pkg)
-	}
-	return entry[0], entry[1], nil
-}
-
 // installIntlHost 为一个 Realm 创建 intl.js 使用的 Go 接口
 func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) {
 	common, err := intlCommon()
@@ -360,12 +275,20 @@ func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) 
 	set := func(name string, value any) {
 		_ = host.Set(name, value)
 	}
-	dateData := func(tag string) *dateLocale {
-		data, err := dateLocaleFor(tag)
+	camou := camouLocale(state.profile.Locale)
+	call := func(op int, args []string) any {
+		icu, err := loadIntlICU()
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
-		return data
+		results, code, err := icu.invoke(camou, op, args)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		if code < 0 {
+			return code
+		}
+		return results
 	}
 	set("defaultLocale", account)
 	set("defaultTimeZone", timeZoneID(state.location.String()))
@@ -376,38 +299,17 @@ func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) 
 		}
 		return vm.ToValue(values)
 	})
-	set("likely", func(tag string) string {
-		base, script, region := likelyTag(tag)
-		composed, err := language.Compose(base, script, region)
-		if err != nil {
-			return tag
-		}
-		return composed.String()
-	})
-	set("canonicalize", canonicalLocale)
 	set("lookup", lookupLocale)
 	set("timeZone", timeZoneID)
-	set("localeParts", localeParts)
-	set("maximize", func(tag string) string { return spoofedLikelyTag(tag, account, true) })
-	set("minimize", func(tag string) string { return spoofedLikelyTag(tag, account, false) })
 	set("localeDefaults", func(tag string) []any {
 		if values, ok := common.LocaleDefaults[tag]; ok {
 			return values
 		}
-		data := dateData(tag)
-		return []any{data.Calendar, data.NumberingSystem, data.NumberingSystem, false}
+		values, _ := call(14, []string{tag}).([]string)
+		return []any{values[0], values[1], values[1], false}
 	})
-	set("dataLocale", func(tag string) string { return localeKey(common.DataLocales, tag) })
 	set("collator", newCollator)
-	set("dateHourCycles", func(tag string) []string { return dateData(tag).HourCycles })
-	set("dateRangeSeparator", func(tag string) string { return dateData(tag).Range })
-	set("datePattern", func(tag string, key []string) []string {
-		pattern, resolved := dateData(tag).pattern(key)
-		return []string{pattern, resolved}
-	})
-	set("formatDate", func(tag, pattern string, epoch float64, zoneName, calendar, numbering string) [][2]string {
-		return dateData(tag).format(pattern, epoch, zoneName, calendar, common.Digits[numbering])
-	})
+	set("icu", call)
 	set("segment", func(granularity, locale string, value goja.Value) []any {
 		text := value.ToString().(goja.String)
 		units := make([]uint16, text.Length())
@@ -419,45 +321,6 @@ func (state *hostState) installIntlHost(vm *goja.Runtime) (*goja.Object, error) 
 			return []any{starts, nil}
 		}
 		return []any{starts, wordLike}
-	})
-	set("formatjsChunk", func(name string) goja.Value {
-		program, err := intlProgram("chunk/"+name, func() (string, error) {
-			sources, err := formatjsSources()
-			if err != nil {
-				return "", err
-			}
-			source, ok := sources[name]
-			if !ok {
-				return "", fmt.Errorf("缺少 FormatJS 构造器 %s", name)
-			}
-			return source, nil
-		})
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		value, err := vm.RunProgram(program)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return value
-	})
-	set("formatjsData", func(locale, pkg string) []goja.Value {
-		name, _, err := formatjsData(locale, pkg)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		program, err := intlProgram("data/"+locale+"/"+pkg, func() (string, error) {
-			_, source, err := formatjsData(locale, pkg)
-			return source, err
-		})
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		loader, err := vm.RunProgram(program)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return []goja.Value{vm.ToValue(name), loader}
 	})
 	return host, nil
 }

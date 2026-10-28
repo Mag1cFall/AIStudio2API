@@ -1,6 +1,10 @@
+import { jsonBody } from '@/api'
+import { useI18n } from '@/i18n'
 import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
 import { apiKey, errorMessage, StreamError } from '../request'
 import type { Part } from '../types'
+
+const { t } = useI18n()
 
 // InlineImage 是请求中的内联图片
 export interface InlineImage {
@@ -38,7 +42,7 @@ async function post<T>(path: string, body: unknown, signal: AbortSignal): Promis
   const response = await fetch(path, {
     method: 'POST',
     headers: headers(),
-    body: JSON.stringify(body),
+    body: jsonBody(body),
     signal,
   })
   if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
@@ -83,7 +87,7 @@ export async function predictImages(
     .map((item) => `data:${item.mimeType ?? 'image/png'};base64,${item.bytesBase64Encoded}`)
   if (images.length === 0)
     throw new Error(
-      predictions.find((item) => item.raiFilteredReason)?.raiFilteredReason ?? 'No images',
+      predictions.find((item) => item.raiFilteredReason)?.raiFilteredReason ?? t('pg.noImages'),
     )
   return images
 }
@@ -135,7 +139,7 @@ export async function waitOpenAIVideo(video: OpenAIVideo, signal: AbortSignal): 
     current = (await response.json()) as OpenAIVideo
   }
   if (current.status === 'failed')
-    throw new StreamError(current.error?.message ?? 'Video generation failed', 500)
+    throw new StreamError(current.error?.message ?? t('pg.videoGenerationFailed'), 500)
   return `/v1/videos/${encodeURIComponent(video.id)}/content`
 }
 
@@ -157,7 +161,8 @@ export async function waitVideo(operation: VideoOperation, signal: AbortSignal):
     if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
     current = (await response.json()) as VideoOperation
   }
-  if (current.error) throw new StreamError(current.error.message ?? 'Video generation failed', 500)
+  if (current.error)
+    throw new StreamError(current.error.message ?? t('pg.videoGenerationFailed'), 500)
   const samples = current.response?.generateVideoResponse?.generatedSamples ?? []
   return samples.map((sample) => sample.video?.uri ?? '').filter((uri) => uri !== '')
 }

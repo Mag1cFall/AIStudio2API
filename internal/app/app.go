@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -18,10 +19,12 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/setup"
 	"github.com/Mag1cFall/AIStudio2API/internal/webui"
+	"github.com/klauspost/compress/gzhttp"
 )
 
 // commandOptions 保存只影响本次启动的命令行选项
@@ -33,7 +36,7 @@ type commandOptions struct {
 // Run 执行单二进制命令入口
 func Run(args []string) int {
 	if err := prepareShell(args); err != nil {
-		fmt.Fprintln(os.Stderr, "AIStudio2API 启动失败:", err)
+		fmt.Fprintln(i18n.Stderr, "AIStudio2API 启动失败:", err)
 		return 1
 	}
 	logs := &logOutput{dir: filepath.Join("runtime", "logs")}
@@ -134,6 +137,9 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	}
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
+	if err := manager.seedFirstEvents(ctx); err != nil {
+		logService("WARN", "读取近期首事件样本失败 | 错误="+err.Error())
+	}
 	prompts, err := promptdb.Open(filepath.Join("runtime", "prompts.db"))
 	if err != nil {
 		return false, errors.Join(fmt.Errorf("打开对话库: %w", err), manager.Close(), ledger.Close())
@@ -162,6 +168,8 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 	listenAddr := flags.String("listen", cfg.ListenAddr, "服务监听地址")
 	proxy := flags.String("proxy", cfg.Proxy, "本次启动使用的 HTTP、HTTPS 或 SOCKS5 代理")
 	openUI := flags.Bool("open-ui", len(args) == 0, "启动后打开管理界面")
+	flags.SetOutput(i18n.Stderr)
+	flags.VisitAll(func(item *flag.Flag) { item.Usage = i18n.Translate(i18n.Console, item.Usage) })
 	if err := flags.Parse(args); err != nil {
 		return commandOptions{}, err
 	}
@@ -193,21 +201,35 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, updater api.UpdateService, onReady func(address string)) (started bool, err error) {
 	manager.requests.log("service", "INFO", fmt.Sprintf("管理监听启动 | 地址=%s", cfg.ListenAddr))
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if errors.Is(err, portReserved) {
+		var address string
+		listener, address, err = listenAfter(cfg.ListenAddr)
+		if err == nil {
+			manager.reservedListenAddr, manager.activeManagement.ListenAddr = cfg.ListenAddr, address
+			manager.requests.log("service", "WARN", fmt.Sprintf("监听端口被 Windows 保留，改用其后第一个可用端口 | 配置=%s | 地址=%s", cfg.ListenAddr, address))
+		}
+	}
 	if err != nil {
 		return false, fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
 	manager.requests.log("service", "INFO", fmt.Sprintf("预览监听启动 | 地址=%s", cfg.PreviewListenAddr))
 	previewListener, err := net.Listen("tcp", cfg.PreviewListenAddr)
 	if err != nil {
-		listener.Close()
-		return false, fmt.Errorf("监听 %s: %w", cfg.PreviewListenAddr, err)
+		host, _, _ := net.SplitHostPort(cfg.PreviewListenAddr)
+		previewListener, err = net.Listen("tcp", net.JoinHostPort(host, "0"))
+		if err != nil {
+			listener.Close()
+			return false, fmt.Errorf("监听 %s: %w", cfg.PreviewListenAddr, err)
+		}
+		manager.requests.log("service", "WARN", fmt.Sprintf("预览端口不可用，改用空闲端口 | 配置=%s | 地址=%s", cfg.PreviewListenAddr, previewListener.Addr()))
 	}
+	manager.previewAddress = previewListener.Addr().String()
 	apiHandler := api.NewHandler(manager, api.Config{
 		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
-		ResponseModes: manager.responseModes,
+		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),
@@ -260,11 +282,48 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	return true, serveErr
 }
 
-// autoStartService 在管理服务就绪后按配置启动生成服务
+// portReserved 是 Windows 拒绝监听系统保留端口（Hyper-V、WSL2、Docker 的 WinNAT 保留端口段）时返回的 WSAEACCES
+const portReserved = syscall.Errno(10013)
+
+// listenAfter 从 address 的下一个端口起依次监听，跳过同样被保留或被占用的端口，返回第一个监听成功的地址
+func listenAfter(address string) (net.Listener, string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, "", err
+	}
+	first, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, "", err
+	}
+	for next := first + 1; next <= 65535; next++ {
+		candidate := net.JoinHostPort(host, strconv.Itoa(next))
+		if listener, err := net.Listen("tcp", candidate); err == nil {
+			return listener, candidate, nil
+		}
+	}
+	return nil, "", fmt.Errorf("%s 之后没有可监听的端口", address)
+}
+
+// autoStartService 在管理服务就绪后按配置启动生成服务，账户与配置以外的原因失败时以 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试
 func autoStartService(ctx context.Context, manager *runtimeManager) {
+	ctx = manager.autoStartContext(ctx)
 	manager.requests.log("service", "INFO", "自动启动生成服务")
-	if _, err := manager.StartService(ctx); err != nil && ctx.Err() == nil {
-		manager.requests.log("service", "ERROR", "自动启动生成服务失败 | 错误="+err.Error())
+	for delay := 5 * time.Second; ; delay = min(2*delay, 5*time.Minute) {
+		_, err := manager.startService(ctx)
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		var operation *adminOperationError
+		if errors.As(err, &operation) {
+			manager.requests.log("service", "ERROR", "自动启动生成服务失败 | 错误="+err.Error())
+			return
+		}
+		manager.requests.log("service", "ERROR", fmt.Sprintf("自动启动生成服务失败 | 重试间隔=%s | 错误=%s", delay, err))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
 	}
 }
 
@@ -272,13 +331,22 @@ func autoStartService(ctx context.Context, manager *runtimeManager) {
 func rootHandler(apiHandler http.Handler) http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/health", apiHandler)
-	root.Handle("/api/", apiHandler)
+	root.Handle("/api/", compressAdmin(apiHandler))
 	root.Handle("/v1/", apiHandler)
 	root.Handle("/v1beta/", apiHandler)
 	root.Handle("/upload/", apiHandler)
 	root.Handle("/media/", apiHandler)
 	root.Handle("/", webui.Handler())
 	return securityHeaders(root)
+}
+
+// compressAdmin 以 gzip 压缩管理接口发给接受 gzip 的客户端的 JSON、CSV 与事件流响应
+func compressAdmin(next http.Handler) http.Handler {
+	wrap, err := gzhttp.NewWrapper(gzhttp.ContentTypes([]string{"application/json", "text/csv", "text/event-stream"}))
+	if err != nil {
+		panic(err)
+	}
+	return wrap(next)
 }
 
 // securityHeaders 禁止页面被其他站点嵌入并关闭 MIME 嗅探与 Referer

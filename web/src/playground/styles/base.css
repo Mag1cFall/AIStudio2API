@@ -19,6 +19,7 @@ html.studio[data-theme='dark'] {
 }
 
 html.studio * {
+  scrollbar-width: auto;
   -webkit-tap-highlight-color: transparent;
 }
 

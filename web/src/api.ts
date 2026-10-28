@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+import { keepPage } from '@/desktop'
 import type {
   Account,
   AccountDraft,
@@ -7,6 +9,7 @@ import type {
   ChromeImportInput,
   CookieBrowser,
   CookieImportInput,
+  FirstEventLatency,
   ChromeImportProfile,
   PairingToken,
   Model,
@@ -94,34 +97,45 @@ async function responseError(response: Response): Promise<ApiError> {
   )
 }
 
-// requestJSON 执行管理端 JSON 请求并保留服务端错误语义
-async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+// jsonBody 把请求正文序列化为 JSON Blob
+export function jsonBody(value: unknown): Blob {
+  return new Blob([JSON.stringify(value)], { type: 'application/json' })
+}
+
+// writes 是进行中的管理写请求数
+const writes = ref(0)
+
+// 关闭桌面窗口时，进行中的写请求保留页面
+keepPage(() => writes.value > 0)
+
+// send 发出管理端请求并保留服务端错误语义，写请求进行中时计入 writes
+async function send(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   if (init?.body !== undefined) {
     headers.set('Content-Type', 'application/json')
   }
-
-  const response = await fetch(path, { ...init, headers })
-  checkSessionResponse(path, response)
-  if (!response.ok) {
-    throw await responseError(response)
+  const write = init?.method !== undefined && init.method !== 'GET'
+  if (write) writes.value++
+  try {
+    const response = await fetch(path, { ...init, headers })
+    checkSessionResponse(path, response)
+    if (!response.ok) {
+      throw await responseError(response)
+    }
+    return response
+  } finally {
+    if (write) writes.value--
   }
+}
 
-  return (await response.json()) as T
+// requestJSON 执行管理端 JSON 请求
+async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await (await send(path, init)).json()) as T
 }
 
 // requestCommand 执行无需响应体的管理写操作
 async function requestCommand(path: string, init: RequestInit): Promise<void> {
-  const headers = new Headers(init.headers)
-  if (init.body !== undefined) {
-    headers.set('Content-Type', 'application/json')
-  }
-
-  const response = await fetch(path, { ...init, headers })
-  checkSessionResponse(path, response)
-  if (!response.ok) {
-    throw await responseError(response)
-  }
+  await send(path, init)
 }
 
 // parseAdminEvent 校验单一事件流的事件外壳
@@ -151,7 +165,7 @@ export const api = {
   login: (username: string, password: string, remember: boolean) =>
     requestJSON<AdminSession>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password, remember }),
+      body: jsonBody({ username, password, remember }),
     }),
   logout: () => requestCommand('/api/auth/logout', { method: 'POST' }),
   status: () => requestJSON<ServiceStatus>('/api/status'),
@@ -175,7 +189,7 @@ export const api = {
   createAccount: (input: AccountLoginInput, view: string, signal: AbortSignal) =>
     requestJSON<AccountResponse>('/api/accounts', {
       method: 'POST',
-      body: JSON.stringify({ ...input, view }),
+      body: jsonBody({ ...input, view }),
       signal,
     }),
   chromeImportProfiles: async () =>
@@ -183,7 +197,7 @@ export const api = {
   importChromeAccounts: (input: ChromeImportInput) =>
     requestJSON<AccountsResponse>('/api/accounts/import/chrome', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: jsonBody(input),
     }),
   cookieBrowsers: async () =>
     (await requestJSON<{ browsers: CookieBrowser[] }>('/api/accounts/import/browsers')).browsers,
@@ -197,20 +211,20 @@ export const api = {
   importCookieAccount: (input: CookieImportInput) =>
     requestJSON<AccountResponse>('/api/accounts/import/cookies', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: jsonBody(input),
     }),
   createPairing: () => requestJSON<PairingToken>('/api/pairing', { method: 'POST' }),
   updateAccount: (id: string, draft: AccountDraft) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(draft),
+      body: jsonBody(draft),
     }),
   deleteAccount: (id: string, keepalive = false) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive }),
   loginAccount: (id: string, view: string, signal: AbortSignal) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}/login`, {
       method: 'POST',
-      body: JSON.stringify({ view }),
+      body: jsonBody({ view }),
       signal,
     }),
   loginViewURL: (view: string) =>
@@ -222,10 +236,12 @@ export const api = {
   startService: () => requestJSON<ServiceStatus>('/api/control/start', { method: 'POST' }),
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
   clearLogs: () => requestCommand('/api/logs', { method: 'DELETE' }),
+  firstEventLatency: async () =>
+    (await requestJSON<{ latencies: FirstEventLatency[] }>('/api/first-event-latency')).latencies,
   saveConfig: (config: ServiceConfig) =>
     requestJSON<ServiceConfig>('/api/config', {
       method: 'PUT',
-      body: JSON.stringify(config),
+      body: jsonBody(config),
     }),
   clearCooldown: (accountID: string, scope: string) =>
     requestCommand(
@@ -237,12 +253,29 @@ export const api = {
       method: 'POST',
     }),
   prompts: async () => (await requestJSON<{ prompts: PromptSummary[] }>('/api/prompts')).prompts,
+  promptPage: (pageSize: number, pageToken: string) => {
+    const query = new URLSearchParams({ page_size: String(pageSize) })
+    if (pageToken !== '') query.set('page_token', pageToken)
+    return requestJSON<{ prompts: PromptSummary[]; next_page_token?: string }>(
+      `/api/prompts?${query.toString()}`,
+    )
+  },
   prompt: <T>(id: string) => requestJSON<SavedPrompt<T>>(`/api/prompts/${encodeURIComponent(id)}`),
   savePrompt: <T>(id: string, prompt: PromptInput<T>, keepalive = false) =>
     requestJSON<PromptSummary>(`/api/prompts/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(prompt),
+      body: jsonBody(prompt),
       keepalive,
+    }),
+  renamePrompt: (id: string, title: string, description: string) =>
+    requestJSON<PromptSummary>(`/api/prompts/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: jsonBody({ title, description }),
+    }),
+  copyPrompt: (id: string, copy: string, title: string) =>
+    requestJSON<PromptSummary>(`/api/prompts/${encodeURIComponent(id)}/copy`, {
+      method: 'POST',
+      body: jsonBody({ id: copy, title }),
     }),
   deletePrompt: (id: string) =>
     requestCommand(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -250,7 +283,7 @@ export const api = {
     (
       await requestJSON<{ title: string }>('/api/prompts/title', {
         method: 'POST',
-        body: JSON.stringify({ model, prompt, answer }),
+        body: jsonBody({ model, prompt, answer }),
       })
     ).title,
 }

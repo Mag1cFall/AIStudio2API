@@ -1,8 +1,8 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package app
 
-// osProxyServer 在 Windows 以外的系统上由环境变量提供系统代理
-func osProxyServer() string {
+// osProxy 在 Windows 与 macOS 以外的系统上由环境变量提供系统代理
+func osProxy() string {
 	return ""
 }

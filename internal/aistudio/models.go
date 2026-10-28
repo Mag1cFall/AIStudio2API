@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// modelStages 是 ListModels field 23 的模型阶段码对应的 Gemini API ModelStage 枚举名
+var modelStages = []string{"", "UNSTABLE_EXPERIMENTAL", "EXPERIMENTAL", "PREVIEW", "STABLE", "LEGACY", "DEPRECATED", "RETIRED"}
+
+// modelStageName 返回模型阶段码的枚举名，0 为未设置，未知码保留数值
+func modelStageName(code int64) string {
+	if code >= 0 && code < int64(len(modelStages)) {
+		return modelStages[code]
+	}
+	return strconv.FormatInt(code, 10)
+}
+
 var capabilityNames = map[int64]string{
 	1:  "chat_model",
 	9:  "code_execution",
@@ -92,9 +103,11 @@ type modelEntry struct {
 type modelCatalog struct {
 	models  []Model
 	entries map[string]modelEntry
+	// source 是解析出该目录的 ListModels 响应 JSON
+	source json.RawMessage
 }
 
-// ParseModels 解码 ListModels 的现场数组协议
+// ParseModels 解码 ListModels 的数组协议
 func ParseModels(source io.Reader) ([]Model, error) {
 	catalog, err := parseModelCatalog(source)
 	if err != nil {
@@ -119,7 +132,7 @@ func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 	if err != nil {
 		return modelCatalog{}, withMethod(err, "ListModels")
 	}
-	catalog := modelCatalog{models: make([]Model, 0, len(rows)), entries: make(map[string]modelEntry, len(rows))}
+	catalog := modelCatalog{models: make([]Model, 0, len(rows)), entries: make(map[string]modelEntry, len(rows)), source: raw}
 	for index, rowRaw := range rows {
 		entry, err := decodeModelRow(rowRaw, index)
 		if err != nil {
@@ -156,6 +169,10 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		return modelEntry{}, err
 	}
 	displayName, err := requiredStringField(row, 3, path, raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	version, err := optionalStringField(row, 2, path, raw)
 	if err != nil {
 		return modelEntry{}, err
 	}
@@ -209,6 +226,10 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	if err != nil {
 		return modelEntry{}, err
 	}
+	stageCode, err := optionalIntField(row, 22, path, raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
 	options, err := decodeCapabilityOptions(row, path, raw)
 	if err != nil {
 		return modelEntry{}, err
@@ -233,6 +254,8 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		ID:                id,
 		Name:              displayName,
 		Description:       description,
+		Version:           version,
+		Stage:             modelStageName(stageCode),
 		Methods:           append([]string(nil), methods...),
 		InputTokenLimit:   inputLimit,
 		OutputTokenLimit:  outputLimit,
@@ -567,6 +590,20 @@ func (c *Client) loadModels(ctx context.Context, accountID string) (modelCatalog
 	c.catalogs[accountID] = catalog
 	c.catalogMu.Unlock()
 	return catalog, nil
+}
+
+// setModelCatalog 采用账户目录缓存恢复的 ListModels 目录
+func (c *Client) setModelCatalog(accountID string, catalog modelCatalog) {
+	c.catalogMu.Lock()
+	c.catalogs[accountID] = catalog
+	c.catalogMu.Unlock()
+}
+
+// modelCatalogSource 返回账户最近一次 ListModels 的响应 JSON
+func (c *Client) modelCatalogSource(accountID string) json.RawMessage {
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	return c.catalogs[accountID].source
 }
 
 func (c *Client) modelEntry(ctx context.Context, accountID string, modelID string) (modelEntry, error) {

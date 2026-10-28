@@ -5,6 +5,7 @@ import {
   DropdownMenuItem,
   DropdownMenuPortal,
   DropdownMenuRoot,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from 'reka-ui'
 import { api } from '@/api'
@@ -32,11 +33,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: []
+  updated: [account: Account]
   notice: [message: string, tone: 'success' | 'error']
   delete: [account: Account]
 }>()
 
-const { t, locale, errorText } = useI18n()
+const { t, locale, errorText, logText } = useI18n()
 const defaultAccountLocale = navigator.language || 'en-US'
 const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const showEditor = ref(false)
@@ -53,8 +55,20 @@ const scanningBrowsers = ref(false)
 const selectedBrowsers = ref<string[]>([])
 const editingAccountID = ref('')
 const pendingAction = ref('')
+// addPending 表示添加账户菜单正在生成配对令牌或读取本机 Chrome 账户
+const addPending = computed(
+  () => pendingAction.value === 'pairing' || pendingAction.value === 'chrome-discover',
+)
 const refreshing = reactive(new Set<string>())
-const refreshingAll = ref(false)
+// queued 是刷新全部中尚未轮到的账户
+const queued = reactive(new Set<string>())
+// refreshErrors 是最近一次刷新失败的账户与失败原因
+const refreshErrors = reactive(new Map<string, string>())
+// refreshTotal 与 refreshDone 是进行中的刷新全部的账户数与已完成数，没有刷新全部时 refreshTotal 为 0
+const refreshTotal = ref(0)
+const refreshDone = ref(0)
+// toggling 是正在切换启用状态的账户
+const toggling = reactive(new Set<string>())
 const chromeProfiles = ref<ChromeImportProfile[]>([])
 const pairing = ref<PairingToken | null>(null)
 const copiedPairing = ref('')
@@ -101,8 +115,8 @@ const stateKeys: Record<AccountState, TranslationKey> = {
   disabled: 'state.disabled',
 }
 
-// messageAccount 是悬窗中显示完整状态原因的账户
-const messageAccount = ref<Account | null>(null)
+// reason 是悬窗中显示的账户、原因类别与完整原因
+const reason = ref<{ account: Account; kind: string; text: string } | null>(null)
 
 // accountSummary 把账户等级、出口、语言与时区合成一行
 function accountSummary(account: Account): string {
@@ -153,7 +167,7 @@ interface LiveLogin {
 
 const liveLogin = ref<LiveLogin | null>(null)
 
-// newViewID 生成登录窗口 ID，非 HTTPS 页面中同样可用
+// newViewID 生成登录窗口 ID
 function newViewID(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, '0'),
@@ -531,7 +545,7 @@ async function saveAccount(): Promise<void> {
 
 // toggleAccount 切换账户是否参与请求
 async function toggleAccount(account: Account): Promise<void> {
-  pendingAction.value = `toggle:${account.id}`
+  toggling.add(account.id)
   try {
     await api.updateAccount(account.id, {
       label: account.label,
@@ -544,7 +558,7 @@ async function toggleAccount(account: Account): Promise<void> {
   } catch (error) {
     actionError(error)
   } finally {
-    pendingAction.value = ''
+    toggling.delete(account.id)
   }
 }
 
@@ -569,34 +583,58 @@ function refreshNotice(result: AccountRefresh): string {
     .replace('{models}', change(String(result.previous_models), String(result.models)))
 }
 
-// refreshAccount 立即读取账户权益与模型目录，执行期间只禁用该账户的按钮
-async function refreshAccount(account: Account): Promise<void> {
-  refreshing.add(account.id)
+// refreshOne 读取一个账户的权益与模型目录，完成后立即更新该行，失败原因记在该行
+async function refreshOne(id: string): Promise<AccountRefresh> {
+  refreshing.add(id)
+  refreshErrors.delete(id)
   try {
-    const result = await api.refreshAccount(account.id)
+    const result = await api.refreshAccount(id)
+    emit('updated', result.account)
+    return result
+  } catch (error) {
+    refreshErrors.set(id, errorText(error))
+    throw error
+  } finally {
+    refreshing.delete(id)
+  }
+}
+
+// refreshAccount 立即刷新一个账户，执行期间只禁用该账户的按钮
+async function refreshAccount(account: Account): Promise<void> {
+  try {
+    const result = await refreshOne(account.id)
     emit('refresh')
     emit('notice', refreshNotice(result), 'success')
   } catch (error) {
     actionError(error)
-  } finally {
-    refreshing.delete(account.id)
   }
 }
 
-// refreshAllAccounts 并发刷新全部启用账户，结束后提示成功与失败的数量
+// refreshConcurrency 是刷新全部时同时刷新的账户数
+const refreshConcurrency = 4
+
+// refreshAllAccounts 按 refreshConcurrency 的并发依次刷新全部启用账户，结束后提示成功与失败的数量
 async function refreshAllAccounts(): Promise<void> {
   const targets = props.accounts.filter((account) => account.enabled && !refreshing.has(account.id))
-  refreshingAll.value = true
-  targets.forEach((account) => refreshing.add(account.id))
-  const results = await Promise.allSettled(targets.map((account) => api.refreshAccount(account.id)))
-  targets.forEach((account) => refreshing.delete(account.id))
-  refreshingAll.value = false
+  for (const account of targets) queued.add(account.id)
+  refreshTotal.value = targets.length
+  refreshDone.value = 0
+  let failed = 0
+  const worker = async (): Promise<void> => {
+    for (let account = targets.shift(); account; account = targets.shift()) {
+      queued.delete(account.id)
+      await refreshOne(account.id).catch(() => failed++)
+      refreshDone.value++
+    }
+  }
+  await Promise.all(Array.from({ length: refreshConcurrency }, worker))
+  const total = refreshTotal.value
+  refreshTotal.value = 0
   emit('refresh')
-  const failed = results.filter((result) => result.status === 'rejected').length
   emit(
     'notice',
     t('accounts.refreshedAll')
-      .replace('{count}', String(targets.length - failed))
+      .replace('{count}', String(total - failed))
       .replace('{failed}', String(failed)),
     failed === 0 ? 'success' : 'error',
   )
@@ -605,29 +643,42 @@ async function refreshAllAccounts(): Promise<void> {
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col overflow-auto md:overflow-hidden">
-    <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-8">
+    <header
+      class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-6xl))/2_+_2rem))]"
+    >
       <div class="min-w-0 flex-[1_1_16rem]">
         <h2 class="text-xl font-semibold text-white">{{ t('section.accounts.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('section.accounts.description') }}</p>
       </div>
       <div class="ml-auto flex flex-wrap justify-end gap-2">
         <button
-          class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
+          class="relative isolate flex items-center gap-2 overflow-hidden rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
           type="button"
-          :disabled="refreshingAll"
-          :aria-busy="refreshingAll"
+          :disabled="refreshTotal > 0"
+          :aria-busy="refreshTotal > 0"
           @click="refreshAllAccounts"
         >
-          <UiIcon name="refresh" :size="15" />
-          {{ t('accounts.refreshAll') }}
+          <span
+            v-if="refreshTotal > 0"
+            class="absolute inset-y-0 left-0 -z-10 bg-blue-500/20 transition-[width] duration-300"
+            :style="{ width: `${(refreshDone / refreshTotal) * 100}%` }"
+            aria-hidden="true"
+          ></span>
+          <UiIcon :name="refreshTotal > 0 ? 'spinner' : 'refresh'" :size="15" />
+          <span v-if="refreshTotal > 0" class="tabular-nums">{{
+            t('accounts.refreshingAll')
+              .replace('{done}', String(refreshDone))
+              .replace('{total}', String(refreshTotal))
+          }}</span>
+          <template v-else>{{ t('accounts.refreshAll') }}</template>
         </button>
         <DropdownMenuRoot :modal="false">
           <DropdownMenuTrigger
             class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:opacity-50"
             :disabled="pendingAction !== ''"
-            :aria-busy="pendingAction === 'pairing' || pendingAction === 'chrome-discover'"
+            :aria-busy="addPending"
           >
-            <UiIcon name="add" :size="15" />
+            <UiIcon :name="addPending ? 'spinner' : 'add'" :size="15" />
             {{ t('accounts.add') }}
             <UiIcon name="chevronDown" :size="14" />
           </DropdownMenuTrigger>
@@ -692,7 +743,7 @@ async function refreshAllAccounts(): Promise<void> {
             <div class="min-w-0">
               <span
                 v-tooltip.overflow="account.label"
-                class="block truncate font-mono text-sm text-white"
+                class="block truncate text-sm font-medium text-white"
                 >{{ account.label }}</span
               >
               <span
@@ -702,11 +753,11 @@ async function refreshAllAccounts(): Promise<void> {
               >
             </div>
           </div>
-          <span class="w-20 shrink-0 text-xs text-gray-500"
+          <span class="shrink-0 text-xs text-gray-500 md:w-20"
             >{{ t('accounts.models') }}
             {{ account.models.length === 0 ? '—' : account.models.length }}</span
           >
-          <div class="flex w-36 shrink-0 items-center gap-2">
+          <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 md:w-36">
             <span
               class="text-xs font-medium uppercase"
               :class="{
@@ -724,29 +775,28 @@ async function refreshAllAccounts(): Promise<void> {
               v-if="account.message"
               type="button"
               class="rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-xs text-red-300 transition hover:bg-red-900/40"
-              @click="messageAccount = account"
+              @click="
+                reason = { account, kind: t(stateKeys[account.state]), text: account.message }
+              "
             >
               {{ t('accounts.reason') }}
             </button>
+            <button
+              v-else-if="refreshErrors.has(account.id)"
+              type="button"
+              class="rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-xs whitespace-nowrap text-red-300 transition hover:bg-red-900/40"
+              @click="
+                reason = {
+                  account,
+                  kind: t('accounts.refreshFailed'),
+                  text: refreshErrors.get(account.id) ?? '',
+                }
+              "
+            >
+              {{ t('accounts.refreshFailed') }}
+            </button>
           </div>
-          <div class="flex max-w-full flex-wrap justify-end gap-2">
-            <button
-              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
-              type="button"
-              :disabled="pendingAction !== '' || refreshing.has(account.id)"
-              @click="beginEdit(account)"
-            >
-              {{ t('common.edit') }}
-            </button>
-            <button
-              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
-              type="button"
-              :disabled="pendingAction !== '' || refreshing.has(account.id)"
-              :aria-busy="pendingAction === `toggle:${account.id}`"
-              @click="toggleAccount(account)"
-            >
-              {{ t(account.enabled ? 'common.disable' : 'common.enable') }}
-            </button>
+          <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
             <button
               v-if="account.state === 'auth_required'"
               class="rounded bg-green-600 px-3 py-1 text-xs text-white transition hover:bg-green-500 disabled:opacity-50"
@@ -758,41 +808,90 @@ async function refreshAllAccounts(): Promise<void> {
               {{ t('common.relogin') }}
             </button>
             <button
-              class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
+              class="relative rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
               type="button"
               :disabled="
                 refreshing.has(account.id) ||
+                queued.has(account.id) ||
                 pendingAction === `login:${account.id}` ||
                 !account.enabled
               "
               :aria-busy="refreshing.has(account.id)"
               @click="refreshAccount(account)"
             >
-              {{ t('accounts.refresh') }}
+              <span class="grid" :class="{ 'opacity-0': refreshing.has(account.id) }">
+                <span class="[grid-area:1/1]" :class="{ invisible: queued.has(account.id) }">{{
+                  t('accounts.refresh')
+                }}</span>
+                <span class="[grid-area:1/1]" :class="{ invisible: !queued.has(account.id) }">{{
+                  t('accounts.queued')
+                }}</span>
+              </span>
+              <UiIcon
+                v-if="refreshing.has(account.id)"
+                name="spinner"
+                :size="14"
+                class="absolute inset-0 m-auto"
+              />
             </button>
-            <button
-              class="rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
-              type="button"
-              :disabled="pendingAction !== '' || refreshing.has(account.id)"
-              @click="emit('delete', account)"
-            >
-              {{ t('common.delete') }}
-            </button>
+            <DropdownMenuRoot :modal="false">
+              <DropdownMenuTrigger
+                v-tooltip="t('pg.moreOptions')"
+                class="flex size-[26px] items-center justify-center rounded border border-line bg-raised text-gray-400 transition hover:bg-line hover:text-gray-200 disabled:opacity-50"
+                :disabled="
+                  pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
+                "
+                :aria-label="t('pg.moreOptions')"
+                :aria-busy="toggling.has(account.id)"
+              >
+                <UiIcon :name="toggling.has(account.id) ? 'spinner' : 'more'" :size="15" />
+              </DropdownMenuTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuContent
+                  align="end"
+                  :side-offset="4"
+                  class="z-[60] min-w-40 overflow-hidden rounded-lg border border-line bg-panel p-1 shadow-xl"
+                >
+                  <DropdownMenuItem
+                    class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-gray-200"
+                    @select="beginEdit(account)"
+                  >
+                    <UiIcon name="edit" :size="15" />
+                    {{ t('common.edit') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-gray-200"
+                    @select="toggleAccount(account)"
+                  >
+                    <UiIcon :name="account.enabled ? 'disable' : 'success'" :size="15" />
+                    {{ t(account.enabled ? 'common.disable' : 'common.enable') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator class="my-1 h-px bg-line" />
+                  <DropdownMenuItem
+                    class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-red-400 data-[highlighted]:bg-red-900/30"
+                    @select="emit('delete', account)"
+                  >
+                    <UiIcon name="trash" :size="15" />
+                    {{ t('common.delete') }}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenuRoot>
           </div>
         </div>
       </div>
 
       <DetailDialog
-        :open="messageAccount !== null"
-        :title="messageAccount?.label ?? ''"
-        :description="messageAccount ? t(stateKeys[messageAccount.state]) : ''"
-        :copy-text="messageAccount?.message"
-        @close="messageAccount = null"
+        :open="reason !== null"
+        :title="reason?.account.label ?? ''"
+        :description="reason?.kind ?? ''"
+        :copy-text="reason?.text"
+        @close="reason = null"
       >
         <pre
-          v-if="messageAccount"
+          v-if="reason"
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-300"
-          >{{ messageAccount.message }}</pre>
+          >{{ logText(reason.text) }}</pre>
       </DetailDialog>
 
       <LoginViewer
@@ -823,10 +922,7 @@ async function refreshAllAccounts(): Promise<void> {
                 <UiIcon name="close" :size="16" />
               </button>
             </div>
-            <p
-              v-tooltip.overflow="draft.label"
-              class="mb-4 truncate font-mono text-sm text-gray-300"
-            >
+            <p v-tooltip.overflow="draft.label" class="mb-4 truncate text-sm text-gray-300">
               {{ draft.label }}
             </p>
             <div class="space-y-4">

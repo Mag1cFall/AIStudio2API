@@ -34,7 +34,7 @@ type http3Conn struct {
 	remember func(capacity uint64, blocked uint64)
 }
 
-// newHTTP3Conn 在 QUIC 连接上按 neqo 的顺序打开控制流、QPACK 编码器流与解码器流；settings 非 nil 表示握手尚未完成的 0-RTT 连接，编码器先沿用上次的服务端设置
+// newHTTP3Conn 在 QUIC 连接上按 neqo 的顺序打开控制流、QPACK 编码器流与解码器流；settings 非 nil 表示握手尚未完成的 0-RTT 连接
 func newHTTP3Conn(connection *quic.Conn, settings *[2]uint64, remember func(capacity uint64, blocked uint64)) (*http3Conn, error) {
 	conn := &http3Conn{quic: connection, goaway: make(chan struct{}), ready: make(chan struct{}), remember: remember}
 	if err := conn.open(settings); err != nil {

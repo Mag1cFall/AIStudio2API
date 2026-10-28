@@ -230,7 +230,7 @@ func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, m
 	return results[0].State, nil
 }
 
-// markAuthenticationRequired 发布当前认证代际的账户状态
+// markAuthenticationRequired 发布当前认证版本号的账户状态
 func (refresher *authRuntimeRefresher) markAuthenticationRequired(ctx context.Context, cause error) error {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)
 	if !ok || ctx.Err() != nil || !aistudio.DefinitiveAuthenticationFailure(cause) {
@@ -248,14 +248,23 @@ func (refresher *authRuntimeRefresher) markAuthenticationRequired(ctx context.Co
 	return errors.Join(cause, err)
 }
 
-// Recover 为当前认证代际恢复一次登录并保留最终失败原因
-func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error) error {
+// authGeneration 返回 ctx 中账户租约的当前认证版本号，没有租约时为 0
+func authGeneration(ctx context.Context) uint64 {
+	lease, ok := aistudio.AccountLeaseFromContext(ctx)
+	if !ok {
+		return 0
+	}
+	return lease.AuthGeneration()
+}
+
+// Recover 为 generation 下失效的认证恢复一次登录并保留最终失败原因
+func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error, generation uint64) error {
 	var startup *accountWorkerInitError
 	if errors.As(cause, &startup) && startup.authHandled {
 		return cause
 	}
 	if refresher.Available(ctx) {
-		if err := refresher.Refresh(ctx); err == nil {
+		if err := refresher.Refresh(ctx, generation); err == nil {
 			return nil
 		} else {
 			cause = errors.Join(cause, err)
@@ -267,6 +276,7 @@ func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error)
 // do 重放认证恢复前尚未产生语义输出的普通或受保护 RPC
 func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, send func() (*aistudio.RPCResponse, error)) (*aistudio.RPCResponse, error) {
 	for attempt := 0; ; attempt++ {
+		generation := authGeneration(ctx)
 		response, err := send()
 		if err == nil && authenticationFailed(response) {
 			original, readErr := readAuthenticationFailure(method, response)
@@ -282,7 +292,7 @@ func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, se
 		if attempt == 1 {
 			return nil, refresher.markAuthenticationRequired(ctx, err)
 		}
-		if err := refresher.Recover(ctx, err); err != nil {
+		if err := refresher.Recover(ctx, err, generation); err != nil {
 			return nil, err
 		}
 	}
@@ -337,6 +347,7 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 		return nil, fmt.Errorf("protected transport 不支持 BidiGenerateContent")
 	}
 	gate := newBidiReleaseGate(release)
+	generation := authGeneration(ctx)
 	session, err := bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, gate.Release)
 	if err == nil {
 		if releaseErr := gate.Commit(); releaseErr != nil {
@@ -348,7 +359,7 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 		return nil, errors.Join(err, gate.Commit())
 	}
 	gate.Abandon()
-	if recoverErr := transport.refresher.Recover(ctx, err); recoverErr != nil {
+	if recoverErr := transport.refresher.Recover(ctx, err, generation); recoverErr != nil {
 		return nil, recoverErr
 	}
 	session, err = bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, release)
@@ -388,8 +399,8 @@ func (transport *authRetryProtectedTransport) DoProtectedTitle(
 	})
 }
 
-// Refresh 续签当前租约账户并保存新的 storage state
-func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
+// Refresh 续签 generation 下失效的租约账户并保存新的 storage state，此后已有续签提交时直接复用
+func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation uint64) error {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)
 	if !ok {
 		return fmt.Errorf("认证续签缺少账户租约")
@@ -399,13 +410,15 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		return fmt.Errorf("%w: 账户存在活动生成", aistudio.ErrAccountLeased)
 	}
 	defer endRefresh()
-	if err := lease.WaitForAuthRefresh(ctx); err != nil {
+	if err := lease.WaitForAuthRefresh(ctx, generation); err != nil {
 		return err
 	}
 	account := lease.Account()
 	startedAt := time.Now()
-	refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
-	err := lease.RefreshStorageState(func(state *aistudio.StorageState) error {
+	refreshed := false
+	err := lease.RefreshStorageState(generation, func(state *aistudio.StorageState) error {
+		refreshed = true
+		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
 		extension, exists, err := state.AuthExtension()
 		if err != nil {
 			return err
@@ -462,6 +475,9 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context) error {
 		))
 		return wrapped
 	}
+	if !refreshed {
+		return nil
+	}
 	if err := resetCookieAuthUser(lease, refresher.prepareWorker); err != nil {
 		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
@@ -496,7 +512,7 @@ func authenticationFailed(response *aistudio.RPCResponse) bool {
 	return response != nil && response.Body != nil && response.StatusCode == http.StatusUnauthorized
 }
 
-// readAuthenticationFailure 读取并关闭认证失败响应以保留原始原因
+// readAuthenticationFailure 读取并关闭认证失败响应，返回原始原因
 func readAuthenticationFailure(method string, response *aistudio.RPCResponse) (*aistudio.RPCError, error) {
 	body, readErr := io.ReadAll(response.Body)
 	if err := errors.Join(readErr, response.Body.Close()); err != nil {

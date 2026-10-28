@@ -9,6 +9,7 @@ import PlaygroundToolbar from './PlaygroundToolbar.vue'
 import PromptBox from './PromptBox.vue'
 import RunSettings from './RunSettings.vue'
 import ZeroState from './ZeroState.vue'
+import UiGradientSpinner from './ui/UiGradientSpinner.vue'
 import { defaultChatModel, defaultImageModel, isChatModel, modelMatches } from './catalog'
 import type { ZeroStarter } from './zero-configs'
 import { useCompare, usePlayground } from './session'
@@ -18,6 +19,8 @@ import type { SavedPrompt } from '@/types'
 defineOptions({ name: 'PlaygroundPage' })
 
 const props = defineProps<{ prompt?: SavedPrompt<PromptData> | undefined }>()
+// emit 的 retry 请求重新打开读取失败的已保存会话
+const emit = defineEmits<{ retry: [] }>()
 
 const route = useRoute()
 const router = useRouter()
@@ -57,7 +60,8 @@ watch(
   () => route.params.id,
   async (id) => {
     if (typeof id === 'string' && id !== '') await playground.open(id, props.prompt)
-    else if (session.id !== null || session.turns.length > 0 || otherModel()) playground.newChat()
+    else if (session.id !== null || session.turns.length > 0 || session.loadError || otherModel())
+      playground.newChat()
   },
   { immediate: true },
 )
@@ -153,12 +157,32 @@ onUnmounted(() => {
         <ComparePane v-for="(pane, index) in panes" :key="index" :pane="pane" :index="index" />
       </div>
       <div v-else class="chat-area">
-        <div v-if="session.loadError === 'not_found'" class="load-error">
+        <div
+          v-if="session.loading"
+          class="chat-loading"
+          role="status"
+          :aria-label="t('common.loading')"
+        >
+          <UiGradientSpinner />
+        </div>
+        <div v-else-if="session.loadError === 'not_found'" class="load-error">
           <h2>{{ t('pg.notFoundTitle') }}</h2>
           <p>{{ t('pg.notFoundBody') }}</p>
           <button type="button" ms-button class="ms-button-primary" @click="newChat">
             {{ t('pg.newChat') }}
           </button>
+        </div>
+        <div v-else-if="session.loadError" class="load-error">
+          <h2>{{ t('pg.loadFailedTitle') }}</h2>
+          <p>{{ session.loadError }}</p>
+          <div class="load-error-actions">
+            <button type="button" ms-button class="ms-button-borderless" @click="emit('retry')">
+              {{ t('pg.retry') }}
+            </button>
+            <button type="button" ms-button class="ms-button-primary" @click="newChat">
+              {{ t('pg.newChat') }}
+            </button>
+          </div>
         </div>
         <ZeroState v-else-if="session.turns.length === 0" @starter="useStarter" />
         <ChatSession v-else />
@@ -215,6 +239,20 @@ onUnmounted(() => {
   background-color: var(--color-overlay-background);
 }
 
+.chat-loading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  animation: chat-loading-in 0.2s ease-out 0.3s both;
+}
+
+@keyframes chat-loading-in {
+  from {
+    opacity: 0;
+  }
+}
+
 .load-error {
   display: flex;
   flex: 1;
@@ -237,5 +275,10 @@ onUnmounted(() => {
 .load-error p {
   margin: 0;
   color: var(--color-v3-text-var);
+}
+
+.load-error-actions {
+  display: flex;
+  gap: 12px;
 }
 </style>

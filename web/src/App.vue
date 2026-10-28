@@ -25,7 +25,7 @@ import { useTabParam } from '@/url'
 import { useRouter } from 'vue-router'
 import type { IconName } from '@/icons'
 
-const { availableLocales, locale, setLocale, t } = useI18n()
+const { availableLocales, locale, setLocale, t, logText } = useI18n()
 // lazyPanel 创建按需加载的页面组件
 function lazyPanel(loader: AsyncComponentLoader) {
   return defineAsyncComponent({
@@ -150,6 +150,7 @@ const {
   showNotice,
   loadAccountData,
   loadRequestData,
+  updateAccount,
   deleteAccount,
   undoDelete,
   commitDelete,
@@ -182,6 +183,8 @@ const statusTextColor = computed(() => {
   if (serviceState.value === 'launching') return 'text-cyan-300'
   return 'text-gray-500'
 })
+// serviceStateLabel 是生成服务状态在当前语言下的文案
+const serviceStateLabel = computed(() => t(`state.${serviceState.value}`))
 
 // logout 先在当前会话内提交等待中的删除再退出登录
 async function logout(): Promise<void> {
@@ -207,10 +210,7 @@ onUnmounted(stopConsole)
       <div
         class="flex h-14 min-w-0 items-center gap-2.5 border-b border-line px-4 [grid-area:brand]"
       >
-        <span
-          v-tooltip="`${t('app.status')}: ${serviceState.toUpperCase()}`"
-          class="relative shrink-0"
-        >
+        <span v-tooltip="`${t('app.status')}: ${serviceStateLabel}`" class="relative shrink-0">
           <img src="/favicon.svg" alt="" class="h-6 w-6" />
           <span
             class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-panel"
@@ -309,8 +309,8 @@ onUnmounted(stopConsole)
         <div class="mb-2 hidden text-xs text-gray-500 md:block">{{ t('app.status') }}</div>
         <div class="flex items-center justify-between gap-2 md:mb-4">
           <div class="flex min-w-0 items-center gap-2 md:contents">
-            <span class="font-mono font-bold" :class="statusTextColor">
-              {{ serviceState.toUpperCase() }}
+            <span class="font-mono font-bold uppercase" :class="statusTextColor">
+              {{ serviceStateLabel }}
             </span>
             <span
               v-tooltip="status?.version || ''"
@@ -381,8 +381,19 @@ onUnmounted(stopConsole)
     </aside>
 
     <main class="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
+      <div
+        v-if="config?.reserved_listen_addr"
+        role="alert"
+        class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm break-words text-amber-200 md:px-8"
+      >
+        {{
+          t('app.listenReserved')
+            .replace('{reserved}', config.reserved_listen_addr)
+            .replace('{active}', config.active_listen_addr)
+        }}
+      </div>
       <Transition name="page">
-        <KeepAlive include="SettingsPanel,VersionPanel">
+        <KeepAlive include="AccountsPanel,SettingsPanel,VersionPanel">
           <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
           <AccountsPanel
             v-else-if="currentTab === 'accounts'"
@@ -390,6 +401,7 @@ onUnmounted(stopConsole)
             :loading="loading.accounts"
             :error="errors.accounts"
             @refresh="loadAccountData"
+            @updated="updateAccount"
             @notice="showNotice"
             @delete="deleteAccount"
           />
@@ -447,7 +459,7 @@ onUnmounted(stopConsole)
               : 'border-green-500/50 text-green-300'
           "
         >
-          {{ notice.message }}
+          {{ logText(notice.message) }}
         </div>
       </Transition>
       <Transition name="notice">

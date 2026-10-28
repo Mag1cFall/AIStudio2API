@@ -1,4 +1,5 @@
 import { EventSourceParserStream } from 'eventsource-parser/stream'
+import { jsonBody } from '@/api'
 import type { Model } from '@/types'
 import { base64Bytes } from './bytes'
 import {
@@ -121,7 +122,7 @@ function dataURL(data: { mimeType: string; data: string }): string {
   return `data:${data.mimeType};base64,${data.data}`
 }
 
-// fileName 返回附件在协议请求中的文件名
+// fileName 返回没有文件名的附件在协议请求中的文件名
 function fileName(mimeType: string, index: number): string {
   return `file_${index}.${mimeType.split('/')[1]?.split(';')[0] ?? 'bin'}`
 }
@@ -169,7 +170,10 @@ function chatContent(parts: readonly Part[]): Record<string, unknown>[] {
       return [
         {
           type: 'file',
-          file: { file_data: dataURL(inline), filename: fileName(inline.mimeType, index) },
+          file: {
+            file_data: dataURL(inline),
+            filename: inline.displayName ?? fileName(inline.mimeType, index),
+          },
         },
       ]
     if (part.fileData) return [{ type: 'image_url', image_url: { url: part.fileData.fileUri } }]
@@ -265,7 +269,7 @@ function responsesInput(request: GenerateRequest): Record<string, unknown>[] {
             {
               type: 'input_file',
               file_data: dataURL(inline),
-              filename: fileName(inline.mimeType, index),
+              filename: inline.displayName ?? fileName(inline.mimeType, index),
             },
           ]
         if (part.fileData) return [{ type: 'input_image', image_url: part.fileData.fileUri }]
@@ -337,6 +341,9 @@ function anthropicContent(parts: readonly Part[]): Record<string, unknown>[] {
         {
           type: inline.mimeType.startsWith('image/') ? 'image' : 'document',
           source: { type: 'base64', media_type: inline.mimeType, data: inline.data },
+          ...(inline.displayName !== undefined && !inline.mimeType.startsWith('image/')
+            ? { title: inline.displayName }
+            : {}),
         },
       ]
     if (part.fileData)
@@ -831,7 +838,7 @@ export async function generate(options: GenerateOptions): Promise<void> {
   const response = await fetch(call.path, {
     method: 'POST',
     headers: call.headers,
-    body: call.body instanceof FormData ? call.body : JSON.stringify(call.body),
+    body: call.body instanceof FormData ? call.body : jsonBody(call.body),
     signal: options.signal,
   })
   if (!response.ok) {

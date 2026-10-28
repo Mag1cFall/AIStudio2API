@@ -158,7 +158,9 @@ defineExpose({ focus })
             class="speaker-dot"
             :class="{ 'speaker-two': block.speaker === 1 }"
           ></span>
-          <span class="voice-chip-label">{{ speaker.alias }} - {{ speaker.voice }}</span>
+          <span class="voice-chip-label"
+            >{{ speech.speakerName(block.speaker) }} - {{ speaker.voice }}</span
+          >
           <UiIcon name="arrowDropDown" :size="18" class="voice-chip-chevron" />
         </button>
         <StyleDropdown

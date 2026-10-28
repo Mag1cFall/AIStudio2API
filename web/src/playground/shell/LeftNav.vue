@@ -10,12 +10,12 @@ import SettingsMenu from '@/playground/shell/SettingsMenu.vue'
 import { useConsole } from '@/console'
 
 defineProps<{ expanded: boolean; narrow: boolean; adminUsername: string }>()
-const emit = defineEmits<{ toggle: []; navigate: []; logout: []; search: [] }>()
+const emit = defineEmits<{ toggle: []; navigate: []; logout: [] }>()
 const { t } = useI18n()
 const route = useRoute()
 const { update } = useConsole()
 
-// NavEntry 为导航中的一项，tab 为管理端主页面的页签，playground 为本页
+// NavEntry 为导航中的一项，tab 为管理端主页面的页签，playground 与 history 为试用页
 interface NavEntry {
   tab: string
   label: TranslationKey
@@ -31,20 +31,24 @@ const entries: NavEntry[] = [
   { tab: 'usage', label: 'nav.usage', icon: 'usage' },
   { tab: 'settings', label: 'nav.settings', icon: 'settings' },
   { tab: 'playground', label: 'nav.playground', icon: 'playground' },
+  { tab: 'history', label: 'pg.history', icon: 'history' },
   { tab: 'version', label: 'nav.version', icon: 'version' },
 ]
 
-// playgroundRoutes 是官网导航中高亮 Playground 的页面，音乐页不高亮
+// playgroundRoutes 是导航中高亮 API 试用的页面：官网高亮 Playground 的页面，音乐页不高亮
 const playgroundRoutes = new Set(['prompt', 'saved', 'video', 'image', 'speech', 'live'])
 
 // active 判断入口是否对应当前页面
 function active(entry: NavEntry): boolean {
+  if (entry.tab === 'history') return route.name === 'library'
   return entry.tab === 'playground' && playgroundRoutes.has(String(route.name))
 }
 
-// target 返回入口的地址，API 试用进入新对话
+// target 返回入口的地址，API 试用进入新对话，历史记录进入历史页
 function target(entry: NavEntry): RouteLocationRaw {
-  return entry.tab === 'playground' ? '/prompts/new_chat' : consoleTab(entry.tab)
+  if (entry.tab === 'playground') return '/prompts/new_chat'
+  if (entry.tab === 'history') return '/library'
+  return consoleTab(entry.tab)
 }
 
 // consoleTab 返回管理端主页面指定页签的地址
@@ -116,18 +120,6 @@ function consoleTab(tab: string): RouteLocationRaw {
           </div>
           <div class="icon-box">
             <SettingsMenu :admin-username="adminUsername" @logout="emit('logout')" />
-          </div>
-          <div class="icon-box">
-            <button
-              v-tooltip="t('pg.searchShortcut')"
-              type="button"
-              ms-button
-              class="ms-button-borderless ms-button-icon"
-              :aria-label="t('pg.searchShortcut')"
-              @click="emit('search')"
-            >
-              <UiIcon name="search" :size="20" />
-            </button>
           </div>
           <div class="icon-box">
             <RouterLink

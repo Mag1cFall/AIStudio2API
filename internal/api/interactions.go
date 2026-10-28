@@ -1,21 +1,20 @@
 package api
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/png"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// handleInteraction 将公开 Interactions 请求接入规范生成链路
+// handleInteraction 将公开 Interactions 请求接入规范生成流程
 func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	var request interactionRequest
 	if err := decodeJSON(r, &request); err != nil {
@@ -27,6 +26,12 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
+	if err := resolveGeminiFileNames(r.Context(), s.service, generate.Contents); err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeGeminiRequestError(w, err)
+		}
+		return
+	}
 	if err := inlineRemoteMedia(r.Context(), generate.Contents); err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -34,7 +39,8 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generate.Unary = !request.Stream || s.responseModes().FakeStream
-	if !request.Stream {
+	generate.Background = request.Background
+	if !request.Stream && !request.Background {
 		var stopKeepalive func()
 		w, stopKeepalive = s.nonstreamKeepalive(w, r)
 		defer stopKeepalive()
@@ -50,6 +56,10 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		}
 		generate.Contents = append(cloneResponseContents(previous.Contents), generate.Contents...)
 	}
+	if _, ok := s.applyGeminiCache(w, request.CachedContent, &generate); !ok {
+		return
+	}
+	generate.Tools.ToolConfig.ServerSideInvocations = interactionServerSteps(generate.Tools)
 	if err := resolveInteractionResults(generate.Contents); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
@@ -66,8 +76,26 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		model, _ := LookupPublicModel(models, generate.Model)
 		audioExpected = interactionAudioExpected(generate.Config.ResponseModalities, model)
 	}
+	created := time.Now().UTC().Format(time.RFC3339)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	if request.Background {
+		var finish func()
+		ctx, finish = s.startBackground(r, generate.ID)
+		defer finish()
+		defer s.endBackgroundInteraction(ctx, request, generate, previous, current, created)
+		started := interactionObject(generate, created, "in_progress", nil)
+		s.storeInteraction(request, previous, current, generationResult{}, started)
+		if !request.Stream {
+			body, _ := json.Marshal(started)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.Header().Set("Connection", "close")
+			_, _ = w.Write(body)
+			_ = http.NewResponseController(w).Flush()
+			w = discardResponseWriter{header: http.Header{}}
+		}
+	}
 	r = r.WithContext(ctx)
 	events, err := s.service.Generate(ctx, generate)
 	if err == nil && request.Stream {
@@ -82,7 +110,6 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	if request.imageMIME() == "image/jpeg" {
 		events = jpegImageEvents(ctx, events)
 	}
-	created := time.Now().UTC().Format(time.RFC3339)
 	if request.Stream {
 		s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events)
 		return
@@ -95,12 +122,12 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		var steps []map[string]any
 		steps, err = interactionSteps(result, request.audioFormat(), request.Generation.ThinkingSummaries != "none")
 		if err == nil {
-			response := interactionObject(generate, created, interactionStatus(result), result.usage)
+			response := interactionObject(generate, created, interactionStatus(result), &result)
 			response["steps"] = steps
 			if request.Store == nil || *request.Store {
 				s.storeInteraction(request, previous, current, result, response)
 			}
-			writeJSON(w, http.StatusOK, response)
+			writeJSON(w, http.StatusOK, officialOrder("interactions", response))
 			return
 		}
 	}
@@ -109,24 +136,46 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// endBackgroundInteraction 在后台交互结束时把仍为 in_progress 的记录保存为终态：被取消时为 cancelled，其他情况为 failed
+func (s *server) endBackgroundInteraction(ctx context.Context, request interactionRequest, generate aistudio.GenerateRequest, previous responseHistory, current []aistudio.Content, created string) {
+	record, ok := s.responseStates.Interaction(generate.ID)
+	if !ok {
+		return
+	}
+	var stored struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(record.object, &stored) != nil || stored.Status != "in_progress" {
+		return
+	}
+	status := "failed"
+	if errors.Is(ctx.Err(), context.Canceled) {
+		status = "cancelled"
+	}
+	s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, created, status, nil))
+}
+
+// discardResponseWriter 丢弃后台交互在立即返回之后的写出
+type discardResponseWriter struct {
+	header http.Header
+}
+
+func (w discardResponseWriter) Header() http.Header            { return w.header }
+func (w discardResponseWriter) Write(data []byte) (int, error) { return len(data), nil }
+func (w discardResponseWriter) WriteHeader(int)                {}
+
 // jpegImageEvents 将非 JPEG 的图片输出转码为 JPEG
 func jpegImageEvents(ctx context.Context, events <-chan aistudio.Event) <-chan aistudio.Event {
 	converted := make(chan aistudio.Event)
 	go func() {
 		defer close(converted)
 		for event := range events {
-			if media := event.Media; event.Kind == aistudio.EventMedia && media != nil && len(media.Data) > 0 && strings.HasPrefix(media.MIME, "image/") && !strings.HasPrefix(media.MIME, "image/jpeg") {
-				decoded, _, err := image.Decode(bytes.NewReader(media.Data))
-				var encoded bytes.Buffer
-				if err == nil {
-					err = jpeg.Encode(&encoded, decoded, nil)
-				}
+			if media := event.InlineData; event.Kind == aistudio.EventMedia && media != nil && strings.HasPrefix(media.MIME, "image/") {
+				converted, err := convertImage(*media, "image/jpeg")
 				if err != nil {
-					event = aistudio.Event{Kind: aistudio.EventError, Err: fmt.Errorf("convert %s output to image/jpeg: %w", media.MIME, err)}
+					event = aistudio.Event{Kind: aistudio.EventError, Err: err}
 				} else {
-					jpegMedia := *media
-					jpegMedia.MIME, jpegMedia.Data = "image/jpeg", encoded.Bytes()
-					event.Media = &jpegMedia
+					event.InlineData = &converted
 				}
 			}
 			select {
@@ -178,20 +227,68 @@ func resolveInteractionResults(contents []aistudio.Content) error {
 	return nil
 }
 
-// interactionObject 构造 SDK 使用的资源标识、状态与用量
-func interactionObject(request aistudio.GenerateRequest, created, status string, usage *aistudio.Usage) map[string]any {
+// interactionObject 构造 SDK 使用的资源标识、状态与用量，result 为空时不带用量
+func interactionObject(request aistudio.GenerateRequest, created, status string, result *generationResult) map[string]any {
 	object := map[string]any{
 		"id": request.ID, "object": "interaction", "model": request.Model,
 		"created": created, "updated": time.Now().UTC().Format(time.RFC3339), "status": status,
 	}
-	if usage != nil {
-		object["usage"] = map[string]any{
+	if result != nil && result.usage != nil {
+		usage := result.usage
+		fields := map[string]any{
 			"total_input_tokens": usage.InputTokens, "total_cached_tokens": usage.CachedTokens, "total_output_tokens": usage.OutputTokens,
 			"total_thought_tokens": usage.ReasoningTokens, "total_tool_use_tokens": usage.ToolTokens,
 			"total_tokens": usage.TotalTokens,
 		}
+		if details := usage.Details; details != nil {
+			for name, counts := range map[string][]aistudio.ModalityTokenCount{
+				"input_tokens_by_modality": details.PromptTokensDetails, "cached_tokens_by_modality": details.CacheTokensDetails,
+				"output_tokens_by_modality": details.CandidatesTokensDetails, "tool_use_tokens_by_modality": details.ToolUsePromptTokensDetails,
+			} {
+				if len(counts) > 0 {
+					fields[name] = interactionModalityTokens(counts)
+				}
+			}
+		}
+		if counts := interactionGroundingToolCount(result.events); len(counts) > 0 {
+			fields["grounding_tool_count"] = counts
+		}
+		object["usage"] = fields
 	}
 	return object
+}
+
+// groundingToolTypes 是服务端工具类型对应的 Interactions grounding_tool_count 类型
+var groundingToolTypes = map[string]string{"GOOGLE_SEARCH_WEB": "google_search", "GOOGLE_SEARCH_IMAGE": "google_search", "GOOGLE_MAPS": "google_maps"}
+
+// interactionGroundingToolCount 按工具类型统计搜索与地图的调用步骤数
+func interactionGroundingToolCount(events []aistudio.Event) []map[string]any {
+	var counts []map[string]any
+	for _, event := range events {
+		if event.ToolCall == nil {
+			continue
+		}
+		kind, ok := groundingToolTypes[event.ToolCall.Type]
+		if !ok {
+			continue
+		}
+		index := slices.IndexFunc(counts, func(item map[string]any) bool { return item["type"] == kind })
+		if index < 0 {
+			counts = append(counts, map[string]any{"type": kind, "count": 0})
+			index = len(counts) - 1
+		}
+		counts[index]["count"] = counts[index]["count"].(int) + 1
+	}
+	return counts
+}
+
+// interactionModalityTokens 把 Gemini 模态细分转换为 Interactions 的 {modality,tokens}
+func interactionModalityTokens(counts []aistudio.ModalityTokenCount) []map[string]any {
+	items := make([]map[string]any, 0, len(counts))
+	for _, count := range counts {
+		items = append(items, map[string]any{"modality": strings.ToLower(count.Modality), "tokens": count.TokenCount})
+	}
+	return items
 }
 
 // interactionStatus 将生成终态转换为交互资源状态，输出上限与内容拦截为 incomplete

@@ -9,16 +9,19 @@ import {
   DropdownMenuTrigger,
 } from 'reka-ui'
 import { useRouter } from 'vue-router'
+import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
+import SavePromptDialog from './SavePromptDialog.vue'
 import { isOmniModel } from './catalog'
 import { useMediaQuery } from './media-query'
 import { useCompare, usePlayground } from './session'
 
 defineProps<{ settingsOpen: boolean; narrow: boolean }>()
 const emit = defineEmits<{ newChat: []; toggleSettings: [] }>()
-const { t, tokenLabel } = useI18n()
+const { t, tokenLabel, errorText } = useI18n()
+const { showNotice } = useConsole()
 const router = useRouter()
 const playground = usePlayground()
 const { session } = playground
@@ -27,7 +30,6 @@ const { comparing, enterCompare, toggleRaw } = useCompare()
 const handset = useMediaQuery('(max-width: 768px)')
 
 const editing = ref(false)
-const titleDraft = ref('')
 const confirmDelete = ref(false)
 
 // hasPrompt 表示对话已有内容，标题可编辑
@@ -49,29 +51,25 @@ const tokens = computed(() =>
   session.promptTokens === null ? '' : tokenLabel(session.promptTokens),
 )
 
-// openRename 打开标题编辑对话框
-function openRename(): void {
-  titleDraft.value = session.title
-  editing.value = true
-}
-
-// saveTitle 保存编辑后的标题
-function saveTitle(): void {
-  playground.rename(titleDraft.value)
-  editing.value = false
-}
-
 // makeCopy 复制当前对话并打开副本
 async function makeCopy(): Promise<void> {
-  const id = await playground.copyPrompt()
-  void router.push(`/prompts/${id}`)
+  try {
+    const id = await playground.copyPrompt()
+    void router.push(`/prompts/${id}`)
+  } catch (error) {
+    showNotice(errorText(error), 'error')
+  }
 }
 
 // removePrompt 删除当前对话并回到新对话
 async function removePrompt(): Promise<void> {
   confirmDelete.value = false
-  await playground.deletePrompt()
-  void router.push('/prompts/new_chat')
+  try {
+    await playground.deletePrompt()
+    void router.push('/prompts/new_chat')
+  } catch (error) {
+    showNotice(errorText(error), 'error')
+  }
 }
 </script>
 
@@ -87,7 +85,7 @@ async function removePrompt(): Promise<void> {
           ms-button
           class="ms-button-borderless ms-button-icon ms-button-small"
           :aria-label="t('pg.editTitle')"
-          @click="openRename"
+          @click="editing = true"
         >
           <UiIcon name="edit" :size="18" />
         </button>
@@ -220,26 +218,18 @@ async function removePrompt(): Promise<void> {
         </button>
       </Transition>
     </div>
-    <UiDialog v-model:open="editing" :title="t('pg.editTitle')" width="480px">
-      <label class="field-label" for="prompt-title">{{ t('pg.title') }}</label>
-      <input
-        id="prompt-title"
-        v-model="titleDraft"
-        ms-input
-        class="title-input"
-        maxlength="120"
-        @keydown.enter.prevent="saveTitle"
-      />
-      <template #actions>
-        <button type="button" ms-button class="ms-button-borderless" @click="editing = false">
-          {{ t('common.cancel') }}
-        </button>
-        <button type="button" ms-button class="ms-button-primary" @click="saveTitle">
-          {{ t('common.save') }}
-        </button>
-      </template>
-    </UiDialog>
-    <UiDialog v-model:open="confirmDelete" :title="t('pg.deleteTitle')" width="420px">
+    <SavePromptDialog
+      v-model:open="editing"
+      :title="session.title"
+      :description="session.description"
+      @save="playground.rename"
+    />
+    <UiDialog
+      v-model:open="confirmDelete"
+      :title="t('pg.deleteTitle')"
+      width="500px"
+      :closable="false"
+    >
       <p class="confirm-text">{{ t('pg.deleteBody') }}</p>
       <template #actions>
         <button type="button" ms-button class="ms-button-borderless" @click="confirmDelete = false">
@@ -347,19 +337,9 @@ async function removePrompt(): Promise<void> {
   line-height: 18px;
 }
 
-.field-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.title-input {
-  width: 100%;
-}
-
 .confirm-text {
   margin: 0;
-  color: var(--color-v3-text-var);
+  line-height: 21px;
 }
 
 .runsettings-toggle-enter-active {

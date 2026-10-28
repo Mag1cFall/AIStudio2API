@@ -41,7 +41,7 @@ func (s *server) handleResponsesInputTokens(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "response.input_tokens", "input_tokens": count.InputTokens})
+	writeJSON(w, http.StatusOK, officialOrder("responses", map[string]any{"object": "response.input_tokens", "input_tokens": count.InputTokens}))
 }
 
 // handleResponseGet 返回已保存的响应对象；stream=true 时按 starting_after 续传后台流式响应的事件
@@ -55,7 +55,7 @@ func (s *server) handleResponseGet(w http.ResponseWriter, r *http.Request) {
 		writeResponseNotFound(w, r.PathValue("response"))
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("responses", response))
 }
 
 // resumeResponseStream 从事件记录回放序号 starting_after 之后的事件并跟随到结束，只有以 background 与 stream 创建的响应有事件记录
@@ -97,7 +97,7 @@ func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 		writeResponseNotFound(w, id)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "object": "response.deleted", "deleted": true})
+	writeJSON(w, http.StatusOK, officialOrder("responses", map[string]any{"id": id, "object": "response.deleted", "deleted": true}))
 }
 
 // handleResponseCancel 终止进行中的后台响应并返回保存的 cancelled 对象，已结束的后台响应返回最终对象，其他响应不可取消
@@ -116,7 +116,7 @@ func (s *server) handleResponseCancel(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "Only responses created with background=true can be cancelled.")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("responses", response))
 }
 
 // handleResponseInputItems 按 after、before、limit 与 order 分页返回生成该响应时的输入项
@@ -175,7 +175,7 @@ func (s *server) handleResponseInputItems(w http.ResponseWriter, r *http.Request
 	if len(page) > 0 {
 		list["first_id"], list["last_id"] = page[0].ID, page[len(page)-1].ID
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeJSON(w, http.StatusOK, officialOrder("responses", list))
 }
 
 // writeResponseNotFound 返回响应不存在的 404

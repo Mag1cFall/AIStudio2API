@@ -57,6 +57,9 @@ func assistantModelEntry(base modelEntry) modelEntry {
 		}
 	}
 	model.CapabilityOptions = nil
+	if len(model.ThinkingLevels) > 0 {
+		model.DefaultThinkingLevel = buildThinkingLevels[closestSupportedThinkingLevel(assistantDefaultThinkingLevel, base.defaults.ThinkingLevels)]
+	}
 	return modelEntry{model: model, defaults: GenerationDefaults{
 		MaxOutputTokens: base.defaults.MaxOutputTokens, Thinking: true, ThinkingLevel: true,
 		DefaultThinkingLevel: assistantDefaultThinkingLevel, ThinkingLevels: base.defaults.ThinkingLevels,
@@ -107,8 +110,8 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 	wire[0] = contents
 	wire[5] = int64(1)
 	wire[7] = wireModelName(assistantBaseModelID(request.Model))
-	if request.System != "" {
-		wire[8] = request.System
+	if system := SystemText(request.System); system != "" {
+		wire[8] = system
 	}
 	wire[11] = applet
 	wire[13] = []any{int64(2), nil, int64(2)}
@@ -507,7 +510,7 @@ func (d *AssistantStreamDecoder) decodePart(step int64, index int, raw json.RawM
 		return nil, nil
 	}
 	if thought {
-		return []Event{{Kind: EventReasoning, Text: delta}}, nil
+		return []Event{{Kind: EventReasoning, Text: delta, Thought: true}}, nil
 	}
 	if d.wroteText && previous == "" && step != d.lastStep {
 		delta = "\n\n" + delta

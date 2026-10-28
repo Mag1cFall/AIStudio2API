@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import { useConsole } from '@/console'
+import { keepPage } from '@/desktop'
 import type { Model } from '@/types'
 import type { CodeOption } from '../code'
 import { newTurnID } from '../session'
@@ -26,12 +27,17 @@ export type ImagenLanguage = 'python' | 'typescript' | 'rest'
 // imagenCodeOptions 是 Imagen 页获取代码的语言选项
 export const imagenCodeOptions: CodeOption<ImagenLanguage>[] = [
   { value: 'python', label: 'Python', highlight: 'python', file: 'main.py' },
-  { value: 'typescript', label: 'TypeScript', highlight: 'typescript', file: 'main.ts' },
+  {
+    value: 'typescript',
+    label: 'TypeScript',
+    highlight: 'typescript',
+    file: 'main.ts',
+  },
   { value: 'rest', label: 'REST', highlight: 'bash', file: 'request.sh' },
 ]
 
-// imagenAspectRatios 是模型没有给出宽高比列表时官网 Imagen 页的选项
-const imagenAspectRatios = ['1:1', '3:4', '4:3', '9:16', '16:9']
+// imagenAspectRatios 是官网 Imagen 页的宽高比选项
+const imagenAspectRatios = ['1:1', '9:16', '16:9', '4:3', '3:4']
 
 const state = reactive({
   model: '',
@@ -44,6 +50,9 @@ const state = reactive({
   turns: [] as ImagenTurn[],
 })
 let controller: AbortController | undefined
+
+// 关闭桌面窗口时，生成中与只存在于页面的图片保留页面
+keepPage(() => state.running || state.turns.length > 0)
 
 // imagenModels 返回目录中归属 Imagen 页的模型
 export function imagenModels(): Model[] {
@@ -153,14 +162,10 @@ result.generatedImages?.forEach((generated, index) => {
 // useImagen 返回 Imagen 页的状态与操作
 export function useImagen() {
   const currentModel = computed(() => imagenModels().find((model) => model.id === state.model))
-  const aspectRatios = computed(() => {
-    const options = currentModel.value?.capability_options?.['image_aspect_ratios']
-    return Array.isArray(options) && options.length > 0 ? options.map(String) : imagenAspectRatios
-  })
   return {
     state,
     currentModel,
-    aspectRatios,
+    aspectRatios: imagenAspectRatios,
     // ensureModel 在目录变化后选定模型：地址中的模型优先，其次保留当前模型，否则用第一个 Imagen 模型
     ensureModel(requested?: string): void {
       const list = imagenModels()
@@ -169,13 +174,11 @@ export function useImagen() {
         list.find((model) => model.id === state.model) ??
         list[0]
       if (wanted) state.model = wanted.id
-      if (!aspectRatios.value.includes(state.aspectRatio))
-        state.aspectRatio = aspectRatios.value[0] ?? '1:1'
     },
     // reset 恢复默认运行设置
     reset(): void {
       state.count = 1
-      state.aspectRatio = aspectRatios.value[0] ?? '1:1'
+      state.aspectRatio = '1:1'
     },
     // newSession 清空当前会话
     newSession(): void {

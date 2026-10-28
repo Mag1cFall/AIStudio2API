@@ -67,16 +67,22 @@ type runtimeManager struct {
 	lifecycle        context.Context
 	configPath       string
 	activeManagement config.Config
-	overrides        dataConfigOverrides
-	requests         *requestRegistry
-	factory          runtimeFactory
-	startMu          sync.Mutex
-	mu               sync.RWMutex
-	current          *runtimeGeneration
-	startCancel      context.CancelFunc
-	ledger           *requestdb.Store
-	prompts          *promptdb.Store
-	logs             *logOutput
+	// reservedListenAddr 是被 Windows 保留而改用 activeManagement.ListenAddr 监听的配置地址，没有改用时为空
+	reservedListenAddr string
+	previewAddress     string
+	overrides          dataConfigOverrides
+	requests           *requestRegistry
+	factory            runtimeFactory
+	startMu            sync.Mutex
+	mu                 sync.RWMutex
+	current            *runtimeGeneration
+	startCancel        context.CancelFunc
+	// launching 在生成服务启动期间存在，启动结束时关闭
+	launching       chan struct{}
+	autoStartCancel context.CancelFunc
+	ledger          *requestdb.Store
+	prompts         *promptdb.Store
+	logs            *logOutput
 }
 
 // newRuntimeManager 创建进程级管理器与初始生成服务
@@ -118,8 +124,14 @@ func buildRuntimeGeneration(
 	}, nil
 }
 
-// StartService 从最新配置创建并启动新生成服务
+// StartService 取消自动启动的重试后从最新配置启动生成服务
 func (manager *runtimeManager) StartService(ctx context.Context) (api.AdminStatus, error) {
+	manager.stopAutoStart()
+	return manager.startService(ctx)
+}
+
+// startService 从最新配置创建并启动新生成服务
+func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatus, error) {
 	manager.startMu.Lock()
 	defer manager.startMu.Unlock()
 
@@ -136,6 +148,7 @@ func (manager *runtimeManager) StartService(ctx context.Context) (api.AdminStatu
 	}
 	launchCtx, launchCancel := context.WithCancel(manager.lifecycle)
 	manager.startCancel = launchCancel
+	manager.launching = make(chan struct{})
 	manager.mu.Unlock()
 
 	cfg, err := config.Load(manager.configPath)
@@ -174,16 +187,33 @@ func (manager *runtimeManager) StartService(ctx context.Context) (api.AdminStatu
 	return status, startErr
 }
 
-// finishStart 清理本轮生成服务启动取消句柄
+// finishStart 清理本轮生成服务启动取消句柄并放行等待启动结束的请求
 func (manager *runtimeManager) finishStart(cancel context.CancelFunc) {
 	manager.mu.Lock()
 	manager.startCancel = nil
+	close(manager.launching)
+	manager.launching = nil
 	manager.mu.Unlock()
 	cancel()
 }
 
+// WaitLaunch 在生成服务启动期间等到启动结束或 ctx 结束
+func (manager *runtimeManager) WaitLaunch(ctx context.Context) {
+	manager.mu.RLock()
+	launching := manager.launching
+	manager.mu.RUnlock()
+	if launching == nil {
+		return
+	}
+	select {
+	case <-launching:
+	case <-ctx.Done():
+	}
+}
+
 // StopService 停止当前生成服务并保持管理监听器运行
 func (manager *runtimeManager) StopService(ctx context.Context) (api.AdminStatus, error) {
+	manager.stopAutoStart()
 	manager.mu.RLock()
 	cancel := manager.startCancel
 	current := manager.current
@@ -192,6 +222,26 @@ func (manager *runtimeManager) StopService(ctx context.Context) (api.AdminStatus
 		cancel()
 	}
 	return current.admin.StopService(ctx)
+}
+
+// autoStartContext 返回手动启动或停止生成服务时取消的自动启动上下文
+func (manager *runtimeManager) autoStartContext(parent context.Context) context.Context {
+	ctx, cancel := context.WithCancel(parent)
+	manager.mu.Lock()
+	manager.autoStartCancel = cancel
+	manager.mu.Unlock()
+	return ctx
+}
+
+// stopAutoStart 取消自动启动及其重试
+func (manager *runtimeManager) stopAutoStart() {
+	manager.mu.Lock()
+	cancel := manager.autoStartCancel
+	manager.autoStartCancel = nil
+	manager.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // Close 释放当前生成服务
@@ -556,10 +606,11 @@ func (manager *runtimeManager) RecordAccessLog(entry api.AccessLog) {
 // decorateRuntimeConfig 标记配置所属的进程级与生成服务生效时机
 func (manager *runtimeManager) decorateRuntimeConfig(value api.RuntimeConfig, active config.Config) api.RuntimeConfig {
 	value.ActiveListenAddr = manager.activeManagement.ListenAddr
+	value.ReservedListenAddr = manager.reservedListenAddr
 	value.ActiveAPIKey = manager.activeManagement.ProxyAPIKey
-	value.ActivePreviewListenAddr = manager.activeManagement.PreviewListenAddr
-	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr || value.APIKey != value.ActiveAPIKey ||
-		value.PreviewListenAddr != value.ActivePreviewListenAddr
+	value.ActivePreviewListenAddr = manager.previewAddress
+	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr && value.ListenAddr != value.ReservedListenAddr || value.APIKey != value.ActiveAPIKey ||
+		value.PreviewListenAddr != manager.activeManagement.PreviewListenAddr
 	value.ManagementRestartRequired = value.ManagementRestartRequired ||
 		value.AdminAuthEnabled != manager.activeManagement.AdminAuthEnabled ||
 		value.AdminUsername != manager.activeManagement.AdminUsername ||
@@ -585,6 +636,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		NonstreamKeepalive:   value.NonstreamKeepalive,
 		FakeStream:           value.FakeStream,
 		YouTubeLinks:         value.YouTubeLinks,
+		FirstEventHedge:      value.FirstEventHedge,
 		MediaOutput:          value.MediaOutput,
 		MediaBaseURL:         value.MediaBaseURL,
 	}
@@ -596,7 +648,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
-		saved.YouTubeLinks == active.YouTubeLinks &&
+		saved.YouTubeLinks == active.YouTubeLinks && saved.FirstEventHedge == active.FirstEventHedge &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL
 }
 

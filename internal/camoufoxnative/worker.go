@@ -448,7 +448,7 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if err != nil {
 		return fmt.Errorf("读取官网 bootstrap 请求正文: %w", err)
 	}
-	if _, err := client.evaluate(ctx, contextID, stopGenerationExpression); err != nil {
+	if err := client.waitFor(ctx, contextID, stopGenerationExpression, 15*time.Second); err != nil {
 		return fmt.Errorf("停止官网 bootstrap 生成: %w", err)
 	}
 	if _, err := client.command(ctx, "network.failRequest", map[string]any{"request": blocked.id}); err != nil {

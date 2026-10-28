@@ -527,23 +527,6 @@ func (runtime *goWAARuntime) drain(response *http.Response, err error) {
 	_ = response.Body.Close()
 }
 
-// pagePromptKey 是请求上下文中页面输入框提示词的键
-type pagePromptKey struct{}
-
-// countTokens 按官网页面对输入框内容 prompt 的统计，以 GenerateContent 的请求头与模型发出 CountTokens
-func (runtime *goWAARuntime) countTokens(ctx context.Context, headers http.Header, generateBody []byte, prompt string) {
-	var fields []json.RawMessage
-	var model string
-	if json.Unmarshal(generateBody, &fields) != nil || len(fields) == 0 || json.Unmarshal(fields[0], &model) != nil {
-		return
-	}
-	body, err := json.Marshal([]any{model, []any{[]any{[]any{[]any{nil, prompt}}, "user"}}})
-	if err != nil {
-		return
-	}
-	runtime.drain(runtime.do(ctx, http.MethodPost, makerSuiteRPCURL+"CountTokens", body, headers))
-}
-
 // encodeJSPBFields 按字段顺序把 JSPB 数组中的数字与字符串编码为 protobuf 二进制
 func encodeJSPBFields(raw []byte) ([]byte, error) {
 	var fields []json.RawMessage
@@ -776,7 +759,7 @@ func (runtime *goWAARuntime) ProtocolHeaders(ctx context.Context) (http.Header, 
 	return runtime.headers.Clone(), nil
 }
 
-// SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求，GenerateContent 伴随的 CountTokens 统计 ctx 中的页面提示词
+// SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求
 func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*camoufoxnative.ProtectedResponse, error) {
 	request := headers.Clone()
 	request.Set("Accept", "*/*")
@@ -786,9 +769,10 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 	request.Set("Sec-Fetch-Mode", "cors")
 	request.Set("Sec-Fetch-Site", "same-site")
 	request.Del("Cookie")
-	if strings.HasSuffix(rawURL, "/GenerateContent") {
-		page, _ := ctx.Value(pagePromptKey{}).(string)
-		go runtime.countTokens(context.WithoutCancel(ctx), request.Clone(), body, page)
+	if followUp, ok := camoufoxnative.FollowUpFrom(ctx); ok {
+		time.AfterFunc(followUp.Delay, func() {
+			runtime.drain(runtime.do(context.WithoutCancel(ctx), http.MethodPost, followUp.URL, followUp.Body, request))
+		})
 	}
 	response, err := runtime.do(ctx, http.MethodPost, rawURL, body, request)
 	if err != nil {

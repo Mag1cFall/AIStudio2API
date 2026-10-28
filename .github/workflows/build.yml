@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     env:
-      CGO_ENABLED: '0'
+      CGO_ENABLED: '1'
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
@@ -38,13 +38,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install Windows C Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
       - name: Run Unit Tests
         run: go test -mod=readonly ./cmd/... ./internal/...
       - name: Check Minimum Go Version
         run: |
           go version
           go vet ./...
-          GOOS=windows go vet -tags desktop,production ./...
+          CC=x86_64-w64-mingw32-gcc GOOS=windows go vet -tags desktop,production ./...
           go build -mod=readonly ./cmd/aistudio2api
       - uses: actions/setup-go@v7
         with:
@@ -58,19 +65,19 @@ jobs:
           link=""
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; number="${version#v}"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
           mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            goos="${target%/*}" goarch="${target#*/}"
-            name="aistudio2api-${version}-${goos}-${goarch}"
+          for target in amd64:x86_64 arm64:aarch64; do
+            goarch="${target%:*}"
+            name="aistudio2api-${version}-linux-${goarch}"
             mkdir -p "dist/$name"
-            GOOS="$goos" GOARCH="$goarch" go build -mod=readonly -trimpath -ldflags="-s -w $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+            CC="zig cc -target ${target#*:}-linux-musl" GOOS=linux GOARCH="$goarch" go build -mod=readonly -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all' $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
             tar -czf "dist/$name.tar.gz" -C dist "$name"
           done
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
+          CGO_ENABLED=0 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
           jq --arg v "$number" '.fixed.file_version = $v | .info["0000"].ProductVersion = $v' build/windows/info.json > dist/info.json
           wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info dist/info.json -out cmd/aistudio2api/rsrc_windows_amd64.syso
           name="aistudio2api-${version}-windows-amd64"
           mkdir -p "dist/$name"
-          GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
+          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
           (cd dist && zip -qr "$name.zip" "$name")
       - uses: actions/upload-artifact@v7
         with:
@@ -115,6 +122,10 @@ jobs:
           mkdir -p dist
           for arch in arm64 amd64; do
             GOARCH="$arch" go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o "dist/aistudio2api-$arch" ./cmd/aistudio2api
+            name="aistudio2api-${version}-darwin-${arch}"
+            mkdir -p "dist/$name"
+            GOARCH="$arch" go build -mod=readonly -trimpath -ldflags="-s -w $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+            tar -czf "dist/$name.tar.gz" -C dist "$name"
           done
           app=dist/AIStudio2API.app
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -136,6 +147,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*.dmg
+            dist/*.tar.gz
           retention-days: 7
 
   desktop-linux:

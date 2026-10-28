@@ -146,7 +146,7 @@ func WireField(values []json.RawMessage, field int) (json.RawMessage, bool) {
 
 ## 3. WAA 运行时
 
-受保护请求的完整链路如下。`WAA_BACKEND=camoufox` 时 Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入；`WAA_BACKEND=go` 时这些环节由服务进程内的 goja 与 Firefox 形状宿主执行。两种后端的实现规格见 [WAA 实现](waa.md)：
+受保护请求的完整链路如下。`WAA_BACKEND=camoufox` 时 Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入；`WAA_BACKEND=go` 时这些环节由服务进程内的 goja 与 Firefox 形状宿主执行。
 
 ```text
 Waa/Create
@@ -166,15 +166,15 @@ Waa/Create
 
 `Waa/Create` 请求 field 1 为 request key `lmnUSbltwc5ULv48iKLX`，field 2、3 为当前 VM 的 interpreter hash 与无绑定 snapshot；Worker 启动时只设置 field 1，请求为 `["lmnUSbltwc5ULv48iKLX"]`。interpreter 下载后以 SHA-256 + Base64URL 无 padding 计算摘要，摘要必须等于 challenge hash。一份 fresh challenge 复核样例包含 33,695 个字符的 program 与 65,831 字节的 interpreter。
 
-`Waa/Create` 响应的第二槽是 Base64 字符串。解码后每个字节加 `97`，结果是 challenge 数组，字段表见 [WAA 实现](waa.md)。
+`Waa/Create` 响应的第二槽是 Base64 字符串。解码后每个字节加 `97`，结果是 challenge 数组。
 
-interpreter 可以按 hash 缓存。program、message ID、实验状态和 snapshot 状态属于当前 challenge 生命周期。每次从 challenge 读取全局函数名称。初始化参数、signal lists 与 persistent state 的派生规则见 [WAA 实现](waa.md)；官网 VM 生命周期参数为 43,200,000ms，检查间隔为 300,000ms。
+interpreter 可以按 hash 缓存。program、message ID、实验状态和 snapshot 状态属于当前 challenge 生命周期。每次从 challenge 读取全局函数名称。官网 VM 生命周期参数为 43,200,000ms，检查间隔为 300,000ms。
 
 `Waa/Ping` wire 为 `[request_key,botguard_response]`，成功响应为 `[]`。以下输入都能得到成功空响应：正确 proof、损坏 proof、省略 proof、任意 request key、无账户 Cookie。Ping 只验证 WAA RPC consumer identity 与字段类型，业务 proof 资格使用实际 GenerateContent、GenerateVideo 或 Bidi 请求判定。
 
 ### Host 与 Realm
 
-dynamic program 会读取以下浏览器宿主语义。Camoufox 后端由真实 Firefox 页面提供；纯 Go 后端由 `internal/waa` 按 Firefox 形状表与 goja 分叉实现，规格见 [WAA 实现](waa.md)：
+dynamic program 会读取以下浏览器宿主语义。Camoufox 后端由真实 Firefox 页面提供；纯 Go 后端由 `internal/waa` 按 Firefox 形状表与 goja 分叉实现：
 
 - navigator、screen、window、document、location、performance 与 timezone
 - TextEncoder、TextDecoder、Base64、TypedArray、ArrayBuffer、Blob 与 URL
@@ -231,7 +231,7 @@ type ProtectedRequest struct {
 }
 ```
 
-GenerateContent 与 CreateInteractionStream 的 proof field 为 5，Build 代理为 3，Veo GenerateVideo 为 8，Bidi setup 与实时输入为 6。请求编码器先形成无 proof 正文和 binding prompt，WAA Worker 串行调用 snapshot，再原位写入 proof。各 RPC 的 binding prompt 见 [WAA 实现](waa.md)；摘要是 binding prompt 的 SHA-256 小写十六进制。
+GenerateContent 与 CreateInteractionStream 的 proof field 为 5，Build 代理为 3，Veo GenerateVideo 为 8，Bidi setup 与实时输入为 6。请求编码器先形成无 proof 正文和 binding prompt，WAA Worker 串行调用 snapshot，再原位写入 proof。摘要是 binding prompt 的 SHA-256 小写十六进制。
 
 官方 snapshot 的底层输入保持四个槽：
 
@@ -401,7 +401,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 `runtime-state.json` 保存 `benefit_tier`、`catalog_fingerprint`、`model_access:{state,checked_at,reason?}`、`cooldowns:{until,reason?}` 与 `resources:{kind?,name?,mime?,size?,purpose?,created_at,video?:{model,seconds,size}}`。`video-operation` 绑定把公开 video object 的 model、seconds、size、UTC 创建时间和创建账户一并持久化；重新建立账户池后，operation 轮询仍从该绑定恢复元数据。活动请求使用账户租约；读取最新磁盘状态、合并目标字段和原子写回使用独立短事务锁。该锁每 25ms 尝试一次并在 2 秒后超时；调用方 context（Go 取消上下文）可以更早取消等待。取得锁后必须重读磁盘值，写回后再更新内存与资源索引。跨进程读取资源未命中时刷新磁盘状态，防止旧内存覆盖另一个进程已经写入的绑定。
 
-本段中的 generation 表示一次 Stop/Start 创建的生成服务实例。模型目录驻留在当前 generation 的内存中，新 generation 以空缓存启动。`Start` 先用当前 generation 已有的真实 `CachedModels` 生成公开目录，并为全部 `enabled` 且处于 `ready` 或 `busy` 的账户各启动一个后台 `ListModels` 任务。缓存非空时立即开始 Worker 预热；缓存为空时等待新 generation 的首个非空结果，再开始 Worker 预热。每个非空结果都会立即重新合并 `CachedModels`、发布账户与模型事件，并在生成服务已经运行时继续预热其他 Worker。全部账户同步结束时，认证集合变化会补发一次账户与模型快照；日志记录同步成功数、非空数、公共模型数、待重试账户数与耗时。
+本段中的 generation 表示一次 Stop/Start 创建的生成服务实例。模型目录驻留在当前 generation 的内存中，新 generation 载入账户目录中与运行状态指纹一致的 `catalog.json` 作为缓存。`Start` 先用当前 generation 的 `CachedModels` 生成公开目录。缓存非空时立即开始 Worker 预热，首个 Worker 有结果后为全部 `enabled` 且处于 `ready` 或 `busy` 的账户各启动一个后台 `ListModels` 任务；缓存为空时先启动这些任务，等待新 generation 的首个非空结果，再开始 Worker 预热。每个非空结果都会立即重新合并 `CachedModels`、发布账户与模型事件，并在生成服务已经运行时继续预热其他 Worker。全部账户同步结束时，认证集合变化会补发一次账户与模型快照；日志记录同步成功数、非空数、公共模型数、待重试账户数与耗时。
 
 目录错误或返回空目录的账户 ID 保留在 pending set（待重试账户集合），返回非空目录或删除账户时移除。初次 fan-out（并发向全部目标账户调用 `ListModels`）结束后，单个 30 秒 ticker（Go 定时器）对排序后的待重试账户列表再次执行 fan-out；每个非空结果立即同步公共目录、发布管理事件并继续预热其他 Worker，批末认证集合变化触发一次快照补发。同一循环的 10 分钟 ticker 对全部 `enabled` 且处于 `ready` 或 `busy` 的账户并发调用 `GetAiStudioBenefitTier`，每个账户占用一个普通并发槽位，槽位已满的账户跳过本轮；权益变化时沿用当前目录写回权益、递增 `modelAccessGeneration` 并发布管理事件。停止流程对目录任务最多等待 2 秒；管理调用对整次启动或停止切换最多等待 12 秒，超时后返回，后台清理继续并保留最终错误。
 
@@ -427,7 +427,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | 上游 401 | Cookie、SAPISID 或 DBSC | 对照登录态、续签响应、Authorization 与 Set-Cookie |
 | 页面成功，协议请求 403 | 动态头、TLS、请求正文或 WAA binding | 对照官方请求头顺序、proof field 与无 proof 正文 |
 | 输入框、Run 或 snapshot 定位失败 | AI Studio 页面与 bundle | 重新定位稳定组件和高层 snapshot 调用 |
-| 纯 Go proof 稳定 403，Camoufox 同账户 200 | 纯 Go 宿主或 goja 分叉 | 按 [WAA 实现](waa.md) 的方法对照同一 challenge |
+| 纯 Go proof 稳定 403，Camoufox 同账户 200 | 纯 Go 宿主或 goja 分叉 | 以同一 challenge 对照两个后端 |
 | 带 JSON 路径的字段类型错误 | protobuf 数组或新 oneof | 保存原始帧，更新单一字段解析器 |
 | `provider_<code>` | finish enum | 确认官方页面表现并更新四套公开响应 |
 | ACK、setup 或 backchannel 失败 | WebChannel | 对照 RID、AID、ofs、frame 长度和 payload 形状 |

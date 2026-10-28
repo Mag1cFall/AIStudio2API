@@ -91,6 +91,13 @@ func BuildRejectionCooldown(err error) (QuotaCooldown, bool) {
 	return QuotaCooldown{Kind: "Build 拒绝", Reason: "Build 拒绝: " + err.Error(), Escalate: true}, true
 }
 
+// BuildGenerationDisabled 判断错误是上游停用 Build 代理生成的 PROXY_GENERATION_DISABLED
+func BuildGenerationDisabled(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.StatusCode == http.StatusBadRequest && rpcError.Code == 3 &&
+		strings.Contains(rpcError.Message, "PROXY_GENERATION_DISABLED")
+}
+
 // zeroQuotaLimit 判断额度错误列出的每个额度项上限都为 0
 func zeroQuotaLimit(message string) bool {
 	matches := quotaLimitPattern.FindAllStringSubmatch(message, -1)

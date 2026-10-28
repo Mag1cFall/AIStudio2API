@@ -7,7 +7,7 @@ import { youtubeVideoID } from './sample-media'
 import type { Part } from './types'
 
 const props = defineProps<{ part: Part }>()
-const { tokenLabel } = useI18n()
+const { t, tokenLabel } = useI18n()
 
 // name 是附件的文件名或视频标题，没有记录时为链接或 MIME 类型
 const name = computed(
@@ -21,7 +21,7 @@ const tokens = computed(() =>
   props.part.tokenCount === undefined ? '' : tokenLabel(props.part.tokenCount),
 )
 
-// thumbnail 与官网一致：PDF 显示第一页预览，其他文件与无法解析的 PDF 只显示文件条
+// thumbnail 与官网一致：PDF 显示第一页预览，其他文件与无法解析的 PDF 显示文件图标
 const thumbnail = ref('')
 onMounted(async () => {
   const inline = props.part.inlineData
@@ -34,7 +34,7 @@ onMounted(async () => {
   <div class="file-chunk">
     <div v-if="youtube" class="video-container">
       <iframe
-        title="YouTube video player"
+        :title="t('pg.youtubeVideo')"
         :src="`https://www.youtube.com/embed/${youtube}`"
         allow="
           accelerometer;
@@ -49,8 +49,9 @@ onMounted(async () => {
         allowfullscreen
       ></iframe>
     </div>
-    <div v-else-if="thumbnail" class="preview-container">
-      <img class="thumbnail-img" :src="thumbnail" alt="file thumbnail" />
+    <div v-else class="preview-container">
+      <img v-if="thumbnail" class="thumbnail-img" :src="thumbnail" :alt="t('pg.fileThumbnail')" />
+      <UiIcon v-else name="document" :size="36" class="thumbnail-icon" />
     </div>
     <div class="file-chunk-container">
       <div>
@@ -98,6 +99,10 @@ onMounted(async () => {
   object-fit: cover;
   object-position: center top;
   pointer-events: none;
+}
+
+.thumbnail-icon {
+  align-self: center;
 }
 
 .file-chunk-container {

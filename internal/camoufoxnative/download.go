@@ -12,10 +12,40 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const camoufoxRelease = "152.0.4-beta.29"
+
+// Download 是正在进行的 Camoufox 下载的已收与总字节，总字节未知时为 0
+type Download struct {
+	Received int64 `json:"received"`
+	Total    int64 `json:"total"`
+}
+
+// downloadState 是正在进行的下载的计数，写入时累计已收字节
+type downloadState struct {
+	received atomic.Int64
+	total    int64
+}
+
+func (state *downloadState) Write(data []byte) (int, error) {
+	state.received.Add(int64(len(data)))
+	return len(data), nil
+}
+
+// activeDownload 是正在进行的 Camoufox 下载，没有下载时为 nil
+var activeDownload atomic.Pointer[downloadState]
+
+// DownloadProgress 返回正在进行的 Camoufox 下载，没有下载时 ok 为 false
+func DownloadProgress() (Download, bool) {
+	state := activeDownload.Load()
+	if state == nil {
+		return Download{}, false
+	}
+	return Download{Received: state.received.Load(), Total: state.total}, true
+}
 
 // installCamoufox 经出口代理下载当前协议传输已对齐的 Camoufox 版本
 func installCamoufox(ctx context.Context, executableName string, proxy string) (string, error) {
@@ -36,7 +66,10 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	archivePath := filepath.Join(filepath.Dir(root), asset+".part")
 	address := fmt.Sprintf("https://github.com/daijro/camoufox/releases/download/v%s/%s", camoufoxRelease, asset)
 	if err := downloadCamoufoxArchive(ctx, address, archivePath, proxy); err != nil {
-		return "", err
+		if ctx.Err() != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%w；在 .env 的 PROXY 设置能访问 GitHub 的代理后重试，或手动下载 %s 解压到 %s", err, address, root)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(root), ".camoufox-stage-*")
 	if err != nil {
@@ -115,14 +148,19 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 	default:
 		return fmt.Errorf("下载 Camoufox: HTTP %d", response.StatusCode)
 	}
+	state := &downloadState{}
+	state.received.Store(offset)
 	if response.ContentLength > 0 {
-		slog.Info("Camoufox 下载已开始", "size_mib", (offset+response.ContentLength)/(1024*1024), "resume_mib", offset/(1024*1024))
+		state.total = offset + response.ContentLength
+		slog.Info("Camoufox 下载已开始", "size_mib", state.total/(1024*1024), "resume_mib", offset/(1024*1024))
 	}
 	archive, err := os.OpenFile(archivePath, flags, 0o644)
 	if err != nil {
 		return fmt.Errorf("创建 Camoufox 下载文件: %w", err)
 	}
-	_, copyErr := io.Copy(archive, contextReader{ctx: ctx, reader: response.Body})
+	activeDownload.Store(state)
+	defer activeDownload.Store(nil)
+	_, copyErr := io.Copy(io.MultiWriter(archive, state), contextReader{ctx: ctx, reader: response.Body})
 	if closeErr := archive.Close(); copyErr != nil || closeErr != nil {
 		return fmt.Errorf("保存 Camoufox: %w", firstError(copyErr, closeErr))
 	}

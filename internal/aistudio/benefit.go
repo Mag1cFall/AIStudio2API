@@ -83,10 +83,15 @@ func (c *Client) BenefitTierForAccount(ctx context.Context, accountID string) (B
 	if err != nil {
 		return BenefitTierFree, err
 	}
+	c.setBenefitTier(accountID, tier)
+	return tier, nil
+}
+
+// setBenefitTier 记录账户的权益等级
+func (c *Client) setBenefitTier(accountID string, tier BenefitTier) {
 	c.tierMu.Lock()
 	c.tiers[accountID] = tier
 	c.tierMu.Unlock()
-	return tier, nil
 }
 
 func decodeBenefitTier(raw []byte) (BenefitTier, error) {

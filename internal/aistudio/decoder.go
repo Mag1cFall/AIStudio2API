@@ -21,9 +21,10 @@ type ProtocolEvidenceError struct {
 
 // PromptFeedbackError 表示上游拒绝当前输入且没有返回候选
 type PromptFeedbackError struct {
-	Reason  string
-	Message string
-	Raw     json.RawMessage
+	Reason        string
+	Message       string
+	SafetyRatings []SafetyRating
+	Raw           json.RawMessage
 }
 
 // Error 返回协议证据错误

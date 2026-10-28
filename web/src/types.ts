@@ -275,6 +275,14 @@ export interface RequestSummary {
   started_at: string
 }
 
+// FirstEventLatency 是一个模型与通道近期原请求首事件等待的 p95 与样本数
+export interface FirstEventLatency {
+  model: string
+  channel: UpstreamChannel
+  samples: number
+  p95_ms: number
+}
+
 export interface ServiceConfig {
   auto_start: boolean
   request_body_log: boolean
@@ -288,11 +296,13 @@ export interface ServiceConfig {
   nonstream_keepalive: boolean
   fake_stream: boolean
   youtube_links: boolean
+  first_event_hedge: string
   auth_states: string
   listen_addr: string
   preview_listen_addr: string
   proxy_api_key: string
   active_listen_addr: string
+  reserved_listen_addr: string
   active_preview_listen_addr: string
   active_proxy_api_key: string
   management_restart_required: boolean

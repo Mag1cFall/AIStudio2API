@@ -137,7 +137,9 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col overflow-auto md:overflow-hidden">
-    <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-8">
+    <header
+      class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-6xl))/2_+_2rem))]"
+    >
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('section.requests.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('section.requests.description') }}</p>
@@ -312,7 +314,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         </dl>
         <pre
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-gray-300"
-          >{{ splitReason(detail.reason).text || '—' }}</pre>
+          >{{ logText(splitReason(detail.reason).text) || '—' }}</pre>
         <div class="mt-4 flex items-center justify-end gap-3">
           <span v-if="detail.scope === '*'" class="text-xs text-gray-500">{{
             t('cooldowns.clearAccountHint')

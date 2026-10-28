@@ -12,7 +12,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// toolContract 保存客户端显式要求的调用模式与参数契约
+// toolContract 保存客户端显式要求的调用模式与参数约束
 type toolContract struct {
 	required   bool
 	parallel   *bool
@@ -29,13 +29,16 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 	}
 	if search := request.Tools.GoogleSearch; search != nil {
 		if search.ContextSize != "" {
-			request.System += "\nUse " + search.ContextSize + " search context depth."
+			request.System = appendSystem(request.System, "\nUse "+search.ContextSize+" search context depth.")
 		}
 		if len(search.UserLocation) > 0 {
-			request.System += "\nApproximate search user location: " + string(search.UserLocation)
+			request.System = appendSystem(request.System, "\nApproximate search user location: "+string(search.UserLocation))
 		}
 		if len(search.AllowedDomains) > 0 {
-			request.System += "\nRestrict web searches to these domains using site: queries: " + strings.Join(search.AllowedDomains, ", ")
+			request.System = appendSystem(request.System, "\nRestrict web searches to these domains using site: queries: "+strings.Join(search.AllowedDomains, ", "))
+		}
+		if len(search.BlockedDomains) > 0 {
+			request.System = appendSystem(request.System, "\nExclude these domains from web searches using -site: queries: "+strings.Join(search.BlockedDomains, ", "))
 		}
 	}
 	contract := &toolContract{required: config.Mode == "required", parallel: config.ParallelCalls, names: map[string]bool{}, schemas: map[string]*jsonschema.Schema{}}
@@ -101,10 +104,10 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 				names = append(names, "google_search")
 			}
 		}
-		request.System += "\nUse one of these tools in this response: " + strings.Join(names, ", ") + ". Use the tool before answering."
+		request.System = appendSystem(request.System, "\nUse one of these tools in this response: "+strings.Join(names, ", ")+". Use the tool before answering.")
 	}
 	if contract.parallel != nil {
-		request.System += "\nCall at most one function in this response."
+		request.System = appendSystem(request.System, "\nCall at most one function in this response.")
 	}
 	if !contract.required && len(config.AllowedFunctionNames) == 0 && len(contract.schemas) == 0 && contract.parallel == nil {
 		contract = nil
@@ -183,7 +186,7 @@ func validationSchema(value any) any {
 	return schema
 }
 
-// forward 在完整工具事件发送给客户端前核对显式契约
+// forward 在完整工具事件发送给客户端前核对显式约束
 func (contract *toolContract) forward(ctx context.Context, source <-chan Event) <-chan Event {
 	if contract == nil {
 		return source
@@ -202,9 +205,9 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 			if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult {
 				serverSideUsed = true
 			}
-			if event.Kind == EventToolCall && event.ToolCall != nil {
+			if event.Kind == EventToolCall && event.FunctionCall != nil {
 				calls++
-				call := event.ToolCall
+				call := event.FunctionCall
 				switch {
 				case !contract.names[call.Name]:
 					err = fmt.Errorf("上游返回了未选择的函数 %q", call.Name)

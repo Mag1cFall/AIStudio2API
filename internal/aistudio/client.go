@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// MakerSuiteRPCBase 是现场确认的 AI Studio RPC 根地址
+	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
 	JSONProtobufContentType = "application/json+protobuf"

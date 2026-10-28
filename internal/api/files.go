@@ -115,7 +115,7 @@ func (s *server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		writeFileError(w, r, statusFromError(err), openAIErrorCode(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, fileResponse(r, metadata))
+	writeJSON(w, http.StatusOK, officialOrder(fileProtocol(r), fileResponse(r, metadata)))
 }
 
 func readOpenAIFileParts(reader *multipart.Reader) (string, *multipart.Part, string, string, error) {
@@ -245,7 +245,7 @@ func (s *server) handleFileGet(w http.ResponseWriter, r *http.Request) {
 		writeFileRequestError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, fileResponse(r, metadata))
+	writeJSON(w, http.StatusOK, officialOrder(fileProtocol(r), fileResponse(r, metadata)))
 }
 
 // handleFileContent 返回上传文件内容
@@ -304,10 +304,10 @@ func (s *server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if anthropicFilesRequest(r) {
-		writeJSON(w, http.StatusOK, map[string]any{"id": fileID, "type": "file_deleted"})
+		writeJSON(w, http.StatusOK, officialOrder("anthropic", map[string]any{"id": fileID, "type": "file_deleted"}))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": fileID, "object": "file", "deleted": true})
+	writeJSON(w, http.StatusOK, officialOrder("openai", map[string]any{"id": fileID, "object": "file", "deleted": true}))
 }
 
 // handleFileList 列出上传文件，Anthropic 请求返回 Files API 列表，其余按 OpenAI 的 after、limit、order 与 purpose 分页过滤
@@ -343,13 +343,13 @@ func (s *server) handleFileList(w http.ResponseWriter, r *http.Request) {
 	if len(listed) > 0 {
 		body["first_id"], body["last_id"] = listed[0].ID, listed[len(listed)-1].ID
 	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, officialOrder("openai", body))
 }
 
 // anthropicFilePagePrefix 是 Files API next_page 游标的前缀，游标其余部分为上一页最后一个文件的 ID
 const anthropicFilePagePrefix = "page_"
 
-// writeAnthropicFileList 按 Files API 的 ids、scope_id、limit 与 page 游标返回一页文件，同时接受 after_id 与 before_id，响应带 next_page 以及 first_id、last_id、has_more
+// writeAnthropicFileList 按 Files API 的 ids、scope_id、limit 与 page 游标返回一页文件，响应带 next_page、first_id、last_id 与 has_more
 func writeAnthropicFileList(w http.ResponseWriter, r *http.Request, files []aistudio.FileMetadata) {
 	query := r.URL.Query()
 	if query.Get("scope_id") != "" {
@@ -381,7 +381,7 @@ func writeAnthropicFileList(w http.ResponseWriter, r *http.Request, files []aist
 	if hasMore && query.Get("before_id") == "" {
 		body["next_page"] = anthropicFilePagePrefix + listed[len(listed)-1].ID
 	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, officialOrder("anthropic", body))
 }
 
 func multipartStreamMIME(file io.Reader, value string, filename string) (string, io.Reader, error) {
@@ -472,6 +472,14 @@ func fileResponse(r *http.Request, metadata aistudio.FileMetadata) any {
 		"id": metadata.ID, "type": "file", "filename": metadata.Name, "mime_type": metadata.MIME,
 		"size_bytes": metadata.Size, "created_at": metadata.CreatedAt.UTC().Format(time.RFC3339), "downloadable": true,
 	}
+}
+
+// fileProtocol 返回文件请求所属协议的字段顺序名
+func fileProtocol(r *http.Request) string {
+	if anthropicFilesRequest(r) {
+		return "anthropic"
+	}
+	return "openai"
 }
 
 // writeFileError 按文件请求的协议写入错误

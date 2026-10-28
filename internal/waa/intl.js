@@ -8,7 +8,7 @@
   const widths = ['narrow', 'short', 'long'];
   const fieldOrder = ['weekday', 'era', 'year', 'month', 'day', 'dayPeriod', 'hour', 'minute', 'second', 'fractionalSecondDigits', 'timeZoneName'];
   const keyValues = {
-    ca: value => host.supportedValues('calendar').includes(value),
+    ca: value => value === 'islamic' || host.supportedValues('calendar').includes(value),
     co: value => host.supportedValues('collation').includes(value),
     nu: value => host.supportedValues('numberingSystem').includes(value),
     hc: value => ['h11', 'h12', 'h23', 'h24'].includes(value),
@@ -43,27 +43,36 @@
     if (Number.isNaN(number) || number < minimum || number > maximum) throw new RangeError('invalid digits value: ' + String(value));
     return Math.floor(number);
   };
-  const copyOptions = (options, names, extra) => {
-    const copy = {};
-    for (const name of names) {
-      const value = options[name];
-      if (value !== undefined) copy[name] = value;
-    }
-    return Object.assign(copy, extra);
-  };
   const typeIdentifier = (value, name) => {
     if (!/^[a-zA-Z0-9]{3,8}(-[a-zA-Z0-9]{3,8})*$/.test(value)) throw new RangeError('invalid value ' + JSON.stringify(value) + ' for option ' + name);
     return value.toLowerCase();
   };
 
+  const canonicalTag = tag => {
+    const result = host.icu(1, [tag]);
+    if (result === -3) throw new RangeError('invalid language tag: ' + JSON.stringify(tag));
+    if (result === -4) throw new RangeError('duplicate variant subtag');
+    if (typeof result === 'number') throw new Error('internal error while computing Intl data');
+    return result[0];
+  };
+  const tagParts = tag => {
+    const parts = tag.split('-');
+    let index = 1;
+    const result = { language: parts[0], script: '', region: '', variants: '' };
+    if (index < parts.length && parts[index].length === 4) result.script = parts[index++];
+    if (index < parts.length && (parts[index].length === 2 || parts[index].length === 3 && /^\d/.test(parts[index]))) result.region = parts[index++];
+    const variants = [];
+    while (index < parts.length && parts[index].length > 1) variants.push(parts[index++]);
+    result.variants = variants.join('-');
+    return result;
+  };
   const isLocale = value => value !== null && typeof value === 'object' && slots.has(value) && slots.get(value).kind === 'Locale';
   const canonicalList = locales => {
     if (locales === undefined) return [];
     const seen = [];
     const add = value => {
       const tag = String(value);
-      const canonical = host.canonicalize(tag);
-      if (!canonical) throw new RangeError('invalid language tag: ' + JSON.stringify(tag));
+      const canonical = canonicalTag(tag);
       if (!seen.includes(canonical)) seen.push(canonical);
     };
     if (typeof locales === 'string' || isLocale(locales)) {
@@ -166,51 +175,6 @@
     if (target === undefined) throw new TypeError('calling a builtin Intl.' + name + ' constructor without new is forbidden');
   };
 
-  const shim = {
-    getCanonicalLocales: locales => canonicalList(locales),
-    Locale: class Locale {
-      constructor(tag) {
-        const text = String(tag);
-        const parts = host.localeParts(host.likely(text));
-        const own = host.localeParts(text);
-        this.language = own.language;
-        this.script = own.script || undefined;
-        this.region = own.region || undefined;
-        this.baseName = [own.language, own.script, own.region].filter(Boolean).join('-');
-        this.maximal = [parts.language, parts.script, parts.region].filter(Boolean).join('-');
-      }
-      maximize() { return new shim.Locale(this.maximal); }
-      toString() { return this.baseName; }
-    },
-  };
-  const formatjsPackages = { NumberFormat: 'intl-numberformat', PluralRules: 'intl-pluralrules', RelativeTimeFormat: 'intl-relativetimeformat', ListFormat: 'intl-listformat', DisplayNames: 'intl-displaynames' };
-  const formatjsNeeds = { NumberFormat: ['PluralRules'], RelativeTimeFormat: ['PluralRules', 'NumberFormat'], DurationFormat: ['PluralRules', 'NumberFormat', 'ListFormat'] };
-  const formatjsLoaded = new Map();
-  const formatjs = (name, found) => {
-    const dataLocale = host.dataLocale(found);
-    let dataName = '';
-    for (const dependency of (formatjsNeeds[name] || []).concat([name])) {
-      if (!shim[dependency]) shim[dependency] = host.formatjsChunk(dependency)(shim, {});
-      const pkg = formatjsPackages[dependency];
-      if (!pkg) continue;
-      const key = pkg + '/' + dataLocale;
-      if (!formatjsLoaded.has(key)) {
-        const [loadedName, loader] = host.formatjsData(dataLocale, pkg);
-        loader(shim);
-        formatjsLoaded.set(key, loadedName);
-      }
-      dataName = formatjsLoaded.get(key);
-    }
-    if (name === 'DurationFormat') dataName = formatjsLoaded.get('intl-numberformat/' + dataLocale);
-    if (!dataName) dataName = found;
-    return { Constructor: shim[name], dataName };
-  };
-  const resolvedWith = (impl, locale) => {
-    const options = impl.resolvedOptions();
-    options.locale = locale;
-    return options;
-  };
-
   // Locale
   const localeString = (parts, keywords) => {
     let tag = [parts.language, parts.script, parts.region, parts.variants].filter(Boolean).join('-');
@@ -219,9 +183,8 @@
     return tag;
   };
   const localeSlot = tag => {
-    const canonical = host.canonicalize(tag);
-    if (!canonical) throw new RangeError('invalid language tag: ' + JSON.stringify(tag));
-    const parts = host.localeParts(canonical);
+    const canonical = canonicalTag(tag);
+    const parts = tagParts(canonical);
     const slot = { kind: 'Locale', language: parts.language, script: parts.script, region: parts.region, variants: parts.variants, keywords: extensionOf(canonical) };
     slot.tag = localeString(slot, slot.keywords);
     return slot;
@@ -257,8 +220,8 @@
   const keyword = name => function () { return slotOf(this, 'Locale', 'get ' + name).keywords[{ calendar: 'ca', caseFirst: 'kf', collation: 'co', hourCycle: 'hc', numberingSystem: 'nu' }[name]]; };
   const adjustLocale = (slot, adjust) => new Locale(adjust(localeString(slot, {})) + localeString({}, slot.keywords));
   const localeMembers = {
-    maximize() { return adjustLocale(slotOf(this, 'Locale', 'maximize'), host.maximize); },
-    minimize() { return adjustLocale(slotOf(this, 'Locale', 'minimize'), host.minimize); },
+    maximize() { return adjustLocale(slotOf(this, 'Locale', 'maximize'), tag => icu(16, [tag])[0]); },
+    minimize() { return adjustLocale(slotOf(this, 'Locale', 'minimize'), tag => icu(17, [tag])[0]); },
     toString() { return slotOf(this, 'Locale', 'toString').tag; },
     get baseName() { const slot = slotOf(this, 'Locale', 'get baseName'); return [slot.language, slot.script, slot.region, slot.variants].filter(Boolean).join('-'); },
     get calendar() { return keyword('calendar').call(this); },
@@ -313,6 +276,72 @@
     },
   }, {}, true);
 
+  // ICU
+  const icu = (op, args) => {
+    const result = host.icu(op, args);
+    if (typeof result !== 'number') return result;
+    if (result === -4) throw new RangeError('duplicate variant subtag');
+    throw new Error('internal error while computing Intl data');
+  };
+  const partsOf = (list, names) => {
+    const parts = [];
+    for (let index = 0; index < list.length; index += names.length) {
+      const part = {};
+      names.forEach((name, offset) => { part[name] = list[index + offset]; });
+      parts.push(part);
+    }
+    return parts;
+  };
+  const icuLocale = (locale, keywords) => {
+    const base = locale.split('-u-')[0];
+    const merged = extensionOf(locale);
+    for (const key of Object.keys(keywords)) if (keywords[key] !== undefined) merged[key] = keywords[key];
+    const keys = Object.keys(merged).sort();
+    return keys.length ? base + '-u-' + keys.map(key => merged[key] === '' ? key : key + '-' + merged[key]).join('-') : base;
+  };
+  const numberText = value => Object.is(value, -0) ? '-0' : String(value);
+  const toPrimitiveNumber = value => {
+    const exotic = value[Symbol.toPrimitive];
+    if (exotic !== undefined && exotic !== null) {
+      const result = exotic.call(value, 'number');
+      if (result !== null && (typeof result === 'object' || typeof result === 'function')) throw new TypeError("can't convert object to primitive type");
+      return result;
+    }
+    for (const name of ['valueOf', 'toString']) {
+      const method = value[name];
+      if (typeof method !== 'function') continue;
+      const result = method.call(value);
+      if (result === null || typeof result !== 'object' && typeof result !== 'function') return result;
+    }
+    throw new TypeError("can't convert object to number");
+  };
+  const mathValue = value => {
+    const primitive = value !== null && (typeof value === 'object' || typeof value === 'function') ? toPrimitiveNumber(value) : value;
+    if (typeof primitive === 'bigint') return ['s', primitive.toString()];
+    if (typeof primitive === 'string') {
+      const text = primitive.trim();
+      if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) return ['s', text.replace(/^\+/, '')];
+    }
+    return ['n', numberText(Number(primitive))];
+  };
+  const isNaNValue = value => value[0] === 'n' && value[1] === 'NaN';
+  const rangeValues = (start, end, kind, method) => {
+    if (start === undefined || end === undefined) throw new TypeError('undefined ' + (start === undefined ? 'start' : 'end') + ' number in ' + kind + '.' + method + '()');
+    const x = mathValue(start);
+    const y = mathValue(end);
+    if (isNaNValue(x) || isNaNValue(y)) throw new RangeError("range can't " + (isNaNValue(x) ? 'start' : 'end') + ' with NaN in ' + kind + '.' + method + '()');
+    return x[0] === 'n' && y[0] === 'n' ? ['n', x[1], y[1]] : ['s', x[1], y[1]];
+  };
+  const optionsObject = (options, name) => {
+    if (options === undefined) return {};
+    if (options === null || typeof options !== 'object' && typeof options !== 'function') throw new TypeError('options argument of Intl.' + name + ' must be an object, got ' + (options === null ? 'null' : typeof options));
+    return options;
+  };
+  const numberingOption = opts => {
+    const value = getOption(opts, 'numberingSystem', 'string');
+    return value === undefined ? undefined : typeIdentifier(value, 'numberingSystem');
+  };
+
   // DateTimeFormat
   const DateTimeFormat = function DateTimeFormat(locales, options) {
     if (new.target === undefined) return new DateTimeFormat(locales, options);
@@ -323,18 +352,17 @@
     const opts = options === undefined ? {} : toObject(options);
     getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
     const calendarOption = getOption(opts, 'calendar', 'string');
-    const numberingOption = getOption(opts, 'numberingSystem', 'string');
+    const numberingSystemOption = getOption(opts, 'numberingSystem', 'string');
     const hour12 = getOption(opts, 'hour12', 'boolean');
     let hourCycleOption = getOption(opts, 'hourCycle', 'string', ['h11', 'h12', 'h23', 'h24']);
     if (hour12 !== undefined) hourCycleOption = null;
     const resolved = resolveLocale(requested, false, ['ca', 'hc', 'nu'], {
       ca: calendarOption === undefined ? undefined : typeIdentifier(calendarOption, 'calendar'),
       hc: hourCycleOption,
-      nu: numberingOption === undefined ? undefined : typeIdentifier(numberingOption, 'numberingSystem'),
+      nu: numberingSystemOption === undefined ? undefined : typeIdentifier(numberingSystemOption, 'numberingSystem'),
     });
+    const calendarKeyword = resolved.ca === 'islamic' ? 'islamic-tbla' : resolved.ca;
     const localeDefaults = host.localeDefaults(resolved.found);
-    const calendar = resolved.ca || localeDefaults[0];
-    const numberingSystem = resolved.nu || localeDefaults[1];
     let timeZone = opts.timeZone;
     if (timeZone === undefined) timeZone = host.defaultTimeZone;
     else {
@@ -366,36 +394,24 @@
       if (needDefaults && (defaults === 'date' || defaults === 'all')) fields.year = fields.month = fields.day = 'numeric';
       if (needDefaults && (defaults === 'time' || defaults === 'all')) fields.hour = fields.minute = fields.second = 'numeric';
     }
-    let hourCycle = resolved.hc || '';
-    if (hour12 !== undefined) {
-      const cycles = host.dateHourCycles(resolved.found);
-      hourCycle = hour12 ? cycles[1] : cycles[2];
-    }
-    const key = fieldOrder.map(name => fields[name] === undefined ? '' : String(fields[name]));
-    const [pattern, resolvedFields] = host.datePattern(resolved.found, [key[0], key[1], key[2], key[3], key[4], key[6], key[7], key[8], key[9], key[5], key[10], hourCycle, dateStyle || '', timeStyle || '']);
-    const resolvedValues = {};
-    for (const entry of String(resolvedFields).split(';')) {
-      if (!entry) continue;
-      const [name, value] = entry.split('=');
-      resolvedValues[name] = name === 'fractionalSecondDigits' ? Number(value) : value;
-    }
-    return { kind: 'DateTimeFormat', locale: resolved.locale, found: resolved.found, calendar, numberingSystem, timeZone, pattern, resolvedValues, dateStyle, timeStyle };
+    const locale = icuLocale(resolved.locale, { ca: calendarKeyword, nu: resolved.nu });
+    const args = [locale, /^[+-]/.test(timeZone) ? 'GMT' + timeZone : timeZone, dateStyle || '', timeStyle || '', resolved.hc || '', hour12 === undefined ? '' : String(hour12)]
+      .concat(fieldOrder.map(name => fields[name] === undefined ? '' : String(fields[name])));
+    const components = icu(2, args);
+    return {
+      kind: 'DateTimeFormat', locale: resolved.locale, calendar: calendarKeyword || localeDefaults[0], numberingSystem: resolved.nu || localeDefaults[1], timeZone, args, components, dateStyle, timeStyle,
+      intervalLocale: icuLocale(resolved.locale, { ca: calendarKeyword, nu: resolved.nu, hc: components[1] || undefined }),
+    };
   };
+  const componentNames = ['hourCycle', 'hour12', 'weekday', 'era', 'year', 'month', 'day', 'dayPeriod', 'hour', 'minute', 'second', 'timeZoneName', 'fractionalSecondDigits'];
   const timeClip = (value, method) => {
     const time = value === undefined ? Date.now() : Number(value);
     if (!Number.isFinite(time) || Math.abs(time) > 8.64e15) throw new RangeError('date value is not finite in DateTimeFormat.' + method + '()');
     return Math.trunc(time) + 0;
   };
-  const dateParts = (slot, time) => Array.from(host.formatDate(slot.found, slot.pattern, time, slot.timeZone, slot.calendar, slot.numberingSystem), part => ({ type: part[0], value: part[1] }));
+  const dateParts = (slot, time) => partsOf(icu(3, slot.args.concat([String(time)])), ['type', 'value']);
   const joinParts = parts => parts.map(part => part.value).join('');
-  const dateRangeParts = (slot, start, end) => {
-    const first = dateParts(slot, start);
-    const second = dateParts(slot, end);
-    if (joinParts(first) === joinParts(second)) return first.map(part => Object.assign(part, { source: 'shared' }));
-    return first.map(part => Object.assign(part, { source: 'startRange' }))
-      .concat([{ type: 'literal', value: host.dateRangeSeparator(slot.found), source: 'shared' }])
-      .concat(second.map(part => Object.assign(part, { source: 'endRange' })));
-  };
+  const dateRangeParts = (slot, start, end) => partsOf(icu(4, slot.args.concat([slot.intervalLocale, String(start), String(end)])), ['type', 'value', 'source']);
   const rangeArguments = (start, end, method) => {
     if (start === undefined || end === undefined) throw new TypeError('DateTimeFormat.' + method + ' requires two arguments');
     return [timeClip(start, method), timeClip(end, method)];
@@ -404,12 +420,12 @@
     resolvedOptions() {
       const slot = slotOf(this, 'DateTimeFormat', 'resolvedOptions');
       const result = { locale: slot.locale, calendar: slot.calendar, numberingSystem: slot.numberingSystem, timeZone: slot.timeZone };
-      const values = slot.resolvedValues;
-      if (values.hourCycle !== undefined) {
-        result.hourCycle = values.hourCycle;
-        result.hour12 = values.hourCycle === 'h11' || values.hourCycle === 'h12';
+      const names = slot.dateStyle !== undefined || slot.timeStyle !== undefined ? (slot.timeStyle !== undefined ? ['hourCycle', 'hour12'] : []) : componentNames;
+      for (const name of names) {
+        const value = slot.components[componentNames.indexOf(name) + 1];
+        if (value === '') continue;
+        result[name] = name === 'hour12' ? value === 'true' : name === 'fractionalSecondDigits' ? Number(value) : value;
       }
-      for (const name of fieldOrder) if (values[name] !== undefined) result[name] = values[name];
       if (slot.dateStyle !== undefined) result.dateStyle = slot.dateStyle;
       if (slot.timeStyle !== undefined) result.timeStyle = slot.timeStyle;
       return result;
@@ -424,82 +440,444 @@
     },
   }, {}, false);
 
+  // 数位选项
+  const roundingIncrements = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
+  const defaultDigits = { minimumIntegerDigits: 1, minimumFractionDigits: 0, maximumFractionDigits: 3, minimumSignificantDigits: 0, maximumSignificantDigits: 0, roundingIncrement: 1, roundingMode: 'halfExpand', roundingPriority: 'auto', trailingZeroDisplay: 'auto' };
+  const defaultNumberOption = (value, minimum, maximum, fallback) => {
+    if (value === undefined) return fallback;
+    const number = Number(value);
+    if (Number.isNaN(number) || number < minimum || number > maximum) throw new RangeError('invalid digits value: ' + String(value));
+    return Math.floor(number);
+  };
+  const digitOptions = (opts, mnfdDefault, mxfdDefault, notation) => {
+    const minimumIntegerDigits = getNumberOption(opts, 'minimumIntegerDigits', 1, 21, 1);
+    const mnfd = opts.minimumFractionDigits;
+    const mxfd = opts.maximumFractionDigits;
+    const mnsd = opts.minimumSignificantDigits;
+    const mxsd = opts.maximumSignificantDigits;
+    const roundingIncrement = getNumberOption(opts, 'roundingIncrement', 1, 5000, 1);
+    if (!roundingIncrements.includes(roundingIncrement)) throw new RangeError('invalid value ' + roundingIncrement + ' for option roundingIncrement');
+    const roundingMode = getOption(opts, 'roundingMode', 'string', ['ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor', 'halfExpand', 'halfTrunc', 'halfEven'], 'halfExpand');
+    const roundingPriority = getOption(opts, 'roundingPriority', 'string', ['auto', 'morePrecision', 'lessPrecision'], 'auto');
+    const trailingZeroDisplay = getOption(opts, 'trailingZeroDisplay', 'string', ['auto', 'stripIfInteger'], 'auto');
+    if (roundingIncrement !== 1) mxfdDefault = mnfdDefault;
+    const digits = { minimumIntegerDigits, minimumFractionDigits: -1, maximumFractionDigits: -1, minimumSignificantDigits: 0, maximumSignificantDigits: 0, roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay };
+    const hasSd = mnsd !== undefined || mxsd !== undefined;
+    const hasFd = mnfd !== undefined || mxfd !== undefined;
+    let needSd = true;
+    let needFd = true;
+    if (roundingPriority === 'auto') {
+      needSd = hasSd;
+      if (needSd || !hasFd && notation === 'compact') needFd = false;
+    }
+    if (needSd) {
+      digits.minimumSignificantDigits = hasSd ? defaultNumberOption(mnsd, 1, 21, 1) : 1;
+      digits.maximumSignificantDigits = hasSd ? defaultNumberOption(mxsd, digits.minimumSignificantDigits, 21, 21) : 21;
+    }
+    if (needFd) {
+      if (hasFd) {
+        let minimum = defaultNumberOption(mnfd, 0, 100, undefined);
+        let maximum = defaultNumberOption(mxfd, 0, 100, undefined);
+        if (minimum === undefined) minimum = Math.min(mnfdDefault, maximum);
+        else if (maximum === undefined) maximum = Math.max(mxfdDefault, minimum);
+        else if (minimum > maximum) throw new RangeError('invalid digits value: ' + roundingIncrement);
+        digits.minimumFractionDigits = minimum;
+        digits.maximumFractionDigits = maximum;
+      } else {
+        digits.minimumFractionDigits = mnfdDefault;
+        digits.maximumFractionDigits = mxfdDefault;
+      }
+    }
+    if (!needSd && !needFd) Object.assign(digits, { minimumFractionDigits: 0, maximumFractionDigits: 0, minimumSignificantDigits: 1, maximumSignificantDigits: 2, roundingPriority: 'morePrecision' });
+    if (roundingIncrement !== 1) {
+      if (roundingPriority !== 'auto' || hasSd) throw new TypeError("can't set option roundingIncrement when " + (mnsd !== undefined ? 'minimumSignificantDigits' : mxsd !== undefined ? 'maximumSignificantDigits' : 'roundingPriority') + ' is used');
+      if (digits.minimumFractionDigits !== digits.maximumFractionDigits) throw new RangeError('fraction digits must be the same when roundingIncrement is used');
+    }
+    return digits;
+  };
+  const digitArgs = digits => [
+    String(digits.minimumIntegerDigits),
+    digits.minimumFractionDigits < 0 ? '' : String(digits.minimumFractionDigits), digits.minimumFractionDigits < 0 ? '' : String(digits.maximumFractionDigits),
+    digits.minimumSignificantDigits > 0 ? String(digits.minimumSignificantDigits) : '', digits.minimumSignificantDigits > 0 ? String(digits.maximumSignificantDigits) : '',
+    String(digits.roundingIncrement), digits.roundingMode, digits.roundingPriority, digits.trailingZeroDisplay,
+  ];
+  const resolveDigits = (result, digits) => {
+    result.minimumIntegerDigits = digits.minimumIntegerDigits;
+    if (digits.minimumFractionDigits >= 0) Object.assign(result, { minimumFractionDigits: digits.minimumFractionDigits, maximumFractionDigits: digits.maximumFractionDigits });
+    if (digits.minimumSignificantDigits > 0) Object.assign(result, { minimumSignificantDigits: digits.minimumSignificantDigits, maximumSignificantDigits: digits.maximumSignificantDigits });
+  };
+  const resolveNotation = (result, slot) => {
+    result.notation = slot.notation;
+    if (slot.notation === 'compact') result.compactDisplay = slot.compactDisplay;
+  };
+  const resolveRounding = (result, digits) => Object.assign(result, { roundingIncrement: digits.roundingIncrement, roundingMode: digits.roundingMode, roundingPriority: digits.roundingPriority, trailingZeroDisplay: digits.trailingZeroDisplay });
+
   // NumberFormat
-  const numberOptionNames = ['numberingSystem', 'style', 'currency', 'currencyDisplay', 'currencySign', 'unit', 'unitDisplay', 'notation', 'compactDisplay', 'minimumIntegerDigits', 'minimumFractionDigits', 'maximumFractionDigits', 'minimumSignificantDigits', 'maximumSignificantDigits', 'roundingPriority', 'roundingIncrement', 'roundingMode', 'trailingZeroDisplay', 'useGrouping', 'signDisplay'];
-  const checkDigits = opts => {
-    getNumberOption(opts, 'minimumIntegerDigits', 1, 21);
-    getNumberOption(opts, 'minimumFractionDigits', 0, 100);
-    getNumberOption(opts, 'maximumFractionDigits', 0, 100);
-    getNumberOption(opts, 'minimumSignificantDigits', 1, 21);
-    getNumberOption(opts, 'maximumSignificantDigits', 1, 21);
+  const currencyDigits = { BHD: 3, BIF: 0, CLF: 4, CLP: 0, DJF: 0, GNF: 0, IQD: 3, ISK: 0, JOD: 3, JPY: 0, KMF: 0, KRW: 0, KWD: 3, LYD: 3, OMR: 3, PYG: 0, RWF: 0, TND: 3, UGX: 0, UYI: 0, UYW: 4, VND: 0, VUV: 0, XAF: 0, XOF: 0, XPF: 0 };
+  const simpleUnits = 'acre bit byte celsius centimeter day degree fahrenheit fluid-ounce foot gallon gigabit gigabyte gram hectare hour inch kilobit kilobyte kilogram kilometer liter megabit megabyte meter microsecond mile mile-scandinavian milliliter millimeter millisecond minute month nanosecond ounce percent petabyte pound second stone terabit terabyte week yard year'.split(' ');
+  const isUnit = unit => {
+    if (simpleUnits.includes(unit)) return true;
+    const index = unit.indexOf('-per-');
+    return index > 0 && simpleUnits.includes(unit.slice(0, index)) && simpleUnits.includes(unit.slice(index + 5));
+  };
+  const createNumberFormat = (locales, options) => {
+    const requested = canonicalList(locales);
+    const slot = { kind: 'NumberFormat', style: 'decimal', currencyDisplay: 'symbol', currencySign: 'standard', unitDisplay: 'short', notation: 'standard', compactDisplay: 'short', useGrouping: 'auto', signDisplay: 'auto', digits: defaultDigits };
+    let numberingSystem;
+    if (options !== undefined) {
+      const opts = toObject(options);
+      getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+      numberingSystem = numberingOption(opts);
+      slot.style = getOption(opts, 'style', 'string', ['decimal', 'percent', 'currency', 'unit'], 'decimal');
+      const currency = getOption(opts, 'currency', 'string');
+      if (currency === undefined) {
+        if (slot.style === 'currency') throw new TypeError('undefined currency in NumberFormat() with currency style');
+      } else {
+        if (!/^[a-zA-Z]{3}$/.test(currency)) throw new RangeError('invalid currency code in NumberFormat(): ' + currency);
+        slot.currency = currency.toUpperCase();
+      }
+      slot.currencyDisplay = getOption(opts, 'currencyDisplay', 'string', ['code', 'symbol', 'narrowSymbol', 'name'], 'symbol');
+      slot.currencySign = getOption(opts, 'currencySign', 'string', ['standard', 'accounting'], 'standard');
+      const unit = getOption(opts, 'unit', 'string');
+      if (unit === undefined) {
+        if (slot.style === 'unit') throw new TypeError('undefined unit in NumberFormat() with unit style');
+      } else {
+        if (!isUnit(unit)) throw new RangeError('invalid unit identifier in NumberFormat(): ' + unit);
+        slot.unit = unit;
+      }
+      slot.unitDisplay = getOption(opts, 'unitDisplay', 'string', ['short', 'narrow', 'long'], 'short');
+      slot.notation = getOption(opts, 'notation', 'string', ['standard', 'scientific', 'engineering', 'compact'], 'standard');
+      const cDigits = slot.style === 'currency' && slot.notation === 'standard' ? (currencyDigits[slot.currency] === undefined ? 2 : currencyDigits[slot.currency]) : undefined;
+      slot.digits = digitOptions(opts, cDigits === undefined ? 0 : cDigits, cDigits === undefined ? (slot.style === 'percent' ? 0 : 3) : cDigits, slot.notation);
+      slot.compactDisplay = getOption(opts, 'compactDisplay', 'string', ['short', 'long'], 'short');
+      const defaultGrouping = slot.notation === 'compact' ? 'min2' : 'auto';
+      const grouping = opts.useGrouping;
+      if (grouping === undefined) slot.useGrouping = defaultGrouping;
+      else if (grouping === true) slot.useGrouping = 'always';
+      else if (!grouping) slot.useGrouping = false;
+      else {
+        const text = String(grouping);
+        if (!['min2', 'auto', 'always', 'true', 'false'].includes(text)) throw new RangeError('invalid value ' + JSON.stringify(text) + ' for option useGrouping');
+        slot.useGrouping = text === 'true' || text === 'false' ? defaultGrouping : text;
+      }
+      slot.signDisplay = getOption(opts, 'signDisplay', 'string', ['auto', 'never', 'always', 'exceptZero', 'negative'], 'auto');
+    }
+    const resolved = resolveLocale(requested, false, ['nu'], { nu: numberingSystem });
+    slot.locale = resolved.locale;
+    slot.numberingSystem = resolved.nu || host.localeDefaults(resolved.found)[2];
+    slot.args = [icuLocale(resolved.locale, { nu: resolved.nu }), slot.style, slot.currency || '', slot.currencyDisplay, slot.currencySign, slot.unit || '', slot.unitDisplay]
+      .concat(digitArgs(slot.digits), [slot.notation, slot.compactDisplay, slot.useGrouping === false ? 'false' : slot.useGrouping, slot.signDisplay]);
+    return slot;
   };
   const NumberFormat = function NumberFormat(locales, options) {
     if (new.target === undefined) return new NumberFormat(locales, options);
-    const requested = canonicalList(locales);
-    const opts = options === undefined ? {} : toObject(options);
-    const numberingOption = getOption(opts, 'numberingSystem', 'string');
-    const resolved = resolveLocale(requested, false, ['nu'], { nu: numberingOption === undefined ? undefined : typeIdentifier(numberingOption, 'numberingSystem') });
-    if (String(opts.style) === 'currency' && opts.currency === undefined) throw new TypeError('undefined currency in NumberFormat() with currency style');
-    if (String(opts.style) === 'unit' && opts.unit === undefined) throw new TypeError('undefined unit in NumberFormat() with unit style');
-    checkDigits(opts);
-    const engine = formatjs('NumberFormat', resolved.found);
-    const impl = new engine.Constructor(engine.dataName, copyOptions(opts, numberOptionNames, { localeMatcher: 'lookup', numberingSystem: resolved.nu || host.localeDefaults(resolved.found)[2] }));
-    slots.set(this, { kind: 'NumberFormat', locale: resolved.locale, impl });
+    slots.set(this, createNumberFormat(locales, options));
   };
+  const numberParts = (slot, value) => partsOf(icu(5, slot.args.concat(mathValue(value))), ['type', 'value']);
+  const numberRangeParts = (slot, start, end, method) => partsOf(icu(6, slot.args.concat(rangeValues(start, end, 'NumberFormat', method))), ['type', 'value', 'source']);
   makeClass(NumberFormat, 'NumberFormat', 0, {
-    resolvedOptions() { const slot = slotOf(this, 'NumberFormat', 'resolvedOptions'); return resolvedWith(slot.impl, slot.locale); },
-    formatToParts(value) { return slotOf(this, 'NumberFormat', 'formatToParts').impl.formatToParts(value); },
-    formatRange(start, end) { return slotOf(this, 'NumberFormat', 'formatRange').impl.formatRange(start, end); },
-    formatRangeToParts(start, end) { return slotOf(this, 'NumberFormat', 'formatRangeToParts').impl.formatRangeToParts(start, end); },
+    resolvedOptions() {
+      const slot = slotOf(this, 'NumberFormat', 'resolvedOptions');
+      const result = { locale: slot.locale, numberingSystem: slot.numberingSystem, style: slot.style };
+      if (slot.style === 'currency') Object.assign(result, { currency: slot.currency, currencyDisplay: slot.currencyDisplay, currencySign: slot.currencySign });
+      if (slot.style === 'unit') Object.assign(result, { unit: slot.unit, unitDisplay: slot.unitDisplay });
+      resolveDigits(result, slot.digits);
+      result.useGrouping = slot.useGrouping;
+      resolveNotation(result, slot);
+      result.signDisplay = slot.signDisplay;
+      return resolveRounding(result, slot.digits);
+    },
+    formatToParts(value) { return numberParts(slotOf(this, 'NumberFormat', 'formatToParts'), value); },
+    formatRange(start, end) { return joinParts(numberRangeParts(slotOf(this, 'NumberFormat', 'formatRange'), start, end, 'formatRange')); },
+    formatRangeToParts(start, end) { return numberRangeParts(slotOf(this, 'NumberFormat', 'formatRangeToParts'), start, end, 'formatRangeToParts'); },
     get format() {
       const slot = slotOf(this, 'NumberFormat', 'get format');
-      if (!slot.bound) slot.bound = anonymous(1, value => slot.impl.format(value));
+      if (!slot.bound) slot.bound = anonymous(1, value => joinParts(numberParts(slot, value)));
       return slot.bound;
     },
   }, {}, false);
 
-  const implOf = (object, kind, method) => slotOf(object, kind, method).impl;
-  const formatjsClass = (name, length, keys, optionNames, members, lengths, prepare) => {
-    const Constructor = { [name]: function (locales, options) {
-      requireNew(new.target, name);
-      const requested = canonicalList(locales);
-      if (prepare) prepare(options);
-      const opts = options === undefined ? {} : toObject(options);
-      const numberingOption = keys.includes('nu') ? getOption(opts, 'numberingSystem', 'string') : undefined;
-      const resolved = resolveLocale(requested, false, keys, { nu: numberingOption === undefined ? undefined : typeIdentifier(numberingOption, 'numberingSystem') });
-      const engine = formatjs(name, resolved.found);
-      const extra = { localeMatcher: 'lookup' };
-      if (keys.includes('nu')) extra.numberingSystem = resolved.nu || host.localeDefaults(resolved.found)[2];
-      const impl = new engine.Constructor(engine.dataName, copyOptions(opts, optionNames, extra));
-      slots.set(this, { kind: name, locale: resolved.locale, impl });
-    } }[name];
-    const all = { resolvedOptions() { const slot = slotOf(this, name, 'resolvedOptions'); return resolvedWith(slot.impl, slot.locale); } };
-    return makeClass(Constructor, name, length, Object.assign(all, members), lengths, false);
+  // PluralRules
+  const PluralRules = function PluralRules(locales, options) {
+    requireNew(new.target, 'PluralRules');
+    const requested = canonicalList(locales);
+    const slot = { kind: 'PluralRules', type: 'cardinal', notation: 'standard', compactDisplay: 'short', digits: defaultDigits };
+    if (options !== undefined) {
+      const opts = toObject(options);
+      getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+      slot.type = getOption(opts, 'type', 'string', ['cardinal', 'ordinal'], 'cardinal');
+      slot.notation = getOption(opts, 'notation', 'string', ['standard', 'scientific', 'engineering', 'compact'], 'standard');
+      slot.compactDisplay = getOption(opts, 'compactDisplay', 'string', ['short', 'long'], 'short');
+      slot.digits = digitOptions(opts, 0, 3, slot.notation);
+    }
+    slot.locale = resolveLocale(requested, false, [], {}).locale;
+    slot.args = [slot.locale, slot.type, slot.notation, slot.compactDisplay].concat(digitArgs(slot.digits));
+    slots.set(this, slot);
   };
-  formatjsClass('PluralRules', 0, [], ['type', 'notation', 'minimumIntegerDigits', 'minimumFractionDigits', 'maximumFractionDigits', 'minimumSignificantDigits', 'maximumSignificantDigits', 'roundingPriority', 'roundingIncrement', 'roundingMode', 'trailingZeroDisplay'], {
-    select(number) { return implOf(this, 'PluralRules', 'select').select(number); },
-    selectRange(start, end) { return implOf(this, 'PluralRules', 'selectRange').selectRange(start, end); },
-  }, { select: 1, selectRange: 2 });
-  formatjsClass('RelativeTimeFormat', 0, ['nu'], ['style', 'numeric'], {
-    format(value, unit) { return implOf(this, 'RelativeTimeFormat', 'format').format(value, unit); },
-    formatToParts(value, unit) { return implOf(this, 'RelativeTimeFormat', 'formatToParts').formatToParts(value, unit); },
-  }, { format: 2, formatToParts: 2 });
-  formatjsClass('ListFormat', 0, [], ['type', 'style'], {
-    format(list) { return implOf(this, 'ListFormat', 'format').format(list); },
-    formatToParts(list) { return implOf(this, 'ListFormat', 'formatToParts').formatToParts(list); },
-  }, { format: 1, formatToParts: 1 });
-  formatjsClass('DisplayNames', 2, [], ['style', 'type', 'fallback', 'languageDisplay'], {
-    of(code) {
-      const impl = implOf(this, 'DisplayNames', 'of');
-      return impl.of(impl.resolvedOptions().type === 'region' && accountRegion ? accountRegion : code);
+  makeClass(PluralRules, 'PluralRules', 0, {
+    select(value) { return icu(7, slotOf(this, 'PluralRules', 'select').args.concat(['n', numberText(Number(value))]))[0]; },
+    selectRange(start, end) { return icu(8, slotOf(this, 'PluralRules', 'selectRange').args.concat(rangeValues(start, end, 'PluralRules', 'selectRange')))[0]; },
+    resolvedOptions() {
+      const slot = slotOf(this, 'PluralRules', 'resolvedOptions');
+      const result = { locale: slot.locale, type: slot.type };
+      resolveNotation(result, slot);
+      resolveDigits(result, slot.digits);
+      result.pluralCategories = icu(9, slot.args);
+      return resolveRounding(result, slot.digits);
     },
-  }, { of: 1 }, options => {
+  }, { select: 1, selectRange: 2 }, false);
+
+  // RelativeTimeFormat
+  const relativeUnits = ['second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'];
+  const RelativeTimeFormat = function RelativeTimeFormat(locales, options) {
+    requireNew(new.target, 'RelativeTimeFormat');
+    const requested = canonicalList(locales);
+    const opts = options === undefined ? {} : toObject(options);
+    getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const numberingSystem = numberingOption(opts);
+    const style = getOption(opts, 'style', 'string', ['long', 'short', 'narrow'], 'long');
+    const numeric = getOption(opts, 'numeric', 'string', ['always', 'auto'], 'always');
+    const resolved = resolveLocale(requested, false, ['nu'], { nu: numberingSystem });
+    slots.set(this, {
+      kind: 'RelativeTimeFormat', locale: resolved.locale, style, numeric, numberingSystem: resolved.nu || host.localeDefaults(resolved.found)[2],
+      args: [icuLocale(resolved.locale, { nu: resolved.nu }), style, numeric],
+    });
+  };
+  const relativeParts = (slot, value, unit, method) => {
+    const number = Number(value);
+    const name = String(unit);
+    if (!Number.isFinite(number)) throw new RangeError('date value is not finite in RelativeTimeFormat.' + method + '()');
+    const singular = relativeUnits.includes(name) ? name : relativeUnits.find(item => item + 's' === name);
+    if (!singular) throw new RangeError('invalid value ' + JSON.stringify(name) + ' for option unit');
+    return partsOf(icu(10, slot.args.concat([numberText(number), singular])), ['type', 'value']).map(part => part.type === 'literal' ? part : Object.assign(part, { unit: singular }));
+  };
+  makeClass(RelativeTimeFormat, 'RelativeTimeFormat', 0, {
+    format(value, unit) { return joinParts(relativeParts(slotOf(this, 'RelativeTimeFormat', 'format'), value, unit, 'format')); },
+    formatToParts(value, unit) { return relativeParts(slotOf(this, 'RelativeTimeFormat', 'formatToParts'), value, unit, 'formatToParts'); },
+    resolvedOptions() { const slot = slotOf(this, 'RelativeTimeFormat', 'resolvedOptions'); return { locale: slot.locale, style: slot.style, numeric: slot.numeric, numberingSystem: slot.numberingSystem }; },
+  }, { format: 2, formatToParts: 2 }, false);
+
+  // ListFormat
+  const informalType = value => value === null ? 'null' : typeof value === 'object' ? Object.prototype.toString.call(value).slice(8, -1) : typeof value;
+  const ListFormat = function ListFormat(locales, options) {
+    requireNew(new.target, 'ListFormat');
+    const requested = canonicalList(locales);
+    const opts = optionsObject(options, 'ListFormat');
+    getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const type = getOption(opts, 'type', 'string', ['conjunction', 'disjunction', 'unit'], 'conjunction');
+    const style = getOption(opts, 'style', 'string', ['long', 'short', 'narrow'], 'long');
+    const locale = resolveLocale(requested, false, [], {}).locale;
+    slots.set(this, { kind: 'ListFormat', locale, type, style, args: [locale, type, style] });
+  };
+  const listParts = (slot, list, method) => {
+    const strings = [];
+    if (list !== undefined) {
+      for (const value of list) {
+        if (typeof value !== 'string') throw new TypeError(method + ': expected string, got ' + informalType(value));
+        strings.push(value);
+      }
+    }
+    return partsOf(icu(11, slot.args.concat(strings)), ['type', 'value']);
+  };
+  makeClass(ListFormat, 'ListFormat', 0, {
+    format(list) { return joinParts(listParts(slotOf(this, 'ListFormat', 'format'), list, 'format')); },
+    formatToParts(list) { return listParts(slotOf(this, 'ListFormat', 'formatToParts'), list, 'formatToParts'); },
+    resolvedOptions() { const slot = slotOf(this, 'ListFormat', 'resolvedOptions'); return { locale: slot.locale, type: slot.type, style: slot.style }; },
+  }, { format: 1, formatToParts: 1 }, false);
+
+  // DisplayNames
+  const DisplayNames = function DisplayNames(locales, options) {
+    requireNew(new.target, 'DisplayNames');
+    const requested = canonicalList(locales);
     if (options === null || typeof options !== 'object' && typeof options !== 'function') throw new TypeError('options argument of Intl.DisplayNames must be an object, got ' + (options === null ? 'null' : typeof options));
-  });
-  formatjsClass('DurationFormat', 0, ['nu'], ['style', 'years', 'yearsDisplay', 'months', 'monthsDisplay', 'weeks', 'weeksDisplay', 'days', 'daysDisplay', 'hours', 'hoursDisplay', 'minutes', 'minutesDisplay', 'seconds', 'secondsDisplay', 'milliseconds', 'millisecondsDisplay', 'microseconds', 'microsecondsDisplay', 'nanoseconds', 'nanosecondsDisplay', 'fractionalDigits'], {
-    format(duration) { return implOf(this, 'DurationFormat', 'format').format(duration); },
-    formatToParts(duration) { return implOf(this, 'DurationFormat', 'formatToParts').formatToParts(duration); },
-  }, { format: 1, formatToParts: 1 });
+    getOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const style = getOption(options, 'style', 'string', ['long', 'short', 'narrow'], 'long');
+    const type = getOption(options, 'type', 'string', ['language', 'region', 'script', 'currency', 'calendar', 'dateTimeField']);
+    if (type === undefined) throw new TypeError('missing "type" option in DisplayNames()');
+    const fallback = getOption(options, 'fallback', 'string', ['code', 'none'], 'code');
+    const languageDisplay = getOption(options, 'languageDisplay', 'string', ['dialect', 'standard'], 'dialect');
+    const locale = resolveLocale(requested, false, [], {}).locale;
+    slots.set(this, { kind: 'DisplayNames', locale, style, type, fallback, languageDisplay });
+  };
+  makeClass(DisplayNames, 'DisplayNames', 2, {
+    of(code) {
+      const slot = slotOf(this, 'DisplayNames', 'of');
+      const text = slot.type === 'region' && accountRegion ? accountRegion : String(code);
+      const result = host.icu(12, [slot.locale, slot.style, slot.languageDisplay, slot.type, slot.fallback, text]);
+      if (result === -2) throw new RangeError('invalid value ' + JSON.stringify(text) + ' for option ' + slot.type);
+      if (result === -3) throw new RangeError('invalid language tag: ' + text);
+      if (result === -4) throw new RangeError('duplicate variant subtag');
+      if (typeof result === 'number') throw new Error('internal error while computing Intl data');
+      return result[0] === '' ? undefined : result[0];
+    },
+    resolvedOptions() {
+      const slot = slotOf(this, 'DisplayNames', 'resolvedOptions');
+      const result = { locale: slot.locale, style: slot.style, type: slot.type, fallback: slot.fallback };
+      if (slot.type === 'language') result.languageDisplay = slot.languageDisplay;
+      return result;
+    },
+  }, { of: 1 }, false);
+
+  // DurationFormat
+  const durationUnits = ['years', 'months', 'weeks', 'days', 'hours', 'minutes', 'seconds', 'milliseconds', 'microseconds', 'nanoseconds'];
+  const singularUnit = unit => unit.slice(0, -1);
+  const isNumericStyle = style => style === 'numeric' || style === '2-digit';
+  const durationUnitOptions = (unit, opts, baseStyle, digitalBase, prevStyle) => {
+    const index = durationUnits.indexOf(unit);
+    const styles = index < 4 ? ['long', 'short', 'narrow'] : index < 7 ? ['long', 'short', 'narrow', 'numeric', '2-digit'] : ['long', 'short', 'narrow', 'numeric'];
+    let style = getOption(opts, unit, 'string', styles);
+    let displayDefault = 'always';
+    if (style === undefined) {
+      if (baseStyle === 'digital') {
+        style = digitalBase;
+        if (index < 4 || index > 6) displayDefault = 'auto';
+      } else if (isNumericStyle(prevStyle)) {
+        style = 'numeric';
+        if (unit !== 'minutes' && unit !== 'seconds') displayDefault = 'auto';
+      } else {
+        style = baseStyle;
+        displayDefault = 'auto';
+      }
+    }
+    const fractional = style === 'numeric' && index > 6;
+    if (fractional) displayDefault = 'auto';
+    const display = getOption(opts, unit + 'Display', 'string', ['auto', 'always'], displayDefault);
+    if (display === 'always' && fractional) throw new RangeError(unit + ' can\'t use "numeric" style with "always" display');
+    if (isNumericStyle(prevStyle) && !isNumericStyle(style)) throw new RangeError('invalid non-numeric value ' + unit + ' for option ' + style);
+    if ((unit === 'minutes' || unit === 'seconds') && isNumericStyle(prevStyle)) style = '2-digit';
+    return { style, display };
+  };
+  const DurationFormat = function DurationFormat(locales, options) {
+    requireNew(new.target, 'DurationFormat');
+    const requested = canonicalList(locales);
+    const opts = options === undefined ? {} : toObject(options);
+    getOption(opts, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const numberingSystem = numberingOption(opts);
+    const style = getOption(opts, 'style', 'string', ['long', 'short', 'narrow', 'digital'], 'short');
+    const units = {};
+    let prevStyle = 'long';
+    for (const unit of durationUnits) {
+      units[unit] = durationUnitOptions(unit, opts, style, durationUnits.indexOf(unit) < 4 ? 'short' : 'numeric', durationUnits.indexOf(unit) < 5 ? 'long' : prevStyle);
+      prevStyle = units[unit].style;
+    }
+    const fractionalDigits = getNumberOption(opts, 'fractionalDigits', 0, 9, undefined);
+    const resolved = resolveLocale(requested, false, ['nu'], { nu: numberingSystem });
+    slots.set(this, {
+      kind: 'DurationFormat', locale: resolved.locale, numberingSystem: resolved.nu || host.localeDefaults(resolved.found)[2], style, units, fractionalDigits,
+      numberLocale: icuLocale(resolved.locale, { nu: resolved.nu }),
+    });
+  };
+  const durationRecord = value => {
+    if (value === null || typeof value !== 'object' && typeof value !== 'function') throw new TypeError('Duration-like objects must have at least one duration unit');
+    const record = {};
+    let found = false;
+    for (const unit of durationUnits.slice().sort()) {
+      const field = value[unit];
+      if (field === undefined) { record[unit] = 0; continue; }
+      found = true;
+      const number = Number(field);
+      if (!Number.isFinite(number)) throw new RangeError('duration value "' + unit + '" is non-finite: ' + numberText(number));
+      if (!Number.isInteger(number)) throw new RangeError(numberText(number) + " isn't a valid " + unit + " duration because it isn't an integer");
+      record[unit] = number + 0;
+    }
+    if (!found) throw new TypeError('Duration-like objects must have at least one duration unit');
+    const signs = durationUnits.map(unit => Math.sign(record[unit])).filter(Boolean);
+    if (signs.some(sign => sign !== signs[0])) throw new RangeError('duration value "' + durationUnits.find(unit => Math.sign(record[unit]) === -signs[0]) + '" has a mismatched sign: ' + signs[0]);
+    record.sign = signs.length ? signs[0] : 0;
+    return record;
+  };
+  const durationDecimal = (record, unit) => {
+    const index = durationUnits.indexOf(unit);
+    const scale = [1000000000n, 1000000n, 1000n][index - 6];
+    const smaller = durationUnits.slice(index + 1);
+    if (smaller.every(name => record[name] === 0)) return ['n', numberText(record[unit])];
+    let total = 0n;
+    for (const name of durationUnits.slice(index)) total += BigInt(record[name]) * [1000000000n, 1000000n, 1000n, 1n][durationUnits.indexOf(name) - 6];
+    const negative = total < 0n;
+    if (negative) total = -total;
+    const integer = total / scale;
+    const fraction = (total % scale).toString().padStart(String(scale).length - 1, '0').replace(/0+$/, '');
+    return ['s', (negative ? '-' : '') + integer + (fraction ? '.' + fraction : '')];
+  };
+  const isZeroValue = value => Number(value[1]) === 0;
+  const absValue = value => value[0] === 'n' ? ['n', numberText(Math.abs(Number(value[1])))] : ['s', value[1].replace(/^-/, '')];
+  const durationNumberArgs = (slot, style, unit, fractional) => {
+    const digits = fractional
+      ? { minimumIntegerDigits: 1, minimumFractionDigits: slot.fractionalDigits === undefined ? 0 : slot.fractionalDigits, maximumFractionDigits: slot.fractionalDigits === undefined ? 9 : slot.fractionalDigits, minimumSignificantDigits: 0, maximumSignificantDigits: 0, roundingIncrement: 1, roundingMode: 'trunc', roundingPriority: 'auto', trailingZeroDisplay: 'auto' }
+      : { minimumIntegerDigits: style === '2-digit' ? 2 : 1, minimumFractionDigits: -1, maximumFractionDigits: -1, minimumSignificantDigits: 0, maximumSignificantDigits: 0, roundingIncrement: 1, roundingMode: 'halfExpand', roundingPriority: 'auto', trailingZeroDisplay: 'auto' };
+    if (isNumericStyle(style)) {
+      if (unit === 'seconds') Object.assign(digits, { minimumFractionDigits: slot.fractionalDigits === undefined ? 0 : slot.fractionalDigits, maximumFractionDigits: slot.fractionalDigits === undefined ? 9 : slot.fractionalDigits, roundingMode: 'trunc' });
+      return [slot.numberLocale, 'decimal', '', '', '', '', 'short'].concat(digitArgs(digits), ['standard', 'short', 'false', 'auto']);
+    }
+    return [slot.numberLocale, 'unit', '', '', '', singularUnit(unit), style].concat(digitArgs(digits), ['standard', 'short', 'auto', 'auto']);
+  };
+  const durationValueParts = (slot, style, unit, value, fractional) => partsOf(icu(5, durationNumberArgs(slot, style, unit, fractional).concat(value)), ['type', 'value']).map(part => Object.assign(part, { unit: singularUnit(unit) }));
+  const nextUnitFractional = (slot, unit) => {
+    const index = durationUnits.indexOf(unit);
+    return index >= 6 && index <= 8 && slot.units[durationUnits[index + 1]].style === 'numeric';
+  };
+  const numericUnitParts = (slot, record, firstUnit, signDisplayed) => {
+    let hours = ['n', numberText(record.hours)];
+    let minutes = ['n', numberText(record.minutes)];
+    let seconds = durationDecimal(record, 'seconds');
+    const hoursFormatted = firstUnit === 'hours' && (!isZeroValue(hours) || slot.units.hours.display === 'always');
+    const secondsFormatted = !isZeroValue(seconds) || slot.units.seconds.display === 'always';
+    const minutesFormatted = (firstUnit === 'hours' || firstUnit === 'minutes') && (hoursFormatted && secondsFormatted || !isZeroValue(minutes) || slot.units.minutes.display === 'always');
+    const list = [];
+    const signed = value => {
+      if (!signDisplayed) return absValue(value);
+      signDisplayed = false;
+      return isZeroValue(value) && record.sign < 0 ? ['n', '-0'] : value;
+    };
+    if (hoursFormatted) list.push(durationValueParts(slot, slot.units.hours.style, 'hours', signed(hours), false));
+    if (minutesFormatted) list.push(durationValueParts(slot, slot.units.minutes.style, 'minutes', signed(minutes), false));
+    if (secondsFormatted) list.push(durationValueParts(slot, slot.units.seconds.style, 'seconds', signDisplayed ? seconds : absValue(seconds), false));
+    if (list.length === 0) return undefined;
+    if (list.length === 1) return list[0];
+    const separator = icu(13, [slot.numberLocale.split('-u-')[0], slot.numberingSystem])[0];
+    return list.reduce((all, parts, index) => index === 0 ? parts : all.concat([{ type: 'literal', value: separator }], parts), []);
+  };
+  const durationParts = (slot, duration) => {
+    const record = durationRecord(duration);
+    const formatted = [];
+    let signDisplayed = true;
+    for (const unit of durationUnits) {
+      const { style, display } = slot.units[unit];
+      if (isNumericStyle(style)) {
+        const parts = numericUnitParts(slot, record, unit, signDisplayed);
+        if (parts) formatted.push(parts);
+        break;
+      }
+      let value = ['n', numberText(record[unit])];
+      const fractional = nextUnitFractional(slot, unit);
+      if (fractional) value = durationDecimal(record, unit);
+      if (display === 'auto' && isZeroValue(value)) {
+        if (fractional) break;
+        continue;
+      }
+      if (signDisplayed) {
+        signDisplayed = false;
+        if (isZeroValue(value) && record.sign < 0) value = ['n', '-0'];
+      } else value = absValue(value);
+      formatted.push(durationValueParts(slot, style, unit, value, fractional));
+      if (fractional) break;
+    }
+    const listStyle = slot.style === 'digital' ? 'short' : slot.style;
+    const list = partsOf(icu(11, [slot.numberLocale.split('-u-')[0], 'unit', listStyle].concat(formatted.map(joinParts))), ['type', 'value']);
+    let element = 0;
+    return list.reduce((all, part) => all.concat(part.type === 'element' ? formatted[element++] : [{ type: 'literal', value: part.value }]), []);
+  };
+  makeClass(DurationFormat, 'DurationFormat', 0, {
+    format(duration) { return joinParts(durationParts(slotOf(this, 'DurationFormat', 'format'), duration)); },
+    formatToParts(duration) { return durationParts(slotOf(this, 'DurationFormat', 'formatToParts'), duration); },
+    resolvedOptions() {
+      const slot = slotOf(this, 'DurationFormat', 'resolvedOptions');
+      const result = { locale: slot.locale, numberingSystem: slot.numberingSystem, style: slot.style };
+      for (const unit of durationUnits) Object.assign(result, { [unit]: slot.units[unit].style, [unit + 'Display']: slot.units[unit].display });
+      if (slot.fractionalDigits !== undefined) result.fractionalDigits = slot.fractionalDigits;
+      return result;
+    },
+  }, { format: 1, formatToParts: 1 }, false);
 
   // Segmenter
   const segmentsPrototype = {};

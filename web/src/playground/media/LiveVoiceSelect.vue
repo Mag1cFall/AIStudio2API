@@ -24,9 +24,10 @@ const options = computed(() =>
   props.voices.map((voice) => ({
     name: voice.name,
     sample: voice.sample_url ?? '',
-    traits: [...(voice.descriptions ?? []), ...(voice.pitch ? [`${voice.pitch} pitch`] : [])].join(
-      ', ',
-    ),
+    traits: [
+      ...(voice.descriptions ?? []),
+      ...(voice.pitch ? [t('pg.pitchValue').replace('{pitch}', voice.pitch)] : []),
+    ].join(', '),
   })),
 )
 

@@ -411,7 +411,7 @@ func (p *AccountPool) resourceAccountID(resourceID string) string {
 	return p.resources[strings.TrimSpace(resourceID)]
 }
 
-// GetGenerateVideoOperation 使用 operation 创建账户轮询，首次完成时把临时结果文件复制为账户 Drive 中的视频并绑定，此后直接返回该视频；临时文件暂不可复制时报告未完成；Omni 任务按本进程的生成状态返回
+// GetGenerateVideoOperation 使用 operation 创建账户轮询，首次完成时把临时结果文件复制为账户 Drive 中的视频并绑定，此后直接返回该视频；Omni 任务按本进程的生成状态返回
 func (s *PooledService) GetGenerateVideoOperation(ctx context.Context, operationID string) (VideoOperation, error) {
 	omniState, omniTracked := s.omniVideos.Load(strings.TrimSpace(operationID))
 	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{ResourceID: strings.TrimSpace(operationID)})

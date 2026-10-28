@@ -106,7 +106,7 @@ function parseBlocks(text: string, base: number, firstKey: number, env: Env): Bl
   return blocks
 }
 
-// IncrementalMarkdown 增量解析流式正文：原文只在末尾增长且不含引用定义时，只重新解析最后一个顶层块之后的部分，之前的块保持同一对象；含引用定义时整篇解析，使其他块中的引用链接得到解析
+// IncrementalMarkdown 增量解析流式正文：原文只在末尾增长且不含引用定义时，只重新解析最后一个顶层块之后的部分，之前的块保持同一对象；含引用定义时整篇解析
 export class IncrementalMarkdown {
   private text = ''
   private blocks: Block[] = []

@@ -52,6 +52,12 @@ export const routes: RouteRecordRaw[] = [
     meta: studio,
   },
   {
+    path: '/library',
+    name: 'library',
+    component: () => import('@/playground/LibraryPage.vue'),
+    meta: studio,
+  },
+  {
     path: '/prompts/:id',
     name: 'saved',
     component: () => import('@/playground/PromptRoute.vue'),

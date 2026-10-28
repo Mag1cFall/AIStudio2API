@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { vTooltip } from '@/playground/ui/tooltip'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
+import ThinkingOrb from '@/playground/ui/ThinkingOrb.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import CodeDialog from '../CodeDialog.vue'
 import { submits } from '../run-keys'
@@ -11,6 +12,7 @@ import AudioFooter from './AudioFooter.vue'
 import CopyPromptButton from './CopyPromptButton.vue'
 import MediaLayout from './MediaLayout.vue'
 import SpeechBlockCard from './SpeechBlockCard.vue'
+import SpeechCarouselSection from './SpeechCarouselSection.vue'
 import SpeechSettings from './SpeechSettings.vue'
 import VoicePanel from './VoicePanel.vue'
 import { mediaCodeOptions, type MediaCodeLanguage } from './code'
@@ -18,9 +20,10 @@ import { useSamplePlayer } from './sample'
 import { useSpeech } from './speech'
 import { speechCode } from './speech-code'
 import { speechTemplates, type SpeechTemplate } from './speech-templates'
+import { speechVoices } from './speech-voices'
 
 const route = useRoute()
-const { t } = useI18n()
+const { t, logText } = useI18n()
 const store = useConsole()
 const speech = useSpeech()
 const { state, currentModel, daikon, multi, openAIMulti, canRun } = speech
@@ -29,24 +32,15 @@ const codeOpen = ref(false)
 const voiceOpen = ref(false)
 const voiceSpeaker = ref(0)
 const blockCards = ref<InstanceType<typeof SpeechBlockCard>[]>([])
-const carousel = ref<HTMLElement>()
-const fadeLeft = ref(false)
-const fadeRight = ref(false)
 const zero = computed(() => state.blocks.length === 0)
+// templates 与 voices 是当前界面语言的示例对话与示例声音
+const templates = computed(speechTemplates)
+const voices = computed(speechVoices)
 
-// updateFades 按轮播滚动位置显示两侧渐隐与翻页按钮状态
-function updateFades(): void {
-  const element = carousel.value
-  if (!element) return
-  fadeLeft.value = element.scrollLeft > 1
-  fadeRight.value = element.scrollLeft + element.clientWidth < element.scrollWidth - 1
-}
-
-// scrollCarousel 按一屏宽度翻页
-function scrollCarousel(direction: -1 | 1): void {
-  const element = carousel.value
-  if (!element) return
-  element.scrollBy({ left: direction * element.clientWidth * 0.8, behavior: 'smooth' })
+// sampleIcon 返回试听按钮在加载、播放与停止时的图标
+function sampleIcon(url: string): 'spinner' | 'stop' | 'play' {
+  if (loadingSample.value === url) return 'spinner'
+  return playingSample.value === url ? 'stop' : 'play'
 }
 
 // openVoice 打开说话人的音色库
@@ -105,17 +99,9 @@ watch(
   () => speech.ensureModel(typeof route.query.model === 'string' ? route.query.model : undefined),
   { immediate: true },
 )
-watch(zero, (value) => {
-  if (value) void nextTick(updateFades)
-})
-onMounted(() => {
-  updateFades()
-  window.addEventListener('resize', updateFades)
-})
 onUnmounted(() => {
   stopSample()
   speech.stopPreview()
-  window.removeEventListener('resize', updateFades)
 })
 </script>
 
@@ -144,82 +130,79 @@ onUnmounted(() => {
         <div class="hero-header">
           <h1 class="hero-title">{{ t('pg.speechHero') }}</h1>
         </div>
-        <section class="zero-state-section">
-          <div class="section-header">
-            <div class="section-title-group">
-              <UiIcon name="speakerNotes" :size="16" class="section-icon" />
-              <h2 class="section-title">{{ t('pg.exploreSpeech') }}</h2>
-            </div>
-            <div class="carousel-controls">
-              <button
-                type="button"
-                ms-button
-                class="ms-button-borderless ms-button-icon carousel-nav-button"
-                :aria-label="t('pg.previous')"
-                :aria-disabled="!fadeLeft"
-                @click="scrollCarousel(-1)"
-              >
-                <UiIcon name="chevronLeft" :size="18" />
-              </button>
-              <button
-                type="button"
-                ms-button
-                class="ms-button-borderless ms-button-icon carousel-nav-button"
-                :aria-label="t('pg.next')"
-                :aria-disabled="!fadeRight"
-                @click="scrollCarousel(1)"
-              >
-                <UiIcon name="chevronRight" :size="18" />
-              </button>
-            </div>
-          </div>
+        <SpeechCarouselSection
+          :title="t('pg.exploreSpeech')"
+          icon="comment"
+          :region-label="t('pg.speechRegion')"
+          :previous-label="t('pg.previous')"
+          :next-label="t('pg.next')"
+          :action-label="t('pg.createDialog')"
+          @action="newDialog"
+        >
           <div
-            ref="carousel"
-            class="cards-carousel"
-            :class="{ 'fade-left': fadeLeft, 'fade-right': fadeRight }"
-            @scroll="updateFades"
+            v-for="template in templates"
+            :key="template.id"
+            role="button"
+            tabindex="0"
+            class="dialog-example-card"
+            @click="useTemplate(template)"
+            @keydown.enter.prevent="useTemplate(template)"
           >
-            <button type="button" class="action-card" @click="newDialog">
-              <span class="action-card-icon"><UiIcon name="add" :size="20" /></span>
-              <span class="action-card-label">{{ t('pg.createDialog') }}</span>
-            </button>
-            <div
-              v-for="template in speechTemplates"
-              :key="template.id"
-              role="button"
-              tabindex="0"
-              class="dialog-example-card"
-              @click="useTemplate(template)"
-              @keydown.enter.prevent="useTemplate(template)"
-            >
-              <div class="card-top-row">
-                <span class="dialog-icon-wrapper"><UiIcon :name="template.icon" :size="20" /></span>
-                <button
-                  v-tooltip.below="playingSample === template.audio ? t('pg.pause') : t('pg.play')"
-                  type="button"
-                  class="play-audio-button"
-                  :aria-label="playingSample === template.audio ? t('pg.pause') : t('pg.play')"
-                  @click.stop="toggleSample(template.audio)"
-                >
-                  <UiIcon
-                    :name="
-                      loadingSample === template.audio
-                        ? 'spinner'
-                        : playingSample === template.audio
-                          ? 'stop'
-                          : 'play'
-                    "
-                    :size="16"
-                  />
-                </button>
-              </div>
-              <div class="card-text-content">
-                <h3 class="card-title">{{ template.name }}</h3>
-                <p class="card-description">{{ template.description }}</p>
-              </div>
+            <div class="card-top-row">
+              <span class="dialog-icon-wrapper"><UiIcon :name="template.icon" :size="20" /></span>
+              <button
+                v-tooltip.below="playingSample === template.audio ? t('pg.pause') : t('pg.play')"
+                type="button"
+                class="play-audio-button"
+                :aria-label="playingSample === template.audio ? t('pg.pause') : t('pg.play')"
+                @click.stop="toggleSample(template.audio)"
+              >
+                <UiIcon :name="sampleIcon(template.audio)" :size="16" />
+              </button>
+            </div>
+            <div class="card-text-content">
+              <h3 class="card-title">{{ template.name }}</h3>
+              <p class="card-description">{{ template.description }}</p>
             </div>
           </div>
-        </section>
+        </SpeechCarouselSection>
+        <SpeechCarouselSection
+          :title="t('pg.exploreVoices')"
+          icon="voiceSelection"
+          :region-label="t('pg.exploreVoices')"
+          :previous-label="t('pg.previousVoices')"
+          :next-label="t('pg.nextVoices')"
+          :action-label="t('pg.createVoice')"
+          :action-unavailable="t('pg.voiceDesignPaid')"
+        >
+          <div
+            v-for="voice in voices"
+            :key="voice.id"
+            v-tooltip.below="t('pg.voiceDesignPaid')"
+            class="voice-card"
+            aria-disabled="true"
+            :aria-label="`${voice.title} - ${voice.description}`"
+          >
+            <div class="top-row">
+              <div class="voice-sphere-visual" aria-hidden="true">
+                <ThinkingOrb :state="voice.orb" />
+              </div>
+              <button
+                v-tooltip.below="playingSample === voice.sample ? t('pg.pause') : t('pg.play')"
+                type="button"
+                class="play-audio-button"
+                :aria-label="playingSample === voice.sample ? t('pg.pause') : t('pg.play')"
+                @click.stop="toggleSample(voice.sample)"
+              >
+                <UiIcon :name="sampleIcon(voice.sample)" :size="16" />
+              </button>
+            </div>
+            <div class="text-content">
+              <div class="voice-title">{{ voice.title }}</div>
+              <div class="voice-description">{{ voice.description }}</div>
+            </div>
+          </div>
+        </SpeechCarouselSection>
       </div>
 
       <div v-else class="composer">
@@ -271,7 +254,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <p v-if="state.error" role="alert" class="speech-error">{{ state.error }}</p>
+    <p v-if="state.error" role="alert" class="speech-error">
+      {{ logText(state.error) }}
+    </p>
     <AudioFooter
       v-if="!zero"
       :audio="state.audio"
@@ -308,7 +293,7 @@ onUnmounted(() => {
 }
 
 @media screen and (max-width: 600px) {
-  .speech-prompt-main {
+  .speech-prompt-main:not(.zero-state) {
     padding: 0 16px;
   }
 }
@@ -339,150 +324,27 @@ onUnmounted(() => {
   line-height: 1.2;
 }
 
-.zero-state-section {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 28px;
-  margin-bottom: 12px;
-}
-
-.section-title-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.section-icon {
-  color: var(--color-v3-text-var);
-}
-
-.section-title {
-  margin: 0;
-  color: var(--color-v3-text-var);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 18px;
-}
-
-.carousel-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.carousel-nav-button {
-  width: 28px;
-  height: 28px;
-  color: var(--color-v3-text-var);
-}
-
-.carousel-nav-button[aria-disabled='true'] {
-  background: transparent;
-  color: var(--color-v3-text-disable);
-  cursor: default;
-}
-
-.cards-carousel {
-  display: flex;
-  align-items: stretch;
-  gap: 12px;
-  width: 100%;
-  margin: -4px 0 0;
-  padding: 4px 2px 8px;
-  overflow-x: auto;
-  scroll-behavior: smooth;
-  scroll-padding-inline: 2px;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-}
-
-.cards-carousel::-webkit-scrollbar {
-  display: none;
-}
-
-.cards-carousel.fade-left {
-  mask-image: linear-gradient(90deg, transparent, #000 3%);
-}
-
-.cards-carousel.fade-right {
-  mask-image: linear-gradient(90deg, #000 97%, transparent);
-}
-
-.cards-carousel.fade-left.fade-right {
-  mask-image: linear-gradient(90deg, transparent, #000 3%, #000 97%, transparent);
-}
-
-.cards-carousel > * {
-  flex: 0 0 180px;
-  height: 148px;
-  scroll-snap-align: start;
-}
-
-.action-card,
 .dialog-example-card {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   width: 100%;
   height: 148px;
   padding: 16px;
+  border: 1px solid var(--color-v3-outline-var);
   border-radius: 12px;
   outline: none;
   background: transparent;
   color: inherit;
   font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.action-card {
-  align-items: center;
-  justify-content: center;
-  border: 1.5px dashed var(--color-v3-outline);
-  text-align: center;
-}
-
-.action-card:hover {
-  border-color: var(--color-v3-outline-active);
-  background: var(--color-v3-surface-container-high);
-  transform: translateY(-2px);
-}
-
-.action-card:focus-visible,
 .dialog-example-card:focus-visible {
   border-color: var(--color-v3-outline-active);
-}
-
-.action-card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin-bottom: 10px;
-  border-radius: 50%;
-  background: var(--color-v3-surface-container-highest);
-  color: var(--color-v3-text-var);
-}
-
-.action-card-label {
-  color: var(--color-v3-text);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 21px;
-}
-
-.dialog-example-card {
-  justify-content: space-between;
-  border: 1px solid var(--color-v3-outline-var);
-  text-align: left;
 }
 
 .dialog-example-card:hover {
@@ -544,6 +406,59 @@ onUnmounted(() => {
   line-height: 21px;
 }
 
+.voice-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 100%;
+  height: 148px;
+  padding: 16px;
+  border: 1px solid var(--color-v3-outline-var);
+  border-radius: 12px;
+  background: var(--color-v3-surface-container-highest);
+}
+
+.top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.voice-sphere-visual {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  margin-bottom: 12px;
+  overflow: visible;
+  color: var(--color-v3-text);
+}
+
+.voice-sphere-visual > * {
+  transform: scale(0.65);
+  transform-origin: left center;
+}
+
+.top-row .play-audio-button {
+  flex: none;
+  margin-bottom: 12px;
+}
+
+.text-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.voice-title {
+  margin: 0 0 4px;
+  color: var(--color-v3-text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.voice-description,
 .card-description {
   display: -webkit-box;
   margin: 0;

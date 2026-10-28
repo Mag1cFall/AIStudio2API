@@ -1,10 +1,12 @@
 import { computed, reactive } from 'vue'
+import { jsonBody } from '@/api'
 import { useConsole } from '@/console'
+import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
 import { readPreference, writePreference } from '@/preference'
 import type { Model, ThinkingLevel } from '@/types'
 import { Capability, defaultChatModel, hasCode } from '../catalog'
-import { apiKey, errorMessage } from '../request'
+import { apiKey, errorMessage, failureText } from '../request'
 import { parseFunctions } from '../schema'
 import { audioInput } from '../shell/preferences'
 import { openLiveSocket, type LiveServerMessage } from './live-socket'
@@ -190,8 +192,21 @@ const state = reactive({
   interim: '',
   draft: '',
   error: '',
+  // denied 是打不开过的麦克风与摄像头，与官网一致保留到页面重新加载
+  denied: [] as LiveSource[],
   disclaimer: false,
 })
+
+// 关闭桌面窗口时，连接中与进行中的会话、只存在于页面的对话与转写保留页面
+keepPage(
+  () =>
+    state.status === 'connecting' ||
+    state.status === 'live' ||
+    state.turns.length > 0 ||
+    state.input.length > 0 ||
+    state.output.length > 0,
+)
+
 // disclaimerKey 是浏览器记住已确认 Live 首次使用提示的偏好键
 const disclaimerKey = 'live.disclaimerAcknowledged'
 let disclaimerAcknowledged = readPreference(disclaimerKey, false, (value) => value === true)
@@ -482,7 +497,7 @@ async function answerCall(part: Extract<LivePart, { type: 'call' }>): Promise<vo
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey() },
-        body: JSON.stringify({
+        body: jsonBody({
           contents: [
             {
               role: 'user',
@@ -507,7 +522,7 @@ async function answerCall(part: Extract<LivePart, { type: 'call' }>): Promise<vo
         .map((item) => item.text ?? '')
         .join('') ?? '{}'
   } catch (error) {
-    part.error = error instanceof Error ? error.message : String(error)
+    part.error = failureText(error, useI18n().t('pg.functionResponseUnreachable'))
   } finally {
     part.generating = false
   }
@@ -720,6 +735,19 @@ function startVideo(stream: MediaStream, source: 'camera' | 'screen'): void {
   ]
 }
 
+// openSource 打开一路实时输入的采集流，浏览器拒绝或没有设备时返回 undefined，麦克风与摄像头记入 denied
+async function openSource(source: LiveSource): Promise<MediaStream | undefined> {
+  try {
+    if (source === 'mic') return await navigator.mediaDevices.getUserMedia({ audio: audioInput() })
+    if (source === 'camera') return await navigator.mediaDevices.getUserMedia({ video: true })
+    return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: source === 'tab' })
+  } catch {
+    if ((source === 'mic' || source === 'camera') && !state.denied.includes(source))
+      state.denied.push(source)
+    return undefined
+  }
+}
+
 // toggleSource 打开或关闭一路实时输入，打开前先建立会话
 async function toggleSource(source: LiveSource): Promise<void> {
   if (state.sources.includes(source)) {
@@ -730,16 +758,8 @@ async function toggleSource(source: LiveSource): Promise<void> {
   state.error = ''
   const epoch = sessionEpoch
   try {
-    let stream: MediaStream
-    if (source === 'mic')
-      stream = await navigator.mediaDevices.getUserMedia({ audio: audioInput() })
-    else if (source === 'camera')
-      stream = await navigator.mediaDevices.getUserMedia({ video: true })
-    else
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: source === 'tab',
-      })
+    const stream = await openSource(source)
+    if (!stream) return
     const connected = epoch === sessionEpoch && (await connect())
     if (connected) await player.resume()
     if (!connected || epoch !== sessionEpoch) {
@@ -753,8 +773,13 @@ async function toggleSource(source: LiveSource): Promise<void> {
     } else {
       startVideo(stream, source)
       // 与官网一样，打开摄像头或屏幕共享时一并打开麦克风
-      if (!state.sources.includes('mic') && hasCode(currentModel.value, Capability.LiveMicrophone))
-        await startAudio(await navigator.mediaDevices.getUserMedia({ audio: audioInput() }), 'mic')
+      if (
+        !state.sources.includes('mic') &&
+        hasCode(currentModel.value, Capability.LiveMicrophone)
+      ) {
+        const mic = await openSource('mic')
+        if (mic) await startAudio(mic, 'mic')
+      }
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error)

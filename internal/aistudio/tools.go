@@ -18,7 +18,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 	default:
 		return nil, false, fmt.Errorf("未知 tool choice %q", tools.ToolConfig.Mode)
 	}
-	if len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil {
+	if len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil && tools.ComputerUse == nil && len(tools.MCPServers) == 0 {
 		return nil, false, nil
 	}
 	wire := make([]any, 0, len(tools.Google)+2)
@@ -63,6 +63,9 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 		case "google_maps":
 			tool := make([]any, 11)
 			tool[10] = []any{}
+			if tools.MapsWidget {
+				tool[10] = []any{true}
+			}
 			wire = append(wire, tool)
 		default:
 			return nil, false, fmt.Errorf("未知 Google tool %q", name)
@@ -71,7 +74,71 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 	if searchRequested && !searchEncoded {
 		wire = append(wire, encodeSearchTool(search))
 	}
+	if computer := tools.ComputerUse; computer != nil {
+		environment, ok := computerEnvironments[computer.Environment]
+		if !ok {
+			return nil, false, fmt.Errorf("computer use environment %q 不受支持", computer.Environment)
+		}
+		options := []any{nil, nil, environment}
+		if len(computer.ExcludedPredefinedFunctions) > 0 {
+			options = append(options, nil, computer.ExcludedPredefinedFunctions)
+		}
+		tool := make([]any, 6)
+		tool[5] = options
+		wire = append(wire, tool)
+	}
+	if len(tools.MCPServers) > 0 {
+		servers := make([]any, 0, len(tools.MCPServers))
+		for _, server := range tools.MCPServers {
+			encoded, err := encodeMCPServer(server)
+			if err != nil {
+				return nil, false, err
+			}
+			servers = append(servers, encoded)
+		}
+		tool := make([]any, 9)
+		tool[8] = servers
+		wire = append(wire, tool)
+	}
 	return wire, true, nil
+}
+
+// computerEnvironments 是 Tool.ComputerUse.Environment 的取值
+var computerEnvironments = map[string]int64{"": 1, "ENVIRONMENT_UNSPECIFIED": 1, "ENVIRONMENT_BROWSER": 1}
+
+// encodeMCPServer 编码 Tool.McpServer：名称、Streamable HTTP 连接与允许调用的工具
+func encodeMCPServer(server MCPServer) ([]any, error) {
+	transport := []any{server.URL, nil, nil, nil, nil}
+	if len(server.Headers) > 0 {
+		names := make([]string, 0, len(server.Headers))
+		for name := range server.Headers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		headers := make([]any, 0, len(names))
+		for _, name := range names {
+			headers = append(headers, []any{name, server.Headers[name]})
+		}
+		transport[1] = headers
+	}
+	for index, value := range []string{server.Timeout, server.SSEReadTimeout} {
+		if value == "" {
+			continue
+		}
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return nil, fmt.Errorf("MCP server %s timeout: %w", server.Name, err)
+		}
+		transport[2+index] = []any{int64(duration / time.Second), int64(duration % time.Second)}
+	}
+	if server.TerminateOnClose != nil {
+		transport[4] = *server.TerminateOnClose
+	}
+	encoded := []any{server.Name, transport}
+	if len(server.AllowedTools) > 0 {
+		encoded = append(encoded, []any{[]any{server.AllowedTools}})
+	}
+	return encoded, nil
 }
 
 func encodeSearchTool(options GoogleSearchOptions) []any {

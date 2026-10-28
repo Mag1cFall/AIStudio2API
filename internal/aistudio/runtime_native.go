@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
@@ -148,9 +150,15 @@ func arrayElementSpan(body []byte, index int) (int, int, error) {
 	return 0, 0, fmt.Errorf("JSON 顶层数组不完整")
 }
 
-// SendProtected 经账户 WAA runtime 流式发送已准备的请求
+// pageCountTokensDelay 是官网页面在 GenerateContent 发出后统计用户轮次 token 的时延
+const pageCountTokensDelay = 2200 * time.Millisecond
+
+// SendProtected 经账户 WAA runtime 流式发送已准备的请求，GenerateContent 发出 pageCountTokensDelay 后由 runtime 以相同请求头统计页面提示词的 token
 func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
-	response, err := worker.runtime.SendProtected(context.WithValue(ctx, pagePromptKey{}, request.PagePrompt), request.URL, request.Headers, request.Body)
+	if body, ok := countTokensBody(request); ok {
+		ctx = camoufoxnative.WithFollowUp(ctx, camoufoxnative.FollowUp{URL: makerSuiteRPCURL + "CountTokens", Body: body, Delay: pageCountTokensDelay})
+	}
+	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
 	if err != nil {
 		if ctx.Err() == nil {
 			worker.fail(err)
@@ -162,6 +170,20 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 		Header:     response.Header,
 		Body:       response.Body,
 	}, nil
+}
+
+// countTokensBody 按官网页面对用户轮次的统计，以 GenerateContent 的模型构造页面提示词的 CountTokens 正文；不是带页面提示词的 GenerateContent 时返回 false
+func countTokensBody(generate ProtectedRequest) ([]byte, bool) {
+	if !strings.HasSuffix(generate.URL, "/GenerateContent") || generate.PagePrompt == "" {
+		return nil, false
+	}
+	var fields []json.RawMessage
+	var model string
+	if json.Unmarshal(generate.Body, &fields) != nil || len(fields) == 0 || json.Unmarshal(fields[0], &model) != nil {
+		return nil, false
+	}
+	body, err := json.Marshal([]any{model, []any{[]any{[]any{[]any{nil, generate.PagePrompt}}, "user"}}})
+	return body, err == nil
 }
 
 // BrowserStorageState 返回账户 WAA runtime 当前 Cookie 状态

@@ -1,13 +1,13 @@
 package app
 
 import (
-	"os"
 	"path/filepath"
 	"sync"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 )
 
 // logFileName 是日志目录中当前日志文件的名称
@@ -42,9 +42,9 @@ func (output *logOutput) set(enabled bool, maxTotalMB int) error {
 	return nil
 }
 
-// Write 把一条日志写到标准错误与日志文件
+// Write 把一条日志按系统语言写到标准错误，按原文写到日志文件
 func (output *logOutput) Write(data []byte) (int, error) {
-	os.Stderr.Write(data)
+	i18n.Stderr.Write(data)
 	output.mu.Lock()
 	defer output.mu.Unlock()
 	if output.file != nil {

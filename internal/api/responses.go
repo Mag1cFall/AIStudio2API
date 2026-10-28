@@ -37,6 +37,7 @@ type responsesRequest struct {
 	Conversation       json.RawMessage   `json:"conversation"`
 	Prompt             json.RawMessage   `json:"prompt"`
 	Include            []string          `json:"include"`
+	ServiceTier        string            `json:"service_tier"`
 	ContextManagement  []struct {
 		Type             string `json:"type"`
 		CompactThreshold *int64 `json:"compact_threshold"`
@@ -65,6 +66,19 @@ type responsesTool struct {
 	Format            json.RawMessage `json:"format,omitempty"`
 	Strict            *bool           `json:"strict,omitempty"`
 	Tools             []responsesTool `json:"tools,omitempty"`
+	// Size、Quality 与 OutputFormat 是 image_generation 工具的图片尺寸、质量与输出格式
+	Size         string `json:"size,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
+}
+
+// imageGenerationTool 返回请求声明的 image_generation 工具
+func imageGenerationTool(tools []responsesTool) *responsesTool {
+	index := slices.IndexFunc(tools, func(tool responsesTool) bool { return tool.Type == "image_generation" })
+	if index < 0 {
+		return nil
+	}
+	return &tools[index]
 }
 
 type responsesInputItem struct {
@@ -224,7 +238,7 @@ func (store *responseStateStore) Response(id string) (json.RawMessage, bool, boo
 		output = append(output, item.Raw)
 	}
 	shell["output"], _ = json.Marshal(output)
-	encoded, _ := json.Marshal(shell)
+	encoded, _ := json.Marshal(officialOrder("responses", shell))
 	return encoded, state.Record.Background, true
 }
 
@@ -411,7 +425,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if request.storesResponse() {
 		s.storeResponse(responseID, request, prepared, result, response)
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("responses", response))
 }
 
 // responsesPreparation 是转换后的生成请求，以及保存续接节点所需的前序上下文与本次输入
@@ -425,7 +439,7 @@ type responsesPreparation struct {
 	stream *streamLog
 }
 
-// compactOverThreshold 在 context_management 的 compaction 阈值被超过时先压缩输入，以被压缩部分的 developer 与 system 消息、保留的条目与 compaction 项作为本次输入；返回生成前插入输出的 compaction 项
+// compactOverThreshold 在 context_management 的 compaction 阈值被超过时先压缩输入，返回生成前插入输出的 compaction 项
 func (s *server) compactOverThreshold(ctx context.Context, request *responsesRequest, prepared *responsesPreparation, id string) (map[string]any, error) {
 	threshold := request.compactThreshold()
 	if threshold <= 0 {
@@ -466,6 +480,17 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	if err := inlineRemoteMedia(ctx, generateRequest.Contents); err != nil {
 		return responsesPreparation{}, err
 	}
+	if tool := imageGenerationTool(request.Tools); tool != nil && (tool.Size != "" || tool.Quality != "") {
+		models, err := s.service.Models(ctx)
+		if err != nil {
+			return responsesPreparation{}, err
+		}
+		if model, _ := LookupPublicModel(models, request.Model); model.Capabilities["image_route"] {
+			if generateRequest.Config.ImageConfig, err = openAIImageConfig(tool.Size, tool.Quality, model.CapabilityOptions); err != nil {
+				return responsesPreparation{}, fmt.Errorf("image_generation: %w", err)
+			}
+		}
+	}
 	prepared := responsesPreparation{
 		generate: generateRequest, contents: cloneResponseContents(generateRequest.Contents),
 		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(request.Input, id),
@@ -485,7 +510,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 		instructions = append(instructions, request.Instructions)
 	}
 	instructions = append(instructions, inlineInstructions...)
-	prepared.generate.System = strings.Join(instructions, "\n")
+	prepared.generate.System = systemSegments(strings.Join(instructions, "\n"))
 	return prepared, nil
 }
 
@@ -503,7 +528,7 @@ func (s *server) storeResponse(id string, request responsesRequest, prepared res
 	for _, item := range response["output"].([]any) {
 		object, _ := item.(map[string]any)
 		if itemID, _ := object["id"].(string); itemID != "" {
-			raw, _ := json.Marshal(object)
+			raw, _ := json.Marshal(officialOrder("responses", object))
 			record.Output = append(record.Output, storedItem{ID: itemID, Raw: raw})
 		}
 	}
@@ -562,44 +587,11 @@ func responsesInputItems(raw json.RawMessage, responseID string) []storedItem {
 }
 
 func responseHistoryOutput(result generationResult) aistudio.Content {
-	output := aistudio.Content{Role: aistudio.RoleAssistant}
+	var output aistudio.Output
 	for _, event := range result.events {
-		switch event.Kind {
-		case aistudio.EventText:
-			if event.Text != "" {
-				output.Parts = append(output.Parts, aistudio.Part{Text: event.Text, ThoughtSignature: event.ThoughtSignature})
-			}
-		case aistudio.EventToolCall:
-			if event.ToolCall != nil {
-				call := *event.ToolCall
-				call.Arguments = append(json.RawMessage(nil), call.Arguments...)
-				output.Parts = append(output.Parts, aistudio.Part{FunctionCall: &call, ThoughtSignature: event.ThoughtSignature})
-			}
-		case aistudio.EventMedia:
-			if event.Media != nil && len(event.Media.Data) > 0 {
-				blob := &aistudio.Blob{MIME: event.Media.MIME, Data: append([]byte(nil), event.Media.Data...)}
-				output.Parts = append(output.Parts, aistudio.Part{InlineData: blob, ThoughtSignature: event.ThoughtSignature})
-			} else if event.Media != nil && event.Media.URL != "" {
-				file := &aistudio.FileRef{ID: event.Media.URL, Name: event.Media.Name, MIME: event.Media.MIME}
-				output.Parts = append(output.Parts, aistudio.Part{File: file, ThoughtSignature: event.ThoughtSignature})
-			}
-		case aistudio.EventExecutableCode:
-			code := *event.ExecutableCode
-			output.Parts = append(output.Parts, aistudio.Part{ExecutableCode: &code, ThoughtSignature: event.ThoughtSignature})
-		case aistudio.EventCodeExecutionResult:
-			result := *event.CodeExecutionResult
-			output.Parts = append(output.Parts, aistudio.Part{CodeExecutionResult: &result, ThoughtSignature: event.ThoughtSignature})
-		case aistudio.EventMediaProcessingCall:
-			output.Parts = append(output.Parts, aistudio.Part{ProcessingCall: event.MediaProcessing, ThoughtSignature: event.ThoughtSignature})
-		case aistudio.EventMediaProcessingResult:
-			output.Parts = append(output.Parts, aistudio.Part{ProcessingResult: event.MediaProcessing, ThoughtSignature: event.ThoughtSignature})
-		case aistudio.EventReasoning, aistudio.EventThoughtSignature:
-			if event.ThoughtSignature != "" {
-				output.Parts = append(output.Parts, aistudio.Part{ThoughtSignature: event.ThoughtSignature})
-			}
-		}
+		output.Add(event)
 	}
-	return output
+	return output.History()
 }
 
 func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, []string, error) {
@@ -684,20 +676,21 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 			config.ResponseMIMEType = "application/json"
 		case "json_schema":
 			config.ResponseMIMEType = "application/json"
-			config.ResponseSchema = text.Format.Schema
+			config.ResponseJSONSchema = text.Format.Schema
 		case "", "text":
 		default:
 			return aistudio.GenerateRequest{}, nil, fmt.Errorf("unsupported text format %q", text.Format.Type)
 		}
 	}
 	return aistudio.GenerateRequest{
-		ID:       id,
-		Model:    request.Model,
-		System:   strings.Join(instructions, "\n"),
-		Contents: contents,
-		Config:   config,
-		Tools:    tools,
-		Truncate: request.Truncation == "auto",
+		ID:          id,
+		Model:       request.Model,
+		System:      systemSegments(strings.Join(instructions, "\n")),
+		Contents:    contents,
+		Config:      config,
+		Tools:       tools,
+		Truncate:    request.Truncation == "auto",
+		ServiceTier: openAIServiceTier(request.ServiceTier),
 	}, inlineInstructions, nil
 }
 
@@ -1102,7 +1095,7 @@ func responsesNamespace(tools []responsesTool, name string) string {
 	return ""
 }
 
-func responseImageGenerationItem(responseID string, index int, media aistudio.Media) (map[string]any, error) {
+func responseImageGenerationItem(responseID string, index int, media aistudio.Blob) (map[string]any, error) {
 	if !strings.HasPrefix(media.MIME, "image/") || len(media.Data) == 0 {
 		return nil, fmt.Errorf("Responses API cannot represent media %q without inline image data", media.MIME)
 	}
@@ -1128,7 +1121,7 @@ func responsesUsage(usage *aistudio.Usage) map[string]any {
 	}
 }
 
-// responsesOutput 按事件生成顺序累积 Responses 输出项：思考为 reasoning 项，正文为 message 项，代码执行、搜索、图片与函数调用为各自的调用项；请求 encrypted_content 时函数调用的签名写入其前的 reasoning 项
+// responsesOutput 按事件生成顺序累积 Responses 输出项：思考为 reasoning 项，正文为 message 项，代码执行、搜索、图片与函数调用为各自的调用项
 type responsesOutput struct {
 	id        string
 	request   responsesRequest
@@ -1172,6 +1165,9 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 	}
 	switch event.Kind {
 	case aistudio.EventReasoning:
+		if event.Text == "" {
+			break
+		}
 		if !isLast(o.reasoning) {
 			o.reasoning = map[string]any{"id": o.itemID("rs_"), "type": "reasoning", "status": "completed", "summary": []any{map[string]any{"type": "summary_text", "text": ""}}}
 			o.texts[o.reasoning["id"].(string)] = &strings.Builder{}
@@ -1188,10 +1184,10 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		write(o.message, o.message["content"].([]any)[0].(map[string]any), event.Text)
 		o.text += len(event.Text)
 	case aistudio.EventToolCall:
-		if event.ToolCall == nil {
+		if event.FunctionCall == nil {
 			break
 		}
-		call := *event.ToolCall
+		call := *event.FunctionCall
 		if len(call.Arguments) == 0 {
 			call.Arguments = json.RawMessage(`{}`)
 		}
@@ -1204,10 +1200,18 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		}
 		push(responseFunctionCall(call, o.tools))
 	case aistudio.EventMedia:
-		if event.Media == nil {
+		if event.InlineData == nil {
 			break
 		}
-		item, err := responseImageGenerationItem(o.id, o.images, *event.Media)
+		media := *event.InlineData
+		if tool := imageGenerationTool(o.request.Tools); tool != nil {
+			converted, err := convertImage(media, "image/"+cmp.Or(tool.OutputFormat, "png"))
+			if err != nil {
+				return nil, err
+			}
+			media = converted
+		}
+		item, err := responseImageGenerationItem(o.id, o.images, media)
 		if err != nil {
 			return nil, err
 		}
@@ -1230,7 +1234,7 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		result := event.CodeExecutionResult
 		status, logs := "completed", result.Output
 		if result.Outcome != "OUTCOME_OK" {
-			status, logs = "failed", result.Error
+			status = "failed"
 			if logs != "" {
 				logs = "stderr:\n" + logs
 			}
@@ -1377,7 +1381,7 @@ func (writer *responsesStreamWriter) emit(eventType string, payload map[string]a
 	if writer.w == nil {
 		return nil
 	}
-	return writeSSE(writer.w, eventType, payload)
+	return writeSSE(writer.w, eventType, officialOrder("responses", payload))
 }
 
 // receive 写出一个事件；声明搜索时从首个正文起暂存事件，带查询的搜索结果或结束事件到达后先写出它再补发暂存的事件
@@ -1431,7 +1435,7 @@ func (writer *responsesStreamWriter) items() []any {
 	return output
 }
 
-// live 写出一个事件：新输出项开始前先完成仍打开的项，reasoning 与 message 项保持打开到下一个输出项或结束，代码执行项在执行结果到达时完成，其余项立即完成
+// live 写出一个事件，新输出项开始前先完成仍打开的项，reasoning 与 message 项保持打开到下一个输出项或结束
 func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 	added, err := writer.output.add(event)
 	if err != nil {
@@ -1444,6 +1448,9 @@ func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 	}
 	switch event.Kind {
 	case aistudio.EventReasoning:
+		if event.Text == "" {
+			return nil
+		}
 		return writer.emit("response.reasoning_summary_text.delta", map[string]any{
 			"item_id": writer.output.reasoning["id"], "output_index": writer.index(writer.output.reasoning), "summary_index": 0, "delta": event.Text,
 		})

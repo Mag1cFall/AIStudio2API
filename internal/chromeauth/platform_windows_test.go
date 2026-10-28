@@ -14,7 +14,7 @@ func TestDiscoverAndReadMultipleAccounts(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "Default"), 0700)
 	os.WriteFile(filepath.Join(root, "Local State"), []byte(`{"profile":{"info_cache":{"Default":{"name":"Fixture","user_name":"first@example.com"}}}}`), 0600)
 	os.WriteFile(filepath.Join(root, "Default", "Preferences"), []byte(`{"account_info":[{"gaia":"111","email":"first@example.com"},{"gaia":"222","email":"second@example.com"},{"gaia":"333","email":"missing@example.com"}],"intl":{"accept_languages":"zh-CN"}}`), 0600)
-	db, err := sql.Open("sqlite", filepath.Join(root, "Default", "Web Data"))
+	db, err := sql.Open("sqlite3", filepath.Join(root, "Default", "Web Data"))
 	if err != nil {
 		t.Fatal(err)
 	}

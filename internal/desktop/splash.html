@@ -40,7 +40,7 @@
         window._wails?.invoke?.('wails:drag')
       })
       document.getElementById('close').addEventListener('click', () => window._wails?.invoke?.('aistudio2api:close'))
-      // ready 通知桌面壳启动画面已加载，macOS 隐藏自绘标题栏；注入早于本脚本时立即执行，否则在注入完成时执行
+      // ready 通知桌面壳启动画面已加载，macOS 隐藏自绘标题栏
       const ready = () => {
         window._wails?.invoke?.('aistudio2api:splash')
         if (window._wails?.environment?.OS === 'darwin') bar.hidden = true

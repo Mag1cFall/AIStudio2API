@@ -7,6 +7,7 @@ import {
   DialogRoot,
   DialogTitle,
 } from 'reka-ui'
+import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -14,6 +15,7 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
   width: '560px',
   closable: true,
 })
+const { t } = useI18n()
 </script>
 
 <template>
@@ -29,7 +31,7 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
             type="button"
             ms-button
             class="ms-button-borderless ms-button-icon"
-            aria-label="Close"
+            :aria-label="t('common.close')"
           >
             <UiIcon name="close" :size="20" />
           </DialogClose>
@@ -77,7 +79,12 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-bottom: 1px;
   padding: 24px 16px 16px;
+  color: var(--mat-sys-on-surface);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
 }
 
 .ms-dialog-header-actions {
@@ -88,15 +95,13 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
 
 .ms-dialog-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 24px;
+  font: inherit;
 }
 
 .ms-dialog-content {
   min-height: 0;
   overflow: auto;
-  padding: 0 16px;
+  padding: 0 16px 24px;
   color: var(--mat-sys-on-surface-variant);
   line-height: 17.5px;
 }
@@ -104,8 +109,9 @@ withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(
 .ms-dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 24px 16px;
+  gap: 12px;
+  padding: 0 16px 24px;
+  border-top: 1px solid transparent;
 }
 
 @keyframes ms-dialog-enter {

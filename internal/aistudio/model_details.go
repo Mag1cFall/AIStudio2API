@@ -53,7 +53,7 @@ func firstTimestamp(fields []json.RawMessage, index int, path string, evidence j
 	return optionalIntField(values, 0, fmt.Sprintf("%s[%d]", path, index), evidence)
 }
 
-// decodeModelPricing 解析价格消息：field 4 为整句说明，field 1、2 为输入与输出分档，分档名称、上限与思考标记取自输入分档，没有输入分档时取自输出分档
+// decodeModelPricing 解析价格消息：field 4 为整句说明，field 1、2 为输入与输出分档
 func decodeModelPricing(value json.RawMessage, path string, evidence json.RawMessage, details *ModelDetails) error {
 	if isJSONNull(value) {
 		return nil

@@ -22,6 +22,7 @@ import symbol_chevron_right from '@material-symbols/svg-300/outlined/chevron_rig
 import symbol_close from '@material-symbols/svg-300/outlined/close.svg?raw'
 import symbol_code from '@material-symbols/svg-300/outlined/code.svg?raw'
 import symbol_code_blocks from '@material-symbols/svg-300/outlined/code_blocks.svg?raw'
+import symbol_comment from '@material-symbols/svg-300/outlined/comment.svg?raw'
 import symbol_compare_arrows from '@material-symbols/svg-300/outlined/compare_arrows.svg?raw'
 import symbol_content_copy from '@material-symbols/svg-300/outlined/content_copy.svg?raw'
 import symbol_contrast from '@material-symbols/svg-300/outlined/contrast.svg?raw'
@@ -46,6 +47,7 @@ import symbol_file_json from '@material-symbols/svg-300/outlined/file_json.svg?r
 import symbol_filter_list from '@material-symbols/svg-300/outlined/filter_list.svg?raw'
 import symbol_filter_none from '@material-symbols/svg-300/outlined/filter_none.svg?raw'
 import symbol_folder from '@material-symbols/svg-300/outlined/folder.svg?raw'
+import symbol_format_align_left from '@material-symbols/svg-300/outlined/format_align_left.svg?raw'
 import symbol_fullscreen from '@material-symbols/svg-300/outlined/fullscreen.svg?raw'
 import symbol_fullscreen_exit from '@material-symbols/svg-300/outlined/fullscreen_exit.svg?raw'
 import symbol_hub from '@material-symbols/svg-300/outlined/hub.svg?raw'
@@ -101,7 +103,6 @@ import symbol_search from '@material-symbols/svg-300/outlined/search.svg?raw'
 import symbol_settings from '@material-symbols/svg-300/outlined/settings.svg?raw'
 import symbol_share from '@material-symbols/svg-300/outlined/share.svg?raw'
 import symbol_shield from '@material-symbols/svg-300/outlined/shield.svg?raw'
-import symbol_speaker_notes from '@material-symbols/svg-300/outlined/speaker_notes.svg?raw'
 import symbol_speed from '@material-symbols/svg-300/outlined/speed.svg?raw'
 import symbol_sports_esports from '@material-symbols/svg-300/outlined/sports_esports.svg?raw'
 import symbol_star from '@material-symbols/svg-300/outlined/star.svg?raw'
@@ -217,6 +218,7 @@ export const icons = {
   history: symbol_history,
   database: symbol_database,
   folder: symbol_folder,
+  inlineText: symbol_format_align_left,
   paid: symbol_paid,
   external: symbol_arrow_outward,
   more: symbol_more_vert,
@@ -289,7 +291,7 @@ export const icons = {
   thumbUp: symbol_thumb_up,
   thumbDown: symbol_thumb_down,
   arrowDropDown: symbol_arrow_drop_down,
-  speakerNotes: symbol_speaker_notes,
+  comment: symbol_comment,
   arrowBack: symbol_arrow_back,
   favorite: symbol_favorite,
   favoriteFill: symbol_favorite_fill,

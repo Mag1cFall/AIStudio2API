@@ -250,6 +250,12 @@ function replaceByID<T extends { id: string }>(items: T[], incoming: T): void {
   else items[index] = incoming
 }
 
+// updateAccount 用接口返回的账户替换列表中的同一账户
+function updateAccount(account: Account): void {
+  const index = accounts.value.findIndex((item) => item.id === account.id)
+  if (index !== -1) accounts.value[index] = account
+}
+
 // waitForRestart 在线更新后等新进程接管再刷新页面：状态接口返回其他版本或要求重新登录都表示旧进程已退出
 function waitForRestart(previous = status.value?.version): void {
   eventConnection?.close()
@@ -347,6 +353,7 @@ export function useConsole() {
     showNotice,
     loadAccountData,
     loadRequestData,
+    updateAccount,
     deleteAccount,
     undoDelete,
     commitDelete,

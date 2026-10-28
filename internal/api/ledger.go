@@ -140,6 +140,17 @@ type RequestAttempt struct {
 	Channel    string `json:"channel"`
 	Error      string `json:"error"`
 	DurationMS int64  `json:"duration_ms"`
+	// Hedge 表示首事件超时后发起的备用请求，Superseded 表示另一方先返回首事件后被取消
+	Hedge      bool `json:"hedge,omitempty"`
+	Superseded bool `json:"superseded,omitempty"`
+}
+
+// FirstEventLatency 是一个模型与通道近期原请求首事件等待的 p95 与样本数
+type FirstEventLatency struct {
+	Model   string `json:"model"`
+	Channel string `json:"channel"`
+	Samples int    `json:"samples"`
+	P95MS   int64  `json:"p95_ms"`
 }
 
 // UsageRecordQuery 选择请求记录的时间范围、筛选、状态码、关键字与分页位置

@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -22,8 +23,54 @@ var ignoredHarmCategories = map[string]bool{
 	"HARM_CATEGORY_UNSPECIFIED": true, "HARM_CATEGORY_DEROGATORY": true, "HARM_CATEGORY_TOXICITY": true,
 	"HARM_CATEGORY_VIOLENCE": true, "HARM_CATEGORY_SEXUAL": true, "HARM_CATEGORY_MEDICAL": true,
 	"HARM_CATEGORY_DANGEROUS": true, "HARM_CATEGORY_IMAGE_HATE": true, "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT": true,
-	"HARM_CATEGORY_IMAGE_HARASSMENT": true, "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT": true, "HARM_CATEGORY_JAILBREAK": true,
+	"HARM_CATEGORY_IMAGE_HARASSMENT": true, "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT": true,
 }
+
+// harmProbabilities 为 SafetyRating.probability 的 wire 编号与 Gemini API 枚举名
+var harmProbabilities = []string{"HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"}
+
+// decodeSafetyRatings 解码 repeated SafetyRating：category、probability、blocked 位于 field 3、4、5
+func decodeSafetyRatings(raw json.RawMessage, path string, evidence json.RawMessage) ([]SafetyRating, error) {
+	items, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, "GenerateContent")
+	}
+	ratings := make([]SafetyRating, 0, len(items))
+	for index, item := range items {
+		fields, err := rawArray(item, fmt.Sprintf("%s[%d]", path, index), evidence)
+		if err != nil {
+			return nil, withMethod(err, "GenerateContent")
+		}
+		rating := SafetyRating{Category: "HARM_CATEGORY_UNSPECIFIED", Probability: harmProbabilities[0]}
+		if value := rawAt(fields, 2); !isJSONNull(value) {
+			code, err := rawInt64(value, fmt.Sprintf("%s[%d][2]", path, index), evidence)
+			if err != nil {
+				return nil, withMethod(err, "GenerateContent")
+			}
+			rating.Category = fmt.Sprintf("HARM_CATEGORY_%d", code)
+			for _, category := range harmCategories {
+				if category.code == code {
+					rating.Category = category.name
+				}
+			}
+		}
+		if value := rawAt(fields, 3); !isJSONNull(value) {
+			code, err := rawInt64(value, fmt.Sprintf("%s[%d][3]", path, index), evidence)
+			if err != nil {
+				return nil, withMethod(err, "GenerateContent")
+			}
+			if code >= 0 && code < int64(len(harmProbabilities)) {
+				rating.Probability = harmProbabilities[code]
+			}
+		}
+		_ = json.Unmarshal(rawAt(fields, 4), &rating.Blocked)
+		ratings = append(ratings, rating)
+	}
+	return ratings, nil
+}
+
+// buildHarmCategory 为只有 Build 接受的安全类别，Playground 没有该类别的 wire 编号
+const buildHarmCategory = "HARM_CATEGORY_JAILBREAK"
 
 // harmThresholds 为 Gemini API 拦截阈值名与 wire 编号
 var harmThresholds = map[string]int64{
@@ -41,7 +88,7 @@ func resolveSafetySettings(settings []SafetySetting, imageRoute bool) ([]SafetyS
 	for _, setting := range settings {
 		category := strings.ToUpper(strings.TrimSpace(setting.Category))
 		threshold := strings.ToUpper(strings.TrimSpace(setting.Threshold))
-		known := false
+		known := category == buildHarmCategory
 		for _, item := range harmCategories {
 			known = known || item.name == category
 		}
@@ -64,6 +111,9 @@ func resolveSafetySettings(settings []SafetySetting, imageRoute bool) ([]SafetyS
 		if threshold, ok := thresholds[category.name]; ok {
 			resolved = append(resolved, SafetySetting{Category: category.name, Threshold: threshold})
 		}
+	}
+	if threshold, ok := thresholds[buildHarmCategory]; ok {
+		resolved = append(resolved, SafetySetting{Category: buildHarmCategory, Threshold: threshold})
 	}
 	return resolved, nil
 }

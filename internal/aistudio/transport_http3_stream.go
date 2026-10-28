@@ -15,7 +15,7 @@ import (
 	"github.com/Mag1cFall/uquic/quicvarint"
 )
 
-// h3RequestFields 按 Firefox 的 HTTP/3 请求头生成 QPACK 字段：伪头 method、scheme、authority、path，其余头按 Firefox 顺序并去掉逐跳头，altUsed 时写入 Alt-Used
+// h3RequestFields 按 Firefox 的 HTTP/3 请求头生成 QPACK 字段，altUsed 时写入 Alt-Used
 func h3RequestFields(request *fhttp.Request, altUsed bool) []qpackField {
 	authority := request.Host
 	if authority == "" {
@@ -52,7 +52,7 @@ func h3RequestFields(request *fhttp.Request, altUsed bool) []qpackField {
 	return fields
 }
 
-// roundTrip 在本连接上发送请求并返回响应头已到达的响应，opened 表示请求流已经打开；0-RTT 连接上只有安全方法不等握手完成，0-RTT 被拒绝的请求在握手完成后重发一次
+// roundTrip 在本连接上发送请求并返回响应头已到达的响应，opened 表示请求流已经打开；0-RTT 被拒绝的请求在握手完成后重发一次
 func (conn *http3Conn) roundTrip(request *fhttp.Request, fields []qpackField) (*fhttp.Response, bool, error) {
 	if !firefoxSafeMethods[request.Method] {
 		if err := conn.awaitReady(request.Context()); err != nil {

@@ -429,7 +429,7 @@ func (s *server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	if usage != nil {
 		response["usage"] = responsesUsage(usage)
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("responses", response))
 }
 
 // responsesCompactionTrigger 返回输入是否以 compaction_trigger 项结尾
@@ -478,7 +478,7 @@ func (s *server) handleCompactionTrigger(w http.ResponseWriter, r *http.Request,
 		s.storeCompaction(r.Context(), id, request, prepared, item, retained, response)
 	}
 	if writer == nil {
-		writeJSON(w, http.StatusOK, response)
+		writeJSON(w, http.StatusOK, officialOrder("responses", response))
 		return
 	}
 	if err := writer.emit("response.output_item.done", map[string]any{"output_index": 0, "item": item}); err != nil {

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '@/api'
+import { keepPage } from '@/desktop'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
 import { maskedProxy } from '@/proxy'
-import type { ServiceConfig, UpstreamChannel } from '@/types'
+import type { FirstEventLatency, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryParam } from '@/url'
 import SettingRow from './SettingRow.vue'
 import UiIcon from './UiIcon.vue'
@@ -22,7 +24,7 @@ const emit = defineEmits<{
   notice: [message: string, tone: 'success' | 'error']
 }>()
 
-const { t, errorText } = useI18n()
+const { t, locale, errorText } = useI18n()
 const saving = ref(false)
 const revealKey = ref(false)
 const adminPassword = ref('')
@@ -38,11 +40,13 @@ const form = reactive<ServiceConfig>({
   nonstream_keepalive: true,
   fake_stream: false,
   youtube_links: false,
+  first_event_hedge: 'off',
   auth_states: 'auth',
   listen_addr: '127.0.0.1:2048',
   preview_listen_addr: '127.0.0.1:2050',
   proxy_api_key: '',
   active_listen_addr: '127.0.0.1:2048',
+  reserved_listen_addr: '',
   active_preview_listen_addr: '127.0.0.1:2050',
   active_proxy_api_key: '',
   management_restart_required: false,
@@ -57,7 +61,7 @@ const form = reactive<ServiceConfig>({
   warm_startup_concurrency: 5,
   per_account_concurrency: 2,
   routing_strategy: 'round-robin',
-  upstream_channels: ['playground', 'build'],
+  upstream_channels: ['playground'],
   model_mapping: '',
   model_channels: '',
   waa_backend: 'camoufox',
@@ -121,6 +125,7 @@ const sections: {
       'temporary_chat',
       'init_timeout',
       'request_timeout',
+      'first_event_hedge',
     ],
   },
   {
@@ -181,6 +186,43 @@ function toggleUpstreamChannel(channel: UpstreamChannel, enabled: boolean): void
   form.upstream_channels = upstreamChannelOptions.filter((option) => selected.has(option))
 }
 
+// latencies 是各模型与通道近期原请求首事件等待的 p95
+const latencies = ref<FirstEventLatency[]>([])
+// busiest 是近期样本最多的模型与通道
+const busiest = computed(() =>
+  latencies.value.reduce<FirstEventLatency | undefined>(
+    (best, item) => (best === undefined || item.samples > best.samples ? item : best),
+    undefined,
+  ),
+)
+// suggestedSeconds 是 busiest 的 p95 向上取整的秒数，没有样本时为 60
+const suggestedSeconds = computed(() =>
+  busiest.value === undefined ? 60 : Math.max(1, Math.ceil(busiest.value.p95_ms / 1000)),
+)
+// hedgeMode 是首字超时备用请求的方式，选自定义时填入建议的秒数
+const hedgeMode = computed({
+  get: () =>
+    form.first_event_hedge === 'off' || form.first_event_hedge === 'auto'
+      ? form.first_event_hedge
+      : 'custom',
+  set: (mode: string) => {
+    form.first_event_hedge = mode === 'custom' ? String(suggestedSeconds.value) : mode
+  },
+})
+
+// hedgeHint 是所选方式的说明：自动时写取值规则，自定义时给出 busiest 的近期 p95 作参考
+const hedgeHint = computed(() => {
+  if (hedgeMode.value === 'auto') return t('settings.firstEventHedgeAutoHint')
+  const item = busiest.value
+  if (hedgeMode.value !== 'custom' || item === undefined) return ''
+  return t('settings.firstEventHedgeCustomHint')
+    .replace('{model}', item.model)
+    .replace(
+      '{seconds}',
+      new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 }).format(item.p95_ms / 1000),
+    )
+})
+
 // resetForm 用已保存配置覆盖表单
 function resetForm(config: ServiceConfig): void {
   Object.assign(form, JSON.parse(JSON.stringify(config)) as ServiceConfig)
@@ -200,8 +242,29 @@ function warnUnsaved(event: BeforeUnloadEvent): void {
   if (changedCount.value > 0) event.preventDefault()
 }
 
-onMounted(() => window.addEventListener('beforeunload', warnUnsaved))
-onUnmounted(() => window.removeEventListener('beforeunload', warnUnsaved))
+// releasePage 撤销关闭桌面窗口时为未保存修改保留页面的登记
+const releasePage = keepPage(() => changedCount.value > 0)
+
+// removeLeaveGuard 撤销离开管理端时对未保存修改的确认
+const removeLeaveGuard = useRouter().beforeEach(
+  (to) =>
+    to.name === 'console' || changedCount.value === 0 || window.confirm(t('settings.leaveUnsaved')),
+)
+
+onMounted(() => {
+  window.addEventListener('beforeunload', warnUnsaved)
+  void api
+    .firstEventLatency()
+    .then((items) => {
+      latencies.value = items
+    })
+    .catch(() => undefined)
+})
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', warnUnsaved)
+  releasePage()
+  removeLeaveGuard()
+})
 
 // saveConfig 原子保存全局配置
 async function saveConfig(): Promise<void> {
@@ -231,7 +294,9 @@ async function saveConfig(): Promise<void> {
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col">
-    <header class="border-b border-line px-4 py-4 md:px-8">
+    <header
+      class="border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-4xl)_-_14rem)/2_+_2rem))]"
+    >
       <h2 class="text-xl font-semibold text-white">{{ t('section.settings.title') }}</h2>
       <p class="mt-1 text-sm text-gray-500">{{ t('section.settings.description') }}</p>
     </header>
@@ -248,40 +313,42 @@ async function saveConfig(): Promise<void> {
     </div>
     <form
       v-else
-      class="flex min-h-0 flex-1 flex-col md:flex-row"
+      class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable_both-edges]"
       novalidate
       @submit.prevent="saveConfig"
     >
-      <nav
-        class="flex shrink-0 gap-1 overflow-x-auto border-b border-line p-2 md:w-56 md:flex-col md:border-r md:border-b-0 md:p-4"
-        :aria-label="t('section.settings.title')"
+      <div
+        class="mx-auto flex w-full max-w-[calc(var(--container-4xl)_+_14rem)] flex-col md:flex-row"
       >
-        <button
-          v-for="item in sections"
-          :key="item.id"
-          type="button"
-          class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors md:whitespace-normal"
-          :class="
-            section === item.id
-              ? 'bg-raised text-white'
-              : 'text-gray-400 hover:bg-raised/60 hover:text-gray-200'
-          "
-          :aria-current="section === item.id ? 'page' : undefined"
-          @click="section = item.id"
+        <nav
+          class="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-canvas p-2 md:w-56 md:flex-col md:self-start md:border-b-0 md:p-4 md:pl-5"
+          :aria-label="t('section.settings.title')"
         >
-          <UiIcon :name="item.icon" :size="15" />
-          <span class="flex-1">{{ t(item.label) }}</span>
-          <span
-            v-if="sectionChanged(item.id)"
-            v-tooltip="t('settings.unsavedSection')"
-            class="h-1.5 w-1.5 rounded-full bg-amber-400"
-            ><span class="sr-only">{{ t('settings.unsavedSection') }}</span></span
+          <button
+            v-for="item in sections"
+            :key="item.id"
+            type="button"
+            class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors md:whitespace-normal"
+            :class="
+              section === item.id
+                ? 'bg-raised text-white'
+                : 'text-gray-400 hover:bg-raised/60 hover:text-gray-200'
+            "
+            :aria-current="section === item.id ? 'page' : undefined"
+            @click="section = item.id"
           >
-        </button>
-      </nav>
+            <UiIcon :name="item.icon" :size="15" />
+            <span class="flex-1">{{ t(item.label) }}</span>
+            <span
+              v-if="sectionChanged(item.id)"
+              v-tooltip="t('settings.unsavedSection')"
+              class="h-1.5 w-1.5 rounded-full bg-amber-400"
+              ><span class="sr-only">{{ t('settings.unsavedSection') }}</span></span
+            >
+          </button>
+        </nav>
 
-      <div class="min-h-0 flex-1 overflow-auto">
-        <div class="mx-auto max-w-4xl px-4 pt-4 pb-28 md:px-8 md:pt-6">
+        <div class="min-w-0 flex-1 px-4 pt-4 pb-28 md:px-8 md:pt-6">
           <div
             v-if="config.service_restart_required"
             class="mb-3 rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-sm text-blue-200"
@@ -515,12 +582,17 @@ async function saveConfig(): Promise<void> {
               <div
                 role="group"
                 aria-labelledby="setting-channels-label"
-                class="flex flex-wrap gap-4 pt-1"
+                class="grid grid-cols-2 gap-2"
               >
                 <label
                   v-for="channel in upstreamChannelOptions"
                   :key="channel"
-                  class="flex items-center gap-2 text-sm text-gray-300"
+                  class="flex h-9 cursor-pointer items-center gap-2.5 rounded-md border px-3 text-sm transition-colors has-[:disabled]:cursor-default"
+                  :class="
+                    form.upstream_channels.includes(channel)
+                      ? 'border-blue-500/60 bg-blue-500/10 text-gray-100'
+                      : 'border-line bg-canvas text-gray-400 hover:border-gray-600 hover:text-gray-200'
+                  "
                 >
                   <input
                     type="checkbox"
@@ -655,6 +727,33 @@ async function saveConfig(): Promise<void> {
                 autocomplete="off"
                 spellcheck="false"
               />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.firstEventHedge')"
+              control-id="setting-first-event-hedge"
+              :description="t('settings.firstEventHedgeHelp')"
+              effect="service"
+              :changed="changedFields.has('first_event_hedge')"
+            >
+              <UiSelect id="setting-first-event-hedge" v-model="hedgeMode" :class="inputClass">
+                <option value="off">{{ t('settings.firstEventHedgeOff') }}</option>
+                <option value="auto">{{ t('settings.firstEventHedgeAuto') }}</option>
+                <option value="custom">{{ t('settings.firstEventHedgeCustom') }}</option>
+              </UiSelect>
+              <div v-if="hedgeMode === 'custom'" class="mt-2 flex items-center gap-2">
+                <input
+                  id="setting-first-event-hedge-seconds"
+                  v-model.trim="form.first_event_hedge"
+                  :class="inputClass"
+                  :aria-label="t('settings.firstEventHedgeSeconds')"
+                  inputmode="numeric"
+                  autocomplete="off"
+                />
+                <span class="shrink-0 text-sm text-gray-400">{{
+                  t('settings.firstEventHedgeUnit')
+                }}</span>
+              </div>
+              <p v-if="hedgeHint" class="mt-2 text-xs leading-5 text-gray-500">{{ hedgeHint }}</p>
             </SettingRow>
           </template>
 
