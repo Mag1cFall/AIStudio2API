@@ -21,7 +21,7 @@ type chatChoices struct {
 	running sync.WaitGroup
 }
 
-// startChatChoices 在各自 goroutine 中启动每个 choice 并立即读取其事件；非流式请求返回前等待各 Generate 返回，流式请求等待首个就绪的 choice，其余 choice 的启动错误作为该 choice 的流内错误
+// startChatChoices 在各自 goroutine 中启动每个 choice 并立即读取其事件，非流式请求等待各 Generate 返回，流式请求等待首个就绪的 choice
 func (s *server) startChatChoices(ctx context.Context, request aistudio.GenerateRequest, count int, stream bool) *chatChoices {
 	choices := &chatChoices{events: make([]<-chan aistudio.Event, count)}
 	choices.ctx, choices.cancel = context.WithCancel(ctx)
@@ -147,7 +147,7 @@ func (choices *chatChoices) record(ctx context.Context, results []generationResu
 	SetAccessLogGenerationResult(ctx, sumUsage(results), toolCalls)
 }
 
-// sumUsage 返回各次生成用量之和，均无用量时返回 nil
+// sumUsage 返回各次生成用量之和，多次生成时不带模态细分，均无用量时返回 nil
 func sumUsage(results []generationResult) *aistudio.Usage {
 	var total *aistudio.Usage
 	for index := range results {
@@ -156,8 +156,11 @@ func sumUsage(results []generationResult) *aistudio.Usage {
 			continue
 		}
 		if total == nil {
-			total = &aistudio.Usage{}
+			value := *usage
+			total = &value
+			continue
 		}
+		total.Details = nil
 		total.InputTokens += usage.InputTokens
 		total.CachedTokens += usage.CachedTokens
 		total.OutputTokens += usage.OutputTokens

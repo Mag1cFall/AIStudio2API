@@ -16,7 +16,7 @@ import ModelSelector from '@/playground/ModelSelector.vue'
 
 defineProps<{ adminUsername?: string }>()
 const emit = defineEmits<{ logout: [] }>()
-const { t } = useI18n()
+const { t, logText } = useI18n()
 const store = useConsole()
 const { notice } = store
 
@@ -82,7 +82,6 @@ onUnmounted(() => {
       @toggle="expanded = !expanded"
       @navigate="closeDrawer"
       @logout="emit('logout')"
-      @search="openPalette('root')"
     />
     <div v-if="narrow && expanded" class="sidebar-overlay" @click="expanded = false"></div>
     <main class="layout-main" :class="{ 'nav-hidden': !expanded }">
@@ -108,7 +107,7 @@ onUnmounted(() => {
         <div v-if="notice.message" role="status" class="callout" :class="`${notice.tone}-callout`">
           <div class="main-content">
             <UiIcon :name="notice.tone === 'error' ? 'error' : 'check'" :size="20" class="icon" />
-            <div class="message">{{ notice.message }}</div>
+            <div class="message">{{ logText(notice.message) }}</div>
           </div>
           <button
             type="button"

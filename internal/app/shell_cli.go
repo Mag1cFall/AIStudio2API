@@ -33,7 +33,7 @@ func (s *uiShell) run(ctx context.Context, start func() (serviceReady, error)) e
 	pageURL, log := service.url, service.log
 	if s.open {
 		if err := openBrowser(pageURL); err != nil {
-			log("WARN", "管理页面打开失败 | "+err.Error())
+			log("WARN", fmt.Sprintf("管理页面打开失败，请在浏览器中打开 %s | 错误=%v", pageURL, err))
 		} else {
 			log("INFO", "管理页面已打开 | 地址="+pageURL)
 		}

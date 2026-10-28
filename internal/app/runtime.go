@@ -129,6 +129,7 @@ func newRuntime(
 	pooled.YouTubeLinks = cfg.YouTubeLinks
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
+	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
@@ -275,7 +276,7 @@ func (preparer *accountWorkerPreparer) BrowserStorageState(ctx context.Context) 
 	return state, err
 }
 
-// current 在账户锁内核对 Worker 与页面模型未被替换，浏览器 RPC 在锁外执行，失败后再次核对以识别执行期间的替换
+// current 在账户锁内核对 Worker 与页面模型未被替换，浏览器 RPC 在锁外执行，失败后再次核对
 func (preparer *accountWorkerPreparer) current() bool {
 	preparer.account.mu.Lock()
 	defer preparer.account.mu.Unlock()
@@ -881,7 +882,7 @@ func (manager *accountWorkerManager) coldAccounts(accountIDs []string) []string 
 func (manager *accountWorkerManager) PrewarmTarget() int {
 	available := 0
 	for _, status := range manager.pool.Status() {
-		if !status.Enabled || (status.State != aistudio.AccountReady && status.State != aistudio.AccountBusy) {
+		if !status.Enabled || (status.State != aistudio.AccountReady && status.State != aistudio.AccountBusy && status.State != aistudio.AccountCooldown) {
 			continue
 		}
 		if models, err := manager.pool.BootstrapModels(status.ID); err == nil && len(models) > 0 {
@@ -1081,9 +1082,13 @@ func (manager *accountWorkerManager) startReservedWorker(
 	manager.requests.log(label, "INFO", "WAA Worker 启动 | 1/7 | 初始化页面 | 页面模型="+bootstrapModel)
 	initCtx, cancel := context.WithTimeout(ctx, manager.initTimeout)
 	options.Model = bootstrapModel
+	launched, _ := ctx.Value(browserLaunchedKey{}).(func())
 	options.StartupProgress = func(stage camoufoxnative.StartupStage) {
 		step, message := workerStartupProgress(stage)
 		manager.requests.log(label, "INFO", fmt.Sprintf("WAA Worker 启动 | %d/7 | %s", step, message))
+		if (stage == camoufoxnative.StartupConnectingBiDi || stage == camoufoxnative.StartupLoadingAIStudio) && launched != nil {
+			launched()
+		}
 	}
 	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	cancel()
@@ -1094,6 +1099,10 @@ func (manager *accountWorkerManager) startReservedWorker(
 		}
 		account.startupMu.Unlock()
 		if err := ctx.Err(); err != nil {
+			manager.requests.log(label, "WARN", fmt.Sprintf(
+				"WAA Worker 启动已取消 | 页面模型=%s | 耗时=%s",
+				bootstrapModel, time.Since(startedAt).Round(time.Millisecond),
+			))
 			return nil, err
 		}
 		manager.requests.log(label, "ERROR", fmt.Sprintf(
@@ -1176,6 +1185,13 @@ func discardAccountWorker(preparer *accountWorkerPreparer) error {
 		}
 		preparer.account.mu.Unlock()
 	}
+	preparer.account.mu.Lock()
+	label := preparer.account.label
+	preparer.account.mu.Unlock()
+	preparer.manager.requests.log(label, "WARN", fmt.Sprintf(
+		"WAA Worker 启动已取消 | 页面模型=%s | 耗时=%s",
+		preparer.bootstrapModel, time.Since(preparer.startedAt).Round(time.Millisecond),
+	))
 	preparer.pending = false
 	preparer.account.startupMu.Unlock()
 	return cleanupErr
@@ -1210,7 +1226,7 @@ func (manager *accountWorkerManager) idleWarmVictim(excludeID string) string {
 	return manager.idleWarmVictimFor(excludeID, "", false)
 }
 
-// reserveVictim 标记已被某次替换选中的旧 Worker，避免并行替换选中同一个
+// reserveVictim 标记已被某次替换选中的旧 Worker
 func (manager *accountWorkerManager) reserveVictim(accountID string) {
 	manager.victimMu.Lock()
 	manager.victims[accountID] = struct{}{}
@@ -1464,12 +1480,13 @@ func (manager *accountWorkerManager) startAuthenticatedWorker(ctx context.Contex
 	if _, busyErr := manager.runtimeAvailable([]string{accountID}); busyErr != nil {
 		return nil, busyErr
 	}
+	generation := lease.AuthGeneration()
 	worker, err := manager.startReservedWorker(ctx, accountID, model)
 	if !aistudio.DefinitiveAuthenticationFailure(err) {
 		return worker, err
 	}
 	if manager.refresher != nil {
-		if recoverErr := manager.refresher.Recover(ctx, err); recoverErr == nil {
+		if recoverErr := manager.refresher.Recover(ctx, err, generation); recoverErr == nil {
 			worker, err = manager.startReservedWorker(ctx, accountID, model)
 			if err == nil {
 				return worker, nil
@@ -1532,6 +1549,10 @@ func (manager *accountWorkerManager) StartPrewarm(ctx context.Context) <-chan er
 	return first
 }
 
+// browserLaunchedKey 是 context 中 Worker 的浏览器进程完成启动、开始连接 WebDriver BiDi 或载入 AI Studio 时调用的函数的键
+type browserLaunchedKey struct{}
+
+// fillWarm 按启动名额补足常驻 Worker，候选账户的目录就绪后立即启动，不等待已在启动的 Worker
 func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- error, cleanup func()) {
 	startedAt := time.Now()
 	defer cleanup()
@@ -1547,6 +1568,28 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 	}
 	var failures []error
 	failedAccounts := make(map[string]struct{})
+	starting := make(map[string]struct{})
+	launched := 0
+	head := ""
+	var headLaunched chan struct{}
+	results := make(chan warmResult)
+	collect := func(result warmResult) {
+		delete(starting, result.accountID)
+		if result.err == nil {
+			notify(nil)
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		failures = append(failures, fmt.Errorf("预热账户 %s: %w", result.accountID, result.err))
+		failedAccounts[result.accountID] = struct{}{}
+	}
+	defer func() {
+		for len(starting) > 0 {
+			collect(<-results)
+		}
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			if !notified {
@@ -1557,90 +1600,116 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 		warm := manager.WarmAccountIDs()
 		limit := manager.warmLimit()
 		if len(warm) >= limit {
-			manager.requests.log("service", "INFO", fmt.Sprintf(
-				"WAA Worker 预热完成 | Worker=%d/%d | 耗时=%s",
-				len(warm), manager.PrewarmTarget(), time.Since(startedAt).Round(time.Millisecond),
-			))
+			if launched > 0 {
+				manager.requests.log("service", "INFO", fmt.Sprintf(
+					"WAA Worker 预热完成 | Worker=%d/%d | 耗时=%s",
+					len(warm), manager.PrewarmTarget(), time.Since(startedAt).Round(time.Millisecond),
+				))
+			}
 			notify(nil)
 			return
 		}
-		remaining := limit - len(warm)
-		batchSize := min(manager.startup.size(), remaining)
+		launch := min(manager.startup.size(), limit-len(warm)) - len(starting)
+		if head != "" {
+			select {
+			case <-headLaunched:
+				head, headLaunched = "", nil
+			default:
+				if _, ok := starting[head]; !ok {
+					head, headLaunched = "", nil
+				}
+			}
+		}
+		if head != "" {
+			launch = 0
+		}
 		groups, err := manager.classifyBootstrapCandidates(ctx, warm)
 		var runtimeBusyErr error
 		if err != nil {
 			failures = append(failures, err)
 		} else {
-			groups.StandbyReady = excludeAccountIDs(groups.StandbyReady, failedAccounts)
-			groups.StandbyBusy = excludeAccountIDs(groups.StandbyBusy, failedAccounts)
+			skipped := maps.Clone(failedAccounts)
+			maps.Copy(skipped, starting)
+			groups.StandbyReady = excludeAccountIDs(groups.StandbyReady, skipped)
+			groups.StandbyBusy = excludeAccountIDs(groups.StandbyBusy, skipped)
 			var readyBusyErr, standbyBusyErr error
 			groups.StandbyReady, readyBusyErr = manager.runtimeAvailable(groups.StandbyReady)
 			groups.StandbyBusy, standbyBusyErr = manager.runtimeAvailable(groups.StandbyBusy)
 			runtimeBusyErr = errors.Join(readyBusyErr, standbyBusyErr)
 		}
-		pendingBusy := false
-		tasks := make([]warmTask, 0, batchSize)
+		pendingBusy := err == nil && len(groups.StandbyBusy) > 0
 		if err == nil {
-			pendingBusy = len(groups.StandbyBusy) > 0
-			for _, accountID := range groups.StandbyReady[:min(batchSize, len(groups.StandbyReady))] {
-				tasks = append(tasks, warmTask{accountID: accountID})
+			ready := groups.StandbyReady[:max(0, min(launch, len(groups.StandbyReady)))]
+			workerCtx := ctx
+			if len(ready) > 0 && launched == 0 && len(warm) == 0 {
+				ready = ready[:1]
+				head, headLaunched = ready[0], make(chan struct{})
+				workerCtx = context.WithValue(ctx, browserLaunchedKey{}, sync.OnceFunc(func() { close(headLaunched) }))
+			}
+			for _, accountID := range ready {
+				starting[accountID] = struct{}{}
+				launched++
+				go func() {
+					_, err := manager.Worker(workerCtx, accountID, "")
+					results <- warmResult{accountID: accountID, err: err}
+				}()
 			}
 		}
-		if len(tasks) == 0 {
-			if pendingBusy {
-				if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil && !notified {
-					notify(errors.Join(append(failures, err)...))
-				}
-				continue
+		if len(starting) > 0 {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+			case result := <-results:
+				collect(result)
+			case <-headLaunched:
+			case <-timer.C:
 			}
-			warm = manager.WarmAccountIDs()
-			if len(warm) > 0 {
+			timer.Stop()
+			continue
+		}
+		if pendingBusy {
+			if err := waitWarmCandidate(ctx, 100*time.Millisecond); err != nil && !notified {
+				notify(errors.Join(append(failures, err)...))
+			}
+			continue
+		}
+		warm = manager.WarmAccountIDs()
+		if len(warm) > 0 {
+			if launched > 0 {
 				manager.requests.log("service", "INFO", fmt.Sprintf(
 					"WAA Worker 预热完成 | Worker=%d/%d | 失败=%d | 耗时=%s",
 					len(warm), manager.PrewarmTarget(), len(failures), time.Since(startedAt).Round(time.Millisecond),
 				))
-				notify(nil)
-				return
 			}
-			if runtimeBusyErr != nil {
-				failures = append(failures, runtimeBusyErr)
-			}
-			if len(failures) == 0 {
-				failures = append(failures, aistudio.ErrNoEligibleAccount)
-			}
-			notify(fmt.Errorf("没有可预热的账户: %w", errors.Join(failures...)))
+			notify(nil)
 			return
 		}
-		results := make(chan warmResult, len(tasks))
-		for _, task := range tasks {
-			go func(task warmTask) {
-				_, err := manager.Worker(ctx, task.accountID, "")
-				results <- warmResult{accountID: task.accountID, err: err}
-			}(task)
-		}
-		for range len(tasks) {
-			result := <-results
-			if result.err == nil {
-				notify(nil)
-				continue
+		if err == nil && runtimeBusyErr == nil && !groups.EarliestCooldown.Until.IsZero() {
+			if !notified {
+				manager.requests.log("service", "INFO", fmt.Sprintf(
+					"WAA Worker 预热等待账户冷却 | 恢复=%s", groups.EarliestCooldown.Until.Local().Format(time.RFC3339),
+				))
 			}
-			if ctx.Err() != nil {
-				continue
+			notify(nil)
+			if err := waitWarmCandidate(ctx, min(time.Until(groups.EarliestCooldown.Until), schedulingRecheck)); err != nil {
+				return
 			}
-			failure := fmt.Errorf("预热账户 %s: %w", result.accountID, result.err)
-			failures = append(failures, failure)
-			failedAccounts[result.accountID] = struct{}{}
+			continue
 		}
+		if runtimeBusyErr != nil {
+			failures = append(failures, runtimeBusyErr)
+		}
+		if len(failures) == 0 {
+			failures = append(failures, aistudio.ErrNoEligibleAccount)
+		}
+		notify(fmt.Errorf("没有可预热的账户: %w", errors.Join(failures...)))
+		return
 	}
 }
 
 type warmResult struct {
 	accountID string
 	err       error
-}
-
-type warmTask struct {
-	accountID string
 }
 
 func excludeAccountIDs(accountIDs []string, excluded map[string]struct{}) []string {
@@ -1930,6 +1999,11 @@ type trackedService struct {
 	modelApplied         uint64
 	stateRefreshMu       sync.Mutex
 	stateRefreshAt       map[string]time.Time
+	// hedgeAuto 与 hedgeAfter 是首事件超时备用请求的自适应开关与自定义等待
+	hedgeAuto  bool
+	hedgeAfter time.Duration
+	// hedges 是正在进行的备用请求数
+	hedges atomic.Int32
 }
 
 type modelCatalogService interface {
@@ -1975,7 +2049,7 @@ func (e *serviceStoppedError) Error() string {
 	if e.launching {
 		return "AIStudio2API 生成服务正在启动"
 	}
-	return "AIStudio2API 服务已停止"
+	return "AIStudio2API 生成服务已停止：在管理页面点击“启动服务”，或在服务配置中开启“自动启动生成服务”"
 }
 
 func (*serviceStoppedError) HTTPStatus() int {
@@ -2035,13 +2109,11 @@ func (service *trackedService) Start(ctx context.Context, launching func()) ([]a
 	service.requests.log("service", "INFO", fmt.Sprintf(
 		"生成服务启动 | 1/2 | 准备模型目录 | 缓存=%d", len(models),
 	))
-	catalogReady, catalogSynced, catalogDone := service.startModelCatalogRefresh(dataContext)
-	service.lifecycleMu.Lock()
-	if service.dataContext == dataContext {
-		service.modelRefreshDone = catalogDone
-	}
-	service.lifecycleMu.Unlock()
-	if len(models) == 0 {
+	cached := len(models) > 0
+	var catalogSynced, catalogDone <-chan struct{}
+	if !cached {
+		var catalogReady <-chan error
+		catalogReady, catalogSynced, catalogDone = service.startLaunchCatalogRefresh(dataContext)
 		select {
 		case <-dataContext.Done():
 			stopCaller()
@@ -2063,6 +2135,9 @@ func (service *trackedService) Start(ctx context.Context, launching func()) ([]a
 		len(models), service.workers.PrewarmTarget(),
 	))
 	synced, warmErr := service.waitFirstWarm(dataContext, catalogSynced)
+	if cached {
+		_, catalogSynced, catalogDone = service.startLaunchCatalogRefresh(dataContext)
+	}
 	if warmErr != nil && !synced && dataContext.Err() == nil {
 		select {
 		case <-dataContext.Done():
@@ -2086,6 +2161,17 @@ func (service *trackedService) Start(ctx context.Context, launching func()) ([]a
 		return models, false, service.finishLaunch(transitionDone, dataCancel, catalogDone, err)
 	}
 	return models, true, nil
+}
+
+// startLaunchCatalogRefresh 开始本次启动的模型目录同步，并记录其结束信号供停止服务时等待
+func (service *trackedService) startLaunchCatalogRefresh(dataContext context.Context) (<-chan error, <-chan struct{}, <-chan struct{}) {
+	ready, synced, done := service.startModelCatalogRefresh(dataContext)
+	service.lifecycleMu.Lock()
+	if service.dataContext == dataContext {
+		service.modelRefreshDone = done
+	}
+	service.lifecycleMu.Unlock()
+	return ready, synced, done
 }
 
 // waitFirstWarm 启动预热并等待首个就绪 Worker，同时返回结束时首轮目录同步是否已完成
@@ -2762,21 +2848,21 @@ func (service *trackedService) syncPendingModels(ctx context.Context) error {
 	return nil
 }
 
-// currentModelRevision 返回最新模型变化代际
+// currentModelRevision 返回最新模型变化版本号
 func (service *trackedService) currentModelRevision() uint64 {
 	service.modelChangeMu.Lock()
 	defer service.modelChangeMu.Unlock()
 	return service.modelRevision
 }
 
-// modelRevisions 返回模型变化与已提交代际
+// modelRevisions 返回模型变化与已提交版本号
 func (service *trackedService) modelRevisions() (uint64, uint64) {
 	service.modelChangeMu.Lock()
 	defer service.modelChangeMu.Unlock()
 	return service.modelRevision, service.modelApplied
 }
 
-// applyModelRevision 提交成功刷新的模型代际
+// applyModelRevision 提交成功刷新的模型版本号
 func (service *trackedService) applyModelRevision(revision uint64) {
 	service.modelChangeMu.Lock()
 	if service.modelApplied < revision {
@@ -3191,13 +3277,13 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 	}
 }
 
-// schedulingRecheck 为等待调度信号时的兜底复查间隔
+// schedulingRecheck 为等待调度信号时的定时复查间隔
 const schedulingRecheck = time.Second
 
 // cooldownQueueLimit 为全部候选账户冷却时请求排队等待恢复的上限，覆盖分钟限额窗口
 const cooldownQueueLimit = time.Minute
 
-// waitScheduling 等待账户或 Worker 可调度状态变化、兜底复查或请求取消
+// waitScheduling 等待账户或 Worker 可调度状态变化、定时复查或请求取消
 func waitScheduling(ctx context.Context, changed <-chan struct{}, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -3378,6 +3464,10 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 		err = suffixErr
 		cancel()
 	}
+	if err == nil && aistudio.RequestBuildOnly(request) && !service.pool.BuildEnabled() {
+		err = fmt.Errorf("%w: File Search 只能经 Build 通道发送，UPSTREAM_CHANNELS 没有启用 build", aistudio.ErrInvalidArgument)
+		cancel()
+	}
 	if validator, ok := service.service.(interface {
 		ValidateGenerateRequest(aistudio.GenerateRequest) error
 	}); ok && err == nil {
@@ -3409,6 +3499,47 @@ func (service *trackedService) generateTimeout(request aistudio.GenerateRequest)
 	return service.timeout * time.Duration(service.pool.OutputContinuationRounds(request.Model, request.Config.MaxOutputTokens))
 }
 
+// generateAttempt 是一次上游尝试的账户租约、准备与发送、等待首事件的结果，done 关闭后结果字段可读
+type generateAttempt struct {
+	lease            *aistudio.AccountLease
+	selection        aistudio.AccountSelection
+	hedge            bool
+	accountLabel     string
+	proxy            string
+	workerGeneration uint64
+	startedAt        time.Time
+	copies           *aistudio.TemporaryFileCopies
+	activity         *upstreamActivity
+	source           <-chan aistudio.Event
+	first            aistudio.Event
+	firstAt          time.Time
+	err              error
+	cancel           context.CancelFunc
+	done             chan struct{}
+}
+
+// generateRetry 是生成请求跨尝试的换号与恢复状态
+type generateRetry struct {
+	maxAttempts       int
+	attempted         map[string]struct{}
+	recoveredWorker   map[string]struct{}
+	recoveryAccountID string
+	buildRejection    *rejectedBuildAttempt
+	// buildOnly 表示请求只能经 Build 通道发送，Build 拒绝参数时不改用 Playground
+	buildOnly bool
+	// attemptFailure 是最近一次既非额度冷却也非 Build 参数拒绝的尝试错误
+	attemptFailure error
+}
+
+// attemptOutcome 是失败尝试处理后的错误与换号决定
+type attemptOutcome struct {
+	err           error
+	retryable     bool
+	recoverWorker bool
+	accountID     string
+	accountLabel  string
+}
+
 func (service *trackedService) generateWithRetry(
 	clientCtx context.Context,
 	requestCtx context.Context,
@@ -3418,39 +3549,32 @@ func (service *trackedService) generateWithRetry(
 	resourceID string,
 	destination chan<- aistudio.Event,
 ) {
-	maxAttempts := 1
 	requestedAccountID := strings.TrimSpace(request.AccountID)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	continuationRounds := service.pool.OutputContinuationRounds(modelID, request.Config.MaxOutputTokens)
 	unbound := requestedAccountID == "" && resourceID == ""
 	fileBound := requestedAccountID == "" && resourceID != ""
+	retry := &generateRetry{maxAttempts: 1, recoveredWorker: make(map[string]struct{}), buildOnly: aistudio.RequestBuildOnly(request)}
 	if unbound || fileBound {
 		_, eligible := service.pool.EnabledAccounts()
 		if eligible > 1 {
-			maxAttempts = eligible
+			retry.maxAttempts = eligible
 		}
 	}
-	var lease *aistudio.AccountLease
-	var source <-chan aistudio.Event
-	var first aistudio.Event
+	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
+	assistant := service.pool.AssistantModel(modelID)
+	hedgeable := !request.Background && !assistant && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0)
+	hedged := false
+	var winner *generateAttempt
 	var activity *upstreamActivity
-	var temporaryCopies *aistudio.TemporaryFileCopies
 	var err error
-	originalContents := request.Contents
-	attempted := make(map[string]struct{}, maxAttempts)
-	recoveredWorker := make(map[string]struct{})
-	recoveryAccountID := ""
 	copyFiles := false
-	var buildRejection *rejectedBuildAttempt
-	// attemptFailure 是最近一次既非额度冷却也非 Build 参数拒绝的尝试错误
-	var attemptFailure error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		request.Contents = originalContents
+	for attempt := 0; attempt < retry.maxAttempts; attempt++ {
 		selectionAccountID := requestedAccountID
-		recoveringAccount := recoveryAccountID != ""
-		if recoveryAccountID != "" {
-			selectionAccountID = recoveryAccountID
-			recoveryAccountID = ""
+		recoveringAccount := retry.recoveryAccountID != ""
+		if retry.recoveryAccountID != "" {
+			selectionAccountID = retry.recoveryAccountID
+			retry.recoveryAccountID = ""
 		}
 		selectionResourceID := resourceID
 		if copyFiles {
@@ -3466,9 +3590,9 @@ func (service *trackedService) generateWithRetry(
 		if continuationRounds > 1 {
 			selection.PlaygroundOnly = true
 		}
-		assistant := service.pool.AssistantModel(modelID)
-		if !assistant && !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuildSchema(request) {
+		if !assistant && !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuild(request) {
 			selection.Channel = aistudio.ChannelBuild
+			selection.BuildOnly = retry.buildOnly
 		}
 		fallbackReason := ""
 		if request.Unary {
@@ -3478,22 +3602,21 @@ func (service *trackedService) generateWithRetry(
 				fallbackReason = "请求包含 Playground 专用能力或文件引用"
 			case selection.Channel != "":
 			case !service.pool.BuildEnabled():
-				fallbackReason = "Build 通道未启用"
 			case !service.buildNativeNonstream:
 				fallbackReason = "Build 非流式优先选项已关闭"
 			default:
 				selection.PreferredChannel = aistudio.ChannelBuild
 			}
 		}
-		if buildRejection != nil && buildRejection.accountID == selectionAccountID {
+		if retry.buildRejection != nil {
 			selection.PlaygroundOnly = true
 			selection.PreferredChannel = ""
 			fallbackReason = "Build 拒绝请求参数"
 		}
-		if (unbound || fileBound) && len(attempted) > 0 {
+		if (unbound || fileBound) && len(retry.attempted) > 0 {
 			enabled, _ := service.pool.EnabledAccounts()
 			for _, accountID := range enabled {
-				if _, exists := attempted[accountID]; !exists {
+				if _, exists := retry.attempted[accountID]; !exists {
 					selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
 				}
 			}
@@ -3504,17 +3627,17 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		nextLease, acquireErr := service.acquireWarmLease(requestCtx, selection)
+		lease, acquireErr := service.acquireWarmLease(requestCtx, selection)
 		var buildCooling *aistudio.AllCoolingError
-		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil &&
+		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
 			(errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &buildCooling)) {
-			// 没有账户能经 Build 服务时，结构化输出 Schema 改用 Playground 载体
+			// 没有账户能经 Build 服务时改用 Playground，Playground 无法表达的设置按其最接近的形式发送
 			selection.Channel = ""
 			fallbackReason = "Build 通道没有可用账户"
-			nextLease, acquireErr = service.acquireWarmLease(requestCtx, selection)
+			lease, acquireErr = service.acquireWarmLease(requestCtx, selection)
 		}
 		queueDelayed := queueWait.finish()
-		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && nextLease.Channel() != aistudio.ChannelBuild {
+		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && lease.Channel() != aistudio.ChannelBuild {
 			fallbackReason = "账户 Build 通道冷却或不支持此模型"
 		}
 		if acquireErr != nil {
@@ -3526,272 +3649,99 @@ func (service *trackedService) generateWithRetry(
 			var cooling *aistudio.AllCoolingError
 			switch {
 			case err != nil && errors.Is(acquireErr, aistudio.ErrNoEligibleAccount):
-			case attemptFailure != nil && errors.As(acquireErr, &cooling):
-				err = attemptFailure
+			case retry.attemptFailure != nil && errors.As(acquireErr, &cooling):
+				err = retry.attemptFailure
 			default:
 				err = acquireErr
 			}
 			if recoveringAccount && unbound && requestCtx.Err() == nil {
-				attempted[selectionAccountID] = struct{}{}
+				retry.attempted[selectionAccountID] = struct{}{}
 				continue
 			}
 			break
 		}
-		lease = nextLease
-		attemptStartedAt := time.Now()
 		err = nil
-		source = nil
-		request.AccountID = lease.Account().ID
-		attemptProxy := service.proxies.Binding(request.AccountID)
-		workerGeneration := service.workers.WorkerGeneration(request.AccountID)
-		attempted[request.AccountID] = struct{}{}
 		accountLabel := lease.Account().Config.Label
-		api.SetAccessLogChannel(requestCtx, string(lease.Channel()))
-		api.SetAccessLogTarget(requestCtx, modelID, accountLabel)
+		retry.attempted[lease.Account().ID] = struct{}{}
+		service.markAttemptAccount(requestCtx, request.ID, modelID, lease)
 		api.MarkAccessLogScheduled(requestCtx)
-		service.requests.markRunning(request.ID, request.AccountID, accountLabel)
-		service.requests.markChannel(request.ID, string(lease.Channel()))
 		if queueDelayed {
 			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 				"排队结束 | 等待=%s | 账户=%s", time.Since(queueStartedAt).Round(time.Millisecond), accountLabel,
 			))
 		}
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
-		attemptCtx := aistudio.ContextWithAccountLease(requestCtx, lease)
-		attemptCtx = aistudio.ContextWithUpstreamModeObserver(attemptCtx, func(method, mode, reason string) {
-			level := "INFO"
-			message := fmt.Sprintf("上游调用 | 通道=%s | 模式=%s | RPC=%s", lease.Channel(), mode, method)
-			if reason != "" {
-				level = "WARN"
-				if fallbackReason != "" {
-					reason = fallbackReason + "; " + reason
+		primary := service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, lease, selection, false)
+		var plan *hedgePlan
+		if hedgeable && !hedged {
+			if delay, ok := service.hedgeDelay(modelID, string(lease.Channel())); ok {
+				fixed := resourceID != "" || requestedAccountID != ""
+				plan = &hedgePlan{delay: delay, selections: service.hedgeSelections(selection, lease.Account().ID, fixed, retry.attempted)}
+				plan.start = func(hedgeLease *aistudio.AccountLease, hedgeSelection aistudio.AccountSelection) *generateAttempt {
+					hedged = true
+					retry.attempted[hedgeLease.Account().ID] = struct{}{}
+					return service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, hedgeLease, hedgeSelection, true)
 				}
-				message += " | 回退流式 | 原因=" + reason
 			}
-			service.requests.logRequestProgress(request.ID, accountLabel, level, message)
+		}
+		var last attemptOutcome
+		winner = service.awaitFirstEvent(requestCtx, request, modelID, primary, plan, func(failed *generateAttempt, sameAccountPending bool) {
+			activity = failed.activity
+			last = service.settleAttempt(requestCtx, request.ID, modelID, failed, retry, !sameAccountPending)
 		})
-		var attemptCopies *aistudio.TemporaryFileCopies
-		copiedFileCount := 0
-		if resourceID != "" {
-			fileCopies, ok := service.service.(interface {
-				CopyFileReferencesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
-			})
-			if !ok {
-				err = fmt.Errorf("文件引用跨账户服务不可用")
-			} else {
-				request.Contents, attemptCopies, err = fileCopies.CopyFileReferencesToLease(
-					requestCtx, lease, originalContents,
-				)
-				if err == nil {
-					copiedFileCount = attemptCopies.Count()
-				}
+		if winner != nil {
+			activity = winner.activity
+			if winner.hedge {
+				service.markAttemptAccount(requestCtx, request.ID, modelID, winner.lease)
 			}
-		}
-		mediaCount, mediaBytes := inlineMediaInput(request.Contents)
-		if err == nil && mediaCount > 0 {
-			uploader, ok := service.service.(interface {
-				UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
-			})
-			if !ok {
-				err = fmt.Errorf("内联附件上传服务不可用")
-			} else {
-				uploadStartedAt := time.Now()
-				request.Contents, attemptCopies, err = uploader.UploadInlineMediaToLease(
-					requestCtx, lease, request.Contents, attemptCopies,
-				)
-				if err == nil {
-					service.requests.log(accountLabel, "INFO", fmt.Sprintf(
-						"内联附件处理完成 | 附件=%d | 原始=%dB | 耗时=%s",
-						mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
-					))
-				}
-			}
-		}
-		prepareStartedAt := time.Now()
-		prepareTiming := newRequestPreparationTiming(prepareStartedAt)
-		prepareWait := startWaitReporter(func(waited time.Duration) {
-			current, _, _ := prepareTiming.snapshot(time.Now())
-			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
-				"请求准备等待 | 已等待=%s | 当前=%s | 模型=%s", waited, current, modelID,
-			))
-		})
-		activity = &upstreamActivity{}
-		attemptCtx = aistudio.ContextWithStreamActivityObserver(attemptCtx, activity.observe)
-		attemptCtx = aistudio.ContextWithRequestPhaseObserver(attemptCtx, prepareTiming.observe)
-		if err == nil {
-			source, err = service.service.Generate(attemptCtx, request)
-		}
-		if err == nil && copiedFileCount > 0 {
-			sourceLabels := make([]string, 0, len(attemptCopies.SourceAccountIDs()))
-			statuses := service.pool.Status()
-			for _, sourceID := range attemptCopies.SourceAccountIDs() {
-				sourceLabel := sourceID
-				for _, status := range statuses {
-					if status.ID == sourceID {
-						sourceLabel = status.Label
-						break
-					}
-				}
-				sourceLabels = append(sourceLabels, sourceLabel)
-			}
-			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
-				"文件引用复制 | 来源=%s | 目标=%s | 文件=%d",
-				strings.Join(sourceLabels, ","), accountLabel, copiedFileCount,
-			))
-		}
-		prepareElapsed := time.Since(prepareStartedAt)
-		if prepareWait.finish() {
-			_, waa, responseHeader := prepareTiming.snapshot(time.Now())
-			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
-				"请求准备结束 | 等待=%s | WAA=%s | 响应头=%s | 模型=%s",
-				prepareElapsed.Round(time.Millisecond), waa.Round(time.Millisecond),
-				responseHeader.Round(time.Millisecond), modelID,
-			))
-		}
-		if err == nil {
-			upstreamStartedAt := time.Now()
-			firstEventDelayed := false
-			first, err = firstGenerateEvent(requestCtx, source, func(waited time.Duration) {
-				firstEventDelayed = true
-				service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
-					"上游首事件等待 | 已等待=%s | 模型=%s | %s",
-					waited, modelID, activity.logFields(time.Now()),
-				))
-			})
-			if firstEventDelayed && err == nil {
-				service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
-					"上游首事件到达 | 等待=%s | 事件=%s | 模型=%s",
-					time.Since(upstreamStartedAt).Round(time.Millisecond), first.Kind, modelID,
-				))
-			}
-			if err == nil {
-				api.SetAccessLogFirstEvent(requestCtx, time.Since(generationStartedAt))
-				api.SetAccessLogTarget(requestCtx, first.ProviderModel, accountLabel)
-				if request.Unary {
-					source, err = collectGenerateEvents(requestCtx, source, func(waited time.Duration, events []aistudio.Event) {
-						reasoning, content := 0, 0
-						for _, event := range events {
-							switch event.Kind {
-							case aistudio.EventReasoning:
-								reasoning++
-							case aistudio.EventText:
-								content++
-							}
+			api.SetAccessLogFirstEvent(requestCtx, winner.firstAt.Sub(generationStartedAt))
+			api.SetAccessLogTarget(requestCtx, winner.first.ProviderModel, winner.accountLabel)
+			if request.Unary {
+				collected, collectErr := collectGenerateEvents(requestCtx, winner.source, func(waited time.Duration, events []aistudio.Event) {
+					reasoning, content := 0, 0
+					for _, event := range events {
+						switch event.Kind {
+						case aistudio.EventReasoning:
+							reasoning++
+						case aistudio.EventText:
+							content++
 						}
-						service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
-							"收集完整响应 | 已等待=%s | 推理=%d | 正文=%d | 模型=%s | %s",
-							waited, reasoning, content, modelID, activity.logFields(time.Now()),
-						))
-					})
-				}
-			}
-			if err == nil {
-				temporaryCopies = attemptCopies
-				service.proxies.ReportSuccess(attemptProxy)
-				if buildRejection != nil && buildRejection.accountID == request.AccountID {
-					service.coolRejectedBuild(request.ID, buildRejection, modelID, accountLabel)
-				}
-				break
-			}
-		}
-		if attemptCopies != nil {
-			err = errors.Join(err, attemptCopies.Cleanup())
-		}
-		api.AddAccessLogAttempt(requestCtx, api.RequestAttempt{
-			Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
-			DurationMS: time.Since(attemptStartedAt).Milliseconds(),
-		})
-		if proxyNetworkError(requestCtx, err) {
-			service.reportProxyFailure(attemptProxy, accountLabel, err)
-		}
-		workerFailed := service.workers.WorkerFailed(request.AccountID)
-		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
-		workerReplaced := errors.Is(err, errAccountWorkerReplaced)
-		localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
-		retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
-		recoverWorker := false
-		if aistudio.DefinitiveAuthenticationFailure(err) {
-			if stateErr := lease.MarkAuthenticationRequired(err.Error()); stateErr != nil {
-				err = errors.Join(err, stateErr)
-				retryable = false
-			}
-		}
-		cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
-		if quotaFailure {
-			modelAccessScope := lease.CooldownScope(modelID)
-			scopeLabel := modelAccessScope
-			if cooldown.Global {
-				modelAccessScope = ""
-				scopeLabel = "全局"
-			}
-			until, stateErr := service.pool.MarkQuotaCooldownIfGeneration(
-				request.AccountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown,
-			)
-			if stateErr != nil {
-				err = errors.Join(err, stateErr)
-				retryable = false
-			} else {
-				if !until.IsZero() {
-					service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
-						"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
-						cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
+					}
+					service.requests.logRequestProgress(request.ID, winner.accountLabel, "INFO", fmt.Sprintf(
+						"收集完整响应 | 已等待=%s | 推理=%d | 正文=%d | 模型=%s | %s",
+						waited, reasoning, content, modelID, winner.activity.logFields(time.Now()),
 					))
-				}
-				if service.pool.ModelRequiresSubscription(request.AccountID, modelID) {
-					service.refreshAccountStateAfterLimit(request.AccountID)
-				}
-				if !cooldown.Global && service.pool.AccountChannelAvailable(request.AccountID, selection) {
-					delete(attempted, request.AccountID)
-					maxAttempts++
+				})
+				if collectErr != nil {
+					winner.err = collectErr
+					last = service.settleAttempt(requestCtx, request.ID, modelID, winner, retry, true)
+					winner = nil
+				} else {
+					winner.source = collected
 				}
 			}
 		}
-		var rpcErr *aistudio.RPCError
-		buildRejected := lease.Channel() == aistudio.ChannelBuild && service.pool.PlaygroundEnabled() && requestCtx.Err() == nil &&
-			errors.As(err, &rpcErr) && rpcErr.StatusCode == http.StatusBadRequest && rpcErr.Code == 3
-		if buildRejected {
-			buildRejection = &rejectedBuildAttempt{
-				accountID: request.AccountID, generation: lease.ModelAccessGeneration(), checkedAt: lease.CheckedAt(), err: err,
+		if winner != nil {
+			service.proxies.ReportSuccess(winner.proxy)
+			if retry.buildRejection != nil {
+				service.coolRejectedBuild(request.ID, retry.buildRejection, modelID, winner.accountLabel)
 			}
-			recoveryAccountID = request.AccountID
-			delete(attempted, request.AccountID)
-			maxAttempts++
-			retryable = true
-		}
-		if !quotaFailure && !buildRejected {
-			attemptFailure = err
-		}
-		releaseErr := lease.Release()
-		lease = nil
-		if releaseErr != nil {
-			err = errors.Join(err, releaseErr)
 			break
 		}
-		if requestCtx.Err() == nil {
-			var resetErr error
-			recoverWorker, _, resetErr = service.recoverWorkerOnce(
-				requestCtx, request.AccountID, workerGeneration, recoveredWorker,
-				needsWAARuntimeRecovery(err, false, workerFailed, workerReplaced),
-				workerFailed || waaRuntimeFailed,
-			)
-			if resetErr != nil {
-				err = errors.Join(err, resetErr)
-				retryable = false
-			}
-		}
-		if !retryable {
+		err = last.err
+		if !last.retryable {
 			break
 		}
-		if recoverWorker {
-			recoveryAccountID = request.AccountID
-			delete(attempted, request.AccountID)
-			maxAttempts++
+		if last.recoverWorker {
+			retry.recoveryAccountID = last.accountID
+			delete(retry.attempted, last.accountID)
+			retry.maxAttempts++
 		}
-		if attempt+1 == maxAttempts {
+		if attempt+1 == retry.maxAttempts {
 			break
 		}
-		if recoverWorker {
-			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
+		if last.recoverWorker {
+			service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", fmt.Sprintf(
 				"WAA Worker 重建 | 模型=%s | 重放当前请求\n原因: %s", modelID, strings.TrimSpace(err.Error()),
 			))
 			continue
@@ -3800,9 +3750,9 @@ func (service *trackedService) generateWithRetry(
 			"账号切换 | 模型=%s\n原因: %s",
 			modelID, strings.TrimSpace(err.Error()),
 		)
-		service.requests.logRequestProgress(request.ID, accountLabel, "WARN", switchMessage)
+		service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", switchMessage)
 	}
-	if err != nil {
+	if winner == nil {
 		if activity != nil {
 			api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
 		}
@@ -3817,12 +3767,267 @@ func (service *trackedService) generateWithRetry(
 		return
 	}
 	service.forwardEvents(
-		clientCtx, requestCtx, cancel, request.ID,
-		first, source, destination, lease, temporaryCopies, activity, modelID,
+		clientCtx, requestCtx, func() { winner.cancel(); cancel() }, request.ID,
+		winner.first, winner.source, destination, winner.lease, winner.copies, winner.activity, modelID,
 	)
 }
 
-// rejectedBuildAttempt 表示 Build 以参数错误拒绝、正在由同账户 Playground 重试的尝试
+// markAttemptAccount 把访问日志与活动请求的执行账户与通道记为该租约
+func (service *trackedService) markAttemptAccount(requestCtx context.Context, requestID, modelID string, lease *aistudio.AccountLease) {
+	label := lease.Account().Config.Label
+	api.SetAccessLogChannel(requestCtx, string(lease.Channel()))
+	api.SetAccessLogTarget(requestCtx, modelID, label)
+	service.requests.markRunning(requestID, lease.Account().ID, label)
+	service.requests.markChannel(requestID, string(lease.Channel()))
+}
+
+// startAttempt 在租约账户上准备并发送请求，后台等待首事件，结束时关闭 done
+func (service *trackedService) startAttempt(
+	requestCtx context.Context,
+	request aistudio.GenerateRequest,
+	resourceID string,
+	modelID string,
+	fallbackReason string,
+	lease *aistudio.AccountLease,
+	selection aistudio.AccountSelection,
+	hedge bool,
+) *generateAttempt {
+	request.AccountID = lease.Account().ID
+	attempt := &generateAttempt{
+		lease: lease, selection: selection, hedge: hedge, accountLabel: lease.Account().Config.Label,
+		proxy: service.proxies.Binding(request.AccountID), workerGeneration: service.workers.WorkerGeneration(request.AccountID),
+		startedAt: time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}),
+	}
+	attemptCtx, cancel := context.WithCancel(requestCtx)
+	attempt.cancel = cancel
+	go func() {
+		defer close(attempt.done)
+		service.runAttempt(attemptCtx, request, resourceID, modelID, fallbackReason, attempt)
+	}()
+	return attempt
+}
+
+// runAttempt 复制文件引用、上传内联附件、发送请求并等待首事件，结果写入 attempt
+func (service *trackedService) runAttempt(
+	ctx context.Context,
+	request aistudio.GenerateRequest,
+	resourceID string,
+	modelID string,
+	fallbackReason string,
+	attempt *generateAttempt,
+) {
+	lease, accountLabel := attempt.lease, attempt.accountLabel
+	originalContents := request.Contents
+	ctx = aistudio.ContextWithAccountLease(ctx, lease)
+	ctx = aistudio.ContextWithUpstreamModeObserver(ctx, func(method, mode, reason string) {
+		level := "INFO"
+		message := fmt.Sprintf("上游调用 | 通道=%s | 模式=%s | RPC=%s", lease.Channel(), mode, method)
+		if reason != "" && service.pool.BuildEnabled() {
+			level = "WARN"
+			if fallbackReason != "" {
+				reason = fallbackReason + "; " + reason
+			}
+			message += " | 回退流式 | 原因=" + reason
+		}
+		service.requests.logRequestProgress(request.ID, accountLabel, level, message)
+	})
+	var err error
+	copiedFileCount := 0
+	if resourceID != "" {
+		fileCopies, ok := service.service.(interface {
+			CopyFileReferencesToLease(context.Context, *aistudio.AccountLease, []aistudio.Content) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
+		})
+		if !ok {
+			err = fmt.Errorf("文件引用跨账户服务不可用")
+		} else {
+			request.Contents, attempt.copies, err = fileCopies.CopyFileReferencesToLease(ctx, lease, originalContents)
+			if err == nil {
+				copiedFileCount = attempt.copies.Count()
+			}
+		}
+	}
+	mediaCount, mediaBytes := inlineMediaInput(request.Contents)
+	if err == nil && mediaCount > 0 {
+		uploader, ok := service.service.(interface {
+			UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
+		})
+		if !ok {
+			err = fmt.Errorf("内联附件上传服务不可用")
+		} else {
+			uploadStartedAt := time.Now()
+			request.Contents, attempt.copies, err = uploader.UploadInlineMediaToLease(ctx, lease, request.Contents, attempt.copies)
+			if err == nil {
+				service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+					"内联附件处理完成 | 附件=%d | 原始=%dB | 耗时=%s",
+					mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
+				))
+			}
+		}
+	}
+	prepareStartedAt := time.Now()
+	prepareTiming := newRequestPreparationTiming(prepareStartedAt)
+	prepareWait := startWaitReporter(func(waited time.Duration) {
+		current, _, _ := prepareTiming.snapshot(time.Now())
+		service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
+			"请求准备等待 | 已等待=%s | 当前=%s | 模型=%s", waited, current, modelID,
+		))
+	})
+	ctx = aistudio.ContextWithStreamActivityObserver(ctx, attempt.activity.observe)
+	ctx = aistudio.ContextWithRequestPhaseObserver(ctx, prepareTiming.observe)
+	if err == nil {
+		attempt.source, err = service.service.Generate(ctx, request)
+	}
+	if err == nil && copiedFileCount > 0 {
+		sourceLabels := make([]string, 0, len(attempt.copies.SourceAccountIDs()))
+		statuses := service.pool.Status()
+		for _, sourceID := range attempt.copies.SourceAccountIDs() {
+			sourceLabel := sourceID
+			for _, status := range statuses {
+				if status.ID == sourceID {
+					sourceLabel = status.Label
+					break
+				}
+			}
+			sourceLabels = append(sourceLabels, sourceLabel)
+		}
+		service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+			"文件引用复制 | 来源=%s | 目标=%s | 文件=%d",
+			strings.Join(sourceLabels, ","), accountLabel, copiedFileCount,
+		))
+	}
+	prepareElapsed := time.Since(prepareStartedAt)
+	if prepareWait.finish() {
+		_, waa, responseHeader := prepareTiming.snapshot(time.Now())
+		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
+			"请求准备结束 | 等待=%s | WAA=%s | 响应头=%s | 模型=%s",
+			prepareElapsed.Round(time.Millisecond), waa.Round(time.Millisecond),
+			responseHeader.Round(time.Millisecond), modelID,
+		))
+	}
+	if err == nil {
+		upstreamStartedAt := time.Now()
+		firstEventDelayed := false
+		attempt.first, err = firstGenerateEvent(ctx, attempt.source, func(waited time.Duration) {
+			firstEventDelayed = true
+			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
+				"上游首事件等待 | 已等待=%s | 模型=%s | %s",
+				waited, modelID, attempt.activity.logFields(time.Now()),
+			))
+		})
+		attempt.firstAt = time.Now()
+		if firstEventDelayed && err == nil {
+			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
+				"上游首事件到达 | 等待=%s | 事件=%s | 模型=%s",
+				time.Since(upstreamStartedAt).Round(time.Millisecond), attempt.first.Kind, modelID,
+			))
+		}
+	}
+	attempt.err = err
+}
+
+// settleAttempt 处理失败的尝试：记录访问日志与冷却，释放租约，mayRecover 为真时按需重建 Worker
+func (service *trackedService) settleAttempt(
+	requestCtx context.Context,
+	requestID string,
+	modelID string,
+	attempt *generateAttempt,
+	retry *generateRetry,
+	mayRecover bool,
+) attemptOutcome {
+	err := attempt.err
+	lease := attempt.lease
+	accountID, accountLabel := lease.Account().ID, attempt.accountLabel
+	if attempt.copies != nil {
+		err = errors.Join(err, attempt.copies.Cleanup())
+	}
+	api.AddAccessLogAttempt(requestCtx, api.RequestAttempt{
+		Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
+		DurationMS: time.Since(attempt.startedAt).Milliseconds(), Hedge: attempt.hedge,
+	})
+	if proxyNetworkError(requestCtx, err) {
+		service.reportProxyFailure(attempt.proxy, accountLabel, err)
+	}
+	workerFailed := service.workers.WorkerFailed(accountID)
+	waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
+	workerReplaced := errors.Is(err, errAccountWorkerReplaced)
+	localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
+	retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
+	if aistudio.DefinitiveAuthenticationFailure(err) {
+		if stateErr := lease.MarkAuthenticationRequired(err.Error()); stateErr != nil {
+			err = errors.Join(err, stateErr)
+			retryable = false
+		}
+	}
+	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
+	if quotaFailure {
+		modelAccessScope := lease.CooldownScope(modelID)
+		scopeLabel := modelAccessScope
+		if cooldown.Global {
+			modelAccessScope = ""
+			scopeLabel = "全局"
+		}
+		until, stateErr := service.pool.MarkQuotaCooldownIfGeneration(
+			accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown,
+		)
+		if stateErr != nil {
+			err = errors.Join(err, stateErr)
+			retryable = false
+		} else {
+			if !until.IsZero() {
+				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
+					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
+					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
+				))
+			}
+			if service.pool.ModelRequiresSubscription(accountID, modelID) {
+				service.refreshAccountStateAfterLimit(accountID)
+			}
+			if !cooldown.Global && service.pool.AccountChannelAvailable(accountID, attempt.selection) {
+				delete(retry.attempted, accountID)
+				retry.maxAttempts++
+			}
+		}
+	}
+	var rpcErr *aistudio.RPCError
+	buildRejected := lease.Channel() == aistudio.ChannelBuild && service.pool.PlaygroundEnabled() && requestCtx.Err() == nil &&
+		errors.As(err, &rpcErr) && rpcErr.StatusCode == http.StatusBadRequest && rpcErr.Code == 3 && !retry.buildOnly &&
+		!aistudio.BuildGenerationDisabled(err)
+	if buildRejected {
+		retry.buildRejection = &rejectedBuildAttempt{
+			accountID: accountID, generation: lease.ModelAccessGeneration(), checkedAt: lease.CheckedAt(), err: err,
+		}
+		playground := attempt.selection
+		playground.PlaygroundOnly = true
+		if service.pool.AccountChannelAvailable(accountID, playground) {
+			retry.recoveryAccountID = accountID
+		}
+		delete(retry.attempted, accountID)
+		retry.maxAttempts++
+		retryable = true
+	}
+	if !quotaFailure && !buildRejected {
+		retry.attemptFailure = err
+	}
+	if releaseErr := lease.Release(); releaseErr != nil {
+		return attemptOutcome{err: errors.Join(err, releaseErr), accountID: accountID, accountLabel: accountLabel}
+	}
+	recoverWorker := false
+	if requestCtx.Err() == nil && mayRecover {
+		var resetErr error
+		recoverWorker, _, resetErr = service.recoverWorkerOnce(
+			requestCtx, accountID, attempt.workerGeneration, retry.recoveredWorker,
+			needsWAARuntimeRecovery(err, false, workerFailed, workerReplaced),
+			workerFailed || waaRuntimeFailed,
+		)
+		if resetErr != nil {
+			err = errors.Join(err, resetErr)
+			retryable = false
+		}
+	}
+	return attemptOutcome{err: err, retryable: retryable, recoverWorker: recoverWorker, accountID: accountID, accountLabel: accountLabel}
+}
+
+// rejectedBuildAttempt 表示 Build 以参数错误拒绝、改由 Playground 重试的尝试
 type rejectedBuildAttempt struct {
 	accountID  string
 	generation uint64
@@ -3830,7 +4035,7 @@ type rejectedBuildAttempt struct {
 	err        error
 }
 
-// coolRejectedBuild 在同账户 Playground 对被 Build 拒绝的请求返回首个事件后递增冷却该模型的 Build 通道
+// coolRejectedBuild 在 Playground 对被 Build 拒绝的请求返回首个事件后递增冷却被拒账户该模型的 Build 通道
 func (service *trackedService) coolRejectedBuild(requestID string, rejection *rejectedBuildAttempt, modelID string, accountLabel string) {
 	cooldown, ok := aistudio.BuildRejectionCooldown(rejection.err)
 	if !ok {
@@ -3889,7 +4094,7 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 	}
 }
 
-// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误以便换号重试；收集达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长与已收到的事件调用 onWait
+// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误；收集达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长与已收到的事件调用 onWait
 func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, onWait func(time.Duration, []aistudio.Event)) (<-chan aistudio.Event, error) {
 	startedAt := time.Now()
 	timer := time.NewTimer(streamStallThreshold)
@@ -4113,7 +4318,7 @@ func (service *trackedService) forwardEvents(
 				usage = event.Usage
 			}
 		case aistudio.EventToolCall:
-			if event.ToolCall != nil {
+			if event.FunctionCall != nil {
 				toolCalls++
 			}
 		}

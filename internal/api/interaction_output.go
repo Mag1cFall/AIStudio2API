@@ -13,12 +13,12 @@ import (
 )
 
 // interactionMedia 投影音频容器、采样参数及其他媒体内容
-func interactionMedia(media aistudio.Media, audioFormat string) (map[string]any, error) {
+func interactionMedia(media aistudio.Blob, audioFormat string) (map[string]any, error) {
 	baseType, parameters, err := mime.ParseMediaType(media.MIME)
 	if err != nil {
 		return nil, err
 	}
-	if media.URL == "" && (baseType == "audio/wav" || baseType == "audio/x-wav") {
+	if baseType == "audio/wav" || baseType == "audio/x-wav" {
 		media, err = wavPCM(media)
 		if err != nil {
 			return nil, err
@@ -33,10 +33,6 @@ func interactionMedia(media aistudio.Media, audioFormat string) (map[string]any,
 		typeName = "document"
 	}
 	content := map[string]any{"type": typeName, "mime_type": baseType}
-	if media.URL != "" {
-		content["uri"] = media.URL
-		return content, nil
-	}
 	data := media.Data
 	if typeName == "audio" {
 		data, _, err = encodeSpeechResponse(media, audioFormat)
@@ -60,13 +56,22 @@ func interactionMedia(media aistudio.Media, audioFormat string) (map[string]any,
 }
 
 // interactionStep 将单个规范事件投影为步骤内容与对应增量
-func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[string]any, map[string]any, error) {
+func interactionStep(event aistudio.Event, audio outputAudioFormat) (map[string]any, map[string]any, error) {
 	var content map[string]any
 	switch event.Kind {
 	case aistudio.EventText:
 		content = map[string]any{"type": "text", "text": event.Text}
+		if words := interactionWordInfos(event.Transcript, event.Text, 0); len(words) > 0 {
+			content["annotations"] = words
+		}
 	case aistudio.EventReasoning:
 		content = map[string]any{"type": "text", "text": event.Text}
+		if event.InlineData != nil {
+			var err error
+			if content, err = interactionMedia(*event.InlineData, audio.container()); err != nil {
+				return nil, nil, err
+			}
+		}
 		step := map[string]any{"type": "thought", "summary": []map[string]any{content}}
 		if event.ThoughtSignature != "" {
 			step["signature"] = event.ThoughtSignature
@@ -78,26 +83,37 @@ func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[st
 		}
 		return map[string]any{"type": "thought", "signature": event.ThoughtSignature}, map[string]any{"type": "thought_signature", "signature": event.ThoughtSignature}, nil
 	case aistudio.EventToolCall:
-		if event.ToolCall == nil {
+		if event.FunctionCall == nil {
 			return nil, nil, nil
 		}
-		call := event.ToolCall
+		call := event.FunctionCall
 		return map[string]any{"type": "function_call", "id": call.ID, "name": call.Name, "arguments": call.Arguments}, nil, nil
-	case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
-		step := map[string]any{"type": "processing_call", "id": event.MediaProcessing.ID}
-		if event.Kind == aistudio.EventMediaProcessingResult {
-			step = map[string]any{"type": "processing_result", "call_id": event.MediaProcessing.ID}
+	case aistudio.EventServerToolCall, aistudio.EventServerToolResponse, aistudio.EventExecutableCode, aistudio.EventCodeExecutionResult:
+		step, err := interactionToolStep(event.Part)
+		if err != nil || step == nil {
+			return nil, nil, err
 		}
-		delta := map[string]any{"type": step["type"]}
+		delta := maps.Clone(step)
+		delete(delta, "id")
+		delete(delta, "call_id")
+		delete(delta, "search_type")
 		if event.ThoughtSignature != "" {
 			step["signature"], delta["signature"] = event.ThoughtSignature, event.ThoughtSignature
 		}
 		return step, delta, nil
 	case aistudio.EventMedia:
-		if event.Media == nil {
+		if external := event.ExternalMedia; external != nil {
+			typeName := strings.SplitN(external.MIME, "/", 2)[0]
+			if typeName != "audio" && typeName != "video" && typeName != "image" {
+				typeName = "document"
+			}
+			content = map[string]any{"type": typeName, "mime_type": external.MIME, "uri": external.URL}
+			break
+		}
+		if event.InlineData == nil {
 			return nil, nil, nil
 		}
-		media := *event.Media
+		media := *event.InlineData
 		var err error
 		if strings.HasPrefix(media.MIME, "audio/") {
 			if media, err = audio.encode(media); err != nil {
@@ -108,15 +124,48 @@ func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[st
 		if err != nil {
 			return nil, nil, err
 		}
-	case aistudio.EventExecutableCode, aistudio.EventCodeExecutionResult:
-		if text := renderCodeExecution(event); text != "" {
-			content = map[string]any{"type": "text", "text": text}
-		}
 	}
 	if content == nil {
 		return nil, nil, nil
 	}
 	return map[string]any{"type": "model_output", "content": []map[string]any{content}}, content, nil
+}
+
+// interactionWordInfos 把转录逐词时间投影为 word_info 注释，下标为词在 text 中的字节位置加 offset
+func interactionWordInfos(transcript *aistudio.TranscriptMetadata, text string, offset int) []map[string]any {
+	if transcript == nil {
+		return nil
+	}
+	annotations := make([]map[string]any, 0, len(transcript.Words))
+	cursor := 0
+	for _, word := range transcript.Words {
+		annotation := map[string]any{"type": "word_info", "text": word.Word, "start_offset": geminiDuration(word.Start), "end_offset": geminiDuration(word.End)}
+		if transcript.Speaker != "" {
+			annotation["speaker"] = transcript.Speaker
+		}
+		if position := strings.Index(text[cursor:], word.Word); word.Word != "" && position >= 0 {
+			cursor += position
+			annotation["start_index"], annotation["end_index"] = offset+cursor, offset+cursor+len(word.Word)
+			cursor += len(word.Word)
+		}
+		annotations = append(annotations, annotation)
+	}
+	return annotations
+}
+
+// shiftWordInfos 把 word_info 注释的下标移动 offset 字节
+func shiftWordInfos(annotations []map[string]any, offset int) []map[string]any {
+	shifted := make([]map[string]any, 0, len(annotations))
+	for _, annotation := range annotations {
+		annotation = maps.Clone(annotation)
+		for _, key := range []string{"start_index", "end_index"} {
+			if index, ok := annotation[key].(int); ok {
+				annotation[key] = index + offset
+			}
+		}
+		shifted = append(shifted, annotation)
+	}
+	return shifted
 }
 
 // interactionText 表示一段 text 内容及其文字在上游全文中的位置
@@ -185,13 +234,15 @@ func annotateInteractionTexts(texts []*interactionText, citations []aistudio.Cit
 }
 
 // interactionSteps 汇总完整内容并将所有 PCM 分块封装为一段音频，引用写入所在 text 内容
-func interactionSteps(result generationResult, audio interactionAudioFormat, summaries bool) ([]map[string]any, error) {
+func interactionSteps(result generationResult, audio outputAudioFormat, summaries bool) ([]map[string]any, error) {
 	steps := make([]map[string]any, 0)
 	audioWritten := false
 	texts := make([]*interactionText, 0)
 	var current *interactionText
+	var codeIDs codeExecutionIDs
 	source := 0
 	for _, event := range result.events {
+		event.Part = codeIDs.assign(event.Part)
 		if signature := interactionOutputSignature(event); signature != "" {
 			steps = append(steps, map[string]any{"type": "thought", "signature": signature})
 		}
@@ -201,7 +252,7 @@ func interactionSteps(result generationResult, audio interactionAudioFormat, sum
 			}
 			event.Kind = aistudio.EventThoughtSignature
 		}
-		if event.Kind == aistudio.EventMedia && event.Media != nil && strings.HasPrefix(event.Media.MIME, "audio/") {
+		if event.Kind == aistudio.EventMedia && event.InlineData != nil && strings.HasPrefix(event.InlineData.MIME, "audio/") {
 			if audioWritten {
 				continue
 			}
@@ -209,7 +260,7 @@ func interactionSteps(result generationResult, audio interactionAudioFormat, sum
 			if err != nil {
 				return nil, err
 			}
-			event.Media = &audio
+			event.InlineData = &audio
 			audioWritten = true
 		}
 		step, _, err := interactionStep(event, audio)
@@ -229,7 +280,12 @@ func interactionSteps(result generationResult, audio interactionAudioFormat, sum
 			prior, _ := previous[field].([]map[string]any)
 			for _, item := range items {
 				if len(prior) > 0 && item["type"] == "text" && prior[len(prior)-1]["type"] == "text" {
-					prior[len(prior)-1]["text"] = prior[len(prior)-1]["text"].(string) + item["text"].(string)
+					last := prior[len(prior)-1]
+					if words, _ := item["annotations"].([]map[string]any); len(words) > 0 {
+						annotations, _ := last["annotations"].([]map[string]any)
+						last["annotations"] = append(annotations, shiftWordInfos(words, len(last["text"].(string)))...)
+					}
+					last["text"] = last["text"].(string) + item["text"].(string)
 				} else {
 					prior = append(prior, item)
 					current = nil
@@ -270,7 +326,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	}
 	send := func(kind string, value map[string]any) error {
 		value["event_type"] = kind
-		return writeSSE(w, kind, value)
+		return writeSSE(w, kind, officialOrder("interactions", value))
 	}
 	if err := send("interaction.created", map[string]any{"interaction": interactionObject(generate, created, "in_progress", nil)}); err != nil {
 		return
@@ -281,6 +337,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	var text *interactionText
 	textLength, source := 0, 0
 	pendingSignature := ""
+	var codeIDs codeExecutionIDs
 	closeStep := func() error {
 		if active == "" {
 			return nil
@@ -326,6 +383,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			return send("step.delta", map[string]any{"index": index, "delta": map[string]any{"type": "text_annotation_delta", "annotations": annotations}})
 		}
+		event.Part = codeIDs.assign(event.Part)
 		step, delta, err := interactionStep(event, audio)
 		if err != nil || step == nil {
 			return err
@@ -344,7 +402,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			textLength += length
 		}
-		standalone := kind == "function_call" || kind == "processing_call" || kind == "processing_result"
+		standalone := kind == "function_call" || interactionToolStepKind(kind)
 		if active != kind || standalone {
 			if err := closeStep(); err != nil {
 				return err
@@ -366,13 +424,20 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 				return err
 			}
 		}
-		if delta != nil {
-			return send("step.delta", map[string]any{"index": index, "delta": delta})
+		if delta == nil {
+			return nil
 		}
-		return nil
+		words, _ := delta["annotations"].([]map[string]any)
+		if len(words) > 0 {
+			delta = map[string]any{"type": "text", "text": delta["text"]}
+		}
+		if err := send("step.delta", map[string]any{"index": index, "delta": delta}); err != nil || len(words) == 0 {
+			return err
+		}
+		return send("step.delta", map[string]any{"index": index, "delta": map[string]any{"type": "text_annotation_delta", "annotations": shiftWordInfos(words, textLength-len(delta["text"].(string)))}})
 	}
 	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
-		if event.Kind == aistudio.EventMedia && event.Media != nil && strings.HasPrefix(event.Media.MIME, "audio/") && !audio.streams(*event.Media) {
+		if event.Kind == aistudio.EventMedia && event.InlineData != nil && strings.HasPrefix(event.InlineData.MIME, "audio/") && !audio.streams(*event.InlineData) {
 			return nil
 		}
 		if len(interactionCitations(event)) == 0 {
@@ -391,10 +456,10 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			if !strings.HasPrefix(media.MIME, "audio/") || audio.streams(media) {
 				continue
 			}
-			var audio aistudio.Media
+			var audio aistudio.Blob
 			audio, err = joinedAudio(result.media)
 			if err == nil {
-				err = emit(aistudio.Event{Kind: aistudio.EventMedia, Media: &audio})
+				err = emit(aistudio.Event{Kind: aistudio.EventMedia, InlineData: &audio})
 			}
 			break
 		}
@@ -412,7 +477,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err := closeStep(); err != nil {
 		return
 	}
-	completed := interactionObject(generate, created, interactionStatus(result), result.usage)
+	completed := interactionObject(generate, created, interactionStatus(result), &result)
 	if request.Store == nil || *request.Store {
 		s.storeInteraction(request, previous, current, result, completed)
 	}
@@ -425,8 +490,8 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 func interactionOutputSignature(event aistudio.Event) string {
 	switch event.Kind {
 	case aistudio.EventToolCall:
-		if event.ToolCall != nil && event.ToolCall.ThoughtSignature != "" {
-			return event.ToolCall.ThoughtSignature
+		if event.FunctionCall != nil && event.FunctionCall.ThoughtSignature != "" {
+			return event.FunctionCall.ThoughtSignature
 		}
 		return event.ThoughtSignature
 	case aistudio.EventText, aistudio.EventMedia:

@@ -45,15 +45,8 @@
     }
     throw new type(message);
   };
-  const isA = (iface, target) => {
-    for (let current = iface; current; current = parentOf[current]) if (current === target) return true;
-    return false;
-  };
-  const brandCheck = (self, iface) => {
-    if (self === undefined || self === null) self = g;
-    const brand = self !== null && (typeof self === 'object' || typeof self === 'function') ? brands.get(self) : undefined;
-    return brand && isA(brand.iface, iface) ? brand : null;
-  };
+  const isA = host.isA;
+  const brandCheck = host.brandCheck;
   const brandError = (iface, member) => {
     const error = new TypeError("'" + member + "' called on an object that does not implement interface " + iface + '.');
     return error;
@@ -63,13 +56,9 @@
     if (!brand) throw brandError(iface, member);
     return brand;
   };
-  const realmOfPath = path => {
-    if (path.startsWith('top.') && topRealm) return [topRealm, path.slice(4)];
-    return [api, path.replace(/^(frame|top)\./, '')];
-  };
   const resolveRef = path => {
-    const [target, key] = realmOfPath(path);
-    return target.singleton(key);
+    if (path.startsWith('top.')) return (topRealm || api).singleton(path.slice(4));
+    return api.singleton(path.startsWith('frame.') ? path.slice(6) : path);
   };
   const decode = encoded => {
     switch (encoded.t) {
@@ -107,18 +96,50 @@
     if (encoded.t === 'b') return Boolean(value);
     return value;
   };
+  // memberTables 是安装完成后按接口与成员名索引的特殊 getter 与方法表
+  let memberTables = null;
+  // memberTable 把以“接口.成员”为键的表转为按接口与成员名索引的两层表
+  const memberTable = table => {
+    const result = Object.create(null);
+    for (const key of Object.keys(table)) {
+      const dot = key.indexOf('.');
+      const iface = key.slice(0, dot);
+      (result[iface] || (result[iface] = Object.create(null)))[key.slice(dot + 1)] = table[key];
+    }
+    return result;
+  };
+  // lookupMember 按声明接口、实例接口与通配接口的顺序取成员实现
+  const lookupMember = (table, indexed, declared, iface, name) => {
+    if (indexed === null) return (declared && table[declared + '.' + name]) || table[iface + '.' + name] || table['*.' + name];
+    const own = declared && indexed[declared];
+    const exact = indexed[iface];
+    const any = indexed['*'];
+    return (own && own[name]) || (exact && exact[name]) || (any && any[name]);
+  };
   const readValue = (self, brand, name, declared) => {
-    if (Object.prototype.hasOwnProperty.call(brand.over, name)) return brand.over[name];
-    if (brand.cache.has(name)) return brand.cache.get(name);
-    const special = (declared && getters[declared + '.' + name]) || getters[brand.iface + '.' + name] || getters['*.' + name];
+    if (name in brand.over) return brand.over[name];
+    const cached = brand.cache.get(name);
+    if (cached !== undefined) return cached;
+    const special = lookupMember(getters, memberTables && memberTables.getters, declared, brand.iface, name);
     if (special) return special.call(self, brand);
     const encoded = Object.prototype.hasOwnProperty.call(brand.values, name) ? brand.values[name] : defaultFor(brand.iface, name);
     if (encoded === undefined) {
       return undefined;
     }
     const value = decode(encoded);
-    if (encoded.t === 'o' || encoded.t === 'a' || encoded.t === 'f') brand.cache.set(name, value);
+    if (encoded.t === 'o' || encoded.t === 'a' || encoded.t === 'f' || stableValue(encoded, name, value)) brand.cache.set(name, value);
     return value;
+  };
+  // stableValue 判断没有特殊 getter 的成员解码出的原始值或单例在之后的读取中不变
+  const stableValue = (encoded, name, value) => {
+    if (value === undefined || memberTables === null || name in memberTables.special) return false;
+    switch (encoded.t) {
+      case 's': case 'b': case 'n': case 'null': case 'bigint': return true;
+      case 'ref':
+        if (encoded.v.startsWith('top.')) return (topRealm || api).stableSingleton(encoded.v.slice(4));
+        return api.stableSingleton(encoded.v.startsWith('frame.') ? encoded.v.slice(6) : encoded.v);
+      default: return false;
+    }
   };
   const read = (self, brand, name, declared) => {
     const value = exposed(readValue(self, brand, name, declared));
@@ -134,7 +155,7 @@
     if (brand.owner) (brand.owner.attrs || (brand.owner.attrs = new Map())).set('style', inlineStyle(brand));
   };
   const invoke = (self, brand, iface, name, args) => {
-    const implementation = methods[iface + '.' + name] || methods['*.' + name];
+    const implementation = lookupMember(methods, memberTables && memberTables.methods, null, iface, name);
     const result = implementation ? implementation.call(self, brand, args) : undefined;
     return result;
   };
@@ -230,13 +251,7 @@
   };
   host.setTemplateResolver(templateProperty);
   let quietCreate = 0;
-  const exposed = value => {
-    if (host.resolveInterface && value !== null && typeof value === 'object') {
-      const brand = brands.get(value);
-      if (brand) host.resolveInterface(brand.iface);
-    }
-    return value;
-  };
+  const exposed = host.exposed;
   const create = (iface, values) => {
     const info = infos[iface];
     const proto = protos[iface] || Object.prototype;
@@ -300,6 +315,7 @@
       protos[info.n] = protos[info.cn];
     }
   }
+  host.interfaceParents(parentOf);
   const realmShape = shape[realmName];
   const windowValues = Object.assign({}, realmShape.windowValues);
   const profileWindow = (profile.window || {});
@@ -405,6 +421,8 @@
       }
       return object;
     },
+    // stableSingleton 判断已取得的单例在之后的 singleton 调用中保持同一对象；创建 document 时会替换先行创建的 document 子节点单例
+    stableSingleton: path => !path.startsWith('document.') || singletons.document !== undefined,
     ctor: name => ctors[name],
     proto: name => protos[name],
     pageOrigin: () => pageOrigin(),
@@ -1130,6 +1148,7 @@
     '*.childNodes': function (brand) { return liveCollection(this, 'childNodes', 'NodeList', () => childrenOf(brand).slice()); },
     'NodeList.length': brand => brand.items ? brand.items.length : 0,
     'HTMLCollection.length': brand => brand.items ? brand.items.length : 0,
+    'CharacterData.length': brand => dataOf(brand).length,
     '*.children': function (brand) { return liveCollection(this, 'children', 'HTMLCollection', () => childrenOf(brand).filter(isElement)); },
     '*.firstChild': brand => childrenOf(brand)[0] || null,
     '*.lastChild': brand => childrenOf(brand)[childrenOf(brand).length - 1] || null,
@@ -2100,6 +2119,8 @@
   }
   if (host.intl) host.intl(g.Intl, host.intlHost, { native, setLength, define });
   for (const item of shape.builtins || []) alignBuiltinObject(item.path, item.own);
+  memberTables = { getters: memberTable(getters), methods: memberTable(methods), special: Object.create(null) };
+  for (const key of Object.keys(getters)) memberTables.special[key.slice(key.indexOf('.') + 1)] = true;
   host.onInstalled && host.onInstalled(api);
   return api;
 })

@@ -24,14 +24,69 @@ var schemaTypeCodes = map[string]int64{
 	"object":  6,
 }
 
+// schemaTypeNames 是 Gemini Schema 类型编号对应的枚举名
+var schemaTypeNames = []string{"TYPE_UNSPECIFIED", "STRING", "NUMBER", "INTEGER", "BOOLEAN", "ARRAY", "OBJECT"}
+
+// playgroundSchemaFields 是 Gemini Schema 字段在 Playground Schema 数组中的位置
+var playgroundSchemaFields = map[string]int{
+	"type": 0, "format": 1, "description": 2, "nullable": 3, "enum": 4, "items": 5, "properties": 6, "required": 7,
+	"minProperties": 8, "maxProperties": 9, "minimum": 10, "maximum": 11, "minLength": 12, "maxLength": 13, "pattern": 14,
+	"example": 15, "oneOf": 16, "anyOf": 17, "allOf": 18, "not": 19, "maxItems": 20, "minItems": 21, "propertyOrdering": 22,
+}
+
+// encodeJSONSchema 把 JSON Schema 编码为 Playground Schema 数组
 func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
+	schema, err := geminiSchema(raw)
+	if err != nil {
+		return nil, err
+	}
+	return playgroundSchema(schema), nil
+}
+
+// playgroundSchema 把 Gemini Schema 对象编码为 Playground Schema 数组，属性按名称排序
+func playgroundSchema(schema map[string]any) []any {
+	var wire []any
+	for name, value := range schema {
+		switch name {
+		case "type":
+			value = int64(slices.Index(schemaTypeNames, value.(string)))
+		case "items", "not":
+			value = playgroundSchema(value.(map[string]any))
+		case "properties":
+			properties := value.(map[string]any)
+			names := make([]string, 0, len(properties))
+			for name := range properties {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			entries := make([]any, 0, len(names))
+			for _, name := range names {
+				entries = append(entries, []any{name, playgroundSchema(properties[name].(map[string]any))})
+			}
+			value = entries
+		case "example":
+			value = encodeWireValue(value)
+		case "oneOf", "anyOf", "allOf":
+			variants := make([]any, 0, len(value.([]any)))
+			for _, variant := range value.([]any) {
+				variants = append(variants, playgroundSchema(variant.(map[string]any)))
+			}
+			value = variants
+		}
+		wire = setWireField(wire, playgroundSchemaFields[name], value)
+	}
+	return wire
+}
+
+// geminiSchema 把 JSON Schema 规范化为 Gemini API Schema 对象
+func geminiSchema(raw json.RawMessage) (map[string]any, error) {
 	var err error
 	raw, err = cleanJSONSchemaInput(raw)
 	if err != nil {
 		return nil, err
 	}
 	if bytes.Equal(raw, []byte("true")) {
-		return []any{int64(0)}, nil
+		return openSchema(), nil
 	}
 	if bytes.Equal(raw, []byte("false")) {
 		return nil, fmt.Errorf("schema false %w", errSchemaForbidsAll)
@@ -88,59 +143,49 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	if !ok && typeName != "" {
 		return nil, fmt.Errorf("未知 schema.type %q", typeName)
 	}
-	wire := []any{typeCode}
+	encoded := map[string]any{"type": schemaTypeNames[typeCode]}
 	if value, ok := schema["format"]; ok {
 		format, err := schemaString(value, "format")
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 1, format)
+		encoded["format"] = format
 	}
 	if value, ok := schema["description"]; ok {
 		description, err := schemaString(value, "description")
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 2, description)
+		encoded["description"] = description
 	}
 	if value, ok := schema["nullable"]; ok {
 		var nullable bool
 		if err := json.Unmarshal(value, &nullable); err != nil {
 			return nil, fmt.Errorf("schema.nullable 必须是布尔值")
 		}
-		wire = setWireField(wire, 3, nullable)
+		encoded["nullable"] = nullable
 	}
 	if value, ok := schema["enum"]; ok {
 		values, err := schemaStrings(value, "enum")
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 4, values)
+		encoded["enum"] = values
 	}
 	if value, ok := schema["items"]; ok {
-		items, err := encodeJSONSchema(value)
+		items, err := geminiSchema(value)
 		if err != nil {
 			return nil, fmt.Errorf("schema.items: %w", err)
 		}
-		wire = setWireField(wire, 5, items)
+		encoded["items"] = items
 	}
-	for _, field := range []struct {
-		name  string
-		index int
-	}{
-		{name: "minItems", index: 21},
-		{name: "maxItems", index: 20},
-		{name: "minProperties", index: 8},
-		{name: "maxProperties", index: 9},
-		{name: "minLength", index: 12},
-		{name: "maxLength", index: 13},
-	} {
-		if value, ok := schema[field.name]; ok {
-			integer, err := schemaInteger(value, field.name)
+	for _, name := range []string{"minItems", "maxItems", "minProperties", "maxProperties", "minLength", "maxLength"} {
+		if value, ok := schema[name]; ok {
+			integer, err := schemaInteger(value, name)
 			if err != nil {
 				return nil, err
 			}
-			wire = setWireField(wire, field.index, integer)
+			encoded[name] = integer
 		}
 	}
 	if value, ok := schema["properties"]; ok {
@@ -155,20 +200,20 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		sort.Strings(names)
 		var required []string
 		_ = json.Unmarshal(schema["required"], &required)
-		entries := make([]any, 0, len(names))
+		encodedProperties := make(map[string]any, len(names))
 		for _, name := range names {
 			// 可选属性为 false 表示该属性不出现
 			if bytes.Equal(bytes.TrimSpace(properties[name]), []byte("false")) && !slices.Contains(required, name) {
 				continue
 			}
-			property, err := encodeJSONSchema(properties[name])
+			property, err := geminiSchema(properties[name])
 			if err != nil {
 				return nil, fmt.Errorf("schema.properties.%s: %w", name, err)
 			}
-			entries = append(entries, []any{name, property})
+			encodedProperties[name] = property
 		}
-		if len(entries) > 0 {
-			wire = setWireField(wire, 6, entries)
+		if len(encodedProperties) > 0 {
+			encoded["properties"] = encodedProperties
 		}
 	}
 	if value, ok := schema["required"]; ok {
@@ -176,21 +221,15 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 7, required)
+		encoded["required"] = required
 	}
-	for _, field := range []struct {
-		name  string
-		index int
-	}{
-		{name: "minimum", index: 10},
-		{name: "maximum", index: 11},
-	} {
-		if value, ok := schema[field.name]; ok {
-			number, err := schemaNumber(value, field.name)
+	for _, name := range []string{"minimum", "maximum"} {
+		if value, ok := schema[name]; ok {
+			number, err := schemaNumber(value, name)
 			if err != nil {
 				return nil, err
 			}
-			wire = setWireField(wire, field.index, number)
+			encoded[name] = number
 		}
 	}
 	if value, ok := schema["pattern"]; ok {
@@ -198,48 +237,57 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 14, pattern)
+		encoded["pattern"] = pattern
 	}
 	if value, ok := schema["example"]; ok {
 		var example any
 		if err := json.Unmarshal(value, &example); err != nil {
 			return nil, fmt.Errorf("schema.example 必须是 JSON value")
 		}
-		wire = setWireField(wire, 15, encodeWireValue(example))
+		encoded["example"] = example
 	}
-	for _, field := range []struct {
-		name  string
-		index int
-	}{
-		{name: "oneOf", index: 16},
-		{name: "anyOf", index: 17},
-		{name: "allOf", index: 18},
-	} {
-		if value, ok := schema[field.name]; ok {
-			variants, err := encodeSchemaVariants(value, field.name)
+	for _, name := range []string{"oneOf", "anyOf", "allOf"} {
+		if value, ok := schema[name]; ok {
+			variants, err := encodeSchemaVariants(value, name)
 			if err != nil {
 				return nil, err
 			}
 			if len(variants) > 0 {
-				wire = setWireField(wire, field.index, variants)
+				encoded[name] = variants
 			}
 		}
 	}
 	if value, ok := schema["not"]; ok {
-		notSchema, err := encodeJSONSchema(value)
+		notSchema, err := geminiSchema(value)
 		if err != nil {
 			return nil, fmt.Errorf("schema.not: %w", err)
 		}
-		wire = setWireField(wire, 19, notSchema)
+		encoded["not"] = notSchema
 	}
 	if value, ok := schema["propertyOrdering"]; ok {
 		ordering, err := schemaStrings(value, "propertyOrdering")
 		if err != nil {
 			return nil, err
 		}
-		wire = setWireField(wire, 22, ordering)
+		encoded["propertyOrdering"] = ordering
 	}
-	return wire, nil
+	if encoded["type"] == schemaTypeNames[0] && encoded["anyOf"] == nil && encoded["oneOf"] == nil && encoded["allOf"] == nil {
+		for name, value := range openSchema() {
+			if _, ok := encoded[name]; !ok {
+				encoded[name] = value
+			}
+		}
+	}
+	return encoded, nil
+}
+
+// openSchema 返回不限类型节点的 Gemini Schema：标量与标量数组的 anyOf，允许 null
+func openSchema() map[string]any {
+	scalars := func() []any {
+		return []any{map[string]any{"type": "STRING"}, map[string]any{"type": "NUMBER"}, map[string]any{"type": "BOOLEAN"}}
+	}
+	items := map[string]any{"type": schemaTypeNames[0], "nullable": true, "anyOf": scalars()}
+	return map[string]any{"type": schemaTypeNames[0], "nullable": true, "anyOf": append(scalars(), map[string]any{"type": "ARRAY", "items": items})}
 }
 
 // normalizeNullableVariants 将 JSON Schema null 联合映射为 AI Studio nullable
@@ -403,7 +451,7 @@ func cleanJSONSchemaInput(raw json.RawMessage) (json.RawMessage, error) {
 	return cleanSchemaInput(raw, false)
 }
 
-// cleanSchemaInput 清理可选空值并按工具与输出契约保留组合节点
+// cleanSchemaInput 清理可选空值并按工具与输出约束保留组合节点
 func cleanSchemaInput(raw json.RawMessage, preserveCombinations bool) (json.RawMessage, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
@@ -648,11 +696,11 @@ func encodeSchemaVariants(raw json.RawMessage, name string) ([]any, error) {
 	}
 	encoded := make([]any, 0, len(variants))
 	for index, variant := range variants {
-		wire, err := encodeJSONSchema(variant)
+		schema, err := geminiSchema(variant)
 		if err != nil {
 			return nil, fmt.Errorf("schema.%s[%d]: %w", name, index, err)
 		}
-		encoded = append(encoded, wire)
+		encoded = append(encoded, schema)
 	}
 	return encoded, nil
 }
@@ -819,14 +867,14 @@ func resolveSchemaRefs(value any, definitions map[string]any, active []string) a
 	return value
 }
 
-// responseSchemaNote 为附加在结构化输出根说明中的完整 Schema 前缀
+// responseSchemaNote 为附加在结构化输出根说明或系统指令中的完整 Schema 前缀
 const responseSchemaNote = "The response must follow this JSON Schema: "
 
 // encodeResponseSchema 编码结构化输出 Schema；无法直接表达的 Schema 按层级与类型编码并在根说明附完整 Schema
-func encodeResponseSchema(raw json.RawMessage) ([]any, error) {
-	wire, err := encodeJSONSchema(raw)
+func encodeResponseSchema(raw json.RawMessage) (map[string]any, error) {
+	encoded, err := geminiSchema(raw)
 	if err == nil {
-		return wire, nil
+		return encoded, nil
 	}
 	if errors.Is(err, errSchemaForbidsAll) {
 		return nil, err
@@ -842,46 +890,91 @@ func encodeResponseSchema(raw json.RawMessage) ([]any, error) {
 	if shapeErr != nil {
 		return nil, err
 	}
-	wire, shapeErr = encodeJSONSchema(shape)
+	encoded, shapeErr = geminiSchema(shape)
 	if shapeErr != nil {
 		return nil, err
 	}
-	return describeResponseSchema(wire, raw), nil
+	description, _ := encoded["description"].(string)
+	encoded["description"] = describedSchema(description, raw)
+	return encoded, nil
 }
 
-// describeResponseSchema 在根节点说明中附加完整 JSON Schema
-func describeResponseSchema(wire []any, raw json.RawMessage) []any {
-	description := ""
-	if len(wire) > 2 {
-		description, _ = wire[2].(string)
-	}
+// describedSchema 返回附加完整 JSON Schema 后的说明，已附加时原样返回
+func describedSchema(description string, raw json.RawMessage) string {
 	if strings.Contains(description, responseSchemaNote) {
-		return wire
+		return description
 	}
 	var compact bytes.Buffer
 	if json.Compact(&compact, raw) != nil {
 		compact.Reset()
 		compact.Write(raw)
 	}
-	return setWireField(wire, 2, strings.TrimSpace(description+"\n"+responseSchemaNote+compact.String()))
+	return strings.TrimSpace(description + "\n" + responseSchemaNote + compact.String())
 }
 
-// projectPlaygroundResponseSchema 为 Playground 补齐开放节点的载体类型并附完整 Schema
-func projectPlaygroundResponseSchema(wire []any, raw json.RawMessage) []any {
-	if !schemaWireNeedsBuild(wire) {
-		return wire
+// responseSchemaBeyondPlayground 判断结构化输出 Schema 含 Playground Schema 无法表达的开放值或约束，wire 为该 Schema 的 Playground 编码
+func responseSchemaBeyondPlayground(config GenerationConfig, wire []any) bool {
+	return schemaWireNeedsBuild(wire) || len(config.ResponseJSONSchema) > 0 && jsonSchemaBeyondPlayground(config.responseSchema())
+}
+
+// RequestNeedsBuild 判断请求是否含 Playground 无法完整表达的设置
+func RequestNeedsBuild(request GenerateRequest) bool {
+	if computer := request.Tools.ComputerUse; computer != nil {
+		if _, ok := computerEnvironments[computer.Environment]; !ok || len(computer.DisabledSafetyPolicies) > 0 || computer.EnablePromptInjectionDetection {
+			return true
+		}
 	}
-	projectToolSchema(wire)
-	return describeResponseSchema(wire, raw)
+	if schema := request.Config.responseSchema(); len(schema) > 0 {
+		wire, err := encodeJSONSchema(schema)
+		if err != nil || responseSchemaBeyondPlayground(request.Config, wire) {
+			return true
+		}
+	}
+	return mixedMediaResolution(request.Config.MediaResolution, request.Contents) || len(request.Tools.FileSearch) > 0 ||
+		request.ServiceTier != "" || request.Store != nil && !*request.Store ||
+		slices.ContainsFunc(request.SafetySettings, func(setting SafetySetting) bool {
+			return strings.EqualFold(strings.TrimSpace(setting.Category), buildHarmCategory)
+		})
 }
 
-// RequestNeedsBuildSchema 判断结构化输出 Schema 是否含 Playground 需要补齐类型的开放节点
-func RequestNeedsBuildSchema(request GenerateRequest) bool {
-	if len(request.Config.ResponseSchema) == 0 {
+// RequestBuildOnly 判断请求含 Playground 没有对应形式的设置：指定存储的 File Search
+func RequestBuildOnly(request GenerateRequest) bool {
+	return len(request.Tools.FileSearch) > 0
+}
+
+// jsonSchemaBeyondPlayground 查找 Playground Schema 没有对应字段的 JSON Schema 约束
+func jsonSchemaBeyondPlayground(raw json.RawMessage) bool {
+	var node any
+	if json.Unmarshal(raw, &node) != nil {
 		return false
 	}
-	wire, err := encodeResponseSchema(request.Config.ResponseSchema)
-	return err == nil && schemaWireNeedsBuild(wire)
+	var walk func(any) bool
+	walk = func(value any) bool {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, item := range typed {
+				switch key {
+				case "prefixItems", "propertyNames", "exclusiveMinimum", "exclusiveMaximum", "uniqueItems":
+					return true
+				case "additionalProperties":
+					if item != false {
+						return true
+					}
+				}
+				if walk(item) {
+					return true
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				if walk(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(node)
 }
 
 // schemaWireNeedsBuild 查找 Playground 不接受的无类型节点

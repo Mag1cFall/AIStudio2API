@@ -5,15 +5,13 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
-ARG TARGETOS
-ARG TARGETARCH
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/internal/webui/dist internal/webui/dist
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' -o /out/aistudio2api ./cmd/aistudio2api
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/aistudio2api ./cmd/aistudio2api
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

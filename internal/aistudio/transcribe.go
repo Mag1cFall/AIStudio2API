@@ -3,6 +3,7 @@ package aistudio
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 func validateTranscriptionConfig(config *TranscriptionConfig, model Model) error {
@@ -28,6 +29,36 @@ func validateTranscriptionConfig(config *TranscriptionConfig, model Model) error
 	return nil
 }
 
+// buildTranscriptionConfig 返回 Gemini API audioTranscriptionConfig
+func buildTranscriptionConfig(config TranscriptionConfig) map[string]any {
+	encoded := map[string]any{}
+	if config.WordTimestamps {
+		encoded["wordTimestamp"] = true
+	}
+	if config.SpeakerLabels {
+		encoded["diarization"] = true
+	}
+	if len(config.LanguageCodes) > 0 {
+		encoded["languageCodes"] = config.LanguageCodes
+	}
+	if len(config.CustomVocabulary) > 0 {
+		encoded["customVocabulary"] = config.CustomVocabulary
+	}
+	if len(config.AdaptationPhrases) > 0 {
+		encoded["adaptationPhrases"] = config.AdaptationPhrases
+	}
+	if len(config.LanguageHints) > 0 {
+		encoded["languageHints"] = map[string]any{"languageCodes": config.LanguageHints}
+	}
+	if config.LanguageAuto {
+		encoded["languageAuto"] = map[string]any{}
+	}
+	if config.SmartTranscription {
+		encoded["mode"] = "SMART"
+	}
+	return encoded
+}
+
 func encodeTranscriptionConfig(config *TranscriptionConfig) ([]any, error) {
 	if config == nil {
 		return nil, nil
@@ -35,37 +66,33 @@ func encodeTranscriptionConfig(config *TranscriptionConfig) ([]any, error) {
 	if config.SmartTranscription && (config.WordTimestamps || config.SpeakerLabels) {
 		return nil, fmt.Errorf("smart transcription 不能同时启用 word timestamps 或 speaker labels")
 	}
-	length := 0
-	if config.WordTimestamps || config.SpeakerLabels {
-		length = 6
+	var wire []any
+	if config.LanguageAuto {
+		wire = setWireField(wire, 1, []any{})
 	}
-	if len(config.CustomVocabulary) > 0 {
-		length = 7
+	if len(config.LanguageHints) > 0 {
+		wire = setWireField(wire, 2, []any{append([]string(nil), config.LanguageHints...)})
 	}
-	if len(config.LanguageCodes) > 0 {
-		length = 8
+	if len(config.AdaptationPhrases) > 0 {
+		wire = setWireField(wire, 3, append([]string(nil), config.AdaptationPhrases...))
 	}
-	if config.SmartTranscription {
-		length = 9
-	}
-	if length == 0 {
-		return nil, nil
-	}
-	wire := make([]any, length)
 	if config.WordTimestamps {
-		wire[4] = int64(1)
+		wire = setWireField(wire, 4, int64(1))
 	}
 	if config.SpeakerLabels {
-		wire[5] = int64(1)
+		wire = setWireField(wire, 5, int64(1))
+	}
+	if config.WordTimestamps && len(wire) < 6 {
+		wire = setWireField(wire, 5, nil)
 	}
 	if len(config.CustomVocabulary) > 0 {
-		wire[6] = append([]string(nil), config.CustomVocabulary...)
+		wire = setWireField(wire, 6, append([]string(nil), config.CustomVocabulary...))
 	}
 	if len(config.LanguageCodes) > 0 {
-		wire[7] = append([]string(nil), config.LanguageCodes...)
+		wire = setWireField(wire, 7, append([]string(nil), config.LanguageCodes...))
 	}
 	if config.SmartTranscription {
-		wire[8] = int64(2)
+		wire = setWireField(wire, 8, int64(2))
 	}
 	return wire, nil
 }
@@ -88,44 +115,59 @@ func decodeTranscriptMetadata(raw json.RawMessage, path string, evidence json.Ra
 			return TranscriptMetadata{}, withMethod(err, "GenerateContent")
 		}
 	}
-	timestampsRaw := rawAt(values, 2)
-	if isJSONNull(timestampsRaw) {
+	wordsRaw := rawAt(values, 2)
+	if isJSONNull(wordsRaw) {
 		return metadata, nil
 	}
-	timestamps, err := rawArray(timestampsRaw, path+"[2]", evidence)
+	words, err := rawArray(wordsRaw, path+"[2]", evidence)
 	if err != nil {
 		return TranscriptMetadata{}, withMethod(err, "GenerateContent")
 	}
-	metadata.Timestamps = make([]TranscriptTimestamp, 0, len(timestamps))
-	for index, timestampRaw := range timestamps {
-		timestamp, err := decodeTranscriptTimestamp(timestampRaw, fmt.Sprintf("%s[2][%d]", path, index), evidence)
+	metadata.Words = make([]TranscriptWord, 0, len(words))
+	for index, wordRaw := range words {
+		word, err := decodeTranscriptWord(wordRaw, fmt.Sprintf("%s[2][%d]", path, index), evidence)
 		if err != nil {
 			return TranscriptMetadata{}, err
 		}
-		metadata.Timestamps = append(metadata.Timestamps, timestamp)
+		metadata.Words = append(metadata.Words, word)
 	}
 	return metadata, nil
 }
 
-func decodeTranscriptTimestamp(raw json.RawMessage, path string, evidence json.RawMessage) (TranscriptTimestamp, error) {
+// decodeTranscriptWord 解码 AudioTranscription.WordInfo：word、start_offset、end_offset
+func decodeTranscriptWord(raw json.RawMessage, path string, evidence json.RawMessage) (TranscriptWord, error) {
 	values, err := rawArray(raw, path, evidence)
 	if err != nil {
-		return TranscriptTimestamp{}, withMethod(err, "GenerateContent")
+		return TranscriptWord{}, withMethod(err, "GenerateContent")
 	}
-	timestamp := TranscriptTimestamp{}
+	word := TranscriptWord{}
+	if textRaw := rawAt(values, 0); !isJSONNull(textRaw) {
+		if word.Word, err = rawString(textRaw, path+"[0]", evidence); err != nil {
+			return TranscriptWord{}, withMethod(err, "GenerateContent")
+		}
+	}
 	if startRaw := rawAt(values, 1); !isJSONNull(startRaw) {
-		timestamp.Start, err = decodeTranscriptDuration(startRaw, path+"[1]", evidence)
+		word.Start, err = decodeTranscriptDuration(startRaw, path+"[1]", evidence)
 		if err != nil {
-			return TranscriptTimestamp{}, err
+			return TranscriptWord{}, err
 		}
 	}
 	if endRaw := rawAt(values, 2); !isJSONNull(endRaw) {
-		timestamp.End, err = decodeTranscriptDuration(endRaw, path+"[2]", evidence)
+		word.End, err = decodeTranscriptDuration(endRaw, path+"[2]", evidence)
 		if err != nil {
-			return TranscriptTimestamp{}, err
+			return TranscriptWord{}, err
 		}
 	}
-	return timestamp, nil
+	return word, nil
+}
+
+// parseTranscriptDuration 解析 Gemini API Duration 字符串，如 "0.800s"
+func parseTranscriptDuration(value string) TranscriptDuration {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return TranscriptDuration{}
+	}
+	return TranscriptDuration{Seconds: int64(duration / time.Second), Nanos: int64(duration % time.Second)}
 }
 
 func decodeTranscriptDuration(raw json.RawMessage, path string, evidence json.RawMessage) (TranscriptDuration, error) {

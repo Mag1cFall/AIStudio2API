@@ -97,7 +97,7 @@ const hostJavaScript = `
     const marked = nativeSourceOf(this);
     if (marked !== undefined) return marked;
     const source = originalFunctionToString.call(this);
-    if (!source.includes('[native code]')) return source;
+    if (!source.includes('[native code]') || source.startsWith('function() {')) return source;
     const name = typeof this.name === 'string' ? this.name : '';
     return 'function ' + name + '() {\n    [native code]\n}';
   };
@@ -129,6 +129,10 @@ const hostJavaScript = `
   domAPI = input.installDOM(input.shape, input.profile, {
     markNative,
     brands: input.brands,
+    interfaceParents: input.interfaceParents,
+    isA: input.isA,
+    brandCheck: input.brandCheck,
+    exposed: input.exposed,
     storage: input.storage,
     realm: input.realm,
     topRealm: input.topRealm,
@@ -163,6 +167,28 @@ const hostJavaScript = `
 })
 `
 
+// interfaceTable 记录一个 Realm 中每个 WebIDL 接口自身与沿父接口的全部祖先
+type interfaceTable map[string]map[string]bool
+
+// load 按宿主脚本的父接口表生成每个接口的祖先集合
+func (table interfaceTable) load(parents *goja.Object) {
+	for _, name := range parents.Keys() {
+		ancestors := map[string]bool{name: true}
+		for parent := parents.Get(name); parent != nil && parent.ToBoolean(); parent = parents.Get(parent.String()) {
+			ancestors[parent.String()] = true
+		}
+		table[name] = ancestors
+	}
+}
+
+// isA 判断 iface 是否为 target 或继承自 target
+func (table interfaceTable) isA(iface, target string) bool {
+	if ancestors, ok := table[iface]; ok {
+		return ancestors[target]
+	}
+	return iface == target
+}
+
 // installRealmHost 在指定 Realm 安装宿主并返回该 Realm 的 DOM 接口
 func (state *hostState) installRealmHost(vm *goja.Runtime, realm string, createIframe func() *goja.Object) (goja.Value, error) {
 	if err := installBinaryEncoding(vm); err != nil {
@@ -178,11 +204,11 @@ func (state *hostState) installRealmHost(vm *goja.Runtime, realm string, createI
 	if err := installQueueMicrotask(vm, reportError); err != nil {
 		return nil, err
 	}
-	installDOM, err := runHostScript(vm, domJavaScript)
+	installDOM, err := vm.RunProgram(domProgram())
 	if err != nil {
 		return nil, fmt.Errorf("编译 WAA DOM 宿主: %w", err)
 	}
-	hostFunction, err := runHostScript(vm, hostJavaScript)
+	hostFunction, err := vm.RunProgram(hostProgram())
 	if err != nil {
 		return nil, fmt.Errorf("编译 WAA Realm 宿主: %w", err)
 	}
@@ -255,6 +281,29 @@ func (state *hostState) installRealmHost(vm *goja.Runtime, realm string, createI
 	_ = input.Set("installDOM", installDOM)
 	_ = input.Set("shape", state.shape)
 	_ = input.Set("brands", state.brands)
+	brands := state.brands.(*goja.Object)
+	interfaces := interfaceTable{}
+	_ = input.Set("interfaceParents", func(call goja.FunctionCall) goja.Value {
+		interfaces.load(call.Argument(0).ToObject(vm))
+		return goja.Undefined()
+	})
+	_ = input.Set("isA", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(interfaces.isA(call.Argument(0).String(), call.Argument(1).String()))
+	})
+	_ = input.Set("brandCheck", func(call goja.FunctionCall) goja.Value {
+		self := call.Argument(0)
+		if goja.IsUndefined(self) || goja.IsNull(self) {
+			self = vm.GlobalObject()
+		}
+		if object, ok := self.(*goja.Object); ok {
+			if brand, ok := brands.WeakMapGet(object).(*goja.Object); ok {
+				if iface := brand.Get("iface"); iface != nil && interfaces.isA(iface.String(), call.Argument(1).String()) {
+					return brand
+				}
+			}
+		}
+		return goja.Null()
+	})
 	_ = input.Set("storage", state.storage)
 	_ = input.Set("realm", realm)
 	_ = input.Set("profile", state.realmProfile(realm))
@@ -267,11 +316,11 @@ func (state *hostState) installRealmHost(vm *goja.Runtime, realm string, createI
 		realmStarted = state.profile.NavigationStart
 	}
 	_ = input.Set("timeOrigin", float64(realmStarted.UnixMilli()))
-	_ = input.Set("performanceNow", func() float64 {
-		return math.Floor(float64(time.Since(realmStarted)) / float64(time.Millisecond))
+	_ = input.Set("performanceNow", func(goja.FunctionCall) goja.Value {
+		return vm.ToValue(math.Floor(float64(time.Since(realmStarted)) / float64(time.Millisecond)))
 	})
-	_ = input.Set("preciseNow", func() float64 {
-		return float64(time.Since(realmStarted).Microseconds()) / 1000
+	_ = input.Set("preciseNow", func(goja.FunctionCall) goja.Value {
+		return vm.ToValue(float64(time.Since(realmStarted).Microseconds()) / 1000)
 	})
 	_ = input.Set("queueTask", func(delay float64, callback goja.Callable) {
 		state.schedule(time.Duration(max(delay, 0)*float64(time.Millisecond)), func() {
@@ -369,10 +418,20 @@ func (state *hostState) installRealmHost(vm *goja.Runtime, realm string, createI
 		})
 	}
 	var order *firefoxGlobalOrder
-	_ = input.Set("resolveInterface", func(name string) {
-		if order != nil {
-			order.Resolve(name)
+	_ = input.Set("exposed", func(call goja.FunctionCall) goja.Value {
+		value := call.Argument(0)
+		if object, ok := value.(*goja.Object); ok && order != nil {
+			if brand, ok := brands.WeakMapGet(object).(*goja.Object); ok {
+				order.Resolve(brand.Get("iface").String())
+			}
 		}
+		return value
+	})
+	_ = input.Set("resolveInterface", func(call goja.FunctionCall) goja.Value {
+		if order != nil {
+			order.Resolve(call.Argument(0).String())
+		}
+		return goja.Undefined()
 	})
 	_ = input.Set("orderKeys", func(object *goja.Object, names []string) {
 		object.OrderOwnKeys(names)

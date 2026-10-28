@@ -19,7 +19,7 @@ import { latencyTone } from './model'
 const props = defineProps<{ record: UsageRecord | null }>()
 const emit = defineEmits<{ close: [] }>()
 
-const { t, errorText } = useI18n()
+const { t, errorText, logText } = useI18n()
 const { integer, duration, dateTime, dimensionLabel } = useUsageFormat()
 const body = ref<RequestBody | null>(null)
 const bodyState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -174,7 +174,7 @@ async function copy(kind: string, text: string): Promise<void> {
             </h3>
             <pre
               class="rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-200"
-              >{{ record.error }}</pre>
+              >{{ logText(record.error) }}</pre>
           </section>
           <section>
             <h3 class="mb-2 text-xs font-medium tracking-wide text-gray-500 uppercase">
@@ -199,7 +199,7 @@ async function copy(kind: string, text: string): Promise<void> {
                   }}</span>
                 </div>
                 <p class="mt-0.5 font-mono [overflow-wrap:anywhere] text-red-300/90">
-                  {{ attempt.error }}
+                  {{ logText(attempt.error) }}
                 </p>
               </li>
             </ol>

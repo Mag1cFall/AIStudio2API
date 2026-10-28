@@ -4,29 +4,34 @@ import { onUnmounted, ref } from 'vue'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { apiKey } from '../request'
+import { apiKey, failureText } from '../request'
 import { audioInput } from '../shell/preferences'
 
 const emit = defineEmits<{ text: [text: string] }>()
 const { t } = useI18n()
 const { showNotice } = useConsole()
 const recording = ref(false)
+// opening 表示正在打开麦克风
+const opening = ref(false)
 const transcribing = ref(false)
 let recorder: MediaRecorder | undefined
 
 // toggle 开始录音，再次点击停止并转写
 async function toggle(): Promise<void> {
-  if (transcribing.value) return
+  if (transcribing.value || opening.value) return
   if (recording.value) {
     recorder?.stop()
     return
   }
+  opening.value = true
   let stream: MediaStream
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: audioInput() })
   } catch {
     showNotice(t('pg.microphoneDenied'), 'error')
     return
+  } finally {
+    opening.value = false
   }
   const chunks: Blob[] = []
   recorder = new MediaRecorder(stream)
@@ -59,7 +64,7 @@ async function transcribe(audio: Blob): Promise<void> {
     const text = value.text?.trim() ?? ''
     if (text !== '') emit('text', text)
   } catch (error) {
-    showNotice(error instanceof Error ? error.message : String(error), 'error')
+    showNotice(failureText(error, t('pg.transcribeUnreachable')), 'error')
   } finally {
     transcribing.value = false
   }
@@ -78,7 +83,7 @@ onUnmounted(() => {
     class="stt-button ms-button-filter-chip"
     :class="{ recording }"
     :aria-label="t('pg.speechToText')"
-    :aria-disabled="transcribing"
+    :aria-disabled="transcribing || opening"
     @click.stop="toggle"
   >
     <UiIcon

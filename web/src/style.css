@@ -336,6 +336,10 @@ button[aria-busy='true']::before {
   vertical-align: -0.12em;
 }
 
+button[aria-busy='true']:has(> svg)::before {
+  content: none;
+}
+
 @keyframes busy-spin {
   to {
     transform: rotate(360deg);

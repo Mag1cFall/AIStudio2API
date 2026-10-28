@@ -65,7 +65,7 @@ var firefoxPseudoHeaderOrder = []string{":method", ":path", ":authority", ":sche
 // firefoxHeaderPriority 是 Firefox 请求 HEADERS 帧携带的优先级，线上权重为 42
 var firefoxHeaderPriority = http2.PriorityParam{Weight: 41}
 
-// firefoxRequestHeaderOrder 是 Firefox 152 发出官网页面请求的请求头顺序：浏览器默认头、页面脚本按写入顺序设置的头、content-length、origin、alt-used、Cookie、导航与 fetch 元数据头、priority 与 te
+// firefoxRequestHeaderOrder 是 Firefox 152 发出官网页面请求的请求头顺序
 var firefoxRequestHeaderOrder = []string{
 	"user-agent",
 	"accept",
@@ -172,7 +172,7 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	return roundTripper, nil
 }
 
-// firefoxConnPool 按 Firefox 选择 HTTP/2 连接：匿名请求、携带凭据的请求与 HTTP/3 备用连接分开建连，主机还没有建立好的连接时每个请求各自拨号并改用最先建好的连接，已有连接时复用最早建立且能接受新请求的连接；本类没有可用连接时合并到另一类已复用过的连接
+// firefoxConnPool 按 Firefox 选择 HTTP/2 连接，匿名请求、携带凭据的请求与 HTTP/3 备用连接分开建连
 type firefoxConnPool struct {
 	transport *http2.Transport
 	dial      func(address string) (net.Conn, error)
@@ -201,7 +201,7 @@ func (pool *firefoxConnPool) GetClientConn(request *fhttp.Request, address strin
 	return pool.get(request.Context(), address, true)
 }
 
-// get 返回 context 所标类别下能接受新请求的连接，本类没有时取另一类已复用过的连接，都没有时拨号；本类已建立与建立中的连接达到 Firefox 上限时等先建好的连接；dispatch 表示返回的连接将承载请求
+// get 返回 context 所标类别下能接受新请求的连接，没有时取另一类已复用过的连接或拨号；dispatch 表示返回的连接将承载请求
 func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch bool) (*http2.ClientConn, error) {
 	class := requestClassOf(ctx)
 	key := poolKey(address, class)
@@ -298,7 +298,7 @@ func (pool *firefoxConnPool) availableLocked(key string, inverted string, dispat
 	return nil
 }
 
-// firstLocked 返回本类最先建好且能接受新请求的连接，即 Firefox 让等待中的请求改用最先建好的连接；取到的不是本请求拨出的连接时记为已复用
+// firstLocked 返回本类最先建好且能接受新请求的连接，取到的不是本请求拨出的连接时记为已复用
 func (pool *firefoxConnPool) firstLocked(key string, own *http2.ClientConn, dispatch bool) *http2.ClientConn {
 	for _, conn := range pool.conns[key] {
 		if conn == own {

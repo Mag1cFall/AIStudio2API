@@ -186,7 +186,7 @@ const total = computed(() => props.report.totals.requests)
         <tbody>
           <template v-for="row in rows" :key="row.key">
             <tr class="border-t border-line/60 text-gray-300 hover:bg-raised/40">
-              <th scope="row" class="max-w-72 px-4 py-2 font-normal">
+              <th scope="row" class="w-[30%] max-w-0 px-4 py-2 font-normal">
                 <div class="flex items-center gap-1.5">
                   <button
                     v-if="children(row.key).length > 0"
@@ -253,7 +253,7 @@ const total = computed(() => props.report.totals.requests)
                 :key="`${row.key}/${child.key}`"
                 class="bg-canvas/60 text-gray-400"
               >
-                <th scope="row" class="max-w-72 py-1.5 pr-4 pl-11 font-normal">
+                <th scope="row" class="w-[30%] max-w-0 py-1.5 pr-4 pl-11 font-normal">
                   <span v-tooltip="child.label" class="block truncate">{{ child.label }}</span>
                 </th>
                 <td class="px-2 py-1.5 text-right tabular-nums">

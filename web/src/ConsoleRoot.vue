@@ -1,17 +1,26 @@
+<script lang="ts">
+import { api, type AdminSession } from '@/api'
+import { router } from '@/router'
+
+// initialSession 是页面载入时与路由分块、界面文案同时发出的会话请求
+const initialSession = api.session()
+// loadStudioLayout 加载 API 试用页布局，首个页面属于 API 试用页时与路由分块同时开始加载
+const loadStudioLayout = () => import('./playground/StudioLayout.vue')
+if (router.resolve(location.pathname).meta.studio) void loadStudioLayout()
+</script>
+
 <script setup lang="ts">
 import { defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { api, type AdminSession } from '@/api'
+import { useRoute } from 'vue-router'
 import { useI18n } from '@/i18n'
 import App from './App.vue'
 import DesktopTitleBar from './components/DesktopTitleBar.vue'
 import LoginPage from './components/LoginPage.vue'
 import { desktopPlatform, startDesktop } from './desktop'
 
-const StudioLayout = defineAsyncComponent(() => import('./playground/StudioLayout.vue'))
+const StudioLayout = defineAsyncComponent(loadStudioLayout)
 const { t, errorText, locale } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const session = ref<AdminSession | null>(null)
 const error = ref('')
 
@@ -28,10 +37,10 @@ function expireSession(): void {
 }
 
 // loadSession 在加载管理数据前确认会话
-async function loadSession(): Promise<void> {
+async function loadSession(request = api.session()): Promise<void> {
   error.value = ''
   try {
-    setSession(await api.session())
+    setSession(await request)
   } catch (cause) {
     error.value = errorText(cause)
   }
@@ -49,9 +58,9 @@ async function logout(): Promise<void> {
 
 onMounted(() => {
   document.title = 'AIStudio2API'
-  startDesktop(locale)
+  startDesktop(locale, router)
   window.addEventListener('admin-session-expired', expireSession)
-  void loadSession()
+  void loadSession(initialSession)
 })
 onUnmounted(() => window.removeEventListener('admin-session-expired', expireSession))
 </script>
@@ -66,7 +75,7 @@ onUnmounted(() => window.removeEventListener('admin-session-expired', expireSess
         class="fixed top-4 right-4 z-50 max-w-sm rounded border border-red-500/40 bg-panel p-4 text-red-300"
       >
         {{ error }}
-        <button type="button" class="ml-3 underline" @click="loadSession">
+        <button type="button" class="ml-3 underline" @click="loadSession()">
           {{ t('app.refresh') }}
         </button>
       </div>

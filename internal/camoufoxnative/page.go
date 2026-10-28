@@ -28,7 +28,7 @@ const workerPageReadyExpression = `(location.hostname === 'accounts.google.com' 
 // loggingContextReadyExpression 检查官网页面已收到 GetLoggingContext 响应，此后页面 RPC 才带 x-goog-ext-519733851-bin
 const loggingContextReadyExpression = `performance.getEntriesByType('resource').some(entry => entry.name.endsWith('/GetLoggingContext'))`
 
-// normalizePromptNewlines 把 CRLF/CR 统一成 LF，官网 textarea 会把写入值规范化为 LF
+// normalizePromptNewlines 把 CRLF/CR 统一成 LF
 func normalizePromptNewlines(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
 }
@@ -48,12 +48,13 @@ const fillPromptStatements = pageDOMHelpers + `
 const fillPromptFunction = `prompt => {` + fillPromptStatements + `  return synced;
 }`
 
-// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，之后清空输入框；页面值与提示词不同时不调用 snapshot，返回 null
+// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，之后清空输入框并通知页面表单；页面值与提示词不同时不调用 snapshot，返回 null
 const proofFunction = `async (page, prompt, digest) => {
   if (!page.service) throw new Error('官方 WAA service 尚未就绪');` + fillPromptStatements + `  try {
     return synced ? await page.snapshot(digest) : null;
   } finally {
     setValue.call(textarea, '');
+    textarea.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContent'}));
   }
 }`
 
@@ -85,11 +86,10 @@ const submitPromptExpression = `(() => {` + pageDOMHelpers + `
   return true;
 })()`
 
-// stopGenerationExpression 点击官网运行中的 Stop 按钮，页面按用户停止的流程中止自己的 GenerateContent
+// stopGenerationExpression 在官网 Run 按钮切换为 Stop 后点击它，页面按用户停止的流程中止自己的 GenerateContent，按钮尚未切换时返回 false
 const stopGenerationExpression = `(() => {` + pageDOMHelpers + `
   const button = uniqueVisible('ms-run-button button', '官网 Stop 按钮');
-  if (!button) throw new Error('官网 Stop 按钮不存在');
-  if (!buttonEnabled(button)) throw new Error('官网 Stop 按钮已禁用');
+  if (!button || !button.querySelector('.spin') || !buttonEnabled(button)) return false;
   button.click();
   return true;
 })()`

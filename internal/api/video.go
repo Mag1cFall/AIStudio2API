@@ -134,7 +134,7 @@ func (s *server) handleGeminiVideoCreate(w http.ResponseWriter, r *http.Request,
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": "operations/" + strings.Join(ids, videoOperationSeparator)})
+	writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"name": "operations/" + strings.Join(ids, videoOperationSeparator)}))
 }
 
 // maxVideoCount 是 Gemini numberOfVideos 与 sampleCount 的上限
@@ -300,7 +300,7 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	} else if done {
 		response["response"] = map[string]any{"generateVideoResponse": map[string]any{"generatedSamples": samples}}
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, officialOrder("gemini", response))
 }
 
 func (s *server) handleOpenAIVideoCreate(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +337,7 @@ func (s *server) handleOpenAIVideoCreate(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, openAIVideoObject(operation))
+	writeJSON(w, http.StatusOK, officialOrder("openai", openAIVideoObject(operation)))
 }
 
 func parseOpenAIVideoRequest(r *http.Request) (openAIVideoRequest, *aistudio.VideoImage, error) {
@@ -448,7 +448,7 @@ func (s *server) handleOpenAIVideoGet(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIVideoError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, openAIVideoObject(operation))
+	writeJSON(w, http.StatusOK, officialOrder("openai", openAIVideoObject(operation)))
 }
 
 // handleOpenAIVideoList 按 after、limit 与 order 分页列出视频，页内各对象经上游轮询返回当前状态
@@ -481,7 +481,7 @@ func (s *server) handleOpenAIVideoList(w http.ResponseWriter, r *http.Request) {
 	if len(page) > 0 {
 		body["first_id"], body["last_id"] = page[0].ID, page[len(page)-1].ID
 	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, officialOrder("openai", body))
 }
 
 // handleOpenAIVideoDelete 删除已结束的视频任务及其结果文件
@@ -496,7 +496,7 @@ func (s *server) handleOpenAIVideoDelete(w http.ResponseWriter, r *http.Request)
 		writeOpenAIVideoError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": operationID, "object": "video.deleted", "deleted": true})
+	writeJSON(w, http.StatusOK, officialOrder("openai", map[string]any{"id": operationID, "object": "video.deleted", "deleted": true}))
 }
 
 // writeOpenAIVideoError 写入视频接口错误，视频任务不存在时返回 404

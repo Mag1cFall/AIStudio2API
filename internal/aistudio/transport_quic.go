@@ -42,7 +42,7 @@ const (
 	quicAEADOverhead = 16
 	// h3NoError 是 HTTP/3 H3_NO_ERROR
 	h3NoError = 0x100
-	// nssGREASEECHInner 是 NSS 为 GREASE ECH 估算的内层 ClientHello 基础长度：前导 47、内层 ECH 5、补到 100 字节主机名的 SNI 109、supported_versions 7 与引用 10 个外层扩展的 outer_extensions 25
+	// nssGREASEECHInner 是 NSS 为 GREASE ECH 估算的内层 ClientHello 基础长度
 	nssGREASEECHInner = 193
 )
 
@@ -96,7 +96,7 @@ func (resumption *quicResumption) rememberedSettings(host string) ([2]uint64, bo
 	return settings, ok
 }
 
-// dialFirefoxQUIC 以 Firefox 152 的 QUIC 首航直连 host:443，每条连接使用独立 UDP 套接字；有会话票据时带 NEW_TOKEN 令牌与 PSK 恢复，票据允许 0-RTT 时不等握手完成即返回，并返回 0-RTT 期间沿用的服务端设置
+// dialFirefoxQUIC 以 Firefox 152 的 QUIC 首航直连 host:443，有会话票据时恢复会话，票据允许 0-RTT 时不等握手完成即返回并返回沿用的服务端设置
 func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumption) (*quic.Conn, *[2]uint64, error) {
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
@@ -160,7 +160,7 @@ func firefoxQUICConfig(datagram int, tokens quic.TokenStore) *quic.Config {
 	}
 }
 
-// firefoxQUICSpec 返回 Firefox 152（neqo 0.28）一次直连的 QUIC 首航：随机 DCID 长度与首个包号、SNI 切分的 CRYPTO 帧、Initial 数据报补零到 datagram 字节，psk 与 early 决定 ClientHello 是否带 pre_shared_key 与 early_data
+// firefoxQUICSpec 返回 Firefox 152（neqo 0.28）一次直连的 QUIC 首航，psk 与 early 决定 ClientHello 是否带 pre_shared_key 与 early_data
 func firefoxQUICSpec(datagram int, psk int, early bool) *quic.QUICSpec {
 	var random [3]byte
 	_, _ = rand.Read(random[:])
@@ -194,7 +194,7 @@ func neqoPacketNumberLength(unacked uint64) quic.PacketNumberLen {
 	}
 }
 
-// firefoxQUICClientHello 返回 Firefox 152 经 NSS 发出的 QUIC ClientHello：13 个扩展（0-RTT 时加 early_data）每次随机排列，其后依次为传输参数、ECH GREASE，psk 为 pre_shared_key 扩展长度，非 0 时该扩展在最后
+// firefoxQUICClientHello 返回 Firefox 152 经 NSS 发出的 QUIC ClientHello，psk 为 pre_shared_key 扩展长度，非 0 时该扩展在最后
 func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 	extensions := []utls.TLSExtension{
 		&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{utls.CertCompressionZlib, utls.CertCompressionZstd, utls.CertCompressionBrotli}},
@@ -254,7 +254,7 @@ func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 	}
 }
 
-// nssGREASEECHPayload 是 NSS GREASE ECH 的密文长度（不含 AEAD 标签）：内层 ClientHello 带上完整的 pre_shared_key 与压缩引用的 early_data，补零到 32 字节对齐减 1
+// nssGREASEECHPayload 是 NSS GREASE ECH 的密文长度（不含 AEAD 标签）
 func nssGREASEECHPayload(psk int, early bool) uint16 {
 	inner := nssGREASEECHInner
 	if psk > 0 {
@@ -266,7 +266,7 @@ func nssGREASEECHPayload(psk int, early bool) uint16 {
 	return uint16(inner + 31 - inner%32)
 }
 
-// neqoInitialFlight 按 neqo 0.28 的 SNI 切分把 ClientHello 排进 Initial 包：首包在 SNI 中点切开并先写后半段，两段截到 ClientHello 按包数均分的长度以内，其余字节依次写入后续包
+// neqoInitialFlight 按 neqo 0.28 的 SNI 切分把 ClientHello 排进 Initial 包
 type neqoInitialFlight struct {
 	// limit 是一个 Initial 包去掉 AEAD 标签后的长度上限
 	limit int

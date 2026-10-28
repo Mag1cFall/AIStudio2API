@@ -162,7 +162,7 @@ export function successRate(stats: UsageStats): number | null {
   return counted > 0 ? stats.succeeded / counted : null
 }
 
-// palette 是分类序列使用的颜色，按取值哈希分配使同一取值在各图中颜色一致
+// palette 是分类序列使用的颜色，按取值哈希分配
 export const palette = [
   '#60a5fa',
   '#34d399',

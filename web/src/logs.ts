@@ -1,5 +1,11 @@
 import type { AdminLog } from './types'
 
+// LogResize 是日志详情展开或收起时的高度变化与过渡时长
+export interface LogResize {
+  delta: number
+  duration: number
+}
+
 // LogRow 保存请求或阶段的最新状态与完整事件时间线
 export interface LogRow {
   key: string
@@ -119,9 +125,10 @@ function groupStage(rows: LogRow[], stages: Map<string, StageRow>, entry: AdminL
   }
   const separator = entry.message.indexOf(' | ')
   const title = separator < 0 ? entry.message : entry.message.slice(0, separator)
+  const detail = separator < 0 ? '' : entry.message.slice(separator + 3)
   const open = stages.get(`${entry.source}\n${title}`)
   if (open) {
-    mergeStage(open, entry, separator < 0 ? '' : entry.message.slice(separator + 3))
+    mergeStage(open, entry, detail)
     return true
   }
   const end = stageEnd(title)
@@ -129,7 +136,7 @@ function groupStage(rows: LogRow[], stages: Map<string, StageRow>, entry: AdminL
   const key = `${entry.source}\n${end[0]}`
   const ended = stages.get(key)
   if (ended === undefined) return false
-  mergeStage(ended, entry, entry.message)
+  mergeStage(ended, entry, detail)
   ended.stage.state = end[1]
   stages.delete(key)
   return true

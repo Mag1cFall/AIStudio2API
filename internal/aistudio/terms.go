@@ -54,7 +54,7 @@ func (c *Client) EnsureTermsAccepted(ctx context.Context, accountID string) erro
 	return nil
 }
 
-// acceptTermsBody 按官网要求同意条款的条件读取 GetLoggingContext：第 6 字段为否且有第 7 字段时返回不订阅邮件的 AcceptTerms 请求体，否则返回 nil；第 10 字段为空或 0 时与官网 onboarding 表单相同，否则与条款对话框相同
+// acceptTermsBody 按官网同意条款的条件读取 GetLoggingContext，需要同意时返回不订阅邮件的 AcceptTerms 请求体，否则返回 nil
 func acceptTermsBody(raw []byte) ([]byte, error) {
 	value, err := decodeJSONValue(raw)
 	if err != nil {

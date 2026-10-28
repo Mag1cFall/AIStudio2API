@@ -11,6 +11,8 @@ const emit = defineEmits<{ logout: [] }>()
 const { t } = useI18n()
 const { status, serviceState, startPending, stopPending, startService, stopService } = useConsole()
 const version = computed(() => status.value?.version || '—')
+// stateLabel 是生成服务状态在当前语言下的文案
+const stateLabel = computed(() => t(`state.${serviceState.value}`))
 // avatarPalette 是 Google 账户默认头像的底色
 const avatarPalette = ['#1a73e8', '#e8710a', '#188038', '#d93025', '#9334e6', '#e52592', '#12b5cb']
 // name 是账户按钮与面板显示的名称，管理登录关闭时为产品名
@@ -25,17 +27,17 @@ const avatar = computed(() => ({
 <template>
   <PopoverRoot>
     <PopoverTrigger
-      v-tooltip="`${t('app.status')}: ${serviceState.toUpperCase()}`"
+      v-tooltip="`${t('app.status')}: ${stateLabel}`"
       ms-button
       class="account-switcher-button ms-button-primary"
-      :aria-label="`${t('app.status')}: ${serviceState.toUpperCase()}`"
+      :aria-label="`${t('app.status')}: ${stateLabel}`"
     >
       <span class="avatar" :style="{ backgroundColor: avatar.color }" aria-hidden="true">{{
         avatar.letter
       }}</span>
       <span class="account-switcher-text">{{ name }}</span>
       <span class="navbar-badge"
-        ><span class="status-dot" :class="serviceState"></span>{{ serviceState }}</span
+        ><span class="status-dot" :class="serviceState"></span>{{ stateLabel }}</span
       >
     </PopoverTrigger>
     <PopoverPortal>
@@ -59,7 +61,7 @@ const avatar = computed(() => ({
           >
           <div class="panel-title">
             <div class="panel-name">{{ name }}</div>
-            <div class="panel-detail">{{ version }} · {{ serviceState.toUpperCase() }}</div>
+            <div class="panel-detail">{{ version }} · {{ stateLabel }}</div>
           </div>
         </div>
         <button

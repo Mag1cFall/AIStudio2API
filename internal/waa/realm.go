@@ -35,14 +35,15 @@ func interfaceTemplate(id string, keys []string) *goja.ObjectTemplate {
 	return actual.(*goja.ObjectTemplate)
 }
 
-// runHostScript 把 source 按宿主脚本编译并在 vm 中执行
-func runHostScript(vm *goja.Runtime, source string) (goja.Value, error) {
-	program, err := goja.CompileHost(hostScriptName, source, false)
-	if err != nil {
-		return nil, err
-	}
-	return vm.RunProgram(program)
-}
+// domProgram 编译各 Realm 共用的 Firefox DOM 宿主脚本
+var domProgram = sync.OnceValue(func() *goja.Program {
+	return goja.MustCompileHost(hostScriptName, domJavaScript, false)
+})
+
+// hostProgram 编译各 Realm 共用的宿主安装脚本
+var hostProgram = sync.OnceValue(func() *goja.Program {
+	return goja.MustCompileHost(hostScriptName, hostJavaScript, false)
+})
 
 // hostRegistry 保存同一 agent 内各 Realm 共享的原生函数源码与 TrustedScript 源码
 type hostRegistry struct {

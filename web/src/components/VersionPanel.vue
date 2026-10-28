@@ -8,7 +8,7 @@ import UiIcon from '@/components/UiIcon.vue'
 
 const props = defineProps<{ status: UpdateStatus | null; activeRequests: number }>()
 const emit = defineEmits<{ status: [UpdateStatus]; restarting: [] }>()
-const { t, locale, errorText } = useI18n()
+const { t, locale, errorText, logText } = useI18n()
 const checking = ref(false)
 const confirming = ref(false)
 const phase = ref<'idle' | 'installing' | 'restarting'>('idle')
@@ -71,7 +71,9 @@ onActivated(() => void check(false))
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col overflow-auto md:overflow-hidden">
-    <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-8">
+    <header
+      class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-4xl))/2_+_2rem))]"
+    >
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('section.version.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('section.version.description') }}</p>
@@ -180,7 +182,7 @@ onActivated(() => void check(false))
           role="alert"
           class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm break-words text-red-300"
         >
-          {{ error || status?.error }}
+          {{ error || logText(status?.error ?? '') }}
         </p>
       </article>
 

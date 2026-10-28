@@ -14,7 +14,7 @@
 </p>
 
 <p>
-  Playground + Build 双额度通道 &nbsp;•&nbsp;
+  Playground 生成通道 &nbsp;•&nbsp;
   Build 代码助手对话通道 &nbsp;•&nbsp;
   多账户高并发<br>
   Camoufox 与纯 Go 双 WAA 后端 &nbsp;•&nbsp;
@@ -46,7 +46,7 @@
 
 ## 核心能力
 
-- **双额度通道**: 每个账户同时拥有 Playground 与 Build 应用代理两份独立额度，`UPSTREAM_CHANNELS` 可单独或同时启用；一个通道触发限额后，同一账户由另一个通道继续
+- **双通道**: 每个账户经 Playground 生成；Build 应用代理是旧通道，上游已对账户停用其生成（`PROXY_GENERATION_DISABLED`），默认关闭，可在 `UPSTREAM_CHANNELS` 中启用；启用后被停用的账户改经 Playground 完成，只能经 Build 发送的请求（如 File Search）返回上游原因；免费账户的两个通道共用同一模型的每日请求次数
 - **Build 对话模型**: Build 对话面板可选的模型各提供一个 `<模型>-build`（如 `gemini-3.8-flash-build`），由 Build 写代码助手连同其系统提示词回复，用量计入 Build 对话额度（免费请求或 Google AI 订阅额度）。⚠️ 这类模型的每次请求都带有 Build 写代码助手自带的系统提示词注入，回答风格、格式与身份会受其影响，请按用途自行评估
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=go` 后由纯 Go 生成官方 proof，运行时不下载、不启动浏览器
@@ -68,18 +68,18 @@
 - **Files 与 Transcribe**: 支持文件上传、查询、内容读取、删除和音频转录
 - **Live 与 Robotics**: 通过 WebSocket 支持文本、音频、JPEG、媒体结束、工具调用、恢复和中断
 - **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
-- **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求、用量统计和配置，界面提供深色与浅色两种配色
+- **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求、用量统计和配置，界面提供深色与浅色两种配色，以及简体中文、繁體中文、English、日本語、한국어、Français 与 Deutsch 七种语言
 - **桌面版**: Windows、macOS 与 Linux 桌面应用在窗口中显示管理页面，关闭窗口后在系统托盘继续运行
 - **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，Windows 与 macOS 桌面版、Linux 与 macOS 命令行版一键下载、校验并重启到新版本，Linux 桌面版提示下载新安装包
 - **模块化架构**: Go 负责协议、调度、API 与管理端，Camoufox 负责 WAA 运行时和隔离登录
 
 ## 系统要求
 
-- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载并静默安装，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
+- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，安装进度显示在微软安装程序的窗口中，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
 - **macOS 桌面版**: macOS 12 或更高版本，Apple 芯片与 Intel 通用
 - **Linux 桌面版**: GTK 4 与 WebKitGTK 6.0，例如 Ubuntu 24.04、Debian 13 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
 - **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
-- **源码运行**: Go 1.27+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm
+- **源码运行**: Go 1.27+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm；C 编译器，Windows 为 MinGW-w64 的 gcc，macOS 为 Xcode Command Line Tools，Linux 为 gcc
 - **操作系统**: Windows、macOS、Linux
 - **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
 - **网络**: 稳定的互联网连接访问 Google AI Studio
@@ -91,7 +91,7 @@
 从 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 下载 `windows-amd64.zip` 发布包，解压后双击 `aistudio2api.exe`：
 
 - 管理页面在桌面窗口中打开；首次启动先显示启动画面，Camoufox 下载完成后进入管理页面
-- 关闭窗口后程序在系统托盘继续运行，托盘菜单可以显示窗口、在浏览器中打开管理页面或退出
+- 关闭窗口后程序在系统托盘继续运行：Windows 双击托盘图标、Linux 单击托盘图标显示窗口；托盘菜单可以显示窗口、在浏览器中打开管理页面、开关开机自启动或退出
 - 再次双击 `aistudio2api.exe` 唤回已运行的窗口
 
 从源码启动时：
@@ -143,6 +143,7 @@ sudo apt install ./aistudio2api-<版本>-linux-amd64.deb
 
 - Go 1.27 或更高版本
 - Node.js 22.18+、24.11+ 或 26+，以及配套 npm
+- C 编译器：macOS 为 Xcode Command Line Tools，Linux 为 gcc
 
 #### 2. 克隆项目
 
@@ -353,7 +354,7 @@ modelRoles:
 | OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/input_tokens`、`POST /v1/responses/compact`、`GET`/`DELETE /v1/responses/{id}`、`GET /v1/responses/{id}/input_items`、`POST /v1/responses/{id}/cancel` |
 | Files | `POST /v1/files`、`GET /v1/files`、`GET /v1/files/{id}`、`GET /v1/files/{id}/content`、`DELETE /v1/files/{id}`（OpenAI 与 Anthropic 格式）；`POST /upload/v1beta/files`、`GET /v1beta/files`、`GET`/`DELETE /v1beta/files/{id}` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
-| Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens` |
+| Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`；`POST`/`GET /v1beta/cachedContents`、`GET`/`PATCH`/`DELETE /v1beta/cachedContents/{id}` |
 | Embeddings | `POST /v1/embeddings`、`POST /v1beta/models/{model}:embedContent`、`:batchEmbedContents` |
 | 图片 | `POST /v1/images/generations`、`POST /v1/images/edits` |
 | 语音 | `POST /v1/audio/speech` |
@@ -365,7 +366,7 @@ modelRoles:
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
-生成请求中的内联附件会优先上传为临时 Drive 文件，随请求结束清理；账户未授予 Drive 权限时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
+生成请求中的内联附件会优先上传到生成账户的 Drive，同一账户之后的请求遇到相同内容时直接引用已上传的文件，闲置 1 小时后删除；账户未授予 Drive 权限时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
 
 Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景；经 Files API 上传的 GIF 按首帧转换为白底 JPEG。
 
@@ -458,42 +459,32 @@ curl http://127.0.0.1:2048/v1/videos \
 
 ## 模型
 
-模型目录会随 AI Studio 更新，客户端从 `/v1/models` 或 `/v1beta/models` 读取当前值。下表保留目录结构示例，模型 ID、限制和方法以运行时结果为准：
+模型目录会随 AI Studio 更新，客户端从 `/v1/models` 或 `/v1beta/models` 读取当前值。下表为目录中的常用模型，模型 ID 与上限以运行时结果为准：
 
-| Model ID | Display name | Input | Output | Methods |
-| --- | --- | ---: | ---: | --- |
-| `antigravity-preview-05-2026` | Antigravity Agent Preview | 131072 | 65536 | `countTokens, generateContent` |
-| `gemini-2.5-flash` | Gemini 2.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-2.5-flash-image` | Nano Banana | 32768 | 32768 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-2.5-flash-lite` | Gemini 2.5 Flash-Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-2.5-flash-preview-tts` | Gemini 2.5 Flash Preview TTS | 8192 | 16384 | `countTokens, generateContent` |
-| `gemini-2.5-pro` | Gemini 2.5 Pro | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-2.5-pro-preview-tts` | Gemini 2.5 Pro Preview TTS | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-3-flash-preview` | Gemini 3 Flash Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3-pro-image` | Nano Banana Pro | 131072 | 32768 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-3.1-flash-image` | Nano Banana 2 | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-3.1-flash-tts-preview` | Gemini 3.1 Flash TTS Preview | 8192 | 16384 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3.5-flash` | Gemini 3.5 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3.6-flash` | Gemini 3.6 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-3.7-flash` | Gemini 3.7 Flash | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-flash-latest` | Gemini Flash Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-flash-lite-latest` | Gemini Flash-Lite Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-nano-banana-2.1` | Nano Banana 2.1 | 65536 | 65536 | `batchGenerateContent, countTokens, generateContent` |
-| `gemini-omni-flash-preview` | Gemini Omni Flash Preview | 131072 | 65536 | `countTokens, generateContent` |
-| `gemini-pro-latest` | Gemini Pro Latest | 1048576 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-robotics-er-1.6-preview` | Gemini Robotics-ER 1.6 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemini-robotics-er-2-preview` | Gemini Robotics-ER 2 Preview | 131072 | 65536 | `batchGenerateContent, countTokens, createCachedContent, generateContent` |
-| `gemma-4-26b-a4b-it` | Gemma 4 26B A4B IT | 262144 | 32768 | `countTokens, generateContent` |
-| `gemma-4-31b-it` | Gemma 4 31B IT | 262144 | 32768 | `countTokens, generateContent` |
-| `lyria-3-clip-preview` | Lyria 3 Clip Preview | 1048576 | 65536 | `countTokens, generateContent` |
-| `lyria-3-pro-preview` | Lyria 3 Pro Preview | 1048576 | 65536 | `countTokens, generateContent` |
-| `veo-3.1-fast-generate-preview` | Veo 3.1 fast | 480 | 8192 | `predictLongRunning` |
-| `veo-3.1-generate-preview` | Veo 3.1 | 480 | 8192 | `predictLongRunning` |
-| `veo-3.1-lite-generate-preview` | Veo 3.1 lite | 480 | 8192 | `predictLongRunning` |
+| Model ID | 名称 | 类型 | 输入 | 输出 |
+| --- | --- | --- | ---: | ---: |
+| `gemini-4-argon` | Gemini 4 Argon | 文本 | 1048576 | 32768 |
+| `gemini-3.8-flash` | Gemini 3.8 Flash | 文本 | 1048576 | 65536 |
+| `gemini-3.6-flash` | Gemini 3.6 Flash | 文本 | 1048576 | 65536 |
+| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | 文本 | 1048576 | 65536 |
+| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | 文本 | 1048576 | 65536 |
+| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | 文本 | 1048576 | 65536 |
+| `gemma-4-31b-it` | Gemma 4 31B IT | 文本 | 262144 | 32768 |
+| `gemini-omni-1.1-flash` | Gemini Omni 1.1 Flash | 文本与视频 | 131072 | 65536 |
+| `deep-research-preview-04-2026` | Deep Research Preview | 深度研究 | 131072 | 65536 |
+| `gemini-nano-banana-2.1` | Nano Banana 2.1 | 图片 | 65536 | 65536 |
+| `gemini-3.1-flash-image` | Nano Banana 2 | 图片 | 65536 | 65536 |
+| `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | 图片 | 65536 | 65536 |
+| `gemini-3-pro-image` | Nano Banana Pro | 图片 | 131072 | 32768 |
+| `gemini-3.8-flash-tts` | Gemini 3.8 Flash TTS | 语音合成 | 8192 | 16384 |
+| `gemini-3.8-flash-lite-tts` | Gemini 3.8 Flash Lite TTS | 语音合成 | 8192 | 16384 |
+| `gemini-3.5-transcribe` | Gemini 3.5 Transcribe | 转录 | 98304 | 32768 |
+| `lyria-3.5` | Lyria 3.5 | 音乐 | 1048576 | 65536 |
+| `lyria-3-pro-preview` | Lyria 3 Pro Preview | 音乐 | 1048576 | 65536 |
+| `gemini-3.8-live` | Gemini 3.8 Live | 实时对话 | 131072 | 65536 |
+| `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | 实时翻译 | 16384 | 32768 |
+
+目录中另有 `-latest` 别名、Robotics-ER、早期版本的图片与 TTS 模型，以及 Build 通道的 `-build` 模型。
 
 公开端点实现标准 `generateContent`、`countTokens`、`embedContent`、`batchEmbedContents` 和 `predictLongRunning`；`bidiGenerateContent` 与 `bidiGenerateMusic` 模型经 `/v1/live` 调用。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
@@ -503,19 +494,40 @@ curl http://127.0.0.1:2048/v1/videos \
 
 ```text
 AIStudio2API/
-├── cmd/aistudio2api/        # 薄入口
-├── internal/app/            # 命令、管理监听、生成服务生命周期与调度
-├── internal/setup/          # 账户导入和独立登录 CLI
-├── internal/aistudio/       # AI Studio 协议、认证、模型与媒体
-├── internal/api/            # OpenAI、Responses、Anthropic 与 Gemini 适配
-├── internal/chromeauth/     # Windows Chrome 与 DBSC 导入
-├── internal/camoufoxnative/ # Camoufox BiDi、登录与 WAA Worker
-├── internal/webui/          # 内嵌前端产物
-├── internal/desktop/        # 桌面窗口与系统托盘
-├── web/                     # Vue 3 + TypeScript 管理页面
-├── docs/                    # 开发文档与协议规范
-└── build/                   # 应用图标与各平台打包配置
+├── cmd/aistudio2api/        # 程序入口与 Windows 资源
+├── internal/
+│   ├── app/                 # 命令、管理监听、生成服务生命周期与调度
+│   ├── config/              # .env 配置项的读取与校验
+│   ├── setup/               # 账户导入和独立登录 CLI
+│   ├── aistudio/            # AI Studio 协议、认证、模型与媒体
+│   ├── api/                 # OpenAI、Responses、Anthropic 与 Gemini 适配
+│   ├── waa/                 # 纯 Go WAA 运行时
+│   ├── camoufoxnative/      # Camoufox BiDi、登录与 WAA Worker
+│   ├── chromeauth/          # Windows Chrome 与 DBSC 导入
+│   ├── proxydial/           # 全局与账户代理的拨号与转发
+│   ├── sqlitedb/            # 本地 SQLite 数据库
+│   ├── requestdb/           # 请求用量、汇总与正文账本
+│   ├── promptdb/            # API 试用页对话存储
+│   ├── pricing/             # 用量页费用估算
+│   ├── i18n/                # 服务文案的界面语言翻译
+│   ├── webui/               # 内嵌前端产物
+│   └── desktop/             # 桌面窗口与系统托盘
+├── web/                     # Vue 3 + TypeScript 前端
+│   └── src/
+│       ├── playground/      # API 试用页
+│       ├── components/      # 管理页面组件
+│       └── locales/         # 界面语言
+├── docs/                    # 构建、开发、协议、日志与 WAA 文档
+├── build/                   # 应用图标与各平台打包配置
+├── .github/workflows/       # 检查、五平台构建与 Release 发布
+├── .env.example             # 配置模板
+├── Dockerfile               # Docker 镜像
+├── docker-compose.yml       # Docker Compose 示例
+├── go.mod                   # Go 模块与依赖
+└── LICENSE
 ```
+
+运行时在程序目录生成 `.env`、`auth/`（账户认证材料）与 `runtime/`（Camoufox、本地数据库、日志与媒体文件）。
 
 ## 配置说明
 
@@ -531,9 +543,9 @@ cp .env.example .env
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
-| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同；页面以当前访问的主机名加此端口打开预览 |
+| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览 |
 | `PROXY_API_KEY` | 空 | 公开 API key |
-| `AUTO_START` | `false` | 管理程序启动后自动启动生成服务 |
+| `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
 | `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
 | `LOG_MAX_TOTAL_MB` | `500` | 日志目录总量上限，超出时删除最旧的文件，不小于 20 |
@@ -548,13 +560,14 @@ cp .env.example .env
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=go` 时不限制 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
-| `UPSTREAM_CHANNELS` | `playground,build` | 生成请求使用的上游通道，可只保留其一 |
+| `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
-| `BUILD_NATIVE_NONSTREAM` | `true` | 非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
+| `BUILD_NATIVE_NONSTREAM` | `true` | 启用 Build 通道时非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
 | `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |
 | `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
+| `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`go` 在服务进程内运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |
@@ -586,7 +599,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 支持通过 HTTP、HTTPS 或 SOCKS5 代理访问 AI Studio，代理需要认证时在 URL 中填写账号密码，例如 `socks5://user:password@host:1080`：
 
-1. 在“服务配置”中设置全局代理；留空时使用系统代理，先读 `HTTPS_PROXY` 环境变量，未设置时读 Windows 系统代理设置，代理输入框下方显示当前生成服务实际使用的出口
+1. 在“服务配置”中设置全局代理；留空时使用系统代理，先读 `HTTPS_PROXY` 环境变量，未设置时读 Windows 或 macOS 的系统代理设置，代理输入框下方显示当前生成服务实际使用的出口
 2. 全局代理可以填写多个，用逗号分隔组成代理池：没有专用代理的账户固定绑定到绑定账户最少的可用代理，绑定写入账户状态，重启后不变；代理连续 3 次网络错误或定时检测失败时，其账户改绑到其他可用代理，检测恢复后重新参与分配；“服务配置”列出各代理的状态与绑定账户数，账户卡片显示每个账户的出口
 3. 在“账户”页面编辑单个账户时可以设置账户专用代理
 4. 账户代理同时用于登录、WAA 与业务请求
@@ -601,7 +614,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 | `auth/<Google 邮箱>/account.json` | 账户邮箱、代理、语言、时区和启用状态 |
 | `auth/<Google 邮箱>/storage-state.json` | Google Cookie 与认证续签材料 |
 | `auth/<Google 邮箱>/runtime-state.json` | 权益等级、模型资格、冷却状态与资源所属账户 |
-| `auth/<Google 邮箱>/camoufox-cache/` | 该账户浏览器的网页缓存，服务停止时可删除 |
+| `auth/<Google 邮箱>/camoufox-cache/` | 该账户浏览器的网页缓存与启动缓存，服务停止时可删除 |
 | `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
 | `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
 
@@ -619,7 +632,6 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 - [开发与贡献](docs/development.md)
 - [Google AI Studio 协议规范](docs/protocol.md)
-- [WAA 实现](docs/waa.md)
 - [Build 通道](docs/build.md)
 - [运行日志说明](docs/logging.md)
 - [可复用逆向开发指南](docs/reverse-engineering.md)
@@ -641,61 +653,10 @@ Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `Gene
 - **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
 - **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
 
-## 故障排除
-
-### Windows 端口被系统保留
-
-如果启动时提示 `LISTEN_ADDR` 配置的端口被占用，任务管理器中又找不到占用进程，可能是 Hyper-V、WSL2 或 Docker 的 NAT 服务保留了端口段。
-
-以下命令需要在管理员权限的 PowerShell 或 CMD 中运行。
-
-#### 1. 查看被 Windows 保留的端口范围
-
-```powershell
-netsh interface ipv4 show excludedportrange protocol=tcp
-```
-
-如果 `2048` 落在输出的 `Start Port` 和 `End Port` 范围内，可以修改 `LISTEN_ADDR`，或重启 WinNAT 服务后再次检查：
-
-```powershell
-net stop winnat
-net start winnat
-```
-
-端口空闲后，也可以将 `2048` 加入持久保留：
-
-```powershell
-netsh int ipv4 add excludedportrange protocol=tcp startport=2048 numberofports=1 store=persistent
-```
-
-常见运行状态：
-
-| 状态 | 处理方法 |
-| --- | --- |
-| 页面未自动打开 | 手动打开 `.env` 中 `LISTEN_ADDR` 对应的地址 |
-| `service_stopped` | 在管理页面点击“启动服务” |
-| `service_starting` | 生成服务正在启动，稍后重试 |
-| 没有可用账户 | 在账户页新增、启用或重新登录账户 |
-| Camoufox 准备失败 | 检查 GitHub Release 访问，或设置 `CAMOUFOX_PATH` |
-| Linux 预热账户 `exit status 255` | 安装 Camoufox 运行库，见“系统要求”中的 apt 命令 |
-| 账户显示“AI Studio 不支持当前出口地区或账户” | 为该账户或全局代理换用 [AI Studio 支持地区](https://aistudio.google.com/docs/available-regions)的出口 |
-
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 开发计划
+## 📈 Star History
 
-- ✅ **TTS 支持**: 已适配 `gemini-2.5-flash/pro-preview-tts` 语音生成模型
-- ✅ **媒体生成**: 已支持 Imagen 3、Veo 2、Nano Banana 图片/视频生成
-- ✅ **文档完善**: 更新并优化 `docs/` 目录下的详细使用文档与 API 规范
-- ✅ **Go 语言重构**: 将核心代理服务迁移至 Go 以提升并发性能与降低资源占用
-- ✅ **多Worker负载均衡**: 支持多 Google 账号轮询池，提高并发限额与稳定性
-- ✅ **桌面版**: Windows、macOS 与 Linux 桌面应用，提供窗口、系统托盘与在线更新
-- ✅ **API 试用页**: 按 AI Studio 官网的入口与路由提供对话、图片、视频、语音、音乐与实时对话页
-
-### 纯 Go WAA 运行时
-
-- ✅ **纯 Go 后端**: `WAA_BACKEND=go` 在服务进程内执行官方 interpreter 与 program，按账户指纹模拟 Firefox 页面环境，运行时不下载、不启动 Camoufox；账户登录仍使用 Camoufox
-- ✅ **Firefox 引擎细节**: 补齐 `Intl` 格式化、正则字面量的全局解析时机与 `RegExp.prototype` 的 Symbol 键顺序
-- ✅ **页面环境对齐**: 文档节点、子窗口、页面全局与全局键顺序与官网页面一致，固定随机种子下 proof 与官网页面逐字节相同
+[![Star History Chart](https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date)](https://star-history.com/#Mag1cFall/AIStudio2API&Date)

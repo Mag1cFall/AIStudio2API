@@ -55,7 +55,7 @@ const selectedLabel = computed(() => options.value[selectedIndex.value]?.label ?
 function keepPrimarySelect(event: PointerEvent) {
   if (event.button !== 0) event.stopPropagation()
 }
-// selectedKey 以选项下标作为 Reka 选项值，使空字符串与数字值都能被选择
+// selectedKey 以选项下标作为 Reka 选项值
 const selectedKey = computed({
   get: () => (selectedIndex.value < 0 ? '' : String(selectedIndex.value)),
   set: (key: string) => {

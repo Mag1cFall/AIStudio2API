@@ -20,14 +20,19 @@ type interactionRequest struct {
 	Input      json.RawMessage            `json:"input"`
 	System     string                     `json:"system_instruction"`
 	Stream     bool                       `json:"stream"`
+	Background bool                       `json:"background"`
 	Store      *bool                      `json:"store"`
 	PreviousID string                     `json:"previous_interaction_id"`
 	Formats    json.RawMessage            `json:"response_format"`
 	MIME       string                     `json:"response_mime_type"`
 	Modalities []string                   `json:"response_modalities"`
 	Safety     []interactionSafetySetting `json:"safety_settings"`
-	Tools      []responsesTool            `json:"tools"`
-	Generation struct {
+	Tools      []interactionTool          `json:"tools"`
+	// CachedContent 是显式缓存的资源名
+	CachedContent string            `json:"cached_content"`
+	ServiceTier   string            `json:"service_tier"`
+	Labels        map[string]string `json:"labels"`
+	Generation    struct {
 		Temperature       *float64        `json:"temperature"`
 		TopP              *float64        `json:"top_p"`
 		TopK              *int            `json:"top_k"`
@@ -45,7 +50,59 @@ type interactionRequest struct {
 		Video *struct {
 			Task string `json:"task"`
 		} `json:"video_config"`
+		Transcription *interactionTranscriptionConfig `json:"transcription_config"`
 	} `json:"generation_config"`
+}
+
+// interactionTool 表示 Interactions 工具声明，在 Responses 工具字段之外带有内置工具的设置
+type interactionTool struct {
+	responsesTool
+	SearchTypes                    []string          `json:"search_types"`
+	EnableWidget                   bool              `json:"enable_widget"`
+	Latitude                       *float64          `json:"latitude"`
+	Longitude                      *float64          `json:"longitude"`
+	Environment                    string            `json:"environment"`
+	ExcludedPredefinedFunctions    []string          `json:"excluded_predefined_functions"`
+	DisabledSafetyPolicies         []string          `json:"disabled_safety_policies"`
+	EnablePromptInjectionDetection bool              `json:"enable_prompt_injection_detection"`
+	URL                            string            `json:"url"`
+	Headers                        map[string]string `json:"headers"`
+	AllowedTools                   []struct {
+		Tools []string `json:"tools"`
+	} `json:"allowed_tools"`
+	FileSearchStoreNames []string `json:"file_search_store_names"`
+	MetadataFilter       string   `json:"metadata_filter"`
+	TopK                 *int     `json:"top_k"`
+}
+
+// interactionTranscriptionConfig 表示 generation_config.transcription_config
+type interactionTranscriptionConfig struct {
+	AdaptationPhrases      []string        `json:"adaptation_phrases"`
+	CustomVocabulary       []string        `json:"custom_vocabulary"`
+	DiarizationMode        string          `json:"diarization_mode"`
+	LanguageCodes          []string        `json:"language_codes"`
+	LanguageHints          []string        `json:"language_hints"`
+	Mode                   json.RawMessage `json:"mode"`
+	TimestampGranularities []string        `json:"timestamp_granularities"`
+}
+
+// config 返回转录配置，mode 接受 "smart" 或 {"type":"smart"}
+func (config interactionTranscriptionConfig) config() (*aistudio.TranscriptionConfig, error) {
+	mode := ""
+	if rawJSONConfigured(config.Mode) && json.Unmarshal(config.Mode, &mode) != nil {
+		var object struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(config.Mode, &object); err != nil {
+			return nil, fmt.Errorf("transcription_config.mode: %w", err)
+		}
+		mode = object.Type
+	}
+	return &aistudio.TranscriptionConfig{
+		WordTimestamps: slices.Contains(config.TimestampGranularities, "word"), SpeakerLabels: config.DiarizationMode == "speaker",
+		CustomVocabulary: config.CustomVocabulary, LanguageCodes: config.LanguageCodes, SmartTranscription: mode == "smart",
+		AdaptationPhrases: config.AdaptationPhrases, LanguageHints: config.LanguageHints,
+	}, nil
 }
 
 // interactionSafetySetting 表示 Interactions 的安全类别与拦截阈值，取值为小写枚举名
@@ -80,10 +137,15 @@ type interactionInput struct {
 	ID          string             `json:"id"`
 	CallID      string             `json:"call_id"`
 	Name        string             `json:"name"`
+	SampleRate  int                `json:"sample_rate"`
+	Channels    int                `json:"channels"`
+	Resolution  string             `json:"resolution"`
 	Arguments   json.RawMessage    `json:"arguments"`
 	Result      json.RawMessage    `json:"result"`
 	IsError     bool               `json:"is_error"`
 	Signature   string             `json:"signature"`
+	SearchType  string             `json:"search_type"`
+	ServerName  string             `json:"server_name"`
 	Annotations []struct {
 		Type    string `json:"type"`
 		Speaker string `json:"speaker"`
@@ -132,7 +194,10 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	if strings.TrimSpace(model) == "" {
 		model = request.Agent
 	}
-	generate := aistudio.GenerateRequest{ID: id, Model: strings.TrimPrefix(strings.TrimSpace(model), "models/"), System: request.System}
+	generate := aistudio.GenerateRequest{
+		ID: id, Model: strings.TrimPrefix(strings.TrimSpace(model), "models/"), System: systemSegments(request.System),
+		ServiceTier: request.ServiceTier, Labels: request.Labels,
+	}
 	if generate.Model == "" {
 		return generate, fmt.Errorf("model or agent is required")
 	}
@@ -149,6 +214,11 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	}
 	if generation.ThinkingSummaries != "" && generation.ThinkingSummaries != "auto" && generation.ThinkingSummaries != "none" {
 		return generate, fmt.Errorf("thinking_summaries must be auto or none")
+	}
+	if generation.Transcription != nil {
+		if generate.Config.TranscriptionConfig, err = generation.Transcription.config(); err != nil {
+			return generate, err
+		}
 	}
 	generate.Config.SpeechConfig, err = interactionSpeech(generation.Speech)
 	if err != nil {
@@ -173,16 +243,16 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 				return generate, fmt.Errorf("text mime_type must be text/plain or application/json")
 			}
 			generate.Config.ResponseMIMEType = format.MIME
-			generate.Config.ResponseSchema = format.Schema
+			generate.Config.ResponseJSONSchema = format.Schema
 			if len(format.Schema) > 0 && format.MIME != "application/json" {
 				return generate, fmt.Errorf("response_format.schema requires application/json")
 			}
 		case "", "object", "array", "string", "number", "integer", "boolean", "null":
 			generate.Config.ResponseModalities = append(generate.Config.ResponseModalities, aistudio.ResponseModalityText)
 			generate.Config.ResponseMIMEType = "application/json"
-			generate.Config.ResponseSchema = raw
+			generate.Config.ResponseJSONSchema = raw
 		case "audio":
-			if _, ok := interactionAudioEncodings[format.MIME]; format.MIME != "" && !ok {
+			if _, ok := outputAudioEncodings[format.MIME]; format.MIME != "" && !ok {
 				return generate, fmt.Errorf("audio mime_type must be audio/wav, audio/l16, audio/mp3, audio/ogg_opus, audio/alaw or audio/mulaw")
 			}
 			if format.SampleRate < 0 || format.BitRate < 0 {
@@ -215,26 +285,79 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 		return generate, err
 	}
 	tools := make([]responsesTool, 0, len(request.Tools))
+	var builtin aistudio.Tools
 	for _, tool := range request.Tools {
 		switch tool.Type {
-		case "function", "url_context", "google_maps":
+		case "function", "url_context":
+		case "google_maps":
+			builtin.MapsWidget = builtin.MapsWidget || tool.EnableWidget
+			if tool.Latitude != nil && tool.Longitude != nil {
+				builtin.ToolConfig.Retrieval = &aistudio.RetrievalConfig{Latitude: tool.Latitude, Longitude: tool.Longitude}
+			}
 		case "google_search":
-			tool.Type = "web_search"
+			builtin.GoogleSearch = &aistudio.GoogleSearchOptions{
+				WebSearch:   len(tool.SearchTypes) == 0 || slices.Contains(tool.SearchTypes, "web_search") || slices.Contains(tool.SearchTypes, "enterprise_web_search"),
+				ImageSearch: slices.Contains(tool.SearchTypes, "image_search"),
+			}
+			continue
 		case "code_execution":
 			tool.Type = "code_interpreter"
-		case "computer_use", "file_search", "mcp_server", "retrieval":
+		case "computer_use":
+			builtin.ComputerUse = &aistudio.ComputerUse{
+				Environment: "ENVIRONMENT_" + strings.ToUpper(cmp.Or(tool.Environment, "browser")), ExcludedPredefinedFunctions: tool.ExcludedPredefinedFunctions,
+				DisabledSafetyPolicies: tool.DisabledSafetyPolicies, EnablePromptInjectionDetection: tool.EnablePromptInjectionDetection,
+			}
+			continue
+		case "mcp_server":
+			server := aistudio.MCPServer{Name: tool.Name, URL: tool.URL, Headers: tool.Headers}
+			for _, allowed := range tool.AllowedTools {
+				server.AllowedTools = append(server.AllowedTools, allowed.Tools...)
+			}
+			builtin.MCPServers = append(builtin.MCPServers, server)
+			continue
+		case "file_search":
+			options := map[string]any{"fileSearchStoreNames": tool.FileSearchStoreNames}
+			if tool.MetadataFilter != "" {
+				options["metadataFilter"] = tool.MetadataFilter
+			}
+			if tool.TopK != nil {
+				options["topK"] = *tool.TopK
+			}
+			if builtin.FileSearch, err = json.Marshal(options); err != nil {
+				return generate, err
+			}
+			continue
+		case "retrieval":
 			continue
 		default:
 			return generate, fmt.Errorf("unsupported interaction tool %q", tool.Type)
 		}
-		tools = append(tools, tool)
+		tools = append(tools, tool.responsesTool)
 	}
 	generate.Tools, err = mapResponsesTools(tools, nil)
 	if err != nil {
 		return generate, err
 	}
+	if search := builtin.GoogleSearch; search != nil {
+		if search.WebSearch {
+			generate.Tools.Google = appendUnique(generate.Tools.Google, "google_search")
+		}
+		if search.ImageSearch {
+			generate.Tools.Google = appendUnique(generate.Tools.Google, "image_search")
+		}
+		generate.Tools.GoogleSearch = search
+	}
+	generate.Tools.MapsWidget, generate.Tools.ComputerUse = builtin.MapsWidget, builtin.ComputerUse
+	generate.Tools.MCPServers, generate.Tools.FileSearch = builtin.MCPServers, builtin.FileSearch
 	generate.Tools.ToolConfig, err = interactionToolChoice(generation.ToolChoice)
+	generate.Tools.ToolConfig.Retrieval = builtin.ToolConfig.Retrieval
+	generate.Tools.ToolConfig.ServerSideInvocations = interactionServerSteps(generate.Tools)
 	return generate, err
+}
+
+// interactionServerSteps 表示请求含服务端执行的工具，Interactions 以步骤返回这些工具的调用与结果
+func interactionServerSteps(tools aistudio.Tools) bool {
+	return len(tools.Google) > 0 || len(tools.MCPServers) > 0 || len(tools.FileSearch) > 0
 }
 
 // interactionModalities 是 response_modalities 取值对应的输出类型
@@ -244,9 +367,15 @@ var interactionModalities = map[string]aistudio.ResponseModality{
 	"audio": aistudio.ResponseModalityAudio,
 }
 
-// applyLegacyOutput 映射 response_modalities、response_mime_type、safety_settings 与 generation_config.image_config，response_format 中的同项优先
+// applyLegacyOutput 映射 response_modalities、response_mime_type、safety_settings 与 generation_config.image_config，response_format 中的同项优先，给出 response_format 时不使用 response_mime_type
 func (request interactionRequest) applyLegacyOutput(generate *aistudio.GenerateRequest) error {
 	for _, name := range request.Modalities {
+		if strings.EqualFold(name, "video") {
+			if generate.Config.VideoConfig == nil {
+				generate.Config.VideoConfig = &aistudio.VideoConfig{}
+			}
+			continue
+		}
 		modality, ok := interactionModalities[strings.ToLower(name)]
 		if !ok {
 			return fmt.Errorf("unsupported response_modalities value %q", name)
@@ -255,7 +384,7 @@ func (request interactionRequest) applyLegacyOutput(generate *aistudio.GenerateR
 			generate.Config.ResponseModalities = append(generate.Config.ResponseModalities, modality)
 		}
 	}
-	if request.MIME != "" && generate.Config.ResponseMIMEType == "" {
+	if request.MIME != "" && !rawJSONConfigured(request.Formats) {
 		if request.MIME != "text/plain" && request.MIME != "application/json" {
 			return fmt.Errorf("response_mime_type must be text/plain or application/json")
 		}
@@ -324,6 +453,8 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 	}
 	var contents []aistudio.Content
 	pendingSignature := ""
+	// mcpFunctions 记录按函数调用发送的 MCP 调用 ID 与函数名
+	mcpFunctions := map[string]string{}
 	for _, item := range items {
 		role := aistudio.RoleUser
 		var parts []aistudio.Part
@@ -344,7 +475,7 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 				return nil, fmt.Errorf("function_call requires id, name and arguments")
 			}
 			role = aistudio.RoleAssistant
-			parts = []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{ID: item.ID, Name: item.Name, Arguments: item.Arguments}, ThoughtSignature: pendingSignature}}
+			parts = []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{ID: item.ID, Name: item.Name, Arguments: item.Arguments}, ThoughtSignature: cmp.Or(item.Signature, pendingSignature)}}
 			pendingSignature = ""
 		case "function_result":
 			if item.CallID == "" || len(item.Result) == 0 {
@@ -361,32 +492,29 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 			if item.Signature != "" {
 				pendingSignature = item.Signature
 			}
-		case "processing_call", "processing_result":
-			role = aistudio.RoleAssistant
-			if item.Type == "processing_call" && item.ID == "" || item.Type == "processing_result" && item.CallID == "" {
-				return nil, fmt.Errorf("processing step requires its call identifier")
-			}
-			mapped := aistudio.Part{ThoughtSignature: item.Signature}
-			if item.Type == "processing_call" {
-				mapped.ProcessingCall = &aistudio.MediaProcessingStep{ID: item.ID}
-			} else {
-				mapped.ProcessingResult = &aistudio.MediaProcessingStep{ID: item.CallID}
-			}
-			if pendingSignature != "" {
-				parts = append(parts, aistudio.Part{ThoughtSignature: pendingSignature})
-				pendingSignature = ""
-			}
-			parts = append(parts, mapped)
-		case "code_execution_call", "code_execution_result":
-			role = aistudio.RoleAssistant
-			if text := item.codeExecutionText(); text != "" {
-				parts = []aistudio.Part{{Text: text}}
-			}
-		case "google_search_call", "google_search_result", "url_context_call", "url_context_result",
-			"google_maps_call", "google_maps_result", "file_search_call", "file_search_result",
-			"mcp_server_tool_call", "mcp_server_tool_result", "retrieval_call", "retrieval_result":
+		case "retrieval_call", "retrieval_result":
 			continue
 		default:
+			if item.Type == "mcp_server_tool_call" && item.Signature == "" && pendingSignature == "" || item.Type == "mcp_server_tool_result" && mcpFunctions[item.CallID] != "" {
+				role, parts, err = mcpFunctionPart(item, mcpFunctions)
+				if err != nil {
+					return nil, err
+				}
+				break
+			}
+			if interactionToolStepKind(item.Type) {
+				role = aistudio.RoleAssistant
+				mapped, mapErr := interactionToolPart(item)
+				if mapErr != nil {
+					return nil, mapErr
+				}
+				if pendingSignature != "" {
+					parts = append(parts, aistudio.Part{ThoughtSignature: pendingSignature})
+					pendingSignature = ""
+				}
+				parts = append(parts, mapped)
+				break
+			}
 			parts, err = item.parts()
 			if err != nil {
 				return nil, err
@@ -415,29 +543,12 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 	return contents, nil
 }
 
-// codeExecutionText 按本服务输出代码执行的格式把历史中的代码与结果渲染为文本
-func (item interactionInput) codeExecutionText() string {
-	if item.Type == "code_execution_call" {
-		var call aistudio.ExecutableCode
-		if json.Unmarshal(item.Arguments, &call) != nil {
-			return ""
-		}
-		return renderCodeExecution(aistudio.Event{Kind: aistudio.EventExecutableCode, ExecutableCode: &call})
-	}
-	var output string
-	if json.Unmarshal(item.Result, &output) != nil {
-		return ""
-	}
-	result := aistudio.CodeExecutionResult{Outcome: "OUTCOME_OK", Output: output}
-	if item.IsError {
-		result = aistudio.CodeExecutionResult{Outcome: "OUTCOME_FAILED", Error: output}
-	}
-	return renderCodeExecution(aistudio.Event{Kind: aistudio.EventCodeExecutionResult, CodeExecutionResult: &result})
-}
-
 // parts 复用 Gemini 的文本、媒体与文件输入映射
 func (content interactionInput) parts() ([]aistudio.Part, error) {
-	var part geminiPart
+	part := geminiPart{}
+	if content.Resolution != "" {
+		part.MediaResolution = &geminiMediaResolution{Level: "MEDIA_RESOLUTION_" + strings.ToUpper(content.Resolution)}
+	}
 	if rawJSONConfigured(content.Processing) {
 		var err error
 		if part.VideoMetadata, part.MediaProcessing, err = interactionVideoProcessing(content.Processing); err != nil {
@@ -471,9 +582,9 @@ func (content interactionInput) parts() ([]aistudio.Part, error) {
 					return nil, fmt.Errorf("%s content requires mime_type", content.Type)
 				}
 			}
-			part.InlineData = &geminiBlobPart{MIMEType: mimeType, Data: content.Data}
+			part.InlineData = &geminiBlobPart{MIMEType: content.audioMIME(mimeType), Data: content.Data, DisplayName: content.Name}
 		} else {
-			part.FileData = &geminiFilePart{MIMEType: content.MIME, FileURI: content.URI}
+			part.FileData = &geminiFilePart{MIMEType: content.audioMIME(content.MIME), FileURI: content.URI, DisplayName: content.Name}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported input type %q", content.Type)
@@ -482,14 +593,33 @@ func (content interactionInput) parts() ([]aistudio.Part, error) {
 	return parts, err
 }
 
+// audioMIME 把音频内容块的 sample_rate 与 channels 写入 MIME 参数，MIME 已带同名参数时保留原值
+func (content interactionInput) audioMIME(mimeType string) string {
+	if content.Type != "audio" || mimeType == "" || content.SampleRate == 0 && content.Channels == 0 {
+		return mimeType
+	}
+	base, params, err := mime.ParseMediaType(mimeType)
+	if err != nil {
+		return mimeType
+	}
+	if _, ok := params["rate"]; !ok && content.SampleRate > 0 {
+		params["rate"] = strconv.Itoa(content.SampleRate)
+	}
+	if _, ok := params["channels"]; !ok && content.Channels > 0 {
+		params["channels"] = strconv.Itoa(content.Channels)
+	}
+	return mime.FormatMediaType(base, params)
+}
+
 // interactionSpeech 转换单人声音列表与多说话人配置
 func interactionSpeech(raw json.RawMessage) (*aistudio.SpeechConfig, error) {
 	if !rawJSONConfigured(raw) {
 		return nil, nil
 	}
 	type voice struct {
-		Voice   string `json:"voice"`
-		Speaker string `json:"speaker"`
+		Voice    string `json:"voice"`
+		Speaker  string `json:"speaker"`
+		Language string `json:"language"`
 	}
 	var config struct {
 		Mode     string  `json:"mode"`
@@ -509,6 +639,9 @@ func interactionSpeech(raw json.RawMessage) (*aistudio.SpeechConfig, error) {
 	for _, speaker := range config.Speakers {
 		if strings.TrimSpace(speaker.Voice) == "" {
 			return nil, fmt.Errorf("speech_config voice is required")
+		}
+		if speaker.Language != "" {
+			speech.LanguageCode = speaker.Language
 		}
 		if len(config.Speakers) == 1 && speaker.Speaker == "" {
 			speech.VoiceName = speaker.Voice
@@ -533,22 +666,22 @@ func (request interactionRequest) imageMIME() string {
 	return ""
 }
 
-// interactionAudioFormat 表示 Interactions 音频输出的 MIME、采样率与码率
-type interactionAudioFormat struct {
+// outputAudioFormat 表示 Interactions response_format 与 Gemini responseFormat.audio 的音频输出 MIME、采样率与码率
+type outputAudioFormat struct {
 	MIME       string
 	SampleRate int
 	BitRate    int
 }
 
-// interactionAudioEncodings 为音频输出 MIME 对应的编码格式与返回内容的 MIME
-var interactionAudioEncodings = map[string]struct{ format, content string }{
+// outputAudioEncodings 为音频输出 MIME 对应的编码格式与返回内容的 MIME
+var outputAudioEncodings = map[string]struct{ format, content string }{
 	"audio/wav": {"pcm", "audio/l16"}, "audio/l16": {"pcm", "audio/l16"}, "audio/mp3": {"mp3", "audio/mp3"},
 	"audio/ogg_opus": {"opus", "audio/ogg"}, "audio/alaw": {"alaw", "audio/alaw"}, "audio/mulaw": {"mulaw", "audio/mulaw"},
 }
 
 // audioFormat 返回音频输出配置，未指定 MIME 时非流式为 WAV、流式为 L16
-func (request interactionRequest) audioFormat() interactionAudioFormat {
-	audio := interactionAudioFormat{MIME: "audio/wav"}
+func (request interactionRequest) audioFormat() outputAudioFormat {
+	audio := outputAudioFormat{MIME: "audio/wav"}
 	if request.Stream {
 		audio.MIME = "audio/l16"
 	}
@@ -565,7 +698,7 @@ func (request interactionRequest) audioFormat() interactionAudioFormat {
 }
 
 // container 返回 interactionMedia 的封装方式，WAV 封装 PCM，其余格式原样输出编码结果
-func (audio interactionAudioFormat) container() string {
+func (audio outputAudioFormat) container() string {
 	if audio.MIME == "audio/wav" {
 		return "wav"
 	}
@@ -573,29 +706,42 @@ func (audio interactionAudioFormat) container() string {
 }
 
 // encode 把上游 PCM 或 MP3 音频转换为请求的编码与采样率，编码与采样率已经一致时保留原始数据，其他编码原样返回
-func (audio interactionAudioFormat) encode(media aistudio.Media) (aistudio.Media, error) {
+func (audio outputAudioFormat) encode(media aistudio.Blob) (aistudio.Blob, error) {
 	baseType, _, _ := mime.ParseMediaType(media.MIME)
-	if media.URL != "" || baseType != "audio/l16" && baseType != "audio/wav" && baseType != "audio/x-wav" && baseType != "audio/mpeg" {
+	if baseType != "audio/l16" && baseType != "audio/wav" && baseType != "audio/x-wav" && baseType != "audio/mpeg" {
 		return media, nil
 	}
 	source, err := mediaPCM(media)
 	if err != nil {
 		return media, err
 	}
-	encoding := interactionAudioEncodings[audio.MIME]
+	encoding := outputAudioEncodings[audio.MIME]
 	sameRate := audio.SampleRate == 0 || audio.SampleRate == source.SampleRate
 	switch {
 	case baseType == "audio/mpeg" && encoding.format == "mp3" && sameRate && audio.BitRate == 0:
-		return aistudio.Media{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, source.SampleRate, source.Channels), Data: media.Data}, nil
+		return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, source.SampleRate, source.Channels), Data: media.Data}, nil
 	case baseType != "audio/mpeg" && encoding.format == "pcm" && sameRate:
 		return media, nil
 	}
 	data, encoded, err := encodeAudio(source, audioOutput{Format: encoding.format, SampleRate: audio.SampleRate, BitRate: audio.BitRate})
-	return aistudio.Media{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, encoded.SampleRate, encoded.Channels), Data: data}, err
+	return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, encoded.SampleRate, encoded.Channels), Data: data}, err
+}
+
+// output 把上游音频转换为请求的编码与采样率，WAV 输出封装为 RIFF WAVE
+func (audio outputAudioFormat) output(media aistudio.Blob) (aistudio.Blob, error) {
+	encoded, err := audio.encode(media)
+	if err != nil || audio.container() != "wav" || strings.HasPrefix(encoded.MIME, "audio/wav") {
+		return encoded, err
+	}
+	pcm, err := mediaPCM(encoded)
+	if err != nil {
+		return encoded, err
+	}
+	return aistudio.Blob{MIME: "audio/wav", Data: pcmWAV(pcm.Data, pcm.SampleRate, pcm.Channels)}, nil
 }
 
 // streams 判断音频块能否逐块输出，容器格式、重采样与 MP3 解码需要完整音频
-func (audio interactionAudioFormat) streams(media aistudio.Media) bool {
+func (audio outputAudioFormat) streams(media aistudio.Blob) bool {
 	switch audio.MIME {
 	case "audio/l16", "audio/alaw", "audio/mulaw":
 		if baseType, _, _ := mime.ParseMediaType(media.MIME); baseType == "audio/mpeg" {

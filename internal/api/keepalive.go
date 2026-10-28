@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// keepaliveWriter 在非流式响应写出前每隔心跳间隔写出一个换行；首个换行以 200 与 JSON 类型提交响应头，之后正文照常写出，状态码只记入访问日志
+// keepaliveWriter 在非流式响应写出前每隔心跳间隔写出一个换行，首个换行以 200 与 JSON 类型提交响应头，状态码只记入访问日志
 type keepaliveWriter struct {
 	http.ResponseWriter
 	ctx       context.Context

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from '@/i18n'
 import { vTooltip } from '@/playground/ui/tooltip'
 import type { Model } from '@/types'
 import type { PageKind } from './media/kinds'
@@ -13,6 +14,7 @@ const props = defineProps<{
   lockedTip?: string
 }>()
 const emit = defineEmits<{ select: [model: Model] }>()
+const { t } = useI18n()
 
 // openSelector 为本页面打开共用的模型选择面板，选中本页面的模型时以 select 事件交给页面
 function openSelector(): void {
@@ -34,8 +36,10 @@ function openSelector(): void {
     :aria-disabled="Boolean(lockedTip)"
     @click="!lockedTip && openSelector()"
   >
-    <span class="title" :class="{ 'is-side-by-side': sideBySide }">{{ model?.name }}</span>
-    <template v-if="!sideBySide">
+    <span class="title" :class="{ 'is-side-by-side': sideBySide }">{{
+      model?.name ?? t('pg.selectModel')
+    }}</span>
+    <template v-if="!sideBySide && model">
       <span class="subtitle">{{ model?.id }}</span>
       <span v-if="model?.details?.summary" class="subtitle">{{ model.details.summary }}</span>
     </template>

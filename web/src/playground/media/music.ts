@@ -1,6 +1,9 @@
 import { computed, reactive } from 'vue'
 import { useConsole } from '@/console'
+import { keepPage } from '@/desktop'
+import { useI18n, type TranslationKey } from '@/i18n'
 import type { Model } from '@/types'
+import { failureText } from '../request'
 import { newTurnID } from '../session'
 import { audioBlob, generateContent, responseText, type InlineImage } from './api'
 import { modelMatches } from '../catalog'
@@ -26,6 +29,16 @@ export type MusicView = 'text' | 'composer'
 export const sectionTypes = ['Intro', 'Verse', 'Chorus', 'Bridge', 'Outro', 'Build'] as const
 export type SectionType = (typeof sectionTypes)[number]
 
+// sectionLabels 是段落类型在界面上的名称，提示词中的类型保持官网英文
+export const sectionLabels: Record<SectionType, TranslationKey> = {
+  Intro: 'pg.sectionIntro',
+  Verse: 'pg.sectionVerse',
+  Chorus: 'pg.sectionChorus',
+  Bridge: 'pg.sectionBridge',
+  Outro: 'pg.sectionOutro',
+  Build: 'pg.sectionBuild',
+}
+
 // MusicSection 是分段编排中的一段：类型、起止秒数、强度与描述
 export interface MusicSection {
   id: string
@@ -41,6 +54,8 @@ export const maxSections = 10
 
 // defaultModel 是官网音乐页的默认模型
 const defaultModel = 'lyria-3-pro-preview'
+
+const { t } = useI18n()
 
 // sectionPattern 与官网一致匹配 [m:ss - m:ss] Type: Intensity: n/10. 描述
 const sectionPattern =
@@ -117,6 +132,9 @@ const state = reactive({
   error: '',
 })
 let controller: AbortController | undefined
+
+// 关闭桌面窗口时，生成中与只存在于页面的音乐保留页面
+keepPage(() => state.running || state.audio?.url.startsWith('blob:') === true)
 // sessionEpoch 在每次回到空态时递增，标识标题请求所属的会话
 let sessionEpoch = 0
 
@@ -264,13 +282,14 @@ async function run(): Promise<void> {
     const blob = audioBlob(parts)
     state.lyrics = responseText(parts)
     if (blob === undefined) {
-      state.error = candidate?.finishReason ?? response.promptFeedback?.blockReason ?? 'No audio'
+      const reason = candidate?.finishReason ?? response.promptFeedback?.blockReason
+      state.error = reason ? t('pg.noAudioReason').replace('{reason}', reason) : t('pg.noAudio')
     } else {
       const extension = blob.type.includes('wav') ? 'wav' : 'mp3'
       setAudio({ url: URL.createObjectURL(blob), name: `${model.id}.${extension}` })
     }
   } catch (error) {
-    if (!signal.aborted) state.error = error instanceof Error ? error.message : String(error)
+    if (!signal.aborted) state.error = failureText(error, t('pg.musicUnreachable'))
   } finally {
     state.running = false
     controller = undefined

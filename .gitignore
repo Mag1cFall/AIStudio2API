@@ -19,6 +19,7 @@
 
 # Go 工作区
 go.work
+go.work.sum
 
 # 编辑器与系统文件
 .vscode/

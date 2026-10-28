@@ -116,22 +116,22 @@ func generationChannelSelection(selection AccountSelection) bool {
 }
 
 // buildMethods 表示经 Build 代理调用、只服务 Playground 目录没有的模型的上游方法
-var buildMethods = []string{"embedContent", "bidiGenerateContent", "bidiGenerateMusic"}
+var buildMethods = []string{"embedContent", "bidiGenerateContent", "bidiGenerateMusic", "countTokens"}
 
-// buildMethodSelection 判断选择是否为 embedding 或实时方法，这类选择的 Build 组合只服务 Build 独有模型
+// buildMethodSelection 判断选择是否为 embedding、实时或计数方法，这类选择的 Build 组合只服务 Build 独有模型
 func buildMethodSelection(selection AccountSelection) bool {
 	return strings.TrimSpace(selection.ModelID) != "" && slices.Contains(buildMethods, selection.Method) &&
 		strings.TrimSpace(selection.Capability) == "" && !selection.PlaygroundOnly
 }
 
-// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位，限定通道的模型只使用该通道；-build 模型只使用写代码助手，embedding 只使用 Build，实时方法依次尝试 Playground 与 Build，其余非生成请求只使用 Playground RPC
+// selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位，限定通道的模型只使用该通道
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
 	if p.assistantModelLocked(selection.ModelID) {
 		return []Channel{ChannelAssistant}
 	}
 	if !generationChannelSelection(selection) {
 		if buildMethodSelection(selection) && p.channelEnabledLocked(ChannelBuild) {
-			if selection.Method == "embedContent" {
+			if selection.Method == "embedContent" || selection.Channel == ChannelBuild {
 				return []Channel{ChannelBuild}
 			}
 			return []Channel{ChannelPlayground, ChannelBuild}
@@ -188,7 +188,8 @@ func (p *AccountPool) channelSupportsLocked(account *Account, channel Channel, s
 		return accountSupportsSelection(account, selection)
 	case ChannelBuild:
 		if buildMethodSelection(selection) {
-			return p.channelEnabledLocked(ChannelBuild) && p.buildSupportsMethodLocked(account, selection.ModelID, selection.Method)
+			return p.channelEnabledLocked(ChannelBuild) && (p.buildSupportsMethodLocked(account, selection.ModelID, selection.Method) ||
+				selection.Channel == ChannelBuild && buildCatalogHasMethod(account, selection.ModelID, selection.Method))
 		}
 		return generationChannelSelection(selection) && p.channelEnabledLocked(ChannelBuild) &&
 			p.buildSupportsModelLocked(account, selection.ModelID, selection.anyTier)
@@ -269,6 +270,18 @@ func (p *AccountPool) AssistantModel(modelID string) bool {
 }
 
 func (p *AccountPool) assistantModelLocked(modelID string) bool {
+	return p.modelCapabilityLocked(modelID, "assistant_route")
+}
+
+// InteractionAgentModel 判断模型是否为经 CreateInteraction 后台任务生成的 Interactions 代理模型，如 Deep Research
+func (p *AccountPool) InteractionAgentModel(modelID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.modelCapabilityLocked(modelID, "interaction_route")
+}
+
+// modelCapabilityLocked 返回目录中首个同 ID 模型的能力标记
+func (p *AccountPool) modelCapabilityLocked(modelID string, capability string) bool {
 	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
 	if modelID == "" {
 		return false
@@ -279,7 +292,7 @@ func (p *AccountPool) assistantModelLocked(modelID string) bool {
 		}
 		for _, model := range account.Models {
 			if model.ID == modelID {
-				return model.Capabilities["assistant_route"]
+				return model.Capabilities[capability]
 			}
 		}
 	}
@@ -323,6 +336,12 @@ func buildRequiresSpecialTool(modelID string) bool {
 	return strings.Contains(modelID, "computer-use")
 }
 
+// buildCatalogHasMethod 判断账户 Build 目录的模型提供方法
+func buildCatalogHasMethod(account *Account, modelID string, method string) bool {
+	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	return slices.ContainsFunc(account.buildModels, func(model Model) bool { return model.ID == modelID && hasMethod(model, method) })
+}
+
 // buildSupportsMethodLocked 判断账户 Build 目录可经 embedding 或实时方法调用 Playground 目录没有的模型
 func (p *AccountPool) buildSupportsMethodLocked(account *Account, modelID string, method string) bool {
 	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
@@ -340,8 +359,8 @@ func (p *AccountPool) buildSupportsMethodLocked(account *Account, modelID string
 // buildPublicMethods 返回 Build 独有 embedding 与实时模型在公开目录中可调用的方法
 func buildPublicMethods(model Model) []string {
 	var methods []string
-	for _, method := range buildMethods {
-		if !hasMethod(model, method) {
+	for _, method := range model.Methods {
+		if !slices.Contains(buildMethods, method) {
 			continue
 		}
 		if method == "embedContent" {
@@ -407,7 +426,7 @@ func (p *AccountPool) BidiMethod(modelID string) string {
 	return "bidiGenerateContent"
 }
 
-// OutputContinuationRounds 返回请求按官网自动续写需要的轮数，未指定输出上限时按目录默认上限计算，不需要续写时为 1；多轮请求只能经 Playground 生成
+// OutputContinuationRounds 返回请求按官网自动续写需要的轮数，不需要续写时为 1
 func (p *AccountPool) OutputContinuationRounds(modelID string, maxOutputTokens *int64) int {
 	if maxOutputTokens != nil && *maxOutputTokens <= continuationRoundTokens {
 		return 1

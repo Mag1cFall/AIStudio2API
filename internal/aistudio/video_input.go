@@ -1,7 +1,6 @@
 package aistudio
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -13,9 +12,6 @@ var videoOffsetPattern = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]{1,9}))?s$`)
 
 // mediaProcessingCodes 是 Part field 40 视频处理方式的枚举值
 var mediaProcessingCodes = map[string]int64{"MEDIA_PROCESSING_UNSPECIFIED": 0, "STATIC": 1, "AGENTIC": 2}
-
-// mediaProcessingToolType 是 ToolCall 与 ToolResponse field 1 中视频理解处理的工具类型
-const mediaProcessingToolType = 13
 
 // videoOffset 把 Duration 字符串解析为秒与纳秒
 func videoOffset(value string) (int64, int64, error) {
@@ -46,23 +42,30 @@ func videoOffsetWire(value string) ([]any, error) {
 	return []any{seconds, nanos}, nil
 }
 
-// validateVideoOffsets 校验视频截取同时设置起止时终点晚于起点
-func validateVideoOffsets(contents []Content) error {
+// validateVideoParts 在取得账户前校验视频截取的 Duration 格式、终点晚于起点与处理方式取值
+func validateVideoParts(contents []Content) error {
 	for _, content := range contents {
 		for _, part := range content.Parts {
+			if _, ok := mediaProcessingCodes[part.MediaProcessing]; part.MediaProcessing != "" && !ok {
+				return fmt.Errorf("未知 mediaProcessing %q", part.MediaProcessing)
+			}
 			video := part.VideoMetadata
-			if video == nil || video.StartOffset == "" || video.EndOffset == "" {
+			if video == nil {
 				continue
 			}
-			startSeconds, startNanos, err := videoOffset(video.StartOffset)
-			if err != nil {
-				return err
+			var offsets [2][2]int64
+			for index, value := range []string{video.StartOffset, video.EndOffset} {
+				if value == "" {
+					continue
+				}
+				seconds, nanos, err := videoOffset(value)
+				if err != nil {
+					return err
+				}
+				offsets[index] = [2]int64{seconds, nanos}
 			}
-			endSeconds, endNanos, err := videoOffset(video.EndOffset)
-			if err != nil {
-				return err
-			}
-			if endSeconds < startSeconds || endSeconds == startSeconds && endNanos <= startNanos {
+			start, end := offsets[0], offsets[1]
+			if video.StartOffset != "" && video.EndOffset != "" && (end[0] < start[0] || end[0] == start[0] && end[1] <= start[1]) {
 				return fmt.Errorf("video endOffset %s 必须晚于 startOffset %s", video.EndOffset, video.StartOffset)
 			}
 		}
@@ -101,52 +104,4 @@ func encodeVideoPart(wire []any, part Part) ([]any, error) {
 		}
 	}
 	return setPartThoughtSignature(wire, part.ThoughtSignature), nil
-}
-
-// encodeMediaProcessingStep 编码 ToolCall 或 ToolResponse：工具类型、名称、Struct 与调用 ID
-func encodeMediaProcessingStep(step *MediaProcessingStep) ([]any, error) {
-	wire := []any{int64(mediaProcessingToolType), nil, nil, step.ID}
-	if step.Name != "" {
-		wire[1] = step.Name
-	}
-	if len(step.Data) != 0 {
-		value, err := encodeWireStructJSON(step.Data)
-		if err != nil {
-			return nil, fmt.Errorf("media processing data: %w", err)
-		}
-		wire[2] = value
-	}
-	return wire, nil
-}
-
-// decodeMediaProcessingStep 解码视频理解处理类型的 ToolCall 或 ToolResponse，其他工具类型返回 nil
-func decodeMediaProcessingStep(raw json.RawMessage, path string, evidence json.RawMessage) (*MediaProcessingStep, error) {
-	fields, err := rawArray(raw, path, evidence)
-	if err != nil {
-		return nil, withMethod(err, "GenerateContent")
-	}
-	toolType, err := rawInt64(rawAt(fields, 0), path+"[0]", evidence)
-	if err != nil {
-		return nil, withMethod(err, "GenerateContent")
-	}
-	if toolType != mediaProcessingToolType {
-		return nil, nil
-	}
-	step := &MediaProcessingStep{}
-	if value := rawAt(fields, 1); !isJSONNull(value) {
-		if step.Name, err = rawString(value, path+"[1]", evidence); err != nil {
-			return nil, withMethod(err, "GenerateContent")
-		}
-	}
-	if value := rawAt(fields, 2); !isJSONNull(value) {
-		if step.Data, err = decodeWireStruct(value, path+"[2]", evidence); err != nil {
-			return nil, err
-		}
-	}
-	if value := rawAt(fields, 3); !isJSONNull(value) {
-		if step.ID, err = rawString(value, path+"[3]", evidence); err != nil {
-			return nil, withMethod(err, "GenerateContent")
-		}
-	}
-	return step, nil
 }

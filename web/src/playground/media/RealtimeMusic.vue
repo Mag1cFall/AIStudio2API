@@ -7,7 +7,7 @@ import UiSlider from '@/playground/ui/UiSlider.vue'
 import { promptSuggestions, useRealtimeMusic } from './realtime-music'
 
 const props = defineProps<{ model: string }>()
-const { t } = useI18n()
+const { t, logText } = useI18n()
 const music = useRealtimeMusic()
 const { state } = music
 const playing = computed(() => ['connecting', 'loading', 'playing'].includes(state.status))
@@ -154,7 +154,7 @@ onUnmounted(() => music.stop())
       </button>
       <span class="status" role="status">{{ statusText }}</span>
     </div>
-    <p v-if="state.error" role="alert" class="realtime-error">{{ state.error }}</p>
+    <p v-if="state.error" role="alert" class="realtime-error">{{ logText(state.error) }}</p>
   </div>
 </template>
 

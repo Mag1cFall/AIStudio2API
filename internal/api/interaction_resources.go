@@ -33,7 +33,7 @@ func (s *server) storeInteraction(request interactionRequest, previous responseH
 		}
 		stored["steps"] = steps
 	}
-	encoded, err := json.Marshal(stored)
+	encoded, err := json.Marshal(officialOrder("interactions", stored))
 	if err != nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (s *server) handleInteractionGet(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(record.object, &fields)
 		_ = json.Unmarshal(fields["steps"], &steps)
 		fields["steps"], _ = json.Marshal(append(slices.Clone(record.input), steps...))
-		writeJSON(w, http.StatusOK, fields)
+		writeJSON(w, http.StatusOK, officialOrder("interactions", fields))
 		return
 	}
 	writeJSON(w, http.StatusOK, record.object)
@@ -111,9 +111,14 @@ func (s *server) handleInteractionDelete(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
-// handleInteractionCancel 返回已保存的交互
+// handleInteractionCancel 停止进行中的后台交互并返回保存的交互
 func (s *server) handleInteractionCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if value, ok := s.background.Load(id); ok {
+		run := value.(backgroundRun)
+		run.cancel()
+		<-run.done
+	}
 	record, ok := s.responseStates.Interaction(id)
 	if !ok {
 		writeInteractionNotFound(w, id)
@@ -176,7 +181,7 @@ func replayInteraction(w http.ResponseWriter, r *http.Request, object json.RawMe
 		event := events[sequence]
 		event.value["event_type"] = event.kind
 		event.value["event_id"] = strconv.Itoa(sequence + 1)
-		if err := writeSSE(w, event.kind, event.value); err != nil {
+		if err := writeSSE(w, event.kind, officialOrder("interactions", event.value)); err != nil {
 			SetAccessLogError(r.Context(), err)
 			return
 		}

@@ -4,86 +4,14 @@ import (
 	"encoding/json"
 )
 
-type generatedOutputParts struct {
-	visible   []Part
-	reasoning []Part
-}
-
-func (output *generatedOutputParts) observe(event Event) {
-	switch event.Kind {
-	case EventText:
-		output.appendText(&output.visible, event.Text, false, event.ThoughtSignature)
-	case EventReasoning:
-		output.appendText(&output.reasoning, event.Text, true, event.ThoughtSignature)
-	case EventToolCall:
-		if event.ToolCall != nil {
-			call := *event.ToolCall
-			call.Arguments = append(json.RawMessage(nil), call.Arguments...)
-			output.visible = append(output.visible, Part{FunctionCall: &call, ThoughtSignature: event.ThoughtSignature})
-		}
-	case EventExecutableCode:
-		if event.ExecutableCode != nil {
-			code := *event.ExecutableCode
-			output.visible = append(output.visible, Part{ExecutableCode: &code, ThoughtSignature: event.ThoughtSignature})
-		}
-	case EventCodeExecutionResult:
-		if event.CodeExecutionResult != nil {
-			result := *event.CodeExecutionResult
-			output.visible = append(output.visible, Part{CodeExecutionResult: &result, ThoughtSignature: event.ThoughtSignature})
-		}
-	case EventMedia:
-		output.appendMedia(event)
-	}
-}
-
-func (output *generatedOutputParts) appendText(parts *[]Part, text string, thought bool, signature string) {
-	if text == "" {
-		return
-	}
-	if len(*parts) > 0 {
-		last := &(*parts)[len(*parts)-1]
-		if last.Text != "" && last.Thought == thought && last.ThoughtSignature == signature {
-			last.Text += text
-			return
-		}
-	}
-	*parts = append(*parts, Part{Text: text, Thought: thought, ThoughtSignature: signature})
-}
-
-func (output *generatedOutputParts) appendMedia(event Event) {
-	if event.Media == nil {
-		return
-	}
-	if len(event.Media.Data) == 0 {
-		if event.Media.URL != "" {
-			output.visible = append(output.visible, Part{
-				File:             &FileRef{ID: event.Media.URL, Name: event.Media.Name, MIME: event.Media.MIME},
-				ThoughtSignature: event.ThoughtSignature,
-			})
-		}
-		return
-	}
-	if len(output.visible) > 0 {
-		last := &output.visible[len(output.visible)-1]
-		if last.InlineData != nil && last.InlineData.MIME == event.Media.MIME && last.ThoughtSignature == event.ThoughtSignature {
-			last.InlineData.Data = append(last.InlineData.Data, event.Media.Data...)
-			return
-		}
-	}
-	data := append([]byte(nil), event.Media.Data...)
-	output.visible = append(output.visible, Part{
-		InlineData: &Blob{MIME: event.Media.MIME, Data: data}, ThoughtSignature: event.ThoughtSignature,
-	})
-}
-
-func localCompleteUsage(request GenerateRequest, output generatedOutputParts) *Usage {
+func localCompleteUsage(request GenerateRequest, output Output) *Usage {
 	inputTokens := localContentsTokens(request.Contents)
-	if request.System != "" {
-		inputTokens += localTextTokens(request.System) + 1
+	if system := SystemText(request.System); system != "" {
+		inputTokens += localTextTokens(system) + 1
 	}
 	toolTokens := localToolTokens(request.Tools)
-	reasoningTokens := localPartsTokens(output.reasoning)
-	outputTokens := localPartsTokens(output.visible)
+	reasoningTokens := localPartsTokens(output.Reasoning())
+	outputTokens := localPartsTokens(output.Visible())
 	return &Usage{
 		InputTokens: inputTokens, ToolTokens: toolTokens, ReasoningTokens: reasoningTokens,
 		OutputTokens: outputTokens, TotalTokens: inputTokens + toolTokens + reasoningTokens + outputTokens,
@@ -91,27 +19,44 @@ func localCompleteUsage(request GenerateRequest, output generatedOutputParts) *U
 }
 
 // countedCompleteUsage 使用权威输入总数补全本地停止用量
-func countedCompleteUsage(request GenerateRequest, output generatedOutputParts, count TokenCount) *Usage {
+func countedCompleteUsage(request GenerateRequest, output Output, count TokenCount) *Usage {
 	toolTokens := localToolTokens(request.Tools)
 	if toolTokens > count.InputTokens {
 		toolTokens = count.InputTokens
 	}
 	inputTokens := count.InputTokens - toolTokens
-	reasoningTokens := localPartsTokens(output.reasoning)
-	outputTokens := localPartsTokens(output.visible)
+	reasoningTokens := localPartsTokens(output.Reasoning())
+	outputTokens := localPartsTokens(output.Visible())
 	return &Usage{
 		InputTokens: inputTokens, ToolTokens: toolTokens, ReasoningTokens: reasoningTokens,
 		OutputTokens: outputTokens, TotalTokens: count.InputTokens + reasoningTokens + outputTokens,
 	}
 }
 
-// EstimatedInputTokens 返回文本、工具和引用元数据的本地输入 Token 估算
-func EstimatedInputTokens(request GenerateRequest) int64 {
-	inputTokens := localContentsTokens(request.Contents)
-	if request.System != "" {
-		inputTokens += localTextTokens(request.System) + 1
+// StartInputTokenEstimate 取下请求中计入本地输入 Token 估算的文本、工具与引用元数据，在后台分词并把估算结果写入返回的通道
+func StartInputTokenEstimate(request GenerateRequest) <-chan int64 {
+	inputTokens := int64(len(request.Contents))
+	var texts []string
+	for _, content := range request.Contents {
+		for _, part := range content.Parts {
+			texts = append(texts, partTexts(part)...)
+		}
 	}
-	return inputTokens + localToolTokens(request.Tools)
+	if system := SystemText(request.System); system != "" {
+		inputTokens++
+		texts = append(texts, system)
+	}
+	if tools := toolText(request.Tools); tools != "" {
+		texts = append(texts, tools)
+	}
+	result := make(chan int64, 1)
+	go func() {
+		for _, text := range texts {
+			inputTokens += localTextTokens(text)
+		}
+		result <- inputTokens
+	}()
+	return result
 }
 
 func localContentsTokens(contents []Content) int64 {
@@ -132,31 +77,48 @@ func localPartsTokens(parts []Part) int64 {
 }
 
 func localPartTokens(part Part) int64 {
+	var total int64
+	for _, text := range partTexts(part) {
+		total += localTextTokens(text)
+	}
+	return total
+}
+
+// partTexts 返回 part 中计入本地 Token 估算的文本
+func partTexts(part Part) []string {
 	switch {
 	case part.Text != "":
-		return localTextTokens(part.Text)
+		return []string{part.Text}
 	case part.ExternalMedia != nil:
-		return localTextTokens(part.ExternalMedia.URL)
+		return []string{part.ExternalMedia.URL}
 	case part.File != nil:
-		return localTextTokens(part.File.ID) + localTextTokens(part.File.Name)
+		return []string{part.File.ID, part.File.Name}
 	case part.FunctionCall != nil:
-		return localTextTokens(part.FunctionCall.Name) + localTextTokens(string(part.FunctionCall.Arguments))
+		return []string{part.FunctionCall.Name, string(part.FunctionCall.Arguments)}
 	case part.FunctionResult != nil:
-		return localTextTokens(part.FunctionResult.Name) + localTextTokens(string(part.FunctionResult.Content))
+		return []string{part.FunctionResult.Name, string(part.FunctionResult.Content)}
 	case part.ExecutableCode != nil:
-		return localTextTokens(part.ExecutableCode.Language) + localTextTokens(part.ExecutableCode.Code)
+		return []string{part.ExecutableCode.Language, part.ExecutableCode.Code}
 	case part.CodeExecutionResult != nil:
-		return localTextTokens(part.CodeExecutionResult.Outcome) + localTextTokens(part.CodeExecutionResult.Output)
+		return []string{part.CodeExecutionResult.Outcome, part.CodeExecutionResult.Output}
 	default:
-		return 0
+		return nil
 	}
 }
 
 func localToolTokens(tools Tools) int64 {
+	if text := toolText(tools); text != "" {
+		return localTextTokens(text)
+	}
+	return 0
+}
+
+// toolText 返回计入本地 Token 估算的工具 JSON，没有生效的工具时为空
+func toolText(tools Tools) string {
 	if tools.ToolConfig.Mode == "none" ||
-		(len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil) {
-		return 0
+		(len(tools.Functions) == 0 && len(tools.Google) == 0 && tools.GoogleSearch == nil && tools.ComputerUse == nil && len(tools.MCPServers) == 0 && len(tools.FileSearch) == 0) {
+		return ""
 	}
 	encoded, _ := json.Marshal(tools)
-	return localTextTokens(string(encoded))
+	return string(encoded)
 }

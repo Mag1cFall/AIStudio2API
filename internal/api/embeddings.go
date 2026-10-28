@@ -107,10 +107,10 @@ func (s *server) handleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) 
 		}
 		data = append(data, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, officialOrder("openai", map[string]any{
 		"object": "list", "data": data, "model": strings.TrimPrefix(model, "models/"),
 		"usage": map[string]int64{"prompt_tokens": result.TokenCount, "total_tokens": result.TokenCount},
-	})
+	}))
 }
 
 // embeddingBase64 按 OpenAI base64 编码把向量写成小端 float32 字节
@@ -180,10 +180,10 @@ func (s *server) handleGeminiEmbed(w http.ResponseWriter, r *http.Request, model
 		embeddings = append(embeddings, map[string]any{"values": values})
 	}
 	if !batch {
-		writeJSON(w, http.StatusOK, map[string]any{"embedding": embeddings[0]})
+		writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"embedding": embeddings[0]}))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"embeddings": embeddings})
+	writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"embeddings": embeddings}))
 }
 
 // embed 调用支持 embedding 的服务

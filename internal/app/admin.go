@@ -45,6 +45,8 @@ type requestRegistry struct {
 	logs        []api.AdminLog
 	subscribers map[*eventSubscriber]struct{}
 	console     chan api.AdminLog
+	// firstEvents 是各模型与通道近期原请求的首事件等待，生成服务重启后保留
+	firstEvents *firstEventStats
 }
 
 type eventSubscriber struct {
@@ -120,6 +122,7 @@ func newRequestRegistry(ctx context.Context) *requestRegistry {
 		logs:        make([]api.AdminLog, 0, 128),
 		subscribers: make(map[*eventSubscriber]struct{}),
 		console:     make(chan api.AdminLog, 256),
+		firstEvents: newFirstEventStats(),
 	}
 	go registry.writeConsole(ctx)
 	return registry
@@ -142,14 +145,19 @@ func (admin *runtimeAdmin) Status(context.Context) (api.AdminStatus, error) {
 	}
 	state := admin.service.State()
 	running := state == "RUNNING"
-	return api.AdminStatus{
+	status := api.AdminStatus{
 		State:          state,
 		Running:        running,
 		Ready:          running && counts.Ready+counts.Busy > 0,
 		Version:        buildVersion(),
 		ActiveRequests: admin.requests.count(),
 		Accounts:       counts,
-	}, nil
+		Camoufox:       api.AdminCamoufox{Ready: camoufoxnative.Installed()},
+	}
+	if download, ok := camoufoxnative.DownloadProgress(); ok {
+		status.Camoufox.Download = &download
+	}
+	return status, nil
 }
 
 func (admin *runtimeAdmin) Accounts(context.Context) ([]api.AdminAccount, error) {
@@ -940,7 +948,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
-		AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
+		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
 		ProxyAPIKey: value.APIKey, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
@@ -1554,10 +1562,10 @@ func (registry *requestRegistry) publish(event api.AdminEvent) {
 	registry.mu.Unlock()
 }
 
-// version 是分发方编译时以 -ldflags "-X github.com/Mag1cFall/AIStudio2API/internal/app.version=<版本>" 写入的版本号
+// version 是编译时写入的版本号
 var version string
 
-// managedBy 是分发方编译时以 -ldflags "-X github.com/Mag1cFall/AIStudio2API/internal/app.managedBy=<分发方>" 写入的更新管理方，非空时在线更新由该分发方负责
+// managedBy 是编译时写入的更新管理方，非空时在线更新由该分发方负责
 var managedBy string
 
 // buildVersion 返回链接时写入的版本号，没有时读取 Go 构建信息
@@ -1581,7 +1589,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		AdminPasswordSet: cfg.AdminPassword != "", SavedAdminPassword: cfg.AdminPassword,
 		BuildNativeNonstream: cfg.BuildNativeNonstream,
 		NonstreamKeepalive:   cfg.NonstreamKeepalive, FakeStream: cfg.FakeStream, YouTubeLinks: cfg.YouTubeLinks,
-		AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
+		FirstEventHedge: cfg.FirstEventHedge, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		PreviewListenAddr: cfg.PreviewListenAddr, ActivePreviewListenAddr: cfg.PreviewListenAddr,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),

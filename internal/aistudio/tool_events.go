@@ -3,6 +3,7 @@ package aistudio
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 func decodeExecutableCode(raw json.RawMessage, path string, evidence json.RawMessage) (ExecutableCode, error) {
@@ -49,18 +50,12 @@ func decodeCodeExecutionResult(raw json.RawMessage, path string, evidence json.R
 	if !ok {
 		return CodeExecutionResult{}, &ProtocolEvidenceError{Method: "GenerateContent", Path: path + "[0]", Detail: fmt.Sprintf("未识别的 code execution outcome %d", outcomeCode), Raw: raw}
 	}
-	value := ""
+	result := CodeExecutionResult{Outcome: outcome}
 	if valueRaw := rawAt(values, 1); !isJSONNull(valueRaw) {
-		value, err = rawString(valueRaw, path+"[1]", evidence)
+		result.Output, err = rawString(valueRaw, path+"[1]", evidence)
 		if err != nil {
 			return CodeExecutionResult{}, withMethod(err, "GenerateContent")
 		}
-	}
-	result := CodeExecutionResult{Outcome: outcome}
-	if outcomeCode == 1 {
-		result.Output = value
-	} else {
-		result.Error = value
 	}
 	return result, nil
 }
@@ -103,8 +98,7 @@ func decodeGroundingMetadata(raw json.RawMessage, path string, evidence json.Raw
 			metadata.DynamicRetrievalScore = &score
 		}
 	}
-	var seenQueries map[string]struct{}
-	for _, fieldIndex := range []int{4, 5} {
+	for fieldIndex, target := range map[int]*[]string{4: &metadata.WebSearchQueries, 5: &metadata.ImageSearchQueries} {
 		queriesRaw := rawAt(values, fieldIndex)
 		if isJSONNull(queriesRaw) {
 			continue
@@ -114,20 +108,15 @@ func decodeGroundingMetadata(raw json.RawMessage, path string, evidence json.Raw
 		if err != nil {
 			return GroundingMetadata{}, withMethod(err, "GenerateContent")
 		}
-		if metadata.WebSearchQueries == nil {
-			metadata.WebSearchQueries = make([]string, 0, len(queries))
-			seenQueries = make(map[string]struct{}, len(queries))
-		}
+		*target = make([]string, 0, len(queries))
 		for index, queryRaw := range queries {
 			query, err := rawString(queryRaw, fmt.Sprintf("%s[%d]", queryPath, index), evidence)
 			if err != nil {
 				return GroundingMetadata{}, withMethod(err, "GenerateContent")
 			}
-			if _, exists := seenQueries[query]; exists {
-				continue
+			if !slices.Contains(*target, query) {
+				*target = append(*target, query)
 			}
-			seenQueries[query] = struct{}{}
-			metadata.WebSearchQueries = append(metadata.WebSearchQueries, query)
 		}
 	}
 	if tokenRaw := rawAt(values, 6); !isJSONNull(tokenRaw) {
@@ -198,8 +187,12 @@ func decodeGroundingChunk(raw json.RawMessage, path string, evidence json.RawMes
 	if err != nil {
 		return GroundingChunk{}, withMethod(err, "GenerateContent")
 	}
-	chunk := GroundingChunk{Source: []string{"web", "retrieved_context", "maps"}[variant]}
+	chunk := GroundingChunk{Source: []string{"web", "image", "maps"}[variant]}
 	stringFields := []*string{&chunk.URI, &chunk.Title, &chunk.Text, &chunk.PlaceID}
+	if chunk.Source == "image" {
+		// GroundingChunk.Image：source_uri、domain
+		stringFields = []*string{&chunk.URI, &chunk.Domain}
+	}
 	for index := 0; index < len(stringFields) && index < len(fields); index++ {
 		if isJSONNull(fields[index]) {
 			continue

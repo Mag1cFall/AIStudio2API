@@ -71,7 +71,7 @@ func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults Gene
 		}
 	}
 	interaction := make([]any, 54)
-	if system := strings.TrimSpace(request.System); system != "" {
+	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
 		interaction[6] = system
 	}
 	interaction[17] = []any{wireModelName(request.Model), config}
@@ -137,7 +137,7 @@ func interactionVideoFormat(config *VideoConfig, resolution string) ([]any, int6
 	return format, task, nil
 }
 
-// encodeInteractionSteps 把规范消息编码为用户 step field 1 与模型 step field 2 交替的 input steps，工具 part 改为文本转录，模型消息的附件移到下一个用户 step
+// encodeInteractionSteps 把规范消息编码为用户 step field 1 与模型 step field 2 交替的 input steps
 func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) {
 	type step struct {
 		model bool
@@ -159,12 +159,12 @@ func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) 
 		texts := make([]Part, 0, len(content.Parts))
 		for _, part := range content.Parts {
 			switch {
-			case part.VideoMetadata != nil || part.MediaProcessing != "" || part.ProcessingCall != nil || part.ProcessingResult != nil:
+			case part.VideoMetadata != nil || part.MediaProcessing != "" || part.ToolCall != nil || part.ToolResponse != nil:
 				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 不接受视频截取、采样、处理方式与处理步骤", index)
 			case part.Thought:
 				continue
 			case part.ExecutableCode != nil || part.CodeExecutionResult != nil:
-				transcript, err := toolPartTranscript(part)
+				transcript, err := ToolPartTranscript(part)
 				if err != nil {
 					return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d]: %w", index, err)
 				}
@@ -309,7 +309,7 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 				return ctx.Err()
 			}
 		}
-		var output generatedOutputParts
+		var output Output
 		var usage *Event
 		finished := false
 		matchedStopSequence := ""
@@ -327,7 +327,7 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 					}
 				}
 			default:
-				output.observe(event)
+				output.Add(event)
 			}
 			return send(event)
 		}
@@ -524,13 +524,13 @@ func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event)
 			if err != nil {
 				return err
 			}
-			if err := emit(Event{Kind: EventMedia, Media: media}); err != nil {
+			if err := emit(Event{Kind: EventMedia, InlineData: media}); err != nil {
 				return err
 			}
 		case 5:
 			text := strings.Join(interactionStrings(value), "")
 			if text != "" {
-				if err := emit(Event{Kind: EventReasoning, Text: text}); err != nil {
+				if err := emit(Event{Kind: EventReasoning, Text: text, Thought: true}); err != nil {
 					return err
 				}
 			}
@@ -601,7 +601,7 @@ func EncodeCreateInteractionRequest(request GenerateRequest) ([]byte, []Content,
 		return nil, nil, err
 	}
 	interaction := make([]any, 27)
-	if system := strings.TrimSpace(request.System); system != "" {
+	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
 		interaction[6] = system
 	}
 	interaction[7] = interactionTaskTools
@@ -749,7 +749,7 @@ func decodeInteractionCitations(method string, value json.RawMessage, raw json.R
 }
 
 // decodeInteractionMedia 解码图片或视频 content：MIME 枚举与 Base64 数据
-func decodeInteractionMedia(method string, value json.RawMessage, index int, mimes map[int64]string, raw json.RawMessage) (*Media, error) {
+func decodeInteractionMedia(method string, value json.RawMessage, index int, mimes map[int64]string, raw json.RawMessage) (*Blob, error) {
 	path := fmt.Sprintf("$delta[1][%d]", index)
 	media, err := rawArray(value, path, raw)
 	if err != nil || len(media) < 2 {
@@ -771,5 +771,5 @@ func decodeInteractionMedia(method string, value json.RawMessage, index int, mim
 	if err != nil {
 		return nil, &ProtocolEvidenceError{Method: method, Path: path + "[1]", Detail: "媒体数据不是 Base64", Raw: cloneRaw(raw)}
 	}
-	return &Media{MIME: mimeType, Data: data}, nil
+	return &Blob{MIME: mimeType, Data: data}, nil
 }

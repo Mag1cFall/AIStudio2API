@@ -1,7 +1,4 @@
-import type { LogPhrase, TranslationKey } from './zh-CN'
-
-// label 是语言选择器中的语言名称
-export const label = 'Français'
+import type { TranslationKey } from './zh-CN'
 
 // messages 是界面文案与管理接口错误码文案
 export const messages: Record<TranslationKey, string> = {
@@ -22,6 +19,8 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': 'État du service',
   'app.start': 'Démarrer le service',
   'app.stop': 'Arrêter le service',
+  'app.listenReserved':
+    'Le port de {reserved} est réservé par Windows : écoute sur {active}, que les clients doivent utiliser. Fixez le port via l’adresse d’écoute',
   'app.language': 'Langue',
   'app.resizeSidebar': 'Redimensionner la barre latérale',
   'app.lightMode': 'Passer au mode clair',
@@ -73,6 +72,7 @@ export const messages: Record<TranslationKey, string> = {
   'common.save': 'Enregistrer',
   'common.cancel': 'Annuler',
   'common.close': 'Fermer',
+  'common.closePanel': 'Fermer le panneau',
   'common.delete': 'Supprimer',
   'common.relogin': 'Se reconnecter',
   'common.edit': 'Modifier',
@@ -134,6 +134,9 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.refreshAll': 'Tout actualiser',
   'accounts.refreshed': '{name} actualisé : forfait {tier}, {models} modèles',
   'accounts.refreshedAll': '{count} comptes actualisés, {failed} en échec',
+  'accounts.refreshingAll': 'Actualisation {done}/{total}',
+  'accounts.queued': 'En attente',
+  'accounts.refreshFailed': 'Échec',
   'accounts.saved': 'Compte enregistré',
   'accounts.remoteAdd': 'Ajouter à distance',
   'accounts.remoteHttps':
@@ -163,7 +166,7 @@ export const messages: Record<TranslationKey, string> = {
   'logs.clear': 'Effacer les journaux',
   'logs.autoScroll': 'Défilement automatique',
   'logs.waiting': 'En attente de journaux…',
-  'logs.search': 'Rechercher un modèle, un ID de requête ou un code d’état',
+  'logs.search': 'Rechercher dans les journaux',
   'logs.running': 'En cours',
   'logs.tools': 'Appels d’outils',
   'logs.loadOlder': 'Charger les journaux plus anciens ({count})',
@@ -209,6 +212,8 @@ export const messages: Record<TranslationKey, string> = {
   'models.methods': 'Méthodes',
   'models.capabilities': 'Capacités',
   'models.unnamedCapabilities': '{count} codes de capacité sans nom',
+  'models.model': 'Modèle',
+  'models.count': '{count} modèles',
   'models.context': 'Limite d’entrée',
   'models.continuation': 'Poursuite automatique par parties de 32 768 jetons',
   'models.output': 'Limite de sortie',
@@ -251,7 +256,7 @@ export const messages: Record<TranslationKey, string> = {
     'Pure Go s’exécute dans le processus du service sans Camoufox ; la connexion des comptes exige toujours un navigateur',
   'settings.upstreamChannels': 'Canaux amont',
   'settings.upstreamChannelsHelp':
-    'Les deux canaux ont des quotas séparés ; quand l’un refroidit, l’autre prend le relais',
+    'Playground est le canal par défaut. Build est l’ancien canal, à génération désactivée en amont ; activé, les requêtes refusées passent par Playground',
   'settings.modelMapping': 'Correspondance des modèles',
   'settings.modelMappingHelp':
     'Chaque entrée au format alias:ID du modèle, séparées par des virgules',
@@ -372,6 +377,26 @@ export const messages: Record<TranslationKey, string> = {
   'pg.channels': 'Canaux :',
   'pg.citations': 'Sources',
   'pg.clearSearch': 'Effacer la recherche',
+  'pg.history': 'Historique',
+  'pg.historySearch': 'Rechercher',
+  'pg.historyName': 'Nom',
+  'pg.historyUpdated': 'Mise à jour',
+  'pg.rename': 'Renommer',
+  'pg.promptName': 'Nom du prompt',
+  'pg.promptDescription': 'Description',
+  'pg.optional': 'Facultatif',
+  'pg.createdByYou': 'Créé par vous',
+  'pg.openPrompt': 'Ouvrir {title}',
+  'pg.historyNoMatch': 'Aucun prompt ne correspond à votre recherche',
+  'pg.historyEmpty': "Vous n'avez encore aucun prompt.",
+  'pg.historyLoading': 'Chargement de vos conversations.',
+  'pg.historyLoadingMore': 'Chargement…',
+  'pg.historyPreviousPage': 'Page précédente',
+  'pg.historyNextPage': 'Page suivante',
+  'pg.historyRange': '{start} – {end} sur {total}',
+  'pg.historyRangeMany': '{start} – {end} sur plusieurs',
+  'pg.newChatPrompt': 'Nouveau prompt de chat',
+  'pg.newChatPromptLabel': 'Créer un prompt de chat',
   'pg.closeSettings': 'Fermer le panneau des paramètres d’exécution',
   'pg.compareMode': 'Mode comparaison',
   'pg.paneGetCode': 'Obtenir le code',
@@ -402,6 +427,18 @@ export const messages: Record<TranslationKey, string> = {
   'pg.dropFiles': 'Déposez les fichiers ici',
   'pg.edit': 'Modifier',
   'pg.editSchema': 'Modifier le schéma JSON',
+  'pg.invalidJson': 'JSON non valide : {detail}',
+  'pg.schemaNotObject': 'Le schéma doit être un objet JSON',
+  'pg.schemaTypeObject': 'Le type du schéma doit être object',
+  'pg.propertyNameRequired': 'Le nom de la propriété est obligatoire',
+  'pg.propertyDuplicate': 'Propriété « {name} » en double',
+  'pg.functionsNotArray': 'Les déclarations de fonctions doivent être un tableau JSON',
+  'pg.functionNotObject': 'Chaque déclaration de fonction doit être un objet',
+  'pg.functionNameString': 'Une chaîne "name" est obligatoire',
+  'pg.functionDescriptionString': 'Une chaîne "description" est obligatoire',
+  'pg.functionBehaviorInvalid': 'behavior non valide : {value}',
+  'pg.functionNameRequired': '"name" est obligatoire',
+  'pg.functionDescriptionRequired': '"description" est obligatoire',
   'pg.editFunctions': 'Modifier les déclarations de fonctions',
   'pg.editSafety': 'Modifier les paramètres de sécurité',
   'pg.editTitle': 'Modifier le titre et la description',
@@ -423,6 +460,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.hate': 'Haine',
   'pg.high': 'Élevé',
   'pg.insertMedia': 'Insérer des images, vidéos, audios ou fichiers',
+  'pg.inlineAttachment': 'Insérer comme texte',
   'pg.knowledgeCutoff': 'Connaissances jusqu’à :',
   'pg.learnMore': 'En savoir plus',
   'pg.copyToClipboard': 'Copier dans le presse-papiers',
@@ -451,10 +489,13 @@ export const messages: Record<TranslationKey, string> = {
   'pg.noModels': 'Aucun modèle correspondant',
   'pg.notFoundBody': 'Ce prompt n’existe pas ou a été supprimé.',
   'pg.notFoundTitle': 'Prompt introuvable',
+  'pg.loadFailedTitle': 'Impossible d’ouvrir le prompt',
+  'pg.retry': 'Réessayer',
   'pg.openTools': 'Ouvrir le menu des outils',
   'pg.outputContinuation': 'Les réponses au-delà de 32 768 tokens continuent automatiquement',
   'pg.tokenLimits': 'Entrée {input} / Sortie {output} tokens',
   'pg.generateFailed': 'Impossible de générer le contenu. Veuillez réessayer.',
+  'pg.chatUnreachable': 'La requête de génération de chat n’a pas pu joindre le service : {detail}',
   'pg.runStats': "Statistiques d'exécution",
   'pg.timeToFirstToken': 'Premier token :',
   'pg.tokensPerSecond': 'Tokens par seconde :',
@@ -482,6 +523,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.targetContext': 'Taille de contexte cible',
   'pg.targetContextTip': 'Nombre de tokens conservés après le glissement de la fenêtre de contexte',
   'pg.automaticResponse': 'Réponse automatique aux fonctions',
+  'pg.functionResponseUnreachable':
+    'La requête de réponse de fonction n’a pas pu joindre le service : {detail}',
   'pg.automaticResponseTip':
     'Gemini génère automatiquement une réponse pour chaque appel de fonction.',
   'pg.automaticResponseOffTip':
@@ -521,6 +564,10 @@ export const messages: Record<TranslationKey, string> = {
   'pg.stopTabForMic': "Arrêtez le partage audio de l'onglet pour utiliser le micro",
   'pg.startCamera': 'Partager la caméra',
   'pg.stopCamera': 'Arrêter le partage de la caméra',
+  'pg.microphoneOpenFailed':
+    'Impossible d’ouvrir le micro. Vérifiez les autorisations du navigateur et réessayez.',
+  'pg.cameraOpenFailed':
+    'Impossible d’ouvrir la caméra. Vérifiez les autorisations du navigateur et réessayez.',
   'pg.startScreen': "Partager l'écran",
   'pg.stopScreen': "Arrêter le partage d'écran",
   'pg.stopTabAudio': "Arrêter le partage audio de l'onglet",
@@ -608,6 +655,14 @@ export const messages: Record<TranslationKey, string> = {
   'pg.musicText': 'Texte',
   'pg.musicComposer': 'Compositeur',
   'pg.songStructure': 'Structure du morceau',
+  'pg.sectionIntro': 'Intro',
+  'pg.sectionVerse': 'Couplet',
+  'pg.sectionChorus': 'Refrain',
+  'pg.sectionBridge': 'Pont',
+  'pg.sectionOutro': 'Outro',
+  'pg.sectionBuild': 'Montée',
+  'pg.musicUnreachable':
+    'La requête de génération musicale n’a pas pu joindre le service : {detail}',
   'pg.addSection': 'Ajouter une section',
   'pg.composerEmpty': 'Ajoutez une section pour structurer votre morceau.',
   'pg.dragSection': 'Faire glisser pour réorganiser',
@@ -617,7 +672,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.sectionEnd': 'Fin',
   'pg.sectionIntensity': 'Intensité',
   'pg.sectionDescription': 'Description de la section',
-  'pg.sectionPlaceholder': 'Décrivez le son ou ajoutez des paroles pour ce {type}…',
+  'pg.sectionPlaceholder': 'Décrivez le son ou ajoutez des paroles pour la section « {type} »…',
   'pg.remove': 'Retirer',
   'pg.generate': 'Générer',
   'pg.songTitle': 'Titre du morceau',
@@ -627,6 +682,13 @@ export const messages: Record<TranslationKey, string> = {
   'pg.createDialog': 'Créer un dialogue',
   'pg.previous': 'Exemples précédents',
   'pg.next': 'Exemples suivants',
+  'pg.speechRegion': 'Synthèse vocale',
+  'pg.exploreVoices': 'Explorer des milliers de voix',
+  'pg.createVoice': 'Créer une voix',
+  'pg.previousVoices': 'Voix précédentes',
+  'pg.nextVoices': 'Voix suivantes',
+  'pg.voiceDesignPaid':
+    'Voice Design est réservé au niveau payant et nécessite une clé API payante',
   'pg.speechBlock': 'Bloc de texte',
   'pg.speechBlockText': 'Texte du bloc',
   'pg.speechPlaceholderFirst': '{example} (tapez « {open} » pour les balises)',
@@ -642,6 +704,10 @@ export const messages: Record<TranslationKey, string> = {
   'pg.addTextToPreview': 'Ajoutez du texte pour l’écouter',
   'pg.deleteSpeechBlock': 'Supprimer le bloc',
   'pg.addSpeechBlock': 'Ajouter un bloc',
+  'pg.speechUnreachable':
+    'La requête de génération vocale n’a pas pu joindre le service : {detail}',
+  'pg.noAudio': 'Le modèle n’a renvoyé aucun audio',
+  'pg.noAudioReason': 'Le modèle n’a renvoyé aucun audio ({reason})',
   'pg.style': 'Style',
   'pg.customStyle': 'Décrire le style de voix',
   'pg.customStylePlaceholder': 'Décrivez le style de voix.\nex. ton, ambiance, rythme…',
@@ -651,6 +717,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.fillerWordsTip':
     'Ajoute des mots de remplissage naturels (ex. « hmm », « ah »), des interjections et des bruits de fond naturels.',
   'pg.speakerName': 'Nom du locuteur',
+  'pg.speakerDefault': 'Locuteur {n}',
   'pg.renameSpeaker': 'Renommer le locuteur',
   'pg.openAISpeechSingle': 'OpenAI Speech ne gère qu’un locuteur ; utilisez l’API Gemini pour deux',
   'pg.openAIVideoStartOnly':
@@ -664,6 +731,7 @@ export const messages: Record<TranslationKey, string> = {
   'pg.voiceLanguage': 'Langue',
   'pg.voiceGender': 'Genre',
   'pg.voicePitch': 'Hauteur',
+  'pg.pitchValue': 'Hauteur {pitch}',
   'pg.voicePersona': 'Style',
   'pg.voiceUseCase': 'Usage',
   'pg.allLanguages': 'Toutes les langues',
@@ -684,6 +752,46 @@ export const messages: Record<TranslationKey, string> = {
     'Décrivez le personnage vocal (ex. chaleureux, énergique, professionnel)',
   'pg.pace': 'Rythme',
   'pg.accent': 'Accent',
+  'pg.styleWhisper': 'Chuchotement',
+  'pg.styleWhisperDetail': 'chuchoter doucement',
+  'pg.styleFriendly': 'Amical',
+  'pg.styleFriendlyDetail': 'Ton chaleureux et neutre, avec de brèves pauses',
+  'pg.styleNarration': 'Narration',
+  'pg.styleNarrationDetail': 'voix assurée, modulation riche, pauses dramatiques',
+  'pg.stylePromote': 'Promotion',
+  'pg.stylePromoteDetail': 'Très énergique, voyelles allongées',
+  'pg.stylePodcast': 'Podcast',
+  'pg.stylePodcastDetail': 'Ton calme et posé',
+  'pg.styleVocalSmile': 'Voix souriante',
+  'pg.styleVocalSmileDetail':
+    '« Voix souriante » : voile du palais relevé pour un ton lumineux, solaire et accueillant',
+  'pg.styleNewscaster': 'Présentateur',
+  'pg.styleNewscasterDetail':
+    'Professionnel, assuré, articulation nette au rythme d’un journal télévisé',
+  'pg.styleBreathyWhisperDetail': 'Intime, soufflé, tout près du micro',
+  'pg.styleEmpathetic': 'Empathique',
+  'pg.styleEmpatheticDetail': 'Ton chaleureux, compréhensif et doux, aux inflexions délicates',
+  'pg.stylePromoHype': 'Promo/Ambiance',
+  'pg.stylePromoHypeDetail':
+    'Très énergique, consonnes percutantes, voyelles allongées sur les mots forts',
+  'pg.styleDeadpan': 'Pince-sans-rire',
+  'pg.styleDeadpanDetail': 'Ton neutre, peu de variations de hauteur, débit sec',
+  'pg.paceNatural': 'Naturel',
+  'pg.paceNaturalDetail': 'Rythme de conversation naturel',
+  'pg.paceRapidFire': 'Débit rapide',
+  'pg.paceRapidFireDetail': 'Rapide, énergique, sans blanc ; les phrases se chevauchent légèrement',
+  'pg.paceDrift': 'Lent',
+  'pg.paceDriftDetail': 'Lent, fluide, sans urgence ; longues pauses pour respirer',
+  'pg.paceStaccato': 'Staccato',
+  'pg.paceStaccatoDetail': 'Phrases courtes et hachées, avec des pauses nettes entre les mots',
+  'pg.accentNeutral': 'Neutre',
+  'pg.accentAmericanGeneral': 'Américain (standard)',
+  'pg.accentAmericanValley': 'Américain (Valley Girl)',
+  'pg.accentAmericanSouth': 'Américain (Sud)',
+  'pg.accentBritishRp': 'Britannique (RP)',
+  'pg.accentBritishBrixton': 'Britannique (Brixton)',
+  'pg.accentTransatlantic': 'Transatlantique',
+  'pg.accentAustralian': 'Australien',
   'pg.scene': 'Scène',
   'pg.sceneTip': 'Décrivez l’environnement et l’ambiance de la scène.',
   'pg.scenePlaceholder': 'ex. Une rue animée la nuit…',
@@ -698,6 +806,10 @@ export const messages: Record<TranslationKey, string> = {
   'pg.addImageToPrompt': 'Ajouter une image au prompt',
   'pg.imagesCannotBeAdded': "Impossible d'ajouter des images",
   'pg.videoFailed': 'Impossible de générer la vidéo : {error}',
+  'pg.videoUnreachable': 'La requête de génération vidéo n’a pas pu joindre le service : {detail}',
+  'pg.videoDownloadUnreachable':
+    'La requête de téléchargement vidéo n’a pas pu joindre le service : {detail}',
+  'pg.videoGenerationFailed': 'Impossible de générer la vidéo',
   'pg.alreadyNewChat': 'Déjà dans une nouvelle discussion',
   'pg.aspectRatio': 'Format',
   'pg.videoDurationSeconds': 'Durée de la vidéo en secondes',
@@ -742,7 +854,10 @@ export const messages: Record<TranslationKey, string> = {
   'pg.videoNoHistory':
     'Le contenu des tours précédents n’est pas repris dans les nouvelles requêtes',
   'pg.videoOnly720p': 'Cette option ne fonctionne qu’en résolution 720p',
-  'pg.imageFailed': "Impossible de générer l'image : {error}",
+  'pg.imageFailed': "Impossible de générer l'image : {detail}",
+  'pg.imageUnreachable':
+    'La requête de génération d’image n’a pas pu joindre le service : {detail}',
+  'pg.noImages': 'Le modèle n’a renvoyé aucune image',
   'pg.imagePromptLabel': 'Saisissez une requête pour générer une image',
   'pg.imagenEmptyTitle': 'Générer des images avec Imagen',
   'pg.videoPromptLabel': 'Saisissez un prompt pour générer une vidéo',
@@ -798,6 +913,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.sexuallyExplicit': 'Contenu sexuellement explicite',
   'pg.source': 'Source :',
   'pg.speechToText': 'Saisie vocale',
+  'pg.transcribeUnreachable':
+    'La requête de transcription n’a pas pu joindre le service : {detail}',
   'pg.star': 'Ajouter aux favoris',
   'pg.startBuilding': 'Commencer avec {model}',
   'pg.starter1':
@@ -805,7 +922,37 @@ export const messages: Record<TranslationKey, string> = {
   'pg.starter2': 'Recherche l’actualité tech du jour et liste trois points clés avec leurs sources',
   'pg.starter3': 'Écris un haïku sur la pluie d’automne',
   'pg.startersLabel': 'Exemples de prompts',
+  'pg.roboticsEmptyTitle': 'Développer avec {model}',
+  'pg.imageEmptyTitle': 'Générer des images avec {model}',
+  'pg.chatEmptyTitle': 'Discuter avec {model}',
+  'pg.quotedText': '« {text} »',
+  'pg.musicTipStructure': 'Astuce : structure',
+  'pg.musicTipStructure1':
+    'Utilisez « [mm:ss – mm:ss] » pour délimiter des sections comme Intro, Build ou Chorus.',
+  'pg.musicTipStructure2':
+    'Esquissez le déroulé avec des flèches : « [Intro] -> [Verse] -> [Chorus] -> [Bridge] -> [Outro] ».',
+  'pg.musicTipStructure3':
+    'Faites monter la tension dans le pré-refrain, puis coupez net avant un refrain explosif.',
+  'pg.musicTipStructure4':
+    'Commencez par une intro au piano tout en douceur, montez vers un couplet puissant, puis explosez dans le refrain.',
+  'pg.musicTipStructure5':
+    'Ajoutez un crescendo progressif en superposant un instrument à la fois jusqu’à former un mur de son.',
+  'pg.musicTipDetails': 'Astuce : détails',
+  'pg.musicTipDetails1': 'Précisez « la majeur » ou « 120 BPM » pour plus de précision technique.',
+  'pg.musicTipDetails2':
+    'Commencez votre prompt par un genre, par exemple « hip-hop du début des années 90 » ou « synth-pop des années 80 ».',
+  'pg.musicTipDetails3':
+    'Mélangez les genres pour un son unique, comme « une fusion de metal et de rap ».',
+  'pg.musicTipDetails4':
+    'Décrivez des instruments précis : « nappes de synthé analogique chaudes sous une guitare acoustique sèche ».',
+  'pg.musicTipDetails5':
+    'Utilisez « valse à 3/4 » ou « shuffle blues en 6/8 » pour un ressenti rythmique précis.',
+  'pg.musicTipDetails6':
+    'Ajoutez des détails sur la voix : « soprano féminine au timbre clair et cristallin ».',
+  'pg.musicTipDetails7':
+    'Décrivez le thème des paroles : « des paroles sur un amour perdu et la douleur d’un cœur brisé ».',
   'pg.stop': 'Arrêter',
+  'pg.generationStopped': 'Génération arrêtée',
   'pg.stopEditing': 'Arrêter la modification',
   'pg.stopRecording': 'Arrêter l’enregistrement',
   'pg.stopTip': 'Arrêter la génération à l’apparition de l’une de ces séquences',
@@ -860,7 +1007,6 @@ export const messages: Record<TranslationKey, string> = {
   'pg.microphoneSource': 'Source du micro',
   'pg.microphoneTip': 'Source audio pour la dictée et Live',
   'pg.microphoneSelect': 'Sélectionner un périphérique d’entrée audio',
-  'pg.searchShortcut': 'Rechercher (Ctrl /)',
   'pg.commandPalette': 'Palette de commandes',
   'pg.palettePlaceholder': 'Démarrer un chat ou rechercher l’activité récente',
   'pg.paletteChat': 'Démarrer un chat avec un modèle',
@@ -909,7 +1055,9 @@ export const messages: Record<TranslationKey, string> = {
   'pg.youtubeInvalid': 'URL YouTube non valide',
   'pg.youtubeURL': 'URL YouTube',
   'pg.youtubeVideo': 'Vidéo YouTube',
+  'pg.fileThumbnail': 'Miniature du fichier',
   'pg.sampleMedia': 'Médias d’exemple',
+  'pg.sampleImageFailed': 'Impossible de télécharger l’image d’exemple : {detail}',
   'pg.sampleVideos': 'Vidéos',
   'pg.sampleAnimal': 'Animaux',
   'pg.sampleArchitecture': 'Architecture',
@@ -923,6 +1071,364 @@ export const messages: Record<TranslationKey, string> = {
   'pg.selectSampleImage': 'Sélectionner une image de {category}',
   'pg.sampleMediaHint': 'Sélectionnez une image ou une vidéo à ajouter au prompt',
   'pg.addToPrompt': 'Ajouter au prompt',
+  'zero.robotics.subtitle':
+    'Raisonnement incarné pour le monde physique : détecter des objets, lire des instruments analogiques et planifier des trajectoires sans collision.',
+  'zero.robotics.starter1': 'Planifier le prochain mouvement',
+  'zero.robotics.starter1Prompt':
+    'À partir de cette image de machine à pince, décris une séquence conceptuelle pour placer la pince au-dessus d’un jouet. Indique toute incertitude liée à la profondeur et aux occultations.',
+  'zero.robotics.starter2': 'Pointer tous les fruits sur la table',
+  'zero.robotics.starter2Prompt':
+    'Pointe tous les fruits de cette scène sur table et renvoie leurs coordonnées 2D normalisées [y, x] de 0 à 1000, ainsi que les angles d’approche recommandés pour la pince.',
+  'zero.robotics.starter3': 'Lire un manomètre analogique par la géométrie',
+  'zero.robotics.starter3Prompt':
+    'Lis l’aiguille rouge du manomètre en bar. Détecte le moyeu, la pointe de l’aiguille et les graduations chiffrées voisines, puis calcule la valeur exacte au lieu de l’estimer.',
+  'zero.robotics.example1': 'Trouver un jouet à attraper',
+  'zero.robotics.example1Prompt':
+    'Examine cette image de machine à pince. Repère un jouet visible et renvoie son cadre de délimitation en coordonnées normalisées de 0 à 1000. Décris sa position par rapport à la pince.',
+  'zero.robotics.example1Detection': 'jouet [640, 455]',
+  'zero.robotics.example2': 'Localiser les objets et l’ordre de saisie',
+  'zero.robotics.example2Prompt':
+    'Pointe tous les fruits et la vaisselle de cet espace de travail. Renvoie des coordonnées 2D normalisées [y, x] de 0 à 1000 pour chaque centre de préhension et planifie une séquence de prise et de dépose sans collision.',
+  'zero.robotics.example2Detection': 'fruit [380, 540]',
+  'zero.nanoBanana21.subtitle':
+    'Notre dernier modèle natif de génération et d’édition d’images : typographie nette, composition multi-images et réalisme tactile.',
+  'zero.nanoBanana21.starter1': 'Épingler un collage de mode sur un tableau en liège',
+  'zero.nanoBanana21.starter1Prompt':
+    'Crée un collage de produits mode sur un tableau en liège brun à partir de cette tenue. Chaque produit et la photo centrale du mannequin apparaissent comme des photos individuelles aux bordures blanches nettes, épinglées naturellement avec de petites étiquettes manuscrites, au format 16:9.',
+  'zero.nanoBanana21.starter2': 'Fond d’écran botanique minimaliste avec oiseau',
+  'zero.nanoBanana21.starter2Prompt':
+    'Un magnifique fond d’écran montrant un sucrier à ventre jaune (Bananaquit) d’un jaune éclatant perché sur une feuille de bananier verte à côté d’un régime de bananes mûres, avec un dégradé pastel chaud de haut en bas et une composition minimaliste.',
+  'zero.nanoBanana21.starter3': 'Dessiner un plan et une coupe architecturale',
+  'zero.nanoBanana21.starter3Prompt':
+    'Crée une planche de présentation architecturale orthographique d’un pavillon nordique en verre et en cèdre à flanc de falaise, en plan, élévation et coupe, avec des cotes nettes, au format 16:9.',
+  'zero.nanoBanana21.example1': 'Couverture de magazine glacée',
+  'zero.nanoBanana21.example1Prompt':
+    'Photo d’une couverture de magazine glacée : sur la couverture bleue minimaliste, les grands mots en gras Nano Banana dans une police à empattements remplissent le cadre. Devant le texte, le portrait d’une personne à l’air détaché dans une élégante robe d’automne au motif « 2.1 » répété, avec le numéro 2.1, la date « Oct 2026 » et un code-barres dans le coin, posée sur l’étagère d’une boutique de créateur.',
+  'zero.nanoBanana21.example2': 'Télémètre en laiton démonté en knolling',
+  'zero.nanoBanana21.example2Prompt':
+    'Photo produit en knolling vue du dessus d’un appareil photo télémétrique vintage sans marque en laiton et cuir, démonté et disposé sur une surface en ardoise mate sombre, avec des lentilles en verre traité multicouche, des micro-engrenages en laiton et des lamelles de diaphragme, sous un doux éclairage studio en contre-jour.',
+  'zero.nanoBanana21.example3': 'Affiche de style typographique suisse',
+  'zero.nanoBanana21.example3Prompt':
+    'Une affiche d’exposition de style typographique international suisse pour « NANO BANANA 2.1 ». Titre en haut en Helvetica grasse asymétrique, date « OCTOBER », lieu « Platform 37 » à Londres. Grille géométrique stricte avec des formes géométriques abstraites minimalistes jaunes, noires et vertes.',
+  'zero.nanoBananaLite.subtitle':
+    'Génération et édition d’images à très faible latence et à moindre coût pour recolorer, créer des stickers et changer d’arrière-plan à grande échelle.',
+  'zero.nanoBananaLite.starter1': 'Transformer une photo d’animal en sticker découpé',
+  'zero.nanoBananaLite.starter1Prompt':
+    'Transforme le corgi de cette photo en sticker vinyle brillant découpé à la forme, avec une épaisse bordure blanche et une ombre portée douce, dans un style cartoon simple qui garde ses marques, son bandana rouge et son air joyeux reconnaissables.',
+  'zero.nanoBananaLite.starter2': 'Préparer une photo produit pour une marketplace',
+  'zero.nanoBananaLite.starter2Prompt':
+    'Supprime le désordre de cuisine derrière cette bouilloire col de cygne et place-la sur un fond studio blanc chaud sans raccord avec une douce ombre de contact. Garde sa forme, sa finition anthracite mate et sa poignée en chêne exactement identiques, centrée en 1:1.',
+  'zero.nanoBananaLite.starter3': 'Photo d’en-tête 21:9 avec place pour un titre',
+  'zero.nanoBananaLite.starter3Prompt':
+    'Une photo d’en-tête 21:9 pour le site d’un bar à smoothies : des bols de mangue, banane et fruit du dragon vus du dessus sur un comptoir en carrelage turquoise ensoleillé, occupant le tiers droit et laissant à gauche un espace vide net pour un titre.',
+  'zero.nanoBananaLite.example1': 'Planche de stickers mascotte banane',
+  'zero.nanoBananaLite.example1Prompt':
+    'Photo vue du dessus d’une planche de stickers vinyle brillants découpés mettant en scène une joyeuse mascotte banane dans six poses : en train de saluer, avec des lunettes de soleil, sur un skateboard, en train de faire la sieste sur un nuage, de siroter un bubble tea et de lever le pouce. Garde le personnage identique, avec d’épaisses bordures blanches et un coin qui se décolle, sur un tapis de découpe vert menthe pastel au format 3:4.',
+  'zero.nanoBananaLite.example2': 'Basket en quatre coloris',
+  'zero.nanoBananaLite.example2Prompt':
+    'Une grille produit 2x2 de la même chaussure de course rétro sans marque en daim et nylon, en jaune banane, vert sauge, bleu cobalt et corail. Garde la chaussure, l’angle de vue de trois quarts et le doux éclairage studio identiques dans chaque case, chacune sur un fond sans raccord teinté assorti, au format 4:3.',
+  'zero.nanoBananaLite.example3': 'Corgi sur une terrasse ensoleillée d’Amalfi',
+  'zero.nanoBananaLite.example3Prompt':
+    'Place ce corgi sur une terrasse ensoleillée de la côte amalfitaine, avec des citronniers en pot, des tomettes en terre cuite et la mer turquoise derrière lui. Garde ses marques, sa pose et son bandana rouge inchangés, et accorde la lumière sur son pelage à la chaleur de la fin d’après-midi.',
+  'zero.nanoBanana.subtitle':
+    'Génération d’images conversationnelle rapide, restylisation fidèle aux personnages et fusion de plusieurs images.',
+  'zero.nanoBanana.starter1': 'Éditorial de mode pourpre dans la lumière de la forêt',
+  'zero.nanoBanana.starter1Prompt':
+    'Crée un éditorial de mode inspiré de cette référence : une robe rouge brodée éclatante devant une forêt bleu-vert floue, avec un mouvement naturel et un contre-jour cinématographique.',
+  'zero.nanoBanana.starter2': 'Une macro botanique au fil des quatre saisons',
+  'zero.nanoBanana.starter2Prompt':
+    'À partir de cette référence de fougère, garde l’angle de vue fixe et génère une grille 2x2 montrant la rosée d’un matin de printemps, le soleil doré de l’été, la brume ambrée de l’automne et le givre de l’hiver.',
+  'zero.nanoBanana.starter3': 'Réimaginer une vague depuis sous l’eau',
+  'zero.nanoBanana.starter3Prompt':
+    'Réimagine cette scène de surf depuis sous l’eau, en regardant vers le haut à travers le tube cristallin et turquoise de la vague tandis que la lumière du soleil se brise en caustiques sous-marines.',
+  'zero.nanoBanana.example1': 'Échoppe de ramen tokyoïte en miniature isométrique',
+  'zero.nanoBanana.example1Prompt':
+    'Présente un diorama miniature 3D isométrique net, vu de dessus à 45°, d’une échoppe de ramen en bois à deux étages à Tokyo au crépuscule. Une chaude lumière ambrée de lanternes se répand sur les pavés mouillés, un chef remue un bouillon fumant à l’intérieur, et le titre en gras « TOKYO RAMEN · 12°C » est centré en haut.',
+  'zero.nanoBanana.example2': 'Flacon de parfum en cristal et logo',
+  'zero.nanoBanana.example2Prompt':
+    'Intègre parfaitement l’emblème doré botanique sur un flacon de parfum en cristal à facettes posé sur une ardoise volcanique sombre et mouillée, en préservant la réfraction du verre, la courbure de la surface et la fine brume.',
+  'zero.nanoBanana.example3': 'Icône de paresseux 3D tactile',
+  'zero.nanoBanana.example3Prompt':
+    'Une icône représentant un adorable paresseux à trois doigts suspendu à une branche moussue sur un fond blanc épuré, rendue dans un style 3D coloré et tactile en vinyle et feutre.',
+  'zero.flashLite.subtitle':
+    'Intelligence économique à très faible latence pour l’extraction et la classification à grand volume, et la génération instantanée d’interfaces.',
+  'zero.flashLite.starter1': 'Classer 1 000 tickets de support en JSON strict',
+  'zero.flashLite.starter1Prompt':
+    'Conçois un prompt système compact et économe en tokens, ainsi qu’un schéma JSON, pour classer les messages du support client par urgence, domaine produit et sentiment.',
+  'zero.flashLite.starter2': 'Créer une palette de commandes sans dépendance',
+  'zero.flashLite.starter2Prompt':
+    'Crée une palette de commandes pensée pour le clavier en HTML, CSS et JS natifs, avec filtrage approximatif, badges de raccourcis et résultats instantanés.',
+  'zero.flashLite.starter3': 'Normaliser des attributs de catalogue en NDJSON',
+  'zero.flashLite.starter3Prompt':
+    'Convertis des descriptions de produits e-commerce non structurées en JSON normalisé délimité par des sauts de ligne (NDJSON), avec des unités, couleurs et dimensions harmonisées.',
+  'zero.flashLite.example1': 'Arcade pixel Playglow',
+  'zero.flashLite.example1Prompt':
+    'Réponds à quatre questions ludiques et joue à ton propre jeu en pixel art sur une borne d’arcade 3D habillée rien que pour toi.',
+  'zero.flashLite.example2': 'Tickets de caisse en JSON',
+  'zero.flashLite.example2Prompt':
+    'Dépose une pile de tickets froissés pour extraire chaque commerçant, article, taxe et total dans un JSON structuré et un CSV propres.',
+  'zero.flashLite.example3': 'Audit de code Fresnel',
+  'zero.flashLite.example3Prompt':
+    'Audite des pages web et des fichiers source pour améliorer les performances, l’accessibilité et la structure, avec un retour visuel instantané.',
+  'zero.flash.subtitle':
+    'Une intelligence multimodale rapide et de pointe, conçue pour des applications réactives et des workflows à haut débit.',
+  'zero.flash.starter1': 'Transformer un croquis en interface interactive',
+  'zero.flash.starter1Prompt':
+    'Crée un tableau de bord interactif et responsive à partir d’une description de maquette fonctionnelle, avec des filtres en direct, des raccourcis clavier et une mise en page propre en grille CSS.',
+  'zero.flash.starter2': 'Extraire du JSON structuré de reçus désordonnés',
+  'zero.flash.starter2Prompt':
+    'Conçois un JSON Schema strict et un prompt d’extraction qui normalisent des reçus multidevises, leurs lignes, les taux de taxe et des scores de confiance.',
+  'zero.flash.starter3': 'Comparer les perturbations aériennes et météo en direct',
+  'zero.flash.starter3Prompt':
+    'Recherche les retards actuels dans les grands aéroports et les alertes météo sévères, puis résume les liaisons les plus touchées dans un tableau structuré.',
+  'zero.flash.example1': 'Snake néon 3D',
+  'zero.flash.example1Prompt':
+    'Crée un jeu de snake néon sur grille au rythme effréné, avec des traînées de particules fluides, des orbes lumineux à collecter et un classement en direct.',
+  'zero.flash.example2': 'Studio de shaders Lumina',
+  'zero.flash.example2Prompt':
+    'Conçois un guide de festival interactif avec des programmations de scènes animées, des extraits d’artistes et un générateur de planning personnalisé.',
+  'zero.flash.example3': 'Styliste de cartes',
+  'zero.flash.example3Prompt':
+    'Crée un outil interactif de stylisation de cartes qui génère des palettes de couleurs et des thèmes de points de repère personnalisés à partir d’une description d’ambiance.',
+  'zero.pro.subtitle':
+    'Raisonnement approfondi, synthèse de contextes longs et ingénierie logicielle de niveau production.',
+  'zero.pro.starter1': 'Créer un simulateur d’érosion hydraulique en WebGL2',
+  'zero.pro.starter1Prompt':
+    'Écris un générateur de terrain HTML/WebGL2 en un seul fichier, avec érosion de carte de hauteur, contrôle de caméra orbitale et curseurs de shader en direct.',
+  'zero.pro.starter2': 'Traquer les conditions de concurrence d’une file asynchrone',
+  'zero.pro.starter2Prompt':
+    'Conçois un pool de workers TypeScript borné avec jetons d’annulation, backoff exponentiel et tests unitaires déterministes.',
+  'zero.pro.starter3': 'Comparer les avancées des batteries solides',
+  'zero.pro.starter3Prompt':
+    'Recherche des articles récents sur les électrolytes solides et compare dans un tableau la conductivité ionique, la suppression des dendrites et la durée de vie en cycles.',
+  'zero.pro.example1': 'Coffre à jouets voxel',
+  'zero.pro.example1Prompt':
+    'Crée un bac à sable interactif de construction en voxels 3D, avec physique, blocs destructibles et outils de palette personnalisés.',
+  'zero.pro.example2': 'Pilote de shaders',
+  'zero.pro.example2Prompt':
+    'Crée un terrain de jeu interactif de fragment shaders GLSL en temps réel, avec uniforms en direct et contrôles de caméra.',
+  'zero.pro.example3': 'Visualisation de recherche',
+  'zero.pro.example3Prompt':
+    'Transforme un sujet de recherche technique dense en explication visuelle interactive avec des schémas manipulables.',
+  'zero.flagship.subtitle':
+    'Demandez, raisonnez, créez. Commencez par un prompt ou remixez une application de la galerie.',
+  'zero.flagship.starter1': 'Estimer la vitesse du courant-jet',
+  'zero.flagship.starter1Prompt':
+    'Recherche les durées des vols sans escale d’aujourd’hui entre New York et Londres dans les deux sens et utilise Python pour estimer la vitesse du courant-jet.',
+  'zero.flagship.starter2': 'Comparer saisons et permis des parcs nationaux',
+  'zero.flagship.starter2Prompt':
+    'Compare les saisons de visite et les règles de permis des parcs nationaux de Zion, Yosemite et Glacier pour choisir la semaine la plus calme de mai.',
+  'zero.flagship.starter3': 'Comprendre pourquoi le GPS a besoin de la relativité',
+  'zero.flagship.starter3Prompt':
+    'Explique comment les satellites GPS corrigent les effets de la relativité d’Einstein pour qu’une carte sur téléphone ne dérive pas de plusieurs kilomètres chaque jour.',
+  'zero.flagship.example1': 'Échecs 3D',
+  'zero.flagship.example1Prompt':
+    'Échecs de sorciers interactifs en 3D dans une cathédrale gothique, avec des pièces sculptées dans la pierre, des captures en mêlée cinématographiques, une physique de pierre qui se brise et une IA pour jouer en solo.',
+  'zero.flagship.example2': 'Terrarium monde de poche',
+  'zero.flagship.example2Prompt':
+    'Un constructeur de monde miniature douillet en Three.js, avec une planète-terrarium à facettes suspendue dans une sphère de verre sur un socle en noyer.',
+  'zero.flagship.example3': 'Course de bureau',
+  'zero.flagship.example3Prompt':
+    'Jeu de course contre la montre miniature sur un circuit de sous-verres de bureau en Three.js',
+  'zero.live.subtitle':
+    'Conversations bidirectionnelles à faible latence par la voix, la caméra et le partage d’écran, avec utilisation d’outils.',
+  'zero.live.starter1': 'S’entraîner à un entretien de conception système',
+  'zero.live.starter1Prompt':
+    'Joue le rôle d’un staff engineer qui mène un entretien de conception système de 15 minutes. Demande-moi de concevoir un limiteur de débit distribué et interroge-moi sur mes compromis.',
+  'zero.live.starter2': 'Réfléchir à l’architecture pendant que je dessine',
+  'zero.live.starter2Prompt':
+    'Regarde mon écran pendant que je dessine un schéma d’architecture de services et propose en temps réel des modes de défaillance, des couches de cache et des améliorations du schéma de données.',
+  'zero.live.starter3': 'S’entraîner à commander en japonais',
+  'zero.live.starter3Prompt':
+    'Joue un chef d’izakaya sympathique à Tokyo. Parle un japonais naturel et poli, pose une question à la fois et corrige gentiment mes fautes de grammaire.',
+  'zero.live.example1': 'Canevas de dessin partagé',
+  'zero.live.example1Prompt':
+    'Collabore avec moi sur un canevas de croquis partagé en temps réel : regarde ce que je dessine et ajoutons des détails à la scène chacun notre tour.',
+  'zero.live.example2': 'Tuteur par partage d’écran',
+  'zero.live.example2Prompt':
+    'Regarde mon écran avec moi. Explique-moi ce que montre cette interface et réponds à mes questions étape par étape.',
+  'zero.live.example3': 'Débogage matériel en direct',
+  'zero.live.example3Prompt':
+    'Regarde à travers ma caméra le câblage de cette breadboard et de ce microcontrôleur, et aide-moi à vérifier les connexions des broches et les valeurs des résistances.',
+  'zero.music.starter1': 'Composer une bande originale orchestrale hybride',
+  'zero.music.starter1Prompt':
+    'Né pour cet instant : [0:00-0:20] Violoncelle solo capté en proximité et timbales lointaines comme des battements de cœur, en ré mineur. [0:20-0:50] Ostinatos de cordes en spiccato et appels graves de cor d’harmonie en guise d’alerte font monter l’élan. [0:50-1:30] Taikos tonitruants, fanfare de cuivres et cordes envolées éclatent dans une tonalité majeure triomphale.',
+  'zero.music.starter2': 'Produire un hymne indie alt-rock des années 90 avec chant',
+  'zero.music.starter2Prompt':
+    'Sourire à travers les parasites : rock alternatif des années 90 lumineux et carillonnant à 124 BPM, avec deux guitares électriques passées au chorus, une guitare acoustique en acajou grattée, un tambourin sur le contretemps, une walking bass fuzz et une alto féminine soul qui lance un refrain fédérateur.',
+  'zero.music.starter3': 'Construire un drop EDM big room de festival en prime time',
+  'zero.music.starter3Prompt':
+    'Encore et encore : morceau club entraînant à 128 BPM porté par un kick four-on-the-floor percutant, un balayage de filtre passe-bas résonant sur un pluck de synthé métallique, une sub-basse en sidechain et un refrain supersaw euphorique.',
+  'zero.music.example1': 'Créer un morceau de réveil',
+  'zero.music.example1Prompt':
+    'Crée un morceau de réveil tout en douceur avec des nappes de synthé analogique chaudes, des harmoniques de harpe pincées et une mélodie ensoleillée qui s’éclaircit progressivement sur 30 secondes, à 108 BPM. Sans chant.',
+  'zero.music.example2': 'Composer pour un jeu de rythme',
+  'zero.music.example2Prompt':
+    'Crée une bande-son énergique pour un jeu de rythme avec une batterie nette et percutante, une basse FM en sidechain et un lead de synthé arcade entraînant à 124 BPM. Sans chant.',
+  'zero.video.example1': 'Animer une image',
+  'zero.video.example2':
+    '« Crée une vidéo avec une image : une adorable créature au pelage de léopard des neiges marche dans une forêt hivernale. »',
+  'zero.video.example2Prompt':
+    'Crée une vidéo avec une image : une adorable créature au pelage de léopard des neiges marche dans une forêt hivernale.',
+  'zero.video.example3':
+    '« Crée une vidéo où des mains saupoudrent d’abord du sel dans une poêle de légumes sautés… »',
+  'zero.video.example3Prompt':
+    'Crée une vidéo où des mains saupoudrent d’abord du sel dans une poêle de légumes sautés sur une cuisinière, puis mélangent les légumes avec une grande cuillère en bois',
+  'zero.imagen.example1Prompt':
+    'Crée une image de lapins tout doux à côté d’un verre de vin dans ma cuisine.',
+  'zero.imagen.example2Prompt':
+    'Crée une image de sushis sur une table, dans le style d’une peinture à l’huile.',
+  'zero.imagen.example3Prompt':
+    'Crée une image d’une jolie maison au bord d’un étang dans la forêt, devant une prairie de fleurs sauvages, en gros plan.',
+  'zero.imagen.example4Prompt':
+    'Crée une image d’un paysage urbain futuriste avec de hauts panneaux holographiques, des voitures volantes élancées et des néons.',
+  'zero.ttsAssistant.name': 'L’assistant du quotidien',
+  'zero.ttsAssistant.description': 'Un assistant personnel serviable et professionnel.',
+  'zero.ttsAssistant.turn1Style':
+    'Salut matinal lumineux, ensoleillé et accueillant, avec un léger sourire dans la voix et un rythme vif',
+  'zero.ttsAssistant.turn1Text':
+    'Bonjour ! Il fait 20 degrés et grand soleil. La circulation commence déjà à ralentir sur le pont, <short pause> je vous conseille donc de partir dix minutes plus tôt pour votre réunion de neuf heures.',
+  'zero.ttsAssistant.turn2Style':
+    'Ton chaleureux, profondément empathique, doux et rassurant pour désamorcer un problème de facturation agaçant',
+  'zero.ttsAssistant.turn2Text':
+    '<sigh> Concernant votre demande d’assistance d’hier, <short pause> je comprends tout à fait à quel point cette double facturation a été agaçante.',
+  'zero.ttsAssistant.turn3Style':
+    'Conclusion confiante, efficace et encourageante, avec une articulation claire',
+  'zero.ttsAssistant.turn3Text':
+    '<chuckles> La bonne nouvelle, c’est que j’ai déjà demandé et confirmé un remboursement complet en votre nom, <short pause> vous retrouverez donc cette somme sur votre compte sous trois jours ouvrés.',
+  'zero.ttsNpc.name': 'Le PNJ méfiant',
+  'zero.ttsNpc.description':
+    'Crée des dialogues à plusieurs personnages dans un univers fantastique.',
+  'zero.ttsNpc.turn1Style':
+    'Voix autoritaire, sévère et usée par les années, qui interpelle à travers une froide cour de pierre',
+  'zero.ttsNpc.turn1Text':
+    '<throat-clearing> Halte, voyageur ! Pas un pas de plus. Le col du nord est fermé sur ordre du Haut Conseil.',
+  'zero.ttsNpc.turn2Style': 'Détermination ferme, pressante et sans peur, au débit vif et saccadé',
+  'zero.ttsNpc.turn2Text':
+    '<exhales> Je porte une dépêche scellée pour l’Ancien. Écarte-toi, <short pause> ou je trouverai mon propre chemin.',
+  'zero.ttsNpc.turn3Style':
+    'Sombre, sur la réserve et hésitant, la voix baissant à mesure que remontent des souvenirs douloureux',
+  'zero.ttsNpc.turn3Text':
+    '<sighs> Range ta lame. Personne ne passe… <long pause> car l’Ancien ne reçoit plus de visiteurs.',
+  'zero.ttsNpc.turn4Style':
+    'Tranchant, soupçonneux et tendu, penché en avant pour exiger une explication',
+  'zero.ttsNpc.turn4Text':
+    'Que caches-tu, vieil homme ? La vallée est en feu, <short pause> nous n’avons pas le temps pour des énigmes !',
+  'zero.ttsNpc.turn5Style':
+    'Murmure terrifié tout près du micro qui se mue soudain en avertissement désespéré',
+  'zero.ttsNpc.turn5Text':
+    '<whispers> Baisse la voix ! L’ombre a atteint la citadelle avant l’aube. <gasp> Écoute… tu entends ça ? Tu dois fuir. Maintenant !',
+  'zero.ttsCoHost.name': 'Le coanimateur plein d’énergie',
+  'zero.ttsCoHost.description': 'Conversation façon podcast.',
+  'zero.ttsCoHost.turn1Style':
+    'Introduction de podcast enjouée et enthousiaste, avec un sourire lumineux dans la voix et un tempo vif',
+  'zero.ttsCoHost.turn1Text':
+    'Bon retour dans l’émission, tout le monde ! Aujourd’hui, on plonge directement dans le croisement fou entre l’IA générative |Mm-hmm.| et la créativité humaine.',
+  'zero.ttsCoHost.turn2Style':
+    'Approbation vive et chaleureuse, portée par l’élan de la conversation',
+  'zero.ttsCoHost.turn2Text':
+    '<chuckles> Oh, j’attends toute la semaine de parler de ça. Le rythme actuel donne franchement le vertige.',
+  'zero.ttsCoHost.turn3Style':
+    'Espiègle, curieux, penché vers le micro comme pour confier un secret',
+  'zero.ttsCoHost.turn3Text':
+    'Pas vrai ? Je veux dire, tu as vu la démo vocale en direct qu’ils ont sortie mardi après-midi ?',
+  'zero.ttsCoHost.turn4Style':
+    'Émerveillé, expressif et un peu essoufflé par un enthousiasme sincère',
+  'zero.ttsCoHost.turn4Text':
+    '<gasp> Arrête, je l’ai regardée trois fois ! <chuckles> Quand le modèle s’est raclé la gorge et a chuchoté en pleine phrase, |Carrément !| j’en suis resté bouche bée.',
+  'zero.ttsCoHost.turn5Style':
+    'Transition chaleureuse, réfléchie et captivante vers le sujet principal',
+  'zero.ttsCoHost.turn5Text':
+    '<sigh> Ça brouille vraiment la frontière entre un outil et un partenaire de scène, <short pause> alors prenez votre café, parce qu’on a beaucoup de choses à décortiquer aujourd’hui.',
+  'zero.ttsStoryteller.name': 'Le maître conteur',
+  'zero.ttsStoryteller.description': 'Façonne une narration d’histoire.',
+  'zero.ttsStoryteller.turn1Style':
+    'Narration de livre audio riche, veloutée et posée, qui installe une atmosphère de soirée',
+  'zero.ttsStoryteller.turn1Text':
+    'Blackwood House se dressait en silence au bord de la lande balayée par le vent, ses fenêtres aux volets clos plongées dans le noir, à l’exception d’une unique lanterne ambrée qui vacillait au deuxième étage.',
+  'zero.ttsStoryteller.turn2Style':
+    'Voix de personnage feutrée, éraillée et pressante, lançant depuis l’ombre un avertissement tendu',
+  'zero.ttsStoryteller.turn2Text':
+    '« Éteins cette lanterne, Elias », râla une voix usée depuis l’arche de pierre, <short pause> « si les chiens flairent notre odeur dans le vent, nous n’atteindrons pas la rivière avant l’aube. »',
+  'zero.ttsStoryteller.turn3Style':
+    'Cadence narrative tendue et entraînante qui prend de l’élan quand le personnage passe à l’action',
+  'zero.ttsStoryteller.turn3Text':
+    'Sans hésiter, Elias étouffa la flamme entre ses doigts, franchit d’un bond le mur moussu de la cour et s’élança dans la brume tourbillonnante.',
+  'zero.ttsAd.name': 'La voix off publicitaire',
+  'zero.ttsAd.description': 'Une voix publicitaire fluide et haut de gamme.',
+  'zero.ttsAd.turn1Style':
+    'Voix off publicitaire pétillante, lumineuse et espiègle, qui accroche l’auditeur par un suspense intrigant',
+  'zero.ttsAd.turn1Text':
+    'Attendez, ne changez pas de station pendant trois secondes ! Vous êtes-vous déjà demandé pourquoi votre énergie de l’après-midi s’effondre juste au moment où vos meilleures idées arrivent enfin ?',
+  'zero.ttsAd.turn2Style':
+    'Anticipation rapide, entraînante et électrique qui fait monter le suspense jusqu’à la grande révélation',
+  'zero.ttsAd.turn2Text':
+    'Quelque chose de plus lumineux, de plus pétillant et de follement rafraîchissant se prépare en coulisses, <short pause> et ça va bouleverser votre quotidien.',
+  'zero.ttsAd.turn3Style':
+    'Révélation publicitaire énergique, souriante et percutante, avec une conclusion nette et festive',
+  'zero.ttsAd.turn3Text':
+    '<chuckles> Voici Sunburst Sparkling Cold Brew : zéro coup de barre, deux fois plus de peps, <short pause> et il vous attend déjà au rayon frais. Offrez-vous le meilleur !',
+  'zero.ttsTrainer.name': 'Le guide de formation',
+  'zero.ttsTrainer.description': 'Un formateur d’entreprise clair et sûr de lui.',
+  'zero.ttsTrainer.turn1Style':
+    'Animateur de tutoriel chaleureux, amical et accueillant, qui présente un guide pratique pour la maison',
+  'zero.ttsTrainer.turn1Text':
+    'Bienvenue dans notre guide en trois étapes pour préparer un café filtre digne d’un coffee shop, directement dans votre cuisine. D’abord, rincez votre filtre en papier à l’eau chaude pour réchauffer la carafe en verre.',
+  'zero.ttsTrainer.turn2Style':
+    'Coaching pratique encourageant et conversationnel, qui signale un indice visuel utile',
+  'zero.ttsTrainer.turn2Text':
+    'Ensuite, ajoutez deux cuillères à soupe de café moulu moyen et versez en spirale lente juste assez d’eau pour mouiller la mouture. <short pause> Vous voyez ces petites bulles dorées qui remontent ? <chuckles> C’est ce qu’on appelle le bloom.',
+  'zero.ttsTrainer.turn3Style': 'Conclusion posée, rassurante et enjouée qui termine la recette',
+  'zero.ttsTrainer.turn3Text':
+    'Laissez-le respirer trente secondes, <short pause> puis versez lentement le reste de l’eau au centre : votre tasse du matin est prête à être savourée.',
+  'zero.ttsGameShow.name': 'L’animateur de jeu télévisé',
+  'zero.ttsGameShow.description': 'Un animateur vibrant et théâtral.',
+  'zero.ttsGameShow.turn1Style':
+    'Animateur de jeu télévisé plein d’énergie, tonitruant et théâtral, qui chauffe le plateau',
+  'zero.ttsGameShow.turn1Text':
+    '<chuckles> Bon retour dans la manche éclair de Brain Trust ! Les deux équipes sont à égalité à quatre cents points, et tout se joue sur l’Histoire antique !',
+  'zero.ttsGameShow.turn2Style':
+    'Cadence vive, rythmée et pleine de suspense, qui fait monter l’attente à chaque proposition',
+  'zero.ttsGameShow.turn2Text':
+    'Pour cinq cents points et le trophée du champion : quelle merveille antique veillait sur le port d’Alexandrie ? Était-ce A : les Jardins suspendus, <short pause> B : le Colosse de Rhodes, <short pause> ou C : le phare de Pharos ?',
+  'zero.ttsGameShow.turn3Style':
+    'Compte à rebours intense et dramatique qui bascule dans un triomphe jubilatoire',
+  'zero.ttsGameShow.turn3Text':
+    'Bloquez vos réponses maintenant ! <long pause> <gasp> Vous avez tout misé sur C… <short pause> et vous remportez le grand prix !',
+  'zero.ttsTeacher.name': 'La professeure patiente',
+  'zero.ttsTeacher.description': 'Une professeure de langue patiente et encourageante.',
+  'zero.ttsTeacher.turn1Style':
+    'Professeure de langue chaleureuse, patiente et encourageante, qui montre une prononciation claire des voyelles espagnoles',
+  'zero.ttsTeacher.turn1Text':
+    '<chuckles> Tu t’en sors très bien aujourd’hui ! Essayons cette phrase ensemble, tout doucement : « El clima de hoy es absolutamente hermoso. »',
+  'zero.ttsTeacher.turn2Style':
+    'Élève prudent, un peu hésitant, qui articule chaque syllabe espagnole avec application',
+  'zero.ttsTeacher.turn2Text':
+    '<exhales> D’accord, j’essaie… <short pause> El clima de hoy es... <short pause> absolutamente hermoso.',
+  'zero.ttsTeacher.turn3Style':
+    'Accompagnement ravi, valorisant et doux, passant naturellement d’une langue à l’autre',
+  'zero.ttsTeacher.turn3Text':
+    'Parfait ! Ton rythme sur « absolutamente » était super net. Maintenant, commandons un café : « Me gustaría pedir un café cortado, por favor. »',
+  'zero.ttsTeacher.turn4Style':
+    'Assurance grandissante et débit plus fluide, avec un petit rire soulagé pour finir',
+  'zero.ttsTeacher.turn4Text':
+    'Me gustaría pedir, <short pause> un café cortado, por favor. <chuckles> Hé, celle-là, c’était vraiment naturel !',
+  'zero.ttsTeacher.turn5Style': 'Conclusion chaleureuse, fière et motivante',
+  'zero.ttsTeacher.turn5Text': 'C’était parfaitement naturel ! Tu es prêt pour Madrid.',
+  'zero.voiceDetective.title': 'Le détective blasé',
+  'zero.voiceDetective.description': 'Narration noir grave, rocailleuse et désabusée.',
+  'zero.voiceMeditation.title': 'Le guide de méditation',
+  'zero.voiceMeditation.description': 'Aérien, feutré, infiniment patient.',
+  'zero.voiceAnnouncer.title': 'L’annonceur survolté',
+  'zero.voiceAnnouncer.description': 'Tonitruant, rapide, une énergie à remplir une arène.',
+  'zero.voiceMonarch.title': 'Le monarque royal',
+  'zero.voiceMonarch.description': 'Posé, précis, d’une autorité tranquille.',
+  'zero.voiceDj.title': 'Le DJ de fin de soirée',
+  'zero.voiceDj.description': 'Doux, velouté, la chaleur de deux heures du matin.',
+  'zero.voiceSidekick.title': 'L’acolyte espiègle',
+  'zero.voiceSidekick.description': 'Vif, rapide, une malice à peine contenue.',
+  'zero.voiceScientist.title': 'Le savant fou',
+  'zero.voiceScientist.description': 'Imprévisible, nasillard, joyeusement déjanté.',
   'state.ready': 'Prêt',
   'state.busy': 'Occupé',
   'state.cooldown': 'En refroidissement',
@@ -931,6 +1437,8 @@ export const messages: Record<TranslationKey, string> = {
   'state.disabled': 'Désactivé',
   'state.queued': 'En file d’attente',
   'state.running': 'En cours',
+  'state.launching': 'Démarrage',
+  'state.stopped': 'Arrêté',
   'state.completed': 'Terminé',
   'state.cancelled': 'Annulé',
   'state.failed': 'Échec',
@@ -964,6 +1472,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.unsavedBar': 'Modifications non enregistrées',
   'settings.unsavedCount': '{count} modifications non enregistrées',
   'settings.unsavedCountOne': '{count} modification non enregistrée',
+  'settings.leaveUnsaved':
+    'Des paramètres ne sont pas enregistrés. Quitter et abandonner les modifications ?',
   'settings.discard': 'Annuler les modifications',
   'settings.autoStart': 'Démarrer automatiquement le service de génération',
   'settings.autoStartHelp':
@@ -991,6 +1501,18 @@ export const messages: Record<TranslationKey, string> = {
   'settings.temporaryChatHelp': 'La page de préchauffage WAA utilise une discussion temporaire.',
   'settings.initTimeoutHelp': 'Durée maximale de l’initialisation WAA d’un compte, par exemple 2m.',
   'settings.requestTimeoutHelp': 'Durée d’exécution maximale d’une requête, par exemple 5m.',
+  'settings.firstEventHedge': 'Requête de secours si le premier jeton tarde',
+  'settings.firstEventHedgeHelp':
+    'Si une requête n’a pas de premier jeton après un délai, elle est renvoyée sur un compte libre ; la première à répondre continue, l’autre est annulée',
+  'settings.firstEventHedgeOff': 'Désactivé',
+  'settings.firstEventHedgeAuto': 'Automatique (p95 récent)',
+  'settings.firstEventHedgeCustom': 'Personnalisé',
+  'settings.firstEventHedgeSeconds': 'Délai en secondes',
+  'settings.firstEventHedgeUnit': 'secondes',
+  'settings.firstEventHedgeAutoHint':
+    'Chaque modèle et canal attend son p95 du premier jeton sur les dernières 24 h ; pas de secours sous 20 requêtes',
+  'settings.firstEventHedgeCustomHint':
+    'Pour référence, p95 du premier jeton de {model} sur les dernières 24 h : {seconds} s',
   'settings.proxyHelp':
     'Proxy HTTP, HTTPS ou SOCKS5. Plusieurs séparés par des virgules forment un pool ; vide utilise le proxy système',
   'settings.proxyPool': 'Pool de proxys',
@@ -1049,12 +1571,8 @@ export const messages: Record<TranslationKey, string> = {
   'usage.autoRefresh.30': 'Toutes les 30 secondes',
   'usage.autoRefresh.60': 'Toutes les 60 secondes',
   'usage.updatedAt': 'Mis à jour à {time}',
-  'usage.nextRefresh': 'Actualisation dans {seconds} s',
-  'usage.fixedRange': 'Période fixe, sans actualisation automatique',
   'usage.latest': 'Dernière requête : {time}',
   'usage.latestNone': 'Aucune requête enregistrée pour l’instant',
-  'usage.latestHelp':
-    'Heure de fin de la requête la plus récente du registre, indépendamment de la période et des filtres',
   'usage.justNow': 'à l’instant',
   'usage.secondsAgo': 'il y a {n} s',
   'usage.minutesAgo': 'il y a {n} min',
@@ -1186,183 +1704,4 @@ export const messages: Record<TranslationKey, string> = {
   'theme.label': 'Thème',
   'theme.light': 'Clair',
   'theme.dark': 'Sombre',
-}
-
-// logs 是服务日志固定短语的译文
-export const logs: Record<LogPhrase, string> = {
-  运行时装配: 'Assemblage de l’environnement',
-  协议运行时就绪: 'Environnement de protocole prêt',
-  载入账户: 'Chargement des comptes',
-  '校验 Camoufox': 'Vérification de Camoufox',
-  创建协议客户端: 'Création du client de protocole',
-  管理监听启动: 'Démarrage de l’écoute de la console',
-  预览监听启动: 'Démarrage de l’écoute de l’aperçu',
-  管理服务就绪: 'Console prête',
-  管理页面已打开: 'Console ouverte',
-  管理页面打开失败: 'Impossible d’ouvrir la console',
-  自动启动生成服务: 'Démarrage automatique du service de génération',
-  自动启动生成服务失败: 'Échec du démarrage automatique du service de génération',
-  生成服务启动: 'Démarrage du service de génération',
-  准备模型目录: 'Préparation du catalogue de modèles',
-  '预热 WAA Worker': 'Préchauffage des workers WAA',
-  生成服务就绪: 'Service de génération prêt',
-  生成服务启动失败: 'Échec du démarrage du service de génération',
-  生成服务启动已取消: 'Démarrage du service de génération annulé',
-  生成服务运行中: 'Service de génération en cours d’exécution',
-  生成服务停止: 'Arrêt du service de génération',
-  生成服务已停止: 'Service de génération arrêté',
-  生成服务停止失败: 'Échec de l’arrêt du service de génération',
-  生成服务已处于停止状态: 'Le service de génération est déjà arrêté',
-  旧生成服务关闭失败: 'Impossible de fermer l’ancien service de génération',
-  服务配置已保存: 'Paramètres enregistrés',
-  'WAA Worker 启动': 'Démarrage du worker WAA',
-  初始化页面: 'Initialisation de la page',
-  准备浏览器配置: 'Préparation du profil de navigateur',
-  '启动 Camoufox': 'Démarrage de Camoufox',
-  '连接 WebDriver BiDi': 'Connexion à WebDriver BiDi',
-  '载入 AI Studio': 'Chargement d’AI Studio',
-  '定位 WAA 服务': 'Recherche du service WAA',
-  '执行 WAA Bootstrap': 'Exécution du bootstrap WAA',
-  'WAA Worker 就绪': 'Worker WAA prêt',
-  'WAA Worker 启动失败': 'Échec du démarrage du worker WAA',
-  'WAA Worker 停止': 'Arrêt du worker WAA',
-  'WAA Worker 已停止': 'Worker WAA arrêté',
-  'WAA Worker 停止失败': 'Échec de l’arrêt du worker WAA',
-  'WAA Worker 旧实例停止失败': 'Impossible d’arrêter l’ancien worker WAA',
-  'WAA Worker 预热完成': 'Préchauffage des workers WAA terminé',
-  'WAA Worker 按需扩容': 'Worker WAA ajouté à la demande',
-  'WAA Worker 按需替换': 'Worker WAA remplacé à la demande',
-  'WAA Worker 后台扩容失败': 'Échec de l’ajout d’un worker WAA en arrière-plan',
-  'WAA Worker 空闲回收': 'Worker WAA inactif arrêté',
-  'WAA Worker 空闲回收失败': 'Impossible d’arrêter le worker WAA inactif',
-  'WAA Worker 账户由其他进程占用': 'Compte du worker WAA utilisé par un autre processus',
-  'WAA Worker 账户占用解除': 'Compte du worker WAA libéré',
-  'WAA Worker 重建': 'Reconstruction du worker WAA',
-  'WAA Worker 已更新': 'Worker WAA mis à jour',
-  重放当前请求: 'Relance de la requête en cours',
-  '遗留 Camoufox profile 已清理': 'Anciens profils Camoufox supprimés',
-  '遗留 Camoufox profile 清理失败': 'Impossible de supprimer les anciens profils Camoufox',
-  模型目录同步失败: 'Échec de la synchronisation du catalogue de modèles',
-  '模型目录为空，等待重新同步': 'Catalogue de modèles vide, nouvelle synchronisation en attente',
-  模型目录已更新: 'Catalogue de modèles mis à jour',
-  模型目录后台同步完成: 'Synchronisation du catalogue de modèles en arrière-plan terminée',
-  账户模型目录同步完成: 'Catalogue de modèles du compte synchronisé',
-  模型资格保存失败: 'Impossible d’enregistrer l’éligibilité au modèle',
-  账户状态刷新失败: 'Échec de l’actualisation du compte',
-  账户状态已更新: 'Compte mis à jour',
-  账户添加: 'Ajout d’un compte',
-  账户添加完成: 'Compte ajouté',
-  账户添加失败: 'Échec de l’ajout du compte',
-  账户登录: 'Connexion du compte',
-  账户登录完成: 'Compte connecté',
-  账户登录失败: 'Échec de la connexion du compte',
-  等待隔离登录: 'En attente de la connexion isolée',
-  保存认证状态: 'Enregistrement de l’état de connexion',
-  'Drive 授权失败': 'Échec de l’autorisation Drive',
-  '关闭 Camoufox 失败': 'Échec de la fermeture de Camoufox',
-  'Chrome 账户已导入': 'Compte Chrome importé',
-  远程配对账户已导入: 'Compte associé à distance importé',
-  认证状态账户已导入: 'Compte importé depuis l’état de connexion',
-  账户配置已更新: 'Paramètres du compte mis à jour',
-  账户已删除: 'Compte supprimé',
-  账户认证续签: 'Renouvellement des identifiants du compte',
-  '刷新 Cookie': 'Actualisation des cookies',
-  '更新 Chrome 来源材料': 'Mise à jour des données source Chrome',
-  重置协议运行时: 'Réinitialisation de l’environnement de protocole',
-  账户认证续签完成: 'Identifiants du compte renouvelés',
-  账户认证续签失败: 'Échec du renouvellement des identifiants du compte',
-  代理改绑: 'Proxy réattribué',
-  账号冷却: 'Refroidissement du compte',
-  账号切换: 'Changement de compte',
-  请求开始: 'Requête démarrée',
-  请求完成: 'Requête terminée',
-  请求失败: 'Échec de la requête',
-  请求已取消: 'Requête annulée',
-  达到输出上限: 'Limite de sortie atteinte',
-  上游终止生成: 'Génération arrêtée en amont',
-  工具调用完成: 'Appels d’outils renvoyés',
-  等待上游响应: 'En attente de la réponse amont',
-  上游调用: 'Appel amont',
-  回退流式: 'Bascule vers le streaming',
-  排队等待: 'En file d’attente',
-  排队结束: 'File d’attente terminée',
-  请求准备等待: 'Préparation de la requête en attente',
-  请求准备结束: 'Préparation de la requête terminée',
-  上游首事件等待: 'En attente du premier événement amont',
-  上游首事件到达: 'Premier événement amont reçu',
-  事件流停顿: 'Flux d’événements bloqué',
-  事件流恢复: 'Flux d’événements repris',
-  收集完整响应: 'Collecte de la réponse complète',
-  内联附件处理完成: 'Pièces jointes intégrées traitées',
-  文件引用复制: 'Copie des références de fichiers',
-  临时文件清理失败: 'Impossible de nettoyer les fichiers temporaires',
-  请求账本写入失败: 'Échec de l’écriture du registre des requêtes',
-  请求账本写入队列已满: 'File d’écriture du registre des requêtes pleine',
-  请求账本已按服务器时区重建本地日汇总:
-    'Totaux journaliers du registre recalculés pour le fuseau horaire du serveur',
-  请求账本清理失败: 'Échec du nettoyage du registre des requêtes',
-  账户: 'Compte',
-  耗时: 'Durée',
-  错误: 'Erreur',
-  原因: 'Motif',
-  页面模型: 'Modèle de la page',
-  模型: 'Modèle',
-  失败: 'Échecs',
-  缓存: 'En cache',
-  目标: 'Cible',
-  地址: 'Adresse',
-  暂停调度: 'Répartition suspendue',
-  类型: 'Type',
-  范围: 'Portée',
-  冷却已手动清除: 'Refroidissement levé manuellement',
-  恢复: 'Disponible à',
-  权益: 'Forfait',
-  同步: 'Synchronisés',
-  非空: 'Non vides',
-  待重试账户: 'Comptes à relancer',
-  数量: 'Nombre',
-  已删除: 'Supprimés',
-  已等待: 'Attente',
-  当前: 'Étape en cours',
-  响应头: 'En-têtes de réponse',
-  等待: 'Attente',
-  事件: 'Événement',
-  最近事件: 'Dernier événement',
-  推理: 'Réflexion',
-  正文: 'Texte',
-  停顿: 'Blocage',
-  当前事件: 'Événement en cours',
-  附件: 'Pièces jointes',
-  原始: 'Taille d’origine',
-  来源: 'Source',
-  文件: 'Fichiers',
-  通道: 'Canal',
-  模式: 'Mode',
-  记录: 'Entrées',
-  丢弃: 'Abandonnées',
-  天数: 'Jours',
-  网络字节: 'Octets réseau',
-  最近网络: 'Dernière activité réseau',
-  'WAA 后端': 'Moteur WAA',
-  短期限额: 'Limite à court terme',
-  分钟限额: 'Limite par minute',
-  每日限额: 'Limite quotidienne',
-  套餐限额: 'Limite du forfait',
-  无配额: 'Aucun quota',
-  'Build 拒绝': 'Refus Build',
-  全局: 'Tous les modèles',
-  流已建立: 'Flux établi',
-  等待上游响应头: 'En attente des en-têtes de réponse amont',
-  没有可用账户: 'Aucun compte utilisable',
-  出口: 'Sortie réseau',
-  系统代理: 'Proxy système',
-  直连: 'Connexion directe',
-  在线更新: 'Mise à jour en ligne',
-  下载发行包: 'Téléchargement du paquet',
-  替换可执行文件: 'Remplacement de l’exécutable',
-  暂存新版本: 'Préparation de la nouvelle version',
-  在线更新完成: 'Mise à jour en ligne terminée',
-  在线更新失败: 'Échec de la mise à jour en ligne',
-  在线更新重启失败: 'Échec du redémarrage après la mise à jour en ligne',
-  版本: 'Version',
 }

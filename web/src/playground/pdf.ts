@@ -1,7 +1,7 @@
 import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { base64Bytes } from './bytes'
 
-// pdfThumbnail 把 Base64 PDF 的第一页按给定的 CSS 宽度画成图片，返回 PNG data URL；pdf.js 在首次调用时才加载
+// pdfThumbnail 把 Base64 PDF 的第一页按给定的 CSS 宽度画成图片，返回 PNG data URL
 export async function pdfThumbnail(data: string, width: number): Promise<string> {
   const { GlobalWorkerOptions, getDocument } = await import('pdfjs-dist')
   GlobalWorkerOptions.workerSrc = workerURL

@@ -96,7 +96,7 @@ func TestFunctionCallThoughtSignature(t *testing.T) {
 	}
 }
 
-// TestRPCErrorCompatibility 验证真实错误帧解码和 Drive 授权边界
+// TestRPCErrorCompatibility 验证真实错误帧的解码与 Drive 授权缺失的判定
 func TestRPCErrorCompatibility(t *testing.T) {
 	t.Run("direct", func(t *testing.T) {
 		err := DecodeRPCError("GenerateAccessToken", http.StatusUnauthorized, []byte(

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,14 +36,85 @@ var geminiFileNames = base32.StdEncoding.WithPadding(base32.NoPadding)
 // geminiFileMetadata 是创建文件请求携带的文件元数据
 type geminiFileMetadata struct {
 	File struct {
+		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
 		MIMEType    string `json:"mimeType"`
 	} `json:"file"`
 }
 
+// geminiFileAliasPattern 是客户端可指定的文件 ID：小写字母、数字与连字符，不以连字符开头或结尾，最长 40 个字符
+var geminiFileAliasPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
+
+// alias 校验并返回元数据中客户端指定的文件 ID，未指定时为空
+func (metadata geminiFileMetadata) alias() (string, error) {
+	name := strings.TrimPrefix(strings.TrimSpace(metadata.File.Name), "files/")
+	if name == "" {
+		return "", nil
+	}
+	if !geminiFileAliasPattern.MatchString(name) {
+		return "", fmt.Errorf("file.name %q must contain 1 to 40 lowercase letters, digits or dashes and cannot begin or end with a dash", metadata.File.Name)
+	}
+	return name, nil
+}
+
+// geminiFileIDs 列出全部上传文件并返回公开文件 ID 对应的 Drive 文件 ID
+func geminiFileIDs(ctx context.Context, service aistudio.FileService) (map[string]string, error) {
+	files, err := service.ListFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]string, len(files))
+	for _, file := range files {
+		ids[geminiPublicFileID(file)] = file.ID
+	}
+	return ids, nil
+}
+
+// geminiFileDriveID 解析 files/ 资源名：本服务签发的 ID 直接解码，客户端指定的 ID 从文件列表查找
+func geminiFileDriveID(ctx context.Context, service aistudio.FileService, name string) (string, bool, error) {
+	if driveID, ok := geminiDriveID(name); ok {
+		return driveID, true, nil
+	}
+	ids, err := geminiFileIDs(ctx, service)
+	if err != nil {
+		return "", false, err
+	}
+	driveID, ok := ids[strings.TrimPrefix(name, "files/")]
+	return driveID, ok, nil
+}
+
+// resolveGeminiFileNames 把引用客户端指定文件 ID 的 Files API URI 换成 Drive 文件 ID
+func resolveGeminiFileNames(ctx context.Context, service aistudio.Service, contents []aistudio.Content) error {
+	files, ok := service.(aistudio.FileService)
+	if !ok {
+		return nil
+	}
+	var ids map[string]string
+	for contentIndex := range contents {
+		for partIndex := range contents[contentIndex].Parts {
+			file := contents[contentIndex].Parts[partIndex].File
+			if file == nil || !geminiFilesAPIURI(file.ID) {
+				continue
+			}
+			if ids == nil {
+				var err error
+				if ids, err = geminiFileIDs(ctx, files); err != nil {
+					return err
+				}
+			}
+			_, name, _ := strings.Cut(file.ID, "/files/")
+			if driveID, found := ids[name]; found {
+				file.ID = driveID
+			}
+		}
+	}
+	return nil
+}
+
 // geminiUploadSession 是一次可续传上传的元数据与已接收的分块
 type geminiUploadSession struct {
 	mu       sync.Mutex
+	alias    string
 	name     string
 	mime     string
 	received int64
@@ -106,9 +178,13 @@ func geminiFileID(driveID string) string {
 	return strings.ToLower(geminiFileNames.EncodeToString([]byte(driveID)))
 }
 
-// geminiDriveID 解析本服务签发的 Files API 资源 ID 或 files/ 资源名
+// geminiDriveID 解析本服务签发的 Files API 资源 ID 或 files/ 资源名，签发的 ID 长于客户端可指定的文件 ID
 func geminiDriveID(name string) (string, bool) {
-	decoded, err := geminiFileNames.DecodeString(strings.ToUpper(strings.TrimPrefix(name, "files/")))
+	name = strings.TrimPrefix(name, "files/")
+	if geminiFileAliasPattern.MatchString(name) {
+		return "", false
+	}
+	decoded, err := geminiFileNames.DecodeString(strings.ToUpper(name))
 	if err != nil || len(decoded) == 0 {
 		return "", false
 	}
@@ -130,15 +206,27 @@ func geminiUploadedFileID(uri string) (string, bool) {
 	return geminiDriveID(name)
 }
 
+// geminiPublicFileID 返回文件的公开 ID：客户端指定的 ID 或由 Drive 文件 ID 编码的 ID
+func geminiPublicFileID(metadata aistudio.FileMetadata) string {
+	return cmp.Or(metadata.Alias, geminiFileID(metadata.ID))
+}
+
 // geminiFileObject 构造 Files API 的 File 资源
 func geminiFileObject(metadata aistudio.FileMetadata) map[string]any {
-	id := geminiFileID(metadata.ID)
+	id := geminiPublicFileID(metadata)
 	created := metadata.CreatedAt.UTC().Format(time.RFC3339Nano)
-	return map[string]any{
+	object := map[string]any{
 		"name": "files/" + id, "displayName": metadata.Name, "mimeType": metadata.MIME,
 		"sizeBytes": strconv.FormatInt(metadata.Size, 10), "createTime": created, "updateTime": created,
 		"uri": geminiFilesURIPrefix + id, "state": "ACTIVE", "source": "UPLOADED",
 	}
+	if metadata.SHA256 != "" {
+		object["sha256Hash"] = metadata.SHA256
+	}
+	if metadata.VideoDuration > 0 {
+		object["videoMetadata"] = map[string]any{"videoDuration": strconv.FormatFloat(metadata.VideoDuration.Seconds(), 'f', -1, 64) + "s"}
+	}
+	return object
 }
 
 // handleGeminiFileUpload 按 X-Goog-Upload-Protocol 或 uploadType 开始可续传上传或完成 multipart 上传
@@ -173,8 +261,12 @@ func (s *server) startGeminiUpload(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
+	alias, ok := checkGeminiFileAlias(w, metadata)
+	if !ok {
+		return
+	}
 	session := &geminiUploadSession{
-		name: geminiUploadName(metadata, "", r),
+		alias: alias, name: geminiUploadName(metadata, "", r),
 		mime: firstMediaType(r.Header.Get("X-Goog-Upload-Header-Content-Type"), metadata.File.MIMEType),
 	}
 	id := s.uploads.start(session)
@@ -263,7 +355,7 @@ func (s *server) handleGeminiUploadChunk(w http.ResponseWriter, r *http.Request)
 		}
 		content = session.buffer
 	}
-	metadata, err := uploadGeminiFile(r.Context(), s.service.(aistudio.FileService), session.name, session.mime, content)
+	metadata, err := uploadGeminiFile(r.Context(), s.service.(aistudio.FileService), session.alias, session.name, session.mime, content)
 	s.uploads.discard(id, session)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -272,7 +364,7 @@ func (s *server) handleGeminiUploadChunk(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("X-Goog-Upload-Status", "final")
-	writeJSON(w, http.StatusOK, map[string]any{"file": geminiFileObject(metadata)})
+	writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"file": geminiFileObject(metadata)}))
 }
 
 // bufferGeminiUpload 把分块追加到会话的临时文件
@@ -326,7 +418,11 @@ func uploadGeminiMultipart(w http.ResponseWriter, r *http.Request, service aistu
 			metadataRead = true
 			continue
 		}
-		file, err := uploadGeminiFile(r.Context(), service, geminiUploadName(metadata, part.FileName(), r),
+		alias, ok := checkGeminiFileAlias(w, metadata)
+		if !ok {
+			return
+		}
+		file, err := uploadGeminiFile(r.Context(), service, alias, geminiUploadName(metadata, part.FileName(), r),
 			firstMediaType(part.Header.Get("Content-Type"), r.Header.Get("X-Goog-Upload-Header-Content-Type"), metadata.File.MIMEType), part)
 		_ = part.Close()
 		if err != nil {
@@ -336,13 +432,23 @@ func uploadGeminiMultipart(w http.ResponseWriter, r *http.Request, service aistu
 			return
 		}
 		w.Header().Set("X-Goog-Upload-Status", "final")
-		writeJSON(w, http.StatusOK, map[string]any{"file": geminiFileObject(file)})
+		writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"file": geminiFileObject(file)}))
 		return
 	}
 }
 
-// uploadGeminiFile 上传文件内容并返回文件元数据，未声明具体类型时按内容识别
-func uploadGeminiFile(ctx context.Context, service aistudio.FileService, name string, mimeType string, content io.Reader) (aistudio.FileMetadata, error) {
+// checkGeminiFileAlias 校验客户端指定的文件 ID 格式，无效时写出错误并返回 false
+func checkGeminiFileAlias(w http.ResponseWriter, metadata geminiFileMetadata) (string, bool) {
+	alias, err := metadata.alias()
+	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return "", false
+	}
+	return alias, true
+}
+
+// uploadGeminiFile 上传文件内容并返回文件元数据，未声明具体类型时按内容识别，alias 为客户端指定的文件 ID
+func uploadGeminiFile(ctx context.Context, service aistudio.FileService, alias string, name string, mimeType string, content io.Reader) (aistudio.FileMetadata, error) {
 	mediaType, stream, err := multipartStreamMIME(content, mimeType, name)
 	if err != nil {
 		var maxBytes *http.MaxBytesError
@@ -352,7 +458,7 @@ func uploadGeminiFile(ctx context.Context, service aistudio.FileService, name st
 		return aistudio.FileMetadata{}, fmt.Errorf("%w: %w", aistudio.ErrInvalidArgument, err)
 	}
 	ref, err := service.UploadFile(ctx, aistudio.UploadRequest{
-		Name: name, MIME: mediaType, Purpose: defaultFilePurpose, Size: -1, MaxSize: openAIFileMaxBytes, Reader: stream,
+		Alias: alias, Name: name, MIME: mediaType, Purpose: defaultFilePurpose, Size: -1, MaxSize: openAIFileMaxBytes, Reader: stream,
 	})
 	if err != nil {
 		return aistudio.FileMetadata{}, err
@@ -485,7 +591,11 @@ func (s *server) handleGeminiFileGet(w http.ResponseWriter, r *http.Request) {
 		s.handleGeminiFileDownload(w, r, service, name)
 		return
 	}
-	driveID, ok := geminiDriveID(r.PathValue("file"))
+	driveID, ok, err := geminiFileDriveID(r.Context(), service, r.PathValue("file"))
+	if err != nil {
+		writeGeminiFileError(w, r, err)
+		return
+	}
 	if !ok {
 		writeGeminiFileNotFound(w, r.PathValue("file"))
 		return
@@ -495,7 +605,7 @@ func (s *server) handleGeminiFileGet(w http.ResponseWriter, r *http.Request) {
 		writeGeminiFileError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, geminiFileObject(metadata))
+	writeJSON(w, http.StatusOK, officialOrder("gemini", geminiFileObject(metadata)))
 }
 
 // handleGeminiFileURIGet 处理官方 Python SDK 对非 https 文件 uri 拼出的 files/<uri> 路径，取 uri 中最后一个 files/ 之后的文件名
@@ -512,7 +622,11 @@ func (s *server) handleGeminiFileURIGet(w http.ResponseWriter, r *http.Request) 
 
 // handleGeminiFileDownload 返回文件内容
 func (s *server) handleGeminiFileDownload(w http.ResponseWriter, r *http.Request, service aistudio.FileService, name string) {
-	driveID, ok := geminiDriveID(name)
+	driveID, ok, err := geminiFileDriveID(r.Context(), service, name)
+	if err != nil {
+		writeGeminiFileError(w, r, err)
+		return
+	}
 	if !ok {
 		writeGeminiFileNotFound(w, name)
 		return
@@ -541,7 +655,11 @@ func (s *server) handleGeminiFileDelete(w http.ResponseWriter, r *http.Request) 
 		writeGeminiError(w, http.StatusBadRequest, "FAILED_PRECONDITION", "file deletion is unavailable")
 		return
 	}
-	driveID, ok := geminiDriveID(r.PathValue("file"))
+	driveID, ok, err := geminiFileDriveID(r.Context(), service, r.PathValue("file"))
+	if err != nil {
+		writeGeminiFileError(w, r, err)
+		return
+	}
 	if !ok {
 		writeGeminiFileNotFound(w, r.PathValue("file"))
 		return
@@ -560,26 +678,6 @@ func (s *server) handleGeminiFileList(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "FAILED_PRECONDITION", "file listing is unavailable")
 		return
 	}
-	query := r.URL.Query()
-	size, offset := 10, 0
-	if value := firstQueryValue(query, "pageSize", "page_size"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "pageSize must be a non-negative integer")
-			return
-		}
-		if parsed > 0 {
-			size = min(parsed, 100)
-		}
-	}
-	if value := firstQueryValue(query, "pageToken", "page_token"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "pageToken is invalid")
-			return
-		}
-		offset = parsed
-	}
 	files, err := service.ListFiles(r.Context())
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -587,16 +685,20 @@ func (s *server) handleGeminiFileList(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	page := files[min(offset, len(files)):min(offset+size, len(files))]
+	page, next, err := geminiPage(r.URL.Query(), files, 10, 100)
+	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
 	objects := make([]map[string]any, 0, len(page))
 	for _, file := range page {
 		objects = append(objects, geminiFileObject(file))
 	}
 	body := map[string]any{"files": objects}
-	if offset+size < len(files) {
-		body["nextPageToken"] = strconv.Itoa(offset + size)
+	if next != "" {
+		body["nextPageToken"] = next
 	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, officialOrder("gemini", body))
 }
 
 // firstQueryValue 返回第一个非空查询参数，查询参数接受驼峰与下划线两种字段名

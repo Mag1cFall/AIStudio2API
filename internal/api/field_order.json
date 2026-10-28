@@ -1,0 +1,1174 @@
+{
+ "gemini": {
+  "global": [
+   "@type",
+   "answer",
+   "answerableProbability",
+   "aspectRatio",
+   "automaticActivityDetection",
+   "activityHandling",
+   "blockReason",
+   "candidateCount",
+   "candidates",
+   "category",
+   "citationSources",
+   "disabled",
+   "dynamicRetrievalConfig",
+   "embedding",
+   "embeddings",
+   "enableWidget",
+   "environment",
+   "error",
+   "excludedPredefinedFunctions",
+   "functionCallingConfig",
+   "functionCalls",
+   "functionDeclarationTokens",
+   "functionDeclarations",
+   "functionResponses",
+   "googleSearchDynamicRetrievalScore",
+   "googleSearchRetrieval",
+   "codeExecution",
+   "googleSearch",
+   "computerUse",
+   "groundingPassage",
+   "handle",
+   "ids",
+   "includeThoughts",
+   "inputFeedback",
+   "key",
+   "conditions",
+   "language",
+   "code",
+   "latLng",
+   "mediaChunks",
+   "audio",
+   "audioStreamEnd",
+   "mimeType",
+   "data",
+   "fileUri",
+   "modality",
+   "mode",
+   "allowedFunctionNames",
+   "dynamicThreshold",
+   "modelTurn",
+   "models",
+   "name",
+   "args",
+   "model",
+   "createTime",
+   "generationConfig",
+   "inlinePassages",
+   "newHandle",
+   "outcome",
+   "output",
+   "partTokens",
+   "passageId",
+   "partIndex",
+   "passages",
+   "prebuiltVoiceConfig",
+   "probability",
+   "blocked",
+   "promptFeedback",
+   "promptTokenCount",
+   "candidatesTokenCount",
+   "queryIndex",
+   "ragStoreName",
+   "rating",
+   "reason",
+   "message",
+   "recipeRunnerFinishReason",
+   "renderedContent",
+   "responseTokenCount",
+   "resultIndex",
+   "resumable",
+   "retrievalResources",
+   "retrievalConfig",
+   "retrievedUrl",
+   "reviewId",
+   "googleMapsUri",
+   "reviewSnippets",
+   "roleTokens",
+   "sdkBlob",
+   "searchEntryPoint",
+   "groundingChunks",
+   "groundingSupports",
+   "retrievalMetadata",
+   "segment",
+   "groundingChunkIndices",
+   "confidenceScores",
+   "semanticRetriever",
+   "semanticRetrieverChunk",
+   "setting",
+   "setup",
+   "clientContent",
+   "realtimeInput",
+   "setupComplete",
+   "serverContent",
+   "source",
+   "chunk",
+   "query",
+   "metadataFilters",
+   "maxChunksCount",
+   "minimumRelevanceScore",
+   "speaker",
+   "speakerVoiceConfigs",
+   "startIndex",
+   "endIndex",
+   "startOfSpeechSensitivity",
+   "prefixPaddingMs",
+   "endOfSpeechSensitivity",
+   "silenceDurationMs",
+   "startOffset",
+   "endOffset",
+   "fps",
+   "status",
+   "stopSequences",
+   "maxOutputTokens",
+   "stringValue",
+   "operation",
+   "stringListValue",
+   "numericValue",
+   "systemInstruction",
+   "targetTokens",
+   "thinkingBudget",
+   "threshold",
+   "timeLeft",
+   "timeRangeFilter",
+   "token",
+   "logProbability",
+   "tokenId",
+   "tool",
+   "successfulToolCallCount",
+   "searchQueryCount",
+   "toolCall",
+   "toolCallCancellation",
+   "goAway",
+   "sessionResumptionUpdate",
+   "toolResponse",
+   "toolType",
+   "toolCallCount",
+   "serverExecuted",
+   "tools",
+   "realtimeInputConfig",
+   "sessionResumption",
+   "contextWindowCompression",
+   "inputAudioTranscription",
+   "outputAudioTranscription",
+   "topCandidates",
+   "chosenCandidates",
+   "logProbabilitySum",
+   "totalTokenCount",
+   "totalTokens",
+   "systemInstructionsTokens",
+   "contentTokens",
+   "cachedContentTokenCount",
+   "toolTokens",
+   "promptTokensDetails",
+   "cacheTokensDetails",
+   "candidatesTokensDetails",
+   "responseTokensDetails",
+   "thoughtsTokensDetails",
+   "toolUsePromptTokenCount",
+   "toolUsePromptTokensDetails",
+   "thoughtsTokenCount",
+   "billedToolCalls",
+   "toolCallStats",
+   "serviceTier",
+   "modelInvocationTokenCounts",
+   "rawPromptTokenCount",
+   "nonGroundingModelInvocationTokenCounts",
+   "triggerTokens",
+   "slidingWindow",
+   "turnCoverage",
+   "turns",
+   "turnComplete",
+   "interrupted",
+   "type",
+   "format",
+   "updateTime",
+   "expireTime",
+   "uri",
+   "license",
+   "urlContext",
+   "fileSearch",
+   "googleMaps",
+   "urlMetadata",
+   "urlRetrievalStatus",
+   "values",
+   "version",
+   "displayName",
+   "description",
+   "inputTokenLimit",
+   "nullable",
+   "enum",
+   "items",
+   "outputTokenLimit",
+   "parameters",
+   "properties",
+   "required",
+   "minProperties",
+   "maxProperties",
+   "minimum",
+   "maximum",
+   "minLength",
+   "maxLength",
+   "pattern",
+   "example",
+   "anyOf",
+   "maxItems",
+   "minItems",
+   "propertyOrdering",
+   "response",
+   "behavior",
+   "id",
+   "content",
+   "finishReason",
+   "index",
+   "finishMessage",
+   "parametersJsonSchema",
+   "safetyRatings",
+   "citationMetadata",
+   "sourceId",
+   "supportedGenerationMethods",
+   "temperature",
+   "title",
+   "default",
+   "searchResultMapping",
+   "domain",
+   "siteName",
+   "tokenCount",
+   "groundingAttributions",
+   "groundingMetadata",
+   "avgLogprobs",
+   "detailedFinishReason",
+   "generationComplete",
+   "inputTranscription",
+   "logprobsResult",
+   "outputTranscription",
+   "topP",
+   "topK",
+   "metadataFilter",
+   "modelStage",
+   "maxTemperature",
+   "seed",
+   "responseMimeType",
+   "responseSchema",
+   "presencePenalty",
+   "frequencyPenalty",
+   "responseLogprobs",
+   "logprobs",
+   "enableEnhancedCivicAnswers",
+   "responseModalities",
+   "speechConfig",
+   "thinking",
+   "thinkingConfig",
+   "mediaResolution",
+   "responseJsonSchema",
+   "imageConfig",
+   "responseJsonSchemaOrdered",
+   "urlContextMetadata",
+   "usageMetadata",
+   "modelVersion",
+   "responseId",
+   "turnToken",
+   "debugInfo",
+   "video",
+   "text",
+   "activityStart",
+   "activityEnd",
+   "inlineData",
+   "functionCall",
+   "functionResponse",
+   "fileData",
+   "partMetadata",
+   "executableCode",
+   "codeExecutionResult",
+   "placeId",
+   "placeAnswerSources",
+   "thought",
+   "thoughtSignature",
+   "videoDuration",
+   "videoMetadata",
+   "voiceConfig",
+   "languageCode",
+   "multiSpeakerVoiceConfig",
+   "voiceName",
+   "waitingForInput",
+   "web",
+   "origin",
+   "referenceId",
+   "retrievedContext",
+   "maps",
+   "webSearchQueries",
+   "googleMapsWidgetContextToken",
+   "willContinue",
+   "scheduling",
+   "parts",
+   "role"
+  ],
+  "opaque": [
+   "args",
+   "response"
+  ]
+ },
+ "chat": {
+  "kinds": {
+   "object:chat.completion": [
+    "id",
+    "object",
+    "created",
+    "model",
+    "choices",
+    "usage",
+    "service_tier"
+   ],
+   "key:choices": [
+    "index",
+    "delta",
+    "message",
+    "logprobs",
+    "finish_reason"
+   ],
+   "key:message": [
+    "role",
+    "content",
+    "refusal",
+    "annotations",
+    "tool_calls"
+   ],
+   "key:usage": [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "prompt_tokens_details",
+    "completion_tokens_details"
+   ],
+   "key:prompt_tokens_details": [
+    "cached_tokens",
+    "audio_tokens"
+   ],
+   "key:completion_tokens_details": [
+    "reasoning_tokens",
+    "audio_tokens",
+    "accepted_prediction_tokens",
+    "rejected_prediction_tokens"
+   ],
+   "type:function": [
+    "id",
+    "type",
+    "function"
+   ],
+   "key:function": [
+    "name",
+    "arguments"
+   ],
+   "key:logprobs": [
+    "content",
+    "refusal"
+   ],
+   "key:content": [
+    "token",
+    "logprob",
+    "bytes",
+    "top_logprobs"
+   ],
+   "key:top_logprobs": [
+    "token",
+    "logprob",
+    "bytes"
+   ],
+   "object:chat.completion.chunk": [
+    "id",
+    "object",
+    "created",
+    "model",
+    "system_fingerprint",
+    "choices"
+   ],
+   "key:delta": [
+    "role",
+    "content"
+   ]
+  }
+ },
+ "openai": {
+  "kinds": {
+   "object:model": [
+    "id",
+    "object",
+    "created",
+    "owned_by",
+    "shutdown_date"
+   ],
+   "object:list": [
+    "object",
+    "data",
+    "model",
+    "usage"
+   ],
+   "object:file": [
+    "id",
+    "object",
+    "bytes",
+    "created_at",
+    "deleted",
+    "expires_at",
+    "filename",
+    "purpose",
+    "status"
+   ],
+   "object:embedding": [
+    "object",
+    "embedding",
+    "index"
+   ],
+   "key:usage": [
+    "prompt_tokens",
+    "input_token_details",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "input_tokens_details"
+   ],
+   "key:": [
+    "created",
+    "data",
+    "task",
+    "language",
+    "duration",
+    "text",
+    "logprobs",
+    "segments",
+    "words",
+    "usage"
+   ],
+   "key:input_tokens_details": [
+    "text_tokens",
+    "image_tokens"
+   ],
+   "type:image_generation.partial_image": [
+    "type",
+    "b64_json",
+    "partial_image_index"
+   ],
+   "type:image_generation.completed": [
+    "type",
+    "b64_json",
+    "usage"
+   ],
+   "object:video": [
+    "id",
+    "object",
+    "model",
+    "status",
+    "progress",
+    "created_at",
+    "size",
+    "seconds",
+    "prompt",
+    "completed_at",
+    "expires_at",
+    "error",
+    "remixed_from_video_id"
+   ],
+   "type:tokens": [
+    "type",
+    "input_tokens",
+    "input_token_details",
+    "output_tokens",
+    "total_tokens"
+   ],
+   "key:input_token_details": [
+    "text_tokens",
+    "audio_tokens"
+   ],
+   "type:transcript.text.segment": [
+    "type",
+    "id",
+    "start",
+    "end",
+    "text",
+    "speaker"
+   ],
+   "type:duration": [
+    "type",
+    "seconds"
+   ],
+   "key:logprobs": [
+    "token",
+    "logprob",
+    "bytes"
+   ],
+   "key:segments": [
+    "id",
+    "seek",
+    "start",
+    "end",
+    "text",
+    "tokens",
+    "temperature",
+    "avg_logprob",
+    "compression_ratio",
+    "no_speech_prob"
+   ],
+   "type:transcript.text.delta": [
+    "type",
+    "delta",
+    "logprobs"
+   ],
+   "type:transcript.text.done": [
+    "type",
+    "text",
+    "logprobs",
+    "usage"
+   ],
+   "key:words": [
+    "word",
+    "start",
+    "end"
+   ]
+  }
+ },
+ "responses": {
+  "kinds": {
+   "object:response": [
+    "id",
+    "object",
+    "access_programs",
+    "created_at",
+    "status",
+    "completed_at",
+    "background",
+    "error",
+    "incomplete_details",
+    "input",
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "model",
+    "output",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "reasoning",
+    "reasoning_effort",
+    "service_tier",
+    "store",
+    "temperature",
+    "text",
+    "tool_choice",
+    "tools",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "usage",
+    "user",
+    "metadata"
+   ],
+   "type:message": [
+    "id",
+    "type",
+    "status",
+    "role",
+    "content"
+   ],
+   "type:output_text": [
+    "type",
+    "text",
+    "annotations",
+    "logprobs"
+   ],
+   "key:reasoning": [
+    "effort",
+    "summary"
+   ],
+   "key:usage": [
+    "input_tokens",
+    "input_tokens_details",
+    "output_tokens",
+    "output_tokens_details",
+    "total_tokens"
+   ],
+   "key:input_tokens_details": [
+    "cached_tokens",
+    "cache_write_tokens"
+   ],
+   "type:file_search_call": [
+    "type",
+    "id",
+    "status",
+    "queries",
+    "results"
+   ],
+   "type:file_citation": [
+    "type",
+    "index",
+    "file_id",
+    "filename"
+   ],
+   "type:function_call": [
+    "type",
+    "id",
+    "call_id",
+    "name",
+    "arguments",
+    "status"
+   ],
+   "type:response.created": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "type:response.in_progress": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "type:response.output_item.added": [
+    "type",
+    "output_index",
+    "item",
+    "sequence_number"
+   ],
+   "type:response.content_part.added": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "part",
+    "sequence_number"
+   ],
+   "type:response.output_text.delta": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "delta",
+    "sequence_number",
+    "logprobs"
+   ],
+   "type:response.output_text.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "text",
+    "sequence_number",
+    "logprobs"
+   ],
+   "type:response.content_part.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "part",
+    "sequence_number"
+   ],
+   "type:response.output_item.done": [
+    "type",
+    "output_index",
+    "item",
+    "sequence_number"
+   ],
+   "type:response.completed": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "type:web_search_call": [
+    "type",
+    "id",
+    "status"
+   ],
+   "type:url_citation": [
+    "type",
+    "start_index",
+    "end_index",
+    "url",
+    "title"
+   ],
+   "object:response.deleted": [
+    "id",
+    "object",
+    "deleted"
+   ],
+   "type:response.failed": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "key:error": [
+    "code",
+    "message"
+   ],
+   "type:response.incomplete": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "type:response.refusal.delta": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.refusal.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "refusal",
+    "sequence_number"
+   ],
+   "type:response.function_call_arguments.delta": [
+    "type",
+    "item_id",
+    "output_index",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.function_call_arguments.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "arguments",
+    "sequence_number"
+   ],
+   "type:response.file_search_call.in_progress": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.file_search_call.searching": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.file_search_call.completed": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.web_search_call.in_progress": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.web_search_call.searching": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.web_search_call.completed": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.reasoning_summary_part.added": [
+    "type",
+    "item_id",
+    "output_index",
+    "summary_index",
+    "part",
+    "sequence_number"
+   ],
+   "type:summary_text": [
+    "type",
+    "text"
+   ],
+   "type:response.reasoning_summary_part.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "summary_index",
+    "part",
+    "sequence_number"
+   ],
+   "type:response.reasoning_summary_text.delta": [
+    "type",
+    "item_id",
+    "output_index",
+    "summary_index",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.reasoning_summary_text.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "summary_index",
+    "text",
+    "sequence_number"
+   ],
+   "type:response.reasoning_text.delta": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.reasoning_text.done": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "text",
+    "sequence_number"
+   ],
+   "type:response.image_generation_call.completed": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.image_generation_call.generating": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.image_generation_call.in_progress": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.image_generation_call.partial_image": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number",
+    "partial_image_index",
+    "partial_image_b64"
+   ],
+   "type:response.mcp_call_arguments.delta": [
+    "type",
+    "output_index",
+    "item_id",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.mcp_call_arguments.done": [
+    "type",
+    "output_index",
+    "item_id",
+    "arguments",
+    "sequence_number"
+   ],
+   "type:response.mcp_call.completed": [
+    "type",
+    "sequence_number",
+    "item_id",
+    "output_index"
+   ],
+   "type:response.mcp_call.failed": [
+    "type",
+    "sequence_number",
+    "item_id",
+    "output_index"
+   ],
+   "type:response.mcp_call.in_progress": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id"
+   ],
+   "type:response.mcp_list_tools.completed": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id"
+   ],
+   "type:response.mcp_list_tools.failed": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id"
+   ],
+   "type:response.mcp_list_tools.in_progress": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id"
+   ],
+   "type:response.code_interpreter_call.in_progress": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.code_interpreter_call.interpreting": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.code_interpreter_call.completed": [
+    "type",
+    "output_index",
+    "item_id",
+    "sequence_number"
+   ],
+   "type:response.code_interpreter_call_code.delta": [
+    "type",
+    "output_index",
+    "item_id",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.code_interpreter_call_code.done": [
+    "type",
+    "output_index",
+    "item_id",
+    "code",
+    "sequence_number"
+   ],
+   "type:response.output_text.annotation.added": [
+    "type",
+    "item_id",
+    "output_index",
+    "content_index",
+    "annotation_index",
+    "annotation",
+    "sequence_number"
+   ],
+   "type:response.queued": [
+    "type",
+    "response",
+    "sequence_number"
+   ],
+   "type:response.custom_tool_call_input.delta": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id",
+    "delta"
+   ],
+   "type:response.custom_tool_call_input.done": [
+    "type",
+    "sequence_number",
+    "output_index",
+    "item_id",
+    "input"
+   ],
+   "type:error": [
+    "type",
+    "code",
+    "message",
+    "param",
+    "sequence_number"
+   ],
+   "type:response.audio.delta": [
+    "type",
+    "response_id",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.audio.done": [
+    "type",
+    "response_id",
+    "sequence_number"
+   ],
+   "type:response.audio.transcript.delta": [
+    "type",
+    "response_id",
+    "delta",
+    "sequence_number"
+   ],
+   "type:response.audio.transcript.done": [
+    "type",
+    "response_id",
+    "sequence_number"
+   ],
+   "object:list": [
+    "object",
+    "data",
+    "first_id",
+    "last_id",
+    "has_more"
+   ],
+   "type:input_text": [
+    "type",
+    "text"
+   ],
+   "object:response.input_tokens": [
+    "input_tokens",
+    "object"
+   ]
+  },
+  "opaque": [
+   "parameters",
+   "metadata",
+   "schema"
+  ]
+ },
+ "anthropic": {
+  "kinds": {
+   "type:error": [
+    "type",
+    "error"
+   ],
+   "type:overloaded_error": [
+    "type",
+    "message"
+   ],
+   "type:content_block_delta": [
+    "type",
+    "index",
+    "delta"
+   ],
+   "type:text_delta": [
+    "type",
+    "text"
+   ],
+   "type:thinking_delta": [
+    "type",
+    "thinking"
+   ],
+   "type:signature_delta": [
+    "type",
+    "signature"
+   ],
+   "type:message_start": [
+    "type",
+    "message"
+   ],
+   "type:message": [
+    "id",
+    "type",
+    "role",
+    "content",
+    "model",
+    "stop_reason",
+    "stop_sequence",
+    "usage"
+   ],
+   "key:usage": [
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "output_tokens",
+    "server_tool_use"
+   ],
+   "type:content_block_start": [
+    "type",
+    "index",
+    "content_block"
+   ],
+   "type:text": [
+    "type",
+    "text"
+   ],
+   "type:content_block_stop": [
+    "type",
+    "index"
+   ],
+   "type:message_delta": [
+    "type",
+    "delta",
+    "usage"
+   ],
+   "key:delta": [
+    "stop_reason",
+    "stop_sequence"
+   ],
+   "type:tool_use": [
+    "type",
+    "id",
+    "name",
+    "input"
+   ],
+   "type:input_json_delta": [
+    "type",
+    "partial_json"
+   ],
+   "type:thinking": [
+    "type",
+    "thinking",
+    "signature"
+   ],
+   "type:server_tool_use": [
+    "type",
+    "id",
+    "name",
+    "input"
+   ],
+   "type:model": [
+    "id",
+    "capabilities",
+    "created_at",
+    "deprecated_at",
+    "display_name",
+    "lifecycle",
+    "line",
+    "max_input_tokens",
+    "max_tokens",
+    "retires_at",
+    "type"
+   ],
+   "key:capabilities": [
+    "batch",
+    "citations",
+    "code_execution",
+    "context_management",
+    "effort",
+    "image_input",
+    "pdf_input",
+    "server_tools",
+    "structured_outputs",
+    "thinking"
+   ],
+   "key:context_management": [
+    "clear_thinking_20251015",
+    "clear_tool_uses_20250919",
+    "compact_20260112",
+    "supported"
+   ],
+   "key:effort": [
+    "high",
+    "low",
+    "max",
+    "medium",
+    "supported",
+    "xhigh"
+   ],
+   "key:server_tools": [
+    "code_execution",
+    "supported",
+    "web_search"
+   ],
+   "key:thinking": [
+    "supported",
+    "types"
+   ],
+   "key:types": [
+    "adaptive",
+    "between_tools",
+    "disabled",
+    "enabled"
+   ],
+   "type:file_deleted": [
+    "id",
+    "type"
+   ]
+  },
+  "opaque": [
+   "input"
+  ]
+ },
+ "interactions": {
+  "typeFirst": true,
+  "opaque": [
+   "arguments",
+   "result"
+  ]
+ }
+}

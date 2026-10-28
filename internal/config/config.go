@@ -58,6 +58,7 @@ var configKeys = [...]string{
 	"NONSTREAM_KEEPALIVE",
 	"FAKE_STREAM",
 	"YOUTUBE_LINKS",
+	"FIRST_EVENT_HEDGE",
 }
 
 // LogFileMB 是单个日志文件的轮转大小
@@ -71,6 +72,12 @@ const WAABackendCamoufox = "camoufox"
 
 // WAABackendGo 表示由纯 Go VM 承担 WAA 生命周期
 const WAABackendGo = "go"
+
+// FirstEventHedgeOff 表示首事件超时不发起备用请求
+const FirstEventHedgeOff = "off"
+
+// FirstEventHedgeAuto 表示按模型与通道近期原请求首事件等待的 p95 发起备用请求
+const FirstEventHedgeAuto = "auto"
 
 // MediaOutputInline 表示 Chat 与 Messages 正文以 data URI 内联生成的媒体
 const MediaOutputInline = "inline"
@@ -91,6 +98,7 @@ type Config struct {
 	NonstreamKeepalive     bool          `json:"nonstream_keepalive"`
 	FakeStream             bool          `json:"fake_stream"`
 	YouTubeLinks           bool          `json:"youtube_links"`
+	FirstEventHedge        string        `json:"first_event_hedge"`
 	AuthStates             string        `json:"auth_states"`
 	ListenAddr             string        `json:"listen_addr"`
 	PreviewListenAddr      string        `json:"preview_listen_addr"`
@@ -120,6 +128,7 @@ func Default() Config {
 		LogMaxTotalMB:          500,
 		BuildNativeNonstream:   true,
 		NonstreamKeepalive:     true,
+		FirstEventHedge:        FirstEventHedgeOff,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
 		PreviewListenAddr:      defaultPreviewListenAddr,
@@ -130,7 +139,7 @@ func Default() Config {
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
-		UpstreamChannels:       append([]string(nil), upstreamChannels...),
+		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendCamoufox,
 		MediaOutput:            MediaOutputInline,
 	}
@@ -208,6 +217,9 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("YOUTUBE_LINKS 必须是 true 或 false")
 		}
+	}
+	if value, ok := values["FIRST_EVENT_HEDGE"]; ok {
+		cfg.FirstEventHedge = strings.ToLower(strings.TrimSpace(value))
 	}
 	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
 		cfg.AuthStates = strings.TrimSpace(value)
@@ -310,6 +322,7 @@ func (c Config) Save(path string) error {
 		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),
 		"FAKE_STREAM":              strconv.FormatBool(c.FakeStream),
 		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
+		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
 		"LISTEN_ADDR":              c.ListenAddr,
 		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
@@ -396,6 +409,9 @@ func (c Config) Validate() error {
 	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
 		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
 	}
+	if _, _, err := ParseFirstEventHedge(c.FirstEventHedge); err != nil {
+		return err
+	}
 	if c.MediaOutput != MediaOutputInline && c.MediaOutput != MediaOutputURL {
 		return fmt.Errorf("MEDIA_OUTPUT 必须是 inline 或 url")
 	}
@@ -409,6 +425,21 @@ func (c Config) Validate() error {
 		return fmt.Errorf("LOG_MAX_TOTAL_MB 不能小于 %d", 2*LogFileMB)
 	}
 	return nil
+}
+
+// ParseFirstEventHedge 解析 FIRST_EVENT_HEDGE，返回是否按近期 p95 自适应与自定义的等待时长，off 时都为零值
+func ParseFirstEventHedge(value string) (bool, time.Duration, error) {
+	switch value {
+	case FirstEventHedgeOff:
+		return false, 0, nil
+	case FirstEventHedgeAuto:
+		return true, 0, nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return false, 0, fmt.Errorf("FIRST_EVENT_HEDGE 必须是 off、auto 或正整数秒")
+	}
+	return false, time.Duration(seconds) * time.Second, nil
 }
 
 // ModelAlias 表示客户端模型名到目录模型 ID 的一项映射
@@ -503,6 +534,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
 		FakeStream             bool     `json:"fake_stream"`
 		YouTubeLinks           bool     `json:"youtube_links"`
+		FirstEventHedge        string   `json:"first_event_hedge"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		PreviewListenAddr      string   `json:"preview_listen_addr"`
@@ -534,6 +566,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		NonstreamKeepalive:     c.NonstreamKeepalive,
 		FakeStream:             c.FakeStream,
 		YouTubeLinks:           c.YouTubeLinks,
+		FirstEventHedge:        c.FirstEventHedge,
 		AuthStates:             c.AuthStates,
 		ListenAddr:             c.ListenAddr,
 		PreviewListenAddr:      c.PreviewListenAddr,
@@ -570,6 +603,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
 		FakeStream             bool     `json:"fake_stream"`
 		YouTubeLinks           bool     `json:"youtube_links"`
+		FirstEventHedge        string   `json:"first_event_hedge"`
 		AuthStates             string   `json:"auth_states"`
 		ListenAddr             string   `json:"listen_addr"`
 		PreviewListenAddr      string   `json:"preview_listen_addr"`
@@ -614,6 +648,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		NonstreamKeepalive:     value.NonstreamKeepalive,
 		FakeStream:             value.FakeStream,
 		YouTubeLinks:           value.YouTubeLinks,
+		FirstEventHedge:        strings.ToLower(strings.TrimSpace(value.FirstEventHedge)),
 		AuthStates:             strings.TrimSpace(value.AuthStates),
 		ListenAddr:             strings.TrimSpace(value.ListenAddr),
 		PreviewListenAddr:      strings.TrimSpace(value.PreviewListenAddr),

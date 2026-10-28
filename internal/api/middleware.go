@@ -210,7 +210,7 @@ func (metadata *accessLogMetadata) setGenerationConfig(config aistudio.Generatio
 }
 
 func (metadata *accessLogMetadata) setGenerationInput(request aistudio.GenerateRequest) {
-	textChars := utf8.RuneCountInString(request.System)
+	textChars := utf8.RuneCountInString(aistudio.SystemText(request.System))
 	media := 0
 	var mediaBytes int64
 	files := 0

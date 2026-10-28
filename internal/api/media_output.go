@@ -52,7 +52,7 @@ func (s *server) mediaOutputFor(r *http.Request) mediaOutput {
 }
 
 // save 在 URL 模式下把带内容的媒体写入媒体目录
-func (output mediaOutput) save(media aistudio.Media) error {
+func (output mediaOutput) save(media aistudio.Blob) error {
 	if output.base == "" || len(media.Data) == 0 {
 		return nil
 	}
@@ -69,8 +69,8 @@ func (output mediaOutput) save(media aistudio.Media) error {
 // saveEvents 保存事件中的全部媒体
 func (output mediaOutput) saveEvents(events []aistudio.Event) error {
 	for _, event := range events {
-		if event.Kind == aistudio.EventMedia && event.Media != nil {
-			if err := output.save(*event.Media); err != nil {
+		if event.Kind == aistudio.EventMedia && event.InlineData != nil {
+			if err := output.save(*event.InlineData); err != nil {
 				return err
 			}
 		}
@@ -78,28 +78,28 @@ func (output mediaOutput) saveEvents(events []aistudio.Event) error {
 	return nil
 }
 
-// markdown 把媒体写成 Markdown 图片或链接
-func (output mediaOutput) markdown(media aistudio.Media) string {
-	url := media.URL
-	if len(media.Data) > 0 {
+// markdown 把媒体 Part 写成 Markdown 图片或链接，内联媒体在 URL 模式下指向媒体目录
+func (output mediaOutput) markdown(part aistudio.Part) string {
+	var mimeType, url string
+	switch {
+	case part.InlineData != nil:
+		mimeType, url = part.InlineData.MIME, "data:"+part.InlineData.MIME+";base64,"+base64.StdEncoding.EncodeToString(part.InlineData.Data)
 		if output.base != "" {
-			url = output.base + "/media/" + mediaFileName(media)
-		} else {
-			url = "data:" + media.MIME + ";base64," + base64.StdEncoding.EncodeToString(media.Data)
+			url = output.base + "/media/" + mediaFileName(*part.InlineData)
 		}
+	case part.ExternalMedia != nil:
+		mimeType, url = part.ExternalMedia.MIME, part.ExternalMedia.URL
+	default:
+		return ""
 	}
-	label := media.Name
-	if label == "" {
-		label = "media"
+	if strings.HasPrefix(mimeType, "image/") {
+		return fmt.Sprintf("![media](%s)", url)
 	}
-	if strings.HasPrefix(media.MIME, "image/") {
-		return fmt.Sprintf("![%s](%s)", label, url)
-	}
-	return fmt.Sprintf("[%s](%s)", label, url)
+	return fmt.Sprintf("[media](%s)", url)
 }
 
 // mediaFileName 返回按媒体内容命名的文件名
-func mediaFileName(media aistudio.Media) string {
+func mediaFileName(media aistudio.Blob) string {
 	sum := sha256.Sum256(media.Data)
 	extension := ".bin"
 	mimeType, _, _ := strings.Cut(media.MIME, ";")

@@ -14,9 +14,9 @@ const scope = self as unknown as {
   postMessage(message: { id: number; svg: string }): void
 }
 
-// document 占位使 elkjs 加载页面内的同步布局器，没有它时 elkjs 把自身当作 Worker 脚本接管消息
+// document 占位使 elkjs 加载页面内的同步布局器
 scope.document = {}
-// self 定义为可写的自有属性，beautiful-mermaid 初始化 elkjs 后会回写 self
+// self 定义为可写的自有属性
 Object.defineProperty(scope, 'self', { value: scope, writable: true, configurable: true })
 // library 是在占位之后加载的 beautiful-mermaid
 const library = import('beautiful-mermaid')

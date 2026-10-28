@@ -36,7 +36,7 @@ const query = ref('')
 const selected = ref(-1)
 // firstSelection 是列表刷新后的选中行：/chat 列表默认选中第一行，其余列表不选中
 const firstSelection = (value: PaletteMode = mode.value) => (value === 'chat' ? 0 : -1)
-const recent = ref<PromptSummary[]>([])
+const saved = ref<PromptSummary[]>([])
 const input = ref<HTMLInputElement>()
 const list = ref<HTMLElement>()
 // chosen 是 /chat 中选定的模型
@@ -195,15 +195,15 @@ const sections = computed<{ title: string; items: PaletteItem[] }[]>(() => {
       run: () => setMode('shortcuts'),
     },
   ]
-  const sessions = recent.value
-    .filter((summary) => text === '' || fuzzy(summary.title))
-    .map<PaletteItem>((summary) => ({
-      id: summary.id,
-      icon: 'chatBubble',
-      label: summary.title || t('pg.untitled'),
-      description: sessionLabel(summary),
-      run: () => openPage(`/prompts/${encodeURIComponent(summary.id)}`),
-    }))
+  const sessions = (
+    text === '' ? saved.value.slice(0, 10) : saved.value.filter((summary) => fuzzy(summary.title))
+  ).map<PaletteItem>((summary) => ({
+    id: summary.id,
+    icon: 'chatBubble',
+    label: summary.title || t('pg.untitled'),
+    description: sessionLabel(summary),
+    run: () => openPage(`/prompts/${encodeURIComponent(summary.id)}`),
+  }))
   if (text === '')
     return [
       { title: '', items: commands },
@@ -280,9 +280,9 @@ watch(open, async (value) => {
   selected.value = firstSelection()
   void nextTick(() => input.value?.focus())
   if (mode.value === 'root')
-    recent.value = (await api.prompts().catch(() => [] as PromptSummary[]))
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .slice(0, 10)
+    saved.value = (await api.prompts().catch(() => [] as PromptSummary[])).sort((a, b) =>
+      b.updated_at.localeCompare(a.updated_at),
+    )
 })
 </script>
 

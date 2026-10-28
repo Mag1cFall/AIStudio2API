@@ -4,11 +4,12 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import MediaViewDialog from './MediaViewDialog.vue'
+import { failureText } from '../request'
 import { downloadMedia } from './api'
 
 // path 是服务端视频结果的下载路径，src 是已有的视频地址，aspectRatio 是视频加载前占位框的宽高比
 const props = defineProps<{ path?: string; src?: string; aspectRatio?: string }>()
-const { t } = useI18n()
+const { t, logText } = useI18n()
 const element = ref<HTMLVideoElement>()
 const downloaded = ref('')
 const error = ref('')
@@ -29,7 +30,7 @@ watch(
     try {
       downloaded.value = URL.createObjectURL(await downloadMedia(path))
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : String(reason)
+      error.value = failureText(reason, t('pg.videoDownloadUnreachable'))
     }
   },
   { immediate: true },
@@ -63,7 +64,7 @@ function save(): void {
 
 <template>
   <div class="gallery-video" :class="portrait ? 'nine-by-sixteen' : 'sixteen-by-nine'">
-    <p v-if="error" class="video-error">{{ error }}</p>
+    <p v-if="error" class="video-error">{{ logText(error) }}</p>
     <div v-else class="video-container" :class="{ pending: !source }">
       <div v-if="!source" class="video-placeholder"></div>
       <template v-else>

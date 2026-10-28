@@ -26,8 +26,8 @@ func TestGeminiVideoProcessingRoundTrip(t *testing.T) {
 	}
 
 	events := []aistudio.Event{
-		{Kind: aistudio.EventMediaProcessingCall, MediaProcessing: &aistudio.MediaProcessingStep{ID: "call_1"}, ThoughtSignature: "call-signature"},
-		{Kind: aistudio.EventMediaProcessingResult, MediaProcessing: &aistudio.MediaProcessingStep{ID: "call_1"}, ThoughtSignature: "result-signature"},
+		{Kind: aistudio.EventServerToolCall, ToolCall: &aistudio.ServerToolStep{ID: "call_1"}, ThoughtSignature: "call-signature"},
+		{Kind: aistudio.EventServerToolResponse, ToolResponse: &aistudio.ServerToolStep{ID: "call_1"}, ThoughtSignature: "result-signature"},
 		{Kind: aistudio.EventText, Text: "answer"},
 	}
 	output, err := json.Marshal(map[string]any{"contents": []any{map[string]any{"role": "model", "parts": geminiOutputParts(generationResult{events: events})}}})
@@ -43,8 +43,8 @@ func TestGeminiVideoProcessingRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := replayed.Contents[0].Parts
-	if len(parts) != 3 || parts[0].ProcessingCall == nil || parts[0].ProcessingCall.ID != "call_1" || parts[0].ThoughtSignature != "call-signature" ||
-		parts[1].ProcessingResult == nil || parts[1].ProcessingResult.ID != "call_1" || parts[1].ThoughtSignature != "result-signature" || parts[2].Text != "answer" {
+	if len(parts) != 3 || parts[0].ToolCall == nil || parts[0].ToolCall.ID != "call_1" || parts[0].ThoughtSignature != "call-signature" ||
+		parts[1].ToolResponse == nil || parts[1].ToolResponse.ID != "call_1" || parts[1].ThoughtSignature != "result-signature" || parts[2].Text != "answer" {
 		t.Fatalf("history parts = %s", output)
 	}
 }

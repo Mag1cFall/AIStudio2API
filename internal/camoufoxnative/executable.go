@@ -26,6 +26,32 @@ func FindExecutable(ctx context.Context, proxy string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if path, ok := installedExecutable(ctx, name); ok {
+		return path, nil
+	}
+	path, err := installCamoufox(ctx, name, proxy)
+	if err != nil {
+		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
+	}
+	return path, nil
+}
+
+// Installed 表示本机已有与 camoufoxRelease 同版本的 Camoufox，不触发下载
+func Installed() bool {
+	if configured := strings.TrimSpace(os.Getenv("CAMOUFOX_PATH")); configured != "" {
+		_, err := validateCamoufoxExecutable(configured)
+		return err == nil
+	}
+	name, err := camoufoxExecutablePath()
+	if err != nil {
+		return false
+	}
+	_, ok := installedExecutable(context.Background(), name)
+	return ok
+}
+
+// installedExecutable 在运行目录、可执行文件旁与系统缓存中查找已安装的 Camoufox
+func installedExecutable(ctx context.Context, name string) (string, bool) {
 	candidates := []string{filepath.Join("runtime", "camoufox", name)}
 	if executable, executableErr := os.Executable(); executableErr == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "runtime", "camoufox", name))
@@ -36,19 +62,14 @@ func FindExecutable(ctx context.Context, proxy string) (string, error) {
 		}
 	}
 	for _, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			return "", err
+		if ctx.Err() != nil {
+			return "", false
 		}
-		path, err := validateCamoufoxExecutable(candidate)
-		if err == nil {
-			return path, nil
+		if path, err := validateCamoufoxExecutable(candidate); err == nil {
+			return path, true
 		}
 	}
-	path, err := installCamoufox(ctx, name, proxy)
-	if err != nil {
-		return "", fmt.Errorf("自动准备 Camoufox: %w", err)
-	}
-	return path, nil
+	return "", false
 }
 
 func camoufoxExecutablePath() (string, error) {

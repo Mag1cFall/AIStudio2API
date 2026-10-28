@@ -583,7 +583,7 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// snapshotHookFunction 在 default_MakerSuite 中定位调用 .snapshot({ 的高层函数并临时替换，页面首次以 service 调用时保存 service 并换回原函数；返回保存 key、service 与 snapshot 调用的对象，未定位到时返回 null
+// snapshotHookFunction 是在页面中临时替换调用 .snapshot({ 的高层函数并保存官网 service 的函数声明，未定位到该函数时返回 null
 const snapshotHookFunction = `() => {
   const makerSuite = window.default_MakerSuite;
   if (!makerSuite) return null;

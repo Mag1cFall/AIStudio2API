@@ -23,6 +23,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 )
 
 type setupStrings []string
@@ -76,7 +77,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 	if options.remote != "" {
 		token := options.token
 		if token == "" {
-			if token, err = readPairingToken(input, os.Stdout); err != nil {
+			if token, err = readPairingToken(input, i18n.Stdout); err != nil {
 				return err
 			}
 		}
@@ -108,7 +109,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 		}
 		return importIsolatedLogin(ctx, target, options, driver)
 	}
-	return importChromeAccounts(ctx, cfg, target, options, input, os.Stdout)
+	return importChromeAccounts(ctx, cfg, target, options, input, i18n.Stdout)
 }
 
 // localTarget 将账户写入本机账户目录
@@ -241,11 +242,11 @@ func importStorageState(ctx context.Context, target accountTarget, options setup
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
+	fmt.Fprintf(i18n.Stdout, "账户已保存: %s\n", saved)
 	return nil
 }
 
-// importCookies 把 --cookie、--cookie-file 或 --cdp 浏览器中的 Cookie 导入为账户，未给 --email 时以 Cookie 登录的账户邮箱为账户；--cdp 未给 --locale、--timezone 时沿用该浏览器页面的语言与时区
+// importCookies 把 --cookie、--cookie-file 或 --cdp 浏览器中的 Cookie 导入为账户，未给 --email 时以 Cookie 登录的账户邮箱为账户
 func importCookies(ctx context.Context, target accountTarget, options setupOptions) error {
 	if options.cdp != "" {
 		browser, err := chromeauth.ReadCDPBrowser(ctx, options.cdp)
@@ -285,7 +286,7 @@ func importCookies(ctx context.Context, target accountTarget, options setupOptio
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
+	fmt.Fprintf(i18n.Stdout, "账户已保存: %s\n", saved)
 	return nil
 }
 
@@ -314,12 +315,12 @@ func importIsolatedLogin(
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "账户已保存: %s\n", saved)
+	fmt.Fprintf(i18n.Stdout, "账户已保存: %s\n", saved)
 	if result.DriveError != "" {
-		fmt.Fprintf(os.Stdout, "Drive 授权失败: %s\n", result.DriveError)
+		fmt.Fprintf(i18n.Stdout, "Drive 授权失败: %s\n", result.DriveError)
 	}
 	if result.CloseError != "" {
-		fmt.Fprintf(os.Stdout, "关闭 Camoufox 失败: %s\n", result.CloseError)
+		fmt.Fprintf(i18n.Stdout, "关闭 Camoufox 失败: %s\n", result.CloseError)
 	}
 	return nil
 }
@@ -376,14 +377,14 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 func promptChromeAccounts(accounts []chromeauth.Account, input io.Reader, output io.Writer) ([]string, error) {
 	available := make([]chromeauth.Account, 0, len(accounts))
 	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "编号\t状态\tProfile\t显示名\t邮箱")
+	fmt.Fprintln(table, i18n.Translate(i18n.Console, "编号\t状态\tProfile\t显示名\t邮箱"))
 	for _, account := range accounts {
 		index := "-"
-		status := "不可导入"
+		status := i18n.Translate(i18n.Console, "不可导入")
 		if account.Importable {
 			available = append(available, account)
 			index = strconv.Itoa(len(available))
-			status = "可导入"
+			status = i18n.Translate(i18n.Console, "可导入")
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", index, status, account.Profile, account.DisplayName, account.Email)
 	}
@@ -444,6 +445,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	authUser := flags.Int("authuser", 0, "Google 多账号会话序号 (0..9，对应 /u/0、/u/1...)")
 	remote := flags.String("remote", "", "远程实例 origin，账户上传到该实例")
 	token := flags.String("token", "", "远程实例账户页生成的配对令牌，省略时从标准输入读取")
+	flags.SetOutput(i18n.Stderr)
+	flags.VisitAll(func(item *flag.Flag) { item.Usage = i18n.Translate(i18n.Console, item.Usage) })
 	if err := flags.Parse(args); err != nil {
 		return setupOptions{}, err
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"net"
 	"net/url"
 	"strings"
 
@@ -15,7 +16,7 @@ func systemProxy() string {
 	if proxy, err := httpproxy.FromEnvironment().ProxyFunc()(systemProxyTarget); err == nil && proxy != nil {
 		return proxy.String()
 	}
-	return windowsProxyURL(osProxyServer())
+	return osProxy()
 }
 
 // windowsProxyURL 把 Windows ProxyServer 的 host:port 或按协议分列的写法转换为代理 URL，依次取 https、http 与 socks
@@ -43,6 +44,23 @@ func windowsProxyURL(server string) string {
 	}
 	if address := entries["socks"]; address != "" {
 		return "socks5://" + address
+	}
+	return ""
+}
+
+// scutilProxyURL 把 macOS scutil --proxy 输出中启用的代理转换为代理 URL，依次取 HTTPS、HTTP 与 SOCKS
+func scutilProxyURL(output string) string {
+	values := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if name, value, ok := strings.Cut(line, " : "); ok {
+			values[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+	for _, item := range []struct{ name, scheme string }{{"HTTPS", "http"}, {"HTTP", "http"}, {"SOCKS", "socks5"}} {
+		host, port := values[item.name+"Proxy"], values[item.name+"Port"]
+		if values[item.name+"Enable"] == "1" && host != "" && port != "" {
+			return item.scheme + "://" + net.JoinHostPort(host, port)
+		}
 	}
 	return ""
 }

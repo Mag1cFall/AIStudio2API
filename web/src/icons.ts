@@ -28,6 +28,7 @@ import {
   Copy,
   Download,
   Gauge,
+  History,
   Inbox,
   KeyRound,
   Languages,
@@ -63,6 +64,9 @@ import {
   Fingerprint,
   Lock,
   Expand,
+  Ellipsis,
+  Pencil,
+  CircleSlash,
   Shrink,
 } from '@lucide/vue'
 
@@ -75,6 +79,7 @@ export const icons = {
   usage: ChartColumn,
   settings: Settings,
   playground: MessagesSquare,
+  history: History,
   version: Tag,
   chevronDown: ChevronDown,
   chevronRight: ChevronRight,
@@ -134,6 +139,9 @@ export const icons = {
   lock: Lock,
   zoomActual: Expand,
   zoomFit: Shrink,
+  more: Ellipsis,
+  edit: Pencil,
+  disable: CircleSlash,
 } as const
 
 // IconName 是界面可用的图标语义名

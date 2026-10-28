@@ -1,10 +1,12 @@
 package aistudio
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -27,6 +29,10 @@ type PooledService struct {
 	YouTubeLinks bool
 	// omniVideos 记录本进程中尚无结果文件的 Omni 视频任务：值为 nil 时仍在生成，为 error 时生成失败
 	omniVideos sync.Map
+	// inlineMediaMu 保护 inlineMediaUses
+	inlineMediaMu sync.Mutex
+	// inlineMediaUses 是本进程进行中的请求引用的内联附件文件 ID 与引用数
+	inlineMediaUses map[string]int
 }
 
 // PoolRequestContextProvider 从租约账户读取协议上下文
@@ -81,6 +87,12 @@ func NewPooledService(pool *AccountPool, client *Client) (*PooledService, error)
 	}
 	if client == nil {
 		return nil, fmt.Errorf("AI Studio client 不能为空")
+	}
+	for accountID, tier := range pool.cachedBenefitTiers() {
+		client.setBenefitTier(accountID, tier)
+	}
+	for accountID, catalog := range pool.takeCachedCatalogs() {
+		client.setModelCatalog(accountID, catalog)
 	}
 	return &PooledService{pool: pool, client: client}, nil
 }
@@ -156,7 +168,7 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	}
 	headers := rpc.Header.Clone()
 	headers.Set("Authorization", authorization)
-	if lease.CoolingDown(selection.ModelID) {
+	if lease.CoolingDown(selectionAccessScope(selection)) {
 		return nil, ErrAccountCoolingDown
 	}
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
@@ -166,15 +178,35 @@ func (t *WorkerProtectedTransport) doBrowserPrepared(
 	if err != nil {
 		return nil, err
 	}
-	browserState, err = worker.BrowserStorageState(ctx)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("导出浏览器 Cookie: %w", err), response.Body.Close())
-	}
-	if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
-		return nil, errors.Join(fmt.Errorf("保存浏览器 Cookie: %w", err), response.Body.Close())
-	}
+	saving := &cookieSavingBody{ReadCloser: response.Body, done: make(chan struct{})}
+	go func() {
+		defer close(saving.done)
+		browserState, err := worker.BrowserStorageState(ctx)
+		if err != nil {
+			saving.err = fmt.Errorf("导出浏览器 Cookie: %w", err)
+			return
+		}
+		if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
+			saving.err = fmt.Errorf("保存浏览器 Cookie: %w", err)
+		}
+	}()
+	response.Body = saving
 	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil
+}
+
+// cookieSavingBody 是在后台写回响应 Cookie 的上游正文，关闭时等待写回完成并返回其错误
+type cookieSavingBody struct {
+	io.ReadCloser
+	done chan struct{}
+	err  error
+}
+
+// Close 关闭上游正文并返回 Cookie 写回的结果
+func (body *cookieSavingBody) Close() error {
+	closeErr := body.ReadCloser.Close()
+	<-body.done
+	return errors.Join(closeErr, body.err)
 }
 
 func (t *WorkerProtectedTransport) prepareProtectedRequest(
@@ -324,10 +356,10 @@ func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 	return models, nil
 }
 
-// RefreshAccountModels 刷新指定账户的权益与模型目录
+// RefreshAccountModels 占用指定账户的一个普通槽位刷新其权益与模型目录，不受账户启用、调度状态与冷却限制
 func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID string) ([]Model, error) {
 	accountID = strings.TrimSpace(accountID)
-	lease, err := s.pool.AcquireAccount(ctx, accountID)
+	lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: accountID, anyState: true})
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +385,7 @@ type AccountRefresh struct {
 	Skipped        bool
 }
 
-// RefreshAccountState 读取账户权益与模型目录，登录失效时标记账户需要登录；wait 为 true 时等待独占租约，任何状态的账户都会刷新，否则只用就绪账户的空闲槽位，没有时跳过
+// RefreshAccountState 读取账户权益与模型目录，登录失效时标记账户需要登录；wait 为 true 时等待独占租约，否则只用就绪账户的空闲槽位
 func (s *PooledService) RefreshAccountState(ctx context.Context, accountID string, wait bool) (AccountRefresh, error) {
 	accountID = strings.TrimSpace(accountID)
 	var lease *AccountLease
@@ -495,6 +527,9 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 	if DefinitiveAuthenticationFailure(err) {
 		return lease.MarkAuthenticationRequired(err.Error())
 	}
+	if errors.Is(err, ErrAccountCoolingDown) {
+		return nil
+	}
 	now := time.Now()
 	cooldown, ok := QuotaCooldownForError(err, now)
 	if !ok {
@@ -511,15 +546,22 @@ func (s *PooledService) markRetryableFailure(lease *AccountLease, modelAccessSco
 
 func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease) ([]Model, error) {
 	account := lease.Account()
-	if err := s.client.EnsureTermsAccepted(ContextWithAccountLease(ctx, lease), account.ID); err != nil {
+	leaseCtx := ContextWithAccountLease(ctx, lease)
+	if err := s.client.EnsureTermsAccepted(leaseCtx, account.ID); err != nil {
 		return nil, s.catalogFailure(lease, err)
 	}
-	tier, err := s.client.BenefitTierForAccount(ContextWithAccountLease(ctx, lease), account.ID)
-	if err != nil {
-		return nil, s.catalogFailure(lease, err)
+	buildEnabled := s.pool.BuildEnabled()
+	var tier BenefitTier
+	var models, buildModels []Model
+	var tierErr, modelsErr, buildErr error
+	var reads sync.WaitGroup
+	reads.Go(func() { tier, tierErr = s.client.BenefitTierForAccount(leaseCtx, account.ID) })
+	reads.Go(func() { models, modelsErr = s.client.ModelsForAccount(leaseCtx, account.ID) })
+	if buildEnabled {
+		reads.Go(func() { buildModels, buildErr = s.client.BuildModelsForAccount(leaseCtx, account.ID) })
 	}
-	models, err := s.client.ModelsForAccount(ContextWithAccountLease(ctx, lease), account.ID)
-	if err != nil {
+	reads.Wait()
+	if err := cmp.Or(tierErr, modelsErr); err != nil {
 		return nil, s.catalogFailure(lease, err)
 	}
 	if err := errors.Join(
@@ -533,14 +575,16 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease)
 	if err := s.pool.SetCatalog(account.ID, tier, models); err != nil {
 		return nil, err
 	}
-	if s.pool.BuildEnabled() {
-		buildModels, err := s.client.BuildModelsForAccount(ContextWithAccountLease(ctx, lease), account.ID)
-		if err != nil {
-			return models, fmt.Errorf("读取 Build 模型目录: %w", err)
-		}
+	if buildEnabled && buildErr == nil {
 		if err := s.pool.SetBuildCatalog(account.ID, buildModels); err != nil {
 			return models, err
 		}
+	}
+	if err := s.pool.SaveCatalogCache(account.ID, s.client.modelCatalogSource(account.ID)); err != nil {
+		slog.Warn("账户模型目录缓存保存失败", "account", account.ID, "error", err)
+	}
+	if buildEnabled && buildErr != nil {
+		return models, fmt.Errorf("读取 Build 模型目录: %w", buildErr)
 	}
 	return models, nil
 }
@@ -569,6 +613,9 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	}
 	modelAccessScope := ModelAccessKey("count-tokens", modelID)
 	selection := AccountSelection{ModelID: modelID, ModelAccessScope: modelAccessScope, Method: "countTokens"}
+	if mixedMediaResolution(request.MediaResolution, request.Contents) {
+		selection.Channel = ChannelBuild
+	}
 	var count TokenCount
 	var requestErr error
 	for attempt := 0; attempt < accountAttemptLimit(s.pool, false); attempt++ {
@@ -652,7 +699,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		AccountID:  strings.TrimSpace(request.AccountID),
 		ResourceID: resourceID,
 	}
-	if RequestNeedsBuildSchema(request) || request.Unary && s.BuildNativeNonstream {
+	if RequestNeedsBuild(request) || request.Unary && s.BuildNativeNonstream {
 		selection.PreferredChannel = ChannelBuild
 	}
 	pinned := selection.AccountID != "" || selection.ResourceID != ""
@@ -720,6 +767,9 @@ func accountAttemptLimit(pool *AccountPool, pinned bool) int {
 func retryableAccountError(err error) bool {
 	if driveAuthorizationMissing(err) {
 		return false
+	}
+	if errors.Is(err, ErrAccountCoolingDown) {
+		return true
 	}
 	var rpcError *RPCError
 	if !errors.As(err, &rpcError) {
@@ -812,7 +862,7 @@ func mergeModels(base []Model, additions []Model) []Model {
 			merged[model.ID] = model
 			continue
 		}
-		current.Methods = unionStrings(current.Methods, model.Methods)
+		current.Methods = unionOrdered(current.Methods, model.Methods)
 		if current.Name == "" {
 			current.Name = model.Name
 		}
@@ -846,13 +896,13 @@ func mergeModels(base []Model, additions []Model) []Model {
 	result := make([]Model, 0, len(merged))
 	for _, id := range upstreamModelOrder(base, additions) {
 		model := merged[id]
-		model.Methods = unionStrings(nil, model.Methods)
+		model.Methods = unionOrdered(nil, model.Methods)
 		result = append(result, model)
 	}
 	return result
 }
 
-// upstreamModelOrder 按各目录的上游顺序合并模型 ID，只出现在后一个目录的模型排在它在该目录中的前一个模型之后，没有前一个已知模型时排在该目录首个已知模型之前，该目录没有已知模型时排在末尾
+// upstreamModelOrder 按各目录的上游顺序合并模型 ID
 func upstreamModelOrder(lists ...[]Model) []string {
 	var order []string
 	for _, models := range lists {
@@ -896,22 +946,6 @@ func unionOrdered(left []string, right []string) []string {
 			result = append(result, value)
 		}
 	}
-	return result
-}
-
-func unionStrings(left []string, right []string) []string {
-	values := make(map[string]struct{}, len(left)+len(right))
-	for _, value := range left {
-		values[value] = struct{}{}
-	}
-	for _, value := range right {
-		values[value] = struct{}{}
-	}
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Strings(result)
 	return result
 }
 

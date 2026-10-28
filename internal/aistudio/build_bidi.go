@@ -88,7 +88,7 @@ func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
 		if request.GoogleSearch {
 			tools.Google = []string{"google_search"}
 		}
-		wire, _, err := encodeBuildTools(tools)
+		wire, err := encodeBuildTools(tools)
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 		}
@@ -323,17 +323,17 @@ func parseBuildLiveServerMessage(raw []byte) ([]BidiEvent, error) {
 			for _, part := range content.ModelTurn.Parts {
 				switch {
 				case part.Text != nil && part.Thought:
-					encoded, _ := json.Marshal(Event{Kind: EventReasoning, Text: *part.Text})
+					encoded, _ := json.Marshal(Event{Kind: EventReasoning, Text: *part.Text, Thought: true})
 					events = append(events, BidiEvent{Kind: BidiEventProvider, Raw: encoded})
 				case part.Text != nil:
 					events = append(events, BidiEvent{Kind: BidiEventText, Text: *part.Text})
 				case part.InlineData != nil:
-					events = append(events, BidiEvent{Kind: BidiEventMedia, Media: &Media{MIME: part.InlineData.MIMEType, Data: part.InlineData.Data}})
+					events = append(events, BidiEvent{Kind: BidiEventMedia, Media: &Blob{MIME: part.InlineData.MIMEType, Data: part.InlineData.Data}})
 				}
 			}
 		}
 		for _, chunk := range content.AudioChunks {
-			events = append(events, BidiEvent{Kind: BidiEventMedia, Media: &Media{MIME: chunk.MIMEType, Data: chunk.Data}})
+			events = append(events, BidiEvent{Kind: BidiEventMedia, Media: &Blob{MIME: chunk.MIMEType, Data: chunk.Data}})
 		}
 		if content.InputTranscription != nil {
 			events = append(events, BidiEvent{Kind: BidiEventInputTranscription, Text: content.InputTranscription.Text, Transcription: content.InputTranscription})

@@ -1,3 +1,4 @@
+import { jsonBody } from '@/api'
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
 import { Capability, hasCode, toolCodes, type Tool } from './catalog'
@@ -42,9 +43,10 @@ export function requestContents(turns: readonly Turn[]): GenerateRequest['conten
     .filter((turn) => turn.parts.length > 0)
 }
 
-// apiPart 返回去掉试用页显示字段的片段
-export function apiPart({ fileName: _fileName, tokenCount: _tokenCount, ...part }: Part): Part {
-  return part
+// apiPart 返回去掉试用页显示字段的片段，内联附件的文件名写为 inlineData.displayName
+export function apiPart({ fileName, tokenCount: _tokenCount, ...part }: Part): Part {
+  if (fileName === undefined || part.inlineData === undefined) return part
+  return { ...part, inlineData: { ...part.inlineData, displayName: fileName } }
 }
 
 // buildRequest 按模型能力把运行设置写为 Gemini API 请求，模型不支持的设置不发送
@@ -156,6 +158,12 @@ export class StreamError extends Error {
   }
 }
 
+// failureText 返回请求失败的说明：未能连接服务时为 unreachable，其余为 failed，其中的 {detail} 换成错误原文
+export function failureText(error: unknown, unreachable: string, failed = '{detail}'): string {
+  const detail = error instanceof Error ? error.message : String(error)
+  return (error instanceof TypeError ? unreachable : failed).replace('{detail}', detail)
+}
+
 // apiKey 返回 Playground 请求使用的本服务 API key
 export function apiKey(): string {
   return (useConsole().config.value?.proxy_api_key ?? '').split(',')[0]?.trim() ?? ''
@@ -260,7 +268,7 @@ export async function countTokens(
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({
+    body: jsonBody({
       generateContentRequest: { model: `models/${modelID}`, ...request },
     }),
   })

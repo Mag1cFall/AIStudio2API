@@ -246,7 +246,7 @@ func (p *ProxyPool) otherAvailableLocked(target *proxyEntry) bool {
 	return false
 }
 
-// Probe 用 check 逐个检测代理：失败的代理标为不可用，恢复的代理重新参与分配，绑定在不可用代理上的账户改绑到可用代理，返回绑定变化的账户
+// Probe 用 check 逐个检测代理，失败的代理标为不可用，恢复的代理重新参与分配，返回绑定变化的账户
 func (p *ProxyPool) Probe(ctx context.Context, check func(context.Context, string) error) ([]string, error) {
 	if p == nil {
 		return nil, nil

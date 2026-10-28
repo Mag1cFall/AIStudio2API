@@ -31,11 +31,32 @@ type protectedMessage struct {
 	Error   string      `json:"error"`
 }
 
+// FollowUp 是受保护请求发出 Delay 后以相同请求头发出的伴随请求，响应被丢弃
+type FollowUp struct {
+	URL   string
+	Body  []byte
+	Delay time.Duration
+}
+
+// followUpKey 是上下文中伴随请求的键
+type followUpKey struct{}
+
+// WithFollowUp 返回携带伴随请求的上下文，SendProtected 发出受保护请求时同时安排它
+func WithFollowUp(ctx context.Context, followUp FollowUp) context.Context {
+	return context.WithValue(ctx, followUpKey{}, followUp)
+}
+
+// FollowUpFrom 返回上下文中的伴随请求
+func FollowUpFrom(ctx context.Context) (FollowUp, bool) {
+	followUp, ok := ctx.Value(followUpKey{}).(FollowUp)
+	return followUp, ok
+}
+
 // protectedGrantBatch 是 Go 端每消费多少个正文块向页面授予一次额度，页面的初始额度为它的两倍
 const protectedGrantBatch = 4
 
-// protectedSend 是页面内以官网页面同样的 XMLHttpRequest 发起受保护请求并经通道依次发出响应头、正文块与结束标记的函数声明，参数依次为 Worker 页面对象、请求 ID、URL、请求头 JSON、正文与通道；响应文本按 65536 个 UTF-16 码元分块、以 UTF-8 发出，每块消耗一份 Go 端授予的额度
-const protectedSend = `(page, id, url, headers, body, emit) => {
+// protectedSend 是页面内以 XMLHttpRequest 发起受保护请求并经通道依次发出响应头、正文块与结束标记的函数声明，参数依次为 Worker 页面对象、请求 ID、URL、请求头 JSON、正文、伴随请求 JSON 与通道
+const protectedSend = `(page, id, url, headers, body, follow, emit) => {
   const xhr = new XMLHttpRequest();
   const request = {xhr, credit: 8, resume: null};
   (page.requests ||= new Map()).set(id, request);
@@ -63,6 +84,16 @@ const protectedSend = `(page, id, url, headers, body, emit) => {
     request.resume?.();
   };
   xhr.send(body);
+  if (follow) {
+    const next = JSON.parse(follow);
+    setTimeout(() => {
+      const companion = new XMLHttpRequest();
+      companion.open("POST", next.url);
+      companion.withCredentials = true;
+      for (const [name, value] of JSON.parse(headers)) companion.setRequestHeader(name, value);
+      companion.send(next.body);
+    }, next.delay);
+  }
   (async () => {
     try {
       while (xhr.readyState < 2 && !failure) await next();
@@ -136,13 +167,21 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	if err != nil {
 		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
 	}
+	follow := ""
+	if followUp, ok := FollowUpFrom(ctx); ok {
+		encoded, err := json.Marshal(map[string]any{"url": followUp.URL, "body": string(followUp.Body), "delay": followUp.Delay.Milliseconds()})
+		if err != nil {
+			return nil, fmt.Errorf("编码伴随请求: %w", err)
+		}
+		follow = string(encoded)
+	}
 	requestID := rand.Text()
 	channel, err := client.openChannel(requestID)
 	if err != nil {
 		return nil, fmt.Errorf("浏览器发送受保护请求: %w", err)
 	}
 	startCtx, cancelStart := context.WithTimeout(ctx, 5*time.Second)
-	_, err = client.callFunction(startCtx, contextID, protectedSend, page, requestID, rawURL, string(encodedHeaders), string(body), bidiChannelArgument(requestID))
+	_, err = client.callFunction(startCtx, contextID, protectedSend, page, requestID, rawURL, string(encodedHeaders), string(body), follow, bidiChannelArgument(requestID))
 	cancelStart()
 	if err != nil {
 		return nil, worker.abandonProtectedRequest(ctx, requestID, fmt.Errorf("浏览器发送受保护请求: %w", err))
@@ -204,7 +243,7 @@ func browserRequestHeaders(headers http.Header) [][2]string {
 	return result
 }
 
-// StorageCookies 导出当前固定指纹浏览器 Cookie，供账户状态签名和持久化
+// StorageCookies 导出当前固定指纹浏览器 Cookie
 func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 	worker.mu.Lock()
 	if worker.closed {

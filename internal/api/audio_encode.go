@@ -53,7 +53,7 @@ var aacSampleRates = []int{44100, 48000}
 var opusSampleRates = []int{8000, 12000, 16000, 24000, 48000}
 
 // mediaPCM 解析上游 audio/l16、PCM16 WAV 或解码 MP3 音频
-func mediaPCM(media aistudio.Media) (audioPCM, error) {
+func mediaPCM(media aistudio.Blob) (audioPCM, error) {
 	baseType, parameters, err := mime.ParseMediaType(media.MIME)
 	if err != nil {
 		return audioPCM{}, fmt.Errorf("AI Studio returned invalid audio MIME %q", media.MIME)

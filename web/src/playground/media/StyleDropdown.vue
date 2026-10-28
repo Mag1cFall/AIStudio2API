@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import type { StylePreset } from './speech'
@@ -9,6 +9,12 @@ const props = defineProps<{ styles: StylePreset[]; custom: boolean }>()
 const style = defineModel<string>({ required: true })
 const { t } = useI18n()
 const open = ref(false)
+// chip 与官网一致：风格是预设时显示预设名称，否则显示风格原文
+const chip = computed(() => {
+  const current = style.value.trim()
+  const preset = props.styles.find((item) => item.value.toLowerCase() === current.toLowerCase())
+  return preset ? t(preset.label) : current || t('pg.style')
+})
 // draft 是自定义风格输入框的内容，打开菜单时预设风格不填入输入框
 const draft = ref('')
 
@@ -44,9 +50,9 @@ function onDraft(event: Event): void {
           class="ms-button-filter-chip attribute-chip"
           :class="{ 'has-style': style.trim() !== '' }"
           :aria-label="t('pg.style')"
-          :title="style.trim() || t('pg.style')"
+          :title="chip"
         >
-          <span class="chip-label">{{ style.trim() || t('pg.style') }}</span>
+          <span class="chip-label">{{ chip }}</span>
           <UiIcon name="arrowDropDown" :size="18" class="dropdown-icon" />
         </button>
       </PopoverTrigger>
@@ -71,7 +77,7 @@ function onDraft(event: Event): void {
           </div>
           <button
             v-for="preset in styles"
-            :key="preset.label"
+            :key="preset.value"
             type="button"
             role="menuitem"
             class="ms-menu-item attribute-menu-item"
@@ -79,8 +85,10 @@ function onDraft(event: Event): void {
             @click="choose(preset)"
           >
             <span class="preset-option">
-              <span class="preset-label">{{ preset.label }}</span>
-              <span class="preset-description">{{ preset.value }}</span>
+              <span class="preset-label">{{ t(preset.label) }}</span>
+              <span class="preset-description">{{
+                preset.description && t(preset.description)
+              }}</span>
             </span>
           </button>
         </PopoverContent>

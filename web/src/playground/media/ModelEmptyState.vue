@@ -68,7 +68,6 @@ const { t } = useI18n()
           class="tile"
           :style="{ '--i': index }"
         >
-          <span class="tile__halo" aria-hidden="true"></span>
           <button
             type="button"
             class="tile__frame"
@@ -76,24 +75,29 @@ const { t } = useI18n()
             @mouseenter="($event.currentTarget as HTMLElement).querySelector('video')?.play()"
             @mouseleave="($event.currentTarget as HTMLElement).querySelector('video')?.pause()"
           >
-            <img :src="item.preview" alt="" />
-            <video
-              v-if="item.video"
-              class="tile__video"
-              :src="item.video"
-              muted
-              loop
-              playsinline
-              preload="none"
-            ></video>
-            <span v-if="item.art" class="tile__art-title">{{ item.art }}</span>
-            <span
-              v-if="item.detection"
-              class="detection"
-              :style="item.detection.inset ? { inset: item.detection.inset } : undefined"
-              aria-hidden="true"
-            >
-              <b>{{ item.detection.label }}</b>
+            <span class="tile__media">
+              <span class="tile__halo" aria-hidden="true"></span>
+              <span class="tile__window">
+                <img :src="item.preview" alt="" />
+                <video
+                  v-if="item.video"
+                  class="tile__video"
+                  :src="item.video"
+                  muted
+                  loop
+                  playsinline
+                  preload="none"
+                ></video>
+                <span v-if="item.art" class="tile__art-title">{{ item.art }}</span>
+                <span
+                  v-if="item.detection"
+                  class="detection"
+                  :style="item.detection.inset ? { inset: item.detection.inset } : undefined"
+                  aria-hidden="true"
+                >
+                  <b>{{ item.detection.label }}</b>
+                </span>
+              </span>
             </span>
             <span class="tile__label">
               <svg v-if="item.video" viewBox="0 0 16 16" aria-hidden="true">
@@ -367,16 +371,12 @@ const { t } = useI18n()
 .tile__frame {
   position: relative;
   display: block;
-  isolation: isolate;
   width: 100%;
   height: 100%;
   padding: 0;
-  overflow: hidden;
   border: 0;
   border-radius: 16px;
-  aspect-ratio: 3 / 2;
-  background: var(--fill);
-  box-shadow: 0 0 0 1px var(--line);
+  background: none;
   text-align: left;
   transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -385,7 +385,24 @@ const { t } = useI18n()
   transform: translateY(-2px);
 }
 
-.tile__frame img,
+.tile__media {
+  position: relative;
+  display: block;
+  height: 100%;
+  aspect-ratio: 3 / 2;
+}
+
+.tile__window {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--fill);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.tile__window img,
 .tile__video {
   position: absolute;
   inset: 0;
@@ -432,7 +449,7 @@ const { t } = useI18n()
   grid-column: 1 / -1;
 }
 
-.empty-state[data-kind='chat'] .tile:first-child .tile__frame {
+.empty-state[data-kind='chat'] .tile:first-child .tile__media {
   aspect-ratio: 16 / 9;
 }
 
@@ -448,15 +465,15 @@ const { t } = useI18n()
   grid-row: 1 / -1;
 }
 
-.empty-state[data-kind='images'] .tile:first-child .tile__frame {
+.empty-state[data-kind='images'] .tile:first-child .tile__media {
   aspect-ratio: 3 / 4;
 }
 
-.empty-state[data-kind='images'] .tile:not(:first-child) .tile__frame {
+.empty-state[data-kind='images'] .tile:not(:first-child) .tile__media {
   aspect-ratio: auto;
 }
 
-.empty-state[data-kind='live'] .tile__frame {
+.empty-state[data-kind='live'] .tile__media {
   aspect-ratio: 16 / 11;
 }
 
@@ -464,7 +481,7 @@ const { t } = useI18n()
   object-position: center 47%;
 }
 
-.empty-state[data-kind='robotics'] .tile__frame {
+.empty-state[data-kind='robotics'] .tile__media {
   aspect-ratio: 1280 / 875;
 }
 
@@ -543,7 +560,7 @@ const { t } = useI18n()
   }
 }
 
-.empty-state[data-kind='music'] .tile__frame {
+.empty-state[data-kind='music'] .tile__media {
   aspect-ratio: 1;
 }
 
@@ -564,11 +581,52 @@ const { t } = useI18n()
   .empty-state {
     grid-template-columns: minmax(0, 1fr);
     gap: 28px;
-    padding: 32px 40px;
+    padding: 32px 0;
   }
 
   .empty-state h3 {
     font-size: 24px;
+  }
+
+  .empty-state__examples {
+    row-gap: 16px;
+  }
+
+  .empty-state__examples[data-count='3'] .tile:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .empty-state[data-kind='images'] .empty-state__examples {
+    grid-template-rows: none;
+  }
+
+  .empty-state[data-kind='images'] .tile:first-child {
+    grid-row: auto;
+  }
+
+  .empty-state[data-kind='images'] .tile:first-child .tile__media {
+    aspect-ratio: 4 / 3;
+  }
+
+  .empty-state[data-kind='images'] .tile:not(:first-child) .tile__media {
+    aspect-ratio: 3 / 2;
+  }
+
+  .tile__media {
+    height: auto;
+  }
+
+  .tile__label {
+    position: static;
+    max-width: none;
+    margin-top: 8px;
+    padding: 0 2px;
+    border-radius: 0;
+    backdrop-filter: none;
+    background: none;
+    color: var(--ink);
+    font-size: 13px;
+    line-height: 18px;
   }
 }
 

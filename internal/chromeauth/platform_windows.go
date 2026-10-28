@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func defaultChromeRoot() (string, error) {
@@ -134,7 +134,7 @@ func copyFile(src string, dst string) error {
 	return err
 }
 
-// openWebData 把 Profile 的 Web Data 与其 WAL 日志复制到临时目录后只读打开，绕过运行中 Chrome 的排他锁并包含尚未检查点的写入
+// openWebData 把 Profile 的 Web Data 与其 WAL 日志复制到临时目录后只读打开
 func openWebData(chromeRoot string, profile string) (database *sql.DB, closeDatabase func(), err error) {
 	tempDir, err := os.MkdirTemp("", "aistudio2api-webdata-*")
 	if err != nil {
@@ -154,7 +154,7 @@ func openWebData(chromeRoot string, profile string) (database *sql.DB, closeData
 		return nil, nil, fmt.Errorf("复制 %s Web Data-wal: %w", profile, err)
 	}
 	uri := url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(copyPath), RawQuery: "mode=ro"}
-	if database, err = sql.Open("sqlite", uri.String()); err != nil {
+	if database, err = sql.Open("sqlite3", uri.String()); err != nil {
 		return nil, nil, fmt.Errorf("打开 %s Web Data: %w", profile, err)
 	}
 	database.SetMaxOpenConns(1)

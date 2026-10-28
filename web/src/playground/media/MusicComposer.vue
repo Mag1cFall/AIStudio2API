@@ -11,11 +11,28 @@ import { ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
-import { clock, maxSections, seconds, sectionTypes, useMusic, type SectionType } from './music'
+import {
+  clock,
+  maxSections,
+  seconds,
+  sectionLabels,
+  sectionTypes,
+  useMusic,
+  type SectionType,
+} from './music'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const music = useMusic()
 const { state } = music
+
+// placeholder 返回段落描述的占位文字，英文界面与官网一致写小写的类型名
+function placeholder(type: SectionType): string {
+  const name = t(sectionLabels[type])
+  return t('pg.sectionPlaceholder').replace(
+    '{type}',
+    locale.value === 'en' ? name.toLowerCase() : name,
+  )
+}
 // dragging 是正在拖动的段落序号
 const dragging = ref(-1)
 const over = ref(-1)
@@ -88,7 +105,7 @@ function drop(index: number): void {
               class="ms-menu-item"
               @select="music.addSection(type)"
             >
-              {{ type }}
+              {{ t(sectionLabels[type]) }}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenuPortal>
@@ -104,7 +121,7 @@ function drop(index: number): void {
           @click="music.addSection(type)"
         >
           <UiIcon name="add" :size="18" />
-          {{ type }}
+          {{ t(sectionLabels[type]) }}
         </button>
       </div>
     </div>
@@ -137,7 +154,7 @@ function drop(index: number): void {
               <DropdownMenuRoot :modal="false">
                 <DropdownMenuTrigger as-child>
                   <button type="button" ms-button class="ms-button-filter-chip type-selector-field">
-                    {{ section.type }}
+                    {{ t(sectionLabels[section.type]) }}
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuPortal>
@@ -148,7 +165,7 @@ function drop(index: number): void {
                       class="ms-menu-item"
                       @select="setType(index, type)"
                     >
-                      {{ type }}
+                      {{ t(sectionLabels[type]) }}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenuPortal>
@@ -204,7 +221,7 @@ function drop(index: number): void {
           <textarea
             class="block-description"
             :value="section.description"
-            :placeholder="t('pg.sectionPlaceholder').replace('{type}', section.type.toLowerCase())"
+            :placeholder="placeholder(section.type)"
             :aria-label="t('pg.sectionDescription')"
             @input="setDescription(index, $event)"
           ></textarea>

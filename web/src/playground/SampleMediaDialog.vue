@@ -79,7 +79,7 @@ function add(): void {
         type="button"
         ms-button
         class="ms-button-primary"
-        aria-label="add to prompt"
+        :aria-label="t('pg.addToPrompt')"
         :aria-disabled="selected === undefined"
         @click="add"
       >

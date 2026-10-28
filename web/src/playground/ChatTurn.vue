@@ -33,7 +33,7 @@ const props = defineProps<{
   showLabel: boolean
   responses?: Part[] | undefined
 }>()
-const { t, locale } = useI18n()
+const { t, locale, logText, errorText } = useI18n()
 const router = useRouter()
 const { showNotice } = useConsole()
 const playground = usePlayground()
@@ -252,8 +252,12 @@ async function copyMarkdown(): Promise<void> {
 
 // branch 从这一轮创建分支并打开
 async function branch(): Promise<void> {
-  const id = await playground.branch(props.index)
-  void router.push(`/prompts/${id}`)
+  try {
+    const id = await playground.branch(props.index)
+    void router.push(`/prompts/${id}`)
+  } catch (error) {
+    showNotice(errorText(error), 'error')
+  }
 }
 
 let intersection: IntersectionObserver | undefined
@@ -321,7 +325,11 @@ onUnmounted(() => {
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
                 <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
-                  <DropdownMenuItem class="ms-menu-item" @select="playground.deleteTurn(index)">
+                  <DropdownMenuItem
+                    class="ms-menu-item"
+                    :disabled="session.running"
+                    @select="playground.deleteTurn(index)"
+                  >
                     <UiIcon name="delete" :size="18" />
                     <span class="ms-menu-item-text">{{ t('common.delete') }}</span>
                   </DropdownMenuItem>
@@ -589,7 +597,7 @@ onUnmounted(() => {
           </div>
           <div v-if="turn.error !== undefined" class="model-error">
             <UiIcon name="error" :size="20" />
-            <span>{{ turn.error }}</span>
+            <span>{{ logText(turn.error) }}</span>
           </div>
           <div
             v-if="
