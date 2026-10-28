@@ -536,25 +536,19 @@ func openAIContentPart(raw json.RawMessage) (aistudio.Part, error) {
 		return aistudio.Part{Text: block.Text}, nil
 	case "refusal":
 		return aistudio.Part{Text: block.Refusal}, nil
-	case "image_url", "input_image":
-		if !rawJSONConfigured(block.ImageURL) && block.FileID != "" {
+	case "image_url", "input_image", "video_url", "input_video":
+		rawURL := block.ImageURL
+		if block.Type == "video_url" || block.Type == "input_video" {
+			rawURL = block.VideoURL
+		}
+		if !rawJSONConfigured(rawURL) && block.FileID != "" {
 			return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID}}, nil
 		}
-		url, err := imageURLString(block.ImageURL)
+		url, err := imageURLString(rawURL)
 		if err != nil {
 			return aistudio.Part{}, err
 		}
 		return fileOrInlinePart(url, "")
-	case "video_url", "input_video":
-		url, err := imageURLString(block.VideoURL)
-		if err != nil {
-			return aistudio.Part{}, err
-		}
-		media, ok := aistudio.ExternalMediaForURL(url)
-		if !ok {
-			return aistudio.Part{}, fmt.Errorf("video_url must contain a YouTube video URL")
-		}
-		return aistudio.Part{ExternalMedia: media}, nil
 	case "file", "input_file":
 		if block.File != nil {
 			block.FileID, block.Filename, block.FileData = block.File.FileID, block.File.Filename, block.File.FileData

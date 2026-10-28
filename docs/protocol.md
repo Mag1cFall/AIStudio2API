@@ -1619,12 +1619,12 @@ message 字段为 `role`、`content`、可选 `name`、`tool_call_id`、`tool_ca
 | --- | --- |
 | `text`、`input_text`、`output_text` | `text` |
 | `image_url`、`input_image` | `image_url` string 或 `{"url":"..."}`；也可只给 `file_id` |
-| `video_url`、`input_video` | `video_url` string 或 `{"url":"..."}` |
+| `video_url`、`input_video` | `video_url` string 或 `{"url":"..."}`；也可只给 `file_id` |
 | `input_file`、`file` | `file_id`，或 `filename` + `file_data`；Chat `file` 的字段位于嵌套 `file` 对象 |
 | `input_audio` | `input_audio.data`、`input_audio.format` |
 | `refusal` | `refusal`，作为所在消息的文本 |
 
-OpenAI `image_url` / `input_image` 值为 data URL 时形成 inline data，值为 YouTube URL 时形成 external media，Gemini Files API 文件 URI 保持文件引用，其他 http(s) URL 由服务端下载后作为内联媒体发送，其他非 data 字符串按已上传 file ID 解析。data URL 接受 Base64 与百分号编码数据，省略 MIME 时按内容判断类型，MIME 参数不发送。同一请求内相同 URL 只下载一次；下载随请求取消，大小上限与内联媒体相同（512 MiB），MIME 取响应 `Content-Type`，缺失、无法解析或为 octet-stream 时按内容判断；URL 主机或任一重定向目标解析到本机、私网、链路本地、组播或未指定地址时不连接，按下载失败处理；下载失败返回 400，错误信息包含 URL 与原因。`video_url` / `input_video` 只接受 YouTube URL。`file_data` 接受 data URL 或 Base64 文件内容，没有声明 MIME 时按 `/v1/files` 的规则依次按文件内容与 `filename` 扩展名判断。
+OpenAI `image_url` / `input_image` 与 `video_url` / `input_video` 值为 data URL 时形成 inline data，值为 YouTube URL 时形成 external media，Gemini Files API 文件 URI 保持文件引用，其他 http(s) URL 由服务端下载后作为内联媒体发送，其他非 data 字符串按已上传 file ID 解析。data URL 接受 Base64 与百分号编码数据，省略 MIME 时按内容判断类型，MIME 参数不发送。同一请求内相同 URL 只下载一次；下载随请求取消，大小上限与内联媒体相同（512 MiB），MIME 取响应 `Content-Type`，缺失、无法解析或为 octet-stream 时按内容判断；URL 主机或任一重定向目标解析到本机、私网、链路本地、组播或未指定地址时不连接，按下载失败处理；下载失败返回 400，错误信息包含 URL 与原因。`file_data` 接受 data URL 或 Base64 文件内容，没有声明 MIME 时按 `/v1/files` 的规则依次按文件内容与 `filename` 扩展名判断。
 
 function tool 使用 `{"type":"function","function":{"name","description","parameters","strict"}}`。`strict:true` 启用参数契约校验。Google tool type 为 `web_search`、`web_search_preview`、`image_search`、`url_context`、`code_interpreter`、`google_maps`。custom tool `{"type":"custom","custom":{name,description,format}}` 声明为只有字符串参数 `input` 的函数，grammar 格式的语法与定义写入函数描述；调用以 `{"type":"custom","custom":{name,input}}` 返回，历史中的 custom 调用以 `{"input":<INPUT>}` 发送。历史函数调用的 `arguments` 不是 JSON object 时以 `{"_raw":"<原文>"}` 发送。
 
@@ -1710,7 +1710,7 @@ input item 字段为 `type`、`id`、`role`、`content`、`call_id`、`name`、`
 | `input_image` | `image_url` string 或 `{url}`；也可只给 `file_id` |
 | `input_file` | `file_id`、`file_url`，或 `filename` + `file_data` |
 | `input_audio` | `input_audio:{data,format}` |
-| `input_video` | `video_url` string 或 `{url}` |
+| `input_video` | `video_url` string 或 `{url}`；也可只给 `file_id` |
 | `refusal` | `refusal`，作为所在消息的文本 |
 
 Responses 的图片、视频与文件 Part 复用上述 data URL、file ID 与 YouTube 规则。
