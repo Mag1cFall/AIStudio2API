@@ -85,6 +85,7 @@ export const messages = {
   'accounts.browserLogin': '浏览器登录',
   'accounts.importChrome': '从 Chrome 导入',
   'accounts.chromeTitle': '选择 Chrome 账户',
+  'accounts.cookieAccounts': 'Cookie 中的账户',
   'accounts.chromeEmpty': '没有可导入的 Chrome 账户',
   'accounts.importSelected': '导入所选账户',
   'accounts.cookies': 'Cookie',

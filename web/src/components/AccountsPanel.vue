@@ -299,16 +299,19 @@ function resetCookieDiscovery(): void {
   selectedCookieUsers.value = []
 }
 
+// importableCookieUsers 是 Cookie 中尚未导入的会话序号
+const importableCookieUsers = computed(() =>
+  cookieCandidates.value.filter((item) => !item.imported).map((item) => item.auth_user),
+)
+
 const allCookieCandidatesSelected = computed(
   () =>
-    cookieCandidates.value.length > 0 &&
-    selectedCookieUsers.value.length === cookieCandidates.value.length,
+    importableCookieUsers.value.length > 0 &&
+    selectedCookieUsers.value.length === importableCookieUsers.value.length,
 )
 
 function toggleAllCookieCandidates(): void {
-  selectedCookieUsers.value = allCookieCandidatesSelected.value
-    ? []
-    : cookieCandidates.value.map((item) => item.auth_user)
+  selectedCookieUsers.value = allCookieCandidatesSelected.value ? [] : importableCookieUsers.value
 }
 
 // pasteSteps 是粘贴 Cookie 的操作步骤
@@ -371,7 +374,7 @@ async function importBrowserAccounts(): Promise<void> {
     const targets = cookieBrowsers.value.filter((browser) => chosen.has(browserKey(browser)))
     for (const target of targets) {
       await api.importCookieAccount({
-        label: target.email,
+        label: '',
         cookies: '',
         cdp: target.address,
         auth_user: target.auth_user,
@@ -446,7 +449,7 @@ const addMethods: {
   },
 ]
 
-// importCookieAccount 第一步识别 Cookie 中尚未导入的 u/0..u/9 账户供勾选，第二步导入用户勾选的账户
+// importCookieAccount 第一步识别 Cookie 中各会话登录的账户供勾选，第二步按会话序号导入勾选的账户
 async function importCookieAccount(): Promise<void> {
   if (cookieCandidates.value.length === 0) {
     pendingAction.value = 'cookie-discover'
@@ -458,7 +461,7 @@ async function importCookieAccount(): Promise<void> {
         ...accountEnvironment,
       })
       cookieCandidates.value = discovered
-      selectedCookieUsers.value = []
+      selectedCookieUsers.value = importableCookieUsers.value
     } catch (error) {
       actionError(error)
     } finally {
@@ -468,26 +471,30 @@ async function importCookieAccount(): Promise<void> {
   }
   if (selectedCookieUsers.value.length === 0) return
   pendingAction.value = 'cookie-import'
+  let lastAccountID = ''
   try {
     const chosen = new Set(selectedCookieUsers.value)
     const targets = cookieCandidates.value.filter((item) => chosen.has(item.auth_user))
-    let lastEmail = ''
     for (const target of targets) {
       const { account } = await api.importCookieAccount({
-        label: target.email,
+        label: '',
         cookies: cookieText.value,
         cdp: '',
         auth_user: target.auth_user,
         ...accountEnvironment,
       })
-      lastEmail = account.id
+      target.imported = true
+      selectedCookieUsers.value = selectedCookieUsers.value.filter(
+        (user) => user !== target.auth_user,
+      )
+      lastAccountID = account.id
     }
     const count = targets.length
     pendingAction.value = ''
     closeCookieImport()
     emit('refresh')
-    if (count === 1 && lastEmail !== '') {
-      emit('notice', t('accounts.importedAccount').replace('{email}', lastEmail), 'success')
+    if (count === 1 && lastAccountID !== '') {
+      emit('notice', t('accounts.importedAccount').replace('{email}', lastAccountID), 'success')
     } else {
       emit(
         'notice',
@@ -499,6 +506,7 @@ async function importCookieAccount(): Promise<void> {
       )
     }
   } catch (error) {
+    if (lastAccountID !== '') emit('refresh')
     actionError(error)
   } finally {
     pendingAction.value = ''
@@ -1068,7 +1076,7 @@ async function refreshAllAccounts(): Promise<void> {
           </form>
         </div>
 
-       <div v-if="showCookieImport" class="modal-overlay" @click.self="closeCookieImport">
+        <div v-if="showCookieImport" class="modal-overlay" @click.self="closeCookieImport">
           <form
             class="mx-4 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-line bg-panel p-6 shadow-xl"
             @submit.prevent="importCookieAccount"
@@ -1078,9 +1086,7 @@ async function refreshAllAccounts(): Promise<void> {
               <button
                 class="rounded p-1 text-gray-500 hover:bg-line hover:text-white disabled:opacity-50"
                 type="button"
-                :disabled="
-                  pendingAction === 'cookie-import' || pendingAction === 'cookie-discover'
-                "
+                :disabled="pendingAction === 'cookie-import' || pendingAction === 'cookie-discover'"
                 :aria-label="t('common.close')"
                 @click="closeCookieImport"
               >
@@ -1101,6 +1107,7 @@ async function refreshAllAccounts(): Promise<void> {
                   spellcheck="false"
                   autocomplete="off"
                   :placeholder="t('accounts.cookiePlaceholder')"
+                  :readonly="pendingAction !== ''"
                   required
                   @input="resetCookieDiscovery"
                 />
@@ -1109,7 +1116,7 @@ async function refreshAllAccounts(): Promise<void> {
               <div v-if="cookieCandidates.length > 0" class="space-y-2">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-medium text-gray-400">
-                    {{ t('accounts.chromeTitle') }} ({{ cookieCandidates.length }})
+                    {{ t('accounts.cookieAccounts') }} ({{ cookieCandidates.length }})
                   </span>
                   <button
                     class="text-xs text-blue-400 transition hover:text-blue-300"
@@ -1127,13 +1134,17 @@ async function refreshAllAccounts(): Promise<void> {
                   <label
                     v-for="candidate in cookieCandidates"
                     :key="candidate.auth_user"
-                    class="flex cursor-pointer items-center gap-3 rounded border border-line bg-canvas p-3 transition hover:border-gray-600"
+                    class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
+                    :class="
+                      candidate.imported ? 'opacity-60' : 'cursor-pointer hover:border-gray-600'
+                    "
                   >
                     <input
                       v-model="selectedCookieUsers"
                       class="h-4 w-4 shrink-0 accent-blue-600"
                       type="checkbox"
                       :value="candidate.auth_user"
+                      :disabled="candidate.imported"
                     />
                     <span class="min-w-0 flex-1">
                       <strong
@@ -1143,9 +1154,12 @@ async function refreshAllAccounts(): Promise<void> {
                         {{ candidate.email }}
                       </strong>
                       <span class="block truncate font-mono text-xs text-gray-400">
-                        Google session u/{{ candidate.auth_user }}
+                        u/{{ candidate.auth_user }}
                       </span>
                     </span>
+                    <span v-if="candidate.imported" class="shrink-0 text-xs text-gray-400">{{
+                      t('accounts.alreadyImported')
+                    }}</span>
                   </label>
                 </div>
               </div>
@@ -1201,9 +1215,7 @@ async function refreshAllAccounts(): Promise<void> {
               <button
                 class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line disabled:opacity-50"
                 type="button"
-                :disabled="
-                  pendingAction === 'cookie-import' || pendingAction === 'cookie-discover'
-                "
+                :disabled="pendingAction === 'cookie-import' || pendingAction === 'cookie-discover'"
                 @click="closeCookieImport"
               >
                 {{ t('common.cancel') }}
@@ -1220,9 +1232,7 @@ async function refreshAllAccounts(): Promise<void> {
                 "
               >
                 {{
-                  cookieCandidates.length > 0
-                    ? t('accounts.importSelected')
-                    : t('accounts.import')
+                  cookieCandidates.length > 0 ? t('accounts.importSelected') : t('accounts.import')
                 }}
               </button>
             </div>

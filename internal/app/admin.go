@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -245,81 +246,52 @@ func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeIm
 	return profiles, nil
 }
 
-// CookieBrowsers 列出本机开启远程调试的浏览器，读取其 Cookie 并识别其中尚未导入的 AI Studio 会话槽位账户 (u/0, u/1, ...)
+// CookieBrowsers 列出本机开启远程调试的浏览器，读取其 Cookie 并识别其中各会话登录 AI Studio 的账户，每个账户一项
 func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context) ([]api.CookieBrowser, error) {
 	addresses, err := chromeauth.DebugAddresses(ctx)
 	if err != nil {
 		return nil, err
 	}
-	existing := make(map[string]struct{})
-	for _, status := range admin.pool.Status() {
-		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
-	}
-	perAddress := make([][]api.CookieBrowser, len(addresses))
+	existing := admin.accountIDs()
+	browsers := make([][]api.CookieBrowser, len(addresses))
 	var group sync.WaitGroup
 	for index, address := range addresses {
 		group.Go(func() {
-			base := api.CookieBrowser{Address: address}
+			browser := api.CookieBrowser{Address: address}
 			name, err := chromeauth.DebugBrowserName(ctx, address)
 			if err != nil {
-				base.Error = err.Error()
-				perAddress[index] = []api.CookieBrowser{base}
+				browser.Error = err.Error()
+				browsers[index] = []api.CookieBrowser{browser}
 				return
 			}
-			base.Browser = name
-			entries, err := admin.readCookieBrowserAccounts(ctx, base, existing)
-			if err != nil {
-				base.SignedOut = errors.Is(err, chromeauth.ErrSignedOut) || errors.Is(err, aistudio.ErrLoginCookieMissing)
-				if !base.SignedOut {
-					base.Error = err.Error()
-				}
-				perAddress[index] = []api.CookieBrowser{base}
-				return
+			browser.Browser = name
+			accounts, err := admin.readCookieBrowser(ctx, &browser)
+			browser.SignedOut = errors.Is(err, chromeauth.ErrSignedOut) || errors.Is(err, aistudio.ErrLoginCookieMissing)
+			if err != nil && !browser.SignedOut {
+				browser.Error = err.Error()
 			}
-			perAddress[index] = entries
+			browsers[index] = cookieAccountEntries(browser, accounts, existing)
 		})
 	}
 	group.Wait()
-	var browsers []api.CookieBrowser
-	for _, list := range perAddress {
-		browsers = append(browsers, list...)
-	}
-	return browsers, nil
+	return append([]api.CookieBrowser{}, slices.Concat(browsers...)...), nil
 }
 
-// readCookieBrowserAccounts 读取调试浏览器的语言、时区与 Cookie，只列出尚未导入的 u/0..u/9 账户
-func (admin *runtimeAdmin) readCookieBrowserAccounts(
-	ctx context.Context,
-	base api.CookieBrowser,
-	existing map[string]struct{},
-) ([]api.CookieBrowser, error) {
-	source, err := chromeauth.ReadCDPBrowser(ctx, base.Address)
+// readCookieBrowser 读取调试浏览器的语言、时区与 Cookie，返回其中各会话登录 AI Studio 的账户
+func (admin *runtimeAdmin) readCookieBrowser(ctx context.Context, browser *api.CookieBrowser) ([]chromeauth.CookieAccount, error) {
+	source, err := chromeauth.ReadCDPBrowser(ctx, browser.Address)
 	if err != nil {
 		return nil, err
 	}
-	base.Locale, base.Timezone = source.Locale, source.Timezone
+	browser.Locale, browser.Timezone = source.Locale, source.Timezone
 	state, err := aistudio.ParseCookieText(source.Cookies)
 	if err != nil {
 		return nil, err
 	}
-	discovered, err := chromeauth.DiscoverCookieAccounts(ctx, &state, admin.effectiveProxy(""))
-	if err != nil {
-		return nil, err
-	}
-	result := make([]api.CookieBrowser, 0, len(discovered))
-	for _, item := range discovered {
-		if _, exists := existing[item.Email]; exists {
-			continue
-		}
-		entry := base
-		entry.Email = item.Email
-		entry.AuthUser = item.AuthUser
-		result = append(result, entry)
-	}
-	return result, nil
+	return chromeauth.DiscoverCookieAccounts(ctx, &state, admin.effectiveProxy(""))
 }
 
-// DiscoverCookieAccounts 解析粘贴的 Cookie 并返回其中尚未导入的全部 Google 会话槽位账户 (u/0..u/9)
+// DiscoverCookieAccounts 解析粘贴的 Cookie，返回其中各会话登录 AI Studio 的账户
 func (admin *runtimeAdmin) DiscoverCookieAccounts(ctx context.Context, input api.CookieImportInput) ([]api.CookieBrowser, error) {
 	state, err := aistudio.ParseCookieText(input.Cookies)
 	if err != nil {
@@ -328,39 +300,38 @@ func (admin *runtimeAdmin) DiscoverCookieAccounts(ctx context.Context, input api
 	if err := state.Validate(); err != nil {
 		return nil, invalidAccount(err)
 	}
-	discovered, err := chromeauth.DiscoverCookieAccounts(ctx, &state, admin.effectiveProxy(input.Proxy))
+	accounts, err := chromeauth.DiscoverCookieAccounts(ctx, &state, admin.effectiveProxy(input.Proxy))
 	if errors.Is(err, chromeauth.ErrSignedOut) {
 		return nil, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
 	}
 	if err != nil {
 		return nil, invalidAccount(err)
 	}
+	return cookieAccountEntries(api.CookieBrowser{}, accounts, admin.accountIDs()), nil
+}
+
+// cookieAccountEntries 以 template 为模板为每个会话账户生成一项并标记已导入的账户，没有账户时只返回 template
+func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.CookieAccount, existing map[string]struct{}) []api.CookieBrowser {
+	if len(accounts) == 0 {
+		return []api.CookieBrowser{template}
+	}
+	entries := make([]api.CookieBrowser, len(accounts))
+	for index, account := range accounts {
+		entry := template
+		entry.Email, entry.AuthUser = account.Email, account.AuthUser
+		_, entry.Imported = existing[account.Email]
+		entries[index] = entry
+	}
+	return entries
+}
+
+// accountIDs 返回已导入账户的小写 ID
+func (admin *runtimeAdmin) accountIDs() map[string]struct{} {
 	existing := make(map[string]struct{})
 	for _, status := range admin.pool.Status() {
 		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
 	}
-	available := make([]api.CookieBrowser, 0, len(discovered))
-	firstExisting := ""
-	for _, item := range discovered {
-		if _, exists := existing[item.Email]; exists {
-			if firstExisting == "" {
-				firstExisting = item.Email
-			}
-			continue
-		}
-		available = append(available, api.CookieBrowser{
-			Email:    item.Email,
-			AuthUser: item.AuthUser,
-			Locale:   strings.TrimSpace(input.Locale),
-			Timezone: strings.TrimSpace(input.Timezone),
-		})
-	}
-	if len(available) == 0 && firstExisting != "" {
-		return nil, &adminOperationError{
-			status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + firstExisting,
-		}
-	}
-	return available, nil
+	return existing
 }
 
 func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
@@ -416,65 +387,21 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	return accounts, nil
 }
 
-// ImportAccountState 导入远程配对上传或 Cookie 导入的认证状态与 Camoufox 指纹，支持指定或自动选择 u/0..u/9 会话槽位
+// ImportAccountState 导入远程配对上传或 Cookie 导入的认证状态与 Camoufox 指纹，未给标签时以 Cookie 中第 auth_user 个会话登录的账户邮箱为标签
 func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.AccountStateInput) (api.AdminAccount, error) {
 	label := strings.TrimSpace(input.Label)
-	authUser := 0
-	if input.AuthUser != nil {
-		authUser = *input.AuthUser
-	}
-	existing := make(map[string]struct{})
-	for _, status := range admin.pool.Status() {
-		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
-	}
-	_, hasExtension, extErr := input.StorageState.AuthExtension()
-	if extErr != nil {
-		return api.AdminAccount{}, invalidAccount(extErr)
-	}
-	if !hasExtension {
-		switch {
-		case input.AuthUser != nil:
-			verification, err := chromeauth.VerifyAuthUser(ctx, &input.StorageState, admin.effectiveProxy(input.Proxy), authUser)
-			if errors.Is(err, chromeauth.ErrSignedOut) {
-				return api.AdminAccount{}, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
-			}
-			if err != nil {
-				return api.AdminAccount{}, invalidAccount(err)
-			}
-			verifiedEmail := strings.ToLower(verification.Email)
-			if label != "" && !strings.EqualFold(label, verifiedEmail) {
-				return api.AdminAccount{}, invalidAccount(fmt.Errorf("u/%d 登录邮箱 (%s) 与指定邮箱 (%s) 不一致", authUser, verifiedEmail, label))
-			}
-			label = verifiedEmail
-		case label != "":
-			verification, resolvedUser, err := chromeauth.FindCookieAccount(ctx, &input.StorageState, admin.effectiveProxy(input.Proxy), label)
-			if errors.Is(err, chromeauth.ErrSignedOut) {
-				return api.AdminAccount{}, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
-			}
-			if err != nil {
-				return api.AdminAccount{}, invalidAccount(err)
-			}
-			label = strings.ToLower(verification.Email)
-			authUser = resolvedUser
-		default:
-			verification, resolvedUser, existingEmail, err := chromeauth.VerifyNextAuthUser(ctx, &input.StorageState, admin.effectiveProxy(input.Proxy), existing)
-			if errors.Is(err, chromeauth.ErrSignedOut) {
-				return api.AdminAccount{}, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
-			}
-			if err != nil {
-				return api.AdminAccount{}, invalidAccount(err)
-			}
-			if existingEmail != "" {
-				return api.AdminAccount{}, &adminOperationError{
-					status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + existingEmail,
-				}
-			}
-			label = strings.ToLower(verification.Email)
-			authUser = resolvedUser
+	if label == "" {
+		verification, err := chromeauth.VerifyAuthUser(ctx, &input.StorageState, admin.effectiveProxy(input.Proxy), input.AuthUser)
+		if errors.Is(err, chromeauth.ErrSignedOut) {
+			return api.AdminAccount{}, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
 		}
+		if err != nil {
+			return api.AdminAccount{}, invalidAccount(err)
+		}
+		label = strings.ToLower(verification.Email)
 	}
 	accountConfig := aistudio.DefaultAccountConfig(label)
-	accountConfig.AuthUser = authUser
+	accountConfig.AuthUser = input.AuthUser
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
 	if locale := strings.TrimSpace(input.Locale); locale != "" {
 		accountConfig.Locale = locale
@@ -705,6 +632,9 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	if err := lease.SaveStorageState(state); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
+	if err := resetCookieAuthUser(lease, admin.workers.prepareUpdate); err != nil {
+		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
 	if err := admin.service.changeModels(func() error {
 		return errors.Join(
 			admin.pool.MarkReady(account.ID),
@@ -723,6 +653,26 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 		time.Since(startedAt).Round(time.Millisecond),
 	))
 	return admin.account(account.ID)
+}
+
+// resetCookieAuthUser 在账户认证状态换成单账号 Cookie 后把会话序号归零并同步到 Worker
+func resetCookieAuthUser(lease *aistudio.AccountLease, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
+	account := lease.Account()
+	if account.Config.AuthUser == 0 {
+		return nil
+	}
+	accountConfig := account.Config
+	accountConfig.AuthUser = 0
+	workerUpdate, err := prepare(account, accountConfig)
+	if err != nil {
+		return err
+	}
+	if err := lease.SaveConfig(accountConfig); err != nil {
+		workerUpdate.Discard()
+		return err
+	}
+	workerUpdate.Commit()
+	return nil
 }
 
 // keepAuthExtension 在新登录状态缺少续签材料时沿用账户已有的 Chrome 来源与 OAuth 材料

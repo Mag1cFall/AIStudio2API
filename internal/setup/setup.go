@@ -149,10 +149,9 @@ func (target remoteTarget) Save(
 	state aistudio.StorageState,
 	fingerprintDirectory string,
 ) (string, error) {
-	authUser := accountConfig.AuthUser
 	input := api.AccountStateInput{
 		Label: accountConfig.Label, Locale: accountConfig.Locale, Timezone: accountConfig.Timezone,
-		AuthUser: &authUser, StorageState: state,
+		AuthUser: accountConfig.AuthUser, StorageState: state,
 	}
 	if fingerprintDirectory != "" {
 		data, err := os.ReadFile(filepath.Join(fingerprintDirectory, "camoufox-fingerprint.json"))
@@ -268,28 +267,17 @@ func importCookies(ctx context.Context, target accountTarget, options setupOptio
 	if _, err := aistudio.NewSigner().Sign(state); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	var email string
-	switch {
-	case options.authUserSet:
+	email := ""
+	if len(options.emails) == 1 {
+		email = options.emails[0]
+	}
+	if email == "" || options.authUserSet {
 		verification, err := chromeauth.VerifyAuthUser(ctx, &state, options.egress, options.authUser)
 		if err != nil {
-			return fmt.Errorf("识别 Cookie (u/%d) 登录的账户: %w", options.authUser, err)
-		}
-		email = strings.ToLower(verification.Email)
-		if len(options.emails) == 1 && !strings.EqualFold(options.emails[0], email) {
-			return fmt.Errorf("u/%d 登录邮箱 (%s) 与 --email (%s) 不一致", options.authUser, email, options.emails[0])
-		}
-	case len(options.emails) == 1:
-		verification, resolvedUser, err := chromeauth.FindCookieAccount(ctx, &state, options.egress, options.emails[0])
-		if err != nil {
 			return fmt.Errorf("识别 Cookie 登录的账户: %w", err)
 		}
-		email = strings.ToLower(verification.Email)
-		options.authUser = resolvedUser
-	default:
-		verification, err := chromeauth.Verify(ctx, &state, options.egress)
-		if err != nil {
-			return fmt.Errorf("识别 Cookie 登录的账户: %w", err)
+		if email != "" && !strings.EqualFold(email, verification.Email) {
+			return fmt.Errorf("Cookie 中 u/%d 登录的账户是 %s，与 --email %s 不同", options.authUser, verification.Email, email)
 		}
 		email = strings.ToLower(verification.Email)
 	}
@@ -468,8 +456,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	options := setupOptions{
 		storageState: strings.TrimSpace(*storageState), login: *login,
 		chromeRoot: strings.TrimSpace(*chromeRoot), profiles: profiles, emails: emails,
-		proxy:    strings.TrimSpace(*proxy),
-		locale:   strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
+		proxy:  strings.TrimSpace(*proxy),
+		locale: strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
 		authUser: *authUser,
 		token:    strings.TrimSpace(*token),
 	}
@@ -521,6 +509,9 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 			options.authUserSet = true
 		}
 	})
+	if options.authUserSet && options.cookies == "" && options.cdp == "" {
+		return setupOptions{}, fmt.Errorf("--authuser 只能与 --cookie、--cookie-file 或 --cdp 同时使用")
+	}
 	chromeSelection := options.cookies == "" && options.cdp == "" && (options.chromeRoot != "" || len(options.profiles) != 0 || len(options.emails) != 0)
 	if options.storageState != "" && (options.login || chromeSelection) {
 		return setupOptions{}, fmt.Errorf("--storage-state 不能与 Chrome 导入或 --login 同时使用")

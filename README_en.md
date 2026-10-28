@@ -262,7 +262,7 @@ On Windows, run these commands for the desktop app as `cmd /c start /wait aistud
 - Without options it scans local Chrome accounts; `--email` or `--profile` selects a Chrome account
 - Isolated login: `aistudio2api setup --login`, which needs a graphical display; without one, start the service and sign in with "Sign in with browser" in the console
 - File import: `aistudio2api setup --storage-state <file>`
-- Cookie import: `aistudio2api setup --cookie-file <file>`, `aistudio2api setup --cookie "<Cookie request header>"`, or `aistudio2api setup --cdp <debugging address>`; the account email is detected from the cookies, and an account imported with `--cdp` keeps the language and time zone of that browser
+- Cookie import: `aistudio2api setup --cookie-file <file>`, `aistudio2api setup --cookie "<Cookie request header>"`, or `aistudio2api setup --cdp <debugging address>`; the account email is detected from the cookies, and an account imported with `--cdp` keeps the language and time zone of that browser; when the cookies come from a browser signed in to several Google accounts, `--authuser N` selects the account at `/u/N/` on the official site
 
 `aistudio2api setup --remote https://<remote-instance>`: Adds accounts to a remote instance. Click "Add remotely" on the remote instance's Accounts page to get a pairing token, then run the command on a computer that can sign in to Google and paste the token. It combines with options such as `--login`.
 
