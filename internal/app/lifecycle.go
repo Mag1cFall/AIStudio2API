@@ -421,7 +421,7 @@ func (manager *runtimeManager) CookieBrowsers(ctx context.Context) ([]api.Cookie
 	return manager.current.admin.CookieBrowsers(ctx)
 }
 
-// DiscoverCookieAccounts 返回粘贴 Cookie 中尚未导入的会话槽位账户
+// DiscoverCookieAccounts 返回粘贴 Cookie 中各会话序号登录的账户并标记已导入的账户
 func (manager *runtimeManager) DiscoverCookieAccounts(ctx context.Context, input api.CookieImportInput) ([]api.CookieBrowser, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()

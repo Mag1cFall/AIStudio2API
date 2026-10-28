@@ -93,6 +93,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserLogin': 'Im Browser anmelden',
   'accounts.importChrome': 'Aus Chrome importieren',
   'accounts.chromeTitle': 'Chrome-Konten auswählen',
+  'accounts.cookieAccounts': 'Konten in den Cookies',
   'accounts.chromeEmpty': 'Keine Chrome-Konten zum Importieren vorhanden',
   'accounts.importSelected': 'Auswahl importieren',
   'accounts.cookies': 'Cookies',

@@ -17,10 +17,10 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-const (
-	aiStudioChatURL    = "https://aistudio.google.com/prompts/new_chat"
-	maxCookieAuthUsers = 10
-)
+const aiStudioChatURL = "https://aistudio.google.com/prompts/new_chat"
+
+// maxCookieAuthUsers 是识别同一份 Cookie 中会话的序号上限
+const maxCookieAuthUsers = 10
 
 // ErrSignedOut 表示 Cookie 打开 AI Studio 时被转到登录页
 var ErrSignedOut = errors.New("Cookie 未登录 AI Studio 或已失效")
@@ -34,23 +34,19 @@ type Verification struct {
 	ModelCount int
 }
 
-// CookieAccount 描述同一份 Cookie 中单个 Google 会话槽位 (u/0, u/1, ...) 的账户
+// CookieAccount 是同一份 Cookie 中一个 Google 会话序号上登录 AI Studio 的账户
 type CookieAccount struct {
-	AuthUser   int
-	Email      string
-	ModelCount int
+	AuthUser int
+	Email    string
 }
 
-// Verify 验证默认账号 (u/0) 可访问 WAA 页面并读取实时模型目录
+// Verify 验证 Cookie 中第一个会话的账号可访问 WAA 页面并读取实时模型目录
 func Verify(ctx context.Context, state *aistudio.StorageState, proxy string) (Verification, error) {
 	return VerifyAuthUser(ctx, state, proxy, 0)
 }
 
-// VerifyAuthUser 验证指定会话槽位 (u/0, u/1, ...) 的账号可访问 WAA 页面并读取实时模型目录
+// VerifyAuthUser 验证 Cookie 中第 authUser 个会话的账号可访问 WAA 页面并读取实时模型目录
 func VerifyAuthUser(ctx context.Context, state *aistudio.StorageState, proxy string, authUser int) (Verification, error) {
-	if authUser < 0 || authUser >= maxCookieAuthUsers {
-		return Verification{}, fmt.Errorf("auth_user 无效: %d", authUser)
-	}
 	client, headers, err := newVerifyClient(ctx, state, proxy)
 	if err != nil {
 		return Verification{}, err
@@ -67,133 +63,32 @@ func VerifyAuthUser(ctx context.Context, state *aistudio.StorageState, proxy str
 	return Verification{Email: email, ModelCount: models}, nil
 }
 
-// VerifyNextAuthUser 按 u/0..u/9 依次查找首个不在 existing 中的登录账户并验证其模型目录
-func VerifyNextAuthUser(
-	ctx context.Context,
-	state *aistudio.StorageState,
-	proxy string,
-	existing map[string]struct{},
-) (Verification, int, string, error) {
-	client, headers, err := newVerifyClient(ctx, state, proxy)
-	if err != nil {
-		return Verification{}, 0, "", err
-	}
-	defer client.CloseIdleConnections()
-	seen := make(map[string]struct{}, maxCookieAuthUsers)
-	firstExisting := ""
-	for authUser := 0; authUser < maxCookieAuthUsers; authUser++ {
-		candidate := cloneStorageState(*state)
-		email, err := verifyChatPage(ctx, client, &candidate, headers.Get("User-Agent"), authUser)
-		if err != nil {
-			if authUser == 0 {
-				return Verification{}, 0, "", err
-			}
-			break
-		}
-		normalized := strings.ToLower(strings.TrimSpace(email))
-		if _, duplicated := seen[normalized]; duplicated {
-			break
-		}
-		seen[normalized] = struct{}{}
-		if _, exists := existing[normalized]; exists {
-			if firstExisting == "" {
-				firstExisting = normalized
-			}
-			continue
-		}
-		models, err := verifyModels(ctx, client, &candidate, headers, authUser)
-		if err != nil {
-			return Verification{}, authUser, "", err
-		}
-		*state = candidate
-		return Verification{Email: email, ModelCount: models}, authUser, "", nil
-	}
-	if firstExisting != "" {
-		return Verification{Email: firstExisting}, 0, firstExisting, nil
-	}
-	return Verification{}, 0, "", ErrSignedOut
-}
-
-// FindCookieAccount 在同一份 Cookie 的 u/0..u/9 会话槽位中定位目标邮箱对应的槽位并验证其模型目录
-func FindCookieAccount(
-	ctx context.Context,
-	state *aistudio.StorageState,
-	proxy string,
-	targetEmail string,
-) (Verification, int, error) {
-	targetEmail = strings.ToLower(strings.TrimSpace(targetEmail))
-	client, headers, err := newVerifyClient(ctx, state, proxy)
-	if err != nil {
-		return Verification{}, 0, err
-	}
-	defer client.CloseIdleConnections()
-	seen := make(map[string]struct{}, maxCookieAuthUsers)
-	for authUser := 0; authUser < maxCookieAuthUsers; authUser++ {
-		candidate := cloneStorageState(*state)
-		email, err := verifyChatPage(ctx, client, &candidate, headers.Get("User-Agent"), authUser)
-		if err != nil {
-			if authUser == 0 {
-				return Verification{}, 0, err
-			}
-			break
-		}
-		normalized := strings.ToLower(strings.TrimSpace(email))
-		if _, duplicated := seen[normalized]; duplicated {
-			break
-		}
-		seen[normalized] = struct{}{}
-		if normalized != targetEmail {
-			continue
-		}
-		models, err := verifyModels(ctx, client, &candidate, headers, authUser)
-		if err != nil {
-			return Verification{}, authUser, err
-		}
-		*state = candidate
-		return Verification{Email: email, ModelCount: models}, authUser, nil
-	}
-	return Verification{}, 0, fmt.Errorf("Cookie 中未找到账户: %s", targetEmail)
-}
-
-// DiscoverCookieAccounts 列出同一份 Cookie 中登录 AI Studio 的全部会话槽位账户 (u/0, u/1, ...)
+// DiscoverCookieAccounts 从 u/0 起依次打开 Cookie 中各会话的对话页，返回各序号登录的账户，序号不存在或账户与前面重复时结束
 func DiscoverCookieAccounts(ctx context.Context, state *aistudio.StorageState, proxy string) ([]CookieAccount, error) {
 	client, headers, err := newVerifyClient(ctx, state, proxy)
 	if err != nil {
 		return nil, err
 	}
 	defer client.CloseIdleConnections()
-	seen := make(map[string]struct{}, maxCookieAuthUsers)
-	accounts := make([]CookieAccount, 0, 2)
-	for authUser := 0; authUser < maxCookieAuthUsers; authUser++ {
-		candidate := cloneStorageState(*state)
-		email, err := verifyChatPage(ctx, client, &candidate, headers.Get("User-Agent"), authUser)
+	var accounts []CookieAccount
+	for authUser := range maxCookieAuthUsers {
+		email, err := verifyChatPage(ctx, client, state, headers.Get("User-Agent"), authUser)
+		if authUser > 0 && errors.Is(err, ErrSignedOut) {
+			break
+		}
 		if err != nil {
-			if authUser == 0 {
-				return nil, err
-			}
+			return nil, err
+		}
+		email = strings.ToLower(email)
+		if slices.ContainsFunc(accounts, func(account CookieAccount) bool { return account.Email == email }) {
 			break
 		}
-		normalized := strings.ToLower(strings.TrimSpace(email))
-		if _, duplicated := seen[normalized]; duplicated {
-			break
-		}
-		seen[normalized] = struct{}{}
-		models, err := verifyModels(ctx, client, &candidate, headers, authUser)
-		if err != nil {
-			if authUser == 0 {
-				return nil, err
-			}
-			break
-		}
-		accounts = append(accounts, CookieAccount{
-			AuthUser:   authUser,
-			Email:      normalized,
-			ModelCount: models,
-		})
+		accounts = append(accounts, CookieAccount{AuthUser: authUser, Email: email})
 	}
 	return accounts, nil
 }
 
+// newVerifyClient 创建验证用的 HTTP 客户端并读取官网公共请求头，客户端不跟随重定向
 func newVerifyClient(ctx context.Context, state *aistudio.StorageState, proxy string) (*http.Client, http.Header, error) {
 	if state == nil {
 		return nil, nil, fmt.Errorf("storage state 为空")
@@ -216,13 +111,7 @@ func newVerifyClient(ctx context.Context, state *aistudio.StorageState, proxy st
 	return client, headers, nil
 }
 
-func cloneStorageState(state aistudio.StorageState) aistudio.StorageState {
-	cloned := state
-	cloned.Cookies = slices.Clone(state.Cookies)
-	cloned.Origins = slices.Clone(state.Origins)
-	return cloned
-}
-
+// chatURLForAuthUser 返回 Cookie 中第 authUser 个会话的对话页地址
 func chatURLForAuthUser(authUser int) string {
 	if authUser > 0 {
 		return fmt.Sprintf("https://aistudio.google.com/u/%d/prompts/new_chat", authUser)

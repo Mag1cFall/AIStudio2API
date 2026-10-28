@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -495,9 +494,6 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		if value := blocked.headers[name]; value != "" {
 			headers.Set(name, value)
 		}
-	}
-	if options.AuthUser > 0 {
-		headers.Set("x-goog-authuser", strconv.Itoa(options.AuthUser))
 	}
 	for _, name := range []string{"user-agent", "x-goog-api-key", "x-goog-authuser", "x-user-agent"} {
 		if headers.Get(name) == "" {

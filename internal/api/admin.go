@@ -198,7 +198,7 @@ type CookieImportInput struct {
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
 	Timezone string `json:"timezone"`
-	AuthUser *int   `json:"auth_user,omitempty"`
+	AuthUser int    `json:"auth_user"`
 }
 
 // ChromeImportProfile 表示可从本机 Chrome 导入的账号
