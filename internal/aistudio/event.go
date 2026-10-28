@@ -329,6 +329,20 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			})
 		}
 	}
+	for _, field := range []struct {
+		index int
+		kind  EventKind
+	}{{25, EventMediaProcessingCall}, {26, EventMediaProcessingResult}} {
+		if value := rawAt(part, field.index); !isJSONNull(value) {
+			step, err := decodeMediaProcessingStep(value, fmt.Sprintf("%s[%d]", path, field.index), raw)
+			if err != nil {
+				return nil, err
+			}
+			if step != nil {
+				events = append(events, Event{Kind: field.kind, MediaProcessing: step, ThoughtSignature: signature})
+			}
+		}
+	}
 	if len(events) == 0 {
 		if signature != "" {
 			return []Event{{Kind: EventThoughtSignature, ThoughtSignature: signature}}, nil

@@ -31,6 +31,7 @@ var capabilityNames = map[int64]string{
 	54: "image_search",
 	58: "google_maps",
 	59: "interaction_route",
+	69: "agentic_video",
 	74: "transcription_word_timestamps",
 	76: "transcription_language_codes",
 	77: "transcription_output",

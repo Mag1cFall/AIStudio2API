@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"mime"
 	"net/http"
 	"strconv"
@@ -82,6 +83,16 @@ func interactionStep(event aistudio.Event, audio interactionAudioFormat) (map[st
 		}
 		call := event.ToolCall
 		return map[string]any{"type": "function_call", "id": call.ID, "name": call.Name, "arguments": call.Arguments}, nil, nil
+	case aistudio.EventMediaProcessingCall, aistudio.EventMediaProcessingResult:
+		step := map[string]any{"type": "processing_call", "id": event.MediaProcessing.ID}
+		if event.Kind == aistudio.EventMediaProcessingResult {
+			step = map[string]any{"type": "processing_result", "call_id": event.MediaProcessing.ID}
+		}
+		delta := map[string]any{"type": step["type"]}
+		if event.ThoughtSignature != "" {
+			step["signature"], delta["signature"] = event.ThoughtSignature, event.ThoughtSignature
+		}
+		return step, delta, nil
 	case aistudio.EventMedia:
 		if event.Media == nil {
 			return nil, nil, nil
@@ -333,7 +344,8 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			}
 			textLength += length
 		}
-		if active != kind || kind == "function_call" {
+		standalone := kind == "function_call" || kind == "processing_call" || kind == "processing_result"
+		if active != kind || standalone {
 			if err := closeStep(); err != nil {
 				return err
 			}
@@ -346,8 +358,9 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			if kind == "thought" {
 				start["summary"] = []any{}
 			}
-			if kind == "function_call" {
-				start = step
+			if standalone {
+				start = maps.Clone(step)
+				delete(start, "signature")
 			}
 			if err := send("step.start", map[string]any{"index": index, "step": start}); err != nil {
 				return err

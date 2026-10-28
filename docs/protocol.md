@@ -308,6 +308,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 52 | thinking level | 53 | music route |
 | 54 | image search | 58 | Google Maps |
 | 59 | private Interaction route | 85 | TTS 分段说话人 |
+| 69 | Agentic 视频理解 | | |
 | 46 | Live 实时翻译 | 48 | Build 写代码助手可选 |
 
 未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
@@ -326,6 +327,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 52 | `thinking_level` | 53 | `music_route` |
 | 54 | `image_search` | 58 | `google_maps` |
 | 59 | `interaction_route` | 74 | `transcription_word_timestamps` |
+| 69 | `agentic_video` | | |
 | 76 | `transcription_language_codes` | 77 | `transcription_output` |
 | 80 | `transcription_speaker_labels` | 81 | `transcription_custom_vocabulary` |
 | 84 | `transcription_smart` | 85 | `speech_metadata` |
@@ -429,8 +431,12 @@ Content 形状：
 | 11 | 12 | function result `[name, Struct, callId?]` |
 | 12 | 13 | thought boolean |
 | 14 | 15 | thought signature |
+| 15 | 16 | 视频静态处理元数据 `[startOffset?, endOffset?, fps?]`；offset 为 `[seconds,nanos?]` |
 | 17 | 18 | 上传附件 `[mime, 上传路径, 文件名, 字节数]`，字节数为十进制字符串；用于 Build 写代码助手，见 [Build 通道](build.md) 第 8 节 |
 | 22 | 23 | transcription metadata `[text, speaker?, timestamp spans?]` |
+| 25 | 26 | 服务端媒体处理调用 `[13, name?, Struct?, callId?]` |
+| 26 | 27 | 服务端媒体处理结果 `[13, name?, Struct?, callId?]` |
+| 39 | 40 | 视频处理模式：`1` STATIC、`2` AGENTIC |
 
 system instruction：
 
@@ -1969,6 +1975,7 @@ delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signatu
 | --- | --- |
 | `input` | 字符串、单个内容块、内容块数组或步骤数组；内容类型为 `text`、`image`、`audio`、`video`、`document` |
 | 媒体内容 | `data`（Base64）或 `uri`，可选 `mime_type` |
+| 视频处理 | `processing:"static"`、`"agentic"` 或 `{type:"static",start_offset?,end_offset?,fps?}`；offset 为带 `s` 的 Duration 字符串，例如 `"2.5s"` |
 | 输入步骤 | `user_input`、`model_output`、`thought`、`function_call`、`function_result`、`code_execution_call`、`code_execution_result` 与工具 call/result 步骤 |
 | `system_instruction` | 当前请求的系统指令 |
 | `generation_config` | `temperature`、`top_p`、`top_k`、`max_output_tokens`、`seed`、`stop_sequences`、`thinking_level`、`thinking_summaries`、`speech_config`、`tool_choice`、`image_config:{aspect_ratio?,image_size?}` |
@@ -1983,7 +1990,8 @@ delta 联合类型为 `text_delta{text}`、`thinking_delta{thinking}`、`signatu
 | 续接 | `previous_interaction_id`、`store` |
 
 - 媒体内容的 `data` 与 `uri` 二选一，复用 Gemini 文件与内联媒体解析：省略 `mime_type` 时内联数据按内容识别类型，无法识别时返回 `400 INVALID_ARGUMENT`；`uri` 为外部 http(s) URL 时由服务下载为内联媒体，规则与 GenerateContent 的 `fileData` 相同；本服务 Gemini 文件接口返回的 `uri` 作为文件引用
-- 函数结果通过 `call_id` 匹配历史调用，没有对应调用时使用自带的 `name`；`is_error:true` 的结果以 `{"error":<result>}` 发送上游；`code_execution_call` 与 `code_execution_result` 以代码块文本并入模型轮次；`google_search`、`url_context`、`google_maps`、`file_search`、`mcp_server_tool`、`retrieval`、`processing` 的 call 与 result 步骤不发送上游
+- 函数结果通过 `call_id` 匹配历史调用，没有对应调用时使用自带的 `name`；`is_error:true` 的结果以 `{"error":<result>}` 发送上游；`code_execution_call` 与 `code_execution_result` 以代码块文本并入模型轮次；`google_search`、`url_context`、`google_maps`、`file_search`、`mcp_server_tool`、`retrieval` 的 call 与 result 步骤不发送上游
+- `processing_call` 和 `processing_result` 保留服务端媒体处理调用的 `id`、对应的 `call_id` 与各自的 `signature`，作为模型历史续接；流式响应按 `step.start`、`step.delta`、`step.stop` 发布，签名位于 delta
 - 文本 `response_format` 带 `schema` 时请求结构化输出，`mime_type` 默认 `application/json`；不带 `type` 或 `type` 为 JSON Schema 类型的对象直接作为结构化输出 Schema；图片指定 `mime_type:"image/jpeg"` 时其他格式的图片输出转为 JPEG
 - `response_format` 中的图片比例、尺寸与文本 `mime_type` 优先于 `generation_config.image_config` 与 `response_mime_type`；`response_modalities` 中的其他取值返回 `400 INVALID_ARGUMENT`
 - `speech_config` 的 `language` 不发送上游，多说话人 `mode` 为 `verbatim` 或 `conversational`；`speech_metadata` 保留说话人与风格
@@ -2032,10 +2040,26 @@ Content 字段为 `role` 与 `parts`。Part oneof：
 | file data | `fileData:{mimeType?,fileUri,displayName}` |
 | function call | `functionCall:{id,name,args}` |
 | function response | `functionResponse:{id,name,response}` |
+| server media processing call | `toolCall:{id?,toolType:"MEDIA_PROCESSING",toolName?,args?}` |
+| server media processing response | `toolResponse:{id?,toolType:"MEDIA_PROCESSING",response?}` |
 | executable code | `executableCode:{language,code}` |
 | code result | `codeExecutionResult:{outcome,output,error}` |
 
 不含数据字段且没有 `thoughtSignature` 的 Part 不发送；同一 Part 含多个数据字段时返回 `400 INVALID_ARGUMENT`。`fileData.fileUri` 为 YouTube 链接时作为外部视频，为本服务 `/upload/v1beta/files` 返回的文件 URI 或 `/v1/files` 文件 ID 时作为文件引用，为其他 http(s) URL 时由服务下载为内联媒体；其他 Gemini Files API URI 不下载。外部 URL 在同一请求内只下载一次，上限 512 MiB，MIME 依次取响应 `Content-Type`、`mimeType` 与内容识别；主机或任一重定向目标解析到本机、私网、链路本地、组播或未指定地址时不连接，按下载失败处理；下载失败返回带 URL 与原因的 `400 INVALID_ARGUMENT`。`:countTokens` 同样先下载外部 URL 再计数。
+
+视频 Part 可设置 `mediaProcessing` 为 `STATIC`、`AGENTIC` 或 `MEDIA_PROCESSING_UNSPECIFIED`。省略时沿用模型默认处理方式。`AGENTIC` 使用模型目录的 `agentic_video` 能力，并返回 `toolType:"MEDIA_PROCESSING"` 的服务端 `toolCall` 与 `toolResponse`；调用标识与 `thoughtSignature` 随完整模型 Part 一起用于下一轮历史。
+
+静态视频的 `videoMetadata` 可设置 `startOffset`、`endOffset` 与 `fps`，与该 Part 的视频附件一起参与生成及 token 计数。offset 为非负秒数 Duration 字符串，支持最多九位小数，例如 `"2.5s"`；显式 `"0s"` 保留起点，终点须晚于起点。FPS 范围为 `(0,24]`，静态参数与 `AGENTIC` 互斥。例如：
+
+```json
+{
+  "fileData": {"mimeType":"video/*","fileUri":"https://www.youtube.com/watch?v=<VIDEO_ID>"},
+  "mediaProcessing": "STATIC",
+  "videoMetadata": {"startOffset":"2s","endOffset":"4s","fps":0.5}
+}
+```
+
+这些参数与媒体处理历史适用于上游使用 GenerateContent 的模型；使用原生 CreateInteractionStream 或 CreateInteraction 的模型收到这些参数时返回参数错误。
 
 `generationConfig` 全字段：
 

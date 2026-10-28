@@ -240,6 +240,10 @@ func encodeBuildPart(part Part) (map[string]any, error) {
 			result["output"] = output
 		}
 		wire["codeExecutionResult"] = result
+	case part.ProcessingCall != nil:
+		wire["toolCall"] = buildMediaProcessingStep(part.ProcessingCall, "args")
+	case part.ProcessingResult != nil:
+		wire["toolResponse"] = buildMediaProcessingStep(part.ProcessingResult, "response")
 	case signature != "":
 		wire["text"] = ""
 	default:
@@ -248,7 +252,35 @@ func encodeBuildPart(part Part) (map[string]any, error) {
 	if signature != "" {
 		wire["thoughtSignature"] = signature
 	}
+	if video := part.VideoMetadata; video != nil {
+		metadata := map[string]any{}
+		if video.StartOffset != "" {
+			metadata["startOffset"] = video.StartOffset
+		}
+		if video.EndOffset != "" {
+			metadata["endOffset"] = video.EndOffset
+		}
+		if video.FPS != nil {
+			metadata["fps"] = *video.FPS
+		}
+		wire["videoMetadata"] = metadata
+	}
+	if part.MediaProcessing != "" {
+		wire["mediaProcessing"] = part.MediaProcessing
+	}
 	return wire, nil
+}
+
+// buildMediaProcessingStep 编码视频理解处理的 toolCall 或 toolResponse，payload 为 args 或 response
+func buildMediaProcessingStep(step *MediaProcessingStep, payload string) map[string]any {
+	value := map[string]any{"toolType": "MEDIA_PROCESSING", "id": step.ID}
+	if step.Name != "" {
+		value["toolName"] = step.Name
+	}
+	if len(step.Data) != 0 {
+		value[payload] = step.Data
+	}
+	return value
 }
 
 // buildJSONObject 把 JSON 值转成 Gemini API Struct，非对象值放在 result 字段
@@ -491,6 +523,17 @@ type buildResponsePart struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
 	} `json:"functionCall"`
+	ToolCall     *buildToolStep `json:"toolCall"`
+	ToolResponse *buildToolStep `json:"toolResponse"`
+}
+
+// buildToolStep 表示 Gemini API 服务端工具的 toolCall 或 toolResponse
+type buildToolStep struct {
+	ID       string          `json:"id"`
+	ToolType string          `json:"toolType"`
+	ToolName string          `json:"toolName"`
+	Args     json.RawMessage `json:"args"`
+	Response json.RawMessage `json:"response"`
 }
 
 type buildGrounding struct {
@@ -663,6 +706,12 @@ func decodeBuildPart(part buildResponsePart, index int, raw []byte) ([]Event, er
 		}
 		call := FunctionCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Arguments: arguments, ThoughtSignature: signature}
 		events = append(events, Event{Kind: EventToolCall, ToolCall: &call, ThoughtSignature: signature})
+	}
+	if step := part.ToolCall; step != nil && step.ToolType == "MEDIA_PROCESSING" {
+		events = append(events, Event{Kind: EventMediaProcessingCall, MediaProcessing: &MediaProcessingStep{ID: step.ID, Name: step.ToolName, Data: step.Args}, ThoughtSignature: signature})
+	}
+	if step := part.ToolResponse; step != nil && step.ToolType == "MEDIA_PROCESSING" {
+		events = append(events, Event{Kind: EventMediaProcessingResult, MediaProcessing: &MediaProcessingStep{ID: step.ID, Name: step.ToolName, Data: step.Response}, ThoughtSignature: signature})
 	}
 	if len(events) == 0 && signature != "" {
 		events = append(events, Event{Kind: EventThoughtSignature, ThoughtSignature: signature})
