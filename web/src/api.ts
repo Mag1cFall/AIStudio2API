@@ -290,16 +290,15 @@ export const api = {
   systemInstructions: async () =>
     (await requestJSON<{ presets: SystemInstructionPreset[] }>('/api/prompts/system-instructions'))
       .presets,
-  saveSystemInstructions: async (presets: SystemInstructionPreset[]) =>
-    (
-      await requestJSON<{ presets: SystemInstructionPreset[] }>(
-        '/api/prompts/system-instructions',
-        {
-          method: 'PUT',
-          body: jsonBody({ presets }),
-        },
-      )
-    ).presets,
+  saveSystemInstruction: (preset: SystemInstructionPreset) =>
+    requestCommand(`/api/prompts/system-instructions/${encodeURIComponent(preset.id)}`, {
+      method: 'PUT',
+      body: jsonBody(preset),
+    }),
+  deleteSystemInstruction: (id: string) =>
+    requestCommand(`/api/prompts/system-instructions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // openAdminEvents 建立唯一的管理状态 SSE 连接

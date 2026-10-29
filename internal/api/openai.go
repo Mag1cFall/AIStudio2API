@@ -201,6 +201,9 @@ func (s *server) handleOpenAIModel(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if r.Header.Get("Anthropic-Version") == "" {
+		models = aistudio.ModelsWithSearchAliases(models)
+	}
 	model, ok := LookupPublicModel(models, r.PathValue("model"))
 	if !ok {
 		message := fmt.Sprintf("model %q is unavailable", r.PathValue("model"))
@@ -248,7 +251,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	generateRequest, _ = aistudio.ResolveSearchGenerateRequest(generateRequest)
+	generateRequest = aistudio.ResolveSearchGenerateRequest(generateRequest)
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	if !request.Stream {
 		var stopKeepalive func()

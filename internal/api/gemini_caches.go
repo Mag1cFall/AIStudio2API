@@ -268,8 +268,9 @@ func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+	counted := aistudio.ResolveSearchGenerateRequest(cached)
 	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
-		Model: model, System: cached.System, Contents: cached.Contents, Tools: cached.Tools,
+		Model: counted.Model, System: counted.System, Contents: counted.Contents, Tools: counted.Tools,
 	})
 	if err != nil {
 		if shouldWriteRequestError(r, err) {

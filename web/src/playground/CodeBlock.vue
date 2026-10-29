@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import hljs from 'highlight.js/lib/common'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import { vTooltip } from '@/playground/ui/tooltip'
 import { previewOrigin } from '@/playground/preview'
+import { highlightCode } from './highlight'
 
 const props = withDefaults(
   defineProps<{
@@ -93,76 +93,41 @@ const title = computed(() => {
   return props.headerText || name || t('pg.code')
 })
 
-// hasAtLeastLines 判断文本是否至少包含 count 行，不分配数组
-function hasAtLeastLines(text: string, count: number): boolean {
-  let lines = 1
-  for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) {
-    if (++lines >= count) return true
-  }
-  return false
-}
-
-// autoHighlightLimit 是未指定语言时执行自动识别高亮的最大字符数
-const autoHighlightLimit = 16_384
-// incrementalChunkSize 是长代码增量高亮的分块字符数
-const incrementalChunkSize = 4_096
 // largeCodeThreshold 是跳过网格折叠动画并在折叠后卸载 DOM 的字符阈值
 const largeCodeThreshold = 4_096
 
 const isLargeCode = computed(() => props.code.length >= largeCodeThreshold)
 const bodyMounted = ref(true)
 let unmountTimer = 0
-let cachedLanguage = ''
-let cachedPrefix = ''
-let cachedHTML = ''
+const highlighted = shallowRef({ code: '', language: '', html: '' })
+let highlighting = false
+let disposed = false
 
-// highlightSegment 高亮单段代码
-function highlightSegment(text: string, language: string): string {
-  if (text === '') return ''
-  if (language === 'none') return escapeHTML(text)
-  if (hljs.getLanguage(language))
-    return hljs.highlight(text, { language, ignoreIllegals: true }).value
-  if (text.length > autoHighlightLimit) return escapeHTML(text)
-  return hljs.highlightAuto(text).value
-}
-
-// highlightedParts 把长代码拆为稳定的已高亮前缀与流式变化的小尾部，避免每帧重写整块 innerHTML
-const highlightedParts = computed<{ prefix: string; tail: string }>(() => {
-  const text = trimmed.value
+// renderHighlight 每块只处理一个高亮请求，完成后接上最新代码
+async function renderHighlight(): Promise<void> {
+  if (highlighting || disposed || !bodyMounted.value || props.language === 'none') return
+  const code = trimmed.value
   const language = props.language
-  if (language === 'none') return { prefix: '', tail: escapeHTML(text) }
-  if (!hljs.getLanguage(language)) {
-    const html =
-      text.length <= autoHighlightLimit ? hljs.highlightAuto(text).value : escapeHTML(text)
-    return { prefix: '', tail: html }
-  }
-  if (text.length < incrementalChunkSize) {
-    cachedLanguage = language
-    cachedPrefix = ''
-    cachedHTML = ''
-    return { prefix: '', tail: highlightSegment(text, language) }
-  }
-  if (language !== cachedLanguage || !text.startsWith(cachedPrefix)) {
-    cachedLanguage = language
-    cachedPrefix = ''
-    cachedHTML = ''
-  }
-  const rest = text.slice(cachedPrefix.length)
-  const boundary = rest.lastIndexOf('\n')
-  if (boundary >= incrementalChunkSize) {
-    const chunk = rest.slice(0, boundary + 1)
-    cachedPrefix += chunk
-    cachedHTML += highlightSegment(chunk, language)
-  }
-  return {
-    prefix: cachedHTML,
-    tail: highlightSegment(text.slice(cachedPrefix.length), language),
-  }
+  highlighting = true
+  const html = await highlightCode(code, language)
+  highlighted.value = { code, language, html }
+  highlighting = false
+  if (code !== trimmed.value || language !== props.language) void renderHighlight()
+}
+watch([trimmed, () => props.language, bodyMounted], () => void renderHighlight(), {
+  immediate: true,
 })
+
+// highlightedPrefix 是仍匹配当前代码的已高亮部分，后续文字即时显示
+const highlightedPrefix = computed(() =>
+  highlighted.value.language === props.language && trimmed.value.startsWith(highlighted.value.code)
+    ? highlighted.value
+    : { code: '', html: '' },
+)
 // previewable 与官网一致：15 行以上的 HTML 或以 <svg 开头的代码可以预览
 const previewable = computed(
   () =>
-    (props.language === 'html' && hasAtLeastLines(props.code, 15)) ||
+    (props.language === 'html' && props.code.split('\n').length >= 15) ||
     props.code.startsWith('<svg '),
 )
 
@@ -175,16 +140,12 @@ function sendPreview(event: MessageEvent): void {
 
 onMounted(() => window.addEventListener('message', sendPreview))
 onUnmounted(() => {
+  disposed = true
   window.removeEventListener('message', sendPreview)
   window.clearTimeout(unmountTimer)
 })
 
-// escapeHTML 转义文本中的 HTML 特殊字符
-function escapeHTML(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-}
-
-// toggle 展开或折叠代码；长代码块立即切换并卸载内部节点以避免整页重排卡顿
+// toggle 展开或折叠代码，长代码折叠后卸载内部节点
 function toggle(): void {
   if (!props.expandable) return
   window.clearTimeout(unmountTimer)
@@ -305,12 +266,12 @@ function download(): void {
                 :key="code"
                 ref="frame"
                 :title="t('pg.preview')"
-                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
                 :src="shim"
               ></iframe>
             </div>
             <template v-else>
-              <pre><code class="hljs"><span v-if="highlightedParts.prefix" v-html="highlightedParts.prefix"></span><span v-html="highlightedParts.tail"></span></code></pre>
+              <pre><code class="hljs"><span v-html="highlightedPrefix.html"></span><span>{{ trimmed.slice(highlightedPrefix.code.length) }}</span></code></pre>
               <div v-if="showDivider" class="code-content-divider"></div>
               <slot></slot>
             </template>

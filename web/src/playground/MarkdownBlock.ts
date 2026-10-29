@@ -32,14 +32,6 @@ export default defineComponent({
   name: 'MarkdownBlock',
   props: { nodes: { type: Array as PropType<MarkdownNode[]>, required: true } },
   setup(props) {
-    let prevNodes: MarkdownNode[] | undefined
-    let prevVNodes: VNode[] = []
-    return () => {
-      if (props.nodes !== prevNodes) {
-        prevNodes = props.nodes
-        prevVNodes = props.nodes.map(renderNode)
-      }
-      return prevVNodes
-    }
+    return () => props.nodes.map(renderNode)
   },
 })

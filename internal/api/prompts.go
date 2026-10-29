@@ -53,12 +53,14 @@ type PromptStore interface {
 	CopyPrompt(ctx context.Context, source, id, title string) (PromptSummary, error)
 	DeletePrompt(context.Context, string) error
 	SystemInstructions(context.Context) ([]SystemInstructionPreset, error)
-	SaveSystemInstructions(context.Context, []SystemInstructionPreset) error
+	SaveSystemInstruction(context.Context, SystemInstructionPreset) error
+	DeleteSystemInstruction(context.Context, string) error
 }
 
 func (s *server) registerPrompts(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/prompts/system-instructions", s.handleSystemInstructions)
-	mux.HandleFunc("PUT /api/prompts/system-instructions", s.handleSaveSystemInstructions)
+	mux.HandleFunc("PUT /api/prompts/system-instructions/{id}", s.handleSaveSystemInstruction)
+	mux.HandleFunc("DELETE /api/prompts/system-instructions/{id}", s.handleDeleteSystemInstruction)
 	mux.HandleFunc("GET /api/prompts", s.handlePrompts)
 	mux.HandleFunc("GET /api/prompts/{id}", s.handlePrompt)
 	mux.HandleFunc("PUT /api/prompts/{id}", s.handleSavePrompt)
@@ -217,22 +219,28 @@ func (s *server) handleSystemInstructions(w http.ResponseWriter, r *http.Request
 	}{presets})
 }
 
-// handleSaveSystemInstructions 保存系统指令预设列表
-func (s *server) handleSaveSystemInstructions(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Presets []SystemInstructionPreset `json:"presets"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
+// handleSaveSystemInstruction 新增或改写路径 ID 对应的系统指令预设
+func (s *server) handleSaveSystemInstruction(w http.ResponseWriter, r *http.Request) {
+	var preset SystemInstructionPreset
+	if err := decodeJSON(r, &preset); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if err := s.config.Prompts.SaveSystemInstructions(r.Context(), body.Presets); err != nil {
+	preset.ID = r.PathValue("id")
+	if err := s.config.Prompts.SaveSystemInstruction(r.Context(), preset); err != nil {
 		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, struct {
-		Presets []SystemInstructionPreset `json:"presets"`
-	}{body.Presets})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteSystemInstruction 删除路径 ID 对应的系统指令预设
+func (s *server) handleDeleteSystemInstruction(w http.ResponseWriter, r *http.Request) {
+	if err := s.config.Prompts.DeleteSystemInstruction(r.Context(), r.PathValue("id")); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writePromptError 把对话库错误写为管理端错误

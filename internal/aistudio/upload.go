@@ -182,8 +182,10 @@ type TemporaryFileCopies struct {
 	sources map[string]struct{}
 	// release 释放本次请求对内联附件文件的引用
 	release func()
-	once    sync.Once
-	err     error
+	// reused 是本次请求复用的已上传内联附件文件
+	reused []FileRef
+	once   sync.Once
+	err    error
 }
 
 // Count 返回本次请求创建的临时文件数
@@ -233,9 +235,6 @@ func (copies *TemporaryFileCopies) Cleanup() error {
 			bindErr := error(nil)
 			if deleteErr == nil && copy.bound {
 				bindErr = copies.lease.pool.unbindResourceContext(cleanupCtx, copy.id)
-				if errors.Is(bindErr, ErrResourceNotFound) {
-					bindErr = nil
-				}
 			}
 			if deleteErr != nil && copy.media != nil {
 				bindErr = copies.lease.bindInlineMedia(context.Background(), copy.media.file, copy.media.key, copy.media.size)
@@ -245,6 +244,40 @@ func (copies *TemporaryFileCopies) Cleanup() error {
 		}
 	})
 	return copies.err
+}
+
+// ForgetMissingInlineMedia 在生成请求返回 404 时查询本次复用的内联附件文件，解除 Drive 中已不存在的文件的绑定，返回是否有复用的文件已不存在
+func (copies *TemporaryFileCopies) ForgetMissingInlineMedia(ctx context.Context, cause error) (bool, error) {
+	var rpcError *RPCError
+	if copies == nil || len(copies.reused) == 0 || !errors.As(cause, &rpcError) ||
+		!modelBoundRPCMethod(rpcError.Method) || rpcError.StatusCode != http.StatusNotFound {
+		return false, nil
+	}
+	drive, ok := copies.client.transport.(DriveFileChecker)
+	if !ok {
+		return false, fmt.Errorf("AI Studio transport 不支持 Drive 查询")
+	}
+	accountID := copies.lease.Account().ID
+	ctx = ContextWithAccountLease(ctx, copies.lease)
+	token, err := copies.client.GenerateAccessToken(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	forgot := false
+	for _, file := range copies.reused {
+		exists, err := drive.DriveFileExists(ctx, accountID, token, file.ID)
+		if err != nil {
+			return forgot, err
+		}
+		if exists {
+			continue
+		}
+		if err := copies.lease.pool.unbindResourceContext(ctx, file.ID); err != nil && !errors.Is(err, ErrResourceNotFound) {
+			return forgot, err
+		}
+		forgot = true
+	}
+	return forgot, nil
 }
 
 func (closer *releaseReadCloser) Read(target []byte) (int, error) {
@@ -296,6 +329,11 @@ type DriveTransport interface {
 	DownloadDrive(context.Context, string, string, string) (MediaStream, error)
 	DeleteDrive(context.Context, string, string, string) error
 	CopyDrive(context.Context, string, string, string, string) (string, error)
+}
+
+// DriveFileChecker 负责使用账户固定出口查询 Drive 文件是否存在
+type DriveFileChecker interface {
+	DriveFileExists(context.Context, string, string, string) (bool, error)
 }
 
 // GenerateAccessToken 获取网页账户授权的短期 bearer token
@@ -897,12 +935,6 @@ func (l *AccountLease) bindInlineMedia(ctx context.Context, file FileRef, key in
 		if owner, exists := l.pool.resources[file.ID]; exists && owner != accountID {
 			return false, nil, fmt.Errorf("资源 %s 已绑定账户 %s", file.ID, owner)
 		}
-		for existingID, binding := range runtimeState.Resources {
-			if existingID != file.ID && binding.Kind == "inline-media" &&
-				binding.MIME == key.mime && binding.SHA256 == key.sha256 && binding.DisplayName == key.name {
-				delete(runtimeState.Resources, existingID)
-			}
-		}
 		now := time.Now().UTC()
 		runtimeState.Resources[file.ID] = ResourceBinding{
 			Kind: "inline-media", Name: file.Name, MIME: file.MIME, Size: size, SHA256: key.sha256, CreatedAt: now, UsedAt: now, DisplayName: key.name,
@@ -1013,6 +1045,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 	used := make([]string, 0, len(jobs))
 	for _, file := range files {
 		used = append(used, file.ID)
+		temporary.reused = append(temporary.reused, file)
 	}
 	pending := slices.DeleteFunc(slices.Clone(jobs), func(job uploadJob) bool {
 		_, claimed := files[job.key]
@@ -1443,6 +1476,45 @@ func (t *MakerSuiteHTTPTransport) DeleteDrive(ctx context.Context, accountID str
 		return release(driveUploadRPCError("DriveDelete", response.StatusCode, responseBody))
 	}
 	return release(nil)
+}
+
+// DriveFileExists 通过当前账户固定出口按官网视频页的元数据请求查询 Drive 文件是否存在
+func (t *MakerSuiteHTTPTransport) DriveFileExists(ctx context.Context, accountID string, token string, fileID string) (bool, error) {
+	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: accountID})
+	if err != nil {
+		return false, err
+	}
+	release := func(operationErr error) error {
+		if !owned {
+			return operationErr
+		}
+		return errors.Join(operationErr, lease.Release())
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, driveAPIBase+"/"+url.PathEscape(strings.TrimSpace(fileID)), nil)
+	if err != nil {
+		return false, release(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	client, err := t.clientForProxy(lease.Account().EffectiveProxy(t.globalProxy))
+	if err != nil {
+		return false, release(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false, release(fmt.Errorf("查询 Drive 文件: %w", err))
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return false, release(err)
+	}
+	switch {
+	case response.StatusCode == http.StatusNotFound:
+		return false, release(nil)
+	case response.StatusCode < 200 || response.StatusCode >= 300:
+		return false, release(driveUploadRPCError("DriveGet", response.StatusCode, responseBody))
+	}
+	return true, release(nil)
 }
 
 // CopyDrive 通过当前账户固定出口复制 Drive 文件并返回副本 ID

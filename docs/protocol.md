@@ -960,7 +960,7 @@ GenerateAccessToken ["users/me"]
 
 Drive token、上传和下载使用文件所属账户的固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；生成请求可以组合不同账户的文件，其他账户的文件会临时复制到本次生成账户；失败尝试的副本随即回收，成功尝试的副本在请求结束后回收。
 
-生成请求的内联附件优先上传到本次生成账户，正文使用 Drive file Part。上传的文件以请求给出的文件名命名，没有文件名时为 `inline-media-<序号>`，模型以这个名称引用附件。上传的文件以 `inline-media` 绑定写入该账户的 `runtime-state.json`，记录 MIME、内容的 SHA-256、请求给出的文件名与最近使用时间，不出现在公开文件接口中；同一账户之后的请求中 MIME、内容与文件名都相同的附件直接引用该文件，同一请求中相同的附件只上传一次；闲置 1 小时且没有进行中的请求引用的文件，在该账户下一次带内联附件的请求结束时删除。`GenerateAccessToken` 明确返回 `401`、Code 16 和 `OAuth error: unauthorized_client` 时，正文保留原始 inline data Part，账户继续参与普通生成调度；其他令牌错误保持失败语义。上传使用公开适配器输出的 MIME 和字节内容。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
+生成请求的内联附件优先上传到本次生成账户，正文使用 Drive file Part。上传的文件以请求给出的文件名命名，没有文件名时为 `inline-media-<序号>`，模型以这个名称引用附件。上传的文件以 `inline-media` 绑定写入该账户的 `runtime-state.json`，记录 MIME、内容的 SHA-256、请求给出的文件名与最近使用时间，不出现在公开文件接口中；同一账户之后的请求中 MIME、内容与文件名都相同的附件直接引用该文件，同一请求中相同的附件只上传一次；闲置 1 小时且没有进行中的请求引用的文件，在该账户下一次带内联附件的请求结束时删除。`GenerateContent` 返回 404 且请求引用了已上传的内联附件时，服务以 `GET https://www.googleapis.com/drive/v3/files/<ID>` 查询这些文件，解除已不存在的文件的绑定，在同一账户重新上传后重试一次。`GenerateAccessToken` 明确返回 `401`、Code 16 和 `OAuth error: unauthorized_client` 时，正文保留原始 inline data Part，账户继续参与普通生成调度；其他令牌错误保持失败语义。上传使用公开适配器输出的 MIME 和字节内容。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
 
 `POST /v1/files` 的未知长度上传使用 Drive resumable upload 和 8 MiB 分块，`GET /v1/files/{id}` 从资源绑定读取文件名、大小、purpose 与创建时间；客户端取消会终止上传并释放账户租约。公开文件字段见“Files、Transcribe 与媒体”节。
 

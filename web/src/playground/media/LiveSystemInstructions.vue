@@ -14,7 +14,7 @@ const props = defineProps<{ locked: boolean }>()
 const { t } = useI18n()
 // lockedTip 是会话进行中编辑区的官网提示
 const lockedTip = computed(() => (props.locked ? t('pg.liveSystemLocked') : ''))
-const { presets, selected, title, saved, currentPreset, remember, choose, remove } =
+const { presets, selected, title, saved, saveError, currentPreset, remember, choose, remove } =
   useInstructionPresets(
     () => open.value,
     () => text.value,
@@ -28,7 +28,7 @@ const { presets, selected, title, saved, currentPreset, remember, choose, remove
   <UiSlidingPanel v-model:open="open" :title="t('pg.systemInstructions')">
     <template #status>
       <span class="saving-status" :class="{ visible: text !== '' }">
-        {{ saved ? t('pg.saved') : t('pg.savingShort') }}
+        {{ saveError ? t('pg.saveFailed') : saved ? t('pg.saved') : t('pg.savingShort') }}
       </span>
     </template>
     <div class="panel-content-wrapper">
@@ -76,9 +76,6 @@ const { presets, selected, title, saved, currentPreset, remember, choose, remove
         @input="remember"
       ></textarea>
     </div>
-    <template #footer>
-      <p class="local-storage-notice">{{ t('pg.systemLocal') }}</p>
-    </template>
   </UiSlidingPanel>
 </template>
 
@@ -120,12 +117,5 @@ const { presets, selected, title, saved, currentPreset, remember, choose, remove
 
 .saving-status.visible {
   opacity: 1;
-}
-
-.local-storage-notice {
-  margin: 8px 0 0;
-  color: var(--color-v3-text-var);
-  font-size: 12px;
-  line-height: 18px;
 }
 </style>

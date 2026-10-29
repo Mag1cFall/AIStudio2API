@@ -375,6 +375,7 @@ func (s *server) compactionSummary(ctx context.Context, request responsesRequest
 	if err != nil {
 		return "", nil, err
 	}
+	generate = aistudio.ResolveSearchGenerateRequest(generate)
 	if err := inlineRemoteMedia(ctx, generate.Contents); err != nil {
 		return "", nil, err
 	}

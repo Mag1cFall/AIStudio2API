@@ -139,6 +139,15 @@ func (transport *authRetryTransport) DeleteDrive(
 	return drive.DeleteDrive(ctx, accountID, token, fileID)
 }
 
+// DriveFileExists 将 Drive 文件查询委托给同一认证传输
+func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accountID string, token string, fileID string) (bool, error) {
+	drive, ok := transport.transport.(aistudio.DriveFileChecker)
+	if !ok {
+		return false, fmt.Errorf("transport 不支持 Drive 查询")
+	}
+	return drive.DriveFileExists(ctx, accountID, token, fileID)
+}
+
 // CopyDrive 将 Drive 复制委托给同一认证传输
 func (transport *authRetryTransport) CopyDrive(
 	ctx context.Context,

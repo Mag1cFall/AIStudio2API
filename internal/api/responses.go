@@ -477,7 +477,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	if err != nil {
 		return responsesPreparation{}, err
 	}
-	generateRequest, _ = aistudio.ResolveSearchGenerateRequest(generateRequest)
+	generateRequest = aistudio.ResolveSearchGenerateRequest(generateRequest)
 	if err := inlineRemoteMedia(ctx, generateRequest.Contents); err != nil {
 		return responsesPreparation{}, err
 	}
