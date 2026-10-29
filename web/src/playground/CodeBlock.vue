@@ -92,17 +92,77 @@ const title = computed(() => {
       : language.charAt(0).toUpperCase() + language.slice(1)
   return props.headerText || name || t('pg.code')
 })
-// highlighted 是高亮后的代码；语言为 none 时按纯文本，未声明或不认识的语言自动识别
-const highlighted = computed(() => {
-  if (props.language === 'none') return escapeHTML(trimmed.value)
-  return hljs.getLanguage(props.language)
-    ? hljs.highlight(trimmed.value, { language: props.language, ignoreIllegals: true }).value
-    : hljs.highlightAuto(trimmed.value).value
+
+// hasAtLeastLines 判断文本是否至少包含 count 行，不分配数组
+function hasAtLeastLines(text: string, count: number): boolean {
+  let lines = 1
+  for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) {
+    if (++lines >= count) return true
+  }
+  return false
+}
+
+// autoHighlightLimit 是未指定语言时执行自动识别高亮的最大字符数
+const autoHighlightLimit = 16_384
+// incrementalChunkSize 是长代码增量高亮的分块字符数
+const incrementalChunkSize = 4_096
+// largeCodeThreshold 是跳过网格折叠动画并在折叠后卸载 DOM 的字符阈值
+const largeCodeThreshold = 4_096
+
+const isLargeCode = computed(() => props.code.length >= largeCodeThreshold)
+const bodyMounted = ref(true)
+let unmountTimer = 0
+let cachedLanguage = ''
+let cachedPrefix = ''
+let cachedHTML = ''
+
+// highlightSegment 高亮单段代码
+function highlightSegment(text: string, language: string): string {
+  if (text === '') return ''
+  if (language === 'none') return escapeHTML(text)
+  if (hljs.getLanguage(language))
+    return hljs.highlight(text, { language, ignoreIllegals: true }).value
+  if (text.length > autoHighlightLimit) return escapeHTML(text)
+  return hljs.highlightAuto(text).value
+}
+
+// highlightedParts 把长代码拆为稳定的已高亮前缀与流式变化的小尾部，避免每帧重写整块 innerHTML
+const highlightedParts = computed<{ prefix: string; tail: string }>(() => {
+  const text = trimmed.value
+  const language = props.language
+  if (language === 'none') return { prefix: '', tail: escapeHTML(text) }
+  if (!hljs.getLanguage(language)) {
+    const html =
+      text.length <= autoHighlightLimit ? hljs.highlightAuto(text).value : escapeHTML(text)
+    return { prefix: '', tail: html }
+  }
+  if (text.length < incrementalChunkSize) {
+    cachedLanguage = language
+    cachedPrefix = ''
+    cachedHTML = ''
+    return { prefix: '', tail: highlightSegment(text, language) }
+  }
+  if (language !== cachedLanguage || !text.startsWith(cachedPrefix)) {
+    cachedLanguage = language
+    cachedPrefix = ''
+    cachedHTML = ''
+  }
+  const rest = text.slice(cachedPrefix.length)
+  const boundary = rest.lastIndexOf('\n')
+  if (boundary >= incrementalChunkSize) {
+    const chunk = rest.slice(0, boundary + 1)
+    cachedPrefix += chunk
+    cachedHTML += highlightSegment(chunk, language)
+  }
+  return {
+    prefix: cachedHTML,
+    tail: highlightSegment(text.slice(cachedPrefix.length), language),
+  }
 })
 // previewable 与官网一致：15 行以上的 HTML 或以 <svg 开头的代码可以预览
 const previewable = computed(
   () =>
-    (props.language === 'html' && props.code.split('\n').length >= 15) ||
+    (props.language === 'html' && hasAtLeastLines(props.code, 15)) ||
     props.code.startsWith('<svg '),
 )
 
@@ -114,16 +174,34 @@ function sendPreview(event: MessageEvent): void {
 }
 
 onMounted(() => window.addEventListener('message', sendPreview))
-onUnmounted(() => window.removeEventListener('message', sendPreview))
+onUnmounted(() => {
+  window.removeEventListener('message', sendPreview)
+  window.clearTimeout(unmountTimer)
+})
 
 // escapeHTML 转义文本中的 HTML 特殊字符
 function escapeHTML(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
 
-// toggle 展开或折叠代码
+// toggle 展开或折叠代码；长代码块立即切换并卸载内部节点以避免整页重排卡顿
 function toggle(): void {
-  if (props.expandable) expanded.value = !expanded.value
+  if (!props.expandable) return
+  window.clearTimeout(unmountTimer)
+  const next = !expanded.value
+  if (next) {
+    bodyMounted.value = true
+    expanded.value = true
+    return
+  }
+  expanded.value = false
+  if (isLargeCode.value) {
+    bodyMounted.value = false
+  } else {
+    unmountTimer = window.setTimeout(() => {
+      if (!expanded.value) bodyMounted.value = false
+    }, 225)
+  }
 }
 
 // copy 复制代码并以提示条告知结果
@@ -220,19 +298,19 @@ function download(): void {
             </button>
           </div>
         </div>
-        <div class="code-body" :inert="!expanded">
-          <div class="code-body-inner">
+        <div class="code-body" :class="{ 'no-transition': isLargeCode }" :inert="!expanded">
+          <div v-if="bodyMounted" class="code-body-inner">
             <div v-if="previewing" class="preview">
               <iframe
                 :key="code"
                 ref="frame"
                 :title="t('pg.preview')"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
                 :src="shim"
               ></iframe>
             </div>
             <template v-else>
-              <pre><code class="hljs" v-html="highlighted"></code></pre>
+              <pre><code class="hljs"><span v-if="highlightedParts.prefix" v-html="highlightedParts.prefix"></span><span v-html="highlightedParts.tail"></span></code></pre>
               <div v-if="showDivider" class="code-content-divider"></div>
               <slot></slot>
             </template>
@@ -338,6 +416,10 @@ function download(): void {
     visibility 225ms;
 }
 
+.code-body.no-transition {
+  transition: none;
+}
+
 .panel.expanded .code-body {
   grid-template-rows: 1fr;
   visibility: visible;
@@ -354,6 +436,7 @@ pre {
   margin: 0;
   padding: 0 16px 12px 12px;
   overflow-x: auto;
+  contain: content;
   color: var(--color-v3-text);
   line-height: 22px;
 }

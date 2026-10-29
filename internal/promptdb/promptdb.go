@@ -22,7 +22,9 @@ const schema = `
 CREATE TABLE IF NOT EXISTS prompts (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL, description TEXT NOT NULL,
  created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL);
-CREATE INDEX IF NOT EXISTS prompts_updated ON prompts(updated);`
+CREATE INDEX IF NOT EXISTS prompts_updated ON prompts(updated);
+CREATE TABLE IF NOT EXISTS prompt_settings (
+ key TEXT PRIMARY KEY, data BLOB NOT NULL);`
 
 // summaryColumns 是对话列表项的列
 const summaryColumns = `id, title, model, description, created, updated`
@@ -143,6 +145,42 @@ func (s *Store) DeletePrompt(ctx context.Context, id string) error {
 		return api.ErrPromptNotFound
 	}
 	return sqlitedb.Reclaim(ctx, s.db)
+}
+
+const systemInstructionsKey = "system_instructions"
+
+// SystemInstructions 读取保存的系统指令预设列表
+func (s *Store) SystemInstructions(ctx context.Context) ([]api.SystemInstructionPreset, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT data FROM prompt_settings WHERE key = ?`, systemInstructionsKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []api.SystemInstructionPreset{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var presets []api.SystemInstructionPreset
+	if err := json.Unmarshal(raw, &presets); err != nil {
+		return nil, err
+	}
+	if presets == nil {
+		presets = []api.SystemInstructionPreset{}
+	}
+	return presets, nil
+}
+
+// SaveSystemInstructions 写入系统指令预设列表
+func (s *Store) SaveSystemInstructions(ctx context.Context, presets []api.SystemInstructionPreset) error {
+	if presets == nil {
+		presets = []api.SystemInstructionPreset{}
+	}
+	raw, err := json.Marshal(presets)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO prompt_settings (key, data) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET data = excluded.data`, systemInstructionsKey, raw)
+	return err
 }
 
 // scanSummary 读取一行对话列表项，没有行时返回 api.ErrPromptNotFound

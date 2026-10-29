@@ -37,7 +37,14 @@ type Prompt struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// PromptStore 保存 Playground 对话
+// SystemInstructionPreset 是一条保存的系统指令预设
+type SystemInstructionPreset struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
+// PromptStore 保存 Playground 对话与系统指令预设
 type PromptStore interface {
 	Prompts(ctx context.Context, pageSize int, pageToken string) ([]PromptSummary, string, error)
 	Prompt(context.Context, string) (Prompt, error)
@@ -45,9 +52,13 @@ type PromptStore interface {
 	RenamePrompt(ctx context.Context, id, title, description string) (PromptSummary, error)
 	CopyPrompt(ctx context.Context, source, id, title string) (PromptSummary, error)
 	DeletePrompt(context.Context, string) error
+	SystemInstructions(context.Context) ([]SystemInstructionPreset, error)
+	SaveSystemInstructions(context.Context, []SystemInstructionPreset) error
 }
 
 func (s *server) registerPrompts(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/prompts/system-instructions", s.handleSystemInstructions)
+	mux.HandleFunc("PUT /api/prompts/system-instructions", s.handleSaveSystemInstructions)
 	mux.HandleFunc("GET /api/prompts", s.handlePrompts)
 	mux.HandleFunc("GET /api/prompts/{id}", s.handlePrompt)
 	mux.HandleFunc("PUT /api/prompts/{id}", s.handleSavePrompt)
@@ -192,6 +203,36 @@ func (s *server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSystemInstructions 返回保存在对话库中的系统指令预设列表
+func (s *server) handleSystemInstructions(w http.ResponseWriter, r *http.Request) {
+	presets, err := s.config.Prompts.SystemInstructions(r.Context())
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Presets []SystemInstructionPreset `json:"presets"`
+	}{presets})
+}
+
+// handleSaveSystemInstructions 保存系统指令预设列表
+func (s *server) handleSaveSystemInstructions(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Presets []SystemInstructionPreset `json:"presets"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.config.Prompts.SaveSystemInstructions(r.Context(), body.Presets); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Presets []SystemInstructionPreset `json:"presets"`
+	}{body.Presets})
 }
 
 // writePromptError 把对话库错误写为管理端错误
