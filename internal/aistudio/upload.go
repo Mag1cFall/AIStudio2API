@@ -227,9 +227,15 @@ func (copies *TemporaryFileCopies) Cleanup() error {
 			deleteErr := copies.client.deleteDriveFile(
 				cleanupCtx, copies.lease.Account().ID, copy.token, copy.id,
 			)
+			if driveFileNotFound(deleteErr, "DriveDelete") {
+				deleteErr = nil
+			}
 			bindErr := error(nil)
 			if deleteErr == nil && copy.bound {
 				bindErr = copies.lease.pool.unbindResourceContext(cleanupCtx, copy.id)
+				if errors.Is(bindErr, ErrResourceNotFound) {
+					bindErr = nil
+				}
 			}
 			if deleteErr != nil && copy.media != nil {
 				bindErr = copies.lease.bindInlineMedia(context.Background(), copy.media.file, copy.media.key, copy.media.size)
@@ -890,6 +896,12 @@ func (l *AccountLease) bindInlineMedia(ctx context.Context, file FileRef, key in
 	_, err := l.pool.updateRuntimeContext(ctx, accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
 		if owner, exists := l.pool.resources[file.ID]; exists && owner != accountID {
 			return false, nil, fmt.Errorf("资源 %s 已绑定账户 %s", file.ID, owner)
+		}
+		for existingID, binding := range runtimeState.Resources {
+			if existingID != file.ID && binding.Kind == "inline-media" &&
+				binding.MIME == key.mime && binding.SHA256 == key.sha256 && binding.DisplayName == key.name {
+				delete(runtimeState.Resources, existingID)
+			}
 		}
 		now := time.Now().UTC()
 		runtimeState.Resources[file.ID] = ResourceBinding{
