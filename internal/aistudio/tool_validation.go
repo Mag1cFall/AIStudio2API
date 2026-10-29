@@ -48,6 +48,9 @@ func supportedTools(tools Tools, model Model) (Tools, error) {
 		hasURLContext = hasURLContext || tool == "url_context"
 	}
 	tools.Google = google
+	if !hasURLContext {
+		tools.URLContext = nil
+	}
 	if hasMaps && (hasCode || hasURLContext) {
 		return Tools{}, fmt.Errorf("google_maps 不能与 code_execution 或 url_context 同时使用")
 	}

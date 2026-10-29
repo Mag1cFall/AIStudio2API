@@ -71,10 +71,10 @@ func encodeTranscriptionConfig(config *TranscriptionConfig) ([]any, error) {
 		wire = setWireField(wire, 1, []any{})
 	}
 	if len(config.LanguageHints) > 0 {
-		wire = setWireField(wire, 2, []any{append([]string(nil), config.LanguageHints...)})
+		wire = setWireField(wire, 2, []any{config.LanguageHints})
 	}
 	if len(config.AdaptationPhrases) > 0 {
-		wire = setWireField(wire, 3, append([]string(nil), config.AdaptationPhrases...))
+		wire = setWireField(wire, 3, config.AdaptationPhrases)
 	}
 	if config.WordTimestamps {
 		wire = setWireField(wire, 4, int64(1))
@@ -86,10 +86,10 @@ func encodeTranscriptionConfig(config *TranscriptionConfig) ([]any, error) {
 		wire = setWireField(wire, 5, nil)
 	}
 	if len(config.CustomVocabulary) > 0 {
-		wire = setWireField(wire, 6, append([]string(nil), config.CustomVocabulary...))
+		wire = setWireField(wire, 6, config.CustomVocabulary)
 	}
 	if len(config.LanguageCodes) > 0 {
-		wire = setWireField(wire, 7, append([]string(nil), config.LanguageCodes...))
+		wire = setWireField(wire, 7, config.LanguageCodes)
 	}
 	if config.SmartTranscription {
 		wire = setWireField(wire, 8, int64(2))

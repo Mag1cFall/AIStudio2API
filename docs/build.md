@@ -80,7 +80,7 @@ proof 位于 field 3，由账户的同一个 WAA Worker 生成，与 Playground 
 /v1beta/models/<MODEL_ID>:streamGenerateContent {"contents":[...],"generationConfig":{...}}
 ```
 
-摘要为 binding 的 SHA-256 小写十六进制。受保护请求由 Worker 发送，Camoufox 后端经页面原生 `fetch`，纯 Go 后端经账户固定出口的 Go HTTP。
+摘要为 binding 的 SHA-256 小写十六进制。受保护请求由 Worker 发送，Camoufox 后端经页面原生 `fetch`，SpiderMonkey 后端经账户固定出口的 Go HTTP。
 
 ### 响应
 
@@ -211,7 +211,7 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 4. M 出现在任一账户的 Playground 目录时：M 不是 Interactions 或转录模型，且账户权益满足 M 的 AccessModes
 5. M 只在 Build 目录中时：M 不是只能配合 Computer Use 工具的模型
 
-以下请求只使用 Playground：Playground 目录中的 Live 与 Robotics 模型、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。Playground 目录中模型的 CountTokens 使用 Playground，各 Part 的 `mediaResolution` 不同时只经 Build 计数。
+以下请求只使用 Playground：Playground 目录中的 Live 与 Robotics 模型、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。Playground 目录中模型的 CountTokens 使用 Playground，各 Part 的 `mediaResolution` 不同时经 Build 计数；Build 未启用时与生成一样经 Playground 发送，各 Part 按模型默认分辨率计数。
 
 带 File Search 工具的生成只经 Build 通道，没有可用的 Build 账户或 Build 拒绝请求时返回对应错误。
 
@@ -504,7 +504,7 @@ ListModels 行的主能力码（field 65）含 48 的模型，即 Build 设置�
 | ID | `<基础模型 ID>-build` |
 | 名称 | `<基础模型名称> (Build)` |
 | methods | 基础模型 methods 中的 `generateContent` 与 `countTokens` |
-| capabilities | `assistant_route`，加基础模型具备的 `chat_model`、`thinking`、`thinking_level` |
+| capabilities | `assistant_route`、`function_declarations`、`google_search`，加基础模型具备的 `chat_model`、`thinking`、`thinking_level` |
 | 能力选项 | 空 |
 | 默认参数 | 输出上限与可选 thinking level 取基础模型，思考开启，默认 level 为 high（3），基础模型不支持 high 时取最接近的可用 level；目录的默认档位为该 level |
 | 其余字段 | 取基础模型，含描述、token 上限与 AccessModes |
@@ -527,11 +527,25 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 | --- | --- |
 | contents | field 1 |
 | system | field 9 自定义指令 |
+| 函数声明 | field 9 中系统提示之前的函数调用说明 |
 | 思考强度或思考预算 | field 19 的 thinking level |
 
-- 上游请求只携带对话轮、系统提示与思考强度；生成参数、结构化输出与安全设置使用助手的服务端设置
+- 上游请求只携带对话轮、系统提示、函数调用说明与思考强度；生成参数、结构化输出与安全设置使用助手的服务端设置
 - 内联附件按官网对话面板上传，对话轮中以 Part field 18 `[mime, 上传路径, 文件名, 字节数]` 引用，文件名为 `attachment-<序号>`，序号按附件在请求中的顺序从 1 开始；上传见“附件上传”
-- `-build` 条目没有函数与 Google 工具能力：工具声明在发送前丢弃，历史中的函数调用与结果按 [协议规范](protocol.md) 改写为文本
+- `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，放在 field 9 系统提示之前（中间空一行）
+- 对话轮中的函数调用与结果 Part 转录为代码块文本：同一轮内相邻的调用合为一个 `function_calls` 块，相邻的结果合为一个 `function_results` 块，元素分别为 `{"name","arguments"}` 与 `{"name","response"}`；转录在上传附件与计算 WAA binding 之前完成
+
+````text
+You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.
+<函数声明 JSON>
+To call functions, reply with only one fenced block and no other text:
+```function_calls
+[{"name": "<function name>", "arguments": {<arguments>}}]
+```
+Function results arrive in a later user turn as a fenced function_results block. Answer normally when no function is needed.
+````
+
+- Google Search 工具不写入请求：写代码助手按需调用内置的 `search_web`，搜索步骤按“任务流”输出为 grounding；其他 Google 工具在发送前丢弃
 - 停止序列在本地匹配截断，见“停止序列、usage 与终态”
 - thinking level 为 high `3`、medium `2`、low `1`、minimal `4`；未指定时为 high。`reasoning_effort`、`thinkingLevel` 与 Anthropic `output_config.effort` 的 `xhigh`、`max` 按 high，`none` 按 minimal；思考预算 `<=0`、`<=1024`、`<=8192` 与更大值分别取 minimal、low、medium、high。模型不支持所得 level 时取强度顺序 minimal、low、medium、high 中最接近的可用 level
 
@@ -654,7 +668,7 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 | 1 | 对话轮列表 `[[[Part...], role]]` |
 | 3 | 应用文件修改 |
 | 7、8 | 时间戳 `["<秒>", <纳秒>]` |
-| 10 | 工具执行，例如编译应用 |
+| 10 | 工具动作，例如编译应用；其中 field 19 为 `search_web` 搜索 `[查询, 域名, 摘要, [[标题, 地址]...]]` |
 | 11 | `[应用 ID, 时间戳]` |
 | 12 | 步骤序号，用户轮为 0 |
 | 6 | 失败原因 `[消息, 详情]` |
@@ -672,9 +686,11 @@ Part 的 field 2 为文本，field 13 为 `1` 或 `true` 时是思考。只修�
 3. 跳过 role 不是 `model` 的对话轮。模型轮的 Part 以（步骤序号，Part 序号）定位，同一步骤内多个模型轮的 Part 序号连续编号
 4. Part 文本是该位置的完整快照：以上一次快照开头时输出新增部分，与上一次相同时不输出；不以上一次快照开头时返回协议错误 “步骤正文不是上一次快照的延续”
 5. 思考 Part 的增量输出为 reasoning，其余为 text；text 来自与上一段 text 不同的步骤、且是该 Part 的第一段增量时，前面加 `\n\n`
-6. 状态为 `1` 的步骤含模型轮时，回复记为已完成
-7. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态
-8. 流关闭时回复已完成：有用量时先输出用量之和，再以 `stop` 结束；回复没有完成时返回协议错误 “流结束前没有完成的模型回复”
+6. 请求声明了函数时，text 中以 ```` ```function_calls ```` 开头、以换行加 ```` ``` ```` 结束的代码块内容为 JSON 数组时，每个元素输出为一个函数调用，调用 ID 为新的 UUID，`arguments` 为 `null` 或缺失时为 `{}`；内容不是调用数组的代码块按原文输出为 text。可能是代码块开头的结尾文本暂缓输出，直到能判定
+7. 状态为 `1` 的步骤的 field 10 带 `search_web` 时，查询记入 `webSearchQueries`，每个 `[标题, 地址]` 记为一个网页来源块；同一步骤只记录一次
+8. 状态为 `1` 的步骤含模型轮时，回复记为已完成
+9. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态
+10. 流关闭时回复已完成：依次输出暂缓的文本、记录的搜索 grounding、用量之和，再以 `stop` 结束；回复没有完成时返回协议错误 “流结束前没有完成的模型回复”
 
 用量之和：输入为各步骤未命中缓存的输入与缓存命中之和，缓存为缓存命中之和，输出为输出之和，总数为输入加输出。
 

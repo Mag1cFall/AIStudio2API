@@ -10,15 +10,15 @@ import { apiKey, errorMessage, failureText } from '../request'
 import { parseFunctions } from '../schema'
 import { audioInput } from '../shell/preferences'
 import { openLiveSocket, type LiveServerMessage } from './live-socket'
-import { createPcmPlayer } from './pcm-player'
+import { createPcmPlayer, pcmFormat } from './pcm-player'
 import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
 import { startPcmCapture, type PcmCapture } from './pcm-capture'
 
 // LiveVariant 是 Live 模型的会话形态：对话、实时翻译或实时转录
-export type LiveVariant = 'conversation' | 'translation' | 'transcription'
+type LiveVariant = 'conversation' | 'translation' | 'transcription'
 
 // liveVariantOf 按能力码返回模型的会话形态：46 为实时翻译，77 为实时转录
-export function liveVariantOf(model: Model | undefined): LiveVariant {
+function liveVariantOf(model: Model | undefined): LiveVariant {
   if (hasCode(model, Capability.SpeechTranslation)) return 'translation'
   if (model?.capabilities?.transcription_output) return 'transcription'
   return 'conversation'
@@ -67,7 +67,7 @@ export type LivePart =
     }
 
 // LiveTranscript 是翻译与转录面板中的一段转写，language 为大写的基础语言代码
-export interface LiveTranscript {
+interface LiveTranscript {
   text: string
   language: string
 }
@@ -147,7 +147,7 @@ export interface LiveTurn {
 }
 
 // LiveStatus 是会话状态：未连接、连接中、进行中或已结束
-export type LiveStatus = 'idle' | 'connecting' | 'live' | 'ended'
+type LiveStatus = 'idle' | 'connecting' | 'live' | 'ended'
 
 // minContext 与 defaultMaxContext、defaultTargetContext 是官网 Session Context 滑块的下限与默认值
 export const minContext = 16000
@@ -292,7 +292,7 @@ function finishModelAudio(interrupted = false): void {
 // transcriptOf 返回服务端帧中的转写片段
 function transcriptOf(message: LiveServerMessage): LiveTranscript {
   return {
-    text: message.transcription?.text ?? message.text ?? '',
+    text: message.text ?? '',
     language: message.transcription?.language_code ?? '',
   }
 }
@@ -356,43 +356,50 @@ function setupFrame(): Record<string, unknown> {
   return frame
 }
 
-// onMessage 处理服务端帧
+// onMessage 处理服务端帧：会话恢复、临时转写、go_away 与错误帧各会话形态相同，其余按会话形态处理
 function onMessage(message: LiveServerMessage): void {
-  if (variant.value !== 'conversation') {
-    onTranscriptMessage(message)
-    return
-  }
   switch (message.type) {
     case 'session_resumption':
       if (message.session_token) sessionToken = message.session_token
-      break
+      return
+    case 'interim_input_transcription':
+      state.interim = message.text ?? ''
+      return
+    case 'go_away':
+      reconnect = sessionToken !== ''
+      return
+    case 'error':
+      state.error = message.error ?? message.code ?? 'error'
+      return
+  }
+  if (variant.value === 'conversation') onConversationMessage(message)
+  else onTranscriptMessage(message)
+}
+
+// onConversationMessage 处理对话会话的服务端帧：音频播放并留存回放，文本、思考与函数调用写入对话
+function onConversationMessage(message: LiveServerMessage): void {
+  switch (message.type) {
     case 'media':
       if (!message.data || !message.mime_type?.startsWith('audio/')) break
       player.enqueue(message.data, message.mime_type)
-      audioRate = Number(/rate=(\d+)/.exec(message.mime_type)?.[1] ?? 24000)
+      audioRate = pcmFormat(message.mime_type).rate
       modelAudio.push(base64Bytes(message.data))
       modelAudioPart()
       break
     case 'output_transcription':
-      modelAudioPart().transcript += message.transcription?.text ?? message.text ?? ''
+      modelAudioPart().transcript += message.text ?? ''
       break
     case 'input_transcription':
       state.interim = ''
-      lastPart('user', 'text', () => ({ type: 'text', text: '' })).text +=
-        message.transcription?.text ?? message.text ?? ''
-      break
-    case 'interim_input_transcription':
-      state.interim = message.transcription?.text ?? message.text ?? ''
+      lastPart('user', 'text', () => ({ type: 'text', text: '' })).text += message.text ?? ''
       break
     case 'text':
       lastPart('model', 'text', () => ({ type: 'text', text: '' })).text += message.text ?? ''
       break
-    case 'provider': {
-      const raw = (message as { raw?: { kind?: string; text?: string } }).raw
-      if (raw?.kind === 'reasoning' && raw.text)
-        lastPart('model', 'thought', () => ({ type: 'thought', text: '' })).text += raw.text
+    case 'provider':
+      if (message.raw?.kind === 'reasoning' && message.raw.text)
+        lastPart('model', 'thought', () => ({ type: 'thought', text: '' })).text += message.raw.text
       break
-    }
     case 'tool_call':
       if (message.tool_call) addCall(message.tool_call)
       break
@@ -410,21 +417,12 @@ function onMessage(message: LiveServerMessage): void {
     case 'turn_complete':
       finishModelAudio()
       break
-    case 'go_away':
-      reconnect = sessionToken !== ''
-      break
-    case 'error':
-      state.error = message.error ?? message.code ?? 'error'
-      break
   }
 }
 
 // onTranscriptMessage 处理实时翻译与转录会话的服务端帧：音频只播放，转写写入面板
 function onTranscriptMessage(message: LiveServerMessage): void {
   switch (message.type) {
-    case 'session_resumption':
-      if (message.session_token) sessionToken = message.session_token
-      break
     case 'media':
       if (message.data && message.mime_type?.startsWith('audio/'))
         player.enqueue(message.data, message.mime_type)
@@ -432,9 +430,6 @@ function onTranscriptMessage(message: LiveServerMessage): void {
     case 'input_transcription':
       state.interim = ''
       state.input.push(transcriptOf(message))
-      break
-    case 'interim_input_transcription':
-      state.interim = message.transcription?.text ?? message.text ?? ''
       break
     case 'output_transcription':
     case 'text':
@@ -451,12 +446,6 @@ function onTranscriptMessage(message: LiveServerMessage): void {
     case 'generation_complete':
     case 'turn_complete':
       closeOutput()
-      break
-    case 'go_away':
-      reconnect = sessionToken !== ''
-      break
-    case 'error':
-      state.error = message.error ?? message.code ?? 'error'
       break
   }
 }
@@ -694,7 +683,7 @@ async function startAudio(stream: MediaStream, source: 'mic' | 'tab'): Promise<v
     return
   }
   capture = started
-  stream.getAudioTracks()[0]?.addEventListener('ended', () => stopSource(source))
+  stream.getAudioTracks()[0]!.addEventListener('ended', () => stopSource(source))
   state.sources = [...state.sources.filter((item) => item !== 'mic' && item !== 'tab'), source]
 }
 
@@ -714,7 +703,7 @@ function startVideo(stream: MediaStream, source: 'camera' | 'screen'): void {
     const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight))
     canvas.width = Math.round(video.videoWidth * scale)
     canvas.height = Math.round(video.videoHeight * scale)
-    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
+    canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
     canvas.toBlob(
       (blob) =>
         void blob?.arrayBuffer().then((buffer) =>
@@ -728,7 +717,7 @@ function startVideo(stream: MediaStream, source: 'camera' | 'screen'): void {
       0.8,
     )
   }, 1000)
-  stream.getVideoTracks()[0]?.addEventListener('ended', () => stopSource(source))
+  stream.getVideoTracks()[0]!.addEventListener('ended', () => stopSource(source))
   state.sources = [
     ...state.sources.filter((item) => item !== 'camera' && item !== 'screen'),
     source,

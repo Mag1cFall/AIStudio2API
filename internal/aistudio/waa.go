@@ -22,10 +22,6 @@ type PreparedProtectedRequest struct {
 type WorkerPhase string
 
 const (
-	// WorkerStarting 表示 runtime 进程正在启动
-	WorkerStarting WorkerPhase = "starting"
-	// WorkerBootstrapping 表示官方页面正在初始化 WAA
-	WorkerBootstrapping WorkerPhase = "bootstrapping"
 	// WorkerReady 表示 runtime 可以接受请求
 	WorkerReady WorkerPhase = "ready"
 	// WorkerBusy 表示 runtime 正在处理受保护请求
@@ -40,11 +36,9 @@ const (
 
 // WorkerState 表示账户 runtime 的可观察状态
 type WorkerState struct {
-	AccountID    string
-	Phase        WorkerPhase
-	PID          int
-	RuntimeID    string
-	PageURL      string
-	RequestCount uint64
-	LastError    string
+	AccountID string
+	Phase     WorkerPhase
+	PID       int
+	RuntimeID string
+	PageURL   string
 }

@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
 
-defineProps<{ text?: string; noAnimation?: boolean }>()
 const { t } = useI18n()
 </script>
 
 <template>
-  <span class="thinking-shimmer" :class="{ 'no-animation': noAnimation }">{{
-    text ?? t('pg.thinking')
-  }}</span>
+  <span class="thinking-shimmer">{{ t('pg.thinking') }}</span>
 </template>
 
 <style scoped>
@@ -42,11 +39,6 @@ const { t } = useI18n()
   line-height: 21px;
   -webkit-text-fill-color: transparent;
   animation: shimmer-cycle 5s linear infinite;
-}
-
-.thinking-shimmer.no-animation {
-  background-position: 50% 0;
-  animation: none;
 }
 
 @keyframes shimmer-cycle {

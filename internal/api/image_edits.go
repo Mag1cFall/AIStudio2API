@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -63,12 +65,15 @@ func (s *server) handleOpenAIImageEdits(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if masks := r.MultipartForm.File["mask"]; len(masks) > 0 {
-		mask, err := imageEditMask(masks[0])
+		data, err := readMultipartFile(masks[0])
+		if err == nil {
+			data, err = imageEditMask(data)
+		}
 		if err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		inputs = append(inputs, aistudio.Part{InlineData: &aistudio.Blob{MIME: "image/png", Data: mask}}, aistudio.Part{Text: imageEditMaskInstruction})
+		inputs = append(inputs, aistudio.Part{InlineData: &aistudio.Blob{MIME: "image/png", Data: data}}, aistudio.Part{Text: imageEditMaskInstruction})
 	}
 	s.writeOpenAIImages(w, r, request, inputs, "image_edit")
 }
@@ -83,12 +88,67 @@ func readMultipartFile(header *multipart.FileHeader) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// imageEditMask 把 OpenAI 遮罩中完全透明的像素转换为白色、其余像素转换为黑色，返回灰度 PNG
-func imageEditMask(header *multipart.FileHeader) ([]byte, error) {
-	data, err := readMultipartFile(header)
+// responsesImageMask 是 image_generation 工具的编辑遮罩，image_url 为 data URL 或 http(s) URL
+type responsesImageMask struct {
+	ImageURL string `json:"image_url,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+}
+
+// imageGenerationMask 读取 input_image_mask 指向的图片并转换为编辑遮罩，file_id 从文件下载
+func (s *server) imageGenerationMask(ctx context.Context, mask responsesImageMask) ([]byte, error) {
+	if mask.ImageURL == "" {
+		service, ok := s.service.(aistudio.FileService)
+		if !ok {
+			return nil, fmt.Errorf("file content is unavailable")
+		}
+		media, err := service.DownloadFile(ctx, mask.FileID)
+		if err != nil {
+			return nil, err
+		}
+		defer media.Body.Close()
+		data, err := io.ReadAll(media.Body)
+		if err != nil {
+			return nil, err
+		}
+		return imageEditMask(data)
+	}
+	part, err := fileOrInlinePart(mask.ImageURL, "")
 	if err != nil {
 		return nil, err
 	}
+	contents := []aistudio.Content{{Parts: []aistudio.Part{part}}}
+	if err := inlineRemoteMedia(ctx, contents); err != nil {
+		return nil, err
+	}
+	if contents[0].Parts[0].InlineData == nil {
+		return nil, fmt.Errorf("image_url must be a data URL or an http(s) URL")
+	}
+	return imageEditMask(contents[0].Parts[0].InlineData.Data)
+}
+
+// withImageMask 把遮罩与说明插入最后一个 user 轮最后一个媒体之后，该轮没有媒体时插在开头
+func withImageMask(contents []aistudio.Content, mask []byte) []aistudio.Content {
+	masked := []aistudio.Part{{InlineData: &aistudio.Blob{MIME: "image/png", Data: mask}}, {Text: imageEditMaskInstruction}}
+	index := len(contents) - 1
+	for index >= 0 && contents[index].Role != aistudio.RoleUser {
+		index--
+	}
+	if index < 0 {
+		return append(slices.Clone(contents), aistudio.Content{Role: aistudio.RoleUser, Parts: masked})
+	}
+	position := 0
+	for offset, part := range contents[index].Parts {
+		if part.InlineData != nil || part.File != nil || part.ExternalMedia != nil {
+			position = offset + 1
+		}
+	}
+	edited := slices.Clone(contents)
+	edited[index].Parts = slices.Concat(contents[index].Parts[:position], masked, contents[index].Parts[position:])
+	return edited
+}
+
+// imageEditMask 把 OpenAI 遮罩中完全透明的像素转换为白色、其余像素转换为黑色，返回灰度 PNG
+func imageEditMask(data []byte) ([]byte, error) {
 	source, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("mask must be a PNG image: %w", err)

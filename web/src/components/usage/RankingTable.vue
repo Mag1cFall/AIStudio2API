@@ -213,15 +213,13 @@ const total = computed(() => props.report.totals.requests)
                 <div class="mt-1 ml-5 h-1 rounded-full bg-raised">
                   <div
                     class="h-1 rounded-full bg-blue-500/70"
-                    :style="{ width: `${Math.max((row.requests / Math.max(total, 1)) * 100, 1)}%` }"
+                    :style="{ width: `${Math.max((row.requests / total) * 100, 1)}%` }"
                   ></div>
                 </div>
               </th>
               <td class="px-2 py-2 text-right tabular-nums">
                 {{ integer(row.requests) }}
-                <span class="ml-1 text-gray-500">{{
-                  percent(row.requests / Math.max(total, 1), 0)
-                }}</span>
+                <span class="ml-1 text-gray-500">{{ percent(row.requests / total, 0) }}</span>
               </td>
               <td class="px-2 py-2 text-right tabular-nums" :class="rateTone(successRate(row))">
                 {{ percent(successRate(row)) }}

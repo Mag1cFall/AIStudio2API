@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>AIStudio2API</title>
+    <style>
+      :root { color-scheme: light; --bg: #fff; --border: #d0d7de; --text: #333b45; --hover: #eef1f5; --active: #1f2328; --check: #2563eb }
+      :root.dark { color-scheme: dark; --bg: #161b22; --border: #30363d; --text: #d1d9e0; --hover: #21262d; --active: #fff; --check: #60a5fa }
+      * { box-sizing: border-box }
+      body { margin: 0; padding: 4px 0; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 13px sans-serif; user-select: none }
+      button { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 30px; padding: 0 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; outline: none }
+      button:hover, button:focus { background: var(--hover); color: var(--active) }
+      .check { color: var(--check) }
+      hr { height: 1px; margin: 4px 0; border: 0; background: var(--border) }
+    </style>
+  </head>
+  <body role="menu">
+    <button role="menuitem" data-action="show"></button>
+    <button role="menuitem" data-action="browser"></button>
+    <hr role="separator">
+    <button role="menuitemcheckbox" data-action="autostart"></button>
+    <hr role="separator">
+    <button role="menuitem" data-action="quit"></button>
+    <script>
+      const menu = __MENU__
+      document.documentElement.lang = menu.locale
+      document.documentElement.classList.toggle('dark', menu.theme === 'dark' || !menu.theme && matchMedia('(prefers-color-scheme: dark)').matches)
+      const buttons = [...document.querySelectorAll('button')]
+      const send = action => window._wails.invoke('aistudio2api:tray:' + action)
+      buttons.forEach((button, index) => {
+        button.textContent = menu.labels[index]
+        button.addEventListener('click', () => send(button.dataset.action))
+        button.addEventListener('mouseenter', () => button.focus())
+      })
+      buttons[2].setAttribute('aria-checked', String(menu.checked))
+      if (menu.checked) {
+        const check = document.createElement('span')
+        check.className = 'check'
+        check.textContent = '\u2713'
+        check.setAttribute('aria-hidden', 'true')
+        buttons[2].append(check)
+      }
+      document.addEventListener('contextmenu', event => event.preventDefault())
+      document.addEventListener('keydown', event => {
+        const current = buttons.indexOf(document.activeElement)
+        let next = current
+        if (event.key === 'Escape') send('close')
+        else if (event.key === 'ArrowDown') next = (current + 1) % buttons.length
+        else if (event.key === 'ArrowUp') next = (current < 0 ? buttons.length - 1 : (current + buttons.length - 1) % buttons.length)
+        else if (event.key === 'Home') next = 0
+        else if (event.key === 'End') next = buttons.length - 1
+        else return
+        event.preventDefault()
+        if (next >= 0) buttons[next].focus()
+      })
+    </script>
+  </body>
+</html>

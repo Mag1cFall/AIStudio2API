@@ -28,7 +28,7 @@ const thresholdLabels: Record<SafetyThreshold, TranslationKey> = {
 
 // setLevel 按滑块位置设置类别的阈值
 function setLevel(category: SafetyCategory, index: number): void {
-  session.settings.safety[category] = safetyThresholds[index] ?? 'OFF'
+  session.settings.safety[category] = safetyThresholds[index]!
 }
 
 // resetDefaults 把全部类别恢复为关闭

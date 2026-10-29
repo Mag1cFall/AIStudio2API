@@ -371,10 +371,7 @@ func EncodeBidiTextRequest(text string) ([]byte, string, error) {
 	}
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, nil, nil, text}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi text: %w", err)
-	}
+	body, _ := json.Marshal(wire)
 	return body, "", nil
 }
 
@@ -395,10 +392,7 @@ func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error
 	}
 	wire := make([]any, 6)
 	wire[2] = realtimeInput
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi media: %w", err)
-	}
+	body, _ := json.Marshal(wire)
 	return body, "", nil
 }
 
@@ -406,10 +400,7 @@ func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error
 func EncodeBidiMediaEndRequest() ([]byte, string, error) {
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, int64(1)}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi media end: %w", err)
-	}
+	body, _ := json.Marshal(wire)
 	return body, "", nil
 }
 

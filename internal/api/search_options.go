@@ -17,7 +17,7 @@ func mapSearchOptions(size string, location json.RawMessage, filters json.RawMes
 	options := &aistudio.GoogleSearchOptions{WebSearch: true, ContextSize: size}
 	if rawJSONConfigured(location) {
 		var object map[string]json.RawMessage
-		if err := json.Unmarshal(location, &object); err != nil || object == nil {
+		if err := json.Unmarshal(location, &object); err != nil {
 			return nil, fmt.Errorf("user_location must be an object")
 		}
 		options.UserLocation = location

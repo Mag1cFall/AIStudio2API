@@ -38,6 +38,7 @@ type AdminService interface {
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
 	Events(context.Context) (<-chan AdminEvent, error)
+	FirstEventLatencies() []FirstEventLatency
 	RecordAccessStart(AccessLog)
 	RecordAccessLog(AccessLog)
 }
@@ -252,7 +253,11 @@ type RuntimeConfig struct {
 	NonstreamKeepalive        bool         `json:"nonstream_keepalive"`
 	FakeStream                bool         `json:"fake_stream"`
 	YouTubeLinks              bool         `json:"youtube_links"`
+	SearchModelAliases        bool         `json:"search_model_aliases"`
+	GoogleSearch              bool         `json:"google_search"`
 	FirstEventHedge           string       `json:"first_event_hedge"`
+	ContinuationRewrite       bool         `json:"continuation_rewrite"`
+	ContinuationPrompt        string       `json:"continuation_prompt"`
 	LogFile                   bool         `json:"log_file"`
 	LogMaxTotalMB             int          `json:"log_max_total_mb"`
 	AuthStates                string       `json:"auth_states"`
@@ -345,20 +350,12 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if s.config.Admin != nil {
-		status, err := s.config.Admin.Status(r.Context())
-		if err != nil {
-			writeAdminUpstreamError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-		return
-	}
-	if _, err := s.service.Models(r.Context()); err != nil {
+	status, err := s.config.Admin.Status(r.Context())
+	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ready": true})
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
@@ -584,11 +581,7 @@ func (s *server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleFirstEventLatencies 返回各模型与通道近期原请求首事件等待的 p95
 func (s *server) handleFirstEventLatencies(w http.ResponseWriter, _ *http.Request) {
-	latencies := []FirstEventLatency{}
-	if provider, ok := s.config.Admin.(interface{ FirstEventLatencies() []FirstEventLatency }); ok {
-		latencies = provider.FirstEventLatencies()
-	}
-	writeJSON(w, http.StatusOK, map[string][]FirstEventLatency{"latencies": latencies})
+	writeJSON(w, http.StatusOK, map[string][]FirstEventLatency{"latencies": s.config.Admin.FirstEventLatencies()})
 }
 
 func (s *server) handleUpdateRuntimeConfig(w http.ResponseWriter, r *http.Request) {

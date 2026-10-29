@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-func localAccountLocale() string {
+// DefaultAccountLocale 返回当前用户的系统语言
+func DefaultAccountLocale() string {
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if locale := normalizeSystemLocale(os.Getenv(name)); locale != "" {
 			return locale
@@ -18,7 +19,8 @@ func localAccountLocale() string {
 	return fallbackAccountLocale
 }
 
-func localAccountTimezone() string {
+// DefaultAccountTimezone 返回当前用户的 IANA 时区
+func DefaultAccountTimezone() string {
 	if zone := normalizeSystemTimezone(os.Getenv("TZ")); zone != "" {
 		return zone
 	}
@@ -39,11 +41,7 @@ func localAccountTimezone() string {
 }
 
 func normalizeSystemLocale(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "C" || value == "POSIX" {
-		return ""
-	}
-	value, _, _ = strings.Cut(value, ".")
+	value, _, _ = strings.Cut(strings.TrimSpace(value), ".")
 	value, _, _ = strings.Cut(value, "@")
 	if strings.EqualFold(value, "C") || strings.EqualFold(value, "POSIX") {
 		return ""

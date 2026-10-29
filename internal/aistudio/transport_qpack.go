@@ -23,6 +23,8 @@ const (
 	firefoxQPACKBlockedStreams = 20
 	// qpackEntryOverhead 是 QPACK 动态表条目在名与值之外计入的字节数
 	qpackEntryOverhead = 32
+	// qpackDecoderMaxEntries 是 RFC 9204 3.2.2 按本端声明的动态表容量算出的最大条目数
+	qpackDecoderMaxEntries uint64 = firefoxQPACKTableSize / qpackEntryOverhead
 )
 
 // qpackField 是一条 QPACK 头字段
@@ -516,11 +518,6 @@ func newQPACKDecoder() *qpackDecoder {
 	return &qpackDecoder{changed: make(chan struct{}), table: qpackTable{acked: math.MaxUint64}, pending: []byte{qpackDecoderStreamType}}
 }
 
-// maxEntries 是 RFC 9204 3.2.2 按本端声明的动态表容量算出的最大条目数
-func (decoder *qpackDecoder) maxEntries() uint64 {
-	return firefoxQPACKTableSize / 32
-}
-
 // readEncoderStream 读取服务端编码器流的指令写入动态表，每读完一批到达的数据调用一次 flush
 func (decoder *qpackDecoder) readEncoderStream(stream io.Reader, flush func()) error {
 	reader := bufio.NewReader(stream)
@@ -680,11 +677,11 @@ func (decoder *qpackDecoder) requiredInsertCount(encoded uint64) (uint64, error)
 	if encoded == 0 {
 		return 0, nil
 	}
-	full := 2 * decoder.maxEntries()
+	full := 2 * qpackDecoderMaxEntries
 	if encoded > full {
 		return 0, errQPACK
 	}
-	maxValue := decoder.table.base + decoder.maxEntries()
+	maxValue := decoder.table.base + qpackDecoderMaxEntries
 	required := maxValue/full*full + encoded - 1
 	if required > maxValue {
 		if required < full {

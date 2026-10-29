@@ -4,7 +4,7 @@ import { openLiveSocket, type LiveServerMessage } from './live-socket'
 import { createPcmPlayer } from './pcm-player'
 
 // WeightedPrompt 是实时音乐的一条带权重提示词
-export interface WeightedPrompt {
+interface WeightedPrompt {
   id: string
   text: string
   weight: number
@@ -27,7 +27,7 @@ export interface MusicConfig {
 }
 
 // RealtimeStatus 是实时音乐会话状态
-export type RealtimeStatus = 'idle' | 'connecting' | 'loading' | 'playing' | 'paused'
+type RealtimeStatus = 'idle' | 'connecting' | 'loading' | 'playing' | 'paused'
 
 // musicScales 是 LiveMusicGenerationConfig.scale 的取值
 export const musicScales = [
@@ -174,9 +174,10 @@ function connect(model: string): void {
   state.error = ''
   state.status = 'connecting'
   ready = false
-  socket = openLiveSocket()
-  socket.onopen = () =>
-    socket?.send(
+  const current = openLiveSocket()
+  socket = current
+  current.onopen = () =>
+    current.send(
       JSON.stringify({
         type: 'setup',
         model,
@@ -184,11 +185,12 @@ function connect(model: string): void {
         output_modalities: ['audio'],
       }),
     )
-  socket.onmessage = (event) => onMessage(JSON.parse(String(event.data)) as LiveServerMessage)
-  socket.onclose = () => {
+  current.onmessage = (event) => onMessage(JSON.parse(String(event.data)) as LiveServerMessage)
+  current.onclose = () => {
+    if (socket !== current) return
     socket = undefined
     ready = false
-    if (state.status !== 'idle') state.status = 'idle'
+    state.status = 'idle'
   }
 }
 
@@ -251,6 +253,8 @@ function resetConfig(): void {
 export function useRealtimeMusic() {
   return {
     state,
+    activePrompts,
+    configFrame,
     play,
     pause,
     stop,

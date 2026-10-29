@@ -1,6 +1,6 @@
 import type { CodeOption } from '../code'
 import type { InlineImage } from './api'
-import { pyTriple, tsTemplate } from './code'
+import { extension, pyTriple, tsTemplate } from './code'
 
 // MusicCodeLanguage 是音乐页获取代码的语言，与官网相同只有 Python 与 TypeScript
 export type MusicCodeLanguage = 'python' | 'typescript'
@@ -12,7 +12,7 @@ export const musicCodeOptions: CodeOption<MusicCodeLanguage>[] = [
 ]
 
 // MusicCodeInput 是音乐页示例代码所需的提示词、参考图片与服务地址
-export interface MusicCodeInput {
+interface MusicCodeInput {
   baseURL: string
   model: string
   prompt: string
@@ -21,7 +21,7 @@ export interface MusicCodeInput {
 
 // imageFile 返回第 index 张参考图片在示例代码中的本地文件名
 function imageFile(image: InlineImage, index: number): string {
-  return `image_${index + 1}.${image.mimeType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png'}`
+  return `image_${index + 1}.${extension(image.mimeType)}`
 }
 
 // musicPrompt 返回示例代码中的提示词，空输入为官网占位
@@ -182,28 +182,16 @@ export function musicCode(language: MusicCodeLanguage, input: MusicCodeInput): s
   return language === 'python' ? musicPython(input) : musicTypescript(input)
 }
 
-// RealtimeMusicCodeInput 是实时音乐示例代码所需的提示词、生成参数与服务地址
-export interface RealtimeMusicCodeInput {
+// RealtimeMusicCodeInput 是实时音乐示例代码所需的非空提示词、已设置的生成参数与服务地址
+interface RealtimeMusicCodeInput {
   baseURL: string
   model: string
   prompts: readonly { text: string; weight: number }[]
   config: Record<string, unknown>
 }
 
-// realtimeFrames 返回实时音乐会话开始后依次发送的提示词、参数与播放帧
-function realtimeFrames(input: RealtimeMusicCodeInput): { prompts: string; config: string } {
-  const prompts = input.prompts
-    .filter((prompt) => prompt.text.trim() !== '')
-    .map((prompt) => ({ text: prompt.text.trim(), weight: prompt.weight }))
-  const config = Object.fromEntries(
-    Object.entries(input.config).filter(([, value]) => value !== null && value !== ''),
-  )
-  return { prompts: JSON.stringify(prompts), config: JSON.stringify(config) }
-}
-
 // realtimePython 生成经本服务 /v1/live 连接实时音乐会话、保存 30 秒 WAV 的 Python 示例
 function realtimePython(input: RealtimeMusicCodeInput): string {
-  const frames = realtimeFrames(input)
   const url = input.baseURL.replace(/^http/, 'ws')
   return `# To run this code you need to install the following dependencies:
 # pip install websockets
@@ -230,8 +218,8 @@ async def main():
         }))
         while json.loads(await socket.recv())["type"] != "setup_complete":
             pass
-        await socket.send(json.dumps({"type": "music_prompts", "weighted_prompts": ${frames.prompts}}))
-        await socket.send(json.dumps({"type": "music_config", "music_config": ${frames.config}}))
+        await socket.send(json.dumps({"type": "music_prompts", "weighted_prompts": ${JSON.stringify(input.prompts)}}))
+        await socket.send(json.dumps({"type": "music_config", "music_config": ${JSON.stringify(input.config)}}))
         await socket.send(json.dumps({"type": "playback", "playback_control": "play"}))
 
         with wave.open("music.wav", "wb") as output:
@@ -260,7 +248,6 @@ asyncio.run(main())
 
 // realtimeTypescript 生成经本服务 /v1/live 连接实时音乐会话、保存 30 秒 WAV 的 TypeScript 示例
 function realtimeTypescript(input: RealtimeMusicCodeInput): string {
-  const frames = realtimeFrames(input)
   const url = input.baseURL.replace(/^http/, 'ws')
   return `// To run this code you need to install the following dependencies:
 // npm install ws
@@ -285,8 +272,8 @@ socket.on('open', () => {
 socket.on('message', (raw) => {
   const message = JSON.parse(raw.toString());
   if (message.type === 'setup_complete') {
-    socket.send(JSON.stringify({ type: 'music_prompts', weighted_prompts: ${frames.prompts} }));
-    socket.send(JSON.stringify({ type: 'music_config', music_config: ${frames.config} }));
+    socket.send(JSON.stringify({ type: 'music_prompts', weighted_prompts: ${JSON.stringify(input.prompts)} }));
+    socket.send(JSON.stringify({ type: 'music_config', music_config: ${JSON.stringify(input.config)} }));
     socket.send(JSON.stringify({ type: 'playback', playback_control: 'play' }));
   } else if (message.type === 'media') {
     const data = Buffer.from(message.data, 'base64');

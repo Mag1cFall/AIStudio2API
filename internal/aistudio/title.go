@@ -41,21 +41,14 @@ func (s *PooledService) GenerateTitle(ctx context.Context, request TitleRequest)
 
 // GenerateTitle 按官网试用页发送 GenerateTitle：正文为提示词、回答与 WAA proof，没有回答时回答位为 null
 func (c *Client) GenerateTitle(ctx context.Context, accountID string, request TitleRequest) (string, error) {
-	transport, ok := c.protected.(TitleProtectedTransport)
-	if !ok {
-		return "", fmt.Errorf("AI Studio protected transport 不支持 GenerateTitle")
-	}
 	var answer any
 	if request.Answer != "" {
 		answer = request.Answer
 	}
-	body, err := json.Marshal([]any{request.Prompt, answer, nil})
-	if err != nil {
-		return "", err
-	}
+	body, _ := json.Marshal([]any{request.Prompt, answer, nil})
 	rpc := newRPCRequest("GenerateTitle", accountID, "", body, false)
 	c.applyBenefitTier(rpc.Method, accountID, rpc.Header)
-	response, err := transport.DoProtectedTitle(ctx, request, rpc)
+	response, err := c.protected.(TitleProtectedTransport).DoProtectedTitle(ctx, request, rpc)
 	if err != nil {
 		return "", fmt.Errorf("发送 AI Studio GenerateTitle: %w", err)
 	}

@@ -75,10 +75,7 @@ func installWebView2() bool {
 
 // downloadWebView2Bootstrapper 下载 WebView2 Evergreen 引导程序到临时文件并返回其路径
 func downloadWebView2Bootstrapper(ctx context.Context) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, webview2BootstrapperURL, nil)
-	if err != nil {
-		return "", err
-	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, webview2BootstrapperURL, nil)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("下载 WebView2 引导程序: %w", err)

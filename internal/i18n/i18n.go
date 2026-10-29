@@ -58,9 +58,6 @@ var (
 
 // Messages 返回 locale 的翻译表原文，键为格式串，值为带编号占位符的译文
 func Messages(locale string) ([]byte, bool) {
-	if !slices.Contains(Locales, locale) || locale == Source {
-		return nil, false
-	}
 	data, err := messages.ReadFile("messages/" + locale + ".json")
 	return data, err == nil
 }
@@ -156,9 +153,6 @@ func (current *catalog) translate(text string) string {
 		}
 		return placeholder.ReplaceAllStringFunc(item.text, func(token string) string {
 			index, _ := strconv.Atoi(token[1 : len(token)-1])
-			if index+1 >= len(groups) {
-				return token
-			}
 			return current.translate(groups[index+1])
 		})
 	}
@@ -208,8 +202,6 @@ func Match(tag string) string {
 	tag = strings.ReplaceAll(strings.TrimSpace(strings.SplitN(tag, ".", 2)[0]), "_", "-")
 	lower := strings.ToLower(tag)
 	switch {
-	case lower == "":
-		return ""
 	case lower == "zh-tw" || lower == "zh-hk" || lower == "zh-mo" || strings.HasPrefix(lower, "zh-hant"):
 		return "zh-TW"
 	case lower == "zh" || strings.HasPrefix(lower, "zh-"):

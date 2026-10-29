@@ -14,83 +14,13 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
-jobs:
-  build:
-    runs-on: ubuntu-24.04
-    env:
-      CGO_ENABLED: '1'
-      GOTOOLCHAIN: local
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22.18.0'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Check And Build Frontend
-        working-directory: web
-        run: |
-          npm ci
-          npm run lint
-          npm run format:check
-          npm run build
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-      - name: Install Windows C Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
-      - name: Run Unit Tests
-        run: go test -mod=readonly ./cmd/... ./internal/...
-      - name: Check Minimum Go Version
-        run: |
-          go version
-          go vet ./...
-          CC=x86_64-w64-mingw32-gcc GOOS=windows go vet -tags desktop,production ./...
-          go build -mod=readonly ./cmd/aistudio2api
-      - uses: actions/setup-go@v7
-        with:
-          go-version: stable
-          cache: false
-      - name: Build Packages
-        shell: bash
-        run: |
-          version="${GITHUB_SHA:0:7}"
-          number=0.0.0
-          link=""
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; number="${version#v}"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
-          mkdir -p dist
-          for target in amd64:x86_64 arm64:aarch64; do
-            goarch="${target%:*}"
-            name="aistudio2api-${version}-linux-${goarch}"
-            mkdir -p "dist/$name"
-            CC="zig cc -target ${target#*:}-linux-musl" GOOS=linux GOARCH="$goarch" go build -mod=readonly -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all' $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
-            tar -czf "dist/$name.tar.gz" -C dist "$name"
-          done
-          CGO_ENABLED=0 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
-          jq --arg v "$number" '.fixed.file_version = $v | .info["0000"].ProductVersion = $v' build/windows/info.json > dist/info.json
-          wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info dist/info.json -out cmd/aistudio2api/rsrc_windows_amd64.syso
-          name="aistudio2api-${version}-windows-amd64"
-          mkdir -p "dist/$name"
-          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
-          (cd dist && zip -qr "$name.zip" "$name")
-      - uses: actions/upload-artifact@v7
-        with:
-          name: packages
-          path: |
-            dist/*.zip
-            dist/*.tar.gz
-          retention-days: 7
+env:
+  GOTOOLCHAIN: local
+  SPIDERMONKEY: v152.0.4-aistudio2api.1
 
-  desktop-macos:
-    runs-on: macos-15
-    env:
-      GOTOOLCHAIN: local
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -102,31 +32,263 @@ jobs:
         working-directory: web
         run: |
           npm ci
-          npm run build
+          npx vp build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend
+          path: internal/webui/dist
+          retention-days: 1
+
+  web-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Check Frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm run format:check
+
+  checks:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        check: [test, vet]
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend
+          path: internal/webui/dist
       - uses: actions/setup-go@v7
+        id: go
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: linux-amd64-gnu
+      - name: Run Unit Tests
+        if: matrix.check == 'test'
+        run: go test -mod=readonly -trimpath -vet=off ./cmd/... ./internal/...
+      - name: Check Minimum Go Version
+        if: matrix.check == 'vet'
+        run: |
+          go version
+          go vet -mod=readonly -trimpath ./...
+          go build -mod=readonly -trimpath ./cmd/aistudio2api
+      - name: Install Windows C Compiler
+        if: matrix.check == 'vet'
+        run: |
+          curl -fsSL https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/spidermonkey
+        if: matrix.check == 'vet'
+        with:
+          target: windows-amd64
+      - name: Vet Windows Build
+        if: matrix.check == 'vet'
+        run: CC=x86_64-w64-mingw32-clang CXX=x86_64-w64-mingw32-clang++ GOOS=windows go vet -mod=readonly -trimpath -tags desktop,production ./...
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+
+  build-linux:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64
+          - arch: arm64
+            target: aarch64
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend
+          path: internal/webui/dist
+      - uses: actions/setup-go@v7
+        id: go
         with:
           go-version: stable
-          cache-dependency-path: go.sum
-      - name: Build App
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-linux-${{ matrix.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-linux-${{ matrix.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: linux-${{ matrix.arch }}
+      - name: Build Packages
         shell: bash
         env:
-          CGO_ENABLED: '1'
-          MACOSX_DEPLOYMENT_TARGET: '12.0'
-          CGO_CFLAGS: -mmacosx-version-min=12.0
-          CGO_LDFLAGS: -mmacosx-version-min=12.0
+          GOARCH: ${{ matrix.arch }}
+          CC: zig cc -target ${{ matrix.target }}-linux-musl
+          CXX: zig c++ -target ${{ matrix.target }}-linux-musl
+        run: |
+          version="${GITHUB_SHA:0:7}"
+          link=""
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
+          mkdir -p dist
+          name="aistudio2api-${version}-linux-${GOARCH}"
+          mkdir -p "dist/$name"
+          GOOS=linux go build -mod=readonly -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all' $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-linux-${{ matrix.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  build-windows:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend
+          path: internal/webui/dist
+      - uses: actions/setup-go@v7
+        id: go
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-windows-amd64-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-windows-amd64-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+      - name: Install Windows C Compiler
+        run: |
+          curl -fsSL https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: windows-amd64
+      - name: Build Package
+        shell: bash
         run: |
           version="${GITHUB_SHA:0:7}"
           number=0.0.0
           link=""
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; number="${version#v}"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
           mkdir -p dist
-          for arch in arm64 amd64; do
-            GOARCH="$arch" go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o "dist/aistudio2api-$arch" ./cmd/aistudio2api
-            name="aistudio2api-${version}-darwin-${arch}"
+          CGO_ENABLED=0 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
+          jq --arg v "$number" '.fixed.file_version = $v | .info["0000"].ProductVersion = $v' build/windows/info.json > dist/info.json
+          wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info dist/info.json -out cmd/aistudio2api/rsrc_windows_amd64.syso
+          name="aistudio2api-${version}-windows-amd64"
+          mkdir -p "dist/$name"
+          CC=x86_64-w64-mingw32-clang CXX=x86_64-w64-mingw32-clang++ GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
+          (cd dist && zip -qr "$name.zip" "$name")
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-windows-amd64-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-windows-amd64
+          path: dist/*.zip
+          retention-days: 7
+
+  desktop-macos:
+    needs: frontend
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend
+          path: internal/webui/dist
+      - uses: actions/setup-go@v7
+        id: go
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: go-macos-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-macos-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: darwin-arm64
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: darwin-amd64
+      - name: Build App
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
+          CGO_CFLAGS: -mmacosx-version-min=12.0
+        run: |
+          version="${GITHUB_SHA:0:7}"
+          number=0.0.0
+          link=""
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; number="${version#v}"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
+          mkdir -p dist
+          build() {
+            export GOARCH=$1
+            export CGO_CXXFLAGS="-mmacosx-version-min=12.0 -I$RUNNER_TEMP/spidermonkey/darwin-$1/include"
+            export CGO_LDFLAGS="-mmacosx-version-min=12.0 -L$RUNNER_TEMP/spidermonkey/darwin-$1/lib"
+            go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o "dist/aistudio2api-$1" ./cmd/aistudio2api
+            name="aistudio2api-${version}-darwin-$1"
             mkdir -p "dist/$name"
-            GOARCH="$arch" go build -mod=readonly -trimpath -ldflags="-s -w $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+            go build -mod=readonly -trimpath -ldflags="-s -w $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
             tar -czf "dist/$name.tar.gz" -C dist "$name"
-          done
+          }
+          build arm64 & arm64=$!
+          build amd64 & amd64=$!
+          wait "$arm64"
+          wait "$amd64"
           app=dist/AIStudio2API.app
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           lipo -create -output "$app/Contents/MacOS/aistudio2api" dist/aistudio2api-arm64 dist/aistudio2api-amd64
@@ -140,7 +302,19 @@ jobs:
           mkdir dist/dmg
           cp -R "$app" dist/dmg/
           ln -s /Applications dist/dmg/Applications
-          hdiutil create -volname AIStudio2API -srcfolder dist/dmg -fs HFS+ -ov -format ULMO "dist/aistudio2api-${version}-darwin-universal.dmg"
+          # hdiutil 在 GitHub macOS runner 上偶发 Resource busy，重试三次
+          for attempt in 1 2 3; do
+            hdiutil create -volname AIStudio2API -srcfolder dist/dmg -fs HFS+ -ov -format ULMO "dist/aistudio2api-${version}-darwin-universal.dmg" && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 5
+          done
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: go-macos-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-macos
@@ -151,29 +325,33 @@ jobs:
           retention-days: 7
 
   desktop-linux:
+    needs: frontend
     runs-on: ubuntu-24.04
-    env:
-      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/download-artifact@v8
         with:
-          node-version: '22.18.0'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build Frontend
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+          name: frontend
+          path: internal/webui/dist
       - uses: actions/setup-go@v7
+        id: go
         with:
           go-version: stable
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-desktop-linux-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-desktop-linux-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config file libgtk-4-dev libwebkitgtk-6.0-dev
+      - uses: ./.github/actions/spidermonkey
+        with:
+          target: linux-amd64-gnu
       - name: Build Packages
         shell: bash
         run: |
@@ -185,10 +363,19 @@ jobs:
           CGO_ENABLED=1 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o bin/aistudio2api ./cmd/aistudio2api
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
           cp build/appicon.png dist/aistudio2api.png
+          # wails3 generate appimage 遍历整个 /usr 查找 WebKit 文件，先用空目录遮住 runner 预装的大型工具目录
+          for dir in /usr/local /usr/lib/google-cloud-sdk /usr/share/miniconda /usr/share/dotnet; do sudo mount -t tmpfs none "$dir"; done
           wails3 generate appimage -binary bin/aistudio2api -icon dist/aistudio2api.png -desktopfile build/linux/aistudio2api.desktop -outputdir dist -builddir dist/appimage
           mv dist/aistudio2api-x86_64.AppImage "dist/aistudio2api-${version}-linux-amd64.AppImage"
           VERSION="$number" GOARCH=amd64 wails3 tool package -name aistudio2api -format deb -config build/linux/nfpm.yaml -out dist
           mv dist/aistudio2api*.deb "dist/aistudio2api-${version}-linux-amd64.deb"
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-desktop-linux-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux
@@ -199,7 +386,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build, desktop-macos, desktop-linux]
+    needs: [web-checks, checks, build-linux, build-windows, desktop-macos, desktop-linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -207,7 +394,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: '{packages,desktop-*}'
+          pattern: '{packages-*,desktop-*}'
           merge-multiple: true
       - name: Publish Release
         env:

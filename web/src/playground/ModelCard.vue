@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
-import { vTooltip } from '@/playground/ui/tooltip'
 import type { Model } from '@/types'
 import type { PageKind } from './media/kinds'
 import { openModelSelector } from './model-selector'
@@ -40,8 +39,8 @@ function openSelector(): void {
       model?.name ?? t('pg.selectModel')
     }}</span>
     <template v-if="!sideBySide && model">
-      <span class="subtitle">{{ model?.id }}</span>
-      <span v-if="model?.details?.summary" class="subtitle">{{ model.details.summary }}</span>
+      <span class="subtitle">{{ model.id }}</span>
+      <span v-if="model.details?.summary" class="subtitle">{{ model.details.summary }}</span>
     </template>
   </button>
 </template>

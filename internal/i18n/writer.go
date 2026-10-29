@@ -58,14 +58,13 @@ func (current writer) Write(data []byte) (int, error) {
 // jsonValue 翻译一个 JSON 字符串字面量并按不转义 HTML 的方式重新编码
 func (current writer) jsonValue(literal string) string {
 	var value string
-	if json.Unmarshal([]byte(literal), &value) != nil || !hasHan(value) {
+	json.Unmarshal([]byte(literal), &value)
+	if !hasHan(value) {
 		return literal
 	}
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
-	if encoder.Encode(Translate(current.locale, value)) != nil {
-		return literal
-	}
+	encoder.Encode(Translate(current.locale, value))
 	return strings.TrimSuffix(encoded.String(), "\n")
 }

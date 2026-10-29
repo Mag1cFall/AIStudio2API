@@ -58,7 +58,7 @@ type App struct {
 	bounds  application.Rect
 	maxed   bool
 	mu      sync.Mutex
-	items   [4]*application.MenuItem
+	menu    *application.WebviewWindow
 	locale  string
 	theme   string
 }
@@ -229,10 +229,7 @@ func (s *App) navigate(pageURL string) {
 		}
 		return
 	}
-	address, err := url.Parse(pageURL)
-	if err != nil {
-		return
-	}
+	address, _ := url.Parse(pageURL)
 	origin := address.Scheme + "://" + address.Host
 	target := origin + pageAddress(address)
 	s.mu.Lock()
@@ -311,7 +308,21 @@ func (s *App) show() {
 // handleMessage 处理管理页面经 postMessage 发来的窗口操作、界面语言、配色、当前路由与是否有未完成的工作
 func (s *App) handleMessage(window application.Window, message string, origin *application.OriginInfo) {
 	command, found := strings.CutPrefix(message, messagePrefix)
-	if !found || origin == nil {
+	if !found {
+		return
+	}
+	if window.Name() == "tray" {
+		window.Close()
+		switch command {
+		case "tray:show":
+			s.show()
+		case "tray:browser":
+			s.openPage()
+		case "tray:autostart":
+			s.toggleAutostart()
+		case "tray:quit":
+			s.app.Quit()
+		}
 		return
 	}
 	if command == "splash" {
@@ -359,23 +370,15 @@ func (s *App) openExternal(link string) {
 	}
 }
 
-// setLocale 按管理页面的界面语言更新托盘菜单文字
+// setLocale 记录管理页面的界面语言，托盘菜单打开时按它取文字
 func (s *App) setLocale(locale string) {
-	labels, ok := trayLabels[locale]
+	_, ok := trayLabels[locale]
 	if !ok {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.locale == locale {
-		return
-	}
 	s.locale = locale
-	for index, item := range s.items {
-		if item != nil {
-			item.SetLabel(labels[index])
-		}
-	}
 }
 
 // labels 返回当前界面语言的托盘菜单文字

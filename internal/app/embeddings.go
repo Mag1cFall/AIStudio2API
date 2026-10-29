@@ -27,28 +27,20 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 	request.CandidateAccountIDs, err = service.embeddingCandidates(requestCtx, modelID)
 	if err != nil {
 		api.SetAccessLogError(requestCtx, err)
-		service.requests.finish(request.ID, finalRequestState(err), err)
+		service.requests.finish(request.ID, finalRequestState(err))
 		return aistudio.EmbeddingResult{}, err
 	}
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
-	accountLabel := func(accountID string) string {
-		for _, status := range service.pool.Status() {
-			if status.ID == accountID {
-				return status.Label
-			}
-		}
-		return accountID
-	}
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		service.requests.logRequestProgress(request.ID, accountLabel(accountID), "WARN", fmt.Sprintf(
+		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", fmt.Sprintf(
 			"账号切换 | 模型=%s\n原因: %s", modelID, strings.TrimSpace(cause.Error()),
 		))
 	}
 	request.RecoverWAARuntime = func(recoveryCtx context.Context, accountID string, cause error) (bool, error) {
 		workerFailed := service.workers.WorkerFailed(accountID)
 		workerReplaced := errors.Is(cause, errAccountWorkerReplaced)
-		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, false, workerFailed, workerReplaced) {
+		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, workerFailed, workerReplaced) {
 			return false, nil
 		}
 		recovered, _, recoveryErr := service.recoverWorkerOnce(
@@ -56,7 +48,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 			true, workerFailed || aistudio.DefinitiveWAARuntimeFailure(cause),
 		)
 		if recovered && recoveryErr == nil {
-			service.requests.logRequestProgress(request.ID, accountLabel(accountID), "WARN", "WAA Worker 重建 | 模型="+modelID+" | 重放当前请求")
+			service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", "WAA Worker 重建 | 模型="+modelID+" | 重放当前请求")
 		}
 		return recovered, recoveryErr
 	}
@@ -68,19 +60,12 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 		service.requests.markRunning(request.ID, account.ID, account.Config.Label)
 		service.requests.markChannel(request.ID, string(aistudio.ChannelBuild))
 	})
-	embeddings, ok := service.service.(aistudio.EmbeddingService)
-	if !ok {
-		err = fmt.Errorf("embedding service 不可用")
-		api.SetAccessLogError(requestCtx, err)
-		service.requests.finish(request.ID, finalRequestState(err), err)
-		return aistudio.EmbeddingResult{}, err
-	}
-	result, err := embeddings.Embed(observed, request)
+	result, err := service.service.(aistudio.EmbeddingService).Embed(observed, request)
 	if err == nil {
 		api.SetAccessLogGenerationResult(requestCtx, &aistudio.Usage{InputTokens: result.TokenCount, TotalTokens: result.TokenCount}, 0)
 	}
 	api.SetAccessLogError(requestCtx, err)
-	service.requests.finish(request.ID, finalRequestState(err), err)
+	service.requests.finish(request.ID, finalRequestState(err))
 	return result, err
 }
 
@@ -114,11 +99,7 @@ func (service *trackedService) embeddingCandidates(ctx context.Context, modelID 
 func (manager *runtimeManager) Embed(ctx context.Context, request aistudio.EmbeddingRequest) (aistudio.EmbeddingResult, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
-	service, ok := manager.current.service.(aistudio.EmbeddingService)
-	if !ok {
-		return aistudio.EmbeddingResult{}, fmt.Errorf("embedding service 不可用")
-	}
-	return service.Embed(ctx, request)
+	return manager.current.service.(aistudio.EmbeddingService).Embed(ctx, request)
 }
 
 // DoProtectedBuild 在认证失败后续签同一账户并重放 Build 代理请求
@@ -128,12 +109,8 @@ func (transport *authRetryProtectedTransport) DoProtectedBuild(
 	page string,
 	rpc aistudio.RPCRequest,
 ) (*aistudio.RPCResponse, error) {
-	buildTransport, ok := transport.transport.(aistudio.BuildProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("protected transport 不支持 Build 代理请求")
-	}
 	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
-		return buildTransport.DoProtectedBuild(ctx, selection, page, rpc)
+		return transport.transport.(aistudio.BuildProtectedTransport).DoProtectedBuild(ctx, selection, page, rpc)
 	})
 }
 

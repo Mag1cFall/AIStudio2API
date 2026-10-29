@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { onUnmounted, reactive, ref, watch } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -28,28 +27,22 @@ const { t } = useI18n()
 // gallery 为示例卡片的容器，内容超出时显示左右滚动按钮
 const gallery = ref<HTMLElement>()
 const scroll = reactive({ left: false, right: false })
-let observer: ResizeObserver | undefined
 
 // updateScroll 按滚动位置决定是否显示左右滚动按钮
 function updateScroll(): void {
-  const node = gallery.value
-  if (!node) return
+  const node = gallery.value!
   scroll.left = node.scrollLeft > 0
   scroll.right = node.scrollLeft + node.clientWidth < node.scrollWidth - 1
 }
 
 // scrollGallery 向左或向右滚动一张卡片
 function scrollGallery(direction: 1 | -1): void {
-  gallery.value?.scrollBy({ left: direction * 178, behavior: 'smooth' })
+  gallery.value!.scrollBy({ left: direction * 178, behavior: 'smooth' })
 }
 
-watch(gallery, (node) => {
-  observer?.disconnect()
-  if (!node) return
-  observer = new ResizeObserver(updateScroll)
-  observer.observe(node)
-})
-onUnmounted(() => observer?.disconnect())
+const observer = new ResizeObserver(updateScroll)
+onMounted(() => observer.observe(gallery.value!))
+onUnmounted(() => observer.disconnect())
 </script>
 
 <template>

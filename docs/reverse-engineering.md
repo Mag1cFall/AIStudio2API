@@ -10,7 +10,7 @@ AI Studio 网页将认证、JSON+protobuf RPC、WAA 内容证明和 WebChannel �
 | --- | --- | --- | --- |
 | 认证 | Cookie、SAPISID、DBSC、Authorization、动态请求头 | `internal/chromeauth`、`internal/aistudio/auth.go`、`internal/aistudio/transport_http.go` | 可发送的账户状态与请求头 |
 | 权益与目录 | BenefitTier、ListModels、AccessModes、方法与能力码 | `internal/aistudio/benefit.go`、`internal/aistudio/models.go` | 每账户完整模型目录、权益与能力字段 |
-| WAA | 官网高层 snapshot service 或纯 Go BotGuard VM、binding prompt digest、proof | `internal/camoufoxnative`、`internal/waa`、`internal/aistudio/runtime_native.go`、`internal/aistudio/runtime_go.go` | 与 binding prompt 的 SHA-256 绑定的 fresh proof |
+| WAA | 官网高层 snapshot service 或 SpiderMonkey 中的 BotGuard VM、binding prompt digest、proof | `internal/camoufoxnative`、`internal/waa`、`internal/aistudio/runtime_native.go`、`internal/aistudio/runtime_go.go` | 与 binding prompt 的 SHA-256 绑定的 fresh proof |
 | 请求编码 | 稀疏 JSON+protobuf 数组、媒体与工具字段 | `internal/aistudio/generate.go`、`internal/aistudio/tools.go` | MakerSuite 请求正文 |
 | 传输 | HTTP、SSE、WebChannel、Cookie 写回 | `internal/aistudio/transport_http.go`、`internal/aistudio/webchannel.go` | 原始增量帧 |
 | 统一事件 | text、reasoning、tool、media、usage、finish、error | `internal/aistudio/event.go`、`internal/aistudio/bidi.go` | 与客户端协议无关的事件流 |
@@ -146,7 +146,7 @@ func WireField(values []json.RawMessage, field int) (json.RawMessage, bool) {
 
 ## 3. WAA 运行时
 
-受保护请求的完整链路如下。`WAA_BACKEND=camoufox` 时 Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入；`WAA_BACKEND=go` 时这些环节由服务进程内的 goja 与 Firefox 形状宿主执行。
+受保护请求的完整链路如下。`WAA_BACKEND=camoufox` 时 Waa/Create、interpreter、dynamic program、Host/Realm 与 persistent state 由官网页面运行，本项目从页面的高层 snapshot service 接入；`WAA_BACKEND=spidermonkey` 时这些环节由服务进程内的 SpiderMonkey 与 Firefox 形状宿主执行。
 
 ```text
 Waa/Create
@@ -174,7 +174,7 @@ interpreter 可以按 hash 缓存。program、message ID、实验状态和 snaps
 
 ### Host 与 Realm
 
-dynamic program 会读取以下浏览器宿主语义。Camoufox 后端由真实 Firefox 页面提供；纯 Go 后端由 `internal/waa` 按 Firefox 形状表与 goja 分叉实现：
+dynamic program 会读取以下浏览器宿主语义。Camoufox 后端由真实 Firefox 页面提供；SpiderMonkey 后端由 `internal/waa` 按 Firefox 形状表在 SpiderMonkey 中实现：
 
 - navigator、screen、window、document、location、performance 与 timezone
 - TextEncoder、TextDecoder、Base64、TypedArray、ArrayBuffer、Blob 与 URL
@@ -254,7 +254,7 @@ ready -> closing -> closed
 
 Camoufox bootstrap 通过官方页面取得 snapshot service 和动态请求头。页面 GenerateContent 在 `network.beforeRequestSent` 阶段由 `network.failRequest` 结束，因此 bootstrap 没有上游模型输出。同一账户的普通业务模型共享该 snapshot service。交互式登录、Cookie 导出和官方运行时位于 `internal/camoufoxnative`。
 
-纯 Go bootstrap 在服务进程内请求官网页面与 `GetLoggingContext` 取得公共请求头，调用 `Waa/Create`，按 hash 加载解释器并在 goja 中执行 program，随后写入 bootstrap 提示词并派发交互事件；VM 每 12 小时按官网流程刷新。实现位于 `internal/waa` 与 `internal/aistudio/runtime_go.go`。
+SpiderMonkey bootstrap 在服务进程内请求官网页面与 `GetLoggingContext` 取得公共请求头，调用 `Waa/Create`，按 hash 加载解释器并在 SpiderMonkey 中执行 program，随后写入 bootstrap 提示词并派发交互事件；VM 每 12 小时按官网流程刷新。实现位于 `internal/waa` 与 `internal/aistudio/runtime_go.go`。
 
 ## 4. WebChannel、Live 与 Robotics
 
@@ -419,7 +419,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | 数组嵌套层级、field 类型、oneof 或已消费槽位变化 | 更新对应编码器或解码器 | 是 |
 | 新 finish enum 的业务语义 | 更新统一终止原因和公开响应 | 是 |
 | 高层 snapshot 定位或页面交互 | 更新 Camoufox 运行时定位与交互 | 是 |
-| program 读取的 Firefox 宿主取值、键顺序或引擎语义 | 更新形状表、纯 Go 宿主或 goja 分叉 | 是 |
+| program 读取的 Firefox 宿主取值、键顺序或引擎语义 | 更新形状表、SpiderMonkey 宿主或 SpiderMonkey 补丁 | 是 |
 | WebChannel control、ACK、envelope 或 payload shape | 更新 WebChannel 与 Bidi parser | 是 |
 
 | 失效信号 | 变化层 | 最短恢复动作 |
@@ -427,7 +427,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | 上游 401 | Cookie、SAPISID 或 DBSC | 对照登录态、续签响应、Authorization 与 Set-Cookie |
 | 页面成功，协议请求 403 | 动态头、TLS、请求正文或 WAA binding | 对照官方请求头顺序、proof field 与无 proof 正文 |
 | 输入框、Run 或 snapshot 定位失败 | AI Studio 页面与 bundle | 重新定位稳定组件和高层 snapshot 调用 |
-| 纯 Go proof 稳定 403，Camoufox 同账户 200 | 纯 Go 宿主或 goja 分叉 | 以同一 challenge 对照两个后端 |
+| SpiderMonkey proof 稳定 403，Camoufox 同账户 200 | SpiderMonkey 宿主或补丁 | 以同一 challenge 对照两个后端 |
 | 带 JSON 路径的字段类型错误 | protobuf 数组或新 oneof | 保存原始帧，更新单一字段解析器 |
 | `provider_<code>` | finish enum | 确认官方页面表现并更新四套公开响应 |
 | ACK、setup 或 backchannel 失败 | WebChannel | 对照 RID、AID、ofs、frame 长度和 payload 形状 |

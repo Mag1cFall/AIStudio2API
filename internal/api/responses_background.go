@@ -32,6 +32,15 @@ func (s *server) startBackground(r *http.Request, id string) (context.Context, f
 	}
 }
 
+// stopBackground 终止进行中的后台响应并等待生成结束
+func (s *server) stopBackground(id string) {
+	if value, running := s.background.Load(id); running {
+		run := value.(backgroundRun)
+		run.cancel()
+		<-run.done
+	}
+}
+
 // storeBackgroundEnd 保存后台响应的结束状态：被 cancel 接口终止时为 cancelled，生成出错时为 failed
 func (s *server) storeBackgroundEnd(ctx context.Context, id string, created int64, request responsesRequest, prepared responsesPreparation, err error) {
 	switch {
@@ -69,7 +78,7 @@ func (s *server) respondBackground(w http.ResponseWriter, r *http.Request, reque
 	var result generationResult
 	if err == nil {
 		s.storeResponse(id, request, prepared, generationResult{}, responseShell(id, created, "in_progress", request))
-		result, err = consumeEvents(ctx, events, nil)
+		result, err = consumeEvents(ctx, events)
 	}
 	var response map[string]any
 	if err == nil {
@@ -166,17 +175,14 @@ func (l *streamLog) Write(frame []byte) (int, error) {
 // finish 标记事件已全部写出并唤醒跟随者
 func (l *streamLog) finish() {
 	l.mu.Lock()
-	if !l.done {
-		l.done = true
-		close(l.wake)
-		l.wake = make(chan struct{})
-	}
+	l.done = true
+	close(l.wake)
 	l.mu.Unlock()
 }
 
 // follow 把序号 after 之后的事件帧写给客户端并跟随到事件写完、客户端断开或写出失败，等待新事件时按心跳间隔写注释帧
 func (l *streamLog) follow(ctx context.Context, w http.ResponseWriter, after int) error {
-	next := max(after+1, 0)
+	next := after + 1
 	heartbeat := time.NewTimer(streamHeartbeatInterval)
 	defer heartbeat.Stop()
 	for {

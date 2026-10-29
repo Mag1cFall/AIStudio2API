@@ -82,10 +82,7 @@ func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults Gene
 	} else {
 		interaction[53] = []any{[]any{[]any{nil, nil, nil, video}}}
 	}
-	body, err := json.Marshal([]any{int64(1), int64(1), nil, interaction, nil, int64(1)})
-	if err != nil {
-		return nil, nil, fmt.Errorf("编码 CreateInteractionStream: %w", err)
-	}
+	body, _ := json.Marshal([]any{int64(1), int64(1), nil, interaction, nil, int64(1)})
 	return body, binding, nil
 }
 
@@ -608,20 +605,13 @@ func EncodeCreateInteractionRequest(request GenerateRequest) ([]byte, []Content,
 	// field 19 为 agent 名称与官网固定的 agent 配置
 	interaction[18] = []any{strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"), nil, []any{int64(1), int64(2)}}
 	interaction[26] = []any{steps}
-	body, err := json.Marshal([]any{nil, int64(1), int64(1), interaction, nil, int64(1)})
-	if err != nil {
-		return nil, nil, fmt.Errorf("编码 CreateInteraction: %w", err)
-	}
+	body, _ := json.Marshal([]any{nil, int64(1), int64(1), interaction, nil, int64(1)})
 	return body, binding, nil
 }
 
 // EncodeGetInteractionStreamRequest 编码按 interaction ID 读取后台任务增量与终态的请求
 func EncodeGetInteractionStreamRequest(id string, model string) ([]byte, error) {
-	body, err := json.Marshal([]any{id, int64(1), nil, nil, nil, int64(1), wireModelName(model)})
-	if err != nil {
-		return nil, fmt.Errorf("编码 GetInteractionStream: %w", err)
-	}
-	return body, nil
+	return json.Marshal([]any{id, int64(1), nil, nil, nil, int64(1), wireModelName(model)})
 }
 
 // decodeCreateInteractionResponse 读取 CreateInteraction 返回的 interaction ID

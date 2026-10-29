@@ -88,6 +88,8 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	}
 	if options.Headless && !options.liveView {
 		prefs["layout.frame_rate"] = headlessFrameRate
+		// gfx.webrender.enable-subpixel-aa 为 false 时 WebRender 把字形光栅化到单通道图集，不分配 RGBA 字形图集
+		prefs["gfx.webrender.enable-subpixel-aa"] = false
 	}
 	if options.CacheDirectory != "" {
 		for key, value := range cachePreferences(options.CacheDirectory) {

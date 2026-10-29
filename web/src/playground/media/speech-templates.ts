@@ -7,7 +7,6 @@ export interface SpeechTemplate {
   name: string
   icon: IconName
   description: string
-  multiSpeaker: boolean
   conversational: boolean
   speakers: { voice: string }[]
   turns: { speaker: number; style: string; text: string }[]
@@ -24,7 +23,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsAssistant.name'),
       icon: 'supportAgent',
       description: t('zero.ttsAssistant.description'),
-      multiSpeaker: false,
       conversational: false,
       speakers: [{ voice: 'Fola' }],
       turns: [
@@ -51,7 +49,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsNpc.name'),
       icon: 'sportsEsports',
       description: t('zero.ttsNpc.description'),
-      multiSpeaker: true,
       conversational: false,
       speakers: [{ voice: 'Cruz' }, { voice: 'Zeno' }],
       turns: [
@@ -68,7 +65,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsCoHost.name'),
       icon: 'podcasts',
       description: t('zero.ttsCoHost.description'),
-      multiSpeaker: true,
       conversational: true,
       speakers: [{ voice: 'Veda' }, { voice: 'Rami' }],
       turns: [
@@ -85,7 +81,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsStoryteller.name'),
       icon: 'menuBook',
       description: t('zero.ttsStoryteller.description'),
-      multiSpeaker: false,
       conversational: false,
       speakers: [{ voice: 'Riko' }],
       turns: [
@@ -112,7 +107,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsAd.name'),
       icon: 'adsClick',
       description: t('zero.ttsAd.description'),
-      multiSpeaker: false,
       conversational: false,
       speakers: [{ voice: 'Tavi' }],
       turns: [
@@ -127,7 +121,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsTrainer.name'),
       icon: 'developerGuide',
       description: t('zero.ttsTrainer.description'),
-      multiSpeaker: false,
       conversational: false,
       speakers: [{ voice: 'Kira' }],
       turns: [
@@ -154,7 +147,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsGameShow.name'),
       icon: 'stars',
       description: t('zero.ttsGameShow.description'),
-      multiSpeaker: false,
       conversational: false,
       speakers: [{ voice: 'Mako' }],
       turns: [
@@ -181,7 +173,6 @@ export function speechTemplates(): SpeechTemplate[] {
       name: t('zero.ttsTeacher.name'),
       icon: 'voiceSelection',
       description: t('zero.ttsTeacher.description'),
-      multiSpeaker: true,
       conversational: true,
       speakers: [{ voice: 'Lumi' }, { voice: 'Varo' }],
       turns: [

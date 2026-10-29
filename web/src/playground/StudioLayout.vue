@@ -4,30 +4,39 @@ import '@fontsource-variable/inter-tight'
 import '@fontsource-variable/google-sans-code'
 import '@/playground/styles/tokens.css'
 import '@/playground/styles/base.css'
-import { onMounted, onUnmounted, ref } from 'vue'
-import { RouterView } from 'vue-router'
+import { onActivated, onDeactivated, provide, ref, shallowReactive, watch } from 'vue'
+import { RouterView, routeLocationKey, useRoute } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { vTooltip } from '@/playground/ui/tooltip'
 import CommandPalette, { type PaletteMode } from '@/playground/shell/CommandPalette.vue'
 import LeftNav from '@/playground/shell/LeftNav.vue'
 import ModelSelector from '@/playground/ModelSelector.vue'
+import { useMediaQuery } from '@/playground/media-query'
+import { editable } from '@/playground/shortcuts'
 
-defineProps<{ adminUsername?: string }>()
+defineProps<{ adminUsername: string }>()
 const emit = defineEmits<{ logout: [] }>()
 const { t, logText } = useI18n()
-const store = useConsole()
-const { notice } = store
+const { notice } = useConsole()
 
-// narrowQuery 与官网一致，960 px 以下导航为抽屉
-const narrowQuery = window.matchMedia('(max-width: 960px)')
-const narrow = ref(narrowQuery.matches)
+// studioRoute 在管理端显示期间保留试用页及其子组件的路由
+const route = useRoute()
+const studioRoute = shallowReactive({ ...route })
+provide(routeLocationKey, studioRoute)
+watch(
+  () => route.fullPath,
+  () => {
+    if (route.meta.studio) Object.assign(studioRoute, route)
+  },
+)
+
+// narrow 与官网一致，960 px 以下导航为抽屉
+const narrow = useMediaQuery('(max-width: 960px)')
 const expanded = ref(!narrow.value)
-const onNarrowChange = (event: MediaQueryListEvent): void => {
-  narrow.value = event.matches
-  expanded.value = !event.matches
-}
+watch(narrow, (value) => {
+  expanded.value = !value
+})
 
 // closeDrawer 在窄屏导航跳转后收起抽屉
 function closeDrawer(): void {
@@ -47,29 +56,21 @@ function openPalette(mode: PaletteMode): void {
 // onKeydown 处理官网全局快捷键：Ctrl+/ 打开命令面板，Ctrl+Shift+/ 打开快捷键列表；输入框获得焦点时 Ctrl+/ 不打开
 function onKeydown(event: KeyboardEvent): void {
   if (event.code !== 'Slash' || !(event.ctrlKey || event.metaKey) || event.altKey) return
-  const target = event.target as HTMLElement | null
-  const editing =
-    target !== null &&
-    (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-  if (!event.shiftKey && editing) return
+  if (!event.shiftKey && editable(event.target)) return
   event.preventDefault()
   openPalette(event.shiftKey ? 'shortcuts' : 'root')
 }
 
-onMounted(() => {
+onActivated(() => {
   document.documentElement.classList.add('studio')
   document.title = `${t('nav.playground')} | AIStudio2API`
-  narrowQuery.addEventListener('change', onNarrowChange)
   window.addEventListener('keydown', onKeydown)
-  void store.startConsole()
 })
 
-onUnmounted(() => {
+onDeactivated(() => {
   document.documentElement.classList.remove('studio')
   document.title = 'AIStudio2API'
-  narrowQuery.removeEventListener('change', onNarrowChange)
   window.removeEventListener('keydown', onKeydown)
-  store.stopConsole()
 })
 </script>
 
@@ -78,7 +79,7 @@ onUnmounted(() => {
     <LeftNav
       :expanded="expanded"
       :narrow="narrow"
-      :admin-username="adminUsername ?? ''"
+      :admin-username="adminUsername"
       @toggle="expanded = !expanded"
       @navigate="closeDrawer"
       @logout="emit('logout')"
@@ -96,7 +97,10 @@ onUnmounted(() => {
       >
         <UiIcon name="menu" :size="20" />
       </button>
-      <RouterView />
+      <RouterView
+        v-if="route.meta.studio || studioRoute.name === 'prompt' || studioRoute.name === 'saved'"
+        :route="studioRoute"
+      />
     </main>
 
     <CommandPalette v-model:open="paletteOpen" v-model:mode="paletteMode" />

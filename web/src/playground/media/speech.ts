@@ -4,7 +4,7 @@ import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import { keepPage } from '@/desktop'
 import type { Model, VoiceDetail } from '@/types'
-import { apiKey, errorMessage, failureText, StreamError } from '../request'
+import { apiKey, errorMessage, failureText } from '../request'
 import { newTurnID } from '../session'
 import { audioBlob, generateContent } from './api'
 import { modelMatches } from '../catalog'
@@ -12,7 +12,7 @@ import { pageKindOf } from './kinds'
 import type { SpeechTemplate } from './speech-templates'
 
 // SpeechProtocol 是语音页发送请求使用的公开协议
-export type SpeechProtocol = 'gemini' | 'openai-speech'
+type SpeechProtocol = 'gemini' | 'openai-speech'
 
 // speechProtocols 是语音页协议下拉的选项
 export const speechProtocols: { value: SpeechProtocol; label: string }[] = [
@@ -21,7 +21,7 @@ export const speechProtocols: { value: SpeechProtocol; label: string }[] = [
 ]
 
 // SpeechBlock 是一段台词：说话人序号、风格与正文
-export interface SpeechBlock {
+interface SpeechBlock {
   id: string
   speaker: number
   style: string
@@ -186,12 +186,6 @@ function models(): Model[] {
   return useConsole().models.value.filter((model) => pageKindOf(model) === 'speech')
 }
 
-// voicesOf 返回模型的音色介绍，目录没有介绍时只有名称
-function voicesOf(model: Model | undefined): VoiceDetail[] {
-  if (model?.voice_details?.length) return model.voice_details
-  return (model?.capability_options?.voices ?? []).map((name) => ({ name }))
-}
-
 const state = reactive({
   settings: {
     model: '',
@@ -217,7 +211,7 @@ let previewAudio: HTMLAudioElement | undefined
 keepPage(() => state.running || state.audio.startsWith('blob:'))
 
 const currentModel = computed(() => models().find((model) => model.id === state.settings.model))
-const voices = computed(() => voicesOf(currentModel.value))
+const voices = computed(() => currentModel.value?.voice_details ?? [])
 // daikon 表示模型支持分段风格，官网对这类模型使用 <tag> 标签、风格下拉与 Filler words
 const daikon = computed(() => Boolean(currentModel.value?.capabilities?.speech_metadata))
 const tags = computed(() => [...(daikon.value ? daikonTags : emotionTags)].sort())
@@ -234,6 +228,10 @@ const canRun = computed(
 )
 // usedSpeakers 是运行设置中列出的说话人序号
 const usedSpeakers = computed(() => (multi.value ? [0, 1] : [0]))
+// temperature 是请求使用的温度：未设置时为模型默认值
+const temperature = computed(
+  () => state.settings.temperature ?? currentModel.value?.temperature ?? 1,
+)
 
 // voiceDetail 返回音色的介绍
 function voiceDetail(name: string): VoiceDetail | undefined {
@@ -243,7 +241,7 @@ function voiceDetail(name: string): VoiceDetail | undefined {
 // defaultVoice 返回第 index 位说话人的默认音色：与官网相同优先 Fola、Rami 或 Zephyr、Puck
 function defaultVoice(index: number): string {
   const preferred = daikon.value ? ['Fola', 'Rami'] : ['Zephyr', 'Puck']
-  const name = preferred[index] ?? preferred[0]!
+  const name = preferred[index]!
   if (voiceDetail(name)) return name
   return voices.value[index]?.name ?? voices.value[0]?.name ?? ''
 }
@@ -348,9 +346,9 @@ function addBlock(): void {
   state.blocks.push({ id: newTurnID(), speaker: last?.speaker === 0 ? 1 : 0, style: '', text: '' })
 }
 
-// removeBlock 删除一段台词，至少保留一段
+// removeBlock 删除一段台词
 function removeBlock(index: number): void {
-  if (state.blocks.length > 1) state.blocks.splice(index, 1)
+  state.blocks.splice(index, 1)
 }
 
 // part 把一段台词写为请求片段：多人模式带说话人名称，有风格时带风格
@@ -420,10 +418,7 @@ function legacyPrompt(blocks: readonly SpeechBlock[], isMulti: boolean): string 
 }
 
 // requestBody 按官网运行请求组合 generateContent：分段风格模型每段台词为一个带说话人与风格的片段，旧版模型为一段整理后的文字；试听单段时沿用整段对话的说话人设置
-function requestBody(
-  model: Model,
-  blocks: readonly SpeechBlock[] = state.blocks,
-): Record<string, unknown> {
+function requestBody(model: Model, blocks: readonly SpeechBlock[]): Record<string, unknown> {
   const isMulti = multi.value
   const speakers = isMulti ? state.speakers : [state.speakers[0]!]
   const voice = (name: string) => ({ prebuiltVoiceConfig: { voiceName: name } })
@@ -450,7 +445,7 @@ function requestBody(
       },
     ],
     generationConfig: {
-      temperature: state.settings.temperature ?? model.temperature ?? 1,
+      temperature: temperature.value,
       ...(model.top_p === undefined ? {} : { topP: model.top_p }),
       ...(model.top_k === undefined ? {} : { topK: model.top_k }),
       responseModalities: ['AUDIO'],
@@ -463,7 +458,7 @@ function requestBody(
 function openAISpeechBody(
   modelID: string,
   blocks: readonly SpeechBlock[] = state.blocks,
-): Record<string, unknown> {
+): { model: string; input: string; voice: string; response_format: string; instructions?: string } {
   const input = blocks
     .map((block) => block.text)
     .filter((value) => value.trim() !== '')
@@ -489,7 +484,7 @@ async function openAISpeech(body: unknown, signal: AbortSignal): Promise<Blob> {
     body: jsonBody(body),
     signal,
   })
-  if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+  if (!response.ok) throw new Error(await errorMessage(response))
   return response.blob()
 }
 
@@ -586,6 +581,7 @@ export function useSpeech() {
     openAIMulti,
     canRun,
     usedSpeakers,
+    temperature,
     voiceDetail,
     speakerName,
     ensureModel,
@@ -596,7 +592,6 @@ export function useSpeech() {
     useTemplate,
     addBlock,
     removeBlock,
-    requestBody,
     openAISpeechBody,
     codePrompt,
     run,

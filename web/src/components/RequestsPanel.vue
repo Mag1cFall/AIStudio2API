@@ -5,6 +5,7 @@ import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import DetailDialog from './DetailDialog.vue'
 import UiIcon from './UiIcon.vue'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   accounts: Account[]
@@ -24,6 +25,18 @@ const { locale, t, errorText, logText } = useI18n()
 const cancelling = ref('')
 const refreshing = ref(false)
 const selectedCategory = ref('')
+const cooldownModel = ref('')
+const requestModel = ref('')
+const cooldownModels = computed(() => [...new Set(props.cooldowns.map((item) => item.model_id))])
+const requestModels = computed(() => [...new Set(props.requests.map((item) => item.model))])
+const modelCooldowns = computed(() =>
+  props.cooldowns.filter(
+    (item) => cooldownModel.value === '' || item.model_id === cooldownModel.value,
+  ),
+)
+const visibleRequests = computed(() =>
+  props.requests.filter((item) => requestModel.value === '' || item.model === requestModel.value),
+)
 const detail = ref<Cooldown | null>(null)
 const clearing = ref(false)
 
@@ -43,7 +56,7 @@ function categoryLabel(category: string): string {
 // categories 是全部与各冷却类型的数量，类型按数量从多到少排列
 const categories = computed(() => {
   const counts = new Map<string, number>()
-  for (const cooldown of props.cooldowns) {
+  for (const cooldown of modelCooldowns.value) {
     const category = splitReason(cooldown.reason).category
     counts.set(category, (counts.get(category) ?? 0) + 1)
   }
@@ -60,7 +73,7 @@ const activeCategory = computed(() =>
 
 // visibleCooldowns 是所选类型的冷却，按恢复时间先后排列
 const visibleCooldowns = computed(() =>
-  props.cooldowns
+  modelCooldowns.value
     .filter(
       (cooldown) =>
         activeCategory.value === '' ||
@@ -79,8 +92,9 @@ const requestStateKeys: Record<RequestState, TranslationKey> = {
 
 const activeCount = computed(
   () =>
-    props.requests.filter((request) => request.state === 'queued' || request.state === 'running')
-      .length,
+    visibleRequests.value.filter(
+      (request) => request.state === 'queued' || request.state === 'running',
+    ).length,
 )
 
 // accountLabel 将稳定账户 ID 映射为用户显示名称
@@ -162,10 +176,18 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
       >
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
           <h3 class="font-bold text-gray-300">{{ t('cooldowns.title') }}</h3>
-          <span class="font-mono text-xs text-gray-500">{{ cooldowns.length }}</span>
+          <span class="font-mono text-xs text-gray-500">{{ visibleCooldowns.length }}</span>
+          <UiSelect
+            v-model="cooldownModel"
+            :aria-label="t('requests.filterModel')"
+            class="min-w-0 max-w-64 rounded-md border border-line bg-canvas px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="">{{ t('requests.allModels') }}</option>
+            <option v-for="model in cooldownModels" :key="model" :value="model">{{ model }}</option>
+          </UiSelect>
           <div v-if="categories.length > 1" class="ml-auto flex flex-wrap gap-1">
             <button
-              v-for="[category, count] in [['', cooldowns.length] as const, ...categories]"
+              v-for="[category, count] in [['', modelCooldowns.length] as const, ...categories]"
               :key="category || 'all'"
               type="button"
               class="rounded px-2 py-0.5 text-xs transition"
@@ -190,7 +212,10 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         <div v-else-if="loading" class="py-8 text-center text-gray-500">
           {{ t('common.loading') }}
         </div>
-        <div v-else-if="cooldowns.length === 0" class="py-8 text-center text-xs text-gray-600">
+        <div
+          v-else-if="visibleCooldowns.length === 0"
+          class="py-8 text-center text-xs text-gray-600"
+        >
           {{ t('cooldowns.empty') }}
         </div>
         <div v-else class="min-h-0 flex-1 overflow-y-auto">
@@ -232,9 +257,19 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
       <article
         class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel max-md:max-h-[70vh]"
       >
-        <div class="flex items-center justify-between border-b border-line px-4 py-3">
+        <div
+          class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3"
+        >
           <h3 class="font-bold text-gray-300">{{ t('requests.history') }}</h3>
           <span class="text-xs text-green-400"> {{ t('requests.live') }}: {{ activeCount }} </span>
+          <UiSelect
+            v-model="requestModel"
+            :aria-label="t('requests.filterModel')"
+            class="min-w-0 max-w-64 rounded-md border border-line bg-canvas px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="">{{ t('requests.allModels') }}</option>
+            <option v-for="model in requestModels" :key="model" :value="model">{{ model }}</option>
+          </UiSelect>
         </div>
         <div
           v-if="requestError"
@@ -245,12 +280,15 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         <div v-else-if="loading" class="py-8 text-center text-gray-500">
           {{ t('common.loading') }}
         </div>
-        <div v-else-if="requests.length === 0" class="py-8 text-center text-xs text-gray-600">
+        <div
+          v-else-if="visibleRequests.length === 0"
+          class="py-8 text-center text-xs text-gray-600"
+        >
           {{ t('requests.empty') }}
         </div>
         <div v-else class="min-h-0 flex-1 overflow-y-auto">
           <div
-            v-for="request in requests"
+            v-for="request in visibleRequests"
             :key="request.id"
             class="flex items-center gap-3 border-b border-line/60 px-4 py-2 transition hover:bg-raised"
           >

@@ -12,7 +12,7 @@ import (
 const accountCacheDirectoryName = "camoufox-cache"
 
 // accountCacheCapacityKB 为单个账户 HTTP 磁盘缓存的容量上限
-const accountCacheCapacityKB = 65536
+const accountCacheCapacityKB = 32768
 
 // lockAccountCache 独占账户 HTTP 磁盘缓存目录，同账户另一个 runtime 占用时返回空目录
 func lockAccountCache(storageStatePath string) (string, *flock.Flock, error) {
@@ -48,5 +48,7 @@ func cachePreferences(directory string) map[string]any {
 		"browser.cache.disk.parent_directory":   directory,
 		"browser.cache.disk.smart_size.enabled": false,
 		"browser.cache.disk.capacity":           accountCacheCapacityKB,
+		// browser.cache.jsbc_compression_level 为写入缓存的 JS 字节码的 zlib 压缩级别
+		"browser.cache.jsbc_compression_level": 1,
 	}
 }

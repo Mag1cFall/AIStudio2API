@@ -20,8 +20,12 @@ func TestGeminiInlineDataCompatibility(t *testing.T) {
 		{name: "data URL", raw: `[{"inlineData":{"mimeType":"application/octet-stream","data":"data:application/octet-stream;base64,+//v"}}]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			raw, _, err := geminiCamelKeys([]byte(test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
 			var input []geminiPart
-			if err := json.Unmarshal([]byte(test.raw), &input); err != nil {
+			if err := json.Unmarshal(raw, &input); err != nil {
 				t.Fatal(err)
 			}
 			parts, hasResult, err := mapGeminiParts(input)

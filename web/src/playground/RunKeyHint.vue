@@ -7,7 +7,7 @@ import { submitKey } from './shell/preferences'
 <template>
   <template v-if="!phone && !tablet">
     <template v-if="submitKey === 'ctrl-enter'">
-      <UiIcon v-if="mac" name="keyboardCommandKey" :size="15" class="command-key-icon" />
+      <UiIcon v-if="mac" name="keyboardCommandKey" :size="15" />
       <span v-else class="secondary-key">Ctrl</span>
     </template>
     <UiIcon name="keyboardReturn" :size="15" />

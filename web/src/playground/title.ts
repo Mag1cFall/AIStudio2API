@@ -1,7 +1,7 @@
 import { api } from '@/api'
 
 // TitleTarget 是标题所属的会话：owner 在切换到另一个会话时变化，title 为会话当前标题
-export interface TitleTarget {
+interface TitleTarget {
   owner: unknown
   title: string
 }

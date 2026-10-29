@@ -13,14 +13,11 @@ const { currentModel } = usePlayground()
 const config = computed(() => zeroConfigFor(currentModel.value))
 // configTitle 是官网空态标题，模型名缺失时用系列名
 const configTitle = computed(() =>
-  (config.value?.title ?? '').replace(
-    '{model}',
-    currentModel.value?.name || config.value?.family || '',
-  ),
+  config.value!.title.replace('{model}', currentModel.value!.name || config.value!.family),
 )
 // configStarters 是带参考图缩略图的示例提示词
 const configStarters = computed(() =>
-  (config.value?.starters ?? []).map((item) =>
+  config.value!.starters.map((item) =>
     item.images?.[0] ? { ...item, thumb: item.images[0] } : item,
   ),
 )

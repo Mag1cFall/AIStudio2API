@@ -20,7 +20,6 @@ async function toggleSample(url: string): Promise<void> {
     return
   }
   stopSample()
-  if (!url) return
   player ??= new Audio()
   player.onended = stopSample
   player.onerror = stopSample

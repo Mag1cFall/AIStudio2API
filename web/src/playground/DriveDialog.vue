@@ -19,7 +19,7 @@ watch(open, async (visible) => {
   try {
     files.value = await listDriveFiles()
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught)
+    error.value = (caught as Error).message
   } finally {
     loading.value = false
   }

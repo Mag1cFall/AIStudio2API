@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -31,15 +30,14 @@ function clock(seconds: number): string {
 
 // toggle 播放或暂停
 function toggle(): void {
-  const audio = element.value
-  if (!audio) return
+  const audio = element.value!
   if (audio.paused) void audio.play()
   else audio.pause()
 }
 
 // seek 跳到进度条位置
 function seek(event: Event): void {
-  if (element.value) element.value.currentTime = Number((event.target as HTMLInputElement).value)
+  element.value!.currentTime = Number((event.target as HTMLInputElement).value)
 }
 
 // submit 运行或停止
@@ -89,7 +87,7 @@ watch(
             class="seek-slider"
             type="range"
             min="0"
-            :max="duration || 0"
+            :max="duration"
             step="0.01"
             :value="current"
             :aria-label="t('pg.seek')"
@@ -270,15 +268,5 @@ watch(
 
 .run-button .run-button-label {
   min-width: 28px;
-}
-
-.spin {
-  animation: spin 0.66s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(1turn);
-  }
 }
 </style>

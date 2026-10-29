@@ -2,7 +2,6 @@
 import { nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
-import { vTooltip } from '@/playground/ui/tooltip'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 
 const router = useRouter()

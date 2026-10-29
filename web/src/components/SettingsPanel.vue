@@ -28,47 +28,8 @@ const { t, locale, errorText } = useI18n()
 const saving = ref(false)
 const revealKey = ref(false)
 const adminPassword = ref('')
-const form = reactive<ServiceConfig>({
-  auto_start: false,
-  request_body_log: false,
-  log_file: true,
-  log_max_total_mb: 500,
-  admin_auth_enabled: false,
-  admin_username: 'admin',
-  admin_password_set: false,
-  build_native_nonstream: true,
-  nonstream_keepalive: true,
-  fake_stream: false,
-  youtube_links: false,
-  first_event_hedge: 'off',
-  auth_states: 'auth',
-  listen_addr: '127.0.0.1:2048',
-  preview_listen_addr: '127.0.0.1:2050',
-  proxy_api_key: '',
-  active_listen_addr: '127.0.0.1:2048',
-  reserved_listen_addr: '',
-  active_preview_listen_addr: '127.0.0.1:2050',
-  active_proxy_api_key: '',
-  management_restart_required: false,
-  service_restart_required: false,
-  proxy: '',
-  active_proxy: '',
-  proxy_pool: [],
-  init_timeout: '2m',
-  request_timeout: '30m',
-  warm_worker_limit: 5,
-  max_active_workers: 10,
-  warm_startup_concurrency: 5,
-  per_account_concurrency: 2,
-  routing_strategy: 'round-robin',
-  upstream_channels: ['playground'],
-  model_mapping: '',
-  model_channels: '',
-  waa_backend: 'camoufox',
-  temporary_chat: false,
-  media_output: 'inline',
-  media_base_url: '',
-})
+// form 是编辑中的配置，读到 props.config 后由 resetForm 填入，表单只在读到配置后显示
+const form = reactive({} as ServiceConfig)
 
 type SectionID = 'service' | 'capacity' | 'upstream' | 'network' | 'security'
 
@@ -121,6 +82,10 @@ const sections: {
       'nonstream_keepalive',
       'fake_stream',
       'youtube_links',
+      'search_model_aliases',
+      'google_search',
+      'continuation_rewrite',
+      'continuation_prompt',
       'waa_backend',
       'temporary_chat',
       'init_timeout',
@@ -154,7 +119,7 @@ const section = useQueryParam<SectionID>(
   sections.map((item) => item.id),
   'service',
 )
-const current = computed(() => sections.find((item) => item.id === section.value) ?? sections[0]!)
+const current = computed(() => sections.find((item) => item.id === section.value)!)
 
 const upstreamChannelOptions: UpstreamChannel[] = ['playground', 'build']
 const inputClass =
@@ -172,17 +137,16 @@ const changedFields = computed(() => {
 const changedCount = computed(() => changedFields.value.size + (adminPassword.value ? 1 : 0))
 
 // sectionChanged 判断分组是否有未保存的修改
-function sectionChanged(id: SectionID): boolean {
-  const target = sections.find((item) => item.id === id)
-  if (id === 'security' && adminPassword.value) return true
-  return target?.fields.some((field) => changedFields.value.has(field)) ?? false
+function sectionChanged(item: (typeof sections)[number]): boolean {
+  if (item.id === 'security' && adminPassword.value) return true
+  return item.fields.some((field) => changedFields.value.has(field))
 }
 
-// toggleUpstreamChannel 切换通道并保持配置顺序，至少保留一个通道
+// toggleUpstreamChannel 切换通道并保持配置顺序
 function toggleUpstreamChannel(channel: UpstreamChannel, enabled: boolean): void {
   const selected = new Set(form.upstream_channels)
   if (enabled) selected.add(channel)
-  else if (selected.size > 1) selected.delete(channel)
+  else selected.delete(channel)
   form.upstream_channels = upstreamChannelOptions.filter((option) => selected.has(option))
 }
 
@@ -245,11 +209,13 @@ function warnUnsaved(event: BeforeUnloadEvent): void {
 // releasePage 撤销关闭桌面窗口时为未保存修改保留页面的登记
 const releasePage = keepPage(() => changedCount.value > 0)
 
-// removeLeaveGuard 撤销离开管理端时对未保存修改的确认
-const removeLeaveGuard = useRouter().beforeEach(
-  (to) =>
-    to.name === 'console' || changedCount.value === 0 || window.confirm(t('settings.leaveUnsaved')),
-)
+// removeLeaveGuard 撤销离开管理端时对未保存修改的确认，确认离开时放弃修改
+const removeLeaveGuard = useRouter().beforeEach((to) => {
+  if (to.name === 'console' || changedCount.value === 0) return true
+  if (!window.confirm(t('settings.leaveUnsaved'))) return false
+  if (props.config !== null) resetForm(props.config)
+  return true
+})
 
 onMounted(() => {
   window.addEventListener('beforeunload', warnUnsaved)
@@ -340,7 +306,7 @@ async function saveConfig(): Promise<void> {
             <UiIcon :name="item.icon" :size="15" />
             <span class="flex-1">{{ t(item.label) }}</span>
             <span
-              v-if="sectionChanged(item.id)"
+              v-if="sectionChanged(item)"
               v-tooltip="t('settings.unsavedSection')"
               class="h-1.5 w-1.5 rounded-full bg-amber-400"
               ><span class="sr-only">{{ t('settings.unsavedSection') }}</span></span
@@ -678,6 +644,49 @@ async function saveConfig(): Promise<void> {
               <UiSwitch id="setting-youtube-links" v-model="form.youtube_links" />
             </SettingRow>
             <SettingRow
+              :label="t('settings.searchModelAliases')"
+              control-id="setting-search-model-aliases"
+              :description="t('settings.searchModelAliasesHelp')"
+              effect="service"
+              :changed="changedFields.has('search_model_aliases')"
+            >
+              <UiSwitch id="setting-search-model-aliases" v-model="form.search_model_aliases" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.googleSearch')"
+              control-id="setting-google-search"
+              :description="t('settings.googleSearchHelp')"
+              effect="service"
+              :changed="changedFields.has('google_search')"
+            >
+              <UiSwitch id="setting-google-search" v-model="form.google_search" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.continuationRewrite')"
+              control-id="setting-continuation-rewrite"
+              :description="t('settings.continuationRewriteHelp')"
+              effect="service"
+              :changed="changedFields.has('continuation_rewrite')"
+            >
+              <UiSwitch id="setting-continuation-rewrite" v-model="form.continuation_rewrite" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.continuationPrompt')"
+              control-id="setting-continuation-prompt"
+              :description="t('settings.continuationPromptHelp')"
+              effect="service"
+              :changed="changedFields.has('continuation_prompt')"
+            >
+              <textarea
+                id="setting-continuation-prompt"
+                v-model.trim="form.continuation_prompt"
+                :class="[inputClass, 'resize-y disabled:cursor-not-allowed disabled:opacity-50']"
+                :disabled="!form.continuation_rewrite"
+                rows="4"
+                spellcheck="false"
+              />
+            </SettingRow>
+            <SettingRow
               :label="t('settings.waaBackend')"
               control-id="setting-waa-backend"
               :description="t('settings.waaBackendHelp')"
@@ -686,7 +695,7 @@ async function saveConfig(): Promise<void> {
             >
               <UiSelect id="setting-waa-backend" v-model="form.waa_backend" :class="inputClass">
                 <option value="camoufox">{{ t('settings.waaBackendCamoufox') }}</option>
-                <option value="go">{{ t('settings.waaBackendGo') }}</option>
+                <option value="spidermonkey">{{ t('settings.waaBackendSpiderMonkey') }}</option>
               </UiSelect>
             </SettingRow>
             <SettingRow
@@ -788,7 +797,7 @@ async function saveConfig(): Promise<void> {
                   >
                     <span class="break-all text-gray-300">{{ maskedProxy(entry.proxy) }}</span>
                     <span
-                      v-tooltip="entry.error || ''"
+                      v-tooltip="entry.error"
                       :class="entry.available ? 'text-green-400' : 'text-red-400'"
                     >
                       {{

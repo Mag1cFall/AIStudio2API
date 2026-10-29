@@ -22,17 +22,16 @@ async function start(): Promise<void> {
   }
   open.value = true
   await nextTick()
-  if (video.value) video.value.srcObject = stream
+  video.value!.srcObject = stream
 }
 
 // capture 拍下当前画面为 JPEG 并关闭预览
 async function capture(): Promise<void> {
-  const element = video.value
-  if (element === undefined) return
+  const element = video.value!
   const canvas = document.createElement('canvas')
   canvas.width = element.videoWidth
   canvas.height = element.videoHeight
-  canvas.getContext('2d')?.drawImage(element, 0, 0)
+  canvas.getContext('2d')!.drawImage(element, 0, 0)
   const blob = await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, 'image/jpeg', 0.92),
   )

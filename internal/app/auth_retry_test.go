@@ -41,10 +41,10 @@ func TestAuthRefreshWithoutExtension(t *testing.T) {
 		chromeHas: func(email string) bool { return email == account.ID },
 		importCurrent: func(_ context.Context, source aistudio.AuthSource, _ *aistudio.ChromeOAuthMaterial, _ string) (aistudio.StorageState, error) {
 			updated := aistudio.StorageState{Cookies: cookies}
-			err := updated.SetAuthExtension(aistudio.AuthExtension{
+			updated.SetAuthExtension(aistudio.AuthExtension{
 				Source: source, OAuth: &aistudio.ChromeOAuthMaterial{GaiaID: "gaia", RefreshToken: "token"},
 			})
-			return updated, err
+			return updated, nil
 		},
 		reset:          func(string) error { return nil },
 		prepareHeaders: func(string) (func(bool), error) { return func(bool) {}, nil },

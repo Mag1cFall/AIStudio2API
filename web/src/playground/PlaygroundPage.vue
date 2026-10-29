@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
@@ -13,6 +13,7 @@ import UiGradientSpinner from './ui/UiGradientSpinner.vue'
 import { defaultChatModel, defaultImageModel, isChatModel, modelMatches } from './catalog'
 import type { ZeroStarter } from './zero-configs'
 import { useCompare, usePlayground } from './session'
+import { useRunSettingsPanel } from './shortcuts'
 import type { PromptData } from './types'
 import type { SavedPrompt } from '@/types'
 
@@ -30,20 +31,24 @@ const playground = usePlayground()
 const { session } = playground
 const { panes, comparing, toggleRaw } = useCompare()
 
-// narrowQuery 与官网一致，960 px 以下运行设置为右侧滑出面板
-const narrowQuery = window.matchMedia('(max-width: 960px)')
-const narrow = ref(narrowQuery.matches)
-const settingsOpen = ref(!narrow.value)
-const onNarrowChange = (event: MediaQueryListEvent): void => {
-  narrow.value = event.matches
-  settingsOpen.value = !event.matches
-}
-
 const promptBox = ref<InstanceType<typeof PromptBox>>()
+// narrow 与 settingsOpen 是运行设置面板的状态，/ 聚焦输入框，Shift+R 切换原始模式
+const { narrow, settingsOpen } = useRunSettingsPanel(
+  () => {
+    promptBox.value!.focus()
+    return true
+  },
+  (event) => {
+    if (event.shiftKey && event.key === 'R') {
+      event.preventDefault()
+      toggleRaw()
+    }
+  },
+)
 
 // useStarter 用空态示例填写输入框并聚焦
 function useStarter(item: ZeroStarter): void {
-  promptBox.value?.focus()
+  promptBox.value!.focus()
   void playground.applyStarter(item)
 }
 // otherModel 返回地址不带 model 的新对话页上，空白对话是否仍是目录默认模型以外的模型
@@ -100,48 +105,11 @@ watch(
   },
 )
 
-// editable 返回事件目标是否为可输入元素
-function editable(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null
-  return (
-    element !== null &&
-    (element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName))
-  )
-}
-
-// onKeydown 处理官网快捷键：/ 聚焦输入框，Ctrl+Shift+S 切换运行设置，Shift+R 切换原始模式
-function onKeydown(event: KeyboardEvent): void {
-  if (event.defaultPrevented || document.querySelector('[role="dialog"]')) return
-  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 's') {
-    event.preventDefault()
-    settingsOpen.value = !settingsOpen.value
-    return
-  }
-  if (editable(event.target) || event.ctrlKey || event.metaKey || event.altKey) return
-  if (event.key === '/') {
-    event.preventDefault()
-    promptBox.value?.focus()
-  } else if (event.shiftKey && event.key === 'R') {
-    event.preventDefault()
-    toggleRaw()
-  }
-}
-
 // newChat 与官网一致打开保留当前系统指令的新对话
 function newChat(): void {
   playground.newChat(session.settings.systemInstruction)
   void router.push('/prompts/new_chat')
 }
-
-onMounted(() => {
-  narrowQuery.addEventListener('change', onNarrowChange)
-  window.addEventListener('keydown', onKeydown)
-})
-
-onUnmounted(() => {
-  narrowQuery.removeEventListener('change', onNarrowChange)
-  window.removeEventListener('keydown', onKeydown)
-})
 </script>
 
 <template>

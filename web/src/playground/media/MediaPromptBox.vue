@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { nextTick, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -7,17 +6,14 @@ import RunKeyHint from '../RunKeyHint.vue'
 import { submits, useRunTooltip } from '../run-keys'
 
 const draft = defineModel<string>({ required: true })
-const props = withDefaults(
-  defineProps<{
-    placeholder: string
-    label: string
-    running: boolean
-    canRun: boolean
-    runLabel?: string
-    showText?: boolean
-  }>(),
-  { runLabel: '', showText: true },
-)
+// runTooltip 是页面给出的运行按钮提示，为空时显示发送快捷键
+const props = defineProps<{
+  placeholder: string
+  label: string
+  running: boolean
+  canRun: boolean
+  runTooltip?: string
+}>()
 const emit = defineEmits<{ run: []; stop: []; files: [files: File[]] }>()
 const { t } = useI18n()
 const textarea = ref<HTMLTextAreaElement>()
@@ -25,8 +21,7 @@ const dragging = ref(false)
 
 // resize 让输入框随内容增高，超过 210 px 后在框内滚动
 function resize(): void {
-  const element = textarea.value
-  if (element === undefined) return
+  const element = textarea.value!
   element.style.height = 'auto'
   element.style.height = `${Math.min(Math.max(element.scrollHeight, 21), 210)}px`
 }
@@ -39,13 +34,13 @@ function submit(): void {
   else if (props.canRun) emit('run')
 }
 
-// runTooltip 是运行按钮的悬停提示
-const runTooltip = useRunTooltip(() => props.running)
+// defaultTooltip 是运行按钮的默认悬停提示
+const defaultTooltip = useRunTooltip(() => props.running)
 
 // onKeydown 与官网 ms-prompt-box 一致：Escape 失焦，生成中或不能运行时快捷键不起作用，否则按提交键运行
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
-    textarea.value?.blur()
+    textarea.value!.blur()
     return
   }
   if (props.running || !props.canRun) return
@@ -58,11 +53,9 @@ function onKeydown(event: KeyboardEvent): void {
 // onDrop 把拖入的文件交给页面
 function onDrop(event: DragEvent): void {
   dragging.value = false
-  const files = [...(event.dataTransfer?.files ?? [])]
+  const files = [...event.dataTransfer!.files]
   if (files.length > 0) emit('files', files)
 }
-
-defineExpose({ focus: () => textarea.value?.focus() })
 </script>
 
 <template>
@@ -81,7 +74,7 @@ defineExpose({ focus: () => textarea.value?.focus() })
       <div v-if="$slots.top" class="augmentation">
         <slot name="top" />
       </div>
-      <div v-if="showText" class="textarea-row">
+      <div class="textarea-row">
         <div class="text-wrapper">
           <textarea
             ref="textarea"
@@ -104,11 +97,11 @@ defineExpose({ focus: () => textarea.value?.focus() })
         <div class="button-wrapper">
           <slot name="right" />
           <button
-            v-tooltip="runTooltip"
+            v-tooltip="runTooltip || defaultTooltip"
             type="button"
             ms-button
             class="run-button ms-button-primary"
-            :aria-label="running ? t('pg.stop') : runLabel || t('pg.run')"
+            :aria-label="running ? t('pg.stop') : t('pg.run')"
             :aria-disabled="!running && !canRun"
             @click="submit"
           >
@@ -117,7 +110,7 @@ defineExpose({ focus: () => textarea.value?.focus() })
               <span class="run-button-label">{{ t('pg.stop') }}</span>
             </template>
             <template v-else>
-              <span class="run-button-label">{{ runLabel || t('pg.run') }}</span>
+              <span class="run-button-label">{{ t('pg.run') }}</span>
               <RunKeyHint />
             </template>
           </button>
@@ -254,15 +247,5 @@ defineExpose({ focus: () => textarea.value?.focus() })
 
 .run-button .run-button-label {
   min-width: 28px;
-}
-
-.spin {
-  animation: spin 0.66s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(1turn);
-  }
 }
 </style>

@@ -350,12 +350,7 @@ func (s *server) compactResponses(ctx context.Context, request responsesRequest,
 
 // instructionItem 判断条目是否为 developer 或 system 消息
 func instructionItem(item json.RawMessage) bool {
-	var head struct {
-		Type string `json:"type"`
-		Role string `json:"role"`
-	}
-	_ = json.Unmarshal(item, &head)
-	return (head.Type == "message" || head.Type == "") && (head.Role == "developer" || head.Role == "system")
+	return compactionItemSide(item) == "instruction"
 }
 
 // conversationItems 返回去掉 developer 与 system 消息后的条目，客户端每次请求都重新发送这些指令
@@ -372,10 +367,13 @@ func (s *server) compactionSummary(ctx context.Context, request responsesRequest
 	}
 	request.Input, _ = json.Marshal(items)
 	generate, _, err := request.toGenerateRequest(id)
+	if err == nil {
+		generate, err = s.resolveMCPTools(ctx, generate)
+	}
 	if err != nil {
 		return "", nil, err
 	}
-	generate = aistudio.ResolveSearchGenerateRequest(generate)
+	generate = s.prepareSearch(generate)
 	if err := inlineRemoteMedia(ctx, generate.Contents); err != nil {
 		return "", nil, err
 	}
@@ -386,7 +384,7 @@ func (s *server) compactionSummary(ctx context.Context, request responsesRequest
 	if err != nil {
 		return "", nil, err
 	}
-	result, err := consumeEvents(ctx, events, nil)
+	result, err := consumeEvents(ctx, events)
 	if err != nil {
 		return "", nil, err
 	}

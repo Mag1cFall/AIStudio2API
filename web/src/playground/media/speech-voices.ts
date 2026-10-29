@@ -1,8 +1,9 @@
 import type { OrbState } from 'thinking-orbs/engine'
 import { useI18n } from '@/i18n'
+import type { VoiceDetail } from '@/types'
 
 // SpeechVoice 是官网语音页 Voice Design 的一个示例声音：标题、描述、试听音频与卡片动画
-export interface SpeechVoice {
+interface SpeechVoice {
   id: string
   title: string
   description: string
@@ -11,6 +12,14 @@ export interface SpeechVoice {
 }
 
 const { t } = useI18n()
+
+// voiceTraits 返回目录音色的官网描述与音高
+export function voiceTraits(voice: VoiceDetail): string[] {
+  return [
+    ...(voice.descriptions ?? []),
+    ...(voice.pitch ? [t('pg.pitchValue').replace('{pitch}', voice.pitch)] : []),
+  ]
+}
 
 // speechVoices 返回当前界面语言的官网语音页“Explore thousands of voices”示例声音
 export function speechVoices(): SpeechVoice[] {

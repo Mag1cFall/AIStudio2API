@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref } from 'vue'
 import {
   DropdownMenuCheckboxItem,

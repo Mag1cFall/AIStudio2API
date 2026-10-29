@@ -14,9 +14,6 @@ type streamActivityReader struct {
 
 // ContextWithStreamActivityObserver 记录上游响应体实际到达的字节
 func ContextWithStreamActivityObserver(ctx context.Context, observer func(int)) context.Context {
-	if observer == nil {
-		return ctx
-	}
 	return context.WithValue(ctx, streamActivityContextKey{}, observer)
 }
 

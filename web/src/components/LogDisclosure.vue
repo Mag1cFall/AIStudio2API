@@ -47,10 +47,4 @@ const { t } = useI18n()
 .log-disclosure[aria-expanded='true'] :deep(svg) {
   transform: rotate(90deg);
 }
-@media (prefers-reduced-motion: reduce) {
-  .log-disclosure,
-  .log-disclosure :deep(svg) {
-    transition: none;
-  }
-}
 </style>

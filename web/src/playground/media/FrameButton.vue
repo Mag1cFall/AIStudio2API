@@ -1,21 +1,18 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import AddImageButton from './AddImageButton.vue'
-import type { InlineImage } from './api'
+import { dataURL } from '../protocols'
+import type { VideoFrame } from './video'
 
 const props = defineProps<{
-  frame: (InlineImage & { name: string }) | undefined
+  frame: VideoFrame | undefined
   label: string
-  disabled?: boolean
 }>()
 const emit = defineEmits<{ add: [image: File]; remove: [] }>()
 const { t } = useI18n()
-const source = computed(() =>
-  props.frame ? `data:${props.frame.mimeType};base64,${props.frame.data}` : '',
-)
+const source = computed(() => (props.frame ? dataURL(props.frame) : ''))
 </script>
 
 <template>
@@ -36,13 +33,7 @@ const source = computed(() =>
         <UiIcon name="close" :size="15" />
       </button>
     </div>
-    <AddImageButton
-      v-else
-      icon="addPhoto"
-      :label="label"
-      :disabled="disabled"
-      @images="emit('add', $event[0]!)"
-    />
+    <AddImageButton v-else icon="addPhoto" :label="label" @images="emit('add', $event[0]!)" />
   </div>
 </template>
 

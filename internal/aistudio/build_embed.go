@@ -136,7 +136,7 @@ func (t *WorkerProtectedTransport) DoProtectedBuild(ctx context.Context, selecti
 	if err != nil {
 		return nil, err
 	}
-	return t.doBrowserPrepared(ctx, prompt, page, buildProofField, selection, rpc)
+	return t.doPrepared(ctx, prompt, page, buildProofField, selection, rpc)
 }
 
 // buildEmbedBatchLimit 是上游 batchEmbedContents 单次接受的最大请求数
@@ -144,10 +144,7 @@ const buildEmbedBatchLimit = 100
 
 // embed 在当前 Build 租约上按上游批量上限依次发送 batchEmbedContents 并按输入顺序合并结果
 func (c *Client) embed(ctx context.Context, request EmbeddingRequest) (EmbeddingResult, error) {
-	transport, ok := c.protected.(BuildProtectedTransport)
-	if !ok {
-		return EmbeddingResult{}, fmt.Errorf("AI Studio protected transport 不支持 Build 代理请求")
-	}
+	transport := c.protected.(BuildProtectedTransport)
 	var result EmbeddingResult
 	for start := 0; start < len(request.Requests); start += buildEmbedBatchLimit {
 		batch, err := c.embedBatch(ctx, transport, request, request.Requests[start:min(start+buildEmbedBatchLimit, len(request.Requests))])
@@ -235,7 +232,7 @@ func (s *PooledService) Embed(ctx context.Context, request EmbeddingRequest) (Em
 		retryable := retryableAccountError(err)
 		var stateErr error
 		if retryable {
-			stateErr = s.markRetryableFailure(lease, lease.CooldownScope(modelID), err)
+			stateErr = s.markRetryableFailure(ctx, lease, lease.CooldownScope(modelID), err)
 		}
 		if releaseErr := lease.Release(); stateErr != nil || releaseErr != nil {
 			return EmbeddingResult{}, errors.Join(requestErr, stateErr, releaseErr)

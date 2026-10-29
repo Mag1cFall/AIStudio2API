@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
-import { vTooltip } from '@/playground/ui/tooltip'
 
 // ScrollbarItem 是轮次导航中的一个点：id 为该组第一个用户轮次，label 为提示文字
 export interface ScrollbarItem {
@@ -166,7 +165,7 @@ function jump(id: string): void {
         : index === props.items.length - 1
           ? anchor - handleHeight.value
           : anchor - handleHeight.value / 2
-  ;(document.activeElement as HTMLElement | null)?.blur()
+  ;(document.activeElement as HTMLElement).blur()
   scroller.focus({ preventScroll: true })
 }
 
@@ -194,7 +193,7 @@ function startDrag(event: MouseEvent | TouchEvent): void {
   if (event instanceof MouseEvent && event.button !== 0) return
   event.preventDefault()
   const y = event instanceof MouseEvent ? event.clientY : event.touches[0]!.clientY
-  grab = y - (handle.value?.getBoundingClientRect().top ?? y)
+  grab = y - handle.value!.getBoundingClientRect().top
   dragging.value = true
   document.body.style.cursor = 'grabbing'
 }
@@ -239,7 +238,7 @@ function focusActive(): void {
 function onKeydown(event: KeyboardEvent): void {
   const index = buttons().indexOf(document.activeElement as HTMLButtonElement)
   if (event.key === 'Escape') {
-    if (host.value?.contains(document.activeElement)) {
+    if (host.value!.contains(document.activeElement)) {
       props.scroller?.focus({ preventScroll: true })
       event.preventDefault()
       event.stopPropagation()
@@ -276,7 +275,7 @@ watch(
     scroller.addEventListener('scroll', schedule, { passive: true })
     resize = new ResizeObserver(schedule)
     resize.observe(scroller)
-    if (scroller.firstElementChild) resize.observe(scroller.firstElementChild)
+    resize.observe(scroller.firstElementChild!)
     schedule()
   },
   { immediate: true },

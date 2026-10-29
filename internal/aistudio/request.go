@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -34,7 +35,7 @@ func EncodeCountTokensRequest(request TokenCountRequest) ([]byte, error) {
 	if len(contents) == 0 && len(request.System) == 0 {
 		return nil, fmt.Errorf("CountTokens contents 不能为空")
 	}
-	resolution, err := playgroundMediaResolution(request.MediaResolution, request.Contents)
+	resolution, err := encodeMediaResolution(cmp.Or(request.MediaResolution, partMediaResolution(request.Contents)))
 	if err != nil {
 		return nil, err
 	}
@@ -243,9 +244,9 @@ func linkFunctionResults(content Content, pendingCalls *[]FunctionCall) (Content
 				content.Parts = slices.Clone(content.Parts)
 				cloned = true
 			}
-			named := cloneFunctionResult(result)
+			named := *result
 			named.Name = (*pendingCalls)[matched].Name
-			content.Parts[index].FunctionResult = named
+			content.Parts[index].FunctionResult = &named
 		}
 		*pendingCalls = slices.Delete(*pendingCalls, matched, matched+1)
 	}
@@ -263,9 +264,6 @@ func encodeContent(content Content) ([]any, error) {
 		role = "user"
 	default:
 		return nil, fmt.Errorf("未知 content role %q", content.Role)
-	}
-	if len(content.Parts) == 0 {
-		return nil, fmt.Errorf("content parts 不能为空")
 	}
 	parts := make([]any, 0, len(content.Parts))
 	for index, part := range content.Parts {
@@ -319,15 +317,9 @@ func encodePart(part Part) ([]any, error) {
 	if part.Text != "" {
 		wire := []any{nil, part.Text}
 		if part.Thought {
-			for len(wire) <= 12 {
-				wire = append(wire, nil)
-			}
-			wire[12] = true
+			wire = setWireField(wire, 12, true)
 		}
 		if metadata := part.SpeechMetadata; metadata != nil && (metadata.Speaker != "" || metadata.Style != "") {
-			for len(wire) <= 40 {
-				wire = append(wire, nil)
-			}
 			// Part field 41 SpeechMetadata：speaker、style
 			encoded := []any{nil}
 			if metadata.Speaker != "" {
@@ -336,7 +328,7 @@ func encodePart(part Part) ([]any, error) {
 			if metadata.Style != "" {
 				encoded = append(encoded, metadata.Style)
 			}
-			wire[40] = encoded
+			wire = setWireField(wire, 40, encoded)
 		}
 		return setPartThoughtSignature(wire, part.ThoughtSignature), nil
 	}
@@ -354,7 +346,7 @@ func encodePart(part Part) ([]any, error) {
 		wire := make([]any, 7)
 		wire[6] = []any{part.ExternalMedia.MIME, part.ExternalMedia.URL}
 		if part.DisplayName != "" {
-			// FileData field 6 display_name
+			// FileData field 6 为文件显示名
 			wire[6] = []any{part.ExternalMedia.MIME, part.ExternalMedia.URL, nil, nil, nil, part.DisplayName}
 		}
 		return encodeVideoPart(wire, part)
@@ -475,19 +467,9 @@ func countTokensNeedsGenerateRequest(contents []Content) bool {
 	return false
 }
 
-func cloneFunctionResult(result *FunctionResult) *FunctionResult {
-	cloned := *result
-	cloned.Content = append(json.RawMessage(nil), result.Content...)
-	return &cloned
-}
-
 func setPartThoughtSignature(wire []any, signature string) []any {
 	if signature == "" {
 		return wire
 	}
-	for len(wire) <= 14 {
-		wire = append(wire, nil)
-	}
-	wire[14] = signature
-	return wire
+	return setWireField(wire, 14, signature)
 }

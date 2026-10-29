@@ -10,7 +10,7 @@ export const liveCodeOptions: CodeOption<LiveCodeLanguage>[] = [
 ]
 
 // LiveCodeInput 是 Live 示例代码所需的服务地址、setup 帧与提示词
-export interface LiveCodeInput {
+interface LiveCodeInput {
   baseURL: string
   setup: Record<string, unknown>
   prompt: string

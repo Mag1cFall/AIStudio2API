@@ -344,7 +344,6 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 		}
 	}
 	events := make([]Event, 0, 2)
-	emptyText := false
 	textEvent := -1
 	if textRaw := rawAt(part, 1); !isJSONNull(textRaw) {
 		text, err := rawString(textRaw, path+"[1]", raw)
@@ -360,8 +359,6 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			if kind == EventText {
 				textEvent = len(events) - 1
 			}
-		} else {
-			emptyText = true
 		}
 	}
 	if inlineRaw := rawAt(part, 2); !isJSONNull(inlineRaw) {
@@ -424,14 +421,8 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			events = append(events, event)
 		}
 	}
-	if len(events) == 0 {
-		if signature != "" {
-			return []Event{{Kind: EventThoughtSignature, ThoughtSignature: signature}}, nil
-		}
-		if emptyText {
-			return nil, nil
-		}
-		return nil, nil
+	if len(events) == 0 && signature != "" {
+		return []Event{{Kind: EventThoughtSignature, ThoughtSignature: signature}}, nil
 	}
 	return events, nil
 }

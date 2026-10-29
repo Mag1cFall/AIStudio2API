@@ -5,23 +5,46 @@ import (
 	"strings"
 )
 
-// assistantPrefixInstruction 是末尾 assistant 轮改写为续写前缀时追加的系统指令
-const assistantPrefixInstruction = "Continue the assistant response after the following prefix. Return only the continuation, without repeating the prefix."
+// nativePrefillModels 是接受以 model 轮结尾请求的规范模型 ID，gemma- 前缀的模型同样接受，其余模型的末尾 assistant 轮按续写配置改写
+var nativePrefillModels = map[string]bool{
+	"gemini-3.1-pro-preview":      true,
+	"gemini-pro-latest":           true,
+	"gemini-3.1-flash-lite":       true,
+	"gemini-3-flash-preview":      true,
+	"gemini-omni-1.1-flash":       true,
+	"gemini-nano-banana-2.1":      true,
+	"gemini-3.1-flash-image":      true,
+	"gemini-3.1-flash-lite-image": true,
+	"gemini-3-pro-image":          true,
+	"gemini-2.5-flash-image":      true,
+}
 
-// normalizeTurns 将末尾连续 assistant 轮改写为系统指令中的续写前缀，没有对话内容时以系统提示作为 user 轮
-func normalizeTurns(system []string, contents []Content) ([]string, []Content) {
-	tail := len(contents)
-	for tail > 0 && contents[tail-1].Role == RoleAssistant {
-		tail--
-	}
-	if prefix := assistantPrefix(contents[tail:]); strings.TrimSpace(prefix) != "" {
-		instruction := assistantPrefixInstruction + "\n<assistant_prefix>" + prefix + "</assistant_prefix>"
-		if len(system) > 0 {
-			instruction = "\n" + instruction
+// rewritesAssistantTail 判断末尾 assistant 轮是否改写：ContinuationRewrite 打开且模型不接受以 model 轮结尾的请求
+func (s *PooledService) rewritesAssistantTail(modelID string) bool {
+	return s.ContinuationRewrite && !nativePrefillModels[modelID] && !strings.HasPrefix(modelID, "gemma-")
+}
+
+// normalizeTurns 在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮
+func normalizeTurns(system []string, contents []Content, rewrite bool, prompt string) ([]string, []Content) {
+	if rewrite {
+		tail := len(contents)
+		for tail > 0 && contents[tail-1].Role == RoleAssistant {
+			tail--
 		}
-		system = appendSystem(system, instruction)
+		prefix := assistantPrefix(contents[tail:])
+		contents = contents[:tail]
+		switch {
+		case strings.TrimSpace(prefix) == "":
+		case prompt == "":
+			contents = append(slices.Clip(contents), Content{Role: RoleUser, Parts: []Part{{Text: prefix}}})
+		default:
+			instruction := prompt + "\n<assistant_prefix>" + prefix + "</assistant_prefix>"
+			if len(system) > 0 {
+				instruction = "\n" + instruction
+			}
+			system = appendSystem(system, instruction)
+		}
 	}
-	contents = contents[:tail]
 	if len(contents) == 0 && strings.TrimSpace(SystemText(system)) != "" {
 		return nil, []Content{{Role: RoleUser, Parts: []Part{{Text: SystemText(system)}}}}
 	}

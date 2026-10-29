@@ -1125,15 +1125,12 @@ func (c *Client) buildModelEntry(ctx context.Context, request GenerateRequest, l
 
 // buildModel 返回租约账户 Build 目录中的模型
 func (l *AccountLease) buildModel(modelID string) (Model, bool) {
-	if l == nil || l.pool == nil || l.account == nil {
-		return Model{}, false
-	}
 	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
 	l.pool.mu.Lock()
 	defer l.pool.mu.Unlock()
 	for _, model := range l.account.buildModels {
 		if model.ID == modelID {
-			return cloneAccountModels([]Model{model})[0], true
+			return cloneModels([]Model{model})[0], true
 		}
 	}
 	return Model{}, false

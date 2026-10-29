@@ -21,10 +21,15 @@ func ResolveSearchModelAlias(model string) (baseModel string, enableSearch bool)
 }
 
 // ResolveSearchGenerateRequest 将搜索型号解析为基础型号并合入 Google 搜索
-func ResolveSearchGenerateRequest(request GenerateRequest) GenerateRequest {
-	baseModel, enableSearch := ResolveSearchModelAlias(request.Model)
-	if enableSearch {
-		request.Model = baseModel
+func ResolveSearchGenerateRequest(request GenerateRequest, aliases, search bool) GenerateRequest {
+	if aliases {
+		baseModel, enableSearch := ResolveSearchModelAlias(request.Model)
+		if enableSearch {
+			request.Model = baseModel
+			search = true
+		}
+	}
+	if search {
 		request.Tools = toolsWithWebSearch(request.Tools)
 	}
 	return request
@@ -49,7 +54,7 @@ func toolsWithWebSearch(tools Tools) Tools {
 // ModelsWithSearchAliases 为支持生成与 Google 搜索的对话模型补充搜索型号
 func ModelsWithSearchAliases(models []Model) []Model {
 	result := make([]Model, 0, len(models)*2)
-	knownIDs := make(map[string]struct{}, len(models)*2)
+	knownIDs := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		knownIDs[model.ID] = struct{}{}
 	}
@@ -67,7 +72,6 @@ func ModelsWithSearchAliases(models []Model) []Model {
 		alias.Name = model.Name + " (Search)"
 		alias.Description = searchAliasDescription(model.Description)
 		result = append(result, alias)
-		knownIDs[aliasID] = struct{}{}
 	}
 	return result
 }

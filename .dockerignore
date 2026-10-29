@@ -7,3 +7,4 @@ internal/webui/dist/
 .env
 *.exe
 aistudio2api
+spidermonkey/

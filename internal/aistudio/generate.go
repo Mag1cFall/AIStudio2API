@@ -42,7 +42,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if err != nil {
 		return nil, err
 	}
-	if len(config) > 8 && config[8] != nil && responseSchemaBeyondPlayground(request.Config, config[8].([]any)) {
+	if config[8] != nil && responseSchemaBeyondPlayground(request.Config, config[8].([]any)) {
 		config[7], config[8] = "application/json", nil
 		request.System = append(slices.Clone(request.System), describedSchema("", request.Config.responseSchema()))
 	}
@@ -204,11 +204,10 @@ func resolveGenerationSettings(config GenerationConfig, defaults GenerationDefau
 		thinkingBudget = nil
 	}
 	if config.SpeechConfig == nil || config.MaxOutputTokens != nil {
-		maxOutput := defaults.MaxOutputTokens
+		maxOutput := max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens)
 		if config.MaxOutputTokens != nil {
-			maxOutput = *config.MaxOutputTokens
+			maxOutput = min(*config.MaxOutputTokens, maxOutput)
 		}
-		maxOutput = min(maxOutput, max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens))
 		if maxOutput <= 0 {
 			return settings, fmt.Errorf("模型目录缺少有效 output token limit")
 		}
@@ -490,13 +489,6 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 			}
 			speakers = append(speakers, []any{name, voice})
 		}
-		if wire == nil {
-			wire = make([]any, 3)
-		} else {
-			for len(wire) < 3 {
-				wire = append(wire, nil)
-			}
-		}
 		multi := []any{nil, speakers}
 		switch strings.ToUpper(strings.TrimSpace(config.Mode)) {
 		case "":
@@ -507,7 +499,7 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 		default:
 			return nil, fmt.Errorf("speech config mode 必须是 VERBATIM 或 CONVERSATIONAL")
 		}
-		wire[2] = multi
+		wire = setWireField(wire, 2, multi)
 	} else if strings.TrimSpace(config.Mode) != "" {
 		return nil, fmt.Errorf("speech config mode 只能用于 multi-speaker")
 	}
@@ -568,11 +560,6 @@ func mixedMediaResolution(global string, contents []Content) bool {
 		}
 	}
 	return false
-}
-
-// playgroundMediaResolution 返回 Playground 请求级分辨率编号：未设置请求级分辨率时使用全部媒体 Part 共同指定的分辨率
-func playgroundMediaResolution(global string, contents []Content) (any, error) {
-	return encodeMediaResolution(cmp.Or(global, partMediaResolution(contents)))
 }
 
 // defaultSpeechVoice 是官网单说话人的默认声音
@@ -870,10 +857,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		emitEvent := func(event Event) error {
 			switch event.Kind {
 			case EventUsage:
-				if event.Usage != nil {
-					value := *event.Usage
-					usage = &value
-				}
+				value := *event.Usage
+				usage = &value
 				return nil
 			case EventFinish:
 				value := event
@@ -1105,7 +1090,7 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		forward := emit
 		if previous != nil {
 			forward = func(event Event) error {
-				if event.Kind == EventUsage && event.Usage != nil {
+				if event.Kind == EventUsage {
 					merged := mergeContinuedUsage(*previous, *event.Usage)
 					event.Usage = &merged
 				}
@@ -1134,6 +1119,7 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		}
 		request.continuationRound++
 		request.continuationToken = decoder.continuation
+		reportContinuationRound(ctx)
 		reportUpstreamMode(ctx, "GenerateContent", fmt.Sprintf("stream | 续写=%d", request.continuationRound), "")
 		body, err := EncodeGenerateContentRequest(request, defaults, runtime)
 		if err != nil {

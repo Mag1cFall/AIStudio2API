@@ -3,12 +3,10 @@ package chromeauth
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/hmac"
+	"crypto/hpke"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -401,82 +399,18 @@ func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, sp
 
 func hpkeOpen(privateKey *ecdh.PrivateKey, encodedValue string) (string, error) {
 	encrypted, err := base64.RawURLEncoding.DecodeString(encodedValue)
-	if err != nil || len(encrypted) <= 48 {
+	if err != nil {
 		return "", fmt.Errorf("OAuthMultilogin Cookie 密文格式异常")
 	}
-	encapsulatedKey := encrypted[:32]
-	senderPublicKey, err := ecdh.X25519().NewPublicKey(encapsulatedKey)
+	recipientKey, err := hpke.NewDHKEMPrivateKey(privateKey)
 	if err != nil {
-		return "", fmt.Errorf("解析 HPKE 封装密钥: %w", err)
+		return "", fmt.Errorf("创建 HPKE 接收密钥: %w", err)
 	}
-	sharedDH, err := privateKey.ECDH(senderPublicKey)
-	if err != nil {
-		return "", fmt.Errorf("计算 HPKE 共享密钥: %w", err)
-	}
-	kemSuite := append([]byte("KEM"), 0, 0x20)
-	hpkeSuite := append([]byte("HPKE"), 0, 0x20, 0, 1, 0, 1)
-	eaePRK := labeledExtract(nil, kemSuite, []byte("eae_prk"), sharedDH)
-	kemContext := append(append([]byte{}, encapsulatedKey...), privateKey.PublicKey().Bytes()...)
-	sharedSecret := labeledExpand(eaePRK, kemSuite, []byte("shared_secret"), kemContext, 32)
-	pskIDHash := labeledExtract(nil, hpkeSuite, []byte("psk_id_hash"), nil)
-	infoHash := labeledExtract(nil, hpkeSuite, []byte("info_hash"), nil)
-	keyScheduleContext := append(append([]byte{0}, pskIDHash...), infoHash...)
-	secret := labeledExtract(sharedSecret, hpkeSuite, []byte("secret"), nil)
-	key := labeledExpand(secret, hpkeSuite, []byte("key"), keyScheduleContext, 16)
-	nonce := labeledExpand(secret, hpkeSuite, []byte("base_nonce"), keyScheduleContext, 12)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("创建 HPKE AES 解密器: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("创建 HPKE GCM 解密器: %w", err)
-	}
-	plaintext, err := gcm.Open(nil, nonce, encrypted[32:], []byte{})
+	plaintext, err := hpke.Open(recipientKey, hpke.HKDFSHA256(), hpke.AES128GCM(), nil, encrypted)
 	if err != nil {
 		return "", fmt.Errorf("OAuthMultilogin Cookie 解密失败")
 	}
 	return string(plaintext), nil
-}
-
-func labeledExtract(salt []byte, suite []byte, label []byte, input []byte) []byte {
-	material := append([]byte("HPKE-v1"), suite...)
-	material = append(material, label...)
-	material = append(material, input...)
-	return hkdfExtract(salt, material)
-}
-
-func labeledExpand(key []byte, suite []byte, label []byte, info []byte, length int) []byte {
-	labeledInfo := make([]byte, 2)
-	binary.BigEndian.PutUint16(labeledInfo, uint16(length))
-	labeledInfo = append(labeledInfo, []byte("HPKE-v1")...)
-	labeledInfo = append(labeledInfo, suite...)
-	labeledInfo = append(labeledInfo, label...)
-	labeledInfo = append(labeledInfo, info...)
-	return hkdfExpand(key, labeledInfo, length)
-}
-
-func hkdfExtract(salt []byte, input []byte) []byte {
-	if len(salt) == 0 {
-		salt = make([]byte, sha256.Size)
-	}
-	hash := hmac.New(sha256.New, salt)
-	hash.Write(input)
-	return hash.Sum(nil)
-}
-
-func hkdfExpand(key []byte, info []byte, length int) []byte {
-	result := make([]byte, 0, length)
-	block := []byte(nil)
-	for counter := byte(1); len(result) < length; counter++ {
-		hash := hmac.New(sha256.New, key)
-		hash.Write(block)
-		hash.Write(info)
-		hash.Write([]byte{counter})
-		block = hash.Sum(nil)
-		result = append(result, block...)
-	}
-	return result[:length]
 }
 
 func appendBytesField(output []byte, number int, value []byte) []byte {

@@ -45,18 +45,6 @@ type geminiFileMetadata struct {
 // geminiFileAliasPattern 是客户端可指定的文件 ID：小写字母、数字与连字符，不以连字符开头或结尾，最长 40 个字符
 var geminiFileAliasPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
-// alias 校验并返回元数据中客户端指定的文件 ID，未指定时为空
-func (metadata geminiFileMetadata) alias() (string, error) {
-	name := strings.TrimPrefix(strings.TrimSpace(metadata.File.Name), "files/")
-	if name == "" {
-		return "", nil
-	}
-	if !geminiFileAliasPattern.MatchString(name) {
-		return "", fmt.Errorf("file.name %q must contain 1 to 40 lowercase letters, digits or dashes and cannot begin or end with a dash", metadata.File.Name)
-	}
-	return name, nil
-}
-
 // geminiFileIDs 列出全部上传文件并返回公开文件 ID 对应的 Drive 文件 ID
 func geminiFileIDs(ctx context.Context, service aistudio.FileService) (map[string]string, error) {
 	files, err := service.ListFiles(ctx)
@@ -437,11 +425,11 @@ func uploadGeminiMultipart(w http.ResponseWriter, r *http.Request, service aistu
 	}
 }
 
-// checkGeminiFileAlias 校验客户端指定的文件 ID 格式，无效时写出错误并返回 false
+// checkGeminiFileAlias 返回元数据中客户端指定的文件 ID，未指定时为空，格式无效时写出错误并返回 false
 func checkGeminiFileAlias(w http.ResponseWriter, metadata geminiFileMetadata) (string, bool) {
-	alias, err := metadata.alias()
-	if err != nil {
-		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+	alias := strings.TrimPrefix(strings.TrimSpace(metadata.File.Name), "files/")
+	if alias != "" && !geminiFileAliasPattern.MatchString(alias) {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", fmt.Sprintf("file.name %q must contain 1 to 40 lowercase letters, digits or dashes and cannot begin or end with a dash", metadata.File.Name))
 		return "", false
 	}
 	return alias, true
@@ -544,24 +532,19 @@ func firstMediaType(values ...string) string {
 	return ""
 }
 
-// geminiUploadFailure 返回上传失败的 HTTP 状态与状态名，超过文件大小上限时为 413
-func geminiUploadFailure(err error) (int, string) {
-	var maxBytes *http.MaxBytesError
-	if errors.As(err, &maxBytes) || statusFromError(err) == http.StatusRequestEntityTooLarge {
-		return http.StatusRequestEntityTooLarge, "INVALID_ARGUMENT"
-	}
-	return statusFromError(err), geminiErrorStatus(err)
-}
-
 // writeGeminiUploadError 写入带 X-Goog-Upload-Status 的上传错误
 func writeGeminiUploadError(w http.ResponseWriter, status int, statusName string, message string, uploadStatus string) {
 	w.Header().Set("X-Goog-Upload-Status", uploadStatus)
 	writeGeminiError(w, status, statusName, message)
 }
 
-// writeGeminiUploadFailure 按上传失败原因写入错误，uploadStatus 非空时同时写入 X-Goog-Upload-Status
+// writeGeminiUploadFailure 按上传失败原因写入错误，超过文件大小上限时为 413，uploadStatus 非空时同时写入 X-Goog-Upload-Status
 func writeGeminiUploadFailure(w http.ResponseWriter, err error, uploadStatus string) {
-	status, statusName := geminiUploadFailure(err)
+	status, statusName := statusFromError(err), geminiErrorStatus(err)
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) || status == http.StatusRequestEntityTooLarge {
+		status, statusName = http.StatusRequestEntityTooLarge, "INVALID_ARGUMENT"
+	}
 	if uploadStatus != "" {
 		w.Header().Set("X-Goog-Upload-Status", uploadStatus)
 	}
@@ -637,15 +620,7 @@ func (s *server) handleGeminiFileDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.Header().Set("Content-Type", cmp.Or(strings.TrimSpace(media.MIME), "application/octet-stream"))
-	if media.Size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(media.Size, 10))
-	}
-	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, media.Body)
-	closeErr := media.Body.Close()
-	if requestErr := errors.Join(copyErr, closeErr); requestErr != nil {
-		SetAccessLogError(r.Context(), requestErr)
-	}
+	writeMediaStream(w, r, media.Body, media.Size)
 }
 
 // handleGeminiFileDelete 删除上传文件并返回空对象

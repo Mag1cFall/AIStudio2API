@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
@@ -27,6 +26,7 @@ import {
   realtimeMusicCode,
   type MusicCodeLanguage,
 } from './music-code'
+import { dataURL } from '../protocols'
 import { useRealtimeMusic } from './realtime-music'
 import { useMusic, type MusicView } from './music'
 
@@ -114,7 +114,7 @@ const tips: { title: TranslationKey; icon: IconName; items: TranslationKey[] }[]
   },
 ]
 const tipIndex = ref(tips.map((tip) => Math.floor(Math.random() * tip.items.length)))
-const viewOptions: { value: MusicView; icon: IconName; label: string }[] = [
+const viewOptions: { value: MusicView; icon: IconName; label: TranslationKey }[] = [
   { value: 'text', icon: 'editNote', label: 'pg.musicText' },
   { value: 'composer', icon: 'layout', label: 'pg.musicComposer' },
 ]
@@ -150,7 +150,7 @@ function openEditor(prompt = '', audio?: string): void {
   tipIndex.value = tips.map((tip) => Math.floor(Math.random() * tip.items.length))
   music.edit(
     prompt,
-    audio ? { url: audio, name: audio.split('/').at(-1) ?? 'music.wav', sample: true } : undefined,
+    audio ? { url: audio, name: audio.split('/').at(-1)!, sample: true } : undefined,
   )
 }
 
@@ -177,9 +177,7 @@ async function addImages(files: File[]): Promise<void> {
 // onDrop 接收拖入的图片
 function onDrop(event: DragEvent): void {
   dragging.value = false
-  const files = [...(event.dataTransfer?.files ?? [])].filter((file) =>
-    file.type.startsWith('image/'),
-  )
+  const files = [...event.dataTransfer!.files].filter((file) => file.type.startsWith('image/'))
   void addImages(files)
 }
 
@@ -202,8 +200,8 @@ function code(language: MusicCodeLanguage): string {
     return realtimeMusicCode(language, {
       baseURL: window.location.origin,
       model: state.model,
-      prompts: realtimeMusic.state.prompts,
-      config: realtimeMusic.state.config,
+      prompts: realtimeMusic.activePrompts(),
+      config: realtimeMusic.configFrame(),
     })
   return musicCode(language, {
     baseURL: window.location.origin,
@@ -245,7 +243,7 @@ onUnmounted(() => {
         <button
           v-for="option in viewOptions"
           :key="option.value"
-          v-tooltip.below="handset ? t(option.label as 'pg.musicText') : undefined"
+          v-tooltip.below="handset ? t(option.label) : undefined"
           type="button"
           ms-button
           role="radio"
@@ -256,7 +254,7 @@ onUnmounted(() => {
           @click="music.setView(option.value)"
         >
           <UiIcon :name="option.icon" :size="18" />
-          <span class="toggle-label">{{ t(option.label as 'pg.musicText') }}</span>
+          <span class="toggle-label">{{ t(option.label) }}</span>
         </button>
       </div>
       <CopyPromptButton
@@ -317,7 +315,7 @@ onUnmounted(() => {
         <div class="prompt-media-container">
           <div class="prompt-media-list">
             <div v-for="(image, index) in state.images" :key="index" class="media-item">
-              <img :src="`data:${image.mimeType};base64,${image.data}`" :alt="image.name" />
+              <img :src="dataURL(image)" :alt="image.name" />
               <button
                 type="button"
                 ms-button

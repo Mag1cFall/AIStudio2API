@@ -13,7 +13,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
-// NativeWorker 将单个账户的 Camoufox 或纯 Go WAA runtime 适配为受保护请求 preparer
+// NativeWorker 将单个账户的 Camoufox 或 SpiderMonkey WAA runtime 适配为受保护请求 preparer
 type NativeWorker struct {
 	accountID   string
 	runtime     workerRuntime
@@ -27,9 +27,6 @@ var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
 
 // NewNativeWorker 启动单个账户的 Camoufox WAA runtime
 func NewNativeWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
-	if accountID == "" {
-		return nil, fmt.Errorf("缺少账户 ID")
-	}
 	runtime, err := camoufoxnative.Start(ctx, options)
 	if err != nil {
 		return nil, err
@@ -58,10 +55,7 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	if err != nil {
 		return PreparedProtectedRequest{}, err
 	}
-	encoded, err := json.Marshal(proof)
-	if err != nil {
-		return PreparedProtectedRequest{}, fmt.Errorf("编码 WAA proof: %w", err)
-	}
+	encoded, _ := json.Marshal(proof)
 	body := make([]byte, 0, len(request.Body)-(end-start)+len(encoded))
 	body = append(append(append(body, request.Body[:start]...), encoded...), request.Body[end:]...)
 	return PreparedProtectedRequest{Body: body, Headers: headers}, nil
@@ -71,33 +65,22 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 func (worker *NativeWorker) proofAndHeaders(ctx context.Context, binding, page string) (string, http.Header, error) {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
-	worker.updateState(func(state *WorkerState) {
-		state.Phase = WorkerBusy
-		state.RequestCount++
-		state.LastError = ""
-	})
+	worker.setPhase(WorkerBusy)
 	digest := sha256.Sum256([]byte(binding))
 	proof, err := worker.runtime.Proof(ctx, fmt.Sprintf("%x", digest), page)
+	var headers http.Header
+	if err == nil {
+		headers, err = worker.runtime.ProtocolHeaders(ctx)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
-			worker.updateState(func(state *WorkerState) { state.Phase = WorkerReady })
+			worker.setPhase(WorkerReady)
 		} else {
-			worker.fail(err)
+			worker.setPhase(WorkerFailed)
 		}
 		return "", nil, err
 	}
-	headers, err := worker.runtime.ProtocolHeaders(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			worker.updateState(func(state *WorkerState) { state.Phase = WorkerReady })
-		} else {
-			worker.fail(err)
-		}
-		return "", nil, err
-	}
-	worker.updateState(func(state *WorkerState) {
-		state.Phase = WorkerReady
-	})
+	worker.setPhase(WorkerReady)
 	return proof, headers, nil
 }
 
@@ -161,7 +144,7 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 	response, err := worker.runtime.SendProtected(ctx, request.URL, request.Headers, request.Body)
 	if err != nil {
 		if ctx.Err() == nil {
-			worker.fail(err)
+			worker.setPhase(WorkerFailed)
 		}
 		return nil, err
 	}
@@ -204,10 +187,7 @@ func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageSta
 }
 
 // ProtocolHeaders 返回当前账户官网请求的动态公共头
-func (worker *NativeWorker) ProtocolHeaders(ctx context.Context, accountID string) (http.Header, error) {
-	if accountID != "" && accountID != worker.accountID {
-		return nil, fmt.Errorf("runtime 账户不匹配")
-	}
+func (worker *NativeWorker) ProtocolHeaders(ctx context.Context, _ string) (http.Header, error) {
 	return worker.runtime.ProtocolHeaders(ctx)
 }
 
@@ -222,30 +202,17 @@ func (worker *NativeWorker) State() WorkerState {
 func (worker *NativeWorker) Close() error {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
-	worker.updateState(func(state *WorkerState) {
-		state.Phase = WorkerClosing
-		state.LastError = ""
-	})
+	worker.setPhase(WorkerClosing)
 	err := worker.runtime.Close()
-	worker.updateState(func(state *WorkerState) {
-		if err != nil {
-			state.LastError = err.Error()
-			return
-		}
-		state.Phase = WorkerClosed
-	})
+	if err == nil {
+		worker.setPhase(WorkerClosed)
+	}
 	return err
 }
 
-func (worker *NativeWorker) updateState(update func(*WorkerState)) {
+// setPhase 更新账户 WAA runtime 阶段
+func (worker *NativeWorker) setPhase(phase WorkerPhase) {
 	worker.stateMu.Lock()
 	defer worker.stateMu.Unlock()
-	update(&worker.state)
-}
-
-func (worker *NativeWorker) fail(err error) {
-	worker.updateState(func(state *WorkerState) {
-		state.Phase = WorkerFailed
-		state.LastError = err.Error()
-	})
+	worker.state.Phase = phase
 }

@@ -46,7 +46,6 @@ function focusInitial(event: Event): void {
           </DialogClose>
         </div>
         <div class="ms-panel-content"><slot /></div>
-        <div v-if="$slots.footer" class="ms-panel-footer"><slot name="footer" /></div>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>
@@ -105,10 +104,6 @@ function focusInitial(event: Event): void {
   padding: 0 16px 24px;
   color: var(--mat-sys-on-surface-variant);
   line-height: 17.5px;
-}
-
-.ms-panel-footer {
-  padding: 0 16px 24px;
 }
 
 @keyframes ms-panel-enter {

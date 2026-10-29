@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineProps<{ adminUsername?: string }>()
 const emit = defineEmits<{ logout: [] }>()
-import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
 import type { AsyncComponentLoader } from 'vue'
 import {
   DropdownMenuContent,
@@ -22,7 +22,7 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import { readPreference, writePreference } from '@/preference'
 import { useTabParam } from '@/url'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { IconName } from '@/icons'
 
 const { availableLocales, locale, setLocale, t, logText } = useI18n()
@@ -50,31 +50,33 @@ const validTabs: TabID[] = [
   'requests',
   'usage',
   'settings',
-  'playground',
   'version',
 ]
 const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
 const router = useRouter()
+const route = useRoute()
+// currentTab 在从试用页返回时同步目标管理页面
+watch(
+  () => route.fullPath,
+  () => {
+    if (route.name === 'console') {
+      const tab = route.query.tab as TabID
+      currentTab.value = validTabs.includes(tab) ? tab : 'logs'
+    }
+  },
+)
 
 // openTab 切换页面，API 试用进入独立的试用页
 function openTab(tab: TabID): void {
   if (tab === 'playground') void router.push('/prompts/new_chat')
   else selectTab(tab)
 }
-watch(
-  currentTab,
-  (tab) => {
-    if (tab === 'playground') void router.replace('/prompts/new_chat')
-  },
-  { immediate: true },
-)
 const navigationBar = ref<HTMLElement | null>(null)
 
 // revealCurrentTab 把窄屏横向导航的当前项横向滚入视野
 function revealCurrentTab(): void {
-  const bar = navigationBar.value
-  const item = bar?.querySelector<HTMLElement>('[aria-current="page"]')
-  if (!bar || !item) return
+  const bar = navigationBar.value!
+  const item = bar.querySelector('[aria-current="page"]')!
   const barRect = bar.getBoundingClientRect()
   const itemRect = item.getBoundingClientRect()
   if (itemRect.left < barRect.left) bar.scrollLeft -= barRect.left - itemRect.left
@@ -116,13 +118,6 @@ function moveSidebarResize(event: PointerEvent): void {
   )
 }
 
-function stopSidebarResize(event: PointerEvent): void {
-  if (!resizingSidebar.value) return
-  const handle = event.currentTarget as HTMLElement
-  if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
-  resizingSidebar.value = false
-}
-
 function resizeSidebarWithKeyboard(event: KeyboardEvent): void {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
   event.preventDefault()
@@ -158,8 +153,6 @@ const {
   stopService,
   clearLogs,
   waitForRestart,
-  startConsole,
-  stopConsole,
 } = useConsole()
 
 const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
@@ -192,13 +185,7 @@ async function logout(): Promise<void> {
   emit('logout')
 }
 
-onMounted(() => {
-  document.title = 'AIStudio2API'
-  revealCurrentTab()
-  void startConsole()
-})
-
-onUnmounted(stopConsole)
+onMounted(revealCurrentTab)
 </script>
 
 <template>
@@ -296,7 +283,7 @@ onUnmounted(stopConsole)
             v-if="item.id === 'version' && update?.available"
             class="size-2 shrink-0 rounded-full bg-amber-400 md:ml-auto"
             aria-hidden="true"
-            :title="t('version.available').replace('{version}', update.latest ?? '')"
+            :title="t('version.available').replace('{version}', update.latest!)"
           />
         </button>
       </nav>
@@ -313,7 +300,7 @@ onUnmounted(stopConsole)
               {{ serviceStateLabel }}
             </span>
             <span
-              v-tooltip="status?.version || ''"
+              v-tooltip="status?.version"
               class="max-w-[65%] truncate font-mono text-xs text-gray-500"
             >
               {{ status?.version || '—' }}
@@ -373,8 +360,8 @@ onUnmounted(stopConsole)
         :aria-valuenow="sidebarWidth"
         @pointerdown="startSidebarResize"
         @pointermove="moveSidebarResize"
-        @pointerup="stopSidebarResize"
-        @pointercancel="stopSidebarResize"
+        @pointerup="resizingSidebar = false"
+        @pointercancel="resizingSidebar = false"
         @dblclick="sidebarWidth = defaultSidebarWidth"
         @keydown="resizeSidebarWithKeyboard"
       ></div>
@@ -393,7 +380,7 @@ onUnmounted(stopConsole)
         }}
       </div>
       <Transition name="page">
-        <KeepAlive include="AccountsPanel,SettingsPanel,VersionPanel">
+        <KeepAlive include="AccountsPanel,SettingsPanel,VersionPanel,UsagePanel">
           <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
           <AccountsPanel
             v-else-if="currentTab === 'accounts'"

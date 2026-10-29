@@ -13,7 +13,7 @@ function renderNode(node: MarkdownNode, key: number): VNode {
     case 'inline':
       return h('span', { key, innerHTML: node.html })
     case 'html':
-      return h('div', { key, class: 'md-html', innerHTML: node.html })
+      return h('div', { key, innerHTML: node.html })
     case 'element': {
       const only = node.children.length === 1 ? node.children[0] : undefined
       const table = node.tag === 'table'

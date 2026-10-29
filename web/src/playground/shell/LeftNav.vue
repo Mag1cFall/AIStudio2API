@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { RouterLink, useRoute, type RouteLocationRaw } from 'vue-router'
 import type { TranslationKey } from '@/i18n'
 import { useI18n } from '@/i18n'

@@ -8,7 +8,8 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-func localAccountLocale() string {
+// DefaultAccountLocale 返回当前用户的系统语言
+func DefaultAccountLocale() string {
 	key, err := registry.OpenKey(registry.CURRENT_USER, `Control Panel\International`, registry.QUERY_VALUE)
 	if err != nil {
 		return fallbackAccountLocale
@@ -21,7 +22,8 @@ func localAccountLocale() string {
 	return strings.TrimSpace(locale)
 }
 
-func localAccountTimezone() string {
+// DefaultAccountTimezone 返回当前用户的 IANA 时区
+func DefaultAccountTimezone() string {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\TimeZoneInformation`, registry.QUERY_VALUE)
 	if err != nil {
 		return fallbackAccountTimezone

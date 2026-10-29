@@ -17,7 +17,7 @@
   Playground Generation Channel &nbsp;•&nbsp;
   Build Code Assistant Chat Channel &nbsp;•&nbsp;
   High-Concurrency Multi-Account<br>
-  Camoufox and Pure Go WAA Backends &nbsp;•&nbsp;
+  Camoufox and SpiderMonkey WAA Backends &nbsp;•&nbsp;
   Claude Code, Codex, and Other Agent Clients &nbsp;•&nbsp;
   Nano Banana, Veo, TTS, and Omni
 </p>
@@ -46,11 +46,11 @@
 
 ## Core Capabilities
 
-- **Dual Channels**: Every account generates through the Playground; the Build app proxy is the legacy channel whose generation upstream has disabled for accounts (`PROXY_GENERATION_DISABLED`), off by default and enabled in `UPSTREAM_CHANNELS`; once enabled, disabled accounts generate through the Playground, and requests that only Build can send (such as File Search) return the upstream reason; on free accounts both channels share one daily request count per model
-- **Build Chat Models**: Every model selectable in the Build chat panel is also listed as `<model>-build` (for example `gemini-3.8-flash-build`), answered by the Build code assistant with its system prompt and billed to the Build chat quota (free requests or the Google AI subscription). ⚠️ Every request to these models carries the Build code assistant's own injected system prompt, which shapes the answer's style, format, and persona; evaluate whether that fits your use
+- **Dual Channels**: Every account generates through the Playground; the Build app proxy is the legacy channel whose generation upstream has disabled for accounts (`PROXY_GENERATION_DISABLED`), off by default and enabled in `UPSTREAM_CHANNELS`; once enabled, generation requests sent through Build return the upstream reason; on free accounts both channels share one daily request count per model
+- **Build Chat Models**: Every model selectable in the Build chat panel is also listed as `<model>-build` (for example `gemini-3.8-flash-build`), answered by the Build code assistant with its system prompt, with function calling, tool-result continuation, and Google Search, and billed to the Build chat quota (free requests or the Google AI subscription). ⚠️ Every request to these models carries the Build code assistant's own injected system prompt, which shapes the answer's style, format, and persona; evaluate whether that fits your use
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
-- **Two WAA Backends**: Camoufox holds the official WAA lifecycle by default; with `WAA_BACKEND=go`, pure Go generates the official proof and no browser is downloaded or launched at runtime
-- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items
+- **Two WAA Backends**: Camoufox holds the official WAA lifecycle by default; with `WAA_BACKEND=spidermonkey`, SpiderMonkey (the Firefox JavaScript engine) generates the official proof inside the service process and no browser is downloaded or launched at runtime
+- **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items, and Anthropic Messages supports `context_management` tool-result and thinking clearing and threshold compaction
 - **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, OpenClaw, and Hermes, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
 
 ## Features
@@ -79,7 +79,7 @@
 - **macOS Desktop App**: macOS 12 or later, universal for Apple silicon and Intel
 - **Linux Desktop App**: GTK 4 and WebKitGTK 6.0, such as Ubuntu 24.04, Debian 13, or later; the deb installs these and the Camoufox libraries, while the AppImage also needs the Camoufox libraries listed on the next line
 - **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries, on Debian/Ubuntu run `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
-- **Source Build**: Go 1.27+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm; a C compiler: MinGW-w64 gcc on Windows, Xcode Command Line Tools on macOS, gcc on Linux
+- **Source Build**: Go 1.27+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm; a C/C++ compiler: the UCRT clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) on Windows, Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux; the SpiderMonkey static library for the platform from [Mag1cFall/firefox Releases](https://github.com/Mag1cFall/firefox/releases)
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: 2GB+ available memory for one account; each resident prewarmed account adds about 0.6GB
 - **Network**: Stable internet connection to Google AI Studio
@@ -91,7 +91,7 @@
 Download the `windows-amd64.zip` package from [Releases](https://github.com/Mag1cFall/AIStudio2API/releases), extract it, and double-click `aistudio2api.exe`:
 
 - The management UI opens in a desktop window; on first launch the window shows a startup screen until Camoufox finishes downloading
-- Closing the window keeps the app running in the system tray: double-click the tray icon on Windows or click it on Linux to show the window; the tray menu shows the window, opens the management UI in the browser, turns start at login on or off, or quits
+- Closing the window keeps the app running in the system tray: double-click the tray icon to show the window and right-click it for the tray menu; the menu shows the window, opens the management UI in the browser, turns start at login on or off, or quits
 - Double-clicking `aistudio2api.exe` again brings back the running window
 
 To start from source:
@@ -104,9 +104,18 @@ cd web
 npm ci
 npm run build
 cd ..
+mkdir spidermonkey
+curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
+tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
+$env:CC = "x86_64-w64-mingw32-clang"
+$env:CXX = "x86_64-w64-mingw32-clang++"
+$env:CGO_CXXFLAGS = "-I$PWD\spidermonkey\include"
+$env:CGO_LDFLAGS = "-L$PWD\spidermonkey\lib"
 go build -o aistudio2api.exe ./cmd/aistudio2api
 .\aistudio2api.exe
 ```
+
+`x86_64-w64-mingw32-clang` comes from the llvm-mingw `ucrt-x86_64` package; add its `bin` directory to `PATH` after extracting it.
 
 The first launch downloads Camoufox for the current platform to `runtime/camoufox/`:
 
@@ -143,7 +152,7 @@ Run `setup` and other commands with the desktop executable in a terminal, such a
 
 - Go 1.27 or later
 - Node.js 22.18+, 24.11+, or 26+, with its bundled npm
-- A C compiler: Xcode Command Line Tools on macOS, gcc on Linux
+- A C/C++ compiler: Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux
 
 #### 2. Clone the Project
 
@@ -160,8 +169,17 @@ cd web
 npm ci
 npm run build
 cd ..
-go build -o aistudio2api ./cmd/aistudio2api
-chmod +x ./aistudio2api
+arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
+mkdir -p spidermonkey
+curl -L https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
+export CGO_CXXFLAGS="-I$PWD/spidermonkey/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib"
+if [ "$platform" = darwin ]; then
+  go build -o aistudio2api ./cmd/aistudio2api
+else
+  target=$(uname -m)-linux-musl
+  CC="zig cc -target $target" CXX="zig c++ -target $target" go build -tags netgo,osusergo -ldflags="-linkmode external -extldflags -static" -o aistudio2api ./cmd/aistudio2api
+fi
 ./aistudio2api
 ```
 
@@ -356,7 +374,7 @@ Main endpoints:
 | Anthropic | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
 | Gemini | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`; `POST`/`GET /v1beta/cachedContents`, `GET`/`PATCH`/`DELETE /v1beta/cachedContents/{id}` |
 | Embeddings | `POST /v1/embeddings`, `POST /v1beta/models/{model}:embedContent`, `:batchEmbedContents` |
-| Images | `POST /v1/images/generations`, `POST /v1/images/edits` |
+| Images | `POST /v1/images/generations`, `POST /v1/images/edits`, Imagen `POST /v1beta/models/{model}:predict` |
 | Speech | `POST /v1/audio/speech` |
 | Transcription and translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` |
 | Music | Gemini `generateContent` with `responseModalities: ["AUDIO"]` |
@@ -488,7 +506,7 @@ The catalog also includes `-latest` aliases, Robotics-ER, earlier image and TTS 
 
 Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, and `predictLongRunning`; `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
-Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
+Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site, and use `input_token_limit` when the request sets no output limit; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
 
 ## Project Architecture
 
@@ -501,7 +519,7 @@ AIStudio2API/
 │   ├── setup/               # Account import and isolated-login CLI
 │   ├── aistudio/            # AI Studio protocol, authentication, models, and media
 │   ├── api/                 # OpenAI, Responses, Anthropic, and Gemini adapters
-│   ├── waa/                 # Pure Go WAA runtime
+│   ├── waa/                 # SpiderMonkey WAA runtime
 │   ├── camoufoxnative/      # Camoufox BiDi, login, and WAA workers
 │   ├── chromeauth/          # Windows Chrome and DBSC import
 │   ├── proxydial/           # Dialing and relaying through global and per-account proxies
@@ -554,10 +572,10 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
-| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, multiplied by the number of rounds for auto-continued requests |
+| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
-| `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=go` |
+| `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=spidermonkey` |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
@@ -567,8 +585,12 @@ cp .env.example .env
 | `NONSTREAM_KEEPALIVE` | `true` | When a non-streaming request waits longer than 10 seconds, return 200 first and write a newline every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body |
 | `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats continue while waiting |
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
+| `SEARCH_MODEL_ALIASES` | `true` | Offer `-search` variants of search-capable models; requests using these variants enable Google Search |
+| `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
+| `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
+| `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
 | `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
-| `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `go` runs WAA inside the service process and neither downloads nor starts Camoufox |
+| `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key |
 | `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
@@ -643,7 +665,7 @@ This project uses [Camoufox](https://camoufox.com/) to reduce automation detecti
 
 Go handles encoding, scheduling, streaming decode, and public protocols. WAA-protected `GenerateContent` requests are sent by the account's fingerprinted Camoufox page, preserving the native Firefox TLS/HTTP2 stack, headers, cookies, and page fingerprint.
 
-With `WAA_BACKEND=go`, WAA runs inside the service process, emulates the Firefox page environment from the account fingerprint, and sends requests with Firefox request headers; Camoufox is neither downloaded nor started at runtime. Browser login on the Accounts page still uses Camoufox and prepares it on first login.
+With `WAA_BACKEND=spidermonkey`, WAA runs in SpiderMonkey inside the service process, emulates the Firefox page environment from the account fingerprint, and sends requests with Firefox request headers; Camoufox is neither downloaded nor started at runtime. Browser login on the Accounts page still uses Camoufox and prepares it on first login.
 
 ### Limitations
 

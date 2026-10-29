@@ -182,7 +182,7 @@ func (target remoteTarget) Save(
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result)
+	decodeErr := json.NewDecoder(response.Body).Decode(&result)
 	if response.StatusCode != http.StatusCreated {
 		if result.Error.Message != "" {
 			return "", fmt.Errorf("远程实例导入失败: HTTP %d: %s", response.StatusCode, result.Error.Message)
@@ -229,7 +229,7 @@ func importStorageState(ctx context.Context, target accountTarget, options setup
 	if err != nil {
 		return err
 	}
-	if _, err := aistudio.NewSigner().Sign(state); err != nil {
+	if _, err := aistudio.NewSigner().Authorization(state); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
 	label := defaultSetupLabel(options.storageState)
@@ -265,7 +265,7 @@ func importCookies(ctx context.Context, target accountTarget, options setupOptio
 	if err != nil {
 		return err
 	}
-	if _, err := aistudio.NewSigner().Sign(state); err != nil {
+	if _, err := aistudio.NewSigner().Authorization(state); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
 	email := ""
@@ -302,13 +302,13 @@ func importIsolatedLogin(
 	}
 	defer os.RemoveAll(loginDirectory)
 	result, err := driver.Login(ctx, aistudio.IsolatedLoginRequest{
-		AccountID: "setup", Directory: loginDirectory, Proxy: options.egress,
+		Directory: loginDirectory, Proxy: options.egress,
 		Locale: options.locale, Timezone: options.timezone,
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := aistudio.NewSigner().Sign(result.StorageState); err != nil {
+	if _, err := aistudio.NewSigner().Authorization(result.StorageState); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
 	saved, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.StorageState, loginDirectory)
@@ -354,7 +354,7 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 	modelCounts := make([]int, len(results))
 	for index := range results {
 		verifyContext, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-		verification, verifyErr := chromeauth.Verify(verifyContext, &results[index].State, options.egress)
+		verification, verifyErr := chromeauth.VerifyAuthUser(verifyContext, &results[index].State, options.egress, 0)
 		cancel()
 		if verifyErr != nil {
 			return fmt.Errorf("验证 %s: %w", results[index].Email, verifyErr)
@@ -541,8 +541,8 @@ func setupAccountConfig(label string, options setupOptions) aistudio.AccountConf
 }
 
 func defaultSetupLabel(storageState string) string {
-	parent := filepath.Base(filepath.Clean(filepath.Dir(storageState)))
-	if parent == "" || parent == "." || parent == string(filepath.Separator) {
+	parent := filepath.Base(filepath.Dir(storageState))
+	if parent == "." || parent == string(filepath.Separator) {
 		return "Default"
 	}
 	return parent
@@ -557,7 +557,6 @@ func defaultSetupLoginDriver(ctx context.Context, cfg config.Config, egress stri
 }
 
 func validateSetupRoot(root string) error {
-	root = strings.TrimSpace(root)
 	if root == "" {
 		return fmt.Errorf("AISTUDIO_AUTH_STATES 不能为空")
 	}

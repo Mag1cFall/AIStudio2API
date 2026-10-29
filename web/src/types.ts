@@ -32,7 +32,7 @@ export interface Account {
   message: string
 }
 
-export interface ProxyPoolEntry {
+interface ProxyPoolEntry {
   proxy: string
   available: boolean
   accounts: number
@@ -98,7 +98,7 @@ export interface CookieBrowser {
   error: string
 }
 
-export interface AccountCounters {
+interface AccountCounters {
   total: number
   ready: number
   busy: number
@@ -131,7 +131,7 @@ export interface UpdateStatus {
 
 export interface AdminLog {
   time: string
-  level: string
+  level: 'INFO' | 'WARN' | 'ERROR'
   source: string
   message: string
   event: string
@@ -139,7 +139,7 @@ export interface AdminLog {
 }
 
 // RequestLog 对应请求日志的结构化载荷
-export interface RequestLog {
+interface RequestLog {
   id: string
   state: 'running' | 'completed' | 'tool_calls' | 'limited' | 'blocked' | 'failed' | 'cancelled'
   started_at?: string
@@ -184,7 +184,7 @@ export interface ModelPrice {
 }
 
 // ModelDetails 是官网模型卡片中的说明、别名、提醒、价格与日期，日期为 Unix 秒
-export interface ModelDetails {
+interface ModelDetails {
   summary?: string
   alias?: string
   warning?: string
@@ -198,7 +198,7 @@ export interface ModelDetails {
 }
 
 // Language 是模型可选语言的代码与显示名
-export interface Language {
+interface Language {
   code: string
   name: string
 }
@@ -296,6 +296,10 @@ export interface ServiceConfig {
   nonstream_keepalive: boolean
   fake_stream: boolean
   youtube_links: boolean
+  search_model_aliases: boolean
+  google_search: boolean
+  continuation_rewrite: boolean
+  continuation_prompt: string
   first_event_hedge: string
   auth_states: string
   listen_addr: string
@@ -320,7 +324,7 @@ export interface ServiceConfig {
   upstream_channels: UpstreamChannel[]
   model_mapping: string
   model_channels: string
-  waa_backend: 'camoufox' | 'go'
+  waa_backend: 'camoufox' | 'spidermonkey'
   temporary_chat: boolean
   media_output: 'inline' | 'url'
   media_base_url: string
@@ -330,7 +334,7 @@ export type UsageDimension = 'model' | 'account' | 'channel' | 'protocol' | 'sta
 
 export type UsageFilters = Partial<Record<UsageDimension, string[]>>
 
-export interface UsageLatency {
+interface UsageLatency {
   avg_ms: number
   p50_ms: number
   p95_ms: number
@@ -354,21 +358,21 @@ export interface UsageStats {
   last_at?: string
 }
 
-export interface UsageBucket extends UsageStats {
+interface UsageBucket extends UsageStats {
   at: string
   cost: number
 }
 
-export interface UsageGroup extends UsageStats {
+interface UsageGroup extends UsageStats {
   key: string
 }
 
-export interface UsagePair extends UsageStats {
+interface UsagePair extends UsageStats {
   account: string
   model: string
 }
 
-export interface UsageSeries {
+interface UsageSeries {
   key: string
   other?: boolean
   requests: number[]
@@ -395,7 +399,7 @@ export interface UsageReport {
   options: Record<UsageDimension, string[]>
 }
 
-export interface RequestAttempt {
+interface RequestAttempt {
   account: string
   channel: string
   error: string

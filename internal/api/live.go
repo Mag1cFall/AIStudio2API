@@ -69,7 +69,6 @@ type bidiServerMessage struct {
 	Raw           json.RawMessage             `json:"raw,omitempty"`
 	Error         string                      `json:"error,omitempty"`
 	Code          string                      `json:"code,omitempty"`
-	Retryable     bool                        `json:"retryable,omitempty"`
 }
 
 // Hijack 让 WebSocket upgrade 穿过访问日志响应包装器
@@ -100,10 +99,7 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 		return
 	}
 	connection.SetReadLimit(bidiMaxClientFrame)
-	if err := connection.SetReadDeadline(time.Now().Add(bidiSetupTimeout)); err != nil {
-		_ = connection.Close()
-		return
-	}
+	_ = connection.SetReadDeadline(time.Now().Add(bidiSetupTimeout))
 	var setup bidiClientSetup
 	if err := connection.ReadJSON(&setup); err != nil {
 		if errors.Is(err, websocket.ErrReadLimit) {
@@ -120,10 +116,7 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 		_ = connection.Close()
 		return
 	}
-	if err := connection.SetReadDeadline(time.Time{}); err != nil {
-		_ = connection.Close()
-		return
-	}
+	_ = connection.SetReadDeadline(time.Time{})
 	startedAt := time.Now()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -219,8 +212,6 @@ func bidiRequestFromSetup(
 			return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: robotics 不支持 system_instruction、voice、media_resolution、thinking_level、context_window_compression 与 google_search", aistudio.ErrInvalidArgument)
 		}
 		request.ModelAccessScope = aistudio.ModelAccessKey("bidi-media", model)
-	default:
-		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: bidi mode %q 无效", aistudio.ErrInvalidArgument, mode)
 	}
 	if _, _, err := aistudio.EncodeBidiSetupRequest(request, aistudio.RequestContext{}); err != nil {
 		return aistudio.BidiRequest{}, nil, fmt.Errorf("%w: %v", aistudio.ErrInvalidArgument, err)
@@ -350,7 +341,7 @@ func sendBidiClientMessages(
 			case "playback":
 				err = session.SendPlaybackControl(ctx, message.PlaybackControl)
 			case "close":
-				err = session.Close()
+				_ = session.Close()
 				cancel()
 				return
 			default:
@@ -416,10 +407,7 @@ func (s *server) writeBidiEvents(
 }
 
 func bidiErrorMessage(err error) bidiServerMessage {
-	message := bidiServerMessage{Type: "error"}
-	if err != nil {
-		message.Error = err.Error()
-	}
+	message := bidiServerMessage{Type: "error", Error: err.Error()}
 	var coded errorCodeProvider
 	switch {
 	case errors.Is(err, aistudio.ErrInvalidArgument):
@@ -456,9 +444,6 @@ func mapBidiServerEvent(event aistudio.BidiEvent) bidiServerMessage {
 	if event.Media != nil {
 		message.MIMEType = event.Media.MIME
 		message.Data = event.Media.Data
-	}
-	if event.Err != nil {
-		message.Error = event.Err.Error()
 	}
 	return message
 }

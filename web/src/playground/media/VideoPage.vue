@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -24,9 +23,14 @@ import PaidUsageZeroState, { type Suggestion } from './PaidUsageZeroState.vue'
 import VideoSettings from './VideoSettings.vue'
 import VideoResult from './VideoResult.vue'
 import { readImage } from './api'
+import { useRunningClock } from '../clock'
+import { dataURL } from '../protocols'
 import { mediaCodeOptions, videoCode, type MediaCodeLanguage } from './code'
 import { maxReferences, useVideo, type VideoData, type VideoFrame } from './video'
 import { useMediaQuery } from '../media-query'
+import perfumePreview from './assets/perfume_animated_v2_opt_288x162.webp'
+import leopardPreview from './assets/snow_leopard_animated_opt_288x162.webp'
+import vegetablesPreview from './assets/stir_fry_vegetables_animated_opt_288x162.webp'
 
 const props = defineProps<{
   promptId?: string
@@ -53,21 +57,21 @@ const suggestions = computed<Suggestion[]>(() => [
     label: t('zero.video.example1'),
     caption: t('zero.video.example1'),
     prompt: '',
-    image: `${zeroState}perfume_animated_v2_opt_288x162.gif`,
+    image: perfumePreview,
     reference: `${zeroState}perfume_v2.png`,
   },
   {
     label: t('zero.video.example2'),
     caption: t('zero.video.example2'),
     prompt: t('zero.video.example2Prompt'),
-    image: `${zeroState}snow_leopard_animated_opt_288x162.gif`,
+    image: leopardPreview,
     reference: `${zeroState}snow_leopard.png`,
   },
   {
     label: t('zero.video.example3'),
     caption: t('zero.video.example3'),
     prompt: t('zero.video.example3Prompt'),
-    image: `${zeroState}stir_fry_vegetables_animated_opt_288x162.gif`,
+    image: vegetablesPreview,
   },
 ])
 
@@ -95,17 +99,7 @@ const imageDisabled = computed(
 )
 
 // now 在生成期间每 100 ms 刷新，用于显示已用时间
-const now = ref(performance.now())
-let ticker = 0
-watch(
-  () => state.running,
-  (running) => {
-    window.clearInterval(ticker)
-    if (running) ticker = window.setInterval(() => (now.value = performance.now()), 100)
-  },
-  { immediate: true },
-)
-onUnmounted(() => window.clearInterval(ticker))
+const now = useRunningClock(() => state.running)
 
 // elapsed 返回模型轮次的耗时文字
 function elapsed(index: number, duration: number | undefined): string {
@@ -133,7 +127,7 @@ async function setLastFrame(file: File): Promise<void> {
 async function addImages(files: File[]): Promise<void> {
   if (imageDisabled.value) return
   if (!referenceInputs.value) {
-    if (files[0]) await setStart(files[0])
+    await setStart(files[0]!)
     return
   }
   for (const file of files.slice(0, maxReferences - state.references.length))
@@ -151,10 +145,7 @@ async function useSuggestion(item: Suggestion): Promise<void> {
     return
   }
   const start = item.reference
-    ? await toFrame(
-        await (await fetch(item.reference)).blob(),
-        item.reference.split('/').at(-1) ?? 'image',
-      )
+    ? await toFrame(await (await fetch(item.reference)).blob(), item.reference.split('/').at(-1)!)
     : undefined
   if (pick !== suggestionPick) return
   state.draft = item.prompt
@@ -304,7 +295,7 @@ watch(
                   ].filter(Boolean)"
                   :key="frameIndex"
                   class="loaded-image"
-                  :src="`data:${frame!.mimeType};base64,${frame!.data}`"
+                  :src="dataURL(frame!)"
                   :alt="frame!.name"
                 />
               </div>
@@ -318,7 +309,7 @@ watch(
                   v-for="(path, videoIndex) in turn.videos ?? ['']"
                   :key="videoIndex"
                   :path="path"
-                  :aspect-ratio="turn.aspectRatio ?? '16:9'"
+                  :aspect-ratio="turn.aspectRatio!"
                 />
               </div>
               <div v-if="index < state.turns.length - 1" class="turn-separator"></div>
@@ -359,11 +350,7 @@ watch(
         </template>
         <template v-if="!frameInputs && state.start" #media>
           <div class="reference">
-            <img
-              class="reference-image"
-              :src="`data:${state.start.mimeType};base64,${state.start.data}`"
-              :alt="state.start.name"
-            />
+            <img class="reference-image" :src="dataURL(state.start)" :alt="state.start.name" />
             <span class="reference-name">{{ state.start.name }}</span>
             <button
               type="button"
@@ -378,11 +365,7 @@ watch(
         </template>
         <template v-else-if="state.references.length" #media>
           <div v-for="(frame, index) in state.references" :key="index" class="reference">
-            <img
-              class="reference-image"
-              :src="`data:${frame.mimeType};base64,${frame.data}`"
-              :alt="frame.name"
-            />
+            <img class="reference-image" :src="dataURL(frame)" :alt="frame.name" />
             <span class="reference-name">{{ frame.name }}</span>
             <button
               type="button"
@@ -528,7 +511,7 @@ watch(
   margin-top: 12px;
   margin-right: 140px;
   margin-left: 8px;
-  border-top: 1px solid var(--turn-separator-color, var(--color-v3-outline));
+  border-top: 1px solid var(--color-v3-outline);
 }
 
 .image-container {

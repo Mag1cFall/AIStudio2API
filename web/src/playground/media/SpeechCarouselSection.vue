@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { onMounted, onUnmounted, ref } from 'vue'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -21,16 +20,14 @@ const fadeRight = ref(false)
 
 // updateFades 按轮播滚动位置显示两侧渐隐与翻页按钮状态
 function updateFades(): void {
-  const element = carousel.value
-  if (!element) return
+  const element = carousel.value!
   fadeLeft.value = element.scrollLeft > 1
   fadeRight.value = element.scrollLeft + element.clientWidth < element.scrollWidth - 1
 }
 
 // scrollCarousel 按一屏宽度翻页
 function scrollCarousel(direction: -1 | 1): void {
-  const element = carousel.value
-  if (!element) return
+  const element = carousel.value!
   element.scrollBy({
     left: direction * element.clientWidth * 0.8,
     behavior: 'smooth',

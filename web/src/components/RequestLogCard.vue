@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
-import { formatLogNumber, type LogRow } from '@/logs'
+import { byteLength, formatLogNumber, prettyBody, type LogRow } from '@/logs'
 import type { RequestBody } from '@/types'
 import LogCollapse from './LogCollapse.vue'
 import LogDisclosure from './LogDisclosure.vue'
@@ -108,18 +108,9 @@ async function toggleBody(): Promise<void> {
   }
 }
 
-// pretty 缩进 JSON 正文，非 JSON 保持原文
-function pretty(text: string): string {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
-  }
-}
-
 // bodySize 显示保存字节数与原始字节数
 function bodySize(saved: string, total: number): string {
-  const bytes = new TextEncoder().encode(saved).length
+  const bytes = byteLength(saved)
   return bytes < total ? `${number(bytes)} / ${number(total)} B` : `${number(total)} B`
 }
 
@@ -129,12 +120,12 @@ const bodyParts = computed(() =>
     : [
         {
           label: t('logs.requestBody'),
-          text: pretty(body.value.request),
+          text: prettyBody(body.value.request),
           size: bodySize(body.value.request, body.value.request_size),
         },
         {
           label: t('logs.responseBody'),
-          text: pretty(body.value.response),
+          text: prettyBody(body.value.response),
           size: bodySize(body.value.response, body.value.response_size),
         },
       ],
@@ -395,7 +386,6 @@ const bodyParts = computed(() =>
   padding: 4px 6px;
   margin-left: -6px;
   border-radius: 4px;
-  cursor: pointer;
   text-align: start;
   user-select: none;
   transition:
@@ -420,12 +410,6 @@ const bodyParts = computed(() =>
 @media (pointer: coarse) {
   .request-section-toggle {
     min-height: 40px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .request-section-toggle,
-  .request-disclosure-icon {
-    transition: none;
   }
 }
 .request-json pre {

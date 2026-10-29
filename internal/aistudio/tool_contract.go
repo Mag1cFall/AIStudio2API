@@ -41,6 +41,14 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 			request.System = appendSystem(request.System, "\nExclude these domains from web searches using -site: queries: "+strings.Join(search.BlockedDomains, ", "))
 		}
 	}
+	if fetch := request.Tools.URLContext; fetch != nil {
+		if len(fetch.AllowedDomains) > 0 {
+			request.System = appendSystem(request.System, "\nRead URLs only on these domains and their subdomains: "+strings.Join(fetch.AllowedDomains, ", "))
+		}
+		if len(fetch.BlockedDomains) > 0 {
+			request.System = appendSystem(request.System, "\nNever read URLs on these domains or their subdomains: "+strings.Join(fetch.BlockedDomains, ", "))
+		}
+	}
 	contract := &toolContract{required: config.Mode == "required", parallel: config.ParallelCalls, names: map[string]bool{}, schemas: map[string]*jsonschema.Schema{}}
 	if contract.parallel != nil && *contract.parallel || len(request.Tools.Functions) == 0 {
 		contract.parallel = nil
@@ -86,7 +94,7 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 			return request, nil, fmt.Errorf("tool choice 引用了未声明函数 %q", name)
 		}
 	}
-	contract.serverSide = len(config.AllowedFunctionNames) == 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil)
+	contract.serverSide = len(config.AllowedFunctionNames) == 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil || len(request.Tools.MCPServers) > 0 && config.ServerSideInvocations)
 	if contract.required && len(functions) == 0 && !contract.serverSide {
 		return request, nil, fmt.Errorf("required tool choice 需要至少一个工具")
 	}
@@ -102,6 +110,11 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 			names = append(names, request.Tools.Google...)
 			if request.Tools.GoogleSearch != nil && !slices.Contains(names, "google_search") {
 				names = append(names, "google_search")
+			}
+			if config.ServerSideInvocations {
+				for _, server := range request.Tools.MCPServers {
+					names = append(names, "the "+server.Name+" MCP server")
+				}
 			}
 		}
 		request.System = appendSystem(request.System, "\nUse one of these tools in this response: "+strings.Join(names, ", ")+". Use the tool before answering.")
@@ -202,7 +215,7 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 				continue
 			}
 			var err error
-			if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult {
+			if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult || event.Kind == EventServerToolCall {
 				serverSideUsed = true
 			}
 			if event.Kind == EventToolCall && event.FunctionCall != nil {

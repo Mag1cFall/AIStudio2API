@@ -32,7 +32,27 @@ const (
 	assistantDefaultThinkingLevel = 3
 	// assistantCleanupTimeout 是取消生成与删除临时应用的期限
 	assistantCleanupTimeout = time.Minute
+	// assistantCallFence 是写代码助手以文本输出函数调用的代码块开头
+	assistantCallFence = "```function_calls"
+	// assistantResultFence 是转录函数结果的代码块开头
+	assistantResultFence = "```function_results"
+	// assistantToolProtocol 是写入自定义指令的客户端函数说明，%s 为函数声明 JSON
+	assistantToolProtocol = "You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.\n%s\n" +
+		"To call functions, reply with only one fenced block and no other text:\n" + assistantCallFence + "\n[{\"name\": \"<function name>\", \"arguments\": {<arguments>}}]\n```\n" +
+		"Function results arrive in a later user turn as a fenced function_results block. Answer normally when no function is needed."
 )
+
+// assistantCall 是 function_calls 代码块中的一次调用
+type assistantCall struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// assistantResult 是 function_results 代码块中的一个结果
+type assistantResult struct {
+	Name     string          `json:"name"`
+	Response json.RawMessage `json:"response"`
+}
 
 // AssistantUploader 以账户身份上传写代码助手附件并返回上传路径
 type AssistantUploader interface {
@@ -50,7 +70,8 @@ func assistantModelEntry(base modelEntry) modelEntry {
 			model.Methods = append(model.Methods, method)
 		}
 	}
-	model.Capabilities = map[string]bool{"assistant_route": true}
+	// 函数调用经自定义指令与代码块转录完成，网页搜索由写代码助手内置的 search_web 完成
+	model.Capabilities = map[string]bool{"assistant_route": true, "function_declarations": true, "google_search": true}
 	for _, name := range []string{"chat_model", "thinking", "thinking_level"} {
 		if base.model.Capabilities[name] {
 			model.Capabilities[name] = true
@@ -121,6 +142,81 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 	return json.Marshal(wire)
 }
 
+// assistantToolPrompt 把函数声明写在自定义指令开头，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块
+func assistantToolPrompt(request GenerateRequest) (GenerateRequest, error) {
+	if len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none" {
+		declarations, err := scriptJSON(request.Tools.Functions)
+		if err != nil {
+			return request, err
+		}
+		protocol := fmt.Sprintf(assistantToolProtocol, declarations)
+		if len(request.System) > 0 {
+			protocol += "\n\n"
+		}
+		request.System = append([]string{protocol}, request.System...)
+	}
+	contents := make([]Content, 0, len(request.Contents))
+	var pending []FunctionCall
+	for index, content := range request.Contents {
+		linked, err := linkFunctionResults(content, &pending)
+		if err != nil {
+			return request, fmt.Errorf("contents[%d]: %w", index, err)
+		}
+		parts := make([]Part, 0, len(linked.Parts))
+		fence := ""
+		var block []any
+		flush := func() error {
+			if len(block) == 0 {
+				return nil
+			}
+			encoded, err := scriptJSON(block)
+			if err != nil {
+				return fmt.Errorf("contents[%d]: %w", index, err)
+			}
+			parts = append(parts, Part{Text: fence + "\n" + encoded + "\n```"})
+			block = nil
+			return nil
+		}
+		for _, part := range linked.Parts {
+			next, entry := "", any(nil)
+			switch {
+			case part.FunctionCall != nil:
+				next, entry = assistantCallFence, assistantCall{Name: part.FunctionCall.Name, Arguments: transcriptJSON(part.FunctionCall.Arguments)}
+			case part.FunctionResult != nil:
+				next, entry = assistantResultFence, assistantResult{Name: part.FunctionResult.Name, Response: transcriptJSON(part.FunctionResult.Content)}
+			}
+			if next != fence {
+				if err := flush(); err != nil {
+					return request, err
+				}
+				fence = next
+			}
+			if entry == nil {
+				parts = append(parts, part)
+				continue
+			}
+			block = append(block, entry)
+		}
+		if err := flush(); err != nil {
+			return request, err
+		}
+		contents = append(contents, Content{Role: linked.Role, Parts: parts})
+	}
+	request.Contents = contents
+	return request, nil
+}
+
+// scriptJSON 按页面脚本 JSON.stringify 的形式编码，保留 HTML 字符原样、不带结尾换行
+func scriptJSON(value any) (string, error) {
+	var buffer strings.Builder
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buffer.String(), "\n"), nil
+}
+
 // sendAssistant 新建临时应用并提交 Build 写代码助手生成任务，返回任务流；流关闭后取消未完成的任务并删除应用
 func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	reason := ""
@@ -128,6 +224,11 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		reason = "Build 写代码助手使用服务端流，收集完成后返回"
 	}
 	reportUpstreamMode(ctx, assistantOfflineMethod, "stream", reason)
+	calls := len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none"
+	request, err := assistantToolPrompt(request)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
 	contents, err := c.uploadAssistantAttachments(ctx, request.AccountID, request.Contents)
 	if err != nil {
 		return nil, nil, err
@@ -159,11 +260,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		cleanup.run()
 		return nil, nil, err
 	}
-	streamBody, err := json.Marshal([]any{cleanup.generation, nil, nil, applet})
-	if err != nil {
-		cleanup.run()
-		return nil, nil, err
-	}
+	streamBody, _ := json.Marshal([]any{cleanup.generation, nil, nil, applet})
 	stream, err := c.do(ctx, assistantStreamMethod, request.AccountID, request.ID, streamBody, true)
 	if err != nil {
 		cleanup.run()
@@ -171,7 +268,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 	}
 	stream.Body = &assistantStreamBody{ReadCloser: stream.Body, cleanup: cleanup}
 	return stream, func(source io.Reader, emit func(Event) error) error {
-		err := DecodeAssistantStream(source, &AssistantStreamDecoder{}, emit)
+		err := DecodeAssistantStream(source, &AssistantStreamDecoder{Calls: calls}, emit)
 		if err == nil {
 			cleanup.completed.Store(true)
 		}
@@ -209,10 +306,7 @@ func (c *Client) uploadAssistantAttachments(ctx context.Context, accountID strin
 
 // createAssistantApplet 新建承载一次写代码助手对话的应用
 func (c *Client) createAssistantApplet(ctx context.Context, accountID string) (string, error) {
-	body, err := json.Marshal([]any{nil, []any{"Untitled", "Generated by Gemini.", nil, nil, "default"}, nil, nil, int64(1)})
-	if err != nil {
-		return "", err
-	}
+	body, _ := json.Marshal([]any{nil, []any{"Untitled", "Generated by Gemini.", nil, nil, "default"}, nil, nil, int64(1)})
 	response, err := c.do(ctx, "CreateApplet", accountID, "", body, false)
 	if err != nil {
 		return "", err
@@ -275,14 +369,11 @@ func (cleanup *assistantCleanup) run() {
 }
 
 func (cleanup *assistantCleanup) call(ctx context.Context, method string, value []any) {
-	body, err := json.Marshal(value)
+	body, _ := json.Marshal(value)
+	response, err := cleanup.client.do(ctx, method, cleanup.accountID, "", body, false)
 	if err == nil {
-		var response *RPCResponse
-		response, err = cleanup.client.do(ctx, method, cleanup.accountID, "", body, false)
-		if err == nil {
-			_, err = io.Copy(io.Discard, response.Body)
-			err = errors.Join(err, response.Body.Close())
-		}
+		_, err = io.Copy(io.Discard, response.Body)
+		err = errors.Join(err, response.Body.Close())
 	}
 	if err != nil {
 		slog.Warn("Build 写代码助手清理失败", "account", cleanup.accountID, "method", method, "applet", cleanup.applet, "error", err)
@@ -304,8 +395,14 @@ func (body *assistantStreamBody) Close() error {
 
 // AssistantStreamDecoder 把写代码助手的步骤快照解码为增量事件
 type AssistantStreamDecoder struct {
+	// Calls 表示请求声明了函数，正文中的 function_calls 代码块解码为函数调用
+	Calls     bool
 	emitted   map[int64][]string
 	usage     map[int64]Usage
+	searched  map[int64]bool
+	grounding *GroundingMetadata
+	held      string
+	inCall    bool
 	lastStep  int64
 	wroteText bool
 	finished  bool
@@ -371,11 +468,12 @@ func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, em
 	return nil
 }
 
-// Decode 解码一条消息 [null, null, [步骤...], 应用 ID]：步骤 field 1 为对话轮、6 为失败原因、12 为序号、13 为状态（1 完成、2 进行中、4 失败）、16 为用量
+// Decode 解码一条消息 [null, null, [步骤...], 应用 ID]：步骤 field 1 为对话轮、6 为失败原因、10 为工具动作、12 为序号、13 为状态（1 完成、2 进行中、4 失败）、16 为用量
 func (d *AssistantStreamDecoder) Decode(raw json.RawMessage, path string) ([]Event, error) {
 	if d.emitted == nil {
 		d.emitted = make(map[int64][]string)
 		d.usage = make(map[int64]Usage)
+		d.searched = make(map[int64]bool)
 	}
 	message, err := rawArray(raw, path, raw)
 	if err != nil {
@@ -431,6 +529,12 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 			return nil, err
 		}
 		d.usage[number] = usage
+	}
+	if actionRaw := rawAt(step, 9); !isJSONNull(actionRaw) && status == 1 && !d.searched[number] {
+		if err := d.decodeSearch(actionRaw, path+"[9]", evidence); err != nil {
+			return nil, err
+		}
+		d.searched[number] = true
 	}
 	contentsRaw := rawAt(step, 0)
 	if isJSONNull(contentsRaw) {
@@ -517,10 +621,123 @@ func (d *AssistantStreamDecoder) decodePart(step int64, index int, raw json.RawM
 	}
 	d.wroteText = true
 	d.lastStep = step
-	return []Event{{Kind: EventText, Text: delta}}, nil
+	return d.text(delta), nil
 }
 
-// End 在流结束时返回各步骤用量之和与完成事件
+// text 返回正文增量的事件；声明了函数时扣下可能是 function_calls 代码块的部分，代码块完整后解码为函数调用
+func (d *AssistantStreamDecoder) text(delta string) []Event {
+	if !d.Calls {
+		return []Event{{Kind: EventText, Text: delta}}
+	}
+	d.held += delta
+	var events []Event
+	emit := func(text string) {
+		if text != "" {
+			events = append(events, Event{Kind: EventText, Text: text})
+		}
+	}
+	for {
+		if !d.inCall {
+			start := strings.Index(d.held, assistantCallFence)
+			if start < 0 {
+				keep := 0
+				for size := min(len(d.held), len(assistantCallFence)-1); size > 0 && keep == 0; size-- {
+					if strings.HasSuffix(d.held, assistantCallFence[:size]) {
+						keep = size
+					}
+				}
+				emit(d.held[:len(d.held)-keep])
+				d.held = d.held[len(d.held)-keep:]
+				return events
+			}
+			emit(d.held[:start])
+			d.held = d.held[start:]
+			d.inCall = true
+		}
+		end := strings.Index(d.held[len(assistantCallFence):], "\n```")
+		if end < 0 {
+			return events
+		}
+		end += len(assistantCallFence)
+		block := d.held[:end+len("\n```")]
+		d.held = d.held[len(block):]
+		d.inCall = false
+		if calls, ok := assistantCalls(block[len(assistantCallFence):end]); ok {
+			events = append(events, calls...)
+		} else {
+			emit(block)
+		}
+	}
+}
+
+// assistantCalls 把 function_calls 代码块的 JSON 数组解码为函数调用事件，不是调用数组时返回 false
+func assistantCalls(body string) ([]Event, bool) {
+	var calls []assistantCall
+	if json.Unmarshal([]byte(body), &calls) != nil || len(calls) == 0 {
+		return nil, false
+	}
+	events := make([]Event, 0, len(calls))
+	for _, call := range calls {
+		if call.Name == "" {
+			return nil, false
+		}
+		arguments := call.Arguments
+		if isJSONNull(arguments) {
+			arguments = json.RawMessage(`{}`)
+		}
+		events = append(events, Event{Kind: EventToolCall, FunctionCall: &FunctionCall{ID: uuid.NewString(), Name: call.Name, Arguments: arguments}})
+	}
+	return events, true
+}
+
+// decodeSearch 把完成的 search_web 工具动作（field 19：查询、域名、摘要、[标题, 链接] 列表）并入搜索来源
+func (d *AssistantStreamDecoder) decodeSearch(raw json.RawMessage, path string, evidence json.RawMessage) error {
+	action, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return withMethod(err, assistantStreamMethod)
+	}
+	searchRaw := rawAt(action, 18)
+	if isJSONNull(searchRaw) {
+		return nil
+	}
+	search, err := rawArray(searchRaw, path+"[18]", evidence)
+	if err != nil {
+		return withMethod(err, assistantStreamMethod)
+	}
+	query, err := rawString(rawAt(search, 0), path+"[18][0]", evidence)
+	if err != nil {
+		return withMethod(err, assistantStreamMethod)
+	}
+	if d.grounding == nil {
+		d.grounding = &GroundingMetadata{}
+	}
+	d.grounding.WebSearchQueries = append(d.grounding.WebSearchQueries, query)
+	if resultsRaw := rawAt(search, 3); !isJSONNull(resultsRaw) {
+		results, err := rawArray(resultsRaw, path+"[18][3]", evidence)
+		if err != nil {
+			return withMethod(err, assistantStreamMethod)
+		}
+		for index, resultRaw := range results {
+			resultPath := fmt.Sprintf("%s[18][3][%d]", path, index)
+			result, err := rawArray(resultRaw, resultPath, evidence)
+			if err != nil {
+				return withMethod(err, assistantStreamMethod)
+			}
+			title, err := rawString(rawAt(result, 0), resultPath+"[0]", evidence)
+			if err != nil {
+				return withMethod(err, assistantStreamMethod)
+			}
+			uri, err := rawString(rawAt(result, 1), resultPath+"[1]", evidence)
+			if err != nil {
+				return withMethod(err, assistantStreamMethod)
+			}
+			d.grounding.Chunks = append(d.grounding.Chunks, GroundingChunk{Source: "web", URI: uri, Title: title})
+		}
+	}
+	return nil
+}
+
+// End 在流结束时返回扣下的正文或函数调用、搜索来源、各步骤用量之和与完成事件
 func (d *AssistantStreamDecoder) End() ([]Event, error) {
 	if !d.finished {
 		return nil, &ProtocolEvidenceError{Method: assistantStreamMethod, Path: "$", Detail: "流结束前没有完成的模型回复"}
@@ -532,7 +749,13 @@ func (d *AssistantStreamDecoder) End() ([]Event, error) {
 		total.OutputTokens += usage.OutputTokens
 		total.TotalTokens += usage.TotalTokens
 	}
-	events := make([]Event, 0, 2)
+	var events []Event
+	if d.held != "" {
+		events = append(events, Event{Kind: EventText, Text: d.held})
+	}
+	if d.grounding != nil {
+		events = append(events, Event{Kind: EventGrounding, Grounding: d.grounding})
+	}
 	if len(d.usage) > 0 {
 		events = append(events, Event{Kind: EventUsage, Usage: &total})
 	}

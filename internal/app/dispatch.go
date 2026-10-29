@@ -54,9 +54,6 @@ func (queue *dispatchQueue) leave(waiter *dispatchWaiter) {
 	defer queue.mu.Unlock()
 	waiters := queue.queues[waiter.key]
 	index := slices.Index(waiters, waiter)
-	if index < 0 {
-		return
-	}
 	waiters = slices.Delete(waiters, index, index+1)
 	if len(waiters) == 0 {
 		delete(queue.queues, waiter.key)

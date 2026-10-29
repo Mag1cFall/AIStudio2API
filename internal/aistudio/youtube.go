@@ -65,20 +65,17 @@ func attachYouTubeMedia(content Content) Content {
 	parts := make([]Part, 0, len(content.Parts)+1)
 	for _, part := range content.Parts {
 		if part.Text != "" {
-			matches := youtubeURLPattern.FindAllString(part.Text, -1)
 			original := part.Text
-			if len(matches) > 0 {
-				for _, raw := range matches {
-					media, ok := ExternalMediaForURL(raw)
-					if !ok {
-						continue
-					}
-					if _, duplicate := existing[media.URL]; !duplicate {
-						existing[media.URL] = struct{}{}
-						parts = append(parts, Part{ExternalMedia: media})
-					}
-					part.Text = strings.ReplaceAll(part.Text, raw, "")
+			for _, raw := range youtubeURLPattern.FindAllString(part.Text, -1) {
+				media, ok := ExternalMediaForURL(raw)
+				if !ok {
+					continue
 				}
+				if _, duplicate := existing[media.URL]; !duplicate {
+					existing[media.URL] = struct{}{}
+					parts = append(parts, Part{ExternalMedia: media})
+				}
+				part.Text = strings.ReplaceAll(part.Text, raw, "")
 			}
 			if part.Text != original {
 				part.Text = strings.TrimSpace(part.Text)

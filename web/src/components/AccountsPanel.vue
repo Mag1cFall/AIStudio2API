@@ -21,9 +21,11 @@ import type {
   PairingToken,
 } from '@/types'
 import type { IconName } from '@/icons'
+import AccountEnvironmentFields from './AccountEnvironmentFields.vue'
 import DetailDialog from './DetailDialog.vue'
 import LoginViewer from './LoginViewer.vue'
 import UiIcon from './UiIcon.vue'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   accounts: Account[]
@@ -39,8 +41,8 @@ const emit = defineEmits<{
 }>()
 
 const { t, locale, errorText, logText } = useI18n()
-const defaultAccountLocale = navigator.language || 'en-US'
-const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+const defaultAccountLocale = navigator.language
+const defaultAccountTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const showEditor = ref(false)
 const showBrowserLogin = ref(false)
 const showChromeImport = ref(false)
@@ -114,6 +116,26 @@ const stateKeys: Record<AccountState, TranslationKey> = {
   unavailable: 'state.unavailable',
   disabled: 'state.disabled',
 }
+
+const search = ref('')
+const selectedState = ref('')
+const selectedTier = ref('')
+const selectedEgress = ref('*')
+const states = computed(() => [...new Set(props.accounts.map((account) => account.state))])
+const tiers = computed(() => [...new Set(props.accounts.map((account) => account.benefit_tier))])
+const egresses = computed(() => [...new Set(props.accounts.map((account) => account.egress))])
+
+// visibleAccounts 是邮箱检索与账户属性筛选的交集
+const visibleAccounts = computed(() => {
+  const needle = search.value.trim().toLowerCase()
+  return props.accounts.filter(
+    (account) =>
+      (account.label.toLowerCase().includes(needle) || account.id.toLowerCase().includes(needle)) &&
+      (selectedState.value === '' || account.state === selectedState.value) &&
+      (selectedTier.value === '' || account.benefit_tier === selectedTier.value) &&
+      (selectedEgress.value === '*' || account.egress === selectedEgress.value),
+  )
+})
 
 // reason 是悬窗中显示的账户、原因类别与完整原因
 const reason = ref<{ account: Account; kind: string; text: string } | null>(null)
@@ -204,14 +226,13 @@ async function runBrowserLogin(
 
 // showLiveLogin 在服务端启用页内登录窗口后关闭登录设置对话框
 function showLiveLogin(): void {
-  if (liveLogin.value === null) return
-  liveLogin.value.active = true
+  liveLogin.value!.active = true
   showBrowserLogin.value = false
 }
 
 // liveLoginUnavailable 在登录窗口无法连接时取消登录
 function liveLoginUnavailable(): void {
-  liveLogin.value?.controller.abort()
+  liveLogin.value!.controller.abort()
   liveLogin.value = null
   emit('notice', t('accounts.liveUnavailable'), 'error')
 }
@@ -483,7 +504,6 @@ async function importCookieAccount(): Promise<void> {
     }
     return
   }
-  if (selectedCookieUsers.value.length === 0) return
   pendingAction.value = 'cookie-import'
   let lastAccountID = ''
   try {
@@ -507,17 +527,10 @@ async function importCookieAccount(): Promise<void> {
     pendingAction.value = ''
     closeCookieImport()
     emit('refresh')
-    if (count === 1 && lastAccountID !== '') {
+    if (count === 1) {
       emit('notice', t('accounts.importedAccount').replace('{email}', lastAccountID), 'success')
     } else {
-      emit(
-        'notice',
-        t(count === 1 ? 'accounts.importCompleteOne' : 'accounts.importComplete').replace(
-          '{count}',
-          String(count),
-        ),
-        'success',
-      )
+      emit('notice', t('accounts.importComplete').replace('{count}', String(count)), 'success')
     }
   } catch (error) {
     if (lastAccountID !== '') emit('refresh')
@@ -529,7 +542,6 @@ async function importCookieAccount(): Promise<void> {
 
 // saveAccount 保存已有账户配置并刷新产品数据
 async function saveAccount(): Promise<void> {
-  if (editingAccountID.value === '') return
   pendingAction.value = `edit:${editingAccountID.value}`
   try {
     await api.updateAccount(editingAccountID.value, { ...draft })
@@ -706,6 +718,45 @@ async function refreshAllAccounts(): Promise<void> {
       </div>
     </header>
     <div class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col p-4 md:p-8">
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          v-model="search"
+          type="search"
+          :aria-label="t('accounts.search')"
+          :placeholder="t('accounts.search')"
+          class="min-w-0 flex-[1_1_12rem] rounded-md border border-line bg-canvas px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+        />
+        <UiSelect
+          v-model="selectedState"
+          :aria-label="t('accounts.filterState')"
+          class="rounded-md border border-line bg-canvas px-2 py-1.5 text-xs text-gray-200"
+        >
+          <option value="">{{ t('accounts.allStates') }}</option>
+          <option v-for="state in states" :key="state" :value="state">
+            {{ t(stateKeys[state]) }}
+          </option>
+        </UiSelect>
+        <UiSelect
+          v-model="selectedTier"
+          :aria-label="t('accounts.filterTier')"
+          class="rounded-md border border-line bg-canvas px-2 py-1.5 text-xs text-gray-200"
+        >
+          <option value="">{{ t('accounts.allTiers') }}</option>
+          <option v-for="tier in tiers" :key="tier" :value="tier">
+            {{ tier === 'Unknown' ? t('accounts.tierUnknown') : tier }}
+          </option>
+        </UiSelect>
+        <UiSelect
+          v-model="selectedEgress"
+          :aria-label="t('accounts.filterEgress')"
+          class="max-w-60 rounded-md border border-line bg-canvas px-2 py-1.5 text-xs text-gray-200"
+        >
+          <option value="*">{{ t('accounts.allEgresses') }}</option>
+          <option v-for="egress in egresses" :key="egress" :value="egress">
+            {{ egress ? maskedProxy(egress) : t('accounts.direct') }}
+          </option>
+        </UiSelect>
+      </div>
       <div v-if="error" class="rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
         {{ error }}
       </div>
@@ -720,11 +771,17 @@ async function refreshAllAccounts(): Promise<void> {
         <p class="text-xs">{{ t('accounts.emptyHint') }}</p>
       </div>
       <div
+        v-else-if="visibleAccounts.length === 0"
+        class="rounded border border-line bg-panel py-10 text-center text-sm text-gray-500"
+      >
+        {{ t('accounts.noMatches') }}
+      </div>
+      <div
         v-else
         class="min-h-0 flex-1 overflow-y-auto rounded-lg border border-line bg-panel max-md:max-h-[70vh]"
       >
         <div
-          v-for="account in accounts"
+          v-for="account in visibleAccounts"
           :key="account.id"
           class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line/60 px-4 py-2.5"
           :class="{ 'opacity-60': !account.enabled }"
@@ -930,38 +987,7 @@ async function refreshAllAccounts(): Promise<void> {
                 <span class="text-sm font-medium text-gray-400">{{ t('common.enable') }}</span>
                 <input v-model="draft.enabled" class="h-4 w-4 accent-blue-600" type="checkbox" />
               </label>
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                  t('accounts.proxy')
-                }}</span>
-                <input
-                  v-model.trim="draft.proxy"
-                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                  placeholder="socks5://127.0.0.1:1080"
-                />
-              </label>
-              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.locale')
-                  }}</span>
-                  <input
-                    v-model.trim="draft.locale"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.timezone')
-                  }}</span>
-                  <input
-                    v-model.trim="draft.timezone"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-              </div>
+              <AccountEnvironmentFields :model-value="draft" />
             </div>
             <div class="mt-6 flex gap-2">
               <button
@@ -1001,38 +1027,7 @@ async function refreshAllAccounts(): Promise<void> {
               </button>
             </div>
             <div class="space-y-4">
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                  t('accounts.proxy')
-                }}</span>
-                <input
-                  v-model.trim="accountEnvironment.proxy"
-                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                  placeholder="socks5://127.0.0.1:1080"
-                />
-              </label>
-              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.locale')
-                  }}</span>
-                  <input
-                    v-model.trim="accountEnvironment.locale"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.timezone')
-                  }}</span>
-                  <input
-                    v-model.trim="accountEnvironment.timezone"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-              </div>
+              <AccountEnvironmentFields :model-value="accountEnvironment" />
             </div>
             <div class="mt-6 flex gap-2">
               <button
@@ -1073,38 +1068,7 @@ async function refreshAllAccounts(): Promise<void> {
               </button>
             </div>
             <div class="mb-4 space-y-4">
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                  t('accounts.proxy')
-                }}</span>
-                <input
-                  v-model.trim="accountEnvironment.proxy"
-                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                  placeholder="socks5://127.0.0.1:1080"
-                />
-              </label>
-              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.locale')
-                  }}</span>
-                  <input
-                    v-model.trim="accountEnvironment.locale"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                    t('accounts.timezone')
-                  }}</span>
-                  <input
-                    v-model.trim="accountEnvironment.timezone"
-                    class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                    required
-                  />
-                </label>
-              </div>
+              <AccountEnvironmentFields :model-value="accountEnvironment" />
             </div>
             <div v-if="chromeProfiles.length === 0" class="py-8 text-center text-sm text-gray-500">
               {{ t('accounts.chromeEmpty') }}
@@ -1272,38 +1236,7 @@ async function refreshAllAccounts(): Promise<void> {
                   {{ t('accounts.moreSettings') }}
                 </summary>
                 <div class="space-y-4 border-t border-line p-3">
-                  <label class="block">
-                    <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                      t('accounts.proxy')
-                    }}</span>
-                    <input
-                      v-model.trim="accountEnvironment.proxy"
-                      class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                      placeholder="socks5://127.0.0.1:1080"
-                    />
-                  </label>
-                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                        t('accounts.locale')
-                      }}</span>
-                      <input
-                        v-model.trim="accountEnvironment.locale"
-                        class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                        required
-                      />
-                    </label>
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-gray-400">{{
-                        t('accounts.timezone')
-                      }}</span>
-                      <input
-                        v-model.trim="accountEnvironment.timezone"
-                        class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-                        required
-                      />
-                    </label>
-                  </div>
+                  <AccountEnvironmentFields :model-value="accountEnvironment" />
                 </div>
               </details>
             </div>

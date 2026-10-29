@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -41,15 +40,14 @@ onUnmounted(() => {
 
 // toggle 播放或暂停
 function toggle(): void {
-  const video = element.value
-  if (video === undefined) return
+  const video = element.value!
   if (video.paused) void video.play()
   else video.pause()
 }
 
 // openLargeView 暂停预览并在对话框中打开大图查看
 function openLargeView(): void {
-  element.value?.pause()
+  element.value!.pause()
   largeView.value = true
 }
 
@@ -178,16 +176,6 @@ function save(): void {
     var(--color-loading-background) 60%
   );
   background-size: 800px;
-}
-
-@keyframes moving-gradient {
-  0% {
-    background-position: -400px 0;
-  }
-
-  to {
-    background-position: 400px 0;
-  }
 }
 
 .bottom-controls-container {

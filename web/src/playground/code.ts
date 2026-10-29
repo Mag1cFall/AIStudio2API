@@ -1,6 +1,7 @@
 import type { Model } from '@/types'
 import {
   chatRequest,
+  dataURL,
   protocolCall,
   responsesRequest,
   type ImageOptions,
@@ -12,7 +13,7 @@ import type { GenerateRequest } from './request'
 export type CodeLanguage = 'rest' | 'python' | 'typescript' | 'openai-python' | 'openai-typescript'
 
 // CodeInput 是生成示例代码所需的页面请求：协议、是否流式、模型、服务地址、Gemini API 请求与 OpenAI Images 参数
-export interface CodeInput {
+interface CodeInput {
   model: Model | undefined
   modelID: string
   baseURL: string
@@ -87,9 +88,7 @@ const markerPattern = /(["'])__FILE_(raw|url)_(\d+)__\1/g
 // markAttachments 把正文中附件的 Base64 正文与 data URL 换为占位
 function markAttachments(value: unknown, attachments: readonly Attachment[]): unknown {
   if (typeof value === 'string') {
-    const index = attachments.findIndex(
-      (item) => value === item.data || value === `data:${item.mimeType};base64,${item.data}`,
-    )
+    const index = attachments.findIndex((item) => value === item.data || value === dataURL(item))
     if (index === -1) return value
     return markerText({ index, kind: value.startsWith('data:') ? 'url' : 'raw' })
   }
@@ -164,14 +163,14 @@ function pyAttachments(
     used.add(Number(index))
     const name = `file_${Number(index) + 1}`
     if (kind === 'url')
-      return `f"data:${attachments[Number(index)]?.mimeType};base64,{base64.b64encode(${name}).decode()}"`
+      return `f"data:${attachments[Number(index)]!.mimeType};base64,{base64.b64encode(${name}).decode()}"`
     return bytes ? name : `base64.b64encode(${name}).decode()`
   })
   const setup = [...used]
     .sort((first, second) => first - second)
     .map(
       (index) =>
-        `with open(${pyString(attachments[index]?.file ?? '')}, 'rb') as file:\n    file_${index + 1} = file.read()`,
+        `with open(${pyString(attachments[index]!.file)}, 'rb') as file:\n    file_${index + 1} = file.read()`,
     )
     .join('\n')
   return { setup, literal: replaced }
@@ -187,14 +186,14 @@ function tsAttachments(
     used.add(Number(index))
     const name = `file${Number(index) + 1}`
     return kind === 'url'
-      ? `\`data:${attachments[Number(index)]?.mimeType};base64,\${${name}}\``
+      ? `\`data:${attachments[Number(index)]!.mimeType};base64,\${${name}}\``
       : name
   })
   const setup = [...used]
     .sort((first, second) => first - second)
     .map(
       (index) =>
-        `const file${index + 1} = fs.readFileSync(${JSON.stringify(attachments[index]?.file ?? '')}).toString('base64');`,
+        `const file${index + 1} = fs.readFileSync(${JSON.stringify(attachments[index]!.file)}).toString('base64');`,
     )
     .join('\n')
   return { setup, literal: replaced }
@@ -305,9 +304,9 @@ function shellJSON(body: unknown, attachments: readonly Attachment[]): string {
   return JSON.stringify(body, null, 2)
     .replace(/[\\$`]/g, '\\$&')
     .replace(markerPattern, (_match, _quote, kind: string, index: string) => {
-      const attachment = attachments[Number(index)]
-      const data = `$(base64 < ${attachment?.file} | tr -d '\\n')`
-      return kind === 'url' ? `"data:${attachment?.mimeType};base64,${data}"` : `"${data}"`
+      const attachment = attachments[Number(index)]!
+      const data = `$(base64 < ${attachment.file} | tr -d '\\n')`
+      return kind === 'url' ? `"data:${attachment.mimeType};base64,${data}"` : `"${data}"`
     })
 }
 

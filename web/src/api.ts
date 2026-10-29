@@ -51,10 +51,6 @@ interface RequestsResponse {
   requests: RequestSummary[]
 }
 
-export interface EventConnection {
-  close: () => void
-}
-
 export interface AdminSession {
   enabled: boolean
   authenticated: boolean
@@ -80,22 +76,15 @@ export class ApiError extends Error {
   }
 }
 
-// responseError 提取四套公开协议与管理接口共享的错误码与错误消息
+// responseError 提取管理接口的错误码与错误消息
 async function responseError(response: Response): Promise<ApiError> {
   const body = await response.text()
   if (body === '') return new ApiError(response.statusText, response.status)
   if (!response.headers.get('content-type')?.includes('application/json')) {
     return new ApiError(body, response.status)
   }
-
-  const value: unknown = JSON.parse(body)
-  const message = pathValue(value, ['error', 'message'])
-  const code = pathValue(value, ['error', 'code'])
-  return new ApiError(
-    typeof message === 'string' ? message : body,
-    response.status,
-    typeof code === 'string' ? code : '',
-  )
+  const { error } = JSON.parse(body) as { error: { message: string; code: string } }
+  return new ApiError(error.message, response.status, error.code)
 }
 
 // jsonBody 把请求正文序列化为 JSON Blob
@@ -103,22 +92,16 @@ export function jsonBody(value: unknown): Blob {
   return new Blob([JSON.stringify(value)], { type: 'application/json' })
 }
 
-// writes 是进行中的管理写请求数
+// writes 是进行中的管理写请求数，关闭桌面窗口时有写请求则保留页面
 const writes = ref(0)
-
-// 关闭桌面窗口时，进行中的写请求保留页面
 keepPage(() => writes.value > 0)
 
 // send 发出管理端请求并保留服务端错误语义，写请求进行中时计入 writes
 async function send(path: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers)
-  if (init?.body !== undefined) {
-    headers.set('Content-Type', 'application/json')
-  }
   const write = init?.method !== undefined && init.method !== 'GET'
   if (write) writes.value++
   try {
-    const response = await fetch(path, { ...init, headers })
+    const response = await fetch(path, init)
     checkSessionResponse(path, response)
     if (!response.ok) {
       throw await responseError(response)
@@ -139,28 +122,6 @@ async function requestCommand(path: string, init: RequestInit): Promise<void> {
   await send(path, init)
 }
 
-// parseAdminEvent 校验单一事件流的事件外壳
-function parseAdminEvent(raw: string): AdminEvent | undefined {
-  const value: unknown = JSON.parse(raw)
-  if (typeof value !== 'object' || value === null || !('type' in value) || !('data' in value)) {
-    return undefined
-  }
-
-  const type = value.type
-  if (
-    type !== 'status' &&
-    type !== 'log' &&
-    type !== 'accounts' &&
-    type !== 'models' &&
-    type !== 'cooldowns' &&
-    type !== 'request'
-  ) {
-    return undefined
-  }
-
-  return value as AdminEvent
-}
-
 export const api = {
   session: () => requestJSON<AdminSession>('/api/auth/session'),
   login: (username: string, password: string, remember: boolean) =>
@@ -178,12 +139,10 @@ export const api = {
   cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,
   requests: async () => (await requestJSON<RequestsResponse>('/api/requests')).requests,
   config: () => requestJSON<ServiceConfig>('/api/config'),
-  usage: (query: URLSearchParams, signal?: AbortSignal) =>
-    requestJSON<UsageReport>(`/api/usage?${query.toString()}`, { signal: signal ?? null }),
-  usageRecords: (query: URLSearchParams, signal?: AbortSignal) =>
-    requestJSON<UsageRecordPage>(`/api/usage/records?${query.toString()}`, {
-      signal: signal ?? null,
-    }),
+  usage: (query: URLSearchParams, signal: AbortSignal) =>
+    requestJSON<UsageReport>(`/api/usage?${query.toString()}`, { signal }),
+  usageRecords: (query: URLSearchParams, signal: AbortSignal) =>
+    requestJSON<UsageRecordPage>(`/api/usage/records?${query.toString()}`, { signal }),
   usageExportURL: (query: URLSearchParams) => `/api/usage/records.csv?${query.toString()}`,
   requestBody: (id: string) =>
     requestJSON<RequestBody>(`/api/requests/${encodeURIComponent(id)}/body`),
@@ -206,7 +165,7 @@ export const api = {
     (
       await requestJSON<{ accounts: CookieBrowser[] }>('/api/accounts/import/cookies/discover', {
         method: 'POST',
-        body: JSON.stringify(input),
+        body: jsonBody(input),
       })
     ).accounts,
   importCookieAccount: (input: CookieImportInput) =>
@@ -220,7 +179,7 @@ export const api = {
       method: 'PUT',
       body: jsonBody(draft),
     }),
-  deleteAccount: (id: string, keepalive = false) =>
+  deleteAccount: (id: string, keepalive: boolean) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive }),
   loginAccount: (id: string, view: string, signal: AbortSignal) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}/login`, {
@@ -305,7 +264,7 @@ export const api = {
 export function openAdminEvents(
   onEvent: (event: AdminEvent) => void,
   onOpen: () => void,
-): EventConnection {
+): EventSource {
   const source = new EventSource('/api/events')
   source.onopen = onOpen
   source.onerror = () => {
@@ -316,33 +275,7 @@ export function openAdminEvents(
       })
       .catch(() => {})
   }
-  source.onmessage = (message) => {
-    const event = parseAdminEvent(message.data)
-    if (event !== undefined) {
-      onEvent(event)
-    }
-  }
-
-  return {
-    close: () => source.close(),
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-// pathValue 读取公开协议中已知的嵌套字段
-function pathValue(value: unknown, path: readonly (string | number)[]): unknown {
-  let current = value
-  for (const part of path) {
-    if (typeof part === 'number') {
-      if (!Array.isArray(current)) return undefined
-      current = current[part]
-      continue
-    }
-    if (!isRecord(current)) return undefined
-    current = current[part]
-  }
-  return current
+  source.onmessage = (message: MessageEvent<string>) =>
+    onEvent(JSON.parse(message.data) as AdminEvent)
+  return source
 }

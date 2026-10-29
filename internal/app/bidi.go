@@ -35,14 +35,7 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 	}
 	request.ObserveModelAccessChange = service.publishModelAccess
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		label := accountID
-		for _, status := range service.pool.Status() {
-			if status.ID == accountID {
-				label = status.Label
-				break
-			}
-		}
-		service.requests.log(label, "WARN", fmt.Sprintf(
+		service.requests.log(service.accountLabel(accountID), "WARN", fmt.Sprintf(
 			"账号切换 | 模型=%s\n原因: %s",
 			strings.TrimPrefix(request.Model, "models/"), strings.TrimSpace(cause.Error()),
 		))
@@ -51,14 +44,13 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 		workerFailed := service.workers.WorkerFailed(accountID)
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(cause)
 		workerReplaced := errors.Is(cause, errAccountWorkerReplaced)
-		recoverCurrentGeneration := needsWAARuntimeRecovery(cause, false, workerFailed, workerReplaced)
-		if recoveryCtx.Err() != nil || !recoverCurrentGeneration {
+		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, workerFailed, workerReplaced) {
 			return false, nil
 		}
 		expectedGeneration := workerGenerations[accountID]
 		recovered, _, recoveryErr := service.recoverWorkerOnce(
 			recoveryCtx, accountID, expectedGeneration, recoveredWorkers,
-			recoverCurrentGeneration, workerFailed || waaRuntimeFailed,
+			true, workerFailed || waaRuntimeFailed,
 		)
 		return recovered, recoveryErr
 	}
@@ -66,12 +58,7 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
 		api.SetAccessLogTarget(ctx, request.Model, account.Config.Label)
 	})
-	bidi, ok := service.service.(aistudio.BidiService)
-	if !ok {
-		cancel()
-		return nil, fmt.Errorf("bidi service 不可用")
-	}
-	session, err := bidi.OpenBidi(requestCtx, request)
+	session, err := service.service.(aistudio.BidiService).OpenBidi(requestCtx, request)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
 		cancel()

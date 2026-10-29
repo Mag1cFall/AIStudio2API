@@ -45,16 +45,6 @@ type ImportResult struct {
 	State       aistudio.StorageState
 }
 
-// DefaultChromeRoot 返回稳定版 Chrome User Data 目录
-func DefaultChromeRoot() (string, error) {
-	return defaultChromeRoot()
-}
-
-// Discover 只读列出本机 Chrome Google 账号
-func Discover(chromeRoot string) ([]Account, error) {
-	return discoverPlatform(chromeRoot)
-}
-
 // Import 用本机 Chrome 的 OAuth 续签材料生成 Playwright storage state
 func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) {
 	if err := ensurePlatformImport(); err != nil {
@@ -134,15 +124,12 @@ func importAccount(ctx context.Context, chromeRoot string, proxy string, account
 		return ImportResult{}, err
 	}
 	state := aistudio.StorageState{Cookies: toStorageCookies(cookies), Origins: []aistudio.StorageOrigin{}}
-	err = state.SetAuthExtension(aistudio.AuthExtension{
+	state.SetAuthExtension(aistudio.AuthExtension{
 		Source: aistudio.AuthSource{Browser: "chrome", Root: chromeRoot, Profile: account.Profile, Email: strings.ToLower(strings.TrimSpace(account.Email))},
 		OAuth: &aistudio.ChromeOAuthMaterial{
 			GaiaID: gaiaID, RefreshToken: token, WrappedBindingKey: append([]byte(nil), wrappedKey...),
 		},
 	})
-	if err != nil {
-		return ImportResult{}, err
-	}
 	return ImportResult{
 		Profile: account.Profile, DisplayName: account.DisplayName,
 		Email: strings.ToLower(strings.TrimSpace(account.Email)), Locale: account.Locale,

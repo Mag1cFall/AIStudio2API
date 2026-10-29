@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue'
-import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import { useTheme } from '@/theme'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { vTooltip } from '@/playground/ui/tooltip'
+import { copyToClipboard } from './clipboard'
 import { renderMermaid } from './mermaid'
 
 const props = defineProps<{ code: string }>()
 const { t } = useI18n()
-const { showNotice } = useConsole()
 const { theme } = useTheme()
 // diagram 是渲染完成的图的 data URL，渲染失败或未完成时为空
 const diagram = ref('')
@@ -61,14 +59,6 @@ const fullscreenLabel = computed(() =>
 )
 
 // copy 把图的源码复制到剪贴板
-async function copy(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(props.code)
-    showNotice(t('pg.copied'), 'success')
-  } catch {
-    showNotice(t('pg.copyFailed'), 'error')
-  }
-}
 
 // onKeydown 全屏时按 Esc 退出
 function onKeydown(event: KeyboardEvent): void {
@@ -116,7 +106,7 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
             class="ms-button-borderless ms-button-icon"
             data-test-id="mermaid-copy-button"
             :aria-label="t('pg.copyCode')"
-            @click="copy"
+            @click="copyToClipboard(code)"
           >
             <UiIcon name="copy" :size="20" />
           </button>
@@ -180,7 +170,7 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .mermaid-card.fullscreen .mermaid-header {
-  background-color: var(--color-v3-surface-container-high, var(--color-v3-surface-container));
+  background-color: var(--color-v3-surface-container-high);
 }
 
 .mermaid-card.fullscreen .mermaid-container {
@@ -208,7 +198,7 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
   justify-content: space-between;
   height: 36px;
   padding-inline: 12px 6px;
-  border-bottom: 1px solid var(--color-v3-outline-var, var(--color-v3-outline));
+  border-bottom: 1px solid var(--color-v3-outline-var);
 }
 
 .header-content {

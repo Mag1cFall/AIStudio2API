@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
@@ -55,9 +54,7 @@ function removeValue(item: SchemaEntry, index: number): void {
   <template v-for="(item, index) in entries" :key="index">
     <div class="entry">
       <div class="entry-key">
-        <label class="entry-key-label" :for="`property-name-${props.path}-${index}`">{{
-          t('pg.property')
-        }}</label>
+        <label :for="`property-name-${props.path}-${index}`">{{ t('pg.property') }}</label>
         <input
           :id="`property-name-${props.path}-${index}`"
           v-model="item.key"
@@ -169,13 +166,6 @@ function removeValue(item: SchemaEntry, index: number): void {
 .enum-value {
   flex: 1;
   min-width: 0;
-}
-
-.entry-key-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 18px;
 }
 
 .entry-children {

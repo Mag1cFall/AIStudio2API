@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -53,8 +52,7 @@ const previewTip = computed(() =>
 
 // resize 按内容调整输入框高度，范围由样式的 3 至 10 行限定
 function resize(): void {
-  const element = textarea.value
-  if (!element) return
+  const element = textarea.value!
   element.style.height = 'auto'
   element.style.height = `${element.scrollHeight}px`
 }
@@ -68,8 +66,7 @@ function toggleStrip(): void {
 
 // onKeyUp 与官网一致：光标前有未闭合的 < 或 [ 时按其后的文字筛选标签
 function onKeyUp(): void {
-  const element = textarea.value
-  if (!element) return
+  const element = textarea.value!
   const before = block.value.text.slice(0, element.selectionStart)
   const start = before.lastIndexOf(open.value)
   const typed = start === -1 ? '' : before.slice(start + 1)
@@ -86,19 +83,12 @@ function onKeyUp(): void {
 
 // insertTag 在光标处插入标签；由输入触发时替换已输入的部分
 function insertTag(tag: string): void {
-  const element = textarea.value
+  const element = textarea.value!
   const text = block.value.text
   const value = `${open.value}${tag}${close.value}`
-  let before: string
-  let after: string
-  if (triggerStart.value !== -1) {
-    before = text.slice(0, triggerStart.value)
-    after = text.slice(element?.selectionStart ?? text.length)
-  } else {
-    const cursor = element?.selectionStart ?? text.length
-    before = text.slice(0, cursor)
-    after = text.slice(cursor)
-  }
+  const cursor = element.selectionStart
+  const before = text.slice(0, triggerStart.value === -1 ? cursor : triggerStart.value)
+  const after = text.slice(cursor)
   const head = `${before.length > 0 && !before.endsWith(' ') ? `${before} ` : before}${value} `
   const tail = after.length > 0 && !after.startsWith(' ') ? after : after.trimStart()
   block.value.text = head + tail
@@ -106,8 +96,8 @@ function insertTag(tag: string): void {
   triggerStart.value = -1
   query.value = ''
   void nextTick(() => {
-    element?.focus()
-    element?.setSelectionRange(head.length, head.length)
+    element.focus()
+    element.setSelectionRange(head.length, head.length)
     resize()
   })
 }
@@ -132,7 +122,7 @@ function onKeydown(event: KeyboardEvent): void {
 
 // focus 聚焦台词输入框
 function focus(): void {
-  textarea.value?.focus()
+  textarea.value!.focus()
 }
 
 watch(
@@ -471,15 +461,5 @@ defineExpose({ focus })
 
 .textarea::placeholder {
   color: var(--color-v3-text-var);
-}
-
-.spin {
-  animation: spin 0.66s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(1turn);
-  }
 }
 </style>

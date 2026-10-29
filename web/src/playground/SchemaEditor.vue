@@ -21,7 +21,7 @@ watch(
       tree.value = parseSchema(value)
       emit('error', '')
     } catch (error) {
-      emit('error', error instanceof Error ? error.message : String(error))
+      emit('error', (error as Error).message)
     }
   },
   { immediate: true },

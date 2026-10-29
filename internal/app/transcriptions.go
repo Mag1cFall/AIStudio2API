@@ -24,7 +24,7 @@ func (service *trackedService) Transcribe(
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
 		service.requests.start(aistudio.GenerateRequest{ID: request.ID, Model: request.Model}, func() {})
-		service.requests.finish(request.ID, "failed", err)
+		service.requests.finish(request.ID, "failed")
 		return aistudio.TranscriptionResult{}, err
 	}
 	service.requests.start(aistudio.GenerateRequest{
@@ -33,21 +33,14 @@ func (service *trackedService) Transcribe(
 	request.CandidateAccountIDs, err = service.transcriptionCandidates(requestCtx, request.Model)
 	if err != nil {
 		api.SetAccessLogError(requestCtx, err)
-		service.requests.finish(request.ID, finalRequestState(err), err)
+		service.requests.finish(request.ID, finalRequestState(err))
 		cancel()
 		return aistudio.TranscriptionResult{}, err
 	}
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		label := accountID
-		for _, status := range service.pool.Status() {
-			if status.ID == accountID {
-				label = status.Label
-				break
-			}
-		}
-		service.requests.logRequestProgress(request.ID, label, "WARN", fmt.Sprintf(
+		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", fmt.Sprintf(
 			"账号切换 | 模型=%s\n原因: %s",
 			strings.TrimPrefix(request.Model, "models/"), strings.TrimSpace(cause.Error()),
 		))
@@ -58,7 +51,7 @@ func (service *trackedService) Transcribe(
 		}
 		workerFailed := service.workers.WorkerFailed(accountID)
 		workerReplaced := errors.Is(cause, errAccountWorkerReplaced)
-		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, false, workerFailed, workerReplaced) {
+		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, workerFailed, workerReplaced) {
 			return false, nil
 		}
 		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(cause)
@@ -75,13 +68,7 @@ func (service *trackedService) Transcribe(
 		if !currentGeneration {
 			return true, nil
 		}
-		label := accountID
-		for _, status := range service.pool.Status() {
-			if status.ID == accountID {
-				label = status.Label
-				break
-			}
-		}
+		label := service.accountLabel(accountID)
 		modelID := strings.TrimPrefix(request.Model, "models/")
 		if workerFailed || waaRuntimeFailed {
 			service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 重建 | 模型="+modelID)
@@ -94,27 +81,17 @@ func (service *trackedService) Transcribe(
 		api.SetAccessLogTarget(requestCtx, request.Model, account.Config.Label)
 		service.requests.markRunning(request.ID, account.ID, account.Config.Label)
 	})
-	transcriptions, ok := service.service.(aistudio.TranscriptionService)
-	if !ok {
-		err = fmt.Errorf("transcription service 不可用")
-	} else {
-		var result aistudio.TranscriptionResult
-		result, err = transcriptions.Transcribe(observed, request)
-		api.SetAccessLogFirstEvent(requestCtx, result.FirstEvent)
-		api.SetAccessLogGenerationResult(
-			requestCtx, &result.Usage, 0,
-		)
-		api.SetAccessLogTarget(requestCtx, result.ProviderModel, "")
-		api.SetAccessLogFinishReason(requestCtx, result.FinishReason)
-		api.SetAccessLogError(requestCtx, err)
-		service.requests.finish(request.ID, finalRequestState(err), err)
-		cancel()
-		return result, err
-	}
+	result, err := service.service.(aistudio.TranscriptionService).Transcribe(observed, request)
+	api.SetAccessLogFirstEvent(requestCtx, result.FirstEvent)
+	api.SetAccessLogGenerationResult(
+		requestCtx, &result.Usage, 0,
+	)
+	api.SetAccessLogTarget(requestCtx, result.ProviderModel, "")
+	api.SetAccessLogFinishReason(requestCtx, result.FinishReason)
 	api.SetAccessLogError(requestCtx, err)
-	service.requests.finish(request.ID, finalRequestState(err), err)
+	service.requests.finish(request.ID, finalRequestState(err))
 	cancel()
-	return aistudio.TranscriptionResult{}, err
+	return result, err
 }
 
 func (service *trackedService) transcriptionCandidates(ctx context.Context, model string) ([]string, error) {

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
@@ -56,7 +55,7 @@ const parseError = computed(() => {
     else parseFunctions(draft.value)
     return ''
   } catch (error) {
-    return error instanceof Error ? error.message : String(error)
+    return (error as Error).message
   }
 })
 
@@ -89,7 +88,7 @@ function switchMode(next: 'code' | 'visual'): void {
     draft.value = visualText()
     mode.value = 'code'
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : String(error)
+    saveError.value = (error as Error).message
   }
 }
 
@@ -99,7 +98,7 @@ function save(): void {
   try {
     if (mode.value === 'visual') draft.value = visualText()
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : String(error)
+    saveError.value = (error as Error).message
     return
   }
   if (parseError.value !== '') return
@@ -324,11 +323,6 @@ watch(open, (value) => {
   flex: 1;
   flex-direction: column;
   min-width: 0;
-}
-
-.field label {
-  font-size: 12px;
-  line-height: 18px;
 }
 
 .parameters {

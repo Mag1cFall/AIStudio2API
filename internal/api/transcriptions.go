@@ -53,12 +53,7 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "audio transcription is unavailable")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, openAIFileMaxBytes+openAIFileRequestOverhead)
-	if err := r.ParseMultipartForm(transcriptionMultipartMemory); err != nil {
-		if r.MultipartForm != nil {
-			_ = r.MultipartForm.RemoveAll()
-		}
-		writeFileParseError(w, r, err)
+	if !parseAudioForm(w, r) {
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
@@ -74,28 +69,24 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "response_format must be json, text, srt, verbose_json, vtt, or diarized_json")
 		return
 	}
-	wordTimestamps, wordTimestampsSet, err := transcriptionBool(r, "word_timestamps", false)
+	wordTimestamps, wordTimestampsSet, err := transcriptionBool(r, "word_timestamps")
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	speakerLabels, speakerLabelsSet, err := transcriptionBool(r, "speaker_labels", false)
+	speakerLabels, _, err := transcriptionBool(r, "speaker_labels")
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	smartTranscription, _, err := transcriptionBool(r, "smart_transcription", false)
+	smartTranscription, _, err := transcriptionBool(r, "smart_transcription")
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if smartTranscription {
-		if wordTimestampsSet && wordTimestamps || speakerLabelsSet && speakerLabels {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "smart_transcription cannot be combined with word_timestamps or speaker_labels")
-			return
-		}
-		wordTimestamps = false
-		speakerLabels = false
+	if smartTranscription && (wordTimestamps || speakerLabels) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "smart_transcription cannot be combined with word_timestamps or speaker_labels")
+		return
 	}
 	temperature, err := transcriptionTemperature(r.FormValue("temperature"))
 	if err != nil {
@@ -144,6 +135,19 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 	writeTranscriptionResponse(w, responseFormat, language, result)
 }
 
+// parseAudioForm 限制请求体并解析转录与翻译的 multipart 表单，失败时写入 OpenAI 错误并返回 false
+func parseAudioForm(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, openAIFileMaxBytes+openAIFileRequestOverhead)
+	if err := r.ParseMultipartForm(transcriptionMultipartMemory); err != nil {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+		writeFileParseError(w, r, err)
+		return false
+	}
+	return true
+}
+
 // openAIAudioFile 读取 multipart 的 file 段并识别音频 MIME，失败时写入 OpenAI 错误并返回 false
 func openAIAudioFile(w http.ResponseWriter, r *http.Request) (multipart.File, *multipart.FileHeader, string, bool) {
 	file, header, err := r.FormFile("file")
@@ -189,13 +193,13 @@ func subtitleFormat(value string) bool {
 	return value == "srt" || value == "vtt"
 }
 
-func transcriptionBool(r *http.Request, name string, defaultValue bool) (bool, bool, error) {
-	values, exists := r.MultipartForm.Value[name]
-	if !exists || len(values) == 0 || strings.TrimSpace(values[len(values)-1]) == "" {
-		return defaultValue, false, nil
+// transcriptionBool 读取表单中最后一个同名布尔字段，返回取值与是否给出
+func transcriptionBool(r *http.Request, name string) (bool, bool, error) {
+	values := r.MultipartForm.Value[name]
+	if len(values) == 0 || strings.TrimSpace(values[len(values)-1]) == "" {
+		return false, false, nil
 	}
-	value := strings.TrimSpace(values[len(values)-1])
-	parsed, err := strconv.ParseBool(value)
+	parsed, err := strconv.ParseBool(strings.TrimSpace(values[len(values)-1]))
 	if err != nil {
 		return false, true, fmt.Errorf("%s must be true or false", name)
 	}

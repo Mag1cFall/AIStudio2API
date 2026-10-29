@@ -87,7 +87,6 @@
   --color-gray-500: #59636e;
   --color-gray-600: #636c76;
   --color-gray-700: #d0d7de;
-  --color-gray-900: #ffffff;
   --color-blue-100: #1e40af;
   --color-blue-200: #1d4ed8;
   --color-blue-300: #1d4ed8;
@@ -121,14 +120,6 @@
     [data-highlighted].data-\[highlighted\]\:bg-blue-600
   ) {
   color: #ffffff;
-}
-
-:root[data-theme='light'] [data-state='checked'].data-\[state\=checked\]\:bg-white {
-  background-color: #ffffff;
-}
-
-:root[data-theme='light'] .shadow-black\/30 {
-  --tw-shadow-color: rgb(15 23 42 / 8%);
 }
 
 * {
@@ -210,6 +201,7 @@ pre,
   width: 100%;
   height: 100%;
   background-color: rgb(0 0 0 / 70%);
+  animation: overlay-in 160ms ease-out;
 }
 
 ::view-transition-old(root),
@@ -258,8 +250,9 @@ pre,
   button:focus-visible,
   a:focus-visible,
   summary:focus-visible,
-  [tabindex]:focus-visible {
-    outline: 2px solid #3b82f6;
+  [tabindex]:focus-visible,
+  input[type='checkbox']:focus-visible {
+    outline: 2px solid var(--color-blue-500);
     outline-offset: 2px;
   }
 
@@ -294,17 +287,12 @@ pre,
   }
 
   input[type='checkbox']:checked {
-    border-color: #2563eb;
-    background-color: #2563eb;
+    border-color: var(--color-blue-600);
+    background-color: var(--color-blue-600);
   }
 
   input[type='checkbox']:checked::after {
     opacity: 1;
-  }
-
-  input[type='checkbox']:focus-visible {
-    outline: 2px solid #3b82f6;
-    outline-offset: 2px;
   }
 
   input[type='number'] {
@@ -348,10 +336,6 @@ button[aria-busy='true']:has(> svg)::before {
 
 .modal-overlay > * {
   animation: dialog-in 160ms ease-out;
-}
-
-.modal-overlay {
-  animation: overlay-in 160ms ease-out;
 }
 
 @keyframes overlay-in {

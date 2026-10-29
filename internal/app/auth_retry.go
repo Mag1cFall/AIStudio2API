@@ -104,11 +104,7 @@ func (transport *authRetryTransport) UploadDrive(
 	token string,
 	request aistudio.UploadRequest,
 ) (aistudio.FileRef, error) {
-	drive, ok := transport.transport.(aistudio.DriveTransport)
-	if !ok {
-		return aistudio.FileRef{}, fmt.Errorf("transport 不支持 Drive 上传")
-	}
-	return drive.UploadDrive(ctx, accountID, token, request)
+	return transport.transport.(aistudio.DriveTransport).UploadDrive(ctx, accountID, token, request)
 }
 
 // DownloadDrive 将 Drive 下载委托给同一认证传输
@@ -118,11 +114,7 @@ func (transport *authRetryTransport) DownloadDrive(
 	token string,
 	fileID string,
 ) (aistudio.MediaStream, error) {
-	drive, ok := transport.transport.(aistudio.DriveTransport)
-	if !ok {
-		return aistudio.MediaStream{}, fmt.Errorf("transport 不支持 Drive 下载")
-	}
-	return drive.DownloadDrive(ctx, accountID, token, fileID)
+	return transport.transport.(aistudio.DriveTransport).DownloadDrive(ctx, accountID, token, fileID)
 }
 
 // DeleteDrive 将 Drive 删除委托给同一认证传输
@@ -132,20 +124,12 @@ func (transport *authRetryTransport) DeleteDrive(
 	token string,
 	fileID string,
 ) error {
-	drive, ok := transport.transport.(aistudio.DriveTransport)
-	if !ok {
-		return fmt.Errorf("transport 不支持 Drive 删除")
-	}
-	return drive.DeleteDrive(ctx, accountID, token, fileID)
+	return transport.transport.(aistudio.DriveTransport).DeleteDrive(ctx, accountID, token, fileID)
 }
 
 // DriveFileExists 将 Drive 文件查询委托给同一认证传输
 func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accountID string, token string, fileID string) (bool, error) {
-	drive, ok := transport.transport.(aistudio.DriveFileChecker)
-	if !ok {
-		return false, fmt.Errorf("transport 不支持 Drive 查询")
-	}
-	return drive.DriveFileExists(ctx, accountID, token, fileID)
+	return transport.transport.(aistudio.DriveFileChecker).DriveFileExists(ctx, accountID, token, fileID)
 }
 
 // CopyDrive 将 Drive 复制委托给同一认证传输
@@ -156,20 +140,12 @@ func (transport *authRetryTransport) CopyDrive(
 	fileID string,
 	name string,
 ) (string, error) {
-	drive, ok := transport.transport.(aistudio.DriveTransport)
-	if !ok {
-		return "", fmt.Errorf("transport 不支持 Drive 复制")
-	}
-	return drive.CopyDrive(ctx, accountID, token, fileID, name)
+	return transport.transport.(aistudio.DriveTransport).CopyDrive(ctx, accountID, token, fileID, name)
 }
 
 // UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
 func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
-	uploader, ok := transport.transport.(aistudio.AssistantUploader)
-	if !ok {
-		return "", fmt.Errorf("transport 不支持写代码助手附件上传")
-	}
-	return uploader.UploadAssistantFile(ctx, accountID, blob)
+	return transport.transport.(aistudio.AssistantUploader).UploadAssistantFile(ctx, accountID, blob)
 }
 
 // newAuthRuntimeRefresher 创建生产环境认证续签器
@@ -245,15 +221,13 @@ func (refresher *authRuntimeRefresher) markAuthenticationRequired(ctx context.Co
 	if !ok || ctx.Err() != nil || !aistudio.DefinitiveAuthenticationFailure(cause) {
 		return cause
 	}
-	err := lease.MarkAuthenticationRequired(cause.Error())
-	if refresher.pool != nil {
-		statuses := refresher.pool.Status()
-		accounts := make([]api.AdminAccount, 0, len(statuses))
-		for _, status := range statuses {
-			accounts = append(accounts, adminAccountDTO(status))
-		}
-		refresher.requests.publish(api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
+	err := lease.ConfirmAuthenticationFailure(ctx, cause)
+	statuses := refresher.pool.Status()
+	accounts := make([]api.AdminAccount, 0, len(statuses))
+	for _, status := range statuses {
+		accounts = append(accounts, adminAccountDTO(status))
 	}
+	refresher.requests.publish(api.AdminEvent{Type: "accounts", Data: map[string]any{"accounts": accounts}})
 	return errors.Join(cause, err)
 }
 
@@ -351,10 +325,7 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 	lease *aistudio.AccountLease,
 	release func() error,
 ) (*aistudio.BidiSession, error) {
-	bidiTransport, ok := transport.transport.(aistudio.BidiProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("protected transport 不支持 BidiGenerateContent")
-	}
+	bidiTransport := transport.transport.(aistudio.BidiProtectedTransport)
 	gate := newBidiReleaseGate(release)
 	generation := authGeneration(ctx)
 	session, err := bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, gate.Release)
@@ -364,7 +335,7 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 		}
 		return session, nil
 	}
-	if !aistudio.DefinitiveAuthenticationFailure(err) || transport.refresher == nil {
+	if !aistudio.DefinitiveAuthenticationFailure(err) {
 		return nil, errors.Join(err, gate.Commit())
 	}
 	gate.Abandon()
@@ -384,12 +355,8 @@ func (transport *authRetryProtectedTransport) DoProtectedVideo(
 	request aistudio.VideoRequest,
 	rpc aistudio.RPCRequest,
 ) (*aistudio.RPCResponse, error) {
-	videoTransport, ok := transport.transport.(aistudio.VideoProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("protected transport 不支持 GenerateVideo")
-	}
 	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
-		return videoTransport.DoProtectedVideo(ctx, request, rpc)
+		return transport.transport.(aistudio.VideoProtectedTransport).DoProtectedVideo(ctx, request, rpc)
 	})
 }
 
@@ -399,12 +366,19 @@ func (transport *authRetryProtectedTransport) DoProtectedTitle(
 	request aistudio.TitleRequest,
 	rpc aistudio.RPCRequest,
 ) (*aistudio.RPCResponse, error) {
-	titleTransport, ok := transport.transport.(aistudio.TitleProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("protected transport 不支持 GenerateTitle")
-	}
 	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
-		return titleTransport.DoProtectedTitle(ctx, request, rpc)
+		return transport.transport.(aistudio.TitleProtectedTransport).DoProtectedTitle(ctx, request, rpc)
+	})
+}
+
+// DoProtectedImage 在认证失败后续签同一账户并重放 GenerateImage 请求
+func (transport *authRetryProtectedTransport) DoProtectedImage(
+	ctx context.Context,
+	request aistudio.ImageRequest,
+	rpc aistudio.RPCRequest,
+) (*aistudio.RPCResponse, error) {
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return transport.transport.(aistudio.ImageProtectedTransport).DoProtectedImage(ctx, request, rpc)
 	})
 }
 
@@ -454,16 +428,14 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 				extension.OAuth != nil && current.OAuth.GaiaID != extension.OAuth.GaiaID {
 				return fmt.Errorf("Chrome 更新结果与账户 %s 不匹配", account.ID)
 			}
-			if err := state.SetAuthExtension(current); err != nil {
-				return err
-			}
+			state.SetAuthExtension(current)
 			cookies, err = updated.Cookies, nil
 		}
 		if err != nil {
 			return fmt.Errorf("续签账户 %s: %w", account.ID, err)
 		}
 		state.Cookies = cookies
-		_, err = aistudio.NewSigner().Sign(*state)
+		_, err = aistudio.NewSigner().Authorization(*state)
 		return err
 	}, func() (func(bool), error) {
 		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")

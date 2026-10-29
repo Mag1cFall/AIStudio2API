@@ -4,7 +4,6 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 
-	"github.com/Mag1cFall/goja"
 	whatwgurl "github.com/nlnwa/whatwg-url/url"
 )
 
@@ -36,13 +35,13 @@ func urlOrigin(address *whatwgurl.Url) string {
 }
 
 // parseURL 以可选基址解析地址，无效时返回 nil
-func parseURL(input string, base goja.Value) map[string]any {
+func parseURL(input string, base *string) map[string]any {
 	var address *whatwgurl.Url
 	var err error
-	if base == nil || goja.IsUndefined(base) {
+	if base == nil {
 		address, err = urlParser.Parse(input)
 	} else {
-		address, err = urlParser.ParseRef(base.String(), input)
+		address, err = urlParser.ParseRef(*base, input)
 	}
 	if err != nil {
 		return nil

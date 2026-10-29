@@ -3,9 +3,7 @@ package api
 import (
 	"cmp"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -84,10 +82,20 @@ func geminiCacheName(value string) string {
 	return "cachedContents/" + strings.TrimPrefix(strings.TrimSpace(value), "cachedContents/")
 }
 
-// get 返回未过期的缓存
+// get 返回未过期缓存的副本，内容与工具在创建后保持不变
 func (caches *geminiCaches) get(name string) (*geminiCache, bool) {
 	caches.mu.Lock()
 	defer caches.mu.Unlock()
+	cache, ok := caches.getLocked(name)
+	if !ok {
+		return nil, false
+	}
+	snapshot := *cache
+	return &snapshot, true
+}
+
+// getLocked 在持锁时查找未过期的缓存
+func (caches *geminiCaches) getLocked(name string) (*geminiCache, bool) {
 	name = geminiCacheName(name)
 	cache, ok := caches.items[name]
 	if ok && !time.Now().Before(cache.expires) {
@@ -98,25 +106,60 @@ func (caches *geminiCaches) get(name string) (*geminiCache, bool) {
 }
 
 // add 保存新缓存并删除已过期的缓存
-func (caches *geminiCaches) add(cache *geminiCache) {
+func (caches *geminiCaches) add(cache *geminiCache) geminiCacheMetadata {
 	caches.mu.Lock()
 	defer caches.mu.Unlock()
 	caches.removeExpiredLocked(time.Now())
 	caches.items[cache.name] = cache
+	return cache.object()
 }
 
 // list 返回未过期缓存的元数据，按创建时间从新到旧排列
-func (caches *geminiCaches) list() []map[string]any {
+func (caches *geminiCaches) list() []geminiCacheMetadata {
 	caches.mu.Lock()
 	defer caches.mu.Unlock()
 	caches.removeExpiredLocked(time.Now())
 	items := slices.Collect(maps.Values(caches.items))
 	slices.SortFunc(items, func(a, b *geminiCache) int { return b.created.Compare(a.created) })
-	objects := make([]map[string]any, len(items))
+	objects := make([]geminiCacheMetadata, len(items))
 	for index, cache := range items {
 		objects[index] = cache.object()
 	}
 	return objects
+}
+
+// metadata 返回未过期缓存的元数据快照
+func (caches *geminiCaches) metadata(name string) (geminiCacheMetadata, bool) {
+	caches.mu.Lock()
+	defer caches.mu.Unlock()
+	cache, ok := caches.getLocked(name)
+	if !ok {
+		return geminiCacheMetadata{}, false
+	}
+	return cache.object(), true
+}
+
+// update 更新未过期缓存的过期时间并返回元数据快照
+func (caches *geminiCaches) update(name string, expires, now time.Time) (geminiCacheMetadata, bool) {
+	caches.mu.Lock()
+	defer caches.mu.Unlock()
+	cache, ok := caches.getLocked(name)
+	if !ok {
+		return geminiCacheMetadata{}, false
+	}
+	cache.expires, cache.updated = expires.UTC(), now
+	return cache.object(), true
+}
+
+// delete 删除未过期缓存并返回是否存在
+func (caches *geminiCaches) delete(name string) bool {
+	caches.mu.Lock()
+	defer caches.mu.Unlock()
+	cache, ok := caches.getLocked(name)
+	if ok {
+		delete(caches.items, cache.name)
+	}
+	return ok
 }
 
 // removeExpiredLocked 删除在 now 之前过期的缓存
@@ -124,17 +167,36 @@ func (caches *geminiCaches) removeExpiredLocked(now time.Time) {
 	maps.DeleteFunc(caches.items, func(_ string, cache *geminiCache) bool { return !now.Before(cache.expires) })
 }
 
+// geminiCacheMetadata 是 CachedContent 资源的响应快照
+type geminiCacheMetadata struct {
+	Name          string           `json:"name"`
+	Model         string           `json:"model"`
+	CreateTime    string           `json:"createTime"`
+	UpdateTime    string           `json:"updateTime"`
+	ExpireTime    string           `json:"expireTime"`
+	DisplayName   string           `json:"displayName,omitempty"`
+	UsageMetadata geminiCacheUsage `json:"usageMetadata"`
+}
+
+// geminiCacheUsage 是缓存的 token 总数
+type geminiCacheUsage struct {
+	TotalTokenCount int64 `json:"totalTokenCount"`
+}
+
+// geminiCacheList 是 CachedContent 分页响应
+type geminiCacheList struct {
+	CachedContents []geminiCacheMetadata `json:"cachedContents"`
+	NextPageToken  string                `json:"nextPageToken,omitempty"`
+}
+
 // object 返回 CachedContent 资源的元数据
-func (cache *geminiCache) object() map[string]any {
-	object := map[string]any{
-		"name": cache.name, "model": "models/" + cache.model,
-		"createTime": cache.created.Format(time.RFC3339Nano), "updateTime": cache.updated.Format(time.RFC3339Nano),
-		"expireTime": cache.expires.Format(time.RFC3339Nano), "usageMetadata": map[string]any{"totalTokenCount": cache.tokens},
+func (cache *geminiCache) object() geminiCacheMetadata {
+	return geminiCacheMetadata{
+		Name: cache.name, Model: "models/" + cache.model,
+		CreateTime: cache.created.Format(time.RFC3339Nano), UpdateTime: cache.updated.Format(time.RFC3339Nano),
+		ExpireTime: cache.expires.Format(time.RFC3339Nano), UsageMetadata: geminiCacheUsage{TotalTokenCount: cache.tokens},
+		DisplayName: cache.displayName,
 	}
-	if cache.displayName != "" {
-		object["displayName"] = cache.displayName
-	}
-	return object
 }
 
 // apply 把缓存的系统指令、内容与工具放在请求之前，请求未设置工具调用方式时沿用缓存的设置
@@ -208,30 +270,17 @@ func (s *server) applyGeminiCache(w http.ResponseWriter, name string, request *a
 	}
 	cache, ok := s.caches.get(name)
 	if !ok {
-		writeGeminiCacheNotFound(w, name)
+		writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("cachedContent %q was not found or has expired", geminiCacheName(name)))
 		return nil, false
 	}
 	cache.apply(request)
 	return cache, true
 }
 
-// readGeminiCacheRequest 读取 cachedContents 请求体
-func readGeminiCacheRequest(r *http.Request) (geminiCacheRequest, error) {
-	var request geminiCacheRequest
-	body, err := io.ReadAll(r.Body)
-	if err == nil {
-		body, _, err = geminiCamelKeys(body)
-	}
-	if err == nil {
-		err = json.Unmarshal(body, &request)
-	}
-	return request, err
-}
-
 // handleGeminiCacheCreate 保存缓存内容并以 countTokens 统计缓存的 token 数
 func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request) {
-	request, err := readGeminiCacheRequest(r)
-	if err != nil {
+	var request geminiCacheRequest
+	if err := decodeGeminiJSON(r, &request); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
@@ -268,7 +317,7 @@ func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
-	counted := aistudio.ResolveSearchGenerateRequest(cached)
+	counted := s.prepareSearch(cached)
 	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
 		Model: counted.Model, System: counted.System, Contents: counted.Contents, Tools: counted.Tools,
 	})
@@ -282,8 +331,7 @@ func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request)
 		name: "cachedContents/" + strings.ToLower(rand.Text()), model: model, displayName: request.DisplayName,
 		created: now, updated: now, expires: expires.UTC(), tokens: count.InputTokens, details: count.PromptTokensDetails, tools: count.Tools, request: cached,
 	}
-	s.caches.add(cache)
-	writeJSON(w, http.StatusOK, officialOrder("gemini", cache.object()))
+	writeJSON(w, http.StatusOK, s.caches.add(cache))
 }
 
 // handleGeminiCacheList 按创建时间从新到旧分页列出未过期的缓存
@@ -293,30 +341,23 @@ func (s *server) handleGeminiCacheList(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	body := map[string]any{"cachedContents": page}
-	if next != "" {
-		body["nextPageToken"] = next
-	}
-	writeJSON(w, http.StatusOK, officialOrder("gemini", body))
+	writeJSON(w, http.StatusOK, geminiCacheList{CachedContents: page, NextPageToken: next})
 }
 
 // handleGeminiCacheGet 返回缓存资源的元数据
 func (s *server) handleGeminiCacheGet(w http.ResponseWriter, r *http.Request) {
-	cache, ok := s.caches.get(r.PathValue("cache"))
+	object, ok := s.caches.metadata(r.PathValue("cache"))
 	if !ok {
-		writeGeminiCacheNotFound(w, r.PathValue("cache"))
+		writeGeminiCacheNotFound(w)
 		return
 	}
-	s.caches.mu.Lock()
-	object := cache.object()
-	s.caches.mu.Unlock()
-	writeJSON(w, http.StatusOK, officialOrder("gemini", object))
+	writeJSON(w, http.StatusOK, object)
 }
 
 // handleGeminiCacheUpdate 按请求中的 ttl 或 expireTime 更新缓存的过期时间
 func (s *server) handleGeminiCacheUpdate(w http.ResponseWriter, r *http.Request) {
-	request, err := readGeminiCacheRequest(r)
-	if err != nil {
+	var request geminiCacheRequest
+	if err := decodeGeminiJSON(r, &request); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
@@ -330,32 +371,24 @@ func (s *server) handleGeminiCacheUpdate(w http.ResponseWriter, r *http.Request)
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cachedContent update requires ttl or expireTime")
 		return
 	}
-	cache, found := s.caches.get(r.PathValue("cache"))
+	object, found := s.caches.update(r.PathValue("cache"), expires, now)
 	if !found {
-		writeGeminiCacheNotFound(w, r.PathValue("cache"))
+		writeGeminiCacheNotFound(w)
 		return
 	}
-	s.caches.mu.Lock()
-	cache.expires, cache.updated = expires.UTC(), now
-	object := cache.object()
-	s.caches.mu.Unlock()
-	writeJSON(w, http.StatusOK, officialOrder("gemini", object))
+	writeJSON(w, http.StatusOK, object)
 }
 
 // handleGeminiCacheDelete 删除缓存
 func (s *server) handleGeminiCacheDelete(w http.ResponseWriter, r *http.Request) {
-	name := geminiCacheName(r.PathValue("cache"))
-	if _, ok := s.caches.get(name); !ok {
-		writeGeminiCacheNotFound(w, name)
+	if !s.caches.delete(r.PathValue("cache")) {
+		writeGeminiCacheNotFound(w)
 		return
 	}
-	s.caches.mu.Lock()
-	delete(s.caches.items, name)
-	s.caches.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
-// writeGeminiCacheNotFound 写出缓存不存在的 404
-func writeGeminiCacheNotFound(w http.ResponseWriter, name string) {
-	writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("cachedContent %q was not found or has expired", geminiCacheName(name)))
+// writeGeminiCacheNotFound 写出缓存资源不存在或已过期时官方的 403
+func writeGeminiCacheNotFound(w http.ResponseWriter) {
+	writeGeminiError(w, http.StatusForbidden, "PERMISSION_DENIED", "CachedContent not found (or permission denied)")
 }

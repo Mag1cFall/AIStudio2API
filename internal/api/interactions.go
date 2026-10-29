@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,12 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generate, err := request.toGenerateRequest(newID("int"))
+	if err == nil && request.Background && request.Store != nil && !*request.Store {
+		err = errors.New("store=false is incompatible with background=true")
+	}
+	if err == nil && request.WebhookConfig != nil {
+		err = request.WebhookConfig.validate(request.Background)
+	}
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
@@ -38,6 +45,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	generate = s.prepareSearch(generate)
 	generate.Unary = !request.Stream || s.responseModes().FakeStream
 	generate.Background = request.Background
 	if !request.Stream && !request.Background {
@@ -74,16 +82,17 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		model, _ := LookupPublicModel(models, generate.Model)
-		audioExpected = interactionAudioExpected(generate.Config.ResponseModalities, model)
+		audioExpected = slices.Contains(aistudio.EffectiveResponseModalities(generate.Config.ResponseModalities, model), aistudio.ResponseModalityAudio)
 	}
 	created := time.Now().UTC().Format(time.RFC3339)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	failure := &bytes.Buffer{}
 	if request.Background {
 		var finish func()
 		ctx, finish = s.startBackground(r, generate.ID)
 		defer finish()
-		defer s.endBackgroundInteraction(ctx, request, generate, previous, current, created)
+		defer s.endBackgroundInteraction(ctx, request, generate, previous, current, created, failure)
 		started := interactionObject(generate, created, "in_progress", nil)
 		s.storeInteraction(request, previous, current, generationResult{}, started)
 		if !request.Stream {
@@ -93,7 +102,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Connection", "close")
 			_, _ = w.Write(body)
 			_ = http.NewResponseController(w).Flush()
-			w = discardResponseWriter{header: http.Header{}}
+			w = discardResponseWriter{header: http.Header{}, body: failure}
 		}
 	}
 	r = r.WithContext(ctx)
@@ -105,16 +114,21 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiRequestError(w, err)
 		}
+		if request.Background && request.Stream {
+			writeGeminiRequestError(discardResponseWriter{header: http.Header{}, body: failure}, err)
+		}
 		return
 	}
 	if request.imageMIME() == "image/jpeg" {
 		events = jpegImageEvents(ctx, events)
 	}
 	if request.Stream {
-		s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events)
+		if err := s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events); err != nil && request.Background {
+			writeGeminiRequestError(discardResponseWriter{header: http.Header{}, body: failure}, err)
+		}
 		return
 	}
-	result, err := consumeEvents(ctx, events, nil)
+	result, err := consumeEvents(ctx, events)
 	if err == nil {
 		err = validateInteractionResult(audioExpected, result)
 	}
@@ -136,8 +150,8 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// endBackgroundInteraction 在后台交互结束时把仍为 in_progress 的记录保存为终态：被取消时为 cancelled，其他情况为 failed
-func (s *server) endBackgroundInteraction(ctx context.Context, request interactionRequest, generate aistudio.GenerateRequest, previous responseHistory, current []aistudio.Content, created string) {
+// endBackgroundInteraction 在后台交互结束时把仍为 in_progress 的记录保存为终态：被取消时为 cancelled，其他情况为 failed；带 webhook_config 时发送终态事件，failure 为后台请求失败时写出的 Gemini 错误
+func (s *server) endBackgroundInteraction(ctx context.Context, request interactionRequest, generate aistudio.GenerateRequest, previous responseHistory, current []aistudio.Content, created string, failure *bytes.Buffer) {
 	record, ok := s.responseStates.Interaction(generate.ID)
 	if !ok {
 		return
@@ -145,23 +159,27 @@ func (s *server) endBackgroundInteraction(ctx context.Context, request interacti
 	var stored struct {
 		Status string `json:"status"`
 	}
-	if json.Unmarshal(record.object, &stored) != nil || stored.Status != "in_progress" {
-		return
+	_ = json.Unmarshal(record.object, &stored)
+	if stored.Status == "in_progress" {
+		stored.Status = "failed"
+		if errors.Is(ctx.Err(), context.Canceled) {
+			stored.Status = "cancelled"
+		}
+		s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, created, stored.Status, nil))
 	}
-	status := "failed"
-	if errors.Is(ctx.Err(), context.Canceled) {
-		status = "cancelled"
+	if request.WebhookConfig != nil {
+		sendInteractionWebhook(*request.WebhookConfig, generate.ID, stored.Status, failure.Bytes())
 	}
-	s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, created, status, nil))
 }
 
-// discardResponseWriter 丢弃后台交互在立即返回之后的写出
+// discardResponseWriter 把后台交互在立即返回之后的写出记入 body
 type discardResponseWriter struct {
 	header http.Header
+	body   *bytes.Buffer
 }
 
 func (w discardResponseWriter) Header() http.Header            { return w.header }
-func (w discardResponseWriter) Write(data []byte) (int, error) { return len(data), nil }
+func (w discardResponseWriter) Write(data []byte) (int, error) { return w.body.Write(data) }
 func (w discardResponseWriter) WriteHeader(int)                {}
 
 // jpegImageEvents 将非 JPEG 的图片输出转码为 JPEG
@@ -195,11 +213,6 @@ func validateInteractionResult(audioExpected bool, result generationResult) erro
 	}
 	_, err := joinedAudio(result.media)
 	return err
-}
-
-// interactionAudioExpected 判断请求的 AUDIO 是否对该模型生效
-func interactionAudioExpected(modalities []aistudio.ResponseModality, model aistudio.Model) bool {
-	return slices.Contains(aistudio.EffectiveResponseModalities(modalities, model), aistudio.ResponseModalityAudio)
 }
 
 // resolveInteractionResults 从完整调用历史补齐函数结果名称

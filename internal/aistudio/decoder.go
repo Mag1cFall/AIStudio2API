@@ -203,7 +203,7 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		if err := decoder.Decode(&raw); err != nil {
 			return fail(fmt.Sprintf("$[0][%d]", index), err)
 		}
-		if err := consume(append(json.RawMessage(nil), raw...)); err != nil {
+		if err := consume(raw); err != nil {
 			return err
 		}
 		index++

@@ -46,7 +46,7 @@ func TestAuthMiddlewarePriorityAndMatching(t *testing.T) {
 			name:       "all mismatched",
 			url:        "/v1beta/models/gemini?key=wrong-key",
 			headers:    map[string]string{"X-Goog-API-Key": "wrong-header"},
-			wantStatus: http.StatusUnauthorized,
+			wantStatus: http.StatusBadRequest,
 		},
 	}
 

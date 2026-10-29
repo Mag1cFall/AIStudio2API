@@ -53,8 +53,6 @@ var capabilityNames = map[int64]string{
 	91: "output_continuation",
 }
 
-var secondaryCapabilityNames = map[int64]string{}
-
 var aspectRatios = map[int64]string{
 	1: "1:1", 2: "9:16", 3: "16:9", 4: "3:4", 5: "4:3",
 	6: "3:2", 7: "2:3", 8: "5:4", 9: "4:5", 10: "21:9",
@@ -209,9 +207,6 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		capabilities["capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
 	for _, code := range secondaryCodes {
-		if name, known := secondaryCapabilityNames[code]; known {
-			capabilities[name] = true
-		}
 		capabilities["secondary_capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
 	if !isJSONNull(rawAt(row, 78)) {
@@ -563,10 +558,6 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 	return defaults, nil
 }
 
-func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	return c.ModelsForAccount(ctx, "")
-}
-
 // ModelsForAccount 读取指定账户的实时模型目录
 func (c *Client) ModelsForAccount(ctx context.Context, accountID string) ([]Model, error) {
 	catalog, err := c.loadModels(ctx, accountID)
@@ -645,11 +636,9 @@ func (catalog modelCatalog) lookup(modelID string) (modelEntry, bool) {
 		return entry, true
 	}
 	for _, model := range catalog.models {
-		if !modelMatchesID(model, modelID) {
-			continue
+		if modelMatchesID(model, modelID) {
+			return catalog.entries[model.ID], true
 		}
-		entry, exists := catalog.entries[model.ID]
-		return entry, exists
 	}
 	return modelEntry{}, false
 }
@@ -901,7 +890,7 @@ func decodeMappedCodes(raw json.RawMessage, path string, evidence json.RawMessag
 
 func appendOption(options map[string][]string, key string, values []string) {
 	if len(values) > 0 {
-		options[key] = append([]string(nil), values...)
+		options[key] = values
 	}
 }
 

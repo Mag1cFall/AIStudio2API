@@ -1,7 +1,5 @@
 // formatDuration 与官网一致：按时分秒显示，秒保留一位小数并去掉末尾的 .0
 export function formatDuration(seconds: number): string {
-  if (seconds < 0) return ''
-  if (seconds === 0) return '0s'
   let hours = Math.floor(seconds / 3600)
   const rest = seconds % 3600
   let minutes = Math.floor(rest / 60)

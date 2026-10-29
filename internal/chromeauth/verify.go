@@ -40,11 +40,6 @@ type CookieAccount struct {
 	Email    string
 }
 
-// Verify 验证 Cookie 中第一个会话的账号可访问 WAA 页面并读取实时模型目录
-func Verify(ctx context.Context, state *aistudio.StorageState, proxy string) (Verification, error) {
-	return VerifyAuthUser(ctx, state, proxy, 0)
-}
-
 // VerifyAuthUser 验证 Cookie 中第 authUser 个会话的账号可访问 WAA 页面并读取实时模型目录
 func VerifyAuthUser(ctx context.Context, state *aistudio.StorageState, proxy string, authUser int) (Verification, error) {
 	client, headers, err := newVerifyClient(ctx, state, proxy)
@@ -90,10 +85,7 @@ func DiscoverCookieAccounts(ctx context.Context, state *aistudio.StorageState, p
 
 // newVerifyClient 创建验证用的 HTTP 客户端并读取官网公共请求头，客户端不跟随重定向
 func newVerifyClient(ctx context.Context, state *aistudio.StorageState, proxy string) (*http.Client, http.Header, error) {
-	if state == nil {
-		return nil, nil, fmt.Errorf("storage state 为空")
-	}
-	if _, err := aistudio.NewSigner().Sign(*state); err != nil {
+	if _, err := aistudio.NewSigner().Authorization(*state); err != nil {
 		return nil, nil, err
 	}
 	client, err := aistudio.NewProxyHTTPClient(proxy)
@@ -126,10 +118,7 @@ func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.St
 	if err != nil {
 		return "", err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return "", err
-	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	request.Header.Set("Cookie", cookie)
 	request.Header.Set("User-Agent", userAgent)
@@ -165,10 +154,7 @@ func verifyModels(ctx context.Context, client *http.Client, state *aistudio.Stor
 	if err != nil {
 		return 0, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("[]")))
-	if err != nil {
-		return 0, err
-	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("[]")))
 	request.Header = headers.Clone()
 	request.Header.Set("Accept", "*/*")
 	request.Header.Set("Authorization", authorization)

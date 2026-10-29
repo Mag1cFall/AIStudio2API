@@ -14,7 +14,6 @@ const library = {
 </script>
 
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { api } from '@/api'
@@ -41,7 +40,7 @@ const video = useVideo()
 const handset = useMediaQuery('(max-width: 768px)')
 const { prompts, nextPageToken, loaded, page } = library
 const loadingMore = ref(false)
-const scroller = ref<HTMLElement | null>(null)
+const scroller = ref<HTMLElement>()
 const query = ref('')
 const pending = ref<PromptSummary | null>(null)
 const renaming = ref<PromptSummary | null>(null)
@@ -248,7 +247,7 @@ watch(
 
 onMounted(async () => {
   document.title = `${t('pg.history')} | AIStudio2API`
-  if (scroller.value) scroller.value.scrollTop = library.scrollTop
+  scroller.value!.scrollTop = library.scrollTop
   try {
     await refresh()
   } catch (error) {
@@ -259,7 +258,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  library.scrollTop = filtering.value ? 0 : (scroller.value?.scrollTop ?? 0)
+  library.scrollTop = filtering.value ? 0 : scroller.value!.scrollTop
   if (filtering.value) page.value = 0
   window.clearInterval(clock)
 })
@@ -535,7 +534,7 @@ onBeforeUnmount(() => {
 
 .header {
   margin: 3px 0;
-  font-family: 'Inter Tight Variable', 'Inter Tight', sans-serif;
+  font-family: var(--font-heading);
   font-size: 24px;
   font-weight: 600;
   line-height: 32px;

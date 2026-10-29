@@ -1,28 +1,39 @@
 package waa
 
 import (
+	"runtime"
 	"sync"
 	"time"
 )
 
-// eventLoop 在单个 goroutine 中按到达顺序串行执行 VM 任务与计时器回调，afterTask 在每个任务结束后执行
+// eventLoop 在一个锁定 OS 线程的 goroutine 中按到达顺序串行执行 VM 任务与计时器回调，afterTask 在每个任务结束后执行，cleanup 在循环结束时于同一线程执行
 type eventLoop struct {
 	mu        sync.Mutex
 	queue     []func()
 	wake      chan struct{}
 	done      chan struct{}
+	exited    chan struct{}
 	closed    bool
 	timers    map[*time.Timer]struct{}
 	afterTask func()
+	cleanup   func()
 }
 
 func newEventLoop() *eventLoop {
-	loop := &eventLoop{wake: make(chan struct{}, 1), done: make(chan struct{}), timers: make(map[*time.Timer]struct{})}
+	loop := &eventLoop{wake: make(chan struct{}, 1), done: make(chan struct{}), exited: make(chan struct{}), timers: make(map[*time.Timer]struct{})}
 	go loop.run()
 	return loop
 }
 
 func (loop *eventLoop) run() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(loop.exited)
+	defer func() {
+		if loop.cleanup != nil {
+			loop.cleanup()
+		}
+	}()
 	for {
 		loop.mu.Lock()
 		if loop.closed {

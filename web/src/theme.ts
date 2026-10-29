@@ -1,7 +1,7 @@
 import { readonly, ref } from 'vue'
 
 // Theme 是界面配色模式
-export type Theme = 'dark' | 'light'
+type Theme = 'dark' | 'light'
 
 // ThemePreference 是 User settings 中的配色选项，system 跟随系统
 export type ThemePreference = Theme | 'system'
@@ -14,12 +14,8 @@ const theme = ref<Theme>(document.documentElement.dataset.theme === 'light' ? 'l
 
 // readStoredTheme 读取保存的配色选项，没有保存时跟随系统
 function readStoredTheme(): ThemePreference {
-  try {
-    const stored = window.localStorage.getItem('user_theme')
-    return stored === 'light' || stored === 'dark' ? stored : 'system'
-  } catch {
-    return 'system'
-  }
+  const stored = window.localStorage.getItem('user_theme')
+  return stored === 'light' || stored === 'dark' ? stored : 'system'
 }
 
 // preference 是当前配色选项

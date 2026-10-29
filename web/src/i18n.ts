@@ -44,9 +44,8 @@ export const availableLocales = (Object.keys(localeLabels) as Locale[]).map((cod
 }))
 
 // matchLocale 返回与语言标签最接近的界面语言，简体中文变体为 zh-CN，繁体中文变体为 zh-TW，其余按语言主标签选择，与 internal/i18n 的 Match 相同
-export function matchLocale(tag: string): Locale | undefined {
-  const lower = tag.trim().replaceAll('_', '-').toLowerCase()
-  if (lower === '') return undefined
+function matchLocale(tag: string): Locale | undefined {
+  const lower = tag.toLowerCase()
   if (['zh-tw', 'zh-hk', 'zh-mo'].includes(lower) || lower.startsWith('zh-hant')) return 'zh-TW'
   if (lower === 'zh' || lower.startsWith('zh-')) return 'zh-CN'
   const primary = lower.split('-')[0] as Locale

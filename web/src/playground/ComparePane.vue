@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
@@ -33,7 +32,7 @@ function close(): void {
 </script>
 
 <template>
-  <div class="chat-view-container side-by-side">
+  <div class="chat-view-container">
     <div class="chat-settings-header-container">
       <ModelCard
         :model="currentModel"

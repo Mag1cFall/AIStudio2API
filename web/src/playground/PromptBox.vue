@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   DropdownMenuContent,
@@ -24,8 +23,9 @@ import SampleMediaDialog, { type SampleSelection } from './SampleMediaDialog.vue
 import { driveNames, type DriveFile } from './drive'
 import { readImage } from './media/api'
 import { useCompare, usePlayground } from './session'
-import { audioInput } from './shell/preferences'
+import { useAudioRecording } from './recording'
 import { useMediaQuery } from './media-query'
+import { dataURL } from './protocols'
 import { failureText } from './request'
 import RunKeyHint from './RunKeyHint.vue'
 import { appends, submits, useRunTooltip } from './run-keys'
@@ -33,7 +33,7 @@ import { useTools } from './tools'
 import type { Part } from './types'
 
 const { t, tokenLabel } = useI18n()
-const { showNotice, config } = useConsole()
+const { showNotice } = useConsole()
 const { session, countAttachment } = usePlayground()
 const { panes, comparing, running, submitAll, appendAll, stopAll } = useCompare()
 const { tools, setTool } = useTools()
@@ -80,13 +80,26 @@ async function addSample(selection: SampleSelection): Promise<void> {
 
 const youtubeURL = ref('')
 const camera = ref<InstanceType<typeof CameraDialog>>()
+const recordingMode = ref<'attach' | 'transcribe'>('transcribe')
+const {
+  recording: audioRecording,
+  opening,
+  transcribing,
+  start: startAudio,
+  stop: stopRecording,
+  transcribe,
+} = useAudioRecording(async (audio) => {
+  window.clearInterval(timer)
+  if (recordingMode.value === 'attach')
+    session.attachments.push(await readFile(audio, audio.type.split(';')[0]))
+  else {
+    const text = await transcribe(audio)
+    if (text !== '') session.draft = session.draft === '' ? text : `${session.draft} ${text}`
+  }
+})
 // recording 表示正在录音：attach 为插入音频附件，transcribe 为语音转文字
-const recording = ref<'' | 'attach' | 'transcribe'>('')
-// opening 表示正在打开麦克风
-const opening = ref(false)
-const transcribing = ref(false)
+const recording = computed(() => (audioRecording.value ? recordingMode.value : ''))
 const elapsed = ref('')
-let recorder: MediaRecorder | undefined
 let timer = 0
 
 // enabledTools 是已开启并显示为标签的工具
@@ -110,8 +123,7 @@ let placeholderHeight: number | undefined
 
 // resize 与官网 cdkTextareaAutosize 一致：输入框高度取内容与占位文字中较高者，超过 210 px 后在框内滚动
 function resize(): void {
-  const element = textarea.value
-  if (element === undefined) return
+  const element = textarea.value!
   if (element.clientHeight >= 210 && element.scrollHeight > element.clientHeight) return
   element.style.height = 'auto'
   if (placeholderHeight === undefined) {
@@ -151,7 +163,7 @@ onMounted(() => {
 
 // focus 聚焦输入框
 function focus(): void {
-  textarea.value?.focus()
+  textarea.value!.focus()
 }
 
 // submit 发送输入或停止生成，对比模式下同时发往每个窗格
@@ -169,7 +181,7 @@ const runTooltip = useRunTooltip(() => running.value)
 // onKeydown 与官网 ms-prompt-box 一致：Escape 失焦，生成中或不能运行时快捷键不起作用，否则按提交键运行或追加
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
-    textarea.value?.blur()
+    textarea.value!.blur()
     return
   }
   if (running.value || !canRun.value) return
@@ -190,7 +202,7 @@ function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'
       const result = String(reader.result)
       resolve({ inlineData: { mimeType, data: result.slice(result.indexOf(',') + 1) } })
     }
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
+    reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)
   })
 }
@@ -219,14 +231,14 @@ async function addFiles(files: Iterable<File>): Promise<void> {
 
 // onFileChange 读取文件选择框中的文件
 async function onFileChange(): Promise<void> {
-  await addFiles(fileInput.value?.files ?? [])
-  if (fileInput.value) fileInput.value.value = ''
+  await addFiles(fileInput.value!.files!)
+  fileInput.value!.value = ''
 }
 
 // onDrop 读取拖放到输入框的文件
 async function onDrop(event: DragEvent): Promise<void> {
   dragging.value = false
-  await addFiles(event.dataTransfer?.files ?? [])
+  await addFiles(event.dataTransfer!.files)
 }
 
 // largePaste 是官网 msPasteLargeTextAsFile 的长文字数：粘贴的纯文本超过它时作为文本附件加入
@@ -243,13 +255,13 @@ function pasteName(date = new Date()): string {
 
 // onPaste 读取粘贴的文件；与官网一致，超过 largePaste 字的纯文本作为文本附件加入，不写入输入框
 async function onPaste(event: ClipboardEvent): Promise<void> {
-  const files = event.clipboardData?.files
-  if (files && files.length > 0) {
+  const { files } = event.clipboardData!
+  if (files.length > 0) {
     event.preventDefault()
     await addFiles(files)
     return
   }
-  const text = event.clipboardData?.getData('text/plain') ?? ''
+  const text = event.clipboardData!.getData('text/plain')
   if (text.length > largePaste) {
     event.preventDefault()
     await addFiles([new File([text], pasteName(), { type: 'text/plain' })])
@@ -263,13 +275,12 @@ function textPart(part: Part): boolean {
 
 // attachmentText 返回文本附件的全文
 async function attachmentText(part: Part): Promise<string> {
-  return (await fetch(attachmentURL(part))).text()
+  return (await fetch(dataURL(part.inlineData!))).text()
 }
 
 // inlineAttachment 与官网 Inline media 一致：文本附件的内容接到输入框文字之后，两段之间空一行，并移除该附件
 async function inlineAttachment(index: number): Promise<void> {
-  const part = session.attachments[index]
-  if (part?.inlineData === undefined) return
+  const part = session.attachments[index]!
   const text = await attachmentText(part)
   const at = session.attachments.indexOf(part)
   if (at === -1) return
@@ -297,11 +308,6 @@ function downloadViewed(): void {
   URL.revokeObjectURL(url)
 }
 
-// attachmentURL 返回内联附件的 data 地址，图片附件以它预览
-function attachmentURL(part: Part): string {
-  return `data:${part.inlineData?.mimeType};base64,${part.inlineData?.data}`
-}
-
 // tick 更新录音计时
 function tick(started: number): void {
   const seconds = Math.floor((Date.now() - started) / 1000)
@@ -312,61 +318,14 @@ function tick(started: number): void {
 async function startRecording(mode: 'attach' | 'transcribe'): Promise<void> {
   if (opening.value) return
   if (recording.value !== '') {
-    recorder?.stop()
+    stopRecording()
     return
   }
-  opening.value = true
-  let stream: MediaStream
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: audioInput() })
-  } catch {
-    showNotice(t('pg.microphoneDenied'), 'error')
-    return
-  } finally {
-    opening.value = false
-  }
-  const chunks: Blob[] = []
-  recorder = new MediaRecorder(stream)
-  recorder.ondataavailable = (event) => chunks.push(event.data)
-  recorder.onstop = async () => {
-    stream.getTracks().forEach((track) => track.stop())
-    window.clearInterval(timer)
-    const kind = recording.value
-    recording.value = ''
-    const audio = new Blob(chunks, { type: recorder?.mimeType || 'audio/webm' })
-    if (kind === 'attach') session.attachments.push(await readFile(audio, audio.type.split(';')[0]))
-    else await transcribe(audio)
-  }
-  recording.value = mode
+  if (!(await startAudio())) return
+  recordingMode.value = mode
   const started = Date.now()
   tick(started)
   timer = window.setInterval(() => tick(started), 500)
-  recorder.start()
-}
-
-// transcribe 用本服务的转写接口把录音转为文字并追加到输入框
-async function transcribe(audio: Blob): Promise<void> {
-  transcribing.value = true
-  try {
-    const form = new FormData()
-    form.append('file', audio, 'speech.webm')
-    const headers = new Headers()
-    const key = (config.value?.proxy_api_key ?? '').split(',')[0]?.trim() ?? ''
-    if (key !== '') headers.set('Authorization', `Bearer ${key}`)
-    const response = await fetch('/v1/audio/transcriptions', {
-      method: 'POST',
-      headers,
-      body: form,
-    })
-    const value = (await response.json()) as { text?: string; error?: { message?: string } }
-    if (!response.ok) throw new Error(value.error?.message ?? response.statusText)
-    const text = value.text?.trim() ?? ''
-    if (text !== '') session.draft = session.draft === '' ? text : `${session.draft} ${text}`
-  } catch (error) {
-    showNotice(failureText(error, t('pg.transcribeUnreachable')), 'error')
-  } finally {
-    transcribing.value = false
-  }
 }
 
 // addPhoto 把相机拍下的照片加入附件
@@ -387,7 +346,6 @@ function addYouTube(): void {
 }
 
 onUnmounted(() => {
-  if (recorder?.state === 'recording') recorder.stop()
   window.clearInterval(timer)
   window.removeEventListener('resize', onWindowResize)
   window.clearTimeout(resizeTimer)
@@ -432,7 +390,7 @@ defineExpose({ focus })
         >
           <img
             v-if="part.inlineData?.mimeType.startsWith('image/')"
-            :src="attachmentURL(part)"
+            :src="dataURL(part.inlineData)"
             alt=""
             class="attachment-image"
           />
@@ -621,7 +579,7 @@ defineExpose({ focus })
             type="button"
             ms-button
             class="ms-button-primary"
-            @click="recorder?.stop()"
+            @click="stopRecording"
           >
             <UiIcon name="stop" :size="18" />
             {{ t('pg.stopRecording') }}
@@ -985,10 +943,6 @@ defineExpose({ focus })
   min-width: 28px;
 }
 
-.spin {
-  animation: spin 0.66s linear infinite;
-}
-
 .tool-item {
   display: flex;
   align-items: center;
@@ -1011,12 +965,6 @@ defineExpose({ focus })
   from {
     opacity: 0;
     transform: scale(0.9);
-  }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(1turn);
   }
 }
 </style>

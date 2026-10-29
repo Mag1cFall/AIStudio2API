@@ -86,7 +86,8 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		w, stopKeepalive = s.nonstreamKeepalive(w, r)
 		defer stopKeepalive()
 	}
-	model, _ := LookupPublicModel(models, request.Model)
+	search := s.prepareSearch(aistudio.GenerateRequest{Model: request.Model})
+	model, _ := LookupPublicModel(models, search.Model)
 	imageConfig, err := openAIImageConfig(request.Size, request.Quality, model.CapabilityOptions)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -94,7 +95,8 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 	}
 	results, err := s.generateImages(r.Context(), aistudio.GenerateRequest{
 		Unary: true,
-		Model: request.Model,
+		Model: search.Model,
+		Tools: search.Tools,
 		Contents: []aistudio.Content{{
 			Role: aistudio.RoleUser, Parts: append(inputs, aistudio.Part{Text: request.Prompt}),
 		}},
@@ -172,7 +174,7 @@ func (s *server) generateImages(ctx context.Context, request aistudio.GenerateRe
 		return nil, err
 	}
 	results, err := images.run(func(_ int, events <-chan aistudio.Event) (generationResult, error) {
-		return consumeEvents(images.ctx, events, nil)
+		return consumeEvents(images.ctx, events)
 	})
 	images.settle(ctx)
 	images.record(ctx, results)
@@ -300,7 +302,7 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	result, err := consumeEvents(r.Context(), events, nil)
+	result, err := consumeEvents(r.Context(), events)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIRequestError(w, err)

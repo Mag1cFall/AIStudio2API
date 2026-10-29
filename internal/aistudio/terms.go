@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 )
 
 const (
@@ -17,7 +16,6 @@ const (
 
 // EnsureTermsAccepted 读取账户的官网日志上下文，账户尚未同意 AI Studio 条款时按官网条款对话框或 onboarding 表单发送 AcceptTerms
 func (c *Client) EnsureTermsAccepted(ctx context.Context, accountID string) error {
-	accountID = strings.TrimSpace(accountID)
 	c.termsMu.Lock()
 	_, accepted := c.termsAccepted[accountID]
 	c.termsMu.Unlock()
