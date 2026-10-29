@@ -61,7 +61,7 @@ watch(
   async (id) => {
     if (typeof id === 'string' && id !== '') await playground.open(id, props.prompt)
     else if (session.id !== null || session.turns.length > 0 || session.loadError || otherModel())
-      playground.newChat()
+      playground.newChat(session.settings.systemInstruction)
   },
   { immediate: true },
 )

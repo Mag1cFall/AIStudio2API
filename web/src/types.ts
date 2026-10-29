@@ -470,3 +470,10 @@ export interface PromptInput<T> {
 export interface SavedPrompt<T> extends PromptSummary {
   data: T
 }
+
+// SystemInstructionPreset 是保存在服务端对话库中的系统指令预设
+export interface SystemInstructionPreset {
+  id: string
+  title: string
+  text: string
+}
