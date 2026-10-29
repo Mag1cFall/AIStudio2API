@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS prompts (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL, description TEXT NOT NULL,
  created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS prompts_updated ON prompts(updated);
-CREATE TABLE IF NOT EXISTS prompt_settings (
- key TEXT PRIMARY KEY, data BLOB NOT NULL);`
+CREATE TABLE IF NOT EXISTS system_instructions (
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL);`
 
 // summaryColumns 是对话列表项的列
 const summaryColumns = `id, title, model, description, created, updated`
@@ -147,39 +147,34 @@ func (s *Store) DeletePrompt(ctx context.Context, id string) error {
 	return sqlitedb.Reclaim(ctx, s.db)
 }
 
-const systemInstructionsKey = "system_instructions"
-
-// SystemInstructions 读取保存的系统指令预设列表
+// SystemInstructions 按创建顺序读取保存的系统指令预设
 func (s *Store) SystemInstructions(ctx context.Context) ([]api.SystemInstructionPreset, error) {
-	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT data FROM prompt_settings WHERE key = ?`, systemInstructionsKey).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return []api.SystemInstructionPreset{}, nil
-	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, title, text FROM system_instructions ORDER BY rowid`)
 	if err != nil {
 		return nil, err
 	}
-	var presets []api.SystemInstructionPreset
-	if err := json.Unmarshal(raw, &presets); err != nil {
-		return nil, err
+	defer rows.Close()
+	presets := []api.SystemInstructionPreset{}
+	for rows.Next() {
+		var preset api.SystemInstructionPreset
+		if err := rows.Scan(&preset.ID, &preset.Title, &preset.Text); err != nil {
+			return nil, err
+		}
+		presets = append(presets, preset)
 	}
-	if presets == nil {
-		presets = []api.SystemInstructionPreset{}
-	}
-	return presets, nil
+	return presets, rows.Err()
 }
 
-// SaveSystemInstructions 写入系统指令预设列表
-func (s *Store) SaveSystemInstructions(ctx context.Context, presets []api.SystemInstructionPreset) error {
-	if presets == nil {
-		presets = []api.SystemInstructionPreset{}
-	}
-	raw, err := json.Marshal(presets)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO prompt_settings (key, data) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET data = excluded.data`, systemInstructionsKey, raw)
+// SaveSystemInstruction 新增或改写一条系统指令预设
+func (s *Store) SaveSystemInstruction(ctx context.Context, preset api.SystemInstructionPreset) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO system_instructions (id, title, text) VALUES (?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET title = excluded.title, text = excluded.text`, preset.ID, preset.Title, preset.Text)
+	return err
+}
+
+// DeleteSystemInstruction 删除一条系统指令预设
+func (s *Store) DeleteSystemInstruction(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM system_instructions WHERE id = ?`, id)
 	return err
 }
 

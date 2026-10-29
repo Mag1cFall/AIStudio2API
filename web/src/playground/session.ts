@@ -265,15 +265,16 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     return text.length > 60 ? `${text.slice(0, 60)}…` : text
   }
 
-  // hasContent 表示对话已有轮次或系统指令，可写入对话库
-  function hasContent(): boolean {
-    return session.turns.length > 0 || session.settings.systemInstruction.trim() !== ''
-  }
-
   // save 把调用时的对话连同对比模式的右侧窗格写入对话库，右侧窗格保存所在的页面对话，其他临时对话不保存；保存状态只回写到仍在显示的同一对话
   async function save(): Promise<void> {
     if (links.save) return links.save()
-    if (session.temporary || (!hasContent() && session.id === null)) return
+    if (
+      session.temporary ||
+      (session.id === null &&
+        session.turns.length === 0 &&
+        session.settings.systemInstruction.trim() === '')
+    )
+      return
     const compare = links.compare?.()
     session.id ??= newTurnID()
     const id = session.id
@@ -843,37 +844,22 @@ export function useCompare() {
   }
 }
 
-// presetsKey 是系统指令预设的本机存储键
-const presetsKey = 'playground_system_instructions'
+// localPresetsKey 是浏览器本机保存系统指令预设的键，读取时并入对话库后删除
+const localPresetsKey = 'playground_system_instructions'
 
-// loadLocalPresets 读取本机保存的系统指令预设
-function loadLocalPresets(): SystemInstructionPreset[] {
-  try {
-    return JSON.parse(localStorage.getItem(presetsKey) ?? '[]') as SystemInstructionPreset[]
-  } catch {
-    return []
-  }
-}
-
-// saveLocalPresets 把系统指令预设写入本机存储
-function saveLocalPresets(items: SystemInstructionPreset[]): void {
-  try {
-    localStorage.setItem(presetsKey, JSON.stringify(items))
-  } catch {
-    // 本机存储不可用时忽略
-  }
-}
-
-// useInstructionPresets 管理本机与服务端同步的系统指令预设
+// useInstructionPresets 管理保存在对话库中的系统指令预设
 export function useInstructionPresets(
   open: () => boolean,
   getText: () => string,
   setText: (value: string) => void,
 ) {
-  const presets = ref<SystemInstructionPreset[]>(loadLocalPresets())
+  const presets = ref<SystemInstructionPreset[]>([])
   const selected = ref('')
   const title = ref('')
   const saved = ref(true)
+  const saveError = ref(false)
+  const { errorText } = useI18n()
+  const { showNotice } = useConsole()
   let saveTimer = 0
 
   // currentPreset 是当前选中的系统指令预设
@@ -886,16 +872,17 @@ export function useInstructionPresets(
     title.value = match?.title ?? ''
   }
 
-  // persist 把预设写入本机存储与服务端对话库
-  async function persist(): Promise<void> {
-    saveLocalPresets(presets.value)
+  // persist 等待一次预设写入并更新保存状态
+  async function persist(write: Promise<void>): Promise<void> {
+    saved.value = false
+    saveError.value = false
     try {
-      presets.value = await api.saveSystemInstructions(presets.value)
-      saveLocalPresets(presets.value)
-    } catch {
-      // 服务端不可达时保留本机缓存
+      await write
+      saved.value = saveTimer === 0
+    } catch (cause) {
+      saveError.value = true
+      showNotice(errorText(cause), 'error')
     }
-    saved.value = true
   }
 
   // commit 把当前标题与系统指令写入预设列表并保存
@@ -913,7 +900,7 @@ export function useInstructionPresets(
     }
     preset.title = title.value
     preset.text = text
-    void persist()
+    void persist(api.saveSystemInstruction(preset))
   }
 
   // flush 立即提交待保存的系统指令预设
@@ -927,6 +914,7 @@ export function useInstructionPresets(
   // remember 在编辑后合并保存当前指令到预设
   function remember(): void {
     saved.value = false
+    saveError.value = false
     window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
       saveTimer = 0
@@ -947,35 +935,33 @@ export function useInstructionPresets(
   function remove(): void {
     window.clearTimeout(saveTimer)
     saveTimer = 0
-    presets.value = presets.value.filter((preset) => preset.id !== selected.value)
-    void persist()
+    const id = selected.value
+    presets.value = presets.value.filter((preset) => preset.id !== id)
+    void persist(api.deleteSystemInstruction(id))
     choose('')
   }
 
-  // refresh 从服务端读取预设并与本机预设合并
+  // refresh 从服务端读取预设，并入浏览器本机保存的预设后匹配当前指令
   async function refresh(): Promise<void> {
-    const local = loadLocalPresets()
-    presets.value = local
-    syncSelection()
     try {
-      const remote = await api.systemInstructions()
-      const merged = [...remote]
-      for (const item of local) {
-        if (!item.id && !item.text.trim() && !item.title.trim()) continue
-        if (
-          !merged.some(
-            (preset) =>
-              preset.id === item.id || (preset.title === item.title && preset.text === item.text),
-          )
+      presets.value = await api.systemInstructions()
+      const local = localStorage.getItem(localPresetsKey)
+      if (local !== null) {
+        const remote = presets.value
+        const missing = (JSON.parse(local) as SystemInstructionPreset[]).filter(
+          (item) =>
+            !remote.some(
+              (preset) =>
+                preset.id === item.id || (preset.title === item.title && preset.text === item.text),
+            ),
         )
-          merged.push(item)
+        for (const preset of missing) await api.saveSystemInstruction(preset)
+        presets.value = [...remote, ...missing]
+        localStorage.removeItem(localPresetsKey)
       }
-      presets.value = merged
-      saveLocalPresets(merged)
-      if (merged.length !== remote.length) await api.saveSystemInstructions(merged)
       syncSelection()
-    } catch {
-      // 服务端不可达时使用本机缓存
+    } catch (cause) {
+      showNotice(errorText(cause), 'error')
     }
   }
 
@@ -984,5 +970,5 @@ export function useInstructionPresets(
     else flush()
   })
 
-  return { presets, selected, title, saved, currentPreset, remember, choose, remove }
+  return { presets, selected, title, saved, saveError, currentPreset, remember, choose, remove }
 }

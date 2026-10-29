@@ -1237,11 +1237,11 @@ func mapGeminiTools(groups []geminiToolGroup, config geminiToolConfig) (aistudio
 
 // handleGeminiCountTokens 统计请求的输入 token 数，引用显式缓存时另给出缓存部分的 token 数
 func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, cache *geminiCache) {
-	tokenRequest := resolveSearchTokenCountRequest(aistudio.TokenCountRequest{
+	request = aistudio.ResolveSearchGenerateRequest(request)
+	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
 		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
 		MediaResolution: request.Config.MediaResolution,
 	})
-	count, err := s.service.CountTokens(r.Context(), tokenRequest)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiRequestError(w, err)
@@ -1278,7 +1278,7 @@ func (s *server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 
 // handleGeminiGenerate 为每个候选启动一次生成，任一候选失败时整个请求按首个错误失败，audio 非空时音频按 responseFormat.audio 转换
 func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, stream bool, count int, audio *outputAudioFormat) {
-	request, _ = aistudio.ResolveSearchGenerateRequest(request)
+	request = aistudio.ResolveSearchGenerateRequest(request)
 	request.Unary = !stream || s.responseModes().FakeStream
 	if !stream {
 		var stopKeepalive func()

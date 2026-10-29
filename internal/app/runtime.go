@@ -3529,6 +3529,8 @@ type generateRetry struct {
 	buildOnly bool
 	// attemptFailure 是最近一次既非额度冷却也非 Build 参数拒绝的尝试错误
 	attemptFailure error
+	// missingInlineMedia 表示已因复用的内联附件文件不存在而在同一账户重试过
+	missingInlineMedia bool
 }
 
 // attemptOutcome 是失败尝试处理后的错误与换号决定
@@ -3937,8 +3939,14 @@ func (service *trackedService) settleAttempt(
 	err := attempt.err
 	lease := attempt.lease
 	accountID, accountLabel := lease.Account().ID, attempt.accountLabel
+	missingInlineMedia := false
 	if attempt.copies != nil {
 		err = errors.Join(err, attempt.copies.Cleanup())
+		if !retry.missingInlineMedia && requestCtx.Err() == nil {
+			var forgetErr error
+			missingInlineMedia, forgetErr = attempt.copies.ForgetMissingInlineMedia(requestCtx, attempt.err)
+			err = errors.Join(err, forgetErr)
+		}
 	}
 	api.AddAccessLogAttempt(requestCtx, api.RequestAttempt{
 		Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
@@ -4001,6 +4009,13 @@ func (service *trackedService) settleAttempt(
 		if service.pool.AccountChannelAvailable(accountID, playground) {
 			retry.recoveryAccountID = accountID
 		}
+		delete(retry.attempted, accountID)
+		retry.maxAttempts++
+		retryable = true
+	}
+	if missingInlineMedia {
+		retry.missingInlineMedia = true
+		retry.recoveryAccountID = accountID
 		delete(retry.attempted, accountID)
 		retry.maxAttempts++
 		retryable = true

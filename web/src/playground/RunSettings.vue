@@ -42,10 +42,45 @@ const schemaOpen = ref(false)
 const functionsOpen = ref(false)
 const codeOpen = ref(false)
 const stopDraft = ref('')
+const samplingPreset = ref('custom')
 
 const settings = computed(() => session.settings)
 const model = computed(() => currentModel.value)
 const can = (code: number) => hasCode(model.value, code)
+const samplingAvailable = computed(
+  () => can(Capability.Temperature) && can(Capability.TopP) && !can(Capability.FixedTemperature),
+)
+// samplingPresets 是一次设定温度、Top P 与 Top K 的采样组合
+const samplingPresets = [
+  { value: 'code', label: 'pg.samplingCode', temperature: 0.1, topP: 0.1, topK: 4 },
+  { value: 'balanced', label: 'pg.samplingBalanced', temperature: 1, topP: 0.95, topK: 64 },
+  { value: 'creative', label: 'pg.samplingCreative', temperature: 1.1, topP: 0.95, topK: 64 },
+] as const
+
+// applySamplingPreset 设置采样组合，温度不超过模型上限，自定义保留当前值
+function applySamplingPreset(value: string): void {
+  const preset = samplingPresets.find((item) => item.value === value)
+  if (preset) {
+    settings.value.temperature = Math.min(preset.temperature, model.value?.max_temperature ?? 1)
+    settings.value.topP = preset.topP
+    settings.value.topK = preset.topK
+  }
+  samplingPreset.value = value
+}
+
+watch(
+  [
+    settings,
+    () => settings.value.model,
+    () => settings.value.temperature,
+    () => settings.value.topP,
+    () => settings.value.topK,
+  ],
+  () => {
+    samplingPreset.value = 'custom'
+  },
+  { flush: 'sync' },
+)
 // supports 判断所选协议能否表达某项设置
 const supports = (setting: ProtocolSetting) => protocolSupports(settings.value.protocol, setting)
 // protocolTip 是所选协议不支持某项设置时的说明
@@ -605,6 +640,20 @@ watch(schemaOpen, (open) => {
           <UiIcon name="chevronDown" :size="20" class="expand-icon" />
         </button>
         <template v-if="advancedOpen">
+          <div v-if="samplingAvailable" class="settings-item-column">
+            <h3 class="item-description-title">{{ t('pg.samplingPreset') }}</h3>
+            <UiSelect
+              :model-value="samplingPreset"
+              class="w-full"
+              :aria-label="t('pg.samplingPreset')"
+              @update:model-value="applySamplingPreset(String($event))"
+            >
+              <option value="custom">{{ t('pg.samplingCustom') }}</option>
+              <option v-for="preset in samplingPresets" :key="preset.value" :value="preset.value">
+                {{ t(preset.label) }}
+              </option>
+            </UiSelect>
+          </div>
           <div
             v-if="can(Capability.MediaResolution)"
             v-tooltip.left="settingTip('mediaResolution', t('pg.mediaResolutionTip'))"
@@ -700,20 +749,31 @@ watch(schemaOpen, (open) => {
           <div
             v-if="can(Capability.TopK)"
             v-tooltip.left="settingTip('topK', t('pg.topKTip'))"
-            class="settings-item"
+            class="settings-item-column"
           >
             <h3 class="item-description-title">{{ t('pg.topK') }}</h3>
-            <input
-              ms-input
-              class="small number-input"
-              type="number"
-              min="1"
-              step="1"
-              :disabled="!supports('topK')"
-              :aria-label="t('pg.topK')"
-              :value="settings.topK"
-              @change="setTopK"
-            />
+            <div class="ms-slider">
+              <UiSlider
+                :model-value="settings.topK ?? model?.top_k ?? 64"
+                :min="1"
+                :max="128"
+                :step="1"
+                :disabled="!supports('topK')"
+                :label="t('pg.topK')"
+                @update:model-value="settings.topK = $event"
+              />
+              <input
+                ms-input
+                class="small slider-number-input"
+                type="number"
+                min="1"
+                step="1"
+                :disabled="!supports('topK')"
+                :aria-label="t('pg.topK')"
+                :value="settings.topK ?? model?.top_k ?? 64"
+                @change="setTopK"
+              />
+            </div>
           </div>
           <div
             v-if="can(Capability.TopP)"

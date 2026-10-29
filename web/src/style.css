@@ -337,7 +337,6 @@ button[aria-busy='true']::before {
 }
 
 button[aria-busy='true']:has(> svg)::before {
-  display: none;
   content: none;
 }
 

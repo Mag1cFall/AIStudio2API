@@ -4,28 +4,30 @@ import "strings"
 
 const searchModelAliasSuffix = "-search"
 
-// ResolveSearchModelAlias resolves the strict -search model suffix.
+// ResolveSearchModelAlias 解析模型名末尾或思考后缀之前的搜索后缀，思考后缀保留在返回的型号上
 func ResolveSearchModelAlias(model string) (baseModel string, enableSearch bool) {
-	if !strings.HasSuffix(model, searchModelAliasSuffix) {
+	name, suffix := model, ""
+	if open := strings.LastIndex(model, "("); open >= 0 && strings.HasSuffix(model, ")") {
+		name, suffix = strings.TrimSpace(model[:open]), model[open:]
+	}
+	if !strings.HasSuffix(name, searchModelAliasSuffix) {
 		return model, false
 	}
-	baseModel = strings.TrimSuffix(model, searchModelAliasSuffix)
+	baseModel = strings.TrimSuffix(name, searchModelAliasSuffix)
 	if baseModel == "" || baseModel == "models/" {
 		return model, false
 	}
-	return baseModel, true
+	return baseModel + suffix, true
 }
 
-// ResolveSearchGenerateRequest maps a Search alias to its real model and merges
-// native Google Search into the request without replacing any existing tools.
-func ResolveSearchGenerateRequest(request GenerateRequest) (GenerateRequest, bool) {
+// ResolveSearchGenerateRequest 将搜索型号解析为基础型号并合入 Google 搜索
+func ResolveSearchGenerateRequest(request GenerateRequest) GenerateRequest {
 	baseModel, enableSearch := ResolveSearchModelAlias(request.Model)
-	if !enableSearch {
-		return request, false
+	if enableSearch {
+		request.Model = baseModel
+		request.Tools = toolsWithWebSearch(request.Tools)
 	}
-	request.Model = baseModel
-	request.Tools = toolsWithWebSearch(request.Tools)
-	return request, true
+	return request
 }
 
 func toolsWithWebSearch(tools Tools) Tools {
@@ -44,15 +46,14 @@ func toolsWithWebSearch(tools Tools) Tools {
 	return tools
 }
 
-// ModelsWithSearchAliases adds derived catalog entries for chat models that
-// support both GenerateContent and native Google Search.
+// ModelsWithSearchAliases 为支持生成与 Google 搜索的对话模型补充搜索型号
 func ModelsWithSearchAliases(models []Model) []Model {
 	result := make([]Model, 0, len(models)*2)
 	knownIDs := make(map[string]struct{}, len(models)*2)
 	for _, model := range models {
 		knownIDs[model.ID] = struct{}{}
 	}
-	for _, model := range cloneModels(models) {
+	for _, model := range models {
 		result = append(result, model)
 		if !searchAliasEligible(model) {
 			continue

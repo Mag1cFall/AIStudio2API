@@ -126,7 +126,7 @@ const hasAnswerSegment = computed(
     waiting.value ||
     (props.turn.sources?.length ?? 0) > 0,
 )
-// now 是生成中每 200 ms 更新的时刻，轮次耗时随之计数
+// now 是生成中每 100 ms 更新的时刻，轮次耗时与官网一样随之计数
 const now = ref(performance.now())
 let ticker = 0
 watch(
@@ -135,7 +135,7 @@ watch(
     window.clearInterval(ticker)
     if (running) {
       now.value = performance.now()
-      ticker = window.setInterval(() => (now.value = performance.now()), 200)
+      ticker = window.setInterval(() => (now.value = performance.now()), 100)
     }
   },
   { immediate: true },
@@ -284,9 +284,8 @@ onMounted(() => {
     },
     { root: root.value?.closest('.chat-scroller') ?? null, rootMargin: '1500px 0px' },
   )
-  resize = new ResizeObserver((entries) => {
-    const rect = entries.at(-1)?.contentRect
-    if (visible.value && rect && rect.height > 0) height.value = rect.height
+  resize = new ResizeObserver(([entry]) => {
+    if (visible.value && entry) height.value = entry.contentRect.height
   })
   if (root.value) {
     intersection.observe(root.value)
@@ -641,7 +640,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   width: 100%;
-  contain: layout style;
 }
 
 .chat-turn + .chat-turn {
