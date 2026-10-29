@@ -14,7 +14,7 @@ import { api, ApiError } from '@/api'
 import { useConsole } from '@/console'
 import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
-import type { Model, SavedPrompt } from '@/types'
+import type { Model, SavedPrompt, SystemInstructionPreset } from '@/types'
 import { defaultChatModel, hasCode, toolCodes, toolCompatible, type Tool } from './catalog'
 import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
@@ -265,10 +265,15 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     return text.length > 60 ? `${text.slice(0, 60)}…` : text
   }
 
+  // hasContent 表示对话已有轮次或系统指令，可写入对话库
+  function hasContent(): boolean {
+    return session.turns.length > 0 || session.settings.systemInstruction.trim() !== ''
+  }
+
   // save 把调用时的对话连同对比模式的右侧窗格写入对话库，右侧窗格保存所在的页面对话，其他临时对话不保存；保存状态只回写到仍在显示的同一对话
   async function save(): Promise<void> {
     if (links.save) return links.save()
-    if (session.temporary || session.turns.length === 0) return
+    if (session.temporary || (!hasContent() && session.id === null)) return
     const compare = links.compare?.()
     session.id ??= newTurnID()
     const id = session.id
@@ -288,6 +293,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
 
   // scheduleSave 在对话变化后合并保存，生成中到时的保存由生成结束时的保存代替
   function scheduleSave(): void {
+    if (session.saveState === 'saved') session.saveState = 'idle'
     window.clearTimeout(saveTimer.value)
     saveTimer.value = window.setTimeout(() => {
       saveTimer.value = 0
@@ -582,7 +588,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       () => [session.settings, session.temporary] as const,
       ([settings], [previous]) => {
         if (settings !== previous && settings === opened) return
-        if (session.id !== null && !session.running) scheduleSave()
+        if ((session.id !== null || session.turns.length > 0) && !session.running) scheduleSave()
       },
       { deep: true },
     )
@@ -835,4 +841,148 @@ export function useCompare() {
     stopAll,
     toggleRaw,
   }
+}
+
+// presetsKey 是系统指令预设的本机存储键
+const presetsKey = 'playground_system_instructions'
+
+// loadLocalPresets 读取本机保存的系统指令预设
+function loadLocalPresets(): SystemInstructionPreset[] {
+  try {
+    return JSON.parse(localStorage.getItem(presetsKey) ?? '[]') as SystemInstructionPreset[]
+  } catch {
+    return []
+  }
+}
+
+// saveLocalPresets 把系统指令预设写入本机存储
+function saveLocalPresets(items: SystemInstructionPreset[]): void {
+  try {
+    localStorage.setItem(presetsKey, JSON.stringify(items))
+  } catch {
+    // 本机存储不可用时忽略
+  }
+}
+
+// useInstructionPresets 管理本机与服务端同步的系统指令预设
+export function useInstructionPresets(
+  open: () => boolean,
+  getText: () => string,
+  setText: (value: string) => void,
+) {
+  const presets = ref<SystemInstructionPreset[]>(loadLocalPresets())
+  const selected = ref('')
+  const title = ref('')
+  const saved = ref(true)
+  let saveTimer = 0
+
+  // currentPreset 是当前选中的系统指令预设
+  const currentPreset = computed(() => presets.value.find((preset) => preset.id === selected.value))
+
+  // syncSelection 按当前系统指令匹配预设选中态
+  function syncSelection(): void {
+    const match = presets.value.find((preset) => preset.text === getText())
+    selected.value = match?.id ?? ''
+    title.value = match?.title ?? ''
+  }
+
+  // persist 把预设写入本机存储与服务端对话库
+  async function persist(): Promise<void> {
+    saveLocalPresets(presets.value)
+    try {
+      presets.value = await api.saveSystemInstructions(presets.value)
+      saveLocalPresets(presets.value)
+    } catch {
+      // 服务端不可达时保留本机缓存
+    }
+    saved.value = true
+  }
+
+  // commit 把当前标题与系统指令写入预设列表并保存
+  function commit(): void {
+    const text = getText()
+    if (text.trim() === '' && title.value.trim() === '') {
+      saved.value = true
+      return
+    }
+    let preset = currentPreset.value
+    if (preset === undefined) {
+      preset = { id: newTurnID(), title: '', text: '' }
+      presets.value.push(preset)
+      selected.value = preset.id
+    }
+    preset.title = title.value
+    preset.text = text
+    void persist()
+  }
+
+  // flush 立即提交待保存的系统指令预设
+  function flush(): void {
+    if (saveTimer === 0) return
+    window.clearTimeout(saveTimer)
+    saveTimer = 0
+    commit()
+  }
+
+  // remember 在编辑后合并保存当前指令到预设
+  function remember(): void {
+    saved.value = false
+    window.clearTimeout(saveTimer)
+    saveTimer = window.setTimeout(() => {
+      saveTimer = 0
+      commit()
+    }, 500)
+  }
+
+  // choose 切换到另一条预设或新建空白指令
+  function choose(id: string | number | undefined): void {
+    flush()
+    selected.value = String(id ?? '')
+    const preset = currentPreset.value
+    title.value = preset?.title ?? ''
+    setText(preset?.text ?? '')
+  }
+
+  // remove 删除当前预设并清空指令
+  function remove(): void {
+    window.clearTimeout(saveTimer)
+    saveTimer = 0
+    presets.value = presets.value.filter((preset) => preset.id !== selected.value)
+    void persist()
+    choose('')
+  }
+
+  // refresh 从服务端读取预设并与本机预设合并
+  async function refresh(): Promise<void> {
+    const local = loadLocalPresets()
+    presets.value = local
+    syncSelection()
+    try {
+      const remote = await api.systemInstructions()
+      const merged = [...remote]
+      for (const item of local) {
+        if (!item.id && !item.text.trim() && !item.title.trim()) continue
+        if (
+          !merged.some(
+            (preset) =>
+              preset.id === item.id || (preset.title === item.title && preset.text === item.text),
+          )
+        )
+          merged.push(item)
+      }
+      presets.value = merged
+      saveLocalPresets(merged)
+      if (merged.length !== remote.length) await api.saveSystemInstructions(merged)
+      syncSelection()
+    } catch {
+      // 服务端不可达时使用本机缓存
+    }
+  }
+
+  watch(open, (value) => {
+    if (value) void refresh()
+    else flush()
+  })
+
+  return { presets, selected, title, saved, currentPreset, remember, choose, remove }
 }

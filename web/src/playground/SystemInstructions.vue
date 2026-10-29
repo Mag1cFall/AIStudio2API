@@ -1,97 +1,22 @@
 <script setup lang="ts">
 import { vTooltip } from '@/playground/ui/tooltip'
-import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlidingPanel from '@/playground/ui/UiSlidingPanel.vue'
-import { newTurnID, usePlayground } from './session'
-
-// Preset 是一条保存在本机的系统指令
-interface Preset {
-  id: string
-  title: string
-  text: string
-}
+import { useInstructionPresets, usePlayground } from './session'
 
 const open = defineModel<boolean>('open', { required: true })
 const { t } = useI18n()
 const { session } = usePlayground()
-
-// presetsKey 是系统指令预设的本机存储键
-const presetsKey = 'playground_system_instructions'
-
-// loadPresets 读取本机保存的系统指令
-function loadPresets(): Preset[] {
-  try {
-    return JSON.parse(localStorage.getItem(presetsKey) ?? '[]') as Preset[]
-  } catch {
-    return []
-  }
-}
-
-const presets = ref<Preset[]>(loadPresets())
-const selected = ref('')
-const title = ref('')
-const saved = ref(true)
-let saveTimer = 0
-
-// currentPreset 是当前编辑的预设
-const currentPreset = computed(() => presets.value.find((preset) => preset.id === selected.value))
-
-// persist 把预设写入本机存储
-function persist(): void {
-  try {
-    localStorage.setItem(presetsKey, JSON.stringify(presets.value))
-  } catch {
-    // 本机存储不可用时预设只在本次打开期间有效
-  }
-  saved.value = true
-}
-
-// remember 在编辑后合并保存当前指令到预设
-function remember(): void {
-  saved.value = false
-  window.clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => {
-    const text = session.settings.systemInstruction
-    if (text.trim() === '' && title.value.trim() === '') {
-      saved.value = true
-      return
-    }
-    let preset = currentPreset.value
-    if (preset === undefined) {
-      preset = { id: newTurnID(), title: '', text: '' }
-      presets.value.push(preset)
-      selected.value = preset.id
-    }
-    preset.title = title.value
-    preset.text = text
-    persist()
-  }, 500)
-}
-
-// choose 切换到另一条预设或新建空白指令
-function choose(id: string | number | undefined): void {
-  selected.value = String(id ?? '')
-  const preset = currentPreset.value
-  title.value = preset?.title ?? ''
-  session.settings.systemInstruction = preset?.text ?? ''
-}
-
-// remove 删除当前预设并清空指令
-function remove(): void {
-  presets.value = presets.value.filter((preset) => preset.id !== selected.value)
-  persist()
-  choose('')
-}
-
-watch(open, (value) => {
-  if (!value) return
-  const match = presets.value.find((preset) => preset.text === session.settings.systemInstruction)
-  selected.value = match?.id ?? ''
-  title.value = match?.title ?? ''
-})
+const { presets, selected, title, saved, currentPreset, remember, choose, remove } =
+  useInstructionPresets(
+    () => open.value,
+    () => session.settings.systemInstruction,
+    (value) => {
+      session.settings.systemInstruction = value
+    },
+  )
 </script>
 
 <template>

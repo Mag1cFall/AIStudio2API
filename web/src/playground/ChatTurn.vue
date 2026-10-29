@@ -106,6 +106,16 @@ const fullTime = computed(() =>
 const roleLabel = computed(() => (props.turn.role === 'user' ? t('pg.user') : t('pg.model')))
 // hasThoughtSegment 表示模型轮次单独显示思考段
 const hasThoughtSegment = computed(() => props.turn.role === 'model' && thoughtText.value !== '')
+// hasStickyCode 表示回复段含有块级代码标题，供操作栏避让粘性标题而无需全树匹配 :has(.ms-code-block)
+const hasStickyCode = computed(() =>
+  answerParts.value.some(
+    (part) =>
+      part.functionCall !== undefined ||
+      part.executableCode !== undefined ||
+      part.codeExecutionResult !== undefined ||
+      (part.text !== undefined && (part.text.includes('```') || part.text.includes('~~~'))),
+  ),
+)
 // hasAnswerSegment 表示需要显示回复段
 const hasAnswerSegment = computed(
   () =>
@@ -116,14 +126,17 @@ const hasAnswerSegment = computed(
     waiting.value ||
     (props.turn.sources?.length ?? 0) > 0,
 )
-// now 是生成中每 100 ms 更新的时刻，轮次耗时与官网一样随之计数
+// now 是生成中每 200 ms 更新的时刻，轮次耗时随之计数
 const now = ref(performance.now())
 let ticker = 0
 watch(
   () => props.streaming,
   (running) => {
     window.clearInterval(ticker)
-    if (running) ticker = window.setInterval(() => (now.value = performance.now()), 100)
+    if (running) {
+      now.value = performance.now()
+      ticker = window.setInterval(() => (now.value = performance.now()), 200)
+    }
   },
   { immediate: true },
 )
@@ -265,13 +278,15 @@ let resize: ResizeObserver | undefined
 
 onMounted(() => {
   intersection = new IntersectionObserver(
-    ([entry]) => {
-      visible.value = entry?.isIntersecting ?? true
+    (entries) => {
+      const last = entries.at(-1)
+      if (last) visible.value = last.isIntersecting
     },
     { root: root.value?.closest('.chat-scroller') ?? null, rootMargin: '1500px 0px' },
   )
-  resize = new ResizeObserver(([entry]) => {
-    if (visible.value && entry) height.value = entry.contentRect.height
+  resize = new ResizeObserver((entries) => {
+    const rect = entries.at(-1)?.contentRect
+    if (visible.value && rect && rect.height > 0) height.value = rect.height
   })
   if (root.value) {
     intersection.observe(root.value)
@@ -368,7 +383,7 @@ onUnmounted(() => {
         v-if="hasAnswerSegment"
         tabindex="-1"
         class="chat-turn-container"
-        :class="[turn.role, { edit: editing }]"
+        :class="[turn.role, { edit: editing, 'has-code': hasStickyCode }]"
       >
         <div class="actions-container">
           <div class="actions hover-or-edit">
@@ -626,6 +641,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   width: 100%;
+  contain: layout style;
 }
 
 .chat-turn + .chat-turn {
@@ -651,7 +667,7 @@ onUnmounted(() => {
 }
 
 .chat-turn-container:focus-visible,
-.chat-turn-container:has([aria-expanded='true'][aria-haspopup='menu']):not(.edit) {
+.chat-turn-container:not(.edit):has(> .actions-container [aria-expanded='true']) {
   border-color: var(--color-v3-outline);
 }
 
@@ -660,12 +676,13 @@ onUnmounted(() => {
     border-color: var(--color-v3-outline);
   }
 
-  .chat-turn-container:hover .hover-or-edit {
+  .chat-turn-container:hover > .actions-container .hover-or-edit,
+  .chat-turn-container:hover > .turn-footer .hover-or-edit {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .chat-turn-container:hover .turn-footer {
+  .chat-turn-container:hover > .turn-footer {
     background-color: var(--color-v3-surface);
   }
 }
@@ -684,7 +701,7 @@ onUnmounted(() => {
   height: 0;
 }
 
-.chat-turn-container:has(.ms-code-block .code-header.sticky) .actions-container {
+.chat-turn-container.has-code > .actions-container {
   top: calc(56px * var(--ms-autoscroll-container-scrolled, 1));
   transition: top 0.6s ease-in-out;
 }
@@ -701,11 +718,11 @@ onUnmounted(() => {
   background-color: var(--color-v3-surface-container-high);
 }
 
-.chat-turn-container.model:has(.ms-code-block .code-header.sticky) .actions {
+.chat-turn-container.model.has-code > .actions-container .actions {
   right: 8px;
 }
 
-.chat-turn-container.user:has(.ms-code-block .code-header.sticky) .actions {
+.chat-turn-container.user.has-code > .actions-container .actions {
   right: 20px;
 }
 
@@ -715,9 +732,14 @@ onUnmounted(() => {
   transition: opacity 0.3s ease-in-out;
 }
 
-.chat-turn-container:focus-within .hover-or-edit,
-.chat-turn-container:has([aria-expanded='true'][aria-haspopup='menu']) .hover-or-edit,
-.chat-turn-container.edit .hover-or-edit {
+.chat-turn-container:focus-within > .actions-container .hover-or-edit,
+.chat-turn-container:focus-within > .turn-footer .hover-or-edit,
+.chat-turn-container:has(> .actions-container [aria-expanded='true'])
+  > .actions-container
+  .hover-or-edit,
+.chat-turn-container:has(> .actions-container [aria-expanded='true']) > .turn-footer .hover-or-edit,
+.chat-turn-container.edit > .actions-container .hover-or-edit,
+.chat-turn-container.edit > .turn-footer .hover-or-edit {
   opacity: 1;
   pointer-events: auto;
 }
