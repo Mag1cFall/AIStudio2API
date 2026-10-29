@@ -180,6 +180,7 @@ func (s *server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicModels(w, r, models)
 		return
 	}
+	models = aistudio.ModelsWithSearchAliases(models)
 	data := make([]map[string]any, 0, len(models))
 	for _, model := range models {
 		data = append(data, openAIModelObject(model))
@@ -247,6 +248,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	generateRequest, _ = aistudio.ResolveSearchGenerateRequest(generateRequest)
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	if !request.Stream {
 		var stopKeepalive func()
