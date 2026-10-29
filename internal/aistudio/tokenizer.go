@@ -2,26 +2,28 @@ package aistudio
 
 import (
 	"bytes"
-	"compress/gzip"
 	_ "embed"
 	"hash/maphash"
 	"sync"
 
 	sentencepiece "github.com/Mag1cFall/go-sentencepiece"
+	"github.com/klauspost/compress/zstd"
 )
 
-//go:embed gemma3.model.gz
+//go:embed gemma3.model.zst
 var geminiTokenizerModel []byte
 
 // geminiTokenizer 在首次本地计数时解析内嵌模型
 var geminiTokenizer = sync.OnceValue(loadGeminiTokenizer)
 
 func loadGeminiTokenizer() *sentencepiece.Processor {
-	model, err := gzip.NewReader(bytes.NewReader(geminiTokenizerModel))
+	decoder, _ := zstd.NewReader(nil)
+	model, err := decoder.DecodeAll(geminiTokenizerModel, nil)
+	decoder.Close()
 	if err != nil {
 		panic(err)
 	}
-	processor, err := sentencepiece.NewProcessor(model)
+	processor, err := sentencepiece.NewProcessor(bytes.NewReader(model))
 	if err != nil {
 		panic(err)
 	}

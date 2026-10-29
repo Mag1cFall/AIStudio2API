@@ -13,7 +13,7 @@ import { pageKindOf } from './kinds'
 import { requestTitle } from '../title'
 
 // VideoProtocol 是视频页发送请求使用的公开协议
-export type VideoProtocol = 'gemini' | 'openai-videos'
+type VideoProtocol = 'gemini' | 'openai-videos'
 
 // videoProtocols 是视频页协议下拉的选项
 export const videoProtocols: { value: VideoProtocol; label: string }[] = [
@@ -36,7 +36,7 @@ export interface VideoSettings {
 }
 
 // VideoTurn 是视频页的一轮：用户轮次记录提示词与图片，模型轮次记录生成的视频地址
-export interface VideoTurn {
+interface VideoTurn {
   id: string
   role: 'user' | 'model'
   created: number
@@ -54,7 +54,7 @@ export interface VideoTurn {
 }
 
 // VideoTask 是模型轮次在服务端的视频任务：Gemini API 为 operation 名，OpenAI Videos 为视频 ID
-export interface VideoTask {
+interface VideoTask {
   protocol: VideoProtocol
   id: string
 }
@@ -67,7 +67,7 @@ export interface VideoData {
 }
 
 // VideoOption 是运行设置下拉中的一项，disabled 时附官网提示
-export interface VideoOption<T> {
+interface VideoOption<T> {
   value: T
   disabled: boolean
 }
@@ -85,8 +85,7 @@ function models(): Model[] {
 
 // optionList 读取模型的视频选项
 function optionList(model: Model | undefined, key: string): string[] {
-  const value = model?.capability_options?.[key]
-  return Array.isArray(value) ? value.map(String) : []
+  return model?.capability_options?.[key] ?? []
 }
 
 // defaultSettings 返回官网默认设置：16:9、8 秒、模型的第一档分辨率
@@ -104,7 +103,7 @@ function defaultSettings(model: Model | undefined): VideoSettings {
 
 // sortedResolutions 返回按清晰度排列的分辨率
 function sortedResolutions(model: Model | undefined): string[] {
-  return optionList(model, 'video_output_resolutions').sort(
+  return [...optionList(model, 'video_output_resolutions')].sort(
     (a, b) => resolutionOrder.indexOf(a) - resolutionOrder.indexOf(b),
   )
 }
@@ -250,7 +249,7 @@ function load(id: string, prompt: { title: string; description: string; data: Vi
     id,
     title: prompt.title,
     description: prompt.description,
-    settings: { ...defaultSettings(undefined), ...prompt.data.settings },
+    settings: { ...prompt.data.settings },
     turns: prompt.data.turns,
     draft: '',
     start: undefined,
@@ -373,12 +372,8 @@ const openAIFrames = computed(
 
 // servicePath 把服务返回的绝对地址换成当前页面同源路径
 function servicePath(uri: string): string {
-  try {
-    const url = new URL(uri, window.location.origin)
-    return `${url.pathname}${url.search}`
-  } catch {
-    return uri
-  }
+  const url = new URL(uri, window.location.origin)
+  return `${url.pathname}${url.search}`
 }
 
 // canRun 表示可以运行：有模型，有提示词、起始图或参考图，且 OpenAI Videos 没有它无法表达的尾帧或参考图

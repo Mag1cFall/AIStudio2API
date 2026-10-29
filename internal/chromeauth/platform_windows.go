@@ -18,7 +18,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func defaultChromeRoot() (string, error) {
+// DefaultChromeRoot 返回稳定版 Chrome User Data 目录
+func DefaultChromeRoot() (string, error) {
 	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 	if localAppData == "" {
 		return "", fmt.Errorf("环境变量 LOCALAPPDATA 为空")
@@ -30,7 +31,8 @@ func ensurePlatformImport() error {
 	return nil
 }
 
-func discoverPlatform(chromeRoot string) ([]Account, error) {
+// Discover 只读列出本机 Chrome Google 账号
+func Discover(chromeRoot string) ([]Account, error) {
 	data, err := os.ReadFile(filepath.Join(chromeRoot, "Local State"))
 	if err != nil {
 		return nil, fmt.Errorf("读取 Chrome Local State: %w", err)

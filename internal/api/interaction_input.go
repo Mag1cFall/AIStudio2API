@@ -32,6 +32,8 @@ type interactionRequest struct {
 	CachedContent string            `json:"cached_content"`
 	ServiceTier   string            `json:"service_tier"`
 	Labels        map[string]string `json:"labels"`
+	// WebhookConfig 是后台交互结束时接收事件的地址
+	WebhookConfig *interactionWebhookConfig `json:"webhook_config"`
 	Generation    struct {
 		Temperature       *float64        `json:"temperature"`
 		TopP              *float64        `json:"top_p"`
@@ -133,7 +135,6 @@ type interactionInput struct {
 	MIME        string             `json:"mime_type"`
 	Processing  json.RawMessage    `json:"processing"`
 	Content     []interactionInput `json:"content"`
-	Summary     []interactionInput `json:"summary"`
 	ID          string             `json:"id"`
 	CallID      string             `json:"call_id"`
 	Name        string             `json:"name"`
@@ -172,12 +173,11 @@ func interactionContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 
 // interactionList 解析协议中的单对象或数组联合字段
 func interactionList[T any](raw json.RawMessage) ([]T, error) {
-	value := strings.TrimSpace(string(raw))
-	if value == "" || value == "null" {
+	if !rawJSONConfigured(raw) {
 		return nil, nil
 	}
 	var values []T
-	if strings.HasPrefix(value, "[") {
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
 		err := json.Unmarshal(raw, &values)
 		return values, err
 	}
@@ -323,9 +323,7 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 			if tool.TopK != nil {
 				options["topK"] = *tool.TopK
 			}
-			if builtin.FileSearch, err = json.Marshal(options); err != nil {
-				return generate, err
-			}
+			builtin.FileSearch, _ = json.Marshal(options)
 			continue
 		case "retrieval":
 			continue
@@ -351,7 +349,6 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	generate.Tools.MCPServers, generate.Tools.FileSearch = builtin.MCPServers, builtin.FileSearch
 	generate.Tools.ToolConfig, err = interactionToolChoice(generation.ToolChoice)
 	generate.Tools.ToolConfig.Retrieval = builtin.ToolConfig.Retrieval
-	generate.Tools.ToolConfig.ServerSideInvocations = interactionServerSteps(generate.Tools)
 	return generate, err
 }
 

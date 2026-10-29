@@ -13,13 +13,13 @@ export interface ZeroStarter {
 }
 
 // ZeroExample 是对话空态右侧的示例卡片，点击与示例提示词相同
-export interface ZeroExample extends ZeroStarter {
+interface ZeroExample extends ZeroStarter {
   preview: string
   detection?: { label: string; inset?: string }
 }
 
 // ZeroConfig 是官网按模型系列配置的对话空态
-export interface ZeroConfig {
+interface ZeroConfig {
   id: string
   kind: 'chat' | 'images' | 'robotics'
   family: string
@@ -78,7 +78,7 @@ function zeroConfigs(): ZeroConfig[] {
           detection: { label: t('zero.robotics.example2Detection'), inset: '34% 34% 42% 50%' },
         },
       ],
-      matches: (model) => model.id.startsWith('gemini-robotics') || model.id.includes('robotics'),
+      matches: (model) => model.id.includes('robotics'),
     },
     {
       id: 'nano-banana-2-1',

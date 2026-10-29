@@ -1,7 +1,7 @@
 import { heredoc, pyTriple, tsTemplate, type MediaCodeLanguage } from './code'
 
 // SpeechCodeInput 是语音页示例代码所需的台词、音色、设置与服务地址
-export interface SpeechCodeInput {
+interface SpeechCodeInput {
   baseURL: string
   model: string
   prompt: string

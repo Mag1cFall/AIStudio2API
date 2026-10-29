@@ -3,7 +3,6 @@ package config
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -58,7 +57,11 @@ var configKeys = [...]string{
 	"NONSTREAM_KEEPALIVE",
 	"FAKE_STREAM",
 	"YOUTUBE_LINKS",
+	"SEARCH_MODEL_ALIASES",
+	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
+	"CONTINUATION_REWRITE",
+	"CONTINUATION_PROMPT",
 }
 
 // LogFileMB 是单个日志文件的轮转大小
@@ -70,8 +73,8 @@ var upstreamChannels = []string{"playground", "build"}
 // WAABackendCamoufox 表示由 Camoufox 页面承担 WAA 生命周期
 const WAABackendCamoufox = "camoufox"
 
-// WAABackendGo 表示由纯 Go VM 承担 WAA 生命周期
-const WAABackendGo = "go"
+// WAABackendSpiderMonkey 表示由进程内的 SpiderMonkey 承担 WAA 生命周期
+const WAABackendSpiderMonkey = "spidermonkey"
 
 // FirstEventHedgeOff 表示首事件超时不发起备用请求
 const FirstEventHedgeOff = "off"
@@ -85,39 +88,46 @@ const MediaOutputInline = "inline"
 // MediaOutputURL 表示生成的媒体保存到本地，Chat 与 Messages 正文以 URL 引用
 const MediaOutputURL = "url"
 
+// DefaultContinuationPrompt 是 CONTINUATION_PROMPT 未设置时改写末尾 assistant 轮所用的续写提示词
+const DefaultContinuationPrompt = "Continue the assistant response after the following prefix. Return only the continuation, without repeating the prefix."
+
 // Config 保存服务的全局配置
 type Config struct {
-	AutoStart              bool          `json:"auto_start"`
-	RequestBodyLog         bool          `json:"request_body_log"`
-	LogFile                bool          `json:"log_file"`
-	LogMaxTotalMB          int           `json:"log_max_total_mb"`
-	AdminAuthEnabled       bool          `json:"admin_auth_enabled"`
-	AdminUsername          string        `json:"admin_username"`
-	AdminPassword          string        `json:"-"`
-	BuildNativeNonstream   bool          `json:"build_native_nonstream"`
-	NonstreamKeepalive     bool          `json:"nonstream_keepalive"`
-	FakeStream             bool          `json:"fake_stream"`
-	YouTubeLinks           bool          `json:"youtube_links"`
-	FirstEventHedge        string        `json:"first_event_hedge"`
-	AuthStates             string        `json:"auth_states"`
-	ListenAddr             string        `json:"listen_addr"`
-	PreviewListenAddr      string        `json:"preview_listen_addr"`
-	ProxyAPIKey            string        `json:"proxy_api_key"`
-	Proxy                  string        `json:"proxy"`
-	InitTimeout            time.Duration `json:"-"`
-	RequestTimeout         time.Duration `json:"-"`
-	WarmWorkerLimit        int           `json:"warm_worker_limit"`
-	MaxActiveWorkers       int           `json:"max_active_workers"`
-	WarmStartupConcurrency int           `json:"warm_startup_concurrency"`
-	PerAccountConcurrency  int           `json:"per_account_concurrency"`
-	RoutingStrategy        string        `json:"routing_strategy"`
-	UpstreamChannels       []string      `json:"upstream_channels"`
-	ModelMapping           string        `json:"model_mapping"`
-	ModelChannels          string        `json:"model_channels"`
-	TemporaryChat          bool          `json:"temporary_chat"`
-	WAABackend             string        `json:"waa_backend"`
-	MediaOutput            string        `json:"media_output"`
-	MediaBaseURL           string        `json:"media_base_url"`
+	AutoStart              bool
+	RequestBodyLog         bool
+	LogFile                bool
+	LogMaxTotalMB          int
+	AdminAuthEnabled       bool
+	AdminUsername          string
+	AdminPassword          string
+	BuildNativeNonstream   bool
+	NonstreamKeepalive     bool
+	FakeStream             bool
+	YouTubeLinks           bool
+	SearchModelAliases     bool
+	GoogleSearch           bool
+	FirstEventHedge        string
+	ContinuationRewrite    bool
+	ContinuationPrompt     string
+	AuthStates             string
+	ListenAddr             string
+	PreviewListenAddr      string
+	ProxyAPIKey            string
+	Proxy                  string
+	InitTimeout            time.Duration
+	RequestTimeout         time.Duration
+	WarmWorkerLimit        int
+	MaxActiveWorkers       int
+	WarmStartupConcurrency int
+	PerAccountConcurrency  int
+	RoutingStrategy        string
+	UpstreamChannels       []string
+	ModelMapping           string
+	ModelChannels          string
+	TemporaryChat          bool
+	WAABackend             string
+	MediaOutput            string
+	MediaBaseURL           string
 }
 
 // Default 返回可直接启动的默认配置
@@ -128,7 +138,10 @@ func Default() Config {
 		LogMaxTotalMB:          500,
 		BuildNativeNonstream:   true,
 		NonstreamKeepalive:     true,
+		SearchModelAliases:     true,
 		FirstEventHedge:        FirstEventHedgeOff,
+		ContinuationRewrite:    true,
+		ContinuationPrompt:     DefaultContinuationPrompt,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
 		PreviewListenAddr:      defaultPreviewListenAddr,
@@ -212,6 +225,18 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("FAKE_STREAM 必须是 true 或 false")
 		}
 	}
+	if value, ok := values["SEARCH_MODEL_ALIASES"]; ok {
+		cfg.SearchModelAliases, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("SEARCH_MODEL_ALIASES 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["GOOGLE_SEARCH"]; ok {
+		cfg.GoogleSearch, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("GOOGLE_SEARCH 必须是 true 或 false")
+		}
+	}
 	if value, ok := values["YOUTUBE_LINKS"]; ok {
 		cfg.YouTubeLinks, err = strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -220,6 +245,15 @@ func Load(path string) (Config, error) {
 	}
 	if value, ok := values["FIRST_EVENT_HEDGE"]; ok {
 		cfg.FirstEventHedge = strings.ToLower(strings.TrimSpace(value))
+	}
+	if value, ok := values["CONTINUATION_REWRITE"]; ok {
+		cfg.ContinuationRewrite, err = strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("CONTINUATION_REWRITE 必须是 true 或 false")
+		}
+	}
+	if value, ok := values["CONTINUATION_PROMPT"]; ok {
+		cfg.ContinuationPrompt = strings.TrimSpace(value)
 	}
 	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
 		cfg.AuthStates = strings.TrimSpace(value)
@@ -276,7 +310,7 @@ func Load(path string) (Config, error) {
 		cfg.RoutingStrategy = strings.TrimSpace(value)
 	}
 	if value, ok := values["UPSTREAM_CHANNELS"]; ok {
-		cfg.UpstreamChannels = ParseUpstreamChannels(value)
+		cfg.UpstreamChannels = parseUpstreamChannels(value)
 	}
 	if value, ok := values["MODEL_MAPPING"]; ok {
 		cfg.ModelMapping = strings.TrimSpace(value)
@@ -322,7 +356,11 @@ func (c Config) Save(path string) error {
 		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),
 		"FAKE_STREAM":              strconv.FormatBool(c.FakeStream),
 		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
+		"SEARCH_MODEL_ALIASES":     strconv.FormatBool(c.SearchModelAliases),
+		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
+		"CONTINUATION_REWRITE":     strconv.FormatBool(c.ContinuationRewrite),
+		"CONTINUATION_PROMPT":      c.ContinuationPrompt,
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
 		"LISTEN_ADDR":              c.ListenAddr,
 		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
@@ -406,8 +444,8 @@ func (c Config) Validate() error {
 	if _, err := ParseModelChannels(c.ModelChannels); err != nil {
 		return err
 	}
-	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendGo {
-		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 go")
+	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendSpiderMonkey {
+		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 spidermonkey")
 	}
 	if _, _, err := ParseFirstEventHedge(c.FirstEventHedge); err != nil {
 		return err
@@ -488,8 +526,8 @@ func ParseModelChannels(value string) (map[string]string, error) {
 	return channels, nil
 }
 
-// ParseUpstreamChannels 把逗号分隔的通道列表拆成去空白的小写名称
-func ParseUpstreamChannels(value string) []string {
+// parseUpstreamChannels 把逗号分隔的通道列表拆成去空白的小写名称
+func parseUpstreamChannels(value string) []string {
 	var channels []string
 	for _, item := range strings.Split(value, ",") {
 		if item = strings.ToLower(strings.TrimSpace(item)); item != "" {
@@ -504,175 +542,14 @@ func validateUpstreamChannels(channels []string) error {
 	if len(channels) == 0 {
 		return fmt.Errorf("UPSTREAM_CHANNELS 至少包含 playground 或 build")
 	}
-	seen := make(map[string]struct{}, len(channels))
-	for _, channel := range channels {
-		known := false
-		for _, candidate := range upstreamChannels {
-			known = known || channel == candidate
-		}
-		if !known {
+	for index, channel := range channels {
+		if !slices.Contains(upstreamChannels, channel) {
 			return fmt.Errorf("UPSTREAM_CHANNELS 只能包含 playground 与 build")
 		}
-		if _, exists := seen[channel]; exists {
+		if slices.Contains(channels[:index], channel) {
 			return fmt.Errorf("UPSTREAM_CHANNELS 通道 %s 重复", channel)
 		}
-		seen[channel] = struct{}{}
 	}
-	return nil
-}
-
-// MarshalJSON 将时长输出为 env 使用的文本格式
-func (c Config) MarshalJSON() ([]byte, error) {
-	type payload struct {
-		AutoStart              bool     `json:"auto_start"`
-		RequestBodyLog         bool     `json:"request_body_log"`
-		LogFile                bool     `json:"log_file"`
-		LogMaxTotalMB          int      `json:"log_max_total_mb"`
-		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
-		AdminUsername          string   `json:"admin_username"`
-		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
-		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
-		FakeStream             bool     `json:"fake_stream"`
-		YouTubeLinks           bool     `json:"youtube_links"`
-		FirstEventHedge        string   `json:"first_event_hedge"`
-		AuthStates             string   `json:"auth_states"`
-		ListenAddr             string   `json:"listen_addr"`
-		PreviewListenAddr      string   `json:"preview_listen_addr"`
-		ProxyAPIKey            string   `json:"proxy_api_key"`
-		Proxy                  string   `json:"proxy"`
-		InitTimeout            string   `json:"init_timeout"`
-		RequestTimeout         string   `json:"request_timeout"`
-		WarmWorkerLimit        int      `json:"warm_worker_limit"`
-		MaxActiveWorkers       int      `json:"max_active_workers"`
-		WarmStartupConcurrency int      `json:"warm_startup_concurrency"`
-		PerAccountConcurrency  int      `json:"per_account_concurrency"`
-		RoutingStrategy        string   `json:"routing_strategy"`
-		UpstreamChannels       []string `json:"upstream_channels"`
-		ModelMapping           string   `json:"model_mapping"`
-		ModelChannels          string   `json:"model_channels"`
-		TemporaryChat          bool     `json:"temporary_chat"`
-		WAABackend             string   `json:"waa_backend"`
-		MediaOutput            string   `json:"media_output"`
-		MediaBaseURL           string   `json:"media_base_url"`
-	}
-	return json.Marshal(payload{
-		AutoStart:              c.AutoStart,
-		RequestBodyLog:         c.RequestBodyLog,
-		LogFile:                c.LogFile,
-		LogMaxTotalMB:          c.LogMaxTotalMB,
-		AdminAuthEnabled:       c.AdminAuthEnabled,
-		AdminUsername:          c.AdminUsername,
-		BuildNativeNonstream:   c.BuildNativeNonstream,
-		NonstreamKeepalive:     c.NonstreamKeepalive,
-		FakeStream:             c.FakeStream,
-		YouTubeLinks:           c.YouTubeLinks,
-		FirstEventHedge:        c.FirstEventHedge,
-		AuthStates:             c.AuthStates,
-		ListenAddr:             c.ListenAddr,
-		PreviewListenAddr:      c.PreviewListenAddr,
-		ProxyAPIKey:            c.ProxyAPIKey,
-		Proxy:                  c.Proxy,
-		InitTimeout:            c.InitTimeout.String(),
-		RequestTimeout:         c.RequestTimeout.String(),
-		WarmWorkerLimit:        c.WarmWorkerLimit,
-		MaxActiveWorkers:       c.MaxActiveWorkers,
-		WarmStartupConcurrency: c.WarmStartupConcurrency,
-		PerAccountConcurrency:  c.PerAccountConcurrency,
-		RoutingStrategy:        c.RoutingStrategy,
-		UpstreamChannels:       c.UpstreamChannels,
-		ModelMapping:           c.ModelMapping,
-		ModelChannels:          c.ModelChannels,
-		TemporaryChat:          c.TemporaryChat,
-		WAABackend:             c.WAABackend,
-		MediaOutput:            c.MediaOutput,
-		MediaBaseURL:           c.MediaBaseURL,
-	})
-}
-
-// UnmarshalJSON 从管理接口使用的文本时长解析配置
-func (c *Config) UnmarshalJSON(data []byte) error {
-	type payload struct {
-		AutoStart              bool     `json:"auto_start"`
-		RequestBodyLog         bool     `json:"request_body_log"`
-		LogFile                bool     `json:"log_file"`
-		LogMaxTotalMB          int      `json:"log_max_total_mb"`
-		AdminAuthEnabled       bool     `json:"admin_auth_enabled"`
-		AdminUsername          string   `json:"admin_username"`
-		AdminPassword          string   `json:"admin_password"`
-		BuildNativeNonstream   bool     `json:"build_native_nonstream"`
-		NonstreamKeepalive     bool     `json:"nonstream_keepalive"`
-		FakeStream             bool     `json:"fake_stream"`
-		YouTubeLinks           bool     `json:"youtube_links"`
-		FirstEventHedge        string   `json:"first_event_hedge"`
-		AuthStates             string   `json:"auth_states"`
-		ListenAddr             string   `json:"listen_addr"`
-		PreviewListenAddr      string   `json:"preview_listen_addr"`
-		ProxyAPIKey            string   `json:"proxy_api_key"`
-		Proxy                  string   `json:"proxy"`
-		InitTimeout            string   `json:"init_timeout"`
-		RequestTimeout         string   `json:"request_timeout"`
-		WarmWorkerLimit        int      `json:"warm_worker_limit"`
-		MaxActiveWorkers       int      `json:"max_active_workers"`
-		WarmStartupConcurrency int      `json:"warm_startup_concurrency"`
-		PerAccountConcurrency  int      `json:"per_account_concurrency"`
-		RoutingStrategy        string   `json:"routing_strategy"`
-		UpstreamChannels       []string `json:"upstream_channels"`
-		ModelMapping           string   `json:"model_mapping"`
-		ModelChannels          string   `json:"model_channels"`
-		TemporaryChat          bool     `json:"temporary_chat"`
-		WAABackend             string   `json:"waa_backend"`
-		MediaOutput            string   `json:"media_output"`
-		MediaBaseURL           string   `json:"media_base_url"`
-	}
-	var value payload
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	initTimeout, err := parsePositiveDuration("INIT_TIMEOUT", value.InitTimeout)
-	if err != nil {
-		return err
-	}
-	requestTimeout, err := parsePositiveDuration("REQUEST_TIMEOUT", value.RequestTimeout)
-	if err != nil {
-		return err
-	}
-	parsed := Config{
-		AutoStart:              value.AutoStart,
-		RequestBodyLog:         value.RequestBodyLog,
-		LogFile:                value.LogFile,
-		LogMaxTotalMB:          value.LogMaxTotalMB,
-		AdminAuthEnabled:       value.AdminAuthEnabled,
-		AdminUsername:          strings.TrimSpace(value.AdminUsername),
-		AdminPassword:          value.AdminPassword,
-		BuildNativeNonstream:   value.BuildNativeNonstream,
-		NonstreamKeepalive:     value.NonstreamKeepalive,
-		FakeStream:             value.FakeStream,
-		YouTubeLinks:           value.YouTubeLinks,
-		FirstEventHedge:        strings.ToLower(strings.TrimSpace(value.FirstEventHedge)),
-		AuthStates:             strings.TrimSpace(value.AuthStates),
-		ListenAddr:             strings.TrimSpace(value.ListenAddr),
-		PreviewListenAddr:      strings.TrimSpace(value.PreviewListenAddr),
-		ProxyAPIKey:            strings.TrimSpace(value.ProxyAPIKey),
-		Proxy:                  strings.TrimSpace(value.Proxy),
-		InitTimeout:            initTimeout,
-		RequestTimeout:         requestTimeout,
-		WarmWorkerLimit:        value.WarmWorkerLimit,
-		MaxActiveWorkers:       value.MaxActiveWorkers,
-		WarmStartupConcurrency: value.WarmStartupConcurrency,
-		PerAccountConcurrency:  value.PerAccountConcurrency,
-		RoutingStrategy:        value.RoutingStrategy,
-		UpstreamChannels:       value.UpstreamChannels,
-		ModelMapping:           strings.TrimSpace(value.ModelMapping),
-		ModelChannels:          strings.TrimSpace(value.ModelChannels),
-		TemporaryChat:          value.TemporaryChat,
-		WAABackend:             strings.ToLower(strings.TrimSpace(value.WAABackend)),
-		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
-		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
-	}
-	if err := parsed.Validate(); err != nil {
-		return err
-	}
-	*c = parsed
 	return nil
 }
 
@@ -713,9 +590,6 @@ func ValidateProxy(value string) error {
 
 func readEnvFile(path string) (map[string]string, error) {
 	values := make(map[string]string)
-	if strings.TrimSpace(path) == "" {
-		return values, nil
-	}
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return values, nil
@@ -736,7 +610,7 @@ func readEnvFile(path string) (map[string]string, error) {
 			return nil, fmt.Errorf("%s:%d 缺少等号", path, lineNumber)
 		}
 		key = strings.TrimSpace(key)
-		if !isConfigKey(key) {
+		if !slices.Contains(configKeys[:], key) {
 			continue
 		}
 		value, err := parseEnvValue(strings.TrimSpace(raw))
@@ -749,15 +623,6 @@ func readEnvFile(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("读取配置文件: %w", err)
 	}
 	return values, nil
-}
-
-func isConfigKey(value string) bool {
-	for _, key := range configKeys {
-		if value == key {
-			return true
-		}
-	}
-	return false
 }
 
 func parseEnvValue(value string) (string, error) {
@@ -827,14 +692,7 @@ func listenPort(value string) string {
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	target, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("解析配置路径: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("创建配置目录: %w", err)
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".env-*.tmp")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".env-*.tmp")
 	if err != nil {
 		return fmt.Errorf("创建临时配置: %w", err)
 	}
@@ -856,7 +714,7 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("关闭配置: %w", err)
 	}
-	if err := os.Rename(temporaryPath, target); err != nil {
+	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("替换配置: %w", err)
 	}
 	return nil

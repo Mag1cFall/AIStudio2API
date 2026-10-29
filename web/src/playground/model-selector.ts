@@ -3,7 +3,7 @@ import type { Model } from '@/types'
 import type { PageKind } from './media/kinds'
 
 // ModelChoice 是打开模型选择面板的页面：页面类型、已选模型、当前会话是否有内容与在本页面使用所选模型的处理
-export interface ModelChoice {
+interface ModelChoice {
   kind: PageKind
   selected: string
   hasContent: () => boolean

@@ -88,11 +88,7 @@ func (s *server) resumeResponseStream(w http.ResponseWriter, r *http.Request) {
 // handleResponseDelete 删除已保存的响应
 func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("response")
-	if value, running := s.background.Load(id); running {
-		run := value.(backgroundRun)
-		run.cancel()
-		<-run.done
-	}
+	s.stopBackground(id)
 	if !s.responseStates.Delete(id, false) {
 		writeResponseNotFound(w, id)
 		return
@@ -102,11 +98,7 @@ func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleResponseCancel 终止进行中的后台响应并返回保存的 cancelled 对象，已结束的后台响应返回最终对象，其他响应不可取消
 func (s *server) handleResponseCancel(w http.ResponseWriter, r *http.Request) {
-	if value, running := s.background.Load(r.PathValue("response")); running {
-		run := value.(backgroundRun)
-		run.cancel()
-		<-run.done
-	}
+	s.stopBackground(r.PathValue("response"))
 	response, background, ok := s.responseStates.Response(r.PathValue("response"))
 	if !ok {
 		writeResponseNotFound(w, r.PathValue("response"))

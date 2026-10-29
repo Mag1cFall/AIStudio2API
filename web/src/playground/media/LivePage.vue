@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { showTooltip, vTooltip } from '@/playground/ui/tooltip'
+import { showTooltip } from '@/tooltip'
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
@@ -13,6 +13,7 @@ import CodeDialog from '../CodeDialog.vue'
 import MarkdownView from '../MarkdownView.vue'
 import ThoughtChunk from '../ThoughtChunk.vue'
 import { Capability, hasCode, modelMatches } from '../catalog'
+import { copyToClipboard } from '../clipboard'
 import LiveSettings from './LiveSettings.vue'
 import MediaLayout from './MediaLayout.vue'
 import MediaPromptBox from './MediaPromptBox.vue'
@@ -204,16 +205,6 @@ function streamingPart(turn: LiveTurn, index: number): boolean {
   return state.status === 'live' && turn === state.turns.at(-1) && index === turn.parts.length - 1
 }
 
-// copyResponse 复制函数调用的响应
-async function copyResponse(part: Extract<LivePart, { type: 'call' }>): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(part.response)
-    store.showNotice(t('pg.copied'), 'success')
-  } catch {
-    store.showNotice(t('pg.copyFailed'), 'error')
-  }
-}
-
 // responseTip 是发送响应按钮的提示
 function responseTip(part: Extract<LivePart, { type: 'call' }>): string {
   if (part.cancelled) return t('pg.callCancelled')
@@ -244,8 +235,7 @@ let videoDrag: VideoDrag | undefined
 // startVideoDrag 开始拖动或缩放视频浮窗
 function startVideoDrag(event: PointerEvent, handle: VideoDrag['handle']): void {
   const target = event.currentTarget as HTMLElement
-  const container = target.closest<HTMLElement>('.video-container')
-  if (container === null) return
+  const container = target.closest<HTMLElement>('.video-container')!
   target.setPointerCapture(event.pointerId)
   videoDrag = {
     handle,
@@ -450,7 +440,7 @@ onUnmounted(() => live.disconnect())
                               ms-button
                               class="ms-button-borderless ms-button-icon"
                               :aria-label="t('pg.copyToClipboard')"
-                              @click="copyResponse(part)"
+                              @click="copyToClipboard(part.response)"
                             >
                               <UiIcon name="copy" :size="18" />
                             </button>

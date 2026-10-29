@@ -8,13 +8,11 @@ export interface Starter {
   prompt: string
 }
 
-// Example 是右侧的示例卡片，悬停时播放视频
+// Example 是右侧的示例卡片
 export interface Example {
   title: string
   prompt: string
   preview: string
-  video?: string
-  art?: string
   detection?: { label: string; inset?: string }
 }
 
@@ -68,27 +66,11 @@ const { t } = useI18n()
           class="tile"
           :style="{ '--i': index }"
         >
-          <button
-            type="button"
-            class="tile__frame"
-            @click="emit('example', item)"
-            @mouseenter="($event.currentTarget as HTMLElement).querySelector('video')?.play()"
-            @mouseleave="($event.currentTarget as HTMLElement).querySelector('video')?.pause()"
-          >
+          <button type="button" class="tile__frame" @click="emit('example', item)">
             <span class="tile__media">
               <span class="tile__halo" aria-hidden="true"></span>
               <span class="tile__window">
                 <img :src="item.preview" alt="" />
-                <video
-                  v-if="item.video"
-                  class="tile__video"
-                  :src="item.video"
-                  muted
-                  loop
-                  playsinline
-                  preload="none"
-                ></video>
-                <span v-if="item.art" class="tile__art-title">{{ item.art }}</span>
                 <span
                   v-if="item.detection"
                   class="detection"
@@ -100,9 +82,6 @@ const { t } = useI18n()
               </span>
             </span>
             <span class="tile__label">
-              <svg v-if="item.video" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M5 3.5l8 4.5-8 4.5z" class="filled" />
-              </svg>
               {{ item.title }}
             </span>
           </button>
@@ -113,12 +92,6 @@ const { t } = useI18n()
 </template>
 
 <style scoped>
-@property --empty-halo-angle {
-  inherits: true;
-  initial-value: 220deg;
-  syntax: '<angle>';
-}
-
 .ms-model-empty-state {
   display: flex;
   flex-direction: column;
@@ -188,21 +161,6 @@ const { t } = useI18n()
   font-size: 14px;
   font-weight: 400;
   line-height: 21px;
-}
-
-.empty-state svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-
-.filled {
-  fill: currentColor;
 }
 
 .empty-state h3,
@@ -283,7 +241,7 @@ const { t } = useI18n()
 .tile__halo {
   position: absolute;
   inset: 0;
-  animation: empty-halo-sway calc(var(--empty-duration, 10s) * 1.5) ease-in-out infinite alternate;
+  animation: empty-halo-sway calc(var(--empty-duration) * 1.5) ease-in-out infinite alternate;
   transition: opacity 0.3s;
 }
 
@@ -293,7 +251,7 @@ const { t } = useI18n()
   inset: -3px;
   border-radius: 20px;
   background: conic-gradient(
-    from var(--empty-halo-angle),
+    from 220deg,
     #3186ff,
     #3186ff 22%,
     #ff4641 40%,
@@ -307,8 +265,8 @@ const { t } = useI18n()
 }
 
 .tile__halo::before {
-  animation: empty-halo-visit calc(var(--empty-duration, 10s) * 2) ease-in-out infinite;
-  animation-delay: calc(0.5s + var(--i) * var(--empty-duration, 10s) * 2 / var(--count, 1));
+  animation: empty-halo-visit calc(var(--empty-duration) * 2) ease-in-out infinite;
+  animation-delay: calc(0.5s + var(--i) * var(--empty-duration) * 2 / var(--count));
 }
 
 .empty-state__examples[data-count='1'] .tile__halo::before {
@@ -360,11 +318,11 @@ const { t } = useI18n()
 
 @keyframes empty-halo-sway {
   0% {
-    --empty-halo-angle: 204deg;
+    transform: rotate(-4deg);
   }
 
   to {
-    --empty-halo-angle: 238deg;
+    transform: rotate(4deg);
   }
 }
 
@@ -402,25 +360,13 @@ const { t } = useI18n()
   box-shadow: 0 0 0 1px var(--line);
 }
 
-.tile__window img,
-.tile__video {
+.tile__window img {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.tile__video {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
-}
-
-.tile:focus-within .tile__video,
-.tile:hover .tile__video {
-  opacity: 1;
 }
 
 .tile__label {
@@ -438,11 +384,6 @@ const { t } = useI18n()
   color: var(--color-v3-text-on-button-reverse);
   font-size: 12px;
   line-height: 1.3;
-}
-
-.tile__label svg {
-  width: 10px;
-  height: 10px;
 }
 
 .empty-state[data-kind='chat'] .tile:first-child {
@@ -564,19 +505,6 @@ const { t } = useI18n()
   aspect-ratio: 1;
 }
 
-.tile__art-title {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  max-width: 70%;
-  color: var(--color-v3-text-on-button-reverse);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.5px;
-  line-height: 1.05;
-  text-shadow: 0 1px 6px rgb(0 0 0 / 45%);
-}
-
 @container (max-width: 640px) {
   .empty-state {
     grid-template-columns: minmax(0, 1fr);
@@ -648,8 +576,7 @@ const { t } = useI18n()
   .tile__frame,
   .tile__halo,
   .tile__halo::after,
-  .tile__halo::before,
-  .tile__video {
+  .tile__halo::before {
     animation: none;
     transition: none;
   }

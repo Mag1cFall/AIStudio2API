@@ -57,41 +57,11 @@ type geminiVideoInlineData struct {
 	Data          string `json:"data"`
 }
 
-func (b *geminiVideoInlineData) MIME() string {
-	if b == nil {
-		return ""
-	}
-	if b.MIMEType != "" {
-		return b.MIMEType
-	}
-	return b.MIMETypeSnake
-}
-
 type geminiVideoFileData struct {
 	MIMEType      string `json:"mimeType"`
 	MIMETypeSnake string `json:"mime_type"`
 	FileURI       string `json:"fileUri"`
 	FileURISnake  string `json:"file_uri"`
-}
-
-func (f *geminiVideoFileData) MIME() string {
-	if f == nil {
-		return ""
-	}
-	if f.MIMEType != "" {
-		return f.MIMEType
-	}
-	return f.MIMETypeSnake
-}
-
-func (f *geminiVideoFileData) URI() string {
-	if f == nil {
-		return ""
-	}
-	if f.FileURI != "" {
-		return f.FileURI
-	}
-	return f.FileURISnake
 }
 
 type openAIVideoRequest struct {
@@ -224,25 +194,25 @@ func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error
 		return nil, fmt.Errorf("image must contain exactly one of bytesBase64Encoded, inlineData or fileData")
 	}
 	if inline != nil {
-		mime := inline.MIME()
-		if mime == "" || inline.Data == "" {
+		mimeType := cmp.Or(inline.MIMEType, inline.MIMETypeSnake)
+		if mimeType == "" || inline.Data == "" {
 			return nil, fmt.Errorf("image requires mimeType and data")
 		}
 		data, err := decodeBase64Flexible(inline.Data)
 		if err != nil {
 			return nil, fmt.Errorf("image.inlineData.data: %w", err)
 		}
-		mimeType, data := normalizeImagePayload(mime, data)
+		mimeType, data = normalizeImagePayload(mimeType, data)
 		return &aistudio.VideoImage{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}}, nil
 	}
 	if file != nil {
-		return &aistudio.VideoImage{File: &aistudio.FileRef{ID: file.URI(), MIME: file.MIME()}}, nil
+		return &aistudio.VideoImage{File: &aistudio.FileRef{ID: cmp.Or(file.FileURI, file.FileURISnake), MIME: cmp.Or(file.MIMEType, file.MIMETypeSnake)}}, nil
 	}
 	return nil, fmt.Errorf("image requires bytesBase64Encoded, inlineData or fileData")
 }
 
 func videoDuration(raw json.RawMessage) (int, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+	if !rawJSONConfigured(raw) {
 		return 0, nil
 	}
 	var value string
@@ -563,21 +533,9 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
-	mimeType := media.MIME
-	if mimeType == "" {
-		mimeType = "video/mp4"
-	}
-	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Type", cmp.Or(media.MIME, "video/mp4"))
 	w.Header().Set("Content-Disposition", `attachment; filename="video.mp4"`)
-	if media.Size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(media.Size, 10))
-	}
-	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, media.Body)
-	closeErr := media.Body.Close()
-	if requestErr := errors.Join(copyErr, closeErr); requestErr != nil {
-		SetAccessLogError(r.Context(), requestErr)
-	}
+	writeMediaStream(w, r, media.Body, media.Size)
 }
 
 func cleanOperationID(value string) string {

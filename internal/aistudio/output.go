@@ -22,8 +22,7 @@ func (output *Output) Add(event Event) {
 		case continuesText(*last, part):
 			last.Text += part.Text
 			return
-		case continuesAudio(*last, part):
-			last.InlineData.Data = append(last.InlineData.Data, part.InlineData.Data...)
+		case MergePCM(last, part):
 			return
 		}
 	}
@@ -118,10 +117,14 @@ func continuesText(last Part, next Part) bool {
 	return last.textOnly() && next.textOnly() && last.Thought == next.Thought && last.ThoughtSignature == next.ThoughtSignature
 }
 
-func continuesAudio(last Part, next Part) bool {
-	return last.InlineData != nil && next.InlineData != nil && last.Thought == next.Thought &&
-		last.ThoughtSignature == next.ThoughtSignature && last.InlineData.MIME == next.InlineData.MIME &&
-		strings.HasPrefix(strings.ToLower(next.InlineData.MIME), "audio/l16")
+// MergePCM 将思考标记、签名与格式都相同的 PCM 数据追加到 last，返回是否合并
+func MergePCM(last *Part, next Part) bool {
+	if last.InlineData == nil || next.InlineData == nil || last.Thought != next.Thought || last.ThoughtSignature != next.ThoughtSignature ||
+		last.InlineData.MIME != next.InlineData.MIME || !strings.HasPrefix(strings.ToLower(next.InlineData.MIME), "audio/l16") {
+		return false
+	}
+	last.InlineData.Data = append(last.InlineData.Data, next.InlineData.Data...)
+	return true
 }
 
 func clonePart(part Part) Part {

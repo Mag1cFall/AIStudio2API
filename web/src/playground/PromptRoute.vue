@@ -11,8 +11,6 @@ import { useVideo, type VideoData } from './media/video'
 import { usePlayground } from './session'
 import type { PromptData } from './types'
 
-defineOptions({ name: 'PromptRoute' })
-
 const route = useRoute()
 const { t } = useI18n()
 const playground = usePlayground()

@@ -240,6 +240,10 @@ type MCPServer struct {
 	SSEReadTimeout   string            `json:"sse_read_timeout,omitempty"`
 	TerminateOnClose *bool             `json:"terminate_on_close,omitempty"`
 	AllowedTools     []string          `json:"allowed_tools,omitempty"`
+	// ReadOnly 为 true 时只允许 tools/list 中标记只读的工具
+	ReadOnly bool `json:"-"`
+	// DisabledTools 是从 tools/list 工具全集中排除的工具
+	DisabledTools []string `json:"-"`
 }
 
 // GoogleSearchTimeRange 表示 Google Search 的检索时间范围
@@ -259,11 +263,18 @@ type GoogleSearchOptions struct {
 	BlockedDomains []string               `json:"blocked_domains,omitempty"`
 }
 
+// URLContextOptions 表示 URL Context 可读取与不可读取的域名
+type URLContextOptions struct {
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+}
+
 // Tools 表示一次请求启用的工具
 type Tools struct {
 	Functions    []FunctionDeclaration `json:"functions,omitempty"`
 	Google       []string              `json:"google,omitempty"`
 	GoogleSearch *GoogleSearchOptions  `json:"google_search,omitempty"`
+	URLContext   *URLContextOptions    `json:"url_context,omitempty"`
 	// MapsWidget 要求 Google Maps 在来源信息中返回 widget context token
 	MapsWidget  bool         `json:"maps_widget,omitempty"`
 	ComputerUse *ComputerUse `json:"computer_use,omitempty"`
@@ -561,12 +572,11 @@ func (details UsageDetails) present() bool {
 
 // Citation 表示模型返回的来源
 type Citation struct {
-	URL       string `json:"url"`
-	Title     string `json:"title,omitempty"`
-	Start     int    `json:"start,omitempty"`
-	End       int    `json:"end,omitempty"`
-	Publisher string `json:"publisher,omitempty"`
-	License   string `json:"license,omitempty"`
+	URL     string `json:"url"`
+	Title   string `json:"title,omitempty"`
+	Start   int    `json:"start,omitempty"`
+	End     int    `json:"end,omitempty"`
+	License string `json:"license,omitempty"`
 }
 
 // TranscriptDuration 表示转录时间值

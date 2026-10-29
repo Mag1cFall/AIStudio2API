@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 )
 
@@ -27,7 +26,7 @@ func (c *Client) EnsureDisclaimerAcknowledged(ctx context.Context, accountID str
 	if !ok {
 		return nil
 	}
-	key := strings.TrimSpace(accountID) + " " + disclaimer.mask
+	key := accountID + " " + disclaimer.mask
 	c.termsMu.Lock()
 	_, acknowledged := c.disclaimers[key]
 	c.termsMu.Unlock()
@@ -47,10 +46,7 @@ func (c *Client) EnsureDisclaimerAcknowledged(ctx context.Context, accountID str
 		return withMethod(err, "GetUserPreferences")
 	}
 	if isJSONNull(rawAt(root, disclaimer.index)) {
-		body, err := json.Marshal(disclaimerBody(disclaimer, time.Now()))
-		if err != nil {
-			return err
-		}
+		body, _ := json.Marshal(disclaimerBody(disclaimer, time.Now()))
 		if _, err := c.readRPC(ctx, "UpdateUserPreferences", accountID, body); err != nil {
 			return err
 		}

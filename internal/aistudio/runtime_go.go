@@ -34,7 +34,7 @@ const (
 	firefoxInnerHeightDiff = 57
 )
 
-// workerRuntime 是 Camoufox 页面与纯 Go VM 两种 WAA 后端共同提供的 Worker 能力
+// workerRuntime 是 Camoufox 页面与 SpiderMonkey VM 两种 WAA 后端共同提供的 Worker 能力
 type workerRuntime interface {
 	Proof(context.Context, string, string) (string, error)
 	ProtocolHeaders(context.Context) (http.Header, error)
@@ -47,7 +47,7 @@ type workerRuntime interface {
 // waaInterpreterHashes 记录本进程已执行过的解释器版本
 var waaInterpreterHashes sync.Map
 
-// goWAARuntime 以纯 Go BotGuard VM 与账户固定出口 HTTP 承担官网页面的 WAA 职责
+// goWAARuntime 以 SpiderMonkey BotGuard VM 与账户固定出口 HTTP 承担官网页面的 WAA 职责
 type goWAARuntime struct {
 	options        camoufoxnative.Options
 	client         *http.Client
@@ -130,8 +130,8 @@ func newGoWAAHTTPClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
-// NewGoWorker 启动单个账户的纯 Go WAA runtime，不启动浏览器
-func NewGoWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
+// NewSpiderMonkeyWorker 启动单个账户的 SpiderMonkey WAA runtime
+func NewSpiderMonkeyWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*NativeWorker, error) {
 	if accountID == "" {
 		return nil, fmt.Errorf("缺少账户 ID")
 	}
@@ -146,7 +146,7 @@ func NewGoWorker(ctx context.Context, accountID string, options camoufoxnative.O
 			AccountID: accountID,
 			Phase:     WorkerReady,
 			PID:       os.Getpid(),
-			RuntimeID: "go-waa",
+			RuntimeID: "spidermonkey-waa",
 			PageURL:   runtime.pageURL,
 		},
 	}, nil
@@ -160,25 +160,11 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		options.BootstrapPrompt = camoufoxnative.DefaultBootstrapPrompt
 	}
 	reportGoStartup(options, camoufoxnative.StartupPreparingBrowser)
-	storage, err := LoadStorageState(options.StorageStatePath)
+	runtime, fingerprint, err := newGoPageRuntime(options)
 	if err != nil {
 		return nil, err
 	}
-	fingerprint, err := camoufoxnative.AccountFingerprint(options)
-	if err != nil {
-		return nil, err
-	}
-	client, err := newGoWAAHTTPClient(options.Proxy)
-	if err != nil {
-		return nil, err
-	}
-	runtime := &goWAARuntime{options: options, client: client, storage: storage}
-	runtime.profile, runtime.userAgent, runtime.acceptLanguage = profileFromFingerprint(fingerprint)
-	pagePath := "/prompts/new_chat"
-	if options.AuthUser > 0 {
-		pagePath = fmt.Sprintf("/u/%d/prompts/new_chat", options.AuthUser)
-	}
-	runtime.pageURL = aiStudioOrigin + pagePath + "?model=" + url.QueryEscape(options.Model)
+	runtime.pageURL += "?model=" + url.QueryEscape(options.Model)
 	if options.TemporaryChat {
 		runtime.pageURL += "&temporary=true"
 	}
@@ -186,7 +172,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	runtime.profile.HasFocus = true
 	runtime.profile.Locale, _ = fingerprint["navigator.language"].(string)
 	runtime.profile.TimeZone, _ = fingerprint["timezone"].(string)
-	for _, origin := range storage.Origins {
+	for _, origin := range runtime.storage.Origins {
 		if origin.Origin != aiStudioOrigin {
 			continue
 		}
@@ -275,7 +261,7 @@ func (runtime *goWAARuntime) scheduleRefresh() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if _, err := runtime.currentVM(ctx, true); err != nil {
-			slog.Warn("WAA 纯 Go VM 刷新失败", "error", err)
+			slog.Warn("WAA SpiderMonkey VM 刷新失败", "error", err)
 		}
 	})
 }
@@ -358,7 +344,7 @@ func (runtime *goWAARuntime) mergeResponseCookies(response *http.Response, reque
 	runtime.storageMu.Lock()
 	defer runtime.storageMu.Unlock()
 	if err := runtime.storage.MergeSetCookieHeaders(headers, requestURL, time.Now()); err != nil {
-		slog.Warn("WAA 纯 Go Cookie 写回失败", "url", requestURL, "error", err)
+		slog.Warn("WAA SpiderMonkey Cookie 写回失败", "url", requestURL, "error", err)
 	}
 }
 
@@ -391,6 +377,40 @@ func (runtime *goWAARuntime) do(ctx context.Context, method string, target strin
 	}
 	runtime.mergeResponseCookies(response, target)
 	return response, nil
+}
+
+// newGoPageRuntime 以账户的指纹、固定出口与保存的 Cookie 准备打开官网新对话页面
+func newGoPageRuntime(options camoufoxnative.Options) (*goWAARuntime, map[string]any, error) {
+	storage, err := LoadStorageState(options.StorageStatePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	fingerprint, err := camoufoxnative.AccountFingerprint(options)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := newGoWAAHTTPClient(options.Proxy)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtime := &goWAARuntime{options: options, client: client, storage: storage}
+	runtime.profile, runtime.userAgent, runtime.acceptLanguage = profileFromFingerprint(fingerprint)
+	pagePath := "/prompts/new_chat"
+	if options.AuthUser > 0 {
+		pagePath = fmt.Sprintf("/u/%d/prompts/new_chat", options.AuthUser)
+	}
+	runtime.pageURL = aiStudioOrigin + pagePath
+	return runtime, fingerprint, nil
+}
+
+// CheckSession 像官网页面一样打开账户的 AI Studio 新对话页，被转到 Google 登录页时返回 camoufoxnative.ErrAuthenticationRequired
+func CheckSession(ctx context.Context, options camoufoxnative.Options) error {
+	runtime, _, err := newGoPageRuntime(options)
+	if err != nil {
+		return err
+	}
+	_, err = runtime.loadPage(ctx)
+	return err
 }
 
 // loadPage 以浏览器导航形状请求官网页面并返回页面公开 API Key
@@ -700,7 +720,7 @@ func (runtime *goWAARuntime) loadImage(address string) bool {
 // currentVM 返回未过期的 VM，到期时按官网刷新流程重建
 func (runtime *goWAARuntime) currentVM(ctx context.Context, force bool) (*waa.Runtime, error) {
 	if runtime.closed {
-		return nil, errors.New("纯 Go WAA runtime 已关闭")
+		return nil, errors.New("SpiderMonkey WAA runtime 已关闭")
 	}
 	if !force && runtime.vm != nil && time.Now().Before(runtime.vmExpires) {
 		return runtime.vm, nil
@@ -789,7 +809,7 @@ func (runtime *goWAARuntime) StorageCookies(ctx context.Context) ([]byte, error)
 	return json.Marshal(runtime.cookies().Cookies)
 }
 
-// State 返回纯 Go runtime 的页面与协议状态
+// State 返回 SpiderMonkey runtime 的页面与协议状态
 func (runtime *goWAARuntime) State() camoufoxnative.State {
 	return camoufoxnative.State{
 		PID:       os.Getpid(),

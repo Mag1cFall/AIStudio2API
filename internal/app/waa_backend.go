@@ -12,10 +12,10 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
-// prepareWAABackend 按 WAA 后端准备浏览器依赖，go 后端只在登录账户时按需准备 Camoufox；需要下载时经 proxy
+// prepareWAABackend 按 WAA 后端准备运行依赖与账户登录驱动
 func prepareWAABackend(ctx context.Context, cfg config.Config, requests *requestRegistry, accounts int, proxy string) (string, aistudio.IsolatedLoginDriver, error) {
-	if cfg.WAABackend == config.WAABackendGo {
-		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=go | 账户=%d", accounts))
+	if cfg.WAABackend == config.WAABackendSpiderMonkey {
+		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=spidermonkey | 账户=%d", accounts))
 		return "", &lazyLoginDriver{timeout: cfg.RequestTimeout, proxy: proxy}, nil
 	}
 	requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | 校验 Camoufox | 账户=%d", accounts))
@@ -42,10 +42,10 @@ func removeStaleCamoufoxProfiles(requests *requestRegistry) {
 	}
 }
 
-// newWAAWorker 启动账户 WAA Worker，Worker 配置没有 Camoufox 路径时由纯 Go VM 承担
+// newWAAWorker 启动账户的 Camoufox 或 SpiderMonkey Worker
 func newWAAWorker(ctx context.Context, accountID string, options camoufoxnative.Options) (*aistudio.NativeWorker, error) {
 	if options.ExecutablePath == "" {
-		return aistudio.NewGoWorker(ctx, accountID, options)
+		return aistudio.NewSpiderMonkeyWorker(ctx, accountID, options)
 	}
 	return aistudio.NewNativeWorker(ctx, accountID, options)
 }

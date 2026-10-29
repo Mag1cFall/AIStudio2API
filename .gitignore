@@ -13,6 +13,9 @@
 /data/
 *.log
 
+# SpiderMonkey 静态库
+/spidermonkey/
+
 # 前端产物
 /web/node_modules/
 /internal/webui/dist/

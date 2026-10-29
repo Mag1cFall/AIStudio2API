@@ -215,15 +215,6 @@ func mcpFunctionPart(item interactionInput, functions map[string]string) (aistud
 	return aistudio.RoleAssistant, []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{ID: item.ID, Name: name, Arguments: arguments}}}, nil
 }
 
-// mcpToolResponse 把 Interactions mcp_server_tool_result 的结果还原为 toolResponse.response
-func mcpToolResponse(raw json.RawMessage) (json.RawMessage, error) {
-	result, err := mcpCallToolResult(raw)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]string{"call_tool_result_json": string(result)})
-}
-
 // interactionToolResult 把 Gemini API toolResponse.response 转为 Interactions 结果数组
 func interactionToolResult(response *aistudio.ServerToolStep) ([]map[string]any, error) {
 	var data struct {
@@ -314,10 +305,11 @@ func interactionToolPart(item interactionInput) (aistudio.Part, error) {
 		if item.CallID == "" || !rawJSONConfigured(item.Result) {
 			return part, fmt.Errorf("mcp_server_tool_result requires call_id and result")
 		}
-		data, err := mcpToolResponse(item.Result)
+		result, err := mcpCallToolResult(item.Result)
 		if err != nil {
 			return part, fmt.Errorf("mcp_server_tool_result result: %w", err)
 		}
+		data, _ := json.Marshal(map[string]string{"call_tool_result_json": string(result)})
 		part.ToolResponse = &aistudio.ServerToolStep{ID: item.CallID, Data: data}
 		return part, nil
 	}

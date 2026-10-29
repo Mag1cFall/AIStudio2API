@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -47,8 +46,7 @@ function setType(index: number, type: SectionType): void {
 function setTime(index: number, field: 'startTime' | 'endTime', event: Event): void {
   const input = event.target as HTMLInputElement
   const section = state.sections[index]!
-  if (/^\d+:\d{2}$/.test(input.value.trim()))
-    section[field] = Math.max(0, seconds(input.value.trim()))
+  if (/^\d+:\d{2}$/.test(input.value.trim())) section[field] = seconds(input.value.trim())
   input.value = clock(section[field])
   music.syncSections()
 }

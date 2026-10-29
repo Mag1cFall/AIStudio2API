@@ -98,11 +98,41 @@ var firefoxRequestHeaderOrder = []string{
 // waaHost 是官网 Waa/Create 的主机，其页面脚本先写 authorization 再写 x-goog-authuser
 const waaHost = "waa-pa.clients6.google.com"
 
+// gapiRequestHeaderOrder 是 Firefox 152 发出官网页面 gapi 请求（Drive discovery 与上传）的请求头顺序
+var gapiRequestHeaderOrder = []string{
+	"user-agent",
+	"accept",
+	"accept-language",
+	"accept-encoding",
+	"access-control-request-method",
+	"access-control-request-headers",
+	"referer",
+	"content-type",
+	"x-javascript-user-agent",
+	"x-requested-with",
+	"x-goog-encode-response-if-executable",
+	"x-goog-authuser",
+	"authorization",
+	"x-clientdetails",
+	"content-length",
+	"origin",
+	"sec-fetch-storage-access",
+	"cookie",
+	"sec-fetch-dest",
+	"sec-fetch-mode",
+	"sec-fetch-site",
+	"priority",
+	"te",
+}
+
+// gapiHosts 是官网页面 gapi 请求的主机
+var gapiHosts = map[string]bool{"clients6.google.com": true, "content.googleapis.com": true}
+
 // browserManagedHeaders 是浏览器自行附加、不进入 CORS 预检 access-control-request-headers 的请求头
 var browserManagedHeaders = map[string]struct{}{
 	"user-agent": {}, "accept": {}, "accept-language": {}, "accept-encoding": {}, "referer": {}, "origin": {}, "cookie": {},
 	"content-length": {}, "host": {}, "upgrade-insecure-requests": {}, "sec-fetch-dest": {}, "sec-fetch-mode": {}, "sec-fetch-site": {},
-	"sec-fetch-user": {}, "priority": {}, "te": {},
+	"sec-fetch-user": {}, "sec-fetch-storage-access": {}, "priority": {}, "te": {},
 }
 
 type browserRoundTripper struct {
@@ -143,7 +173,7 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	hello := firefox152ClientHello()
 	priority := firefoxHeaderPriority
 	pool := &firefoxConnPool{
-		dial:        func(address string) (net.Conn, error) { return dialBrowserTLS(proxyDialer, hello, "tcp", address) },
+		dial:        func(address string) (net.Conn, error) { return dialBrowserTLS(proxyDialer, hello, address) },
 		conns:       map[string][]*http2.ClientConn{},
 		experienced: map[*http2.ClientConn]bool{},
 		dialing:     map[string]int{},
@@ -366,15 +396,12 @@ func (pool *firefoxConnPool) shutdown() {
 }
 
 // dialBrowserTLS 以 Firefox ClientHello 建立 TLS 连接并要求协商 HTTP/2
-func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, network string, address string) (net.Conn, error) {
-	raw, err := dialer.DialContext(context.Background(), network, address)
+func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, address string) (net.Conn, error) {
+	raw, err := dialer.DialContext(context.Background(), "tcp", address)
 	if err != nil {
 		return nil, err
 	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		host = address
-	}
+	host, _, _ := net.SplitHostPort(address)
 	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true}, hello, false, false, false)
 	ctx, cancel := context.WithTimeout(context.Background(), firefoxTLSHandshakeTimeout)
 	defer cancel()
@@ -390,14 +417,10 @@ func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, network
 }
 
 func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdhttp.Response, error) {
-	var body io.Reader
-	if request.Body != nil {
-		body = request.Body
-	}
 	err := transport.ensurePreflight(request)
 	var upstream *fhttp.Request
 	if err == nil {
-		upstream, err = fhttp.NewRequestWithContext(request.Context(), request.Method, request.URL.String(), body)
+		upstream, err = fhttp.NewRequestWithContext(request.Context(), request.Method, request.URL.String(), request.Body)
 	}
 	if err != nil {
 		if request.Body != nil {
@@ -418,14 +441,6 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 		return nil, err
 	}
 	responseTrailer := standardHeader(response.Trailer)
-	responseBody := io.ReadCloser(stdhttp.NoBody)
-	if response.Body != nil {
-		responseBody = &browserResponseBody{
-			body:    response.Body,
-			source:  response,
-			trailer: responseTrailer,
-		}
-	}
 	responseRequest := new(stdhttp.Request)
 	*responseRequest = *request
 	responseRequest.Body = nil
@@ -436,7 +451,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 		ProtoMajor:       response.ProtoMajor,
 		ProtoMinor:       response.ProtoMinor,
 		Header:           standardHeader(response.Header),
-		Body:             responseBody,
+		Body:             &browserResponseBody{body: response.Body, source: response, trailer: responseTrailer},
 		ContentLength:    response.ContentLength,
 		TransferEncoding: append([]string(nil), response.TransferEncoding...),
 		Close:            response.Close,
@@ -543,7 +558,7 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 		return err
 	}
 	preflight.Header = make(fhttp.Header, 14)
-	for _, name := range []string{"User-Agent", "Accept-Language", "Accept-Encoding", "Referer", "Origin", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"} {
+	for _, name := range []string{"User-Agent", "Accept-Language", "Accept-Encoding", "Referer", "Origin", "Sec-Fetch-Storage-Access", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"} {
 		if value := request.Header.Get(name); value != "" {
 			preflight.Header.Set(name, value)
 		}
@@ -588,6 +603,9 @@ func corsRequestHeaders(headers stdhttp.Header) []string {
 
 // requestHeaderOrder 返回目标主机的请求头顺序
 func requestHeaderOrder(host string) []string {
+	if gapiHosts[host] {
+		return gapiRequestHeaderOrder
+	}
 	if host != waaHost {
 		return firefoxRequestHeaderOrder
 	}
@@ -648,5 +666,3 @@ func firefox152ClientHello() tls.ClientHelloID {
 	}
 	return hello
 }
-
-var _ stdhttp.RoundTripper = (*browserRoundTripper)(nil)

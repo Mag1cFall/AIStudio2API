@@ -385,11 +385,6 @@ func (session *loginSession) Close() error {
 	return session.process.Close()
 }
 
-func isGoogleLoginURL(pageURL string) bool {
-	parsed, err := url.Parse(pageURL)
-	return err == nil && strings.EqualFold(parsed.Hostname(), "accounts.google.com")
-}
-
 func isGoogleHost(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
 	return host == "google.com" || strings.HasSuffix(host, ".google.com")

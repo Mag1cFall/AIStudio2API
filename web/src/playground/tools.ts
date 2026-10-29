@@ -14,7 +14,7 @@ interface ToolDefinition {
 }
 
 // toolDefinitions 是官网工具分组的开关顺序
-export const toolDefinitions: ToolDefinition[] = [
+const toolDefinitions: ToolDefinition[] = [
   {
     id: 'structured_output',
     label: 'pg.structuredOutput',

@@ -45,12 +45,12 @@ function supported(values: readonly (string | number)[]): string {
 }
 
 // extension 返回图片 MIME 对应的文件扩展名
-function extension(mimeType: string): string {
-  return mimeType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png'
+export function extension(mimeType: string): string {
+  return mimeType.split('/')[1]!.replace('jpeg', 'jpg')
 }
 
 // VideoCodeInput 是视频页示例代码所需的输入、设置与服务地址
-export interface VideoCodeInput {
+interface VideoCodeInput {
   baseURL: string
   prompt: string
   settings: VideoSettings

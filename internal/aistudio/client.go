@@ -94,16 +94,8 @@ type Client struct {
 	disclaimers     map[string]struct{}
 }
 
-var _ Service = (*Client)(nil)
-
 // NewClient 创建协议客户端
-func NewClient(options ClientOptions) (*Client, error) {
-	if options.Transport == nil {
-		return nil, fmt.Errorf("AI Studio transport 不能为空")
-	}
-	if options.Protected == nil {
-		return nil, fmt.Errorf("AI Studio protected transport 不能为空")
-	}
+func NewClient(options ClientOptions) *Client {
 	return &Client{
 		transport:       options.Transport,
 		protected:       options.Protected,
@@ -112,7 +104,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		tiers:           make(map[string]BenefitTier),
 		termsAccepted:   make(map[string]struct{}),
 		disclaimers:     make(map[string]struct{}),
-	}, nil
+	}
 }
 
 // RPCError 保存上游状态和协议错误码
@@ -192,13 +184,9 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 }
 
 func (c *Client) doProtectedVideo(ctx context.Context, request VideoRequest, body []byte) (*RPCResponse, error) {
-	transport, ok := c.protected.(VideoProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("AI Studio protected transport 不支持 GenerateVideo")
-	}
 	rpc := newRPCRequest("GenerateVideo", request.AccountID, "", body, false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
-	response, err := transport.DoProtectedVideo(ctx, request, rpc)
+	response, err := c.protected.(VideoProtectedTransport).DoProtectedVideo(ctx, request, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio GenerateVideo: %w", err)
 	}

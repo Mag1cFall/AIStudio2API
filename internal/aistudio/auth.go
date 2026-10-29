@@ -29,6 +29,29 @@ type StateCookie struct {
 	PartitionKey string  `json:"partitionKey,omitempty"`
 }
 
+// rotatingCookieNames 是 Google 每次响应都会轮换的 Cookie 名
+var rotatingCookieNames = map[string]bool{"SIDCC": true, "__Secure-1PSIDCC": true, "__Secure-3PSIDCC": true}
+
+// rotatingCookieWriteInterval 是只有轮换 Cookie 变化时磁盘状态的最短写入间隔
+const rotatingCookieWriteInterval = 30 * time.Second
+
+// onlyRotatingCookiesChanged 判断 next 与 previous 是否只在轮换 Cookie 的值与过期时间上不同
+func onlyRotatingCookiesChanged(previous []StateCookie, next []StateCookie) bool {
+	if len(previous) != len(next) {
+		return false
+	}
+	for index, cookie := range next {
+		old := previous[index]
+		if rotatingCookieNames[cookie.Name] {
+			old.Value, old.Expires = cookie.Value, cookie.Expires
+		}
+		if old != cookie {
+			return false
+		}
+	}
+	return true
+}
+
 // StorageItem 表示浏览器本地存储项
 type StorageItem struct {
 	Name  string `json:"name"`
@@ -72,19 +95,12 @@ type AuthExtension struct {
 const authExtensionKey = "aistudio2api"
 
 // SetAuthExtension 写入 aistudio2api 认证扩展
-func (s *StorageState) SetAuthExtension(extension AuthExtension) error {
-	if s == nil {
-		return fmt.Errorf("storage state 为空")
-	}
-	raw, err := json.Marshal(extension)
-	if err != nil {
-		return fmt.Errorf("编码认证扩展: %w", err)
-	}
+func (s *StorageState) SetAuthExtension(extension AuthExtension) {
+	raw, _ := json.Marshal(extension)
 	if s.extra == nil {
 		s.extra = make(map[string]json.RawMessage)
 	}
 	s.extra[authExtensionKey] = raw
-	return nil
 }
 
 // AuthExtension 返回 aistudio2api 认证扩展
@@ -102,7 +118,6 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 
 // IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境，View 不为空时登录画面显示在管理页登录窗口
 type IsolatedLoginRequest struct {
-	AccountID string
 	Directory string
 	Proxy     string
 	Locale    string
@@ -369,14 +384,10 @@ func cookiePathMatches(cookiePath string, requestPath string) bool {
 }
 
 func defaultCookiePath(requestPath string) string {
-	if requestPath == "" || requestPath[0] != '/' || requestPath == "/" {
+	if requestPath == "" || requestPath[0] != '/' {
 		return "/"
 	}
-	directory := path.Dir(requestPath)
-	if directory == "." {
-		return "/"
-	}
-	return directory
+	return path.Dir(requestPath)
 }
 
 func sameSiteText(value http.SameSite) string {

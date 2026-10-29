@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
@@ -26,7 +25,7 @@ const route = useRoute()
 const { t, logText } = useI18n()
 const store = useConsole()
 const speech = useSpeech()
-const { state, currentModel, daikon, multi, openAIMulti, canRun } = speech
+const { state, daikon, multi, openAIMulti, canRun } = speech
 const { playingSample, loadingSample, toggleSample, stopSample } = useSamplePlayer()
 const codeOpen = ref(false)
 const voiceOpen = ref(false)
@@ -53,7 +52,7 @@ function openVoice(speaker: number): void {
 function newDialog(): void {
   stopSample()
   speech.newDialog()
-  void nextTick(() => blockCards.value[0]?.focus())
+  void nextTick(() => blockCards.value[0]!.focus())
 }
 
 // useTemplate 载入官网示例对话
@@ -65,7 +64,7 @@ function useTemplate(template: SpeechTemplate): void {
 // addBlock 加入一段台词并聚焦
 function addBlock(): void {
   speech.addBlock()
-  void nextTick(() => blockCards.value.at(-1)?.focus())
+  void nextTick(() => blockCards.value.at(-1)!.focus())
 }
 
 // onBlockKeydown 按提交键运行
@@ -78,19 +77,13 @@ function onBlockKeydown(event: KeyboardEvent): void {
 
 // code 按语言生成当前台词与设置的语音示例代码
 function code(language: MediaCodeLanguage): string {
-  const model = currentModel.value
-  const openAI = speech.openAISpeechBody(state.settings.model)
   return speechCode(language, {
     baseURL: window.location.origin,
     model: state.settings.model,
     prompt: speech.codePrompt(),
-    temperature: state.settings.temperature ?? model?.temperature ?? 1,
+    temperature: speech.temperature.value,
     speakers: multi.value ? state.speakers : [state.speakers[0]!],
-    openAI: {
-      input: String(openAI.input ?? ''),
-      voice: String(openAI.voice ?? ''),
-      instructions: typeof openAI.instructions === 'string' ? openAI.instructions : undefined,
-    },
+    openAI: speech.openAISpeechBody(state.settings.model),
   })
 }
 
@@ -108,10 +101,7 @@ onUnmounted(() => {
 <template>
   <MediaLayout>
     <template #actions>
-      <CopyPromptButton
-        :text="speech.codePrompt"
-        :disabled="zero || speech.state.blocks.length === 0"
-      />
+      <CopyPromptButton :text="speech.codePrompt" :disabled="zero" />
       <button
         v-tooltip.below="zero ? t('pg.alreadyNewChat') : t('pg.newChat')"
         type="button"

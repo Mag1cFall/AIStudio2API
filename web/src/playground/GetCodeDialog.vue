@@ -17,7 +17,7 @@ const docs = computed(() =>
     : 'https://github.com/Mag1cFall/AIStudio2API/blob/main/README_en.md#api-usage',
 )
 
-// turns 是示例代码中的对话：已有轮次加上输入框中尚未发送的内容，即按下运行时页面发出的请求；输入框为空且最后不是用户轮次时与官网一样以 INSERT_INPUT_HERE 作为新的用户轮次
+// turns 是示例代码中的对话：已有轮次加上输入框中尚未发送的内容，输入框为空且最后不是用户轮次时以 INSERT_INPUT_HERE 作为新的用户轮次
 const turns = computed<Turn[]>(() => {
   const draft = session.draft.trim()
   if (draft === '' && session.attachments.length === 0) {

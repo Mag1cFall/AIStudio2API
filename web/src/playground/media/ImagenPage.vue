@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { computed, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -14,11 +13,11 @@ import MediaLayout from './MediaLayout.vue'
 import MediaPromptBox from './MediaPromptBox.vue'
 import PaidUsageZeroState, { type Suggestion } from './PaidUsageZeroState.vue'
 import { imagenCode, imagenCodeOptions, useImagen, type ImagenLanguage } from './imagen'
+import { useRunningClock } from '../clock'
 import { useMediaQuery } from '../media-query'
 import { failureText } from '../request'
 
 const route = useRoute()
-const router = useRouter()
 const { t } = useI18n()
 const store = useConsole()
 const imagen = useImagen()
@@ -60,17 +59,7 @@ const suggestions = computed<Suggestion[]>(() =>
 const canRun = computed(() => currentModel.value !== undefined && state.draft.trim() !== '')
 
 // now 在生成期间每 100 ms 刷新，用于显示已用时间
-const now = ref(performance.now())
-let ticker = 0
-watch(
-  () => state.running,
-  (running) => {
-    window.clearInterval(ticker)
-    if (running) ticker = window.setInterval(() => (now.value = performance.now()), 100)
-  },
-  { immediate: true },
-)
-onUnmounted(() => window.clearInterval(ticker))
+const now = useRunningClock(() => state.running)
 
 // elapsed 返回模型轮次的耗时文字
 function elapsed(index: number, duration: number | undefined): string {
@@ -104,12 +93,6 @@ function runSuggestion(item: Suggestion): void {
   generate()
 }
 
-// newChat 清空当前会话
-function newChat(): void {
-  imagen.newSession()
-  void router.replace({ query: { ...route.query } })
-}
-
 watch(
   () => store.models.value,
   () => imagen.ensureModel(typeof route.query.model === 'string' ? route.query.model : undefined),
@@ -127,7 +110,7 @@ watch(
         class="ms-button-borderless ms-button-icon"
         :aria-label="t('pg.newChat')"
         :aria-disabled="state.turns.length === 0 || state.running"
-        @click="state.turns.length > 0 && !state.running && newChat()"
+        @click="state.turns.length > 0 && !state.running && imagen.newSession()"
       >
         <UiIcon name="add" :size="20" />
       </button>
@@ -297,7 +280,7 @@ watch(
 
 .turn-separator {
   margin-top: 12px;
-  border-top: 1px solid var(--turn-separator-color, var(--color-v3-outline));
+  border-top: 1px solid var(--color-v3-outline);
 }
 
 .image-gallery {
@@ -355,16 +338,6 @@ watch(
     var(--color-loading-background) 60%
   );
   background-size: 800px;
-}
-
-@keyframes moving-gradient {
-  0% {
-    background-position: -400px 0;
-  }
-
-  to {
-    background-position: 400px 0;
-  }
 }
 
 .prompt-input-container {

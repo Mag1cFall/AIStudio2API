@@ -1,15 +1,13 @@
 // PcmPlayer 是按到达顺序连续播放 L16 PCM 音频块的播放器
-export interface PcmPlayer {
+interface PcmPlayer {
   enqueue(base64: string, mimeType: string): void
   interrupt(): void
   suspend(): Promise<void>
   resume(): Promise<void>
-  close(): void
-  readonly context: AudioContext | undefined
 }
 
 // pcmFormat 从 audio/l16;rate=48000;channels=2 这类 MIME 读取采样率与声道数
-function pcmFormat(mimeType: string): { rate: number; channels: number } {
+export function pcmFormat(mimeType: string): { rate: number; channels: number } {
   const parameters = new Map(
     mimeType
       .split(';')
@@ -69,14 +67,6 @@ export function createPcmPlayer(lead = 0.1): PcmPlayer {
     },
     resume: async () => {
       await context?.resume()
-    },
-    close: () => {
-      interrupt()
-      void context?.close()
-      context = undefined
-    },
-    get context() {
-      return context
     },
   }
 }

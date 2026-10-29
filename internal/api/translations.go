@@ -21,12 +21,7 @@ func (s *server) handleOpenAITranslation(w http.ResponseWriter, r *http.Request)
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "audio translation is unavailable")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, openAIFileMaxBytes+openAIFileRequestOverhead)
-	if err := r.ParseMultipartForm(transcriptionMultipartMemory); err != nil {
-		if r.MultipartForm != nil {
-			_ = r.MultipartForm.RemoveAll()
-		}
-		writeFileParseError(w, r, err)
+	if !parseAudioForm(w, r) {
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
@@ -139,7 +134,7 @@ func (s *server) translateSegments(ctx context.Context, model string, sources []
 	if err != nil {
 		return nil, err
 	}
-	result, err := consumeEvents(ctx, events, nil)
+	result, err := consumeEvents(ctx, events)
 	if err != nil {
 		return nil, err
 	}

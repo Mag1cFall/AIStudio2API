@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import { useTheme, type ThemePreference } from '@/theme'
@@ -23,11 +22,6 @@ const submitKeys: { value: SubmitKey; label: 'pg.submitCtrlEnter' | 'pg.submitEn
 ]
 // microphones 是浏览器列出的音频输入设备
 const microphones = ref<{ id: string; label: string }[]>([])
-
-// chooseTheme 与官网一样直接切换到选中的配色选项
-function chooseTheme(next: ThemePreference): void {
-  if (next !== preference.value) selectTheme(next)
-}
 
 // loadMicrophones 列出音频输入设备，未授权时设备名为空并按序号显示
 async function loadMicrophones(): Promise<void> {
@@ -61,7 +55,7 @@ watch(open, (value) => {
             class="ms-button-filter-chip"
             :class="{ 'ms-button-active': preference === item.value }"
             :aria-pressed="preference === item.value"
-            @click="chooseTheme(item.value)"
+            @click="selectTheme(item.value)"
           >
             {{ t(item.label) }}
           </button>

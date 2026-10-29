@@ -13,14 +13,14 @@ const props = defineProps<{
   delta?:
     | { text: string; tone: 'good' | 'bad' | 'neutral'; direction: 'up' | 'down'; help: string }
     | undefined
-  spark?: number[] | undefined
-  color?: string | undefined
+  spark: number[]
+  color: string
   tone?: string | undefined
 }>()
 
 // sparkPath 把序列归一化为 100×28 的折线路径
 const sparkPath = computed(() => {
-  const values = props.spark ?? []
+  const values = props.spark
   if (values.length < 2) return ''
   const high = Math.max(...values)
   const low = Math.min(...values)
@@ -85,7 +85,7 @@ const deltaClass = computed(() => {
       <path
         :d="sparkPath"
         fill="none"
-        :stroke="color ?? '#60a5fa'"
+        :stroke="color"
         stroke-width="1.5"
         vector-effect="non-scaling-stroke"
       />

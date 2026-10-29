@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { ref } from 'vue'
 import {
   DropdownMenuContent,
@@ -31,8 +30,8 @@ const camera = ref<InstanceType<typeof CameraDialog>>()
 
 // onChange 读取选择的图片文件
 function onChange(): void {
-  const files = [...(input.value?.files ?? [])].filter((file) => file.type.startsWith('image/'))
-  if (input.value) input.value.value = ''
+  const files = [...input.value!.files!].filter((file) => file.type.startsWith('image/'))
+  input.value!.value = ''
   if (files.length > 0) emit('images', files)
 }
 

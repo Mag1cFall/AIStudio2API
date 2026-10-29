@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import type { ThinkingBudget } from '@/types'
@@ -31,7 +30,7 @@ const budgetTip = computed(() =>
   ),
 )
 
-// setBudget 把输入的预算限制在上下限之间的整数，与官网一样设为 0 时关闭思考
+// setBudget 把输入的预算限制在上下限之间的整数，设为 0 时关闭思考
 function setBudget(input: number): void {
   value.value = Math.min(Math.max(Math.round(input), min.value), max.value)
 }
@@ -100,13 +99,6 @@ function setBudget(input: number): void {
   font-size: 12px;
   font-weight: 400;
   line-height: 18px;
-}
-
-.settings-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
 }
 
 .settings-item-title {

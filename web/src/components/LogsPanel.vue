@@ -7,7 +7,7 @@ import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import StageLogCard from './StageLogCard.vue'
 import { groupLogs, type LogResize, type LogRow } from '@/logs'
-import { standardEase } from '@/motion'
+import { reducedMotion, standardEase } from '@/motion'
 import { useQueryParam, useQueryText } from '@/url'
 
 const props = defineProps<{
@@ -38,19 +38,19 @@ const sources = computed(() =>
 )
 
 function matchLog(entry: AdminLog, query: string): boolean {
-  if (entry.message && entry.message.toLowerCase().includes(query)) return true
-  if (entry.message && logText(entry.message).toLowerCase().includes(query)) return true
-  if (entry.source && entry.source.toLowerCase().includes(query)) return true
-  if (entry.event && entry.event.toLowerCase().includes(query)) return true
+  if (entry.message.toLowerCase().includes(query)) return true
+  if (logText(entry.message).toLowerCase().includes(query)) return true
+  if (entry.source.toLowerCase().includes(query)) return true
+  if (entry.event.toLowerCase().includes(query)) return true
   if (entry.request) {
     const req = entry.request
-    if (req.id && req.id.toLowerCase().includes(query)) return true
-    if (req.model && req.model.toLowerCase().includes(query)) return true
-    if (req.path && req.path.toLowerCase().includes(query)) return true
+    if (req.id.toLowerCase().includes(query)) return true
+    if (req.model?.toLowerCase().includes(query)) return true
+    if (req.path?.toLowerCase().includes(query)) return true
     if (req.status !== undefined && String(req.status).includes(query)) return true
-    if (req.error && req.error.toLowerCase().includes(query)) return true
+    if (req.error?.toLowerCase().includes(query)) return true
     if (req.error && logText(req.error).toLowerCase().includes(query)) return true
-    if (req.finish_reason && req.finish_reason.toLowerCase().includes(query)) return true
+    if (req.finish_reason?.toLowerCase().includes(query)) return true
   }
   return false
 }
@@ -62,8 +62,7 @@ const filteredLogs = computed(() => {
   return rows.value.filter(({ entry, events, stage }) => {
     const checked = stage ? events : [entry]
     return (
-      (level.value === 'ALL' ||
-        checked.some((event) => event.level.toUpperCase() === level.value)) &&
+      (level.value === 'ALL' || checked.some((event) => event.level === level.value)) &&
       (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
       (query === '' || checked.some((event) => matchLog(event, query)))
     )
@@ -82,8 +81,6 @@ const firstVisible = computed(() => {
     )
   return Math.max(0, list.length - displayLimit.value)
 })
-const hasMore = computed(() => firstVisible.value > 0)
-const hiddenCount = computed(() => firstVisible.value)
 const visibleLogs = computed(() => filteredLogs.value.slice(firstVisible.value))
 
 // pinWindow 自动滚动关闭时固定当前窗口首行，开启时恢复跟随末尾
@@ -115,31 +112,23 @@ function levelLabel(value: (typeof levels)[number]): string {
   return t(keys[value])
 }
 
-function displayLevel(value: string): string {
-  const normalized = value.toUpperCase()
-  return levels.includes(normalized as (typeof levels)[number])
-    ? levelLabel(normalized as (typeof levels)[number])
-    : value
-}
-
 // glide 是进行中的滚到末尾动画帧，没有动画时为 0
 let glide = 0
 
 function scrollToBottom(): void {
   if (!autoScroll.value || glide !== 0) return
   void nextTick(() => {
-    if (output.value !== undefined) output.value.scrollTop = output.value.scrollHeight
+    output.value!.scrollTop = output.value!.scrollHeight
   })
 }
 
 // glideToBottom 从最多一屏之外以先快后慢的缓动滚到末尾，减少动态效果时直接到底
 function glideToBottom(): void {
-  const element = output.value
-  if (!element) return
+  const element = output.value!
   cancelAnimationFrame(glide)
   glide = 0
   const end = element.scrollHeight - element.clientHeight
-  if (end - element.scrollTop <= 1 || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (end - element.scrollTop <= 1 || reducedMotion()) {
     element.scrollTop = end
     return
   }
@@ -170,20 +159,15 @@ function setRowOpen(key: string, open: boolean): void {
 function toggleRow(row: LogRow, event: MouseEvent): void {
   if (!row.entry.request && !row.stage) return
   if ((event.target as Element).closest('button, a, input, textarea, select, .log-collapse')) return
-  const selection = getSelection()
-  if (
-    selection &&
-    !selection.isCollapsed &&
-    (event.currentTarget as Element).contains(selection.anchorNode)
-  )
+  const selection = getSelection()!
+  if (!selection.isCollapsed && (event.currentTarget as Element).contains(selection.anchorNode))
     return
   setRowOpen(row.key, !openRows.has(row.key))
 }
 
 // scrollAlong 以与详情高度过渡相同的缓动把日志区滚动 shift，被尚未撑开的高度截住时继续跟到过渡结束，过渡时长为 0 时直接到位
 function scrollAlong(shift: number, duration: number): void {
-  const element = output.value
-  if (!element) return
+  const element = output.value!
   cancelAnimationFrame(glide)
   glide = 0
   const start = element.scrollTop
@@ -204,11 +188,10 @@ function scrollAlong(shift: number, duration: number): void {
 
 // followDetails 在详情展开时随过渡把整行滚入视野且不把被点击的标题滚出顶部，收起时把已滚出顶部的标题带回顶部
 function followDetails(event: Event): void {
-  const element = output.value
+  const element = output.value!
   const target = event.target as Element
-  const heading = target.parentElement
-  const entry = target.closest('.log-entry')
-  if (!element || !heading || !entry) return
+  const heading = target.parentElement!
+  const entry = target.closest('.log-entry')!
   const { delta, duration } = (event as CustomEvent<LogResize>).detail
   const view = element.getBoundingClientRect()
   const top = heading.getBoundingClientRect().top - view.top - revealMargin
@@ -224,8 +207,8 @@ function followDetails(event: Event): void {
 
 // followScroll 在日志区离开末尾时关闭自动滚动，回到末尾时开启
 function followScroll(): void {
-  if (!output.value || glide !== 0) return
-  const element = output.value
+  if (glide !== 0) return
+  const element = output.value!
   const distance = element.scrollHeight - element.scrollTop - element.clientHeight
   if (autoScroll.value && distance > 40) autoScroll.value = false
   else if (!autoScroll.value && distance <= 10) autoScroll.value = true
@@ -238,11 +221,6 @@ const timeFormat = new Intl.DateTimeFormat('en-GB', {
   second: '2-digit',
   hour12: false,
 })
-
-function displayTime(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : timeFormat.format(date)
-}
 
 function clampSourceWidth(value: number): number {
   return Math.min(maxSourceWidth, Math.max(minSourceWidth, value))
@@ -261,13 +239,6 @@ function startSourceResize(event: PointerEvent): void {
 function moveSourceResize(event: PointerEvent): void {
   if (!resizingSource.value) return
   sourceWidth.value = clampSourceWidth(resizeStartWidth + event.clientX - resizeStartX)
-}
-
-function stopSourceResize(event: PointerEvent): void {
-  if (!resizingSource.value) return
-  const handle = event.currentTarget as HTMLElement
-  if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
-  resizingSource.value = false
 }
 
 function resizeSourceWithKeyboard(event: KeyboardEvent): void {
@@ -385,12 +356,12 @@ onUnmounted(() => cancelAnimationFrame(glide))
           :aria-valuenow="sourceWidth"
           @pointerdown="startSourceResize"
           @pointermove="moveSourceResize"
-          @pointerup="stopSourceResize"
-          @pointercancel="stopSourceResize"
+          @pointerup="resizingSource = false"
+          @pointercancel="resizingSource = false"
           @keydown="resizeSourceWithKeyboard"
         ></div>
         <div
-          v-if="hasMore"
+          v-if="firstVisible > 0"
           class="flex items-center justify-center py-2 border-b border-line bg-panel/60 text-xs my-1 rounded"
         >
           <button
@@ -398,7 +369,7 @@ onUnmounted(() => cancelAnimationFrame(glide))
             class="rounded border border-line bg-canvas px-3 py-1 text-gray-400 hover:border-blue-500 hover:text-blue-400 transition"
             @click="loadOlder"
           >
-            {{ t('logs.loadOlder').replace('{count}', String(hiddenCount)) }}
+            {{ t('logs.loadOlder').replace('{count}', String(firstVisible)) }}
           </button>
         </div>
         <div
@@ -407,18 +378,16 @@ onUnmounted(() => cancelAnimationFrame(glide))
           class="log-entry log-grid border-l-2 px-2 py-1 select-text"
           :class="{
             'log-expandable': row.entry.request || row.stage,
-            'border-blue-500 text-gray-300': row.entry.level.toUpperCase() === 'INFO',
-            'border-yellow-500 bg-yellow-500/5 text-yellow-100':
-              row.entry.level.toUpperCase() === 'WARN',
-            'border-red-500 bg-red-500/10 text-red-100': row.entry.level.toUpperCase() === 'ERROR',
-            'border-gray-600 text-gray-300': !['INFO', 'WARN', 'ERROR'].includes(
-              row.entry.level.toUpperCase(),
-            ),
+            'border-blue-500 text-gray-300': row.entry.level === 'INFO',
+            'border-yellow-500 bg-yellow-500/5 text-yellow-100': row.entry.level === 'WARN',
+            'border-red-500 bg-red-500/10 text-red-100': row.entry.level === 'ERROR',
           }"
           @click="toggleRow(row, $event)"
         >
-          <span class="text-right text-gray-500">{{ displayTime(row.entry.time) }}</span>
-          <span class="font-semibold">{{ displayLevel(row.entry.level) }}</span>
+          <span class="text-right text-gray-500">{{
+            timeFormat.format(new Date(row.entry.time))
+          }}</span>
+          <span class="font-semibold">{{ levelLabel(row.entry.level) }}</span>
           <span v-tooltip="row.entry.source" class="log-cell log-source text-gray-500">{{
             row.entry.source
           }}</span>
@@ -509,7 +478,7 @@ onUnmounted(() => cancelAnimationFrame(glide))
 .source-resizer:hover::after,
 .source-resizer:focus-visible::after,
 .source-resizer.is-resizing::after {
-  background: #3b82f6;
+  background: var(--color-blue-500);
 }
 
 .source-resizer:focus-visible {
@@ -517,10 +486,6 @@ onUnmounted(() => cancelAnimationFrame(glide))
 }
 
 @media (max-width: 767px) {
-  .log-table {
-    min-width: 0;
-  }
-
   .log-grid {
     grid-template-columns: 4.5rem 3.25rem minmax(0, 1fr);
     column-gap: 0.5rem;

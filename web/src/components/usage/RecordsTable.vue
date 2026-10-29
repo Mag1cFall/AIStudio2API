@@ -126,11 +126,8 @@ function restart(): void {
 
 // move 前后翻页，向后翻页时记录下一页的位置
 function move(step: 1 | -1): void {
-  if (step === 1) {
-    if (nextCursor.value === undefined) return
-    cursors.value = [...cursors.value.slice(0, page.value + 1), nextCursor.value]
-  }
-  page.value = Math.max(0, page.value + step)
+  if (step === 1) cursors.value = [...cursors.value.slice(0, page.value + 1), nextCursor.value]
+  page.value += step
   void load()
 }
 

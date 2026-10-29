@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { vTooltip } from './tooltip'
-import { computed, useSlots, type VNode } from 'vue'
+import { keepPrimarySelect, useSelectOptions } from '@/components/UiSelect.vue'
 import {
   SelectContent,
   SelectItem,
@@ -17,61 +16,7 @@ defineOptions({ inheritAttrs: false })
 
 const model = defineModel<string | number>()
 defineProps<{ disabled?: boolean; icon?: IconName }>()
-const slots = useSlots()
-
-interface SelectOption {
-  value: string | number
-  label: string
-  disabled: boolean
-  title: string
-}
-
-// vnodeText 拼接 option 子节点中的文本
-function vnodeText(children: unknown): string {
-  if (typeof children === 'string') return children
-  if (Array.isArray(children))
-    return children.map((child) => vnodeText((child as VNode)?.children ?? child)).join('')
-  return ''
-}
-
-// collectOptions 从默认插槽展开 option 与 v-for 片段
-function collectOptions(nodes: VNode[], result: SelectOption[]): SelectOption[] {
-  for (const node of nodes) {
-    if (node.type === 'option') {
-      const label = vnodeText(node.children).trim()
-      const value = (node.props?.value as string | number | undefined) ?? label
-      const disabled = node.props?.disabled
-      result.push({
-        value,
-        label,
-        disabled: disabled !== undefined && disabled !== false,
-        title: String(node.props?.title ?? ''),
-      })
-    } else if (Array.isArray(node.children)) {
-      collectOptions(node.children as VNode[], result)
-    }
-  }
-  return result
-}
-
-const options = computed(() => collectOptions(slots.default?.() ?? [], []))
-const selectedIndex = computed(() =>
-  options.value.findIndex((option) => option.value === model.value),
-)
-const selectedLabel = computed(() => options.value[selectedIndex.value]?.label ?? '')
-
-// keepPrimarySelect 拦截非左键松开，中键滚动结束时不选中停留项
-function keepPrimarySelect(event: PointerEvent) {
-  if (event.button !== 0) event.stopPropagation()
-}
-// selectedKey 以选项下标作为 Reka 选项值
-const selectedKey = computed({
-  get: () => (selectedIndex.value < 0 ? '' : String(selectedIndex.value)),
-  set: (key: string) => {
-    const option = key === '' ? undefined : options.value[Number(key)]
-    if (option) model.value = option.value
-  },
-})
+const { options, selectedLabel, selectedKey } = useSelectOptions(model)
 </script>
 
 <template>

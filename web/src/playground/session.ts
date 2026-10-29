@@ -15,7 +15,14 @@ import { useConsole } from '@/console'
 import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
 import type { Model, SavedPrompt, SystemInstructionPreset } from '@/types'
-import { defaultChatModel, hasCode, toolCodes, toolCompatible, type Tool } from './catalog'
+import {
+  Capability,
+  defaultChatModel,
+  hasCode,
+  toolCodes,
+  toolCompatible,
+  type Tool,
+} from './catalog'
 import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
 import { apiKey, apiPart, appendParts, buildRequest, countTokens, failureText } from './request'
@@ -56,13 +63,13 @@ export function outputLimit(model: Model | undefined): number | undefined {
     : model?.output_token_limit
 }
 
-// modelDefaults 返回随模型变化的运行设置默认值
+// modelDefaults 返回随模型变化的运行设置默认值，官网面板隐藏的采样参数默认不发送
 function modelDefaults(model: Model | undefined): Partial<RunSettings> {
   return {
     model: model?.id ?? '',
-    temperature: model?.temperature ?? null,
-    topP: model?.top_p ?? null,
-    topK: model?.top_k ?? null,
+    temperature: hasCode(model, Capability.Temperature) ? (model?.temperature ?? null) : null,
+    topP: hasCode(model, Capability.TopP) ? (model?.top_p ?? null) : null,
+    topK: hasCode(model, Capability.TopK) ? (model?.top_k ?? null) : null,
     maxOutputTokens: model?.output_token_limit ?? null,
     thinkingLevel: model?.default_thinking_level ?? null,
     thinkingBudget: -1,
@@ -126,7 +133,7 @@ export function newTurnID(): string {
 }
 
 // SaveState 是对话保存状态
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 // cloneData 以 JSON 往返复制对话数据，嵌套的响应式对象一并复制为普通对象
 function cloneData<T>(value: T): T {
@@ -368,7 +375,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
 
   // submit 发送输入框内容；输入为空且最后一轮为用户轮次时直接运行
   async function submit(): Promise<void> {
-    if (session.running) return
     if (!append() && session.turns.at(-1)?.role !== 'user') return
     await run()
   }
@@ -478,15 +484,12 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // rerun 从某一轮重新生成：模型轮次替换自身，用户轮次替换其后的回复
   function rerun(index: number): void {
     if (session.running) return
-    const turn = session.turns[index]
-    if (turn === undefined) return
-    session.turns.splice(turn.role === 'model' ? index : index + 1)
+    session.turns.splice(session.turns[index]!.role === 'model' ? index : index + 1)
     void run()
   }
 
   // respond 以用户填写的函数响应继续生成：响应为 JSON 对象时原样发送，否则作为 result 字段发送
   function respond(call: NonNullable<Part['functionCall']>, text: string): void {
-    if (session.running) return
     let response: Record<string, unknown>
     try {
       const value: unknown = JSON.parse(text)
@@ -510,8 +513,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
 
   // editTurn 用新文本替换某一轮的文本片段
   function editTurn(index: number, text: string): void {
-    const turn = session.turns[index]
-    if (turn === undefined) return
+    const turn = session.turns[index]!
     const others = turn.parts.filter((part) => part.text === undefined || part.thought)
     turn.parts = text === '' ? others : [...others, { text }]
     scheduleSave()
@@ -732,8 +734,8 @@ watch(
 // setSync 与官网一致切换系统指令同步，开启时把 index 窗格的系统指令写入右侧窗格
 function setSync(index: number, value: boolean): void {
   syncInstructions.value = value
-  const text = panes[index]?.session.settings.systemInstruction
-  if (!value || text === undefined) return
+  if (!value) return
+  const text = panes[index]!.session.settings.systemInstruction
   for (const pane of panes.slice(1)) pane.session.settings.systemInstruction = text
 }
 
@@ -768,8 +770,7 @@ function leaveCompare(): void {
 
 // closePane 关闭一个窗格：关闭左侧时右侧的对话与运行设置成为页面对话
 function closePane(index: number): void {
-  const right = panes[1]
-  if (right === undefined) return
+  const right = panes[1]!
   if (index === 0) {
     main.stop()
     right.stop()

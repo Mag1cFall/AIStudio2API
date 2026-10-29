@@ -35,7 +35,7 @@ export function sendDesktop(command: string): void {
 
 // openExternal 把新窗口打开的链接交给系统浏览器，桌面窗口本身只显示管理页面
 function openExternal(event: MouseEvent): void {
-  const link = (event.target as Element | null)?.closest('a[target="_blank"]')
+  const link = (event.target as Element).closest('a[target="_blank"]')
   if (!(link instanceof HTMLAnchorElement)) return
   event.preventDefault()
   sendDesktop(`open:${link.href}`)

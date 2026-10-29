@@ -1,18 +1,14 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
+import { copyToClipboard } from '../clipboard'
 
 const props = defineProps<{ text: () => string; disabled: boolean; disabledMessage?: string }>()
 const { t } = useI18n()
-const { showNotice } = useConsole()
 
 // copy 把当前提示词复制到剪贴板
-async function copy(): Promise<void> {
-  if (props.disabled) return
-  await navigator.clipboard.writeText(props.text())
-  showNotice(t('pg.copied'), 'success')
+function copy(): void {
+  if (!props.disabled) void copyToClipboard(props.text())
 }
 </script>
 

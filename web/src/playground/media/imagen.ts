@@ -11,7 +11,7 @@ import { pageKindOf } from './kinds'
 import { requestTitle } from '../title'
 
 // ImagenTurn 是 Imagen 页的一轮：用户轮次记录提示词，模型轮次记录生成的图片
-export interface ImagenTurn {
+interface ImagenTurn {
   id: string
   role: 'user' | 'model'
   prompt?: string
@@ -55,7 +55,7 @@ let controller: AbortController | undefined
 keepPage(() => state.running || state.turns.length > 0)
 
 // imagenModels 返回目录中归属 Imagen 页的模型
-export function imagenModels(): Model[] {
+function imagenModels(): Model[] {
   return useConsole().models.value.filter((model) => pageKindOf(model) === 'image')
 }
 

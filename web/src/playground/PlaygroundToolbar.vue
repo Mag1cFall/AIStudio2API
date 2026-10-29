@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref } from 'vue'
 import {
   DropdownMenuContent,
@@ -245,37 +244,6 @@ async function removePrompt(): Promise<void> {
 </template>
 
 <style scoped>
-.ms-header {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  padding: 16px 20px 8px var(--ms-header-padding-left, 20px);
-  backdrop-filter: blur(5px);
-  background-color: var(--color-v3-overlay-background);
-}
-
-.ms-header::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 32px;
-  background: linear-gradient(to bottom, var(--color-v3-surface) 0, transparent 100%);
-  content: '';
-  pointer-events: none;
-  transform: translateY(100%);
-}
-
-@media screen and (max-width: 480px) {
-  .ms-header {
-    padding: 16px 8px 8px var(--ms-header-padding-left, 8px);
-  }
-}
-
 .toolbar-left,
 .toolbar-right {
   display: flex;

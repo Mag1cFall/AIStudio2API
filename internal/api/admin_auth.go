@@ -60,7 +60,7 @@ type adminAuth struct {
 // newAdminAuth 创建进程级管理认证，载入会话文件中账号密码未变且未到期的会话
 func newAdminAuth(config Config) *adminAuth {
 	auth := &adminAuth{config: config, sessions: make(map[string]*adminSession), attempts: make(map[string]loginAttempt)}
-	if !config.AdminAuthEnabled || config.AdminSessionPath == "" {
+	if !config.AdminAuthEnabled {
 		return auth
 	}
 	data, err := os.ReadFile(config.AdminSessionPath)
@@ -101,19 +101,13 @@ func (auth *adminAuth) addSession(token string, expires time.Time, remembered bo
 
 // saveRemembered 在持锁期间把记住我的会话写入会话文件
 func (auth *adminAuth) saveRemembered() error {
-	if auth.config.AdminSessionPath == "" {
-		return nil
-	}
 	saved := rememberedSessions{Credential: auth.credential(), Sessions: []rememberedSessionRow{}}
 	for token, session := range auth.sessions {
 		if session.remembered {
 			saved.Sessions = append(saved.Sessions, rememberedSessionRow{Token: token, Expires: session.expires})
 		}
 	}
-	data, err := json.Marshal(saved)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(saved)
 	if err := os.MkdirAll(filepath.Dir(auth.config.AdminSessionPath), 0o755); err != nil {
 		return err
 	}
@@ -226,7 +220,7 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	userOK := subtle.ConstantTimeCompare([]byte(strings.TrimSpace(input.Username)), []byte(auth.config.AdminUsername))
 	passwordOK := subtle.ConstantTimeCompare([]byte(input.Password), []byte(auth.config.AdminPassword))
-	if userOK&passwordOK != 1 || auth.config.AdminPassword == "" {
+	if userOK&passwordOK != 1 {
 		attempt := auth.attempts[peer]
 		if attempt.count == 0 {
 			attempt.until = now.Add(time.Minute)

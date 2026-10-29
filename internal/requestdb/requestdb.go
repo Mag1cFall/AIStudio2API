@@ -150,9 +150,6 @@ func addCachedTokens(db *sql.DB) error {
 
 // Close 写完已排队的记录后关闭数据库
 func (store *Store) Close() error {
-	if store == nil {
-		return nil
-	}
 	store.mu.Lock()
 	if store.closed {
 		store.mu.Unlock()

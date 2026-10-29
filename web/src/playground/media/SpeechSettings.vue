@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { nextTick, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -9,12 +8,13 @@ import UiSwitch from '@/playground/ui/UiSwitch.vue'
 import ModelCard from '../ModelCard.vue'
 import RunSettingsFrame from '../RunSettingsFrame.vue'
 import { defaultAlias, speechProtocols, useSpeech } from './speech'
+import { voiceTraits } from './speech-voices'
 
 defineProps<{ open: boolean; narrow: boolean }>()
 const emit = defineEmits<{ close: []; code: []; voice: [speaker: number] }>()
 const { t } = useI18n()
 const speech = useSpeech()
-const { state, currentModel, daikon, multi, openAIMulti, usedSpeakers } = speech
+const { state, currentModel, daikon, multi, openAIMulti, usedSpeakers, temperature } = speech
 const modelOpen = ref(false)
 // editing 是正在编辑名称的说话人序号
 const editing = ref(-1)
@@ -29,13 +29,7 @@ function setTemperature(event: Event): void {
 // characteristics 与官网一致返回说话人卡片的描述与音高
 function characteristics(voice: string): string {
   const detail = speech.voiceDetail(voice)
-  if (!detail) return ''
-  return [
-    ...(detail.descriptions ?? []),
-    detail.pitch ? t('pg.pitchValue').replace('{pitch}', detail.pitch) : '',
-  ]
-    .filter(Boolean)
-    .join(', ')
+  return detail ? voiceTraits(detail).join(', ') : ''
 }
 
 // editAlias 开始编辑说话人名称
@@ -102,7 +96,7 @@ function saveAlias(index: number, event: Event): void {
         <h3 class="item-description-title">{{ t('pg.temperature') }}</h3>
         <div class="ms-slider">
           <UiSlider
-            :model-value="state.settings.temperature ?? currentModel?.temperature ?? 1"
+            :model-value="temperature"
             :min="0"
             :max="currentModel?.max_temperature ?? 2"
             :step="0.05"
@@ -117,7 +111,7 @@ function saveAlias(index: number, event: Event): void {
             :max="currentModel?.max_temperature ?? 2"
             step="0.05"
             :aria-label="t('pg.temperature')"
-            :value="state.settings.temperature ?? currentModel?.temperature ?? 1"
+            :value="temperature"
             @change="setTemperature"
           />
         </div>

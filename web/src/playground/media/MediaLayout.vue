@@ -1,57 +1,25 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
+import { useRunSettingsPanel } from '../shortcuts'
 
 // fadeTitle 为真时页头标题与官网音乐、Live 页一样在进入页面时淡入
 defineProps<{ title?: string; fadeTitle?: boolean }>()
 const { t } = useI18n()
 
-// narrowQuery 与官网一致，960 px 以下运行设置为右侧滑出面板
-const narrowQuery = window.matchMedia('(max-width: 960px)')
-const narrow = ref(narrowQuery.matches)
-const settingsOpen = ref(!narrow.value)
-const onNarrowChange = (event: MediaQueryListEvent): void => {
-  narrow.value = event.matches
-  settingsOpen.value = !event.matches
-}
-
 const column = ref<HTMLElement>()
-
-// onKeydown 处理官网快捷键：Ctrl+Shift+S 切换运行设置，/ 聚焦页面主输入框
-function onKeydown(event: KeyboardEvent): void {
-  if (event.defaultPrevented || document.querySelector('[role="dialog"]')) return
-  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 's') {
-    event.preventDefault()
-    settingsOpen.value = !settingsOpen.value
-    return
-  }
-  const target = event.target as HTMLElement | null
-  const editing =
-    target !== null &&
-    (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-  if (event.key !== '/' || editing || event.ctrlKey || event.metaKey || event.altKey) return
-  const input = column.value?.querySelector<HTMLTextAreaElement>('textarea:not([disabled])')
-  if (input === null || input === undefined) return
-  event.preventDefault()
-  input.focus()
-}
+// narrow 与 settingsOpen 是运行设置面板的状态，/ 聚焦页面中第一个可用的输入框
+const { narrow, settingsOpen } = useRunSettingsPanel(() => {
+  const input = column.value!.querySelector<HTMLTextAreaElement>('textarea:not([disabled])')
+  input?.focus()
+  return input !== null
+})
 
 // closeSettings 关闭运行设置
 function closeSettings(): void {
   settingsOpen.value = false
 }
-
-onMounted(() => {
-  narrowQuery.addEventListener('change', onNarrowChange)
-  window.addEventListener('keydown', onKeydown)
-})
-
-onUnmounted(() => {
-  narrowQuery.removeEventListener('change', onNarrowChange)
-  window.removeEventListener('keydown', onKeydown)
-})
 </script>
 
 <template>
@@ -100,37 +68,6 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-}
-
-.ms-header {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  padding: 16px 20px 8px var(--ms-header-padding-left, 20px);
-  backdrop-filter: blur(5px);
-  background-color: var(--color-v3-overlay-background);
-}
-
-.ms-header::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 32px;
-  background: linear-gradient(to bottom, var(--color-v3-surface) 0, transparent 100%);
-  content: '';
-  pointer-events: none;
-  transform: translateY(100%);
-}
-
-@media screen and (max-width: 480px) {
-  .ms-header {
-    padding: 16px 8px 8px var(--ms-header-padding-left, 8px);
-  }
 }
 
 .toolbar-right {

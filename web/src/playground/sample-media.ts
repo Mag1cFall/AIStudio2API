@@ -9,7 +9,7 @@ export interface SampleVideo {
 }
 
 // SampleCategory 是官网 Sample Media 中的一组示例图片
-export interface SampleCategory {
+interface SampleCategory {
   name: string
   label: TranslationKey
   images: string[]

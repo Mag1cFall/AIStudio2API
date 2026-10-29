@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { MODE_DRAWS, resolvePreset, type OrbSize, type OrbState } from 'thinking-orbs/engine'
+import { MODE_DRAWS, resolvePreset, type OrbState } from 'thinking-orbs/engine'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useTheme } from '@/theme'
 
 // ThinkingOrb 是官网 thinking-orb 的点阵球动画
-const props = withDefaults(defineProps<{ state: OrbState; size?: OrbSize }>(), {
-  size: 64,
-})
+const props = defineProps<{ state: OrbState }>()
+// size 是点阵球的边长
+const size = 64
 const canvas = ref<HTMLCanvasElement>()
 const { theme } = useTheme()
 let stop: (() => void) | undefined
@@ -18,8 +18,7 @@ function start(): void {
   const element = canvas.value
   const context = element?.getContext('2d')
   if (!element || !context) return
-  const size = props.size
-  const ratio = Math.min(2, window.devicePixelRatio || 1)
+  const ratio = Math.min(2, window.devicePixelRatio)
   element.width = Math.round(size * ratio)
   element.height = Math.round(size * ratio)
   const { mode, speed, opts } = resolvePreset(props.state, size)
@@ -69,7 +68,7 @@ function start(): void {
 }
 
 onMounted(start)
-watch([() => props.state, () => props.size, theme], start)
+watch([() => props.state, theme], start)
 onUnmounted(() => stop?.())
 </script>
 

@@ -60,7 +60,6 @@ function choose(range: RangePreset): void {
 
 // applyCustom 应用校验通过的自定义范围
 function applyCustom(): void {
-  if (customError.value !== '') return
   emit('apply', 'custom', customFrom.value, customTo.value)
   open.value = false
 }

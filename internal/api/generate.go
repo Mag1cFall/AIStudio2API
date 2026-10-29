@@ -14,7 +14,6 @@ import (
 )
 
 var errIncompleteStream = errors.New("upstream stream closed before finish")
-var errUpstreamStream = errors.New("upstream stream error")
 
 const streamHeartbeatInterval = 10 * time.Second
 
@@ -58,39 +57,21 @@ func (result *generationResult) apply(event aistudio.Event) error {
 		usage := *event.Usage
 		result.usage = &usage
 	}
-	if event.Kind == aistudio.EventError {
-		if event.Err != nil {
-			return event.Err
-		}
-		return errUpstreamStream
-	}
 	switch event.Kind {
+	case aistudio.EventError:
+		return event.Err
 	case aistudio.EventText:
 		result.text.WriteString(event.Text)
 	case aistudio.EventReasoning:
 		result.reasoning.WriteString(event.Text)
 	case aistudio.EventToolCall:
-		if event.FunctionCall != nil {
-			call := *event.FunctionCall
-			if len(call.Arguments) == 0 {
-				call.Arguments = json.RawMessage(`{}`)
-			}
-			if !json.Valid(call.Arguments) {
-				return fmt.Errorf("upstream tool call %q arguments are not JSON", call.Name)
-			}
-			event.FunctionCall = &call
-			result.toolCalls = append(result.toolCalls, call)
-		}
+		result.toolCalls = append(result.toolCalls, *event.FunctionCall)
 	case aistudio.EventGrounding:
-		if event.Grounding != nil {
-			grounding := *event.Grounding
-			result.grounding = &grounding
-			result.citations = append(result.citations, groundingCitations(grounding)...)
-		}
+		grounding := *event.Grounding
+		result.grounding = &grounding
+		result.citations = append(result.citations, groundingCitations(grounding)...)
 	case aistudio.EventCitation:
-		if event.Citation != nil {
-			result.citations = append(result.citations, *event.Citation)
-		}
+		result.citations = append(result.citations, *event.Citation)
 	case aistudio.EventMedia:
 		if event.ExternalMedia != nil && (event.ExternalMedia.MIME == "" || event.ExternalMedia.URL == "") {
 			return fmt.Errorf("upstream media is missing MIME or content")
@@ -99,16 +80,12 @@ func (result *generationResult) apply(event aistudio.Event) error {
 			if event.InlineData.MIME == "" || len(event.InlineData.Data) == 0 {
 				return fmt.Errorf("upstream media is missing MIME or content")
 			}
+			if count := len(result.events); count > 0 && result.events[count-1].Kind == aistudio.EventMedia && aistudio.MergePCM(&result.events[count-1].Part, event.Part) {
+				result.media[len(result.media)-1].Data = result.events[count-1].InlineData.Data
+				return nil
+			}
 			media := *event.InlineData
 			media.Data = append([]byte(nil), media.Data...)
-			if strings.HasPrefix(media.MIME, "audio/l16") && len(result.events) > 0 {
-				previous := &result.events[len(result.events)-1]
-				if previous.Kind == aistudio.EventMedia && previous.InlineData != nil && previous.InlineData.MIME == media.MIME && previous.ThoughtSignature == "" && event.ThoughtSignature == "" {
-					previous.InlineData.Data = append(previous.InlineData.Data, media.Data...)
-					result.media[len(result.media)-1].Data = append(result.media[len(result.media)-1].Data, media.Data...)
-					return nil
-				}
-			}
 			event.InlineData = &media
 			result.media = append(result.media, media)
 		}
@@ -139,10 +116,7 @@ func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan
 			return nil, errIncompleteStream
 		}
 		if event.Kind == aistudio.EventError {
-			if event.Err != nil {
-				return nil, event.Err
-			}
-			return nil, errUpstreamStream
+			return nil, event.Err
 		}
 		first = event
 	}
@@ -160,20 +134,13 @@ func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan
 	return replay, nil
 }
 
-func consumeEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (result generationResult, resultErr error) {
-	return consumeEventsWithHeartbeat(ctx, events, emit, nil)
+// consumeEvents 收集全部事件，不逐个转发也不写心跳
+func consumeEvents(ctx context.Context, events <-chan aistudio.Event) (generationResult, error) {
+	return consumeStreamEvents(ctx, events, nil, nil)
 }
 
+// consumeStreamEvents 收集事件并逐个交给 emit，heartbeat 不为空时在事件间隔达到心跳间隔时调用
 func consumeStreamEvents(
-	ctx context.Context,
-	events <-chan aistudio.Event,
-	emit func(aistudio.Event) error,
-	heartbeat func() error,
-) (generationResult, error) {
-	return consumeEventsWithHeartbeat(ctx, events, emit, heartbeat)
-}
-
-func consumeEventsWithHeartbeat(
 	ctx context.Context,
 	events <-chan aistudio.Event,
 	emit func(aistudio.Event) error,
@@ -182,24 +149,11 @@ func consumeEventsWithHeartbeat(
 	defer func() {
 		SetAccessLogError(ctx, resultErr)
 	}()
-	var heartbeatTimer *time.Timer
+	heartbeatTimer := time.NewTimer(streamHeartbeatInterval)
+	defer heartbeatTimer.Stop()
 	var heartbeatTick <-chan time.Time
 	if heartbeat != nil {
-		heartbeatTimer = time.NewTimer(streamHeartbeatInterval)
 		heartbeatTick = heartbeatTimer.C
-		defer heartbeatTimer.Stop()
-	}
-	resetHeartbeat := func() {
-		if heartbeatTimer == nil {
-			return
-		}
-		if !heartbeatTimer.Stop() {
-			select {
-			case <-heartbeatTimer.C:
-			default:
-			}
-		}
-		heartbeatTimer.Reset(streamHeartbeatInterval)
 	}
 	for {
 		select {
@@ -209,7 +163,7 @@ func consumeEventsWithHeartbeat(
 			if err := heartbeat(); err != nil {
 				return result, err
 			}
-			resetHeartbeat()
+			heartbeatTimer.Reset(streamHeartbeatInterval)
 		case event, ok := <-events:
 			if !ok {
 				if !result.finished {
@@ -225,7 +179,7 @@ func consumeEventsWithHeartbeat(
 					return result, err
 				}
 			}
-			resetHeartbeat()
+			heartbeatTimer.Reset(streamHeartbeatInterval)
 		}
 	}
 }
@@ -245,9 +199,8 @@ func inputTokens(usage *aistudio.Usage) int64 {
 }
 
 func providerFinishReason(reason string) string {
-	normalized := strings.ToLower(strings.TrimSpace(reason))
-	if strings.HasPrefix(normalized, "provider_") {
-		return normalized
+	if strings.HasPrefix(reason, "provider_") {
+		return reason
 	}
 	return ""
 }
@@ -334,31 +287,17 @@ func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawM
 			return content, media, nil
 		}
 	}
-	if isError {
-		if len(raw) == 0 {
-			raw = json.RawMessage("null")
-		}
-		if !json.Valid(raw) {
-			return nil, nil, fmt.Errorf("function result must be JSON")
-		}
-		return json.RawMessage(`{"error":` + strings.TrimSpace(string(raw)) + `}`), nil, nil
-	}
-	content, err := normalizeFunctionResultContent(raw)
-	return content, nil, err
-}
-
-func normalizeFunctionResultContent(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage("null")
 	}
 	if !json.Valid(raw) {
-		return nil, fmt.Errorf("function result must be JSON")
+		return nil, nil, fmt.Errorf("function result must be JSON")
 	}
 	trimmed := strings.TrimSpace(string(raw))
-	if strings.HasPrefix(trimmed, "{") {
-		return raw, nil
+	if !isError && strings.HasPrefix(trimmed, "{") {
+		return raw, nil, nil
 	}
-	return json.RawMessage(`{"result":` + trimmed + `}`), nil
+	return json.RawMessage(`{"` + key + `":` + trimmed + `}`), nil, nil
 }
 
 func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation {
@@ -366,7 +305,7 @@ func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation
 	if len(metadata.Supports) == 0 {
 		for _, chunk := range metadata.Chunks {
 			if chunk.URI != "" {
-				citations = append(citations, aistudio.Citation{URL: chunk.URI, Title: chunk.Title, Publisher: chunk.Source})
+				citations = append(citations, aistudio.Citation{URL: chunk.URI, Title: chunk.Title})
 			}
 		}
 		return citations
@@ -381,7 +320,7 @@ func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation
 				continue
 			}
 			citations = append(citations, aistudio.Citation{
-				URL: chunk.URI, Title: chunk.Title, Publisher: chunk.Source,
+				URL: chunk.URI, Title: chunk.Title,
 				Start: support.Segment.StartIndex, End: support.Segment.EndIndex,
 			})
 		}
@@ -410,18 +349,12 @@ func spanCitation(output string, spans []textSpan, citation aistudio.Citation) (
 func renderCodeExecution(event aistudio.Event) string {
 	switch event.Kind {
 	case aistudio.EventExecutableCode:
-		if event.ExecutableCode == nil {
-			return ""
-		}
 		language := strings.ToLower(event.ExecutableCode.Language)
 		if language == "language_unspecified" {
 			language = "text"
 		}
 		return "```" + language + "\n" + strings.TrimSuffix(event.ExecutableCode.Code, "\n") + "\n```"
 	case aistudio.EventCodeExecutionResult:
-		if event.CodeExecutionResult == nil {
-			return ""
-		}
 		value := event.CodeExecutionResult.Output
 		if value == "" {
 			return ""

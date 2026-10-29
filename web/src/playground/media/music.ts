@@ -11,12 +11,12 @@ import { pageKindOf } from './kinds'
 import { requestTitle } from '../title'
 
 // MusicImage 是音乐提示中的参考图片
-export interface MusicImage extends InlineImage {
+interface MusicImage extends InlineImage {
   name: string
 }
 
 // MusicAudio 是播放栏中的音频，sample 表示官网示例音频
-export interface MusicAudio {
+interface MusicAudio {
   url: string
   name: string
   sample?: boolean
@@ -40,7 +40,7 @@ export const sectionLabels: Record<SectionType, TranslationKey> = {
 }
 
 // MusicSection 是分段编排中的一段：类型、起止秒数、强度与描述
-export interface MusicSection {
+interface MusicSection {
   id: string
   type: SectionType
   description: string
@@ -69,11 +69,11 @@ export function clock(seconds: number): string {
 // seconds 把 m:ss 解析为秒数
 export function seconds(value: string): number {
   const [minutes, rest] = value.split(':').map(Number)
-  return (minutes ?? 0) * 60 + (rest ?? 0)
+  return minutes! * 60 + rest!
 }
 
 // serializeSections 与官网一致把分段写为提示词
-export function serializeSections(sections: readonly MusicSection[]): string {
+function serializeSections(sections: readonly MusicSection[]): string {
   return sections
     .map(
       (section) =>
@@ -83,14 +83,14 @@ export function serializeSections(sections: readonly MusicSection[]): string {
 }
 
 // parseSections 与官网一致从提示词解析分段，没有分段格式时返回 null
-export function parseSections(text: string): MusicSection[] | null {
+function parseSections(text: string): MusicSection[] | null {
   const matches = [...text.matchAll(sectionPattern)]
   if (matches.length === 0) return null
   const sections: MusicSection[] = []
   let cursor = 0
   for (const match of matches) {
     const between = text.slice(cursor, match.index).trim()
-    let description = match[5] ?? ''
+    let description = match[5]!
     const last = sections.at(-1)
     if (between) {
       if (last) last.description = last.description ? `${last.description}\n\n${between}` : between
@@ -206,7 +206,6 @@ function syncSections(): void {
 
 // addSection 与官网一致在末尾加入一段，起点接上一段终点，时长 10 秒
 function addSection(type: SectionType): void {
-  if (state.sections.length >= maxSections) return
   const start = state.sections.at(-1)?.endTime ?? 0
   state.sections.push({
     id: newTurnID(),
@@ -221,7 +220,6 @@ function addSection(type: SectionType): void {
 
 // moveSection 与官网一致移动段落，各位置保留原有的起止时间
 function moveSection(from: number, to: number): void {
-  if (to < 0 || to >= state.sections.length) return
   const times = state.sections.map(({ startTime, endTime }) => ({ startTime, endTime }))
   const [section] = state.sections.splice(from, 1)
   state.sections.splice(to, 0, section!)
@@ -236,7 +234,7 @@ function removeSection(index: number): void {
 }
 
 // requestBody 按官网运行请求组合 generateContent：图片在前，提示词在后，输出音频
-function requestBody(model: Model | undefined = currentModel.value): Record<string, unknown> {
+function requestBody(model: Model): Record<string, unknown> {
   return {
     contents: [
       {
@@ -250,8 +248,8 @@ function requestBody(model: Model | undefined = currentModel.value): Record<stri
       },
     ],
     generationConfig: {
-      ...(model?.top_p === undefined ? {} : { topP: model.top_p }),
-      ...(model?.top_k === undefined ? {} : { topK: model.top_k }),
+      ...(model.top_p === undefined ? {} : { topP: model.top_p }),
+      ...(model.top_k === undefined ? {} : { topK: model.top_k }),
       responseModalities: ['AUDIO'],
     },
   }
@@ -315,7 +313,6 @@ export function useMusic() {
     addSection,
     moveSection,
     removeSection,
-    requestBody,
     run,
     stop,
   }

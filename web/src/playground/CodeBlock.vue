@@ -4,8 +4,8 @@ import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { vTooltip } from '@/playground/ui/tooltip'
 import { previewOrigin } from '@/playground/preview'
+import { copyToClipboard } from './clipboard'
 import { highlightCode } from './highlight'
 
 const props = withDefaults(
@@ -14,23 +14,17 @@ const props = withDefaults(
     language?: string
     headerText?: string
     icon?: IconName
-    expandable?: boolean
-    showDownload?: boolean
-    stickyHeader?: boolean
     showDivider?: boolean
   }>(),
   {
     language: '',
     headerText: '',
     icon: 'code',
-    expandable: true,
-    showDownload: true,
-    stickyHeader: true,
     showDivider: false,
   },
 )
 const { t } = useI18n()
-const { showNotice, config } = useConsole()
+const { config } = useConsole()
 
 // languageNames 是官网代码块标题中与语言标识不同写法的显示名
 const languageNames: Record<string, string> = {
@@ -147,7 +141,6 @@ onUnmounted(() => {
 
 // toggle 展开或折叠代码，长代码折叠后卸载内部节点
 function toggle(): void {
-  if (!props.expandable) return
   window.clearTimeout(unmountTimer)
   const next = !expanded.value
   if (next) {
@@ -162,16 +155,6 @@ function toggle(): void {
     unmountTimer = window.setTimeout(() => {
       if (!expanded.value) bodyMounted.value = false
     }, 225)
-  }
-}
-
-// copy 复制代码并以提示条告知结果
-async function copy(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(trimmed.value)
-    showNotice(t('pg.copied'), 'success')
-  } catch {
-    showNotice(t('pg.copyFailed'), 'error')
   }
 }
 
@@ -190,14 +173,12 @@ function download(): void {
 <template>
   <div class="ms-code-block" :data-test-language="language">
     <div class="container">
-      <div class="panel" :class="{ 'sticky-header': stickyHeader, expanded }">
+      <div class="panel" :class="{ expanded }">
         <div
           class="code-header"
-          :class="{ sticky: stickyHeader, disabled: !expandable }"
           role="button"
-          :tabindex="expandable ? 0 : -1"
+          tabindex="0"
           :aria-expanded="expanded"
-          :aria-disabled="!expandable"
           @click="toggle"
           @keydown.enter.self.prevent="toggle"
           @keydown.space.self.prevent="toggle"
@@ -225,7 +206,6 @@ function download(): void {
                 <UiIcon :name="previewing ? 'stopGeneration' : 'playCircle'" :size="20" />
               </button>
               <button
-                v-if="showDownload"
                 v-tooltip="t('pg.download')"
                 type="button"
                 ms-button
@@ -241,13 +221,12 @@ function download(): void {
                 ms-button
                 class="ms-button-borderless ms-button-icon"
                 :aria-label="t('pg.copyCode')"
-                @click="copy"
+                @click="copyToClipboard(trimmed)"
               >
                 <UiIcon name="copy" :size="20" />
               </button>
             </div>
             <button
-              v-if="expandable"
               v-tooltip="expanded ? t('pg.collapseCode') : t('pg.expandCode')"
               type="button"
               ms-button
@@ -298,16 +277,15 @@ function download(): void {
 }
 
 .panel {
-  overflow: hidden;
+  overflow: visible clip;
   border-radius: 12px;
   background: var(--color-v3-surface-container);
 }
 
-.panel.sticky-header {
-  overflow: visible clip;
-}
-
 .code-header {
+  position: sticky;
+  z-index: 1;
+  top: calc(var(--ms-autoscroll-container-padding-top, 20px) * -1);
   display: flex;
   align-items: center;
   height: 36px;
@@ -322,18 +300,8 @@ function download(): void {
   outline: none;
 }
 
-.code-header.disabled {
-  cursor: default;
-}
-
 .code-header:focus-visible {
   background-color: var(--color-v3-surface-container-high);
-}
-
-.code-header.sticky {
-  position: sticky;
-  z-index: 1;
-  top: calc(var(--ms-autoscroll-container-padding-top, 20px) * -1);
 }
 
 .header-content {

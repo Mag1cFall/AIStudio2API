@@ -55,11 +55,11 @@ func (p *AccountPool) SetModelChannels(channels map[string]Channel) {
 func (p *AccountPool) SetBuildCatalog(accountID string, models []Model) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	account := p.byID[strings.TrimSpace(accountID)]
+	account := p.byID[accountID]
 	if account == nil {
 		return ErrAccountNotFound
 	}
-	account.buildModels = cloneAccountModels(models)
+	account.buildModels = cloneModels(models)
 	p.notifyLocked()
 	return nil
 }
@@ -287,9 +287,6 @@ func (p *AccountPool) modelCapabilityLocked(modelID string, capability string) b
 		return false
 	}
 	for _, account := range p.accounts {
-		if account == nil {
-			continue
-		}
 		for _, model := range account.Models {
 			if model.ID == modelID {
 				return model.Capabilities[capability]
@@ -313,9 +310,6 @@ func (p *AccountPool) buildSupportsModelLocked(account *Account, modelID string,
 		return false
 	}
 	for _, candidate := range p.accounts {
-		if candidate == nil {
-			continue
-		}
 		for _, model := range candidate.Models {
 			if modelMatchesID(model, modelID) {
 				return !buildExcludedPlaygroundModel(model) && (anyTier || modelAllowedByTier(model, account.BenefitTier))
@@ -379,14 +373,14 @@ func (p *AccountPool) buildOnlyModelsLocked() []Model {
 	var models []Model
 	seen := make(map[string]struct{})
 	for _, account := range p.accounts {
-		if account == nil || !account.Config.Enabled {
+		if !account.Config.Enabled {
 			continue
 		}
 		for _, model := range account.buildModels {
 			if _, exists := seen[model.ID]; exists || p.hasPlaygroundModelLocked(model.ID) {
 				continue
 			}
-			listed := cloneAccountModels([]Model{model})[0]
+			listed := cloneModels([]Model{model})[0]
 			if !hasMethod(model, "generateContent") {
 				listed.Methods = buildPublicMethods(model)
 			} else if !p.buildSupportsModelLocked(account, model.ID, false) {
@@ -404,9 +398,6 @@ func (p *AccountPool) buildOnlyModelsLocked() []Model {
 
 func (p *AccountPool) hasPlaygroundModelLocked(modelID string) bool {
 	for _, account := range p.accounts {
-		if account == nil {
-			continue
-		}
 		for _, model := range account.Models {
 			if modelMatchesID(model, modelID) {
 				return true
@@ -435,16 +426,12 @@ func (p *AccountPool) OutputContinuationRounds(modelID string, maxOutputTokens *
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, account := range p.accounts {
-		if account == nil {
-			continue
-		}
 		for _, model := range account.Models {
 			if modelMatchesID(model, modelID) && model.Capabilities["output_continuation"] {
-				requested := model.OutputTokenLimit
+				total := max(model.InputTokenLimit, continuationRoundTokens)
 				if maxOutputTokens != nil {
-					requested = *maxOutputTokens
+					total = min(*maxOutputTokens, total)
 				}
-				total := min(requested, max(model.InputTokenLimit, continuationRoundTokens))
 				return max(1, int((total+continuationRoundTokens-1)/continuationRoundTokens))
 			}
 		}
@@ -457,9 +444,6 @@ func (p *AccountPool) hasBuildModelLocked(modelID string, method string) bool {
 		return false
 	}
 	for _, account := range p.accounts {
-		if account == nil {
-			continue
-		}
 		for _, model := range account.buildModels {
 			if model.ID != modelID || method != "" && !hasMethod(model, method) {
 				continue
@@ -488,7 +472,7 @@ func (p *AccountPool) modelChannelsLocked(model Model, anyTier bool) []string {
 	var channels []string
 	for _, channel := range p.selectionChannelsLocked(selection) {
 		for _, account := range p.accounts {
-			if account != nil && account.Config.Enabled && p.channelSupportsLocked(account, channel, selection) {
+			if account.Config.Enabled && p.channelSupportsLocked(account, channel, selection) {
 				channels = append(channels, string(channel))
 				break
 			}
@@ -499,12 +483,9 @@ func (p *AccountPool) modelChannelsLocked(model Model, anyTier bool) []string {
 
 // AccountChannelAvailable 返回账户是否还有支持选择且未冷却的通道
 func (p *AccountPool) AccountChannelAvailable(accountID string, selection AccountSelection) bool {
-	if p == nil {
-		return false
-	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	account := p.byID[strings.TrimSpace(accountID)]
+	account := p.byID[accountID]
 	if account == nil || !account.Config.Enabled || !p.accountSupportsAnyChannelLocked(account, selection) {
 		return false
 	}

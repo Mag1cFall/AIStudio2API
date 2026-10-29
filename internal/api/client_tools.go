@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -26,6 +27,40 @@ var clientToolDeclarations = map[string]aistudio.FunctionDeclaration{
 		Description: "Creates, updates or deletes a file. diff uses the V4A format: for create_file every line of the new file starts with +; for update_file each hunk starts with @@ and every line starts with a space for context, - for a removed line or + for an added line.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"type":{"type":"string","enum":["create_file","update_file","delete_file"],"description":"The file operation"},"path":{"type":"string","description":"The file path"},"diff":{"type":"string","description":"The V4A diff for create_file and update_file"}},"required":["type","path"]}`),
 	},
+}
+
+// computerAction 是 computer_call 单个动作的参数 Schema
+const computerAction = `{"type":"object","properties":{"type":{"type":"string","enum":["click","double_click","drag","keypress","move","screenshot","scroll","type","wait"]},"button":{"type":"string","enum":["left","right","wheel","back","forward"]},"x":{"type":"integer"},"y":{"type":"integer"},"path":{"type":"array","items":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}},"keys":{"type":"array","items":{"type":"string"}},"scroll_x":{"type":"integer"},"scroll_y":{"type":"integer"},"text":{"type":"string"}},"required":["type"]}`
+
+// computerToolDeclaration 把 computer_use_preview 与 computer 工具声明为名为 computer 的函数：前者参数为单个动作并在描述中写屏幕尺寸与环境，后者参数为按顺序执行的动作列表
+func computerToolDeclaration(tool responsesTool) aistudio.FunctionDeclaration {
+	description := "Controls the user's computer with the mouse and keyboard. screenshot captures the screen, click presses button at x and y, double_click double-clicks at x and y, drag holds the left button along path, keypress presses keys together, move moves the mouse to x and y, scroll scrolls by scroll_x and scroll_y at x and y, type types text, wait pauses briefly."
+	if tool.Type == "computer_use_preview" {
+		var environment string
+		_ = json.Unmarshal(tool.Environment, &environment)
+		description = fmt.Sprintf("The %s screen is %dx%d pixels; x and y are pixel positions from the top-left corner. ", environment, tool.DisplayWidth, tool.DisplayHeight) + description
+		return aistudio.FunctionDeclaration{Name: "computer", Description: description, Parameters: json.RawMessage(computerAction)}
+	}
+	return aistudio.FunctionDeclaration{Name: "computer", Description: description + " The actions run in order.", Parameters: json.RawMessage(`{"type":"object","properties":{"actions":{"type":"array","items":` + computerAction + `}},"required":["actions"]}`)}
+}
+
+// shellSkills 把 shell 工具本地环境中的 skills 名称、路径与说明写入函数说明
+func shellSkills(declaration aistudio.FunctionDeclaration, environment json.RawMessage) aistudio.FunctionDeclaration {
+	var local struct {
+		Skills []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Path        string `json:"path"`
+		} `json:"skills"`
+	}
+	if json.Unmarshal(environment, &local) != nil || len(local.Skills) == 0 {
+		return declaration
+	}
+	declaration.Description += "\n\nSkills available in the local environment:"
+	for _, skill := range local.Skills {
+		declaration.Description += fmt.Sprintf("\n- %s (%s): %s", skill.Name, skill.Path, skill.Description)
+	}
+	return declaration
 }
 
 // customToolDeclaration 将 custom 工具声明为只接收字符串 input 的函数，语法格式写入描述
@@ -92,6 +127,10 @@ func responsesToolKind(tools []responsesTool, name string) string {
 			}
 		case "local_shell", "shell", "apply_patch":
 			if tool.Type == name {
+				return tool.Type
+			}
+		case "computer_use_preview", "computer":
+			if name == "computer" {
 				return tool.Type
 			}
 		case "namespace":

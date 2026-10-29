@@ -230,6 +230,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
 		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
+		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),
@@ -363,10 +364,7 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // browserAddress 将通配监听地址转换为本机可访问地址
 func browserAddress(address string) string {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return address
-	}
+	host, port, _ := net.SplitHostPort(address)
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}

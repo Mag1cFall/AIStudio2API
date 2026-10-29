@@ -16,7 +16,6 @@ export function standardEase(progress: number): number {
     const error = bezier(0.4, 0.2, t) - progress
     if (Math.abs(error) < 1e-5) break
     const slope = 3 * (1 - t) ** 2 * 0.4 + 6 * (1 - t) * t * (0.2 - 0.4) + 3 * t ** 2 * (1 - 0.2)
-    if (slope === 0) break
     t = Math.min(1, Math.max(0, t - error / slope))
   }
   return bezier(0, 1, t)

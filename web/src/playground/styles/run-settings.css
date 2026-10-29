@@ -80,11 +80,6 @@
   width: 65%;
 }
 
-.ms-run-settings .slider-number-input {
-  font-size: 12px;
-  line-height: 18px;
-}
-
 .ms-run-settings .settings-group-header {
   display: flex;
   align-items: center;

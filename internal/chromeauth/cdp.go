@@ -166,10 +166,7 @@ func debugVersion(ctx context.Context, address string) (cdpVersion, error) {
 	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return cdpVersion{}, fmt.Errorf("浏览器调试地址无效，例如 127.0.0.1:9222")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.Scheme+"://"+parsed.Host+"/json/version", nil)
-	if err != nil {
-		return cdpVersion{}, err
-	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, parsed.Scheme+"://"+parsed.Host+"/json/version", nil)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return cdpVersion{}, fmt.Errorf("连接浏览器调试地址: %w", err)

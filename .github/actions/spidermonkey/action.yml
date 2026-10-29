@@ -1,0 +1,18 @@
+name: SpiderMonkey
+description: 下载 Mag1cFall/firefox Release 中指定目标的 SpiderMonkey 静态库与头文件，并设置 cgo 的编译与链接路径
+inputs:
+  target:
+    description: 静态库目标，如 linux-amd64、linux-amd64-gnu、windows-amd64、darwin-arm64
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        dir="$RUNNER_TEMP/spidermonkey/$TARGET"
+        mkdir -p "$dir"
+        curl -fsSL "https://github.com/Mag1cFall/firefox/releases/download/$SPIDERMONKEY/spidermonkey-$SPIDERMONKEY-$TARGET.tar.gz" | tar -xz -C "$dir"
+        echo "CGO_CXXFLAGS=-I$dir/include" >> "$GITHUB_ENV"
+        echo "CGO_LDFLAGS=-L$dir/lib" >> "$GITHUB_ENV"

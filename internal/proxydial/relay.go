@@ -47,13 +47,9 @@ func (relay *Relay) Addr() *net.TCPAddr {
 	return relay.listener.Addr().(*net.TCPAddr)
 }
 
-// Close 停止监听并断开全部转发连接，可重复调用
+// Close 停止监听并断开全部转发连接
 func (relay *Relay) Close() error {
 	relay.mu.Lock()
-	if relay.closed {
-		relay.mu.Unlock()
-		return nil
-	}
 	relay.closed = true
 	conns := make([]net.Conn, 0, len(relay.conns))
 	for conn := range relay.conns {

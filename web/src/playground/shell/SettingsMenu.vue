@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { ref } from 'vue'
 import {
   DropdownMenuContent,
@@ -24,7 +23,7 @@ const userSettingsOpen = ref(false)
     <DropdownMenuTrigger
       v-tooltip="t('nav.settings')"
       ms-button
-      class="trigger-button ms-button-borderless ms-button-icon"
+      class="ms-button-borderless ms-button-icon"
       :aria-label="t('nav.settings')"
     >
       <UiIcon name="settings" :size="20" />

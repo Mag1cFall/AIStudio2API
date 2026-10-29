@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, onActivated, onDeactivated, ref, shallowRef, watch } from 'vue'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { Model, UsageDimension, UsageReport, UsageStats } from '@/types'
@@ -131,12 +131,13 @@ function resume(): void {
   if (document.visibilityState === 'visible') tick()
 }
 
-onMounted(() => {
-  void load()
+onActivated(() => {
+  if (report.value === null) void load()
+  else tick()
   clockTimer = window.setInterval(tick, 1000)
   document.addEventListener('visibilitychange', resume)
 })
-onUnmounted(() => {
+onDeactivated(() => {
   controller?.abort()
   window.clearInterval(clockTimer)
   document.removeEventListener('visibilitychange', resume)

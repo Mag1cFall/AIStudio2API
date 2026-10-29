@@ -2,13 +2,7 @@ import { EventSourceParserStream } from 'eventsource-parser/stream'
 import { jsonBody } from '@/api'
 import type { Model } from '@/types'
 import { base64Bytes } from './bytes'
-import {
-  errorMessage,
-  StreamError,
-  streamUpdate,
-  type GenerateRequest,
-  type StreamUpdate,
-} from './request'
+import { errorMessage, streamUpdate, type GenerateRequest, type StreamUpdate } from './request'
 import type { Part } from './types'
 
 // Protocol 是 API 试用页发送请求使用的公开协议
@@ -118,7 +112,7 @@ function systemText(request: GenerateRequest): string {
 }
 
 // dataURL 把内联数据写为 data URL
-function dataURL(data: { mimeType: string; data: string }): string {
+export function dataURL(data: { mimeType: string; data: string }): string {
   return `data:${data.mimeType};base64,${data.data}`
 }
 
@@ -370,7 +364,7 @@ function anthropicContent(parts: readonly Part[]): Record<string, unknown>[] {
 }
 
 // anthropicRequest 把 Gemini 请求换为 Messages 请求，max_tokens 未设置时取模型输出上限
-export function anthropicRequest(
+function anthropicRequest(
   model: Model | undefined,
   modelID: string,
   request: GenerateRequest,
@@ -467,7 +461,7 @@ function errorOf(value: Record<string, unknown>): string | undefined {
 
 // Decoder 把一种协议的事件或完整响应逐步换为片段变化
 interface Decoder {
-  event: (value: Record<string, unknown>) => StreamUpdate | undefined
+  event: (value: Record<string, unknown>) => StreamUpdate
   done: (value: Record<string, unknown>) => boolean
 }
 
@@ -750,7 +744,7 @@ function imagesCall(
 }
 
 // ProtocolCall 是一次协议请求：路径、请求头、正文与解析器
-export interface ProtocolCall {
+interface ProtocolCall {
   path: string
   headers: Headers
   body: Record<string, unknown> | GenerateRequest | FormData
@@ -812,7 +806,7 @@ export function protocolCall(
 }
 
 // GenerateOptions 是一次试用请求的协议、模型与回调
-export interface GenerateOptions {
+interface GenerateOptions {
   protocol: Protocol
   stream: boolean
   model: Model | undefined
@@ -841,33 +835,24 @@ export async function generate(options: GenerateOptions): Promise<void> {
     body: call.body instanceof FormData ? call.body : jsonBody(call.body),
     signal: options.signal,
   })
-  if (!response.ok) {
-    const message = await errorMessage(response)
-    throw new StreamError(message, response.status)
-  }
+  if (!response.ok) throw new Error(await errorMessage(response))
   if (!options.stream) {
     const text = await response.text()
     const value = record(JSON.parse(text))
     const error = errorOf(value)
-    if (error !== undefined) throw new StreamError(error, response.status)
-    const update = call.decoder.event({ ...value, type: value.type ?? '' })
-    if (update) options.onUpdate(update)
+    if (error !== undefined) throw new Error(error)
+    options.onUpdate(call.decoder.event({ ...value, type: value.type ?? '' }))
     return
   }
-  if (response.body === null) throw new StreamError('Empty event stream', response.status)
-  const events = response.body
-    .pipeThrough(new TextDecoderStream())
+  const events = response
+    .body!.pipeThrough(new TextDecoderStream())
     .pipeThrough(new EventSourceParserStream())
   for await (const { data } of events) {
     if (data === '[DONE]') return
     const value = record(JSON.parse(data))
     const error = errorOf(value)
-    if (error !== undefined) {
-      const code = record(value.error).code
-      throw new StreamError(error, typeof code === 'number' ? code : response.status)
-    }
-    const update = call.decoder.event(value)
-    if (update) options.onUpdate(update)
+    if (error !== undefined) throw new Error(error)
+    options.onUpdate(call.decoder.event(value))
     if (call.decoder.done(value)) return
   }
 }

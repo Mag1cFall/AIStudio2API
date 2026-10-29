@@ -3,15 +3,14 @@ import { apiKey } from '../request'
 // LiveServerMessage 是本服务 /v1/live 的服务端帧
 export interface LiveServerMessage {
   type: string
-  model?: string
   text?: string
   mime_type?: string
   data?: string
-  transcription?: { text?: string; finished?: boolean; language_code?: string }
+  transcription?: { language_code?: string }
   tool_call?: { id: string; name: string; arguments: Record<string, unknown> }
   tool_call_ids?: string[]
   session_token?: string
-  resumable?: boolean
+  raw?: { kind?: string; text?: string }
   error?: string
   code?: string
 }

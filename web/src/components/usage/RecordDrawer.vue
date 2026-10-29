@@ -11,6 +11,7 @@ import {
 } from 'reka-ui'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
+import { byteLength, prettyBody } from '@/logs'
 import type { RequestBody, UsageRecord } from '@/types'
 import UiIcon from '../UiIcon.vue'
 import { formatBytes, useUsageFormat } from './format'
@@ -70,20 +71,6 @@ const summary = computed(() => {
     { label: t('usage.tokens'), value: integer(record.total_tokens) },
   ]
 })
-
-// byteLength 返回文本的 UTF-8 字节数
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length
-}
-
-// pretty 格式化 JSON 正文，无法解析时原样返回
-function pretty(text: string): string {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
-  }
-}
 
 // copy 复制文本并短暂显示已复制
 async function copy(kind: string, text: string): Promise<void> {
@@ -255,7 +242,7 @@ async function copy(kind: string, text: string): Promise<void> {
                 </div>
                 <pre
                   class="max-h-80 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-gray-300"
-                  >{{ pretty(part.text) }}</pre>
+                  >{{ prettyBody(part.text) }}</pre>
               </div>
             </template>
           </section>

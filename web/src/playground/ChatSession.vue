@@ -1,9 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onDeactivated,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
+} from 'vue'
 import { useI18n } from '@/i18n'
 import ChatTurn from './ChatTurn.vue'
 import ItemsScrollbar, { type ScrollbarItem } from './ItemsScrollbar.vue'
 import { usePlayground } from './session'
+import { editable } from './shortcuts'
 import type { Part } from './types'
 
 defineProps<{ sideBySide?: boolean }>()
@@ -61,16 +71,14 @@ const userScrolling = ref(false)
 
 // measure 记录对话是否可滚动、是否位于底部
 function measure(): void {
-  const element = scroller.value
-  if (!element) return
+  const element = scroller.value!
   scrollable.value = element.scrollHeight > element.clientHeight
   atBottom.value = element.scrollTop >= element.scrollHeight - element.clientHeight
 }
 
 // follow 与官网 ms-autoscroll-container 一致：没有停止跟随时滚到底部，force 先恢复跟随
 function follow(force = false): void {
-  const element = scroller.value
-  if (!element) return
+  const element = scroller.value!
   if (force) detached = false
   if (detached) return
   const max = element.scrollHeight - element.clientHeight
@@ -83,8 +91,7 @@ function follow(force = false): void {
 
 // onScroll 用户向上滚动任意距离即停止跟随，滚到底部恢复跟随；可见高度增加使位置被截短的距离不算向上滚动
 function onScroll(): void {
-  const element = scroller.value
-  if (!element) return
+  const element = scroller.value!
   const max = element.scrollHeight - element.clientHeight
   const top = Math.max(0, Math.floor(element.scrollTop))
   const bottom = top >= max
@@ -105,19 +112,20 @@ const resize = new ResizeObserver(() => {
   follow()
   measure()
 })
-watch(
-  [scroller, content],
-  ([element, inner]) => {
-    resize.disconnect()
-    detached = false
-    lastTop = 0
-    lastHeight = element?.clientHeight ?? 0
-    if (element === undefined || inner === undefined) return
-    resize.observe(inner)
-    resize.observe(element)
-  },
-  { flush: 'post' },
-)
+// observe 观察对话内容与滚动容器的尺寸
+function observe(): void {
+  resize.observe(content.value!)
+  resize.observe(scroller.value!)
+}
+onMounted(() => {
+  lastHeight = scroller.value!.clientHeight
+  observe()
+})
+onDeactivated(() => resize.disconnect())
+onActivated(() => {
+  scroller.value!.scrollTop = lastTop
+  observe()
+})
 watch(
   () => session.running,
   (running) => {
@@ -127,12 +135,7 @@ watch(
 
 // onScrollerKeydown 与官网一致：Alt 加上下方向键聚焦右侧轮次导航
 function onScrollerKeydown(event: KeyboardEvent): void {
-  const element = event.target as HTMLElement | null
-  if (
-    element !== null &&
-    (element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName))
-  )
-    return
+  if (editable(event.target)) return
   if (
     (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
     event.altKey &&

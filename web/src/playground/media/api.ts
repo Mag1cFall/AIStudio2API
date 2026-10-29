@@ -1,8 +1,9 @@
 import { jsonBody } from '@/api'
 import { useI18n } from '@/i18n'
 import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
-import { apiKey, errorMessage, StreamError } from '../request'
+import { apiKey, errorMessage } from '../request'
 import type { Part } from '../types'
+import { pcmFormat } from './pcm-player'
 
 const { t } = useI18n()
 
@@ -13,13 +14,13 @@ export interface InlineImage {
 }
 
 // GenerateResponse 是 generateContent 的响应
-export interface GenerateResponse {
+interface GenerateResponse {
   candidates?: { content?: { parts?: Part[] }; finishReason?: string }[]
   promptFeedback?: { blockReason?: string }
 }
 
 // VideoOperation 是 Gemini 视频长任务的状态
-export interface VideoOperation {
+interface VideoOperation {
   name: string
   done?: boolean
   error?: { message?: string }
@@ -45,7 +46,7 @@ async function post<T>(path: string, body: unknown, signal: AbortSignal): Promis
     body: jsonBody(body),
     signal,
   })
-  if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+  if (!response.ok) throw new Error(await errorMessage(response))
   return (await response.json()) as T
 }
 
@@ -59,7 +60,7 @@ export function generateContent(
 }
 
 // PredictImagesInput 是 Imagen predict 请求的提示词与参数
-export interface PredictImagesInput {
+interface PredictImagesInput {
   prompt: string
   sampleCount: number
   aspectRatio: string
@@ -93,7 +94,7 @@ export async function predictImages(
 }
 
 // OpenAIVideo 是 OpenAI Videos 视频对象
-export interface OpenAIVideo {
+interface OpenAIVideo {
   id: string
   status: string
   error?: { message?: string } | null
@@ -107,7 +108,7 @@ export async function createOpenAIVideo(form: FormData, signal: AbortSignal): Pr
     body: form,
     signal,
   })
-  if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+  if (!response.ok) throw new Error(await errorMessage(response))
   return (await response.json()) as OpenAIVideo
 }
 
@@ -135,11 +136,11 @@ export async function waitOpenAIVideo(video: OpenAIVideo, signal: AbortSignal): 
       headers: headers(false),
       signal,
     })
-    if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+    if (!response.ok) throw new Error(await errorMessage(response))
     current = (await response.json()) as OpenAIVideo
   }
   if (current.status === 'failed')
-    throw new StreamError(current.error?.message ?? t('pg.videoGenerationFailed'), 500)
+    throw new Error(current.error?.message ?? t('pg.videoGenerationFailed'))
   return `/v1/videos/${encodeURIComponent(video.id)}/content`
 }
 
@@ -158,19 +159,18 @@ export async function waitVideo(operation: VideoOperation, signal: AbortSignal):
   while (current.done !== true) {
     await pollDelay(signal)
     const response = await fetch(`/v1beta/${current.name}`, { headers: headers(false), signal })
-    if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+    if (!response.ok) throw new Error(await errorMessage(response))
     current = (await response.json()) as VideoOperation
   }
-  if (current.error)
-    throw new StreamError(current.error.message ?? t('pg.videoGenerationFailed'), 500)
+  if (current.error) throw new Error(current.error.message ?? t('pg.videoGenerationFailed'))
   const samples = current.response?.generateVideoResponse?.generatedSamples ?? []
   return samples.map((sample) => sample.video?.uri ?? '').filter((uri) => uri !== '')
 }
 
 // downloadMedia 下载本服务返回的媒体地址
-export async function downloadMedia(url: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(url, { headers: headers(false), signal: signal ?? null })
-  if (!response.ok) throw new StreamError(await errorMessage(response), response.status)
+export async function downloadMedia(url: string): Promise<Blob> {
+  const response = await fetch(url, { headers: headers(false) })
+  if (!response.ok) throw new Error(await errorMessage(response))
   return response.blob()
 }
 
@@ -189,14 +189,7 @@ export function audioBlob(parts: readonly Part[]): Blob | undefined {
   const mime = audio[0]!.inlineData!.mimeType
   const chunks = audio.map((part) => base64Bytes(part.inlineData!.data))
   if (!mime.toLowerCase().startsWith('audio/l16')) return new Blob(chunks, { type: mime })
-  const parameters = new Map(
-    mime
-      .split(';')
-      .slice(1)
-      .map((item) => item.trim().split('=') as [string, string]),
-  )
-  const rate = Number(parameters.get('rate') ?? 24000)
-  const channels = Number(parameters.get('channels') ?? 1)
+  const { rate, channels } = pcmFormat(mime)
   return pcmToWav(chunks, rate, channels)
 }
 

@@ -203,21 +203,13 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parameters: %w", err)
 	}
-	inlined, err := inlineSchemaRefs(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parameters: %w", err)
-	}
+	inlined := inlineSchemaRefs(raw)
 	parameters, encodingError := encodeJSONSchema(inlined)
 	description := declaration.Description
 	if encodingError != nil {
 		var schema any
-		if err := json.Unmarshal(inlined, &schema); err != nil {
-			return nil, err
-		}
-		shape, err := json.Marshal(toolSchemaShape(schema))
-		if err != nil {
-			return nil, err
-		}
+		_ = json.Unmarshal(inlined, &schema)
+		shape, _ := json.Marshal(toolSchemaShape(schema))
 		parameters, err = encodeJSONSchema(shape)
 		if err != nil {
 			return nil, fmt.Errorf("parameters: %w", err)
@@ -358,7 +350,7 @@ func hasMethod(model Model, method string) bool {
 }
 
 func validateFunctionCall(call *FunctionCall) error {
-	if call == nil || call.Name == "" {
+	if call.Name == "" {
 		return fmt.Errorf("function call 缺少名称")
 	}
 	return nil
@@ -450,10 +442,7 @@ func decodeWireStruct(raw json.RawMessage, path string, evidence json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(object)
-	if err != nil {
-		return nil, fmt.Errorf("编码 function arguments: %w", err)
-	}
+	encoded, _ := json.Marshal(object)
 	return encoded, nil
 }
 

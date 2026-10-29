@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/base64"
 	"fmt"
 	"maps"
@@ -23,15 +24,9 @@ func interactionMedia(media aistudio.Blob, audioFormat string) (map[string]any, 
 		if err != nil {
 			return nil, err
 		}
-		baseType, parameters, err = mime.ParseMediaType(media.MIME)
-		if err != nil {
-			return nil, err
-		}
+		baseType, parameters, _ = mime.ParseMediaType(media.MIME)
 	}
-	typeName := strings.SplitN(baseType, "/", 2)[0]
-	if typeName != "audio" && typeName != "video" && typeName != "image" {
-		typeName = "document"
-	}
+	typeName := interactionContentType(baseType)
 	content := map[string]any{"type": typeName, "mime_type": baseType}
 	data := media.Data
 	if typeName == "audio" {
@@ -53,6 +48,15 @@ func interactionMedia(media aistudio.Blob, audioFormat string) (map[string]any, 
 	}
 	content["data"] = base64.StdEncoding.EncodeToString(data)
 	return content, nil
+}
+
+// interactionContentType 返回 MIME 类型对应的 Interactions 内容类型，音频、视频与图片之外为 document
+func interactionContentType(mimeType string) string {
+	typeName, _, _ := strings.Cut(mimeType, "/")
+	if typeName != "audio" && typeName != "video" && typeName != "image" {
+		return "document"
+	}
+	return typeName
 }
 
 // interactionStep 将单个规范事件投影为步骤内容与对应增量
@@ -78,14 +82,8 @@ func interactionStep(event aistudio.Event, audio outputAudioFormat) (map[string]
 		}
 		return step, map[string]any{"type": "thought_summary", "content": content}, nil
 	case aistudio.EventThoughtSignature:
-		if event.ThoughtSignature == "" {
-			return nil, nil, nil
-		}
 		return map[string]any{"type": "thought", "signature": event.ThoughtSignature}, map[string]any{"type": "thought_signature", "signature": event.ThoughtSignature}, nil
 	case aistudio.EventToolCall:
-		if event.FunctionCall == nil {
-			return nil, nil, nil
-		}
 		call := event.FunctionCall
 		return map[string]any{"type": "function_call", "id": call.ID, "name": call.Name, "arguments": call.Arguments}, nil, nil
 	case aistudio.EventServerToolCall, aistudio.EventServerToolResponse, aistudio.EventExecutableCode, aistudio.EventCodeExecutionResult:
@@ -103,15 +101,8 @@ func interactionStep(event aistudio.Event, audio outputAudioFormat) (map[string]
 		return step, delta, nil
 	case aistudio.EventMedia:
 		if external := event.ExternalMedia; external != nil {
-			typeName := strings.SplitN(external.MIME, "/", 2)[0]
-			if typeName != "audio" && typeName != "video" && typeName != "image" {
-				typeName = "document"
-			}
-			content = map[string]any{"type": typeName, "mime_type": external.MIME, "uri": external.URL}
+			content = map[string]any{"type": interactionContentType(external.MIME), "mime_type": external.MIME, "uri": external.URL}
 			break
-		}
-		if event.InlineData == nil {
-			return nil, nil, nil
 		}
 		media := *event.InlineData
 		var err error
@@ -176,10 +167,10 @@ type interactionText struct {
 
 // interactionCitations 返回引用事件与 grounding 事件携带的引用
 func interactionCitations(event aistudio.Event) []aistudio.Citation {
-	switch {
-	case event.Kind == aistudio.EventCitation && event.Citation != nil:
+	switch event.Kind {
+	case aistudio.EventCitation:
 		return []aistudio.Citation{*event.Citation}
-	case event.Kind == aistudio.EventGrounding && event.Grounding != nil:
+	case aistudio.EventGrounding:
 		return groundingCitations(*event.Grounding)
 	}
 	return nil
@@ -319,17 +310,17 @@ func interactionSteps(result generationResult, audio outputAudioFormat, summarie
 	return steps, nil
 }
 
-// streamInteraction 输出创建、步骤增量、步骤结束与交互终态
-func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, audioExpected bool, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) {
+// streamInteraction 输出创建、步骤增量、步骤结束与交互终态，返回生成失败的错误
+func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, audioExpected bool, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) error {
 	if err := streamHeaders(w); err != nil {
-		return
+		return nil
 	}
 	send := func(kind string, value map[string]any) error {
 		value["event_type"] = kind
 		return writeSSE(w, kind, officialOrder("interactions", value))
 	}
 	if err := send("interaction.created", map[string]any{"interaction": interactionObject(generate, created, "in_progress", nil)}); err != nil {
-		return
+		return nil
 	}
 	audio := request.audioFormat()
 	index := -1
@@ -472,10 +463,10 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 		if shouldWriteRequestError(r, err) {
 			_ = send("error", map[string]any{"error": map[string]any{"code": geminiErrorStatus(err), "message": err.Error()}})
 		}
-		return
+		return err
 	}
 	if err := closeStep(); err != nil {
-		return
+		return nil
 	}
 	completed := interactionObject(generate, created, interactionStatus(result), &result)
 	if request.Store == nil || *request.Store {
@@ -484,16 +475,14 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err := send("interaction.completed", map[string]any{"interaction": completed}); err != nil {
 		SetAccessLogError(r.Context(), fmt.Errorf("interaction completion: %w", err))
 	}
+	return nil
 }
 
 // interactionOutputSignature 提取函数调用、正文与媒体携带的可回传思考签名，输出为其前的 thought 步骤
 func interactionOutputSignature(event aistudio.Event) string {
 	switch event.Kind {
 	case aistudio.EventToolCall:
-		if event.FunctionCall != nil && event.FunctionCall.ThoughtSignature != "" {
-			return event.FunctionCall.ThoughtSignature
-		}
-		return event.ThoughtSignature
+		return cmp.Or(event.FunctionCall.ThoughtSignature, event.ThoughtSignature)
 	case aistudio.EventText, aistudio.EventMedia:
 		return event.ThoughtSignature
 	}

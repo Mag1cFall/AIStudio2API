@@ -40,10 +40,4 @@ function toggle(event: MouseEvent): void {
   opacity: 0;
   transform: rotate(90deg) scale(0.4);
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .theme-icon {
-    transition: none;
-  }
-}
 </style>

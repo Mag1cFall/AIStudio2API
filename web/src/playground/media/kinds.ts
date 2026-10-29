@@ -28,13 +28,3 @@ export function pageKindOf(model: Model | undefined): PageKind {
   if (model.methods.includes('bidiGenerateMusic')) return 'music'
   return 'chat'
 }
-
-// pageKindOfPath 返回路径所属的页面类型
-export function pageKindOfPath(path: string): PageKind {
-  if (path.startsWith('/live')) return 'live'
-  if (path.startsWith('/generate-speech')) return 'speech'
-  if (path.startsWith('/new_music')) return 'music'
-  if (path.startsWith('/prompts/new_image')) return 'image'
-  if (path.startsWith('/prompts/new_video')) return 'video'
-  return 'chat'
-}

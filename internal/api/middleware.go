@@ -55,36 +55,6 @@ type accessLogMetadata struct {
 	authorized      bool
 }
 
-type accessLogSnapshot struct {
-	generation      bool
-	model           string
-	account         string
-	channel         string
-	finishReason    string
-	requestErr      string
-	canceled        bool
-	detached        bool
-	failureStatus   int
-	firstEvent      time.Duration
-	upstreamBytes   int64
-	usage           *aistudio.Usage
-	toolCalls       int
-	inputMessages   int
-	inputTextChars  int
-	inputMedia      int
-	inputMediaBytes int64
-	inputFiles      int
-	temperature     string
-	topP            string
-	thinking        string
-	maxOutputTokens string
-	requestID       string
-	queueWait       time.Duration
-	proof           time.Duration
-	attempts        []RequestAttempt
-	authorized      bool
-}
-
 type accessLogResponseWriter struct {
 	http.ResponseWriter
 	status   int
@@ -119,19 +89,11 @@ func (writer *accessLogResponseWriter) Unwrap() http.ResponseWriter {
 }
 
 func (writer *accessLogResponseWriter) setError(message string) {
-	writer.metadata.setError(message)
-}
-
-func (metadata *accessLogMetadata) setTarget(model string, account string) {
-	metadata.mu.Lock()
-	if model = strings.TrimSpace(model); model != "" {
-		metadata.model = strings.TrimPrefix(model, "models/")
+	if message = strings.TrimSpace(message); message != "" {
+		writer.metadata.mu.Lock()
+		writer.metadata.err = message
+		writer.metadata.mu.Unlock()
 	}
-	if account = strings.TrimSpace(account); account != "" {
-		metadata.account = account
-	}
-	metadata.mu.Unlock()
-	metadata.start(false)
 }
 
 func (metadata *accessLogMetadata) start(force bool) {
@@ -155,122 +117,25 @@ func (metadata *accessLogMetadata) start(force bool) {
 	}
 }
 
-func (metadata *accessLogMetadata) setError(message string) {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return
+// finished 返回请求结束时的访问日志，status 为写出的 HTTP 状态，disconnected 表示客户端连接已关闭
+func (metadata *accessLogMetadata) finished(status int, disconnected bool) AccessLog {
+	metadata.mu.Lock()
+	defer metadata.mu.Unlock()
+	if metadata.canceled || !metadata.detached && disconnected {
+		status = 499
+	} else if status < http.StatusBadRequest && metadata.failureStatus >= http.StatusBadRequest {
+		status = metadata.failureStatus
 	}
-	metadata.mu.Lock()
-	metadata.err = message
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setRequestError(err error) {
-	if err == nil {
-		return
+	return AccessLog{
+		Status: status, FirstEvent: metadata.firstEvent, QueueWait: metadata.queueWait, Proof: metadata.proof,
+		UpstreamBytes: metadata.upstreamBytes, Usage: metadata.usage, ToolCalls: metadata.toolCalls,
+		InputMessages: metadata.inputMessages, InputTextChars: metadata.inputTextChars,
+		InputMedia: metadata.inputMedia, InputMediaBytes: metadata.inputMediaBytes, InputFiles: metadata.inputFiles,
+		Temperature: metadata.temperature, TopP: metadata.topP, Thinking: metadata.thinking, MaxOutputTokens: metadata.maxOutputTokens,
+		RequestID: metadata.requestID, Model: metadata.model, Account: metadata.account, Channel: metadata.channel,
+		FinishReason: metadata.finishReason, Error: metadata.err, Canceled: metadata.canceled, Generation: metadata.generation,
+		Attempts: slices.Clone(metadata.attempts), Authorized: metadata.authorized,
 	}
-	metadata.mu.Lock()
-	metadata.err = strings.TrimSpace(err.Error())
-	metadata.canceled = errors.Is(err, context.Canceled)
-	if metadata.canceled {
-		metadata.failureStatus = 499
-	} else {
-		metadata.failureStatus = statusFromError(err)
-	}
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setFinishReason(reason string) {
-	metadata.mu.Lock()
-	metadata.finishReason = strings.TrimSpace(reason)
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setGenerationResult(
-	usage *aistudio.Usage,
-	toolCalls int,
-) {
-	metadata.mu.Lock()
-	if usage != nil {
-		value := *usage
-		metadata.usage = &value
-	}
-	metadata.toolCalls = toolCalls
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setGenerationConfig(config aistudio.GenerationConfig) {
-	metadata.mu.Lock()
-	metadata.generation = true
-	metadata.temperature = formatLogFloat(config.Temperature)
-	metadata.topP = formatLogFloat(config.TopP)
-	metadata.thinking = formatLogThinking(config)
-	metadata.maxOutputTokens = formatLogInt(config.MaxOutputTokens)
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setGenerationInput(request aistudio.GenerateRequest) {
-	textChars := utf8.RuneCountInString(aistudio.SystemText(request.System))
-	media := 0
-	var mediaBytes int64
-	files := 0
-	for _, content := range request.Contents {
-		for _, part := range content.Parts {
-			textChars += utf8.RuneCountInString(part.Text)
-			if part.InlineData != nil {
-				media++
-				mediaBytes += int64(len(part.InlineData.Data))
-			}
-			if part.ExternalMedia != nil {
-				media++
-			}
-			if part.File != nil {
-				files++
-			}
-		}
-	}
-	metadata.mu.Lock()
-	metadata.requestID = strings.TrimSpace(request.ID)
-	metadata.inputMessages = len(request.Contents)
-	metadata.inputTextChars = textChars
-	metadata.inputMedia = media
-	metadata.inputMediaBytes = mediaBytes
-	metadata.inputFiles = files
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setUpstreamBytes(bytes int64) {
-	metadata.mu.Lock()
-	metadata.upstreamBytes = bytes
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) setFirstEvent(firstEvent time.Duration) {
-	metadata.mu.Lock()
-	if metadata.firstEvent == 0 {
-		metadata.firstEvent = firstEvent
-	}
-	metadata.mu.Unlock()
-}
-
-func (metadata *accessLogMetadata) snapshot() accessLogSnapshot {
-	metadata.mu.Lock()
-	snapshot := accessLogSnapshot{
-		generation: metadata.generation,
-		model:      metadata.model, account: metadata.account, channel: metadata.channel, finishReason: metadata.finishReason,
-		requestErr: metadata.err, canceled: metadata.canceled, detached: metadata.detached,
-		failureStatus: metadata.failureStatus,
-		firstEvent:    metadata.firstEvent,
-		upstreamBytes: metadata.upstreamBytes, usage: metadata.usage, toolCalls: metadata.toolCalls,
-		inputMessages: metadata.inputMessages, inputTextChars: metadata.inputTextChars,
-		inputMedia: metadata.inputMedia, inputMediaBytes: metadata.inputMediaBytes, inputFiles: metadata.inputFiles,
-		temperature: metadata.temperature, topP: metadata.topP,
-		thinking: metadata.thinking, maxOutputTokens: metadata.maxOutputTokens, requestID: metadata.requestID,
-		queueWait: metadata.queueWait, proof: metadata.proof,
-		attempts: slices.Clone(metadata.attempts), authorized: metadata.authorized,
-	}
-	metadata.mu.Unlock()
-	return snapshot
 }
 
 // id 返回请求日志使用的请求 ID
@@ -330,28 +195,68 @@ func AddAccessLogProof(ctx context.Context, duration time.Duration) {
 // SetAccessLogFirstEvent 写入首个上游语义事件耗时
 func SetAccessLogFirstEvent(ctx context.Context, firstEvent time.Duration) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setFirstEvent(firstEvent)
+		metadata.mu.Lock()
+		if metadata.firstEvent == 0 {
+			metadata.firstEvent = firstEvent
+		}
+		metadata.mu.Unlock()
 	}
 }
 
 // SetAccessLogGenerationConfig 写入生成请求采用的参数
 func SetAccessLogGenerationConfig(ctx context.Context, config aistudio.GenerationConfig) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setGenerationConfig(config)
+		metadata.mu.Lock()
+		metadata.generation = true
+		metadata.temperature = formatLogFloat(config.Temperature)
+		metadata.topP = formatLogFloat(config.TopP)
+		metadata.thinking = formatLogThinking(config)
+		metadata.maxOutputTokens = formatLogInt(config.MaxOutputTokens)
+		metadata.mu.Unlock()
 	}
 }
 
 // SetAccessLogGenerationInput 写入生成请求输入摘要
 func SetAccessLogGenerationInput(ctx context.Context, request aistudio.GenerateRequest) {
-	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setGenerationInput(request)
+	metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata)
+	if !ok {
+		return
 	}
+	textChars := utf8.RuneCountInString(aistudio.SystemText(request.System))
+	media := 0
+	var mediaBytes int64
+	files := 0
+	for _, content := range request.Contents {
+		for _, part := range content.Parts {
+			textChars += utf8.RuneCountInString(part.Text)
+			if part.InlineData != nil {
+				media++
+				mediaBytes += int64(len(part.InlineData.Data))
+			}
+			if part.ExternalMedia != nil {
+				media++
+			}
+			if part.File != nil {
+				files++
+			}
+		}
+	}
+	metadata.mu.Lock()
+	metadata.requestID = strings.TrimSpace(request.ID)
+	metadata.inputMessages = len(request.Contents)
+	metadata.inputTextChars = textChars
+	metadata.inputMedia = media
+	metadata.inputMediaBytes = mediaBytes
+	metadata.inputFiles = files
+	metadata.mu.Unlock()
 }
 
 // SetAccessLogUpstreamBytes 写入上游响应体字节数
 func SetAccessLogUpstreamBytes(ctx context.Context, bytes int64) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setUpstreamBytes(bytes)
+		metadata.mu.Lock()
+		metadata.upstreamBytes = bytes
+		metadata.mu.Unlock()
 	}
 }
 
@@ -388,9 +293,19 @@ func formatLogThinking(config aistudio.GenerationConfig) string {
 
 // SetAccessLogTarget 写入请求实际使用的模型与账户
 func SetAccessLogTarget(ctx context.Context, model string, account string) {
-	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setTarget(model, account)
+	metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata)
+	if !ok {
+		return
 	}
+	metadata.mu.Lock()
+	if model = strings.TrimSpace(model); model != "" {
+		metadata.model = strings.TrimPrefix(model, "models/")
+	}
+	if account = strings.TrimSpace(account); account != "" {
+		metadata.account = account
+	}
+	metadata.mu.Unlock()
+	metadata.start(false)
 }
 
 // SetAccessLogChannel 写入请求实际使用的上游通道
@@ -408,7 +323,15 @@ func SetAccessLogError(ctx context.Context, err error) {
 		return
 	}
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setRequestError(err)
+		metadata.mu.Lock()
+		metadata.err = strings.TrimSpace(err.Error())
+		metadata.canceled = errors.Is(err, context.Canceled)
+		if metadata.canceled {
+			metadata.failureStatus = 499
+		} else {
+			metadata.failureStatus = statusFromError(err)
+		}
+		metadata.mu.Unlock()
 	}
 }
 
@@ -424,18 +347,22 @@ func setAccessLogFailureStatus(ctx context.Context, status int) {
 // SetAccessLogFinishReason 写入生成请求的上游终止原因
 func SetAccessLogFinishReason(ctx context.Context, reason string) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setFinishReason(reason)
+		metadata.mu.Lock()
+		metadata.finishReason = strings.TrimSpace(reason)
+		metadata.mu.Unlock()
 	}
 }
 
 // SetAccessLogGenerationResult 写入生成流的完成摘要
-func SetAccessLogGenerationResult(
-	ctx context.Context,
-	usage *aistudio.Usage,
-	toolCalls int,
-) {
+func SetAccessLogGenerationResult(ctx context.Context, usage *aistudio.Usage, toolCalls int) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
-		metadata.setGenerationResult(usage, toolCalls)
+		metadata.mu.Lock()
+		if usage != nil {
+			value := *usage
+			metadata.usage = &value
+		}
+		metadata.toolCalls = toolCalls
+		metadata.mu.Unlock()
 	}
 }
 
@@ -446,32 +373,16 @@ func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handle
 		writer := &accessLogResponseWriter{ResponseWriter: w, metadata: metadata}
 		request := r.WithContext(context.WithValue(r.Context(), accessLogContextKey{}, metadata))
 		next.ServeHTTP(writer, request)
+		if admin == nil {
+			return
+		}
 		status := writer.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		snapshot := metadata.snapshot()
-		if snapshot.canceled || !snapshot.detached && errors.Is(r.Context().Err(), context.Canceled) {
-			status = 499
-		} else if status < http.StatusBadRequest && snapshot.failureStatus >= http.StatusBadRequest {
-			status = snapshot.failureStatus
-		}
-		if admin != nil {
-			admin.RecordAccessLog(AccessLog{
-				Status: status, Latency: time.Since(started), FirstEvent: snapshot.firstEvent,
-				QueueWait: snapshot.queueWait, Proof: snapshot.proof,
-				UpstreamBytes: snapshot.upstreamBytes, Usage: snapshot.usage, ToolCalls: snapshot.toolCalls,
-				InputMessages: snapshot.inputMessages, InputTextChars: snapshot.inputTextChars,
-				InputMedia: snapshot.inputMedia, InputMediaBytes: snapshot.inputMediaBytes, InputFiles: snapshot.inputFiles,
-				Temperature: snapshot.temperature, TopP: snapshot.topP,
-				Thinking: snapshot.thinking, MaxOutputTokens: snapshot.maxOutputTokens,
-				RequestID: snapshot.requestID,
-				Method:    r.Method, Path: r.URL.Path, Model: snapshot.model, Account: snapshot.account, Channel: snapshot.channel,
-				FinishReason: snapshot.finishReason, Error: snapshot.requestErr,
-				Canceled: snapshot.canceled, Generation: snapshot.generation, Attempts: snapshot.attempts,
-				Authorized: snapshot.authorized,
-			})
-		}
+		entry := metadata.finished(status, errors.Is(r.Context().Err(), context.Canceled))
+		entry.Latency, entry.Method, entry.Path = time.Since(started), r.Method, r.URL.Path
+		admin.RecordAccessLog(entry)
 	})
 }
 
@@ -589,16 +500,23 @@ func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
 	})
 }
 
-// checkAPIKeyMatches 判断请求头或 URL 中任一 API key 是否与配置的某个 key 相同
-func checkAPIKeyMatches(r *http.Request, keys []string) bool {
+// apiKeyCandidates 返回请求头与 URL 中给出的 API key，去掉首尾空白
+func apiKeyCandidates(r *http.Request) []string {
 	candidates := []string{
 		r.Header.Get("X-Goog-API-Key"),
 		r.Header.Get("X-API-Key"),
 		bearerToken(r.Header.Get("Authorization")),
 		r.URL.Query().Get("key"),
 	}
-	for _, cand := range candidates {
-		cand = strings.TrimSpace(cand)
+	for index, candidate := range candidates {
+		candidates[index] = strings.TrimSpace(candidate)
+	}
+	return candidates
+}
+
+// checkAPIKeyMatches 判断请求头或 URL 中任一 API key 是否与配置的某个 key 相同
+func checkAPIKeyMatches(r *http.Request, keys []string) bool {
+	for _, cand := range apiKeyCandidates(r) {
 		if cand == "" {
 			continue
 		}

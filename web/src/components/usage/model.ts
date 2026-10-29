@@ -1,4 +1,4 @@
-import { onUnmounted, reactive, watch } from 'vue'
+import { onActivated, onUnmounted, reactive, watch } from 'vue'
 import type { UsageDimension, UsageFilters, UsageStats } from '@/types'
 
 // relativePresets 与 calendarPresets 是相对时间与日历两类快捷范围
@@ -12,7 +12,7 @@ export type RangePreset =
 export const dimensions: UsageDimension[] = ['model', 'account', 'channel', 'protocol', 'state']
 
 // maxSpan 与服务端校验一致
-export const maxSpan = 93 * 86_400_000
+const maxSpan = 93 * 86_400_000
 export const retention = 90 * 86_400_000
 
 const relativeSpans: Record<(typeof relativePresets)[number], number> = {
@@ -25,7 +25,7 @@ const relativeSpans: Record<(typeof relativePresets)[number], number> = {
 }
 
 // UsageViewState 是用量页写入地址栏的视图状态
-export interface UsageViewState {
+interface UsageViewState {
   range: RangePreset
   from: string
   to: string
@@ -44,6 +44,9 @@ const defaults: UsageViewState = {
   status: '',
   search: '',
 }
+
+// rememberedState 保存当前会话的用量视图状态
+let rememberedState: UsageViewState | undefined
 
 // readState 从地址栏读取视图状态，非法取值使用默认值
 function readState(): UsageViewState {
@@ -84,15 +87,31 @@ function writeState(state: UsageViewState): void {
   if (url.href !== window.location.href) window.history.replaceState(null, '', url)
 }
 
-// useUsageState 返回与地址栏双向同步的视图状态
+// viewKeys 是视图状态在地址栏中的参数名
+const viewKeys = ['range', 'from', 'to', 'stack', ...dimensions, 'status', 'q']
+
+// hasViewQuery 判断地址栏是否带有视图状态
+function hasViewQuery(): boolean {
+  const query = new URLSearchParams(window.location.search)
+  return viewKeys.some((key) => query.has(key))
+}
+
+// useUsageState 返回会话内保留并与地址栏双向同步的视图状态
 export function useUsageState(): UsageViewState {
-  const state = reactive(readState())
+  const state = reactive(hasViewQuery() || !rememberedState ? readState() : rememberedState)
+  rememberedState = state
+  writeState(state)
+  onActivated(() => {
+    if (hasViewQuery()) Object.assign(state, readState())
+    else writeState(state)
+  })
   watch(
     () => JSON.stringify(state),
     () => writeState(state),
   )
   const sync = (): void => {
-    Object.assign(state, readState())
+    if (new URLSearchParams(window.location.search).get('tab') === 'usage')
+      Object.assign(state, readState())
   }
   window.addEventListener('popstate', sync)
   onUnmounted(() => window.removeEventListener('popstate', sync))
@@ -163,7 +182,7 @@ export function successRate(stats: UsageStats): number | null {
 }
 
 // palette 是分类序列使用的颜色，按取值哈希分配
-export const palette = [
+const palette = [
   '#60a5fa',
   '#34d399',
   '#f59e0b',
@@ -188,7 +207,7 @@ export function assignColors(keys: string[]): Map<string, string> {
     for (let probe = 0; probe < palette.length && used.has(index); probe++)
       index = (index + 1) % palette.length
     used.add(index)
-    result.set(key, palette[index] ?? otherColor)
+    result.set(key, palette[index]!)
   }
   return result
 }

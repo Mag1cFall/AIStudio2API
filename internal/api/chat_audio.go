@@ -66,8 +66,8 @@ func chatAudioMessage(id string, media []aistudio.Blob, format string, transcrip
 	}, nil
 }
 
-// takeChatAudio 从结果中移出音频事件并返回 message.audio，结果没有音频时返回 nil
-func takeChatAudio(result *generationResult, format string) (map[string]any, error) {
+// takeChatAudio 从结果中移出音频事件、保存音频回复并返回 message.audio，结果没有音频时返回 nil
+func (s *server) takeChatAudio(result *generationResult, format string) (map[string]any, error) {
 	var media []aistudio.Blob
 	events := slices.DeleteFunc(slices.Clone(result.events), func(event aistudio.Event) bool {
 		if audioEvent(event) {
@@ -80,5 +80,41 @@ func takeChatAudio(result *generationResult, format string) (map[string]any, err
 		return nil, nil
 	}
 	result.events = events
-	return chatAudioMessage(newID("audio"), media, format, result.text.String())
+	id := newID("audio")
+	if err := s.rememberChatAudio(id, media, result.text.String()); err != nil {
+		return nil, err
+	}
+	return chatAudioMessage(id, media, format, result.text.String())
+}
+
+// rememberChatAudio 以 WAV 与 transcript 保存音频回复，之后的 assistant 消息以 audio.id 引用时作为该轮内容
+func (s *server) rememberChatAudio(id string, media []aistudio.Blob, transcript string) error {
+	joined, err := joinedAudio(media)
+	if err != nil {
+		return err
+	}
+	data, _, err := encodeSpeechResponse(joined, "wav")
+	if err != nil {
+		return err
+	}
+	parts := []aistudio.Part{{InlineData: &aistudio.Blob{MIME: "audio/wav", Data: data}}}
+	if transcript != "" {
+		parts = append(parts, aistudio.Part{Text: transcript})
+	}
+	s.responseStates.Store(id, responseHistory{}, generationResult{}, responseState{Contents: []aistudio.Content{{Role: aistudio.RoleAssistant, Parts: parts}}})
+	return nil
+}
+
+// resolveChatAudio 为以 audio.id 引用音频回复的 assistant 消息取出保存的音频与 transcript
+func (s *server) resolveChatAudio(messages []chatMessage) {
+	for index := range messages {
+		if messages[index].Audio == nil {
+			continue
+		}
+		if history, ok := s.responseStates.Load(messages[index].Audio.ID); ok {
+			for _, content := range history.Contents {
+				messages[index].audioReply = append(messages[index].audioReply, content.Parts...)
+			}
+		}
+	}
 }

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
+import { readPreference, writePreference } from '@/preference'
 import type { Model } from '@/types'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -17,6 +17,7 @@ import {
   priceLines,
   type ModelCategory,
 } from './catalog'
+import { copyToClipboard } from './clipboard'
 import { pageKindOf, pageRoutes, unsavedKinds } from './media/kinds'
 import { modelChoice, modelSelectorOpen } from './model-selector'
 
@@ -24,23 +25,14 @@ const open = modelSelectorOpen
 const choice = modelChoice
 const { t, locale } = useI18n()
 const router = useRouter()
-const { models, showNotice } = useConsole()
+const { models } = useConsole()
 // pending 是等待确认切换页面的模型
 const pending = ref<Model>()
 
 // starredKey 是本机收藏模型的存储键
 const starredKey = 'playground_starred_models'
 
-// loadStarred 读取本机收藏的模型
-function loadStarred(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(starredKey) ?? '[]') as string[]
-  } catch {
-    return []
-  }
-}
-
-const starred = ref(new Set(loadStarred()))
+const starred = ref(new Set(readPreference<string[]>(starredKey, [], Array.isArray)))
 const search = ref('')
 const category = ref<ModelCategory>(10)
 
@@ -82,8 +74,7 @@ const badgeLabels: Record<ReturnType<typeof modelBadges>[number], TranslationKey
 function categoryLabel(item: ModelCategory): string {
   if (item === 'All') return t('pg.categoryAll')
   if (item === 'Starred') return t('pg.categoryStarred')
-  const label = categoryLabels[item]
-  return label === undefined ? String(item) : t(label)
+  return t(categoryLabels[item]!)
 }
 
 // switchPage 打开模型所属页面的新会话
@@ -110,17 +101,7 @@ function toggleStar(model: Model): void {
   if (next.has(model.id)) next.delete(model.id)
   else next.add(model.id)
   starred.value = next
-  try {
-    localStorage.setItem(starredKey, JSON.stringify([...next]))
-  } catch {
-    // 本机存储不可用时收藏只在本次打开期间有效
-  }
-}
-
-// copyID 复制模型 ID
-async function copyID(model: Model): Promise<void> {
-  await navigator.clipboard.writeText(model.id)
-  showNotice(t('pg.copied'), 'success')
+  writePreference(starredKey, [...next])
 }
 </script>
 
@@ -167,7 +148,7 @@ async function copyID(model: Model): Promise<void> {
         <p v-if="visibleModels.length === 0" class="empty">{{ t('pg.noModels') }}</p>
         <template v-for="(model, index) in visibleModels" :key="model.id">
           <div v-if="index > 0" class="row-divider"></div>
-          <div class="model-row" :class="{ selected: model.id === choice?.selected }">
+          <div class="model-row" :class="{ selected: model.id === choice!.selected }">
             <button type="button" class="content-button" @click="choose(model)">
               <div class="row-header">
                 <span class="model-icon"><UiIcon :name="modelIcon(model)" :size="20" /></span>
@@ -277,7 +258,7 @@ async function copyID(model: Model): Promise<void> {
                 ms-button
                 class="ms-button-borderless ms-button-icon ms-button-small"
                 :aria-label="t('pg.copyToClipboard')"
-                @click="copyID(model)"
+                @click="copyToClipboard(model.id)"
               >
                 <UiIcon name="copy" :size="18" />
               </button>

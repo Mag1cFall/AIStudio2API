@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
 import { useI18n } from '@/i18n'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'

@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { vTooltip } from '@/playground/ui/tooltip'
-import { useI18n } from '@/i18n'
+import { useI18n, type TranslationKey } from '@/i18n'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
 import UiSwitch from '@/playground/ui/UiSwitch.vue'
@@ -13,8 +12,8 @@ const { state } = music
 // SliderField 是一个滑块参数：字段、范围、步长、说明与是否可留空
 interface SliderField {
   key: 'temperature' | 'topK' | 'guidance' | 'bpm' | 'density' | 'brightness'
-  label: string
-  tip: string
+  label: TranslationKey
+  tip: TranslationKey
   min: number
   max: number
   step: number
@@ -67,7 +66,7 @@ const sliders: SliderField[] = [
     optional: true,
   },
 ]
-const toggles: { key: 'muteBass' | 'muteDrums' | 'onlyBassAndDrums'; label: string }[] = [
+const toggles: { key: 'muteBass' | 'muteDrums' | 'onlyBassAndDrums'; label: TranslationKey }[] = [
   { key: 'muteBass', label: 'pg.musicMuteBass' },
   { key: 'muteDrums', label: 'pg.musicMuteDrums' },
   { key: 'onlyBassAndDrums', label: 'pg.musicOnlyBassAndDrums' },
@@ -102,17 +101,17 @@ function scaleLabel(value: string): string {
     <div
       v-for="field in sliders"
       :key="field.key"
-      v-tooltip.left="t(field.tip as 'pg.musicBpmTip')"
+      v-tooltip.left="t(field.tip)"
       class="settings-item-column"
     >
-      <h3 class="item-description-title">{{ t(field.label as 'pg.temperature') }}</h3>
+      <h3 class="item-description-title">{{ t(field.label) }}</h3>
       <div class="ms-slider">
         <UiSlider
           :model-value="state.config[field.key] ?? field.min"
           :min="field.min"
           :max="field.max"
           :step="field.step"
-          :label="t(field.label as 'pg.temperature')"
+          :label="t(field.label)"
           @update:model-value="setValue(field.key, $event)"
         />
         <input
@@ -123,7 +122,7 @@ function scaleLabel(value: string): string {
           :max="field.max"
           :step="field.step"
           :placeholder="field.optional ? t('pg.auto') : ''"
-          :aria-label="t(field.label as 'pg.temperature')"
+          :aria-label="t(field.label)"
           :value="state.config[field.key] ?? ''"
           @change="setNumber(field, $event)"
         />
@@ -171,11 +170,11 @@ function scaleLabel(value: string): string {
     </div>
     <div v-for="toggle in toggles" :key="toggle.key" class="toggle-row">
       <div class="label-container">
-        <p class="label">{{ t(toggle.label as 'pg.musicMuteBass') }}</p>
+        <p class="label">{{ t(toggle.label) }}</p>
       </div>
       <UiSwitch
         :model-value="state.config[toggle.key]"
-        :label="t(toggle.label as 'pg.musicMuteBass')"
+        :label="t(toggle.label)"
         @update:model-value="setValue(toggle.key, $event)"
       />
     </div>

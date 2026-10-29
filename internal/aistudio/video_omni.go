@@ -24,9 +24,6 @@ func (p *AccountPool) generatedVideoModel(modelID string) (Model, bool) {
 		return Model{}, false
 	}
 	for _, account := range p.accounts {
-		if account == nil {
-			continue
-		}
 		for _, model := range account.Models {
 			if modelMatchesID(model, modelID) && IsVideoModel(model) {
 				return model, true
@@ -38,7 +35,7 @@ func (p *AccountPool) generatedVideoModel(modelID string) (Model, bool) {
 
 // VideoMethod 返回模型创建视频任务所用的上游方法：经 generateContent 输出视频的模型为 generateContent，其余为 predictLongRunning
 func (p *AccountPool) VideoMethod(modelID string) string {
-	if _, ok := p.generatedVideoModel(strings.TrimPrefix(strings.TrimSpace(modelID), "models/")); ok {
+	if _, ok := p.generatedVideoModel(modelID); ok {
 		return "generateContent"
 	}
 	return "predictLongRunning"
@@ -209,7 +206,7 @@ func (s *PooledService) saveOmniVideo(ctx context.Context, operationID string, g
 	name, err := videoResultName(lease.Account(), time.Now())
 	if err == nil {
 		var file FileRef
-		file, err = s.client.UploadFile(ContextWithAccountLease(ctx, lease), UploadRequest{
+		file, _, err = s.client.uploadFile(ContextWithAccountLease(ctx, lease), UploadRequest{
 			AccountID: lease.Account().ID, Name: name, MIME: "video/mp4",
 			Size: int64(len(video.Data)), Reader: bytes.NewReader(video.Data),
 		})

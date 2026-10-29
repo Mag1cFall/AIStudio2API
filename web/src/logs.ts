@@ -18,7 +18,7 @@ export interface LogRow {
 export type LogStageState = 'running' | 'completed' | 'failed' | 'cancelled'
 
 // LogStage 是同一来源分阶段运行日志合并后的进度
-export interface LogStage {
+interface LogStage {
   name: string
   step: number
   steps: number
@@ -57,6 +57,20 @@ export function formatLogNumber(value: number, locale: string, digits = 0): stri
   return format.format(value)
 }
 
+// prettyBody 缩进 JSON 正文，非 JSON 保持原文
+export function prettyBody(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+// byteLength 返回文本的 UTF-8 字节数
+export function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length
+}
+
 // stagePattern 匹配“阶段名 | i/N | 详情”形式的阶段步骤消息
 const stagePattern = /^(.+?) \| (\d+)\/(\d+)(?: \| ([\s\S]*))?$/
 
@@ -84,13 +98,11 @@ function stageEnd(title: string): [string, LogStageState] | undefined {
 }
 
 // levelRanks 是日志级别的严重程度
-const levelRanks: Record<string, number> = { INFO: 1, WARN: 2, ERROR: 3 }
+const levelRanks: Record<AdminLog['level'], number> = { INFO: 1, WARN: 2, ERROR: 3 }
 
 // severerLevel 返回两个日志级别中更严重的一个
-function severerLevel(current: string, next: string): string {
-  return (levelRanks[next.toUpperCase()] ?? 0) > (levelRanks[current.toUpperCase()] ?? 0)
-    ? next
-    : current
+function severerLevel(current: AdminLog['level'], next: AdminLog['level']): AdminLog['level'] {
+  return levelRanks[next] > levelRanks[current] ? next : current
 }
 
 // mergeStage 把一条运行日志并入阶段卡片，卡片保持首条消息的时间并取最严重的级别

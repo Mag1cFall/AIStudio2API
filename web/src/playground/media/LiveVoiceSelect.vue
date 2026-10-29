@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted } from 'vue'
 import {
   SelectContent,
   SelectItem,
@@ -12,39 +12,24 @@ import {
 import { useI18n } from '@/i18n'
 import type { VoiceDetail } from '@/types'
 import UiIcon from '@/playground/ui/UiIcon.vue'
+import { useSamplePlayer } from './sample'
+import { voiceTraits } from './speech-voices'
 
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ voices: readonly VoiceDetail[]; disabled?: boolean }>()
 const { t } = useI18n()
-const playing = ref('')
-let audio: HTMLAudioElement | undefined
+const { playingSample, toggleSample, stopSample } = useSamplePlayer()
 
 // options 是带官网说明的音色：描述与音高
 const options = computed(() =>
   props.voices.map((voice) => ({
     name: voice.name,
     sample: voice.sample_url ?? '',
-    traits: [
-      ...(voice.descriptions ?? []),
-      ...(voice.pitch ? [t('pg.pitchValue').replace('{pitch}', voice.pitch)] : []),
-    ].join(', '),
+    traits: voiceTraits(voice).join(', '),
   })),
 )
 
-// toggleSample 播放或停止音色试听
-function toggleSample(name: string, url: string): void {
-  audio?.pause()
-  if (playing.value === name) {
-    playing.value = ''
-    return
-  }
-  audio = new Audio(url)
-  audio.onended = () => (playing.value = '')
-  playing.value = name
-  void audio.play()
-}
-
-onUnmounted(() => audio?.pause())
+onUnmounted(stopSample)
 </script>
 
 <template>
@@ -71,9 +56,12 @@ onUnmounted(() => audio?.pause())
               :aria-label="t('pg.playAudioSample')"
               @pointerdown.stop
               @pointerup.stop
-              @click.stop="toggleSample(option.name, option.sample)"
+              @click.stop="toggleSample(option.sample)"
             >
-              <UiIcon :name="playing === option.name ? 'pauseCircle' : 'playCircle'" :size="20" />
+              <UiIcon
+                :name="playingSample === option.sample ? 'pauseCircle' : 'playCircle'"
+                :size="20"
+              />
             </button>
             <span class="voice-text">
               <SelectItemText class="voice-name">{{ option.name }}</SelectItemText>

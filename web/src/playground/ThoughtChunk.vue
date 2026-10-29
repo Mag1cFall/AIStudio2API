@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { vTooltip } from '@/playground/ui/tooltip'
 import { formatDuration } from './duration'
 import LoadingIndicator from './LoadingIndicator.vue'
 import MarkdownView from './MarkdownView.vue'

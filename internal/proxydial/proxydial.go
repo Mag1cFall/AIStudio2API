@@ -56,11 +56,7 @@ func Dialer(proxyURL *url.URL) (proxy.ContextDialer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("创建 SOCKS5 代理连接: %w", err)
 		}
-		contextDialer, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			return nil, fmt.Errorf("SOCKS5 代理不支持上下文取消")
-		}
-		return socksDialer{contextDialer}, nil
+		return socksDialer{dialer.(proxy.ContextDialer)}, nil
 	}
 	return &connectDialer{
 		proxyURL:    proxyURL,
@@ -78,10 +74,6 @@ func (dialer socksDialer) DialContext(ctx context.Context, network, address stri
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	return dialer.ContextDialer.DialContext(ctx, network, address)
-}
-
-func (dialer *connectDialer) Dial(network, address string) (net.Conn, error) {
-	return dialer.DialContext(context.Background(), network, address)
 }
 
 func (dialer *connectDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -138,9 +130,7 @@ func (dialer *connectDialer) DialContext(ctx context.Context, network, address s
 		return nil, err
 	}
 	if response.StatusCode != http.StatusOK {
-		if response.Body != nil {
-			_ = response.Body.Close()
-		}
+		_ = response.Body.Close()
 		return nil, fmt.Errorf("代理 CONNECT 返回 %s", response.Status)
 	}
 	if err := connection.SetDeadline(time.Time{}); err != nil {

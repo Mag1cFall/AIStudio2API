@@ -18,6 +18,19 @@ type requestPhaseContextKey struct{}
 
 type upstreamModeContextKey struct{}
 
+type continuationContextKey struct{}
+
+// ContextWithContinuationObserver 在自动续写开始新一轮时调用 observer
+func ContextWithContinuationObserver(ctx context.Context, observer func()) context.Context {
+	return context.WithValue(ctx, continuationContextKey{}, observer)
+}
+
+func reportContinuationRound(ctx context.Context) {
+	if observer, ok := ctx.Value(continuationContextKey{}).(func()); ok {
+		observer()
+	}
+}
+
 // ContextWithUpstreamModeObserver 记录实际 RPC、传输模式与流式回退原因
 func ContextWithUpstreamModeObserver(ctx context.Context, observer func(string, string, string)) context.Context {
 	return context.WithValue(ctx, upstreamModeContextKey{}, observer)

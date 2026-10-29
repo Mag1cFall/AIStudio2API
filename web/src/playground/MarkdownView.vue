@@ -1,20 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import MarkdownBlock from './MarkdownBlock'
 import { IncrementalMarkdown } from './markdown'
 
 const props = defineProps<{ text: string; raw?: boolean }>()
-const root = ref<HTMLElement>()
 const engine = new IncrementalMarkdown()
 // blocks 是正文的顶层块，流式增长时只有末尾块重新解析与渲染
 const blocks = computed(() => (props.raw ? [] : engine.render(props.text)))
-
-defineExpose({ root })
 </script>
 
 <template>
   <pre v-if="raw" class="raw-text">{{ text }}</pre>
-  <div v-else ref="root" class="cmark-node">
+  <div v-else class="cmark-node">
     <MarkdownBlock v-for="block in blocks" :key="block.key" :nodes="block.nodes" />
   </div>
 </template>
@@ -32,6 +29,11 @@ defineExpose({ root })
   flex-direction: column;
   min-width: 100%;
   overflow-wrap: anywhere;
+}
+
+.cmark-node > :deep(*) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100px;
 }
 
 .cmark-node :deep(:is(p, li, td, th, blockquote, dt)) {
