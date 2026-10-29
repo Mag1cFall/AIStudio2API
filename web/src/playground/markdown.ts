@@ -1,3 +1,4 @@
+import { markRaw } from 'vue'
 import MarkdownIt, { type Env, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
 import './katex.scss'
@@ -96,11 +97,13 @@ function parseBlocks(text: string, base: number, firstKey: number, env: Env): Bl
     if (depth !== 0) continue
     const group = tokens.slice(start, index + 1)
     const line = group[0]?.map?.[0] ?? 0
-    blocks.push({
-      key: firstKey + blocks.length,
-      offset: base + (offsets[line] ?? 0),
-      nodes: buildNodes(group, env),
-    })
+    blocks.push(
+      markRaw({
+        key: firstKey + blocks.length,
+        offset: base + (offsets[line] ?? 0),
+        nodes: markRaw(buildNodes(group, env)),
+      }),
+    )
     start = index + 1
   }
   return blocks

@@ -33,7 +33,12 @@ const editing = ref(false)
 const confirmDelete = ref(false)
 
 // hasPrompt 表示对话已有内容，标题可编辑
-const hasPrompt = computed(() => session.turns.length > 0 || session.id !== null)
+const hasPrompt = computed(
+  () =>
+    session.turns.length > 0 ||
+    session.id !== null ||
+    session.settings.systemInstruction.trim() !== '',
+)
 // temporaryLabel 与官网一样在临时对话不可用时显示原因
 const temporaryLabel = computed(() =>
   isOmniModel(playground.currentModel.value)
@@ -168,16 +173,12 @@ async function removePrompt(): Promise<void> {
             </DropdownMenuItem>
             <DropdownMenuItem
               class="ms-menu-item"
-              :disabled="
-                session.temporary || session.turns.length === 0 || session.saveState === 'saved'
-              "
+              :disabled="session.temporary || !hasPrompt || session.saveState === 'saved'"
               @select="playground.save()"
             >
               <UiIcon name="save" :size="18" />
               <span class="ms-menu-item-text">{{
-                session.turns.length === 0 || session.saveState === 'saved'
-                  ? t('pg.noChanges')
-                  : t('pg.savePrompt')
+                !hasPrompt || session.saveState === 'saved' ? t('pg.noChanges') : t('pg.savePrompt')
               }}</span>
             </DropdownMenuItem>
             <DropdownMenuItem

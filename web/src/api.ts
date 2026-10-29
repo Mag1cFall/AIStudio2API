@@ -16,6 +16,7 @@ import type {
   PromptInput,
   PromptSummary,
   SavedPrompt,
+  SystemInstructionPreset,
   Cooldown,
   RequestBody,
   RequestSummary,
@@ -286,6 +287,19 @@ export const api = {
         body: jsonBody({ model, prompt, answer }),
       })
     ).title,
+  systemInstructions: async () =>
+    (await requestJSON<{ presets: SystemInstructionPreset[] }>('/api/prompts/system-instructions'))
+      .presets,
+  saveSystemInstructions: async (presets: SystemInstructionPreset[]) =>
+    (
+      await requestJSON<{ presets: SystemInstructionPreset[] }>(
+        '/api/prompts/system-instructions',
+        {
+          method: 'PUT',
+          body: jsonBody({ presets }),
+        },
+      )
+    ).presets,
 }
 
 // openAdminEvents 建立唯一的管理状态 SSE 连接
