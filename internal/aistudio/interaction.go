@@ -745,13 +745,19 @@ func decodeInteractionMedia(method string, value json.RawMessage, index int, mim
 	if err != nil || len(media) < 2 {
 		return nil, &ProtocolEvidenceError{Method: method, Path: path, Detail: "媒体 delta 无效", Raw: cloneRaw(raw)}
 	}
-	code, err := rawInt64(media[0], path+"[0]", raw)
-	if err != nil {
-		return nil, withMethod(err, method)
-	}
-	mimeType, ok := mimes[code]
-	if !ok {
-		return nil, &ProtocolEvidenceError{Method: method, Path: path + "[0]", Detail: fmt.Sprintf("未识别的媒体 MIME 枚举 %d", code), Raw: cloneRaw(raw)}
+	// 视频响应可能省略 MIME 枚举；仅在数据可识别为 MP4 时接受。
+	missingVideoMIME := index == 4 && isJSONNull(media[0])
+	var mimeType string
+	if !missingVideoMIME {
+		code, err := rawInt64(media[0], path+"[0]", raw)
+		if err != nil {
+			return nil, withMethod(err, method)
+		}
+		var ok bool
+		mimeType, ok = mimes[code]
+		if !ok {
+			return nil, &ProtocolEvidenceError{Method: method, Path: path + "[0]", Detail: fmt.Sprintf("未识别的媒体 MIME 枚举 %d", code), Raw: cloneRaw(raw)}
+		}
 	}
 	encoded, err := rawString(media[1], path+"[1]", raw)
 	if err != nil {
@@ -760,6 +766,12 @@ func decodeInteractionMedia(method string, value json.RawMessage, index int, mim
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, &ProtocolEvidenceError{Method: method, Path: path + "[1]", Detail: "媒体数据不是 Base64", Raw: cloneRaw(raw)}
+	}
+	if missingVideoMIME {
+		mimeType = http.DetectContentType(data)
+		if mimeType != "video/mp4" {
+			return nil, &ProtocolEvidenceError{Method: method, Path: path, Detail: "视频 MIME 枚举缺失且数据不是 MP4", Raw: cloneRaw(raw)}
+		}
 	}
 	return &Blob{MIME: mimeType, Data: data}, nil
 }
