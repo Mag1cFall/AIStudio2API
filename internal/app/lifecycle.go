@@ -29,9 +29,11 @@ type generationAdmin interface {
 	Accounts(context.Context) ([]api.AdminAccount, error)
 	CreateAccount(context.Context, api.AccountCreateInput, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error)
+	BrowserImportProfiles(ctx context.Context, browser string) ([]api.BrowserImportProfile, error)
 	CookieBrowsers(context.Context) ([]api.CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, api.CookieImportInput) ([]api.CookieBrowser, error)
 	ImportChromeAccounts(context.Context, api.ChromeImportInput) ([]api.AdminAccount, error)
+	ImportBrowserAccounts(ctx context.Context, input api.BrowserImportInput) ([]api.AdminAccount, []api.ImportFailure, error)
 	ImportAccountState(context.Context, api.AccountStateInput) (api.AdminAccount, error)
 	UpdateAccount(context.Context, string, api.AccountInput) (api.AdminAccount, error)
 	DeleteAccount(context.Context, string) error
@@ -449,6 +451,20 @@ func (manager *runtimeManager) ChromeImportProfiles(ctx context.Context) ([]api.
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.ChromeImportProfiles(ctx)
+}
+
+// BrowserImportProfiles 返回当前生成服务可导入的指定浏览器账号
+func (manager *runtimeManager) BrowserImportProfiles(ctx context.Context, browser string) ([]api.BrowserImportProfile, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.BrowserImportProfiles(ctx, browser)
+}
+
+// ImportBrowserAccounts 在当前生成服务批量导入指定浏览器账号
+func (manager *runtimeManager) ImportBrowserAccounts(ctx context.Context, input api.BrowserImportInput) ([]api.AdminAccount, []api.ImportFailure, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.ImportBrowserAccounts(ctx, input)
 }
 
 // CookieBrowsers 返回当前生成服务发现的本机调试浏览器

@@ -47,7 +47,9 @@ function setSession(value: AdminSession): void {
 
 // expireSession 卸载控制台及其事件订阅
 function expireSession(): void {
-  setSession({ enabled: true, authenticated: false, username: '' })
+  if (session.value?.enabled) {
+    setSession({ enabled: true, authenticated: false, username: '' })
+  }
 }
 
 // loadSession 在加载管理数据前确认会话
