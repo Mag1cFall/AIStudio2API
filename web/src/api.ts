@@ -6,11 +6,14 @@ import type {
   AccountLoginInput,
   AccountRefresh,
   AdminEvent,
+  BrowserImportInput,
+  BrowserImportProfile,
   ChromeImportInput,
+  ChromeImportProfile,
   CookieBrowser,
   CookieImportInput,
   FirstEventLatency,
-  ChromeImportProfile,
+  ImportBrowserResponse,
   PairingToken,
   Model,
   PromptInput,
@@ -60,7 +63,15 @@ export interface AdminSession {
 // checkSessionResponse 通知页面清理失效会话中的管理数据
 function checkSessionResponse(path: string, response: Response): void {
   if (response.status === 401 && !path.startsWith('/api/auth/')) {
-    window.dispatchEvent(new Event('admin-session-expired'))
+    response
+      .clone()
+      .json()
+      .then((data: { error?: { code?: string } }) => {
+        if (data?.error?.code === 'admin_login_required') {
+          window.dispatchEvent(new Event('admin-session-expired'))
+        }
+      })
+      .catch(() => {})
   }
 }
 
@@ -156,6 +167,17 @@ export const api = {
     (await requestJSON<ChromeProfilesResponse>('/api/accounts/import/chrome')).profiles,
   importChromeAccounts: (input: ChromeImportInput) =>
     requestJSON<AccountsResponse>('/api/accounts/import/chrome', {
+      method: 'POST',
+      body: jsonBody(input),
+    }),
+  browserImportProfiles: async (browser = 'chrome') =>
+    (
+      await requestJSON<{ browser?: string; profiles: BrowserImportProfile[] }>(
+        `/api/accounts/import/browser?browser=${encodeURIComponent(browser)}`,
+      )
+    ).profiles,
+  importBrowserAccounts: (input: BrowserImportInput) =>
+    requestJSON<ImportBrowserResponse>('/api/accounts/import/browser', {
       method: 'POST',
       body: jsonBody(input),
     }),

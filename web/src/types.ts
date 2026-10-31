@@ -62,21 +62,41 @@ export interface AccountLoginInput {
   timezone: string
 }
 
-export interface ChromeImportProfile {
+export type BrowserType = 'chrome' | 'brave' | 'edge'
+
+export interface BrowserImportProfile {
   id: string
+  browser?: BrowserType
   profile: string
   display_name: string
   email: string
   locale: string
+  auth_user?: number
+  imported?: boolean
 }
+
+export type ChromeImportProfile = BrowserImportProfile
 
 export interface PairingToken {
   token: string
   expires_at: string
 }
 
-export interface ChromeImportInput extends AccountLoginInput {
+export interface BrowserImportInput extends AccountLoginInput {
+  browser?: BrowserType
   account_ids: string[]
+}
+
+export type ChromeImportInput = BrowserImportInput
+
+export interface ImportFailure {
+  target: string
+  error: string
+}
+
+export interface ImportBrowserResponse {
+  accounts: Account[]
+  failures?: ImportFailure[]
 }
 
 export interface CookieImportInput extends AccountLoginInput {

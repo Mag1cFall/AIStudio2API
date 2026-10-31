@@ -20,9 +20,11 @@ type AdminService interface {
 	Accounts(context.Context) ([]AdminAccount, error)
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
+	BrowserImportProfiles(ctx context.Context, browser string) ([]BrowserImportProfile, error)
 	CookieBrowsers(context.Context) ([]CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, CookieImportInput) ([]CookieBrowser, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
+	ImportBrowserAccounts(ctx context.Context, input BrowserImportInput) ([]AdminAccount, []ImportFailure, error)
 	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
@@ -240,6 +242,33 @@ type ChromeImportInput struct {
 	Timezone   string   `json:"timezone"`
 }
 
+// BrowserImportProfile 表示可从本机浏览器导入的账号
+type BrowserImportProfile struct {
+	ID          string `json:"id"`
+	Browser     string `json:"browser,omitempty"`
+	Profile     string `json:"profile"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	Locale      string `json:"locale"`
+	AuthUser    int    `json:"auth_user,omitempty"`
+	Imported    bool   `json:"imported"`
+}
+
+// BrowserImportInput 表示批量导入的浏览器账号与账户环境
+type BrowserImportInput struct {
+	Browser    string   `json:"browser"`
+	AccountIDs []string `json:"account_ids"`
+	Proxy      string   `json:"proxy"`
+	Locale     string   `json:"locale"`
+	Timezone   string   `json:"timezone"`
+}
+
+// ImportFailure 描述导入失败的账号与原因
+type ImportFailure struct {
+	Target string `json:"target"`
+	Error  string `json:"error"`
+}
+
 // RuntimeConfig 表示全局运行配置
 type RuntimeConfig struct {
 	AutoStart                 bool         `json:"auto_start"`
@@ -323,6 +352,8 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
+	mux.HandleFunc("GET /api/accounts/import/browser", s.handleBrowserImportProfiles)
+	mux.HandleFunc("POST /api/accounts/import/browser", s.handleImportBrowserAccounts)
 	mux.HandleFunc("GET /api/accounts/import/browsers", s.handleCookieBrowsers)
 	mux.HandleFunc("POST /api/accounts/import/cookies/discover", s.handleDiscoverCookieAccounts)
 	mux.HandleFunc("POST /api/accounts/import/cookies", s.handleImportCookieAccount)
@@ -416,6 +447,36 @@ func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string][]AdminAccount{"accounts": accounts})
+}
+
+func (s *server) handleBrowserImportProfiles(w http.ResponseWriter, r *http.Request) {
+	browser := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("browser")))
+	if browser == "" {
+		browser = "chrome"
+	}
+	profiles, err := s.config.Admin.BrowserImportProfiles(r.Context(), browser)
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"browser": browser, "profiles": profiles})
+}
+
+func (s *server) handleImportBrowserAccounts(w http.ResponseWriter, r *http.Request) {
+	var input BrowserImportInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if input.Browser == "" {
+		input.Browser = "chrome"
+	}
+	accounts, failures, err := s.config.Admin.ImportBrowserAccounts(r.Context(), input)
+	if err != nil && len(accounts) == 0 {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"accounts": accounts, "failures": failures})
 }
 
 func (s *server) handleCookieBrowsers(w http.ResponseWriter, r *http.Request) {
@@ -660,5 +721,9 @@ func writeAdminUpstreamError(w http.ResponseWriter, err error) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
-	writeAdminError(w, statusFromError(err), codeFromError(err, "upstream_error"), err.Error())
+	status := statusFromError(err)
+	if status == http.StatusUnauthorized {
+		status = http.StatusBadGateway
+	}
+	writeAdminError(w, status, codeFromError(err, "upstream_error"), err.Error())
 }
