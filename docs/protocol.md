@@ -1062,9 +1062,16 @@ thinking level 取值 MINIMAL=1、LOW=2、MEDIUM=3、HIGH=4，由 `reasoning_eff
 
 视频设置来自 Interactions `response_format` 的 `{"type":"video","aspect_ratio","duration","resolution"}` 与 `generation_config.video_config.task`，或 Gemini API `generationConfig.responseFormat` 的 `video.aspectRatio`、`video.duration`、`video.resolution` 与扩展字段 `generationConfig.videoConfig.task`；Interactions `response_modalities` 的 `video` 与 Gemini API `generationConfig.responseModalities` 的 `VIDEO` 等同于不带设置的视频输出格式；`duration` 取 `"4s"` 或秒数并四舍五入为整秒，宽高比与分辨率换成最接近的上游取值，无法解析的取值与未知任务返回 400。
 
-响应为 `[[<EVENT>...], <STATUS>?]`。事件索引 10 的 content delta 中 field 1 为正文、field 5 为视频 `[1,"<BASE64 MP4>"]`、field 6 为思考摘要，分别映射为 text、`video/mp4` 媒体与 reasoning 事件；索引 19 的最终 interaction 状态 `3` 产生 usage（输入、输出、思考、总 token 位于 usage 索引 0、4、8、9）与 `stop` 终态，状态 `4`、`5` 返回错误。事件列表后的 google.rpc 状态按 code 映射 HTTP 状态，额度 code 8 为 429；首个正文事件之前的错误进入换号与冷却，之后的错误以流内 error 结束。
+响应为 `[[<EVENT>...], <STATUS>?]`。事件索引 10 的 content delta 中 field 1 为正文、field 2 至 5 为图片、音频、文档与视频 `[<MIME 枚举>,"<BASE64>"]`、field 6 为思考摘要，分别映射为 text、媒体与 reasoning 事件；索引 19 的最终 interaction 状态 `3` 产生 usage（输入、输出、思考、总 token 位于 usage 索引 0、4、8、9）与 `stop` 终态，状态 `4`、`5` 返回错误。事件列表后的 google.rpc 状态按 code 映射 HTTP 状态，额度 code 8 为 429；首个正文事件之前的错误进入换号与冷却，之后的错误以流内 error 结束。
 
-视频 field 5 也可能返回 `[null,"<BASE64 MP4>"]`，省略 MIME 枚举；此时解码 Base64 后检查文件类型，仅接受可识别为 `video/mp4` 的数据。未知的非空枚举仍返回协议错误，图片 MIME 枚举的处理不变。
+媒体 MIME 枚举与官网前端相同，枚举为 `null` 或不在表中时取该类的默认 MIME：
+
+| 字段 | 枚举 | 默认 |
+| --- | --- | --- |
+| 图片 field 2 | 1 png、2 jpeg、3 webp、4 heic、5 heif、7 gif、8 bmp、9 tiff | `image/jpeg` |
+| 音频 field 3 | 1 wav、2 mp3、3 aiff、4 aac、5 ogg、6 flac、7 mpeg、8 m4a、9 l16、10 s16le、11 opus、12 alaw、13 mulaw | `audio/wav` |
+| 文档 field 4 | 1 pdf | `application/pdf` |
+| 视频 field 5 | 1 mp4、2 mpeg、3 mpg、4 mov、5 avi、6 x-flv、7 webm、8 wmv、9 3gpp | `video/mp4` |
 
 ### 后台 Interaction 任务
 
