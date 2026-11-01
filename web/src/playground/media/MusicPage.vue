@@ -491,6 +491,7 @@ onUnmounted(() => {
 @media screen and (max-width: 600px) {
   .usage-zero-state-container {
     justify-content: flex-start;
+    padding-inline: 0;
     padding-bottom: 0;
   }
 }

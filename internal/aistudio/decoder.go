@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"unicode"
 )
@@ -220,6 +221,11 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		if err := decoder.Decode(&raw); err != nil {
 			return fail(fmt.Sprintf("$[%d]", fieldIndex), err)
 		}
+		if fieldIndex == 1 {
+			if err := trailerError("GenerateContent", raw); err != nil {
+				return err
+			}
+		}
 		fieldIndex++
 	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
@@ -236,6 +242,26 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 		return fail("$", err)
 	}
 	return nil
+}
+
+// trailerError 解码流式响应列表之后的 google.rpc 状态，code 不为 0 时返回上游错误
+func trailerError(method string, raw json.RawMessage) error {
+	status, err := rawArray(raw, "$[1]", raw)
+	if err != nil || len(status) == 0 {
+		return &ProtocolEvidenceError{Method: method, Path: "$[1]", Detail: "流尾状态无效", Raw: cloneRaw(raw)}
+	}
+	code, err := rawInt64(status[0], "$[1][0]", raw)
+	if err != nil {
+		return withMethod(err, method)
+	}
+	if code == 0 {
+		return nil
+	}
+	statusCode := http.StatusBadGateway
+	if mapped, ok := interactionStatusHTTP[code]; ok {
+		statusCode = mapped
+	}
+	return DecodeRPCError(method, statusCode, raw)
 }
 
 func rawArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]json.RawMessage, error) {

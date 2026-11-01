@@ -83,20 +83,23 @@ func (s *server) handleGeminiVideoCreate(w http.ResponseWriter, r *http.Request,
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	videoRequest, count, err := request.toVideoRequest(model)
+	videoRequests, count, err := request.toVideoRequests(model)
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	videoRequest = normalizeVideoDefaults(videoRequest)
-	ids := make([]string, 0, count)
-	for range count {
-		operation, createErr := service.GenerateVideo(r.Context(), videoRequest)
-		if createErr != nil {
-			err = createErr
-			break
+	ids := make([]string, 0, count*len(videoRequests))
+create:
+	for _, videoRequest := range videoRequests {
+		videoRequest = normalizeVideoDefaults(videoRequest)
+		for range count {
+			operation, createErr := service.GenerateVideo(r.Context(), videoRequest)
+			if createErr != nil {
+				err = createErr
+				break create
+			}
+			ids = append(ids, operation.ID)
 		}
-		ids = append(ids, operation.ID)
 	}
 	if len(ids) == 0 {
 		if shouldWriteRequestError(r, err) {
@@ -113,10 +116,10 @@ const maxVideoCount = 4
 // videoOperationSeparator 连接同一 Gemini 操作内各上游视频任务的 ID
 const videoOperationSeparator = "~"
 
-// toVideoRequest 返回单个上游视频任务的请求与要创建的任务数
-func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRequest, int, error) {
-	if len(request.Instances) != 1 {
-		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances must contain one instance")
+// toVideoRequests 返回每个 instance 的上游视频任务请求与每个 instance 要创建的任务数
+func (request geminiVideoRequest) toVideoRequests(model string) ([]aistudio.VideoRequest, int, error) {
+	if len(request.Instances) == 0 {
+		return nil, 0, fmt.Errorf("instances is required")
 	}
 	count := request.Parameters.NumberOfVideos
 	if count == 0 {
@@ -126,53 +129,56 @@ func (request geminiVideoRequest) toVideoRequest(model string) (aistudio.VideoRe
 		count = 1
 	}
 	if count < 1 || count > maxVideoCount {
-		return aistudio.VideoRequest{}, 0, fmt.Errorf("numberOfVideos must be between 1 and %d", maxVideoCount)
+		return nil, 0, fmt.Errorf("numberOfVideos must be between 1 and %d", maxVideoCount)
 	}
 	duration, err := videoDuration(request.Parameters.Duration)
 	if err != nil {
-		return aistudio.VideoRequest{}, 0, err
+		return nil, 0, err
 	}
-	instance := request.Instances[0]
 	negative := request.Parameters.NegativePrompt
 	if negative == "" {
 		negative = request.Parameters.NegativePromptSnake
 	}
-	result := aistudio.VideoRequest{
-		Model: model, Prompt: instance.Prompt, NegativePrompt: negative,
-		AspectRatio: request.Parameters.AspectRatio, DurationSeconds: duration, Resolution: request.Parameters.Resolution,
-	}
-	if instance.Image != nil {
-		if result.StartImage, err = geminiVideoImage(instance.Image); err != nil {
-			return aistudio.VideoRequest{}, 0, fmt.Errorf("image: %w", err)
+	results := make([]aistudio.VideoRequest, 0, len(request.Instances))
+	for index, instance := range request.Instances {
+		result := aistudio.VideoRequest{
+			Model: model, Prompt: instance.Prompt, NegativePrompt: negative,
+			AspectRatio: request.Parameters.AspectRatio, DurationSeconds: duration, Resolution: request.Parameters.Resolution,
 		}
-	}
-	last := instance.LastFrame
-	if last == nil {
-		last = instance.LastFrameSnake
-	}
-	if last != nil {
-		if result.LastImage, err = geminiVideoImage(last); err != nil {
-			return aistudio.VideoRequest{}, 0, fmt.Errorf("lastFrame: %w", err)
+		if instance.Image != nil {
+			if result.StartImage, err = geminiVideoImage(instance.Image); err != nil {
+				return nil, 0, fmt.Errorf("instances[%d].image: %w", index, err)
+			}
 		}
-	}
-	references := instance.ReferenceImages
-	if references == nil {
-		references = instance.ReferenceImagesSnake
-	}
-	for index, reference := range references {
-		if reference.Image == nil {
-			return aistudio.VideoRequest{}, 0, fmt.Errorf("referenceImages[%d].image is required", index)
+		last := instance.LastFrame
+		if last == nil {
+			last = instance.LastFrameSnake
 		}
-		image, err := geminiVideoImage(reference.Image)
-		if err != nil {
-			return aistudio.VideoRequest{}, 0, fmt.Errorf("referenceImages[%d].image: %w", index, err)
+		if last != nil {
+			if result.LastImage, err = geminiVideoImage(last); err != nil {
+				return nil, 0, fmt.Errorf("instances[%d].lastFrame: %w", index, err)
+			}
 		}
-		result.ReferenceImages = append(result.ReferenceImages, image)
+		references := instance.ReferenceImages
+		if references == nil {
+			references = instance.ReferenceImagesSnake
+		}
+		for reference, item := range references {
+			if item.Image == nil {
+				return nil, 0, fmt.Errorf("instances[%d].referenceImages[%d].image is required", index, reference)
+			}
+			image, err := geminiVideoImage(item.Image)
+			if err != nil {
+				return nil, 0, fmt.Errorf("instances[%d].referenceImages[%d].image: %w", index, reference, err)
+			}
+			result.ReferenceImages = append(result.ReferenceImages, image)
+		}
+		if strings.TrimSpace(result.Prompt) == "" && result.StartImage == nil && result.LastImage == nil && len(result.ReferenceImages) == 0 {
+			return nil, 0, fmt.Errorf("instances[%d] must contain a prompt or an image", index)
+		}
+		results = append(results, result)
 	}
-	if strings.TrimSpace(result.Prompt) == "" && result.StartImage == nil && result.LastImage == nil && len(result.ReferenceImages) == 0 {
-		return aistudio.VideoRequest{}, 0, fmt.Errorf("instances[0] must contain a prompt or an image")
-	}
-	return result, count, nil
+	return results, count, nil
 }
 
 func geminiVideoImage(input *geminiVideoImageInput) (*aistudio.VideoImage, error) {

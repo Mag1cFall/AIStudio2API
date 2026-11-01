@@ -871,6 +871,21 @@ func restrictAllowedTools(tools aistudio.Tools, allowed []toolReference) aistudi
 	if !google["google_search"] {
 		tools.GoogleSearch = nil
 	}
+	servers := allowedMCPServers(allowed)
+	tools.MCPServers = slices.DeleteFunc(tools.MCPServers, func(server aistudio.MCPServer) bool {
+		_, ok := servers[server.Name]
+		return !ok
+	})
+	for index, server := range tools.MCPServers {
+		if names := servers[server.Name]; names != nil {
+			tools.MCPServers[index].AllowedTools = names
+		}
+	}
+	return tools
+}
+
+// allowedMCPServers 返回引用中限定的 MCP 服务器标签与工具名，工具名为 nil 表示该服务器的全部工具
+func allowedMCPServers(allowed []toolReference) map[string][]string {
 	servers := make(map[string][]string)
 	for _, reference := range allowed {
 		if reference.Type != "mcp" {
@@ -882,16 +897,7 @@ func restrictAllowedTools(tools aistudio.Tools, allowed []toolReference) aistudi
 			servers[reference.ServerLabel] = appendUnique(names, reference.Name)
 		}
 	}
-	tools.MCPServers = slices.DeleteFunc(tools.MCPServers, func(server aistudio.MCPServer) bool {
-		_, ok := servers[server.Name]
-		return !ok
-	})
-	for index, server := range tools.MCPServers {
-		if names := servers[server.Name]; names != nil {
-			tools.MCPServers[index].AllowedTools = names
-		}
-	}
-	return tools
+	return servers
 }
 
 // toolReference 是 tool_choice 与 allowed_tools 中对单个工具的引用

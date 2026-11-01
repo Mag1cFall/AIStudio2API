@@ -377,7 +377,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	responseID := newID("resp")
-	prepared, err := s.prepareResponses(r.Context(), &request, responseID)
+	prepared, err := s.prepareResponses(r.Context(), &request, responseID, true)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -432,7 +432,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	response, err := buildResponsesObject(responseID, created, request, result, compaction)
+	response, err := buildResponsesObject(responseID, created, request, result, outputPrefix(compaction, prepared))
 	if err != nil {
 		writeOpenAIRequestError(w, err)
 		return
@@ -450,6 +450,8 @@ type responsesPreparation struct {
 	contents           []aistudio.Content
 	inlineInstructions []string
 	input              []storedItem
+	// approved 是批准后由服务执行的 mcp_call 项，排在输出首位
+	approved []map[string]any
 	// stream 为后台流式响应的事件记录，随响应对象保存
 	stream *streamLog
 }
@@ -473,24 +475,34 @@ func (s *server) compactOverThreshold(ctx context.Context, request *responsesReq
 	encoded, _ := json.Marshal(item)
 	request.Input, _ = json.Marshal(slices.Concat(instructions, retained, []json.RawMessage{encoded}))
 	request.PreviousResponseID = ""
-	compacted, err := s.prepareResponses(ctx, request, id)
+	compacted, err := s.prepareResponses(ctx, request, id, false)
 	if err != nil {
 		return nil, err
 	}
+	compacted.approved = prepared.approved
 	*prepared = compacted
 	return item, nil
 }
 
-// prepareResponses 展开 item_reference、转换请求、下载外部媒体并接上 previous_response_id 的上下文
-func (s *server) prepareResponses(ctx context.Context, request *responsesRequest, id string) (responsesPreparation, error) {
+// prepareResponses 展开 item_reference、转换请求、下载外部媒体并接上 previous_response_id 的上下文；execute 为真时执行输入中批准的 MCP 调用
+func (s *server) prepareResponses(ctx context.Context, request *responsesRequest, id string, execute bool) (responsesPreparation, error) {
 	input, err := s.responseStates.ResolveItems(request.Input)
 	if err != nil {
 		return responsesPreparation{}, err
 	}
-	request.Input = input
+	additionalTools, _ := responsesInputConfig(input)
+	tools := slices.Concat(request.Tools, additionalTools)
+	rewritten, approved, err := s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input, execute)
+	if err != nil {
+		return responsesPreparation{}, err
+	}
+	request.Input = rewritten
 	generateRequest, inlineInstructions, err := request.toGenerateRequest(id)
 	if err == nil {
 		generateRequest, err = s.resolveMCPTools(ctx, generateRequest)
+	}
+	if err == nil {
+		generateRequest, err = s.mcpApprovalTools(ctx, tools, request.ToolChoice, generateRequest)
 	}
 	if err != nil {
 		return responsesPreparation{}, err
@@ -512,7 +524,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	}
 	prepared := responsesPreparation{
 		generate: generateRequest, contents: cloneResponseContents(generateRequest.Contents),
-		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(request.Input, id),
+		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(input, id), approved: approved,
 	}
 	if tool := imageGenerationTool(request.Tools); tool != nil && tool.InputImageMask != nil {
 		mask, err := s.imageGenerationMask(ctx, *tool.InputImageMask)
@@ -1061,7 +1073,13 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			if err != nil {
 				return aistudio.Tools{}, err
 			}
-			mapped.MCPServers = append(mapped.MCPServers, server)
+			approval, err := parseMCPApproval(tool.RequireApproval)
+			if err != nil {
+				return aistudio.Tools{}, err
+			}
+			if approval.never {
+				mapped.MCPServers = append(mapped.MCPServers, server)
+			}
 		case "image_generation", "file_search", "tool_search", "programmatic_tool_calling":
 		default:
 			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
@@ -1079,17 +1097,13 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 	return mapped, nil
 }
 
-// responsesMCPServer 把 mcp 工具映射为上游连接并直接调用的 MCP 服务器：authorization 写为 Bearer 授权头，allowed_tools 按工具名与只读要求限定
+// responsesMCPServer 把 mcp 工具映射为 MCP 服务器连接：authorization 写为 Bearer 授权头，allowed_tools 按工具名与只读要求限定
 func responsesMCPServer(tool responsesTool) (aistudio.MCPServer, error) {
 	if tool.ConnectorID != "" {
 		return aistudio.MCPServer{}, fmt.Errorf("mcp connector_id %q is an OpenAI hosted connector; upstream connects only to a server_url", tool.ConnectorID)
 	}
 	if tool.ServerLabel == "" || tool.ServerURL == "" {
 		return aistudio.MCPServer{}, fmt.Errorf("mcp server_label and server_url are required")
-	}
-	var approval string
-	if json.Unmarshal(tool.RequireApproval, &approval) != nil || approval != "never" {
-		return aistudio.MCPServer{}, fmt.Errorf("mcp server %q requires approval; upstream calls MCP tools during generation without pausing for approval, so set require_approval to never", tool.ServerLabel)
 	}
 	server := aistudio.MCPServer{Name: tool.ServerLabel, URL: tool.ServerURL, Headers: maps.Clone(tool.Headers)}
 	if tool.Authorization != "" {
@@ -1114,10 +1128,10 @@ func responsesMCPServer(tool responsesTool) (aistudio.MCPServer, error) {
 	return server, nil
 }
 
-// buildResponsesObject 用与流式相同的输出累积构造非流式响应对象，compaction 不为空时排在输出首位
-func buildResponsesObject(id string, created int64, request responsesRequest, result generationResult, compaction map[string]any) (map[string]any, error) {
+// buildResponsesObject 用与流式相同的输出累积构造非流式响应对象，prefix 排在输出首位
+func buildResponsesObject(id string, created int64, request responsesRequest, result generationResult, prefix []map[string]any) (map[string]any, error) {
 	writer := newResponsesWriter(nil, id, created, request)
-	writer.compaction = compaction
+	writer.prefix = prefix
 	for _, event := range result.events {
 		if err := writer.receive(event); err != nil {
 			return nil, err
@@ -1196,8 +1210,11 @@ func rawJSONConfigured(raw json.RawMessage) bool {
 	return len(value) > 0 && string(value) != "null"
 }
 
-// responseFunctionCall 按声明的工具类型把函数调用投影为 Responses 输出项
+// responseFunctionCall 按声明的工具类型把函数调用投影为 Responses 输出项，需要批准的 MCP 工具调用投影为 mcp_approval_request 项
 func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map[string]any {
+	if label, name, ok := mcpApprovalTarget(tools, call.Name); ok {
+		return map[string]any{"id": "mcpr_" + call.ID, "type": "mcp_approval_request", "server_label": label, "name": name, "arguments": string(call.Arguments)}
+	}
 	item := map[string]any{"id": "fc_" + call.ID, "status": "completed", "call_id": call.ID}
 	switch responsesToolKind(tools, call.Name) {
 	case "local_shell":
@@ -1475,8 +1492,16 @@ type responsesStreamWriter struct {
 	code     map[string]any
 	search   bool
 	held     []aistudio.Event
-	// compaction 为生成前自动压缩得到的 compaction 项，排在输出首位
-	compaction map[string]any
+	// prefix 是生成前得到的 compaction 项与批准后执行的 mcp_call 项，排在输出首位
+	prefix []map[string]any
+}
+
+// outputPrefix 返回排在输出首位的 compaction 项与批准后执行的 mcp_call 项
+func outputPrefix(compaction map[string]any, prepared responsesPreparation) []map[string]any {
+	if compaction == nil {
+		return prepared.approved
+	}
+	return append([]map[string]any{compaction}, prepared.approved...)
 }
 
 // newResponsesWriter 返回 Responses 输出写出器，声明搜索时正文等到搜索结果之后再写出
@@ -1507,12 +1532,18 @@ func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request
 
 // streamOutput 写出输出项事件与终止事件并保存最终响应，report 决定生成出错时是否写出 response.failed；返回生成或写出的错误
 func (s *server) streamOutput(ctx context.Context, writer *responsesStreamWriter, prepared responsesPreparation, events <-chan aistudio.Event, compaction map[string]any, report func(error) bool) error {
-	if compaction != nil {
-		writer.compaction = compaction
-		if err := writer.emit("response.output_item.added", map[string]any{"output_index": 0, "item": compaction}); err != nil {
+	writer.prefix = outputPrefix(compaction, prepared)
+	for index, item := range writer.prefix {
+		if item["type"] == "mcp_call" {
+			if err := writer.mcpCall(item, index); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
 			return err
 		}
-		if err := writer.emit("response.output_item.done", map[string]any{"output_index": 0, "item": compaction}); err != nil {
+		if err := writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item}); err != nil {
 			return err
 		}
 	}
@@ -1582,18 +1613,14 @@ func (writer *responsesStreamWriter) release() error {
 
 // index 返回输出项在响应 output 中的位置
 func (writer *responsesStreamWriter) index(item map[string]any) int {
-	base := 0
-	if writer.compaction != nil {
-		base = 1
-	}
-	return base + slices.IndexFunc(writer.output.items, func(candidate map[string]any) bool { return candidate["id"] == item["id"] })
+	return len(writer.prefix) + slices.IndexFunc(writer.output.items, func(candidate map[string]any) bool { return candidate["id"] == item["id"] })
 }
 
-// items 返回已累积的输出项，compaction 项排在首位
+// items 返回已累积的输出项，prefix 排在首位
 func (writer *responsesStreamWriter) items() []any {
-	output := make([]any, 0, 1+len(writer.output.items))
-	if writer.compaction != nil {
-		output = append(output, writer.compaction)
+	output := make([]any, 0, len(writer.prefix)+len(writer.output.items))
+	for _, item := range writer.prefix {
+		output = append(output, item)
 	}
 	for _, item := range writer.output.items {
 		output = append(output, item)
@@ -1703,23 +1730,10 @@ func (writer *responsesStreamWriter) added(item map[string]any) error {
 		}
 		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
 	case item["type"] == "mcp_call":
-		pending := maps.Clone(item)
-		pending["status"], pending["arguments"], pending["output"], pending["error"] = "in_progress", "", nil, nil
-		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": pending}); err != nil {
+		return writer.mcpCall(item, index)
+	case item["type"] == "mcp_approval_request":
+		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
 			return err
-		}
-		for _, event := range []map[string]any{
-			{"type": "response.mcp_call_arguments.delta", "delta": item["arguments"]},
-			{"type": "response.mcp_call_arguments.done", "arguments": item["arguments"]},
-			{"type": "response.mcp_call.in_progress"},
-			{"type": "response.mcp_call." + item["status"].(string)},
-		} {
-			eventType := event["type"].(string)
-			delete(event, "type")
-			event["item_id"], event["output_index"] = item["id"], index
-			if err := writer.emit(eventType, event); err != nil {
-				return err
-			}
 		}
 		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
 	case item["type"] == "image_generation_call":
@@ -1736,6 +1750,29 @@ func (writer *responsesStreamWriter) added(item map[string]any) error {
 		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
 	}
 	return writer.toolCall(item, index)
+}
+
+// mcpCall 写出 mcp_call 项的 added、参数、进行中与结束状态和 done 事件
+func (writer *responsesStreamWriter) mcpCall(item map[string]any, index int) error {
+	pending := maps.Clone(item)
+	pending["status"], pending["arguments"], pending["output"], pending["error"] = "in_progress", "", nil, nil
+	if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": pending}); err != nil {
+		return err
+	}
+	for _, event := range []map[string]any{
+		{"type": "response.mcp_call_arguments.delta", "delta": item["arguments"]},
+		{"type": "response.mcp_call_arguments.done", "arguments": item["arguments"]},
+		{"type": "response.mcp_call.in_progress"},
+		{"type": "response.mcp_call." + item["status"].(string)},
+	} {
+		eventType := event["type"].(string)
+		delete(event, "type")
+		event["item_id"], event["output_index"] = item["id"], index
+		if err := writer.emit(eventType, event); err != nil {
+			return err
+		}
+	}
+	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
 }
 
 // toolCall 写出函数调用项的 added、参数增量与 done 事件

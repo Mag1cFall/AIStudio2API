@@ -18,7 +18,7 @@
   Build 代码助手对话通道 &nbsp;•&nbsp;
   多账户高并发<br>
   Camoufox 与 SpiderMonkey 双 WAA 后端 &nbsp;•&nbsp;
-  Claude Code、Codex 等 agent 客户端 &nbsp;•&nbsp;
+  Claude Code、Codex 等 Agent 客户端 &nbsp;•&nbsp;
   Nano Banana、Veo、TTS 与 Omni
 </p>
 
@@ -42,6 +42,30 @@
 
 **三步开始使用**：下载 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 并启动 → 在“账户”页添加 Google 账户 → 点击“启动服务”，把 `http://127.0.0.1:2048` 作为 OpenAI、Anthropic 或 Gemini 客户端的 Base URL
 
+## 🧩 Google 反代全家桶
+
+三个项目分别接入 AI Studio、Gemini 网页版与 Antigravity，把各自的模型转为 OpenAI、Anthropic 与 Gemini 兼容接口，供 Claude Code、Codex 等 Agent 客户端和 SillyTavern 等酒馆前端使用。
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
+      <a href="https://github.com/Mag1cFall/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
+      官方 WAA proof 由 Camou&shy;fox 或进程内 Spider&shy;Monkey 生成，账户像在官网一样对话
+    </td>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/Gemini-Web2API"><img src="https://raw.githubusercontent.com/Mag1cFall/Gemini-Web2API/main/internal/desktop/icon.png" width="72" alt="Gemini-Web2API"></a><br>
+      <a href="https://github.com/Mag1cFall/Gemini-Web2API"><b>Gemini-Web&shy;2API</b></a></p>
+      账户从本机 Chrome 一键导入，运行时只走纯 HTTP，未登录也能用访客会话
+    </td>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/Antigravity2API"><img src="https://raw.githubusercontent.com/Mag1cFall/Antigravity2API/main/internal/desktop/icon.png" width="72" alt="Antigravity2API"></a><br>
+      <a href="https://github.com/Mag1cFall/Antigravity2API"><b>Antigravity&shy;2API</b></a></p>
+      只模拟官方 Windows 客户端，TLS、请求信封与伴随请求逐字段一致
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## 核心能力
@@ -51,7 +75,7 @@
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=spidermonkey` 后由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩，Anthropic Messages 支持 `context_management` 的工具结果与思考清理和阈值压缩
-- **主流 agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
+- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
 
@@ -204,6 +228,7 @@ docker compose up -d
 - 端口对外开放时设置 `PROXY_API_KEY`；从容器外打开管理页面需要 `ADMIN_AUTH_ENABLED=true` 与管理密码，用户名默认为 `admin`
 - 添加账户：在管理页面“添加账户”中选择“浏览器登录”，在管理页面打开的登录窗口中登录 Google；也可以粘贴 Cookie，或把能登录 Google 的电脑上的 `auth/<Google 邮箱>/` 复制到 `data/auth/`
 - `PROXY` 与账户代理从容器内访问，代理运行在宿主机时填写宿主机的局域网地址，并允许代理接受局域网连接
+- 容器时区为 UTC，新账户的指纹时区、日志时间与用量页的按日统计取容器时区；在 `docker-compose.yml` 中加入 `environment: { TZ: <IANA 时区> }` 改用其他时区，账户时区也可在账户页单独设置
 - 修改 `data/.env` 后执行 `docker compose restart`；更新镜像执行 `docker compose pull && docker compose up -d`；在源码目录中执行 `docker compose up -d --build` 从源码构建
 
 ## 快速开始
@@ -310,7 +335,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 | Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 
-模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用。
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。
 
 以 Cherry Studio 为例：
 
@@ -320,7 +345,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 4. API 密钥填写 `.env` 中的 `PROXY_API_KEY`
 5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.6-flash`、`gemini-3.7-flash`
 
-[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 agent 按 opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
+[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
@@ -557,12 +582,15 @@ AIStudio2API/
 cp .env.example .env
 ```
 
+进程环境变量覆盖 `.env` 中的同名项，这些项在设置页中不可修改；在管理页面保存设置时 `.env` 只写入与默认值不同的项；取值无效的项按默认值运行，并在管理页面顶部与日志中列出。
+
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览 |
 | `PROXY_API_KEY` | 空 | 公开 API key |
+| `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
 | `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
@@ -589,7 +617,8 @@ cp .env.example .env
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |
-| `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
+| `FIRST_EVENT_HEDGE` | `auto` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
+| `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | 发起备用请求的模型 ID，逗号分隔；备用请求同样计入账户额度 |
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |

@@ -29,8 +29,8 @@ const (
 	firefoxPingTimeout = 8 * time.Second
 	// firefoxTLSHandshakeTimeout 是 Firefox network.http.tls-handshake-timeout
 	firefoxTLSHandshakeTimeout = 30 * time.Second
-	// browserIdleConnTimeout 是空闲 HTTP/2 连接的保留时长
-	browserIdleConnTimeout = 90 * time.Second
+	// browserIdleConnTimeout 是 Firefox network.http.http2.timeout，空闲 HTTP/2 连接保留该时长后关闭
+	browserIdleConnTimeout = 170 * time.Second
 	// firefoxInitialStreamID 是 Firefox 在每条 HTTP/2 连接上首个请求流的 ID
 	firefoxInitialStreamID = 3
 	// firefoxConnectionWindowUpdate 是 Firefox 在 SETTINGS 后把连接接收窗口开到 12 MiB 的 WINDOW_UPDATE 增量

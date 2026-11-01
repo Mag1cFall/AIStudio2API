@@ -5,7 +5,7 @@ import { useI18n } from '@/i18n'
 import type { Model, UsageDimension, UsageReport, UsageStats } from '@/types'
 import UiIcon from './UiIcon.vue'
 import UiSelect from './UiSelect.vue'
-import FilterMenu from './usage/FilterMenu.vue'
+import FilterMenu from './FilterMenu.vue'
 import KpiCard from './usage/KpiCard.vue'
 import RangePicker from './usage/RangePicker.vue'
 import RankingTable from './usage/RankingTable.vue'
@@ -407,6 +407,9 @@ const statusOptions = computed(() =>
         :options="filterOptions(dimension)"
         :selected="state.filters[dimension] ?? []"
         :format="(value: string) => dimensionLabel(dimension, value)"
+        :search-label="t('usage.filterSearch')"
+        :empty-label="t('usage.filterNone')"
+        :clear-label="t('usage.filtersClear')"
         @change="setFilter(dimension, $event)"
       />
       <button

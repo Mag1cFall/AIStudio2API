@@ -408,7 +408,7 @@ func (s *PooledService) UploadFile(ctx context.Context, request UploadRequest) (
 	maxAttempts := 1
 	var candidateAccountIDs []string
 	if automatic {
-		candidateAccountIDs = s.pool.fileUploadAccountIDs()
+		candidateAccountIDs = s.pool.fileUploadAccountIDs(ctx)
 		if len(candidateAccountIDs) == 0 {
 			return FileRef{}, ErrNoEligibleAccount
 		}
@@ -476,12 +476,14 @@ func (s *PooledService) UploadFile(ctx context.Context, request UploadRequest) (
 	return file, uploadErr
 }
 
-func (p *AccountPool) fileUploadAccountIDs() []string {
+// fileUploadAccountIDs 返回请求所用 API key 可用的上传候选账户，空闲账户在前
+func (p *AccountPool) fileUploadAccountIDs(ctx context.Context) []string {
+	selection := p.keyScopedSelection(ctx, AccountSelection{})
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	available := make([]string, 0, len(p.accounts))
 	busy := make([]string, 0, len(p.accounts))
-	indices, _ := p.selectionIndicesLocked(AccountSelection{})
+	indices, _ := p.selectionIndicesLocked(selection)
 	for _, index := range indices {
 		account := p.accounts[index]
 		if !account.Config.Enabled || account.State != AccountReady {
@@ -855,6 +857,38 @@ func (l *AccountLease) claimInlineMedia(ctx context.Context, keys []inlineMediaK
 		return nil, nil, err
 	}
 	return found, expired, nil
+}
+
+// ReclaimIdleInlineMedia 删除各账户闲置超过 inlineMediaIdle 的内联附件 Drive 文件，没有空闲槽位的账户跳过本轮
+func (s *PooledService) ReclaimIdleInlineMedia(ctx context.Context) error {
+	var reclaimErr error
+	for _, accountID := range s.pool.resourceOwners() {
+		reclaimErr = errors.Join(reclaimErr, s.reclaimInlineMedia(ctx, accountID))
+	}
+	return reclaimErr
+}
+
+// reclaimInlineMedia 删除账户中闲置超过 inlineMediaIdle 的内联附件，删除失败的附件恢复绑定留待下一轮
+func (s *PooledService) reclaimInlineMedia(ctx context.Context, accountID string) error {
+	lease, _, _ := s.pool.TryAcquireFor(ctx, AccountSelection{AccountID: accountID})
+	if lease == nil {
+		return nil
+	}
+	leaseCtx := ContextWithAccountLease(ctx, lease)
+	_, expired, err := lease.claimInlineMedia(leaseCtx, nil, s.inlineMediaBusy)
+	if err != nil || len(expired) == 0 {
+		return errors.Join(err, lease.Release())
+	}
+	copies := &TemporaryFileCopies{client: s.client, lease: lease}
+	token, err := s.client.GenerateAccessToken(leaseCtx, accountID)
+	for _, media := range expired {
+		if err != nil {
+			err = errors.Join(err, lease.bindInlineMedia(context.WithoutCancel(leaseCtx), media.file, media.key, media.size))
+		} else {
+			copies.copies = append(copies.copies, temporaryDriveCopy{id: media.file.ID, token: token, media: &media})
+		}
+	}
+	return errors.Join(err, copies.Cleanup(), lease.Release())
 }
 
 // bindInlineMedia 记录上传到当前账户的内联附件

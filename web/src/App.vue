@@ -379,6 +379,16 @@ onMounted(revealCurrentTab)
             .replace('{active}', config.active_listen_addr)
         }}
       </div>
+      <div
+        v-if="config?.invalid.length"
+        role="alert"
+        class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm break-words text-amber-200 md:px-8"
+      >
+        <p>{{ t('app.invalidConfig') }}</p>
+        <p v-for="item in config.invalid" :key="item.key" class="mt-1 font-mono text-xs">
+          {{ item.value ? `${item.key}=${item.value}` : item.key }} · {{ logText(item.reason) }}
+        </p>
+      </div>
       <Transition name="page">
         <KeepAlive include="AccountsPanel,SettingsPanel,VersionPanel,UsagePanel">
           <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
@@ -416,6 +426,8 @@ onMounted(revealCurrentTab)
           <SettingsPanel
             v-else-if="currentTab === 'settings'"
             :config="config"
+            :accounts="accounts"
+            :models="models"
             :loading="loading.config"
             :error="errors.config"
             @saved="config = $event"

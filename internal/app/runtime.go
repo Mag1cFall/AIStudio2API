@@ -113,6 +113,7 @@ func newRuntime(
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
+	service.hedgeModels = config.ModelList(cfg.FirstEventHedgeModels)
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
@@ -170,6 +171,8 @@ type trackedService struct {
 	// hedgeAuto 与 hedgeAfter 是首事件超时备用请求的自适应开关与自定义等待
 	hedgeAuto  bool
 	hedgeAfter time.Duration
+	// hedgeModels 是发起备用请求的模型
+	hedgeModels []string
 	// hedges 是正在进行的备用请求数
 	hedges atomic.Int32
 }
@@ -177,6 +180,7 @@ type trackedService struct {
 type modelCatalogService interface {
 	RefreshAccountModels(context.Context, string) ([]aistudio.Model, error)
 	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
+	ReclaimIdleInlineMedia(context.Context) error
 	CachedModels() []aistudio.Model
 }
 
@@ -783,6 +787,11 @@ func (service *trackedService) applyCachedModelCatalog() {
 }
 
 // ApplyCapacity 让容量设置作用于后续调度，常驻 Worker 数调高时补足预热
+// SetAPIKeyAccounts 设置各 API key 可用的账户 ID
+func (service *trackedService) SetAPIKeyAccounts(accounts map[string][]string) {
+	service.pool.SetAPIKeyAccounts(accounts)
+}
+
 func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int) {
 	service.pool.SetPerAccountConcurrency(perAccountConcurrency)
 	service.workers.SetCapacity(warmTarget, maxActive, startupConcurrency)
@@ -803,7 +812,7 @@ func (service *trackedService) syncAccountModels(ctx context.Context, accountID 
 	return models, err
 }
 
-// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益与目录
+// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益与目录并删除闲置的内联附件
 func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 	ticker := time.NewTicker(modelCatalogRetryInterval)
 	defer ticker.Stop()
@@ -815,6 +824,9 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 			return
 		case <-stateTicker.C:
 			service.refreshAccountStates(ctx)
+			if err := service.catalog.ReclaimIdleInlineMedia(ctx); err != nil {
+				service.requests.log("service", "WARN", fmt.Sprintf("闲置内联附件删除失败: %v", err))
+			}
 		case <-ticker.C:
 			if !service.retryAccountModelCatalogs(ctx) {
 				return
@@ -1266,7 +1278,8 @@ func (closer *trackedMediaReadCloser) Close() error {
 	return closer.err
 }
 
-func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection) (*aistudio.AccountLease, error) {
+// acquireWarmLease 取得 Worker 已就绪的账户租约，planLimitFallback 为 true 时全部账户冷却且排队超过上限时改用套餐限额冷却中的账户
+func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection, planLimitFallback bool) (*aistudio.AccountLease, error) {
 	fixedAccount := strings.TrimSpace(selection.AccountID) != "" || strings.TrimSpace(selection.ResourceID) != ""
 	failedWorkers := make(map[string]struct{})
 	var promoteFailure error
@@ -1394,6 +1407,10 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		if !groups.EarliestCooldown.Until.IsZero() {
 			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit {
+				if planLimitFallback && !selection.IgnorePlanLimitCooldown {
+					selection.IgnorePlanLimitCooldown = true
+					continue
+				}
 				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 			}
 			if err := wait(min(remaining, schedulingRecheck)); err != nil {
@@ -1655,6 +1672,8 @@ type generateRetry struct {
 	attemptFailure error
 	// missingInlineMedia 表示已因复用的内联附件文件不存在而在同一账户重试过
 	missingInlineMedia bool
+	// planLimitSeen 表示已有尝试收到套餐限额拒绝，之后全部账户冷却时不再改用套餐限额冷却中的账户
+	planLimitSeen bool
 }
 
 // attemptOutcome 是失败尝试处理后的错误与换号决定
@@ -1689,7 +1708,7 @@ func (service *trackedService) generateWithRetry(
 	}
 	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
 	assistant := service.pool.AssistantModel(modelID)
-	hedgeable := !request.Background && !assistant && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0)
+	hedgeable := !request.Background && !assistant && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0) && slices.Contains(service.hedgeModels, modelID)
 	hedged := false
 	var winner *generateAttempt
 	var activity *upstreamActivity
@@ -1752,14 +1771,15 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		lease, acquireErr := service.acquireWarmLease(requestCtx, selection)
+		planLimitFallback := !retry.planLimitSeen && selection.ResourceID == ""
+		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, planLimitFallback)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
 			(errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &buildCooling)) {
 			// 没有账户能经 Build 服务时改用 Playground，Playground 无法表达的设置按其最接近的形式发送
 			selection.Channel = ""
 			fallbackReason = "Build 通道没有可用账户"
-			lease, acquireErr = service.acquireWarmLease(requestCtx, selection)
+			lease, acquireErr = service.acquireWarmLease(requestCtx, selection, planLimitFallback)
 		}
 		queueDelayed := queueWait.finish()
 		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && lease.Channel() != aistudio.ChannelBuild {
@@ -2083,6 +2103,7 @@ func (service *trackedService) settleAttempt(
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
+		retry.planLimitSeen = retry.planLimitSeen || cooldown.Kind == aistudio.PlanLimitKind
 		modelAccessScope := lease.CooldownScope(modelID)
 		scopeLabel := modelAccessScope
 		if cooldown.Global {

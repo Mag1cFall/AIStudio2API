@@ -43,7 +43,10 @@ func (handler *spaHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		return
 	}
 
+	// 管理端资源不进入 WebView 磁盘缓存，也不以 304 复用已缓存的正文
+	writer.Header().Set("Cache-Control", "no-store")
 	if handler.static.Found(request) {
+		request.Header.Del("If-None-Match")
 		handler.static.ServeHTTP(writer, request)
 		return
 	}

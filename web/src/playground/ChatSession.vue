@@ -76,15 +76,15 @@ function measure(): void {
   atBottom.value = element.scrollTop >= element.scrollHeight - element.clientHeight
 }
 
-// follow 与官网 ms-autoscroll-container 一致：没有停止跟随时滚到底部，force 先恢复跟随
+// follow 与官网 ms-autoscroll-container 一致：没有停止跟随时滚到底部，force 先恢复跟随；内容变矮使位置被截短时同样记录新的底部
 function follow(force = false): void {
   const element = scroller.value!
   if (force) detached = false
   if (detached) return
   const max = element.scrollHeight - element.clientHeight
-  if (element.scrollTop >= max) return
   lastTop = max
   lastHeight = element.clientHeight
+  if (element.scrollTop >= max) return
   element.scrollTop = max
   atBottom.value = true
 }

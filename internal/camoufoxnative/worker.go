@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,11 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	if err := worker.bootstrap(ctx, options, state); err != nil {
 		return nil, err
 	}
+	if options.Headless && !options.liveView {
+		if err := worker.stopRendering(ctx); err != nil {
+			return nil, fmt.Errorf("停止 Camoufox 标签页绘制: %w", err)
+		}
+	}
 	failed = false
 	return worker, nil
 }
@@ -165,7 +171,34 @@ func (worker *Worker) launch(ctx context.Context, options Options, fingerprint m
 		}
 		return err
 	}
+	if runtime.GOOS != "windows" && options.Headless {
+		return worker.placeWindow(sessionCtx)
+	}
 	return nil
+}
+
+// placeWindow 移动主窗口，使页面内容区的屏幕坐标与 Windows 版一致
+func (worker *Worker) placeWindow(ctx context.Context) error {
+	result, err := worker.client.command(ctx, "browser.getClientWindows", map[string]any{})
+	if err != nil {
+		return err
+	}
+	window := result["clientWindows"].([]any)[0].(map[string]any)
+	_, err = worker.client.command(ctx, "browser.setClientWindowState", map[string]any{
+		"clientWindow": window["clientWindow"], "state": "normal", "x": windowsWindowPosition, "y": windowsWindowPosition + windowsChromeHeight - hostChromeHeight,
+	})
+	return err
+}
+
+// stopRendering 经浏览器界面层关闭当前标签页的 renderLayers，标签页不再光栅化与合成，页面的可见状态、焦点、动画帧与定时器不变
+func (worker *Worker) stopRendering(ctx context.Context) error {
+	tree, err := worker.client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0, "moz:scope": "chrome"})
+	if err != nil {
+		return err
+	}
+	chrome := tree["contexts"].([]any)[0].(map[string]any)["context"].(string)
+	_, err = worker.client.evaluate(ctx, chrome, "gBrowser.selectedBrowser.renderLayers = false")
+	return err
 }
 
 // closeBrowser 关闭未完成启动的 Camoufox，保留账户缓存锁

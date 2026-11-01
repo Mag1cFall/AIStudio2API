@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
-import { useI18n } from '@/i18n'
-import UiIcon from '../UiIcon.vue'
+import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{
   label: string
   options: string[]
   selected: string[]
   format: (value: string) => string
+  searchLabel: string
+  emptyLabel: string
+  clearLabel: string
 }>()
 const emit = defineEmits<{ change: [values: string[]] }>()
 
-const { t } = useI18n()
 const id = useId()
 const query = ref('')
 const visible = computed(() => {
@@ -58,7 +59,7 @@ function toggle(value: string, checked: boolean): void {
         class="ui-popover z-[60] w-80 max-w-[var(--reka-popover-content-available-width)] rounded-lg border border-line bg-panel p-2 shadow-xl shadow-black/40"
       >
         <label class="relative mb-2 block">
-          <span class="sr-only">{{ t('usage.filterSearch') }}</span>
+          <span class="sr-only">{{ searchLabel }}</span>
           <UiIcon
             name="search"
             :size="13"
@@ -67,14 +68,14 @@ function toggle(value: string, checked: boolean): void {
           <input
             v-model="query"
             type="search"
-            :placeholder="t('usage.filterSearch')"
+            :placeholder="searchLabel"
             class="w-full rounded-md border border-line bg-canvas py-1.5 pr-2 pl-7 text-xs text-white focus:border-blue-500 focus:outline-none"
           />
         </label>
         <fieldset class="max-h-64 min-w-0 overflow-y-auto">
           <legend class="sr-only">{{ label }}</legend>
           <p v-if="visible.length === 0" class="px-2 py-3 text-center text-xs text-gray-500">
-            {{ t('usage.filterNone') }}
+            {{ emptyLabel }}
           </p>
           <label
             v-for="(value, index) in visible"
@@ -99,7 +100,7 @@ function toggle(value: string, checked: boolean): void {
             class="w-full rounded px-2 py-1 text-left text-xs text-gray-400 hover:bg-raised hover:text-white"
             @click="emit('change', [])"
           >
-            {{ t('usage.filtersClear') }}
+            {{ clearLabel }}
           </button>
         </div>
       </PopoverContent>

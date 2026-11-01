@@ -303,10 +303,14 @@ func (request anthropicRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	contents := make([]aistudio.Content, 0, len(request.Messages))
 	var reminders []aistudio.Part
 	declared := request.Tools
+	known := make(map[string]anthropicTool, len(request.Tools))
+	for _, tool := range request.Tools {
+		known[tool.Name] = tool
+	}
 	for _, message := range request.Messages {
 		if message.Role == "system" {
 			var text string
-			text, declared, err = anthropicSystemMessage(message.Content, declared)
+			text, declared, err = anthropicSystemMessage(message.Content, declared, known)
 			if err != nil {
 				return aistudio.GenerateRequest{}, fmt.Errorf("system message: %w", err)
 			}
@@ -400,8 +404,8 @@ func anthropicSystemText(raw json.RawMessage) (string, error) {
 	return strings.Join(texts, "\n"), nil
 }
 
-// anthropicSystemMessage 读取对话中途 system 消息的文本，并按其中的 tool_addition 与 tool_removal 更新声明的工具
-func anthropicSystemMessage(raw json.RawMessage, tools []anthropicTool) (string, []anthropicTool, error) {
+// anthropicSystemMessage 读取对话中途 system 消息的文本，并按其中的 tool_addition 与 tool_removal 更新声明的工具：按定义加入的工具记入 known，按名称引用的工具从 known 恢复，已声明的工具不重复声明
+func anthropicSystemMessage(raw json.RawMessage, tools []anthropicTool, known map[string]anthropicTool) (string, []anthropicTool, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		return text, tools, nil
@@ -426,8 +430,14 @@ func anthropicSystemMessage(raw json.RawMessage, tools []anthropicTool) (string,
 				texts = append(texts, block.Text)
 			}
 		case "tool_addition":
-			if block.Tool.Type == "tool_definition" {
-				tools = append(slices.Clip(tools), block.Tool.Definition)
+			tool, ok := block.Tool.Definition, block.Tool.Type == "tool_definition"
+			if ok {
+				known[tool.Name] = tool
+			} else if block.Tool.Type == "tool_reference" {
+				tool, ok = known[block.Tool.Name]
+			}
+			if ok && !slices.ContainsFunc(tools, func(declared anthropicTool) bool { return declared.Name == tool.Name }) {
+				tools = append(slices.Clip(tools), tool)
 			}
 		case "tool_removal":
 			tools = slices.DeleteFunc(slices.Clone(tools), func(tool anthropicTool) bool { return tool.Name == block.Tool.Name })

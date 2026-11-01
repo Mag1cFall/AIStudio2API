@@ -876,7 +876,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
 		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch,
 		ContinuationRewrite: value.ContinuationRewrite, ContinuationPrompt: strings.TrimSpace(value.ContinuationPrompt),
-		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
+		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
 		ProxyAPIKey: value.APIKey, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
@@ -885,11 +885,12 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
+		APIKeyAccounts:         strings.TrimSpace(value.APIKeyAccounts),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             value.WAABackend,
 		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
 		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
-	}
+	}.KeepEnvironment(saved)
 	if err := cfg.Validate(); err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(err)
 	}
@@ -1174,7 +1175,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		NonstreamKeepalive:   cfg.NonstreamKeepalive, FakeStream: cfg.FakeStream, YouTubeLinks: cfg.YouTubeLinks,
 		SearchModelAliases: cfg.SearchModelAliases, GoogleSearch: cfg.GoogleSearch,
 		ContinuationRewrite: cfg.ContinuationRewrite, ContinuationPrompt: cfg.ContinuationPrompt,
-		FirstEventHedge: cfg.FirstEventHedge, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
+		FirstEventHedge: cfg.FirstEventHedge, FirstEventHedgeModels: cfg.FirstEventHedgeModels, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		PreviewListenAddr: cfg.PreviewListenAddr, ActivePreviewListenAddr: cfg.PreviewListenAddr,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
@@ -1185,11 +1186,23 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		UpstreamChannels:       cfg.UpstreamChannels,
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,
+		APIKeyAccounts:         cfg.APIKeyAccounts,
 		TemporaryChat:          cfg.TemporaryChat,
 		WAABackend:             cfg.WAABackend,
 		MediaOutput:            cfg.MediaOutput,
 		MediaBaseURL:           cfg.MediaBaseURL,
+		Environment:            append([]string{}, cfg.Environment...),
+		Invalid:                invalidConfigDTO(cfg.Invalid),
 	}
+}
+
+// invalidConfigDTO 把加载时无效的配置项转为管理接口的表示
+func invalidConfigDTO(values []config.InvalidValue) []api.InvalidConfigValue {
+	result := make([]api.InvalidConfigValue, 0, len(values))
+	for _, value := range values {
+		result = append(result, api.InvalidConfigValue{Key: value.Key, Value: value.Value, Reason: value.Reason})
+	}
+	return result
 }
 
 var _ generationAdmin = (*runtimeAdmin)(nil)

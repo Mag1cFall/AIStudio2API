@@ -215,7 +215,7 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 			return nil, fmt.Errorf("parameters: %w", err)
 		}
 	}
-	if encodingError != nil || schemaWireNeedsBuild(parameters) || declaration.Strict || strings.Contains(string(raw), `"additionalProperties"`) || strings.Contains(string(raw), `"prefixItems"`) || strings.Contains(string(raw), `"exclusiveMinimum"`) || strings.Contains(string(raw), `"propertyNames"`) || strings.Contains(string(raw), `"$ref"`) {
+	if encodingError != nil || schemaWireNeedsBuild(parameters) || declaration.Strict || strings.Contains(string(raw), `"additionalProperties"`) || strings.Contains(string(raw), `"prefixItems"`) || strings.Contains(string(raw), `"exclusiveMinimum"`) || strings.Contains(string(raw), `"propertyNames"`) || strings.Contains(string(raw), `"$ref"`) || schemaHasEmptyEnum(raw) {
 		description += "\nArguments must follow this JSON Schema: " + string(raw)
 	}
 	projectToolSchema(parameters)

@@ -42,6 +42,30 @@
 
 **Get started in three steps**: download a [release](https://github.com/Mag1cFall/AIStudio2API/releases) and launch it → add a Google account on the Accounts page → click "Start service" and use `http://127.0.0.1:2048` as the Base URL of your OpenAI, Anthropic or Gemini client
 
+## 🧩 The Google proxy family
+
+The three projects connect to AI Studio, the Gemini web app and Antigravity, and serve their models through OpenAI, Anthropic and Gemini compatible APIs for Agent clients such as Claude Code and Codex and for chat front ends such as SillyTavern.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
+      <a href="https://github.com/Mag1cFall/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
+      Camou&shy;fox or in-process Spider&shy;Monkey generates the official WAA proof, so accounts chat as on the website
+    </td>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/Gemini-Web2API"><img src="https://raw.githubusercontent.com/Mag1cFall/Gemini-Web2API/main/internal/desktop/icon.png" width="72" alt="Gemini-Web2API"></a><br>
+      <a href="https://github.com/Mag1cFall/Gemini-Web2API"><b>Gemini-Web&shy;2API</b></a></p>
+      Imports accounts from the local Chrome in one click and runs on plain HTTP, with a guest session when signed out
+    </td>
+    <td width="33%" valign="top">
+      <p align="center"><a href="https://github.com/Mag1cFall/Antigravity2API"><img src="https://raw.githubusercontent.com/Mag1cFall/Antigravity2API/main/internal/desktop/icon.png" width="72" alt="Antigravity2API"></a><br>
+      <a href="https://github.com/Mag1cFall/Antigravity2API"><b>Antigravity&shy;2API</b></a></p>
+      Emulates only the official Windows client, matching TLS, request envelope and companion requests field by field
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## Core Capabilities
@@ -204,6 +228,7 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
 - Set `PROXY_API_KEY` when the port is reachable from other machines. Opening the console from outside the container requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
 - Add accounts: choose "Sign in with browser" in "Add account" on the console and sign in to Google in the sign-in window that opens in the console; you can also paste cookies, or copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`.
 - `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy.
+- The container time zone is UTC. New accounts' fingerprint time zone, log timestamps, and daily usage totals follow the container time zone; add `environment: { TZ: <IANA time zone> }` to `docker-compose.yml` to use another one. Each account's time zone can also be set on the Accounts page.
 - Run `docker compose restart` after editing `data/.env`, `docker compose pull && docker compose up -d` to update the image, and `docker compose up -d --build` in the source directory to build from source.
 
 ## Quick Start
@@ -310,7 +335,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 | Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 
-Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted.
+Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests.
 
 For Cherry Studio:
 
@@ -557,12 +582,15 @@ Copy and edit the environment file:
 cp .env.example .env
 ```
 
+Process environment variables override the same keys in `.env`, and those settings cannot be changed on the settings page. Saving settings in the console writes only the values that differ from the defaults to `.env`. Settings with invalid values run with their defaults and are listed at the top of the console and in the log.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | Listen address for HTML previews in the API playground, on a port different from `LISTEN_ADDR`; when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use |
 | `PROXY_API_KEY` | empty | Public API key |
+| `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
 | `LOG_FILE` | `true` | Also write service logs to `runtime/logs/`, rotating at 10 MB per file |
@@ -589,7 +617,8 @@ cp .env.example .env
 | `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
 | `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
 | `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
-| `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
+| `FIRST_EVENT_HEDGE` | `auto` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
+| `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | Comma-separated model IDs that get backup requests; backup requests also count against account quota |
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key |

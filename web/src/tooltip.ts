@@ -20,8 +20,9 @@ function tooltipElement(): HTMLDivElement {
   return tip
 }
 
-// place 按指定位置与间距放置提示，超出视口时换到相反一侧并限制在视口内
+// place 按指定位置与间距放置提示，超出视口时换到相反一侧，两侧都放不下时留在指定一侧并推入视口
 function place(element: HTMLDivElement, rect: DOMRect, position: string, gap: number): void {
+  element.style.left = '0px'
   const width = element.offsetWidth
   const height = element.offsetHeight
   const clampX = (value: number) => Math.min(Math.max(8, value), window.innerWidth - width - 8)
@@ -31,14 +32,17 @@ function place(element: HTMLDivElement, rect: DOMRect, position: string, gap: nu
   if (position === 'left' || position === 'right') {
     const before = rect.left - width - gap
     const after = rect.right + gap
-    left =
+    const fitsBefore = before >= 8
+    const fitsAfter = after + width <= window.innerWidth - 8
+    left = clampX(
       position === 'left'
-        ? before >= 8
+        ? fitsBefore || !fitsAfter
           ? before
           : after
-        : after + width <= window.innerWidth - 8
+        : fitsAfter || !fitsBefore
           ? after
-          : before
+          : before,
+    )
     top = clampY(rect.top + rect.height / 2 - height / 2)
   } else {
     const above = rect.top - height - gap

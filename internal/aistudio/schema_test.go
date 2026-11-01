@@ -3,6 +3,7 @@ package aistudio
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -43,7 +44,13 @@ func TestEncodeJSONSchema_NotVariants(t *testing.T) {
 	if err != nil || len(wire) <= 3 || wire[3] != false {
 		t.Fatalf("not null wire=%#v error=%v", wire, err)
 	}
-	for _, value := range []string{`""`, `"denied"`, `["a","b"]`} {
+	for _, raw := range []string{`{"type":"string","not":""}`, `{"type":"string","not":{"enum":[""]}}`} {
+		wire, err := encodeJSONSchema(json.RawMessage(raw))
+		if err != nil || len(wire) > 19 || len(wire) <= 12 || wire[12] != int64(1) {
+			t.Fatalf("not empty schema=%s wire=%#v error=%v", raw, wire, err)
+		}
+	}
+	for _, value := range []string{`"denied"`, `["a","b"]`, `["","a","b"]`} {
 		wire, err := encodeJSONSchema(json.RawMessage(`{"type":"string","not":` + value + `}`))
 		if err != nil || len(wire) <= 19 {
 			t.Fatalf("not enum wire=%#v error=%v", wire, err)
@@ -52,6 +59,7 @@ func TestEncodeJSONSchema_NotVariants(t *testing.T) {
 		var expected []string
 		if value[0] == '[' {
 			_ = json.Unmarshal([]byte(value), &expected)
+			expected = slices.DeleteFunc(expected, func(item string) bool { return item == "" })
 		} else {
 			var text string
 			_ = json.Unmarshal([]byte(value), &text)
@@ -60,6 +68,23 @@ func TestEncodeJSONSchema_NotVariants(t *testing.T) {
 		if len(excluded) <= 4 || !reflect.DeepEqual(excluded[4], expected) {
 			t.Fatalf("excluded=%#v expected=%#v", excluded, expected)
 		}
+	}
+}
+
+// TestGeminiSchemaNotEmptyString 核对 not 排除空串只收紧空串：联合类型仍接受其余类型，带其他约束的排除不额外要求非空
+func TestGeminiSchemaNotEmptyString(t *testing.T) {
+	union, err := geminiSchema(json.RawMessage(`{"type":["integer","string"],"not":{"enum":["","reserved"]}}`))
+	if err != nil || union["type"] == "STRING" || union["minLength"] != nil {
+		t.Fatalf("联合类型被收窄为字符串 schema=%#v error=%v", union, err)
+	}
+	variants, _ := union["anyOf"].([]any)
+	if !slices.ContainsFunc(variants, func(variant any) bool { return variant.(map[string]any)["type"] == "INTEGER" }) {
+		t.Fatalf("联合类型缺少整数分支 anyOf=%#v", union["anyOf"])
+	}
+	pattern, err := geminiSchema(json.RawMessage(`{"type":"string","not":{"enum":["","reserved"],"pattern":"^reserved$"}}`))
+	not, _ := pattern["not"].(map[string]any)
+	if err != nil || pattern["minLength"] != nil || not == nil || !reflect.DeepEqual(not["enum"], []string{"reserved"}) || not["pattern"] != "^reserved$" {
+		t.Fatalf("带 pattern 的排除 schema=%#v error=%v", pattern, err)
 	}
 }
 

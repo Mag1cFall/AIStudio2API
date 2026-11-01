@@ -31,6 +31,7 @@ var configKeys = [...]string{
 	"LISTEN_ADDR",
 	"PREVIEW_LISTEN_ADDR",
 	"PROXY_API_KEY",
+	"API_KEY_ACCOUNTS",
 	"PROXY",
 	"INIT_TIMEOUT",
 	"REQUEST_TIMEOUT",
@@ -60,6 +61,7 @@ var configKeys = [...]string{
 	"SEARCH_MODEL_ALIASES",
 	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
+	"FIRST_EVENT_HEDGE_MODELS",
 	"CONTINUATION_REWRITE",
 	"CONTINUATION_PROMPT",
 }
@@ -81,6 +83,9 @@ const FirstEventHedgeOff = "off"
 
 // FirstEventHedgeAuto 表示按模型与通道近期原请求首事件等待的 p95 发起备用请求
 const FirstEventHedgeAuto = "auto"
+
+// DefaultFirstEventHedgeModels 是 FIRST_EVENT_HEDGE_MODELS 的默认值
+const DefaultFirstEventHedgeModels = "gemini-4-argon"
 
 // MediaOutputInline 表示 Chat 与 Messages 正文以 data URI 内联生成的媒体
 const MediaOutputInline = "inline"
@@ -107,12 +112,14 @@ type Config struct {
 	SearchModelAliases     bool
 	GoogleSearch           bool
 	FirstEventHedge        string
+	FirstEventHedgeModels  string
 	ContinuationRewrite    bool
 	ContinuationPrompt     string
 	AuthStates             string
 	ListenAddr             string
 	PreviewListenAddr      string
 	ProxyAPIKey            string
+	APIKeyAccounts         string
 	Proxy                  string
 	InitTimeout            time.Duration
 	RequestTimeout         time.Duration
@@ -128,6 +135,10 @@ type Config struct {
 	WAABackend             string
 	MediaOutput            string
 	MediaBaseURL           string
+	// Invalid 是加载时取值无效、改用默认值的配置项
+	Invalid []InvalidValue
+	// Environment 是取自进程环境变量、覆盖 .env 的配置键
+	Environment []string
 }
 
 // Default 返回可直接启动的默认配置
@@ -139,7 +150,8 @@ func Default() Config {
 		BuildNativeNonstream:   true,
 		NonstreamKeepalive:     true,
 		SearchModelAliases:     true,
-		FirstEventHedge:        FirstEventHedgeOff,
+		FirstEventHedge:        FirstEventHedgeAuto,
+		FirstEventHedgeModels:  DefaultFirstEventHedgeModels,
 		ContinuationRewrite:    true,
 		ContinuationPrompt:     DefaultContinuationPrompt,
 		AuthStates:             defaultAuthStates,
@@ -158,180 +170,270 @@ func Default() Config {
 	}
 }
 
-// Load 从指定 env 文件和进程环境加载配置
+// InvalidValue 是加载时取值无效、改用默认值的配置项
+type InvalidValue struct {
+	Key    string
+	Value  string
+	Reason string
+}
+
+// secretKeys 是取值可能含凭据的配置键，无效时不记录原值
+var secretKeys = []string{"PROXY", "PROXY_API_KEY", "API_KEY_ACCOUNTS", "ADMIN_PASSWORD"}
+
+// invalidValue 返回无效配置项的记录，凭据键不带原值
+func invalidValue(key, value string, err error) InvalidValue {
+	if slices.Contains(secretKeys, key) {
+		value = ""
+	}
+	return InvalidValue{Key: key, Value: value, Reason: err.Error()}
+}
+
+// configSetters 把每个配置键的文本值解析到 Config
+var configSetters = map[string]func(*Config, string) error{
+	"AUTO_START":               boolSetter("AUTO_START", func(c *Config) *bool { return &c.AutoStart }),
+	"REQUEST_BODY_LOG":         boolSetter("REQUEST_BODY_LOG", func(c *Config) *bool { return &c.RequestBodyLog }),
+	"LOG_FILE":                 boolSetter("LOG_FILE", func(c *Config) *bool { return &c.LogFile }),
+	"ADMIN_AUTH_ENABLED":       boolSetter("ADMIN_AUTH_ENABLED", func(c *Config) *bool { return &c.AdminAuthEnabled }),
+	"BUILD_NATIVE_NONSTREAM":   boolSetter("BUILD_NATIVE_NONSTREAM", func(c *Config) *bool { return &c.BuildNativeNonstream }),
+	"NONSTREAM_KEEPALIVE":      boolSetter("NONSTREAM_KEEPALIVE", func(c *Config) *bool { return &c.NonstreamKeepalive }),
+	"FAKE_STREAM":              boolSetter("FAKE_STREAM", func(c *Config) *bool { return &c.FakeStream }),
+	"SEARCH_MODEL_ALIASES":     boolSetter("SEARCH_MODEL_ALIASES", func(c *Config) *bool { return &c.SearchModelAliases }),
+	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
+	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
+	"CONTINUATION_REWRITE":     boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
+	"TEMPORARY_CHAT":           boolSetter("TEMPORARY_CHAT", func(c *Config) *bool { return &c.TemporaryChat }),
+	"LOG_MAX_TOTAL_MB":         intSetter("LOG_MAX_TOTAL_MB", func(c *Config) *int { return &c.LogMaxTotalMB }),
+	"WARM_WORKER_LIMIT":        intSetter("WARM_WORKER_LIMIT", func(c *Config) *int { return &c.WarmWorkerLimit }),
+	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
+	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
+	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
+	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
+	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
+	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
+	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
+	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
+	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
+	"CONTINUATION_PROMPT":      textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
+	"AISTUDIO_AUTH_STATES":     textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
+	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
+	"PREVIEW_LISTEN_ADDR":      textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
+	"PROXY_API_KEY":            textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
+	"PROXY":                    textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
+	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
+	"MODEL_MAPPING":            textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
+	"MODEL_CHANNELS":           textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
+	"API_KEY_ACCOUNTS":         textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
+	"WAA_BACKEND":              textSetter(func(c *Config) *string { return &c.WAABackend }, lowerTrim),
+	"MEDIA_OUTPUT":             textSetter(func(c *Config) *string { return &c.MediaOutput }, lowerTrim),
+	"MEDIA_BASE_URL":           textSetter(func(c *Config) *string { return &c.MediaBaseURL }, strings.TrimSpace),
+	"UPSTREAM_CHANNELS": func(c *Config, value string) error {
+		c.UpstreamChannels = parseUpstreamChannels(value)
+		return nil
+	},
+}
+
+func boolSetter(key string, field func(*Config) *bool) func(*Config, string) error {
+	return func(c *Config, value string) error {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("%s 必须是 true 或 false", key)
+		}
+		*field(c) = parsed
+		return nil
+	}
+}
+
+func intSetter(key string, field func(*Config) *int) func(*Config, string) error {
+	return func(c *Config, value string) error {
+		parsed, err := parsePositiveInt(key, value)
+		if err != nil {
+			return err
+		}
+		*field(c) = parsed
+		return nil
+	}
+}
+
+func durationSetter(key string, field func(*Config) *time.Duration) func(*Config, string) error {
+	return func(c *Config, value string) error {
+		parsed, err := parsePositiveDuration(key, value)
+		if err != nil {
+			return err
+		}
+		*field(c) = parsed
+		return nil
+	}
+}
+
+func textSetter(field func(*Config) *string, normalize func(string) string) func(*Config, string) error {
+	return func(c *Config, value string) error {
+		*field(c) = normalize(value)
+		return nil
+	}
+}
+
+func lowerTrim(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// configCheck 是一条配置校验与校验失败时改回默认值的键
+type configCheck struct {
+	keys  []string
+	check func(Config) error
+}
+
+// configChecks 是加载与保存时的全部取值校验
+var configChecks = []configCheck{
+	{[]string{"AISTUDIO_AUTH_STATES"}, func(c Config) error {
+		if strings.TrimSpace(c.AuthStates) == "" {
+			return fmt.Errorf("AISTUDIO_AUTH_STATES 不能为空")
+		}
+		return nil
+	}},
+	{[]string{"LISTEN_ADDR"}, func(c Config) error { return validateListenAddr("LISTEN_ADDR", c.ListenAddr) }},
+	{[]string{"PREVIEW_LISTEN_ADDR"}, func(c Config) error { return validateListenAddr("PREVIEW_LISTEN_ADDR", c.PreviewListenAddr) }},
+	{[]string{"LISTEN_ADDR", "PREVIEW_LISTEN_ADDR"}, func(c Config) error {
+		if listenPort(c.ListenAddr) == listenPort(c.PreviewListenAddr) {
+			return fmt.Errorf("PREVIEW_LISTEN_ADDR 的端口不能与 LISTEN_ADDR 相同")
+		}
+		return nil
+	}},
+	{[]string{"PROXY"}, func(c Config) error {
+		for _, proxy := range ProxyList(c.Proxy) {
+			if err := ValidateProxy(proxy); err != nil {
+				return err
+			}
+		}
+		return nil
+	}},
+	{[]string{"INIT_TIMEOUT"}, func(c Config) error {
+		if c.InitTimeout <= 0 {
+			return fmt.Errorf("INIT_TIMEOUT 必须是正数时长")
+		}
+		return nil
+	}},
+	{[]string{"REQUEST_TIMEOUT"}, func(c Config) error {
+		if c.RequestTimeout <= 0 {
+			return fmt.Errorf("REQUEST_TIMEOUT 必须是正数时长")
+		}
+		return nil
+	}},
+	{[]string{"WARM_WORKER_LIMIT", "MAX_ACTIVE_WORKERS"}, func(c Config) error {
+		if c.WarmWorkerLimit <= 0 {
+			return fmt.Errorf("WARM_WORKER_LIMIT 必须是正整数")
+		}
+		if c.MaxActiveWorkers < c.WarmWorkerLimit {
+			return fmt.Errorf("MAX_ACTIVE_WORKERS 必须大于或等于 WARM_WORKER_LIMIT")
+		}
+		return nil
+	}},
+	{[]string{"WARM_STARTUP_CONCURRENCY", "MAX_ACTIVE_WORKERS"}, func(c Config) error {
+		if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.MaxActiveWorkers {
+			return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 MAX_ACTIVE_WORKERS")
+		}
+		return nil
+	}},
+	{[]string{"PER_ACCOUNT_CONCURRENCY"}, func(c Config) error {
+		if c.PerAccountConcurrency <= 0 {
+			return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
+		}
+		return nil
+	}},
+	{[]string{"ROUTING_STRATEGY"}, func(c Config) error {
+		if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" {
+			return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin 或 fill-first")
+		}
+		return nil
+	}},
+	{[]string{"UPSTREAM_CHANNELS"}, func(c Config) error { return validateUpstreamChannels(c.UpstreamChannels) }},
+	{[]string{"MODEL_MAPPING"}, func(c Config) error {
+		_, err := ParseModelMapping(c.ModelMapping)
+		return err
+	}},
+	{[]string{"MODEL_CHANNELS"}, func(c Config) error {
+		_, err := ParseModelChannels(c.ModelChannels)
+		return err
+	}},
+	{[]string{"API_KEY_ACCOUNTS"}, func(c Config) error {
+		_, err := ParseAPIKeyAccounts(c.APIKeyAccounts, c.ProxyAPIKey)
+		return err
+	}},
+	{[]string{"WAA_BACKEND"}, func(c Config) error {
+		if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendSpiderMonkey {
+			return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 spidermonkey")
+		}
+		return nil
+	}},
+	{[]string{"FIRST_EVENT_HEDGE"}, func(c Config) error {
+		_, _, err := ParseFirstEventHedge(c.FirstEventHedge)
+		return err
+	}},
+	{[]string{"MEDIA_OUTPUT"}, func(c Config) error {
+		if c.MediaOutput != MediaOutputInline && c.MediaOutput != MediaOutputURL {
+			return fmt.Errorf("MEDIA_OUTPUT 必须是 inline 或 url")
+		}
+		return nil
+	}},
+	{[]string{"MEDIA_BASE_URL"}, func(c Config) error {
+		if c.MediaBaseURL == "" {
+			return nil
+		}
+		base, err := url.Parse(c.MediaBaseURL)
+		if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+			return fmt.Errorf("MEDIA_BASE_URL 必须是 http 或 https 地址")
+		}
+		return nil
+	}},
+	{[]string{"LOG_MAX_TOTAL_MB"}, func(c Config) error {
+		if c.LogMaxTotalMB < 2*LogFileMB {
+			return fmt.Errorf("LOG_MAX_TOTAL_MB 不能小于 %d", 2*LogFileMB)
+		}
+		return nil
+	}},
+}
+
+// Load 从指定 env 文件和进程环境加载配置，取值无效的项改用默认值并记入 Invalid
 func Load(path string) (Config, error) {
-	values, err := readEnvFile(path)
+	values, commented, err := readEnvFile(path)
 	if err != nil {
 		return Config{}, err
 	}
+	if !commented && upgradeEnv(values) {
+		if err := writeEnv(path, values); err != nil {
+			return Config{}, err
+		}
+	}
+	cfg := Default()
 	for _, key := range configKeys {
 		if value, ok := os.LookupEnv(key); ok {
 			values[key] = value
+			cfg.Environment = append(cfg.Environment, key)
 		}
 	}
-
-	cfg := Default()
-	if value, ok := values["AUTO_START"]; ok {
-		cfg.AutoStart, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("AUTO_START 必须是 true 或 false")
+	for _, key := range configKeys {
+		if value, ok := values[key]; ok {
+			if err := configSetters[key](&cfg, value); err != nil {
+				cfg.Invalid = append(cfg.Invalid, invalidValue(key, value, err))
+			}
 		}
 	}
-	if value, ok := values["REQUEST_BODY_LOG"]; ok {
-		cfg.RequestBodyLog, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("REQUEST_BODY_LOG 必须是 true 或 false")
+	defaults := Default().envValues()
+	for failed := true; failed; {
+		failed = false
+		for _, check := range configChecks {
+			err := check.check(cfg)
+			if err == nil {
+				continue
+			}
+			failed = true
+			for _, key := range check.keys {
+				configSetters[key](&cfg, defaults[key])
+				value, ok := values[key]
+				if ok && !slices.ContainsFunc(cfg.Invalid, func(item InvalidValue) bool { return item.Key == key }) {
+					cfg.Invalid = append(cfg.Invalid, invalidValue(key, value, err))
+				}
+			}
 		}
-	}
-	if value, ok := values["LOG_FILE"]; ok {
-		cfg.LogFile, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("LOG_FILE 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["LOG_MAX_TOTAL_MB"]; ok {
-		cfg.LogMaxTotalMB, err = parsePositiveInt("LOG_MAX_TOTAL_MB", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["ADMIN_AUTH_ENABLED"]; ok {
-		cfg.AdminAuthEnabled, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("ADMIN_AUTH_ENABLED 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["ADMIN_USERNAME"]; ok {
-		cfg.AdminUsername = strings.TrimSpace(value)
-	}
-	if value, ok := values["ADMIN_PASSWORD"]; ok {
-		cfg.AdminPassword = value
-	}
-	if value, ok := values["BUILD_NATIVE_NONSTREAM"]; ok {
-		cfg.BuildNativeNonstream, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("BUILD_NATIVE_NONSTREAM 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["NONSTREAM_KEEPALIVE"]; ok {
-		cfg.NonstreamKeepalive, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("NONSTREAM_KEEPALIVE 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["FAKE_STREAM"]; ok {
-		cfg.FakeStream, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("FAKE_STREAM 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["SEARCH_MODEL_ALIASES"]; ok {
-		cfg.SearchModelAliases, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("SEARCH_MODEL_ALIASES 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["GOOGLE_SEARCH"]; ok {
-		cfg.GoogleSearch, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("GOOGLE_SEARCH 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["YOUTUBE_LINKS"]; ok {
-		cfg.YouTubeLinks, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("YOUTUBE_LINKS 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["FIRST_EVENT_HEDGE"]; ok {
-		cfg.FirstEventHedge = strings.ToLower(strings.TrimSpace(value))
-	}
-	if value, ok := values["CONTINUATION_REWRITE"]; ok {
-		cfg.ContinuationRewrite, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("CONTINUATION_REWRITE 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["CONTINUATION_PROMPT"]; ok {
-		cfg.ContinuationPrompt = strings.TrimSpace(value)
-	}
-	if value, ok := values["AISTUDIO_AUTH_STATES"]; ok {
-		cfg.AuthStates = strings.TrimSpace(value)
-	}
-	if value, ok := values["LISTEN_ADDR"]; ok {
-		cfg.ListenAddr = strings.TrimSpace(value)
-	}
-	if value, ok := values["PREVIEW_LISTEN_ADDR"]; ok {
-		cfg.PreviewListenAddr = strings.TrimSpace(value)
-	}
-	if value, ok := values["PROXY_API_KEY"]; ok {
-		cfg.ProxyAPIKey = strings.TrimSpace(value)
-	}
-	if value, ok := values["PROXY"]; ok {
-		cfg.Proxy = strings.TrimSpace(value)
-	}
-	if value, ok := values["INIT_TIMEOUT"]; ok {
-		cfg.InitTimeout, err = parsePositiveDuration("INIT_TIMEOUT", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["REQUEST_TIMEOUT"]; ok {
-		cfg.RequestTimeout, err = parsePositiveDuration("REQUEST_TIMEOUT", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["WARM_WORKER_LIMIT"]; ok {
-		cfg.WarmWorkerLimit, err = parsePositiveInt("WARM_WORKER_LIMIT", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["MAX_ACTIVE_WORKERS"]; ok {
-		cfg.MaxActiveWorkers, err = parsePositiveInt("MAX_ACTIVE_WORKERS", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["WARM_STARTUP_CONCURRENCY"]; ok {
-		cfg.WarmStartupConcurrency, err = parsePositiveInt("WARM_STARTUP_CONCURRENCY", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["PER_ACCOUNT_CONCURRENCY"]; ok {
-		cfg.PerAccountConcurrency, err = parsePositiveInt("PER_ACCOUNT_CONCURRENCY", value)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if value, ok := values["ROUTING_STRATEGY"]; ok {
-		cfg.RoutingStrategy = strings.TrimSpace(value)
-	}
-	if value, ok := values["UPSTREAM_CHANNELS"]; ok {
-		cfg.UpstreamChannels = parseUpstreamChannels(value)
-	}
-	if value, ok := values["MODEL_MAPPING"]; ok {
-		cfg.ModelMapping = strings.TrimSpace(value)
-	}
-	if value, ok := values["MODEL_CHANNELS"]; ok {
-		cfg.ModelChannels = strings.TrimSpace(value)
-	}
-	if value, ok := values["TEMPORARY_CHAT"]; ok {
-		cfg.TemporaryChat, err = strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, fmt.Errorf("TEMPORARY_CHAT 必须是 true 或 false")
-		}
-	}
-	if value, ok := values["WAA_BACKEND"]; ok {
-		cfg.WAABackend = strings.ToLower(strings.TrimSpace(value))
-	}
-	if value, ok := values["MEDIA_OUTPUT"]; ok {
-		cfg.MediaOutput = strings.ToLower(strings.TrimSpace(value))
-	}
-	if value, ok := values["MEDIA_BASE_URL"]; ok {
-		cfg.MediaBaseURL = strings.TrimSpace(value)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -339,12 +441,59 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// Save 将配置原子写入指定 env 文件
-func (c Config) Save(path string) error {
-	if err := c.Validate(); err != nil {
-		return err
+// legacyEnvKeys 是 v0.2.18 及之前的版本保存设置时总会写出的键
+var legacyEnvKeys = []string{
+	"AISTUDIO_AUTH_STATES", "LISTEN_ADDR", "PROXY_API_KEY", "PROXY", "INIT_TIMEOUT", "REQUEST_TIMEOUT", "WARM_WORKER_LIMIT",
+	"MAX_ACTIVE_WORKERS", "WARM_STARTUP_CONCURRENCY", "PER_ACCOUNT_CONCURRENCY", "ROUTING_STRATEGY", "UPSTREAM_CHANNELS", "TEMPORARY_CHAT", "WAA_BACKEND",
+}
+
+// upgradeEnv 改写旧版本写出的没有注释的全量 .env：四项旧值改为当前值，删去等于默认值的键，返回是否改写
+func upgradeEnv(values map[string]string) bool {
+	if slices.ContainsFunc(legacyEnvKeys, func(key string) bool {
+		_, ok := values[key]
+		return !ok
+	}) {
+		return false
 	}
-	values := map[string]string{
+	defaults := Default().envValues()
+	isDefault := func(key, value string) bool {
+		parsed := Default()
+		return configSetters[key](&parsed, value) == nil && parsed.envValues()[key] == defaults[key]
+	}
+	if slices.Equal(parseUpstreamChannels(values["UPSTREAM_CHANNELS"]), []string{"playground", "build"}) {
+		delete(values, "UPSTREAM_CHANNELS")
+	}
+	if timeout, err := time.ParseDuration(strings.TrimSpace(values["REQUEST_TIMEOUT"])); err == nil && timeout == 5*time.Minute {
+		delete(values, "REQUEST_TIMEOUT")
+	}
+	if lowerTrim(values["FIRST_EVENT_HEDGE"]) == FirstEventHedgeOff {
+		delete(values, "FIRST_EVENT_HEDGE")
+	}
+	if lowerTrim(values["WAA_BACKEND"]) == "go" {
+		values["WAA_BACKEND"] = WAABackendSpiderMonkey
+	}
+	for key, value := range values {
+		if isDefault(key, value) {
+			delete(values, key)
+		}
+	}
+	return true
+}
+
+// KeepEnvironment 返回把进程环境变量决定的项及其无效记录取 saved 中的值后的配置
+func (c Config) KeepEnvironment(saved Config) Config {
+	values := saved.envValues()
+	for _, key := range saved.Environment {
+		configSetters[key](&c, values[key])
+	}
+	c.Environment = saved.Environment
+	c.Invalid = slices.DeleteFunc(slices.Clone(saved.Invalid), func(item InvalidValue) bool { return !slices.Contains(saved.Environment, item.Key) })
+	return c
+}
+
+// envValues 返回每个配置键在 .env 中的文本值
+func (c Config) envValues() map[string]string {
+	return map[string]string{
 		"AUTO_START":               strconv.FormatBool(c.AutoStart),
 		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
 		"LOG_FILE":                 strconv.FormatBool(c.LogFile),
@@ -359,6 +508,7 @@ func (c Config) Save(path string) error {
 		"SEARCH_MODEL_ALIASES":     strconv.FormatBool(c.SearchModelAliases),
 		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
+		"FIRST_EVENT_HEDGE_MODELS": c.FirstEventHedgeModels,
 		"CONTINUATION_REWRITE":     strconv.FormatBool(c.ContinuationRewrite),
 		"CONTINUATION_PROMPT":      c.ContinuationPrompt,
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
@@ -376,18 +526,47 @@ func (c Config) Save(path string) error {
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
 		"MODEL_CHANNELS":           c.ModelChannels,
+		"API_KEY_ACCOUNTS":         c.APIKeyAccounts,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 		"WAA_BACKEND":              c.WAABackend,
 		"MEDIA_OUTPUT":             c.MediaOutput,
 		"MEDIA_BASE_URL":           c.MediaBaseURL,
 	}
+}
 
+// Save 将与默认值不同的配置原子写入指定 env 文件，进程环境变量决定的项保留文件中原有的值
+func (c Config) Save(path string) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	saved, _, err := readEnvFile(path)
+	if err != nil {
+		return err
+	}
+	values, defaults := c.envValues(), Default().envValues()
+	file := make(map[string]string)
+	for _, key := range configKeys {
+		if slices.Contains(c.Environment, key) {
+			if value, ok := saved[key]; ok {
+				file[key] = value
+			}
+		} else if values[key] != defaults[key] {
+			file[key] = values[key]
+		}
+	}
+	return writeEnv(path, file)
+}
+
+// writeEnv 按 configKeys 的顺序原子写入 values 中的键
+func writeEnv(path string, values map[string]string) error {
 	var output strings.Builder
 	for _, key := range configKeys {
-		output.WriteString(key)
-		output.WriteByte('=')
-		output.WriteString(formatEnvValue(values[key]))
-		output.WriteByte('\n')
+		if value, ok := values[key]; ok {
+			output.WriteString(key)
+			output.WriteByte('=')
+			output.WriteString(formatEnvValue(value))
+			output.WriteByte('\n')
+		}
 	}
 	return atomicWrite(path, []byte(output.String()), 0o600)
 }
@@ -397,70 +576,10 @@ func (c Config) Validate() error {
 	if c.AdminAuthEnabled && (strings.TrimSpace(c.AdminUsername) == "" || strings.TrimSpace(c.AdminPassword) == "") {
 		return fmt.Errorf("开启管理登录需要 ADMIN_USERNAME 与 ADMIN_PASSWORD")
 	}
-	if strings.TrimSpace(c.AuthStates) == "" {
-		return fmt.Errorf("AISTUDIO_AUTH_STATES 不能为空")
-	}
-	if err := validateListenAddr("LISTEN_ADDR", c.ListenAddr); err != nil {
-		return err
-	}
-	if err := validateListenAddr("PREVIEW_LISTEN_ADDR", c.PreviewListenAddr); err != nil {
-		return err
-	}
-	if listenPort(c.ListenAddr) == listenPort(c.PreviewListenAddr) {
-		return fmt.Errorf("PREVIEW_LISTEN_ADDR 的端口不能与 LISTEN_ADDR 相同")
-	}
-	for _, proxy := range ProxyList(c.Proxy) {
-		if err := ValidateProxy(proxy); err != nil {
+	for _, check := range configChecks {
+		if err := check.check(c); err != nil {
 			return err
 		}
-	}
-	if c.InitTimeout <= 0 {
-		return fmt.Errorf("INIT_TIMEOUT 必须是正数时长")
-	}
-	if c.RequestTimeout <= 0 {
-		return fmt.Errorf("REQUEST_TIMEOUT 必须是正数时长")
-	}
-	if c.WarmWorkerLimit <= 0 {
-		return fmt.Errorf("WARM_WORKER_LIMIT 必须是正整数")
-	}
-	if c.MaxActiveWorkers < c.WarmWorkerLimit {
-		return fmt.Errorf("MAX_ACTIVE_WORKERS 必须大于或等于 WARM_WORKER_LIMIT")
-	}
-	if c.WarmStartupConcurrency <= 0 || c.WarmStartupConcurrency > c.MaxActiveWorkers {
-		return fmt.Errorf("WARM_STARTUP_CONCURRENCY 必须是 1 到 MAX_ACTIVE_WORKERS")
-	}
-	if c.PerAccountConcurrency <= 0 {
-		return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
-	}
-	if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" {
-		return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin 或 fill-first")
-	}
-	if err := validateUpstreamChannels(c.UpstreamChannels); err != nil {
-		return err
-	}
-	if _, err := ParseModelMapping(c.ModelMapping); err != nil {
-		return err
-	}
-	if _, err := ParseModelChannels(c.ModelChannels); err != nil {
-		return err
-	}
-	if c.WAABackend != WAABackendCamoufox && c.WAABackend != WAABackendSpiderMonkey {
-		return fmt.Errorf("WAA_BACKEND 必须是 camoufox 或 spidermonkey")
-	}
-	if _, _, err := ParseFirstEventHedge(c.FirstEventHedge); err != nil {
-		return err
-	}
-	if c.MediaOutput != MediaOutputInline && c.MediaOutput != MediaOutputURL {
-		return fmt.Errorf("MEDIA_OUTPUT 必须是 inline 或 url")
-	}
-	if c.MediaBaseURL != "" {
-		base, err := url.Parse(c.MediaBaseURL)
-		if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-			return fmt.Errorf("MEDIA_BASE_URL 必须是 http 或 https 地址")
-		}
-	}
-	if c.LogMaxTotalMB < 2*LogFileMB {
-		return fmt.Errorf("LOG_MAX_TOTAL_MB 不能小于 %d", 2*LogFileMB)
 	}
 	return nil
 }
@@ -480,10 +599,63 @@ func ParseFirstEventHedge(value string) (bool, time.Duration, error) {
 	return false, time.Duration(seconds) * time.Second, nil
 }
 
+// ModelList 解析逗号分隔的模型 ID 列表
+func ModelList(value string) []string {
+	var models []string
+	for item := range strings.SplitSeq(value, ",") {
+		if item = strings.TrimPrefix(strings.TrimSpace(item), "models/"); item != "" && !slices.Contains(models, item) {
+			models = append(models, item)
+		}
+	}
+	return models
+}
+
 // ModelAlias 表示客户端模型名到目录模型 ID 的一项映射
 type ModelAlias struct {
 	Alias string
 	Model string
+}
+
+// ParseAPIKeyAccounts 解析逗号分隔的 API key:账户|账户，以最后一个冒号分隔，跳过不在 apiKeys 中的 key
+func ParseAPIKeyAccounts(value string, apiKeys string) (map[string][]string, error) {
+	keys := APIKeys(apiKeys)
+	accounts := make(map[string][]string)
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		index := strings.LastIndexByte(item, ':')
+		key := strings.TrimSpace(item[:max(index, 0)])
+		var ids []string
+		for id := range strings.SplitSeq(item[index+1:], "|") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if index < 0 || key == "" || len(ids) == 0 {
+			return nil, fmt.Errorf("API_KEY_ACCOUNTS 的每一项写成 API key:账户|账户")
+		}
+		if !slices.Contains(keys, key) {
+			continue
+		}
+		if _, exists := accounts[key]; exists {
+			return nil, fmt.Errorf("API_KEY_ACCOUNTS 中同一 key 重复")
+		}
+		accounts[key] = ids
+	}
+	return accounts, nil
+}
+
+// APIKeys 返回 PROXY_API_KEY 中逗号分隔、去掉空白的各个 key
+func APIKeys(value string) []string {
+	var keys []string
+	for key := range strings.SplitSeq(value, ",") {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // ParseModelMapping 解析逗号分隔的 别名:模型 ID，别名可含冒号，以最后一个冒号分隔
@@ -588,26 +760,32 @@ func ValidateProxy(value string) error {
 	return nil
 }
 
-func readEnvFile(path string) (map[string]string, error) {
+// readEnvFile 读取 env 文件中的配置键，并返回文件是否含注释行
+func readEnvFile(path string) (map[string]string, bool, error) {
 	values := make(map[string]string)
+	commented := false
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return values, nil
+		return values, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读取配置文件: %w", err)
+		return nil, false, fmt.Errorf("读取配置文件: %w", err)
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		if strings.HasPrefix(line, "#") {
+			commented = true
+			continue
+		}
+		if line == "" {
 			continue
 		}
 		key, raw, ok := strings.Cut(line, "=")
 		if !ok {
-			return nil, fmt.Errorf("%s:%d 缺少等号", path, lineNumber)
+			return nil, false, fmt.Errorf("%s:%d 缺少等号", path, lineNumber)
 		}
 		key = strings.TrimSpace(key)
 		if !slices.Contains(configKeys[:], key) {
@@ -615,14 +793,14 @@ func readEnvFile(path string) (map[string]string, error) {
 		}
 		value, err := parseEnvValue(strings.TrimSpace(raw))
 		if err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", path, lineNumber, err)
+			return nil, false, fmt.Errorf("%s:%d: %w", path, lineNumber, err)
 		}
 		values[key] = value
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("读取配置文件: %w", err)
+		return nil, false, fmt.Errorf("读取配置文件: %w", err)
 	}
-	return values, nil
+	return values, commented, nil
 }
 
 func parseEnvValue(value string) (string, error) {

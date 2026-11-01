@@ -79,7 +79,7 @@ func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
 	return newRuntime(ctx, options, "")
 }
 
-// newRuntime 创建 VM，prelude 在顶层宿主安装后、解释器执行前运行
+// newRuntime 创建 VM，prelude 在顶层宿主安装后、解释器执行前运行，VM 就绪后以收缩 GC 释放初始化留下的堆内存
 func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime, error) {
 	if options.Interpreter == "" {
 		return nil, errors.New("WAA 解释器为空")
@@ -128,6 +128,13 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 		if err != nil {
 			loop.close()
 			return nil, err
+		}
+		collected := make(chan struct{})
+		if loop.post(func() {
+			runtime.agent.cx.GC()
+			close(collected)
+		}) {
+			<-collected
 		}
 		return runtime, nil
 	case <-ctx.Done():

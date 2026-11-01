@@ -527,13 +527,17 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 | --- | --- |
 | contents | field 1 |
 | system | field 9 自定义指令 |
+| 内置工具禁止说明 | field 9 开头 |
 | 函数声明 | field 9 中系统提示之前的函数调用说明 |
 | 思考强度或思考预算 | field 19 的 thinking level |
 
 - 上游请求只携带对话轮、系统提示、函数调用说明与思考强度；生成参数、结构化输出与安全设置使用助手的服务端设置
 - 内联附件按官网对话面板上传，对话轮中以 Part field 18 `[mime, 上传路径, 文件名, 字节数]` 引用，文件名为 `attachment-<序号>`，序号按附件在请求中的顺序从 1 开始；上传见“附件上传”
-- `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，放在 field 9 系统提示之前（中间空一行）
+- field 9 以内置工具禁止说明开头：写代码助手服务端指令声明的 25 个工作区工具（`run_command`、`write_to_file`、`view_file`、`search_web` 等）作用于与对话无关的空应用，说明列出这些工具名并禁止调用；请求带 Google Search 工具时列表不含 `search_web`，并在说明末尾允许调用 `search_web`
+- `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，接在禁止说明之后（中间空一行）
 - 对话轮中的函数调用与结果 Part 转录为代码块文本：同一轮内相邻的调用合为一个 `function_calls` 块，相邻的结果合为一个 `function_results` 块，元素分别为 `{"name","arguments"}` 与 `{"name","response"}`；转录在上传附件与计算 WAA binding 之前完成
+- 写代码助手只把对话轮中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮。服务把 model 轮去掉思考与空 Part 后，首尾加上 `<assistant_turn>\n` 与 `\n</assistant_turn>` 两个文本 Part，以 user 轮发送；对话含 model 轮时，field 9 的说明之后另起一段写入下面的模型轮说明
+- 本进程读到的回复中，`search_web` 步骤的查询与摘要按请求所用 API key、该轮之前对话轮的角色与正文摘要、回复正文保存（最多 1000 条回复）；之后以同一 API key 发送的请求中，某个 model 轮之前的对话与正文都和某条回复相同时，在该轮开头补回文本 Part `search_web results for "<查询>":\n<摘要>`，每次搜索一个
 
 ````text
 You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.
@@ -542,7 +546,11 @@ To call functions, reply with only one fenced block and no other text:
 ```function_calls
 [{"name": "<function name>", "arguments": {<arguments>}}]
 ```
-Function results arrive in a later user turn as a fenced function_results block. Answer normally when no function is needed.
+Function results arrive in a later user turn as a fenced function_results block. Never write a function_results block yourself; stop after the function_calls block and wait for the results. Answer normally when no function is needed.
+````
+
+````text
+Your own earlier replies in this conversation, including your function_calls blocks, appear in the user message between <assistant_turn> and </assistant_turn>. Continue from the latest content and never write these tags yourself.
 ````
 
 - Google Search 工具不写入请求：写代码助手按需调用内置的 `search_web`，搜索步骤按“任务流”输出为 grounding；其他 Google 工具在发送前丢弃
@@ -555,7 +563,7 @@ Function results arrive in a later user turn as a fenced function_results block.
 /_/upload（每个内联附件一次）               → 上传路径
 CreateApplet                                → 应用 ID
 CodeAssistantOffline（WAA proof）           → 任务 ID
-StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到上游关闭
+StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到本轮回复结束或上游关闭
 流关闭后在后台：
   CancelCodeAssistantOfflineGeneration      （已取得任务 ID 且流没有正常解码完成时）
   DeleteApplet
@@ -612,7 +620,7 @@ StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到上游�
 | 2 | WAA proof |
 | 6 | `1` |
 | 8 | `models/<基础模型 ID>` |
-| 9 | 系统提示；system 为空时为 `null` |
+| 9 | 自定义指令：内置工具禁止说明、函数调用说明、模型轮说明与系统提示 |
 | 12 | 应用 ID |
 | 14 | `[2,null,2]` |
 | 16 | `1` |
@@ -686,15 +694,15 @@ Part 的 field 2 为文本，field 13 为 `1` 或 `true` 时是思考。只修�
 3. 跳过 role 不是 `model` 的对话轮。模型轮的 Part 以（步骤序号，Part 序号）定位，同一步骤内多个模型轮的 Part 序号连续编号
 4. Part 文本是该位置的完整快照：以上一次快照开头时输出新增部分，与上一次相同时不输出；不以上一次快照开头时返回协议错误 “步骤正文不是上一次快照的延续”
 5. 思考 Part 的增量输出为 reasoning，其余为 text；text 来自与上一段 text 不同的步骤、且是该 Part 的第一段增量时，前面加 `\n\n`
-6. 请求声明了函数时，text 中以 ```` ```function_calls ```` 开头、以换行加 ```` ``` ```` 结束的代码块内容为 JSON 数组时，每个元素输出为一个函数调用，调用 ID 为新的 UUID，`arguments` 为 `null` 或缺失时为 `{}`；内容不是调用数组的代码块按原文输出为 text。可能是代码块开头的结尾文本暂缓输出，直到能判定
+6. 请求声明了函数时，语言标记为 `function_calls`、`function_results`、`function_call`、`tool_calls`、`tool_call` 与 `tool_code` 的代码块暂缓到以换行加 ```` ``` ```` 结束（流结束时补上结尾）再判定，围栏可以出现在行中；其他代码块按原文输出为 text，可能是围栏开头的结尾反引号暂缓输出。判定取代码块中的第一个 JSON 值，解码失败时把不合法转义（如 `\x27`）的反斜杠按字面字符再解码一次；值为调用数组或单个调用对象时，每个元素输出为一个函数调用，调用 ID 为新的 UUID，`arguments` 为 `null` 或缺失时为 `{}`。`function_calls` 块接受任意函数名，其余标记的块只在函数均已声明时解码为调用，否则按原文输出。`function_results` 块不输出；输出函数调用之后的正文不再输出；无法解码的 `function_calls` 块不输出，回复以 `malformed_function_call` 结束
 7. 状态为 `1` 的步骤的 field 10 带 `search_web` 时，查询记入 `webSearchQueries`，每个 `[标题, 地址]` 记为一个网页来源块；同一步骤只记录一次
-8. 状态为 `1` 的步骤含模型轮时，回复记为已完成
+8. 状态为 `1` 的步骤含模型轮时，回复记为已完成；消息中最后一个步骤状态为 `1`、含非思考正文且 field 10 为空时，本轮回复结束；输出函数调用之后模型继续输出非空白正文时，本轮回复在调用处结束，任务流关闭后取消生成任务。两种情况都不再读取后续消息与流尾状态
 9. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态
-10. 流关闭时回复已完成：依次输出暂缓的文本、记录的搜索 grounding、用量之和，再以 `stop` 结束；回复没有完成时返回协议错误 “流结束前没有完成的模型回复”
+10. 本轮回复结束或流关闭时回复已完成：依次输出暂缓的文本、记录的搜索 grounding、用量之和，再以 `stop` 结束（无法解码的 `function_calls` 块时为 `malformed_function_call`）；回复没有完成时返回协议错误 “流结束前没有完成的模型回复”
 
 用量之和：输入为各步骤未命中缓存的输入与缓存命中之和，缓存为缓存命中之和，输出为输出之和，总数为输入加输出。
 
-最后一个步骤完成后，上游约 1 到 14 秒后关闭流，finish 在流关闭后输出。
+最后一个步骤完成后，上游在数秒到数分钟后才关闭流；finish 在本轮回复结束时输出。
 
 ### 错误
 

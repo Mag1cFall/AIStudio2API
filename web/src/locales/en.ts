@@ -31,6 +31,7 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': 'Service status',
   'app.start': 'Start service',
   'app.stop': 'Stop service',
+  'app.invalidConfig': 'These settings have invalid values and are running with their defaults:',
   'app.listenReserved':
     'The port of {reserved} is reserved by Windows, so the service listens on {active}; clients must use it. Set the Listen address to fix the port',
   'app.language': 'Language',
@@ -253,6 +254,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listen': 'Listen address',
   'settings.previewListen': 'Preview listen address',
   'settings.apiKey': 'Local API key',
+  'settings.apiKeyAccounts': 'Accounts per key',
   'settings.proxy': 'Default proxy',
   'settings.initTimeout': 'Init timeout',
   'settings.requestTimeout': 'Request timeout',
@@ -274,7 +276,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.upstreamChannelsHelp':
     'Playground is the default channel. Build is the legacy channel with generation disabled upstream; when on, rejected requests complete via Playground',
   'settings.modelMapping': 'Model mapping',
-  'settings.modelMappingHelp': 'Write each item as alias:model ID, separated by commas',
+  'settings.modelMappingHelp': 'Requests for the model name on the left use the model on the right',
   'settings.modelChannels': 'Model channels',
   'settings.mediaOutput': 'Media output',
   'settings.mediaOutputHelp':
@@ -284,8 +286,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURL': 'Media link address',
   'settings.mediaBaseURLHelp':
     'Service address used in media links. Empty uses the address of each request.',
-  'settings.modelChannelsHelp':
-    'Limit a model to one channel: model ID:playground or build per item; also selectable in model details',
+  'settings.modelChannelsHelp': 'Limit a model to one channel; also selectable in model details',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build chat',
@@ -327,6 +328,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.expandCode': 'Expand code snippet',
   'pg.expandDiagram': 'Expand diagram',
   'pg.functionResponse': 'Enter a function response',
+  'pg.functionInput': 'Input',
+  'pg.functionOutput': 'Output',
   'pg.mermaidDiagram': 'Mermaid diagram',
   'pg.preview': 'Preview',
   'pg.property': 'Property',
@@ -1467,6 +1470,23 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listenHelp': 'Listen address shared by the console and the public API.',
   'settings.previewListenHelp':
     'Separate origin for API playground HTML previews, opened at the current host name with this port. Use a port other than the listen port.',
+  'settings.apiKeyAccountsHelp':
+    'Choose which accounts handle requests made with each key. A key with none selected can use every account',
+  'settings.keyAccountsAll': 'All accounts',
+  'settings.keyAccountsSome': 'Selected accounts',
+  'settings.accountSearch': 'Search accounts',
+  'settings.accountNone': 'No matching accounts',
+  'settings.keyAccountsClear': 'Use all accounts',
+  'settings.hedgeModelsNone': 'No models selected',
+  'settings.hedgeModelsSome': 'Selected models',
+  'settings.modelSearch': 'Search models',
+  'settings.modelNone': 'No matching models',
+  'settings.selectionClear': 'Clear selection',
+  'settings.aliasPlaceholder': 'Alias',
+  'settings.selectModel': 'Select model',
+  'settings.selectChannel': 'Select channel',
+  'settings.addMapping': 'Add mapping',
+  'settings.addModelChannel': 'Add model',
   'settings.apiKeyHelp':
     'Separate several keys with commas. When empty, only pages on this machine can call the API',
   'settings.authPathHelp': 'Account file, directory or several comma-separated paths.',
@@ -1482,8 +1502,11 @@ export const messages: Record<TranslationKey, string> = {
     'Streaming requests get the full result before streaming it, with heartbeats while waiting and retries on another account on failure',
   'settings.youtubeLinksHelp': 'Send YouTube links in user message text to the model as video',
   'settings.temporaryChatHelp': 'The WAA prewarm page uses a temporary chat.',
-  'settings.initTimeoutHelp': 'Maximum WAA initialization time per account, such as 2m.',
-  'settings.requestTimeoutHelp': 'Maximum run time of one request, such as 5m.',
+  'settings.initTimeoutHelp': 'Maximum WAA initialization time per account.',
+  'settings.requestTimeoutHelp': 'Maximum run time of one request.',
+  'settings.unitSeconds': 'seconds',
+  'settings.unitMinutes': 'minutes',
+  'settings.timeUnit': 'Time unit',
   'settings.firstEventHedge': 'Hedge slow first tokens',
   'settings.firstEventHedgeHelp':
     'When a request has no first token for a while, send it again on an idle account; the first to answer continues and the other is cancelled',
@@ -1496,6 +1519,10 @@ export const messages: Record<TranslationKey, string> = {
     'Each model and channel waits for its first-token p95 over the last 24 hours; no hedge with fewer than 20 requests',
   'settings.firstEventHedgeCustomHint':
     'For reference, {model} first-token p95 over the last 24 hours: {seconds} s',
+  'settings.firstEventHedgeModels': 'Models to hedge',
+  'settings.firstEventHedgeModelsHelp':
+    'A backup request counts as one request even when cancelled. Only gemini-4-argon on Ultra accounts has a per-token quota; other models have per-request quotas and are not recommended',
+  'settings.environmentLocked': 'Set by the {key} environment variable; cannot be changed here',
   'settings.proxyHelp':
     'HTTP, HTTPS or SOCKS5 proxy. Separate several with commas to form a pool; empty uses the system proxy',
   'settings.proxyPool': 'Proxy pool',
