@@ -263,8 +263,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': 'Account selection strategy',
   'settings.routingRoundRobin': 'Round robin',
   'settings.routingFillFirst': 'Fill first',
+  'settings.routingKeyAffinity': 'API key affinity',
   'settings.routingHelp':
     'Round robin rotates accounts. Fill first stays on one account until it is full or unavailable.',
+  'settings.keyAffinityTTL': 'API key affinity TTL',
+  'settings.keyAffinityTTLHelp':
+    'Duration an API key stays on its last used account (e.g. 60m, 1h); sticks to the new account after failover and rotates again once expired.',
   'settings.waaBackend': 'WAA backend',
   'settings.waaBackendCamoufox': 'Camoufox browser',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

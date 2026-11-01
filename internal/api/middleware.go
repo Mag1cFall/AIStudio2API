@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/http"
@@ -18,6 +20,15 @@ import (
 )
 
 type accessLogContextKey struct{}
+
+// apiKeyAffinitySeedContextKey 是请求上下文中 API key 亲和种子的键
+type apiKeyAffinitySeedContextKey struct{}
+
+// APIKeyAffinitySeed 返回请求命中的 API key 的 SHA-256 十六进制亲和种子，未配置或未命中 key 时为空
+func APIKeyAffinitySeed(ctx context.Context) string {
+	seed, _ := ctx.Value(apiKeyAffinitySeedContextKey{}).(string)
+	return seed
+}
 
 type accessLogMetadata struct {
 	mu              sync.Mutex
@@ -491,9 +502,14 @@ func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(keys) > 0 && !checkAPIKeyMatches(r, keys) {
+		matched := matchAPIKey(r, keys)
+		if len(keys) > 0 && matched == "" {
 			writeAuthError(w, r)
 			return
+		}
+		if matched != "" {
+			sum := sha256.Sum256([]byte(matched))
+			r = r.WithContext(context.WithValue(r.Context(), apiKeyAffinitySeedContextKey{}, hex.EncodeToString(sum[:])))
 		}
 		markAccessLogAuthorized(r.Context())
 		next.ServeHTTP(w, r)
@@ -514,19 +530,19 @@ func apiKeyCandidates(r *http.Request) []string {
 	return candidates
 }
 
-// checkAPIKeyMatches 判断请求头或 URL 中任一 API key 是否与配置的某个 key 相同
-func checkAPIKeyMatches(r *http.Request, keys []string) bool {
+// matchAPIKey 返回请求头或 URL 中与配置的某个 key 相同的候选 API key，未命中时为空
+func matchAPIKey(r *http.Request, keys []string) string {
 	for _, cand := range apiKeyCandidates(r) {
 		if cand == "" {
 			continue
 		}
 		for _, key := range keys {
 			if subtle.ConstantTimeCompare([]byte(cand), []byte(key)) == 1 {
-				return true
+				return cand
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // bearerToken 返回 Authorization Bearer 凭据

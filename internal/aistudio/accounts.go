@@ -252,8 +252,10 @@ type AccountSelection struct {
 	PlaygroundOnly    bool
 	Channel           Channel
 	PreferredChannel  Channel
-	anyTier           bool
-	anyState          bool
+	// StickySeed 是会话亲和种子，仅 key-affinity 策略用于候选账户排序
+	StickySeed string
+	anyTier    bool
+	anyState   bool
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
@@ -289,6 +291,12 @@ type AccountStore struct {
 	paths []string
 }
 
+// stickyBinding 记录亲和种子上次命中的账户与更新时间
+type stickyBinding struct {
+	accountID string
+	updatedAt time.Time
+}
+
 // AccountPool 在账户之间执行能力与并发槽位调度
 type AccountPool struct {
 	mu                    sync.Mutex
@@ -297,6 +305,8 @@ type AccountPool struct {
 	resources             map[string]string
 	perAccountConcurrency int
 	routingStrategy       string
+	keyAffinityTTL        time.Duration
+	stickyBySeed          map[string]stickyBinding
 	lastPicked            map[string]string
 	lastPickedChannel     map[string]Channel
 	channels              []Channel
@@ -739,7 +749,8 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 	p := &AccountPool{
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
-		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
+		routingStrategy: "round-robin", keyAffinityTTL: 60 * time.Minute, stickyBySeed: make(map[string]stickyBinding),
+		lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
 	}
 	for _, account := range p.accounts {
 		if account.runtime.Cooldowns == nil {
@@ -2459,6 +2470,20 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		account.LastUsed = now
 		p.lastPicked[selectionAccessScope(selection)] = account.ID
 		p.lastPickedChannel[selectionAccessScope(selection)] = candidate.channel
+		if seed := strings.TrimSpace(selection.StickySeed); seed != "" && p.routingStrategy == "key-affinity" {
+			for k, v := range p.stickyBySeed {
+				if now.Sub(v.updatedAt) > p.keyAffinityTTL {
+					delete(p.stickyBySeed, k)
+				}
+			}
+			prev, exists := p.stickyBySeed[seed]
+			if !exists || now.Sub(prev.updatedAt) > p.keyAffinityTTL || prev.accountID == account.ID || !p.stickyAccountHealthyLocked(prev.accountID, selection, now) {
+				p.stickyBySeed[seed] = stickyBinding{accountID: account.ID, updatedAt: now}
+			} else {
+				// 原主账户健康且仅因当前并发槽满临时溢出借用其他账户，保持原主账户绑定不变，防止多并发时主账户轮换漂移
+				p.stickyBySeed[seed] = stickyBinding{accountID: prev.accountID, updatedAt: now}
+			}
+		}
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
@@ -2608,18 +2633,104 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	sort.Slice(indices, func(left, right int) bool {
 		return p.accounts[indices[left]].ID < p.accounts[indices[right]].ID
 	})
-	if p.routingStrategy == "round-robin" {
+	if p.routingStrategy == "round-robin" || p.routingStrategy == "key-affinity" {
 		last := p.lastPicked[selectionAccessScope(selection)]
 		start := sort.Search(len(indices), func(index int) bool { return p.accounts[indices[index]].ID > last })
 		indices = append(indices[start:], indices[:start]...)
 	}
+	if p.routingStrategy == "key-affinity" {
+		now := time.Now()
+		if targetID := p.stickyAccountIDLocked(selection.StickySeed, now); targetID != "" {
+			for pos, idx := range indices {
+				if p.accounts[idx].ID == targetID {
+					if pos > 0 {
+						rotated := make([]int, 0, len(indices))
+						rotated = append(rotated, idx)
+						rotated = append(rotated, indices[:pos]...)
+						rotated = append(rotated, indices[pos+1:]...)
+						indices = rotated
+					}
+					break
+				}
+			}
+		} else if strings.TrimSpace(selection.StickySeed) != "" && len(indices) > 1 {
+			// 新种子或需要重绑的种子优先分配当前被绑定次数最少的账户（平局按 round-robin 顺序），避免多个 Key 扎堆绑定同一账户
+			counts := make(map[string]int, len(indices))
+			for k, v := range p.stickyBySeed {
+				if now.Sub(v.updatedAt) <= p.keyAffinityTTL {
+					counts[v.accountID]++
+				} else {
+					delete(p.stickyBySeed, k)
+				}
+			}
+			sort.SliceStable(indices, func(left, right int) bool {
+				return counts[p.accounts[indices[left]].ID] < counts[p.accounts[indices[right]].ID]
+			})
+		}
+	}
 	return indices, nil
 }
 
-// SetRoutingStrategy 设置账户轮询或优先填满策略
+// stickyAccountIDLocked 返回种子在有效期内绑定的上次账户 ID，未绑定或已过期时返回空
+func (p *AccountPool) stickyAccountIDLocked(seed string, now time.Time) string {
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		return ""
+	}
+	binding, exists := p.stickyBySeed[seed]
+	if !exists {
+		return ""
+	}
+	if now.Sub(binding.updatedAt) > p.keyAffinityTTL {
+		delete(p.stickyBySeed, seed)
+		return ""
+	}
+	return binding.accountID
+}
+
+// stickyAccountHealthyLocked 判断已绑定的主账户是否仍然启用、就绪且未全部冷却（忽略瞬时并发槽满）
+func (p *AccountPool) stickyAccountHealthyLocked(accountID string, selection AccountSelection, now time.Time) bool {
+	account := p.byID[accountID]
+	if account == nil || !account.Config.Enabled || account.State != AccountReady {
+		return false
+	}
+	if selection.ModelID != "" && !p.accountSupportsAnyChannelLocked(account, selection) {
+		return false
+	}
+	if _, cooling := p.accountChannelCooldownLocked(account, selection, now); cooling {
+		return false
+	}
+	return true
+}
+
+// StickyAccountID 返回 key-affinity 策略下种子当前未过期的绑定主账户，未启用或未绑定时返回空
+func (p *AccountPool) StickyAccountID(seed string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.routingStrategy != "key-affinity" {
+		return ""
+	}
+	return p.stickyAccountIDLocked(seed, time.Now())
+}
+
+// RoutingStrategy 返回当前账户选择策略
+func (p *AccountPool) RoutingStrategy() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.routingStrategy
+}
+
+// SetRoutingStrategy 设置账户轮询、优先填满或按 API key 亲和策略
 func (p *AccountPool) SetRoutingStrategy(strategy string) {
 	p.mu.Lock()
 	p.routingStrategy = strategy
+	p.mu.Unlock()
+}
+
+// SetKeyAffinityTTL 设置 key-affinity 策略下同一 API key 保持同一账户的有效期
+func (p *AccountPool) SetKeyAffinityTTL(ttl time.Duration) {
+	p.mu.Lock()
+	p.keyAffinityTTL = ttl
 	p.mu.Unlock()
 }
 

@@ -67,6 +67,7 @@ const sections: {
       'warm_startup_concurrency',
       'per_account_concurrency',
       'routing_strategy',
+      'key_affinity_ttl',
     ],
   },
   {
@@ -533,7 +534,25 @@ async function saveConfig(): Promise<void> {
               <UiSelect id="setting-routing" v-model="form.routing_strategy" :class="inputClass">
                 <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
                 <option value="fill-first">{{ t('settings.routingFillFirst') }}</option>
+                <option value="key-affinity">{{ t('settings.routingKeyAffinity') }}</option>
               </UiSelect>
+            </SettingRow>
+            <SettingRow
+              v-if="form.routing_strategy === 'key-affinity'"
+              :label="t('settings.keyAffinityTTL')"
+              control-id="setting-key-affinity-ttl"
+              :description="t('settings.keyAffinityTTLHelp')"
+              effect="immediate"
+              :changed="changedFields.has('key_affinity_ttl')"
+            >
+              <input
+                id="setting-key-affinity-ttl"
+                v-model.trim="form.key_affinity_ttl"
+                :class="inputClass"
+                placeholder="1h"
+                autocomplete="off"
+                spellcheck="false"
+              />
             </SettingRow>
           </template>
 

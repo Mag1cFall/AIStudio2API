@@ -280,6 +280,7 @@ type RuntimeConfig struct {
 	WarmStartupConcurrency    int          `json:"warm_startup_concurrency"`
 	PerAccountConcurrency     int          `json:"per_account_concurrency"`
 	RoutingStrategy           string       `json:"routing_strategy"`
+	KeyAffinityTTL            string       `json:"key_affinity_ttl"`
 	UpstreamChannels          []string     `json:"upstream_channels"`
 	ModelMapping              string       `json:"model_mapping"`
 	ModelChannels             string       `json:"model_channels"`

@@ -267,8 +267,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': 'Kontoauswahl',
   'settings.routingRoundRobin': 'Reihum',
   'settings.routingFillFirst': 'Gleiches Konto bevorzugen',
+  'settings.routingKeyAffinity': 'API-Schlüssel-Affinität',
   'settings.routingHelp':
     'Reihum wechselt die Konten. „Gleiches Konto bevorzugen“ bleibt bei einem Konto, bis es ausgelastet oder nicht verfügbar ist.',
+  'settings.keyAffinityTTL': 'Dauer der API-Schlüssel-Affinität',
+  'settings.keyAffinityTTLHelp':
+    'Dauer, für die ein API-Schlüssel beim zuletzt genutzten Konto bleibt (z. B. 60m, 1h); bleibt nach einem Wechsel beim neuen Konto und rotiert nach Ablauf erneut.',
   'settings.waaBackend': 'WAA-Backend',
   'settings.waaBackendCamoufox': 'Camoufox-Browser',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

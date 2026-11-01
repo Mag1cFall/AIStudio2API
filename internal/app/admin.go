@@ -867,6 +867,10 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
+	keyAffinityTTL, err := time.ParseDuration(value.KeyAffinityTTL)
+	if err != nil {
+		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("KEY_AFFINITY_TTL 无效: %w", err))
+	}
 	cfg := config.Config{
 		AutoStart:      value.AutoStart,
 		RequestBodyLog: value.RequestBodyLog,
@@ -882,6 +886,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		RoutingStrategy:        value.RoutingStrategy,
+		KeyAffinityTTL:         keyAffinityTTL,
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
@@ -897,6 +902,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		return api.RuntimeConfig{}, err
 	}
 	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	admin.pool.SetKeyAffinityTTL(cfg.KeyAffinityTTL)
 	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	admin.requests.log("service", "INFO", "服务配置已保存")
 	models, _ := admin.CatalogModels(context.Background())
@@ -1182,6 +1188,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		WarmStartupConcurrency: cfg.WarmStartupConcurrency,
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,
 		RoutingStrategy:        cfg.RoutingStrategy,
+		KeyAffinityTTL:         cfg.KeyAffinityTTL.String(),
 		UpstreamChannels:       cfg.UpstreamChannels,
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,

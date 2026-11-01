@@ -25,13 +25,17 @@ func newDispatchQueue() *dispatchQueue {
 	return &dispatchQueue{queues: make(map[string][]*dispatchWaiter)}
 }
 
-// dispatchKey 返回可互相替代的请求共用的队列键
-func dispatchKey(selection aistudio.AccountSelection) string {
+// dispatchKey 返回可互相替代的请求共用的队列键，仅在 key-affinity 策略下按亲和种子拆分队列
+func dispatchKey(selection aistudio.AccountSelection, routingStrategy string) string {
 	allowed := slices.Clone(selection.AllowedAccountIDs)
 	slices.Sort(allowed)
+	seed := ""
+	if routingStrategy == "key-affinity" {
+		seed = strings.TrimSpace(selection.StickySeed)
+	}
 	return strings.Join([]string{
 		selection.ModelID, selection.Method, selection.Capability, selection.AccountID, selection.ResourceID,
-		strings.Join(allowed, ","), strconv.FormatBool(selection.PlaygroundOnly),
+		strings.Join(allowed, ","), strconv.FormatBool(selection.PlaygroundOnly), seed,
 	}, "\x00")
 }
 

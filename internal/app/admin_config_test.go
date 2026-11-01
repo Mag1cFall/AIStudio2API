@@ -68,7 +68,17 @@ func TestAdminConfig(t *testing.T) {
 		t.Fatalf("empty enabled password error = %v", err)
 	}
 	value.AdminAuthEnabled = false
+	value.RoutingStrategy = "key-affinity"
+	value.KeyAffinityTTL = "0s"
+	if _, err := admin.UpdateRuntimeConfig(ctx, value); err == nil {
+		t.Fatal("zero KeyAffinityTTL was accepted")
+	}
+	value.KeyAffinityTTL = "90m"
 	if _, err := admin.UpdateRuntimeConfig(ctx, value); err != nil {
 		t.Fatal(err)
+	}
+	saved, err = config.Load(path)
+	if err != nil || saved.KeyAffinityTTL.String() != "1h30m0s" {
+		t.Fatalf("saved KeyAffinityTTL = %v, err = %v", saved.KeyAffinityTTL, err)
 	}
 }

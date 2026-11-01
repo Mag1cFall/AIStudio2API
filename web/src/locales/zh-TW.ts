@@ -252,8 +252,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': '帳號選擇策略',
   'settings.routingRoundRobin': '輪流分配',
   'settings.routingFillFirst': '優先使用同一帳號',
+  'settings.routingKeyAffinity': '依 API Key 親和',
   'settings.routingHelp':
     '輪流分配依序使用各帳號；優先使用同一帳號會持續用它，滿載或無法使用時切換',
+  'settings.keyAffinityTTL': 'API Key 親和時長',
+  'settings.keyAffinityTTLHelp':
+    '同一 API Key 保持使用上一次命中帳號的有效時長（如 60m、1h）；期間滿載或冷卻切換後留在新帳號，過期後重新輪流分配',
   'settings.waaBackend': 'WAA 後端',
   'settings.waaBackendCamoufox': 'Camoufox 瀏覽器',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

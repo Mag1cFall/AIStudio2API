@@ -250,7 +250,11 @@ export const messages = {
   'settings.routingStrategy': '账户选择策略',
   'settings.routingRoundRobin': '轮询',
   'settings.routingFillFirst': '账户粘性优先',
+  'settings.routingKeyAffinity': '按 API Key 亲和',
   'settings.routingHelp': '轮询依次使用各账户；粘性优先持续用同一账户，满载或不可用时切换',
+  'settings.keyAffinityTTL': 'API Key 亲和时长',
+  'settings.keyAffinityTTLHelp':
+    '同一 API Key 保持使用上一次命中账户的有效时长（如 60m、1h）；期间满载或冷却切换后留在新账户，过期后重新轮询分配',
   'settings.waaBackend': 'WAA 后端',
   'settings.waaBackendCamoufox': 'Camoufox 浏览器',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

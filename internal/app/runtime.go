@@ -66,6 +66,7 @@ func newRuntime(
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	pool.SetKeyAffinityTTL(cfg.KeyAffinityTTL)
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	proxies := aistudio.NewProxyPool(pool, proxyList)
@@ -1271,10 +1272,11 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 	failedWorkers := make(map[string]struct{})
 	var promoteFailure error
 	var waiter *dispatchWaiter
+	var stickyWaitUntil time.Time
 	defer func() { service.workers.dispatch.leave(waiter) }()
 	wait := func(delay time.Duration) error {
 		if waiter == nil {
-			waiter = service.workers.dispatch.join(dispatchKey(selection))
+			waiter = service.workers.dispatch.join(dispatchKey(selection, service.pool.RoutingStrategy()))
 		}
 		return waitScheduling(ctx, waiter.wake, delay)
 	}
@@ -1302,6 +1304,21 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		standbyReady, opening := service.workers.withoutOpening(groups.StandbyReady)
 		groups.StandbyReady = standbyReady
 		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
+		if !fixedAccount && len(warmAvailable) > 0 {
+			if stickyID := service.pool.StickyAccountID(selection.StickySeed); stickyID != "" &&
+				!slices.Contains(warmAvailable, stickyID) && slices.Contains(groups.WarmBusy, stickyID) {
+				now := time.Now()
+				if stickyWaitUntil.IsZero() {
+					stickyWaitUntil = now.Add(affinityBusyWaitLimit)
+				}
+				if remaining := stickyWaitUntil.Sub(now); remaining > 0 {
+					if err := wait(min(remaining, schedulingRecheck)); err != nil {
+						return nil, err
+					}
+					continue
+				}
+			}
+		}
 		if len(warmAvailable) > 0 {
 			candidate := selection
 			candidate.AllowedAccountIDs = warmAvailable
@@ -1422,6 +1439,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 
 // schedulingRecheck 为等待调度信号时的定时复查间隔
 const schedulingRecheck = time.Second
+
+// affinityBusyWaitLimit 为 key-affinity 策略下绑定主账户仅因并发槽满时排队等待原账户释放的最长时间，超时后再借用其他热账户
+const affinityBusyWaitLimit = 3 * time.Second
 
 // cooldownQueueLimit 为全部候选账户冷却时请求排队等待恢复的上限，覆盖分钟限额窗口
 const cooldownQueueLimit = time.Minute
@@ -1710,6 +1730,7 @@ func (service *trackedService) generateWithRetry(
 			ModelID: modelID, Method: "generateContent",
 			AccountID: selectionAccountID, ResourceID: selectionResourceID,
 		}
+		selection.StickySeed = api.APIKeyAffinitySeed(requestCtx)
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
 		}

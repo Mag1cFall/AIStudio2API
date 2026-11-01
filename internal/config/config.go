@@ -24,6 +24,7 @@ const (
 	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 5
 	defaultAccountConcurrency = 2
+	defaultKeyAffinityTTL     = 60 * time.Minute
 )
 
 var configKeys = [...]string{
@@ -39,6 +40,7 @@ var configKeys = [...]string{
 	"WARM_STARTUP_CONCURRENCY",
 	"PER_ACCOUNT_CONCURRENCY",
 	"ROUTING_STRATEGY",
+	"KEY_AFFINITY_TTL",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
 	"MODEL_CHANNELS",
@@ -121,6 +123,7 @@ type Config struct {
 	WarmStartupConcurrency int
 	PerAccountConcurrency  int
 	RoutingStrategy        string
+	KeyAffinityTTL         time.Duration
 	UpstreamChannels       []string
 	ModelMapping           string
 	ModelChannels          string
@@ -152,6 +155,7 @@ func Default() Config {
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
+		KeyAffinityTTL:         defaultKeyAffinityTTL,
 		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendCamoufox,
 		MediaOutput:            MediaOutputInline,
@@ -309,6 +313,12 @@ func Load(path string) (Config, error) {
 	if value, ok := values["ROUTING_STRATEGY"]; ok {
 		cfg.RoutingStrategy = strings.TrimSpace(value)
 	}
+	if value, ok := values["KEY_AFFINITY_TTL"]; ok {
+		cfg.KeyAffinityTTL, err = parsePositiveDuration("KEY_AFFINITY_TTL", value)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if value, ok := values["UPSTREAM_CHANNELS"]; ok {
 		cfg.UpstreamChannels = parseUpstreamChannels(value)
 	}
@@ -373,6 +383,7 @@ func (c Config) Save(path string) error {
 		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
+		"KEY_AFFINITY_TTL":         c.KeyAffinityTTL.String(),
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
 		"MODEL_CHANNELS":           c.ModelChannels,
@@ -432,8 +443,11 @@ func (c Config) Validate() error {
 	if c.PerAccountConcurrency <= 0 {
 		return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
 	}
-	if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" {
-		return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin 或 fill-first")
+	if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" && c.RoutingStrategy != "key-affinity" {
+		return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin、fill-first 或 key-affinity")
+	}
+	if c.KeyAffinityTTL <= 0 {
+		return fmt.Errorf("KEY_AFFINITY_TTL 必须是正数时长")
 	}
 	if err := validateUpstreamChannels(c.UpstreamChannels); err != nil {
 		return err

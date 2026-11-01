@@ -263,8 +263,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': '계정 선택 방식',
   'settings.routingRoundRobin': '라운드 로빈',
   'settings.routingFillFirst': '같은 계정 우선',
+  'settings.routingKeyAffinity': 'API 키 어피니티',
   'settings.routingHelp':
     '라운드 로빈은 계정을 차례로 쓰고, 같은 계정 우선은 한도에 닿거나 쓸 수 없을 때까지 한 계정을 씁니다',
+  'settings.keyAffinityTTL': 'API 키 어피니티 유지 시간',
+  'settings.keyAffinityTTLHelp':
+    '동일한 API 키가 마지막으로 사용한 계정을 유지하는 시간(예: 60m, 1h). 전환 후에는 새 계정을 유지하며 만료 후 다시 순환 배정합니다',
   'settings.waaBackend': 'WAA 백엔드',
   'settings.waaBackendCamoufox': 'Camoufox 브라우저',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

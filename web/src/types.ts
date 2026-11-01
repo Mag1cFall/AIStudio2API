@@ -320,7 +320,8 @@ export interface ServiceConfig {
   max_active_workers: number
   warm_startup_concurrency: number
   per_account_concurrency: number
-  routing_strategy: 'round-robin' | 'fill-first'
+  routing_strategy: 'round-robin' | 'fill-first' | 'key-affinity'
+  key_affinity_ttl: string
   upstream_channels: UpstreamChannel[]
   model_mapping: string
   model_channels: string

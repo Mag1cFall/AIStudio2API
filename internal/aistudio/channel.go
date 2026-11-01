@@ -229,7 +229,7 @@ func (p *AccountPool) accountChannelCooldownLocked(account *Account, selection A
 	return earliest, !earliest.Until.IsZero()
 }
 
-// channelCandidatesLocked 按账户 ID 与通道顺序展开候选，轮询策略从上次选中组合之后开始
+// channelCandidatesLocked 按账户与通道顺序展开候选，轮询策略（及无种子的 key-affinity）从上次选中组合之后开始
 func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSelection) []channelCandidate {
 	channels := p.selectionChannelsLocked(selection)
 	candidates := make([]channelCandidate, 0, len(indices)*len(channels))
@@ -237,6 +237,12 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		for _, channel := range channels {
 			candidates = append(candidates, channelCandidate{index: index, channel: channel})
 		}
+	}
+	if p.routingStrategy == "fill-first" || (p.routingStrategy == "key-affinity" && strings.TrimSpace(selection.StickySeed) != "") {
+		return candidates
+	}
+	if (p.routingStrategy != "round-robin" && p.routingStrategy != "key-affinity") || len(indices) <= 1 && len(channels) <= 1 {
+		return candidates
 	}
 	rank := func(channel Channel) int { return slices.Index(channels, channel) }
 	sort.SliceStable(candidates, func(left, right int) bool {
@@ -246,9 +252,6 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		}
 		return rank(candidates[left].channel) < rank(candidates[right].channel)
 	})
-	if p.routingStrategy != "round-robin" || len(indices) <= 1 && len(channels) <= 1 {
-		return candidates
-	}
 	key := selectionAccessScope(selection)
 	lastAccount := p.lastPicked[key]
 	lastChannel := p.lastPickedChannel[key]

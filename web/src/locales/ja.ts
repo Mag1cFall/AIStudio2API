@@ -267,8 +267,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': 'アカウントの選択方法',
   'settings.routingRoundRobin': 'ラウンドロビン',
   'settings.routingFillFirst': '同じアカウントを優先',
+  'settings.routingKeyAffinity': 'API キー affinity',
   'settings.routingHelp':
     'ラウンドロビンは順番にアカウントを使い、同じアカウントを優先すると上限到達か利用不可まで同じアカウントを使います',
+  'settings.keyAffinityTTL': 'API キー affinity の有効期間',
+  'settings.keyAffinityTTLHelp':
+    '同じ API キーが前回使用したアカウントを維持する時間（例: 60m、1h）。切り替え後は新しいアカウントを維持し、期限切れ後は再び順番に割り当てます',
   'settings.waaBackend': 'WAA バックエンド',
   'settings.waaBackendCamoufox': 'Camoufox ブラウザ',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',

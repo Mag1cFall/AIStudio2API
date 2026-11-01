@@ -269,8 +269,12 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingStrategy': 'Stratégie de sélection des comptes',
   'settings.routingRoundRobin': 'Tourniquet',
   'settings.routingFillFirst': 'Même compte en priorité',
+  'settings.routingKeyAffinity': 'Affinité par clé API',
   'settings.routingHelp':
     'Le tourniquet alterne les comptes. « Même compte en priorité » garde un compte jusqu’à ce qu’il soit saturé ou indisponible.',
+  'settings.keyAffinityTTL': 'Durée d’affinité par clé API',
+  'settings.keyAffinityTTLHelp':
+    'Durée pendant laquelle une clé API conserve le dernier compte utilisé (ex. 60m, 1h) ; reste sur le nouveau compte après bascule et alterne à nouveau après expiration.',
   'settings.waaBackend': 'Moteur WAA',
   'settings.waaBackendCamoufox': 'Navigateur Camoufox',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',
