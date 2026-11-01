@@ -21,11 +21,19 @@ var interactionThinkingLevels = map[int64]int64{4: 1, 1: 2, 2: 3, 3: 4}
 // interactionCancelTimeout 是取消后台任务的期限，包含等待账户请求槽位的时间
 const interactionCancelTimeout = time.Minute
 
-// interactionVideoMIME 表示 Interaction 视频内容的 MIME 枚举
-var interactionVideoMIME = map[int64]string{1: "video/mp4"}
+// interactionMediaMIME 是 content delta 各媒体字段的 MIME 枚举表，与官网前端相同
+var interactionMediaMIME = map[int]interactionMIME{
+	1: {codes: map[int64]string{1: "image/png", 2: "image/jpeg", 3: "image/webp", 4: "image/heic", 5: "image/heif", 7: "image/gif", 8: "image/bmp", 9: "image/tiff"}, unlisted: "image/jpeg"},
+	2: {codes: map[int64]string{1: "audio/wav", 2: "audio/mp3", 3: "audio/aiff", 4: "audio/aac", 5: "audio/ogg", 6: "audio/flac", 7: "audio/mpeg", 8: "audio/m4a", 9: "audio/l16", 10: "audio/s16le", 11: "audio/opus", 12: "audio/alaw", 13: "audio/mulaw"}, unlisted: "audio/wav"},
+	3: {codes: map[int64]string{1: "application/pdf"}, unlisted: "application/pdf"},
+	4: {codes: map[int64]string{1: "video/mp4", 2: "video/mpeg", 3: "video/mpg", 4: "video/mov", 5: "video/avi", 6: "video/x-flv", 7: "video/webm", 8: "video/wmv", 9: "video/3gpp"}, unlisted: "video/mp4"},
+}
 
-// interactionImageMIME 表示 Interaction 图片内容的 MIME 枚举
-var interactionImageMIME = map[int64]string{1: "image/png"}
+// interactionMIME 是一类媒体的 MIME 枚举与枚举缺省或不在表中时的 MIME
+type interactionMIME struct {
+	codes    map[int64]string
+	unlisted string
+}
 
 // interactionStatusHTTP 把流尾 google.rpc 状态码换算为 HTTP 状态
 var interactionStatusHTTP = map[int64]int{
@@ -485,7 +493,7 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 	return true, emit(Event{Kind: EventFinish, FinishReason: "stop"})
 }
 
-// decodeInteractionDelta 解码 content delta：field 1 文本、field 2 图片、field 5 视频、field 6 思考摘要、field 7 思考签名、field 10 引用
+// decodeInteractionDelta 解码 content delta：field 1 文本、field 2 图片、field 3 音频、field 4 文档、field 5 视频、field 6 思考摘要、field 7 思考签名、field 10 引用
 func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event) error) error {
 	delta, err := rawArray(raw, "$delta", raw)
 	if err != nil || len(delta) < 2 {
@@ -512,12 +520,8 @@ func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event)
 			if err := emit(Event{Kind: EventText, Text: decoded}); err != nil {
 				return err
 			}
-		case 1, 4:
-			mimes := interactionImageMIME
-			if index == 4 {
-				mimes = interactionVideoMIME
-			}
-			media, err := decodeInteractionMedia(method, value, index, mimes, raw)
+		case 1, 2, 3, 4:
+			media, err := decodeInteractionMedia(method, value, index, raw)
 			if err != nil {
 				return err
 			}
@@ -738,26 +742,23 @@ func decodeInteractionCitations(method string, value json.RawMessage, raw json.R
 	return nil
 }
 
-// decodeInteractionMedia 解码图片或视频 content：MIME 枚举与 Base64 数据
-func decodeInteractionMedia(method string, value json.RawMessage, index int, mimes map[int64]string, raw json.RawMessage) (*Blob, error) {
+// decodeInteractionMedia 解码媒体 content：MIME 枚举与 Base64 数据，枚举缺省或不在表中时按官网取该类媒体的默认 MIME
+func decodeInteractionMedia(method string, value json.RawMessage, index int, raw json.RawMessage) (*Blob, error) {
 	path := fmt.Sprintf("$delta[1][%d]", index)
 	media, err := rawArray(value, path, raw)
 	if err != nil || len(media) < 2 {
 		return nil, &ProtocolEvidenceError{Method: method, Path: path, Detail: "媒体 delta 无效", Raw: cloneRaw(raw)}
 	}
-	// 视频响应可能省略 MIME 枚举；仅在数据可识别为 MP4 时接受。
-	missingVideoMIME := index == 4 && isJSONNull(media[0])
-	var mimeType string
-	if !missingVideoMIME {
-		code, err := rawInt64(media[0], path+"[0]", raw)
-		if err != nil {
+	var code int64
+	if !isJSONNull(media[0]) {
+		if code, err = rawInt64(media[0], path+"[0]", raw); err != nil {
 			return nil, withMethod(err, method)
 		}
-		var ok bool
-		mimeType, ok = mimes[code]
-		if !ok {
-			return nil, &ProtocolEvidenceError{Method: method, Path: path + "[0]", Detail: fmt.Sprintf("未识别的媒体 MIME 枚举 %d", code), Raw: cloneRaw(raw)}
-		}
+	}
+	kind := interactionMediaMIME[index]
+	mimeType, ok := kind.codes[code]
+	if !ok {
+		mimeType = kind.unlisted
 	}
 	encoded, err := rawString(media[1], path+"[1]", raw)
 	if err != nil {
@@ -766,12 +767,6 @@ func decodeInteractionMedia(method string, value json.RawMessage, index int, mim
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, &ProtocolEvidenceError{Method: method, Path: path + "[1]", Detail: "媒体数据不是 Base64", Raw: cloneRaw(raw)}
-	}
-	if missingVideoMIME {
-		mimeType = http.DetectContentType(data)
-		if mimeType != "video/mp4" {
-			return nil, &ProtocolEvidenceError{Method: method, Path: path, Detail: "视频 MIME 枚举缺失且数据不是 MP4", Raw: cloneRaw(raw)}
-		}
 	}
 	return &Blob{MIME: mimeType, Data: data}, nil
 }
