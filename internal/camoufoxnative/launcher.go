@@ -48,8 +48,10 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if _, err := os.Stat(options.ExecutablePath); err != nil {
 		return nil, "", fmt.Errorf("Camoufox 不可用: %w", err)
 	}
+	config = maps.Clone(config)
+	// voices:blockIfNotDefined 为 true 时语音列表只含指纹中的语音，不加入主机语音
+	config["voices:blockIfNotDefined"] = true
 	if runtime.GOOS != "windows" {
-		config = maps.Clone(config)
 		config["AudioContext:maxChannelCount"] = windowsAudioChannels
 		config["AudioContext:sampleRate"] = windowsAudioSampleRate
 		fonts := fontList(config["fonts"])
@@ -104,6 +106,10 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		maps.Copy(prefs, windowsFontData.Prefs)
 	}
 	if runtime.GOOS == "darwin" {
+		if err := addWindowsSubstituteNames(filepath.Join(filepath.Dir(filepath.Dir(options.ExecutablePath)), "Resources", "fonts")); err != nil {
+			_ = removeProfile(profile, profileLock)
+			return nil, "", err
+		}
 		// gfx.font_loader.delay 为 0 时 Firefox 同步加载本地化与带字重的字体族名
 		prefs["gfx.font_loader.delay"] = 0
 		if !options.Headless {
@@ -135,6 +141,10 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	}
 	// Camoufox 的临时目录指向自身 profile
 	environment = append(environment, "TMP="+profile, "TEMP="+profile, "TMPDIR="+profile)
+	if options.Headless && !options.liveView {
+		// MOZ_REMOTE_ALLOW_SYSTEM_ACCESS 让 WebDriver BiDi 访问浏览器界面层，Worker 由此停止标签页的图层绘制
+		environment = append(environment, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1")
+	}
 	if options.CacheDirectory != "" {
 		restoreStartupCache(options.CacheDirectory, profile)
 	}
@@ -350,6 +360,12 @@ const windowsChromeHeight = 57
 
 // windowsStorageLimit 为使站点存储配额取 Firefox 上限 10 GiB 的全局存储上限，单位 KB
 const windowsStorageLimit = 50 << 20
+
+// hostChromeHeight 为 macOS 与 Linux 版 Camoufox 窗口中浏览器界面占用的高度
+const hostChromeHeight = 51
+
+// windowsWindowPosition 为 Windows 版按 browser.xhtml 的 screenX、screenY 放置主窗口的坐标
+const windowsWindowPosition = 4
 
 // windowsFontconfig 在 profile 中写入只加载 Camoufox 发行包 Windows 字体并带 Windows 字体替换表的 fontconfig 配置并返回其路径
 func windowsFontconfig(executablePath string, profile string) (string, error) {

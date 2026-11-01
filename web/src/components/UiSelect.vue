@@ -103,7 +103,8 @@ const { options, selectedLabel, selectedKey } = useSelectOptions(model)
             v-for="(option, index) in options"
             :key="`${index}:${option.value}`"
             :value="String(index)"
-            class="flex cursor-pointer items-center justify-between gap-3 px-3 py-1.5 whitespace-nowrap text-gray-300 outline-none select-none data-[highlighted]:bg-raised data-[highlighted]:text-white data-[state=checked]:font-medium data-[state=checked]:text-blue-300"
+            :disabled="option.disabled"
+            class="flex cursor-pointer items-center justify-between gap-3 px-3 py-1.5 whitespace-nowrap text-gray-300 outline-none select-none data-[disabled]:cursor-default data-[disabled]:text-gray-500 data-[highlighted]:bg-raised data-[highlighted]:text-white data-[state=checked]:font-medium data-[state=checked]:text-blue-300"
           >
             <SelectItemText v-tooltip.overflow="option.label" class="min-w-0 truncate">{{
               option.label

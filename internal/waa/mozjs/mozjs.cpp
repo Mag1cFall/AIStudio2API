@@ -941,7 +941,10 @@ extern "C" double mz_now(void) {
   return double(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) / 1000.0;
 }
 
-extern "C" void mz_gc(mz_context* mz) { JS_GC(mz->cx); }
+extern "C" void mz_gc(mz_context* mz) {
+  JS::PrepareForFullGC(mz->cx);
+  JS::NonIncrementalGC(mz->cx, JS::GCOptions::Shrink, JS::GCReason::API);
+}
 
 extern "C" size_t mz_thread_stack_size(void) {
 #ifdef _WIN32

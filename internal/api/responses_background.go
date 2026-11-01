@@ -82,7 +82,7 @@ func (s *server) respondBackground(w http.ResponseWriter, r *http.Request, reque
 	}
 	var response map[string]any
 	if err == nil {
-		response, err = buildResponsesObject(id, created, request, result, compaction)
+		response, err = buildResponsesObject(id, created, request, result, outputPrefix(compaction, prepared))
 	}
 	if err == nil && ctx.Err() == nil {
 		s.storeResponse(id, request, prepared, result, response)

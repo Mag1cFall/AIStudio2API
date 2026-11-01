@@ -31,7 +31,8 @@ const blocks = computed(() => (props.raw ? [] : engine.render(props.text)))
   overflow-wrap: anywhere;
 }
 
-.cmark-node > :deep(*) {
+/* 顶层块离开视口时跳过渲染，含 Mermaid 图的块除外 */
+.cmark-node > :deep(:not(.ms-mermaid, :has(.ms-mermaid))) {
   content-visibility: auto;
   contain-intrinsic-size: auto 100px;
 }

@@ -136,7 +136,7 @@ void mz_request_interrupt(mz_context* mz);
 // mz_now 返回单调时钟的毫秒数
 double mz_now(void);
 
-// mz_gc 执行一次完整 GC
+// mz_gc 执行一次收缩的完整 GC，归还空闲内存并丢弃 JIT 代码
 void mz_gc(mz_context* mz);
 
 // mz_thread_stack_size 返回当前线程栈的可用字节数

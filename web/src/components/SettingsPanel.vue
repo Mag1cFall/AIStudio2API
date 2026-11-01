@@ -6,15 +6,20 @@ import { keepPage } from '@/desktop'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
 import { maskedProxy } from '@/proxy'
-import type { FirstEventLatency, ServiceConfig, UpstreamChannel } from '@/types'
+import type { Account, FirstEventLatency, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryParam } from '@/url'
+import DurationInput from './DurationInput.vue'
+import PairRows from './PairRows.vue'
 import SettingRow from './SettingRow.vue'
 import UiIcon from './UiIcon.vue'
 import UiSelect from './UiSelect.vue'
 import UiSwitch from './UiSwitch.vue'
+import FilterMenu from './FilterMenu.vue'
 
 const props = defineProps<{
   config: ServiceConfig | null
+  accounts: Account[]
+  models: Model[]
   loading: boolean
   error: string
 }>()
@@ -51,6 +56,7 @@ const sections: {
       'listen_addr',
       'preview_listen_addr',
       'proxy_api_key',
+      'api_key_accounts',
       'auth_states',
       'media_output',
       'media_base_url',
@@ -91,6 +97,7 @@ const sections: {
       'init_timeout',
       'request_timeout',
       'first_event_hedge',
+      'first_event_hedge_models',
     ],
   },
   {
@@ -185,6 +192,101 @@ const hedgeHint = computed(() => {
       '{seconds}',
       new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 }).format(item.p95_ms / 1000),
     )
+})
+
+// environmentKey 返回决定该字段的进程环境变量名，字段不由环境变量决定时为 undefined
+function environmentKey(field: keyof ServiceConfig): string | undefined {
+  const key = field === 'auth_states' ? 'AISTUDIO_AUTH_STATES' : field.toUpperCase()
+  return props.config?.environment.includes(key) ? key : undefined
+}
+
+// apiKeyList 是 API key 输入框中逗号分隔的各个 key
+const apiKeyList = computed(() =>
+  (form.proxy_api_key ?? '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean),
+)
+
+// keyAccounts 把 api_key_accounts 解析为各 key 可用的账户 ID
+function keyAccounts(value: string): Map<string, string[]> {
+  const result = new Map<string, string[]>()
+  for (const item of value.split(',')) {
+    const index = item.lastIndexOf(':')
+    const ids = item
+      .slice(index + 1)
+      .split('|')
+      .map((id) => id.trim())
+      .filter(Boolean)
+    if (index > 0 && ids.length > 0) result.set(item.slice(0, index).trim(), ids)
+  }
+  return result
+}
+
+// writeKeyAccounts 按 API key 的顺序写回 api_key_accounts，去掉已不在 key 列表中的绑定
+function writeKeyAccounts(bindings: Map<string, string[]>): void {
+  form.api_key_accounts = apiKeyList.value
+    .filter((key) => bindings.has(key))
+    .map((key) => `${key}:${bindings.get(key)!.join('|')}`)
+    .join(',')
+}
+
+// keyBindings 是表单中各 API key 可用的账户 ID
+const keyBindings = computed(() => keyAccounts(form.api_key_accounts ?? ''))
+
+// setKeyAccounts 设置 key 可用的账户，空列表表示可用全部账户
+function setKeyAccounts(key: string, ids: string[]): void {
+  const bindings = new Map(keyBindings.value)
+  if (ids.length > 0) bindings.set(key, ids)
+  else bindings.delete(key)
+  writeKeyAccounts(bindings)
+}
+
+// accountLabel 返回账户 ID 对应的显示名称
+function accountLabel(id: string): string {
+  return props.accounts.find((account) => account.id === id)?.label ?? id
+}
+
+// keyAccountsLabel 是 key 账户选择按钮的文字：未选时为全部账户，只选一个时为该账户
+function keyAccountsLabel(key: string): string {
+  const ids = keyBindings.value.get(key) ?? []
+  if (ids.length === 0) return t('settings.keyAccountsAll')
+  return ids.length === 1 ? accountLabel(ids[0]!) : t('settings.keyAccountsSome')
+}
+
+// modelIDs 是模型目录中的全部模型 ID
+const modelIDs = computed(() => props.models.map((model) => model.id))
+
+// modelOptions 是行编辑器中可选的模型
+const modelOptions = computed(() => modelIDs.value.map((id) => ({ value: id, label: id })))
+
+// channelOptions 是行编辑器中可选的上游通道
+const channelOptions = computed(() =>
+  upstreamChannelOptions.map((channel) => ({ value: channel, label: t(channelLabelKey(channel)) })),
+)
+
+// hedgeModels 是表单中发起备用请求的模型
+const hedgeModels = computed(() =>
+  (form.first_event_hedge_models ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean),
+)
+
+// hedgeModelsLabel 是备用请求模型选择按钮的文字
+const hedgeModelsLabel = computed(() => {
+  if (hedgeModels.value.length === 0) return t('settings.hedgeModelsNone')
+  return hedgeModels.value.length === 1 ? hedgeModels.value[0]! : t('settings.hedgeModelsSome')
+})
+
+// maskedKey 在未显示 API key 时只露出首尾字符
+function maskedKey(key: string): string {
+  if (revealKey.value) return key
+  return key.length > 8 ? `${key.slice(0, 4)}…${key.slice(-2)}` : '••••••••'
+}
+
+watch(apiKeyList, () => {
+  if (form.api_key_accounts !== undefined) writeKeyAccounts(keyAccounts(form.api_key_accounts))
 })
 
 // resetForm 用已保存配置覆盖表单
@@ -338,6 +440,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.autoStartHelp')"
               effect="management"
               :changed="changedFields.has('auto_start')"
+              :env="environmentKey('auto_start')"
             >
               <UiSwitch id="setting-auto-start" v-model="form.auto_start" />
             </SettingRow>
@@ -347,6 +450,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.listenHelp')"
               effect="management"
               :changed="changedFields.has('listen_addr')"
+              :env="environmentKey('listen_addr')"
             >
               <input
                 id="setting-listen"
@@ -368,6 +472,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.previewListenHelp')"
               effect="management"
               :changed="changedFields.has('preview_listen_addr')"
+              :env="environmentKey('preview_listen_addr')"
             >
               <input
                 id="setting-preview-listen"
@@ -389,6 +494,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.apiKeyHelp')"
               effect="management"
               :changed="changedFields.has('proxy_api_key')"
+              :env="environmentKey('proxy_api_key')"
             >
               <div class="flex gap-2">
                 <input
@@ -416,11 +522,43 @@ async function saveConfig(): Promise<void> {
               </p>
             </SettingRow>
             <SettingRow
+              v-if="apiKeyList.length > 0 && accounts.length > 0"
+              :label="t('settings.apiKeyAccounts')"
+              group-id="setting-api-key-accounts"
+              :description="t('settings.apiKeyAccountsHelp')"
+              effect="immediate"
+              :changed="changedFields.has('api_key_accounts')"
+              :env="environmentKey('api_key_accounts')"
+            >
+              <div role="group" aria-labelledby="setting-api-key-accounts-label" class="space-y-2">
+                <div
+                  v-for="key in apiKeyList"
+                  :key="key"
+                  class="flex items-center justify-between gap-3"
+                >
+                  <span class="min-w-0 truncate font-mono text-xs text-gray-400">
+                    {{ maskedKey(key) }}
+                  </span>
+                  <FilterMenu
+                    :label="keyAccountsLabel(key)"
+                    :options="accounts.map((account) => account.id)"
+                    :selected="keyBindings.get(key) ?? []"
+                    :format="accountLabel"
+                    :search-label="t('settings.accountSearch')"
+                    :empty-label="t('settings.accountNone')"
+                    :clear-label="t('settings.keyAccountsClear')"
+                    @change="setKeyAccounts(key, $event)"
+                  />
+                </div>
+              </div>
+            </SettingRow>
+            <SettingRow
               :label="t('settings.authPath')"
               control-id="setting-auth-path"
               :description="t('settings.authPathHelp')"
               effect="service"
               :changed="changedFields.has('auth_states')"
+              :env="environmentKey('auth_states')"
             >
               <input
                 id="setting-auth-path"
@@ -436,6 +574,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.mediaOutputHelp')"
               effect="service"
               :changed="changedFields.has('media_output')"
+              :env="environmentKey('media_output')"
             >
               <UiSelect id="setting-media-output" v-model="form.media_output" :class="inputClass">
                 <option value="inline">{{ t('settings.mediaOutputInline') }}</option>
@@ -449,6 +588,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.mediaBaseURLHelp')"
               effect="service"
               :changed="changedFields.has('media_base_url')"
+              :env="environmentKey('media_base_url')"
             >
               <input
                 id="setting-media-base-url"
@@ -468,6 +608,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.warmWorkerLimitHelp')"
               effect="immediate"
               :changed="changedFields.has('warm_worker_limit')"
+              :env="environmentKey('warm_worker_limit')"
             >
               <input
                 id="setting-warm"
@@ -483,6 +624,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.maxActiveWorkersHelp')"
               effect="immediate"
               :changed="changedFields.has('max_active_workers')"
+              :env="environmentKey('max_active_workers')"
             >
               <input
                 id="setting-max"
@@ -498,6 +640,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.warmStartupConcurrencyHelp')"
               effect="immediate"
               :changed="changedFields.has('warm_startup_concurrency')"
+              :env="environmentKey('warm_startup_concurrency')"
             >
               <input
                 id="setting-startup"
@@ -514,6 +657,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.perAccountConcurrencyHelp')"
               effect="immediate"
               :changed="changedFields.has('per_account_concurrency')"
+              :env="environmentKey('per_account_concurrency')"
             >
               <input
                 id="setting-per-account"
@@ -529,6 +673,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.routingHelp')"
               effect="immediate"
               :changed="changedFields.has('routing_strategy')"
+              :env="environmentKey('routing_strategy')"
             >
               <UiSelect id="setting-routing" v-model="form.routing_strategy" :class="inputClass">
                 <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
@@ -544,6 +689,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.upstreamChannelsHelp')"
               effect="service"
               :changed="changedFields.has('upstream_channels')"
+              :env="environmentKey('upstream_channels')"
             >
               <div
                 role="group"
@@ -577,34 +723,41 @@ async function saveConfig(): Promise<void> {
             </SettingRow>
             <SettingRow
               :label="t('settings.modelMapping')"
-              control-id="setting-model-mapping"
+              group-id="setting-model-mapping"
               :description="t('settings.modelMappingHelp')"
               effect="service"
               :changed="changedFields.has('model_mapping')"
+              :env="environmentKey('model_mapping')"
             >
-              <input
-                id="setting-model-mapping"
-                v-model.trim="form.model_mapping"
-                :class="inputClass"
-                placeholder="claude-haiku-5-5:gemini-3.8-flash"
-                autocomplete="off"
-                spellcheck="false"
+              <PairRows
+                role="group"
+                aria-labelledby="setting-model-mapping-label"
+                :value="form.model_mapping"
+                :left-placeholder="t('settings.aliasPlaceholder')"
+                :right-options="modelOptions"
+                :right-placeholder="t('settings.selectModel')"
+                :add-label="t('settings.addMapping')"
+                @change="form.model_mapping = $event"
               />
             </SettingRow>
             <SettingRow
               :label="t('settings.modelChannels')"
-              control-id="setting-model-channels"
+              group-id="setting-model-channels"
               :description="t('settings.modelChannelsHelp')"
               effect="immediate"
               :changed="changedFields.has('model_channels')"
+              :env="environmentKey('model_channels')"
             >
-              <input
-                id="setting-model-channels"
-                v-model.trim="form.model_channels"
-                :class="inputClass"
-                placeholder="gemini-4-argon:playground"
-                autocomplete="off"
-                spellcheck="false"
+              <PairRows
+                role="group"
+                aria-labelledby="setting-model-channels-label"
+                :value="form.model_channels"
+                :left-options="modelOptions"
+                :left-placeholder="t('settings.selectModel')"
+                :right-options="channelOptions"
+                :right-placeholder="t('settings.selectChannel')"
+                :add-label="t('settings.addModelChannel')"
+                @change="form.model_channels = $event"
               />
             </SettingRow>
             <SettingRow
@@ -613,6 +766,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.buildNativeHelp')"
               effect="service"
               :changed="changedFields.has('build_native_nonstream')"
+              :env="environmentKey('build_native_nonstream')"
             >
               <UiSwitch id="setting-build-native" v-model="form.build_native_nonstream" />
             </SettingRow>
@@ -622,6 +776,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.nonstreamKeepaliveHelp')"
               effect="service"
               :changed="changedFields.has('nonstream_keepalive')"
+              :env="environmentKey('nonstream_keepalive')"
             >
               <UiSwitch id="setting-nonstream-keepalive" v-model="form.nonstream_keepalive" />
             </SettingRow>
@@ -631,6 +786,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.fakeStreamHelp')"
               effect="service"
               :changed="changedFields.has('fake_stream')"
+              :env="environmentKey('fake_stream')"
             >
               <UiSwitch id="setting-fake-stream" v-model="form.fake_stream" />
             </SettingRow>
@@ -640,6 +796,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.youtubeLinksHelp')"
               effect="service"
               :changed="changedFields.has('youtube_links')"
+              :env="environmentKey('youtube_links')"
             >
               <UiSwitch id="setting-youtube-links" v-model="form.youtube_links" />
             </SettingRow>
@@ -649,6 +806,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.searchModelAliasesHelp')"
               effect="service"
               :changed="changedFields.has('search_model_aliases')"
+              :env="environmentKey('search_model_aliases')"
             >
               <UiSwitch id="setting-search-model-aliases" v-model="form.search_model_aliases" />
             </SettingRow>
@@ -658,6 +816,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.googleSearchHelp')"
               effect="service"
               :changed="changedFields.has('google_search')"
+              :env="environmentKey('google_search')"
             >
               <UiSwitch id="setting-google-search" v-model="form.google_search" />
             </SettingRow>
@@ -667,6 +826,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.continuationRewriteHelp')"
               effect="service"
               :changed="changedFields.has('continuation_rewrite')"
+              :env="environmentKey('continuation_rewrite')"
             >
               <UiSwitch id="setting-continuation-rewrite" v-model="form.continuation_rewrite" />
             </SettingRow>
@@ -676,6 +836,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.continuationPromptHelp')"
               effect="service"
               :changed="changedFields.has('continuation_prompt')"
+              :env="environmentKey('continuation_prompt')"
             >
               <textarea
                 id="setting-continuation-prompt"
@@ -692,6 +853,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.waaBackendHelp')"
               effect="service"
               :changed="changedFields.has('waa_backend')"
+              :env="environmentKey('waa_backend')"
             >
               <UiSelect id="setting-waa-backend" v-model="form.waa_backend" :class="inputClass">
                 <option value="camoufox">{{ t('settings.waaBackendCamoufox') }}</option>
@@ -704,6 +866,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.temporaryChatHelp')"
               effect="service"
               :changed="changedFields.has('temporary_chat')"
+              :env="environmentKey('temporary_chat')"
             >
               <UiSwitch id="setting-temporary" v-model="form.temporary_chat" />
             </SettingRow>
@@ -713,13 +876,12 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.initTimeoutHelp')"
               effect="service"
               :changed="changedFields.has('init_timeout')"
+              :env="environmentKey('init_timeout')"
             >
-              <input
+              <DurationInput
                 id="setting-init-timeout"
-                v-model.trim="form.init_timeout"
-                :class="inputClass"
-                autocomplete="off"
-                spellcheck="false"
+                v-model="form.init_timeout"
+                :input-class="inputClass"
               />
             </SettingRow>
             <SettingRow
@@ -728,13 +890,12 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.requestTimeoutHelp')"
               effect="service"
               :changed="changedFields.has('request_timeout')"
+              :env="environmentKey('request_timeout')"
             >
-              <input
+              <DurationInput
                 id="setting-request-timeout"
-                v-model.trim="form.request_timeout"
-                :class="inputClass"
-                autocomplete="off"
-                spellcheck="false"
+                v-model="form.request_timeout"
+                :input-class="inputClass"
               />
             </SettingRow>
             <SettingRow
@@ -743,6 +904,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.firstEventHedgeHelp')"
               effect="service"
               :changed="changedFields.has('first_event_hedge')"
+              :env="environmentKey('first_event_hedge')"
             >
               <UiSelect id="setting-first-event-hedge" v-model="hedgeMode" :class="inputClass">
                 <option value="off">{{ t('settings.firstEventHedgeOff') }}</option>
@@ -764,6 +926,25 @@ async function saveConfig(): Promise<void> {
               </div>
               <p v-if="hedgeHint" class="mt-2 text-xs leading-5 text-gray-500">{{ hedgeHint }}</p>
             </SettingRow>
+            <SettingRow
+              :label="t('settings.firstEventHedgeModels')"
+              group-id="setting-first-event-hedge-models"
+              :description="t('settings.firstEventHedgeModelsHelp')"
+              effect="service"
+              :changed="changedFields.has('first_event_hedge_models')"
+              :env="environmentKey('first_event_hedge_models')"
+            >
+              <FilterMenu
+                :label="hedgeModelsLabel"
+                :options="modelIDs"
+                :selected="hedgeModels"
+                :format="(id: string) => id"
+                :search-label="t('settings.modelSearch')"
+                :empty-label="t('settings.modelNone')"
+                :clear-label="t('settings.selectionClear')"
+                @change="form.first_event_hedge_models = $event.join(',')"
+              />
+            </SettingRow>
           </template>
 
           <template v-else-if="section === 'network'">
@@ -773,6 +954,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.proxyHelp')"
               effect="service"
               :changed="changedFields.has('proxy')"
+              :env="environmentKey('proxy')"
             >
               <input
                 id="setting-proxy"
@@ -822,6 +1004,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.adminAuthHelp')"
               effect="management"
               :changed="changedFields.has('admin_auth_enabled')"
+              :env="environmentKey('admin_auth_enabled')"
             >
               <UiSwitch id="setting-admin-auth" v-model="form.admin_auth_enabled" />
             </SettingRow>
@@ -831,6 +1014,7 @@ async function saveConfig(): Promise<void> {
                 control-id="setting-admin-username"
                 effect="management"
                 :changed="changedFields.has('admin_username')"
+                :env="environmentKey('admin_username')"
               >
                 <input
                   id="setting-admin-username"
@@ -845,6 +1029,7 @@ async function saveConfig(): Promise<void> {
                 control-id="setting-admin-password"
                 effect="management"
                 :changed="adminPassword !== ''"
+                :env="environmentKey('admin_password')"
               >
                 <input
                   id="setting-admin-password"
@@ -863,6 +1048,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.requestBodyLogHelp')"
               effect="immediate"
               :changed="changedFields.has('request_body_log')"
+              :env="environmentKey('request_body_log')"
             >
               <UiSwitch id="setting-body-log" v-model="form.request_body_log" />
             </SettingRow>
@@ -872,6 +1058,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.logFileHelp')"
               effect="immediate"
               :changed="changedFields.has('log_file')"
+              :env="environmentKey('log_file')"
             >
               <UiSwitch id="setting-log-file" v-model="form.log_file" />
             </SettingRow>
@@ -881,6 +1068,7 @@ async function saveConfig(): Promise<void> {
               :description="t('settings.logMaxTotalHelp')"
               effect="immediate"
               :changed="changedFields.has('log_max_total_mb')"
+              :env="environmentKey('log_max_total_mb')"
             >
               <input
                 id="setting-log-max-total"

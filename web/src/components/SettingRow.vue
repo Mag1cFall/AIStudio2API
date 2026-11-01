@@ -8,6 +8,7 @@ defineProps<{
   description?: string
   effect: 'immediate' | 'service' | 'management'
   changed?: boolean
+  env?: string | undefined
 }>()
 
 const { t } = useI18n()
@@ -32,9 +33,15 @@ const { t } = useI18n()
       </div>
       <p v-if="description" class="mt-1 text-xs leading-5 text-gray-500">{{ description }}</p>
       <p class="mt-1 text-xs text-gray-600">{{ t(`settings.effect.${effect}`) }}</p>
+      <p v-if="env" class="mt-1 text-xs text-amber-300">
+        {{ t('settings.environmentLocked').replace('{key}', env) }}
+      </p>
     </div>
-    <div class="w-full md:w-80 md:shrink-0">
+    <fieldset
+      :disabled="env !== undefined"
+      class="w-full min-w-0 disabled:opacity-60 md:w-80 md:shrink-0"
+    >
       <slot />
-    </div>
+    </fieldset>
   </div>
 </template>

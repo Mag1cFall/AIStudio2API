@@ -166,7 +166,9 @@ func geminiSchema(raw json.RawMessage) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		encoded["enum"] = values
+		if values = slices.DeleteFunc(values, func(value string) bool { return value == "" }); len(values) > 0 {
+			encoded["enum"] = values
+		}
 	}
 	if value, ok := schema["items"]; ok {
 		items, err := geminiSchema(value)
@@ -519,6 +521,17 @@ func normalizeNotSchema(schema map[string]json.RawMessage) error {
 			delete(schema, "not")
 			schema["nullable"] = json.RawMessage("false")
 		}
+		var values []string
+		if json.Unmarshal(sub["enum"], &values) == nil && slices.Contains(values, "") {
+			subType, _ := schemaType(sub)
+			pure := len(sub) == 1 || len(sub) == 2 && strings.EqualFold(subType, "string")
+			if values = excludeEmptyString(schema, values, pure); len(values) == 0 {
+				delete(schema, "not")
+				return nil
+			}
+			sub["enum"], _ = json.Marshal(values)
+			schema["not"], _ = json.Marshal(sub)
+		}
 		return nil
 	}
 	var values []string
@@ -529,12 +542,25 @@ func normalizeNotSchema(schema map[string]json.RawMessage) error {
 		}
 		values = []string{value}
 	}
-	if len(values) == 0 {
+	if values = excludeEmptyString(schema, values, true); len(values) == 0 {
 		delete(schema, "not")
 		return nil
 	}
 	schema["not"], _ = json.Marshal(map[string]any{"type": "string", "enum": values})
 	return nil
+}
+
+// excludeEmptyString 去掉排除值中上游拒绝的空串，pure 表示 not 只是纯枚举排除，此时字符串节点改写为 minLength 1；返回其余排除值
+func excludeEmptyString(schema map[string]json.RawMessage, values []string, pure bool) []string {
+	if !slices.Contains(values, "") {
+		return values
+	}
+	typeName, _ := schemaType(schema)
+	var minLength int
+	if pure && strings.EqualFold(typeName, "string") && (json.Unmarshal(schema["minLength"], &minLength) != nil || minLength < 1) {
+		schema["minLength"] = json.RawMessage("1")
+	}
+	return slices.DeleteFunc(values, func(value string) bool { return value == "" })
 }
 
 // normalizeImplicitType 从节点约束推导类型并保留开放的数组元素
@@ -746,7 +772,10 @@ func defineRequiredProperties(value any) bool {
 	return changed
 }
 
-// inlineSchemaRefs 把指向根 $defs 或 definitions 的本地 $ref 替换为被引用的定义，循环引用保留原节点
+// maxSchemaRefExpansions 为一个 Schema 中展开本地 $ref 的总次数上限
+const maxSchemaRefExpansions = 500
+
+// inlineSchemaRefs 把指向根 $defs 或 definitions 的本地 $ref 替换为被引用的定义，循环引用与超过 maxSchemaRefExpansions 之后的引用保留原节点
 func inlineSchemaRefs(raw json.RawMessage) json.RawMessage {
 	root, ok := decodeSchemaValue(raw).(map[string]any)
 	if !ok {
@@ -763,28 +792,30 @@ func inlineSchemaRefs(raw json.RawMessage) json.RawMessage {
 	if len(definitions) == 0 {
 		return raw
 	}
-	resolved := resolveSchemaRefs(root, definitions, nil).(map[string]any)
+	budget := maxSchemaRefExpansions
+	resolved := resolveSchemaRefs(root, definitions, nil, &budget).(map[string]any)
 	delete(resolved, "$defs")
 	delete(resolved, "definitions")
 	encoded, _ := json.Marshal(resolved)
 	return encoded
 }
 
-// resolveSchemaRefs 递归替换本地 $ref，节点自身的其他字段优先于被引用定义的同名字段
-func resolveSchemaRefs(value any, definitions map[string]any, active []string) any {
+// resolveSchemaRefs 递归替换本地 $ref，节点自身的其他字段优先于被引用定义的同名字段，budget 为剩余的展开次数
+func resolveSchemaRefs(value any, definitions map[string]any, active []string, budget *int) any {
 	switch node := value.(type) {
 	case map[string]any:
 		if ref, ok := node["$ref"].(string); ok {
-			if definition, ok := definitions[ref]; ok && !slices.Contains(active, ref) {
+			if definition, ok := definitions[ref]; ok && !slices.Contains(active, ref) && *budget > 0 {
+				*budget--
 				merged := map[string]any{}
-				if target, ok := resolveSchemaRefs(definition, definitions, append(slices.Clip(active), ref)).(map[string]any); ok {
+				if target, ok := resolveSchemaRefs(definition, definitions, append(slices.Clip(active), ref), budget).(map[string]any); ok {
 					for key, item := range target {
 						merged[key] = item
 					}
 				}
 				for key, item := range node {
 					if key != "$ref" {
-						merged[key] = resolveSchemaRefs(item, definitions, active)
+						merged[key] = resolveSchemaRefs(item, definitions, active, budget)
 					}
 				}
 				return merged
@@ -792,13 +823,13 @@ func resolveSchemaRefs(value any, definitions map[string]any, active []string) a
 		}
 		result := make(map[string]any, len(node))
 		for key, item := range node {
-			result[key] = resolveSchemaRefs(item, definitions, active)
+			result[key] = resolveSchemaRefs(item, definitions, active, budget)
 		}
 		return result
 	case []any:
 		result := make([]any, len(node))
 		for index, item := range node {
-			result[index] = resolveSchemaRefs(item, definitions, active)
+			result[index] = resolveSchemaRefs(item, definitions, active, budget)
 		}
 		return result
 	}
@@ -812,6 +843,10 @@ const responseSchemaNote = "The response must follow this JSON Schema: "
 func encodeResponseSchema(raw json.RawMessage) (map[string]any, error) {
 	encoded, err := geminiSchema(raw)
 	if err == nil {
+		if schemaHasEmptyEnum(raw) {
+			description, _ := encoded["description"].(string)
+			encoded["description"] = describedSchema(description, raw)
+		}
 		return encoded, nil
 	}
 	if errors.Is(err, errSchemaForbidsAll) {
@@ -832,6 +867,30 @@ func encodeResponseSchema(raw json.RawMessage) (map[string]any, error) {
 	description, _ := encoded["description"].(string)
 	encoded["description"] = describedSchema(description, raw)
 	return encoded, nil
+}
+
+// schemaHasEmptyEnum 判断 Schema 的 enum 含上游拒绝的空串，编码时去掉空串并在说明附完整 Schema
+func schemaHasEmptyEnum(raw json.RawMessage) bool {
+	return slices.ContainsFunc(schemaEnums(decodeSchemaValue(raw)), func(values []any) bool { return slices.Contains(values, any("")) })
+}
+
+// schemaEnums 返回 Schema 各层节点的 enum 取值
+func schemaEnums(value any) [][]any {
+	var enums [][]any
+	switch node := value.(type) {
+	case map[string]any:
+		if values, ok := node["enum"].([]any); ok {
+			enums = append(enums, values)
+		}
+		for _, item := range node {
+			enums = append(enums, schemaEnums(item)...)
+		}
+	case []any:
+		for _, item := range node {
+			enums = append(enums, schemaEnums(item)...)
+		}
+	}
+	return enums
 }
 
 // describedSchema 返回附加完整 JSON Schema 后的说明，已附加时原样返回

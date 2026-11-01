@@ -20,7 +20,7 @@ type geminiPredictRequest struct {
 	} `json:"parameters"`
 }
 
-// handleGeminiPredict 把 Imagen predict 请求转为 GenerateImage，响应为 predictions 中的 base64 图片
+// handleGeminiPredict 把 Imagen predict 请求的每个 instance 转为 GenerateImage，响应为按 instances 顺序排列的 predictions 中的 base64 图片
 func (s *server) handleGeminiPredict(w http.ResponseWriter, r *http.Request, model string) {
 	service, ok := s.service.(aistudio.ImageService)
 	if !ok {
@@ -32,26 +32,30 @@ func (s *server) handleGeminiPredict(w http.ResponseWriter, r *http.Request, mod
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	if len(request.Instances) != 1 {
-		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "instances must contain one instance")
+	if len(request.Instances) == 0 {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "instances is required")
 		return
 	}
 	var stopKeepalive func()
 	w, stopKeepalive = s.nonstreamKeepalive(w, r)
 	defer stopKeepalive()
-	images, err := service.GenerateImage(r.Context(), aistudio.ImageRequest{
-		Model:          model,
-		Prompt:         request.Instances[0].Prompt,
-		SampleCount:    request.Parameters.SampleCount,
-		NegativePrompt: request.Parameters.NegativePrompt,
-		AspectRatio:    request.Parameters.AspectRatio,
-		ImageSize:      request.Parameters.ImageSize,
-	})
-	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeGeminiRequestError(w, err)
+	var images []aistudio.GeneratedImage
+	for _, instance := range request.Instances {
+		generated, err := service.GenerateImage(r.Context(), aistudio.ImageRequest{
+			Model:          model,
+			Prompt:         instance.Prompt,
+			SampleCount:    request.Parameters.SampleCount,
+			NegativePrompt: request.Parameters.NegativePrompt,
+			AspectRatio:    request.Parameters.AspectRatio,
+			ImageSize:      request.Parameters.ImageSize,
+		})
+		if err != nil {
+			if shouldWriteRequestError(r, err) {
+				writeGeminiRequestError(w, err)
+			}
+			return
 		}
-		return
+		images = append(images, generated...)
 	}
 	predictions := make([]map[string]any, 0, len(images))
 	for _, image := range images {

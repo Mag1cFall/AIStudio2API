@@ -20,6 +20,7 @@ type managedService interface {
 	aistudio.Service
 	State() string
 	ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int)
+	SetAPIKeyAccounts(map[string][]string)
 }
 
 // generationAdmin 表示进程级管理器转交给当前生成服务的管理操作
@@ -122,6 +123,7 @@ func newRuntimeManager(
 	if err != nil {
 		return nil, err
 	}
+	generation.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts, cfg))
 	manager.current = generation
 	return manager, nil
 }
@@ -194,6 +196,7 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 		return manager.Status(ctx)
 	}
 
+	next.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts, manager.activeManagement))
 	manager.mu.Lock()
 	current = manager.current
 	manager.current = next
@@ -529,6 +532,7 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	manager.mu.Lock()
 	updated, err := manager.current.admin.UpdateRuntimeConfig(ctx, value)
 	if err == nil {
+		manager.current.service.SetAPIKeyAccounts(apiKeyAccounts(updated.APIKey, updated.APIKeyAccounts, manager.activeManagement))
 		manager.current.service.ApplyCapacity(
 			updated.WarmWorkerLimit, updated.MaxActiveWorkers, updated.WarmStartupConcurrency, updated.PerAccountConcurrency,
 		)
@@ -613,20 +617,21 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	saved := config.Config{
 		AuthStates: value.AuthStates, Proxy: value.Proxy,
 		InitTimeout: initTimeout, RequestTimeout: requestTimeout, TemporaryChat: value.TemporaryChat,
-		UpstreamChannels:     value.UpstreamChannels,
-		ModelMapping:         value.ModelMapping,
-		WAABackend:           value.WAABackend,
-		BuildNativeNonstream: value.BuildNativeNonstream,
-		NonstreamKeepalive:   value.NonstreamKeepalive,
-		FakeStream:           value.FakeStream,
-		YouTubeLinks:         value.YouTubeLinks,
-		SearchModelAliases:   value.SearchModelAliases,
-		GoogleSearch:         value.GoogleSearch,
-		FirstEventHedge:      value.FirstEventHedge,
-		ContinuationRewrite:  value.ContinuationRewrite,
-		ContinuationPrompt:   value.ContinuationPrompt,
-		MediaOutput:          value.MediaOutput,
-		MediaBaseURL:         value.MediaBaseURL,
+		UpstreamChannels:      value.UpstreamChannels,
+		ModelMapping:          value.ModelMapping,
+		WAABackend:            value.WAABackend,
+		BuildNativeNonstream:  value.BuildNativeNonstream,
+		NonstreamKeepalive:    value.NonstreamKeepalive,
+		FakeStream:            value.FakeStream,
+		YouTubeLinks:          value.YouTubeLinks,
+		SearchModelAliases:    value.SearchModelAliases,
+		GoogleSearch:          value.GoogleSearch,
+		FirstEventHedge:       value.FirstEventHedge,
+		FirstEventHedgeModels: value.FirstEventHedgeModels,
+		ContinuationRewrite:   value.ContinuationRewrite,
+		ContinuationPrompt:    value.ContinuationPrompt,
+		MediaOutput:           value.MediaOutput,
+		MediaBaseURL:          value.MediaBaseURL,
 	}
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
@@ -636,7 +641,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
-		saved.YouTubeLinks == active.YouTubeLinks && saved.FirstEventHedge == active.FirstEventHedge &&
+		saved.YouTubeLinks == active.YouTubeLinks && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
 		saved.SearchModelAliases == active.SearchModelAliases && saved.GoogleSearch == active.GoogleSearch &&
 		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL

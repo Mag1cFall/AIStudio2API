@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"sort"
@@ -49,6 +50,42 @@ func (p *AccountPool) SetModelChannels(channels map[string]Channel) {
 	defer p.mu.Unlock()
 	p.modelChannels = maps.Clone(channels)
 	p.notifyLocked()
+}
+
+// apiKeyContextKey 是请求上下文中所用 API key 的键
+type apiKeyContextKey struct{}
+
+// ContextWithAPIKey 返回带有请求所用 API key 的上下文，账户池只在该 key 绑定的账户中选号
+func ContextWithAPIKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, apiKeyContextKey{}, key)
+}
+
+// SetAPIKeyAccounts 设置各 API key 可用的账户 ID，未列出的 key 可用全部账户
+func (p *AccountPool) SetAPIKeyAccounts(accounts map[string][]string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.apiKeyAccounts = maps.Clone(accounts)
+	p.notifyLocked()
+}
+
+// keyScopedSelection 把请求所用 API key 绑定的账户并入选择的允许账户
+func (p *AccountPool) keyScopedSelection(ctx context.Context, selection AccountSelection) AccountSelection {
+	key, _ := ctx.Value(apiKeyContextKey{}).(string)
+	if key == "" {
+		return selection
+	}
+	p.mu.Lock()
+	scope, bound := p.apiKeyAccounts[key]
+	p.mu.Unlock()
+	if !bound {
+		return selection
+	}
+	if selection.AllowedAccountIDs == nil {
+		selection.AllowedAccountIDs = scope
+		return selection
+	}
+	selection.AllowedAccountIDs = slices.DeleteFunc(slices.Clone(selection.AllowedAccountIDs), func(id string) bool { return !slices.Contains(scope, id) })
+	return selection
 }
 
 // SetBuildCatalog 保存账户 Build 代理返回的 Gemini API 模型目录
@@ -171,7 +208,7 @@ func (p *AccountPool) preferredChannelOpenLocked(account *Account, selection Acc
 		!p.channelSupportsLocked(account, preferred, selection) {
 		return false
 	}
-	_, cooling := accountCooldown(account, ChannelCooldownScope(preferred, selectionAccessScope(selection)), now)
+	_, cooling := selectionCooldown(account, ChannelCooldownScope(preferred, selectionAccessScope(selection)), selection, now)
 	return !cooling
 }
 
@@ -218,7 +255,7 @@ func (p *AccountPool) accountChannelCooldownLocked(account *Account, selection A
 		if !p.channelSupportsLocked(account, channel, selection) {
 			continue
 		}
-		cooldown, active := accountCooldown(account, ChannelCooldownScope(channel, scope), now)
+		cooldown, active := selectionCooldown(account, ChannelCooldownScope(channel, scope), selection, now)
 		if !active {
 			return CooldownState{}, false
 		}

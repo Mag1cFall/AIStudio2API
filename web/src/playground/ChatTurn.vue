@@ -15,6 +15,7 @@ import { copyToClipboard } from './clipboard'
 import { useRunningClock } from './clock'
 import CodeBlock from './CodeBlock.vue'
 import FileChunk from './FileChunk.vue'
+import FunctionCallChunk from './FunctionCallChunk.vue'
 import { driveNames } from './drive'
 import LoadingIndicator from './LoadingIndicator.vue'
 import MarkdownView from './MarkdownView.vue'
@@ -46,7 +47,6 @@ const answer = ref<HTMLElement>()
 const editing = ref(false)
 const draft = ref('')
 const editor = ref<HTMLTextAreaElement>()
-const functionReply = ref('')
 // visible 表示轮次在视口附近；离屏且不在生成时用占位高度代替内容
 const visible = ref(true)
 const height = ref(0)
@@ -174,13 +174,6 @@ function responseText(call: NonNullable<Part['functionCall']>): string {
   return keys.length === 1 && keys[0] === 'result' && typeof response.result === 'string'
     ? response.result
     : JSON.stringify(response)
-}
-
-// sendResponse 以函数响应继续生成
-function sendResponse(call: NonNullable<Part['functionCall']>): void {
-  if (functionReply.value.trim() === '') return
-  playground.respond(call, functionReply.value)
-  functionReply.value = ''
 }
 
 // startEdit 进入编辑：文本变为可编辑文本框
@@ -455,44 +448,13 @@ onActivated(observe)
                 :class="{ 'chunk-gap': partIndex < answerParts.length - 1 }"
               />
             </template>
-            <CodeBlock
+            <FunctionCallChunk
               v-else-if="part.functionCall"
-              :code="
-                part.functionCall.args ? JSON.stringify(part.functionCall.args, undefined, 2) : ''
-              "
-              :header-text="part.functionCall.name"
-              icon="functionCalling"
-              show-divider
-            >
-              <form class="function-response" @submit.prevent="sendResponse(part.functionCall)">
-                <input
-                  v-if="awaitingResponse"
-                  v-model="functionReply"
-                  ms-input
-                  class="function-response-input"
-                  :aria-label="t('pg.functionResponse')"
-                  :placeholder="t('pg.functionResponse')"
-                />
-                <input
-                  v-else
-                  ms-input
-                  class="function-response-input"
-                  :aria-label="t('pg.functionResponse')"
-                  :placeholder="t('pg.functionResponse')"
-                  :value="responseText(part.functionCall)"
-                  disabled
-                />
-                <button
-                  v-if="awaitingResponse"
-                  type="submit"
-                  ms-button
-                  class="ms-button-primary"
-                  :disabled="functionReply.trim() === ''"
-                >
-                  {{ t('pg.send') }}
-                </button>
-              </form>
-            </CodeBlock>
+              :call="part.functionCall"
+              :response="responseText(part.functionCall)"
+              :awaiting="awaitingResponse"
+              @respond="playground.respond(part.functionCall, $event)"
+            />
             <CodeBlock
               v-else-if="part.executableCode"
               :code="part.executableCode.code"
@@ -856,17 +818,6 @@ onActivated(observe)
 
 .chip:hover {
   background-color: var(--color-search-entry-point-chip-hover-background-color);
-}
-
-.function-response {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-}
-
-.function-response-input {
-  flex: 1;
 }
 
 .media-image {

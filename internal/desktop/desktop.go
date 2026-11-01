@@ -92,6 +92,8 @@ func New(show bool, webviewDir string) *App {
 			WndProcInterceptor:            shell.trayMessage,
 		},
 		RawMessageHandler: shell.handleMessage,
+		ErrorHandler:      func(err error) { slog.Error("桌面窗口错误", "error", err) },
+		WarningHandler:    func(message string) { slog.Warn("桌面窗口警告", "message", message) },
 	})
 	if runtime.GOOS == "windows" && shell.app.Env.Info().PlatformInfo["WebView2"] == "" && !(show && installWebView2()) {
 		slog.Warn("没有找到 WebView2 运行时，管理页面在默认浏览器中打开")

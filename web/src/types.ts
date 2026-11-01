@@ -301,6 +301,7 @@ export interface ServiceConfig {
   continuation_rewrite: boolean
   continuation_prompt: string
   first_event_hedge: string
+  first_event_hedge_models: string
   auth_states: string
   listen_addr: string
   preview_listen_addr: string
@@ -324,10 +325,20 @@ export interface ServiceConfig {
   upstream_channels: UpstreamChannel[]
   model_mapping: string
   model_channels: string
+  api_key_accounts: string
   waa_backend: 'camoufox' | 'spidermonkey'
   temporary_chat: boolean
   media_output: 'inline' | 'url'
   media_base_url: string
+  environment: string[]
+  invalid: InvalidConfigValue[]
+}
+
+// InvalidConfigValue 是加载时取值无效、按默认值生效的配置项
+export interface InvalidConfigValue {
+  key: string
+  value: string
+  reason: string
 }
 
 export type UsageDimension = 'model' | 'account' | 'channel' | 'protocol' | 'state'

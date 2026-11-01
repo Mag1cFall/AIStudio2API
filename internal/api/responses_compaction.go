@@ -406,7 +406,7 @@ func (s *server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id := newID("resp")
-	prepared, err := s.prepareResponses(r.Context(), &request, id)
+	prepared, err := s.prepareResponses(r.Context(), &request, id, false)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())

@@ -591,7 +591,7 @@ AUDIO 采用独立输出模态，与其他模态同时请求时按模型能力�
 | `$[0][frame][7]` | turnToken |
 | `$[0][frame][3]` 且 frame 0 为空 | interaction metadata |
 
-传输正文是一个 JSON 根值，网络 chunk 提供字节；解码器在 `$[0]` 中每出现一个完整 repeated frame 时立即消费该 frame。每个内容帧包含一个 candidate，candidate content 为 `[[parts...], "model"]`。完成帧可以同时携带最后一组 Part、usage、turnToken 和 finish reason，根数组解析完成后结束读取。turnToken 为 `v1_` 加 Base64 protobuf，field 2 为该响应的 responseId，同一响应的各帧相同；服务以该 responseId 作为 Gemini 输出的 `responseId`。
+传输正文是一个 JSON 根值，网络 chunk 提供字节；解码器在 `$[0]` 中每出现一个完整 repeated frame 时立即消费该 frame。每个内容帧包含一个 candidate，candidate content 为 `[[parts...], "model"]`。完成帧可以同时携带最后一组 Part、usage、turnToken 和 finish reason，根数组解析完成后结束读取。出错时根索引 `1` 为流尾 google.rpc 状态 `[code, message, details]`，code 不为 0 时按 [Build 通道](build.md) 的流尾状态表换算 HTTP 状态，以该上游错误结束回复。turnToken 为 `v1_` 加 Base64 protobuf，field 2 为该响应的 responseId，同一响应的各帧相同；服务以该 responseId 作为 Gemini 输出的 `responseId`。
 
 从 `$[0]` 提取出的文本帧：
 
@@ -752,7 +752,7 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 | 18 | missing_thought_signature | 19 | malformed_response |
 | 22 | continuation | 其他整数 | `provider_<code>` |
 
-Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
+Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call` 或 `unexpected_tool_call` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时，服务在同一账户上以同一请求重新生成，最多再生成 3 次，之后按最后一次的终止原因或中断错误结束；每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
 
 候选 field 5（`$[0][frame][0][0][4]`）为安全评级 `[[null, null, 类别, 概率, blocked?], ...]`，类别编号与安全设置相同，概率 `NEGLIGIBLE`=1、`LOW`=2、`MEDIUM`=3、`HIGH`=4；输入拒绝帧 `[null,[block_reason,ratings?,message]]` 的 ratings 为同形数组。Build 通道读取候选与 `promptFeedback` 的 `safetyRatings`。
 
@@ -979,7 +979,7 @@ GET clients6.google.com Drive v3 discovery（每个账户第一次上传前一�
 
 Drive token、上传和下载使用文件所属账户的固定出口。文件 ID 与账户绑定写入 `runtime-state.json`；生成请求可以组合不同账户的文件，其他账户的文件会临时复制到本次生成账户；失败尝试的副本随即回收，成功尝试的副本在请求结束后回收。
 
-生成请求的内联附件优先上传到本次生成账户，正文使用 Drive file Part。上传的文件以请求给出的文件名命名，没有文件名时为 `inline-media-<序号>`，模型以这个名称引用附件。上传的文件以 `inline-media` 绑定写入该账户的 `runtime-state.json`，记录 MIME、内容的 SHA-256、请求给出的文件名与最近使用时间，不出现在公开文件接口中；同一账户之后的请求中 MIME、内容与文件名都相同的附件直接引用该文件，同一请求中相同的附件只上传一次；闲置 1 小时且没有进行中的请求引用的文件，在该账户下一次带内联附件的请求结束时删除。`GenerateContent` 返回 404 且请求引用了已上传的内联附件时，服务以 `GET https://www.googleapis.com/drive/v3/files/<ID>` 查询这些文件，解除已不存在的文件的绑定，在同一账户重新上传后重试一次。`GenerateAccessToken` 明确返回 `401`、Code 16 和 `OAuth error: unauthorized_client` 时，正文保留原始 inline data Part，账户继续参与普通生成调度；其他令牌错误保持失败语义。上传使用公开适配器输出的 MIME 和字节内容。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
+生成请求的内联附件优先上传到本次生成账户，正文使用 Drive file Part。上传的文件以请求给出的文件名命名，没有文件名时为 `inline-media-<序号>`，模型以这个名称引用附件。上传的文件以 `inline-media` 绑定写入该账户的 `runtime-state.json`，记录 MIME、内容的 SHA-256、请求给出的文件名与最近使用时间，不出现在公开文件接口中；同一账户之后的请求中 MIME、内容与文件名都相同的附件直接引用该文件，同一请求中相同的附件只上传一次；闲置 1 小时且没有进行中的请求引用的文件，在该账户下一次带内联附件的请求结束时删除，没有后续请求时由生成服务每 10 分钟一次的账户巡检删除。`GenerateContent` 返回 404 且请求引用了已上传的内联附件时，服务以 `GET https://www.googleapis.com/drive/v3/files/<ID>` 查询这些文件，解除已不存在的文件的绑定，在同一账户重新上传后重试一次。`GenerateAccessToken` 明确返回 `401`、Code 16 和 `OAuth error: unauthorized_client` 时，正文保留原始 inline data Part，账户继续参与普通生成调度；其他令牌错误保持失败语义。上传使用公开适配器输出的 MIME 和字节内容。图片、音频、视频、PDF 等附件的支持范围由所选模型决定。普通文本和 YouTube 外部媒体保持各自的 Part 编码。
 
 `POST /v1/files` 的未知长度上传使用 Drive resumable upload 和 8 MiB 分块，`GET /v1/files/{id}` 从资源绑定读取文件名、大小、purpose 与创建时间；客户端取消会终止上传并释放账户租约。公开文件字段见“Files、Transcribe 与媒体”节。
 
@@ -1809,12 +1809,12 @@ Responses 的图片、视频与文件 Part 复用上述 data URL、file ID 与 Y
 | `apply_patch_call` | `apply_patch` 函数调用，参数为 `operation` |
 | `custom_tool_call_output`、`local_shell_call_output`、`shell_call_output`、`apply_patch_call_output` | 按 `call_id` 关联的函数结果 |
 | `computer_call` | `computer` 函数调用，参数为 `action`，或 `{"actions":[...]}` |
-| `web_search_call`、`code_interpreter_call`、`file_search_call`、`mcp_call`、`mcp_list_tools`、`mcp_approval_request`、`tool_search_call`、`tool_search_output`、`program`、`program_output` | assistant 文本摘要 `<type> <JSON>` |
+| `web_search_call`、`code_interpreter_call`、`file_search_call`、`mcp_call`、`mcp_list_tools`、`mcp_approval_request`、`tool_search_call`、`tool_search_output`、`program`、`program_output` | assistant 文本摘要 `<type> <JSON>`；输入含 `mcp_approval_response` 时 `mcp_approval_request` 为 `mcp__<server_label>__<name>` 函数调用，带 `approval_request_id` 的 `mcp_call` 并入对应函数结果 |
 | `additional_tools` | `tools` 并入请求的工具列表 |
 | `configuration_update` | 最后一个带 `reasoning.effort` 的项覆盖请求的推理强度 |
 | `image_generation_call` | assistant 文本摘要与 `result` 图片 |
 | `computer_call_output` | 按 `call_id` 关联的 `computer` 函数结果 `{"type":"computer_screenshot"}`，截图作为图片 |
-| `mcp_approval_response` | user 文本摘要 |
+| `mcp_approval_response` | 对应批准请求的函数结果：批准时为服务调用该 MCP 工具得到的 `output` 与 `error`，拒绝时为带 `reason` 的拒绝说明；批准请求取自输入或 `previous_response_id` 的输出，找不到时返回 400；`/v1/responses/input_tokens` 与 `/v1/responses/compact` 不调用工具，批准的函数结果的 `output` 与 `error` 均为 null |
 | `item_reference` | 当前进程保存的同 ID 输入项或输出项 |
 | `compaction` | 摘要 user 轮与原样保留的条目，见下文上下文压缩 |
 | `compaction_trigger` | 压缩当前上下文，必须是最后一个输入项，其他位置返回 400 |
@@ -1840,7 +1840,7 @@ Responses tool 字段：
 
 - web search 工具的 `search_context_size`、`user_location` 与 `filters.allowed_domains` 写入搜索指令，域名限制使用 `site:` 查询；上游 grounding query 与 sources 原样返回
 - `search_content_types` 只含 `image` 时只开启图片搜索，同时含 `text` 时同时开启网页搜索；图片搜索查询同样输出为 `web_search_call`
-- `mcp` 工具的 `require_approval` 必须为 `never`，上游在生成中调用 MCP 工具，其他取值与 `connector_id` 返回 400；`allowed_tools.read_only:true` 时服务经出口代理以 `server_url` 与请求头读取该服务器的 `tools/list`，只允许 `annotations.readOnlyHint` 为 true 的工具，同时给出 `tool_names` 时取交集，没有允许的工具时不连接该服务器，`tools/list` 失败返回 400 并说明原因；上游的 MCP 调用输出为 `mcp_call` 项，`output` 为工具结果文本
+- `mcp` 工具的 `require_approval` 省略或为 `always` 时全部工具需要批准，为 `never` 时全部不需要；为对象时 `never` 过滤匹配且 `always` 过滤不匹配的工具不需要批准，其余需要批准，过滤的 `tool_names` 与 `read_only` 同时给出时都要满足。不需要批准的工具由上游在生成中直接调用；需要批准的工具由服务经出口代理读取 `tools/list`，声明为 `mcp__<server_label>__<name>` 函数，模型调用时输出 `mcp_approval_request` 项（`id` 为 `mcpr_` 加调用 ID）并结束本轮；下一轮输入给出 `mcp_approval_response` 且 `approve` 为 true 时，服务以 `tools/call` 调用该工具，结果以带 `approval_request_id` 的 `mcp_call` 项排在本轮输出首位，客户端回传该 `mcp_call` 时不再调用。需要批准的工具按 `tool_choice` 展开：为 `none` 或指定函数时不读取 `tools/list`，为 `mcp` 或 `allowed_tools` 时只声明其中列出的服务器与工具，`allowed_tools` 同时列出函数时，声明的 MCP 工具函数也加入允许调用的函数；`additional_tools` 输入项中的 `mcp` 工具与 `tools` 中的相同。`connector_id` 返回 400；`allowed_tools.read_only:true` 时服务经出口代理以 `server_url` 与请求头读取该服务器的 `tools/list`，只允许 `annotations.readOnlyHint` 为 true 的工具，同时给出 `tool_names` 时取交集，没有允许的工具时不连接该服务器，`tools/list` 失败返回 400 并说明原因；上游的 MCP 调用输出为 `mcp_call` 项，`output` 为工具结果文本
 - namespace 的 `description` 写在其中各函数描述之前
 - `code_interpreter.container` 为容器 ID 字符串时忽略；为对象时其 `file_ids` 作为文件引用附到最后一个 user 轮，没有 user 轮时作为新的 user 轮
 
@@ -2445,14 +2445,14 @@ Gemini `POST /v1beta/models/{model}:predict` 以 Imagen 模型生成图片，`{m
 
 | 字段 | 取值与处理 |
 | --- | --- |
-| `instances` | 一个实例，`prompt` 为提示词 |
+| `instances` | 一个或多个实例，`prompt` 为提示词；每个实例按同一组参数依次生成一次 |
 | `sampleCount` | 图片数 |
 | `aspectRatio` | 宽高比 |
 | `negativePrompt` | 反向提示词 |
 | `imageSize` | 输出分辨率 |
 | `includeRaiReason` | 为 true 时返回被拦下图片的原因 |
 
-响应 `predictions[]` 每项为 `bytesBase64Encoded` 与 `mimeType`。被安全策略拦下的图片在 `includeRaiReason` 为 true 时以 `{"raiFilteredReason": "<上游给出的原因>"}` 列出，否则省略；全部图片被拦下时响应为 `{}`。模型不在实时目录或没有 `predict` 方法时返回 404 `NOT_FOUND`，上游错误按 Gemini 错误体返回。
+响应 `predictions[]` 按 `instances` 顺序排列，每项为 `bytesBase64Encoded` 与 `mimeType`；某个实例生成出错时返回该错误。被安全策略拦下的图片在 `includeRaiReason` 为 true 时以 `{"raiFilteredReason": "<上游给出的原因>"}` 列出，否则省略；全部图片被拦下时响应为 `{}`。模型不在实时目录或没有 `predict` 方法时返回 404 `NOT_FOUND`，上游错误按 Gemini 错误体返回。
 
 ### Video
 
@@ -2523,7 +2523,7 @@ Gemini `:predictLongRunning` 请求：
 }
 ```
 
-`instances` 必须只有一个，其中至少有非空 prompt、image、lastFrame 或 referenceImages 之一；prompt 为空时上游请求的提示词位为 null，与官网视频页只有图片时相同；image 必须在 `inlineData` 与 `fileData:{mimeType,fileUri}` 中选择一个。`numberOfVideos` 为 0 时读取 `sampleCount`，两者均为 0 时默认 1，范围 1–4；每个视频创建一个上游任务。`durationSeconds` 接受 JSON integer 或十进制字符串。duration、aspect ratio 与 resolution 省略时分别为 `4`、`16:9`、`720p`，并换成实时模型 `video_durations_seconds`、`video_aspect_ratios`、`video_output_resolutions` 中最接近的取值（时长按秒数、宽高比按比值对数、分辨率按像素高度，距离相同时取较大值）；负数时长返回 400，模型列出对应选项时无法解析的宽高比与分辨率返回 400，未列出时原样发送。创建返回 `{"name":"operations/<ID>"}`，多个视频时 `<ID>` 为各任务 ID 以 `~` 连接；中途创建失败时停止，已创建的任务照常返回，第一个即失败时返回该错误。Gemini operation 使用同一份持久元数据恢复创建账户与轮询上下文；Gemini 响应只包含 `name`、`done` 与完成后的 `response.generateVideoResponse.generatedSamples`。
+`instances` 有一个或多个，每个实例至少有非空 prompt、image、lastFrame 或 referenceImages 之一；prompt 为空时上游请求的提示词位为 null，与官网视频页只有图片时相同；image 必须在 `inlineData` 与 `fileData:{mimeType,fileUri}` 中选择一个。`numberOfVideos` 为 0 时读取 `sampleCount`，两者均为 0 时默认 1，范围 1–4，为每个实例各生成这些视频；每个视频创建一个上游任务。`durationSeconds` 接受 JSON integer 或十进制字符串。duration、aspect ratio 与 resolution 省略时分别为 `4`、`16:9`、`720p`，并换成实时模型 `video_durations_seconds`、`video_aspect_ratios`、`video_output_resolutions` 中最接近的取值（时长按秒数、宽高比按比值对数、分辨率按像素高度，距离相同时取较大值）；负数时长返回 400，模型列出对应选项时无法解析的宽高比与分辨率返回 400，未列出时原样发送。创建返回 `{"name":"operations/<ID>"}`，多个视频时 `<ID>` 为各任务 ID 按实例顺序以 `~` 连接；中途创建失败时停止，已创建的任务照常返回，第一个即失败时返回该错误。Gemini operation 使用同一份持久元数据恢复创建账户与轮询上下文；Gemini 响应只包含 `name`、`done` 与完成后的 `response.generateVideoResponse.generatedSamples`。
 
 `GET /v1beta/operations/{id}`：
 

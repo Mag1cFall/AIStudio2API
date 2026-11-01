@@ -31,6 +31,7 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': '서비스 상태',
   'app.start': '서비스 시작',
   'app.stop': '서비스 중지',
+  'app.invalidConfig': '다음 설정 값이 올바르지 않아 기본값으로 실행 중입니다:',
   'app.listenReserved':
     '{reserved}의 포트가 예약되어 {active}에서 수신합니다. 이 주소를 사용하고, 수신 주소로 포트를 고정하세요',
   'app.language': '표시 언어',
@@ -253,6 +254,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listen': '수신 주소',
   'settings.previewListen': '미리보기 수신 주소',
   'settings.apiKey': '로컬 API 키',
+  'settings.apiKeyAccounts': '키별 사용 계정',
   'settings.proxy': '기본 프록시',
   'settings.initTimeout': '초기화 제한 시간',
   'settings.requestTimeout': '요청 제한 시간',
@@ -274,7 +276,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.upstreamChannelsHelp':
     '기본은 Playground. Build는 이전 채널로 업스트림 생성 중단. 켜면 거부된 요청은 Playground로 완료',
   'settings.modelMapping': '모델 매핑',
-  'settings.modelMappingHelp': '각 항목을 별칭:모델 ID로 쓰고 쉼표로 구분',
+  'settings.modelMappingHelp': '왼쪽 모델 이름으로 온 요청에 오른쪽 모델을 사용합니다',
   'settings.modelChannels': '모델 채널',
   'settings.mediaOutput': '미디어 출력',
   'settings.mediaOutputHelp':
@@ -284,8 +286,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURL': '미디어 링크 주소',
   'settings.mediaBaseURLHelp':
     '미디어 링크에 쓰는 서비스 주소입니다. 비워 두면 각 요청이 접속한 주소를 씁니다.',
-  'settings.modelChannelsHelp':
-    '모델을 한 채널로 제한: 각 항목은 모델 ID:playground 또는 build, 모델 상세에서도 선택 가능',
+  'settings.modelChannelsHelp': '모델을 한 채널로 제한합니다. 모델 상세에서도 선택할 수 있습니다',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build 채팅',
@@ -327,6 +328,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.expandCode': '코드 스니펫 펼치기',
   'pg.expandDiagram': '다이어그램 펼치기',
   'pg.functionResponse': '함수 응답 입력',
+  'pg.functionInput': '입력',
+  'pg.functionOutput': '출력',
   'pg.mermaidDiagram': 'Mermaid 다이어그램',
   'pg.preview': '미리보기',
   'pg.property': '속성',
@@ -1437,6 +1440,23 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listenHelp': '콘솔과 공개 API가 함께 쓰는 수신 주소입니다.',
   'settings.previewListenHelp':
     'API 플레이그라운드 HTML 미리보기용 출처입니다. 현재 호스트 이름과 이 포트로 엽니다.',
+  'settings.apiKeyAccountsHelp':
+    '각 키의 요청을 처리할 계정을 선택합니다. 선택하지 않으면 모든 계정을 사용합니다',
+  'settings.keyAccountsAll': '모든 계정',
+  'settings.keyAccountsSome': '선택한 계정',
+  'settings.accountSearch': '계정 검색',
+  'settings.accountNone': '일치하는 계정이 없습니다',
+  'settings.keyAccountsClear': '모든 계정 사용',
+  'settings.hedgeModelsNone': '선택한 모델 없음',
+  'settings.hedgeModelsSome': '선택한 모델',
+  'settings.modelSearch': '모델 검색',
+  'settings.modelNone': '일치하는 모델이 없습니다',
+  'settings.selectionClear': '선택 해제',
+  'settings.aliasPlaceholder': '별칭',
+  'settings.selectModel': '모델 선택',
+  'settings.selectChannel': '채널 선택',
+  'settings.addMapping': '매핑 추가',
+  'settings.addModelChannel': '모델 추가',
   'settings.apiKeyHelp': '여러 키는 쉼표로 구분. 비우면 이 컴퓨터의 페이지만 호출할 수 있습니다',
   'settings.authPathHelp': '계정 파일, 디렉터리 또는 쉼표로 구분한 여러 경로입니다.',
   'settings.warmWorkerLimitHelp': '생성 서비스 시작 후 예열 상태로 상주시킬 계정 수입니다.',
@@ -1451,8 +1471,11 @@ export const messages: Record<TranslationKey, string> = {
     '스트리밍 요청은 전체 결과를 받은 뒤 스트림으로 출력하며, 대기 중 하트비트를 보내고 생성에 실패하면 다른 계정으로 재시도',
   'settings.youtubeLinksHelp': '사용자 메시지 본문의 YouTube 링크를 동영상으로 모델에 전송',
   'settings.temporaryChatHelp': 'WAA 예열 페이지에서 임시 채팅을 사용합니다.',
-  'settings.initTimeoutHelp': '계정별 WAA 초기화에 허용하는 최대 시간입니다(예: 2m).',
-  'settings.requestTimeoutHelp': '요청 하나에 허용하는 최대 실행 시간입니다(예: 5m).',
+  'settings.initTimeoutHelp': '계정별 WAA 초기화에 허용하는 최대 시간입니다.',
+  'settings.requestTimeoutHelp': '요청 하나에 허용하는 최대 실행 시간입니다.',
+  'settings.unitSeconds': '초',
+  'settings.unitMinutes': '분',
+  'settings.timeUnit': '시간 단위',
   'settings.firstEventHedge': '첫 토큰 지연 시 예비 요청',
   'settings.firstEventHedgeHelp':
     '첫 토큰이 늦으면 유휴 계정으로 한 번 더 보내고, 먼저 응답한 쪽을 계속하며 다른 쪽은 취소합니다',
@@ -1464,6 +1487,10 @@ export const messages: Record<TranslationKey, string> = {
   'settings.firstEventHedgeAutoHint':
     '모델과 채널마다 최근 24시간 첫 토큰 p95만큼 기다리며, 요청이 20건 미만이면 보내지 않습니다',
   'settings.firstEventHedgeCustomHint': '참고: {model}의 최근 24시간 첫 토큰 p95는 {seconds}초',
+  'settings.firstEventHedgeModels': '예비 요청을 보낼 모델',
+  'settings.firstEventHedgeModelsHelp':
+    '예비 요청은 취소되어도 요청 한 번의 할당량을 씁니다. 토큰제는 Ultra 계정의 gemini-4-argon뿐이며 다른 모델은 횟수제라 권장하지 않습니다',
+  'settings.environmentLocked': '환경 변수 {key}(으)로 지정되어 여기서 변경할 수 없습니다',
   'settings.proxyHelp':
     'HTTP, HTTPS 또는 SOCKS5 프록시. 쉼표로 여러 개를 구분하면 프록시 풀이 되며, 비우면 시스템 프록시 사용',
   'settings.proxyPool': '프록시 풀',

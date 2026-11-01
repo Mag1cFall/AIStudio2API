@@ -31,6 +31,8 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': 'État du service',
   'app.start': 'Démarrer le service',
   'app.stop': 'Arrêter le service',
+  'app.invalidConfig':
+    'Ces paramètres ont des valeurs non valides et utilisent leur valeur par défaut :',
   'app.listenReserved':
     'Le port de {reserved} est réservé par Windows : écoute sur {active}, que les clients doivent utiliser. Fixez le port via l’adresse d’écoute',
   'app.language': 'Langue',
@@ -259,6 +261,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listen': 'Adresse d’écoute',
   'settings.previewListen': 'Adresse d’écoute de l’aperçu',
   'settings.apiKey': 'Clé API locale',
+  'settings.apiKeyAccounts': 'Comptes par clé',
   'settings.proxy': 'Proxy par défaut',
   'settings.initTimeout': 'Délai d’initialisation',
   'settings.requestTimeout': 'Délai de requête',
@@ -281,7 +284,7 @@ export const messages: Record<TranslationKey, string> = {
     'Playground est le canal par défaut. Build est l’ancien canal, à génération désactivée en amont ; activé, les requêtes refusées passent par Playground',
   'settings.modelMapping': 'Correspondance des modèles',
   'settings.modelMappingHelp':
-    'Chaque entrée au format alias:ID du modèle, séparées par des virgules',
+    'Les requêtes pour le nom de modèle de gauche utilisent le modèle de droite',
   'settings.modelChannels': 'Canaux des modèles',
   'settings.mediaOutput': 'Sortie des médias',
   'settings.mediaOutputHelp':
@@ -291,8 +294,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURL': 'Adresse des liens média',
   'settings.mediaBaseURLHelp':
     'Adresse du service utilisée dans les liens média. Vide : adresse de chaque requête.',
-  'settings.modelChannelsHelp':
-    'Limiter un modèle à un canal : ID du modèle:playground ou build par entrée ; aussi dans les détails du modèle',
+  'settings.modelChannelsHelp': 'Limiter un modèle à un canal ; aussi dans les détails du modèle',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Chat Build',
@@ -336,6 +338,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.expandCode': 'Développer l’extrait de code',
   'pg.expandDiagram': 'Développer le diagramme',
   'pg.functionResponse': 'Saisissez une réponse de fonction',
+  'pg.functionInput': 'Entrée',
+  'pg.functionOutput': 'Sortie',
   'pg.mermaidDiagram': 'Diagramme Mermaid',
   'pg.preview': 'Aperçu',
   'pg.property': 'Propriété',
@@ -1508,6 +1512,23 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listenHelp': 'Adresse d’écoute partagée par la console et l’API publique.',
   'settings.previewListenHelp':
     'Origine distincte des aperçus HTML du bac à sable API, ouverts avec le nom d’hôte actuel et ce port, différent du port d’écoute.',
+  'settings.apiKeyAccountsHelp':
+    'Choisissez les comptes qui traitent les requêtes de chaque clé. Sans sélection, la clé peut utiliser tous les comptes',
+  'settings.keyAccountsAll': 'Tous les comptes',
+  'settings.keyAccountsSome': 'Comptes choisis',
+  'settings.accountSearch': 'Rechercher un compte',
+  'settings.accountNone': 'Aucun compte correspondant',
+  'settings.keyAccountsClear': 'Utiliser tous les comptes',
+  'settings.hedgeModelsNone': 'Aucun modèle choisi',
+  'settings.hedgeModelsSome': 'Modèles choisis',
+  'settings.modelSearch': 'Rechercher un modèle',
+  'settings.modelNone': 'Aucun modèle correspondant',
+  'settings.selectionClear': 'Effacer la sélection',
+  'settings.aliasPlaceholder': 'Alias',
+  'settings.selectModel': 'Choisir un modèle',
+  'settings.selectChannel': 'Choisir un canal',
+  'settings.addMapping': 'Ajouter une correspondance',
+  'settings.addModelChannel': 'Ajouter un modèle',
   'settings.apiKeyHelp':
     'Séparez plusieurs clés par des virgules. Vide, seules les pages de cette machine peuvent appeler l’API',
   'settings.authPathHelp':
@@ -1526,8 +1547,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.youtubeLinksHelp':
     'Les liens YouTube du texte des messages utilisateur sont envoyés au modèle sous forme de vidéo',
   'settings.temporaryChatHelp': 'La page de préchauffage WAA utilise une discussion temporaire.',
-  'settings.initTimeoutHelp': 'Durée maximale de l’initialisation WAA d’un compte, par exemple 2m.',
-  'settings.requestTimeoutHelp': 'Durée d’exécution maximale d’une requête, par exemple 5m.',
+  'settings.initTimeoutHelp': 'Durée maximale de l’initialisation WAA d’un compte.',
+  'settings.requestTimeoutHelp': 'Durée d’exécution maximale d’une requête.',
+  'settings.unitSeconds': 'secondes',
+  'settings.unitMinutes': 'minutes',
+  'settings.timeUnit': 'Unité de temps',
   'settings.firstEventHedge': 'Requête de secours si le premier jeton tarde',
   'settings.firstEventHedgeHelp':
     'Si une requête n’a pas de premier jeton après un délai, elle est renvoyée sur un compte libre ; la première à répondre continue, l’autre est annulée',
@@ -1540,6 +1564,10 @@ export const messages: Record<TranslationKey, string> = {
     'Chaque modèle et canal attend son p95 du premier jeton sur les dernières 24 h ; pas de secours sous 20 requêtes',
   'settings.firstEventHedgeCustomHint':
     'Pour référence, p95 du premier jeton de {model} sur les dernières 24 h : {seconds} s',
+  'settings.firstEventHedgeModels': 'Modèles avec requête de secours',
+  'settings.firstEventHedgeModelsHelp':
+    'Une requête de secours compte pour une requête même annulée. Seul gemini-4-argon sur les comptes Ultra est limité en jetons ; les autres modèles sont limités en requêtes et déconseillés',
+  'settings.environmentLocked': 'Défini par la variable d’environnement {key} ; non modifiable ici',
   'settings.proxyHelp':
     'Proxy HTTP, HTTPS ou SOCKS5. Plusieurs séparés par des virgules forment un pool ; vide utilise le proxy système',
   'settings.proxyPool': 'Pool de proxys',

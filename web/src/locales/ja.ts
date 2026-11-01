@@ -31,6 +31,7 @@ export const messages: Record<TranslationKey, string> = {
   'app.status': 'サービスの状態',
   'app.start': 'サービスを開始',
   'app.stop': 'サービスを停止',
+  'app.invalidConfig': '次の設定値が無効なため、既定値で動作しています:',
   'app.listenReserved':
     '{reserved} のポートは予約済みのため {active} で待ち受けます。このアドレスを使い、待ち受けアドレスでポートを固定できます',
   'app.language': '表示言語',
@@ -257,6 +258,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listen': '待ち受けアドレス',
   'settings.previewListen': 'プレビューの待ち受けアドレス',
   'settings.apiKey': 'ローカル API キー',
+  'settings.apiKeyAccounts': 'キーごとの利用アカウント',
   'settings.proxy': 'デフォルトのプロキシ',
   'settings.initTimeout': '初期化のタイムアウト',
   'settings.requestTimeout': 'リクエストのタイムアウト',
@@ -278,7 +280,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.upstreamChannelsHelp':
     '既定は Playground。Build は旧チャネルで上流の生成は停止済み。オン時、拒否されたリクエストは Playground で完了',
   'settings.modelMapping': 'モデルのマッピング',
-  'settings.modelMappingHelp': '各項目を エイリアス:モデル ID の形で書き、カンマで区切る',
+  'settings.modelMappingHelp': '左のモデル名へのリクエストに右のモデルを使います',
   'settings.modelChannels': 'モデルのチャネル',
   'settings.mediaOutput': 'メディアの出力',
   'settings.mediaOutputHelp':
@@ -288,8 +290,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURL': 'メディアリンクのアドレス',
   'settings.mediaBaseURLHelp':
     'メディアリンクに使うサービスのアドレスです。空欄の場合は各リクエストのアクセス先を使います。',
-  'settings.modelChannelsHelp':
-    'モデルを 1 つのチャネルに限定：各項目は モデル ID:playground または build。モデル詳細でも選べます',
+  'settings.modelChannelsHelp': 'モデルを 1 つのチャネルに限定します。モデル詳細でも選べます',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build チャット',
@@ -331,6 +332,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.expandCode': 'コード スニペットを展開',
   'pg.expandDiagram': '図を展開',
   'pg.functionResponse': '関数のレスポンスを入力',
+  'pg.functionInput': '入力',
+  'pg.functionOutput': '出力',
   'pg.mermaidDiagram': 'Mermaid 図',
   'pg.preview': 'プレビュー',
   'pg.property': 'プロパティ',
@@ -1455,6 +1458,23 @@ export const messages: Record<TranslationKey, string> = {
   'settings.listenHelp': 'コンソールと公開 API が共用する待ち受けアドレスです。',
   'settings.previewListenHelp':
     'API プレイグラウンドの HTML プレビュー用オリジン。現在のホスト名とこのポートで開きます。',
+  'settings.apiKeyAccountsHelp':
+    '各キーのリクエストを処理するアカウントを選びます。選ばない場合はすべてのアカウントを使います',
+  'settings.keyAccountsAll': 'すべてのアカウント',
+  'settings.keyAccountsSome': '指定したアカウント',
+  'settings.accountSearch': 'アカウントを検索',
+  'settings.accountNone': '一致するアカウントはありません',
+  'settings.keyAccountsClear': 'すべてのアカウントを使う',
+  'settings.hedgeModelsNone': 'モデル未選択',
+  'settings.hedgeModelsSome': '指定したモデル',
+  'settings.modelSearch': 'モデルを検索',
+  'settings.modelNone': '一致するモデルはありません',
+  'settings.selectionClear': '選択を解除',
+  'settings.aliasPlaceholder': 'エイリアス',
+  'settings.selectModel': 'モデルを選択',
+  'settings.selectChannel': 'チャネルを選択',
+  'settings.addMapping': 'マッピングを追加',
+  'settings.addModelChannel': 'モデルを追加',
   'settings.apiKeyHelp':
     '複数のキーはカンマで区切る。空欄では、このマシンのページだけが呼び出せます',
   'settings.authPathHelp': 'アカウントのファイル、ディレクトリ、またはカンマ区切りの複数のパス。',
@@ -1471,8 +1491,11 @@ export const messages: Record<TranslationKey, string> = {
     'ストリーミング リクエストは完全な結果を取得してからストリームで返す。待機中はハートビートを送り、生成に失敗したら別のアカウントで再試行',
   'settings.youtubeLinksHelp': 'ユーザー メッセージ本文の YouTube リンクを動画としてモデルに送信',
   'settings.temporaryChatHelp': 'WAA のウォームアップ ページで一時チャットを使用します。',
-  'settings.initTimeoutHelp': 'アカウントごとの WAA 初期化の最大時間（例: 2m）。',
-  'settings.requestTimeoutHelp': '1 件のリクエストの最大実行時間（例: 5m）。',
+  'settings.initTimeoutHelp': 'アカウントごとの WAA 初期化の最大時間。',
+  'settings.requestTimeoutHelp': '1 件のリクエストの最大実行時間。',
+  'settings.unitSeconds': '秒',
+  'settings.unitMinutes': '分',
+  'settings.timeUnit': '時間の単位',
   'settings.firstEventHedge': '初回トークン遅延時の予備リクエスト',
   'settings.firstEventHedgeHelp':
     '初回トークンが遅いときは空きアカウントで再送し、先に応答した方を使ってもう一方を取り消します',
@@ -1485,6 +1508,10 @@ export const messages: Record<TranslationKey, string> = {
     'モデルとチャネルごとに直近 24 時間の初回トークン p95 だけ待ちます。リクエストが 20 件未満なら送りません',
   'settings.firstEventHedgeCustomHint':
     '参考：{model} の直近 24 時間の初回トークン p95 は {seconds} 秒',
+  'settings.firstEventHedgeModels': '予備リクエストを送るモデル',
+  'settings.firstEventHedgeModelsHelp':
+    '予備リクエストは取り消されても 1 回分のリクエスト枠を消費します。トークン制は Ultra アカウントの gemini-4-argon のみで、その他のモデルは回数制のため推奨しません',
+  'settings.environmentLocked': '環境変数 {key} で指定されているため、ここでは変更できません',
   'settings.proxyHelp':
     'HTTP、HTTPS、SOCKS5 プロキシ。カンマ区切りで複数指定するとプールになり、空欄ではシステム プロキシを使用',
   'settings.proxyPool': 'プロキシプール',

@@ -384,6 +384,8 @@ const { t } = useI18n()
   color: var(--color-v3-text-on-button-reverse);
   font-size: 12px;
   line-height: 1.3;
+  hyphens: auto;
+  overflow-wrap: anywhere;
 }
 
 .empty-state[data-kind='chat'] .tile:first-child {
@@ -509,7 +511,7 @@ const { t } = useI18n()
   .empty-state {
     grid-template-columns: minmax(0, 1fr);
     gap: 28px;
-    padding: 32px 0;
+    padding: 32px 40px;
   }
 
   .empty-state h3 {
@@ -537,24 +539,11 @@ const { t } = useI18n()
   }
 
   .empty-state[data-kind='images'] .tile:not(:first-child) .tile__media {
-    aspect-ratio: 3 / 2;
+    aspect-ratio: 1;
   }
 
   .tile__media {
     height: auto;
-  }
-
-  .tile__label {
-    position: static;
-    max-width: none;
-    margin-top: 8px;
-    padding: 0 2px;
-    border-radius: 0;
-    backdrop-filter: none;
-    background: none;
-    color: var(--ink);
-    font-size: 13px;
-    line-height: 18px;
   }
 }
 

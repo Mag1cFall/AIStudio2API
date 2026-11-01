@@ -69,6 +69,9 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 		return false, err
 	}
 	defer logs.set(false, 0)
+	for _, invalid := range cfg.Invalid {
+		slog.Warn("配置项取值无效，按默认值启动", "key", invalid.Key, "value", invalid.Value, "reason", invalid.Reason)
+	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(signals)

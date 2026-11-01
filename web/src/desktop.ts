@@ -41,6 +41,13 @@ function openExternal(event: MouseEvent): void {
   sendDesktop(`open:${link.href}`)
 }
 
+// blockDrop 取消页面没有处理的拖放，拖入的链接与文件不会让桌面窗口离开管理页面
+function blockDrop(event: DragEvent): void {
+  if (event.defaultPrevented) return
+  event.preventDefault()
+  if (event.type === 'dragover' && event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+}
+
 // keepers 是关闭窗口时需要保留页面的条件：进行中的生成、保存与未保存的内容
 const keepers = shallowReactive(new Set<() => boolean>())
 
@@ -50,11 +57,13 @@ export function keepPage(condition: () => boolean): () => void {
   return () => keepers.delete(condition)
 }
 
-// startDesktop 在桌面窗口中加载 Wails 运行时的拖动与缩放处理，外部链接用系统浏览器打开，界面语言与配色同步到托盘菜单，当前路由与是否需要保留页面同步到桌面壳
+// startDesktop 在桌面窗口中加载 Wails 运行时的拖动与缩放处理，外部链接用系统浏览器打开，页面没有处理的拖放被取消，界面语言与配色同步到托盘菜单，当前路由与是否需要保留页面同步到桌面壳
 export function startDesktop(locale: Readonly<Ref<string>>, router: Router): void {
   if (desktopPlatform === '') return
   void import('@wailsio/runtime')
   document.addEventListener('click', openExternal, true)
+  window.addEventListener('dragover', blockDrop)
+  window.addEventListener('drop', blockDrop)
   watch(locale, (value) => sendDesktop(`locale:${value}`), { immediate: true })
   watch(useTheme().theme, (value) => sendDesktop(`theme:${value}`), { immediate: true })
   watch(

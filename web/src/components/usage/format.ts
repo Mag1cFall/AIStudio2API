@@ -51,15 +51,14 @@ export function useUsageFormat() {
         maximumFractionDigits: 1,
       }),
   )
-  const minuteFormat = computed(() => new Intl.DurationFormat(locale.value, { style: 'short' }))
 
-  // duration 按界面语言把毫秒显示为毫秒、秒或分秒
+  // duration 按界面语言把毫秒显示为毫秒或秒，一分钟以上为整数秒
   const duration = (milliseconds: number): string => {
     if (milliseconds <= 0) return '—'
     if (milliseconds < 1000) return millisecondFormat.value.format(Math.round(milliseconds))
-    if (milliseconds < 60_000) return secondFormat.value.format(milliseconds / 1000)
-    const total = Math.round(milliseconds / 1000)
-    return minuteFormat.value.format({ minutes: Math.floor(total / 60), seconds: total % 60 })
+    return secondFormat.value.format(
+      milliseconds < 60_000 ? milliseconds / 1000 : Math.round(milliseconds / 1000),
+    )
   }
 
   // dateTime 显示带月日的本地时间，seconds 为真时显示秒

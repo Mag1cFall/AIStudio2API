@@ -46,7 +46,7 @@ onUnmounted(() => observer.disconnect())
 </script>
 
 <template>
-  <div class="zero-state-content">
+  <div class="zero-state-content" :data-layout="layout">
     <div class="paid-usage-zero-state">
       <div class="left-container">
         <div class="title-content-container">
@@ -323,6 +323,10 @@ onUnmounted(() => observer.disconnect())
   .zero-state-content {
     justify-content: flex-start;
     padding: 16px 0 0;
+  }
+
+  .zero-state-content[data-layout='mosaic'] {
+    padding-inline: 16px;
   }
 
   .paid-usage-zero-state {

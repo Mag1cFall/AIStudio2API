@@ -380,7 +380,7 @@ func (cx *Context) SetThrowLocation(filename string, line, column int) {
 // Interrupt 请求终止正在执行的脚本，可在任意 goroutine 调用
 func (cx *Context) Interrupt() { C.mz_request_interrupt(cx.c) }
 
-// GC 执行一次完整 GC
+// GC 执行一次收缩的完整 GC，归还空闲内存并丢弃 JIT 代码
 func (cx *Context) GC() { C.mz_gc(cx.c) }
 
 // Call 是一次原生函数调用

@@ -56,6 +56,7 @@ type goWAARuntime struct {
 	acceptLanguage string
 	pageURL        string
 	pageLoaded     time.Time
+	pageFlags      pageFlags
 	headers        http.Header
 	cacheDirectory string
 
@@ -92,6 +93,35 @@ var pageStartupRPCs = []pageRPC{
 var pageFollowupRPCs = []pageRPC{
 	{"ListRecentApplets", "[]"},
 	{"ListPrompts", "[100]"},
+}
+
+// gdpProfileRPC 是官网导航栏在账户有订阅权益时读取 Google Developer Program 权益的请求
+var gdpProfileRPC = pageRPC{"GetGdpProfileAndBenefits", "[]"}
+
+// pageFlags 是官网页面内联数据中决定页面自身请求的构建开关
+type pageFlags struct {
+	// gdpProfile 为开关 45806340：导航栏读取 Google Developer Program 权益
+	gdpProfile bool
+	// plusBenefit 为开关 45777963：Plus 权益计为订阅权益
+	plusBenefit bool
+}
+
+// parsePageFlags 读取官网页面内联数据中的构建开关
+func parsePageFlags(body []byte) pageFlags {
+	enabled := func(id string) bool { return bytes.Contains(body, []byte("["+id+",null,true,")) }
+	return pageFlags{gdpProfile: enabled("45806340"), plusBenefit: enabled("45777963")}
+}
+
+// requestsGDPProfile 按官网导航栏的条件判断页面是否读取 Google Developer Program 权益：开关开启且 GetAiStudioBenefitTier 返回订阅权益
+func (flags pageFlags) requestsGDPProfile(benefitTier []byte) bool {
+	if !flags.gdpProfile {
+		return false
+	}
+	tier, err := decodeBenefitTier(benefitTier)
+	if err != nil || tier == BenefitTierPlus && !flags.plusBenefit {
+		return false
+	}
+	return tier != BenefitTierFree
 }
 
 // pageTogglesPattern 匹配官网页面内联脚本写入的构建开关数组
@@ -201,14 +231,13 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		extension, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
 		loggingDone <- loggingContext{extension, err}
 	}()
-	pageDone := make(chan struct{})
+	pageDone := make(chan [][]byte, 1)
 	go func() {
-		runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
-		close(pageDone)
+		pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
 	}()
 	challenge, err := runtime.createChallenge(ctx, nil)
 	logging := <-loggingDone
-	<-pageDone
+	startup := <-pageDone
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +257,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	reportGoStartup(options, camoufoxnative.StartupBootstrappingWAA)
 	followupDone := make(chan struct{})
 	go func() {
-		runtime.sendPageRPCs(ctx, apiKey, visitID, pageFollowupRPCs)
+		runtime.sendFollowupRPCs(ctx, apiKey, visitID, startup)
 		close(followupDone)
 	}()
 	vm, err := runtime.startVM(ctx, challenge)
@@ -455,6 +484,7 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
 		}
 		runtime.pageLoaded = time.Now()
 		runtime.profile.Globals = pageGlobals(body)
+		runtime.pageFlags = parsePageFlags(body)
 		runtime.profile.NavigationStart = navigationStart
 		runtime.profile.TrustedTypes = requiresTrustedScripts(response.Header.Values("Content-Security-Policy"))
 		return string(match[1]), nil
@@ -522,29 +552,45 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 	return base64.StdEncoding.EncodeToString(encoded), nil
 }
 
-// sendPageRPCs 以官网页面的请求头并发发出页面自身的 MakerSuite 请求，与页面一样不依赖其结果
-func (runtime *goWAARuntime) sendPageRPCs(ctx context.Context, apiKey string, visitID string, rpcs []pageRPC) {
+// sendPageRPCs 以官网页面的请求头并发发出页面自身的 MakerSuite 请求，按 rpcs 顺序返回各 HTTP 200 响应的正文
+func (runtime *goWAARuntime) sendPageRPCs(ctx context.Context, apiKey string, visitID string, rpcs []pageRPC) [][]byte {
+	bodies := make([][]byte, len(rpcs))
 	var group sync.WaitGroup
-	for _, rpc := range rpcs {
+	for index, rpc := range rpcs {
 		group.Go(func() {
 			headers, err := runtime.rpcHeaders(apiKey)
 			if err != nil {
 				return
 			}
 			headers.Set("X-AIStudio-Visit-Id", visitID)
-			runtime.drain(runtime.do(ctx, http.MethodPost, makerSuiteRPCURL+rpc.method, []byte(rpc.body), headers))
+			bodies[index] = runtime.drain(runtime.do(ctx, http.MethodPost, makerSuiteRPCURL+rpc.method, []byte(rpc.body), headers))
 		})
 	}
 	group.Wait()
+	return bodies
 }
 
-// drain 读完并关闭页面自身请求的响应
-func (runtime *goWAARuntime) drain(response *http.Response, err error) {
-	if err != nil {
-		return
+// sendFollowupRPCs 按启动请求的响应发出官网页面接着发出的请求，导航栏条件成立时同时读取 Google Developer Program 权益
+func (runtime *goWAARuntime) sendFollowupRPCs(ctx context.Context, apiKey string, visitID string, startup [][]byte) {
+	rpcs := pageFollowupRPCs
+	benefitTier := startup[slices.IndexFunc(pageStartupRPCs, func(rpc pageRPC) bool { return rpc.method == "GetAiStudioBenefitTier" })]
+	if runtime.pageFlags.requestsGDPProfile(benefitTier) {
+		rpcs = append(slices.Clone(rpcs), gdpProfileRPC)
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	_ = response.Body.Close()
+	runtime.sendPageRPCs(ctx, apiKey, visitID, rpcs)
+}
+
+// drain 读完并关闭页面自身请求的响应，返回 HTTP 200 响应的正文
+func (runtime *goWAARuntime) drain(response *http.Response, err error) []byte {
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK {
+		return nil
+	}
+	return body
 }
 
 // encodeJSPBFields 按字段顺序把 JSPB 数组中的数字与字符串编码为 protobuf 二进制

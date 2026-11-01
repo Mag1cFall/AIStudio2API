@@ -484,12 +484,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 }
 
 func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
-	var keys []string
-	for key := range strings.SplitSeq(configuredKeys, ",") {
-		if key = strings.TrimSpace(key); key != "" {
-			keys = append(keys, key)
-		}
-	}
+	keys := apiKeys(configuredKeys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(keys) > 0 && !checkAPIKeyMatches(r, keys) {
 			writeAuthError(w, r)
@@ -498,6 +493,34 @@ func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
 		markAccessLogAuthorized(r.Context())
 		next.ServeHTTP(w, r)
 	})
+}
+
+// apiKeyContextMiddleware 把请求所用的已配置 API key 放进请求上下文，供账户池按 key 绑定的账户选号
+func apiKeyContextMiddleware(configuredKeys string, next http.Handler) http.Handler {
+	keys := apiKeys(configuredKeys)
+	if len(keys) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, candidate := range apiKeyCandidates(r) {
+			if candidate != "" && slices.Contains(keys, candidate) {
+				r = r.WithContext(aistudio.ContextWithAPIKey(r.Context(), candidate))
+				break
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// apiKeys 返回逗号分隔、去掉空白的已配置 API key
+func apiKeys(configuredKeys string) []string {
+	var keys []string
+	for key := range strings.SplitSeq(configuredKeys, ",") {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // apiKeyCandidates 返回请求头与 URL 中给出的 API key，去掉首尾空白

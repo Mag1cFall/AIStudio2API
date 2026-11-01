@@ -148,15 +148,39 @@ func codeFromError(err error, defaultCode string) string {
 	return defaultCode
 }
 
-// writeAuthError 按请求路径所属协议写入 API key 错误，OpenAI 与 Anthropic 为 401
-func writeAuthError(w http.ResponseWriter, r *http.Request) {
+// requestProtocol 返回请求路径与请求头所属的公开协议：gemini、anthropic 或 openai
+func requestProtocol(r *http.Request) string {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/v1beta/"), strings.HasPrefix(r.URL.Path, "/upload/"), interactionsPath(r.URL.Path):
-		writeGeminiAuthError(w, r)
+		return "gemini"
 	case strings.HasPrefix(r.URL.Path, "/v1/messages"), r.Header.Get("Anthropic-Version") != "":
+		return "anthropic"
+	}
+	return "openai"
+}
+
+// writeAuthError 按请求所属协议写入 API key 错误，OpenAI 与 Anthropic 为 401
+func writeAuthError(w http.ResponseWriter, r *http.Request) {
+	switch requestProtocol(r) {
+	case "gemini":
+		writeGeminiAuthError(w, r)
+	case "anthropic":
 		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "Invalid API Key")
 	default:
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key")
+	}
+}
+
+// writeRouteNotFound 以请求所属协议的错误体返回 404，消息含请求的方法与路径
+func writeRouteNotFound(w http.ResponseWriter, r *http.Request) {
+	message := fmt.Sprintf("Invalid URL (%s %s)", r.Method, r.URL.Path)
+	switch requestProtocol(r) {
+	case "gemini":
+		writeGeminiError(w, http.StatusNotFound, "NOT_FOUND", message)
+	case "anthropic":
+		writeAnthropicError(w, http.StatusNotFound, "not_found_error", message)
+	default:
+		writeOpenAIError(w, http.StatusNotFound, "not_found", message)
 	}
 }
 
@@ -363,6 +387,10 @@ func openAIErrorCode(err error) string {
 	}
 	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
 		return "account_required"
+	}
+	var feedback *aistudio.PromptFeedbackError
+	if errors.As(err, &feedback) {
+		return "invalid_prompt"
 	}
 	if errors.Is(err, aistudio.ErrInvalidArgument) || isUnverifiedProtocolError(err) {
 		return "invalid_request"

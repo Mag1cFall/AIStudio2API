@@ -98,7 +98,7 @@ func EncodeGenerateVideoRequest(request VideoRequest) ([]byte, error) {
 	config := []any{
 		int64(1),
 		request.AspectRatio,
-		[]any{strconv.Itoa(request.DurationSeconds)},
+		[]any{int64(request.DurationSeconds)},
 		request.Resolution,
 	}
 	if request.LastImage != nil {
