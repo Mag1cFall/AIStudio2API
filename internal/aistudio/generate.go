@@ -19,7 +19,7 @@ var errStopSequenceMatched = errors.New("stop sequence matched")
 // continuationRoundTokens 为官网自动续写每轮增加的输出上限
 const continuationRoundTokens = 32768
 
-// regenerations 是上游以函数调用格式错误结束、流中断或流尾 5xx 错误且客户端没有收到内容时重新生成的次数上限
+// regenerations 是上游以函数调用格式错误、意外的工具调用或响应格式异常结束、流中断或流尾 5xx 错误且客户端没有收到内容时重新生成的次数上限
 const regenerations = 3
 
 // tokenCountResult 保存并发输入计数结果
@@ -873,7 +873,6 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				finish = &value
 				return nil
 			default:
-				output.Add(event)
 				if request.Config.HideThinking && event.Kind == EventReasoning || serverToolHidden(request, event) {
 					if event.ThoughtSignature == "" {
 						return nil
@@ -883,6 +882,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 						TurnToken: event.TurnToken, DebugInfo: event.DebugInfo, ResponseID: event.ResponseID, FrameUsage: event.FrameUsage, FinishFrame: event.FinishFrame,
 					}
 				}
+				output.Add(event)
 				return send(event)
 			}
 		}
@@ -899,6 +899,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			stopClose = closeOnCancel(response)
 			usage, finish = nil, nil
+			output = Output{}
+			matchedStopSequence = ""
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			emit = stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), emit)
@@ -944,7 +946,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	return contract.forward(ctx, events), nil
 }
 
-// regenerable 表示上游以函数调用格式错误或意外的工具调用结束、流在完成帧之前中断或流尾为 5xx 错误，且没有输出正文、函数调用与媒体
+// regenerable 表示上游以函数调用格式错误、意外的工具调用或响应格式异常结束、流在完成帧之前中断或流尾为 5xx 错误，且没有输出正文、函数调用与媒体
 func regenerable(ctx context.Context, err error, finish *Event, output Output) bool {
 	if err != nil {
 		var interrupted *StreamInterruptedError
@@ -952,7 +954,7 @@ func regenerable(ctx context.Context, err error, finish *Event, output Output) b
 		if ctx.Err() != nil || !errors.As(err, &interrupted) && !(errors.As(err, &rpcError) && rpcError.StatusCode >= http.StatusInternalServerError) {
 			return false
 		}
-	} else if finish == nil || finish.FinishReason != "malformed_function_call" && finish.FinishReason != "unexpected_tool_call" {
+	} else if finish == nil || finish.FinishReason != "malformed_function_call" && finish.FinishReason != "unexpected_tool_call" && finish.FinishReason != "malformed_response" {
 		return false
 	}
 	return !slices.ContainsFunc(output.Visible(), Part.payload)
