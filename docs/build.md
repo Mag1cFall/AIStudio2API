@@ -264,7 +264,7 @@ Build 请求与 Playground 共用同一预处理：工具可用性校验、模�
 | `serviceTier` | `SERVICE_TIER_<请求值大写>` |
 | `store`、`labels` | 请求值 |
 
-- `safetySettings` 默认为骚扰、仇恨、色情、危险四类 `OFF`，请求中的类别按名称覆盖或追加；图片路由只发送请求中的类别
+- `safetySettings` 默认为骚扰、仇恨、色情、危险、公民诚信五类 `OFF`，请求中的类别按名称覆盖或追加；图片路由只发送请求中的类别
 
 ```json
 {
@@ -279,7 +279,8 @@ Build 请求与 Playground 共用同一预处理：工具可用性校验、模�
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"}
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "OFF"}
   ]
 }
 ```

@@ -483,7 +483,7 @@ safety settings：
 ]
 ```
 
-每项为 `[null, null, 类别, 阈值]`，编号与 Gemini API 枚举相同：类别 `HARM_CATEGORY_HARASSMENT`=7、`HATE_SPEECH`=8、`SEXUALLY_EXPLICIT`=9、`DANGEROUS_CONTENT`=10、`CIVIC_INTEGRITY`=11；阈值 `BLOCK_LOW_AND_ABOVE`=1、`BLOCK_MEDIUM_AND_ABOVE`=2、`BLOCK_ONLY_HIGH`=3、`BLOCK_NONE`=4、`OFF`=5。Playground 没有 `HARM_CATEGORY_JAILBREAK` 的编号，含该类别的请求经 Build 通道发送。非图片模型默认发送上面 7–10 四类 `OFF`，Gemini 协议请求中的类别按名称覆盖或追加；图片模型只发送请求中的类别，没有时为 `null`。上游对 `HARM_CATEGORY_UNSPECIFIED`（0）与 `DEROGATORY` 至 `DANGEROUS`（1–6）返回 400，这些类别与 `HARM_CATEGORY_IMAGE_*` 不发送；其他未知名称在发送前返回 400 并列出可用类别，未知阈值同样在发送前返回 400。
+每项为 `[null, null, 类别, 阈值]`，编号与 Gemini API 枚举相同：类别 `HARM_CATEGORY_HARASSMENT`=7、`HATE_SPEECH`=8、`SEXUALLY_EXPLICIT`=9、`DANGEROUS_CONTENT`=10、`CIVIC_INTEGRITY`=11；阈值 `BLOCK_LOW_AND_ABOVE`=1、`BLOCK_MEDIUM_AND_ABOVE`=2、`BLOCK_ONLY_HIGH`=3、`BLOCK_NONE`=4、`OFF`=5。Playground 没有 `HARM_CATEGORY_JAILBREAK` 的编号，含该类别的请求经 Build 通道发送。非图片模型默认发送上面 7–11 五类 `OFF`，Gemini 协议请求中的类别按名称覆盖或追加；图片模型只发送请求中的类别，没有时为 `null`。上游对 `HARM_CATEGORY_UNSPECIFIED`（0）与 `DEROGATORY` 至 `DANGEROUS`（1–6）返回 400，这些类别与 `HARM_CATEGORY_IMAGE_*` 不发送；其他未知名称在发送前返回 400 并列出可用类别，未知阈值同样在发送前返回 400。
 
 generation config 字段：
 
@@ -752,7 +752,7 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 | 18 | missing_thought_signature | 19 | malformed_response |
 | 22 | continuation | 其他整数 | `provider_<code>` |
 
-Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call` 或 `unexpected_tool_call` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时，服务在同一账户上以同一请求重新生成，最多再生成 3 次，之后按最后一次的终止原因或中断错误结束；每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
+Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call`、`unexpected_tool_call` 或 `malformed_response` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时，服务在同一账户上以同一请求重新生成，最多再生成 3 次，之后按最后一次的终止原因或中断错误结束；每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
 
 候选 field 5（`$[0][frame][0][0][4]`）为安全评级 `[[null, null, 类别, 概率, blocked?], ...]`，类别编号与安全设置相同，概率 `NEGLIGIBLE`=1、`LOW`=2、`MEDIUM`=3、`HIGH`=4；输入拒绝帧 `[null,[block_reason,ratings?,message]]` 的 ratings 为同形数组。Build 通道读取候选与 `promptFeedback` 的 `safetyRatings`。
 
@@ -782,8 +782,8 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 | `stop_sequence` | `stop` | `completed` | `stop_sequence` 与实际序列 | `STOP` |
 | `max_tokens` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `MAX_TOKENS` |
 | `continuation` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `CONTINUATION` |
-| safety、recitation、blocklist、prohibited_content、spii、malformed_response、图片对应原因与 `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
-| other、language、malformed_function_call、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
+| safety、recitation、blocklist、prohibited_content、spii、图片对应原因与 `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
+| other、language、malformed_function_call、malformed_response、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
 
 内容拦截终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 对 Build 通道的 `provider_<名称>` 输出大写的原枚举名，对 Playground 的 `provider_<编号>` 输出 `OTHER` 并用 `finishMessage` 保留编号。`malformed_response`（Playground 编号 19）在 AI Studio 页面显示为 `Content blocked`。
 

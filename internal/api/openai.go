@@ -1363,7 +1363,7 @@ func legacyFunctionCall(call aistudio.FunctionCall) map[string]any {
 func contentFilterFinishReason(reason string) bool {
 	switch reason {
 	case "safety", "recitation", "blocklist", "prohibited_content", "spii",
-		"image_safety", "image_prohibited_content", "image_recitation", "malformed_response":
+		"image_safety", "image_prohibited_content", "image_recitation":
 		return true
 	}
 	return strings.HasPrefix(reason, "provider_")
