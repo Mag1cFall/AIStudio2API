@@ -16,6 +16,7 @@ import type {
   AccountDraft,
   AccountRefresh,
   AccountState,
+  BrowserType,
   ChromeImportProfile,
   CookieBrowser,
   PairingToken,
@@ -83,17 +84,21 @@ const pairingInsecure =
   !/^127\.\d+\.\d+\.\d+$/.test(pairingHost)
 // clipboardAvailable 表示页面处于可使用剪贴板 API 的安全上下文
 const clipboardAvailable = window.isSecureContext
+const selectedBrowser = ref<BrowserType>('chrome')
 const selectedChromeProfiles = ref<string[]>([])
+const importableChromeProfiles = computed(() =>
+  chromeProfiles.value.filter((profile) => !profile.imported).map((profile) => profile.id),
+)
 const allChromeProfilesSelected = computed(
   () =>
-    chromeProfiles.value.length > 0 &&
-    selectedChromeProfiles.value.length === chromeProfiles.value.length,
+    importableChromeProfiles.value.length > 0 &&
+    selectedChromeProfiles.value.length === importableChromeProfiles.value.length,
 )
 
 function toggleAllChromeProfiles(): void {
   selectedChromeProfiles.value = allChromeProfilesSelected.value
     ? []
-    : chromeProfiles.value.map((profile) => profile.id)
+    : [...importableChromeProfiles.value]
 }
 const accountEnvironment = reactive({
   proxy: '',
@@ -274,11 +279,38 @@ async function copyPairing(kind: 'command' | 'token', text: string): Promise<voi
   }
 }
 
-// openChromeImport 读取本机可导入的 Chrome 账户
+async function changeBrowser(browser: BrowserType): Promise<void> {
+  selectedBrowser.value = browser
+  selectedChromeProfiles.value = []
+  pendingAction.value = 'chrome-discover'
+  try {
+    chromeProfiles.value = await api.browserImportProfiles(browser)
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+// openChromeImport 读取本机可导入的浏览器账户
 async function openChromeImport(): Promise<void> {
   pendingAction.value = 'chrome-discover'
   try {
-    chromeProfiles.value = await api.chromeImportProfiles()
+    let currentBrowser = selectedBrowser.value
+    let profiles = await api.browserImportProfiles(currentBrowser).catch(() => [])
+    if (profiles.length === 0 && currentBrowser === 'chrome') {
+      const candidates: BrowserType[] = ['brave', 'edge']
+      for (const cand of candidates) {
+        const res = await api.browserImportProfiles(cand).catch(() => [])
+        if (res.length > 0) {
+          currentBrowser = cand
+          profiles = res
+          break
+        }
+      }
+    }
+    selectedBrowser.value = currentBrowser
+    chromeProfiles.value = profiles
     selectedChromeProfiles.value = []
     showChromeImport.value = true
   } catch (error) {
@@ -295,11 +327,12 @@ function closeChromeImport(): void {
   selectedChromeProfiles.value = []
 }
 
-// importChromeAccounts 导入用户选中的 Chrome 账户
+// importChromeAccounts 导入用户选中的浏览器账户
 async function importChromeAccounts(): Promise<void> {
   pendingAction.value = 'chrome-import'
   try {
-    const result = await api.importChromeAccounts({
+    const result = await api.importBrowserAccounts({
+      browser: selectedBrowser.value,
       account_ids: [...selectedChromeProfiles.value],
       ...accountEnvironment,
     })
@@ -307,13 +340,23 @@ async function importChromeAccounts(): Promise<void> {
     chromeProfiles.value = []
     selectedChromeProfiles.value = []
     emit('refresh')
-    emit(
-      'notice',
-      t(
-        result.accounts.length === 1 ? 'accounts.importCompleteOne' : 'accounts.importComplete',
-      ).replace('{count}', String(result.accounts.length)),
-      'success',
-    )
+    const count = result.accounts.length
+    if (result.failures && result.failures.length > 0) {
+      const failed = result.failures.map((f) => `${f.target}: ${f.error}`).join('; ')
+      emit(
+        'notice',
+        `${t(count === 1 ? 'accounts.importCompleteOne' : 'accounts.importComplete').replace('{count}', String(count))} (${failed})`,
+        count > 0 ? 'success' : 'error',
+      )
+    } else {
+      emit(
+        'notice',
+        t(
+          count === 1 ? 'accounts.importCompleteOne' : 'accounts.importComplete',
+        ).replace('{count}', String(count)),
+        'success',
+      )
+    }
   } catch (error) {
     actionError(error)
   } finally {
@@ -1067,6 +1110,19 @@ async function refreshAllAccounts(): Promise<void> {
                 <UiIcon name="close" :size="16" />
               </button>
             </div>
+            <div class="mb-4 flex rounded-lg border border-line bg-canvas p-1">
+              <button
+                v-for="b in (['chrome', 'brave', 'edge'] as const)"
+                :key="b"
+                type="button"
+                class="flex-1 rounded py-1.5 text-xs font-medium capitalize transition"
+                :class="selectedBrowser === b ? 'bg-raised text-white shadow-sm' : 'text-gray-400 hover:text-white'"
+                :disabled="pendingAction !== ''"
+                @click="changeBrowser(b)"
+              >
+                {{ b === 'chrome' ? 'Chrome' : b === 'brave' ? 'Brave' : 'Edge' }}
+              </button>
+            </div>
             <div class="mb-4 space-y-4">
               <AccountEnvironmentFields :model-value="accountEnvironment" />
             </div>
@@ -1089,12 +1145,14 @@ async function refreshAllAccounts(): Promise<void> {
                 v-for="profile in chromeProfiles"
                 :key="profile.id"
                 class="flex cursor-pointer items-start gap-3 rounded border border-line bg-canvas p-3 transition hover:border-gray-600"
+                :class="{ 'opacity-60': profile.imported }"
               >
                 <input
                   v-model="selectedChromeProfiles"
                   class="mt-1 h-4 w-4 shrink-0 accent-blue-600"
                   type="checkbox"
                   :value="profile.id"
+                  :disabled="profile.imported"
                 />
                 <span class="min-w-0 flex-1">
                   <strong
@@ -1113,6 +1171,9 @@ async function refreshAllAccounts(): Promise<void> {
                     >{{ profile.profile }}</span
                   >
                 </span>
+                <span v-if="profile.imported" class="shrink-0 text-xs text-gray-400">{{
+                  t('accounts.alreadyImported')
+                }}</span>
               </label>
             </div>
             <div class="mt-6 flex gap-2">

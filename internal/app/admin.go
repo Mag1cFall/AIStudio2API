@@ -175,28 +175,48 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountC
 	return created, nil
 }
 
-func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error) {
-	root, err := chromeauth.DefaultChromeRoot()
+func (admin *runtimeAdmin) BrowserImportProfiles(ctx context.Context, browser string) ([]api.BrowserImportProfile, error) {
+	if browser == "" {
+		browser = "chrome"
+	}
+	root, err := chromeauth.DefaultBrowserRoot(browser)
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := chromeauth.Discover(root)
+	accounts, err := chromeauth.DiscoverBrowser(browser, root)
 	if err != nil {
 		return nil, err
 	}
 	existing := admin.accountIDs()
-	profiles := make([]api.ChromeImportProfile, 0, len(accounts))
+	profiles := make([]api.BrowserImportProfile, 0, len(accounts))
 	for _, account := range accounts {
 		email := strings.ToLower(strings.TrimSpace(account.Email))
 		if !account.Importable || email == "" {
 			continue
 		}
-		if _, exists := existing[email]; exists {
+		_, isImported := existing[email]
+		profiles = append(profiles, api.BrowserImportProfile{
+			ID: account.ID, Browser: browser, Profile: account.Profile, DisplayName: account.DisplayName,
+			Email: email, Locale: account.Locale, AuthUser: account.AuthUser, Imported: isImported,
+		})
+	}
+	return profiles, nil
+}
+
+func (admin *runtimeAdmin) ChromeImportProfiles(ctx context.Context) ([]api.ChromeImportProfile, error) {
+	bp, err := admin.BrowserImportProfiles(ctx, "chrome")
+	if err != nil || len(bp) == 0 {
+		if braveBp, braveErr := admin.BrowserImportProfiles(ctx, "brave"); braveErr == nil && len(braveBp) > 0 {
+			bp = braveBp
+		}
+	}
+	profiles := make([]api.ChromeImportProfile, 0, len(bp))
+	for _, p := range bp {
+		if p.Imported {
 			continue
 		}
-		existing[email] = struct{}{}
 		profiles = append(profiles, api.ChromeImportProfile{
-			ID: account.ID, Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
+			ID: p.ID, Profile: p.Profile, DisplayName: p.DisplayName, Email: p.Email, Locale: p.Locale,
 		})
 	}
 	return profiles, nil
@@ -291,28 +311,59 @@ func (admin *runtimeAdmin) accountIDs() map[string]struct{} {
 }
 
 func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
-	if len(input.AccountIDs) == 0 {
-		return nil, invalidAccount(fmt.Errorf("未选择 Chrome 账号"))
+	accounts, _, err := admin.ImportBrowserAccounts(ctx, api.BrowserImportInput{
+		Browser: "chrome", AccountIDs: input.AccountIDs, Proxy: input.Proxy, Locale: input.Locale, Timezone: input.Timezone,
+	})
+	if err != nil && len(accounts) == 0 {
+		if bAccs, _, bErr := admin.ImportBrowserAccounts(ctx, api.BrowserImportInput{
+			Browser: "brave", AccountIDs: input.AccountIDs, Proxy: input.Proxy, Locale: input.Locale, Timezone: input.Timezone,
+		}); bErr == nil && len(bAccs) > 0 {
+			return bAccs, nil
+		}
 	}
-	root, err := chromeauth.DefaultChromeRoot()
+	return accounts, err
+}
+
+func (admin *runtimeAdmin) ImportBrowserAccounts(ctx context.Context, input api.BrowserImportInput) ([]api.AdminAccount, []api.ImportFailure, error) {
+	if len(input.AccountIDs) == 0 {
+		return nil, nil, invalidAccount(fmt.Errorf("未选择账号"))
+	}
+	browser := input.Browser
+	if browser == "" {
+		browser = "chrome"
+	}
+	root, err := chromeauth.DefaultBrowserRoot(browser)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	accountProxy := strings.TrimSpace(input.Proxy)
-	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{
-		ChromeRoot: root, Proxy: admin.effectiveProxy(accountProxy), AccountIDs: input.AccountIDs,
+	res, err := chromeauth.ImportWithDetails(ctx, chromeauth.ImportOptions{
+		Browser:    browser,
+		ChromeRoot: root,
+		Proxy:      admin.effectiveProxy(accountProxy),
+		AccountIDs: input.AccountIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	configs := make([]aistudio.AccountConfig, len(results))
-	seen := make(map[string]struct{}, len(results))
-	for index, result := range results {
-		email := strings.ToLower(strings.TrimSpace(result.Email))
-		if _, exists := seen[email]; exists {
-			return nil, invalidAccount(fmt.Errorf("Chrome 账号重复: %s", email))
+	if err != nil && len(res.Results) == 0 {
+		var failures []api.ImportFailure
+		for _, f := range res.Failures {
+			failures = append(failures, api.ImportFailure{Target: f.Target, Error: f.Error})
 		}
-		seen[email] = struct{}{}
+		return nil, failures, err
+	}
+
+	var failures []api.ImportFailure
+	for _, f := range res.Failures {
+		failures = append(failures, api.ImportFailure{Target: f.Target, Error: f.Error})
+	}
+
+	existingAccounts := make(map[string]struct{})
+	for _, status := range admin.pool.Status() {
+		existingAccounts[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
+	}
+
+	accounts := make([]api.AdminAccount, 0, len(res.Results))
+	for _, result := range res.Results {
+		email := strings.ToLower(strings.TrimSpace(result.Email))
 		accountConfig := aistudio.DefaultAccountConfig(email)
 		accountConfig.Proxy = accountProxy
 		if locale := strings.TrimSpace(input.Locale); locale != "" {
@@ -324,23 +375,51 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 			accountConfig.Timezone = timezone
 		}
 		if err := accountConfig.Validate(); err != nil {
-			return nil, invalidAccount(err)
+			failures = append(failures, api.ImportFailure{Target: email, Error: err.Error()})
+			continue
 		}
 		if _, err := aistudio.NewSigner().Authorization(result.State); err != nil {
-			return nil, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
+			failures = append(failures, api.ImportFailure{Target: email, Error: fmt.Sprintf("认证状态无法用于 AI Studio: %v", err)})
+			continue
 		}
-		configs[index] = accountConfig
-	}
-	accounts := make([]api.AdminAccount, 0, len(results))
-	for index, result := range results {
-		account, err := admin.addAccount(ctx, configs[index], result.State, "")
+
+		if _, exists := existingAccounts[email]; exists {
+			lease, leaseErr := admin.pool.AcquireAccount(ctx, email)
+			if leaseErr == nil {
+				account := lease.Account()
+				_ = admin.workers.Reset(account.ID)
+				saveErr := lease.SaveStorageState(result.State)
+				_ = admin.service.changeModels(func() error {
+					return errors.Join(
+						admin.pool.MarkReady(account.ID),
+						admin.pool.ResetModelAccess(account.ID),
+					)
+				})
+				_ = lease.Release()
+				if saveErr == nil {
+					admin.syncAccountModelCatalog(ctx, account)
+					if updated, err := admin.account(account.ID); err == nil {
+						accounts = append(accounts, updated)
+						admin.requests.log("auth", "INFO", browser+" 账户已覆盖更新 | 账户="+updated.Label)
+						continue
+					}
+				}
+			}
+		}
+
+		account, err := admin.addAccount(ctx, accountConfig, result.State, "")
 		if err != nil {
-			return nil, err
+			failures = append(failures, api.ImportFailure{Target: email, Error: err.Error()})
+			continue
 		}
 		accounts = append(accounts, account)
-		admin.requests.log("auth", "INFO", "Chrome 账户已导入 | 账户="+account.Label)
+		admin.requests.log("auth", "INFO", browser+" 账户已导入 | 账户="+account.Label)
 	}
-	return accounts, nil
+
+	if len(accounts) == 0 && len(failures) > 0 {
+		return nil, failures, fmt.Errorf("所有所选账号均导入失败: %s", failures[0].Error)
+	}
+	return accounts, failures, nil
 }
 
 // ImportAccountState 导入远程配对上传或 Cookie 导入的认证状态与 Camoufox 指纹，未给标签时以 Cookie 中第 auth_user 个会话登录的账户邮箱为标签
