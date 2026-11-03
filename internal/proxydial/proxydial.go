@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -23,6 +24,23 @@ type connectDialer struct {
 	proxyURL    *url.URL
 	proxyTarget string
 	direct      *net.Dialer
+}
+
+// bufferedConn 保留 CONNECT 响应解析器预读的隧道数据，其余操作沿用底层连接。
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (connection *bufferedConn) Read(data []byte) (int, error) {
+	return connection.reader.Read(data)
+}
+
+func (connection *bufferedConn) CloseWrite() error {
+	if writer, ok := connection.Conn.(interface{ CloseWrite() error }); ok {
+		return writer.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }
 
 // Address 返回代理的拨号地址，HTTP 与 HTTPS 代理省略端口时补齐默认端口
@@ -125,7 +143,8 @@ func (dialer *connectDialer) DialContext(ctx context.Context, network, address s
 	if err := request.Write(connection); err != nil {
 		return nil, err
 	}
-	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	reader := bufio.NewReader(connection)
+	response, err := http.ReadResponse(reader, request)
 	if err != nil {
 		return nil, err
 	}
@@ -137,5 +156,8 @@ func (dialer *connectDialer) DialContext(ctx context.Context, network, address s
 		return nil, err
 	}
 	success = true
+	if reader.Buffered() > 0 {
+		return &bufferedConn{Conn: connection, reader: reader}, nil
+	}
 	return connection, nil
 }

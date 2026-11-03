@@ -2,6 +2,8 @@ package proxydial
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/base64"
 	"io"
 	"net"
@@ -12,6 +14,133 @@ import (
 
 	"golang.org/x/net/proxy"
 )
+
+func TestCONNECTPreservesDataAfterResponseHeaders(t *testing.T) {
+	for _, throughRelay := range []bool{false, true} {
+		name := "direct"
+		if throughRelay {
+			name = "relay"
+		}
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			payload := bytes.Repeat([]byte{0, 1, 2, 0xff}, 64)
+			serverDone := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					serverDone <- err
+					return
+				}
+				defer conn.Close()
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				if _, err = http.ReadRequest(bufio.NewReader(conn)); err == nil {
+					response := append([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"), payload...)
+					_, err = conn.Write(response)
+				}
+				serverDone <- err
+			}()
+			upstream := &url.URL{Scheme: "http", Host: listener.Addr().String()}
+			dialer, err := Dialer(upstream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if throughRelay {
+				relay, err := StartRelay(upstream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer relay.Close()
+				socks, err := proxy.SOCKS5("tcp", relay.Addr().String(), nil, &net.Dialer{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				dialer = socks.(proxy.ContextDialer)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, err := dialer.DialContext(ctx, "tcp", "example.com:443")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			got := make([]byte, len(payload))
+			n, readErr := io.ReadFull(conn, got)
+			if err := <-serverDone; err != nil {
+				t.Fatal(err)
+			}
+			if readErr != nil || !bytes.Equal(got, payload) {
+				t.Fatalf("tunnel read %d of %d bytes, error = %v", n, len(payload), readErr)
+			}
+		})
+	}
+}
+
+func TestCONNECTBufferedConnectionKeepsHalfClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err = http.ReadRequest(bufio.NewReader(conn))
+		if err == nil {
+			_, err = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\nhello")
+		}
+		if err == nil {
+			var request []byte
+			request, err = io.ReadAll(conn)
+			if err == nil {
+				_, err = conn.Write(request)
+			}
+		}
+		serverDone <- err
+	}()
+	relay, err := StartRelay(&url.URL{Scheme: "http", Host: listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relay.Close()
+	dialer, err := proxy.SOCKS5("tcp", relay.Addr().String(), nil, &net.Dialer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialer.Dial("tcp", "example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	greeting := make([]byte, 5)
+	if _, err := io.ReadFull(conn, greeting); err != nil || string(greeting) != "hello" {
+		t.Fatalf("greeting = %q, error = %v", greeting, err)
+	}
+	if _, err := io.WriteString(conn, "request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := io.ReadAll(conn)
+	if err != nil || string(reply) != "request" {
+		t.Fatalf("reply after half-close = %q, error = %v", reply, err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
 
 // TestRelayAuthenticatedUpstream 验证中转经带账号密码的 CONNECT 上游转发域名目标，凭据错误时返回 SOCKS5 失败
 func TestRelayAuthenticatedUpstream(t *testing.T) {
