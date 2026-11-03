@@ -861,6 +861,19 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		var usage *Usage
 		var finish *Event
 		var output Output
+		// committed 表示本次生成已有不能随重新生成丢弃的输出：客户端收到的正文、函数调用与媒体，或重新执行有外部副作用的服务端工具调用
+		committed := false
+		// sources 暂存 committed 之前收到的网页来源与引用，重新生成时丢弃
+		var sources []Event
+		releaseSources := func() error {
+			for _, source := range sources {
+				if err := send(source); err != nil {
+					return err
+				}
+			}
+			sources = nil
+			return nil
+		}
 		matchedStopSequence := ""
 		emitEvent := func(event Event) error {
 			switch event.Kind {
@@ -873,7 +886,20 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				finish = &value
 				return nil
 			default:
-				if request.Config.HideThinking && event.Kind == EventReasoning || serverToolHidden(request, event) {
+				hiddenTool := serverToolHidden(request, event)
+				if !hiddenTool || !serverToolReplayable(event) {
+					output.Add(event)
+					committed = committed || !event.Thought && event.payload()
+				}
+				if !committed {
+					if event.Kind == EventGrounding || event.Kind == EventCitation {
+						sources = append(sources, event)
+						return nil
+					}
+				} else if err := releaseSources(); err != nil {
+					return err
+				}
+				if request.Config.HideThinking && event.Kind == EventReasoning || hiddenTool {
 					if event.ThoughtSignature == "" {
 						return nil
 					}
@@ -882,13 +908,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 						TurnToken: event.TurnToken, DebugInfo: event.DebugInfo, ResponseID: event.ResponseID, FrameUsage: event.FrameUsage, FinishFrame: event.FinishFrame,
 					}
 				}
-				output.Add(event)
 				return send(event)
 			}
 		}
 		emit := stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
 		err := decodeStream(observeStreamActivity(ctx, response.Body), emit)
-		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, output); regenerated++ {
+		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed); regenerated++ {
 			stopClose()
 			_ = response.Body.Close()
 			if response, decodeStream, err = sendRequest(); err != nil {
@@ -898,12 +923,13 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return
 			}
 			stopClose = closeOnCancel(response)
-			usage, finish = nil, nil
-			output = Output{}
-			matchedStopSequence = ""
+			usage, finish, sources = nil, nil, nil
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			emit = stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), emit)
+		}
+		if releaseSources() != nil {
+			return
 		}
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
@@ -946,8 +972,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	return contract.forward(ctx, events), nil
 }
 
-// regenerable 表示上游以函数调用格式错误、意外的工具调用或响应格式异常结束、流在完成帧之前中断或流尾为 5xx 错误，且没有输出正文、函数调用与媒体
-func regenerable(ctx context.Context, err error, finish *Event, output Output) bool {
+// regenerable 表示上游以函数调用格式错误、意外的工具调用或响应格式异常结束、流在完成帧之前中断或流尾为 5xx 错误，且本次生成还没有不能丢弃的输出
+func regenerable(ctx context.Context, err error, finish *Event, committed bool) bool {
 	if err != nil {
 		var interrupted *StreamInterruptedError
 		var rpcError *RPCError
@@ -957,7 +983,7 @@ func regenerable(ctx context.Context, err error, finish *Event, output Output) b
 	} else if finish == nil || finish.FinishReason != "malformed_function_call" && finish.FinishReason != "unexpected_tool_call" && finish.FinishReason != "malformed_response" {
 		return false
 	}
-	return !slices.ContainsFunc(output.Visible(), Part.payload)
+	return !committed
 }
 
 // countStopInput 并发计数请求输入，供本地命中 stop sequence 后补全用量
