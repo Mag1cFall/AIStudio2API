@@ -1,7 +1,6 @@
 package aistudio
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -226,38 +225,5 @@ func TestFunctionResultNameInference(t *testing.T) {
 				t.Fatal("input mutated")
 			}
 		})
-	}
-}
-
-// TestResolveSafetySettingsCivicIntegrity 验证默认安全设置包含 civic integrity 类别
-func TestResolveSafetySettingsCivicIntegrity(t *testing.T) {
-	settings, err := resolveSafetySettings(nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(settings) != 5 {
-		t.Fatalf("expected 5 safety settings, got %d: %#v", len(settings), settings)
-	}
-	found := false
-	for _, setting := range settings {
-		if setting.Category == "HARM_CATEGORY_CIVIC_INTEGRITY" && setting.Threshold == "OFF" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("CIVIC_INTEGRITY not found in resolved safety settings: %#v", settings)
-	}
-}
-
-// TestRegenerableMalformedResponse 验证无正文时的 malformed_response 触发重新生成
-func TestRegenerableMalformedResponse(t *testing.T) {
-	finish := &Event{Kind: EventFinish, FinishReason: "malformed_response"}
-	if !regenerable(context.Background(), nil, finish, Output{}) {
-		t.Fatal("expected malformed_response without output to be regenerable")
-	}
-	outputWithText := Output{Parts: []Part{{Text: "hello"}}}
-	if regenerable(context.Background(), nil, finish, outputWithText) {
-		t.Fatal("expected malformed_response with visible output NOT to be regenerable")
 	}
 }

@@ -81,7 +81,7 @@ var harmThresholds = map[string]int64{
 func resolveSafetySettings(settings []SafetySetting, imageRoute bool) ([]SafetySetting, error) {
 	thresholds := map[string]string{}
 	if !imageRoute {
-		for _, category := range harmCategories {
+		for _, category := range harmCategories[:4] {
 			thresholds[category.name] = "OFF"
 		}
 	}
