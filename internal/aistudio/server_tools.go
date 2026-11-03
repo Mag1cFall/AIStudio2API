@@ -3,6 +3,7 @@ package aistudio
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // serverToolTypes 是 Playground ToolCall 与 ToolResponse field 1 的工具类型编号，MCP 调用为 CUSTOM，MCP 结果不带类型
@@ -24,6 +25,11 @@ func serverToolHidden(request GenerateRequest, event Event) bool {
 		step = event.ToolResponse
 	}
 	return step != nil && step.Type != "MEDIA_PROCESSING" && !request.Tools.ToolConfig.ServerSideInvocations
+}
+
+// serverToolReplayable 表示事件随重新生成在上游再次执行没有外部副作用：网页与图片搜索、网址上下文、地图与文件检索的调用和全部工具结果，MCP 调用与其他类型的调用除外
+func serverToolReplayable(event Event) bool {
+	return event.ToolCall == nil || slices.Contains([]string{"GOOGLE_SEARCH_WEB", "GOOGLE_SEARCH_IMAGE", "URL_CONTEXT", "GOOGLE_MAPS", "FILE_SEARCH"}, event.ToolCall.Type)
 }
 
 // encodeServerToolStep 编码 ToolCall 或 ToolResponse：工具类型、名称、Struct 与调用 ID
