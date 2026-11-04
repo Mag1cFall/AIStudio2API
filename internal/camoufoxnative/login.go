@@ -67,10 +67,6 @@ func HasDisplay() bool {
 
 // Login 启动隔离 Camoufox 供用户登录 Google，并在 AI Studio 可用后导出认证状态
 func Login(ctx context.Context, options LoginOptions) (result LoginResult, err error) {
-	options, err = validateLoginOptions(options)
-	if err != nil {
-		return LoginResult{}, err
-	}
 	if options.View == nil && !HasDisplay() {
 		return LoginResult{}, ErrNoDisplay
 	}
@@ -131,29 +127,6 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func validateLoginOptions(options LoginOptions) (LoginOptions, error) {
-	options.ExecutablePath = strings.TrimSpace(options.ExecutablePath)
-	options.Directory = strings.TrimSpace(options.Directory)
-	if options.ExecutablePath == "" {
-		return LoginOptions{}, errors.New("缺少 Camoufox 路径")
-	}
-	if options.Directory == "" {
-		return LoginOptions{}, errors.New("缺少隔离登录目录")
-	}
-	directory, err := filepath.Abs(options.Directory)
-	if err != nil {
-		return LoginOptions{}, fmt.Errorf("解析隔离登录目录: %w", err)
-	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return LoginOptions{}, fmt.Errorf("创建隔离登录目录: %w", err)
-	}
-	if options.Timeout <= 0 {
-		return LoginOptions{}, errors.New("隔离登录超时必须为正数")
-	}
-	options.Directory = directory
-	return options, nil
 }
 
 func startLoginSession(ctx context.Context, options LoginOptions, state storageState) (*loginSession, error) {

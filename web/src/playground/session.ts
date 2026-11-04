@@ -16,16 +16,28 @@ import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
 import type { Model, SavedPrompt, SystemInstructionPreset } from '@/types'
 import {
+  agentTools,
   Capability,
   defaultChatModel,
+  defaultOn,
   hasCode,
+  isAgent,
   toolCodes,
   toolCompatible,
   type Tool,
 } from './catalog'
 import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
-import { apiKey, apiPart, appendParts, buildRequest, countTokens, failureText } from './request'
+import {
+  agentConfig,
+  apiKey,
+  apiPart,
+  appendParts,
+  buildRequest,
+  continuation,
+  countTokens,
+  failureText,
+} from './request'
 import type {
   CompareData,
   PaneData,
@@ -63,9 +75,19 @@ export function outputLimit(model: Model | undefined): number | undefined {
     : model?.output_token_limit
 }
 
-// modelDefaults 返回随模型变化的运行设置默认值，官网面板隐藏的采样参数默认不发送
+// researchDefaults 是 Deep Research 的思考摘要、可视化与协作规划默认值，与官网一样取模型目录 field 82 默认开启的能力码
+function researchDefaults(model: Model | undefined) {
+  return {
+    thinkingSummaries: defaultOn(model, Capability.ThinkingSummaries),
+    visualization: defaultOn(model, Capability.Visualization),
+    collaborativePlanning: defaultOn(model, Capability.CollaborativePlanning),
+  }
+}
+
+// modelDefaults 返回随模型变化的运行设置默认值，官网面板隐藏的采样参数默认不发送，agent 打开官网默认的工具
 function modelDefaults(model: Model | undefined): Partial<RunSettings> {
   return {
+    ...(isAgent(model) && { tools: agentTools(model!) }),
     model: model?.id ?? '',
     temperature: hasCode(model, Capability.Temperature) ? (model?.temperature ?? null) : null,
     topP: hasCode(model, Capability.TopP) ? (model?.top_p ?? null) : null,
@@ -79,6 +101,7 @@ function modelDefaults(model: Model | undefined): Partial<RunSettings> {
     videoDuration: null,
     videoResolution: model?.capability_options?.video_output_resolutions?.[0] ?? '',
     videoTask: '',
+    ...researchDefaults(model),
   }
 }
 
@@ -88,7 +111,7 @@ function defaultImageSize(model: Model | undefined): string {
   return sizes.includes('1K') ? '1K' : (sizes[0] ?? '')
 }
 
-// defaultSettings 返回新对话的运行设置：模型默认参数、安全设置全部关闭、支持时开启 Google 搜索
+// defaultSettings 返回新对话的运行设置：模型默认参数、安全设置全部关闭，agent 之外的模型工具全部关闭
 export function defaultSettings(model: Model | undefined): RunSettings {
   return {
     model: '',
@@ -106,7 +129,7 @@ export function defaultSettings(model: Model | undefined): RunSettings {
     safety: Object.fromEntries(
       safetyCategories.map((category) => [category, 'OFF']),
     ) as RunSettings['safety'],
-    tools: hasCode(model, toolCodes.google_search) ? ['google_search'] : [],
+    tools: [],
     responseSchema: '',
     functionDeclarations: '',
     imageOutput: 'IMAGE_TEXT',
@@ -119,6 +142,9 @@ export function defaultSettings(model: Model | undefined): RunSettings {
     imageCount: 1,
     openAISize: 'auto',
     imageQuality: 'auto',
+    agentModel: '',
+    maxTotalTokens: null,
+    ...researchDefaults(undefined),
     ...modelDefaults(model),
   }
 }
@@ -220,8 +246,9 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     session.settings.tools = session.settings.tools.filter((tool) =>
       hasCode(model, toolCodes[tool]),
     )
-    if (!protocolsFor(model).some((item) => item.value === session.settings.protocol))
-      session.settings.protocol = 'gemini'
+    const protocols = protocolsFor(model)
+    if (!protocols.some((item) => item.value === session.settings.protocol))
+      session.settings.protocol = protocols[0]!.value
   }
 
   // open 读取对话库中的对话并返回其内容，loaded 为已读取的内容，读取失败时换成空白对话并记录原因，返回 undefined
@@ -249,7 +276,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         saveState: 'saved',
       })
       opened = session.settings
-      void refreshTokens()
+      // 打开对话后在下一个任务统计 token，构造整段对话的请求不并入渲染对话的任务
+      setTimeout(() => void refreshTokens())
       return prompt
     } catch (error) {
       newChat()
@@ -383,9 +411,16 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   async function run(): Promise<void> {
     const model = currentModel.value
     if (model === undefined || session.running) return
-    const request = buildRequest(session.settings, model, session.turns)
+    const input = continuation(session.settings.protocol, session.turns)
+    const request = buildRequest(session.settings, model, input.turns)
     void refreshTokens()
-    const turn = reactive<Turn>({ id: newTurnID(), role: 'model', parts: [], created: Date.now() })
+    const turn = reactive<Turn>({
+      id: newTurnID(),
+      role: 'model',
+      parts: [],
+      created: Date.now(),
+      ...(session.settings.tools.includes('code_execution') && { agent: true }),
+    })
     // owner 是本次生成所属对话的轮次，打开其他对话或开始新对话时被整体替换
     const owner = session.turns
     owner.push(turn)
@@ -407,6 +442,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
           size: session.settings.openAISize,
           quality: session.settings.imageQuality,
         },
+        agent: agentConfig(session.settings, model),
+        previous: input.previous,
         signal,
         onUpdate: (update) => {
           const elapsed = Math.round(performance.now() - session.started)
@@ -420,6 +457,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
           )
             turn.thinking = elapsed
           appendParts(turn.parts, update.parts)
+          if (update.interactionId) turn.interactionId = update.interactionId
           if (update.finishReason) turn.finishReason = update.finishReason
           if (update.tokens !== undefined) turn.tokens = update.tokens
           if (update.thoughtTokens !== undefined) turn.thoughtTokens = update.thoughtTokens
@@ -511,17 +549,28 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     void run()
   }
 
-  // editTurn 用新文本替换某一轮的文本片段
+  // forgetInteractions 去掉从 index 起各模型轮的交互 ID：这些交互的上游上下文含有被修改的轮次，之后不从它们续接
+  function forgetInteractions(index: number): void {
+    for (const turn of session.turns.slice(index)) delete turn.interactionId
+  }
+
+  // editTurn 用新文本替换某一轮的文本片段，文本有变化时其后的交互不再用于续接
   function editTurn(index: number, text: string): void {
     const turn = session.turns[index]!
     const others = turn.parts.filter((part) => part.text === undefined || part.thought)
+    const current = turn.parts
+      .filter((part) => part.text !== undefined && !part.thought)
+      .map((part) => part.text)
+      .join('')
+    if (text !== current) forgetInteractions(index)
     turn.parts = text === '' ? others : [...others, { text }]
     scheduleSave()
   }
 
-  // deleteTurn 删除一轮
+  // deleteTurn 删除一轮，其后的交互不再用于续接
   function deleteTurn(index: number): void {
     session.turns.splice(index, 1)
+    forgetInteractions(index)
     scheduleSave()
   }
 
@@ -547,11 +596,10 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     return branch(session.turns.length - 1, 'pg.copyOf')
   }
 
-  // applyStarter 按官网空态示例填写输入框：提示词、参考图片、思考档位与搜索、代码执行开关
+  // applyStarter 按官网空态示例填写输入框：提示词、参考图片与搜索、代码执行开关，模型支持时思考档位设为 HIGH
   async function applyStarter(item: ZeroStarter): Promise<void> {
     const model = currentModel.value
-    if (item.thinkingLevel && model?.thinking_levels?.includes(item.thinkingLevel))
-      session.settings.thinkingLevel = item.thinkingLevel
+    if (model?.thinking_levels?.includes('HIGH')) session.settings.thinkingLevel = 'HIGH'
     const enable = (tool: Tool) => {
       if (hasCode(model, toolCodes[tool]) && toolCompatible(model, tool, session.settings.tools))
         session.settings.tools = [...new Set([...session.settings.tools, tool])]

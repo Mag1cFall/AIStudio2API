@@ -236,6 +236,13 @@
       natives.loadImage(String(address), id);
     };
   }
+  if (natives.loadFrame) {
+    input.loadFrame = (address, callback) => {
+      const id = ++nextTask;
+      tasks.set(id, loaded => { try { callback(loaded); } catch (error) {} });
+      natives.loadFrame(String(address), id);
+    };
+  }
   const api = install(input);
   if (realmName === 'frame') {
     const split = shared.shape.frame.freshKeys.indexOf('Function');

@@ -310,11 +310,11 @@ func (p *AccountPool) assistantModelLocked(modelID string) bool {
 	return p.modelCapabilityLocked(modelID, "assistant_route")
 }
 
-// InteractionAgentModel 判断模型是否为经 CreateInteraction 后台任务生成的 Interactions 代理模型，如 Deep Research
+// InteractionAgentModel 判断模型是否为经 CreateInteraction 后台任务生成的 agent，如 Deep Research 与 Antigravity
 func (p *AccountPool) InteractionAgentModel(modelID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.modelCapabilityLocked(modelID, "interaction_route")
+	return p.modelCapabilityLocked(modelID, "interaction_task")
 }
 
 // modelCapabilityLocked 返回目录中首个同 ID 模型的能力标记
@@ -358,8 +358,7 @@ func (p *AccountPool) buildSupportsModelLocked(account *Account, modelID string,
 
 // buildExcludedPlaygroundModel 判断 Playground 目录模型是否使用 Build 未接入的专用路由
 func buildExcludedPlaygroundModel(model Model) bool {
-	return model.Capabilities["interactions_api"] || model.Capabilities["interaction_route"] ||
-		model.Capabilities["transcription_output"]
+	return model.Capabilities["interactions_api"] || model.Capabilities["transcription_output"]
 }
 
 // buildRequiresSpecialTool 判断 Build 独有模型是否只能配合 Computer Use 等专用工具调用

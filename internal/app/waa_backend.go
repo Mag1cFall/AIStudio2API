@@ -14,6 +14,7 @@ import (
 
 // prepareWAABackend 按 WAA 后端准备运行依赖与账户登录驱动
 func prepareWAABackend(ctx context.Context, cfg config.Config, requests *requestRegistry, accounts int, proxy string) (string, aistudio.IsolatedLoginDriver, error) {
+	removeStaleCamoufoxProfiles(requests)
 	if cfg.WAABackend == config.WAABackendSpiderMonkey {
 		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=spidermonkey | 账户=%d", accounts))
 		return "", &lazyLoginDriver{timeout: cfg.RequestTimeout, proxy: proxy}, nil
@@ -23,7 +24,6 @@ func prepareWAABackend(ctx context.Context, cfg config.Config, requests *request
 	if err != nil {
 		return "", nil, err
 	}
-	removeStaleCamoufoxProfiles(requests)
 	login, err := aistudio.NewNativeLoginDriver(camoufoxPath, cfg.RequestTimeout)
 	if err != nil {
 		return "", nil, err

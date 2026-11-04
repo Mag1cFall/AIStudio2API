@@ -17,6 +17,7 @@ const library = {
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { api } from '@/api'
+import { useAnchoredMenu } from '@/components/AnchoredMenu.vue'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
@@ -49,11 +50,14 @@ const sort = ref<{ column: SortColumn; descending: boolean }>({ column: '', desc
 // shown 与官网一样是已读取的会话中标题、描述、所有者或更新时间文字包含搜索词的会话，按官网表头的规则排序：名称比较小写后的码位，更新时间比较时间戳
 const shown = computed(() => {
   const text = query.value.trim().toLowerCase()
-  const items = prompts.value.filter((item) =>
-    [title(item), item.description, t('pg.createdByYou'), relativeTime(item.updated_at)].some(
-      (field) => field.toLowerCase().includes(text),
-    ),
-  )
+  const items =
+    text === ''
+      ? prompts.value.slice()
+      : prompts.value.filter((item) =>
+          [title(item), item.description, t('pg.createdByYou'), relativeTime(item.updated_at)].some(
+            (field) => field.toLowerCase().includes(text),
+          ),
+        )
   const { column, descending } = sort.value
   if (column === '') return items
   const key = (item: PromptSummary) =>
@@ -79,10 +83,27 @@ function updatedTime(item: PromptSummary): number {
 const now = ref(Date.now())
 const clock = window.setInterval(() => (now.value = Date.now()), 60_000)
 
+// relativeFormat 是界面语言的相对时间格式
+const relativeFormat = computed(
+  () => new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' }),
+)
+// dateTimeFormat 是界面语言的完整日期时间格式，字段与 toLocaleString 的默认值相同
+const dateTimeFormat = computed(
+  () =>
+    new Intl.DateTimeFormat(locale.value, {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    }),
+)
+
 // relativeTime 按界面语言把更新时间写成相对当前的时间
 function relativeTime(value: string): string {
   const seconds = (new Date(value).getTime() - now.value) / 1000
-  const format = new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
+  const format = relativeFormat.value
   const units: [Intl.RelativeTimeFormatUnit, number][] = [
     ['year', 31536000],
     ['month', 2592000],
@@ -95,6 +116,9 @@ function relativeTime(value: string): string {
     if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit)
   return format.format(Math.round(seconds), 'second')
 }
+
+// menu 是各行共用的更多选项菜单
+const { open: menuOpen, target: menu, toggle: toggleMenu } = useAnchoredMenu<PromptSummary>()
 
 // toggleSort 按官网表头切换排序：升序、降序、恢复默认
 function toggleSort(column: Exclude<SortColumn, ''>): void {
@@ -247,7 +271,9 @@ watch(
 
 onMounted(async () => {
   document.title = `${t('pg.history')} | AIStudio2API`
-  scroller.value!.scrollTop = library.scrollTop
+  // 回到历史页时在下一帧绘制前恢复上次的滚动位置，滚动所需的布局随这一帧完成，不并入挂载页面的任务
+  if (library.scrollTop > 0)
+    requestAnimationFrame(() => (scroller.value!.scrollTop = library.scrollTop))
   try {
     await refresh()
   } catch (error) {
@@ -341,11 +367,17 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="card-actions" @click.stop @keydown.stop>
-              <LibraryRowMenu
-                @rename="renaming = item"
-                @copy="copy(item)"
-                @remove="pending = item"
-              />
+              <button
+                type="button"
+                ms-button
+                class="ms-button-borderless ms-button-icon"
+                :aria-label="t('pg.moreOptions')"
+                aria-haspopup="menu"
+                :aria-expanded="menuOpen && menu?.item.id === item.id"
+                @click="toggleMenu($event, item)"
+              >
+                <UiIcon name="more" :size="20" />
+              </button>
             </div>
           </div>
           <div class="card-details">
@@ -445,18 +477,24 @@ onBeforeUnmount(() => {
                 </div>
               </td>
               <td
-                v-tooltip="new Date(item.updated_at).toLocaleString(locale)"
+                v-tooltip="dateTimeFormat.format(new Date(item.updated_at))"
                 class="table-body-cell updated-cell sub-text"
                 @click="openPrompt(item)"
               >
                 {{ relativeTime(item.updated_at) }}
               </td>
               <td class="table-body-cell actions-cell">
-                <LibraryRowMenu
-                  @rename="renaming = item"
-                  @copy="copy(item)"
-                  @remove="pending = item"
-                />
+                <button
+                  type="button"
+                  ms-button
+                  class="ms-button-borderless ms-button-icon"
+                  :aria-label="t('pg.moreOptions')"
+                  aria-haspopup="menu"
+                  :aria-expanded="menuOpen && menu?.item.id === item.id"
+                  @click="toggleMenu($event, item)"
+                >
+                  <UiIcon name="more" :size="20" />
+                </button>
               </td>
             </tr>
           </tbody>
@@ -480,6 +518,13 @@ onBeforeUnmount(() => {
         <div class="loading-next-batch-text">{{ t('pg.historyLoadingMore') }}</div>
       </div>
     </div>
+    <LibraryRowMenu
+      v-model:open="menuOpen"
+      :anchor="menu?.anchor"
+      @rename="renaming = menu?.item ?? null"
+      @copy="menu && copy(menu.item)"
+      @remove="pending = menu?.item ?? null"
+    />
     <SavePromptDialog
       :open="renaming !== null"
       :title="renaming?.title ?? ''"
@@ -512,6 +557,7 @@ onBeforeUnmount(() => {
   height: 100%;
   overflow-y: auto;
   padding: 0 24px;
+  scrollbar-gutter: stable both-edges;
 }
 
 .lib-view {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, ref, shallowRef, watch } from 'vue'
+import { computed, onActivated, onDeactivated, provide, ref, shallowRef, watch } from 'vue'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { Model, UsageDimension, UsageReport, UsageStats } from '@/types'
@@ -11,7 +11,7 @@ import RangePicker from './usage/RangePicker.vue'
 import RankingTable from './usage/RankingTable.vue'
 import RecordsTable from './usage/RecordsTable.vue'
 import UsageCharts from './usage/UsageCharts.vue'
-import { useUsageFormat } from './usage/format'
+import { usageClock, useUsageFormat } from './usage/format'
 import { readPreference, writePreference } from '@/preference'
 import {
   dimensions,
@@ -43,6 +43,7 @@ const loading = ref(false)
 const error = ref('')
 const updatedAt = ref(0)
 const now = ref(Date.now())
+provide(usageClock, now)
 const recordsRefresh = ref(0)
 const refreshChoices = [0, 15, 30, 60] as const
 const autoRefresh = ref<number>(
@@ -82,6 +83,7 @@ async function load(): Promise<void> {
   }
   query.set('tz', timezone)
   query.set('stack', state.stack)
+  query.set('pairs', '0')
   controller?.abort()
   const current = new AbortController()
   controller = current
@@ -99,6 +101,19 @@ async function load(): Promise<void> {
   } finally {
     if (controller === current) loading.value = false
   }
+}
+
+// loadPairs 读取当前范围与筛选下一个账户或模型的组合明细，主报告不含组合明细
+async function loadPairs(
+  dimension: 'account' | 'model',
+  key: string,
+): Promise<UsageReport['pairs']> {
+  const query = baseQuery()
+  if (query === null) throw new Error(t('usage.rangeInvalid'))
+  query.set(dimension, key)
+  query.set('tz', timezone)
+  query.set('stack', state.stack)
+  return (await api.usage(query, new AbortController().signal)).pairs
 }
 
 // refresh 立即刷新报告与请求记录
@@ -362,7 +377,7 @@ const statusOptions = computed(() =>
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 flex-col overflow-auto">
+  <section class="flex min-h-0 flex-1 flex-col overflow-auto [scrollbar-gutter:stable]">
     <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-8">
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('usage.title') }}</h2>
@@ -541,7 +556,7 @@ const statusOptions = computed(() =>
             />
             <RankingTable
               :report="report"
-              :now="now"
+              :load-pairs="loadPairs"
               @filter="addFilter"
               @status="state.status = $event"
             />

@@ -163,8 +163,8 @@ jobs:
           mkdir -p dist
           name="aistudio2api-${version}-linux-${GOARCH}"
           mkdir -p "dist/$name"
-          GOOS=linux go build -mod=readonly -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all' $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
-          tar -cf - -C dist "$name" | gzip -9 > "dist/$name.tar.gz"
+          GOOS=linux go build -mod=readonly -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all -Wl,--gc-sections' $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+          tar -cf - -C dist "$name" | 7z a -tgzip -mx=9 -mfb=258 -mpass=15 -si "dist/$name.tar.gz" > /dev/null
       - uses: actions/cache/save@v5
         if: github.ref == 'refs/heads/main'
         with:
@@ -221,8 +221,8 @@ jobs:
           wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info dist/info.json -out cmd/aistudio2api/rsrc_windows_amd64.syso
           name="aistudio2api-${version}-windows-amd64"
           mkdir -p "dist/$name"
-          CC=x86_64-w64-mingw32-clang CXX=x86_64-w64-mingw32-clang++ GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
-          (cd dist && zip -9 -qr "$name.zip" "$name")
+          CC=x86_64-w64-mingw32-clang CXX=x86_64-w64-mingw32-clang++ GOOS=windows GOARCH=amd64 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -H windowsgui -extldflags '-Wl,--gc-sections -Wl,--icf=safe' $link" -o "dist/$name/aistudio2api.exe" ./cmd/aistudio2api
+          (cd dist && 7z a -tzip -mm=Deflate -mx=9 -mfb=258 -mpass=15 "$name.zip" "$name" > /dev/null)
       - uses: actions/cache/save@v5
         if: github.ref == 'refs/heads/main'
         with:
@@ -279,11 +279,11 @@ jobs:
             export GOARCH=$1
             export CGO_CXXFLAGS="-mmacosx-version-min=12.0 -I$RUNNER_TEMP/spidermonkey/darwin-$1/include"
             export CGO_LDFLAGS="-mmacosx-version-min=12.0 -L$RUNNER_TEMP/spidermonkey/darwin-$1/lib"
-            go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o "dist/aistudio2api-$1" ./cmd/aistudio2api
+            go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w -extldflags -Wl,-dead_strip $link" -o "dist/aistudio2api-$1" ./cmd/aistudio2api
             name="aistudio2api-${version}-darwin-$1"
             mkdir -p "dist/$name"
-            go build -mod=readonly -trimpath -ldflags="-s -w $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
-            tar -cf - -C dist "$name" | gzip -9 > "dist/$name.tar.gz"
+            go build -mod=readonly -trimpath -ldflags="-s -w -extldflags -Wl,-dead_strip $link" -o "dist/$name/aistudio2api" ./cmd/aistudio2api
+            tar -cf - -C dist "$name" | 7z a -tgzip -mx=9 -mfb=258 -mpass=15 -si "dist/$name.tar.gz" > /dev/null
           }
           build arm64 & arm64=$!
           build amd64 & amd64=$!
@@ -326,7 +326,7 @@ jobs:
 
   desktop-linux:
     needs: frontend
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -348,7 +348,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config file libgtk-4-dev libwebkitgtk-6.0-dev
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config file libgtk-3-dev libwebkit2gtk-4.1-dev
       - uses: ./.github/actions/spidermonkey
         with:
           target: linux-amd64-gnu
@@ -360,11 +360,9 @@ jobs:
           link=""
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; number="${version#v}"; link="-X github.com/Mag1cFall/AIStudio2API/internal/app.version=$version"; fi
           mkdir -p bin dist
-          CGO_ENABLED=1 go build -mod=readonly -trimpath -tags desktop,production -ldflags="-s -w $link" -o bin/aistudio2api ./cmd/aistudio2api
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
+          CGO_ENABLED=1 go build -mod=readonly -trimpath -tags desktop,production,gtk3 -ldflags="-s -w -extldflags -Wl,--gc-sections $link" -o bin/aistudio2api ./cmd/aistudio2api
+          go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           cp build/appicon.png dist/aistudio2api.png
-          # wails3 generate appimage 遍历整个 /usr 查找 WebKit 文件，先用空目录遮住 runner 预装的大型工具目录
-          for dir in /usr/local /usr/lib/google-cloud-sdk /usr/share/miniconda /usr/share/dotnet; do sudo mount -t tmpfs none "$dir"; done
           wails3 generate appimage -binary bin/aistudio2api -icon dist/aistudio2api.png -desktopfile build/linux/aistudio2api.desktop -outputdir dist -builddir dist/appimage
           mv dist/aistudio2api-x86_64.AppImage "dist/aistudio2api-${version}-linux-amd64.AppImage"
           VERSION="$number" GOARCH=amd64 wails3 tool package -name aistudio2api -format deb -config build/linux/nfpm.yaml -out dist

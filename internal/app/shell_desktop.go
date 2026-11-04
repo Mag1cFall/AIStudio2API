@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,10 +26,30 @@ func prepareShell(args []string) error {
 	if err := os.Chdir(directory); err != nil {
 		return err
 	}
+	if err := linkWebKitHelpers(); err != nil {
+		return err
+	}
 	if len(args) != 0 && args[0] == "setup" {
 		attachConsole()
 	}
 	return nil
+}
+
+// linkWebKitHelpers 在数据目录链接 AppImage 打包的 WebKit 辅助进程目录，打包的 libwebkit2gtk 以相对当前目录的路径启动辅助进程
+func linkWebKitHelpers() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	helpers, err := filepath.Glob(filepath.Join(filepath.Dir(executable), "..", "lib", "webkit*gtk-*"))
+	if err != nil || len(helpers) == 0 {
+		return err
+	}
+	link := filepath.Base(helpers[0])
+	if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.Symlink(helpers[0], link)
 }
 
 // desktopDataDir 返回桌面版数据目录：Windows 为可执行文件所在目录，其他系统为用户配置目录下的 AIStudio2API
@@ -51,10 +73,10 @@ type uiShell struct {
 	app *desktop.App
 }
 
-// newShell 创建桌面应用，open 为 false 时窗口保持隐藏、只显示托盘
-func newShell(open bool) *uiShell {
+// newShell 创建桌面应用，open 为 false 时窗口保持隐藏、只显示托盘，stop 在桌面应用退出前结束生成服务
+func newShell(open bool, stop func()) *uiShell {
 	webview, _ := filepath.Abs(filepath.Join("runtime", "webview"))
-	return &uiShell{app: desktop.New(open, webview)}
+	return &uiShell{app: desktop.New(open, webview, stop)}
 }
 
 // run 运行窗口与托盘：服务就绪前显示启动画面，就绪后显示管理页面，启动失败时显示错误对话框后退出

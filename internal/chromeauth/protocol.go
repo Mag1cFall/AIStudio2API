@@ -72,7 +72,7 @@ type multiloginResponse struct {
 }
 
 type deviceBindingKey interface {
-	PublicKey() (*ecdsa.PublicKey, []byte, error)
+	PublicKey() ([]byte, error)
 	SignSHA256([]byte) ([]byte, error)
 	Close()
 }
@@ -194,7 +194,7 @@ func fetchBoundCookies(ctx context.Context, client tls_client.HttpClient, identi
 		return nil, err
 	}
 	defer bindingKey.Close()
-	publicKey, spki, err := bindingKey.PublicKey()
+	spki, err := bindingKey.PublicKey()
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +212,7 @@ func fetchBoundCookies(ctx context.Context, client tls_client.HttpClient, identi
 	if err != nil {
 		return nil, fmt.Errorf("生成 HPKE 临时密钥: %w", err)
 	}
-	assertion, err := createAssertion(bindingKey, publicKey, spki, challenge, ephemeralPrivateKey.PublicKey().Bytes())
+	assertion, err := createAssertion(bindingKey, spki, challenge, ephemeralPrivateKey.PublicKey().Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +351,7 @@ func createTinkHPKEKeyset(publicKey []byte) []byte {
 	return appendBytesField(keyset, 2, key)
 }
 
-func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, spki []byte, challenge string, ephemeralPublicKey []byte) (string, error) {
+func createAssertion(bindingKey deviceBindingKey, spki []byte, challenge string, ephemeralPublicKey []byte) (string, error) {
 	header := struct {
 		Algorithm string `json:"alg"`
 		Type      string `json:"typ"`
@@ -384,15 +384,6 @@ func createAssertion(bindingKey deviceBindingKey, publicKey *ecdsa.PublicKey, sp
 	signature, err := bindingKey.SignSHA256([]byte(signingInput))
 	if err != nil {
 		return "", err
-	}
-	if len(signature) != 64 {
-		return "", fmt.Errorf("NCrypt ECDSA 签名长度异常")
-	}
-	digest := sha256.Sum256([]byte(signingInput))
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-	if !ecdsa.Verify(publicKey, digest[:], r, s) {
-		return "", fmt.Errorf("NCrypt ECDSA 签名校验失败")
 	}
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
@@ -432,19 +423,13 @@ func appendVarint(output []byte, value uint64) []byte {
 	return append(output, byte(value))
 }
 
-func parsePublicKeyBlob(blob []byte) (*ecdsa.PublicKey, []byte, error) {
+func parsePublicKeyBlob(blob []byte) ([]byte, error) {
 	if len(blob) != 72 || binary.LittleEndian.Uint32(blob[4:8]) != 32 {
-		return nil, nil, fmt.Errorf("NCrypt ECDSA 公钥格式异常")
+		return nil, fmt.Errorf("NCrypt ECDSA 公钥格式异常")
 	}
-	x := new(big.Int).SetBytes(blob[8:40])
-	y := new(big.Int).SetBytes(blob[40:72])
-	if !elliptic.P256().IsOnCurve(x, y) {
-		return nil, nil, fmt.Errorf("NCrypt ECDSA 公钥曲线异常")
-	}
-	publicKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
-	spki, err := x509.MarshalPKIXPublicKey(publicKey)
+	spki, err := x509.MarshalPKIXPublicKey(&ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(blob[8:40]), Y: new(big.Int).SetBytes(blob[40:72])})
 	if err != nil {
-		return nil, nil, fmt.Errorf("编码 NCrypt ECDSA 公钥: %w", err)
+		return nil, fmt.Errorf("编码 NCrypt ECDSA 公钥: %w", err)
 	}
-	return publicKey, spki, nil
+	return spki, nil
 }

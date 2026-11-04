@@ -5,12 +5,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
 const maxCookieAge = 400 * 24 * time.Hour
@@ -50,8 +50,8 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err
 	}
-	proxyURL, err := validateProxy(options.Proxy)
-	if err != nil {
+	proxyURL := strings.TrimSpace(options.Proxy)
+	if err := config.ValidateProxy(proxyURL); err != nil {
 		return nil, err
 	}
 	accounts, err := Discover(options.ChromeRoot)
@@ -65,9 +65,6 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 	masterKey, err := retrieveV20Key(options.ChromeRoot)
 	if err != nil {
 		return nil, err
-	}
-	if len(masterKey) != 32 {
-		return nil, fmt.Errorf("Chrome v20 主密钥长度异常")
 	}
 	results := make([]ImportResult, 0, len(selected))
 	for _, account := range selected {
@@ -85,7 +82,8 @@ func Refresh(ctx context.Context, source aistudio.AuthSource, material aistudio.
 	if err := ensurePlatformImport(); err != nil {
 		return nil, err
 	}
-	proxyURL, err := validateProxy(proxy)
+	proxyURL := strings.TrimSpace(proxy)
+	err := config.ValidateProxy(proxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -205,23 +203,6 @@ func missingValues(requested map[string]struct{}, found map[string]struct{}) []s
 	return missing
 }
 
-func validateProxy(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", nil
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("proxy 必须是 http、https 或 socks5 URL")
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https", "socks5":
-		return value, nil
-	default:
-		return "", fmt.Errorf("proxy 必须是 http、https 或 socks5 URL")
-	}
-}
-
 func decryptV20Token(masterKey []byte, encrypted []byte) (string, error) {
 	if len(encrypted) < 3+12+16 || string(encrypted[:3]) != "v20" {
 		return "", fmt.Errorf("refresh token 密文版本不是 v20")
@@ -238,11 +219,7 @@ func decryptV20Token(masterKey []byte, encrypted []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("refresh token 解密失败")
 	}
-	token := string(plaintext)
-	if len(token) != 103 || !strings.HasPrefix(token, "1//0") {
-		return "", fmt.Errorf("refresh token 解密结果格式异常")
-	}
-	return token, nil
+	return string(plaintext), nil
 }
 
 func toStorageCookies(cookies []multiloginCookie) []aistudio.StateCookie {

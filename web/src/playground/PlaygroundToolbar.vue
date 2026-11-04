@@ -256,6 +256,7 @@ async function removePrompt(): Promise<void> {
 }
 
 .toolbar-right {
+  position: relative;
   grid-column: 3;
 }
 
@@ -287,6 +288,8 @@ async function removePrompt(): Promise<void> {
 }
 
 .saving-indicator {
+  position: absolute;
+  right: calc(100% + 4px);
   display: flex;
   padding: 4px;
   color: var(--color-v3-text-var);

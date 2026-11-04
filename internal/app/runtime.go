@@ -77,37 +77,34 @@ func newRuntime(
 	if _, err := proxies.Assign(); err != nil {
 		return nil, nil, nil, err
 	}
-	headers, err := newAccountHeaderProvider(accounts, globalProxy)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	transport, err := aistudio.NewMakerSuiteHTTPTransport(aistudio.HTTPTransportOptions{
-		Pool: pool, Signer: aistudio.NewSigner(), Headers: headers, GlobalProxy: globalProxy,
-	})
-	if err != nil {
-		headers.Close()
-		return nil, nil, nil, err
-	}
 	workers := newAccountWorkerManager(
 		pool, accounts, requests, camoufoxPath, globalProxy, cfg.InitTimeout,
-		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency, cfg.TemporaryChat,
+		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency,
 	)
+	transport, err := aistudio.NewMakerSuiteHTTPTransport(aistudio.HTTPTransportOptions{
+		Pool: pool, Signer: aistudio.NewSigner(), Headers: workers, GlobalProxy: globalProxy,
+	})
+	if err != nil {
+		return nil, nil, nil, errors.Join(err, workers.Close())
+	}
 	pool.SetSessionCheck(func(ctx context.Context, account *aistudio.Account) error {
 		return aistudio.CheckSession(ctx, workers.workerConfig(account))
 	})
 	protected := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
 		Transport: transport, Workers: workers, SetupTimeout: cfg.InitTimeout,
 	})
-	refresher := newAuthRuntimeRefresher(workers, headers, requests, globalProxy)
+	refresher := newAuthRuntimeRefresher(workers, requests, globalProxy)
 	workers.refresher = refresher
 	client := aistudio.NewClient(aistudio.ClientOptions{
 		Transport:       &authRetryTransport{transport: transport, refresher: refresher},
 		Protected:       &authRetryProtectedTransport{transport: protected, refresher: refresher},
 		ContextProvider: aistudio.NewPoolRequestContextProvider(pool),
+		Pages:           workers,
 	})
 	pooled := aistudio.NewPooledService(pool, client)
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
 	pooled.YouTubeLinks = cfg.YouTubeLinks
+	pooled.StripThoughtSignatures = cfg.StripThoughtSignatures
 	pooled.ContinuationRewrite = cfg.ContinuationRewrite
 	pooled.ContinuationPrompt = cfg.ContinuationPrompt
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
@@ -115,7 +112,7 @@ func newRuntime(
 	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
 	service.hedgeModels = config.ModelList(cfg.FirstEventHedgeModels)
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
-	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
+	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
 	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
 	workers.proxyFailed = service.reportProxyFailure
@@ -131,7 +128,6 @@ func newRuntime(
 		stopProbe()
 		err := workers.Close()
 		transport.CloseIdleConnections()
-		headers.Close()
 		return err
 	}
 	return service, admin, closeRuntime, nil
@@ -166,8 +162,14 @@ type trackedService struct {
 	modelChangeMu        sync.Mutex
 	modelRevision        uint64
 	modelApplied         uint64
-	stateRefreshMu       sync.Mutex
-	stateRefreshAt       map[string]time.Time
+	// catalogRoundMu 保护 catalogRoundAt 与 catalogRoundDone
+	catalogRoundMu sync.Mutex
+	// catalogRoundAt 是上一轮启用账户目录读取的开始时间，巡检循环未运行时为零
+	catalogRoundAt time.Time
+	// catalogRoundDone 在待开始或进行中的一轮目录读取读完第一个账户时关闭，没有这样的一轮时为 nil
+	catalogRoundDone chan struct{}
+	// catalogRoundWake 让巡检循环立即开始请求缺少模型时排定的一轮
+	catalogRoundWake chan struct{}
 	// hedgeAuto 与 hedgeAfter 是首事件超时备用请求的自适应开关与自定义等待
 	hedgeAuto  bool
 	hedgeAfter time.Duration
@@ -178,9 +180,10 @@ type trackedService struct {
 }
 
 type modelCatalogService interface {
-	RefreshAccountModels(context.Context, string) ([]aistudio.Model, error)
+	RefreshAccountModels(context.Context, string, bool) ([]aistudio.Model, error)
 	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
 	ReclaimIdleInlineMedia(context.Context) error
+	ReclaimIdleAssistantApplets(context.Context) error
 	CachedModels() []aistudio.Model
 }
 
@@ -196,7 +199,7 @@ func newTrackedService(
 	catalog := service.(modelCatalogService)
 	return &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
-		timeout: timeout, modelRetries: make(map[string]struct{}), stateRefreshAt: make(map[string]time.Time),
+		timeout: timeout, modelRetries: make(map[string]struct{}), catalogRoundWake: make(chan struct{}, 1),
 	}
 }
 
@@ -212,7 +215,9 @@ const (
 	serviceLaunching
 	serviceRunning
 	modelCatalogRetryInterval        = 30 * time.Second
-	accountStateRefreshInterval      = 10 * time.Minute
+	accountStateRefreshInterval      = 24 * time.Hour
+	missingModelCatalogInterval      = 10 * time.Minute
+	idleResourceReclaimInterval      = 10 * time.Minute
 	modelCatalogShutdownTimeout      = 2 * time.Second
 	serviceTransitionShutdownTimeout = 12 * time.Second
 )
@@ -649,7 +654,7 @@ type accountModelRefreshResult struct {
 	skipped   bool
 }
 
-// startModelCatalogRefresh 并发刷新全部账户并持续处理失败目录
+// startModelCatalogRefresh 刷新全部账户目录并持续处理失败目录
 func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-chan error, <-chan struct{}, <-chan struct{}) {
 	ready := make(chan error, 1)
 	synced := make(chan struct{})
@@ -661,11 +666,11 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 		firstReady := false
 		synchronized := 0
 		refreshed := 0
-		failures := make([]error, 0)
+		var failures aistudio.GroupedErrors
 		authRequiredBefore := service.authRequiredAccountIDs()
 		for result := range service.refreshAccountModelCatalogs(ctx, accountIDs, false) {
 			if result.err != nil {
-				failures = append(failures, fmt.Errorf("账户 %s: %w", result.accountID, result.err))
+				failures.Add(result.accountID, result.err)
 				continue
 			}
 			synchronized++
@@ -685,7 +690,7 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 		if !firstReady {
 			launchErr := ctx.Err()
 			if launchErr == nil && len(failures) > 0 {
-				launchErr = errors.Join(failures...)
+				launchErr = failures.Join(aistudio.AccountError)
 			}
 			if launchErr == nil {
 				launchErr = aistudio.ErrNoEligibleAccount
@@ -704,7 +709,7 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 			"模型目录后台同步完成 | 同步=%d | 非空=%d | 模型=%d | 待重试账户=%d | 耗时=%s",
 			synchronized, refreshed, len(service.modelSnapshot()), service.pendingModelRetryCount(), time.Since(startedAt).Round(time.Millisecond),
 		))
-		service.retryModelCatalogs(ctx)
+		service.retryModelCatalogs(ctx, startedAt)
 	}()
 	return ready, synced, done
 }
@@ -721,25 +726,39 @@ func (service *trackedService) modelCatalogAccountIDs() []string {
 	return accountIDs
 }
 
+// refreshAccountModelCatalogs 同步账户目录并按完成顺序发出结果：还没有目录的账户并发载入页面，已有目录的账户逐个载入
 func (service *trackedService) refreshAccountModelCatalogs(
 	ctx context.Context,
 	accountIDs []string,
 	pendingOnly bool,
 ) <-chan accountModelRefreshResult {
 	results := make(chan accountModelRefreshResult, len(accountIDs))
-	var refreshes sync.WaitGroup
-	for _, accountID := range accountIDs {
-		refreshes.Add(1)
-		go func(accountID string) {
-			defer refreshes.Done()
-			if pendingOnly && !service.modelRetryPending(accountID) {
-				results <- accountModelRefreshResult{accountID: accountID, skipped: true}
-				return
-			}
-			models, err := service.refreshAccountModelCatalog(ctx, accountID)
-			results <- accountModelRefreshResult{accountID: accountID, models: models, err: err}
-		}(accountID)
+	refresh := func(accountID string) {
+		if pendingOnly && !service.modelRetryPending(accountID) {
+			results <- accountModelRefreshResult{accountID: accountID, skipped: true}
+			return
+		}
+		models, err := service.refreshAccountModelCatalog(ctx, accountID, pendingOnly)
+		results <- accountModelRefreshResult{accountID: accountID, models: models, err: err}
 	}
+	catalogued := make(map[string]bool)
+	for _, status := range service.pool.Status() {
+		catalogued[status.ID] = len(status.Models) > 0
+	}
+	var refreshes sync.WaitGroup
+	var known []string
+	for _, accountID := range accountIDs {
+		if catalogued[accountID] {
+			known = append(known, accountID)
+			continue
+		}
+		refreshes.Go(func() { refresh(accountID) })
+	}
+	refreshes.Go(func() {
+		for _, accountID := range known {
+			refresh(accountID)
+		}
+	})
 	go func() {
 		refreshes.Wait()
 		close(results)
@@ -747,10 +766,11 @@ func (service *trackedService) refreshAccountModelCatalogs(
 	return results
 }
 
-func (service *trackedService) refreshAccountModelCatalog(ctx context.Context, accountID string) ([]aistudio.Model, error) {
+// refreshAccountModelCatalog 以账户页面载入时的响应同步权益与模型目录，reload 为 true 时重新载入页面，失败或目录为空时登记 30 秒后重试
+func (service *trackedService) refreshAccountModelCatalog(ctx context.Context, accountID string, reload bool) ([]aistudio.Model, error) {
 	requestCtx, cancel := service.lifecycleRequestContext(ctx)
 	defer cancel()
-	models, err := service.catalog.RefreshAccountModels(requestCtx, accountID)
+	models, err := service.catalog.RefreshAccountModels(requestCtx, accountID, reload)
 	service.modelRetriesMu.Lock()
 	if err != nil {
 		if ctx.Err() == nil {
@@ -805,28 +825,32 @@ func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, star
 }
 
 func (service *trackedService) syncAccountModels(ctx context.Context, accountID string) ([]aistudio.Model, error) {
-	models, err := service.refreshAccountModelCatalog(ctx, accountID)
+	models, err := service.refreshAccountModelCatalog(ctx, accountID, false)
 	service.modelSyncMu.Lock()
 	service.applyCachedModelCatalog()
 	service.modelSyncMu.Unlock()
 	return models, err
 }
 
-// retryModelCatalogs 每 30 秒重试待同步账户的目录，每 10 分钟巡检启用账户的权益与目录并删除闲置的内联附件
-func (service *trackedService) retryModelCatalogs(ctx context.Context) {
+// retryModelCatalogs 每 30 秒重新载入待同步账户的页面重试目录，自 startedAt 起每 24 小时重新载入启用账户的页面读取权益与目录；闲置的写代码助手应用在启动时与每 10 分钟删除，闲置的内联附件每 10 分钟删除
+func (service *trackedService) retryModelCatalogs(ctx context.Context, startedAt time.Time) {
+	var patrol sync.WaitGroup
+	defer patrol.Wait()
+	patrol.Go(func() { service.patrolAccountStates(ctx, startedAt) })
+	service.reclaimIdleAssistantApplets(ctx)
 	ticker := time.NewTicker(modelCatalogRetryInterval)
 	defer ticker.Stop()
-	stateTicker := time.NewTicker(accountStateRefreshInterval)
-	defer stateTicker.Stop()
+	reclaimTicker := time.NewTicker(idleResourceReclaimInterval)
+	defer reclaimTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-stateTicker.C:
-			service.refreshAccountStates(ctx)
+		case <-reclaimTicker.C:
 			if err := service.catalog.ReclaimIdleInlineMedia(ctx); err != nil {
 				service.requests.log("service", "WARN", fmt.Sprintf("闲置内联附件删除失败: %v", err))
 			}
+			service.reclaimIdleAssistantApplets(ctx)
 		case <-ticker.C:
 			if !service.retryAccountModelCatalogs(ctx) {
 				return
@@ -835,16 +859,108 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context) {
 	}
 }
 
-// refreshAccountStates 并发读取启用账户的权益与模型目录，没有空闲槽位的账户跳过本轮
-func (service *trackedService) refreshAccountStates(ctx context.Context) {
-	var refreshes sync.WaitGroup
-	for _, accountID := range service.modelCatalogAccountIDs() {
-		refreshes.Go(func() { _, _ = service.refreshAccountState(ctx, accountID, false) })
+// reclaimIdleAssistantApplets 删除闲置的写代码助手应用，失败的留待下一轮
+func (service *trackedService) reclaimIdleAssistantApplets(ctx context.Context) {
+	if err := service.catalog.ReclaimIdleAssistantApplets(ctx); err != nil {
+		service.requests.log("service", "WARN", fmt.Sprintf("闲置写代码助手应用删除失败: %v", err))
 	}
-	refreshes.Wait()
 }
 
-// refreshAccountState 读取账户权益与模型目录，失败或变化时发布账户与模型事件并记录日志
+// patrolAccountStates 自 startedAt 起每 24 小时开始一轮账户状态巡检，请求缺少模型时排定的一轮立即开始，下一轮从最近一轮开始时计时
+func (service *trackedService) patrolAccountStates(ctx context.Context, startedAt time.Time) {
+	service.catalogRoundMu.Lock()
+	service.catalogRoundAt = startedAt
+	service.catalogRoundMu.Unlock()
+	defer func() {
+		service.catalogRoundMu.Lock()
+		service.catalogRoundAt = time.Time{}
+		if service.catalogRoundDone != nil {
+			close(service.catalogRoundDone)
+			service.catalogRoundDone = nil
+		}
+		select {
+		case <-service.catalogRoundWake:
+		default:
+		}
+		service.catalogRoundMu.Unlock()
+	}()
+	timer := time.NewTimer(time.Until(startedAt.Add(accountStateRefreshInterval)))
+	defer timer.Stop()
+	for {
+		woken := false
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		case <-service.catalogRoundWake:
+			woken = true
+		}
+		service.catalogRoundMu.Lock()
+		if service.catalogRoundDone == nil {
+			if woken {
+				service.catalogRoundMu.Unlock()
+				continue
+			}
+			service.catalogRoundDone = make(chan struct{})
+		}
+		done := service.catalogRoundDone
+		round := time.Now()
+		service.catalogRoundAt = round
+		service.catalogRoundMu.Unlock()
+		service.refreshAccountStates(ctx, func() {
+			service.catalogRoundMu.Lock()
+			service.catalogRoundDone = nil
+			service.catalogRoundMu.Unlock()
+			close(done)
+		})
+		timer.Reset(time.Until(round.Add(accountStateRefreshInterval)))
+	}
+}
+
+// catalogModelID 返回请求模型在实时目录中的正式 ID；目录中没有该模型时先等 awaitCatalogRound 再查找
+func (service *trackedService) catalogModelID(ctx context.Context, model string) string {
+	if service.pool.MissingModel(model) {
+		service.awaitCatalogRound(ctx)
+	}
+	return service.pool.CanonicalModelID(model)
+}
+
+// awaitCatalogRound 等待进行中的一轮启用账户目录读取读完第一个账户；没有进行中的一轮且距上一轮开始已超过 10 分钟时让巡检循环立即开始一轮并等它读完第一个账户
+func (service *trackedService) awaitCatalogRound(ctx context.Context) {
+	service.catalogRoundMu.Lock()
+	done := service.catalogRoundDone
+	if done == nil && !service.catalogRoundAt.IsZero() && time.Since(service.catalogRoundAt) >= missingModelCatalogInterval {
+		done = make(chan struct{})
+		service.catalogRoundDone = done
+		select {
+		case service.catalogRoundWake <- struct{}{}:
+		default:
+		}
+	}
+	service.catalogRoundMu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+}
+
+// refreshAccountStates 逐个重新载入启用账户的页面读取权益与模型目录，没有空闲槽位的账户跳过本轮；first 在第一个账户读完或本轮结束时调用一次
+func (service *trackedService) refreshAccountStates(ctx context.Context, first func()) {
+	first = sync.OnceFunc(first)
+	defer first()
+	for _, accountID := range service.modelCatalogAccountIDs() {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _ = service.refreshAccountState(ctx, accountID, false)
+		first()
+	}
+}
+
+// refreshAccountState 重新载入账户页面读取权益与模型目录，失败或变化时发布账户与模型事件并记录日志
 func (service *trackedService) refreshAccountState(ctx context.Context, accountID string, wait bool) (aistudio.AccountRefresh, error) {
 	requestCtx, cancel := service.lifecycleRequestContext(ctx)
 	defer cancel()
@@ -868,19 +984,6 @@ func (service *trackedService) refreshAccountState(ctx context.Context, accountI
 		"账户状态已更新 | 权益=%s→%s | 模型=%d→%d", refresh.PreviousTier, refresh.Tier, refresh.PreviousModels, refresh.Models,
 	))
 	return refresh, nil
-}
-
-// refreshAccountStateAfterLimit 在订阅模型撞到额度限制后于后台读取该账户权益与目录，同一账户每分钟最多一次
-func (service *trackedService) refreshAccountStateAfterLimit(accountID string) {
-	now := time.Now()
-	service.stateRefreshMu.Lock()
-	if now.Sub(service.stateRefreshAt[accountID]) < time.Minute {
-		service.stateRefreshMu.Unlock()
-		return
-	}
-	service.stateRefreshAt[accountID] = now
-	service.stateRefreshMu.Unlock()
-	go func() { _, _ = service.refreshAccountState(service.lifecycle, accountID, false) }()
 }
 
 func (service *trackedService) retryAccountModelCatalogs(ctx context.Context) bool {
@@ -1067,7 +1170,7 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 	if err != nil {
 		return aistudio.TokenCount{}, err
 	}
-	request.Model = service.pool.CanonicalModelID(model)
+	request.Model = service.catalogModelID(ctx, model)
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
 	if err != nil {
 		return aistudio.TokenCount{}, err
@@ -1080,7 +1183,7 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 
 // GenerateTitle 生成试用页页头标题
 func (service *trackedService) GenerateTitle(ctx context.Context, request aistudio.TitleRequest) (string, error) {
-	request.Model = service.pool.CanonicalModelID(service.mappedModel(request.Model))
+	request.Model = service.catalogModelID(ctx, service.mappedModel(request.Model))
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
 		return "", err
@@ -1091,7 +1194,7 @@ func (service *trackedService) GenerateTitle(ctx context.Context, request aistud
 
 // GenerateImage 生成 Imagen 图片并登记请求目标与账户
 func (service *trackedService) GenerateImage(ctx context.Context, request aistudio.ImageRequest) ([]aistudio.GeneratedImage, error) {
-	request.Model = service.pool.CanonicalModelID(service.mappedModel(request.Model))
+	request.Model = service.catalogModelID(ctx, service.mappedModel(request.Model))
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
 	if err != nil {
 		return nil, err
@@ -1102,11 +1205,11 @@ func (service *trackedService) GenerateImage(ctx context.Context, request aistud
 	return images, requestErr
 }
 
-// GenerateVideo 创建一个 Veo 长任务
+// GenerateVideo 创建一个视频长任务
 func (service *trackedService) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
 	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
-	request.Model = service.pool.CanonicalModelID(request.Model)
+	request.Model = service.catalogModelID(ctx, request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
@@ -1117,43 +1220,13 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 		api.SetAccessLogError(requestCtx, err)
 		return aistudio.VideoOperation{}, err
 	}
-	workerGenerations := make(map[string]uint64)
-	recoveredWorkers := make(map[string]struct{})
-	selectedAccountID := ""
-	selectedAccountLabel := ""
-	selectedAccessGeneration := uint64(0)
 	requestCtx = aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
-		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
-		selectedAccountID = account.ID
-		selectedAccountLabel = account.Config.Label
-		selectedAccessGeneration = service.pool.ModelAccessGeneration(account.ID)
 		api.SetAccessLogTarget(requestCtx, request.Model, account.Config.Label)
 	})
-	request.RecoverWAARuntime = func(recoveryCtx context.Context, accountID string, cause error) (bool, error) {
-		workerFailed := service.workers.WorkerFailed(accountID)
-		workerReplaced := errors.Is(cause, errAccountWorkerReplaced)
-		if recoveryCtx.Err() != nil || !needsWAARuntimeRecovery(cause, workerFailed, workerReplaced) {
-			return false, nil
-		}
-		waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(cause)
-		expectedGeneration := workerGenerations[accountID]
-		recovered, _, recoveryErr := service.recoverWorkerOnce(
-			recoveryCtx, accountID, expectedGeneration, recoveredWorkers,
-			true, workerFailed || waaRuntimeFailed,
-		)
-		return recovered, recoveryErr
-	}
 	request.TaskContext = func() (context.Context, context.CancelFunc, error) {
 		return service.dataRequestContext(context.Background())
 	}
 	operation, requestErr := service.service.(aistudio.VideoService).GenerateVideo(requestCtx, request)
-	if requestErr == nil && selectedAccountID != "" && !operation.ModelAccessCheckedAt().IsZero() {
-		service.markModelAccessVerifiedAsync(
-			selectedAccountID, selectedAccountLabel,
-			strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"),
-			selectedAccessGeneration, operation.ModelAccessCheckedAt(),
-		)
-	}
 	api.SetAccessLogError(requestCtx, requestErr)
 	return operation, requestErr
 }
@@ -1162,7 +1235,7 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 func (service *trackedService) videoCooling(ctx context.Context, request aistudio.VideoRequest) error {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	groups, err := service.pool.ClassifyCandidates(ctx, aistudio.AccountSelection{
-		ModelID: modelID, Method: service.pool.VideoMethod(modelID), AccountID: strings.TrimSpace(request.AccountID),
+		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
 	}, nil)
 	if err != nil {
 		return err
@@ -1207,7 +1280,7 @@ func (service *trackedService) recoverWorkerOnce(
 	return true, true, nil
 }
 
-// GetGenerateVideoOperation 读取 Veo 长任务状态
+// GetGenerateVideoOperation 读取视频长任务状态
 func (service *trackedService) GetGenerateVideoOperation(ctx context.Context, operationID string) (aistudio.VideoOperation, error) {
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")
 	if err != nil {
@@ -1371,7 +1444,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 				continue
 			}
 			workersChanged := service.workers.schedulingChanged()
-			_, promoteErr := service.workers.ensureWorker(aistudio.ContextWithAccountLease(ctx, lease), accountID, selection.ModelID, false)
+			_, promoteErr := service.workers.ensureWorker(aistudio.ContextWithAccountLease(ctx, lease), accountID, selection.ModelID, false, false)
 			if promoteErr == nil {
 				return lease, nil
 			}
@@ -1604,7 +1677,7 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.SetAccessLogGenerationInput(ctx, request)
 	api.StartAccessLog(ctx)
-	request.Model = service.pool.CanonicalModelID(request.Model)
+	request.Model = service.catalogModelID(ctx, request.Model)
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err == nil && suffixErr != nil {
 		err = suffixErr
@@ -1708,6 +1781,12 @@ func (service *trackedService) generateWithRetry(
 	}
 	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
 	assistant := service.pool.AssistantModel(modelID)
+	preferredAccountID := ""
+	if assistant {
+		preferredAccountID = service.service.(aistudio.AssistantService).AssistantAccount(requestCtx, request)
+	} else {
+		preferredAccountID = service.pool.InlineMediaAccount(request.Contents)
+	}
 	hedgeable := !request.Background && !assistant && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0) && slices.Contains(service.hedgeModels, modelID)
 	hedged := false
 	var winner *generateAttempt
@@ -1727,7 +1806,7 @@ func (service *trackedService) generateWithRetry(
 		}
 		selection := aistudio.AccountSelection{
 			ModelID: modelID, Method: "generateContent",
-			AccountID: selectionAccountID, ResourceID: selectionResourceID,
+			AccountID: selectionAccountID, ResourceID: selectionResourceID, PreferredAccountID: preferredAccountID,
 		}
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
@@ -1972,6 +2051,12 @@ func (service *trackedService) runAttempt(
 	attempt *generateAttempt,
 ) {
 	lease, accountLabel := attempt.lease, attempt.accountLabel
+	for _, model := range service.modelSnapshot() {
+		if model.ID == modelID && model.Capabilities["interaction_task"] {
+			// agent 后台任务只发送 AgentInput 选出的内容，其余轮次的文件不复制、附件不上传
+			request.Contents = aistudio.AgentInput(request.Contents, request.PreviousInteractionID != "")
+		}
+	}
 	originalContents := request.Contents
 	ctx = aistudio.ContextWithAccountLease(ctx, lease)
 	ctx = aistudio.ContextWithUpstreamModeObserver(ctx, func(method, mode, reason string) {
@@ -2122,9 +2207,6 @@ func (service *trackedService) settleAttempt(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
 				))
-			}
-			if service.pool.ModelRequiresSubscription(accountID, modelID) {
-				service.refreshAccountStateAfterLimit(accountID)
 			}
 			if !cooldown.Global && service.pool.AccountChannelAvailable(accountID, attempt.selection) {
 				delete(retry.attempted, accountID)

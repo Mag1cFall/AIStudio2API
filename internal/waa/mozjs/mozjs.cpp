@@ -606,6 +606,7 @@ extern "C" mz_context* mz_context_new(uintptr_t id, uint32_t heap_bytes, size_t 
   JS::SetWarningReporter(cx, IgnoreWarning);
   JS_SetSecurityCallbacks(cx, &SecurityCallbacks);
   JS::ContextOptionsRef(cx).setAsyncStackCaptureDebuggeeOnly(true);
+  JS_SetGCParameter(cx, JSGC_MAX_NURSERY_BYTES, 4 * 1024 * 1024);
   if (locale && *locale) {
     JS_SetDefaultLocale(JS_GetRuntime(cx), locale);
   }
@@ -637,7 +638,7 @@ extern "C" void mz_set_camou_locale(const char* language, const char* region, co
 extern "C" uint32_t mz_global_new(mz_context* mz, uint32_t same, const char* timezone) {
   JSContext* cx = mz->cx;
   JS::RealmOptions options;
-  options.creationOptions().setSharedMemoryAndAtomicsEnabled(true).setDefineSharedArrayBufferConstructor(false);
+  options.creationOptions().setSharedMemoryAndAtomicsEnabled(true).setDefineSharedArrayBufferConstructor(false).setPreserveJitCode(true);
   if (same) {
     options.creationOptions().setExistingCompartment(&Slot(mz, same).toObject());
   } else {
@@ -941,9 +942,9 @@ extern "C" double mz_now(void) {
   return double(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) / 1000.0;
 }
 
-extern "C" void mz_gc(mz_context* mz) {
+extern "C" void mz_gc(mz_context* mz, bool shrink) {
   JS::PrepareForFullGC(mz->cx);
-  JS::NonIncrementalGC(mz->cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  JS::NonIncrementalGC(mz->cx, shrink ? JS::GCOptions::Shrink : JS::GCOptions::Normal, JS::GCReason::API);
 }
 
 extern "C" size_t mz_thread_stack_size(void) {

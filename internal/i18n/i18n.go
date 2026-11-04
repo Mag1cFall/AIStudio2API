@@ -97,7 +97,7 @@ func load(locale string) *catalog {
 	return current
 }
 
-// compile 把格式串编译为整句匹配的正则，返回最长的字面片段与字面字符数
+// compile 把格式串编译为整句匹配的正则，开头的格式动词取最长匹配，返回最长的字面片段与字面字符数
 func compile(template string) (*regexp.Regexp, string, int) {
 	var pattern, literal strings.Builder
 	anchor, weight := "", 0
@@ -129,7 +129,11 @@ func compile(template string) (*regexp.Regexp, string, int) {
 		case 'q':
 			pattern.WriteString(`("(?:[^"\\]|\\.)*")`)
 		default:
-			pattern.WriteString(`([\s\S]*?)`)
+			if location[0] == 0 {
+				pattern.WriteString(`([\s\S]*)`)
+			} else {
+				pattern.WriteString(`([\s\S]*?)`)
+			}
 		}
 	}
 	literal.WriteString(template[last:])

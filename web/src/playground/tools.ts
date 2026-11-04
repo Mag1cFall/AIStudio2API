@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import type { TranslationKey } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
-import { hasCode, toolCodes, toolCompatible, type Tool } from './catalog'
+import { hasCode, isAgent, toolCodes, toolCompatible, type Tool } from './catalog'
 import { usePlayground } from './session'
 
 // ToolDefinition 是运行设置中一个工具开关的名称、图标与说明
@@ -22,7 +22,7 @@ const toolDefinitions: ToolDefinition[] = [
     icon: 'structuredOutput',
     editable: true,
   },
-  { id: 'code_execution', label: 'pg.codeExecution', tooltip: 'pg.codeExecutionTip', icon: 'code' },
+  { id: 'code_execution', label: 'pg.agentMode', tooltip: 'pg.agentModeTip', icon: 'code' },
   {
     id: 'function_declarations',
     label: 'pg.functionCalling',
@@ -36,6 +36,9 @@ const toolDefinitions: ToolDefinition[] = [
   { id: 'url_context', label: 'pg.urlContext', tooltip: 'pg.urlContextTip', icon: 'link' },
 ]
 
+// agentCodeExecution 是 agent 的代码执行开关：与官网 agent 页面一样称为代码执行
+const agentCodeExecution = { label: 'pg.codeExecution', tooltip: 'pg.codeExecutionTip' } as const
+
 // useTools 返回当前模型支持的工具及其开启与可用状态
 export function useTools() {
   const { session, currentModel } = usePlayground()
@@ -44,6 +47,7 @@ export function useTools() {
       .filter((tool) => hasCode(currentModel.value, toolCodes[tool.id]))
       .map((tool) => ({
         ...tool,
+        ...(tool.id === 'code_execution' && isAgent(currentModel.value) && agentCodeExecution),
         enabled: session.settings.tools.includes(tool.id),
         disabled: !toolCompatible(currentModel.value, tool.id, session.settings.tools),
       })),

@@ -428,11 +428,17 @@
     "total_tokens",
     "input_tokens",
     "output_tokens",
-    "input_tokens_details"
+    "input_tokens_details",
+    "output_tokens_details"
    ],
    "key:": [
     "created",
+    "background",
     "data",
+    "output_format",
+    "quality",
+    "safety_identifier",
+    "size",
     "task",
     "language",
     "duration",
@@ -443,6 +449,10 @@
     "usage"
    ],
    "key:input_tokens_details": [
+    "text_tokens",
+    "image_tokens"
+   ],
+   "key:output_tokens_details": [
     "text_tokens",
     "image_tokens"
    ],
@@ -1055,8 +1065,22 @@
     "input_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
+    "cache_creation",
     "output_tokens",
-    "server_tool_use"
+    "server_tool_use",
+    "service_tier",
+    "inference_geo"
+   ],
+   "key:cache_creation": [
+    "ephemeral_5m_input_tokens",
+    "ephemeral_1h_input_tokens"
+   ],
+   "type:web_search_result_location": [
+    "type",
+    "url",
+    "title",
+    "encrypted_index",
+    "cited_text"
    ],
    "type:content_block_start": [
     "type",

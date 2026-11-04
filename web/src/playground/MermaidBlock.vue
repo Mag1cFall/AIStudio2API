@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import { useI18n } from '@/i18n'
 import { useTheme } from '@/theme'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -81,7 +83,7 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
       :aria-label="t('pg.exitFullscreen')"
       @click="fullscreen = false"
     ></button>
-    <div class="mermaid-card" :class="{ fullscreen, collapsed: !expanded }">
+    <div class="mermaid-card" :class="{ fullscreen }">
       <div class="mermaid-header">
         <div class="header-content">
           <UiIcon name="hub" :size="20" class="title-icon" />
@@ -132,19 +134,23 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
             :aria-expanded="expanded"
             @click="expanded = !expanded"
           >
-            <UiIcon :name="expanded ? 'expandLess' : 'chevronDown'" :size="20" />
+            <DisclosureChevron :open="expanded" :turn="180"
+              ><UiIcon name="chevronDown" :size="20"
+            /></DisclosureChevron>
           </button>
         </div>
       </div>
-      <div v-if="expanded || fullscreen" class="mermaid-container">
-        <img
-          v-if="diagram && !showCode"
-          class="mermaid-diagram"
-          :src="diagram"
-          :alt="t('pg.mermaidDiagram')"
-        />
-        <pre v-else class="mermaid-fallback" :class="{ nowrap: showCode }">{{ code }}</pre>
-      </div>
+      <UiCollapse :open="expanded || fullscreen" :instant="fullscreen">
+        <div class="mermaid-container">
+          <img
+            v-if="diagram && !showCode"
+            class="mermaid-diagram"
+            :src="diagram"
+            :alt="t('pg.mermaidDiagram')"
+          />
+          <pre v-else class="mermaid-fallback" :class="{ nowrap: showCode }">{{ code }}</pre>
+        </div>
+      </UiCollapse>
     </div>
   </div>
 </template>
@@ -173,6 +179,13 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
   background-color: var(--color-v3-surface-container-high);
 }
 
+.mermaid-card.fullscreen > :deep(.ui-collapse) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .mermaid-card.fullscreen .mermaid-container {
   flex: 1;
   min-height: 0;
@@ -188,17 +201,12 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
   object-fit: contain;
 }
 
-.mermaid-card.collapsed .mermaid-header {
-  border-bottom: none;
-}
-
 .mermaid-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 36px;
   padding-inline: 12px 6px;
-  border-bottom: 1px solid var(--color-v3-outline-var);
 }
 
 .header-content {
@@ -237,6 +245,7 @@ onScopeDispose(() => document.removeEventListener('keydown', onKeydown))
   justify-content: center;
   overflow-x: auto;
   padding: 12px;
+  border-top: 1px solid var(--color-v3-outline-var);
 }
 
 .mermaid-diagram {

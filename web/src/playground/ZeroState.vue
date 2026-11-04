@@ -79,6 +79,7 @@ const heading = computed(() =>
   min-height: 0;
   overflow: auto;
   padding: 20px 20px 0;
+  scrollbar-gutter: stable;
 }
 
 .ms-model-empty-state {

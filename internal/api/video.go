@@ -34,7 +34,7 @@ type geminiVideoRequest struct {
 	} `json:"parameters"`
 }
 
-// geminiVideoImageInput 是 Veo 帧图片，接受 Gemini API 的 bytesBase64Encoded 与 Part 形式的 inlineData、fileData
+// geminiVideoImageInput 是视频帧图片，接受 Gemini API 的 bytesBase64Encoded 与 Part 形式的 inlineData、fileData
 type geminiVideoImageInput struct {
 	Bytes           string                 `json:"bytesBase64Encoded"`
 	BytesSnake      string                 `json:"bytes_base64_encoded"`
@@ -46,7 +46,7 @@ type geminiVideoImageInput struct {
 	FileDataSnake   *geminiVideoFileData   `json:"file_data"`
 }
 
-// geminiVideoReferenceImage 是 Veo 参考图
+// geminiVideoReferenceImage 是视频参考图
 type geminiVideoReferenceImage struct {
 	Image *geminiVideoImageInput `json:"image"`
 }
@@ -270,11 +270,15 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	}
 	response := map[string]any{"name": "operations/" + operationID, "done": done}
 	if done && failure != nil {
-		response["error"] = map[string]any{"code": statusFromError(failure), "message": failure.Error(), "status": geminiErrorStatus(failure)}
+		status := geminiErrorStatus(failure)
+		response["error"] = map[string]any{"code": rpcCodes[status], "message": failure.Error(), "status": status}
 	} else if done && missing != "" {
-		response["error"] = map[string]any{"code": http.StatusNotFound, "message": missing, "status": "NOT_FOUND"}
+		response["error"] = map[string]any{"code": rpcCodes["NOT_FOUND"], "message": missing, "status": "NOT_FOUND"}
 	} else if done {
-		response["response"] = map[string]any{"generateVideoResponse": map[string]any{"generatedSamples": samples}}
+		response["response"] = map[string]any{
+			"@type":                 "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
+			"generateVideoResponse": map[string]any{"generatedSamples": samples},
+		}
 	}
 	writeJSON(w, http.StatusOK, officialOrder("gemini", response))
 }
@@ -393,12 +397,10 @@ func (request openAIVideoRequest) toVideoRequest(image *aistudio.VideoImage) (ai
 
 func openAIVideoSize(size string) (string, string, error) {
 	switch strings.ToLower(strings.TrimSpace(size)) {
-	case "":
-		return "", "", nil
+	case "", "720x1280":
+		return "9:16", "720p", nil
 	case "1280x720":
 		return "16:9", "720p", nil
-	case "720x1280":
-		return "9:16", "720p", nil
 	case "1792x1024", "1920x1080":
 		return "16:9", "1080p", nil
 	case "1024x1792", "1080x1920":
@@ -501,7 +503,14 @@ func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 	object := map[string]any{
 		"id": operation.ID, "object": "video", "model": operation.Model,
 		"status": status, "progress": progress, "created_at": operation.CreatedAt.Unix(),
-		"size": operation.Size, "seconds": operation.Seconds,
+		"size": operation.Size, "seconds": operation.Seconds, "prompt": nil,
+		"completed_at": nil, "expires_at": nil, "error": nil, "remixed_from_video_id": nil,
+	}
+	if operation.Prompt != "" {
+		object["prompt"] = operation.Prompt
+	}
+	if operation.CompletedAt != 0 {
+		object["completed_at"] = operation.CompletedAt
 	}
 	if operation.Missing != "" {
 		object["error"] = map[string]any{"code": "video_not_found", "message": operation.Missing}
@@ -542,6 +551,13 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", cmp.Or(media.MIME, "video/mp4"))
 	w.Header().Set("Content-Disposition", `attachment; filename="video.mp4"`)
 	writeMediaStream(w, r, media.Body, media.Size)
+}
+
+// rpcCodes 是 google.rpc.Code 名称对应的数值，用于长任务 Operation.error.code
+var rpcCodes = map[string]int{
+	"OK": 0, "CANCELLED": 1, "UNKNOWN": 2, "INVALID_ARGUMENT": 3, "DEADLINE_EXCEEDED": 4, "NOT_FOUND": 5,
+	"ALREADY_EXISTS": 6, "PERMISSION_DENIED": 7, "RESOURCE_EXHAUSTED": 8, "FAILED_PRECONDITION": 9, "ABORTED": 10,
+	"OUT_OF_RANGE": 11, "UNIMPLEMENTED": 12, "INTERNAL": 13, "UNAVAILABLE": 14, "DATA_LOSS": 15, "UNAUTHENTICATED": 16,
 }
 
 func cleanOperationID(value string) string {

@@ -426,11 +426,13 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 		for _, dimension := range usageDimensions {
 			add(groups[dimension], value.dimension(dimension), value)
 		}
-		pair := [2]string{value.account, value.model}
-		if pairs[pair] == nil {
-			pairs[pair] = &aggregate{}
+		if !query.SkipPairs {
+			pair := [2]string{value.account, value.model}
+			if pairs[pair] == nil {
+				pairs[pair] = &aggregate{}
+			}
+			pairs[pair].add(value)
 		}
-		pairs[pair].add(value)
 		key := value.dimension(query.Stack)
 		if stack[key] == nil {
 			stack[key] = make([][2]int64, len(starts))

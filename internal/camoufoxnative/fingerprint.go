@@ -243,6 +243,9 @@ func writeAccountCamoufoxConfig(path string, saved savedFingerprint) error {
 	return nil
 }
 
+// sessionVariables 是 Firefox 以 root 运行时检查属主的环境变量
+var sessionVariables = []string{"HOME", "XDG_RUNTIME_DIR", "XAUTHORITY"}
+
 // camoufoxEnvironment 将指纹 JSON 分片写入 Camoufox 环境变量
 func camoufoxEnvironment(config map[string]any) ([]string, error) {
 	encoded, err := json.Marshal(config)
@@ -252,7 +255,7 @@ func camoufoxEnvironment(config map[string]any) ([]string, error) {
 	values := make(map[string]string)
 	for _, item := range os.Environ() {
 		name, value, ok := strings.Cut(item, "=")
-		if ok && !strings.HasPrefix(name, "CAMOU_CONFIG_") {
+		if ok && !strings.HasPrefix(name, "CAMOU_CONFIG_") && (!slices.Contains(sessionVariables, name) || !foreignUserPath(value)) {
 			values[name] = value
 		}
 	}

@@ -195,8 +195,8 @@ func (s StorageState) Validate() error {
 // CookieHeader 为目标 URL 构造当前有效的 Cookie 请求头
 func (s StorageState) CookieHeader(targetURL string, now time.Time) (string, error) {
 	target, err := url.Parse(targetURL)
-	if err != nil || target.Scheme == "" || target.Hostname() == "" {
-		return "", fmt.Errorf("目标 URL 无效")
+	if err != nil {
+		return "", err
 	}
 	type candidate struct {
 		cookie StateCookie
@@ -257,11 +257,11 @@ func (s StorageState) CookieValue(name string, targetURL string, now time.Time) 
 	return selected, selectedPath >= 0
 }
 
-// MergeSetCookieHeaders 将响应轮换的 Cookie 合并到 storage state
+// MergeSetCookieHeaders 将响应轮换的 Cookie 合并到 storage state，替换的 Cookie 保留原有位置
 func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string, now time.Time) error {
 	source, err := url.Parse(sourceURL)
-	if err != nil || source.Scheme == "" || source.Hostname() == "" {
-		return fmt.Errorf("来源 URL 无效")
+	if err != nil {
+		return err
 	}
 	for _, header := range headers {
 		response := http.Response{Header: http.Header{"Set-Cookie": []string{header}}}
@@ -285,10 +285,10 @@ func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string,
 				break
 			}
 		}
-		if index >= 0 {
-			s.Cookies = append(s.Cookies[:index], s.Cookies[index+1:]...)
-		}
 		if incoming.MaxAge < 0 || !incoming.Expires.IsZero() && !incoming.Expires.After(now) {
+			if index >= 0 {
+				s.Cookies = append(s.Cookies[:index], s.Cookies[index+1:]...)
+			}
 			continue
 		}
 		expires := float64(-1)
@@ -297,7 +297,7 @@ func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string,
 		} else if !incoming.Expires.IsZero() {
 			expires = float64(incoming.Expires.UnixNano()) / 1e9
 		}
-		s.Cookies = append(s.Cookies, StateCookie{
+		cookie := StateCookie{
 			Name:     incoming.Name,
 			Value:    incoming.Value,
 			Domain:   domain,
@@ -306,7 +306,12 @@ func (s *StorageState) MergeSetCookieHeaders(headers []string, sourceURL string,
 			HTTPOnly: incoming.HttpOnly,
 			Secure:   incoming.Secure,
 			SameSite: sameSiteText(incoming.SameSite),
-		})
+		}
+		if index >= 0 {
+			s.Cookies[index] = cookie
+		} else {
+			s.Cookies = append(s.Cookies, cookie)
+		}
 	}
 	return nil
 }

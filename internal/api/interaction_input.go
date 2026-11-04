@@ -15,19 +15,21 @@ import (
 
 // interactionRequest 表示公开 Interactions 创建请求
 type interactionRequest struct {
-	Model      string                     `json:"model"`
-	Agent      string                     `json:"agent"`
-	Input      json.RawMessage            `json:"input"`
-	System     string                     `json:"system_instruction"`
-	Stream     bool                       `json:"stream"`
-	Background bool                       `json:"background"`
-	Store      *bool                      `json:"store"`
-	PreviousID string                     `json:"previous_interaction_id"`
-	Formats    json.RawMessage            `json:"response_format"`
-	MIME       string                     `json:"response_mime_type"`
-	Modalities []string                   `json:"response_modalities"`
-	Safety     []interactionSafetySetting `json:"safety_settings"`
-	Tools      []interactionTool          `json:"tools"`
+	Model string `json:"model"`
+	Agent string `json:"agent"`
+	// AgentConfig 是 agent 的运行配置，Antigravity 为所用模型与 token 上限，Deep Research 为思考摘要、可视化与协作规划
+	AgentConfig *interactionAgentConfig    `json:"agent_config"`
+	Input       json.RawMessage            `json:"input"`
+	System      string                     `json:"system_instruction"`
+	Stream      bool                       `json:"stream"`
+	Background  bool                       `json:"background"`
+	Store       *bool                      `json:"store"`
+	PreviousID  string                     `json:"previous_interaction_id"`
+	Formats     json.RawMessage            `json:"response_format"`
+	MIME        string                     `json:"response_mime_type"`
+	Modalities  []string                   `json:"response_modalities"`
+	Safety      []interactionSafetySetting `json:"safety_settings"`
+	Tools       []interactionTool          `json:"tools"`
 	// CachedContent 是显式缓存的资源名
 	CachedContent string            `json:"cached_content"`
 	ServiceTier   string            `json:"service_tier"`
@@ -54,6 +56,39 @@ type interactionRequest struct {
 		} `json:"video_config"`
 		Transcription *interactionTranscriptionConfig `json:"transcription_config"`
 	} `json:"generation_config"`
+	// stream 是后台交互的事件记录，下标加一即 event_id
+	stream *streamLog
+	// cache 是 cached_content 引用的显式缓存
+	cache *geminiCache
+}
+
+// interactionAgentConfig 是公开请求的 agent_config，max_total_tokens 按官方 REST 为字符串，也接受数字
+type interactionAgentConfig struct {
+	Type                  string      `json:"type"`
+	Model                 string      `json:"model"`
+	MaxTotalTokens        json.Number `json:"max_total_tokens"`
+	ThinkingSummaries     string      `json:"thinking_summaries"`
+	Visualization         string      `json:"visualization"`
+	CollaborativePlanning bool        `json:"collaborative_planning"`
+}
+
+// config 校验 agent_config 的取值并转为生成请求的 agent 配置，type 与 agent 是否一致在找到 agent 后核对
+func (config interactionAgentConfig) config() (*aistudio.AgentConfig, error) {
+	if config.ThinkingSummaries != "" && config.ThinkingSummaries != "auto" && config.ThinkingSummaries != "none" {
+		return nil, fmt.Errorf("agent_config.thinking_summaries must be auto or none")
+	}
+	if config.Visualization != "" && config.Visualization != "auto" && config.Visualization != "off" {
+		return nil, fmt.Errorf("agent_config.visualization must be auto or off")
+	}
+	result := &aistudio.AgentConfig{Type: config.Type, Model: config.Model, ThinkingSummaries: config.ThinkingSummaries, Visualization: config.Visualization, CollaborativePlanning: config.CollaborativePlanning}
+	if config.MaxTotalTokens != "" {
+		tokens, err := config.MaxTotalTokens.Int64()
+		if err != nil || tokens <= 0 {
+			return nil, fmt.Errorf("agent_config.max_total_tokens must be a positive integer")
+		}
+		result.MaxTotalTokens = tokens
+	}
+	return result, nil
 }
 
 // interactionTool 表示 Interactions 工具声明，在 Responses 工具字段之外带有内置工具的设置
@@ -202,6 +237,11 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 		return generate, fmt.Errorf("model or agent is required")
 	}
 	var err error
+	if request.AgentConfig != nil {
+		if generate.AgentConfig, err = request.AgentConfig.config(); err != nil {
+			return generate, err
+		}
+	}
 	generate.Contents, err = interactionContents(request.Input)
 	if err != nil {
 		return generate, err
@@ -336,6 +376,7 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 	if err != nil {
 		return generate, err
 	}
+	generate.Tools.Explicit = request.Tools != nil
 	if search := builtin.GoogleSearch; search != nil {
 		if search.WebSearch {
 			generate.Tools.Google = appendUnique(generate.Tools.Google, "google_search")

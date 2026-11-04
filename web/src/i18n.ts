@@ -1,4 +1,4 @@
-import { readonly, ref, shallowRef } from 'vue'
+import { readonly, ref } from 'vue'
 import { ApiError } from '@/api'
 import type { TranslationKey } from '@/locales/zh-CN'
 import { Catalog } from '@/messages'
@@ -19,8 +19,11 @@ const localeLabels: Record<Locale, string> = {
   de: 'Deutsch',
 }
 
-// localeModules 按需加载各语言的界面文案，每种语言打包为单独的文件
-const localeModules: Record<Locale, () => Promise<{ messages: Messages }>> = {
+// LocaleModule 是一种语言的界面文案与服务文案翻译表，服务文案以简体中文写成，简体中文没有翻译表
+type LocaleModule = { messages: Messages; serverMessages?: Record<string, string> }
+
+// localeModules 按需加载各语言的界面文案与服务文案翻译表，每种语言打包为单独的文件
+const localeModules: Record<Locale, () => Promise<LocaleModule>> = {
   'zh-CN': () => import('@/locales/zh-CN'),
   'zh-TW': () => import('@/locales/zh-TW'),
   en: () => import('@/locales/en'),
@@ -32,10 +35,17 @@ const localeModules: Record<Locale, () => Promise<{ messages: Messages }>> = {
 
 // catalogs 是已加载语言的界面文案
 const catalogs: Partial<Record<Locale, Messages>> = {}
+// serverTables 是已加载语言的服务文案翻译表
+const serverTables: Partial<Record<Locale, Record<string, string>>> = {}
+// serverCatalogs 是首次翻译服务文案时由翻译表建立的翻译器
+const serverCatalogs: Partial<Record<Locale, Catalog>> = {}
 
-// loadMessages 加载一种语言的界面文案，已加载时直接返回
+// loadMessages 加载一种语言的界面文案与服务文案翻译表，已加载时直接返回
 async function loadMessages(code: Locale): Promise<void> {
-  catalogs[code] ??= (await localeModules[code]()).messages
+  if (catalogs[code] !== undefined) return
+  const { messages, serverMessages } = await localeModules[code]()
+  catalogs[code] = messages
+  if (serverMessages) serverTables[code] = serverMessages
 }
 
 export const availableLocales = (Object.keys(localeLabels) as Locale[]).map((code) => ({
@@ -72,37 +82,6 @@ export function loadInitialLocale(): Promise<void> {
   return loadMessages(locale.value)
 }
 
-// serverCatalog 是当前语言的服务文案翻译表，读取完成前为 null
-const serverCatalog = shallowRef<{ locale: Locale; catalog: Catalog } | null>(null)
-// serverLoad 记录正在读取或上次读取失败的语言与时间
-let serverLoad: { locale: Locale; pending: boolean; failedAt: number } | null = null
-
-// serverMessages 返回当前语言的服务文案翻译表，尚未读取时开始读取，失败 10 秒后才重试
-function serverMessages(): Catalog | null {
-  const current = locale.value
-  if (serverCatalog.value?.locale === current) return serverCatalog.value.catalog
-  if (
-    serverLoad?.locale === current &&
-    (serverLoad.pending || Date.now() - serverLoad.failedAt < 10000)
-  )
-    return null
-  const load = { locale: current, pending: true, failedAt: 0 }
-  serverLoad = load
-  void fetch(`/api/i18n/${current}`)
-    .then(async (response) => {
-      if (!response.ok) throw new Error(String(response.status))
-      const table = (await response.json()) as Record<string, string>
-      if (locale.value === current)
-        serverCatalog.value = { locale: current, catalog: new Catalog(table, current) }
-      load.pending = false
-    })
-    .catch(() => {
-      load.pending = false
-      load.failedAt = Date.now()
-    })
-  return null
-}
-
 // channelLabelKey 返回上游通道的翻译键
 export function channelLabelKey(channel: UpstreamChannel): TranslationKey {
   if (channel === 'assistant') return 'channel.assistant'
@@ -121,8 +100,10 @@ export function useI18n() {
 
   // logText 把服务生成的日志、错误与状态说明换成当前语言，上游原文、账户、模型名与数值保持原样
   const logText = (message: string): string => {
-    if (locale.value === 'zh-CN') return message
-    return serverMessages()?.translate(message) ?? message
+    const code = locale.value
+    if (code === 'zh-CN') return message
+    serverCatalogs[code] ??= new Catalog(serverTables[code]!, code)
+    return serverCatalogs[code].translate(message)
   }
 
   // errorText 返回界面显示的错误文本：未能连接服务时显示服务离线，管理接口错误码按当前语言显示，服务说明经翻译表翻译

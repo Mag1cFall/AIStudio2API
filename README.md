@@ -19,7 +19,7 @@
   多账户高并发<br>
   Camoufox 与 SpiderMonkey 双 WAA 后端 &nbsp;•&nbsp;
   Claude Code、Codex 等 Agent 客户端 &nbsp;•&nbsp;
-  Nano Banana、Veo、TTS 与 Omni
+  Nano Banana、TTS 与 Omni
 </p>
 
 </div>
@@ -73,9 +73,9 @@
 - **双通道**: 每个账户经 Playground 生成；Build 应用代理是旧通道，上游已对账户停用其生成（`PROXY_GENERATION_DISABLED`），默认关闭，可在 `UPSTREAM_CHANNELS` 中启用；启用后经 Build 发送的生成请求返回上游原因；免费账户的两个通道共用同一模型的每日请求次数
 - **Build 对话模型**: Build 对话面板可选的模型各提供一个 `<模型>-build`（如 `gemini-3.8-flash-build`），由 Build 写代码助手连同其系统提示词回复，支持函数调用、工具结果续接与 Google 搜索，用量计入 Build 对话额度（免费请求或 Google AI 订阅额度）。⚠️ 这类模型的每次请求都带有 Build 写代码助手自带的系统提示词注入，回答风格、格式与身份会受其影响，请按用途自行评估
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
-- **两种 WAA 后端**: 默认由 Camoufox 持有官方 WAA 生命周期；设置 `WAA_BACKEND=spidermonkey` 后由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器
+- **两种 WAA 后端**: 默认由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器；设置 `WAA_BACKEND=camoufox` 后由 Camoufox 持有官方 WAA 生命周期
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩，Anthropic Messages 支持 `context_management` 的工具结果与思考清理和阈值压缩
-- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
+- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、dsh、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
 
@@ -83,7 +83,7 @@
 - **函数工具**: 四协议支持工具调用与续接、工具选择和严格参数校验；支持联合类型与开放参数定义
 - **TTS 语音生成**: 支持 Gemini TTS 模型的单/多说话人音频生成
 - **图片生成**: 支持 Nano Banana 图片生成
-- **视频生成**: 支持 Veo 视频生成和图片转视频，目录中没有 Veo 时视频长任务由 Gemini Omni 生成；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
+- **视频生成**: 视频长任务与图片转视频由 Gemini Omni 生成；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
 - **Deep Research**: Pro 与 Ultra 账户可通过四套生成接口与 Interactions 的 `agent` 字段调用 Deep Research，输出研究过程、带引用的报告与图表
 - **YouTube 输入**: YouTube 视频 URL 作为外部视频附件读取；开启 `YOUTUBE_LINKS` 后，消息文本中的 YouTube 链接同样作为视频读取
 - **视频理解设置**: Gemini 与 Interactions 支持逐视频的起止时间、0–24 FPS 范围内的正数采样率和静态/Agentic 处理；Agentic 返回服务端处理步骤并支持历史续接
@@ -91,21 +91,22 @@
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
 - **Files 与 Transcribe**: 支持文件上传、查询、内容读取、删除和音频转录
 - **Live 与 Robotics**: 通过 WebSocket 支持文本、音频、JPEG、媒体结束、工具调用、恢复和中断
-- **反指纹检测**: 使用 Camoufox 持有官方 WAA 生命周期，并为每个账户固定浏览器指纹与出口
+- **反指纹检测**: 为每个账户固定 Firefox 指纹与出口，官方 WAA 在 SpiderMonkey 的 Firefox 页面环境或 Camoufox 页面中运行
 - **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求、用量统计和配置，界面提供深色与浅色两种配色，以及简体中文、繁體中文、English、日本語、한국어、Français 与 Deutsch 七种语言
 - **桌面版**: Windows、macOS 与 Linux 桌面应用在窗口中显示管理页面，关闭窗口后在系统托盘继续运行
-- **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，Windows 与 macOS 桌面版、Linux 与 macOS 命令行版一键下载、校验并重启到新版本，Linux 桌面版提示下载新安装包
-- **模块化架构**: Go 负责协议、调度、API 与管理端，Camoufox 负责 WAA 运行时和隔离登录
+- **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，桌面版与 Linux、macOS 命令行版一键下载、校验并重启到新版本，Linux deb 安装时由系统弹出管理员认证
+- **模块化架构**: Go 负责协议、调度、API 与管理端，SpiderMonkey 或 Camoufox 负责 WAA 运行时，Camoufox 负责隔离登录
 
 ## 系统要求
 
 - **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，安装进度显示在微软安装程序的窗口中，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
 - **macOS 桌面版**: macOS 12 或更高版本，Apple 芯片与 Intel 通用
-- **Linux 桌面版**: GTK 4 与 WebKitGTK 6.0，例如 Ubuntu 24.04、Debian 13 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
-- **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库，Debian/Ubuntu 执行 `sudo apt install libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 xvfb`
+- **Linux 桌面版**: GTK 3 与 WebKitGTK 4.1，例如 Ubuntu 22.04、Debian 12 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
+- **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库与 Xvfb，Debian/Ubuntu 执行 `sudo apt-get update && sudo apt-get satisfy -y "libgtk-3-0, libasound2t64 | libasound2, libx11-xcb1, xvfb"`
 - **源码运行**: Go 1.27+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm；C/C++ 编译器，Windows 为 [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 的 UCRT 版 clang，macOS 为 Xcode Command Line Tools，Linux 为 [Zig](https://ziglang.org/download/) 0.16；当前平台的 SpiderMonkey 静态库，从 [Mag1cFall/firefox Releases](https://github.com/Mag1cFall/firefox/releases) 下载
 - **操作系统**: Windows、macOS、Linux
-- **内存**: 单账户建议 2GB+ 可用内存，每个常驻预热账户约增加 0.6GB
+- **内存**: 默认的 SpiderMonkey 后端单账户在 macOS 上约 100 MB、Windows 与 Linux 上约 150 MB，每增加一个常驻预热账户约增加 55 MB；Camoufox 后端单账户在 Windows 与 macOS 上约 0.5 GB、Linux 上约 0.7 GB，每增加一个常驻预热账户约增加 0.4 GB
+- **CPU**: SpiderMonkey 后端空闲时几乎不占用，Camoufox 后端空闲时每个常驻预热账户约占单核的 0.5%；两个后端每个请求的 CPU 时间都在 0.1 秒以内
 - **网络**: 稳定的互联网连接访问 Google AI Studio
 
 ## 安装步骤
@@ -114,7 +115,7 @@
 
 从 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 下载 `windows-amd64.zip` 发布包，解压后双击 `aistudio2api.exe`：
 
-- 管理页面在桌面窗口中打开；首次启动先显示启动画面，Camoufox 下载完成后进入管理页面
+- 管理页面在桌面窗口中打开；启动时先显示启动画面，管理服务就绪后进入管理页面
 - 关闭窗口后程序在系统托盘继续运行：双击托盘图标显示窗口，右键打开托盘菜单；菜单可以显示窗口、在浏览器中打开管理页面、开关开机自启动或退出
 - 再次双击 `aistudio2api.exe` 唤回已运行的窗口
 
@@ -141,7 +142,7 @@ go build -o aistudio2api.exe ./cmd/aistudio2api
 
 `x86_64-w64-mingw32-clang` 来自 llvm-mingw 的 `ucrt-x86_64` 包，解压后把其中的 `bin` 目录加入 `PATH`。
 
-首次启动会自动下载当前平台的 Camoufox 到 `runtime/camoufox/`：
+`WAA_BACKEND=camoufox` 时启动生成服务，或第一次使用浏览器登录时，程序自动下载当前平台的 Camoufox 到 `runtime/camoufox/`：
 
 - 下载经 `PROXY` 的第一个代理发出，未设置时使用系统代理
 - 下载中断后，下次启动从已下载的部分继续
@@ -207,7 +208,7 @@ fi
 ./aistudio2api
 ```
 
-Linux 与 macOS 首次运行同样会自动准备对应平台的 Camoufox。
+Linux 与 macOS 同样在需要时自动准备对应平台的 Camoufox。
 
 ### 方式四：Docker
 
@@ -308,7 +309,7 @@ Windows 桌面版在命令行中运行以下命令时写作 `cmd /c start /wait 
 - 文件导入：`aistudio2api setup --storage-state <file>`
 - Cookie 导入：`aistudio2api setup --cookie-file <file>`、`aistudio2api setup --cookie "<Cookie 请求头>"` 或 `aistudio2api setup --cdp <调试地址>`，账户邮箱按 Cookie 识别，`--cdp` 导入的账户沿用该浏览器的语言与时区；Cookie 来自同时登录多个 Google 账户的浏览器时，以 `--authuser N` 选择官网地址 `/u/N/` 中第 N 个账户
 
-`aistudio2api setup --remote https://<远程实例>`：向远程实例添加账户。先在远程实例的账户页点击“远程添加”取得配对令牌，再在能登录 Google 的电脑上运行该命令并粘贴令牌；可与 `--login` 等参数组合。
+`aistudio2api setup --remote https://<远程实例>`：向远程实例添加账户。在远程实例的账户页点击“远程添加”，对话框给出完整命令（Windows 为 `cmd /c start /wait aistudio2api.exe setup --remote <地址> --token <令牌>`，其他系统为 `./aistudio2api setup --remote <地址> --token <令牌>`），账户来源可选“该电脑 Chrome 中的账户”或“在新窗口登录”（命令带 `--login`），一键复制后在能登录 Google 的电脑上运行；省略 `--token` 时运行后从标准输入读取令牌。对话框打开期间沿用仍有效的令牌，令牌到期时自动换新，点击“换一个令牌”立即换新，旧令牌随即失效。从该电脑 Chrome 导入的账户只能由这台电脑续签：命令上传这类账户后留在前台，立即并每 100 分钟向远程实例发送它们的新会话，失败时 5 分钟后重试；保持该窗口打开，重启电脑后运行 `aistudio2api setup --remote <地址> --renew` 恢复续签。
 
 ## API 使用
 
@@ -409,7 +410,7 @@ modelRoles:
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
-生成请求中的内联附件会优先上传到生成账户的 Drive，同一账户之后的请求遇到相同内容时直接引用已上传的文件，闲置 1 小时后删除；账户未授予 Drive 权限时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
+生成请求中的内联附件会优先上传到生成账户的 Drive，之后带相同附件的请求优先发往已上传该附件的账户并直接引用已上传的文件，闲置 1 小时后删除；账户未授予 Drive 权限时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
 
 Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景；经 Files API 上传的 GIF 按首帧转换为白底 JPEG。
 
@@ -486,19 +487,21 @@ curl http://127.0.0.1:2048/v1/images/generations \
   }'
 ```
 
-### 视频生成 (Veo)
+`size` 为输出图片的宽高，例如 `2560x1440`，服务按最接近的宽高比与能覆盖该尺寸的分辨率生成后缩放为该尺寸；`size` 为 `auto` 或省略时，`quality` 的 `low`、`medium`、`high` 分别按 1K、2K、4K 生成。`output_format` 取 `png`（默认）、`jpeg` 或 `webp`。`/v1/images/edits` 与 Responses 的 `image_generation` 工具使用同样的字段，Gemini 原生接口使用 `imageConfig.aspectRatio` 与 `imageConfig.imageSize`。
+
+### 视频生成
 
 ```bash
 curl http://127.0.0.1:2048/v1/videos \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "veo-3.1-fast-generate-preview",
+    "model": "gemini-omni-1.1-flash",
     "prompt": "A drone flying over a forest"
   }'
 ```
 
-创建操作后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果。目录中没有 Veo 模型时，`gemini-omni-1.1-flash` 等能输出视频的 Omni 模型及其 `veo-*` 别名同样经 `/v1/videos` 与 `:predictLongRunning` 创建任务。
+创建任务后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果；`gemini-omni-1.1-flash` 等能输出视频的 Omni 模型同样经 `:predictLongRunning` 创建任务。
 
 ## 模型
 
@@ -601,8 +604,8 @@ cp .env.example .env
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |
-| `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
-| `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
+| `WARM_WORKER_LIMIT` | `10`，Camoufox 后端 `5` | 常驻预热账户数 |
+| `MAX_ACTIVE_WORKERS` | `20`，Camoufox 后端 `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
@@ -613,14 +616,14 @@ cp .env.example .env
 | `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |
 | `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
+| `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名，函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少 |
 | `SEARCH_MODEL_ALIASES` | `true` | 提供支持搜索的模型的 `-search` 型号，使用该型号时启用 Google 搜索 |
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |
 | `FIRST_EVENT_HEDGE` | `auto` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | 发起备用请求的模型 ID，逗号分隔；备用请求同样计入账户额度 |
-| `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox |
-| `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
+| `WAA_BACKEND` | `spidermonkey` | `spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox；`camoufox` 在 Camoufox 页面运行 WAA |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |
 | `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，经反向代理时跟随 `X-Forwarded-Proto` |
 
@@ -674,8 +677,10 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 账户页的“添加账户”支持从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、隔离 Camoufox 登录和远程添加：
 
 - 隔离 Camoufox 登录在本机打开可见窗口；服务器没有图形界面或从其他电脑访问时，登录画面显示在管理页面的登录窗口中，经反向代理访问时需要转发 `/api/login-view/` 的 WebSocket
+- 添加与重新登录账户在服务端的任务中运行：提交后即可离开对话框，账户页上方逐个显示进度、结果与失败原因，关闭或刷新管理页面后任务继续；页内登录窗口可以隐藏，之后从任务行再次打开
+- 粘贴 Cookie 或选择 Cookie 文件后自动识别其中登录的账户；Edge、Brave 等日常使用的浏览器用 Cookie 扩展导出后粘贴
 - `ready` 账户可以编辑、停用、立即刷新和删除，`auth_required` 账户可以重新登录
-- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 10 分钟也会读取一次
+- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
 - 从未读取成功的账户权益显示为未知，并显示最近一次失败原因
 - 读取报告 AI Studio 不支持当前出口地区或账户时，已有目录的账户同样显示该原因
 
@@ -693,14 +698,14 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 本项目使用 [Camoufox](https://camoufox.com/) 浏览器来降低被检测为自动化脚本的风险。Camoufox 基于 Firefox，通过修改底层实现来保持真实的设备指纹。
 
-Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS/HTTP2、请求头、Cookie 与页面指纹。
+Go 负责编码、调度、流式解码与公开协议；`WAA_BACKEND=camoufox` 时，受 WAA 保护的 `GenerateContent` 通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS/HTTP2、请求头、Cookie 与页面指纹。
 
 `WAA_BACKEND=spidermonkey` 时，WAA 在服务进程内的 SpiderMonkey 中运行，按账户指纹模拟 Firefox 页面环境并以 Firefox 请求头直接发送，运行时不下载也不启动 Camoufox。账户页的浏览器登录仍使用 Camoufox，首次登录时按需准备。
 
 ### 使用限制
 
 - **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
-- **AI Studio 历史**: API 请求不保存到官网历史；`TEMPORARY_CHAT=true` 还会关闭 WAA 预热页的自动保存
+- **AI Studio 历史**: API 请求不保存到官网历史
 - **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
 - **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
 
@@ -710,4 +715,10 @@ Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `Gene
 
 ## 📈 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date)](https://star-history.com/#Mag1cFall/AIStudio2API&Date)
+<a href="https://star-history.com/#Mag1cFall/AIStudio2API&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
+  </picture>
+</a>

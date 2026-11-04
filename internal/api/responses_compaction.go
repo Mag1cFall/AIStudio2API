@@ -424,10 +424,10 @@ func (s *server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	for _, message := range retained {
 		output = append(output, message)
 	}
-	response := map[string]any{"id": id, "object": "response.compaction", "created_at": time.Now().Unix(), "output": append(output, item)}
-	if usage != nil {
-		response["usage"] = responsesUsage(usage)
+	if usage == nil {
+		usage = &aistudio.Usage{}
 	}
+	response := map[string]any{"id": id, "object": "response.compaction", "created_at": time.Now().Unix(), "output": append(output, item), "usage": responsesUsage(usage)}
 	writeJSON(w, http.StatusOK, officialOrder("responses", response))
 }
 

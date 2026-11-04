@@ -23,6 +23,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/setup"
+	"github.com/Mag1cFall/AIStudio2API/internal/statedb"
 	"github.com/Mag1cFall/AIStudio2API/internal/webui"
 	"github.com/klauspost/compress/gzhttp"
 )
@@ -84,15 +85,22 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 	if err != nil {
 		return false, err
 	}
-	shell := newShell(options.openUI)
+	var serviceErr error
+	stopped := make(chan struct{})
+	// stopService 结束生成服务并等待它退出
+	stopService := func() {
+		cancel()
+		<-stopped
+	}
+	shell := newShell(options.openUI, stopService)
 	ready := make(chan serviceReady, 1)
 	shellCtx, stopShell := context.WithCancel(ctx)
 	defer stopShell()
 	var restarting atomic.Bool
-	result := make(chan error, 1)
 	go func() {
 		started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
-		result <- err
+		serviceErr = err
+		close(stopped)
 		if started {
 			stopShell()
 		}
@@ -105,8 +113,7 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 			return serviceReady{}, shellCtx.Err()
 		}
 	})
-	cancel()
-	serviceErr := <-result
+	stopService()
 	if errors.Is(serviceErr, context.Canceled) {
 		serviceErr = nil
 	}
@@ -148,6 +155,11 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 		return false, errors.Join(fmt.Errorf("打开对话库: %w", err), manager.Close(), ledger.Close())
 	}
 	manager.prompts = prompts
+	states, err := statedb.Open(filepath.Join("runtime", "states.db"), logService)
+	if err != nil {
+		return false, errors.Join(fmt.Errorf("打开续接状态库: %w", err), manager.Close(), ledger.Close(), prompts.Close())
+	}
+	manager.states = states
 	manager.logs = logs
 	updater := newSelfUpdater(buildVersion(), executable, manager.egressProxy, logService, updateRestart(cancel, restarting, logService))
 	started, err = runServer(ctx, cfg, manager, updater, func(address string) {
@@ -156,7 +168,7 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	if started {
 		cancel()
 	}
-	return started, errors.Join(err, manager.Close(), ledger.Close(), prompts.Close())
+	return started, errors.Join(err, manager.Close(), ledger.Close(), prompts.Close(), states.Close())
 }
 
 // parseFlags 使用命令行参数覆盖本次启动配置
@@ -233,7 +245,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
 		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
-		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy,
+		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy, States: manager.states,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),

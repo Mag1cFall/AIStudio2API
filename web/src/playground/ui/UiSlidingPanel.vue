@@ -11,7 +11,12 @@ import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
 const open = defineModel<boolean>('open', { required: true })
-withDefaults(defineProps<{ title: string; width?: string }>(), { width: '550px' })
+// back 表示标题前显示返回按钮，点按时发出 back
+withDefaults(defineProps<{ title: string; width?: string; back?: boolean }>(), {
+  width: '550px',
+  back: false,
+})
+const emit = defineEmits<{ back: [] }>()
 const { t } = useI18n()
 
 // focusInitial 打开面板时把焦点交给内容中带 autofocus 的元素，没有时保留默认的首个可聚焦元素
@@ -33,7 +38,18 @@ function focusInitial(event: Event): void {
         :aria-describedby="undefined"
         @open-auto-focus="focusInitial"
       >
-        <div class="ms-panel-header">
+        <div class="ms-panel-header" :class="{ 'has-back': back }">
+          <button
+            v-if="back"
+            v-tooltip.below="t('common.goBack')"
+            type="button"
+            ms-button
+            class="ms-button-borderless ms-button-icon ms-button-small"
+            :aria-label="t('common.goBack')"
+            @click="emit('back')"
+          >
+            <UiIcon name="arrowBack" :size="20" />
+          </button>
           <DialogTitle class="ms-panel-title">{{ title }}</DialogTitle>
           <slot name="status" />
           <DialogClose
@@ -85,6 +101,11 @@ function focusInitial(event: Event): void {
   align-items: center;
   gap: 8px;
   padding: 18px 12px 18px 20px;
+}
+
+/* has-back 为带返回按钮的标题栏：按钮距面板左边 12px，与官网 Selected model 面板相同 */
+.ms-panel-header.has-back {
+  padding-left: 12px;
 }
 
 .ms-panel-title {

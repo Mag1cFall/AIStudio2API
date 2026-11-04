@@ -75,10 +75,6 @@ const suggestions = computed<Suggestion[]>(() => [
   },
 ])
 
-// hasImages 表示输入中有图片，官网此时提示 Veo 不支持含儿童的图片
-const hasImages = computed(
-  () => state.start !== undefined || state.last !== undefined || state.references.length > 0,
-)
 // referenceInputs 表示模型接受参考图，参考图最多 3 张且与首尾帧互斥
 const referenceInputs = computed(() => video.videoInputs.value.references)
 // frameInputs 表示显示帧按钮：模型接受尾帧，或同时接受起始图与参考图，且没有参考图
@@ -272,7 +268,7 @@ watch(
 
     <PaidUsageZeroState
       v-if="state.turns.length === 0"
-      :title="t('pg.videoEmptyTitle').replace('{model}', currentModel?.name ?? 'Veo')"
+      :title="t('pg.videoEmptyTitle').replace('{model}', currentModel?.name ?? 'Gemini Omni')"
       :subtitle="t('pg.videoEmptyDescription')"
       layout="single-row"
       icon="modelVideo"
@@ -402,7 +398,6 @@ watch(
           </button>
         </template>
       </MediaPromptBox>
-      <p v-if="hasImages" class="input-warning">{{ t('pg.veoChildren') }}</p>
     </div>
 
     <template #settings="{ open, narrow, close }">
@@ -581,17 +576,5 @@ watch(
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.input-warning {
-  display: block;
-  width: 100%;
-  max-width: 1000px;
-  margin: 8px auto;
-  padding: 0 20px;
-  color: var(--color-on-surface-variant);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 18px;
 }
 </style>

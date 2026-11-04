@@ -46,7 +46,7 @@ INFO  service  管理服务就绪 | 地址=http://127.0.0.1:2048
 INFO  service  管理页面已打开 | 地址=http://127.0.0.1:2048
 ```
 
-点击“启动服务”后状态进入 `LAUNCHING`。服务先读取当前 `generation`（一次启动所创建的生成服务实例）的 `CachedModels`。缓存非空时立即预热 Worker，首个 Worker 有结果后为全部 `enabled`、`ready` 或 `busy` 账户并发执行 `ListModels`；没有模型缓存的 generation 先并发执行 `ListModels`，等待首个非空真实目录后预热 Worker，其余账户继续后台同步。首个 Worker 就绪后状态进入 `RUNNING` 并开始接收请求，其余目标 Worker 继续预热；可预热的账户全部处于冷却时记录 `WAA Worker 预热等待账户冷却 | 恢复=<时间>` 并直接进入 `RUNNING`，冷却期内的请求按冷却规则排队或返回 429，冷却结束后开始预热。`LAUNCHING` 期间点击“停止服务”会取消当前阶段并回到 `STOPPED`。
+点击“启动服务”后状态进入 `LAUNCHING`。服务先读取当前 `generation`（一次启动所创建的生成服务实例）的 `CachedModels`。缓存非空时立即预热 Worker，首个 Worker 有结果后读取全部 `enabled`、`ready` 或 `busy` 账户会话页面载入时的权益与 `ListModels` 目录；没有模型缓存的 generation 先同时读取这些账户的页面目录，等待首个非空真实目录后预热 Worker，其余账户继续后台同步。首个 Worker 就绪后状态进入 `RUNNING` 并开始接收请求，其余目标 Worker 继续预热；可预热的账户全部处于冷却时记录 `WAA Worker 预热等待账户冷却 | 恢复=<时间>` 并直接进入 `RUNNING`，冷却期内的请求按冷却规则排队或返回 429，冷却结束后开始预热。`LAUNCHING` 期间点击“停止服务”会取消当前阶段并回到 `STOPPED`。
 
 ```text
 INFO  service              生成服务启动 | 1/2 | 准备模型目录 | 缓存=0
@@ -59,15 +59,18 @@ INFO  service              WAA Worker 预热完成 | Worker=5/5 | 耗时=34.903s
 
 `准备模型目录` 的 `缓存` 是启动瞬间当前 generation 合并后的真实模型数。`模型目录后台同步完成` 的 `同步` 是本次无错误返回的账户数，包含空目录；`非空` 是返回非空真实目录的账户数；`模型` 是合并后的公共模型数；`待重试账户` 是 `pending set`（等待重试的账户 ID 集合）的大小。每个非空结果到达时已经写入公共目录、发布管理事件并在运行期预热更多 Worker，因此后台完成日志可以出现在 `生成服务就绪` 之后。
 
-目录为空、单账户同步失败或单账户同步成功但仍为空的账户进入 pending ID 集合。初次 `fan-out`（同时向全部符合条件的账户发出 `ListModels`）结束后，处于 `RUNNING` 的生成服务使用单个 30 秒 ticker（定时器）对全部 pending ID 再次并发执行 `ListModels`；非空成功立即更新账户、模型和 Worker 选择，失败与空结果继续保留：
+目录为空、单账户同步失败或单账户同步成功但仍为空的账户进入 pending ID 集合。启动期同步结束后，处于 `RUNNING` 的生成服务使用单个 30 秒 ticker（定时器）重新载入全部 pending 账户的页面再次读取目录；非空成功立即更新账户、模型和 Worker 选择，失败与空结果继续保留：
 
 ```text
 INFO  account@example.com  模型目录已更新 | 模型=39
 ```
 
-同一循环每 10 分钟对全部 `enabled`、`ready` 或 `busy` 账户并发读取权益与 `ListModels` 目录，并发槽位已满的账户跳过本轮；订阅模型遇到额度错误时同样刷新该账户。权益或模型数变化时更新账户调度与公开目录，读取失败时记录原因，登录失效的账户转为需要登录：
+同一循环从启动期同步开始时起每 24 小时逐个重新载入全部 `enabled`、`ready` 或 `busy` 账户的页面读取权益与 `ListModels` 目录，并发槽位已满的账户跳过本轮：有常驻 Worker 的账户重新载入它的页面，其余账户临时载入一个页面，取得响应后关闭。请求的模型不在任何账户的目录中时，巡检正在读取一轮的第一个账户则请求等它读完，没有进行中的一轮且距上一轮开始已超过 10 分钟时立即读取一轮，请求等这一轮读完第一个账户后再查找模型，其余账户在后台继续读取。订阅模型遇到额度错误时同样刷新该账户。权益或模型数变化时更新账户调度与公开目录，读取失败时记录原因，登录失效的账户转为需要登录：
 
 ```text
+INFO  account@example.com  WAA Worker 页面已重新载入 | 耗时=4.521s
+INFO  account@example.com  WAA Worker 临时页面已关闭 | 页面模型=gemini-flash-latest | 耗时=6.112s
+WARN  account@example.com  WAA Worker 重新载入页面失败 | 耗时=2.082s | 错误=...
 INFO  account@example.com  账户状态已更新 | 权益=Free→Ultra | 模型=46→47
 WARN  account@example.com  账户状态刷新失败 | 错误=...
 ```

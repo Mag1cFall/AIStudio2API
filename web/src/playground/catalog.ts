@@ -27,6 +27,9 @@ export const Capability = {
   MusicRoute: 53,
   ImageSearch: 54,
   GoogleMaps: 58,
+  ThinkingSummaries: 59,
+  Visualization: 60,
+  CollaborativePlanning: 61,
   Temperature: 62,
   StopSequences: 63,
   MaxOutputTokens: 64,
@@ -39,6 +42,11 @@ export const Capability = {
 // hasCode 返回模型是否带某个主能力码
 export function hasCode(model: Model | undefined, code: number): boolean {
   return model?.capabilities?.[`capability_code_${code}`] === true
+}
+
+// defaultOn 返回模型目录 field 82 是否默认开启某个能力码对应的设置
+export function defaultOn(model: Model | undefined, code: number): boolean {
+  return model?.capabilities?.[`default_capability_code_${code}`] === true
 }
 
 // hasCategory 返回模型是否属于某个官网分类（次能力码）
@@ -145,7 +153,7 @@ export function modelMatches(model: Model, id: string | undefined): boolean {
   )
 }
 
-// isChatModel 返回模型能否在 Playground 对话中使用，图片模型以图文输出参与对话
+// isChatModel 返回模型能否在 Playground 对话中使用，图片模型以图文输出参与对话，agent 经 Interactions API 参与对话
 export function isChatModel(model: Model): boolean {
   const capabilities = model.capabilities ?? {}
   return (
@@ -153,8 +161,19 @@ export function isChatModel(model: Model): boolean {
     capabilities.speech_route !== true &&
     capabilities.music_route !== true &&
     capabilities.video_route !== true &&
-    capabilities.live_route !== true &&
-    (capabilities.interactions_api !== true || isOmniModel(model))
+    capabilities.live_route !== true
+  )
+}
+
+// isAgent 返回模型是否为官网 Agents 分类的 agent，请求经 Interactions API 发出
+export function isAgent(model: Model | undefined): boolean {
+  return model !== undefined && hasCategory(model, 19)
+}
+
+// agentTools 是 agent 默认打开的工具，与官网一样取模型目录 field 82 默认开启的代码执行、网页搜索与网址读取
+export function agentTools(model: Model): Tool[] {
+  return (['code_execution', 'google_search', 'url_context'] as const).filter((tool) =>
+    defaultOn(model, toolCodes[tool]),
   )
 }
 

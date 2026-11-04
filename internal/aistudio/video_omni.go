@@ -16,13 +16,10 @@ import (
 // omniVideoPrefix 是由 Omni generateContent 视频输出完成的视频任务 ID 前缀
 const omniVideoPrefix = "omni-"
 
-// generatedVideoModel 返回目录中没有 predictLongRunning、经 generateContent 输出视频的模型
+// generatedVideoModel 返回经 generateContent 输出视频的模型
 func (p *AccountPool) generatedVideoModel(modelID string) (Model, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.hasModelMethodLocked(modelID, "predictLongRunning") {
-		return Model{}, false
-	}
 	for _, account := range p.accounts {
 		for _, model := range account.Models {
 			if modelMatchesID(model, modelID) && IsVideoModel(model) {
@@ -31,14 +28,6 @@ func (p *AccountPool) generatedVideoModel(modelID string) (Model, bool) {
 		}
 	}
 	return Model{}, false
-}
-
-// VideoMethod 返回模型创建视频任务所用的上游方法：经 generateContent 输出视频的模型为 generateContent，其余为 predictLongRunning
-func (p *AccountPool) VideoMethod(modelID string) string {
-	if _, ok := p.generatedVideoModel(modelID); ok {
-		return "generateContent"
-	}
-	return "predictLongRunning"
 }
 
 // generateOmniVideo 以 Omni 的 generateContent 视频输出完成长任务，绑定任务后立即返回，后台生成的 MP4 上传为账户 Drive 中的视频并绑定为结果
@@ -71,6 +60,7 @@ func (s *PooledService) generateOmniVideo(ctx context.Context, request VideoRequ
 		Model:   request.Model,
 		Seconds: strconv.FormatInt(video.DurationSeconds, 10),
 		Size:    videoOutputSize(VideoRequest{AspectRatio: video.AspectRatio, Resolution: video.Resolution}),
+		Prompt:  request.Prompt,
 	})
 	generate.AccountID = lease.Account().ID
 	if owned {
@@ -83,7 +73,7 @@ func (s *PooledService) generateOmniVideo(ctx context.Context, request VideoRequ
 	s.omniVideos.Store(operationID, nil)
 	go func() {
 		defer cancelTask()
-		s.runOmniVideo(taskCtx, operationID, generate)
+		s.runOmniVideo(taskCtx, operationID, generate, selection.AccountID != "")
 	}()
 	operation := VideoOperation{ID: operationID}
 	applyVideoOperationBinding(&operation, binding)
@@ -136,9 +126,9 @@ func omniVideoGenerateRequest(request VideoRequest, model Model) (GenerateReques
 	}, nil
 }
 
-// runOmniVideo 在后台生成 Omni 视频并保存结果，失败时记录错误供轮询返回
-func (s *PooledService) runOmniVideo(ctx context.Context, operationID string, generate GenerateRequest) {
-	if err := s.saveOmniVideo(ctx, operationID, generate); err != nil {
+// runOmniVideo 在后台生成 Omni 视频并保存结果，失败时记录错误供轮询返回；pinned 表示请求指定了账户
+func (s *PooledService) runOmniVideo(ctx context.Context, operationID string, generate GenerateRequest, pinned bool) {
+	if err := s.saveOmniVideo(ctx, operationID, generate, pinned); err != nil {
 		slog.Warn("Omni 视频任务失败", "operation", operationID, "error", err)
 		s.omniVideos.Store(operationID, err)
 		return
@@ -146,58 +136,36 @@ func (s *PooledService) runOmniVideo(ctx context.Context, operationID string, ge
 	s.omniVideos.Delete(operationID)
 }
 
-// saveOmniVideo 生成 Omni 视频并把 MP4 上传到任务所在账户的 Drive，绑定为任务结果
-func (s *PooledService) saveOmniVideo(ctx context.Context, operationID string, generate GenerateRequest) error {
+// saveOmniVideo 生成 Omni 视频并把 MP4 上传到任务所在账户的 Drive，绑定为任务结果；请求没有指定账户时，生成账户在冷却或上游返回可换号的错误时换另一个可用账户重新生成
+func (s *PooledService) saveOmniVideo(ctx context.Context, operationID string, generate GenerateRequest, pinned bool) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	parts := generate.Contents[0].Parts
-	for index, part := range parts {
-		var image *Blob
-		switch {
-		case part.InlineData != nil:
-			image = part.InlineData
-		case part.File != nil && s.pool.resourceAccountID(part.File.ID) != generate.AccountID:
-			var err error
-			if image, err = s.downloadFileBlob(ctx, part.File.ID); err != nil {
-				return err
-			}
-		default:
-			continue
+	var video *Blob
+	var err error
+	for attempt := 1; ; attempt++ {
+		generate.Contents = []Content{{Role: RoleUser, Parts: slices.Clone(parts)}}
+		video, err = s.renderOmniVideo(ctx, operationID, generate)
+		if err == nil || pinned || !retryableAccountError(err) || attempt >= accountAttemptLimit(s.pool, false) {
+			break
 		}
-		file, err := s.UploadFile(ctx, UploadRequest{
-			AccountID: generate.AccountID, Purpose: "assistants", Name: fmt.Sprintf("%s-image-%d", operationID, index),
-			MIME: image.MIME, Size: int64(len(image.Data)), Reader: bytes.NewReader(image.Data),
-		})
-		if err != nil {
-			return err
+		selection := AccountSelection{ModelID: generate.Model, Method: "generateContent"}
+		if groups, classifyErr := s.pool.ClassifyCandidates(ctx, selection, nil); classifyErr != nil || len(groups.StandbyReady)+len(groups.StandbyBusy) == 0 {
+			break
 		}
-		defer func() {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveCleanupTimeout)
-			defer cancel()
-			if err := s.DeleteFile(cleanupCtx, file.ID); err != nil {
-				slog.Warn("Omni 视频输入图片删除失败", "operation", operationID, "file", file.ID, "error", err)
+		lease, owned, selectErr := resolveAccountLease(ctx, s.pool, selection)
+		if selectErr != nil {
+			break
+		}
+		generate.AccountID = lease.Account().ID
+		if owned {
+			if releaseErr := lease.Release(); releaseErr != nil {
+				return releaseErr
 			}
-		}()
-		parts[index] = Part{File: &file}
+		}
 	}
-	events, err := s.Generate(ctx, generate)
 	if err != nil {
 		return err
-	}
-	var video *Blob
-	finish := ""
-	for event := range events {
-		switch {
-		case event.Err != nil:
-			return event.Err
-		case event.Kind == EventMedia && event.InlineData != nil && strings.HasPrefix(event.InlineData.MIME, "video/"):
-			video = event.InlineData
-		case event.FinishReason != "":
-			finish = strings.TrimSpace(event.FinishReason + " " + event.FinishMessage)
-		}
-	}
-	if video == nil {
-		return fmt.Errorf("模型 %s 没有返回视频：%s", generate.Model, finish)
 	}
 	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{ResourceID: operationID})
 	if err != nil {
@@ -218,4 +186,58 @@ func (s *PooledService) saveOmniVideo(ctx context.Context, operationID string, g
 		err = errors.Join(err, lease.Release())
 	}
 	return err
+}
+
+// renderOmniVideo 把图片输入上传为生成账户的 Drive 文件后在该账户上生成 Omni 视频，返回视频数据，结束时删除上传的图片
+func (s *PooledService) renderOmniVideo(ctx context.Context, operationID string, generate GenerateRequest) (*Blob, error) {
+	parts := generate.Contents[0].Parts
+	for index, part := range parts {
+		var image *Blob
+		switch {
+		case part.InlineData != nil:
+			image = part.InlineData
+		case part.File != nil && s.pool.resourceAccountID(part.File.ID) != generate.AccountID:
+			var err error
+			if image, err = s.downloadFileBlob(ctx, part.File.ID); err != nil {
+				return nil, err
+			}
+		default:
+			continue
+		}
+		file, err := s.UploadFile(ctx, UploadRequest{
+			AccountID: generate.AccountID, Purpose: "assistants", Name: fmt.Sprintf("%s-image-%d", operationID, index),
+			MIME: image.MIME, Size: int64(len(image.Data)), Reader: bytes.NewReader(image.Data),
+		})
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveCleanupTimeout)
+			defer cancel()
+			if err := s.DeleteFile(cleanupCtx, file.ID); err != nil {
+				slog.Warn("Omni 视频输入图片删除失败", "operation", operationID, "file", file.ID, "error", err)
+			}
+		}()
+		parts[index] = Part{File: &file}
+	}
+	events, err := s.Generate(ctx, generate)
+	if err != nil {
+		return nil, err
+	}
+	var video *Blob
+	finish := ""
+	for event := range events {
+		switch {
+		case event.Err != nil:
+			return nil, event.Err
+		case event.Kind == EventMedia && event.InlineData != nil && strings.HasPrefix(event.InlineData.MIME, "video/"):
+			video = event.InlineData
+		case event.FinishReason != "":
+			finish = strings.TrimSpace(event.FinishReason + " " + event.FinishMessage)
+		}
+	}
+	if video == nil {
+		return nil, fmt.Errorf("模型 %s 没有返回视频：%s", generate.Model, finish)
+	}
+	return video, nil
 }

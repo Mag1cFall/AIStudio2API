@@ -3,6 +3,7 @@ import { api, openAdminEvents } from '@/api'
 import { useI18n } from '@/i18n'
 import type {
   Account,
+  AccountTask,
   AdminEvent,
   AdminLog,
   Cooldown,
@@ -19,6 +20,8 @@ const { t, errorText } = useI18n()
 const status = ref<ServiceStatus | null>(null)
 const logs = shallowRef<AdminLog[]>([])
 const accounts = ref<Account[]>([])
+// accountTasks 是服务端运行中与已结束、尚未关闭的添加或重新登录账户任务
+const accountTasks = ref<AccountTask[]>([])
 const models = ref<Model[]>([])
 const cooldowns = ref<Cooldown[]>([])
 const requests = ref<RequestSummary[]>([])
@@ -29,6 +32,7 @@ const stopPending = ref(false)
 const launchCancellationRequested = ref(false)
 const notice = reactive({ message: '', tone: 'success' as 'success' | 'error' })
 const loading = reactive({
+  status: true,
   accounts: true,
   models: true,
   requests: true,
@@ -62,14 +66,18 @@ let noticeTimer: number | undefined
 let pendingLogs: AdminLog[] = []
 let logFlushTimer: number | undefined
 
-// showNotice 显示一次短暂操作结果
+// showNotice 显示一次操作结果，成功提示 3.2 秒后关闭，错误提示保留到手动关闭或下一条提示
 function showNotice(message: string, tone: 'success' | 'error'): void {
   notice.message = message
   notice.tone = tone
   window.clearTimeout(noticeTimer)
-  noticeTimer = window.setTimeout(() => {
-    notice.message = ''
-  }, 3200)
+  if (tone === 'success') noticeTimer = window.setTimeout(closeNotice, 3200)
+}
+
+// closeNotice 关闭当前提示
+function closeNotice(): void {
+  window.clearTimeout(noticeTimer)
+  notice.message = ''
 }
 
 async function loadStatus(): Promise<void> {
@@ -77,6 +85,8 @@ async function loadStatus(): Promise<void> {
     status.value = await api.status()
   } catch {
     status.value = null
+  } finally {
+    loading.status = false
   }
 }
 
@@ -291,6 +301,10 @@ function handleAdminEvent(event: AdminEvent): void {
     cooldowns.value = event.data
     return
   }
+  if (event.type === 'account_tasks') {
+    accountTasks.value = event.data.tasks
+    return
+  }
   replaceByID(requests.value, event.data)
 }
 
@@ -335,6 +349,7 @@ export function useConsole() {
     status,
     logs,
     accounts,
+    accountTasks,
     visibleAccounts,
     models,
     cooldowns,
@@ -349,6 +364,7 @@ export function useConsole() {
     startPending,
     stopPending,
     showNotice,
+    closeNotice,
     loadAccountData,
     loadRequestData,
     updateAccount,

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
@@ -21,7 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HugoSmits86/nativewebp"
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"golang.org/x/image/draw"
 )
 
 type openAIImageRequest struct {
@@ -32,6 +33,12 @@ type openAIImageRequest struct {
 	Quality        string `json:"quality"`
 	ResponseFormat string `json:"response_format"`
 	Stream         bool   `json:"stream"`
+	// OutputFormat 与 OutputCompression 是输出图片的编码与 JPEG 压缩级别
+	OutputFormat      string `json:"output_format"`
+	OutputCompression *int   `json:"output_compression"`
+	// SafetyIdentifier 与 User 是调用方的终端用户标识，响应回传其中非空的一个
+	SafetyIdentifier string `json:"safety_identifier"`
+	User             string `json:"user"`
 }
 
 type openAISpeechRequest struct {
@@ -41,6 +48,8 @@ type openAISpeechRequest struct {
 	ResponseFormat string  `json:"response_format"`
 	Speed          float64 `json:"speed"`
 	Instructions   string  `json:"instructions"`
+	// StreamFormat 为 sse 时以 speech.audio.delta 与 speech.audio.done 事件输出，省略或为 audio 时返回音频文件
+	StreamFormat string `json:"stream_format"`
 }
 
 func (s *server) handleOpenAIImages(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +102,12 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	target, _ := openAIImageSize(request.Size)
+	format, compression, err := openAIImageEncoding(request.OutputFormat, request.OutputCompression)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	results, err := s.generateImages(r.Context(), aistudio.GenerateRequest{
 		Unary: true,
 		Model: search.Model,
@@ -112,12 +127,19 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		return
 	}
 	created := time.Now().Unix()
+	quality := openAIImageQuality(request.Quality, imageConfig)
 	data := make([]map[string]any, 0, len(results))
+	var size image.Point
 	for _, result := range results {
 		images := 0
 		for _, media := range result.media {
-			if !strings.HasPrefix(media.MIME, "image/") || len(media.Data) == 0 {
+			if !strings.HasPrefix(media.MIME, "image/") {
 				continue
+			}
+			media, size, err = fitImage(media, target, format, compression)
+			if err != nil {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+				return
 			}
 			encoded := base64.StdEncoding.EncodeToString(media.Data)
 			item := map[string]any{}
@@ -125,12 +147,16 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 				item["type"] = event + ".completed"
 				item["b64_json"] = encoded
 				item["created_at"] = created
-				item["output_format"] = strings.TrimPrefix(media.MIME, "image/")
-				item["size"], item["quality"], item["background"] = cmp.Or(request.Size, "auto"), cmp.Or(request.Quality, "auto"), "auto"
-			} else if request.ResponseFormat == "b64_json" {
-				item["b64_json"] = encoded
-			} else {
+				item["output_format"] = strings.TrimPrefix(format, "image/")
+				item["size"], item["quality"], item["background"] = fmt.Sprintf("%dx%d", size.X, size.Y), quality, "opaque"
+				item["usage"] = openAIImageUsage(result.usage)
+				if identifier := cmp.Or(request.SafetyIdentifier, request.User); identifier != "" {
+					item["safety_identifier"] = identifier
+				}
+			} else if request.ResponseFormat == "url" {
 				item["url"] = "data:" + media.MIME + ";base64," + encoded
+			} else {
+				item["b64_json"] = encoded
 			}
 			if result.text.Len() > 0 {
 				item["revised_prompt"] = result.text.String()
@@ -148,7 +174,18 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		}
 	}
 	if !request.Stream {
-		writeJSON(w, http.StatusOK, officialOrder("openai", map[string]any{"created": created, "data": data}))
+		usages := make([]*aistudio.Usage, 0, len(results))
+		for _, result := range results {
+			usages = append(usages, result.usage)
+		}
+		body := map[string]any{
+			"created": created, "data": data, "background": "opaque", "output_format": strings.TrimPrefix(format, "image/"),
+			"quality": quality, "size": fmt.Sprintf("%dx%d", size.X, size.Y), "usage": openAIImageUsage(usages...),
+		}
+		if identifier := cmp.Or(request.SafetyIdentifier, request.User); identifier != "" {
+			body["safety_identifier"] = identifier
+		}
+		writeJSON(w, http.StatusOK, officialOrder("openai", body))
 		return
 	}
 	if err := streamHeaders(w); err != nil {
@@ -194,34 +231,41 @@ func defaultCatalogModel(models []aistudio.Model, match func(aistudio.Model) boo
 // openAIImageAspectRatios 为模型目录未列出宽高比时的候选宽高比
 var openAIImageAspectRatios = []string{"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
 
-// openAIImageConfig 将 OpenAI size 与 quality 换成模型选项中最接近的宽高比与分辨率
+// openAIImageConfig 将 OpenAI size 与 quality 换成上游宽高比与分辨率：size 取最接近的宽高比与能覆盖该尺寸的最小分辨率，quality 对应的分辨率更高时取 quality 的分辨率
 func openAIImageConfig(size string, quality string, options map[string][]string) (*aistudio.ImageConfig, error) {
 	config := &aistudio.ImageConfig{}
-	if size = strings.ToLower(strings.TrimSpace(size)); size != "" && size != "auto" {
-		width, height, ok := imageDimensions(size)
-		if !ok {
-			return nil, fmt.Errorf("size must be auto or WIDTHxHEIGHT")
-		}
+	target, err := openAIImageSize(size)
+	if err != nil {
+		return nil, err
+	}
+	resolutions := options["image_output_resolutions"]
+	if target != (image.Point{}) {
 		ratios := options["image_aspect_ratios"]
 		if len(ratios) == 0 {
 			ratios = openAIImageAspectRatios
 		}
-		config.AspectRatio = aistudio.NearestOption(math.Log(width)-math.Log(height), ratios, aistudio.AspectRatioLog)
+		config.AspectRatio = aistudio.NearestOption(math.Log(float64(target.X))-math.Log(float64(target.Y)), ratios, aistudio.AspectRatioLog)
+		config.ImageSize = imageResolutionCovering(math.Sqrt(float64(target.X)*float64(target.Y)), resolutions)
 	}
+	var requested string
 	switch strings.ToLower(strings.TrimSpace(quality)) {
 	case "", "auto":
 	case "low", "standard":
-		config.ImageSize = "1K"
+		requested = "1K"
 	case "medium", "hd":
-		config.ImageSize = "2K"
+		requested = "2K"
 	case "high", "xhigh", "max":
-		config.ImageSize = "4K"
+		requested = "4K"
 	default:
 		return nil, fmt.Errorf("quality must be auto, low, medium, high, xhigh, max, standard or hd")
 	}
-	if resolutions := options["image_output_resolutions"]; config.ImageSize != "" && len(resolutions) > 0 {
-		pixels, _ := imageResolutionPixels(config.ImageSize)
-		config.ImageSize = aistudio.NearestOption(pixels, resolutions, imageResolutionPixels)
+	if requested != "" && len(resolutions) > 0 {
+		pixels, _ := imageResolutionPixels(requested)
+		requested = aistudio.NearestOption(pixels, resolutions, imageResolutionPixels)
+	}
+	current, _ := imageResolutionPixels(config.ImageSize)
+	if pixels, _ := imageResolutionPixels(requested); pixels > current {
+		config.ImageSize = requested
 	}
 	if config.AspectRatio == "" && config.ImageSize == "" {
 		return nil, nil
@@ -229,15 +273,159 @@ func openAIImageConfig(size string, quality string, options map[string][]string)
 	return config, nil
 }
 
-// imageDimensions 解析 WIDTHxHEIGHT 形式的图片尺寸
-func imageDimensions(size string) (float64, float64, bool) {
+// openAIImageSize 解析 OpenAI size 的 WIDTHxHEIGHT，auto 或省略时为零
+func openAIImageSize(size string) (image.Point, error) {
+	size = strings.ToLower(strings.TrimSpace(size))
+	if size == "" || size == "auto" {
+		return image.Point{}, nil
+	}
 	widthText, heightText, ok := strings.Cut(size, "x")
 	width, widthErr := strconv.Atoi(widthText)
 	height, heightErr := strconv.Atoi(heightText)
 	if !ok || widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
-		return 0, 0, false
+		return image.Point{}, fmt.Errorf("size must be auto or WIDTHxHEIGHT")
 	}
-	return float64(width), float64(height), true
+	return image.Pt(width, height), nil
+}
+
+// imageResolutionCovering 返回分辨率选项中边长不小于 edge 的最小一档，edge 超过全部选项时返回最大一档，没有选项时为空
+func imageResolutionCovering(edge float64, resolutions []string) string {
+	covering, coveringPixels := "", math.Inf(1)
+	largest, largestPixels := "", 0.0
+	for _, option := range resolutions {
+		pixels, ok := imageResolutionPixels(option)
+		switch {
+		case !ok:
+		case pixels >= edge && pixels < coveringPixels:
+			covering, coveringPixels = option, pixels
+		case pixels > largestPixels:
+			largest, largestPixels = option, pixels
+		}
+	}
+	return cmp.Or(covering, largest)
+}
+
+// openAIImageQuality 返回响应中的 quality：请求的 low、medium、high、xhigh、max 原样返回，其余按生成分辨率换为 low、medium 或 high
+func openAIImageQuality(quality string, config *aistudio.ImageConfig) string {
+	switch quality = strings.ToLower(strings.TrimSpace(quality)); quality {
+	case "low", "medium", "high", "xhigh", "max":
+		return quality
+	}
+	if config != nil {
+		switch config.ImageSize {
+		case "4K":
+			return "high"
+		case "2K":
+			return "medium"
+		}
+	}
+	return "low"
+}
+
+// openAIImageEncoding 返回 output_format 对应的 MIME 类型与 output_compression 给出的 JPEG 质量，省略时为 PNG 与 100
+func openAIImageEncoding(format string, compression *int) (string, int, error) {
+	quality := 100
+	if compression != nil {
+		if *compression < 0 || *compression > 100 {
+			return "", 0, fmt.Errorf("output_compression must be between 0 and 100")
+		}
+		quality = *compression
+	}
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "png":
+		return "image/png", quality, nil
+	case "jpeg", "jpg":
+		return "image/jpeg", quality, nil
+	case "webp":
+		return "image/webp", quality, nil
+	}
+	return "", 0, fmt.Errorf("output_format must be png, jpeg or webp")
+}
+
+// openAIImageUsage 合计上游用量为 OpenAI 图片用量，输入与输出按模态分为图片与文本 token
+func openAIImageUsage(usages ...*aistudio.Usage) map[string]any {
+	var input, output, total, inputImages, outputImages int64
+	for _, usage := range usages {
+		if usage == nil {
+			continue
+		}
+		input += usage.InputTokens
+		output += usage.OutputTokens
+		total += usage.TotalTokens
+		if usage.Details != nil {
+			inputImages += imageTokens(usage.Details.PromptTokensDetails)
+			outputImages += imageTokens(usage.Details.CandidatesTokensDetails)
+		}
+	}
+	return map[string]any{
+		"input_tokens":          input,
+		"input_tokens_details":  map[string]any{"image_tokens": inputImages, "text_tokens": input - inputImages},
+		"output_tokens":         output,
+		"output_tokens_details": map[string]any{"image_tokens": outputImages, "text_tokens": output - outputImages},
+		"total_tokens":          total,
+	}
+}
+
+// imageTokens 返回按模态细分的用量中图片的 token 数
+func imageTokens(counts []aistudio.ModalityTokenCount) int64 {
+	var tokens int64
+	for _, count := range counts {
+		if count.Modality == "IMAGE" {
+			tokens += count.TokenCount
+		}
+	}
+	return tokens
+}
+
+// fitImage 把图片居中裁切缩放为 size 并编码为 mimeType，返回实际尺寸；size 为零或图片任一边小于 size 时保持原尺寸，不放大
+func fitImage(media aistudio.Blob, size image.Point, mimeType string, compression int) (aistudio.Blob, image.Point, error) {
+	decoded, _, err := image.Decode(bytes.NewReader(media.Data))
+	if err != nil {
+		return media, image.Point{}, fmt.Errorf("decode %s output: %w", media.MIME, err)
+	}
+	bounds := decoded.Bounds().Size()
+	if size != (image.Point{}) && bounds != size && bounds.X >= size.X && bounds.Y >= size.Y {
+		decoded = coverImage(decoded, size)
+	} else if media.MIME == mimeType && (mimeType != "image/jpeg" || compression == 100) {
+		return media, bounds, nil
+	}
+	encoded, err := encodeImage(decoded, mimeType, compression)
+	if err != nil {
+		return media, image.Point{}, fmt.Errorf("convert %s output to %s: %w", media.MIME, mimeType, err)
+	}
+	return aistudio.Blob{MIME: mimeType, Data: encoded}, decoded.Bounds().Size(), nil
+}
+
+// coverImage 从图片中央取与 size 同宽高比的最大区域，缩放为 size
+func coverImage(source image.Image, size image.Point) image.Image {
+	crop := source.Bounds()
+	if crop.Dx()*size.Y > crop.Dy()*size.X {
+		width := crop.Dy() * size.X / size.Y
+		crop.Min.X += (crop.Dx() - width) / 2
+		crop.Max.X = crop.Min.X + width
+	} else {
+		height := crop.Dx() * size.Y / size.X
+		crop.Min.Y += (crop.Dy() - height) / 2
+		crop.Max.Y = crop.Min.Y + height
+	}
+	scaled := image.NewRGBA(image.Rectangle{Max: size})
+	draw.CatmullRom.Scale(scaled, scaled.Bounds(), source, crop, draw.Src, nil)
+	return scaled
+}
+
+// encodeImage 把图片编码为 PNG、JPEG 或无损 WebP，jpegQuality 为 JPEG 质量
+func encodeImage(img image.Image, mimeType string, jpegQuality int) ([]byte, error) {
+	var encoded bytes.Buffer
+	var err error
+	switch mimeType {
+	case "image/jpeg":
+		err = jpeg.Encode(&encoded, img, &jpeg.Options{Quality: jpegQuality})
+	case "image/webp":
+		err = nativewebp.Encode(&encoded, img, nil)
+	default:
+		err = png.Encode(&encoded, img)
+	}
+	return encoded.Bytes(), err
 }
 
 // imageResolutionPixels 返回 512、1K 等图片分辨率的长边像素
@@ -270,10 +458,15 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	format := strings.ToLower(strings.TrimSpace(request.ResponseFormat))
 	if format == "" {
-		format = "wav"
+		format = "mp3"
 	}
 	if err := speechFormatError(format); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	streamFormat := strings.TrimSpace(request.StreamFormat)
+	if streamFormat != "" && streamFormat != "audio" && streamFormat != "sse" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "stream_format must be audio or sse")
 		return
 	}
 	part := aistudio.Part{Text: strings.TrimSpace(request.Input)}
@@ -286,7 +479,7 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.service.Generate(r.Context(), aistudio.GenerateRequest{
 		ID:    newID("speech"),
-		Unary: true,
+		Unary: streamFormat != "sse",
 		Model: request.Model,
 		Contents: []aistudio.Content{{
 			Role: aistudio.RoleUser, Parts: []aistudio.Part{part},
@@ -300,6 +493,10 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIRequestError(w, err)
 		}
+		return
+	}
+	if streamFormat == "sse" {
+		streamSpeech(w, r, events, format)
 		return
 	}
 	result, err := consumeEvents(r.Context(), events)
@@ -325,6 +522,48 @@ func (s *server) handleOpenAISpeech(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// streamSpeech 以 speech.audio.delta 写出音频，pcm 随上游逐块输出，其他格式在结束时整段输出，最后写出带用量的 speech.audio.done
+func streamSpeech(w http.ResponseWriter, r *http.Request, events <-chan aistudio.Event, format string) {
+	if err := streamHeaders(w); err != nil {
+		return
+	}
+	delta := func(data []byte) error {
+		return writeSSE(w, "", map[string]any{"type": "speech.audio.delta", "audio": base64.StdEncoding.EncodeToString(data)})
+	}
+	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
+		if format != "pcm" || !audioEvent(event) {
+			return nil
+		}
+		data, _, err := encodeSpeechResponse(*event.InlineData, "pcm")
+		if err != nil {
+			return err
+		}
+		return delta(data)
+	}, func() error { return writeSSEHeartbeat(w) })
+	if err == nil && format != "pcm" {
+		var media aistudio.Blob
+		if media, err = joinedAudio(result.media); err == nil {
+			var data []byte
+			if data, _, err = encodeSpeechResponse(media, format); err == nil {
+				err = delta(data)
+			}
+		}
+	}
+	if err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeOpenAISSEError(w, err)
+		}
+		return
+	}
+	usage := aistudio.Usage{}
+	if result.usage != nil {
+		usage = *result.usage
+	}
+	_ = writeSSE(w, "", map[string]any{"type": "speech.audio.done", "usage": map[string]any{
+		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens, "total_tokens": usage.TotalTokens,
+	}})
+}
+
 // speechFormatError 在生成前拒绝 OpenAI Speech 未定义的 response_format
 func speechFormatError(format string) error {
 	if _, ok := audioContentTypes[format]; ok || format == "wav" || format == "pcm" {
@@ -333,22 +572,13 @@ func speechFormatError(format string) error {
 	return fmt.Errorf("response_format must be mp3, opus, aac, flac, wav or pcm")
 }
 
-// convertImage 把图片转码为 image/jpeg 或 image/png，已是目标格式或目标为其他格式时原样返回
-func convertImage(media aistudio.Blob, mimeType string) (aistudio.Blob, error) {
-	if len(media.Data) == 0 || strings.HasPrefix(media.MIME, mimeType) || mimeType != "image/jpeg" && mimeType != "image/png" {
+// convertImage 把图片转码为 image/jpeg，已是 JPEG 时原样返回
+func convertImage(media aistudio.Blob) (aistudio.Blob, error) {
+	if strings.HasPrefix(media.MIME, "image/jpeg") {
 		return media, nil
 	}
-	decoded, _, err := image.Decode(bytes.NewReader(media.Data))
-	var encoded bytes.Buffer
-	if err == nil && mimeType == "image/jpeg" {
-		err = jpeg.Encode(&encoded, decoded, nil)
-	} else if err == nil {
-		err = png.Encode(&encoded, decoded)
-	}
-	if err != nil {
-		return media, fmt.Errorf("convert %s output to %s: %w", media.MIME, mimeType, err)
-	}
-	return aistudio.Blob{MIME: mimeType, Data: encoded.Bytes()}, nil
+	converted, _, err := fitImage(media, image.Point{}, "image/jpeg", jpeg.DefaultQuality)
+	return converted, err
 }
 
 // audioEvent 表示事件是内联音频
@@ -366,7 +596,7 @@ func joinedAudio(values []aistudio.Blob) (aistudio.Blob, error) {
 				return aistudio.Blob{}, err
 			}
 		}
-		if !strings.HasPrefix(media.MIME, "audio/") || len(media.Data) == 0 {
+		if !strings.HasPrefix(media.MIME, "audio/") {
 			continue
 		}
 		if joined.MIME == "" {

@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
-	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
-	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 )
 
 // AdminService 定义管理端需要的权威状态能力
@@ -24,6 +21,7 @@ type AdminService interface {
 	DiscoverCookieAccounts(context.Context, CookieImportInput) ([]CookieBrowser, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
 	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
+	RenewAccountCookies(ctx context.Context, accountID string, token string, cookies []aistudio.StateCookie) (AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
@@ -52,6 +50,7 @@ type AdminStatus struct {
 	ActiveRequests int                `json:"active_requests"`
 	Accounts       AdminAccountCounts `json:"accounts"`
 	Camoufox       AdminCamoufox      `json:"camoufox"`
+	ChromeImport   bool               `json:"chrome_import"`
 }
 
 // InvalidConfigValue 表示加载时取值无效、按默认值生效的一个配置项
@@ -170,6 +169,9 @@ type AdminAccount struct {
 	Models      []string `json:"models"`
 	BenefitTier string   `json:"benefit_tier"`
 	Message     string   `json:"message"`
+
+	// PairingRenewedAt 是远程配对账户最近一次由原电脑续签的时间，没有经配对续签时省略
+	PairingRenewedAt *time.Time `json:"pairing_renewed_at,omitempty"`
 }
 
 // AdminProxy 表示代理池中一个代理的可用性与绑定账户数
@@ -206,15 +208,10 @@ type AccountCreateInput struct {
 	Timezone string `json:"timezone"`
 }
 
-// CookieImportInput 表示 Cookie 导入的账户邮箱、Cookie 文本或浏览器调试地址与账户环境
+// CookieImportInput 表示识别 Cookie 中账户时提交的 Cookie 文本与出口代理
 type CookieImportInput struct {
-	Label    string `json:"label"`
-	Cookies  string `json:"cookies"`
-	CDP      string `json:"cdp"`
-	Proxy    string `json:"proxy"`
-	Locale   string `json:"locale"`
-	Timezone string `json:"timezone"`
-	AuthUser int    `json:"auth_user"`
+	Cookies string `json:"cookies"`
+	Proxy   string `json:"proxy"`
 }
 
 // ChromeImportProfile 表示可从本机 Chrome 导入的账号
@@ -237,6 +234,9 @@ type CookieBrowser struct {
 	Imported  bool   `json:"imported"`
 	SignedOut bool   `json:"signed_out"`
 	Error     string `json:"error"`
+
+	// DeviceBound 表示 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备，导入的副本约 2 小时内失效
+	DeviceBound bool `json:"device_bound"`
 }
 
 // ChromeImportInput 表示批量导入的 Chrome 账号与账户环境
@@ -260,6 +260,7 @@ type RuntimeConfig struct {
 	NonstreamKeepalive        bool                 `json:"nonstream_keepalive"`
 	FakeStream                bool                 `json:"fake_stream"`
 	YouTubeLinks              bool                 `json:"youtube_links"`
+	StripThoughtSignatures    bool                 `json:"strip_thought_signatures"`
 	SearchModelAliases        bool                 `json:"search_model_aliases"`
 	GoogleSearch              bool                 `json:"google_search"`
 	FirstEventHedge           string               `json:"first_event_hedge"`
@@ -292,7 +293,6 @@ type RuntimeConfig struct {
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
 	APIKeyAccounts            string               `json:"api_key_accounts"`
-	TemporaryChat             bool                 `json:"temporary_chat"`
 	WAABackend                string               `json:"waa_backend"`
 	MediaOutput               string               `json:"media_output"`
 	MediaBaseURL              string               `json:"media_base_url"`
@@ -329,14 +329,16 @@ type AdminEvent struct {
 }
 
 func (s *server) registerAdmin(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/i18n/{locale}", handleMessages)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
 	mux.HandleFunc("GET /api/accounts/import/browsers", s.handleCookieBrowsers)
 	mux.HandleFunc("POST /api/accounts/import/cookies/discover", s.handleDiscoverCookieAccounts)
-	mux.HandleFunc("POST /api/accounts/import/cookies", s.handleImportCookieAccount)
+	mux.HandleFunc("POST /api/accounts/import/cookies", s.handleImportCookieAccounts)
+	mux.HandleFunc("GET /api/accounts/tasks", s.handleAccountTasks)
+	mux.HandleFunc("DELETE /api/accounts/tasks/{id}", s.handleDeleteAccountTask)
+	mux.HandleFunc("GET /api/pairing", s.handleActivePairing)
 	mux.HandleFunc("POST /api/pairing", s.handleCreatePairing)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
@@ -387,25 +389,6 @@ func (s *server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]AdminAccount{"accounts": accounts})
 }
 
-func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		AccountCreateInput
-		View string `json:"view"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	view, release := s.loginView(r, input.View)
-	defer release()
-	account, err := s.config.Admin.CreateAccount(r.Context(), input.AccountCreateInput, view)
-	if err != nil {
-		writeAdminUpstreamError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]AdminAccount{"account": account})
-}
-
 func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.config.Admin.ChromeImportProfiles(r.Context())
 	if err != nil {
@@ -413,20 +396,6 @@ func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]ChromeImportProfile{"profiles": profiles})
-}
-
-func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Request) {
-	var input ChromeImportInput
-	if err := decodeJSON(r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	accounts, err := s.config.Admin.ImportChromeAccounts(r.Context(), input)
-	if err != nil {
-		writeAdminUpstreamError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string][]AdminAccount{"accounts": accounts})
 }
 
 func (s *server) handleCookieBrowsers(w http.ResponseWriter, r *http.Request) {
@@ -452,58 +421,6 @@ func (s *server) handleDiscoverCookieAccounts(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string][]CookieBrowser{"accounts": accounts})
 }
 
-func (s *server) handleImportCookieAccount(w http.ResponseWriter, r *http.Request) {
-	var input CookieImportInput
-	if err := decodeJSON(r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if address := strings.TrimSpace(input.CDP); address != "" {
-		browser, err := chromeauth.ReadCDPBrowser(r.Context(), address)
-		if err != nil {
-			writeAdminError(w, http.StatusBadGateway, "cdp_unavailable", err.Error())
-			return
-		}
-		input.Cookies = browser.Cookies
-		if strings.TrimSpace(input.Locale) == "" {
-			input.Locale = browser.Locale
-		}
-		if strings.TrimSpace(input.Timezone) == "" {
-			input.Timezone = browser.Timezone
-		}
-	}
-	state, err := aistudio.ParseCookieText(input.Cookies)
-	if err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_cookies", err.Error())
-		return
-	}
-	account, err := s.config.Admin.ImportAccountState(r.Context(), AccountStateInput{
-		Label: input.Label, Proxy: input.Proxy, Locale: input.Locale, Timezone: input.Timezone,
-		AuthUser: input.AuthUser, StorageState: state,
-	})
-	if err != nil {
-		writeAdminUpstreamError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]AdminAccount{"account": account})
-}
-
-// handleMessages 返回界面语言的服务文案翻译表，简体中文为空表
-func handleMessages(w http.ResponseWriter, r *http.Request) {
-	locale := r.PathValue("locale")
-	if locale == i18n.Source {
-		writeJSON(w, http.StatusOK, map[string]string{})
-		return
-	}
-	data, ok := i18n.Messages(locale)
-	if !ok {
-		writeAdminError(w, http.StatusNotFound, "not_found", "unknown locale")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Write(data)
-}
-
 func (s *server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	var input AccountInput
 	if err := decodeJSON(r, &input); err != nil {
@@ -524,26 +441,6 @@ func (s *server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *server) handleLoginAccount(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		View string `json:"view"`
-	}
-	if r.ContentLength != 0 {
-		if err := decodeJSON(r, &input); err != nil {
-			writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
-	}
-	view, release := s.loginView(r, input.View)
-	defer release()
-	account, err := s.config.Admin.LoginAccount(r.Context(), r.PathValue("id"), view)
-	if err != nil {
-		writeAdminUpstreamError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]AdminAccount{"account": account})
 }
 
 func (s *server) handleRefreshAccount(w http.ResponseWriter, r *http.Request) {
@@ -652,6 +549,7 @@ func (s *server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 	if err := streamHeaders(w); err != nil {
 		return
 	}
+	tasks := s.accountTasks.subscribe(r.Context())
 	for {
 		select {
 		case <-r.Context().Done():
@@ -661,6 +559,10 @@ func (s *server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := writeSSE(w, "", event); err != nil {
+				return
+			}
+		case list := <-tasks:
+			if err := writeSSE(w, "", AdminEvent{Type: "account_tasks", Data: map[string][]AccountTask{"tasks": list}}); err != nil {
 				return
 			}
 		}

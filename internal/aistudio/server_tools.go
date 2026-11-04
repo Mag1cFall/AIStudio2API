@@ -18,6 +18,29 @@ func serverSideInvocations(tools Tools, imageRoute bool) bool {
 	return builtin && !imageRoute && tools.ToolConfig.Mode != "none" && (tools.ToolConfig.ServerSideInvocations || len(tools.Functions) > 0)
 }
 
+// playgroundServerSteps 表示 Playground 请求开启 include_server_side_tool_invocations：serverSideInvocations 成立或声明了 URL context，Playground 只在 URL context 工具步骤中给出各网址的读取结果
+func playgroundServerSteps(tools Tools, imageRoute bool) bool {
+	return serverSideInvocations(tools, imageRoute) || !imageRoute && tools.ToolConfig.Mode != "none" && slices.Contains(tools.Google, "url_context")
+}
+
+// urlContextGrounding 返回 URL context 工具结果中各网址的读取结果
+func urlContextGrounding(step *ServerToolStep, path string, evidence json.RawMessage) (*GroundingMetadata, error) {
+	var data struct {
+		URLMetadata []struct {
+			RetrievedURL string `json:"retrieved_url"`
+			Status       string `json:"url_retrieval_status"`
+		} `json:"url_metadata"`
+	}
+	if err := json.Unmarshal(step.Data, &data); err != nil {
+		return nil, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: "URL context 结果不是 url_metadata 对象", Raw: evidence}
+	}
+	grounding := &GroundingMetadata{}
+	for _, item := range data.URLMetadata {
+		grounding.URLContext = append(grounding.URLContext, URLMetadata{RetrievedURL: item.RetrievedURL, Status: item.Status})
+	}
+	return grounding, nil
+}
+
 // serverToolHidden 表示事件是客户端没有要求 includeServerSideToolInvocations 时的服务端工具步骤，视频理解处理步骤由上游按处理方式返回
 func serverToolHidden(request GenerateRequest, event Event) bool {
 	step := event.ToolCall

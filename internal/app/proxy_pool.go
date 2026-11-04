@@ -94,17 +94,11 @@ func (admin *runtimeAdmin) rebindAccount(ctx context.Context, accountID string) 
 		return err
 	}
 	account := lease.Account()
-	headerUpdate, err := admin.headers.prepareUpdate(account, account.Config)
-	if err != nil {
-		return errors.Join(err, lease.Release())
-	}
 	workerUpdate, err := admin.workers.prepareUpdate(account, account.Config)
 	if err != nil {
-		headerUpdate.Discard()
 		return errors.Join(err, lease.Release())
 	}
 	workerUpdate.Commit()
-	headerUpdate.Commit()
 	admin.requests.log(account.Config.Label, "WARN", fmt.Sprintf("代理改绑 | 出口=%s", redactedProxy(account.EffectiveProxy(admin.globalProxy))))
 	return lease.Release()
 }

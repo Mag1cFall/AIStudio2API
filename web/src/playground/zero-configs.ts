@@ -1,13 +1,12 @@
 import { useI18n } from '@/i18n'
-import type { Model, ThinkingLevel } from '@/types'
+import type { Model } from '@/types'
 import { Capability, hasCode } from './catalog'
 
-// ZeroStarter 是对话空态的示例提示词：可带参考图片、思考档位与开启的工具
+// ZeroStarter 是对话空态的示例提示词：可带参考图片与开启的工具
 export interface ZeroStarter {
   title: string
   prompt: string
   images?: string[]
-  thinkingLevel?: ThinkingLevel
   search?: boolean
   codeExecution?: boolean
 }
@@ -91,17 +90,14 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.nanoBanana21.starter1'),
           prompt: t('zero.nanoBanana21.starter1Prompt'),
           images: [zeroImage('nb21-outfit-ref.webp')],
-          thinkingLevel: 'MEDIUM',
         },
         {
           title: t('zero.nanoBanana21.starter2'),
           prompt: t('zero.nanoBanana21.starter2Prompt'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.nanoBanana21.starter3'),
           prompt: t('zero.nanoBanana21.starter3Prompt'),
-          thinkingLevel: 'HIGH',
         },
       ],
       examples: [
@@ -109,19 +105,16 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.nanoBanana21.example1'),
           prompt: t('zero.nanoBanana21.example1Prompt'),
           preview: zeroImage('nano_banana_2_1_magazine_cover.webp'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.nanoBanana21.example2'),
           prompt: t('zero.nanoBanana21.example2Prompt'),
           preview: zeroImage('nano_banana_2_1_camera_knolling.webp'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.nanoBanana21.example3'),
           prompt: t('zero.nanoBanana21.example3Prompt'),
           preview: zeroImage('nano_banana_2_1_swiss_poster.webp'),
-          thinkingLevel: 'HIGH',
         },
       ],
       matches: (model) => model.id.includes('nano-banana-2.1'),
@@ -137,18 +130,15 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.nanoBananaLite.starter1'),
           prompt: t('zero.nanoBananaLite.starter1Prompt'),
           images: [zeroImage('nbl-corgi-ref.webp')],
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.nanoBananaLite.starter2'),
           prompt: t('zero.nanoBananaLite.starter2Prompt'),
           images: [zeroImage('nbl-kettle-ref.webp')],
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.nanoBananaLite.starter3'),
           prompt: t('zero.nanoBananaLite.starter3Prompt'),
-          thinkingLevel: 'MINIMAL',
         },
       ],
       examples: [
@@ -156,20 +146,17 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.nanoBananaLite.example1'),
           prompt: t('zero.nanoBananaLite.example1Prompt'),
           preview: zeroImage('nbl-sticker-sheet.webp'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.nanoBananaLite.example2'),
           prompt: t('zero.nanoBananaLite.example2Prompt'),
           preview: zeroImage('nbl-sneaker-colorways.webp'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.nanoBananaLite.example3'),
           prompt: t('zero.nanoBananaLite.example3Prompt'),
           preview: zeroImage('nbl-corgi-amalfi.webp'),
           images: [zeroImage('nbl-corgi-ref.webp')],
-          thinkingLevel: 'MINIMAL',
         },
       ],
       matches: (model) =>
@@ -234,17 +221,14 @@ function zeroConfigs(): ZeroConfig[] {
         {
           title: t('zero.flashLite.starter1'),
           prompt: t('zero.flashLite.starter1Prompt'),
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.flashLite.starter2'),
           prompt: t('zero.flashLite.starter2Prompt'),
-          thinkingLevel: 'LOW',
         },
         {
           title: t('zero.flashLite.starter3'),
           prompt: t('zero.flashLite.starter3Prompt'),
-          thinkingLevel: 'MINIMAL',
         },
       ],
       examples: [
@@ -252,19 +236,16 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.flashLite.example1'),
           prompt: t('zero.flashLite.example1Prompt'),
           preview: 'https://www.gstatic.com/aistudio-static/applets/pixel-arcade/image.png',
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.flashLite.example2'),
           prompt: t('zero.flashLite.example2Prompt'),
           preview: 'https://www.gstatic.com/aistudio-static/applets/shoebox-receipts/image.png',
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.flashLite.example3'),
           prompt: t('zero.flashLite.example3Prompt'),
           preview: 'https://www.gstatic.com/aistudio-static/applets/website-checker/image.png',
-          thinkingLevel: 'LOW',
         },
       ],
       matches: (model) =>
@@ -282,17 +263,14 @@ function zeroConfigs(): ZeroConfig[] {
         {
           title: t('zero.flash.starter1'),
           prompt: t('zero.flash.starter1Prompt'),
-          thinkingLevel: 'LOW',
         },
         {
           title: t('zero.flash.starter2'),
           prompt: t('zero.flash.starter2Prompt'),
-          thinkingLevel: 'MINIMAL',
         },
         {
           title: t('zero.flash.starter3'),
           prompt: t('zero.flash.starter3Prompt'),
-          thinkingLevel: 'LOW',
           search: true,
         },
       ],
@@ -301,20 +279,17 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.flash.example1'),
           prompt: t('zero.flash.example1Prompt'),
           preview: 'https://www.gstatic.com/aistudio/starter-apps/thumbnails/Neon_Snake.png',
-          thinkingLevel: 'LOW',
         },
         {
           title: t('zero.flash.example2'),
           prompt: t('zero.flash.example2Prompt'),
           preview: 'https://www.gstatic.com/aistudio/starter-apps/thumbnails/lumina.png',
-          thinkingLevel: 'LOW',
         },
         {
           title: t('zero.flash.example3'),
           prompt: t('zero.flash.example3Prompt'),
           preview:
             'https://www.gstatic.com/aistudio/starter-apps/thumbnails/map-styling-sandbox.png',
-          thinkingLevel: 'LOW',
         },
       ],
       matches: (model) =>
@@ -333,18 +308,15 @@ function zeroConfigs(): ZeroConfig[] {
         {
           title: t('zero.pro.starter1'),
           prompt: t('zero.pro.starter1Prompt'),
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.pro.starter2'),
           prompt: t('zero.pro.starter2Prompt'),
-          thinkingLevel: 'HIGH',
           codeExecution: true,
         },
         {
           title: t('zero.pro.starter3'),
           prompt: t('zero.pro.starter3Prompt'),
-          thinkingLevel: 'HIGH',
           search: true,
         },
       ],
@@ -353,20 +325,17 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.pro.example1'),
           prompt: t('zero.pro.example1Prompt'),
           preview: 'https://www.gstatic.com/aistudio/starter-apps/thumbnails/voxel_toy_box.png',
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.pro.example2'),
           prompt: t('zero.pro.example2Prompt'),
           preview: 'https://www.gstatic.com/aistudio/starter-apps/thumbnails/shader_pilot.png',
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.pro.example3'),
           prompt: t('zero.pro.example3Prompt'),
           preview:
             'https://www.gstatic.com/aistudio/starter-apps/thumbnails/research_visualization.png',
-          thinkingLevel: 'HIGH',
         },
       ],
       matches: (model) =>
@@ -383,20 +352,17 @@ function zeroConfigs(): ZeroConfig[] {
         {
           title: t('zero.flagship.starter1'),
           prompt: t('zero.flagship.starter1Prompt'),
-          thinkingLevel: 'HIGH',
           search: true,
           codeExecution: true,
         },
         {
           title: t('zero.flagship.starter2'),
           prompt: t('zero.flagship.starter2Prompt'),
-          thinkingLevel: 'HIGH',
           search: true,
         },
         {
           title: t('zero.flagship.starter3'),
           prompt: t('zero.flagship.starter3Prompt'),
-          thinkingLevel: 'HIGH',
         },
       ],
       examples: [
@@ -404,20 +370,17 @@ function zeroConfigs(): ZeroConfig[] {
           title: t('zero.flagship.example1'),
           prompt: t('zero.flagship.example1Prompt'),
           preview: 'https://www.gstatic.com/aistudio-static/applets/wizard-chess-3d/image.png',
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.flagship.example2'),
           prompt: t('zero.flagship.example2Prompt'),
           preview:
             'https://www.gstatic.com/aistudio-static/applets/pocket-world-terrarium/image.png',
-          thinkingLevel: 'HIGH',
         },
         {
           title: t('zero.flagship.example3'),
           prompt: t('zero.flagship.example3Prompt'),
           preview: 'https://www.gstatic.com/aistudio-static/applets/desk-racer/image.png',
-          thinkingLevel: 'HIGH',
         },
       ],
       matches: (model) => model.id.startsWith('gemini-') && !model.id.includes('pro'),

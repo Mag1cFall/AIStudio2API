@@ -1,11 +1,12 @@
 <script lang="ts">
 import { api, type AdminSession } from '@/api'
+import { afterTask } from '@/lazy'
 import { router } from '@/router'
 
 // initialSession 是页面载入时与路由分块、界面文案同时发出的会话请求
 const initialSession = api.session()
 // loadStudioLayout 加载 API 试用页布局，首个页面属于 API 试用页时与路由分块同时开始加载
-const loadStudioLayout = () => import('./playground/StudioLayout.vue')
+const loadStudioLayout = () => import('./playground/StudioLayout.vue').then(afterTask)
 if (router.resolve(location.pathname).meta.studio) void loadStudioLayout()
 router.beforeEach((to) => {
   if (to.meta.studio) void loadStudioLayout()

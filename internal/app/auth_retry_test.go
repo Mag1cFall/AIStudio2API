@@ -46,8 +46,7 @@ func TestAuthRefreshWithoutExtension(t *testing.T) {
 			})
 			return updated, nil
 		},
-		reset:          func(string) error { return nil },
-		prepareHeaders: func(string) (func(bool), error) { return func(bool) {}, nil },
+		reset: func(string) error { return nil },
 	}
 	ctx := aistudio.ContextWithAccountLease(t.Context(), lease)
 	if !refresher.Available(ctx) {

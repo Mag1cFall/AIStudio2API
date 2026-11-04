@@ -59,6 +59,7 @@ type setupOptions struct {
 	authUserSet  bool
 	remote       string
 	token        string
+	renew        bool
 }
 
 // accountTarget 保存 setup 得到的账户并返回账户名称
@@ -66,14 +67,25 @@ type accountTarget interface {
 	Save(ctx context.Context, accountConfig aistudio.AccountConfig, state aistudio.StorageState, fingerprintDirectory string) (string, error)
 }
 
-// Run 执行本机 Chrome 导入、文件导入或隔离登录，结果写入本机账户目录或远程实例
+// Run 执行本机 Chrome 导入、文件导入或隔离登录，结果写入本机账户目录或远程实例；上传到远程实例的账户带 Chrome OAuth 材料时留在前台为它们续签
 func Run(ctx context.Context, cfg config.Config, args []string) error {
 	options, err := parseSetupFlags(args, cfg)
 	if err != nil {
 		return err
 	}
+	client := &http.Client{Timeout: cfg.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	if options.renew {
+		renewals, err := originRenewals(options.remote)
+		if err != nil {
+			return err
+		}
+		return renewRemote(ctx, client, renewals, i18n.Stdout)
+	}
 	input := bufio.NewReader(os.Stdin)
 	var target accountTarget
+	var remote *remoteTarget
 	if options.remote != "" {
 		token := options.token
 		if token == "" {
@@ -81,18 +93,26 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 				return err
 			}
 		}
-		target = remoteTarget{
-			client: &http.Client{Timeout: cfg.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			}},
-			origin: options.remote, token: token,
-		}
+		remote = &remoteTarget{client: client, origin: options.remote, token: token, proxy: options.egress}
+		target = remote
 	} else {
 		if err := validateSetupRoot(cfg.AuthStates); err != nil {
 			return err
 		}
 		target = localTarget{store: aistudio.NewAccountStore(cfg.AuthStates)}
 	}
+	importErr := importAccounts(ctx, cfg, target, options, input)
+	if remote == nil || len(remote.renewals) == 0 {
+		return importErr
+	}
+	if err := saveRenewals(remote.renewals); err != nil || importErr != nil {
+		return errors.Join(importErr, err)
+	}
+	return renewRemote(ctx, client, remote.renewals, i18n.Stdout)
+}
+
+// importAccounts 按参数从 storage state 文件、Cookie、隔离登录或本机 Chrome 导入账户
+func importAccounts(ctx context.Context, cfg config.Config, target accountTarget, options setupOptions, input io.Reader) error {
 	if options.storageState != "" {
 		return importStorageState(ctx, target, options)
 	}
@@ -136,15 +156,17 @@ func (target localTarget) Save(
 	return account.Config.Label, publishLease.Release()
 }
 
-// remoteTarget 凭配对令牌将账户上传到远程实例
+// remoteTarget 凭配对令牌将账户上传到远程实例，记下带 Chrome OAuth 材料的账户的续签材料
 type remoteTarget struct {
-	client *http.Client
-	origin string
-	token  string
+	client   *http.Client
+	origin   string
+	token    string
+	proxy    string
+	renewals []remoteRenewal
 }
 
 // Save 上传认证状态与隔离登录指纹
-func (target remoteTarget) Save(
+func (target *remoteTarget) Save(
 	ctx context.Context,
 	accountConfig aistudio.AccountConfig,
 	state aistudio.StorageState,
@@ -177,8 +199,8 @@ func (target remoteTarget) Save(
 	}
 	defer response.Body.Close()
 	var result struct {
-		Account api.AdminAccount `json:"account"`
-		Error   struct {
+		api.PairingAccountResult
+		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
@@ -191,6 +213,12 @@ func (target remoteTarget) Save(
 	}
 	if decodeErr != nil {
 		return "", fmt.Errorf("解析远程实例响应: %w", decodeErr)
+	}
+	if extension, exists, err := state.AuthExtension(); err == nil && exists && extension.OAuth != nil {
+		target.renewals = append(target.renewals, remoteRenewal{
+			Origin: target.origin, Account: result.Account.ID, Token: result.RenewalToken,
+			Source: extension.Source, OAuth: *extension.OAuth, Proxy: target.proxy,
+		})
 	}
 	return result.Account.Label, nil
 }
@@ -427,6 +455,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		fmt.Fprintln(flags.Output(), "Cookie 导入: aistudio2api setup --cookie <Cookie 请求头>、--cookie-file <file> 或 --cdp <调试地址>")
 		fmt.Fprintln(flags.Output(), "隔离登录: aistudio2api setup --login")
 		fmt.Fprintln(flags.Output(), "导入远程实例: 以上命令加 --remote <origin>")
+		fmt.Fprintln(flags.Output(), "恢复远程续签: aistudio2api setup --remote <origin> --renew")
 		flags.PrintDefaults()
 	}
 	var profiles setupStrings
@@ -445,6 +474,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	authUser := flags.Int("authuser", 0, "Google 多账号会话序号 (0..9，对应 /u/0、/u/1...)")
 	remote := flags.String("remote", "", "远程实例 origin，账户上传到该实例")
 	token := flags.String("token", "", "远程实例账户页生成的配对令牌，省略时从标准输入读取")
+	renew := flags.Bool("renew", false, "在前台为本机上传到 --remote 实例的 Chrome 导入账户按时续签，用于重启电脑后恢复续签")
 	flags.SetOutput(i18n.Stderr)
 	flags.VisitAll(func(item *flag.Flag) { item.Usage = i18n.Translate(i18n.Console, item.Usage) })
 	if err := flags.Parse(args); err != nil {
@@ -463,6 +493,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		locale: strings.TrimSpace(*locale), timezone: strings.TrimSpace(*timezone),
 		authUser: *authUser,
 		token:    strings.TrimSpace(*token),
+		renew:    *renew,
 	}
 	options.egress = options.proxy
 	if proxies := config.ProxyList(cfg.Proxy); options.egress == "" && len(proxies) > 0 {
@@ -522,8 +553,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	if options.login && chromeSelection {
 		return setupOptions{}, fmt.Errorf("--login 不能与 Chrome 导入参数同时使用")
 	}
-	if options.locale == "" || options.timezone == "" {
-		return setupOptions{}, fmt.Errorf("locale 和 timezone 不能为空")
+	if options.renew && (options.remote == "" || options.token != "" || options.storageState != "" || options.cookies != "" || options.cdp != "" || options.login || chromeSelection) {
+		return setupOptions{}, fmt.Errorf("--renew 只与 --remote 一起使用，不带 --token 与导入参数")
 	}
 	if err := config.ValidateProxy(options.proxy); err != nil {
 		return setupOptions{}, err
@@ -557,9 +588,6 @@ func defaultSetupLoginDriver(ctx context.Context, cfg config.Config, egress stri
 }
 
 func validateSetupRoot(root string) error {
-	if root == "" {
-		return fmt.Errorf("AISTUDIO_AUTH_STATES 不能为空")
-	}
 	if strings.Contains(root, ",") {
 		return fmt.Errorf("setup 需要 AISTUDIO_AUTH_STATES 指向单个账户目录")
 	}

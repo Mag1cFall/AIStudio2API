@@ -12,7 +12,7 @@ import type { GenerateRequest } from './request'
 // CodeLanguage 是获取代码对话框的语言选项
 export type CodeLanguage = 'rest' | 'python' | 'typescript' | 'openai-python' | 'openai-typescript'
 
-// CodeInput 是生成示例代码所需的页面请求：协议、是否流式、模型、服务地址、Gemini API 请求与 OpenAI Images 参数
+// CodeInput 是生成示例代码所需的页面请求：协议、是否流式、模型、服务地址、Gemini API 请求、OpenAI Images 参数、Interactions 的 agent 配置与续接的交互 ID
 interface CodeInput {
   model: Model | undefined
   modelID: string
@@ -21,6 +21,8 @@ interface CodeInput {
   protocol: Protocol
   stream: boolean
   images: ImageOptions
+  agent: Record<string, unknown> | undefined
+  previous: string | undefined
 }
 
 // apiKeyMarker 是代码中 API key 的占位，cURL 中换为对应协议的环境变量
@@ -33,6 +35,7 @@ const keyVariables: Record<Protocol, string> = {
   'openai-responses': 'OPENAI_API_KEY',
   'openai-images': 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
+  interactions: 'GEMINI_API_KEY',
 }
 
 // Attachment 是请求中的一个内联附件及其在示例代码中的本地文件名
@@ -204,7 +207,7 @@ function tsLiteral(value: unknown, indent = 0): string {
   return JSON.stringify(value, null, 2).replaceAll('\n', `\n${'  '.repeat(indent)}`)
 }
 
-// geminiConfig 把 Gemini API 请求拆为 contents 与 SDK 的 config：生成参数并入系统指令、安全设置与工具，内联附件去掉 displayName
+// geminiConfig 把 Gemini API 请求拆为 contents 与 SDK 的 config：生成参数并入系统指令、安全设置、工具与工具配置，内联附件去掉 displayName
 function geminiConfig(request: GenerateRequest): {
   contents: unknown
   config: Record<string, unknown>
@@ -213,6 +216,7 @@ function geminiConfig(request: GenerateRequest): {
   if (request.systemInstruction) config.systemInstruction = request.systemInstruction
   if (request.safetySettings) config.safetySettings = request.safetySettings
   if (request.tools) config.tools = request.tools
+  if (request.toolConfig) config.toolConfig = request.toolConfig
   const contents = request.contents.map((content) => ({
     ...content,
     parts: content.parts.map((part) => {
@@ -224,8 +228,73 @@ function geminiConfig(request: GenerateRequest): {
   return { contents, config }
 }
 
-// pythonCode 生成 google-genai Python 的 generateContent 示例，正文与页面以 Gemini API 发送的请求相同
-function pythonCode({ modelID, baseURL, request, stream }: CodeInput): string {
+// interactionsBody 返回页面以 Interactions 发送的请求正文，附件换为占位
+function interactionsBody(input: CodeInput): Record<string, unknown> {
+  const call = protocolCall(
+    'interactions',
+    input.model,
+    input.modelID,
+    '',
+    input.request,
+    input.stream,
+    input.images,
+    input.agent,
+    input.previous,
+  )
+  return markAttachments(call.body, attachmentsOf(input.request)) as Record<string, unknown>
+}
+
+// interactionsPythonCode 生成 google-genai Python 的 interactions.create 示例，参数与页面以 Interactions 发送的请求相同
+function interactionsPythonCode(input: CodeInput): string {
+  const lines = Object.entries(interactionsBody(input))
+    .map(([key, value]) => `    ${key}=${pyLiteral(value, 1)},`)
+    .join('\n')
+  const files = pyAttachments(lines, attachmentsOf(input.request), false)
+  const output = input.stream
+    ? `for event in response:\n    if event.event_type == "step.delta" and event.delta.type == "text":\n        print(event.delta.text, end="")\nprint()`
+    : 'print(response.output_text)'
+  return `${files.literal.includes('base64.') ? 'import base64\n' : ''}import os
+
+from google import genai
+from google.genai import types
+
+client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY"),
+    http_options=types.HttpOptions(base_url="${input.baseURL}"),
+)
+${files.setup ? `\n${files.setup}\n` : ''}
+response = client.interactions.create(
+${files.literal}
+)
+${output}
+`
+}
+
+// interactionsTypescriptCode 生成 @google/genai TypeScript 的 interactions.create 示例，参数与页面以 Interactions 发送的请求相同
+function interactionsTypescriptCode(input: CodeInput): string {
+  const files = tsAttachments(
+    `const response = await ai.interactions.create(${tsLiteral(interactionsBody(input))});`,
+    attachmentsOf(input.request),
+  )
+  const output = input.stream
+    ? `for await (const event of response) {\n  if (event.event_type === 'step.delta' && event.delta.type === 'text') {\n    process.stdout.write(event.delta.text);\n  }\n}\nconsole.log();`
+    : 'console.log(response.output_text);'
+  return `${files.setup ? "import fs from 'node:fs';\n" : ''}import { GoogleGenAI } from '@google/genai';
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: { baseUrl: '${input.baseURL}' },
+});
+${files.setup ? `\n${files.setup}\n` : ''}
+${files.literal}
+${output}
+`
+}
+
+// pythonCode 生成 google-genai Python 的 generateContent 示例，正文与页面以 Gemini API 发送的请求相同；所选协议为 Interactions 时为 interactions.create 示例
+function pythonCode(input: CodeInput): string {
+  if (input.protocol === 'interactions') return interactionsPythonCode(input)
+  const { modelID, baseURL, request, stream } = input
   const attachments = attachmentsOf(request)
   const { contents, config } = geminiConfig(request)
   const marked = snakeKeys(markAttachments({ contents, config }, attachments)) as {
@@ -265,8 +334,10 @@ ${output}
 `
 }
 
-// typescriptCode 生成 @google/genai TypeScript 的 generateContent 示例，正文与页面以 Gemini API 发送的请求相同
-function typescriptCode({ modelID, baseURL, request, stream }: CodeInput): string {
+// typescriptCode 生成 @google/genai TypeScript 的 generateContent 示例，正文与页面以 Gemini API 发送的请求相同；所选协议为 Interactions 时为 interactions.create 示例
+function typescriptCode(input: CodeInput): string {
+  if (input.protocol === 'interactions') return interactionsTypescriptCode(input)
+  const { modelID, baseURL, request, stream } = input
   const attachments = attachmentsOf(request)
   const { contents, config } = geminiConfig(request)
   const marked = markAttachments({ contents, config }, attachments) as {
@@ -321,6 +392,8 @@ function restCode(input: CodeInput): string {
     input.request,
     input.stream,
     input.images,
+    input.agent,
+    input.previous,
   )
   const variable = keyVariables[input.protocol]
   const headers = [...call.headers.entries()].map(
@@ -369,6 +442,8 @@ function imagesFields(input: CodeInput): {
     input.request,
     input.stream,
     input.images,
+    undefined,
+    undefined,
   )
   const attachments = attachmentsOf(input.request)
   if (!(call.body instanceof FormData))

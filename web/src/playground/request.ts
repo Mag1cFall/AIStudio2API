@@ -1,7 +1,8 @@
 import { jsonBody } from '@/api'
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
-import { Capability, hasCode, toolCodes, type Tool } from './catalog'
+import { Capability, hasCode, isAgent, toolCodes, type Tool } from './catalog'
+import type { Protocol } from './protocols'
 import type { Part, RunSettings, Source, Support, Turn } from './types'
 
 // GenerateRequest 是一次 Gemini API 生成请求的正文
@@ -11,10 +12,11 @@ export interface GenerateRequest {
   generationConfig: Record<string, unknown>
   safetySettings?: { category: string; threshold: string }[]
   tools?: Record<string, unknown>[]
+  toolConfig?: { includeServerSideToolInvocations: boolean }
 }
 
 // toolPayloads 是各工具在 Gemini API tools 中的写法
-const toolPayloads: Partial<Record<Tool, Record<string, unknown>>> = {
+export const toolPayloads: Partial<Record<Tool, Record<string, unknown>>> = {
   code_execution: { codeExecution: {} },
   google_search: { googleSearch: {} },
   url_context: { urlContext: {} },
@@ -131,12 +133,52 @@ export function buildRequest(
     }))
   }
   if (tools.length > 0) request.tools = tools
+  // Agent 模式要求返回搜索、网址读取等服务端工具步骤，按发生顺序显示
+  if (enabled.includes('code_execution'))
+    request.toolConfig = { includeServerSideToolInvocations: true }
   return request
 }
 
-// StreamUpdate 是一次流式事件带来的变化
+// agentConfig 按官方 Interactions REST 写出 agent 的 agent_config：Antigravity 为所选模型与 token 上限，都未设置时不发送；Deep Research 按思考摘要、可视化与协作规划的能力码写出这三项；其余模型不发送
+export function agentConfig(
+  settings: RunSettings,
+  model: Model | undefined,
+): Record<string, unknown> | undefined {
+  if (model === undefined || !isAgent(model)) return undefined
+  if (model.agent_model !== undefined) {
+    if (settings.agentModel === '' && settings.maxTotalTokens === null) return undefined
+    return {
+      type: 'antigravity',
+      ...(settings.agentModel !== '' && { model: settings.agentModel }),
+      ...(settings.maxTotalTokens !== null && {
+        max_total_tokens: String(settings.maxTotalTokens),
+      }),
+    }
+  }
+  const config: Record<string, unknown> = {}
+  if (hasCode(model, Capability.ThinkingSummaries))
+    config.thinking_summaries = settings.thinkingSummaries ? 'auto' : 'none'
+  if (hasCode(model, Capability.Visualization))
+    config.visualization = settings.visualization ? 'auto' : 'off'
+  if (hasCode(model, Capability.CollaborativePlanning) && settings.collaborativePlanning)
+    config.collaborative_planning = true
+  return Object.keys(config).length > 0 ? { type: 'deep-research', ...config } : undefined
+}
+
+// continuation 与官网一样选取 Interactions 续接的起点：以 Interactions 发送且最后一个模型轮带交互 ID 时，以该 ID 续接并只发送其后的轮次，否则发送全部轮次
+export function continuation(
+  protocol: Protocol,
+  turns: readonly Turn[],
+): { previous: string | undefined; turns: readonly Turn[] } {
+  const index = turns.map((turn) => turn.role).lastIndexOf('model')
+  const previous = protocol === 'interactions' ? turns[index]?.interactionId : undefined
+  return { previous, turns: previous === undefined ? turns : turns.slice(index + 1) }
+}
+
+// StreamUpdate 是一次流式事件带来的变化，interactionId 是 Interactions 完成时的交互 ID
 export interface StreamUpdate {
   parts: Part[]
+  interactionId?: string
   finishReason?: string
   tokens?: number
   thoughtTokens?: number

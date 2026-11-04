@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
+import DisclosureChevron from './DisclosureChevron.vue'
 import UiIcon from './UiIcon.vue'
 
 const open = defineModel<boolean>({ required: true })
@@ -8,18 +9,18 @@ const { t } = useI18n()
 
 <template>
   <button
-    class="log-disclosure"
+    class="ui-disclosure"
     type="button"
     :aria-expanded="open"
     :aria-label="t('logs.details')"
     @click="open = !open"
   >
-    <UiIcon name="chevronRight" :size="12" />
+    <DisclosureChevron :open="open"><UiIcon name="chevronRight" :size="12" /></DisclosureChevron>
   </button>
 </template>
 
 <style scoped>
-.log-disclosure {
+.ui-disclosure {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
@@ -33,18 +34,12 @@ const { t } = useI18n()
     background-color 120ms ease,
     color 120ms ease;
 }
-.log-disclosure:hover {
+.ui-disclosure:hover {
   color: var(--color-fg);
   background: color-mix(in oklab, var(--color-line) 60%, transparent);
 }
-.log-disclosure:focus-visible {
+.ui-disclosure:focus-visible {
   outline: 1px solid var(--color-blue-400);
   outline-offset: 1px;
-}
-.log-disclosure :deep(svg) {
-  transition: transform 120ms ease;
-}
-.log-disclosure[aria-expanded='true'] :deep(svg) {
-  transform: rotate(90deg);
 }
 </style>

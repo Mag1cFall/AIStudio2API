@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
+	fhttp "github.com/Mag1cFall/fhttp"
 	"github.com/Mag1cFall/fhttp/http2"
 )
 
-// TestBrowserRoundTripperFirefoxHTTP2 验证浏览器传输使用 Firefox 152 的 HTTP/2 帧参数与 PING 保活
+// TestBrowserRoundTripperFirefoxHTTP2 验证浏览器传输使用 Firefox 152 的 HTTP/2 帧参数、按请求类别的 HEADERS 优先级与 PING 保活
 func TestBrowserRoundTripperFirefoxHTTP2(t *testing.T) {
 	roundTripper, err := newBrowserRoundTripper("")
 	if err != nil {
@@ -26,7 +27,20 @@ func TestBrowserRoundTripperFirefoxHTTP2(t *testing.T) {
 	if transport.ConnectionFlow != 12517377 || transport.StreamWindowUpdate != 12451840 || transport.WindowUpdateThreshold != 4<<20 || transport.InitialStreamID != 3 {
 		t.Fatalf("连接窗口=%d 流窗口增量=%d 补窗阈值=%d 首个流=%d，应为 Firefox 152 的 12517377、12451840、4 MiB 与 3", transport.ConnectionFlow, transport.StreamWindowUpdate, transport.WindowUpdateThreshold, transport.InitialStreamID)
 	}
-	if !reflect.DeepEqual(transport.PseudoHeaderOrder, []string{":method", ":path", ":authority", ":scheme"}) || *transport.HeaderPriority != (http2.PriorityParam{Weight: 41}) {
-		t.Fatalf("伪头顺序=%v 头部优先级=%+v，应为 Firefox 152 的 m,p,a,s 与权重 42", transport.PseudoHeaderOrder, transport.HeaderPriority)
+	if !reflect.DeepEqual(transport.PseudoHeaderOrder, []string{":method", ":path", ":authority", ":scheme"}) {
+		t.Fatalf("伪头顺序=%v，应为 Firefox 152 的 m,p,a,s", transport.PseudoHeaderOrder)
+	}
+	for _, item := range []struct {
+		dest     string
+		priority string
+		weight   uint8
+	}{{"document", "u=0, i", 41}, {"empty", "u=0", 41}, {"empty", "", 21}, {"script", "", 21}, {"image", "u=5, i", 11}} {
+		header := fhttp.Header{"Sec-Fetch-Dest": {item.dest}}
+		if item.priority != "" {
+			header.Set("Priority", item.priority)
+		}
+		if got := firefoxStreamPriority(header); got != (http2.PriorityParam{Weight: item.weight}) {
+			t.Fatalf("Sec-Fetch-Dest=%s Priority=%q 的头部优先级=%+v，Firefox 152 的权重字节为 %d", item.dest, item.priority, got, item.weight)
+		}
 	}
 }

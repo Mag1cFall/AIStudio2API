@@ -34,6 +34,7 @@ type generationAdmin interface {
 	DiscoverCookieAccounts(context.Context, api.CookieImportInput) ([]api.CookieBrowser, error)
 	ImportChromeAccounts(context.Context, api.ChromeImportInput) ([]api.AdminAccount, error)
 	ImportAccountState(context.Context, api.AccountStateInput) (api.AdminAccount, error)
+	RenewAccountCookies(ctx context.Context, accountID string, token string, cookies []aistudio.StateCookie) (api.AdminAccount, error)
 	UpdateAccount(context.Context, string, api.AccountInput) (api.AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (api.AdminAccount, error)
@@ -104,6 +105,7 @@ type runtimeManager struct {
 	autoStartCancel context.CancelFunc
 	ledger          *requestdb.Store
 	prompts         *promptdb.Store
+	states          api.StateStore
 	logs            *logOutput
 }
 
@@ -482,6 +484,13 @@ func (manager *runtimeManager) ImportAccountState(ctx context.Context, input api
 	return manager.current.admin.ImportAccountState(ctx, input)
 }
 
+// RenewAccountCookies 在当前生成服务以配对续签凭据替换账户的会话 Cookie
+func (manager *runtimeManager) RenewAccountCookies(ctx context.Context, accountID string, token string, cookies []aistudio.StateCookie) (api.AdminAccount, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.RenewAccountCookies(ctx, accountID, token, cookies)
+}
+
 // UpdateAccount 在当前生成服务更新账户
 func (manager *runtimeManager) UpdateAccount(ctx context.Context, id string, input api.AccountInput) (api.AdminAccount, error) {
 	manager.mu.RLock()
@@ -616,7 +625,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	requestTimeout, _ := time.ParseDuration(value.RequestTimeout)
 	saved := config.Config{
 		AuthStates: value.AuthStates, Proxy: value.Proxy,
-		InitTimeout: initTimeout, RequestTimeout: requestTimeout, TemporaryChat: value.TemporaryChat,
+		InitTimeout: initTimeout, RequestTimeout: requestTimeout, StripThoughtSignatures: value.StripThoughtSignatures,
 		UpstreamChannels:      value.UpstreamChannels,
 		ModelMapping:          value.ModelMapping,
 		WAABackend:            value.WAABackend,
@@ -636,12 +645,11 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
 		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
-		saved.TemporaryChat == active.TemporaryChat &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
-		saved.YouTubeLinks == active.YouTubeLinks && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
+		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
 		saved.SearchModelAliases == active.SearchModelAliases && saved.GoogleSearch == active.GoogleSearch &&
 		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL

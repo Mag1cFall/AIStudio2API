@@ -1,11 +1,16 @@
 import { markRaw } from 'vue'
 import MarkdownIt, { type Env, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
+import { gfmLinkify } from '@/markdown'
 import './katex.scss'
 import type { Support } from './types'
 
+// KaTeX 的正文与变量字体在模块载入时开始下载，公式首次出现时字体已就绪，不因字体晚到而重排
+for (const font of ['1em KaTeX_Main', 'italic 1em KaTeX_Math']) void document.fonts.load(font)
+
 // markdown 是 Playground 正文解析器：原始 HTML 按文本转义，公式由 KaTeX 渲染
 const markdown = new MarkdownIt({ linkify: true, breaks: false, html: false })
+gfmLinkify(markdown)
 const katex = (katexPlugin as unknown as { default?: typeof katexPlugin }).default ?? katexPlugin
 markdown.use(katex, { throwOnError: false, enableBareBlocks: true })
 markdown.renderer.rules.link_open = (tokens, index, options, _env, self) => {

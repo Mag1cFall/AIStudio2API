@@ -171,10 +171,6 @@ func subtractTextTokens(details []ModalityTokenCount, tokens int64) []ModalityTo
 	return result
 }
 
-func (c *Client) CountTokens(ctx context.Context, request TokenCountRequest) (TokenCount, error) {
-	return c.CountTokensForAccount(ctx, "", request)
-}
-
 // CountTokensForAccount 使用指定账户调用权威 token 计数，Build 租约经 Build 代理计数
 func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, request TokenCountRequest) (TokenCount, error) {
 	if lease, ok := AccountLeaseFromContext(ctx); ok && lease.Channel() == ChannelBuild {
@@ -309,7 +305,7 @@ func encodePart(part Part) ([]any, error) {
 		variants++
 	}
 	if variants == 0 && part.ThoughtSignature != "" {
-		return setPartThoughtSignature([]any{}, part.ThoughtSignature), nil
+		return setPartThoughtSignature([]any{nil, ""}, part.ThoughtSignature), nil
 	}
 	if variants != 1 {
 		return nil, fmt.Errorf("part 必须且只能设置一种内容")
@@ -317,7 +313,7 @@ func encodePart(part Part) ([]any, error) {
 	if part.Text != "" {
 		wire := []any{nil, part.Text}
 		if part.Thought {
-			wire = setWireField(wire, 12, true)
+			wire = setWireField(wire, 12, int64(1))
 		}
 		if metadata := part.SpeechMetadata; metadata != nil && (metadata.Speaker != "" || metadata.Style != "") {
 			// Part field 41 SpeechMetadata：speaker、style
@@ -472,4 +468,29 @@ func setPartThoughtSignature(wire []any, signature string) []any {
 		return wire
 	}
 	return setWireField(wire, 14, signature)
+}
+
+// stripThoughtSignatures 返回去掉思考签名的对话：只带签名的 Part 删除，其余 Part 与函数调用的签名清空，函数调用发送时带跳过校验的占位签名
+func stripThoughtSignatures(contents []Content) []Content {
+	stripped := make([]Content, 0, len(contents))
+	for _, content := range contents {
+		parts := make([]Part, 0, len(content.Parts))
+		for _, part := range content.Parts {
+			if !part.payload() {
+				continue
+			}
+			part.ThoughtSignature = ""
+			if part.FunctionCall != nil {
+				call := *part.FunctionCall
+				call.ThoughtSignature = ""
+				part.FunctionCall = &call
+			}
+			parts = append(parts, part)
+		}
+		if len(parts) > 0 {
+			content.Parts = parts
+			stripped = append(stripped, content)
+		}
+	}
+	return stripped
 }

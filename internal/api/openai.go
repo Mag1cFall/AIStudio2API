@@ -792,7 +792,7 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 	return mapped, nil
 }
 
-// openAIToolChoice 转换 tool_choice，类型为 allowed_tools 时另外返回允许的工具引用
+// openAIToolChoice 转换 tool_choice，allowed_tools、托管工具与 MCP 另外返回允许的工具引用
 func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, []toolReference, error) {
 	if !rawJSONConfigured(raw) {
 		return aistudio.ToolConfig{Mode: "auto"}, nil, nil
@@ -833,12 +833,13 @@ func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, []toolReference
 			}
 		}
 		return config, append([]toolReference{}, object.Tools...), nil
-	case "web_search_preview", "web_search_preview_2025_03_11", "code_interpreter":
-		return aistudio.ToolConfig{Mode: "required"}, nil, nil
 	case "mcp":
 		return aistudio.ToolConfig{Mode: "required"}, []toolReference{object.toolReference}, nil
 	case "file_search", "image_generation", "programmatic_tool_calling", "tool_search":
 		return aistudio.ToolConfig{Mode: "auto"}, nil, nil
+	}
+	if hostedGoogleTools[object.Type] != "" {
+		return aistudio.ToolConfig{Mode: "required"}, []toolReference{object.toolReference}, nil
 	}
 	if name := object.functionName(); name != "" {
 		return aistudio.ToolConfig{Mode: "required", AllowedFunctionNames: []string{name}}, nil, nil
@@ -943,6 +944,16 @@ func openAIServiceTier(tier string) string {
 		return tier
 	}
 	return ""
+}
+
+// openAIResponseServiceTier 返回响应的 service_tier：上游用量报告 flex 或 priority 时取该等级，其余为 default
+func openAIResponseServiceTier(usage *aistudio.Usage) string {
+	if usage != nil && usage.Details != nil {
+		if tier := strings.ToLower(usage.Details.ServiceTier); tier == "flex" || tier == "priority" {
+			return tier
+		}
+	}
+	return "default"
 }
 
 func appendUnique(values []string, value string) []string {
@@ -1105,9 +1116,11 @@ func buildChatCompletion(id string, created int64, model string, results []gener
 		}
 	}
 	response["choices"] = choices
-	if usage := sumUsage(results); usage != nil {
+	usage := choicesUsage(results)
+	if usage != nil {
 		response["usage"] = openAIUsage(usage)
 	}
+	response["service_tier"] = openAIResponseServiceTier(usage)
 	return response
 }
 
@@ -1191,16 +1204,12 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 	if err != nil {
 		choices.settle(r.Context())
 		if shouldWriteRequestError(r, err) {
-			status := statusFromError(err)
-			code := openAIErrorCode(err)
-			_ = writeSSE(w, "", map[string]any{"error": openAIErrorBody{
-				Message: publicErrorMessage(status, err.Error()), Type: openAIErrorType(status, code), Code: code,
-			}})
+			writeOpenAISSEError(w, err)
 		}
 		return
 	}
 	choices.record(r.Context(), results)
-	if usage := sumUsage(results); request.StreamOptions.IncludeUsage && usage != nil {
+	if usage := choicesUsage(results); request.StreamOptions.IncludeUsage && usage != nil {
 		chunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",

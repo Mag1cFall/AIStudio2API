@@ -55,7 +55,7 @@ func requestOutcome(entry api.AccessLog) (string, string, string) {
 		return "cancelled", "WARN", "请求已取消"
 	case entry.Status >= http.StatusBadRequest || entry.Error != "":
 		return "failed", "ERROR", "请求失败"
-	case entry.FinishReason == "max_tokens" || entry.FinishReason == "max_output_tokens" || entry.FinishReason == "length":
+	case entry.FinishReason == "max_tokens":
 		return "limited", "WARN", "达到输出上限"
 	case entry.FinishReason != "" && entry.FinishReason != "stop" && entry.FinishReason != "stop_sequence":
 		return "blocked", "WARN", "上游终止生成"

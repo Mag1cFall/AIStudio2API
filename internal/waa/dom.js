@@ -18,6 +18,13 @@
   const brands = host.brands;
   const realmName = host.realm;
   const topRealm = host.topRealm || null;
+  // frameURL 是 iframe Realm 当前文档的地址，导航提交前为初始 about:blank 文档
+  let frameURL = realmName === 'frame' ? 'about:blank' : '';
+  // locationFields 返回地址对应的 Location 各字段
+  const locationFields = address => {
+    const record = host.parseURL(address);
+    return { href: record.href, origin: record.origin, protocol: record.protocol, host: record.host, hostname: record.hostname, port: record.port, pathname: record.pathname, search: record.search, hash: record.hash };
+  };
   const ES = new Set(['Object', 'Function', 'Array', 'Boolean', 'Date', 'Number', 'String', 'RegExp', 'Error', 'InternalError', 'AggregateError', 'EvalError', 'RangeError', 'ReferenceError', 'SuppressedError', 'SyntaxError', 'TypeError', 'URIError', 'ArrayBuffer', 'SharedArrayBuffer', 'Int8Array', 'Uint8Array', 'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array', 'Uint8ClampedArray', 'BigInt64Array', 'BigUint64Array', 'Float16Array', 'BigInt', 'Map', 'Set', 'WeakMap', 'WeakSet', 'DataView', 'Symbol', 'Promise', 'Proxy', 'FinalizationRegistry', 'WeakRef', 'Iterator', 'DisposableStack', 'AsyncDisposableStack']);
   const infos = Object.create(null);
   const protos = Object.create(null);
@@ -322,6 +329,12 @@
   const profileWindow = (profile.window || {});
   const windowBrand = { iface: 'Window', values: windowValues, over: Object.create(null), cache: new Map(), children: null, parent: null, attrs: null, listeners: null, realm: null };
   for (const [name, value] of Object.entries(profileWindow)) windowBrand.over[name] = value;
+  // navigate 在 iframe 导航响应到达后把 Realm 的 Location 与文档地址提交为新地址
+  if (realmName === 'frame') windowBrand.navigate = address => {
+    frameURL = address;
+    if (singletons.location) Object.assign(brands.get(singletons.location).over, locationFields(address));
+    if (singletons.document) Object.assign(brands.get(singletons.document).over, { URL: address, documentURI: address });
+  };
   brands.set(g, windowBrand);
   const windowProperties = Object.create(protos.EventTarget);
   const windowPropertiesLevel = realmShape.chain.find(level => level.name === 'WindowProperties');
@@ -402,6 +415,8 @@
       if (overrides) { const brand = brands.get(object); for (const [name, value] of Object.entries(overrides)) brand.over[name] = value; }
       if (path === 'location' && profile.location) Object.assign(brands.get(object).over, profile.location);
       if (path === 'document' && profile.location) Object.assign(brands.get(object).over, { URL: profile.location.href, documentURI: profile.location.href });
+      if (path === 'location' && frameURL) Object.assign(brands.get(object).over, locationFields(frameURL));
+      if (path === 'document' && frameURL) Object.assign(brands.get(object).over, { URL: frameURL, documentURI: frameURL });
       singletons[path] = object;
       if (path === 'document') {
         quietCreate++;
@@ -499,9 +514,22 @@
     if (brand.iface === 'HTMLIFrameElement' && !brand.contentWindow && host.createIframeWindow) {
       brand.contentWindow = host.createIframeWindow();
       syncFrames();
-      host.queueTask(0, () => { const event = create('Event', undefined); brandFor(event).over.isTrusted = true; dispatch(node, event, 'load'); });
+      const address = resolveURL(attribute(brand, 'src') || '');
+      if (/^https?:/i.test(address) && host.loadFrame) navigateFrame(node, brand, address);
+      else host.queueTask(0, () => frameLoaded(node));
     }
     for (const child of childrenOf(brand)) attached(child);
+  };
+  // frameLoaded 在 iframe 元素上派发可信的 load 事件
+  const frameLoaded = node => { const event = create('Event', undefined); brandFor(event).over.isTrusted = true; dispatch(node, event, 'load'); };
+  // navigateFrame 经宿主网络载入 iframe 地址，响应到达后提交 iframe 文档地址并派发 load，iframe 已移除时不派发
+  const navigateFrame = (node, brand, address) => {
+    const view = brand.contentWindow;
+    host.loadFrame(address, loaded => {
+      if (brand.contentWindow !== view) return;
+      if (loaded) brandFor(view).navigate(address);
+      frameLoaded(node);
+    });
   };
   const tagName = brand => (brand.tag || '').toUpperCase();
   const walk = (root, visit) => {
@@ -1072,6 +1100,7 @@
   };
   const digestNames = { 'SHA-1': 'SHA-1', 'SHA-256': 'SHA-256', 'SHA-384': 'SHA-384', 'SHA-512': 'SHA-512' };
   let animationHandle = 0;
+  let animationFrameTime = -Infinity;
   const animationCallbacks = new Set();
   const descendants = (root, accept) => {
     const found = [];
@@ -1194,7 +1223,11 @@
   });
   Object.assign(setters, {
     'HTMLImageElement.src': function (brand, value) { trustedImage(this, brand, String(value)); },
-    'HTMLIFrameElement.src': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('src', String(value)); },
+    'HTMLIFrameElement.src': function (brand, value) {
+      (brand.attrs || (brand.attrs = new Map())).set('src', String(value));
+      const address = resolveURL(String(value));
+      if (brand.contentWindow && connected(this) && /^https?:/i.test(address) && host.loadFrame) navigateFrame(this, brand, address);
+    },
     'Element.id': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('id', String(value)); },
     'CharacterData.data': (brand, value) => setCharacterData(brand, String(value)),
     'Node.nodeValue': (brand, value) => { if (isCharacterData(brand)) setCharacterData(brand, value === null ? '' : String(value)); },
@@ -1584,10 +1617,10 @@
     'Window.requestAnimationFrame': (brand, [callback]) => {
       const frame = 1000 / 60;
       const now = host.performanceNow();
-      const next = Math.floor((now - 0.66) / frame) * frame + 0.66 + frame;
+      const next = Math.max(Math.floor((now - 0.66) / frame) * frame + 0.66 + frame, animationFrameTime + frame);
       const handle = ++animationHandle;
       animationCallbacks.add(handle);
-      host.queueTask(Math.max(0, Math.ceil(next - now)), () => { if (animationCallbacks.delete(handle)) callback(Math.round(next * 100) / 100); });
+      host.queueTask(Math.max(0, Math.ceil(next - now)), () => { if (animationCallbacks.delete(handle)) { animationFrameTime = next; callback(Math.round(next * 100) / 100); } });
       return handle;
     },
     'Window.cancelAnimationFrame': (brand, [id]) => { animationCallbacks.delete(id); },

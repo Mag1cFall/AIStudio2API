@@ -2,8 +2,8 @@
 import { computed } from 'vue'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { LogRow, LogStageState } from '@/logs'
-import LogCollapse from './LogCollapse.vue'
-import LogDisclosure from './LogDisclosure.vue'
+import UiCollapse from './UiCollapse.vue'
+import UiDisclosure from './UiDisclosure.vue'
 
 const props = defineProps<{ row: LogRow }>()
 const { t, locale, logText } = useI18n()
@@ -25,7 +25,7 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
 <template>
   <div class="stage-log">
     <div class="stage-heading">
-      <LogDisclosure v-model="open" />
+      <UiDisclosure v-model="open" />
       <span class="stage-state" :class="`state-${stage.state}`">{{
         stage.state === 'running' ? progress : t(stateKeys[stage.state])
       }}</span>
@@ -38,14 +38,14 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
         >{{ logText(stage.detail) }}</span
       >
     </div>
-    <LogCollapse :open="open">
+    <UiCollapse :open="open">
       <ol class="stage-timeline">
         <li v-for="(event, index) in row.events" :key="index">
           <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
           <span>{{ logText(event.message) }}</span>
         </li>
       </ol>
-    </LogCollapse>
+    </UiCollapse>
   </div>
 </template>
 
@@ -88,7 +88,13 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+/* stage-detail 为最后一步的详情，最多两行，全文在步骤列表中 */
 .stage-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   min-width: 0;
   color: var(--color-gray-400);
   white-space: pre-wrap;

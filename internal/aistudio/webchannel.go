@@ -121,10 +121,7 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 		modelAccessScope = modelID
 	}
 	request.ModelAccessScope = modelAccessScope
-	transport, ok := s.client.protected.(BidiProtectedTransport)
-	if !ok {
-		return nil, fmt.Errorf("AI Studio protected transport 不支持 bidiGenerateContent")
-	}
+	transport := s.client.protected.(BidiProtectedTransport)
 	request.method = s.pool.BidiMethod(modelID)
 	selection := AccountSelection{
 		ModelID: modelID, Method: request.method, AccountID: strings.TrimSpace(request.AccountID),
@@ -270,9 +267,6 @@ func retryableBidiOpenError(ctx context.Context, err error) bool {
 
 // Events 返回上游按网络顺序产生的事件
 func (s *BidiSession) Events() <-chan BidiEvent {
-	if s == nil {
-		return nil
-	}
 	return s.events
 }
 
@@ -283,9 +277,6 @@ func (s *BidiSession) Done() <-chan struct{} {
 
 // Model 返回会话使用的模型
 func (s *BidiSession) Model() string {
-	if s == nil {
-		return ""
-	}
 	return s.model
 }
 
@@ -347,9 +338,6 @@ func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionR
 
 // Close 取消网络读取并等待账户租约释放
 func (s *BidiSession) Close() error {
-	if s == nil {
-		return nil
-	}
 	s.closeOnce.Do(func() {
 		if s.ctx.Err() == nil {
 			s.closeErr = s.terminate()
@@ -531,7 +519,7 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := s.client.Do(request)
+	response, err := sendHTTP(s.client, request)
 	if err != nil {
 		return fmt.Errorf("执行 bidi WebChannel handshake: %w", err)
 	}
@@ -711,7 +699,7 @@ func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resu
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := s.client.Do(request)
+	response, err := sendHTTP(s.client, request)
 	if err != nil {
 		return fmt.Errorf("执行 bidi WebChannel message: %w", err)
 	}
@@ -825,7 +813,7 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 		return 0, fmt.Errorf("创建 bidi WebChannel backchannel: %w", err)
 	}
 	request.Header = s.cloneHeaders()
-	response, err := s.client.Do(request)
+	response, err := sendHTTP(s.client, request)
 	if err != nil {
 		if first {
 			ready(err)
@@ -1064,7 +1052,7 @@ func (s *BidiSession) terminate() error {
 	}
 	request.Header = s.cloneHeaders()
 	request.Header.Set("Content-Type", "text/plain;charset=UTF-8")
-	response, err := s.client.Do(request)
+	response, err := sendHTTP(s.client, request)
 	if err != nil {
 		return fmt.Errorf("执行 bidi WebChannel terminate: %w", err)
 	}

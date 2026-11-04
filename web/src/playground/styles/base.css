@@ -1,7 +1,7 @@
 /* base 为 API 试用页与官网 AI Studio 一致的排版与 ms-button 按钮样式，进入 API 试用页时根元素带 studio 类 */
 html.studio {
-  --font-sans: 'Inter Variable', Inter, sans-serif;
-  --font-heading: 'Inter Tight Variable', 'Inter Tight', sans-serif;
+  --font-sans: 'Inter Variable', Inter, var(--font-cjk), sans-serif;
+  --font-heading: 'Inter Tight Variable', 'Inter Tight', var(--font-cjk), sans-serif;
   --font-mono: 'Google Sans Code Variable', 'Google Sans Mono', monospace;
   color-scheme: light;
   font-family: var(--font-sans);
@@ -372,95 +372,4 @@ textarea[ms-input] {
   to {
     background-position: 400px 0;
   }
-}
-
-html.studio .hljs {
-  color: light-dark(#24292e, #adbac7);
-}
-
-html.studio .hljs-doctag,
-html.studio .hljs-keyword,
-html.studio .hljs-meta .hljs-keyword,
-html.studio .hljs-template-tag,
-html.studio .hljs-template-variable,
-html.studio .hljs-type,
-html.studio .hljs-variable.language_ {
-  color: light-dark(#d73a49, #f47067);
-}
-
-html.studio .hljs-title,
-html.studio .hljs-title.class_,
-html.studio .hljs-title.class_.inherited__,
-html.studio .hljs-title.function_ {
-  color: light-dark(#6f42c1, #dcbdfb);
-}
-
-html.studio .hljs-attr,
-html.studio .hljs-attribute,
-html.studio .hljs-literal,
-html.studio .hljs-meta,
-html.studio .hljs-number,
-html.studio .hljs-operator,
-html.studio .hljs-selector-attr,
-html.studio .hljs-selector-class,
-html.studio .hljs-selector-id,
-html.studio .hljs-variable {
-  color: light-dark(#005cc5, #6cb6ff);
-}
-
-html.studio .hljs-meta .hljs-string,
-html.studio .hljs-regexp,
-html.studio .hljs-string {
-  color: light-dark(#032f62, #96d0ff);
-}
-
-html.studio .hljs-built_in,
-html.studio .hljs-symbol {
-  color: light-dark(#e36209, #f69d50);
-}
-
-html.studio .hljs-code,
-html.studio .hljs-comment,
-html.studio .hljs-formula {
-  color: light-dark(#6a737d, #768390);
-}
-
-html.studio .hljs-name,
-html.studio .hljs-quote,
-html.studio .hljs-selector-pseudo,
-html.studio .hljs-selector-tag {
-  color: light-dark(#22863a, #8ddb8c);
-}
-
-html.studio .hljs-subst {
-  color: light-dark(#24292e, #adbac7);
-}
-
-html.studio .hljs-section {
-  color: light-dark(#005cc5, #316dca);
-  font-weight: 700;
-}
-
-html.studio .hljs-bullet {
-  color: light-dark(#735c0f, #eac55f);
-}
-
-html.studio .hljs-emphasis {
-  color: light-dark(#24292e, #adbac7);
-  font-style: italic;
-}
-
-html.studio .hljs-strong {
-  color: light-dark(#24292e, #adbac7);
-  font-weight: 700;
-}
-
-html.studio .hljs-addition {
-  background-color: light-dark(#f0fff4, #1b4721);
-  color: light-dark(#22863a, #b4f1b4);
-}
-
-html.studio .hljs-deletion {
-  background-color: light-dark(#ffeef0, #78191b);
-  color: light-dark(#b31d28, #ffd8d3);
 }

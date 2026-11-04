@@ -35,9 +35,18 @@ func (s *server) handleOpenAIImageEdits(w http.ResponseWriter, r *http.Request) 
 	defer r.MultipartForm.RemoveAll()
 	request := openAIImageRequest{
 		Model: r.FormValue("model"), Prompt: r.FormValue("prompt"), Size: r.FormValue("size"),
-		Quality: r.FormValue("quality"), ResponseFormat: r.FormValue("response_format"),
+		Quality: r.FormValue("quality"), ResponseFormat: r.FormValue("response_format"), OutputFormat: r.FormValue("output_format"),
+		SafetyIdentifier: r.FormValue("safety_identifier"), User: r.FormValue("user"),
 	}
 	request.Stream, _ = strconv.ParseBool(r.FormValue("stream"))
+	if value := strings.TrimSpace(r.FormValue("output_compression")); value != "" {
+		compression, err := strconv.Atoi(value)
+		if err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "output_compression must be an integer")
+			return
+		}
+		request.OutputCompression = &compression
+	}
 	if value := strings.TrimSpace(r.FormValue("n")); value != "" {
 		count, err := strconv.Atoi(value)
 		if err != nil {

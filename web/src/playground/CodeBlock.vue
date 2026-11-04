@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
@@ -87,19 +89,17 @@ const title = computed(() => {
   return props.headerText || name || t('pg.code')
 })
 
-// largeCodeThreshold 是跳过网格折叠动画并在折叠后卸载 DOM 的字符阈值
+// largeCodeThreshold 是跳过展开收起过渡的字符阈值
 const largeCodeThreshold = 4_096
 
 const isLargeCode = computed(() => props.code.length >= largeCodeThreshold)
-const bodyMounted = ref(true)
-let unmountTimer = 0
 const highlighted = shallowRef({ code: '', language: '', html: '' })
 let highlighting = false
 let disposed = false
 
 // renderHighlight 每块只处理一个高亮请求，完成后接上最新代码
 async function renderHighlight(): Promise<void> {
-  if (highlighting || disposed || !bodyMounted.value || props.language === 'none') return
+  if (highlighting || disposed || !expanded.value || props.language === 'none') return
   const code = trimmed.value
   const language = props.language
   highlighting = true
@@ -108,7 +108,7 @@ async function renderHighlight(): Promise<void> {
   highlighting = false
   if (code !== trimmed.value || language !== props.language) void renderHighlight()
 }
-watch([trimmed, () => props.language, bodyMounted], () => void renderHighlight(), {
+watch([trimmed, () => props.language, expanded], () => void renderHighlight(), {
   immediate: true,
 })
 
@@ -136,26 +136,11 @@ onMounted(() => window.addEventListener('message', sendPreview))
 onUnmounted(() => {
   disposed = true
   window.removeEventListener('message', sendPreview)
-  window.clearTimeout(unmountTimer)
 })
 
-// toggle 展开或折叠代码，长代码折叠后卸载内部节点
+// toggle 展开或折叠代码
 function toggle(): void {
-  window.clearTimeout(unmountTimer)
-  const next = !expanded.value
-  if (next) {
-    bodyMounted.value = true
-    expanded.value = true
-    return
-  }
-  expanded.value = false
-  if (isLargeCode.value) {
-    bodyMounted.value = false
-  } else {
-    unmountTimer = window.setTimeout(() => {
-      if (!expanded.value) bodyMounted.value = false
-    }, 225)
-  }
+  expanded.value = !expanded.value
 }
 
 // download 以官网文件名 ai_studio_code 加语言扩展名下载代码
@@ -173,7 +158,7 @@ function download(): void {
 <template>
   <div class="ms-code-block" :data-test-language="language">
     <div class="container">
-      <div class="panel" :class="{ expanded }">
+      <div class="panel">
         <div
           class="code-header"
           role="button"
@@ -234,12 +219,14 @@ function download(): void {
               class="ms-button-borderless ms-button-icon"
               :aria-label="expanded ? t('pg.collapseCode') : t('pg.expandCode')"
             >
-              <UiIcon :name="expanded ? 'expandLess' : 'chevronDown'" :size="20" />
+              <DisclosureChevron :open="expanded" :turn="180"
+                ><UiIcon name="chevronDown" :size="20"
+              /></DisclosureChevron>
             </button>
           </div>
         </div>
-        <div class="code-body" :class="{ 'no-transition': isLargeCode }" :inert="!expanded">
-          <div v-if="bodyMounted" class="code-body-inner">
+        <UiCollapse :open="expanded" :instant="isLargeCode">
+          <div class="code-body-inner">
             <div v-if="previewing" class="preview">
               <iframe
                 :key="code"
@@ -255,7 +242,7 @@ function download(): void {
               <slot></slot>
             </template>
           </div>
-        </div>
+        </UiCollapse>
       </div>
     </div>
   </div>
@@ -336,26 +323,7 @@ function download(): void {
   justify-content: end;
 }
 
-.code-body {
-  display: grid;
-  grid-template-rows: 0fr;
-  visibility: hidden;
-  transition:
-    grid-template-rows 225ms cubic-bezier(0.4, 0, 0.2, 1),
-    visibility 225ms;
-}
-
-.code-body.no-transition {
-  transition: none;
-}
-
-.panel.expanded .code-body {
-  grid-template-rows: 1fr;
-  visibility: visible;
-}
-
 .code-body-inner {
-  min-height: 0;
   overflow: hidden;
 }
 

@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import CodeDialog from './CodeDialog.vue'
 import { codeOptions, generateCode, type CodeLanguage } from './code'
-import { buildRequest } from './request'
+import { agentConfig, buildRequest, continuation } from './request'
 import { usePlayground } from './session'
 import type { Turn } from './types'
 
@@ -40,11 +40,12 @@ const turns = computed<Turn[]>(() => {
 
 // code 按语言生成当前对话的示例代码，请求与页面运行时以所选协议发送的请求相同
 function code(language: CodeLanguage): string {
+  const input = continuation(session.settings.protocol, turns.value)
   return generateCode(language, {
     model: currentModel.value,
     modelID: currentModel.value?.id ?? session.settings.model,
     baseURL: window.location.origin,
-    request: buildRequest(session.settings, currentModel.value, turns.value),
+    request: buildRequest(session.settings, currentModel.value, input.turns),
     protocol: session.settings.protocol,
     stream: session.settings.stream,
     images: {
@@ -52,10 +53,19 @@ function code(language: CodeLanguage): string {
       size: session.settings.openAISize,
       quality: session.settings.imageQuality,
     },
+    agent: agentConfig(session.settings, currentModel.value),
+    previous: input.previous,
   })
 }
+
+// options 是可选的代码语言：以 Interactions 发送时 OpenAI SDK 无法表达 agent 请求，只列 Gemini SDK 与 REST
+const options = computed(() =>
+  session.settings.protocol === 'interactions'
+    ? codeOptions.filter((option) => !option.value.startsWith('openai-'))
+    : codeOptions,
+)
 </script>
 
 <template>
-  <CodeDialog v-model:open="open" :options="codeOptions" :code="code" :docs="docs" />
+  <CodeDialog v-model:open="open" :options="options" :code="code" :docs="docs" />
 </template>

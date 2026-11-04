@@ -15,7 +15,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.StartAccessLog(ctx)
-	request.Model = service.pool.CanonicalModelID(request.Model)
+	request.Model = service.catalogModelID(ctx, request.Model)
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	requestCtx, cancel, err := service.dataRequestContext(ctx)
 	if err != nil {

@@ -2,11 +2,12 @@
 import { computed, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import { useConsole } from '@/console'
+import { afterTask } from '@/lazy'
 import { modelMatches } from '../catalog'
 import { pageKindOf } from './kinds'
 
-const PlaygroundPage = defineAsyncComponent(() => import('../PlaygroundPage.vue'))
-const ImagenPage = defineAsyncComponent(() => import('./ImagenPage.vue'))
+const PlaygroundPage = defineAsyncComponent(() => import('../PlaygroundPage.vue').then(afterTask))
+const ImagenPage = defineAsyncComponent(() => import('./ImagenPage.vue').then(afterTask))
 const route = useRoute()
 const store = useConsole()
 

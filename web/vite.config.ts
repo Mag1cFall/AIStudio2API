@@ -205,8 +205,16 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL('../internal/webui/dist', import.meta.url)),
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        // postBanner 在 ECharts 块开头写入 V8 显式编译提示，块在流式解析时于后台编译全部函数，首张图表挂载时主线程不再逐个编译
+        postBanner: (chunk) => (chunk.name === 'chart' ? '//# allFunctionsCalledOnLoad' : ''),
+      },
+    },
   },
   server: {
+    // fs.allow 让本地联调读取各语言文案引用的服务文案翻译表 internal/i18n/messages
+    fs: { allow: ['.', fileURLToPath(new URL('../internal/i18n/messages', import.meta.url))] },
     proxy: Object.fromEntries(
       ['/api', '/health', '/v1', '/v1beta'].map((path) => [
         path,
