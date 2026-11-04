@@ -21,6 +21,7 @@ import {
   Inbox,
   KeyRound,
   Languages,
+  LayoutDashboard,
   ListFilter,
   LoaderCircle,
   LogIn,
@@ -72,6 +73,7 @@ import {
 
 // icons 将界面语义名映射到 Lucide 图标
 export const icons = {
+  overview: LayoutDashboard,
   logs: ScrollText,
   accounts: KeyRound,
   access: Cable,

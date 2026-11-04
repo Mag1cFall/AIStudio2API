@@ -93,6 +93,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
 - **Anti-Fingerprinting**: Each account keeps a stable Firefox fingerprint and network exit, and the official WAA runs in the Firefox page environment of SpiderMonkey or in a Camoufox page
 - **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, usage statistics, and configuration in the web UI, with dark and light color themes and seven languages: 简体中文, 繁體中文, English, 日本語, 한국어, Français, and Deutsch
+- **Service Overview**: The landing page summarizes account health, model traffic, cooldowns, recent requests, and errors, with daily per-account request and token usage in Pacific time; account-state filters show counts
 - **Desktop App**: Windows, macOS, and Linux desktop apps show the management UI in a window and keep running in the system tray after the window is closed
 - **Online Update**: The Version page shows the latest release and its notes; the desktop apps and the Linux and macOS command-line builds download, verify, and restart into the new version in one click, and a Linux deb install asks for administrator authentication
 - **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; SpiderMonkey or Camoufox hosts WAA, and Camoufox hosts isolated login

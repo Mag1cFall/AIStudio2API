@@ -185,6 +185,13 @@ const selectedState = ref('')
 const selectedTier = ref('')
 const selectedEgress = ref('*')
 const states = computed(() => [...new Set(props.accounts.map((account) => account.state))])
+// stateCounts 是每种账户状态的数量，显示在状态筛选按钮上
+const stateCounts = computed(() => {
+  const counts = new Map<AccountState, number>()
+  for (const account of props.accounts)
+    counts.set(account.state, (counts.get(account.state) ?? 0) + 1)
+  return counts
+})
 const tiers = computed(() => [...new Set(props.accounts.map((account) => account.benefit_tier))])
 const egresses = computed(() => [...new Set(props.accounts.map((account) => account.egress))])
 
@@ -1051,16 +1058,30 @@ async function refreshAllAccounts(): Promise<void> {
           :placeholder="t('accounts.search')"
           class="min-w-0 flex-[1_1_12rem] rounded-md border border-line bg-canvas px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
         />
-        <UiSelect
-          v-model="selectedState"
+        <div
+          class="flex flex-wrap items-center gap-1"
+          role="group"
           :aria-label="t('accounts.filterState')"
-          class="rounded-md border border-line bg-canvas px-2 py-1.5 text-xs text-gray-200"
         >
-          <option value="">{{ t('accounts.allStates') }}</option>
-          <option v-for="state in states" :key="state" :value="state">
-            {{ t(stateKeys[state]) }}
-          </option>
-        </UiSelect>
+          <button
+            v-for="state in ['', ...states] as ('' | AccountState)[]"
+            :key="state"
+            type="button"
+            :aria-pressed="selectedState === state"
+            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition"
+            :class="
+              selectedState === state
+                ? 'border-blue-500 bg-blue-600/15 text-blue-300'
+                : 'border-line text-gray-400 hover:text-white'
+            "
+            @click="selectedState = state"
+          >
+            {{ state === '' ? t('accounts.allStates') : t(stateKeys[state]) }}
+            <span class="text-gray-500 tabular-nums">{{
+              state === '' ? accounts.length : stateCounts.get(state)
+            }}</span>
+          </button>
+        </div>
         <UiSelect
           v-model="selectedTier"
           :aria-label="t('accounts.filterTier')"

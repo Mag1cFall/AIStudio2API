@@ -47,7 +47,9 @@ function lazyPanel(loader: AsyncComponentLoader) {
 const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
 const VersionPanel = lazyPanel(() => import('@/components/VersionPanel.vue'))
 const AccessPanel = lazyPanel(() => import('@/components/AccessPanel.vue'))
+const OverviewPanel = lazyPanel(() => import('@/components/OverviewPanel.vue'))
 const validTabs: TabID[] = [
+  'overview',
   'logs',
   'accounts',
   'access',
@@ -57,7 +59,7 @@ const validTabs: TabID[] = [
   'settings',
   'version',
 ]
-const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'logs')
+const { tab: currentTab, select: selectTab } = useTabParam(validTabs, 'overview')
 const router = useRouter()
 const route = useRoute()
 // currentTab 在从试用页返回时同步目标管理页面
@@ -66,7 +68,7 @@ watch(
   () => {
     if (route.name === 'console') {
       const tab = route.query.tab as TabID
-      currentTab.value = validTabs.includes(tab) ? tab : 'logs'
+      currentTab.value = validTabs.includes(tab) ? tab : 'overview'
     }
   },
 )
@@ -185,7 +187,15 @@ watch(
   { flush: 'post' },
 )
 
+// refreshOverview 同时刷新总览使用的账户、模型、请求与冷却数据
+const overviewRefreshKey = ref(0)
+async function refreshOverview(): Promise<void> {
+  await Promise.all([loadAccountData(), loadRequestData()])
+  overviewRefreshKey.value++
+}
+
 const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
+  { id: 'overview', label: 'nav.overview', icon: 'overview' },
   { id: 'logs', label: 'nav.logs', icon: 'logs' },
   { id: 'accounts', label: 'nav.accounts', icon: 'accounts' },
   { id: 'access', label: 'nav.access', icon: 'access' },
@@ -431,9 +441,23 @@ onMounted(revealCurrentTab)
         </p>
       </div>
       <KeepAlive
-        include="LogsPanel,AccountsPanel,AccessPanel,ModelsTable,RequestsPanel,SettingsPanel,VersionPanel,UsagePanel"
+        include="OverviewPanel,LogsPanel,AccountsPanel,AccessPanel,ModelsTable,RequestsPanel,SettingsPanel,VersionPanel,UsagePanel"
       >
-        <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
+        <OverviewPanel
+          v-if="currentTab === 'overview'"
+          :status="status"
+          :service-state="serviceState"
+          :accounts="accounts"
+          :models="models"
+          :cooldowns="cooldowns"
+          :requests="requests"
+          :refresh-key="overviewRefreshKey"
+          @refresh="refreshOverview"
+          @select="openTab"
+          @start="startService"
+          @stop="stopService"
+        />
+        <LogsPanel v-else-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
         <AccountsPanel
           v-else-if="currentTab === 'accounts'"
           :accounts="visibleAccounts"
