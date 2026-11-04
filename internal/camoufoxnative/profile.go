@@ -17,6 +17,9 @@ const profilePrefix = "aistudio-camoufox-"
 // profileLockName 为 profile 内由创建进程持有的锁文件
 const profileLockName = ".aistudio2api-profile.lock"
 
+// profilePIDName 为 profile 内记录 Camoufox 进程组号的文件
+const profilePIDName = ".aistudio2api-profile.pid"
+
 // createProfile 创建临时 profile 并在浏览器生命周期内持有其锁文件
 func createProfile() (string, *flock.Flock, error) {
 	profile, err := os.MkdirTemp("", profilePrefix+"*")
@@ -74,6 +77,9 @@ func RemoveStaleProfiles() (int, error) {
 		locked, err := lock.TryLock()
 		if err != nil || !locked {
 			continue
+		}
+		if err := terminateStaleBrowser(profile); err != nil {
+			removeErrors = append(removeErrors, err)
 		}
 		if err := removeProfile(profile, lock); err != nil {
 			removeErrors = append(removeErrors, fmt.Errorf("删除遗留 Camoufox profile %s: %w", profile, err))

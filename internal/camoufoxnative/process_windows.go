@@ -126,3 +126,9 @@ func terminateBrowserProcess(ctx context.Context, process *browserProcess) error
 func releaseBrowserTree(tree browserTree) {
 	windows.CloseHandle(windows.Handle(tree))
 }
+
+// recordBrowserProcess 在 Windows 由 Job 回收进程，不需要记录
+func recordBrowserProcess(string, int) error { return nil }
+
+// terminateStaleBrowser 在 Windows 由 Job 回收进程，不需要处理遗留进程
+func terminateStaleBrowser(string) error { return nil }

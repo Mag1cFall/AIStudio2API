@@ -173,6 +173,12 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
 	}
+	if err := recordBrowserProcess(profile, command.Process.Pid); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		_ = removeProfile(profile, profileLock)
+		return nil, "", fmt.Errorf("记录 Camoufox 进程: %w", err)
+	}
 	tree, err := attachBrowserProcess(command)
 	if err != nil {
 		_ = command.Process.Kill()
