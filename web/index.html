@@ -6,10 +6,48 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>AIStudio2API</title>
+    <link
+      rel="preload"
+      href="/node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <script>
       document.documentElement.dataset.theme =
         { light: 'light', dark: 'dark' }[localStorage.getItem('user_theme')] ??
         (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    </script>
+    <script>
+      // recoverAssets 在资源载入失败或入口模块解析失败时以网络正文覆盖本页资源的 HTTP 缓存后重新载入，30 秒内只重试一次
+      function recoverAssets(urls) {
+        if (Date.now() - Number(sessionStorage.getItem('asset-recovery')) < 30000) return
+        sessionStorage.setItem('asset-recovery', String(Date.now()))
+        const assets = new Set(urls)
+        for (const entry of performance.getEntriesByType('resource')) assets.add(entry.name)
+        for (const node of document.querySelectorAll('script[src], link[href]'))
+          assets.add(node.src || node.href)
+        const targets = [...assets].filter((url) =>
+          new URL(url, location.href).pathname.startsWith('/assets/'),
+        )
+        void Promise.allSettled(targets.map((url) => fetch(url, { cache: 'reload' }))).then(() =>
+          location.reload(),
+        )
+      }
+      addEventListener(
+        'error',
+        (event) => {
+          const target = event.target
+          if (target instanceof HTMLScriptElement || target instanceof HTMLLinkElement)
+            recoverAssets([target.src || target.href])
+          else if (event.error instanceof SyntaxError && !document.querySelector('#app > *'))
+            recoverAssets([event.filename])
+        },
+        true,
+      )
+      addEventListener('vite:preloadError', (event) =>
+        recoverAssets(String(event.payload).match(/\/assets\/[^\s'"]+/g) ?? []),
+      )
     </script>
   </head>
   <body>

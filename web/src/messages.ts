@@ -11,9 +11,10 @@ const halfWidth: Record<string, string> = { '；': '; ', '：': ': ' }
 // cacheLimit 是译文缓存的条数上限，超过时清空
 const cacheLimit = 20000
 
-// Entry 是一条格式串的匹配规则与译文
+// Entry 是一条格式串的匹配规则与译文，整句匹配的正则在首次用到时由 source 编译
 interface Entry {
-  pattern: RegExp
+  source: string
+  pattern?: RegExp
   anchor: string
   weight: number
   plain: boolean
@@ -26,7 +27,7 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // codePoints 返回文字的码位数，与 Go 按 rune 计数相同
 const codePoints = (text: string) => text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '_').length
 
-// compile 把格式串编译为整句匹配的正则，记录最长的字面片段与字面字符数
+// compile 把格式串转为整句匹配的正则源码，开头的格式动词取最长匹配，记录最长的字面片段与字面字符数
 function compile(template: string, text: string): Entry {
   let pattern = '^'
   let literal = ''
@@ -57,11 +58,13 @@ function compile(template: string, text: string): Entry {
           ? '([0-9a-f]+)'
           : kind === 'q'
             ? '("(?:[^"\\\\]|\\\\.)*")'
-            : '([\\s\\S]*?)'
+            : match.index === 0
+              ? '([\\s\\S]*)'
+              : '([\\s\\S]*?)'
   }
   literal += template.slice(last)
   flush()
-  return { pattern: new RegExp(`${pattern}$`), anchor, weight, plain, text }
+  return { source: `${pattern}$`, anchor, weight, plain, text }
 }
 
 // Catalog 按服务文案翻译表把服务生成的简体中文换成界面语言，匹配规则与 internal/i18n 相同
@@ -97,6 +100,7 @@ export class Catalog {
   private resolve(text: string): string {
     for (const item of this.entries) {
       if (!text.includes(item.anchor)) continue
+      item.pattern ??= new RegExp(item.source)
       const groups = item.pattern.exec(text)
       if (groups === null) continue
       return item.text.replace(/\{(\d+)\}/g, (token, index: string) => {

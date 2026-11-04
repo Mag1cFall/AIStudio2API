@@ -2,6 +2,7 @@ package camoufoxnative
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -77,22 +78,69 @@ const runButtonEnabledExpression = `(() => {` + pageDOMHelpers + `
   return Boolean(button && buttonEnabled(button));
 })()`
 
-// submitPromptExpression 点击官网当前可见且启用的提交按钮
-const submitPromptExpression = `(() => {` + pageDOMHelpers + `
+// generationRunningExpression 检查官网 Run 按钮已切换为 Stop（按钮内出现 .spin）
+const generationRunningExpression = `(() => {` + pageDOMHelpers + `
   const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
-  if (!button) throw new Error('官网 Run 按钮不存在');
-  if (!buttonEnabled(button)) throw new Error('官网 Run 按钮已禁用');
-  button.click();
-  return true;
+  return Boolean(button && button.querySelector('.spin'));
 })()`
 
-// stopGenerationExpression 在官网 Run 按钮切换为 Stop 后点击它，页面按用户停止的流程中止自己的 GenerateContent，按钮尚未切换时返回 false
-const stopGenerationExpression = `(() => {` + pageDOMHelpers + `
-  const button = uniqueVisible('ms-run-button button', '官网 Stop 按钮');
-  if (!button || !button.querySelector('.spin') || !buttonEnabled(button)) return false;
-  button.click();
-  return true;
-})()`
+// promptFocusedExpression 检查输入框已获得焦点，官网新开对话后焦点在输入框中
+const promptFocusedExpression = `Boolean(document.activeElement && document.activeElement.matches('` + promptBoxSelector + `'))`
+
+// chatEmptyExpression 检查页面没有对话轮次
+const chatEmptyExpression = `document.querySelectorAll('ms-chat-turn').length === 0`
+
+// temporaryChatExpression 检查页面显示临时对话标识
+const temporaryChatExpression = `[...document.querySelectorAll('ms-incognito-mode-indicator')].some(node => node.checkVisibility({visibilityProperty: true}))`
+
+const (
+	// promptBoxSelector 是提示词输入框
+	promptBoxSelector = "ms-prompt-box textarea"
+	// runButtonSelector 是生成前显示 Run、生成中显示 Stop 的按钮
+	runButtonSelector = "ms-run-button button"
+	// newChatButtonSelector 是顶栏的 New chat 按钮
+	newChatButtonSelector = `ms-playground-toolbar button[aria-label="New chat"]`
+	// discardButtonPattern 是 New chat 确认弹窗中丢弃当前对话的按钮文字
+	discardButtonPattern = "^Discard and continue$"
+	// lastTurnSelector 是最后一个对话轮次，指针悬停其上时显示 Rerun 按钮
+	lastTurnSelector = "ms-chat-turn:last-of-type"
+	// rerunButtonSelector 是最后一个对话轮次的 Rerun 按钮
+	rerunButtonSelector = `ms-chat-turn:last-of-type button[aria-label^="Rerun" i]`
+)
+
+// pointerTargetFunction 把 selector 匹配且文字或 aria-label 匹配 pattern 的第一个可见元素滚动到视口内，返回其中心坐标 JSON，没有时返回空字符串
+const pointerTargetFunction = `(selector, pattern) => {
+  const expression = new RegExp(pattern, 'i');
+  const item = [...document.querySelectorAll(selector)].find(node => node.checkVisibility({visibilityProperty: true}) && expression.test((node.innerText || node.getAttribute('aria-label') || '').trim()));
+  if (!item) return '';
+  item.scrollIntoView({block: 'nearest', inline: 'nearest'});
+  const box = item.getBoundingClientRect();
+  return JSON.stringify({x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)});
+}`
+
+// pointer 以可信指针移到 selector 与 pattern 匹配的可见元素中心，click 为真时再按下、停顿并抬起，返回是否找到该元素
+func (client *bidiClient) pointer(ctx context.Context, contextID, selector, pattern string, click bool) (bool, error) {
+	located, err := client.callFunctionString(ctx, contextID, pointerTargetFunction, selector, pattern)
+	if err != nil || located == "" {
+		return false, err
+	}
+	var target struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	}
+	if err := json.Unmarshal([]byte(located), &target); err != nil {
+		return false, err
+	}
+	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": 120}}
+	if click {
+		actions = append(actions, map[string]any{"type": "pointerDown", "button": 0}, map[string]any{"type": "pause", "duration": 60}, map[string]any{"type": "pointerUp", "button": 0})
+	}
+	_, err = client.command(ctx, "input.performActions", map[string]any{
+		"context": contextID,
+		"actions": []map[string]any{{"type": "pointer", "id": "mouse", "parameters": map[string]any{"pointerType": "mouse"}, "actions": actions}},
+	})
+	return true, err
+}
 
 // dismissOverlaysExpression 关闭官网已知且可交互的启动弹层
 const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `

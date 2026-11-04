@@ -83,7 +83,7 @@ func newSelfUpdater(version, executable string, proxy func() string, log func(le
 	}
 }
 
-// updateMode 返回更新方式：managed 由分发方更新，binary 可原地替换，download 下载新版本安装，container 随镜像更新，development 为源码构建
+// updateMode 返回更新方式：managed 由分发方更新，binary 可原地替换，container 随镜像更新，development 为源码构建
 func updateMode(version string) string {
 	if managedBy != "" {
 		return "managed"

@@ -52,6 +52,9 @@
   --mat-sys-on-primary: #fff;
   --mat-sys-on-surface: #1c1b1b;
   --mat-sys-on-surface-variant: #45474a;
+  --mat-sys-primary-container: #f2f0f2;
+  --mat-sys-surface: #fff;
+  --mat-sys-surface-variant: #e2e2e6;
   --shadow-v3-card: 0px 2px 1px 0px rgba(27, 27, 30, 0.04), 0px 0px 1px 0px rgba(27, 27, 30, 0.4);
   --shadow-v3-card-hover:
     0px 3px 6px 0px rgba(27, 27, 30, 0.08), 0px 0px 1px 0px rgba(27, 27, 30, 0.4);
@@ -116,6 +119,9 @@
   --mat-sys-on-primary: #1b1c1c;
   --mat-sys-on-surface: #e5e2e1;
   --mat-sys-on-surface-variant: #c4c7c7;
+  --mat-sys-primary-container: #3b3b3c;
+  --mat-sys-surface: #141313;
+  --mat-sys-surface-variant: #444748;
   --shadow-v3-card:
     0px 2px 1px 0px rgba(252, 252, 252, 0), 0px 0px 1px 0px rgba(252, 252, 252, 0.4);
   --shadow-v3-card-hover:

@@ -282,6 +282,8 @@ type Tools struct {
 	// FileSearch 是 Gemini API fileSearch 工具的原始设置
 	FileSearch json.RawMessage `json:"file_search,omitempty"`
 	ToolConfig ToolConfig      `json:"tool_config,omitempty"`
+	// Explicit 表示请求带有工具列表字段，agent 只使用列出的工具，空列表时不使用工具
+	Explicit bool `json:"-"`
 }
 
 // ResponseModality 表示模型输出模态
@@ -378,6 +380,16 @@ type GenerationConfig struct {
 	HideThinking bool `json:"hide_thinking,omitempty"`
 }
 
+// AgentConfig 是 Interactions API 的 agent_config：Antigravity 所用的模型与 token 上限，Deep Research 的思考摘要（auto、none）、可视化（auto、off）与协作规划，空值为官网默认
+type AgentConfig struct {
+	Type                  string `json:"type,omitempty"`
+	Model                 string `json:"model,omitempty"`
+	MaxTotalTokens        int64  `json:"max_total_tokens,omitempty"`
+	ThinkingSummaries     string `json:"thinking_summaries,omitempty"`
+	Visualization         string `json:"visualization,omitempty"`
+	CollaborativePlanning bool   `json:"collaborative_planning,omitempty"`
+}
+
 // GenerateRequest 表示供应商无关的生成请求
 type GenerateRequest struct {
 	ID    string `json:"id"`
@@ -396,6 +408,10 @@ type GenerateRequest struct {
 	Store *bool `json:"store,omitempty"`
 	// Labels 是请求的计费标签
 	Labels map[string]string `json:"labels,omitempty"`
+	// AgentConfig 是 agent 的运行配置
+	AgentConfig *AgentConfig `json:"agent_config,omitempty"`
+	// PreviousInteractionID 是上一轮 agent 后台任务的上游 interaction ID，有值时只发送上一模型轮之后的输入
+	PreviousInteractionID string `json:"previous_interaction_id,omitempty"`
 	// ImageRoute 内部标记：图像生成模型（由模型目录能力推导）
 	ImageRoute bool `json:"-"`
 	// Unary 标记单次非流式请求（在 Build 代理中使用 ProxyUnaryCall）
@@ -408,6 +424,10 @@ type GenerateRequest struct {
 	continuationRound int
 	// continuationToken 为上一轮响应给出的续写 token
 	continuationToken string
+	// restoreModelTurns 表示 Playground 请求按本进程保存的生成结果补回历史模型轮
+	restoreModelTurns bool
+	// turnToken 为历史中最后一个模型轮的轮次令牌
+	turnToken string
 }
 
 // TokenCountRequest 表示计数请求
@@ -476,6 +496,8 @@ type Model struct {
 	AccessModes []int64    `json:"access_modes,omitempty"`
 	Paid        bool       `json:"paid,omitempty"`
 	Channels    []string   `json:"channels,omitempty"`
+	// AgentModel 是 agent 默认使用的模型 ID
+	AgentModel string `json:"agent_model,omitempty"`
 }
 
 // ThinkingBudget 是 ListModels field 72 的思考预算配置
@@ -654,6 +676,9 @@ type Event struct {
 	DetailedFinishReason json.RawMessage `json:"detailed_finish_reason,omitempty"`
 	// ResponseID 是上游给出的该响应的 responseId
 	ResponseID string `json:"response_id,omitempty"`
+	// InteractionID 与 AccountID 是 agent 后台任务的上游 interaction ID 与所属账户，随结束事件给出
+	InteractionID string `json:"interaction_id,omitempty"`
+	AccountID     string `json:"account_id,omitempty"`
 	// FrameUsage 是事件所在上游帧给出的累计用量
 	FrameUsage *Usage `json:"frame_usage,omitempty"`
 	// FinishFrame 表示事件来自带结束原因的上游帧

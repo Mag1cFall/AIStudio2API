@@ -1,11 +1,5 @@
 import type { AdminLog } from './types'
 
-// LogResize 是日志详情展开或收起时的高度变化与过渡时长
-export interface LogResize {
-  delta: number
-  duration: number
-}
-
 // LogRow 保存请求或阶段的最新状态与完整事件时间线
 export interface LogRow {
   key: string
@@ -154,8 +148,8 @@ function groupStage(rows: LogRow[], stages: Map<string, StageRow>, entry: AdminL
   return true
 }
 
-// groupLogs 按请求标识合并生命周期、按来源与阶段名合并分阶段运行日志，并保持服务事件的原始顺序
-export function groupLogs(logs: AdminLog[]): LogRow[] {
+// groupLogs 按请求标识合并生命周期、按来源与阶段名合并分阶段运行日志，并保持服务事件的原始顺序；previous 中事件相同的行沿用原对象
+export function groupLogs(logs: AdminLog[], previous: ReadonlyMap<string, LogRow>): LogRow[] {
   const rows: LogRow[] = []
   const requests = new Map<string, LogRow>()
   const stages = new Map<string, StageRow>()
@@ -171,5 +165,13 @@ export function groupLogs(logs: AdminLog[]): LogRow[] {
       if (id) requests.set(id, next)
     }
   }
-  return rows
+  return rows.map((row) => {
+    const old = previous.get(row.key)
+    return old !== undefined &&
+      old.events.length === row.events.length &&
+      old.events[0] === row.events[0] &&
+      old.events.at(-1) === row.events.at(-1)
+      ? old
+      : row
+  })
 }

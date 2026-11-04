@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import '@/playground/styles/run-settings.css'
@@ -20,16 +20,25 @@ const heading = ref<HTMLElement | null>(null)
 // compact 表示标题放不下时获取代码按钮只显示图标
 const compact = ref(false)
 
-// fit 先显示获取代码按钮的文字，标题因此被截断时改为只显示图标
+// fit 先显示获取代码按钮的文字，下一帧标题因此被截断时改为只显示图标
 async function fit(): Promise<void> {
   compact.value = false
-  await nextTick()
+  await new Promise((resolve) => requestAnimationFrame(resolve))
   const element = heading.value
   compact.value = element !== null && element.scrollWidth > element.clientWidth
 }
 
-onMounted(() => void document.fonts.ready.then(fit))
-watch([locale, () => props.title], () => void fit())
+// refit 在挂载、网页字体载入完成与语言或标题变化后重新测量标题
+function refit(): void {
+  void fit()
+}
+
+onMounted(() => {
+  refit()
+  document.fonts.addEventListener('loadingdone', refit)
+})
+onUnmounted(() => document.fonts.removeEventListener('loadingdone', refit))
+watch([locale, () => props.title], refit)
 </script>
 
 <template>
@@ -160,5 +169,6 @@ watch([locale, () => props.title], () => void fit())
   min-height: 0;
   overflow: hidden auto;
   padding: 16px;
+  scrollbar-gutter: stable;
 }
 </style>

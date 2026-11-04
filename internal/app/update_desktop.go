@@ -1,4 +1,4 @@
-//go:build desktop
+//go:build desktop && !linux
 
 package app
 
@@ -16,11 +16,8 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/desktop"
 )
 
-// platformUpdateMode 返回桌面版的更新方式：Windows 与 macOS 原地更新，Linux 桌面包下载新版本安装
+// platformUpdateMode 返回 Windows 与 macOS 桌面版的更新方式：原地更新
 func platformUpdateMode() string {
-	if runtime.GOOS == "linux" {
-		return "download"
-	}
 	return "binary"
 }
 

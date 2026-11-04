@@ -2,12 +2,14 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api'
+import { maskKey, splitKeys } from '@/apikey'
 import { keepPage } from '@/desktop'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
 import { maskedProxy } from '@/proxy'
 import type { Account, FirstEventLatency, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryParam } from '@/url'
+import ApiKeyInput from './ApiKeyInput.vue'
 import DurationInput from './DurationInput.vue'
 import PairRows from './PairRows.vue'
 import SettingRow from './SettingRow.vue'
@@ -92,8 +94,8 @@ const sections: {
       'google_search',
       'continuation_rewrite',
       'continuation_prompt',
+      'strip_thought_signatures',
       'waa_backend',
-      'temporary_chat',
       'init_timeout',
       'request_timeout',
       'first_event_hedge',
@@ -200,13 +202,10 @@ function environmentKey(field: keyof ServiceConfig): string | undefined {
   return props.config?.environment.includes(key) ? key : undefined
 }
 
-// apiKeyList 是 API key 输入框中逗号分隔的各个 key
-const apiKeyList = computed(() =>
-  (form.proxy_api_key ?? '')
-    .split(',')
-    .map((key) => key.trim())
-    .filter(Boolean),
-)
+// apiKeyList 是表单中逗号分隔的各个 API key
+const apiKeyList = computed(() => splitKeys(form.proxy_api_key ?? ''))
+// activeKeys 是生效中的各个 API key
+const activeKeys = computed(() => splitKeys(props.config?.active_proxy_api_key ?? ''))
 
 // keyAccounts 把 api_key_accounts 解析为各 key 可用的账户 ID
 function keyAccounts(value: string): Map<string, string[]> {
@@ -278,12 +277,6 @@ const hedgeModelsLabel = computed(() => {
   if (hedgeModels.value.length === 0) return t('settings.hedgeModelsNone')
   return hedgeModels.value.length === 1 ? hedgeModels.value[0]! : t('settings.hedgeModelsSome')
 })
-
-// maskedKey 在未显示 API key 时只露出首尾字符
-function maskedKey(key: string): string {
-  if (revealKey.value) return key
-  return key.length > 8 ? `${key.slice(0, 4)}…${key.slice(-2)}` : '••••••••'
-}
 
 watch(apiKeyList, () => {
   if (form.api_key_accounts !== undefined) writeKeyAccounts(keyAccounts(form.api_key_accounts))
@@ -496,30 +489,24 @@ async function saveConfig(): Promise<void> {
               :changed="changedFields.has('proxy_api_key')"
               :env="environmentKey('proxy_api_key')"
             >
-              <div class="flex gap-2">
-                <input
-                  id="setting-api-key"
-                  v-model="form.proxy_api_key"
-                  :type="revealKey ? 'text' : 'password'"
-                  :class="inputClass"
-                  autocomplete="new-password"
-                  spellcheck="false"
-                />
-                <button
-                  class="shrink-0 rounded-md border border-line bg-raised px-3 text-xs text-gray-300 transition hover:bg-line"
-                  type="button"
-                  @click="revealKey = !revealKey"
-                >
-                  {{ revealKey ? t('settings.hide') : t('settings.reveal') }}
-                </button>
-              </div>
-              <p
-                v-if="form.proxy_api_key !== config.active_proxy_api_key"
-                class="mt-1 text-xs break-all text-gray-500"
+              <ApiKeyInput
+                v-model="form.proxy_api_key"
+                v-model:revealed="revealKey"
+                input-id="setting-api-key"
+              />
+              <div
+                v-if="apiKeyList.join(',') !== activeKeys.join(',')"
+                class="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-gray-500"
               >
                 {{ t('settings.activeValue') }}:
-                {{ revealKey ? config.active_proxy_api_key || t('common.empty') : '••••••••' }}
-              </p>
+                <span
+                  v-for="key in activeKeys"
+                  :key="key"
+                  class="rounded border border-line px-1.5 py-0.5 font-mono break-all text-gray-400"
+                  >{{ revealKey ? key : maskKey(key) }}</span
+                >
+                <span v-if="activeKeys.length === 0">{{ t('common.empty') }}</span>
+              </div>
             </SettingRow>
             <SettingRow
               v-if="apiKeyList.length > 0 && accounts.length > 0"
@@ -530,15 +517,21 @@ async function saveConfig(): Promise<void> {
               :changed="changedFields.has('api_key_accounts')"
               :env="environmentKey('api_key_accounts')"
             >
-              <div role="group" aria-labelledby="setting-api-key-accounts-label" class="space-y-2">
+              <div
+                role="group"
+                aria-labelledby="setting-api-key-accounts-label"
+                class="max-h-60 space-y-2 overflow-y-auto pr-1 [scrollbar-width:thin]"
+              >
                 <div
                   v-for="key in apiKeyList"
                   :key="key"
                   class="flex items-center justify-between gap-3"
                 >
-                  <span class="min-w-0 truncate font-mono text-xs text-gray-400">
-                    {{ maskedKey(key) }}
-                  </span>
+                  <span
+                    data-api-key
+                    class="min-w-0 rounded border border-line bg-raised px-2 py-0.5 font-mono text-xs break-all text-gray-200"
+                    >{{ revealKey ? key : maskKey(key) }}</span
+                  >
                   <FilterMenu
                     :label="keyAccountsLabel(key)"
                     :options="accounts.map((account) => account.id)"
@@ -848,6 +841,19 @@ async function saveConfig(): Promise<void> {
               />
             </SettingRow>
             <SettingRow
+              :label="t('settings.stripThoughtSignatures')"
+              control-id="setting-strip-thought-signatures"
+              :description="t('settings.stripThoughtSignaturesHelp')"
+              effect="service"
+              :changed="changedFields.has('strip_thought_signatures')"
+              :env="environmentKey('strip_thought_signatures')"
+            >
+              <UiSwitch
+                id="setting-strip-thought-signatures"
+                v-model="form.strip_thought_signatures"
+              />
+            </SettingRow>
+            <SettingRow
               :label="t('settings.waaBackend')"
               control-id="setting-waa-backend"
               :description="t('settings.waaBackendHelp')"
@@ -859,16 +865,6 @@ async function saveConfig(): Promise<void> {
                 <option value="camoufox">{{ t('settings.waaBackendCamoufox') }}</option>
                 <option value="spidermonkey">{{ t('settings.waaBackendSpiderMonkey') }}</option>
               </UiSelect>
-            </SettingRow>
-            <SettingRow
-              :label="t('settings.temporaryChat')"
-              control-id="setting-temporary"
-              :description="t('settings.temporaryChatHelp')"
-              effect="service"
-              :changed="changedFields.has('temporary_chat')"
-              :env="environmentKey('temporary_chat')"
-            >
-              <UiSwitch id="setting-temporary" v-model="form.temporary_chat" />
             </SettingRow>
             <SettingRow
               :label="t('settings.initTimeout')"

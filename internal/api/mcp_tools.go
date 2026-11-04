@@ -307,7 +307,7 @@ func (s *server) applyMCPApprovals(ctx context.Context, previousID string, tools
 	requests := map[string]mcpApprovalItem{}
 	executed := map[string]mcpApprovalItem{}
 	if previousID != "" {
-		raw, _, _ := s.responseStates.Response(previousID)
+		raw, _, _ := s.responseStates.Response(previousID, nil)
 		var previous struct {
 			Output []mcpApprovalItem `json:"output"`
 		}

@@ -50,7 +50,8 @@ func (s *server) handleResponseGet(w http.ResponseWriter, r *http.Request) {
 		s.resumeResponseStream(w, r)
 		return
 	}
-	response, _, ok := s.responseStates.Response(r.PathValue("response"))
+	query := r.URL.Query()
+	response, _, ok := s.responseStates.Response(r.PathValue("response"), slices.Concat(query["include[]"], query["include"]))
 	if !ok {
 		writeResponseNotFound(w, r.PathValue("response"))
 		return
@@ -63,7 +64,7 @@ func (s *server) resumeResponseStream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("response")
 	stream, ok := s.responseStates.Stream(id)
 	if !ok {
-		if _, _, exists := s.responseStates.Response(id); exists {
+		if _, _, exists := s.responseStates.Response(id, nil); exists {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "Only responses created with background=true and stream=true can be streamed.")
 			return
 		}
@@ -99,7 +100,7 @@ func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 // handleResponseCancel 终止进行中的后台响应并返回保存的 cancelled 对象，已结束的后台响应返回最终对象，其他响应不可取消
 func (s *server) handleResponseCancel(w http.ResponseWriter, r *http.Request) {
 	s.stopBackground(r.PathValue("response"))
-	response, background, ok := s.responseStates.Response(r.PathValue("response"))
+	response, background, ok := s.responseStates.Response(r.PathValue("response"), nil)
 	if !ok {
 		writeResponseNotFound(w, r.PathValue("response"))
 		return

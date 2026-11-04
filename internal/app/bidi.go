@@ -14,7 +14,7 @@ import (
 func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.BidiRequest) (*aistudio.BidiSession, error) {
 	request.Model = service.mappedModel(request.Model)
 	api.SetAccessLogTarget(ctx, request.Model, "")
-	request.Model = service.pool.CanonicalModelID(request.Model)
+	request.Model = service.catalogModelID(ctx, request.Model)
 	requestCtx, cancel, err := service.bidiRequestContext(ctx)
 	if err != nil {
 		api.SetAccessLogError(ctx, err)
@@ -101,12 +101,12 @@ func (service *trackedService) bidiCandidates(ctx context.Context, model string,
 
 // preferBidiAccounts 在实测资格分组内按账户策略排列候选
 func (service *trackedService) preferBidiAccounts(accountIDs []string, modelID string, modelAccessScope string) []string {
-	scope := strings.TrimSpace(modelAccessScope)
+	scope := modelAccessScope
 	if scope == "" {
-		scope = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+		scope = modelID
 	}
 	candidates := service.pool.OrderCandidates(accountIDs, scope)
-	if strings.TrimSpace(modelAccessScope) == "" {
+	if modelAccessScope == "" {
 		return candidates
 	}
 	states := service.pool.CandidateStatesForScope(candidates, modelID, modelAccessScope)

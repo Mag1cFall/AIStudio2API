@@ -5,8 +5,10 @@ import type {
   AccountDraft,
   AccountLoginInput,
   AccountRefresh,
+  AccountTask,
   AdminEvent,
   ChromeImportInput,
+  CookieAccountsInput,
   CookieBrowser,
   CookieImportInput,
   FirstEventLatency,
@@ -31,8 +33,8 @@ interface AccountsResponse {
   accounts: Account[]
 }
 
-interface AccountResponse {
-  account: Account
+interface AccountTaskResponse {
+  task: AccountTask
 }
 
 interface ChromeProfilesResponse {
@@ -55,13 +57,6 @@ export interface AdminSession {
   enabled: boolean
   authenticated: boolean
   username: string
-}
-
-// checkSessionResponse 通知页面清理失效会话中的管理数据
-function checkSessionResponse(path: string, response: Response): void {
-  if (response.status === 401 && !path.startsWith('/api/auth/')) {
-    window.dispatchEvent(new Event('admin-session-expired'))
-  }
 }
 
 export class ApiError extends Error {
@@ -96,15 +91,17 @@ export function jsonBody(value: unknown): Blob {
 const writes = ref(0)
 keepPage(() => writes.value > 0)
 
-// send 发出管理端请求并保留服务端错误语义，写请求进行中时计入 writes
+// send 发出管理端请求并保留服务端错误语义，管理登录失效时通知页面清理管理数据，写请求进行中时计入 writes
 async function send(path: string, init?: RequestInit): Promise<Response> {
   const write = init?.method !== undefined && init.method !== 'GET'
   if (write) writes.value++
   try {
     const response = await fetch(path, init)
-    checkSessionResponse(path, response)
     if (!response.ok) {
-      throw await responseError(response)
+      const error = await responseError(response)
+      if (error.code === 'admin_login_required')
+        window.dispatchEvent(new Event('admin-session-expired'))
+      throw error
     }
     return response
   } finally {
@@ -146,19 +143,22 @@ export const api = {
   usageExportURL: (query: URLSearchParams) => `/api/usage/records.csv?${query.toString()}`,
   requestBody: (id: string) =>
     requestJSON<RequestBody>(`/api/requests/${encodeURIComponent(id)}/body`),
-  createAccount: (input: AccountLoginInput, view: string, signal: AbortSignal) =>
-    requestJSON<AccountResponse>('/api/accounts', {
-      method: 'POST',
-      body: jsonBody({ ...input, view }),
-      signal,
-    }),
+  createAccount: async (input: AccountLoginInput, view: string) =>
+    (
+      await requestJSON<AccountTaskResponse>('/api/accounts', {
+        method: 'POST',
+        body: jsonBody({ ...input, view }),
+      })
+    ).task,
   chromeImportProfiles: async () =>
     (await requestJSON<ChromeProfilesResponse>('/api/accounts/import/chrome')).profiles,
-  importChromeAccounts: (input: ChromeImportInput) =>
-    requestJSON<AccountsResponse>('/api/accounts/import/chrome', {
-      method: 'POST',
-      body: jsonBody(input),
-    }),
+  importChromeAccounts: async (input: ChromeImportInput) =>
+    (
+      await requestJSON<AccountTaskResponse>('/api/accounts/import/chrome', {
+        method: 'POST',
+        body: jsonBody(input),
+      })
+    ).task,
   cookieBrowsers: async () =>
     (await requestJSON<{ browsers: CookieBrowser[] }>('/api/accounts/import/browsers')).browsers,
   discoverCookieAccounts: async (input: CookieImportInput) =>
@@ -168,11 +168,16 @@ export const api = {
         body: jsonBody(input),
       })
     ).accounts,
-  importCookieAccount: (input: CookieImportInput) =>
-    requestJSON<AccountResponse>('/api/accounts/import/cookies', {
-      method: 'POST',
-      body: jsonBody(input),
-    }),
+  importCookieAccounts: async (input: CookieAccountsInput) =>
+    (
+      await requestJSON<AccountTaskResponse>('/api/accounts/import/cookies', {
+        method: 'POST',
+        body: jsonBody(input),
+      })
+    ).task,
+  dismissAccountTask: (id: string) =>
+    requestCommand(`/api/accounts/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  activePairing: () => requestJSON<PairingToken>('/api/pairing'),
   createPairing: () => requestJSON<PairingToken>('/api/pairing', { method: 'POST' }),
   updateAccount: (id: string, draft: AccountDraft) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, {
@@ -181,12 +186,13 @@ export const api = {
     }),
   deleteAccount: (id: string, keepalive: boolean) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive }),
-  loginAccount: (id: string, view: string, signal: AbortSignal) =>
-    requestCommand(`/api/accounts/${encodeURIComponent(id)}/login`, {
-      method: 'POST',
-      body: jsonBody({ view }),
-      signal,
-    }),
+  loginAccount: async (id: string, view: string) =>
+    (
+      await requestJSON<AccountTaskResponse>(`/api/accounts/${encodeURIComponent(id)}/login`, {
+        method: 'POST',
+        body: jsonBody({ view }),
+      })
+    ).task,
   loginViewURL: (view: string) =>
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/login-view/${encodeURIComponent(view)}`,
   refreshAccount: (id: string) =>

@@ -52,8 +52,6 @@
     'Inter Variable', var(--font-cjk), ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
     'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-weight: 450;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
   background: var(--color-canvas);
   color: var(--color-fg);
 }
@@ -122,10 +120,6 @@
   color: #ffffff;
 }
 
-* {
-  box-sizing: border-box;
-}
-
 html,
 body,
 #app {
@@ -142,13 +136,6 @@ body {
   color: var(--color-fg);
   font-size: 0.9375rem;
   line-height: 1.375rem;
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
 }
 
 button,
@@ -185,10 +172,6 @@ pre,
 
 ::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-line-strong);
-}
-
-.log-entry:hover {
-  background-color: var(--color-panel);
 }
 
 .modal-overlay {
@@ -349,14 +332,6 @@ button[aria-busy='true']:has(> svg)::before {
     opacity: 0;
     transform: translateY(6px);
   }
-}
-
-.page-enter-active {
-  animation: overlay-in 120ms ease-out;
-}
-
-.page-leave-active {
-  display: none;
 }
 
 .ui-select-content[data-state='open'] {

@@ -215,6 +215,7 @@ function onDrop(event: DragEvent): void {
   outline: none;
   overflow-wrap: anywhere;
   resize: none;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
 }
 

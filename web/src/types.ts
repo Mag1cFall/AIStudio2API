@@ -3,6 +3,7 @@ export type Locale = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'fr' | 'de'
 export type TabID =
   | 'logs'
   | 'accounts'
+  | 'access'
   | 'models'
   | 'requests'
   | 'usage'
@@ -30,6 +31,8 @@ export interface Account {
   models: string[]
   benefit_tier: string
   message: string
+  // pairing_renewed_at 是远程添加的账户最近一次由原电脑续签的时间
+  pairing_renewed_at?: string
 }
 
 interface ProxyPoolEntry {
@@ -76,14 +79,44 @@ export interface PairingToken {
 }
 
 export interface ChromeImportInput extends AccountLoginInput {
-  account_ids: string[]
+  accounts: { id: string; email: string }[]
 }
 
-export interface CookieImportInput extends AccountLoginInput {
-  label: string
+// CookieAccountItem 是一次 Cookie 导入中的一个账户：识别出的邮箱、Cookie 文本或调试浏览器地址与会话序号
+export interface CookieAccountItem {
+  email: string
   cookies: string
   cdp: string
-  auth_user?: number
+  auth_user: number
+}
+
+// CookieAccountsInput 是一次导入的 Cookie 账户与共用的账户环境，语言与时区为空时调试浏览器账户沿用浏览器的设置
+export interface CookieAccountsInput extends AccountLoginInput {
+  items: CookieAccountItem[]
+}
+
+// AccountTaskItem 是账户任务中的一个账户，label 为邮箱，浏览器登录完成前为空
+export interface AccountTaskItem {
+  label: string
+  state: 'pending' | 'running' | 'done' | 'failed'
+  code?: string
+  error?: string
+}
+
+// AccountTask 是在服务端运行的添加或重新登录账户任务，view 为显示登录画面的登录窗口 ID
+export interface AccountTask {
+  id: string
+  kind: 'login' | 'relogin' | 'chrome' | 'cookies' | 'browser'
+  view?: string
+  state: 'running' | 'done' | 'failed'
+  items: AccountTaskItem[]
+  started_at: string
+}
+
+// CookieImportInput 是识别 Cookie 中账户时提交的 Cookie 文本与出口代理
+export interface CookieImportInput {
+  cookies: string
+  proxy: string
 }
 
 export interface CookieBrowser {
@@ -95,6 +128,8 @@ export interface CookieBrowser {
   timezone: string
   imported: boolean
   signed_out: boolean
+  // device_bound 为真时 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备
+  device_bound: boolean
   error: string
 }
 
@@ -113,13 +148,14 @@ export interface ServiceStatus {
   version: string
   active_requests: number
   accounts: AccountCounters
+  chrome_import: boolean
 }
 
 export interface UpdateStatus {
   current: string
   latest?: string
   available: boolean
-  mode: 'binary' | 'download' | 'container' | 'development' | 'managed'
+  mode: 'binary' | 'container' | 'development' | 'managed'
   managed_by?: string
   notes?: string
   url?: string
@@ -238,6 +274,8 @@ export interface Model {
   languages?: Language[]
   access_modes?: number[]
   paid?: boolean
+  // agent_model 是 agent 默认使用的模型 ID
+  agent_model?: string
   channels?: UpstreamChannel[]
 }
 
@@ -300,6 +338,7 @@ export interface ServiceConfig {
   google_search: boolean
   continuation_rewrite: boolean
   continuation_prompt: string
+  strip_thought_signatures: boolean
   first_event_hedge: string
   first_event_hedge_models: string
   auth_states: string
@@ -327,7 +366,6 @@ export interface ServiceConfig {
   model_channels: string
   api_key_accounts: string
   waa_backend: 'camoufox' | 'spidermonkey'
-  temporary_chat: boolean
   media_output: 'inline' | 'url'
   media_base_url: string
   environment: string[]
@@ -461,6 +499,7 @@ export type AdminEvent =
   | { type: 'accounts'; data: { accounts: Account[] } }
   | { type: 'models'; data: { models: Model[] } }
   | { type: 'cooldowns'; data: Cooldown[] }
+  | { type: 'account_tasks'; data: { tasks: AccountTask[] } }
   | { type: 'request'; data: RequestSummary }
 
 // PromptSummary 是对话库列表中的一项

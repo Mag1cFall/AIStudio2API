@@ -17,9 +17,8 @@ contents:
   - src: ./build/linux/aistudio2api.desktop
     dst: /usr/share/applications/aistudio2api.desktop
 depends:
-  - "libgtk-4-1"
-  - "libwebkitgtk-6.0-4"
   - "libgtk-3-0"
+  - "libwebkit2gtk-4.1-0"
   - "libasound2t64 | libasound2"
   - "libnss3"
   - "libdbus-glib-1-2"
@@ -33,3 +32,4 @@ depends:
   - "libxdamage1"
   - "libxfixes3"
   - "xvfb"
+  - "pkexec | policykit-1"

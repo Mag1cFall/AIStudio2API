@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onDeactivated,
+  onMounted,
+  onUnmounted,
+  ref,
+  type FunctionalComponent,
+} from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -8,24 +17,31 @@ import {
   DropdownMenuTrigger,
 } from 'reka-ui'
 import { useRouter } from 'vue-router'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import { useConsole } from '@/console'
-import { useI18n } from '@/i18n'
+import { useI18n, type TranslationKey } from '@/i18n'
+import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import { copyToClipboard } from './clipboard'
 import { useRunningClock } from './clock'
-import CodeBlock from './CodeBlock.vue'
+import CodeExecutionChunk from './CodeExecutionChunk.vue'
 import FileChunk from './FileChunk.vue'
 import FunctionCallChunk from './FunctionCallChunk.vue'
 import { driveNames } from './drive'
 import LoadingIndicator from './LoadingIndicator.vue'
 import MarkdownView from './MarkdownView.vue'
 import RunStats from './RunStats.vue'
+import ServerToolChunk from './ServerToolChunk.vue'
 import ThoughtChunk from './ThoughtChunk.vue'
+import ThoughtStep from './ThoughtStep.vue'
 import VideoResult from './media/VideoResult.vue'
+import { isAgent } from './catalog'
 import { insertCitations } from './markdown'
 import { dataURL } from './protocols'
 import { useReveal } from './reveal'
 import { youtubeVideoID } from './sample-media'
+import SegmentRun from './SegmentRun.vue'
 import { usePlayground } from './session'
 import type { Part, Turn } from './types'
 
@@ -43,7 +59,6 @@ const playground = usePlayground()
 const { session } = playground
 
 const root = ref<HTMLElement>()
-const answer = ref<HTMLElement>()
 const editing = ref(false)
 const draft = ref('')
 const editor = ref<HTMLTextAreaElement>()
@@ -51,6 +66,8 @@ const editor = ref<HTMLTextAreaElement>()
 const visible = ref(true)
 const height = ref(0)
 
+// agent 表示模型轮次在 Agent 模式下生成：思考按出现顺序显示为步骤行，完成后过程折叠在耗时标题下
+const agent = computed(() => props.turn.role === 'model' && props.turn.agent === true)
 // thoughtText 是模型轮次的思考摘要
 const thoughtText = computed(() =>
   props.turn.parts
@@ -67,15 +84,35 @@ const answerText = computed(() =>
     .map((part) => part.text)
     .join(''),
 )
-// citedAnswer 是生成完成后按依据支撑插入引用编号的回复正文，与官网一样出现后直接显示全文
-const citedAnswer = computed(() => {
-  const { supports, sources } = props.turn
-  if (!supports?.length || !sources?.length || props.streaming) return undefined
-  return insertCitations(
-    answerText.value,
-    supports,
-    sources.map((source) => source.uri),
-  )
+// Segment 是回复按原顺序分成的一段：连续的文本片段合为一段，start 与 end 为它在回复正文中的位置；Agent 模式下连续的思考片段合为一段；其余片段各成一段，index 为它在 answerParts 中的位置
+type Segment =
+  | { kind: 'text'; start: number; end: number }
+  | { kind: 'thought'; text: string }
+  | { kind: 'part'; part: Part; index: number }
+// segments 是回复按片段原顺序分成的段
+const segments = computed(() => {
+  const list: Segment[] = []
+  let offset = 0
+  let index = 0
+  for (const part of props.turn.parts) {
+    if (part.thought) {
+      if (!agent.value || !part.text) continue
+      const last = list.at(-1)
+      if (last?.kind === 'thought') last.text += part.text
+      else list.push({ kind: 'thought', text: part.text })
+      continue
+    }
+    if (part.text === undefined) {
+      list.push({ kind: 'part', part, index: index++ })
+      continue
+    }
+    index++
+    const last = list.at(-1)
+    if (last?.kind === 'text') last.end += part.text.length
+    else list.push({ kind: 'text', start: offset, end: offset + part.text.length })
+    offset += part.text.length
+  }
+  return list
 })
 // thinkingRunning 表示正在输出思考，回复片段出现后结束
 const thinkingRunning = computed(() => props.streaming && answerParts.value.length === 0)
@@ -87,8 +124,219 @@ const revealedAnswer = useReveal(
   () => answerText.value,
   () => props.streaming,
 )
-// shownAnswer 是当前显示的回复正文
-const shownAnswer = computed(() => citedAnswer.value ?? revealedAnswer.value)
+// shownSegments 是各段与文本段当前显示的正文：生成中按逐字显示的进度截取，完成后有依据支撑时与官网一样直接显示插入引用编号的全文，key 为段的原序号
+const shownSegments = computed(() => {
+  const { supports = [], sources = [] } = props.turn
+  const cited = !props.streaming && supports.length > 0 && sources.length > 0
+  const uris = sources.map((source) => source.uri)
+  const encoder = new TextEncoder()
+  let startByte = 0
+  const shown = segments.value.map((segment, key) => {
+    if (segment.kind !== 'text') return { segment, text: '', key }
+    if (!cited)
+      return { segment, text: revealedAnswer.value.slice(segment.start, segment.end), key }
+    const text = answerText.value.slice(segment.start, segment.end)
+    const size = encoder.encode(text).length
+    const own = supports
+      .filter((support) => support.end > startByte && support.end <= startByte + size)
+      .map((support) => ({ ...support, end: support.end - startByte }))
+    startByte += size
+    return { segment, text: insertCitations(text, own, uris), key }
+  })
+  return shown
+})
+// isMedia 表示该段为图片、音视频或文件，过程折叠后仍显示
+function isMedia(segment: Segment): boolean {
+  return (
+    segment.kind === 'part' &&
+    (segment.part.inlineData !== undefined || segment.part.fileData !== undefined)
+  )
+}
+// isStep 表示该段显示为步骤行：思考、函数调用、可执行代码与执行结果、服务端工具调用与结果
+function isStep(segment: Segment): boolean {
+  return (
+    segment.kind === 'thought' ||
+    (segment.kind === 'part' &&
+      (segment.part.functionCall !== undefined ||
+        segment.part.executableCode !== undefined ||
+        segment.part.codeExecutionResult !== undefined ||
+        segment.part.toolCall !== undefined ||
+        segment.part.toolResponse !== undefined))
+  )
+}
+// processEnd 是 Agent 模式轮次中最后一个步骤行之后的段序号，之前的段为过程，之后的为回答
+const processEnd = computed(() =>
+  agent.value ? segments.value.map(isStep).lastIndexOf(true) + 1 : 0,
+)
+// processOpen 表示完成后折叠的过程已展开
+const processOpen = ref(false)
+// pairedResult 表示该片段与之前的调用合在同一个步骤中显示：紧跟在可执行代码后的执行结果，或同一 ID 的服务端工具调用之后的结果
+function pairedResult(index: number): boolean {
+  const part = answerParts.value[index]
+  if (part?.toolResponse !== undefined) return toolCallIndex(part.toolResponse.id, index) !== -1
+  return (
+    part?.codeExecutionResult !== undefined &&
+    answerParts.value[index - 1]?.executableCode !== undefined
+  )
+}
+// toolCallIndex 返回 before 之前同一 ID 的服务端工具调用在 answerParts 中的位置，没有时为 -1
+function toolCallIndex(id: string | undefined, before: number): number {
+  return answerParts.value.findIndex(
+    (part, index) => index < before && part.toolCall !== undefined && part.toolCall.id === id,
+  )
+}
+// toolResponse 返回 index 处服务端工具调用之后同一 ID 的结果
+function toolResponse(index: number): Part['toolResponse'] {
+  const id = answerParts.value[index]!.toolCall!.id
+  return answerParts.value.find(
+    (part, position) =>
+      position > index && part.toolResponse !== undefined && part.toolResponse.id === id,
+  )?.toolResponse
+}
+// lastSearch 是最后一个网页搜索步骤在 answerParts 中的位置，本轮的依据来源显示在这一步
+const lastSearch = computed(() =>
+  answerParts.value
+    .map((part) =>
+      ['GOOGLE_SEARCH_WEB', 'GOOGLE_SEARCH_IMAGE'].includes(part.toolCall?.toolType ?? ''),
+    )
+    .lastIndexOf(true),
+)
+// stepImages 返回 index 处代码运行步骤输出的图片：执行结果之后连续的内联图片
+function stepImages(index: number): NonNullable<Part['inlineData']>[] {
+  const images: NonNullable<Part['inlineData']>[] = []
+  let position = answerParts.value[index]?.codeExecutionResult === undefined ? index + 2 : index + 1
+  if (answerParts.value[position - 1]?.codeExecutionResult === undefined) return images
+  while (answerParts.value[position]?.inlineData?.mimeType.startsWith('image/')) {
+    images.push(answerParts.value[position]!.inlineData!)
+    position++
+  }
+  return images
+}
+// stepImage 表示 index 处的图片是代码运行步骤的输出：之前连续的图片之前是执行结果
+function stepImage(index: number): boolean {
+  let position = index
+  while (answerParts.value[position]?.inlineData?.mimeType.startsWith('image/')) position--
+  return position !== index && answerParts.value[position]?.codeExecutionResult !== undefined
+}
+// folded 表示 Agent 模式轮次完成后过程已折叠，代码运行生成的图片显示在过程标题之后
+const folded = computed(() => turnProcess.value?.foldable === true && !processOpen.value)
+// StepKind 是步骤组计数的步骤类别，对应 dsh 过程分组的运行代码、搜索网页、访问网页与调用工具
+type StepKind = 'code' | 'search' | 'fetch' | 'tools'
+// stepKinds 是各步骤类别的组标题文案、接在后面时的文案与图标
+const stepKinds: Record<StepKind, { label: TranslationKey; next: TranslationKey; icon: IconName }> =
+  {
+    code: { label: 'pg.groupCode', next: 'pg.groupCodeNext', icon: 'code' },
+    search: { label: 'pg.groupSearch', next: 'pg.groupSearchNext', icon: 'globe' },
+    fetch: { label: 'pg.groupFetch', next: 'pg.groupFetchNext', icon: 'document' },
+    tools: { label: 'pg.groupTools', next: 'pg.groupToolsNext', icon: 'functionCalling' },
+  }
+// stepKind 返回段计入的步骤类别：每次代码运行、服务端工具调用与函数调用各计一次，思考与已配对的结果不计
+function stepKind(segment: Segment): StepKind | undefined {
+  if (segment.kind !== 'part' || pairedResult(segment.index)) return undefined
+  const { part } = segment
+  if (part.executableCode || part.codeExecutionResult) return 'code'
+  if (part.functionCall) return 'tools'
+  const step = part.toolCall ?? part.toolResponse
+  if (step === undefined) return undefined
+  if (['GOOGLE_SEARCH_WEB', 'GOOGLE_SEARCH_IMAGE'].includes(step.toolType ?? '')) return 'search'
+  return step.toolType === 'URL_CONTEXT' ? 'fetch' : 'tools'
+}
+// groupHeader 与 dsh processTitle 一样取次数最多的前三类步骤组成组标题，次数相同时按首次出现排序，图标取第一类；只有思考时为分析完成
+function groupHeader(members: Segment[]): { title: string; icon: IconName } {
+  const counts = new Map<StepKind, number>()
+  for (const segment of members) {
+    const kind = stepKind(segment)
+    if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1)
+  }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]).map(([kind]) => stepKinds[kind])
+  const [first, second, third] = ranked
+  if (first === undefined) return { title: t('pg.groupThinking'), icon: 'spark' }
+  const lead = t(first.label)
+  if (second === undefined) return { title: lead, icon: first.icon }
+  if (third === undefined) {
+    const prefix = t('pg.groupPrefix')
+    const next = t(second.next)
+    const shared = prefix !== '' && lead.startsWith(prefix) && t(second.label).startsWith(prefix)
+    const title = t('pg.groupJoinTwo')
+      .replace('{first}', lead)
+      .replace('{second}', shared ? next.slice(prefix.length) : next)
+    return { title, icon: first.icon }
+  }
+  const title = [lead, t(second.next), t(third.next)].join(t('pg.groupComma'))
+  return {
+    title: ranked.length > 3 ? t('pg.groupMore').replace('{title}', title) : title,
+    icon: first.icon,
+  }
+}
+// StepBlock 是依次显示的一块段：group 为步骤组的标题与图标，没有时各段直接显示
+interface StepBlock {
+  key: number
+  group?: { title: string; icon: IconName }
+  items: (typeof shownSegments.value)[number][]
+}
+// blocks 与 dsh 过程分组一样把已完成轮次过程中连续的思考与工具步骤合为步骤组，正文、媒体与过程结尾打断分组；生成中与等待函数响应时不分组
+const blocks = computed(() => {
+  const grouping = turnProcess.value !== undefined && !awaitingResponse.value
+  const list: StepBlock[] = []
+  for (const item of shownSegments.value) {
+    const { segment } = item
+    const member =
+      grouping &&
+      item.key < processEnd.value &&
+      (isStep(segment) ||
+        (segment.kind === 'part' && (pairedResult(segment.index) || stepImage(segment.index))))
+    const last = list.at(-1)
+    if (
+      last !== undefined &&
+      (last.group !== undefined) === member &&
+      last.key < processEnd.value === item.key < processEnd.value
+    )
+      last.items.push(item)
+    else list.push({ key: item.key, items: [item] })
+    if (member) list.at(-1)!.group = { title: '', icon: 'spark' }
+  }
+  for (const block of list)
+    if (block.group) block.group = groupHeader(block.items.map((item) => item.segment))
+  return list
+})
+// StepSection 是依次显示的一段步骤块：fold 表示它是完成后可折叠的过程
+interface StepSection {
+  key: string
+  fold: boolean
+  blocks: StepBlock[]
+}
+// sections 把可折叠轮次的步骤块分为折叠区中的过程、折叠后显示在过程标题之后的过程媒体与回答，其余轮次只有一段
+const sections = computed((): StepSection[] => {
+  if (turnProcess.value?.foldable !== true)
+    return [{ key: 'answer', fold: false, blocks: blocks.value }]
+  const process = blocks.value.filter((block) => block.key < processEnd.value)
+  const media = folded.value
+    ? process.flatMap((block) => block.items).filter((item) => isMedia(item.segment))
+    : []
+  return [
+    { key: 'process', fold: true, blocks: process },
+    {
+      key: 'media',
+      fold: false,
+      blocks: media.length ? [{ key: media[0]!.key, items: media }] : [],
+    },
+    {
+      key: 'answer',
+      fold: false,
+      blocks: blocks.value.filter((block) => block.key >= processEnd.value),
+    },
+  ]
+})
+// Bare 原样渲染插槽内容，是不折叠的段的容器
+const Bare: FunctionalComponent = (_, { slots }) => slots.default?.()
+// openGroups 是已展开的步骤组，以组内第一段的序号标识
+const openGroups = ref<number[]>([])
+// toggleGroup 展开或收起步骤组
+function toggleGroup(key: number): void {
+  openGroups.value = openGroups.value.includes(key)
+    ? openGroups.value.filter((item) => item !== key)
+    : [...openGroups.value, key]
+}
 // waiting 表示已提交但还没有收到任何内容
 const waiting = computed(() => props.streaming && props.turn.parts.length === 0)
 const time = computed(() =>
@@ -105,9 +353,15 @@ const fullTime = computed(() =>
     minute: '2-digit',
   }).format(props.turn.created),
 )
-const roleLabel = computed(() => (props.turn.role === 'user' ? t('pg.user') : t('pg.model')))
+// roleLabel 是轮次标签：用户轮次为 User，模型轮次与官网一样所选模型为 agent 时为 Agent
+const roleLabel = computed(() => {
+  if (props.turn.role === 'user') return t('pg.user')
+  return isAgent(playground.currentModel.value) ? t('pg.agent') : t('pg.model')
+})
 // hasThoughtSegment 表示模型轮次单独显示思考段
-const hasThoughtSegment = computed(() => props.turn.role === 'model' && thoughtText.value !== '')
+const hasThoughtSegment = computed(
+  () => props.turn.role === 'model' && !agent.value && thoughtText.value !== '',
+)
 // hasStickyCode 表示回复段含有块级代码标题，供操作栏避让粘性标题而无需全树匹配 :has(.ms-code-block)
 const hasStickyCode = computed(() =>
   answerParts.value.some(
@@ -153,13 +407,24 @@ const awaitingResponse = computed(
     answerParts.value.some((part) => part.functionCall) &&
     !props.responses?.length,
 )
-
-// executionCode 与官网一致：执行结果出错时显示超时或失败说明加错误输出
-function executionCode(result: NonNullable<Part['codeExecutionResult']>): string {
-  if (result.outcome === 'OUTCOME_OK') return result.output ?? ''
-  const reason =
-    result.outcome === 'OUTCOME_DEADLINE_EXCEEDED' ? t('pg.codeTimeout') : t('pg.codeFailed')
-  return `${reason}\n${result.output ?? ''}`
+// turnProcess 是 Agent 模式轮次完成后过程标题的文字与能否折叠：出错为失败、停止为已停止，二者与等待函数响应时不折叠，否则为完成耗时
+const turnProcess = computed(() => {
+  if (processEnd.value === 0 || props.streaming) return undefined
+  if (props.turn.error !== undefined) return { label: t('pg.processFailed'), foldable: false }
+  if (props.turn.finishReason === undefined)
+    return { label: t('pg.processStopped'), foldable: false }
+  return {
+    label: t('pg.processDone').replace('{duration}', runDuration(props.turn.duration ?? 0)),
+    foldable: !awaitingResponse.value,
+  }
+})
+// runDuration 与 dsh 过程标题一样把耗时写为整秒的时、分、秒，不足一秒记为一秒
+function runDuration(ms: number): string {
+  const total = Math.floor(Math.max(1000, ms) / 1000)
+  const hours = Math.floor(total / 3600)
+  let text = hours > 0 ? `${hours}${t('pg.hourUnit')}` : ''
+  if (total >= 60) text += `${Math.floor(total / 60) % 60}${t('pg.minuteUnit')}`
+  return `${text}${total % 60}${t('pg.secondUnit')}`
 }
 
 // responseText 返回已发送的函数响应文本
@@ -204,6 +469,13 @@ function resizeEditor(): void {
 }
 
 // plainText 返回本轮正文的 Markdown 原文
+// renderedText 返回模型轮次各文本段渲染后的文字，按显示顺序以空行连接
+function renderedText(): string {
+  return [...(root.value?.querySelectorAll<HTMLElement>('.answer-text') ?? [])]
+    .map((element) => element.innerText)
+    .join('\n\n')
+}
+
 function plainText(): string {
   return props.turn.role === 'user'
     ? (props.turn.parts.find((part) => part.text)?.text ?? '')
@@ -334,11 +606,12 @@ onActivated(observe)
         <div class="actions-container">
           <div class="actions hover-or-edit">
             <button
-              v-if="!waiting && turn.error === undefined"
+              v-if="turn.error === undefined"
               v-tooltip.below="editing ? t('pg.stopEditing') : t('pg.edit')"
               type="button"
               ms-button
               class="toggle-edit-button ms-button-borderless ms-button-icon"
+              :style="{ visibility: waiting ? 'hidden' : undefined }"
               :aria-label="editing ? t('pg.stopEditing') : t('pg.edit')"
               :aria-disabled="session.running"
               @click="!session.running && startEdit()"
@@ -385,7 +658,7 @@ onActivated(observe)
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     class="ms-menu-item"
-                    @select="copyToClipboard(answer?.innerText ?? plainText())"
+                    @select="copyToClipboard(renderedText() || plainText())"
                   >
                     <UiIcon name="copy" :size="18" />
                     <span class="ms-menu-item-text">{{ t('pg.copyText') }}</span>
@@ -409,68 +682,148 @@ onActivated(observe)
             {{ roleLabel }}<span v-tooltip.below="fullTime" class="timestamp">{{ time }}</span>
           </div>
           <LoadingIndicator v-if="waiting" />
-          <div
-            v-for="(part, partIndex) in answerParts"
-            v-show="!editing || part.text === undefined"
-            :key="partIndex"
+          <button
+            v-if="turnProcess"
+            type="button"
+            class="process-header"
+            :disabled="!turnProcess.foldable"
+            :aria-expanded="turnProcess.foldable ? processOpen : undefined"
+            @click="processOpen = !processOpen"
           >
-            <template v-if="part.inlineData || part.fileData">
-              <img
-                v-if="part.inlineData?.mimeType.startsWith('image/')"
-                class="media-image"
-                :src="dataURL(part.inlineData)"
-                alt=""
-              />
-              <audio
-                v-else-if="part.inlineData?.mimeType.startsWith('audio/')"
-                controls
-                :src="dataURL(part.inlineData)"
-              ></audio>
-              <VideoResult
-                v-else-if="part.inlineData?.mimeType.startsWith('video/')"
-                :src="dataURL(part.inlineData)"
-              />
-              <a
-                v-else-if="part.fileData && !youtubeVideoID(part.fileData.fileUri)"
-                class="file-chip"
-                :href="part.fileData.fileUri"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <UiIcon
-                  :name="driveNames.has(part.fileData.fileUri) ? 'addToDrive' : 'youtube'"
-                  :size="18"
-                />{{ driveNames.get(part.fileData.fileUri) ?? part.fileData.fileUri }}
-              </a>
-              <FileChunk
-                v-else
-                :part="part"
-                :class="{ 'chunk-gap': partIndex < answerParts.length - 1 }"
-              />
-            </template>
-            <FunctionCallChunk
-              v-else-if="part.functionCall"
-              :call="part.functionCall"
-              :response="responseText(part.functionCall)"
-              :awaiting="awaitingResponse"
-              @respond="playground.respond(part.functionCall, $event)"
-            />
-            <CodeBlock
-              v-else-if="part.executableCode"
-              :code="part.executableCode.code"
-              :language="t('pg.executableCode')"
-            />
-            <CodeBlock
-              v-else-if="part.codeExecutionResult"
-              :code="executionCode(part.codeExecutionResult)"
-              :language="t('pg.codeExecutionResult')"
-            />
-          </div>
+            <span class="process-label">{{ turnProcess.label }}</span>
+            <DisclosureChevron
+              v-if="turnProcess.foldable"
+              :open="processOpen"
+              :turn="180"
+              class="process-chevron"
+              ><UiIcon name="chevronDown" :size="14"
+            /></DisclosureChevron>
+          </button>
+          <template v-for="section in sections" :key="section.key">
+            <component :is="section.fold ? UiCollapse : Bare" :open="!folded">
+              <template v-for="block in section.blocks" :key="block.key">
+                <button
+                  v-if="block.group"
+                  type="button"
+                  class="step-group"
+                  :aria-expanded="openGroups.includes(block.key)"
+                  @click="toggleGroup(block.key)"
+                >
+                  <span class="group-leading" aria-hidden="true">
+                    <UiIcon :name="block.group.icon" :size="14" class="group-icon" />
+                    <span class="group-chevron"
+                      ><DisclosureChevron :open="openGroups.includes(block.key)" :turn="180"
+                        ><UiIcon name="chevronDown" :size="16" /></DisclosureChevron
+                    ></span>
+                  </span>
+                  <span class="group-label">{{ block.group.title }}</span>
+                </button>
+                <SegmentRun
+                  v-slot="{ segment, text, key }"
+                  :items="block.items"
+                  :wrap="block.group !== undefined"
+                  :open="openGroups.includes(block.key)"
+                >
+                  <div
+                    v-if="segment.kind === 'text' && turn.role === 'model' && !editing && text"
+                    class="answer-text"
+                  >
+                    <MarkdownView :text="text" :raw="session.rawMode" />
+                  </div>
+                  <div v-else-if="segment.kind === 'thought'" class="step">
+                    <ThoughtStep
+                      :text="segment.text"
+                      :running="streaming && key === segments.length - 1"
+                      :raw="session.rawMode"
+                    />
+                  </div>
+                  <div
+                    v-else-if="
+                      segment.kind === 'part' &&
+                      !pairedResult(segment.index) &&
+                      !(stepImage(segment.index) && !folded)
+                    "
+                    :class="{ step: isStep(segment) }"
+                  >
+                    <template v-if="segment.part.inlineData || segment.part.fileData">
+                      <img
+                        v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
+                        class="media-image"
+                        :src="dataURL(segment.part.inlineData)"
+                        alt=""
+                      />
+                      <audio
+                        v-else-if="segment.part.inlineData?.mimeType.startsWith('audio/')"
+                        controls
+                        :src="dataURL(segment.part.inlineData)"
+                      ></audio>
+                      <VideoResult
+                        v-else-if="segment.part.inlineData?.mimeType.startsWith('video/')"
+                        :src="dataURL(segment.part.inlineData)"
+                      />
+                      <a
+                        v-else-if="
+                          segment.part.fileData && !youtubeVideoID(segment.part.fileData.fileUri)
+                        "
+                        class="file-chip"
+                        :href="segment.part.fileData.fileUri"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <UiIcon
+                          :name="
+                            driveNames.has(segment.part.fileData.fileUri) ? 'addToDrive' : 'youtube'
+                          "
+                          :size="18"
+                        />{{
+                          driveNames.get(segment.part.fileData.fileUri) ??
+                          segment.part.fileData.fileUri
+                        }}
+                      </a>
+                      <FileChunk
+                        v-else
+                        :part="segment.part"
+                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                      />
+                    </template>
+                    <FunctionCallChunk
+                      v-else-if="segment.part.functionCall"
+                      :call="segment.part.functionCall"
+                      :response="responseText(segment.part.functionCall)"
+                      :awaiting="awaitingResponse"
+                      @respond="playground.respond(segment.part.functionCall, $event)"
+                    />
+                    <CodeExecutionChunk
+                      v-else-if="segment.part.executableCode || segment.part.codeExecutionResult"
+                      :code="segment.part.executableCode"
+                      :result="
+                        segment.part.codeExecutionResult ??
+                        answerParts[segment.index + 1]?.codeExecutionResult
+                      "
+                      :images="stepImages(segment.index)"
+                      :running="streaming && segment.index === answerParts.length - 1"
+                    />
+                    <ServerToolChunk
+                      v-else-if="segment.part.toolCall"
+                      :call="segment.part.toolCall"
+                      :response="toolResponse(segment.index)"
+                      :sources="segment.index === lastSearch && !streaming ? sources : []"
+                      :running="streaming"
+                    />
+                    <ServerToolChunk
+                      v-else-if="segment.part.toolResponse"
+                      :call="segment.part.toolResponse"
+                      :response="segment.part.toolResponse"
+                      :sources="[]"
+                      :running="false"
+                    />
+                  </div>
+                </SegmentRun>
+              </template>
+            </component>
+          </template>
           <div v-if="turn.role === 'user' && !editing" class="user-chunk">
             <MarkdownView :text="plainText()" :raw="session.rawMode" />
-          </div>
-          <div v-else-if="turn.role === 'model' && !editing && shownAnswer" ref="answer">
-            <MarkdownView :text="shownAnswer" :raw="session.rawMode" />
           </div>
           <textarea
             v-if="editing"
@@ -561,10 +914,6 @@ onActivated(observe)
   width: 100%;
 }
 
-.chat-turn + .chat-turn {
-  margin-top: 8px;
-}
-
 .chat-turn-container {
   position: relative;
   display: flex;
@@ -636,11 +985,11 @@ onActivated(observe)
 }
 
 .chat-turn-container.model.has-code > .actions-container .actions {
-  right: 8px;
+  transform: translateX(-8px);
 }
 
 .chat-turn-container.user.has-code > .actions-container .actions {
-  right: 20px;
+  transform: translateX(-20px);
 }
 
 .hover-or-edit {
@@ -686,6 +1035,130 @@ onActivated(observe)
 .timestamp::before {
   margin-right: 8px;
   content: '•';
+}
+
+/* step 为步骤行所在的块：相邻步骤间隔 4 px，与正文间隔 12 px，取 dsh 对话流 */
+.step + .step {
+  margin-top: 4px;
+}
+
+.step + .answer-text,
+.answer-text + .step {
+  margin-top: 12px;
+}
+
+/* process-header 为 Agent 模式轮次完成后的过程标题：高度、下边框、字号与箭头取 dsh TurnProcessNodeView，颜色取 AI Studio 主题 */
+.process-header {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 33px;
+  padding: 0 0 8px;
+  border: none;
+  border-bottom: 0.5px solid var(--color-v3-outline-var);
+  background: none;
+  color: var(--color-v3-text-var);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  transition: color 100ms;
+}
+
+.process-header:disabled {
+  cursor: default;
+}
+
+.process-header:hover:not(:disabled) {
+  color: var(--color-v3-text);
+}
+
+.process-header + * {
+  margin-top: 12px;
+}
+
+.process-label {
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-chevron {
+  margin-left: 4px;
+}
+
+/* step-group 为展开过程中的步骤组标题：图标与箭头叠放、悬停或展开时显示箭头，字号与间距取 dsh ChatGroupSeat，颜色取 AI Studio 主题 */
+.step-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-v3-text-var);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 24px;
+  text-align: left;
+  transition: color 100ms;
+}
+
+.step-group:hover,
+.step-group:focus-visible {
+  color: var(--color-v3-text);
+}
+
+.group-leading {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.group-icon {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  transition: opacity 100ms;
+}
+
+.group-chevron {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 100ms;
+}
+
+.group-chevron,
+.step-group:is(:hover, :focus-visible, [aria-expanded='true']) .group-icon {
+  opacity: 0;
+}
+
+.step-group:is(:hover, :focus-visible, [aria-expanded='true']) .group-chevron {
+  opacity: 1;
+}
+
+.group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.answer-text + .step-group,
+.step-group + .answer-text,
+.ui-collapse + .answer-text {
+  margin-top: 12px;
 }
 
 .user-chunk {

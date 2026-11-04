@@ -39,7 +39,9 @@ type responsesRequest struct {
 	Prompt             json.RawMessage   `json:"prompt"`
 	Include            []string          `json:"include"`
 	ServiceTier        string            `json:"service_tier"`
-	ContextManagement  []struct {
+	// MaxToolCalls 是本响应内置工具调用总次数的上限
+	MaxToolCalls      *int64 `json:"max_tool_calls"`
+	ContextManagement []struct {
 		Type             string `json:"type"`
 		CompactThreshold *int64 `json:"compact_threshold"`
 	} `json:"context_management"`
@@ -67,11 +69,12 @@ type responsesTool struct {
 	Format            json.RawMessage `json:"format,omitempty"`
 	Strict            *bool           `json:"strict,omitempty"`
 	Tools             []responsesTool `json:"tools,omitempty"`
-	// Size、Quality、OutputFormat 与 InputImageMask 是 image_generation 工具的图片尺寸、质量、输出格式与编辑遮罩
-	Size           string              `json:"size,omitempty"`
-	Quality        string              `json:"quality,omitempty"`
-	OutputFormat   string              `json:"output_format,omitempty"`
-	InputImageMask *responsesImageMask `json:"input_image_mask,omitempty"`
+	// Size、Quality、OutputFormat、OutputCompression 与 InputImageMask 是 image_generation 工具的图片尺寸、质量、输出格式、JPEG 压缩级别与编辑遮罩
+	Size              string              `json:"size,omitempty"`
+	Quality           string              `json:"quality,omitempty"`
+	OutputFormat      string              `json:"output_format,omitempty"`
+	OutputCompression *int                `json:"output_compression,omitempty"`
+	InputImageMask    *responsesImageMask `json:"input_image_mask,omitempty"`
 	// DisplayWidth、DisplayHeight 与 Environment 是 computer_use_preview 工具的屏幕尺寸与运行环境，shell 工具的 environment 为对象
 	DisplayWidth  int64           `json:"display_width,omitempty"`
 	DisplayHeight int64           `json:"display_height,omitempty"`
@@ -132,7 +135,9 @@ type responseRecord struct {
 	Output     []storedItem
 	Background bool
 	// Stream 为后台流式响应的事件记录
-	Stream *streamLog
+	Stream *streamLog `json:"-"`
+	// Include 是创建请求的 include，查询时与查询参数的 include 一起决定输出项的可选字段
+	Include []string
 }
 
 // storedItem 是带 ID 的 Responses 输入或输出项
@@ -151,16 +156,76 @@ type responseHistory struct {
 	Contents           []aistudio.Content
 	InlineInstructions []string
 	Items              []storedItem
+	// Upstream、AccountID 与 Agent 是续接起点为 agent 后台任务时的上游 interaction ID、所属账户与 agent
+	Upstream  string
+	AccountID string
+	Agent     string
+}
+
+// StateStore 持久保存续接节点，服务重启后由 Load 按保存顺序读回
+type StateStore interface {
+	Load() []SavedState
+	Save(saved []SavedState, removed []string)
+}
+
+// SavedState 是写入 StateStore 的一个续接节点
+type SavedState struct {
+	ID   string
+	Data []byte
 }
 
 type responseStateStore struct {
-	mu     sync.Mutex
-	states map[string]responseState
-	order  []string
+	mu      sync.Mutex
+	states  map[string]responseState
+	order   []string
+	persist StateStore
 }
 
-func newResponseStateStore() *responseStateStore {
-	return &responseStateStore{states: make(map[string]responseState, responseStateCapacity)}
+// newResponseStateStore 创建续接节点存储，persist 非空时读回其中保存的节点并把之后的变化写入它
+func newResponseStateStore(persist StateStore) *responseStateStore {
+	store := &responseStateStore{states: make(map[string]responseState, responseStateCapacity), persist: persist}
+	if persist == nil {
+		return store
+	}
+	for _, saved := range persist.Load() {
+		var state responseState
+		if json.Unmarshal(saved.Data, &state) == nil {
+			store.states[saved.ID] = state
+			store.order = append(store.order, saved.ID)
+		}
+	}
+	return store
+}
+
+// persistLocked 把仍存在且已结束的节点写入 persist，并删除已移除的节点；进行中的后台响应与交互在服务重启后不能继续，只保存终态
+func (store *responseStateStore) persistLocked(saved, removed []string) {
+	if store.persist == nil {
+		return
+	}
+	states := make([]SavedState, 0, len(saved))
+	for _, id := range saved {
+		if state, exists := store.states[id]; exists && state.finished() {
+			data, _ := json.Marshal(state)
+			states = append(states, SavedState{ID: id, Data: data})
+		}
+	}
+	store.persist.Save(states, removed)
+}
+
+// finished 返回节点的响应或交互是否已不在进行中
+func (state responseState) finished() bool {
+	var object json.RawMessage
+	switch {
+	case state.Record != nil:
+		object = state.Record.Shell
+	case state.Interaction != nil:
+		object = state.Interaction.object
+	}
+	var status struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(object, &status)
+	return status.Status != "queued" && status.Status != "in_progress"
 }
 
 func (store *responseStateStore) Load(id string) (responseHistory, bool) {
@@ -169,6 +234,9 @@ func (store *responseStateStore) Load(id string) (responseHistory, bool) {
 	history := responseHistory{ID: id, Contents: make([]aistudio.Content, 0), InlineInstructions: make([]string, 0)}
 	if state, exists := store.states[id]; exists {
 		history.Interaction = state.Interaction != nil
+		if state.Interaction != nil {
+			history.Upstream, history.AccountID, history.Agent = state.Interaction.upstream, state.Interaction.account, state.Interaction.agent
+		}
 		if state.Record != nil {
 			history.Model = state.Record.Model
 		}
@@ -214,16 +282,20 @@ func (store *responseStateStore) Store(id string, previous responseHistory, resu
 		store.order = append(store.order, id)
 	}
 	store.states[id] = state
+	saved, removed := []string{id}, []string(nil)
 	for len(store.order) > responseStateCapacity {
-		id := store.order[0]
+		evicted := store.order[0]
 		store.order = store.order[1:]
-		store.removeLocked(id)
+		saved = append(saved, store.removeLocked(evicted)...)
+		removed = append(removed, evicted)
 	}
+	store.persistLocked(saved, removed)
 }
 
-// removeLocked 删除一个节点，并把它的上下文并入以它为续接起点的子节点
-func (store *responseStateStore) removeLocked(id string) {
+// removeLocked 删除一个节点，并把它的上下文并入以它为续接起点的子节点，返回这些子节点的 ID
+func (store *responseStateStore) removeLocked(id string) []string {
 	parent := store.states[id]
+	var children []string
 	for childID, child := range store.states {
 		if child.ParentID != id {
 			continue
@@ -237,12 +309,14 @@ func (store *responseStateStore) removeLocked(id string) {
 			child.Record = &merged
 		}
 		store.states[childID] = child
+		children = append(children, childID)
 	}
 	delete(store.states, id)
+	return children
 }
 
 // Response 返回 Responses 接口保存的完整响应对象及其是否以后台模式创建
-func (store *responseStateStore) Response(id string) (json.RawMessage, bool, bool) {
+func (store *responseStateStore) Response(id string, include []string) (json.RawMessage, bool, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	state, exists := store.states[id]
@@ -251,9 +325,12 @@ func (store *responseStateStore) Response(id string) (json.RawMessage, bool, boo
 	}
 	var shell map[string]json.RawMessage
 	_ = json.Unmarshal(state.Record.Shell, &shell)
-	output := make([]json.RawMessage, 0, len(state.Record.Output))
+	include = slices.Concat(state.Record.Include, include)
+	output := make([]any, 0, len(state.Record.Output))
 	for _, item := range state.Record.Output {
-		output = append(output, item.Raw)
+		var object map[string]any
+		_ = json.Unmarshal(item.Raw, &object)
+		output = append(output, responseIncludeView(object, include))
 	}
 	shell["output"], _ = json.Marshal(output)
 	encoded, _ := json.Marshal(officialOrder("responses", shell))
@@ -305,7 +382,7 @@ func (store *responseStateStore) Delete(id string, interaction bool) bool {
 	if state, exists := store.states[id]; !exists || (state.Interaction != nil) != interaction {
 		return false
 	}
-	store.removeLocked(id)
+	store.persistLocked(store.removeLocked(id), []string{id})
 	store.order = slices.DeleteFunc(store.order, func(value string) bool { return value == id })
 	return true
 }
@@ -412,7 +489,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	events, err := s.service.Generate(r.Context(), generateRequest)
 	if err == nil && request.Stream {
-		events, err = awaitStreamStart(r.Context(), events)
+		events, _, err = awaitStreamStart(r.Context(), events)
 	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -440,7 +517,44 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if request.storesResponse() {
 		s.storeResponse(responseID, request, prepared, result, response)
 	}
-	writeJSON(w, http.StatusOK, officialOrder("responses", response))
+	writeJSON(w, http.StatusOK, officialOrder("responses", responseView(response, request.Include)))
+}
+
+// responseView 返回按 include 裁剪输出项可选字段后的响应对象
+func responseView(response map[string]any, include []string) map[string]any {
+	output, ok := response["output"].([]any)
+	if !ok {
+		return response
+	}
+	view := maps.Clone(response)
+	items := make([]any, 0, len(output))
+	for _, item := range output {
+		object, _ := item.(map[string]any)
+		items = append(items, responseIncludeView(object, include))
+	}
+	view["output"] = items
+	return view
+}
+
+// responseIncludeView 返回按 include 输出的项：没有 code_interpreter_call.outputs 时代码执行项的 outputs 为 null，没有 web_search_call.action.sources 时搜索项的 action 不带 sources
+func responseIncludeView(item map[string]any, include []string) map[string]any {
+	switch item["type"] {
+	case "code_interpreter_call":
+		if item["outputs"] != nil && !slices.Contains(include, "code_interpreter_call.outputs") {
+			view := maps.Clone(item)
+			view["outputs"] = nil
+			return view
+		}
+	case "web_search_call":
+		action, _ := item["action"].(map[string]any)
+		if _, ok := action["sources"]; ok && !slices.Contains(include, "web_search_call.action.sources") {
+			view, trimmed := maps.Clone(item), maps.Clone(action)
+			delete(trimmed, "sources")
+			view["action"] = trimmed
+			return view
+		}
+	}
+	return item
 }
 
 // responsesPreparation 是转换后的生成请求，以及保存续接节点所需的前序上下文与本次输入
@@ -490,6 +604,12 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	if err != nil {
 		return responsesPreparation{}, err
 	}
+	for index, tool := range request.Tools {
+		if tool.Type == "function" && tool.Strict == nil {
+			strict := tool.strict()
+			request.Tools[index].Strict = &strict
+		}
+	}
 	additionalTools, _ := responsesInputConfig(input)
 	tools := slices.Concat(request.Tools, additionalTools)
 	rewritten, approved, err := s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input, execute)
@@ -510,6 +630,11 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	generateRequest = s.prepareSearch(generateRequest)
 	if err := inlineRemoteMedia(ctx, generateRequest.Contents); err != nil {
 		return responsesPreparation{}, err
+	}
+	if tool := imageGenerationTool(request.Tools); tool != nil {
+		if _, _, err := openAIImageEncoding(tool.OutputFormat, tool.OutputCompression); err != nil {
+			return responsesPreparation{}, fmt.Errorf("image_generation: %w", err)
+		}
 	}
 	if tool := imageGenerationTool(request.Tools); tool != nil && (tool.Size != "" || tool.Quality != "") {
 		models, err := s.service.Models(ctx)
@@ -573,7 +698,7 @@ func (s *server) storeResponse(id string, request responsesRequest, prepared res
 	shell := maps.Clone(response)
 	delete(shell, "output")
 	encoded, _ := json.Marshal(shell)
-	record := &responseRecord{Model: request.Model, Shell: encoded, Input: prepared.input, Background: request.Background, Stream: prepared.stream}
+	record := &responseRecord{Model: request.Model, Shell: encoded, Input: prepared.input, Background: request.Background, Stream: prepared.stream, Include: request.Include}
 	for _, item := range response["output"].([]any) {
 		object, _ := item.(map[string]any)
 		if itemID, _ := object["id"].(string); itemID != "" {
@@ -658,6 +783,9 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	tools, err := mapResponsesTools(slices.Concat(request.Tools, additionalTools), request.ToolChoice)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
+	}
+	if request.MaxToolCalls != nil && (len(tools.Google) > 0 || len(tools.MCPServers) > 0) {
+		instructions = append(instructions, fmt.Sprintf("Make at most %d built-in tool calls in this response.", *request.MaxToolCalls))
 	}
 	var files []aistudio.Part
 	for _, tool := range request.Tools {
@@ -994,6 +1122,53 @@ func computerScreenshot(raw json.RawMessage) ([]aistudio.Part, error) {
 	return nil, nil
 }
 
+// strict 返回函数工具是否按 strict 校验：省略 strict 时参数 Schema 已满足 strict 要求即按 strict 处理
+func (tool responsesTool) strict() bool {
+	if tool.Strict != nil {
+		return *tool.Strict
+	}
+	var schema any
+	return json.Unmarshal(tool.Parameters, &schema) == nil && strictCompatible(schema)
+}
+
+// strictCompatible 表示 Schema 满足 strict 要求：每个对象设 additionalProperties 为 false 并把全部属性列为必填，且不含 strict 不支持的组合关键字
+func strictCompatible(schema any) bool {
+	value, ok := schema.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, keyword := range []string{"allOf", "oneOf", "not", "if", "then", "else", "patternProperties", "dependentRequired", "dependentSchemas"} {
+		if _, ok := value[keyword]; ok {
+			return false
+		}
+	}
+	properties, _ := value["properties"].(map[string]any)
+	if value["type"] == "object" || properties != nil {
+		required, _ := value["required"].([]any)
+		if value["additionalProperties"] != false || len(required) != len(properties) {
+			return false
+		}
+		for _, name := range required {
+			if key, _ := name.(string); properties[key] == nil {
+				return false
+			}
+		}
+	}
+	children := slices.Collect(maps.Values(properties))
+	for _, key := range []string{"$defs", "definitions"} {
+		if definitions, ok := value[key].(map[string]any); ok {
+			children = slices.AppendSeq(children, maps.Values(definitions))
+		}
+	}
+	if anyOf, ok := value["anyOf"].([]any); ok {
+		children = append(children, anyOf...)
+	}
+	if items, ok := value["items"]; ok {
+		children = append(children, items)
+	}
+	return !slices.ContainsFunc(children, func(child any) bool { return !strictCompatible(child) })
+}
+
 func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
 	names := make(map[string]bool)
@@ -1017,7 +1192,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		return addDeclaration(aistudio.FunctionDeclaration{
-			Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.Strict != nil && *tool.Strict,
+			Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.strict(),
 		})
 	}
 	for _, tool := range tools {
@@ -1093,7 +1268,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 		mapped = restrictAllowedTools(mapped, allowed)
 	}
 	mapped.ToolConfig = config
-	mapped.ToolConfig.ServerSideInvocations = len(mapped.MCPServers) > 0
+	mapped.ToolConfig.ServerSideInvocations = len(mapped.MCPServers) > 0 || slices.Contains(mapped.Google, "google_search")
 	return mapped, nil
 }
 
@@ -1133,7 +1308,7 @@ func buildResponsesObject(id string, created int64, request responsesRequest, re
 	writer := newResponsesWriter(nil, id, created, request)
 	writer.prefix = prefix
 	for _, event := range result.events {
-		if err := writer.receive(event); err != nil {
+		if err := writer.live(event); err != nil {
 			return nil, err
 		}
 	}
@@ -1190,6 +1365,8 @@ func responseShell(id string, created int64, status string, request responsesReq
 		"top_p":                request.TopP,
 		"truncation":           truncation,
 		"max_output_tokens":    request.MaxOutputTokens,
+		"max_tool_calls":       request.MaxToolCalls,
+		"service_tier":         cmp.Or(request.ServiceTier, "auto"),
 		"background":           request.Background,
 		"usage":                nil,
 	}
@@ -1264,7 +1441,7 @@ func responsesNamespace(tools []responsesTool, name string) string {
 }
 
 func responseImageGenerationItem(responseID string, index int, media aistudio.Blob) (map[string]any, error) {
-	if !strings.HasPrefix(media.MIME, "image/") || len(media.Data) == 0 {
+	if !strings.HasPrefix(media.MIME, "image/") {
 		return nil, fmt.Errorf("Responses API cannot represent media %q without inline image data", media.MIME)
 	}
 	return map[string]any{
@@ -1301,6 +1478,10 @@ type responsesOutput struct {
 	texts     map[string]*strings.Builder
 	starts    map[string]int
 	queries   map[string]struct{}
+	// search 是最后一个 search 动作，请求 include 来源时写入其后到达的搜索来源
+	search map[string]any
+	// pages 是已写出 open_page 动作的网址
+	pages     map[string]struct{}
 	text      int
 	codes     int
 	images    int
@@ -1318,7 +1499,7 @@ func (o *responsesOutput) itemID(prefix string) string {
 	return fmt.Sprintf("%s%s_%d", prefix, o.id, len(o.items))
 }
 
-// add 处理一个事件，返回新增的输出项；reasoning 与正文接在同类项之后时并入该项，否则开始新项；搜索结果中出现新查询时新增一个 web_search_call 项
+// add 处理一个事件，返回新增的输出项；reasoning 与正文接在同类项之后时并入该项，否则开始新项；搜索调用或搜索结果中出现新查询、读取了新网址时新增一个 web_search_call 项
 func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 	var added []map[string]any
 	push := func(item map[string]any) {
@@ -1371,8 +1552,10 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 			break
 		}
 		media := *event.InlineData
-		if tool := imageGenerationTool(o.request.Tools); tool != nil {
-			converted, err := convertImage(media, "image/"+cmp.Or(tool.OutputFormat, "png"))
+		if tool := imageGenerationTool(o.request.Tools); tool != nil && strings.HasPrefix(media.MIME, "image/") {
+			size, _ := openAIImageSize(tool.Size)
+			format, compression, _ := openAIImageEncoding(tool.OutputFormat, tool.OutputCompression)
+			converted, _, err := fitImage(media, size, format, compression)
 			if err != nil {
 				return nil, err
 			}
@@ -1409,8 +1592,12 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		}
 		o.code = nil
 	case aistudio.EventServerToolCall:
-		if step := event.ToolCall; step.Type == mcpToolType {
+		step := event.ToolCall
+		switch {
+		case step.Type == mcpToolType:
 			o.mcpCalls[step.ID] = *step
+		case groundingToolTypes[step.Type] == "google_search" && responsesUsesWebSearch(o.request.Tools):
+			o.addSearch(searchStepQueries(*step), nil, push)
 		}
 	case aistudio.EventServerToolResponse:
 		step := event.ToolResponse
@@ -1436,27 +1623,58 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		o.citations = append(o.citations, *event.Citation)
 	case aistudio.EventGrounding:
 		o.citations = append(o.citations, groundingCitations(*event.Grounding)...)
-		if !responsesUsesWebSearch(o.request.Tools) {
-			break
-		}
-		var queries []any
-		for _, query := range slices.Concat(event.Grounding.WebSearchQueries, event.Grounding.ImageSearchQueries) {
-			if _, exists := o.queries[query]; !exists {
-				o.queries[query] = struct{}{}
-				queries = append(queries, query)
+		for _, page := range event.Grounding.URLContext {
+			if _, exists := o.pages[page.RetrievedURL]; exists {
+				continue
 			}
+			o.pages[page.RetrievedURL] = struct{}{}
+			status := "completed"
+			if page.Status != "URL_RETRIEVAL_STATUS_SUCCESS" {
+				status = "failed"
+			}
+			push(map[string]any{"id": fmt.Sprintf("ws_%s_%d", o.id, o.searches), "type": "web_search_call", "status": status, "action": map[string]any{"type": "open_page", "url": page.RetrievedURL}})
+			o.searches++
 		}
-		if len(queries) == 0 {
-			break
+		if responsesUsesWebSearch(o.request.Tools) {
+			o.addSearch(slices.Concat(event.Grounding.WebSearchQueries, event.Grounding.ImageSearchQueries), event.Grounding, push)
 		}
-		action := map[string]any{"type": "search", "query": queries[0], "queries": queries}
-		if slices.Contains(o.request.Include, "web_search_call.action.sources") {
-			action["sources"] = responseWebSearchSources(*event.Grounding)
-		}
-		push(map[string]any{"id": fmt.Sprintf("ws_%s_%d", o.id, o.searches), "type": "web_search_call", "status": "completed", "action": action})
-		o.searches++
 	}
 	return added, nil
+}
+
+// addSearch 为未出现过的查询新增一个 search 动作的 web_search_call 项，grounding 的来源按 URL 去重并入最后一个 search 动作
+func (o *responsesOutput) addSearch(queries []string, grounding *aistudio.GroundingMetadata, push func(map[string]any)) {
+	var fresh []any
+	for _, query := range queries {
+		if _, exists := o.queries[query]; !exists {
+			o.queries[query] = struct{}{}
+			fresh = append(fresh, query)
+		}
+	}
+	if len(fresh) > 0 {
+		o.search = map[string]any{"type": "search", "query": fresh[0], "queries": fresh}
+		push(map[string]any{"id": fmt.Sprintf("ws_%s_%d", o.id, o.searches), "type": "web_search_call", "status": "completed", "action": o.search})
+		o.searches++
+	}
+	if grounding == nil || o.search == nil {
+		return
+	}
+	sources, _ := o.search["sources"].([]map[string]any)
+	for _, source := range responseWebSearchSources(*grounding) {
+		if !slices.ContainsFunc(sources, func(known map[string]any) bool { return known["url"] == source["url"] }) {
+			sources = append(sources, source)
+		}
+	}
+	o.search["sources"] = sources
+}
+
+// searchStepQueries 返回网页或图片搜索调用步骤参数中的查询
+func searchStepQueries(step aistudio.ServerToolStep) []string {
+	var args struct {
+		Queries []string `json:"queries"`
+	}
+	json.Unmarshal(step.Data, &args)
+	return args.Queries
 }
 
 // annotate 写入 message 项正文的 url_citation 注释并返回：有区间的引用按全文字节区间归入所在项并换算为字符下标，没有区间的引用只写入最后结束的 message 项
@@ -1490,8 +1708,8 @@ type responsesStreamWriter struct {
 	output   *responsesOutput
 	open     []map[string]any
 	code     map[string]any
-	search   bool
-	held     []aistudio.Event
+	// searches 是请求 include 来源、来源尚未到达的 search 动作 web_search_call 项，收到 grounding 或生成结束时完成
+	searches []map[string]any
 	// prefix 是生成前得到的 compaction 项与批准后执行的 mcp_call 项，排在输出首位
 	prefix []map[string]any
 }
@@ -1504,14 +1722,14 @@ func outputPrefix(compaction map[string]any, prepared responsesPreparation) []ma
 	return append([]map[string]any{compaction}, prepared.approved...)
 }
 
-// newResponsesWriter 返回 Responses 输出写出器，声明搜索时正文等到搜索结果之后再写出
+// newResponsesWriter 返回 Responses 输出写出器
 func newResponsesWriter(w http.ResponseWriter, id string, created int64, request responsesRequest) *responsesStreamWriter {
 	additional, _ := responsesInputConfig(request.Input)
 	return &responsesStreamWriter{
-		w: w, id: id, created: created, request: request, search: responsesUsesWebSearch(request.Tools),
+		w: w, id: id, created: created, request: request,
 		output: &responsesOutput{
 			id: id, request: request, tools: slices.Concat(request.Tools, additional), texts: make(map[string]*strings.Builder),
-			starts: make(map[string]int), queries: make(map[string]struct{}), mcpCalls: make(map[string]aistudio.ServerToolStep),
+			starts: make(map[string]int), queries: make(map[string]struct{}), pages: make(map[string]struct{}), mcpCalls: make(map[string]aistudio.ServerToolStep),
 		},
 	}
 }
@@ -1547,10 +1765,9 @@ func (s *server) streamOutput(ctx context.Context, writer *responsesStreamWriter
 			return err
 		}
 	}
-	result, err := consumeStreamEvents(ctx, events, writer.receive, func() error { return writeSSEHeartbeat(writer.w) })
+	result, err := consumeStreamEvents(ctx, events, writer.live, func() error { return writeSSEHeartbeat(writer.w) })
 	if err != nil {
 		if report(err) {
-			_ = writer.release()
 			_ = writer.failed(err)
 		}
 		return err
@@ -1572,6 +1789,12 @@ func (s *server) streamOutput(ctx context.Context, writer *responsesStreamWriter
 }
 
 func (writer *responsesStreamWriter) emit(eventType string, payload map[string]any) error {
+	if item, ok := payload["item"].(map[string]any); ok {
+		payload["item"] = responseIncludeView(item, writer.request.Include)
+	}
+	if response, ok := payload["response"].(map[string]any); ok {
+		payload["response"] = responseView(response, writer.request.Include)
+	}
 	payload["type"] = eventType
 	payload["sequence_number"] = writer.sequence
 	writer.sequence++
@@ -1579,36 +1802,6 @@ func (writer *responsesStreamWriter) emit(eventType string, payload map[string]a
 		return nil
 	}
 	return writeSSE(writer.w, eventType, officialOrder("responses", payload))
-}
-
-// receive 写出一个事件；声明搜索时从首个正文起暂存事件，带查询的搜索结果或结束事件到达后先写出它再补发暂存的事件
-func (writer *responsesStreamWriter) receive(event aistudio.Event) error {
-	if !writer.search {
-		return writer.live(event)
-	}
-	switch {
-	case event.Kind == aistudio.EventFinish || event.Kind == aistudio.EventGrounding && len(event.Grounding.WebSearchQueries) > 0:
-		if err := writer.live(event); err != nil {
-			return err
-		}
-		return writer.release()
-	case len(writer.held) > 0 || event.Kind == aistudio.EventText:
-		writer.held = append(writer.held, event)
-		return nil
-	}
-	return writer.live(event)
-}
-
-// release 结束暂存并补发暂存的事件
-func (writer *responsesStreamWriter) release() error {
-	held := writer.held
-	writer.search, writer.held = false, nil
-	for _, event := range held {
-		if err := writer.live(event); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // index 返回输出项在响应 output 中的位置
@@ -1651,6 +1844,8 @@ func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 		return writer.emit("response.output_text.delta", map[string]any{
 			"item_id": writer.output.message["id"], "output_index": writer.index(writer.output.message), "content_index": 0, "delta": event.Text, "logprobs": []any{},
 		})
+	case aistudio.EventGrounding:
+		return writer.finishSearches()
 	case aistudio.EventCodeExecutionResult:
 		if writer.code == nil || writer.output.code != nil {
 			return nil
@@ -1723,12 +1918,17 @@ func (writer *responsesStreamWriter) added(item map[string]any) error {
 		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": pending}); err != nil {
 			return err
 		}
-		for _, stage := range []string{"in_progress", "searching", "completed"} {
+		for _, stage := range []string{"in_progress", "searching"} {
 			if err := writer.emit("response.web_search_call."+stage, map[string]any{"item_id": item["id"], "output_index": index}); err != nil {
 				return err
 			}
 		}
-		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
+		action, _ := item["action"].(map[string]any)
+		if _, sourced := action["sources"]; action["type"] == "search" && !sourced && slices.Contains(writer.request.Include, "web_search_call.action.sources") {
+			writer.searches = append(writer.searches, item)
+			return nil
+		}
+		return writer.finishSearch(item, index)
 	case item["type"] == "mcp_call":
 		return writer.mcpCall(item, index)
 	case item["type"] == "mcp_approval_request":
@@ -1858,12 +2058,40 @@ func (writer *responsesStreamWriter) complete(final bool) error {
 			return err
 		}
 	}
-	if final && writer.code != nil {
+	if !final {
+		return nil
+	}
+	if err := writer.finishSearches(); err != nil {
+		return err
+	}
+	if writer.code != nil {
 		code := writer.code
 		writer.code = nil
 		return writer.emit("response.output_item.done", map[string]any{"output_index": writer.index(code), "item": code})
 	}
 	return nil
+}
+
+// finishSearches 完成等待来源的搜索项
+func (writer *responsesStreamWriter) finishSearches() error {
+	searches := writer.searches
+	writer.searches = nil
+	for _, item := range searches {
+		if err := writer.finishSearch(item, writer.index(item)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finishSearch 写出搜索项的 completed 与 done 事件，失败的搜索项只写 done
+func (writer *responsesStreamWriter) finishSearch(item map[string]any, index int) error {
+	if item["status"] != "failed" {
+		if err := writer.emit("response.web_search_call.completed", map[string]any{"item_id": item["id"], "output_index": index}); err != nil {
+			return err
+		}
+	}
+	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
 }
 
 // response 返回携带已累积输出项的完整响应对象
@@ -1879,7 +2107,10 @@ func (writer *responsesStreamWriter) response(result generationResult) map[strin
 		incompleteReason = "content_filter"
 	}
 	response := responseShell(writer.id, writer.created, status, writer.request)
-	response["completed_at"] = time.Now().Unix()
+	response["service_tier"] = openAIResponseServiceTier(result.usage)
+	if status == "completed" {
+		response["completed_at"] = time.Now().Unix()
+	}
 	if status == "incomplete" {
 		response["incomplete_details"] = map[string]any{"reason": incompleteReason}
 	}

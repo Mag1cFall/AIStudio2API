@@ -39,7 +39,9 @@ function close(): void {
         kind="chat"
         side-by-side
         :has-content="session.turns.length > 0"
+        :agent-model="session.settings.agentModel"
         @select="pane.selectModel($event.id)"
+        @agent-model="session.settings.agentModel = $event"
       />
       <span v-if="tokens" class="token-count">{{ tokens }}</span>
       <button

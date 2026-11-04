@@ -60,7 +60,8 @@ func (s *App) popupTray(tray *application.SystemTray, x, y int) {
 	window := s.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "tray", Title: "AIStudio2API", Width: 260, Height: 148,
 		Frameless: true, DisableResize: true, AlwaysOnTop: true, Hidden: true,
-		HTML: strings.Replace(trayPage, "__MENU__", string(data), 1),
+		HTML:  strings.Replace(trayPage, "__MENU__", string(data), 1),
+		Linux: application.LinuxWindow{WebviewGpuPolicy: application.WebviewGpuPolicyNever},
 	})
 	s.mu.Lock()
 	s.menu = window

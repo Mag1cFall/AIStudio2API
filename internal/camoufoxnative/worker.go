@@ -2,9 +2,11 @@ package camoufoxnative
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,17 +23,18 @@ import (
 
 const aiStudioOrigin = "https://aistudio.google.com"
 
+// generateContentPath 是官网 GenerateContent 的 RPC 路径
 const generateContentPath = "/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/GenerateContent"
 
-// requestBodyLimit 为 bootstrap 期间 BiDi 数据收集器保存的单个请求正文上限
-const requestBodyLimit = 20_000_000
+// collectedBodyLimit 为 BiDi 数据收集器保存的单个正文上限
+const collectedBodyLimit = 20_000_000
 
+// publicHeaderNames 是页面 MakerSuite 请求共用的公共头，x-goog-ext-519733851-bin 由页面 GetLoggingContext 响应得出
 var publicHeaderNames = []string{
 	"x-goog-api-key",
 	"x-goog-authuser",
 	"x-user-agent",
 	"x-aistudio-visit-id",
-	"x-goog-ext-519733851-bin",
 	"user-agent",
 }
 
@@ -47,6 +50,30 @@ type Worker struct {
 	state     State
 	closed    bool
 	cacheLock *flock.Flock
+	// cookieOrder 是启动时写入浏览器的各 Cookie 的序号
+	cookieOrder map[cookieKey]int
+	// pageCatalog 是页面载入时目录 RPC 的响应正文
+	pageCatalog PageCatalog
+	// options 是启动选项，重新载入页面时沿用
+	options Options
+	// tabs 是有进行中受保护请求或已被替换的标签页，键为标签页的 context
+	tabs map[string]*tabUse
+	// chats 是可运行界面对话的标签页，第一个是当前页面所在的标签页
+	chats []*chatTab
+	// selected 是浏览器窗口中选中的标签页
+	selected string
+	// inputMu 串行化页面输入与标签页切换，同一时刻只有一个标签页接收指针与输入
+	inputMu sync.Mutex
+	// frameMu 保护 frameBoosts 与刷新帧率的切换
+	frameMu sync.Mutex
+	// frameBoosts 是进行中的界面操作数，大于 0 时页面以 interactiveFrameRate 刷新
+	frameBoosts int
+}
+
+// tabUse 是一个标签页中进行中的受保护请求数，retired 表示该标签页已被重新载入的页面替换
+type tabUse struct {
+	requests int
+	retired  bool
 }
 
 // Start 启动隔离 Camoufox 并完成一次官网 WAA bootstrap
@@ -57,9 +84,6 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	}
 	if options.Model == "" {
 		return nil, errors.New("WAA bootstrap 缺少实时目录聊天模型")
-	}
-	if options.BootstrapPrompt == "" {
-		options.BootstrapPrompt = DefaultBootstrapPrompt
 	}
 	options.reportStartup(StartupPreparingBrowser)
 	ffVersion := camoufoxFirefoxMajor
@@ -72,7 +96,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 		return nil, err
 	}
 	options.CacheDirectory = cacheDirectory
-	worker := &Worker{cacheLock: cacheLock}
+	worker := &Worker{cacheLock: cacheLock, options: options, tabs: make(map[string]*tabUse)}
 	failed := true
 	defer func() {
 		if failed {
@@ -105,6 +129,9 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 
 // browserStartupTimeout 为 Camoufox 完成启动并响应 session.new 的最长等待
 const browserStartupTimeout = 30 * time.Second
+
+// pageReleaseTimeout 为页面载入结束后移除载入期间 BiDi 资源的期限
+const pageReleaseTimeout = 10 * time.Second
 
 // errBrowserStartupStalled 表示 Camoufox 未在 browserStartupTimeout 内完成启动
 var errBrowserStartupStalled = errors.New("Camoufox 启动未完成")
@@ -192,13 +219,106 @@ func (worker *Worker) placeWindow(ctx context.Context) error {
 
 // stopRendering 经浏览器界面层关闭当前标签页的 renderLayers，标签页不再光栅化与合成，页面的可见状态、焦点、动画帧与定时器不变
 func (worker *Worker) stopRendering(ctx context.Context) error {
+	_, err := worker.chromeEvaluate(ctx, "gBrowser.selectedBrowser.renderLayers = false")
+	return err
+}
+
+// interactiveFrameRate 是无头 Worker 的软件 vsync 频率，界面操作期间页面按此频率刷新，与官网页面在 60 Hz 显示器上相同
+const interactiveFrameRate = 60
+
+// idleFrameDivisor 是无头 Worker 空闲时的 vsync 分频，页面每秒刷新 1 次
+const idleFrameDivisor = interactiveFrameRate
+
+// boostFrames 在无头 Worker 的界面操作期间把 vsync 分频设为 1，页面从下一次 vsync 起按 interactiveFrameRate 刷新，返回的函数结束本次操作，全部操作结束后恢复 idleFrameDivisor
+func (worker *Worker) boostFrames(ctx context.Context) (func(), error) {
+	if !worker.options.Headless || worker.options.liveView {
+		return func() {}, nil
+	}
+	worker.frameMu.Lock()
+	defer worker.frameMu.Unlock()
+	if worker.frameBoosts == 0 {
+		if _, err := worker.chromeEvaluate(ctx, "Services.prefs.setIntPref('gfx.display.frame-rate-divisor', 1)"); err != nil {
+			return nil, fmt.Errorf("提高 Camoufox 刷新帧率: %w", err)
+		}
+	}
+	worker.frameBoosts++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			worker.frameMu.Lock()
+			defer worker.frameMu.Unlock()
+			worker.frameBoosts--
+			if worker.frameBoosts > 0 {
+				return
+			}
+			restoreCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := worker.chromeEvaluate(restoreCtx, fmt.Sprintf("Services.prefs.setIntPref('gfx.display.frame-rate-divisor', %d)", idleFrameDivisor)); err != nil {
+				slog.Warn("恢复 Camoufox 刷新帧率失败", "error", err)
+			}
+		})
+	}, nil
+}
+
+// browserWindowURL 是浏览器主窗口界面层文档的地址
+const browserWindowURL = "chrome://browser/content/browser.xhtml"
+
+// chromeEvaluate 在浏览器主窗口的界面层执行表达式
+func (worker *Worker) chromeEvaluate(ctx context.Context, expression string) (map[string]any, error) {
 	tree, err := worker.client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0, "moz:scope": "chrome"})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	chrome := tree["contexts"].([]any)[0].(map[string]any)["context"].(string)
-	_, err = worker.client.evaluate(ctx, chrome, "gBrowser.selectedBrowser.renderLayers = false")
-	return err
+	contexts, _ := tree["contexts"].([]any)
+	for _, item := range contexts {
+		window, _ := item.(map[string]any)
+		if window["url"] == browserWindowURL {
+			return worker.client.evaluate(ctx, window["context"].(string), expression)
+		}
+	}
+	return nil, errors.New("Camoufox BiDi 没有浏览器主窗口")
+}
+
+// selectTabExpression 选中 WebDriver BiDi context 为 %q 的标签页
+const selectTabExpression = `(() => {
+  const { NavigableManager } = ChromeUtils.importESModule("chrome://remote/content/shared/NavigableManager.sys.mjs");
+  gBrowser.selectedTab = gBrowser.getTabForBrowser(NavigableManager.getBrowsingContextById(%q).embedderElement);
+})()`
+
+// createTab 在后台新建标签页，返回其 context
+func (worker *Worker) createTab(ctx context.Context) (string, error) {
+	created, err := worker.client.command(ctx, "browsingContext.create", map[string]any{"type": "tab", "background": true})
+	if err != nil {
+		return "", fmt.Errorf("打开新标签页: %w", err)
+	}
+	contextID, _ := created["context"].(string)
+	if contextID == "" {
+		return "", errors.New("Camoufox BiDi 新标签页无效")
+	}
+	return contextID, nil
+}
+
+// selectTab 经浏览器界面层选中标签页并记为选中；调用方持有 inputMu
+func (worker *Worker) selectTab(ctx context.Context, contextID string) error {
+	if _, err := worker.chromeEvaluate(ctx, fmt.Sprintf(selectTabExpression, contextID)); err != nil {
+		return fmt.Errorf("选中新标签页: %w", err)
+	}
+	worker.mu.Lock()
+	worker.selected = contextID
+	worker.mu.Unlock()
+	return nil
+}
+
+// openTab 在后台新建标签页并选中它，返回其 context；调用方持有 inputMu
+func (worker *Worker) openTab(ctx context.Context) (string, error) {
+	contextID, err := worker.createTab(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := worker.selectTab(ctx, contextID); err != nil {
+		return "", errors.Join(err, worker.closeTab(contextID))
+	}
+	return contextID, nil
 }
 
 // closeBrowser 关闭未完成启动的 Camoufox，保留账户缓存锁
@@ -231,6 +351,114 @@ func (worker *Worker) abort() error {
 	return releaseAccountCache(worker.cacheLock)
 }
 
+// PageCatalog 返回当前页面载入时 GetLoggingContext、GetAiStudioBenefitTier 与 ListModels 的响应正文
+func (worker *Worker) PageCatalog() PageCatalog {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.pageCatalog
+}
+
+// Reload 像官网用户一样在当前标签页中按官网冷启动重新载入页面；当前标签页有进行中的请求时改在新标签页中载入并切换过去，原标签页在其中的请求结束后关闭
+func (worker *Worker) Reload(ctx context.Context) error {
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return errors.New("Camoufox runtime 已关闭")
+	}
+	options := worker.options
+	worker.mu.Unlock()
+	options.StartupProgress = nil
+	worker.inputMu.Lock()
+	defer worker.inputMu.Unlock()
+	worker.mu.Lock()
+	contextID := worker.contextID
+	busy := worker.tabs[contextID] != nil
+	worker.mu.Unlock()
+	if busy {
+		opened, err := worker.openTab(ctx)
+		if err != nil {
+			return err
+		}
+		contextID = opened
+	}
+	loaded, err := worker.openPage(ctx, options, contextID)
+	if err == nil && options.Headless && !options.liveView {
+		err = worker.stopRendering(ctx)
+	}
+	if err != nil && busy {
+		return errors.Join(err, worker.closeTab(contextID))
+	}
+	if err != nil {
+		return err
+	}
+	return worker.switchTab(contextID, loaded)
+}
+
+// switchTab 切换到已载入页面的标签页；页面在原标签页中重新载入时不关闭标签页，否则原标签页没有进行中的受保护请求时立即关闭，有时在其中最后一个请求结束后关闭
+func (worker *Worker) switchTab(contextID string, loaded loadedPage) error {
+	worker.mu.Lock()
+	previous := worker.contextID
+	worker.contextID, worker.page, worker.state, worker.pageCatalog = contextID, loaded.page, loaded.state, loaded.catalog
+	worker.chats[0], worker.selected = &chatTab{contextID: contextID, page: loaded.page}, contextID
+	if previous == contextID {
+		worker.mu.Unlock()
+		return nil
+	}
+	use := worker.tabs[previous]
+	if use != nil {
+		use.retired = true
+	}
+	worker.mu.Unlock()
+	if use == nil {
+		return worker.closeTab(previous)
+	}
+	return nil
+}
+
+// beginRequest 记下当前标签页中开始的一个受保护请求，返回该标签页与其中的 WAA 页面对象
+func (worker *Worker) beginRequest() (string, pageHandle) {
+	worker.useTab(worker.contextID)
+	return worker.contextID, worker.page
+}
+
+// useTab 记下 contextID 标签页中开始的一个请求，调用方持有 mu
+func (worker *Worker) useTab(contextID string) {
+	use := worker.tabs[contextID]
+	if use == nil {
+		use = &tabUse{}
+		worker.tabs[contextID] = use
+	}
+	use.requests++
+}
+
+// finishRequest 结束标签页中的一个受保护请求，已被替换的标签页在其中最后一个请求结束后关闭
+func (worker *Worker) finishRequest(contextID string) {
+	worker.mu.Lock()
+	use := worker.tabs[contextID]
+	use.requests--
+	idle := use.requests == 0
+	if idle {
+		delete(worker.tabs, contextID)
+	}
+	closing := idle && use.retired && !worker.closed
+	worker.mu.Unlock()
+	if closing {
+		if err := worker.closeTab(contextID); err != nil {
+			slog.Warn("关闭已替换的 Camoufox 标签页失败", "context", contextID, "error", err)
+		}
+	}
+}
+
+// closeTab 关闭标签页
+func (worker *Worker) closeTab(contextID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := worker.client.command(ctx, "browsingContext.close", map[string]any{"context": contextID}); err != nil {
+		return fmt.Errorf("关闭标签页: %w", err)
+	}
+	return nil
+}
+
 // ProtocolHeaders 返回官网为 GenerateContent 构造的六个公共头
 func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) {
 	worker.mu.Lock()
@@ -246,6 +474,8 @@ func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) 
 
 // Proof 在一次页面调用中写入官网 prompt 并为 SHA-256 digest 生成 fresh WAA proof，页面值未同步时最多重试 5 秒
 func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (string, error) {
+	worker.inputMu.Lock()
+	defer worker.inputMu.Unlock()
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if worker.closed {
@@ -326,6 +556,15 @@ func parallel(functions ...func() error) error {
 	return errors.Join(errs...)
 }
 
+// restoreCookies 按 storage state 的顺序写入 Cookie 并记下各 Cookie 的序号
+func (worker *Worker) restoreCookies(ctx context.Context, cookies []storageCookie) error {
+	worker.cookieOrder = make(map[cookieKey]int, len(cookies))
+	for index, cookie := range cookies {
+		worker.cookieOrder[cookie.key()] = index
+	}
+	return worker.client.installCookies(ctx, cookies)
+}
+
 func (worker *Worker) bootstrap(ctx context.Context, options Options, storage storageState) error {
 	client := worker.client
 	tree, err := client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0})
@@ -344,26 +583,121 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	worker.contextID = contextID
 	if err := parallel(
 		func() error { return client.installLocalStorage(ctx, contextID, storage.Origins) },
-		func() error { return client.installCookies(ctx, storage.Cookies) },
-		func() error {
-			_, err := client.command(ctx, "session.subscribe", map[string]any{
-				"events":   []string{"browsingContext.navigationStarted", "script.message"},
-				"contexts": []string{contextID},
-			})
-			return err
-		},
+		func() error { return worker.restoreCookies(ctx, storage.Cookies) },
 	); err != nil {
 		return err
+	}
+	loaded, err := worker.openPage(ctx, options, contextID)
+	if err != nil {
+		return err
+	}
+	worker.page, worker.state, worker.pageCatalog = loaded.page, loaded.state, loaded.catalog
+	worker.chats, worker.selected = []*chatTab{{contextID: contextID, page: loaded.page}}, contextID
+	return nil
+}
+
+// loadedPage 是一次官网页面载入取得的 WAA 页面对象、页面状态与目录 RPC 响应
+type loadedPage struct {
+	page    pageHandle
+	state   State
+	catalog PageCatalog
+}
+
+// openPage 在 contextID 标签页中按官网冷启动载入新对话页：preload 在官网 WAA service 首次取请求头时交出该实例，页面载入期间记下目录 RPC 响应与第一个带 x-aistudio-visit-id 的 MakerSuite 请求的公共头，等官方 WAA 程序的图片请求完成后返回页面对象
+func (worker *Worker) openPage(ctx context.Context, options Options, contextID string) (loadedPage, error) {
+	client := worker.client
+	serviceChannel := rand.Text()
+	services, err := client.openChannel(serviceChannel)
+	if err != nil {
+		return loadedPage{}, err
+	}
+	defer client.closeChannel(serviceChannel)
+	client.startLoad(contextID)
+	defer client.endLoad(contextID)
+	var catalogCollector, preloadScript string
+	var subscribed, released bool
+	// release 移除载入期间登记的响应收集器、preload 与 network 事件订阅，原请求超时或取消后仍以独立期限执行
+	release := func() error {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pageReleaseTimeout)
+		defer cancel()
+		var removals []func() error
+		if catalogCollector != "" {
+			removals = append(removals, func() error {
+				if _, err := client.command(releaseCtx, "network.removeDataCollector", map[string]any{"collector": catalogCollector}); err != nil {
+					return fmt.Errorf("移除页面目录响应收集: %w", err)
+				}
+				return nil
+			})
+		}
+		if preloadScript != "" {
+			removals = append(removals, func() error {
+				if _, err := client.command(releaseCtx, "script.removePreloadScript", map[string]any{"script": preloadScript}); err != nil {
+					return fmt.Errorf("移除官网 WAA service preload: %w", err)
+				}
+				return nil
+			})
+		}
+		if subscribed {
+			removals = append(removals, func() error {
+				_, err := client.command(releaseCtx, "session.unsubscribe", map[string]any{
+					"events":   []string{"network.beforeRequestSent", "network.responseCompleted"},
+					"contexts": []string{contextID},
+				})
+				return err
+			})
+		}
+		released = true
+		return parallel(removals...)
+	}
+	defer func() {
+		if !released {
+			_ = release()
+		}
+	}()
+	if err := parallel(
+		func() error {
+			_, err := client.command(ctx, "session.subscribe", map[string]any{
+				"events":   []string{"browsingContext.navigationStarted", "script.message", "network.beforeRequestSent", "network.responseCompleted"},
+				"contexts": []string{contextID},
+			})
+			subscribed = err == nil
+			return err
+		},
+		func() error {
+			collector, err := client.command(ctx, "network.addDataCollector", map[string]any{
+				"dataTypes":          []string{"response"},
+				"maxEncodedDataSize": collectedBodyLimit,
+				"contexts":           []string{contextID},
+			})
+			if err != nil {
+				return fmt.Errorf("安装页面目录响应收集: %w", err)
+			}
+			catalogCollector, _ = collector["collector"].(string)
+			return nil
+		},
+		func() error {
+			preload, err := client.command(ctx, "script.addPreloadScript", map[string]any{
+				"functionDeclaration": servicePreloadFunction,
+				"arguments": []map[string]any{{"type": "channel", "value": map[string]any{
+					"channel": serviceChannel, "ownership": "root", "serializationOptions": map[string]any{"maxObjectDepth": 0},
+				}}},
+				"contexts": []string{contextID},
+			})
+			if err != nil {
+				return fmt.Errorf("安装官网 WAA service preload: %w", err)
+			}
+			preloadScript, _ = preload["script"].(string)
+			return nil
+		},
+	); err != nil {
+		return loadedPage{}, err
 	}
 	options.reportStartup(StartupLoadingAIStudio)
 	pagePath := "/prompts/new_chat"
 	if options.AuthUser > 0 {
 		pagePath = fmt.Sprintf("/u/%d/prompts/new_chat", options.AuthUser)
 	}
-	target := aiStudioOrigin + pagePath + "?model=" + url.QueryEscape(options.Model)
-	if options.TemporaryChat {
-		target += "&temporary=true"
-	}
+	target := aiStudioOrigin + pagePath + "?model=" + url.QueryEscape(options.Model) + "&temporary=true"
 	pageCtx, stopWatch := watchProxy(ctx, options.Proxy)
 	defer stopWatch()
 	if _, err := client.command(pageCtx, "browsingContext.navigate", map[string]any{
@@ -372,193 +706,90 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		"wait":    "interactive",
 	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
 		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
-			return cause
+			return loadedPage{}, cause
 		}
 		if strings.Contains(err.Error(), "NS_ERROR_PROXY_") {
-			return fmt.Errorf("%w: 导航 AI Studio: %v", ErrProxyUnreachable, err)
+			return loadedPage{}, fmt.Errorf("%w: 导航 AI Studio: %v", ErrProxyUnreachable, err)
 		}
-		return fmt.Errorf("导航 AI Studio: %w", err)
+		return loadedPage{}, fmt.Errorf("导航 AI Studio: %w", err)
 	}
 	if err := client.waitFor(pageCtx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
 		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
-			return cause
+			return loadedPage{}, cause
 		}
 		if errors.Is(err, ErrRegionNotSupported) {
-			return err
+			return loadedPage{}, err
 		}
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
-		return fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)
+		return loadedPage{}, fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)
 	}
 	stopWatch()
 	pageURL, err := client.evaluateString(ctx, contextID, "location.href")
 	if err != nil {
-		return err
+		return loadedPage{}, err
 	}
 	if location, parseErr := url.Parse(pageURL); parseErr == nil && location.Hostname() == "accounts.google.com" {
-		return fmt.Errorf("%w url=%s", ErrAuthenticationRequired, pageURL)
+		return loadedPage{}, fmt.Errorf("%w url=%s", ErrAuthenticationRequired, pageURL)
 	}
 	if err := client.waitFor(ctx, contextID, loggingContextReadyExpression, 30*time.Second); err != nil {
-		return fmt.Errorf("等待官网 GetLoggingContext 响应: %w", err)
+		return loadedPage{}, fmt.Errorf("等待官网 GetLoggingContext 响应: %w", err)
 	}
-	if err := dismissKnownOverlays(ctx, client, contextID); err != nil {
-		return err
+	catalog, err := client.pageCatalog(ctx, contextID, catalogCollector, 30*time.Second)
+	if err != nil {
+		return loadedPage{}, err
 	}
 	options.reportStartup(StartupLocatingWAA)
-	page, err := client.waitSnapshotFunction(ctx, contextID, 30*time.Second)
+	serviceCtx, cancelService := context.WithTimeout(ctx, 30*time.Second)
+	service, err := services.next(serviceCtx)
+	cancelService()
 	if err != nil {
-		return err
+		return loadedPage{}, fmt.Errorf("等待官网 WAA service: %w", err)
+	}
+	if err := client.waitLoad(ctx, contextID, 30*time.Second, "发出带 x-aistudio-visit-id 的 MakerSuite 请求", func(load *pageLoad) bool { return load.headers != nil }); err != nil {
+		return loadedPage{}, err
+	}
+	options.reportStartup(StartupBootstrappingWAA)
+	if err := client.waitLoad(ctx, contextID, 60*time.Second, "完成官方 WAA 程序的图片请求", func(load *pageLoad) bool { return load.image }); err != nil {
+		return loadedPage{}, err
+	}
+	client.mu.Lock()
+	observed := client.loads[contextID].headers
+	client.mu.Unlock()
+	if err := release(); err != nil {
+		return loadedPage{}, err
+	}
+	if err := dismissKnownOverlays(ctx, client, contextID); err != nil {
+		return loadedPage{}, err
+	}
+	page, err := client.callFunctionHandle(ctx, contextID, pageObjectFunction, pageHandle(service))
+	if err != nil {
+		return loadedPage{}, fmt.Errorf("构造官网 WAA 页面对象: %w", err)
+	}
+	if page == "" {
+		return loadedPage{}, errors.New("官网高层 snapshot 函数不存在")
 	}
 	snapshotKey, err := client.callFunctionString(ctx, contextID, `page => page.key`, page)
 	if err != nil {
-		return fmt.Errorf("读取官网 snapshot 函数名: %w", err)
-	}
-	options.reportStartup(StartupBootstrappingWAA)
-	if err := fillPrompt(ctx, client, contextID, options.BootstrapPrompt); err != nil {
-		return fmt.Errorf("填写 bootstrap 提示词: %w", err)
-	}
-	var collectorID, interceptID string
-	if err := parallel(
-		func() error {
-			_, err := client.command(ctx, "session.subscribe", map[string]any{
-				"events":   []string{"network.beforeRequestSent"},
-				"contexts": []string{contextID},
-			})
-			return err
-		},
-		func() error {
-			collector, err := client.command(ctx, "network.addDataCollector", map[string]any{
-				"dataTypes":          []string{"request"},
-				"maxEncodedDataSize": requestBodyLimit,
-				"contexts":           []string{contextID},
-			})
-			if err != nil {
-				return fmt.Errorf("安装 GenerateContent 正文收集: %w", err)
-			}
-			collectorID, _ = collector["collector"].(string)
-			return nil
-		},
-		func() error {
-			intercept, err := client.command(ctx, "network.addIntercept", map[string]any{
-				"phases":   []string{"beforeRequestSent"},
-				"contexts": []string{contextID},
-				"urlPatterns": []map[string]any{{
-					"type":     "pattern",
-					"protocol": "https",
-					"hostname": "alkalimakersuite-pa.clients6.google.com",
-					"pathname": generateContentPath,
-				}},
-			})
-			if err != nil {
-				return fmt.Errorf("安装 GenerateContent 拦截: %w", err)
-			}
-			interceptID, _ = intercept["intercept"].(string)
-			if interceptID == "" {
-				return errors.New("GenerateContent 拦截 ID 无效")
-			}
-			return nil
-		},
-	); err != nil {
-		return err
-	}
-	if err := client.waitFor(ctx, contextID, runButtonEnabledExpression, 15*time.Second); err != nil {
-		return fmt.Errorf("等待官网 Run 按钮启用: %w", err)
-	}
-	if _, err := client.evaluate(ctx, contextID, submitPromptExpression); err != nil {
-		return fmt.Errorf("提交官网提示词: %w", err)
-	}
-	blocked, err := client.waitBlockedGenerateRequest(ctx, 60*time.Second)
-	if err != nil {
-		return err
-	}
-	captured, err := client.callFunction(ctx, contextID, `page => Boolean(page.service)`, page)
-	if err != nil {
-		return fmt.Errorf("读取官网 WAA service: %w", err)
-	}
-	if captured["value"] != true {
-		return errors.New("官网 WAA service 未暴露")
-	}
-	data, err := client.command(ctx, "network.getData", map[string]any{"request": blocked.id, "dataType": "request", "collector": collectorID})
-	if err != nil {
-		return fmt.Errorf("读取官网 bootstrap 请求正文: %w", err)
-	}
-	if err := client.waitFor(ctx, contextID, stopGenerationExpression, 15*time.Second); err != nil {
-		return fmt.Errorf("停止官网 bootstrap 生成: %w", err)
-	}
-	if _, err := client.command(ctx, "network.failRequest", map[string]any{"request": blocked.id}); err != nil {
-		return fmt.Errorf("释放 bootstrap GenerateContent: %w", err)
-	}
-	if err := parallel(
-		func() error {
-			_, err := client.command(ctx, "network.removeIntercept", map[string]any{"intercept": interceptID})
-			if err != nil {
-				return fmt.Errorf("移除 GenerateContent 拦截: %w", err)
-			}
-			return nil
-		},
-		func() error {
-			_, err := client.command(ctx, "network.removeDataCollector", map[string]any{"collector": collectorID})
-			if err != nil {
-				return fmt.Errorf("移除 GenerateContent 正文收集: %w", err)
-			}
-			return nil
-		},
-		func() error {
-			_, err := client.command(ctx, "session.unsubscribe", map[string]any{
-				"events":   []string{"network.beforeRequestSent"},
-				"contexts": []string{contextID},
-			})
-			if err != nil {
-				return fmt.Errorf("停止 GenerateContent 网络事件订阅: %w", err)
-			}
-			return nil
-		},
-	); err != nil {
-		return err
-	}
-	actualModel, err := bootstrapModel(remoteBytesValue(data["bytes"]))
-	if err != nil {
-		return err
-	}
-	if actualModel != strings.TrimPrefix(options.Model, "models/") {
-		return fmt.Errorf("官网初始化页面模型不匹配 expected=%s actual=%s", options.Model, actualModel)
+		return loadedPage{}, fmt.Errorf("读取官网 snapshot 函数名: %w", err)
 	}
 	headers := make(http.Header, len(publicHeaderNames))
 	for _, name := range publicHeaderNames {
-		if value := blocked.headers[name]; value != "" {
+		if value := observed[name]; value != "" {
 			headers.Set(name, value)
 		}
 	}
 	for _, name := range []string{"user-agent", "x-goog-api-key", "x-goog-authuser", "x-user-agent"} {
 		if headers.Get(name) == "" {
-			return fmt.Errorf("官网 GenerateContent 缺少必要公共头 %s", name)
+			return loadedPage{}, fmt.Errorf("官网 MakerSuite 请求缺少必要公共头 %s", name)
 		}
 	}
-	worker.page = page
-	worker.state = State{
+	return loadedPage{page: page, catalog: catalog, state: State{
 		PID:         worker.process.command.Process.Pid,
 		PageURL:     pageURL,
 		UserAgent:   headers.Get("user-agent"),
 		SnapshotKey: snapshotKey,
 		Headers:     headers,
-	}
-	return nil
-}
-
-// bootstrapModel 返回官网 bootstrap GenerateContent 请求正文中的模型
-func bootstrapModel(body string) (string, error) {
-	var wire []any
-	if err := json.Unmarshal([]byte(body), &wire); err != nil {
-		return "", fmt.Errorf("解析官网 bootstrap 请求正文: %w", err)
-	}
-	if len(wire) == 0 {
-		return "", errors.New("官网 bootstrap 请求缺少模型")
-	}
-	model, _ := wire[0].(string)
-	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
-	if model == "" {
-		return "", errors.New("官网 bootstrap 请求模型无效")
-	}
-	return model, nil
+	}}, nil
 }
 
 func loadStorageState(path string) (storageState, error) {

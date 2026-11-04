@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -62,11 +63,18 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "previous_interaction_id was not found")
 			return
 		}
-		generate.Contents = append(cloneResponseContents(previous.Contents), generate.Contents...)
+		if previous.Upstream != "" && previous.Agent == generate.Model {
+			// 同一 agent 续接自己的后台任务时与官网一样只发送新输入并以其上游 interaction 续接，使用创建它的账户
+			generate.PreviousInteractionID, generate.AccountID = previous.Upstream, previous.AccountID
+		} else {
+			generate.Contents = append(cloneResponseContents(previous.Contents), generate.Contents...)
+		}
 	}
-	if _, ok := s.applyGeminiCache(w, request.CachedContent, &generate); !ok {
+	cache, ok := s.applyGeminiCache(w, request.CachedContent, &generate)
+	if !ok {
 		return
 	}
+	request.cache = cache
 	generate.Tools.ToolConfig.ServerSideInvocations = interactionServerSteps(generate.Tools)
 	if err := resolveInteractionResults(generate.Contents); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -85,15 +93,20 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		audioExpected = slices.Contains(aistudio.EffectiveResponseModalities(generate.Config.ResponseModalities, model), aistudio.ResponseModalityAudio)
 	}
 	created := time.Now().UTC().Format(time.RFC3339)
-	ctx, cancel := context.WithCancel(r.Context())
+	client := r.Context()
+	ctx, cancel := context.WithCancel(client)
 	defer cancel()
 	failure := &bytes.Buffer{}
+	var following sync.WaitGroup
 	if request.Background {
 		var finish func()
 		ctx, finish = s.startBackground(r, generate.ID)
 		defer finish()
+		request.stream = newStreamLog()
+		defer following.Wait()
+		defer request.stream.finish()
 		defer s.endBackgroundInteraction(ctx, request, generate, previous, current, created, failure)
-		started := interactionObject(generate, created, "in_progress", nil)
+		started := interactionObject(generate, request.PreviousID, created, "in_progress", nil)
 		s.storeInteraction(request, previous, current, generationResult{}, started)
 		if !request.Stream {
 			body, _ := json.Marshal(started)
@@ -108,7 +121,7 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	events, err := s.service.Generate(ctx, generate)
 	if err == nil && request.Stream {
-		events, err = awaitStreamStart(ctx, events)
+		events, _, err = awaitStreamStart(ctx, events)
 	}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -117,15 +130,31 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		if request.Background && request.Stream {
 			writeGeminiRequestError(discardResponseWriter{header: http.Header{}, body: failure}, err)
 		}
+		if request.Background && shouldWriteRequestError(r, err) {
+			_ = writeSSE(request.stream, "error", officialOrder("interactions", interactionErrorEvent(err, "1")))
+		}
 		return
 	}
 	if request.imageMIME() == "image/jpeg" {
 		events = jpegImageEvents(ctx, events)
 	}
-	if request.Stream {
-		if err := s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events); err != nil && request.Background {
+	if request.Background {
+		if request.Stream {
+			following.Add(1)
+			go func() {
+				defer following.Done()
+				if streamHeaders(w) == nil {
+					_ = request.stream.follow(client, w, -1)
+				}
+			}()
+		}
+		if err := s.streamInteraction(request.stream, r, request, generate, audioExpected, previous, current, created, events); err != nil {
 			writeGeminiRequestError(discardResponseWriter{header: http.Header{}, body: failure}, err)
 		}
+		return
+	}
+	if request.Stream {
+		_ = s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events)
 		return
 	}
 	result, err := consumeEvents(ctx, events)
@@ -133,10 +162,11 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		err = validateInteractionResult(audioExpected, result)
 	}
 	if err == nil {
+		result.usage = request.cache.usage(result.usage)
 		var steps []map[string]any
 		steps, err = interactionSteps(result, request.audioFormat(), request.Generation.ThinkingSummaries != "none")
 		if err == nil {
-			response := interactionObject(generate, created, interactionStatus(result), &result)
+			response := interactionObject(generate, request.PreviousID, created, interactionStatus(result), &result)
 			response["steps"] = steps
 			if request.Store == nil || *request.Store {
 				s.storeInteraction(request, previous, current, result, response)
@@ -165,7 +195,7 @@ func (s *server) endBackgroundInteraction(ctx context.Context, request interacti
 		if errors.Is(ctx.Err(), context.Canceled) {
 			stored.Status = "cancelled"
 		}
-		s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, created, stored.Status, nil))
+		s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, request.PreviousID, created, stored.Status, nil))
 	}
 	if request.WebhookConfig != nil {
 		sendInteractionWebhook(*request.WebhookConfig, generate.ID, stored.Status, failure.Bytes())
@@ -189,7 +219,7 @@ func jpegImageEvents(ctx context.Context, events <-chan aistudio.Event) <-chan a
 		defer close(converted)
 		for event := range events {
 			if media := event.InlineData; event.Kind == aistudio.EventMedia && media != nil && strings.HasPrefix(media.MIME, "image/") {
-				converted, err := convertImage(*media, "image/jpeg")
+				converted, err := convertImage(*media)
 				if err != nil {
 					event = aistudio.Event{Kind: aistudio.EventError, Err: err}
 				} else {
@@ -240,11 +270,14 @@ func resolveInteractionResults(contents []aistudio.Content) error {
 	return nil
 }
 
-// interactionObject 构造 SDK 使用的资源标识、状态与用量，result 为空时不带用量
-func interactionObject(request aistudio.GenerateRequest, created, status string, result *generationResult) map[string]any {
+// interactionObject 构造 SDK 使用的资源标识、前序交互、状态与用量，result 为空时不带用量
+func interactionObject(request aistudio.GenerateRequest, previousID string, created, status string, result *generationResult) map[string]any {
 	object := map[string]any{
 		"id": request.ID, "object": "interaction", "model": request.Model,
 		"created": created, "updated": time.Now().UTC().Format(time.RFC3339), "status": status,
+	}
+	if previousID != "" {
+		object["previous_interaction_id"] = previousID
 	}
 	if result != nil && result.usage != nil {
 		usage := result.usage

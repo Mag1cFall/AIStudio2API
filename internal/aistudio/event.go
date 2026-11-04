@@ -419,6 +419,13 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 				event.ToolResponse = step
 			}
 			events = append(events, event)
+			if field.kind == EventServerToolResponse && step.Type == "URL_CONTEXT" {
+				grounding, err := urlContextGrounding(step, fmt.Sprintf("%s[%d]", path, field.index), raw)
+				if err != nil {
+					return nil, err
+				}
+				events = append(events, Event{Kind: EventGrounding, Grounding: grounding})
+			}
 		}
 	}
 	if len(events) == 0 && signature != "" {

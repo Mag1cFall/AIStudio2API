@@ -31,7 +31,7 @@ const (
 	assistantProofField = 2
 	// assistantDefaultThinkingLevel 是 Build 对话默认的 high 思考强度
 	assistantDefaultThinkingLevel = 3
-	// assistantCleanupTimeout 是取消生成与删除临时应用的期限
+	// assistantCleanupTimeout 是取消未完成生成任务的期限
 	assistantCleanupTimeout = time.Minute
 	// assistantFence 是 Markdown 代码块的围栏
 	assistantFence = "```"
@@ -41,8 +41,12 @@ const (
 	assistantResultFence = assistantFence + "function_results"
 	// assistantToolProtocol 是写入自定义指令的客户端函数说明，%s 为函数声明 JSON
 	assistantToolProtocol = "You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.\n%s\n" +
-		"To call functions, reply with only one fenced block and no other text:\n" + assistantCallFence + "\n[{\"name\": \"<function name>\", \"arguments\": {<arguments>}}]\n```\n" +
-		"Function results arrive in a later user turn as a fenced function_results block. Never write a function_results block yourself; stop after the function_calls block and wait for the results. Answer normally when no function is needed."
+		"To call functions, write one fenced block:\n" + assistantCallFence + "\n[{\"name\": \"<function name>\", \"arguments\": {<arguments>}}]\n```\n" +
+		"Right after the block, call your ask_question tool once with the question \"" + assistantCallQuestion + "\" and write nothing more. The user's machine runs the calls and the results arrive as the answer in a fenced function_results block. Never write a function_results block yourself. Answer normally when no function is needed."
+	// assistantCallQuestion 是模型写出调用代码块后以 ask_question 交回调用的问题
+	assistantCallQuestion = "Run these function calls and send me their results."
+	// assistantQuestionTool 是写代码助手向用户提问并结束本轮生成的内置工具
+	assistantQuestionTool = "ask_question"
 	// assistantWorkspaceRule 是写在自定义指令开头、禁止调用写代码助手内置工具的说明，%s 为禁止的工具名
 	assistantWorkspaceRule = "The tools listed earlier in your instructions (%s) act on an empty remote applet workspace that has nothing to do with this conversation or the user's machine. You are strictly forbidden to call any of them: do not create, view, edit or delete workspace files, run workspace commands, compile, install, deploy or generate images there. Reply to the user directly in your answer."
 	// assistantSearchRule 是请求允许网页搜索时接在禁止说明之后的说明
@@ -56,6 +60,8 @@ const (
 	assistantSearchHistoryLimit = 1000
 	// assistantHistoryRule 是对话含模型历史轮时写入自定义指令的说明
 	assistantHistoryRule = "Your own earlier replies in this conversation, including your function_calls blocks, appear in the user message between <assistant_turn> and </assistant_turn>. Continue from the latest content and never write these tags yourself."
+	// assistantEmptyReplyPrompt 是模型一轮结束时没有正文与函数调用后在同一应用中追加的用户轮
+	assistantEmptyReplyPrompt = "Your last turn ended without any visible reply. Continue now and give your reply."
 )
 
 // assistantWorkspaceTools 是写代码助手服务端指令声明的工作区内置工具，search_web 在最后
@@ -140,8 +146,8 @@ func assistantThinkingLevel(config GenerationConfig, defaults GenerationDefaults
 	return closestSupportedThinkingLevel(level, defaults.ThinkingLevels), nil
 }
 
-// EncodeAssistantRequest 编码 CodeAssistantOffline：field 1 对话轮、6 模式、8 模型、9 自定义指令、12 应用、14 框架、16、19 思考配置、29 请求 ID，field 2 由 WAA proof 写入
-func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults, applet string, requestID string) ([]byte, error) {
+// EncodeAssistantRequest 编码 CodeAssistantOffline：field 1 对话轮、6 模式、8 模型、9 自定义指令、12 应用、14 框架、16、19 思考配置、21 继续的对话、29 请求 ID，field 2 由 WAA proof 写入；新应用的首轮模式为 1，continued 时模式为 2 并继续应用中以应用 ID 为 ID 的对话
+func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults, applet string, continued bool, requestID string) ([]byte, error) {
 	contents, err := encodeContents(request.Contents)
 	if err != nil {
 		return nil, err
@@ -162,23 +168,32 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 	}
 	wire[11] = applet
 	wire[13] = []any{int64(2), nil, int64(2)}
+	if continued {
+		wire[5] = int64(2)
+		wire[13] = []any{int64(2)}
+		wire[20] = applet
+	}
 	wire[15] = int64(1)
 	wire[18] = []any{int64(1), nil, nil, level}
 	wire[28] = requestID
 	return json.Marshal(wire)
 }
 
-// assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块；写代码助手只读取 user 轮，模型历史轮去掉思考后包上标记以 user 轮发送
-func assistantToolPrompt(request GenerateRequest) (GenerateRequest, error) {
+// assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，声明函数时允许以 ask_question 交回调用，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块，只保留 start 起的对话轮；写代码助手只读取 user 轮，模型历史轮去掉思考后包上标记以 user 轮发送，transcribed 时说明这一标记
+func assistantToolPrompt(request GenerateRequest, start int, transcribed bool) (GenerateRequest, error) {
+	functions := len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none"
 	forbidden := assistantWorkspaceTools
 	if request.Tools.GoogleSearch != nil {
 		forbidden = forbidden[:len(forbidden)-1]
+	}
+	if functions {
+		forbidden = slices.DeleteFunc(slices.Clone(forbidden), func(name string) bool { return name == assistantQuestionTool })
 	}
 	prompt := fmt.Sprintf(assistantWorkspaceRule, strings.Join(forbidden, ", "))
 	if request.Tools.GoogleSearch != nil {
 		prompt += assistantSearchRule
 	}
-	if len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none" {
+	if functions {
 		declarations, err := scriptJSON(request.Tools.Functions)
 		if err != nil {
 			return request, err
@@ -232,17 +247,17 @@ func assistantToolPrompt(request GenerateRequest) (GenerateRequest, error) {
 		}
 		if linked.Role == RoleAssistant {
 			parts = assistantTurn(parts)
-			if !strings.Contains(prompt, assistantHistoryRule) {
-				prompt += "\n\n" + assistantHistoryRule
-			}
 		}
 		contents = append(contents, Content{Role: RoleUser, Parts: parts})
+	}
+	if transcribed {
+		prompt += "\n\n" + assistantHistoryRule
 	}
 	if len(request.System) > 0 {
 		prompt += "\n\n"
 	}
 	request.System = append([]string{prompt}, request.System...)
-	request.Contents = contents
+	request.Contents = contents[start:]
 	return request, nil
 }
 
@@ -269,7 +284,7 @@ func scriptJSON(value any) (string, error) {
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 
-// sendAssistant 新建临时应用并提交 Build 写代码助手生成任务，返回任务流；流关闭后取消未完成的任务并删除应用
+// sendAssistant 在对话所在的应用中只提交新增轮次，没有可继续的应用时新建应用并提交全部历史，返回任务流；本轮结束时没有正文与函数调用的，在同一应用中追加用户轮请模型继续，用量按续写合并；流关闭后取消未完成的任务，本轮回复完整结束时对话保存为可继续，否则放弃应用留待巡检删除
 func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	reason := ""
 	if request.Unary {
@@ -284,25 +299,101 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 	}
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
 	history := assistantHistoryDigest(request.Contents)
+	links := assistantLinks(request.Contents)
+	session, start := c.assistants.claim(apiKey, request.AccountID, links)
+	cleanup := &assistantCleanup{client: c, accountID: request.AccountID, session: session}
+	cleanup.transcribed = slices.ContainsFunc(request.Contents[start:], func(content Content) bool { return content.Role == RoleAssistant }) ||
+		session != nil && session.transcribed
 	request.Contents = assistantSearches.restore(apiKey, request.Contents)
-	request, err := assistantToolPrompt(request)
+	request, err := assistantToolPrompt(request, start, cleanup.transcribed)
 	if err != nil {
+		cleanup.run()
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	contents, err := c.uploadAssistantAttachments(ctx, request.AccountID, request.Contents)
 	if err != nil {
+		cleanup.run()
 		return nil, nil, err
 	}
 	request.Contents = contents
-	applet, err := c.createAssistantApplet(ctx, request.AccountID)
-	if err != nil {
-		return nil, nil, err
+	if session == nil {
+		applet, err := c.createAssistantApplet(ctx, request.AccountID)
+		if err != nil {
+			return nil, nil, err
+		}
+		cleanup.session = c.assistants.open(request.AccountID, applet)
+		lease, _ := AccountLeaseFromContext(ctx)
+		if err := lease.BindResource(applet, assistantAppletKind); err != nil {
+			cleanup.run()
+			return nil, nil, err
+		}
 	}
-	cleanup := &assistantCleanup{client: c, accountID: request.AccountID, applet: applet}
-	body, err := EncodeAssistantRequest(request, entry.defaults, applet, strings.ToUpper(uuid.NewString()))
+	applet := cleanup.session.applet
+	generation, streamBody, stream, err := c.openAssistantGeneration(ctx, request, entry, applet, session != nil)
+	cleanup.generation.Store(&generation)
 	if err != nil {
 		cleanup.run()
-		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		return nil, nil, err
+	}
+	stream.Body = &assistantStreamBody{ReadCloser: stream.Body, cleanup: cleanup}
+	return stream, func(source io.Reader, emit func(Event) error) error {
+		newDecoder := func(streamBody []byte) *AssistantStreamDecoder {
+			return &AssistantStreamDecoder{Functions: functions, Reopen: func() (io.ReadCloser, error) {
+				reopened, err := c.do(ctx, assistantStreamMethod, request.AccountID, request.ID, streamBody, true)
+				if err != nil {
+					return nil, err
+				}
+				return reopened.Body, nil
+			}}
+		}
+		var answer strings.Builder
+		var reply []Part
+		var usage *Usage
+		collect := func(event Event) error {
+			switch event.Kind {
+			case EventText:
+				answer.WriteString(event.Text)
+				reply = append(reply, Part{Text: event.Text})
+			case EventToolCall:
+				reply = append(reply, Part{FunctionCall: event.FunctionCall})
+			case EventUsage:
+				if usage != nil {
+					merged := mergeContinuedUsage(*usage, *event.Usage)
+					event.Usage = &merged
+				}
+				usage = event.Usage
+			}
+			return emit(event)
+		}
+		decoder := newDecoder(streamBody)
+		err := DecodeAssistantStream(source, decoder, collect)
+		for followed := 0; err == nil && len(reply) == 0 && !decoder.overran && !decoder.malformed && followed < regenerations; followed++ {
+			followUp := request
+			followUp.Contents = []Content{{Role: RoleUser, Parts: []Part{{Text: assistantEmptyReplyPrompt}}}}
+			next, nextBody, follow, openErr := c.openAssistantGeneration(ctx, followUp, entry, applet, true)
+			cleanup.generation.Store(&next)
+			if err = openErr; err != nil {
+				break
+			}
+			decoder = newDecoder(nextBody)
+			err = errors.Join(DecodeAssistantStream(follow.Body, decoder, collect), follow.Body.Close())
+		}
+		if err == nil {
+			cleanup.completed.Store(!decoder.overran)
+			assistantSearches.store(apiKey, history, answer.String(), decoder.searches)
+			if !decoder.overran && !decoder.malformed {
+				cleanup.tip.Store(&assistantSessionKey{apiKey: apiKey, digest: assistantLinkDigest(links[len(links)-1].digest, true, reply)})
+			}
+		}
+		return err
+	}, nil
+}
+
+// openAssistantGeneration 在应用中提交请求的对话轮并打开任务流，返回任务 ID、任务流请求正文与任务流；continued 为 true 时在应用已有对话之后继续
+func (c *Client) openAssistantGeneration(ctx context.Context, request GenerateRequest, entry modelEntry, applet string, continued bool) (string, []byte, *RPCResponse, error) {
+	body, err := EncodeAssistantRequest(request, entry.defaults, applet, continued, strings.ToUpper(uuid.NewString()))
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	rpc := newRPCRequest(assistantOfflineMethod, request.AccountID, request.ID, body, false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
@@ -311,37 +402,16 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		response, err = validateRPCResponse(assistantOfflineMethod, response)
 	}
 	if err != nil {
-		cleanup.run()
-		return nil, nil, fmt.Errorf("发送 AI Studio %s: %w", assistantOfflineMethod, err)
+		return "", nil, nil, fmt.Errorf("发送 AI Studio %s: %w", assistantOfflineMethod, err)
 	}
-	cleanup.generation, err = decodeAssistantGeneration(response.Body)
+	generation, err := decodeAssistantGeneration(response.Body)
 	response.Body.Close()
 	if err != nil {
-		cleanup.run()
-		return nil, nil, err
+		return "", nil, nil, err
 	}
-	streamBody, _ := json.Marshal([]any{cleanup.generation, nil, nil, applet})
+	streamBody, _ := json.Marshal([]any{generation, nil, nil, applet})
 	stream, err := c.do(ctx, assistantStreamMethod, request.AccountID, request.ID, streamBody, true)
-	if err != nil {
-		cleanup.run()
-		return nil, nil, err
-	}
-	stream.Body = &assistantStreamBody{ReadCloser: stream.Body, cleanup: cleanup}
-	return stream, func(source io.Reader, emit func(Event) error) error {
-		decoder := &AssistantStreamDecoder{Functions: functions}
-		var answer strings.Builder
-		err := DecodeAssistantStream(source, decoder, func(event Event) error {
-			if event.Kind == EventText {
-				answer.WriteString(event.Text)
-			}
-			return emit(event)
-		})
-		if err == nil {
-			cleanup.completed.Store(!decoder.overran)
-			assistantSearches.store(apiKey, history, answer.String(), decoder.searches)
-		}
-		return err
-	}, nil
+	return generation, streamBody, stream, err
 }
 
 // assistantSearches 是本进程写代码助手回复的 search_web 结果
@@ -499,40 +569,46 @@ func decodeAssistantGeneration(source io.Reader) (string, error) {
 	return generation, nil
 }
 
-// assistantCleanup 在请求结束后取消未完成的生成任务并删除临时应用
+// assistantCleanup 在请求结束后取消未完成的生成任务，并按回复是否完整结束保存或放弃会话
 type assistantCleanup struct {
-	client     *Client
-	accountID  string
-	applet     string
-	generation string
+	client    *Client
+	accountID string
+	session   *assistantSession
+	// transcribed 表示请求结束后应用中有以 user 轮转录的模型历史轮
+	transcribed bool
+	// generation 是应用中最近提交的任务 ID
+	generation atomic.Pointer[string]
 	completed  atomic.Bool
-	once       sync.Once
+	// tip 是本轮回复完整结束后对话可继续的键
+	tip  atomic.Pointer[assistantSessionKey]
+	once sync.Once
 }
 
-// run 在后台以独立期限执行一次清理
+// run 执行一次清理：结束会话上的请求，未完成的任务在后台以独立期限取消
 func (cleanup *assistantCleanup) run() {
 	cleanup.once.Do(func() {
+		if cleanup.session == nil {
+			return
+		}
+		cleanup.client.assistants.finish(cleanup.session, cleanup.tip.Load(), cleanup.transcribed)
+		generation := cleanup.generation.Load()
+		if generation == nil || *generation == "" || cleanup.completed.Load() {
+			return
+		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), assistantCleanupTimeout)
 			defer cancel()
-			if cleanup.generation != "" && !cleanup.completed.Load() {
-				cleanup.call(ctx, "CancelCodeAssistantOfflineGeneration", []any{cleanup.generation, cleanup.applet})
+			body, _ := json.Marshal([]any{*generation, cleanup.session.applet})
+			response, err := cleanup.client.do(ctx, "CancelCodeAssistantOfflineGeneration", cleanup.accountID, "", body, false)
+			if err == nil {
+				_, err = io.Copy(io.Discard, response.Body)
+				err = errors.Join(err, response.Body.Close())
 			}
-			cleanup.call(ctx, "DeleteApplet", []any{cleanup.applet})
+			if err != nil {
+				slog.Warn("Build 写代码助手清理失败", "account", cleanup.accountID, "method", "CancelCodeAssistantOfflineGeneration", "applet", cleanup.session.applet, "error", err)
+			}
 		}()
 	})
-}
-
-func (cleanup *assistantCleanup) call(ctx context.Context, method string, value []any) {
-	body, _ := json.Marshal(value)
-	response, err := cleanup.client.do(ctx, method, cleanup.accountID, "", body, false)
-	if err == nil {
-		_, err = io.Copy(io.Discard, response.Body)
-		err = errors.Join(err, response.Body.Close())
-	}
-	if err != nil {
-		slog.Warn("Build 写代码助手清理失败", "account", cleanup.accountID, "method", method, "applet", cleanup.applet, "error", err)
-	}
 }
 
 // assistantStreamBody 在任务流关闭时触发清理
@@ -541,7 +617,7 @@ type assistantStreamBody struct {
 	cleanup *assistantCleanup
 }
 
-// Close 关闭任务流并清理临时应用
+// Close 关闭任务流并清理
 func (body *assistantStreamBody) Close() error {
 	err := body.ReadCloser.Close()
 	body.cleanup.run()
@@ -552,6 +628,8 @@ func (body *assistantStreamBody) Close() error {
 type AssistantStreamDecoder struct {
 	// Functions 是请求声明的函数名，不为空时正文中的调用代码块解码为函数调用
 	Functions []string
+	// Reopen 以同一任务重新打开任务流
+	Reopen    func() (io.ReadCloser, error)
 	emitted   map[int64][]string
 	usage     map[int64]Usage
 	searched  map[int64]bool
@@ -575,8 +653,32 @@ type AssistantStreamDecoder struct {
 	overran bool
 }
 
-// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束或函数调用之后模型继续输出正文时不再读取上游
+// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束或函数调用之后模型继续输出正文时不再读取上游，消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取
 func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, emit func(Event) error) error {
+	err := decodeAssistantMessages(source, decoder, emit)
+	if err == nil && !decoder.finished && !decoder.overran && decoder.Reopen != nil {
+		var reopened io.ReadCloser
+		if reopened, err = decoder.Reopen(); err == nil {
+			err = errors.Join(decodeAssistantMessages(reopened, decoder, emit), reopened.Close())
+		}
+	}
+	if err != nil {
+		return err
+	}
+	events, err := decoder.End()
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeAssistantMessages 读取一条任务流的消息列表与流尾状态
+func decodeAssistantMessages(source io.Reader, decoder *AssistantStreamDecoder, emit func(Event) error) error {
 	reader := &streamReadRecorder{source: source}
 	stream := json.NewDecoder(newSparseJSONReader(reader))
 	stream.UseNumber()
@@ -622,19 +724,7 @@ func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, em
 			}
 		}
 	}
-	if err := reader.failure(assistantStreamMethod, index, nil); err != nil {
-		return err
-	}
-	events, err := decoder.End()
-	if err != nil {
-		return err
-	}
-	for _, event := range events {
-		if err := emit(event); err != nil {
-			return err
-		}
-	}
-	return nil
+	return reader.failure(assistantStreamMethod, index, nil)
 }
 
 // Decode 解码一条消息 [null, null, [步骤...], 应用 ID]：步骤 field 1 为对话轮、6 为失败原因、10 为工具动作、12 为序号、13 为状态（1 完成、2 进行中、4 失败）、16 为用量
@@ -700,21 +790,24 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 		}
 		d.usage[number] = usage
 	}
+	var events []Event
 	if actionRaw := rawAt(step, 9); !isJSONNull(actionRaw) && status == 1 && !d.searched[number] {
 		if err := d.decodeSearch(actionRaw, path+"[9]", evidence); err != nil {
+			return nil, err
+		}
+		if events, err = d.decodeQuestion(actionRaw, path+"[9]", evidence); err != nil {
 			return nil, err
 		}
 		d.searched[number] = true
 	}
 	contentsRaw := rawAt(step, 0)
 	if isJSONNull(contentsRaw) {
-		return nil, nil
+		return events, nil
 	}
 	contents, err := rawArray(contentsRaw, path+"[0]", evidence)
 	if err != nil {
 		return nil, withMethod(err, assistantStreamMethod)
 	}
-	var events []Event
 	partOffset := 0
 	for contentIndex, contentRaw := range contents {
 		contentPath := fmt.Sprintf("%s[0][%d]", path, contentIndex)
@@ -883,10 +976,10 @@ func (d *AssistantStreamDecoder) callBlock(block string) []Event {
 	return []Event{{Kind: EventText, Text: block}}
 }
 
-// assistantCalls 把代码块中的第一个 JSON 值解码为函数调用事件：不合法的转义按字面反斜杠解码，值为调用数组或单个调用对象，anyName 为假时调用的函数必须已声明，不是调用时返回 false
+// assistantCalls 把代码块中的第一个 JSON 值解码为函数调用事件：无法解码时修正字符串中的不合法转义与原始控制字符后再解码，值为调用数组或单个调用对象，anyName 为假时调用的函数必须已声明，不是调用时返回 false
 func assistantCalls(body string, anyName bool, functions []string) ([]Event, bool) {
 	var value json.RawMessage
-	if json.NewDecoder(strings.NewReader(body)).Decode(&value) != nil && json.NewDecoder(strings.NewReader(literalInvalidEscapes(body))).Decode(&value) != nil {
+	if json.NewDecoder(strings.NewReader(body)).Decode(&value) != nil && json.NewDecoder(strings.NewReader(repairJSONStrings(body))).Decode(&value) != nil {
 		return nil, false
 	}
 	var calls []assistantCall
@@ -914,21 +1007,99 @@ func assistantCalls(body string, anyName bool, functions []string) ([]Event, boo
 	return events, true
 }
 
-// literalInvalidEscapes 把 JSON 中不合法的转义（如模型按 Python 写出的 \x27）改为字面反斜杠
-func literalInvalidEscapes(body string) string {
+// repairJSONStrings 修正 JSON 字符串中模型写出的内容：不合法的转义（如按 Python 写出的 \x27、Windows 路径中 \u 之后不是十六进制的部分）改为字面反斜杠，原始控制字符（如多行代码中的换行）改为转义
+func repairJSONStrings(body string) string {
 	var repaired strings.Builder
+	quoted := false
 	for index := 0; index < len(body); index++ {
-		repaired.WriteByte(body[index])
-		if body[index] != '\\' || index+1 == len(body) {
-			continue
+		char := body[index]
+		switch {
+		case quoted && char == '\\' && validJSONEscape(body[index+1:]):
+			repaired.WriteString(body[index : index+2])
+			index++
+		case quoted && char == '\\':
+			repaired.WriteString(`\\`)
+		case quoted && char < 0x20:
+			fmt.Fprintf(&repaired, `\u%04x`, char)
+		default:
+			if char == '"' {
+				quoted = !quoted
+			}
+			repaired.WriteByte(char)
 		}
-		index++
-		if !strings.ContainsRune(`"\/bfnrtu`, rune(body[index])) {
-			repaired.WriteByte('\\')
-		}
-		repaired.WriteByte(body[index])
 	}
 	return repaired.String()
+}
+
+// validJSONEscape 表示反斜杠之后的 rest 以 JSON 合法转义开头，\u 之后须为 4 位十六进制
+func validJSONEscape(rest string) bool {
+	if strings.HasPrefix(rest, "u") {
+		return len(rest) >= 5 && strings.Trim(rest[1:5], "0123456789abcdefABCDEF") == ""
+	}
+	return rest != "" && strings.IndexByte(`"\/bfnrt`, rest[0]) >= 0
+}
+
+// decodeQuestion 解码 ask_question 工具动作 field 22 [标题, null, 说明, [[参数名, 值]...]]：没有输出函数调用时把各问题与选项输出为正文，交回函数调用的提问不输出
+func (d *AssistantStreamDecoder) decodeQuestion(raw json.RawMessage, path string, evidence json.RawMessage) ([]Event, error) {
+	action, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	toolRaw := rawAt(action, 21)
+	if isJSONNull(toolRaw) || d.called {
+		return nil, nil
+	}
+	tool, err := rawArray(toolRaw, path+"[21]", evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	pairs, err := rawArray(rawAt(tool, 3), path+"[21][3]", evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	arguments := map[string]string{}
+	for index, pairRaw := range pairs {
+		pairPath := fmt.Sprintf("%s[21][3][%d]", path, index)
+		pair, err := rawArray(pairRaw, pairPath, evidence)
+		if err != nil {
+			return nil, withMethod(err, assistantStreamMethod)
+		}
+		name, err := rawString(rawAt(pair, 0), pairPath+"[0]", evidence)
+		if err != nil {
+			return nil, withMethod(err, assistantStreamMethod)
+		}
+		if arguments[name], err = rawString(rawAt(pair, 1), pairPath+"[1]", evidence); err != nil {
+			return nil, withMethod(err, assistantStreamMethod)
+		}
+	}
+	if arguments["tag"] != assistantQuestionTool {
+		return nil, nil
+	}
+	var questions []struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	if err := json.Unmarshal([]byte(arguments["questions"]), &questions); err != nil {
+		return nil, &ProtocolEvidenceError{Method: assistantStreamMethod, Path: path + "[21][3]", Detail: "ask_question 的 questions 不是问题列表: " + err.Error(), Raw: cloneRaw(evidence)}
+	}
+	var text strings.Builder
+	for _, question := range questions {
+		if question.Question == assistantCallQuestion {
+			continue
+		}
+		if d.wroteText || text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(question.Question)
+		for _, option := range question.Options {
+			text.WriteString("\n- " + option)
+		}
+	}
+	if text.Len() == 0 {
+		return nil, nil
+	}
+	d.wroteText = true
+	return []Event{{Kind: EventText, Text: text.String()}}, nil
 }
 
 // decodeSearch 把完成的 search_web 工具动作（field 19：查询、域名、摘要、[标题, 链接] 列表）并入搜索来源，查询与摘要记入 searches

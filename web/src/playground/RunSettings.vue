@@ -2,6 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n, type TranslationKey } from '@/i18n'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
@@ -13,7 +15,7 @@ import RunSettingsFrame from './RunSettingsFrame.vue'
 import SafetyDialog from './SafetyDialog.vue'
 import SystemInstructions from './SystemInstructions.vue'
 import ThinkingBudgetSetting from './ThinkingBudgetSetting.vue'
-import { Capability, hasCode, thinkingLevelLabels, thinkingLevelTooltips } from './catalog'
+import { Capability, hasCode, isAgent, thinkingLevelLabels, thinkingLevelTooltips } from './catalog'
 import { protocolOptions, protocolsFor, protocolSupports, type ProtocolSetting } from './protocols'
 import { defaultSettings, outputLimit, useCompare, usePlayground } from './session'
 import { useTools } from './tools'
@@ -46,6 +48,33 @@ const samplingPreset = ref('custom')
 const settings = computed(() => session.settings)
 const model = computed(() => currentModel.value)
 const can = (code: number) => hasCode(model.value, code)
+// agent 表示所选模型是 agent：请求以 agent_config 代替生成参数，不显示采样设置
+const agent = computed(() => isAgent(model.value))
+// researchSettings 是 Deep Research 的思考摘要、可视化与协作规划开关，与官网一样按各自的能力码显示
+const researchSettings = computed(() =>
+  (
+    [
+      {
+        key: 'thinkingSummaries',
+        code: Capability.ThinkingSummaries,
+        label: 'pg.thinkingSummaries',
+        tooltip: 'pg.thinkingSummariesTip',
+      },
+      {
+        key: 'visualization',
+        code: Capability.Visualization,
+        label: 'pg.visualization',
+        tooltip: 'pg.visualizationTip',
+      },
+      {
+        key: 'collaborativePlanning',
+        code: Capability.CollaborativePlanning,
+        label: 'pg.collaborativePlanning',
+        tooltip: 'pg.collaborativePlanningTip',
+      },
+    ] as const
+  ).filter((item) => can(item.code)),
+)
 // samplingPresets 是一次设定温度、Top P 与 Top K 的采样组合
 const samplingPresets = [
   { value: 'code', label: 'pg.samplingCode', temperature: 0.1, topP: 0.1, topK: 4 },
@@ -284,7 +313,9 @@ watch(schemaOpen, (open) => {
         :model="model"
         kind="chat"
         :has-content="session.turns.length > 0"
+        :agent-model="settings.agentModel"
         @select="selectModel"
+        @agent-model="settings.agentModel = $event"
       />
       <div class="system-instructions-panel">
         <button
@@ -566,15 +597,16 @@ watch(schemaOpen, (open) => {
         <button
           type="button"
           class="settings-group-header"
-          :class="{ expanded: toolsOpen }"
           :aria-expanded="toolsOpen"
           :aria-label="t('pg.toggleTools')"
           @click="toolsOpen = !toolsOpen"
         >
           <span class="group-title">{{ t('pg.tools') }}</span>
-          <UiIcon name="chevronDown" :size="20" class="expand-icon" />
+          <DisclosureChevron :open="toolsOpen" :turn="180" class="expand-icon"
+            ><UiIcon name="chevronDown" :size="20"
+          /></DisclosureChevron>
         </button>
-        <template v-if="toolsOpen">
+        <UiCollapse :open="toolsOpen">
           <div
             v-for="tool in tools"
             :key="tool.id"
@@ -619,23 +651,38 @@ watch(schemaOpen, (open) => {
               />
             </div>
           </div>
-        </template>
+        </UiCollapse>
+      </div>
+
+      <div v-if="researchSettings.length" class="field-group">
+        <div
+          v-for="item in researchSettings"
+          :key="item.key"
+          v-tooltip.left="t(item.tooltip)"
+          class="toggle-row"
+        >
+          <div class="label-container">
+            <p class="label">{{ t(item.label) }}</p>
+          </div>
+          <UiSwitch v-model="settings[item.key]" :label="t(item.label)" />
+        </div>
       </div>
 
       <div class="field-group advanced-settings">
         <button
           type="button"
           class="settings-group-header"
-          :class="{ expanded: advancedOpen }"
           :aria-expanded="advancedOpen"
           :aria-label="t('pg.toggleAdvanced')"
           @click="advancedOpen = !advancedOpen"
         >
           <span class="group-title">{{ t('pg.advancedSettings') }}</span>
-          <UiIcon name="chevronDown" :size="20" class="expand-icon" />
+          <DisclosureChevron :open="advancedOpen" :turn="180" class="expand-icon"
+            ><UiIcon name="chevronDown" :size="20"
+          /></DisclosureChevron>
         </button>
-        <template v-if="advancedOpen">
-          <div v-if="!can(Capability.FixedTemperature)" class="settings-item-column">
+        <UiCollapse :open="advancedOpen">
+          <div v-if="!agent && !can(Capability.FixedTemperature)" class="settings-item-column">
             <h3 class="item-description-title">{{ t('pg.samplingPreset') }}</h3>
             <UiSelect
               :model-value="samplingPreset"
@@ -742,7 +789,7 @@ watch(schemaOpen, (open) => {
             </p>
           </div>
           <div
-            v-if="!can(Capability.Temperature)"
+            v-if="!agent && !can(Capability.Temperature)"
             v-tooltip.left="t('pg.temperatureTip')"
             class="settings-item-column"
           >
@@ -770,7 +817,11 @@ watch(schemaOpen, (open) => {
             </div>
             <p class="setting-hint">{{ t('pg.samplingIgnored') }}</p>
           </div>
-          <div v-tooltip.left="settingTip('topK', t('pg.topKTip'))" class="settings-item-column">
+          <div
+            v-if="!agent"
+            v-tooltip.left="settingTip('topK', t('pg.topKTip'))"
+            class="settings-item-column"
+          >
             <h3 class="item-description-title">{{ t('pg.topK') }}</h3>
             <div class="ms-slider">
               <UiSlider
@@ -796,7 +847,7 @@ watch(schemaOpen, (open) => {
             </div>
             <p v-if="!can(Capability.TopK)" class="setting-hint">{{ t('pg.samplingIgnored') }}</p>
           </div>
-          <div v-tooltip.left="t('pg.topPTip')" class="settings-item-column">
+          <div v-if="!agent" v-tooltip.left="t('pg.topPTip')" class="settings-item-column">
             <h3 class="item-description-title">{{ t('pg.topP') }}</h3>
             <div class="ms-slider">
               <UiSlider
@@ -852,7 +903,7 @@ watch(schemaOpen, (open) => {
             </div>
             <UiSwitch v-model="settings.stream" :label="t('playground.stream')" />
           </div>
-        </template>
+        </UiCollapse>
       </div>
     </template>
   </RunSettingsFrame>

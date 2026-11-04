@@ -16,10 +16,13 @@ import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSwitch from '@/playground/ui/UiSwitch.vue'
+import AgentDisclaimer from './AgentDisclaimer.vue'
 import ApiKeyButton from './ApiKeyButton.vue'
 import CameraDialog from './CameraDialog.vue'
 import DriveDialog from './DriveDialog.vue'
 import SampleMediaDialog, { type SampleSelection } from './SampleMediaDialog.vue'
+import TokenCapDialog from './TokenCapDialog.vue'
+import { hasCode, isAgent } from './catalog'
 import { driveNames, type DriveFile } from './drive'
 import { readImage } from './media/api'
 import { useCompare, usePlayground } from './session'
@@ -34,7 +37,7 @@ import type { Part } from './types'
 
 const { t, tokenLabel } = useI18n()
 const { showNotice } = useConsole()
-const { session, countAttachment } = usePlayground()
+const { session, currentModel, countAttachment } = usePlayground()
 const { panes, comparing, running, submitAll, appendAll, stopAll } = useCompare()
 const { tools, setTool } = useTools()
 
@@ -118,7 +121,15 @@ const canRun = computed(
       panes.some((pane) => pane.session.turns.at(-1)?.role === 'user')),
 )
 
-// placeholderHeight 是占位文字在当前宽度下的高度，窗口尺寸或界面语言变化后重新测量
+// placeholder 与官网一致，agent 的占位文字为看看 agent 能做什么
+const placeholder = computed(() =>
+  t(isAgent(currentModel.value) ? 'pg.agentPlaceholder' : 'pg.placeholder'),
+)
+// disclaimer 表示与官网一样为带远程执行环境（能力码 65）的 agent 显示运行提示与 token 上限按钮
+const disclaimer = computed(() => !comparing.value && hasCode(currentModel.value, 65))
+const tokenCapOpen = ref(false)
+
+// placeholderHeight 是占位文字在当前宽度下的高度，输入框宽度、网页字体或界面语言变化后重新测量
 let placeholderHeight: number | undefined
 
 // resize 与官网 cdkTextareaAutosize 一致：输入框高度取内容与占位文字中较高者，超过 210 px 后在框内滚动
@@ -142,23 +153,28 @@ function remeasure(): void {
   resize()
 }
 
-let resizeTimer = 0
-// onWindowResize 与官网一样在窗口尺寸变化 16 ms 后重新测量
-function onWindowResize(): void {
-  if (resizeTimer !== 0) return
-  resizeTimer = window.setTimeout(() => {
-    resizeTimer = 0
-    remeasure()
-  }, 16)
+// measuredWidth 是上次测量占位文字时输入框的宽度，页面未显示时为 0
+let measuredWidth = 0
+// measureWidth 在输入框宽度变化后重新测量，未显示时宽度为 0 不测量
+function measureWidth(width: number): void {
+  if (width === 0 || width === measuredWidth) return
+  measuredWidth = width
+  remeasure()
+}
+const widthObserver = new ResizeObserver(([entry]) => measureWidth(entry!.contentRect.width))
+// onFontsLoaded 在网页字体载入后按新字形重新测量，页面未显示时留到再次显示
+function onFontsLoaded(): void {
+  measuredWidth = 0
+  measureWidth(textarea.value!.clientWidth)
 }
 watch(
   () => session.draft,
   () => void nextTick(resize),
 )
-watch(() => t('pg.placeholder'), remeasure, { flush: 'post' })
+watch(placeholder, remeasure, { flush: 'post' })
 onMounted(() => {
-  resize()
-  window.addEventListener('resize', onWindowResize)
+  widthObserver.observe(textarea.value!)
+  document.fonts.addEventListener('loadingdone', onFontsLoaded)
 })
 
 // focus 聚焦输入框
@@ -347,8 +363,8 @@ function addYouTube(): void {
 
 onUnmounted(() => {
   window.clearInterval(timer)
-  window.removeEventListener('resize', onWindowResize)
-  window.clearTimeout(resizeTimer)
+  widthObserver.disconnect()
+  document.fonts.removeEventListener('loadingdone', onFontsLoaded)
 })
 
 defineExpose({ focus })
@@ -374,12 +390,18 @@ defineExpose({ focus })
             v-model="session.draft"
             rows="1"
             class="textarea"
-            :placeholder="t('pg.placeholder')"
+            :placeholder="placeholder"
             :aria-label="t('pg.enterPrompt')"
             @keydown="onKeydown"
             @paste="onPaste"
           ></textarea>
         </div>
+        <AgentDisclaimer
+          v-if="disclaimer"
+          :running="session.running"
+          :token-cap="session.settings.maxTotalTokens"
+          @token-cap="tokenCapOpen = true"
+        />
       </div>
       <div v-if="session.attachments.length || preparing" class="multi-media-row">
         <div
@@ -593,14 +615,14 @@ defineExpose({ focus })
             :aria-disabled="!running && !canRun"
             @click="submit"
           >
-            <template v-if="running">
-              <UiIcon name="refresh" :size="18" class="spin" />
+            <span class="run-state stop-state" :class="{ inactive: !running }">
+              <UiIcon v-if="running" name="refresh" :size="18" class="spin" />
               <span class="run-button-label">{{ t('pg.stop') }}</span>
-            </template>
-            <template v-else>
+            </span>
+            <span class="run-state" :class="{ inactive: running }">
               <span class="run-button-label">{{ t('pg.run') }}</span>
               <RunKeyHint />
-            </template>
+            </span>
           </button>
         </div>
       </div>
@@ -641,6 +663,11 @@ defineExpose({ focus })
     <CameraDialog ref="camera" @capture="addPhoto" />
     <DriveDialog v-model:open="driveOpen" @select="addDriveFile" />
     <SampleMediaDialog v-model:open="sampleOpen" @select="addSample" />
+    <TokenCapDialog
+      v-if="disclaimer"
+      v-model:open="tokenCapOpen"
+      v-model:cap="session.settings.maxTotalTokens"
+    />
   </div>
 </template>
 
@@ -837,6 +864,7 @@ defineExpose({ focus })
   outline: none;
   overflow-wrap: anywhere;
   resize: none;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
 }
 
@@ -925,6 +953,7 @@ defineExpose({ focus })
 }
 
 .button-wrapper {
+  position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: center;
@@ -934,6 +963,8 @@ defineExpose({ focus })
 }
 
 .recording-time {
+  position: absolute;
+  right: calc(100% + 8px);
   color: var(--color-v3-text-var);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -941,6 +972,26 @@ defineExpose({ focus })
 
 .run-button .run-button-label {
   min-width: 28px;
+}
+
+.run-button {
+  position: relative;
+}
+
+.run-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.stop-state {
+  position: absolute;
+  inset: 0;
+}
+
+.run-state.inactive {
+  visibility: hidden;
 }
 
 .tool-item {

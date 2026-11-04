@@ -2,25 +2,36 @@ import { EventSourceParserStream } from 'eventsource-parser/stream'
 import { jsonBody } from '@/api'
 import type { Model } from '@/types'
 import { base64Bytes } from './bytes'
+import { isAgent } from './catalog'
 import { errorMessage, streamUpdate, type GenerateRequest, type StreamUpdate } from './request'
-import type { Part } from './types'
+import type { Part, Source, Support } from './types'
 
 // Protocol 是 API 试用页发送请求使用的公开协议
-export type Protocol = 'gemini' | 'openai-chat' | 'openai-responses' | 'anthropic' | 'openai-images'
+export type Protocol =
+  | 'gemini'
+  | 'openai-chat'
+  | 'openai-responses'
+  | 'anthropic'
+  | 'openai-images'
+  | 'interactions'
 
-// protocolOptions 是协议下拉的选项，Gemini API 与官网一致为默认，OpenAI Images 只用于图片模型
+// protocolOptions 是协议下拉的选项，Gemini API 与官网一致为默认，OpenAI Images 只用于图片模型，Gemini Interactions 只用于 agent
 export const protocolOptions: { value: Protocol; label: string }[] = [
   { value: 'gemini', label: 'Gemini API' },
   { value: 'openai-chat', label: 'OpenAI Chat' },
   { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'anthropic', label: 'Anthropic Messages' },
   { value: 'openai-images', label: 'OpenAI Images' },
+  { value: 'interactions', label: 'Gemini Interactions' },
 ]
 
-// protocolsFor 返回模型可用的协议选项
+// protocolsFor 返回模型可用的协议选项：agent 与官网一样只经 Interactions 调用
 export function protocolsFor(model: Model | undefined): typeof protocolOptions {
+  if (isAgent(model)) return protocolOptions.filter((item) => item.value === 'interactions')
   return protocolOptions.filter(
-    (item) => item.value !== 'openai-images' || model?.capabilities?.image_route === true,
+    (item) =>
+      item.value !== 'interactions' &&
+      (item.value !== 'openai-images' || model?.capabilities?.image_route === true),
   )
 }
 
@@ -40,6 +51,14 @@ const unsupported: Record<Protocol, readonly ProtocolSetting[]> = {
   'openai-responses': ['topK', 'stopSequences', 'safety', 'mediaResolution', 'thinkingBudget'],
   anthropic: ['safety', 'mediaResolution', 'structuredOutput'],
   'openai-images': [
+    'topK',
+    'stopSequences',
+    'safety',
+    'mediaResolution',
+    'structuredOutput',
+    'thinkingBudget',
+  ],
+  interactions: [
     'topK',
     'stopSequences',
     'safety',
@@ -419,6 +438,7 @@ const finishReasons: Record<string, string> = {
   tool_use: 'STOP',
   pause_turn: 'STOP',
   completed: 'STOP',
+  requires_action: 'STOP',
   length: 'MAX_TOKENS',
   max_tokens: 'MAX_TOKENS',
   max_output_tokens: 'MAX_TOKENS',
@@ -534,7 +554,49 @@ function responsesItem(item: Record<string, unknown>): Part[] {
       .map((text) => ({ text }))
   if (item.type === 'image_generation_call' && typeof item.result === 'string')
     return [{ inlineData: { mimeType: 'image/png', data: item.result } }]
+  if (item.type === 'code_interpreter_call')
+    return [
+      { executableCode: { language: 'PYTHON', code: stringOf(item.code) } },
+      ...responsesCodeResult(item),
+    ]
+  if (item.type === 'web_search_call') {
+    const action = record(item.action)
+    const id = stringOf(item.id)
+    if (action.type === 'open_page')
+      return urlContextStep(id, stringOf(action.url), item.status === 'completed')
+    const queries = Array.isArray(action.queries) ? action.queries : [action.query]
+    return [
+      { toolCall: { toolType: 'GOOGLE_SEARCH_WEB', args: { queries }, id } },
+      { toolResponse: { toolType: 'GOOGLE_SEARCH_WEB', response: {}, id } },
+    ]
+  }
   return []
+}
+
+// urlContextStep 返回一次网址读取的调用与结果片段，结果写法与 Gemini API 的 url_metadata 相同
+function urlContextStep(id: string, url: string, retrieved: boolean): Part[] {
+  return [
+    { toolCall: { toolType: 'URL_CONTEXT', args: { urls: [url] }, id } },
+    {
+      toolResponse: {
+        toolType: 'URL_CONTEXT',
+        response: interactionToolResponse('URL_CONTEXT', [
+          { url, status: retrieved ? 'success' : 'error' },
+        ]),
+        id,
+      },
+    },
+  ]
+}
+
+// responsesCodeResult 把代码解释器调用的状态与日志换为代码执行结果，调用未结束时没有结果
+function responsesCodeResult(item: Record<string, unknown>): Part[] {
+  if (item.status !== 'completed' && item.status !== 'failed') return []
+  const output = ((item.outputs as unknown[] | undefined) ?? [])
+    .map((entry) => stringOf(record(entry).logs))
+    .join('')
+  const outcome = item.status === 'completed' ? 'OUTCOME_OK' : 'OUTCOME_FAILED'
+  return [{ codeExecutionResult: output === '' ? { outcome } : { outcome, output } }]
 }
 
 // responsesUsage 把 Responses 完成对象中的用量与结束原因写入变化
@@ -551,7 +613,7 @@ function responsesUsage(response: Record<string, unknown>, update: StreamUpdate)
       : finishReason(String(response.status))
 }
 
-// responsesDecoder 解析 Responses：流式只取增量与完成的函数调用，完整响应读取全部输出项
+// responsesDecoder 解析 Responses：流式取正文与思考增量、写完的代码与完成的输出项，完整响应读取全部输出项
 function responsesDecoder(): Decoder {
   return {
     event(value) {
@@ -561,9 +623,16 @@ function responsesDecoder(): Decoder {
       if (type === 'response.output_text.delta') update.parts.push({ text: delta })
       else if (type === 'response.reasoning_summary_text.delta')
         update.parts.push({ text: delta, thought: true })
+      else if (type === 'response.code_interpreter_call_code.done')
+        update.parts.push({ executableCode: { language: 'PYTHON', code: stringOf(value.code) } })
       else if (type === 'response.output_item.done') {
         const item = record(value.item)
-        if (item.type === 'function_call' || item.type === 'image_generation_call')
+        if (item.type === 'code_interpreter_call') update.parts.push(...responsesCodeResult(item))
+        else if (
+          item.type === 'function_call' ||
+          item.type === 'image_generation_call' ||
+          item.type === 'web_search_call'
+        )
           update.parts.push(...responsesItem(item))
       } else if (type === 'response.completed' || type === 'response.incomplete')
         responsesUsage(record(value.response), update)
@@ -578,10 +647,44 @@ function responsesDecoder(): Decoder {
   }
 }
 
-// anthropicDecoder 解析 Messages：按内容块拼接正文、思考与工具输入
+// anthropicServerTool 把服务端工具调用块换为步骤：代码执行为可执行代码，网页搜索为搜索调用，网页读取为网址读取调用
+function anthropicServerTool(name: string, id: string, input: Record<string, unknown>): Part[] {
+  if (name === 'code_execution')
+    return [{ executableCode: { language: 'PYTHON', code: stringOf(input.code) } }]
+  if (name === 'web_search')
+    return [{ toolCall: { toolType: 'GOOGLE_SEARCH_WEB', args: { queries: [input.query] }, id } }]
+  if (name === 'web_fetch')
+    return [{ toolCall: { toolType: 'URL_CONTEXT', args: { urls: [stringOf(input.url)] }, id } }]
+  return []
+}
+
+// anthropicCodeResult 把代码执行结果块换为代码执行结果：返回码非零为失败并取 stderr，执行超时错误为超时
+function anthropicCodeResult(
+  content: Record<string, unknown>,
+): NonNullable<Part['codeExecutionResult']> {
+  if (content.type === 'code_execution_tool_result_error')
+    return {
+      outcome:
+        content.error_code === 'execution_time_exceeded'
+          ? 'OUTCOME_DEADLINE_EXCEEDED'
+          : 'OUTCOME_FAILED',
+    }
+  const ok = content.return_code === 0
+  const output = stringOf(ok ? content.stdout : content.stderr)
+  const outcome = ok ? 'OUTCOME_OK' : 'OUTCOME_FAILED'
+  return output === '' ? { outcome } : { outcome, output }
+}
+
+// anthropicDecoder 解析 Messages：按内容块拼接正文、思考、工具输入与服务端工具步骤
 function anthropicDecoder(): Decoder {
-  const blocks = new Map<number, { name: string; id: string; input: string }>()
+  const blocks = new Map<number, { type: string; name: string; id: string; input: string }>()
+  // fetches 是网页读取调用的网址，读取失败的结果块只带调用 ID
+  const fetches = new Map<string, string>()
   let promptTokens: number | undefined
+  const serverTool = (name: string, id: string, input: Record<string, unknown>): Part[] => {
+    if (name === 'web_fetch') fetches.set(id, stringOf(input.url))
+    return anthropicServerTool(name, id, input)
+  }
   const block = (raw: unknown): Part[] => {
     const value = record(raw)
     if (value.type === 'text' && typeof value.text === 'string' && value.text !== '')
@@ -598,6 +701,25 @@ function anthropicDecoder(): Decoder {
           },
         },
       ]
+    if (value.type === 'server_tool_use')
+      return serverTool(stringOf(value.name), stringOf(value.id), record(value.input))
+    if (value.type === 'code_execution_tool_result')
+      return [{ codeExecutionResult: anthropicCodeResult(record(value.content)) }]
+    if (value.type === 'web_search_tool_result') {
+      const sources = ((value.content as unknown[] | undefined) ?? []).map((result) => ({
+        uri: stringOf(record(result).url),
+        title: stringOf(record(result).title),
+      }))
+      const id = stringOf(value.tool_use_id)
+      return [{ toolResponse: { toolType: 'GOOGLE_SEARCH_WEB', response: { sources }, id } }]
+    }
+    if (value.type === 'web_fetch_tool_result') {
+      const id = stringOf(value.tool_use_id)
+      const content = record(value.content)
+      const retrieved = content.type === 'web_fetch_result'
+      const url = retrieved ? stringOf(content.url) : (fetches.get(id) ?? '')
+      return urlContextStep(id, url, retrieved).slice(1)
+    }
     return []
   }
   return {
@@ -610,11 +732,13 @@ function anthropicDecoder(): Decoder {
       switch (value.type) {
         case 'content_block_start': {
           const start = record(value.content_block)
-          if (start.type === 'tool_use')
+          const input = record(start.input)
+          if (start.type === 'tool_use' || start.type === 'server_tool_use')
             blocks.set(Number(value.index), {
+              type: start.type,
               name: stringOf(start.name),
               id: stringOf(start.id),
-              input: '',
+              input: Object.keys(input).length > 0 ? JSON.stringify(input) : '',
             })
           else update.parts.push(...block(start))
           break
@@ -632,7 +756,9 @@ function anthropicDecoder(): Decoder {
         }
         case 'content_block_stop': {
           const tool = blocks.get(Number(value.index))
-          if (tool)
+          if (tool?.type === 'server_tool_use')
+            update.parts.push(...serverTool(tool.name, tool.id, parseArguments(tool.input)))
+          else if (tool)
             update.parts.push({
               functionCall: { name: tool.name, args: parseArguments(tool.input), id: tool.id },
             })
@@ -663,6 +789,370 @@ function geminiDecoder(): Decoder {
   return {
     event: (value) => streamUpdate(value),
     done: () => false,
+  }
+}
+
+// interactionToolSteps 是服务端工具类型对应的 Interactions 调用与结果步骤类型
+const interactionToolSteps: Record<string, [string, string]> = {
+  GOOGLE_SEARCH_WEB: ['google_search_call', 'google_search_result'],
+  GOOGLE_SEARCH_IMAGE: ['google_search_call', 'google_search_result'],
+  URL_CONTEXT: ['url_context_call', 'url_context_result'],
+  GOOGLE_MAPS: ['google_maps_call', 'google_maps_result'],
+  FILE_SEARCH: ['file_search_call', 'file_search_result'],
+  MEDIA_PROCESSING: ['processing_call', 'processing_result'],
+}
+
+// interactionMedia 把附件写为 Interactions 内容：图片、音频、视频之外为 document，内联数据带 data，文件引用带 uri
+function interactionMedia(
+  mimeType: string,
+  source: { data: string } | { uri: string },
+): Record<string, unknown> {
+  const kind = mimeType.split('/')[0]!
+  const type = ['image', 'audio', 'video'].includes(kind) ? kind : 'document'
+  return { type, ...(mimeType !== '' && { mime_type: mimeType }), ...source }
+}
+
+// interactionToolResult 把服务端工具结果写为 Interactions 结果数组：网址读取为网址与状态，地图为地点，搜索为搜索建议
+function interactionToolResult(toolType: string, response: Record<string, unknown>): unknown[] {
+  if (toolType === 'URL_CONTEXT')
+    return ((response.url_metadata as unknown[] | undefined) ?? []).map((raw) => {
+      const item = record(raw)
+      return {
+        url: stringOf(item.retrieved_url),
+        status: stringOf(item.url_retrieval_status)
+          .replace('URL_RETRIEVAL_STATUS_', '')
+          .toLowerCase(),
+      }
+    })
+  if (toolType === 'GOOGLE_MAPS')
+    return [
+      {
+        places: ((response.places as unknown[] | undefined) ?? []).map((raw) => {
+          const place = record(raw)
+          return { place_id: place.place_id, name: place.title, url: place.uri }
+        }),
+        ...(typeof response.widget_context_token === 'string' && {
+          widget_context_token: response.widget_context_token,
+        }),
+      },
+    ]
+  return [
+    typeof response.search_suggestions === 'string'
+      ? { search_suggestions: response.search_suggestions }
+      : {},
+  ]
+}
+
+// interactionToolResponse 把 Interactions 结果数组还原为服务端工具结果，写法与 Gemini API 的 toolResponse.response 相同
+function interactionToolResponse(toolType: string, result: unknown): Record<string, unknown> {
+  const items = (Array.isArray(result) ? result : []).map(record)
+  if (toolType === 'URL_CONTEXT')
+    return {
+      url_metadata: items.map((item) => ({
+        retrieved_url: stringOf(item.url),
+        url_retrieval_status: `URL_RETRIEVAL_STATUS_${stringOf(item.status).toUpperCase()}`,
+      })),
+    }
+  if (toolType === 'GOOGLE_MAPS')
+    return {
+      places: items.flatMap((item) =>
+        ((item.places as unknown[] | undefined) ?? []).map((raw) => {
+          const place = record(raw)
+          return { place_id: place.place_id, title: place.name, uri: place.url }
+        }),
+      ),
+    }
+  const suggestions = items.find((item) => typeof item.search_suggestions === 'string')
+  return suggestions ? { search_suggestions: suggestions.search_suggestions } : {}
+}
+
+// interactionsInput 把 contents 写为 Interactions 输入步骤：正文与附件为 user_input 或 model_output，思考签名为其前的 thought 步骤，函数调用与结果、代码执行与服务端工具为对应步骤，思考正文不发送
+function interactionsInput(request: GenerateRequest): Record<string, unknown>[] {
+  const steps: Record<string, unknown>[] = []
+  let code = ''
+  request.contents.forEach((content, turn) => {
+    let output: Record<string, unknown>[] | undefined
+    // step 写入独立步骤，其后的正文另起内容步骤
+    const step = (value: Record<string, unknown>) => {
+      output = undefined
+      steps.push(value)
+    }
+    // write 把一项正文或附件并入当前内容步骤
+    const write = (value: Record<string, unknown>) => {
+      if (output === undefined) {
+        output = []
+        steps.push({
+          type: content.role === 'user' ? 'user_input' : 'model_output',
+          content: output,
+        })
+      }
+      output.push(value)
+    }
+    content.parts.forEach((part, index) => {
+      if (part.thoughtSignature) step({ type: 'thought', signature: part.thoughtSignature })
+      if (part.thought) return
+      if (part.text) write({ type: 'text', text: part.text })
+      else if (part.inlineData)
+        write(interactionMedia(part.inlineData.mimeType, { data: part.inlineData.data }))
+      else if (part.fileData)
+        write(interactionMedia(part.fileData.mimeType ?? '', { uri: part.fileData.fileUri }))
+      else if (part.functionCall)
+        step({
+          type: 'function_call',
+          id: callID(part.functionCall),
+          name: part.functionCall.name,
+          arguments: part.functionCall.args ?? {},
+        })
+      else if (part.functionResponse)
+        step({
+          type: 'function_result',
+          call_id: callID(part.functionResponse),
+          name: part.functionResponse.name,
+          result: part.functionResponse.response,
+        })
+      else if (part.executableCode) {
+        code = `code_${turn}_${index}`
+        step({
+          type: 'code_execution_call',
+          id: code,
+          arguments: {
+            code: part.executableCode.code,
+            language: part.executableCode.language.toLowerCase(),
+          },
+        })
+      } else if (part.codeExecutionResult)
+        step({
+          type: 'code_execution_result',
+          call_id: code,
+          result: part.codeExecutionResult.output ?? '',
+          ...(part.codeExecutionResult.outcome !== 'OUTCOME_OK' && { is_error: true }),
+        })
+      else if (part.toolCall) {
+        const names = interactionToolSteps[part.toolCall.toolType ?? '']
+        if (names)
+          step({
+            type: names[0],
+            id: part.toolCall.id ?? '',
+            arguments: part.toolCall.args ?? {},
+            ...(part.toolCall.toolType === 'GOOGLE_SEARCH_IMAGE' && {
+              search_type: 'image_search',
+            }),
+          })
+      } else if (part.toolResponse) {
+        const toolType = part.toolResponse.toolType ?? ''
+        const names = interactionToolSteps[toolType]
+        if (names)
+          step({
+            type: names[1],
+            call_id: part.toolResponse.id ?? '',
+            result: interactionToolResult(toolType, part.toolResponse.response ?? {}),
+          })
+      }
+    })
+  })
+  return steps
+}
+
+// interactionsRequest 组合 Interactions 创建请求：agent 名称、输入步骤、续接的交互 ID、系统指令、工具与 agent 配置，工具顺序与官网相同；工具全部关闭时发送空列表，与官网一样不使用工具
+function interactionsRequest(
+  modelID: string,
+  request: GenerateRequest,
+  agent: Record<string, unknown> | undefined,
+  previous: string | undefined,
+  stream: boolean,
+): Record<string, unknown> {
+  const { builtin, functions } = requestTools(request)
+  const search = ['googleSearch', 'imageSearch'].filter((name) => builtin.includes(name))
+  const tools = [
+    ...(builtin.includes('codeExecution') ? [{ type: 'code_execution' }] : []),
+    ...functions.map((declaration) => ({
+      type: 'function',
+      name: declaration.name,
+      ...(declaration.description !== undefined && { description: declaration.description }),
+      ...(declaration.parameters !== undefined && { parameters: declaration.parameters }),
+    })),
+    ...(search.length > 0
+      ? [
+          {
+            type: 'google_search',
+            ...(search.includes('imageSearch') && {
+              search_types: search.map((name) =>
+                name === 'imageSearch' ? 'image_search' : 'web_search',
+              ),
+            }),
+          },
+        ]
+      : []),
+    ...(builtin.includes('urlContext') ? [{ type: 'url_context' }] : []),
+    ...(builtin.includes('googleMaps') ? [{ type: 'google_maps' }] : []),
+  ]
+  const system = systemText(request)
+  return {
+    agent: modelID,
+    input: interactionsInput(request),
+    ...(previous !== undefined && { previous_interaction_id: previous }),
+    ...(system !== '' && { system_instruction: system }),
+    tools,
+    ...(agent && { agent_config: agent }),
+    stream,
+  }
+}
+
+// interactionToolParts 把函数调用、代码执行与服务端工具步骤换为片段
+function interactionToolParts(step: Record<string, unknown>): Part[] {
+  const type = stringOf(step.type)
+  const args = record(step.arguments)
+  if (type === 'function_call')
+    return [{ functionCall: { name: stringOf(step.name), args, id: stringOf(step.id) } }]
+  if (type === 'code_execution_call')
+    return [
+      {
+        executableCode: {
+          language: (stringOf(args.language) || 'python').toUpperCase(),
+          code: stringOf(args.code),
+        },
+      },
+    ]
+  if (type === 'code_execution_result') {
+    const output = stringOf(step.result)
+    const outcome = step.is_error === true ? 'OUTCOME_FAILED' : 'OUTCOME_OK'
+    return [{ codeExecutionResult: output === '' ? { outcome } : { outcome, output } }]
+  }
+  const entry = Object.entries(interactionToolSteps).find(([, names]) => names.includes(type))
+  if (entry === undefined) return []
+  const toolType = step.search_type === 'image_search' ? 'GOOGLE_SEARCH_IMAGE' : entry[0]
+  if (type === entry[1][0]) return [{ toolCall: { toolType, args, id: stringOf(step.id) } }]
+  return [
+    {
+      toolResponse: {
+        toolType,
+        response: interactionToolResponse(toolType, step.result),
+        id: stringOf(step.call_id),
+      },
+    },
+  ]
+}
+
+// interactionContentPart 把一项正文或媒体内容换为片段，thought 表示它属于思考摘要
+function interactionContentPart(raw: unknown, thought: boolean): Part | undefined {
+  const content = record(raw)
+  const flag = thought ? { thought: true } : {}
+  if (content.type === 'text') return { text: stringOf(content.text), ...flag }
+  const mimeType = stringOf(content.mime_type)
+  if (typeof content.data === 'string')
+    return { inlineData: { mimeType, data: content.data }, ...flag }
+  if (typeof content.uri === 'string') return { fileData: { mimeType, fileUri: content.uri } }
+  return undefined
+}
+
+// interactionsDecoder 解析 Interactions：流式按步骤开始、增量与结束取正文、思考摘要、思考签名、引用、媒体、函数调用与工具步骤，完成事件带用量与状态；完整响应依次读取全部步骤；思考签名附到其后第一个非思考片段，引用下标换为全部回答正文中的字节位置
+function interactionsDecoder(): Decoder {
+  const encoder = new TextEncoder()
+  const sources: Source[] = []
+  const supports: Support[] = []
+  let kind = ''
+  let signature = ''
+  let answerBytes = 0
+  let textStart = 0
+  let inText = false
+  // emit 写入一个片段：待用的思考签名附到非思考片段，回答正文计入字节位置
+  const emit = (update: StreamUpdate, part: Part) => {
+    if (signature !== '' && !part.thought) {
+      part.thoughtSignature = signature
+      signature = ''
+    }
+    if (part.text !== undefined && !part.thought) answerBytes += encoder.encode(part.text).length
+    update.parts.push(part)
+  }
+  // cite 把一段回答正文的 url_citation 注释写为来源与支撑，base 为该段在回答正文中的起始字节
+  const cite = (update: StreamUpdate, annotations: unknown, base: number) => {
+    for (const raw of Array.isArray(annotations) ? annotations : []) {
+      const annotation = record(raw)
+      if (annotation.type !== 'url_citation' || typeof annotation.end_index !== 'number') continue
+      const uri = stringOf(annotation.url)
+      let index = sources.findIndex((source) => source.uri === uri)
+      if (index === -1) {
+        index = sources.length
+        sources.push({ uri, title: stringOf(annotation.title) || uri })
+      }
+      supports.push({ end: base + annotation.end_index, chunks: [index] })
+    }
+    update.sources = [...sources]
+    update.supports = [...supports]
+  }
+  // finish 写入交互 ID、用量与结束原因，仍待用的思考签名附到最后一个片段
+  const finish = (update: StreamUpdate, interaction: Record<string, unknown>) => {
+    if (signature !== '') update.parts.push({ text: '', thoughtSignature: signature })
+    signature = ''
+    if (typeof interaction.id === 'string') update.interactionId = interaction.id
+    const usage = record(interaction.usage)
+    const { total_output_tokens: output, total_thought_tokens: thoughts } = usage
+    if (typeof output === 'number' || typeof thoughts === 'number')
+      update.tokens = Number(output ?? 0) + Number(thoughts ?? 0)
+    if (typeof thoughts === 'number') update.thoughtTokens = thoughts
+    if (typeof usage.total_input_tokens === 'number') update.promptTokens = usage.total_input_tokens
+    if (typeof interaction.status === 'string')
+      update.finishReason = finishReason(interaction.status)
+  }
+  // step 读取完整响应中的一个步骤
+  const step = (update: StreamUpdate, value: Record<string, unknown>) => {
+    if (value.type === 'thought') {
+      for (const content of (value.summary as unknown[] | undefined) ?? []) {
+        const part = interactionContentPart(content, true)
+        if (part) emit(update, part)
+      }
+      if (typeof value.signature === 'string') signature = value.signature
+    } else if (value.type === 'model_output') {
+      for (const content of (value.content as unknown[] | undefined) ?? []) {
+        const base = answerBytes
+        const part = interactionContentPart(content, false)
+        if (part) emit(update, part)
+        cite(update, record(content).annotations, base)
+      }
+    } else for (const part of interactionToolParts(value)) emit(update, part)
+  }
+  return {
+    event(value) {
+      const update: StreamUpdate = { parts: [] }
+      switch (value.event_type) {
+        case 'step.start': {
+          const start = record(value.step)
+          kind = stringOf(start.type)
+          inText = false
+          if (kind !== 'thought' && kind !== 'model_output')
+            for (const part of interactionToolParts(start)) emit(update, part)
+          break
+        }
+        case 'step.delta': {
+          const delta = record(value.delta)
+          if (delta.type === 'thought_signature') signature = stringOf(delta.signature)
+          else if (delta.type === 'thought_summary') {
+            const part = interactionContentPart(delta.content, true)
+            if (part) emit(update, part)
+          } else if (delta.type === 'text_annotation_delta')
+            cite(update, delta.annotations, textStart)
+          else if (kind === 'model_output') {
+            if (delta.type === 'text' && !inText) textStart = answerBytes
+            inText = delta.type === 'text'
+            const part = interactionContentPart(delta, false)
+            if (part) emit(update, part)
+          } else if (typeof delta.signature === 'string')
+            update.parts.push({ text: '', thoughtSignature: delta.signature })
+          break
+        }
+        case 'interaction.completed':
+          finish(update, record(value.interaction))
+          break
+        case undefined:
+          if (value.object !== 'interaction') break
+          for (const item of (value.steps as unknown[] | undefined) ?? [])
+            step(update, record(item))
+          finish(update, value)
+          break
+      }
+      return update
+    },
+    done: (value) => value.event_type === 'interaction.completed',
   }
 }
 
@@ -751,7 +1241,7 @@ interface ProtocolCall {
   decoder: Decoder
 }
 
-// protocolCall 按协议组合请求，获取代码以同一请求生成示例
+// protocolCall 按协议组合请求，previous 为 Interactions 续接的交互 ID，获取代码以同一请求生成示例
 export function protocolCall(
   protocol: Protocol,
   model: Model | undefined,
@@ -760,9 +1250,19 @@ export function protocolCall(
   request: GenerateRequest,
   stream: boolean,
   images: ImageOptions,
+  agent: Record<string, unknown> | undefined,
+  previous: string | undefined,
 ): ProtocolCall {
   const headers = new Headers({ 'Content-Type': 'application/json' })
   switch (protocol) {
+    case 'interactions':
+      if (key !== '') headers.set('x-goog-api-key', key)
+      return {
+        path: '/v1beta/interactions',
+        headers,
+        body: interactionsRequest(modelID, request, agent, previous, stream),
+        decoder: interactionsDecoder(),
+      }
     case 'openai-images': {
       if (key !== '') headers.set('Authorization', `Bearer ${key}`)
       const call = imagesCall(modelID, request, images, stream)
@@ -805,7 +1305,7 @@ export function protocolCall(
   }
 }
 
-// GenerateOptions 是一次试用请求的协议、模型与回调
+// GenerateOptions 是一次试用请求的协议、模型、OpenAI Images 参数、Interactions 的 agent 配置与续接的交互 ID 与回调
 interface GenerateOptions {
   protocol: Protocol
   stream: boolean
@@ -814,6 +1314,8 @@ interface GenerateOptions {
   apiKey: string
   request: GenerateRequest
   images: ImageOptions
+  agent: Record<string, unknown> | undefined
+  previous: string | undefined
   signal: AbortSignal
   onUpdate: (update: StreamUpdate) => void
 }
@@ -828,6 +1330,8 @@ export async function generate(options: GenerateOptions): Promise<void> {
     options.request,
     options.stream,
     options.images,
+    options.agent,
+    options.previous,
   )
   const response = await fetch(call.path, {
     method: 'POST',

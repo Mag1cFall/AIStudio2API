@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
 import { useI18n } from '@/i18n'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
@@ -85,37 +87,40 @@ function saveAlias(index: number, event: Event): void {
       <button
         type="button"
         class="settings-group-header model-settings-header"
-        :class="{ expanded: modelOpen }"
         :aria-expanded="modelOpen"
         @click="modelOpen = !modelOpen"
       >
         <span class="group-title">{{ t('pg.modelSettings') }}</span>
-        <UiIcon name="chevronDown" :size="20" class="expand-icon" />
+        <DisclosureChevron :open="modelOpen" :turn="180" class="expand-icon"
+          ><UiIcon name="chevronDown" :size="20"
+        /></DisclosureChevron>
       </button>
-      <div v-if="modelOpen" v-tooltip.left="t('pg.temperatureTip')" class="settings-item-column">
-        <h3 class="item-description-title">{{ t('pg.temperature') }}</h3>
-        <div class="ms-slider">
-          <UiSlider
-            :model-value="temperature"
-            :min="0"
-            :max="currentModel?.max_temperature ?? 2"
-            :step="0.05"
-            :label="t('pg.temperature')"
-            @update:model-value="state.settings.temperature = $event"
-          />
-          <input
-            ms-input
-            class="small slider-number-input"
-            type="number"
-            :min="0"
-            :max="currentModel?.max_temperature ?? 2"
-            step="0.05"
-            :aria-label="t('pg.temperature')"
-            :value="temperature"
-            @change="setTemperature"
-          />
+      <UiCollapse :open="modelOpen">
+        <div v-tooltip.left="t('pg.temperatureTip')" class="settings-item-column">
+          <h3 class="item-description-title">{{ t('pg.temperature') }}</h3>
+          <div class="ms-slider">
+            <UiSlider
+              :model-value="temperature"
+              :min="0"
+              :max="currentModel?.max_temperature ?? 2"
+              :step="0.05"
+              :label="t('pg.temperature')"
+              @update:model-value="state.settings.temperature = $event"
+            />
+            <input
+              ms-input
+              class="small slider-number-input"
+              type="number"
+              :min="0"
+              :max="currentModel?.max_temperature ?? 2"
+              step="0.05"
+              :aria-label="t('pg.temperature')"
+              :value="temperature"
+              @change="setTemperature"
+            />
+          </div>
         </div>
-      </div>
+      </UiCollapse>
     </div>
 
     <div v-if="state.blocks.length > 0" class="field-group speaker-settings">

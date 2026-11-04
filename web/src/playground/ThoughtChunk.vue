@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import { formatDuration } from './duration'
@@ -16,16 +18,6 @@ const props = defineProps<{
 }>()
 const { t, locale } = useI18n()
 const expanded = ref(false)
-// bodyMounted 表示思考正文已渲染；折叠动画结束后卸载，生成中折叠时不解析正文
-const bodyMounted = ref(false)
-
-watch(expanded, (open) => {
-  if (open) bodyMounted.value = true
-  else
-    window.setTimeout(() => {
-      if (!expanded.value) bodyMounted.value = false
-    }, 225)
-})
 
 // heading 按官网取小标题的规则取思考中最后一个含粗体的行的粗体文字
 const heading = computed(
@@ -70,7 +62,7 @@ function onKey(event: KeyboardEvent): void {
 
 <template>
   <div class="thought-chunk">
-    <div class="thought-panel" :class="{ expanded }">
+    <div class="thought-panel">
       <div
         class="top-panel-header"
         role="button"
@@ -89,13 +81,11 @@ function onKey(event: KeyboardEvent): void {
         <template v-else>{{ t('pg.thoughts') }}</template>
         <span v-if="!streaming && meta" class="thought-meta">{{ meta }}</span>
       </div>
-      <div class="thought-body" :inert="!expanded">
-        <div class="thought-body-inner">
-          <div v-if="bodyMounted" class="thought-content">
-            <MarkdownView :text="shown ?? text" :raw="raw" />
-          </div>
+      <UiCollapse :open="expanded">
+        <div class="thought-content">
+          <MarkdownView :text="shown ?? text" :raw="raw" />
         </div>
-      </div>
+      </UiCollapse>
       <div
         v-tooltip="toggleText"
         class="thought-panel-footer"
@@ -111,7 +101,9 @@ function onKey(event: KeyboardEvent): void {
           </Transition>
           <p v-else class="thought-collapsed-text">{{ toggleText }}</p>
         </div>
-        <UiIcon name="chevronRight" :size="20" class="footer-icon" :class="{ expanded }" />
+        <DisclosureChevron :open="expanded" :turn="180"
+          ><UiIcon name="chevronRight" :size="20" class="footer-icon"
+        /></DisclosureChevron>
       </div>
     </div>
   </div>
@@ -144,11 +136,6 @@ function onKey(event: KeyboardEvent): void {
   font-weight: 500;
   line-height: 21px;
   outline: none;
-  transition: margin-bottom 225ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.thought-panel.expanded .top-panel-header {
-  margin-bottom: 16px;
 }
 
 .top-panel-header:focus-visible,
@@ -165,27 +152,8 @@ function onKey(event: KeyboardEvent): void {
   animation: rotate 3s linear infinite;
 }
 
-.thought-body {
-  display: grid;
-  grid-template-rows: 0fr;
-  visibility: hidden;
-  transition:
-    grid-template-rows 225ms cubic-bezier(0.4, 0, 0.2, 1),
-    visibility 225ms;
-}
-
-.thought-panel.expanded .thought-body {
-  grid-template-rows: 1fr;
-  visibility: visible;
-}
-
-.thought-body-inner {
-  min-height: 0;
-  overflow: hidden;
-}
-
 .thought-content {
-  padding: 0 24px 16px;
+  padding: 16px 24px;
 }
 
 .thought-panel-footer {
@@ -227,13 +195,7 @@ function onKey(event: KeyboardEvent): void {
 }
 
 .footer-icon {
-  flex: 0 0 auto;
   transform: rotate(90deg);
-}
-
-.footer-icon.expanded {
-  transform: rotate(270deg);
-  transition: transform 0.3s;
 }
 
 .fade-slide-enter-active {

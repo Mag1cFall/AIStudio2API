@@ -172,11 +172,14 @@ func (s *server) handleGeminiEmbed(w http.ResponseWriter, r *http.Request, model
 	for _, values := range result.Embeddings {
 		embeddings = append(embeddings, map[string]any{"values": values})
 	}
+	response := map[string]any{"embeddings": embeddings}
 	if !batch {
-		writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"embedding": embeddings[0]}))
-		return
+		response = map[string]any{"embedding": embeddings[0]}
 	}
-	writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"embeddings": embeddings}))
+	if result.TokenCount > 0 {
+		response["usageMetadata"] = map[string]any{"promptTokenCount": result.TokenCount}
+	}
+	writeJSON(w, http.StatusOK, officialOrder("gemini", response))
 }
 
 // embed 调用支持 embedding 的服务

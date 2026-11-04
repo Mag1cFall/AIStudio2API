@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // profilePrefix 为本服务创建的 Camoufox 临时 profile 目录名前缀
@@ -52,15 +54,14 @@ func removeProfile(profile string, lock *flock.Flock) error {
 	}
 }
 
-// RemoveStaleProfiles 删除创建进程已退出的临时 profile 并返回删除数量
+// RemoveStaleProfiles 结束仍在使用创建进程已退出的临时 profile 的进程树，再删除这些 profile 并返回删除数量
 func RemoveStaleProfiles() (int, error) {
 	root := os.TempDir()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return 0, fmt.Errorf("读取临时目录: %w", err)
 	}
-	removed := 0
-	var removeErrors []error
+	stale := map[string]*flock.Flock{}
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), profilePrefix) {
 			continue
@@ -71,15 +72,58 @@ func RemoveStaleProfiles() (int, error) {
 			continue
 		}
 		lock := flock.New(lockPath)
-		locked, err := lock.TryLock()
-		if err != nil || !locked {
-			continue
+		if locked, err := lock.TryLock(); err == nil && locked {
+			stale[profile] = lock
 		}
-		if err := removeProfile(profile, lock); err != nil {
-			removeErrors = append(removeErrors, fmt.Errorf("删除遗留 Camoufox profile %s: %w", profile, err))
+	}
+	if len(stale) == 0 {
+		return 0, nil
+	}
+	err = endProfileProcesses(stale)
+	removed := 0
+	for profile, lock := range stale {
+		if removeErr := removeProfile(profile, lock); removeErr != nil {
+			err = errors.Join(err, fmt.Errorf("删除遗留 Camoufox profile %s: %w", profile, removeErr))
 			continue
 		}
 		removed++
 	}
-	return removed, errors.Join(removeErrors...)
+	return removed, err
+}
+
+// endProfileProcesses 结束命令行以 -profile 指向 profiles 中目录的进程及其全部子孙进程
+func endProfileProcesses(profiles map[string]*flock.Flock) error {
+	processes, err := process.Processes()
+	if err != nil {
+		return fmt.Errorf("列出进程: %w", err)
+	}
+	var targets []*process.Process
+	for _, candidate := range processes {
+		arguments, err := candidate.CmdlineSlice()
+		if err != nil {
+			continue
+		}
+		if index := slices.Index(arguments, "-profile"); index >= 0 && index+1 < len(arguments) && profiles[arguments[index+1]] != nil {
+			targets = append(targets, candidate)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	children := map[int32][]*process.Process{}
+	for _, candidate := range processes {
+		if parent, err := candidate.Ppid(); err == nil {
+			children[parent] = append(children[parent], candidate)
+		}
+	}
+	for index := 0; index < len(targets); index++ {
+		targets = append(targets, children[targets[index].Pid]...)
+	}
+	var killErrors []error
+	for _, target := range targets {
+		if err := target.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			killErrors = append(killErrors, fmt.Errorf("结束遗留 Camoufox 进程 %d: %w", target.Pid, err))
+		}
+	}
+	return errors.Join(killErrors...)
 }

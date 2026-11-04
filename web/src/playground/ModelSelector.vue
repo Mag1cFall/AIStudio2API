@@ -1,38 +1,31 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConsole } from '@/console'
-import { useI18n, type TranslationKey } from '@/i18n'
-import { readPreference, writePreference } from '@/preference'
+import { useI18n } from '@/i18n'
 import type { Model } from '@/types'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSlidingPanel from '@/playground/ui/UiSlidingPanel.vue'
-import {
-  categoryLabels,
-  categoryOrder,
-  hasCategory,
-  modelBadges,
-  modelIcon,
-  priceLines,
-  type ModelCategory,
-} from './catalog'
-import { copyToClipboard } from './clipboard'
+import ModelRow from './ModelRow.vue'
+import { categoryLabels, categoryOrder, hasCategory, hasCode, type ModelCategory } from './catalog'
 import { pageKindOf, pageRoutes, unsavedKinds } from './media/kinds'
-import { modelChoice, modelSelectorOpen } from './model-selector'
+import {
+  agentModelID,
+  modelChoice,
+  modelSelectorOpen,
+  openAgentModel,
+  starredModels as starred,
+} from './model-selector'
 
 const open = modelSelectorOpen
 const choice = modelChoice
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const { models } = useConsole()
 // pending 是等待确认切换页面的模型
 const pending = ref<Model>()
 
-// starredKey 是本机收藏模型的存储键
-const starredKey = 'playground_starred_models'
-
-const starred = ref(new Set(readPreference<string[]>(starredKey, [], Array.isArray)))
 const search = ref('')
 const category = ref<ModelCategory>(10)
 
@@ -55,19 +48,30 @@ const visibleModels = computed(() => {
   })
 })
 
-const dateFormat = computed(
-  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', day: 'numeric' }),
-)
-const monthFormat = computed(
-  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short' }),
-)
-const numberFormat = computed(() => new Intl.NumberFormat(locale.value))
+// rowBatch 是打开面板或切换分类、搜索后每个任务渲染的模型行数，其余行在后续任务中补齐
+const rowBatch = 12
+// shownRows 是已渲染的模型行数
+const shownRows = ref(rowBatch)
+// shownModels 是已渲染的模型行
+const shownModels = computed(() => visibleModels.value.slice(0, shownRows.value))
+let growing = 0
 
-// badgeLabels 是模型标记的文案
-const badgeLabels: Record<ReturnType<typeof modelBadges>[number], TranslationKey> = {
-  Confidential: 'pg.badgeConfidential',
-  New: 'pg.badgeNew',
-  Paid: 'pg.badgePaid',
+// grow 多渲染一批模型行，没有渲染完时在下一个任务继续
+function grow(): void {
+  shownRows.value += rowBatch
+  if (shownRows.value < visibleModels.value.length) growing = window.setTimeout(grow)
+}
+watch([open, visibleModels], () => {
+  window.clearTimeout(growing)
+  shownRows.value = rowBatch
+  if (open.value && rowBatch < visibleModels.value.length) growing = window.setTimeout(grow)
+})
+
+// agentModelName 返回可选模型的 agent 所用模型的名称：与官网一样只有带能力码 65 的 agent 显示所选模型，页面未选择时为 agent 默认模型
+function agentModelName(model: Model): string | undefined {
+  if (!hasCode(model, 65) || model.agent_model === undefined) return undefined
+  const id = agentModelID(model, choice.value)
+  return models.value.find((item) => item.id === id)?.name ?? id
 }
 
 // categoryLabel 返回分类按钮文字
@@ -93,15 +97,6 @@ function choose(model: Model): void {
   }
   if (current.hasContent()) pending.value = model
   else switchPage(model)
-}
-
-// toggleStar 收藏或取消收藏模型
-function toggleStar(model: Model): void {
-  const next = new Set(starred.value)
-  if (next.has(model.id)) next.delete(model.id)
-  else next.add(model.id)
-  starred.value = next
-  writePreference(starredKey, [...next])
 }
 </script>
 
@@ -146,138 +141,17 @@ function toggleStar(model: Model): void {
       </div>
       <div class="model-options-container">
         <p v-if="visibleModels.length === 0" class="empty">{{ t('pg.noModels') }}</p>
-        <template v-for="(model, index) in visibleModels" :key="model.id">
+        <template v-for="(model, index) in shownModels" :key="model.id">
           <div v-if="index > 0" class="row-divider"></div>
-          <div class="model-row" :class="{ selected: model.id === choice!.selected }">
-            <button type="button" class="content-button" @click="choose(model)">
-              <div class="row-header">
-                <span class="model-icon"><UiIcon :name="modelIcon(model)" :size="20" /></span>
-                <div class="row-header-text">
-                  <div class="model-title">
-                    <span class="model-title-text">{{ model.name }}</span>
-                    <span
-                      v-for="badge in modelBadges(model, category)"
-                      :key="badge"
-                      class="badge"
-                      :class="badge.toLowerCase()"
-                      >{{ t(badgeLabels[badge]) }}</span
-                    >
-                  </div>
-                  <span class="model-subtitle">{{ model.id }}</span>
-                </div>
-              </div>
-              <ul class="model-details">
-                <li v-if="model.details?.warning">
-                  <UiIcon name="warning" :size="15" />
-                  <span>{{ model.details.warning }}</span>
-                </li>
-                <li v-if="model.details?.alias">
-                  <UiIcon name="spark" :size="15" />
-                  <span>{{ model.details.alias }}</span>
-                </li>
-                <li v-if="model.details?.summary || model.description">
-                  <UiIcon name="info" :size="15" />
-                  <span>{{ model.details?.summary || model.description }}</span>
-                </li>
-                <li
-                  v-for="(line, lineIndex) in priceLines(model, t)"
-                  :key="`price-${lineIndex}`"
-                  v-tooltip.left="line.tooltip ?? ''"
-                >
-                  <UiIcon name="price" :size="15" />
-                  <span
-                    >{{ line.text }}
-                    <a
-                      v-if="line.link"
-                      :href="line.link"
-                      target="_blank"
-                      rel="noopener"
-                      @click.stop
-                      >{{ t('pg.learnMore') }}</a
-                    ></span
-                  >
-                </li>
-                <li v-if="model.input_token_limit && model.output_token_limit">
-                  <UiIcon name="tokenLimits" :size="15" />
-                  <span>{{
-                    t('pg.tokenLimits')
-                      .replace('{input}', numberFormat.format(model.input_token_limit))
-                      .replace('{output}', numberFormat.format(model.output_token_limit))
-                  }}</span>
-                </li>
-                <li v-if="model.capabilities?.output_continuation">
-                  <UiIcon name="tokens" :size="15" />
-                  <span>{{ t('pg.outputContinuation') }}</span>
-                </li>
-                <li v-if="model.details?.model_card_url || model.details?.knowledge_cutoff">
-                  <UiIcon name="cutoff" :size="15" />
-                  <span>
-                    {{ t('pg.knowledgeCutoff') }}
-                    <a
-                      v-if="model.details?.model_card_url"
-                      :href="model.details.model_card_url"
-                      target="_blank"
-                      rel="noopener"
-                      @click.stop
-                      >{{ t('pg.seeModelCard') }}</a
-                    >
-                    <template v-else-if="model.details?.knowledge_cutoff">{{
-                      monthFormat.format(model.details.knowledge_cutoff * 1000)
-                    }}</template>
-                  </span>
-                </li>
-                <li v-if="model.details?.release_date">
-                  <UiIcon name="release" :size="15" />
-                  <span
-                    >{{ t('pg.releaseDate') }}
-                    {{ dateFormat.format(model.details.release_date * 1000) }}</span
-                  >
-                </li>
-                <li v-if="model.channels?.length">
-                  <UiIcon name="channel" :size="15" />
-                  <span>{{ t('pg.channels') }} {{ model.channels.join(', ') }}</span>
-                </li>
-              </ul>
-            </button>
-            <div class="row-actions">
-              <button
-                v-tooltip.below="starred.has(model.id) ? t('pg.unstar') : t('pg.star')"
-                type="button"
-                ms-button
-                class="ms-button-borderless ms-button-icon ms-button-small"
-                :class="{ filled: starred.has(model.id) }"
-                :aria-label="starred.has(model.id) ? t('pg.unstar') : t('pg.star')"
-                @click="toggleStar(model)"
-              >
-                <UiIcon name="star" :size="18" />
-              </button>
-              <span class="vertical-divider"></span>
-              <button
-                v-tooltip.below="t('pg.copyToClipboard')"
-                type="button"
-                ms-button
-                class="ms-button-borderless ms-button-icon ms-button-small"
-                :aria-label="t('pg.copyToClipboard')"
-                @click="copyToClipboard(model.id)"
-              >
-                <UiIcon name="copy" :size="18" />
-              </button>
-              <template v-if="model.details?.docs_url">
-                <span class="vertical-divider"></span>
-                <a
-                  v-tooltip.below="t('pg.developerDocs')"
-                  ms-button
-                  class="ms-button-borderless ms-button-icon ms-button-small"
-                  :href="model.details.docs_url"
-                  target="_blank"
-                  rel="noreferrer"
-                  :aria-label="t('pg.developerDocs')"
-                >
-                  <UiIcon name="docs" :size="18" />
-                </a>
-              </template>
-            </div>
-          </div>
+          <ModelRow
+            :model="model"
+            :category="category"
+            :selected="model.id === choice!.selected"
+            :agent-model="agentModelName(model)"
+            :agent-locked="choice!.setAgentModel === undefined"
+            @choose="choose(model)"
+            @agent="openAgentModel(model, choice!)"
+          />
         </template>
       </div>
     </div>
@@ -310,8 +184,10 @@ function toggleStar(model: Model): void {
 
 .model-carousel {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 20px;
+  min-height: 0;
   padding: 1px;
 }
 
@@ -351,7 +227,10 @@ function toggleStar(model: Model): void {
 
 .model-options-container {
   display: flex;
+  flex: 1;
   flex-direction: column;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .empty {
@@ -365,159 +244,5 @@ function toggleStar(model: Model): void {
   height: 1px;
   margin: 8px 0;
   background-color: var(--color-v3-outline-var);
-}
-
-.model-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  border-radius: 8px;
-}
-
-.model-row.selected,
-.model-row:hover {
-  background-color: var(--color-v3-surface-container-high);
-}
-
-.content-button {
-  grid-column: 1 / 3;
-  grid-row: 1;
-  padding: 12px;
-  border: 0;
-  background: none;
-  color: var(--color-v3-text);
-  cursor: pointer;
-  font-weight: 500;
-  text-align: left;
-}
-
-.row-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-right: 96px;
-}
-
-.model-icon {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background-color: var(--color-v3-surface-container);
-  color: var(--color-v3-text-link);
-}
-
-.row-header-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.model-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.model-title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-subtitle {
-  color: var(--color-v3-text-var);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 18px;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 6px 1px 5px;
-  border: 1px solid var(--color-v3-outline);
-  border-radius: 8px;
-  background-color: var(--color-v3-surface-container-high);
-  color: var(--color-v3-text);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 16px;
-}
-
-.badge::before {
-  width: 6px;
-  aspect-ratio: 1 / 1;
-  border-radius: 50%;
-  content: '';
-}
-
-.badge.new::before {
-  background-color: var(--color-v3-accent-4);
-}
-
-.badge.paid::before {
-  background-color: var(--color-v3-text-link);
-}
-
-.badge.confidential::before {
-  background-color: var(--color-v3-accent-1);
-}
-
-.model-details {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.model-details li {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  color: var(--color-v3-text-var);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 16px;
-}
-
-.model-details li > :first-child {
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.model-details a {
-  color: var(--color-v3-text-link);
-  font-weight: 500;
-}
-
-.row-actions {
-  z-index: 1;
-  display: flex;
-  grid-column: 2;
-  grid-row: 1;
-  align-items: center;
-  height: min-content;
-  margin-top: 20px;
-  margin-right: 12px;
-}
-
-.vertical-divider {
-  width: 1px;
-  height: 28px;
-  margin: 0 2px;
-  background-color: var(--color-v3-outline-var);
-}
-
-.filled {
-  color: var(--color-v3-text-link);
 }
 </style>

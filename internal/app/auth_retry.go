@@ -19,15 +19,14 @@ type chromeCookieRefreshFunc func(context.Context, aistudio.AuthSource, aistudio
 
 // authRuntimeRefresher 使用账户保存的 Chrome OAuth 材料原地续签
 type authRuntimeRefresher struct {
-	pool           *aistudio.AccountPool
-	refresh        chromeCookieRefreshFunc
-	importCurrent  func(context.Context, aistudio.AuthSource, *aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
-	chromeHas      func(string) bool
-	reset          func(string) error
-	prepareWorker  func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)
-	prepareHeaders func(string) (func(bool), error)
-	globalProxy    string
-	requests       *requestRegistry
+	pool          *aistudio.AccountPool
+	refresh       chromeCookieRefreshFunc
+	importCurrent func(context.Context, aistudio.AuthSource, *aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
+	chromeHas     func(string) bool
+	reset         func(string) error
+	prepareWorker func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)
+	globalProxy   string
+	requests      *requestRegistry
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -132,17 +131,6 @@ func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accoun
 	return transport.transport.(aistudio.DriveFileChecker).DriveFileExists(ctx, accountID, token, fileID)
 }
 
-// CopyDrive 将 Drive 复制委托给同一认证传输
-func (transport *authRetryTransport) CopyDrive(
-	ctx context.Context,
-	accountID string,
-	token string,
-	fileID string,
-	name string,
-) (string, error) {
-	return transport.transport.(aistudio.DriveTransport).CopyDrive(ctx, accountID, token, fileID, name)
-}
-
 // UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
 func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
 	return transport.transport.(aistudio.AssistantUploader).UploadAssistantFile(ctx, accountID, blob)
@@ -151,14 +139,13 @@ func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, ac
 // newAuthRuntimeRefresher 创建生产环境认证续签器
 func newAuthRuntimeRefresher(
 	workers *accountWorkerManager,
-	headers *accountHeaderProvider,
 	requests *requestRegistry,
 	globalProxy string,
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
-		reset: workers.Reset, prepareWorker: workers.prepareUpdate, prepareHeaders: headers.prepareInvalidate,
+		reset: workers.Reset, prepareWorker: workers.prepareUpdate,
 		globalProxy: globalProxy,
 		requests:    requests,
 	}
@@ -281,24 +268,6 @@ func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, se
 	}
 }
 
-func (provider *accountHeaderProvider) prepareInvalidate(accountID string) (func(bool), error) {
-	provider.mu.RLock()
-	account := provider.accounts[accountID]
-	provider.mu.RUnlock()
-	if account == nil {
-		return nil, fmt.Errorf("账户固定出口不存在: %s", accountID)
-	}
-	account.mu.Lock()
-	previous := account.headers.Clone()
-	account.headers = nil
-	return func(committed bool) {
-		if !committed {
-			account.headers = previous
-		}
-		account.mu.Unlock()
-	}, nil
-}
-
 // Do 在 401 后续签同一账户并重放一次请求
 func (transport *authRetryTransport) Do(ctx context.Context, request aistudio.RPCRequest) (*aistudio.RPCResponse, error) {
 	return transport.refresher.do(ctx, request.Method, func() (*aistudio.RPCResponse, error) {
@@ -347,17 +316,6 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 		err = transport.refresher.markAuthenticationRequired(ctx, err)
 	}
 	return session, err
-}
-
-// DoProtectedVideo 在认证失败后续签同一账户并重放 Veo 请求
-func (transport *authRetryProtectedTransport) DoProtectedVideo(
-	ctx context.Context,
-	request aistudio.VideoRequest,
-	rpc aistudio.RPCRequest,
-) (*aistudio.RPCResponse, error) {
-	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
-		return transport.transport.(aistudio.VideoProtectedTransport).DoProtectedVideo(ctx, request, rpc)
-	})
 }
 
 // DoProtectedTitle 在认证失败后续签同一账户并重放 GenerateTitle 请求
@@ -437,16 +395,12 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 		state.Cookies = cookies
 		_, err = aistudio.NewSigner().Authorization(*state)
 		return err
-	}, func() (func(bool), error) {
+	}, func() error {
 		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")
 		if err := refresher.reset(account.ID); err != nil {
-			return nil, fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
+			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
 		}
-		finish, err := refresher.prepareHeaders(account.ID)
-		if err != nil {
-			return nil, fmt.Errorf("刷新账户 %s 公共头: %w", account.ID, err)
-		}
-		return finish, nil
+		return nil
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
@@ -490,7 +444,7 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 }
 
 func authenticationFailed(response *aistudio.RPCResponse) bool {
-	return response != nil && response.Body != nil && response.StatusCode == http.StatusUnauthorized
+	return response.StatusCode == http.StatusUnauthorized
 }
 
 // readAuthenticationFailure 读取并关闭认证失败响应，返回原始原因
@@ -505,5 +459,4 @@ func readAuthenticationFailure(method string, response *aistudio.RPCResponse) (*
 var _ aistudio.RPCTransport = (*authRetryTransport)(nil)
 var _ aistudio.DriveTransport = (*authRetryTransport)(nil)
 var _ aistudio.ProtectedTransport = (*authRetryProtectedTransport)(nil)
-var _ aistudio.VideoProtectedTransport = (*authRetryProtectedTransport)(nil)
 var _ aistudio.BidiProtectedTransport = (*authRetryProtectedTransport)(nil)

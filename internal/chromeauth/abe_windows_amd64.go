@@ -17,6 +17,9 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+// Supported 表示本平台能从 Chrome 导入账户
+const Supported = true
+
 const (
 	appBoundPrefix      = "APPB"
 	abeInputEnv         = "AISTUDIO2API_ABE_INPUT"

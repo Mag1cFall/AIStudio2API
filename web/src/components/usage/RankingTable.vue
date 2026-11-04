@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
+import { computed, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from '@/i18n'
+import { usePaged } from '@/paging'
 import type { UsageDimension, UsageReport, UsageStats } from '@/types'
+import DisclosureChevron from '../DisclosureChevron.vue'
+import UiCollapse from '../UiCollapse.vue'
 import UiIcon from '../UiIcon.vue'
+import UiPager from '../UiPager.vue'
+import UsageAgo from './UsageAgo.vue'
 import { useUsageFormat } from './format'
 import { readPreference, writePreference } from '@/preference'
 import { rateTone, successRate } from './model'
@@ -10,14 +15,20 @@ import { rateTone, successRate } from './model'
 type Tab = UsageDimension | 'status'
 type SortKey = 'key' | 'requests' | 'rate' | 'tokens' | 'p50' | 'p95' | 'first' | 'last'
 
-const props = defineProps<{ report: UsageReport; now: number }>()
+type Breakdown = 'account' | 'model'
+type Pairs = UsageReport['pairs']
+
+const props = defineProps<{
+  report: UsageReport
+  loadPairs: (dimension: Breakdown, key: string) => Promise<Pairs>
+}>()
 const emit = defineEmits<{
   filter: [dimension: UsageDimension, key: string]
   status: [code: string]
 }>()
 
-const { t } = useI18n()
-const { compact, integer, duration, percent, ago, dimensionLabel } = useUsageFormat()
+const { t, errorText } = useI18n()
+const { compact, integer, duration, percent, dimensionLabel } = useUsageFormat()
 const id = useId()
 const tabs: Tab[] = ['account', 'model', 'channel', 'protocol', 'state', 'status']
 const tab = ref<Tab>(
@@ -25,9 +36,12 @@ const tab = ref<Tab>(
 )
 const sort = ref<{ key: SortKey; descending: boolean }>({ key: 'requests', descending: true })
 const expanded = ref(new Set<string>())
+// shown 是显示组合明细的行：展开的行与正在收起的行，收起过渡结束后移除
+const shown = ref(new Set<string>())
 watch(tab, (value) => {
   writePreference('usage.rankingTab', value)
   expanded.value = new Set()
+  shown.value = new Set()
 })
 
 const columns: { key: SortKey; label: () => string; numeric: boolean }[] = [
@@ -73,22 +87,57 @@ const rows = computed(() => {
   })
 })
 
-// children 返回账户或模型行展开后的组合明细
-function children(key: string): { key: string; label: string; stats: UsageStats }[] {
-  if (tab.value === 'account')
-    return props.report.pairs
-      .filter((pair) => pair.account === key)
-      .map((pair) => ({ key: pair.model, label: dimensionLabel('model', pair.model), stats: pair }))
-  if (tab.value === 'model')
-    return props.report.pairs
-      .filter((pair) => pair.model === key)
-      .map((pair) => ({
-        key: pair.account,
-        label: dimensionLabel('account', pair.account),
-        stats: pair,
-      }))
-  return []
+// 排行每页 50 行，切换维度或排序时回到第一页
+const { page, pages, paged: pagedRows } = usePaged(rows, 50)
+watch([tab, sort], () => (page.value = 1))
+
+// breakdown 是能展开组合明细的维度，其余维度为 null
+const breakdown = computed<Breakdown | null>(() =>
+  tab.value === 'account' || tab.value === 'model' ? tab.value : null,
+)
+// pairs 保存已展开行按需读取的组合明细或读取失败的原因，键为维度与行取值
+const pairs = shallowRef(new Map<string, Pairs | string>())
+
+// fetchPairs 读取一行在当前范围与筛选下的组合明细，报告已更新时丢弃结果
+async function fetchPairs(dimension: Breakdown, key: string): Promise<void> {
+  const report = props.report
+  const result = await props.loadPairs(dimension, key).catch((reason: unknown) => errorText(reason))
+  if (props.report === report) pairs.value = new Map(pairs.value).set(`${dimension}:${key}`, result)
 }
+
+// 报告更新后重新读取仍展开的行，新明细到达前保留旧明细，其余行的明细在下次展开时读取
+watch(
+  () => props.report,
+  () => {
+    const dimension = breakdown.value
+    const open = new Set([...expanded.value].map((key) => `${dimension}:${key}`))
+    pairs.value = new Map([...pairs.value].filter(([name]) => open.has(name)))
+    if (dimension !== null) for (const key of expanded.value) void fetchPairs(dimension, key)
+  },
+)
+
+// details 是各展开行的组合明细；读取中或读取失败时 note 为提示文字
+const details = computed(() => {
+  const result = new Map<
+    string,
+    { note: string | null; rows: { key: string; label: string; stats: UsageStats }[] }
+  >()
+  const dimension = breakdown.value
+  if (dimension === null) return result
+  const other = dimension === 'account' ? 'model' : 'account'
+  for (const key of shown.value) {
+    const list = pairs.value.get(`${dimension}:${key}`)
+    if (list === undefined || typeof list === 'string') {
+      result.set(key, { note: list ?? t('common.loading'), rows: [] })
+      continue
+    }
+    const rows = list
+      .filter((pair) => pair[dimension] === key)
+      .map((pair) => ({ key: pair[other], label: dimensionLabel(other, pair[other]), stats: pair }))
+    result.set(key, { note: null, rows })
+  }
+  return result
+})
 
 // toggleSort 切换排序列，再次点击同一列时反转方向
 function toggleSort(key: SortKey): void {
@@ -98,12 +147,24 @@ function toggleSort(key: SortKey): void {
       : { key, descending: key !== 'key' }
 }
 
-// toggleRow 展开或收起一行的组合明细
+// toggleRow 展开或收起一行的组合明细，首次展开时读取
 function toggleRow(key: string): void {
   const next = new Set(expanded.value)
   if (next.has(key)) next.delete(key)
-  else next.add(key)
+  else {
+    next.add(key)
+    shown.value = new Set(shown.value).add(key)
+    if (!pairs.value.has(`${breakdown.value}:${key}`)) void fetchPairs(breakdown.value!, key)
+  }
   expanded.value = next
+}
+
+// hideRow 在一行的明细收起过渡结束后不再显示它，期间又展开时保留
+function hideRow(key: string): void {
+  if (expanded.value.has(key) || !shown.value.has(key)) return
+  const next = new Set(shown.value)
+  next.delete(key)
+  shown.value = next
 }
 
 // applyFilter 把行取值加入筛选；状态码行筛选请求记录
@@ -113,6 +174,19 @@ function applyFilter(key: string): void {
 }
 
 const total = computed(() => props.report.totals.requests)
+
+// childCells 是组合明细行在各数值列中的文字与颜色，最后请求列由 UsageAgo 显示相对时间
+function childCells(stats: UsageStats): { key: string; text: string; tone?: string }[] {
+  return [
+    { key: 'requests', text: integer(stats.requests) },
+    { key: 'rate', text: percent(successRate(stats)), tone: rateTone(successRate(stats)) },
+    { key: 'tokens', text: compact(stats.total_tokens) },
+    { key: 'p50', text: duration(stats.duration.p50_ms) },
+    { key: 'p95', text: duration(stats.duration.p95_ms) },
+    { key: 'first', text: duration(stats.first_event.p95_ms) },
+    { key: 'last', text: '—' },
+  ]
+}
 </script>
 
 <template>
@@ -184,12 +258,12 @@ const total = computed(() => props.report.totals.requests)
           </tr>
         </thead>
         <tbody>
-          <template v-for="row in rows" :key="row.key">
+          <template v-for="row in pagedRows" :key="row.key">
             <tr class="border-t border-line/60 text-gray-300 hover:bg-raised/40">
               <th scope="row" class="w-[30%] max-w-0 px-4 py-2 font-normal">
                 <div class="flex items-center gap-1.5">
                   <button
-                    v-if="children(row.key).length > 0"
+                    v-if="breakdown !== null"
                     type="button"
                     class="rounded p-0.5 text-gray-500 hover:bg-raised hover:text-white"
                     :aria-expanded="expanded.has(row.key)"
@@ -198,12 +272,9 @@ const total = computed(() => props.report.totals.requests)
                     "
                     @click="toggleRow(row.key)"
                   >
-                    <UiIcon
-                      name="chevronRight"
-                      :size="12"
-                      class="transition-transform"
-                      :class="expanded.has(row.key) ? 'rotate-90' : ''"
-                    />
+                    <DisclosureChevron :open="expanded.has(row.key)"
+                      ><UiIcon name="chevronRight" :size="12"
+                    /></DisclosureChevron>
                   </button>
                   <span v-else class="w-4"></span>
                   <span v-tooltip="dimensionLabel(tab, row.key)" class="truncate text-gray-200">{{
@@ -231,7 +302,7 @@ const total = computed(() => props.report.totals.requests)
                 {{ duration(row.first_event.p95_ms) }}
               </td>
               <td class="px-2 py-2 text-right text-gray-400">
-                {{ row.last_at ? ago(row.last_at, now) : '—' }}
+                <UsageAgo v-if="row.last_at" :at="row.last_at" /><template v-else>—</template>
               </td>
               <td class="px-2 py-2 text-right">
                 <button
@@ -245,38 +316,36 @@ const total = computed(() => props.report.totals.requests)
                 </button>
               </td>
             </tr>
-            <template v-if="expanded.has(row.key)">
+            <template v-if="details.has(row.key)">
+              <tr v-if="details.get(row.key)!.note !== null" class="bg-canvas/60 text-gray-500">
+                <td colspan="9" class="p-0">
+                  <UiCollapse :open="expanded.has(row.key)" @closed="hideRow(row.key)">
+                    <div class="py-1.5 pr-4 pl-11">{{ details.get(row.key)!.note }}</div>
+                  </UiCollapse>
+                </td>
+              </tr>
               <tr
-                v-for="child in children(row.key)"
+                v-for="child in details.get(row.key)!.rows"
                 :key="`${row.key}/${child.key}`"
                 class="bg-canvas/60 text-gray-400"
               >
-                <th scope="row" class="w-[30%] max-w-0 py-1.5 pr-4 pl-11 font-normal">
-                  <span v-tooltip="child.label" class="block truncate">{{ child.label }}</span>
+                <th scope="row" class="w-[30%] max-w-0 p-0 font-normal">
+                  <UiCollapse :open="expanded.has(row.key)" @closed="hideRow(row.key)">
+                    <span v-tooltip="child.label" class="block truncate py-1.5 pr-4 pl-11">{{
+                      child.label
+                    }}</span>
+                  </UiCollapse>
                 </th>
-                <td class="px-2 py-1.5 text-right tabular-nums">
-                  {{ integer(child.stats.requests) }}
-                </td>
-                <td
-                  class="px-2 py-1.5 text-right tabular-nums"
-                  :class="rateTone(successRate(child.stats))"
-                >
-                  {{ percent(successRate(child.stats)) }}
-                </td>
-                <td class="px-2 py-1.5 text-right tabular-nums">
-                  {{ compact(child.stats.total_tokens) }}
-                </td>
-                <td class="px-2 py-1.5 text-right tabular-nums">
-                  {{ duration(child.stats.duration.p50_ms) }}
-                </td>
-                <td class="px-2 py-1.5 text-right tabular-nums">
-                  {{ duration(child.stats.duration.p95_ms) }}
-                </td>
-                <td class="px-2 py-1.5 text-right tabular-nums">
-                  {{ duration(child.stats.first_event.p95_ms) }}
-                </td>
-                <td class="px-2 py-1.5 text-right">
-                  {{ child.stats.last_at ? ago(child.stats.last_at, now) : '—' }}
+                <td v-for="cell in childCells(child.stats)" :key="cell.key" class="p-0">
+                  <UiCollapse :open="expanded.has(row.key)">
+                    <div class="px-2 py-1.5 text-right tabular-nums" :class="cell.tone">
+                      <UsageAgo
+                        v-if="cell.key === 'last' && child.stats.last_at"
+                        :at="child.stats.last_at"
+                      />
+                      <template v-else>{{ cell.text }}</template>
+                    </div>
+                  </UiCollapse>
                 </td>
                 <td></td>
               </tr>
@@ -285,5 +354,6 @@ const total = computed(() => props.report.totals.requests)
         </tbody>
       </table>
     </div>
+    <UiPager v-model="page" :pages="pages" />
   </section>
 </template>

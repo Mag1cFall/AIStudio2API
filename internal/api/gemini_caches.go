@@ -140,14 +140,15 @@ func (caches *geminiCaches) metadata(name string) (geminiCacheMetadata, bool) {
 }
 
 // update 更新未过期缓存的过期时间并返回元数据快照
-func (caches *geminiCaches) update(name string, expires, now time.Time) (geminiCacheMetadata, bool) {
+func (caches *geminiCaches) update(name string, now time.Time, apply func(*geminiCache)) (geminiCacheMetadata, bool) {
 	caches.mu.Lock()
 	defer caches.mu.Unlock()
 	cache, ok := caches.getLocked(name)
 	if !ok {
 		return geminiCacheMetadata{}, false
 	}
-	cache.expires, cache.updated = expires.UTC(), now
+	apply(cache)
+	cache.updated = now
 	return cache.object(), true
 }
 
@@ -263,6 +264,22 @@ func (cache *geminiCache) requestTokens(count aistudio.TokenCount) aistudio.Toke
 	return count
 }
 
+// usage 返回计入缓存部分的用量副本：缓存的 token 数不少于上游缓存命中时以缓存的 token 数与模态细分作为缓存用量，cache 或 usage 为空时原样返回
+func (cache *geminiCache) usage(usage *aistudio.Usage) *aistudio.Usage {
+	if cache == nil || usage == nil || cache.tokens < usage.CachedTokens {
+		return usage
+	}
+	value := *usage
+	value.CachedTokens = cache.tokens
+	details := aistudio.UsageDetails{}
+	if usage.Details != nil {
+		details = *usage.Details
+	}
+	details.CacheTokensDetails = cache.details
+	value.Details = &details
+	return &value
+}
+
 // applyGeminiCache 展开请求引用的显式缓存，缓存不存在或已过期时写出 404 并返回 false
 func (s *server) applyGeminiCache(w http.ResponseWriter, name string, request *aistudio.GenerateRequest) (*geminiCache, bool) {
 	if name == "" {
@@ -354,7 +371,7 @@ func (s *server) handleGeminiCacheGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, object)
 }
 
-// handleGeminiCacheUpdate 按请求中的 ttl 或 expireTime 更新缓存的过期时间
+// handleGeminiCacheUpdate 按 updateMask 列出的字段更新缓存的过期时间与显示名称，没有 updateMask 时更新请求中出现的这些字段
 func (s *server) handleGeminiCacheUpdate(w http.ResponseWriter, r *http.Request) {
 	var request geminiCacheRequest
 	if err := decodeGeminiJSON(r, &request); err != nil {
@@ -362,16 +379,42 @@ func (s *server) handleGeminiCacheUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := time.Now().UTC()
-	expires, ok, err := request.expiration(now)
+	expires, hasExpiration, err := request.expiration(now)
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	if !ok {
-		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cachedContent update requires ttl or expireTime")
+	expiration, displayName := hasExpiration, request.DisplayName != ""
+	if mask := r.URL.Query().Get("updateMask"); mask != "" {
+		expiration, displayName = false, false
+		for _, path := range strings.Split(mask, ",") {
+			switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(path), "_", "")) {
+			case "ttl", "expiretime", "expiration":
+				expiration = true
+			case "displayname":
+				displayName = true
+			default:
+				writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", fmt.Sprintf("updateMask field %q cannot be updated; updatable fields are ttl, expireTime and displayName", path))
+				return
+			}
+		}
+		if expiration && !hasExpiration {
+			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "updateMask names the expiration but the request has no ttl or expireTime")
+			return
+		}
+	}
+	if !expiration && !displayName {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cachedContent update requires ttl, expireTime or displayName")
 		return
 	}
-	object, found := s.caches.update(r.PathValue("cache"), expires, now)
+	object, found := s.caches.update(r.PathValue("cache"), now, func(cache *geminiCache) {
+		if expiration {
+			cache.expires = expires.UTC()
+		}
+		if displayName {
+			cache.displayName = request.DisplayName
+		}
+	})
 	if !found {
 		writeGeminiCacheNotFound(w)
 		return

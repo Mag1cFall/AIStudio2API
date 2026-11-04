@@ -23,81 +23,31 @@ type ProtectedResponse struct {
 	Body       io.ReadCloser
 }
 
-// protectedMessage 是受保护请求通道上以 { 开头的控制消息：先是状态码与响应头，之后是结束标记或错误；其余消息为 Base64 正文块
+// protectedMessage 是受保护请求通道上以 { 开头的控制消息：界面运行时先是发出标记，之后是状态码与响应头，最后是结束标记或错误；其余消息为 Base64 正文块
 type protectedMessage struct {
+	Sent    bool        `json:"sent"`
 	Status  int         `json:"status"`
 	Headers [][2]string `json:"headers"`
 	Done    bool        `json:"done"`
 	Error   string      `json:"error"`
 }
 
-// FollowUp 是受保护请求发出 Delay 后以相同请求头发出的伴随请求，响应被丢弃
-type FollowUp struct {
-	URL   string
-	Body  []byte
-	Delay time.Duration
-}
-
-// followUpKey 是上下文中伴随请求的键
-type followUpKey struct{}
-
-// WithFollowUp 返回携带伴随请求的上下文，SendProtected 发出受保护请求时同时安排它
-func WithFollowUp(ctx context.Context, followUp FollowUp) context.Context {
-	return context.WithValue(ctx, followUpKey{}, followUp)
-}
-
-// FollowUpFrom 返回上下文中的伴随请求
-func FollowUpFrom(ctx context.Context) (FollowUp, bool) {
-	followUp, ok := ctx.Value(followUpKey{}).(FollowUp)
-	return followUp, ok
-}
+// protectedSendKey 是让页面在用户输入的处理中发出受保护请求的一次 Pause 按键
+var protectedSendKey = []any{map[string]any{"type": "key", "id": "keyboard", "actions": []any{
+	map[string]any{"type": "keyDown", "value": ""},
+	map[string]any{"type": "keyUp", "value": ""},
+}}}
 
 // protectedGrantBatch 是 Go 端每消费多少个正文块向页面授予一次额度，页面的初始额度为它的两倍
 const protectedGrantBatch = 4
 
-// protectedSend 是页面内以 XMLHttpRequest 发起受保护请求并经通道依次发出响应头、正文块与结束标记的函数声明，参数依次为 Worker 页面对象、请求 ID、URL、请求头 JSON、正文、伴随请求 JSON 与通道
-const protectedSend = `(page, id, url, headers, body, follow, emit) => {
-  const xhr = new XMLHttpRequest();
-  const request = {xhr, credit: 8, resume: null};
-  (page.requests ||= new Map()).set(id, request);
-  let loaded = false, failure = "", wake = null;
-  const changed = () => {
-    wake?.();
-    wake = null;
-  };
-  const next = () => new Promise(resolve => wake = resolve);
-  xhr.open("POST", url);
-  xhr.withCredentials = true;
-  for (const [name, value] of JSON.parse(headers)) xhr.setRequestHeader(name, value);
-  xhr.onreadystatechange = xhr.onprogress = changed;
-  xhr.onload = () => {
-    loaded = true;
-    changed();
-  };
-  xhr.onerror = () => {
-    failure = "NetworkError when attempting to fetch resource.";
-    changed();
-  };
-  xhr.onabort = () => {
-    failure = "AbortError: The operation was aborted.";
-    changed();
-    request.resume?.();
-  };
-  xhr.send(body);
-  if (follow) {
-    const next = JSON.parse(follow);
-    setTimeout(() => {
-      const companion = new XMLHttpRequest();
-      companion.open("POST", next.url);
-      companion.withCredentials = true;
-      for (const [name, value] of JSON.parse(headers)) companion.setRequestHeader(name, value);
-      companion.send(next.body);
-    }, next.delay);
-  }
+// protectedPump 是页面内等 request.xhr 收到响应头后经通道依次发出状态码与响应头、按 65536 个 UTF-16 码元分块并以 UTF-8 编码的 Base64 正文块与结束标记的语句，正文块受 request.credit 额度限制；page、id、request、failure、loaded、next 与 emit 由外层函数定义
+const protectedPump = `
   (async () => {
     try {
-      while (xhr.readyState < 2 && !failure) await next();
+      while ((!request.xhr || request.xhr.readyState < 2) && !failure) await next();
       if (failure) throw new Error(failure);
+      const xhr = request.xhr;
       const lines = xhr.getAllResponseHeaders().split(/\r\n/).filter(Boolean);
       emit(JSON.stringify({status: xhr.status, headers: lines.map(line => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()])}));
       const encoder = new TextEncoder();
@@ -129,12 +79,73 @@ const protectedSend = `(page, id, url, headers, body, follow, emit) => {
       page.requests.delete(id);
     }
   })();
-}`
+`
+
+// protectedSend 是页面内以 XMLHttpRequest 发起受保护请求并经通道发出响应的函数声明，activate 非空时在下一次可信按键的处理中发起并拦下该按键；参数依次为 Worker 页面对象、请求 ID、URL、请求头 JSON、正文、activate 与通道
+const protectedSend = `(page, id, url, headers, body, activate, emit) => {
+  const xhr = new XMLHttpRequest();
+  const request = {xhr, credit: 8, resume: null};
+  (page.requests ||= new Map()).set(id, request);
+  let loaded = false, failure = "", wake = null;
+  const changed = () => {
+    wake?.();
+    wake = null;
+  };
+  const next = () => new Promise(resolve => wake = resolve);
+  const send = () => {
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    for (const [name, value] of JSON.parse(headers)) xhr.setRequestHeader(name, value);
+    xhr.onreadystatechange = xhr.onprogress = changed;
+    xhr.onload = () => {
+      loaded = true;
+      changed();
+    };
+    xhr.onerror = () => {
+      failure = "NetworkError when attempting to fetch resource.";
+      changed();
+    };
+    xhr.onabort = () => {
+      failure = "AbortError: The operation was aborted.";
+      changed();
+      request.resume?.();
+    };
+    xhr.send(body);
+  };
+  const keydown = event => {
+    if (!event.isTrusted) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    removeEventListener("keydown", keydown, true);
+    send();
+  };
+  const keyup = event => {
+    if (!event.isTrusted) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    removeEventListener("keyup", keyup, true);
+  };
+  request.release = () => {
+    removeEventListener("keydown", keydown, true);
+    removeEventListener("keyup", keyup, true);
+    if (xhr.readyState === 0) {
+      failure = "AbortError: The operation was aborted.";
+      changed();
+    }
+  };
+  if (activate) {
+    addEventListener("keydown", keydown, true);
+    addEventListener("keyup", keyup, true);
+  } else {
+    send();
+  }
+` + protectedPump + `}`
 
 // protectedCancel 是中止并删除受保护请求的函数声明
 const protectedCancel = `(page, id) => {
   const request = page.requests?.get(id);
-  request?.xhr.abort();
+  request?.release();
+  request?.xhr?.abort();
   request?.resume?.();
   page.requests?.delete(id);
 }`
@@ -148,66 +159,84 @@ const protectedGrant = `(page, id, count) => {
   request.resume = null;
 }`
 
-// SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹
+// SendProtected 通过固定指纹 Camoufox 页面发送请求，保留原生 TLS、HTTP/2、请求头、Cookie 和页面指纹；请求头带 Priority: u=0 时在一次 Pause 按键的处理中发出
 func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*ProtectedResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	worker.inputMu.Lock()
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()
+		worker.inputMu.Unlock()
 		return nil, errors.New("Camoufox runtime 已关闭")
 	}
 	client := worker.client
-	contextID := worker.contextID
-	page := worker.page
+	contextID, page := worker.beginRequest()
 	worker.mu.Unlock()
+	worker.inputMu.Unlock()
+	response, err := worker.sendProtected(ctx, client, contextID, page, rawURL, headers, body)
+	if err != nil {
+		worker.finishRequest(contextID)
+	}
+	return response, err
+}
 
+// sendProtected 在 contextID 标签页的 WAA 页面对象中发出受保护请求并等待响应头
+func (worker *Worker) sendProtected(ctx context.Context, client *bidiClient, contextID string, page pageHandle, rawURL string, headers http.Header, body []byte) (*ProtectedResponse, error) {
 	encodedHeaders, err := json.Marshal(browserRequestHeaders(headers))
 	if err != nil {
 		return nil, fmt.Errorf("编码浏览器请求头: %w", err)
-	}
-	follow := ""
-	if followUp, ok := FollowUpFrom(ctx); ok {
-		encoded, err := json.Marshal(map[string]any{"url": followUp.URL, "body": string(followUp.Body), "delay": followUp.Delay.Milliseconds()})
-		if err != nil {
-			return nil, fmt.Errorf("编码伴随请求: %w", err)
-		}
-		follow = string(encoded)
 	}
 	requestID := rand.Text()
 	channel, err := client.openChannel(requestID)
 	if err != nil {
 		return nil, fmt.Errorf("浏览器发送受保护请求: %w", err)
 	}
+	activate := ""
+	if headers.Get("Priority") == "u=0" {
+		activate = "keydown"
+	}
 	startCtx, cancelStart := context.WithTimeout(ctx, 5*time.Second)
-	_, err = client.callFunction(startCtx, contextID, protectedSend, page, requestID, rawURL, string(encodedHeaders), string(body), follow, bidiChannelArgument(requestID))
+	_, err = client.callFunction(startCtx, contextID, protectedSend, page, requestID, rawURL, string(encodedHeaders), string(body), activate, bidiChannelArgument(requestID))
+	if err == nil && activate != "" {
+		_, err = client.command(startCtx, "input.performActions", map[string]any{"context": contextID, "actions": protectedSendKey})
+	}
 	cancelStart()
 	if err != nil {
-		return nil, worker.abandonProtectedRequest(ctx, requestID, fmt.Errorf("浏览器发送受保护请求: %w", err))
+		return nil, worker.abandonProtectedRequest(ctx, contextID, page, requestID, fmt.Errorf("浏览器发送受保护请求: %w", err))
 	}
+	status, header, err := readResponseHead(ctx, channel)
+	if err != nil {
+		return nil, worker.abandonProtectedRequest(ctx, contextID, page, requestID, err)
+	}
+	bodyCtx, cancelBody := context.WithCancel(ctx)
+	return &ProtectedResponse{
+		StatusCode: status,
+		Header:     header,
+		Body: &protectedResponseBody{
+			ctx: bodyCtx, cancel: cancelBody, worker: worker, contextID: contextID, page: page, requestID: requestID, channel: channel,
+		},
+	}, nil
+}
+
+// readResponseHead 等待受保护请求通道上的状态码与响应头
+func readResponseHead(ctx context.Context, channel *bidiChannel) (int, http.Header, error) {
 	metadata, err := readProtectedMessage(ctx, channel)
 	if err == nil && metadata.Error != "" {
 		err = errors.New(metadata.Error)
 	}
 	if err != nil {
-		return nil, worker.abandonProtectedRequest(ctx, requestID, err)
+		return 0, nil, err
 	}
-	responseHeaders := make(http.Header, len(metadata.Headers)+1)
+	header := make(http.Header, len(metadata.Headers)+1)
 	for _, pair := range metadata.Headers {
-		responseHeaders.Add(pair[0], pair[1])
+		header.Add(pair[0], pair[1])
 	}
-	if responseHeaders.Get("Content-Type") == "" {
-		responseHeaders.Set("Content-Type", "application/json+protobuf")
+	if header.Get("Content-Type") == "" {
+		header.Set("Content-Type", "application/json+protobuf")
 	}
-	bodyCtx, cancelBody := context.WithCancel(ctx)
-	return &ProtectedResponse{
-		StatusCode: metadata.Status,
-		Header:     responseHeaders,
-		Body: &protectedResponseBody{
-			ctx: bodyCtx, cancel: cancelBody, worker: worker, requestID: requestID, channel: channel,
-		},
-	}, nil
+	return metadata.Status, header, nil
 }
 
 // readProtectedMessage 等待受保护请求通道上的下一条控制消息
@@ -243,7 +272,7 @@ func browserRequestHeaders(headers http.Header) [][2]string {
 	return result
 }
 
-// StorageCookies 导出当前固定指纹浏览器 Cookie
+// StorageCookies 导出当前固定指纹浏览器 Cookie，启动时写入的 Cookie 保持写入顺序，之后出现的 Cookie 排在其后
 func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 	worker.mu.Lock()
 	if worker.closed {
@@ -251,6 +280,7 @@ func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("Camoufox runtime 已关闭")
 	}
 	client := worker.client
+	order := worker.cookieOrder
 	worker.mu.Unlock()
 	result, err := client.command(ctx, "storage.getCookies", map[string]any{})
 	if err != nil {
@@ -264,7 +294,16 @@ func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 			cookies = append(cookies, cookie)
 		}
 	}
+	rank := func(cookie storageCookie) int {
+		if index, installed := order[cookie.key()]; installed {
+			return index
+		}
+		return len(order)
+	}
 	sort.SliceStable(cookies, func(left, right int) bool {
+		if leftRank, rightRank := rank(cookies[left]), rank(cookies[right]); leftRank != rightRank {
+			return leftRank < rightRank
+		}
 		if cookies[left].Domain != cookies[right].Domain {
 			return cookies[left].Domain < cookies[right].Domain
 		}
@@ -277,11 +316,18 @@ func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 }
 
 type protectedResponseBody struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	worker    *Worker
+	ctx    context.Context
+	cancel context.CancelFunc
+	worker *Worker
+	// contextID 与 page 是发出请求的标签页与其中的 WAA 页面对象
+	contextID string
+	page      pageHandle
 	requestID string
 	channel   *bidiChannel
+	// stop 在正文读完前关闭时中止请求，为空时在页面中止 XHR
+	stop func() error
+	// release 在关闭时结束请求所在的标签页使用，参数表示正文已读完；为空时按受保护请求结束
+	release func(done bool)
 
 	mu       sync.Mutex
 	buffer   []byte
@@ -303,7 +349,7 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 		}
 		if err != nil {
 			body.done = true
-			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.requestID))
+			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.contextID, body.page, body.requestID))
 		}
 		if !strings.HasPrefix(value, "{") {
 			body.buffer, err = base64.StdEncoding.AppendDecode(body.buffer, []byte(value))
@@ -312,7 +358,7 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 			}
 			if body.consumed++; body.consumed == protectedGrantBatch {
 				body.consumed = 0
-				if _, err := body.worker.client.callFunction(body.ctx, body.worker.contextID, protectedGrant, body.worker.page, body.requestID, strconv.Itoa(protectedGrantBatch)); err != nil {
+				if _, err := body.worker.client.callFunction(body.ctx, body.contextID, protectedGrant, body.page, body.requestID, strconv.Itoa(protectedGrantBatch)); err != nil {
 					return 0, fmt.Errorf("浏览器继续读取受保护响应: %w", err)
 				}
 			}
@@ -348,26 +394,35 @@ func (body *protectedResponseBody) Close() error {
 	body.closed = true
 	done := body.done
 	body.mu.Unlock()
+	if body.release != nil {
+		defer body.release(done)
+	} else {
+		defer body.worker.finishRequest(body.contextID)
+	}
 	if done {
 		return nil
 	}
-	return body.worker.cancelProtectedRequest(body.requestID)
+	if body.stop != nil {
+		body.worker.client.closeChannel(body.requestID)
+		return body.stop()
+	}
+	return body.worker.cancelProtectedRequest(body.contextID, body.page, body.requestID)
 }
 
 // abandonProtectedRequest 在受保护请求出错时中止页面请求并返回 err，请求已取消时在后台中止，不等待忙碌的页面
-func (worker *Worker) abandonProtectedRequest(ctx context.Context, requestID string, err error) error {
+func (worker *Worker) abandonProtectedRequest(ctx context.Context, contextID string, page pageHandle, requestID string, err error) error {
 	if ctx.Err() != nil {
-		go func() { _ = worker.cancelProtectedRequest(requestID) }()
+		go func() { _ = worker.cancelProtectedRequest(contextID, page, requestID) }()
 		return err
 	}
-	return errors.Join(err, worker.cancelProtectedRequest(requestID))
+	return errors.Join(err, worker.cancelProtectedRequest(contextID, page, requestID))
 }
 
-// cancelProtectedRequest 注销通道并在页面中中止受保护请求
-func (worker *Worker) cancelProtectedRequest(requestID string) error {
+// cancelProtectedRequest 注销通道并在发出请求的标签页中中止受保护请求
+func (worker *Worker) cancelProtectedRequest(contextID string, page pageHandle, requestID string) error {
 	worker.client.closeChannel(requestID)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := worker.client.callFunction(ctx, worker.contextID, protectedCancel, worker.page, requestID)
+	_, err := worker.client.callFunction(ctx, contextID, protectedCancel, page, requestID)
 	return err
 }

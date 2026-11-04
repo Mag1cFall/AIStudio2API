@@ -22,7 +22,7 @@ func (admin *pairingAdmin) ImportAccountState(_ context.Context, input AccountSt
 	return AdminAccount{ID: input.Label, Label: input.Label}, nil
 }
 
-// TestPairingTokenAccount 验证令牌由管理会话签发、上传不需要管理会话、新令牌使旧令牌失效
+// TestPairingTokenAccount 验证令牌由管理会话签发与读取、读取得到当前令牌、上传不需要管理会话、新令牌使旧令牌失效
 func TestPairingTokenAccount(t *testing.T) {
 	admin := &pairingAdmin{}
 	handler := NewHandler(nil, Config{Admin: admin, AdminAuthEnabled: true, AdminUsername: "admin", AdminPassword: "secret"})
@@ -37,6 +37,9 @@ func TestPairingTokenAccount(t *testing.T) {
 	}
 	if response := serve("POST", "/api/pairing", "", nil); response.Code != http.StatusUnauthorized {
 		t.Fatalf("无会话签发令牌 = %d", response.Code)
+	}
+	if response := serve("GET", "/api/pairing", "", nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("无会话读取令牌 = %d", response.Code)
 	}
 	login := serve("POST", "/api/auth/login", `{"username":"admin","password":"secret"}`, nil)
 	cookies := login.Result().Cookies()
@@ -55,6 +58,14 @@ func TestPairingTokenAccount(t *testing.T) {
 		}
 		return token.Token
 	}
+	active := func() string {
+		response := serve("GET", "/api/pairing", "", session)
+		var token PairingToken
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &token) != nil {
+			t.Fatalf("读取令牌 = %d %s", response.Code, response.Body)
+		}
+		return token.Token
+	}
 	upload := func(token string) int {
 		header := http.Header{"Content-Type": {"application/json"}}
 		if token != "" {
@@ -63,7 +74,13 @@ func TestPairingTokenAccount(t *testing.T) {
 		body := `{"label":"a@example.com","locale":"en-US","timezone":"UTC","storage_state":{"cookies":[],"origins":[]},"fingerprint":{"config":{"a":1}}}`
 		return serve("POST", "/api/pairing/accounts", body, header).Code
 	}
+	if response := serve("GET", "/api/pairing", "", session); response.Code != http.StatusNotFound {
+		t.Fatalf("未签发时读取令牌 = %d", response.Code)
+	}
 	first := issue()
+	if current := active(); current != first {
+		t.Fatalf("读取令牌 = %q，签发的是 %q", current, first)
+	}
 	if code := upload(""); code != http.StatusUnauthorized {
 		t.Fatalf("无令牌上传 = %d", code)
 	}
@@ -77,6 +94,9 @@ func TestPairingTokenAccount(t *testing.T) {
 		t.Fatalf("有效期内第二个账户 = %d", code)
 	}
 	second := issue()
+	if current := active(); current != second {
+		t.Fatalf("重新签发后读取令牌 = %q，签发的是 %q", current, second)
+	}
 	if code := upload(first); code != http.StatusUnauthorized {
 		t.Fatalf("旧令牌上传 = %d", code)
 	}
@@ -88,7 +108,7 @@ func TestPairingTokenAccount(t *testing.T) {
 	}
 }
 
-// TestPairingTokenExpiry 验证令牌到期后失效
+// TestPairingTokenExpiry 验证令牌到期后失效且不再作为当前令牌返回
 func TestPairingTokenExpiry(t *testing.T) {
 	tokens := &pairingTokens{}
 	now := time.Unix(1_700_000_000, 0)
@@ -98,6 +118,12 @@ func TestPairingTokenExpiry(t *testing.T) {
 	}
 	if tokens.valid(token.Token, now.Add(pairingTokenLifetime)) {
 		t.Fatal("到期后令牌仍有效")
+	}
+	if current, ok := tokens.active(now.Add(pairingTokenLifetime - time.Second)); !ok || current != token {
+		t.Fatal("到期前读不到当前令牌")
+	}
+	if _, ok := tokens.active(now.Add(pairingTokenLifetime)); ok {
+		t.Fatal("到期后仍返回当前令牌")
 	}
 	if (&pairingTokens{}).valid("", now) {
 		t.Fatal("未签发时空令牌有效")

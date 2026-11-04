@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
+import { usePaged } from '@/paging'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import DetailDialog from './DetailDialog.vue'
 import UiIcon from './UiIcon.vue'
+import UiPager from './UiPager.vue'
 import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
@@ -34,8 +36,11 @@ const modelCooldowns = computed(() =>
     (item) => cooldownModel.value === '' || item.model_id === cooldownModel.value,
   ),
 )
+// visibleRequests 是所选模型的请求，最近开始的在前
 const visibleRequests = computed(() =>
-  props.requests.filter((item) => requestModel.value === '' || item.model === requestModel.value),
+  props.requests
+    .filter((item) => requestModel.value === '' || item.model === requestModel.value)
+    .sort((left, right) => Date.parse(right.started_at) - Date.parse(left.started_at)),
 )
 const detail = ref<Cooldown | null>(null)
 const clearing = ref(false)
@@ -82,6 +87,26 @@ const visibleCooldowns = computed(() =>
     .sort((left, right) => Date.parse(left.until) - Date.parse(right.until)),
 )
 
+// 冷却与请求列表每页 50 条，筛选变化时回到第一页
+const pageSize = 50
+const {
+  page: cooldownPage,
+  pages: cooldownPages,
+  paged: pagedCooldowns,
+} = usePaged(visibleCooldowns, pageSize)
+const {
+  page: requestPage,
+  pages: requestPages,
+  paged: pagedRequests,
+} = usePaged(visibleRequests, pageSize)
+watch([cooldownModel, activeCategory], () => (cooldownPage.value = 1))
+watch(requestModel, () => (requestPage.value = 1))
+const cooldownList = ref<HTMLElement>()
+const requestList = ref<HTMLElement>()
+// 翻页后列表回到顶部
+watch(cooldownPage, () => cooldownList.value?.scrollTo({ top: 0 }))
+watch(requestPage, () => requestList.value?.scrollTo({ top: 0 }))
+
 const requestStateKeys: Record<RequestState, TranslationKey> = {
   queued: 'state.queued',
   running: 'state.running',
@@ -97,9 +122,13 @@ const activeCount = computed(
     ).length,
 )
 
+const accountLabels = computed(
+  () => new Map(props.accounts.map((account) => [account.id, account.label])),
+)
+
 // accountLabel 将稳定账户 ID 映射为用户显示名称
 function accountLabel(id: string, label: string): string {
-  return label || props.accounts.find((account) => account.id === id)?.label || '—'
+  return label || accountLabels.value.get(id) || '—'
 }
 
 // formatTime 根据当前语言显示请求时间
@@ -150,7 +179,9 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 flex-col overflow-auto md:overflow-hidden">
+  <section
+    class="flex min-h-0 flex-1 flex-col overflow-auto max-md:[scrollbar-gutter:stable] md:overflow-hidden"
+  >
     <header
       class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-6xl))/2_+_2rem))]"
     >
@@ -169,7 +200,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
       </button>
     </header>
     <div
-      class="mx-auto grid min-h-0 w-full max-w-6xl flex-1 gap-4 p-4 md:grid-rows-[minmax(0,3fr)_minmax(0,2fr)] md:p-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1"
+      class="mx-auto grid min-h-0 w-full max-w-6xl flex-1 gap-4 p-4 max-md:shrink-0 max-md:basis-auto md:grid-rows-[minmax(0,3fr)_minmax(0,2fr)] md:p-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1"
     >
       <article
         class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel max-md:max-h-[70vh]"
@@ -218,9 +249,13 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         >
           {{ t('cooldowns.empty') }}
         </div>
-        <div v-else class="min-h-0 flex-1 overflow-y-auto">
+        <div
+          v-else
+          ref="cooldownList"
+          class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
           <button
-            v-for="cooldown in visibleCooldowns"
+            v-for="cooldown in pagedCooldowns"
             :key="`${cooldown.account_id}:${cooldown.channel}:${cooldown.model_id}`"
             type="button"
             class="flex w-full items-center gap-3 border-b border-line/60 px-4 py-2 text-left transition hover:bg-raised"
@@ -252,6 +287,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
             <UiIcon name="chevronRight" :size="14" class="shrink-0 text-gray-600" />
           </button>
         </div>
+        <UiPager v-if="!cooldownError && !loading" v-model="cooldownPage" :pages="cooldownPages" />
       </article>
 
       <article
@@ -286,9 +322,13 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         >
           {{ t('requests.empty') }}
         </div>
-        <div v-else class="min-h-0 flex-1 overflow-y-auto">
+        <div
+          v-else
+          ref="requestList"
+          class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
           <div
-            v-for="request in visibleRequests"
+            v-for="request in pagedRequests"
             :key="request.id"
             class="flex items-center gap-3 border-b border-line/60 px-4 py-2 transition hover:bg-raised"
           >
@@ -329,6 +369,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
             </button>
           </div>
         </div>
+        <UiPager v-if="!requestError && !loading" v-model="requestPage" :pages="requestPages" />
       </article>
     </div>
 

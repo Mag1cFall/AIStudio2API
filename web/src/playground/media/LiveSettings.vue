@@ -9,6 +9,8 @@ import {
 } from 'reka-ui'
 import { useI18n } from '@/i18n'
 import type { TranslationKey } from '@/i18n'
+import DisclosureChevron from '@/components/DisclosureChevron.vue'
+import UiCollapse from '@/components/UiCollapse.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
@@ -185,15 +187,16 @@ function addVocabulary(): void {
         v-tooltip.left="t('pg.sessionContextTip')"
         type="button"
         class="settings-group-header"
-        :class="{ expanded: contextOpen }"
         :aria-expanded="contextOpen"
         :aria-label="t('pg.toggleSessionContext')"
         @click="contextOpen = !contextOpen"
       >
         <span class="group-title">{{ t('pg.sessionContext') }}</span>
-        <UiIcon name="chevronDown" :size="20" class="expand-icon" />
+        <DisclosureChevron :open="contextOpen" :turn="180" class="expand-icon"
+          ><UiIcon name="chevronDown" :size="20"
+        /></DisclosureChevron>
       </button>
-      <template v-if="contextOpen">
+      <UiCollapse :open="contextOpen">
         <div v-tooltip.left="lockedTip(t('pg.maxContextTip'))" class="settings-item-column">
           <h3 class="item-description-title">{{ t('pg.maxContext') }}</h3>
           <div class="ms-slider">
@@ -248,22 +251,23 @@ function addVocabulary(): void {
             />
           </div>
         </div>
-      </template>
+      </UiCollapse>
     </div>
 
     <div v-if="variant === 'conversation'" class="field-group">
       <button
         type="button"
         class="settings-group-header"
-        :class="{ expanded: toolsOpen }"
         :aria-expanded="toolsOpen"
         :aria-label="t('pg.toggleTools')"
         @click="toolsOpen = !toolsOpen"
       >
         <span class="group-title">{{ t('pg.tools') }}</span>
-        <UiIcon name="chevronDown" :size="20" class="expand-icon" />
+        <DisclosureChevron :open="toolsOpen" :turn="180" class="expand-icon"
+          ><UiIcon name="chevronDown" :size="20"
+        /></DisclosureChevron>
       </button>
-      <template v-if="toolsOpen">
+      <UiCollapse :open="toolsOpen">
         <div v-tooltip.left="lockedTip(t('pg.functionCallingTip'))" class="toggle-row">
           <div class="label-container">
             <p class="label">{{ t('pg.functionCalling') }}</p>
@@ -318,7 +322,7 @@ function addVocabulary(): void {
             :label="t('pg.googleSearch')"
           />
         </div>
-      </template>
+      </UiCollapse>
     </div>
 
     <div v-if="variant === 'translation'" class="field-group">

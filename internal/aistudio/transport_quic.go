@@ -42,8 +42,10 @@ const (
 	quicAEADOverhead = 16
 	// h3NoError 是 HTTP/3 H3_NO_ERROR
 	h3NoError = 0x100
-	// nssGREASEECHInner 是 NSS 为 GREASE ECH 估算的内层 ClientHello 基础长度
-	nssGREASEECHInner = 193
+	// nssQUICGREASEECHInner 是 NSS 为 QUIC ClientHello 的 GREASE ECH 估算的内层 ClientHello 基础长度
+	nssQUICGREASEECHInner = 193
+	// nssTLSGREASEECHInner 是 NSS 为 TCP ClientHello 的 GREASE ECH 估算的内层 ClientHello 基础长度，比 QUIC 多 13 个 TLS 1.2 密码套件
+	nssTLSGREASEECHInner = 219
 )
 
 // quicResumption 是一类请求的 QUIC 连接共用的会话票据、NEW_TOKEN 令牌与各主机上次收到的服务端 QPACK 设置
@@ -66,14 +68,13 @@ func (resumption *quicResumption) lookup(host string) (int, *[2]uint64) {
 		return 0, nil
 	}
 	raw, err := state.Bytes()
-	if err != nil || time.Now().After(time.Unix(int64(binary.BigEndian.Uint64(raw[len(raw)-12:])), 0)) {
+	if err != nil {
 		return 0, nil
 	}
-	binder := 32
-	if binary.BigEndian.Uint16(raw[3:]) == utls.TLS_AES_256_GCM_SHA384 {
-		binder = 48
+	psk := resumptionPSKLength(raw, len(ticket))
+	if psk == 0 {
+		return 0, nil
 	}
-	psk := 2 + 2 + len(ticket) + 4 + 2 + 1 + binder
 	settings, ok := resumption.rememberedSettings(host)
 	if !state.EarlyData || !ok {
 		return psk, nil
@@ -238,8 +239,8 @@ func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 			utls.MaxDatagramFrameSize(65535),
 		}},
 		&utls.GREASEEncryptedClientHelloExtension{
-			CandidateCipherSuites: []utls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}},
-			CandidatePayloadLens:  []uint16{nssGREASEECHPayload(psk, early)},
+			CandidateCipherSuites: []utls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}, {KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_CHACHA20_POLY1305}},
+			CandidatePayloadLens:  []uint16{nssGREASEECHPayload(nssQUICGREASEECHInner, psk, early)},
 		},
 	)
 	if psk > 0 {
@@ -254,9 +255,20 @@ func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 	}
 }
 
-// nssGREASEECHPayload 是 NSS GREASE ECH 的密文长度（不含 AEAD 标签）
-func nssGREASEECHPayload(psk int, early bool) uint16 {
-	inner := nssGREASEECHInner
+// resumptionPSKLength 返回以编码为 raw（utls SessionState.Bytes）的 TLS 1.3 客户端会话恢复时 pre_shared_key 扩展的长度，会话不是 TLS 1.3 或票据已过期时为 0
+func resumptionPSKLength(raw []byte, ticket int) int {
+	if binary.BigEndian.Uint16(raw) != utls.VersionTLS13 || time.Now().After(time.Unix(int64(binary.BigEndian.Uint64(raw[len(raw)-12:])), 0)) {
+		return 0
+	}
+	binder := 32
+	if binary.BigEndian.Uint16(raw[3:]) == utls.TLS_AES_256_GCM_SHA384 {
+		binder = 48
+	}
+	return 2 + 2 + ticket + 4 + 2 + 1 + binder
+}
+
+// nssGREASEECHPayload 是 NSS 按内层基础长度 inner 算出的 GREASE ECH 密文长度（不含 AEAD 标签）
+func nssGREASEECHPayload(inner int, psk int, early bool) uint16 {
 	if psk > 0 {
 		inner += 4 + psk
 	}

@@ -315,11 +315,16 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err := streamHeaders(w); err != nil {
 		return nil
 	}
+	sequence := 0
 	send := func(kind string, value map[string]any) error {
 		value["event_type"] = kind
+		if request.stream != nil {
+			sequence++
+			value["event_id"] = strconv.Itoa(sequence)
+		}
 		return writeSSE(w, kind, officialOrder("interactions", value))
 	}
-	if err := send("interaction.created", map[string]any{"interaction": interactionObject(generate, created, "in_progress", nil)}); err != nil {
+	if err := send("interaction.created", map[string]any{"interaction": interactionObject(generate, request.PreviousID, created, "in_progress", nil)}); err != nil {
 		return nil
 	}
 	audio := request.audioFormat()
@@ -461,14 +466,15 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 	if err != nil {
 		SetAccessLogError(r.Context(), err)
 		if shouldWriteRequestError(r, err) {
-			_ = send("error", map[string]any{"error": map[string]any{"code": geminiErrorStatus(err), "message": err.Error()}})
+			_ = send("error", interactionErrorEvent(err, ""))
 		}
 		return err
 	}
 	if err := closeStep(); err != nil {
 		return nil
 	}
-	completed := interactionObject(generate, created, interactionStatus(result), &result)
+	result.usage = request.cache.usage(result.usage)
+	completed := interactionObject(generate, request.PreviousID, created, interactionStatus(result), &result)
 	if request.Store == nil || *request.Store {
 		s.storeInteraction(request, previous, current, result, completed)
 	}
@@ -476,6 +482,15 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 		SetAccessLogError(r.Context(), fmt.Errorf("interaction completion: %w", err))
 	}
 	return nil
+}
+
+// interactionErrorEvent 返回交互流的 error 事件正文，eventID 非空时带 event_id
+func interactionErrorEvent(err error, eventID string) map[string]any {
+	event := map[string]any{"event_type": "error", "error": map[string]any{"code": geminiErrorStatus(err), "message": err.Error()}}
+	if eventID != "" {
+		event["event_id"] = eventID
+	}
+	return event
 }
 
 // interactionOutputSignature 提取函数调用、正文与媒体携带的可回传思考签名，输出为其前的 thought 步骤

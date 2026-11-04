@@ -11,7 +11,7 @@ const canvas = ref<HTMLCanvasElement>()
 const { theme } = useTheme()
 let stop: (() => void) | undefined
 
-// start 按状态、尺寸与配色逐帧绘制，离开视口或页面隐藏时暂停
+// start 按状态、尺寸与配色逐帧绘制，首帧在进入视口后的动画帧中绘制，离开视口或页面隐藏时暂停
 function start(): void {
   stop?.()
   stop = undefined
@@ -57,7 +57,6 @@ function start(): void {
     if (document.visibilityState === 'hidden') pause()
     else if (visible) resume()
   }
-  paint((performance.now() / 1000) * speed)
   observer.observe(element)
   document.addEventListener('visibilitychange', onVisibility)
   stop = () => {

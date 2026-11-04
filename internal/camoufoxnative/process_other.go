@@ -10,6 +10,12 @@ import (
 	"syscall"
 )
 
+// foreignUserPath 表示本进程以 root 运行而 path 属于其他用户，Firefox 的会话变量指向这种路径时拒绝启动
+func foreignUserPath(path string) bool {
+	var info syscall.Stat_t
+	return os.Geteuid() == 0 && syscall.Stat(path, &info) == nil && info.Uid != 0
+}
+
 // configureBrowserProcess 将 Camoufox 隔离到独立进程组
 func configureBrowserProcess(command *exec.Cmd, _ bool) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -27,16 +33,9 @@ func attachBrowserProcess(*exec.Cmd) (browserTree, error) {
 func releaseBrowserTree(browserTree) {}
 
 // terminateBrowserProcess 结束 Camoufox 进程组
-func terminateBrowserProcess(ctx context.Context, process *browserProcess) error {
-	command := process.command
-	if command == nil || command.Process == nil {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+func terminateBrowserProcess(_ context.Context, process *browserProcess) error {
+	err := syscall.Kill(-process.command.Process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err

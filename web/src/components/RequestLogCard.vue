@@ -4,8 +4,9 @@ import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { byteLength, formatLogNumber, prettyBody, type LogRow } from '@/logs'
 import type { RequestBody } from '@/types'
-import LogCollapse from './LogCollapse.vue'
-import LogDisclosure from './LogDisclosure.vue'
+import DisclosureChevron from './DisclosureChevron.vue'
+import UiCollapse from './UiCollapse.vue'
+import UiDisclosure from './UiDisclosure.vue'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
@@ -135,7 +136,7 @@ const bodyParts = computed(() =>
 <template>
   <div class="request-log">
     <div class="request-heading">
-      <LogDisclosure v-model="open" />
+      <UiDisclosure v-model="open" />
       <span class="request-state" :class="`state-${request.state}`">{{
         request.status ?? t('logs.running')
       }}</span>
@@ -170,11 +171,13 @@ const bodyParts = computed(() =>
         >{{ t('logs.firstToken') }} <b>{{ number(request.first_event_ms / 1000, 1) }}</b> s</span
       >
     </div>
-    <p v-if="request.error" class="request-error">{{ logText(request.error) }}</p>
+    <p v-if="request.error" class="request-error request-error-summary">
+      {{ logText(request.error) }}
+    </p>
     <p v-else-if="request.state === 'blocked' || request.state === 'limited'" class="request-error">
       {{ finishLabel }}
     </p>
-    <LogCollapse :open="open">
+    <UiCollapse :open="open">
       <div class="request-details">
         <dl>
           <dt>ID</dt>
@@ -203,6 +206,10 @@ const bodyParts = computed(() =>
             <dt>{{ t('logs.inputMessages') }}</dt>
             <dd>{{ number(request.input_messages) }}</dd>
           </template>
+          <template v-if="request.error">
+            <dt>{{ t('logs.errorDetail') }}</dt>
+            <dd class="request-error-detail">{{ logText(request.error) }}</dd>
+          </template>
           <template v-if="request.finish_reason">
             <dt>{{ t('logs.finishReason') }}</dt>
             <dd>
@@ -226,12 +233,14 @@ const bodyParts = computed(() =>
             :aria-expanded="jsonOpen"
             @click="jsonOpen = !jsonOpen"
           >
-            <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+            <DisclosureChevron class="request-disclosure-icon" :open="jsonOpen"
+              ><UiIcon name="chevronRight" :size="12"
+            /></DisclosureChevron>
             JSON
           </button>
-          <LogCollapse :open="jsonOpen">
+          <UiCollapse :open="jsonOpen">
             <pre>{{ JSON.stringify(row.entry, null, 2) }}</pre>
-          </LogCollapse>
+          </UiCollapse>
         </section>
         <section
           v-if="request.state !== 'running' && request.method === 'POST'"
@@ -243,10 +252,12 @@ const bodyParts = computed(() =>
             :aria-expanded="bodyOpen"
             @click="toggleBody"
           >
-            <UiIcon class="request-disclosure-icon" name="chevronRight" :size="12" />
+            <DisclosureChevron class="request-disclosure-icon" :open="bodyOpen"
+              ><UiIcon name="chevronRight" :size="12"
+            /></DisclosureChevron>
             {{ t('logs.body') }}
           </button>
-          <LogCollapse :open="bodyOpen">
+          <UiCollapse :open="bodyOpen">
             <p v-if="bodyState === 'loading'" class="request-body-note">
               {{ t('common.loading') }}
             </p>
@@ -263,10 +274,10 @@ const bodyParts = computed(() =>
               </div>
               <pre>{{ part.text }}</pre>
             </div>
-          </LogCollapse>
+          </UiCollapse>
         </section>
       </div>
-    </LogCollapse>
+    </UiCollapse>
   </div>
 </template>
 
@@ -344,6 +355,18 @@ const bodyParts = computed(() =>
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* request-error-summary 为卡片上的错误，最多两行，全文在详情中 */
+.request-error-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.request-details .request-error-detail {
+  color: var(--color-red-400);
+  white-space: pre-wrap;
+}
 .request-details {
   margin: 6px 0 4px;
   padding: 8px 12px;
@@ -402,10 +425,6 @@ const bodyParts = computed(() =>
 }
 .request-disclosure-icon {
   color: var(--color-gray-500);
-  transition: transform 120ms ease;
-}
-.request-section-toggle[aria-expanded='true'] > .request-disclosure-icon {
-  transform: rotate(90deg);
 }
 @media (pointer: coarse) {
   .request-section-toggle {

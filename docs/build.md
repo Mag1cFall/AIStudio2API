@@ -211,7 +211,7 @@ Build 目录保存在账户内存中，不写入 `runtime-state.json`。读取�
 4. M 出现在任一账户的 Playground 目录时：M 不是 Interactions 或转录模型，且账户权益满足 M 的 AccessModes
 5. M 只在 Build 目录中时：M 不是只能配合 Computer Use 工具的模型
 
-以下请求只使用 Playground：Playground 目录中的 Live 与 Robotics 模型、Veo、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。Playground 目录中模型的 CountTokens 使用 Playground，各 Part 的 `mediaResolution` 不同时经 Build 计数；Build 未启用时与生成一样经 Playground 发送，各 Part 按模型默认分辨率计数。
+以下请求只使用 Playground：Playground 目录中的 Live 与 Robotics 模型、转录、Interactions 模型、带 Drive 文件引用的生成、带多说话人 `mode` 的 TTS。Playground 目录中模型的 CountTokens 使用 Playground，各 Part 的 `mediaResolution` 不同时经 Build 计数；Build 未启用时与生成一样经 Playground 发送，各 Part 按模型默认分辨率计数。
 
 带 File Search 工具的生成只经 Build 通道，没有可用的 Build 账户或 Build 拒绝请求时返回对应错误。
 
@@ -452,7 +452,8 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | `internal/aistudio/generate.go` | 通道分派、共用预处理、停止序列与 usage |
 | `internal/aistudio/service.go` | 受保护发送、Build 与写代码助手的 binding 和 proof field |
 | `internal/aistudio/upload.go` | Build 通道与写代码助手通道保留内联附件 |
-| `internal/aistudio/assistant.go` | 写代码助手的目录条目派生、附件改写、`CodeAssistantOffline` 编码、RPC 顺序、临时应用清理与任务流解码 |
+| `internal/aistudio/assistant.go` | 写代码助手的目录条目派生、附件改写、`CodeAssistantOffline` 编码、RPC 顺序、取消与任务流解码 |
+| `internal/aistudio/assistant_session.go` | 写代码助手对话摘要、应用继续、所在账户与闲置应用巡检 |
 | `internal/aistudio/transport_http.go` | 写代码助手附件上传 |
 | `internal/aistudio/models.go` | 能力码 48 与 `-build` 条目追加 |
 | `internal/aistudio/build_embed.go` | embedding 编码、分批、发送、解码与换号 |
@@ -460,7 +461,7 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | `internal/aistudio/webchannel.go` | WebChannel 会话按租约通道选择地址、proof field、帧编码与解码 |
 | `internal/app/embeddings.go` | embedding 候选、通道日志与输入 token |
 | `internal/api/embeddings.go`、`internal/api/live.go` | OpenAI 与 Gemini embedding 端点、实时音乐客户端帧 |
-| `internal/app/runtime.go` | 重试、冷却写入、同账户换通道、文件引用复制 |
+| `internal/app/runtime.go` | 重试、冷却写入、同账户换通道、文件引用复制、写代码助手应用所在账户优先与应用巡检 |
 | `internal/app/admin.go`、`internal/api` | 冷却、请求、日志与模型目录中的通道字段 |
 | `web/src` | 设置页通道选择与各列表的通道显示 |
 
@@ -516,6 +517,7 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 
 - `-build` 模型的候选通道只有 `assistant`；该通道始终启用，`UPSTREAM_CHANNELS` 与 `BUILD_NATIVE_NONSTREAM` 只作用于其他模型
 - 账户的目录含该 `-build` 条目、且账户权益满足基础模型的 AccessModes 时，账户可以承担请求；候选顺序、热 Worker 优先与 `round-robin`、`fill-first` 策略与其他模型相同
+- 请求的对话可以在某个账户的应用中继续时，该账户有空闲槽位就先于其他账户选择，见“对话与应用”
 - 冷却 scope 为 `-build` 模型 ID 本身，例如 `gemini-3.8-flash-build`，与基础模型的 Playground `<模型>`、Build `build:<模型>` 分开记录；额度错误、换号与排队按“调度与冷却”与“错误、额度与能力边界”处理
 - 模型 `channels`、请求 `channel` 与冷却 `channel` 为 `assistant`，管理页面显示为 “Build 对话”
 - 模型名可以带思考后缀，后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`
@@ -525,28 +527,28 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 
 | 规范请求 | `CodeAssistantOffline` |
 | --- | --- |
-| contents | field 1 |
+| contents | field 1，继续应用中的对话时只含新增轮次 |
 | system | field 9 自定义指令 |
 | 内置工具禁止说明 | field 9 开头 |
 | 函数声明 | field 9 中系统提示之前的函数调用说明 |
 | 思考强度或思考预算 | field 19 的 thinking level |
 
 - 上游请求只携带对话轮、系统提示、函数调用说明与思考强度；生成参数、结构化输出与安全设置使用助手的服务端设置
-- 内联附件按官网对话面板上传，对话轮中以 Part field 18 `[mime, 上传路径, 文件名, 字节数]` 引用，文件名为 `attachment-<序号>`，序号按附件在请求中的顺序从 1 开始；上传见“附件上传”
-- field 9 以内置工具禁止说明开头：写代码助手服务端指令声明的 25 个工作区工具（`run_command`、`write_to_file`、`view_file`、`search_web` 等）作用于与对话无关的空应用，说明列出这些工具名并禁止调用；请求带 Google Search 工具时列表不含 `search_web`，并在说明末尾允许调用 `search_web`
+- 内联附件按官网对话面板上传，对话轮中以 Part field 18 `[mime, 上传路径, 文件名, 字节数]` 引用，文件名为 `attachment-<序号>`，序号按附件在 field 1 中的顺序从 1 开始；上传见“附件上传”
+- field 9 以内置工具禁止说明开头：写代码助手服务端指令声明的 25 个工作区工具（`run_command`、`write_to_file`、`view_file`、`search_web` 等）作用于与对话无关的空应用，说明列出这些工具名并禁止调用；请求带 Google Search 工具时列表不含 `search_web`，并在说明末尾允许调用 `search_web`；请求声明函数且 tool choice 不是 `none` 时列表不含 `ask_question`，模型写出调用代码块后以它结束本轮
 - `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，接在禁止说明之后（中间空一行）
 - 对话轮中的函数调用与结果 Part 转录为代码块文本：同一轮内相邻的调用合为一个 `function_calls` 块，相邻的结果合为一个 `function_results` 块，元素分别为 `{"name","arguments"}` 与 `{"name","response"}`；转录在上传附件与计算 WAA binding 之前完成
-- 写代码助手只把对话轮中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮。服务把 model 轮去掉思考与空 Part 后，首尾加上 `<assistant_turn>\n` 与 `\n</assistant_turn>` 两个文本 Part，以 user 轮发送；对话含 model 轮时，field 9 的说明之后另起一段写入下面的模型轮说明
+- 写代码助手只把 field 1 中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮；应用中以前各轮由上游保存，按原角色进入模型输入，见“对话与应用”。服务把 field 1 中的 model 轮去掉思考与空 Part 后，首尾加上 `<assistant_turn>\n` 与 `\n</assistant_turn>` 两个文本 Part，以 user 轮发送；本次或以前提交到该应用的对话轮中有这样转录的 model 轮时，field 9 的说明之后另起一段写入下面的模型轮说明
 - 本进程读到的回复中，`search_web` 步骤的查询与摘要按请求所用 API key、该轮之前对话轮的角色与正文摘要、回复正文保存（最多 1000 条回复）；之后以同一 API key 发送的请求中，某个 model 轮之前的对话与正文都和某条回复相同时，在该轮开头补回文本 Part `search_web results for "<查询>":\n<摘要>`，每次搜索一个
 
 ````text
 You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.
 <函数声明 JSON>
-To call functions, reply with only one fenced block and no other text:
+To call functions, write one fenced block:
 ```function_calls
 [{"name": "<function name>", "arguments": {<arguments>}}]
 ```
-Function results arrive in a later user turn as a fenced function_results block. Never write a function_results block yourself; stop after the function_calls block and wait for the results. Answer normally when no function is needed.
+Right after the block, call your ask_question tool once with the question "Run these function calls and send me their results." and write nothing more. The user's machine runs the calls and the results arrive as the answer in a fenced function_results block. Never write a function_results block yourself. Answer normally when no function is needed.
 ````
 
 ````text
@@ -560,19 +562,33 @@ Your own earlier replies in this conversation, including your function_calls blo
 ### RPC 顺序
 
 ```text
-/_/upload（每个内联附件一次）               → 上传路径
-CreateApplet                                → 应用 ID
+/_/upload（field 1 中每个内联附件一次）      → 上传路径
+CreateApplet（对话没有可继续的应用时）       → 应用 ID
 CodeAssistantOffline（WAA proof）           → 任务 ID
 StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到本轮回复结束或上游关闭
+StreamCodeAssistantOfflineGeneration        （消息列表在回复完成前结束时再请求一次）
+CodeAssistantOffline、StreamCodeAssistantOfflineGeneration（回复没有正文、问题与函数调用时追加用户轮，最多 3 次）
 流关闭后在后台：
   CancelCodeAssistantOfflineGeneration      （已取得任务 ID 且流没有正常解码完成时）
-  DeleteApplet
+巡检：
+  DeleteApplet                              （闲置的应用）
 ```
 
 - 请求头的集合、顺序与取值和 Playground 文本请求的 `GenerateContent` 相同；权益头 `X-AIStudio-G1-Tier` 只随 `CodeAssistantOffline` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带）
 - `CodeAssistantOffline` 由账户 WAA Worker 发送；其余四个 RPC 与附件上传经账户的 MakerSuite Go HTTP transport，使用同一账户的 Cookie、UA 与出口
-- 每个请求新建一个应用，请求结束后删除。上游把同一应用上以前的对话带入后续生成，应用只承载一次请求
 - 非流式请求同样读取任务流，收齐后输出；日志的“上游调用”记录 `stream` 模式、RPC `CodeAssistantOffline` 与原因 “Build 写代码助手使用服务端流，收集完成后返回”
+
+### 对话与应用
+
+上游在应用中保存对话。官网同一应用的第二轮起，`CodeAssistantOffline` 的 field 1 只有新的 user 轮，field 6 为 `2`、field 14 为 `[2]`、field 21 为对话 ID；应用的第一段对话以应用 ID 为对话 ID。之后的生成按原角色读取该对话以前的 user 轮与 model 轮（含思考与函数调用代码块），取消的回复保存到取消处。官网对话面板的回复没有重新生成按钮，停止按钮发送 `CancelCodeAssistantOfflineGeneration`，回复显示为已取消。
+
+服务按请求所用 API key 与对话历史把请求对应到应用：
+
+- 对话轮按连续的 model 轮与其余轮次分组，逐组累积 SHA-256 摘要。每组计入非思考正文 Part 直接连接后按空白归一的结果、函数调用的名称与键排序的参数、函数结果键排序的内容，其余 Part 去掉思考签名计入，内联数据以其 SHA-256 计入；调用 ID 不计入，客户端以不同格式回传同一回复时摘要相同
+- 本轮回复完整结束、没有以 `malformed_function_call` 结束、也没有在函数调用之后继续输出正文时，本进程把“请求的对话 + 本轮回复的正文与函数调用”的摘要记为该应用可以继续的位置
+- 新请求从后往前找到最近一个摘要与记录相同、之后还有新轮次的 model 轮组时，在该应用中继续：field 1 只提交该组之后的轮次，field 6 为 `2`、field 14 为 `[2]`、field 21 为应用 ID；记录的位置被取走，回复完整结束后移到新回复之后，同时到达的另一请求找不到记录
+- 找不到时新建应用并提交全部对话轮，包括第一轮、重新生成、编辑或压缩过的历史、另一个 API key、上一轮回复没有完整结束与服务重启之后；对话所在账户没有空闲槽位或不可用、请求被调度到其他账户时，放弃原应用并在新账户新建
+- 新建的应用 ID 以资源类型 `assistant-applet` 记入账户运行状态。生成服务启动时与之后每 10 分钟，巡检删除闲置超过 1 小时、或本进程没有可继续对话的应用并删除记录，`DeleteApplet` 返回 404 时同样删除记录；进行中的请求所用应用保留，没有空闲槽位的账户跳过本轮；删除失败时以 WARN 记录 “闲置写代码助手应用删除失败: <错误>”，记录保留到下一轮
 
 #### 附件上传
 
@@ -618,14 +634,21 @@ StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到本轮�
 | ---: | --- |
 | 1 | 对话轮，编码与 Playground `GenerateContent` 的 contents 相同：`[[Part...], role]`，role 为 `user` 或 `model` |
 | 2 | WAA proof |
-| 6 | `1` |
+| 6 | 新建应用的首轮为 `1`，继续时为 `2` |
 | 8 | `models/<基础模型 ID>` |
 | 9 | 自定义指令：内置工具禁止说明、函数调用说明、模型轮说明与系统提示 |
 | 12 | 应用 ID |
-| 14 | `[2,null,2]` |
+| 14 | 首轮为 `[2,null,2]`，继续时为 `[2]` |
 | 16 | `1` |
 | 19 | 思考配置 `[1,null,null,<thinking level>]` |
+| 21 | 继续时为应用 ID |
 | 29 | 每个请求新生成的大写 UUID v4 |
+
+在应用中继续时：
+
+```json
+[[[[[null,"```function_results\n[{\"name\":\"read_file\",\"response\":{\"result\":\"...\"}}]\n```"]],"user"]],"<WAA_PROOF>",null,null,null,2,null,"models/gemini-3.8-flash","<SYSTEM>",null,null,"<APPLET_ID>",null,[2],null,1,null,null,[1,null,null,3],null,"<APPLET_ID>",null,null,null,null,null,null,null,"<UUID>"]
+```
 
 WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次取文本、内联数据的标准 Base64 或 Drive file ID，其余 Part 取空字符串，以单个空格连接；proof 写入 field 2。Camoufox 后端的页面输入框写入 contents 各 Part 的文本，以空格连接。
 
@@ -652,11 +675,11 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 ["<APPLET_ID>"]
 ```
 
-第一行是 `CancelCodeAssistantOfflineGeneration` 的正文，第二行是 `DeleteApplet` 的正文；`DeleteApplet` 成功响应为 `[]`，之后该应用返回 404。
+第一行是 `CancelCodeAssistantOfflineGeneration` 的正文，第二行是 `DeleteApplet` 的正文；`DeleteApplet` 成功响应为 `[]`，之后该应用返回 404 `[5,"Requested entity was not found."]`。
 
-- 清理在任务流正文关闭时触发，包括正常读完、客户端断开与停止序列截断；`CreateApplet` 之后任一步失败时同样触发
-- 每个请求的清理只执行一次，在后台以独立的 1 分钟期限依次执行 Cancel 与 Delete
-- 任一步失败时以 WARN 记录 “Build 写代码助手清理失败”，字段为 `account`、`method`、`applet` 与 `error`
+- 任务流正文关闭时结束请求，包括正常读完、客户端断开与停止序列截断；`CreateApplet` 之后任一步失败时同样结束。回复完整结束时记录可继续的位置，否则放弃应用，由巡检删除
+- 已取得任务 ID 且流没有正常解码完成时，在后台以独立的 1 分钟期限发送一次 Cancel，失败时以 WARN 记录 “Build 写代码助手清理失败”，字段为 `account`、`method`、`applet` 与 `error`
+- `DeleteApplet` 只由“对话与应用”中的巡检发送
 
 ### 任务流
 
@@ -676,7 +699,7 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 | 1 | 对话轮列表 `[[[Part...], role]]` |
 | 3 | 应用文件修改 |
 | 7、8 | 时间戳 `["<秒>", <纳秒>]` |
-| 10 | 工具动作，例如编译应用；其中 field 19 为 `search_web` 搜索 `[查询, 域名, 摘要, [[标题, 地址]...]]` |
+| 10 | 工具动作，例如编译应用；其中 field 19 为 `search_web` 搜索 `[查询, 域名, 摘要, [[标题, 地址]...]]`，field 22 为 `[标题, null, 说明, [[参数名, 值]...]]`，参数 `tag` 为 `ask_question` 时参数 `questions` 是 `[{"question","options"}]` 的 JSON |
 | 11 | `[应用 ID, 时间戳]` |
 | 12 | 步骤序号，用户轮为 0 |
 | 6 | 失败原因 `[消息, 详情]` |
@@ -694,11 +717,13 @@ Part 的 field 2 为文本，field 13 为 `1` 或 `true` 时是思考。只修�
 3. 跳过 role 不是 `model` 的对话轮。模型轮的 Part 以（步骤序号，Part 序号）定位，同一步骤内多个模型轮的 Part 序号连续编号
 4. Part 文本是该位置的完整快照：以上一次快照开头时输出新增部分，与上一次相同时不输出；不以上一次快照开头时返回协议错误 “步骤正文不是上一次快照的延续”
 5. 思考 Part 的增量输出为 reasoning，其余为 text；text 来自与上一段 text 不同的步骤、且是该 Part 的第一段增量时，前面加 `\n\n`
-6. 请求声明了函数时，语言标记为 `function_calls`、`function_results`、`function_call`、`tool_calls`、`tool_call` 与 `tool_code` 的代码块暂缓到以换行加 ```` ``` ```` 结束（流结束时补上结尾）再判定，围栏可以出现在行中；其他代码块按原文输出为 text，可能是围栏开头的结尾反引号暂缓输出。判定取代码块中的第一个 JSON 值，解码失败时把不合法转义（如 `\x27`）的反斜杠按字面字符再解码一次；值为调用数组或单个调用对象时，每个元素输出为一个函数调用，调用 ID 为新的 UUID，`arguments` 为 `null` 或缺失时为 `{}`。`function_calls` 块接受任意函数名，其余标记的块只在函数均已声明时解码为调用，否则按原文输出。`function_results` 块不输出；输出函数调用之后的正文不再输出；无法解码的 `function_calls` 块不输出，回复以 `malformed_function_call` 结束
-7. 状态为 `1` 的步骤的 field 10 带 `search_web` 时，查询记入 `webSearchQueries`，每个 `[标题, 地址]` 记为一个网页来源块；同一步骤只记录一次
+6. 请求声明了函数时，语言标记为 `function_calls`、`function_results`、`function_call`、`tool_calls`、`tool_call` 与 `tool_code` 的代码块暂缓到以换行加 ```` ``` ```` 结束（流结束时补上结尾）再判定，围栏可以出现在行中；其他代码块按原文输出为 text，可能是围栏开头的结尾反引号暂缓输出。判定取代码块中的第一个 JSON 值，解码失败时把字符串中不合法转义（如 `\x27`，以及 `\u` 之后不是 4 位十六进制的 Windows 路径 `C:\users`）的反斜杠按字面字符、原始控制字符（如多行代码中的换行）按转义再解码一次；值为调用数组或单个调用对象时，每个元素输出为一个函数调用，调用 ID 为新的 UUID，`arguments` 为 `null` 或缺失时为 `{}`。`function_calls` 块接受任意函数名，其余标记的块只在函数均已声明时解码为调用，否则按原文输出。`function_results` 块不输出；输出函数调用之后的正文不再输出；无法解码的 `function_calls` 块不输出，回复以 `malformed_function_call` 结束
+7. 状态为 `1` 的步骤的 field 10 带 `search_web` 时，查询记入 `webSearchQueries`，每个 `[标题, 地址]` 记为一个网页来源块；同一步骤只记录一次。带 `ask_question` 且本轮还没有输出函数调用时，各问题输出为正文，选项各占一行 `- <选项>`；问题为说明中交回函数调用的那句时不输出
 8. 状态为 `1` 的步骤含模型轮时，回复记为已完成；消息中最后一个步骤状态为 `1`、含非思考正文且 field 10 为空时，本轮回复结束；输出函数调用之后模型继续输出非空白正文时，本轮回复在调用处结束，任务流关闭后取消生成任务。两种情况都不再读取后续消息与流尾状态
-9. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态
+9. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态。上游有时在模型步骤仍为状态 `2` 时正常结束消息列表；此时以同一任务 ID 与应用再请求一次 `StreamCodeAssistantOfflineGeneration`，已完成的任务立即返回状态为 `1` 的最终快照与用量，按同一组规则继续解码，已输出的正文与函数调用不重复输出
 10. 本轮回复结束或流关闭时回复已完成：依次输出暂缓的文本、记录的搜索 grounding、用量之和，再以 `stop` 结束（无法解码的 `function_calls` 块时为 `malformed_function_call`）；回复没有完成时返回协议错误 “流结束前没有完成的模型回复”
+
+回复完成时没有正文、问题与函数调用（例如只有思考）且没有以 `malformed_function_call` 结束时，在同一应用中继续：field 1 只含用户轮 `Your last turn ended without any visible reply. Continue now and give your reply.`，再读取新任务的任务流，按同一组规则解码，最多 3 次；用量的输入与缓存取最后一次，输出为各次之和。
 
 用量之和：输入为各步骤未命中缓存的输入与缓存命中之和，缓存为缓存命中之和，输出为输出之和，总数为输入加输出。
 

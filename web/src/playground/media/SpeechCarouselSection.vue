@@ -39,11 +39,10 @@ function runAction(): void {
   if (!props.actionUnavailable) emit('action')
 }
 
-onMounted(() => {
-  updateFades()
-  window.addEventListener('resize', updateFades)
-})
-onUnmounted(() => window.removeEventListener('resize', updateFades))
+// resize 在轮播布局完成与尺寸变化后更新渐隐，挂载时不强制同步布局
+const resize = new ResizeObserver(updateFades)
+onMounted(() => resize.observe(carousel.value!))
+onUnmounted(() => resize.disconnect())
 </script>
 
 <template>

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n } from '@/i18n'
 import type { Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
 import DetailDialog from './DetailDialog.vue'
+import DisclosureChevron from './DisclosureChevron.vue'
+import UiCollapse from './UiCollapse.vue'
 import UiIcon from './UiIcon.vue'
 import UiSelect from './UiSelect.vue'
 
@@ -23,6 +25,9 @@ const { locale, t, errorText } = useI18n()
 const query = useQueryText('q')
 const selectedMethod = useQueryText('method')
 const detail = ref<Model | null>(null)
+// codedOpen 是详情中未命名能力码是否展开，打开另一个模型的详情时收起
+const codedOpen = ref(false)
+watch(detail, () => (codedOpen.value = false))
 const savingChannel = ref(false)
 
 // modelChannels 与服务端一致解析 MODEL_CHANNELS 为模型到限定通道的映射：模型 ID 去掉 models/ 前缀，通道转为小写
@@ -139,7 +144,9 @@ function tokenLimit(value: number | undefined): string {
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 flex-col overflow-auto md:overflow-hidden">
+  <section
+    class="flex min-h-0 flex-1 flex-col overflow-auto max-md:[scrollbar-gutter:stable] md:overflow-hidden"
+  >
     <header
       class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-5xl))/2_+_2rem))]"
     >
@@ -157,6 +164,7 @@ function tokenLimit(value: number | undefined): string {
           type="search"
         />
         <UiSelect
+          v-if="!loading"
           v-model="selectedMethod"
           class="rounded border border-line bg-canvas px-3 py-2 text-sm text-gray-300 focus:border-blue-500 focus:outline-none"
           :aria-label="t('models.methods')"
@@ -164,7 +172,7 @@ function tokenLimit(value: number | undefined): string {
           <option value="">{{ t('models.allMethods') }}</option>
           <option v-for="method in methods" :key="method" :value="method">{{ method }}</option>
         </UiSelect>
-        <span class="shrink-0 text-xs text-gray-500 tabular-nums">{{
+        <span v-if="!loading" class="shrink-0 text-xs text-gray-500 tabular-nums">{{
           t('models.count').replace('{count}', String(filteredModels.length))
         }}</span>
       </div>
@@ -183,7 +191,7 @@ function tokenLimit(value: number | undefined): string {
       </div>
       <div
         v-else
-        class="min-h-0 flex-1 overflow-y-auto rounded-lg border border-line bg-panel max-md:max-h-[70vh]"
+        class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] rounded-lg border border-line bg-panel max-md:max-h-[70vh] max-md:shrink-0 max-md:basis-auto"
       >
         <div
           class="sticky top-0 z-10 hidden items-center gap-3 border-b border-line bg-panel px-4 py-2 text-xs text-gray-500 sm:flex"
@@ -327,28 +335,35 @@ function tokenLimit(value: number | undefined): string {
             </span>
             <span v-if="capabilityNames(detail).length === 0" class="text-gray-600">—</span>
           </div>
-          <details v-if="capabilityGroups(detail).coded.length" class="group mt-2">
-            <summary
-              class="inline-flex cursor-pointer list-none items-center gap-1 text-xs text-gray-500 hover:text-gray-300"
+          <template v-if="capabilityGroups(detail).coded.length">
+            <button
+              type="button"
+              class="mt-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300"
+              :aria-expanded="codedOpen"
+              @click="codedOpen = !codedOpen"
             >
-              <UiIcon name="chevronRight" :size="12" class="transition group-open:rotate-90" />
+              <DisclosureChevron :open="codedOpen"
+                ><UiIcon name="chevronRight" :size="12"
+              /></DisclosureChevron>
               {{
                 t('models.unnamedCapabilities').replace(
                   '{count}',
                   String(capabilityGroups(detail).coded.length),
                 )
               }}
-            </summary>
-            <div class="mt-2 flex flex-wrap gap-2">
-              <span
-                v-for="capability in capabilityGroups(detail).coded"
-                :key="capability"
-                class="rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-gray-500"
-              >
-                {{ capability }}
-              </span>
-            </div>
-          </details>
+            </button>
+            <UiCollapse :open="codedOpen">
+              <div class="flex flex-wrap gap-2 pt-2">
+                <span
+                  v-for="capability in capabilityGroups(detail).coded"
+                  :key="capability"
+                  class="rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-gray-500"
+                >
+                  {{ capability }}
+                </span>
+              </div>
+            </UiCollapse>
+          </template>
           <div v-if="capabilityOptionEntries(detail).length" class="mt-3 space-y-1 text-xs">
             <div
               v-for="[name, values] in capabilityOptionEntries(detail)"

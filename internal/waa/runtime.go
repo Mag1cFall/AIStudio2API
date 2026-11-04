@@ -18,6 +18,8 @@ type Options struct {
 	Interpreter string
 	Profile     Profile
 	LoadImage   func(string) bool
+	// LoadFrame 以浏览器 iframe 导航形状载入地址，返回是否收到文档响应
+	LoadFrame func(string) bool
 }
 
 // Runtime 在嵌入的 SpiderMonkey 中持有一份与官网页面同形态的 BotGuard 生命周期
@@ -36,7 +38,12 @@ type Runtime struct {
 	operationMu sync.Mutex
 	closeOnce   sync.Once
 	pending     sync.WaitGroup
+	// idle 在最后一次操作 idleShrinkDelay 后执行收缩 GC
+	idle *time.Timer
 }
+
+// idleShrinkDelay 为 VM 最后一次操作后执行收缩 GC 的空闲时长，与 Firefox 正式版 javascript.options.compact_on_user_inactive_delay 相同
+const idleShrinkDelay = 5 * time.Minute
 
 // promptScript 按官网 Worker 的方式向提示词输入框写值并派发 input 与 change，submit 时点击 Run
 const promptScript = `((prompt, submit) => {
@@ -79,7 +86,7 @@ func NewRuntime(ctx context.Context, options Options) (*Runtime, error) {
 	return newRuntime(ctx, options, "")
 }
 
-// newRuntime 创建 VM，prelude 在顶层宿主安装后、解释器执行前运行，VM 就绪后以收缩 GC 释放初始化留下的堆内存
+// newRuntime 创建 VM，prelude 在顶层宿主安装后、解释器执行前运行，VM 就绪后以保留 JIT 代码的完整 GC 回收初始化留下的对象
 func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime, error) {
 	if options.Interpreter == "" {
 		return nil, errors.New("WAA 解释器为空")
@@ -112,7 +119,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 			complete(err)
 			return
 		}
-		state := &agent{cx: cx, loop: loop, profile: options.Profile, loadImage: options.LoadImage, pending: &runtime.pending, timezone: location.String(), navigationStart: options.Profile.NavigationStart}
+		state := &agent{cx: cx, loop: loop, profile: options.Profile, loadImage: options.LoadImage, loadFrame: options.LoadFrame, pending: &runtime.pending, timezone: location.String(), navigationStart: options.Profile.NavigationStart}
 		runtime.agent = state
 		loop.cleanup = cx.Close
 		loop.afterTask = state.afterTask
@@ -136,6 +143,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 		}) {
 			<-collected
 		}
+		runtime.idle = time.AfterFunc(idleShrinkDelay, func() { loop.post(runtime.agent.cx.ShrinkGC) })
 		return runtime, nil
 	case <-ctx.Done():
 		loop.close()
@@ -341,13 +349,7 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	}
 }
 
-// FillPrompt 向页面提示词输入框写入文本并派发官网 Worker 相同的事件，submit 时点击 Run
-func (runtime *Runtime) FillPrompt(ctx context.Context, prompt string, submit bool) error {
-	runtime.operationMu.Lock()
-	defer runtime.operationMu.Unlock()
-	return runtime.fillPrompt(ctx, prompt, submit)
-}
-
+// fillPrompt 向页面提示词输入框写入文本并派发官网 Worker 相同的事件，submit 时点击 Run
 func (runtime *Runtime) fillPrompt(ctx context.Context, prompt string, submit bool) error {
 	prompt = textareaValue(prompt)
 	result := make(chan error, 1)
@@ -386,8 +388,19 @@ func textareaValue(value string) string {
 
 // Proof 同步页面提示词后为 SHA-256 digest 生成 snapshot proof，结束后清空输入框
 func (runtime *Runtime) Proof(ctx context.Context, digest string, prompt string) (string, error) {
+	return runtime.proof(ctx, digest, prompt, false)
+}
+
+// RunProof 向页面提示词输入框写入文本并点击 Run 后为 SHA-256 digest 生成 fresh proof，与官网用户点击 Run 后页面为 GenerateContent 取 proof 的顺序相同，返回前清空输入框
+func (runtime *Runtime) RunProof(ctx context.Context, digest string, prompt string) (string, error) {
+	return runtime.proof(ctx, digest, prompt, true)
+}
+
+// proof 写入提示词、submit 时点击 Run，再为 digest 生成 proof，返回前清空输入框
+func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string, submit bool) (string, error) {
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
+	defer runtime.idle.Reset(idleShrinkDelay)
 	defer runtime.loop.post(func() {
 		if value, err := runtime.agent.invoke(runtime.clear, 0); err == nil {
 			runtime.agent.cx.ReleaseValue(value)
@@ -395,7 +408,7 @@ func (runtime *Runtime) Proof(ctx context.Context, digest string, prompt string)
 			runtime.agent.release(err)
 		}
 	})
-	if err := runtime.fillPrompt(ctx, prompt, false); err != nil {
+	if err := runtime.fillPrompt(ctx, prompt, submit); err != nil {
 		return "", err
 	}
 	return runtime.snapshotWith(ctx, mozjs.String(digest))
@@ -405,6 +418,7 @@ func (runtime *Runtime) Proof(ctx context.Context, digest string, prompt string)
 func (runtime *Runtime) RefreshSnapshot(ctx context.Context) (string, error) {
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
+	defer runtime.idle.Reset(idleShrinkDelay)
 	return runtime.snapshotWith(ctx, mozjs.Undefined())
 }
 
@@ -467,6 +481,7 @@ func (runtime *Runtime) snapshotWith(ctx context.Context, digest mozjs.Value) (s
 // Close 结束 VM 生命周期并停止事件循环，关闭超时时中断仍在执行的脚本
 func (runtime *Runtime) Close() {
 	runtime.closeOnce.Do(func() {
+		runtime.idle.Stop()
 		if runtime.shutdown != 0 {
 			done := make(chan struct{})
 			if runtime.loop.post(func() {

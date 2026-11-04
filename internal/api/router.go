@@ -35,6 +35,8 @@ type Config struct {
 	WaitLaunch func(context.Context)
 	// EgressProxy 返回服务连接外部 MCP 服务器所用的出口代理，空串为直连
 	EgressProxy func() string
+	// States 持久保存 Responses、Interactions 与 Chat 音频回复的续接节点，为空时只保存在内存中
+	States StateStore
 }
 
 // ResponseModes 是生成请求的响应方式设置
@@ -54,6 +56,7 @@ type server struct {
 	thoughtSignatures *thoughtSignatureStore
 	pairing           *pairingTokens
 	loginViews        *loginViews
+	accountTasks      *accountTasks
 	// background 按响应 ID 保存进行中的 Responses 后台响应
 	background sync.Map
 }
@@ -63,8 +66,8 @@ var idSequence atomic.Uint64
 // NewHandler 创建公开 API 路由
 func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{
-		service: service, config: config, responseStates: newResponseStateStore(), uploads: newGeminiUploads(), caches: newGeminiCaches(),
-		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{},
+		service: service, config: config, responseStates: newResponseStateStore(config.States), uploads: newGeminiUploads(), caches: newGeminiCaches(),
+		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{}, accountTasks: &accountTasks{},
 	}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
@@ -141,6 +144,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 		root.Handle("GET /media/{file}", corsMiddleware(http.HandlerFunc(s.handleMedia)))
 	}
 	root.HandleFunc("POST /api/pairing/accounts", s.handlePairingAccount)
+	root.HandleFunc("PUT /api/pairing/accounts/{account}/cookies", s.handlePairingRenewal)
 	return root
 }
 

@@ -101,11 +101,11 @@
 
 .ms-run-settings .expand-icon {
   margin-right: 6px;
-  transition: transform 0.2s;
 }
 
-.ms-run-settings .settings-group-header.expanded .expand-icon {
-  transform: rotate(180deg);
+/* 分组内容区的首个开关行与分组标题相距 12 px */
+.ms-run-settings .settings-group-header + .ui-collapse > .toggle-row:first-child {
+  margin-top: 4px;
 }
 
 .ms-run-settings .settings-note {

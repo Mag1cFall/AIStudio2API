@@ -11,6 +11,7 @@ import symbol_arrow_upward from '@material-symbols/svg-300/outlined/arrow_upward
 import symbol_asterisk from '@material-symbols/svg-300/outlined/asterisk.svg?raw'
 import symbol_attach_money from '@material-symbols/svg-300/outlined/attach_money.svg?raw'
 import symbol_bar_chart from '@material-symbols/svg-300/outlined/bar_chart.svg?raw'
+import symbol_cable from '@material-symbols/svg-300/outlined/cable.svg?raw'
 import symbol_chat from '@material-symbols/svg-300/outlined/chat.svg?raw'
 import symbol_chat_bubble from '@material-symbols/svg-300/outlined/chat_bubble.svg?raw'
 import symbol_check from '@material-symbols/svg-300/outlined/check.svg?raw'
@@ -111,12 +112,15 @@ import symbol_dashboard from '@material-symbols/svg-300/outlined/dashboard.svg?r
 import symbol_drag_indicator from '@material-symbols/svg-300/outlined/drag_indicator.svg?raw'
 import symbol_edit_note from '@material-symbols/svg-300/outlined/edit_note.svg?raw'
 import symbol_schedule from '@material-symbols/svg-300/outlined/schedule.svg?raw'
+import symbol_lightbulb from '@material-symbols/svg-300/outlined/lightbulb.svg?raw'
+import symbol_collapse_content from '@material-symbols/svg-300/outlined/collapse_content.svg?raw'
 import symbol_video_audio_call from './video_audio_call.svg?raw'
 
 // icons 将界面语义名映射到 Material Symbols Outlined 300 字重图标的 SVG 文本
 export const icons = {
   logs: symbol_terminal,
   accounts: symbol_account_circle,
+  access: symbol_cable,
   models: symbol_deployed_code,
   requests: symbol_speed,
   usage: symbol_bar_chart,
@@ -235,7 +239,24 @@ export const icons = {
   screenShare: symbol_screenshot_monitor,
   globe: symbol_language,
   help: symbol_help,
+  lightbulb: symbol_lightbulb,
+  collapseContent: symbol_collapse_content,
 } as const
 
 // IconName 是界面可用的图标语义名
 export type IconName = keyof typeof icons
+
+// iconTemplates 是各图标解析一次后的 SVG
+const iconTemplates = new Map<IconName, DocumentFragment>()
+
+// iconNode 返回图标 SVG 的副本，每个图标只解析一次
+export function iconNode(name: IconName): Node {
+  let fragment = iconTemplates.get(name)
+  if (fragment === undefined) {
+    const template = document.createElement('template')
+    template.innerHTML = icons[name]
+    fragment = template.content
+    iconTemplates.set(name, fragment)
+  }
+  return fragment.cloneNode(true)
+}

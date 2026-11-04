@@ -325,7 +325,7 @@ func rawBool(raw json.RawMessage, path string, evidence json.RawMessage) (bool, 
 }
 
 func rawAt(values []json.RawMessage, index int) json.RawMessage {
-	if index < 0 || index >= len(values) {
+	if index >= len(values) {
 		return nil
 	}
 	return values[index]

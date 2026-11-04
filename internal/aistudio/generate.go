@@ -53,7 +53,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if defaults.ContinuedOutputTokens > 0 {
 		config = continueGenerationConfig(config, request.continuationRound)
 	}
-	serverSideTools := explicitTools && serverSideInvocations(request.Tools, defaults.ImageRoute)
+	serverSideTools := explicitTools && playgroundServerSteps(request.Tools, defaults.ImageRoute)
 	if !explicitTools && defaults.OutputResolution {
 		// 可设置分辨率模型的默认扩展工具字段
 		tools, explicitTools = []any{[]any{nil, nil, nil, []any{nil, []any{}}}}, true
@@ -63,6 +63,9 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		retrieval = encodeRetrievalConfig(request.Tools.ToolConfig.Retrieval, runtime.Timezone)
 	}
 	length := 11
+	if request.turnToken != "" {
+		length = 12
+	}
 	if retrieval != nil || serverSideTools {
 		length = 14
 	}
@@ -88,6 +91,9 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	}
 	if defaults.ContinuedOutputTokens == 0 {
 		wire[10] = int64(1)
+	}
+	if request.turnToken != "" {
+		wire[11] = request.turnToken
 	}
 	if retrieval != nil || serverSideTools {
 		toolConfig := []any{retrieval}
@@ -208,12 +214,16 @@ func resolveGenerationSettings(config GenerationConfig, defaults GenerationDefau
 		thinkingBudget = nil
 	}
 	if config.SpeechConfig == nil || config.MaxOutputTokens != nil {
-		maxOutput := max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens)
-		if config.MaxOutputTokens != nil {
-			maxOutput = min(*config.MaxOutputTokens, maxOutput)
-		}
-		if maxOutput <= 0 {
+		limit := max(defaults.MaxOutputTokens, defaults.ContinuedOutputTokens)
+		if limit <= 0 {
 			return settings, fmt.Errorf("模型目录缺少有效 output token limit")
+		}
+		maxOutput := limit
+		if config.MaxOutputTokens != nil {
+			if *config.MaxOutputTokens <= 0 {
+				return settings, fmt.Errorf("max output tokens %d 超出模型范围 1-%d", *config.MaxOutputTokens, limit)
+			}
+			maxOutput = min(*config.MaxOutputTokens, limit)
 		}
 		settings.maxOutput = &maxOutput
 	}
@@ -421,7 +431,7 @@ func encodeResponseModalities(modalities []ResponseModality) ([]int64, error) {
 	hasImage := false
 	hasAudio := false
 	for _, modality := range modalities {
-		switch ResponseModality(strings.ToUpper(strings.TrimSpace(string(modality)))) {
+		switch modality {
 		case ResponseModalityText:
 			hasText = true
 		case ResponseModalityImage:
@@ -473,9 +483,6 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 		return nil, nil
 	}
 	voice := encodeVoiceConfig(config.VoiceName, config.Voice)
-	if voice != nil && len(config.Speakers) > 0 {
-		return nil, fmt.Errorf("speech config 不能同时设置 voice 和 multi-speaker")
-	}
 	var wire []any
 	if voice != nil {
 		wire = []any{voice}
@@ -485,13 +492,8 @@ func encodeSpeechConfig(config *SpeechConfig) ([]any, error) {
 	}
 	if len(config.Speakers) > 0 {
 		speakers := make([]any, 0, len(config.Speakers))
-		for index, speaker := range config.Speakers {
-			name := strings.TrimSpace(speaker.Speaker)
-			voice := encodeVoiceConfig(speaker.VoiceName, speaker.Voice)
-			if name == "" || voice == nil {
-				return nil, fmt.Errorf("speech config speakers[%d] 需要 speaker 和 voiceName", index)
-			}
-			speakers = append(speakers, []any{name, voice})
+		for _, speaker := range config.Speakers {
+			speakers = append(speakers, []any{strings.TrimSpace(speaker.Speaker), encodeVoiceConfig(speaker.VoiceName, speaker.Voice)})
 		}
 		multi := []any{nil, speakers}
 		switch strings.ToUpper(strings.TrimSpace(config.Mode)) {
@@ -774,6 +776,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
+	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
+	restoring := request.restoreModelTurns && !build && !entry.model.Capabilities["assistant_route"] && !entry.defaults.InteractionStream && !entry.defaults.InteractionTask
+	if restoring {
+		request.Contents, request.turnToken = c.turns.restore(apiKey, request.Contents)
+	}
+	history := request.Contents
 	if err := validateVideoParts(request.Contents); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -789,7 +797,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	}
 	interaction := entry.defaults.InteractionStream && !build
 	task := entry.defaults.InteractionTask && !build
-	if interaction || task {
+	if interaction {
 		request.Tools = Tools{}
 	}
 	request, contract, err := prepareToolRequest(request)
@@ -861,6 +869,8 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		var usage *Usage
 		var finish *Event
 		var output Output
+		// turn 是按上游顺序未合并的本轮 Part 与轮次令牌，生成完整结束后保存供下一轮补回
+		var turn modelTurn
 		// committed 表示本次生成已有不能随重新生成丢弃的输出：客户端收到的正文、函数调用与媒体，或重新执行有外部副作用的服务端工具调用
 		committed := false
 		// sources 暂存 committed 之前收到的网页来源与引用，重新生成时丢弃
@@ -876,6 +886,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 		matchedStopSequence := ""
 		emitEvent := func(event Event) error {
+			turn.turnToken = cmp.Or(event.TurnToken, turn.turnToken)
 			switch event.Kind {
 			case EventUsage:
 				value := *event.Usage
@@ -887,8 +898,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return nil
 			default:
 				hiddenTool := serverToolHidden(request, event)
+				if hiddenTool && !serverSideInvocations(request.Tools, entry.defaults.ImageRoute) {
+					// 只为取得 URL context 读取状态而开启的工具步骤与不开启时一样不输出，签名属于工具步骤，回传时上游不接受
+					return nil
+				}
 				if !hiddenTool || !serverToolReplayable(event) {
 					output.Add(event)
+					if restoring && event.HasContent() {
+						turn.parts = append(turn.parts, clonePart(event.Part))
+					}
 					committed = committed || !event.Thought && event.payload()
 				}
 				if !committed {
@@ -923,7 +941,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				return
 			}
 			stopClose = closeOnCancel(response)
-			usage, finish, sources = nil, nil, nil
+			usage, finish, sources, turn = nil, nil, nil, modelTurn{}
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			emit = stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), emit)
@@ -967,6 +985,9 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 		if finish != nil {
 			_ = send(*finish)
+		}
+		if restoring {
+			c.turns.store(apiKey, history, turn)
 		}
 	}()
 	return contract.forward(ctx, events), nil

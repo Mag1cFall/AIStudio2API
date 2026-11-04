@@ -43,10 +43,11 @@ var trayTemplateIcon []byte
 // messagePrefix 为管理页面发给桌面壳的消息前缀
 const messagePrefix = "aistudio2api:"
 
-// App 为桌面应用的窗口、托盘与托盘菜单，没有窗口时 window 为 nil，Windows 缺少 WebView2 运行时时 webview 为 false
+// App 为桌面应用的窗口、托盘与托盘菜单，没有窗口时 window 为 nil，Windows 缺少 WebView2 运行时时 webview 为 false，桌面环境没有系统托盘时 trayed 为 false
 type App struct {
 	app     *application.App
 	webview bool
+	trayed  bool
 	window  *application.WebviewWindow
 	open    bool
 	origin  string
@@ -68,8 +69,8 @@ func HandleUpdateHelper() {
 	updater.HandleHelperMode()
 }
 
-// New 创建桌面应用与托盘，show 为 true 时同时创建主窗口，WebView 数据写入 webviewDir；已有实例运行时把它的窗口带到前台并结束当前进程
-func New(show bool, webviewDir string) *App {
+// New 创建桌面应用与托盘，show 为 true 时同时创建主窗口，WebView 数据写入 webviewDir，stop 在窗口与托盘关闭后、进程退出前执行；已有实例运行时把它的窗口带到前台并结束当前进程
+func New(show bool, webviewDir string, stop func()) *App {
 	shell := &App{}
 	shell.app = application.New(application.Options{
 		Name:        "AIStudio2API",
@@ -92,24 +93,32 @@ func New(show bool, webviewDir string) *App {
 			WndProcInterceptor:            shell.trayMessage,
 		},
 		RawMessageHandler: shell.handleMessage,
+		PostShutdown:      stop,
 		ErrorHandler:      func(err error) { slog.Error("桌面窗口错误", "error", err) },
 		WarningHandler:    func(message string) { slog.Warn("桌面窗口警告", "message", message) },
 	})
 	if runtime.GOOS == "windows" && shell.app.Env.Info().PlatformInfo["WebView2"] == "" && !(show && installWebView2()) {
 		slog.Warn("没有找到 WebView2 运行时，管理页面在默认浏览器中打开")
 		shell.open = show
-		shell.createTray()
+		shell.startTray()
 		return shell
 	}
 	shell.webview = true
-	if show {
+	shell.startTray()
+	if show || !shell.hasTray() {
 		shell.createWindow()
 	}
 	shell.app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
 		shell.show()
 	})
-	shell.createTray()
 	return shell
+}
+
+// hasTray 返回托盘是否已创建
+func (s *App) hasTray() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.trayed
 }
 
 // createWindow 返回主窗口，没有时以上次销毁前的位置、大小与最大化状态创建
@@ -134,6 +143,7 @@ func (s *App) createWindow() *application.WebviewWindow {
 			TitleBar:                application.MacTitleBarHiddenInset,
 			InvisibleTitleBarHeight: 40,
 		},
+		Linux: application.LinuxWindow{WebviewGpuPolicy: application.WebviewGpuPolicyNever},
 	}
 	if target != "" {
 		options.HTML, options.URL = "", target
@@ -147,6 +157,10 @@ func (s *App) createWindow() *application.WebviewWindow {
 		window.Maximise()
 	}
 	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		if !s.hasTray() {
+			go s.app.Quit()
+			return
+		}
 		maxed, minimised, bounds := window.IsMaximised(), window.IsMinimised(), window.Bounds()
 		s.mu.Lock()
 		keep := s.window == window && s.busy
@@ -265,6 +279,9 @@ func (s *App) createTray() {
 	tray.SetTooltip("AIStudio2API")
 	s.attachMenu(tray)
 	s.setLocale(i18n.Console)
+	s.mu.Lock()
+	s.trayed = true
+	s.mu.Unlock()
 }
 
 // toggleAutostart 按系统中的当前设置切换开机自启动，失败时显示错误对话框

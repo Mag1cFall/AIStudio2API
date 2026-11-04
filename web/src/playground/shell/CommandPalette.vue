@@ -568,6 +568,7 @@ input {
   padding: 6px;
   overflow-y: auto;
   list-style: none;
+  scrollbar-gutter: stable;
 }
 
 .category-header {

@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { icons, type IconName } from '@/playground/ui/icons'
+import { ref, watchPostEffect } from 'vue'
+import { iconNode, type IconName } from '@/playground/ui/icons'
 
 const props = withDefaults(defineProps<{ name: IconName; size?: number }>(), { size: 20 })
-const svg = computed(() => icons[props.name])
+const host = ref<HTMLSpanElement>()
+watchPostEffect(() => host.value?.replaceChildren(iconNode(props.name)))
 </script>
 
 <template>
   <span
+    ref="host"
     class="ui-icon"
     :class="props.name === 'spinner' ? 'animate-spin' : ''"
     :style="{ width: `${props.size}px`, height: `${props.size}px` }"
     aria-hidden="true"
-    v-html="svg"
   ></span>
 </template>
 

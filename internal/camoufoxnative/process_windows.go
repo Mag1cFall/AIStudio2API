@@ -126,3 +126,8 @@ func terminateBrowserProcess(ctx context.Context, process *browserProcess) error
 func releaseBrowserTree(tree browserTree) {
 	windows.CloseHandle(windows.Handle(tree))
 }
+
+// foreignUserPath 在 Windows 上恒为 false
+func foreignUserPath(string) bool {
+	return false
+}

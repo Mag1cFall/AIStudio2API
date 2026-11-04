@@ -89,7 +89,7 @@ function optionList(model: Model | undefined, key: string): string[] {
 }
 
 // defaultSettings 返回官网默认设置：16:9、8 秒、模型的第一档分辨率
-function defaultSettings(model: Model | undefined): VideoSettings {
+export function defaultSettings(model: Model | undefined): VideoSettings {
   const aspects = optionList(model, 'video_aspect_ratios')
   const resolutions = sortedResolutions(model)
   return {

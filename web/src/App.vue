@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineProps<{ adminUsername?: string }>()
 const emit = defineEmits<{ logout: [] }>()
-import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, ref, useTemplateRef, watch } from 'vue'
 import type { AsyncComponentLoader } from 'vue'
 import {
   DropdownMenuContent,
@@ -14,12 +14,15 @@ import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { TabID } from '@/types'
 import AccountsPanel from '@/components/AccountsPanel.vue'
+import UiDisclosure from '@/components/UiDisclosure.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
 import ModelsTable from '@/components/ModelsTable.vue'
 import RequestsPanel from '@/components/RequestsPanel.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import UiIcon from '@/components/UiIcon.vue'
+import { useClampToggle } from '@/clamp'
+import { afterTask } from '@/lazy'
 import { readPreference, writePreference } from '@/preference'
 import { useTabParam } from '@/url'
 import { useRoute, useRouter } from 'vue-router'
@@ -29,7 +32,7 @@ const { availableLocales, locale, setLocale, t, logText } = useI18n()
 // lazyPanel 创建按需加载的页面组件
 function lazyPanel(loader: AsyncComponentLoader) {
   return defineAsyncComponent({
-    loader,
+    loader: () => loader().then(afterTask),
     delay: 150,
     loadingComponent: {
       render: () =>
@@ -43,9 +46,11 @@ function lazyPanel(loader: AsyncComponentLoader) {
 }
 const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
 const VersionPanel = lazyPanel(() => import('@/components/VersionPanel.vue'))
+const AccessPanel = lazyPanel(() => import('@/components/AccessPanel.vue'))
 const validTabs: TabID[] = [
   'logs',
   'accounts',
+  'access',
   'models',
   'requests',
   'usage',
@@ -73,8 +78,12 @@ function openTab(tab: TabID): void {
 }
 const navigationBar = ref<HTMLElement | null>(null)
 
+// wideQuery 匹配导航纵向排列的宽屏
+const wideQuery = window.matchMedia('(min-width: 48rem)')
+
 // revealCurrentTab 把窄屏横向导航的当前项横向滚入视野
 function revealCurrentTab(): void {
+  if (wideQuery.matches) return
   const bar = navigationBar.value!
   const item = bar.querySelector('[aria-current="page"]')!
   const barRect = bar.getBoundingClientRect()
@@ -129,6 +138,7 @@ const {
   status,
   logs,
   accounts,
+  accountTasks,
   visibleAccounts,
   models,
   cooldowns,
@@ -143,6 +153,7 @@ const {
   startPending,
   stopPending,
   showNotice,
+  closeNotice,
   loadAccountData,
   loadRequestData,
   updateAccount,
@@ -155,9 +166,29 @@ const {
   waitForRestart,
 } = useConsole()
 
+// noticeText 是按界面语言显示的提示正文，服务文案翻译表到达后随之更新
+const noticeText = computed(() => logText(notice.message))
+const noticeBody = useTemplateRef<HTMLElement>('noticeBody')
+// noticeOpen 是提示是否显示全文
+const noticeOpen = ref(false)
+// noticeClamped 是提示正文当前是否截断为三行，收起过渡结束后才截断
+const noticeClamped = useClampToggle(noticeBody, noticeOpen, 3)
+// noticeClipped 是提示正文是否超过三行
+const noticeClipped = ref(false)
+watch(
+  noticeText,
+  () => {
+    noticeOpen.value = false
+    noticeClipped.value =
+      noticeBody.value !== null && noticeBody.value.scrollHeight > noticeBody.value.clientHeight
+  },
+  { flush: 'post' },
+)
+
 const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
   { id: 'logs', label: 'nav.logs', icon: 'logs' },
   { id: 'accounts', label: 'nav.accounts', icon: 'accounts' },
+  { id: 'access', label: 'nav.access', icon: 'access' },
   { id: 'models', label: 'nav.models', icon: 'models' },
   { id: 'requests', label: 'nav.requests', icon: 'requests' },
   { id: 'usage', label: 'nav.usage', icon: 'usage' },
@@ -167,7 +198,7 @@ const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
 ]
 
 const statusColor = computed(() => {
-  if (serviceState.value === 'running') return 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]'
+  if (serviceState.value === 'running') return 'bg-green-500'
   if (serviceState.value === 'launching') return 'bg-cyan-400 animate-pulse'
   return 'bg-gray-600'
 })
@@ -178,6 +209,8 @@ const statusTextColor = computed(() => {
 })
 // serviceStateLabel 是生成服务状态在当前语言下的文案
 const serviceStateLabel = computed(() => t(`state.${serviceState.value}`))
+// serviceStates 是状态区可能显示的服务状态，各状态文案叠放在同一格，宽度取最长的一项
+const serviceStates = ['running', 'launching', 'stopped', 'unavailable'] as const
 
 // logout 先在当前会话内提交等待中的删除再退出登录
 async function logout(): Promise<void> {
@@ -221,7 +254,7 @@ onMounted(revealCurrentTab)
               <DropdownMenuContent
                 align="end"
                 :side-offset="4"
-                class="z-[60] overflow-hidden rounded border border-line bg-panel shadow-xl"
+                class="z-[60] max-h-[var(--reka-dropdown-menu-content-available-height)] overflow-y-auto rounded border border-line bg-panel shadow-xl"
               >
                 <DropdownMenuItem
                   v-for="item in availableLocales"
@@ -288,18 +321,24 @@ onMounted(revealCurrentTab)
         </button>
       </nav>
 
-      <div
-        class="relative min-w-0 overflow-hidden border-t border-line p-2 [grid-area:status] md:p-4"
-        :class="serviceState === 'launching' ? 'launching-shell' : ''"
-      >
-        <div v-if="serviceState === 'launching'" class="launching-scan" aria-hidden="true"></div>
+      <div class="min-w-0 overflow-hidden border-t border-line p-2 [grid-area:status] md:p-4">
         <div class="mb-2 hidden text-xs text-gray-500 md:block">{{ t('app.status') }}</div>
         <div class="flex items-center justify-between gap-2 md:mb-4">
           <div class="flex min-w-0 items-center gap-2 md:contents">
-            <span class="font-mono font-bold uppercase" :class="statusTextColor">
-              {{ serviceStateLabel }}
+            <span
+              class="grid shrink-0 font-mono font-bold whitespace-nowrap uppercase"
+              :class="statusTextColor"
+            >
+              <span
+                v-for="state in serviceStates"
+                :key="state"
+                class="[grid-area:1/1]"
+                :class="{ invisible: loading.status || state !== serviceState }"
+                >{{ t(`state.${state}`) }}</span
+              >
             </span>
             <span
+              v-if="!loading.status"
               v-tooltip="status?.version"
               class="max-w-[65%] truncate font-mono text-xs text-gray-500"
             >
@@ -307,7 +346,8 @@ onMounted(revealCurrentTab)
             </span>
           </div>
           <button
-            v-if="serviceState === 'stopped'"
+            v-if="serviceState === 'stopped' || serviceState === 'unavailable'"
+            :class="{ invisible: serviceState === 'unavailable' }"
             class="flex shrink-0 items-center gap-1.5 rounded bg-green-600 px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50 md:hidden"
             type="button"
             :disabled="startPending || stopPending"
@@ -328,7 +368,8 @@ onMounted(revealCurrentTab)
           </button>
         </div>
         <button
-          v-if="serviceState === 'stopped'"
+          v-if="serviceState === 'stopped' || serviceState === 'unavailable'"
+          :class="{ invisible: serviceState === 'unavailable' }"
           class="hidden w-full items-center justify-center gap-2 rounded bg-green-600 py-2 font-bold text-white shadow transition hover:bg-green-500 disabled:opacity-50 md:flex"
           type="button"
           :disabled="startPending || stopPending"
@@ -389,59 +430,67 @@ onMounted(revealCurrentTab)
           {{ item.value ? `${item.key}=${item.value}` : item.key }} · {{ logText(item.reason) }}
         </p>
       </div>
-      <Transition name="page">
-        <KeepAlive include="AccountsPanel,SettingsPanel,VersionPanel,UsagePanel">
-          <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
-          <AccountsPanel
-            v-else-if="currentTab === 'accounts'"
-            :accounts="visibleAccounts"
-            :loading="loading.accounts"
-            :error="errors.accounts"
-            @refresh="loadAccountData"
-            @updated="updateAccount"
-            @notice="showNotice"
-            @delete="deleteAccount"
-          />
-          <ModelsTable
-            v-else-if="currentTab === 'models'"
-            :models="models"
-            :loading="loading.models"
-            :error="errors.models"
-            :config="config"
-            @saved="config = $event"
-            @notice="showNotice"
-          />
-          <RequestsPanel
-            v-else-if="currentTab === 'requests'"
-            :accounts="accounts"
-            :cooldowns="cooldowns"
-            :requests="requests"
-            :loading="loading.requests || loading.cooldowns"
-            :cooldown-error="errors.cooldowns"
-            :request-error="errors.requests"
-            @refresh="loadRequestData"
-            @notice="showNotice"
-          />
-          <UsagePanel v-else-if="currentTab === 'usage'" :models="models" />
-          <SettingsPanel
-            v-else-if="currentTab === 'settings'"
-            :config="config"
-            :accounts="accounts"
-            :models="models"
-            :loading="loading.config"
-            :error="errors.config"
-            @saved="config = $event"
-            @notice="showNotice"
-          />
-          <VersionPanel
-            v-else-if="currentTab === 'version'"
-            :status="update"
-            :active-requests="status?.active_requests ?? 0"
-            @status="update = $event"
-            @restarting="waitForRestart"
-          />
-        </KeepAlive>
-      </Transition>
+      <KeepAlive
+        include="LogsPanel,AccountsPanel,AccessPanel,ModelsTable,RequestsPanel,SettingsPanel,VersionPanel,UsagePanel"
+      >
+        <LogsPanel v-if="currentTab === 'logs'" :logs="logs" @clear="clearLogs" />
+        <AccountsPanel
+          v-else-if="currentTab === 'accounts'"
+          :accounts="visibleAccounts"
+          :tasks="accountTasks"
+          :loading="loading.accounts"
+          :error="errors.accounts"
+          :chrome-import="status?.chrome_import ?? false"
+          @refresh="loadAccountData"
+          @updated="updateAccount"
+          @notice="showNotice"
+          @delete="deleteAccount"
+        />
+        <AccessPanel
+          v-else-if="currentTab === 'access'"
+          :config="config"
+          :models="models"
+          @settings="openTab('settings')"
+        />
+        <ModelsTable
+          v-else-if="currentTab === 'models'"
+          :models="models"
+          :loading="loading.models"
+          :error="errors.models"
+          :config="config"
+          @saved="config = $event"
+          @notice="showNotice"
+        />
+        <RequestsPanel
+          v-else-if="currentTab === 'requests'"
+          :accounts="accounts"
+          :cooldowns="cooldowns"
+          :requests="requests"
+          :loading="loading.requests || loading.cooldowns"
+          :cooldown-error="errors.cooldowns"
+          :request-error="errors.requests"
+          @refresh="loadRequestData"
+          @notice="showNotice"
+        />
+        <UsagePanel v-else-if="currentTab === 'usage'" :models="models" />
+        <SettingsPanel
+          v-else-if="currentTab === 'settings'"
+          :config="config"
+          :accounts="accounts"
+          :models="models"
+          :loading="loading.config"
+          :error="errors.config"
+          @saved="config = $event"
+          @notice="showNotice"
+        />
+        <VersionPanel
+          v-else-if="currentTab === 'version'"
+          :status="update"
+          :active-requests="status?.active_requests ?? 0"
+          @status="update = $event"
+          @restarting="waitForRestart"
+        />
+      </KeepAlive>
     </main>
 
     <div
@@ -451,14 +500,29 @@ onMounted(revealCurrentTab)
         <div
           v-if="notice.message"
           role="status"
-          class="pointer-events-auto max-w-full rounded border bg-panel px-4 py-3 text-sm break-words shadow-xl"
+          class="pointer-events-auto flex max-w-full items-start gap-2 rounded border bg-panel py-3 pr-2 pl-4 text-sm shadow-xl"
           :class="
             notice.tone === 'error'
               ? 'border-red-500/50 text-red-300'
               : 'border-green-500/50 text-green-300'
           "
         >
-          {{ logText(notice.message) }}
+          <UiDisclosure v-if="noticeClipped" v-model="noticeOpen" />
+          <p
+            ref="noticeBody"
+            class="min-w-0 flex-1 break-words"
+            :class="noticeClamped ? 'line-clamp-3' : 'max-h-[40vh] overflow-y-auto'"
+          >
+            {{ noticeText }}
+          </p>
+          <button
+            type="button"
+            class="-my-1 shrink-0 rounded p-1 text-gray-500 transition hover:bg-raised hover:text-gray-200"
+            :aria-label="t('common.close')"
+            @click="closeNotice"
+          >
+            <UiIcon name="close" :size="14" />
+          </button>
         </div>
       </Transition>
       <Transition name="notice">
@@ -547,27 +611,6 @@ onMounted(revealCurrentTab)
 @media (width >= 48rem) {
   .sidebar-resizer {
     display: block;
-  }
-}
-
-.launching-shell {
-  background:
-    radial-gradient(circle at 12% 0%, rgb(34 211 238 / 14%), transparent 55%), var(--color-panel);
-}
-
-.launching-scan {
-  position: absolute;
-  top: 0;
-  left: -45%;
-  width: 45%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(103 232 249), transparent);
-  animation: launching-scan 1.25s ease-in-out infinite;
-}
-
-@keyframes launching-scan {
-  to {
-    transform: translateX(320%);
   }
 }
 </style>

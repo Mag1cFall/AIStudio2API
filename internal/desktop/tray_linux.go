@@ -2,7 +2,7 @@
 
 package desktop
 
-// #cgo pkg-config: gtk4
+// #cgo pkg-config: gtk+-3.0
 // #include <gtk/gtk.h>
 // static int trayDoubleClickTime(void) { int value; g_object_get(gtk_settings_get_default(), "gtk-double-click-time", &value, NULL); return value; }
 import "C"
@@ -20,6 +20,45 @@ import (
 // doubleClickInterval 返回 GTK 的双击间隔
 func doubleClickInterval() time.Duration {
 	return time.Duration(C.trayDoubleClickTime()) * time.Millisecond
+}
+
+// statusNotifierWatcher 为托盘宿主在会话总线上的名称
+const statusNotifierWatcher = "org.kde.StatusNotifierWatcher"
+
+// startTray 在会话总线上有托盘宿主时创建托盘；没有时（如未装托盘扩展的 GNOME）关闭窗口即退出，托盘宿主出现后再创建托盘
+func (s *App) startTray() {
+	conn, err := dbus.SessionBus()
+	if err == nil {
+		err = conn.AddMatchSignal(
+			dbus.WithMatchSender("org.freedesktop.DBus"),
+			dbus.WithMatchMember("NameOwnerChanged"),
+			dbus.WithMatchArg(0, statusNotifierWatcher),
+		)
+	}
+	var owned bool
+	if err == nil {
+		err = conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, statusNotifierWatcher).Store(&owned)
+	}
+	if err != nil {
+		slog.Error("托盘连接会话总线失败", "error", err)
+		return
+	}
+	if owned {
+		s.createTray()
+		return
+	}
+	slog.Info("桌面环境没有系统托盘，关闭窗口即退出")
+	signals := make(chan *dbus.Signal, 10)
+	conn.Signal(signals)
+	go func() {
+		defer conn.RemoveSignal(signals)
+		for signal := range signals {
+			if signal.Name == "org.freedesktop.DBus.NameOwnerChanged" && len(signal.Body) == 3 && signal.Body[0] == statusNotifierWatcher && signal.Body[2] != "" {
+				application.InvokeSync(s.createTray)
+				return
+			}
+		}
+	}()
 }
 
 // bindTray 在 Wails 注册的托盘项上接收 StatusNotifierItem 的点击与上下文菜单事件

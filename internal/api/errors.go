@@ -320,6 +320,15 @@ func writeOpenAIRequestError(w http.ResponseWriter, err error) {
 	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
 }
 
+// writeOpenAISSEError 在已开始的 OpenAI 事件流中以 error 数据帧写出请求失败
+func writeOpenAISSEError(w http.ResponseWriter, err error) {
+	status := statusFromError(err)
+	code := openAIErrorCode(err)
+	_ = writeSSE(w, "", map[string]any{"error": openAIErrorBody{
+		Message: publicErrorMessage(status, err.Error()), Type: openAIErrorType(status, code), Code: code,
+	}})
+}
+
 // writeAnthropicRequestError 以 Anthropic 错误体写出请求失败，可重试时带 Retry-After
 func writeAnthropicRequestError(w http.ResponseWriter, err error) {
 	setRetryAfter(w, err)

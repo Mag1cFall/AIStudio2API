@@ -43,9 +43,8 @@ func (handler *spaHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	// 管理端资源不进入 WebView 磁盘缓存，也不以 304 复用已缓存的正文
-	writer.Header().Set("Cache-Control", "no-store")
 	if handler.static.Found(request) {
+		writer.Header().Set("Cache-Control", cacheControl(requestPath))
 		request.Header.Del("If-None-Match")
 		handler.static.ServeHTTP(writer, request)
 		return
@@ -55,9 +54,18 @@ func (handler *spaHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		return
 	}
 
+	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(handler.index)
+}
+
+// cacheControl 返回静态文件的缓存策略：assets 下文件名带内容哈希，长期缓存且不重新验证，其余文件不进入缓存
+func cacheControl(requestPath string) string {
+	if strings.HasPrefix(requestPath, "/assets/") {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-store"
 }
 
 // reservedPath 判断路径是否属于服务 API

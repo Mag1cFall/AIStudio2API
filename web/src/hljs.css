@@ -1,0 +1,91 @@
+/* hljs 是示例代码与回答代码块的高亮配色，浅色与深色分别取 GitHub 与 GitHub Dark Dimmed 调色板 */
+.hljs {
+  color: light-dark(#24292e, #adbac7);
+}
+
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+  color: light-dark(#d73a49, #f47067);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+  color: light-dark(#6f42c1, #dcbdfb);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-variable {
+  color: light-dark(#005cc5, #6cb6ff);
+}
+
+.hljs-meta .hljs-string,
+.hljs-regexp,
+.hljs-string {
+  color: light-dark(#032f62, #96d0ff);
+}
+
+.hljs-built_in,
+.hljs-symbol {
+  color: light-dark(#e36209, #f69d50);
+}
+
+.hljs-code,
+.hljs-comment,
+.hljs-formula {
+  color: light-dark(#6a737d, #768390);
+}
+
+.hljs-name,
+.hljs-quote,
+.hljs-selector-pseudo,
+.hljs-selector-tag {
+  color: light-dark(#22863a, #8ddb8c);
+}
+
+.hljs-subst {
+  color: light-dark(#24292e, #adbac7);
+}
+
+.hljs-section {
+  color: light-dark(#005cc5, #316dca);
+  font-weight: 700;
+}
+
+.hljs-bullet {
+  color: light-dark(#735c0f, #eac55f);
+}
+
+.hljs-emphasis {
+  color: light-dark(#24292e, #adbac7);
+  font-style: italic;
+}
+
+.hljs-strong {
+  color: light-dark(#24292e, #adbac7);
+  font-weight: 700;
+}
+
+.hljs-addition {
+  background-color: light-dark(#f0fff4, #1b4721);
+  color: light-dark(#22863a, #b4f1b4);
+}
+
+.hljs-deletion {
+  background-color: light-dark(#ffeef0, #78191b);
+  color: light-dark(#b31d28, #ffd8d3);
+}

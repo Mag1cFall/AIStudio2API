@@ -41,7 +41,7 @@ var capabilityNames = map[int64]string{
 	53: "music_route",
 	54: "image_search",
 	58: "google_maps",
-	59: "interaction_route",
+	59: "thinking_summaries",
 	69: "agentic_video",
 	74: "transcription_word_timestamps",
 	76: "transcription_language_codes",
@@ -209,6 +209,14 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	for _, code := range secondaryCodes {
 		capabilities["secondary_capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
+	// field 82 是官网新建对话时默认开启的设置与工具的能力码
+	defaultCodes, err := intSliceField(row, 81, path, raw)
+	if err != nil {
+		return modelEntry{}, err
+	}
+	for _, code := range defaultCodes {
+		capabilities["default_capability_code_"+strconv.FormatInt(code, 10)] = true
+	}
 	if !isJSONNull(rawAt(row, 78)) {
 		// field 79 InteractionConfig 表示模型只经 Interactions API 生成
 		capabilities["interactions_api"] = true
@@ -260,6 +268,27 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		Languages:         languages,
 		AccessModes:       append([]int64(nil), accessModes...),
 		Paid:              paidCode == 2,
+	}
+	if config := rawAt(row, 78); !isJSONNull(config) {
+		// field 79 InteractionConfig 的 field 3 表示经 CreateInteraction 后台任务生成，field 6 是 agent 默认使用的模型
+		interaction, err := rawArray(config, path+"[78]", raw)
+		if err != nil {
+			return modelEntry{}, withMethod(err, "ListModels")
+		}
+		if value := rawAt(interaction, 2); !isJSONNull(value) {
+			background, err := rawBool(value, path+"[78][2]", raw)
+			if err != nil {
+				return modelEntry{}, withMethod(err, "ListModels")
+			}
+			model.Capabilities["interaction_task"] = background
+		}
+		if value := rawAt(interaction, 5); !isJSONNull(value) {
+			agentModel, err := rawString(value, path+"[78][5]", raw)
+			if err != nil {
+				return modelEntry{}, withMethod(err, "ListModels")
+			}
+			model.AgentModel = strings.TrimPrefix(agentModel, "models/")
+		}
 	}
 	defaults, err := decodeGenerationDefaults(row, path, raw, capabilities)
 	if err != nil {
@@ -558,29 +587,14 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 	return defaults, nil
 }
 
-// ModelsForAccount 读取指定账户的实时模型目录
-func (c *Client) ModelsForAccount(ctx context.Context, accountID string) ([]Model, error) {
-	catalog, err := c.loadModels(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	return cloneModels(catalog.models), nil
-}
-
+// loadModels 以账户会话页面最近一次载入时的 ListModels 响应载入账户目录
 func (c *Client) loadModels(ctx context.Context, accountID string) (modelCatalog, error) {
-	response, err := c.do(ctx, "ListModels", accountID, "", []byte("[]"), false)
-	if err != nil {
+	if _, _, err := c.loadPageCatalog(ctx, accountID, false); err != nil {
 		return modelCatalog{}, err
 	}
-	defer response.Body.Close()
-	catalog, err := parseModelCatalog(response.Body)
-	if err != nil {
-		return modelCatalog{}, err
-	}
-	c.catalogMu.Lock()
-	c.catalogs[accountID] = catalog
-	c.catalogMu.Unlock()
-	return catalog, nil
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	return c.catalogs[accountID], nil
 }
 
 // setModelCatalog 采用账户目录缓存恢复的 ListModels 目录

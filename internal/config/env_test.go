@@ -40,19 +40,19 @@ func TestSaveWritesOnlyChangedKeys(t *testing.T) {
 		t.Fatalf(".env = %q", got)
 	}
 	loaded, err := Load(path)
-	if err != nil || loaded.RoutingStrategy != "fill-first" || loaded.WAABackend != WAABackendCamoufox {
+	if err != nil || loaded.RoutingStrategy != "fill-first" || loaded.WAABackend != WAABackendSpiderMonkey {
 		t.Fatalf("loaded = %+v, err = %v", loaded, err)
 	}
 }
 
 // TestLoadInvalidValueUsesDefault 核对取值无效的项按默认值加载并记录键与原值
 func TestLoadInvalidValueUsesDefault(t *testing.T) {
-	path := writeTestEnv(t, "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=go\nPER_ACCOUNT_CONCURRENCY=abc\nWARM_WORKER_LIMIT=20\n")
+	path := writeTestEnv(t, "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=go\nPER_ACCOUNT_CONCURRENCY=abc\nWARM_WORKER_LIMIT=30\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.WAABackend != WAABackendCamoufox || cfg.PerAccountConcurrency != defaultAccountConcurrency ||
+	if cfg.WAABackend != WAABackendSpiderMonkey || cfg.PerAccountConcurrency != defaultAccountConcurrency ||
 		cfg.WarmWorkerLimit != defaultWarmWorkerLimit || cfg.MaxActiveWorkers != defaultMaxActiveWorkers || cfg.RoutingStrategy != "fill-first" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
@@ -61,7 +61,7 @@ func TestLoadInvalidValueUsesDefault(t *testing.T) {
 		keys = append(keys, item.Key+"="+item.Value)
 	}
 	slices.Sort(keys)
-	if !slices.Equal(keys, []string{"PER_ACCOUNT_CONCURRENCY=abc", "WAA_BACKEND=go", "WARM_WORKER_LIMIT=20"}) {
+	if !slices.Equal(keys, []string{"PER_ACCOUNT_CONCURRENCY=abc", "WAA_BACKEND=go", "WARM_WORKER_LIMIT=30"}) {
 		t.Fatalf("invalid = %v", keys)
 	}
 }
@@ -79,7 +79,7 @@ func TestEnvironmentKeepsSavedFile(t *testing.T) {
 	}
 	update := Default()
 	update.RoutingStrategy = "fill-first"
-	update.TemporaryChat = true
+	update.RequestBodyLog = true
 	update = update.KeepEnvironment(saved)
 	if update.RoutingStrategy != "round-robin" {
 		t.Fatalf("update = %+v", update)
@@ -87,7 +87,7 @@ func TestEnvironmentKeepsSavedFile(t *testing.T) {
 	if err := update.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nTEMPORARY_CHAT=true\n" {
+	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nREQUEST_BODY_LOG=true\n" {
 		t.Fatalf(".env = %q", got)
 	}
 }
@@ -147,7 +147,7 @@ func TestEnvKeepEnvironmentKeepsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	kept := Default().KeepEnvironment(saved)
-	if len(kept.Invalid) != 1 || kept.Invalid[0].Key != "WAA_BACKEND" || kept.WAABackend != WAABackendCamoufox {
+	if len(kept.Invalid) != 1 || kept.Invalid[0].Key != "WAA_BACKEND" || kept.WAABackend != WAABackendSpiderMonkey {
 		t.Fatalf("保存后无效记录=%v 后端=%q", kept.Invalid, kept.WAABackend)
 	}
 }

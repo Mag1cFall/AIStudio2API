@@ -3,6 +3,7 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/inter-tight'
 import '@fontsource-variable/google-sans-code'
 import '@/playground/styles/tokens.css'
+import '@/hljs.css'
 import '@/playground/styles/base.css'
 import { onActivated, onDeactivated, provide, ref, shallowReactive, watch } from 'vue'
 import { RouterView, routeLocationKey, useRoute } from 'vue-router'
@@ -11,6 +12,7 @@ import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import CommandPalette, { type PaletteMode } from '@/playground/shell/CommandPalette.vue'
 import LeftNav from '@/playground/shell/LeftNav.vue'
+import AgentModelPanel from '@/playground/AgentModelPanel.vue'
 import ModelSelector from '@/playground/ModelSelector.vue'
 import { useMediaQuery } from '@/playground/media-query'
 import { editable } from '@/playground/shortcuts'
@@ -105,6 +107,7 @@ onDeactivated(() => {
 
     <CommandPalette v-model:open="paletteOpen" v-model:mode="paletteMode" />
     <ModelSelector />
+    <AgentModelPanel />
 
     <div class="notice-stack">
       <Transition name="studio-notice">
@@ -228,7 +231,13 @@ onDeactivated(() => {
   color: var(--color-v3-accent-3);
 }
 
+/* message 是提示正文，最多显示三行 */
 .message {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   font-size: 14px;
   line-height: 20px;
   overflow-wrap: anywhere;
