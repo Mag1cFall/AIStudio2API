@@ -1,0 +1,78 @@
+#include "textflag.h"
+
+// func dotsSIMD(y, coef, x *float32, rows, starts *int32, n, taps int)
+// 每组 4 个输出各用一个 YMM 累加 8 路乘积，先 VMULPS 后 VADDPS；结束时高低 128 位相加，再三次 VHADDPS 一次写出 4 个结果
+TEXT ·dotsSIMD(SB), NOSPLIT, $0-56
+	MOVQ y+0(FP), DI
+	MOVQ rows+24(FP), R8
+	MOVQ starts+32(FP), R9
+	MOVQ n+40(FP), R10
+	MOVQ taps+48(FP), R15
+	SHLQ $2, R15
+
+group:
+	MOVLQSX 0(R8), AX
+	MOVLQSX 4(R8), BX
+	MOVLQSX 8(R8), CX
+	MOVLQSX 12(R8), DX
+	IMULQ   R15, AX
+	IMULQ   R15, BX
+	IMULQ   R15, CX
+	IMULQ   R15, DX
+	MOVQ    coef+8(FP), R14
+	ADDQ    R14, AX
+	ADDQ    R14, BX
+	ADDQ    R14, CX
+	ADDQ    R14, DX
+	MOVQ    x+16(FP), R14
+	MOVLQSX 0(R9), SI
+	MOVLQSX 4(R9), R11
+	MOVLQSX 8(R9), R12
+	MOVLQSX 12(R9), R13
+	LEAQ    (R14)(SI*4), SI
+	LEAQ    (R14)(R11*4), R11
+	LEAQ    (R14)(R12*4), R12
+	LEAQ    (R14)(R13*4), R13
+	VXORPS  Y0, Y0, Y0
+	VXORPS  Y1, Y1, Y1
+	VXORPS  Y2, Y2, Y2
+	VXORPS  Y3, Y3, Y3
+	XORQ    R14, R14
+
+taps:
+	VMOVUPS (AX)(R14*1), Y4
+	VMULPS  (SI)(R14*1), Y4, Y4
+	VADDPS  Y4, Y0, Y0
+	VMOVUPS (BX)(R14*1), Y5
+	VMULPS  (R11)(R14*1), Y5, Y5
+	VADDPS  Y5, Y1, Y1
+	VMOVUPS (CX)(R14*1), Y6
+	VMULPS  (R12)(R14*1), Y6, Y6
+	VADDPS  Y6, Y2, Y2
+	VMOVUPS (DX)(R14*1), Y7
+	VMULPS  (R13)(R14*1), Y7, Y7
+	VADDPS  Y7, Y3, Y3
+	ADDQ    $32, R14
+	CMPQ    R14, R15
+	JB      taps
+
+	VEXTRACTF128 $1, Y0, X4
+	VADDPS       X4, X0, X0
+	VEXTRACTF128 $1, Y1, X5
+	VADDPS       X5, X1, X1
+	VEXTRACTF128 $1, Y2, X6
+	VADDPS       X6, X2, X2
+	VEXTRACTF128 $1, Y3, X7
+	VADDPS       X7, X3, X3
+	VHADDPS      X1, X0, X0
+	VHADDPS      X3, X2, X2
+	VHADDPS      X2, X0, X0
+	VMOVUPS      X0, (DI)
+
+	ADDQ $16, DI
+	ADDQ $16, R8
+	ADDQ $16, R9
+	SUBQ $4, R10
+	JNZ  group
+	VZEROUPPER
+	RET

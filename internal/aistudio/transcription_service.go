@@ -193,9 +193,13 @@ func (s *PooledService) transcribeWithLease(
 	if err != nil {
 		return TranscriptionResult{}, &transcriptionStageError{stage: "upload", err: err}
 	}
+	bound := false
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(attemptCtx), driveCleanupTimeout)
 		cleanupErr := s.client.deleteDriveFile(cleanupCtx, accountID, token, file.ID)
+		if cleanupErr == nil && bound {
+			cleanupErr = s.pool.unbindResourceContext(cleanupCtx, file.ID)
+		}
 		cancel()
 		if cleanupErr == nil {
 			return
@@ -207,6 +211,11 @@ func (s *PooledService) transcribeWithLease(
 		}
 		resultErr = cleanupErr
 	}()
+	createdAt := time.Now().UTC()
+	if err := lease.BindFileResource(attemptCtx, file, FileMetadata{Size: request.Size, CreatedAt: createdAt, ExpiresAt: createdAt.Add(temporaryFileRetention)}); err != nil {
+		return TranscriptionResult{}, &transcriptionStageError{stage: "upload", err: err}
+	}
+	bound = true
 	events, err := s.client.Generate(attemptCtx, GenerateRequest{
 		ID:        request.ID,
 		Model:     request.Model,

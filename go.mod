@@ -5,6 +5,8 @@ go 1.27
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/Mag1cFall/fhttp v0.6.8-firefox.2
+	github.com/Mag1cFall/go-aac v0.7.3
+	github.com/Mag1cFall/go-mp3 v0.1.1
 	github.com/Mag1cFall/go-sentencepiece v0.7.1
 	github.com/Mag1cFall/uquic v0.0.6-firefox.6
 	github.com/Mag1cFall/utls v1.8.2-firefox.3
@@ -23,12 +25,9 @@ require (
 	github.com/minio/selfupdate v0.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nlnwa/whatwg-url v0.6.2
-	github.com/oov/audio v0.0.0-20171004131523-88a2be6dbe38
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/thesyncim/gopus v0.1.2
-	github.com/tphakala/go-aac v0.7.0
-	github.com/tphakala/go-mp3 v0.1.0
 	github.com/vearutop/statigz v1.5.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.29
 	github.com/zaf/g711 v1.4.0

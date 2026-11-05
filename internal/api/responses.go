@@ -1735,10 +1735,12 @@ func newResponsesWriter(w http.ResponseWriter, id string, created int64, request
 }
 
 func (s *server) streamResponses(w http.ResponseWriter, r *http.Request, request responsesRequest, prepared responsesPreparation, id string, created int64, events <-chan aistudio.Event, compaction map[string]any) {
-	if err := streamHeaders(w); err != nil {
+	stream, err := openStream(w, sseHeartbeat)
+	defer stream.stop()
+	if err != nil {
 		return
 	}
-	writer := newResponsesWriter(w, id, created, request)
+	writer := newResponsesWriter(stream, id, created, request)
 	if err := writer.emit("response.created", map[string]any{"response": responseShell(id, created, "in_progress", request)}); err != nil {
 		return
 	}
@@ -1765,7 +1767,7 @@ func (s *server) streamOutput(ctx context.Context, writer *responsesStreamWriter
 			return err
 		}
 	}
-	result, err := consumeStreamEvents(ctx, events, writer.live, func() error { return writeSSEHeartbeat(writer.w) })
+	result, err := consumeStreamEvents(ctx, events, writer.live)
 	if err != nil {
 		if report(err) {
 			_ = writer.failed(err)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,8 +20,8 @@ const streamHeartbeatInterval = 10 * time.Second
 
 type generationResult struct {
 	events        []aistudio.Event
-	text          strings.Builder
-	reasoning     strings.Builder
+	text          bytes.Buffer
+	reasoning     bytes.Buffer
 	toolCalls     []aistudio.FunctionCall
 	citations     []aistudio.Citation
 	grounding     *aistudio.GroundingMetadata
@@ -156,36 +157,20 @@ func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan
 	return replay, first.FrameUsage, nil
 }
 
-// consumeEvents 收集全部事件，不逐个转发也不写心跳
+// consumeEvents 收集全部事件，不逐个转发
 func consumeEvents(ctx context.Context, events <-chan aistudio.Event) (generationResult, error) {
-	return consumeStreamEvents(ctx, events, nil, nil)
+	return consumeStreamEvents(ctx, events, nil)
 }
 
-// consumeStreamEvents 收集事件并逐个交给 emit，heartbeat 不为空时在事件间隔达到心跳间隔时调用
-func consumeStreamEvents(
-	ctx context.Context,
-	events <-chan aistudio.Event,
-	emit func(aistudio.Event) error,
-	heartbeat func() error,
-) (result generationResult, resultErr error) {
+// consumeStreamEvents 收集事件并逐个交给 emit
+func consumeStreamEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (result generationResult, resultErr error) {
 	defer func() {
 		SetAccessLogError(ctx, resultErr)
 	}()
-	heartbeatTimer := time.NewTimer(streamHeartbeatInterval)
-	defer heartbeatTimer.Stop()
-	var heartbeatTick <-chan time.Time
-	if heartbeat != nil {
-		heartbeatTick = heartbeatTimer.C
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return result, ctx.Err()
-		case <-heartbeatTick:
-			if err := heartbeat(); err != nil {
-				return result, err
-			}
-			heartbeatTimer.Reset(streamHeartbeatInterval)
 		case event, ok := <-events:
 			if !ok {
 				if !result.finished {
@@ -201,7 +186,6 @@ func consumeStreamEvents(
 					return result, err
 				}
 			}
-			heartbeatTimer.Reset(streamHeartbeatInterval)
 		}
 	}
 }

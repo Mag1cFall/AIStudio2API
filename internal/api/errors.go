@@ -47,6 +47,7 @@ func streamHeaders(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	return http.NewResponseController(w).Flush()
 }
@@ -71,22 +72,6 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 // writeSSEText 写入文本事件并刷新网络缓冲
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-		return err
-	}
-	return http.NewResponseController(w).Flush()
-}
-
-// writeGeminiHeartbeat 发送不触发事件的空行并传播连接错误
-func writeGeminiHeartbeat(w http.ResponseWriter) error {
-	if _, err := io.WriteString(w, "\n"); err != nil {
-		return err
-	}
-	return http.NewResponseController(w).Flush()
-}
-
-// writeSSEHeartbeat 发送心跳并传播连接错误
-func writeSSEHeartbeat(w http.ResponseWriter) error {
-	if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 		return err
 	}
 	return http.NewResponseController(w).Flush()

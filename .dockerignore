@@ -8,3 +8,4 @@ internal/webui/dist/
 *.exe
 aistudio2api
 spidermonkey/
+libwebp/

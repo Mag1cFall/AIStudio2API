@@ -125,8 +125,10 @@ func (s *server) handleInteractionGet(w http.ResponseWriter, r *http.Request) {
 			}
 			after = sequence
 		}
-		if streamHeaders(w) == nil {
-			_ = record.stream.follow(r.Context(), w, after-1)
+		out, err := openStream(w, sseHeartbeat)
+		defer out.stop()
+		if err == nil {
+			_ = record.stream.follow(r.Context(), out, after-1)
 		}
 		return
 	}

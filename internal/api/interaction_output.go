@@ -310,11 +310,8 @@ func interactionSteps(result generationResult, audio outputAudioFormat, summarie
 	return steps, nil
 }
 
-// streamInteraction 输出创建、步骤增量、步骤结束与交互终态，返回生成失败的错误
+// streamInteraction 输出创建、步骤增量、步骤结束与交互终态，返回生成失败的错误；客户端流的响应头由调用方写出
 func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, request interactionRequest, generate aistudio.GenerateRequest, audioExpected bool, previous responseHistory, current []aistudio.Content, created string, events <-chan aistudio.Event) error {
-	if err := streamHeaders(w); err != nil {
-		return nil
-	}
 	sequence := 0
 	send := func(kind string, value map[string]any) error {
 		value["event_type"] = kind
@@ -446,7 +443,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			return nil
 		}
 		return emit(event)
-	}, func() error { return writeSSEHeartbeat(w) })
+	})
 	if err == nil {
 		for _, media := range result.media {
 			if !strings.HasPrefix(media.MIME, "audio/") || audio.streams(media) {

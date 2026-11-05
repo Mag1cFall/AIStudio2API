@@ -998,7 +998,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if err != nil {
 				return nil, false, fmt.Errorf("inlineData.data: %w", err)
 			}
-			mimeType, data := normalizeImagePayload(mime, data)
+			mimeType, data := normalizeImagePayload(attachmentMIME(mime, inline.DisplayName, data), data)
 			parts = append(parts, aistudio.Part{
 				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
 				ThoughtSignature: part.ThoughtSignature,
@@ -1749,31 +1749,32 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 	return metadata
 }
 
-// geminiStream 写出 streamGenerateContent 的响应块：alt=sse 时为 SSE，否则与官方 REST 一样为逐个对象写出的 JSON 数组
+// geminiStream 写出 streamGenerateContent 的响应块：alt=sse 时为静默时写出空行心跳的 SSE，否则与官方 REST 一样为逐个对象写出的 JSON 数组
 type geminiStream struct {
-	w       http.ResponseWriter
-	sse     bool
-	mu      sync.Mutex
-	written bool
+	w         http.ResponseWriter
+	keepalive *streamKeepalive
+	mu        sync.Mutex
+	written   bool
 }
 
 // openGeminiStream 按 alt 参数写出流式响应头
 func openGeminiStream(w http.ResponseWriter, r *http.Request) (*geminiStream, error) {
-	stream := &geminiStream{w: w, sse: r.URL.Query().Get("alt") == "sse"}
-	if stream.sse {
-		return stream, streamHeaders(w)
+	if r.URL.Query().Get("alt") == "sse" {
+		keepalive, err := openStream(w, geminiHeartbeat)
+		return &geminiStream{w: keepalive, keepalive: keepalive}, err
 	}
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	return stream, http.NewResponseController(w).Flush()
+	return &geminiStream{w: w}, http.NewResponseController(w).Flush()
 }
 
 // write 写出一个响应块
 func (stream *geminiStream) write(value map[string]any) error {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if stream.sse {
+	if stream.keepalive != nil {
 		return writeSSE(stream.w, "", officialOrder("gemini", value))
 	}
 	data, err := json.Marshal(officialOrder("gemini", value))
@@ -1791,19 +1792,10 @@ func (stream *geminiStream) write(value map[string]any) error {
 	return http.NewResponseController(stream.w).Flush()
 }
 
-// heartbeat 在 SSE 流静默时写出空行，JSON 数组不写
-func (stream *geminiStream) heartbeat() error {
-	if !stream.sse {
-		return nil
-	}
-	stream.mu.Lock()
-	defer stream.mu.Unlock()
-	return writeGeminiHeartbeat(stream.w)
-}
-
-// close 结束 JSON 数组
+// close 停止 SSE 心跳，或结束 JSON 数组
 func (stream *geminiStream) close() {
-	if stream.sse {
+	if stream.keepalive != nil {
+		stream.keepalive.stop()
 		return
 	}
 	stream.mu.Lock()
@@ -1822,7 +1814,7 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 		return
 	}
 	defer stream.close()
-	write, heartbeat := stream.write, stream.heartbeat
+	write := stream.write
 	finalParts := make([][]any, len(candidates.events))
 	results, err := candidates.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		send := func(event aistudio.Event) error {
@@ -1862,7 +1854,7 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 				event.InlineData = &converted
 			}
 			return send(event)
-		}, heartbeat)
+		})
 		if err != nil || !buffered {
 			return result, err
 		}

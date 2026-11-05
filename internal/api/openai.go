@@ -687,11 +687,8 @@ func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
 		}
 		data = []byte(decoded)
 	}
-	mimeType, _, err := mime.ParseMediaType(metadata)
-	if err != nil {
-		mimeType = detectMediaType(name, data)
-	}
-	mimeType, data = normalizeImagePayload(mimeType, data)
+	mediaType, _, _ := mime.ParseMediaType(metadata)
+	mimeType, data := normalizeImagePayload(attachmentMIME(mediaType, name, data), data)
 	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}, DisplayName: name}, nil
 }
 
@@ -1160,9 +1157,12 @@ func chatCompletionChoice(index int, result generationResult, tools []openAITool
 }
 
 func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, choices *chatChoices) {
-	if err := streamHeaders(w); err != nil {
+	stream, err := openStream(w, sseHeartbeat)
+	defer stream.stop()
+	if err != nil {
 		return
 	}
+	w = stream
 	var writing sync.Mutex
 	write := func(index int, delta map[string]any, finish *string) error {
 		writing.Lock()
@@ -1174,16 +1174,11 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 	}
-	heartbeat := func() error {
-		writing.Lock()
-		defer writing.Unlock()
-		return writeSSEHeartbeat(w)
-	}
 	media := s.mediaOutputFor(r)
 	format, _, _ := request.audioOutput()
 	results, err := choices.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		choice := &chatStreamChoice{server: s, tools: request.Tools, index: index, write: write, media: media, audioFormat: format, audioID: newID("audio")}
-		result, err := consumeStreamEvents(choices.ctx, events, choice.emit, heartbeat)
+		result, err := consumeStreamEvents(choices.ctx, events, choice.emit)
 		if err == nil {
 			err = choice.finishAudio(result)
 		}

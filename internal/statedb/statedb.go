@@ -28,12 +28,9 @@ func Open(path string, log func(level, message string)) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sqlitedb.Open(path)
+	db, err := sqlitedb.Open(path, schema)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(schema); err != nil {
-		return nil, errors.Join(fmt.Errorf("初始化续接状态库: %w", err), db.Close())
+		return nil, fmt.Errorf("初始化续接状态库: %w", err)
 	}
 	loaded, err := readStates(db)
 	if err != nil {

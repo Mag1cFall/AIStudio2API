@@ -1,0 +1,307 @@
+#include "textflag.h"
+
+// rowCos26 是 idctRows 中 x2、x3 的 dctBox 常数 kcos
+DATA rowCos26<>+0(SB)/8, $0x0001151800011518
+DATA rowCos26<>+8(SB)/8, $0x0001151800011518
+DATA rowCos26<>+16(SB)/8, $0x0001151800011518
+DATA rowCos26<>+24(SB)/8, $0x0001151800011518
+GLOBL rowCos26<>(SB), RODATA|NOPTR, $32
+
+// rowA26 是 idctRows 中 x2、x3 的 dctBox 常数 ksin-kcos
+DATA rowA26<>+0(SB)/8, $0xfffc4df2fffc4df2
+DATA rowA26<>+8(SB)/8, $0xfffc4df2fffc4df2
+DATA rowA26<>+16(SB)/8, $0xfffc4df2fffc4df2
+DATA rowA26<>+24(SB)/8, $0xfffc4df2fffc4df2
+GLOBL rowA26<>(SB), RODATA|NOPTR, $32
+
+// rowB26 是 idctRows 中 x2、x3 的 dctBox 常数 kcos+ksin
+DATA rowB26<>+0(SB)/8, $0xfffe7822fffe7822
+DATA rowB26<>+8(SB)/8, $0xfffe7822fffe7822
+DATA rowB26<>+16(SB)/8, $0xfffe7822fffe7822
+DATA rowB26<>+24(SB)/8, $0xfffe7822fffe7822
+GLOBL rowB26<>(SB), RODATA|NOPTR, $32
+
+// rowR8 是 idctRows 中 x5、x6 的乘数 c(sqrt2inv, 8)
+DATA rowR8<>+0(SB)/8, $0x000000b5000000b5
+DATA rowR8<>+8(SB)/8, $0x000000b5000000b5
+DATA rowR8<>+16(SB)/8, $0x000000b5000000b5
+DATA rowR8<>+24(SB)/8, $0x000000b5000000b5
+GLOBL rowR8<>(SB), RODATA|NOPTR, $32
+
+// c3Cos 是 x4、x7 的 dctBox 常数 kcos
+DATA c3Cos<>+0(SB)/8, $0x00000d4e00000d4e
+DATA c3Cos<>+8(SB)/8, $0x00000d4e00000d4e
+DATA c3Cos<>+16(SB)/8, $0x00000d4e00000d4e
+DATA c3Cos<>+24(SB)/8, $0x00000d4e00000d4e
+GLOBL c3Cos<>(SB), RODATA|NOPTR, $32
+
+// c3A 是 x4、x7 的 dctBox 常数 ksin-kcos
+DATA c3A<>+0(SB)/8, $0xffffe9ceffffe9ce
+DATA c3A<>+8(SB)/8, $0xffffe9ceffffe9ce
+DATA c3A<>+16(SB)/8, $0xffffe9ceffffe9ce
+DATA c3A<>+24(SB)/8, $0xffffe9ceffffe9ce
+GLOBL c3A<>(SB), RODATA|NOPTR, $32
+
+// c3B 是 x4、x7 的 dctBox 常数 kcos+ksin
+DATA c3B<>+0(SB)/8, $0x0000046a0000046a
+DATA c3B<>+8(SB)/8, $0x0000046a0000046a
+DATA c3B<>+16(SB)/8, $0x0000046a0000046a
+DATA c3B<>+24(SB)/8, $0x0000046a0000046a
+GLOBL c3B<>(SB), RODATA|NOPTR, $32
+
+// c1Cos 是 x5、x6 的 dctBox 常数 kcos
+DATA c1Cos<>+0(SB)/8, $0x00000fb100000fb1
+DATA c1Cos<>+8(SB)/8, $0x00000fb100000fb1
+DATA c1Cos<>+16(SB)/8, $0x00000fb100000fb1
+DATA c1Cos<>+24(SB)/8, $0x00000fb100000fb1
+GLOBL c1Cos<>(SB), RODATA|NOPTR, $32
+
+// c1A 是 x5、x6 的 dctBox 常数 ksin-kcos
+DATA c1A<>+0(SB)/8, $0xffffed30ffffed30
+DATA c1A<>+8(SB)/8, $0xffffed30ffffed30
+DATA c1A<>+16(SB)/8, $0xffffed30ffffed30
+DATA c1A<>+24(SB)/8, $0xffffed30ffffed30
+GLOBL c1A<>(SB), RODATA|NOPTR, $32
+
+// c1B 是 x5、x6 的 dctBox 常数 kcos+ksin
+DATA c1B<>+0(SB)/8, $0x00000c9200000c92
+DATA c1B<>+8(SB)/8, $0x00000c9200000c92
+DATA c1B<>+16(SB)/8, $0x00000c9200000c92
+DATA c1B<>+24(SB)/8, $0x00000c9200000c92
+GLOBL c1B<>(SB), RODATA|NOPTR, $32
+
+// colCos26 是 idctCols 中 x2、x3 的 dctBox 常数 kcos
+DATA colCos26<>+0(SB)/8, $0x0000045400000454
+DATA colCos26<>+8(SB)/8, $0x0000045400000454
+DATA colCos26<>+16(SB)/8, $0x0000045400000454
+DATA colCos26<>+24(SB)/8, $0x0000045400000454
+GLOBL colCos26<>(SB), RODATA|NOPTR, $32
+
+// colA26 是 idctCols 中 x2、x3 的 dctBox 常数 ksin-kcos
+DATA colA26<>+0(SB)/8, $0xfffff138fffff138
+DATA colA26<>+8(SB)/8, $0xfffff138fffff138
+DATA colA26<>+16(SB)/8, $0xfffff138fffff138
+DATA colA26<>+24(SB)/8, $0xfffff138fffff138
+GLOBL colA26<>(SB), RODATA|NOPTR, $32
+
+// colB26 是 idctCols 中 x2、x3 的 dctBox 常数 kcos+ksin
+DATA colB26<>+0(SB)/8, $0xfffff9e0fffff9e0
+DATA colB26<>+8(SB)/8, $0xfffff9e0fffff9e0
+DATA colB26<>+16(SB)/8, $0xfffff9e0fffff9e0
+DATA colB26<>+24(SB)/8, $0xfffff9e0fffff9e0
+GLOBL colB26<>(SB), RODATA|NOPTR, $32
+
+// colR14 是 idctCols 中 x5、x6 的乘数 c(sqrt2inv, 14)
+DATA colR14<>+0(SB)/8, $0x00002d4100002d41
+DATA colR14<>+8(SB)/8, $0x00002d4100002d41
+DATA colR14<>+16(SB)/8, $0x00002d4100002d41
+DATA colR14<>+24(SB)/8, $0x00002d4100002d41
+GLOBL colR14<>(SB), RODATA|NOPTR, $32
+
+// half19 是 idctCols 中加到 x0 的舍入量
+DATA half19<>+0(SB)/8, $0x0008000000080000
+DATA half19<>+8(SB)/8, $0x0008000000080000
+DATA half19<>+16(SB)/8, $0x0008000000080000
+DATA half19<>+24(SB)/8, $0x0008000000080000
+GLOBL half19<>(SB), RODATA|NOPTR, $32
+
+// level 是 电平平移量
+DATA level<>+0(SB)/8, $0x0000008000000080
+DATA level<>+8(SB)/8, $0x0000008000000080
+DATA level<>+16(SB)/8, $0x0000008000000080
+DATA level<>+24(SB)/8, $0x0000008000000080
+GLOBL level<>(SB), RODATA|NOPTR, $32
+
+// max255 是 输出上限
+DATA max255<>+0(SB)/8, $0x000000ff000000ff
+DATA max255<>+8(SB)/8, $0x000000ff000000ff
+DATA max255<>+16(SB)/8, $0x000000ff000000ff
+DATA max255<>+24(SB)/8, $0x000000ff000000ff
+GLOBL max255<>(SB), RODATA|NOPTR, $32
+
+// packPerm 把打包后按 128 位通道交错的 4 行字节重排为逐行连续
+DATA packPerm<>+0(SB)/8, $0x0000000400000000
+DATA packPerm<>+8(SB)/8, $0x0000000500000001
+DATA packPerm<>+16(SB)/8, $0x0000000600000002
+DATA packPerm<>+24(SB)/8, $0x0000000700000003
+GLOBL packPerm<>(SB), RODATA|NOPTR, $32
+
+// BUTTERFLY 计算 a, b = a+b, a-b，t 为临时寄存器
+#define BUTTERFLY(a, b, t) \
+	VPADDD b, a, t; \
+	VPSUBD b, a, b; \
+	VMOVDQA t, a
+
+// BOX 是 dctBox：ksum = kcos*(a+b)，a = ksum+(ksin-kcos)*b，b = ksum-(kcos+ksin)*a，t0、t1、t2 为临时寄存器
+#define BOX(a, b, kcos, ka, kb, t0, t1, t2) \
+	VPADDD b, a, t0; \
+	VPMULLD kcos, t0, t0; \
+	VPMULLD ka, b, t1; \
+	VPMULLD kb, a, t2; \
+	VPADDD t1, t0, a; \
+	VPSUBD t2, t0, b
+
+// LEVEL 把 IDCT 结果加 128 后截到 [0,255]，zero 为全 0 寄存器
+#define LEVEL(x, zero) \
+	VPADDD level<>(SB), x, x; \
+	VPMAXSD zero, x, x; \
+	VPMINSD max255<>(SB), x, x
+
+// func idctStore(dst *byte, stride int, coef, quant *block)
+TEXT ·idctStore(SB), NOSPLIT, $0-32
+	MOVQ dst+0(FP), DI
+	MOVQ stride+8(FP), R8
+	MOVQ coef+16(FP), SI
+	MOVQ quant+24(FP), DX
+
+	// 每个 YMM 的 8 个 lane 是 8 行；第 k 列反量化后按 idctRows 的取数顺序装入 x0=列0 x7=列1 x2=列2 x5=列3 x1=列4 x6=列5 x3=列6 x4=列7
+	VMOVDQU 0(SI), Y0
+	VPMULLD 0(DX), Y0, Y0
+	VMOVDQU 32(SI), Y7
+	VPMULLD 32(DX), Y7, Y7
+	VMOVDQU 64(SI), Y2
+	VPMULLD 64(DX), Y2, Y2
+	VMOVDQU 96(SI), Y5
+	VPMULLD 96(DX), Y5, Y5
+	VMOVDQU 128(SI), Y1
+	VPMULLD 128(DX), Y1, Y1
+	VMOVDQU 160(SI), Y6
+	VPMULLD 160(DX), Y6, Y6
+	VMOVDQU 192(SI), Y3
+	VPMULLD 192(DX), Y3, Y3
+	VMOVDQU 224(SI), Y4
+	VPMULLD 224(DX), Y4, Y4
+	VPXOR Y8, Y8, Y8
+	VMOVDQU Y8, 0(SI)
+	VMOVDQU Y8, 32(SI)
+	VMOVDQU Y8, 64(SI)
+	VMOVDQU Y8, 96(SI)
+	VMOVDQU Y8, 128(SI)
+	VMOVDQU Y8, 160(SI)
+	VMOVDQU Y8, 192(SI)
+	VMOVDQU Y8, 224(SI)
+
+	// idctRows：Yi 为 xi
+	VPSLLD $17, Y0, Y0
+	VPSLLD $17, Y1, Y1
+	BUTTERFLY(Y0, Y1, Y8)
+	BOX(Y2, Y3, rowCos26<>(SB), rowA26<>(SB), rowB26<>(SB), Y13, Y14, Y15)
+	BUTTERFLY(Y1, Y2, Y8)
+	BUTTERFLY(Y0, Y3, Y8)
+	VPSLLD $7, Y4, Y4
+	VPSLLD $7, Y7, Y7
+	BUTTERFLY(Y7, Y4, Y8)
+	VPMULLD rowR8<>(SB), Y6, Y6
+	VPMULLD rowR8<>(SB), Y5, Y5
+	BUTTERFLY(Y7, Y5, Y8)
+	BUTTERFLY(Y4, Y6, Y8)
+	VPSRAD $2, Y4, Y4
+	VPSRAD $2, Y7, Y7
+	BOX(Y4, Y7, c3Cos<>(SB), c3A<>(SB), c3B<>(SB), Y13, Y14, Y15)
+	VPSRAD $2, Y5, Y5
+	VPSRAD $2, Y6, Y6
+	BOX(Y5, Y6, c1Cos<>(SB), c1A<>(SB), c1B<>(SB), Y13, Y14, Y15)
+	BUTTERFLY(Y0, Y7, Y8)
+	BUTTERFLY(Y1, Y6, Y8)
+	BUTTERFLY(Y2, Y5, Y8)
+	BUTTERFLY(Y3, Y4, Y8)
+
+	// 转置：Yk 的 lane i 为第 i 行第 k 个结果，转置后 Y8..Y15 依次为第 0..7 行，lane 为列
+	VPUNPCKLDQ Y1, Y0, Y8
+	VPUNPCKHDQ Y1, Y0, Y9
+	VPUNPCKLDQ Y3, Y2, Y10
+	VPUNPCKHDQ Y3, Y2, Y11
+	VPUNPCKLDQ Y5, Y4, Y12
+	VPUNPCKHDQ Y5, Y4, Y13
+	VPUNPCKLDQ Y7, Y6, Y14
+	VPUNPCKHDQ Y7, Y6, Y15
+	VPUNPCKLQDQ Y10, Y8, Y0
+	VPUNPCKHQDQ Y10, Y8, Y1
+	VPUNPCKLQDQ Y11, Y9, Y2
+	VPUNPCKHQDQ Y11, Y9, Y3
+	VPUNPCKLQDQ Y14, Y12, Y4
+	VPUNPCKHQDQ Y14, Y12, Y5
+	VPUNPCKLQDQ Y15, Y13, Y6
+	VPUNPCKHQDQ Y15, Y13, Y7
+	VPERM2I128 $0x20, Y4, Y0, Y8
+	VPERM2I128 $0x31, Y4, Y0, Y12
+	VPERM2I128 $0x20, Y5, Y1, Y9
+	VPERM2I128 $0x31, Y5, Y1, Y13
+	VPERM2I128 $0x20, Y6, Y2, Y10
+	VPERM2I128 $0x31, Y6, Y2, Y14
+	VPERM2I128 $0x20, Y7, Y3, Y11
+	VPERM2I128 $0x31, Y7, Y3, Y15
+
+	// idctCols：x0=Y8 x7=Y9 x2=Y10 x5=Y11 x1=Y12 x6=Y13 x3=Y14 x4=Y15，Y0..Y7 为临时寄存器
+	VPADDD half19<>(SB), Y8, Y8
+	VPADDD Y12, Y8, Y0
+	VPSUBD Y12, Y8, Y12
+	VPSRAD $2, Y0, Y8
+	VPSRAD $2, Y12, Y12
+	VPSRAD $13, Y10, Y10
+	VPSRAD $13, Y14, Y14
+	BOX(Y10, Y14, colCos26<>(SB), colA26<>(SB), colB26<>(SB), Y0, Y1, Y2)
+	BUTTERFLY(Y12, Y10, Y0)
+	BUTTERFLY(Y8, Y14, Y0)
+	BUTTERFLY(Y9, Y15, Y0)
+	VPSRAD $13, Y11, Y11
+	VPMULLD colR14<>(SB), Y11, Y11
+	VPSRAD $13, Y13, Y13
+	VPMULLD colR14<>(SB), Y13, Y13
+	BUTTERFLY(Y9, Y11, Y0)
+	BUTTERFLY(Y15, Y13, Y0)
+	VPSRAD $14, Y15, Y15
+	VPSRAD $14, Y9, Y9
+	BOX(Y15, Y9, c3Cos<>(SB), c3A<>(SB), c3B<>(SB), Y0, Y1, Y2)
+	VPSRAD $14, Y11, Y11
+	VPSRAD $14, Y13, Y13
+	BOX(Y11, Y13, c1Cos<>(SB), c1A<>(SB), c1B<>(SB), Y0, Y1, Y2)
+	BUTTERFLY(Y8, Y9, Y0)
+	BUTTERFLY(Y12, Y13, Y0)
+	BUTTERFLY(Y10, Y11, Y0)
+	BUTTERFLY(Y14, Y15, Y0)
+
+	// 第 r 行为 xr：Y8 Y12 Y10 Y14 Y15 Y11 Y13 Y9
+	VPSRAD $18, Y8, Y8
+	VPSRAD $18, Y9, Y9
+	VPSRAD $18, Y10, Y10
+	VPSRAD $18, Y11, Y11
+	VPSRAD $18, Y12, Y12
+	VPSRAD $18, Y13, Y13
+	VPSRAD $18, Y14, Y14
+	VPSRAD $18, Y15, Y15
+	VPXOR Y7, Y7, Y7
+	LEVEL(Y8, Y7)
+	LEVEL(Y9, Y7)
+	LEVEL(Y10, Y7)
+	LEVEL(Y11, Y7)
+	LEVEL(Y12, Y7)
+	LEVEL(Y13, Y7)
+	LEVEL(Y14, Y7)
+	LEVEL(Y15, Y7)
+
+	// 打包为字节：Y0 依次为第 0..3 行，Y2 为第 4..7 行
+	VMOVDQU packPerm<>(SB), Y6
+	VPACKUSDW Y12, Y8, Y0
+	VPACKUSDW Y14, Y10, Y1
+	VPACKUSWB Y1, Y0, Y0
+	VPERMD Y0, Y6, Y0
+	VPACKUSDW Y11, Y15, Y2
+	VPACKUSDW Y9, Y13, Y3
+	VPACKUSWB Y3, Y2, Y2
+	VPERMD Y2, Y6, Y2
+
+	LEAQ (R8)(R8*2), R9
+	VMOVQ X0, (DI)
+	VPEXTRQ $1, X0, (DI)(R8*1)
+	VEXTRACTI128 $1, Y0, X1
+	VMOVQ X1, (DI)(R8*2)
+	VPEXTRQ $1, X1, (DI)(R9*1)
+	LEAQ (DI)(R8*4), DI
+	VMOVQ X2, (DI)
+	VPEXTRQ $1, X2, (DI)(R8*1)
+	VEXTRACTI128 $1, Y2, X3
+	VMOVQ X3, (DI)(R8*2)
+	VPEXTRQ $1, X3, (DI)(R9*1)
+	VZEROUPPER
+	RET

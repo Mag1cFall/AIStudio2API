@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -168,6 +170,74 @@ type ResourceBinding struct {
 	UsedAt time.Time `json:"used_at,omitzero"`
 	// DisplayName 是内联附件在请求中给出的文件名
 	DisplayName string `json:"display_name,omitempty"`
+	// ExpiresAt 是上传文件的到期时间，零值表示不过期
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+}
+
+// generatedVideoRetention 是生成视频与其任务自完成起的保留时长
+const generatedVideoRetention = 48 * time.Hour
+
+// bidiSessionRetention 是 Live 续接凭证绑定自最近一次发放起的保留时长
+const bidiSessionRetention = 24 * time.Hour
+
+// temporaryFileRetention 是请求创建的临时 Drive 文件自上传起的保留时长，请求结束时删除，进程在请求进行中退出时由到期回收删除
+const temporaryFileRetention = 48 * time.Hour
+
+// expiresAt 返回绑定的到期时间，零值表示不按时间到期：内联附件按最近一次引用，上传文件按上传时确定的时间，旧版本请求上传的内联附件与 Omni 输入图片按上传时间，生成视频与任务按完成时间，Live 续接凭证按发放时间
+func (binding ResourceBinding) expiresAt() time.Time {
+	switch binding.Kind {
+	case "inline-media":
+		return binding.UsedAt.Add(inlineMediaIdle)
+	case "drive-file":
+		if binding.ExpiresAt.IsZero() && binding.legacyTemporary() {
+			return binding.CreatedAt.Add(temporaryFileRetention)
+		}
+		return binding.ExpiresAt
+	case "video-file":
+		return binding.CreatedAt.Add(generatedVideoRetention)
+	case "video-operation":
+		if binding.Video != nil && binding.Video.CompletedAt != 0 {
+			return time.Unix(binding.Video.CompletedAt, 0).Add(generatedVideoRetention)
+		}
+		return binding.CreatedAt.Add(generatedVideoRetention)
+	case "bidi-session":
+		return binding.CreatedAt.Add(bidiSessionRetention)
+	}
+	return time.Time{}
+}
+
+// driveFile 表示绑定对应 Drive 中的一个文件
+func (binding ResourceBinding) driveFile() bool {
+	return binding.Kind == "inline-media" || binding.Kind == "drive-file" || binding.Kind == "video-file"
+}
+
+// legacyInlineMediaName 匹配旧版本以 drive-file 记录的请求内联附件的文件名
+var legacyInlineMediaName = regexp.MustCompile(`^inline-media-\d+$`)
+
+// omniInputImageName 匹配 Omni 视频任务上传的输入图片的文件名
+var omniInputImageName = regexp.MustCompile(`^` + omniVideoPrefix + `[a-z2-7]{26}-image-\d+$`)
+
+// legacyTemporary 表示没有到期时间的 drive-file 是旧版本请求上传的内联附件或 Omni 输入图片
+func (binding ResourceBinding) legacyTemporary() bool {
+	return binding.Purpose == "assistants" &&
+		(binding.SHA256 == "" && legacyInlineMediaName.MatchString(binding.Name) || omniInputImageName.MatchString(binding.Name))
+}
+
+// copySourceKey 以文件名、类型、大小与用途标识一个上传文件
+type copySourceKey struct {
+	name    string
+	mime    string
+	purpose string
+	size    int64
+}
+
+// legacyCopy 表示 drive-file 是旧版本请求创建的跨账户临时副本：没有到期时间、摘要与别名，sources 中有更早上传的同名、同类型、同大小、同用途的文件
+func (binding ResourceBinding) legacyCopy(sources map[copySourceKey]time.Time) bool {
+	if binding.Kind != "drive-file" || !binding.ExpiresAt.IsZero() || binding.SHA256 != "" || binding.Alias != "" {
+		return false
+	}
+	uploadedAt, exists := sources[copySourceKey{name: binding.Name, mime: binding.MIME, purpose: binding.Purpose, size: binding.Size}]
+	return exists && uploadedAt.Before(binding.CreatedAt)
 }
 
 // VideoResourceMetadata 保存 OpenAI 视频对象的持久字段与可下载的结果文件
@@ -225,6 +295,7 @@ type Account struct {
 	exclusive             bool
 	exclusiveWaiters      int
 	authRefreshers        int
+	openingWaiters        int
 	leaseLock             *flock.Flock
 	storageMu             sync.Mutex
 	runtimeMu             sync.Mutex
@@ -1471,14 +1542,14 @@ func (l *AccountLease) AuthGeneration() uint64 {
 	return l.account.authGeneration
 }
 
-// WaitForAuthRefresh 等待其他正常请求释放，或等到 generation 之后已经提交的新认证
+// WaitForAuthRefresh 等待其他正常请求释放，或等到 generation 之后已经提交的新认证；等待 Worker 启动占位的租约不算正常请求
 func (l *AccountLease) WaitForAuthRefresh(ctx context.Context, generation uint64) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		l.pool.mu.Lock()
-		ready := l.exclusive || generation != l.account.authGeneration || l.account.active <= l.account.authRefreshers
+		ready := l.exclusive || generation != l.account.authGeneration || l.account.active <= l.account.authRefreshers+l.account.openingWaiters
 		changed := l.pool.changed
 		l.pool.mu.Unlock()
 		if ready {
@@ -1489,6 +1560,20 @@ func (l *AccountLease) WaitForAuthRefresh(ctx context.Context, generation uint64
 			return ctx.Err()
 		case <-changed:
 		}
+	}
+}
+
+// BeginOpeningWait 把租约标记为等待 Worker 启动占位，返回的函数在等待结束后撤销标记
+func (l *AccountLease) BeginOpeningWait() func() {
+	l.pool.mu.Lock()
+	l.account.openingWaiters++
+	l.pool.notifyLocked()
+	l.pool.mu.Unlock()
+	return func() {
+		l.pool.mu.Lock()
+		l.account.openingWaiters--
+		l.pool.notifyLocked()
+		l.pool.mu.Unlock()
 	}
 }
 
@@ -2913,10 +2998,21 @@ func readAccountConfig(filePath string) (AccountConfig, error) {
 	if err := ensureJSONEnd(decoder); err != nil {
 		return AccountConfig{}, fmt.Errorf("解析 %s: %w", accountConfigName, err)
 	}
+	value.Timezone = NormalizeTimezone(value.Timezone)
 	if err := value.Validate(); err != nil {
 		return AccountConfig{}, err
 	}
 	return value, nil
+}
+
+// NormalizeTimezone 去掉时区名两端的空白与其中的 Unicode 格式字符，如零宽空格、BOM 与方向标记
+func NormalizeTimezone(value string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, value))
 }
 
 func writeAccountConfig(filePath string, value AccountConfig) error {

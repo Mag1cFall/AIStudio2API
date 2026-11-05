@@ -104,10 +104,7 @@ func downloadRemoteMedia(ctx context.Context, url string, declared string) (*ais
 	mimeType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mimeType == "application/octet-stream" || mimeType == "binary/octet-stream" {
 		mimeType = declared
-		if mimeType == "" {
-			mimeType = detectMediaType("", data)
-		}
 	}
-	mimeType, data = normalizeImagePayload(mimeType, data)
+	mimeType, data = normalizeImagePayload(attachmentMIME(mimeType, "", data), data)
 	return &aistudio.Blob{MIME: mimeType, Data: data}, nil
 }

@@ -13,8 +13,9 @@
 /data/
 *.log
 
-# SpiderMonkey 静态库
+# SpiderMonkey 与 libwebp 静态库
 /spidermonkey/
+/libwebp/
 
 # 前端产物
 /web/node_modules/

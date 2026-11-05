@@ -181,6 +181,29 @@ func TestAttachYouTubeMediaPreservesText(t *testing.T) {
 	}
 }
 
+// TestAttachYouTubeMediaVideoIDs 验证文本中只有 11 位视频 ID 的链接转为视频，链接在汉字与全角标点处结束，其余链接保留为文本
+func TestAttachYouTubeMediaVideoIDs(t *testing.T) {
+	for _, test := range []struct{ text, media, rest string }{
+		{"用一句话总结https://youtu.be/jNQXAC9IVRw这个视频", "https://www.youtube.com/watch?v=jNQXAC9IVRw", "用一句话总结这个视频"},
+		{"看看 https://www.youtube.com/watch?v=jNQXAC9IVRw，讲了什么", "https://www.youtube.com/watch?v=jNQXAC9IVRw", "看看 ，讲了什么"},
+		{"Embed players with `https://www.youtube.com/embed/${videoId}`.", "", "Embed players with `https://www.youtube.com/embed/${videoId}`."},
+		{"Template: https://www.youtube.com/watch?v=VIDEO_ID", "", "Template: https://www.youtube.com/watch?v=VIDEO_ID"},
+		{"See https://youtu.be/abc", "", "See https://youtu.be/abc"},
+	} {
+		got := attachYouTubeMedia(Content{Role: RoleUser, Parts: []Part{{Text: test.text}}})
+		var media, rest string
+		for _, part := range got.Parts {
+			if part.ExternalMedia != nil {
+				media = part.ExternalMedia.URL
+			}
+			rest += part.Text
+		}
+		if media != test.media || rest != test.rest {
+			t.Errorf("%q: media=%q text=%q", test.text, media, rest)
+		}
+	}
+}
+
 // TestFunctionResultNameInference 验证工具结果的唯一关联与原始输入保留
 func TestFunctionResultNameInference(t *testing.T) {
 	call := func(id, name string) Part {

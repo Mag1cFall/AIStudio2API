@@ -161,44 +161,42 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 	writeTranscriptionResponse(w, responseFormat, "transcribe", language, result, words, wavSeconds(file, header.Size))
 }
 
-// streamTranscription 以 SSE 写出转录：每段正文为 transcript.text.delta，diarized_json 另为每个分段写出 transcript.text.segment，结束时写出带全文与用量的 transcript.text.done
+// streamTranscription 以 SSE 写出转录：每段正文为 transcript.text.delta，diarized_json 另为每个分段写出 transcript.text.segment，结束时写出带全文与用量的 transcript.text.done；首段正文晚于心跳间隔时由心跳先写出响应头
 func streamTranscription(w http.ResponseWriter, r *http.Request, service aistudio.TranscriptionService, request aistudio.TranscriptionRequest, responseFormat string) {
-	started := false
+	stream := keepStreamAlive(w, sseHeartbeat)
+	defer stream.stop()
 	segments := 0
 	request.Emit = func(event aistudio.Event) error {
-		if !started {
-			if err := streamHeaders(w); err != nil {
-				return err
-			}
-			started = true
+		if err := stream.open(); err != nil {
+			return err
 		}
 		if responseFormat == "diarized_json" && event.Transcript != nil {
 			segment := diarizedSegment(segments, *event.Transcript)
 			segments++
-			return writeSSE(w, "", segment)
+			return writeSSE(stream, "", segment)
 		}
-		return writeSSE(w, "", map[string]any{"type": "transcript.text.delta", "delta": event.Text})
+		return writeSSE(stream, "", map[string]any{"type": "transcript.text.delta", "delta": event.Text})
 	}
 	result, err := service.Transcribe(r.Context(), request)
 	if err != nil {
 		if !shouldWriteRequestError(r, err) {
 			return
 		}
-		if started {
-			writeOpenAISSEError(w, err)
+		if stream.stop() {
+			writeOpenAISSEError(stream, err)
 		} else {
 			writeOpenAIRequestError(w, err)
 		}
 		return
 	}
-	if !started && streamHeaders(w) != nil {
+	if stream.open() != nil {
 		return
 	}
 	done := map[string]any{"type": "transcript.text.done", "text": result.Text}
 	if usage := transcriptionTokens(result.Usage); usage != nil {
 		done["usage"] = usage
 	}
-	_ = writeSSE(w, "", done)
+	_ = writeSSE(stream, "", done)
 }
 
 // transcriptionGranularities 读取 timestamp_granularities 的取值，只接受 word 与 segment

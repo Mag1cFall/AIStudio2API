@@ -1,0 +1,535 @@
+#include "textflag.h"
+
+// tailmask 前 16 字节为 0xff、后 16 字节为 0，从 tailmask+16-k 读取 16 字节得到前 k 字节有效的掩码
+DATA tailmask<>+0(SB)/8, $-1
+DATA tailmask<>+8(SB)/8, $-1
+DATA tailmask<>+16(SB)/8, $0
+DATA tailmask<>+24(SB)/8, $0
+GLOBL tailmask<>(SB), RODATA|NOPTR, $32
+
+// SUM_ABS 把 V5 中 16 个字节的有符号绝对值按无符号累加到 acc 的四个 32 位通道
+#define SUM_ABS(acc) \
+	VABS V5.B16, V5.B16; WORD $0x6e2028a5; WORD acc
+
+// FILTER_BODY 以 V0、V1、V2、V3 中的 x、a、b、c 计算 16 字节的四种过滤结果写到 R2 至 R5 并后移，绝对值和累加到 V20 至 V24；V30 为 0
+#define FILTER_BODY \
+	VORR   V0.B16, V0.B16, V5.B16; SUM_ABS($0x6e6068b4); \
+	VSUB   V1.B16, V0.B16, V5.B16; VST1.P [V5.B16], 16(R2); SUM_ABS($0x6e6068b5); \
+	VSUB   V2.B16, V0.B16, V5.B16; VST1.P [V5.B16], 16(R3); SUM_ABS($0x6e6068b6); \
+	VUHADD V2.B16, V1.B16, V5.B16; VSUB V5.B16, V0.B16, V5.B16; VST1.P [V5.B16], 16(R4); SUM_ABS($0x6e6068b7); \
+	VUQSUB V3.B16, V2.B16, V6.B16; VUQSUB V2.B16, V3.B16, V7.B16; VORR V7.B16, V6.B16, V8.B16; \
+	VUQSUB V3.B16, V1.B16, V6.B16; VUQSUB V1.B16, V3.B16, V9.B16; VORR V9.B16, V6.B16, V10.B16; \
+	VCMEQ  V30.B16, V7.B16, V7.B16; VCMEQ V30.B16, V9.B16, V9.B16; VEOR V9.B16, V7.B16, V7.B16; \
+	VUQADD V10.B16, V8.B16, V6.B16; VUQSUB V10.B16, V8.B16, V9.B16; VUQSUB V8.B16, V10.B16, V11.B16; VORR V11.B16, V9.B16, V9.B16; \
+	VBIT   V7.B16, V9.B16, V6.B16; \
+	VCMHS  V8.B16, V10.B16, V9.B16; VCMHS V8.B16, V6.B16, V11.B16; VAND V11.B16, V9.B16, V9.B16; \
+	VCMHS  V10.B16, V6.B16, V11.B16; \
+	VORR   V3.B16, V3.B16, V12.B16; VBIT V11.B16, V2.B16, V12.B16; VBIT V9.B16, V1.B16, V12.B16; \
+	VSUB   V12.B16, V0.B16, V5.B16; VST1.P [V5.B16], 16(R5); SUM_ABS($0x6e6068b8)
+
+// HSUM 把 acc 四个 32 位通道的和写入 dst
+#define HSUM(acc, dst) \
+	VADDV acc.S4, acc; VMOV acc.S[0], R11; MOVD R11, dst
+
+// func filterRow(cur, prev, sub, up, avg, paeth *byte, n, bpp int, sums *[5]int)
+TEXT ·filterRow(SB), NOSPLIT, $0-72
+	MOVD cur+0(FP), R0
+	MOVD prev+8(FP), R1
+	MOVD sub+16(FP), R2
+	MOVD up+24(FP), R3
+	MOVD avg+32(FP), R4
+	MOVD paeth+40(FP), R5
+	MOVD n+48(FP), R6
+	MOVD bpp+56(FP), R7
+	SUB  R7, R0, R9
+	SUB  R7, R1, R10
+	VEOR V30.B16, V30.B16, V30.B16
+	VEOR V20.B16, V20.B16, V20.B16
+	VEOR V21.B16, V21.B16, V21.B16
+	VEOR V22.B16, V22.B16, V22.B16
+	VEOR V23.B16, V23.B16, V23.B16
+	VEOR V24.B16, V24.B16, V24.B16
+
+filterLoop:
+	CMP    $16, R6
+	BLT    filterTail
+	VLD1.P 16(R0), [V0.B16]
+	VLD1.P 16(R9), [V1.B16]
+	VLD1.P 16(R1), [V2.B16]
+	VLD1.P 16(R10), [V3.B16]
+	FILTER_BODY
+	SUB    $16, R6
+	B      filterLoop
+
+filterTail:
+	CBZ  R6, filterDone
+	MOVD $tailmask<>+16(SB), R11
+	SUB  R6, R11, R11
+	VLD1 (R11), [V29.B16]
+	VLD1 (R0), [V0.B16]
+	VLD1 (R9), [V1.B16]
+	VLD1 (R1), [V2.B16]
+	VLD1 (R10), [V3.B16]
+	VAND V29.B16, V0.B16, V0.B16
+	VAND V29.B16, V1.B16, V1.B16
+	VAND V29.B16, V2.B16, V2.B16
+	VAND V29.B16, V3.B16, V3.B16
+	FILTER_BODY
+
+filterDone:
+	MOVD sums+64(FP), R8
+	HSUM(V20, 0(R8))
+	HSUM(V21, 8(R8))
+	HSUM(V22, 16(R8))
+	HSUM(V23, 24(R8))
+	HSUM(V24, 32(R8))
+	RET
+
+// func rgbFromRGBA(dst, src *byte, n int)
+TEXT ·rgbFromRGBA(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R0
+	MOVD src+8(FP), R1
+	MOVD n+16(FP), R2
+
+rgbWide:
+	CMP    $16, R2
+	BLT    rgbNarrow
+	VLD4.P 64(R1), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VST3.P [V0.B16, V1.B16, V2.B16], 48(R0)
+	SUB    $16, R2
+	B      rgbWide
+
+rgbNarrow:
+	CBZ    R2, rgbDone
+	VLD4.P 32(R1), [V0.B8, V1.B8, V2.B8, V3.B8]
+	VST3.P [V0.B8, V1.B8, V2.B8], 24(R0)
+
+rgbDone:
+	RET
+
+// YCBCR_CONST 把 color.YCbCr.RGBA 的常数载入 V24 至 V31
+#define YCBCR_CONST \
+	MOVW $0x10101, R6; VDUP R6, V24.S4; MOVW $128, R6; VDUP R6, V25.S4; \
+	MOVW $91881, R6; VDUP R6, V26.S4; MOVW $22554, R6; VDUP R6, V27.S4; \
+	MOVW $46802, R6; VDUP R6, V28.S4; MOVW $116130, R6; VDUP R6, V29.S4; \
+	VEOR V30.B16, V30.B16, V30.B16; MOVW $0xffffff, R6; VDUP R6, V31.S4
+
+// YCBCR_RGB 以 V2、V3 前 8 字节中的 Cb、Cr 与 R1 处的 8 个 Y 计算 color.YCbCr.RGBA 的 R、G、B，前 4 个像素在 V10、V12、V14，后 4 个在 V11、V13、V15
+#define YCBCR_RGB \
+	VLD1.P 8(R1), [V0.B8]; \
+	VUXTL  V0.B8, V0.H8; VUXTL V0.H4, V4.S4; VUXTL2 V0.H8, V5.S4; \
+	VUXTL  V2.B8, V2.H8; VUXTL V2.H4, V6.S4; VUXTL2 V2.H8, V7.S4; \
+	VUXTL  V3.B8, V3.H8; VUXTL V3.H4, V8.S4; VUXTL2 V3.H8, V9.S4; \
+	VMUL   V24.S4, V4.S4, V4.S4; VMUL V24.S4, V5.S4, V5.S4; \
+	VSUB   V25.S4, V6.S4, V6.S4; VSUB V25.S4, V7.S4, V7.S4; VSUB V25.S4, V8.S4, V8.S4; VSUB V25.S4, V9.S4, V9.S4; \
+	VORR   V4.B16, V4.B16, V10.B16; VMLA V26.S4, V8.S4, V10.S4; VORR V5.B16, V5.B16, V11.B16; VMLA V26.S4, V9.S4, V11.S4; \
+	VORR   V4.B16, V4.B16, V12.B16; VMLS V27.S4, V6.S4, V12.S4; VMLS V28.S4, V8.S4, V12.S4; \
+	VORR   V5.B16, V5.B16, V13.B16; VMLS V27.S4, V7.S4, V13.S4; VMLS V28.S4, V9.S4, V13.S4; \
+	VORR   V4.B16, V4.B16, V14.B16; VMLA V29.S4, V6.S4, V14.S4; VORR V5.B16, V5.B16, V15.B16; VMLA V29.S4, V7.S4, V15.S4; \
+	VSMAX  V30.S4, V10.S4, V10.S4; VSMIN V31.S4, V10.S4, V10.S4; VUSHR $8, V10.S4, V10.S4; \
+	VSMAX  V30.S4, V11.S4, V11.S4; VSMIN V31.S4, V11.S4, V11.S4; VUSHR $8, V11.S4, V11.S4; \
+	VSMAX  V30.S4, V12.S4, V12.S4; VSMIN V31.S4, V12.S4, V12.S4; VUSHR $8, V12.S4, V12.S4; \
+	VSMAX  V30.S4, V13.S4, V13.S4; VSMIN V31.S4, V13.S4, V13.S4; VUSHR $8, V13.S4, V13.S4; \
+	VSMAX  V30.S4, V14.S4, V14.S4; VSMIN V31.S4, V14.S4, V14.S4; VUSHR $8, V14.S4, V14.S4; \
+	VSMAX  V30.S4, V15.S4, V15.S4; VSMIN V31.S4, V15.S4, V15.S4; VUSHR $8, V15.S4, V15.S4
+
+// CHROMA_444 与 CHROMA_422、CHROMA_411 按色度水平位移把 8 个像素的 Cb、Cr 载入 V2、V3 前 8 字节
+#define CHROMA_444 \
+	VLD1.P 8(R2), [V2.B8]; VLD1.P 8(R3), [V3.B8]
+
+#define CHROMA_422 \
+	VLD1 (R2), V2.S[0]; VLD1 (R3), V3.S[0]; ADD $4, R2; ADD $4, R3; \
+	VZIP1 V2.B16, V2.B16, V2.B16; VZIP1 V3.B16, V3.B16, V3.B16
+
+#define CHROMA_411 \
+	VLD1  (R2), V2.H[0]; VLD1 (R3), V3.H[0]; ADD $2, R2; ADD $2, R3; \
+	VZIP1 V2.B16, V2.B16, V2.B16; VZIP1 V3.B16, V3.B16, V3.B16; \
+	VZIP1 V2.B16, V2.B16, V2.B16; VZIP1 V3.B16, V3.B16, V3.B16
+
+// RGBA_STORE 把 YCBCR_RGB 结果的高 8 位与 V19 中的 0xff 按像素 [R, G, B, A] 写到 R0 处 32 字节并后移
+#define RGBA_STORE \
+	VSHRN  $8, V10.S4, V16.H4; VSHRN2 $8, V11.S4, V16.H8; VXTN V16.H8, V16.B8; \
+	VSHRN  $8, V12.S4, V17.H4; VSHRN2 $8, V13.S4, V17.H8; VXTN V17.H8, V17.B8; \
+	VSHRN  $8, V14.S4, V18.H4; VSHRN2 $8, V15.S4, V18.H8; VXTN V18.H8, V18.B8; \
+	VST4.P [V16.B8, V17.B8, V18.B8, V19.B8], 32(R0)
+
+// func rgbaFromYCbCr(dst, y, cb, cr *byte, n, shift int)
+TEXT ·rgbaFromYCbCr(SB), NOSPLIT, $0-48
+	MOVD  dst+0(FP), R0
+	MOVD  y+8(FP), R1
+	MOVD  cb+16(FP), R2
+	MOVD  cr+24(FP), R3
+	MOVD  n+32(FP), R4
+	MOVD  shift+40(FP), R5
+	YCBCR_CONST
+	VMOVI $255, V19.B16
+	CMP   $1, R5
+	BEQ   rgbaFrom422
+	BGT   rgbaFrom411
+
+rgbaFrom444:
+	CHROMA_444
+	YCBCR_RGB
+	RGBA_STORE
+	SUBS $8, R4, R4
+	BNE  rgbaFrom444
+	RET
+
+rgbaFrom422:
+	CHROMA_422
+	YCBCR_RGB
+	RGBA_STORE
+	SUBS $8, R4, R4
+	BNE  rgbaFrom422
+	RET
+
+rgbaFrom411:
+	CHROMA_411
+	YCBCR_RGB
+	RGBA_STORE
+	SUBS $8, R4, R4
+	BNE  rgbaFrom411
+	RET
+
+// FLOAT_STORE 把 YCBCR_RGB 的结果与 V19 中的 alpha 转为 float64，按像素 [R, G, B, A] 写到 R0 处 256 字节并后移
+#define FLOAT_STORE \
+	VUCVTF  V10.S4, V10.S4; VUCVTF V11.S4, V11.S4; VUCVTF V12.S4, V12.S4; \
+	VUCVTF  V13.S4, V13.S4; VUCVTF V14.S4, V14.S4; VUCVTF V15.S4, V15.S4; \
+	VFCVTL  V10.S2, V16.D2; VFCVTL V12.S2, V17.D2; VFCVTL V14.S2, V18.D2; VST4.P [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0); \
+	VFCVTL2 V10.S4, V16.D2; VFCVTL2 V12.S4, V17.D2; VFCVTL2 V14.S4, V18.D2; VST4.P [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0); \
+	VFCVTL  V11.S2, V16.D2; VFCVTL V13.S2, V17.D2; VFCVTL V15.S2, V18.D2; VST4.P [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0); \
+	VFCVTL2 V11.S4, V16.D2; VFCVTL2 V13.S4, V17.D2; VFCVTL2 V15.S4, V18.D2; VST4.P [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0)
+
+// func convertYCbCr(dst *float64, y, cb, cr *byte, n, shift int)
+TEXT ·convertYCbCr(SB), NOSPLIT, $0-48
+	MOVD dst+0(FP), R0
+	MOVD y+8(FP), R1
+	MOVD cb+16(FP), R2
+	MOVD cr+24(FP), R3
+	MOVD n+32(FP), R4
+	MOVD shift+40(FP), R5
+	YCBCR_CONST
+	MOVD $0x40efffe000000000, R6
+	VDUP R6, V19.D2
+	CMP  $1, R5
+	BEQ  convert422
+	BGT  convert411
+
+convert444:
+	CHROMA_444
+	YCBCR_RGB
+	FLOAT_STORE
+	SUBS $8, R4, R4
+	BNE  convert444
+	RET
+
+convert422:
+	CHROMA_422
+	YCBCR_RGB
+	FLOAT_STORE
+	SUBS $8, R4, R4
+	BNE  convert422
+	RET
+
+convert411:
+	CHROMA_411
+	YCBCR_RGB
+	FLOAT_STORE
+	SUBS $8, R4, R4
+	BNE  convert411
+	RET
+
+// func convertRGBA(dst *float64, src *byte, n int)
+TEXT ·convertRGBA(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R0
+	MOVD src+8(FP), R1
+	MOVD n+16(FP), R2
+	MOVW $257, R3
+	VDUP R3, V31.H8
+
+rgbaQuad:
+	CMP     $4, R2
+	BLT     rgbaSingle
+	VLD1.P  16(R1), [V0.B16]
+	VUXTL   V0.B8, V1.H8
+	VUXTL2  V0.B16, V2.H8
+	VMUL    V31.H8, V1.H8, V1.H8
+	VMUL    V31.H8, V2.H8, V2.H8
+	VUXTL   V1.H4, V3.S4
+	VUXTL2  V1.H8, V4.S4
+	VUXTL   V2.H4, V5.S4
+	VUXTL2  V2.H8, V6.S4
+	VUCVTF  V3.S4, V3.S4
+	VUCVTF  V4.S4, V4.S4
+	VUCVTF  V5.S4, V5.S4
+	VUCVTF  V6.S4, V6.S4
+	VFCVTL  V3.S2, V16.D2
+	VFCVTL2 V3.S4, V17.D2
+	VFCVTL  V4.S2, V18.D2
+	VFCVTL2 V4.S4, V19.D2
+	VST1.P  [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0)
+	VFCVTL  V5.S2, V16.D2
+	VFCVTL2 V5.S4, V17.D2
+	VFCVTL  V6.S2, V18.D2
+	VFCVTL2 V6.S4, V19.D2
+	VST1.P  [V16.D2, V17.D2, V18.D2, V19.D2], 64(R0)
+	SUB     $4, R2
+	B       rgbaQuad
+
+rgbaSingle:
+	CBZ     R2, rgbaDone
+	VLD1.P  4(R1), V0.S[0]
+	VUXTL   V0.B8, V1.H8
+	VMUL    V31.H8, V1.H8, V1.H8
+	VUXTL   V1.H4, V3.S4
+	VUCVTF  V3.S4, V3.S4
+	VFCVTL  V3.S2, V16.D2
+	VFCVTL2 V3.S4, V17.D2
+	VST1.P  [V16.D2, V17.D2], 32(R0)
+	SUB     $1, R2
+	B       rgbaSingle
+
+rgbaDone:
+	RET
+
+// func convertNRGBA(dst *float64, src *byte, n int)
+TEXT ·convertNRGBA(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R0
+	MOVD src+8(FP), R1
+	MOVD n+16(FP), R2
+	MOVW $257, R3
+	VDUP R3, V31.S4
+	MOVD $0x406fe00000000000, R3
+	VDUP R3, V30.D2
+
+nrgbaLoop:
+	CBZ     R2, nrgbaDone
+	VLD1.P  4(R1), V0.S[0]
+	VUXTL   V0.B8, V0.H8
+	VUXTL   V0.H4, V1.S4
+	VDUP    V1.S[3], V2.S4
+	VMUL    V31.S4, V2.S4, V2.S4
+	VMUL    V2.S4, V1.S4, V1.S4
+	VUCVTF  V1.S4, V1.S4
+	VFCVTL  V1.S2, V3.D2
+	VFCVTL2 V1.S4, V4.D2
+	VFDIV   V30.D2, V3.D2, V3.D2
+	VFDIV   V30.D2, V4.D2, V4.D2
+	VFRINTZ V3.D2, V3.D2
+	VFRINTZ V4.D2, V4.D2
+	VUCVTF  V2.S4, V2.S4
+	VFCVTL  V2.S2, V5.D2
+	VMOV    V5.D[0], V4.D[1]
+	VST1.P  [V3.D2, V4.D2], 32(R0)
+	SUB     $1, R2
+	B       nrgbaLoop
+
+nrgbaDone:
+	RET
+
+// func convertGray(dst *float64, src *byte, n int)
+TEXT ·convertGray(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R0
+	MOVD src+8(FP), R1
+	MOVD n+16(FP), R2
+	MOVW $257, R4
+
+grayLoop:
+	CBZ     R2, grayDone
+	MOVBU.P 1(R1), R3
+	MULW    R4, R3, R3
+	SCVTFWD R3, F0
+	VDUP    V0.D[0], V0.D2
+	VORR    V0.B16, V0.B16, V1.B16
+	VST1.P  [V0.D2, V1.D2], 32(R0)
+	SUB     $1, R2
+	B       grayLoop
+
+grayDone:
+	RET
+
+// ROWS_TAP 把 R17 偏移处 conv 行与 V8 中权重的乘积加到该行的两个累加寄存器
+#define ROWS_TAP(row, lo, hi) \
+	ADD R17, row, R19; VLD1 (R19), [V10.D2, V11.D2]; \
+	VFMUL V8.D2, V10.D2, V10.D2; VFMUL V8.D2, V11.D2, V11.D2; VFADD V10.D2, lo.D2, lo.D2; VFADD V11.D2, hi.D2, hi.D2
+
+// func scaleRows(tmp *float64, tmpStride int, conv *float64, convStride int, sources *source, n int, contribs *contrib, alphaOne int)
+TEXT ·scaleRows(SB), NOSPLIT, $0-64
+	MOVD tmp+0(FP), R0
+	MOVD tmpStride+8(FP), R1
+	MOVD conv+16(FP), R2
+	MOVD convStride+24(FP), R3
+	MOVD sources+32(FP), R4
+	MOVD n+40(FP), R5
+	MOVD contribs+48(FP), R6
+	MOVD alphaOne+56(FP), R7
+	ADD  R3, R2, R8
+	ADD  R3, R8, R9
+	ADD  R3, R9, R10
+	ADD  R1, R0, R11
+	ADD  R1, R11, R12
+	ADD  R1, R12, R13
+	MOVD $0x3ff0000000000000, R14
+	VDUP R14, V30.D2
+	VEOR V31.B16, V31.B16, V31.B16
+	CBZ  R7, rowsColumn
+	MOVD $-1, R14
+	VMOV R14, V31.D[1]
+
+rowsColumn:
+	MOVW (R4), R14
+	MOVW 4(R4), R15
+	VEOR V0.B16, V0.B16, V0.B16
+	VEOR V1.B16, V1.B16, V1.B16
+	VEOR V2.B16, V2.B16, V2.B16
+	VEOR V3.B16, V3.B16, V3.B16
+	VEOR V4.B16, V4.B16, V4.B16
+	VEOR V5.B16, V5.B16, V5.B16
+	VEOR V6.B16, V6.B16, V6.B16
+	VEOR V7.B16, V7.B16, V7.B16
+	CMP  R15, R14
+	BGE  rowsStore
+	LSL  $4, R14
+	LSL  $4, R15
+
+rowsTap:
+	ADD   R14, R6, R16
+	MOVW  (R16), R17
+	LSL   $5, R17
+	ADD   $8, R16, R16
+	VLD1R (R16), [V8.D2]
+	ROWS_TAP(R2, V0, V1)
+	ROWS_TAP(R8, V2, V3)
+	ROWS_TAP(R9, V4, V5)
+	ROWS_TAP(R10, V6, V7)
+	ADD   $16, R14
+	CMP   R15, R14
+	BLT   rowsTap
+
+rowsStore:
+	ADD   $16, R4, R16
+	VLD1R (R16), [V8.D2]
+	VFMUL V8.D2, V0.D2, V0.D2
+	VFMUL V8.D2, V1.D2, V1.D2
+	VFMUL V8.D2, V2.D2, V2.D2
+	VFMUL V8.D2, V3.D2, V3.D2
+	VFMUL V8.D2, V4.D2, V4.D2
+	VFMUL V8.D2, V5.D2, V5.D2
+	VFMUL V8.D2, V6.D2, V6.D2
+	VFMUL V8.D2, V7.D2, V7.D2
+	VBIT  V31.B16, V30.B16, V1.B16
+	VBIT  V31.B16, V30.B16, V3.B16
+	VBIT  V31.B16, V30.B16, V5.B16
+	VBIT  V31.B16, V30.B16, V7.B16
+	VST1  [V0.D2, V1.D2], (R0)
+	VST1  [V2.D2, V3.D2], (R11)
+	VST1  [V4.D2, V5.D2], (R12)
+	VST1  [V6.D2, V7.D2], (R13)
+	ADD   $32, R0
+	ADD   $32, R11
+	ADD   $32, R12
+	ADD   $32, R13
+	ADD   $24, R4
+	SUBS  $1, R5, R5
+	BNE   rowsColumn
+	RET
+
+// COLUMN_PIXEL 按 scaleY_RGBA_Src 把一个像素的累加结果 rg、ba 夹到 alpha 以内、乘 invTotalWeight 后经 ftou 取高 8 位，四个分量的 int32 写到 out
+#define COLUMN_PIXEL(rg, ba, out) \
+	VDUP    ba.D[1], V9.D2; \
+	VFCMGT  V9.D2, rg.D2, V25.D2; VBIT V25.B16, V9.B16, rg.B16; VFCMGT V9.D2, ba.D2, V25.D2; VBIT V25.B16, V9.B16, ba.B16; \
+	VFMUL   V28.D2, rg.D2, rg.D2; VFMUL V28.D2, ba.D2, ba.D2; VFMUL V29.D2, rg.D2, rg.D2; VFMUL V29.D2, ba.D2, ba.D2; \
+	VFADD   V30.D2, rg.D2, rg.D2; VFADD V30.D2, ba.D2, ba.D2; \
+	VFCVTZS rg.D2, rg.D2; VFCVTZS ba.D2, ba.D2; VXTN rg.D2, out.S2; VXTN2 ba.D2, out.S4; \
+	VSMAX   V27.S4, out.S4, out.S4; VSMIN V26.S4, out.S4, out.S4; VUSHR $8, out.S4, out.S4
+
+// COLUMN_TAP 把 R7 处一个像素与 V8 中权重的乘积加到 rg、ba
+#define COLUMN_TAP(p, q, rg, ba) \
+	VFMUL V8.D2, p.D2, p.D2; VFMUL V8.D2, q.D2, q.D2; VFADD p.D2, rg.D2, rg.D2; VFADD q.D2, ba.D2, ba.D2
+
+// func scaleColumn(dst *byte, rows **float64, weights *float64, taps, n int, invTotalWeight float64)
+TEXT ·scaleColumn(SB), NOSPLIT, $0-48
+	MOVD  dst+0(FP), R0
+	MOVD  rows+8(FP), R1
+	MOVD  weights+16(FP), R2
+	MOVD  taps+24(FP), R3
+	MOVD  n+32(FP), R4
+	FMOVD invTotalWeight+40(FP), F28
+	VDUP  V28.D[0], V28.D2
+	MOVD  $0x40efffe000000000, R5
+	VDUP  R5, V29.D2
+	MOVD  $0x3fe0000000000000, R5
+	VDUP  R5, V30.D2
+	VEOR  V27.B16, V27.B16, V27.B16
+	MOVW  $0xffff, R5
+	VDUP  R5, V26.S4
+	MOVD  $0, R5
+
+columnQuad:
+	CMP  $4, R4
+	BLT  columnSingle
+	VEOR V0.B16, V0.B16, V0.B16
+	VEOR V1.B16, V1.B16, V1.B16
+	VEOR V2.B16, V2.B16, V2.B16
+	VEOR V3.B16, V3.B16, V3.B16
+	VEOR V4.B16, V4.B16, V4.B16
+	VEOR V5.B16, V5.B16, V5.B16
+	VEOR V6.B16, V6.B16, V6.B16
+	VEOR V7.B16, V7.B16, V7.B16
+	MOVD $0, R6
+
+columnQuadTap:
+	MOVD   (R1)(R6<<3), R7
+	ADD    R5, R7, R7
+	ADD    R6<<3, R2, R8
+	VLD1R  (R8), [V8.D2]
+	VLD1.P 64(R7), [V10.D2, V11.D2, V12.D2, V13.D2]
+	VLD1   (R7), [V14.D2, V15.D2, V16.D2, V17.D2]
+	COLUMN_TAP(V10, V11, V0, V1)
+	COLUMN_TAP(V12, V13, V2, V3)
+	COLUMN_TAP(V14, V15, V4, V5)
+	COLUMN_TAP(V16, V17, V6, V7)
+	ADD    $1, R6
+	CMP    R3, R6
+	BLT    columnQuadTap
+	COLUMN_PIXEL(V0, V1, V18)
+	COLUMN_PIXEL(V2, V3, V19)
+	COLUMN_PIXEL(V4, V5, V20)
+	COLUMN_PIXEL(V6, V7, V21)
+	VXTN   V18.S4, V22.H4
+	VXTN2  V19.S4, V22.H8
+	VXTN   V20.S4, V23.H4
+	VXTN2  V21.S4, V23.H8
+	VXTN   V22.H8, V24.B8
+	VXTN2  V23.H8, V24.B16
+	VST1.P [V24.B16], 16(R0)
+	ADD    $128, R5
+	SUB    $4, R4
+	B      columnQuad
+
+columnSingle:
+	CBZ  R4, columnDone
+	VEOR V0.B16, V0.B16, V0.B16
+	VEOR V1.B16, V1.B16, V1.B16
+	MOVD $0, R6
+
+columnSingleTap:
+	MOVD  (R1)(R6<<3), R7
+	ADD   R5, R7, R7
+	ADD   R6<<3, R2, R8
+	VLD1R (R8), [V8.D2]
+	VLD1  (R7), [V10.D2, V11.D2]
+	COLUMN_TAP(V10, V11, V0, V1)
+	ADD   $1, R6
+	CMP   R3, R6
+	BLT   columnSingleTap
+	COLUMN_PIXEL(V0, V1, V18)
+	VXTN   V18.S4, V22.H4
+	VXTN   V22.H8, V24.B8
+	VST1.P V24.S[0], 4(R0)
+	ADD    $32, R5
+	SUB    $1, R4
+	B      columnSingle
+
+columnDone:
+	RET

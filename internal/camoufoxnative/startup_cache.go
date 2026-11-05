@@ -37,20 +37,15 @@ func saveStartupCache(profile, cacheDirectory string) {
 // copyStartupCache 把 source 中存在的启动缓存条目复制到 target
 func copyStartupCache(source, target string) error {
 	for _, name := range startupCacheEntries {
-		from := filepath.Join(source, name)
-		info, err := os.Stat(from)
-		if errors.Is(err, fs.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(source, name)); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		to := filepath.Join(target, name)
-		if info.IsDir() {
-			err = os.CopyFS(to, os.DirFS(from))
-		} else {
-			err = copyStartupFile(from, to)
-		}
+		err := fs.WalkDir(os.DirFS(source), name, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			return copyStartupFile(filepath.Join(source, path), filepath.Join(target, path))
+		})
 		if err != nil {
 			return err
 		}

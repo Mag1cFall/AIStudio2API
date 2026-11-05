@@ -3,17 +3,20 @@ WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
+COPY internal/i18n/messages/ /src/internal/i18n/messages/
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
 ARG TARGETARCH
 ARG ZIG=0.16.0
 ARG SPIDERMONKEY=v152.0.4-aistudio2api.1
+ARG LIBWEBP=v1.6.0-aistudio2api.1
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://ziglang.org/download/$ZIG/zig-$(uname -m)-linux-$ZIG.tar.xz | tar -xJ -C /opt \
     && mv /opt/zig-* /opt/zig \
-    && mkdir /opt/spidermonkey \
-    && curl -fsSL https://github.com/Mag1cFall/firefox/releases/download/$SPIDERMONKEY/spidermonkey-$SPIDERMONKEY-linux-$TARGETARCH.tar.gz | tar -xz -C /opt/spidermonkey
+    && mkdir /opt/spidermonkey /opt/libwebp \
+    && curl -fsSL https://github.com/Mag1cFall/firefox/releases/download/$SPIDERMONKEY/spidermonkey-$SPIDERMONKEY-linux-$TARGETARCH.tar.gz | tar -xz -C /opt/spidermonkey \
+    && curl -fsSL https://github.com/Mag1cFall/libwebp/releases/download/$LIBWEBP/libwebp-$LIBWEBP-linux-$TARGETARCH.tar.gz | tar -xz -C /opt/libwebp
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -23,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     target=$([ "$TARGETARCH" = arm64 ] && echo aarch64 || echo x86_64) \
     && CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH \
     CC="/opt/zig/zig cc -target $target-linux-musl" CXX="/opt/zig/zig c++ -target $target-linux-musl" \
-    CGO_CXXFLAGS=-I/opt/spidermonkey/include CGO_LDFLAGS=-L/opt/spidermonkey/lib \
+    CGO_CPPFLAGS="-I/opt/spidermonkey/include -I/opt/libwebp/include" CGO_LDFLAGS="-L/opt/spidermonkey/lib -L/opt/libwebp/lib" \
     go build -trimpath -tags netgo,osusergo -ldflags="-s -w -linkmode external -extldflags '-static -Wl,--strip-all'" -o /out/aistudio2api ./cmd/aistudio2api
 
 FROM debian:bookworm-slim AS runtime

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa"
 )
 
@@ -241,7 +242,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 			runtime.profile.LocalStorage[item.Name] = item.Value
 		}
 	}
-	runtime.cacheDirectory = filepath.Join(filepath.Dir(filepath.Dir(options.StorageStatePath)), ".waa-interpreters")
+	runtime.cacheDirectory = filepath.Join(filepath.Dir(filepath.Dir(options.StorageStatePath)), appconfig.WAAInterpreterCacheName)
 	reportGoStartup(options, camoufoxnative.StartupLoadingAIStudio)
 	apiKey, document, err := runtime.loadPage(ctx)
 	if err != nil {

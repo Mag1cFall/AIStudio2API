@@ -122,9 +122,13 @@ internal/aistudio/       账户、MakerSuite、WAA、模型、工具、上传、
 internal/api/            OpenAI、Responses、Anthropic、Gemini 与管理端 HTTP 路由
 internal/camoufoxnative/ 原生 WebDriver BiDi、WAA 页面与隔离登录
 internal/waa/            SpiderMonkey WAA：BotGuard VM、Firefox 形状宿主与 SpiderMonkey cgo 绑定
+internal/imagecodec/     生成图片的 JPEG 解码、CatmullRom 缩放、PNG 编码与经 cgo 链接 libwebp 的 WebP 编码
+internal/resample/       语音 PCM 的 Kaiser 窗 sinc 多相重采样
 internal/proxydial/      上游代理拨号与带认证代理的本机 SOCKS5 中转
 internal/requestdb/      请求用量账本与可选正文的 SQLite 存储
 internal/statedb/        Responses 与 Interactions 续接节点的 SQLite 存储
+internal/promptdb/       Playground 对话的 SQLite 存储
+internal/sqlitedb/       SQLite 打开、按建表语句同步表结构与空闲页回收
 internal/pricing/        用量估算费用使用的 Gemini API 单价表
 internal/chromeauth/     Windows Chrome OAuth/DBSC 发现、导入和续签
 internal/config/         全局配置的读取、校验和原子写回
@@ -137,7 +141,8 @@ auth/                    每账户配置、认证状态和可恢复运行状态
 runtime/camoufox/        Release 使用的 Camoufox 运行时
 runtime/requests.db      请求用量账本与可选正文
 runtime/states.db        Responses、Interactions 与 Chat 音频回复的续接节点
-runtime/media/           MEDIA_OUTPUT=url 时按内容命名保存的生成媒体
+runtime/prompts.db       Playground 对话
+runtime/media/           MEDIA_OUTPUT=url 时按内容命名保存的生成媒体，总量超过 1 GB 时删除最久未使用的文件
 ```
 
 主依赖方向：
@@ -182,7 +187,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 
 ## 3. 配置、账户和持久状态
 
-程序从当前目录读取可选的 `.env`，进程环境变量覆盖同名配置，这些项在设置页中显示为由环境变量决定、不可修改。管理端保存设置时 `.env` 只写入与默认值不同的项；取值无效的项按默认值运行，管理页面顶部与服务日志列出这些项与原值：
+程序从当前目录读取可选的 `.env`，进程环境变量覆盖同名配置，这些项在设置页中显示为由环境变量决定、不可修改。管理端保存设置时 `.env` 写入 WAA 后端与其余和默认值不同的项；取值无效的项按默认值运行，管理页面顶部与服务日志列出这些项与原值：
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
@@ -220,7 +225,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `CONTINUATION_PROMPT` | 改写时与末尾 assistant 正文一起写入系统指令的续写提示词；键存在且为空时末尾 assistant 正文作为最后一轮 user；保存后停止再启动生成服务生效 | 内置英文续写句 |
 | `FIRST_EVENT_HEDGE` | 首字超时备用请求：`off`、`auto`（各模型与通道近 24 小时原请求首字等待的 p95）或正整数秒 | `auto` |
 | `FIRST_EVENT_HEDGE_MODELS` | 发起备用请求的模型 ID，逗号分隔 | `gemini-4-argon` |
-| `WAA_BACKEND` | WAA 后端 `spidermonkey` 或 `camoufox` | `spidermonkey` |
+| `WAA_BACKEND` | WAA 后端 `spidermonkey` 或 `camoufox`，其他取值按 `spidermonkey`；未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey` | `spidermonkey` |
 | `MEDIA_OUTPUT` | Chat Completions 与 Messages 正文中生成媒体的引用方式 `inline` 或 `url` | `inline` |
 | `MEDIA_BASE_URL` | 媒体 URL 的服务地址，`http` 或 `https`；留空时取请求的协议与 Host | 空 |
 
@@ -437,7 +442,7 @@ API 试用页位于 `web/src/playground/`，路由与官网相同（`/prompts/ne
 
 ## 6. 构建与贡献
 
-本地数据库使用经 cgo 编译的 SQLite，`internal/waa` 经 cgo 链接 SpiderMonkey 静态库，构建需要 C/C++ 编译器与当前平台的静态库：Windows 为 llvm-mingw 的 UCRT 版 clang，macOS 为 Xcode Command Line Tools，Linux 命令行版为 Zig、桌面版为 gcc；静态库来自 [Mag1cFall/firefox Releases](https://github.com/Mag1cFall/firefox/releases)，下载与 `CC`、`CXX`、`CGO_CXXFLAGS`、`CGO_LDFLAGS` 的设置见 README 的源码构建一节。发布二进制前先构建前端：
+本地数据库使用经 cgo 编译的 SQLite，`internal/waa` 经 cgo 链接 SpiderMonkey 静态库，`internal/imagecodec/libwebp` 经 cgo 链接 libwebp 静态库，构建需要 C/C++ 编译器与当前平台的静态库：Windows 为 llvm-mingw 的 UCRT 版 clang，macOS 为 Xcode Command Line Tools，Linux 命令行版为 Zig、桌面版为 gcc；静态库分别来自 [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) 与 [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases) 的 Releases，下载与 `CC`、`CXX`、`CGO_CPPFLAGS`、`CGO_LDFLAGS` 的设置见 README 的源码构建一节。发布二进制前先构建前端：
 
 ```powershell
 cd web
@@ -485,7 +490,7 @@ wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/wi
 
 Camoufox 在首次浏览器登录时准备；`WAA_BACKEND=camoufox` 时在首次启动时自动准备。贡献内容聚焦单一功能或协议变更，并使用脱敏后的请求与响应样例。
 
-GitHub Actions 对 `main` 提交和 Pull Request 执行前端类型检查、lint 与格式检查，以及 `go.mod` 最低版本的 Go 检查。前端产物由单独的构建任务产出并在各 Go 任务间共享；单元测试、vet、Linux 两个架构的命令行包、Windows 包与各桌面包并行运行，各任务经 `.github/actions/spidermonkey` 下载对应目标的 SpiderMonkey 静态库。Go 模块与编译缓存按任务、目标架构和工具链在 `main` 推送时保存，标签与 Pull Request 构建恢复 `main` 的缓存，SQLite 与 SpiderMonkey 绑定的 C/C++ 编译产物随 Go 编译缓存复用。发布包使用当前稳定版 Go 构建：
+GitHub Actions 的 `checks.yml` 对 Pull Request 与 `main` 推送执行前端类型检查、lint 与格式检查，以及 `go.mod` 最低版本的 Go 单元测试与 vet；`build.yml` 在 `v*` 标签上先运行同一组检查，再并行构建 Linux 两个架构的命令行版、Windows 版与各桌面版，以最高压缩级别打包，并发布 Release 与 Docker 镜像，手动触发时只编译与链接。前端产物由单独的构建任务产出并在各 Go 任务间共享，各任务经 `.github/actions/static-libraries` 下载对应目标的 SpiderMonkey 与 libwebp 静态库。Go 模块与编译缓存按任务、目标架构和工具链保存：检查任务在 `main` 推送时保存，Pull Request 与标签构建中的检查恢复 `main` 的缓存；构建任务每次构建后保存，同一标签重新构建时恢复；SQLite、SpiderMonkey 与 libwebp 绑定的 C/C++ 编译产物随 Go 编译缓存复用。发布包使用当前稳定版 Go 构建：
 
 - Windows amd64：桌面版 zip，只含 `aistudio2api.exe`
 - macOS：arm64 与 amd64 合并的桌面版，ad-hoc 签名的 `AIStudio2API.app` 打成 zip 与 LZMA 压缩的 dmg
@@ -498,7 +503,7 @@ Linux 命令行版与 Docker 镜像中的程序由 `zig cc` 以 musl 静态链�
 
 - 推送 `v*` 版本标签后自动创建 Release 并附上这些发布包；含 `-` 的标签发布为预发布版本
 - 同一标签的 linux/amd64 与 linux/arm64 镜像以 Dockerfile 的 `release` 目标装入该标签的 Linux 命令行版程序，推送到 `ghcr.io/mag1cfall/aistudio2api`，正式版本同时更新 `latest`
-- 普通构建产物在 Actions 中保留七天，Release 附件长期保留
+- 标签构建的发布包在 Actions 中保留七天，Release 附件长期保留
 
 管理端“版本”页的在线更新由 `internal/app/update.go` 实现：
 

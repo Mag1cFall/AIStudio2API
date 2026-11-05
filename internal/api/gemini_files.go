@@ -30,6 +30,9 @@ const geminiFilesURIPrefix = "https://generativelanguage.googleapis.com/v1beta/f
 // geminiUploadTTL 为可续传上传会话在两次请求之间的保留时长
 const geminiUploadTTL = time.Hour
 
+// geminiFileRetention 为 Files API 上传文件自上传起的保留时长
+const geminiFileRetention = 48 * time.Hour
+
 // geminiFileNames 把 Drive 文件 ID 编码为 Files API 资源 ID 允许的小写字母与数字
 var geminiFileNames = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -199,22 +202,43 @@ func geminiPublicFileID(metadata aistudio.FileMetadata) string {
 	return cmp.Or(metadata.Alias, geminiFileID(metadata.ID))
 }
 
+// geminiFileResource 是 Files API 的 File 资源，字段按 proto 字段号排列
+type geminiFileResource struct {
+	Name           string                   `json:"name"`
+	DisplayName    string                   `json:"displayName"`
+	MIMEType       string                   `json:"mimeType"`
+	SizeBytes      string                   `json:"sizeBytes"`
+	CreateTime     string                   `json:"createTime"`
+	UpdateTime     string                   `json:"updateTime"`
+	ExpirationTime string                   `json:"expirationTime,omitempty"`
+	SHA256Hash     string                   `json:"sha256Hash,omitempty"`
+	URI            string                   `json:"uri"`
+	State          string                   `json:"state"`
+	VideoMetadata  *geminiVideoFileMetadata `json:"videoMetadata,omitempty"`
+	Source         string                   `json:"source"`
+}
+
+// geminiVideoFileMetadata 是 File 资源的视频时长
+type geminiVideoFileMetadata struct {
+	VideoDuration string `json:"videoDuration"`
+}
+
 // geminiFileObject 构造 Files API 的 File 资源
-func geminiFileObject(metadata aistudio.FileMetadata) map[string]any {
+func geminiFileObject(metadata aistudio.FileMetadata) geminiFileResource {
 	id := geminiPublicFileID(metadata)
 	created := metadata.CreatedAt.UTC().Format(time.RFC3339Nano)
-	object := map[string]any{
-		"name": "files/" + id, "displayName": metadata.Name, "mimeType": metadata.MIME,
-		"sizeBytes": strconv.FormatInt(metadata.Size, 10), "createTime": created, "updateTime": created,
-		"uri": geminiFilesURIPrefix + id, "state": "ACTIVE", "source": "UPLOADED",
+	file := geminiFileResource{
+		Name: "files/" + id, DisplayName: metadata.Name, MIMEType: metadata.MIME,
+		SizeBytes: strconv.FormatInt(metadata.Size, 10), CreateTime: created, UpdateTime: created,
+		SHA256Hash: metadata.SHA256, URI: geminiFilesURIPrefix + id, State: "ACTIVE", Source: "UPLOADED",
 	}
-	if metadata.SHA256 != "" {
-		object["sha256Hash"] = metadata.SHA256
+	if !metadata.ExpiresAt.IsZero() {
+		file.ExpirationTime = metadata.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
 	if metadata.VideoDuration > 0 {
-		object["videoMetadata"] = map[string]any{"videoDuration": strconv.FormatFloat(metadata.VideoDuration.Seconds(), 'f', -1, 64) + "s"}
+		file.VideoMetadata = &geminiVideoFileMetadata{VideoDuration: strconv.FormatFloat(metadata.VideoDuration.Seconds(), 'f', -1, 64) + "s"}
 	}
-	return object
+	return file
 }
 
 // handleGeminiFileUpload 按 X-Goog-Upload-Protocol 或 uploadType 开始可续传上传或完成 multipart 上传
@@ -447,6 +471,7 @@ func uploadGeminiFile(ctx context.Context, service aistudio.FileService, alias s
 	}
 	ref, err := service.UploadFile(ctx, aistudio.UploadRequest{
 		Alias: alias, Name: name, MIME: mediaType, Purpose: defaultFilePurpose, Size: -1, MaxSize: openAIFileMaxBytes, Reader: stream,
+		ExpiresAfter: geminiFileRetention,
 	})
 	if err != nil {
 		return aistudio.FileMetadata{}, err
@@ -665,7 +690,7 @@ func (s *server) handleGeminiFileList(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
-	objects := make([]map[string]any, 0, len(page))
+	objects := make([]geminiFileResource, 0, len(page))
 	for _, file := range page {
 		objects = append(objects, geminiFileObject(file))
 	}

@@ -28,7 +28,7 @@ func readTestEnv(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestSaveWritesOnlyChangedKeys 核对保存只写与默认值不同的键，未写的键取当前默认值
+// TestSaveWritesOnlyChangedKeys 核对保存写入 WAA 后端与其余和默认值不同的键，未写的键取当前默认值
 func TestSaveWritesOnlyChangedKeys(t *testing.T) {
 	path := writeTestEnv(t, "")
 	cfg := Default()
@@ -36,7 +36,7 @@ func TestSaveWritesOnlyChangedKeys(t *testing.T) {
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\n" {
+	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=spidermonkey\n" {
 		t.Fatalf(".env = %q", got)
 	}
 	loaded, err := Load(path)
@@ -47,12 +47,12 @@ func TestSaveWritesOnlyChangedKeys(t *testing.T) {
 
 // TestLoadInvalidValueUsesDefault 核对取值无效的项按默认值加载并记录键与原值
 func TestLoadInvalidValueUsesDefault(t *testing.T) {
-	path := writeTestEnv(t, "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=go\nPER_ACCOUNT_CONCURRENCY=abc\nWARM_WORKER_LIMIT=30\n")
+	path := writeTestEnv(t, "ROUTING_STRATEGY=fill-first\nMEDIA_OUTPUT=file\nPER_ACCOUNT_CONCURRENCY=abc\nWARM_WORKER_LIMIT=30\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.WAABackend != WAABackendSpiderMonkey || cfg.PerAccountConcurrency != defaultAccountConcurrency ||
+	if cfg.MediaOutput != MediaOutputInline || cfg.PerAccountConcurrency != defaultAccountConcurrency ||
 		cfg.WarmWorkerLimit != defaultWarmWorkerLimit || cfg.MaxActiveWorkers != defaultMaxActiveWorkers || cfg.RoutingStrategy != "fill-first" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
@@ -61,7 +61,7 @@ func TestLoadInvalidValueUsesDefault(t *testing.T) {
 		keys = append(keys, item.Key+"="+item.Value)
 	}
 	slices.Sort(keys)
-	if !slices.Equal(keys, []string{"PER_ACCOUNT_CONCURRENCY=abc", "WAA_BACKEND=go", "WARM_WORKER_LIMIT=30"}) {
+	if !slices.Equal(keys, []string{"MEDIA_OUTPUT=file", "PER_ACCOUNT_CONCURRENCY=abc", "WARM_WORKER_LIMIT=30"}) {
 		t.Fatalf("invalid = %v", keys)
 	}
 }
@@ -87,7 +87,7 @@ func TestEnvironmentKeepsSavedFile(t *testing.T) {
 	if err := update.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nREQUEST_BODY_LOG=true\n" {
+	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=spidermonkey\nREQUEST_BODY_LOG=true\n" {
 		t.Fatalf(".env = %q", got)
 	}
 }
@@ -119,7 +119,7 @@ func TestAPIKeyAccounts(t *testing.T) {
 // TestEnvInvalidSecretOmitsValue 核对取值无效的凭据配置项只记录键名与原因，不记录原值
 func TestEnvInvalidSecretOmitsValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("PROXY=http://alice:s3cret@127.0.0.1:notaport\nWAA_BACKEND=go\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("PROXY=http://alice:s3cret@127.0.0.1:notaport\nMEDIA_OUTPUT=file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -133,21 +133,21 @@ func TestEnvInvalidSecretOmitsValue(t *testing.T) {
 	if value, ok := values["PROXY"]; !ok || value != "" {
 		t.Fatalf("PROXY 无效记录=%q 存在=%v", value, ok)
 	}
-	if values["WAA_BACKEND"] != "go" {
-		t.Fatalf("WAA_BACKEND 无效记录=%q", values["WAA_BACKEND"])
+	if values["MEDIA_OUTPUT"] != "file" {
+		t.Fatalf("MEDIA_OUTPUT 无效记录=%q", values["MEDIA_OUTPUT"])
 	}
 }
 
 // TestEnvKeepEnvironmentKeepsInvalid 核对保存设置时环境变量决定的无效项仍列在无效记录中
 func TestEnvKeepEnvironmentKeepsInvalid(t *testing.T) {
-	t.Setenv("WAA_BACKEND", "go")
+	t.Setenv("MEDIA_OUTPUT", "file")
 	path := filepath.Join(t.TempDir(), ".env")
 	saved, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	kept := Default().KeepEnvironment(saved)
-	if len(kept.Invalid) != 1 || kept.Invalid[0].Key != "WAA_BACKEND" || kept.WAABackend != WAABackendSpiderMonkey {
-		t.Fatalf("保存后无效记录=%v 后端=%q", kept.Invalid, kept.WAABackend)
+	if len(kept.Invalid) != 1 || kept.Invalid[0].Key != "MEDIA_OUTPUT" || kept.MediaOutput != MediaOutputInline {
+		t.Fatalf("保存后无效记录=%v 媒体输出=%q", kept.Invalid, kept.MediaOutput)
 	}
 }

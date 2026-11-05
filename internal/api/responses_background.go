@@ -99,8 +99,10 @@ func (s *server) streamBackground(w http.ResponseWriter, r *http.Request, reques
 	following := make(chan struct{})
 	go func() {
 		defer close(following)
-		if streamHeaders(w) == nil {
-			_ = stream.follow(r.Context(), w, -1)
+		out, err := openStream(w, sseHeartbeat)
+		defer out.stop()
+		if err == nil {
+			_ = stream.follow(r.Context(), out, -1)
 		}
 	}()
 	defer func() {
@@ -136,7 +138,7 @@ func (s *server) streamBackground(w http.ResponseWriter, r *http.Request, reques
 	}
 }
 
-// streamLog 是后台流式响应写出的事件帧，下标即 sequence_number；作为 http.ResponseWriter 接收写出器的帧，心跳注释帧不记录
+// streamLog 是后台流式响应写出的事件帧，下标即 sequence_number；作为 http.ResponseWriter 接收写出器的帧
 type streamLog struct {
 	header http.Header
 	mu     sync.Mutex
@@ -161,9 +163,6 @@ func (l *streamLog) Flush() {}
 
 // Write 记录一个事件帧并唤醒跟随者
 func (l *streamLog) Write(frame []byte) (int, error) {
-	if bytes.HasPrefix(frame, []byte(":")) {
-		return len(frame), nil
-	}
 	l.mu.Lock()
 	l.frames = append(l.frames, bytes.Clone(frame))
 	close(l.wake)
@@ -180,11 +179,9 @@ func (l *streamLog) finish() {
 	l.mu.Unlock()
 }
 
-// follow 把序号 after 之后的事件帧写给客户端并跟随到事件写完、客户端断开或写出失败，等待新事件时按心跳间隔写注释帧
+// follow 把序号 after 之后的事件帧写给客户端并跟随到事件写完、客户端断开或写出失败
 func (l *streamLog) follow(ctx context.Context, w http.ResponseWriter, after int) error {
 	next := after + 1
-	heartbeat := time.NewTimer(streamHeartbeatInterval)
-	defer heartbeat.Stop()
 	for {
 		l.mu.Lock()
 		frames, done, wake := l.frames[min(next, len(l.frames)):], l.done, l.wake
@@ -203,15 +200,10 @@ func (l *streamLog) follow(ctx context.Context, w http.ResponseWriter, after int
 		if done {
 			return nil
 		}
-		heartbeat.Reset(streamHeartbeatInterval)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-wake:
-		case <-heartbeat.C:
-			if err := writeSSEHeartbeat(w); err != nil {
-				return err
-			}
 		}
 	}
 }

@@ -80,10 +80,11 @@ func (s *server) resumeResponseStream(w http.ResponseWriter, r *http.Request) {
 		}
 		after = parsed
 	}
-	if streamHeaders(w) != nil {
-		return
+	out, err := openStream(w, sseHeartbeat)
+	defer out.stop()
+	if err == nil {
+		_ = stream.follow(r.Context(), out, after)
 	}
-	_ = stream.follow(r.Context(), w, after)
 }
 
 // handleResponseDelete 删除已保存的响应

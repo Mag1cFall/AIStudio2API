@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -173,11 +172,13 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if request.Stream {
-		if err := streamHeaders(w); err != nil {
+		stream, err := openStream(w, anthropicHeartbeat)
+		defer stream.stop()
+		if err != nil {
 			return
 		}
 		writer := &anthropicStreamWriter{
-			send: sseSender(w), id: messageID, model: request.Model,
+			send: sseSender(stream), id: messageID, model: request.Model,
 			inputTokens: <-estimate, startUsage: startUsage,
 			searchKey: s.config.APIKey, omitted: request.thinkingOmitted(),
 			media: s.mediaOutputFor(r), context: contextResult, search: s.anthropicSearchable(r.Context(), generateRequest),
@@ -583,7 +584,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 				if err != nil {
 					return nil, fmt.Errorf("%s source data: %w", block.Type, err)
 				}
-				mediaType, data := normalizeImagePayload(source.MediaType, data)
+				mediaType, data := normalizeImagePayload(attachmentMIME(source.MediaType, block.Title, data), data)
 				parts = append(parts, aistudio.Part{InlineData: &aistudio.Blob{MIME: mediaType, Data: data}, DisplayName: block.Title})
 			case "url":
 				if media, ok := aistudio.ExternalMediaForURL(source.URL); ok {
@@ -1239,22 +1240,9 @@ func (s *server) anthropicSearchable(ctx context.Context, request aistudio.Gener
 	return model.Capabilities["assistant_route"]
 }
 
-// streamAnthropic 写出流式事件，正文推迟到搜索块之后时按最后一次写出的时间补发 ping
+// streamAnthropic 写出流式事件
 func (s *server) streamAnthropic(r *http.Request, writer *anthropicStreamWriter, events <-chan aistudio.Event) {
-	send, sent := writer.send, time.Now()
-	writer.send = func(eventType string, payload any) error {
-		sent = time.Now()
-		return send(eventType, payload)
-	}
-	ping := func() error {
-		return writer.send("ping", map[string]string{"type": "ping"})
-	}
-	result, err := consumeStreamEvents(r.Context(), events, func(event aistudio.Event) error {
-		if err := writer.live(event); err != nil || time.Since(sent) < streamHeartbeatInterval {
-			return err
-		}
-		return ping()
-	}, ping)
+	result, err := consumeStreamEvents(r.Context(), events, writer.live)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			_ = writer.error(err)
