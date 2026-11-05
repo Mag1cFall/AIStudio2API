@@ -368,7 +368,7 @@ func encodePart(part Part) ([]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("function call arguments: %w", err)
 		}
-		call := []any{part.FunctionCall.Name, arguments}
+		call := []any{wireFunctionName(part.FunctionCall.Name), arguments}
 		if part.FunctionCall.ID != "" {
 			call = append(call, part.FunctionCall.ID)
 		}
@@ -388,7 +388,7 @@ func encodePart(part Part) ([]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("function result content: %w", err)
 		}
-		result := []any{part.FunctionResult.Name, response}
+		result := []any{wireFunctionName(part.FunctionResult.Name), response}
 		if part.FunctionResult.ID != "" {
 			result = append(result, part.FunctionResult.ID)
 		}

@@ -125,3 +125,49 @@ func TestToolSchemaKeepsFileTools(t *testing.T) {
 		t.Fatal("原始工具集发生变化")
 	}
 }
+
+// TestToolSchemaLongFunctionNames 验证超过 63 字符的函数名以不超过 63 字符的同一名称声明与回传历史，上游调用以原名交给客户端
+func TestToolSchemaLongFunctionNames(t *testing.T) {
+	prefix := "mcp__codex_apps__codex_document_control___execute_document_"
+	names := []string{prefix + "command", prefix + "commands", "Read"}
+	functions := make([]FunctionDeclaration, 0, len(names))
+	for _, name := range names {
+		functions = append(functions, FunctionDeclaration{Name: name, Parameters: json.RawMessage(`{"type":"object"}`)})
+	}
+	wire, _, err := encodeRequestedTools(Tools{Functions: functions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make([]string, 0, len(names))
+	for _, declaration := range wire[0].([]any)[1].([]any) {
+		sent = append(sent, declaration.([]any)[0].(string))
+	}
+	if len(sent[0]) > 63 || len(sent[1]) > 63 || sent[0] == sent[1] || sent[2] != "Read" {
+		t.Fatalf("声明的函数名 %q", sent)
+	}
+	contents, err := encodeContents([]Content{
+		{Role: RoleUser, Parts: []Part{{Text: "run"}}},
+		{Role: RoleAssistant, Parts: []Part{{FunctionCall: &FunctionCall{ID: "call-1", Name: names[0], Arguments: json.RawMessage(`{}`)}}}},
+		{Role: RoleUser, Parts: []Part{{FunctionResult: &FunctionResult{ID: "call-1", Name: names[0], Content: json.RawMessage(`{"ok":true}`)}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, _ := json.Marshal(contents)
+	if strings.Count(string(history), `"`+sent[0]+`"`) != 2 || strings.Contains(string(history), names[0]) {
+		t.Fatalf("历史中的函数名与声明不一致: %s", history)
+	}
+	var received []string
+	emit := restoreFunctionNames(functions, func(event Event) error {
+		received = append(received, event.FunctionCall.Name)
+		return nil
+	})
+	for _, name := range sent {
+		if err := emit(Event{Kind: EventToolCall, FunctionCall: &FunctionCall{Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(received, names) {
+		t.Fatalf("回传的函数名 %q", received)
+	}
+}
