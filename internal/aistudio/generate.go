@@ -1151,7 +1151,7 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 		return nil, nil, err
 	}
 	return response, func(source io.Reader, emit func(Event) error) error {
-		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, emit)
+		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, restoreFunctionNames(request.Tools.Functions, emit))
 	}, nil
 }
 

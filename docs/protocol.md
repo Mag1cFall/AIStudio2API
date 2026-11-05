@@ -831,6 +831,8 @@ Interactions 的 `google_search`、`google_maps`、`computer_use`、`mcp_server`
 
 编码器将全部函数声明合并为一个 Tool entry；Google Search 与 Image Search 合并为一个 search entry 并分别占用 `searchTypes` 索引 `0/1`；Code Execution、URL Context 与 Maps 各占一个 entry。Google Maps 与 Code Execution/URL Context 构成互斥工具组，每个请求选择其中一组。Anthropic server tool 的定义规则见“Anthropic Messages”节。
 
+Playground 的 `GenerateContent` 与 `CountTokens` 接受最长 63 字符的函数名。更长的名称在函数声明、历史函数调用与函数结果中统一编码为原名的前 50 个字符、`_` 与原名 SHA-256 前 6 字节的十六进制，共 63 字符；上游返回的函数调用在交给公开协议前换回声明的原名。写代码助手与 Live 会话按原名发送。
+
 函数 JSON Struct 使用 protobuf `Struct/Value` 数组：map 为 `[[[key,value],...]]`；Value oneof 索引 `0..5` 分别表示 null、number、string、bool、Struct、ListValue。对象键排序后编码。
 
 例如以下函数参数：

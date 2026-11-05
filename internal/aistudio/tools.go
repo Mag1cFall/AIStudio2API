@@ -1,6 +1,8 @@
 package aistudio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -25,6 +27,7 @@ func encodeRequestedTools(tools Tools) ([]any, bool, error) {
 	if len(tools.Functions) > 0 {
 		declarations := make([]any, 0, len(tools.Functions))
 		for index, declaration := range tools.Functions {
+			declaration.Name = wireFunctionName(declaration.Name)
 			encoded, err := encodeFunctionDeclaration(declaration)
 			if err != nil {
 				return nil, false, fmt.Errorf("编码 function declaration %d: %w", index, err)
@@ -189,6 +192,42 @@ func functionBehavior(declaration FunctionDeclaration) (string, int64, error) {
 		return "", 0, fmt.Errorf("behavior %q 无效，可用 BLOCKING 或 NON_BLOCKING", declaration.Behavior)
 	}
 	return name, value, nil
+}
+
+// maxWireFunctionNameLength 是 Playground GenerateContent 与 CountTokens 接受的最长函数名
+const maxWireFunctionNameLength = 63
+
+// wireFunctionName 返回发往 Playground 的函数名，超长时截短并以原名的哈希结尾
+func wireFunctionName(name string) string {
+	if len(name) <= maxWireFunctionNameLength {
+		return name
+	}
+	digest := sha256.Sum256([]byte(name))
+	suffix := "_" + hex.EncodeToString(digest[:6])
+	return name[:maxWireFunctionNameLength-len(suffix)] + suffix
+}
+
+// restoreFunctionNames 在 emit 前把函数调用中的 Playground 函数名换回声明的原名
+func restoreFunctionNames(functions []FunctionDeclaration, emit func(Event) error) func(Event) error {
+	originals := map[string]string{}
+	for _, declaration := range functions {
+		if wire := wireFunctionName(declaration.Name); wire != declaration.Name {
+			originals[wire] = declaration.Name
+		}
+	}
+	if len(originals) == 0 {
+		return emit
+	}
+	return func(event Event) error {
+		if event.FunctionCall != nil {
+			if name, ok := originals[event.FunctionCall.Name]; ok {
+				call := *event.FunctionCall
+				call.Name = name
+				event.FunctionCall = &call
+			}
+		}
+		return emit(event)
+	}
 }
 
 func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
