@@ -857,12 +857,23 @@ func (manager *accountWorkerManager) waitOpening(ctx context.Context, accountID 
 	if opening == nil {
 		return nil
 	}
+	endWait := beginOpeningWait(ctx)
+	defer endWait()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-opening:
 		return nil
 	}
+}
+
+// beginOpeningWait 把 ctx 中的账户租约标记为等待 Worker 启动占位，让启动中的认证续签不等待它，ctx 没有租约时为空操作
+func beginOpeningWait(ctx context.Context) func() {
+	lease, ok := aistudio.AccountLeaseFromContext(ctx)
+	if !ok {
+		return func() {}
+	}
+	return lease.BeginOpeningWait()
 }
 
 // residentWorker 返回账户已就绪的常驻 Worker，没有时返回 nil
@@ -1312,7 +1323,7 @@ func (manager *accountWorkerManager) evictIdleWorker(ctx context.Context, accoun
 	return true, errors.Join(resetErr, releaseErr)
 }
 
-// ensureWorker 返回账户就绪的 Worker，没有时在峰值上限内启动，满额时替换空闲的其他账户 Worker；warmOnly 为 true 时只在常驻名额未满时启动，不替换其他账户的 Worker
+// ensureWorker 返回账户就绪的 Worker，没有时在峰值上限内启动，满额时替换空闲的其他账户 Worker；warmOnly 为 true 时只在常驻名额未满时启动，不替换其他账户的 Worker；ctx 没有账户租约时先取得同一账户的租约
 func (manager *accountWorkerManager) ensureWorker(
 	ctx context.Context,
 	accountID string,
@@ -1331,6 +1342,14 @@ func (manager *accountWorkerManager) ensureWorker(
 	if err != nil {
 		return nil, err
 	}
+	if _, leased := aistudio.AccountLeaseFromContext(ctx); !leased {
+		lease, err := manager.pool.AcquireFor(ctx, aistudio.AccountSelection{AccountID: accountID})
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Release()
+		ctx = aistudio.ContextWithAccountLease(ctx, lease)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1341,10 +1360,13 @@ func (manager *accountWorkerManager) ensureWorker(
 			if !waitForOpening {
 				return nil, errAccountWorkerOpening
 			}
+			endWait := beginOpeningWait(ctx)
 			select {
 			case <-ctx.Done():
+				endWait()
 				return nil, ctx.Err()
 			case <-opening:
+				endWait()
 				continue
 			}
 		}

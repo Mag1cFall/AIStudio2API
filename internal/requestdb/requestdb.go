@@ -41,7 +41,7 @@ const rollupColumns = `
  state TEXT NOT NULL, status INTEGER NOT NULL, requests INTEGER NOT NULL,
  input_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, reply_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
  duration_ms INTEGER NOT NULL, first_event_ms INTEGER NOT NULL, first_events INTEGER NOT NULL, queue_ms INTEGER NOT NULL,
- duration_hist BLOB NOT NULL, first_event_hist BLOB NOT NULL, last_time INTEGER NOT NULL, cached_tokens INTEGER NOT NULL,
+ duration_hist BLOB NOT NULL, first_event_hist BLOB NOT NULL, last_time INTEGER NOT NULL, cached_tokens INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY (start, model, account, channel, protocol, state, status)`
 
 const schema = `
@@ -51,14 +51,13 @@ CREATE TABLE IF NOT EXISTS requests (
  duration_ms INTEGER NOT NULL, first_event_ms INTEGER NOT NULL, queue_ms INTEGER NOT NULL,
  input_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, reply_tokens INTEGER NOT NULL,
  total_tokens INTEGER NOT NULL, tool_calls INTEGER NOT NULL, error TEXT NOT NULL, attempts TEXT NOT NULL,
- cached_tokens INTEGER NOT NULL);
+ cached_tokens INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS requests_time ON requests(time);
 CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model, time);
 CREATE INDEX IF NOT EXISTS requests_account_time ON requests(account, time);
 CREATE INDEX IF NOT EXISTS requests_state_time ON requests(state, time);
 CREATE TABLE IF NOT EXISTS hours (` + rollupColumns + `) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS days (` + rollupColumns + `) WITHOUT ROWID;
-DROP TABLE IF EXISTS bodies;
 CREATE TABLE IF NOT EXISTS request_bodies (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, time INTEGER NOT NULL,
  request BLOB NOT NULL, request_size INTEGER NOT NULL, response BLOB NOT NULL, response_size INTEGER NOT NULL);`
@@ -113,39 +112,17 @@ func Open(path string, log Logger) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sqlitedb.Open(path)
+	db, err := sqlitedb.Open(path, schema)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("初始化请求账本: %w", err)
 	}
 	db.SetMaxOpenConns(4)
-	if _, err := db.Exec(schema); err != nil {
-		return nil, errors.Join(fmt.Errorf("初始化请求账本: %w", err), db.Close())
-	}
-	if err := addCachedTokens(db); err != nil {
-		return nil, errors.Join(fmt.Errorf("初始化请求账本: %w", err), db.Close())
-	}
 	store := &Store{db: db, writes: make(chan write, queueLimit), done: make(chan struct{}), log: log}
 	if err := store.alignDays(); err != nil {
 		return nil, errors.Join(fmt.Errorf("重建本地日汇总: %w", err), db.Close())
 	}
 	go store.run()
 	return store, nil
-}
-
-// addCachedTokens 为没有缓存 token 列的请求与汇总表追加该列，已有记录计为 0
-func addCachedTokens(db *sql.DB) error {
-	for _, table := range []string{"requests", "hours", "days"} {
-		var exists bool
-		if err := db.QueryRow(`SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = 'cached_tokens'`, table).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0`); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // Close 写完已排队的记录后关闭数据库

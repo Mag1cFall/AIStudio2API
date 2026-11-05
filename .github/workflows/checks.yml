@@ -1,0 +1,113 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build Frontend
+        working-directory: web
+        run: |
+          npm ci
+          npx vp build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend
+          path: internal/webui/dist
+          retention-days: 1
+
+  web-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Check Frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm run format:check
+
+  checks:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        check: [test, vet]
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend
+          path: internal/webui/dist
+      - uses: actions/setup-go@v7
+        id: go
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+      - uses: ./.github/actions/static-libraries
+        with:
+          target: linux-amd64-gnu
+      - name: Run Unit Tests
+        if: matrix.check == 'test'
+        run: go test -mod=readonly -trimpath -vet=off ./cmd/... ./internal/...
+      - name: Check Minimum Go Version
+        if: matrix.check == 'vet'
+        run: |
+          go version
+          go vet -mod=readonly -trimpath ./...
+          go build -mod=readonly -trimpath ./cmd/aistudio2api
+      - name: Install Windows C Compiler
+        if: matrix.check == 'vet'
+        run: |
+          curl -fsSL https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/static-libraries
+        if: matrix.check == 'vet'
+        with:
+          target: windows-amd64
+      - name: Vet Windows Build
+        if: matrix.check == 'vet'
+        run: CC=x86_64-w64-mingw32-clang CXX=x86_64-w64-mingw32-clang++ GOOS=windows go vet -mod=readonly -trimpath -tags desktop,production ./...
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-checks-${{ matrix.check }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}

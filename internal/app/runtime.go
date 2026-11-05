@@ -182,7 +182,7 @@ type trackedService struct {
 type modelCatalogService interface {
 	RefreshAccountModels(context.Context, string, bool) ([]aistudio.Model, error)
 	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
-	ReclaimIdleInlineMedia(context.Context) error
+	ReclaimExpiredResources(context.Context) error
 	ReclaimIdleAssistantApplets(context.Context) error
 	CachedModels() []aistudio.Model
 }
@@ -832,12 +832,13 @@ func (service *trackedService) syncAccountModels(ctx context.Context, accountID 
 	return models, err
 }
 
-// retryModelCatalogs 每 30 秒重新载入待同步账户的页面重试目录，自 startedAt 起每 24 小时重新载入启用账户的页面读取权益与目录；闲置的写代码助手应用在启动时与每 10 分钟删除，闲置的内联附件每 10 分钟删除
+// retryModelCatalogs 每 30 秒重新载入待同步账户的页面重试目录，自 startedAt 起每 24 小时重新载入启用账户的页面读取权益与目录；闲置的写代码助手应用与到期资源在启动时与每 10 分钟删除
 func (service *trackedService) retryModelCatalogs(ctx context.Context, startedAt time.Time) {
 	var patrol sync.WaitGroup
 	defer patrol.Wait()
 	patrol.Go(func() { service.patrolAccountStates(ctx, startedAt) })
 	service.reclaimIdleAssistantApplets(ctx)
+	service.reclaimExpiredResources(ctx)
 	ticker := time.NewTicker(modelCatalogRetryInterval)
 	defer ticker.Stop()
 	reclaimTicker := time.NewTicker(idleResourceReclaimInterval)
@@ -847,9 +848,7 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context, startedAt
 		case <-ctx.Done():
 			return
 		case <-reclaimTicker.C:
-			if err := service.catalog.ReclaimIdleInlineMedia(ctx); err != nil {
-				service.requests.log("service", "WARN", fmt.Sprintf("闲置内联附件删除失败: %v", err))
-			}
+			service.reclaimExpiredResources(ctx)
 			service.reclaimIdleAssistantApplets(ctx)
 		case <-ticker.C:
 			if !service.retryAccountModelCatalogs(ctx) {
@@ -863,6 +862,13 @@ func (service *trackedService) retryModelCatalogs(ctx context.Context, startedAt
 func (service *trackedService) reclaimIdleAssistantApplets(ctx context.Context) {
 	if err := service.catalog.ReclaimIdleAssistantApplets(ctx); err != nil {
 		service.requests.log("service", "WARN", fmt.Sprintf("闲置写代码助手应用删除失败: %v", err))
+	}
+}
+
+// reclaimExpiredResources 删除到期的内联附件、上传文件、生成视频与 Live 续接绑定，失败的留待下一轮
+func (service *trackedService) reclaimExpiredResources(ctx context.Context) {
+	if err := service.catalog.ReclaimExpiredResources(ctx); err != nil && ctx.Err() == nil {
+		service.requests.log("service", "WARN", fmt.Sprintf("到期资源删除失败: %v", err))
 	}
 }
 

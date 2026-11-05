@@ -74,6 +74,8 @@ type VideoOperation struct {
 	Prompt string
 	// CompletedAt 是结果视频登记时的 Unix 秒数，未完成时为 0
 	CompletedAt int64
+	// ExpiresAt 是结果视频到期删除的 Unix 秒数，没有结果视频时为 0
+	ExpiresAt int64
 	// Missing 为结果已无法得到的已结束任务的说明
 	Missing string
 	// Failure 为视频生成失败的错误
@@ -232,6 +234,9 @@ func applyVideoOperationBinding(operation *VideoOperation, binding ResourceBindi
 	operation.CreatedAt = binding.CreatedAt
 	operation.Prompt = binding.Video.Prompt
 	operation.CompletedAt = binding.Video.CompletedAt
+	if binding.Video.File != "" {
+		operation.ExpiresAt = binding.expiresAt().Unix()
+	}
 }
 
 func videoOutputSize(request VideoRequest) string {

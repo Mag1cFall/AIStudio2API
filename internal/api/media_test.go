@@ -15,9 +15,9 @@ func TestGeminiInlineDataCompatibility(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "camel case", raw: `[{"inlineData":{"mimeType":"application/octet-stream","data":"+//v"}}]`},
-		{name: "snake case", raw: `[{"inline_data":{"mime_type":"application/octet-stream","data":"-__v"}}]`},
-		{name: "data URL", raw: `[{"inlineData":{"mimeType":"application/octet-stream","data":"data:application/octet-stream;base64,+//v"}}]`},
+		{name: "camel case", raw: `[{"inlineData":{"mimeType":"image/png","data":"+//v"}}]`},
+		{name: "snake case", raw: `[{"inline_data":{"mime_type":"image/png","data":"-__v"}}]`},
+		{name: "data URL", raw: `[{"inlineData":{"mimeType":"image/png","data":"data:image/png;base64,+//v"}}]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw, _, err := geminiCamelKeys([]byte(test.raw))
@@ -35,7 +35,7 @@ func TestGeminiInlineDataCompatibility(t *testing.T) {
 			if hasResult || len(parts) != 1 || parts[0].InlineData == nil {
 				t.Fatalf("mapped parts=%#v hasResult=%v", parts, hasResult)
 			}
-			if parts[0].InlineData.MIME != "application/octet-stream" || !bytes.Equal(parts[0].InlineData.Data, want) {
+			if parts[0].InlineData.MIME != "image/png" || !bytes.Equal(parts[0].InlineData.Data, want) {
 				t.Fatalf("inline data=%#v", parts[0].InlineData)
 			}
 		})

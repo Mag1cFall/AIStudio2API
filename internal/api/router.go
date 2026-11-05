@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,8 @@ type Config struct {
 	Updates          UpdateService
 	// MediaDir 是媒体 URL 模式下生成媒体的保存目录
 	MediaDir string
+	// MediaLimit 是媒体目录的总字节上限，超过时删除最久未使用的文件
+	MediaLimit int64
 	// MediaLinks 返回媒体输出是否使用 URL 与设置的服务地址
 	MediaLinks func() (enabled bool, base string)
 	// ResponseModes 返回非流式保活与假流式设置
@@ -59,6 +62,8 @@ type server struct {
 	accountTasks      *accountTasks
 	// background 按响应 ID 保存进行中的 Responses 后台响应
 	background sync.Map
+	// media 是媒体 URL 模式的生成媒体目录
+	media *mediaStore
 }
 
 var idSequence atomic.Uint64
@@ -68,6 +73,12 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{
 		service: service, config: config, responseStates: newResponseStateStore(config.States), uploads: newGeminiUploads(), caches: newGeminiCaches(),
 		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{}, accountTasks: &accountTasks{},
+		media: &mediaStore{dir: config.MediaDir, limit: config.MediaLimit},
+	}
+	if config.MediaDir != "" {
+		if err := s.media.trim(); err != nil {
+			slog.Warn("媒体目录回收失败", "dir", config.MediaDir, "error", err)
+		}
 	}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)

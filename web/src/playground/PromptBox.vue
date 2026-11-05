@@ -24,6 +24,7 @@ import SampleMediaDialog, { type SampleSelection } from './SampleMediaDialog.vue
 import TokenCapDialog from './TokenCapDialog.vue'
 import { hasCode, isAgent } from './catalog'
 import { driveNames, type DriveFile } from './drive'
+import { fileMIME } from './file-types'
 import { readImage } from './media/api'
 import { useCompare, usePlayground } from './session'
 import { useAudioRecording } from './recording'
@@ -235,7 +236,7 @@ async function addFiles(files: Iterable<File>): Promise<void> {
   preparing.value += list.length
   for (const file of list) {
     try {
-      const part = await readFile(file)
+      const part = await readFile(file, fileMIME(file))
       part.fileName = file.name
       session.attachments.push(part)
       if (documentPart(part)) void countAttachment(session.attachments.at(-1)!)

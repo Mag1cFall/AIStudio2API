@@ -206,7 +206,7 @@ func (s *PooledService) renderOmniVideo(ctx context.Context, operationID string,
 		}
 		file, err := s.UploadFile(ctx, UploadRequest{
 			AccountID: generate.AccountID, Purpose: "assistants", Name: fmt.Sprintf("%s-image-%d", operationID, index),
-			MIME: image.MIME, Size: int64(len(image.Data)), Reader: bytes.NewReader(image.Data),
+			MIME: image.MIME, Size: int64(len(image.Data)), Reader: bytes.NewReader(image.Data), ExpiresAfter: temporaryFileRetention,
 		})
 		if err != nil {
 			return nil, err

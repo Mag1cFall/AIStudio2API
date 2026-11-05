@@ -442,10 +442,12 @@ func (s *server) handleCompactionTrigger(w http.ResponseWriter, r *http.Request,
 	created := time.Now().Unix()
 	var writer *responsesStreamWriter
 	if request.Stream {
-		if err := streamHeaders(w); err != nil {
+		stream, err := openStream(w, sseHeartbeat)
+		defer stream.stop()
+		if err != nil {
 			return
 		}
-		writer = newResponsesWriter(w, id, created, request)
+		writer = newResponsesWriter(stream, id, created, request)
 		for _, eventType := range []string{"response.created", "response.in_progress"} {
 			if err := writer.emit(eventType, map[string]any{"response": responseShell(id, created, "in_progress", request)}); err != nil {
 				return

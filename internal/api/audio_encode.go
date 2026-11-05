@@ -9,18 +9,18 @@ import (
 	"mime"
 	"strconv"
 
+	aacpcm "github.com/Mag1cFall/go-aac/pcm"
+	mp3 "github.com/Mag1cFall/go-mp3"
+	mp3pcm "github.com/Mag1cFall/go-mp3/pcm"
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/frame"
 	"github.com/mewkiz/flac/meta"
-	"github.com/oov/audio/resampler"
 	"github.com/thesyncim/gopus"
 	"github.com/thesyncim/gopus/container/ogg"
-	aacpcm "github.com/tphakala/go-aac/pcm"
-	mp3 "github.com/tphakala/go-mp3"
-	mp3pcm "github.com/tphakala/go-mp3/pcm"
 	"github.com/zaf/g711"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/resample"
 )
 
 // audioPCM 表示 16-bit 小端交错 PCM 及其采样率与声道数
@@ -36,9 +36,6 @@ type audioOutput struct {
 	SampleRate int
 	BitRate    int
 }
-
-// resamplerQuality 为 Speex 重采样器的最高质量档
-const resamplerQuality = 10
 
 // mp3SampleRates 为 MPEG-1 Layer III 编码器接受的输入采样率
 var mp3SampleRates = []int{32000, 44100, 48000}
@@ -133,29 +130,12 @@ func supportedSampleRate(rate int, rates []int) int {
 	return rates[len(rates)-1]
 }
 
-// resamplePCM 用 Speex 重采样器逐声道转换采样率，起止的滤波延迟已补偿
+// resamplePCM 把 PCM 转换为 rate 采样率
 func resamplePCM(audio audioPCM, rate int) audioPCM {
 	if rate == audio.SampleRate {
 		return audio
 	}
-	frames := len(audio.Data) / 2 / audio.Channels
-	outFrames := (frames*rate + audio.SampleRate - 1) / audio.SampleRate
-	converter := resampler.NewWithSkipZeros(audio.Channels, audio.SampleRate, rate, resamplerQuality)
-	input := make([]float64, frames+converter.InputLatency())
-	output := make([]float64, outFrames)
-	data := make([]byte, outFrames*audio.Channels*2)
-	for channel := range audio.Channels {
-		for frame := range frames {
-			input[frame] = float64(int16(binary.LittleEndian.Uint16(audio.Data[(frame*audio.Channels+channel)*2:])))
-		}
-		_, written := converter.ProcessFloat64(channel, input, output)
-		for frame, value := range output[:written] {
-			sample := int16(math.Round(max(math.MinInt16, min(math.MaxInt16, value))))
-			binary.LittleEndian.PutUint16(data[(frame*audio.Channels+channel)*2:], uint16(sample))
-		}
-		outFrames = min(outFrames, written)
-	}
-	return audioPCM{Data: data[:outFrames*audio.Channels*2], SampleRate: rate, Channels: audio.Channels}
+	return audioPCM{Data: resample.PCM(audio.Data, audio.Channels, audio.SampleRate, rate), SampleRate: rate, Channels: audio.Channels}
 }
 
 // mp3DefaultBitRate 为未指定码率时的 MP3 码率

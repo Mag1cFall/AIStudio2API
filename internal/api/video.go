@@ -512,6 +512,9 @@ func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 	if operation.CompletedAt != 0 {
 		object["completed_at"] = operation.CompletedAt
 	}
+	if operation.ExpiresAt != 0 {
+		object["expires_at"] = operation.ExpiresAt
+	}
 	if operation.Missing != "" {
 		object["error"] = map[string]any{"code": "video_not_found", "message": operation.Missing}
 	}
@@ -543,9 +546,7 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	}
 	media, err := service.DownloadFile(r.Context(), operation.File.ID)
 	if err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeOpenAIRequestError(w, err)
-		}
+		writeOpenAIVideoError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", cmp.Or(media.MIME, "video/mp4"))
