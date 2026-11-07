@@ -1625,36 +1625,20 @@ func geminiFinishReason(reason string) string {
 		return "FINISH_REASON_UNSPECIFIED"
 	case "max_tokens":
 		return "MAX_TOKENS"
-	case "safety":
-		return "SAFETY"
-	case "recitation":
-		return "RECITATION"
 	case "language":
 		return "LANGUAGE"
 	case "other":
 		return "OTHER"
-	case "blocklist":
-		return "BLOCKLIST"
-	case "prohibited_content":
-		return "PROHIBITED_CONTENT"
-	case "spii":
-		return "SPII"
 	case "malformed_function_call":
 		return "MALFORMED_FUNCTION_CALL"
-	case "image_safety":
-		return "IMAGE_SAFETY"
 	case "unexpected_tool_call":
 		return "UNEXPECTED_TOOL_CALL"
 	case "too_many_tool_calls":
 		return "TOO_MANY_TOOL_CALLS"
-	case "image_prohibited_content":
-		return "IMAGE_PROHIBITED_CONTENT"
 	case "image_other":
 		return "IMAGE_OTHER"
 	case "no_image":
 		return "NO_IMAGE"
-	case "image_recitation":
-		return "IMAGE_RECITATION"
 	case "missing_thought_signature":
 		return "MISSING_THOUGHT_SIGNATURE"
 	case "malformed_response":

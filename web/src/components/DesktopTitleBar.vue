@@ -30,7 +30,7 @@ onUnmounted(() => window.removeEventListener('resize', updateMaximised))
       <button
         type="button"
         :aria-label="t('window.minimise')"
-        class="flex h-full w-11 items-center justify-center text-gray-400 transition hover:bg-raised hover:text-white"
+        class="flex h-full w-11 items-center justify-center text-gray-400 transition [--wails-non-client-region:minimize] hover:bg-raised hover:text-white"
         @click="sendDesktop('minimise')"
       >
         <UiIcon name="windowMinimise" :size="14" />
@@ -38,7 +38,7 @@ onUnmounted(() => window.removeEventListener('resize', updateMaximised))
       <button
         type="button"
         :aria-label="maximised ? t('window.restore') : t('window.maximise')"
-        class="flex h-full w-11 items-center justify-center text-gray-400 transition hover:bg-raised hover:text-white"
+        class="flex h-full w-11 items-center justify-center text-gray-400 transition [--wails-non-client-region:maximize] hover:bg-raised hover:text-white"
         @click="sendDesktop('toggle-maximise')"
       >
         <UiIcon :name="maximised ? 'windowRestore' : 'windowMaximise'" :size="12" />
@@ -46,7 +46,7 @@ onUnmounted(() => window.removeEventListener('resize', updateMaximised))
       <button
         type="button"
         :aria-label="t('window.close')"
-        class="flex h-full w-11 items-center justify-center text-gray-400 transition hover:bg-red-600 hover:text-white"
+        class="flex h-full w-11 items-center justify-center text-gray-400 transition [--wails-non-client-region:close] hover:bg-[#c42b1c] hover:text-[#fff] active:bg-[#c42b1c]/90"
         @click="sendDesktop('close')"
       >
         <UiIcon name="close" :size="15" />
@@ -58,6 +58,7 @@ onUnmounted(() => window.removeEventListener('resize', updateMaximised))
 <style scoped>
 .desktop-drag {
   --wails-draggable: drag;
+  --wails-non-client-region: caption;
 }
 
 .desktop-no-drag {

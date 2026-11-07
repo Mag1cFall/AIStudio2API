@@ -1,9 +1,9 @@
 import { jsonBody } from '@/api'
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
-import { Capability, hasCode, isAgent, toolCodes, type Tool } from './catalog'
+import { Capability, hasCode, isAgent, isOmniModel, toolCodes, type Tool } from './catalog'
 import type { Protocol } from './protocols'
-import type { Part, RunSettings, Source, Support, Turn } from './types'
+import type { AgentEnvironment, Part, RunSettings, Source, Support, Turn } from './types'
 
 // GenerateRequest 是一次 Gemini API 生成请求的正文
 export interface GenerateRequest {
@@ -33,20 +33,38 @@ function parseJSON(text: string): unknown {
   }
 }
 
-// requestContents 把对话轮次写为 contents：去掉思考正文、出错的空轮次与附件的显示字段
-function requestContents(turns: readonly Turn[]): GenerateRequest['contents'] {
+// requestContents 把对话轮次写为 contents：去掉思考正文、出错的空轮次与附件的显示字段，Omni 与官网一样不发送视频设置
+function requestContents(turns: readonly Turn[], omni: boolean): GenerateRequest['contents'] {
   return turns
     .map((turn) => ({
       role: turn.role,
       parts: turn.parts
         .filter((part) => !(part.thought && part.text !== undefined && !part.thoughtSignature))
-        .map(apiPart),
+        .map((part) => (omni ? omitVideoSettings(apiPart(part)) : apiPart(part))),
     }))
     .filter((turn) => turn.parts.length > 0)
 }
 
-// apiPart 返回去掉试用页显示字段的片段，内联附件的文件名写为 inlineData.displayName
-export function apiPart({ fileName, tokenCount: _tokenCount, ...part }: Part): Part {
+// omitVideoSettings 返回去掉视频截取、帧率与处理方式的片段
+function omitVideoSettings({
+  videoMetadata: _metadata,
+  mediaProcessing: _mode,
+  ...part
+}: Part): Part {
+  return part
+}
+
+// apiPart 返回去掉试用页显示字段的片段：已上传 Drive 的附件只发送文件引用，内联数据只用于本页预览，内联附件的文件名写为 inlineData.displayName
+export function apiPart({
+  fileName,
+  fileExpires: _fileExpires,
+  tokenCount: _tokenCount,
+  ...part
+}: Part): Part {
+  if (part.fileData !== undefined && part.inlineData !== undefined) {
+    const { inlineData: _preview, ...uploaded } = part
+    return uploaded
+  }
   if (fileName === undefined || part.inlineData === undefined) return part
   return { ...part, inlineData: { ...part.inlineData, displayName: fileName } }
 }
@@ -122,7 +140,10 @@ export function buildRequest(
     if (Array.isArray(declarations) && declarations.length > 0)
       tools.push({ functionDeclarations: declarations })
   }
-  const request: GenerateRequest = { contents: requestContents(turns), generationConfig: config }
+  const request: GenerateRequest = {
+    contents: requestContents(turns, isOmniModel(model)),
+    generationConfig: config,
+  }
   if (settings.systemInstruction.trim() !== '' && hasCode(model, Capability.SystemInstruction)) {
     request.systemInstruction = { parts: [{ text: settings.systemInstruction }] }
   }
@@ -139,8 +160,24 @@ export function buildRequest(
   return request
 }
 
+// agentFields 返回 agent 请求的 agent_config 与 environment 字段，都不需要时为 undefined
+export function agentFields(
+  settings: RunSettings,
+  model: Model | undefined,
+): Record<string, unknown> | undefined {
+  const config = agentConfig(settings, model)
+  const environment = hasCode(model, Capability.RemoteEnvironment)
+    ? agentEnvironment(settings.environment)
+    : undefined
+  if (config === undefined && environment === undefined) return undefined
+  return {
+    ...(config !== undefined && { agent_config: config }),
+    ...(environment !== undefined && { environment }),
+  }
+}
+
 // agentConfig 按官方 Interactions REST 写出 agent 的 agent_config：Antigravity 为所选模型与 token 上限，都未设置时不发送；Deep Research 按思考摘要、可视化与协作规划的能力码写出这三项；其余模型不发送
-export function agentConfig(
+function agentConfig(
   settings: RunSettings,
   model: Model | undefined,
 ): Record<string, unknown> | undefined {
@@ -163,6 +200,39 @@ export function agentConfig(
   if (hasCode(model, Capability.CollaborativePlanning) && settings.collaborativePlanning)
     config.collaborative_planning = true
   return Object.keys(config).length > 0 ? { type: 'deep-research', ...config } : undefined
+}
+
+// agentEnvironment 按官方 Interactions REST 写出运行设置中的环境：已有环境与官网一样只发环境 ID，新环境带源或规则时为 remote 环境对象，没有规则时不发送 network，什么都没设置时不发送
+function agentEnvironment(
+  environment: AgentEnvironment,
+): string | Record<string, unknown> | undefined {
+  if (environment.type === 'existing') return environment.id.trim() || undefined
+  const sources = environment.sources
+  const allowlist = environment.rules
+    .filter((rule) => rule.domain.trim() !== '')
+    .map((rule) => {
+      const headers = rule.headers.filter((header) => header.name.trim() !== '')
+      return {
+        domain: rule.domain.trim(),
+        ...(headers.length > 0 && {
+          transform: Object.fromEntries(
+            headers.map((header) => [header.name.trim(), header.value]),
+          ),
+        }),
+      }
+    })
+  if (sources.length === 0 && allowlist.length === 0) return undefined
+  return {
+    type: 'remote',
+    ...(sources.length > 0 && {
+      sources: sources.map((source) =>
+        source.type === 'inline'
+          ? { type: 'inline', target: source.target, content: source.content }
+          : { type: source.type, source: source.source, target: source.target },
+      ),
+    }),
+    ...(allowlist.length > 0 && { network: { allowlist } }),
+  }
 }
 
 // continuation 与官网一样选取 Interactions 续接的起点：以 Interactions 发送且最后一个模型轮带交互 ID 时，以该 ID 续接并只发送其后的轮次，否则发送全部轮次

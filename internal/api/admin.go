@@ -250,6 +250,7 @@ type ChromeImportInput struct {
 // RuntimeConfig 表示全局运行配置
 type RuntimeConfig struct {
 	AutoStart                 bool                 `json:"auto_start"`
+	HideDockIcon              bool                 `json:"hide_dock_icon"`
 	RequestBodyLog            bool                 `json:"request_body_log"`
 	AdminAuthEnabled          bool                 `json:"admin_auth_enabled"`
 	AdminUsername             string               `json:"admin_username"`
@@ -354,6 +355,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cooldowns", s.handleCooldowns)
 	mux.HandleFunc("DELETE /api/accounts/{id}/cooldowns/{scope}", s.handleClearCooldown)
 	mux.HandleFunc("GET /api/requests", s.handleRequests)
+	mux.HandleFunc("POST /api/video-tokens", s.handleVideoTokens)
 	mux.HandleFunc("POST /api/requests/{id}/cancel", s.handleCancelRequest)
 	mux.HandleFunc("GET /api/events", s.handleAdminEvents)
 }

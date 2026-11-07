@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 
@@ -13,20 +14,24 @@ export interface Example {
   title: string
   prompt: string
   preview: string
+  video?: string
   detection?: { label: string; inset?: string }
 }
 
 defineProps<{
-  kind: 'music' | 'chat' | 'images' | 'robotics' | 'live'
+  kind: 'music' | 'chat' | 'images' | 'robotics' | 'live' | 'video'
   title: string
   description: string
   starters: readonly Starter[]
   examples: readonly Example[]
   clickableTitle?: boolean
   docs?: string | undefined
+  caption?: string | undefined
 }>()
 const emit = defineEmits<{ starter: [item: Starter]; example: [item: Example]; title: [] }>()
 const { t } = useI18n()
+// played 是指针或焦点到过的示例卡下标，卡片第一次被指向时才载入它的示例视频
+const played = ref(new Set<number>())
 </script>
 
 <template>
@@ -59,32 +64,64 @@ const { t } = useI18n()
           <UiIcon name="external" :size="14" class="empty-state__external-icon" />
         </a>
       </div>
-      <div class="empty-state__examples" :data-count="examples.length">
-        <div
-          v-for="(item, index) in examples"
-          :key="item.title"
-          class="tile"
-          :style="{ '--i': index }"
-        >
-          <button type="button" class="tile__frame" @click="emit('example', item)">
-            <span class="tile__media">
-              <span class="tile__halo" aria-hidden="true"></span>
-              <span class="tile__window">
-                <img :src="item.preview" alt="" />
-                <span
-                  v-if="item.detection"
-                  class="detection"
-                  :style="item.detection.inset ? { inset: item.detection.inset } : undefined"
-                  aria-hidden="true"
-                >
-                  <b>{{ item.detection.label }}</b>
+      <div class="empty-state__showcase">
+        <p v-if="caption" class="empty-state__examples-caption">
+          <svg class="empty-state__examples-caption-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="empty-state-caption-gradient" x1="0" y1="1" x2="1" y2="0">
+                <stop offset="33%" stop-color="#346bf1" />
+                <stop offset="49%" stop-color="#3186ff" />
+                <stop offset="66%" stop-color="#4fa0ff" />
+              </linearGradient>
+            </defs>
+            <path
+              fill="url(#empty-state-caption-gradient)"
+              d="M12 2c0 5.52 4.48 10 10 10-5.52 0-10 4.48-10 10 0-5.52-4.48-10-10-10 5.52 0 10-4.48 10-10z"
+            />
+          </svg>
+          {{ caption }}
+        </p>
+        <div class="empty-state__examples" :data-count="examples.length">
+          <div
+            v-for="(item, index) in examples"
+            :key="item.title"
+            class="tile"
+            :style="{ '--i': index }"
+            @pointerenter="played.add(index)"
+            @focusin="played.add(index)"
+          >
+            <button type="button" class="tile__frame" @click="emit('example', item)">
+              <span class="tile__media">
+                <span class="tile__halo" aria-hidden="true"></span>
+                <span class="tile__window">
+                  <img :src="item.preview" alt="" />
+                  <video
+                    v-if="item.video"
+                    class="tile__video"
+                    :src="played.has(index) ? item.video : undefined"
+                    autoplay
+                    muted
+                    loop
+                    playsinline
+                    preload="none"
+                    aria-hidden="true"
+                  ></video>
+                  <span
+                    v-if="item.detection"
+                    class="detection"
+                    :style="item.detection.inset ? { inset: item.detection.inset } : undefined"
+                    aria-hidden="true"
+                  >
+                    <b>{{ item.detection.label }}</b>
+                  </span>
                 </span>
               </span>
-            </span>
-            <span class="tile__label">
-              {{ item.title }}
-            </span>
-          </button>
+              <span class="tile__label">
+                <UiIcon v-if="item.video" name="playFill" :size="14" class="tile__play-icon" />
+                {{ item.title }}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -221,6 +258,32 @@ const { t } = useI18n()
 
 .starter:hover {
   background: var(--fill);
+}
+
+.empty-state__showcase {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.empty-state__examples-caption {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 21px;
+  animation: empty-arrive 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: 0.1s;
+}
+
+.empty-state__examples-caption-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
 }
 
 .empty-state__examples {
@@ -507,6 +570,76 @@ const { t } = useI18n()
   aspect-ratio: 1;
 }
 
+.tile__video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.tile:focus-within .tile__video,
+.tile:hover .tile__video {
+  opacity: 1;
+}
+
+.tile__play-icon {
+  flex: none;
+}
+
+.empty-state[data-kind='video'] .empty-state__examples {
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.empty-state[data-kind='video'] .tile__media {
+  aspect-ratio: 4 / 3;
+}
+
+.empty-state[data-kind='video'] .tile:nth-child(2) .tile__media {
+  aspect-ratio: auto;
+}
+
+.empty-state[data-kind='video'] .empty-state__examples[data-count='3'] {
+  grid-template-columns: 1fr 1.25fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.empty-state[data-kind='video'] .empty-state__examples[data-count='3'] .tile:first-child {
+  grid-row: 1 / -1;
+}
+
+.empty-state[data-kind='video']
+  .empty-state__examples[data-count='3']
+  .tile:first-child
+  .tile__media {
+  aspect-ratio: 9 / 16;
+}
+
+.empty-state[data-kind='video']
+  .empty-state__examples[data-count='3']
+  .tile:not(:first-child)
+  .tile__media {
+  aspect-ratio: auto;
+}
+
+.empty-state[data-kind='video'] img {
+  animation: empty-push-in calc(var(--empty-duration) * 2.5) ease-in-out infinite alternate;
+}
+
+@keyframes empty-push-in {
+  0% {
+    transform: scale(1.02);
+  }
+
+  to {
+    transform: scale(1.1) translate(-1.5%, 1%);
+  }
+}
+
 @container (max-width: 640px) {
   .empty-state {
     grid-template-columns: minmax(0, 1fr);
@@ -556,6 +689,8 @@ const { t } = useI18n()
 
 @media (prefers-reduced-motion: reduce) {
   .empty-state h3,
+  .empty-state[data-kind='video'] img,
+  .empty-state__examples-caption,
   .detection,
   .empty-state__docs-link,
   .empty-state__description,

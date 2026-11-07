@@ -461,7 +461,7 @@ onUnmounted(() => {
     <figure class="min-w-0 rounded-lg border border-line bg-panel p-4 xl:col-span-2">
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <figcaption class="mr-auto">
-          <span class="text-sm font-medium text-gray-200">{{ t('usage.chartTraffic') }}</span>
+          <span class="text-sm font-semibold text-gray-200">{{ t('usage.chartTraffic') }}</span>
           <span class="ml-2 text-xs text-gray-500">{{ t('usage.chartTrafficHelp') }}</span>
         </figcaption>
         <UiSelect
@@ -504,7 +504,7 @@ onUnmounted(() => {
       </div>
     </figure>
     <figure class="flex min-w-0 flex-col rounded-lg border border-line bg-panel p-4">
-      <figcaption class="mb-2 text-sm font-medium text-gray-200">
+      <figcaption class="mb-2 text-sm font-semibold text-gray-200">
         {{ t('usage.chartOutcomes') }}
       </figcaption>
       <ChartLegend
@@ -518,7 +518,7 @@ onUnmounted(() => {
       </div>
     </figure>
     <figure class="flex min-w-0 flex-col rounded-lg border border-line bg-panel p-4">
-      <figcaption class="mb-2 text-sm font-medium text-gray-200">
+      <figcaption class="mb-2 text-sm font-semibold text-gray-200">
         {{ t('usage.chartLatency') }}
       </figcaption>
       <table class="mb-3 w-full text-xs tabular-nums">
@@ -567,7 +567,7 @@ onUnmounted(() => {
       </div>
     </figure>
     <figure class="min-w-0 rounded-lg border border-line bg-panel p-4 xl:col-span-2">
-      <figcaption class="mb-2 text-sm font-medium text-gray-200">
+      <figcaption class="mb-2 text-sm font-semibold text-gray-200">
         {{ t('usage.chartTokens') }}
       </figcaption>
       <ChartLegend

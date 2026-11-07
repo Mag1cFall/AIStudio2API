@@ -18,7 +18,9 @@ type interactionRequest struct {
 	Model string `json:"model"`
 	Agent string `json:"agent"`
 	// AgentConfig 是 agent 的运行配置，Antigravity 为所用模型与 token 上限，Deep Research 为思考摘要、可视化与协作规划
-	AgentConfig *interactionAgentConfig    `json:"agent_config"`
+	AgentConfig *interactionAgentConfig `json:"agent_config"`
+	// Environment 是 agent 的远程环境配置对象，或已有环境的 ID
+	Environment json.RawMessage            `json:"environment"`
 	Input       json.RawMessage            `json:"input"`
 	System      string                     `json:"system_instruction"`
 	Stream      bool                       `json:"stream"`
@@ -89,6 +91,78 @@ func (config interactionAgentConfig) config() (*aistudio.AgentConfig, error) {
 		result.MaxTotalTokens = tokens
 	}
 	return result, nil
+}
+
+// interactionEnvironment 是公开请求的 environment 对象
+type interactionEnvironment struct {
+	Type          string                       `json:"type"`
+	Sources       []aistudio.EnvironmentSource `json:"sources"`
+	Network       json.RawMessage              `json:"network"`
+	EnvironmentID string                       `json:"environment_id"`
+}
+
+// interactionEgressRule 是 network.allowlist 的一条规则
+type interactionEgressRule struct {
+	Domain     string            `json:"domain"`
+	Transform  map[string]string `json:"transform"`
+	Credential string            `json:"credential"`
+}
+
+// agentEnvironment 把 environment 转为生成请求的 agent 环境：字符串为已有环境 ID，对象为远程环境的源、出站白名单与要更新的环境 ID
+func agentEnvironment(raw json.RawMessage) (*aistudio.AgentEnvironment, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var id string
+	if json.Unmarshal(raw, &id) == nil {
+		if strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("environment must be a non-empty environment ID")
+		}
+		return &aistudio.AgentEnvironment{ID: strings.TrimSpace(id)}, nil
+	}
+	var config interactionEnvironment
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, fmt.Errorf("environment must be an object or an environment ID: %w", err)
+	}
+	if config.Type != "" && config.Type != "remote" {
+		return nil, fmt.Errorf("environment.type must be remote")
+	}
+	environment := &aistudio.AgentEnvironment{ID: strings.TrimSpace(config.EnvironmentID), Sources: config.Sources}
+	if len(config.Network) == 0 || string(config.Network) == "null" {
+		return environment, nil
+	}
+	var disabled string
+	if json.Unmarshal(config.Network, &disabled) == nil {
+		if disabled != "disabled" {
+			return nil, fmt.Errorf("environment.network must be disabled or an allowlist object")
+		}
+		environment.NetworkDisabled = true
+		return environment, nil
+	}
+	var network struct {
+		Allowlist json.RawMessage `json:"allowlist"`
+	}
+	if err := json.Unmarshal(config.Network, &network); err != nil {
+		return nil, fmt.Errorf("environment.network must be disabled or an allowlist object: %w", err)
+	}
+	if json.Unmarshal(network.Allowlist, &disabled) == nil {
+		if disabled != "disabled" {
+			return nil, fmt.Errorf("environment.network.allowlist must be disabled or an array of rules")
+		}
+		environment.NetworkDisabled = true
+		return environment, nil
+	}
+	var rules []interactionEgressRule
+	if err := json.Unmarshal(network.Allowlist, &rules); err != nil {
+		return nil, fmt.Errorf("environment.network.allowlist must be disabled or an array of rules: %w", err)
+	}
+	for index, rule := range rules {
+		if strings.TrimSpace(rule.Domain) == "" {
+			return nil, fmt.Errorf("environment.network.allowlist[%d].domain is required", index)
+		}
+		environment.Allowlist = append(environment.Allowlist, aistudio.EgressRule{Domain: strings.TrimSpace(rule.Domain), Headers: rule.Transform, Credential: rule.Credential})
+	}
+	return environment, nil
 }
 
 // interactionTool 表示 Interactions 工具声明，在 Responses 工具字段之外带有内置工具的设置
@@ -241,6 +315,9 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 		if generate.AgentConfig, err = request.AgentConfig.config(); err != nil {
 			return generate, err
 		}
+	}
+	if generate.Environment, err = agentEnvironment(request.Environment); err != nil {
+		return generate, err
 	}
 	generate.Contents, err = interactionContents(request.Input)
 	if err != nil {

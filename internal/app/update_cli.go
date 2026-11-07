@@ -28,6 +28,7 @@ func (u *selfUpdater) install(ctx context.Context, release *githubRelease) error
 	if err != nil {
 		return err
 	}
+	u.setStage("install")
 	u.log("INFO", "在线更新 | 2/2 | 替换可执行文件 | 版本="+release.TagName)
 	if err := selfupdate.Apply(bytes.NewReader(executable), selfupdate.Options{TargetPath: u.executable}); err != nil {
 		if rollback := selfupdate.RollbackError(err); rollback != nil {

@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api'
 import { maskKey, splitKeys } from '@/apikey'
-import { keepPage } from '@/desktop'
+import { desktopPlatform, keepPage, sendDesktop } from '@/desktop'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
 import { maskedProxy } from '@/proxy'
@@ -55,6 +55,7 @@ const sections: {
     icon: 'service',
     fields: [
       'auto_start',
+      'hide_dock_icon',
       'listen_addr',
       'preview_listen_addr',
       'proxy_api_key',
@@ -336,6 +337,7 @@ async function saveConfig(): Promise<void> {
       ...(adminPassword.value ? { admin_password: adminPassword.value } : {}),
     })
     emit('saved', saved)
+    if (desktopPlatform === 'darwin') sendDesktop(`dock:${saved.hide_dock_icon ? 'hide' : 'show'}`)
     if (saved.management_restart_required && saved.service_restart_required) {
       emit('notice', t('settings.savedBoth'), 'success')
     } else if (saved.management_restart_required) {
@@ -355,18 +357,15 @@ async function saveConfig(): Promise<void> {
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col">
-    <header
-      class="border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-4xl)_-_14rem)/2_+_2rem))]"
-    >
+    <header class="page-x overflow-hidden border-b border-line py-4 [scrollbar-gutter:stable]">
       <h2 class="text-xl font-semibold text-white">{{ t('section.settings.title') }}</h2>
       <p class="mt-1 text-sm text-gray-500">{{ t('section.settings.description') }}</p>
     </header>
 
-    <div
-      v-if="error"
-      class="m-4 rounded-md border border-red-500/40 bg-red-500/10 p-4 text-red-300 md:m-8"
-    >
-      {{ error }}
+    <div v-if="error" class="page-x overflow-hidden py-4 [scrollbar-gutter:stable] md:py-8">
+      <div class="rounded-md border border-red-500/40 bg-red-500/10 p-4 text-red-300">
+        {{ error }}
+      </div>
     </div>
     <div v-else-if="loading || config === null" class="py-16 text-center text-gray-500">
       <UiIcon name="spinner" :size="18" class="mx-auto mb-2" />
@@ -374,22 +373,20 @@ async function saveConfig(): Promise<void> {
     </div>
     <form
       v-else
-      class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable_both-edges]"
+      class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]"
       novalidate
       @submit.prevent="saveConfig"
     >
-      <div
-        class="mx-auto flex w-full max-w-[calc(var(--container-4xl)_+_14rem)] flex-col md:flex-row"
-      >
+      <div class="page-x flex flex-col @max-3xl:px-0 @3xl:flex-row">
         <nav
-          class="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-canvas p-2 md:w-56 md:flex-col md:self-start md:border-b-0 md:p-4 md:pl-5"
+          class="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-canvas px-4 py-2 @3xl:w-56 @3xl:flex-col @3xl:self-start @3xl:border-b-0 @3xl:px-0 @3xl:py-8"
           :aria-label="t('section.settings.title')"
         >
           <button
             v-for="item in sections"
             :key="item.id"
             type="button"
-            class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors md:whitespace-normal"
+            class="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm whitespace-nowrap transition-colors @3xl:whitespace-normal"
             :class="
               section === item.id
                 ? 'bg-raised text-white'
@@ -409,7 +406,7 @@ async function saveConfig(): Promise<void> {
           </button>
         </nav>
 
-        <div class="min-w-0 flex-1 px-4 pt-4 pb-28 md:px-8 md:pt-6">
+        <div class="min-w-0 flex-1 px-4 pt-4 pb-28 @3xl:pt-8 @3xl:pr-0 @3xl:pl-8">
           <div
             v-if="config.service_restart_required"
             class="mb-3 rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-sm text-blue-200"
@@ -436,6 +433,17 @@ async function saveConfig(): Promise<void> {
               :env="environmentKey('auto_start')"
             >
               <UiSwitch id="setting-auto-start" v-model="form.auto_start" />
+            </SettingRow>
+            <SettingRow
+              v-if="desktopPlatform === 'darwin'"
+              :label="t('settings.hideDockIcon')"
+              control-id="setting-hide-dock-icon"
+              :description="t('settings.hideDockIconHelp')"
+              effect="immediate"
+              :changed="changedFields.has('hide_dock_icon')"
+              :env="environmentKey('hide_dock_icon')"
+            >
+              <UiSwitch id="setting-hide-dock-icon" v-model="form.hide_dock_icon" />
             </SettingRow>
             <SettingRow
               :label="t('settings.listen')"

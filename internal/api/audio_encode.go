@@ -9,7 +9,6 @@ import (
 	"mime"
 	"strconv"
 
-	aacpcm "github.com/Mag1cFall/go-aac/pcm"
 	mp3 "github.com/Mag1cFall/go-mp3"
 	mp3pcm "github.com/Mag1cFall/go-mp3/pcm"
 	"github.com/mewkiz/flac"
@@ -17,6 +16,7 @@ import (
 	"github.com/mewkiz/flac/meta"
 	"github.com/thesyncim/gopus"
 	"github.com/thesyncim/gopus/container/ogg"
+	aacpcm "github.com/tphakala/go-aac/pcm"
 	"github.com/zaf/g711"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"

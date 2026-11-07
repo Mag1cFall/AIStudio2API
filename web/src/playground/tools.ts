@@ -30,7 +30,7 @@ const toolDefinitions: ToolDefinition[] = [
     icon: 'functionCalling',
     editable: true,
   },
-  { id: 'google_search', label: 'pg.googleSearch', tooltip: 'pg.googleSearchTip', icon: 'search' },
+  { id: 'google_search', label: 'pg.googleSearch', tooltip: 'pg.googleSearchTip', icon: 'google' },
   { id: 'google_maps', label: 'pg.googleMaps', tooltip: 'pg.googleMapsTip', icon: 'maps' },
   { id: 'image_search', label: 'pg.imageSearch', tooltip: 'pg.imageSearchTip', icon: 'modeImage' },
   { id: 'url_context', label: 'pg.urlContext', tooltip: 'pg.urlContextTip', icon: 'link' },

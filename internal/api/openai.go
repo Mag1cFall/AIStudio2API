@@ -1363,13 +1363,8 @@ func legacyFunctionCall(call aistudio.FunctionCall) map[string]any {
 	return map[string]any{"name": call.Name, "arguments": string(call.Arguments)}
 }
 
-// contentFilterFinishReason 判断上游结束原因是否表示内容策略拦截，未知编号按官网默认的 Content blocked 处理
+// contentFilterFinishReason 判断上游结束原因是否为未知编号，未知编号按官网默认的 Content blocked 处理
 func contentFilterFinishReason(reason string) bool {
-	switch reason {
-	case "safety", "recitation", "blocklist", "prohibited_content", "spii",
-		"image_safety", "image_prohibited_content", "image_recitation":
-		return true
-	}
 	return strings.HasPrefix(reason, "provider_")
 }
 

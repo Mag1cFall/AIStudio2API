@@ -408,11 +408,11 @@ onMounted(revealCurrentTab)
       ></div>
     </aside>
 
-    <main class="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
+    <main class="@container flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <div
         v-if="config?.reserved_listen_addr"
         role="alert"
-        class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm break-words text-amber-200 md:px-8"
+        class="page-x overflow-hidden border-b border-amber-500/30 bg-amber-500/10 py-2.5 text-sm break-words text-amber-200 [scrollbar-gutter:stable]"
       >
         {{
           t('app.listenReserved')
@@ -423,7 +423,7 @@ onMounted(revealCurrentTab)
       <div
         v-if="config?.invalid.length"
         role="alert"
-        class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm break-words text-amber-200 md:px-8"
+        class="page-x overflow-hidden border-b border-amber-500/30 bg-amber-500/10 py-2.5 text-sm break-words text-amber-200 [scrollbar-gutter:stable]"
       >
         <p>{{ t('app.invalidConfig') }}</p>
         <p v-for="item in config.invalid" :key="item.key" class="mt-1 font-mono text-xs">

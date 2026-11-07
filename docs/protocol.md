@@ -778,7 +778,8 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 
 - HTTP/协议错误形成失败
 - 读取上游响应时连接中断或上游流在完成帧之前结束，报告为上游流中断与已接收帧数
-- 上游 finish reason 作为正常终态保留并映射到各公开协议
+- 上游以内容策略类原因（safety、recitation、blocklist、prohibited_content、spii 与对应的图片原因）结束时形成失败：还没有输出时返回 HTTP 502 与各协议的错误对象，已开始流式输出时以流内错误结束，错误消息写明结束原因与上游说明
+- 其余上游 finish reason 作为正常终态保留并映射到各公开协议
 
 各协议的具体终态转换如下：
 
@@ -788,10 +789,10 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 | `stop_sequence` | `stop` | `completed` | `stop_sequence` 与实际序列 | `STOP` |
 | `max_tokens` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `MAX_TOKENS` |
 | `continuation` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `CONTINUATION` |
-| safety、recitation、blocklist、prohibited_content、spii、图片对应原因与 `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
+| `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
 | other、language、malformed_function_call、malformed_response、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
 
-内容拦截终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 对 Build 通道的 `provider_<名称>` 输出大写的原枚举名，对 Playground 的 `provider_<编号>` 输出 `OTHER` 并用 `finishMessage` 保留编号。`malformed_response`（Playground 编号 19）在 AI Studio 页面显示为 `Content blocked`。
+`provider_*` 终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 对 Build 通道的 `provider_<名称>` 输出大写的原枚举名，对 Playground 的 `provider_<编号>` 输出 `OTHER` 并用 `finishMessage` 保留编号。`malformed_response`（Playground 编号 19）在 AI Studio 页面显示为 `Content blocked`。
 
 ## 6. 函数、Google 工具、Drive 与媒体
 
@@ -1034,7 +1035,7 @@ Drive token、上传和下载使用文件所属账户的固定出口。文件 ID
 
 ### Omni Interaction
 
-模型目录 field 79 类型为 `2` 且不是后台任务的模型（`gemini-omni-1.1-flash`、`gemini-omni-flash-preview`）不接受 `GenerateContent`，四套公开生成接口对这类模型改用 `CreateInteractionStream`，账户选择、Worker 与 WAA 与 GenerateContent 相同，WAA proof 位于 field 5，binding 为发送的全部文本以空格连接：
+模型目录 field 79 类型为 `2` 且不是后台任务的模型（`gemini-omni-1.1-flash`、`gemini-omni-flash-preview`）不接受 `GenerateContent`，四套公开生成接口对这类模型改用 `CreateInteractionStream`，账户选择、Worker 与 WAA 与 GenerateContent 相同，WAA proof 位于 field 5，binding 为发送的文本与内联图片的 Base64 按内容顺序以空格连接：
 
 ```json
 [1, 1, null, <INTERACTION>, "<WAA_PROOF>", 1]
@@ -1044,10 +1045,10 @@ Drive token、上传和下载使用文件所属账户的固定出口。文件 ID
 | ---: | --- |
 | 6 | system instruction |
 | 17 | `["models/<MODEL_ID>", [null,null,null,null,null,<THINKING_LEVEL>,1,<MAX_OUTPUT_TOKENS>]]`，历史中没有模型输出时配置索引 24 为 `[]`，设置视频任务时为 `[<TASK>]`（`1`–`5` 依次为 text_to_video、image_to_video、reference_to_video、edit、extend） |
-| 26 | `[[<STEP>...]]`，用户 step 为 `[[<CONTENT>...]]`，模型 step 为 `[null,[<CONTENT>...]]`；文本 content 为 `[[<TEXT>]]`，Drive 附件 content 为 `[null×8,["<DRIVE_FILE_ID>"]]` |
+| 26 | `[[<STEP>...]]`，用户 step 为 `[[<CONTENT>...]]`，模型 step 为 `[null,[<CONTENT>...]]`；文本 content 为 `[[<TEXT>]]`，内联图片 content 为 `[null,[<MIME 枚举>,"<BASE64>"]]`，Drive 附件 content 为 `[null×8,["<DRIVE_FILE_ID>"]]` |
 | 53 | 输出格式 `[[[null,null,null,[null,null,null,<ASPECT>,[<SECONDS>],<RESOLUTION>]]]]`：宽高比 `1` 为 16:9、`2` 为 9:16，分辨率 `1`–`4` 为 360p、720p、1080p、4k，省略时取模型 `video_output_resolutions` 的第一项；任务为 `edit` 时 interaction 只到索引 26 |
 
-thinking level 取值 MINIMAL=1、LOW=2、MEDIUM=3、HIGH=4，由 `reasoning_effort` 或思考预算按模型支持的等级换算，默认使用目录默认等级。Interaction 请求接受 user、assistant 与 tool 消息，tool 消息按 user 处理，相邻同角色消息合并为一个 step，历史函数调用、函数结果与代码执行改写为 Gemini API JSON 文本，assistant 消息中的附件移到下一个 user step；内联附件先上传到所选账户的 Drive，再以 file ID 引用，文件 ID 不参与 binding。音频附件由上游以 code 3 `Audio input modality is not enabled for this model` 拒绝，映射为 HTTP 400；函数声明与 Google 工具不发送，stop sequences 与 GenerateContent 相同在本地匹配，temperature、topP、topK 与 seed 不发送。
+thinking level 取值 MINIMAL=1、LOW=2、MEDIUM=3、HIGH=4，由 `reasoning_effort` 或思考预算按模型支持的等级换算，默认使用目录默认等级，目录没有思考档位能力的模型不发送。Interaction 请求接受 user、assistant 与 tool 消息，tool 消息按 user 处理，相邻同角色消息合并为一个 step，历史函数调用、函数结果与代码执行改写为 Gemini API JSON 文本，assistant 消息中的附件移到下一个 user step；内联图片以 Base64 直接发送，其他内联附件先上传到所选账户的 Drive，再以 file ID 引用，文件 ID 不参与 binding。音频附件由上游以 code 3 `Audio input modality is not enabled for this model` 拒绝，映射为 HTTP 400；函数声明与 Google 工具不发送，stop sequences 与 GenerateContent 相同在本地匹配，temperature、topP、topK 与 seed 不发送。
 
 视频设置来自 Interactions `response_format` 的 `{"type":"video","aspect_ratio","duration","resolution"}` 与 `generation_config.video_config.task`，或 Gemini API `generationConfig.responseFormat` 的 `video.aspectRatio`、`video.duration`、`video.resolution` 与扩展字段 `generationConfig.videoConfig.task`；Interactions `response_modalities` 的 `video` 与 Gemini API `generationConfig.responseModalities` 的 `VIDEO` 等同于不带设置的视频输出格式；`duration` 取 `"4s"` 或秒数并四舍五入为整秒，宽高比与分辨率换成最接近的上游取值，无法解析的取值与未知任务返回 400。
 
@@ -1077,7 +1078,8 @@ thinking level 取值 MINIMAL=1、LOW=2、MEDIUM=3、HIGH=4，由 `reasoning_eff
 | 7 | 工具列表，见下文 |
 | 16 | 续接的上一轮 interaction ID |
 | 18 | agent 目标，见下文 |
-| 22 | Antigravity 的远程环境 `[null,null,1]` |
+| 22 | 远程环境：field 1 源 `[[<类型>,"<源>","<目标>","<内容>","<编码>"]...]`（类型 gcs `2`、inline `3`、repository `4`），field 2 出站白名单 `[[["<域名>",[["<头>","<值>"]...],"<凭据>"]...]]`（有凭据时只发凭据），field 3 禁止出站 `1`，field 4 要更新的已有环境 ID；Antigravity 未设置环境时为 `[null,null,1]` |
+| 23 | 只引用已有环境、不带源与网络设置时的环境 ID |
 | 26 | 与 Omni Interaction 相同的 step 列表，见下文 |
 
 agent 目标的 field 1 为 agent 名称。Deep Research 为 `["<AGENT>", null, [<思考摘要>, <可视化>, <协作规划>]]`：思考摘要 `1` 为 auto、`2` 为 none，可视化 `2` 为 auto、`1` 为 off，协作规划开启时为 `true`、关闭时省略，默认 `[1,2]`。field 79 InteractionConfig 的 field 6 给出默认模型的 agent（Antigravity）为 `["<AGENT>"]`，指定模型或 token 上限时 field 12 为 `["<MODEL>",null,null,null,null,null,<MAX_TOTAL_TOKENS>]`。公开 Interactions 的 `agent_config` 按官方取值写入这些位置。
@@ -1375,6 +1377,7 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 | `youtube_links` | 保存值；下一次启动生成服务时决定是否把用户消息文本中的 YouTube 链接作为视频外部媒体发送 |
 | `first_event_hedge` | 保存值；`off`、`auto` 或正整数秒，下一次启动生成服务时决定原请求等待首字多久后发起备用请求 |
 | `auto_start` | 保存值；下一管理进程就绪后是否自动启动生成服务 |
+| `hide_dock_icon` | 保存值；macOS 桌面版是否只在菜单栏显示图标 |
 | `request_body_log` | 保存值；保存后立即决定是否保存请求与响应正文 |
 | `admin_auth_enabled`、`admin_username` | 保存值；下一管理进程使用 |
 | `admin_password` | 只写；省略时保留现值，下一管理进程使用 |
@@ -2120,6 +2123,7 @@ delta 联合类型为 `text_delta{text}`、`citations_delta{citation}`、`thinki
 | 请求设置 | `service_tier`、`labels`、`cached_content` |
 | `agent` | `model` 为空时作为模型 ID，用于 Deep Research 等代理 |
 | `agent_config` | `{type:"antigravity",model?,max_total_tokens?}`，`max_total_tokens` 为字符串或数字；`{type:"deep-research",thinking_summaries?,visualization?,collaborative_planning?}`，`thinking_summaries` 为 `auto` 或 `none`，`visualization` 为 `auto` 或 `off`；`type` 与 agent 的种类不一致或取值不在上述范围时返回 `400 INVALID_ARGUMENT` |
+| `environment` | 已有环境 ID，或 `{type:"remote",sources?,network?,environment_id?}`：`sources` 为 `[{type,source?,target?,content?,encoding?}]`，`type` 取 `gcs`、`inline`、`repository`；`network` 为 `"disabled"` 或 `{allowlist}`，`allowlist` 为 `"disabled"` 或 `[{domain,transform?,credential?}]`，`transform` 为注入匹配请求的请求头 |
 | 续接 | `previous_interaction_id`、`store` |
 
 - 媒体内容的 `data` 与 `uri` 二选一，复用 Gemini 文件与内联媒体解析：省略 `mime_type` 时内联数据按内容识别类型，无法识别时返回 `400 INVALID_ARGUMENT`；`uri` 为外部 http(s) URL 时由服务下载为内联媒体，规则与 GenerateContent 的 `fileData` 相同；本服务 Gemini 文件接口返回的 `uri` 作为文件引用
@@ -2720,13 +2724,14 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 | 视频仍在生成 | 409 | `video_not_ready` | `api_error` | `INTERNAL` |
 | 文件超过 512 MiB | 413 | `file_too_large` | `request_too_large` | `INTERNAL` |
 | 上游配额或限流（上游给出重试时长时带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
-| 候选账户均在冷却且 1 分钟内不恢复（带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
+| 候选账户均在冷却且 1 分钟内不恢复（套餐限额与每日限额冷却中的账户先发送一次，上游仍拒绝时返回该拒绝；带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
 | 上游过载 | 529 | `upstream_error` | `overloaded_error` | `INTERNAL` |
 | 当前客户端请求被管理端取消 | 503 | `request_canceled` | `api_error` | `UNAVAILABLE` |
 | 生成服务已停止 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
 | 生成服务正在启动且模型目录尚未就绪 | 503 | `service_starting` | `api_error` | `UNAVAILABLE` |
 | 请求期限到期 | 504 | `upstream_error` | `timeout_error` | `DEADLINE_EXCEEDED` |
 | 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
+| 上游以内容策略类原因结束生成 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 
 - “没有符合条件的账户”指候选耗尽且没有符合方法与能力的账户
 - 权益不满足时错误消息写明模型需要的权益：`1` 为付费 API key，`3` 为 Google AI Pro 或 Ultra 订阅，`4` 为 Google AI Ultra 订阅

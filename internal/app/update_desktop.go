@@ -73,6 +73,7 @@ func (p *releaseProvider) Download(ctx context.Context, _ *updater.Release, dst 
 			return err
 		}
 	}
+	p.updater.setStage("install")
 	p.updater.log("INFO", "在线更新 | 2/2 | 暂存新版本 | 版本="+p.release.TagName)
 	written, err := io.Copy(dst, bytes.NewReader(payload))
 	onProgress(written, int64(len(payload)))

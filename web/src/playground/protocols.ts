@@ -43,13 +43,21 @@ export type ProtocolSetting =
   | 'mediaResolution'
   | 'structuredOutput'
   | 'thinkingBudget'
+  | 'videoSettings'
 
 // unsupported 是各协议无法表达的运行设置
 const unsupported: Record<Protocol, readonly ProtocolSetting[]> = {
   gemini: [],
-  'openai-chat': ['topK', 'safety', 'mediaResolution'],
-  'openai-responses': ['topK', 'stopSequences', 'safety', 'mediaResolution', 'thinkingBudget'],
-  anthropic: ['safety', 'mediaResolution', 'structuredOutput'],
+  'openai-chat': ['topK', 'safety', 'mediaResolution', 'videoSettings'],
+  'openai-responses': [
+    'topK',
+    'stopSequences',
+    'safety',
+    'mediaResolution',
+    'thinkingBudget',
+    'videoSettings',
+  ],
+  anthropic: ['safety', 'mediaResolution', 'structuredOutput', 'videoSettings'],
   'openai-images': [
     'topK',
     'stopSequences',
@@ -57,6 +65,7 @@ const unsupported: Record<Protocol, readonly ProtocolSetting[]> = {
     'mediaResolution',
     'structuredOutput',
     'thinkingBudget',
+    'videoSettings',
   ],
   interactions: [
     'topK',
@@ -65,6 +74,7 @@ const unsupported: Record<Protocol, readonly ProtocolSetting[]> = {
     'mediaResolution',
     'structuredOutput',
     'thinkingBudget',
+    'videoSettings',
   ],
 }
 
@@ -953,11 +963,11 @@ function interactionsInput(request: GenerateRequest): Record<string, unknown>[] 
   return steps
 }
 
-// interactionsRequest 组合 Interactions 创建请求：agent 名称、输入步骤、续接的交互 ID、系统指令、工具与 agent 配置，工具顺序与官网相同；工具全部关闭时发送空列表，与官网一样不使用工具
+// interactionsRequest 组合 Interactions 创建请求：agent 名称、输入步骤、续接的交互 ID、系统指令、工具与 agent 的 agent_config、environment 字段，工具顺序与官网相同；工具全部关闭时发送空列表，与官网一样不使用工具
 function interactionsRequest(
   modelID: string,
   request: GenerateRequest,
-  agent: Record<string, unknown> | undefined,
+  agentFields: Record<string, unknown> | undefined,
   previous: string | undefined,
   stream: boolean,
 ): Record<string, unknown> {
@@ -993,7 +1003,7 @@ function interactionsRequest(
     ...(previous !== undefined && { previous_interaction_id: previous }),
     ...(system !== '' && { system_instruction: system }),
     tools,
-    ...(agent && { agent_config: agent }),
+    ...agentFields,
     stream,
   }
 }

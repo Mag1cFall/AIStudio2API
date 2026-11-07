@@ -23,6 +23,7 @@ import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
+import { attachmentName, downloadAttachment, useAttachmentPreview } from './attachment'
 import { copyToClipboard } from './clipboard'
 import { useRunningClock } from './clock'
 import CodeExecutionChunk from './CodeExecutionChunk.vue'
@@ -35,6 +36,7 @@ import RunStats from './RunStats.vue'
 import ServerToolChunk from './ServerToolChunk.vue'
 import ThoughtChunk from './ThoughtChunk.vue'
 import ThoughtStep from './ThoughtStep.vue'
+import MediaViewDialog from './media/MediaViewDialog.vue'
 import VideoResult from './media/VideoResult.vue'
 import { isAgent } from './catalog'
 import { insertCitations } from './markdown'
@@ -519,7 +521,10 @@ onMounted(() => {
   )
   observe()
 })
+// preview 是用户轮次附件的预览对话框：点击图片、视频、音频、文本与 PDF 附件打开
+const { preview, show: showAttachment, release: releasePreview } = useAttachmentPreview()
 onUnmounted(disconnect)
+onUnmounted(releasePreview)
 onDeactivated(disconnect)
 onActivated(observe)
 </script>
@@ -745,7 +750,33 @@ onActivated(observe)
                     "
                     :class="{ step: isStep(segment) }"
                   >
-                    <template v-if="segment.part.inlineData || segment.part.fileData">
+                    <template
+                      v-if="
+                        turn.role === 'user' && (segment.part.inlineData || segment.part.fileData)
+                      "
+                    >
+                      <button
+                        v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
+                        type="button"
+                        class="image-chunk"
+                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                        :aria-label="t('pg.preview')"
+                        @click="showAttachment(segment.part)"
+                      >
+                        <img
+                          class="loaded-image"
+                          :src="dataURL(segment.part.inlineData)"
+                          :alt="attachmentName(segment.part)"
+                        />
+                      </button>
+                      <FileChunk
+                        v-else
+                        :part="segment.part"
+                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                        @preview="showAttachment(segment.part)"
+                      />
+                    </template>
+                    <template v-else-if="segment.part.inlineData || segment.part.fileData">
                       <img
                         v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
                         class="media-image"
@@ -904,6 +935,15 @@ onActivated(observe)
         </div>
       </div>
     </template>
+    <MediaViewDialog
+      v-if="turn.role === 'user'"
+      v-model:open="preview.open"
+      :title="preview.part ? attachmentName(preview.part) : ''"
+      :kind="preview.kind"
+      :src="preview.src"
+      :text="preview.text"
+      @download="preview.part && downloadAttachment(preview.part)"
+    />
   </div>
 </template>
 
@@ -1299,6 +1339,26 @@ onActivated(observe)
   object-fit: cover;
   margin: 4px 0 8px;
   border-radius: 8px;
+}
+
+/* image-chunk 与官网 ms-image-chunk 一致：带 1 px 边框与 4 px 圆角的图片，点击打开预览 */
+.image-chunk {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  overflow: clip;
+  border: 1px solid var(--color-v3-outline-var);
+  border-radius: 4px;
+  background: none;
+  vertical-align: top;
+}
+
+.loaded-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(30vh, 358px);
+  cursor: pointer;
+  object-fit: cover;
 }
 
 /* chunk-gap 为官网相邻两个用户轮次之间的间距：下内边距 24 px、上外边距 8 px、上内边距 8 px 与两条 1 px 边框 */

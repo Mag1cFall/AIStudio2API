@@ -131,7 +131,7 @@ const tools = computed(() => [
     label: t('pg.functionCalling'),
     icon: 'functionCalling' as IconName,
   },
-  { id: 'googleSearch' as const, label: t('pg.googleSearch'), icon: 'search' as IconName },
+  { id: 'googleSearch' as const, label: t('pg.googleSearch'), icon: 'google' as IconName },
 ])
 // enabledTools 是已开启并显示为标签的工具
 const enabledTools = computed(() => tools.value.filter((tool) => state.settings[tool.id]))

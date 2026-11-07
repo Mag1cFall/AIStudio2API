@@ -213,7 +213,7 @@ jobs:
           app=dist/AIStudio2API.app
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           lipo -create -output "$app/Contents/MacOS/aistudio2api" bin/desktop-arm64 bin/desktop-amd64
-          cp build/darwin/icons.icns "$app/Contents/Resources/"
+          cp -R build/darwin/icons.icns build/darwin/*.lproj "$app/Contents/Resources/"
           cp build/darwin/Info.plist "$app/Contents/"
           plutil -replace CFBundleShortVersionString -string "$number" "$app/Contents/Info.plist"
           plutil -replace CFBundleVersion -string "$number" "$app/Contents/Info.plist"

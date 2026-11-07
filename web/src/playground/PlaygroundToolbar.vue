@@ -31,10 +31,11 @@ const handset = useMediaQuery('(max-width: 768px)')
 const editing = ref(false)
 const confirmDelete = ref(false)
 
-// hasPrompt 表示对话已有内容，标题可编辑
+// hasPrompt 表示对话已有内容或附件，标题可编辑
 const hasPrompt = computed(
   () =>
     session.turns.length > 0 ||
+    session.attachments.length > 0 ||
     session.id !== null ||
     session.settings.systemInstruction.trim() !== '',
 )
@@ -50,9 +51,17 @@ const temporaryLabel = computed(() =>
 const title = computed(() =>
   hasPrompt.value ? session.title || t('pg.untitled') : t('nav.playground'),
 )
-// tokens 是当前对话的 token 数
+// draftTokens 是输入框中附件的 token 数之和
+const draftTokens = computed(() =>
+  session.attachments.reduce((sum, part) => sum + (part.tokenCount ?? 0), 0),
+)
+// tokens 是当前对话的 token 数，还没有对话时为输入框附件的 token 数
 const tokens = computed(() =>
-  session.promptTokens === null ? '' : tokenLabel(session.promptTokens),
+  session.promptTokens !== null
+    ? tokenLabel(session.promptTokens)
+    : draftTokens.value > 0
+      ? tokenLabel(draftTokens.value)
+      : '',
 )
 
 // makeCopy 复制当前对话并打开副本

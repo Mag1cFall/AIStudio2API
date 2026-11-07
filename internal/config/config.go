@@ -49,6 +49,7 @@ var configKeys = [...]string{
 	"MEDIA_OUTPUT",
 	"MEDIA_BASE_URL",
 	"AUTO_START",
+	"HIDE_DOCK_ICON",
 	"REQUEST_BODY_LOG",
 	"LOG_FILE",
 	"LOG_MAX_TOTAL_MB",
@@ -104,6 +105,7 @@ const DefaultContinuationPrompt = "Continue the assistant response after the fol
 // Config 保存服务的全局配置
 type Config struct {
 	AutoStart              bool
+	HideDockIcon           bool
 	RequestBodyLog         bool
 	LogFile                bool
 	LogMaxTotalMB          int
@@ -208,6 +210,7 @@ func invalidValue(key, value string, err error) InvalidValue {
 // configSetters 把每个配置键的文本值解析到 Config
 var configSetters = map[string]func(*Config, string) error{
 	"AUTO_START":               boolSetter("AUTO_START", func(c *Config) *bool { return &c.AutoStart }),
+	"HIDE_DOCK_ICON":           boolSetter("HIDE_DOCK_ICON", func(c *Config) *bool { return &c.HideDockIcon }),
 	"REQUEST_BODY_LOG":         boolSetter("REQUEST_BODY_LOG", func(c *Config) *bool { return &c.RequestBodyLog }),
 	"LOG_FILE":                 boolSetter("LOG_FILE", func(c *Config) *bool { return &c.LogFile }),
 	"ADMIN_AUTH_ENABLED":       boolSetter("ADMIN_AUTH_ENABLED", func(c *Config) *bool { return &c.AdminAuthEnabled }),
@@ -548,6 +551,7 @@ func (c Config) KeepEnvironment(saved Config) Config {
 func (c Config) envValues() map[string]string {
 	return map[string]string{
 		"AUTO_START":               strconv.FormatBool(c.AutoStart),
+		"HIDE_DOCK_ICON":           strconv.FormatBool(c.HideDockIcon),
 		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
 		"LOG_FILE":                 strconv.FormatBool(c.LogFile),
 		"LOG_MAX_TOTAL_MB":         strconv.Itoa(c.LogMaxTotalMB),

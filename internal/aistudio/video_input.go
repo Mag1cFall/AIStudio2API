@@ -73,26 +73,36 @@ func validateVideoParts(contents []Content) error {
 	return nil
 }
 
+// videoMetadataWire 把视频截取与帧率编码为 [起点 Duration, 终点 Duration, 帧率]，都未设置时为 nil
+func videoMetadataWire(video *VideoMetadata) ([]any, error) {
+	if video == nil {
+		return nil, nil
+	}
+	var metadata []any
+	for index, offset := range []string{video.StartOffset, video.EndOffset} {
+		if offset == "" {
+			continue
+		}
+		value, err := videoOffsetWire(offset)
+		if err != nil {
+			return nil, err
+		}
+		metadata = setWireField(metadata, index, value)
+	}
+	if video.FPS != nil {
+		metadata = setWireField(metadata, 2, *video.FPS)
+	}
+	return metadata, nil
+}
+
 // encodeVideoPart 为媒体 Part 写入 field 16 视频元数据与 field 40 处理方式，再写入思考签名
 func encodeVideoPart(wire []any, part Part) ([]any, error) {
-	if video := part.VideoMetadata; video != nil {
-		var metadata []any
-		for index, offset := range []string{video.StartOffset, video.EndOffset} {
-			if offset == "" {
-				continue
-			}
-			value, err := videoOffsetWire(offset)
-			if err != nil {
-				return nil, err
-			}
-			metadata = setWireField(metadata, index, value)
-		}
-		if video.FPS != nil {
-			metadata = setWireField(metadata, 2, *video.FPS)
-		}
-		if metadata != nil {
-			wire = setWireField(wire, 15, metadata)
-		}
+	metadata, err := videoMetadataWire(part.VideoMetadata)
+	if err != nil {
+		return nil, err
+	}
+	if metadata != nil {
+		wire = setWireField(wire, 15, metadata)
 	}
 	if part.MediaProcessing != "" {
 		code, ok := mediaProcessingCodes[part.MediaProcessing]

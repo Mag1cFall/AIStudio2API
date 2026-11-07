@@ -17,26 +17,35 @@ import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSwitch from '@/playground/ui/UiSwitch.vue'
 import AgentDisclaimer from './AgentDisclaimer.vue'
+import {
+  attachmentKind,
+  attachmentName,
+  attachmentText,
+  downloadAttachment,
+  useAttachmentPreview,
+} from './attachment'
 import ApiKeyButton from './ApiKeyButton.vue'
 import CameraDialog from './CameraDialog.vue'
 import DriveDialog from './DriveDialog.vue'
 import SampleMediaDialog, { type SampleSelection } from './SampleMediaDialog.vue'
 import TokenCapDialog from './TokenCapDialog.vue'
-import { hasCode, isAgent } from './catalog'
-import { driveNames, type DriveFile } from './drive'
+import { Capability, hasCode, isAgent, isOmniModel } from './catalog'
+import { driveNames, uploadDriveFile, type DriveFile } from './drive'
 import { fileMIME } from './file-types'
 import { readImage } from './media/api'
+import MediaViewDialog from './media/MediaViewDialog.vue'
+import VideoSettingsDialog from './media/VideoSettingsDialog.vue'
 import { useCompare, usePlayground } from './session'
 import { useAudioRecording } from './recording'
 import { useMediaQuery } from './media-query'
-import { dataURL } from './protocols'
+import { dataURL, protocolSupports } from './protocols'
 import { failureText } from './request'
 import RunKeyHint from './RunKeyHint.vue'
 import { appends, submits, useRunTooltip } from './run-keys'
 import { useTools } from './tools'
 import type { Part } from './types'
 
-const { t, tokenLabel } = useI18n()
+const { t, tokenLabel, locale } = useI18n()
 const { showNotice } = useConsole()
 const { session, currentModel, countAttachment } = usePlayground()
 const { panes, comparing, running, submitAll, appendAll, stopAll } = useCompare()
@@ -51,30 +60,36 @@ const sampleOpen = ref(false)
 // preparing 为正在读取的附件与正在下载的示例图片数，完成前与官网一样不能运行
 const preparing = ref(0)
 
-// addDriveFile 把从 Drive 选中的已上传文件作为文件引用加入附件
+// addDriveFile 把从 Drive 选中的已上传文件作为文件引用加入附件，与本地附件一样记录文件名
 function addDriveFile(file: DriveFile): void {
-  driveNames.set(file.uri, file.displayName || file.name)
-  session.attachments.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } })
+  const name = file.displayName || file.name
+  driveNames.set(file.uri, name)
+  attach({ fileData: { mimeType: file.mimeType, fileUri: file.uri }, fileName: name })
+}
+
+// attach 与官网一致：附件加入后单独统计它的 token 数
+function attach(part: Part): void {
+  session.attachments.push(part)
+  void countAttachment(session.attachments.at(-1)!)
 }
 
 // addSample 与官网一致：示例图片下载后作为图片附件，示例视频作为 YouTube 视频附件
 async function addSample(selection: SampleSelection): Promise<void> {
   if ('video' in selection) {
-    session.attachments.push({
+    attach({
       fileData: {
         mimeType: 'video/*',
         fileUri: `https://www.youtube.com/watch?v=${selection.video.id}`,
       },
       fileName: selection.video.name,
     })
-    void countAttachment(session.attachments.at(-1)!)
     return
   }
   preparing.value++
   try {
     const response = await fetch(selection.image)
     if (!response.ok) throw new Error(`${response.status} ${selection.image}`)
-    session.attachments.push({ inlineData: await readImage(await response.blob()) })
+    attach({ inlineData: await readImage(await response.blob()) })
   } catch (error) {
     showNotice(failureText(error, t('pg.sampleImageFailed'), t('pg.sampleImageFailed')), 'error')
   } finally {
@@ -94,8 +109,7 @@ const {
   transcribe,
 } = useAudioRecording(async (audio) => {
   window.clearInterval(timer)
-  if (recordingMode.value === 'attach')
-    session.attachments.push(await readFile(audio, audio.type.split(';')[0]))
+  if (recordingMode.value === 'attach') attach(await readFile(audio, audio.type.split(';')[0]))
   else {
     const text = await transcribe(audio)
     if (text !== '') session.draft = session.draft === '' ? text : `${session.draft} ${text}`
@@ -108,6 +122,31 @@ let timer = 0
 
 // enabledTools 是已开启并显示为标签的工具
 const enabledTools = computed(() => tools.value.filter((tool) => tool.enabled))
+// filesystem 表示带远程执行环境的 agent 始终启用文件系统工具，标签不能移除
+const filesystem = computed(() => hasCode(currentModel.value, Capability.RemoteEnvironment))
+// toolRow 是已启用工具的标签行，scrollable 记录左右两侧是否还有被遮住的标签
+const toolRow = ref<HTMLElement>()
+const scrollable = ref({ start: false, end: false })
+// measureTools 按滚动位置更新左右滚动按钮
+function measureTools(): void {
+  const row = toolRow.value
+  if (!row) return
+  scrollable.value = {
+    start: row.scrollLeft > 0,
+    end: row.scrollLeft + row.clientWidth < row.scrollWidth - 1,
+  }
+}
+// scrollTools 向左或向右滚动一屏标签
+function scrollTools(direction: number): void {
+  toolRow.value!.scrollBy({ left: direction * toolRow.value!.clientWidth, behavior: 'smooth' })
+}
+const toolObserver = new ResizeObserver(measureTools)
+watch(toolRow, (row, previous) => {
+  if (previous) toolObserver.unobserve(previous)
+  if (row) toolObserver.observe(row)
+})
+watch([enabledTools, filesystem], () => void nextTick(measureTools))
+onUnmounted(() => toolObserver.disconnect())
 // handset 与官网一致，768 px 及以下 Tools 只显示图标，已启用的工具列在提示中
 const handset = useMediaQuery('(max-width: 768px)')
 const toolsTooltip = computed(() =>
@@ -126,8 +165,27 @@ const canRun = computed(
 const placeholder = computed(() =>
   t(isAgent(currentModel.value) ? 'pg.agentPlaceholder' : 'pg.placeholder'),
 )
-// disclaimer 表示与官网一样为带远程执行环境（能力码 65）的 agent 显示运行提示与 token 上限按钮
-const disclaimer = computed(() => !comparing.value && hasCode(currentModel.value, 65))
+// disclaimer 表示与官网一样为带远程执行环境的 agent 显示运行提示与 token 上限按钮
+const disclaimer = computed(
+  () => !comparing.value && hasCode(currentModel.value, Capability.RemoteEnvironment),
+)
+// inputs 是模型可接受的附件类型，目录能力码 3、4、5 分别表示图片、视频与音频
+const inputs = computed(() => ({
+  image: hasCode(currentModel.value, 3),
+  video: hasCode(currentModel.value, 4),
+  audio: hasCode(currentModel.value, 5),
+}))
+// insertLabel 是附件按钮的说明，列出模型可接受的附件类型
+const insertLabel = computed(() => {
+  const types = [
+    inputs.value.image && t('pg.mediaImages'),
+    inputs.value.video && t('pg.mediaVideos'),
+    inputs.value.audio && t('pg.mediaAudio'),
+    t('pg.mediaFiles'),
+  ].filter((item): item is string => Boolean(item))
+  const list = new Intl.ListFormat(locale.value, { style: 'long', type: 'disjunction' })
+  return t('pg.insertMedia').replace('{types}', list.format(types))
+})
 const tokenCapOpen = ref(false)
 
 // placeholderHeight 是占位文字在当前宽度下的高度，输入框宽度、网页字体或界面语言变化后重新测量
@@ -224,13 +282,7 @@ function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'
   })
 }
 
-// documentPart 表示片段是图片、音频与视频以外的内联文件，与官网一样显示文件名与 token 数
-function documentPart(part: Part): boolean {
-  const mime = part.inlineData?.mimeType
-  return mime !== undefined && !/^(image|audio|video)\//.test(mime)
-}
-
-// addFiles 把文件加入待发送附件，读取期间显示占位，文件附件随后统计 token 数
+// addFiles 把文件加入待发送附件，读取期间显示占位，文件附件随后统计 token 数；与官网一样 Gemini API 协议下的视频先上传 Drive，生成时引用该文件
 async function addFiles(files: Iterable<File>): Promise<void> {
   const list = [...files]
   preparing.value += list.length
@@ -238,8 +290,14 @@ async function addFiles(files: Iterable<File>): Promise<void> {
     try {
       const part = await readFile(file, fileMIME(file))
       part.fileName = file.name
-      session.attachments.push(part)
-      if (documentPart(part)) void countAttachment(session.attachments.at(-1)!)
+      if (videoOptions.value && attachmentKind(part) === 'video') {
+        const uploaded = await uploadDriveFile(file, file.name)
+        part.fileData = { mimeType: uploaded.mimeType, fileUri: uploaded.uri }
+        part.fileExpires = Date.parse(uploaded.expirationTime)
+      }
+      attach(part)
+    } catch (error) {
+      showNotice(failureText(error, t('pg.uploadFailed'), t('pg.uploadFailed')), 'error')
     } finally {
       preparing.value--
     }
@@ -290,11 +348,6 @@ function textPart(part: Part): boolean {
   return part.inlineData?.mimeType.startsWith('text/') ?? false
 }
 
-// attachmentText 返回文本附件的全文
-async function attachmentText(part: Part): Promise<string> {
-  return (await fetch(dataURL(part.inlineData!))).text()
-}
-
 // inlineAttachment 与官网 Inline media 一致：文本附件的内容接到输入框文字之后，两段之间空一行，并移除该附件
 async function inlineAttachment(index: number): Promise<void> {
   const part = session.attachments[index]!
@@ -305,24 +358,45 @@ async function inlineAttachment(index: number): Promise<void> {
   session.draft = [session.draft, text].filter(Boolean).join('\n\n')
 }
 
-// viewed 是对话框中预览的文本附件的名称与全文
-const viewed = ref({ name: '', text: '' })
-const viewOpen = ref(false)
+// preview 是附件预览对话框：与官网一样点击图片与文本附件的缩略图打开，视频与 PDF 同样可以打开
+const { preview, show: showAttachment, release: releasePreview } = useAttachmentPreview()
 
-// viewAttachment 与官网一致点击文本附件的缩略图时在对话框中显示全文
-async function viewAttachment(part: Part): Promise<void> {
-  viewed.value = { name: part.fileName ?? '', text: await attachmentText(part) }
-  viewOpen.value = true
+// videoSettings 是视频附件的 Video settings 对话框：与官网一样 Gemini API 协议下的视频附件可设置截取、帧率与 Agentic 模式
+const videoSettings = ref<{ open: boolean; part?: Part }>({ open: false })
+const videoOptions = computed(() => protocolSupports(session.settings.protocol, 'videoSettings'))
+const agenticVideo = computed(() => hasCode(currentModel.value, 69))
+
+// saveVideoSettings 以保存的视频设置替换附件原有设置，与官网一样按新设置重新统计 token 数
+function saveVideoSettings(
+  settings: Pick<Part, 'videoMetadata' | 'mediaProcessing' | 'fileName'>,
+): void {
+  const part = videoSettings.value.part!
+  delete part.videoMetadata
+  Object.assign(part, settings)
+  void countAttachment(part)
 }
 
-// downloadViewed 把预览中的文本附件存为文件
-function downloadViewed(): void {
-  const url = URL.createObjectURL(new Blob([viewed.value.text], { type: 'text/plain' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = viewed.value.name
-  link.click()
-  URL.revokeObjectURL(url)
+// playing 是正在播放的音频附件，与官网 ms-prompt-audio 一样点击播放图标播放、再次点击暂停
+const playing = ref<Part>()
+const player = new Audio()
+player.addEventListener('pause', () => (playing.value = undefined))
+player.addEventListener('ended', () => (playing.value = undefined))
+
+// toggleAudio 播放或暂停音频附件
+function toggleAudio(part: Part): void {
+  if (playing.value === part) {
+    player.pause()
+    return
+  }
+  player.src = dataURL(part.inlineData!)
+  void player.play()
+  playing.value = part
+}
+
+// removeAttachment 移除附件，正在播放的音频随之停止
+function removeAttachment(index: number): void {
+  if (playing.value === session.attachments[index]) player.pause()
+  session.attachments.splice(index, 1)
 }
 
 // tick 更新录音计时
@@ -347,7 +421,7 @@ async function startRecording(mode: 'attach' | 'transcribe'): Promise<void> {
 
 // addPhoto 把相机拍下的照片加入附件
 async function addPhoto(photo: Blob): Promise<void> {
-  session.attachments.push(await readFile(photo))
+  attach(await readFile(photo))
 }
 
 // addYouTube 把 YouTube 链接作为视频附件
@@ -357,12 +431,14 @@ function addYouTube(): void {
     showNotice(t('pg.youtubeInvalid'), 'error')
     return
   }
-  session.attachments.push({ fileData: { mimeType: 'video/*', fileUri: url } })
+  attach({ fileData: { mimeType: 'video/*', fileUri: url } })
   youtubeURL.value = ''
   youtubeOpen.value = false
 }
 
 onUnmounted(() => {
+  player.pause()
+  releasePreview()
   window.clearInterval(timer)
   widthObserver.disconnect()
   document.fonts.removeEventListener('loadingdone', onFontsLoaded)
@@ -405,64 +481,82 @@ defineExpose({ focus })
         />
       </div>
       <div v-if="session.attachments.length || preparing" class="multi-media-row">
-        <div
-          v-for="(part, index) in session.attachments"
-          :key="index"
-          class="attachment"
-          :class="{ 'attachment-document': documentPart(part) }"
-        >
-          <img
-            v-if="part.inlineData?.mimeType.startsWith('image/')"
-            :src="dataURL(part.inlineData)"
-            alt=""
-            class="attachment-image"
-          />
-          <template v-else-if="documentPart(part)">
-            <button
-              v-if="textPart(part)"
-              type="button"
-              class="document-preview document-view"
+        <div v-for="(part, index) in session.attachments" :key="index" class="attachment">
+          <div class="preview-container">
+            <img
+              v-if="attachmentKind(part) === 'image'"
+              :src="dataURL(part.inlineData!)"
+              :alt="attachmentName(part)"
+              class="attachment-image"
+              @click="showAttachment(part)"
+            />
+            <video
+              v-else-if="attachmentKind(part) === 'video'"
+              :src="dataURL(part.inlineData!)"
               :aria-label="t('pg.preview')"
-              @click="viewAttachment(part)"
+              preload="metadata"
+              muted
+              @click="showAttachment(part)"
+            ></video>
+            <button
+              v-else-if="attachmentKind(part) === 'audio'"
+              type="button"
+              class="thumbnail-icon interactive"
+              :aria-label="playing === part ? t('pg.pause') : t('pg.play')"
+              @click="toggleAudio(part)"
+            >
+              <UiIcon :name="playing === part ? 'pauseCircle' : 'playCircle'" :size="24" />
+            </button>
+            <button
+              v-else-if="attachmentKind(part) !== ''"
+              type="button"
+              class="thumbnail-icon interactive"
+              :aria-label="t('pg.preview')"
+              @click="showAttachment(part)"
             >
               <UiIcon name="document" :size="24" />
             </button>
-            <span v-else class="document-preview"><UiIcon name="document" :size="24" /></span>
-            <span class="document-content">
-              <span class="document-name" :title="part.fileName">{{
-                part.fileName ?? part.inlineData?.mimeType
-              }}</span>
-              <span v-if="part.tokenCount !== undefined" class="document-tokens">{{
-                tokenLabel(part.tokenCount)
-              }}</span>
-            </span>
-          </template>
-          <span v-else class="attachment-file">
             <UiIcon
+              v-else
               :name="
                 part.fileData
                   ? driveNames.has(part.fileData.fileUri)
                     ? 'addToDrive'
                     : 'youtube'
-                  : part.inlineData?.mimeType.startsWith('audio/')
-                    ? 'mic'
-                    : 'upload'
+                  : 'document'
               "
-              :size="18"
+              :size="24"
+              class="thumbnail-icon"
             />
-            <span class="attachment-name">{{
-              part.fileData
-                ? (driveNames.get(part.fileData.fileUri) ?? part.fileData.fileUri)
-                : part.inlineData?.mimeType
+          </div>
+          <div class="content-container">
+            <span v-tooltip.below="attachmentName(part)" class="attachment-name">{{
+              attachmentName(part)
             }}</span>
-          </span>
-          <span class="attachment-actions">
+            <span v-if="part.tokenCount !== undefined" class="attachment-tokens">{{
+              tokenLabel(part.tokenCount)
+            }}</span>
+          </div>
+          <div class="actions-container">
+            <template v-if="videoOptions && attachmentKind(part) === 'video' && part.inlineData">
+              <button
+                v-tooltip.below="t('pg.editVideoOptions')"
+                type="button"
+                ms-button
+                class="attachment-video-settings action-button ms-button-borderless ms-button-icon"
+                :aria-label="t('pg.editVideoOptions')"
+                @click="videoSettings = { open: true, part }"
+              >
+                <UiIcon name="settings" :size="20" />
+              </button>
+              <div class="divider"></div>
+            </template>
             <button
               v-if="textPart(part)"
               v-tooltip.below="t('pg.inlineAttachment')"
               type="button"
               ms-button
-              class="attachment-inline ms-button-borderless ms-button-icon"
+              class="attachment-inline action-button ms-button-borderless ms-button-icon"
               :aria-label="t('pg.inlineAttachment')"
               @click="inlineAttachment(index)"
             >
@@ -472,27 +566,29 @@ defineExpose({ focus })
               v-tooltip.below="t('pg.removeAttachment')"
               type="button"
               ms-button
-              class="attachment-remove ms-button-borderless ms-button-icon"
-              :class="{ 'ms-button-small': !documentPart(part) }"
+              class="attachment-remove action-button ms-button-borderless ms-button-icon"
               :aria-label="t('pg.removeAttachment')"
-              @click="session.attachments.splice(index, 1)"
+              @click="removeAttachment(index)"
             >
-              <UiIcon name="close" :size="documentPart(part) ? 20 : 16" />
+              <UiIcon name="close" :size="20" />
             </button>
-          </span>
+          </div>
         </div>
         <div v-for="index in preparing" :key="`preparing-${index}`" class="attachment">
-          <span class="attachment-file attachment-preparing">{{ t('common.loading') }}…</span>
+          <div class="preview-container">
+            <UiIcon name="spinner" :size="24" class="thumbnail-icon spin" />
+          </div>
+          <span class="attachment-preparing">{{ t('common.loading') }}…</span>
         </div>
       </div>
       <div class="buttons-row">
         <div class="button-row-left">
           <DropdownMenuRoot :modal="false">
             <DropdownMenuTrigger
-              v-tooltip.below="t('pg.insertMedia')"
+              v-tooltip.below="insertLabel"
               ms-button
               class="add-media ms-button-filter-chip"
-              :aria-label="t('pg.insertMedia')"
+              :aria-label="insertLabel"
             >
               <UiIcon name="addCircle" :size="18" />
             </DropdownMenuTrigger>
@@ -506,19 +602,35 @@ defineExpose({ focus })
                   <UiIcon name="upload" :size="18" />
                   <span class="ms-menu-item-text">{{ t('pg.uploadFiles') }}</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem class="ms-menu-item" @select="startRecording('attach')">
+                <DropdownMenuItem
+                  v-if="inputs.audio"
+                  class="ms-menu-item"
+                  @select="startRecording('attach')"
+                >
                   <UiIcon name="mic" :size="18" />
                   <span class="ms-menu-item-text">{{ t('pg.recordAudio') }}</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem class="ms-menu-item" @select="camera?.start()">
+                <DropdownMenuItem
+                  v-if="inputs.image || inputs.video"
+                  class="ms-menu-item"
+                  @select="camera?.start()"
+                >
                   <UiIcon name="camera" :size="18" />
                   <span class="ms-menu-item-text">{{ t('pg.camera') }}</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem class="ms-menu-item" @select="youtubeOpen = true">
+                <DropdownMenuItem
+                  v-if="inputs.video && !isOmniModel(currentModel)"
+                  class="ms-menu-item"
+                  @select="youtubeOpen = true"
+                >
                   <UiIcon name="youtube" :size="18" />
                   <span class="ms-menu-item-text">{{ t('pg.youtubeVideo') }}</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem class="ms-menu-item" @select="sampleOpen = true">
+                <DropdownMenuItem
+                  v-if="inputs.image || inputs.video"
+                  class="ms-menu-item"
+                  @select="sampleOpen = true"
+                >
                   <UiIcon name="modeImage" :size="18" />
                   <span class="ms-menu-item-text">{{ t('pg.sampleMedia') }}</span>
                 </DropdownMenuItem>
@@ -527,7 +639,19 @@ defineExpose({ focus })
           </DropdownMenuRoot>
           <ApiKeyButton />
           <input ref="fileInput" type="file" class="file-input" multiple @change="onFileChange" />
-          <PopoverRoot v-if="tools.length && !comparing">
+          <button
+            v-if="!tools.length && !comparing"
+            type="button"
+            ms-button
+            class="tools-button ms-button-primary"
+            :class="{ 'ms-button-icon': handset }"
+            :aria-label="t('pg.openTools')"
+            aria-disabled="true"
+          >
+            <UiIcon name="tools" :size="18" />
+            <template v-if="!handset">{{ t('pg.tools') }}</template>
+          </button>
+          <PopoverRoot v-else-if="!comparing">
             <PopoverTrigger
               v-tooltip.below="toolsTooltip"
               ms-button
@@ -558,23 +682,54 @@ defineExpose({ focus })
               </PopoverContent>
             </PopoverPortal>
           </PopoverRoot>
-          <div v-if="enabledTools.length && !handset && !comparing" class="enabled-tool-container">
-            <div v-for="tool in enabledTools" :key="tool.id" class="enabled-tool">
-              <span class="tool-chip">
-                <UiIcon :name="tool.icon" :size="16" class="tool-icon" />
-                <span class="tool-name">{{ t(tool.label) }}</span>
-              </span>
-              <button
-                v-tooltip.below="t('pg.removeTool').replace('{tool}', t(tool.label))"
-                type="button"
-                ms-button
-                class="ms-button-borderless ms-button-icon ms-button-small"
-                :aria-label="t('pg.removeTool').replace('{tool}', t(tool.label))"
-                @click="setTool(tool.id, false)"
-              >
-                <UiIcon name="close" :size="16" />
-              </button>
+          <div
+            v-if="(enabledTools.length || filesystem) && !handset && !comparing"
+            class="enabled-tool-scroll"
+          >
+            <button
+              v-if="scrollable.start"
+              type="button"
+              ms-button
+              class="chevron-btn left ms-button-borderless ms-button-icon"
+              :aria-label="t('pg.scrollLeft')"
+              @click="scrollTools(-1)"
+            >
+              <UiIcon name="chevronLeft" :size="20" />
+            </button>
+            <div ref="toolRow" class="enabled-tool-container" @scroll="measureTools">
+              <div v-for="tool in enabledTools" :key="tool.id" class="enabled-tool">
+                <span class="tool-chip">
+                  <UiIcon :name="tool.icon" :size="16" class="tool-icon" />
+                  <span class="tool-name">{{ t(tool.label) }}</span>
+                </span>
+                <button
+                  v-tooltip.below="t('pg.removeTool').replace('{tool}', t(tool.label))"
+                  type="button"
+                  ms-button
+                  class="ms-button-borderless ms-button-icon ms-button-small"
+                  :aria-label="t('pg.removeTool').replace('{tool}', t(tool.label))"
+                  @click="setTool(tool.id, false)"
+                >
+                  <UiIcon name="close" :size="16" />
+                </button>
+              </div>
+              <div v-if="filesystem" class="enabled-tool">
+                <span class="tool-chip">
+                  <UiIcon name="folder" :size="16" class="tool-icon" />
+                  <span class="tool-name">{{ t('pg.filesystemTools') }}</span>
+                </span>
+              </div>
             </div>
+            <button
+              v-if="scrollable.end"
+              type="button"
+              ms-button
+              class="chevron-btn right ms-button-borderless ms-button-icon"
+              :aria-label="t('pg.scrollRight')"
+              @click="scrollTools(1)"
+            >
+              <UiIcon name="chevronRight" :size="20" />
+            </button>
           </div>
         </div>
         <div class="button-wrapper">
@@ -646,21 +801,23 @@ defineExpose({ focus })
         </button>
       </template>
     </UiDialog>
-    <UiDialog v-model:open="viewOpen" :title="viewed.name" width="600px">
-      <template #header>
-        <button
-          v-tooltip.below="t('pg.download')"
-          type="button"
-          ms-button
-          class="ms-button-borderless ms-button-icon"
-          :aria-label="t('pg.download')"
-          @click="downloadViewed"
-        >
-          <UiIcon name="download" :size="20" />
-        </button>
-      </template>
-      <pre class="attachment-text" tabindex="0">{{ viewed.text }}</pre>
-    </UiDialog>
+    <MediaViewDialog
+      v-model:open="preview.open"
+      :title="preview.part ? attachmentName(preview.part) : ''"
+      :kind="preview.kind"
+      :src="preview.src"
+      :text="preview.text"
+      @download="preview.part && downloadAttachment(preview.part)"
+    />
+    <VideoSettingsDialog
+      v-if="videoSettings.part"
+      v-model:open="videoSettings.open"
+      :part="videoSettings.part"
+      :src="dataURL(videoSettings.part.inlineData!)"
+      :name="attachmentName(videoSettings.part)"
+      :agentic="agenticVideo"
+      @save="saveVideoSettings"
+    />
     <CameraDialog ref="camera" @capture="addPhoto" />
     <DriveDialog v-model:open="driveOpen" @select="addDriveFile" />
     <SampleMediaDialog v-model:open="sampleOpen" @select="addSample" />
@@ -735,107 +892,97 @@ defineExpose({ focus })
   overflow-x: auto;
 }
 
+/* attachment 与官网 ms-prompt-media 一致：56 px 高的附件块，32 px 预览、文件名与 token 数、操作按钮 */
 .attachment {
-  position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 4px;
-  max-width: 240px;
-  padding: 4px;
-  border: 1px solid var(--color-v3-outline-var);
-  border-radius: 8px;
-  background-color: var(--color-v3-surface-container);
-}
-
-.attachment-document {
   gap: 8px;
+  width: fit-content;
   min-width: 180px;
   max-width: 280px;
   height: 56px;
   padding: 8px 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-v3-outline-var);
   border-radius: 12px;
+  background-color: var(--color-v3-surface-container);
+  cursor: default;
 }
 
-.document-preview {
+.preview-container {
+  position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
+  overflow: hidden;
   border-radius: 4px;
   background-color: var(--color-v3-surface-container-highest);
 }
 
-.document-view {
+.preview-container :is(img, video) {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  cursor: pointer;
+  object-fit: cover;
+}
+
+.thumbnail-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
+  background: none;
   color: inherit;
+  pointer-events: none;
+}
+
+.thumbnail-icon.interactive {
   cursor: pointer;
+  pointer-events: auto;
 }
 
-.attachment-actions {
-  display: flex;
-  flex-shrink: 0;
-}
-
-.attachment-text {
-  max-height: calc(80dvh - 97px);
-  margin: 0;
-  overflow: auto;
-  color: var(--color-v3-text);
-  font-family: monospace;
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.document-content {
+.content-container {
   display: flex;
   flex-direction: column;
+  flex-grow: 1;
+  justify-content: center;
   min-width: 0;
-  font-size: 12px;
 }
 
-.document-name {
+.attachment-name {
   overflow: hidden;
+  color: var(--color-v3-text);
+  font-size: 12px;
   line-height: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.document-tokens {
+.attachment-tokens,
+.attachment-preparing {
   color: var(--color-v3-text-var);
+  font-size: 12px;
   line-height: 16px;
 }
 
-.attachment-image {
-  width: 56px;
-  height: 56px;
-  border-radius: 4px;
-  object-fit: cover;
-}
-
-.attachment-file {
+.actions-container {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding-left: 4px;
-  font-size: 12px;
-  line-height: 18px;
 }
 
-.attachment-preparing {
-  height: 56px;
-  padding-inline: 12px;
-  color: var(--color-v3-text-var);
-}
-
-.attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--color-v3-outline-var);
 }
 
 .textarea-row {
@@ -908,6 +1055,12 @@ defineExpose({ focus })
   flex-shrink: 0;
 }
 
+.enabled-tool-scroll {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .enabled-tool-container {
   display: flex;
   gap: 4px;
@@ -915,6 +1068,10 @@ defineExpose({ focus })
   padding-inline: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.chevron-btn {
+  flex-shrink: 0;
 }
 
 .enabled-tool {

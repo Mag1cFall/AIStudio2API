@@ -390,6 +390,32 @@ type AgentConfig struct {
 	CollaborativePlanning bool   `json:"collaborative_planning,omitempty"`
 }
 
+// AgentEnvironment 是 Interactions API 的 environment：ID 为已有环境，Sources 为挂载到环境中的源，Allowlist 为出站白名单
+type AgentEnvironment struct {
+	ID      string              `json:"id,omitempty"`
+	Sources []EnvironmentSource `json:"sources,omitempty"`
+	// Allowlist 为空时新环境按官网默认禁止出站，已有环境保持原网络设置
+	Allowlist []EgressRule `json:"allowlist,omitempty"`
+	// NetworkDisabled 表示禁止全部出站
+	NetworkDisabled bool `json:"network_disabled,omitempty"`
+}
+
+// EnvironmentSource 是挂载到环境中的一个源，Type 为 gcs、inline 或 repository
+type EnvironmentSource struct {
+	Type     string `json:"type"`
+	Source   string `json:"source,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Encoding string `json:"encoding,omitempty"`
+}
+
+// EgressRule 是出站白名单的一条规则，Headers 为注入匹配请求的请求头，Credential 为服务端凭据 ID
+type EgressRule struct {
+	Domain     string            `json:"domain"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Credential string            `json:"credential,omitempty"`
+}
+
 // GenerateRequest 表示供应商无关的生成请求
 type GenerateRequest struct {
 	ID    string `json:"id"`
@@ -410,6 +436,8 @@ type GenerateRequest struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// AgentConfig 是 agent 的运行配置
 	AgentConfig *AgentConfig `json:"agent_config,omitempty"`
+	// Environment 是 agent 的远程环境，nil 时为官网默认的新环境
+	Environment *AgentEnvironment `json:"environment,omitempty"`
 	// PreviousInteractionID 是上一轮 agent 后台任务的上游 interaction ID，有值时只发送上一模型轮之后的输入
 	PreviousInteractionID string `json:"previous_interaction_id,omitempty"`
 	// ImageRoute 内部标记：图像生成模型（由模型目录能力推导）

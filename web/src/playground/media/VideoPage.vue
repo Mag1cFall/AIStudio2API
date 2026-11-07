@@ -201,7 +201,7 @@ watch(
 </script>
 
 <template>
-  <MediaLayout :title="state.title">
+  <MediaLayout :title="state.title || t('pg.untitled')">
     <template v-if="state.id !== null" #title>
       <button
         v-tooltip.below="t('pg.editTitle')"

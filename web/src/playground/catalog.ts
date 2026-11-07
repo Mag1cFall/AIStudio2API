@@ -33,6 +33,7 @@ export const Capability = {
   Temperature: 62,
   StopSequences: 63,
   MaxOutputTokens: 64,
+  RemoteEnvironment: 65,
   LiveMicrophone: 66,
   LiveCamera: 67,
   LiveScreen: 68,

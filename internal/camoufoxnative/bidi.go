@@ -564,9 +564,9 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// servicePreloadFunction 是先于官网页面脚本执行的 preload：第一个 bundle 写入 default_MakerSuite 时把它恢复为普通数据属性，并在随后的微任务中定位官网 WAA service 类（原型带 initialize，getMetadata 返回 X-Goog-Api-Key），该类实例首次调用 getMetadata 时换回原方法并经通道交出实例
+// servicePreloadFunction 是先于官网页面脚本执行的 preload，只在仍在解析的顶层官网文档中生效：第一个 bundle 写入 default_MakerSuite 时把它恢复为普通数据属性，并在随后的微任务中定位官网 WAA service 类（原型带 initialize，getMetadata 返回 X-Goog-Api-Key），该类实例首次调用 getMetadata 时换回原方法并经通道交出实例
 const servicePreloadFunction = `emit => {
-  if (window !== window.top || location.origin !== 'https://aistudio.google.com') return;
+  if (window !== window.top || location.origin !== 'https://aistudio.google.com' || document.readyState !== 'loading') return;
   Object.defineProperty(window, 'default_MakerSuite', {configurable: true, enumerable: true, get: () => undefined, set: namespace => {
     Object.defineProperty(window, 'default_MakerSuite', {value: namespace, writable: true, enumerable: true, configurable: true});
     queueMicrotask(() => {

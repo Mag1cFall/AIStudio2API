@@ -20,7 +20,7 @@ type uiShell struct {
 }
 
 // newShell 创建命令行版的管理界面宿主，open 为 true 时打开系统浏览器；生成服务在 run 返回后结束
-func newShell(open bool, _ func()) *uiShell {
+func newShell(open, _ bool, _ func()) *uiShell {
 	return &uiShell{open: open}
 }
 

@@ -2,25 +2,14 @@
 
 package desktop
 
-// #cgo pkg-config: gtk+-3.0
-// #include <gtk/gtk.h>
-// static int trayDoubleClickTime(void) { int value; g_object_get(gtk_settings_get_default(), "gtk-double-click-time", &value, NULL); return value; }
-import "C"
-
 import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
-
-// doubleClickInterval 返回 GTK 的双击间隔
-func doubleClickInterval() time.Duration {
-	return time.Duration(C.trayDoubleClickTime()) * time.Millisecond
-}
 
 // statusNotifierWatcher 为托盘宿主在会话总线上的名称
 const statusNotifierWatcher = "org.kde.StatusNotifierWatcher"

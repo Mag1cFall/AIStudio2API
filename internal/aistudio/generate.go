@@ -970,6 +970,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			return
 		}
+		if finish != nil && contentPolicyFinish(finish.FinishReason) {
+			if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
+				return
+			}
+			if ctx.Err() == nil {
+				_ = send(Event{Kind: EventError, Err: &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
+			}
+			return
+		}
 		if usage == nil {
 			usage = localCompleteUsage(request, output)
 		} else if usage.OutputTokensMissing {
@@ -991,6 +1000,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 	}()
 	return contract.forward(ctx, events), nil
+}
+
+// contentPolicyFinish 表示结束原因属于内容策略类：安全、背诵、屏蔽词、禁止内容、个人敏感信息与对应的图片原因
+func contentPolicyFinish(reason string) bool {
+	switch reason {
+	case "safety", "recitation", "blocklist", "prohibited_content", "spii", "image_safety", "image_prohibited_content", "image_recitation":
+		return true
+	}
+	return false
 }
 
 // regenerable 表示上游以函数调用格式错误、意外的工具调用或响应格式异常结束、流在完成帧之前中断或流尾为 5xx 错误，且本次生成还没有不能丢弃的输出
