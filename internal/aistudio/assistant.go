@@ -51,17 +51,29 @@ const (
 	assistantWorkspaceRule = "The tools listed earlier in your instructions (%s) act on an empty remote applet workspace that has nothing to do with this conversation or the user's machine. You are strictly forbidden to call any of them: do not create, view, edit or delete workspace files, run workspace commands, compile, install, deploy or generate images there. Reply to the user directly in your answer."
 	// assistantSearchRule 是请求允许网页搜索时接在禁止说明之后的说明
 	assistantSearchRule = " The only exception is search_web, which you may call to search the web."
-	// assistantTurnOpen 与 assistantTurnClose 包住以 user 轮发送的模型历史轮
-	assistantTurnOpen  = "<assistant_turn>\n"
-	assistantTurnClose = "\n</assistant_turn>"
+	// assistantHistoryOpen 与 assistantHistoryClose 包住转录在自定义指令末尾的对话历史
+	assistantHistoryOpen  = "<conversation_history>\n"
+	assistantHistoryClose = "</conversation_history>"
+	// assistantHistoryTurn 是对话历史中的一轮，依次为标签、正文与标签
+	assistantHistoryTurn = "<%s>\n%s\n</%s>\n"
+	// assistantAttachmentLabel 是对话历史中附件的编号
+	assistantAttachmentLabel = "[attachment %d]"
 	// assistantSearchTranscript 是模型历史轮中补回的一次 search_web 结果，依次为查询与摘要
 	assistantSearchTranscript = "search_web results for %q:\n%s"
 	// assistantSearchHistoryLimit 是保存 search_web 结果的模型回复数上限
 	assistantSearchHistoryLimit = 1000
-	// assistantHistoryRule 是对话含模型历史轮时写入自定义指令的说明
-	assistantHistoryRule = "Your own earlier replies in this conversation, including your function_calls blocks, appear in the user message between <assistant_turn> and </assistant_turn>. Continue from the latest content and never write these tags yourself."
+	// assistantHistoryRule 是自定义指令转录了对话历史时的说明
+	assistantHistoryRule = "The conversation before the first user message of this chat is transcribed at the end of these instructions between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself."
+	// assistantTurnTokenLimit 是最后一组留在 field 1 提交的本地 Token 数上限，超过时与之前的对话一起转录在自定义指令中
+	assistantTurnTokenLimit = 24576
+	// assistantLatestPrompt 是对话全部转录在自定义指令中时提交的用户轮
+	assistantLatestPrompt = "Continue the conversation from the last turn of the conversation history at the end of your instructions."
 	// assistantEmptyReplyPrompt 是模型一轮结束时没有正文与函数调用后在同一应用中追加的用户轮
 	assistantEmptyReplyPrompt = "Your last turn ended without any visible reply. Continue now and give your reply."
+	// assistantInterruptedPrompt 是上游步骤在已输出正文后失败时在同一应用中追加的用户轮，%s 为已输出正文的末尾
+	assistantInterruptedPrompt = "Your last turn was cut off by an internal error. The user already received your reply up to the end of this text:\n<partial_reply>\n%s\n</partial_reply>\nContinue the reply right after it without repeating it."
+	// assistantPartialReplyRunes 是 assistantInterruptedPrompt 带上的已输出正文末尾的字符数上限
+	assistantPartialReplyRunes = 20000
 )
 
 // assistantWorkspaceTools 是写代码助手服务端指令声明的工作区内置工具，search_web 在最后
@@ -179,8 +191,8 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 	return json.Marshal(wire)
 }
 
-// assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，声明函数时允许以 ask_question 交回调用，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块，只保留 start 起的对话轮；写代码助手只读取 user 轮，模型历史轮去掉思考后包上标记以 user 轮发送，transcribed 时说明这一标记
-func assistantToolPrompt(request GenerateRequest, start int, transcribed bool) (GenerateRequest, error) {
+// assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，声明函数时允许以 ask_question 交回调用，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块；前 history 轮去掉思考后转录在自定义指令末尾，只提交 start 起的对话轮，全部转录时提交请模型从最后一轮继续的用户轮，start 等于 history 时其中的附件按编号放在提交的第一轮开头
+func assistantToolPrompt(request GenerateRequest, history int, start int) (GenerateRequest, error) {
 	functions := len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none"
 	forbidden := assistantWorkspaceTools
 	if request.Tools.GoogleSearch != nil {
@@ -200,7 +212,7 @@ func assistantToolPrompt(request GenerateRequest, start int, transcribed bool) (
 		}
 		prompt += "\n\n" + fmt.Sprintf(assistantToolProtocol, declarations)
 	}
-	contents := make([]Content, 0, len(request.Contents))
+	turns := make([][]Part, 0, len(request.Contents))
 	var pending []FunctionCall
 	for index, content := range request.Contents {
 		linked, err := linkFunctionResults(content, &pending)
@@ -245,32 +257,61 @@ func assistantToolPrompt(request GenerateRequest, start int, transcribed bool) (
 		if err := flush(); err != nil {
 			return request, err
 		}
-		if linked.Role == RoleAssistant {
-			parts = assistantTurn(parts)
-		}
-		contents = append(contents, Content{Role: RoleUser, Parts: parts})
+		turns = append(turns, parts)
 	}
-	if transcribed {
+	if history > 0 {
 		prompt += "\n\n" + assistantHistoryRule
 	}
 	if len(request.System) > 0 {
 		prompt += "\n\n"
 	}
 	request.System = append([]string{prompt}, request.System...)
-	request.Contents = contents[start:]
+	var attachments []Part
+	if history > 0 {
+		var transcript string
+		transcript, attachments = assistantTranscript(request.Contents[:history], turns)
+		request.System = append(request.System, "\n\n"+transcript)
+	}
+	contents := make([]Content, 0, len(turns)-start+1)
+	for _, parts := range turns[start:] {
+		contents = append(contents, Content{Role: RoleUser, Parts: parts})
+	}
+	if len(contents) == 0 {
+		contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: assistantLatestPrompt}}})
+	}
+	if start == history && len(attachments) > 0 {
+		contents[0].Parts = append(attachments, contents[0].Parts...)
+	}
+	request.Contents = contents
 	return request, nil
 }
 
-// assistantTurn 去掉模型历史轮的思考与空 Part，首尾加上模型轮标记
-func assistantTurn(parts []Part) []Part {
-	turn := []Part{{Text: assistantTurnOpen}}
-	for _, part := range parts {
-		if part.Thought || !part.payload() {
-			continue
+// assistantTranscript 返回 contents 转录成的对话历史与其中的附件：各轮取 turns 中同一位置改写后的 Part，去掉思考与空 Part，附件写为编号，附件依次以编号文本 Part 与附件 Part 返回
+func assistantTranscript(contents []Content, turns [][]Part) (string, []Part) {
+	var transcript strings.Builder
+	var attachments []Part
+	transcript.WriteString(assistantHistoryOpen)
+	for index, content := range contents {
+		tag := "user_turn"
+		if content.Role == RoleAssistant {
+			tag = "assistant_turn"
 		}
-		turn = append(turn, part)
+		var texts []string
+		for _, part := range turns[index] {
+			switch {
+			case part.Thought || !part.payload():
+			case part.textOnly():
+				texts = append(texts, part.Text)
+			default:
+				label := fmt.Sprintf(assistantAttachmentLabel, len(attachments)/2+1)
+				attachments = append(attachments, Part{Text: label}, part)
+				texts = append(texts, label)
+			}
+		}
+		fmt.Fprintf(&transcript, assistantHistoryTurn, tag, strings.Join(texts, "\n"), tag)
 	}
-	return append(turn, Part{Text: assistantTurnClose})
+	transcript.WriteString(assistantHistoryClose)
+	return transcript.String(), attachments
 }
 
 // scriptJSON 按页面脚本 JSON.stringify 的形式编码，保留 HTML 字符原样、不带结尾换行
@@ -284,7 +325,7 @@ func scriptJSON(value any) (string, error) {
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 
-// sendAssistant 在对话所在的应用中只提交新增轮次，没有可继续的应用时新建应用并提交全部历史，返回任务流；本轮结束时没有正文与函数调用的，在同一应用中追加用户轮请模型继续，用量按续写合并；流关闭后取消未完成的任务，本轮回复完整结束时对话保存为可继续，否则放弃应用留待巡检删除
+// sendAssistant 在对话所在的应用中只提交新增轮次，没有可继续的应用时新建应用，最后一组之前的历史转录在自定义指令中，返回任务流；本轮结束时没有正文与函数调用、或上游步骤在已输出正文后失败的，在同一应用中追加用户轮请模型继续，用量按续写合并；流关闭后取消未完成的任务，本轮回复完整结束时对话保存为可继续，否则放弃应用留待巡检删除
 func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	reason := ""
 	if request.Unary {
@@ -300,12 +341,43 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
 	history := assistantHistoryDigest(request.Contents)
 	links := assistantLinks(request.Contents)
-	session, start := c.assistants.claim(apiKey, request.AccountID, links)
+	// latest 表示最后一组也转录在自定义指令中：最后一组是模型轮，或本地 Token 数超过 assistantTurnTokenLimit
+	latest := false
+	if count := len(links); count > 0 {
+		tail := 0
+		if count > 1 {
+			tail = links[count-2].end
+		}
+		var parts []Part
+		for _, content := range request.Contents[tail:] {
+			parts = append(parts, content.Parts...)
+		}
+		latest = links[count-1].model || localPartsTokens(parts) > assistantTurnTokenLimit
+	}
+	var session *assistantSession
+	start := 0
+	if !latest {
+		session, start = c.assistants.claim(apiKey, request.AccountID, links)
+	}
+	// groups 是转录在自定义指令中的开头分组数
+	groups := 0
+	switch {
+	case latest:
+		groups = len(links)
+		start = len(request.Contents)
+	case session != nil:
+		groups = session.history
+	case len(links) > 1:
+		groups = len(links) - 1
+		start = links[groups-1].end
+	}
+	transcribed := 0
+	if groups > 0 {
+		transcribed = links[groups-1].end
+	}
 	cleanup := &assistantCleanup{client: c, accountID: request.AccountID, session: session}
-	cleanup.transcribed = slices.ContainsFunc(request.Contents[start:], func(content Content) bool { return content.Role == RoleAssistant }) ||
-		session != nil && session.transcribed
 	request.Contents = assistantSearches.restore(apiKey, request.Contents)
-	request, err := assistantToolPrompt(request, start, cleanup.transcribed)
+	request, err := assistantToolPrompt(request, transcribed, start)
 	if err != nil {
 		cleanup.run()
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -321,11 +393,11 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		if err != nil {
 			return nil, nil, err
 		}
-		cleanup.session = c.assistants.open(request.AccountID, applet)
+		cleanup.session = c.assistants.open(request.AccountID, applet, groups)
 		lease, _ := AccountLeaseFromContext(ctx)
 		if err := lease.BindResource(applet, assistantAppletKind); err != nil {
 			cleanup.run()
-			return nil, nil, err
+			return nil, nil, errors.Join(err, c.deleteAssistantApplet(ctx, request.AccountID, applet))
 		}
 	}
 	applet := cleanup.session.applet
@@ -367,21 +439,48 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		}
 		decoder := newDecoder(streamBody)
 		err := DecodeAssistantStream(source, decoder, collect)
-		for followed := 0; err == nil && len(reply) == 0 && !decoder.overran && !decoder.malformed && followed < regenerations; followed++ {
+		// searches 是之前各任务完成的 search_web，interrupted 表示本轮在上游步骤失败后接着写过
+		var searches []string
+		interrupted := false
+		// replied 是当前任务开始时回复中的 Part 数
+		for followed, replied := 0, 0; followed < regenerations; followed++ {
+			prompt := assistantEmptyReplyPrompt
+			var failure *RPCError
+			if err != nil {
+				if !decoder.failed || answer.Len() == 0 || !errors.As(err, &failure) || failure.StatusCode != http.StatusBadGateway {
+					break
+				}
+				err = nil
+				for _, event := range decoder.recorded() {
+					if err = collect(event); err != nil {
+						break
+					}
+				}
+				if err != nil {
+					break
+				}
+				partial := []rune(answer.String())
+				prompt = fmt.Sprintf(assistantInterruptedPrompt, string(partial[max(0, len(partial)-assistantPartialReplyRunes):]))
+				interrupted = true
+			} else if len(reply) > replied || decoder.overran || decoder.malformed {
+				break
+			}
+			replied = len(reply)
+			searches = append(searches, decoder.searches...)
 			followUp := request
-			followUp.Contents = []Content{{Role: RoleUser, Parts: []Part{{Text: assistantEmptyReplyPrompt}}}}
+			followUp.Contents = []Content{{Role: RoleUser, Parts: []Part{{Text: prompt}}}}
 			next, nextBody, follow, openErr := c.openAssistantGeneration(ctx, followUp, entry, applet, true)
 			cleanup.generation.Store(&next)
+			decoder = newDecoder(nextBody)
 			if err = openErr; err != nil {
 				break
 			}
-			decoder = newDecoder(nextBody)
 			err = errors.Join(DecodeAssistantStream(follow.Body, decoder, collect), follow.Body.Close())
 		}
+		cleanup.completed.Store(decoder.failed || err == nil && decoder.finished && !decoder.overran)
 		if err == nil {
-			cleanup.completed.Store(decoder.finished && !decoder.overran || decoder.failed)
-			assistantSearches.store(apiKey, history, answer.String(), decoder.searches)
-			if decoder.finished && !decoder.overran && !decoder.malformed {
+			assistantSearches.store(apiKey, history, answer.String(), append(searches, decoder.searches...))
+			if decoder.finished && !decoder.overran && !decoder.malformed && !interrupted {
 				cleanup.tip.Store(&assistantSessionKey{apiKey: apiKey, digest: assistantLinkDigest(links[len(links)-1].digest, true, reply)})
 			}
 		}
@@ -574,8 +673,6 @@ type assistantCleanup struct {
 	client    *Client
 	accountID string
 	session   *assistantSession
-	// transcribed 表示请求结束后应用中有以 user 轮转录的模型历史轮
-	transcribed bool
 	// generation 是应用中最近提交的任务 ID
 	generation atomic.Pointer[string]
 	completed  atomic.Bool
@@ -590,7 +687,7 @@ func (cleanup *assistantCleanup) run() {
 		if cleanup.session == nil {
 			return
 		}
-		cleanup.client.assistants.finish(cleanup.session, cleanup.tip.Load(), cleanup.transcribed)
+		cleanup.client.assistants.finish(cleanup.session, cleanup.tip.Load())
 		generation := cleanup.generation.Load()
 		if generation == nil || *generation == "" || cleanup.completed.Load() {
 			return
@@ -782,8 +879,9 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 		if status == 3 {
 			return nil, nil
 		}
+		d.failed = true
 		if d.called {
-			d.overran, d.failed = true, true
+			d.overran = true
 			return nil, nil
 		}
 		return nil, failed
@@ -1205,17 +1303,29 @@ func (d *AssistantStreamDecoder) decodeSearch(raw json.RawMessage, path string, 
 	return nil
 }
 
+// recorded 返回记录的搜索来源与各步骤用量之和
+func (d *AssistantStreamDecoder) recorded() []Event {
+	var events []Event
+	if d.grounding != nil {
+		events = append(events, Event{Kind: EventGrounding, Grounding: d.grounding})
+	}
+	if len(d.usage) > 0 {
+		var total Usage
+		for _, usage := range d.usage {
+			total.InputTokens += usage.InputTokens
+			total.CachedTokens += usage.CachedTokens
+			total.OutputTokens += usage.OutputTokens
+			total.TotalTokens += usage.TotalTokens
+		}
+		events = append(events, Event{Kind: EventUsage, Usage: &total})
+	}
+	return events
+}
+
 // End 在本轮回复结束、函数调用之后模型继续输出正文或流结束时返回扣下的正文或函数调用、搜索来源、各步骤用量之和与完成事件
 func (d *AssistantStreamDecoder) End() ([]Event, error) {
 	if !d.finished && !d.overran && !d.called && !d.wroteText {
 		return nil, &ProtocolEvidenceError{Method: assistantStreamMethod, Path: "$", Detail: "流结束前没有完成的模型回复"}
-	}
-	var total Usage
-	for _, usage := range d.usage {
-		total.InputTokens += usage.InputTokens
-		total.CachedTokens += usage.CachedTokens
-		total.OutputTokens += usage.OutputTokens
-		total.TotalTokens += usage.TotalTokens
 	}
 	var events []Event
 	switch {
@@ -1224,12 +1334,7 @@ func (d *AssistantStreamDecoder) End() ([]Event, error) {
 	case !d.called && d.held != "":
 		events = []Event{{Kind: EventText, Text: d.held}}
 	}
-	if d.grounding != nil {
-		events = append(events, Event{Kind: EventGrounding, Grounding: d.grounding})
-	}
-	if len(d.usage) > 0 {
-		events = append(events, Event{Kind: EventUsage, Usage: &total})
-	}
+	events = append(events, d.recorded()...)
 	finish := decodeFinishReason(1)
 	if d.malformed {
 		finish = decodeFinishReason(10)

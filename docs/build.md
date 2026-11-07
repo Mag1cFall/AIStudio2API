@@ -494,7 +494,7 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 
 Build 页面的对话面板由写代码助手回复。助手带有服务端的系统提示词，用量计入 Build 对话的额度：免费账户为免费请求，Google AI 订阅账户为订阅额度，与 Playground、Build 应用代理分别计算。服务把它作为第三个通道 `assistant`，经模型名后缀 `-build` 调用。
 
-本节的 RPC 都位于 MakerSuite 服务，地址为 `https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/<RPC>`，方法为 `POST`，正文为 `application/json+protobuf` 稀疏数组：protobuf field N 对应 JSON 索引 N-1，中间未设置的 field 写 `null`。
+本节的 RPC 除 `DeleteApplet` 外都位于 MakerSuite 服务，地址为 `https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/<RPC>`；`DeleteApplet` 位于应用服务，地址为 `https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletService/DeleteApplet`。方法为 `POST`，正文为 `application/json+protobuf` 稀疏数组：protobuf field N 对应 JSON 索引 N-1，中间未设置的 field 写 `null`。
 
 ### 目录与调度
 
@@ -538,7 +538,9 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 - field 9 以内置工具禁止说明开头：写代码助手服务端指令声明的 25 个工作区工具（`run_command`、`write_to_file`、`view_file`、`search_web` 等）作用于与对话无关的空应用，说明列出这些工具名并禁止调用；请求带 Google Search 工具时列表不含 `search_web`，并在说明末尾允许调用 `search_web`；请求声明函数且 tool choice 不是 `none` 时列表不含 `ask_question`，模型写出调用代码块后以它结束本轮
 - `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，接在禁止说明之后（中间空一行）
 - 对话轮中的函数调用与结果 Part 转录为代码块文本：同一轮内相邻的调用合为一个 `function_calls` 块，相邻的结果合为一个 `function_results` 块，元素分别为 `{"name","arguments"}` 与 `{"name","response"}`；转录在上传附件与计算 WAA binding 之前完成
-- 写代码助手只把 field 1 中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮；应用中以前各轮由上游保存，按原角色进入模型输入，见“对话与应用”。服务把 field 1 中的 model 轮去掉思考与空 Part 后，首尾加上 `<assistant_turn>\n` 与 `\n</assistant_turn>` 两个文本 Part，以 user 轮发送；本次或以前提交到该应用的对话轮中有这样转录的 model 轮时，field 9 的说明之后另起一段写入下面的模型轮说明
+- 写代码助手只把 field 1 中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮，合并后的消息超过约 33k token 时只有开头部分进入模型输入；field 9 不截短（33 万 token 完整进入）；应用中以前各轮由上游保存，按原角色进入模型输入，见“对话与应用”
+- 新建应用时最后一组之前还有对话轮的，这些轮次去掉思考与空 Part 后转录在 field 9 末尾，field 1 只提交最后一组：field 9 的说明之后另起一段写入下面的对话历史说明，系统提示之后另起一段写入 `<conversation_history>` 与 `</conversation_history>` 包住的各轮，user 轮为 `<user_turn>\n<正文>\n</user_turn>\n`，model 轮为 `<assistant_turn>\n<正文>\n</assistant_turn>\n`，同一轮的多个 Part 以换行连接。转录轮次中的附件写为 `[attachment <序号>]`，附件本身按序号放在 field 1 第一轮开头，每个附件前是它的 `[attachment <序号>]` 文本 Part；之后在该应用中继续时，field 9 按本次请求转录同样多的开头分组，客户端回传的历史格式不同（例如合并了相邻的 user 轮）时按回传的格式转录
+- 最后一组是 model 轮，或其本地 Token 数超过 24576 时，不在已有应用中继续：新建应用，最后一组也转录在 field 9 中，field 1 只提交用户轮 `Continue the conversation from the last turn of the conversation history at the end of your instructions.`，转录轮次中的附件放在这一轮开头
 - 本进程读到的回复中，`search_web` 步骤的查询与摘要按请求所用 API key、该轮之前对话轮的角色与正文摘要、回复正文保存（最多 1000 条回复）；之后以同一 API key 发送的请求中，某个 model 轮之前的对话与正文都和某条回复相同时，在该轮开头补回文本 Part `search_web results for "<查询>":\n<摘要>`，每次搜索一个
 
 ````text
@@ -552,7 +554,7 @@ Right after the block, call your ask_question tool once with the question "Run t
 ````
 
 ````text
-Your own earlier replies in this conversation, including your function_calls blocks, appear in the user message between <assistant_turn> and </assistant_turn>. Continue from the latest content and never write these tags yourself.
+The conversation before the first user message of this chat is transcribed at the end of these instructions between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself.
 ````
 
 - Google Search 工具不写入请求：写代码助手按需调用内置的 `search_web`，搜索步骤按“任务流”输出为 grounding；其他 Google 工具在发送前丢弃
@@ -567,11 +569,11 @@ CreateApplet（对话没有可继续的应用时）       → 应用 ID
 CodeAssistantOffline（WAA proof）           → 任务 ID
 StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到本轮回复结束或上游关闭
 StreamCodeAssistantOfflineGeneration        （消息列表在回复完成前结束时再请求一次）
-CodeAssistantOffline、StreamCodeAssistantOfflineGeneration（回复没有正文、问题与函数调用时追加用户轮，最多 3 次）
+CodeAssistantOffline、StreamCodeAssistantOfflineGeneration（回复没有正文、问题与函数调用，或上游步骤在已输出正文后失败时追加用户轮，最多 3 次）
 流关闭后在后台：
-  CancelCodeAssistantOfflineGeneration      （已取得任务 ID 且流没有正常解码完成时）
-巡检：
-  DeleteApplet                              （闲置的应用）
+  CancelCodeAssistantOfflineGeneration      （已取得任务 ID、流没有正常解码完成且任务没有以失败步骤结束时）
+巡检、删除账户、新建应用后写入记录失败：
+  DeleteApplet                              （应用服务）
 ```
 
 - 请求头的集合、顺序与取值和 Playground 文本请求的 `GenerateContent` 相同；权益头 `X-AIStudio-G1-Tier` 只随 `CodeAssistantOffline` 发送（Pro 为 `TIER1`、Ultra 为 `TIER2`、Plus 为 `TIER0`，Free 不带）
@@ -585,10 +587,11 @@ CodeAssistantOffline、StreamCodeAssistantOfflineGeneration（回复没有正文
 服务按请求所用 API key 与对话历史把请求对应到应用：
 
 - 对话轮按连续的 model 轮与其余轮次分组，逐组累积 SHA-256 摘要。每组计入非思考正文 Part 直接连接后按空白归一的结果、函数调用的名称与键排序的参数、函数结果键排序的内容，其余 Part 去掉思考签名计入，内联数据以其 SHA-256 计入；调用 ID 不计入，客户端以不同格式回传同一回复时摘要相同
-- 本轮回复完整结束、没有以 `malformed_function_call` 结束、也没有在函数调用之后继续输出正文时，本进程把“请求的对话 + 本轮回复的正文与函数调用”的摘要记为该应用可以继续的位置
-- 新请求从后往前找到最近一个摘要与记录相同、之后还有新轮次的 model 轮组时，在该应用中继续：field 1 只提交该组之后的轮次，field 6 为 `2`、field 14 为 `[2]`、field 21 为应用 ID；记录的位置被取走，回复完整结束后移到新回复之后，同时到达的另一请求找不到记录
-- 找不到时新建应用并提交全部对话轮，包括第一轮、重新生成、编辑或压缩过的历史、另一个 API key、上一轮回复没有完整结束与服务重启之后；对话所在账户没有空闲槽位或不可用、请求被调度到其他账户时，放弃原应用并在新账户新建
+- 本轮回复完整结束、没有以 `malformed_function_call` 结束、没有在函数调用之后继续输出正文、也没有在上游步骤失败后接着写时，本进程把“请求的对话 + 本轮回复的正文与函数调用”的摘要记为该应用可以继续的位置
+- 新请求最后一组之前最近的 model 轮组摘要与记录相同时，在该应用中继续：field 1 只提交该组之后的轮次，field 6 为 `2`、field 14 为 `[2]`、field 21 为应用 ID；记录的位置被取走，回复完整结束后移到新回复之后，同时到达的另一请求找不到记录
+- 找不到时新建应用，最后一组之前的对话轮转录在 field 9 中，见“请求映射”；包括第一轮、重新生成、编辑或压缩过的历史、回到较早的回复另起分支、另一个 API key、上一轮回复没有完整结束或在步骤失败后接着写过、最后一组过长或是 model 轮与服务重启之后；对话所在账户没有空闲槽位或不可用、请求被调度到其他账户时，放弃原应用并在新账户新建
 - 新建的应用 ID 以资源类型 `assistant-applet` 记入账户运行状态。生成服务启动时与之后每 10 分钟，巡检删除闲置超过 1 小时、或本进程没有可继续对话的应用并删除记录，`DeleteApplet` 返回 404 时同样删除记录；进行中的请求所用应用保留，没有空闲槽位的账户跳过本轮；删除失败时以 WARN 记录 “闲置写代码助手应用删除失败: <错误>”，记录保留到下一轮
+- `CreateApplet` 之后写入记录失败时，请求以该错误结束，并删除刚建的应用；管理端删除账户时，账户有应用记录的先停止向该账户调度新请求，等进行中的请求结束后删除全部应用与其上的对话，再删除账户，应用删除失败时以 WARN 记录 “账户写代码助手应用删除失败”
 
 #### 附件上传
 
@@ -636,7 +639,7 @@ CodeAssistantOffline、StreamCodeAssistantOfflineGeneration（回复没有正文
 | 2 | WAA proof |
 | 6 | 新建应用的首轮为 `1`，继续时为 `2` |
 | 8 | `models/<基础模型 ID>` |
-| 9 | 自定义指令：内置工具禁止说明、函数调用说明、模型轮说明与系统提示 |
+| 9 | 自定义指令：内置工具禁止说明、函数调用说明、对话历史说明、系统提示与转录的对话历史 |
 | 12 | 应用 ID |
 | 14 | 首轮为 `[2,null,2]`，继续时为 `[2]` |
 | 16 | `1` |
@@ -675,11 +678,11 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 ["<APPLET_ID>"]
 ```
 
-第一行是 `CancelCodeAssistantOfflineGeneration` 的正文，第二行是 `DeleteApplet` 的正文；`DeleteApplet` 成功响应为 `[]`，之后该应用返回 404 `[5,"Requested entity was not found."]`。
+第一行是 `CancelCodeAssistantOfflineGeneration` 的正文，第二行是 `DeleteApplet` 的正文；`DeleteApplet` 成功响应为 `[]`，之后该应用返回 404 `[5,"Requested entity was not found."]`。MakerSuite 服务也有正文相同的 `DeleteApplet`，对带开发环境的应用返回 403 `[7,"The caller does not have permission"]`；这类应用在 `GetApplet` 响应 field 1 的应用中 field 12 为 `["https://ais-dev-<…>.run.app"]` 预览地址，官网打开应用时由 `ProvisionAndInitializeApplet` 开通，应用服务的 `DeleteApplet` 同样删除它们。生成刚结束的几秒内，应用服务的 `DeleteApplet` 返回 500 `[13,"Internal error encountered."]`，服务每秒重试，最多 10 次。
 
 - 任务流正文关闭时结束请求，包括正常读完、客户端断开与停止序列截断；`CreateApplet` 之后任一步失败时同样结束。回复完整结束时记录可继续的位置，否则放弃应用，由巡检删除
-- 已取得任务 ID 且流没有正常解码完成时，在后台以独立的 1 分钟期限发送一次 Cancel，失败时以 WARN 记录 “Build 写代码助手清理失败”，字段为 `account`、`method`、`applet` 与 `error`
-- `DeleteApplet` 只由“对话与应用”中的巡检发送
+- 已取得任务 ID、流没有正常解码完成且任务没有以失败步骤结束时，在后台以独立的 1 分钟期限发送一次 Cancel，失败时以 WARN 记录 “Build 写代码助手清理失败”，字段为 `account`、`method`、`applet` 与 `error`
+- `DeleteApplet` 由“对话与应用”中的巡检、删除账户与写入记录失败时发送
 
 ### 任务流
 
@@ -723,7 +726,17 @@ Part 的 field 2 为文本，field 13 为 `1` 或 `true` 时是思考。只修�
 9. 消息列表结束后读取流尾状态，code 0 为成功，其他 code 按“错误、额度与能力边界”的表换算 HTTP 状态。上游有时在模型步骤仍为状态 `2` 时正常结束消息列表；此时以同一任务 ID 与应用再请求一次 `StreamCodeAssistantOfflineGeneration`，已完成的任务立即返回状态为 `1` 的最终快照与用量，按同一组规则继续解码，已输出的正文与函数调用不重复输出；重新打开的任务流仍在模型步骤完成前结束时，已解出函数调用或写出正文则以已有内容结束本轮，任务流关闭后取消生成任务，下一轮新建应用并带全部历史
 10. 本轮回复结束或流关闭时回复已完成：依次输出暂缓的文本、记录的搜索 grounding、用量之和，再以 `stop` 结束（无法解码的 `function_calls` 块时为 `malformed_function_call`）；回复没有完成、也没有函数调用与正文时返回协议错误 “流结束前没有完成的模型回复”
 
-回复完成时没有正文、问题与函数调用（例如只有思考）且没有以 `malformed_function_call` 结束时，在同一应用中继续：field 1 只含用户轮 `Your last turn ended without any visible reply. Continue now and give your reply.`，再读取新任务的任务流，按同一组规则解码，最多 3 次；用量的输入与缓存取最后一次，输出为各次之和。
+一次任务的回复完成时没有输出正文、问题与函数调用（例如只有思考）且没有以 `malformed_function_call` 结束时，在同一应用中继续：field 1 只含用户轮 `Your last turn ended without any visible reply. Continue now and give your reply.`，再读取新任务的任务流，按同一组规则解码，最多 3 次；用量的输入与缓存取最后一次，输出为各次之和。
+
+本轮已输出正文、还没有输出函数调用时出现失败步骤且不带额度标记的，同样在同一应用中继续：field 1 只含下面的用户轮，`<partial_reply>` 中为本轮已输出正文的最后至多 20000 个字符；新任务的输出接在已输出的正文之后，失败任务中已完成步骤的搜索来源与用量照常输出，用量按上一段的规则合并，搜索记录一并保存，与上一段的追加合计最多 3 次，仍失败时以该失败步骤的错误结束。失败之前只有思考时返回错误，由生成层重新生成：
+
+````text
+Your last turn was cut off by an internal error. The user already received your reply up to the end of this text:
+<partial_reply>
+<已输出正文的末尾>
+</partial_reply>
+Continue the reply right after it without repeating it.
+````
 
 用量之和：输入为各步骤未命中缓存的输入与缓存命中之和，缓存为缓存命中之和，输出为输出之和，总数为输入加输出。
 
@@ -735,6 +748,6 @@ Part 的 field 2 为文本，field 13 为 `1` 或 `true` 时是思考。只修�
 | --- | --- |
 | 附件上传、`CreateApplet`、`CodeAssistantOffline` 或任务流返回非 200 | 按“错误、额度与能力边界”解码与换算，进入换号与冷却流程，冷却 scope 为 `-build` 模型 ID |
 | 流尾状态非 0 | 同上；首个语义事件之后以流内 error 结束 |
-| 步骤 field 6 非空、状态不是 `3` 且本轮还没有输出函数调用 | HTTP 502，消息为 “生成步骤失败: <上游消息>”，按 5xx 处理；带额度标记时为 HTTP 429 |
+| 步骤 field 6 非空、状态不是 `3` 且本轮还没有输出函数调用 | HTTP 502，消息为 “生成步骤失败: <上游消息>”，按 5xx 处理；带额度标记时为 HTTP 429；已输出正文且不带额度标记时先按“任务流”在同一应用中继续 |
 | 应用 ID、任务 ID 缺失或流结构不符 | 协议错误，HTTP 502 |
 | 流关闭时没有完成的模型回复、函数调用与正文 | 协议错误，HTTP 502 |

@@ -18,6 +18,8 @@ import (
 const (
 	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
+	// appletServiceRPCBase 是 AI Studio 应用服务 RPC 根地址
+	appletServiceRPCBase = "https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
 	JSONProtobufContentType = "application/json+protobuf"
 )
@@ -154,13 +156,17 @@ func (e *RPCError) RetryAt(now time.Time) time.Time {
 }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
-	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
-	c.applyBenefitTier(method, accountID, rpc.Header)
+	return c.send(ctx, newRPCRequest(method, accountID, requestID, body, streaming))
+}
+
+// send 发送 RPC 请求并校验响应状态与媒体类型
+func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
+	c.applyBenefitTier(rpc.Method, rpc.AccountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
+		return nil, fmt.Errorf("发送 AI Studio %s: %w", rpc.Method, err)
 	}
-	return validateRPCResponse(method, response)
+	return validateRPCResponse(rpc.Method, response)
 }
 
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {
