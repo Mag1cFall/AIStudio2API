@@ -522,10 +522,13 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	return admin.account(account.ID)
 }
 
-func (admin *runtimeAdmin) DeleteAccount(_ context.Context, accountID string) error {
+func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
+	}
+	if err := admin.service.catalog.DeleteAccountAssistantApplets(ctx, accountID); err != nil {
+		admin.requests.log("auth", "WARN", fmt.Sprintf("账户写代码助手应用删除失败 | 账户=%s | 原因: %v", account.Label, err))
 	}
 	defer admin.syncModelCache()
 	err = admin.service.changeModels(func() error {

@@ -184,6 +184,7 @@ type modelCatalogService interface {
 	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
 	ReclaimExpiredResources(context.Context) error
 	ReclaimIdleAssistantApplets(context.Context) error
+	DeleteAccountAssistantApplets(context.Context, string) error
 	CachedModels() []aistudio.Model
 }
 
