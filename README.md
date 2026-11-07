@@ -159,6 +159,8 @@ macOS 从 Releases 下载 `darwin-universal.dmg`，打开后把 `AIStudio2API.ap
 xattr -dr com.apple.quarantine /Applications/AIStudio2API.app
 ```
 
+macOS 版关闭窗口后在菜单栏继续运行：单击菜单栏图标显示窗口，右键打开菜单，点 Dock 图标或从“应用程序”再次打开时显示窗口。
+
 Linux 下载 `linux-amd64.AppImage` 赋予执行权限后运行，或安装 `linux-amd64.deb` 后从应用菜单启动 AIStudio2API：
 
 ```bash
@@ -600,6 +602,7 @@ cp .env.example .env
 | `PROXY_API_KEY` | 空 | 公开 API key |
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
+| `HIDE_DOCK_ICON` | `false` | macOS 桌面版只在菜单栏显示图标、不显示 Dock 图标，关闭窗口后服务继续运行；在设置页修改立即生效 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
 | `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
 | `LOG_MAX_TOTAL_MB` | `500` | 日志目录总量上限，超出时删除最旧的文件，不小于 20 |

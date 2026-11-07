@@ -192,7 +192,7 @@ function childCells(stats: UsageStats): { key: string; text: string; tone?: stri
 <template>
   <section class="min-w-0 rounded-lg border border-line bg-panel">
     <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 pt-3">
-      <h3 class="mr-auto pb-3 text-sm font-medium text-gray-200">{{ t('usage.ranking') }}</h3>
+      <h3 class="mr-auto pb-3 text-sm font-semibold text-gray-200">{{ t('usage.ranking') }}</h3>
       <div role="tablist" :aria-label="t('usage.ranking')" class="flex gap-1 overflow-x-auto">
         <button
           v-for="item in tabs"

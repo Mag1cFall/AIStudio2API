@@ -31,6 +31,7 @@ func (u *selfUpdater) install(ctx context.Context, release *githubRelease) error
 	if err != nil {
 		return err
 	}
+	u.setStage("install")
 	if image != "" {
 		u.log("INFO", "在线更新 | 2/2 | 替换 AppImage | 版本="+release.TagName)
 		return replaceAppImage(image, payload)

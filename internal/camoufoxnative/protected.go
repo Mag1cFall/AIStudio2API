@@ -164,7 +164,7 @@ func (worker *Worker) SendProtected(ctx context.Context, rawURL string, headers 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	worker.inputMu.Lock()
+	worker.lockInput()
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()

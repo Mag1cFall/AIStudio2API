@@ -1,4 +1,4 @@
-//go:build desktop && !windows
+//go:build desktop
 
 package desktop
 
@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -16,26 +15,10 @@ import (
 //go:embed tray.html
 var trayPage string
 
-// attachMenu 按系统双击间隔显示主窗口，右键打开自绘菜单
+// attachMenu 单击显示主窗口，右键打开自绘菜单
 func (s *App) attachMenu(tray *application.SystemTray) {
-	var clicked time.Time
-	click := func() {
-		application.InvokeAsync(func() {
-			now := time.Now()
-			if now.Sub(clicked) <= doubleClickInterval() {
-				clicked = time.Time{}
-				s.show()
-			} else {
-				clicked = now
-			}
-		})
-	}
-	popup := func(x, y int) {
-		application.InvokeAsync(func() {
-			clicked = time.Time{}
-			s.popupTray(tray, x, y)
-		})
-	}
+	click := func() { application.InvokeAsync(s.show) }
+	popup := func(x, y int) { application.InvokeAsync(func() { s.popupTray(tray, x, y) }) }
 	s.bindTray(tray, click, popup)
 }
 

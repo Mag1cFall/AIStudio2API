@@ -136,13 +136,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 			loop.close()
 			return nil, err
 		}
-		collected := make(chan struct{})
-		if loop.post(func() {
-			runtime.agent.cx.GC()
-			close(collected)
-		}) {
-			<-collected
-		}
+		loop.post(runtime.agent.cx.GC)
 		runtime.idle = time.AfterFunc(idleShrinkDelay, func() { loop.post(runtime.agent.cx.ShrinkGC) })
 		return runtime, nil
 	case <-ctx.Done():

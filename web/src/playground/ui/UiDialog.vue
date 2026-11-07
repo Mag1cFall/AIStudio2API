@@ -6,15 +6,17 @@ import {
   DialogPortal,
   DialogRoot,
   DialogTitle,
+  VisuallyHidden,
 } from 'reka-ui'
 import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
 const open = defineModel<boolean>('open', { required: true })
-withDefaults(defineProps<{ title: string; width?: string; closable?: boolean }>(), {
-  width: '560px',
-  closable: true,
-})
+// headerless 的对话框不显示标题栏，标题只供读屏
+withDefaults(
+  defineProps<{ title: string; width?: string; closable?: boolean; headerless?: boolean }>(),
+  { width: '560px', closable: true, headerless: false },
+)
 const { t } = useI18n()
 </script>
 
@@ -23,7 +25,10 @@ const { t } = useI18n()
     <DialogPortal>
       <DialogOverlay class="ms-dialog-overlay" />
       <DialogContent class="ms-dialog" :style="{ width }" :aria-describedby="undefined">
-        <div class="ms-dialog-header">
+        <VisuallyHidden v-if="headerless" as-child>
+          <DialogTitle>{{ title }}</DialogTitle>
+        </VisuallyHidden>
+        <div v-else class="ms-dialog-header">
           <DialogTitle class="ms-dialog-title">{{ title }}</DialogTitle>
           <span v-if="$slots.header" class="ms-dialog-header-actions"><slot name="header" /></span>
           <DialogClose

@@ -1041,12 +1041,13 @@ func (s *PooledService) inlineMediaBusy(id string) bool {
 	return s.inlineMediaUses[id] > 0
 }
 
-// UploadInlineMediaToLease 把内联附件改写为目标账户 Drive 文件的引用，同一账户已上传过的相同内容直接引用，闲置超过 inlineMediaIdle 的旧文件在本次请求结束时删除
+// UploadInlineMediaToLease 把内联附件改写为目标账户 Drive 文件的引用，keepImages 为真时 CreateInteractionStream 可内联的图片保持内联，同一账户已上传过的相同内容直接引用，闲置超过 inlineMediaIdle 的旧文件在本次请求结束时删除
 func (s *PooledService) UploadInlineMediaToLease(
 	ctx context.Context,
 	target *AccountLease,
 	contents []Content,
 	temporary *TemporaryFileCopies,
+	keepImages bool,
 ) ([]Content, *TemporaryFileCopies, error) {
 	if target.Channel() == ChannelBuild || target.Channel() == ChannelAssistant {
 		// Build 代理的 Gemini API 请求直接携带 inlineData，写代码助手在发送时把内联数据上传为附件引用
@@ -1080,7 +1081,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 	for contentIndex := range rewritten {
 		for index := range rewritten[contentIndex].Parts {
 			part := &rewritten[contentIndex].Parts[index]
-			if part.InlineData == nil {
+			if part.InlineData == nil || keepImages && InteractionInlineMIME(part.InlineData.MIME) {
 				continue
 			}
 			if part.InlineData.MIME == "" || len(part.InlineData.Data) == 0 {
@@ -1111,9 +1112,15 @@ func (s *PooledService) UploadInlineMediaToLease(
 		_, claimed := files[job.key]
 		return claimed
 	})
-	var token string
+	var token, folder string
+	var folderErr error
 	if len(pending) > 0 || len(expired) > 0 {
+		var lookup sync.WaitGroup
+		if len(pending) > 0 {
+			lookup.Go(func() { folder, folderErr = s.client.appFolder(targetCtx, targetID) })
+		}
 		token, err = s.client.GenerateAccessToken(targetCtx, targetID)
+		lookup.Wait()
 		if err != nil {
 			temporary.release = s.useInlineMedia(used)
 			if driveAuthorizationMissing(err) {
@@ -1128,25 +1135,21 @@ func (s *PooledService) UploadInlineMediaToLease(
 	for _, id := range expired {
 		temporary.copies = append(temporary.copies, temporaryDriveCopy{id: id, token: token, bound: true})
 	}
-	var uploadErr error
-	if len(pending) > 0 {
+	uploadErr := folderErr
+	if len(pending) > 0 && folderErr == nil {
 		drive := s.client.transport.(DriveTransport)
 		uploadCtx, cancelUploads := context.WithCancel(targetCtx)
 		resultChannel := make(chan uploadResult, len(pending))
 		for index, job := range pending {
 			go func(index int, job uploadJob) {
-				folder, err := s.client.appFolder(uploadCtx, targetID)
-				var file FileRef
-				if err == nil {
-					file, err = drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
-						AccountID: targetID,
-						Name:      job.name,
-						MIME:      job.blob.MIME,
-						Size:      int64(len(job.blob.Data)),
-						Reader:    bytes.NewReader(job.blob.Data),
-						Folder:    folder,
-					})
-				}
+				file, err := drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
+					AccountID: targetID,
+					Name:      job.name,
+					MIME:      job.blob.MIME,
+					Size:      int64(len(job.blob.Data)),
+					Reader:    bytes.NewReader(job.blob.Data),
+					Folder:    folder,
+				})
 				resultChannel <- uploadResult{index: index, file: file, err: err}
 			}(index, job)
 		}
@@ -1299,8 +1302,17 @@ func uriComponent(value string) string {
 	return strings.NewReplacer("+", "%20", "%21", "!", "%27", "'", "%28", "(", "%29", ")", "%2A", "*").Replace(url.QueryEscape(value))
 }
 
-// loadDriveDiscovery 在账户第一次经 gapi 上传前按官网页面读取 Drive v3 discovery 文档，每个账户读取一次
+// loadDriveDiscovery 在账户第一次经 gapi 上传前按官网页面读取 Drive v3 discovery 文档，每个账户读取一次，同时上传的多个文件等待同一次读取
 func (t *MakerSuiteHTTPTransport) loadDriveDiscovery(ctx context.Context, lease *AccountLease, client *http.Client, gapi http.Header, apiKey string) error {
+	account := lease.Account()
+	_, err, _ := t.driveDiscovery.Do(account.ID, func() (any, error) {
+		return nil, t.readDriveDiscovery(ctx, lease, client, gapi, apiKey)
+	})
+	return err
+}
+
+// readDriveDiscovery 读取账户尚未读取过的 Drive v3 discovery 文档
+func (t *MakerSuiteHTTPTransport) readDriveDiscovery(ctx context.Context, lease *AccountLease, client *http.Client, gapi http.Header, apiKey string) error {
 	account := lease.Account()
 	t.driveMu.Lock()
 	loaded := t.driveDiscovered[account.ID]

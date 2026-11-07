@@ -73,6 +73,7 @@ const stageReadyTitles: Record<string, string> = {
   协议运行时就绪: '运行时装配',
   生成服务就绪: '生成服务启动',
   'WAA Worker 就绪': 'WAA Worker 启动',
+  'WAA Worker 临时页面已关闭': 'WAA Worker 启动',
 }
 
 // stageEndSuffixes 是阶段名加后缀构成的结束消息标题对应的状态

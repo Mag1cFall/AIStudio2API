@@ -313,7 +313,7 @@ function addVocabulary(): void {
           <div class="label-container">
             <p class="label">{{ t('pg.googleSearch') }}</p>
             <p v-if="settings.googleSearch" class="search-source">
-              {{ t('pg.source') }} <UiIcon name="search" :size="12" /> Google Search
+              {{ t('pg.source') }} <UiIcon name="googleColor" :size="12" /> Google Search
             </p>
           </div>
           <UiSwitch

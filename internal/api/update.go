@@ -14,17 +14,25 @@ type UpdateService interface {
 
 // UpdateStatus 表示当前版本与 GitHub 最新发行版本
 type UpdateStatus struct {
-	Current     string    `json:"current"`
-	Latest      string    `json:"latest,omitempty"`
-	Available   bool      `json:"available"`
-	Mode        string    `json:"mode"`
-	ManagedBy   string    `json:"managed_by,omitempty"`
-	Notes       string    `json:"notes,omitempty"`
-	URL         string    `json:"url,omitempty"`
-	PublishedAt time.Time `json:"published_at,omitzero"`
-	CheckedAt   time.Time `json:"checked_at,omitzero"`
-	Error       string    `json:"error,omitempty"`
-	Updating    bool      `json:"updating"`
+	Current     string          `json:"current"`
+	Latest      string          `json:"latest,omitempty"`
+	Available   bool            `json:"available"`
+	Mode        string          `json:"mode"`
+	ManagedBy   string          `json:"managed_by,omitempty"`
+	Notes       string          `json:"notes,omitempty"`
+	URL         string          `json:"url,omitempty"`
+	PublishedAt time.Time       `json:"published_at,omitzero"`
+	CheckedAt   time.Time       `json:"checked_at,omitzero"`
+	Error       string          `json:"error,omitempty"`
+	Updating    bool            `json:"updating"`
+	Progress    *UpdateProgress `json:"progress,omitempty"`
+}
+
+// UpdateProgress 表示在线更新的阶段（download、verify、install、restart）与发行包的已下载和总字节数，总字节数未知时为 0
+type UpdateProgress struct {
+	Stage      string `json:"stage"`
+	Downloaded int64  `json:"downloaded"`
+	Total      int64  `json:"total"`
 }
 
 func (s *server) registerUpdates(mux *http.ServeMux) {

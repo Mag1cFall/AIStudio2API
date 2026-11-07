@@ -68,7 +68,7 @@ function applyCustom(): void {
 <template>
   <PopoverRoot :open="open" @update:open="prepare">
     <PopoverTrigger
-      class="flex min-w-0 items-center gap-2 rounded-md border border-line bg-canvas px-3 py-1.5 text-left text-sm text-gray-200 transition-colors hover:border-gray-600 data-[state=open]:border-blue-500"
+      class="flex min-w-0 items-center gap-2 rounded-md border border-line bg-canvas px-3 py-1 text-left text-sm text-gray-200 transition-colors hover:border-gray-600 data-[state=open]:border-blue-500"
       :aria-label="`${t('usage.range')}: ${t(`usage.range.${range}`)} ${summary}`"
     >
       <UiIcon name="calendar" :size="14" class="text-gray-400" />

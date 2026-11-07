@@ -12,11 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -73,6 +75,7 @@ type selfUpdater struct {
 	checked    time.Time
 	checkErr   error
 	updating   bool
+	progress   api.UpdateProgress
 }
 
 // newSelfUpdater 按构建版本与运行环境创建替换 executable 的更新器
@@ -137,6 +140,7 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 		return api.UpdateStatus{}, updateConflictError("更新正在进行")
 	}
 	u.updating = true
+	u.progress = api.UpdateProgress{Stage: "download"}
 	u.mu.Unlock()
 	release, err := u.fetchRelease(ctx)
 	if err == nil && semver.Compare(release.TagName, u.version) <= 0 {
@@ -154,6 +158,7 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 		return api.UpdateStatus{}, err
 	}
 	u.release, u.checked, u.checkErr = release, time.Now(), nil
+	u.progress.Stage = "restart"
 	u.log("INFO", "在线更新完成 | 版本="+release.TagName)
 	status := u.statusLocked()
 	u.restart()
@@ -163,6 +168,10 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 // statusLocked 在持有锁时生成更新状态
 func (u *selfUpdater) statusLocked() api.UpdateStatus {
 	status := api.UpdateStatus{Current: u.version, Mode: u.mode, ManagedBy: managedBy, CheckedAt: u.checked, Updating: u.updating}
+	if u.updating {
+		progress := u.progress
+		status.Progress = &progress
+	}
 	if u.checkErr != nil {
 		status.Error = u.checkErr.Error()
 	}
@@ -202,15 +211,38 @@ func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
-	archive, err := io.ReadAll(response.Body)
-	response.Body.Close()
-	if err != nil {
+	defer response.Body.Close()
+	u.mu.Lock()
+	u.progress = api.UpdateProgress{Stage: "download", Total: max(response.ContentLength, 0)}
+	u.mu.Unlock()
+	var archive bytes.Buffer
+	archive.Grow(int(max(response.ContentLength, 0)))
+	if _, err := io.Copy(&archive, io.TeeReader(response.Body, downloadCounter{u})); err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
-	if sum := sha256.Sum256(archive); hex.EncodeToString(sum[:]) != expected {
+	u.setStage("verify")
+	if sum := sha256.Sum256(archive.Bytes()); hex.EncodeToString(sum[:]) != expected {
 		return nil, fmt.Errorf("发行包 %s 的 SHA-256 与发行版本记录不一致", name)
 	}
-	return archive, nil
+	return archive.Bytes(), nil
+}
+
+// setStage 记录在线更新进入的阶段
+func (u *selfUpdater) setStage(stage string) {
+	u.mu.Lock()
+	u.progress.Stage = stage
+	u.mu.Unlock()
+}
+
+// downloadCounter 把流经的字节数计入在线更新的已下载字节数
+type downloadCounter struct{ updater *selfUpdater }
+
+// Write 累加 p 的字节数
+func (c downloadCounter) Write(p []byte) (int, error) {
+	c.updater.mu.Lock()
+	c.updater.progress.Downloaded += int64(len(p))
+	c.updater.mu.Unlock()
+	return len(p), nil
 }
 
 // get 经管理进程出口发出 GET，非 200 响应返回错误
@@ -277,6 +309,22 @@ func extractExecutable(archive []byte, name, binary string) ([]byte, error) {
 			return io.ReadAll(reader)
 		}
 	}
+}
+
+// removeReplacedExecutables 删除在线更新替换后留在可执行文件旁的旧版本：Wails 更新器改名的 <文件名>.old.<时间> 与 selfupdate 隐藏的 .<文件名>.old
+func removeReplacedExecutables(executable string) error {
+	directory, name := filepath.Split(executable)
+	files, err := filepath.Glob(filepath.Join(directory, name+".old.*"))
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, file := range append(files, filepath.Join(directory, "."+name+".old")) {
+		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // relaunch 以原参数启动替换后的可执行文件：Windows 上新进程沿用当前控制台，其他系统原地替换进程

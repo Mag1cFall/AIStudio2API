@@ -20,10 +20,15 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/updater"
 )
 
-// appIcon 为窗口与 Linux 托盘使用的应用图标
+// appIcon 为 Windows 与 Linux 的窗口图标
 //
 //go:embed icons/appicon.png
 var appIcon []byte
+
+// macAppIcon 为 macOS 的 Dock 与对话框图标，按 macOS 图标网格留白，与应用包内的 icons.icns 同源
+//
+//go:embed icons/appicon-mac.png
+var macAppIcon []byte
 
 // trayIcon 为 Windows 与 Linux 托盘图标
 //
@@ -43,11 +48,12 @@ var trayTemplateIcon []byte
 // messagePrefix 为管理页面发给桌面壳的消息前缀
 const messagePrefix = "aistudio2api:"
 
-// App 为桌面应用的窗口、托盘与托盘菜单，没有窗口时 window 为 nil，Windows 缺少 WebView2 运行时时 webview 为 false，桌面环境没有系统托盘时 trayed 为 false
+// App 为桌面应用的窗口、托盘与托盘菜单，没有窗口时 window 为 nil，Windows 缺少 WebView2 运行时时 webview 为 false，桌面环境没有系统托盘时 trayed 为 false，tray 为 macOS 的菜单栏图标
 type App struct {
 	app     *application.App
 	webview bool
 	trayed  bool
+	tray    *application.SystemTray
 	window  *application.WebviewWindow
 	open    bool
 	origin  string
@@ -69,15 +75,23 @@ func HandleUpdateHelper() {
 	updater.HandleHelperMode()
 }
 
-// New 创建桌面应用与托盘，show 为 true 时同时创建主窗口，WebView 数据写入 webviewDir，stop 在窗口与托盘关闭后、进程退出前执行；已有实例运行时把它的窗口带到前台并结束当前进程
-func New(show bool, webviewDir string, stop func()) *App {
+// New 创建桌面应用与托盘，show 为 true 时同时创建主窗口，hideDock 为 true 时 macOS 只显示菜单栏图标、不显示 Dock 图标，WebView 数据写入 webviewDir，stop 在窗口与托盘关闭后、进程退出前执行；已有实例运行时把它的窗口带到前台并结束当前进程
+func New(show, hideDock bool, webviewDir string, stop func()) *App {
 	shell := &App{}
+	policy := application.ActivationPolicyRegular
+	if hideDock {
+		policy = application.ActivationPolicyAccessory
+	}
+	icon := appIcon
+	if runtime.GOOS == "darwin" {
+		icon = macAppIcon
+	}
 	shell.app = application.New(application.Options{
 		Name:        "AIStudio2API",
 		Description: "AIStudio2API",
-		Icon:        appIcon,
+		Icon:        icon,
 		Mac: application.MacOptions{
-			ActivationPolicy: application.ActivationPolicyRegular,
+			ActivationPolicy: policy,
 		},
 		Linux: application.LinuxOptions{
 			DisableQuitOnLastWindowClosed: true,
@@ -144,6 +158,8 @@ func (s *App) createWindow() *application.WebviewWindow {
 			InvisibleTitleBarHeight: 40,
 		},
 		Linux: application.LinuxWindow{WebviewGpuPolicy: application.WebviewGpuPolicyNever},
+		// WebView2CompositionHosting 让标题栏按钮作为非客户区参与 Windows 命中测试，悬停最大化按钮时系统显示贴靠布局
+		Windows: application.WindowsWindow{WebView2CompositionHosting: true},
 	}
 	if target != "" {
 		options.HTML, options.URL = "", target
@@ -322,9 +338,10 @@ func (s *App) show() {
 	window.Show()
 	window.UnMinimise()
 	window.Focus()
+	activateApp()
 }
 
-// handleMessage 处理管理页面经 postMessage 发来的窗口操作、界面语言、配色、当前路由与是否有未完成的工作
+// handleMessage 处理管理页面经 postMessage 发来的窗口操作、界面语言、配色、Dock 图标、当前路由与是否有未完成的工作
 func (s *App) handleMessage(window application.Window, message string, origin *application.OriginInfo) {
 	command, found := strings.CutPrefix(message, messagePrefix)
 	if !found {
@@ -368,6 +385,8 @@ func (s *App) handleMessage(window application.Window, message string, origin *a
 			s.mu.Lock()
 			s.theme = theme
 			s.mu.Unlock()
+		} else if dock, ok := strings.CutPrefix(command, "dock:"); ok {
+			setDockIcon(dock == "show")
 		} else if busy, ok := strings.CutPrefix(command, "busy:"); ok {
 			s.setBusy(busy == "1")
 		} else if route, ok := strings.CutPrefix(command, "route:"); ok && page != "" {
@@ -389,15 +408,19 @@ func (s *App) openExternal(link string) {
 	}
 }
 
-// setLocale 记录管理页面的界面语言，托盘菜单打开时按它取文字
+// setLocale 记录管理页面的界面语言，托盘菜单打开时按它取文字，界面语言变化时重设 macOS 的原生菜单
 func (s *App) setLocale(locale string) {
 	_, ok := trayLabels[locale]
 	if !ok {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	changed := s.locale != locale
 	s.locale = locale
+	s.mu.Unlock()
+	if changed {
+		s.localizeMenus(locale)
+	}
 }
 
 // labels 返回当前界面语言的托盘菜单文字

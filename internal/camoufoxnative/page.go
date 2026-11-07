@@ -72,11 +72,88 @@ func fillPrompt(ctx context.Context, client *bidiClient, contextID, prompt strin
 	return nil
 }
 
-// runButtonEnabledExpression 检查官网 Run 按钮是否可见且已启用
-const runButtonEnabledExpression = `(() => {` + pageDOMHelpers + `
+// runStateFunction 是等页面执行完已排队的任务后读取官网 Run 按钮状态的函数声明，页面忙于处理时随之等待；参数为 Worker 页面对象与界面运行的请求 ID，返回 runState 的 JSON
+const runStateFunction = `async (page, id) => {` + pageDOMHelpers + `
+  await new Promise(resolve => setTimeout(resolve));
+  const describe = node => (node?.getAttribute('aria-describedby') || '').split(' ').map(name => document.getElementById(name)?.textContent.trim()).filter(Boolean).join(' ');
+  const texts = selector => [...document.querySelectorAll(selector)].filter(visible).map(node => node.innerText.trim()).filter(Boolean);
   const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
-  return Boolean(button && buttonEnabled(button));
-})()`
+  const box = document.querySelector('ms-prompt-box .prompt-box-container');
+  let cover = '';
+  if (button) {
+    const rect = button.getBoundingClientRect();
+    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (top && !button.contains(top)) cover = (top.innerText || top.getAttribute('aria-label') || top.tagName).trim();
+  }
+  return JSON.stringify({
+    found: Boolean(button), enabled: Boolean(button && buttonEnabled(button)) && !cover, running: Boolean(button?.querySelector('.spin')),
+    started: Boolean(page.requests?.get(id)?.started),
+    tooltip: describe(button), boxTooltip: box?.classList.contains('disabled') ? describe(box) : '',
+    dialogs: texts('mat-dialog-container'), notices: texts('mat-snack-bar-container'), cover,
+    prompt: document.querySelector('ms-prompt-box textarea')?.value.length ?? -1
+  });
+}`
+
+// runState 是页面空闲时官网 Run 按钮与页面提示的状态
+type runState struct {
+	// Found 与 Enabled 表示 Run 按钮可见与可点，按钮中心被其他元素遮挡时不可点
+	Found   bool `json:"found"`
+	Enabled bool `json:"enabled"`
+	// Running 表示 Run 按钮已切换为 Stop
+	Running bool `json:"running"`
+	// Started 表示页面应用已为本次请求调用高层 proof 函数
+	Started bool `json:"started"`
+	// Tooltip 与 BoxTooltip 是 Run 按钮与停用的输入框的悬停提示
+	Tooltip    string   `json:"tooltip"`
+	BoxTooltip string   `json:"boxTooltip"`
+	Dialogs    []string `json:"dialogs"`
+	Notices    []string `json:"notices"`
+	// Cover 是遮挡 Run 按钮中心的元素文字
+	Cover string `json:"cover"`
+	// Prompt 是输入框文本的 UTF-16 长度，没有输入框时为 -1
+	Prompt int `json:"prompt"`
+}
+
+// readRunState 读取页面空闲时官网 Run 按钮的状态，id 为界面运行的请求 ID
+func readRunState(ctx context.Context, client *bidiClient, contextID string, page pageHandle, id string) (runState, error) {
+	var state runState
+	value, err := client.callFunctionString(ctx, contextID, runStateFunction, page, id)
+	if err != nil {
+		return state, fmt.Errorf("读取官网 Run 按钮状态: %w", err)
+	}
+	if err := json.Unmarshal([]byte(value), &state); err != nil {
+		return state, fmt.Errorf("解析官网 Run 按钮状态: %w", err)
+	}
+	return state, nil
+}
+
+// reason 返回官网页面给出的 Run 按钮不可点或点击后没有运行的原因
+func (state runState) reason() string {
+	var parts []string
+	if !state.Found {
+		parts = append(parts, "Run 按钮不存在")
+	}
+	for _, dialog := range state.Dialogs {
+		parts = append(parts, fmt.Sprintf("对话框 %q", dialog))
+	}
+	if state.Cover != "" {
+		parts = append(parts, fmt.Sprintf("遮挡 Run 按钮的元素 %q", state.Cover))
+	}
+	if state.BoxTooltip != "" {
+		parts = append(parts, fmt.Sprintf("输入框提示 %q", state.BoxTooltip))
+	}
+	if state.Tooltip != "" {
+		parts = append(parts, fmt.Sprintf("Run 按钮提示 %q", state.Tooltip))
+	}
+	for _, notice := range state.Notices {
+		parts = append(parts, fmt.Sprintf("提示条 %q", notice))
+	}
+	parts = append(parts, fmt.Sprintf("输入框 %d 字", state.Prompt))
+	return strings.Join(parts, " | ")
+}
+
+// runSettleChecks 是页面空闲时 Run 按钮持续不可点、点击后仍没有开始运行时判定失败所需的连续检查次数，页面空闲时约 3 秒
+const runSettleChecks = 40
 
 // generationRunningExpression 检查官网 Run 按钮已切换为 Stop（按钮内出现 .spin）
 const generationRunningExpression = `(() => {` + pageDOMHelpers + `
@@ -118,8 +195,11 @@ const pointerTargetFunction = `(selector, pattern) => {
   return JSON.stringify({x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)});
 }`
 
-// pointer 以可信指针移到 selector 与 pattern 匹配的可见元素中心，click 为真时再按下、停顿并抬起，返回是否找到该元素
-func (client *bidiClient) pointer(ctx context.Context, contextID, selector, pattern string, click bool) (bool, error) {
+// pointerMoveDuration 是可信指针从别处移到目标元素所用的毫秒数
+const pointerMoveDuration = 120
+
+// pointer 以可信指针用 move 毫秒移到 selector 与 pattern 匹配的可见元素中心，click 为真时再按下、停顿并抬起，返回是否找到该元素
+func (client *bidiClient) pointer(ctx context.Context, contextID, selector, pattern string, click bool, move int) (bool, error) {
 	located, err := client.callFunctionString(ctx, contextID, pointerTargetFunction, selector, pattern)
 	if err != nil || located == "" {
 		return false, err
@@ -131,7 +211,7 @@ func (client *bidiClient) pointer(ctx context.Context, contextID, selector, patt
 	if err := json.Unmarshal([]byte(located), &target); err != nil {
 		return false, err
 	}
-	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": 120}}
+	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": move}}
 	if click {
 		actions = append(actions, map[string]any{"type": "pointerDown", "button": 0}, map[string]any{"type": "pause", "duration": 60}, map[string]any{"type": "pointerUp", "button": 0})
 	}

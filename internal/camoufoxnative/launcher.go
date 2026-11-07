@@ -88,10 +88,12 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	}
 	if options.Headless && !options.liveView {
 		prefs["layout.frame_rate"] = interactiveFrameRate
-		// gfx.display.frame-rate-divisor 为每次分发给页面与合成器的 vsync 间隔数，空闲时页面每秒刷新 1 次
-		prefs["gfx.display.frame-rate-divisor"] = idleFrameDivisor
 		// gfx.webrender.enable-subpixel-aa 为 false 时 WebRender 把字形光栅化到单通道图集，不分配 RGBA 字形图集
 		prefs["gfx.webrender.enable-subpixel-aa"] = false
+		if runtime.GOOS == "windows" {
+			// timer.maximum_firing_delay_tolerance_ms 为 0 时 Windows 定时器线程在最早的定时器到期时唤醒，界面操作中的短定时器按期触发
+			prefs["timer.maximum_firing_delay_tolerance_ms"] = "0"
+		}
 	}
 	if options.CacheDirectory != "" {
 		for key, value := range cachePreferences(options.CacheDirectory) {

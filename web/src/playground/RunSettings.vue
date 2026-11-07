@@ -8,6 +8,7 @@ import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
 import UiSlider from '@/playground/ui/UiSlider.vue'
 import UiSwitch from '@/playground/ui/UiSwitch.vue'
+import EnvironmentSettings from './EnvironmentSettings.vue'
 import GetCodeDialog from './GetCodeDialog.vue'
 import JsonEditorDialog from './JsonEditorDialog.vue'
 import ModelCard from './ModelCard.vue'
@@ -15,7 +16,14 @@ import RunSettingsFrame from './RunSettingsFrame.vue'
 import SafetyDialog from './SafetyDialog.vue'
 import SystemInstructions from './SystemInstructions.vue'
 import ThinkingBudgetSetting from './ThinkingBudgetSetting.vue'
-import { Capability, hasCode, isAgent, thinkingLevelLabels, thinkingLevelTooltips } from './catalog'
+import {
+  Capability,
+  hasCode,
+  isAgent,
+  isOmniModel,
+  thinkingLevelLabels,
+  thinkingLevelTooltips,
+} from './catalog'
 import { protocolOptions, protocolsFor, protocolSupports, type ProtocolSetting } from './protocols'
 import { defaultSettings, outputLimit, useCompare, usePlayground } from './session'
 import { useTools } from './tools'
@@ -50,6 +58,8 @@ const model = computed(() => currentModel.value)
 const can = (code: number) => hasCode(model.value, code)
 // agent 表示所选模型是 agent：请求以 agent_config 代替生成参数，不显示采样设置
 const agent = computed(() => isAgent(model.value))
+// sampling 表示显示采样预设、温度、Top K 与 Top P，agent 与 Omni 模型不显示
+const sampling = computed(() => !agent.value && !isOmniModel(model.value))
 // researchSettings 是 Deep Research 的思考摘要、可视化与协作规划开关，与官网一样按各自的能力码显示
 const researchSettings = computed(() =>
   (
@@ -620,7 +630,7 @@ watch(schemaOpen, (open) => {
             <div class="label-container">
               <p class="label">{{ t(tool.label) }}</p>
               <p v-if="tool.id === 'google_search' && tool.enabled" class="search-source">
-                {{ t('pg.source') }} <UiIcon name="search" :size="12" /> Google Search
+                {{ t('pg.source') }} <UiIcon name="googleColor" :size="12" /> Google Search
               </p>
             </div>
             <div class="actions">
@@ -651,8 +661,23 @@ watch(schemaOpen, (open) => {
               />
             </div>
           </div>
+          <div
+            v-if="can(Capability.RemoteEnvironment)"
+            v-tooltip.left="t('pg.filesystemToolsTip')"
+            class="toggle-row"
+          >
+            <div class="label-container">
+              <p class="label">{{ t('pg.filesystemTools') }}</p>
+            </div>
+            <UiSwitch :model-value="true" disabled :label="t('pg.filesystemTools')" />
+          </div>
         </UiCollapse>
       </div>
+
+      <EnvironmentSettings
+        v-if="can(Capability.RemoteEnvironment)"
+        v-model="settings.environment"
+      />
 
       <div v-if="researchSettings.length" class="field-group">
         <div
@@ -682,7 +707,7 @@ watch(schemaOpen, (open) => {
           /></DisclosureChevron>
         </button>
         <UiCollapse :open="advancedOpen">
-          <div v-if="!agent && !can(Capability.FixedTemperature)" class="settings-item-column">
+          <div v-if="sampling && !can(Capability.FixedTemperature)" class="settings-item-column">
             <h3 class="item-description-title">{{ t('pg.samplingPreset') }}</h3>
             <UiSelect
               :model-value="samplingPreset"
@@ -789,7 +814,7 @@ watch(schemaOpen, (open) => {
             </p>
           </div>
           <div
-            v-if="!agent && !can(Capability.Temperature)"
+            v-if="sampling && !can(Capability.Temperature)"
             v-tooltip.left="t('pg.temperatureTip')"
             class="settings-item-column"
           >
@@ -818,7 +843,7 @@ watch(schemaOpen, (open) => {
             <p class="setting-hint">{{ t('pg.samplingIgnored') }}</p>
           </div>
           <div
-            v-if="!agent"
+            v-if="sampling"
             v-tooltip.left="settingTip('topK', t('pg.topKTip'))"
             class="settings-item-column"
           >
@@ -847,7 +872,7 @@ watch(schemaOpen, (open) => {
             </div>
             <p v-if="!can(Capability.TopK)" class="setting-hint">{{ t('pg.samplingIgnored') }}</p>
           </div>
-          <div v-if="!agent" v-tooltip.left="t('pg.topPTip')" class="settings-item-column">
+          <div v-if="sampling" v-tooltip.left="t('pg.topPTip')" class="settings-item-column">
             <h3 class="item-description-title">{{ t('pg.topP') }}</h3>
             <div class="ms-slider">
               <UiSlider
@@ -872,11 +897,11 @@ watch(schemaOpen, (open) => {
             </div>
             <p v-if="!can(Capability.TopP)" class="setting-hint">{{ t('pg.samplingIgnored') }}</p>
           </div>
-          <div v-if="videoOptions" class="settings-item-column">
+          <div v-if="videoOptions" class="settings-item">
             <h3 class="item-description-title">{{ t('pg.videoTask') }}</h3>
             <UiSelect
               v-model="settings.videoTask"
-              class="w-full"
+              class="video-task-select"
               :aria-label="t('pg.videoTaskLabel')"
             >
               <option value="">{{ t('pg.videoTaskUnspecified') }}</option>
@@ -1157,6 +1182,10 @@ watch(schemaOpen, (open) => {
 .output-length {
   --ms-input-width: 150px;
   flex-wrap: wrap;
+}
+
+:deep(.video-task-select) {
+  width: 174px;
 }
 
 .setting-hint {

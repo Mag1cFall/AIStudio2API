@@ -382,6 +382,13 @@ func (manager *runtimeManager) UploadFile(ctx context.Context, request aistudio.
 	return manager.current.service.(aistudio.FileService).UploadFile(ctx, request)
 }
 
+// VideoFrameTokens 由当前生成服务统计视频文件按视频设置抽帧后的 token 数
+func (manager *runtimeManager) VideoFrameTokens(ctx context.Context, request aistudio.VideoFramesRequest) (int64, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.service.(aistudio.VideoFrameService).VideoFrameTokens(ctx, request)
+}
+
 // FileMetadata 由当前生成服务读取文件元数据
 func (manager *runtimeManager) FileMetadata(ctx context.Context, id string) (aistudio.FileMetadata, error) {
 	manager.mu.RLock()

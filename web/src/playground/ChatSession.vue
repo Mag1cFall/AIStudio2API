@@ -34,7 +34,7 @@ const firstShown = ref(0)
 const eager = ref<[number, number]>([0, 0])
 let filling = 0
 let fillFrame = 0
-// codeFont 是代码块的字体，首批轮次等它载入后才排版，代码按最终字体换行，之后不因字体晚到而改变高度
+// codeFont 是代码块的字体，首批轮次等它载入或载入失败后才排版，代码按最终字体换行，之后不因字体晚到而改变高度
 const codeFont = '1em "Google Sans Code Variable"'
 
 // scheduleFill 在下一帧绘制之后的任务中向前多渲染一批，每批轮次的排版各在一帧里完成
@@ -44,7 +44,7 @@ function scheduleFill(first = false): void {
 
 // fill 向前多渲染一批轮次；首批不满一屏时在同一任务里继续向前补并滚到末尾，首次绘制即铺满可见区域，之后在可见区域上方每帧补一批，由浏览器的滚动锚定保持可见内容不动
 async function fill(first: boolean): Promise<void> {
-  if (first) await document.fonts.load(codeFont)
+  if (first) await document.fonts.load(codeFont).catch(() => [])
   firstShown.value = Math.max(0, firstShown.value - renderBatch)
   if (first) eager.value = [firstShown.value, eager.value[1]]
   await nextTick()

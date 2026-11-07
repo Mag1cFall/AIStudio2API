@@ -187,7 +187,7 @@ function latencyWidth(milliseconds: number): number {
   <section class="@container min-w-0 rounded-lg border border-line bg-panel">
     <header class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
       <div class="mr-auto min-w-0">
-        <h3 :id="`${id}-title`" class="text-sm font-medium text-gray-200">
+        <h3 :id="`${id}-title`" class="text-sm font-semibold text-gray-200">
           {{ t('usage.records') }}
         </h3>
         <p v-if="!filtered" class="text-xs text-gray-500">

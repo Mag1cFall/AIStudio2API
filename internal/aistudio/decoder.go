@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -26,6 +27,20 @@ type PromptFeedbackError struct {
 	Message       string
 	SafetyRatings []SafetyRating
 	Raw           json.RawMessage
+}
+
+// ContentPolicyError 表示上游以内容策略类原因结束生成
+type ContentPolicyError struct {
+	Reason  string
+	Message string
+}
+
+// Error 返回上游结束生成的内容策略原因
+func (e *ContentPolicyError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("AI Studio 因内容策略结束生成: %s: %s", strings.ToUpper(e.Reason), e.Message)
+	}
+	return fmt.Sprintf("AI Studio 因内容策略结束生成: %s", strings.ToUpper(e.Reason))
 }
 
 // Error 返回协议证据错误

@@ -45,6 +45,14 @@
   --radius-4xl: 8px;
 }
 
+@utility page-x {
+  padding-inline: --spacing(4);
+
+  @variant md {
+    padding-inline: max(--spacing(8), calc((100cqw - var(--container-6xl)) / 2 + --spacing(8)));
+  }
+}
+
 :root {
   color-scheme: dark;
   --font-cjk: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC';

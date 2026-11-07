@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import CodeDialog from './CodeDialog.vue'
 import { codeOptions, generateCode, type CodeLanguage } from './code'
-import { agentConfig, buildRequest, continuation } from './request'
+import { agentFields, buildRequest, continuation } from './request'
 import { usePlayground } from './session'
 import type { Turn } from './types'
 
@@ -53,7 +53,7 @@ function code(language: CodeLanguage): string {
       size: session.settings.openAISize,
       quality: session.settings.imageQuality,
     },
-    agent: agentConfig(session.settings, currentModel.value),
+    agent: agentFields(session.settings, currentModel.value),
     previous: input.previous,
   })
 }

@@ -5,7 +5,6 @@ go 1.27
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/Mag1cFall/fhttp v0.6.8-firefox.2
-	github.com/Mag1cFall/go-aac v0.7.3
 	github.com/Mag1cFall/go-mp3 v0.1.1
 	github.com/Mag1cFall/go-sentencepiece v0.7.1
 	github.com/Mag1cFall/uquic v0.0.6-firefox.6
@@ -28,6 +27,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/thesyncim/gopus v0.1.2
+	github.com/tphakala/go-aac v0.7.2
 	github.com/vearutop/statigz v1.5.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.29
 	github.com/zaf/g711 v1.4.0
@@ -36,7 +36,7 @@ require (
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.42.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
@@ -68,7 +68,7 @@ require (
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/tphakala/simd v1.9.0 // indirect
+	github.com/tphakala/simd v1.15.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect

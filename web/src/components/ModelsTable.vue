@@ -148,25 +148,27 @@ function tokenLimit(value: number | undefined): string {
     class="flex min-h-0 flex-1 flex-col overflow-auto max-md:[scrollbar-gutter:stable] md:overflow-hidden"
   >
     <header
-      class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-5xl))/2_+_2rem))]"
+      class="page-x flex flex-wrap items-center gap-3 border-b border-line py-4 md:overflow-hidden md:[scrollbar-gutter:stable]"
     >
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('section.models.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('section.models.description') }}</p>
       </div>
     </header>
-    <div class="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col p-4 md:p-8">
-      <div class="mb-4 flex flex-wrap items-center gap-3">
+    <div
+      class="page-x flex min-h-0 flex-1 flex-col py-4 md:overflow-hidden md:py-8 md:[scrollbar-gutter:stable]"
+    >
+      <div class="mb-3 flex flex-wrap items-center gap-2">
         <input
           v-model="query"
-          class="min-w-0 flex-1 basis-full rounded border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64 sm:basis-0"
+          class="min-w-0 flex-1 basis-full rounded-md border border-line bg-canvas px-3 py-1 text-sm text-white transition focus:border-blue-500 focus:outline-none sm:min-w-64 sm:basis-0"
           :placeholder="t('models.search')"
           type="search"
         />
         <UiSelect
           v-if="!loading"
           v-model="selectedMethod"
-          class="rounded border border-line bg-canvas px-3 py-2 text-sm text-gray-300 focus:border-blue-500 focus:outline-none"
+          class="rounded-md border border-line bg-canvas px-2 py-1.5 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
           :aria-label="t('models.methods')"
         >
           <option value="">{{ t('models.allMethods') }}</option>

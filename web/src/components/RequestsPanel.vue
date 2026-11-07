@@ -183,7 +183,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
     class="flex min-h-0 flex-1 flex-col overflow-auto max-md:[scrollbar-gutter:stable] md:overflow-hidden"
   >
     <header
-      class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-[max(2rem,calc((100%_-_var(--container-6xl))/2_+_2rem))]"
+      class="page-x flex flex-wrap items-center gap-3 border-b border-line py-4 md:overflow-hidden md:[scrollbar-gutter:stable]"
     >
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('section.requests.title') }}</h2>
@@ -200,13 +200,13 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
       </button>
     </header>
     <div
-      class="mx-auto grid min-h-0 w-full max-w-6xl flex-1 gap-4 p-4 max-md:shrink-0 max-md:basis-auto md:grid-rows-[minmax(0,3fr)_minmax(0,2fr)] md:p-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1"
+      class="page-x grid min-h-0 flex-1 gap-4 py-4 max-md:shrink-0 max-md:basis-auto md:grid-rows-[minmax(0,3fr)_minmax(0,2fr)] md:overflow-hidden md:py-8 md:[scrollbar-gutter:stable] lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1"
     >
       <article
         class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel max-md:max-h-[70vh]"
       >
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-          <h3 class="font-bold text-gray-300">{{ t('cooldowns.title') }}</h3>
+          <h3 class="text-sm font-semibold text-gray-200">{{ t('cooldowns.title') }}</h3>
           <span class="font-mono text-xs text-gray-500">{{ visibleCooldowns.length }}</span>
           <UiSelect
             v-model="cooldownModel"
@@ -296,7 +296,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
         <div
           class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3"
         >
-          <h3 class="font-bold text-gray-300">{{ t('requests.history') }}</h3>
+          <h3 class="text-sm font-semibold text-gray-200">{{ t('requests.history') }}</h3>
           <span class="text-xs text-green-400"> {{ t('requests.live') }}: {{ activeCount }} </span>
           <UiSelect
             v-model="requestModel"

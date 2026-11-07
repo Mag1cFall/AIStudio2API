@@ -343,10 +343,10 @@ type AccountSelection struct {
 	PlaygroundOnly     bool
 	Channel            Channel
 	PreferredChannel   Channel
-	// IgnorePlanLimitCooldown 为 true 时套餐限额冷却中的账户照常参与选号
-	IgnorePlanLimitCooldown bool
-	anyTier                 bool
-	anyState                bool
+	// IgnoreQuotaCooldown 为 true 时套餐限额与每日限额冷却中的账户照常参与选号
+	IgnoreQuotaCooldown bool
+	anyTier             bool
+	anyState            bool
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
@@ -414,12 +414,12 @@ type AccountLease struct {
 	checkedAt             time.Time
 	refreshRuntime        bool
 	channel               Channel
-	// ignorePlanLimitCooldown 表示租约按套餐限额回退取得，套餐限额冷却不阻止它发送
-	ignorePlanLimitCooldown bool
-	operation               sync.Mutex
-	released                bool
-	once                    sync.Once
-	err                     error
+	// ignoreQuotaCooldown 表示租约在全部账户冷却时取自套餐限额或每日限额冷却中的账户，这两种冷却不阻止它发送
+	ignoreQuotaCooldown bool
+	operation           sync.Mutex
+	released            bool
+	once                sync.Once
+	err                 error
 	// sessionOnce 使同一租约内的认证失败只检查一次会话
 	sessionOnce sync.Once
 	// sessionErr 是本租约会话检查的结果
@@ -1459,7 +1459,7 @@ func (l *AccountLease) CoolingDown(modelID string) bool {
 	if account == nil {
 		return false
 	}
-	_, active := selectionCooldown(account, scope, AccountSelection{IgnorePlanLimitCooldown: l.ignorePlanLimitCooldown}, time.Now())
+	_, active := selectionCooldown(account, scope, AccountSelection{IgnoreQuotaCooldown: l.ignoreQuotaCooldown}, time.Now())
 	return active
 }
 
@@ -2592,7 +2592,7 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
-			channel: candidate.channel, ignorePlanLimitCooldown: selection.IgnorePlanLimitCooldown,
+			channel: candidate.channel, ignoreQuotaCooldown: selection.IgnoreQuotaCooldown,
 		}, time.Time{}, true, nil
 	}
 	return nil, earliest, waitable, nil
@@ -3489,7 +3489,7 @@ func accountCatalogFingerprint(tier BenefitTier, models []Model) (string, error)
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
-// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnorePlanLimitCooldown 的选择不受套餐限额冷却限制
+// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额与每日限额冷却限制
 func selectionCooldown(account *Account, scope string, selection AccountSelection, now time.Time) (CooldownState, bool) {
 	var selected CooldownState
 	for _, key := range []string{globalCooldownKey, scope} {
@@ -3497,7 +3497,7 @@ func selectionCooldown(account *Account, scope string, selection AccountSelectio
 			continue
 		}
 		cooldown, exists := account.runtime.Cooldowns[key]
-		if !exists || !cooldown.Active(now) || selection.IgnorePlanLimitCooldown && strings.HasPrefix(cooldown.Reason, PlanLimitKind) {
+		if !exists || !cooldown.Active(now) || selection.IgnoreQuotaCooldown && RequestQuotaCooldown(cooldown.Reason) {
 			continue
 		}
 		if selected.Until.IsZero() || cooldown.Until.After(selected.Until) {

@@ -282,6 +282,12 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 			}
 			model.Capabilities["interaction_task"] = background
 		}
+		kind, err := optionalIntField(interaction, 3, path+"[78]", raw)
+		if err != nil {
+			return modelEntry{}, withMethod(err, "ListModels")
+		}
+		// field 4 为 2 且不是后台任务的模型经 CreateInteractionStream 生成，与官网一样以内联数据发送图片
+		model.Capabilities["interaction_stream"] = kind == 2 && !model.Capabilities["interaction_task"]
 		if value := rawAt(interaction, 5); !isJSONNull(value) {
 			agentModel, err := rawString(value, path+"[78][5]", raw)
 			if err != nil {

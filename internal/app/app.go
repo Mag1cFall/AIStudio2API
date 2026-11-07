@@ -92,7 +92,7 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 		cancel()
 		<-stopped
 	}
-	shell := newShell(options.openUI, stopService)
+	shell := newShell(options.openUI, cfg.HideDockIcon, stopService)
 	ready := make(chan serviceReady, 1)
 	shellCtx, stopShell := context.WithCancel(ctx)
 	defer stopShell()
@@ -162,6 +162,9 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	manager.states = states
 	manager.logs = logs
 	updater := newSelfUpdater(buildVersion(), executable, manager.egressProxy, logService, updateRestart(cancel, restarting, logService))
+	if err := removeReplacedExecutables(executable); err != nil {
+		logService("WARN", "删除在线更新留下的旧版本失败 | 错误="+err.Error())
+	}
 	started, err = runServer(ctx, cfg, manager, updater, func(address string) {
 		ready <- serviceReady{url: address, log: logService}
 	})

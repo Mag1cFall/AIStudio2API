@@ -379,9 +379,9 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 			err = errors.Join(DecodeAssistantStream(follow.Body, decoder, collect), follow.Body.Close())
 		}
 		if err == nil {
-			cleanup.completed.Store(!decoder.overran)
+			cleanup.completed.Store(decoder.finished && !decoder.overran || decoder.failed)
 			assistantSearches.store(apiKey, history, answer.String(), decoder.searches)
-			if !decoder.overran && !decoder.malformed {
+			if decoder.finished && !decoder.overran && !decoder.malformed {
 				cleanup.tip.Store(&assistantSessionKey{apiKey: apiKey, digest: assistantLinkDigest(links[len(links)-1].digest, true, reply)})
 			}
 		}
@@ -649,11 +649,13 @@ type AssistantStreamDecoder struct {
 	finished  bool
 	// answered 表示最近解码的步骤是已完成、含正文且没有工具动作的模型步骤，即本轮回复结束
 	answered bool
-	// overran 表示函数调用之后模型继续输出正文，本轮回复在调用处结束
+	// overran 表示本轮回复在函数调用处结束：调用之后模型继续输出正文或上游后续步骤失败
 	overran bool
+	// failed 表示上游任务以失败步骤结束，不再需要取消
+	failed bool
 }
 
-// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束或函数调用之后模型继续输出正文时不再读取上游，消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取
+// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束、函数调用之后模型继续输出正文或上游后续步骤失败时不再读取上游，消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取，仍未完成而已解出完整函数调用或写出正文时以已有内容结束本轮
 func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, emit func(Event) error) error {
 	err := decodeAssistantMessages(source, decoder, emit)
 	if err == nil && !decoder.finished && !decoder.overran && decoder.Reopen != nil {
@@ -727,7 +729,7 @@ func decodeAssistantMessages(source io.Reader, decoder *AssistantStreamDecoder, 
 	return reader.failure(assistantStreamMethod, index, nil)
 }
 
-// Decode 解码一条消息 [null, null, [步骤...], 应用 ID]：步骤 field 1 为对话轮、6 为失败原因、10 为工具动作、12 为序号、13 为状态（1 完成、2 进行中、4 失败）、16 为用量
+// Decode 解码一条消息 [null, null, [步骤...], 应用 ID]：步骤 field 1 为对话轮、6 为错误（状态为 3 时不终止任务）、10 为工具动作、12 为序号、13 为状态（1 完成、2 进行中、4 失败）、16 为用量
 func (d *AssistantStreamDecoder) Decode(raw json.RawMessage, path string) ([]Event, error) {
 	if d.emitted == nil {
 		d.emitted = make(map[int64][]string)
@@ -773,15 +775,18 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 		return nil, withMethod(err, assistantStreamMethod)
 	}
 	if failure := rawAt(step, 5); !isJSONNull(failure) {
-		values, err := rawArray(failure, path+"[5]", evidence)
+		failed, err := decodeAssistantFailure(failure, path+"[5]", evidence)
 		if err != nil {
-			return nil, withMethod(err, assistantStreamMethod)
+			return nil, err
 		}
-		message, err := rawString(rawAt(values, 0), path+"[5][0]", evidence)
-		if err != nil {
-			return nil, withMethod(err, assistantStreamMethod)
+		if status == 3 {
+			return nil, nil
 		}
-		return nil, &RPCError{Method: assistantStreamMethod, StatusCode: http.StatusBadGateway, Message: "生成步骤失败: " + message}
+		if d.called {
+			d.overran, d.failed = true, true
+			return nil, nil
+		}
+		return nil, failed
 	}
 	if usageRaw := rawAt(step, 15); !isJSONNull(usageRaw) && status == 1 {
 		usage, err := decodeAssistantUsage(usageRaw, path+"[15]", evidence)
@@ -840,6 +845,50 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 	}
 	d.answered = status == 1 && isJSONNull(rawAt(step, 9)) && d.wroteText && d.lastStep == number
 	return events, nil
+}
+
+// decodeAssistantFailure 解码错误步骤 field 6：field 1 为错误文字，field 2 为详情（1 消息、2 调试信息、3 内部错误详情、4 通用额度、5 每用户额度）；带额度标记时为 HTTP 429 与协议错误码 8，否则为 HTTP 502
+func decodeAssistantFailure(raw json.RawMessage, path string, evidence json.RawMessage) (*RPCError, error) {
+	values, err := rawArray(raw, path, evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	message, err := rawString(rawAt(values, 0), path+"[0]", evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	failure := &RPCError{Method: assistantStreamMethod, StatusCode: http.StatusBadGateway, Message: "生成步骤失败: " + message}
+	detailRaw := rawAt(values, 1)
+	if isJSONNull(detailRaw) {
+		return failure, nil
+	}
+	detail, err := rawArray(detailRaw, path+"[1]", evidence)
+	if err != nil {
+		return nil, withMethod(err, assistantStreamMethod)
+	}
+	for index := range 3 {
+		if text := rawAt(detail, index); !isJSONNull(text) {
+			value, err := rawString(text, fmt.Sprintf("%s[1][%d]", path, index), evidence)
+			if err != nil {
+				return nil, withMethod(err, assistantStreamMethod)
+			}
+			if value != "" && value != message {
+				failure.Message += "；" + value
+			}
+		}
+	}
+	for _, index := range []int{3, 4} {
+		if flag := rawAt(detail, index); !isJSONNull(flag) {
+			quota, err := rawBool(flag, fmt.Sprintf("%s[1][%d]", path, index), evidence)
+			if err != nil {
+				return nil, withMethod(err, assistantStreamMethod)
+			}
+			if quota {
+				failure.StatusCode, failure.Code = http.StatusTooManyRequests, 8
+			}
+		}
+	}
+	return failure, nil
 }
 
 // decodePart 返回模型 part 文本相对上一次快照新增的部分
@@ -1158,7 +1207,7 @@ func (d *AssistantStreamDecoder) decodeSearch(raw json.RawMessage, path string, 
 
 // End 在本轮回复结束、函数调用之后模型继续输出正文或流结束时返回扣下的正文或函数调用、搜索来源、各步骤用量之和与完成事件
 func (d *AssistantStreamDecoder) End() ([]Event, error) {
-	if !d.finished && !d.overran {
+	if !d.finished && !d.overran && !d.called && !d.wroteText {
 		return nil, &ProtocolEvidenceError{Method: assistantStreamMethod, Path: "$", Detail: "流结束前没有完成的模型回复"}
 	}
 	var total Usage

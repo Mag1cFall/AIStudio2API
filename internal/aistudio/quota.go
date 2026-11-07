@@ -15,6 +15,14 @@ const quotaResetTimezone = "America/Los_Angeles"
 // PlanLimitKind 是套餐限额冷却的类型名，也是其冷却原因的前缀
 const PlanLimitKind = "套餐限额"
 
+// DailyLimitKind 是每日限额冷却的类型名，也是其冷却原因的前缀
+const DailyLimitKind = "每日限额"
+
+// RequestQuotaCooldown 判断冷却原因是上游按每个请求判定是否放行的套餐限额或每日限额，用尽后较短的请求仍可能完成
+func RequestQuotaCooldown(reason string) bool {
+	return strings.HasPrefix(reason, PlanLimitKind) || strings.HasPrefix(reason, DailyLimitKind)
+}
+
 // planLimitBackoff 为没有恢复时间的套餐限额按连续次数递增的冷却时长
 var planLimitBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
 
@@ -63,7 +71,7 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 	for _, evidence := range []string{rpcError.Metadata["quota_unit"], rpcError.Metadata["quota_limit"], rpcError.Metadata["quota_metric"], message} {
 		evidence = strings.ToLower(evidence)
 		if dailyQuotaEvidence(evidence) {
-			until, kind = nextQuotaDay(now), "每日限额"
+			until, kind = nextQuotaDay(now), DailyLimitKind
 			break
 		}
 		if minuteQuotaEvidence(evidence) {

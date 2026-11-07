@@ -54,3 +54,15 @@ func (service *trackedService) DeleteFile(ctx context.Context, fileID string) er
 	api.SetAccessLogError(requestCtx, requestErr)
 	return requestErr
 }
+
+// VideoFrameTokens 统计视频文件按视频设置抽帧后的 token 数并记录实际账户
+func (service *trackedService) VideoFrameTokens(ctx context.Context, request aistudio.VideoFramesRequest) (int64, error) {
+	requestCtx, cancel, err := service.observedDataRequestContext(ctx, "")
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	tokens, requestErr := service.service.(aistudio.VideoFrameService).VideoFrameTokens(requestCtx, request)
+	api.SetAccessLogError(requestCtx, requestErr)
+	return tokens, requestErr
+}

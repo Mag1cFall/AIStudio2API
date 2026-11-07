@@ -378,27 +378,27 @@ const statusOptions = computed(() =>
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col overflow-auto [scrollbar-gutter:stable]">
-    <header class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-4 md:px-8">
+    <header class="page-x flex flex-wrap items-center gap-3 border-b border-line py-4">
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('usage.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('usage.description') }}</p>
       </div>
-      <div class="flex h-8 items-stretch rounded-md border border-line text-xs">
+      <div class="flex h-10 items-stretch rounded border border-line text-sm">
         <button
           v-tooltip="refreshTip"
           type="button"
-          class="flex w-8 items-center justify-center text-gray-400 transition hover:bg-raised hover:text-white"
-          :class="live ? 'rounded-l-md' : 'rounded-md'"
+          class="flex w-10 items-center justify-center text-gray-400 transition hover:bg-raised hover:text-white"
+          :class="live ? 'rounded-l' : 'rounded'"
           :aria-label="t('app.refresh')"
           @click="refresh"
         >
-          <UiIcon name="refresh" :size="14" :class="{ 'animate-spin': loading }" />
+          <UiIcon name="refresh" :size="15" :class="{ 'animate-spin': loading }" />
         </button>
         <UiSelect
           v-if="live"
           :model-value="autoRefresh"
           :aria-label="t('usage.autoRefresh')"
-          class="w-max rounded-r-md border-l border-line px-2.5 text-gray-200 hover:bg-raised"
+          class="w-max rounded-r border-l border-line px-3 text-gray-200 hover:bg-raised"
           @update:model-value="autoRefresh = Number($event)"
         >
           <option v-for="choice in refreshChoices" :key="choice" :value="choice">
@@ -409,7 +409,7 @@ const statusOptions = computed(() =>
     </header>
 
     <div
-      class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-line bg-canvas/95 px-4 py-2.5 backdrop-blur md:px-8"
+      class="page-x sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-line bg-canvas/95 py-2.5 backdrop-blur"
       role="toolbar"
       :aria-label="t('usage.filters')"
     >
@@ -436,7 +436,7 @@ const statusOptions = computed(() =>
         {{ t('usage.filtersClear') }}
       </button>
     </div>
-    <div v-if="activeChips.length > 0" class="flex flex-wrap gap-1.5 px-4 pt-3 md:px-8">
+    <div v-if="activeChips.length > 0" class="page-x flex flex-wrap gap-1.5 pt-3">
       <span
         v-for="chip in activeChips"
         :key="`${chip.dimension}:${chip.value}`"
@@ -464,7 +464,7 @@ const statusOptions = computed(() =>
       </span>
     </div>
 
-    <div class="@container w-full space-y-4 p-4 md:p-8">
+    <div class="@container page-x space-y-4 py-4 md:py-8">
       <div
         v-if="error && status !== 'error'"
         class="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
