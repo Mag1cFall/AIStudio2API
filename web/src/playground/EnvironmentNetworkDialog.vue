@@ -8,6 +8,7 @@ import type { EgressRule } from './types'
 
 const open = defineModel<boolean>('open', { required: true })
 const rules = defineModel<EgressRule[]>('rules', { required: true })
+defineProps<{ readonly?: boolean }>()
 const { t } = useI18n()
 
 // draft 是对话框中尚未保存的规则
@@ -33,6 +34,7 @@ function save(): void {
   <UiDialog v-model:open="open" :title="t('pg.networkTitle')" width="560px">
     <p class="dialog-description">{{ t('pg.networkDescription') }}</p>
     <button
+      v-if="!readonly"
       type="button"
       ms-button
       class="ms-button-secondary add-rule-button"
@@ -45,10 +47,12 @@ function save(): void {
         <input
           v-model="rule.domain"
           ms-input
+          :disabled="readonly"
           :aria-label="t('pg.domain')"
           :placeholder="t('pg.domainPlaceholder')"
         />
         <button
+          v-if="!readonly"
           v-tooltip.left="t('pg.deleteRule')"
           type="button"
           ms-button
@@ -64,6 +68,7 @@ function save(): void {
           <input
             v-model="header.name"
             ms-input
+            :disabled="readonly"
             class="small"
             :aria-label="t('pg.headerName')"
             :placeholder="t('pg.headerName')"
@@ -71,11 +76,13 @@ function save(): void {
           <input
             v-model="header.value"
             ms-input
+            :disabled="readonly"
             class="small"
             :aria-label="t('pg.headerValue')"
             :placeholder="t('pg.headerValue')"
           />
           <button
+            v-if="!readonly"
             v-tooltip.left="t('pg.deleteHeader')"
             type="button"
             ms-button
@@ -88,6 +95,7 @@ function save(): void {
         </template>
       </div>
       <button
+        v-if="!readonly"
         type="button"
         ms-button
         class="ms-button-secondary ms-button-small add-header-button"
@@ -118,12 +126,23 @@ function save(): void {
           ? t('pg.oneRule')
           : t('pg.ruleCount').replace('{count}', String(draft.length))
       }}</span>
-      <button type="button" ms-button class="ms-button-borderless" @click="open = false">
-        {{ t('common.cancel') }}
+      <button
+        v-if="readonly"
+        type="button"
+        ms-button
+        class="ms-button-primary"
+        @click="open = false"
+      >
+        {{ t('common.close') }}
       </button>
-      <button type="button" ms-button class="ms-button-primary" @click="save">
-        {{ t('common.save') }}
-      </button>
+      <template v-else>
+        <button type="button" ms-button class="ms-button-borderless" @click="open = false">
+          {{ t('common.cancel') }}
+        </button>
+        <button type="button" ms-button class="ms-button-primary" @click="save">
+          {{ t('common.save') }}
+        </button>
+      </template>
     </template>
   </UiDialog>
 </template>

@@ -29,17 +29,24 @@ const types = [
 // sourcesLabel 与官网一样没有源时为 Add sources，否则为源的个数
 const sourcesLabel = computed(() => {
   const count = environment.value.sources.length
-  if (count === 0) return t('pg.addSources')
+  if (count === 0) return t(viewable.value ? 'pg.viewSources' : 'pg.addSources')
   return count === 1 ? t('pg.oneSource') : t('pg.sourceCount').replace('{count}', String(count))
 })
 // rulesLabel 与官网一样没有规则时为 Add rules，否则为规则的条数
 const rulesLabel = computed(() => {
   const count = environment.value.rules.length
-  if (count === 0) return t('pg.addRules')
+  if (count === 0) return t(viewable.value ? 'pg.viewRules' : 'pg.addRules')
   return count === 1 ? t('pg.oneRule') : t('pg.ruleCount').replace('{count}', String(count))
 })
 // hasId 表示已有环境填了环境 ID
 const hasId = computed(() => environment.value.id.trim() !== '')
+// viewable 与官网一样在已有环境的 ID 是本对话运行得到的环境时显示只读的来源与规则
+const viewable = computed(
+  () =>
+    environment.value.type === 'existing' &&
+    hasId.value &&
+    environment.value.id === environment.value.produced,
+)
 
 // selectType 切换环境类型，与官网一样已有环境带 ID 且对话已有轮次时切回 New 先确认
 function selectType(type: AgentEnvironment['type']): void {
@@ -131,6 +138,30 @@ function download(): void {
             {{ t('pg.download') }}
           </button>
         </div>
+        <template v-if="viewable">
+          <div class="environment-row">
+            <h3 class="row-label">{{ t('pg.environmentSources') }}</h3>
+            <button
+              type="button"
+              ms-button
+              class="ms-button-secondary row-button"
+              @click="sourcesOpen = true"
+            >
+              {{ sourcesLabel }}
+            </button>
+          </div>
+          <div class="environment-row">
+            <h3 class="row-label">{{ t('pg.environmentNetwork') }}</h3>
+            <button
+              type="button"
+              ms-button
+              class="ms-button-secondary row-button"
+              @click="networkOpen = true"
+            >
+              {{ rulesLabel }}
+            </button>
+          </div>
+        </template>
       </template>
       <template v-else>
         <div v-tooltip.left="t('pg.sourcesTip')" class="environment-row">
@@ -157,8 +188,16 @@ function download(): void {
         </div>
       </template>
     </UiCollapse>
-    <EnvironmentSourcesDialog v-model:open="sourcesOpen" v-model:sources="environment.sources" />
-    <EnvironmentNetworkDialog v-model:open="networkOpen" v-model:rules="environment.rules" />
+    <EnvironmentSourcesDialog
+      v-model:open="sourcesOpen"
+      v-model:sources="environment.sources"
+      :readonly="viewable"
+    />
+    <EnvironmentNetworkDialog
+      v-model:open="networkOpen"
+      v-model:rules="environment.rules"
+      :readonly="viewable"
+    />
     <UiDialog v-model:open="switchOpen" :title="t('pg.switchEnvironmentTitle')" width="420px">
       <p class="confirm-text">{{ t('pg.switchEnvironmentBody') }}</p>
       <template #actions>

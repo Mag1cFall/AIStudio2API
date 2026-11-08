@@ -1095,6 +1095,8 @@ function interactionsDecoder(): Decoder {
     if (signature !== '') update.parts.push({ text: '', thoughtSignature: signature })
     signature = ''
     if (typeof interaction.id === 'string') update.interactionId = interaction.id
+    if (typeof interaction.environment_id === 'string')
+      update.environmentId = interaction.environment_id
     const usage = record(interaction.usage)
     const { total_output_tokens: output, total_thought_tokens: thoughts } = usage
     if (typeof output === 'number' || typeof thoughts === 'number')

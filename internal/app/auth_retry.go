@@ -12,10 +12,14 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 )
 
-type chromeCookieRefreshFunc func(context.Context, aistudio.AuthSource, aistudio.ChromeOAuthMaterial, string) ([]aistudio.StateCookie, error)
+type chromeCookieRefreshFunc func(context.Context, aistudio.AuthSource, aistudio.ChromeOAuthMaterial, string) ([]aistudio.StateCookie, *aistudio.BoundSession, error)
+
+// boundRefreshThreshold 是 Chromium 主动刷新 DBSC 会话时绑定 Cookie 的剩余时间
+const boundRefreshThreshold = 2 * time.Minute
 
 // authRuntimeRefresher 使用账户保存的 Chrome OAuth 材料原地续签
 type authRuntimeRefresher struct {
@@ -25,8 +29,14 @@ type authRuntimeRefresher struct {
 	chromeHas     func(string) bool
 	reset         func(string) error
 	prepareWorker func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)
-	globalProxy   string
-	requests      *requestRegistry
+	// rotate 刷新账户的 DBSC 会话并返回响应 Cookie
+	rotate func(context.Context, aistudio.StorageState, aistudio.AuthExtension, string) ([]string, error)
+	// mergeWorker 把响应 Cookie 写入账户当前 Worker 的页面
+	mergeWorker func(context.Context, string, []string, string) error
+	// boundLocks 是各账户 DBSC 会话刷新的互斥锁
+	boundLocks  sync.Map
+	globalProxy string
+	requests    *requestRegistry
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -146,6 +156,7 @@ func newAuthRuntimeRefresher(
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
 		reset: workers.Reset, prepareWorker: workers.prepareUpdate,
+		rotate: chromeauth.RotateBoundCookies, mergeWorker: workers.MergeCookies,
 		globalProxy: globalProxy,
 		requests:    requests,
 	}
@@ -247,7 +258,11 @@ func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error,
 func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, send func() (*aistudio.RPCResponse, error)) (*aistudio.RPCResponse, error) {
 	for attempt := 0; ; attempt++ {
 		generation := authGeneration(ctx)
-		response, err := send()
+		var response *aistudio.RPCResponse
+		err := refresher.ensureBound(ctx)
+		if err == nil {
+			response, err = send()
+		}
 		if err == nil && authenticationFailed(response) {
 			original, readErr := readAuthenticationFailure(method, response)
 			if readErr != nil {
@@ -297,7 +312,11 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 	bidiTransport := transport.transport.(aistudio.BidiProtectedTransport)
 	gate := newBidiReleaseGate(release)
 	generation := authGeneration(ctx)
-	session, err := bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, gate.Release)
+	var session *aistudio.BidiSession
+	err := transport.refresher.ensureBound(ctx)
+	if err == nil {
+		session, err = bidiTransport.OpenBidiProtected(ctx, request, runtime, lease, gate.Release)
+	}
 	if err == nil {
 		if releaseErr := gate.Commit(); releaseErr != nil {
 			return nil, errors.Join(releaseErr, session.Close())
@@ -357,9 +376,14 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	account := lease.Account()
 	startedAt := time.Now()
 	refreshed := false
+	logRenewal := func(level, message string) {
+		if startup, _ := ctx.Value(workerStartupRenewalKey{}).(bool); !startup {
+			refresher.requests.log(account.Config.Label, level, message)
+		}
+	}
 	err := lease.RefreshStorageState(generation, func(state *aistudio.StorageState) error {
 		refreshed = true
-		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
+		logRenewal("INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
 		extension, exists, err := state.AuthExtension()
 		if err != nil {
 			return err
@@ -370,13 +394,13 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 		proxy := account.EffectiveProxy(refresher.globalProxy)
 		var cookies []aistudio.StateCookie
 		if extension.OAuth != nil {
-			cookies, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
+			cookies, extension.Bound, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
 		}
 		if extension.OAuth == nil || errors.Is(err, chromeauth.ErrCredentialsRejected) {
 			if extension.Source.Browser != "chrome" || !strings.EqualFold(extension.Source.Email, account.ID) {
 				return errors.Join(fmt.Errorf("账户 %s 缺少可更新的 Chrome 来源", account.ID), err)
 			}
-			refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 更新 Chrome 来源材料")
+			logRenewal("INFO", "账户认证续签 | 更新 Chrome 来源材料")
 			updated, importErr := refresher.importCurrent(ctx, extension.Source, extension.OAuth, proxy)
 			if importErr != nil {
 				return errors.Join(err, importErr)
@@ -386,17 +410,18 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 				extension.OAuth != nil && current.OAuth.GaiaID != extension.OAuth.GaiaID {
 				return fmt.Errorf("Chrome 更新结果与账户 %s 不匹配", account.ID)
 			}
-			state.SetAuthExtension(current)
+			extension = current
 			cookies, err = updated.Cookies, nil
 		}
 		if err != nil {
 			return fmt.Errorf("续签账户 %s: %w", account.ID, err)
 		}
+		state.SetAuthExtension(extension)
 		state.Cookies = cookies
 		_, err = aistudio.NewSigner().Authorization(*state)
 		return err
 	}, func() error {
-		refresher.requests.log(account.Config.Label, "INFO", "账户认证续签 | 2/2 | 重置协议运行时")
+		logRenewal("INFO", "账户认证续签 | 2/2 | 重置协议运行时")
 		if err := refresher.reset(account.ID); err != nil {
 			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
 		}
@@ -404,7 +429,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
-		refresher.requests.log(account.Config.Label, "ERROR", fmt.Sprintf(
+		logRenewal("ERROR", fmt.Sprintf(
 			"账户认证续签失败 | 耗时=%s | 错误=%s",
 			time.Since(startedAt).Round(time.Millisecond), wrapped.Error(),
 		))
@@ -416,11 +441,53 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	if err := resetCookieAuthUser(lease, refresher.prepareWorker); err != nil {
 		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
-	refresher.requests.log(account.Config.Label, "INFO", fmt.Sprintf(
+	logRenewal("INFO", fmt.Sprintf(
 		"账户认证续签完成 | 耗时=%s",
 		time.Since(startedAt).Round(time.Millisecond),
 	))
 	return nil
+}
+
+// ensureBound 在租约账户 DBSC 会话的绑定 Cookie 剩余不足 boundRefreshThreshold 时刷新，并写回账户与当前 Worker 的页面
+func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
+	lease, ok := aistudio.AccountLeaseFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	due := func() (aistudio.StorageState, aistudio.AuthExtension, bool, error) {
+		state, err := lease.ReloadStorageState()
+		if err != nil {
+			return state, aistudio.AuthExtension{}, false, err
+		}
+		extension, _, err := state.AuthExtension()
+		if err != nil || extension.Bound == nil {
+			return state, extension, false, err
+		}
+		return state, extension, state.BoundCookieLifetime(*extension.Bound, time.Now()) <= boundRefreshThreshold, nil
+	}
+	if _, _, refresh, err := due(); err != nil || !refresh {
+		return err
+	}
+	account := lease.Account()
+	value, _ := refresher.boundLocks.LoadOrStore(account.ID, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	state, extension, refresh, err := due()
+	if err != nil || !refresh {
+		return err
+	}
+	headers, err := refresher.rotate(ctx, state, extension, account.EffectiveProxy(refresher.globalProxy))
+	if errors.Is(err, chromeauth.ErrBoundSessionRejected) {
+		return errors.Join(camoufoxnative.ErrAuthenticationRequired, err)
+	}
+	if err != nil {
+		return fmt.Errorf("刷新账户 %s DBSC 会话: %w", account.ID, err)
+	}
+	if err := lease.MergeSetCookieHeaders(headers, extension.Bound.RefreshURL, time.Now()); err != nil {
+		return fmt.Errorf("保存账户 %s DBSC 会话 Cookie: %w", account.ID, err)
+	}
+	return refresher.mergeWorker(ctx, account.ID, headers, extension.Bound.RefreshURL)
 }
 
 // Available 返回当前租约账户是否保存了 Chrome OAuth 续签材料

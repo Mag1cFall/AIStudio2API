@@ -301,6 +301,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrency': 'Requêtes simultanées par compte',
   'settings.routingStrategy': 'Stratégie de sélection des comptes',
   'settings.routingRoundRobin': 'Tourniquet',
+  'settings.accountOrder': 'Ordre des comptes',
+  'settings.accountOrderHelp':
+    'Avec « Même compte en priorité », ces comptes sont utilisés dans cet ordre ; le compte suivant prend le relais lorsqu’un compte est saturé, en temporisation ou indisponible',
+  'settings.accountOrderUp': 'Monter {account}',
+  'settings.accountOrderDown': 'Descendre {account}',
   'settings.routingFillFirst': 'Même compte en priorité',
   'settings.routingHelp':
     'Le tourniquet alterne les comptes. « Même compte en priorité » garde un compte jusqu’à ce qu’il soit saturé ou indisponible.',
@@ -330,6 +335,10 @@ export const messages: Record<TranslationKey, string> = {
   'channel.assistant': 'Chat Build',
   'logs.channel': 'Canal',
   'models.channels': 'Canaux',
+  'models.accounts': 'Comptes',
+  'models.accountsHelp':
+    'La sélection automatique utilise uniquement ces comptes. Sans sélection, tous les comptes sont utilisables',
+  'models.accountsSaved': 'Comptes enregistrés et appliqués',
   'models.channelAll': 'Tous les canaux',
   'models.channelSaved': 'Canal enregistré et appliqué',
   'settings.activeValue': 'Valeur active',
@@ -1217,6 +1226,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.environmentSources': 'Sources',
   'pg.sourcesTip': 'Sources à installer dans l’environnement',
   'pg.addSources': 'Ajouter des sources',
+  'pg.viewSources': 'Voir les sources',
+  'pg.viewRules': 'Voir les règles',
   'pg.oneSource': '1 source',
   'pg.sourceCount': '{count} sources',
   'pg.environmentNetwork': 'Réseau',

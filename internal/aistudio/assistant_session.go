@@ -43,10 +43,10 @@ type assistantSession struct {
 	applet    string
 	// key 是可继续时在 tips 中的键
 	key assistantSessionKey
-	// history 是新建应用时转录在自定义指令中的开头分组数
-	history int
-	busy    bool
-	usedAt  time.Time
+	// historyGroupCount 是新建应用时转录在自定义指令中的开头分组数
+	historyGroupCount int
+	busy              bool
+	usedAt            time.Time
 }
 
 // assistantSessions 是本进程创建的写代码助手应用与其中可继续的对话
@@ -162,10 +162,10 @@ func (store *assistantSessions) claim(apiKey string, accountID string, links []a
 }
 
 // open 记录新建的应用与转录在自定义指令中的开头分组数，会话为进行中
-func (store *assistantSessions) open(accountID string, applet string, history int) *assistantSession {
+func (store *assistantSessions) open(accountID string, applet string, historyGroupCount int) *assistantSession {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	session := &assistantSession{accountID: accountID, applet: applet, history: history, busy: true}
+	session := &assistantSession{accountID: accountID, applet: applet, historyGroupCount: historyGroupCount, busy: true}
 	store.applets[applet] = session
 	return session
 }

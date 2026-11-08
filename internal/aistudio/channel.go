@@ -52,6 +52,26 @@ func (p *AccountPool) SetModelChannels(channels map[string]Channel) {
 	p.notifyLocked()
 }
 
+// SetModelAccounts 设置模型可用的账户 ID，未列出的模型可用全部账户
+func (p *AccountPool) SetModelAccounts(accounts map[string][]string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelAccounts = maps.Clone(accounts)
+	p.notifyLocked()
+}
+
+// SetAccountOrder 设置 fill-first 依次使用的账户 ID
+func (p *AccountPool) SetAccountOrder(accountIDs []string) {
+	order := make(map[string]int, len(accountIDs))
+	for rank, accountID := range accountIDs {
+		order[accountID] = rank
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.accountOrder = order
+	p.notifyLocked()
+}
+
 // apiKeyContextKey 是请求上下文中所用 API key 的键
 type apiKeyContextKey struct{}
 
@@ -68,24 +88,28 @@ func (p *AccountPool) SetAPIKeyAccounts(accounts map[string][]string) {
 	p.notifyLocked()
 }
 
-// keyScopedSelection 把请求所用 API key 绑定的账户并入选择的允许账户
-func (p *AccountPool) keyScopedSelection(ctx context.Context, selection AccountSelection) AccountSelection {
+// scopedSelection 把请求所用 API key 与模型绑定的账户并入选择的允许账户，指定账户与绑定资源的选择不受模型绑定限制
+func (p *AccountPool) scopedSelection(ctx context.Context, selection AccountSelection) AccountSelection {
 	key, _ := ctx.Value(apiKeyContextKey{}).(string)
-	if key == "" {
-		return selection
-	}
 	p.mu.Lock()
-	scope, bound := p.apiKeyAccounts[key]
+	keyScope, keyBound := p.apiKeyAccounts[key]
+	modelScope, modelBound := p.modelAccounts[strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")]
 	p.mu.Unlock()
-	if !bound {
-		return selection
+	if keyBound {
+		selection.AllowedAccountIDs = narrowedAccounts(selection.AllowedAccountIDs, keyScope)
 	}
-	if selection.AllowedAccountIDs == nil {
-		selection.AllowedAccountIDs = scope
-		return selection
+	if modelBound && selection.AccountID == "" && selection.ResourceID == "" {
+		selection.AllowedAccountIDs = narrowedAccounts(selection.AllowedAccountIDs, modelScope)
 	}
-	selection.AllowedAccountIDs = slices.DeleteFunc(slices.Clone(selection.AllowedAccountIDs), func(id string) bool { return !slices.Contains(scope, id) })
 	return selection
+}
+
+// narrowedAccounts 返回 allowed 中属于 scope 的账户，allowed 为 nil 时返回 scope
+func narrowedAccounts(allowed []string, scope []string) []string {
+	if allowed == nil {
+		return scope
+	}
+	return slices.DeleteFunc(slices.Clone(allowed), func(id string) bool { return !slices.Contains(scope, id) })
 }
 
 // SetBuildCatalog 保存账户 Build 代理返回的 Gemini API 模型目录
@@ -266,7 +290,7 @@ func (p *AccountPool) accountChannelCooldownLocked(account *Account, selection A
 	return earliest, !earliest.Until.IsZero()
 }
 
-// channelCandidatesLocked 按账户 ID 与通道顺序展开候选，轮询策略从上次选中组合之后开始
+// channelCandidatesLocked 按 indices 的账户顺序与通道顺序展开候选，轮询策略改按账户 ID 排序并从上次选中组合之后开始
 func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSelection) []channelCandidate {
 	channels := p.selectionChannelsLocked(selection)
 	candidates := make([]channelCandidate, 0, len(indices)*len(channels))
@@ -274,6 +298,9 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		for _, channel := range channels {
 			candidates = append(candidates, channelCandidate{index: index, channel: channel})
 		}
+	}
+	if p.routingStrategy != "round-robin" || len(indices) <= 1 && len(channels) <= 1 {
+		return candidates
 	}
 	rank := func(channel Channel) int { return slices.Index(channels, channel) }
 	sort.SliceStable(candidates, func(left, right int) bool {
@@ -283,9 +310,6 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		}
 		return rank(candidates[left].channel) < rank(candidates[right].channel)
 	})
-	if p.routingStrategy != "round-robin" || len(indices) <= 1 && len(channels) <= 1 {
-		return candidates
-	}
 	key := selectionAccessScope(selection)
 	lastAccount := p.lastPicked[key]
 	lastChannel := p.lastPickedChannel[key]

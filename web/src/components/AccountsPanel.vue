@@ -1154,7 +1154,10 @@ async function refreshAllAccounts(): Promise<void> {
                   v-for="(key, state) in stateKeys"
                   :key="state"
                   class="[grid-area:1/1]"
-                  :class="[stateTone[state], { invisible: state !== account.state }]"
+                  :class="[
+                    stateTone[state],
+                    { 'invisible max-md:hidden': state !== account.state },
+                  ]"
                   >{{ t(key) }}</span
                 >
               </span>

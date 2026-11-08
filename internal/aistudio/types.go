@@ -687,13 +687,15 @@ const (
 type Event struct {
 	Kind EventKind `json:"kind"`
 	Part
-	Grounding     *GroundingMetadata `json:"grounding,omitempty"`
-	Citation      *Citation          `json:"citation,omitempty"`
-	Usage         *Usage             `json:"usage,omitempty"`
-	FinishReason  string             `json:"finish_reason,omitempty"`
-	FinishMessage string             `json:"finish_message,omitempty"`
-	StopSequence  string             `json:"stop_sequence,omitempty"`
-	ProviderModel string             `json:"provider_model,omitempty"`
+	Grounding    *GroundingMetadata `json:"grounding,omitempty"`
+	Citation     *Citation          `json:"citation,omitempty"`
+	Usage        *Usage             `json:"usage,omitempty"`
+	FinishReason string             `json:"finish_reason,omitempty"`
+	// EnvironmentID 是 agent 交互结束时返回的远程环境 ID
+	EnvironmentID string `json:"environment_id,omitempty"`
+	FinishMessage string `json:"finish_message,omitempty"`
+	StopSequence  string `json:"stop_sequence,omitempty"`
+	ProviderModel string `json:"provider_model,omitempty"`
 	// SafetyRatings 是结束事件携带的候选安全评级
 	SafetyRatings []SafetyRating `json:"safety_ratings,omitempty"`
 	// TurnToken 是上游响应帧的轮次令牌

@@ -42,6 +42,8 @@ type workerRuntime interface {
 	PageCatalog() camoufoxnative.PageCatalog
 	SendProtected(context.Context, string, http.Header, []byte) (*camoufoxnative.ProtectedResponse, error)
 	StorageCookies(context.Context) ([]byte, error)
+	// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入页面
+	MergeSetCookieHeaders(context.Context, []string, string) error
 	State() camoufoxnative.State
 	// Reload 按官网冷启动重新载入页面，返回新页面就绪后使用的 runtime
 	Reload(context.Context) (workerRuntime, error)
@@ -985,6 +987,13 @@ func (runtime *goWAARuntime) StorageCookies(ctx context.Context) ([]byte, error)
 		return nil, err
 	}
 	return json.Marshal(runtime.cookies().Cookies)
+}
+
+// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入 runtime 的 Cookie 状态
+func (runtime *goWAARuntime) MergeSetCookieHeaders(_ context.Context, headers []string, requestURL string) error {
+	runtime.session.mu.Lock()
+	defer runtime.session.mu.Unlock()
+	return runtime.session.state.MergeSetCookieHeaders(headers, requestURL, time.Now())
 }
 
 // State 返回 SpiderMonkey runtime 的页面与协议状态

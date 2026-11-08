@@ -192,7 +192,7 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 }
 
 // assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，声明函数时允许以 ask_question 交回调用，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块；前 history 轮去掉思考后转录在自定义指令末尾，只提交 start 起的对话轮，全部转录时提交请模型从最后一轮继续的用户轮，start 等于 history 时其中的附件按编号放在提交的第一轮开头
-func assistantToolPrompt(request GenerateRequest, history int, start int) (GenerateRequest, error) {
+func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int) (GenerateRequest, error) {
 	functions := len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none"
 	forbidden := assistantWorkspaceTools
 	if request.Tools.GoogleSearch != nil {
@@ -259,7 +259,7 @@ func assistantToolPrompt(request GenerateRequest, history int, start int) (Gener
 		}
 		turns = append(turns, parts)
 	}
-	if history > 0 {
+	if transcriptEnd > 0 {
 		prompt += "\n\n" + assistantHistoryRule
 	}
 	if len(request.System) > 0 {
@@ -267,9 +267,9 @@ func assistantToolPrompt(request GenerateRequest, history int, start int) (Gener
 	}
 	request.System = append([]string{prompt}, request.System...)
 	var attachments []Part
-	if history > 0 {
+	if transcriptEnd > 0 {
 		var transcript string
-		transcript, attachments = assistantTranscript(request.Contents[:history], turns)
+		transcript, attachments = assistantTranscript(request.Contents[:transcriptEnd], turns)
 		request.System = append(request.System, "\n\n"+transcript)
 	}
 	contents := make([]Content, 0, len(turns)-start+1)
@@ -279,7 +279,7 @@ func assistantToolPrompt(request GenerateRequest, history int, start int) (Gener
 	if len(contents) == 0 {
 		contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: assistantLatestPrompt}}})
 	}
-	if start == history && len(attachments) > 0 {
+	if start == transcriptEnd && len(attachments) > 0 {
 		contents[0].Parts = append(attachments, contents[0].Parts...)
 	}
 	request.Contents = contents
@@ -339,7 +339,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		}
 	}
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
-	history := assistantHistoryDigest(request.Contents)
+	historyDigest := assistantHistoryDigest(request.Contents)
 	links := assistantLinks(request.Contents)
 	// latest 表示最后一组也转录在自定义指令中：最后一组是模型轮，或本地 Token 数超过 assistantTurnTokenLimit
 	latest := false
@@ -366,7 +366,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		groups = len(links)
 		start = len(request.Contents)
 	case session != nil:
-		groups = session.history
+		groups = session.historyGroupCount
 	case len(links) > 1:
 		groups = len(links) - 1
 		start = links[groups-1].end
@@ -439,18 +439,19 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		}
 		decoder := newDecoder(streamBody)
 		err := DecodeAssistantStream(source, decoder, collect)
-		// searches 是之前各任务完成的 search_web，interrupted 表示本轮在上游步骤失败后接着写过
+		// searches 是之前各任务完成的 search_web，interruption 是本轮接着写之前最后一次上游步骤失败
 		var searches []string
-		interrupted := false
+		var interruption error
 		// replied 是当前任务开始时回复中的 Part 数
-		for followed, replied := 0, 0; followed < regenerations; followed++ {
+		replied := 0
+		for followed := 0; followed < regenerations; followed++ {
 			prompt := assistantEmptyReplyPrompt
 			var failure *RPCError
 			if err != nil {
 				if !decoder.failed || answer.Len() == 0 || !errors.As(err, &failure) || failure.StatusCode != http.StatusBadGateway {
 					break
 				}
-				err = nil
+				interruption, err = err, nil
 				for _, event := range decoder.recorded() {
 					if err = collect(event); err != nil {
 						break
@@ -461,7 +462,6 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 				}
 				partial := []rune(answer.String())
 				prompt = fmt.Sprintf(assistantInterruptedPrompt, string(partial[max(0, len(partial)-assistantPartialReplyRunes):]))
-				interrupted = true
 			} else if len(reply) > replied || decoder.overran || decoder.malformed {
 				break
 			}
@@ -478,9 +478,12 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 			err = errors.Join(DecodeAssistantStream(follow.Body, decoder, collect), follow.Body.Close())
 		}
 		cleanup.completed.Store(decoder.failed || err == nil && decoder.finished && !decoder.overran)
+		if err == nil && interruption != nil && len(reply) == replied {
+			err = interruption
+		}
 		if err == nil {
-			assistantSearches.store(apiKey, history, answer.String(), append(searches, decoder.searches...))
-			if decoder.finished && !decoder.overran && !decoder.malformed && !interrupted {
+			assistantSearches.store(apiKey, historyDigest, answer.String(), append(searches, decoder.searches...))
+			if decoder.finished && !decoder.overran && !decoder.malformed && interruption == nil {
 				cleanup.tip.Store(&assistantSessionKey{apiKey: apiKey, digest: assistantLinkDigest(links[len(links)-1].digest, true, reply)})
 			}
 		}

@@ -617,9 +617,11 @@ cp .env.example .env
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
+| `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
+| `MODEL_ACCOUNTS` | 空 | 模型可用的账户，每项写成 `模型 ID:账户\|账户`，未列出的模型可用全部账户；也可在“模型目录”的模型详情中勾选，保存后立即生效 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 启用 Build 通道时非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
 | `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |

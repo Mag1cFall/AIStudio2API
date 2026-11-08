@@ -489,7 +489,7 @@ func (s *PooledService) UploadFile(ctx context.Context, request UploadRequest) (
 
 // fileUploadAccountIDs 返回请求所用 API key 可用的上传候选账户，空闲账户在前
 func (p *AccountPool) fileUploadAccountIDs(ctx context.Context) []string {
-	selection := p.keyScopedSelection(ctx, AccountSelection{})
+	selection := p.scopedSelection(ctx, AccountSelection{})
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	available := make([]string, 0, len(p.accounts))

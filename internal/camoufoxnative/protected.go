@@ -272,6 +272,22 @@ func browserRequestHeaders(headers http.Header) [][2]string {
 	return result
 }
 
+// SetCookies 按 storage state 的 Cookie 格式写入固定指纹浏览器
+func (worker *Worker) SetCookies(ctx context.Context, encoded []byte) error {
+	var cookies []storageCookie
+	if err := json.Unmarshal(encoded, &cookies); err != nil {
+		return fmt.Errorf("解析 Cookie: %w", err)
+	}
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return errors.New("Camoufox runtime 已关闭")
+	}
+	client := worker.client
+	worker.mu.Unlock()
+	return client.installCookies(ctx, cookies)
+}
+
 // StorageCookies 导出当前固定指纹浏览器 Cookie，启动时写入的 Cookie 保持写入顺序，之后出现的 Cookie 排在其后
 func (worker *Worker) StorageCookies(ctx context.Context) ([]byte, error) {
 	worker.mu.Lock()

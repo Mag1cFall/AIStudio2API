@@ -295,6 +295,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrency': 'Concurrent requests per account',
   'settings.routingStrategy': 'Account selection strategy',
   'settings.routingRoundRobin': 'Round robin',
+  'settings.accountOrder': 'Account order',
+  'settings.accountOrderHelp':
+    'Fill first uses these accounts in order and moves to the next one when an account is full, cooling down, or unavailable',
+  'settings.accountOrderUp': 'Move {account} up',
+  'settings.accountOrderDown': 'Move {account} down',
   'settings.routingFillFirst': 'Fill first',
   'settings.routingHelp':
     'Round robin rotates accounts. Fill first stays on one account until it is full or unavailable.',
@@ -323,6 +328,10 @@ export const messages: Record<TranslationKey, string> = {
   'channel.assistant': 'Build chat',
   'logs.channel': 'Channel',
   'models.channels': 'Channels',
+  'models.accounts': 'Accounts',
+  'models.accountsHelp':
+    'Automatic account selection uses only these accounts. Leave empty to use every account',
+  'models.accountsSaved': 'Accounts saved and in effect',
   'models.channelAll': 'All channels',
   'models.channelSaved': 'Channel saved and in effect',
   'settings.activeValue': 'Active',
@@ -1189,6 +1198,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.environmentSources': 'Sources',
   'pg.sourcesTip': 'Sources to be mounted in the environment',
   'pg.addSources': 'Add sources',
+  'pg.viewSources': 'View sources',
+  'pg.viewRules': 'View rules',
   'pg.oneSource': '1 source',
   'pg.sourceCount': '{count} sources',
   'pg.environmentNetwork': 'Network',

@@ -16,7 +16,7 @@ const stateLabel = computed(() => t(`state.${serviceState.value}`))
 const serviceStates = ['running', 'launching', 'stopped', 'unavailable'] as const
 // avatarPalette 是 Google 账户默认头像的底色
 const avatarPalette = ['#1a73e8', '#e8710a', '#188038', '#d93025', '#9334e6', '#e52592', '#12b5cb']
-// name 是账户按钮与面板显示的名称，管理登录关闭时为产品名
+// name 是头像取字的名称，管理登录关闭时为产品名
 const name = computed(() => props.adminUsername || 'AIStudio2API')
 // avatar 是按名称首字母生成的头像文字与底色
 const avatar = computed(() => ({
@@ -36,7 +36,9 @@ const avatar = computed(() => ({
       <span class="avatar" :style="{ backgroundColor: avatar.color }" aria-hidden="true">{{
         avatar.letter
       }}</span>
-      <span class="account-switcher-text">{{ name }}</span>
+      <span v-if="adminUsername" v-tooltip.overflow="adminUsername" class="account-switcher-text">{{
+        adminUsername
+      }}</span>
       <span class="navbar-badge"
         ><span class="status-dot" :class="serviceState"></span
         ><span class="badge-labels"

@@ -105,6 +105,7 @@ Chrome Local State + Profile Preferences + Web Data/token_service
   -> 有 binding key：OAuthMultilogin sentinel 请求取得 DBSC challenge
      -> NCrypt 设备密钥签发 ES256 assertion
      -> X25519/HPKE 解密服务端 Cookie
+     -> 响应为 google.com 登记 DBSC 会话时保存会话登记
   -> 没有 binding key：MultiBearer 头的 OAuthMultilogin 直接返回明文 Cookie
   -> 保存 Playwright storage state 结构与续签材料
 ```
@@ -113,9 +114,11 @@ Chrome 运行期间以排他锁打开 `Web Data`，程序把 `Web Data` 与 `Web
 
 设备绑定的账号 OAuthMultilogin 使用 `MultiOAuth` 头，`token_service.binding_key` 为空的账号使用 `MultiBearer <refresh token>:<Gaia ID>` 头，一次请求返回明文 Cookie。`MultiOAuth` 第一次 assertion 为 `DBSC_CHALLENGE_IF_REQUIRED`，响应提供 challenge；第二次 assertion 的 JWT header 使用 `ES256` 与 `DEVICE_BOUND_SESSION_CREDENTIALS_ASSERTION`。payload 绑定 Google OAuth client、challenge、设备公钥 issuer 和临时 HPKE 公钥。Cookie 密文使用 X25519、HKDF-SHA256 与 AES-128-GCM 解密。
 
+Google 对部分账户强制设备绑定会话：OAuthMultilogin 响应的 `device_bound_session_info` 为 `GOOGLE_COM` 登记一个 DBSC 会话，给出 `session_identifier`（`sidts_session`）、`refresh_url`（`/RotateBoundCookies`）与绑定的 `__Secure-1PSIDTS`、`__Secure-3PSIDTS`、`__Secure-1PSIDRTS`、`__Secure-3PSIDRTS`，会话以同一把设备绑定密钥刷新，不刷新时签发约 2 小时后失效。服务在 Worker 启动、普通 RPC、受保护 RPC 与 Live 建连之前检查绑定 Cookie，最早到期的一项剩余不足 2 分钟时按 Chromium `RegistrationFetcher` 刷新：`POST` 刷新地址并带 `Sec-Secure-Session-Id`，服务端返回 `403` 与 `Secure-Session-Challenge`；以设备密钥签发 header 为 `{"alg":"ES256","typ":"dbsc+jwt"}`、payload 为 `{"jti":"<challenge>"}` 的 JWT，放入 `Secure-Session-Response` 重发，`200` 响应下发新的绑定 Cookie。新 Cookie 写回 `storage-state.json` 并写入账户当前 WAA Worker 的页面。刷新返回 3xx 或 4xx（`429` 除外）时进入认证恢复。远程配对上传的状态不带 DBSC 会话登记。
+
 OAuthMultilogin 以该 Profile 的 Chrome 身份发出，请求头与 Chrome `GaiaAuthFetcher` 相同：HTTP/2 下依次为 `content-length`、`authorization`、`content-type`、`sec-fetch-site: none`、`sec-fetch-mode: no-cors`、`sec-fetch-dest: empty`、`user-agent`、`accept-encoding: gzip, deflate, br, zstd`、`accept-language` 与 `priority: u=4, i`。`user-agent` 的主版本取 User Data 的 `Last Version`；`accept-language` 取 Profile `Preferences` 的 `intl.accept_languages`，没有该项时取 `intl.selected_languages`，按 Chromium 的规则在带地区的语言后补主语言并依次加 `q=0.9` 到 `q=0.1`。导入与续签都读取账户导入来源的 User Data 目录中当前的 Chrome 版本与该 Profile 的语言设置，来源没有记录目录时读取稳定版 Chrome 的默认目录。
 
-Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源（浏览器、User Data 目录、Profile 与邮箱）、Gaia ID、refresh token 与 wrapped binding key。登录页跳转、签名 Cookie 失效、HTTP `401` 与协议 Code 16 进入同一认证恢复流程，覆盖 Worker 预热、按需启动、普通 RPC、受保护 RPC 与 Live 建连。服务优先在同一账户出口续签 Cookie；保存的 OAuth 材料被拒绝时，从当前 Chrome 匹配原账户邮箱与 Gaia ID，更新来源材料。没有 `aistudio2api` 扩展的账户在本机 Chrome 登录着同一邮箱时，从 Chrome 导入该邮箱的材料并写入扩展，此后按 Chrome 导入账户续签。有效 Cookie 提交后使动态头失效、关闭该账户 WAA runtime，并重放一次。恢复失败后，服务以账户的指纹、出口与保存的 Cookie 打开 AI Studio 新对话页：被转到 Google 登录页时账户标为 `auth_required`，管理事件同步发布账户状态，后续调度使用其他合格账户；页面正常打开时账户状态不变，只有该次请求失败或换号。
+Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源（浏览器、User Data 目录、Profile 与邮箱）、Gaia ID、refresh token、wrapped binding key 与 DBSC 会话登记。登录页跳转、签名 Cookie 失效、HTTP `401` 与协议 Code 16 进入同一认证恢复流程，覆盖 Worker 预热、按需启动、普通 RPC、受保护 RPC 与 Live 建连。服务优先在同一账户出口续签 Cookie；保存的 OAuth 材料被拒绝时，从当前 Chrome 匹配原账户邮箱与 Gaia ID，更新来源材料。没有 `aistudio2api` 扩展的账户在本机 Chrome 登录着同一邮箱时，从 Chrome 导入该邮箱的材料并写入扩展，此后按 Chrome 导入账户续签。有效 Cookie 提交后使动态头失效、关闭该账户 WAA runtime，并重放一次。恢复失败后，服务以账户的指纹、出口与保存的 Cookie 打开 AI Studio 新对话页：被转到 Google 登录页时账户标为 `auth_required`，管理事件同步发布账户状态，后续调度使用其他合格账户；页面正常打开时账户状态不变，只有该次请求失败或换号。
 
 认证恢复等待同账户的正常请求结束；并发失效复用一次提交结果。替换登录材料推进认证代际，旧请求的认证结果按代际和请求顺序写回；生成正常结束后确认认证有效。HTTP `403`、协议 Code 7 与 Drive `unauthorized_client` 保留模型权限或 Drive 授权含义。隔离 Camoufox 登录和外部 storage state 在本机 Chrome 没有同一邮箱时只使用各自的登录材料。
 
@@ -148,6 +151,11 @@ Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存�
       "gaia_id": "<GAIA_ID>",
       "refresh_token": "<REFRESH_TOKEN>",
       "wrapped_binding_key": "<BASE64>"
+    },
+    "bound_session": {
+      "id": "sidts_session",
+      "refresh_url": "https://accounts.google.com/RotateBoundCookies",
+      "credentials": ["__Secure-1PSIDTS", "__Secure-3PSIDTS", "__Secure-1PSIDRTS", "__Secure-3PSIDRTS"]
     }
   }
 }
@@ -2142,7 +2150,7 @@ delta 联合类型为 `text_delta{text}`、`citations_delta{citation}`、`thinki
 
 `webhook_config:{uris,user_metadata}` 随 `background:true` 使用，否则返回 `400 INVALID_ARGUMENT`，`uris` 为 http 或 https 地址。后台交互结束时服务向每个地址 POST `{type,version:"v1",timestamp,data:{id},user_metadata}`，请求头带 `webhook-id` 与 `webhook-timestamp`：`type` 按终态为 `interaction.completed`（含 `incomplete`）、`interaction.requires_action`、`interaction.failed`（`data` 另有 `error_code` 与 `error_message`）或 `interaction.cancelled`；应答不是 2xx 或 10 秒内没有应答时，从 1 秒起按倍数退避（间隔最长 1 小时）重试 24 小时。
 
-非流式响应包含 `id`、`object:"interaction"`、`model`、`created`、`updated`、`status`、`steps` 与 `usage`，以 `previous_interaction_id` 续接时同时带该字段。`steps` 的 `model_output.content` 保存文本或媒体，带引用的文本内容含 `annotations`，每项为 `{type:"url_citation",url,title,start_index,end_index}`，下标为该段文本中的字节位置；音频位于 `{type:"audio",data,mime_type,sample_rate,channels}`；SDK 的 `output_audio` 与 `output_text` 从这些步骤读取。正文、图片与函数调用携带的思考签名作为其前 `thought` 步骤的 `signature` 输出，按步骤回传时签名回到其后第一个模型 Part。函数调用作为 `function_call` 步骤返回，状态为 `requires_action`；正常生成与命中停止序列的状态为 `completed`，输出限额与内容拦截的状态为 `incomplete`。`usage` 包含 `total_input_tokens`、`total_cached_tokens`、`total_output_tokens`、`total_thought_tokens`、`total_tool_use_tokens` 与 `total_tokens`；上游给出模态细分时另有 `input_tokens_by_modality`、`cached_tokens_by_modality`、`output_tokens_by_modality`、`tool_use_tokens_by_modality`，元素为 `{modality,tokens}`，`modality` 为小写模态名；使用 Google Search 或 Google Maps 时 `grounding_tool_count` 按 `{type:"google_search"|"google_maps",count}` 给出调用次数。
+非流式响应包含 `id`、`object:"interaction"`、`model`、`created`、`updated`、`status`、`steps` 与 `usage`，以 `previous_interaction_id` 续接时同时带该字段，agent 运行结束时上游给出远程环境时带 `environment_id`。`steps` 的 `model_output.content` 保存文本或媒体，带引用的文本内容含 `annotations`，每项为 `{type:"url_citation",url,title,start_index,end_index}`，下标为该段文本中的字节位置；音频位于 `{type:"audio",data,mime_type,sample_rate,channels}`；SDK 的 `output_audio` 与 `output_text` 从这些步骤读取。正文、图片与函数调用携带的思考签名作为其前 `thought` 步骤的 `signature` 输出，按步骤回传时签名回到其后第一个模型 Part。函数调用作为 `function_call` 步骤返回，状态为 `requires_action`；正常生成与命中停止序列的状态为 `completed`，输出限额与内容拦截的状态为 `incomplete`。`usage` 包含 `total_input_tokens`、`total_cached_tokens`、`total_output_tokens`、`total_thought_tokens`、`total_tool_use_tokens` 与 `total_tokens`；上游给出模态细分时另有 `input_tokens_by_modality`、`cached_tokens_by_modality`、`output_tokens_by_modality`、`tool_use_tokens_by_modality`，元素为 `{modality,tokens}`，`modality` 为小写模态名；使用 Google Search 或 Google Maps 时 `grounding_tool_count` 按 `{type:"google_search"|"google_maps",count}` 给出调用次数。
 
 SSE 使用相同的事件名与 JSON `event_type`：`interaction.created` → `step.start` → `step.delta` → `step.stop` → `interaction.completed`。`background:true` 的流式与后台生成写入事件记录，每个事件带从 1 递增的 `event_id`；客户端断开后生成继续，`GET` 带 `stream=true` 与 `last_event_id` 从下一个事件继续读取。步骤以 `index` 对应，引用在其所在文本之后以 `{type:"text_annotation_delta",annotations}` 增量输出，音频增量为 `{type:"audio",data,mime_type,sample_rate,channels}`。10 秒无语义事件时发送 `: ping`，上游错误或缺失终态发送 `error` 事件并结束；客户端断开会取消上游生成。流开始前使用 Gemini HTTP 错误对象。
 

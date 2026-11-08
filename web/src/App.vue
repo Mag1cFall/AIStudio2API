@@ -458,6 +458,7 @@ onMounted(revealCurrentTab)
           :loading="loading.models"
           :error="errors.models"
           :config="config"
+          :accounts="accounts"
           @saved="config = $event"
           @notice="showNotice"
         />

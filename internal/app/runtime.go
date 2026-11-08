@@ -66,8 +66,10 @@ func newRuntime(
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	pool.SetModelChannels(modelChannels(cfg.ModelChannels))
+	pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
 	proxies := aistudio.NewProxyPool(pool, proxyList)
 	if len(proxyList) > 1 {
 		if _, err := proxies.Probe(launchCtx, checkProxy); err != nil {

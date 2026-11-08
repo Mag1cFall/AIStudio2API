@@ -40,6 +40,19 @@ func (runtime camoufoxRuntime) Reload(ctx context.Context) (workerRuntime, error
 	return runtime, runtime.Worker.Reload(ctx)
 }
 
+// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入浏览器
+func (runtime camoufoxRuntime) MergeSetCookieHeaders(ctx context.Context, headers []string, requestURL string) error {
+	var state StorageState
+	if err := state.MergeSetCookieHeaders(headers, requestURL, time.Now()); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(state.Cookies)
+	if err != nil {
+		return err
+	}
+	return runtime.Worker.SetCookies(ctx, encoded)
+}
+
 // ProtocolHeaders 返回页面的公共协议头，X-Goog-Ext-519733851-Bin 与官网页面一样由页面载入时 GetLoggingContext 的响应得出
 func (runtime camoufoxRuntime) ProtocolHeaders(ctx context.Context) (http.Header, error) {
 	headers, err := runtime.Worker.ProtocolHeaders(ctx)
@@ -276,6 +289,11 @@ func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageSta
 		return StorageState{}, err
 	}
 	return state, nil
+}
+
+// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入当前页面
+func (worker *NativeWorker) MergeSetCookieHeaders(ctx context.Context, headers []string, requestURL string) error {
+	return worker.current().MergeSetCookieHeaders(ctx, headers, requestURL)
 }
 
 // PageCatalog 返回账户当前页面载入时目录 RPC 的响应正文

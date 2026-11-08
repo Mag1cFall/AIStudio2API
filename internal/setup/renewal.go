@@ -131,7 +131,7 @@ func renewRemote(ctx context.Context, client *http.Client, renewals []remoteRene
 
 // pushRenewal 以本机 Chrome 来源与 OAuth 材料签发新会话，凭续签凭据写入远程实例
 func pushRenewal(ctx context.Context, client *http.Client, renewal remoteRenewal) error {
-	cookies, err := chromeauth.Refresh(ctx, renewal.Source, renewal.OAuth, renewal.Proxy)
+	cookies, _, err := chromeauth.Refresh(ctx, renewal.Source, renewal.OAuth, renewal.Proxy)
 	if err != nil {
 		return err
 	}
