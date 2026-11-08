@@ -298,6 +298,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrency': 'Gleichzeitige Anfragen pro Konto',
   'settings.routingStrategy': 'Kontoauswahl',
   'settings.routingRoundRobin': 'Reihum',
+  'settings.accountOrder': 'Kontoreihenfolge',
+  'settings.accountOrderHelp':
+    'Beim Bevorzugen desselben Kontos werden diese Konten der Reihe nach verwendet; ist ein Konto ausgelastet, in der Abklingzeit oder nicht verfügbar, folgt das nächste',
+  'settings.accountOrderUp': '{account} nach oben',
+  'settings.accountOrderDown': '{account} nach unten',
   'settings.routingFillFirst': 'Gleiches Konto bevorzugen',
   'settings.routingHelp':
     'Reihum wechselt die Konten. „Gleiches Konto bevorzugen“ bleibt bei einem Konto, bis es ausgelastet oder nicht verfügbar ist.',
@@ -327,6 +332,10 @@ export const messages: Record<TranslationKey, string> = {
   'channel.assistant': 'Build-Chat',
   'logs.channel': 'Kanal',
   'models.channels': 'Kanäle',
+  'models.accounts': 'Konten',
+  'models.accountsHelp':
+    'Die automatische Kontoauswahl verwendet nur diese Konten. Ohne Auswahl sind alle Konten verfügbar',
+  'models.accountsSaved': 'Konten gespeichert und aktiv',
   'models.channelAll': 'Alle Kanäle',
   'models.channelSaved': 'Kanal gespeichert und aktiv',
   'settings.activeValue': 'Aktiver Wert',
@@ -1215,6 +1224,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.environmentSources': 'Quellen',
   'pg.sourcesTip': 'Quellen, die in der Umgebung bereitgestellt werden',
   'pg.addSources': 'Quellen hinzufügen',
+  'pg.viewSources': 'Quellen ansehen',
+  'pg.viewRules': 'Regeln ansehen',
   'pg.oneSource': '1 Quelle',
   'pg.sourceCount': '{count} Quellen',
   'pg.environmentNetwork': 'Netzwerk',

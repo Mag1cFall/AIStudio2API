@@ -275,6 +275,7 @@ func (order *fieldOrder) object(fields map[string]any, parent string) any {
 		if mapString(fields, "object") == "interaction" {
 			return interactionJSON{
 				Created:               fields["created"],
+				EnvironmentID:         fields["environment_id"],
 				ID:                    fields["id"],
 				Model:                 fields["model"],
 				Object:                fields["object"],
@@ -411,10 +412,11 @@ type responsesJSON struct {
 
 // interactionJSON 是 Interactions 响应资源
 type interactionJSON struct {
-	Created any `json:"created,omitempty"`
-	ID      any `json:"id,omitempty"`
-	Model   any `json:"model,omitempty"`
-	Object  any `json:"object,omitempty"`
+	Created       any `json:"created,omitempty"`
+	EnvironmentID any `json:"environment_id,omitempty"`
+	ID            any `json:"id,omitempty"`
+	Model         any `json:"model,omitempty"`
+	Object        any `json:"object,omitempty"`
 	// PreviousInteractionID 是续接的前序交互
 	PreviousInteractionID any `json:"previous_interaction_id,omitempty"`
 	Status                any `json:"status,omitempty"`

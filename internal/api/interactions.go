@@ -285,6 +285,9 @@ func interactionObject(request aistudio.GenerateRequest, previousID string, crea
 	if previousID != "" {
 		object["previous_interaction_id"] = previousID
 	}
+	if result != nil && result.environmentID != "" {
+		object["environment_id"] = result.environmentID
+	}
 	if result != nil && result.usage != nil {
 		usage := result.usage
 		fields := map[string]any{

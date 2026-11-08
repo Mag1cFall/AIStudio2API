@@ -165,13 +165,17 @@ type remoteTarget struct {
 	renewals []remoteRenewal
 }
 
-// Save 上传认证状态与隔离登录指纹
+// Save 上传认证状态与隔离登录指纹，DBSC 会话登记只留在持有设备绑定密钥的本机
 func (target *remoteTarget) Save(
 	ctx context.Context,
 	accountConfig aistudio.AccountConfig,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
 ) (string, error) {
+	if extension, exists, err := state.AuthExtension(); err == nil && exists && extension.Bound != nil {
+		extension.Bound = nil
+		state.SetAuthExtension(extension)
+	}
 	input := api.AccountStateInput{
 		Label: accountConfig.Label, Locale: accountConfig.Locale, Timezone: accountConfig.Timezone,
 		AuthUser: accountConfig.AuthUser, StorageState: state,

@@ -96,10 +96,11 @@ export interface EgressRule {
   headers: { name: string; value: string }[]
 }
 
-// AgentEnvironment 是 agent 的运行环境：new 为按 sources 与 rules 新建的环境，existing 为 id 指向的已有环境
+// AgentEnvironment 是 agent 的运行环境：new 为按 sources 与 rules 新建的环境，existing 为 id 指向的已有环境，produced 是本对话的运行得到的环境 ID
 export interface AgentEnvironment {
   type: 'new' | 'existing'
   id: string
+  produced?: string
   sources: EnvironmentSource[]
   rules: EgressRule[]
 }

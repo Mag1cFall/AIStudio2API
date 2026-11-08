@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { parseAccountBindings } from '@/accountBindings'
 import { api } from '@/api'
 import { maskKey, splitKeys } from '@/apikey'
 import { desktopPlatform, keepPage, sendDesktop } from '@/desktop'
@@ -76,6 +77,7 @@ const sections: {
       'warm_startup_concurrency',
       'per_account_concurrency',
       'routing_strategy',
+      'account_order',
     ],
   },
   {
@@ -208,21 +210,6 @@ const apiKeyList = computed(() => splitKeys(form.proxy_api_key ?? ''))
 // activeKeys 是生效中的各个 API key
 const activeKeys = computed(() => splitKeys(props.config?.active_proxy_api_key ?? ''))
 
-// keyAccounts 把 api_key_accounts 解析为各 key 可用的账户 ID
-function keyAccounts(value: string): Map<string, string[]> {
-  const result = new Map<string, string[]>()
-  for (const item of value.split(',')) {
-    const index = item.lastIndexOf(':')
-    const ids = item
-      .slice(index + 1)
-      .split('|')
-      .map((id) => id.trim())
-      .filter(Boolean)
-    if (index > 0 && ids.length > 0) result.set(item.slice(0, index).trim(), ids)
-  }
-  return result
-}
-
 // writeKeyAccounts 按 API key 的顺序写回 api_key_accounts，去掉已不在 key 列表中的绑定
 function writeKeyAccounts(bindings: Map<string, string[]>): void {
   form.api_key_accounts = apiKeyList.value
@@ -232,7 +219,7 @@ function writeKeyAccounts(bindings: Map<string, string[]>): void {
 }
 
 // keyBindings 是表单中各 API key 可用的账户 ID
-const keyBindings = computed(() => keyAccounts(form.api_key_accounts ?? ''))
+const keyBindings = computed(() => parseAccountBindings(form.api_key_accounts ?? ''))
 
 // setKeyAccounts 设置 key 可用的账户，空列表表示可用全部账户
 function setKeyAccounts(key: string, ids: string[]): void {
@@ -245,6 +232,27 @@ function setKeyAccounts(key: string, ids: string[]): void {
 // accountLabel 返回账户 ID 对应的显示名称
 function accountLabel(id: string): string {
   return props.accounts.find((account) => account.id === id)?.label ?? id
+}
+
+// orderedAccounts 是 fill-first 依次使用的账户 ID：配置中列出的账户在前，其余按 ID 排序
+const orderedAccounts = computed(() => {
+  const ids = props.accounts.map((account) => account.id)
+  const listed = [
+    ...new Set(
+      (form.account_order ?? '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => ids.includes(id)),
+    ),
+  ]
+  return [...listed, ...ids.filter((id) => !listed.includes(id)).sort()]
+})
+
+// moveAccount 把账户在 fill-first 顺序中上移或下移一位
+function moveAccount(index: number, offset: number): void {
+  const ids = [...orderedAccounts.value]
+  ids.splice(index + offset, 0, ...ids.splice(index, 1))
+  form.account_order = ids.join(',')
 }
 
 // keyAccountsLabel 是 key 账户选择按钮的文字：未选时为全部账户，只选一个时为该账户
@@ -280,7 +288,8 @@ const hedgeModelsLabel = computed(() => {
 })
 
 watch(apiKeyList, () => {
-  if (form.api_key_accounts !== undefined) writeKeyAccounts(keyAccounts(form.api_key_accounts))
+  if (form.api_key_accounts !== undefined)
+    writeKeyAccounts(parseAccountBindings(form.api_key_accounts))
 })
 
 // resetForm 用已保存配置覆盖表单
@@ -680,6 +689,54 @@ async function saveConfig(): Promise<void> {
                 <option value="round-robin">{{ t('settings.routingRoundRobin') }}</option>
                 <option value="fill-first">{{ t('settings.routingFillFirst') }}</option>
               </UiSelect>
+            </SettingRow>
+            <SettingRow
+              v-if="form.routing_strategy === 'fill-first' && accounts.length > 1"
+              :label="t('settings.accountOrder')"
+              group-id="setting-account-order"
+              :description="t('settings.accountOrderHelp')"
+              effect="immediate"
+              :changed="changedFields.has('account_order')"
+              :env="environmentKey('account_order')"
+            >
+              <ol
+                aria-labelledby="setting-account-order-label"
+                class="max-h-60 space-y-1 overflow-y-auto pr-1 [scrollbar-width:thin]"
+              >
+                <li
+                  v-for="(id, index) in orderedAccounts"
+                  :key="id"
+                  class="flex items-center justify-between gap-2 rounded border border-line bg-raised px-2 py-1"
+                >
+                  <span class="min-w-0 truncate text-xs text-gray-200" :title="id"
+                    >{{ index + 1 }}. {{ accountLabel(id) }}</span
+                  >
+                  <span class="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      class="rounded p-0.5 text-gray-400 transition hover:text-gray-200 disabled:opacity-30"
+                      :aria-label="
+                        t('settings.accountOrderUp').replace('{account}', accountLabel(id))
+                      "
+                      :disabled="index === 0"
+                      @click="moveAccount(index, -1)"
+                    >
+                      <UiIcon name="chevronUp" :size="14" />
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded p-0.5 text-gray-400 transition hover:text-gray-200 disabled:opacity-30"
+                      :aria-label="
+                        t('settings.accountOrderDown').replace('{account}', accountLabel(id))
+                      "
+                      :disabled="index === orderedAccounts.length - 1"
+                      @click="moveAccount(index, 1)"
+                    >
+                      <UiIcon name="chevronDown" :size="14" />
+                    </button>
+                  </span>
+                </li>
+              </ol>
             </SettingRow>
           </template>
 

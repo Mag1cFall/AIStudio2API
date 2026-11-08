@@ -290,9 +290,11 @@ type RuntimeConfig struct {
 	WarmStartupConcurrency    int                  `json:"warm_startup_concurrency"`
 	PerAccountConcurrency     int                  `json:"per_account_concurrency"`
 	RoutingStrategy           string               `json:"routing_strategy"`
+	AccountOrder              string               `json:"account_order"`
 	UpstreamChannels          []string             `json:"upstream_channels"`
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
+	ModelAccounts             string               `json:"model_accounts"`
 	APIKeyAccounts            string               `json:"api_key_accounts"`
 	WAABackend                string               `json:"waa_backend"`
 	MediaOutput               string               `json:"media_output"`

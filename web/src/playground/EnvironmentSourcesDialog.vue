@@ -14,6 +14,7 @@ import type { EnvironmentSource } from './types'
 
 const open = defineModel<boolean>('open', { required: true })
 const sources = defineModel<EnvironmentSource[]>('sources', { required: true })
+defineProps<{ readonly?: boolean }>()
 const { t } = useI18n()
 
 // draft 是对话框中尚未保存的源
@@ -75,7 +76,7 @@ function save(): void {
           <UiIcon :name="kinds.find((kind) => kind.type === source.type)!.icon" :size="16" />
           <span class="file-name">{{ source.target.replace(/^\//, '') }}</span>
         </button>
-        <div class="add-source-cell">
+        <div v-if="!readonly" class="add-source-cell">
           <DropdownMenuRoot :modal="false">
             <DropdownMenuTrigger
               v-tooltip.above="t('pg.addNewSource')"
@@ -107,10 +108,12 @@ function save(): void {
             <input
               ms-input
               :value="current.target"
+              :disabled="readonly"
               :aria-label="t('pg.mountingPath')"
               @change="setTarget(($event.target as HTMLInputElement).value)"
             />
             <button
+              v-if="!readonly"
               v-tooltip.left="t('pg.deleteFile')"
               type="button"
               ms-button
@@ -125,6 +128,7 @@ function save(): void {
         <textarea
           v-if="current.type === 'inline'"
           v-model="current.content"
+          :readonly="readonly"
           class="content-editor"
           spellcheck="false"
           :aria-label="t('pg.fileContent')"
@@ -136,6 +140,7 @@ function save(): void {
           <input
             v-model="current.source"
             ms-input
+            :disabled="readonly"
             :aria-label="current.type === 'gcs' ? t('pg.cloudStorageUri') : t('pg.repoUri')"
             :placeholder="
               t('pg.sourceUrlPlaceholder').replace(
@@ -151,7 +156,7 @@ function save(): void {
       <div v-else class="empty-state">
         <UiIcon name="folder" :size="32" />
         <p>{{ t('pg.noSourceYet') }}</p>
-        <DropdownMenuRoot :modal="false">
+        <DropdownMenuRoot v-if="!readonly" :modal="false">
           <DropdownMenuTrigger
             v-tooltip.below="t('pg.addNewSource')"
             ms-button
@@ -176,12 +181,23 @@ function save(): void {
       </div>
     </div>
     <template #actions>
-      <button type="button" ms-button class="ms-button-borderless" @click="open = false">
-        {{ t('common.cancel') }}
+      <button
+        v-if="readonly"
+        type="button"
+        ms-button
+        class="ms-button-primary"
+        @click="open = false"
+      >
+        {{ t('common.close') }}
       </button>
-      <button type="button" ms-button class="ms-button-primary" @click="save">
-        {{ t('common.save') }}
-      </button>
+      <template v-else>
+        <button type="button" ms-button class="ms-button-borderless" @click="open = false">
+          {{ t('common.cancel') }}
+        </button>
+        <button type="button" ms-button class="ms-button-primary" @click="save">
+          {{ t('common.save') }}
+        </button>
+      </template>
     </template>
   </UiDialog>
 </template>

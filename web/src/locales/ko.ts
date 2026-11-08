@@ -296,6 +296,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrency': '계정당 동시 요청 수',
   'settings.routingStrategy': '계정 선택 방식',
   'settings.routingRoundRobin': '라운드 로빈',
+  'settings.accountOrder': '계정 순서',
+  'settings.accountOrderHelp':
+    '같은 계정 우선일 때 이 순서대로 사용하며, 한도에 도달했거나 쿨다운 중이거나 사용할 수 없으면 다음 계정으로 전환합니다',
+  'settings.accountOrderUp': '{account} 위로 이동',
+  'settings.accountOrderDown': '{account} 아래로 이동',
   'settings.routingFillFirst': '같은 계정 우선',
   'settings.routingHelp':
     '라운드 로빈은 계정을 차례로 쓰고, 같은 계정 우선은 한도에 닿거나 쓸 수 없을 때까지 한 계정을 씁니다',
@@ -324,6 +329,10 @@ export const messages: Record<TranslationKey, string> = {
   'channel.assistant': 'Build 채팅',
   'logs.channel': '채널',
   'models.channels': '채널',
+  'models.accounts': '사용 계정',
+  'models.accountsHelp':
+    '자동 선택 시 이 계정만 사용합니다. 선택하지 않으면 모든 계정을 사용합니다',
+  'models.accountsSaved': '계정을 저장했고 바로 적용됩니다',
   'models.channelAll': '모든 채널',
   'models.channelSaved': '채널을 저장했고 바로 적용됩니다',
   'settings.activeValue': '현재 적용 값',
@@ -1173,6 +1182,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.environmentSources': '소스',
   'pg.sourcesTip': '환경에 마운트할 소스',
   'pg.addSources': '소스 추가',
+  'pg.viewSources': '소스 보기',
+  'pg.viewRules': '규칙 보기',
   'pg.oneSource': '소스 1개',
   'pg.sourceCount': '소스 {count}개',
   'pg.environmentNetwork': '네트워크',

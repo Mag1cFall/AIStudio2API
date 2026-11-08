@@ -86,10 +86,18 @@ type ChromeOAuthMaterial struct {
 	WrappedBindingKey []byte `json:"wrapped_binding_key,omitempty"`
 }
 
+// BoundSession 是 OAuthMultilogin 登记的 Google DBSC 会话，以 OAuth 材料的设备绑定密钥刷新
+type BoundSession struct {
+	ID          string   `json:"id"`
+	RefreshURL  string   `json:"refresh_url"`
+	Credentials []string `json:"credentials"`
+}
+
 // AuthExtension 保存 aistudio2api 认证扩展
 type AuthExtension struct {
 	Source AuthSource           `json:"source"`
 	OAuth  *ChromeOAuthMaterial `json:"oauth,omitempty"`
+	Bound  *BoundSession        `json:"bound_session,omitempty"`
 }
 
 const authExtensionKey = "aistudio2api"
@@ -114,6 +122,26 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 		return AuthExtension{}, true, fmt.Errorf("解析认证扩展: %w", err)
 	}
 	return extension, true, nil
+}
+
+// BoundCookieLifetime 按 Chromium MinimumBoundCookieLifetime 返回 DBSC 会话绑定 Cookie 中最早到期者的剩余时间，缺少或已到期时为 0
+func (s StorageState) BoundCookieLifetime(session BoundSession, now time.Time) time.Duration {
+	lifetime := time.Duration(1<<63 - 1)
+	for _, name := range session.Credentials {
+		remaining := time.Duration(0)
+		for _, cookie := range s.Cookies {
+			if cookie.Name != name || cookie.Domain != ".google.com" || cookie.Value == "" {
+				continue
+			}
+			if cookie.Expires < 0 {
+				remaining = lifetime
+			} else {
+				remaining = max(time.Unix(0, int64(cookie.Expires*1e9)).Sub(now), 0)
+			}
+		}
+		lifetime = min(lifetime, remaining)
+	}
+	return lifetime
 }
 
 // IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境，View 不为空时登录画面显示在管理页登录窗口

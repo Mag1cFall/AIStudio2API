@@ -506,6 +506,12 @@ function createSession(temporary = false, links: SessionLinks = {}) {
             turn.thinking = elapsed
           appendParts(turn.parts, update.parts)
           if (update.interactionId) turn.interactionId = update.interactionId
+          if (update.environmentId)
+            Object.assign(session.settings.environment, {
+              type: 'existing',
+              id: update.environmentId,
+              produced: update.environmentId,
+            })
           if (update.finishReason) turn.finishReason = update.finishReason
           if (update.tokens !== undefined) turn.tokens = update.tokens
           if (update.thoughtTokens !== undefined) turn.thoughtTokens = update.thoughtTokens

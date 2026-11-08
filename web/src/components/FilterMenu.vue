@@ -11,6 +11,7 @@ const props = defineProps<{
   searchLabel: string
   emptyLabel: string
   clearLabel: string
+  disabled?: boolean
 }>()
 const emit = defineEmits<{ change: [values: string[]] }>()
 
@@ -56,7 +57,7 @@ function toggle(value: string, checked: boolean): void {
         align="start"
         :side-offset="6"
         :collision-padding="12"
-        class="ui-popover z-[60] w-80 max-w-[var(--reka-popover-content-available-width)] rounded-lg border border-line bg-panel p-2 shadow-xl shadow-black/40"
+        class="ui-popover z-[80] w-80 max-w-[var(--reka-popover-content-available-width)] rounded-lg border border-line bg-panel p-2 shadow-xl shadow-black/40"
       >
         <label class="relative mb-2 block">
           <span class="sr-only">{{ searchLabel }}</span>
@@ -87,6 +88,7 @@ function toggle(value: string, checked: boolean): void {
               :id="`${id}-${index}`"
               type="checkbox"
               :checked="selected.includes(value)"
+              :disabled="disabled"
               @change="toggle(value, ($event.target as HTMLInputElement).checked)"
             />
             <span v-tooltip.overflow="format(value)" class="min-w-0 flex-1 truncate">{{
@@ -98,6 +100,7 @@ function toggle(value: string, checked: boolean): void {
           <button
             type="button"
             class="w-full rounded px-2 py-1 text-left text-xs text-gray-400 hover:bg-raised hover:text-white"
+            :disabled="disabled"
             @click="emit('change', [])"
           >
             {{ clearLabel }}

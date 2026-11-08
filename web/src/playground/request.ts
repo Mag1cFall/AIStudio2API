@@ -245,10 +245,11 @@ export function continuation(
   return { previous, turns: previous === undefined ? turns : turns.slice(index + 1) }
 }
 
-// StreamUpdate 是一次流式事件带来的变化，interactionId 是 Interactions 完成时的交互 ID
+// StreamUpdate 是一次流式事件带来的变化，interactionId 与 environmentId 是 Interactions 完成时的交互 ID 与远程环境 ID
 export interface StreamUpdate {
   parts: Part[]
   interactionId?: string
+  environmentId?: string
   finishReason?: string
   tokens?: number
   thoughtTokens?: number

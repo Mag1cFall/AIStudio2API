@@ -299,6 +299,11 @@ export const messages: Record<TranslationKey, string> = {
   'settings.perAccountConcurrency': 'アカウントあたりの同時リクエスト数',
   'settings.routingStrategy': 'アカウントの選択方法',
   'settings.routingRoundRobin': 'ラウンドロビン',
+  'settings.accountOrder': 'アカウントの順序',
+  'settings.accountOrderHelp':
+    '同じアカウントを優先する場合、この順序で使用し、上限到達・クールダウン中・利用不可のときは次のアカウントに切り替えます',
+  'settings.accountOrderUp': '{account} を上へ移動',
+  'settings.accountOrderDown': '{account} を下へ移動',
   'settings.routingFillFirst': '同じアカウントを優先',
   'settings.routingHelp':
     'ラウンドロビンは順番にアカウントを使い、同じアカウントを優先すると上限到達か利用不可まで同じアカウントを使います',
@@ -327,6 +332,10 @@ export const messages: Record<TranslationKey, string> = {
   'channel.assistant': 'Build チャット',
   'logs.channel': 'チャネル',
   'models.channels': 'チャネル',
+  'models.accounts': '利用アカウント',
+  'models.accountsHelp':
+    '自動選択ではこれらのアカウントのみを使用します。未選択の場合はすべてのアカウントを使用します',
+  'models.accountsSaved': 'アカウントを保存し、すぐに反映しました',
   'models.channelAll': 'すべてのチャネル',
   'models.channelSaved': 'チャネルを保存し、すぐに反映しました',
   'settings.activeValue': '適用中の値',
@@ -1182,6 +1191,8 @@ export const messages: Record<TranslationKey, string> = {
   'pg.environmentSources': 'ソース',
   'pg.sourcesTip': '環境にマウントするソース',
   'pg.addSources': 'ソースを追加',
+  'pg.viewSources': 'ソースを表示',
+  'pg.viewRules': 'ルールを表示',
   'pg.oneSource': '1 個のソース',
   'pg.sourceCount': '{count} 個のソース',
   'pg.environmentNetwork': 'ネットワーク',

@@ -535,7 +535,13 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 			return false, err
 		}
 	}
-	return true, emit(Event{Kind: EventFinish, FinishReason: "stop"})
+	environmentID := ""
+	if value := rawAt(interaction, 24); !isJSONNull(value) {
+		if environmentID, err = rawString(value, "$event[19][0][24]", raw); err != nil {
+			return false, withMethod(err, method)
+		}
+	}
+	return true, emit(Event{Kind: EventFinish, FinishReason: "stop", EnvironmentID: environmentID})
 }
 
 // decodeInteractionDelta 解码 content delta：field 1 文本、field 2 图片、field 3 音频、field 4 文档、field 5 视频、field 6 思考摘要、field 7 思考签名、field 10 引用
