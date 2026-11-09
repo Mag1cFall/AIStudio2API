@@ -172,6 +172,11 @@ type AdminAccount struct {
 
 	// PairingRenewedAt 是远程配对账户最近一次由原电脑续签的时间，没有经配对续签时省略
 	PairingRenewedAt *time.Time `json:"pairing_renewed_at,omitempty"`
+
+	// Transition 是账户启停的后台收尾阶段，draining 为等待在途请求结束，syncing 为同步模型目录，没有收尾时省略
+	Transition string `json:"transition,omitempty"`
+	// ActiveRequests 是账户上进行中的请求数
+	ActiveRequests int `json:"active_requests"`
 }
 
 // AdminProxy 表示代理池中一个代理的可用性与绑定账户数
@@ -343,6 +348,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/accounts/tasks/{id}", s.handleDeleteAccountTask)
 	mux.HandleFunc("GET /api/pairing", s.handleActivePairing)
 	mux.HandleFunc("POST /api/pairing", s.handleCreatePairing)
+	mux.HandleFunc("GET /api/paths", s.handlePaths)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)

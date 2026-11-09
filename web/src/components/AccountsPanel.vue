@@ -25,7 +25,6 @@ import type {
 } from '@/types'
 import type { IconName } from '@/icons'
 import AccountEnvironmentFields from './AccountEnvironmentFields.vue'
-import AnchoredMenu, { useAnchoredMenu } from './AnchoredMenu.vue'
 import DetailDialog from './DetailDialog.vue'
 import DisclosureChevron from './DisclosureChevron.vue'
 import LoginViewer from './LoginViewer.vue'
@@ -51,7 +50,7 @@ const emit = defineEmits<{
   refresh: []
   updated: [account: Account]
   notice: [message: string, tone: 'success' | 'error']
-  delete: [account: Account]
+  delete: [accounts: Account[]]
 }>()
 
 const { t, locale, errorText, logText } = useI18n()
@@ -168,17 +167,38 @@ const stateKeys: Record<AccountState, TranslationKey> = {
   unavailable: 'state.unavailable',
   disabled: 'state.disabled',
 }
-// stateTone 是各账户状态文字的颜色
+// stateTone 是各账户状态气泡的颜色
 const stateTone: Record<AccountState, string> = {
-  ready: 'text-green-400',
-  busy: 'text-blue-400',
-  cooldown: 'text-yellow-400',
-  auth_required: 'text-red-400',
-  unavailable: 'text-red-400',
-  disabled: 'text-gray-500',
+  ready: 'bg-green-400/10 text-green-400',
+  busy: 'bg-blue-400/10 text-blue-400',
+  cooldown: 'bg-yellow-400/10 text-yellow-400',
+  auth_required: 'bg-red-400/10 text-red-400',
+  unavailable: 'bg-red-400/10 text-red-400',
+  disabled: 'bg-gray-500/10 text-gray-500',
 }
+// accountIconClass 是账户行图标按钮的样式
+const accountIconClass =
+  'flex size-7 items-center justify-center rounded text-gray-400 transition hover:bg-line disabled:opacity-50'
+// reasonClass 是查看失败原因的文字按钮样式
+const reasonClass =
+  'shrink-0 text-xs text-gray-400 underline underline-offset-2 transition hover:text-gray-200'
+// transitionKeys 是账户启停后台收尾阶段的文字，宽屏下各行按最长的一项留出位置，阶段出现时状态列宽度不变
+const transitionKeys: TranslationKey[] = [
+  'accounts.draining',
+  'accounts.drainingRequests',
+  'accounts.syncing',
+]
 // reasonKeys 是状态旁说明按钮的文字，宽屏下各行按最长的一项留出位置，按钮出现时状态列宽度不变
 const reasonKeys: TranslationKey[] = ['accounts.reason', 'accounts.refreshFailed']
+
+// transitionText 返回账户启停收尾阶段的文字，没有收尾时返回空串
+function transitionText(account: Account): string {
+  if (account.transition === 'syncing') return t('accounts.syncing')
+  if (account.transition !== 'draining') return ''
+  return account.active_requests > 0
+    ? t('accounts.drainingRequests').replace('{count}', String(account.active_requests))
+    : t('accounts.draining')
+}
 
 const search = ref('')
 const selectedState = ref('')
@@ -188,15 +208,6 @@ const states = computed(() => [...new Set(props.accounts.map((account) => accoun
 const tiers = computed(() => [...new Set(props.accounts.map((account) => account.benefit_tier))])
 const egresses = computed(() => [...new Set(props.accounts.map((account) => account.egress))])
 
-// accountMenu 是账户行共用的更多选项菜单，menuAccount 是它所属账户的最新数据
-const {
-  open: accountMenuOpen,
-  target: accountMenu,
-  toggle: toggleAccountMenu,
-} = useAnchoredMenu<string>()
-const menuAccount = computed(() =>
-  props.accounts.find((account) => account.id === accountMenu.value?.item),
-)
 // visibleAccounts 是邮箱检索与账户属性筛选的交集
 const visibleAccounts = computed(() => {
   const needle = search.value.trim().toLowerCase()
@@ -218,6 +229,73 @@ watch([search, selectedState, selectedTier, selectedEgress], () => (accountPage.
 const accountList = ref<HTMLElement>()
 // 翻页后列表回到顶部
 watch(accountPage, () => accountList.value?.scrollTo({ top: 0 }))
+
+// selected 是勾选的账户
+const selected = reactive(new Set<string>())
+// selectedAccounts 是当前筛选结果中已勾选的账户
+const selectedAccounts = computed(() =>
+  visibleAccounts.value.filter((account) => selected.has(account.id)),
+)
+const allSelected = computed(
+  () =>
+    selectedAccounts.value.length > 0 &&
+    selectedAccounts.value.length === visibleAccounts.value.length,
+)
+const someSelected = computed(() => selectedAccounts.value.length > 0 && !allSelected.value)
+
+// toggleAccountSelected 勾选或取消一个账户
+function toggleAccountSelected(accountID: string): void {
+  if (selected.has(accountID)) selected.delete(accountID)
+  else selected.add(accountID)
+}
+
+// toggleRowSelected 点击账户行时勾选或取消该账户，点击行内控件与拖选文字时不切换
+function toggleRowSelected(account: Account, event: MouseEvent): void {
+  if ((event.target as Element).closest('button, a, input')) return
+  if (!getSelection()!.isCollapsed) return
+  toggleAccountSelected(account.id)
+}
+
+// toggleAllSelected 勾选当前筛选结果中的全部账户，已全部勾选时取消
+function toggleAllSelected(): void {
+  if (allSelected.value) for (const account of visibleAccounts.value) selected.delete(account.id)
+  else for (const account of visibleAccounts.value) selected.add(account.id)
+}
+
+// bulkDisabled 判断所选账户是否全部已处于目标启用状态
+function bulkDisabled(enabled: boolean): boolean {
+  return selectedAccounts.value.every((account) => account.enabled === enabled)
+}
+
+// bulkSetEnabled 启用或停用所选账户中状态不同的账户，结束后提示成功与失败的数量并清空选择
+async function bulkSetEnabled(enabled: boolean): Promise<void> {
+  const targets = selectedAccounts.value.filter((account) => account.enabled !== enabled)
+  selected.clear()
+  const results = await Promise.allSettled(
+    targets.map((account) => updateEnabled(account, enabled)),
+  )
+  const failed = results.filter((result) => result.status === 'rejected').length
+  emit('refresh')
+  emit(
+    'notice',
+    t(enabled ? 'accounts.bulkEnabled' : 'accounts.bulkDisabled')
+      .replace('{count}', String(targets.length - failed))
+      .replace('{failed}', String(failed)),
+    failed === 0 ? 'success' : 'error',
+  )
+}
+
+// bulkRefresh 按并发限制刷新所选的启用账户并清空选择
+function bulkRefresh(): void {
+  void refreshAccounts(selectedAccounts.value.filter((account) => account.enabled))
+  selected.clear()
+}
+
+// bulkDelete 把所选账户交给可撤销的删除并清空选择
+function bulkDelete(): void {
+  emit('delete', [...selectedAccounts.value])
+  selected.clear()
+}
 
 // reason 是悬窗中显示的账户或任务、原因类别与完整原因
 const reason = ref<{ title: string; kind: string; text: string } | null>(null)
@@ -750,22 +828,29 @@ async function saveAccount(): Promise<void> {
   }
 }
 
-// toggleAccount 切换账户是否参与请求
-async function toggleAccount(account: Account): Promise<void> {
+// updateEnabled 保存账户是否参与请求
+async function updateEnabled(account: Account, enabled: boolean): Promise<void> {
   toggling.add(account.id)
   try {
     await api.updateAccount(account.id, {
       label: account.label,
-      enabled: !account.enabled,
+      enabled,
       proxy: account.proxy,
       locale: account.locale,
       timezone: account.timezone,
     })
+  } finally {
+    toggling.delete(account.id)
+  }
+}
+
+// toggleAccount 切换账户是否参与请求，收尾在后台进行并显示在账户状态上
+async function toggleAccount(account: Account): Promise<void> {
+  try {
+    await updateEnabled(account, !account.enabled)
     emit('refresh')
   } catch (error) {
     actionError(error)
-  } finally {
-    toggling.delete(account.id)
   }
 }
 
@@ -822,9 +907,9 @@ async function refreshAccount(account: Account): Promise<void> {
 // refreshConcurrency 是刷新全部时同时刷新的账户数
 const refreshConcurrency = 4
 
-// refreshAllAccounts 按 refreshConcurrency 的并发依次刷新全部启用账户，结束后提示成功与失败的数量
-async function refreshAllAccounts(): Promise<void> {
-  const targets = props.accounts.filter((account) => account.enabled && !refreshing.has(account.id))
+// refreshAccounts 按 refreshConcurrency 的并发依次刷新 accounts 中尚未在刷新的账户，结束后提示成功与失败的数量
+async function refreshAccounts(accounts: Account[]): Promise<void> {
+  const targets = accounts.filter((account) => !refreshing.has(account.id))
   for (const account of targets) queued.add(account.id)
   refreshTotal.value = targets.length
   refreshDone.value = 0
@@ -868,15 +953,15 @@ async function refreshAllAccounts(): Promise<void> {
           :disabled="refreshTotal > 0"
           :aria-busy="refreshTotal > 0"
           :aria-describedby="refreshTotal > 0 ? 'refresh-all-progress' : undefined"
-          @click="refreshAllAccounts"
+          @click="refreshAccounts(accounts.filter((account) => account.enabled))"
         >
           <span
             v-if="refreshTotal > 0"
-            class="absolute inset-y-0 left-0 -z-10 bg-blue-500/20 transition-[width] duration-300 motion-reduce:transition-none"
+            class="absolute inset-y-0 left-0 -z-10 bg-line transition-[width] duration-300 motion-reduce:transition-none"
             :style="{ width: `${(refreshDone / refreshTotal) * 100}%` }"
             aria-hidden="true"
           ></span>
-          <StagedRefreshIcon v-if="refreshTotal > 0" class="text-blue-400" />
+          <StagedRefreshIcon v-if="refreshTotal > 0" />
           <UiIcon v-else name="refresh" :size="15" />
           {{ t('accounts.refreshAll') }}
         </button>
@@ -910,7 +995,7 @@ async function refreshAllAccounts(): Promise<void> {
               >
                 <UiIcon
                   :name="item.icon"
-                  :size="16"
+                  :size="15"
                   class="mt-0.5 shrink-0 text-gray-400 group-data-[disabled]:opacity-50"
                 />
                 <span class="min-w-0">
@@ -928,12 +1013,12 @@ async function refreshAllAccounts(): Promise<void> {
     <div
       class="page-x flex min-h-0 flex-1 flex-col py-4 md:overflow-hidden md:py-8 md:[scrollbar-gutter:stable]"
     >
-      <ul v-if="tasks.length > 0" class="mb-3 space-y-2" :aria-label="t('accounts.tasks')">
-        <li
-          v-for="task in tasks"
-          :key="task.id"
-          class="rounded-lg border border-line bg-panel px-4 py-2.5"
-        >
+      <ul
+        v-if="tasks.length > 0"
+        class="mb-3 divide-y divide-line/60 rounded-lg border border-line bg-panel"
+        :aria-label="t('accounts.tasks')"
+      >
+        <li v-for="task in tasks" :key="task.id" class="px-4 py-2.5">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex min-w-0 flex-1 basis-64 items-center gap-2.5">
               <UiIcon
@@ -946,11 +1031,7 @@ async function refreshAllAccounts(): Promise<void> {
                 "
                 :size="15"
                 class="shrink-0"
-                :class="{
-                  'text-blue-400': task.state === 'running',
-                  'text-green-400': task.state === 'done',
-                  'text-red-400': task.state === 'failed',
-                }"
+                :class="task.state === 'failed' ? 'text-red-400' : 'text-gray-400'"
               />
               <span class="shrink-0 text-sm font-medium text-white">{{
                 t(taskTitles[task.kind])
@@ -967,7 +1048,7 @@ async function refreshAllAccounts(): Promise<void> {
                 <button
                   v-if="task.items[0]!.state === 'failed'"
                   type="button"
-                  class="shrink-0 rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-xs text-red-300 transition hover:bg-red-900/40"
+                  :class="reasonClass"
                   @click="showTaskError(task, task.items[0]!)"
                 >
                   {{ t('accounts.reason') }}
@@ -1019,13 +1100,9 @@ async function refreshAllAccounts(): Promise<void> {
                 "
                 :size="13"
                 class="shrink-0"
-                :class="{
-                  'text-blue-400': item.state === 'running',
-                  'text-green-400': item.state === 'done',
-                  'text-red-400': item.state === 'failed',
-                }"
+                :class="item.state === 'failed' ? 'text-red-400' : 'text-gray-400'"
               />
-              <span v-else class="mx-[4.5px] size-1 shrink-0 rounded-full bg-gray-500"></span>
+              <span v-else class="w-[13px] shrink-0"></span>
               <span class="sr-only">{{ t(taskStates[item.state]) }}</span>
               <span
                 v-tooltip.overflow="item.label"
@@ -1036,7 +1113,7 @@ async function refreshAllAccounts(): Promise<void> {
               <button
                 v-if="item.state === 'failed'"
                 type="button"
-                class="shrink-0 rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-xs text-red-300 transition hover:bg-red-900/40"
+                :class="reasonClass"
                 @click="showTaskError(task, item)"
               >
                 {{ t('accounts.reason') }}
@@ -1084,9 +1161,9 @@ async function refreshAllAccounts(): Promise<void> {
           </option>
         </UiSelect>
       </div>
-      <div v-if="error" class="rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
-        {{ error }}
-      </div>
+      <p v-if="error" class="flex items-center gap-2 text-sm text-red-300">
+        <UiIcon name="warning" :size="15" class="shrink-0" />{{ error }}
+      </p>
       <div v-else-if="loading" class="py-12 text-center text-gray-500">
         {{ t('common.loading') }}
       </div>
@@ -1107,6 +1184,71 @@ async function refreshAllAccounts(): Promise<void> {
         v-else
         class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-panel max-md:max-h-[70vh] max-md:shrink-0 max-md:basis-auto"
       >
+        <div class="flex min-h-10 items-center gap-3 border-b border-line px-4 py-1.5 text-xs">
+          <label class="flex cursor-pointer items-center gap-3">
+            <input
+              class="h-4 w-4 shrink-0 accent-blue-600"
+              type="checkbox"
+              :checked="allSelected"
+              :indeterminate.prop="someSelected"
+              :aria-label="t('accounts.selectAllRows')"
+              @change="toggleAllSelected"
+            />
+            <span class="text-gray-400 tabular-nums">{{
+              selectedAccounts.length > 0
+                ? t('accounts.selectedCount').replace('{count}', String(selectedAccounts.length))
+                : t('accounts.totalCount').replace('{count}', String(visibleAccounts.length))
+            }}</span>
+          </label>
+          <DropdownMenuRoot v-if="selectedAccounts.length > 0" :modal="false">
+            <DropdownMenuTrigger
+              class="flex items-center gap-1 rounded bg-raised px-2 py-0.5 text-xs text-gray-200 transition hover:bg-line"
+            >
+              {{ t('accounts.bulk') }}
+              <UiIcon name="chevronDown" :size="13" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent
+                align="start"
+                :side-offset="4"
+                class="z-[60] min-w-36 rounded-lg border border-line bg-panel p-1 shadow-xl"
+              >
+                <DropdownMenuItem
+                  class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-gray-200 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-raised"
+                  :disabled="bulkDisabled(true)"
+                  @select="bulkSetEnabled(true)"
+                >
+                  <UiIcon name="success" :size="15" />
+                  {{ t('common.enable') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-gray-200 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-raised"
+                  :disabled="bulkDisabled(false)"
+                  @select="bulkSetEnabled(false)"
+                >
+                  <UiIcon name="disable" :size="15" />
+                  {{ t('common.disable') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-gray-200 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-raised"
+                  :disabled="bulkDisabled(false) || refreshTotal > 0"
+                  @select="bulkRefresh"
+                >
+                  <UiIcon name="refresh" :size="15" />
+                  {{ t('accounts.refresh') }}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator class="my-1 h-px bg-line" />
+                <DropdownMenuItem
+                  class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-red-400 outline-none data-[highlighted]:bg-raised"
+                  @select="bulkDelete"
+                >
+                  <UiIcon name="trash" :size="15" />
+                  {{ t('common.delete') }}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
+        </div>
         <div
           ref="accountList"
           class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] lg:grid lg:grid-cols-[minmax(0,1fr)_auto_auto_auto] lg:content-start"
@@ -1114,21 +1256,18 @@ async function refreshAllAccounts(): Promise<void> {
           <div
             v-for="account in pagedAccounts"
             :key="account.id"
-            class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line/60 px-4 py-2.5 lg:col-span-4 lg:grid lg:grid-cols-subgrid"
-            :class="{ 'opacity-60': !account.enabled }"
+            class="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 border-b border-line/60 px-4 py-2.5 transition-colors lg:col-span-4 lg:grid lg:grid-cols-subgrid"
+            :class="selected.has(account.id) ? 'bg-blue-500/[0.06]' : 'hover:bg-raised/50'"
+            @click="toggleRowSelected(account, $event)"
           >
             <div class="flex min-w-0 flex-1 basis-72 items-center gap-3">
-              <div
-                class="h-2.5 w-2.5 shrink-0 rounded-full"
-                :class="{
-                  'bg-green-500': account.state === 'ready',
-                  'bg-blue-500': account.state === 'busy',
-                  'bg-yellow-500': account.state === 'cooldown',
-                  'bg-red-500':
-                    account.state === 'auth_required' || account.state === 'unavailable',
-                  'bg-gray-500': account.state === 'disabled',
-                }"
-              ></div>
+              <input
+                class="h-4 w-4 shrink-0 accent-blue-600"
+                type="checkbox"
+                :checked="selected.has(account.id)"
+                :aria-label="t('accounts.selectRow').replace('{name}', account.label)"
+                @change="toggleAccountSelected(account.id)"
+              />
               <div class="min-w-0">
                 <span
                   v-tooltip.overflow="account.label"
@@ -1149,16 +1288,33 @@ async function refreshAllAccounts(): Promise<void> {
             <div
               class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 md:w-36 lg:w-auto lg:min-w-36 lg:flex-nowrap lg:whitespace-nowrap"
             >
-              <span class="grid text-xs font-medium uppercase">
+              <span class="grid text-xs">
                 <span
                   v-for="(key, state) in stateKeys"
                   :key="state"
-                  class="[grid-area:1/1]"
-                  :class="[
-                    stateTone[state],
-                    { 'invisible max-md:hidden': state !== account.state },
-                  ]"
+                  class="invisible border px-1.5 [grid-area:1/1] max-md:hidden"
+                  aria-hidden="true"
                   >{{ t(key) }}</span
+                >
+                <span
+                  v-for="key in transitionKeys"
+                  :key="key"
+                  class="invisible pl-[19px] [grid-area:1/1] max-lg:hidden"
+                  aria-hidden="true"
+                  >{{ t(key).replace('{count}', '1') }}</span
+                >
+                <span
+                  v-if="account.transition"
+                  class="flex items-center gap-1.5 text-gray-400 [grid-area:1/1]"
+                  ><UiIcon name="spinner" :size="13" class="shrink-0" />{{
+                    transitionText(account)
+                  }}</span
+                >
+                <span
+                  v-else
+                  class="justify-self-start rounded border border-current px-1.5 [grid-area:1/1]"
+                  :class="stateTone[account.state]"
+                  >{{ t(stateKeys[account.state]) }}</span
                 >
               </span>
               <span class="grid text-xs">
@@ -1166,13 +1322,14 @@ async function refreshAllAccounts(): Promise<void> {
                   v-for="key in reasonKeys"
                   :key="key"
                   aria-hidden="true"
-                  class="invisible rounded border px-1.5 py-0.5 [grid-area:1/1] max-lg:hidden"
+                  class="invisible [grid-area:1/1] max-lg:hidden"
                   >{{ t(key) }}</span
                 >
                 <button
                   v-if="account.message"
                   type="button"
-                  class="rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-red-300 transition [grid-area:1/1] hover:bg-red-900/40"
+                  class="[grid-area:1/1]"
+                  :class="reasonClass"
                   @click="
                     reason = {
                       title: account.label,
@@ -1186,7 +1343,8 @@ async function refreshAllAccounts(): Promise<void> {
                 <button
                   v-else-if="refreshErrors.has(account.id)"
                   type="button"
-                  class="rounded border border-red-900/50 bg-red-900/20 px-1.5 py-0.5 text-red-300 transition [grid-area:1/1] hover:bg-red-900/40"
+                  class="[grid-area:1/1]"
+                  :class="reasonClass"
                   @click="
                     reason = {
                       title: account.label,
@@ -1200,11 +1358,11 @@ async function refreshAllAccounts(): Promise<void> {
               </span>
             </div>
             <div
-              class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 lg:flex-nowrap"
+              class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1 lg:flex-nowrap"
             >
               <button
                 v-if="account.state === 'auth_required'"
-                class="rounded bg-green-600 px-3 py-1 text-xs text-white transition hover:bg-green-500 disabled:opacity-50"
+                class="rounded bg-blue-600 px-3 py-1 text-xs text-white transition hover:bg-blue-500 disabled:opacity-50"
                 type="button"
                 :disabled="
                   pendingAction !== '' ||
@@ -1220,47 +1378,69 @@ async function refreshAllAccounts(): Promise<void> {
                 {{ t('common.relogin') }}
               </button>
               <button
-                class="relative rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line disabled:opacity-50"
+                v-tooltip="t(queued.has(account.id) ? 'accounts.queued' : 'accounts.refresh')"
                 type="button"
+                :class="[accountIconClass, 'hover:text-gray-200']"
                 :disabled="
                   refreshing.has(account.id) ||
                   queued.has(account.id) ||
                   pendingAction === `login:${account.id}` ||
                   reloggingAccounts.has(account.id) ||
-                  !account.enabled
+                  !account.enabled ||
+                  account.transition !== undefined
                 "
+                :aria-label="t(queued.has(account.id) ? 'accounts.queued' : 'accounts.refresh')"
                 :aria-busy="refreshing.has(account.id)"
                 @click="refreshAccount(account)"
               >
-                <span class="grid" :class="{ 'opacity-0': refreshing.has(account.id) }">
-                  <span class="[grid-area:1/1]" :class="{ invisible: queued.has(account.id) }">{{
-                    t('accounts.refresh')
-                  }}</span>
-                  <span class="[grid-area:1/1]" :class="{ invisible: !queued.has(account.id) }">{{
-                    t('accounts.queued')
-                  }}</span>
-                </span>
                 <UiIcon
-                  v-if="refreshing.has(account.id)"
-                  name="spinner"
-                  :size="14"
-                  class="absolute inset-0 m-auto"
+                  :name="
+                    refreshing.has(account.id) || queued.has(account.id) ? 'spinner' : 'refresh'
+                  "
+                  :size="15"
                 />
               </button>
               <button
-                v-tooltip="t('pg.moreOptions')"
+                v-tooltip="t('common.edit')"
                 type="button"
-                class="flex size-[26px] items-center justify-center rounded border border-line bg-raised text-gray-400 transition hover:bg-line hover:text-gray-200 disabled:opacity-50"
+                :class="[accountIconClass, 'hover:text-gray-200']"
                 :disabled="
                   pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
                 "
-                :aria-label="t('pg.moreOptions')"
-                aria-haspopup="menu"
-                :aria-expanded="accountMenuOpen && accountMenu?.item === account.id"
-                :aria-busy="toggling.has(account.id)"
-                @click="toggleAccountMenu($event, account.id)"
+                :aria-label="t('common.edit')"
+                @click="beginEdit(account)"
               >
-                <UiIcon :name="toggling.has(account.id) ? 'spinner' : 'more'" :size="15" />
+                <UiIcon name="edit" :size="15" />
+              </button>
+              <button
+                v-tooltip="t(account.enabled ? 'common.disable' : 'common.enable')"
+                type="button"
+                :class="[accountIconClass, 'hover:text-gray-200']"
+                :disabled="
+                  pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
+                "
+                :aria-label="t(account.enabled ? 'common.disable' : 'common.enable')"
+                :aria-busy="toggling.has(account.id)"
+                @click="toggleAccount(account)"
+              >
+                <UiIcon
+                  :name="
+                    toggling.has(account.id) ? 'spinner' : account.enabled ? 'disable' : 'success'
+                  "
+                  :size="15"
+                />
+              </button>
+              <button
+                v-tooltip="t('common.delete')"
+                type="button"
+                :class="[accountIconClass, 'hover:text-red-400']"
+                :disabled="
+                  pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
+                "
+                :aria-label="t('common.delete')"
+                @click="emit('delete', [account])"
+              >
+                <UiIcon name="trash" :size="15" />
               </button>
             </div>
           </div>
@@ -1306,7 +1486,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closeEditor"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <p v-tooltip.overflow="draft.label" class="mb-4 truncate text-sm text-gray-300">
@@ -1353,7 +1533,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closeBrowserLogin"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <div class="space-y-4">
@@ -1394,7 +1574,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closeChromeImport"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <div class="mb-4 space-y-4">
@@ -1480,7 +1660,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closeCookieImport"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <ol class="mb-5 list-decimal space-y-1 pl-5 text-sm leading-6 text-gray-300">
@@ -1673,7 +1853,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closeBrowserImport"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <div class="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -1822,7 +2002,7 @@ async function refreshAllAccounts(): Promise<void> {
                 :aria-label="t('common.close')"
                 @click="closePairing"
               >
-                <UiIcon name="close" :size="16" />
+                <UiIcon name="close" :size="15" />
               </button>
             </div>
             <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm leading-6 text-gray-400">
@@ -1858,10 +2038,7 @@ async function refreshAllAccounts(): Promise<void> {
                 t('accounts.remoteAddressHelp')
               }}</span>
             </label>
-            <p
-              v-if="pairingInsecure"
-              class="mb-4 flex gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200"
-            >
+            <p v-if="pairingInsecure" class="mb-4 flex gap-2 text-xs leading-5 text-amber-200">
               <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />
               {{ t(pairingLoopback ? 'accounts.remoteHttpsAddress' : 'accounts.remoteHttps') }}
             </p>
@@ -1958,37 +2135,5 @@ async function refreshAllAccounts(): Promise<void> {
         </div>
       </Teleport>
     </div>
-    <AnchoredMenu
-      v-model:open="accountMenuOpen"
-      :anchor="accountMenu?.anchor"
-      align="end"
-      :side-offset="4"
-      class="z-[60] max-h-[var(--reka-dropdown-menu-content-available-height)] min-w-40 overflow-y-auto rounded-lg border border-line bg-panel p-1 shadow-xl"
-    >
-      <template v-if="menuAccount">
-        <DropdownMenuItem
-          class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-gray-200"
-          @select="beginEdit(menuAccount)"
-        >
-          <UiIcon name="edit" :size="15" />
-          {{ t('common.edit') }}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-gray-200"
-          @select="toggleAccount(menuAccount)"
-        >
-          <UiIcon :name="menuAccount.enabled ? 'disable' : 'success'" :size="15" />
-          {{ t(menuAccount.enabled ? 'common.disable' : 'common.enable') }}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator class="my-1 h-px bg-line" />
-        <DropdownMenuItem
-          class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm outline-none data-[highlighted]:bg-raised text-red-400 data-[highlighted]:bg-red-900/30"
-          @select="emit('delete', menuAccount)"
-        >
-          <UiIcon name="trash" :size="15" />
-          {{ t('common.delete') }}
-        </DropdownMenuItem>
-      </template>
-    </AnchoredMenu>
   </section>
 </template>

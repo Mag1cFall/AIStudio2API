@@ -10,7 +10,7 @@ const { logText } = useI18n()
 const text = computed(() => logText(props.message))
 // open 是是否显示全文，由日志页按行保存
 const open = defineModel<boolean>('open', { required: true })
-// clipped 是折叠为两行时是否截掉过内容，由日志页按行保存；没有箭头时消息左侧留出箭头的位置，箭头出现时消息不横移
+// clipped 是折叠为两行时是否截掉过内容，由日志页按行保存
 const clipped = defineModel<boolean>('clipped', { required: true })
 const root = useTemplateRef<HTMLElement>('root')
 const body = useTemplateRef<HTMLElement>('body')
@@ -30,9 +30,9 @@ watch(text, measure, { flush: 'post' })
 </script>
 
 <template>
-  <div ref="root" class="log-text" :class="{ 'log-text-indent': !clipped }">
-    <UiDisclosure v-if="clipped" v-model="open" />
+  <div ref="root" class="log-text">
     <span ref="body" class="log-text-body" :class="{ 'log-text-clamp': clamped }">{{ text }}</span>
+    <UiDisclosure v-if="clipped" v-model="open" />
   </div>
 </template>
 
@@ -41,10 +41,6 @@ watch(text, measure, { flush: 'post' })
   display: flex;
   align-items: flex-start;
   gap: 10px;
-}
-/* log-text-indent 是没有箭头时为箭头留出的位置，箭头宽 24 px、左外边距 -4 px，加上 10 px 间距共 30 px */
-.log-text-indent {
-  padding-left: 30px;
 }
 .log-text-body {
   display: block;

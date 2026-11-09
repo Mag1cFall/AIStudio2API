@@ -95,7 +95,7 @@ func (writer *keepaliveWriter) Unwrap() http.ResponseWriter {
 	return writer.ResponseWriter
 }
 
-// 流式响应的心跳帧：OpenAI 与 Interactions 为 SSE 注释，Anthropic 为官方 ping 事件，Gemini 为不触发事件的空行
+// 流式响应的心跳帧：OpenAI 与 Interactions 为 SSE 注释，Responses 写出开场事件后改用 progressFrame，Anthropic 为官方 ping 事件，Gemini 为不触发事件的空行
 const (
 	sseHeartbeat       = ": ping\n\n"
 	anthropicHeartbeat = "event: ping\ndata: {\"type\":\"ping\"}\n\n"
@@ -105,7 +105,7 @@ const (
 // streamKeepalive 是流式响应的 ResponseWriter，距最近一次写出满心跳间隔时写出心跳帧，响应头由 open 或首个心跳写出
 type streamKeepalive struct {
 	http.ResponseWriter
-	frame   string
+	frame   func() string
 	mu      sync.Mutex
 	timer   *time.Timer
 	opened  bool
@@ -114,7 +114,7 @@ type streamKeepalive struct {
 
 // keepStreamAlive 返回静默满心跳间隔时写出 frame 的流式 ResponseWriter，首个事件可能晚于心跳间隔的流式响应用它在等待期间写出响应头与心跳
 func keepStreamAlive(w http.ResponseWriter, frame string) *streamKeepalive {
-	writer := &streamKeepalive{ResponseWriter: w, frame: frame}
+	writer := &streamKeepalive{ResponseWriter: w, frame: func() string { return frame }}
 	writer.mu.Lock()
 	writer.timer = time.AfterFunc(streamHeartbeatInterval, writer.beat)
 	writer.mu.Unlock()
@@ -129,6 +129,13 @@ func openStream(w http.ResponseWriter, frame string) (*streamKeepalive, error) {
 		return writer, err
 	}
 	return writer, nil
+}
+
+// setFrame 替换之后每次心跳用来生成心跳帧的函数
+func (writer *streamKeepalive) setFrame(frame func() string) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	writer.frame = frame
 }
 
 // open 写出流式响应头，已写出时不再写
@@ -153,7 +160,7 @@ func (writer *streamKeepalive) beat() {
 	if writer.stopped || writer.openLocked() != nil {
 		return
 	}
-	if _, err := io.WriteString(writer.ResponseWriter, writer.frame); err != nil {
+	if _, err := io.WriteString(writer.ResponseWriter, writer.frame()); err != nil {
 		return
 	}
 	if http.NewResponseController(writer.ResponseWriter).Flush() != nil {

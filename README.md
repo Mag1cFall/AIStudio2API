@@ -75,7 +75,7 @@
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器；设置 `WAA_BACKEND=camoufox` 后由 Camoufox 持有官方 WAA 生命周期
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩，Anthropic Messages 支持 `context_management` 的工具结果与思考清理和阈值压缩
-- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、dsh、OpenClaw、Hermes 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
+- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、dsh、OpenClaw、Magpie 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
 

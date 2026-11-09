@@ -240,10 +240,12 @@ const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   return clicked;
 })()`
 
-// dismissKnownOverlays 关闭官网已知启动弹层
-func dismissKnownOverlays(ctx context.Context, client *bidiClient, contextID string) error {
-	if _, err := client.evaluate(ctx, contextID, dismissOverlaysExpression); err != nil {
-		return fmt.Errorf("处理 AI Studio 启动覆盖层: %w", err)
+// dismissKnownOverlays 关闭官网已知启动弹层，返回点击的按钮数
+func dismissKnownOverlays(ctx context.Context, client *bidiClient, contextID string) (int, error) {
+	clicked, err := client.evaluate(ctx, contextID, dismissOverlaysExpression)
+	if err != nil {
+		return 0, fmt.Errorf("处理 AI Studio 启动覆盖层: %w", err)
 	}
-	return nil
+	count, _ := number(clicked["value"])
+	return int(count), nil
 }

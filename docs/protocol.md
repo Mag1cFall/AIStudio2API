@@ -215,6 +215,12 @@ Google 邮箱的小写形式同时作为账户目录、管理页面标识和日�
 
 服务在每个账户本进程的首次目录同步前读取 `GetLoggingContext`，需要同意时按 field 10 选择 field 9，以不订阅邮件发送 `AcceptTerms`；成功后本进程内不再读取，失败时本次目录同步失败，下次同步重新读取。
 
+### Google AI 方案欢迎对话框
+
+Google AI 方案账户的 `GetUserPreferences` field 12 不为真时，官网弹出欢迎对话框 `ms-g1-welcome-dialog`，页面载入几秒后才打开，打开时遮挡 Run 按钮。点击 Continue 后官网发送 `UpdateUserPreferences`，field 12 为真，field mask 为 `has_seen_g1_welcome_dialog`。
+
+Camoufox 后端在页面载入后、每次运行开始时与等待 Run 按钮可点时关闭该对话框。
+
 ### 地区或账户不受支持
 
 官网启动时 `GetLoggingContext` 返回 HTTP 403、错误体 `[7,"Region not supported."]` 或 `[7,"Account not supported."]` 时，页面跳转到 `https://aistudio.google.com/docs/available-regions`。
@@ -1314,7 +1320,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AdminStatus` | `state`、`running`、`ready`、`version`、`active_requests`、`accounts`、`camoufox` |
 | `AdminAccountCounts` | `total`、`ready`、`busy`、`cooldown`、`auth_required` |
 | `AdminCamoufox` | `ready`、可选 `download`（`received`、`total`） |
-| `AdminAccount` | `id`、`label`、`enabled`、`state`、`proxy`、`locale`、`timezone`、`models`、`benefit_tier`、`message`、可选 `pairing_renewed_at` |
+| `AdminAccount` | `id`、`label`、`enabled`、`state`、`proxy`、`locale`、`timezone`、`models`、`benefit_tier`、`message`、`active_requests`、可选 `pairing_renewed_at`、可选 `transition` |
 | `AccountCreateInput` | `proxy`、`locale`、`timezone` |
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
 | `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`locale` |
@@ -1372,7 +1378,9 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 
 新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
 
-`PUT /api/accounts/{id}` 的提交顺序固定为：校验不可变邮箱 ID，取得账户独占租约，创建未发布的新固定出口，关闭当前 Worker 并把新 Worker 配置标记为 `pending`（尚未发布），在模型目录写锁内原子写入 `account.json` 并更新账户池，随后发布 Worker 配置、替换固定出口、释放租约并重建模型缓存。`account.json` 写入是唯一持久提交点。提交前的出口创建、Worker 关闭或写入错误会丢弃这份待发布配置并保持旧配置；已经关闭的 Worker 由后续请求按旧配置重建。持久写入后，新配置、Worker 配置与固定出口共同成为已提交状态。租约释放错误保留该提交状态并返回原始 unlock 错误；释放成功后记录完成日志并同步模型缓存。
+`PUT /api/accounts/{id}` 只切换 `enabled` 时立即写回 `account.json` 并返回，账户状态同时更新，后台收尾的阶段写在 `AdminAccount.transition`：`draining` 表示停用后等待该账户在途请求结束（`active_requests` 为等待的请求数）并关闭 Worker，`syncing` 表示启用后载入页面同步该账户的模型目录，收尾结束后字段省略；再次切换同一账户会取消进行中的收尾。
+
+其余账户更新的提交顺序固定为：校验不可变邮箱 ID，取得账户独占租约，创建未发布的新固定出口，关闭当前 Worker 并把新 Worker 配置标记为 `pending`（尚未发布），在模型目录写锁内原子写入 `account.json` 并更新账户池，随后发布 Worker 配置、替换固定出口、释放租约并重建模型缓存。`account.json` 写入是唯一持久提交点。提交前的出口创建、Worker 关闭或写入错误会丢弃这份待发布配置并保持旧配置；已经关闭的 Worker 由后续请求按旧配置重建。持久写入后，新配置、Worker 配置与固定出口共同成为已提交状态。租约释放错误保留该提交状态并返回原始 unlock 错误；释放成功后记录完成日志并同步模型缓存。
 
 `RuntimeConfig` 字段。`response-only` 表示字段由服务器填充，客户端提交的值不参与保存：
 
@@ -2682,7 +2690,7 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | Anthropic | `message_start` | `content_block_start`、delta、`content_block_stop` | `message_delta.usage` | `message_stop` |
 | Gemini | candidate Part | `GenerateContentResponse` 增量 | 最后一帧 `usageMetadata` | 最后一帧 finish reason |
 
-流式响应距上一次写出满 10 秒时，OpenAI 各接口与 Interactions 发送 SSE 注释帧 `: ping`，Anthropic 发送 `ping` 事件，Gemini SSE 发送空行，均立即 flush；流式响应头带 `X-Accel-Buffering: no`，经 nginx 反向代理时逐帧转发。图片与转写的流式请求在首个结果晚于 10 秒时先由心跳写出响应头，之后的错误以 SSE 错误事件返回。OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端。Gemini 的首个帧来自上游语义事件或保活空行。
+流式响应距上一次写出满 10 秒时，OpenAI 各接口与 Interactions 发送 SSE 注释帧 `: ping`，Responses 写出开场事件后重发序号为 1 的 `response.in_progress` 事件，Anthropic 发送 `ping` 事件，Gemini SSE 发送空行，均立即 flush；流式响应头带 `X-Accel-Buffering: no`，经 nginx 反向代理时逐帧转发。图片与转写的流式请求在首个结果晚于 10 秒时先由心跳写出响应头，之后的错误以 SSE 错误事件返回。OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端。Gemini 的首个帧来自上游语义事件或保活空行。
 
 公开适配规则：
 

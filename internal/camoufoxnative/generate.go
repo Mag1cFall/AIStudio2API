@@ -259,7 +259,7 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 	if err := client.waitFor(ctx, tab.contextID, `!`+generationRunningExpression, 15*time.Second); err != nil {
 		return fmt.Errorf("等待上一轮生成结束: %w", err)
 	}
-	if err := dismissKnownOverlays(input, client, tab.contextID); err != nil {
+	if _, err := dismissKnownOverlays(input, client, tab.contextID); err != nil {
 		return err
 	}
 	worker.mu.Lock()
@@ -329,7 +329,7 @@ func promptHead(prompt string) string {
 	return prompt
 }
 
-// waitRunnable 等页面处理完输入后官网 Run 按钮可点；页面忙于处理时随之等待，页面空闲时 Run 按钮持续不可点时以页面给出的原因失败
+// waitRunnable 等页面处理完输入后官网 Run 按钮可点；期间弹出的已知弹层在此关闭，页面忙于处理时随之等待，页面空闲时 Run 按钮持续不可点时以页面给出的原因失败
 func (worker *Worker) waitRunnable(ctx context.Context, tab *chatTab) error {
 	for checks := 1; ; checks++ {
 		state, err := readRunState(ctx, worker.client, tab.contextID, tab.page, "")
@@ -338,6 +338,15 @@ func (worker *Worker) waitRunnable(ctx context.Context, tab *chatTab) error {
 		}
 		if state.Enabled {
 			return nil
+		}
+		if len(state.Dialogs) > 0 {
+			clicked, err := dismissKnownOverlays(ctx, worker.client, tab.contextID)
+			if err != nil {
+				return err
+			}
+			if clicked > 0 {
+				checks = 0
+			}
 		}
 		if checks == runSettleChecks {
 			return fmt.Errorf("页面空闲后仍不可点: %s", state.reason())
@@ -563,7 +572,7 @@ func (worker *Worker) clearChat(ctx context.Context, tab *chatTab) error {
 	if err := worker.client.waitFor(ctx, tab.contextID, `!`+generationRunningExpression, 15*time.Second); err != nil {
 		return fmt.Errorf("等待上一轮生成结束: %w", err)
 	}
-	if err := dismissKnownOverlays(ctx, worker.client, tab.contextID); err != nil {
+	if _, err := dismissKnownOverlays(ctx, worker.client, tab.contextID); err != nil {
 		return err
 	}
 	if err := worker.newChat(ctx, tab); err != nil {

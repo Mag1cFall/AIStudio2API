@@ -207,7 +207,9 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
       >
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
           <h3 class="text-sm font-semibold text-gray-200">{{ t('cooldowns.title') }}</h3>
-          <span class="font-mono text-xs text-gray-500">{{ visibleCooldowns.length }}</span>
+          <span class="min-w-[2ch] font-mono text-xs text-gray-500">{{
+            visibleCooldowns.length
+          }}</span>
           <UiSelect
             v-model="cooldownModel"
             :aria-label="t('requests.filterModel')"

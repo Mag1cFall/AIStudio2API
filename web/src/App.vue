@@ -157,7 +157,7 @@ const {
   loadAccountData,
   loadRequestData,
   updateAccount,
-  deleteAccount,
+  deleteAccounts,
   undoDelete,
   commitDelete,
   startService,
@@ -168,6 +168,13 @@ const {
 
 // noticeText 是按界面语言显示的提示正文，服务文案翻译表到达后随之更新
 const noticeText = computed(() => logText(notice.message))
+// deletedNotice 是撤销提示的正文：删除一个账户时写账户名，批量删除时写数量
+const deletedNotice = computed(() => {
+  const accounts = pendingDelete.value?.accounts ?? []
+  return accounts.length === 1
+    ? t('accounts.deletedNamed').replace('{name}', accounts[0]!.label)
+    : t('accounts.deletedCount').replace('{count}', String(accounts.length))
+})
 const noticeBody = useTemplateRef<HTMLElement>('noticeBody')
 // noticeOpen 是提示是否显示全文
 const noticeOpen = ref(false)
@@ -444,7 +451,7 @@ onMounted(revealCurrentTab)
           @refresh="loadAccountData"
           @updated="updateAccount"
           @notice="showNotice"
-          @delete="deleteAccount"
+          @delete="deleteAccounts"
         />
         <AccessPanel
           v-else-if="currentTab === 'access'"
@@ -532,13 +539,9 @@ onMounted(revealCurrentTab)
           class="pointer-events-auto flex max-w-full items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
           role="status"
         >
-          <span
-            v-tooltip.overflow="
-              t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label)
-            "
-            class="min-w-0 truncate"
-            >{{ t('accounts.deletedNamed').replace('{name}', pendingDelete.account.label) }}</span
-          >
+          <span v-tooltip.overflow="deletedNotice" class="min-w-0 truncate">{{
+            deletedNotice
+          }}</span>
           <button
             type="button"
             class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 font-medium text-blue-400 hover:bg-raised"

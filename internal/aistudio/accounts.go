@@ -34,7 +34,7 @@ import (
 
 const (
 	accountConfigName = "account.json"
-	storageStateName  = "storage-state.json"
+	StorageStateName  = "storage-state.json"
 	runtimeStateName  = "runtime-state.json"
 	catalogCacheName  = "catalog.json"
 	globalCooldownKey = "*"
@@ -305,6 +305,7 @@ type Account struct {
 	authCheckedAt         time.Time
 	modelAccessGeneration uint64
 	stateMessage          string
+	transition            AccountTransition
 	catalogErr            error
 	initializedAt         time.Time
 	buildModels           []Model
@@ -328,7 +329,21 @@ type AccountStatus struct {
 	LastUsed    *time.Time               `json:"last_used,omitempty"`
 	Message     string                   `json:"message,omitempty"`
 	Directory   string                   `json:"-"`
+	// Transition 是账户启停的后台收尾阶段，没有收尾时为空
+	Transition AccountTransition `json:"-"`
+	// ActiveRequests 是账户上进行中的请求数
+	ActiveRequests int `json:"-"`
 }
+
+// AccountTransition 是账户启停的后台收尾阶段
+type AccountTransition string
+
+const (
+	// AccountDraining 表示账户已停用，正在等待在途请求结束并关闭 Worker
+	AccountDraining AccountTransition = "draining"
+	// AccountSyncing 表示账户已启用，正在载入页面同步模型目录
+	AccountSyncing AccountTransition = "syncing"
+)
 
 // AccountSelection 描述账户调度所需的能力或粘性条件
 type AccountSelection struct {
@@ -486,13 +501,13 @@ func (s *AccountStore) Load() ([]*Account, error) {
 			return nil, fmt.Errorf("读取账户路径 %q: %w", source, err)
 		}
 		if !info.IsDir() {
-			if filepath.Base(absolute) != storageStateName {
-				return nil, fmt.Errorf("账户文件必须命名为 %s", storageStateName)
+			if filepath.Base(absolute) != StorageStateName {
+				return nil, fmt.Errorf("账户文件必须命名为 %s", StorageStateName)
 			}
 			directories = append(directories, filepath.Dir(absolute))
 			continue
 		}
-		if fileExists(filepath.Join(absolute, storageStateName)) || fileExists(filepath.Join(absolute, accountConfigName)) {
+		if fileExists(filepath.Join(absolute, StorageStateName)) || fileExists(filepath.Join(absolute, accountConfigName)) {
 			directories = append(directories, absolute)
 			continue
 		}
@@ -508,7 +523,7 @@ func (s *AccountStore) Load() ([]*Account, error) {
 				continue
 			}
 			directory := filepath.Join(absolute, entry.Name())
-			if fileExists(filepath.Join(directory, storageStateName)) || fileExists(filepath.Join(directory, accountConfigName)) {
+			if fileExists(filepath.Join(directory, StorageStateName)) || fileExists(filepath.Join(directory, accountConfigName)) {
 				directories = append(directories, directory)
 			}
 		}
@@ -569,7 +584,7 @@ func (s *AccountStore) Create(accountConfig AccountConfig, state StorageState) (
 	if err := writeAccountConfig(filepath.Join(temporary, accountConfigName), accountConfig); err != nil {
 		return nil, nil, err
 	}
-	if err := WriteStorageState(filepath.Join(temporary, storageStateName), state); err != nil {
+	if err := WriteStorageState(filepath.Join(temporary, StorageStateName), state); err != nil {
 		return nil, nil, err
 	}
 	directory := filepath.Join(root, id)
@@ -580,7 +595,7 @@ func (s *AccountStore) Create(accountConfig AccountConfig, state StorageState) (
 	account.ID = id
 	account.Directory = directory
 	account.ConfigPath = filepath.Join(directory, accountConfigName)
-	account.StoragePath = filepath.Join(directory, storageStateName)
+	account.StoragePath = filepath.Join(directory, StorageStateName)
 	account.RuntimePath = filepath.Join(directory, runtimeStateName)
 	publishLease, err := acquireAccountPublishLease(account, false)
 	if err != nil {
@@ -1667,18 +1682,61 @@ func (l *AccountLease) SaveConfig(value AccountConfig) error {
 		return err
 	}
 	l.pool.mu.Lock()
-	wasDisabled := l.account.State == AccountDisabled
-	l.account.Config = value
-	if !value.Enabled {
-		l.account.State = AccountDisabled
-		l.account.stateMessage = ""
-	} else if wasDisabled {
-		l.account.State = initialAccountState(value, l.account.StorageState)
-		l.account.stateMessage = ""
-	}
-	l.pool.notifyLocked()
-	l.pool.mu.Unlock()
+	defer l.pool.mu.Unlock()
+	l.pool.applyConfigLocked(l.account, value)
 	return nil
+}
+
+// applyConfigLocked 更新账户配置并按启用状态调整账户状态
+func (p *AccountPool) applyConfigLocked(account *Account, value AccountConfig) {
+	account.Config = value
+	p.applyEnabledLocked(account)
+}
+
+// applyEnabledLocked 按启用状态调整账户状态
+func (p *AccountPool) applyEnabledLocked(account *Account) {
+	if !account.Config.Enabled {
+		account.State = AccountDisabled
+		account.stateMessage = ""
+	} else if account.State == AccountDisabled {
+		account.State = initialAccountState(account.Config, account.StorageState)
+		account.stateMessage = ""
+	}
+	p.notifyLocked()
+}
+
+// SetEnabled 写回账户启用状态并立即生效，不等待账户上的在途请求
+func (p *AccountPool) SetEnabled(accountID string, enabled bool) (*Account, error) {
+	accountID = strings.TrimSpace(accountID)
+	p.mu.Lock()
+	account := p.byID[accountID]
+	p.mu.Unlock()
+	if account == nil {
+		return nil, fmt.Errorf("%w: %s", ErrAccountNotFound, accountID)
+	}
+	account.storageMu.Lock()
+	defer account.storageMu.Unlock()
+	p.mu.Lock()
+	value := account.Config
+	p.mu.Unlock()
+	value.Enabled = enabled
+	if err := writeAccountConfig(account.ConfigPath, value); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account.Config.Enabled = enabled
+	p.applyEnabledLocked(account)
+	return account, nil
+}
+
+// SetTransition记录账户启停的后台收尾阶段，空值表示收尾结束
+func (p *AccountPool) SetTransition(accountID string, transition AccountTransition) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if account := p.byID[strings.TrimSpace(accountID)]; account != nil {
+		account.transition = transition
+	}
 }
 
 // ReloadStorageState 在租约内重新读取认证状态
@@ -2441,6 +2499,9 @@ func (p *AccountPool) Status() []AccountStatus {
 			Cooldowns:   cloneCooldowns(account.runtime.Cooldowns),
 			Message:     message,
 			Directory:   account.Directory,
+
+			Transition:     account.transition,
+			ActiveRequests: account.active,
 		}
 		if !account.LastUsed.IsZero() {
 			status.LastUsed = timePointer(account.LastUsed)
@@ -2885,7 +2946,7 @@ func loadAccount(directory string) (*Account, error) {
 	}
 	id := filepath.Base(directory)
 	configPath := filepath.Join(directory, accountConfigName)
-	storagePath := filepath.Join(directory, storageStateName)
+	storagePath := filepath.Join(directory, StorageStateName)
 	accountConfig, err := readAccountConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("账户 %s: %w", id, err)

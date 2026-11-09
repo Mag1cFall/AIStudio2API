@@ -453,6 +453,7 @@ func (s *server) handleCompactionTrigger(w http.ResponseWriter, r *http.Request,
 				return
 			}
 		}
+		stream.setFrame(writer.progressFrame)
 		if err := writer.emit("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"id": "cmp_" + id, "type": "compaction", "encrypted_content": ""}}); err != nil {
 			return
 		}

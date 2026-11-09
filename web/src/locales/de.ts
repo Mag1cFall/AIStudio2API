@@ -170,6 +170,16 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.refreshedAll': '{count} Konten aktualisiert, {failed} fehlgeschlagen',
   'accounts.refreshingAll': 'Aktualisiere {done}/{total}',
   'accounts.queued': 'Wartet',
+  'accounts.selectAllRows': 'Alle Konten auswählen',
+  'accounts.selectRow': '{name} auswählen',
+  'accounts.selectedCount': '{count} ausgewählt',
+  'accounts.totalCount': '{count} Konten',
+  'accounts.bulk': 'Sammelaktionen',
+  'accounts.bulkEnabled': '{count} Konten aktiviert, {failed} fehlgeschlagen',
+  'accounts.bulkDisabled': '{count} Konten deaktiviert, {failed} fehlgeschlagen',
+  'accounts.draining': 'Wird deaktiviert · Abschluss',
+  'accounts.drainingRequests': 'Wird deaktiviert · {count} Anfragen offen',
+  'accounts.syncing': 'Wird aktiviert · Modelle synchronisieren',
   'accounts.refreshFailed': 'Fehlgeschlagen',
   'accounts.saved': 'Konto gespeichert',
   'accounts.remoteAdd': 'Remote hinzufügen',
@@ -220,8 +230,8 @@ export const messages: Record<TranslationKey, string> = {
   'logs.loadOlder': 'Ältere Protokolle laden ({count})',
   'logs.reasoning': 'Denken',
   'logs.reply': 'Antwort',
-  'logs.outputTotal': 'Ausgabe gesamt',
-  'logs.averageSpeed': 'Durchschnittliche Geschwindigkeit',
+  'logs.outputTotal': 'Ausgabe',
+  'logs.averageSpeed': 'Ø Tempo',
   'logs.firstToken': 'Erstes Token',
   'logs.details': 'Details',
   'logs.endpoint': 'Endpunkt',
@@ -307,11 +317,36 @@ export const messages: Record<TranslationKey, string> = {
   'settings.routingHelp':
     'Reihum wechselt die Konten. „Gleiches Konto bevorzugen“ bleibt bei einem Konto, bis es ausgelastet oder nicht verfügbar ist.',
   'settings.waaBackend': 'WAA-Backend',
-  'settings.waaBackendCamoufox': 'Camoufox-Browser',
+  'settings.waaBackendCamoufox': 'Camoufox',
   'settings.waaBackendSpiderMonkey': 'SpiderMonkey',
   'settings.waaBackendHelp':
     'SpiderMonkey läuft im Dienstprozess ohne Camoufox; die Kontoanmeldung braucht weiterhin einen Browser',
-  'settings.upstreamChannels': 'Upstream-Kanäle',
+  'settings.helpFor': 'Info zu {label}',
+  'settings.section.runtime': 'Laufzeit & Kanäle',
+  'settings.section.models': 'Modelle & Protokolle',
+  'settings.workerCapacity': 'Worker-Kapazität',
+  'settings.workerCapacityHelp':
+    'Die Reglerenden legen vorgewärmte Worker und das Spitzenlimit fest: Vorgewärmte Worker sind die beim Start geladenen Konten, das Spitzenlimit ist die Höchstzahl gleichzeitig laufender Worker. Die Camoufox-Startparallelität gibt an, wie viele Worker gleichzeitig kalt starten; die Parallelität pro Konto, wie viele Anfragen ein Konto gleichzeitig ausführt',
+  'settings.capacitySummary': 'Bis zu {requests} gleichzeitige Anfragen über {accounts} Konten',
+  'settings.accountOrderDrag': '{account} zum Sortieren ziehen',
+  'settings.accountOrderRemove': '{account} entfernen',
+  'settings.accountOrderAdd': 'Bevorzugte Konten hinzufügen',
+  'settings.accountOrderClear': 'Bevorzugte Konten leeren',
+  'settings.accountOrderUnset': 'Nicht festgelegt; Konten werden in ID-Reihenfolge verwendet',
+  'settings.accountOrderRest': 'Die übrigen {count} Konten folgen in ID-Reihenfolge',
+  'settings.authPathAdd': 'Pfad hinzufügen',
+  'settings.authPathBrowse': 'Durchsuchen',
+  'settings.authPathRemove': '{path} entfernen',
+  'settings.authPathRow': 'Pfad {index}',
+  'settings.pathPickerTitle': 'Kontodatei oder Verzeichnis auswählen',
+  'settings.pathPickerRoots': 'Laufwerke',
+  'settings.pathPickerUp': 'Eine Ebene höher',
+  'settings.pathPickerEmpty': 'Hier gibt es keine Verzeichnisse oder Kontostatus-Dateien',
+  'settings.pathPickerSelect': 'Dieses Verzeichnis auswählen',
+  'settings.legacy': 'Veraltet',
+  'settings.buildLegacyNotice':
+    'Der Build-Kanal ist upstream deaktiviert; abgelehnte Anfragen laufen über den Standardkanal',
+  'settings.channelRow': '{channel}-Kanal',
   'settings.upstreamChannelsHelp':
     'Standard ist Playground. Build ist der alte Kanal, dessen Generierung upstream eingestellt ist; aktiviert laufen abgelehnte Anfragen über Playground',
   'settings.modelMapping': 'Modellzuordnung',
@@ -1684,29 +1719,19 @@ export const messages: Record<TranslationKey, string> = {
   'nav.usage': 'Nutzung',
   'common.undo': 'Rückgängig',
   'accounts.deletedNamed': 'Konto {name} gelöscht',
+  'accounts.deletedCount': '{count} Konten gelöscht',
   'logs.body': 'Anfrage- und Antwortinhalt',
   'logs.requestBody': 'Anfrageinhalt',
   'logs.responseBody': 'Antwortinhalt',
   'logs.bodyMissing':
     'Kein Inhalt gespeichert. Aktivieren Sie „Anfrageinhalte speichern“ in den Einstellungen',
   'settings.section.service': 'Dienst',
-  'settings.section.serviceHelp':
-    'Start des Generierungsdienstes, Listen-Adresse und Speicherort der Kontodateien',
   'settings.section.capacity': 'Kapazität',
-  'settings.section.capacityHelp':
-    'Anzahl der Worker, gleichzeitige Kaltstarts und Kontoverteilung',
-  'settings.section.upstream': 'Upstream',
-  'settings.section.upstreamHelp': 'Upstream-Kanäle, WAA-Ausführung und Zeitlimits',
   'settings.section.network': 'Netzwerk',
-  'settings.section.networkHelp':
-    'Standard-Netzwerkausgang für Anmeldung, Import und Kontoanfragen',
   'settings.section.security': 'Sicherheit und Protokollierung',
-  'settings.section.securityHelp':
-    'Konsolenanmeldung, Speicherung von Anfrageinhalten und Protokolldateien',
   'settings.effect.immediate': 'Gilt sofort nach dem Speichern',
   'settings.effect.service': 'Gilt nach dem Neustart des Generierungsdienstes',
   'settings.effect.management': 'Gilt nach einem Neustart der App',
-  'settings.unsavedField': 'Nicht gespeichert',
   'settings.unsavedSection': 'Dieser Bereich enthält nicht gespeicherte Änderungen',
   'settings.unsavedBar': 'Nicht gespeicherte Änderungen',
   'settings.unsavedCount': '{count} nicht gespeicherte Änderungen',
@@ -1749,12 +1774,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.keyDuplicate':
     'Schlüssel {key} steht bereits in der Liste und wurde nicht erneut hinzugefügt',
   'settings.authPathHelp': 'Kontodatei, Verzeichnis oder mehrere durch Kommas getrennte Pfade.',
-  'settings.warmWorkerLimitHelp':
-    'Anzahl der Konten, die nach dem Start des Generierungsdienstes vorgewärmt bereitstehen.',
-  'settings.maxActiveWorkersHelp': 'Maximal gleichzeitig laufende Worker zu Spitzenzeiten',
-  'settings.warmStartupConcurrencyHelp': 'Gleichzeitig kalt startende Camoufox-Worker',
-  'settings.perAccountConcurrencyHelp':
-    'Anzahl der Anfragen, die ein Konto gleichzeitig bearbeitet.',
   'settings.buildNativeHelp': 'Nicht-Streaming-Anfragen nutzen bevorzugt Build, sonst Playground',
   'settings.nonstreamKeepaliveHelp':
     'Sendet beim Warten alle 10 Sekunden einen Zeilenumbruch, damit Reverse-Proxys die Verbindung offen halten',
@@ -1981,8 +2000,6 @@ export const messages: Record<TranslationKey, string> = {
   'theme.dark': 'Dunkel',
   'nav.access': 'Anbindung',
   'section.access.title': 'Anbindung',
-  'section.access.description':
-    'Dienst-URLs und Schlüssel, Client-Einrichtung, Codebeispiele für jede Funktion und alle Endpunkte',
   'access.nav.start': 'Schnellstart',
   'access.nav.clients': 'Clients',
   'access.nav.capabilities': 'Funktionen',
@@ -2030,6 +2047,7 @@ export const messages: Record<TranslationKey, string> = {
   'access.tierHaiku': 'Modell für Haiku',
   'access.importCCSwitch': 'In CC Switch importieren',
   'access.importCherry': 'In Cherry Studio importieren',
+  'access.importMagpie': 'In Magpie importieren',
   'access.importHelp':
     'Die App muss auf diesem Computer installiert sein; den Import in der App bestätigen',
   'access.dockerNote':
@@ -2037,37 +2055,36 @@ export const messages: Record<TranslationKey, string> = {
   'access.client.claude':
     'Terminal-Coding-Agent von Anthropic, angebunden über Anthropic Messages, mit eigenem Modell für die Stufen Opus, Sonnet und Haiku',
   'access.client.codex': 'Terminal-Coding-Agent von OpenAI, angebunden über OpenAI Responses',
-  'access.client.geminiCli': 'Terminal-Agent von Google, angebunden über die Gemini API',
   'access.client.opencode':
-    'Open-Source-Coding-Agent für das Terminal, angebunden als OpenAI-kompatibler Anbieter mit allen Chat-Modellen',
+    'Open-Source-Coding-Agent für das Terminal, mit allen Chat-Modellen in der Konfiguration',
   'access.client.openclaw':
-    'Open-Source-Assistenz-Agent, angebunden als OpenAI-kompatibler Anbieter',
-  'access.client.hermes':
-    'Open-Source-Agent von Nous Research, angebunden als benutzerdefinierter Anbieter',
+    'Open-Source-Assistenz-Agent, angebunden als benutzerdefinierter Anbieter in der Konfiguration',
+  'access.client.magpie':
+    'Modell-Gateway, das die Modelle dieses Dienstes für Claude Code, Codex und weitere Agenten bereitstellt',
   'access.client.pi':
     'Open-Source-Coding-Agent für das Terminal, angebunden als benutzerdefinierter Anbieter in models.json',
-  'access.client.omp':
-    'Erweiterte Version von pi: Chat über die OpenAI-kompatible API, Websuche über die Gemini API',
+  'access.client.omp': 'Erweiterte Version von pi, Websuche über die Gemini API',
   'access.client.dsh':
-    'Terminal-Agent von DeepSeek, mit einem OpenAI-kompatiblen Anbieter aus einer Patch-Datei',
+    'Terminal-Agent von DeepSeek, mit einem benutzerdefinierten Anbieter aus einer Patch-Datei',
   'access.client.cherry':
     'Desktop-KI-Client, der Anbieter vom Typ OpenAI, Gemini oder Anthropic hinzufügt',
   'access.client.sillytavern':
-    'Chat-Frontend für Rollenspiele, mit der Quelle Google AI Studio und einem Reverse-Proxy',
+    'Chat-Frontend für Rollenspiele, mit einer Chat-Completion-Quelle und einem Reverse-Proxy',
   'access.client.openWebui':
     'Selbst gehostete Web-Chat-Oberfläche, mit einer OpenAI-kompatiblen Verbindung',
-  'access.client.lobechat': 'Open-Source-Chat-App, mit einer Proxy-URL beim Anbieter Google',
-  'access.client.newApi': 'API-Gateway und Verteilsystem, mit einem Gemini-Kanal',
+  'access.client.lobechat': 'Open-Source-Chat-App, mit einer Proxy-URL beim passenden Anbieter',
+  'access.client.newApi':
+    'API-Gateway und Verteilsystem, mit einem Kanal für das gewählte Protokoll',
   'access.step.envRun': 'Umgebungsvariablen im Terminal setzen und {name} starten',
-  'access.step.geminiAuth':
-    'Folgendes in die Einstellungsdatei von {name} aufnehmen, um die Authentifizierung per Gemini-API-Schlüssel zu wählen',
   'access.step.settingsFile':
     'Oder Folgendes in die Einstellungsdatei aufnehmen und {name} danach direkt starten',
   'access.step.configFile': 'Folgendes in die Konfigurationsdatei von {name} aufnehmen',
   'access.step.keyRun': 'Schlüsselvariable im Terminal setzen und {name} starten',
-  'access.step.envFile': 'Oder die .env-Datei schreiben und {name} danach direkt starten',
   'access.step.ompSearch': 'In config.yml die Rolle Websuche dem Gemini-Anbieter zuweisen',
   'access.step.patchFile': 'Folgenden Inhalt als Patch-Datei speichern',
+  'access.step.magpieImport': 'Oder im Terminal importieren',
+  'access.step.magpieManual':
+    'Zum manuellen Hinzufügen in {name} unter Providers „Add provider“ und dann „Custom provider“ wählen und diese Felder ausfüllen',
   'access.step.cherry':
     'Unter „Einstellungen → Modelldienst“ einen Anbieter mit den Feldern unten hinzufügen und dann die gewünschten Modelle aus seiner Modellliste hinzufügen',
   'access.step.sillytavern':
@@ -2076,7 +2093,7 @@ export const messages: Record<TranslationKey, string> = {
     'Unter „Admin-Bereich → Einstellungen → Verbindungen“ bei OpenAI API eine Verbindung mit den Feldern unten hinzufügen',
   'access.step.dockerEnv': 'Bei einer Docker-Bereitstellung geht es auch über Umgebungsvariablen',
   'access.step.lobechat':
-    'Unter „Einstellungen → KI-Dienstanbieter → Google“ die Felder unten ausfüllen und den Anbieter aktivieren',
+    'Unter „Einstellungen → KI-Dienstanbieter“ den unten genannten Anbieter öffnen, die Felder ausfüllen und ihn aktivieren',
   'access.step.newApi':
     'Unter „Channels“ auf „Create Channel“ klicken, den Anbieter wählen und die Felder unten ausfüllen',
   'access.field.cherryType': 'Anbietertyp',
@@ -2086,10 +2103,14 @@ export const messages: Record<TranslationKey, string> = {
   'access.field.stSource': 'Quelle für Chat-Vervollständigung',
   'access.field.stUrl': 'Proxy-Server-URL',
   'access.field.stPassword': 'Proxy-Passwort',
-  'access.field.stModel': 'Google-Modell',
+  'access.field.stModel': 'Modell',
   'access.field.webuiKey': 'Schlüssel',
   'access.field.lobeKey': 'API-Schlüssel',
   'access.field.lobeUrl': 'API-Proxy-URL',
+  'access.field.lobeResponses': 'Responses API-Spezifikation verwenden',
+  'access.field.lobeOn': 'An',
+  'access.field.webuiApiType': 'API-Typ',
+  'access.field.webuiResponses': 'Responses',
   'access.field.newapiProvider': 'Provider',
   'access.field.newapiUrl': 'Base URL',
   'access.field.newapiKey': 'API Key',

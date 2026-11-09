@@ -92,7 +92,7 @@ Camoufox 按以下顺序定位，只使用发行目录 `application.ini` 中 `Ve
 3. 可执行文件旁的同名目录
 4. Windows 本机 Camoufox 缓存
 
-版本不符的候选被跳过；都没有时自动下载当前平台的固定版本。下载失败时，错误给出发行包地址与 `runtime/camoufox/` 的绝对路径，手动下载解压到该目录后不再下载。Camoufox 在报告 WebDriver BiDi 端点前退出时，错误带上退出码与 Camoufox 最后 20 行输出；输出含 `cannot open shared object file` 时，错误只写明退出码与 `ldd` 查到的 Camoufox 及其依赖库缺少的全部系统库，Debian 系发行版另附安装这些库与 Xvfb 的 `apt-get satisfy` 命令。没有 `DISPLAY` 且找不到 Xvfb 时，错误同样附上该命令。
+版本不符的候选被跳过；都没有时自动下载当前平台的固定版本。下载失败时，错误给出发行包地址与 `runtime/camoufox/` 的绝对路径，手动下载解压到该目录后不再下载。`CAMOUFOX_PATH` 以外的 Camoufox 在 Windows 上使用前删除 `fonts` 目录中 Twemoji 以外的字体。Camoufox 在报告 WebDriver BiDi 端点前退出时，错误带上退出码与 Camoufox 最后 20 行输出；输出含 `cannot open shared object file` 时，错误只写明退出码与 `ldd` 查到的 Camoufox 及其依赖库缺少的全部系统库，Debian 系发行版另附安装这些库与 Xvfb 的 `apt-get satisfy` 命令。没有 `DISPLAY` 且找不到 Xvfb 时，错误同样附上该命令。
 
 日常启动只需运行二进制或 Go 入口，再从管理页面启动生成服务：
 
@@ -385,7 +385,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 配置 | `GET /api/config`、`PUT /api/config` |
+| 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/paths?path=`（列出服务所在机器的目录与账户状态文件 `storage-state.json`，`path=roots` 列出文件系统根） |
 | 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
 | 用量与正文 | `GET /api/usage`、`GET /api/usage/records`、`GET /api/usage/records.csv`、`GET /api/requests/{id}/body` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |

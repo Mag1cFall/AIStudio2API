@@ -33,6 +33,10 @@ export interface Account {
   message: string
   // pairing_renewed_at 是远程添加的账户最近一次由原电脑续签的时间
   pairing_renewed_at?: string
+  // transition 是账户启停的后台收尾阶段：draining 等待在途请求结束并关闭 Worker，syncing 同步模型目录
+  transition?: 'draining' | 'syncing'
+  // active_requests 是账户上进行中的请求数
+  active_requests: number
 }
 
 interface ProxyPoolEntry {
@@ -327,6 +331,13 @@ export interface FirstEventLatency {
   channel: UpstreamChannel
   samples: number
   p95_ms: number
+}
+
+// PathListing 是路径选择器当前位置的内容，path 为空表示文件系统根列表
+export interface PathListing {
+  path: string
+  parent: string
+  entries: { name: string; path: string; dir: boolean }[]
 }
 
 export interface ServiceConfig {

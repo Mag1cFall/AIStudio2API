@@ -41,12 +41,13 @@ const loading = reactive({
 })
 const errors = reactive({ accounts: '', models: '', requests: '', cooldowns: '', config: '' })
 // pendingDelete 为撤销时限内尚未提交的账户删除
-const pendingDelete = shallowRef<{ account: Account; timer: number } | null>(null)
+const pendingDelete = shallowRef<{ accounts: Account[]; timer: number } | null>(null)
 const deletingAccounts = ref(new Set<string>())
 const visibleAccounts = computed(() =>
   accounts.value.filter(
     (account) =>
-      account.id !== pendingDelete.value?.account.id && !deletingAccounts.value.has(account.id),
+      !pendingDelete.value?.accounts.some((item) => item.id === account.id) &&
+      !deletingAccounts.value.has(account.id),
   ),
 )
 
@@ -160,10 +161,10 @@ async function loadRequestData(): Promise<void> {
   await Promise.all([loadRequests(), loadCooldowns()])
 }
 
-// deleteAccount 隐藏账户并在撤销时限结束后删除，新的删除会先提交上一项
-function deleteAccount(account: Account): void {
+// deleteAccounts 隐藏账户并在撤销时限结束后删除，新的删除会先提交上一批
+function deleteAccounts(accounts: Account[]): void {
   void commitDelete()
-  pendingDelete.value = { account, timer: window.setTimeout(() => void commitDelete(), 6000) }
+  pendingDelete.value = { accounts, timer: window.setTimeout(() => void commitDelete(), 6000) }
 }
 
 // undoDelete 撤销尚未提交的账户删除
@@ -179,16 +180,16 @@ async function commitDelete(keepalive = false): Promise<void> {
   if (pending === null) return
   window.clearTimeout(pending.timer)
   pendingDelete.value = null
-  const id = pending.account.id
-  deletingAccounts.value = new Set(deletingAccounts.value).add(id)
+  const ids = pending.accounts.map((account) => account.id)
+  deletingAccounts.value = new Set([...deletingAccounts.value, ...ids])
+  const results = await Promise.allSettled(ids.map((id) => api.deleteAccount(id, keepalive)))
+  const failed = results.find((result) => result.status === 'rejected')
+  if (failed !== undefined) showNotice(errorText(failed.reason), 'error')
   try {
-    await api.deleteAccount(id, keepalive)
     await loadAccountData()
-  } catch (error) {
-    showNotice(errorText(error), 'error')
   } finally {
     const deleting = new Set(deletingAccounts.value)
-    deleting.delete(id)
+    for (const id of ids) deleting.delete(id)
     deletingAccounts.value = deleting
   }
 }
@@ -368,7 +369,7 @@ export function useConsole() {
     loadAccountData,
     loadRequestData,
     updateAccount,
-    deleteAccount,
+    deleteAccounts,
     undoDelete,
     commitDelete,
     startService,
