@@ -986,6 +986,9 @@ func decodeAssistantFailure(raw json.RawMessage, path string, evidence json.RawM
 			}
 			if quota {
 				failure.StatusCode, failure.Code = http.StatusTooManyRequests, 8
+				if index == 4 {
+					failure.PerUserQuota = true
+				}
 			}
 		}
 	}

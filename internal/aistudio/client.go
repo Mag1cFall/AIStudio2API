@@ -105,12 +105,13 @@ func NewClient(options ClientOptions) *Client {
 
 // RPCError 保存上游状态和协议错误码
 type RPCError struct {
-	Method     string
-	StatusCode int
-	Code       int64
-	Message    string
-	Metadata   map[string]string
-	RetryDelay time.Duration
+	Method       string
+	StatusCode   int
+	Code         int64
+	Message      string
+	Metadata     map[string]string
+	RetryDelay   time.Duration
+	PerUserQuota bool
 }
 
 // ContextOverflow 返回错误是否为上游报告的输入 token 超过模型上限
