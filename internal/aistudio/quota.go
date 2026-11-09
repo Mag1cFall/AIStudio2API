@@ -87,7 +87,7 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		until = now.Add(rpcError.RetryDelay)
 	} else if reset, ok := usageLimitReset(message); ok {
 		until, kind = now.Add(reset), PlanLimitKind
-	} else if kind == "短期限额" && strings.Contains(message, "reached your usage limit") {
+	} else if kind == "短期限额" && (rpcError.PerUserQuota || strings.Contains(message, "reached your usage limit")) {
 		kind, escalate = PlanLimitKind, true
 	}
 	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error(), Escalate: escalate}, true
