@@ -1487,6 +1487,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		if !groups.EarliestCooldown.Until.IsZero() {
+			if fixedAccount {
+				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
+			}
 			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit {
 				if quotaFallback && !selection.IgnoreQuotaCooldown {
@@ -1859,7 +1862,7 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		quotaFallback := !retry.quotaRejected && selection.ResourceID == ""
+		quotaFallback := !retry.quotaRejected && selection.ResourceID == "" && requestedAccountID == ""
 		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
@@ -2217,6 +2220,12 @@ func (service *trackedService) settleAttempt(
 			retryable = false
 		} else {
 			if !until.IsZero() {
+				var rpcFailure *aistudio.RPCError
+				if errors.As(err, &rpcFailure) {
+					if delay := time.Until(until); delay > rpcFailure.RetryDelay {
+						rpcFailure.RetryDelay = delay
+					}
+				}
 				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
