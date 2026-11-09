@@ -54,6 +54,10 @@ export function useSelectOptions(model: Ref<string | number | undefined>) {
   return { options, selectedLabel, selectedKey }
 }
 
+// selectTriggerClass 是下拉框触发器的公共样式
+export const selectTriggerClass =
+  'group flex items-center justify-between gap-2 text-left transition-colors hover:border-gray-600 data-[state=open]:border-blue-500'
+
 // keepPrimarySelect 拦截非左键松开，中键滚动结束时不选中停留项
 export function keepPrimarySelect(event: PointerEvent) {
   if (event.button !== 0) event.stopPropagation()
@@ -81,10 +85,7 @@ const { options, selectedLabel, selectedKey } = useSelectOptions(model)
 
 <template>
   <SelectRoot v-model="selectedKey">
-    <SelectTrigger
-      v-bind="$attrs"
-      class="group flex items-center justify-between gap-2 text-left transition-colors hover:border-gray-600 data-[state=open]:border-blue-500"
-    >
+    <SelectTrigger v-bind="$attrs" :class="selectTriggerClass">
       <span class="min-w-0 flex-1 truncate">{{ selectedLabel }}</span>
       <UiIcon
         name="chevronDown"

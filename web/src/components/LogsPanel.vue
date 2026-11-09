@@ -26,11 +26,20 @@ const source = useQueryText('source', 'ALL')
 const search = useQueryText('q')
 const autoScroll = ref(true)
 const output = ref<HTMLElement>()
-const sourceWidth = ref(224)
+const sourceWidth = ref(136)
 const resizingSource = ref(false)
-const minSourceWidth = 128
-const maxSourceWidth = 512
+const minSourceWidth = 96
+// metricsWidth 是一行放下请求指标所需的消息列宽度，单位 px
+const metricsWidth = 694
+// messageMinWidth 是拖动来源列时保留给消息列的最小宽度，单位 px
+const messageMinWidth = 360
+// maxSourceWidth 返回来源列可拖到的最大宽度：当前日志区宽度减去时间、级别、列间距与消息列保留的宽度
+function maxSourceWidth(): number {
+  return Math.max(minSourceWidth, (output.value?.clientWidth ?? 0) - 200 - messageMinWidth)
+}
 
+// sourceResized 表示来源列宽度已由用户调整
+let sourceResized = false
 let resizeStartX = 0
 let resizeStartWidth = 0
 
@@ -271,13 +280,19 @@ function clock(time: string): string {
 }
 
 function clampSourceWidth(value: number): number {
-  return Math.min(maxSourceWidth, Math.max(minSourceWidth, value))
+  return Math.min(maxSourceWidth(), Math.max(minSourceWidth, value))
+}
+
+// fittedSourceWidth 返回来源列的默认宽度：消息列留够一行指标后的剩余宽度，最多 224 px
+function fittedSourceWidth(): number {
+  return Math.min(224, Math.max(136, (output.value?.clientWidth ?? 0) - 170 - metricsWidth))
 }
 
 function startSourceResize(event: PointerEvent): void {
   if (event.button !== 0) return
   const handle = event.currentTarget as HTMLElement
   handle.setPointerCapture(event.pointerId)
+  sourceResized = true
   resizeStartX = event.clientX
   resizeStartWidth = sourceWidth.value
   resizingSource.value = true
@@ -292,6 +307,7 @@ function moveSourceResize(event: PointerEvent): void {
 function resizeSourceWithKeyboard(event: KeyboardEvent): void {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
   event.preventDefault()
+  sourceResized = true
   sourceWidth.value = clampSourceWidth(sourceWidth.value + (event.key === 'ArrowRight' ? 16 : -16))
 }
 
@@ -310,6 +326,7 @@ watch(autoScroll, (enabled) => {
 })
 onActivated(() => {
   trimmed.value = 0
+  if (!sourceResized) sourceWidth.value = fittedSourceWidth()
   scrollToBottom()
 })
 onUnmounted(() => {
@@ -388,7 +405,6 @@ onUnmounted(() => {
           <span
             class="size-1.5 rounded-full"
             :class="autoScroll ? 'bg-blue-400' : 'bg-gray-600'"
-            aria-hidden="true"
           ></span>
           {{ t('logs.autoScroll') }}
         </button>
@@ -413,7 +429,7 @@ onUnmounted(() => {
           aria-orientation="vertical"
           :aria-label="t('logs.source')"
           :aria-valuemin="minSourceWidth"
-          :aria-valuemax="maxSourceWidth"
+          :aria-valuemax="maxSourceWidth()"
           :aria-valuenow="sourceWidth"
           @pointerdown="startSourceResize"
           @pointermove="moveSourceResize"
@@ -442,9 +458,9 @@ onUnmounted(() => {
           class="log-entry log-grid border-l-2 px-2 py-1 select-text"
           :class="{
             'log-expandable': expandable(row),
-            'border-blue-500 text-gray-300': row.entry.level === 'INFO',
-            'border-yellow-500 bg-yellow-500/5 text-yellow-100': row.entry.level === 'WARN',
-            'border-red-500 bg-red-500/10 text-red-100': row.entry.level === 'ERROR',
+            'border-l-transparent text-gray-300': row.entry.level === 'INFO',
+            'border-l-yellow-500 bg-yellow-500/5 text-yellow-100': row.entry.level === 'WARN',
+            'border-l-red-500 bg-red-500/10 text-red-100': row.entry.level === 'ERROR',
           }"
           @click="toggleRow(row, $event)"
         >
@@ -511,8 +527,8 @@ onUnmounted(() => {
 
 .log-grid {
   display: grid;
-  grid-template-columns: 5rem 3.5rem var(--log-source-width) minmax(0, 1fr);
-  column-gap: 0.75rem;
+  grid-template-columns: 4.5rem 3.5rem var(--log-source-width) minmax(0, 1fr);
+  column-gap: 0.5rem;
   align-items: start;
 }
 
@@ -520,6 +536,10 @@ onUnmounted(() => {
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.log-message {
+  padding-left: 0.5rem;
 }
 
 .log-source {
@@ -533,7 +553,7 @@ onUnmounted(() => {
   z-index: 10;
   top: 0;
   bottom: 0;
-  left: calc(10.5rem + var(--log-source-width) + 2px);
+  left: calc(9.5rem + var(--log-source-width) + 2px);
   width: 0.75rem;
   cursor: col-resize;
   overflow-anchor: none;

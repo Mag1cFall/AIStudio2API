@@ -2102,7 +2102,7 @@ func (service *trackedService) runAttempt(
 			UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies, bool) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
 		}).UploadInlineMediaToLease(ctx, lease, request.Contents, attempt.copies, inlineImages)
 		if err == nil {
-			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 				"内联附件处理完成 | 附件=%d | 原始=%dB | 耗时=%s",
 				mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
 			))

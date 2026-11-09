@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { capabilities, chatModel } from '@/access/capabilities'
-import { clients, type CherryType, type Client, type Shell } from '@/access/clients'
+import { clients, protocolNames, type Client, type Protocol, type Shell } from '@/access/clients'
 import {
   bodyFields,
   endpointAuth,
@@ -81,7 +81,7 @@ watch(keys, (list) => {
 })
 // rowClass 是地址、密钥与客户端字段列表一行的布局：内容列窄时字段名单独一行，宽时三列
 const rowClass =
-  'grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5 pr-1.5 pl-3 @lg:grid-cols-[10rem_minmax(0,1fr)_auto]'
+  'grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5 @lg:grid-cols-[10rem_minmax(0,1fr)_auto]'
 
 // revealClass 是显示与隐藏密钥按钮的样式
 const revealClass =
@@ -219,7 +219,7 @@ const clientID = useQueryParam(
   clients[0]!.id,
 )
 const client = computed(() => clients.find((item) => item.id === clientID.value)!)
-// clientGroups 是客户端选择网格的各组
+// clientGroups 是客户端选择列表的各组
 const clientGroups = computed(() =>
   groups.map((group) => ({
     label: t(group.label),
@@ -239,13 +239,15 @@ watch(
   },
   { immediate: true },
 )
-const cherry = ref<CherryType>('openai')
-// cherryTypes 是 Cherry Studio 的接口类型选项
-const cherryTypes: { value: CherryType; label: string }[] = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'anthropic', label: 'Anthropic' },
-]
+// selectedProtocols 是各客户端已选的接入协议
+const selectedProtocols = reactive<Record<string, Protocol>>({})
+// clientProtocol 是当前客户端的接入协议，未选择时为该客户端的第一个协议
+const clientProtocol = computed<Protocol>({
+  get: () => selectedProtocols[client.value.id] ?? client.value.protocols[0]!,
+  set: (value) => {
+    selectedProtocols[client.value.id] = value
+  },
+})
 // tierLabels 是 Claude Code 三档模型的选择框名称
 const tierLabels: { tier: keyof typeof tiers; label: TranslationKey }[] = [
   { tier: 'opus', label: 'access.tierOpus' },
@@ -266,7 +268,7 @@ const clientInput = computed(() => ({
   models: chatModels.value,
   catalog: props.models,
   shell: shell.value,
-  cherry: cherry.value,
+  protocol: clientProtocol.value,
   t,
 }))
 const steps = computed(() => client.value.steps(clientInput.value))
@@ -393,7 +395,6 @@ function methodClass(method: string): string {
   <section class="flex min-h-0 flex-1 flex-col">
     <header class="page-x overflow-hidden border-b border-line py-4 [scrollbar-gutter:stable]">
       <h2 class="text-xl font-semibold text-white">{{ t('section.access.title') }}</h2>
-      <p class="mt-1 text-sm text-gray-500">{{ t('section.access.description') }}</p>
     </header>
 
     <div class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]">
@@ -425,10 +426,10 @@ function methodClass(method: string): string {
           <p class="mt-1 mb-5 text-sm text-gray-500">{{ t(current.description) }}</p>
 
           <template v-if="section === 'start'">
-            <article class="rounded-lg border border-line bg-panel p-4">
+            <article>
               <h4 class="text-sm font-semibold text-gray-200">{{ t('access.baseUrls') }}</h4>
               <p class="mt-1 text-xs text-gray-500">{{ t('access.baseUrlsHelp') }}</p>
-              <ul class="mt-3 divide-y divide-line/60 rounded-md border border-line">
+              <ul class="mt-3 divide-y divide-line/60 border-y border-line/60">
                 <li v-for="item in baseUrls" :key="item.name" :class="rowClass">
                   <div class="col-span-2 @lg:col-span-1">
                     <div class="text-sm text-gray-200">{{ item.name }}</div>
@@ -476,11 +477,12 @@ function methodClass(method: string): string {
                 </li>
               </ul>
               <p class="mt-2 text-xs text-gray-500">{{ t('access.keyHelp') }}</p>
-              <div
-                v-if="config !== null && keys.length === 0"
-                class="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200"
-              >
-                <p>{{ t('access.keyNone') }}</p>
+              <div v-if="config !== null && keys.length === 0" class="mt-3 text-sm text-amber-200">
+                <p class="flex items-start gap-2">
+                  <UiIcon name="warning" :size="15" class="mt-0.5 shrink-0" />{{
+                    t('access.keyNone')
+                  }}
+                </p>
                 <button
                   type="button"
                   class="mt-2 text-sm font-medium text-blue-400 hover:text-blue-300"
@@ -491,7 +493,7 @@ function methodClass(method: string): string {
               </div>
             </article>
 
-            <article class="mt-4 rounded-lg border border-line bg-panel p-4">
+            <article class="mt-8">
               <div class="flex flex-wrap items-center gap-3">
                 <div class="min-w-60 flex-1">
                   <h4 class="text-sm font-semibold text-gray-200">{{ t('access.env') }}</h4>
@@ -528,7 +530,7 @@ function methodClass(method: string): string {
               />
             </article>
 
-            <article class="mt-4 rounded-lg border border-line bg-panel p-4">
+            <article class="mt-8">
               <h4 class="text-sm font-semibold text-gray-200">{{ t('access.test') }}</h4>
               <p class="mt-1 text-xs text-gray-500">{{ t('access.testHelp') }}</p>
               <div class="mt-3 flex flex-wrap items-center gap-2">
@@ -553,22 +555,21 @@ function methodClass(method: string): string {
                   {{ t('access.testRun') }}
                 </button>
               </div>
-              <ul v-if="results.length > 0" class="mt-3 space-y-1.5" aria-live="polite">
+              <ul
+                v-if="results.length > 0"
+                class="mt-3 divide-y divide-line/60 border-y border-line/60"
+                aria-live="polite"
+              >
                 <li
                   v-for="item in results"
                   :key="item.request"
-                  class="flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-                  :class="
-                    item.ok
-                      ? 'border-green-500/30 bg-green-500/5'
-                      : 'border-red-500/40 bg-red-500/10'
-                  "
+                  class="flex items-start gap-2 py-2 text-sm"
                 >
                   <UiIcon
                     :name="item.ok ? 'success' : 'warning'"
                     :size="15"
                     class="mt-0.5"
-                    :class="item.ok ? 'text-green-400' : 'text-red-400'"
+                    :class="item.ok ? 'text-gray-400' : 'text-red-400'"
                   />
                   <code class="shrink-0 font-mono text-xs leading-5 text-gray-400">{{
                     item.request
@@ -587,10 +588,42 @@ function methodClass(method: string): string {
           </template>
 
           <template v-else-if="section === 'clients'">
-            <ChoiceGrid :groups="clientGroups" :selected="clientID" @select="clientID = $event" />
+            <div class="space-y-1.5">
+              <div
+                v-for="group in clientGroups"
+                :key="group.label"
+                class="grid gap-x-3 gap-y-1 @lg:grid-cols-[5.5rem_minmax(0,1fr)]"
+                role="group"
+                :aria-label="group.label"
+              >
+                <div class="text-xs leading-8 text-gray-500">{{ group.label }}</div>
+                <div class="flex flex-wrap gap-1">
+                  <button
+                    v-for="item in group.items"
+                    :key="item.id"
+                    type="button"
+                    class="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] whitespace-nowrap transition-colors"
+                    :class="
+                      clientID === item.id
+                        ? 'bg-raised text-white'
+                        : 'text-gray-400 hover:bg-raised/60 hover:text-gray-200'
+                    "
+                    :aria-pressed="clientID === item.id"
+                    @click="clientID = item.id"
+                  >
+                    <span
+                      class="choice-svg flex h-4 w-4 shrink-0 items-center justify-center text-base"
+                      aria-hidden="true"
+                      v-html="item.svg"
+                    ></span>
+                    {{ item.label }}
+                  </button>
+                </div>
+              </div>
+            </div>
 
-            <article class="mt-5 rounded-lg border border-line bg-panel">
-              <div class="flex flex-wrap items-start gap-3 border-b border-line p-4">
+            <article class="mt-5 border-t border-line">
+              <div class="flex flex-wrap items-start gap-3 border-b border-line/60 py-4">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
                     <span
@@ -599,10 +632,9 @@ function methodClass(method: string): string {
                       v-html="client.icon"
                     ></span>
                     <h4 class="text-base font-semibold text-white">{{ client.name }}</h4>
-                    <span
-                      class="rounded border border-line px-1.5 py-0.5 font-mono text-xs text-gray-400"
-                      >{{ client.protocol }}</span
-                    >
+                    <span class="text-xs text-gray-500">{{
+                      client.protocols.map((item) => protocolNames[item]).join(' · ')
+                    }}</span>
                   </div>
                   <p class="mt-1 text-sm text-gray-400">{{ t(client.summary) }}</p>
                 </div>
@@ -617,7 +649,7 @@ function methodClass(method: string): string {
                 </a>
               </div>
 
-              <div class="flex flex-wrap items-end gap-3 border-b border-line p-4">
+              <div class="flex flex-wrap items-end gap-3 border-b border-line/60 py-4">
                 <label v-if="!client.noModel" class="flex min-w-0 flex-col gap-1">
                   <span class="text-xs text-gray-500">{{ t('access.model') }}</span>
                   <UiSelect
@@ -650,15 +682,18 @@ function methodClass(method: string): string {
                     </UiSelect>
                   </label>
                 </template>
-                <label v-if="client.cherry" class="flex min-w-0 flex-col gap-1">
-                  <span class="text-xs text-gray-500">{{ t('access.field.cherryType') }}</span>
+                <label
+                  v-if="client.protocols.length > 1 && !client.importsAll"
+                  class="flex min-w-0 flex-col gap-1"
+                >
+                  <span class="text-xs text-gray-500">{{ t('access.protocol') }}</span>
                   <UiSelect
-                    v-model="cherry"
-                    class="w-40 rounded border border-line bg-canvas px-3 py-2 text-sm text-gray-300"
-                    :aria-label="t('access.field.cherryType')"
+                    v-model="clientProtocol"
+                    class="w-64 max-w-full rounded border border-line bg-canvas px-3 py-2 text-sm text-gray-300"
+                    :aria-label="t('access.protocol')"
                   >
-                    <option v-for="item in cherryTypes" :key="item.value" :value="item.value">
-                      {{ item.label }}
+                    <option v-for="item in client.protocols" :key="item" :value="item">
+                      {{ protocolNames[item] }}
                     </option>
                   </UiSelect>
                 </label>
@@ -696,7 +731,7 @@ function methodClass(method: string): string {
                 </button>
               </div>
 
-              <div class="space-y-5 p-4">
+              <div class="space-y-5 py-4">
                 <div v-if="links.length > 0" class="flex flex-wrap items-center gap-3">
                   <a
                     v-for="link in links"
@@ -709,18 +744,14 @@ function methodClass(method: string): string {
                   </a>
                   <span class="text-xs text-gray-500">{{ t('access.importHelp') }}</span>
                 </div>
-                <p
-                  v-if="client.docker && loopback"
-                  class="rounded-md border border-line bg-canvas p-3 text-xs text-gray-400"
-                >
+                <p v-if="client.docker && loopback" class="text-xs text-gray-500">
                   {{ t('access.dockerNote').replace('{name}', client.name) }}
                 </p>
                 <ol class="space-y-5">
                   <li v-for="(step, index) in steps" :key="index" class="flex gap-3">
-                    <span
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-medium text-gray-300 tabular-nums"
-                      >{{ index + 1 }}</span
-                    >
+                    <span class="w-4 shrink-0 text-right text-sm text-gray-500 tabular-nums">{{
+                      index + 1
+                    }}</span>
                     <div class="min-w-0 flex-1">
                       <p class="mb-2 text-sm text-gray-300">
                         {{ t(step.text).replace('{name}', client.name) }}
@@ -735,7 +766,7 @@ function methodClass(method: string): string {
                           t(shell === 'windows' ? 'access.shellWindows' : 'access.shellUnix')
                         "
                       />
-                      <dl v-else class="divide-y divide-line/60 rounded-md border border-line">
+                      <dl v-else class="divide-y divide-line/60 border-y border-line/60">
                         <div v-for="field in step.fields" :key="field.label" :class="rowClass">
                           <dt class="col-span-2 text-xs text-gray-500 @lg:col-span-1">
                             {{ field.label }}

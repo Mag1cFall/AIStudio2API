@@ -34,6 +34,16 @@ type runtimeAdmin struct {
 	config      config.Config
 	proxies     *aistudio.ProxyPool
 	globalProxy string
+
+	transitionMu sync.Mutex
+	// transitions 是各账户进行中的启停后台收尾
+	transitions map[string]*accountTransition
+}
+
+// accountTransition 是一次进行中的账户启停后台收尾
+type accountTransition struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type adminOperationError struct {
@@ -487,6 +497,15 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	if err := accountConfig.Validate(); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
+	current, err := admin.account(accountID)
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	if current.Enabled != accountConfig.Enabled && current.Proxy == accountConfig.Proxy &&
+		current.Locale == accountConfig.Locale && current.Timezone == accountConfig.Timezone {
+		return admin.setAccountEnabled(accountID, accountConfig.Enabled)
+	}
+	admin.cancelTransition(accountID)
 	lease, err := admin.pool.AcquireAccount(ctx, accountID)
 	if err != nil {
 		return api.AdminAccount{}, accountOperationError(err)
@@ -522,7 +541,92 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	return admin.account(account.ID)
 }
 
+// setAccountEnabled 立即保存账户启用状态并返回，等待在途请求、关闭 Worker 与同步模型目录转入后台，阶段显示在账户状态上
+func (admin *runtimeAdmin) setAccountEnabled(accountID string, enabled bool) (api.AdminAccount, error) {
+	admin.cancelTransition(accountID)
+	var account *aistudio.Account
+	if err := admin.service.changeModels(func() (err error) {
+		account, err = admin.pool.SetEnabled(accountID, enabled)
+		return err
+	}); err != nil {
+		return api.AdminAccount{}, accountOperationError(err)
+	}
+	stage := aistudio.AccountDraining
+	if enabled {
+		stage = aistudio.AccountSyncing
+	}
+	admin.pool.SetTransition(accountID, stage)
+	ctx, cancel := context.WithCancel(admin.lifecycle)
+	transition := &accountTransition{cancel: cancel, done: make(chan struct{})}
+	admin.transitionMu.Lock()
+	if admin.transitions == nil {
+		admin.transitions = make(map[string]*accountTransition)
+	}
+	admin.transitions[accountID] = transition
+	admin.transitionMu.Unlock()
+	go func() {
+		defer close(transition.done)
+		defer cancel()
+		if enabled {
+			admin.finishEnable(ctx, account)
+		} else {
+			admin.finishDisable(ctx, account)
+		}
+		admin.pool.SetTransition(accountID, "")
+		admin.transitionMu.Lock()
+		if admin.transitions[accountID] == transition {
+			delete(admin.transitions, accountID)
+		}
+		admin.transitionMu.Unlock()
+		status, _ := admin.Status(admin.lifecycle)
+		admin.publishRuntimeSnapshot(admin.lifecycle, status)
+	}()
+	admin.requests.log("auth", "INFO", "账户配置已更新 | 账户="+account.Config.Label)
+	status, _ := admin.Status(admin.lifecycle)
+	admin.publishRuntimeSnapshot(admin.lifecycle, status)
+	return admin.account(accountID)
+}
+
+// finishDisable 等账户在途请求结束后关闭 Worker 并刷新目录
+func (admin *runtimeAdmin) finishDisable(ctx context.Context, account *aistudio.Account) {
+	lease, err := admin.pool.AcquireAccount(ctx, account.ID)
+	if err != nil {
+		if ctx.Err() == nil {
+			admin.requests.log("auth", "ERROR", fmt.Sprintf("账户停用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+		}
+		return
+	}
+	if err := errors.Join(admin.workers.Reset(account.ID), lease.Release()); err != nil {
+		admin.requests.log("auth", "ERROR", fmt.Sprintf("账户停用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+	}
+	admin.syncModelCache()
+}
+
+// finishEnable 为启用的账户分配代理池出口、刷新目录并同步账户模型目录
+func (admin *runtimeAdmin) finishEnable(ctx context.Context, account *aistudio.Account) {
+	if strings.TrimSpace(account.Config.Proxy) == "" && !admin.proxies.Available(account.PoolProxy("")) {
+		account.SetPoolProxy(admin.proxies.Next())
+	}
+	if _, err := admin.proxies.Assign(); err != nil {
+		admin.requests.log("auth", "ERROR", fmt.Sprintf("账户启用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+	}
+	admin.syncModelCache()
+	admin.syncAccountModelCatalog(ctx, account)
+}
+
+// cancelTransition 取消账户进行中的启停后台收尾并等待它结束
+func (admin *runtimeAdmin) cancelTransition(accountID string) {
+	admin.transitionMu.Lock()
+	transition := admin.transitions[accountID]
+	admin.transitionMu.Unlock()
+	if transition != nil {
+		transition.cancel()
+		<-transition.done
+	}
+}
+
 func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
+	admin.cancelTransition(accountID)
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
@@ -837,6 +941,7 @@ func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
 		Proxy: status.Proxy, Egress: status.Egress, Locale: status.Locale, Timezone: status.Timezone,
 		Models: status.Models, BenefitTier: status.BenefitTier, Message: status.Message,
 		PairingRenewedAt: pairingRenewedAt(status.Directory),
+		Transition:       string(status.Transition), ActiveRequests: status.ActiveRequests,
 	}
 }
 

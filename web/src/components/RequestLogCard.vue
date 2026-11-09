@@ -234,7 +234,7 @@ const bodyParts = computed(() =>
             @click="jsonOpen = !jsonOpen"
           >
             <DisclosureChevron class="request-disclosure-icon" :open="jsonOpen"
-              ><UiIcon name="chevronRight" :size="12"
+              ><UiIcon name="chevronRight" :size="13"
             /></DisclosureChevron>
             JSON
           </button>
@@ -253,7 +253,7 @@ const bodyParts = computed(() =>
             @click="toggleBody"
           >
             <DisclosureChevron class="request-disclosure-icon" :open="bodyOpen"
-              ><UiIcon name="chevronRight" :size="12"
+              ><UiIcon name="chevronRight" :size="13"
             /></DisclosureChevron>
             {{ t('logs.body') }}
           </button>
@@ -334,13 +334,13 @@ const bodyParts = computed(() =>
   overflow-wrap: anywhere;
 }
 .tool-count {
-  color: var(--color-blue-300);
+  color: var(--color-gray-400);
   font-size: 13px;
 }
 .request-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 18px;
+  gap: 2px 14px;
   margin-top: 2px;
   color: var(--color-gray-400);
   font-size: 13px;

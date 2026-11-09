@@ -75,7 +75,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: By default, SpiderMonkey (the Firefox JavaScript engine) generates the official proof inside the service process and no browser is downloaded or launched at runtime; with `WAA_BACKEND=camoufox`, Camoufox holds the official WAA lifecycle
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items, and Anthropic Messages supports `context_management` tool-result and thinking clearing and threshold compaction
-- **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, dsh, OpenClaw, and Hermes, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
+- **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, dsh, OpenClaw, and Magpie, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
 
 ## Features
 

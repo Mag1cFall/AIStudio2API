@@ -73,6 +73,8 @@ type Worker struct {
 	frameBoosts int
 	// idle 在最后一次界面操作 idleMinimizeDelay 后发出 memory-pressure，由 frameMu 保护
 	idle *time.Timer
+	// settle 在 Worker 就绪 readyMinimizeDelay 后发出一次 memory-pressure
+	settle *time.Timer
 }
 
 // tabUse 是一个标签页中进行中的受保护请求数，retired 表示该标签页已被重新载入的页面替换
@@ -129,6 +131,7 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 			return nil, fmt.Errorf("停止 Camoufox 标签页绘制: %w", err)
 		}
 		worker.idle = time.AfterFunc(idleMinimizeDelay, worker.minimizeMemory)
+		worker.settle = time.AfterFunc(readyMinimizeDelay, worker.minimizeMemory)
 	}
 	failed = false
 	return worker, nil
@@ -136,6 +139,9 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 
 // browserStartupTimeout 为 Camoufox 完成启动并响应 session.new 的最长等待
 const browserStartupTimeout = 30 * time.Second
+
+// pageImageTimeout 为页面载入等待官方 WAA 程序图片请求结束的上限，到期后页面照常就绪
+const pageImageTimeout = 30 * time.Second
 
 // pageReleaseTimeout 为页面载入结束后移除载入期间 BiDi 资源的期限
 const pageReleaseTimeout = 10 * time.Second
@@ -241,6 +247,9 @@ var idleRenderingExpression = fmt.Sprintf("Services.prefs.setIntPref('gfx.displa
 
 // idleMinimizeDelay 为无头 Worker 最后一次界面操作后发出 memory-pressure 的空闲时长，与 SpiderMonkey 后端的空闲收缩 GC 相同
 const idleMinimizeDelay = 5 * time.Minute
+
+// readyMinimizeDelay 为无头 Worker 就绪后发出一次 memory-pressure 的延迟，回收浏览器启动与首次载入留下的渲染目标与 GC 垃圾
+const readyMinimizeDelay = 2 * time.Second
 
 // minimizeMemory 在没有进行中的界面操作时发出 memory-pressure heap-minimize，各进程回收 GC 堆与软件 WebRender 的渲染缓存
 func (worker *Worker) minimizeMemory() {
@@ -577,6 +586,7 @@ func (worker *Worker) Close() error {
 	worker.mu.Unlock()
 	if worker.idle != nil {
 		worker.idle.Stop()
+		worker.settle.Stop()
 	}
 	if client != nil && connection != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -654,7 +664,7 @@ type loadedPage struct {
 	catalog PageCatalog
 }
 
-// openPage 在 contextID 标签页中按官网冷启动载入新对话页：preload 在官网 WAA service 首次取请求头时交出该实例，页面载入期间记下目录 RPC 响应与第一个带 x-aistudio-visit-id 的 MakerSuite 请求的公共头，等官方 WAA 程序的图片请求完成后返回页面对象
+// openPage 在 contextID 标签页中按官网冷启动载入新对话页：preload 在官网 WAA service 首次取请求头时交出该实例，页面载入期间记下目录 RPC 响应与第一个带 x-aistudio-visit-id 的 MakerSuite 请求的公共头，等官方 WAA 程序的图片请求结束或到达上限后返回页面对象
 func (worker *Worker) openPage(ctx context.Context, options Options, contextID string) (loadedPage, error) {
 	client := worker.client
 	serviceChannel := rand.Text()
@@ -691,7 +701,7 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 		if subscribed {
 			removals = append(removals, func() error {
 				_, err := client.command(releaseCtx, "session.unsubscribe", map[string]any{
-					"events":   []string{"network.beforeRequestSent", "network.responseCompleted"},
+					"events":   []string{"network.beforeRequestSent", "network.responseCompleted", "network.fetchError"},
 					"contexts": []string{contextID},
 				})
 				return err
@@ -708,7 +718,7 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 	if err := parallel(
 		func() error {
 			_, err := client.command(ctx, "session.subscribe", map[string]any{
-				"events":   []string{"browsingContext.navigationStarted", "script.message", "network.beforeRequestSent", "network.responseCompleted"},
+				"events":   []string{"browsingContext.navigationStarted", "script.message", "network.beforeRequestSent", "network.responseCompleted", "network.fetchError"},
 				"contexts": []string{contextID},
 			})
 			subscribed = err == nil
@@ -800,8 +810,11 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 		return loadedPage{}, err
 	}
 	options.reportStartup(StartupBootstrappingWAA)
-	if err := client.waitLoad(ctx, contextID, 60*time.Second, "完成官方 WAA 程序的图片请求", func(load *pageLoad) bool { return load.image }); err != nil {
-		return loadedPage{}, err
+	if err := client.waitLoad(ctx, contextID, pageImageTimeout, "完成官方 WAA 程序的图片请求", func(load *pageLoad) bool { return load.image }); err != nil {
+		if ctx.Err() != nil {
+			return loadedPage{}, err
+		}
+		slog.Warn("官方 WAA 程序的图片请求没有结束，继续载入页面", "error", err)
 	}
 	client.mu.Lock()
 	observed := client.loads[contextID].headers
@@ -809,7 +822,7 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 	if err := release(); err != nil {
 		return loadedPage{}, err
 	}
-	if err := dismissKnownOverlays(ctx, client, contextID); err != nil {
+	if _, err := dismissKnownOverlays(ctx, client, contextID); err != nil {
 		return loadedPage{}, err
 	}
 	page, err := client.callFunctionHandle(ctx, contextID, pageObjectFunction, pageHandle(service))

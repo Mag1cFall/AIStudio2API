@@ -14,6 +14,7 @@ import type {
   FirstEventLatency,
   ChromeImportProfile,
   PairingToken,
+  PathListing,
   Model,
   PromptInput,
   PromptSummary,
@@ -195,6 +196,7 @@ export const api = {
     ).task,
   loginViewURL: (view: string) =>
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/login-view/${encodeURIComponent(view)}`,
+  paths: (path: string) => requestJSON<PathListing>(`/api/paths?path=${encodeURIComponent(path)}`),
   refreshAccount: (id: string) =>
     requestJSON<AccountRefresh>(`/api/accounts/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',

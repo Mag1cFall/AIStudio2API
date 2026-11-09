@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowDownRight,
+  ArrowUp,
   ArrowUpRight,
   Boxes,
   Cable,
@@ -13,12 +14,15 @@ import {
   ChevronRight,
   CircleCheck,
   CircleDollarSign,
+  CircleHelp,
   Coins,
   Columns3,
   Cookie,
   Copy,
   Download,
+  Folder,
   Gauge,
+  GripVertical,
   Inbox,
   KeyRound,
   Languages,
@@ -144,6 +148,11 @@ export const icons = {
   live: Radio,
   agent: Bot,
   file: FileText,
+  folder: Folder,
+  help: CircleHelp,
+  arrowUp: ArrowUp,
+  grip: GripVertical,
+  boxes: Boxes,
 } as const
 
 // IconName 是界面可用的图标语义名

@@ -10,7 +10,7 @@ defineProps<{ id: string }>()
     role="switch"
     :aria-checked="model"
     :data-state="model ? 'checked' : 'unchecked'"
-    class="group relative flex h-[18px] w-8 shrink-0 items-center rounded-full bg-line-strong transition-colors duration-150 hover:bg-gray-600 data-[state=checked]:bg-blue-600 data-[state=checked]:hover:bg-blue-500 md:ms-auto md:mt-px"
+    class="group relative flex h-[18px] w-8 shrink-0 items-center rounded-full bg-line-strong transition-colors duration-150 hover:bg-gray-600 disabled:cursor-default disabled:opacity-50 data-[state=checked]:bg-blue-600 data-[state=checked]:hover:bg-blue-500 md:ms-auto md:mt-px"
     @click="model = !model"
   >
     <span
