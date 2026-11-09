@@ -1793,12 +1793,31 @@ func (stream *geminiStream) close() {
 
 // streamGemini 按到达顺序输出各候选的增量块，带结束原因的上游帧中的内容与全部候选的终止原因、来源和用量之和放在最后一块
 func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, candidates *chatChoices, output geminiOutputOptions) {
-	stream, err := openGeminiStream(w, r)
-	if err != nil {
-		return
+	var (
+		streamMu sync.Mutex
+		stream   *geminiStream
+	)
+	defer func() {
+		streamMu.Lock()
+		if stream != nil {
+			stream.close()
+		}
+		streamMu.Unlock()
+	}()
+	write := func(value map[string]any) error {
+		streamMu.Lock()
+		if stream == nil {
+			var openErr error
+			stream, openErr = openGeminiStream(w, r)
+			if openErr != nil {
+				streamMu.Unlock()
+				return openErr
+			}
+		}
+		s := stream
+		streamMu.Unlock()
+		return s.write(value)
 	}
-	defer stream.close()
-	write := stream.write
 	finalParts := make([][]any, len(candidates.events))
 	results, err := candidates.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		send := func(event aistudio.Event) error {
@@ -1854,6 +1873,13 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 	if err != nil {
 		candidates.settle(r.Context())
 		if !shouldWriteRequestError(r, err) {
+			return
+		}
+		streamMu.Lock()
+		opened := stream != nil
+		streamMu.Unlock()
+		if !opened {
+			writeGeminiFailure(w, r, request, err, true)
 			return
 		}
 		if response, ok := geminiPromptFeedback(request, err); ok {
