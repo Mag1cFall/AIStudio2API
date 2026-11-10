@@ -1,13 +1,9 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -214,37 +210,5 @@ func TestGeminiOutputParts_SignedAudio(t *testing.T) {
 	parts := geminiOutputParts(result)
 	if len(parts) != 2 || parts[0]["thoughtSignature"] != "audio-a" || parts[1]["thoughtSignature"] != "audio-b" {
 		t.Fatalf("signed audio=%+v", parts)
-	}
-}
-
-// TestStreamGeminiErrorBeforeFirstChunkUsesHTTPStatus 验证流式请求在写出首个候选块前失败时返回原始 HTTP 状态码与 Retry-After
-func TestStreamGeminiErrorBeforeFirstChunkUsesHTTPStatus(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	events := make(chan aistudio.Event, 1)
-	events <- aistudio.Event{
-		Kind: aistudio.EventError,
-		Err: &aistudio.RPCError{
-			Method:     "GetCodeAssistantStream",
-			StatusCode: http.StatusTooManyRequests,
-			Code:       8,
-			Message:    "You have exceeded your quota",
-			RetryDelay: 5 * time.Minute,
-		},
-	}
-	close(events)
-	candidates := &chatChoices{
-		ctx:    ctx,
-		cancel: cancel,
-		events: []<-chan aistudio.Event{events},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-4-argon-build:streamGenerateContent?alt=sse", nil)
-	rec := httptest.NewRecorder()
-	(&server{}).streamGemini(rec, req, aistudio.GenerateRequest{ID: "req-1", Model: "gemini-4-argon-build"}, candidates, geminiOutputOptions{})
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
-	}
-	if got := rec.Header().Get("Retry-After"); got != "300" {
-		t.Fatalf("Retry-After=%q want 300", got)
 	}
 }

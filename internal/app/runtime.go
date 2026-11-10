@@ -1487,9 +1487,6 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		if !groups.EarliestCooldown.Until.IsZero() {
-			if fixedAccount {
-				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
-			}
 			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit {
 				if quotaFallback && !selection.IgnoreQuotaCooldown {
@@ -1862,7 +1859,7 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		quotaFallback := !retry.quotaRejected && selection.ResourceID == "" && requestedAccountID == ""
+		quotaFallback := !retry.quotaRejected && selection.ResourceID == ""
 		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
@@ -2164,6 +2161,25 @@ func (service *trackedService) runAttempt(
 	attempt.err = err
 }
 
+// quotaCooldownError 是带账户冷却恢复时刻的额度失败
+type quotaCooldownError struct {
+	err   error
+	until time.Time
+}
+
+func (err *quotaCooldownError) Error() string {
+	return err.err.Error()
+}
+
+func (err *quotaCooldownError) Unwrap() error {
+	return err.err
+}
+
+// RetryAt 返回账户冷却的恢复时刻
+func (err *quotaCooldownError) RetryAt(time.Time) time.Time {
+	return err.until
+}
+
 // settleAttempt 处理失败的尝试：记录访问日志与冷却，释放租约，mayRecover 为真时按需重建 Worker
 func (service *trackedService) settleAttempt(
 	requestCtx context.Context,
@@ -2220,12 +2236,7 @@ func (service *trackedService) settleAttempt(
 			retryable = false
 		} else {
 			if !until.IsZero() {
-				var rpcFailure *aistudio.RPCError
-				if errors.As(err, &rpcFailure) {
-					if delay := time.Until(until); delay > rpcFailure.RetryDelay {
-						rpcFailure.RetryDelay = delay
-					}
-				}
+				err = &quotaCooldownError{err: err, until: until}
 				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
