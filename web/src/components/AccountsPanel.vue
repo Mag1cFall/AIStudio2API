@@ -688,11 +688,11 @@ function browserSummary(browser: CookieBrowser): string {
   )
 }
 
-// scanBrowsers 查找本机调试浏览器，默认勾选可导入的账户
+// scanBrowsers 查找本机调试浏览器并经对话框里的代理识别账户，默认勾选可导入的账户
 async function scanBrowsers(): Promise<void> {
   scanningBrowsers.value = true
   try {
-    cookieBrowsers.value = await api.cookieBrowsers()
+    cookieBrowsers.value = await api.cookieBrowsers(accountEnvironment.proxy)
     selectedBrowsers.value = cookieBrowsers.value
       .filter((browser) => browser.email !== '' && !browser.imported && browser.error === '')
       .map((browser) => browserKey(browser))

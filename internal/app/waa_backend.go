@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
@@ -17,14 +16,14 @@ func prepareWAABackend(ctx context.Context, cfg config.Config, requests *request
 	removeStaleCamoufoxProfiles(requests)
 	if cfg.WAABackend == config.WAABackendSpiderMonkey {
 		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=spidermonkey | 账户=%d", accounts))
-		return "", &lazyLoginDriver{timeout: cfg.RequestTimeout, proxy: proxy}, nil
+		return "", &lazyLoginDriver{proxy: proxy}, nil
 	}
 	requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | 校验 Camoufox | 账户=%d", accounts))
 	camoufoxPath, err := camoufoxnative.FindExecutable(ctx, proxy)
 	if err != nil {
 		return "", nil, err
 	}
-	login, err := aistudio.NewNativeLoginDriver(camoufoxPath, cfg.RequestTimeout)
+	login, err := aistudio.NewNativeLoginDriver(camoufoxPath)
 	if err != nil {
 		return "", nil, err
 	}
@@ -52,10 +51,9 @@ func newWAAWorker(ctx context.Context, accountID string, options camoufoxnative.
 
 // lazyLoginDriver 在第一次登录或校验账户时定位 Camoufox 并创建登录驱动
 type lazyLoginDriver struct {
-	timeout time.Duration
-	proxy   string
-	mu      sync.Mutex
-	driver  *aistudio.NativeLoginDriver
+	proxy  string
+	mu     sync.Mutex
+	driver *aistudio.NativeLoginDriver
 }
 
 func (lazy *lazyLoginDriver) resolve(ctx context.Context) (*aistudio.NativeLoginDriver, error) {
@@ -68,7 +66,7 @@ func (lazy *lazyLoginDriver) resolve(ctx context.Context) (*aistudio.NativeLogin
 	if err != nil {
 		return nil, err
 	}
-	driver, err := aistudio.NewNativeLoginDriver(camoufoxPath, lazy.timeout)
+	driver, err := aistudio.NewNativeLoginDriver(camoufoxPath)
 	if err != nil {
 		return nil, err
 	}
