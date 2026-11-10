@@ -32,7 +32,7 @@ export function copyAttachmentBlob(
   if (blob !== undefined) cacheAttachmentBlob(target, blob)
 }
 
-// attachmentBlob 把内联附件解码为 Blob 并缓存
+// attachmentBlob 返回内联附件的 Blob：有缓存时取缓存，否则解码 Base64
 export function attachmentBlob(part: Part): Blob {
   const raw = toRaw(part.inlineData!)
   return mediaBlobs.get(raw) ?? new Blob([base64Bytes(raw.data)], { type: raw.mimeType })

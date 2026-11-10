@@ -300,7 +300,7 @@ func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.Cook
 	return entries
 }
 
-// accountIDs 返回已导入且无需重新登录的账户小写 ID，需要重新登录的账户允许直接重新导入覆盖认证状态
+// accountIDs 返回已导入且不需要重新登录的账户小写 ID
 func (admin *runtimeAdmin) accountIDs() map[string]struct{} {
 	existing := make(map[string]struct{})
 	for _, status := range admin.pool.Status() {
@@ -436,7 +436,7 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	}
 	var account api.AdminAccount
 	if existingID != "" {
-		account, err = admin.updateImportedAccount(ctx, existingID, accountConfig, input.StorageState, fingerprintDirectory)
+		account, err = admin.updateImportedAccount(ctx, existingID, accountConfig.AuthUser, input.StorageState, fingerprintDirectory)
 	} else {
 		account, err = admin.addAccount(ctx, accountConfig, input.StorageState, fingerprintDirectory)
 	}
@@ -461,17 +461,17 @@ func (admin *runtimeAdmin) upsertAccount(
 ) (api.AdminAccount, error) {
 	for _, status := range admin.pool.Status() {
 		if strings.EqualFold(status.ID, strings.TrimSpace(accountConfig.Label)) {
-			return admin.updateImportedAccount(ctx, status.ID, accountConfig, state, fingerprintDirectory)
+			return admin.updateImportedAccount(ctx, status.ID, accountConfig.AuthUser, state, fingerprintDirectory)
 		}
 	}
 	return admin.addAccount(ctx, accountConfig, state, fingerprintDirectory)
 }
 
-// updateImportedAccount 就地替换已有账户的 Cookie 与认证材料，保留 runtime-state.json 中的文件资源绑定与模型资格
+// updateImportedAccount 就地替换已有账户的 Cookie、认证材料与会话序号，保留 runtime-state.json 中的文件资源绑定与模型资格
 func (admin *runtimeAdmin) updateImportedAccount(
 	ctx context.Context,
 	accountID string,
-	accountConfig aistudio.AccountConfig,
+	authUser int,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
 ) (api.AdminAccount, error) {
@@ -484,34 +484,11 @@ func (admin *runtimeAdmin) updateImportedAccount(
 	if err := admin.workers.Reset(account.ID); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if fingerprintDirectory != "" {
-		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
-			return api.AdminAccount{}, errors.Join(err, lease.Release())
-		}
-	}
-	if err := keepAuthExtension(&state, account.StorageState); err != nil {
+	if err := replaceAccountState(lease, state, fingerprintDirectory); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	if err := lease.SaveStorageState(state); err != nil {
+	if err := setCookieAuthUser(lease, authUser, admin.workers.prepareUpdate); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	nextConfig := account.Config
-	nextConfig.AuthUser = accountConfig.AuthUser
-	if strings.TrimSpace(accountConfig.Proxy) != "" {
-		nextConfig.Proxy = strings.TrimSpace(accountConfig.Proxy)
-	}
-	if nextConfig != account.Config {
-		workerUpdate, err := admin.workers.prepareUpdate(account, nextConfig)
-		if err != nil {
-			return api.AdminAccount{}, errors.Join(err, lease.Release())
-		}
-		if err := admin.service.changeModels(func() error {
-			return lease.SaveConfig(nextConfig)
-		}); err != nil {
-			workerUpdate.Discard()
-			return api.AdminAccount{}, errors.Join(err, lease.Release())
-		}
-		workerUpdate.Commit()
 	}
 	if err := admin.service.changeModels(func() error {
 		return admin.pool.MarkReady(account.ID)
@@ -788,17 +765,10 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	if _, err := aistudio.NewSigner().Authorization(result.StorageState); err != nil {
 		return api.AdminAccount{}, errors.Join(fmt.Errorf("认证状态无法用于 AI Studio: %w", err), lease.Release())
 	}
-	if err := camoufoxnative.PersistAccountFingerprint(directory, account.Directory); err != nil {
+	if err := replaceAccountState(lease, result.StorageState, directory); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	state := result.StorageState
-	if err := keepAuthExtension(&state, account.StorageState); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := lease.SaveStorageState(state); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := resetCookieAuthUser(lease, admin.workers.prepareUpdate); err != nil {
+	if err := setCookieAuthUser(lease, 0, admin.workers.prepareUpdate); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
@@ -821,14 +791,28 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	return admin.account(account.ID)
 }
 
-// resetCookieAuthUser 在账户认证状态换成单账号 Cookie 后把会话序号归零并同步到 Worker
-func resetCookieAuthUser(lease *aistudio.AccountLease, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
+// replaceAccountState 以新登录状态替换账户的认证状态并沿用账户已有的续签材料，fingerprintDirectory 非空时一并替换 Camoufox 指纹
+func replaceAccountState(lease *aistudio.AccountLease, state aistudio.StorageState, fingerprintDirectory string) error {
 	account := lease.Account()
-	if account.Config.AuthUser == 0 {
+	if fingerprintDirectory != "" {
+		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
+			return err
+		}
+	}
+	if err := keepAuthExtension(&state, account.StorageState); err != nil {
+		return err
+	}
+	return lease.SaveStorageState(state)
+}
+
+// setCookieAuthUser 把账户 Cookie 的会话序号改为 authUser 并同步到 Worker
+func setCookieAuthUser(lease *aistudio.AccountLease, authUser int, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
+	account := lease.Account()
+	if account.Config.AuthUser == authUser {
 		return nil
 	}
 	accountConfig := account.Config
-	accountConfig.AuthUser = 0
+	accountConfig.AuthUser = authUser
 	workerUpdate, err := prepare(account, accountConfig)
 	if err != nil {
 		return err

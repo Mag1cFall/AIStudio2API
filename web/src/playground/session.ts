@@ -182,7 +182,7 @@ async function renewUploads(turns: readonly Turn[]): Promise<void> {
   }
 }
 
-// rawInlineMarks 将对话轮次中的内联媒体标记为非响应式原始对象，避免巨型 Base64 字符串进入深度代理
+// rawInlineMarks 把对话轮次中的内联媒体标记为非响应式对象
 function rawInlineMarks(turns: Turn[]): Turn[] {
   for (const turn of turns) {
     for (const part of turn.parts) {
@@ -192,17 +192,15 @@ function rawInlineMarks(turns: Turn[]): Turn[] {
   return turns
 }
 
-// countedMedia 表示片段是已统计过 token 数的附件（已抽帧视频，或未改变媒体分辨率时已计数的内联附件）
-function countedMedia(part: Part, mediaResolution: string): boolean {
-  if (part.tokenCount === undefined) return false
-  if (uploadedVideo(part)) return true
-  return part.inlineData !== undefined && mediaResolution === ''
+// framedVideo 表示片段是已按抽帧统计过 token 数的视频
+function framedVideo(part: Part): boolean {
+  return uploadedVideo(part) && part.tokenCount !== undefined
 }
 
 // attachmentCounts 记录每个附件最近一次 token 计数请求，只接收最近一次请求的结果
 const attachmentCounts = new WeakMap<Part, object>()
 
-// cloneData 结构化复制对话数据并解除响应式代理，直接复用巨型 Base64 字符串引用与缓存的 Blob
+// cloneData 复制对话数据为普通对象，内联附件复用原 Base64 字符串与缓存的 Blob
 function cloneData<T>(value: T): T {
   const raw = toRaw(value)
   if (raw === null || typeof raw !== 'object') return raw
@@ -404,7 +402,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     controller?.abort()
   }
 
-  // refreshTokens 与官网一致统计当前对话的输入 token：已计数的媒体附件直接累加其 tokenCount，其余内容用 countTokens 统计
+  // refreshTokens 与官网一致统计当前对话的输入 token：已按抽帧计数的视频取其 token 数，其余内容用 countTokens 统计
   async function refreshTokens(): Promise<void> {
     tokenController?.abort()
     const model = currentModel.value
@@ -415,15 +413,9 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     const counter = new AbortController()
     tokenController = counter
     try {
-      const resolution = session.settings.mediaResolution
-      const precounted = session.turns.flatMap((turn) =>
-        turn.parts.filter((part) => countedMedia(part, resolution)),
-      )
+      const framed = session.turns.flatMap((turn) => turn.parts.filter(framedVideo))
       const turns = session.turns
-        .map((turn) => ({
-          ...turn,
-          parts: turn.parts.filter((part) => !countedMedia(part, resolution)),
-        }))
+        .map((turn) => ({ ...turn, parts: turn.parts.filter((part) => !framedVideo(part)) }))
         .filter((turn) => turn.parts.length > 0)
       const counted =
         turns.length === 0
@@ -434,7 +426,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
               buildRequest(session.settings, model, turns),
               counter.signal,
             )
-      const count = precounted.reduce((sum, part) => sum + part.tokenCount!, counted)
+      const count = framed.reduce((sum, part) => sum + part.tokenCount!, counted)
       if (!counter.signal.aborted) session.promptTokens = count
     } catch {
       // 统计失败时保留上一次的数字

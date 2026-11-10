@@ -625,7 +625,7 @@ async function discoverCookieAccounts(): Promise<void> {
     }
     if (sequence !== cookieDiscovery) return
     cookieCandidates.value = found
-    selectedCookieUsers.value = importableCookieUsers.value
+    selectedCookieUsers.value = defaultCookieUsers.value
   } catch (error) {
     if (sequence === cookieDiscovery)
       cookieDiscoveryError.value =
@@ -640,20 +640,22 @@ function cookieKey(candidate: CookieCandidate): string {
   return `${candidate.source}:${candidate.auth_user}`
 }
 
-// importableCookieUsers 是默认全选的候选账户：有未导入账户时为未导入账户，全部已导入时为全部候选账户以允许直接更新 Cookie
-const importableCookieUsers = computed(() => {
+// defaultCookieUsers 是默认勾选的候选账户：有未导入账户时为未导入账户，全部已导入时为全部候选账户
+const defaultCookieUsers = computed(() => {
   const unimported = cookieCandidates.value.filter((item) => !item.imported).map(cookieKey)
   return unimported.length > 0 ? unimported : cookieCandidates.value.map(cookieKey)
 })
 
 const allCookieCandidatesSelected = computed(
   () =>
-    importableCookieUsers.value.length > 0 &&
-    selectedCookieUsers.value.length === importableCookieUsers.value.length,
+    cookieCandidates.value.length > 0 &&
+    selectedCookieUsers.value.length === cookieCandidates.value.length,
 )
 
 function toggleAllCookieCandidates(): void {
-  selectedCookieUsers.value = allCookieCandidatesSelected.value ? [] : importableCookieUsers.value
+  selectedCookieUsers.value = allCookieCandidatesSelected.value
+    ? []
+    : cookieCandidates.value.map(cookieKey)
 }
 
 // pasteSteps 是粘贴 Cookie 的操作步骤
