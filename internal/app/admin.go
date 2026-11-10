@@ -177,7 +177,7 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountC
 	if err := accountConfig.Validate(); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
-	created, err := admin.upsertAccount(ctx, accountConfig, result.StorageState, directory)
+	created, err := admin.upsertAccount(ctx, accountConfig.Label, accountConfig, result.StorageState, directory)
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
@@ -356,7 +356,7 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	}
 	accounts := make([]api.AdminAccount, 0, len(results))
 	for index, result := range results {
-		account, err := admin.upsertAccount(ctx, configs[index], result.State, "")
+		account, err := admin.upsertAccount(ctx, configs[index].Label, configs[index], result.State, "")
 		if err != nil {
 			return nil, err
 		}
@@ -407,16 +407,9 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
 		email = extension.Source.Email
 	}
-	existingID := ""
-	for _, status := range admin.pool.Status() {
-		if strings.EqualFold(status.ID, strings.TrimSpace(email)) {
-			if input.RenewalToken != "" {
-				return api.AdminAccount{}, &adminOperationError{
-					status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + status.ID,
-				}
-			}
-			existingID = status.ID
-			break
+	if existing := admin.accountID(email); existing != "" && input.RenewalToken != "" {
+		return api.AdminAccount{}, &adminOperationError{
+			status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + existing,
 		}
 	}
 	fingerprintDirectory := ""
@@ -431,12 +424,7 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 		}
 		fingerprintDirectory = directory
 	}
-	var account api.AdminAccount
-	if existingID != "" {
-		account, err = admin.updateImportedAccount(ctx, existingID, accountConfig.AuthUser, input.StorageState, fingerprintDirectory)
-	} else {
-		account, err = admin.addAccount(ctx, accountConfig, input.StorageState, fingerprintDirectory)
-	}
+	account, err := admin.upsertAccount(ctx, email, accountConfig, input.StorageState, fingerprintDirectory)
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
@@ -449,19 +437,28 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	return account, nil
 }
 
-// upsertAccount 新增账户，若同名账户已存在则就地更新其认证状态并保留运行态资源绑定
+// upsertAccount 在 id 对应的账户已存在时就地更新其认证状态并保留运行态资源绑定，否则以 accountConfig 新增账户
 func (admin *runtimeAdmin) upsertAccount(
 	ctx context.Context,
+	id string,
 	accountConfig aistudio.AccountConfig,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
 ) (api.AdminAccount, error) {
-	for _, status := range admin.pool.Status() {
-		if strings.EqualFold(status.ID, strings.TrimSpace(accountConfig.Label)) {
-			return admin.updateImportedAccount(ctx, status.ID, accountConfig.AuthUser, state, fingerprintDirectory)
-		}
+	if existing := admin.accountID(id); existing != "" {
+		return admin.updateImportedAccount(ctx, existing, accountConfig.AuthUser, state, fingerprintDirectory)
 	}
 	return admin.addAccount(ctx, accountConfig, state, fingerprintDirectory)
+}
+
+// accountID 返回与 id 不区分大小写相同的已有账户 ID，没有时为空
+func (admin *runtimeAdmin) accountID(id string) string {
+	for _, status := range admin.pool.Status() {
+		if strings.EqualFold(status.ID, strings.TrimSpace(id)) {
+			return status.ID
+		}
+	}
+	return ""
 }
 
 // updateImportedAccount 就地替换已有账户的 Cookie、认证材料与会话序号，保留 runtime-state.json 中的文件资源绑定与模型资格

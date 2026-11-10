@@ -2132,6 +2132,23 @@ func (p *AccountPool) CandidateStatesForScope(
 	return result
 }
 
+// ByBenefitTier 把账户按权益从高到低稳定排序，同权益保持传入顺序
+func (p *AccountPool) ByBenefitTier(accountIDs []string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	priority := func(accountID string) int {
+		if account := p.byID[accountID]; account != nil {
+			return benefitTierPriority(account.BenefitTier)
+		}
+		return -1
+	}
+	ordered := slices.Clone(accountIDs)
+	slices.SortStableFunc(ordered, func(left, right string) int {
+		return priority(right) - priority(left)
+	})
+	return ordered
+}
+
 // PreferWarmPool 按权益分层轮选初始热账户，fill-first 时 ACCOUNT_ORDER 列出的账户在前
 func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
 	type warmCandidate struct {

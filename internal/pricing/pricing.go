@@ -12,6 +12,7 @@ type price struct {
 
 // prices 是按 API 模型 ID 索引的文本生成单价，输出单价包含思考 token
 var prices = map[string]price{
+	"gemini-4-carbon":                        {input: 2, cached: 0.10, output: 10},
 	"gemini-4-argon":                         {input: 2, cached: 0.10, output: 10},
 	"gemini-3.8-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
 	"gemini-3.7-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
