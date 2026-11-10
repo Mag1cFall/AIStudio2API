@@ -1832,6 +1832,7 @@ Responses 的图片、视频与文件 Part 复用上述 data URL、file ID 与 Y
 | item | 映射 |
 | --- | --- |
 | system/developer message | 文本进入系统指令，图片与文件移到首个 user 轮 |
+| `agent_message` | user 轮，`content` 中 `input_text` 的 `text` 与 `encrypted_content` 的 `encrypted_content` 依次作为文本 |
 | `custom_tool_call` | 函数调用，参数为 `{"input":<INPUT>}` |
 | `local_shell_call` | `local_shell` 函数调用，参数为去掉 `type` 的 `action` |
 | `shell_call` | `shell` 函数调用，参数为 `action` |
