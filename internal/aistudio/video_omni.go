@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -41,7 +42,7 @@ func (s *PooledService) generateOmniVideo(ctx context.Context, request VideoRequ
 		return VideoOperation{}, err
 	}
 	selection := AccountSelection{
-		ModelID: model.ID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
+		ModelID: model.ID, Method: "generateContent", AccountID: cmp.Or(strings.TrimSpace(request.AccountID), contextAccount(ctx)),
 		ResourceID: videoImageResourceID(request),
 	}
 	lease, owned, err := resolveAccountLease(ctx, s.pool, selection)

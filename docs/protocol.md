@@ -1244,6 +1244,8 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 
 公开 `/v1` 与 `/v1beta` 接受 `Authorization: Bearer`、`X-API-Key`、`X-Goog-API-Key` 或 `?key=`，任一来源与配置的 key 相同即通过；配置为空时关闭本地 API key 校验，此时 `Origin` 为 `null` 或非 localhost、非回环地址的 http/https 页面请求按 API key 错误拒绝（OpenAI 与 Anthropic 路由 401，Gemini 路由与官方相同：没有 key 为 403，带 key 为 400），不带 `Origin` 的客户端与其他 scheme 不受限制。`/v1*`、`/upload/` 与 `/health` 响应允许任意 origin，并以 `Access-Control-Expose-Headers: *` 暴露响应头；OPTIONS 预检不经过 API key 校验，允许 `GET/POST/PUT/DELETE/OPTIONS`，`Access-Control-Allow-Headers` 回显请求的 `Access-Control-Request-Headers`。`/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件。`/upload/v1beta/files` 使用相同的认证与请求体上限；可续传上传的分块请求发往 start 响应 `X-Goog-Upload-URL` 给出的地址，凭其中的 `upload_id` 鉴权，不需要 API key。
 
+公开 `/v1`、`/v1beta` 与 `/upload/` 的请求带 `X-AIStudio-Account: <账户 ID>` 时，账户池只在该账户上选号，视频后台生成与可续传上传同样只用该账户；上游出错时返回该错误，不换到其他账户，账户冷却中的处理与只有这一个可用账户时相同；该账户仍受所用 key 的 `API_KEY_ACCOUNTS` 绑定限制，不受 `MODEL_ACCOUNTS` 限制。账户不存在或不在本次请求可用的账户中时返回 400 `account_required`，错误写明该账户。
+
 `/api` 控制面在 `ADMIN_AUTH_ENABLED=false` 时要求来源地址为 loopback 且 `Host` 为 localhost 或回环地址；开启登录后，通过管理员账号和密码签发的 Cookie 会话访问。管理请求执行 same-origin 校验并携带 `Cache-Control: no-store`。全部响应携带 `X-Frame-Options: DENY`、`Content-Security-Policy: frame-ancestors 'none'`、`X-Content-Type-Options: nosniff` 与 `Referrer-Policy: no-referrer`。`GET /health` 返回 `{"status":"ok"}`。
 
 `POST /api/auth/login` 接受 `{"username":"<ADMIN_USERNAME>","password":"<ADMIN_PASSWORD>","remember":false}`，成功返回 `{"enabled":true,"authenticated":true,"username":"<ADMIN_USERNAME>"}`：
