@@ -952,6 +952,14 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 			}
 			contents = append(contents, aistudio.Content{Role: role, Parts: parts})
 			continue
+		case "agent_message":
+			pendingSignature = ""
+			parts, err := agentMessageParts(item.Content)
+			if err != nil {
+				return nil, nil, fmt.Errorf("agent_message: %w", err)
+			}
+			contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: parts})
+			continue
 		case "function_call":
 			call.Arguments = functionCallArguments(item.Arguments)
 		case "custom_tool_call":
@@ -1003,6 +1011,30 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 		pendingSignature = ""
 	}
 	return prependSystemMedia(contents, systemMedia), instructions, nil
+}
+
+// agentMessageParts 把 Codex 智能体间消息的内容转为文本片段，encrypted_content 中是本服务模型写出的消息原文
+func agentMessageParts(raw json.RawMessage) ([]aistudio.Part, error) {
+	var content []struct {
+		Type             string `json:"type"`
+		Text             string `json:"text"`
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return nil, err
+	}
+	parts := make([]aistudio.Part, 0, len(content))
+	for _, part := range content {
+		switch part.Type {
+		case "input_text":
+			parts = append(parts, aistudio.Part{Text: part.Text})
+		case "encrypted_content":
+			parts = append(parts, aistudio.Part{Text: part.EncryptedContent})
+		default:
+			return nil, fmt.Errorf("unsupported content type %q", part.Type)
+		}
+	}
+	return parts, nil
 }
 
 // responsesInputConfig 返回输入项中 additional_tools 提供的工具与最后一个 configuration_update 的推理强度
