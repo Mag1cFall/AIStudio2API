@@ -384,11 +384,11 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	err := lease.RefreshStorageState(generation, func(state *aistudio.StorageState) error {
 		refreshed = true
 		logRenewal("INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
-		extension, exists, err := state.AuthExtension()
+		extension, _, err := state.AuthExtension()
 		if err != nil {
 			return err
 		}
-		if !exists {
+		if extension.OAuth == nil {
 			extension = aistudio.AuthExtension{Source: aistudio.AuthSource{Browser: "chrome", Email: account.ID}}
 		}
 		proxy := account.EffectiveProxy(refresher.globalProxy)
@@ -490,7 +490,7 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	return refresher.mergeWorker(ctx, account.ID, headers, extension.Bound.RefreshURL)
 }
 
-// Available 返回当前租约账户是否保存了 Chrome OAuth 续签材料
+// Available 返回当前租约账户能否续签：保存了 Chrome OAuth 续签材料，或本机 Chrome 登录着同一邮箱
 func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)
 	if !ok {
@@ -500,14 +500,11 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	extension, exists, err := state.AuthExtension()
+	extension, _, err := state.AuthExtension()
 	if err != nil {
 		return false
 	}
-	if exists {
-		return extension.OAuth != nil || extension.Source.Browser == "chrome"
-	}
-	return refresher.chromeHas != nil && refresher.chromeHas(lease.Account().ID)
+	return extension.OAuth != nil || refresher.chromeHas != nil && refresher.chromeHas(lease.Account().ID)
 }
 
 func authenticationFailed(response *aistudio.RPCResponse) bool {

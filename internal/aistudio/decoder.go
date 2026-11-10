@@ -109,6 +109,7 @@ func (reader *streamReadRecorder) failure(method string, frames int, decodeErr e
 type sparseJSONReader struct {
 	source        *bufio.Reader
 	pending       []byte
+	hole          [5]byte
 	inString      bool
 	escaped       bool
 	previousToken byte
@@ -137,12 +138,18 @@ func (r *sparseJSONReader) Read(destination []byte) (int, error) {
 			}
 			return 0, err
 		}
-		r.pending = r.normalize(value)
+		if r.emptySlot(value) {
+			r.pending = append(append(r.hole[:0], "null"...), value)
+			continue
+		}
+		destination[written] = value
+		written++
 	}
 	return written, nil
 }
 
-func (r *sparseJSONReader) normalize(value byte) []byte {
+// emptySlot 按 value 更新扫描状态，返回 value 之前是否为数组空位
+func (r *sparseJSONReader) emptySlot(value byte) bool {
 	if r.inString {
 		if r.escaped {
 			r.escaped = false
@@ -151,25 +158,16 @@ func (r *sparseJSONReader) normalize(value byte) []byte {
 		} else if value == '"' {
 			r.inString = false
 		}
-		return []byte{value}
+		return false
 	}
 	if value == '"' {
 		r.inString = true
-		r.previousToken = value
-		return []byte{value}
 	}
-	if value == ',' && (r.previousToken == '[' || r.previousToken == ',') {
-		r.previousToken = value
-		return []byte("null,")
-	}
-	if value == ']' && r.previousToken == ',' {
-		r.previousToken = value
-		return []byte("null]")
-	}
+	empty := value == ',' && (r.previousToken == '[' || r.previousToken == ',') || value == ']' && r.previousToken == ','
 	if !unicode.IsSpace(rune(value)) {
 		r.previousToken = value
 	}
-	return []byte{value}
+	return empty
 }
 
 func decodeJSONValue(raw []byte) (json.RawMessage, error) {

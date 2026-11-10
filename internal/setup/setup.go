@@ -123,7 +123,7 @@ func importAccounts(ctx context.Context, cfg config.Config, target accountTarget
 		if !camoufoxnative.HasDisplay() {
 			return camoufoxnative.ErrNoDisplay
 		}
-		driver, err := defaultSetupLoginDriver(ctx, cfg, options.egress)
+		driver, err := defaultSetupLoginDriver(ctx, options.egress)
 		if err != nil {
 			return err
 		}
@@ -583,12 +583,12 @@ func defaultSetupLabel(storageState string) string {
 	return parent
 }
 
-func defaultSetupLoginDriver(ctx context.Context, cfg config.Config, egress string) (aistudio.IsolatedLoginDriver, error) {
+func defaultSetupLoginDriver(ctx context.Context, egress string) (aistudio.IsolatedLoginDriver, error) {
 	camoufoxPath, err := camoufoxnative.FindExecutable(ctx, egress)
 	if err != nil {
 		return nil, err
 	}
-	return aistudio.NewNativeLoginDriver(camoufoxPath, cfg.RequestTimeout)
+	return aistudio.NewNativeLoginDriver(camoufoxPath)
 }
 
 func validateSetupRoot(root string) error {

@@ -1,6 +1,7 @@
 package waa
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -51,8 +52,17 @@ func decodeText(name string, data []byte, fatal bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if fatal && strings.ContainsRune(string(decoded), '�') && !strings.ContainsRune(string(data), '�') {
+	if fatal && bytes.Count(decoded, []byte("�")) > encodedReplacements(encoder, data) {
 		return "", encoding.ErrInvalidUTF8
 	}
 	return string(decoded), nil
+}
+
+// encodedReplacements 返回 data 中按该编码合法编码的 U+FFFD 个数，编码不能表示 U+FFFD 时为 0
+func encodedReplacements(encoder encoding.Encoding, data []byte) int {
+	sequence, err := encoder.NewEncoder().Bytes([]byte("�"))
+	if err != nil {
+		return 0
+	}
+	return bytes.Count(data, sequence)
 }

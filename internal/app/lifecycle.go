@@ -30,7 +30,7 @@ type generationAdmin interface {
 	Accounts(context.Context) ([]api.AdminAccount, error)
 	CreateAccount(context.Context, api.AccountCreateInput, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error)
-	CookieBrowsers(context.Context) ([]api.CookieBrowser, error)
+	CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, api.CookieImportInput) ([]api.CookieBrowser, error)
 	ImportChromeAccounts(context.Context, api.ChromeImportInput) ([]api.AdminAccount, error)
 	ImportAccountState(context.Context, api.AccountStateInput) (api.AdminAccount, error)
@@ -463,11 +463,11 @@ func (manager *runtimeManager) ChromeImportProfiles(ctx context.Context) ([]api.
 	return manager.current.admin.ChromeImportProfiles(ctx)
 }
 
-// CookieBrowsers 返回当前生成服务发现的本机调试浏览器
-func (manager *runtimeManager) CookieBrowsers(ctx context.Context) ([]api.CookieBrowser, error) {
+// CookieBrowsers 返回当前生成服务发现的本机调试浏览器，proxy 为识别账户的请求出口
+func (manager *runtimeManager) CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error) {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
-	return manager.current.admin.CookieBrowsers(ctx)
+	return manager.current.admin.CookieBrowsers(ctx, proxy)
 }
 
 // DiscoverCookieAccounts 返回粘贴 Cookie 中各会话序号登录的账户并标记已导入的账户
