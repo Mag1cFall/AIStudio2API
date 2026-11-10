@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -21,6 +21,8 @@ import {
   attachmentKind,
   attachmentName,
   attachmentText,
+  attachmentURL,
+  cacheAttachmentBlob,
   downloadAttachment,
   useAttachmentPreview,
 } from './attachment'
@@ -38,7 +40,7 @@ import VideoSettingsDialog from './media/VideoSettingsDialog.vue'
 import { useCompare, usePlayground } from './session'
 import { useAudioRecording } from './recording'
 import { useMediaQuery } from './media-query'
-import { dataURL, protocolSupports } from './protocols'
+import { protocolSupports } from './protocols'
 import { failureText } from './request'
 import RunKeyHint from './RunKeyHint.vue'
 import { appends, submits, useRunTooltip } from './run-keys'
@@ -269,13 +271,15 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
-// readFile 读取文件为内联数据片段
+// readFile 读取文件为内联数据片段，并绑定原文件 Blob 供预览与上传复用
 function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'): Promise<Part> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       const result = String(reader.result)
-      resolve({ inlineData: { mimeType, data: result.slice(result.indexOf(',') + 1) } })
+      const inlineData = markRaw({ mimeType, data: result.slice(result.indexOf(',') + 1) })
+      cacheAttachmentBlob(inlineData, file)
+      resolve({ inlineData })
     }
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)
@@ -388,7 +392,7 @@ function toggleAudio(part: Part): void {
     player.pause()
     return
   }
-  player.src = dataURL(part.inlineData!)
+  player.src = attachmentURL(part)
   void player.play()
   playing.value = part
 }
@@ -485,14 +489,14 @@ defineExpose({ focus })
           <div class="preview-container">
             <img
               v-if="attachmentKind(part) === 'image'"
-              :src="dataURL(part.inlineData!)"
+              :src="attachmentURL(part)"
               :alt="attachmentName(part)"
               class="attachment-image"
               @click="showAttachment(part)"
             />
             <video
               v-else-if="attachmentKind(part) === 'video'"
-              :src="dataURL(part.inlineData!)"
+              :src="attachmentURL(part)"
               :aria-label="t('pg.preview')"
               preload="metadata"
               muted
@@ -813,7 +817,7 @@ defineExpose({ focus })
       v-if="videoSettings.part"
       v-model:open="videoSettings.open"
       :part="videoSettings.part"
-      :src="dataURL(videoSettings.part.inlineData!)"
+      :src="attachmentURL(videoSettings.part)"
       :name="attachmentName(videoSettings.part)"
       :agentic="agenticVideo"
       @save="saveVideoSettings"

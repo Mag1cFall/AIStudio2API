@@ -3,6 +3,7 @@ import {
   effectScope,
   hasInjectionContext,
   inject,
+  markRaw,
   provide,
   reactive,
   ref,
@@ -16,6 +17,7 @@ import { useConsole } from '@/console'
 import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
 import type { Model, SavedPrompt, SystemInstructionPreset } from '@/types'
+import { attachmentBlob, copyAttachmentBlob } from './attachment'
 import {
   agentTools,
   Capability,
@@ -27,8 +29,7 @@ import {
   toolCompatible,
   type Tool,
 } from './catalog'
-import { base64Bytes } from './bytes'
-import { countVideoFrames, uploadDriveFile } from './drive'
+import { countVideoFrames, driveFileExists, uploadDriveFile } from './drive'
 import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
 import {
@@ -170,20 +171,25 @@ function uploadedVideo(part: Part): boolean {
   return part.fileData !== undefined && part.inlineData?.mimeType.startsWith('video/') === true
 }
 
-// renewUploads 在发送前把 Files API 上传文件已到期的视频以对话中保留的原视频重新上传，片段改为引用新文件
+// renewUploads 在发送前把 Files API 上传文件已到期或已不存在的视频以对话中保留的原视频重新上传，片段改为引用新文件
 async function renewUploads(turns: readonly Turn[]): Promise<void> {
-  const expired = turns
-    .flatMap((turn) => turn.parts)
-    .filter((part) => uploadedVideo(part) && Date.now() >= part.fileExpires!)
-  for (const part of expired) {
-    const { mimeType, data } = part.inlineData!
-    const uploaded = await uploadDriveFile(
-      new Blob([base64Bytes(data)], { type: mimeType }),
-      part.fileName!,
-    )
+  const videos = turns.flatMap((turn) => turn.parts).filter(uploadedVideo)
+  for (const part of videos) {
+    if (Date.now() < part.fileExpires! && (await driveFileExists(part.fileData!.fileUri))) continue
+    const uploaded = await uploadDriveFile(attachmentBlob(part), part.fileName!)
     part.fileData = { mimeType: uploaded.mimeType, fileUri: uploaded.uri }
     part.fileExpires = Date.parse(uploaded.expirationTime)
   }
+}
+
+// rawInlineMarks 把对话轮次中的内联媒体标记为非响应式对象
+function rawInlineMarks(turns: Turn[]): Turn[] {
+  for (const turn of turns) {
+    for (const part of turn.parts) {
+      if (part.inlineData) part.inlineData = markRaw(toRaw(part.inlineData))
+    }
+  }
+  return turns
 }
 
 // framedVideo 表示片段是已按抽帧统计过 token 数的视频
@@ -194,9 +200,23 @@ function framedVideo(part: Part): boolean {
 // attachmentCounts 记录每个附件最近一次 token 计数请求，只接收最近一次请求的结果
 const attachmentCounts = new WeakMap<Part, object>()
 
-// cloneData 以 JSON 往返复制对话数据，嵌套的响应式对象一并复制为普通对象
+// cloneData 复制对话数据为普通对象，内联附件复用原 Base64 字符串与缓存的 Blob
 function cloneData<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  const raw = toRaw(value)
+  if (raw === null || typeof raw !== 'object') return raw
+  if (Array.isArray(raw)) return raw.map((item) => cloneData(item)) as T
+  const copy: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(raw as Record<string, unknown>)) {
+    if (key === 'inlineData' && item !== null && typeof item === 'object') {
+      const source = toRaw(item) as NonNullable<Part['inlineData']>
+      const target = markRaw({ ...source })
+      copyAttachmentBlob(source, target)
+      copy[key] = target
+    } else {
+      copy[key] = cloneData(item)
+    }
+  }
+  return copy as T
 }
 
 // models 返回实时模型目录
@@ -300,7 +320,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         title: prompt.title,
         description: prompt.description,
         settings: { ...defaultSettings(undefined), ...prompt.data.settings },
-        turns: prompt.data.turns,
+        turns: rawInlineMarks(prompt.data.turns),
         draft: '',
         attachments: [],
         running: false,
@@ -420,6 +440,9 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     const request = {}
     attachmentCounts.set(toRaw(part), request)
     try {
+      if (uploadedVideo(part)) {
+        await renewUploads([{ id: '', role: 'user', parts: [part], created: 0 }])
+      }
       const count = uploadedVideo(part)
         ? await countVideoFrames(model.id, part.fileData!.fileUri, part.videoMetadata)
         : await countTokens(
@@ -460,7 +483,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     const input = continuation(session.settings.protocol, session.turns)
     // sent 是本次发送的轮次，不含随后加入的模型轮次
     const sent = [...input.turns]
-    void refreshTokens()
     const turn = reactive<Turn>({
       id: newTurnID(),
       role: 'model',
@@ -478,6 +500,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     if (session.id === null && !session.temporary) await save()
     try {
       await renewUploads(sent)
+      void refreshTokens()
       await generate({
         protocol: session.settings.protocol,
         stream: session.settings.stream,
