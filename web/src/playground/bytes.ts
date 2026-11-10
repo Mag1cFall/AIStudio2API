@@ -8,7 +8,10 @@ export function bytesToBase64(bytes: Uint8Array): string {
 
 // base64Bytes 把 Base64 文本解码为字节
 export function base64Bytes(data: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+  return bytes
 }
 
 // pcmToWav 把 16 位小端 PCM 片段封装为 WAV

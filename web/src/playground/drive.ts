@@ -23,6 +23,16 @@ export async function listDriveFiles(): Promise<DriveFile[]> {
   return ((await response.json()) as { files?: DriveFile[] }).files ?? []
 }
 
+// driveFileExists 检查已上传的 Files API 文件是否存在
+export async function driveFileExists(fileUri: string): Promise<boolean> {
+  const name = fileUri.split('/files/')[1]
+  if (!name) return false
+  const response = await fetch(`/v1beta/files/${encodeURIComponent(name)}`, {
+    headers: filesHeaders(),
+  })
+  return response.status !== 404
+}
+
 // filesHeaders 返回调用本服务 Files API 的请求头，设置了 API 密钥时带上密钥
 function filesHeaders(): Headers {
   const headers = new Headers()

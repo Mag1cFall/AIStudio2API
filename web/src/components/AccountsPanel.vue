@@ -604,7 +604,7 @@ function clearCookieFiles(): void {
   scheduleCookieDiscovery()
 }
 
-// discoverCookieAccounts 逐个识别 Cookie 来源中各会话登录的账户，默认勾选尚未导入的账户，失败原因显示在对话框中
+// discoverCookieAccounts 逐个识别 Cookie 来源中各会话登录的账户，默认勾选尚未导入的账户（全部已导入时勾选全部以直接更新 Cookie），失败原因显示在对话框中
 async function discoverCookieAccounts(): Promise<void> {
   resetCookieDiscovery()
   const sequence = cookieDiscovery
@@ -625,7 +625,7 @@ async function discoverCookieAccounts(): Promise<void> {
     }
     if (sequence !== cookieDiscovery) return
     cookieCandidates.value = found
-    selectedCookieUsers.value = importableCookieUsers.value
+    selectedCookieUsers.value = defaultCookieUsers.value
   } catch (error) {
     if (sequence === cookieDiscovery)
       cookieDiscoveryError.value =
@@ -640,19 +640,22 @@ function cookieKey(candidate: CookieCandidate): string {
   return `${candidate.source}:${candidate.auth_user}`
 }
 
-// importableCookieUsers 是 Cookie 中尚未导入的账户
-const importableCookieUsers = computed(() =>
-  cookieCandidates.value.filter((item) => !item.imported).map(cookieKey),
-)
+// defaultCookieUsers 是默认勾选的候选账户：有未导入账户时为未导入账户，全部已导入时为全部候选账户
+const defaultCookieUsers = computed(() => {
+  const unimported = cookieCandidates.value.filter((item) => !item.imported).map(cookieKey)
+  return unimported.length > 0 ? unimported : cookieCandidates.value.map(cookieKey)
+})
 
 const allCookieCandidatesSelected = computed(
   () =>
-    importableCookieUsers.value.length > 0 &&
-    selectedCookieUsers.value.length === importableCookieUsers.value.length,
+    cookieCandidates.value.length > 0 &&
+    selectedCookieUsers.value.length === cookieCandidates.value.length,
 )
 
 function toggleAllCookieCandidates(): void {
-  selectedCookieUsers.value = allCookieCandidatesSelected.value ? [] : importableCookieUsers.value
+  selectedCookieUsers.value = allCookieCandidatesSelected.value
+    ? []
+    : cookieCandidates.value.map(cookieKey)
 }
 
 // pasteSteps 是粘贴 Cookie 的操作步骤
@@ -1757,17 +1760,13 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   <label
                     v-for="candidate in cookieCandidates"
                     :key="cookieKey(candidate)"
-                    class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
-                    :class="
-                      candidate.imported ? 'opacity-60' : 'cursor-pointer hover:border-gray-600'
-                    "
+                    class="flex cursor-pointer items-center gap-3 rounded border border-line bg-canvas p-3 transition hover:border-gray-600"
                   >
                     <input
                       v-model="selectedCookieUsers"
                       class="h-4 w-4 shrink-0 accent-blue-600"
                       type="checkbox"
                       :value="cookieKey(candidate)"
-                      :disabled="candidate.imported"
                     />
                     <span class="min-w-0 flex-1">
                       <strong
@@ -1904,7 +1903,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 :key="browserKey(browser)"
                 class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
                 :class="
-                  browser.email && !browser.imported && !browser.error
+                  browser.email && !browser.error
                     ? 'cursor-pointer hover:border-gray-600'
                     : 'opacity-70'
                 "
@@ -1914,7 +1913,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   class="h-4 w-4 shrink-0 accent-blue-600"
                   type="checkbox"
                   :value="browserKey(browser)"
-                  :disabled="!browser.email || browser.imported || browser.error !== ''"
+                  :disabled="!browser.email || browser.error !== ''"
                 />
                 <span class="min-w-0 flex-1">
                   <span
