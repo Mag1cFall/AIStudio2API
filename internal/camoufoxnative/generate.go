@@ -122,7 +122,7 @@ func nextChatAction(previous, contents []json.RawMessage) chatAction {
 	return chatNew
 }
 
-// generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明：官网高层 proof 函数下一次被调用时记下请求已开始并以本请求的 digest 取 proof，proof 返回后下一个 GenerateContent XHR 发送时把正文换成 head + proof + tail，并在该 XHR 上监听响应，经通道先发出 {sent: true}，再依次发出响应头、正文块与结束标记；参数依次为页面对象、请求 ID、digest、head、tail 与通道
+// generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明：官网高层 proof 函数下一次被调用时记下请求已开始并以本请求的 digest 取 proof，proof 返回后下一个 GenerateContent XHR 发送时把正文换成 head + proof + tail，并在该 XHR 上监听响应，经通道先发出带 proof 的 {sent: true, proof}，再依次发出响应头、正文块与结束标记；参数依次为页面对象、请求 ID、digest、head、tail 与通道
 const generateArmFunction = `(page, id, digest, head, tail, emit) => {
   const makerSuite = window.default_MakerSuite;
   const open = XMLHttpRequest.prototype.open;
@@ -161,7 +161,7 @@ const generateArmFunction = `(page, id, digest, head, tail, emit) => {
               changed();
               request.resume?.();
             });
-            emit(JSON.stringify({sent: true}));
+            emit(JSON.stringify({sent: true, proof}));
             return send.call(xhr, head + JSON.stringify(proof) + tail);
           };
         }
@@ -217,7 +217,7 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateT
 		unboost()
 		return nil, worker.abandonProtectedRequest(ctx, tab.contextID, tab.page, requestID, err)
 	}
-	err = worker.waitSent(ctx, tab, requestID, channel)
+	proof, err := worker.waitSent(ctx, tab, requestID, channel)
 	unboost()
 	if err != nil {
 		return nil, worker.abandonProtectedRequest(ctx, tab.contextID, tab.page, requestID, fmt.Errorf("等待页面应用发出 GenerateContent: %w", err))
@@ -239,6 +239,7 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateT
 	return &ProtectedResponse{
 		StatusCode: status,
 		Header:     header,
+		Proof:      proof,
 		Body: &protectedResponseBody{
 			ctx: bodyCtx, cancel: cancelBody, worker: worker, contextID: tab.contextID, page: tab.page, requestID: requestID, channel: channel,
 			stop: func() error { return worker.stopTurn(tab) }, release: func(done bool) { worker.releaseChat(tab, done && status == http.StatusOK) },
@@ -357,44 +358,44 @@ func (worker *Worker) waitRunnable(ctx context.Context, tab *chatTab) error {
 	}
 }
 
-// waitSent 等页面应用发出本轮 GenerateContent；页面忙于处理或已开始运行时随之等待，点击后页面空闲时持续没有开始运行或弹出对话框时以页面给出的原因失败
-func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, requestID string, channel *bidiChannel) error {
+// waitSent 等页面应用发出本轮 GenerateContent 并返回页面写入的 proof；页面忙于处理或已开始运行时随之等待，点击后页面空闲时持续没有开始运行或弹出对话框时以页面给出的原因失败
+func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, requestID string, channel *bidiChannel) (string, error) {
 	for checks := 1; ; checks++ {
 		pollCtx, cancel := context.WithTimeout(ctx, pagePollInterval)
 		message, err := readProtectedMessage(pollCtx, channel)
 		cancel()
 		if err != nil && (ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded)) {
-			return err
+			return "", err
 		}
 		if err == nil {
-			return sentError(message)
+			return sentProof(message)
 		}
 		state, err := readRunState(ctx, worker.client, tab.contextID, tab.page, requestID)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if state.Started || state.Running {
 			message, err := readProtectedMessage(ctx, channel)
 			if err != nil {
-				return err
+				return "", err
 			}
-			return sentError(message)
+			return sentProof(message)
 		}
 		if len(state.Dialogs) > 0 || checks == runSettleChecks {
-			return fmt.Errorf("点击 Run 后页面没有开始运行: %s", state.reason())
+			return "", fmt.Errorf("点击 Run 后页面没有开始运行: %s", state.reason())
 		}
 	}
 }
 
-// sentError 返回通道上第一条消息表示的发送结果，页面已发出 GenerateContent 时为 nil
-func sentError(message protectedMessage) error {
+// sentProof 返回通道上第一条消息表示的发送结果，页面已发出 GenerateContent 时返回页面写入的 proof
+func sentProof(message protectedMessage) (string, error) {
 	if message.Error != "" {
-		return errors.New(message.Error)
+		return "", errors.New(message.Error)
 	}
 	if !message.Sent {
-		return errors.New("页面应用没有发出 GenerateContent")
+		return "", errors.New("页面应用没有发出 GenerateContent")
 	}
-	return nil
+	return message.Proof, nil
 }
 
 // newChat 点击顶栏 New chat，在确认弹窗中丢弃当前对话，等页面清空并显示临时对话标识，临时对话中打开的新对话仍是临时对话

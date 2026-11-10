@@ -40,7 +40,6 @@ const (
 	globalCooldownKey = "*"
 	externalLeasePoll = 100 * time.Millisecond
 	runtimeLockPoll   = 25 * time.Millisecond
-	runtimeLockLimit  = 2 * time.Second
 )
 
 // AccountState 表示账户当前是否可调度
@@ -3367,9 +3366,7 @@ func lockRuntimeState(ctx context.Context, account *Account) (*flock.Flock, erro
 		return nil, fmt.Errorf("创建账户状态锁目录: %w", err)
 	}
 	lock := flock.New(filepath.Join(leaseDirectory, filepath.Base(account.Directory)+".runtime.lock"))
-	lockCtx, cancel := context.WithTimeout(ctx, runtimeLockLimit)
-	defer cancel()
-	_, err := lock.TryLockContext(lockCtx, runtimeLockPoll)
+	_, err := lock.TryLockContext(ctx, runtimeLockPoll)
 	if err != nil {
 		return nil, fmt.Errorf("锁定账户运行状态: %w", err)
 	}

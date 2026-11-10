@@ -35,11 +35,12 @@ type RPCRequest struct {
 	Streaming bool
 }
 
-// RPCResponse 描述认证传输层返回的响应头和实时正文
+// RPCResponse 描述认证传输层返回的响应头和实时正文，Proof 为受保护请求写入的 WAA proof
 type RPCResponse struct {
 	StatusCode int
 	Header     http.Header
 	Body       io.ReadCloser
+	Proof      string
 }
 
 // RPCTransport 负责认证、账户租约、Cookie 写回和真实网络发送
