@@ -72,6 +72,8 @@ var (
 	errNoAccounts = fmt.Errorf("%w：在管理页面账户页添加账户", ErrNoEligibleAccount)
 	// ErrAccountNotFound 表示稳定账户 ID 不存在
 	ErrAccountNotFound = errors.New("账户不存在")
+	// ErrAccountExists 表示同一邮箱的账户目录已存在
+	ErrAccountExists = errors.New("账户已存在")
 	// ErrAccountLeased 表示账户当前存在进程内或跨进程租约
 	ErrAccountLeased = errors.New("账户正在使用")
 	// ErrAccountCoolingDown 表示租约账户在请求发出前进入冷却
@@ -436,8 +438,11 @@ type AccountLease struct {
 	ignoreQuotaCooldown bool
 	operation           sync.Mutex
 	released            bool
-	once                sync.Once
-	err                 error
+	// holds 是 Retain 尚未结束的次数，大于 0 时 Release 推迟到最后一次结束
+	holds int
+	// releaseDeferred 表示 Release 已被推迟
+	releaseDeferred bool
+	err             error
 	// sessionOnce 使同一租约内的认证失败只检查一次会话
 	sessionOnce sync.Once
 	// sessionErr 是本租约会话检查的结果
@@ -576,6 +581,10 @@ func (s *AccountStore) Create(accountConfig AccountConfig, state StorageState) (
 		return nil, nil, err
 	}
 	accountConfig.Label = id
+	directory := filepath.Join(root, id)
+	if _, err := os.Stat(directory); err == nil {
+		return nil, nil, fmt.Errorf("%w: %s", ErrAccountExists, id)
+	}
 	temporary, err := os.MkdirTemp(root, ".account-*.tmp")
 	if err != nil {
 		return nil, nil, fmt.Errorf("创建临时账户目录: %w", err)
@@ -587,7 +596,6 @@ func (s *AccountStore) Create(accountConfig AccountConfig, state StorageState) (
 	if err := WriteStorageState(filepath.Join(temporary, StorageStateName), state); err != nil {
 		return nil, nil, err
 	}
-	directory := filepath.Join(root, id)
 	account, err := loadAccount(temporary)
 	if err != nil {
 		return nil, nil, err
@@ -1885,26 +1893,52 @@ func (l *AccountLease) MergeSetCookieHeaders(headers []string, requestURL string
 
 // Release 释放账户文件和进程内租约
 func (l *AccountLease) Release() error {
-	l.once.Do(func() {
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.holds > 0 {
+		l.releaseDeferred = true
+		return nil
+	}
+	l.releaseLocked()
+	return l.err
+}
+
+// Retain 让租约在返回的函数调用前保持占用，期间的 Release 推迟到该函数调用时生效
+func (l *AccountLease) Retain() func() error {
+	l.operation.Lock()
+	l.holds++
+	l.operation.Unlock()
+	return func() error {
 		l.operation.Lock()
 		defer l.operation.Unlock()
-		l.released = true
-		l.pool.mu.Lock()
-		if l.exclusive {
-			l.account.exclusive = false
-		} else if l.account.active > 0 {
-			l.account.active--
+		l.holds--
+		if l.holds == 0 && l.releaseDeferred {
+			l.releaseLocked()
 		}
-		if l.account.active == 0 && !l.account.exclusive && l.account.authRefreshers == 0 && l.account.leaseLock != nil {
-			if err := l.account.leaseLock.Unlock(); err != nil {
-				l.err = err
-			}
-			l.account.leaseLock = nil
+		return l.err
+	}
+}
+
+// releaseLocked 归还租约占用的账户名额，调用方持有 operation，已归还时不重复归还
+func (l *AccountLease) releaseLocked() {
+	if l.released {
+		return
+	}
+	l.released = true
+	l.pool.mu.Lock()
+	if l.exclusive {
+		l.account.exclusive = false
+	} else if l.account.active > 0 {
+		l.account.active--
+	}
+	if l.account.active == 0 && !l.account.exclusive && l.account.authRefreshers == 0 && l.account.leaseLock != nil {
+		if err := l.account.leaseLock.Unlock(); err != nil {
+			l.err = err
 		}
-		l.pool.notifyLocked()
-		l.pool.mu.Unlock()
-	})
-	return l.err
+		l.account.leaseLock = nil
+	}
+	l.pool.notifyLocked()
+	l.pool.mu.Unlock()
 }
 
 // SetCatalog 替换账户的权益等级与实时模型目录

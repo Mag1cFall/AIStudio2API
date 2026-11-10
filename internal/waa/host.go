@@ -169,7 +169,8 @@ type agent struct {
 	profile         Profile
 	loadImage       func(string) bool
 	loadFrame       func(string) bool
-	pending         *sync.WaitGroup
+	pending         int
+	settled         []chan struct{}
 	timezone        string
 	navigationStart time.Time
 	depth           int
@@ -232,6 +233,18 @@ func (state *agent) dispatch(realm *realmHost, id float64, argument mozjs.Value)
 		return
 	}
 	state.cx.ReleaseValue(value)
+}
+
+// loaded 结束一个页面资源请求，没有进行中的请求时唤醒等待静置的调用方
+func (state *agent) loaded() {
+	state.pending--
+	if state.pending > 0 {
+		return
+	}
+	for _, done := range state.settled {
+		close(done)
+	}
+	state.settled = nil
 }
 
 // afterTask 在每个任务结束后为 Promise 拒绝派发 unhandledrejection 与 rejectionhandled
@@ -474,11 +487,13 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 	if state.loadImage != nil {
 		natives["loadImage"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
-			state.pending.Add(1)
+			state.pending++
 			go func() {
-				defer state.pending.Done()
 				loaded := state.loadImage(address)
-				state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+				state.loop.post(func() {
+					state.dispatch(realm, id, mozjs.Bool(loaded))
+					state.loaded()
+				})
 			}()
 			return nil
 		}}
@@ -486,11 +501,13 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 	if state.loadFrame != nil {
 		natives["loadFrame"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
-			state.pending.Add(1)
+			state.pending++
 			go func() {
-				defer state.pending.Done()
 				loaded := state.loadFrame(address)
-				state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+				state.loop.post(func() {
+					state.dispatch(realm, id, mozjs.Bool(loaded))
+					state.loaded()
+				})
 			}()
 			return nil
 		}}

@@ -82,6 +82,11 @@ func (loop *eventLoop) schedule(delay time.Duration, job func()) {
 		loop.post(job)
 		return
 	}
+	loop.mu.Lock()
+	defer loop.mu.Unlock()
+	if loop.closed {
+		return
+	}
 	var timer *time.Timer
 	timer = time.AfterFunc(delay, func() {
 		loop.mu.Lock()
@@ -89,14 +94,7 @@ func (loop *eventLoop) schedule(delay time.Duration, job func()) {
 		loop.mu.Unlock()
 		loop.post(job)
 	})
-	loop.mu.Lock()
-	if loop.closed {
-		loop.mu.Unlock()
-		timer.Stop()
-		return
-	}
 	loop.timers[timer] = struct{}{}
-	loop.mu.Unlock()
 }
 
 func (loop *eventLoop) close() {

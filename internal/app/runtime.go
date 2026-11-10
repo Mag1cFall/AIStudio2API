@@ -1973,6 +1973,12 @@ func (service *trackedService) generateWithRetry(
 		if attempt+1 == retry.maxAttempts {
 			break
 		}
+		if last.recoverWorker && errors.Is(err, aistudio.ErrProtectedTransport) {
+			service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", fmt.Sprintf(
+				"受保护请求网络错误 | 模型=%s | 同账户重放当前请求\n原因: %s", modelID, strings.TrimSpace(err.Error()),
+			))
+			continue
+		}
 		if last.recoverWorker {
 			service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", fmt.Sprintf(
 				"WAA Worker 重建 | 模型=%s | 重放当前请求\n原因: %s", modelID, strings.TrimSpace(err.Error()),
@@ -2211,6 +2217,7 @@ func (service *trackedService) settleAttempt(
 	workerFailed := service.workers.WorkerFailed(accountID)
 	waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
 	workerReplaced := errors.Is(err, errAccountWorkerReplaced)
+	protectedTransport := errors.Is(err, aistudio.ErrProtectedTransport) && requestCtx.Err() == nil
 	localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
 	retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
 	if aistudio.DefinitiveAuthenticationFailure(err) {
@@ -2283,7 +2290,7 @@ func (service *trackedService) settleAttempt(
 		var resetErr error
 		recoverWorker, _, resetErr = service.recoverWorkerOnce(
 			requestCtx, accountID, attempt.workerGeneration, retry.recoveredWorker,
-			needsWAARuntimeRecovery(err, workerFailed, workerReplaced),
+			needsWAARuntimeRecovery(err, workerFailed, workerReplaced) || protectedTransport,
 			workerFailed || waaRuntimeFailed,
 		)
 		if resetErr != nil {

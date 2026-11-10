@@ -65,6 +65,7 @@ func TestAuthRefreshWithoutExtension(t *testing.T) {
 	}
 
 	login := aistudio.StorageState{Cookies: cookies}
+	login.SetAuthExtension(aistudio.AuthExtension{Source: aistudio.AuthSource{Browser: "camoufox", Email: account.ID}})
 	if err := keepAuthExtension(&login, stored); err != nil {
 		t.Fatal(err)
 	}

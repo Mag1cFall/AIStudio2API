@@ -17,7 +17,7 @@ type AdminService interface {
 	Accounts(context.Context) ([]AdminAccount, error)
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
-	CookieBrowsers(context.Context) ([]CookieBrowser, error)
+	CookieBrowsers(ctx context.Context, proxy string) ([]CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, CookieImportInput) ([]CookieBrowser, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
 	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
@@ -409,7 +409,7 @@ func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *server) handleCookieBrowsers(w http.ResponseWriter, r *http.Request) {
-	browsers, err := s.config.Admin.CookieBrowsers(r.Context())
+	browsers, err := s.config.Admin.CookieBrowsers(r.Context(), r.URL.Query().Get("proxy"))
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return
