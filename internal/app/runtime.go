@@ -1828,7 +1828,7 @@ func (service *trackedService) generateWithRetry(
 	var activity *upstreamActivity
 	var err error
 	copyFiles := false
-	for attempt := 0; attempt < retry.maxAttempts && generationAttemptAllowed(attempt); attempt++ {
+	for attempt := 0; attempt < retry.maxAttempts && generationAttemptAllowed(attempt, retry.quotaRejected); attempt++ {
 		selectionAccountID := requestedAccountID
 		recoveringAccount := retry.recoveryAccountID != ""
 		if retry.recoveryAccountID != "" {
@@ -2038,8 +2038,8 @@ func (service *trackedService) generateWithRetry(
 	)
 }
 
-func generationAttemptAllowed(attempt int) bool {
-	return !buildpolicy.Conservative || attempt == 0
+func generationAttemptAllowed(attempt int, quotaRejected bool) bool {
+	return !buildpolicy.Conservative || attempt == 0 || quotaRejected
 }
 
 // markAttemptAccount 把访问日志与活动请求的执行账户与通道记为该租约
