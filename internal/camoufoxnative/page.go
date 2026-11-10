@@ -222,12 +222,13 @@ func (client *bidiClient) pointer(ctx context.Context, contextID, selector, patt
 	return true, err
 }
 
-// dismissOverlaysExpression 关闭官网已知且可交互的启动弹层
+// dismissOverlaysExpression 关闭官网已知且可交互的启动弹层：G1 欢迎对话框、引导浏览浮层与 Cookie 提示条，提示条有拒绝按钮时拒绝，只有确认按钮时确认
 const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   const selectors = [
-    'ms-g1-welcome-dialog button[aria-label="Close dialog"]',
-    'button[aria-label="Close guided tour"]',
-    '#glue-cookie-notification-bar-1 .glue-cookie-notification-bar__reject'
+    'ms-g1-welcome-dialog button',
+    'button.xap-tour-exit-button',
+    '#glue-cookie-notification-bar-1 .glue-cookie-notification-bar__reject',
+    '#glue-cookie-notification-bar-1:not(:has(.glue-cookie-notification-bar__reject)) .glue-cookie-notification-bar__accept'
   ];
   let clicked = 0;
   for (const selector of selectors) {

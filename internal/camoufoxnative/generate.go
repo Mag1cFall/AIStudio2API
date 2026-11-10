@@ -339,7 +339,7 @@ func (worker *Worker) waitRunnable(ctx context.Context, tab *chatTab) error {
 		if state.Enabled {
 			return nil
 		}
-		if len(state.Dialogs) > 0 {
+		if len(state.Dialogs) > 0 || state.Cover != "" {
 			clicked, err := dismissKnownOverlays(ctx, worker.client, tab.contextID)
 			if err != nil {
 				return err
