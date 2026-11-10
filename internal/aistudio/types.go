@@ -452,6 +452,8 @@ type GenerateRequest struct {
 	continuationRound int
 	// continuationToken 为上一轮响应给出的续写 token
 	continuationToken string
+	// continuationProof 为首轮请求写入的 WAA proof，各续写轮沿用
+	continuationProof string
 	// restoreModelTurns 表示 Playground 请求按本进程保存的生成结果补回历史模型轮
 	restoreModelTurns bool
 	// turnToken 为历史中最后一个模型轮的轮次令牌

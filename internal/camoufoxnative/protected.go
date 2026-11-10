@@ -16,16 +16,18 @@ import (
 	"time"
 )
 
-// ProtectedResponse 表示由固定指纹浏览器流式返回的 MakerSuite 响应
+// ProtectedResponse 表示由固定指纹浏览器流式返回的 MakerSuite 响应，Proof 为界面运行时页面应用写入请求的 proof
 type ProtectedResponse struct {
 	StatusCode int
 	Header     http.Header
 	Body       io.ReadCloser
+	Proof      string
 }
 
-// protectedMessage 是受保护请求通道上以 { 开头的控制消息：界面运行时先是发出标记，之后是状态码与响应头，最后是结束标记或错误；其余消息为 Base64 正文块
+// protectedMessage 是受保护请求通道上以 { 开头的控制消息：界面运行时先是带 proof 的发出标记，之后是状态码与响应头，最后是结束标记或错误；其余消息为 Base64 正文块
 type protectedMessage struct {
 	Sent    bool        `json:"sent"`
+	Proof   string      `json:"proof"`
 	Status  int         `json:"status"`
 	Headers [][2]string `json:"headers"`
 	Done    bool        `json:"done"`

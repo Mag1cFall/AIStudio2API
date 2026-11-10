@@ -136,7 +136,7 @@ func (t *WorkerProtectedTransport) DoProtectedBuild(ctx context.Context, selecti
 	if err != nil {
 		return nil, err
 	}
-	return t.doPrepared(ctx, prompt, page, buildProofField, selection, rpc)
+	return t.doPrepared(ctx, prompt, page, buildProofField, "", selection, rpc)
 }
 
 // buildEmbedBatchLimit 是上游 batchEmbedContents 单次接受的最大请求数

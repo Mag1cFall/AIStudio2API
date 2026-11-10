@@ -81,7 +81,7 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageRequest) ([]Gen
 
 // DoProtectedImage 写入 GenerateImage fresh proof 后经 Worker 页面发送请求，binding 与页面输入框均为提示词
 func (t *WorkerProtectedTransport) DoProtectedImage(ctx context.Context, request ImageRequest, rpc RPCRequest) (*RPCResponse, error) {
-	return t.doPrepared(ctx, request.Prompt, request.Prompt, 3, AccountSelection{
+	return t.doPrepared(ctx, request.Prompt, request.Prompt, 3, "", AccountSelection{
 		ModelID: request.Model, Method: "predict", AccountID: request.AccountID,
 	}, rpc)
 }
