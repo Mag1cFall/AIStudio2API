@@ -246,7 +246,7 @@ func compactionItemTokens(raw json.RawMessage) int {
 	return (len(encoded) + 3) / 4
 }
 
-// compactionItemSide 把条目分为 user 消息、工具输出、指令与模型侧条目
+// compactionItemSide 把条目分为 user 轮（user 消息与 agent_message）、工具输出、指令与模型侧条目
 func compactionItemSide(raw json.RawMessage) string {
 	var head struct {
 		Type string `json:"type"`
@@ -254,7 +254,7 @@ func compactionItemSide(raw json.RawMessage) string {
 	}
 	_ = json.Unmarshal(raw, &head)
 	switch {
-	case (head.Type == "" || head.Type == "message") && head.Role == "user":
+	case (head.Type == "" || head.Type == "message") && head.Role == "user", head.Type == "agent_message":
 		return "user"
 	case (head.Type == "" || head.Type == "message") && (head.Role == "system" || head.Role == "developer"):
 		return "instruction"
