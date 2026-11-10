@@ -23,7 +23,12 @@ import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { attachmentName, downloadAttachment, useAttachmentPreview } from './attachment'
+import {
+  attachmentName,
+  attachmentURL,
+  downloadAttachment,
+  useAttachmentPreview,
+} from './attachment'
 import { copyToClipboard } from './clipboard'
 import { useRunningClock } from './clock'
 import CodeExecutionChunk from './CodeExecutionChunk.vue'
@@ -40,7 +45,6 @@ import MediaViewDialog from './media/MediaViewDialog.vue'
 import VideoResult from './media/VideoResult.vue'
 import { isAgent } from './catalog'
 import { insertCitations } from './markdown'
-import { dataURL } from './protocols'
 import { useReveal } from './reveal'
 import { youtubeVideoID } from './sample-media'
 import SegmentRun from './SegmentRun.vue'
@@ -765,7 +769,7 @@ onActivated(observe)
                       >
                         <img
                           class="loaded-image"
-                          :src="dataURL(segment.part.inlineData)"
+                          :src="attachmentURL(segment.part)"
                           :alt="attachmentName(segment.part)"
                         />
                       </button>
@@ -780,17 +784,17 @@ onActivated(observe)
                       <img
                         v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
                         class="media-image"
-                        :src="dataURL(segment.part.inlineData)"
+                        :src="attachmentURL(segment.part)"
                         alt=""
                       />
                       <audio
                         v-else-if="segment.part.inlineData?.mimeType.startsWith('audio/')"
                         controls
-                        :src="dataURL(segment.part.inlineData)"
+                        :src="attachmentURL(segment.part)"
                       ></audio>
                       <VideoResult
                         v-else-if="segment.part.inlineData?.mimeType.startsWith('video/')"
-                        :src="dataURL(segment.part.inlineData)"
+                        :src="attachmentURL(segment.part)"
                       />
                       <a
                         v-else-if="
