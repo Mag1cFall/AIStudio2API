@@ -171,12 +171,16 @@ function uploadedVideo(part: Part): boolean {
   return part.fileData !== undefined && part.inlineData?.mimeType.startsWith('video/') === true
 }
 
-// renewUploads 在发送前把 Files API 上传文件已到期或已不存在的视频以对话中保留的原视频重新上传，片段改为引用新文件
-async function renewUploads(turns: readonly Turn[]): Promise<void> {
+// renewUploads 在发送前把 Files API 上传文件已到期或已不存在的视频以对话中保留的原视频重新上传，片段改为引用新文件；signal 中止时检查与上传随之中止
+async function renewUploads(
+  turns: readonly Turn[],
+  signal: AbortSignal | null = null,
+): Promise<void> {
   const videos = turns.flatMap((turn) => turn.parts).filter(uploadedVideo)
   for (const part of videos) {
-    if (Date.now() < part.fileExpires! && (await driveFileExists(part.fileData!.fileUri))) continue
-    const uploaded = await uploadDriveFile(attachmentBlob(part), part.fileName!)
+    if (Date.now() < part.fileExpires! && (await driveFileExists(part.fileData!.fileUri, signal)))
+      continue
+    const uploaded = await uploadDriveFile(attachmentBlob(part), part.fileName!, signal)
     part.fileData = { mimeType: uploaded.mimeType, fileUri: uploaded.uri }
     part.fileExpires = Date.parse(uploaded.expirationTime)
   }
@@ -499,7 +503,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     const signal = controller.signal
     if (session.id === null && !session.temporary) await save()
     try {
-      await renewUploads(sent)
+      await renewUploads(sent, signal)
       void refreshTokens()
       await generate({
         protocol: session.settings.protocol,

@@ -11,16 +11,9 @@ const mediaBlobs = new WeakMap<object, Blob>()
 const mediaURLs = new WeakMap<object, string>()
 const mediaRegistry = new FinalizationRegistry<string>((url) => URL.revokeObjectURL(url))
 
-// cacheAttachmentBlob 绑定内联附件的原始 Blob 与 Object URL
-export function cacheAttachmentBlob(inline: NonNullable<Part['inlineData']>, blob: Blob): string {
-  const raw = toRaw(inline)
-  const existing = mediaURLs.get(raw)
-  if (existing !== undefined) return existing
-  const url = URL.createObjectURL(blob)
-  mediaBlobs.set(raw, blob)
-  mediaURLs.set(raw, url)
-  mediaRegistry.register(raw, url)
-  return url
+// cacheAttachmentBlob 绑定内联附件的原始 Blob
+export function cacheAttachmentBlob(inline: NonNullable<Part['inlineData']>, blob: Blob): void {
+  mediaBlobs.set(toRaw(inline), blob)
 }
 
 // copyAttachmentBlob 为复制出的内联附件复用已缓存的 Blob
@@ -38,10 +31,19 @@ export function attachmentBlob(part: Part): Blob {
   return mediaBlobs.get(raw) ?? new Blob([base64Bytes(raw.data)], { type: raw.mimeType })
 }
 
-// attachmentURL 返回内联附件的 Object URL
+// attachmentURL 返回内联附件的 Object URL，首次显示时以 attachmentBlob 创建并缓存其 Blob
 export function attachmentURL(part: Part): string {
   if (!part.inlineData) return ''
-  return cacheAttachmentBlob(part.inlineData, attachmentBlob(part))
+  const raw = toRaw(part.inlineData)
+  let url = mediaURLs.get(raw)
+  if (url === undefined) {
+    const blob = attachmentBlob(part)
+    cacheAttachmentBlob(raw, blob)
+    url = URL.createObjectURL(blob)
+    mediaURLs.set(raw, url)
+    mediaRegistry.register(raw, url)
+  }
+  return url
 }
 
 // attachmentKind 返回内联附件在预览对话框中的类型，Drive 与 YouTube 引用和无法预览的文件为空

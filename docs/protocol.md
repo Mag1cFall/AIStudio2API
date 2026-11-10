@@ -1518,7 +1518,7 @@ Worker 进程故障、Worker 被替换与协议 Code 5 会重建当前账户 Wor
 
 模型目录重试的 pending 集合保存等待再次同步的账户 ID。启动期全账户同步、以及新增、登录或在管理端启用后的单账户同步，遇到任意错误或成功返回空目录时加入；返回非空目录时移除；删除账户同时移除。全账户后台同步结束后启动单个 30 秒 ticker（Go 定时器），每次按启动期同步的方式重新载入排序后的待重试账户的会话页面，并在任务开始时复核该 ID 仍在 pending 集合中。错误或空目录继续保留；每个非空成功立即更新账户缓存与公共目录快照、发布 `accounts` 和 `models`，并在 `RUNNING` 状态触发 Worker 预热。批次结束时，`auth_required` 集合发生变化会补发当前账户与模型快照；即时单账户同步无论成功或失败都立即发布当前快照。启动期同步、单账户同步与 30 秒重试中的每个账户读取占用该账户的一个普通并发槽位，与生成请求和 Worker 启动共用 `PER_ACCOUNT_CONCURRENCY`。
 
-同一循环从全账户同步开始时起每 24 小时巡检一轮：逐个重新载入全部 enabled 且处于 `ready` 或 `busy` 的账户的会话页面，读取页面载入时的 `GetAiStudioBenefitTier` 与 `ListModels` 响应（启用 Build 时另读 Build 目录；账户本进程的首次读取先按[条款同意](#条款同意)处理 `GetLoggingContext`）：
+同一循环从全账户同步开始时起每 24 小时巡检一轮：按权益从高到低（Ultra、Pro、Plus、Free）、同权益按账户 ID 的顺序，逐个重新载入全部 enabled 且处于 `ready` 或 `busy` 的账户的会话页面，读取页面载入时的 `GetAiStudioBenefitTier` 与 `ListModels` 响应（启用 Build 时另读 Build 目录；账户本进程的首次读取先按[条款同意](#条款同意)处理 `GetLoggingContext`）：
 
 - 每个账户占用一个普通并发槽位，与生成请求共用 `PER_ACCOUNT_CONCURRENCY`，槽位已满的账户跳过本轮
 - 请求的模型不在任何账户的目录中时，巡检正在读取一轮的第一个账户则请求等它读完；没有进行中的一轮且距上一轮开始已超过 10 分钟时，巡检立即开始一轮，请求等这一轮读完第一个账户后再查找模型，仍没有时返回模型不存在，其余账户在后台继续读取；下一轮巡检从这一轮开始时计时
@@ -1631,6 +1631,8 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 | `/v1/videos` | `prompt` 或 `input_reference` | 长任务对象，随后轮询并下载内容 |
 
 生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，`gemini-3.1-pro-preview`、`gemini-3.1-flash-lite`、`gemini-3-flash-preview`、`gemini-omni-1.1-flash`、`gemini-nano-banana-2.1` 与 `gemma-` 开头的模型原样以 model 轮结尾发送，由模型原生续写。其余模型（包括 `-latest` 别名与 `-build` 写代码助手）在 `CONTINUATION_REWRITE` 打开时改写末尾连续 assistant 轮：`CONTINUATION_PROMPT` 非空时，这些轮的正文与代码执行内容以 `<assistant_prefix>` 包裹，连同该提示词写入系统指令；为空时这段正文作为最后一轮 user 发送。改写后模型从前缀之后续写，响应只返回续写部分，末尾未回传结果的函数调用由模型重新生成。`CONTINUATION_REWRITE` 关闭时所有模型原样发送，Playground 以 400 `Requests ending with a model turn are not supported` 拒绝的模型返回该错误。各生成入口与计数接口按同一规则转换，`countTokens` 接受以 model 轮结尾的请求。
+
+生成、计数与 Live 的系统提示按同一规则改写后发送：行首以 `You are` 或 `You're` 开头、以 agent、assistant 或 AI 结尾并带归属声明（`created by`、`built on`、`based on` 等）的身份句替换为 `You are an AI Agent.`，以 `x-anthropic-billing-header:` 开头的行与含 `RFC 2119 keywords`（不区分大小写）的行整行删除，改写后为空的系统提示分段不发送。
 
 四套生成入口共享同一规范请求，输入映射如下：
 

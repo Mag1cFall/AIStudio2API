@@ -206,8 +206,9 @@ type BidiEvent struct {
 	Err           error              `json:"-"`
 }
 
-// EncodeBidiSetupRequest 编码 Live 或 Robotics 的已验证 setup 帧
+// EncodeBidiSetupRequest 编码 Live 或 Robotics 的已验证 setup 帧，系统指令按 clientSystemText 改写
 func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte, string, error) {
+	request.SystemInstruction = clientSystemText(request.SystemInstruction)
 	model := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if model == "" {
 		return nil, "", fmt.Errorf("%w: bidi model 不能为空", ErrInvalidArgument)
