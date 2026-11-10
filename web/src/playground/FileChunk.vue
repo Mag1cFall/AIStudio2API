@@ -2,10 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { attachmentKind, attachmentName } from './attachment'
+import { attachmentKind, attachmentName, attachmentURL } from './attachment'
 import { base64Bytes } from './bytes'
 import { pdfThumbnail } from './pdf'
-import { dataURL } from './protocols'
 import { youtubeVideoID } from './sample-media'
 import type { Part } from './types'
 
@@ -23,8 +22,8 @@ const youtube = computed(() => youtubeVideoID(props.part.fileData?.fileUri ?? ''
 const tokens = computed(() =>
   props.part.tokenCount === undefined ? '' : tokenLabel(props.part.tokenCount),
 )
-// source 是内联音频与视频的播放地址
-const source = computed(() => (props.part.inlineData ? dataURL(props.part.inlineData) : ''))
+// source 是内联音频与视频的缓存 Blob 播放地址
+const source = computed(() => attachmentURL(props.part))
 
 // thumbnail 与官网 Drive 缩略图一致：PDF 显示第一页预览，无法解析的 PDF 与其他文件显示文件图标
 const thumbnail = ref('')
