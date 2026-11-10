@@ -438,7 +438,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	if !refreshed {
 		return nil
 	}
-	if err := resetCookieAuthUser(lease, refresher.prepareWorker); err != nil {
+	if err := setCookieAuthUser(lease, 0, refresher.prepareWorker); err != nil {
 		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
 	logRenewal("INFO", fmt.Sprintf(

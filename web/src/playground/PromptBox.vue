@@ -271,7 +271,7 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
-// readFile 读取文件为内联数据片段，直接绑定原文件 Blob 供预览与上传复用，不将巨型 Base64 纳入深度响应式代理
+// readFile 读取文件为内联数据片段，并绑定原文件 Blob 供预览与上传复用
 function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'): Promise<Part> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
