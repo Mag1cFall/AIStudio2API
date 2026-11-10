@@ -743,6 +743,8 @@ async function importBrowserAccounts(): Promise<void> {
   }
 }
 
+const conservativeTrial = import.meta.env.VITE_CONSERVATIVE === '1'
+
 // addMethods 是“添加账户”菜单中的导入方式，顺序按常用程度；服务所在平台不能从 Chrome 导入时该项不可选并说明原因
 const addMethods = computed<
   {
@@ -990,7 +992,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               class="z-[60] max-h-[var(--reka-dropdown-menu-content-available-height)] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg border border-line bg-panel p-1 shadow-xl"
             >
               <DropdownMenuItem
-                v-for="item in addMethods"
+                v-for="item in (conservativeTrial ? addMethods.slice(0, 1) : addMethods)"
                 :key="item.label"
                 :disabled="item.disabled ?? false"
                 class="group flex cursor-pointer items-start gap-3 rounded-md px-3 py-2.5 text-left outline-none data-[disabled]:cursor-default data-[highlighted]:bg-raised"

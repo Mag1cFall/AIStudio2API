@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 )
@@ -274,13 +275,17 @@ func (refresher *authRuntimeRefresher) do(ctx context.Context, method string, se
 		if !aistudio.DefinitiveAuthenticationFailure(err) {
 			return response, err
 		}
-		if attempt == 1 {
+		if !authenticationRecoveryAllowed(attempt) {
 			return nil, refresher.markAuthenticationRequired(ctx, err)
 		}
 		if err := refresher.Recover(ctx, err, generation); err != nil {
 			return nil, err
 		}
 	}
+}
+
+func authenticationRecoveryAllowed(attempt int) bool {
+	return !buildpolicy.Conservative && attempt < 1
 }
 
 // Do 在 401 后续签同一账户并重放一次请求

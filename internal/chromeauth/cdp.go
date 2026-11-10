@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/gorilla/websocket"
 )
 
@@ -23,6 +24,9 @@ type CDPBrowser struct {
 
 // ReadCDPBrowser 经 Chromium 远程调试地址读取浏览器全部未分区 Cookie，并在第一个页面中读取 navigator.language 与 Intl 时区，没有页面时语言与时区为空
 func ReadCDPBrowser(ctx context.Context, address string) (CDPBrowser, error) {
+	if buildpolicy.Conservative {
+		return CDPBrowser{}, fmt.Errorf("browser cookie extraction is disabled in the conservative trial")
+	}
 	endpoint, err := cdpBrowserEndpoint(ctx, address)
 	if err != nil {
 		return CDPBrowser{}, err

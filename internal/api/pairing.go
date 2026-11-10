@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 )
 
 // pairingTokenLifetime 是远程配对令牌的有效期
@@ -74,6 +75,10 @@ func (tokens *pairingTokens) valid(token string, now time.Time) bool {
 
 // handleActivePairing 返回仍在有效期内的远程配对令牌，没有时返回 404
 func (s *server) handleActivePairing(w http.ResponseWriter, _ *http.Request) {
+	if buildpolicy.Conservative {
+		writeAdminError(w, http.StatusForbidden, "conservative_trial", "Remote pairing is disabled")
+		return
+	}
 	token, ok := s.pairing.active(time.Now())
 	if !ok {
 		writeAdminError(w, http.StatusNotFound, "pairing_token_missing", "No active pairing token")
@@ -84,11 +89,19 @@ func (s *server) handleActivePairing(w http.ResponseWriter, _ *http.Request) {
 
 // handleCreatePairing 生成远程配对令牌
 func (s *server) handleCreatePairing(w http.ResponseWriter, _ *http.Request) {
+	if buildpolicy.Conservative {
+		writeAdminError(w, http.StatusForbidden, "conservative_trial", "Remote pairing is disabled")
+		return
+	}
 	writeJSON(w, http.StatusCreated, s.pairing.issue(time.Now()))
 }
 
 // handlePairingAccount 凭配对令牌导入一个账户，不经过管理会话
 func (s *server) handlePairingAccount(w http.ResponseWriter, r *http.Request) {
+	if buildpolicy.Conservative {
+		writeAdminError(w, http.StatusForbidden, "conservative_trial", "Remote pairing is disabled")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !s.pairing.valid(strings.TrimSpace(token), time.Now()) {
@@ -112,6 +125,10 @@ func (s *server) handlePairingAccount(w http.ResponseWriter, r *http.Request) {
 
 // handlePairingRenewal 凭配对上传时签发的续签凭据替换该账户的会话 Cookie，不经过管理会话
 func (s *server) handlePairingRenewal(w http.ResponseWriter, r *http.Request) {
+	if buildpolicy.Conservative {
+		writeAdminError(w, http.StatusForbidden, "conservative_trial", "Remote renewal is disabled")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

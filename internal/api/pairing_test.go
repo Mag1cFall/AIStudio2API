@@ -1,3 +1,5 @@
+//go:build !conservative
+
 package api
 
 import (

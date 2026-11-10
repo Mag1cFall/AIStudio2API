@@ -20,6 +20,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -72,6 +73,9 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 	options, err := parseSetupFlags(args, cfg)
 	if err != nil {
 		return err
+	}
+	if buildpolicy.Conservative && (!options.login || options.remote != "" || options.renew) {
+		return fmt.Errorf("conservative trial supports only local setup --login; browser extraction, cookie copying and remote renewal are disabled")
 	}
 	client := &http.Client{Timeout: cfg.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse

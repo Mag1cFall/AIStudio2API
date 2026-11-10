@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
@@ -20,6 +21,7 @@ func TestAdminConfig(t *testing.T) {
 	cfg.AdminAuthEnabled = true
 	cfg.AdminUsername = "operator"
 	cfg.AdminPassword = "test-password"
+	cfg.ProxyAPIKey = "fixture-key"
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,12 @@ func TestAdminConfig(t *testing.T) {
 		t.Fatalf("empty enabled password error = %v", err)
 	}
 	value.AdminAuthEnabled = false
-	if _, err := admin.UpdateRuntimeConfig(ctx, value); err != nil {
+	_, err = admin.UpdateRuntimeConfig(ctx, value)
+	if buildpolicy.Conservative {
+		if !errors.As(err, &status) || status.HTTPStatus() != http.StatusBadRequest {
+			t.Fatalf("disabled conservative admin auth error = %v", err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 }

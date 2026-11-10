@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"net"
 	"net/url"
 	"os"
@@ -158,7 +159,7 @@ var workerDefaultKeys = []string{"WARM_WORKER_LIMIT", "MAX_ACTIVE_WORKERS"}
 // defaultsFor 返回 WAA 后端为 backend 时的默认配置，Camoufox 后端的常驻预热账户数与活动 Worker 上限较小
 func defaultsFor(backend string) Config {
 	cfg := Default()
-	if backend == WAABackendCamoufox {
+	if backend == WAABackendCamoufox && !buildpolicy.Conservative {
 		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers = camoufoxWarmWorkerLimit, camoufoxMaxActiveWorkers
 	}
 	return cfg
@@ -166,7 +167,7 @@ func defaultsFor(backend string) Config {
 
 // Default 返回可直接启动的默认配置
 func Default() Config {
-	return Config{
+	cfg := Config{
 		AdminUsername:          "admin",
 		LogFile:                true,
 		LogMaxTotalMB:          500,
@@ -191,6 +192,17 @@ func Default() Config {
 		WAABackend:             WAABackendSpiderMonkey,
 		MediaOutput:            MediaOutputInline,
 	}
+	if buildpolicy.Conservative {
+		cfg.AdminAuthEnabled = true
+		cfg.WAABackend = WAABackendCamoufox
+		cfg.FirstEventHedge = FirstEventHedgeOff
+		cfg.PerAccountConcurrency, cfg.WarmStartupConcurrency = 1, 1
+		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers = 1, 1
+		cfg.SearchModelAliases, cfg.ContinuationRewrite = false, false
+		cfg.LogMaxTotalMB = 20
+		cfg.RoutingStrategy = "fill-first"
+	}
+	return cfg
 }
 
 // InvalidValue 是加载时取值无效、改用默认值的配置项
@@ -664,6 +676,9 @@ func appendEnv(path, key, value string) error {
 
 // Validate 校验配置值是否能用于服务启动
 func (c Config) Validate() error {
+	if err := validateConservative(c); err != nil {
+		return err
+	}
 	if c.AdminAuthEnabled && (strings.TrimSpace(c.AdminUsername) == "" || strings.TrimSpace(c.AdminPassword) == "") {
 		return fmt.Errorf("开启管理登录需要 ADMIN_USERNAME 与 ADMIN_PASSWORD")
 	}

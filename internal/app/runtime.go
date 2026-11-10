@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
@@ -36,6 +37,11 @@ func newRuntime(
 	accounts, err := store.Load()
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	for _, account := range accounts {
+		if err := aistudio.ValidateRuntimeState(account.StorageState); err != nil {
+			return nil, nil, nil, fmt.Errorf("account %s: %w", account.ID, err)
+		}
 	}
 	if err := launchCtx.Err(); err != nil {
 		return nil, nil, nil, err
@@ -838,6 +844,9 @@ func (service *trackedService) syncAccountModels(ctx context.Context, accountID 
 
 // retryModelCatalogs 每 30 秒重新载入待同步账户的页面重试目录，自 startedAt 起每 24 小时重新载入启用账户的页面读取权益与目录；闲置的写代码助手应用与到期资源在启动时与每 10 分钟删除
 func (service *trackedService) retryModelCatalogs(ctx context.Context, startedAt time.Time) {
+	if buildpolicy.Conservative {
+		return
+	}
 	var patrol sync.WaitGroup
 	defer patrol.Wait()
 	patrol.Go(func() { service.patrolAccountStates(ctx, startedAt) })
@@ -1819,7 +1828,7 @@ func (service *trackedService) generateWithRetry(
 	var activity *upstreamActivity
 	var err error
 	copyFiles := false
-	for attempt := 0; attempt < retry.maxAttempts; attempt++ {
+	for attempt := 0; attempt < retry.maxAttempts && generationAttemptAllowed(attempt); attempt++ {
 		selectionAccountID := requestedAccountID
 		recoveringAccount := retry.recoveryAccountID != ""
 		if retry.recoveryAccountID != "" {
@@ -2027,6 +2036,10 @@ func (service *trackedService) generateWithRetry(
 		clientCtx, requestCtx, func() { winner.cancel(); cancel() }, request.ID,
 		winner.first, winner.source, destination, &winner.serving, winner.copies, winner.activity, modelID,
 	)
+}
+
+func generationAttemptAllowed(attempt int) bool {
+	return !buildpolicy.Conservative || attempt == 0
 }
 
 // markAttemptAccount 把访问日志与活动请求的执行账户与通道记为该租约
@@ -2277,6 +2290,9 @@ func (service *trackedService) settleAttempt(
 	retry *generateRetry,
 	mayRecover bool,
 ) attemptOutcome {
+	if buildpolicy.Conservative {
+		mayRecover = false
+	}
 	err := attempt.err
 	lease := attempt.serving.Load()
 	accountID, accountLabel := lease.Account().ID, lease.Account().Config.Label
