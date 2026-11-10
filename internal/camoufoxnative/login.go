@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/gorilla/websocket"
 )
 
@@ -100,7 +101,7 @@ func Login(ctx context.Context, options LoginOptions) (result LoginResult, err e
 	if email == "" {
 		return LoginResult{}, errors.New("AI Studio 页面没有登录邮箱")
 	}
-	driveErr := session.authorizeDrive(loginCtx, email)
+	driveErr := optionalDriveAuthorization(loginCtx, email, session.authorizeDrive)
 	if err := loginCtx.Err(); err != nil {
 		return LoginResult{}, err
 	}
@@ -127,6 +128,13 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func optionalDriveAuthorization(ctx context.Context, email string, authorize func(context.Context, string) error) error {
+	if buildpolicy.Conservative {
+		return nil
+	}
+	return authorize(ctx, email)
 }
 
 func startLoginSession(ctx context.Context, options LoginOptions, state storageState) (*loginSession, error) {

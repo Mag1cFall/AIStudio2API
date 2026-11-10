@@ -29,6 +29,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 )
 
 // releaseAPI 为 GitHub 最新发行版本接口
@@ -88,6 +89,9 @@ func newSelfUpdater(version, executable string, proxy func() string, log func(le
 
 // updateMode 返回更新方式：managed 由分发方更新，binary 可原地替换，container 随镜像更新，development 为源码构建
 func updateMode(version string) string {
+	if buildpolicy.Conservative {
+		return "development"
+	}
 	if managedBy != "" {
 		return "managed"
 	}

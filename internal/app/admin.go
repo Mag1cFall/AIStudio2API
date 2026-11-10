@@ -16,6 +16,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -217,6 +218,9 @@ func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeIm
 
 // CookieBrowsers 列出本机开启远程调试的浏览器，读取其 Cookie 并经 proxy 识别其中各会话登录 AI Studio 的账户，每个账户一项，proxy 为空时用默认出口
 func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error) {
+	if buildpolicy.Conservative {
+		return nil, invalidAccount(fmt.Errorf("browser discovery is disabled; sign in in the runtime browser"))
+	}
 	addresses, err := chromeauth.DebugAddresses(ctx)
 	if err != nil {
 		return nil, err
@@ -263,6 +267,9 @@ func (admin *runtimeAdmin) readCookieBrowser(ctx context.Context, browser *api.C
 
 // DiscoverCookieAccounts 解析粘贴的 Cookie，返回其中各会话登录 AI Studio 的账户
 func (admin *runtimeAdmin) DiscoverCookieAccounts(ctx context.Context, input api.CookieImportInput) ([]api.CookieBrowser, error) {
+	if buildpolicy.Conservative {
+		return nil, invalidAccount(fmt.Errorf("cross-browser cookie import is disabled; sign in in the runtime browser"))
+	}
 	state, err := aistudio.ParseCookieText(input.Cookies)
 	if err != nil {
 		return nil, &adminOperationError{status: http.StatusBadRequest, code: "invalid_cookies", message: err.Error()}
@@ -368,6 +375,9 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 
 // ImportAccountState 导入远程配对上传或 Cookie 导入的认证状态与 Camoufox 指纹，未给标签时以 Cookie 中第 auth_user 个会话登录的账户邮箱为标签
 func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.AccountStateInput) (api.AdminAccount, error) {
+	if buildpolicy.Conservative {
+		return api.AdminAccount{}, invalidAccount(fmt.Errorf("external state import is disabled; sign in in the runtime browser"))
+	}
 	timezone, err := accountTimezone(input.Timezone)
 	if err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
@@ -1109,6 +1119,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
 	}.KeepEnvironment(saved)
 	if err := cfg.Validate(); err != nil {
+		return api.RuntimeConfig{}, invalidConfigError(err)
+	}
+	if err := config.ValidateRuntimePolicy(cfg); err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(err)
 	}
 	if err := cfg.Save(admin.configPath); err != nil {

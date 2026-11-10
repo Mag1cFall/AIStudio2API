@@ -201,6 +201,9 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 	if err := cfg.Validate(); err != nil {
 		return commandOptions{}, err
 	}
+	if err := config.ValidateRuntimePolicy(*cfg); err != nil {
+		return commandOptions{}, err
+	}
 	options := commandOptions{openUI: *openUI}
 	flags.Visit(func(value *flag.Flag) {
 		switch value.Name {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/buildpolicy"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
@@ -198,6 +199,15 @@ func WriteStorageState(filePath string, state StorageState) error {
 
 // Validate 校验 storage state 的浏览器字段
 func (s StorageState) Validate() error {
+	if buildpolicy.Conservative {
+		extension, exists, err := s.AuthExtension()
+		if err != nil {
+			return err
+		}
+		if exists && (extension.OAuth != nil || extension.Bound != nil) {
+			return fmt.Errorf("Chrome OAuth and device-bound renewal material are disabled in the conservative trial")
+		}
+	}
 	for index, cookie := range s.Cookies {
 		if strings.TrimSpace(cookie.Name) == "" || strings.TrimSpace(cookie.Domain) == "" {
 			return fmt.Errorf("storage state Cookie %d 缺少名称或域", index)
@@ -216,6 +226,25 @@ func (s StorageState) Validate() error {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			return fmt.Errorf("storage state origin %d 无效", index)
 		}
+	}
+	return nil
+}
+
+// ValidateRuntimeState rejects copied states at the live service boundary while
+// allowing generic parsers and fixtures to validate their storage shape.
+func ValidateRuntimeState(s StorageState) error {
+	if !buildpolicy.Conservative {
+		return nil
+	}
+	extension, exists, err := s.AuthExtension()
+	if err != nil {
+		return err
+	}
+	if !exists || extension.Source.Browser != "camoufox" {
+		return fmt.Errorf("this trial requires state created by sign-in in its runtime browser")
+	}
+	if extension.OAuth != nil || extension.Bound != nil {
+		return fmt.Errorf("Chrome OAuth and device-bound renewal material are disabled in the conservative trial")
 	}
 	return nil
 }
