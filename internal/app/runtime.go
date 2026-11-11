@@ -1755,8 +1755,6 @@ type generateRetry struct {
 	attemptFailure error
 	// missingInlineMedia 表示已因复用的内联附件文件不存在而在同一账户重试过
 	missingInlineMedia bool
-	// quotaRejected 表示已有尝试收到套餐限额或每日限额拒绝，之后全部账户冷却时不再改用这两种冷却中的账户
-	quotaRejected bool
 	// quotaUntil 是本次请求中因额度失败而冷却的账户最早的恢复时刻
 	quotaUntil time.Time
 }
@@ -1850,6 +1848,7 @@ func (service *trackedService) generateWithRetry(
 		}
 		if (unbound || fileBound) && len(retry.attempted) > 0 {
 			enabled, _ := service.pool.EnabledAccounts()
+			selection.AllowedAccountIDs = []string{}
 			for _, accountID := range enabled {
 				if _, exists := retry.attempted[accountID]; !exists {
 					selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
@@ -1862,7 +1861,7 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		quotaFallback := !retry.quotaRejected && selection.ResourceID == ""
+		quotaFallback := selection.ResourceID == ""
 		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
@@ -2231,7 +2230,6 @@ func (service *trackedService) settleAttempt(
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
-		retry.quotaRejected = retry.quotaRejected || aistudio.RequestQuotaCooldown(cooldown.Reason)
 		modelAccessScope := lease.CooldownScope(modelID)
 		scopeLabel := modelAccessScope
 		if cooldown.Global {
