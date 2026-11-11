@@ -334,7 +334,7 @@ func sendBidiClientMessages(
 				err = session.SendMusicPrompts(ctx, message.WeightedPrompts)
 			case "music_config":
 				var config []byte
-				config, _, err = geminiCamelKeys(message.MusicConfig)
+				config, err = geminiCamelKeys(message.MusicConfig)
 				if err == nil {
 					err = session.SendMusicConfig(ctx, config)
 				}

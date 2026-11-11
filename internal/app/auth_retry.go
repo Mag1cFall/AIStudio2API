@@ -359,6 +359,17 @@ func (transport *authRetryProtectedTransport) DoProtectedImage(
 	})
 }
 
+// DoProtectedDecision 在认证失败后续签同一账户并重放 CreateDecision 请求
+func (transport *authRetryProtectedTransport) DoProtectedDecision(
+	ctx context.Context,
+	request aistudio.DecisionRequest,
+	rpc aistudio.RPCRequest,
+) (*aistudio.RPCResponse, error) {
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return transport.transport.(aistudio.DecisionProtectedTransport).DoProtectedDecision(ctx, request, rpc)
+	})
+}
+
 // Refresh 续签 generation 下失效的租约账户并保存新的 storage state，此后已有续签提交时直接复用
 func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation uint64) error {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)

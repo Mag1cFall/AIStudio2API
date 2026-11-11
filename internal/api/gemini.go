@@ -392,7 +392,7 @@ func (s *server) handleGeminiModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // geminiServedMethods 是本服务以 Gemini API 形式提供的模型方法
-var geminiServedMethods = []string{"generateContent", "countTokens", "createCachedContent", "embedContent", "batchEmbedContents", "predict", "predictLongRunning"}
+var geminiServedMethods = []string{"generateContent", "countTokens", "createCachedContent", "embedContent", "batchEmbedContents", "predict", "predictLongRunning", "createDecision"}
 
 func geminiModelObject(model aistudio.Model) map[string]any {
 	methods := make([]string, 0, len(model.Methods))
@@ -524,7 +524,7 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 func decodeGeminiJSON(r *http.Request, target any) error {
 	body, err := io.ReadAll(r.Body)
 	if err == nil {
-		body, _, err = geminiCamelKeys(body)
+		body, err = geminiCamelKeys(body)
 	}
 	if err == nil {
 		err = json.Unmarshal(body, target)
@@ -545,62 +545,110 @@ var geminiOpaqueFields = map[string]bool{
 }
 
 // geminiCamelKeys 按 proto3 JSON 规则把各层消息字段名转为 lowerCamelCase，同层两种写法并存时保留驼峰字段，自由 JSON 字段的取值原样保留
-func geminiCamelKeys(raw []byte) ([]byte, bool, error) {
+func geminiCamelKeys(raw []byte) ([]byte, error) {
 	value := bytes.TrimSpace(raw)
 	if len(value) == 0 || value[0] != '{' && value[0] != '[' {
-		return raw, false, nil
+		return raw, nil
 	}
 	if camel, err := geminiKeysCamel(value); err == nil && camel {
-		return raw, false, nil
+		return raw, nil
 	}
-	changed := false
-	if value[0] == '[' {
-		var items []json.RawMessage
-		if err := json.Unmarshal(value, &items); err != nil {
-			return nil, false, err
+	output := bytes.NewBuffer(make([]byte, 0, len(value)))
+	if err := writeGeminiCamelKeys(output, value); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+// writeGeminiCamelKeys 把 JSON 对象或数组 value 中各层消息字段名转为 lowerCamelCase 后写入 output，字段取值按原字节写出，根值之后还有其他内容时返回错误
+func writeGeminiCamelKeys(output *bytes.Buffer, value []byte) error {
+	decoder := jsontext.NewDecoder(bytes.NewBuffer(value), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	// end 读取根值的结束括号，确认其后只有空白
+	end := func() error {
+		if _, err := decoder.ReadToken(); err != nil {
+			return err
 		}
-		for index, item := range items {
-			converted, itemChanged, err := geminiCamelKeys(item)
+		if _, err := decoder.ReadToken(); err != io.EOF {
+			return cmp.Or(err, errors.New("unexpected data after top-level value"))
+		}
+		return nil
+	}
+	// next 读取下一个值，返回它在 value 中的原字节
+	next := func() ([]byte, error) {
+		item, err := decoder.ReadValue()
+		end := decoder.InputOffset()
+		return value[end-int64(len(item)) : end], err
+	}
+	write := func(item []byte, opaque bool) error {
+		if opaque || item[0] != '{' && item[0] != '[' {
+			output.Write(item)
+			return nil
+		}
+		return writeGeminiCamelKeys(output, item)
+	}
+	open, err := decoder.ReadToken()
+	if err != nil {
+		return err
+	}
+	if open.Kind() == '[' {
+		output.WriteByte('[')
+		for index := 0; decoder.PeekKind() != ']'; index++ {
+			item, err := next()
 			if err != nil {
-				return nil, false, err
+				return err
 			}
-			items[index], changed = converted, changed || itemChanged
-		}
-		if !changed {
-			return raw, false, nil
-		}
-		encoded, err := json.Marshal(items)
-		return encoded, true, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(value, &fields); err != nil {
-		return nil, false, err
-	}
-	converted := make(map[string]json.RawMessage, len(fields))
-	for key, field := range fields {
-		name := geminiJSONName(key)
-		if name != key {
-			changed = true
-			if _, exists := fields[name]; exists {
-				continue
+			if index > 0 {
+				output.WriteByte(',')
+			}
+			if err := write(item, false); err != nil {
+				return err
 			}
 		}
-		if !geminiOpaqueFields[name] {
-			var fieldChanged bool
-			var err error
-			field, fieldChanged, err = geminiCamelKeys(field)
-			if err != nil {
-				return nil, false, err
-			}
-			changed = changed || fieldChanged
+		output.WriteByte(']')
+		return end()
+	}
+	type member struct {
+		key   string
+		value []byte
+	}
+	var members []member
+	keys := make(map[string]bool)
+	for decoder.PeekKind() != '}' {
+		token, err := decoder.ReadToken()
+		if err != nil {
+			return err
 		}
-		converted[name] = field
+		key := token.String()
+		item, err := next()
+		if err != nil {
+			return err
+		}
+		members = append(members, member{key: key, value: item})
+		keys[key] = true
 	}
-	if !changed {
-		return raw, false, nil
+	output.WriteByte('{')
+	written := 0
+	for _, field := range members {
+		name := geminiJSONName(field.key)
+		if name != field.key && keys[name] {
+			continue
+		}
+		if written > 0 {
+			output.WriteByte(',')
+		}
+		written++
+		quoted, err := jsontext.AppendQuote(output.AvailableBuffer(), name)
+		if err != nil {
+			return err
+		}
+		output.Write(quoted)
+		output.WriteByte(':')
+		if err := write(field.value, geminiOpaqueFields[name]); err != nil {
+			return err
+		}
 	}
-	encoded, err := json.Marshal(converted)
-	return encoded, true, err
+	output.WriteByte('}')
+	return end()
 }
 
 // geminiKeysCamel 逐个读取 JSON token，判断各层消息字段名是否都已是 lowerCamelCase，不读取自由 JSON 字段的取值

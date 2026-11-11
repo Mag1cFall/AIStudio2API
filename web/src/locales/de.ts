@@ -2131,6 +2131,9 @@ export const messages: Record<TranslationKey, string> = {
     'Einen Videoauftrag einreichen und das Video nach Abschluss herunterladen',
   'access.cap.embedding': 'Embeddings',
   'access.cap.embeddingHelp': 'Text in Vektoren für Suche und Ähnlichkeit umwandeln',
+  'access.cap.decision': 'Entscheidungen',
+  'access.cap.decisionHelp':
+    'Beantwortet Ja/Nein-, Auswahl- und Bewertungsfragen zu einer Eingabe mit Wahrscheinlichkeiten und Konfidenz',
   'access.cap.live': 'Live',
   'access.cap.liveHelp': 'Text und Audio über WebSocket in beide Richtungen austauschen',
   'access.cap.agent': 'Agents',
@@ -2153,6 +2156,8 @@ export const messages: Record<TranslationKey, string> = {
     'Gemini-Generierung, Streaming-Generierung, Tokenzählung und Kontext-Caching',
   'access.endpoint.interactions':
     'Gemini Interactions: erstellen, abrufen, löschen und abbrechen; dieselben Pfade funktionieren auch unter /v1',
+  'access.endpoint.decisions':
+    'Gemini Decisions: eine Reihe von Fragen in einem Aufruf mit dem Entscheidungsmodell beantworten',
   'access.endpoint.embeddings': 'Text-Embeddings im OpenAI- und Gemini-Format',
   'access.endpoint.images': 'OpenAI-Bildgenerierung und -bearbeitung sowie Gemini-Imagen-predict',
   'access.endpoint.audio': 'Sprachausgabe, Transkription und Übersetzung',
@@ -2200,6 +2205,7 @@ export const messages: Record<TranslationKey, string> = {
   'access.ep.interactionGet': 'Status und Ergebnis einer Interaktion abrufen',
   'access.ep.interactionDelete': 'Interaktion löschen',
   'access.ep.interactionCancel': 'Laufende Interaktion abbrechen',
+  'access.ep.decisionCreate': 'Eine Reihe von Entscheidungsfragen beantworten',
   'access.ep.embeddings': 'Embeddings erzeugen',
   'access.ep.embedContent': 'Embedding für einen Inhalt erzeugen',
   'access.ep.batchEmbed': 'Embeddings für mehrere Inhalte in einer Anfrage erzeugen',

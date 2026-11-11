@@ -1215,6 +1215,19 @@ func (service *trackedService) GenerateImage(ctx context.Context, request aistud
 	return images, requestErr
 }
 
+// CreateDecision 回答决策问题并登记请求目标与账户
+func (service *trackedService) CreateDecision(ctx context.Context, request aistudio.DecisionRequest) (aistudio.DecisionResult, error) {
+	request.Model = service.catalogModelID(ctx, service.mappedModel(request.Model))
+	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
+	if err != nil {
+		return aistudio.DecisionResult{}, err
+	}
+	defer cancel()
+	result, requestErr := service.service.(aistudio.DecisionService).CreateDecision(requestCtx, request)
+	api.SetAccessLogError(requestCtx, requestErr)
+	return result, requestErr
+}
+
 // GenerateVideo 创建一个视频长任务
 func (service *trackedService) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
 	request.Model = service.mappedModel(request.Model)
@@ -1930,10 +1943,10 @@ func (service *trackedService) generateWithRetry(
 		if winner != nil {
 			activity = winner.activity
 			if winner.hedge {
-				service.markAttemptAccount(requestCtx, request.ID, modelID, winner.lease)
+				service.markAttemptAccount(requestCtx, request.ID, modelID, winner.serving.Load())
 			}
 			api.SetAccessLogFirstEvent(requestCtx, winner.firstAt.Sub(generationStartedAt))
-			api.SetAccessLogTarget(requestCtx, winner.first.ProviderModel, winner.accountLabel)
+			api.SetAccessLogTarget(requestCtx, winner.first.ProviderModel, winner.serving.Load().Account().Config.Label)
 			if request.Unary {
 				collected, collectErr := collectGenerateEvents(requestCtx, winner.source, func(waited time.Duration, events []aistudio.Event) {
 					reasoning, content := 0, 0
@@ -2255,7 +2268,7 @@ func (err *quotaCooldownError) RetryAt(time.Time) time.Time {
 	return err.until
 }
 
-// settleAttempt 处理失败的尝试：记录访问日志与冷却，释放租约，mayRecover 为真时按需重建 Worker
+// settleAttempt 处理失败的尝试：在正在生成回答的账户上记录访问日志、冷却与认证失败，释放其租约，mayRecover 为真时按需重建 Worker
 func (service *trackedService) settleAttempt(
 	requestCtx context.Context,
 	requestID string,
@@ -2265,8 +2278,12 @@ func (service *trackedService) settleAttempt(
 	mayRecover bool,
 ) attemptOutcome {
 	err := attempt.err
-	lease := attempt.lease
-	accountID, accountLabel := lease.Account().ID, attempt.accountLabel
+	lease := attempt.serving.Load()
+	accountID, accountLabel := lease.Account().ID, lease.Account().Config.Label
+	proxy, workerGeneration := attempt.proxy, attempt.workerGeneration
+	if lease != attempt.lease {
+		proxy, workerGeneration = service.proxies.Binding(accountID), service.workers.WorkerGeneration(accountID)
+	}
 	missingInlineMedia := false
 	if attempt.copies != nil {
 		err = errors.Join(err, attempt.copies.Cleanup())
@@ -2281,7 +2298,7 @@ func (service *trackedService) settleAttempt(
 		DurationMS: time.Since(attempt.startedAt).Milliseconds(), Hedge: attempt.hedge,
 	})
 	if proxyNetworkError(requestCtx, err) {
-		service.reportProxyFailure(attempt.proxy, accountLabel, err)
+		service.reportProxyFailure(proxy, accountLabel, err)
 	}
 	workerFailed := service.workers.WorkerFailed(accountID)
 	waaRuntimeFailed := aistudio.DefinitiveWAARuntimeFailure(err)
@@ -2341,14 +2358,14 @@ func (service *trackedService) settleAttempt(
 	if !quotaFailure && !buildRejected {
 		retry.attemptFailure = err
 	}
-	if releaseErr := attempt.serving.Load().Release(); releaseErr != nil {
+	if releaseErr := lease.Release(); releaseErr != nil {
 		return attemptOutcome{err: errors.Join(err, releaseErr), accountID: accountID, accountLabel: accountLabel}
 	}
 	recoverWorker := false
 	if requestCtx.Err() == nil && mayRecover {
 		var resetErr error
 		recoverWorker, _, resetErr = service.recoverWorkerOnce(
-			requestCtx, accountID, attempt.workerGeneration, retry.recoveredWorker,
+			requestCtx, accountID, workerGeneration, retry.recoveredWorker,
 			needsWAARuntimeRecovery(err, workerFailed, workerReplaced) || protectedTransport,
 			workerFailed || waaRuntimeFailed,
 		)

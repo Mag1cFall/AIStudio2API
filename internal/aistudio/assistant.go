@@ -80,8 +80,6 @@ const (
 	assistantInterruptedPrompt = "Your last turn was cut off by an internal error. The user already received your reply up to the end of this text:\n<partial_reply>\n%s\n</partial_reply>\nContinue the reply right after it without repeating it."
 	// assistantPartialReplyPrompt 是模型已输出部分正文后需要续出或修正工具调用时附带的已输出正文末尾，%s 为已输出正文的末尾
 	assistantPartialReplyPrompt = "\n\nThe user already received your reply up to the end of this text:\n<partial_reply>\n%s\n</partial_reply>\nDo not repeat it."
-	// assistantPartialReplyRunes 是恢复提示带上的已输出正文末尾的字符数上限
-	assistantPartialReplyRunes = 20000
 )
 
 // assistantWorkspaceTools 是写代码助手服务端指令声明的工作区内置工具，search_web 在最后
@@ -465,7 +463,10 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		for followed := 0; followed < regenerations; followed++ {
 			prompt := assistantEmptyReplyPrompt
 			var failure *RPCError
-			if err != nil {
+			if err != nil && decoder.unanswered && answer.Len() > 0 {
+				// 追加的任务没有任何模型回复即结束时以空回复提示再追加一轮
+				err = nil
+			} else if err != nil {
 				if !decoder.failed || answer.Len() == 0 || !errors.As(err, &failure) || failure.StatusCode != http.StatusBadGateway {
 					break
 				}
@@ -488,11 +489,11 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 				if strings.TrimSpace(answer.String()) != "" {
 					prompt += fmt.Sprintf(assistantPartialReplyPrompt, partialReplyTail(answer.String()))
 				}
-			} else if len(reply) > replied || decoder.overran {
+			} else if len(reply) > replied || decoder.stopped {
 				break
 			}
-			// 任务在被禁止的工具或交回调用的提问处截断时上游仍在运行，追加用户轮之前取消
-			if decoder.overran && !decoder.failed {
+			// 任务在被禁止的工作区工具处截断时上游仍在运行，追加用户轮之前取消
+			if decoder.invalidTool {
 				if err = cleanup.cancel(ctx, *cleanup.generation.Load()); err != nil {
 					break
 				}
@@ -510,13 +511,13 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 			}
 			err = errors.Join(DecodeAssistantStream(follow.Body, decoder, collect), follow.Body.Close())
 		}
-		cleanup.completed.Store(decoder.failed || err == nil && decoder.finished && !decoder.overran)
+		cleanup.completed.Store(decoder.failed || err == nil && decoder.finished && !decoder.stopped)
 		if err == nil && interruption != nil && len(reply) == replied && !decoder.malformed && !decoder.invalidTool {
 			err = interruption
 		}
 		if err == nil {
 			assistantSearches.store(apiKey, historyDigest, answer.String(), append(searches, decoder.searches...))
-			if decoder.finished && !decoder.overran && !decoder.malformed && !decoder.invalidTool && interruption == nil {
+			if decoder.finished && !decoder.stopped && !decoder.malformed && !decoder.invalidTool && interruption == nil {
 				cleanup.tip.Store(&assistantSessionKey{apiKey: apiKey, digest: assistantLinkDigest(links[len(links)-1].digest, true, reply)})
 			}
 			if !decoder.called && (decoder.malformed || decoder.invalidTool) {
@@ -728,13 +729,16 @@ type assistantCleanup struct {
 	once sync.Once
 }
 
-// cancel 取消应用中的任务 generation
+// cancel 取消应用中的任务 generation，任务已在上游结束时上游返回 FAILED_PRECONDITION，同样视为已停止
 func (cleanup *assistantCleanup) cancel(ctx context.Context, generation string) error {
 	body, _ := json.Marshal([]any{generation, cleanup.session.applet})
 	response, err := cleanup.client.do(ctx, "CancelCodeAssistantOfflineGeneration", cleanup.accountID, "", body, false)
 	if err == nil {
 		_, err = io.Copy(io.Discard, response.Body)
 		err = errors.Join(err, response.Body.Close())
+	}
+	if failure := (*RPCError)(nil); errors.As(err, &failure) && failure.Code == 9 {
+		return nil
 	}
 	return err
 }
@@ -799,16 +803,18 @@ type AssistantStreamDecoder struct {
 	finished    bool
 	// answered 表示最近解码的步骤是已完成、含正文且没有工具动作的模型步骤，即本轮回复结束
 	answered bool
-	// overran 表示本轮回复在函数调用处结束：调用之后模型继续输出正文或上游后续步骤失败
-	overran bool
+	// stopped 表示不再读取本任务后续步骤：函数调用之后模型继续输出正文、上游后续步骤失败，或模型调用了被禁止的工作区工具、交回的提问缺少调用块
+	stopped bool
 	// failed 表示上游任务以失败步骤结束，不再需要取消
 	failed bool
+	// unanswered 表示任务流正常结束而本任务没有任何模型回复
+	unanswered bool
 }
 
 // DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束、函数调用之后模型继续输出正文或上游后续步骤失败时不再读取上游，消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取，仍未完成而已解出完整函数调用或写出正文时以已有内容结束本轮
 func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, emit func(Event) error) error {
 	err := decodeAssistantMessages(source, decoder, emit)
-	if err == nil && !decoder.finished && !decoder.overran && decoder.Reopen != nil {
+	if err == nil && !decoder.finished && !decoder.stopped && decoder.Reopen != nil {
 		var reopened io.ReadCloser
 		if reopened, err = decoder.Reopen(); err == nil {
 			err = errors.Join(decodeAssistantMessages(reopened, decoder, emit), reopened.Close())
@@ -847,7 +853,7 @@ func decodeAssistantMessages(source io.Reader, decoder *AssistantStreamDecoder, 
 	if token, err := stream.Token(); err != nil || token != json.Delim('[') {
 		return fail("$[0]", "消息列表不是数组")
 	}
-	for ; !decoder.answered && !decoder.overran && stream.More(); index++ {
+	for ; !decoder.answered && !decoder.stopped && stream.More(); index++ {
 		var raw json.RawMessage
 		if err := stream.Decode(&raw); err != nil {
 			return fail(fmt.Sprintf("$[0][%d]", index), err.Error())
@@ -862,7 +868,7 @@ func decodeAssistantMessages(source io.Reader, decoder *AssistantStreamDecoder, 
 			}
 		}
 	}
-	if !decoder.answered && !decoder.overran {
+	if !decoder.answered && !decoder.stopped {
 		if token, err := stream.Token(); err != nil || token != json.Delim(']') {
 			return fail("$[0]", "消息列表没有正常结束")
 		}
@@ -906,7 +912,7 @@ func (d *AssistantStreamDecoder) Decode(raw json.RawMessage, path string) ([]Eve
 			return nil, err
 		}
 		events = append(events, stepEvents...)
-		if d.overran {
+		if d.stopped {
 			break
 		}
 	}
@@ -937,7 +943,7 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 		}
 		d.failed = true
 		if d.called {
-			d.overran = true
+			d.stopped = true
 			return nil, nil
 		}
 		return nil, failed
@@ -1008,10 +1014,10 @@ func (d *AssistantStreamDecoder) decodeStep(raw json.RawMessage, path string, ev
 	}
 	if invalidAction && len(d.Functions) > 0 && !d.called {
 		d.invalidTool = true
-		d.overran = true
+		d.stopped = true
 	} else if missingCallQuestion && len(d.Functions) > 0 && !d.called && !d.block {
 		d.malformed = true
-		d.overran = true
+		d.stopped = true
 	}
 	return events, nil
 }
@@ -1115,7 +1121,7 @@ func (d *AssistantStreamDecoder) text(delta string) []Event {
 		return []Event{{Kind: EventText, Text: delta}}
 	}
 	if d.called {
-		d.overran = d.overran || strings.TrimSpace(delta) != ""
+		d.stopped = d.stopped || strings.TrimSpace(delta) != ""
 		return nil
 	}
 	d.held += delta
@@ -1180,7 +1186,7 @@ func (d *AssistantStreamDecoder) text(delta string) []Event {
 			d.other = true
 		}
 	}
-	d.overran = strings.TrimSpace(d.held) != ""
+	d.stopped = strings.TrimSpace(d.held) != ""
 	d.held = ""
 	return events
 }
@@ -1414,7 +1420,8 @@ func (d *AssistantStreamDecoder) recorded() []Event {
 
 // End 在本轮回复结束、函数调用之后模型继续输出正文或流结束时返回扣下的正文或函数调用、搜索来源、各步骤用量之和与完成事件
 func (d *AssistantStreamDecoder) End() ([]Event, error) {
-	if !d.finished && !d.overran && !d.called && !d.wroteText {
+	if !d.finished && !d.stopped && !d.called && !d.wroteText {
+		d.unanswered = true
 		return nil, &ProtocolEvidenceError{Method: assistantStreamMethod, Path: "$", Detail: "流结束前没有完成的模型回复"}
 	}
 	var events []Event

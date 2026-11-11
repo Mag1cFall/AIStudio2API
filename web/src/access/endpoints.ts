@@ -257,6 +257,26 @@ export const endpointGroups: EndpointGroup[] = [
     ],
   },
   {
+    name: 'Gemini Decisions',
+    description: 'access.endpoint.decisions',
+    auth: 'gemini',
+    endpoints: [
+      {
+        method: 'POST',
+        path: '/v1beta/decisions',
+        summary: 'access.ep.decisionCreate',
+        docs: 'https://ai.google.dev/gemini-api/docs/decisions-api',
+        body: {
+          model: '{model}',
+          input: 'I was charged twice for my order.',
+          questions: {
+            is_refund: { type: 'noul', instructions: 'Is the customer asking for money back?' },
+          },
+        },
+      },
+    ],
+  },
+  {
     name: 'Embeddings',
     description: 'access.endpoint.embeddings',
     auth: 'openai',

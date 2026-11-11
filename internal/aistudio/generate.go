@@ -824,14 +824,19 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	request.Contents = applySpeechTranscript(request.Contents, entry.model, request.Config)
 	wireRequest := request
 	wireRequest.Config.StopSequences = nil
+	// accountCtx 是发送请求所用的上下文，续写轮换账户后为新账户的上下文
+	accountCtx := ctx
+	switched := func(next context.Context, accountID string) {
+		accountCtx, request.AccountID, wireRequest.AccountID = next, accountID, accountID
+	}
 	sendRequest := func() (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 		switch {
 		case entry.model.Capabilities["assistant_route"]:
-			return c.sendAssistant(ctx, wireRequest, entry)
+			return c.sendAssistant(accountCtx, wireRequest, entry)
 		case build:
-			return c.sendBuild(ctx, wireRequest, entry)
+			return c.sendBuild(accountCtx, wireRequest, entry)
 		default:
-			return c.sendPlayground(ctx, wireRequest, entry)
+			return c.sendPlayground(accountCtx, wireRequest, entry, switched)
 		}
 	}
 	response, decodeStream, err := sendRequest()
@@ -1117,11 +1122,14 @@ func trimTrailingSignatureParts(parts *[]Part) {
 	*parts = items
 }
 
-// partialReplyTail 返回已输出正文末尾至多 assistantPartialReplyRunes 个 Unicode 字符
+// partialReplyRunes 是续写恢复提示带上的已输出正文末尾的字符数上限
+const partialReplyRunes = 20000
+
+// partialReplyTail 返回已输出正文末尾至多 partialReplyRunes 个 Unicode 字符
 func partialReplyTail(text string) string {
 	runes := []rune(text)
-	if len(runes) > assistantPartialReplyRunes {
-		return string(runes[len(runes)-assistantPartialReplyRunes:])
+	if len(runes) > partialReplyRunes {
+		return string(runes[len(runes)-partialReplyRunes:])
 	}
 	return text
 }
@@ -1191,6 +1199,17 @@ func (s *continuationPrefixStripper) longerPrefixPending(index int, combined str
 	return false
 }
 
+// flush 停止去重并输出尚未确认重复的暂存正文
+func (s *continuationPrefixStripper) flush(emit func(Event) error) error {
+	s.active = false
+	if s.pending == "" {
+		return nil
+	}
+	text, sig := s.pending, s.pendingSig
+	s.pending, s.pendingSig = "", ""
+	return emit(Event{Kind: EventText, Text: text, ThoughtSignature: sig})
+}
+
 // filter 过滤续写轮开头重复的已输出正文前缀并保留思考签名
 func (s *continuationPrefixStripper) filter(event Event, emit func(Event) error) error {
 	if s == nil || !s.active {
@@ -1205,25 +1224,14 @@ func (s *continuationPrefixStripper) filter(event Event, emit func(Event) error)
 				return emit(event)
 			}
 		}
-		sig := s.pendingSig
-		s.pending = ""
-		s.pendingSig = ""
-		s.active = false
-		if sig != "" {
-			if err := emit(Event{Kind: EventThoughtSignature, Part: Part{ThoughtSignature: sig}}); err != nil {
-				return err
-			}
+		if err := s.flush(emit); err != nil {
+			return err
 		}
 		return emit(event)
 	}
 	if event.Transcript != nil {
-		s.active = false
-		if s.pending != "" {
-			if err := emit(Event{Kind: EventText, Text: s.pending, ThoughtSignature: s.pendingSig}); err != nil {
-				return err
-			}
-			s.pending = ""
-			s.pendingSig = ""
+		if err := s.flush(emit); err != nil {
+			return err
 		}
 		return emit(event)
 	}
@@ -1407,8 +1415,8 @@ func nextConversationTurn(contents []Content) int {
 	return -1
 }
 
-// sendPlayground 编码并发送 Playground GenerateContent，返回响应与含完成帧校验的流解码
-func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
+// sendPlayground 编码并发送 Playground GenerateContent，返回响应与含完成帧校验的流解码，续写轮换账户后以新账户的上下文与 ID 调用 switched
+func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, entry modelEntry, switched func(context.Context, string)) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	reason := ""
 	if request.Unary {
 		reason = "Playground GenerateContent 使用服务端流，收集完成后返回"
@@ -1432,7 +1440,7 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 	}
 	request.continuationProof = response.Proof
 	return response, func(source io.Reader, emit func(Event) error) error {
-		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, restoreFunctionNames(request.Tools.Functions, emit))
+		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, restoreFunctionNames(request.Tools.Functions, emit), switched)
 	}, nil
 }
 
@@ -1447,8 +1455,8 @@ func ContextWithContinuationAccounts(ctx context.Context, accounts ContinuationA
 	return context.WithValue(ctx, continuationAccountsKey{}, accounts)
 }
 
-// decodePlaygroundRounds 解码 GenerateContent 流，上游要求续写时携带续写 token 发送下一轮，续写轮以可换账户的错误失败时经上下文中的 ContinuationAccounts 换账户重发，各轮输出依次转发
-func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateRequest, defaults GenerationDefaults, runtime RequestContext, source io.Reader, emit func(Event) error) error {
+// decodePlaygroundRounds 解码 GenerateContent 流，上游要求续写时携带续写 token 发送下一轮，续写轮以可换账户的错误失败时经上下文中的 ContinuationAccounts 换账户重发并调用 switched，没有其他账户时返回该轮的上游错误，各轮输出依次转发
+func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateRequest, defaults GenerationDefaults, runtime RequestContext, source io.Reader, emit func(Event) error, switched func(context.Context, string)) error {
 	total := int64(0)
 	if defaults.ContinuedOutputTokens > 0 {
 		config, err := encodeGenerationConfig(request.Config, defaults)
@@ -1514,12 +1522,15 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 			}
 			next, switchErr := accounts(ctx, err)
 			if switchErr != nil {
-				err = errors.Join(err, switchErr)
+				if !errors.Is(switchErr, ErrNoEligibleAccount) {
+					err = errors.Join(err, switchErr)
+				}
 				break
 			}
 			ctx = next
 			lease, _ := AccountLeaseFromContext(ctx)
 			request.AccountID, request.continuationProof = lease.Account().ID, ""
+			switched(ctx, request.AccountID)
 			if c.contextProvider != nil {
 				if runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID); err != nil {
 					return fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
