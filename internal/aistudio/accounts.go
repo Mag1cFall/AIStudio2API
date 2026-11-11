@@ -2850,13 +2850,13 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 			if account.ID == accountID {
 				if allowed != nil {
 					if _, exists := allowed[accountID]; !exists {
-						return nil, ErrNoEligibleAccount
+						return nil, fmt.Errorf("%w：账户 %s 不在本次请求可用的账户中", ErrNoEligibleAccount, accountID)
 					}
 				}
 				return []int{index}, nil
 			}
 		}
-		return nil, ErrNoEligibleAccount
+		return nil, fmt.Errorf("%w：账户 %s 不存在", ErrNoEligibleAccount, accountID)
 	}
 	indices := make([]int, 0, len(p.accounts))
 	for index, account := range p.accounts {
