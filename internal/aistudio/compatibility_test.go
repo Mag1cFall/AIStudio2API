@@ -296,3 +296,14 @@ func TestAssistantFailureQuotaCooldown(t *testing.T) {
 		}
 	})
 }
+
+// TestRepairJSONStringsTrailingComma 验证调用块 JSON 去掉 } 与 ] 之前的尾随逗号后可以解码，字符串中的逗号保持原样
+func TestRepairJSONStringsTrailingComma(t *testing.T) {
+	var calls []map[string]any
+	if err := json.Unmarshal([]byte(repairJSONStrings("[{\"name\": \"read_file\", \"arguments\": {\"path\": \"a,}b.txt\",},},\n]")), &calls); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0]["name"] != "read_file" || calls[0]["arguments"].(map[string]any)["path"] != "a,}b.txt" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
