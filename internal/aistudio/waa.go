@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ProtectedRequest 表示需要 WAA 保护的 AI Studio 请求
+// ProtectedRequest 表示需要 WAA 保护的 AI Studio 请求，Proof 非空时写入该 proof 并直接发送
 type ProtectedRequest struct {
 	URL        string
 	Headers    http.Header
@@ -14,6 +14,7 @@ type ProtectedRequest struct {
 	Prompt     string
 	PagePrompt string
 	ProofField int
+	Proof      string
 }
 
 // followUp 是受保护请求发出 Delay 后以相同请求头发出的伴随请求，响应被丢弃
@@ -37,10 +38,11 @@ func followUpFrom(ctx context.Context) (followUp, bool) {
 	return item, ok
 }
 
-// PreparedProtectedRequest 表示已写入 fresh proof 的请求
+// PreparedProtectedRequest 表示已写入 proof 的请求与写入的 proof，由页面界面运行的请求 proof 为空
 type PreparedProtectedRequest struct {
 	Body    []byte
 	Headers http.Header
+	Proof   string
 }
 
 // WorkerPhase 表示账户 runtime 当前阶段
