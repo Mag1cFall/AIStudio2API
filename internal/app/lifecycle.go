@@ -340,6 +340,13 @@ func (manager *runtimeManager) GenerateImage(ctx context.Context, request aistud
 	return manager.current.service.(aistudio.ImageService).GenerateImage(ctx, request)
 }
 
+// CreateDecision 由当前生成服务回答决策问题
+func (manager *runtimeManager) CreateDecision(ctx context.Context, request aistudio.DecisionRequest) (aistudio.DecisionResult, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.service.(aistudio.DecisionService).CreateDecision(ctx, request)
+}
+
 // GenerateVideo 由当前生成服务创建视频任务
 func (manager *runtimeManager) GenerateVideo(ctx context.Context, request aistudio.VideoRequest) (aistudio.VideoOperation, error) {
 	manager.mu.RLock()

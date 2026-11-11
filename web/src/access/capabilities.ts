@@ -13,6 +13,7 @@ import type { Model } from '@/types'
 import {
   anthropicPython,
   anthropicTypescript,
+  decisionCode,
   embeddingCode,
   filesCode,
   transcriptionCode,
@@ -257,6 +258,17 @@ export const capabilities: Capability[] = [
     protocols: [],
     languages: () => openAIOptions,
     code: (input) => embeddingCode(input.language, input),
+  },
+  {
+    id: 'decision',
+    label: 'access.cap.decision',
+    description: 'access.cap.decisionHelp',
+    icon: 'decision',
+    endpoints: [['POST', '/v1beta/decisions']],
+    matches: (model) => model.methods.includes('createDecision'),
+    protocols: [],
+    languages: () => googleOptions,
+    code: (input) => decisionCode(input.language, input),
   },
   {
     id: 'live',

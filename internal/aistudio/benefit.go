@@ -27,6 +27,7 @@ var tieredRPCMethods = map[string]struct{}{
 	"CodeAssistantOffline":     {},
 	"CancelInteraction":        {},
 	"CreateInteraction":        {},
+	"CreateDecision":           {},
 	"CreateInteractionStream":  {},
 	"GetInteractionStream":     {},
 	"StreamExtractVideoFrames": {},

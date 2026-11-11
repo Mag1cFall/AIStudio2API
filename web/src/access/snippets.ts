@@ -122,6 +122,77 @@ console.log(result.data[0].embedding.length);
   }
 }
 
+// decisionCode 生成 Decisions API 示例：对同一段输入同时提出是非与单选问题
+export function decisionCode(language: string, { origin, modelID }: SnippetInput): string {
+  switch (language) {
+    case 'python':
+      return `import os
+
+from google import genai
+from google.genai import types
+
+client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY"),
+    http_options=types.HttpOptions(base_url="${origin}", api_version="v1beta"),
+)
+
+result = client.decisions.create(
+    model="${modelID}",
+    input="I was charged twice for my order.",
+    questions={
+        "is_refund": {"type": "noul", "instructions": "Is the customer asking for money back?"},
+        "department": {
+            "type": "choice",
+            "instructions": "Which department should handle this request?",
+            "criteria": {"billing": "Payments and refunds.", "shipping": "Delivery and tracking.", "other": ""},
+        },
+    },
+)
+print(result.answers["is_refund"].noul, result.answers["department"].choice)
+`
+    case 'typescript':
+      return `import { GoogleGenAI } from '@google/genai';
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  apiVersion: 'v1beta',
+  httpOptions: { baseUrl: '${origin}' },
+});
+
+const result = await ai.decisions.create({
+  model: '${modelID}',
+  input: 'I was charged twice for my order.',
+  questions: {
+    is_refund: { type: 'noul', instructions: 'Is the customer asking for money back?' },
+    department: {
+      type: 'choice',
+      instructions: 'Which department should handle this request?',
+      criteria: { billing: 'Payments and refunds.', shipping: 'Delivery and tracking.', other: '' },
+    },
+  },
+});
+console.log(result.answers?.is_refund, result.answers?.department);
+`
+    default:
+      return `curl "${origin}/v1beta/decisions" \\
+  -H "x-goog-api-key: $GEMINI_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${modelID}",
+    "input": "I was charged twice for my order.",
+    "questions": {
+      "is_refund": {"type": "noul", "instructions": "Is the customer asking for money back?"},
+      "department": {
+        "type": "choice",
+        "instructions": "Which department should handle this request?",
+        "criteria": {"billing": "Payments and refunds.", "shipping": "Delivery and tracking.", "other": ""}
+      }
+    }
+  }'
+`
+  }
+}
+
 // filesCode 生成上传 document.pdf 后在提问中引用该文件的示例：Gemini SDK 经 Files API，OpenAI SDK 经 Files 与 Responses
 export function filesCode(language: string, { origin, modelID }: SnippetInput): string {
   switch (language) {

@@ -495,10 +495,15 @@ func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
 	})
 }
 
+// requestedAccount 返回 X-AIStudio-Account 请求头指定的账户 ID，没有指定时为空
+func requestedAccount(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-AIStudio-Account"))
+}
+
 // accountContextMiddleware 把 X-AIStudio-Account 请求头指定的账户放进请求上下文，账户池只用该账户
 func accountContextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accountID := strings.TrimSpace(r.Header.Get("X-AIStudio-Account")); accountID != "" {
+		if accountID := requestedAccount(r); accountID != "" {
 			r = r.WithContext(aistudio.ContextWithAccount(r.Context(), accountID))
 		}
 		next.ServeHTTP(w, r)

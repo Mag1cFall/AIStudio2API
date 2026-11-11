@@ -85,6 +85,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **Image Generation**: Nano Banana image generation
 - **Video Generation**: Gemini Omni generates video tasks and image-to-video; Gemini Omni accepts text, image, and video input and returns text and MP4 video through the four generation APIs
 - **Deep Research**: Pro and Ultra accounts can run Deep Research through the four generation APIs and the Interactions `agent` field, returning the research process, a cited report, and charts
+- **Decision Model**: `gemini-decision-1` answers many yes/no, choice, and score questions about one shared input in a single call to `/v1beta/decisions`, returning calibrated probabilities and confidence; input can be text, images, audio, video, and PDF, and only input tokens are billed
 - **YouTube Input**: YouTube video URLs are read as external video attachments; with `YOUTUBE_LINKS` enabled, YouTube links in message text are read as video too
 - **Video Understanding Controls**: Gemini and Interactions support per-video start/end offsets, sampling rates greater than 0 and up to 24 FPS, and static/agentic processing; agentic results preserve server-side processing steps and conversation history
 - **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
@@ -510,6 +511,28 @@ curl http://127.0.0.1:2048/v1/videos \
 
 After creating the task, poll `GET /v1/videos/{id}` and download the result from `GET /v1/videos/{id}/content`; video-capable Omni models such as `gemini-omni-1.1-flash` also create tasks through `:predictLongRunning`.
 
+### Decisions (Gemini Decision)
+
+```bash
+curl http://127.0.0.1:2048/v1beta/decisions \
+  -H "x-goog-api-key: 123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-decision-1",
+    "input": "I was charged twice for my order.",
+    "questions": {
+      "is_refund": {"type": "noul", "instructions": "Is the customer asking for money back?"},
+      "department": {
+        "type": "choice",
+        "instructions": "Which department should handle this request?",
+        "criteria": {"billing": "Payments and refunds.", "shipping": "Delivery and tracking.", "other": ""}
+      }
+    }
+  }'
+```
+
+You name the keys of `questions`, and answers come back under the same keys. `noul` returns the probability `noul` that the statement holds, with optional `true_description` and `false_description` in `criteria`; `choice` takes option IDs mapped to descriptions in `criteria` and returns `choice` plus `probabilities` for every option; `score` takes level descriptions from low to high in `criteria` and returns the expected level `score`, per-level `probabilities`, and `legend`. Every answer includes `confidence`. `input` accepts a string or Interactions content blocks; images, audio, video, and PDF use `data` (Base64) or `uri` (an HTTPS URL or a file from this service's Files API) with `mime_type`. The Google Gen AI SDK calls it through `client.decisions.create`.
+
 ## Models
 
 The model catalog follows AI Studio updates; clients read the current values from `/v1/models` or `/v1beta/models`. The table below lists common catalog models; runtime results are authoritative for model IDs and limits:
@@ -526,6 +549,7 @@ The model catalog follows AI Studio updates; clients read the current values fro
 | `gemma-4-31b-it` | Gemma 4 31B IT | Text | 262144 | 32768 |
 | `gemini-omni-1.1-flash` | Gemini Omni 1.1 Flash | Text and video | 131072 | 65536 |
 | `deep-research-preview-04-2026` | Deep Research Preview | Deep research | 131072 | 65536 |
+| `gemini-decision-1` | Gemini Decision 1 | Decision | 262144 | 0 |
 | `gemini-nano-banana-2.1` | Nano Banana 2.1 | Image | 65536 | 65536 |
 | `gemini-3.1-flash-image` | Nano Banana 2 | Image | 65536 | 65536 |
 | `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | Image | 65536 | 65536 |
@@ -540,7 +564,7 @@ The model catalog follows AI Studio updates; clients read the current values fro
 
 The catalog also includes `-latest` aliases, Robotics-ER, earlier image and TTS models, and the Build channel's `-build` models.
 
-Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, and `predictLongRunning`; `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
+Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, `predictLongRunning`, and `createDecision` (`/v1beta/decisions`); `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
 Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site, and use `input_token_limit` when the request sets no output limit; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
 

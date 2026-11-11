@@ -28,6 +28,8 @@ type FrameDecoder struct {
 	safetyRatings []SafetyRating
 	// systemRoleTokens 是请求系统指令的 user 角色计入上游输入用量的 token 数
 	systemRoleTokens int64
+	// generation 是同一流交错多条生成时保留的第一条生成的标记
+	generation string
 }
 
 // NewFrameDecoder 创建单次 GenerateContent 的有状态解码器
@@ -51,6 +53,14 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 			return nil, decodePromptFeedback(feedbackRaw, raw)
 		}
 		return nil, nil
+	}
+	var generation []json.RawMessage
+	if json.Unmarshal(rawAt(frame, 4), &generation) == nil && len(generation) > 0 {
+		if d.generation == "" {
+			d.generation = string(generation[0])
+		} else if string(generation[0]) != d.generation {
+			return nil, nil
+		}
 	}
 	candidates, err := rawArray(frame[0], "$[0][][0]", raw)
 	if err != nil {

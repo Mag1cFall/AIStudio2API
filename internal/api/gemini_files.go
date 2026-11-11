@@ -494,7 +494,7 @@ func readGeminiFileMetadata(body io.Reader) (geminiFileMetadata, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return metadata, nil
 	}
-	raw, _, err = geminiCamelKeys(doubleQuotedJSON(raw))
+	raw, err = geminiCamelKeys(doubleQuotedJSON(raw))
 	if err == nil {
 		err = json.Unmarshal(raw, &metadata)
 	}

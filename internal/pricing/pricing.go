@@ -28,6 +28,7 @@ var prices = map[string]price{
 	"gemini-2.5-flash-lite":                  {input: 0.10, cached: 0.01, output: 0.40},
 	"gemini-robotics-er-2-preview":           {input: 1, cached: 0.10, output: 5},
 	"gemini-robotics-er-2-streaming-preview": {input: 1, cached: 0.10, output: 5},
+	"gemini-decision-1":                      {input: 0.10},
 }
 
 // Priced 返回模型是否有单价

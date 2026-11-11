@@ -72,6 +72,7 @@ import {
   Binary,
   Radio,
   Bot,
+  Scale,
   FileText,
 } from '@lucide/vue'
 
@@ -147,6 +148,7 @@ export const icons = {
   embedding: Binary,
   live: Radio,
   agent: Bot,
+  decision: Scale,
   file: FileText,
   folder: Folder,
   help: CircleHelp,

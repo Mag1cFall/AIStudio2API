@@ -2086,6 +2086,9 @@ export const messages: Record<TranslationKey, string> = {
   'access.cap.videoHelp': 'Submit a video generation job and download the video when it finishes',
   'access.cap.embedding': 'Embeddings',
   'access.cap.embeddingHelp': 'Turn text into vectors for search and similarity',
+  'access.cap.decision': 'Decisions',
+  'access.cap.decisionHelp':
+    'Answer yes/no, choice, and score questions about one input with probabilities and confidence',
   'access.cap.live': 'Live',
   'access.cap.liveHelp': 'Stream text and audio both ways over a WebSocket',
   'access.cap.agent': 'Agents',
@@ -2108,6 +2111,8 @@ export const messages: Record<TranslationKey, string> = {
     'Gemini generation, streaming generation, token counting, and context caching',
   'access.endpoint.interactions':
     'Gemini Interactions: create, read, delete, and cancel; the same paths also work under /v1',
+  'access.endpoint.decisions':
+    'Gemini Decisions: answer a set of questions with the decision model in one call',
   'access.endpoint.embeddings': 'Text embeddings in OpenAI and Gemini formats',
   'access.endpoint.images': 'OpenAI image generation and editing, and Gemini Imagen predict',
   'access.endpoint.audio': 'Speech, transcription, and translation',
@@ -2156,6 +2161,7 @@ export const messages: Record<TranslationKey, string> = {
   'access.ep.interactionGet': 'Get an interaction’s status and output',
   'access.ep.interactionDelete': 'Delete an interaction',
   'access.ep.interactionCancel': 'Cancel a running interaction',
+  'access.ep.decisionCreate': 'Answer a set of decision questions',
   'access.ep.embeddings': 'Create embeddings',
   'access.ep.embedContent': 'Embed one piece of content',
   'access.ep.batchEmbed': 'Embed several pieces of content in one request',

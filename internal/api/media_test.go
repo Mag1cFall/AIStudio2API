@@ -20,7 +20,7 @@ func TestGeminiInlineDataCompatibility(t *testing.T) {
 		{name: "data URL", raw: `[{"inlineData":{"mimeType":"image/png","data":"data:image/png;base64,+//v"}}]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			raw, _, err := geminiCamelKeys([]byte(test.raw))
+			raw, err := geminiCamelKeys([]byte(test.raw))
 			if err != nil {
 				t.Fatal(err)
 			}
