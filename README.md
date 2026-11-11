@@ -343,7 +343,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 | Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 
-模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。请求带 `X-AIStudio-Account: <账户>` 请求头时只由该账户处理，账户填账户页显示的邮箱；该账户出错时直接返回它的错误，不换到其他账户。
 
 以 Cherry Studio 为例：
 

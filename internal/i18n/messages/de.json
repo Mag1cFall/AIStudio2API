@@ -1492,6 +1492,8 @@
   "媒体目录回收失败": "Medienverzeichnis konnte nicht bereinigt werden",
   "账户 timezone 无效: %q": "Ungültige Zeitzone des Kontos: {0}",
   "%w：模型 %s 绑定的账户都无法调用": "{0}: Keines der an Modell {1} gebundenen Konten kann es aufrufen",
+  "%w：账户 %s 不在本次请求可用的账户中": "{0}: Konto {1} gehört nicht zu den für diese Anfrage verfügbaren Konten",
+  "%w：账户 %s 不存在": "{0}: Konto {1} existiert nicht",
   "DBSC 刷新请求失败: %w": "DBSC-Aktualisierungsanfrage fehlgeschlagen: {0}",
   "Google DBSC 会话刷新被拒绝": "Google hat die Aktualisierung der DBSC-Sitzung abgelehnt",
   "MODEL_ACCOUNTS 中模型 %s 重复": "Modell {0} ist in MODEL_ACCOUNTS doppelt vorhanden",
