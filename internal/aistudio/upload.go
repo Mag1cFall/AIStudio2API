@@ -731,6 +731,20 @@ func driveAuthorizationMissing(err error) bool {
 		strings.Contains(strings.ToLower(rpcError.Message), "unauthorized_client")
 }
 
+// driveStorageQuotaExceeded 判断账户 Google Drive 空间不足或服务未启用
+func driveStorageQuotaExceeded(err error) bool {
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) || rpcErr == nil || rpcErr.StatusCode != http.StatusForbidden {
+		return false
+	}
+
+	msg := strings.ToLower(rpcErr.Message)
+
+	return strings.Contains(msg, "storagequotaexceeded") ||
+		strings.Contains(msg, "quota has been exceeded") ||
+		strings.Contains(msg, "servicedisabled")
+}
+
 // CopyFileReferencesToLease 将文件引用复制到目标账户并返回改写内容
 func (s *PooledService) CopyFileReferencesToLease(
 	ctx context.Context,
@@ -1181,6 +1195,10 @@ func (s *PooledService) UploadInlineMediaToLease(
 	}
 	temporary.release = s.useInlineMedia(used)
 	if uploadErr != nil {
+		if driveStorageQuotaExceeded(uploadErr) {
+			_ = temporary.Cleanup()
+			return rewritten, temporary, nil
+		}
 		if DefinitiveAuthenticationFailure(uploadErr) {
 			uploadErr = errors.Join(uploadErr, target.ConfirmAuthenticationFailure(targetCtx, uploadErr))
 		}
