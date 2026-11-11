@@ -772,7 +772,7 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 | 18 | missing_thought_signature | 19 | malformed_response |
 | 22 | continuation | 其他整数 | `provider_<code>` |
 
-Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call`、`unexpected_tool_call` 或 `malformed_response` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时（不输出给客户端的搜索、网址上下文、地图与文件检索步骤不计入，MCP 调用计入），服务在同一账户上以同一请求重新生成，最多再生成 3 次，之后按最后一次的终止原因或中断错误结束；被重新生成取代的那一次的网页来源与引用不输出，每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
+Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call`、`unexpected_tool_call` 或 `malformed_response` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时（不输出给客户端的搜索、网址上下文、地图与文件检索步骤不计入，MCP 调用计入），服务在同一账户上以同一请求重新生成；已经输出纯文本且没有输出函数调用、媒体、可执行代码与服务端工具步骤时，Playground 与 Build 通道在同一账户上把已输出纯文本作为 model 轮并附上带 `<partial_reply>`（最后至多 20000 个字符）的用户提示继续生成，续写轮开头重复已输出正文的前缀自动去掉并保留思考签名，用量按续写合并。两种情况合计最多 3 次，之后按最后一次的终止原因或中断错误结束；被重新生成取代的那一次的网页来源与引用不输出，每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
 
 候选 field 5（`$[0][frame][0][0][4]`）为安全评级 `[[null, null, 类别, 概率, blocked?], ...]`，类别编号与安全设置相同，概率 `NEGLIGIBLE`=1、`LOW`=2、`MEDIUM`=3、`HIGH`=4；输入拒绝帧 `[null,[block_reason,ratings?,message]]` 的 ratings 为同形数组。Build 通道读取候选与 `promptFeedback` 的 `safetyRatings`。
 
