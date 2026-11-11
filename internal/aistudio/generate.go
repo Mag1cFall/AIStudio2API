@@ -938,38 +938,46 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 		}
 		var stripper *continuationPrefixStripper
+		// roundUsage 是本次尝试最近一帧的上游用量，流中断时没有用量事件，续写按它合并
+		var roundUsage *Usage
 		roundEmit := func() func(Event) error {
 			emit := stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
-			if stripper == nil {
-				return emit
-			}
 			return func(event Event) error {
 				turn.turnToken = cmp.Or(event.TurnToken, turn.turnToken)
+				roundUsage = cmp.Or(event.FrameUsage, roundUsage)
 				return stripper.filter(event, emit)
 			}
 		}
 		err := decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
+		assistant := entry.model.Capabilities["assistant_route"]
 		for regenerated := 0; regenerated < regenerations; regenerated++ {
+			// 写代码助手的调用块错误已在应用内续写，这里只重新生成发送与读取失败
+			if assistant && err == nil {
+				break
+			}
+			// emittedText 是续写时已向客户端输出的纯文本，为空时从头重新生成
 			emittedText := ""
-			recoverCommitted := false
-			if (!entry.model.Capabilities["assistant_route"] || err != nil) && regenerable(ctx, err, finish, committed) {
-			} else if committed && !entry.model.Capabilities["assistant_route"] && regenerable(ctx, err, finish, false) {
-				var ok bool
-				if emittedText, ok = committedTextOnly(output); !ok {
+			if !regenerable(ctx, err, finish, committed) {
+				text, ok := committedTextOnly(output)
+				if !ok || assistant || !regenerable(ctx, err, finish, false) {
 					break
 				}
-				recoverCommitted = true
-			} else {
-				break
+				emittedText = text
 			}
 			stopClose()
 			_ = response.Body.Close()
-			if recoverCommitted {
+			if emittedText != "" {
 				trimTrailingSignatureParts(&output.Parts)
 				trimTrailingSignatureParts(&turn.parts)
 				turn.turnToken = ""
-				if usage != nil {
+				switch {
+				case usage != nil:
 					previousUsage = usage
+				case roundUsage != nil && previousUsage != nil:
+					merged := mergeContinuedUsage(*previousUsage, *roundUsage)
+					previousUsage = &merged
+				case roundUsage != nil:
+					previousUsage = roundUsage
 				}
 				wireRequest = request
 				wireRequest.Config.StopSequences = nil
@@ -987,6 +995,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				usage, finish, sources, turn = nil, nil, nil, modelTurn{}
 				stripper = nil
 			}
+			roundUsage = nil
 			if response, decodeStream, err = sendRequest(); err != nil {
 				if ctx.Err() == nil {
 					_ = send(Event{Kind: EventError, Err: err})
