@@ -1168,12 +1168,24 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 	if err != nil {
 		return nil, nil, err
 	}
+	request.continuationProof = response.Proof
 	return response, func(source io.Reader, emit func(Event) error) error {
 		return c.decodePlaygroundRounds(ctx, request, entry.defaults, runtime, source, restoreFunctionNames(request.Tools.Functions, emit))
 	}, nil
 }
 
-// decodePlaygroundRounds 解码 GenerateContent 流，上游要求续写时携带续写 token 发送下一轮，各轮输出依次转发
+// continuationAccountsKey 是上下文中续写轮换账户函数的键
+type continuationAccountsKey struct{}
+
+// ContinuationAccounts 在续写轮以可换账户的错误失败后返回改由其他账户发送该轮的上下文
+type ContinuationAccounts func(context.Context, error) (context.Context, error)
+
+// ContextWithContinuationAccounts 返回续写轮可经 accounts 换账户发送的上下文
+func ContextWithContinuationAccounts(ctx context.Context, accounts ContinuationAccounts) context.Context {
+	return context.WithValue(ctx, continuationAccountsKey{}, accounts)
+}
+
+// decodePlaygroundRounds 解码 GenerateContent 流，上游要求续写时携带续写 token 发送下一轮，续写轮以可换账户的错误失败时经上下文中的 ContinuationAccounts 换账户重发，各轮输出依次转发
 func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateRequest, defaults GenerationDefaults, runtime RequestContext, source io.Reader, emit func(Event) error) error {
 	total := int64(0)
 	if defaults.ContinuedOutputTokens > 0 {
@@ -1233,9 +1245,34 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		}
 		closeRound()
 		response, err := c.doProtected(ctx, request, body)
+		for err != nil && retryableAccountError(err) {
+			accounts, ok := ctx.Value(continuationAccountsKey{}).(ContinuationAccounts)
+			if !ok {
+				break
+			}
+			next, switchErr := accounts(ctx, err)
+			if switchErr != nil {
+				err = errors.Join(err, switchErr)
+				break
+			}
+			ctx = next
+			lease, _ := AccountLeaseFromContext(ctx)
+			request.AccountID, request.continuationProof = lease.Account().ID, ""
+			if c.contextProvider != nil {
+				if runtime, err = c.contextProvider.RequestContext(ctx, request.AccountID); err != nil {
+					return fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
+				}
+			}
+			if body, err = EncodeGenerateContentRequest(request, defaults, runtime); err != nil {
+				return err
+			}
+			reportUpstreamMode(ctx, "GenerateContent", fmt.Sprintf("stream | 续写=%d", request.continuationRound), "")
+			response, err = c.doProtected(ctx, request, body)
+		}
 		if err != nil {
 			return err
 		}
+		request.continuationProof = response.Proof
 		stopClose := context.AfterFunc(ctx, func() {
 			_ = response.Body.Close()
 		})

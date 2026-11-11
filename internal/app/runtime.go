@@ -1728,6 +1728,7 @@ type generateAttempt struct {
 	lease            *aistudio.AccountLease
 	selection        aistudio.AccountSelection
 	hedge            bool
+	unbound          bool
 	accountLabel     string
 	proxy            string
 	workerGeneration uint64
@@ -1740,6 +1741,8 @@ type generateAttempt struct {
 	err              error
 	cancel           context.CancelFunc
 	done             chan struct{}
+	// serving 是正在生成回答的账户租约，续写轮换账户后为新账户的租约
+	serving atomic.Pointer[aistudio.AccountLease]
 }
 
 // generateRetry 是生成请求跨尝试的换号与恢复状态
@@ -2009,7 +2012,7 @@ func (service *trackedService) generateWithRetry(
 	}
 	service.forwardEvents(
 		clientCtx, requestCtx, func() { winner.cancel(); cancel() }, request.ID,
-		winner.first, winner.source, destination, winner.lease, winner.copies, winner.activity, modelID,
+		winner.first, winner.source, destination, &winner.serving, winner.copies, winner.activity, modelID,
 	)
 }
 
@@ -2043,12 +2046,14 @@ func (service *trackedService) startAttempt(
 	selection aistudio.AccountSelection,
 	hedge bool,
 ) *generateAttempt {
+	unbound := strings.TrimSpace(request.AccountID) == "" && resourceID == ""
 	request.AccountID = lease.Account().ID
 	attempt := &generateAttempt{
-		lease: lease, selection: selection, hedge: hedge, accountLabel: lease.Account().Config.Label,
+		lease: lease, selection: selection, hedge: hedge, unbound: unbound, accountLabel: lease.Account().Config.Label,
 		proxy: service.proxies.Binding(request.AccountID), workerGeneration: service.workers.WorkerGeneration(request.AccountID),
 		startedAt: time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}),
 	}
+	attempt.serving.Store(lease)
 	attemptCtx, cancel := context.WithCancel(requestCtx)
 	attempt.cancel = cancel
 	go func() {
@@ -2081,18 +2086,7 @@ func (service *trackedService) runAttempt(
 	}
 	originalContents := request.Contents
 	ctx = aistudio.ContextWithAccountLease(ctx, lease)
-	ctx = aistudio.ContextWithUpstreamModeObserver(ctx, func(method, mode, reason string) {
-		level := "INFO"
-		message := fmt.Sprintf("上游调用 | 通道=%s | 模式=%s | RPC=%s", lease.Channel(), mode, method)
-		if reason != "" && service.pool.BuildEnabled() {
-			level = "WARN"
-			if fallbackReason != "" {
-				reason = fallbackReason + "; " + reason
-			}
-			message += " | 回退流式 | 原因=" + reason
-		}
-		service.requests.logRequestProgress(request.ID, accountLabel, level, message)
-	})
+	ctx = aistudio.ContextWithUpstreamModeObserver(ctx, service.upstreamModeObserver(request.ID, lease, fallbackReason))
 	var err error
 	copiedFileCount := 0
 	if resourceID != "" {
@@ -2104,6 +2098,12 @@ func (service *trackedService) runAttempt(
 		}
 	}
 	mediaCount, mediaBytes := inlineMediaInput(request.Contents)
+	if attempt.unbound && mediaCount == 0 {
+		failed := make(map[string]struct{})
+		ctx = aistudio.ContextWithContinuationAccounts(ctx, func(roundCtx context.Context, err error) (context.Context, error) {
+			return service.continuationAccount(roundCtx, request.ID, modelID, attempt, failed, err)
+		})
+	}
 	if err == nil && mediaCount > 0 {
 		uploadStartedAt := time.Now()
 		request.Contents, attempt.copies, err = service.service.(interface {
@@ -2169,6 +2169,73 @@ func (service *trackedService) runAttempt(
 	attempt.err = err
 }
 
+// upstreamModeObserver 返回把租约账户的上游调用方式记入请求日志的观察函数，回退流式时附上 fallbackReason
+func (service *trackedService) upstreamModeObserver(requestID string, lease *aistudio.AccountLease, fallbackReason string) func(string, string, string) {
+	accountLabel := lease.Account().Config.Label
+	return func(method, mode, reason string) {
+		level := "INFO"
+		message := fmt.Sprintf("上游调用 | 通道=%s | 模式=%s | RPC=%s", lease.Channel(), mode, method)
+		if reason != "" && service.pool.BuildEnabled() {
+			level = "WARN"
+			if fallbackReason != "" {
+				reason = fallbackReason + "; " + reason
+			}
+			message += " | 回退流式 | 原因=" + reason
+		}
+		service.requests.logRequestProgress(requestID, accountLabel, level, message)
+	}
+}
+
+// continuationAccount 把续写轮在当前账户上的失败记为一次尝试，额度失败时冷却该账户，释放其租约后从未在续写轮失败过的其余账户取得租约，返回改由该账户发送续写轮的上下文
+func (service *trackedService) continuationAccount(ctx context.Context, requestID string, modelID string, attempt *generateAttempt, failed map[string]struct{}, err error) (context.Context, error) {
+	current := attempt.serving.Load()
+	label := current.Account().Config.Label
+	api.AddAccessLogAttempt(ctx, api.RequestAttempt{Account: label, Channel: string(current.Channel()), Error: err.Error()})
+	failed[current.Account().ID] = struct{}{}
+	if cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now()); quotaFailure {
+		if _, stateErr := service.markQuotaCooldown(requestID, modelID, current, cooldown); stateErr != nil {
+			return nil, stateErr
+		}
+	}
+	if releaseErr := current.Release(); releaseErr != nil {
+		return nil, releaseErr
+	}
+	selection := aistudio.AccountSelection{ModelID: modelID, Method: "generateContent", PlaygroundOnly: true, AllowedAccountIDs: []string{}}
+	enabled, _ := service.pool.EnabledAccounts()
+	for _, accountID := range enabled {
+		if _, exists := failed[accountID]; !exists {
+			selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
+		}
+	}
+	lease, acquireErr := service.acquireWarmLease(ctx, selection, false)
+	if acquireErr != nil {
+		return nil, acquireErr
+	}
+	attempt.serving.Store(lease)
+	service.requests.logRequestProgress(requestID, label, "WARN", fmt.Sprintf(
+		"账号切换 | 续写轮 | 模型=%s\n原因: %s", modelID, strings.TrimSpace(err.Error()),
+	))
+	service.markAttemptAccount(ctx, requestID, modelID, lease)
+	next := aistudio.ContextWithAccountLease(ctx, lease)
+	return aistudio.ContextWithUpstreamModeObserver(next, service.upstreamModeObserver(requestID, lease, "")), nil
+}
+
+// markQuotaCooldown 按额度失败冷却租约账户在该模型或全局范围上的调度并记入请求日志，返回实际生效的恢复时刻
+func (service *trackedService) markQuotaCooldown(requestID, modelID string, lease *aistudio.AccountLease, cooldown aistudio.QuotaCooldown) (time.Time, error) {
+	scope := lease.CooldownScope(modelID)
+	scopeLabel := scope
+	if cooldown.Global {
+		scope, scopeLabel = "", "全局"
+	}
+	until, err := service.pool.MarkQuotaCooldownIfGeneration(lease.Account().ID, scope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown)
+	if err == nil && !until.IsZero() {
+		service.requests.logRequestProgress(requestID, lease.Account().Config.Label, "WARN", fmt.Sprintf(
+			"账号冷却 | 类型=%s | 范围=%s | 恢复=%s", cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
+		))
+	}
+	return until, err
+}
+
 // quotaCooldownError 是带恢复时刻的额度失败，恢复时刻取本次请求中额度失败账户最早的冷却恢复时刻
 type quotaCooldownError struct {
 	err   error
@@ -2230,15 +2297,7 @@ func (service *trackedService) settleAttempt(
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
-		modelAccessScope := lease.CooldownScope(modelID)
-		scopeLabel := modelAccessScope
-		if cooldown.Global {
-			modelAccessScope = ""
-			scopeLabel = "全局"
-		}
-		until, stateErr := service.pool.MarkQuotaCooldownIfGeneration(
-			accountID, modelAccessScope, lease.ModelAccessGeneration(), lease.CheckedAt(), cooldown,
-		)
+		until, stateErr := service.markQuotaCooldown(requestID, modelID, lease, cooldown)
 		if stateErr != nil {
 			err = errors.Join(err, stateErr)
 			retryable = false
@@ -2248,10 +2307,6 @@ func (service *trackedService) settleAttempt(
 					retry.quotaUntil = until
 				}
 				err = &quotaCooldownError{err: err, until: retry.quotaUntil}
-				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
-					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
-					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),
-				))
 			}
 			if !cooldown.Global && service.pool.AccountChannelAvailable(accountID, attempt.selection) {
 				delete(retry.attempted, accountID)
@@ -2286,7 +2341,7 @@ func (service *trackedService) settleAttempt(
 	if !quotaFailure && !buildRejected {
 		retry.attemptFailure = err
 	}
-	if releaseErr := lease.Release(); releaseErr != nil {
+	if releaseErr := attempt.serving.Load().Release(); releaseErr != nil {
 		return attemptOutcome{err: errors.Join(err, releaseErr), accountID: accountID, accountLabel: accountLabel}
 	}
 	recoverWorker := false
@@ -2526,7 +2581,7 @@ func (service *trackedService) forwardEvents(
 	first aistudio.Event,
 	source <-chan aistudio.Event,
 	destination chan<- aistudio.Event,
-	lease *aistudio.AccountLease,
+	serving *atomic.Pointer[aistudio.AccountLease],
 	temporaryCopies *aistudio.TemporaryFileCopies,
 	activity *upstreamActivity,
 	requestedModelID string,
@@ -2534,8 +2589,7 @@ func (service *trackedService) forwardEvents(
 	state := "completed"
 	var requestErr error
 	terminal := false
-	accountLabel := lease.Account().Config.Label
-	accessGeneration := lease.ModelAccessGeneration()
+	accountLabel := func() string { return serving.Load().Account().Config.Label }
 	modelID := strings.TrimPrefix(strings.TrimSpace(first.ProviderModel), "models/")
 	var lastEventAt time.Time
 	lastEventKind := "-"
@@ -2565,10 +2619,10 @@ func (service *trackedService) forwardEvents(
 		api.SetAccessLogGenerationResult(requestCtx, usage, toolCalls)
 		if temporaryCopies != nil {
 			if err := temporaryCopies.Cleanup(); err != nil {
-				service.requests.log(accountLabel, "WARN", "临时文件清理失败 | 错误="+err.Error())
+				service.requests.log(accountLabel(), "WARN", "临时文件清理失败 | 错误="+err.Error())
 			}
 		}
-		if err := lease.Release(); err != nil {
+		if err := serving.Load().Release(); err != nil {
 			state = "failed"
 			requestErr = errors.Join(requestErr, err)
 			if clientCtx.Err() == nil {
@@ -2597,7 +2651,7 @@ func (service *trackedService) forwardEvents(
 			case <-stall:
 				stalled = true
 				stallTimer.Reset(waitReportInterval)
-				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
+				service.requests.logRequestProgress(requestID, accountLabel(), "WARN", fmt.Sprintf(
 					"事件流停顿 | 模型=%s | 已等待=%s | 最近事件=%s | 推理=%d | 正文=%d | %s",
 					modelID, time.Since(lastEventAt).Round(time.Second), lastEventKind, reasoningEvents, contentEvents,
 					activity.logFields(time.Now()),
@@ -2623,7 +2677,7 @@ func (service *trackedService) forwardEvents(
 		}
 		now := time.Now()
 		if stalled {
-			service.requests.logRequestProgress(requestID, accountLabel, "INFO", fmt.Sprintf(
+			service.requests.logRequestProgress(requestID, accountLabel(), "INFO", fmt.Sprintf(
 				"事件流恢复 | 模型=%s | 停顿=%s | 当前事件=%s",
 				modelID, now.Sub(lastEventAt).Round(time.Millisecond), event.Kind,
 			))
@@ -2641,14 +2695,14 @@ func (service *trackedService) forwardEvents(
 		case aistudio.EventToolCall:
 			toolCalls++
 		}
-		api.SetAccessLogTarget(requestCtx, event.ProviderModel, lease.Account().Config.Label)
+		api.SetAccessLogTarget(requestCtx, event.ProviderModel, accountLabel())
 		if terminal {
 			continue
 		}
 		if event.Kind == aistudio.EventError {
 			requestErr = event.Err
 			if aistudio.DefinitiveAuthenticationFailure(event.Err) {
-				if stateErr := lease.ConfirmAuthenticationFailure(requestCtx, event.Err); stateErr != nil {
+				if stateErr := serving.Load().ConfirmAuthenticationFailure(requestCtx, event.Err); stateErr != nil {
 					requestErr = errors.Join(requestErr, stateErr)
 					event.Err = requestErr
 				}
@@ -2675,8 +2729,9 @@ func (service *trackedService) forwardEvents(
 		}
 		if !verified && event.Kind == aistudio.EventFinish {
 			verified = true
+			lease := serving.Load()
 			service.markModelAccessVerifiedAsync(
-				lease.Account().ID, accountLabel, lease.CooldownScope(requestedModelID), accessGeneration, lease.CheckedAt(),
+				lease.Account().ID, lease.Account().Config.Label, lease.CooldownScope(requestedModelID), lease.ModelAccessGeneration(), lease.CheckedAt(),
 			)
 		}
 	}

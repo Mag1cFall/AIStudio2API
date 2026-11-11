@@ -313,7 +313,7 @@ POST /api/control/start
 
 `runtime-state.json` 的 `model_access` value 为 `{state,checked_at,reason?}`，成功状态为 `verified`；`cooldowns` value 为 `{until,reason?}`；`resources` value 保存 kind、name、mime、size、purpose、created_at 与可选 video 元数据。Drive file、视频任务、视频产物和 Bidi 恢复 token 均保持创建账户粘性。视频任务额外保存公开 video object 的 model、seconds、size 与 UTC 创建时间，生成服务或进程重启后的轮询继续投影相同字段。
 
-活动请求锁保护跨进程账户租约，短事务锁保护 `runtime-state.json` 合并写回。短事务锁位于 `auth/.leases/<账户>.runtime.lock`，以 25ms 间隔等待，最多 2 秒；取得锁后重读磁盘状态，只修改目标字段，原子替换文件，再同步内存与资源索引。取租约时同样在锁内读取所选账户的文件，内容与上次同步或写入时相同则沿用内存状态。接收 context 的资源事务会在取消或 deadline 到达时提前返回。
+活动请求锁保护跨进程账户租约，短事务锁保护 `runtime-state.json` 合并写回。短事务锁位于 `auth/.leases/<账户>.runtime.lock`，以 25ms 间隔等到锁释放；取得锁后重读磁盘状态，只修改目标字段，原子替换文件，再同步内存与资源索引。取租约时同样在锁内读取所选账户的文件，内容与上次同步或写入时相同则沿用内存状态。接收 context 的资源事务会在取消或 deadline 到达时提前返回。
 
 账户更新以 `account.json` 原子写入为持久提交点。`internal/app` 先准备 `pending`（尚未提交）的固定出口，关闭旧 Worker并锁定该账户的 Worker 配置，再调用 `AccountLease.SaveConfig`；保存成功后依次提交 Worker 配置与固定出口。准备、关闭或保存失败时丢弃 pending 更新；保存后的租约释放错误原样返回，已发布配置继续生效。
 
