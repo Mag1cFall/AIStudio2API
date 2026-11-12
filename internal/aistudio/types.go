@@ -37,14 +37,6 @@ type FileRef struct {
 	MIME string `json:"mime,omitempty"`
 }
 
-// UploadRef 表示经 AI Studio /_/upload 上传的附件引用
-type UploadRef struct {
-	MIME string `json:"mime"`
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
-}
-
 // VideoMetadata 是视频 Part 的截取起止与采样帧率，起止为 Duration 字符串
 type VideoMetadata struct {
 	StartOffset string   `json:"start_offset,omitempty"`
@@ -160,7 +152,6 @@ type Part struct {
 	InlineData          *Blob                `json:"inline_data,omitempty"`
 	ExternalMedia       *ExternalMedia       `json:"external_media,omitempty"`
 	File                *FileRef             `json:"file,omitempty"`
-	Upload              *UploadRef           `json:"upload,omitempty"`
 	FunctionCall        *FunctionCall        `json:"function_call,omitempty"`
 	FunctionResult      *FunctionResult      `json:"function_result,omitempty"`
 	ExecutableCode      *ExecutableCode      `json:"executable_code,omitempty"`
@@ -528,6 +519,8 @@ type Model struct {
 	Channels    []string   `json:"channels,omitempty"`
 	// AgentModel 是 agent 默认使用的模型 ID
 	AgentModel string `json:"agent_model,omitempty"`
+	// Hidden 表示官网前端已配置、ListModels 尚未列出、经 CountTokens 确认可用的模型
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // ThinkingBudget 是 ListModels field 72 的思考预算配置
@@ -716,6 +709,8 @@ type Event struct {
 	// FinishFrame 表示事件来自带结束原因的上游帧
 	FinishFrame bool  `json:"finish_frame,omitempty"`
 	Err         error `json:"-"`
+	// TrailingError 是上游在函数调用之后结束生成的错误，结束事件仍按正常完成输出给客户端
+	TrailingError error `json:"-"`
 }
 
 // SafetyRating 是候选或输入在一个安全类别上的评级，取值为 Gemini API 枚举名

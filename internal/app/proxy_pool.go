@@ -4,36 +4,37 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 )
 
 // proxyProbeInterval 为代理池的定时检测间隔
 const proxyProbeInterval = 5 * time.Minute
 
-// proxyProbeTarget 为代理检测访问的地址
-const proxyProbeTarget = "https://aistudio.google.com/"
+// proxyProbeTarget 为代理检测建立隧道的地址
+const proxyProbeTarget = "aistudio.google.com:443"
 
-// checkProxy 经代理访问 AI Studio，收到任意 HTTP 响应即判定代理可用
+// checkProxy 经代理建立到 AI Studio 的隧道，建立成功即判定代理可用
 func checkProxy(ctx context.Context, proxy string) error {
-	client, err := aistudio.NewProxyHTTPClient(proxy)
+	parsed, err := url.Parse(strings.TrimSpace(proxy))
 	if err != nil {
 		return err
 	}
-	defer client.CloseIdleConnections()
+	dialer, err := proxydial.Dialer(parsed)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, proxyProbeTarget, nil)
-	response, err := client.Do(request)
+	connection, err := dialer.DialContext(ctx, "tcp", proxyProbeTarget)
 	if err != nil {
 		return err
 	}
-	return response.Body.Close()
+	return connection.Close()
 }
 
 // proxyNetworkError 判断请求失败是否为经代理的网络错误
@@ -54,6 +55,18 @@ func (service *trackedService) reportProxyFailure(proxy string, label string, er
 	if len(changed) > 0 && service.rebindAccounts != nil {
 		service.rebindAccounts(changed)
 	}
+}
+
+// probeProxyPool 在生成服务启动时检测多个代理，账户先改绑到可用代理再载入页面与预热 Worker
+func (service *trackedService) probeProxyPool(ctx context.Context) {
+	if len(service.proxies.Status()) < 2 {
+		return
+	}
+	changed, err := service.proxies.Probe(ctx, checkProxy)
+	if err != nil && ctx.Err() == nil {
+		service.requests.log("service", "WARN", "代理改绑 | 错误="+err.Error())
+	}
+	service.rebindAccounts(changed)
 }
 
 // probeProxies 定时检测代理池并改绑不可用代理上的账户

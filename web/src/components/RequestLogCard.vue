@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
-import { byteLength, formatLogNumber, prettyBody, type LogRow } from '@/logs'
+import { byteLength, formatLogNumber, prettyBody, requestSources, type LogRow } from '@/logs'
 import type { RequestBody } from '@/types'
 import DisclosureChevron from './DisclosureChevron.vue'
 import UiCollapse from './UiCollapse.vue'
@@ -45,6 +45,22 @@ const currentStep = computed(() => {
   const latest = props.row.events.at(-1)!
   return latest.event === 'request.started' ? '' : logText(latest.message.split('\n')[0]!)
 })
+
+// sources 是请求依次用到的账户
+const sources = computed(() => requestSources(props.row))
+// switchReasons 是请求结束后换下的各账户最后一条警告或错误
+const switchReasons = computed(() =>
+  running.value
+    ? []
+    : sources.value
+        .filter((source) => source !== props.row.entry.source)
+        .flatMap((source) => {
+          const event = [...props.row.events]
+            .reverse()
+            .find((item) => item.source === source && item.level !== 'INFO')
+          return event ? [{ source, message: logText(event.message).replaceAll('\n', ' ') }] : []
+        }),
+)
 
 const body = ref<RequestBody | null>(null)
 const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle')
@@ -163,7 +179,7 @@ const bodyParts = computed(() =>
       <span
         >{{ t('logs.outputTotal') }} <b>{{ number(request.usage.output_tokens) }}</b> tokens</span
       >
-      <span
+      <span v-if="request.usage.average_tokens_per_second !== undefined"
         >{{ t('logs.averageSpeed') }}
         <b>{{ number(request.usage.average_tokens_per_second, 1) }}</b> tokens/s</span
       >
@@ -171,6 +187,9 @@ const bodyParts = computed(() =>
         >{{ t('logs.firstToken') }} <b>{{ number(request.first_event_ms / 1000, 1) }}</b> s</span
       >
     </div>
+    <p v-for="reason in switchReasons" :key="reason.source" class="request-switch">
+      {{ reason.source }} · {{ reason.message }}
+    </p>
     <p v-if="request.error" class="request-error request-error-summary">
       {{ logText(request.error) }}
     </p>
@@ -223,6 +242,9 @@ const bodyParts = computed(() =>
         <ol class="request-timeline">
           <li v-for="(event, index) in row.events" :key="index">
             <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
+            <span v-if="sources.length > 1" class="request-timeline-source">{{
+              event.source
+            }}</span>
             <span>{{ logText(event.message) }}</span>
           </li>
         </ol>
@@ -396,9 +418,22 @@ const bodyParts = computed(() =>
   gap: 12px;
   margin-bottom: 4px;
 }
-.request-timeline time {
+.request-timeline time,
+.request-timeline-source {
   flex-shrink: 0;
   color: var(--color-gray-500);
+}
+/* request-switch 为卡片上换下账户的原因，最多两行，全文在详情中 */
+.request-switch {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 2px 0 0;
+  color: var(--color-yellow-400);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .request-section-toggle {
   display: flex;

@@ -7,7 +7,7 @@ import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import StageLogCard from './StageLogCard.vue'
 import LogText from './LogText.vue'
-import { groupLogs, type LogRow } from '@/logs'
+import { groupLogs, requestSources, type LogRow } from '@/logs'
 import { reducedMotion, standardEase, type CollapseResize } from '@/motion'
 import { useQueryParam, useQueryText } from '@/url'
 
@@ -46,6 +46,11 @@ let resizeStartWidth = 0
 const sources = computed(() =>
   Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort(),
 )
+
+// sourceLabel 是来源列文字，请求卡片依次列出用到的账户
+function sourceLabel(row: LogRow): string {
+  return row.entry.request ? requestSources(row).join(' → ') : row.entry.source
+}
 
 function matchLog(entry: AdminLog, query: string): boolean {
   if (entry.message.toLowerCase().includes(query)) return true
@@ -466,8 +471,8 @@ onUnmounted(() => {
         >
           <span class="text-right text-gray-500">{{ clock(row.entry.time) }}</span>
           <span class="font-semibold">{{ levelLabel(row.entry.level) }}</span>
-          <span v-tooltip="row.entry.source" class="log-cell log-source text-gray-500">{{
-            row.entry.source
+          <span v-tooltip="sourceLabel(row)" class="log-cell log-source text-gray-500">{{
+            sourceLabel(row)
           }}</span>
           <div class="log-cell log-message">
             <RequestLogCard

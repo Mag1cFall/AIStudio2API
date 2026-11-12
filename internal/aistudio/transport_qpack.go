@@ -200,7 +200,7 @@ func appendQPACKString(buffer []byte, prefix byte, bits uint8, value string) []b
 	return hpack.AppendHuffmanString(buffer, value)
 }
 
-// qpackEncoder 按 neqo 0.28 的策略编码请求头：静态表没有的头名连同取值写入动态表并按索引引用，字面量一律 Huffman 编码
+// qpackEncoder 按 neqo 0.31 的策略编码请求头：静态表没有的头名连同取值写入动态表并按索引引用，字面量一律 Huffman 编码
 type qpackEncoder struct {
 	table        qpackTable
 	maxEntries   uint64
@@ -503,7 +503,7 @@ func (encoder *qpackEncoder) readDecoderStream(stream io.Reader, mu *sync.Mutex)
 	}
 }
 
-// qpackDecoder 维护服务端编码器写入的动态表并解码响应头块，回执时机与 neqo 0.28 一致
+// qpackDecoder 维护服务端编码器写入的动态表并解码响应头块，回执时机与 neqo 0.31 一致
 type qpackDecoder struct {
 	mu      sync.Mutex
 	changed chan struct{}

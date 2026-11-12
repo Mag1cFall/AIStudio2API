@@ -809,6 +809,14 @@ function methodClass(method: string): string {
               <div class="border-b border-line p-4">
                 <h4 class="text-base font-semibold text-white">{{ t(capability.label) }}</h4>
                 <p class="mt-1 text-sm text-gray-400">{{ t(capability.description) }}</p>
+                <p
+                  v-if="capability.notice"
+                  class="mt-2 flex items-start gap-2 text-sm text-amber-200"
+                >
+                  <UiIcon name="warning" :size="15" class="mt-0.5 shrink-0" />{{
+                    t(capability.notice)
+                  }}
+                </p>
                 <ul class="mt-3 flex flex-wrap gap-1.5">
                   <li v-for="[method, path] in capability.endpoints" :key="method + path">
                     <button

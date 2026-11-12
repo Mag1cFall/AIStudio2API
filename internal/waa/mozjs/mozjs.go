@@ -152,13 +152,11 @@ func NewContext(options Options) (*Context, error) {
 	return context, nil
 }
 
-// SetCamouLocale 设置当前线程 mozilla::intl::Locale 的 Camoufox 语言、地区与 navigator.language
-func SetCamouLocale(language, region, locale string) {
-	cLanguage, cRegion, cLocale := C.CString(language), C.CString(region), C.CString(locale)
-	defer C.free(unsafe.Pointer(cLanguage))
-	defer C.free(unsafe.Pointer(cRegion))
+// SetCamouLocale 设置当前线程 mozilla::intl::Locale 的默认区域为 Camoufox 的 navigator.language
+func SetCamouLocale(locale string) {
+	cLocale := C.CString(locale)
 	defer C.free(unsafe.Pointer(cLocale))
-	C.mz_set_camou_locale(cLanguage, cRegion, cLocale)
+	C.mz_set_camou_locale(cLocale)
 }
 
 // Now 返回单调时钟的毫秒数，精度为微秒

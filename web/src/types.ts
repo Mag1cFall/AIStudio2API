@@ -16,6 +16,7 @@ export type AccountState =
   | 'busy'
   | 'cooldown'
   | 'auth_required'
+  | 'restricted'
   | 'unavailable'
   | 'disabled'
 
@@ -75,6 +76,8 @@ export interface ChromeImportProfile {
   display_name: string
   email: string
   locale: string
+  // restricted 是账户服务受限的原因，受限的账户不能导入
+  restricted: string
 }
 
 export interface PairingToken {
@@ -135,6 +138,8 @@ export interface CookieBrowser {
   // device_bound 为真时 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备
   device_bound: boolean
   error: string
+  // restricted 是账户服务受限的原因，受限的账户不能导入
+  restricted: string
 }
 
 interface AccountCounters {
@@ -145,6 +150,14 @@ interface AccountCounters {
   auth_required: number
 }
 
+// CamoufoxStatus 是 Camoufox 是否就绪、是否正在下载或解压、正在进行的下载与最近一次准备失败的原因
+export interface CamoufoxStatus {
+  ready: boolean
+  preparing: boolean
+  download?: { received: number; total: number }
+  error?: string
+}
+
 export interface ServiceStatus {
   state: 'STOPPED' | 'LAUNCHING' | 'RUNNING'
   running: boolean
@@ -152,6 +165,7 @@ export interface ServiceStatus {
   version: string
   active_requests: number
   accounts: AccountCounters
+  camoufox: CamoufoxStatus
   chrome_import: boolean
 }
 
@@ -215,7 +229,7 @@ interface RequestLog {
     reply_tokens: number
     output_tokens: number
     total_tokens: number
-    average_tokens_per_second: number
+    average_tokens_per_second?: number
   }
 }
 
@@ -286,12 +300,14 @@ export interface Model {
   languages?: Language[]
   access_modes?: number[]
   paid?: boolean
+  // hidden 表示官网前端已配置、ListModels 尚未列出、经上游确认可用的模型
+  hidden?: boolean
   // agent_model 是 agent 默认使用的模型 ID
   agent_model?: string
   channels?: UpstreamChannel[]
 }
 
-export type ThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH'
+export type ThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'EXTRA_HIGH'
 
 // ThinkingBudget 是可设思考预算的模型的预算默认值、上下限与能否关闭思考
 export interface ThinkingBudget {
@@ -301,7 +317,7 @@ export interface ThinkingBudget {
   can_disable?: boolean
 }
 
-export type UpstreamChannel = 'playground' | 'build' | 'assistant'
+export type UpstreamChannel = 'playground' | 'build'
 
 export interface Cooldown {
   account_id: string
@@ -355,6 +371,7 @@ export interface ServiceConfig {
   fake_stream: boolean
   youtube_links: boolean
   search_model_aliases: boolean
+  discover_hidden_models: boolean
   google_search: boolean
   continuation_rewrite: boolean
   continuation_prompt: string
@@ -380,6 +397,7 @@ export interface ServiceConfig {
   max_active_workers: number
   warm_startup_concurrency: number
   per_account_concurrency: number
+  max_account_switches: number
   routing_strategy: 'round-robin' | 'fill-first'
   account_order: string
   upstream_channels: UpstreamChannel[]

@@ -126,7 +126,7 @@ func (service *trackedService) bidiRequestContext(ctx context.Context) (context.
 	service.lifecycleMu.Lock()
 	if service.state.Load() != serviceRunning || service.dataContext == nil {
 		service.lifecycleMu.Unlock()
-		return nil, nil, &serviceStoppedError{launching: service.state.Load() == serviceLaunching}
+		return nil, nil, service.stoppedError()
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopData := context.AfterFunc(service.dataContext, cancel)

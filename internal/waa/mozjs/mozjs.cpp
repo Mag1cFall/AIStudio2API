@@ -50,7 +50,7 @@ extern "C" __declspec(dllimport) void WINAPI GetCurrentThreadStackLimits(PULONG_
 #endif
 
 extern "C" bool mzGoNative(uintptr_t id, int32_t native, mz_call* call);
-extern "C" void mozjs_set_camou_locale(const char* language, const char* region, const char* locale);
+extern "C" void mozjs_set_camou_locale(const char* locale);
 extern "C" bool mozjs_delete_global_property(JSContext* cx, JSObject* global, JS::HandleId id);
 
 class HostJobQueue;
@@ -631,8 +631,8 @@ extern "C" void mz_context_free(mz_context* mz) {
   delete mz;
 }
 
-extern "C" void mz_set_camou_locale(const char* language, const char* region, const char* locale) {
-  mozjs_set_camou_locale(language, region, locale);
+extern "C" void mz_set_camou_locale(const char* locale) {
+  mozjs_set_camou_locale(locale);
 }
 
 extern "C" uint32_t mz_global_new(mz_context* mz, uint32_t same, const char* timezone) {

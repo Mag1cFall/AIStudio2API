@@ -135,7 +135,7 @@ func responsesToolKind(tools []responsesTool, name string) string {
 			}
 		case "namespace":
 			for _, inner := range tool.Tools {
-				if inner.Type == "custom" && tool.Name+"."+inner.Name == name {
+				if inner.Type == "custom" && namespacedName(tool.Name, inner.Name) == name {
 					return "custom"
 				}
 			}

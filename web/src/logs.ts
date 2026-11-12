@@ -149,7 +149,16 @@ function groupStage(rows: LogRow[], stages: Map<string, StageRow>, entry: AdminL
   return true
 }
 
+// requestSources 返回请求依次用到的账户，还没有账户事件时返回请求自身的来源
+export function requestSources(row: LogRow): string[] {
+  const sources = new Set(
+    row.events.filter((event) => event.source !== 'request').map((event) => event.source),
+  )
+  return sources.size > 0 ? [...sources] : [row.entry.source]
+}
+
 // groupLogs 按请求标识合并生命周期、按来源与阶段名合并分阶段运行日志，并保持服务事件的原始顺序；previous 中事件相同的行沿用原对象
+
 export function groupLogs(logs: AdminLog[], previous: ReadonlyMap<string, LogRow>): LogRow[] {
   const rows: LogRow[] = []
   const requests = new Map<string, LogRow>()

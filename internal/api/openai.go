@@ -923,8 +923,8 @@ func (reference toolReference) functionName() string {
 		if reference.Custom != nil {
 			name = reference.Custom.Name
 		}
-		if reference.Namespace != "" && name != "" {
-			name = reference.Namespace + "." + name
+		if name != "" {
+			name = namespacedName(reference.Namespace, name)
 		}
 		return name
 	case "local_shell", "shell", "apply_patch":

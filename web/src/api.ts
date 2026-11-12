@@ -207,6 +207,7 @@ export const api = {
     }),
   startService: () => requestJSON<ServiceStatus>('/api/control/start', { method: 'POST' }),
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
+  downloadCamoufox: () => requestJSON<ServiceStatus>('/api/camoufox/download', { method: 'POST' }),
   clearLogs: () => requestCommand('/api/logs', { method: 'DELETE' }),
   firstEventLatency: async () =>
     (await requestJSON<{ latencies: FirstEventLatency[] }>('/api/first-event-latency')).latencies,

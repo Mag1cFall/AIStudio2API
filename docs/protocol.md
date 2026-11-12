@@ -34,7 +34,7 @@ MakerSuite 请求使用以下公共头：
 
 请求头 `x-goog-api-key` 是 AI Studio 页面使用的动态公共值，与用户创建的 Google Cloud API key 不同；免费网页链仍依赖 Cookie、SAPISID 签名和 WAA proof。
 
-受 WAA 保护的 `GenerateContent` 由服务进程以 Firefox 152 网络形状经账户固定出口发送；其他 MakerSuite 与 Drive 请求使用同账户固定出口的 Go HTTP transport。`WAA_BACKEND=camoufox` 时受保护请求通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS、HTTP/2、请求头、Cookie 与页面指纹。
+受 WAA 保护的 `GenerateContent` 由服务进程以 Firefox 158 网络形状经账户固定出口发送；其他 MakerSuite 与 Drive 请求使用同账户固定出口的 Go HTTP transport。`WAA_BACKEND=camoufox` 时受保护请求通过账户固定指纹 Camoufox 页面发送，保留原生 Firefox TLS、HTTP/2、请求头、Cookie 与页面指纹。
 
 JSON+protobuf 使用数组表示 protobuf message。数组索引从 `0` 开始，protobuf field 从 `1` 开始，因此 field `N` 对应索引 `N-1`。Google 响应允许省略空槽并形成 `[,value]`；解码器先把省略槽规范化为 `null`，再从完整 JSON 根值中提取 repeated message。HTTPS chunk 仅提供字节序列，业务事件起止由数组结构确定。
 
@@ -198,7 +198,7 @@ Google 邮箱的小写形式同时作为账户目录、管理页面标识和日�
 | 2 | Ultra | `X-AIStudio-G1-Tier: TIER2` |
 | 3 | Plus | `X-AIStudio-G1-Tier: TIER0` |
 
-官网为 `GenerateContent`、`CountTokens`、Interaction、Code Assistant 与 `StreamExtractVideoFrames` 注入该 header。模型 field 83 描述访问方式：`1` 为付费 API key，`3` 为 Pro/Ultra 订阅，`4` 为 Ultra 订阅。公开模型目录合并全部账户的实时 `ListModels` 记录；账户调度使用 AccessModes、BenefitTier 与成功调用历史选择具体账户。
+官网为 `GenerateContent`、`CountTokens`、Interaction 与 `StreamExtractVideoFrames` 注入该 header。模型 field 83 描述访问方式：`1` 为付费 API key，`3` 为 Pro/Ultra 订阅，`4` 为 Ultra 订阅。公开模型目录合并全部账户的实时 `ListModels` 记录；账户调度使用 AccessModes、BenefitTier 与成功调用历史选择具体账户。
 
 ### 条款同意
 
@@ -246,7 +246,7 @@ Waa/Create
   -> send protected MakerSuite RPC
 ```
 
-`WAA_BACKEND=camoufox` 时官方 VM 运行在账户固定指纹的 Camoufox 页面，受保护请求由页面 `XMLHttpRequest` 发送；最后一轮是带文本的 user 轮次的 `GenerateContent` 首轮由页面应用在输入框写入该轮文本并点击 Run 时发出（与页面上一轮的对话相同时点击 Rerun），proof 由页面应用以服务给出的 binding 摘要生成，发送时正文换成服务编码的请求正文，自动续写的后续轮次沿用页面写入首轮的 proof 直接发送；`WAA_BACKEND=spidermonkey` 时 VM 运行在服务进程内的 SpiderMonkey 与 Firefox 形状宿主中，受保护请求由 Go HTTP 以 Firefox 152 网络形状发送。
+`WAA_BACKEND=camoufox` 时官方 VM 运行在账户固定指纹的 Camoufox 页面，受保护请求由页面 `XMLHttpRequest` 发送；最后一轮是带文本的 user 轮次的 `GenerateContent` 首轮由页面应用在输入框写入该轮文本并点击 Run 时发出（与页面上一轮的对话相同时点击 Rerun），proof 由页面应用以服务给出的 binding 摘要生成，发送时正文换成服务编码的请求正文，自动续写的后续轮次沿用页面写入首轮的 proof 直接发送；`WAA_BACKEND=spidermonkey` 时 VM 运行在服务进程内的 SpiderMonkey 与 Firefox 形状宿主中，受保护请求由 Go HTTP 以 Firefox 158 网络形状发送。
 
 `Waa/Create` 请求是 JSON+protobuf 数组。Worker 启动时只带 request key，VM 刷新时追加当前 interpreter hash 与上一 VM 的无绑定 snapshot：
 
@@ -255,7 +255,7 @@ Waa/Create
 ["lmnUSbltwc5ULv48iKLX", "<INTERPRETER_HASH>", "<PREVIOUS_SNAPSHOT>"]
 ```
 
-响应外层索引 `1` 是 Base64 challenge，解码后每个字节加 `97`，得到 message ID、interpreter、program、全局函数名与 client experiments 状态。interpreter 按 hash 缓存，摘要为 SHA-256 的 Base64URL 无 padding 编码；program 属于当前 Create 生命周期，proof 绑定当前 prompt 摘要与 VM 内部状态，每个请求生成新的 proof。
+响应外层索引 `1` 是 Base64 challenge，解码后每个字节加 `97`，得到 message ID、interpreter、program、全局函数名与 client experiments 状态。interpreter 按 hash 缓存，VM 刷新的响应不带 interpreter 与其地址，沿用同 hash 已载入的 interpreter；摘要为 SHA-256 的 Base64URL 无 padding 编码；program 属于当前 Create 生命周期，proof 绑定当前 prompt 摘要与 VM 内部状态，每个请求生成新的 proof。
 
 snapshot 的底层输入是四槽数组，首槽承载 binding：
 
@@ -263,7 +263,7 @@ snapshot 的底层输入是四槽数组，首槽承载 binding：
 [{content: sha256(bindingPrompt)}, undefined, undefined, undefined]
 ```
 
-返回值是 `!` 开头的 proof。`GenerateContent`、`CreateInteractionStream`、`CreateInteraction` 与 `GetInteractionStream` 写入 field 5，Build 代理写入 field 3，Build 写代码助手 `CodeAssistantOffline` 写入 field 2，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
+返回值是 `!` 开头的 proof。`GenerateContent`、`CreateInteractionStream`、`CreateInteraction` 与 `GetInteractionStream` 写入 field 5，Build 代理写入 field 3，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
 
 `Waa/Ping` 请求和成功响应：
 
@@ -329,7 +329,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 54 | image search | 58 | Google Maps |
 | 59 | private Interaction route | 85 | TTS 分段说话人 |
 | 69 | Agentic 视频理解 | | |
-| 46 | Live 实时翻译 | 48 | Build 写代码助手可选 |
+| 46 | Live 实时翻译 | | |
 
 未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
 
@@ -351,7 +351,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 76 | `transcription_language_codes` | 77 | `transcription_output` |
 | 80 | `transcription_speaker_labels` | 81 | `transcription_custom_vocabulary` |
 | 84 | `transcription_smart` | 85 | `speech_metadata` |
-| 46 | `speech_translation` | 48 | `code_assistant` |
+| 46 | `speech_translation` | | |
 
 每个主能力码都保留为 `capability_code_<N>`，同时为上表中的已知码增加语义键；次能力码保留为 `secondary_capability_code_<N>`；field 82 中默认开启的码保留为 `default_capability_code_<N>`；有 field 79 的模型带 `interactions_api`，其中经后台任务生成的模型另带 `interaction_task`。
 
@@ -457,7 +457,6 @@ Content 形状：
 | 12 | 13 | thought boolean |
 | 14 | 15 | thought signature |
 | 15 | 16 | 视频静态处理元数据 `[startOffset?, endOffset?, fps?]`；offset 为 `[seconds,nanos?]` |
-| 17 | 18 | 上传附件 `[mime, 上传路径, 文件名, 字节数]`，字节数为十进制字符串；用于 Build 写代码助手，见 [Build 通道](build.md) 第 8 节 |
 | 22 | 23 | transcription metadata `[text, speaker?, timestamp spans?]` |
 | 25 | 26 | 服务端媒体处理调用 `[13, name?, Struct?, callId?]` |
 | 26 | 27 | 服务端媒体处理结果 `[13, name?, Struct?, callId?]` |
@@ -537,11 +536,9 @@ generation config 字段：
 
 - max output 大于模型上限时按上限发送
 
-`reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，`xhigh` 与 `max` 按 `high` 处理，`THINKING_LEVEL_UNSPECIFIED` 视为未设置。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level。模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high；没有 thinking level 能力的模型忽略其余 effort，两类能力都缺少时同时忽略 budget。
+`reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max`，`xhigh`、`extra_high` 与 `max` 对应官网的 Extra High 档位（目录中写作 `EXTRA_HIGH`），模型没有这一档时按 `high` 处理；Interactions 通道按 `high` 处理；`THINKING_LEVEL_UNSPECIFIED` 视为未设置。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level。模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high；没有 thinking level 能力的模型忽略其余 effort，两类能力都缺少时同时忽略 budget。
 
-生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
-
-能力码 48 的模型在目录中另有 `<模型 ID>-build` 条目，经 Build 写代码助手生成，思考后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`；条目定义、请求与流格式见 [Build 通道](build.md) 第 8 节。
+生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
 
 模型名等于 `MODEL_MAPPING` 中的别名（可带 `models/` 前缀）时，生成、计数、embedding、Live、视频与转录请求先换成映射的模型名，再解析思考后缀，映射目标可以带后缀，例如 `fast:gemini-4-argon(low)`；别名本身带后缀时以该后缀替换目标自带的后缀，例如 `fast(high)` 按 `gemini-4-argon(high)` 处理。同一别名写了多次时以第一项为准，映射只替换一次。`/v1/models` 与 `/v1beta/models` 在目录之后列出目标在目录中的别名，字段取自目标模型；与目录 ID 同名的别名替换该条目。
 
@@ -784,16 +781,14 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 - `NONSTREAM_KEEPALIVE=true` 时，Chat Completions、Responses、Messages、Gemini `generateContent`、Interactions 与图片生成的非流式请求在 10 秒内没有结果时先写出 `200`、`Content-Type: application/json` 与 `X-Accel-Buffering: no`，之后每 10 秒写出一个换行，结果就绪后写出 JSON 正文；此后的错误以各协议的错误对象作为正文，访问日志与请求账本记录错误的 HTTP 状态
 - `FAKE_STREAM=true` 时，上述协议的流式请求按非流式方式生成：收齐上游事件、中途中断时换号重发，再以各协议的流式事件输出；等待期间按下文的流式心跳保持连接
 
-错误响应根形状为 `[null,[code,message,...]]`。输入被上游拒绝时帧为 `[null,[block_reason,null,message]]`：
-
-- Gemini GenerateContent 返回 200 与不含 `candidates` 的 `promptFeedback:{blockReason,blockReasonMessage}`，流式时作为唯一一帧发送
-- 其他协议返回 400，错误消息包含拒绝原因与上游说明
+错误响应根形状为 `[null,[code,message,...]]`。上游拦截请求时帧为 `[null,[block_reason,null,message]]`，可以是首帧，也可以在正文、思考或函数调用之后到达，按内容策略类原因结束处理，原因为 block_reason 的小写名（`safety`=1、`other`=2、`blocklist`=3、`prohibited_content`=4、`image_safety`=5）。
 
 协议核心保留 HTTP 状态、协议 code 与 message；公开适配器映射为 OpenAI、Anthropic 或 Gemini 错误对象。Chat、Responses、Anthropic Messages 与 Gemini GenerateContent 将媒体模型的普通文本作为文本结果输出；专用图片端点要求图片结果。终态如下：
 
 - HTTP/协议错误形成失败
 - 读取上游响应时连接中断或上游流在完成帧之前结束，报告为上游流中断与已接收帧数
-- 上游以内容策略类原因（safety、recitation、blocklist、prohibited_content、spii 与对应的图片原因）结束时形成失败：还没有输出时返回 HTTP 502 与各协议的错误对象，已开始流式输出时以流内错误结束，错误消息写明结束原因与上游说明
+- 上游以内容策略类原因（safety、recitation、blocklist、prohibited_content、spii 与对应的图片原因）结束或拦截请求时形成失败：还没有输出时返回 HTTP 502 与各协议的错误对象，已开始流式输出时以流内错误结束，错误消息写明结束原因与上游说明
+- 已输出函数调用之后，上游以内容策略类原因结束、拦截请求、以流尾错误结束或在完成帧之前中断时，这一轮按 `stop` 正常结束，客户端收到完整的函数调用；上游错误写入服务日志警告，内容策略类原因同时作为请求记录的终止原因
 - 其余上游 finish reason 作为正常终态保留并映射到各公开协议
 
 各协议的具体终态转换如下：
@@ -849,7 +844,7 @@ Interactions 的 `google_search`、`google_maps`、`computer_use`、`mcp_server`
 
 编码器将全部函数声明合并为一个 Tool entry；Google Search 与 Image Search 合并为一个 search entry 并分别占用 `searchTypes` 索引 `0/1`；Code Execution、URL Context 与 Maps 各占一个 entry。Google Maps 与 Code Execution/URL Context 构成互斥工具组，每个请求选择其中一组。Anthropic server tool 的定义规则见“Anthropic Messages”节。
 
-Playground 的 `GenerateContent` 与 `CountTokens` 接受最长 63 字符的函数名。更长的名称在函数声明、历史函数调用与函数结果中统一编码为原名的前 50 个字符、`_` 与原名 SHA-256 前 6 字节的十六进制，共 63 字符；上游返回的函数调用在交给公开协议前换回声明的原名。写代码助手与 Live 会话按原名发送。
+Playground 的 `GenerateContent` 与 `CountTokens` 接受最长 63 字符的函数名。更长的名称在函数声明、历史函数调用与函数结果中统一编码为原名的前 50 个字符、`_` 与原名 SHA-256 前 6 字节的十六进制，共 63 字符；上游返回的函数调用在交给公开协议前换回声明的原名。Live 会话按原名发送。
 
 函数 JSON Struct 使用 protobuf `Struct/Value` 数组：map 为 `[[[key,value],...]]`；Value oneof 索引 `0..5` 分别表示 null、number、string、bool、Struct、ListValue。对象键排序后编码。
 
@@ -1494,7 +1489,7 @@ POST /api/control/stop
 
 请求状态使用 `queued`、`running`、`completed`、`cancelled`、`failed`。视频状态使用 `queued`、`completed`、`failed`，对应 progress `0` 或 `100`。
 
-模型目录驻留在当前 generation（`runtimeGeneration` 表示的一次生成服务实例）的内存中；新 generation 载入各账户目录中目录指纹与 `runtime-state.json` 一致的 `catalog.json` 作为缓存，公开目录与请求编码使用的模型条目都由其中保存的 ListModels 响应解析得到。启动先用当前 generation 的 `catalog.CachedModels()` 建立公开快照。缓存非空时直接进入 Worker 预热，首个 Worker 有结果后为每个 `enabled` 且处于 `ready` 或 `busy` 的账户开始后台目录同步；缓存为空时立即开始。目录同步读取账户会话页面载入时的响应：有常驻 Worker 的账户取它最近一次页面载入，没有的账户在 Worker 容量允许时启动 Worker，否则临时载入一个页面，取得响应后关闭；还没有目录的账户同时读取，已有目录的账户逐个读取。可预热的账户全部处于冷却时，预热不返回错误，生成服务直接进入 `RUNNING`，预热在最早的冷却结束时开始。每个非空结果到达时立即从 `CachedModels` 合并公共目录并发布 `accounts`、`models`；生成服务已经 `RUNNING` 时同时触发 Worker 预热，新 generation 的首个非空结果还会解除启动等待。全账户同步结束时，`auth_required` 集合发生变化会补发一次账户与模型快照，并记录同步成功数、非空数、公共模型数、待重试账户数和耗时。第一个 Worker 就绪后重新读取当前缓存，并在持有账户与配置变化锁时把服务状态设为 `RUNNING`。
+模型目录驻留在当前 generation（`runtimeGeneration` 表示的一次生成服务实例）的内存中；新 generation 载入各账户目录中目录指纹与 `runtime-state.json` 一致的 `catalog.json` 作为缓存，公开目录与请求编码使用的模型条目都由其中保存的 ListModels 响应解析得到。启动先用当前 generation 的 `catalog.CachedModels()` 建立公开快照。缓存非空时直接进入 Worker 预热，首个 Worker 有结果后为 `enabled`、处于 `ready` 或 `busy` 且目录缓存缺失或最近一次同步已满 24 小时的账户开始后台目录同步，其余账户沿用缓存；缓存为空时立即开始。目录同步读取账户会话页面载入时的响应：有常驻 Worker 的账户取它最近一次页面载入，没有的账户在 Worker 容量允许时启动 Worker，否则临时载入一个页面，取得响应后关闭；还没有目录的账户同时读取，已有目录的账户逐个读取。可预热的账户全部处于冷却时，预热不返回错误，生成服务直接进入 `RUNNING`，预热在最早的冷却结束时开始。每个非空结果到达时立即从 `CachedModels` 合并公共目录并发布 `accounts`、`models`；生成服务已经 `RUNNING` 时同时触发 Worker 预热，新 generation 的首个非空结果还会解除启动等待。全账户同步结束时，`auth_required` 集合发生变化会补发一次账户与模型快照，并记录沿用缓存的账户数、同步成功数、非空数、公共模型数、待重试账户数和耗时。第一个 Worker 就绪后重新读取当前缓存，并在持有账户与配置变化锁时把服务状态设为 `RUNNING`。
 
 账户状态：
 
@@ -1624,7 +1619,7 @@ OpenAI `GET /v1/models`：
 }
 ```
 
-`max_input_tokens` 与 `max_tokens` 取实时目录的输入与输出 token 上限，目录缺失时为 `null`。`capabilities` 按实时目录给出：`thinking` 及其 `enabled`、`adaptive` 两种类型随模型是否支持思考，`effort` 的 `low`、`medium`、`high` 对应模型支持的思考档位，`xhigh` 与 `max` 按 `high` 执行，`supported` 为 false；`image_input` 与 `pdf_input` 随对话模型，`code_execution` 与 `structured_outputs` 随目录的代码执行与结构化输出能力；`batch` 与 `citations` 的 `supported` 为 false，`context_management` 与其三种编辑为 true。`limit` 为 1–1000 的整数，超出范围返回 `400 invalid_request_error`；省略时为 20。`after_id` 返回该模型之后的一页，`before_id` 返回之前的一页，`has_more` 表示该方向是否还有模型，`first_id`、`last_id` 为本页首尾 ID。`lifecycle`（含 `lifecycle[]` 与逗号分隔写法）不包含 `active` 时返回空列表。单模型路由返回与列表项相同的对象，失败响应使用 Anthropic 错误对象。
+`max_input_tokens` 与 `max_tokens` 取实时目录的输入与输出 token 上限，目录缺失时为 `null`。`capabilities` 按实时目录给出：`thinking` 及其 `enabled`、`adaptive` 两种类型随模型是否支持思考，`effort` 的 `low`、`medium`、`high`、`xhigh` 对应模型支持的思考档位，`max` 按模型最高档执行，`supported` 为 false；`image_input` 与 `pdf_input` 随对话模型，`code_execution` 与 `structured_outputs` 随目录的代码执行与结构化输出能力；`batch` 与 `citations` 的 `supported` 为 false，`context_management` 与其三种编辑为 true。`limit` 为 1–1000 的整数，超出范围返回 `400 invalid_request_error`；省略时为 20。`after_id` 返回该模型之后的一页，`before_id` 返回之前的一页，`has_more` 表示该方向是否还有模型，`first_id`、`last_id` 为本页首尾 ID。`lifecycle`（含 `lifecycle[]` 与逗号分隔写法）不包含 `active` 时返回空列表。单模型路由返回与列表项相同的对象，失败响应使用 Anthropic 错误对象。
 
 Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返回一个对象。字段为 `name`、`baseModelId`（模型 ID）、`displayName`、`description`、`supportedGenerationMethods`（上游目录中该模型的方法里本服务提供的 `generateContent`、`countTokens`、`createCachedContent`、`embedContent`、`batchEmbedContents`、`predict`、`predictLongRunning`，按上游顺序）、`inputTokenLimit`、`outputTokenLimit`、可选 `temperature`、`maxTemperature`、`topP`、`topK`、`modelStage`（ListModels field 23 或 Build 目录给出的模型阶段）、`thinking`、`thinkingLevels`、`defaultThinkingLevel`、`capabilities`、`capabilityOptions`、`accessModes`、`paid`、`channels`。
 
@@ -1651,7 +1646,7 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 | `/v1/audio/transcriptions` | multipart `file` | 文本或转录 JSON |
 | `/v1/videos` | `prompt` 或 `input_reference` | 长任务对象，随后轮询并下载内容 |
 
-生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，`gemini-3.1-pro-preview`、`gemini-3.1-flash-lite`、`gemini-3-flash-preview`、`gemini-omni-1.1-flash`、`gemini-nano-banana-2.1` 与 `gemma-` 开头的模型原样以 model 轮结尾发送，由模型原生续写。其余模型（包括 `-latest` 别名与 `-build` 写代码助手）在 `CONTINUATION_REWRITE` 打开时改写末尾连续 assistant 轮：`CONTINUATION_PROMPT` 非空时，这些轮的正文与代码执行内容以 `<assistant_prefix>` 包裹，连同该提示词写入系统指令；为空时这段正文作为最后一轮 user 发送。改写后模型从前缀之后续写，响应只返回续写部分，末尾未回传结果的函数调用由模型重新生成。`CONTINUATION_REWRITE` 关闭时所有模型原样发送，Playground 以 400 `Requests ending with a model turn are not supported` 拒绝的模型返回该错误。各生成入口与计数接口按同一规则转换，`countTokens` 接受以 model 轮结尾的请求。
+生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，`gemini-3.1-pro-preview`、`gemini-3.1-flash-lite`、`gemini-3-flash-preview`、`gemini-omni-1.1-flash`、`gemini-nano-banana-2.1` 与 `gemma-` 开头的模型原样以 model 轮结尾发送，由模型原生续写。其余模型（包括 `-latest` 别名）在 `CONTINUATION_REWRITE` 打开时改写末尾连续 assistant 轮：`CONTINUATION_PROMPT` 非空时，这些轮的正文与代码执行内容以 `<assistant_prefix>` 包裹，连同该提示词写入系统指令；为空时这段正文作为最后一轮 user 发送。改写后模型从前缀之后续写，响应只返回续写部分，末尾未回传结果的函数调用由模型重新生成。`CONTINUATION_REWRITE` 关闭时所有模型原样发送，Playground 以 400 `Requests ending with a model turn are not supported` 拒绝的模型返回该错误。各生成入口与计数接口按同一规则转换，`countTokens` 接受以 model 轮结尾的请求。
 
 生成、计数与 Live 的系统提示按同一规则改写后发送：行首以 `You are` 或 `You're` 开头、以 agent、assistant 或 AI 结尾并带归属声明（`created by`、`built on`、`based on` 等）的身份句替换为 `You are an AI Agent.`，以 `x-anthropic-billing-header:` 开头的行与含 `RFC 2119 keywords`（不区分大小写）的行整行删除，改写后为空的系统提示分段不发送。
 
@@ -2384,7 +2379,7 @@ tool group 字段：
 
 非流式结果合并相邻、同类且无签名边界的正文或思考片段。工具、媒体与带转录元数据的 Part 保持独立；独立签名附着于前一未签名 Part，缺少可附着内容时用 `{"text":"","thoughtSignature":"..."}` 承载。
 
-`:streamGenerateContent` 带 `alt=sse` 时使用 SSE；不带时与官方 REST 一样返回 `application/json` 的 JSON 数组，元素之间以 `\r\n,\r\n` 分隔，不写保活行。每个内容事件发送一个部分 `GenerateContentResponse`，包含 `responseId`、`modelVersion`、`turnToken`、该事件所在上游帧的累计 `usageMetadata` 与一个带 `content` 的 candidate Part；上游带结束原因的那一帧中的内容 Part（包括只带签名的空文本 Part）不单独成块，与 `finishReason`、可选 `finishMessage`、`groundingMetadata`、`citationMetadata` 和最终 `usageMetadata` 一起放在最后一帧。响应头后的错误为 SSE 帧 `data: {"error":{"code","message","status"}}` 或 JSON 数组中的同形元素。
+`:streamGenerateContent` 带 `alt=sse` 时使用 SSE；不带时与官方 REST 一样返回 `application/json` 的 JSON 数组，元素之间以 `\r\n,\r\n` 分隔，不写保活行。每个内容事件发送一个部分 `GenerateContentResponse`，包含 `responseId`、`modelVersion`、`turnToken`、该事件所在上游帧的累计 `usageMetadata` 与一个带 `content` 的 candidate Part；上游带结束原因的那一帧中的内容 Part（包括只带签名的空文本 Part）不单独成块，与 `finishReason`、可选 `finishMessage`、`groundingMetadata`、`citationMetadata` 和最终 `usageMetadata` 一起放在最后一帧。响应头后的错误在 SSE 中为不带 `data:` 前缀的一行 `{"error":{"code","message","status"}}`（官方 `@google/genai` 与 google-genai 按这一形状识别流内错误），在 JSON 数组中为同形元素。
 
 ### Files、Transcribe 与媒体
 
@@ -2532,7 +2527,7 @@ Gemini `POST /v1beta/models/{model}:predict` 以 Imagen 模型生成图片，`{m
 
 ### Decisions
 
-`POST /v1beta/decisions` 以实时目录中带 `createDecision` 方法的模型回答决策问题，请求与响应同官方 Decisions API：
+`POST /v1beta/decisions` 以实时目录中带 `createDecision` 方法的模型回答决策问题，请求与响应同官方 Decisions API。官网前端尚未调用这类模型：Playground 只列出示例应用，示例应用经 Gemini API 以付费 API key 调用，本服务经网页的 `CreateDecision` 发送，每次请求在运行日志记一条 `WARN`（`Decision 请求 | 模型=<模型> | 官网前端尚未调用该模型`）：
 
 | 字段 | 取值与处理 |
 | --- | --- |
@@ -2775,7 +2770,8 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 | 模型或方法不存在 | 404 | `model_not_found` | `not_found_error` | `NOT_FOUND` |
 | 本地文件不存在 | 404 | `file_not_found` | `not_found_error` | `NOT_FOUND` |
 | 输入 token 超过模型上限（上游原文含 `The input token count exceeds the maximum number of tokens allowed`） | 400 | `context_length_exceeded` | `invalid_request_error`，消息以 `prompt is too long: ` 开头 | `INVALID_ARGUMENT` |
-| 上游拒绝权限 | 403 | `upstream_error` | `permission_error` | `PERMISSION_DENIED` |
+| 上游拒绝权限（官网跳转拒绝页的地区、年龄与 Workspace 原因，或协议错误码不为 7） | 403 | `upstream_error` | `permission_error` | `PERMISSION_DENIED` |
+| 换号用尽且最后一次失败为上游暂时拒绝账户（403、协议错误码 7）或认证失败（401）；被拒账户最早在 1 分钟内恢复时带 `Retry-After`，Gemini 错误体带 `RetryInfo` | 503 | `account_unavailable` | `api_error` | `UNAVAILABLE` |
 | 视频仍在生成 | 409 | `video_not_ready` | `api_error` | `INTERNAL` |
 | 文件超过 512 MiB | 413 | `file_too_large` | `request_too_large` | `INTERNAL` |
 | 上游配额或限流（上游给出重试时长时带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
@@ -2786,7 +2782,7 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 | 生成服务正在启动且模型目录尚未就绪 | 503 | `service_starting` | `api_error` | `UNAVAILABLE` |
 | 请求期限到期 | 504 | `upstream_error` | `timeout_error` | `DEADLINE_EXCEEDED` |
 | 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
-| 上游以内容策略类原因结束生成 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
+| 上游以内容策略类原因结束生成或拦截请求 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 
 - “没有符合条件的账户”指候选耗尽且没有符合方法与能力的账户
 - 权益不满足时错误消息写明模型需要的权益：`1` 为付费 API key，`3` 为 Google AI Pro 或 Ultra 订阅，`4` 为 Google AI Ultra 订阅
@@ -2794,7 +2790,7 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 - 管理端启动生成服务期间到达的公开 API 请求等启动结束再处理；生成服务处于 `STOPPED` 时，生成与计数端点返回 `service_stopped`，错误消息说明在管理页面点击“启动服务”或开启“自动启动生成服务”
 - OpenAI 错误对象的 `type` 在参数、认证、权限与资源不存在时为 `invalid_request_error`，429 为 `requests`，其余为 `server_error`；`param` 为 `null`
 - Responses 流中的 `response.failed` 的 `error.code` 取官方枚举：429 为 `rate_limit_exceeded`，400 为 `invalid_prompt`，其余为 `server_error`
-- 错误消息以服务的中文说明开头，上游错误随后附上游方法、HTTP 状态、协议错误码与上游原文，例如 `AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: You've reached your usage limit…`
+- 错误消息以服务的中文说明开头，上游错误随后附上游方法、HTTP 状态、协议错误码与上游原文，例如 `AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: You've reached your usage limit…`；以 503 返回的上游 403 与 401 写 gRPC 状态名，例如 `AI Studio GenerateContent 返回 PERMISSION_DENIED、协议错误码 7: The caller does not have permission`
 - 候选账户均在冷却时，消息在最早恢复时间后附上该冷却的类型与触发它的上游错误，例如 `每日限额: AI Studio GenerateContent 返回 HTTP 429、协议错误码 8: … limit: 100, model: gemini-3.8-flash …`
 - OpenAI 与 Anthropic 的 5xx 错误消息（含已开始流式响应后的终止事件）在说明前加官方英文开头与冒号：503 为 `Service unavailable`，504 为 `Request timed out`，529 为 `Overloaded`，其余为 `Internal server error`
 
@@ -2854,7 +2850,7 @@ event: error
 data: {"type":"error","error":{"type":"api_error","message":"..."}}
 
 # Gemini
-data: {"error":{"code":502,"message":"...","status":"INTERNAL"}}
+{"error":{"code":502,"message":"...","status":"INTERNAL"}}
 ```
 
 MakerSuite 错误解析：

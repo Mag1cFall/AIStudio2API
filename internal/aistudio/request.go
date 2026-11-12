@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -176,9 +175,6 @@ func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, re
 	if lease, ok := AccountLeaseFromContext(ctx); ok && lease.Channel() == ChannelBuild {
 		return c.buildCountTokens(ctx, accountID, request)
 	}
-	if entry, err := c.modelEntry(ctx, accountID, request.Model); err == nil && entry.model.Capabilities["assistant_route"] {
-		request.Model = assistantBaseModelID(request.Model)
-	}
 	body, err := EncodeCountTokensRequest(request)
 	if err != nil {
 		return TokenCount{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -286,9 +282,6 @@ func encodePart(part Part) ([]any, error) {
 	if part.File != nil {
 		variants++
 	}
-	if part.Upload != nil {
-		variants++
-	}
 	if part.FunctionCall != nil {
 		variants++
 	}
@@ -352,12 +345,6 @@ func encodePart(part Part) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return encodeVideoPart(wire, part)
-	}
-	if upload := part.Upload; upload != nil {
-		// Part field 18 上传附件：MIME、上传路径、文件名、字节数
-		wire := make([]any, 18)
-		wire[17] = []any{upload.MIME, upload.Path, upload.Name, strconv.FormatInt(upload.Size, 10)}
 		return encodeVideoPart(wire, part)
 	}
 	if part.FunctionCall != nil {

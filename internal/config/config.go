@@ -43,6 +43,7 @@ var configKeys = [...]string{
 	"PER_ACCOUNT_CONCURRENCY",
 	"ROUTING_STRATEGY",
 	"ACCOUNT_ORDER",
+	"MAX_ACCOUNT_SWITCHES",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
 	"MODEL_CHANNELS",
@@ -64,6 +65,7 @@ var configKeys = [...]string{
 	"YOUTUBE_LINKS",
 	"STRIP_THOUGHT_SIGNATURES",
 	"SEARCH_MODEL_ALIASES",
+	"DISCOVER_HIDDEN_MODELS",
 	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
 	"FIRST_EVENT_HEDGE_MODELS",
@@ -91,6 +93,9 @@ const FirstEventHedgeOff = "off"
 
 // FirstEventHedgeAuto 表示按模型与通道近期原请求首事件等待的 p95 发起备用请求
 const FirstEventHedgeAuto = "auto"
+
+// DefaultMaxAccountSwitches 是 MAX_ACCOUNT_SWITCHES 的默认值
+const DefaultMaxAccountSwitches = 3
 
 // DefaultFirstEventHedgeModels 是 FIRST_EVENT_HEDGE_MODELS 的默认值
 const DefaultFirstEventHedgeModels = "gemini-4-argon"
@@ -120,6 +125,7 @@ type Config struct {
 	YouTubeLinks           bool
 	StripThoughtSignatures bool
 	SearchModelAliases     bool
+	DiscoverHiddenModels   bool
 	GoogleSearch           bool
 	FirstEventHedge        string
 	FirstEventHedgeModels  string
@@ -139,6 +145,7 @@ type Config struct {
 	PerAccountConcurrency  int
 	RoutingStrategy        string
 	AccountOrder           string
+	MaxAccountSwitches     int
 	UpstreamChannels       []string
 	ModelMapping           string
 	ModelChannels          string
@@ -173,7 +180,7 @@ func Default() Config {
 		BuildNativeNonstream:   true,
 		NonstreamKeepalive:     true,
 		SearchModelAliases:     true,
-		FirstEventHedge:        FirstEventHedgeAuto,
+		FirstEventHedge:        FirstEventHedgeOff,
 		FirstEventHedgeModels:  DefaultFirstEventHedgeModels,
 		ContinuationRewrite:    true,
 		ContinuationPrompt:     DefaultContinuationPrompt,
@@ -187,6 +194,7 @@ func Default() Config {
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
+		MaxAccountSwitches:     DefaultMaxAccountSwitches,
 		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendSpiderMonkey,
 		MediaOutput:            MediaOutputInline,
@@ -222,6 +230,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"NONSTREAM_KEEPALIVE":      boolSetter("NONSTREAM_KEEPALIVE", func(c *Config) *bool { return &c.NonstreamKeepalive }),
 	"FAKE_STREAM":              boolSetter("FAKE_STREAM", func(c *Config) *bool { return &c.FakeStream }),
 	"SEARCH_MODEL_ALIASES":     boolSetter("SEARCH_MODEL_ALIASES", func(c *Config) *bool { return &c.SearchModelAliases }),
+	"DISCOVER_HIDDEN_MODELS":   boolSetter("DISCOVER_HIDDEN_MODELS", func(c *Config) *bool { return &c.DiscoverHiddenModels }),
 	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
 	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
 	"STRIP_THOUGHT_SIGNATURES": boolSetter("STRIP_THOUGHT_SIGNATURES", func(c *Config) *bool { return &c.StripThoughtSignatures }),
@@ -231,6 +240,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
 	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
 	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
+	"MAX_ACCOUNT_SWITCHES":     setMaxAccountSwitches,
 	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
 	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
 	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
@@ -300,6 +310,19 @@ func textSetter(field func(*Config) *string, normalize func(string) string) func
 
 func lowerTrim(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// errMaxAccountSwitches 是 MAX_ACCOUNT_SWITCHES 取值无效的原因
+var errMaxAccountSwitches = fmt.Errorf("MAX_ACCOUNT_SWITCHES 必须是 0 或正整数")
+
+// setMaxAccountSwitches 设置非额度失败的换号次数，0 表示不换号
+func setMaxAccountSwitches(c *Config, value string) error {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return errMaxAccountSwitches
+	}
+	c.MaxAccountSwitches = parsed
+	return nil
 }
 
 // setWAABackend 设置 WAA 后端，camoufox 以外的取值都使用 spidermonkey
@@ -377,6 +400,12 @@ var configChecks = []configCheck{
 	{[]string{"ROUTING_STRATEGY"}, func(c Config) error {
 		if c.RoutingStrategy != "round-robin" && c.RoutingStrategy != "fill-first" {
 			return fmt.Errorf("ROUTING_STRATEGY 必须是 round-robin 或 fill-first")
+		}
+		return nil
+	}},
+	{[]string{"MAX_ACCOUNT_SWITCHES"}, func(c Config) error {
+		if c.MaxAccountSwitches < 0 {
+			return errMaxAccountSwitches
 		}
 		return nil
 	}},
@@ -499,7 +528,7 @@ var legacyEnvKeys = []string{
 	"MAX_ACTIVE_WORKERS", "WARM_STARTUP_CONCURRENCY", "PER_ACCOUNT_CONCURRENCY", "ROUTING_STRATEGY", "UPSTREAM_CHANNELS", "WAA_BACKEND",
 }
 
-// upgradeEnv 改写旧版本写出的没有注释的全量 .env：四项旧值改为当前值，WAA 后端保留为当前取值，删去其余等于默认值的键，返回是否改写
+// upgradeEnv 改写旧版本写出的没有注释的全量 .env：上游通道与请求超时的旧默认值改为当前值，WAA 后端保留为当前取值，删去其余等于默认值的键，返回是否改写
 func upgradeEnv(values map[string]string) bool {
 	if slices.ContainsFunc(legacyEnvKeys, func(key string) bool {
 		_, ok := values[key]
@@ -517,9 +546,6 @@ func upgradeEnv(values map[string]string) bool {
 	}
 	if timeout, err := time.ParseDuration(strings.TrimSpace(values["REQUEST_TIMEOUT"])); err == nil && timeout == 5*time.Minute {
 		delete(values, "REQUEST_TIMEOUT")
-	}
-	if lowerTrim(values["FIRST_EVENT_HEDGE"]) == FirstEventHedgeOff {
-		delete(values, "FIRST_EVENT_HEDGE")
 	}
 	backend := Default()
 	configSetters["WAA_BACKEND"](&backend, values["WAA_BACKEND"])
@@ -574,6 +600,7 @@ func (c Config) envValues() map[string]string {
 		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
 		"STRIP_THOUGHT_SIGNATURES": strconv.FormatBool(c.StripThoughtSignatures),
 		"SEARCH_MODEL_ALIASES":     strconv.FormatBool(c.SearchModelAliases),
+		"DISCOVER_HIDDEN_MODELS":   strconv.FormatBool(c.DiscoverHiddenModels),
 		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
 		"FIRST_EVENT_HEDGE_MODELS": c.FirstEventHedgeModels,
@@ -592,6 +619,7 @@ func (c Config) envValues() map[string]string {
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"ACCOUNT_ORDER":            c.AccountOrder,
+		"MAX_ACCOUNT_SWITCHES":     strconv.Itoa(c.MaxAccountSwitches),
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
 		"MODEL_CHANNELS":           c.ModelChannels,

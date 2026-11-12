@@ -190,6 +190,8 @@ func resolveGenerationSettings(config GenerationConfig, defaults GenerationDefau
 		thinkingLevel = 2
 	case "high":
 		thinkingLevel = 3
+	case "xhigh", "extra_high", "max":
+		thinkingLevel = 5
 	case "minimal":
 		thinkingLevel = 4
 	case "none":
@@ -199,7 +201,7 @@ func resolveGenerationSettings(config GenerationConfig, defaults GenerationDefau
 			thinkingBudget = &zero
 		}
 	default:
-		return settings, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh 或 max")
+		return settings, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh、extra_high 或 max")
 	}
 	if hasReasoningEffort && defaults.ThinkingLevel {
 		thinkingLevel = closestSupportedThinkingLevel(thinkingLevel, defaults.ThinkingLevels)
@@ -329,7 +331,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	if thinking := settings.thinking; thinking != nil {
 		value := []any{int64(1)}
 		if thinking.level != nil {
-			value = []any{int64(1), nil, nil, *thinking.level}
+			value = []any{int64(1), nil, nil, generateThinkingLevel(*thinking.level)}
 		}
 		if thinking.budget != nil {
 			if len(value) < 2 {
@@ -354,16 +356,21 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 	return wire, nil
 }
 
-var thinkingLevelsByEffort = []int64{4, 1, 2, 3}
+var thinkingLevelsByEffort = []int64{4, 1, 2, 3, 5}
 
-// normalizedReasoningEffort 把各协议的思考强度归一为 none、minimal、low、medium、high，xhigh 与 max 取 high，未设置时为空
+// generateThinkingLevel 返回 ListModels 思考档位在 GenerateContent 请求中的编号，官网 Extra High 在 ListModels 中为 5、在请求中为 6
+func generateThinkingLevel(level int64) int64 {
+	if level == 5 {
+		return 6
+	}
+	return level
+}
+
+// normalizedReasoningEffort 把各协议的思考强度归一为小写，未设置时为空
 func normalizedReasoningEffort(value string) string {
 	effort := strings.ToLower(strings.TrimSpace(value))
-	switch effort {
-	case "thinking_level_unspecified":
+	if effort == "thinking_level_unspecified" {
 		return ""
-	case "xhigh", "max":
-		return "high"
 	}
 	return effort
 }
@@ -379,12 +386,12 @@ func ApplyModelSuffix(model string, config GenerationConfig) (string, Generation
 	switch value {
 	case "auto", "-1":
 		config.ReasoningEffort, config.ThinkingBudget = "", nil
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+	case "none", "minimal", "low", "medium", "high", "xhigh", "extra_high", "max":
 		config.ReasoningEffort, config.ThinkingBudget = value, nil
 	default:
 		budget, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || budget < 0 {
-			return model, config, fmt.Errorf("%w: 模型名后缀 (%s) 必须是 none、auto、minimal、low、medium、high、xhigh、max 或非负整数思考预算", ErrInvalidArgument, value)
+			return model, config, fmt.Errorf("%w: 模型名后缀 (%s) 必须是 none、auto、minimal、low、medium、high、xhigh、extra_high、max 或非负整数思考预算", ErrInvalidArgument, value)
 		}
 		config.ReasoningEffort, config.ThinkingBudget = "", &budget
 	}
@@ -777,7 +784,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		return nil, err
 	}
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
-	restoring := request.restoreModelTurns && !build && !entry.model.Capabilities["assistant_route"] && !entry.defaults.InteractionStream && !entry.defaults.InteractionTask
+	restoring := request.restoreModelTurns && !build && !entry.defaults.InteractionStream && !entry.defaults.InteractionTask
 	if restoring {
 		request.Contents, request.turnToken = c.turns.restore(apiKey, request.Contents)
 	}
@@ -830,14 +837,10 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		accountCtx, request.AccountID, wireRequest.AccountID = next, accountID, accountID
 	}
 	sendRequest := func() (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
-		switch {
-		case entry.model.Capabilities["assistant_route"]:
-			return c.sendAssistant(accountCtx, wireRequest, entry)
-		case build:
+		if build {
 			return c.sendBuild(accountCtx, wireRequest, entry)
-		default:
-			return c.sendPlayground(accountCtx, wireRequest, entry, switched)
 		}
+		return c.sendPlayground(accountCtx, wireRequest, entry, switched)
 	}
 	response, decodeStream, err := sendRequest()
 	if err != nil {
@@ -957,17 +960,12 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 		}
 		err := decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
-		assistant := entry.model.Capabilities["assistant_route"]
 		for regenerated := 0; regenerated < regenerations; regenerated++ {
-			// 写代码助手的调用块错误已在应用内续写，这里只重新生成发送与读取失败
-			if assistant && err == nil {
-				break
-			}
 			// emittedText 是续写时已向客户端输出的纯文本，为空时从头重新生成
 			emittedText := ""
 			if !regenerable(ctx, err, finish, committed) {
 				text, ok := committedTextOnly(output)
-				if !ok || assistant || !regenerable(ctx, err, finish, false) {
+				if !ok || !regenerable(ctx, err, finish, false) {
 					break
 				}
 				emittedText = text
@@ -1032,17 +1030,43 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				}
 			}
 		}
-		if err != nil {
+		var feedback *PromptFeedbackError
+		if errors.As(err, &feedback) {
+			err = &ContentPolicyError{Reason: feedback.Reason, Message: feedback.Message}
+		}
+		// trailing 是上游在函数调用之后结束生成的错误，客户端已收到完整的函数调用，按正常完成结束
+		var trailing error
+		switch {
+		case ctx.Err() != nil:
+		case err != nil && calledFunction(output):
+			trailing, err = err, nil
+			finish = &Event{Kind: EventFinish, FinishReason: "stop"}
+			if usage == nil && roundUsage != nil {
+				merged := *roundUsage
+				if previousUsage != nil {
+					merged = mergeContinuedUsage(*previousUsage, merged)
+				}
+				usage = &merged
+			}
+		case finish != nil && contentPolicyFinish(finish.FinishReason) && calledFunction(output):
+			trailing = &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
+			finish.FinishReason, finish.FinishMessage = "stop", ""
+		}
+		var policy *ContentPolicyError
+		switch {
+		case errors.As(err, &policy):
+		case err != nil:
 			if ctx.Err() == nil {
 				_ = send(Event{Kind: EventError, Err: err})
 			}
 			return
+		case finish != nil && contentPolicyFinish(finish.FinishReason):
+			policy = &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
 		}
-		if finish != nil && contentPolicyFinish(finish.FinishReason) {
+		if policy != nil {
 			if usage == nil {
 				usage = previousUsage
 			}
-			policy := &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
 			if !sentOutput {
 				policy.Usage = usage
 			} else if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
@@ -1073,13 +1097,19 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return
 		}
 		if finish != nil {
+			finish.TrailingError = trailing
 			_ = send(*finish)
 		}
-		if restoring {
+		if restoring && trailing == nil {
 			c.turns.store(apiKey, history, turn)
 		}
 	}()
 	return contract.forward(ctx, events), nil
+}
+
+// calledFunction 表示本次生成已输出函数调用，上游的函数调用 Part 总是完整到达
+func calledFunction(output Output) bool {
+	return slices.ContainsFunc(output.Parts, func(part Part) bool { return part.FunctionCall != nil })
 }
 
 // contentPolicyFinish 表示结束原因属于内容策略类：安全、背诵、屏蔽词、禁止内容、个人敏感信息与对应的图片原因

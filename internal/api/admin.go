@@ -28,6 +28,7 @@ type AdminService interface {
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
+	DownloadCamoufox(context.Context) (AdminStatus, error)
 	ClearLogs(context.Context) error
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, RuntimeConfig) (RuntimeConfig, error)
@@ -43,14 +44,14 @@ type AdminService interface {
 
 // AdminStatus 表示管理端运行状态
 type AdminStatus struct {
-	State          string             `json:"state"`
-	Running        bool               `json:"running"`
-	Ready          bool               `json:"ready"`
-	Version        string             `json:"version"`
-	ActiveRequests int                `json:"active_requests"`
-	Accounts       AdminAccountCounts `json:"accounts"`
-	Camoufox       AdminCamoufox      `json:"camoufox"`
-	ChromeImport   bool               `json:"chrome_import"`
+	State          string                     `json:"state"`
+	Running        bool                       `json:"running"`
+	Ready          bool                       `json:"ready"`
+	Version        string                     `json:"version"`
+	ActiveRequests int                        `json:"active_requests"`
+	Accounts       AdminAccountCounts         `json:"accounts"`
+	Camoufox       camoufoxnative.Preparation `json:"camoufox"`
+	ChromeImport   bool                       `json:"chrome_import"`
 }
 
 // InvalidConfigValue 表示加载时取值无效、按默认值生效的一个配置项
@@ -58,12 +59,6 @@ type InvalidConfigValue struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Reason string `json:"reason"`
-}
-
-// AdminCamoufox 表示 Camoufox 是否就绪与正在进行的下载
-type AdminCamoufox struct {
-	Ready    bool                     `json:"ready"`
-	Download *camoufoxnative.Download `json:"download,omitempty"`
 }
 
 // AdminLog 表示管理页面展示的一条运行日志
@@ -103,7 +98,7 @@ type RequestLog struct {
 	Channel         string            `json:"channel,omitempty"`
 }
 
-// RequestLogUsage 区分输入、缓存命中、思考、回复与端到端输出速率
+// RequestLogUsage 区分输入、缓存命中、思考、回复与首字之后的输出速率
 type RequestLogUsage struct {
 	InputTokens            int64   `json:"input_tokens"`
 	CachedTokens           int64   `json:"cached_tokens"`
@@ -111,7 +106,7 @@ type RequestLogUsage struct {
 	ReplyTokens            int64   `json:"reply_tokens"`
 	OutputTokens           int64   `json:"output_tokens"`
 	TotalTokens            int64   `json:"total_tokens"`
-	AverageTokensPerSecond float64 `json:"average_tokens_per_second"`
+	AverageTokensPerSecond float64 `json:"average_tokens_per_second,omitempty"`
 }
 
 // AccessLog 表示一次公开 API 请求的最终访问记录
@@ -119,6 +114,8 @@ type AccessLog struct {
 	Status          int
 	Latency         time.Duration
 	FirstEvent      time.Duration
+	FirstOutput     int64
+	TrailingError   string
 	QueueWait       time.Duration
 	Proof           time.Duration
 	UpstreamBytes   int64
@@ -226,6 +223,8 @@ type ChromeImportProfile struct {
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
 	Locale      string `json:"locale"`
+	// Restricted 是该账户服务受限的原因，受限的账户不能导入
+	Restricted string `json:"restricted"`
 }
 
 // CookieBrowser 表示本机开启远程调试的浏览器与其中登录 AI Studio 的账户
@@ -239,6 +238,8 @@ type CookieBrowser struct {
 	Imported  bool   `json:"imported"`
 	SignedOut bool   `json:"signed_out"`
 	Error     string `json:"error"`
+	// Restricted 是该账户服务受限的原因，受限的账户不能导入
+	Restricted string `json:"restricted"`
 
 	// DeviceBound 表示 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备，导入的副本约 2 小时内失效
 	DeviceBound bool `json:"device_bound"`
@@ -268,6 +269,7 @@ type RuntimeConfig struct {
 	YouTubeLinks              bool                 `json:"youtube_links"`
 	StripThoughtSignatures    bool                 `json:"strip_thought_signatures"`
 	SearchModelAliases        bool                 `json:"search_model_aliases"`
+	DiscoverHiddenModels      bool                 `json:"discover_hidden_models"`
 	GoogleSearch              bool                 `json:"google_search"`
 	FirstEventHedge           string               `json:"first_event_hedge"`
 	FirstEventHedgeModels     string               `json:"first_event_hedge_models"`
@@ -296,6 +298,7 @@ type RuntimeConfig struct {
 	PerAccountConcurrency     int                  `json:"per_account_concurrency"`
 	RoutingStrategy           string               `json:"routing_strategy"`
 	AccountOrder              string               `json:"account_order"`
+	MaxAccountSwitches        int                  `json:"max_account_switches"`
 	UpstreamChannels          []string             `json:"upstream_channels"`
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
@@ -356,6 +359,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
+	mux.HandleFunc("POST /api/camoufox/download", s.handleDownloadCamoufox)
 	mux.HandleFunc("DELETE /api/logs", s.handleClearLogs)
 	mux.HandleFunc("GET /api/config", s.handleRuntimeConfig)
 	mux.HandleFunc("PUT /api/config", s.handleUpdateRuntimeConfig)
@@ -464,6 +468,16 @@ func (s *server) handleRefreshAccount(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleStartService(w http.ResponseWriter, r *http.Request) {
 	status, err := s.config.Admin.StartService(r.Context())
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// handleDownloadCamoufox 在后台重新开始下载 Camoufox 并返回服务状态
+func (s *server) handleDownloadCamoufox(w http.ResponseWriter, r *http.Request) {
+	status, err := s.config.Admin.DownloadCamoufox(r.Context())
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return

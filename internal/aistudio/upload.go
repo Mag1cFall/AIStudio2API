@@ -1056,8 +1056,8 @@ func (s *PooledService) UploadInlineMediaToLease(
 	temporary *TemporaryFileCopies,
 	keepImages bool,
 ) ([]Content, *TemporaryFileCopies, error) {
-	if target.Channel() == ChannelBuild || target.Channel() == ChannelAssistant {
-		// Build 代理的 Gemini API 请求直接携带 inlineData，写代码助手在发送时把内联数据上传为附件引用
+	if target.Channel() == ChannelBuild {
+		// Build 代理的 Gemini API 请求直接携带 inlineData
 		return contents, temporary, nil
 	}
 	if temporary == nil {
@@ -1725,4 +1725,15 @@ func encodeFilePart(file *FileRef) ([]any, error) {
 	wire := make([]any, 6)
 	wire[5] = []any{file.ID}
 	return wire, nil
+}
+
+// scriptJSON 按页面脚本 JSON.stringify 的形式编码，保留 HTML 字符原样、不带结尾换行
+func scriptJSON(value any) (string, error) {
+	var buffer strings.Builder
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }

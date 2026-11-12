@@ -24,7 +24,7 @@ func newPageRuns() *pageRuns {
 
 // rerun 记录账户页面运行 contents，返回该账户此前是否运行过同一对话；对话不以 user 轮结尾时返回 false 且不记录，超过上限时丢弃最早的一条
 func (runs *pageRuns) rerun(accountID string, contents []Content) bool {
-	links := assistantLinks(contents)
+	links := turnLinks(contents)
 	if len(links) == 0 || links[len(links)-1].model {
 		return false
 	}

@@ -26,9 +26,6 @@ func prepareShell(args []string) error {
 	if err := os.Chdir(directory); err != nil {
 		return err
 	}
-	if err := linkWebKitHelpers(); err != nil {
-		return err
-	}
 	if len(args) != 0 && args[0] == "setup" {
 		attachConsole()
 	}
@@ -81,6 +78,9 @@ func newShell(open, hideDock bool, stop func()) *uiShell {
 
 // run 运行窗口与托盘：服务就绪前显示启动画面，就绪后显示管理页面，启动失败时显示错误对话框后退出
 func (s *uiShell) run(ctx context.Context, start func() (serviceReady, error)) error {
+	if err := linkWebKitHelpers(); err != nil {
+		return err
+	}
 	return s.app.Run(ctx, func() (string, error) {
 		service, err := start()
 		return service.url, err

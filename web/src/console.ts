@@ -1,4 +1,4 @@
-import { computed, reactive, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { api, openAdminEvents } from '@/api'
 import { useI18n } from '@/i18n'
 import type {
@@ -215,6 +215,25 @@ async function startService(): Promise<void> {
   }
 }
 
+// retryCamoufox 在后台重新下载 Camoufox，从已下载的部分继续
+async function retryCamoufox(): Promise<void> {
+  try {
+    status.value = await api.downloadCamoufox()
+  } catch (error) {
+    showNotice(errorText(error), 'error')
+  }
+}
+
+// camoufoxTimer 是 Camoufox 下载或解压期间每秒刷新服务状态的定时器
+let camoufoxTimer: number | undefined
+watch(
+  () => status.value?.camoufox.preparing === true,
+  (preparing) => {
+    window.clearInterval(camoufoxTimer)
+    camoufoxTimer = preparing ? window.setInterval(() => void loadStatus(), 1000) : undefined
+  },
+)
+
 async function stopService(): Promise<void> {
   launchCancellationRequested.value = serviceState.value === 'launching'
   stopPending.value = true
@@ -374,6 +393,7 @@ export function useConsole() {
     commitDelete,
     startService,
     stopService,
+    retryCamoufox,
     clearLogs,
     waitForRestart,
     startConsole,

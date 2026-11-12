@@ -35,7 +35,7 @@ const (
 	h3RequestBodyChunk = 32 << 10
 )
 
-// firefoxHTTP3Settings 是 Firefox 152 控制流 SETTINGS 的参数与顺序：QPACK 容量、阻塞流、WebTransport、两个 H3 DATAGRAM 与扩展 CONNECT
+// firefoxHTTP3Settings 是 Firefox 158 控制流 SETTINGS 的参数与顺序：QPACK 容量、阻塞流、WebTransport、两个 H3 DATAGRAM 与扩展 CONNECT
 var firefoxHTTP3Settings = [][2]uint64{
 	{h3SettingQPACKCapacity, firefoxQPACKTableSize},
 	{h3SettingQPACKBlocked, firefoxQPACKBlockedStreams},
@@ -70,7 +70,7 @@ func requestClassOf(ctx context.Context) requestClass {
 	return class
 }
 
-// firefoxHTTP3 按 Firefox 152 的 Alt-Svc 流程在直连时把请求切换到 HTTP/3：响应通告 h3 后以携带凭据的连接验证，验证成功后该主机的请求改走 HTTP/3
+// firefoxHTTP3 按 Firefox 158 的 Alt-Svc 流程在直连时把请求切换到 HTTP/3：响应通告 h3 后以携带凭据的连接验证，验证成功后该主机的请求改走 HTTP/3
 type firefoxHTTP3 struct {
 	pool    *firefoxConnPool
 	mu      sync.Mutex

@@ -18,8 +18,6 @@ import (
 const (
 	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
-	// appletServiceRPCBase 是 AI Studio 应用服务 RPC 根地址
-	appletServiceRPCBase = "https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
 	JSONProtobufContentType = "application/json+protobuf"
 )
@@ -69,6 +67,7 @@ type ClientOptions struct {
 	Protected       ProtectedTransport
 	ContextProvider RequestContextProvider
 	Pages           PageCatalogProvider
+	Static          StaticFetcher
 }
 
 // Client 实现 AI Studio 私有协议核心
@@ -77,6 +76,7 @@ type Client struct {
 	protected       ProtectedTransport
 	contextProvider RequestContextProvider
 	pages           PageCatalogProvider
+	static          StaticFetcher
 	catalogMu       sync.RWMutex
 	catalogs        map[string]modelCatalog
 	tierMu          sync.RWMutex
@@ -84,8 +84,10 @@ type Client struct {
 	termsMu         sync.Mutex
 	termsAccepted   map[string]struct{}
 	disclaimers     map[string]struct{}
-	assistants      *assistantSessions
 	turns           *modelTurnHistory
+	frontendMu      sync.Mutex
+	// frontend 是按地址解析过的官网前端主程序推荐模型
+	frontend map[string]frontendModels
 }
 
 // NewClient 创建协议客户端
@@ -95,24 +97,24 @@ func NewClient(options ClientOptions) *Client {
 		protected:       options.Protected,
 		contextProvider: options.ContextProvider,
 		pages:           options.Pages,
+		static:          options.Static,
 		catalogs:        make(map[string]modelCatalog),
 		tiers:           make(map[string]BenefitTier),
 		termsAccepted:   make(map[string]struct{}),
 		disclaimers:     make(map[string]struct{}),
-		assistants:      newAssistantSessions(),
 		turns:           newModelTurnHistory(),
+		frontend:        make(map[string]frontendModels),
 	}
 }
 
 // RPCError 保存上游状态和协议错误码
 type RPCError struct {
-	Method       string
-	StatusCode   int
-	Code         int64
-	Message      string
-	Metadata     map[string]string
-	RetryDelay   time.Duration
-	PerUserQuota bool
+	Method     string
+	StatusCode int
+	Code       int64
+	Message    string
+	Metadata   map[string]string
+	RetryDelay time.Duration
 }
 
 // ContextOverflow 返回错误是否为上游报告的输入 token 超过模型上限
@@ -120,15 +122,18 @@ func (e *RPCError) ContextOverflow() bool {
 	return e.StatusCode == http.StatusBadRequest && strings.Contains(e.Message, "input token count exceeds the maximum number of tokens allowed")
 }
 
-// regionNotSupported 返回上游是否以官网跳转地区不可用页的错误拒绝当前出口地区或账户
-func (e *RPCError) regionNotSupported() bool {
-	return e.StatusCode == http.StatusForbidden && e.Code == 7 && (e.Message == "Region not supported." || e.Message == "Account not supported.")
+// accessDenial 返回官网对该 403、协议错误码 7 的消息跳转的拒绝原因，其他错误返回 nil
+func (e *RPCError) accessDenial() *camoufoxnative.AccessDenial {
+	if e.StatusCode != http.StatusForbidden || e.Code != 7 {
+		return nil
+	}
+	return camoufoxnative.DenialForMessage(e.Message)
 }
 
 // Error 返回结构化上游错误
 func (e *RPCError) Error() string {
-	if e.regionNotSupported() {
-		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s（%v，官网跳转 %s）", e.Method, e.StatusCode, e.Code, e.Message, camoufoxnative.ErrRegionNotSupported, camoufoxnative.AvailableRegionsURL)
+	if denial := e.accessDenial(); denial != nil {
+		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s（%v）", e.Method, e.StatusCode, e.Code, e.Message, denial)
 	}
 	if e.Code != 0 {
 		return fmt.Sprintf("AI Studio %s 返回 HTTP %d、协议错误码 %d: %s", e.Method, e.StatusCode, e.Code, e.Message)
@@ -136,10 +141,22 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("AI Studio %s 返回 HTTP %d: %s", e.Method, e.StatusCode, e.Message)
 }
 
-// Unwrap 把地区或账户不受支持的错误映射为 camoufoxnative.ErrRegionNotSupported
+// StatusError 以 gRPC 状态名代替 HTTP 状态码写出 401 或 403 的上游方法、协议错误码与原因
+func (e *RPCError) StatusError() string {
+	status := "PERMISSION_DENIED"
+	if e.StatusCode == http.StatusUnauthorized {
+		status = "UNAUTHENTICATED"
+	}
+	if e.Code != 0 {
+		return fmt.Sprintf("AI Studio %s 返回 %s、协议错误码 %d: %s", e.Method, status, e.Code, e.Message)
+	}
+	return fmt.Sprintf("AI Studio %s 返回 %s: %s", e.Method, status, e.Message)
+}
+
+// Unwrap 把官网会跳转拒绝页的错误映射为对应的 camoufoxnative.AccessDenial
 func (e *RPCError) Unwrap() error {
-	if e.regionNotSupported() {
-		return camoufoxnative.ErrRegionNotSupported
+	if denial := e.accessDenial(); denial != nil {
+		return denial
 	}
 	return nil
 }
@@ -158,17 +175,13 @@ func (e *RPCError) RetryAt(now time.Time) time.Time {
 }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
-	return c.send(ctx, newRPCRequest(method, accountID, requestID, body, streaming))
-}
-
-// send 发送 RPC 请求并校验响应状态与媒体类型
-func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
-	c.applyBenefitTier(rpc.Method, rpc.AccountID, rpc.Header)
+	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
+	c.applyBenefitTier(method, accountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio %s: %w", rpc.Method, err)
+		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
 	}
-	return validateRPCResponse(rpc.Method, response)
+	return validateRPCResponse(method, response)
 }
 
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {

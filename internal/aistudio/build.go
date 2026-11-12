@@ -25,7 +25,7 @@ const buildProxyUnaryMethod = "ProxyUnaryCall"
 const buildProofField = 3
 
 // buildThinkingLevels 把 thinking level 枚举换算为 Gemini API 名称
-var buildThinkingLevels = map[int64]string{1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "MINIMAL"}
+var buildThinkingLevels = map[int64]string{1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "MINIMAL", 5: "EXTRA_HIGH"}
 
 // buildModelDefaults 返回 Build 独有模型按目录推导的生成默认值
 func buildModelDefaults(model Model) GenerationDefaults {

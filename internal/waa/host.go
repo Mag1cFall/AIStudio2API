@@ -22,7 +22,7 @@ import (
 //go:embed dom.js
 var domJavaScript string
 
-//go:embed firefox152.json.gz
+//go:embed firefox158.json.gz
 var firefoxShapeGzip []byte
 
 //go:embed smhost.js

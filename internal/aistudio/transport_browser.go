@@ -44,7 +44,7 @@ const (
 	firefoxMaxPersistentConns = 6
 )
 
-// firefoxHTTP2Settings 是 Firefox 152 在每条 HTTP/2 连接开头发送的 SETTINGS
+// firefoxHTTP2Settings 是 Firefox 158 在每条 HTTP/2 连接开头发送的 SETTINGS
 var firefoxHTTP2Settings = map[http2.SettingID]uint32{
 	http2.SettingHeaderTableSize:   65536,
 	http2.SettingEnablePush:        0,
@@ -75,7 +75,7 @@ func firefoxStreamPriority(header fhttp.Header) http2.PriorityParam {
 	return http2.PriorityParam{Weight: 21}
 }
 
-// firefoxRequestHeaderOrder 是 Firefox 152 发出官网页面请求的请求头顺序
+// firefoxRequestHeaderOrder 是 Firefox 158 发出官网页面请求的请求头顺序
 var firefoxRequestHeaderOrder = []string{
 	"user-agent",
 	"accept",
@@ -111,7 +111,7 @@ var firefoxRequestHeaderOrder = []string{
 // waaHost 是官网 Waa/Create 的主机，其页面脚本先写 authorization 再写 x-goog-authuser
 const waaHost = "waa-pa.clients6.google.com"
 
-// gapiRequestHeaderOrder 是 Firefox 152 发出官网页面 gapi 请求（Drive discovery 与上传）的请求头顺序
+// gapiRequestHeaderOrder 是 Firefox 158 发出官网页面 gapi 请求（Drive discovery 与上传）的请求头顺序
 var gapiRequestHeaderOrder = []string{
 	"user-agent",
 	"accept",
@@ -431,7 +431,7 @@ func dialBrowserTLS(dialer proxy.ContextDialer, sessions *firefoxSessionCache, a
 	if sessions.tunnel {
 		session, psk = sessions.take(peer)
 	}
-	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true, ClientSessionCache: handshakeSessions{sessions, peer, session}}, firefox152ClientHello(psk), false, false, false)
+	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true, ClientSessionCache: handshakeSessions{sessions, peer, session}}, firefox158ClientHello(psk), false, false, false)
 	ctx, cancel := context.WithTimeout(context.Background(), firefoxTLSHandshakeTimeout)
 	defer cancel()
 	if err := connection.HandshakeContext(ctx); err != nil {
@@ -671,11 +671,11 @@ func orderedHeaderNames(headers fhttp.Header, host string) []string {
 	return append(slices.Clone(order), remaining...)
 }
 
-// firefox152ClientHello 返回以 tls-client 的 Firefox 148 档案为底、密码套件按 Firefox 152 排列、GREASE ECH 按 NSS 选套件与长度的 ClientHello；psk 为 pre_shared_key 扩展长度，非 0 时与 Firefox 的 TLS 1.3 会话恢复一样去掉 session_ticket、末尾加 pre_shared_key
-func firefox152ClientHello(psk int) tls.ClientHelloID {
+// firefox158ClientHello 返回以 tls-client 的 Firefox 148 档案为底、密码套件与支持的组按 Firefox 158 排列、GREASE ECH 按 NSS 选套件与长度的 ClientHello；psk 为 pre_shared_key 扩展长度，非 0 时与 Firefox 的 TLS 1.3 会话恢复一样去掉 session_ticket、末尾加 pre_shared_key
+func firefox158ClientHello(psk int) tls.ClientHelloID {
 	base := profiles.Firefox_148
 	hello := base.GetClientHelloId()
-	hello.Version = "152"
+	hello.Version = "158"
 	hello.SpecFactory = func() (tls.ClientHelloSpec, error) {
 		spec, err := base.GetClientHelloSpec()
 		if err != nil {
@@ -691,7 +691,6 @@ func firefox152ClientHello(psk int) tls.ClientHelloID {
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
 			tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
 			tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
@@ -700,9 +699,12 @@ func firefox152ClientHello(psk int) tls.ClientHelloID {
 			tls.TLS_RSA_WITH_AES_256_CBC_SHA,
 		}
 		for _, extension := range spec.Extensions {
-			if ech, ok := extension.(*tls.GREASEEncryptedClientHelloExtension); ok {
-				ech.CandidateCipherSuites = []tls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}, {KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_CHACHA20_POLY1305}}
-				ech.CandidatePayloadLens = []uint16{nssGREASEECHPayload(nssTLSGREASEECHInner, psk, false)}
+			switch typed := extension.(type) {
+			case *tls.SupportedCurvesExtension:
+				typed.Curves = []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256, tls.CurveP384, tls.CurveP521}
+			case *tls.GREASEEncryptedClientHelloExtension:
+				typed.CandidateCipherSuites = []tls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}, {KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_CHACHA20_POLY1305}}
+				typed.CandidatePayloadLens = []uint16{nssGREASEECHPayload(nssTLSGREASEECHInner, psk, false)}
 			}
 		}
 		if psk > 0 {

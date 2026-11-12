@@ -199,7 +199,7 @@ function latencyWidth(milliseconds: number): number {
           }}
         </p>
       </div>
-      <label class="relative">
+      <label class="relative w-full @md:w-auto">
         <span class="sr-only">{{ t('usage.recordsSearch') }}</span>
         <UiIcon
           name="search"
@@ -210,7 +210,7 @@ function latencyWidth(milliseconds: number): number {
           v-model="searchText"
           type="search"
           :placeholder="t('usage.recordsSearch')"
-          class="w-56 rounded-md border border-line bg-canvas py-1.5 pr-2 pl-7 text-xs text-white focus:border-blue-500 focus:outline-none"
+          class="w-full rounded-md border border-line bg-canvas py-1.5 pr-2 pl-7 text-xs text-white focus:border-blue-500 focus:outline-none @md:w-80"
         />
       </label>
       <UiSelect
@@ -333,8 +333,8 @@ function latencyWidth(milliseconds: number): number {
                   {{ dateTime(record.time, true) }}
                 </button>
               </td>
-              <td class="px-4 py-2 whitespace-nowrap">
-                <span class="rounded px-1.5 py-0.5" :class="stateClass(record)">{{
+              <td class="px-4 py-2">
+                <span class="inline-block rounded px-1.5 py-0.5" :class="stateClass(record)">{{
                   dimensionLabel('state', record.state)
                 }}</span>
                 <span class="ml-1.5 text-gray-500 tabular-nums">{{ record.status }}</span>

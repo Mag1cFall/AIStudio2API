@@ -10,7 +10,7 @@ runs:
     - shell: bash
       env:
         TARGET: ${{ inputs.target }}
-        SPIDERMONKEY: v152.0.4-aistudio2api.1
+        SPIDERMONKEY: v158.0.1-aistudio2api.1
         LIBWEBP: v1.6.0-aistudio2api.1
       run: |
         spidermonkey="$RUNNER_TEMP/spidermonkey/$TARGET"

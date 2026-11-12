@@ -13,7 +13,6 @@
       h1 { margin: 0; font-size: 18px; font-weight: 600; }
       .spinner { width: 22px; height: 22px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
       #status { font-size: 13px; color: #8b949e; }
-      #hint { font-size: 12px; color: #6e7681; }
       @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
@@ -24,12 +23,17 @@
       <h1>AIStudio2API</h1>
       <div class="spinner"></div>
       <div id="status"></div>
-      <div id="hint"></div>
     </main>
     <script>
-      const zh = navigator.language.toLowerCase().startsWith('zh')
-      document.getElementById('status').textContent = zh ? '正在启动' : 'Starting'
-      document.getElementById('hint').textContent = zh ? '首次启动时会下载 Camoufox（约 470 MB）' : 'The first start downloads Camoufox (about 470 MB)'
+      // starting 是各界面语言的启动文字，语言按系统首选语言与管理页面相同的规则选择
+      const starting = { 'zh-CN': '正在启动', 'zh-TW': '正在啟動', en: 'Starting', ja: '起動しています', ko: '시작하는 중', fr: 'Démarrage', de: 'Wird gestartet' }
+      const locale = (tag) => {
+        const lower = tag.toLowerCase()
+        if (['zh-tw', 'zh-hk', 'zh-mo'].includes(lower) || lower.startsWith('zh-hant')) return 'zh-TW'
+        if (lower === 'zh' || lower.startsWith('zh-')) return 'zh-CN'
+        return Object.hasOwn(starting, lower.split('-')[0]) ? lower.split('-')[0] : undefined
+      }
+      document.getElementById('status').textContent = starting[navigator.languages.map(locale).find(Boolean) ?? 'en']
       const bar = document.getElementById('bar')
       let pressed = false
       bar.addEventListener('mousedown', (event) => { pressed = event.button === 0 && event.target === bar })

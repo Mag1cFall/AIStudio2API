@@ -54,6 +54,8 @@ const (
 	AccountCooldown AccountState = "cooldown"
 	// AccountAuthRequired 表示账户需要重新登录
 	AccountAuthRequired AccountState = "auth_required"
+	// AccountRestricted 表示 Google 拒绝该账户使用 AI Studio
+	AccountRestricted AccountState = "restricted"
 	// AccountUnavailable 表示账户初始化或运行失败
 	AccountUnavailable AccountState = "unavailable"
 	// AccountDisabled 表示账户已停用
@@ -96,19 +98,33 @@ func (e *AllCoolingError) Error() string {
 	return message + "；" + e.Reason
 }
 
-// RetryAt 返回最早恢复的时刻
-func (e *AllCoolingError) RetryAt(time.Time) time.Time {
+// RetryAt 返回最早恢复的时刻，最早恢复的是权限拒绝冷却且在一分钟之后时返回零值
+func (e *AllCoolingError) RetryAt(now time.Time) time.Time {
+	if e.accountRejection() && e.Until.Sub(now) > time.Minute {
+		return time.Time{}
+	}
 	return e.Until
 }
 
-// HTTPStatus 返回额度耗尽对应的公开状态码
+// HTTPStatus 返回额度耗尽对应的 429，最早恢复的是权限拒绝冷却时返回账户暂时不可用的 503
 func (e *AllCoolingError) HTTPStatus() int {
+	if e.accountRejection() {
+		return http.StatusServiceUnavailable
+	}
 	return http.StatusTooManyRequests
 }
 
-// ErrorCode 返回 OpenAI 兼容的额度错误代码
+// ErrorCode 返回 OpenAI 兼容的额度错误代码，最早恢复的是权限拒绝冷却时为账户暂时不可用
 func (e *AllCoolingError) ErrorCode() string {
+	if e.accountRejection() {
+		return "account_unavailable"
+	}
 	return "rate_limit_exceeded"
+}
+
+// accountRejection 判断最早恢复的冷却是否为上游 403、协议错误码 7 的权限拒绝冷却
+func (e *AllCoolingError) accountRejection() bool {
+	return strings.HasPrefix(e.Reason, AccountRejectionKind)
 }
 
 // AccountsNotReadyError 表示支持请求的账户都处于不可调度状态
@@ -132,6 +148,8 @@ func accountStateReason(account *Account) string {
 		reason = fmt.Sprintf("%s 已停用", account.ID)
 	case account.State == AccountAuthRequired:
 		reason = fmt.Sprintf("%s 需要重新登录", account.ID)
+	case account.State == AccountRestricted:
+		reason = fmt.Sprintf("%s 服务受限", account.ID)
 	case account.State == AccountUnavailable:
 		reason = fmt.Sprintf("%s 不可用", account.ID)
 	default:
@@ -261,6 +279,8 @@ type accountRuntimeState struct {
 	BenefitTier        BenefitTier                `json:"benefit_tier,omitempty"`
 	CatalogFingerprint string                     `json:"catalog_fingerprint,omitempty"`
 	Proxy              string                     `json:"proxy,omitempty"`
+	// Restricted 是 Google 拒绝该账户使用 AI Studio 的原因与官网跳转页
+	Restricted string `json:"restricted,omitempty"`
 }
 
 // ModelAccessState 表示账户对单个模型的实测调用资格
@@ -311,7 +331,12 @@ type Account struct {
 	initializedAt         time.Time
 	buildModels           []Model
 	cachedCatalog         modelCatalog
-	boundProxy            atomic.Pointer[string]
+	// catalogSyncedAt 是目录缓存最近一次同步的时刻，没有一致的缓存时为零值
+	catalogSyncedAt time.Time
+	// hiddenModels 是目录中官网隐藏模型 ID 到依据模型 ID 的映射，hiddenDiscovered 表示该目录同步时探测过官网隐藏模型
+	hiddenModels     map[string]string
+	hiddenDiscovered bool
+	boundProxy       atomic.Pointer[string]
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
@@ -334,6 +359,11 @@ type AccountStatus struct {
 	Transition AccountTransition `json:"-"`
 	// ActiveRequests 是账户上进行中的请求数
 	ActiveRequests int `json:"-"`
+	// CatalogSyncedAt 是目录缓存最近一次同步的时刻，没有一致的缓存时为零值
+	CatalogSyncedAt time.Time `json:"-"`
+	// HiddenDiscovered 表示账户目录同步时探测过官网隐藏模型，HiddenModels 是目录中的官网隐藏模型数
+	HiddenDiscovered bool `json:"-"`
+	HiddenModels     int  `json:"-"`
 }
 
 // AccountTransition 是账户启停的后台收尾阶段
@@ -397,6 +427,48 @@ type AccountCandidateState struct {
 // AccountStore 从一个或多个账户文件或目录加载账户
 type AccountStore struct {
 	paths []string
+}
+
+// restrictedImportsName 是账户根目录中记下导入时被 Google 限制使用 AI Studio 的账户邮箱与原因的文件
+const restrictedImportsName = "restricted-imports.json"
+
+// RestrictedImports 返回账户根目录中记下的导入时被 Google 限制使用 AI Studio 的账户小写邮箱与原因，没有单一账户根目录时为空
+func (s *AccountStore) RestrictedImports() (map[string]string, error) {
+	records := make(map[string]string)
+	if len(s.paths) != 1 {
+		return records, nil
+	}
+	data, err := os.ReadFile(filepath.Join(s.paths[0], restrictedImportsName))
+	if os.IsNotExist(err) {
+		return records, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s: %w", restrictedImportsName, err)
+	}
+	if err := json.Unmarshal(data, &records); err != nil {
+		return nil, fmt.Errorf("解析 %s: %w", restrictedImportsName, err)
+	}
+	return records, nil
+}
+
+// RecordRestrictedImport 在账户根目录记下导入时被 Google 限制使用 AI Studio 的账户邮箱与原因
+func (s *AccountStore) RecordRestrictedImport(email string, reason string) error {
+	if len(s.paths) != 1 {
+		return nil
+	}
+	records, err := s.RestrictedImports()
+	if err != nil {
+		return err
+	}
+	records[strings.ToLower(strings.TrimSpace(email))] = reason
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return fmt.Errorf("编码 %s: %w", restrictedImportsName, err)
+	}
+	if err := os.MkdirAll(s.paths[0], 0o755); err != nil {
+		return fmt.Errorf("创建账户根目录: %w", err)
+	}
+	return atomicWriteFile(filepath.Join(s.paths[0], restrictedImportsName), data, 0o600)
 }
 
 // AccountPool 在账户之间执行能力与并发槽位调度
@@ -1206,19 +1278,6 @@ func (p *AccountPool) AcquireFor(ctx context.Context, selection AccountSelection
 	}
 }
 
-// resourcesOfKind 返回各账户绑定的指定类型资源 ID
-func (p *AccountPool) resourcesOfKind(kind string) map[string][]string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	owned := make(map[string][]string)
-	for resourceID, owner := range p.resources {
-		if p.byID[owner].runtime.Resources[resourceID].Kind == kind {
-			owned[owner] = append(owned[owner], resourceID)
-		}
-	}
-	return owned
-}
-
 // resourceOwners 返回持有已绑定资源的账户
 func (p *AccountPool) resourceOwners() []string {
 	p.mu.Lock()
@@ -1457,7 +1516,7 @@ func (l *AccountLease) markAuthenticationValidAt(checkedAt time.Time) error {
 	return l.markAuthenticationStateAt(false, "", checkedAt)
 }
 
-// confirmAuthenticationFailureAt 在账户会话失效时保存长连接中指定轮次的认证失败状态
+// confirmAuthenticationFailureAt 在账户会话失效时保存长连接中指定轮次的认证失败状态，会话检查被转到 Google 受限页时把账户标为服务受限
 func (l *AccountLease) confirmAuthenticationFailureAt(ctx context.Context, cause error, checkedAt time.Time) error {
 	l.pool.mu.Lock()
 	check := l.pool.sessionCheck
@@ -1472,6 +1531,9 @@ func (l *AccountLease) confirmAuthenticationFailureAt(ctx context.Context, cause
 				return nil, err
 			})
 		})
+		if denial := RestrictionDenial(l.sessionErr); denial != nil {
+			return l.pool.MarkRestricted(l.account.ID, denial)
+		}
 		if !errors.Is(l.sessionErr, camoufoxnative.ErrAuthenticationRequired) {
 			return nil
 		}
@@ -1706,8 +1768,8 @@ func (p *AccountPool) applyEnabledLocked(account *Account) {
 		account.State = AccountDisabled
 		account.stateMessage = ""
 	} else if account.State == AccountDisabled {
-		account.State = initialAccountState(account.Config, account.StorageState)
-		account.stateMessage = ""
+		account.State = initialAccountState(account.Config, account.StorageState, account.runtime)
+		account.stateMessage = account.runtime.Restricted
 	}
 	p.notifyLocked()
 }
@@ -1794,18 +1856,6 @@ func (l *AccountLease) ReplaceCookies(cookies []StateCookie) error {
 	l.account.StorageState = state
 	l.pool.mu.Unlock()
 	return nil
-}
-
-// BindResource 将资源固定到当前租约账户
-func (l *AccountLease) BindResource(resourceID string, kind string) error {
-	l.operation.Lock()
-	defer l.operation.Unlock()
-	if l.released {
-		return fmt.Errorf("账户租约已释放")
-	}
-	l.account.storageMu.Lock()
-	defer l.account.storageMu.Unlock()
-	return l.pool.BindResourceKind(resourceID, l.account.ID, kind)
 }
 
 // BindVideoOperation 保存视频任务账户与公开对象元数据
@@ -1967,6 +2017,10 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 		}
 		runtimeState.BenefitTier = tier
 		runtimeState.CatalogFingerprint = fingerprint
+		if runtimeState.Restricted != "" {
+			runtimeState.Restricted = ""
+			runtimeChanged = true
+		}
 		return runtimeChanged, func(account *Account) {
 			if (firstCatalog || tierChanged || catalogChanged) && account.modelAccessGeneration == previousGeneration {
 				account.modelAccessGeneration++
@@ -1975,7 +2029,7 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 			account.Models = cloneModels(models)
 			account.catalogErr = nil
 			account.initializedAt = time.Now()
-			if account.State == AccountUnavailable {
+			if account.State == AccountUnavailable || account.State == AccountRestricted {
 				account.State = AccountReady
 				account.stateMessage = ""
 			}
@@ -2457,11 +2511,6 @@ func (p *AccountPool) replaceResource(previousResourceID string, resourceID stri
 	return err
 }
 
-// UnbindResource 删除终态资源的账户映射
-func (p *AccountPool) UnbindResource(resourceID string) error {
-	return p.unbindResourceContext(context.Background(), resourceID)
-}
-
 func (p *AccountPool) unbindResourceContext(ctx context.Context, resourceID string) error {
 	p.mu.Lock()
 	accountID, exists := p.resources[resourceID]
@@ -2490,6 +2539,31 @@ func (p *AccountPool) unbindResourceContext(ctx context.Context, resourceID stri
 // MarkAuthRequired 将账户标记为需要重新登录
 func (p *AccountPool) MarkAuthRequired(accountID string, reason string) error {
 	return p.setAccountState(accountID, AccountAuthRequired, reason)
+}
+
+// MarkRestricted 把账户标为服务受限并把原因写入 runtime-state.json，之后不再为该账户载入页面，目录同步成功时恢复
+func (p *AccountPool) MarkRestricted(accountID string, denial *camoufoxnative.AccessDenial) error {
+	reason := denial.Error()
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		changed := runtimeState.Restricted != reason
+		runtimeState.Restricted = reason
+		return changed, func(account *Account) {
+			if account.Config.Enabled {
+				account.State = AccountRestricted
+			}
+			account.stateMessage = reason
+		}, nil
+	})
+	return err
+}
+
+// RestrictionDenial 返回错误中 Google 拒绝该账户本身使用 AI Studio 的原因，出口地区不受支持与其他错误返回 nil
+func RestrictionDenial(err error) *camoufoxnative.AccessDenial {
+	var denial *camoufoxnative.AccessDenial
+	if !errors.As(err, &denial) || errors.Is(denial, camoufoxnative.ErrRegionNotSupported) {
+		return nil
+	}
+	return denial
 }
 
 // recordCatalogFailure 记录账户最近一次权益或目录读取失败的原因
@@ -2550,8 +2624,11 @@ func (p *AccountPool) Status() []AccountStatus {
 			Message:     message,
 			Directory:   account.Directory,
 
-			Transition:     account.transition,
-			ActiveRequests: account.active,
+			Transition:       account.transition,
+			ActiveRequests:   account.active,
+			CatalogSyncedAt:  account.catalogSyncedAt,
+			HiddenDiscovered: account.hiddenDiscovered,
+			HiddenModels:     len(account.hiddenModels),
 		}
 		if !account.LastUsed.IsZero() {
 			status.LastUsed = timePointer(account.LastUsed)
@@ -2816,7 +2893,7 @@ func accountBootstrapModels(account *Account) []string {
 func waaBootstrapModelEligible(account *Account, modelID string) bool {
 	for _, model := range account.Models {
 		if !modelMatchesID(model, modelID) || !hasMethod(model, "generateContent") ||
-			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] || model.Capabilities["assistant_route"] {
+			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] {
 			continue
 		}
 		return true
@@ -3010,21 +3087,25 @@ func loadAccount(directory string) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("账户 %s: %w", id, err)
 	}
-	catalog, buildModels := readCatalogCache(filepath.Join(directory, catalogCacheName), runtimeState)
+	catalog, cache := readCatalogCache(filepath.Join(directory, catalogCacheName), runtimeState)
 	return &Account{
-		ID:            id,
-		Directory:     directory,
-		ConfigPath:    configPath,
-		StoragePath:   storagePath,
-		RuntimePath:   runtimePath,
-		Config:        accountConfig,
-		StorageState:  state,
-		Models:        cloneModels(catalog.models),
-		BenefitTier:   runtimeState.BenefitTier,
-		State:         initialAccountState(accountConfig, state),
-		runtime:       runtimeState,
-		buildModels:   buildModels,
-		cachedCatalog: catalog,
+		ID:               id,
+		Directory:        directory,
+		ConfigPath:       configPath,
+		StoragePath:      storagePath,
+		RuntimePath:      runtimePath,
+		Config:           accountConfig,
+		StorageState:     state,
+		Models:           cloneModels(catalog.models),
+		BenefitTier:      runtimeState.BenefitTier,
+		State:            initialAccountState(accountConfig, state, runtimeState),
+		stateMessage:     runtimeState.Restricted,
+		runtime:          runtimeState,
+		buildModels:      cache.BuildModels,
+		cachedCatalog:    catalog,
+		catalogSyncedAt:  cache.SyncedAt,
+		hiddenModels:     cache.HiddenModels,
+		hiddenDiscovered: cache.HiddenDiscovered,
 	}, nil
 }
 
@@ -3032,27 +3113,32 @@ func loadAccount(directory string) (*Account, error) {
 type accountCatalogCache struct {
 	ListModels  json.RawMessage `json:"list_models"`
 	BuildModels []Model         `json:"build_models,omitempty"`
+	// SyncedAt 是最近一次成功同步目录的时刻
+	SyncedAt time.Time `json:"synced_at"`
+	// HiddenModels 是目录中官网隐藏模型 ID 到依据模型 ID 的映射，HiddenDiscovered 表示同步时探测过官网隐藏模型
+	HiddenModels     map[string]string `json:"hidden_models,omitempty"`
+	HiddenDiscovered bool              `json:"hidden_discovered,omitempty"`
 }
 
-// readCatalogCache 读取 catalog.json 并解析其中的 ListModels 响应，内容与 runtime-state 的目录指纹不一致或无法读取时返回空目录
-func readCatalogCache(filePath string, runtimeState accountRuntimeState) (modelCatalog, []Model) {
+// readCatalogCache 读取 catalog.json，返回加入官网隐藏模型后的 ListModels 目录与缓存内容，内容与 runtime-state 的目录指纹不一致或无法读取时返回空目录与空缓存
+func readCatalogCache(filePath string, runtimeState accountRuntimeState) (modelCatalog, accountCatalogCache) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return modelCatalog{}, nil
+		return modelCatalog{}, accountCatalogCache{}
 	}
 	var cache accountCatalogCache
 	if err := json.Unmarshal(data, &cache); err != nil || len(cache.ListModels) == 0 {
-		return modelCatalog{}, nil
+		return modelCatalog{}, accountCatalogCache{}
 	}
 	catalog, err := parseModelCatalog(bytes.NewReader(cache.ListModels))
 	if err != nil {
-		return modelCatalog{}, nil
+		return modelCatalog{}, accountCatalogCache{}
 	}
 	fingerprint, err := accountCatalogFingerprint(runtimeState.BenefitTier, catalog.models)
 	if err != nil || fingerprint != runtimeState.CatalogFingerprint {
-		return modelCatalog{}, nil
+		return modelCatalog{}, accountCatalogCache{}
 	}
-	return catalog, cache.BuildModels
+	return catalog.withHidden(cache.HiddenModels), cache
 }
 
 // takeCachedCatalogs 取出各账户载入时从 catalog.json 恢复的 ListModels 目录
@@ -3069,7 +3155,19 @@ func (p *AccountPool) takeCachedCatalogs() map[string]modelCatalog {
 	return catalogs
 }
 
-// SaveCatalogCache 把账户的 ListModels 响应与当前 Build 模型目录写入账户目录的 catalog.json
+// SetHiddenModels 记下账户目录中的官网隐藏模型与本次同步是否探测过官网隐藏模型，随下一次 SaveCatalogCache 写入
+func (p *AccountPool) SetHiddenModels(accountID string, hidden map[string]string, discovered bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[strings.TrimSpace(accountID)]
+	if account == nil {
+		return ErrAccountNotFound
+	}
+	account.hiddenModels, account.hiddenDiscovered = hidden, discovered
+	return nil
+}
+
+// SaveCatalogCache 把账户的 ListModels 响应、官网隐藏模型、当前 Build 模型目录与同步时刻写入账户目录的 catalog.json
 func (p *AccountPool) SaveCatalogCache(accountID string, source json.RawMessage) error {
 	p.mu.Lock()
 	account := p.byID[strings.TrimSpace(accountID)]
@@ -3077,18 +3175,20 @@ func (p *AccountPool) SaveCatalogCache(accountID string, source json.RawMessage)
 		p.mu.Unlock()
 		return ErrAccountNotFound
 	}
+	syncedAt := time.Now().UTC()
+	account.catalogSyncedAt = syncedAt
 	if account.Directory == "" {
 		p.mu.Unlock()
 		return nil
 	}
 	filePath := filepath.Join(account.Directory, catalogCacheName)
-	data, err := json.Marshal(accountCatalogCache{ListModels: source, BuildModels: account.buildModels})
+	data, err := json.Marshal(accountCatalogCache{
+		ListModels: source, BuildModels: account.buildModels, SyncedAt: syncedAt,
+		HiddenModels: account.hiddenModels, HiddenDiscovered: account.hiddenDiscovered,
+	})
 	p.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("编码 %s: %w", catalogCacheName, err)
-	}
-	if existing, err := os.ReadFile(filePath); err == nil && bytes.Equal(existing, data) {
-		return nil
 	}
 	return atomicWriteFile(filePath, data, 0o600)
 }
@@ -3106,9 +3206,12 @@ func (p *AccountPool) cachedBenefitTiers() map[string]BenefitTier {
 	return tiers
 }
 
-func initialAccountState(accountConfig AccountConfig, state StorageState) AccountState {
+func initialAccountState(accountConfig AccountConfig, state StorageState, runtimeState accountRuntimeState) AccountState {
 	if !accountConfig.Enabled {
 		return AccountDisabled
+	}
+	if runtimeState.Restricted != "" {
+		return AccountRestricted
 	}
 	now := time.Now()
 	for _, item := range signatureCookies {
@@ -3346,6 +3449,13 @@ func (p *AccountPool) syncAccountRuntimeLocked(account *Account, runtimeState ac
 	}
 	catalogChanged := account.runtime.BenefitTier != runtimeState.BenefitTier ||
 		account.runtime.CatalogFingerprint != runtimeState.CatalogFingerprint
+	if account.runtime.Restricted != runtimeState.Restricted && account.Config.Enabled {
+		if runtimeState.Restricted != "" {
+			account.State, account.stateMessage = AccountRestricted, runtimeState.Restricted
+		} else if account.State == AccountRestricted {
+			account.State, account.stateMessage = AccountReady, ""
+		}
+	}
 	account.runtime = cloneRuntime(runtimeState)
 	account.BenefitTier = runtimeState.BenefitTier
 	for resourceID := range runtimeState.Resources {
@@ -3591,6 +3701,7 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 		BenefitTier:        value.BenefitTier,
 		CatalogFingerprint: value.CatalogFingerprint,
 		Proxy:              value.Proxy,
+		Restricted:         value.Restricted,
 	}
 	for key, cooldown := range value.Cooldowns {
 		result.Cooldowns[key] = cooldown
@@ -3608,8 +3719,9 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 	return result
 }
 
+// accountCatalogFingerprint 返回权益等级与 ListModels 目录的指纹，官网隐藏模型不计入
 func accountCatalogFingerprint(tier BenefitTier, models []Model) (string, error) {
-	catalog := cloneModels(models)
+	catalog := slices.DeleteFunc(cloneModels(models), func(model Model) bool { return model.Hidden })
 	sort.Slice(catalog, func(left int, right int) bool {
 		return catalog[left].ID < catalog[right].ID
 	})
