@@ -46,6 +46,7 @@ import VideoResult from './media/VideoResult.vue'
 import { isAgent } from './catalog'
 import { insertCitations } from './markdown'
 import { useReveal } from './reveal'
+import { appends, submits } from './run-keys'
 import { youtubeVideoID } from './sample-media'
 import SegmentRun from './SegmentRun.vue'
 import { usePlayground } from './session'
@@ -456,8 +457,8 @@ async function startEdit(): Promise<void> {
   draft.value = plainText()
   editing.value = true
   await nextTick()
-  editor.value!.focus()
   resizeEditor()
+  editor.value!.focus({ preventScroll: true })
 }
 
 // finishEdit 保存编辑结果
@@ -467,11 +468,47 @@ function finishEdit(): void {
   playground.editTurn(props.index, draft.value)
 }
 
-// resizeEditor 让编辑框随内容增高
+// onEditorKeydown 处理编辑框快捷键：Escape 与追加键保存，提交键保存并重新运行用户轮次
+function onEditorKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    finishEdit()
+    return
+  }
+  if (session.running) return
+  if (submits(event)) {
+    event.preventDefault()
+    finishEdit()
+    if (props.turn.role === 'user') playground.rerun(props.index)
+  } else if (appends(event)) {
+    event.preventDefault()
+    finishEdit()
+  }
+}
+
+// onEditorBlur 在焦点移出本轮时保存编辑，切换窗口或误点本轮空白处时保持编辑
+function onEditorBlur(event: FocusEvent): void {
+  if (!document.hasFocus()) return
+  const target = event.relatedTarget
+  if (
+    target instanceof HTMLElement &&
+    target.classList.contains('chat-turn-container') &&
+    root.value?.contains(target)
+  ) {
+    editor.value?.focus({ preventScroll: true })
+    return
+  }
+  finishEdit()
+}
+
+// resizeEditor 让编辑框随内容增高并保持滚动容器位置
 function resizeEditor(): void {
   const element = editor.value!
+  const scroller = element.closest<HTMLElement>('.chat-scroller')
+  const top = scroller?.scrollTop
   element.style.height = 'auto'
   element.style.height = `${element.scrollHeight}px`
+  if (scroller && top !== undefined) scroller.scrollTop = top
 }
 
 // plainText 返回本轮正文的 Markdown 原文
@@ -540,7 +577,10 @@ onActivated(observe)
     class="chat-turn"
     :class="{ 'thought-host': hasThoughtSegment }"
   >
-    <div v-if="!visible && !streaming && height > 0" :style="{ height: `${height}px` }"></div>
+    <div
+      v-if="!visible && !streaming && !editing && height > 0"
+      :style="{ height: `${height}px` }"
+    ></div>
     <template v-else>
       <div v-if="hasThoughtSegment" tabindex="-1" class="chat-turn-container model">
         <div class="actions-container">
@@ -623,6 +663,7 @@ onActivated(observe)
               :style="{ visibility: waiting ? 'hidden' : undefined }"
               :aria-label="editing ? t('pg.stopEditing') : t('pg.edit')"
               :aria-disabled="session.running"
+              @mousedown.prevent
               @click="!session.running && startEdit()"
             >
               <UiIcon :name="editing ? 'check' : 'edit'" :size="20" />
@@ -867,8 +908,8 @@ onActivated(observe)
             class="edit-textarea"
             :aria-label="t('pg.edit')"
             @input="resizeEditor"
-            @keydown.escape.prevent="finishEdit"
-            @blur="finishEdit"
+            @keydown="onEditorKeydown"
+            @blur="onEditorBlur"
           ></textarea>
           <div v-if="sources.length && !streaming" class="grounding-sources">
             <p class="sources-title">

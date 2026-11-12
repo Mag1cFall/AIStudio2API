@@ -635,16 +635,20 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     for (const turn of session.turns.slice(index)) delete turn.interactionId
   }
 
-  // editTurn 用新文本替换某一轮的文本片段，文本有变化时其后的交互不再用于续接
+  // editTurn 用新文本替换某一轮的正文：新文本放在首个正文片段的位置，其他片段保持原有顺序，文本有变化时其后的交互不再用于续接
   function editTurn(index: number, text: string): void {
     const turn = session.turns[index]!
-    const others = turn.parts.filter((part) => part.text === undefined || part.thought)
+    const body = (part: Part) => part.text !== undefined && !part.thought
     const current = turn.parts
-      .filter((part) => part.text !== undefined && !part.thought)
+      .filter(body)
       .map((part) => part.text)
       .join('')
     if (text !== current) forgetInteractions(index)
-    turn.parts = text === '' ? others : [...others, { text }]
+    const first = turn.parts.findIndex(body)
+    turn.parts = turn.parts.flatMap((part, at) =>
+      !body(part) ? [part] : at === first && text !== '' ? [{ text }] : [],
+    )
+    if (first === -1 && text !== '') turn.parts.push({ text })
     scheduleSave()
   }
 
