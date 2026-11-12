@@ -109,11 +109,14 @@ func newRuntime(
 	pooled.StripThoughtSignatures = cfg.StripThoughtSignatures
 	pooled.ContinuationRewrite = cfg.ContinuationRewrite
 	pooled.ContinuationPrompt = cfg.ContinuationPrompt
+	pooled.AssistantFallback = cfg.AssistantFallback
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
+	service.SetBuildStallTimeout(cfg.BuildStallTimeout)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
 	service.hedgeModels = config.ModelList(cfg.FirstEventHedgeModels)
 	service.modelMapping, _ = config.ParseModelMapping(cfg.ModelMapping)
+	service.assistantFallback = cfg.AssistantFallback
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
 	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
@@ -138,6 +141,7 @@ func newRuntime(
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
 	buildNativeNonstream bool
+	assistantFallback    bool
 	modelMapping         []config.ModelAlias
 	proxies              *aistudio.ProxyPool
 	rebindAccounts       func([]string)
@@ -179,6 +183,8 @@ type trackedService struct {
 	hedgeModels []string
 	// hedges 是正在进行的备用请求数
 	hedges atomic.Int32
+	// buildStallTimeoutNs 是 Build 通道与写代码助手模型在正文提交前的超时时限（纳秒）
+	buildStallTimeoutNs atomic.Int64
 }
 
 type modelCatalogService interface {
@@ -200,9 +206,57 @@ func newTrackedService(
 	timeout time.Duration,
 ) *trackedService {
 	catalog := service.(modelCatalogService)
-	return &trackedService{
+	ts := &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
 		timeout: timeout, modelRetries: make(map[string]struct{}), catalogRoundWake: make(chan struct{}, 1),
+	}
+	ts.buildStallTimeoutNs.Store(int64(config.DefaultBuildStallTimeout))
+	return ts
+}
+
+// errBuildPreCommitStallTimeout 表示 Build 通道或写代码助手在正文与函数调用输出前等待超时
+var errBuildPreCommitStallTimeout = errors.New("AI Studio Build channel pre-commit stall timeout")
+
+// SetBuildStallTimeout 设置 Build 通道与写代码助手在正文输出前的停顿超时
+func (service *trackedService) SetBuildStallTimeout(d time.Duration) {
+	if service == nil {
+		return
+	}
+	if d <= 0 {
+		service.buildStallTimeoutNs.Store(int64(config.DefaultBuildStallTimeout))
+		return
+	}
+	service.buildStallTimeoutNs.Store(int64(d))
+}
+
+// buildAttemptStallTimeout 返回当前尝试在正文输出前的停顿超时，Playground 通道返回 0
+func (service *trackedService) buildAttemptStallTimeout(assistant bool, lease *aistudio.AccountLease) time.Duration {
+	if service == nil {
+		return 0
+	}
+	if !assistant && (lease == nil || lease.Channel() != aistudio.ChannelBuild) {
+		return 0
+	}
+	d := time.Duration(service.buildStallTimeoutNs.Load())
+	if d <= 0 {
+		return config.DefaultBuildStallTimeout
+	}
+	return d
+}
+
+// eventCommitted 表示事件包含向客户端提交的正文、函数调用、媒体或工具执行结果
+func eventCommitted(event aistudio.Event) bool {
+	switch event.Kind {
+	case aistudio.EventText,
+		aistudio.EventToolCall,
+		aistudio.EventMedia,
+		aistudio.EventExecutableCode,
+		aistudio.EventCodeExecutionResult,
+		aistudio.EventServerToolCall,
+		aistudio.EventServerToolResponse:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -816,6 +870,14 @@ func (service *trackedService) SetAPIKeyAccounts(accounts map[string][]string) {
 	service.pool.SetAPIKeyAccounts(accounts)
 }
 
+// SetAssistantFallback 设置全部候选账户冷却或额度耗尽时是否回退至写代码助手 -build 通道
+func (service *trackedService) SetAssistantFallback(fallback bool) {
+	service.assistantFallback = fallback
+	if pooled, ok := service.service.(*aistudio.PooledService); ok {
+		pooled.AssistantFallback = fallback
+	}
+}
+
 func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int) {
 	service.pool.SetPerAccountConcurrency(perAccountConcurrency)
 	service.workers.SetCapacity(warmTarget, maxActive, startupConcurrency)
@@ -1391,6 +1453,13 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		preferred := strings.TrimSpace(selection.PreferredAccountID)
+		preferredUsable := preferred != ""
+		if preferredUsable {
+			if _, failed := failedWorkers[preferred]; failed {
+				preferredUsable = false
+			}
+		}
 		warm := service.workers.ReadyWarmAccountIDs()
 		active := service.workers.WarmAccountIDs()
 		groups, err := service.pool.ClassifyCandidates(ctx, selection, warm)
@@ -1408,10 +1477,20 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		runtimeBusyErr := errors.Join(readyBusyErr, standbyBusyErr)
 		candidates := len(groups.WarmReady) + len(groups.WarmAvailable) + len(groups.WarmBusy) +
 			len(groups.StandbyReady) + len(groups.StandbyBusy)
+		rawStandbyReady := groups.StandbyReady
 		standbyReady, opening := service.workers.withoutOpening(groups.StandbyReady)
 		groups.StandbyReady = standbyReady
+		preferredOpening := preferredUsable && slices.Contains(rawStandbyReady, preferred) && !slices.Contains(standbyReady, preferred)
+		preferredStandby := preferredUsable && slices.Contains(standbyReady, preferred)
+		canPromotePreferred := preferredStandby && (len(active) < service.workers.activeLimit() || service.workers.idleWarmVictimFor(preferred, selection.ModelID, false) != "")
+		if preferredOpening {
+			if err := wait(schedulingRecheck); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
-		if len(warmAvailable) > 0 {
+		if len(warmAvailable) > 0 && !canPromotePreferred {
 			candidate := selection
 			candidate.AllowedAccountIDs = warmAvailable
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
@@ -1431,7 +1510,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		warmCandidates := len(warmAvailable) + len(groups.WarmBusy)
 		coolingVictim := len(active) >= service.workers.activeLimit() &&
 			service.workers.idleWarmVictimFor("", selection.ModelID, true) != ""
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() || coolingVictim) && warmCandidates > 0 && !fixedAccount {
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() || coolingVictim) && warmCandidates > 0 && !fixedAccount && !canPromotePreferred {
 			standby := groups.StandbyReady
 			if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 				standby = cold
@@ -1442,15 +1521,20 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 			continue
 		}
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() ||
+		if len(groups.StandbyReady) > 0 && (canPromotePreferred || len(active) < service.workers.activeLimit() ||
 			warmCandidates == 0 && service.workers.idleWarmVictim("") != "") {
 			standby := groups.StandbyReady
-			if len(active) < service.workers.activeLimit() {
-				if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
-					standby = cold
+			accountID := ""
+			if canPromotePreferred {
+				accountID = preferred
+			} else {
+				if len(active) < service.workers.activeLimit() {
+					if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
+						standby = cold
+					}
 				}
+				accountID = standby[0]
 			}
-			accountID := standby[0]
 			candidate := selection
 			candidate.AccountID = accountID
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
@@ -1771,6 +1855,8 @@ type generateRetry struct {
 	attemptFailure error
 	// missingInlineMedia 表示已因复用的内联附件文件不存在而在同一账户重试过
 	missingInlineMedia bool
+	// quotaFailed 表示已有尝试因额度限制而冷却
+	quotaFailed bool
 	// quotaUntil 是本次请求中因额度失败而冷却的账户最早的恢复时刻
 	quotaUntil time.Time
 }
@@ -1819,6 +1905,23 @@ func (service *trackedService) generateWithRetry(
 	var activity *upstreamActivity
 	var err error
 	copyFiles := false
+	switchToAssistant := func() {
+		service.requests.logRequestProgress(request.ID, "request", "WARN", fmt.Sprintf(
+			"Playground 额度耗尽或冷却 | 自动回退至 Assistant 通道 | 模型=%s-build", modelID,
+		))
+		modelID = modelID + "-build"
+		request.Model = "models/" + modelID
+		assistant = true
+		hedgeable = false
+		preferredAccountID = service.service.(aistudio.AssistantService).AssistantAccount(requestCtx, request)
+		continuationRounds = service.pool.OutputContinuationRounds(modelID, request.Config.MaxOutputTokens)
+		retry.attempted = make(map[string]struct{}, retry.maxAttempts)
+		retry.quotaFailed = false
+		retry.quotaUntil = time.Time{}
+		retry.recoveryAccountID = ""
+		retry.buildRejection = nil
+		copyFiles = false
+	}
 	for attempt := 0; attempt < retry.maxAttempts; attempt++ {
 		selectionAccountID := requestedAccountID
 		recoveringAccount := retry.recoveryAccountID != ""
@@ -1830,9 +1933,15 @@ func (service *trackedService) generateWithRetry(
 		if copyFiles {
 			selectionResourceID = ""
 		}
+		selectionPreferredAccountID := preferredAccountID
+		if selectionPreferredAccountID != "" {
+			if _, alreadyAttempted := retry.attempted[selectionPreferredAccountID]; alreadyAttempted {
+				selectionPreferredAccountID = ""
+			}
+		}
 		selection := aistudio.AccountSelection{
 			ModelID: modelID, Method: "generateContent",
-			AccountID: selectionAccountID, ResourceID: selectionResourceID, PreferredAccountID: preferredAccountID,
+			AccountID: selectionAccountID, ResourceID: selectionResourceID, PreferredAccountID: selectionPreferredAccountID,
 		}
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
@@ -1877,7 +1986,8 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		quotaFallback := selection.ResourceID == ""
+		canFallbackToAssistant := !assistant && service.assistantFallback && !strings.HasSuffix(modelID, "-build") && service.pool.AssistantModel(modelID+"-build")
+		quotaFallback := selection.ResourceID == "" && !canFallbackToAssistant
 		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
@@ -1898,6 +2008,11 @@ func (service *trackedService) generateWithRetry(
 				continue
 			}
 			var cooling *aistudio.AllCoolingError
+			if canFallbackToAssistant && requestCtx.Err() == nil && (errors.As(acquireErr, &cooling) || errors.Is(acquireErr, aistudio.ErrNoEligibleAccount)) {
+				switchToAssistant()
+				attempt = -1
+				continue
+			}
 			switch {
 			case err != nil && errors.Is(acquireErr, aistudio.ErrNoEligibleAccount):
 			case retry.attemptFailure != nil && errors.As(acquireErr, &cooling):
@@ -1926,8 +2041,8 @@ func (service *trackedService) generateWithRetry(
 		var plan *hedgePlan
 		if hedgeable && !hedged {
 			if delay, ok := service.hedgeDelay(modelID, string(lease.Channel())); ok {
-				fixed := resourceID != "" || requestedAccountID != ""
-				plan = &hedgePlan{delay: delay, selections: service.hedgeSelections(selection, lease.Account().ID, fixed, retry.attempted)}
+				preferSameOnly := resourceID != "" || requestedAccountID != "" || strings.TrimSpace(selection.PreferredAccountID) != ""
+				plan = &hedgePlan{delay: delay, selections: service.hedgeSelections(selection, lease.Account().ID, preferSameOnly, retry.attempted)}
 				plan.start = func(hedgeLease *aistudio.AccountLease, hedgeSelection aistudio.AccountSelection) *generateAttempt {
 					hedged = true
 					retry.attempted[hedgeLease.Account().ID] = struct{}{}
@@ -1948,7 +2063,8 @@ func (service *trackedService) generateWithRetry(
 			api.SetAccessLogFirstEvent(requestCtx, winner.firstAt.Sub(generationStartedAt))
 			api.SetAccessLogTarget(requestCtx, winner.first.ProviderModel, winner.serving.Load().Account().Config.Label)
 			if request.Unary {
-				collected, collectErr := collectGenerateEvents(requestCtx, winner.source, func(waited time.Duration, events []aistudio.Event) {
+				stallTimeout := service.buildAttemptStallTimeout(service.pool.AssistantModel(modelID), winner.serving.Load())
+				collected, collectErr := collectGenerateEvents(requestCtx, winner.first, winner.source, stallTimeout, func(waited time.Duration, events []aistudio.Event) {
 					reasoning, content := 0, 0
 					for _, event := range events {
 						switch event.Kind {
@@ -1965,6 +2081,9 @@ func (service *trackedService) generateWithRetry(
 				})
 				if collectErr != nil {
 					winner.err = collectErr
+					if winner.cancel != nil {
+						winner.cancel()
+					}
 					last = service.settleAttempt(requestCtx, request.ID, modelID, winner, retry, true)
 					winner = nil
 				} else {
@@ -1977,10 +2096,43 @@ func (service *trackedService) generateWithRetry(
 			if retry.buildRejection != nil {
 				service.coolRejectedBuild(request.ID, retry.buildRejection, modelID, winner.accountLabel)
 			}
+			if !request.Unary {
+				canSwitchOnPreCommitStall := attempt+1 < retry.maxAttempts
+				stallTimeout := service.buildAttemptStallTimeout(service.pool.AssistantModel(modelID), winner.serving.Load())
+				forwardErr := service.forwardEvents(
+					clientCtx, requestCtx, func() { winner.cancel(); cancel() }, request.ID,
+					winner.first, winner.source, destination, &winner.serving, winner.copies, winner.activity, modelID,
+					stallTimeout, canSwitchOnPreCommitStall,
+				)
+				if errors.Is(forwardErr, errBuildPreCommitStallTimeout) && canSwitchOnPreCommitStall {
+					winner.err = forwardErr
+					if winner.cancel != nil {
+						winner.cancel()
+					}
+					last = service.settleAttempt(requestCtx, request.ID, modelID, winner, retry, true)
+					waited := stallTimeout.Round(time.Second)
+					if waited == 0 {
+						waited = stallTimeout.Round(time.Millisecond)
+					}
+					service.requests.logRequestProgress(request.ID, winner.accountLabel, "WARN", fmt.Sprintf(
+						"Build 通道响应前停顿超时 | 切换账号 | 已等待=%s | 模型=%s",
+						waited, modelID,
+					))
+					winner = nil
+					err = last.err
+					continue
+				}
+				return
+			}
 			break
 		}
 		err = last.err
 		if !last.retryable {
+			if canFallbackToAssistant && retry.quotaFailed && requestCtx.Err() == nil {
+				switchToAssistant()
+				attempt = -1
+				continue
+			}
 			break
 		}
 		if last.recoverWorker {
@@ -1989,6 +2141,11 @@ func (service *trackedService) generateWithRetry(
 			retry.maxAttempts++
 		}
 		if attempt+1 == retry.maxAttempts {
+			if canFallbackToAssistant && retry.quotaFailed && requestCtx.Err() == nil {
+				switchToAssistant()
+				attempt = -1
+				continue
+			}
 			break
 		}
 		if last.recoverWorker && errors.Is(err, aistudio.ErrProtectedTransport) {
@@ -2026,6 +2183,7 @@ func (service *trackedService) generateWithRetry(
 	service.forwardEvents(
 		clientCtx, requestCtx, func() { winner.cancel(); cancel() }, request.ID,
 		winner.first, winner.source, destination, &winner.serving, winner.copies, winner.activity, modelID,
+		0, false,
 	)
 }
 
@@ -2164,10 +2322,16 @@ func (service *trackedService) runAttempt(
 	if err == nil {
 		upstreamStartedAt := time.Now()
 		firstEventDelayed := false
-		attempt.first, err = firstGenerateEvent(ctx, attempt.source, func(waited time.Duration) {
+		stallTimeout := service.buildAttemptStallTimeout(service.pool.AssistantModel(modelID), attempt.serving.Load())
+		attempt.first, err = firstGenerateEvent(ctx, attempt.source, stallTimeout, func(waited time.Duration) {
 			firstEventDelayed = true
 			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
 				"上游首事件等待 | 已等待=%s | 模型=%s | %s",
+				waited, modelID, attempt.activity.logFields(time.Now()),
+			))
+		}, func(waited time.Duration) {
+			service.requests.logRequestProgress(request.ID, accountLabel, "WARN", fmt.Sprintf(
+				"Build 通道首事件等待超时 | 已等待=%s | 模型=%s | %s",
 				waited, modelID, attempt.activity.logFields(time.Now()),
 			))
 		})
@@ -2180,6 +2344,9 @@ func (service *trackedService) runAttempt(
 		}
 	}
 	attempt.err = err
+	if attempt.err != nil && attempt.cancel != nil {
+		attempt.cancel()
+	}
 }
 
 // upstreamModeObserver 返回把租约账户的上游调用方式记入请求日志的观察函数，回退流式时附上 fallbackReason
@@ -2314,6 +2481,7 @@ func (service *trackedService) settleAttempt(
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
+		retry.quotaFailed = true
 		until, stateErr := service.markQuotaCooldown(requestID, modelID, lease, cooldown)
 		if stateErr != nil {
 			err = errors.Join(err, stateErr)
@@ -2408,11 +2576,24 @@ func (service *trackedService) coolRejectedBuild(requestID string, rejection *re
 var errStreamClosedBeforeFirstEvent = errors.New("AI Studio stream closed before first event")
 var errStreamClosedBeforeFinish = errors.New("AI Studio stream closed before finish")
 
-// firstGenerateEvent 等待首事件并在请求期限内完成错误流清理，等待达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长调用 onWait
-func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWait func(time.Duration)) (aistudio.Event, error) {
+// firstGenerateEvent 等待首事件并在请求期限内完成错误流清理，等待达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长调用 onWait，stallTimeout 大于 0 且到期时返回停顿超时错误
+func firstGenerateEvent(
+	ctx context.Context,
+	source <-chan aistudio.Event,
+	stallTimeout time.Duration,
+	onWait func(time.Duration),
+	onStall func(time.Duration),
+) (aistudio.Event, error) {
 	startedAt := time.Now()
 	timer := time.NewTimer(streamStallThreshold)
 	defer timer.Stop()
+	var stallTimer *time.Timer
+	var stallC <-chan time.Time
+	if stallTimeout > 0 {
+		stallTimer = time.NewTimer(stallTimeout)
+		defer stallTimer.Stop()
+		stallC = stallTimer.C
+	}
 	for {
 		select {
 		case event, ok := <-source:
@@ -2432,8 +2613,19 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 					return aistudio.Event{}, ctx.Err()
 				}
 			}
+		case <-stallC:
+			if onStall != nil {
+				waited := time.Since(startedAt).Round(time.Second)
+				if waited == 0 {
+					waited = time.Since(startedAt).Round(time.Millisecond)
+				}
+				onStall(waited)
+			}
+			return aistudio.Event{}, errBuildPreCommitStallTimeout
 		case <-timer.C:
-			onWait(time.Since(startedAt).Round(time.Second))
+			if onWait != nil {
+				onWait(time.Since(startedAt).Round(time.Second))
+			}
 			timer.Reset(waitReportInterval)
 		case <-ctx.Done():
 			return aistudio.Event{}, ctx.Err()
@@ -2441,11 +2633,25 @@ func firstGenerateEvent(ctx context.Context, source <-chan aistudio.Event, onWai
 	}
 }
 
-// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断时返回该错误；收集达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长与已收到的事件调用 onWait
-func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, onWait func(time.Duration, []aistudio.Event)) (<-chan aistudio.Event, error) {
+// collectGenerateEvents 收齐非流式请求首事件之后的上游事件，上游流中断或正文前停顿超时时返回该错误；收集达到 streamStallThreshold 后每隔 waitReportInterval 以已等待时长与已收到的事件调用 onWait
+func collectGenerateEvents(
+	ctx context.Context,
+	first aistudio.Event,
+	source <-chan aistudio.Event,
+	stallTimeout time.Duration,
+	onWait func(time.Duration, []aistudio.Event),
+) (<-chan aistudio.Event, error) {
 	startedAt := time.Now()
 	timer := time.NewTimer(streamStallThreshold)
 	defer timer.Stop()
+	var stallTimer *time.Timer
+	var stallC <-chan time.Time
+	committed := eventCommitted(first)
+	if !committed && stallTimeout > 0 {
+		stallTimer = time.NewTimer(stallTimeout)
+		defer stallTimer.Stop()
+		stallC = stallTimer.C
+	}
 	var events []aistudio.Event
 	for {
 		select {
@@ -2464,9 +2670,24 @@ func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, on
 				}
 				return nil, event.Err
 			}
+			if !committed {
+				if eventCommitted(event) {
+					committed = true
+					if stallTimer != nil {
+						stallTimer.Stop()
+						stallC = nil
+					}
+				} else if stallTimer != nil {
+					stallTimer.Reset(stallTimeout)
+				}
+			}
 			events = append(events, event)
+		case <-stallC:
+			return nil, errBuildPreCommitStallTimeout
 		case <-timer.C:
-			onWait(time.Since(startedAt).Round(time.Second), events)
+			if onWait != nil {
+				onWait(time.Since(startedAt).Round(time.Second), events)
+			}
 			timer.Reset(waitReportInterval)
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -2475,6 +2696,9 @@ func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, on
 }
 
 func retryableGenerateAccountError(ctx context.Context, err error) bool {
+	if errors.Is(err, errBuildPreCommitStallTimeout) {
+		return ctx.Err() == nil
+	}
 	if errors.Is(err, errStreamClosedBeforeFirstEvent) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
 		return true
 	}
@@ -2602,7 +2826,9 @@ func (service *trackedService) forwardEvents(
 	temporaryCopies *aistudio.TemporaryFileCopies,
 	activity *upstreamActivity,
 	requestedModelID string,
-) {
+	stallTimeout time.Duration,
+	canSwitchOnPreCommitStall bool,
+) (forwardErr error) {
 	state := "completed"
 	var requestErr error
 	terminal := false
@@ -2619,6 +2845,15 @@ func (service *trackedService) forwardEvents(
 	stallTimer.Stop()
 	defer stallTimer.Stop()
 	var stall <-chan time.Time
+	var preCommitTimer *time.Timer
+	var preCommitC <-chan time.Time
+	committed := false
+	if stallTimeout > 0 {
+		preCommitTimer = time.NewTimer(stallTimeout)
+		defer preCommitTimer.Stop()
+		preCommitC = preCommitTimer.C
+	}
+	switched := false
 	finishFromContext := func() {
 		requestErr = requestCtx.Err()
 		state = finalRequestState(requestErr)
@@ -2630,8 +2865,11 @@ func (service *trackedService) forwardEvents(
 		case <-clientCtx.Done():
 		}
 	}
-	defer cancel()
 	defer func() {
+		if switched {
+			return
+		}
+		cancel()
 		api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
 		api.SetAccessLogGenerationResult(requestCtx, usage, toolCalls)
 		if temporaryCopies != nil {
@@ -2665,6 +2903,19 @@ func (service *trackedService) forwardEvents(
 		} else {
 			select {
 			case event, ok = <-source:
+			case <-preCommitC:
+				if canSwitchOnPreCommitStall {
+					switched = true
+					return errBuildPreCommitStallTimeout
+				}
+				requestErr = errBuildPreCommitStallTimeout
+				state = "failed"
+				terminal = true
+				select {
+				case destination <- aistudio.Event{Kind: aistudio.EventError, Err: requestErr}:
+				case <-clientCtx.Done():
+				}
+				return errBuildPreCommitStallTimeout
 			case <-stall:
 				stalled = true
 				stallTimer.Reset(waitReportInterval)
@@ -2676,12 +2927,13 @@ func (service *trackedService) forwardEvents(
 				continue
 			case <-requestCtx.Done():
 				finishFromContext()
-				return
+				return requestCtx.Err()
 			}
 		}
 		if !ok {
 			if err := requestCtx.Err(); err != nil {
 				finishFromContext()
+				return err
 			} else if !terminal {
 				requestErr = errStreamClosedBeforeFinish
 				state = "failed"
@@ -2689,8 +2941,9 @@ func (service *trackedService) forwardEvents(
 				case destination <- aistudio.Event{Kind: aistudio.EventError, Err: requestErr}:
 				case <-clientCtx.Done():
 				}
+				return requestErr
 			}
-			return
+			return nil
 		}
 		now := time.Now()
 		if stalled {
@@ -2711,6 +2964,17 @@ func (service *trackedService) forwardEvents(
 			usage = event.Usage
 		case aistudio.EventToolCall:
 			toolCalls++
+		}
+		if !committed {
+			if eventCommitted(event) {
+				committed = true
+				if preCommitTimer != nil {
+					preCommitTimer.Stop()
+					preCommitC = nil
+				}
+			} else if preCommitTimer != nil {
+				preCommitTimer.Reset(stallTimeout)
+			}
 		}
 		api.SetAccessLogTarget(requestCtx, event.ProviderModel, accountLabel())
 		if terminal {
@@ -2734,6 +2998,10 @@ func (service *trackedService) forwardEvents(
 		}
 		if terminal {
 			stall = nil
+			if preCommitTimer != nil {
+				preCommitTimer.Stop()
+				preCommitC = nil
+			}
 		} else {
 			stallTimer.Reset(streamStallThreshold)
 			stall = stallTimer.C
@@ -2742,7 +3010,7 @@ func (service *trackedService) forwardEvents(
 		case destination <- event:
 		case <-requestCtx.Done():
 			finishFromContext()
-			return
+			return requestCtx.Err()
 		}
 		if !verified && event.Kind == aistudio.EventFinish {
 			verified = true

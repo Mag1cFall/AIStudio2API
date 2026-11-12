@@ -282,6 +282,8 @@ export const messages = {
   'settings.proxy': '默认代理',
   'settings.initTimeout': '初始化超时',
   'settings.requestTimeout': '请求超时',
+  'settings.buildStallTimeout': 'Build 响应前停顿超时',
+  'settings.assistantFallback': '冷却后回退至 Build 对话',
   'settings.warmWorkerLimit': '常驻 Worker 数',
   'settings.maxActiveWorkers': '峰值 Worker 上限',
   'settings.warmStartupConcurrency': 'Camoufox 启动并发',
@@ -1634,6 +1636,10 @@ export const messages = {
   'settings.youtubeLinksHelp': '把用户消息文本中的 YouTube 链接作为视频发送给模型',
   'settings.initTimeoutHelp': '单个账户 WAA 初始化的最长时间。',
   'settings.requestTimeoutHelp': '单次请求的最长执行时间。',
+  'settings.buildStallTimeoutHelp':
+    'Build 通道与写代码助手在输出正文、工具调用或媒体前允许停顿的最长时间，超时后切换至下一个账户。',
+  'settings.assistantFallbackHelp':
+    '所有候选账户在启用通道上均处于额度冷却或耗尽时，自动回退至对应模型的 -build 写代码助手通道。',
   'settings.unitSeconds': '秒',
   'settings.unitMinutes': '分钟',
   'settings.timeUnit': '时间单位',

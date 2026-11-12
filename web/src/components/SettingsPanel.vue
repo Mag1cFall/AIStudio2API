@@ -88,8 +88,10 @@ const sections: {
       'waa_backend',
       'upstream_channels',
       'build_native_nonstream',
+      'assistant_fallback',
       'init_timeout',
       'request_timeout',
+      'build_stall_timeout',
       'first_event_hedge',
       'first_event_hedge_models',
     ],
@@ -808,6 +810,16 @@ async function saveConfig(): Promise<void> {
               <UiSwitch id="setting-build-native" v-model="form.build_native_nonstream" />
             </SettingRow>
             <SettingRow
+              :label="t('settings.assistantFallback')"
+              control-id="setting-assistant-fallback"
+              :description="t('settings.assistantFallbackHelp')"
+              effect="service"
+              :changed="changedFields.has('assistant_fallback')"
+              :env="environmentKey('assistant_fallback')"
+            >
+              <UiSwitch id="setting-assistant-fallback" v-model="form.assistant_fallback" />
+            </SettingRow>
+            <SettingRow
               :label="t('settings.initTimeout')"
               control-id="setting-init-timeout"
               :description="t('settings.initTimeoutHelp')"
@@ -832,6 +844,20 @@ async function saveConfig(): Promise<void> {
               <DurationInput
                 id="setting-request-timeout"
                 v-model="form.request_timeout"
+                :input-class="inputClass"
+              />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.buildStallTimeout')"
+              control-id="setting-build-stall-timeout"
+              :description="t('settings.buildStallTimeoutHelp')"
+              effect="service"
+              :changed="changedFields.has('build_stall_timeout')"
+              :env="environmentKey('build_stall_timeout')"
+            >
+              <DurationInput
+                id="setting-build-stall-timeout"
+                v-model="form.build_stall_timeout"
                 :input-class="inputClass"
               />
             </SettingRow>

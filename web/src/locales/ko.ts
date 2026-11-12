@@ -300,6 +300,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': '기본 프록시',
   'settings.initTimeout': '초기화 제한 시간',
   'settings.requestTimeout': '요청 제한 시간',
+  'settings.buildStallTimeout': 'Build 응답 전 지연 제한 시간',
+  'settings.assistantFallback': '쿨다운 시 Build 대화로 전환',
   'settings.warmWorkerLimit': '상주 Worker 수',
   'settings.maxActiveWorkers': '최대 Worker 수',
   'settings.warmStartupConcurrency': 'Camoufox 동시 시작 수',
@@ -1722,6 +1724,10 @@ export const messages: Record<TranslationKey, string> = {
   'settings.youtubeLinksHelp': '사용자 메시지 본문의 YouTube 링크를 동영상으로 모델에 전송',
   'settings.initTimeoutHelp': '계정별 WAA 초기화에 허용하는 최대 시간입니다.',
   'settings.requestTimeoutHelp': '요청 하나에 허용하는 최대 실행 시간입니다.',
+  'settings.buildStallTimeoutHelp':
+    'Build 채널 및 코딩 도우미에서 본문, 도구 호출 또는 미디어가 출력되기 전 허용하는 최대 지연 시간이며, 시간 초과 시 다음 계정으로 전환합니다.',
+  'settings.assistantFallbackHelp':
+    '모든 후보 계정이 할당량 쿨다운이거나 소진되었을 때 해당 모델의 -build 코딩 도우미 채널로 자동 전환합니다.',
   'settings.unitSeconds': '초',
   'settings.unitMinutes': '분',
   'settings.timeUnit': '시간 단위',

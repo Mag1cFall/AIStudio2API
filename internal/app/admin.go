@@ -1082,6 +1082,16 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
+	buildStallTimeout := saved.BuildStallTimeout
+	if buildStallTimeout <= 0 {
+		buildStallTimeout = config.DefaultBuildStallTimeout
+	}
+	if strings.TrimSpace(value.BuildStallTimeout) != "" {
+		buildStallTimeout, err = time.ParseDuration(value.BuildStallTimeout)
+		if err != nil {
+			return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("BUILD_STALL_TIMEOUT 无效: %w", err))
+		}
+	}
 	cfg := config.Config{
 		AutoStart:      value.AutoStart,
 		HideDockIcon:   value.HideDockIcon,
@@ -1091,9 +1101,10 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
 		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch, StripThoughtSignatures: value.StripThoughtSignatures,
+		AssistantFallback:   value.AssistantFallback,
 		ContinuationRewrite: value.ContinuationRewrite, ContinuationPrompt: strings.TrimSpace(value.ContinuationPrompt),
 		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
-		ProxyAPIKey: value.APIKey, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
+		ProxyAPIKey: value.APIKey, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout, BuildStallTimeout: buildStallTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
@@ -1118,6 +1129,10 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	admin.pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
 	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	admin.pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
+	if admin.service != nil {
+		admin.service.SetBuildStallTimeout(cfg.BuildStallTimeout)
+		admin.service.SetAssistantFallback(cfg.AssistantFallback)
+	}
 	admin.requests.log("service", "INFO", "服务配置已保存")
 	models, _ := admin.CatalogModels(context.Background())
 	admin.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": models}})
@@ -1394,11 +1409,12 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		BuildNativeNonstream: cfg.BuildNativeNonstream,
 		NonstreamKeepalive:   cfg.NonstreamKeepalive, FakeStream: cfg.FakeStream, YouTubeLinks: cfg.YouTubeLinks,
 		SearchModelAliases: cfg.SearchModelAliases, GoogleSearch: cfg.GoogleSearch, StripThoughtSignatures: cfg.StripThoughtSignatures,
+		AssistantFallback:   cfg.AssistantFallback,
 		ContinuationRewrite: cfg.ContinuationRewrite, ContinuationPrompt: cfg.ContinuationPrompt,
 		FirstEventHedge: cfg.FirstEventHedge, FirstEventHedgeModels: cfg.FirstEventHedgeModels, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		PreviewListenAddr: cfg.PreviewListenAddr, ActivePreviewListenAddr: cfg.PreviewListenAddr,
-		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
+		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), BuildStallTimeout: cfg.BuildStallTimeout.String(),
 		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,
 		WarmStartupConcurrency: cfg.WarmStartupConcurrency,
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,

@@ -129,12 +129,12 @@ func (service *trackedService) hedgeDelay(modelID, channel string) (time.Duratio
 	return p95, samples >= firstEventMinSamples
 }
 
-// hedgeSelections 返回备用请求依次尝试的账户选择：引用已上传文件或指定账户的请求只用原账户；其余先用尚未尝试的其他账户，再用原账户
-func (service *trackedService) hedgeSelections(primary aistudio.AccountSelection, accountID string, fixed bool, attempted map[string]struct{}) []aistudio.AccountSelection {
+// hedgeSelections 返回备用请求依次尝试的账户选择：引用已上传文件、指定账户或带首选账户的请求只用原账户；其余先用尚未尝试的其他账户，再用原账户
+func (service *trackedService) hedgeSelections(primary aistudio.AccountSelection, accountID string, sameAccountOnly bool, attempted map[string]struct{}) []aistudio.AccountSelection {
 	same := primary
 	same.AllowedAccountIDs = nil
 	same.AccountID = accountID
-	if fixed {
+	if sameAccountOnly {
 		return []aistudio.AccountSelection{same}
 	}
 	other := primary
