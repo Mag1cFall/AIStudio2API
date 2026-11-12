@@ -150,9 +150,9 @@ function onScroll(): void {
   scrollingTimer = window.setTimeout(() => (userScrolling.value = false), 200)
 }
 
-// resize 在内容或容器尺寸变化时跟随到底部
+// resize 在内容或容器尺寸变化时跟随到底部，编辑轮次时不跳转滚动位置
 const resize = new ResizeObserver(() => {
-  follow()
+  if (!content.value?.querySelector('.edit-textarea')) follow()
   measure()
 })
 // observe 观察对话内容与滚动容器的尺寸
