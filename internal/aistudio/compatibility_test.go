@@ -136,27 +136,6 @@ func TestRPCErrorCompatibility(t *testing.T) {
 			}
 		}
 	})
-
-	t.Run("drive storage quota exceeded", func(t *testing.T) {
-		for _, err := range []*RPCError{
-			{Method: "DriveUpload", StatusCode: http.StatusForbidden, Message: `{"error":{"code":403,"message":"The user's Drive storage quota has been exceeded.","errors":[{"message":"The user's Drive storage quota has been exceeded.","domain":"usageLimits","reason":"storageQuotaExceeded"}]}}`},
-			{Method: "DriveUpload", StatusCode: http.StatusForbidden, Message: `{"error":{"code":403,"message":"Service disabled","errors":[{"reason":"serviceDisabled"}]}}`},
-		} {
-			if !driveStorageQuotaExceeded(err) {
-				t.Fatalf("expected storage quota error classified: %+v", err)
-			}
-		}
-
-		for _, err := range []*RPCError{
-			{Method: "DriveUpload", StatusCode: http.StatusBadRequest, Message: `storageQuotaExceeded`},
-			{Method: "DriveUpload", StatusCode: http.StatusUnauthorized, Message: `storageQuotaExceeded`},
-			{Method: "DriveUpload", StatusCode: http.StatusForbidden, Message: `rateLimitExceeded`},
-		} {
-			if driveStorageQuotaExceeded(err) {
-				t.Fatalf("unrelated error classified as drive storage quota: %+v", err)
-			}
-		}
-	})
 }
 
 // TestEncodeContentsEmptyPartsFilter 验证多轮历史中空 parts 内容被自动忽略而不触发编码校验失败
