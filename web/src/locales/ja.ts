@@ -303,8 +303,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': 'デフォルトのプロキシ',
   'settings.initTimeout': '初期化のタイムアウト',
   'settings.requestTimeout': 'リクエストのタイムアウト',
-  'settings.buildStallTimeout': 'Build 応答前の停滞タイムアウト',
-  'settings.assistantFallback': 'クールダウン時に Build チャットへフォールバック',
   'settings.warmWorkerLimit': '常駐 Worker 数',
   'settings.maxActiveWorkers': 'ピーク時の Worker 上限',
   'settings.warmStartupConcurrency': 'Camoufox の同時起動数',
@@ -1739,10 +1737,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.youtubeLinksHelp': 'ユーザー メッセージ本文の YouTube リンクを動画としてモデルに送信',
   'settings.initTimeoutHelp': 'アカウントごとの WAA 初期化の最大時間。',
   'settings.requestTimeoutHelp': '1 件のリクエストの最大実行時間。',
-  'settings.buildStallTimeoutHelp':
-    'Build チャネルおよびコード アシスタントで本文、ツール呼び出し、メディアが出力されるまでの最大停滞時間。タイムアウト時は次のアカウントに切り替えます。',
-  'settings.assistantFallbackHelp':
-    'すべての候補アカウントがクォータのクールダウンまたは上限に達している場合、モデルの -build コード アシスタント チャネルへ自動フォールバックします。',
   'settings.unitSeconds': '秒',
   'settings.unitMinutes': '分',
   'settings.timeUnit': '時間の単位',

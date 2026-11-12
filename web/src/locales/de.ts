@@ -302,8 +302,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': 'Standard-Proxy',
   'settings.initTimeout': 'Zeitlimit für die Initialisierung',
   'settings.requestTimeout': 'Zeitlimit für Anfragen',
-  'settings.buildStallTimeout': 'Build-Zeitlimit vor Antwortbeginn',
-  'settings.assistantFallback': 'Bei Abklingzeit auf Build-Chat ausweichen',
   'settings.warmWorkerLimit': 'Vorgewärmte Worker',
   'settings.maxActiveWorkers': 'Worker-Limit bei Spitzenlast',
   'settings.warmStartupConcurrency': 'Gleichzeitige Camoufox-Starts',
@@ -1785,10 +1783,6 @@ export const messages: Record<TranslationKey, string> = {
     'YouTube-Links im Text von Nutzernachrichten werden als Video an das Modell gesendet',
   'settings.initTimeoutHelp': 'Maximale Dauer der WAA-Initialisierung pro Konto.',
   'settings.requestTimeoutHelp': 'Maximale Laufzeit einer Anfrage.',
-  'settings.buildStallTimeoutHelp':
-    'Maximale Wartezeit auf dem Build-Kanal und beim Code-Assistenten vor der Ausgabe von Text, Tool-Aufrufen oder Medien; wechselt bei Zeitüberschreitung zum nächsten Konto.',
-  'settings.assistantFallbackHelp':
-    'Weicht automatisch auf den -build-Code-Assistent-Kanal des Modells aus, wenn sich alle Kandidatenkonten in der Kontingent-Abklingzeit befinden.',
   'settings.unitSeconds': 'Sekunden',
   'settings.unitMinutes': 'Minuten',
   'settings.timeUnit': 'Zeiteinheit',

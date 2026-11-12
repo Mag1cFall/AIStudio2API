@@ -287,8 +287,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': '預設代理伺服器',
   'settings.initTimeout': '初始化逾時',
   'settings.requestTimeout': '請求逾時',
-  'settings.buildStallTimeout': 'Build 回應前停頓逾時',
-  'settings.assistantFallback': '冷卻後回退至 Build 對話',
   'settings.warmWorkerLimit': '常駐 Worker 數',
   'settings.maxActiveWorkers': '尖峰 Worker 上限',
   'settings.warmStartupConcurrency': 'Camoufox 同時啟動數',
@@ -1643,10 +1641,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.youtubeLinksHelp': '把使用者訊息文字中的 YouTube 連結作為影片傳送給模型',
   'settings.initTimeoutHelp': '單一帳號 WAA 初始化的最長時間。',
   'settings.requestTimeoutHelp': '單次請求的最長執行時間。',
-  'settings.buildStallTimeoutHelp':
-    'Build 通道與寫程式助手在輸出內文、工具呼叫或媒體前允許停頓的最長時間，逾時後切換至下一個帳號。',
-  'settings.assistantFallbackHelp':
-    '所有候選帳號在啟用通道上均處於額度冷卻或耗盡時，自動回退至對應模型的 -build 寫程式助手通道。',
   'settings.unitSeconds': '秒',
   'settings.unitMinutes': '分鐘',
   'settings.timeUnit': '時間單位',

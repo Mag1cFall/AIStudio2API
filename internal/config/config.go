@@ -15,14 +15,11 @@ import (
 )
 
 const (
-	defaultAuthStates        = "auth"
-	defaultListenAddr        = "127.0.0.1:2048"
-	defaultPreviewListenAddr = "127.0.0.1:2050"
-	defaultInitTimeout       = 2 * time.Minute
-	defaultRequestTimeout    = 30 * time.Minute
-	defaultBuildStallTimeout = 2 * time.Minute
-	// DefaultBuildStallTimeout 是 BUILD_STALL_TIMEOUT 的默认值
-	DefaultBuildStallTimeout  = defaultBuildStallTimeout
+	defaultAuthStates         = "auth"
+	defaultListenAddr         = "127.0.0.1:2048"
+	defaultPreviewListenAddr  = "127.0.0.1:2050"
+	defaultInitTimeout        = 2 * time.Minute
+	defaultRequestTimeout     = 30 * time.Minute
 	defaultWarmWorkerLimit    = 10
 	defaultMaxActiveWorkers   = 20
 	camoufoxWarmWorkerLimit   = 5
@@ -70,8 +67,6 @@ var configKeys = [...]string{
 	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
 	"FIRST_EVENT_HEDGE_MODELS",
-	"BUILD_STALL_TIMEOUT",
-	"ASSISTANT_FALLBACK",
 	"CONTINUATION_REWRITE",
 	"CONTINUATION_PROMPT",
 }
@@ -128,7 +123,6 @@ type Config struct {
 	GoogleSearch           bool
 	FirstEventHedge        string
 	FirstEventHedgeModels  string
-	AssistantFallback      bool
 	ContinuationRewrite    bool
 	ContinuationPrompt     string
 	AuthStates             string
@@ -139,7 +133,6 @@ type Config struct {
 	Proxy                  string
 	InitTimeout            time.Duration
 	RequestTimeout         time.Duration
-	BuildStallTimeout      time.Duration
 	WarmWorkerLimit        int
 	MaxActiveWorkers       int
 	WarmStartupConcurrency int
@@ -189,7 +182,6 @@ func Default() Config {
 		PreviewListenAddr:      defaultPreviewListenAddr,
 		InitTimeout:            defaultInitTimeout,
 		RequestTimeout:         defaultRequestTimeout,
-		BuildStallTimeout:      defaultBuildStallTimeout,
 		WarmWorkerLimit:        defaultWarmWorkerLimit,
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
@@ -231,7 +223,6 @@ var configSetters = map[string]func(*Config, string) error{
 	"FAKE_STREAM":              boolSetter("FAKE_STREAM", func(c *Config) *bool { return &c.FakeStream }),
 	"SEARCH_MODEL_ALIASES":     boolSetter("SEARCH_MODEL_ALIASES", func(c *Config) *bool { return &c.SearchModelAliases }),
 	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
-	"ASSISTANT_FALLBACK":       boolSetter("ASSISTANT_FALLBACK", func(c *Config) *bool { return &c.AssistantFallback }),
 	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
 	"STRIP_THOUGHT_SIGNATURES": boolSetter("STRIP_THOUGHT_SIGNATURES", func(c *Config) *bool { return &c.StripThoughtSignatures }),
 	"CONTINUATION_REWRITE":     boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
@@ -242,7 +233,6 @@ var configSetters = map[string]func(*Config, string) error{
 	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
 	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
 	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
-	"BUILD_STALL_TIMEOUT":      durationSetter("BUILD_STALL_TIMEOUT", func(c *Config) *time.Duration { return &c.BuildStallTimeout }),
 	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
 	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
 	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
@@ -360,12 +350,6 @@ var configChecks = []configCheck{
 	{[]string{"REQUEST_TIMEOUT"}, func(c Config) error {
 		if c.RequestTimeout <= 0 {
 			return fmt.Errorf("REQUEST_TIMEOUT 必须是正数时长")
-		}
-		return nil
-	}},
-	{[]string{"BUILD_STALL_TIMEOUT"}, func(c Config) error {
-		if c.BuildStallTimeout <= 0 {
-			return fmt.Errorf("BUILD_STALL_TIMEOUT 必须是正数时长")
 		}
 		return nil
 	}},
@@ -593,7 +577,6 @@ func (c Config) envValues() map[string]string {
 		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
 		"FIRST_EVENT_HEDGE_MODELS": c.FirstEventHedgeModels,
-		"ASSISTANT_FALLBACK":       strconv.FormatBool(c.AssistantFallback),
 		"CONTINUATION_REWRITE":     strconv.FormatBool(c.ContinuationRewrite),
 		"CONTINUATION_PROMPT":      c.ContinuationPrompt,
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
@@ -603,7 +586,6 @@ func (c Config) envValues() map[string]string {
 		"PROXY":                    c.Proxy,
 		"INIT_TIMEOUT":             c.InitTimeout.String(),
 		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
-		"BUILD_STALL_TIMEOUT":      c.BuildStallTimeout.String(),
 		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
 		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
 		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),

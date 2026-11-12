@@ -861,15 +861,14 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		stopClose := closeOnCancel(response)
 		defer func() { stopClose() }()
 		providerModel := entry.model.ID
+		// sentOutput 表示下游已收到本次生成的事件
 		sentOutput := false
 		send := func(event Event) error {
 			providerModel = cmp.Or(event.ProviderModel, providerModel)
 			event.ProviderModel = providerModel
 			select {
 			case events <- event:
-				if event.Kind != EventUsage && event.Kind != EventError && event.Kind != EventFinish {
-					sentOutput = true
-				}
+				sentOutput = true
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1040,30 +1039,17 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return
 		}
 		if finish != nil && contentPolicyFinish(finish.FinishReason) {
-			if sentOutput {
-				if usage == nil {
-					usage = previousUsage
-				}
-				if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
-					return
-				}
+			if usage == nil {
+				usage = previousUsage
+			}
+			policy := &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
+			if !sentOutput {
+				policy.Usage = usage
+			} else if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
+				return
 			}
 			if ctx.Err() == nil {
-				_ = send(Event{Kind: EventError, Err: &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
-			}
-			return
-		}
-		if finish != nil && abnormalGenerationFinish(finish.FinishReason) {
-			if sentOutput {
-				if usage == nil {
-					usage = previousUsage
-				}
-				if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
-					return
-				}
-			}
-			if ctx.Err() == nil {
-				_ = send(Event{Kind: EventError, Err: &AbnormalFinishError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
+				_ = send(Event{Kind: EventError, Err: policy})
 			}
 			return
 		}

@@ -32,8 +32,6 @@ type PooledService struct {
 	ContinuationRewrite bool
 	// ContinuationPrompt 是改写末尾 assistant 轮时写入系统指令的续写提示词，为空时末尾 assistant 正文作为最后一轮 user
 	ContinuationPrompt string
-	// AssistantFallback 在候选账户全部冷却或额度耗尽时回退至写代码助手 -build 通道
-	AssistantFallback bool
 	// omniVideos 记录本进程中尚无结果文件的 Omni 视频任务：值为 nil 时仍在生成，为 error 时生成失败
 	omniVideos sync.Map
 	// inlineMediaMu 保护 inlineMediaUses
@@ -684,15 +682,9 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		pinned = true
 	}
 	var requestErr error
-	var cooling *AllCoolingError
 	for attempt := 0; attempt < accountAttemptLimit(s.pool, pinned); attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
 		if err != nil {
-			if s.AssistantFallback && !strings.HasSuffix(modelID, "-build") && s.pool.AssistantModel(modelID+"-build") &&
-				(errors.Is(err, ErrNoEligibleAccount) || errors.As(err, &cooling)) {
-				request.Model = "models/" + modelID + "-build"
-				return s.Generate(ctx, request)
-			}
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
 				return nil, requestErr
 			}
@@ -719,19 +711,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 			requestErr = errors.Join(requestErr, stateErr, lease.Release())
 		}
 		if !retryable || !owned || stateErr != nil {
-			if owned && s.AssistantFallback && !strings.HasSuffix(modelID, "-build") && s.pool.AssistantModel(modelID+"-build") {
-				if _, quotaErr := QuotaCooldownForError(err, time.Now()); quotaErr {
-					request.Model = "models/" + modelID + "-build"
-					return s.Generate(ctx, request)
-				}
-			}
 			return nil, requestErr
-		}
-	}
-	if _, leased := AccountLeaseFromContext(ctx); !leased && s.AssistantFallback && !strings.HasSuffix(modelID, "-build") && s.pool.AssistantModel(modelID+"-build") {
-		if _, quotaErr := QuotaCooldownForError(requestErr, time.Now()); quotaErr {
-			request.Model = "models/" + modelID + "-build"
-			return s.Generate(ctx, request)
 		}
 	}
 	return nil, requestErr

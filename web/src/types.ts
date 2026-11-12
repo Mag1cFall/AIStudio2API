@@ -358,7 +358,6 @@ export interface ServiceConfig {
   google_search: boolean
   continuation_rewrite: boolean
   continuation_prompt: string
-  assistant_fallback: boolean
   strip_thought_signatures: boolean
   first_event_hedge: string
   first_event_hedge_models: string
@@ -377,7 +376,6 @@ export interface ServiceConfig {
   proxy_pool: ProxyPoolEntry[]
   init_timeout: string
   request_timeout: string
-  build_stall_timeout: string
   warm_worker_limit: number
   max_active_workers: number
   warm_startup_concurrency: number
