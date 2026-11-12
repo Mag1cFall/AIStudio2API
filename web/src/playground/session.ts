@@ -10,7 +10,6 @@ import {
   shallowReactive,
   toRaw,
   watch,
-  watchEffect,
   type InjectionKey,
 } from 'vue'
 import { api, ApiError } from '@/api'
@@ -41,7 +40,6 @@ import {
   buildRequest,
   continuation,
   countTokens,
-  countTokensDetailed,
   failureText,
 } from './request'
 import type {
@@ -230,11 +228,10 @@ function models(): Model[] {
   return useConsole().models.value
 }
 
-// SessionLinks 是对话实例与页面其他窗格的关联：compare 返回随对话一起保存的右侧窗格，save 是右侧窗格变化时保存页面对话的函数，draft 返回共用的输入框文本与附件
+// SessionLinks 是对话实例与页面其他窗格的关联：compare 返回随对话一起保存的右侧窗格，save 是右侧窗格变化时保存页面对话的函数
 interface SessionLinks {
   compare?: () => CompareData | undefined
   save?: () => Promise<void>
-  draft?: () => { text: string; attachments: Part[] }
 }
 
 // createSession 创建一个对话实例，temporary 为真时不单独写入对话库
@@ -252,10 +249,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     temporary,
     rawMode: false,
     promptTokens: null as number | null,
-    inputTokens: null as number | null,
-    outputTokens: 0,
-    cachedTokens: 0,
-    systemTokens: null as number | null,
     saveState: 'idle' as SaveState,
     loadError: '',
     loading: false,
@@ -266,69 +259,16 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // opened 是 open 装入的运行设置，换入它引起的设置变化不触发保存
   let opened: RunSettings | undefined
   let tokenController: AbortController | undefined
-  let tokenTimer = 0
-  let lastTokenKey = ''
-  let pendingTokenKey = ''
-  let lastSystemKey = ''
-  // countedTotalTokens 是最近一次 countTokens 统计到的对话与草稿文本总 token 数（含末尾模型轮次的可见正文與已抽帧视频）
-  const countedTotalTokens = ref<number | null>(null)
-  // turnCounts 记录每一轮在 countTokens 中占用的可见 token 数，删除轮次或切换末尾模型轮次时同步扣除
-  const turnCounts = reactive(new Map<string, number>())
   const scope = effectScope(true)
-
-  // draftSource 返回本窗格使用的输入框文本与附件，对比模式的右侧窗格共用主输入框
-  const draftSource = () =>
-    links.draft ? links.draft() : { text: session.draft, attachments: session.attachments }
 
   // currentModel 返回当前所选模型
   const currentModel = scope.run(() =>
     computed(() => models().find((model) => model.id === session.settings.model)),
   )!
 
-  // draftAttachmentTokens 是输入框中待发送附件的 token 之和，附件计数完成或移除时立即生效
-  const draftAttachmentTokens = scope.run(() =>
-    computed(() =>
-      draftSource().attachments.reduce((sum, part) => sum + (part.tokenCount ?? 0), 0),
-    ),
-  )!
-
-  // activeModelTurn 返回当前作为本轮输出的末尾模型轮次；输入框有待发送内容时末尾模型轮次并入下一轮输入历史
-  const activeModelTurn = scope.run(() =>
-    computed(() => {
-      const source = draftSource()
-      if (source.text.trim() !== '' || source.attachments.length > 0) return undefined
-      const last = session.turns.at(-1)
-      if (last?.role !== 'model') return undefined
-      return last.tokens !== undefined || turnCounts.has(last.id) ? last : undefined
-    }),
-  )!
-
-  // visibleTurnTokens 返回模型轮次在上下文中占用的非思考可见 token 数
-  function visibleTurnTokens(turn: Turn): number {
-    const counted = turnCounts.get(turn.id)
-    if (counted !== undefined) return counted
-    return Math.max(0, (turn.tokens ?? 0) - (turn.thoughtTokens ?? 0))
-  }
-
-  // outputTokens 是当前末尾模型轮次的输出 token 数
-  const outputTokens = scope.run(() =>
-    computed(() => {
-      const tail = activeModelTurn.value
-      if (!tail) return 0
-      return tail.tokens ?? turnCounts.get(tail.id) ?? 0
-    }),
-  )!
-
-  // cachedTokens 是当前末尾模型轮次的缓存命中 token 数
-  const cachedTokens = scope.run(() => computed(() => activeModelTurn.value?.cachedTokens ?? 0))!
-
   // newChat 丢弃尚未写入的保存与生成，开始一个空白对话，systemInstruction 为新对话的系统指令
   function newChat(systemInstruction = ''): void {
     discard()
-    lastTokenKey = ''
-    lastSystemKey = ''
-    countedTotalTokens.value = null
-    turnCounts.clear()
     Object.assign(session, {
       id: null,
       title: '',
@@ -339,15 +279,10 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       attachments: [],
       running: false,
       promptTokens: null,
-      inputTokens: null,
-      outputTokens: 0,
-      cachedTokens: 0,
-      systemTokens: null,
       saveState: 'idle',
       loadError: '',
       rawMode: false,
     })
-    if (systemInstruction.trim() !== '') scheduleTokens()
   }
 
   // ensureModel 在目录到达后为没有模型的对话补上默认模型
@@ -384,10 +319,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     session.loadError = ''
     try {
       const prompt = loaded ?? (await api.prompt<PromptData>(id))
-      lastTokenKey = ''
-      lastSystemKey = ''
-      countedTotalTokens.value = null
-      turnCounts.clear()
       Object.assign(session, {
         id,
         title: prompt.title,
@@ -399,10 +330,6 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         running: false,
         temporary: false,
         promptTokens: null,
-        inputTokens: null,
-        outputTokens: 0,
-        cachedTokens: 0,
-        systemTokens: null,
         saveState: 'saved',
       })
       opened = session.settings
@@ -472,170 +399,41 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     return saveTimer.value !== 0 || session.running
   }
 
-  // discard 撤销尚未到时的合并保存与 token 统计并中止生成
+  // discard 撤销尚未到时的合并保存并中止生成
   function discard(): void {
     window.clearTimeout(saveTimer.value)
     saveTimer.value = 0
-    window.clearTimeout(tokenTimer)
-    tokenTimer = 0
-    pendingTokenKey = ''
-    tokenController?.abort()
     controller?.abort()
   }
 
-  // requestTurns 返回需要发往 countTokens 统计的轮次与已抽帧计数的视频片段
-  function requestTurns(): { turns: Turn[]; sources: Turn[]; framed: Part[] } {
-    const source = draftSource()
-    const text = source.text.trim()
-    const rawTurns =
-      text === ''
-        ? session.turns
-        : [
-            ...session.turns,
-            { id: 'draft', role: 'user' as const, parts: [{ text: source.text }], created: 0 },
-          ]
-    const framed = session.turns.flatMap((turn) => turn.parts.filter(framedVideo))
-    const turns: Turn[] = []
-    const sources: Turn[] = []
-    for (const turn of rawTurns) {
-      const parts = turn.parts.filter(
-        (part) =>
-          !framedVideo(part) &&
-          !(part.thought && part.text !== undefined && !part.thoughtSignature),
-      )
-      if (parts.length === 0) {
-        const turnFramed = turn.parts
-          .filter(framedVideo)
-          .reduce((sum, part) => sum + part.tokenCount!, 0)
-        turnCounts.set(turn.id, turnFramed)
-        continue
-      }
-      turns.push({ ...turn, parts })
-      sources.push(turn)
-    }
-    return { turns, sources, framed }
-  }
-
-  // hasSystemInput 表示当前有可统计 token 的系统指令
-  function hasSystemInput(): boolean {
-    if (session.settings.systemInstruction.trim() === '') return false
-    return hasCode(currentModel.value, Capability.SystemInstruction)
-  }
-
-  // scheduleTokens 在文本或设置变化后合并统计 token，输入清空时立即清零
-  function scheduleTokens(): void {
-    window.clearTimeout(tokenTimer)
-    tokenTimer = 0
-    const hasSystem = hasSystemInput()
-    if (!hasSystem) {
-      lastSystemKey = ''
-      session.systemTokens = null
-    }
-    const { turns, framed } = requestTurns()
-    if (
-      currentModel.value === undefined ||
-      (turns.length === 0 && framed.length === 0 && !hasSystem)
-    ) {
-      pendingTokenKey = ''
-      lastTokenKey = ''
-      tokenController?.abort()
-      countedTotalTokens.value = null
-      return
-    }
-    tokenTimer = window.setTimeout(() => {
-      tokenTimer = 0
-      if (!session.running) void refreshTokens()
-    }, 250)
-  }
-
-  // refreshTokens 与官网一致统计当前对话与输入框的 token：与 open 保持同一请求口径，相同请求不重复发送
+  // refreshTokens 与官网一致统计当前对话的输入 token：已按抽帧计数的视频取其 token 数，其余内容用 countTokens 统计
   async function refreshTokens(): Promise<void> {
-    window.clearTimeout(tokenTimer)
-    tokenTimer = 0
-    const model = currentModel.value
-    const hasSystem = hasSystemInput()
-    if (!hasSystem) {
-      lastSystemKey = ''
-      session.systemTokens = null
-    }
-    if (model === undefined) {
-      pendingTokenKey = ''
-      lastTokenKey = ''
-      tokenController?.abort()
-      countedTotalTokens.value = null
-      return
-    }
-    const { turns, sources, framed } = requestTurns()
-    if (turns.length === 0 && framed.length === 0 && !hasSystem) {
-      pendingTokenKey = ''
-      lastTokenKey = ''
-      tokenController?.abort()
-      countedTotalTokens.value = null
-      return
-    }
-    const framedTokens = framed.reduce((sum, part) => sum + part.tokenCount!, 0)
-    if (turns.length === 0 && !hasSystem) {
-      pendingTokenKey = ''
-      lastTokenKey = ''
-      tokenController?.abort()
-      countedTotalTokens.value = framedTokens
-      return
-    }
-    const request = buildRequest(session.settings, model, turns)
-    const ids = sources.map((turn) => turn.id).join(',')
-    const key = `${model.id}:${framedTokens}:${ids}:${JSON.stringify(request)}`
-    const systemReady = !hasSystem || session.systemTokens !== null
-    if (key === pendingTokenKey) return
-    if (key === lastTokenKey && countedTotalTokens.value !== null && systemReady) return
     tokenController?.abort()
+    const model = currentModel.value
+    if (model === undefined || session.turns.length === 0) {
+      session.promptTokens = null
+      return
+    }
     const counter = new AbortController()
     tokenController = counter
-    pendingTokenKey = key
     try {
-      const result = await countTokensDetailed(model.id, apiKey(), request, counter.signal)
-      if (counter.signal.aborted) return
-      if (result.contentTokens) {
-        sources.forEach((turn, index) => {
-          const count = result.contentTokens?.[index]
-          if (count === undefined) return
-          const turnFramed = turn.parts
-            .filter(framedVideo)
-            .reduce((sum, part) => sum + part.tokenCount!, 0)
-          turnCounts.set(turn.id, count + turnFramed)
-          if (turn.role === 'model' && turn.tokens === undefined) turn.tokens = count
-        })
-      }
-      countedTotalTokens.value = result.totalTokens + framedTokens
-      if (hasSystem) {
-        const sysKey = `${model.id}:${session.settings.systemInstruction}`
-        const direct =
-          result.systemTokens ??
-          (turns.length === 0
-            ? (result.contentTokens?.[0] ?? (!request.tools ? result.totalTokens : undefined))
-            : undefined)
-        if (direct !== undefined) {
-          session.systemTokens = direct
-          lastSystemKey = sysKey
-        } else if (sysKey !== lastSystemKey || session.systemTokens === null) {
-          const sysCount = await countTokens(
-            model.id,
-            apiKey(),
-            {
-              contents: [{ role: 'user', parts: [{ text: session.settings.systemInstruction }] }],
-              generationConfig: {},
-            },
-            counter.signal,
-          )
-          if (counter.signal.aborted) return
-          session.systemTokens = sysCount
-          lastSystemKey = sysKey
-        }
-      }
-      lastTokenKey = key
+      const framed = session.turns.flatMap((turn) => turn.parts.filter(framedVideo))
+      const turns = session.turns
+        .map((turn) => ({ ...turn, parts: turn.parts.filter((part) => !framedVideo(part)) }))
+        .filter((turn) => turn.parts.length > 0)
+      const counted =
+        turns.length === 0
+          ? 0
+          : await countTokens(
+              model.id,
+              apiKey(),
+              buildRequest(session.settings, model, turns),
+              counter.signal,
+            )
+      const count = framed.reduce((sum, part) => sum + part.tokenCount!, counted)
+      if (!counter.signal.aborted) session.promptTokens = count
     } catch {
       // 统计失败时保留上一次的数字
-    } finally {
-      if (pendingTokenKey === key) pendingTokenKey = ''
     }
   }
 
@@ -667,20 +465,12 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   function append(): boolean {
     const text = session.draft.trim()
     if (text === '' && session.attachments.length === 0) return false
-    const attachSum = session.attachments.reduce((sum, part) => sum + (part.tokenCount ?? 0), 0)
     const parts: Part[] = [...session.attachments]
     if (text !== '') parts.push({ text: session.draft })
-    const turn: Turn = { id: newTurnID(), role: 'user', parts, created: Date.now() }
-    if (attachSum > 0) {
-      turnCounts.set(turn.id, attachSum)
-      countedTotalTokens.value = (countedTotalTokens.value ?? 0) + attachSum
-    }
-    session.turns.push(turn)
+    session.turns.push({ id: newTurnID(), role: 'user', parts, created: Date.now() })
     session.draft = ''
     session.attachments = []
-    lastTokenKey = ''
     scheduleSave()
-    void refreshTokens()
     return true
   }
 
@@ -752,15 +542,9 @@ function createSession(temporary = false, links: SessionLinks = {}) {
           if (update.finishReason) turn.finishReason = update.finishReason
           if (update.tokens !== undefined) turn.tokens = update.tokens
           if (update.thoughtTokens !== undefined) turn.thoughtTokens = update.thoughtTokens
-          if (update.cachedTokens !== undefined) turn.cachedTokens = update.cachedTokens
           if (update.promptTokens !== undefined) {
             tokenController?.abort()
-            pendingTokenKey = ''
-            lastTokenKey = ''
-            const visibleOut = Math.max(0, (turn.tokens ?? 0) - (turn.thoughtTokens ?? 0))
-            turnCounts.set(turn.id, visibleOut)
-            countedTotalTokens.value =
-              Math.max(0, update.promptTokens - draftAttachmentTokens.value) + visibleOut
+            session.promptTokens = update.promptTokens + (turn.tokens ?? 0)
           }
           if (update.sources) turn.sources = update.sources
           if (update.supports) turn.supports = update.supports
@@ -784,17 +568,11 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         turn.parts.length === 0 &&
         turn.error === undefined &&
         turn.finishReason === undefined
-      ) {
-        turnCounts.delete(turn.id)
+      )
         session.turns.splice(index, 1)
-      }
       if (!links.save && session.title === '' && session.turns.includes(turn))
         void generateTitle(model.id)
-      if (session.turns === owner) {
-        lastTokenKey = ''
-        scheduleSave()
-        void refreshTokens()
-      }
+      if (session.turns === owner) scheduleSave()
     }
   }
 
@@ -822,27 +600,10 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     controller?.abort()
   }
 
-  // removeTurns 从 start 起移除轮次并立即从已统计的总 token 中扣除它们占用的部分
-  function removeTurns(start: number, count = session.turns.length - start): void {
-    const removed = session.turns.splice(start, count)
-    let deducted = 0
-    for (const item of removed) {
-      const tokens =
-        turnCounts.get(item.id) ?? Math.max(0, (item.tokens ?? 0) - (item.thoughtTokens ?? 0))
-      turnCounts.delete(item.id)
-      deducted += tokens
-    }
-    if (countedTotalTokens.value !== null && deducted > 0)
-      countedTotalTokens.value = Math.max(0, countedTotalTokens.value - deducted)
-    if (session.turns.length === 0 && !hasSystemInput() && draftSource().text.trim() === '')
-      countedTotalTokens.value = null
-    lastTokenKey = ''
-  }
-
   // rerun 从某一轮重新生成：模型轮次替换自身，用户轮次替换其后的回复
   function rerun(index: number): void {
     if (session.running) return
-    removeTurns(session.turns[index]!.role === 'model' ? index : index + 1)
+    session.turns.splice(session.turns[index]!.role === 'model' ? index : index + 1)
     void run()
   }
 
@@ -866,57 +627,36 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       ],
       created: Date.now(),
     })
-    lastTokenKey = ''
     void run()
   }
 
-  // forgetInteractions 去掉从 index 起各模型轮的交互 ID 与缓存统计：这些轮次的上游上下文已变化
+  // forgetInteractions 去掉从 index 起各模型轮的交互 ID：这些交互的上游上下文含有被修改的轮次，之后不从它们续接
   function forgetInteractions(index: number): void {
-    for (const turn of session.turns.slice(index)) {
-      delete turn.interactionId
-      delete turn.cachedTokens
-    }
+    for (const turn of session.turns.slice(index)) delete turn.interactionId
   }
 
-  // editTurn 用新文本替换某一轮的文本片段，保留文本与附件的相对位置，文本有变化时其后的交互不再用于续接
+  // editTurn 用新文本替换某一轮的正文：新文本放在首个正文片段的位置，其他片段保持原有顺序，文本有变化时其后的交互不再用于续接
   function editTurn(index: number, text: string): void {
     const turn = session.turns[index]!
+    const body = (part: Part) => part.text !== undefined && !part.thought
     const current = turn.parts
-      .filter((part) => part.text !== undefined && !part.thought)
+      .filter(body)
       .map((part) => part.text)
       .join('')
-    if (text === current) return
-    forgetInteractions(index)
-    if (turn.role === 'model') {
-      delete turn.tokens
-      delete turn.thoughtTokens
-    }
-    const firstText = turn.parts.findIndex((part) => part.text !== undefined && !part.thought)
-    const others = turn.parts.filter((part) => part.text === undefined || part.thought)
-    if (text === '') {
-      turn.parts = others
-    } else if (firstText === -1) {
-      turn.parts = [...others, { text }]
-    } else {
-      const before = turn.parts
-        .slice(0, firstText)
-        .filter((part) => part.text === undefined || part.thought)
-      const after = turn.parts
-        .slice(firstText + 1)
-        .filter((part) => part.text === undefined || part.thought)
-      turn.parts = [...before, { text }, ...after]
-    }
-    lastTokenKey = ''
+    if (text !== current) forgetInteractions(index)
+    const first = turn.parts.findIndex(body)
+    turn.parts = turn.parts.flatMap((part, at) =>
+      !body(part) ? [part] : at === first && text !== '' ? [{ text }] : [],
+    )
+    if (first === -1 && text !== '') turn.parts.push({ text })
     scheduleSave()
-    void refreshTokens()
   }
 
   // deleteTurn 删除一轮，其后的交互不再用于续接
   function deleteTurn(index: number): void {
-    removeTurns(index, 1)
+    session.turns.splice(index, 1)
     forgetInteractions(index)
     scheduleSave()
-    void refreshTokens()
   }
 
   // branch 以前 index+1 轮创建新对话并返回其 ID
@@ -957,9 +697,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       for (const url of item.images ?? []) {
         const response = await fetch(url)
         if (!response.ok) throw new Error(`${response.status} ${url}`)
-        const part: Part = { inlineData: await readImage(await response.blob()) }
-        session.attachments.push(part)
-        void countAttachment(part)
+        session.attachments.push({ inlineData: await readImage(await response.blob()) })
       }
     } catch (error) {
       const failed = useI18n().t('pg.sampleImageFailed')
@@ -977,29 +715,11 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // dispose 中止生成与保存并停止监听
   function dispose(): void {
     discard()
+    tokenController?.abort()
     scope.stop()
   }
 
   scope.run(() => {
-    watchEffect(
-      () => {
-        const attach = draftAttachmentTokens.value
-        const tail = activeModelTurn.value
-        const out = outputTokens.value
-        const cached = cachedTokens.value
-        const tailVisible = tail ? visibleTurnTokens(tail) : 0
-        const baseInput =
-          countedTotalTokens.value !== null
-            ? Math.max(0, countedTotalTokens.value - tailVisible)
-            : null
-        const input = baseInput !== null || attach > 0 ? (baseInput ?? 0) + attach : null
-        session.inputTokens = input
-        session.outputTokens = out
-        session.cachedTokens = cached
-        session.promptTokens = input !== null || out > 0 ? (input ?? 0) + out : null
-      },
-      { flush: 'sync' },
-    )
     watch(
       () => [session.settings, session.temporary] as const,
       ([settings], [previous]) => {
@@ -1009,31 +729,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       { deep: true },
     )
     watch(
-      () => [
-        draftSource().text,
-        session.settings.systemInstruction,
-        session.settings.functionDeclarations,
-        session.settings.mediaResolution,
-        ...session.settings.tools,
-      ],
-      () => scheduleTokens(),
-    )
-    watch(
       () => currentModel.value?.id,
-      (id, previous) => {
-        lastTokenKey = ''
-        lastSystemKey = ''
-        if (previous !== undefined && id !== previous) {
-          for (const turn of session.turns) {
-            delete turn.cachedTokens
-            for (const part of turn.parts) {
-              if (uploadedVideo(part)) void countAttachment(part)
-            }
-          }
-        }
-        for (const part of session.attachments) void countAttachment(part)
-        void refreshTokens()
-      },
+      () => void refreshTokens(),
     )
   })
 
@@ -1180,12 +877,7 @@ const running = computed(() => panes.some((pane) => pane.session.running))
 
 // addPane 以 data 的运行设置与对话加入右侧窗格并返回它，右侧窗格变化时保存页面对话
 function addPane(data: PaneData): Playground {
-  const pane = page(
-    createSession(true, {
-      save: main.save,
-      draft: () => ({ text: main.session.draft, attachments: main.session.attachments }),
-    }),
-  )
+  const pane = page(createSession(true, { save: main.save }))
   pane.session.settings = cloneData(data.settings)
   pane.session.turns = cloneData(data.turns)
   panes.push(pane)
@@ -1199,9 +891,9 @@ function enterCompare(): void {
     settings: main.session.settings,
     turns: main.session.turns.map((turn) => ({ ...turn, id: newTurnID() })),
   })
+  pane.session.promptTokens = main.session.promptTokens
   pane.session.rawMode = main.session.rawMode
   syncInstructions.value = true
-  void pane.refreshTokens()
 }
 
 // leaveCompare 关闭右侧窗格回到单对话
@@ -1218,8 +910,8 @@ function closePane(index: number): void {
     Object.assign(main.session, {
       settings: right.session.settings,
       turns: right.session.turns,
+      promptTokens: right.session.promptTokens,
     })
-    void main.refreshTokens()
   }
   leaveCompare()
   if (main.session.id !== null) void main.save()

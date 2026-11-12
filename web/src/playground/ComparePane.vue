@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
@@ -7,11 +7,10 @@ import ChatSession from './ChatSession.vue'
 import GetCodeDialog from './GetCodeDialog.vue'
 import ModelCard from './ModelCard.vue'
 import RunSettings from './RunSettings.vue'
-import TokenCountTooltip from './TokenCountTooltip.vue'
 import { providePlayground, useCompare, type Playground } from './session'
 
 const props = defineProps<{ pane: Playground; index: number }>()
-const { t } = useI18n()
+const { t, tokenLabel } = useI18n()
 const { closePane } = useCompare()
 providePlayground(props.pane)
 const { session, currentModel } = props.pane
@@ -19,6 +18,11 @@ const { session, currentModel } = props.pane
 const settingsOpen = ref(false)
 const codeOpen = ref(false)
 const confirmClose = ref(false)
+
+// tokens 是窗格对话的 token 数
+const tokens = computed(() =>
+  session.promptTokens === null ? '' : tokenLabel(session.promptTokens),
+)
 
 // close 确认后关闭窗格
 function close(): void {
@@ -39,7 +43,7 @@ function close(): void {
         @select="pane.selectModel($event.id)"
         @agent-model="session.settings.agentModel = $event"
       />
-      <TokenCountTooltip />
+      <span v-if="tokens" class="token-count">{{ tokens }}</span>
       <button
         v-tooltip.below="t('pg.paneGetCodeTip')"
         type="button"
@@ -119,6 +123,12 @@ function close(): void {
   justify-content: end;
   gap: 8px;
   margin: 12px 20px;
+}
+
+.token-count {
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
 }
 
 .settings-overlay {
