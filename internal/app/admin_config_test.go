@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -36,13 +35,11 @@ func TestAdminConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "test-password") || !value.AdminPasswordSet || !value.BuildNativeNonstream || value.BuildStallTimeout != "2m0s" || value.AssistantFallback {
+	if strings.Contains(string(raw), "test-password") || !value.AdminPasswordSet || !value.BuildNativeNonstream {
 		t.Fatalf("config=%s", raw)
 	}
 	value.Proxy = "http://127.0.0.1:1234"
 	value.AutoStart = true
-	value.BuildStallTimeout = "90s"
-	value.AssistantFallback = true
 	if _, err := admin.UpdateRuntimeConfig(ctx, value); err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +47,8 @@ func TestAdminConfig(t *testing.T) {
 	if err != nil || saved.AdminPassword != cfg.AdminPassword {
 		t.Fatalf("password changed: %v", err)
 	}
-	if !saved.AutoStart || saved.BuildStallTimeout != 90*time.Second || !saved.AssistantFallback {
-		t.Fatalf("saved=%+v", saved)
+	if !saved.AutoStart {
+		t.Fatal("auto_start was not saved")
 	}
 	manager := &runtimeManager{activeManagement: cfg}
 	password := "new-test-password"

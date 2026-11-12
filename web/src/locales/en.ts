@@ -299,8 +299,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': 'Default proxy',
   'settings.initTimeout': 'Init timeout',
   'settings.requestTimeout': 'Request timeout',
-  'settings.buildStallTimeout': 'Build pre-response stall timeout',
-  'settings.assistantFallback': 'Fall back to Build chat when cooling',
   'settings.warmWorkerLimit': 'Warm workers',
   'settings.maxActiveWorkers': 'Peak worker limit',
   'settings.warmStartupConcurrency': 'Camoufox startup concurrency',
@@ -1752,10 +1750,6 @@ export const messages: Record<TranslationKey, string> = {
   'settings.youtubeLinksHelp': 'Send YouTube links in user message text to the model as video',
   'settings.initTimeoutHelp': 'Maximum WAA initialization time per account.',
   'settings.requestTimeoutHelp': 'Maximum run time of one request.',
-  'settings.buildStallTimeoutHelp':
-    'Maximum stall time on Build and code assistant before text, tool calls, or media are emitted; switches to the next account on timeout.',
-  'settings.assistantFallbackHelp':
-    'Automatically fall back to the model’s -build code assistant channel when all candidate accounts are in quota cooldown.',
   'settings.unitSeconds': 'seconds',
   'settings.unitMinutes': 'minutes',
   'settings.timeUnit': 'Time unit',

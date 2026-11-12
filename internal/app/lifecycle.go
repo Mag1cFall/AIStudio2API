@@ -637,17 +637,9 @@ func (manager *runtimeManager) decorateRuntimeConfig(value api.RuntimeConfig, ac
 func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dataConfigOverrides) bool {
 	initTimeout, _ := time.ParseDuration(value.InitTimeout)
 	requestTimeout, _ := time.ParseDuration(value.RequestTimeout)
-	buildStallTimeout, _ := time.ParseDuration(value.BuildStallTimeout)
-	if buildStallTimeout <= 0 {
-		buildStallTimeout = config.DefaultBuildStallTimeout
-	}
-	activeBuildStallTimeout := active.BuildStallTimeout
-	if activeBuildStallTimeout <= 0 {
-		activeBuildStallTimeout = config.DefaultBuildStallTimeout
-	}
 	saved := config.Config{
 		AuthStates: value.AuthStates, Proxy: value.Proxy,
-		InitTimeout: initTimeout, RequestTimeout: requestTimeout, BuildStallTimeout: buildStallTimeout, StripThoughtSignatures: value.StripThoughtSignatures,
+		InitTimeout: initTimeout, RequestTimeout: requestTimeout, StripThoughtSignatures: value.StripThoughtSignatures,
 		UpstreamChannels:      value.UpstreamChannels,
 		ModelMapping:          value.ModelMapping,
 		WAABackend:            value.WAABackend,
@@ -659,7 +651,6 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		GoogleSearch:          value.GoogleSearch,
 		FirstEventHedge:       value.FirstEventHedge,
 		FirstEventHedgeModels: value.FirstEventHedgeModels,
-		AssistantFallback:     value.AssistantFallback,
 		ContinuationRewrite:   value.ContinuationRewrite,
 		ContinuationPrompt:    value.ContinuationPrompt,
 		MediaOutput:           value.MediaOutput,
@@ -668,14 +659,12 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	overrides.Apply(&saved)
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
 		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
-		saved.BuildStallTimeout == activeBuildStallTimeout &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
 		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
 		saved.SearchModelAliases == active.SearchModelAliases && saved.GoogleSearch == active.GoogleSearch &&
-		saved.AssistantFallback == active.AssistantFallback &&
 		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL
 }
