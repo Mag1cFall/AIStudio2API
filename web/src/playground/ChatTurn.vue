@@ -458,7 +458,7 @@ async function startEdit(): Promise<void> {
   editing.value = true
   await nextTick()
   resizeEditor()
-  editor.value!.focus()
+  editor.value!.focus({ preventScroll: true })
 }
 
 // finishEdit 保存编辑结果
@@ -468,11 +468,11 @@ function finishEdit(): void {
   playground.editTurn(props.index, draft.value)
 }
 
-// onEditorKeydown 处理编辑框快捷键：Escape 取消编辑，提交键保存并重新运行用户轮次，追加键只保存
+// onEditorKeydown 处理编辑框快捷键：Escape 与追加键保存，提交键保存并重新运行用户轮次
 function onEditorKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault()
-    editing.value = false
+    finishEdit()
     return
   }
   if (session.running) return
@@ -490,8 +490,12 @@ function onEditorKeydown(event: KeyboardEvent): void {
 function onEditorBlur(event: FocusEvent): void {
   if (!document.hasFocus()) return
   const target = event.relatedTarget
-  if (target instanceof HTMLElement && target.classList.contains('chat-turn-container')) {
-    editor.value?.focus()
+  if (
+    target instanceof HTMLElement &&
+    target.classList.contains('chat-turn-container') &&
+    root.value?.contains(target)
+  ) {
+    editor.value?.focus({ preventScroll: true })
     return
   }
   finishEdit()

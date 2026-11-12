@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSelect from '@/playground/ui/UiSelect.vue'
@@ -7,7 +6,7 @@ import UiSlidingPanel from '@/playground/ui/UiSlidingPanel.vue'
 import { useInstructionPresets, usePlayground } from './session'
 
 const open = defineModel<boolean>('open', { required: true })
-const { t, tokenLabel } = useI18n()
+const { t } = useI18n()
 const { session } = usePlayground()
 const { presets, selected, title, saved, saveError, currentPreset, remember, choose, remove } =
   useInstructionPresets(
@@ -17,24 +16,13 @@ const { presets, selected, title, saved, saveError, currentPreset, remember, cho
       session.settings.systemInstruction = value
     },
   )
-// statusText 是面板标题栏显示的保存状态与系统指令占用的 token 数
-const statusText = computed(() => {
-  const status = saveError.value
-    ? t('pg.saveFailed')
-    : saved.value
-      ? t('pg.saved')
-      : t('pg.savingShort')
-  return session.systemTokens !== null && session.systemTokens > 0
-    ? `${status} · ${tokenLabel(session.systemTokens)}`
-    : status
-})
 </script>
 
 <template>
   <UiSlidingPanel v-model:open="open" :title="t('pg.systemInstructions')">
     <template #status>
       <span class="saving-status" :class="{ visible: session.settings.systemInstruction !== '' }">
-        {{ statusText }}
+        {{ saveError ? t('pg.saveFailed') : saved ? t('pg.saved') : t('pg.savingShort') }}
       </span>
     </template>
     <div class="panel-content-wrapper">
