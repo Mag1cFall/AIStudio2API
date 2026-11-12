@@ -2297,6 +2297,10 @@ func (service *trackedService) settleAttempt(
 		Account: accountLabel, Channel: string(lease.Channel()), Error: err.Error(),
 		DurationMS: time.Since(attempt.startedAt).Milliseconds(), Hedge: attempt.hedge,
 	})
+	var policy *aistudio.ContentPolicyError
+	if errors.As(err, &policy) && policy.Usage != nil {
+		api.SetAccessLogGenerationResult(requestCtx, policy.Usage, 0)
+	}
 	if proxyNetworkError(requestCtx, err) {
 		service.reportProxyFailure(proxy, accountLabel, err)
 	}
