@@ -33,6 +33,8 @@ type PromptFeedbackError struct {
 type ContentPolicyError struct {
 	Reason  string
 	Message string
+	// Usage 是下游还没有收到事件就结束时上游给出的用量
+	Usage *Usage
 }
 
 // Error 返回上游结束生成的内容策略原因

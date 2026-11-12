@@ -861,11 +861,14 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		stopClose := closeOnCancel(response)
 		defer func() { stopClose() }()
 		providerModel := entry.model.ID
+		// sentOutput 表示下游已收到本次生成的事件
+		sentOutput := false
 		send := func(event Event) error {
 			providerModel = cmp.Or(event.ProviderModel, providerModel)
 			event.ProviderModel = providerModel
 			select {
 			case events <- event:
+				sentOutput = true
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1011,11 +1014,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
 		}
-		if releaseSources() != nil {
-			return
-		}
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
+			if releaseSources() != nil {
+				return
+			}
 			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
 			return
 		}
@@ -1039,12 +1042,18 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			if usage == nil {
 				usage = previousUsage
 			}
-			if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
+			policy := &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
+			if !sentOutput {
+				policy.Usage = usage
+			} else if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
 				return
 			}
 			if ctx.Err() == nil {
-				_ = send(Event{Kind: EventError, Err: &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
+				_ = send(Event{Kind: EventError, Err: policy})
 			}
+			return
+		}
+		if releaseSources() != nil {
 			return
 		}
 		if usage == nil {
