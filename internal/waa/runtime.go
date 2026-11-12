@@ -111,8 +111,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 	var readyOnce sync.Once
 	complete := func(err error) { readyOnce.Do(func() { ready <- err }) }
 	if !loop.post(func() {
-		camou := camouLocale(options.Profile.Locale)
-		mozjs.SetCamouLocale(camou[0], camou[1], camou[2])
+		mozjs.SetCamouLocale(options.Profile.Locale)
 		cx, err := mozjs.NewContext(mozjs.Options{HeapBytes: 1 << 30, Locale: options.Profile.Locale})
 		if err != nil {
 			complete(err)

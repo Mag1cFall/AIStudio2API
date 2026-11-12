@@ -141,11 +141,6 @@ func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accoun
 	return transport.transport.(aistudio.DriveFileChecker).DriveFileExists(ctx, accountID, token, fileID)
 }
 
-// UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
-func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
-	return transport.transport.(aistudio.AssistantUploader).UploadAssistantFile(ctx, accountID, blob)
-}
-
 // newAuthRuntimeRefresher 创建生产环境认证续签器
 func newAuthRuntimeRefresher(
 	workers *accountWorkerManager,

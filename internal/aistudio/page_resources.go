@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -203,6 +204,16 @@ func subresourceHeaders(target, accept, destination, priority string) http.Heade
 		headers.Set("Priority", priority)
 	}
 	return headers
+}
+
+// frontendBundle 返回文档引用的官网前端主程序地址，没有时返回空字符串
+func (document pageDocument) frontendBundle() string {
+	for _, resource := range document.resources {
+		if address, err := url.Parse(resource.url); err == nil && camoufoxnative.FrontendBundle(address) {
+			return resource.url
+		}
+	}
+	return ""
 }
 
 // loadDocumentResources 像 Firefox 解析官网文档一样按文档顺序并发请求样式表与脚本，全部完成后返回

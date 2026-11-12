@@ -270,10 +270,10 @@ func interactionThinkingLevel(config GenerationConfig, defaults GenerationDefaul
 		level = 1
 	case "medium":
 		level = 2
-	case "high":
+	case "high", "xhigh", "extra_high", "max":
 		level = 3
 	default:
-		return 0, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh 或 max")
+		return 0, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh、extra_high 或 max")
 	}
 	if !defaults.ThinkingLevel {
 		return 0, nil

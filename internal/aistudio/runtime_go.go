@@ -32,7 +32,7 @@ const (
 	waaLifetime            = 12 * time.Hour
 	makerSuiteRPCURL       = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
 	loggingContextURL      = makerSuiteRPCURL + "GetLoggingContext"
-	firefoxInnerHeightDiff = 57
+	firefoxInnerHeightDiff = 85
 )
 
 // workerRuntime 是 Camoufox 页面与 SpiderMonkey VM 两种 WAA 后端共同提供的 Worker 能力
@@ -323,6 +323,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 		Logging: logging.body,
 		Tier:    catalog[0],
 		Models:  catalog[1],
+		Bundle:  document.frontendBundle(),
 	}
 	runtime.headers = http.Header{}
 	runtime.headers.Set("user-agent", runtime.userAgent)
@@ -534,7 +535,7 @@ func pageRuntime(options camoufoxnative.Options, client *http.Client, session *s
 	return runtime, fingerprint, nil
 }
 
-// CheckSession 像官网页面一样打开账户的 AI Studio 新对话页，被转到 Google 登录页时返回 camoufoxnative.ErrAuthenticationRequired
+// CheckSession 像官网页面一样打开账户的 AI Studio 新对话页，被转到 Google 登录页时返回 camoufoxnative.ErrAuthenticationRequired，被转到拒绝页时返回对应的 camoufoxnative.AccessDenial
 func CheckSession(ctx context.Context, options camoufoxnative.Options) error {
 	runtime, _, err := newGoPageRuntime(options)
 	if err != nil {
@@ -570,6 +571,9 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 			location, err := response.Location()
 			if err != nil {
 				return "", pageDocument{}, fmt.Errorf("AI Studio 页面跳转无效: %w", err)
+			}
+			if denial := camoufoxnative.PageDenial(location); denial != nil {
+				return "", pageDocument{}, denial
 			}
 			if location.Hostname() == "accounts.google.com" {
 				return "", pageDocument{}, fmt.Errorf("%w url=%s", camoufoxnative.ErrAuthenticationRequired, location.String())
@@ -770,7 +774,7 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 	return waa.ParseChallenge(raw)
 }
 
-// loadInterpreter 按 challenge 指定的 hash 取得解释器并校验摘要：账户页面缓存中新鲜时不发请求，否则像页面脚本一样请求（有本地副本时带条件头）
+// loadInterpreter 按 challenge 指定的 hash 取得解释器并校验摘要：challenge 不带解释器地址或账户页面缓存中新鲜时沿用同 hash 的已有解释器，否则像页面脚本一样请求（有本地副本时带条件头）
 func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.Challenge) (string, error) {
 	if challenge.InterpreterJavaScript != "" {
 		if hash := waa.InterpreterHash([]byte(challenge.InterpreterJavaScript)); hash != challenge.InterpreterHash {
@@ -786,7 +790,7 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 		cached = string(data)
 	}
 	entry, fresh := runtime.pageCache.lookup(challenge.InterpreterURL, time.Now())
-	if cached != "" && fresh {
+	if cached != "" && (fresh || challenge.InterpreterURL == "") {
 		return cached, nil
 	}
 	headers := http.Header{}

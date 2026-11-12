@@ -1353,7 +1353,9 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	defer candidates.cancel()
 	if err := candidates.err; err != nil {
 		candidates.settle(r.Context())
-		writeGeminiFailure(w, r, request, err, stream)
+		if shouldWriteRequestError(r, err) {
+			writeGeminiRequestError(w, err)
+		}
 		return
 	}
 	if stream {
@@ -1372,50 +1374,13 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	})
 	if err != nil {
 		candidates.settle(r.Context())
-		writeGeminiFailure(w, r, request, err, false)
+		if shouldWriteRequestError(r, err) {
+			writeGeminiRequestError(w, err)
+		}
 		return
 	}
 	candidates.record(r.Context(), results)
 	writeJSON(w, http.StatusOK, officialOrder("gemini", buildGeminiResponse(request, output.cache, results)))
-}
-
-// writeGeminiFailure 写出响应头之前的生成失败，上游拒绝输入时按 Gemini API 返回 200 与 promptFeedback
-func writeGeminiFailure(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, err error, stream bool) {
-	if !shouldWriteRequestError(r, err) {
-		return
-	}
-	response, ok := geminiPromptFeedback(request, err)
-	switch {
-	case !ok:
-		writeGeminiRequestError(w, err)
-	case stream:
-		if output, err := openGeminiStream(w, r); err == nil {
-			_ = output.write(response)
-			output.close()
-		}
-	default:
-		writeJSON(w, http.StatusOK, officialOrder("gemini", response))
-	}
-}
-
-// geminiPromptFeedback 把上游输入拒绝投影为不含候选的 Gemini 响应
-func geminiPromptFeedback(request aistudio.GenerateRequest, err error) (map[string]any, bool) {
-	var feedback *aistudio.PromptFeedbackError
-	if !errors.As(err, &feedback) {
-		return nil, false
-	}
-	reason := strings.ToUpper(strings.TrimSpace(feedback.Reason))
-	if reason == "" || reason == "UNSPECIFIED" {
-		reason = "BLOCK_REASON_UNSPECIFIED"
-	}
-	block := map[string]any{"blockReason": reason}
-	if feedback.Message != "" {
-		block["blockReasonMessage"] = feedback.Message
-	}
-	if len(feedback.SafetyRatings) > 0 {
-		block["safetyRatings"] = feedback.SafetyRatings
-	}
-	return map[string]any{"promptFeedback": block, "modelVersion": request.Model, "responseId": request.ID}, true
 }
 
 // buildGeminiResponse 按候选序号输出各候选内容与终止原因，用量为全部候选之和，cache 非空时计入缓存部分
@@ -1824,6 +1789,23 @@ func (stream *geminiStream) write(value map[string]any) error {
 	return http.NewResponseController(stream.w).Flush()
 }
 
+// fail 写出流内错误：SSE 按官方 SDK 的解析方式写成不带 data: 前缀的整块 JSON，JSON 数组中写为一个元素
+func (stream *geminiStream) fail(value map[string]any) error {
+	if stream.keepalive == nil {
+		return stream.write(value)
+	}
+	data, err := json.Marshal(officialOrder("gemini", value))
+	if err != nil {
+		return err
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if _, err := stream.w.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return http.NewResponseController(stream.w).Flush()
+}
+
 // close 停止 SSE 心跳，或结束 JSON 数组
 func (stream *geminiStream) close() {
 	if stream.keepalive != nil {
@@ -1904,11 +1886,7 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 		if !shouldWriteRequestError(r, err) {
 			return
 		}
-		if response, ok := geminiPromptFeedback(request, err); ok {
-			_ = write(response)
-			return
-		}
-		_ = write(map[string]any{"error": map[string]any{
+		_ = stream.fail(map[string]any{"error": map[string]any{
 			"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err),
 		}})
 		return

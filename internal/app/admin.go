@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -111,11 +112,8 @@ func (admin *runtimeAdmin) Status(context.Context) (api.AdminStatus, error) {
 		Version:        buildVersion(),
 		ActiveRequests: admin.requests.count(),
 		Accounts:       counts,
-		Camoufox:       api.AdminCamoufox{Ready: camoufoxnative.Installed()},
+		Camoufox:       camoufoxnative.PreparationState(),
 		ChromeImport:   chromeauth.Supported,
-	}
-	if download, ok := camoufoxnative.DownloadProgress(); ok {
-		status.Camoufox.Download = &download
 	}
 	return status, nil
 }
@@ -197,22 +195,47 @@ func (admin *runtimeAdmin) ChromeImportProfiles(context.Context) ([]api.ChromeIm
 	if err != nil {
 		return nil, err
 	}
-	existing := admin.accountIDs()
+	recorded, err := admin.store.RestrictedImports()
+	if err != nil {
+		return nil, err
+	}
+	return chromeImportProfiles(accounts, admin.accountIDs(), recorded), nil
+}
+
+// chromeImportProfiles 返回可导入的 Chrome 账户，已导入且未受限的账户不列出，服务受限的已导入账户与导入时被拒绝的账户带受限原因
+func chromeImportProfiles(accounts []chromeauth.Account, existing map[string]string, recorded map[string]string) []api.ChromeImportProfile {
+	seen := make(map[string]struct{}, len(accounts))
 	profiles := make([]api.ChromeImportProfile, 0, len(accounts))
 	for _, account := range accounts {
 		email := strings.ToLower(strings.TrimSpace(account.Email))
 		if !account.Importable || email == "" {
 			continue
 		}
-		if _, exists := existing[email]; exists {
+		restricted, exists := existing[email]
+		if _, duplicate := seen[email]; duplicate || exists && restricted == "" {
 			continue
 		}
-		existing[email] = struct{}{}
+		seen[email] = struct{}{}
 		profiles = append(profiles, api.ChromeImportProfile{
 			ID: account.ID, Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
+			Restricted: cmp.Or(restricted, recorded[email]),
 		})
 	}
-	return profiles, nil
+	return profiles
+}
+
+// restrictedChromeSelection 在 Chrome 认证交换之前拒绝所选账户中服务受限的已导入账户与导入时被记下服务受限的账户
+func restrictedChromeSelection(accounts []chromeauth.Account, ids []string, existing map[string]string, recorded map[string]string) error {
+	for _, account := range accounts {
+		if !slices.ContainsFunc(ids, func(id string) bool { return strings.EqualFold(strings.TrimSpace(id), account.ID) }) {
+			continue
+		}
+		email := strings.ToLower(strings.TrimSpace(account.Email))
+		if reason := cmp.Or(existing[email], recorded[email]); reason != "" {
+			return accountRestricted(email, reason)
+		}
+	}
+	return nil
 }
 
 // CookieBrowsers 列出本机开启远程调试的浏览器，读取其 Cookie 并经 proxy 识别其中各会话登录 AI Studio 的账户，每个账户一项，proxy 为空时用默认出口
@@ -282,31 +305,60 @@ func deviceBoundSession(state aistudio.StorageState) bool {
 	return slices.ContainsFunc(state.Cookies, func(cookie aistudio.StateCookie) bool { return cookie.Name == "__Secure-1PSIDRTS" })
 }
 
-// cookieAccountEntries 以 template 为模板为每个会话账户生成一项并标记已导入的账户，没有账户时只返回 template
-func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.CookieAccount, existing map[string]struct{}) []api.CookieBrowser {
+// cookieAccountEntries 以 template 为模板为每个会话账户生成一项并标记已导入与服务受限的账户，没有账户时只返回 template
+func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.CookieAccount, existing map[string]string) []api.CookieBrowser {
 	if len(accounts) == 0 {
 		return []api.CookieBrowser{template}
 	}
 	entries := make([]api.CookieBrowser, len(accounts))
 	for index, account := range accounts {
 		entry := template
-		entry.Email, entry.AuthUser = account.Email, account.AuthUser
-		_, entry.Imported = existing[account.Email]
+		entry.Email, entry.AuthUser, entry.Restricted = account.Email, account.AuthUser, account.Restricted
+		if restricted, imported := existing[account.Email]; imported {
+			entry.Imported = true
+			if restricted != "" {
+				entry.Restricted = restricted
+			}
+		}
 		entries[index] = entry
 	}
 	return entries
 }
 
-// accountIDs 返回已导入且不需要重新登录的账户小写 ID
-func (admin *runtimeAdmin) accountIDs() map[string]struct{} {
-	existing := make(map[string]struct{})
+// accountIDs 返回已导入且不需要重新登录的账户小写 ID 与其服务受限的原因，没有受限时原因为空
+func (admin *runtimeAdmin) accountIDs() map[string]string {
+	existing := make(map[string]string)
 	for _, status := range admin.pool.Status() {
 		if status.State == aistudio.AccountAuthRequired {
 			continue
 		}
-		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
+		restricted := ""
+		if status.State == aistudio.AccountRestricted {
+			restricted = status.Message
+		}
+		existing[strings.ToLower(strings.TrimSpace(status.ID))] = restricted
 	}
 	return existing
+}
+
+// checkAccountAccess 在导入前确认账户不在服务受限状态，再以认证状态打开 AI Studio，Google 拒绝该账户使用 AI Studio 时返回说明原因的错误，服务受限时另在账户根目录记下原因
+func (admin *runtimeAdmin) checkAccountAccess(ctx context.Context, email string, state *aistudio.StorageState, proxy string, authUser int) error {
+	if restricted := admin.accountIDs()[strings.ToLower(email)]; restricted != "" {
+		return accountRestricted(email, restricted)
+	}
+	err := chromeauth.CheckAccess(ctx, state, proxy, authUser)
+	if denial := aistudio.RestrictionDenial(err); denial != nil {
+		if !errors.Is(denial, camoufoxnative.ErrServiceRestricted) {
+			return accountRestricted(email, denial.Error())
+		}
+		return errors.Join(accountRestricted(email, denial.Error()), admin.store.RecordRestrictedImport(email, denial.Error()))
+	}
+	return err
+}
+
+// accountRestricted 返回账户服务受限、拒绝导入的错误
+func accountRestricted(email string, reason string) error {
+	return &adminOperationError{status: http.StatusForbidden, code: "account_restricted", message: fmt.Sprintf("%s 服务受限，未导入：%s", email, reason)}
 }
 
 func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.ChromeImportInput) ([]api.AdminAccount, error) {
@@ -321,6 +373,17 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	timezone, err := accountTimezone(input.Timezone)
 	if err != nil {
 		return nil, invalidAccount(err)
+	}
+	discovered, err := chromeauth.Discover(root)
+	if err != nil {
+		return nil, err
+	}
+	recorded, err := admin.store.RestrictedImports()
+	if err != nil {
+		return nil, err
+	}
+	if err := restrictedChromeSelection(discovered, input.AccountIDs, admin.accountIDs(), recorded); err != nil {
+		return nil, err
 	}
 	results, err := chromeauth.Import(ctx, chromeauth.ImportOptions{
 		ChromeRoot: root, Proxy: admin.effectiveProxy(accountProxy), AccountIDs: input.AccountIDs,
@@ -352,6 +415,9 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 		if _, err := aistudio.NewSigner().Authorization(result.State); err != nil {
 			return nil, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 		}
+		if err := admin.checkAccountAccess(ctx, email, &results[index].State, admin.effectiveProxy(accountProxy), 0); err != nil {
+			return nil, err
+		}
 		configs[index] = accountConfig
 	}
 	accounts := make([]api.AdminAccount, 0, len(results))
@@ -377,6 +443,9 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 		verification, err := chromeauth.VerifyAuthUser(ctx, &input.StorageState, admin.effectiveProxy(input.Proxy), input.AuthUser)
 		if errors.Is(err, chromeauth.ErrSignedOut) {
 			return api.AdminAccount{}, &adminOperationError{status: http.StatusBadRequest, code: "signed_out", message: err.Error()}
+		}
+		if denial := aistudio.RestrictionDenial(err); denial != nil {
+			return api.AdminAccount{}, accountRestricted(fmt.Sprintf("u/%d", input.AuthUser), denial.Error())
 		}
 		if err != nil {
 			return api.AdminAccount{}, invalidAccount(err)
@@ -406,6 +475,9 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 		return api.AdminAccount{}, invalidAccount(err)
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
 		email = extension.Source.Email
+	}
+	if err := admin.checkAccountAccess(ctx, email, &input.StorageState, admin.effectiveProxy(input.Proxy), input.AuthUser); err != nil {
+		return api.AdminAccount{}, err
 	}
 	if existing := admin.accountID(email); existing != "" && input.RenewalToken != "" {
 		return api.AdminAccount{}, &adminOperationError{
@@ -690,12 +762,6 @@ func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) 
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
-	}
-	if err := admin.service.catalog.DeleteAccountAssistantApplets(ctx, accountID); err != nil {
-		if appletCleanupRetryable(err) {
-			return fmt.Errorf("账户写代码助手应用删除失败 | 账户=%s | 原因: %w", account.Label, err)
-		}
-		admin.requests.log("auth", "WARN", fmt.Sprintf("账户写代码助手应用删除失败 | 账户=%s | 原因: %v", account.Label, err))
 	}
 	defer admin.syncModelCache()
 	err = admin.service.changeModels(func() error {
@@ -1030,15 +1096,6 @@ func invalidAccount(err error) error {
 	}
 }
 
-// appletCleanupRetryable 判断应用删除失败后能否重试，上游明确拒绝（429 以外的 4xx）与登录态失效时该账户已无法删除这些应用
-func appletCleanupRetryable(err error) bool {
-	if aistudio.DefinitiveAuthenticationFailure(err) {
-		return false
-	}
-	var rpcErr *aistudio.RPCError
-	return !errors.As(err, &rpcErr) || rpcErr.StatusCode >= http.StatusInternalServerError || rpcErr.StatusCode == http.StatusTooManyRequests
-}
-
 func accountOperationError(err error) error {
 	switch {
 	case errors.Is(err, aistudio.ErrAccountNotFound):
@@ -1090,7 +1147,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
-		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch, StripThoughtSignatures: value.StripThoughtSignatures,
+		SearchModelAliases: value.SearchModelAliases, DiscoverHiddenModels: value.DiscoverHiddenModels, GoogleSearch: value.GoogleSearch, StripThoughtSignatures: value.StripThoughtSignatures,
 		ContinuationRewrite: value.ContinuationRewrite, ContinuationPrompt: strings.TrimSpace(value.ContinuationPrompt),
 		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
 		ProxyAPIKey: value.APIKey, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
@@ -1099,6 +1156,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		PerAccountConcurrency:  value.PerAccountConcurrency,
 		RoutingStrategy:        value.RoutingStrategy,
 		AccountOrder:           strings.TrimSpace(value.AccountOrder),
+		MaxAccountSwitches:     value.MaxAccountSwitches,
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
@@ -1168,8 +1226,6 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			modelID, build := strings.CutPrefix(key, string(aistudio.ChannelBuild)+":")
 			if build {
 				channel = string(aistudio.ChannelBuild)
-			} else if admin.pool.AssistantModel(modelID) {
-				channel = string(aistudio.ChannelAssistant)
 			}
 			cooldowns = append(cooldowns, api.AdminCooldown{
 				AccountID: account.ID, AccountLabel: account.Label, Channel: channel,
@@ -1393,7 +1449,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		AdminPasswordSet: cfg.AdminPassword != "", SavedAdminPassword: cfg.AdminPassword,
 		BuildNativeNonstream: cfg.BuildNativeNonstream,
 		NonstreamKeepalive:   cfg.NonstreamKeepalive, FakeStream: cfg.FakeStream, YouTubeLinks: cfg.YouTubeLinks,
-		SearchModelAliases: cfg.SearchModelAliases, GoogleSearch: cfg.GoogleSearch, StripThoughtSignatures: cfg.StripThoughtSignatures,
+		SearchModelAliases: cfg.SearchModelAliases, DiscoverHiddenModels: cfg.DiscoverHiddenModels, GoogleSearch: cfg.GoogleSearch, StripThoughtSignatures: cfg.StripThoughtSignatures,
 		ContinuationRewrite: cfg.ContinuationRewrite, ContinuationPrompt: cfg.ContinuationPrompt,
 		FirstEventHedge: cfg.FirstEventHedge, FirstEventHedgeModels: cfg.FirstEventHedgeModels, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
@@ -1404,6 +1460,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,
 		RoutingStrategy:        cfg.RoutingStrategy,
 		AccountOrder:           cfg.AccountOrder,
+		MaxAccountSwitches:     cfg.MaxAccountSwitches,
 		UpstreamChannels:       cfg.UpstreamChannels,
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,

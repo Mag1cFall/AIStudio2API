@@ -9,7 +9,7 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
 ARG TARGETARCH
 ARG ZIG=0.16.0
-ARG SPIDERMONKEY=v152.0.4-aistudio2api.1
+ARG SPIDERMONKEY=v158.0.1-aistudio2api.1
 ARG LIBWEBP=v1.6.0-aistudio2api.1
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://ziglang.org/download/$ZIG/zig-$(uname -m)-linux-$ZIG.tar.xz | tar -xJ -C /opt \

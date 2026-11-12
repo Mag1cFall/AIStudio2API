@@ -37,7 +37,8 @@ type bidiClient struct {
 	done chan struct{}
 	// accessTokenStatus 为最近一次 GenerateAccessToken 的响应状态
 	accessTokenStatus atomic.Int64
-	regionURL         string
+	// denial 是页面导航到官网拒绝页时的原因，之后的命令立即以它返回
+	denial *AccessDenial
 	// listener 接收 BiDi 事件，在读取连接的协程中调用
 	listener func(map[string]any)
 	// loads 是正在载入官网页面的标签页记下的网络状态，键为标签页的 context
@@ -52,6 +53,8 @@ type pageLoad struct {
 	headers map[string]string
 	// image 表示官方 WAA 程序的 /generate_204 图片请求已结束，网络错误与 204 一样在页面中以 error 事件结束
 	image bool
+	// bundle 是页面载入的官网前端主程序（boq-makersuite 的 m=_b 模块）地址
+	bundle string
 }
 
 // bidiPending 是等待响应的一条命令
@@ -97,10 +100,10 @@ func (client *bidiClient) command(ctx context.Context, method string, params map
 	defer cancel()
 	response := make(chan bidiResponse, 1)
 	client.mu.Lock()
-	if client.regionURL != "" {
-		region := client.regionURL
+	if client.denial != nil {
+		denial := client.denial
 		client.mu.Unlock()
-		return nil, fmt.Errorf("%w，官网跳转 %s", ErrRegionNotSupported, region)
+		return nil, denial
 	}
 	if client.failure != nil {
 		failure := client.failure
@@ -228,10 +231,12 @@ func (client *bidiClient) observe(message map[string]any) {
 		return
 	case method == "browsingContext.navigationStarted":
 		rawURL, _ := params["url"].(string)
-		if parsed, err := url.Parse(rawURL); err == nil && strings.HasSuffix(parsed.Path, "/available-regions") {
-			client.mu.Lock()
-			client.regionURL = rawURL
-			client.mu.Unlock()
+		if parsed, err := url.Parse(rawURL); err == nil {
+			if denial := PageDenial(parsed); denial != nil {
+				client.mu.Lock()
+				client.denial = denial
+				client.mu.Unlock()
+			}
 		}
 		return
 	case !strings.HasPrefix(method, "network."):
@@ -250,6 +255,10 @@ func (client *bidiClient) observe(message map[string]any) {
 	load := client.loads[contextID]
 	if load != nil && (method == "network.responseCompleted" || method == "network.fetchError") && strings.EqualFold(parsed.Hostname(), "aistudio.google.com") && path.Base(parsed.Path) == "generate_204" {
 		load.image = true
+		return
+	}
+	if load != nil && method == "network.responseCompleted" && load.bundle == "" && FrontendBundle(parsed) {
+		load.bundle = rawURL
 		return
 	}
 	if !strings.EqualFold(parsed.Hostname(), "alkalimakersuite-pa.clients6.google.com") || requestMethod != http.MethodPost {
@@ -654,6 +663,7 @@ func (client *bidiClient) pageCatalog(ctx context.Context, contextID, collector 
 	}
 	client.mu.Lock()
 	requests := maps.Clone(client.loads[contextID].responses)
+	bundle := client.loads[contextID].bundle
 	client.mu.Unlock()
 	bodies := make(map[string][]byte, len(requests))
 	for name, requestID := range requests {
@@ -666,7 +676,7 @@ func (client *bidiClient) pageCatalog(ctx context.Context, contextID, collector 
 			return PageCatalog{}, fmt.Errorf("解码页面 %s 响应: %w", name, err)
 		}
 	}
-	return PageCatalog{Logging: bodies["GetLoggingContext"], Tier: bodies["GetAiStudioBenefitTier"], Models: bodies["ListModels"]}, nil
+	return PageCatalog{Logging: bodies["GetLoggingContext"], Tier: bodies["GetAiStudioBenefitTier"], Models: bodies["ListModels"], Bundle: bundle}, nil
 }
 
 // remoteBytes 按 Firefox network.getData 的编码还原响应正文：正文先按 UTF-8 解码为文本，base64 值是文本逐字符取 Latin-1 字节的编码，文本含 U+00FF 以上字符时值为文本本身

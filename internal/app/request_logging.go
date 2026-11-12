@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,8 +35,8 @@ func requestLogData(entry api.AccessLog) *api.RequestLog {
 			InputTokens: usage.InputTokens + usage.ToolTokens, CachedTokens: usage.CachedTokens, ReasoningTokens: usage.ReasoningTokens,
 			ReplyTokens: usage.OutputTokens, OutputTokens: output, TotalTokens: usage.TotalTokens,
 		}
-		if entry.Latency > 0 {
-			data.Usage.AverageTokensPerSecond = float64(output) / entry.Latency.Seconds()
+		if generation := entry.Latency - entry.FirstEvent; generation > 0 && output > entry.FirstOutput {
+			data.Usage.AverageTokensPerSecond = float64(output-entry.FirstOutput) / generation.Seconds()
 		}
 	}
 	return data
@@ -82,13 +83,13 @@ func (admin *runtimeAdmin) RecordAccessLog(entry api.AccessLog) {
 	admin.recordRequestLog(entry.Account, level, "request.finished", message, data)
 }
 
-// requestRow 将 POST 请求结果投影为用量账本记录
+// requestRow 将 POST 请求结果投影为用量账本记录，函数调用之后上游结束生成的错误写入记录的错误详情
 func requestRow(entry api.AccessLog, finished time.Time) requestdb.Row {
 	data, _, _ := finishedRequestLog(entry)
 	row := requestdb.Row{
 		ID: entry.RequestID, Time: finished, Protocol: requestProtocol(entry.Path), Path: entry.Path,
 		Model: entry.Model, Account: entry.Account, Channel: entry.Channel, Status: entry.Status, State: data.State,
-		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, ToolCalls: entry.ToolCalls, Error: data.Error,
+		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, ToolCalls: entry.ToolCalls, Error: cmp.Or(data.Error, entry.TrailingError),
 		Attempts: entry.Attempts,
 	}
 	if usage := data.Usage; usage != nil {

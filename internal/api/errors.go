@@ -382,10 +382,6 @@ func openAIErrorCode(err error) string {
 	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
 		return "account_required"
 	}
-	var feedback *aistudio.PromptFeedbackError
-	if errors.As(err, &feedback) {
-		return "invalid_prompt"
-	}
 	if errors.Is(err, aistudio.ErrInvalidArgument) || isUnverifiedProtocolError(err) {
 		return "invalid_request"
 	}

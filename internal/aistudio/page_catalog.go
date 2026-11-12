@@ -40,6 +40,7 @@ func (c *Client) ApplyPageCatalog(ctx context.Context, accountID string, page ca
 	if err != nil {
 		return BenefitTierFree, nil, err
 	}
+	catalog.bundle = page.Bundle
 	c.setBenefitTier(accountID, tier)
 	c.setModelCatalog(accountID, catalog)
 	return tier, cloneModels(catalog.models), nil

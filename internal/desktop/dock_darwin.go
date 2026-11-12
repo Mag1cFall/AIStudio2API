@@ -5,7 +5,11 @@ package desktop
 // #cgo CFLAGS: -x objective-c
 // #include <Cocoa/Cocoa.h>
 // static void dockSetVisible(int visible) {
+//   NSImage *icon = [NSApp applicationIconImage];
 //   [NSApp setActivationPolicy:visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
+//   if (visible) {
+//     dispatch_async(dispatch_get_main_queue(), ^{ [NSApp setApplicationIconImage:icon]; });
+//   }
 //   [NSApp activateIgnoringOtherApps:YES];
 // }
 // static void dockActivate(void) { [NSApp activateIgnoringOtherApps:YES]; }

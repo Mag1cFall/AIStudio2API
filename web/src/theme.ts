@@ -1,4 +1,5 @@
 import { readonly, ref } from 'vue'
+import { desktopPlatform } from './desktop'
 
 // Theme 是界面配色模式
 type Theme = 'dark' | 'light'
@@ -47,6 +48,7 @@ function switchTheme(next: Theme, origin?: { x: number; y: number }): void {
   }
   if (
     !origin ||
+    desktopPlatform === 'linux' ||
     !('startViewTransition' in document) ||
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   ) {

@@ -55,8 +55,8 @@ mz_context* mz_context_new(uintptr_t id, uint32_t heap_bytes, size_t stack_quota
 // mz_context_free 销毁 JSContext 及其根表
 void mz_context_free(mz_context* mz);
 
-// mz_set_camou_locale 设置当前线程 mozilla::intl::Locale 的 Camoufox 语言、地区与 navigator.language
-void mz_set_camou_locale(const char* language, const char* region, const char* locale);
+// mz_set_camou_locale 设置当前线程 mozilla::intl::Locale 的默认区域为 Camoufox 的 navigator.language
+void mz_set_camou_locale(const char* locale);
 
 // mz_global_new 新建 Window 全局对象，same 非 0 时与该全局对象共用 compartment，timezone 为该 Realm 的时区
 uint32_t mz_global_new(mz_context* mz, uint32_t same, const char* timezone);

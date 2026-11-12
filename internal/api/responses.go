@@ -918,9 +918,7 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 				return nil, nil, fmt.Errorf("input item: %w", err)
 			}
 		}
-		if item.Namespace != "" {
-			item.Name = item.Namespace + "." + item.Name
-		}
+		item.Name = namespacedName(item.Namespace, item.Name)
 		call := aistudio.FunctionCall{ID: item.CallID, Name: item.Name, ThoughtSignature: pendingSignature}
 		switch item.Type {
 		case "", "message":
@@ -1250,7 +1248,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 				if inner.Type != "function" && inner.Type != "custom" {
 					return aistudio.Tools{}, fmt.Errorf("namespace %q tool type %q is not supported", tool.Name, inner.Type)
 				}
-				inner.Name = tool.Name + "." + inner.Name
+				inner.Name = namespacedName(tool.Name, inner.Name)
 				if tool.Description != "" {
 					inner.Description = strings.TrimSpace(tool.Description + "\n\n" + inner.Description)
 				}
@@ -1458,6 +1456,14 @@ func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map
 	return item
 }
 
+// namespacedName 返回命名空间中函数的声明名：默认命名空间 functions 中的函数与顶层函数相同，用原名，其余为 <命名空间>.<名>
+func namespacedName(namespace, name string) string {
+	if namespace == "" || namespace == "functions" {
+		return name
+	}
+	return namespace + "." + name
+}
+
 // responsesNamespace 返回函数所属的命名空间工具名
 func responsesNamespace(tools []responsesTool, name string) string {
 	for _, tool := range tools {
@@ -1465,7 +1471,7 @@ func responsesNamespace(tools []responsesTool, name string) string {
 			continue
 		}
 		for _, inner := range tool.Tools {
-			if tool.Name+"."+inner.Name == name {
+			if namespacedName(tool.Name, inner.Name) == name {
 				return tool.Name
 			}
 		}

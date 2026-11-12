@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { parseAccountBindings } from '@/accountBindings'
 import { api } from '@/api'
 import { channelLabelKey, useI18n } from '@/i18n'
+import { priceLines } from '@/playground/catalog'
 import type { Account, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
 import DetailDialog from './DetailDialog.vue'
@@ -146,6 +147,11 @@ const filteredModels = computed(() => {
   })
 })
 
+// frontendUncalled 判断模型是否只能经官网前端尚未调用的 RPC 使用（Gemini Decision 的 createDecision）
+function frontendUncalled(model: Model): boolean {
+  return model.methods.includes('createDecision')
+}
+
 // capabilityNames 返回模型明确启用的能力名称
 function capabilityNames(model: Model): string[] {
   return Object.entries(model.capabilities ?? {})
@@ -183,6 +189,20 @@ function outputLimit(model: Model): number | undefined {
 function tokenLimit(value: number | undefined): string {
   if (value === undefined || value === 0) return '—'
   return new Intl.NumberFormat(locale.value).format(value)
+}
+
+// dateFormat 与 monthFormat 是详情中发布日期与知识截止月份的格式
+const dateFormat = computed(
+  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', day: 'numeric' }),
+)
+const monthFormat = computed(
+  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short' }),
+)
+
+// modelSummary 返回官网模型卡片的简介，没有简介时为与名称不同的目录描述
+function modelSummary(model: Model): string {
+  if (model.details?.summary) return model.details.summary
+  return model.description !== model.name ? (model.description ?? '') : ''
 }
 </script>
 
@@ -265,6 +285,20 @@ function tokenLimit(value: number | undefined): string {
               >
                 {{ t('models.paid') }}
               </span>
+              <span
+                v-if="frontendUncalled(model)"
+                v-tooltip="t('models.frontendUncalledHelp')"
+                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
+              >
+                {{ t('models.frontendUncalled') }}
+              </span>
+              <span
+                v-if="model.hidden"
+                v-tooltip="t('models.hiddenHelp')"
+                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
+              >
+                {{ t('models.hidden') }}
+              </span>
             </div>
             <code v-tooltip.overflow="model.id" class="block truncate text-xs text-blue-400">{{
               model.id
@@ -297,28 +331,97 @@ function tokenLimit(value: number | undefined): string {
       @close="detail = null"
     >
       <div v-if="detail" class="space-y-4">
-        <p
-          v-if="detail.description && detail.description !== detail.name"
-          class="text-xs leading-5 [overflow-wrap:anywhere] text-gray-400"
+        <div
+          v-if="detail.details?.alias || modelSummary(detail) || detail.details?.docs_url"
+          class="space-y-1 text-xs leading-5 [overflow-wrap:anywhere]"
         >
-          {{ detail.description }}
+          <p v-if="detail.details?.alias" class="text-gray-300">{{ detail.details.alias }}</p>
+          <p v-if="modelSummary(detail) || detail.details?.docs_url" class="text-gray-400">
+            {{ modelSummary(detail) }}
+            <a
+              v-if="detail.details?.docs_url"
+              :href="detail.details.docs_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-0.5 whitespace-nowrap text-blue-400 hover:text-blue-300"
+              >{{ t('pg.developerDocs') }}<UiIcon name="up" :size="12"
+            /></a>
+          </p>
+        </div>
+        <p
+          v-if="detail.details?.warning"
+          class="flex items-start gap-2 text-xs leading-5 text-amber-200"
+        >
+          <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{ detail.details.warning }}
         </p>
-        <dl class="grid grid-cols-2 gap-3 font-mono text-xs sm:grid-cols-4">
-          <div>
-            <dt class="text-gray-500">{{ t('models.context') }}</dt>
-            <dd class="text-gray-200">{{ tokenLimit(detail.input_token_limit) }}</dd>
-          </div>
-          <div>
-            <dt class="text-gray-500">{{ t('models.output') }}</dt>
-            <dd class="text-gray-200">{{ tokenLimit(outputLimit(detail)) }}</dd>
-            <dd
-              v-if="detail.capabilities?.output_continuation"
-              class="mt-0.5 font-sans text-xs text-gray-500"
+        <p
+          v-if="frontendUncalled(detail)"
+          class="flex items-start gap-2 text-xs leading-5 text-amber-200"
+        >
+          <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{
+            t('models.frontendUncalledHelp')
+          }}
+        </p>
+        <p v-if="detail.hidden" class="flex items-start gap-2 text-xs leading-5 text-amber-200">
+          <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{ t('models.hiddenHelp') }}
+        </p>
+        <div>
+          <dl class="grid grid-cols-2 gap-3 font-mono text-xs sm:grid-cols-4">
+            <div>
+              <dt class="text-gray-500">{{ t('models.context') }}</dt>
+              <dd class="text-gray-200">{{ tokenLimit(detail.input_token_limit) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500">{{ t('models.output') }}</dt>
+              <dd class="text-gray-200">{{ tokenLimit(outputLimit(detail)) }}</dd>
+            </div>
+            <div v-if="detail.details?.release_date">
+              <dt class="text-gray-500">{{ t('models.releaseDate') }}</dt>
+              <dd class="text-gray-200">
+                {{ dateFormat.format(detail.details.release_date * 1000) }}
+              </dd>
+            </div>
+            <div v-if="detail.details?.model_card_url || detail.details?.knowledge_cutoff">
+              <dt class="text-gray-500">{{ t('models.knowledgeCutoff') }}</dt>
+              <dd class="text-gray-200">
+                <a
+                  v-if="detail.details.model_card_url"
+                  :href="detail.details.model_card_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-0.5 font-sans text-blue-400 hover:text-blue-300"
+                  >{{ t('pg.seeModelCard') }}<UiIcon name="up" :size="12"
+                /></a>
+                <template v-else-if="detail.details.knowledge_cutoff">{{
+                  monthFormat.format(detail.details.knowledge_cutoff * 1000)
+                }}</template>
+              </dd>
+            </div>
+          </dl>
+          <p v-if="detail.capabilities?.output_continuation" class="mt-2 text-xs text-gray-500">
+            {{ t('pg.outputContinuation') }}
+          </p>
+        </div>
+        <div v-if="detail.details?.pricing?.length">
+          <span class="mb-2 block text-xs text-gray-500">{{ t('models.pricing') }}</span>
+          <ul class="space-y-1 text-xs leading-5 [overflow-wrap:anywhere] text-gray-300">
+            <li
+              v-for="(line, index) in priceLines(detail, t)"
+              :key="index"
+              v-tooltip="line.tooltip"
             >
-              {{ t('models.continuation') }}
-            </dd>
-          </div>
-        </dl>
+              {{ line.text }}
+              <a
+                v-if="line.link"
+                :href="line.link"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-0.5 whitespace-nowrap text-blue-400 hover:text-blue-300"
+                >{{ t('pg.learnMore') }}<UiIcon name="up" :size="12"
+              /></a>
+            </li>
+          </ul>
+        </div>
         <div v-if="detail.channels?.length">
           <span id="model-channel-label" class="mb-2 block text-xs text-gray-500">{{
             t('models.channels')

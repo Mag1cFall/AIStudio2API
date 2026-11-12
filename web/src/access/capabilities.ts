@@ -28,11 +28,12 @@ export interface CodeInput {
   modelID: string
 }
 
-// Capability 是接入页的一种能力：名称与说明的文案键、图标、所用端点、实时目录中可用模型的条件、协议与语言选项和示例代码
+// Capability 是接入页的一种能力：名称、说明与提醒的文案键、图标、所用端点、实时目录中可用模型的条件、协议与语言选项和示例代码
 export interface Capability {
   id: string
   label: TranslationKey
   description: TranslationKey
+  notice?: TranslationKey
   icon: IconName
   endpoints: [method: string, path: string][]
   matches: (model: Model) => boolean
@@ -263,6 +264,7 @@ export const capabilities: Capability[] = [
     id: 'decision',
     label: 'access.cap.decision',
     description: 'access.cap.decisionHelp',
+    notice: 'models.frontendUncalledHelp',
     icon: 'decision',
     endpoints: [['POST', '/v1beta/decisions']],
     matches: (model) => model.methods.includes('createDecision'),

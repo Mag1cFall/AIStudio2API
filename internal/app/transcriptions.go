@@ -82,7 +82,7 @@ func (service *trackedService) Transcribe(
 		service.requests.markRunning(request.ID, account.ID, account.Config.Label)
 	})
 	result, err := service.service.(aistudio.TranscriptionService).Transcribe(observed, request)
-	api.SetAccessLogFirstEvent(requestCtx, result.FirstEvent)
+	api.SetAccessLogFirstEvent(requestCtx, result.FirstEvent, 0)
 	api.SetAccessLogGenerationResult(
 		requestCtx, &result.Usage, 0,
 	)

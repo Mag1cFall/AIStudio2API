@@ -24,19 +24,21 @@ const (
 	firefoxQUICMaxData = 25165824
 	// firefoxQUICMaxStreamData 是 Firefox network.http.http3.max_stream_data
 	firefoxQUICMaxStreamData = 12582912
-	// neqoStreamWindow 是 neqo 0.28 对端发起流与单向流的初始接收窗口
+	// neqoStreamWindow 是 neqo 0.31 对端发起流与单向流的初始接收窗口
 	neqoStreamWindow = 1048576
-	// neqoMaxStreams 是 neqo 0.28 允许对端打开的双向流与单向流数
+	// neqoMaxStreams 是 neqo 0.31 允许对端打开的双向流与单向流数
 	neqoMaxStreams = 100
-	// neqoMinAckDelayParameter 是 neqo 0.28 发送的 min_ack_delay 草案传输参数 ID
+	// neqoResetStreamAtParameter 是 neqo 0.31 以空值声明支持 RESET_STREAM_AT 的传输参数 ID
+	neqoResetStreamAtParameter = 0x1d
+	// neqoMinAckDelayParameter 是 neqo 0.31 发送的 min_ack_delay 草案传输参数 ID
 	neqoMinAckDelayParameter = 0xff02de1a
-	// neqoMinAckDelay 是 neqo 0.28 声明的 min_ack_delay，单位微秒
+	// neqoMinAckDelay 是 neqo 0.31 声明的 min_ack_delay，单位微秒
 	neqoMinAckDelay = 1000
 	// neqoSourceConnectionIDLength 是 Firefox 为 neqo 配置的本端连接 ID 长度
 	neqoSourceConnectionIDLength = 3
-	// neqoIPv4Datagram 是 neqo 0.28 关闭 PMTUD 时 IPv4 的 UDP 载荷上限，Initial 数据报补零到该长度
+	// neqoIPv4Datagram 是 neqo 0.31 关闭 PMTUD 时 IPv4 的 UDP 载荷上限，Initial 数据报补零到该长度
 	neqoIPv4Datagram = 1252
-	// neqoIPv6Datagram 是 neqo 0.28 关闭 PMTUD 时 IPv6 的 UDP 载荷上限
+	// neqoIPv6Datagram 是 neqo 0.31 关闭 PMTUD 时 IPv6 的 UDP 载荷上限
 	neqoIPv6Datagram = 1232
 	// quicAEADOverhead 是 QUIC 包保护的 AEAD 标签长度
 	quicAEADOverhead = 16
@@ -44,8 +46,8 @@ const (
 	h3NoError = 0x100
 	// nssQUICGREASEECHInner 是 NSS 为 QUIC ClientHello 的 GREASE ECH 估算的内层 ClientHello 基础长度
 	nssQUICGREASEECHInner = 193
-	// nssTLSGREASEECHInner 是 NSS 为 TCP ClientHello 的 GREASE ECH 估算的内层 ClientHello 基础长度，比 QUIC 多 13 个 TLS 1.2 密码套件
-	nssTLSGREASEECHInner = 219
+	// nssTLSGREASEECHInner 是 NSS 为 TCP ClientHello 的 GREASE ECH 估算的内层 ClientHello 基础长度，比 QUIC 多 12 个 TLS 1.2 密码套件
+	nssTLSGREASEECHInner = 217
 )
 
 // quicResumption 是一类请求的 QUIC 连接共用的会话票据、NEW_TOKEN 令牌与各主机上次收到的服务端 QPACK 设置
@@ -97,7 +99,7 @@ func (resumption *quicResumption) rememberedSettings(host string) ([2]uint64, bo
 	return settings, ok
 }
 
-// dialFirefoxQUIC 以 Firefox 152 的 QUIC 首航直连 host:443，有会话票据时恢复会话，票据允许 0-RTT 时不等握手完成即返回并返回沿用的服务端设置
+// dialFirefoxQUIC 以 Firefox 158 的 QUIC 首航直连 host:443，有会话票据时恢复会话，票据允许 0-RTT 时不等握手完成即返回并返回沿用的服务端设置
 func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumption) (*quic.Conn, *[2]uint64, error) {
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
@@ -141,27 +143,28 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 	return connection, settings, nil
 }
 
-// firefoxQUICConfig 返回 Firefox 152 的 QUIC 连接配置：空闲超时 30 秒，与 neqo 一样只在请求流尚未完成时每半个空闲超时发送保活 PING
+// firefoxQUICConfig 返回 Firefox 158 的 QUIC 连接配置：空闲超时 30 秒，与 neqo 一样只在请求流尚未完成时每半个空闲超时发送保活 PING
 func firefoxQUICConfig(datagram int, tokens quic.TokenStore) *quic.Config {
 	return &quic.Config{
-		Versions:                       []quic.Version{quic.Version1},
-		HandshakeIdleTimeout:           firefoxQUICIdleTimeout,
-		MaxIdleTimeout:                 firefoxQUICIdleTimeout,
-		KeepAlivePeriod:                firefoxQUICIdleTimeout / 2,
-		KeepAliveStreamsOnly:           true,
-		InitialStreamReceiveWindow:     firefoxQUICMaxStreamData,
-		MaxStreamReceiveWindow:         firefoxQUICMaxStreamData,
-		InitialConnectionReceiveWindow: firefoxQUICMaxData,
-		MaxConnectionReceiveWindow:     firefoxQUICMaxData,
-		MaxIncomingStreams:             neqoMaxStreams,
-		MaxIncomingUniStreams:          neqoMaxStreams,
-		InitialPacketSize:              uint16(datagram),
-		DisablePathMTUDiscovery:        true,
-		TokenStore:                     tokens,
+		Versions:                         []quic.Version{quic.Version1},
+		HandshakeIdleTimeout:             firefoxQUICIdleTimeout,
+		MaxIdleTimeout:                   firefoxQUICIdleTimeout,
+		KeepAlivePeriod:                  firefoxQUICIdleTimeout / 2,
+		KeepAliveStreamsOnly:             true,
+		InitialStreamReceiveWindow:       firefoxQUICMaxStreamData,
+		MaxStreamReceiveWindow:           firefoxQUICMaxStreamData,
+		InitialConnectionReceiveWindow:   firefoxQUICMaxData,
+		MaxConnectionReceiveWindow:       firefoxQUICMaxData,
+		MaxIncomingStreams:               neqoMaxStreams,
+		MaxIncomingUniStreams:            neqoMaxStreams,
+		InitialPacketSize:                uint16(datagram),
+		DisablePathMTUDiscovery:          true,
+		EnableStreamResetPartialDelivery: true,
+		TokenStore:                       tokens,
 	}
 }
 
-// firefoxQUICSpec 返回 Firefox 152（neqo 0.28）一次直连的 QUIC 首航，psk 与 early 决定 ClientHello 是否带 pre_shared_key 与 early_data
+// firefoxQUICSpec 返回 Firefox 158（neqo 0.31）一次直连的 QUIC 首航，psk 与 early 决定 ClientHello 是否带 pre_shared_key 与 early_data
 func firefoxQUICSpec(datagram int, psk int, early bool) *quic.QUICSpec {
 	var random [3]byte
 	_, _ = rand.Read(random[:])
@@ -195,7 +198,7 @@ func neqoPacketNumberLength(unacked uint64) quic.PacketNumberLen {
 	}
 }
 
-// firefoxQUICClientHello 返回 Firefox 152 经 NSS 发出的 QUIC ClientHello，psk 为 pre_shared_key 扩展长度，非 0 时该扩展在最后
+// firefoxQUICClientHello 返回 Firefox 158 经 NSS 发出的 QUIC ClientHello，psk 为 pre_shared_key 扩展长度，非 0 时该扩展在最后
 func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 	extensions := []utls.TLSExtension{
 		&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{utls.CertCompressionZlib, utls.CertCompressionZstd, utls.CertCompressionBrotli}},
@@ -234,7 +237,8 @@ func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 			utls.MaxAckDelay(20),
 			utls.ActiveConnectionIDLimit(8),
 			utls.InitialSourceConnectionID(nil),
-			&utls.VersionInformation{ChoosenVersion: utls.VERSION_1, AvailableVersions: []uint32{utls.VERSION_GREASE, utls.VERSION_1}},
+			&utls.VersionInformation{ChoosenVersion: utls.VERSION_1, AvailableVersions: []uint32{utls.VERSION_GREASE, utls.VERSION_2, utls.VERSION_1}},
+			&utls.FakeQUICTransportParameter{Id: neqoResetStreamAtParameter},
 			&utls.FakeQUICTransportParameter{Id: neqoMinAckDelayParameter, Val: quicvarint.Append(nil, neqoMinAckDelay)},
 			utls.MaxDatagramFrameSize(65535),
 		}},
@@ -267,7 +271,7 @@ func resumptionPSKLength(raw []byte, ticket int) int {
 	return 2 + 2 + ticket + 4 + 2 + 1 + binder
 }
 
-// nssGREASEECHPayload 是 NSS 按内层基础长度 inner 算出的 GREASE ECH 密文长度（不含 AEAD 标签）
+// nssGREASEECHPayload 是 NSS 按内层基础长度 inner 算出的 GREASE ECH 密文长度（不含 AEAD 标签），按 RFC 9849 补齐到 32 字节的整数倍
 func nssGREASEECHPayload(inner int, psk int, early bool) uint16 {
 	if psk > 0 {
 		inner += 4 + psk
@@ -275,10 +279,10 @@ func nssGREASEECHPayload(inner int, psk int, early bool) uint16 {
 	if early {
 		inner += 2
 	}
-	return uint16(inner + 31 - inner%32)
+	return uint16(inner + 31 - (inner-1)%32)
 }
 
-// neqoInitialFlight 按 neqo 0.28 的 SNI 切分把 ClientHello 排进 Initial 包
+// neqoInitialFlight 按 neqo 0.31 的 SNI 切分把 ClientHello 排进 Initial 包
 type neqoInitialFlight struct {
 	// limit 是一个 Initial 包去掉 AEAD 标签后的长度上限
 	limit int

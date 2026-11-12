@@ -1,3 +1,4 @@
+import { ParseError } from 'eventsource-parser'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 import { jsonBody } from '@/api'
 import type { Model } from '@/types'
@@ -1360,9 +1361,20 @@ export async function generate(options: GenerateOptions): Promise<void> {
     options.onUpdate(call.decoder.event({ ...value, type: value.type ?? '' }))
     return
   }
-  const events = response
-    .body!.pipeThrough(new TextDecoderStream())
-    .pipeThrough(new EventSourceParserStream())
+  // bare 是流中不带 data: 前缀的整行 JSON，Gemini 流内错误以这种形式写出
+  let bare: string | undefined
+  const events = response.body!.pipeThrough(new TextDecoderStream()).pipeThrough(
+    new EventSourceParserStream({
+      onError: (error) => {
+        if (
+          error instanceof ParseError &&
+          error.type === 'unknown-field' &&
+          error.line?.startsWith('{')
+        )
+          bare = error.line
+      },
+    }),
+  )
   for await (const { data } of events) {
     if (data === '[DONE]') return
     const value = record(JSON.parse(data))
@@ -1371,4 +1383,6 @@ export async function generate(options: GenerateOptions): Promise<void> {
     options.onUpdate(call.decoder.event(value))
     if (call.decoder.done(value)) return
   }
+  const error = bare === undefined ? undefined : errorOf(record(JSON.parse(bare)))
+  if (error !== undefined) throw new Error(error)
 }

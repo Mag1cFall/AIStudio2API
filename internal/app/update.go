@@ -318,8 +318,12 @@ func removeReplacedExecutables(executable string) error {
 	if err != nil {
 		return err
 	}
+	hidden, err := filepath.Glob(filepath.Join(directory, "."+name+".old"))
+	if err != nil {
+		return err
+	}
 	var errs []error
-	for _, file := range append(files, filepath.Join(directory, "."+name+".old")) {
+	for _, file := range append(files, hidden...) {
 		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}

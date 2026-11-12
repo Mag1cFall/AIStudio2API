@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,8 @@ type runtimeGeneration struct {
 	config          config.Config
 	lifecycleCancel context.CancelFunc
 	closeRuntime    func() error
+	// camoufoxWait 在启动开始等待 Camoufox 下载时关闭，不需要 Camoufox 时为 nil
+	camoufoxWait <-chan struct{}
 }
 
 // runtimeFactory 创建一个完整生成服务实例
@@ -99,9 +102,13 @@ type runtimeManager struct {
 	startMu            sync.Mutex
 	mu                 sync.RWMutex
 	current            *runtimeGeneration
-	startCancel        context.CancelFunc
+	// launchMu 保护 startCancel、launching、launchReleased 与 autoStartCancel
+	launchMu    sync.Mutex
+	startCancel context.CancelFunc
 	// launching 在生成服务启动期间存在，启动结束时关闭
-	launching       chan struct{}
+	launching chan struct{}
+	// launchReleased 在本轮启动开始等待 Camoufox 下载时关闭，Camoufox 就绪前等待启动的公开请求不再等待
+	launchReleased  chan struct{}
 	autoStartCancel context.CancelFunc
 	ledger          *requestdb.Store
 	prompts         *promptdb.Store
@@ -145,7 +152,7 @@ func buildRuntimeGeneration(
 	}
 	return &runtimeGeneration{
 		service: service, admin: admin, config: cfg,
-		lifecycleCancel: lifecycleCancel, closeRuntime: closeRuntime,
+		lifecycleCancel: lifecycleCancel, closeRuntime: closeRuntime, camoufoxWait: service.camoufoxWait,
 	}, nil
 }
 
@@ -160,21 +167,21 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 	manager.startMu.Lock()
 	defer manager.startMu.Unlock()
 
-	manager.mu.Lock()
+	manager.mu.RLock()
 	current := manager.current
+	manager.mu.RUnlock()
 	if current.service.State() != "STOPPED" {
-		status, err := current.admin.StartService(ctx)
-		manager.mu.Unlock()
-		return status, err
-	}
-	if _, err := current.admin.StopService(ctx); err != nil {
-		manager.mu.Unlock()
-		return api.AdminStatus{}, err
+		return current.admin.StartService(ctx)
 	}
 	launchCtx, launchCancel := context.WithCancel(manager.lifecycle)
-	manager.startCancel = launchCancel
-	manager.launching = make(chan struct{})
-	manager.mu.Unlock()
+	launching, released := make(chan struct{}), make(chan struct{})
+	manager.launchMu.Lock()
+	manager.startCancel, manager.launching, manager.launchReleased = launchCancel, launching, released
+	manager.launchMu.Unlock()
+	if _, err := current.admin.StopService(ctx); err != nil {
+		manager.finishStart(launchCancel)
+		return api.AdminStatus{}, err
+	}
 
 	cfg, err := config.Load(manager.configPath)
 	if err != nil {
@@ -203,6 +210,15 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 	current = manager.current
 	manager.current = next
 	manager.mu.Unlock()
+	if next.camoufoxWait != nil {
+		go func() {
+			select {
+			case <-next.camoufoxWait:
+				close(released)
+			case <-launching:
+			}
+		}()
+	}
 
 	current.lifecycleCancel()
 	status, startErr := next.admin.StartService(launchCtx)
@@ -215,20 +231,30 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 
 // finishStart 清理本轮生成服务启动取消句柄并放行等待启动结束的请求
 func (manager *runtimeManager) finishStart(cancel context.CancelFunc) {
-	manager.mu.Lock()
+	manager.launchMu.Lock()
 	manager.startCancel = nil
 	close(manager.launching)
-	manager.launching = nil
-	manager.mu.Unlock()
+	manager.launching, manager.launchReleased = nil, nil
+	manager.launchMu.Unlock()
 	cancel()
 }
 
-// WaitLaunch 在生成服务启动期间等到启动结束或 ctx 结束
+// WaitLaunch 在生成服务启动期间等到启动结束或 ctx 结束，启动正在等待 Camoufox 下载时立即返回
 func (manager *runtimeManager) WaitLaunch(ctx context.Context) {
-	manager.mu.RLock()
-	launching := manager.launching
-	manager.mu.RUnlock()
+	manager.launchMu.Lock()
+	launching, released := manager.launching, manager.launchReleased
+	manager.launchMu.Unlock()
 	if launching == nil {
+		return
+	}
+	select {
+	case <-launching:
+		return
+	case <-released:
+	case <-ctx.Done():
+		return
+	}
+	if !camoufoxnative.PreparationState().Ready {
 		return
 	}
 	select {
@@ -240,8 +266,10 @@ func (manager *runtimeManager) WaitLaunch(ctx context.Context) {
 // StopService 停止当前生成服务并保持管理监听器运行
 func (manager *runtimeManager) StopService(ctx context.Context) (api.AdminStatus, error) {
 	manager.stopAutoStart()
-	manager.mu.RLock()
+	manager.launchMu.Lock()
 	cancel := manager.startCancel
+	manager.launchMu.Unlock()
+	manager.mu.RLock()
 	current := manager.current
 	manager.mu.RUnlock()
 	if cancel != nil {
@@ -250,21 +278,27 @@ func (manager *runtimeManager) StopService(ctx context.Context) (api.AdminStatus
 	return current.admin.StopService(ctx)
 }
 
+// DownloadCamoufox 在 Camoufox 未就绪且没有进行中的下载时经出口代理在后台开始下载
+func (manager *runtimeManager) DownloadCamoufox(ctx context.Context) (api.AdminStatus, error) {
+	camoufoxnative.PrepareInBackground(manager.egressProxy())
+	return manager.Status(ctx)
+}
+
 // autoStartContext 返回手动启动或停止生成服务时取消的自动启动上下文
 func (manager *runtimeManager) autoStartContext(parent context.Context) context.Context {
 	ctx, cancel := context.WithCancel(parent)
-	manager.mu.Lock()
+	manager.launchMu.Lock()
 	manager.autoStartCancel = cancel
-	manager.mu.Unlock()
+	manager.launchMu.Unlock()
 	return ctx
 }
 
 // stopAutoStart 取消自动启动及其重试
 func (manager *runtimeManager) stopAutoStart() {
-	manager.mu.Lock()
+	manager.launchMu.Lock()
 	cancel := manager.autoStartCancel
 	manager.autoStartCancel = nil
-	manager.mu.Unlock()
+	manager.launchMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
@@ -456,8 +490,11 @@ func (manager *runtimeManager) Accounts(ctx context.Context) ([]api.AdminAccount
 	return manager.current.admin.Accounts(ctx)
 }
 
-// CreateAccount 在当前生成服务创建账户
+// CreateAccount 等 Camoufox 就绪后在当前生成服务以浏览器登录创建账户，等待下载期间不占用生成服务
 func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.AccountCreateInput, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
+	if err := manager.prepareLoginCamoufox(ctx, "auth"); err != nil {
+		return api.AdminAccount{}, err
+	}
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.CreateAccount(ctx, input, view)
@@ -519,11 +556,26 @@ func (manager *runtimeManager) DeleteAccount(ctx context.Context, id string) err
 	return manager.current.admin.DeleteAccount(ctx, id)
 }
 
-// LoginAccount 在当前生成服务登录账户
+// LoginAccount 等 Camoufox 就绪后在当前生成服务重新登录账户，等待下载期间不占用生成服务
 func (manager *runtimeManager) LoginAccount(ctx context.Context, id string, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
+	if err := manager.prepareLoginCamoufox(ctx, id); err != nil {
+		return api.AdminAccount{}, err
+	}
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.LoginAccount(ctx, id, view)
+}
+
+// prepareLoginCamoufox 在浏览器登录前等 Camoufox 就绪，需要下载时记录等待，失败时记录原因
+func (manager *runtimeManager) prepareLoginCamoufox(ctx context.Context, source string) error {
+	if !camoufoxnative.PreparationState().Ready {
+		manager.requests.log(source, "INFO", "浏览器登录 | 等待 Camoufox 下载")
+	}
+	_, err := camoufoxnative.Prepare(ctx, manager.egressProxy())
+	if err != nil {
+		manager.requests.log(source, "ERROR", "浏览器登录失败 | 错误="+strings.TrimSpace(err.Error()))
+	}
+	return err
 }
 
 // RefreshAccount 在当前生成服务立即刷新账户状态
@@ -642,12 +694,14 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		InitTimeout: initTimeout, RequestTimeout: requestTimeout, StripThoughtSignatures: value.StripThoughtSignatures,
 		UpstreamChannels:      value.UpstreamChannels,
 		ModelMapping:          value.ModelMapping,
+		MaxAccountSwitches:    value.MaxAccountSwitches,
 		WAABackend:            value.WAABackend,
 		BuildNativeNonstream:  value.BuildNativeNonstream,
 		NonstreamKeepalive:    value.NonstreamKeepalive,
 		FakeStream:            value.FakeStream,
 		YouTubeLinks:          value.YouTubeLinks,
 		SearchModelAliases:    value.SearchModelAliases,
+		DiscoverHiddenModels:  value.DiscoverHiddenModels,
 		GoogleSearch:          value.GoogleSearch,
 		FirstEventHedge:       value.FirstEventHedge,
 		FirstEventHedgeModels: value.FirstEventHedgeModels,
@@ -660,11 +714,12 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
 		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
+		saved.MaxAccountSwitches == active.MaxAccountSwitches &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&
 		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
-		saved.SearchModelAliases == active.SearchModelAliases && saved.GoogleSearch == active.GoogleSearch &&
+		saved.SearchModelAliases == active.SearchModelAliases && saved.DiscoverHiddenModels == active.DiscoverHiddenModels && saved.GoogleSearch == active.GoogleSearch &&
 		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt &&
 		saved.MediaOutput == active.MediaOutput && saved.MediaBaseURL == active.MediaBaseURL
 }

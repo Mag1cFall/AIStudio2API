@@ -138,6 +138,7 @@ export const thinkingLevelLabels: Record<ThinkingLevel, TranslationKey> = {
   LOW: 'pg.low',
   MEDIUM: 'pg.medium',
   HIGH: 'pg.high',
+  EXTRA_HIGH: 'pg.extraHigh',
 }
 
 // thinkingLevelTooltips 是官网思考档位选项的说明
@@ -145,6 +146,7 @@ export const thinkingLevelTooltips: Partial<Record<ThinkingLevel, TranslationKey
   LOW: 'pg.thinkingLowTip',
   MEDIUM: 'pg.thinkingMediumTip',
   HIGH: 'pg.thinkingHighTip',
+  EXTRA_HIGH: 'pg.thinkingExtraHighTip',
 }
 
 // modelMatches 返回地址中的模型 ID 是否为该模型的 ID 或目录别名

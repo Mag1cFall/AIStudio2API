@@ -675,8 +675,8 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 	defer client.closeChannel(serviceChannel)
 	client.startLoad(contextID)
 	defer client.endLoad(contextID)
-	var catalogCollector, preloadScript string
-	var subscribed, released bool
+	var catalogCollector, preloadScript, networkSubscription string
+	var released bool
 	// release 移除载入期间登记的响应收集器、preload 与 network 事件订阅，原请求超时或取消后仍以独立期限执行
 	release := func() error {
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pageReleaseTimeout)
@@ -698,12 +698,9 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 				return nil
 			})
 		}
-		if subscribed {
+		if networkSubscription != "" {
 			removals = append(removals, func() error {
-				_, err := client.command(releaseCtx, "session.unsubscribe", map[string]any{
-					"events":   []string{"network.beforeRequestSent", "network.responseCompleted", "network.fetchError"},
-					"contexts": []string{contextID},
-				})
+				_, err := client.command(releaseCtx, "session.unsubscribe", map[string]any{"subscriptions": []string{networkSubscription}})
 				return err
 			})
 		}
@@ -717,12 +714,21 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 	}()
 	if err := parallel(
 		func() error {
-			_, err := client.command(ctx, "session.subscribe", map[string]any{
-				"events":   []string{"browsingContext.navigationStarted", "script.message", "network.beforeRequestSent", "network.responseCompleted", "network.fetchError"},
+			if _, err := client.command(ctx, "session.subscribe", map[string]any{
+				"events":   []string{"browsingContext.navigationStarted", "script.message"},
+				"contexts": []string{contextID},
+			}); err != nil {
+				return err
+			}
+			subscription, err := client.command(ctx, "session.subscribe", map[string]any{
+				"events":   []string{"network.beforeRequestSent", "network.responseCompleted", "network.fetchError"},
 				"contexts": []string{contextID},
 			})
-			subscribed = err == nil
-			return err
+			if err != nil {
+				return err
+			}
+			networkSubscription, _ = subscription["subscription"].(string)
+			return nil
 		},
 		func() error {
 			collector, err := client.command(ctx, "network.addDataCollector", map[string]any{
@@ -778,7 +784,8 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
 			return loadedPage{}, cause
 		}
-		if errors.Is(err, ErrRegionNotSupported) {
+		var denial *AccessDenial
+		if errors.As(err, &denial) {
 			return loadedPage{}, err
 		}
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
@@ -790,6 +797,9 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 		return loadedPage{}, err
 	}
 	if location, parseErr := url.Parse(pageURL); parseErr == nil && location.Hostname() == "accounts.google.com" {
+		if denial := PageDenial(location); denial != nil {
+			return loadedPage{}, denial
+		}
 		return loadedPage{}, fmt.Errorf("%w url=%s", ErrAuthenticationRequired, pageURL)
 	}
 	if err := client.waitFor(ctx, contextID, loggingContextReadyExpression, 30*time.Second); err != nil {

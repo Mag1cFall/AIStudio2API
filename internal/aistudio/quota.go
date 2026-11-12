@@ -87,7 +87,7 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		until = now.Add(rpcError.RetryDelay)
 	} else if reset, ok := usageLimitReset(message); ok {
 		until, kind = now.Add(reset), PlanLimitKind
-	} else if kind == "短期限额" && (rpcError.PerUserQuota || strings.Contains(message, "reached your usage limit")) {
+	} else if kind == "短期限额" && strings.Contains(message, "reached your usage limit") {
 		kind, escalate = PlanLimitKind, true
 	}
 	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error(), Escalate: escalate}, true
@@ -100,6 +100,18 @@ func BuildRejectionCooldown(err error) (QuotaCooldown, bool) {
 		return QuotaCooldown{}, false
 	}
 	return QuotaCooldown{Kind: "Build 拒绝", Reason: "Build 拒绝: " + err.Error(), Escalate: true}, true
+}
+
+// AccountRejectionKind 是上游以 403、协议错误码 7 暂时拒绝账户时冷却的类型名，也是其冷却原因的前缀
+const AccountRejectionKind = "权限拒绝"
+
+// AccountRejectionCooldown 返回上游以 403、协议错误码 7 拒绝账户且官网不跳转拒绝页时，按账户与模型以 planLimitBackoff 递增的冷却
+func AccountRejectionCooldown(err error) (QuotaCooldown, bool) {
+	var rpcError *RPCError
+	if !errors.As(err, &rpcError) || rpcError.StatusCode != http.StatusForbidden || rpcError.Code != 7 || rpcError.accessDenial() != nil {
+		return QuotaCooldown{}, false
+	}
+	return QuotaCooldown{Kind: AccountRejectionKind, Reason: AccountRejectionKind + ": " + rpcError.StatusError(), Escalate: true}, true
 }
 
 // BuildGenerationDisabled 判断错误是上游停用 Build 代理生成的 PROXY_GENERATION_DISABLED

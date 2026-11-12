@@ -15,7 +15,6 @@
 
 <p>
   Playground Generation Channel &nbsp;•&nbsp;
-  Build Code Assistant Chat Channel &nbsp;•&nbsp;
   High-Concurrency Multi-Account<br>
   Camoufox and SpiderMonkey WAA Backends &nbsp;•&nbsp;
   Claude Code, Codex, and Other Agent Clients &nbsp;•&nbsp;
@@ -71,7 +70,6 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 ## Core Capabilities
 
 - **Dual Channels**: Every account generates through the Playground; the Build app proxy is the legacy channel whose generation upstream has disabled for accounts (`PROXY_GENERATION_DISABLED`), off by default and enabled in `UPSTREAM_CHANNELS`; once enabled, generation requests sent through Build return the upstream reason; on free accounts both channels share one daily request count per model
-- **Build Chat Models**: Every model selectable in the Build chat panel is also listed as `<model>-build` (for example `gemini-3.8-flash-build`), answered by the Build code assistant with its system prompt, with function calling, tool-result continuation, and Google Search, and billed to the Build chat quota (free requests or the Google AI subscription). ⚠️ Every request to these models carries the Build code assistant's own injected system prompt, which shapes the answer's style, format, and persona; evaluate whether that fits your use
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: By default, SpiderMonkey (the Firefox JavaScript engine) generates the official proof inside the service process and no browser is downloaded or launched at runtime; with `WAA_BACKEND=camoufox`, Camoufox holds the official WAA lifecycle
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items, and Anthropic Messages supports `context_management` tool-result and thinking clearing and threshold compaction
@@ -85,10 +83,10 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **Image Generation**: Nano Banana image generation
 - **Video Generation**: Gemini Omni generates video tasks and image-to-video; Gemini Omni accepts text, image, and video input and returns text and MP4 video through the four generation APIs
 - **Deep Research**: Pro and Ultra accounts can run Deep Research through the four generation APIs and the Interactions `agent` field, returning the research process, a cited report, and charts
-- **Decision Model**: `gemini-decision-1` answers many yes/no, choice, and score questions about one shared input in a single call to `/v1beta/decisions`, returning calibrated probabilities and confidence; input can be text, images, audio, video, and PDF, and only input tokens are billed
+- **Decision Model**: `gemini-decision-1` answers many yes/no, choice, and score questions about one shared input in a single call to `/v1beta/decisions`, returning calibrated probabilities and confidence; input can be text, images, audio, video, and PDF, and only input tokens are billed; the AI Studio website does not call this model yet, and the service calls it with the website's CreateDecision request
 - **YouTube Input**: YouTube video URLs are read as external video attachments; with `YOUTUBE_LINKS` enabled, YouTube links in message text are read as video too
 - **Video Understanding Controls**: Gemini and Interactions support per-video start/end offsets, sampling rates greater than 0 and up to 24 FPS, and static/agentic processing; agentic results preserve server-side processing steps and conversation history
-- **Smart Model Switching**: Discover models from AI Studio and route through the `model` field
+- **Smart Model Switching**: Discover models from AI Studio and route through the `model` field; with `DISCOVER_HIDDEN_MODELS` enabled, models that the AI Studio website references but the account's model list doesn't include yet can be called too once the upstream confirms they work
 - **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
 - **Files and Transcribe**: File upload, metadata, content, deletion, and audio transcription
 - **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
@@ -131,7 +129,7 @@ npm ci
 npm run build
 cd ..
 mkdir spidermonkey
-curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
+curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
@@ -146,11 +144,11 @@ go build -o aistudio2api.exe ./cmd/aistudio2api
 
 `x86_64-w64-mingw32-clang` comes from the llvm-mingw `ucrt-x86_64` package; add its `bin` directory to `PATH` after extracting it.
 
-With `WAA_BACKEND=camoufox`, starting the generation service, or the first browser sign-in, downloads Camoufox for the current platform to `runtime/camoufox/`:
+With `WAA_BACKEND=camoufox`, the program downloads Camoufox for the current platform to `runtime/camoufox/` in the background once the console is up, and the generation service becomes ready when the download finishes; the default SpiderMonkey backend downloads it on the first browser sign-in. The console shows the download progress, and public API requests during the download get a 503 that reports it:
 
 - The download goes through the first proxy in `PROXY`, or the system proxy when it is unset
-- An interrupted download resumes from the downloaded part on the next launch
-- `CAMOUFOX_PATH` selects an existing executable of the same version; a different version stops startup with an error naming the required version
+- When the download is interrupted or receives no data for 30 seconds, the console shows the reason and offers a retry, which resumes from the downloaded part
+- `CAMOUFOX_PATH` selects an existing executable of the same version; for a different version the console names the required version
 
 ### Method 2: macOS and Linux Desktop App
 
@@ -203,7 +201,7 @@ cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
 mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
+curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
 mkdir -p libwebp
 curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
@@ -288,6 +286,7 @@ Account actions depend on state:
 | `ready` | Edit, disable, verify, delete |
 | `disabled` | Edit, enable, delete |
 | `auth_required` | Edit, disable, log in again, verify, delete |
+| `restricted` | Edit, disable, verify, delete |
 
 "Log in again" appears only when the account state is `auth_required`.
 
@@ -533,6 +532,8 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 
 You name the keys of `questions`, and answers come back under the same keys. `noul` returns the probability `noul` that the statement holds, with optional `true_description` and `false_description` in `criteria`; `choice` takes option IDs mapped to descriptions in `criteria` and returns `choice` plus `probabilities` for every option; `score` takes level descriptions from low to high in `criteria` and returns the expected level `score`, per-level `probabilities`, and `legend`. Every answer includes `confidence`. `input` accepts a string or Interactions content blocks; images, audio, video, and PDF use `data` (Base64) or `uri` (an HTTPS URL or a file from this service's Files API) with `mime_type`. The Google Gen AI SDK calls it through `client.decisions.create`.
 
+The AI Studio website does not call `gemini-decision-1` yet: the official Playground lists only sample apps for this model, and the sample apps call it through the Gemini API with a paid API key. This service calls it with the website's CreateDecision request, which AI Studio pages do not send, and logs a reminder in the runtime log for every call.
+
 ## Models
 
 The model catalog follows AI Studio updates; clients read the current values from `/v1/models` or `/v1beta/models`. The table below lists common catalog models; runtime results are authoritative for model IDs and limits:
@@ -562,11 +563,11 @@ The model catalog follows AI Studio updates; clients read the current values fro
 | `gemini-3.8-live` | Gemini 3.8 Live | Live | 131072 | 65536 |
 | `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | Live translation | 16384 | 32768 |
 
-The catalog also includes `-latest` aliases, Robotics-ER, earlier image and TTS models, and the Build channel's `-build` models.
+The catalog also includes `-latest` aliases, Robotics-ER, and earlier image and TTS models.
 
 Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, `predictLongRunning`, and `createDecision` (`/v1beta/decisions`); `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
-Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site, and use `input_token_limit` when the request sets no output limit; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
+Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site, and use `input_token_limit` when the request sets no output limit; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `extra_high`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
 
 ## Project Architecture
 
@@ -643,6 +644,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
+| `MAX_ACCOUNT_SWITCHES` | `3` | How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; `0` disables switching. Quota errors do not count, and the remaining accounts are still tried in turn |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
@@ -653,10 +655,11 @@ Process environment variables override the same keys in `.env`, and those settin
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream and send function calls with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens |
 | `SEARCH_MODEL_ALIASES` | `true` | Offer `-search` variants of search-capable models; requests using these variants enable Google Search |
+| `DISCOVER_HIDDEN_MODELS` | `false` | When syncing account model catalogs (at startup, every 24 hours, and on Refresh all in Accounts), find models that the AI Studio website references but the account's model list doesn't include yet, and add them to the catalog once the upstream confirms they work; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page. Officially listed models use their official entries; turning this off removes them the next time the generation service starts |
 | `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
 | `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
 | `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
-| `FIRST_EVENT_HEDGE` | `auto` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
+| `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | Comma-separated model IDs that get backup requests; backup requests also count against account quota |
 | `WAA_BACKEND` | `spidermonkey` | `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox; `camoufox` runs WAA in a Camoufox page; any other value means `spidermonkey`; when unset, startup picks it from `auth/` and writes it to `.env`: `camoufox` if `auth/` already has accounts but no `auth/.waa-interpreters`, otherwise `spidermonkey` |
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key; when the directory exceeds 1 GB, the least recently used files are deleted first |
@@ -716,7 +719,8 @@ The lowercase Google email is the account directory, management UI identity, and
 - `ready` accounts can be edited, disabled, refreshed, and deleted; `auth_required` accounts can log in again
 - Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
 - An account whose catalog has never been read shows an unknown tier and the reason for the last failed read
-- When a read reports that AI Studio does not support the current egress region or account, accounts with an existing catalog show that reason as well
+- When a read reports that AI Studio does not support the current egress region, accounts with an existing catalog show that reason as well
+- When Google restricts an account from using AI Studio, the account does not meet AI Studio's age requirements, or its Workspace has not enabled AI Studio, the account enters the `restricted` (Service restricted) state and shows the reason with a link to the official page: startup, scheduling, and background reads skip the account, it is not renewed, verification loads the page once, and a successful read restores it; when importing from Chrome, cookies, or an antidetect browser, service-restricted accounts are marked with the reason and cannot be imported
 
 ## Documentation
 

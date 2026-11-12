@@ -101,7 +101,7 @@ func (part Part) empty() bool {
 
 // payload 表示 Part 携带正文或其他内容
 func (part Part) payload() bool {
-	return part.Text != "" || part.InlineData != nil || part.ExternalMedia != nil || part.File != nil || part.Upload != nil ||
+	return part.Text != "" || part.InlineData != nil || part.ExternalMedia != nil || part.File != nil ||
 		part.FunctionCall != nil || part.FunctionResult != nil || part.ExecutableCode != nil || part.CodeExecutionResult != nil ||
 		part.ToolCall != nil || part.ToolResponse != nil || part.Transcript != nil
 }

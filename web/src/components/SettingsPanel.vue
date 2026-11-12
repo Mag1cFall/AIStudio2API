@@ -78,6 +78,7 @@ const sections: {
       'per_account_concurrency',
       'routing_strategy',
       'account_order',
+      'max_account_switches',
     ],
   },
   {
@@ -105,6 +106,7 @@ const sections: {
       'fake_stream',
       'youtube_links',
       'search_model_aliases',
+      'discover_hidden_models',
       'google_search',
       'continuation_rewrite',
       'continuation_prompt',
@@ -740,6 +742,22 @@ async function saveConfig(): Promise<void> {
                 @change="form.account_order = $event"
               />
             </SettingRow>
+            <SettingRow
+              :label="t('settings.maxAccountSwitches')"
+              control-id="setting-max-account-switches"
+              :description="t('settings.maxAccountSwitchesHelp')"
+              effect="service"
+              :changed="changedFields.has('max_account_switches')"
+              :env="environmentKey('max_account_switches')"
+            >
+              <input
+                id="setting-max-account-switches"
+                v-model.number="form.max_account_switches"
+                :class="inputClass"
+                type="number"
+                min="0"
+              />
+            </SettingRow>
           </template>
 
           <template v-else-if="section === 'runtime'">
@@ -965,6 +983,16 @@ async function saveConfig(): Promise<void> {
               :env="environmentKey('search_model_aliases')"
             >
               <UiSwitch id="setting-search-model-aliases" v-model="form.search_model_aliases" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.discoverHiddenModels')"
+              control-id="setting-discover-hidden-models"
+              :description="t('settings.discoverHiddenModelsHelp')"
+              effect="service"
+              :changed="changedFields.has('discover_hidden_models')"
+              :env="environmentKey('discover_hidden_models')"
+            >
+              <UiSwitch id="setting-discover-hidden-models" v-model="form.discover_hidden_models" />
             </SettingRow>
             <SettingRow
               :label="t('settings.googleSearch')"

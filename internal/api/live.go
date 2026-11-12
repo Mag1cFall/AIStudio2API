@@ -385,7 +385,7 @@ func (s *server) writeBidiEvents(
 				return
 			}
 			if first {
-				SetAccessLogFirstEvent(r.Context(), time.Since(startedAt))
+				SetAccessLogFirstEvent(r.Context(), time.Since(startedAt), 0)
 				first = false
 			}
 			message := mapBidiServerEvent(event)

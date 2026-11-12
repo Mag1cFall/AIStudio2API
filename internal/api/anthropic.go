@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -181,7 +180,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			send: sseSender(stream), id: messageID, model: request.Model,
 			inputTokens: <-estimate, startUsage: startUsage,
 			searchKey: s.config.APIKey, omitted: request.thinkingOmitted(),
-			media: s.mediaOutputFor(r), context: contextResult, search: s.anthropicSearchable(r.Context(), generateRequest),
+			media: s.mediaOutputFor(r), context: contextResult, search: generateRequest.Tools.GoogleSearch != nil || slices.Contains(generateRequest.Tools.Google, "google_search"),
 		}
 		if err := writer.start(); err != nil {
 			return
@@ -1178,7 +1177,7 @@ func anthropicCapabilities(model aistudio.Model) map[string]any {
 			"low":       support(slices.Contains(model.ThinkingLevels, "LOW")),
 			"medium":    support(slices.Contains(model.ThinkingLevels, "MEDIUM")),
 			"high":      support(slices.Contains(model.ThinkingLevels, "HIGH")),
-			"xhigh":     support(false),
+			"xhigh":     support(slices.Contains(model.ThinkingLevels, "EXTRA_HIGH")),
 			"max":       support(false),
 		},
 		"image_input":        support(chat),
@@ -1224,20 +1223,6 @@ type anthropicStreamWriter struct {
 	citations []anthropicCitationGroup
 	cited     *anthropicCitationGroup
 	source    int
-}
-
-// anthropicSearchable 判断本次生成能否发起网页搜索：请求启用了 Google 搜索或模型走 Build 写代码助手
-func (s *server) anthropicSearchable(ctx context.Context, request aistudio.GenerateRequest) bool {
-	if request.Tools.GoogleSearch != nil || slices.Contains(request.Tools.Google, "google_search") {
-		return true
-	}
-	name, _, err := aistudio.ApplyModelSuffix(request.Model, aistudio.GenerationConfig{})
-	if err != nil {
-		return false
-	}
-	models, _ := s.service.Models(ctx)
-	model, _ := LookupPublicModel(models, name)
-	return model.Capabilities["assistant_route"]
 }
 
 // streamAnthropic 写出流式事件

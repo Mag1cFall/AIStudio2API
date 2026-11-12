@@ -20,7 +20,7 @@ import (
 
 var firefoxVersionPattern = regexp.MustCompile(`\b1[0-9]{2}\.0\b`)
 
-const camoufoxFirefoxMajor = 152
+const camoufoxFirefoxMajor = 158
 
 type savedFingerprint struct {
 	FirefoxVersion int            `json:"firefox_version"`
@@ -109,14 +109,6 @@ func buildCamoufoxConfig(ffVersion int, locale string, timezone string) (map[str
 		}
 	}
 	applyScreenXY(config, screen)
-	if fingerprint.Navigator.DoNotTrack != nil && truthy(*fingerprint.Navigator.DoNotTrack) {
-		config["navigator.doNotTrack"] = *fingerprint.Navigator.DoNotTrack
-	}
-	if fingerprint.Navigator.ExtraProperties != nil {
-		if value, ok := fingerprint.Navigator.ExtraProperties["globalPrivacyControl"].(bool); ok && value {
-			config["navigator.globalPrivacyControl"] = value
-		}
-	}
 	for key, target := range map[string]string{
 		"charging":        "battery:charging",
 		"chargingTime":    "battery:chargingTime",
@@ -546,7 +538,7 @@ func applyScreenXY(config map[string]any, screen fingerprints.ScreenFingerprint)
 	}
 }
 
-// normalizeCamoufoxConfig 按官方启动器修正指纹中的空值、窗口几何、字体、语音、WebGL、媒体设备与噪声种子
+// normalizeCamoufoxConfig 按官方启动器修正指纹中的空值、隐私信号、窗口几何、字体、语音、WebGL、媒体设备与噪声种子
 func normalizeCamoufoxConfig(config map[string]any) {
 	for key, value := range config {
 		derived := strings.HasPrefix(key, "navigator.") || strings.HasPrefix(key, "screen.") ||
@@ -555,7 +547,7 @@ func normalizeCamoufoxConfig(config map[string]any) {
 			delete(config, key)
 		}
 	}
-	for _, key := range []string{"window.history.length", "canvas:aaOffset", "canvas:aaCapOffset"} {
+	for _, key := range []string{"window.history.length", "canvas:aaOffset", "canvas:aaCapOffset", "navigator.doNotTrack", "navigator.globalPrivacyControl"} {
 		delete(config, key)
 	}
 	if !windowsFonts(config["fonts"]) {

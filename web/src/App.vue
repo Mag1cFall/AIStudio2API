@@ -14,6 +14,7 @@ import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { TabID } from '@/types'
 import AccountsPanel from '@/components/AccountsPanel.vue'
+import CamoufoxBanner from '@/components/CamoufoxBanner.vue'
 import UiDisclosure from '@/components/UiDisclosure.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
 import ModelsTable from '@/components/ModelsTable.vue'
@@ -162,6 +163,7 @@ const {
   commitDelete,
   startService,
   stopService,
+  retryCamoufox,
   clearLogs,
   waitForRestart,
 } = useConsole()
@@ -427,6 +429,7 @@ onMounted(revealCurrentTab)
             .replace('{active}', config.active_listen_addr)
         }}
       </div>
+      <CamoufoxBanner v-if="status" :camoufox="status.camoufox" @retry="retryCamoufox" />
       <div
         v-if="config?.invalid.length"
         role="alert"
@@ -486,7 +489,7 @@ onMounted(revealCurrentTab)
           :config="config"
           :accounts="accounts"
           :models="models"
-          :loading="loading.config"
+          :loading="loading.config || loading.accounts"
           :error="errors.config"
           @saved="config = $event"
           @notice="showNotice"

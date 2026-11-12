@@ -35,7 +35,6 @@ var capabilityNames = map[int64]string{
 	43: "media_resolution",
 	46: "speech_translation",
 	47: "aspect_ratio",
-	48: "code_assistant",
 	49: "output_resolution",
 	52: "thinking_level",
 	53: "music_route",
@@ -103,6 +102,8 @@ type modelCatalog struct {
 	entries map[string]modelEntry
 	// source 是解析出该目录的 ListModels 响应 JSON
 	source json.RawMessage
+	// bundle 是载入该目录的官网页面的前端主程序地址
+	bundle string
 }
 
 // ParseModels 解码 ListModels 的数组协议
@@ -138,17 +139,6 @@ func parseModelCatalog(source io.Reader) (modelCatalog, error) {
 		}
 		if _, exists := catalog.entries[entry.model.ID]; exists {
 			return modelCatalog{}, &ProtocolEvidenceError{Method: "ListModels", Path: fmt.Sprintf("$[0][%d][0]", index), Detail: "模型 ID 重复", Raw: rowRaw}
-		}
-		catalog.models = append(catalog.models, entry.model)
-		catalog.entries[entry.model.ID] = entry
-	}
-	for _, base := range catalog.models {
-		if !base.Capabilities["code_assistant"] {
-			continue
-		}
-		entry := assistantModelEntry(catalog.entries[base.ID])
-		if _, exists := catalog.entries[entry.model.ID]; exists {
-			continue
 		}
 		catalog.models = append(catalog.models, entry.model)
 		catalog.entries[entry.model.ID] = entry
@@ -608,6 +598,13 @@ func (c *Client) setModelCatalog(accountID string, catalog modelCatalog) {
 	c.catalogMu.Lock()
 	c.catalogs[accountID] = catalog
 	c.catalogMu.Unlock()
+}
+
+// accountModels 返回账户当前目录中的模型
+func (c *Client) accountModels(accountID string) []Model {
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	return cloneModels(c.catalogs[accountID].models)
 }
 
 // modelCatalogSource 返回账户最近一次 ListModels 的响应 JSON

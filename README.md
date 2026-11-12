@@ -15,7 +15,6 @@
 
 <p>
   Playground 生成通道 &nbsp;•&nbsp;
-  Build 代码助手对话通道 &nbsp;•&nbsp;
   多账户高并发<br>
   Camoufox 与 SpiderMonkey 双 WAA 后端 &nbsp;•&nbsp;
   Claude Code、Codex 等 Agent 客户端 &nbsp;•&nbsp;
@@ -71,7 +70,6 @@
 ## 核心能力
 
 - **双通道**: 每个账户经 Playground 生成；Build 应用代理是旧通道，上游已对账户停用其生成（`PROXY_GENERATION_DISABLED`），默认关闭，可在 `UPSTREAM_CHANNELS` 中启用；启用后经 Build 发送的生成请求返回上游原因；免费账户的两个通道共用同一模型的每日请求次数
-- **Build 对话模型**: Build 对话面板可选的模型各提供一个 `<模型>-build`（如 `gemini-3.8-flash-build`），由 Build 写代码助手连同其系统提示词回复，支持函数调用、工具结果续接与 Google 搜索，用量计入 Build 对话额度（免费请求或 Google AI 订阅额度）。⚠️ 这类模型的每次请求都带有 Build 写代码助手自带的系统提示词注入，回答风格、格式与身份会受其影响，请按用途自行评估
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器；设置 `WAA_BACKEND=camoufox` 后由 Camoufox 持有官方 WAA 生命周期
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩，Anthropic Messages 支持 `context_management` 的工具结果与思考清理和阈值压缩
@@ -85,10 +83,10 @@
 - **图片生成**: 支持 Nano Banana 图片生成
 - **视频生成**: 视频长任务与图片转视频由 Gemini Omni 生成；Gemini Omni 通过四套生成接口接收文本、图片与视频输入，输出文本与 MP4 视频
 - **Deep Research**: Pro 与 Ultra 账户可通过四套生成接口与 Interactions 的 `agent` 字段调用 Deep Research，输出研究过程、带引用的报告与图表
-- **决策模型**: `gemini-decision-1` 经 `/v1beta/decisions` 对同一份输入一次回答多个是非、单选与评分问题，返回校准后的概率与置信度；输入可以是文本、图片、音频、视频与 PDF，只计输入 token
+- **决策模型**: `gemini-decision-1` 经 `/v1beta/decisions` 对同一份输入一次回答多个是非、单选与评分问题，返回校准后的概率与置信度；输入可以是文本、图片、音频、视频与 PDF，只计输入 token；AI Studio 官网前端尚未调用这个模型，服务经网页的 CreateDecision 请求调用
 - **YouTube 输入**: YouTube 视频 URL 作为外部视频附件读取；开启 `YOUTUBE_LINKS` 后，消息文本中的 YouTube 链接同样作为视频读取
 - **视频理解设置**: Gemini 与 Interactions 支持逐视频的起止时间、0–24 FPS 范围内的正数采样率和静态/Agentic 处理；Agentic 返回服务端处理步骤并支持历史续接
-- **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由
+- **智能模型切换**: 从 AI Studio 实时发现模型并按 `model` 字段路由；开启 `DISCOVER_HIDDEN_MODELS` 后，官网前端已配置、账户模型列表尚未列出的模型经上游确认可用后同样可以调用
 - **Google 工具**: 支持 Search、Image Search、URL Context、Code Execution 和 Maps
 - **Files 与 Transcribe**: 支持文件上传、查询、内容读取、删除和音频转录
 - **Live 与 Robotics**: 通过 WebSocket 支持文本、音频、JPEG、媒体结束、工具调用、恢复和中断
@@ -131,7 +129,7 @@ npm ci
 npm run build
 cd ..
 mkdir spidermonkey
-curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
+curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
@@ -146,11 +144,11 @@ go build -o aistudio2api.exe ./cmd/aistudio2api
 
 `x86_64-w64-mingw32-clang` 来自 llvm-mingw 的 `ucrt-x86_64` 包，解压后把其中的 `bin` 目录加入 `PATH`。
 
-`WAA_BACKEND=camoufox` 时启动生成服务，或第一次使用浏览器登录时，程序自动下载当前平台的 Camoufox 到 `runtime/camoufox/`：
+`WAA_BACKEND=camoufox` 时，程序在管理服务启动后于后台下载当前平台的 Camoufox 到 `runtime/camoufox/`，生成服务在下载完成后就绪；默认的 SpiderMonkey 后端在第一次使用浏览器登录时下载。下载期间管理页面显示进度，公开 API 请求返回说明下载进度的 503：
 
 - 下载经 `PROXY` 的第一个代理发出，未设置时使用系统代理
-- 下载中断后，下次启动从已下载的部分继续
-- 环境变量 `CAMOUFOX_PATH` 可以指定已有的同版本可执行文件，版本不符时启动报错并给出所需版本
+- 下载中断或连续 30 秒收不到数据时，管理页面显示原因并可重试，重试从已下载的部分继续
+- 环境变量 `CAMOUFOX_PATH` 可以指定已有的同版本可执行文件，版本不符时管理页面给出所需版本
 
 ### 方式二：macOS 与 Linux 桌面版
 
@@ -203,7 +201,7 @@ cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
 mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
+curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
 mkdir -p libwebp
 curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
@@ -288,6 +286,7 @@ docker compose up -d
 | `ready` | 编辑、停用、验证、删除 |
 | `disabled` | 编辑、启用、删除 |
 | `auth_required` | 编辑、停用、重新登录、验证、删除 |
+| `restricted` | 编辑、停用、验证、删除 |
 
 “重新登录”只在账户状态为 `auth_required` 时显示。
 
@@ -533,6 +532,8 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 
 `questions` 的键由调用方命名，回答按同样的键返回。`noul` 返回为真的概率 `noul`，`criteria` 可写 `true_description` 与 `false_description`；`choice` 的 `criteria` 为选项 ID 到说明，返回 `choice` 与各选项的 `probabilities`；`score` 的 `criteria` 为从低到高的等级说明，返回期望等级 `score`、各等级的 `probabilities` 与 `legend`。每个回答都带 `confidence`。`input` 接受字符串或 Interactions 内容块，图片、音频、视频与 PDF 以 `data`（Base64）或 `uri`（HTTPS 链接或本服务 Files API 的文件）给出并写明 `mime_type`。Google Gen AI SDK 以 `client.decisions.create` 调用。
 
+AI Studio 官网前端尚未调用 `gemini-decision-1`：官网 Playground 选这个模型时只列出示例应用，示例应用经 Gemini API 以付费 API key 调用；本服务经网页的 CreateDecision 请求调用，官网页面不会发出这类请求，每次调用在运行日志中提醒。
+
 ## 模型
 
 模型目录会随 AI Studio 更新，客户端从 `/v1/models` 或 `/v1beta/models` 读取当前值。下表为目录中的常用模型，模型 ID 与上限以运行时结果为准：
@@ -562,11 +563,11 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 | `gemini-3.8-live` | Gemini 3.8 Live | 实时对话 | 131072 | 65536 |
 | `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | 实时翻译 | 16384 | 32768 |
 
-目录中另有 `-latest` 别名、Robotics-ER、早期版本的图片与 TTS 模型，以及 Build 通道的 `-build` 模型。
+目录中另有 `-latest` 别名、Robotics-ER 与早期版本的图片与 TTS 模型。
 
 公开端点实现标准 `generateContent`、`countTokens`、`embedContent`、`batchEmbedContents`、`predictLongRunning` 和 `createDecision`（`/v1beta/decisions`）；`bidiGenerateContent` 与 `bidiGenerateMusic` 模型经 `/v1/live` 调用。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
-启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，未指定输出上限时取 `input_token_limit`，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。客户端写死的模型名可用 `MODEL_MAPPING` 映射到目录中的模型，例如 `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`，别名以目标模型的字段列在模型目录中。
+启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，未指定输出上限时取 `input_token_limit`，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。客户端写死的模型名可用 `MODEL_MAPPING` 映射到目录中的模型，例如 `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`，别名以目标模型的字段列在模型目录中。
 
 ## 项目架构
 
@@ -643,6 +644,7 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
+| `MAX_ACCOUNT_SWITCHES` | `3` | 上游返回 403、5xx 等非额度错误时一个请求最多换几次账户重试，`0` 为不换号；额度用尽不计入，照常依次尝试其余账户 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
@@ -653,10 +655,11 @@ cp .env.example .env
 | `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名，函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少 |
 | `SEARCH_MODEL_ALIASES` | `true` | 提供支持搜索的模型的 `-search` 型号，使用该型号时启用 Google 搜索 |
+| `DISCOVER_HIDDEN_MODELS` | `false` | 同步账户模型目录时（启动、每 24 小时与账户页“刷新全部”），找出 AI Studio 官网前端已配置、账户模型列表尚未列出的模型，经上游确认可用后加入目录，可直接用于各协议请求并列在 `/v1/models` 中，“模型目录”页标为“官网隐藏”；模型被正式列出后使用官方条目，关闭后下一次启动生成服务时从目录中移除 |
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |
-| `FIRST_EVENT_HEDGE` | `auto` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
+| `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | 发起备用请求的模型 ID，逗号分隔；备用请求同样计入账户额度 |
 | `WAA_BACKEND` | `spidermonkey` | `spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox；`camoufox` 在 Camoufox 页面运行 WAA；其他取值按 `spidermonkey`；未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `auth/.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey` |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key；目录总量超过 1 GB 时从最久未使用的文件开始删除 |
@@ -717,7 +720,8 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 - `ready` 账户可以编辑、停用、立即刷新和删除，`auth_required` 账户可以重新登录
 - “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
 - 从未读取成功的账户权益显示为未知，并显示最近一次失败原因
-- 读取报告 AI Studio 不支持当前出口地区或账户时，已有目录的账户同样显示该原因
+- 读取报告 AI Studio 不支持当前出口地区时，已有目录的账户同样显示该原因
+- Google 限制账户使用 AI Studio、账户未满足 AI Studio 的年龄要求或所属 Workspace 没有开放 AI Studio 时，账户进入 `restricted`（服务受限）状态并显示原因与官网页面链接：启动、调度与后台读取都跳过该账户，不续签，验证时只载入一次页面，读取成功后恢复；从 Chrome、Cookie 与指纹浏览器导入时，服务受限的账户标出原因且不能导入
 
 ## 详细文档
 
