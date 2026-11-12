@@ -861,11 +861,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		stopClose := closeOnCancel(response)
 		defer func() { stopClose() }()
 		providerModel := entry.model.ID
+		sentOutput := false
 		send := func(event Event) error {
 			providerModel = cmp.Or(event.ProviderModel, providerModel)
 			event.ProviderModel = providerModel
 			select {
 			case events <- event:
+				if event.Kind != EventUsage && event.Kind != EventError && event.Kind != EventFinish {
+					sentOutput = true
+				}
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1011,11 +1015,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
 		}
-		if releaseSources() != nil {
-			return
-		}
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
+			if releaseSources() != nil {
+				return
+			}
 			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
 			return
 		}
@@ -1036,15 +1040,34 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return
 		}
 		if finish != nil && contentPolicyFinish(finish.FinishReason) {
-			if usage == nil {
-				usage = previousUsage
-			}
-			if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
-				return
+			if sentOutput {
+				if usage == nil {
+					usage = previousUsage
+				}
+				if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
+					return
+				}
 			}
 			if ctx.Err() == nil {
 				_ = send(Event{Kind: EventError, Err: &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
 			}
+			return
+		}
+		if finish != nil && abnormalGenerationFinish(finish.FinishReason) {
+			if sentOutput {
+				if usage == nil {
+					usage = previousUsage
+				}
+				if usage != nil && send(Event{Kind: EventUsage, Usage: usage}) != nil {
+					return
+				}
+			}
+			if ctx.Err() == nil {
+				_ = send(Event{Kind: EventError, Err: &AbnormalFinishError{Reason: finish.FinishReason, Message: finish.FinishMessage}})
+			}
+			return
+		}
+		if releaseSources() != nil {
 			return
 		}
 		if usage == nil {

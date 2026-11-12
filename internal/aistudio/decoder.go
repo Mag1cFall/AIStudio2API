@@ -43,6 +43,20 @@ func (e *ContentPolicyError) Error() string {
 	return fmt.Sprintf("AI Studio 因内容策略结束生成: %s", strings.ToUpper(e.Reason))
 }
 
+// AbnormalFinishError 表示上游以格式错误的函数调用、意外的工具调用或格式错误的响应结束生成
+type AbnormalFinishError struct {
+	Reason  string
+	Message string
+}
+
+// Error 返回上游异常终止生成的原因
+func (e *AbnormalFinishError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("AI Studio 异常终止生成: %s: %s", strings.ToUpper(e.Reason), e.Message)
+	}
+	return fmt.Sprintf("AI Studio 异常终止生成: %s", strings.ToUpper(e.Reason))
+}
+
 // Error 返回协议证据错误
 func (e *ProtocolEvidenceError) Error() string {
 	if e.Method == "" {

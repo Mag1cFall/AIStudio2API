@@ -793,7 +793,7 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 
 - HTTP/协议错误形成失败
 - 读取上游响应时连接中断或上游流在完成帧之前结束，报告为上游流中断与已接收帧数
-- 上游以内容策略类原因（safety、recitation、blocklist、prohibited_content、spii 与对应的图片原因）结束时形成失败：还没有输出时返回 HTTP 502 与各协议的错误对象，已开始流式输出时以流内错误结束，错误消息写明结束原因与上游说明
+- 上游以内容策略类原因（safety、recitation、blocklist、prohibited_content、spii 与对应的图片原因）或重试耗尽后的异常终止原因（malformed_function_call、unexpected_tool_call、malformed_response）结束时形成失败：还没有输出时返回 HTTP 502 与各协议的错误对象，已开始流式输出时以流内错误结束，错误消息写明结束原因与上游说明
 - 其余上游 finish reason 作为正常终态保留并映射到各公开协议
 
 各协议的具体终态转换如下：
@@ -805,7 +805,7 @@ generation config、安全设置、工具与转写配置在选择账户前按各
 | `max_tokens` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `MAX_TOKENS` |
 | `continuation` | `length` | `incomplete/max_output_tokens` | `max_tokens` | `CONTINUATION` |
 | `provider_*` | `content_filter` | `incomplete/content_filter` | `refusal` | 对应 Gemini 枚举或 `OTHER` |
-| other、language、malformed_function_call、malformed_response、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
+| other、language、签名缺失等其他终态 | `stop`，含函数调用时 `tool_calls` | `completed` | `end_turn`，含函数调用时 `tool_use` | 对应 Gemini 枚举 |
 
 `provider_*` 终态优先于同一结果中的工具调用终态，已产生的正文、reasoning、工具事件和 usage 保持在响应中。`provider_*` 在 Chat choice、Responses response、Anthropic message 或 `message_delta` 的 `provider_finish_reason` 中保留原值；Gemini 对 Build 通道的 `provider_<名称>` 输出大写的原枚举名，对 Playground 的 `provider_<编号>` 输出 `OTHER` 并用 `finishMessage` 保留编号。`malformed_response`（Playground 编号 19）在 AI Studio 页面显示为 `Content blocked`。
 
@@ -1407,9 +1407,9 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 
 | 字段 | 读写与生效时机 |
 | --- | --- |
-| `auth_states`、`proxy`、`init_timeout`、`request_timeout` | 保存值；下一次启动生成服务时使用 |
+| `auth_states`、`proxy`、`init_timeout`、`request_timeout`、`build_stall_timeout` | 保存值；下一次启动生成服务时使用 |
 | `warm_worker_limit`、`max_active_workers`、`warm_startup_concurrency`、`per_account_concurrency` | 保存值；下一次启动生成服务时使用 |
-| `build_native_nonstream` | 保存值；下一次启动生成服务时决定非流式请求是否优先选择 Build |
+| `build_native_nonstream`、`assistant_fallback` | 保存值；下一次启动生成服务时决定非流式请求是否优先选择 Build 及冷却后是否回退至写代码助手通道 |
 | `nonstream_keepalive`、`fake_stream` | 保存值；下一次启动生成服务时决定非流式请求是否保活、流式请求是否按非流式生成 |
 | `youtube_links` | 保存值；下一次启动生成服务时决定是否把用户消息文本中的 YouTube 链接作为视频外部媒体发送 |
 | `first_event_hedge` | 保存值；`off`、`auto` 或正整数秒，下一次启动生成服务时决定原请求等待首字多久后发起备用请求 |

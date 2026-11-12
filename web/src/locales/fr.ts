@@ -305,6 +305,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxy': 'Proxy par défaut',
   'settings.initTimeout': 'Délai d’initialisation',
   'settings.requestTimeout': 'Délai de requête',
+  'settings.buildStallTimeout': 'Délai d’inactivité Build avant réponse',
+  'settings.assistantFallback': 'Repli vers le chat Build pendant le refroidissement',
   'settings.warmWorkerLimit': 'Workers préchauffés',
   'settings.maxActiveWorkers': 'Limite de workers en pointe',
   'settings.warmStartupConcurrency': 'Démarrages Camoufox simultanés',
@@ -1790,6 +1792,10 @@ export const messages: Record<TranslationKey, string> = {
     'Les liens YouTube du texte des messages utilisateur sont envoyés au modèle sous forme de vidéo',
   'settings.initTimeoutHelp': 'Durée maximale de l’initialisation WAA d’un compte.',
   'settings.requestTimeoutHelp': 'Durée d’exécution maximale d’une requête.',
+  'settings.buildStallTimeoutHelp':
+    'Durée maximale d’inactivité sur le canal Build et l’assistant de code avant l’émission du texte, d’un appel d’outil ou d’un média ; bascule sur le compte suivant à l’expiration.',
+  'settings.assistantFallbackHelp':
+    'Bascule automatiquement sur le canal assistant de code -build du modèle lorsque tous les comptes candidats sont en refroidissement de quota.',
   'settings.unitSeconds': 'secondes',
   'settings.unitMinutes': 'minutes',
   'settings.timeUnit': 'Unité de temps',

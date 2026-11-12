@@ -271,6 +271,7 @@ type RuntimeConfig struct {
 	GoogleSearch              bool                 `json:"google_search"`
 	FirstEventHedge           string               `json:"first_event_hedge"`
 	FirstEventHedgeModels     string               `json:"first_event_hedge_models"`
+	AssistantFallback         bool                 `json:"assistant_fallback"`
 	ContinuationRewrite       bool                 `json:"continuation_rewrite"`
 	ContinuationPrompt        string               `json:"continuation_prompt"`
 	LogFile                   bool                 `json:"log_file"`
@@ -290,6 +291,7 @@ type RuntimeConfig struct {
 	ProxyPool                 []AdminProxy         `json:"proxy_pool"`
 	InitTimeout               string               `json:"init_timeout"`
 	RequestTimeout            string               `json:"request_timeout"`
+	BuildStallTimeout         string               `json:"build_stall_timeout"`
 	WarmWorkerLimit           int                  `json:"warm_worker_limit"`
 	MaxActiveWorkers          int                  `json:"max_active_workers"`
 	WarmStartupConcurrency    int                  `json:"warm_startup_concurrency"`
