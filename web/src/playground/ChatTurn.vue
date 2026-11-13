@@ -1,14 +1,25 @@
+<script lang="ts">
+import { computed } from 'vue'
+import { useI18n, type TranslationKey } from '@/i18n'
+
+const { locale: formatLocale } = useI18n()
+// timeFormat and fullTimeFormat share Intl.DateTimeFormat instances across turns.
+const timeFormat = computed(
+  () => new Intl.DateTimeFormat(formatLocale.value, { hour: 'numeric', minute: '2-digit' }),
+)
+const fullTimeFormat = computed(
+  () =>
+    new Intl.DateTimeFormat(formatLocale.value, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }),
+)
+</script>
+
 <script setup lang="ts">
-import {
-  computed,
-  nextTick,
-  onActivated,
-  onDeactivated,
-  onMounted,
-  onUnmounted,
-  ref,
-  type FunctionalComponent,
-} from 'vue'
+import { nextTick, onUnmounted, ref, type FunctionalComponent } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -20,7 +31,6 @@ import { useRouter } from 'vue-router'
 import DisclosureChevron from '@/components/DisclosureChevron.vue'
 import UiCollapse from '@/components/UiCollapse.vue'
 import { useConsole } from '@/console'
-import { useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/playground/ui/icons'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import {
@@ -59,7 +69,7 @@ const props = defineProps<{
   showLabel: boolean
   responses?: Part[] | undefined
 }>()
-const { t, locale, logText, errorText } = useI18n()
+const { t, logText, errorText } = useI18n()
 const router = useRouter()
 const { showNotice } = useConsole()
 const playground = usePlayground()
@@ -69,9 +79,6 @@ const root = ref<HTMLElement>()
 const editing = ref(false)
 const draft = ref('')
 const editor = ref<HTMLTextAreaElement>()
-// visible 表示轮次在视口附近；离屏且不在生成时用占位高度代替内容
-const visible = ref(true)
-const height = ref(0)
 
 // agent 表示模型轮次在 Agent 模式下生成：思考按出现顺序显示为步骤行，完成后过程折叠在耗时标题下
 const agent = computed(() => props.turn.role === 'model' && props.turn.agent === true)
@@ -346,20 +353,8 @@ function toggleGroup(key: number): void {
 }
 // waiting 表示已提交但还没有收到任何内容
 const waiting = computed(() => props.streaming && props.turn.parts.length === 0)
-const time = computed(() =>
-  new Intl.DateTimeFormat(locale.value, { hour: 'numeric', minute: '2-digit' }).format(
-    props.turn.created,
-  ),
-)
-// fullTime 与官网一样是悬停时间时提示的日期与时刻
-const fullTime = computed(() =>
-  new Intl.DateTimeFormat(locale.value, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(props.turn.created),
-)
+const time = computed(() => timeFormat.value.format(props.turn.created))
+const fullTime = computed(() => fullTimeFormat.value.format(props.turn.created))
 // roleLabel 是轮次标签：用户轮次为 User，模型轮次与官网一样所选模型为 agent 时为 Agent
 const roleLabel = computed(() => {
   if (props.turn.role === 'user') return t('pg.user')
@@ -538,36 +533,9 @@ async function branch(): Promise<void> {
   }
 }
 
-let intersection: IntersectionObserver
-const resize = new ResizeObserver(([entry]) => {
-  if (visible.value) height.value = entry!.contentRect.height
-})
-
-// observe 观察轮次是否在视口附近与它的高度
-function observe(): void {
-  intersection.observe(root.value!)
-  resize.observe(root.value!)
-}
-
-// disconnect 停止观察轮次
-function disconnect(): void {
-  intersection.disconnect()
-  resize.disconnect()
-}
-
-onMounted(() => {
-  intersection = new IntersectionObserver(
-    (entries) => (visible.value = entries.at(-1)!.isIntersecting),
-    { root: root.value!.closest('.chat-scroller'), rootMargin: '1500px 0px' },
-  )
-  observe()
-})
 // preview 是用户轮次附件的预览对话框：点击图片、视频、音频、文本与 PDF 附件打开
 const { preview, show: showAttachment, release: releasePreview } = useAttachmentPreview()
-onUnmounted(disconnect)
 onUnmounted(releasePreview)
-onDeactivated(disconnect)
-onActivated(observe)
 </script>
 
 <template>
@@ -577,409 +545,395 @@ onActivated(observe)
     class="chat-turn"
     :class="{ 'thought-host': hasThoughtSegment }"
   >
-    <div
-      v-if="!visible && !streaming && !editing && height > 0"
-      :style="{ height: `${height}px` }"
-    ></div>
-    <template v-else>
-      <div v-if="hasThoughtSegment" tabindex="-1" class="chat-turn-container model">
-        <div class="actions-container">
-          <div class="actions hover-or-edit">
-            <button
-              v-tooltip.below="t('pg.rerun')"
-              type="button"
+    <div v-if="hasThoughtSegment" tabindex="-1" class="chat-turn-container model">
+      <div class="actions-container">
+        <div class="actions hover-or-edit">
+          <button
+            v-tooltip.below="t('pg.rerun')"
+            type="button"
+            ms-button
+            class="ms-button-borderless ms-button-icon"
+            :aria-label="t('pg.rerun')"
+            :aria-disabled="session.running"
+            @click="playground.rerun(index)"
+          >
+            <UiIcon name="spark" :size="20" />
+          </button>
+          <DropdownMenuRoot :modal="false">
+            <DropdownMenuTrigger
+              v-tooltip.below="t('pg.moreOptions')"
               ms-button
               class="ms-button-borderless ms-button-icon"
-              :aria-label="t('pg.rerun')"
-              :aria-disabled="session.running"
-              @click="playground.rerun(index)"
+              :aria-label="t('pg.moreOptions')"
             >
-              <UiIcon name="spark" :size="20" />
-            </button>
-            <DropdownMenuRoot :modal="false">
-              <DropdownMenuTrigger
-                v-tooltip.below="t('pg.moreOptions')"
-                ms-button
-                class="ms-button-borderless ms-button-icon"
-                :aria-label="t('pg.moreOptions')"
-              >
-                <UiIcon name="more" :size="20" />
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
-                  <DropdownMenuItem
-                    class="ms-menu-item"
-                    :disabled="session.running"
-                    @select="playground.deleteTurn(index)"
-                  >
-                    <UiIcon name="delete" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('common.delete') }}</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    class="ms-menu-item"
-                    :disabled="session.running"
-                    @select="branch"
-                  >
-                    <UiIcon name="branch" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('pg.branch') }}</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenuRoot>
-          </div>
-        </div>
-        <div class="turn-content">
-          <div v-if="showLabel" role="heading" aria-level="3" class="author-label">
-            {{ roleLabel }}<span v-tooltip.below="fullTime" class="timestamp">{{ time }}</span>
-          </div>
-          <ThoughtChunk
-            :text="thoughtText"
-            :shown="shownThought"
-            :streaming="thinkingRunning"
-            :raw="session.rawMode"
-            :duration="turn.thinking"
-            :tokens="turn.thoughtTokens"
-          />
-        </div>
-        <div v-if="thoughtDuration !== undefined" class="turn-footer">
-          <RunStats class="hover-or-edit" :duration="thoughtDuration" />
+              <UiIcon name="more" :size="20" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
+                <DropdownMenuItem
+                  class="ms-menu-item"
+                  :disabled="session.running"
+                  @select="playground.deleteTurn(index)"
+                >
+                  <UiIcon name="delete" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('common.delete') }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem class="ms-menu-item" :disabled="session.running" @select="branch">
+                  <UiIcon name="branch" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('pg.branch') }}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
         </div>
       </div>
+      <div class="turn-content">
+        <div v-if="showLabel" role="heading" aria-level="3" class="author-label">
+          {{ roleLabel }}<span v-tooltip.below="fullTime" class="timestamp">{{ time }}</span>
+        </div>
+        <ThoughtChunk
+          :text="thoughtText"
+          :shown="shownThought"
+          :streaming="thinkingRunning"
+          :raw="session.rawMode"
+          :duration="turn.thinking"
+          :tokens="turn.thoughtTokens"
+        />
+      </div>
+      <div v-if="thoughtDuration !== undefined" class="turn-footer">
+        <RunStats class="hover-or-edit" :duration="thoughtDuration" />
+      </div>
+    </div>
 
-      <div
-        v-if="hasAnswerSegment"
-        tabindex="-1"
-        class="chat-turn-container"
-        :class="[turn.role, { edit: editing, 'has-code': hasStickyCode }]"
-      >
-        <div class="actions-container">
-          <div class="actions hover-or-edit">
-            <button
-              v-if="turn.error === undefined"
-              v-tooltip.below="editing ? t('pg.stopEditing') : t('pg.edit')"
-              type="button"
-              ms-button
-              class="toggle-edit-button ms-button-borderless ms-button-icon"
-              :style="{ visibility: waiting ? 'hidden' : undefined }"
-              :aria-label="editing ? t('pg.stopEditing') : t('pg.edit')"
-              :aria-disabled="session.running"
-              @mousedown.prevent
-              @click="!session.running && startEdit()"
-            >
-              <UiIcon :name="editing ? 'check' : 'edit'" :size="20" />
-            </button>
-            <button
-              v-tooltip.below="t('pg.rerun')"
-              type="button"
+    <div
+      v-if="hasAnswerSegment"
+      tabindex="-1"
+      class="chat-turn-container"
+      :class="[turn.role, { edit: editing, 'has-code': hasStickyCode }]"
+    >
+      <div class="actions-container">
+        <div class="actions hover-or-edit">
+          <button
+            v-if="turn.error === undefined"
+            v-tooltip.below="editing ? t('pg.stopEditing') : t('pg.edit')"
+            type="button"
+            ms-button
+            class="toggle-edit-button ms-button-borderless ms-button-icon"
+            :style="{ visibility: waiting ? 'hidden' : undefined }"
+            :aria-label="editing ? t('pg.stopEditing') : t('pg.edit')"
+            :aria-disabled="session.running"
+            @mousedown.prevent
+            @click="!session.running && startEdit()"
+          >
+            <UiIcon :name="editing ? 'check' : 'edit'" :size="20" />
+          </button>
+          <button
+            v-tooltip.below="t('pg.rerun')"
+            type="button"
+            ms-button
+            class="ms-button-borderless ms-button-icon"
+            :aria-label="t('pg.rerun')"
+            :aria-disabled="session.running"
+            @click="!session.running && playground.rerun(index)"
+          >
+            <UiIcon name="spark" :size="20" />
+          </button>
+          <DropdownMenuRoot :modal="false">
+            <DropdownMenuTrigger
+              v-tooltip.below="t('pg.moreOptions')"
               ms-button
               class="ms-button-borderless ms-button-icon"
-              :aria-label="t('pg.rerun')"
-              :aria-disabled="session.running"
-              @click="!session.running && playground.rerun(index)"
+              :aria-label="t('pg.moreOptions')"
             >
-              <UiIcon name="spark" :size="20" />
-            </button>
-            <DropdownMenuRoot :modal="false">
-              <DropdownMenuTrigger
-                v-tooltip.below="t('pg.moreOptions')"
-                ms-button
-                class="ms-button-borderless ms-button-icon"
-                :aria-label="t('pg.moreOptions')"
-              >
-                <UiIcon name="more" :size="20" />
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
-                  <DropdownMenuItem
-                    class="ms-menu-item"
-                    :disabled="session.running"
-                    @select="playground.deleteTurn(index)"
-                  >
-                    <UiIcon name="delete" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('common.delete') }}</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    class="ms-menu-item"
-                    :disabled="session.running"
-                    @select="branch"
-                  >
-                    <UiIcon name="branch" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('pg.branch') }}</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    class="ms-menu-item"
-                    @select="copyToClipboard(renderedText() || plainText())"
-                  >
-                    <UiIcon name="copy" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('pg.copyText') }}</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem class="ms-menu-item" @select="copyToClipboard(plainText())">
-                    <UiIcon name="markdownCopy" :size="18" />
-                    <span class="ms-menu-item-text">{{ t('pg.copyMarkdown') }}</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenuRoot>
-          </div>
+              <UiIcon name="more" :size="20" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent align="end" :side-offset="4" class="ms-menu-panel">
+                <DropdownMenuItem
+                  class="ms-menu-item"
+                  :disabled="session.running"
+                  @select="playground.deleteTurn(index)"
+                >
+                  <UiIcon name="delete" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('common.delete') }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem class="ms-menu-item" :disabled="session.running" @select="branch">
+                  <UiIcon name="branch" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('pg.branch') }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  class="ms-menu-item"
+                  @select="copyToClipboard(renderedText() || plainText())"
+                >
+                  <UiIcon name="copy" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('pg.copyText') }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem class="ms-menu-item" @select="copyToClipboard(plainText())">
+                  <UiIcon name="markdownCopy" :size="18" />
+                  <span class="ms-menu-item-text">{{ t('pg.copyMarkdown') }}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
         </div>
-        <div class="turn-content">
-          <div
-            v-if="showLabel && !hasThoughtSegment"
-            role="heading"
-            aria-level="3"
-            class="author-label"
-          >
-            {{ roleLabel }}<span v-tooltip.below="fullTime" class="timestamp">{{ time }}</span>
-          </div>
-          <LoadingIndicator v-if="waiting" />
-          <button
-            v-if="turnProcess"
-            type="button"
-            class="process-header"
-            :disabled="!turnProcess.foldable"
-            :aria-expanded="turnProcess.foldable ? processOpen : undefined"
-            @click="processOpen = !processOpen"
-          >
-            <span class="process-label">{{ turnProcess.label }}</span>
-            <DisclosureChevron
-              v-if="turnProcess.foldable"
-              :open="processOpen"
-              :turn="180"
-              class="process-chevron"
-              ><UiIcon name="chevronDown" :size="14"
-            /></DisclosureChevron>
-          </button>
-          <template v-for="section in sections" :key="section.key">
-            <component :is="section.fold ? UiCollapse : Bare" :open="!folded">
-              <template v-for="block in section.blocks" :key="block.key">
-                <button
-                  v-if="block.group"
-                  type="button"
-                  class="step-group"
-                  :aria-expanded="openGroups.includes(block.key)"
-                  @click="toggleGroup(block.key)"
+      </div>
+      <div class="turn-content">
+        <div
+          v-if="showLabel && !hasThoughtSegment"
+          role="heading"
+          aria-level="3"
+          class="author-label"
+        >
+          {{ roleLabel }}<span v-tooltip.below="fullTime" class="timestamp">{{ time }}</span>
+        </div>
+        <LoadingIndicator v-if="waiting" />
+        <button
+          v-if="turnProcess"
+          type="button"
+          class="process-header"
+          :disabled="!turnProcess.foldable"
+          :aria-expanded="turnProcess.foldable ? processOpen : undefined"
+          @click="processOpen = !processOpen"
+        >
+          <span class="process-label">{{ turnProcess.label }}</span>
+          <DisclosureChevron
+            v-if="turnProcess.foldable"
+            :open="processOpen"
+            :turn="180"
+            class="process-chevron"
+            ><UiIcon name="chevronDown" :size="14"
+          /></DisclosureChevron>
+        </button>
+        <template v-for="section in sections" :key="section.key">
+          <component :is="section.fold ? UiCollapse : Bare" :open="!folded">
+            <template v-for="block in section.blocks" :key="block.key">
+              <button
+                v-if="block.group"
+                type="button"
+                class="step-group"
+                :aria-expanded="openGroups.includes(block.key)"
+                @click="toggleGroup(block.key)"
+              >
+                <span class="group-leading" aria-hidden="true">
+                  <UiIcon :name="block.group.icon" :size="14" class="group-icon" />
+                  <span class="group-chevron"
+                    ><DisclosureChevron :open="openGroups.includes(block.key)" :turn="180"
+                      ><UiIcon name="chevronDown" :size="16" /></DisclosureChevron
+                  ></span>
+                </span>
+                <span class="group-label">{{ block.group.title }}</span>
+              </button>
+              <SegmentRun
+                v-slot="{ segment, text, key }"
+                :items="block.items"
+                :wrap="block.group !== undefined"
+                :open="openGroups.includes(block.key)"
+              >
+                <div
+                  v-if="segment.kind === 'text' && turn.role === 'model' && !editing && text"
+                  class="answer-text"
                 >
-                  <span class="group-leading" aria-hidden="true">
-                    <UiIcon :name="block.group.icon" :size="14" class="group-icon" />
-                    <span class="group-chevron"
-                      ><DisclosureChevron :open="openGroups.includes(block.key)" :turn="180"
-                        ><UiIcon name="chevronDown" :size="16" /></DisclosureChevron
-                    ></span>
-                  </span>
-                  <span class="group-label">{{ block.group.title }}</span>
-                </button>
-                <SegmentRun
-                  v-slot="{ segment, text, key }"
-                  :items="block.items"
-                  :wrap="block.group !== undefined"
-                  :open="openGroups.includes(block.key)"
+                  <MarkdownView :text="text" :raw="session.rawMode" />
+                </div>
+                <div v-else-if="segment.kind === 'thought'" class="step">
+                  <ThoughtStep
+                    :text="segment.text"
+                    :running="streaming && key === segments.length - 1"
+                    :raw="session.rawMode"
+                  />
+                </div>
+                <div
+                  v-else-if="
+                    segment.kind === 'part' &&
+                    !pairedResult(segment.index) &&
+                    !(stepImage(segment.index) && !folded)
+                  "
+                  :class="{ step: isStep(segment) }"
                 >
-                  <div
-                    v-if="segment.kind === 'text' && turn.role === 'model' && !editing && text"
-                    class="answer-text"
-                  >
-                    <MarkdownView :text="text" :raw="session.rawMode" />
-                  </div>
-                  <div v-else-if="segment.kind === 'thought'" class="step">
-                    <ThoughtStep
-                      :text="segment.text"
-                      :running="streaming && key === segments.length - 1"
-                      :raw="session.rawMode"
-                    />
-                  </div>
-                  <div
-                    v-else-if="
-                      segment.kind === 'part' &&
-                      !pairedResult(segment.index) &&
-                      !(stepImage(segment.index) && !folded)
+                  <template
+                    v-if="
+                      turn.role === 'user' && (segment.part.inlineData || segment.part.fileData)
                     "
-                    :class="{ step: isStep(segment) }"
                   >
-                    <template
-                      v-if="
-                        turn.role === 'user' && (segment.part.inlineData || segment.part.fileData)
-                      "
+                    <button
+                      v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
+                      type="button"
+                      class="image-chunk"
+                      :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                      :aria-label="t('pg.preview')"
+                      @click="showAttachment(segment.part)"
                     >
-                      <button
-                        v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
-                        type="button"
-                        class="image-chunk"
-                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
-                        :aria-label="t('pg.preview')"
-                        @click="showAttachment(segment.part)"
-                      >
-                        <img
-                          class="loaded-image"
-                          :src="attachmentURL(segment.part)"
-                          :alt="attachmentName(segment.part)"
-                        />
-                      </button>
-                      <FileChunk
-                        v-else
-                        :part="segment.part"
-                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
-                        @preview="showAttachment(segment.part)"
-                      />
-                    </template>
-                    <template v-else-if="segment.part.inlineData || segment.part.fileData">
                       <img
-                        v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
-                        class="media-image"
+                        class="loaded-image"
                         :src="attachmentURL(segment.part)"
-                        alt=""
+                        :alt="attachmentName(segment.part)"
                       />
-                      <audio
-                        v-else-if="segment.part.inlineData?.mimeType.startsWith('audio/')"
-                        controls
-                        :src="attachmentURL(segment.part)"
-                      ></audio>
-                      <VideoResult
-                        v-else-if="segment.part.inlineData?.mimeType.startsWith('video/')"
-                        :src="attachmentURL(segment.part)"
-                      />
-                      <a
-                        v-else-if="
-                          segment.part.fileData && !youtubeVideoID(segment.part.fileData.fileUri)
-                        "
-                        class="file-chip"
-                        :href="segment.part.fileData.fileUri"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <UiIcon
-                          :name="
-                            driveNames.has(segment.part.fileData.fileUri) ? 'addToDrive' : 'youtube'
-                          "
-                          :size="18"
-                        />{{
-                          driveNames.get(segment.part.fileData.fileUri) ??
-                          segment.part.fileData.fileUri
-                        }}
-                      </a>
-                      <FileChunk
-                        v-else
-                        :part="segment.part"
-                        :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
-                      />
-                    </template>
-                    <FunctionCallChunk
-                      v-else-if="segment.part.functionCall"
-                      :call="segment.part.functionCall"
-                      :response="responseText(segment.part.functionCall)"
-                      :awaiting="awaitingResponse"
-                      @respond="playground.respond(segment.part.functionCall, $event)"
+                    </button>
+                    <FileChunk
+                      v-else
+                      :part="segment.part"
+                      :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                      @preview="showAttachment(segment.part)"
                     />
-                    <CodeExecutionChunk
-                      v-else-if="segment.part.executableCode || segment.part.codeExecutionResult"
-                      :code="segment.part.executableCode"
-                      :result="
-                        segment.part.codeExecutionResult ??
-                        answerParts[segment.index + 1]?.codeExecutionResult
-                      "
-                      :images="stepImages(segment.index)"
-                      :running="streaming && segment.index === answerParts.length - 1"
+                  </template>
+                  <template v-else-if="segment.part.inlineData || segment.part.fileData">
+                    <img
+                      v-if="segment.part.inlineData?.mimeType.startsWith('image/')"
+                      class="media-image"
+                      :src="attachmentURL(segment.part)"
+                      alt=""
                     />
-                    <ServerToolChunk
-                      v-else-if="segment.part.toolCall"
-                      :call="segment.part.toolCall"
-                      :response="toolResponse(segment.index)"
-                      :sources="segment.index === lastSearch && !streaming ? sources : []"
-                      :running="streaming"
+                    <audio
+                      v-else-if="segment.part.inlineData?.mimeType.startsWith('audio/')"
+                      controls
+                      :src="attachmentURL(segment.part)"
+                    ></audio>
+                    <VideoResult
+                      v-else-if="segment.part.inlineData?.mimeType.startsWith('video/')"
+                      :src="attachmentURL(segment.part)"
                     />
-                    <ServerToolChunk
-                      v-else-if="segment.part.toolResponse"
-                      :call="segment.part.toolResponse"
-                      :response="segment.part.toolResponse"
-                      :sources="[]"
-                      :running="false"
-                    />
-                  </div>
-                </SegmentRun>
-              </template>
-            </component>
-          </template>
-          <div v-if="turn.role === 'user' && !editing" class="user-chunk">
-            <MarkdownView :text="plainText()" :raw="session.rawMode" />
-          </div>
-          <textarea
-            v-if="editing"
-            ref="editor"
-            v-model="draft"
-            class="edit-textarea"
-            :aria-label="t('pg.edit')"
-            @input="resizeEditor"
-            @keydown="onEditorKeydown"
-            @blur="onEditorBlur"
-          ></textarea>
-          <div v-if="sources.length && !streaming" class="grounding-sources">
-            <p class="sources-title">
-              {{ t('pg.citations') }}
-              <span
-                v-tooltip="t('pg.sourcesTooltip')"
-                class="sources-help"
-                :aria-label="t('pg.sourcesTooltip')"
-                ><UiIcon name="help" :size="16"
-              /></span>
-            </p>
-            <ol>
-              <li v-for="(source, sourceIndex) in sources" :key="sourceIndex">
-                <a :href="source.uri" target="_blank" rel="noopener noreferrer">{{
-                  source.title || source.uri
-                }}</a>
-              </li>
-            </ol>
-          </div>
-          <div v-if="turn.searchQueries?.length && !streaming" class="search-entry-point">
-            <div class="search-entry-container">
-              <h5 class="search-entry-container-title">{{ t('pg.searchSuggestions') }}</h5>
-              <div class="search-entry-container-description">
-                {{ t('pg.searchSuggestionsNote') }}
-                <a
-                  href="https://ai.google.dev/gemini-api/docs/grounding/search-suggestions"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  >{{ t('pg.learnMore') }}</a
-                >
-              </div>
-              <div class="search-chips">
-                <UiIcon name="search" :size="24" class="search-chips-icon" />
-                <ul class="carousel">
-                  <li v-for="query in turn.searchQueries" :key="query">
                     <a
-                      class="chip"
+                      v-else-if="
+                        segment.part.fileData && !youtubeVideoID(segment.part.fileData.fileUri)
+                      "
+                      class="file-chip"
+                      :href="segment.part.fileData.fileUri"
                       target="_blank"
-                      rel="noopener noreferrer"
-                      :href="`https://www.google.com/search?q=${encodeURIComponent(query)}&client=app-vertex-grounding&safesearch=active`"
-                      >{{ query }}</a
+                      rel="noreferrer"
                     >
-                  </li>
-                </ul>
-              </div>
+                      <UiIcon
+                        :name="
+                          driveNames.has(segment.part.fileData.fileUri) ? 'addToDrive' : 'youtube'
+                        "
+                        :size="18"
+                      />{{
+                        driveNames.get(segment.part.fileData.fileUri) ??
+                        segment.part.fileData.fileUri
+                      }}
+                    </a>
+                    <FileChunk
+                      v-else
+                      :part="segment.part"
+                      :class="{ 'chunk-gap': segment.index < answerParts.length - 1 }"
+                    />
+                  </template>
+                  <FunctionCallChunk
+                    v-else-if="segment.part.functionCall"
+                    :call="segment.part.functionCall"
+                    :response="responseText(segment.part.functionCall)"
+                    :awaiting="awaitingResponse"
+                    @respond="playground.respond(segment.part.functionCall, $event)"
+                  />
+                  <CodeExecutionChunk
+                    v-else-if="segment.part.executableCode || segment.part.codeExecutionResult"
+                    :code="segment.part.executableCode"
+                    :result="
+                      segment.part.codeExecutionResult ??
+                      answerParts[segment.index + 1]?.codeExecutionResult
+                    "
+                    :images="stepImages(segment.index)"
+                    :running="streaming && segment.index === answerParts.length - 1"
+                  />
+                  <ServerToolChunk
+                    v-else-if="segment.part.toolCall"
+                    :call="segment.part.toolCall"
+                    :response="toolResponse(segment.index)"
+                    :sources="segment.index === lastSearch && !streaming ? sources : []"
+                    :running="streaming"
+                  />
+                  <ServerToolChunk
+                    v-else-if="segment.part.toolResponse"
+                    :call="segment.part.toolResponse"
+                    :response="segment.part.toolResponse"
+                    :sources="[]"
+                    :running="false"
+                  />
+                </div>
+              </SegmentRun>
+            </template>
+          </component>
+        </template>
+        <div v-if="turn.role === 'user' && !editing" class="user-chunk">
+          <MarkdownView :text="plainText()" :raw="session.rawMode" />
+        </div>
+        <textarea
+          v-if="editing"
+          ref="editor"
+          v-model="draft"
+          class="edit-textarea"
+          :aria-label="t('pg.edit')"
+          @input="resizeEditor"
+          @keydown="onEditorKeydown"
+          @blur="onEditorBlur"
+        ></textarea>
+        <div v-if="sources.length && !streaming" class="grounding-sources">
+          <p class="sources-title">
+            {{ t('pg.citations') }}
+            <span
+              v-tooltip="t('pg.sourcesTooltip')"
+              class="sources-help"
+              :aria-label="t('pg.sourcesTooltip')"
+              ><UiIcon name="help" :size="16"
+            /></span>
+          </p>
+          <ol>
+            <li v-for="(source, sourceIndex) in sources" :key="sourceIndex">
+              <a :href="source.uri" target="_blank" rel="noopener noreferrer">{{
+                source.title || source.uri
+              }}</a>
+            </li>
+          </ol>
+        </div>
+        <div v-if="turn.searchQueries?.length && !streaming" class="search-entry-point">
+          <div class="search-entry-container">
+            <h5 class="search-entry-container-title">{{ t('pg.searchSuggestions') }}</h5>
+            <div class="search-entry-container-description">
+              {{ t('pg.searchSuggestionsNote') }}
+              <a
+                href="https://ai.google.dev/gemini-api/docs/grounding/search-suggestions"
+                target="_blank"
+                rel="noopener noreferrer"
+                >{{ t('pg.learnMore') }}</a
+              >
+            </div>
+            <div class="search-chips">
+              <UiIcon name="search" :size="24" class="search-chips-icon" />
+              <ul class="carousel">
+                <li v-for="query in turn.searchQueries" :key="query">
+                  <a
+                    class="chip"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    :href="`https://www.google.com/search?q=${encodeURIComponent(query)}&client=app-vertex-grounding&safesearch=active`"
+                    >{{ query }}</a
+                  >
+                </li>
+              </ul>
             </div>
           </div>
-          <div v-if="turn.error !== undefined" class="model-error">
-            <UiIcon name="error" :size="20" />
-            <span>{{ logText(turn.error) }}</span>
-          </div>
-          <div
-            v-if="
-              turn.finishReason && !['STOP', 'MAX_TOKENS'].includes(turn.finishReason) && !streaming
-            "
-            class="finish-reason"
-          >
-            {{ t('pg.finishReason').replace('{reason}', turn.finishReason) }}
-          </div>
         </div>
-        <div v-if="answerDuration !== undefined" class="turn-footer">
-          <RunStats
-            class="hover-or-edit"
-            :duration="answerDuration"
-            :latency="turn.latency"
-            :tokens="streaming ? undefined : turn.tokens"
-          />
+        <div v-if="turn.error !== undefined" class="model-error">
+          <UiIcon name="error" :size="20" />
+          <span>{{ logText(turn.error) }}</span>
+        </div>
+        <div
+          v-if="
+            turn.finishReason && !['STOP', 'MAX_TOKENS'].includes(turn.finishReason) && !streaming
+          "
+          class="finish-reason"
+        >
+          {{ t('pg.finishReason').replace('{reason}', turn.finishReason) }}
         </div>
       </div>
-    </template>
+      <div v-if="answerDuration !== undefined" class="turn-footer">
+        <RunStats
+          class="hover-or-edit"
+          :duration="answerDuration"
+          :latency="turn.latency"
+          :tokens="streaming ? undefined : turn.tokens"
+        />
+      </div>
+    </div>
     <MediaViewDialog
       v-if="turn.role === 'user'"
       v-model:open="preview.open"
