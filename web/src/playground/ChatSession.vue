@@ -26,12 +26,10 @@ const scrollbar = ref<InstanceType<typeof ItemsScrollbar>>()
 
 // streamingIndex 是正在生成的模型轮次下标
 const streamingIndex = computed(() => (session.running ? session.turns.length - 1 : -1))
-// renderBatch 是打开对话后每帧渲染的轮次数，长对话从末尾一批开始逐帧向前补齐
-const renderBatch = 1
+// renderBatch controls how many turns are prepended per frame after opening a chat.
+const renderBatch = 4
 // firstShown 是已渲染的第一个轮次下标
 const firstShown = ref(0)
-// eager 是首批轮次的下标范围 [起, 止)，这些轮次的正文块始终全部排版、不按视口跳过，打开对话滚到末尾时可见部分已是实际高度
-const eager = ref<[number, number]>([0, 0])
 let filling = 0
 let fillFrame = 0
 // codeFont 是代码块的字体，首批轮次等它载入或载入失败后才排版，代码按最终字体换行，之后不因字体晚到而改变高度
@@ -42,18 +40,25 @@ function scheduleFill(first = false): void {
   fillFrame = requestAnimationFrame(() => (filling = window.setTimeout(() => void fill(first))))
 }
 
-// fill 向前多渲染一批轮次；首批不满一屏时在同一任务里继续向前补并滚到末尾，首次绘制即铺满可见区域，之后在可见区域上方每帧补一批，由浏览器的滚动锚定保持可见内容不动
+// fill prepends batches from the end upward and preserves scrollTop when scrolled to the temporary top.
 async function fill(first: boolean): Promise<void> {
   if (first) await document.fonts.load(codeFont).catch(() => [])
+  const prevHeight = scroller.value?.scrollHeight ?? 0
+  const prevTop = scroller.value?.scrollTop ?? 0
   firstShown.value = Math.max(0, firstShown.value - renderBatch)
-  if (first) eager.value = [firstShown.value, eager.value[1]]
   await nextTick()
   // 等待字体与更新期间切换对话时组件已卸载，补齐随之结束
   if (!scroller.value) return
+  const element = scroller.value
   if (first) {
-    const element = scroller.value
     if (firstShown.value > 0 && element.scrollHeight <= element.clientHeight) return fill(true)
     follow()
+  } else if (detached && prevTop <= 1 && element.scrollTop <= 1) {
+    const added = element.scrollHeight - prevHeight
+    if (added > 0) {
+      element.scrollTop += added
+      lastTop = element.scrollTop
+    }
   }
   if (firstShown.value > 0) scheduleFill()
 }
@@ -62,10 +67,11 @@ watch(
   (turns) => {
     cancelAnimationFrame(fillFrame)
     window.clearTimeout(filling)
+    detached = false
     // 长对话的末尾一批也在下一帧之后渲染，不与打开对话时的页面更新挤在同一个任务里
     firstShown.value = turns.length > renderBatch ? turns.length : 0
-    eager.value = [turns.length, turns.length]
     if (firstShown.value > 0) scheduleFill(true)
+    else void nextTick(() => follow(true))
   },
   { immediate: true },
 )
@@ -112,38 +118,39 @@ const scrollable = ref(false)
 const atBottom = ref(true)
 const userScrolling = ref(false)
 
-// measure 记录对话是否可滚动、是否位于底部
+// measure records whether the conversation is scrollable and whether it sits at the bottom.
 function measure(): void {
   const element = scroller.value!
   scrollable.value = element.scrollHeight > element.clientHeight
-  atBottom.value = element.scrollTop >= element.scrollHeight - element.clientHeight
+  atBottom.value = element.scrollTop >= element.scrollHeight - element.clientHeight - 1
 }
 
-// follow 与官网 ms-autoscroll-container 一致：没有停止跟随时滚到底部，force 先恢复跟随；内容变矮使位置被截短时同样记录新的底部
+// follow scrolls to the bottom unless detached; force re-attaches.
 function follow(force = false): void {
-  const element = scroller.value!
+  const element = scroller.value
+  if (!element) return
   if (force) detached = false
   if (detached) return
   const max = element.scrollHeight - element.clientHeight
   lastTop = max
   lastHeight = element.clientHeight
-  if (element.scrollTop >= max) return
+  if (element.scrollTop >= max - 1) return
   element.scrollTop = max
   atBottom.value = true
 }
 
-// onScroll 用户向上滚动任意距离即停止跟随，滚到底部恢复跟随；可见高度增加使位置被截短的距离不算向上滚动
+// onScroll detaches auto-follow on any upward scroll including subpixel steps and re-attaches at bottom.
 function onScroll(): void {
   const element = scroller.value!
   const max = element.scrollHeight - element.clientHeight
-  const top = Math.max(0, Math.floor(element.scrollTop))
-  const bottom = top >= max
+  const rawTop = Math.max(0, element.scrollTop)
+  const bottom = rawTop >= max - 1
   const grown = Math.max(0, element.clientHeight - lastHeight)
-  if (lastTop <= max && lastTop - top > 1 + grown) detached = true
+  if (lastTop <= max && lastTop - rawTop > 1 + grown) detached = true
   if (bottom) detached = false
-  lastTop = top
+  if (detached || bottom || rawTop > lastTop) lastTop = bottom ? max : rawTop
   lastHeight = element.clientHeight
-  scrolled.value = top > 0
+  scrolled.value = rawTop > 0
   atBottom.value = bottom
   userScrolling.value = true
   window.clearTimeout(scrollingTimer)
@@ -211,7 +218,6 @@ onUnmounted(() => {
         <template v-for="(turn, index) in session.turns" :key="turn.id">
           <ChatTurn
             v-if="index >= firstShown && !responseTurn(index)"
-            :class="{ eager: index >= eager[0] && index < eager[1] }"
             :turn="turn"
             :index="index"
             :streaming="index === streamingIndex"
@@ -289,10 +295,6 @@ onUnmounted(() => {
 
 .side-by-side .chat-session-content {
   padding: 0 0 24px;
-}
-
-.chat-session-content :deep(.chat-turn.eager .cmark-node > *) {
-  content-visibility: visible;
 }
 
 .bottom-overlay {
