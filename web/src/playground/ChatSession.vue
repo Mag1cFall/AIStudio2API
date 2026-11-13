@@ -62,6 +62,10 @@ async function fill(first: boolean): Promise<void> {
   }
   if (firstShown.value > 0) scheduleFill()
 }
+// detached 表示用户向上滚动后停止跟随，回到底部时恢复；lastTop 是判断向上滚动的基准位置，跟随时为自动跟随设定的位置，停止跟随后与向下滚动时为当前位置；lastHeight 是当时的可见高度
+let detached = false
+let lastTop = 0
+let lastHeight = 0
 watch(
   () => session.turns,
   (turns) => {
@@ -108,10 +112,6 @@ const scrollbarItems = computed<ScrollbarItem[]>(() => {
   return items
 })
 
-// detached 表示用户向上滚动后停止跟随，回到底部时恢复；lastTop 是上一次滚动事件或自动跟随设定的位置，lastHeight 是当时的可见高度
-let detached = false
-let lastTop = 0
-let lastHeight = 0
 let scrollingTimer = 0
 const scrolled = ref(false)
 const scrollable = ref(false)
@@ -171,7 +171,8 @@ function observe(): void {
 onMounted(observe)
 onDeactivated(() => resize.disconnect())
 onActivated(() => {
-  scroller.value!.scrollTop = lastTop
+  if (!scroller.value) return
+  scroller.value.scrollTop = lastTop
   observe()
 })
 watch(

@@ -145,11 +145,12 @@ function syncHostScroll(force = false): void {
   const element = host.value
   if (element === undefined || dragging.value || handleHeight.value <= 0) return
   if (element.scrollHeight <= element.clientHeight) return
+  if (!force && element.matches(':focus-within')) return
   if (!force && element.matches(':hover') && !props.scrolling) return
   const viewTop = element.scrollTop
   const viewHeight = element.clientHeight
   const maxHost = element.scrollHeight - viewHeight
-  const margin = 60
+  const margin = Math.max(0, Math.min(60, (viewHeight - handleHeight.value) / 2))
   const handleBottom = handleTop.value + handleHeight.value
   if (handleTop.value <= margin) element.scrollTop = 0
   else if (handleBottom >= element.scrollHeight - margin) element.scrollTop = maxHost
@@ -344,7 +345,9 @@ onMounted(() => {
   document.addEventListener('touchend', stopDrag)
 })
 
-onActivated(() => sync(true))
+onActivated(() => {
+  if (host.value) sync(true)
+})
 
 onUnmounted(() => {
   props.scroller?.removeEventListener('scroll', schedule)
