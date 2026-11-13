@@ -40,6 +40,7 @@ import {
   buildRequest,
   continuation,
   countTokens,
+  countTokensDetailed,
   failureText,
 } from './request'
 import type {
@@ -228,11 +229,15 @@ function models(): Model[] {
   return useConsole().models.value
 }
 
-// SessionLinks 是对话实例与页面其他窗格的关联：compare 返回随对话一起保存的右侧窗格，save 是右侧窗格变化时保存页面对话的函数
+// SessionLinks 是对话实例与页面其他窗格的关联：compare 返回随对话一起保存的右侧窗格，save 是右侧窗格变化时保存页面对话的函数，draft 返回对比模式共用的输入框文本与附件
 interface SessionLinks {
   compare?: () => CompareData | undefined
   save?: () => Promise<void>
+  draft?: () => { text: string; attachments: Part[] }
 }
+
+// draftCountDelay 与官网一致：输入框停止输入 500 ms 后才统计输入框文本的 token
+const draftCountDelay = 500
 
 // createSession 创建一个对话实例，temporary 为真时不单独写入对话库
 function createSession(temporary = false, links: SessionLinks = {}) {
@@ -249,6 +254,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     temporary,
     rawMode: false,
     promptTokens: null as number | null,
+    draftTokens: 0,
+    systemTokens: null as number | null,
     saveState: 'idle' as SaveState,
     loadError: '',
     loading: false,
@@ -259,11 +266,39 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // opened 是 open 装入的运行设置，换入它引起的设置变化不触发保存
   let opened: RunSettings | undefined
   let tokenController: AbortController | undefined
+  let draftController: AbortController | undefined
+  let draftTimer = 0
+  let tokenTimer = 0
+  // lastRun 是对话末尾模型轮次那次运行的输入与输出 token 数，取自生成用量或整段统计的逐轮明细
+  const lastRun = ref<{ id: string; input: number; output: number } | null>(null)
   const scope = effectScope(true)
 
   // currentModel 返回当前所选模型
   const currentModel = scope.run(() =>
     computed(() => models().find((model) => model.id === session.settings.model)),
+  )!
+
+  // draftSource 返回本窗格使用的输入框文本与附件，对比模式的右侧窗格共用主输入框
+  const draftSource = () =>
+    links.draft ? links.draft() : { text: session.draft, attachments: session.attachments }
+
+  // usage 是标题栏显示的 token 用量：总数为对话、输入框文本与输入框附件之和；输入框为空且末尾是模型轮次时，输入与输出取那次运行，否则全部记为下一次运行的输入
+  const usage = scope.run(() =>
+    computed(() => {
+      const pending =
+        session.draftTokens +
+        draftSource().attachments.reduce((sum, part) => sum + (part.tokenCount ?? 0), 0)
+      const total = (session.promptTokens ?? 0) + pending
+      const last = session.turns.at(-1)
+      const run =
+        pending === 0 && last !== undefined && lastRun.value?.id === last.id ? lastRun.value : null
+      return {
+        total,
+        input: run ? run.input : total,
+        output: run ? run.output : 0,
+        cached: run ? (last?.cachedTokens ?? 0) : 0,
+      }
+    }),
   )!
 
   // newChat 丢弃尚未写入的保存与生成，开始一个空白对话，systemInstruction 为新对话的系统指令
@@ -279,10 +314,14 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       attachments: [],
       running: false,
       promptTokens: null,
+      draftTokens: 0,
+      systemTokens: null,
       saveState: 'idle',
       loadError: '',
       rawMode: false,
     })
+    lastRun.value = null
+    if (systemInstruction.trim() !== '') scheduleTokens()
   }
 
   // ensureModel 在目录到达后为没有模型的对话补上默认模型
@@ -330,11 +369,14 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         running: false,
         temporary: false,
         promptTokens: null,
+        draftTokens: 0,
+        systemTokens: null,
         saveState: 'saved',
       })
+      lastRun.value = null
       opened = session.settings
       // 打开对话后在下一个任务统计 token，构造整段对话的请求不并入渲染对话的任务
-      setTimeout(() => void refreshTokens())
+      scheduleTokens()
       return prompt
     } catch (error) {
       newChat()
@@ -406,11 +448,23 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     controller?.abort()
   }
 
-  // refreshTokens 与官网一致统计当前对话的输入 token：已按抽帧计数的视频取其 token 数，其余内容用 countTokens 统计
+  // hasSystemInput 表示当前模型支持系统指令且系统指令不为空
+  function hasSystemInput(): boolean {
+    return (
+      session.settings.systemInstruction.trim() !== '' &&
+      hasCode(currentModel.value, Capability.SystemInstruction)
+    )
+  }
+
+  // refreshTokens 与官网一致统计当前对话与系统指令的输入 token：已按抽帧计数的视频取其 token 数，其余内容用 countTokens 统计，系统指令与末尾模型轮次的 token 取统计的逐轮明细
   async function refreshTokens(): Promise<void> {
+    window.clearTimeout(tokenTimer)
+    tokenTimer = 0
     tokenController?.abort()
     const model = currentModel.value
-    if (model === undefined || session.turns.length === 0) {
+    const hasSystem = hasSystemInput()
+    if (!hasSystem) session.systemTokens = null
+    if (model === undefined || (session.turns.length === 0 && !hasSystem)) {
       session.promptTokens = null
       return
     }
@@ -422,19 +476,67 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         .map((turn) => ({ ...turn, parts: turn.parts.filter((part) => !framedVideo(part)) }))
         .filter((turn) => turn.parts.length > 0)
       const counted =
-        turns.length === 0
-          ? 0
-          : await countTokens(
+        turns.length === 0 && !hasSystem
+          ? { totalTokens: 0 }
+          : await countTokensDetailed(
               model.id,
               apiKey(),
               buildRequest(session.settings, model, turns),
               counter.signal,
             )
-      const count = framed.reduce((sum, part) => sum + part.tokenCount!, counted)
-      if (!counter.signal.aborted) session.promptTokens = count
+      if (counter.signal.aborted) return
+      const count = framed.reduce((sum, part) => sum + part.tokenCount!, counted.totalTokens)
+      session.promptTokens = count
+      session.systemTokens = hasSystem ? (counted.systemTokens ?? null) : null
+      const last = session.turns.at(-1)
+      // tail 是末尾模型轮次正文的 token 数，CountTokens 不给逐轮明细时取该轮生成用量中思考以外的部分
+      const tail =
+        counted.contentTokens?.at(-1) ??
+        (last?.tokens === undefined ? undefined : last.tokens - (last.thoughtTokens ?? 0))
+      if (last?.role === 'model' && turns.at(-1)?.id === last.id && tail !== undefined)
+        lastRun.value = { id: last.id, input: count - tail, output: last.tokens ?? tail }
+      else if (last?.role !== 'model') lastRun.value = null
     } catch {
       // 统计失败时保留上一次的数字
     }
+  }
+
+  // scheduleTokens 在 delay 毫秒后重新统计对话与系统指令，到时前的多次调用合并为一次
+  function scheduleTokens(delay = 0): void {
+    window.clearTimeout(tokenTimer)
+    tokenTimer = window.setTimeout(() => {
+      tokenTimer = 0
+      if (!session.running) void refreshTokens()
+    }, delay)
+  }
+
+  // scheduleDraftTokens 与官网一致：输入框文本停止变化 500 ms 后只统计输入框文本，文本清空时立即归零
+  function scheduleDraftTokens(): void {
+    window.clearTimeout(draftTimer)
+    draftTimer = 0
+    draftController?.abort()
+    const text = draftSource().text
+    const model = currentModel.value
+    if (text.trim() === '' || model === undefined) {
+      session.draftTokens = 0
+      return
+    }
+    draftTimer = window.setTimeout(async () => {
+      draftTimer = 0
+      const counter = new AbortController()
+      draftController = counter
+      try {
+        const count = await countTokens(
+          model.id,
+          apiKey(),
+          { contents: [{ role: 'user', parts: [{ text }] }], generationConfig: {} },
+          counter.signal,
+        )
+        if (!counter.signal.aborted) session.draftTokens = count
+      } catch {
+        // 统计失败时保留上一次的数字
+      }
+    }, draftCountDelay)
   }
 
   // countAttachment 与官网一致：附件加入时单独统计它的 token 数，写入片段的 tokenCount；已上传 Drive 的视频按视频设置抽帧计数
@@ -542,9 +644,11 @@ function createSession(temporary = false, links: SessionLinks = {}) {
           if (update.finishReason) turn.finishReason = update.finishReason
           if (update.tokens !== undefined) turn.tokens = update.tokens
           if (update.thoughtTokens !== undefined) turn.thoughtTokens = update.thoughtTokens
+          if (update.cachedTokens !== undefined) turn.cachedTokens = update.cachedTokens
           if (update.promptTokens !== undefined) {
             tokenController?.abort()
             session.promptTokens = update.promptTokens + (turn.tokens ?? 0)
+            lastRun.value = { id: turn.id, input: update.promptTokens, output: turn.tokens ?? 0 }
           }
           if (update.sources) turn.sources = update.sources
           if (update.supports) turn.supports = update.supports
@@ -630,12 +734,15 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     void run()
   }
 
-  // forgetInteractions 去掉从 index 起各模型轮的交互 ID：这些交互的上游上下文含有被修改的轮次，之后不从它们续接
+  // forgetInteractions 去掉从 index 起各模型轮的交互 ID 与缓存命中数：这些交互的上游上下文含有被修改的轮次，之后不从它们续接
   function forgetInteractions(index: number): void {
-    for (const turn of session.turns.slice(index)) delete turn.interactionId
+    for (const turn of session.turns.slice(index)) {
+      delete turn.interactionId
+      delete turn.cachedTokens
+    }
   }
 
-  // editTurn 用新文本替换某一轮的正文：新文本放在首个正文片段的位置，其他片段保持原有顺序，文本有变化时其后的交互不再用于续接
+  // editTurn 用新文本替换某一轮的正文：新文本放在首个正文片段的位置，其他片段保持原有顺序；文本有变化时其后的交互不再用于续接，模型轮次的生成用量失效，重新统计 token
   function editTurn(index: number, text: string): void {
     const turn = session.turns[index]!
     const body = (part: Part) => part.text !== undefined && !part.thought
@@ -643,20 +750,27 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       .filter(body)
       .map((part) => part.text)
       .join('')
-    if (text !== current) forgetInteractions(index)
+    const changed = text !== current
+    if (changed) {
+      forgetInteractions(index)
+      delete turn.tokens
+      delete turn.thoughtTokens
+    }
     const first = turn.parts.findIndex(body)
     turn.parts = turn.parts.flatMap((part, at) =>
       !body(part) ? [part] : at === first && text !== '' ? [{ text }] : [],
     )
     if (first === -1 && text !== '') turn.parts.push({ text })
     scheduleSave()
+    if (changed) scheduleTokens()
   }
 
-  // deleteTurn 删除一轮，其后的交互不再用于续接
+  // deleteTurn 删除一轮并重新统计 token，其后的交互不再用于续接
   function deleteTurn(index: number): void {
     session.turns.splice(index, 1)
     forgetInteractions(index)
     scheduleSave()
+    scheduleTokens()
   }
 
   // branch 以前 index+1 轮创建新对话并返回其 ID
@@ -698,6 +812,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         const response = await fetch(url)
         if (!response.ok) throw new Error(`${response.status} ${url}`)
         session.attachments.push({ inlineData: await readImage(await response.blob()) })
+        void countAttachment(session.attachments.at(-1)!)
       }
     } catch (error) {
       const failed = useI18n().t('pg.sampleImageFailed')
@@ -716,6 +831,9 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   function dispose(): void {
     discard()
     tokenController?.abort()
+    draftController?.abort()
+    window.clearTimeout(draftTimer)
+    window.clearTimeout(tokenTimer)
     scope.stop()
   }
 
@@ -730,13 +848,24 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     )
     watch(
       () => currentModel.value?.id,
-      () => void refreshTokens(),
+      () => {
+        scheduleTokens()
+        scheduleDraftTokens()
+      },
+    )
+    watch(() => draftSource().text, scheduleDraftTokens)
+    watch(
+      () => [session.settings, session.settings.systemInstruction] as const,
+      ([settings], [previous]) => {
+        if (settings === previous) scheduleTokens(draftCountDelay)
+      },
     )
   })
 
   return {
     session,
     currentModel,
+    usage,
     newChat,
     ensureModel,
     selectModel,
@@ -877,7 +1006,12 @@ const running = computed(() => panes.some((pane) => pane.session.running))
 
 // addPane 以 data 的运行设置与对话加入右侧窗格并返回它，右侧窗格变化时保存页面对话
 function addPane(data: PaneData): Playground {
-  const pane = page(createSession(true, { save: main.save }))
+  const pane = page(
+    createSession(true, {
+      save: main.save,
+      draft: () => ({ text: main.session.draft, attachments: main.session.attachments }),
+    }),
+  )
   pane.session.settings = cloneData(data.settings)
   pane.session.turns = cloneData(data.turns)
   panes.push(pane)
@@ -892,6 +1026,7 @@ function enterCompare(): void {
     turns: main.session.turns.map((turn) => ({ ...turn, id: newTurnID() })),
   })
   pane.session.promptTokens = main.session.promptTokens
+  pane.session.systemTokens = main.session.systemTokens
   pane.session.rawMode = main.session.rawMode
   syncInstructions.value = true
 }

@@ -8,20 +8,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/gorilla/websocket"
 )
 
-// CDPBrowser 是经远程调试地址读取的浏览器 Cookie 与页面语言、时区
+// CDPBrowser 是经远程调试地址读取的浏览器 Cookie
 type CDPBrowser struct {
-	Cookies  string
-	Locale   string
-	Timezone string
+	Cookies string
 }
 
-// ReadCDPBrowser 经 Chromium 远程调试地址读取浏览器全部未分区 Cookie，并在第一个页面中读取 navigator.language 与 Intl 时区，没有页面时语言与时区为空
+// ReadCDPBrowser 经 Chromium 远程调试地址读取浏览器全部未分区 Cookie
 func ReadCDPBrowser(ctx context.Context, address string) (CDPBrowser, error) {
 	endpoint, err := cdpBrowserEndpoint(ctx, address)
 	if err != nil {
@@ -51,11 +48,7 @@ func ReadCDPBrowser(ctx context.Context, address string) (CDPBrowser, error) {
 	if err != nil {
 		return CDPBrowser{}, fmt.Errorf("编码浏览器 Cookie: %w", err)
 	}
-	browser := CDPBrowser{Cookies: string(data)}
-	if browser.Locale, browser.Timezone, err = session.pageEnvironment(ctx); err != nil {
-		return CDPBrowser{}, fmt.Errorf("读取浏览器语言与时区: %w", err)
-	}
-	return browser, nil
+	return CDPBrowser{Cookies: string(data)}, nil
 }
 
 // cdpSession 在一条浏览器级 CDP 连接上依次发送命令
@@ -99,42 +92,6 @@ func (session *cdpSession) call(ctx context.Context, method string, params any, 
 		}
 		return json.Unmarshal(response.Result, result)
 	}
-}
-
-// cdpTarget 是 Target.getTargets 列出的一个调试目标
-type cdpTarget struct {
-	TargetID string `json:"targetId"`
-	Type     string `json:"type"`
-}
-
-// pageEnvironment 附加到浏览器的第一个页面，返回该页面的 navigator.language 与 Intl 时区
-func (session *cdpSession) pageEnvironment(ctx context.Context) (string, string, error) {
-	var targets struct {
-		TargetInfos []cdpTarget `json:"targetInfos"`
-	}
-	if err := session.call(ctx, "Target.getTargets", nil, "", &targets); err != nil {
-		return "", "", err
-	}
-	index := slices.IndexFunc(targets.TargetInfos, func(target cdpTarget) bool { return target.Type == "page" })
-	if index < 0 {
-		return "", "", nil
-	}
-	var attached struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := session.call(ctx, "Target.attachToTarget", map[string]any{"targetId": targets.TargetInfos[index].TargetID, "flatten": true}, "", &attached); err != nil {
-		return "", "", err
-	}
-	var evaluated struct {
-		Result struct {
-			Value [2]string `json:"value"`
-		} `json:"result"`
-	}
-	expression := "[navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone]"
-	if err := session.call(ctx, "Runtime.evaluate", map[string]any{"expression": expression, "returnByValue": true}, attached.SessionID, &evaluated); err != nil {
-		return "", "", err
-	}
-	return evaluated.Result.Value[0], evaluated.Result.Value[1], nil
 }
 
 // cdpVersion 是浏览器调试接口 /json/version 的产品名与浏览器级 WebSocket 地址

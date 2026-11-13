@@ -31,6 +31,7 @@ type accountWorkerManager struct {
 	globalProxy    string
 	initTimeout    time.Duration
 	warmTarget     atomic.Int64
+	dormant        atomic.Bool
 	maxActive      atomic.Int64
 	startup        startupLimiter
 	lifecycle      context.Context
@@ -215,8 +216,11 @@ func (manager *accountWorkerManager) setLimits(warmTarget int, maxActive int, st
 	manager.startup.setLimit(max(startupConcurrency, 1))
 }
 
-// warmLimit 返回常驻 Worker 数
+// warmLimit 返回常驻 Worker 数，闲置休眠期间为 0
 func (manager *accountWorkerManager) warmLimit() int {
+	if manager.dormant.Load() {
+		return 0
+	}
 	return int(manager.warmTarget.Load())
 }
 
@@ -324,19 +328,53 @@ func (manager *accountWorkerManager) runtimeAvailable(accountIDs []string) ([]st
 // workerIdleTimeout 为超出热池目标的 Worker 空闲多久后关闭
 const workerIdleTimeout = 5 * time.Minute
 
-// reapIdleWorkers 定期关闭超出热池目标且空闲超时的 Worker
+// warmIdleTimeout 为全部账户没有请求多久后进入闲置休眠：关闭常驻 Worker 并停止预热，直到下一个请求
+const warmIdleTimeout = 30 * time.Minute
+
+// reapIdleWorkers 定期关闭超出热池目标且空闲超时的 Worker，按全部账户的请求活动进入或退出闲置休眠
 func (manager *accountWorkerManager) reapIdleWorkers() {
 	ticker := time.NewTicker(workerIdleTimeout / 10)
 	defer ticker.Stop()
+	idleSince := time.Now()
 	for {
 		select {
 		case <-manager.lifecycle.Done():
 			return
 		case <-ticker.C:
-			for manager.reapIdleWorker(time.Now().Add(-workerIdleTimeout)) {
-			}
+			idleSince = manager.checkIdle(time.Now(), idleSince)
 		}
 	}
+}
+
+// checkIdle 在全部账户自 idleSince 起有新请求时退出闲置休眠并恢复预热，闲置满 warmIdleTimeout 时进入休眠，再关闭空闲超时的 Worker，返回新的闲置起点
+func (manager *accountWorkerManager) checkIdle(now time.Time, idleSince time.Time) time.Time {
+	if last := manager.lastRequest(now); last.After(idleSince) {
+		idleSince = last
+		if manager.dormant.CompareAndSwap(true, false) {
+			manager.requests.log("service", "INFO", "WAA Worker 结束闲置休眠，恢复预热")
+			manager.StartPrewarm(manager.lifecycle)
+		}
+	}
+	if now.Sub(idleSince) >= warmIdleTimeout && manager.dormant.CompareAndSwap(false, true) {
+		manager.requests.log("service", "INFO", fmt.Sprintf("WAA Worker 闲置休眠 | 闲置=%s", warmIdleTimeout))
+	}
+	for manager.reapIdleWorker(now.Add(-workerIdleTimeout)) {
+	}
+	return idleSince
+}
+
+// lastRequest 返回全部账户最近一次取得请求租约的时刻，有账户正在处理请求时返回 now
+func (manager *accountWorkerManager) lastRequest(now time.Time) time.Time {
+	var last time.Time
+	for _, status := range manager.pool.Status() {
+		if status.ActiveRequests > 0 {
+			return now
+		}
+		if status.LastUsed != nil && status.LastUsed.After(last) {
+			last = *status.LastUsed
+		}
+	}
+	return last
 }
 
 // reapIdleWorker 关闭一个多余的空闲 Worker 并返回是否关闭：超出峰值上限时立即关闭，否则只关闭最近使用早于 before 的
@@ -741,7 +779,7 @@ func (manager *accountWorkerManager) PrewarmTarget() int {
 			available++
 		}
 	}
-	return min(manager.warmLimit(), available)
+	return min(int(manager.warmTarget.Load()), available)
 }
 
 func (manager *accountWorkerManager) classifyBootstrapCandidates(
@@ -1126,12 +1164,8 @@ func (manager *accountWorkerManager) startReservedWorker(
 	logStep(1, "初始化页面 | 页面模型="+bootstrapModel)
 	initCtx, cancel := context.WithTimeout(ctx, manager.initTimeout)
 	options.Model = bootstrapModel
-	launched, _ := ctx.Value(browserLaunchedKey{}).(func())
 	options.StartupProgress = func(stage camoufoxnative.StartupStage) {
 		logStep(workerStartupProgress(stage))
-		if (stage == camoufoxnative.StartupConnectingBiDi || stage == camoufoxnative.StartupLoadingAIStudio) && launched != nil {
-			launched()
-		}
 	}
 	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	if initErr == nil {
@@ -1686,10 +1720,7 @@ type temporaryPageKey struct{}
 // startupReservationKey 是 context 中常驻或按需启动的启动名额预约的键，启动取得名额后结束预约
 type startupReservationKey struct{}
 
-// browserLaunchedKey 是 context 中 Worker 的浏览器进程完成启动、开始连接 WebDriver BiDi 或载入 AI Studio 时调用的函数的键
-type browserLaunchedKey struct{}
-
-// fillWarm 按启动名额补足常驻 Worker，候选账户的目录就绪后立即启动，不等待已在启动的 Worker
+// fillWarm 逐个补足常驻 Worker：候选账户的目录就绪后启动，上一个 Worker 启动结束后再启动下一个
 func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- error, cleanup func()) {
 	startedAt := time.Now()
 	defer cleanup()
@@ -1707,8 +1738,6 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 	failedAccounts := make(map[string]struct{})
 	starting := make(map[string]struct{})
 	launched := 0
-	head := ""
-	var headLaunched chan struct{}
 	results := make(chan warmResult)
 	collect := func(result warmResult) {
 		delete(starting, result.accountID)
@@ -1745,20 +1774,7 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			return
 		}
 		opening := manager.openingOutside(starting)
-		launch := min(manager.startup.size(), limit-len(warm)-opening) - len(starting)
-		if head != "" {
-			select {
-			case <-headLaunched:
-				head, headLaunched = "", nil
-			default:
-				if _, ok := starting[head]; !ok {
-					head, headLaunched = "", nil
-				}
-			}
-		}
-		if head != "" {
-			launch = 0
-		}
+		launch := min(1, limit-len(warm)-opening) - len(starting)
 		groups, err := manager.classifyBootstrapCandidates(ctx, warm)
 		var runtimeBusyErr error
 		if err != nil {
@@ -1776,17 +1792,11 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 		pendingBusy := err == nil && len(groups.StandbyBusy) > 0
 		if err == nil {
 			ready := groups.StandbyReady[:max(0, min(launch, len(groups.StandbyReady)))]
-			workerCtx := ctx
-			if len(ready) > 0 && launched == 0 && len(warm) == 0 {
-				ready = ready[:1]
-				head, headLaunched = ready[0], make(chan struct{})
-				workerCtx = context.WithValue(ctx, browserLaunchedKey{}, sync.OnceFunc(func() { close(headLaunched) }))
-			}
 			for _, accountID := range ready {
 				starting[accountID] = struct{}{}
 				launched++
 				go func() {
-					_, err := manager.Worker(workerCtx, accountID, "")
+					_, err := manager.Worker(ctx, accountID, "")
 					results <- warmResult{accountID: accountID, err: err}
 				}()
 			}
@@ -1797,7 +1807,6 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			case <-ctx.Done():
 			case result := <-results:
 				collect(result)
-			case <-headLaunched:
 			case <-timer.C:
 			}
 			timer.Stop()

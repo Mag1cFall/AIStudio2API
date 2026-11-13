@@ -2,6 +2,7 @@ package camoufoxnative
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,14 +54,23 @@ func copyStartupCache(source, target string) error {
 	return nil
 }
 
-// copyStartupFile 复制单个启动缓存文件并创建目标目录
+// copyStartupFile 以流式读写复制单个启动缓存文件并创建目标目录
 func copyStartupFile(from, to string) error {
-	data, err := os.ReadFile(from)
+	source, err := os.Open(from)
 	if err != nil {
 		return err
 	}
+	defer source.Close()
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(to, data, 0o600)
+	target, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		return err
+	}
+	return target.Close()
 }

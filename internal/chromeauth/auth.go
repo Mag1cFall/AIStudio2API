@@ -22,7 +22,6 @@ type Account struct {
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
-	Locale      string `json:"locale"`
 	Importable  bool   `json:"importable"`
 }
 
@@ -40,7 +39,6 @@ type ImportResult struct {
 	Profile     string
 	DisplayName string
 	Email       string
-	Locale      string
 	CookieCount int
 	State       aistudio.StorageState
 }
@@ -137,7 +135,7 @@ func importAccount(ctx context.Context, chromeRoot string, proxy string, account
 	})
 	return ImportResult{
 		Profile: account.Profile, DisplayName: account.DisplayName,
-		Email: strings.ToLower(strings.TrimSpace(account.Email)), Locale: account.Locale,
+		Email:       strings.ToLower(strings.TrimSpace(account.Email)),
 		CookieCount: len(cookies), State: state,
 	}, nil
 }

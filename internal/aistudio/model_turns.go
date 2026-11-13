@@ -3,6 +3,7 @@ package aistudio
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"slices"
@@ -129,6 +130,21 @@ func turnLinks(contents []Content) []turnLink {
 
 // turnLinkDigest 返回在 previous 之后接上一组轮次的摘要：正文 Part 直接连接后去掉首尾空白，函数调用计入名称与规范参数，函数结果计入规范内容，其余 Part 去掉签名、内联数据以其 SHA-256 计入；思考与调用 ID 不计入，客户端回传的模型轮与服务输出的同一回复得到同一摘要
 func turnLinkDigest(previous string, model bool, parts []Part) string {
+	key, cacheable := turnDigestKey(previous, model, parts)
+	if cacheable {
+		if digest, ok := turnDigests.get(key); ok {
+			return digest
+		}
+	}
+	digest := computeTurnLinkDigest(previous, model, parts)
+	if cacheable {
+		turnDigests.put(key, digest)
+	}
+	return digest
+}
+
+// computeTurnLinkDigest 不经缓存计算 turnLinkDigest 的摘要
+func computeTurnLinkDigest(previous string, model bool, parts []Part) string {
 	var text []string
 	items := []any{}
 	for _, part := range parts {
@@ -153,6 +169,85 @@ func turnLinkDigest(previous string, model bool, parts []Part) string {
 	encoded, _ := json.Marshal([]any{previous, model, strings.TrimSpace(strings.Join(text, "")), items})
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
+}
+
+// turnDigestLimit 是本进程缓存的轮次摘要条数上限
+const turnDigestLimit = 4096
+
+// turnDigestCache 是轮次摘要缓存，键为前序摘要与轮次原始内容的 SHA-256，超过上限时丢弃最早的一条
+type turnDigestCache struct {
+	mu      sync.Mutex
+	entries map[[sha256.Size]byte]string
+	order   [][sha256.Size]byte
+}
+
+// turnDigests 是本进程的轮次摘要缓存，同一对话的后续请求与同一请求的多次计算沿用已算出的摘要
+var turnDigests = &turnDigestCache{entries: make(map[[sha256.Size]byte]string)}
+
+// get 返回缓存中键对应的摘要
+func (cache *turnDigestCache) get(key [sha256.Size]byte) (string, bool) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	digest, ok := cache.entries[key]
+	return digest, ok
+}
+
+// put 保存键对应的摘要，超过上限时丢弃最早的一条
+func (cache *turnDigestCache) put(key [sha256.Size]byte, digest string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if _, exists := cache.entries[key]; exists {
+		return
+	}
+	cache.entries[key] = digest
+	cache.order = append(cache.order, key)
+	if len(cache.order) > turnDigestLimit {
+		delete(cache.entries, cache.order[0])
+		cache.order = cache.order[1:]
+	}
+}
+
+// turnDigestKey 返回轮次摘要的缓存键：前序摘要、角色与按 turnLinkDigest 计入的正文、函数调用与函数结果原文；含其余 Part 的轮次不缓存
+func turnDigestKey(previous string, model bool, parts []Part) ([sha256.Size]byte, bool) {
+	hash := sha256.New()
+	var chunk [4096]byte
+	header := func(kind byte, size int) {
+		chunk[0] = kind
+		binary.LittleEndian.PutUint64(chunk[1:9], uint64(size))
+		hash.Write(chunk[:9])
+	}
+	write := func(kind byte, value []byte) {
+		header(kind, len(value))
+		hash.Write(value)
+	}
+	writeString := func(kind byte, value string) {
+		header(kind, len(value))
+		for len(value) > 0 {
+			count := copy(chunk[:], value)
+			hash.Write(chunk[:count])
+			value = value[count:]
+		}
+	}
+	writeString('p', previous)
+	if model {
+		header('m', 0)
+	}
+	for _, part := range parts {
+		switch {
+		case part.Thought:
+		case part.FunctionCall != nil:
+			writeString('c', part.FunctionCall.Name)
+			write('a', part.FunctionCall.Arguments)
+		case part.FunctionResult != nil:
+			write('r', part.FunctionResult.Content)
+		case part.Text != "":
+			writeString('t', part.Text)
+		case !part.payload():
+		default:
+			return [sha256.Size]byte{}, false
+		}
+	}
+	return [sha256.Size]byte(hash.Sum(nil)), true
 }
 
 // canonicalJSON 返回键按字典序排列、不含空白的 JSON，不是 JSON 时返回去掉首尾空白的原文

@@ -46,6 +46,16 @@ type responsesRequest struct {
 		Type             string `json:"type"`
 		CompactThreshold *int64 `json:"compact_threshold"`
 	} `json:"context_management"`
+	// split 是 prepareResponses 对 Input 的切分结果
+	split splitInput
+}
+
+// inputItems 返回 Input 的切分结果，prepareResponses 已切分同一输入时直接沿用
+func (request responsesRequest) inputItems() splitInput {
+	if bytes.Equal(request.split.raw, request.Input) {
+		return request.split
+	}
+	return splitResponsesInput(request.Input)
 }
 
 // compactThreshold 返回 context_management 中 compaction 的触发 token 数，没有时为 0
@@ -389,21 +399,15 @@ func (store *responseStateStore) Delete(id string, interaction bool) bool {
 }
 
 // ResolveItems 将输入中的 item_reference 替换为已保存的同 ID 输入或输出项
-func (store *responseStateStore) ResolveItems(raw json.RawMessage) (json.RawMessage, error) {
-	var items []json.RawMessage
-	if json.Unmarshal(raw, &items) != nil {
-		return raw, nil
+func (store *responseStateStore) ResolveItems(input splitInput) (splitInput, error) {
+	if !slices.ContainsFunc(input.heads, responsesItemHead.reference) {
+		return input, nil
 	}
+	items := slices.Clone(input.items)
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	resolved := false
-	for index, item := range items {
-		var head struct {
-			Type string `json:"type"`
-			Role string `json:"role"`
-			ID   string `json:"id"`
-		}
-		if json.Unmarshal(item, &head) != nil || head.Type != "item_reference" && (head.Type != "" || head.Role != "" || head.ID == "") {
+	for index, head := range input.heads {
+		if !head.reference() {
 			continue
 		}
 		found := false
@@ -422,14 +426,62 @@ func (store *responseStateStore) ResolveItems(raw json.RawMessage) (json.RawMess
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("item %q was not found", head.ID)
+			return splitInput{}, fmt.Errorf("item %q was not found", head.ID)
 		}
-		resolved = true
 	}
-	if !resolved {
-		return raw, nil
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return splitInput{}, err
 	}
-	return json.Marshal(items)
+	return splitResponsesInput(encoded), nil
+}
+
+// responsesItemHead 是输入项的类型、角色与 ID
+type responsesItemHead struct {
+	Type string `json:"type"`
+	Role string `json:"role"`
+	ID   string `json:"id"`
+	// invalid 表示该项不能完整解析为类型、角色与 ID
+	invalid bool
+}
+
+// reference 返回输入项是否引用已保存的项：item_reference 或只带 ID 的项
+func (head responsesItemHead) reference() bool {
+	return !head.invalid && (head.Type == "item_reference" || head.Type == "" && head.Role == "" && head.ID != "")
+}
+
+// splitInput 是切分一次的 Responses 输入：array 表示原文是数组，items 与 heads 按位置对应
+type splitInput struct {
+	raw   json.RawMessage
+	array bool
+	items []json.RawMessage
+	heads []responsesItemHead
+}
+
+// splitResponsesInput 把 Responses 输入切分为各输入项原文与类型、角色和 ID
+func splitResponsesInput(raw json.RawMessage) splitInput {
+	input := splitInput{raw: raw}
+	if json.Unmarshal(raw, &input.items) != nil {
+		input.items = nil
+		return input
+	}
+	input.array = true
+	input.heads = responsesItemHeads(input.items)
+	return input
+}
+
+// responsesItemHeads 返回各输入项的类型、角色与 ID
+func responsesItemHeads(items []json.RawMessage) []responsesItemHead {
+	heads := make([]responsesItemHead, len(items))
+	for index, item := range items {
+		heads[index].invalid = json.Unmarshal(item, &heads[index]) != nil
+	}
+	return heads
+}
+
+// hasType 返回输入中是否有 kinds 中任一类型的项
+func (input splitInput) hasType(kinds ...string) bool {
+	return slices.ContainsFunc(input.heads, func(head responsesItemHead) bool { return slices.Contains(kinds, head.Type) })
 }
 
 func cloneResponseContents(contents []aistudio.Content) []aistudio.Content {
@@ -462,7 +514,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if responsesCompactionTrigger(request.Input) {
+	if responsesCompactionTrigger(request.inputItems()) {
 		s.handleCompactionTrigger(w, r, request, prepared, responseID)
 		return
 	}
@@ -601,7 +653,7 @@ func (s *server) compactOverThreshold(ctx context.Context, request *responsesReq
 
 // prepareResponses 展开 item_reference、转换请求、下载外部媒体并接上 previous_response_id 的上下文；execute 为真时执行输入中批准的 MCP 调用
 func (s *server) prepareResponses(ctx context.Context, request *responsesRequest, id string, execute bool) (responsesPreparation, error) {
-	input, err := s.responseStates.ResolveItems(request.Input)
+	input, err := s.responseStates.ResolveItems(splitResponsesInput(request.Input))
 	if err != nil {
 		return responsesPreparation{}, err
 	}
@@ -613,11 +665,14 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	}
 	additionalTools, _ := responsesInputConfig(input)
 	tools := slices.Concat(request.Tools, additionalTools)
-	rewritten, approved, err := s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input, execute)
+	rewritten, approved, err := s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input.raw, execute)
 	if err != nil {
 		return responsesPreparation{}, err
 	}
-	request.Input = rewritten
+	request.Input, request.split = rewritten, input
+	if !bytes.Equal(rewritten, input.raw) {
+		request.split = splitResponsesInput(rewritten)
+	}
 	generateRequest, inlineInstructions, err := request.toGenerateRequest(id)
 	if err == nil {
 		generateRequest, err = s.resolveMCPTools(ctx, generateRequest)
@@ -650,7 +705,10 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	}
 	prepared := responsesPreparation{
 		generate: generateRequest, contents: cloneResponseContents(generateRequest.Contents),
-		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(input, id), approved: approved,
+		inlineInstructions: append([]string(nil), inlineInstructions...), approved: approved,
+	}
+	if request.storesResponse() {
+		prepared.input = responsesInputItems(input, id)
 	}
 	if tool := imageGenerationTool(request.Tools); tool != nil && tool.InputImageMask != nil {
 		mask, err := s.imageGenerationMask(ctx, *tool.InputImageMask)
@@ -711,15 +769,15 @@ func (s *server) storeResponse(id string, request responsesRequest, prepared res
 }
 
 // responsesInputItems 把请求输入整理为带 ID 的输入项：字符串输入与字符串内容转为内容数组，缺少 ID 的项按位置编号
-func responsesInputItems(raw json.RawMessage, responseID string) []storedItem {
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		encoded, _ := json.Marshal([]map[string]string{{"role": "user", "content": text}})
-		raw = encoded
-	}
-	var items []json.RawMessage
-	if json.Unmarshal(raw, &items) != nil {
-		return nil
+func responsesInputItems(input splitInput, responseID string) []storedItem {
+	items := input.items
+	if !input.array {
+		var text string
+		if json.Unmarshal(input.raw, &text) != nil {
+			return nil
+		}
+		encoded, _ := json.Marshal(map[string]string{"role": "user", "content": text})
+		items = []json.RawMessage{encoded}
 	}
 	stored := make([]storedItem, 0, len(items))
 	for index, rawItem := range items {
@@ -775,12 +833,13 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	default:
 		return aistudio.GenerateRequest{}, nil, fmt.Errorf("unsupported truncation %q", request.Truncation)
 	}
-	contents, inlineInstructions, err := responsesContents(request.Input)
+	input := request.inputItems()
+	contents, inlineInstructions, err := responsesContents(input)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
 	}
 	instructions := request.instructions(inlineInstructions)
-	additionalTools, configuredEffort := responsesInputConfig(request.Input)
+	additionalTools, configuredEffort := responsesInputConfig(input)
 	tools, err := mapResponsesTools(slices.Concat(request.Tools, additionalTools), request.ToolChoice)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
@@ -873,30 +932,33 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 	}, inlineInstructions, nil
 }
 
-func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error) {
-	if !rawJSONConfigured(raw) {
+func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
+	if !rawJSONConfigured(input.raw) {
 		return nil, nil, nil
 	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
+	if !input.array {
+		var text string
+		if err := json.Unmarshal(input.raw, &text); err != nil {
+			return nil, nil, fmt.Errorf("input must be a string or item array")
+		}
 		return []aistudio.Content{{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: text}}}}, nil, nil
 	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, nil, fmt.Errorf("input must be a string or item array")
+	items, heads := input.items, input.heads
+	if input.hasType("compaction") {
+		window, err := splitCompaction(items)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = window.items()
+		heads = responsesItemHeads(items)
 	}
-	window, err := splitCompaction(items)
-	if err != nil {
-		return nil, nil, err
-	}
-	items = window.items()
 	contents := make([]aistudio.Content, 0, len(items))
 	var instructions []string
 	var systemMedia []aistudio.Part
 	pendingSignature := ""
 	for index, rawItem := range items {
 		var item responsesInputItem
-		switch kind := responsesItemType(rawItem); kind {
+		switch kind := heads[index].Type; kind {
 		case "compaction_trigger":
 			if index != len(items)-1 {
 				return nil, nil, fmt.Errorf("compaction_trigger must be the final input item")
@@ -1036,7 +1098,10 @@ func agentMessageParts(raw json.RawMessage) ([]aistudio.Part, error) {
 }
 
 // responsesInputConfig 返回输入项中 additional_tools 提供的工具与最后一个 configuration_update 的推理强度
-func responsesInputConfig(raw json.RawMessage) ([]responsesTool, string) {
+func responsesInputConfig(input splitInput) ([]responsesTool, string) {
+	if !input.hasType("additional_tools", "configuration_update") {
+		return nil, ""
+	}
 	var items []struct {
 		Type      string          `json:"type"`
 		Tools     []responsesTool `json:"tools"`
@@ -1044,7 +1109,7 @@ func responsesInputConfig(raw json.RawMessage) ([]responsesTool, string) {
 			Effort string `json:"effort"`
 		} `json:"reasoning"`
 	}
-	if json.Unmarshal(raw, &items) != nil {
+	if json.Unmarshal(input.raw, &items) != nil {
 		return nil, ""
 	}
 	var tools []responsesTool
@@ -1763,7 +1828,7 @@ func outputPrefix(compaction map[string]any, prepared responsesPreparation) []ma
 
 // newResponsesWriter 返回 Responses 输出写出器
 func newResponsesWriter(w http.ResponseWriter, id string, created int64, request responsesRequest) *responsesStreamWriter {
-	additional, _ := responsesInputConfig(request.Input)
+	additional, _ := responsesInputConfig(request.inputItems())
 	return &responsesStreamWriter{
 		w: w, id: id, created: created, request: request,
 		output: &responsesOutput{

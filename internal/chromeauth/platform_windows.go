@@ -5,8 +5,10 @@ package chromeauth
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -31,16 +33,16 @@ func ensurePlatformImport() error {
 	return nil
 }
 
-// Discover 只读列出本机 Chrome Google 账号
+// Discover 只读列出本机 Chrome Google 账号，本机没有 Chrome 用户数据时为空
 func Discover(chromeRoot string) ([]Account, error) {
 	data, err := os.ReadFile(filepath.Join(chromeRoot, "Local State"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取 Chrome Local State: %w", err)
 	}
 	var state struct {
-		Variations struct {
-			SafeSeedLocale string `json:"safe_seed_locale"`
-		} `json:"variations"`
 		Profile struct {
 			InfoCache map[string]struct {
 				Name     string `json:"name"`
@@ -65,14 +67,10 @@ func Discover(chromeRoot string) ([]Account, error) {
 	accounts := make([]Account, 0, len(profiles))
 	for _, profile := range profiles {
 		info := state.Profile.InfoCache[profile]
-		locale := profileLocale(chromeRoot, profile)
-		if locale == "" {
-			locale = state.Variations.SafeSeedLocale
-		}
 		identities, err := profileIdentities(chromeRoot, profile)
 		if err != nil {
 			accounts = append(accounts, Account{
-				ID: profile, Profile: profile, DisplayName: info.Name, Email: info.UserName, Locale: locale,
+				ID: profile, Profile: profile, DisplayName: info.Name, Email: info.UserName,
 			})
 			continue
 		}
@@ -86,7 +84,7 @@ func Discover(chromeRoot string) ([]Account, error) {
 			record, found := records[identity.Gaia]
 			accounts = append(accounts, Account{
 				ID: profile + "/" + identity.Gaia, GaiaID: identity.Gaia,
-				Profile: profile, DisplayName: info.Name, Email: identity.Email, Locale: locale,
+				Profile: profile, DisplayName: info.Name, Email: identity.Email,
 				Importable: recordsErr == nil && found && strings.HasPrefix(string(record.encryptedToken), "v20"),
 			})
 		}
@@ -113,11 +111,6 @@ func profileIdentities(chromeRoot string, profile string) ([]profileIdentity, er
 		return nil, fmt.Errorf("解析 %s Preferences: %w", profile, err)
 	}
 	return preferences.Accounts, nil
-}
-
-func profileLocale(chromeRoot string, profile string) string {
-	locale, _, _ := strings.Cut(profileLanguages(chromeRoot, profile), ",")
-	return strings.TrimSpace(locale)
 }
 
 // copyFile 把 src 复制为 dst

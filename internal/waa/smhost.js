@@ -123,17 +123,14 @@
     const set = ancestors[iface];
     return set ? set.has(target) : iface === target;
   };
-  const templates = [];
   let resolver = null;
-  // materialize 按模板键顺序定义已创建原型的成员
-  const materialize = () => {
-    for (const [object, id, keys] of templates.splice(0)) {
-      for (let index = 0; index < keys.length; index++) {
-        const key = keys[index];
-        const [accessor, value, get, set, writable, enumerable, configurable] = resolver(id, index);
-        const name = typeof key === 'string' && key.startsWith('@@') ? Symbol[key.slice(2)] : key;
-        defineProperty(object, name, accessor ? { get, set, enumerable, configurable } : { value, writable, enumerable, configurable });
-      }
+  // materialize 按模板键顺序定义接口原型的成员
+  const materialize = (object, id, keys) => {
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index];
+      const [accessor, value, get, set, writable, enumerable, configurable] = resolver(id, index);
+      const name = typeof key === 'string' && key.startsWith('@@') ? Symbol[key.slice(2)] : key;
+      defineProperty(object, name, accessor ? { get, set, enumerable, configurable } : { value, writable, enumerable, configurable });
     }
   };
   // orderKeys 把自有字符串键从首个与 names 顺序不同的位置起按 names 顺序重新定义
@@ -180,7 +177,6 @@
         for (let parent = table[name]; parent; parent = table[String(parent)]) set.add(String(parent));
         ancestors[name] = set;
       }
-      materialize();
     },
     isA: (iface, target) => isA(String(iface), String(target)),
     brandCheck(self, iface) {
@@ -209,9 +205,7 @@
     digest: (name, data) => natives.digest(String(name), data),
     encodingName: label => natives.encodingName(String(label)),
     templatedObject(id, keys, proto) {
-      const object = Object.create(proto);
-      templates.push([object, id, keys]);
-      return object;
+      return natives.templateObject(proto, object => materialize(object, id, keys));
     },
     setTemplateResolver(resolve) { resolver = resolve; },
     parseURL: (text, base) => record(natives.parseURL(String(text), base === undefined ? undefined : String(base))),
@@ -268,6 +262,10 @@
     api,
     dispatch,
     report: error => api.reportException(error),
+    // activate 在顶层页面记录一次用户点击或按键
+    activate: () => api.activate(),
+    // mouseInput 在顶层页面按 Firefox 可信鼠标输入依次派发事件
+    mouseInput: (nodes, rects, target, left, point, movement, blurred, focused, types) => api.mouseInput(nodes, rects, target, left, point, movement, blurred, focused, types),
     shared,
     // track 按 Promise 拒绝跟踪事件维护未处理与已处理队列
     track(promise, handled, global) {

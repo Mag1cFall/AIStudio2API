@@ -1,8 +1,8 @@
 // Package pricing 按 Gemini API 与 Vertex AI 公布的当前文本单价估算请求费用
 package pricing
 
-// longContext 是长上下文分档的输入 token 界限，输入超过该值的请求按长上下文单价计费
-const longContext = 200_000
+// LongContext 是长上下文分档的输入 token 界限，输入超过该值的请求按长上下文单价计费
+const LongContext = 200_000
 
 // price 是一个模型每百万 token 的美元单价，cached 为缓存命中输入单价，long 前缀为长上下文分档单价，0 表示不分档
 type price struct {
@@ -14,6 +14,7 @@ type price struct {
 var prices = map[string]price{
 	"gemini-4-carbon":                        {input: 2, cached: 0.10, output: 10},
 	"gemini-4-argon":                         {input: 2, cached: 0.10, output: 10},
+	"gemini-4-hydrogen":                      {input: 1.50, cached: 0.15, output: 7.50},
 	"gemini-3.8-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
 	"gemini-3.7-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
 	"gemini-3.6-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
@@ -39,8 +40,13 @@ func Priced(model string) bool {
 
 // Cost 返回一个请求按模型单价估算的美元费用，cached 为 input 中命中缓存的部分，output 为思考与回复 token 之和，模型没有单价时为 0
 func Cost(model string, input, cached, output int64) float64 {
+	return TierCost(model, input > LongContext, input, cached, output)
+}
+
+// TierCost 返回一组同模型同分档请求的美元费用，long 表示这些请求的输入都超过 LongContext，token 为各请求之和
+func TierCost(model string, long bool, input, cached, output int64) float64 {
 	value := prices[model]
-	if value.longInput > 0 && input > longContext {
+	if value.longInput > 0 && long {
 		value.input, value.cached, value.output = value.longInput, value.longCached, value.longOutput
 	}
 	return (float64(input-cached)*value.input + float64(cached)*value.cached + float64(output)*value.output) / 1e6

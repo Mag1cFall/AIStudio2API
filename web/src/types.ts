@@ -40,6 +40,16 @@ export interface Account {
   active_requests: number
 }
 
+// AccountExit 是一个账户出口代理的公网 IP 与按 IP 定位的国家，proxy 为空时是直连，查询失败时 error 为原因
+export interface AccountExit {
+  proxy: string
+  ip?: string
+  country?: string
+  timezone?: string
+  locale?: string
+  error?: string
+}
+
 interface ProxyPoolEntry {
   proxy: string
   available: boolean
@@ -75,7 +85,6 @@ export interface ChromeImportProfile {
   profile: string
   display_name: string
   email: string
-  locale: string
   // restricted 是账户服务受限的原因，受限的账户不能导入
   restricted: string
 }
@@ -97,7 +106,7 @@ export interface CookieAccountItem {
   auth_user: number
 }
 
-// CookieAccountsInput 是一次导入的 Cookie 账户与共用的账户环境，语言与时区为空时调试浏览器账户沿用浏览器的设置
+// CookieAccountsInput 是一次导入的 Cookie 账户与共用的账户环境，语言与时区为空时按出口位置填写
 export interface CookieAccountsInput extends AccountLoginInput {
   items: CookieAccountItem[]
 }
@@ -131,8 +140,6 @@ export interface CookieBrowser {
   browser: string
   email: string
   auth_user: number
-  locale: string
-  timezone: string
   imported: boolean
   signed_out: boolean
   // device_bound 为真时 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备
@@ -317,7 +324,7 @@ export interface ThinkingBudget {
   can_disable?: boolean
 }
 
-export type UpstreamChannel = 'playground' | 'build'
+export type UpstreamChannel = 'playground' | 'build' | 'assistant'
 
 export interface Cooldown {
   account_id: string

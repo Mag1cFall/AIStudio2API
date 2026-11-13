@@ -127,7 +127,9 @@ INFO  account@example.com  WAA Worker 就绪 | 页面模型=gemini-flash-latest 
 | --- | --- |
 | `WAA Worker 按需扩容 | Worker=N/M` | 活动 Worker 未达 `MAX_ACTIVE_WORKERS`，新 Worker 成功发布 |
 | `WAA Worker 按需替换 | Worker=N/M` | `pending Worker`（正在启动的替代 Worker）成功启动并替换一个空闲 Worker |
-| `WAA Worker 空闲回收 | Worker=N/M` | 超出热池目标的 Worker 空闲 5 分钟后关闭 |
+| `WAA Worker 空闲回收 | Worker=N/M` | 超出热池目标的 Worker 空闲 5 分钟后关闭，闲置休眠期间常驻 Worker 同样以此关闭 |
+| `WAA Worker 闲置休眠 | 闲置=30m0s` | 全部账户 30 分钟没有请求，常驻 Worker 关闭、预热暂停 |
+| `WAA Worker 结束闲置休眠，恢复预热` | 休眠后有请求取得账户，开始逐个补足热池 |
 | `WAA Worker 旧实例停止失败` | 旧实例关闭失败，发布中止并开始关闭 pending Worker |
 | `WAA Worker 重建 | 模型=... | 重放当前请求` | 当前账户 Worker 已失效，业务请求在新实例重放；下一行 `原因:` 为触发重建的错误 |
 | `WAA Worker 已更新 | 模型=... | 重放当前请求` | 并发路径已经替换 Worker，当前请求使用新实例 |
@@ -271,6 +273,10 @@ WARN  account@example.com  账号切换 | 模型=gemini-3.7-flash
 | `内联附件处理完成` | 本次请求的附件数量、原始字节数与处理耗时 |
 | `临时文件清理失败` | 本次请求的临时 Drive 文件回收失败，原始错误保留 |
 | `到期资源删除失败` | 到期资源回收的 Drive 删除失败，资源恢复绑定、下一轮重试，原始错误保留 |
+| `Build 写代码助手伴随请求失败` | 写代码助手的伴随请求失败，本轮回复不受影响，原始错误保留 |
+| `Build 写代码助手取消任务失败` | 回复没有完整结束时取消上游任务失败，原始错误保留 |
+| `保存 Build 写代码助手续接位置失败` | trajectory 续接位置写入账户运行状态失败，下一轮开启新 trajectory，原始错误保留 |
+| `Build 写代码助手新建云项目失败`、`Build 写代码助手生成 API key 失败` | 新建应用前取得 API key 的一步失败，继续下一步，原始错误保留 |
 | `转录账号切换` | 转录生成阶段在首个结果前切换候选 |
 | `Bidi 账号切换` | Live/Robotics setup 阶段切换候选 |
 

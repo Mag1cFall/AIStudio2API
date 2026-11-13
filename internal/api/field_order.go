@@ -1,9 +1,10 @@
 package api
 
 import (
-	"bytes"
 	_ "embed"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"maps"
 	"slices"
 	"strings"
@@ -142,28 +143,23 @@ func (order *fieldOrder) value(value any, parent string) any {
 	return value
 }
 
-// MarshalJSON 只排列当前动态对象的键，字段值由 encoding/json 编码
-func (o orderedJSON) MarshalJSON() ([]byte, error) {
+// MarshalJSONTo 只排列当前动态对象的键，字段值由 encoding/json 编码
+func (o orderedJSON) MarshalJSONTo(encoder *jsontext.Encoder) error {
 	keys := slices.Collect(maps.Keys(o.fields))
 	ranks := o.order.ranksFor(o.fields, o.parent)
 	slices.SortFunc(keys, func(a, b string) int { return o.order.compare(ranks, a, b) })
-	var buffer bytes.Buffer
-	buffer.WriteByte('{')
-	for index, key := range keys {
-		if index > 0 {
-			buffer.WriteByte(',')
-		}
-		name, _ := json.Marshal(key)
-		item, err := json.Marshal(o.fields[key])
-		if err != nil {
-			return nil, err
-		}
-		buffer.Write(name)
-		buffer.WriteByte(':')
-		buffer.Write(item)
+	if err := encoder.WriteToken(jsontext.BeginObject); err != nil {
+		return err
 	}
-	buffer.WriteByte('}')
-	return buffer.Bytes(), nil
+	for _, key := range keys {
+		if err := encoder.WriteToken(jsontext.String(key)); err != nil {
+			return err
+		}
+		if err := jsonv2.MarshalEncode(encoder, o.fields[key]); err != nil {
+			return err
+		}
+	}
+	return encoder.WriteToken(jsontext.EndObject)
 }
 
 // object 返回固定响应的具名结构体或动态字段对象

@@ -1056,8 +1056,8 @@ func (s *PooledService) UploadInlineMediaToLease(
 	temporary *TemporaryFileCopies,
 	keepImages bool,
 ) ([]Content, *TemporaryFileCopies, error) {
-	if target.Channel() == ChannelBuild {
-		// Build 代理的 Gemini API 请求直接携带 inlineData
+	if target.Channel() == ChannelBuild || target.Channel() == ChannelAssistant {
+		// Build 代理的 Gemini API 请求直接携带 inlineData，写代码助手在发送时把内联数据上传为附件引用
 		return contents, temporary, nil
 	}
 	if temporary == nil {

@@ -17,6 +17,8 @@ const (
 	ChannelPlayground Channel = "playground"
 	// ChannelBuild 表示官网 Build 应用代理的 Gemini API 调用
 	ChannelBuild Channel = "build"
+	// ChannelAssistant 表示官网 Build 写代码助手，只服务 -build 模型
+	ChannelAssistant Channel = "assistant"
 )
 
 // ChannelCooldownScope 返回通道在作用域上的冷却键，Build 使用 build:<作用域>
@@ -179,6 +181,9 @@ func (l *AccountLease) CooldownScope(scope string) string {
 }
 
 func (p *AccountPool) channelEnabledLocked(channel Channel) bool {
+	if channel == ChannelAssistant {
+		return true
+	}
 	if len(p.channels) == 0 {
 		return channel == ChannelPlayground
 	}
@@ -210,6 +215,9 @@ func buildMethodSelection(selection AccountSelection) bool {
 
 // selectionChannelsLocked 返回选择可使用的通道顺序，优先通道排在首位，限定通道的模型只使用该通道
 func (p *AccountPool) selectionChannelsLocked(selection AccountSelection) []Channel {
+	if p.assistantModelLocked(selection.ModelID) {
+		return []Channel{ChannelAssistant}
+	}
 	if !generationChannelSelection(selection) {
 		if buildMethodSelection(selection) && p.channelEnabledLocked(ChannelBuild) {
 			if selection.Method == "embedContent" || selection.Channel == ChannelBuild {
@@ -274,6 +282,8 @@ func (p *AccountPool) channelSupportsLocked(account *Account, channel Channel, s
 		}
 		return generationChannelSelection(selection) && p.channelEnabledLocked(ChannelBuild) &&
 			p.buildSupportsModelLocked(account, selection.ModelID, selection.anyTier)
+	case ChannelAssistant:
+		return accountSupportsSelection(account, selection)
 	default:
 		return false
 	}
@@ -339,6 +349,23 @@ func (p *AccountPool) channelCandidatesLocked(indices []int, selection AccountSe
 		return lastChannel != "" && rank(candidates[position].channel) > rank(lastChannel)
 	})
 	return append(candidates[start:], candidates[:start]...)
+}
+
+// AssistantModel 判断模型是否为经 Build 写代码助手生成的 -build 模型
+func (p *AccountPool) AssistantModel(modelID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.assistantModelLocked(modelID)
+}
+
+// assistantModelLocked 判断模型是否带 assistant_route 能力，调用方持有 p.mu
+func (p *AccountPool) assistantModelLocked(modelID string) bool {
+	return p.modelCapabilityLocked(modelID, "assistant_route")
+}
+
+// assistantBusyLocked 判断账户正在为 -build 选择运行另一个写代码助手生成，同一账户同时只运行一个
+func (p *AccountPool) assistantBusyLocked(account *Account, selection AccountSelection) bool {
+	return account.assistantBusy && p.assistantModelLocked(selection.ModelID)
 }
 
 // InteractionAgentModel 判断模型是否为经 CreateInteraction 后台任务生成的 agent，如 Deep Research 与 Antigravity

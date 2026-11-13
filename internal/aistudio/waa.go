@@ -2,6 +2,8 @@ package aistudio
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -15,6 +17,16 @@ type ProtectedRequest struct {
 	PagePrompt string
 	ProofField int
 	Proof      string
+	// Digest 是直接作为 proof 摘要的 binding，为空时取 Prompt 的 SHA-256
+	Digest string
+}
+
+// proofDigest 返回请求 proof 绑定的摘要
+func proofDigest(request ProtectedRequest) string {
+	if request.Digest != "" {
+		return request.Digest
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(request.Prompt)))
 }
 
 // followUp 是受保护请求发出 Delay 后以相同请求头发出的伴随请求，响应被丢弃

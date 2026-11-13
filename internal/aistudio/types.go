@@ -37,6 +37,14 @@ type FileRef struct {
 	MIME string `json:"mime,omitempty"`
 }
 
+// UploadRef 表示经 AI Studio /_/upload 上传的附件引用
+type UploadRef struct {
+	MIME string `json:"mime"`
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
 // VideoMetadata 是视频 Part 的截取起止与采样帧率，起止为 Duration 字符串
 type VideoMetadata struct {
 	StartOffset string   `json:"start_offset,omitempty"`
@@ -152,6 +160,7 @@ type Part struct {
 	InlineData          *Blob                `json:"inline_data,omitempty"`
 	ExternalMedia       *ExternalMedia       `json:"external_media,omitempty"`
 	File                *FileRef             `json:"file,omitempty"`
+	Upload              *UploadRef           `json:"upload,omitempty"`
 	FunctionCall        *FunctionCall        `json:"function_call,omitempty"`
 	FunctionResult      *FunctionResult      `json:"function_result,omitempty"`
 	ExecutableCode      *ExecutableCode      `json:"executable_code,omitempty"`

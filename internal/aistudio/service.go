@@ -102,24 +102,37 @@ func NewWorkerProtectedTransport(options WorkerProtectedTransportOptions) *Worke
 	}
 }
 
-// DoProtected 写入 fresh proof 后经账户的 WAA 运行时发送 GenerateContent 或 Build 代理请求，写入页面输入框的提示词为最后一个轮次的文本；账户页面再次运行同一对话的 GenerateContent 按官网 Rerun 不写入提示词
+// DoProtected 写入 fresh proof 后经账户的 WAA 运行时发送 GenerateContent、Build 代理或写代码助手请求，binding 与写入页面输入框的提示词取自关联函数结果后的 contents，页面提示词为最后一个轮次的文本；账户页面再次运行同一对话的 GenerateContent 按官网 Rerun 不写入提示词
 func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
+	contents, err := linkedContents(request.Contents)
+	if err != nil {
+		return nil, err
+	}
 	var prompt string
-	var err error
 	proofField := 5
 	switch rpc.Method {
 	case buildProxyStreamedMethod, buildProxyUnaryMethod:
 		prompt, err = buildBindingPrompt(rpc.Body)
 		proofField = buildProofField
+	case assistantOfflineMethod:
+		proofField = assistantProofField
+		fallthrough
 	default:
-		prompt, err = bindingPrompt(request)
+		prompt, err = bindingPrompt(GenerateRequest{Contents: contents})
 	}
 	if err != nil {
 		return nil, err
 	}
-	page := contentsText(request.Contents[max(len(request.Contents)-1, 0):])
+	page := contentsText(contents[max(len(contents)-1, 0):])
 	if lease, ok := AccountLeaseFromContext(ctx); ok && rpc.Method == "GenerateContent" && t.runs.rerun(lease.Account().ID, request.Contents) {
 		page = ""
+		rounds := 0
+		for _, content := range request.Contents {
+			if content.Role == RoleUser {
+				rounds++
+			}
+		}
+		ctx = context.WithValue(ctx, pageRerunKey{}, rounds)
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	return t.doPrepared(ctx, prompt, page, proofField, request.continuationProof, AccountSelection{
@@ -573,21 +586,25 @@ func (s *PooledService) catalogFailure(ctx context.Context, lease *AccountLease,
 	return err
 }
 
-// CountTokens 使用支持目标模型的独占账户计数
+// CountTokens 使用支持目标模型的独占账户按客户端给出的对话计数，只有系统指令时以 user 轮计数后还原为系统指令明细
 func (s *PooledService) CountTokens(ctx context.Context, request TokenCountRequest) (TokenCount, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
 		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
 	}
-	request.System, request.Contents = normalizeTurns(request.System, request.Contents, s.rewritesAssistantTail(modelID), s.ContinuationPrompt)
+	request.System = clientSystem(request.System)
 	if s.YouTubeLinks {
 		request.Contents = attachYouTubeLinks(request.Contents)
 	}
 	if s.StripThoughtSignatures {
 		request.Contents = stripThoughtSignatures(request.Contents)
 	}
-	if len(request.Contents) == 0 {
-		return TokenCount{}, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
+	systemOnly := len(request.Contents) == 0
+	if systemOnly {
+		if strings.TrimSpace(SystemText(request.System)) == "" {
+			return TokenCount{}, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
+		}
+		request.System, request.Contents = nil, []Content{{Role: RoleUser, Parts: []Part{{Text: SystemText(request.System)}}}}
 	}
 	modelAccessScope := ModelAccessKey("count-tokens", modelID)
 	selection := AccountSelection{ModelID: modelID, ModelAccessScope: modelAccessScope, Method: "countTokens"}
@@ -609,6 +626,9 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 		var stateErr error
 		retryable := retryableAccountError(requestErr)
 		if requestErr == nil {
+			if systemOnly && len(count.Contents) == 1 {
+				count = systemOnlyCount(count)
+			}
 			stateErr = errors.Join(
 				lease.MarkAuthenticationValid(),
 				s.pool.ClearCooldownIfGeneration(
@@ -635,6 +655,15 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	return count, requestErr
 }
 
+// systemOnlyCount 把只有系统指令的请求以 user 轮计数的结果还原为系统指令明细，与系统指令一样不计角色 token
+func systemOnlyCount(count TokenCount) TokenCount {
+	role := count.Contents[0].RoleTokens
+	count.InputTokens -= role
+	count.PromptTokensDetails = subtractTextTokens(count.PromptTokensDetails, role)
+	count.System, count.Contents = &ContentTokens{PartTokens: count.Contents[0].PartTokens}, nil
+	return count
+}
+
 // ValidateGenerateRequest 在选择账户前校验与上游通道无关的生成参数
 func (s *PooledService) ValidateGenerateRequest(request GenerateRequest) error {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
@@ -652,19 +681,26 @@ func (s *PooledService) ValidateGenerateRequest(request GenerateRequest) error {
 	return s.client.validateGenerateRequest(request)
 }
 
+// generateTurns 返回 Generate 发往上游前改写的系统指令与对话轮
+func (s *PooledService) generateTurns(request GenerateRequest) ([]string, []Content) {
+	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
+	system, contents := normalizeTurns(request.System, request.Contents, s.rewritesAssistantTail(modelID), s.ContinuationPrompt)
+	if s.YouTubeLinks {
+		contents = attachYouTubeLinks(contents)
+	}
+	if s.StripThoughtSignatures {
+		contents = stripThoughtSignatures(contents)
+	}
+	return system, contents
+}
+
 // Generate 使用支持目标模型的独占账户生成事件流
 func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (<-chan Event, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if modelID == "" {
 		return nil, fmt.Errorf("%w: GenerateContent model 不能为空", ErrInvalidArgument)
 	}
-	request.System, request.Contents = normalizeTurns(request.System, request.Contents, s.rewritesAssistantTail(modelID), s.ContinuationPrompt)
-	if s.YouTubeLinks {
-		request.Contents = attachYouTubeLinks(request.Contents)
-	}
-	if s.StripThoughtSignatures {
-		request.Contents = stripThoughtSignatures(request.Contents)
-	}
+	request.System, request.Contents = s.generateTurns(request)
 	if len(request.Contents) == 0 {
 		return nil, fmt.Errorf("%w: 请求没有系统提示或对话内容", ErrInvalidArgument)
 	}

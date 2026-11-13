@@ -131,15 +131,21 @@ function accountLabel(id: string, label: string): string {
   return label || accountLabels.value.get(id) || '—'
 }
 
+// timeFormat 是当前语言的请求时间格式
+const timeFormat = computed(
+  () =>
+    new Intl.DateTimeFormat(locale.value, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+)
+
 // formatTime 根据当前语言显示请求时间
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(locale.value, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date(value))
+  return timeFormat.value.format(new Date(value))
 }
 
 // refresh 请求刷新数据，图标短暂旋转确认点击

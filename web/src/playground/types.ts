@@ -45,6 +45,7 @@ export interface Turn {
   thinking?: number
   tokens?: number
   thoughtTokens?: number
+  cachedTokens?: number
   finishReason?: string
   sources?: Source[]
   supports?: Support[]

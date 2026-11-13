@@ -15,6 +15,7 @@ type AdminService interface {
 	Status(context.Context) (AdminStatus, error)
 	CatalogModels(context.Context) ([]aistudio.Model, error)
 	Accounts(context.Context) ([]AdminAccount, error)
+	AccountExits(context.Context) ([]AccountExit, error)
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
 	CookieBrowsers(ctx context.Context, proxy string) ([]CookieBrowser, error)
@@ -176,6 +177,16 @@ type AdminAccount struct {
 	ActiveRequests int `json:"active_requests"`
 }
 
+// AccountExit 表示一个账户出口代理的公网 IP 与按 IP 定位的国家、时区和语言，Proxy 为空时是直连，查询失败时 Error 为原因
+type AccountExit struct {
+	Proxy    string `json:"proxy"`
+	IP       string `json:"ip,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+	Locale   string `json:"locale,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 // AdminProxy 表示代理池中一个代理的可用性与绑定账户数
 type AdminProxy struct {
 	Proxy     string     `json:"proxy"`
@@ -222,7 +233,6 @@ type ChromeImportProfile struct {
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
-	Locale      string `json:"locale"`
 	// Restricted 是该账户服务受限的原因，受限的账户不能导入
 	Restricted string `json:"restricted"`
 }
@@ -233,8 +243,6 @@ type CookieBrowser struct {
 	Browser   string `json:"browser"`
 	Email     string `json:"email"`
 	AuthUser  int    `json:"auth_user"`
-	Locale    string `json:"locale"`
-	Timezone  string `json:"timezone"`
 	Imported  bool   `json:"imported"`
 	SignedOut bool   `json:"signed_out"`
 	Error     string `json:"error"`
@@ -341,6 +349,7 @@ type AdminEvent struct {
 
 func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
+	mux.HandleFunc("GET /api/accounts/exits", s.handleAccountExits)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
@@ -401,6 +410,15 @@ func (s *server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]AdminAccount{"accounts": accounts})
+}
+
+func (s *server) handleAccountExits(w http.ResponseWriter, r *http.Request) {
+	exits, err := s.config.Admin.AccountExits(r.Context())
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]AccountExit{"exits": exits})
 }
 
 func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Request) {

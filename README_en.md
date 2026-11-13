@@ -15,6 +15,7 @@
 
 <p>
   Playground Generation Channel &nbsp;•&nbsp;
+  Build Code Assistant Chat Channel &nbsp;•&nbsp;
   High-Concurrency Multi-Account<br>
   Camoufox and SpiderMonkey WAA Backends &nbsp;•&nbsp;
   Claude Code, Codex, and Other Agent Clients &nbsp;•&nbsp;
@@ -70,6 +71,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 ## Core Capabilities
 
 - **Dual Channels**: Every account generates through the Playground; the Build app proxy is the legacy channel whose generation upstream has disabled for accounts (`PROXY_GENERATION_DISABLED`), off by default and enabled in `UPSTREAM_CHANNELS`; once enabled, generation requests sent through Build return the upstream reason; on free accounts both channels share one daily request count per model
+- **Build Chat Models**: Every model selectable in the Build chat panel is also listed as `<model>-build` (for example `gemini-3.8-flash-build`), answered by the Build code assistant with its system prompt, with function calling, tool-result continuation, and Google Search, and billed to the Build chat quota (free requests or the Google AI subscription); each account uses one Build app, and the same conversation continues in that app, including after a service restart. ⚠️ Every request to these models carries the Build code assistant's own injected system prompt, which shapes the answer's style, format, and persona; evaluate whether that fits your use
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: By default, SpiderMonkey (the Firefox JavaScript engine) generates the official proof inside the service process and no browser is downloaded or launched at runtime; with `WAA_BACKEND=camoufox`, Camoufox holds the official WAA lifecycle
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items, and Anthropic Messages supports `context_management` tool-result and thinking clearing and threshold compaction
@@ -83,10 +85,10 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **Image Generation**: Nano Banana image generation
 - **Video Generation**: Gemini Omni generates video tasks and image-to-video; Gemini Omni accepts text, image, and video input and returns text and MP4 video through the four generation APIs
 - **Deep Research**: Pro and Ultra accounts can run Deep Research through the four generation APIs and the Interactions `agent` field, returning the research process, a cited report, and charts
-- **Decision Model**: `gemini-decision-1` answers many yes/no, choice, and score questions about one shared input in a single call to `/v1beta/decisions`, returning calibrated probabilities and confidence; input can be text, images, audio, video, and PDF, and only input tokens are billed; the AI Studio website does not call this model yet, and the service calls it with the website's CreateDecision request
+- **Decision Model**: `gemini-decision-1` answers many yes/no, choice, and score questions about one shared input in a single call to `/v1beta/decisions`, returning calibrated probabilities and confidence; input can be text, images, audio, video, and PDF, and only input tokens are billed; this model is hidden on the AI Studio website, where choosing it only shows sample apps, and this service can use it directly
 - **YouTube Input**: YouTube video URLs are read as external video attachments; with `YOUTUBE_LINKS` enabled, YouTube links in message text are read as video too
 - **Video Understanding Controls**: Gemini and Interactions support per-video start/end offsets, sampling rates greater than 0 and up to 24 FPS, and static/agentic processing; agentic results preserve server-side processing steps and conversation history
-- **Smart Model Switching**: Discover models from AI Studio and route through the `model` field; with `DISCOVER_HIDDEN_MODELS` enabled, models that the AI Studio website references but the account's model list doesn't include yet can be called too once the upstream confirms they work
+- **Smart Model Switching**: Discover models from AI Studio and route through the `model` field; with `DISCOVER_HIDDEN_MODELS` enabled, models that AI Studio hasn't made public yet are added to the model list once the account is confirmed to be able to use them
 - **Google Tools**: Search, Image Search, URL Context, Code Execution, and Maps
 - **Files and Transcribe**: File upload, metadata, content, deletion, and audio transcription
 - **Live and Robotics**: WebSocket text, audio, JPEG images, media end, tool calls, resumption, and interruption
@@ -102,7 +104,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **macOS Desktop App**: macOS 13 or later, universal for Apple silicon and Intel
 - **Linux Desktop App**: GTK 3 and WebKitGTK 4.1, such as Ubuntu 22.04, Debian 12, or later; the deb installs these and the Camoufox libraries, while the AppImage also needs the Camoufox libraries listed on the next line
 - **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries and Xvfb, on Debian/Ubuntu run `sudo apt-get update && sudo apt-get satisfy -y "libgtk-3-0, libasound2t64 | libasound2, libx11-xcb1, xvfb"`
-- **Source Build**: Go 1.27+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm; a C/C++ compiler: the UCRT clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) on Windows, Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux; the SpiderMonkey and libwebp static libraries for the platform from the Releases of [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) and [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases)
+- **Source Build**: Go 1.27.3+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm; a C/C++ compiler: the UCRT clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) on Windows, Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux; the SpiderMonkey and libwebp static libraries for the platform from the Releases of [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) and [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases)
 - **Operating System**: Windows, macOS, Linux
 - **Memory**: with the default SpiderMonkey backend, one account takes about 100 MB on macOS and about 150 MB on Windows and Linux, plus about 55 MB for each additional resident prewarmed account; with the Camoufox backend, one account takes about 0.5 GB on Windows and macOS and about 0.7 GB on Linux, plus about 0.4 GB for each additional resident prewarmed account
 - **CPU**: the SpiderMonkey backend uses almost none while idle, and the Camoufox backend uses about 0.5% of one core per resident prewarmed account while idle; each request takes under 0.1 s of CPU time on either backend
@@ -179,7 +181,7 @@ Run `setup` and other commands with the desktop executable in a terminal, such a
 
 #### 1. Install Dependencies
 
-- Go 1.27 or later
+- Go 1.27.3 or later
 - Node.js 22.18+, 24.11+, or 26+, with its bundled npm
 - A C/C++ compiler: Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux
 
@@ -235,7 +237,7 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
 - Set `PROXY_API_KEY` when the port is reachable from other machines. Opening the console from outside the container requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
 - Add accounts: choose "Sign in with browser" in "Add account" on the console and sign in to Google in the sign-in window that opens in the console; you can also paste cookies, or copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`.
 - `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy.
-- The container time zone is UTC. New accounts' fingerprint time zone, log timestamps, and daily usage totals follow the container time zone; add `environment: { TZ: <IANA time zone> }` to `docker-compose.yml` to use another one. Each account's time zone can also be set on the Accounts page.
+- The container time zone is UTC. Log timestamps and daily usage totals follow the container time zone; add `environment: { TZ: <IANA time zone> }` to `docker-compose.yml` to use another one. New accounts take their locale and time zone from the location of the exit IP, and each account's time zone can also be set on the Accounts page.
 - Run `docker compose restart` after editing `data/.env`, `docker compose pull && docker compose up -d` to update the image, and `docker compose up -d --build` in the source directory to build from source.
 
 ## Quick Start
@@ -256,7 +258,7 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
    ./aistudio2api setup --login
    ```
 
-   The Google email is read from AI Studio after login, and Google Drive is authorized for the account. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the current computer and can be set with `--locale` and `--timezone`.
+   The Google email is read from AI Studio after login, and Google Drive is authorized for the account. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the location of the exit IP and can be set with `--locale` and `--timezone`.
 
 2. **Start the management UI**:
    - Double-click `aistudio2api.exe` on Windows
@@ -268,10 +270,11 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
    - Open Accounts and click "Add account" to pick a method
    - "Import from Chrome" supports selecting multiple local Chrome accounts
    - "Paste cookies" takes the JSON exported on aistudio.google.com by a cookie extension (such as Cookie-Editor), a Cookie request header line, or a Netscape cookies.txt file, and the service detects the account email
-   - "Import from an antidetect browser" lists the windows signed in to AI Studio in local antidetect browsers and Chromium with their language and time zone; select them and import, and each account keeps the language and time zone of its browser. The browser needs remote debugging enabled
+   - "Import from an antidetect browser" lists the windows signed in to AI Studio in local antidetect browsers and Chromium; select them and import. The browser needs remote debugging enabled
    - "Sign in with browser" opens an isolated Camoufox window, detects the email after login, authorizes Google Drive, and saves the account; when Google asks to verify your identity, confirm it in that window or on your phone
    - When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type and paste; Cancel ends the sign-in
-   - Account proxy, locale and time zone are under "More settings" in the dialog
+   - Account proxy, locale and time zone are under "More settings" in the dialog; locale and time zone left empty follow the location of the exit IP
+   - Above the account list, each exit IP is shown with the number of accounts that reach Google through it, with a notice when several accounts share one exit IP
 
 4. **Start the API**:
    - Click "Start service" to start the data plane
@@ -532,7 +535,7 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 
 You name the keys of `questions`, and answers come back under the same keys. `noul` returns the probability `noul` that the statement holds, with optional `true_description` and `false_description` in `criteria`; `choice` takes option IDs mapped to descriptions in `criteria` and returns `choice` plus `probabilities` for every option; `score` takes level descriptions from low to high in `criteria` and returns the expected level `score`, per-level `probabilities`, and `legend`. Every answer includes `confidence`. `input` accepts a string or Interactions content blocks; images, audio, video, and PDF use `data` (Base64) or `uri` (an HTTPS URL or a file from this service's Files API) with `mime_type`. The Google Gen AI SDK calls it through `client.decisions.create`.
 
-The AI Studio website does not call `gemini-decision-1` yet: the official Playground lists only sample apps for this model, and the sample apps call it through the Gemini API with a paid API key. This service calls it with the website's CreateDecision request, which AI Studio pages do not send, and logs a reminder in the runtime log for every call.
+`gemini-decision-1` is hidden on the AI Studio website: choosing it in the official Playground only shows sample apps and doesn't open a chat. This service can use it directly and logs a reminder in the runtime log for every request.
 
 ## Models
 
@@ -563,7 +566,7 @@ The model catalog follows AI Studio updates; clients read the current values fro
 | `gemini-3.8-live` | Gemini 3.8 Live | Live | 131072 | 65536 |
 | `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | Live translation | 16384 | 32768 |
 
-The catalog also includes `-latest` aliases, Robotics-ER, and earlier image and TTS models.
+The catalog also includes `-latest` aliases, Robotics-ER, earlier image and TTS models, and the Build channel's `-build` models.
 
 Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, `predictLongRunning`, and `createDecision` (`/v1beta/decisions`); `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
@@ -640,7 +643,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
 | `WARM_WORKER_LIMIT` | `10`, `5` with Camoufox | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `20`, `10` with Camoufox | Maximum workers active during peak load |
-| `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=spidermonkey` |
+| `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently during on-demand scaling; prewarming starts workers one at a time; unlimited with `WAA_BACKEND=spidermonkey` |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
@@ -655,7 +658,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream and send function calls with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens |
 | `SEARCH_MODEL_ALIASES` | `true` | Offer `-search` variants of search-capable models; requests using these variants enable Google Search |
-| `DISCOVER_HIDDEN_MODELS` | `false` | When syncing account model catalogs (at startup, every 24 hours, and on Refresh all in Accounts), find models that the AI Studio website references but the account's model list doesn't include yet, and add them to the catalog once the upstream confirms they work; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page. Officially listed models use their official entries; turning this off removes them the next time the generation service starts |
+| `DISCOVER_HIDDEN_MODELS` | `false` | When syncing account model catalogs (at startup, every 24 hours, and on Refresh all in Accounts), find models that AI Studio hasn't made public yet and add them to the catalog once the account is confirmed to be able to use them; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page. Once AI Studio lists a model, its official details are used; turning this off removes them the next time the generation service starts |
 | `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
 | `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
 | `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
@@ -665,7 +668,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key; when the directory exceeds 1 GB, the least recently used files are deleted first |
 | `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
 
-The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
+The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more. When no account has served a request for 30 minutes, the resident workers close, and prewarming resumes after the next request arrives.
 
 ### Port Configuration
 

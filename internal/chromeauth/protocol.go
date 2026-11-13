@@ -25,7 +25,6 @@ import (
 
 	http "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -197,7 +196,7 @@ func acceptLanguageHeader(languages string) string {
 
 // fetchGoogleCookies 用 refresh token 经 OAuthMultilogin 取得 Google Cookie，有设备绑定密钥时走 DBSC 挑战与 HPKE 解密，并返回 google.com 的 DBSC 会话登记
 func fetchGoogleCookies(ctx context.Context, identity chromeIdentity, gaiaID string, token string, wrappedKey []byte, proxyURL string) ([]multiloginCookie, *aistudio.BoundSession, error) {
-	client, err := newOAuthClient(proxyURL)
+	client, err := newOAuthClient(proxyURL, chromeIdle)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -295,23 +294,6 @@ func checkMultiloginCookies(cookies []multiloginCookie) error {
 		}
 	}
 	return nil
-}
-
-func newOAuthClient(proxyURL string) (tls_client.HttpClient, error) {
-	options := []tls_client.HttpClientOption{
-		tls_client.WithTimeoutSeconds(30),
-		tls_client.WithClientProfile(profiles.Chrome_146),
-		tls_client.WithNotFollowRedirects(),
-		tls_client.WithCookieJar(tls_client.NewCookieJar()),
-	}
-	if proxyURL != "" {
-		options = append(options, tls_client.WithProxyUrl(proxyURL))
-	}
-	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
-	if err != nil {
-		return nil, fmt.Errorf("创建 OAuth HTTP 客户端: %w", err)
-	}
-	return client, nil
 }
 
 // requestMultilogin 按 Chrome 的请求头发送一次 OAuthMultilogin：带 assertion 时用 MultiOAuth 头，没有设备绑定的 token 用 MultiBearer 头

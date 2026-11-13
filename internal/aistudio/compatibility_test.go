@@ -205,7 +205,7 @@ func TestAttachYouTubeMediaVideoIDs(t *testing.T) {
 	}
 }
 
-// TestFunctionResultNameInference 验证工具结果的唯一关联与原始输入保留
+// TestFunctionResultNameInference 验证工具结果的唯一关联与原始输入保留，关联不到调用的结果以 functionResponse 文本转录发送
 func TestFunctionResultNameInference(t *testing.T) {
 	call := func(id, name string) Part {
 		return Part{FunctionCall: &FunctionCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
@@ -232,17 +232,16 @@ func TestFunctionResultNameInference(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := encodeContents(test.contents)
-			if test.want == "" {
-				if err == nil {
-					t.Fatalf("unresolved result accepted: %#v", wire)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			last := wire[len(wire)-1].([]any)[0].([]any)[0].([]any)[11].([]any)
-			if last[0] != test.want {
+			part := wire[len(wire)-1].([]any)[0].([]any)[0].([]any)
+			if test.want == "" {
+				text, _ := part[1].(string)
+				if len(part) > 11 || !strings.HasPrefix(text, `{"functionResponse":`) {
+					t.Fatalf("unresolved result part=%#v", part)
+				}
+			} else if last := part[11].([]any); last[0] != test.want {
 				t.Fatalf("name=%v want=%s", last[0], test.want)
 			}
 			if test.contents[len(test.contents)-1].Parts[0].FunctionResult.Name != "" {

@@ -18,6 +18,10 @@
   const brands = host.brands;
   const realmName = host.realm;
   const topRealm = host.topRealm || null;
+  // userActivation 记录顶层页面最近一次用户点击或按键的 Unix 毫秒时刻，各 Realm 共用
+  const userActivation = topRealm ? topRealm.userActivation : { at: null };
+  // transientActivationMs 是 Firefox dom.user_activation.transient.timeout 的瞬时激活时长
+  const transientActivationMs = 5000;
   // frameURL 是 iframe Realm 当前文档的地址，导航提交前为初始 about:blank 文档
   let frameURL = realmName === 'frame' ? 'about:blank' : '';
   // locationFields 返回地址对应的 Location 各字段
@@ -442,6 +446,30 @@
     ctor: name => ctors[name],
     proto: name => protos[name],
     pageOrigin: () => pageOrigin(),
+    userActivation,
+    // activate 记录一次用户点击或按键
+    activate: () => { userActivation.at = host.timeOrigin + host.performanceNow(); },
+    // mouseInput 按 Firefox 可信鼠标输入依次派发 types 中的事件：nodes 的布局矩形取 rects，指针与鼠标事件派发到指针下的 target，out 事件派发到指针离开的 left，坐标为 point，pointermove 与 mousemove 的移动量为 movement，焦点从 blurred 移到 focused，pointerdown 记录一次用户点击
+    mouseInput: (nodes, rects, target, left, point, movement, blurred, focused, types) => {
+      nodes.forEach((node, index) => { brandFor(node).rect = rects[index]; });
+      const [clientX, clientY] = point;
+      for (const type of types) {
+        const focus = type === 'focusin' || type === 'focusout';
+        const out = type === 'pointerout' || type === 'mouseout';
+        const pointer = type.startsWith('pointer') || type === 'click';
+        const pressed = type === 'pointerdown' || type === 'mousedown';
+        const changed = pressed || type === 'pointerup' || type === 'mouseup' || type === 'click';
+        const moved = type === 'pointermove' || type === 'mousemove';
+        const event = create(focus ? 'FocusEvent' : pointer ? 'PointerEvent' : 'MouseEvent');
+        const over = brandFor(event).over;
+        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: !focus, composed: true, view: g, detail: !focus && type !== 'mouseover' && type !== 'mouseout' && (!pointer || type === 'click') ? 1 : 0, timeStamp: host.performanceNow() });
+        if (focus) over.relatedTarget = type === 'focusout' ? focused : blurred;
+        else Object.assign(over, { button: pointer && !changed ? -1 : 0, buttons: pressed ? 1 : 0, clientX, clientY, screenX: clientX + g.mozInnerScreenX, screenY: clientY + g.mozInnerScreenY, movementX: moved ? movement[0] : 0, movementY: moved ? movement[1] : 0 });
+        if (pointer) Object.assign(over, { pointerId: 0, pointerType: 'mouse', width: 1, height: 1, pressure: pressed ? 0.5 : 0, isPrimary: true, altitudeAngle: Math.PI / 2, azimuthAngle: 0 });
+        if (type === 'pointerdown') api.activate();
+        dispatch(type === 'focusout' ? blurred : type === 'focusin' ? focused : out ? left : target, event);
+      }
+    },
     reportException: error => reportException(error),
     reportRejection: (type, promise, reason) => reportRejection(type, promise, reason),
     idleDeadline: (didTimeout, remaining) => {
@@ -1108,6 +1136,7 @@
     return found;
   };
   const layoutRect = element => {
+    if (brandFor(element).rect) return brandFor(element).rect;
     if (realmName === 'top' && (element === api.singleton('document.body') || element === api.singleton('document.documentElement'))) {
       return [0, 0, g.innerWidth, g.innerHeight];
     }
@@ -1219,6 +1248,8 @@
     'Event.target': brand => brand.over.target === undefined ? null : brand.over.target,
     'Storage.length': brand => storageKeys(storageArea(brand)).length,
     'Performance.timeOrigin': () => host.timeOrigin,
+    'UserActivation.hasBeenActive': () => userActivation.at !== null,
+    'UserActivation.isActive': () => userActivation.at !== null && host.timeOrigin + host.performanceNow() - userActivation.at < transientActivationMs,
     'Document.cookie': () => '',
   });
   Object.assign(setters, {
@@ -1600,7 +1631,24 @@
     'Navigator.getGamepads': () => [],
     'Navigator.sendBeacon': () => true,
     'Performance.now': () => host.performanceNow(),
-    'Performance.toJSON': () => ({ timeOrigin: host.timeOrigin }),
+    // *.toJSON 是 WebIDL 默认 toJSON：按继承顺序收集声明 toJSON 的各级接口的属性，原始值、带 toJSON 的对象与这类对象的数组原样收入，事件处理属性与其他对象不收
+    '*.toJSON': function (brand) {
+      const chain = [];
+      for (let current = brand.iface; current && !ES.has(current); current = parentOf[current]) chain.unshift(current);
+      const json = value => value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || (value && typeof value.toJSON === 'function') ? value : undefined;
+      const result = {};
+      for (const iface of chain) {
+        const info = infos[iface];
+        if (!info || !info.pr.some(entry => entry.n === 'toJSON')) continue;
+        for (const entry of info.pr) {
+          if (entry.k !== 'a' || !entry.g || /^on[a-z]/.test(entry.n)) continue;
+          const value = read(this, brand, entry.n, iface);
+          const converted = Array.isArray(value) ? value.map(json) : json(value);
+          if (converted !== undefined && !(Array.isArray(converted) && converted.includes(undefined))) result[entry.n] = converted;
+        }
+      }
+      return result;
+    },
     'Performance.getEntries': () => navigationEntries(),
     'Performance.getEntriesByType': (brand, [type]) => String(type) === 'navigation' ? navigationEntries() : [],
     'Performance.getEntriesByName': (brand, [name]) => navigationEntries().filter(entry => readValue(entry, brandFor(entry), 'name') === String(name)),
@@ -1865,6 +1913,16 @@
   }
   getters['URL.searchParams'] = brand => brand.params;
   getters['URLSearchParams.size'] = brand => brand.list.length;
+  // PerformanceTiming 各属性是本 Realm 导航计时加 timeOrigin 的 Unix 毫秒值，没有发生的卸载与重定向阶段为 0
+  for (const name of ['navigationStart', 'unloadEventStart', 'unloadEventEnd', 'redirectStart', 'redirectEnd', 'fetchStart', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart', 'responseStart', 'responseEnd', 'domLoading', 'domInteractive', 'domContentLoadedEventStart', 'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd']) {
+    getters['PerformanceTiming.' + name] = () => {
+      if (name === 'navigationStart') return host.timeOrigin;
+      const entry = navigationEntries()[0];
+      const entryValue = field => entry ? readValue(entry, brandFor(entry), field) : 0;
+      const value = name === 'domLoading' ? (profile.domLoading ?? entryValue('responseEnd')) : entryValue(name);
+      return value === 0 && /^(unload|redirect)/.test(name) ? 0 : host.timeOrigin + value;
+    };
+  }
   getters['PerformanceObserver.supportedEntryTypes:static'] = () => ['event', 'first-input', 'largest-contentful-paint', 'mark', 'measure', 'navigation', 'paint', 'resource'];
   getters['PushManager.supportedContentEncodings:static'] = () => Object.freeze(['aes128gcm']);
   getters['Notification.permission:static'] = () => 'default';

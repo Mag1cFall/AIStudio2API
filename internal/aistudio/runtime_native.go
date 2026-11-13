@@ -122,7 +122,11 @@ func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedReques
 	proof := request.Proof
 	var headers http.Header
 	if proof == "" {
-		proof, headers, err = worker.proofAndHeaders(ctx, request.Prompt, request.PagePrompt, strings.HasSuffix(request.URL, "/GenerateContent") && request.PagePrompt != "")
+		gesture := ctx
+		if !strings.HasSuffix(request.URL, "/GenerateTitle") {
+			gesture = context.WithValue(ctx, userGestureKey{}, true)
+		}
+		proof, headers, err = worker.proofAndHeaders(gesture, proofDigest(request), request.PagePrompt, strings.HasSuffix(request.URL, "/GenerateContent") && request.PagePrompt != "")
 	} else {
 		headers, err = worker.current().ProtocolHeaders(ctx)
 	}
@@ -140,19 +144,18 @@ type pageRunner interface {
 	RunProof(context.Context, string, string) (string, error)
 }
 
-// proofAndHeaders 把 page 写入页面提示词后为 binding 的 SHA-256 生成 fresh proof，run 时写入后点击 Run，再取公共协议头
-func (worker *NativeWorker) proofAndHeaders(ctx context.Context, binding, page string, run bool) (string, http.Header, error) {
+// proofAndHeaders 把 page 写入页面提示词后为 digest 生成 fresh proof，run 时写入后点击 Run，再取公共协议头
+func (worker *NativeWorker) proofAndHeaders(ctx context.Context, digest, page string, run bool) (string, http.Header, error) {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
 	worker.setPhase(WorkerBusy)
-	digest := sha256.Sum256([]byte(binding))
 	runtime := worker.current()
 	var proof string
 	var err error
 	if runner, ok := runtime.(pageRunner); ok && run {
-		proof, err = runner.RunProof(ctx, fmt.Sprintf("%x", digest), page)
+		proof, err = runner.RunProof(ctx, digest, page)
 	} else {
-		proof, err = runtime.Proof(ctx, fmt.Sprintf("%x", digest), page)
+		proof, err = runtime.Proof(ctx, digest, page)
 	}
 	var headers http.Header
 	if err == nil {

@@ -50,7 +50,7 @@ type cookieImportItem struct {
 	AuthUser int    `json:"auth_user"`
 }
 
-// cookieImportRequest 是一次导入的 Cookie 账户与共用的账户环境，语言与时区为空时调试浏览器账户沿用浏览器的设置
+// cookieImportRequest 是一次导入的 Cookie 账户与共用的账户环境，语言与时区为空时按出口位置填写
 type cookieImportRequest struct {
 	Items    []cookieImportItem `json:"items"`
 	Proxy    string             `json:"proxy"`
@@ -310,12 +310,6 @@ func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem,
 			return AdminAccount{}, err
 		}
 		cookies = browser.Cookies
-		if strings.TrimSpace(locale) == "" {
-			locale = browser.Locale
-		}
-		if strings.TrimSpace(timezone) == "" {
-			timezone = browser.Timezone
-		}
 	}
 	state, err := aistudio.ParseCookieText(cookies)
 	if err != nil {

@@ -1089,9 +1089,6 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 				ThoughtSignature: part.ThoughtSignature,
 			})
 		case part.FunctionResponse != nil:
-			if part.FunctionResponse.Name == "" {
-				return nil, false, fmt.Errorf("functionResponse requires name")
-			}
 			response, err := geminiJSONObject(part.FunctionResponse.Response, "functionResponse.response")
 			if err != nil {
 				return nil, false, err
@@ -1133,8 +1130,7 @@ func geminiJSONObject(raw json.RawMessage, field string) (json.RawMessage, error
 	if len(raw) == 0 {
 		return json.RawMessage(`{}`), nil
 	}
-	var object map[string]any
-	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+	if value := bytes.TrimSpace(raw); len(value) == 0 || value[0] != '{' {
 		return nil, fmt.Errorf("%s must be an object", field)
 	}
 	return raw, nil

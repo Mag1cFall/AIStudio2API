@@ -264,7 +264,7 @@ export const capabilities: Capability[] = [
     id: 'decision',
     label: 'access.cap.decision',
     description: 'access.cap.decisionHelp',
-    notice: 'models.frontendUncalledHelp',
+    notice: 'models.decisionHiddenHelp',
     icon: 'decision',
     endpoints: [['POST', '/v1beta/decisions']],
     matches: (model) => model.methods.includes('createDecision'),

@@ -22,19 +22,26 @@ var ErrBoundSessionRejected = errors.New("Google DBSC 会话刷新被拒绝")
 // boundChallengePattern 匹配 Secure-Session-Challenge 结构化列表中的一项挑战与会话 id
 var boundChallengePattern = regexp.MustCompile(`"([^"]+)"(?:;id="([^"]*)")?`)
 
-// RotateBoundCookies 按 Chromium RegistrationFetcher 的刷新流程以设备绑定密钥刷新 google.com 的 DBSC 会话，返回各次响应的 Set-Cookie
+// boundRefreshHeaderOrder 是 Chrome DBSC 刷新请求的请求头顺序：RegistrationFetcher 设置的头在前，网络栈添加的 User-Agent、Accept-Encoding、Accept-Language 与 Cookie 在后，priority 由 HTTP/2 层最后加入
+var boundRefreshHeaderOrder = []string{"content-length", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-site", "origin", "sec-secure-session-id", "secure-session-response", "user-agent", "accept-encoding", "accept-language", "cookie", "priority"}
+
+// RotateBoundCookies 按 Chromium RegistrationFetcher 的刷新流程以设备绑定密钥刷新 google.com 的 DBSC 会话，返回各次响应的 Set-Cookie；绑定 Cookie 仍有效时按 Chrome 主动刷新以 IDLE 优先级发出，已缺少或到期时按挂起请求触发的刷新以 HIGHEST 优先级发出
 func RotateBoundCookies(ctx context.Context, state aistudio.StorageState, extension aistudio.AuthExtension, proxy string) ([]string, error) {
 	identity, proxyURL, err := sourceIdentity(extension.Source, proxy)
 	if err != nil {
 		return nil, err
 	}
-	client, err := newOAuthClient(proxyURL)
+	session := *extension.Bound
+	priority := chromeIdle
+	if state.BoundCookieLifetime(session, time.Now()) == 0 {
+		priority = chromeHighest
+	}
+	client, err := newOAuthClient(proxyURL, priority)
 	if err != nil {
 		return nil, err
 	}
 	defer client.CloseIdleConnections()
-	session := *extension.Bound
-	status, header, err := requestBoundRefresh(ctx, client, identity, &state, session, "")
+	status, header, err := requestBoundRefresh(ctx, client, identity, &state, session, "", priority)
 	setCookies := header.Values("Set-Cookie")
 	if err != nil || status == http.StatusOK {
 		return setCookies, err
@@ -52,7 +59,7 @@ func RotateBoundCookies(ctx context.Context, state aistudio.StorageState, extens
 	if err != nil {
 		return nil, err
 	}
-	status, header, err = requestBoundRefresh(ctx, client, identity, &state, session, signed)
+	status, header, err = requestBoundRefresh(ctx, client, identity, &state, session, signed, priority)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +69,8 @@ func RotateBoundCookies(ctx context.Context, state aistudio.StorageState, extens
 	return append(setCookies, header.Values("Set-Cookie")...), nil
 }
 
-// requestBoundRefresh 以 state 中的 Cookie 向刷新地址发出一次 DBSC 刷新请求，并把响应 Cookie 合并回 state
-func requestBoundRefresh(ctx context.Context, client tls_client.HttpClient, identity chromeIdentity, state *aistudio.StorageState, session aistudio.BoundSession, signed string) (int, http.Header, error) {
+// requestBoundRefresh 以 state 中的 Cookie 按 Chrome 的请求头顺序向刷新地址发出一次 DBSC 刷新请求，并把响应 Cookie 合并回 state
+func requestBoundRefresh(ctx context.Context, client tls_client.HttpClient, identity chromeIdentity, state *aistudio.StorageState, session aistudio.BoundSession, signed string, priority chromePriority) (int, http.Header, error) {
 	cookie, err := state.CookieHeader(session.RefreshURL, time.Now())
 	if err != nil {
 		return 0, nil, err
@@ -84,6 +91,8 @@ func requestBoundRefresh(ctx context.Context, client tls_client.HttpClient, iden
 	request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	request.Header.Set("Accept-Language", identity.acceptLanguage)
 	request.Header.Set("Cookie", cookie)
+	request.Header.Set("Priority", priority.header)
+	request.Header[http.HeaderOrderKey] = boundRefreshHeaderOrder
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, nil, fmt.Errorf("DBSC 刷新请求失败: %w", err)

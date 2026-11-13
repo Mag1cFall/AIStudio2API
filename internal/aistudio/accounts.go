@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/mail"
@@ -281,6 +282,8 @@ type accountRuntimeState struct {
 	Proxy              string                     `json:"proxy,omitempty"`
 	// Restricted 是 Google 拒绝该账户使用 AI Studio 的原因与官网跳转页
 	Restricted string `json:"restricted,omitempty"`
+	// Assistant 是账户的 Build 写代码助手应用与其中可续接的对话
+	Assistant *assistantApplet `json:"assistant,omitempty"`
 }
 
 // ModelAccessState 表示账户对单个模型的实测调用资格
@@ -325,18 +328,24 @@ type Account struct {
 	authGeneration        uint64
 	authCheckedAt         time.Time
 	modelAccessGeneration uint64
-	stateMessage          string
-	transition            AccountTransition
-	catalogErr            error
-	initializedAt         time.Time
-	buildModels           []Model
-	cachedCatalog         modelCatalog
+	// verifiedAt 是只推进了检查时间、尚未写回 runtime-state 的模型成功记录，按资格键索引，写回后删除已写入的项
+	verifiedAt map[string]time.Time
+	// verifiedGeneration 是 verifiedAt 记录时的模型资格目录版本
+	verifiedGeneration uint64
+	stateMessage       string
+	transition         AccountTransition
+	catalogErr         error
+	initializedAt      time.Time
+	buildModels        []Model
+	cachedCatalog      modelCatalog
 	// catalogSyncedAt 是目录缓存最近一次同步的时刻，没有一致的缓存时为零值
 	catalogSyncedAt time.Time
 	// hiddenModels 是目录中官网隐藏模型 ID 到依据模型 ID 的映射，hiddenDiscovered 表示该目录同步时探测过官网隐藏模型
 	hiddenModels     map[string]string
 	hiddenDiscovered bool
 	boundProxy       atomic.Pointer[string]
+	// assistantBusy 表示账户正在运行写代码助手生成
+	assistantBusy bool
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
@@ -507,8 +516,10 @@ type AccountLease struct {
 	channel               Channel
 	// ignoreQuotaCooldown 表示租约在全部账户冷却时取自套餐限额或每日限额冷却中的账户，这两种冷却不阻止它发送
 	ignoreQuotaCooldown bool
-	operation           sync.Mutex
-	released            bool
+	// assistantDone 表示本租约的写代码助手生成已结束，账户已可接其他 -build 请求
+	assistantDone bool
+	operation     sync.Mutex
+	released      bool
 	// holds 是 Retain 尚未结束的次数，大于 0 时 Release 推迟到最后一次结束
 	holds int
 	// releaseDeferred 表示 Release 已被推迟
@@ -536,13 +547,11 @@ type AccountPublishLease struct {
 	err         error
 }
 
-// DefaultAccountConfig 返回新账户的最小配置
+// DefaultAccountConfig 返回新账户的最小配置，语言与时区由调用方按出口位置填写
 func DefaultAccountConfig(label string) AccountConfig {
 	return AccountConfig{
-		Label:    strings.TrimSpace(label),
-		Enabled:  true,
-		Locale:   DefaultAccountLocale(),
-		Timezone: DefaultAccountTimezone(),
+		Label:   strings.TrimSpace(label),
+		Enabled: true,
 	}
 }
 
@@ -609,8 +618,9 @@ func (s *AccountStore) Load() ([]*Account, error) {
 	accounts := make([]*Account, 0, len(directories))
 	ids := make(map[string]struct{}, len(directories))
 	resources := make(map[string]string)
+	catalogs := make(map[catalogCacheKey]catalogCacheParse)
 	for _, directory := range directories {
-		account, err := loadAccount(directory)
+		account, err := loadAccount(directory, catalogs)
 		if err != nil {
 			return nil, err
 		}
@@ -667,7 +677,7 @@ func (s *AccountStore) Create(accountConfig AccountConfig, state StorageState) (
 	if err := WriteStorageState(filepath.Join(temporary, StorageStateName), state); err != nil {
 		return nil, nil, err
 	}
-	account, err := loadAccount(temporary)
+	account, err := loadAccount(temporary, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1980,6 +1990,9 @@ func (l *AccountLease) releaseLocked() {
 	} else if l.account.active > 0 {
 		l.account.active--
 	}
+	if l.channel == ChannelAssistant && !l.assistantDone {
+		l.account.assistantBusy = false
+	}
 	if l.account.active == 0 && !l.account.exclusive && l.account.authRefreshers == 0 && l.account.leaseLock != nil {
 		if err := l.account.leaseLock.Unlock(); err != nil {
 			l.err = err
@@ -2094,15 +2107,14 @@ func (p *AccountPool) MarkModelAccessVerifiedIfGeneration(
 	canonicalModelID := canonicalAccountModelID(account, modelID)
 	current := account.runtime.ModelAccess[canonicalModelID]
 	_, cooling := account.runtime.Cooldowns[canonicalModelID]
-	globalAccess := account.runtime.ModelAccess[globalCooldownKey]
 	_, globalCooling := account.runtime.Cooldowns[globalCooldownKey]
-	unchanged := generation == account.modelAccessGeneration && current.State == ModelAccessVerified &&
-		!cooling && !current.CheckedAt.Before(checkedAt) && !globalCooling &&
-		!globalAccess.CheckedAt.Before(checkedAt)
-	p.mu.Unlock()
-	if unchanged {
+	if generation == account.modelAccessGeneration && current.State == ModelAccessVerified && !cooling && !globalCooling {
+		account.deferVerified(generation, canonicalModelID, checkedAt)
+		account.deferVerified(generation, globalCooldownKey, checkedAt)
+		p.mu.Unlock()
 		return false, nil
 	}
+	p.mu.Unlock()
 	changed := false
 	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
 		if generation != account.modelAccessGeneration {
@@ -2142,6 +2154,48 @@ func (p *AccountPool) MarkModelAccessVerifiedIfGeneration(
 		return false, err
 	}
 	return changed, nil
+}
+
+// deferVerified 在内存中推进已验证模型的成功检查时间，留到下一次写回 runtime-state 时一并写入
+func (account *Account) deferVerified(generation uint64, key string, checkedAt time.Time) {
+	if account.verifiedGeneration != generation {
+		account.verifiedAt, account.verifiedGeneration = nil, generation
+	}
+	if account.verifiedAt == nil {
+		account.verifiedAt = map[string]time.Time{}
+	}
+	if checkedAt.After(account.verifiedAt[key]) {
+		account.verifiedAt[key] = checkedAt
+	}
+}
+
+// applyVerified 把内存中较新的成功检查时间并入读出的运行状态，返回是否改变了检查时间以外的状态
+func (account *Account) applyVerified(runtimeState *accountRuntimeState) bool {
+	if account.verifiedGeneration != account.modelAccessGeneration {
+		account.verifiedAt = nil
+		return false
+	}
+	changed := false
+	for key, checkedAt := range account.verifiedAt {
+		access := runtimeState.ModelAccess[key]
+		if access.CheckedAt.After(checkedAt) {
+			continue
+		}
+		if _, exists := runtimeState.Cooldowns[key]; exists {
+			delete(runtimeState.Cooldowns, key)
+			changed = true
+		}
+		if key != globalCooldownKey && access.State != ModelAccessVerified {
+			access.State = ModelAccessVerified
+			changed = true
+		}
+		access.CheckedAt = checkedAt
+		if runtimeState.ModelAccess == nil {
+			runtimeState.ModelAccess = map[string]ModelAccess{}
+		}
+		runtimeState.ModelAccess[key] = access
+	}
+	return changed
 }
 
 // ResetModelAccess 清空账户的实测模型资格
@@ -2721,14 +2775,15 @@ func (p *AccountPool) classifyCandidatesLocked(
 			continue
 		}
 		_, isWarm := warm[account.ID]
+		assistantBusy := p.assistantBusyLocked(account, selection)
 		switch {
-		case isWarm && !account.exclusive && account.exclusiveWaiters == 0 && account.authRefreshers == 0 && account.active == 0:
+		case isWarm && !assistantBusy && !account.exclusive && account.exclusiveWaiters == 0 && account.authRefreshers == 0 && account.active == 0:
 			groups.WarmReady = append(groups.WarmReady, account.ID)
-		case isWarm && !account.exclusive && account.exclusiveWaiters == 0 && account.authRefreshers == 0 && account.active < p.perAccountConcurrency:
+		case isWarm && !assistantBusy && !account.exclusive && account.exclusiveWaiters == 0 && account.authRefreshers == 0 && account.active < p.perAccountConcurrency:
 			groups.WarmAvailable = append(groups.WarmAvailable, account.ID)
 		case isWarm:
 			groups.WarmBusy = append(groups.WarmBusy, account.ID)
-		case account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0:
+		case assistantBusy || account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0:
 			groups.StandbyBusy = append(groups.StandbyBusy, account.ID)
 		default:
 			groups.StandbyReady = append(groups.StandbyReady, account.ID)
@@ -2757,7 +2812,8 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 			continue
 		}
 		waitable = true
-		if account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active >= p.perAccountConcurrency {
+		if account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active >= p.perAccountConcurrency ||
+			candidate.channel == ChannelAssistant && account.assistantBusy {
 			continue
 		}
 		if selection.ResourceID == "" && !selection.anyState {
@@ -2788,6 +2844,9 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 			refreshRuntime = leaseLock != nil
 		}
 		account.active++
+		if candidate.channel == ChannelAssistant {
+			account.assistantBusy = true
+		}
 		account.LastUsed = now
 		p.lastPicked[selectionAccessScope(selection)] = account.ID
 		p.lastPickedChannel[selectionAccessScope(selection)] = candidate.channel
@@ -2893,7 +2952,7 @@ func accountBootstrapModels(account *Account) []string {
 func waaBootstrapModelEligible(account *Account, modelID string) bool {
 	for _, model := range account.Models {
 		if !modelMatchesID(model, modelID) || !hasMethod(model, "generateContent") ||
-			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] {
+			!modelAllowedByTier(model, account.BenefitTier) || !model.Capabilities["chat_model"] || model.Capabilities["assistant_route"] {
 			continue
 		}
 		return true
@@ -3066,7 +3125,8 @@ func (p *AccountPool) notifyLocked() {
 	p.changed = make(chan struct{})
 }
 
-func loadAccount(directory string) (*Account, error) {
+// loadAccount 载入账户目录，catalogs 不为 nil 时保存本次载入已解析的目录缓存，内容与权益等级相同的账户共用一次解析
+func loadAccount(directory string, catalogs map[catalogCacheKey]catalogCacheParse) (*Account, error) {
 	directory, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, fmt.Errorf("解析账户目录: %w", err)
@@ -3087,7 +3147,7 @@ func loadAccount(directory string) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("账户 %s: %w", id, err)
 	}
-	catalog, cache := readCatalogCache(filepath.Join(directory, catalogCacheName), runtimeState)
+	catalog, cache := readCatalogCache(filepath.Join(directory, catalogCacheName), runtimeState, catalogs)
 	return &Account{
 		ID:               id,
 		Directory:        directory,
@@ -3120,8 +3180,20 @@ type accountCatalogCache struct {
 	HiddenDiscovered bool              `json:"hidden_discovered,omitempty"`
 }
 
-// readCatalogCache 读取 catalog.json，返回加入官网隐藏模型后的 ListModels 目录与缓存内容，内容与 runtime-state 的目录指纹不一致或无法读取时返回空目录与空缓存
-func readCatalogCache(filePath string, runtimeState accountRuntimeState) (modelCatalog, accountCatalogCache) {
+// catalogCacheKey 是目录缓存的权益等级与 ListModels 响应原文
+type catalogCacheKey struct {
+	tier   BenefitTier
+	source string
+}
+
+// catalogCacheParse 是一份目录缓存的解析结果与目录指纹
+type catalogCacheParse struct {
+	catalog     modelCatalog
+	fingerprint string
+}
+
+// readCatalogCache 读取 catalog.json，返回加入官网隐藏模型后的 ListModels 目录与缓存内容，内容与 runtime-state 的目录指纹不一致或无法读取时返回空目录与空缓存；catalogs 中已有同一权益等级与原文的解析结果时直接沿用，catalogs 不为 nil 时保存本次解析结果
+func readCatalogCache(filePath string, runtimeState accountRuntimeState, catalogs map[catalogCacheKey]catalogCacheParse) (modelCatalog, accountCatalogCache) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return modelCatalog{}, accountCatalogCache{}
@@ -3130,15 +3202,26 @@ func readCatalogCache(filePath string, runtimeState accountRuntimeState) (modelC
 	if err := json.Unmarshal(data, &cache); err != nil || len(cache.ListModels) == 0 {
 		return modelCatalog{}, accountCatalogCache{}
 	}
-	catalog, err := parseModelCatalog(bytes.NewReader(cache.ListModels))
-	if err != nil {
+	key := catalogCacheKey{tier: runtimeState.BenefitTier, source: string(cache.ListModels)}
+	parsed, ok := catalogs[key]
+	if !ok {
+		catalog, err := parseModelCatalog(bytes.NewReader(cache.ListModels))
+		if err != nil {
+			return modelCatalog{}, accountCatalogCache{}
+		}
+		fingerprint, err := accountCatalogFingerprint(runtimeState.BenefitTier, catalog.models)
+		if err != nil {
+			return modelCatalog{}, accountCatalogCache{}
+		}
+		parsed = catalogCacheParse{catalog: catalog, fingerprint: fingerprint}
+		if catalogs != nil {
+			catalogs[key] = parsed
+		}
+	}
+	if parsed.fingerprint != runtimeState.CatalogFingerprint {
 		return modelCatalog{}, accountCatalogCache{}
 	}
-	fingerprint, err := accountCatalogFingerprint(runtimeState.BenefitTier, catalog.models)
-	if err != nil || fingerprint != runtimeState.CatalogFingerprint {
-		return modelCatalog{}, accountCatalogCache{}
-	}
-	return catalog.withHidden(cache.HiddenModels), cache
+	return parsed.catalog.withHidden(cache.HiddenModels), cache
 }
 
 // takeCachedCatalogs 取出各账户载入时从 catalog.json 恢复的 ListModels 目录
@@ -3378,6 +3461,8 @@ func (p *AccountPool) updateRuntimeContext(
 		p.mu.Unlock()
 		return false, fmt.Errorf("账户不存在: %s", account.ID)
 	}
+	verified := account.applyVerified(&current)
+	applied := maps.Clone(account.verifiedAt)
 	refreshed, err := p.syncAccountRuntimeLocked(account, current)
 	if err != nil {
 		p.mu.Unlock()
@@ -3389,10 +3474,17 @@ func (p *AccountPool) updateRuntimeContext(
 	if err != nil {
 		return false, err
 	}
-	if changed {
+	if changed || verified {
 		if data, err = writeRuntime(account.RuntimePath, working); err != nil {
 			return false, err
 		}
+		p.mu.Lock()
+		for key, checkedAt := range applied {
+			if !account.verifiedAt[key].After(checkedAt) {
+				delete(account.verifiedAt, key)
+			}
+		}
+		p.mu.Unlock()
 	}
 
 	p.mu.Lock()
@@ -3702,6 +3794,11 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 		CatalogFingerprint: value.CatalogFingerprint,
 		Proxy:              value.Proxy,
 		Restricted:         value.Restricted,
+	}
+	if value.Assistant != nil {
+		applet := *value.Assistant
+		applet.Trajectories = slices.Clone(applet.Trajectories)
+		result.Assistant = &applet
 	}
 	for key, cooldown := range value.Cooldowns {
 		result.Cooldowns[key] = cooldown

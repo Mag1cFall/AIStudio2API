@@ -81,6 +81,28 @@ type goWAARuntime struct {
 	closed          bool
 	refreshTimer    *time.Timer
 	incidentsTimer  *time.Timer
+	// pointer 是本页面上可信指针与焦点所在的位置，本页面新建的 VM 共用
+	pointer *waa.Pointer
+	// running 是最近一次点击 Run 或 Rerun 取 proof 的 VM，随后的 GenerateContent 响应开始与结束时在其中派发指针下元素被替换的事件
+	running *waa.Runtime
+
+	// uiLocale 是官网前端主程序地址声明的界面语言
+	uiLocale string
+	// serviceStreamz 是页面 WAA 服务 logger 的 1828 上报通道，记录 Waa/Create 耗时与 challenge 解码耗时
+	serviceStreamz *streamzReporter
+	streamzMu      sync.Mutex
+	// vmStreamz 是各 VM 包装层 logger 的 1828 上报通道
+	vmStreamz map[*waa.Runtime]*streamzReporter
+	// telemetry 是页面 WIZ 数据中 clearcut 上报用到的值
+	telemetry pageTelemetry
+	// scriptReport 是页面载入 BotGuard 解释器脚本时的 CSP 违规报告，文档没有 report-only CSP 时 policy 为空
+	scriptReport cspReport
+	// vitals 是页面载入的 1957 与 2584 上报
+	vitals *pageVitals
+	// elements 是页面载入的 2712 界面元素日志
+	elements *pageElements
+	// windowID 是页面 sessionStorage 中的浏览器窗口 ID，重新载入后的页面沿用
+	windowID string
 }
 
 // vmRefreshTimeout 是后台重建 VM 的期限
@@ -236,6 +258,7 @@ func (runtime *goWAARuntime) Reload(ctx context.Context) (workerRuntime, error) 
 	if err != nil {
 		return nil, err
 	}
+	next.windowID = runtime.windowID
 	if err := next.open(ctx, fingerprint); err != nil {
 		return nil, err
 	}
@@ -243,7 +266,12 @@ func (runtime *goWAARuntime) Reload(ctx context.Context) (workerRuntime, error) 
 }
 
 // open 按官网冷启动载入页面：请求页面与文档引用的样式表和脚本，脚本就绪后像页面应用一样预热认证并发出页面启动 RPC，再创建 WAA VM
-func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]any) error {
+func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]any) (err error) {
+	defer func() {
+		if err != nil {
+			runtime.closeTelemetry()
+		}
+	}()
 	options := runtime.options
 	runtime.pageURL += "?model=" + url.QueryEscape(options.Model) + "&temporary=true"
 	runtime.profile.PageURL = runtime.pageURL
@@ -265,8 +293,31 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	if err != nil {
 		return err
 	}
+	runtime.uiLocale = uiLocale(document.frontendBundle())
+	runtime.serviceStreamz = runtime.newStreamz(nil)
+	page, err := url.Parse(runtime.pageURL)
+	if err != nil {
+		return err
+	}
 	if err := runtime.loadDocumentResources(ctx, document); err != nil {
 		return err
+	}
+	documentTiming(runtime.profile.Navigation, time.Since(runtime.profile.NavigationStart))
+	runtime.vitals = newPageVitals(runtime.sendClearcut, runtime.telemetry, runtime.uiLocale, runtime.location(), runtime.profile.NavigationStart, runtime.profile.Navigation, page.Path)
+	if runtime.windowID == "" {
+		runtime.windowID = pageWindowID()
+	}
+	runtime.elements = newPageElements(func(body []byte) { runtime.sendClearcut(clearcutGzip, body) }, runtime.uiLocale, runtime.location(), runtime.telemetry.experiments, runtime.windowID, runtime.profile.Locale, "models/"+strings.TrimPrefix(options.Model, "models/"))
+	runtime.elements.load(runtime.profile.NavigationStart.Add(time.Duration(navigationInt(runtime.profile.Navigation, "domInteractive")) * time.Millisecond))
+	dependency, module, err := starterModuleURLs(document)
+	if err != nil {
+		return err
+	}
+	go runtime.loadStarters(context.WithoutCancel(ctx), dependency, module)
+	if runtime.scriptReport.policy != "" {
+		if runtime.scriptReport.loader, err = runtime.pageCache.loader(runtime.scriptReport.bundle); err != nil {
+			return err
+		}
 	}
 	runtime.loadPageIcons(ctx, document)
 	go runtime.authWarmup(context.WithoutCancel(ctx))
@@ -287,8 +338,11 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	}()
 	catalogDone := make(chan [][]byte, 1)
 	pageStarted := time.Now()
+	var catalogAt time.Time
 	go func() {
-		catalogDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageCatalogStartupRPCs)
+		bodies := runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageCatalogStartupRPCs)
+		catalogAt = time.Now()
+		catalogDone <- bodies
 	}()
 	startupDone := make(chan struct{})
 	go func() {
@@ -314,7 +368,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	}
 	if logging.err != nil {
 		if started := <-vmDone; started.vm != nil {
-			started.vm.Close()
+			runtime.closeVM(started.vm)
 		}
 		return logging.err
 	}
@@ -325,6 +379,8 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 		Models:  catalog[1],
 		Bundle:  document.frontendBundle(),
 	}
+	tier, _ := decodeBenefitTier(catalog[0])
+	runtime.elements.catalog(catalogAt, tier.HeaderValue())
 	runtime.headers = http.Header{}
 	runtime.headers.Set("user-agent", runtime.userAgent)
 	runtime.headers.Set("x-goog-api-key", apiKey)
@@ -345,7 +401,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	}
 	vm := started.vm
 	if err := vm.Settle(ctx); err != nil {
-		vm.Close()
+		runtime.closeVM(vm)
 		return err
 	}
 	runtime.vm = vm
@@ -413,11 +469,15 @@ func profileFromFingerprint(config map[string]any) (waa.Profile, string, string)
 	}
 	profile.Navigator["doNotTrack"] = "unspecified"
 	profile.Navigator["globalPrivacyControl"] = false
-	if width, ok := numberValue(profile.Window["outerWidth"]); ok {
-		profile.Window["innerWidth"] = width
+	if _, ok := profile.Window["innerWidth"]; !ok {
+		if width, ok := numberValue(profile.Window["outerWidth"]); ok {
+			profile.Window["innerWidth"] = width
+		}
 	}
-	if height, ok := numberValue(profile.Window["outerHeight"]); ok {
-		profile.Window["innerHeight"] = height - firefoxInnerHeightDiff
+	if _, ok := profile.Window["innerHeight"]; !ok {
+		if height, ok := numberValue(profile.Window["outerHeight"]); ok {
+			profile.Window["innerHeight"] = height - firefoxInnerHeightDiff
+		}
 	}
 	userAgent, _ := config["navigator.userAgent"].(string)
 	if userAgent == "" {
@@ -471,7 +531,7 @@ func (runtime *goWAARuntime) mergeResponseCookies(response *http.Response, reque
 	}
 }
 
-// do 以 Firefox 请求头形状发送请求并写回响应 Cookie
+// do 以 Firefox 请求头形状发送请求并写回响应 Cookie，context 标为匿名类别的请求不带 Cookie 也不写回
 func (runtime *goWAARuntime) do(ctx context.Context, method string, target string, body []byte, headers http.Header) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -491,14 +551,17 @@ func (runtime *goWAARuntime) do(ctx context.Context, method string, target strin
 	if request.Header.Get("Accept-Encoding") == "" {
 		request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	}
-	if cookieHeader, err := runtime.cookies().CookieHeader(target, time.Now()); err == nil && cookieHeader != "" {
+	anonymous := requestClassOf(ctx).anonymous
+	if cookieHeader, err := runtime.cookies().CookieHeader(target, time.Now()); err == nil && cookieHeader != "" && !anonymous {
 		request.Header.Set("Cookie", cookieHeader)
 	}
 	response, err := sendHTTP(runtime.client, request)
 	if err != nil {
 		return nil, err
 	}
-	runtime.mergeResponseCookies(response, target)
+	if !anonymous {
+		runtime.mergeResponseCookies(response, target)
+	}
 	return response, nil
 }
 
@@ -525,7 +588,7 @@ func pageRuntime(options camoufoxnative.Options, client *http.Client, session *s
 	if err != nil {
 		return nil, nil, err
 	}
-	runtime := &goWAARuntime{options: options, client: client, session: session, pageCache: cache}
+	runtime := &goWAARuntime{options: options, client: client, session: session, pageCache: cache, pointer: waa.NewPointer()}
 	runtime.profile, runtime.userAgent, runtime.acceptLanguage = profileFromFingerprint(fingerprint)
 	pagePath := "/prompts/new_chat"
 	if options.AuthUser > 0 {
@@ -558,7 +621,8 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 	target := runtime.pageURL
 	navigationStart := time.Now()
 	for redirect := 0; redirect < 5; redirect++ {
-		response, err := runtime.do(ctx, http.MethodGet, target, nil, headers)
+		timing := &connectionTiming{}
+		response, err := runtime.do(context.WithValue(ctx, connectionTimingKey{}, timing), http.MethodGet, target, nil, headers)
 		if err != nil {
 			return "", pageDocument{}, fmt.Errorf("载入 AI Studio 页面: %w", err)
 		}
@@ -592,8 +656,21 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 		runtime.profile.Globals = pageGlobals(body)
 		runtime.pageFlags = parsePageFlags(body)
 		runtime.profile.NavigationStart = navigationStart
+		runtime.profile.Navigation, runtime.profile.DOMLoading = navigationTiming(pageLoad{
+			url: target, protocol: nextHopProtocol(response.Proto), started: navigationStart, connection: timing, end: runtime.pageLoaded.Sub(navigationStart), decoded: len(body),
+		})
 		runtime.profile.TrustedTypes = requiresTrustedScripts(response.Header.Values("Content-Security-Policy"))
-		return string(match[1]), parsePageDocument(body, target), nil
+		document := parsePageDocument(body, target)
+		if runtime.telemetry, err = parsePageTelemetry(body, document.frontendBundle()); err != nil {
+			return "", pageDocument{}, err
+		}
+		runtime.scriptReport = cspReport{policy: response.Header.Get("Content-Security-Policy-Report-Only"), document: target, bundle: document.frontendBundle()}
+		if runtime.scriptReport.policy != "" {
+			if _, _, err := runtime.scriptReport.body(""); err != nil {
+				return "", pageDocument{}, fmt.Errorf("AI Studio 页面 report-only CSP: %w", err)
+			}
+		}
+		return string(match[1]), document, nil
 	}
 	return "", pageDocument{}, errors.New("AI Studio 页面跳转次数过多")
 }
@@ -759,6 +836,11 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 	if err != nil {
 		return waa.Challenge{}, err
 	}
+	started := time.Now()
+	status := -1
+	defer func() {
+		runtime.serviceStreamz.record(streamzRecord{metric: "wrl", labels: []any{"c", 1, status, waaRequestKey, streamzMachineKey}, value: float64(time.Since(started).Milliseconds())})
+	}()
 	response, err := runtime.do(ctx, http.MethodPost, waaCreateURL, body, headers)
 	if err != nil {
 		return waa.Challenge{}, fmt.Errorf("调用 Waa/Create: %w", err)
@@ -771,7 +853,13 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 	if response.StatusCode != http.StatusOK {
 		return waa.Challenge{}, fmt.Errorf("Waa/Create 返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	return waa.ParseChallenge(raw)
+	status = 0
+	decoded := time.Now()
+	challenge, err := waa.ParseChallenge(raw)
+	if err == nil && challenge.Packed {
+		runtime.serviceStreamz.record(streamzRecord{metric: "el", labels: []any{"U", streamzMachineKey}, value: float64(time.Since(decoded).Milliseconds())})
+	}
+	return challenge, err
 }
 
 // loadInterpreter 按 challenge 指定的 hash 取得解释器并校验摘要：challenge 不带解释器地址或账户页面缓存中新鲜时沿用同 hash 的已有解释器，否则像页面脚本一样请求（有本地副本时带条件头）
@@ -781,6 +869,9 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 			return "", fmt.Errorf("WAA 解释器摘要不一致 expected=%s actual=%s", challenge.InterpreterHash, hash)
 		}
 		return challenge.InterpreterJavaScript, nil
+	}
+	if runtime.scriptReport.policy != "" {
+		runtime.sendScriptReport(challenge.InterpreterURL)
 	}
 	path := filepath.Join(runtime.cacheDirectory, challenge.InterpreterHash+".js")
 	cached := ""
@@ -823,7 +914,7 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 	if hash := waa.InterpreterHash(data); hash != challenge.InterpreterHash {
 		return "", fmt.Errorf("WAA 解释器摘要不一致 expected=%s actual=%s", challenge.InterpreterHash, hash)
 	}
-	if err := runtime.pageCache.store(challenge.InterpreterURL, response, time.Now()); err != nil {
+	if err := runtime.pageCache.store(challenge.InterpreterURL, response, time.Now(), nil, nil); err != nil {
 		return "", err
 	}
 	if response.StatusCode == http.StatusOK {
@@ -834,7 +925,7 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 	return string(data), nil
 }
 
-// startVM 加载 challenge 指定的解释器并初始化新 VM
+// startVM 加载 challenge 指定的解释器并初始化新 VM，导航计时的 loadEventEnd 之前等到页面 load 事件结束
 func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challenge) (*waa.Runtime, error) {
 	interpreter, err := runtime.loadInterpreter(ctx, challenge)
 	if err != nil {
@@ -849,12 +940,82 @@ func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challeng
 	runtime.interpreterHash, runtime.interpreter = challenge.InterpreterHash, interpreter
 	cookie, _ := documentCookie(runtime.cookies())
 	profile := runtime.profile
-	location, err := time.LoadLocation(profile.TimeZone)
-	if err != nil {
-		location = time.Local
+	profile.Document = map[string]any{"cookie": cookie, "lastModified": runtime.pageLoaded.In(runtime.location()).Format("01/02/2006 15:04:05")}
+	if loadEnd, ok := profile.Navigation["loadEventEnd"].(int); ok {
+		select {
+		case <-time.After(time.Until(profile.NavigationStart.Add(time.Duration(loadEnd) * time.Millisecond))):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	profile.Document = map[string]any{"cookie": cookie, "lastModified": runtime.pageLoaded.In(location).Format("01/02/2006 15:04:05")}
-	return waa.NewRuntime(ctx, waa.Options{Challenge: challenge, Interpreter: interpreter, Profile: profile, LoadImage: runtime.loadImage, LoadFrame: runtime.loadFrame})
+	vm, err := waa.NewRuntime(ctx, waa.Options{Challenge: challenge, Interpreter: interpreter, Profile: profile, LoadImage: runtime.loadImage, LoadFrame: runtime.loadFrame, Pointer: runtime.pointer})
+	if err != nil {
+		return nil, err
+	}
+	reporter := runtime.newStreamz(vm.TakeMetrics)
+	runtime.streamzMu.Lock()
+	if runtime.vmStreamz == nil {
+		runtime.vmStreamz = map[*waa.Runtime]*streamzReporter{}
+	}
+	runtime.vmStreamz[vm] = reporter
+	runtime.streamzMu.Unlock()
+	reporter.flush(ctx)
+	runtime.serviceStreamz.flush(ctx)
+	return vm, nil
+}
+
+// location 返回账户指纹的时区，本机时区数据中没有该时区时为本机时区
+func (runtime *goWAARuntime) location() *time.Location {
+	location, err := time.LoadLocation(runtime.profile.TimeZone)
+	if err != nil {
+		return time.Local
+	}
+	return location
+}
+
+// newStreamz 创建一个以账户时区与页面界面语言上报的 1828 通道
+func (runtime *goWAARuntime) newStreamz(take func(context.Context) ([]waa.BotGuardMetric, error)) *streamzReporter {
+	return newStreamzReporter(runtime.uiLocale, runtime.location(), func(body []byte) { runtime.sendClearcut(clearcutBeacon, body) }, take)
+}
+
+// flushVMStreamz 上报 VM 包装层 logger 积攒的记录
+func (runtime *goWAARuntime) flushVMStreamz(ctx context.Context, vm *waa.Runtime) {
+	runtime.streamzMu.Lock()
+	reporter := runtime.vmStreamz[vm]
+	runtime.streamzMu.Unlock()
+	if reporter != nil {
+		reporter.flush(ctx)
+	}
+}
+
+// closeVM 停止 VM 的 1828 定时上报并关闭 VM
+func (runtime *goWAARuntime) closeVM(vm *waa.Runtime) {
+	runtime.streamzMu.Lock()
+	if reporter := runtime.vmStreamz[vm]; reporter != nil {
+		reporter.close()
+		delete(runtime.vmStreamz, vm)
+	}
+	runtime.streamzMu.Unlock()
+	vm.Close()
+}
+
+// closeTelemetry 停止页面全部 1828 定时上报与尚未发出的 1957、2584 上报
+func (runtime *goWAARuntime) closeTelemetry() {
+	if runtime.vitals != nil {
+		runtime.vitals.close()
+	}
+	if runtime.elements != nil {
+		runtime.elements.close()
+	}
+	runtime.streamzMu.Lock()
+	defer runtime.streamzMu.Unlock()
+	if runtime.serviceStreamz != nil {
+		runtime.serviceStreamz.close()
+	}
+	for vm, reporter := range runtime.vmStreamz {
+		reporter.close()
+		delete(runtime.vmStreamz, vm)
+	}
 }
 
 // documentCookie 返回页面脚本可见的非 HttpOnly Cookie 串
@@ -907,11 +1068,11 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 		case err != nil:
 			slog.Warn("WAA SpiderMonkey VM 刷新失败", "error", err)
 		case runtime.closed:
-			vm.Close()
+			runtime.closeVM(vm)
 			err = errors.New("SpiderMonkey WAA runtime 已关闭")
 		default:
 			if previous != nil {
-				previous.Close()
+				runtime.closeVM(previous)
 			}
 			runtime.vm = vm
 			runtime.scheduleRefresh()
@@ -931,6 +1092,7 @@ func (runtime *goWAARuntime) nextVM(ctx context.Context, previous *waa.Runtime) 
 		if err != nil {
 			snapshot = "E:UCE"
 		}
+		runtime.flushVMStreamz(ctx, previous)
 		refresh = []string{runtime.interpreterHash, snapshot}
 	}
 	challenge, err := runtime.createChallenge(ctx, refresh)
@@ -942,7 +1104,7 @@ func (runtime *goWAARuntime) nextVM(ctx context.Context, previous *waa.Runtime) 
 		return nil, err
 	}
 	if err := vm.Settle(ctx); err != nil {
-		vm.Close()
+		runtime.closeVM(vm)
 		return nil, err
 	}
 	return vm, nil
@@ -958,7 +1120,13 @@ func (runtime *goWAARuntime) RunProof(ctx context.Context, digest string, prompt
 	return runtime.proof(ctx, digest, prompt, true)
 }
 
-// proof 以当前 VM 生成 fresh WAA proof，run 时写入提示词后点击 Run；VM 到期时等待后台重建完成，等待随 ctx 结束
+// userGestureKey 标记 proof 所属请求在官网由页面上的点击或按键触发
+type userGestureKey struct{}
+
+// pageRerunKey 标记 GenerateContent 是账户页面再次运行同一对话，与官网点击最后一轮的 Rerun 相同，取值为对话的轮数
+type pageRerunKey struct{}
+
+// proof 以当前 VM 生成 fresh WAA proof：run 时写入提示词后以可信鼠标点击 Run，ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余 ctx 带 userGestureKey 的请求先记录一次用户操作；VM 到期时等待后台重建完成，等待随 ctx 结束
 func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt string, run bool) (string, error) {
 	runtime.vmMu.Lock()
 	defer runtime.vmMu.Unlock()
@@ -981,13 +1149,30 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 		return "", errors.New("SpiderMonkey WAA runtime 已关闭")
 	}
 	vm := runtime.vm
-	snapshot := vm.Proof
-	if run {
-		snapshot = vm.RunProof
+	rounds, rerun := ctx.Value(pageRerunKey{}).(int)
+	rerun = rerun && !runtime.pointer.Clicked().IsZero()
+	if gesture, _ := ctx.Value(userGestureKey{}).(bool); gesture && !run && !rerun {
+		if err := vm.Activate(ctx); err != nil {
+			return "", err
+		}
 	}
-	proof, err := snapshot(ctx, digest, prompt)
+	var proof string
+	var err error
+	switch {
+	case run:
+		proof, err = vm.RunProof(ctx, digest, prompt)
+	case rerun:
+		proof, err = vm.RerunProof(ctx, digest, rounds)
+	default:
+		proof, err = vm.Proof(ctx, digest, prompt)
+	}
+	go runtime.flushVMStreamz(context.Background(), vm)
 	if err != nil {
 		return "", fmt.Errorf("生成 fresh WAA proof: %w", err)
+	}
+	if run || rerun {
+		runtime.running = vm
+		runtime.elements.press(runtime.pointer.Clicked(), rerun)
 	}
 	if !strings.HasPrefix(proof, "!") {
 		return "", errors.New("fresh WAA proof 前缀无效")
@@ -1008,7 +1193,7 @@ func (runtime *goWAARuntime) ProtocolHeaders(ctx context.Context) (http.Header, 
 	return runtime.headers.Clone(), nil
 }
 
-// SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求
+// SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求；点击 Run 或 Rerun 后的 GenerateContent 在响应头到达与正文关闭时各派发一次指针下元素被替换的事件，并在界面元素日志中记录回答占位、回答结束与随后曝光的按钮
 func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*camoufoxnative.ProtectedResponse, error) {
 	request := headers.Clone()
 	request.Set("Accept", "*/*")
@@ -1018,18 +1203,57 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 	request.Set("Sec-Fetch-Mode", "cors")
 	request.Set("Sec-Fetch-Site", "same-site")
 	request.Del("Cookie")
-	if followUp, ok := followUpFrom(ctx); ok {
+	followUp, counting := followUpFrom(ctx)
+	var running *waa.Runtime
+	var turn *pageTurn
+	if strings.HasSuffix(rawURL, "/GenerateContent") {
+		runtime.vmMu.Lock()
+		running, runtime.running = runtime.running, nil
+		runtime.vmMu.Unlock()
+		turn = runtime.elements.turn(body, counting)
+	}
+	if counting {
 		companion := request.Clone()
 		companion.Del("Priority")
 		time.AfterFunc(followUp.Delay, func() {
 			runtime.drain(runtime.do(context.WithoutCancel(ctx), http.MethodPost, followUp.URL, followUp.Body, companion))
+			if turn != nil {
+				turn.count(time.Now())
+			}
 		})
 	}
 	response, err := runtime.do(ctx, http.MethodPost, rawURL, body, request)
 	if err != nil {
 		return nil, err
 	}
-	return &camoufoxnative.ProtectedResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body}, nil
+	if turn != nil {
+		turn.started(time.Now())
+	}
+	if running == nil {
+		return &camoufoxnative.ProtectedResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body}, nil
+	}
+	go running.Replaced(context.Background())
+	return &camoufoxnative.ProtectedResponse{StatusCode: response.StatusCode, Header: response.Header, Body: &runningBody{ReadCloser: response.Body, vm: running, turn: turn}}, nil
+}
+
+// runningBody 是点击 Run 或 Rerun 后 GenerateContent 的响应正文，关闭时在 VM 中派发指针下元素被替换的事件并记录回答结束
+type runningBody struct {
+	io.ReadCloser
+	vm *waa.Runtime
+	// turn 是这次回答的界面元素日志，页面日志已关闭时为 nil
+	turn *pageTurn
+	once sync.Once
+}
+
+// Close 关闭响应正文，派发一次指针下元素被替换的事件并记录回答结束
+func (body *runningBody) Close() error {
+	body.once.Do(func() {
+		go body.vm.Replaced(context.Background())
+		if body.turn != nil {
+			body.turn.done(time.Now())
+		}
+	})
+	return body.ReadCloser.Close()
 }
 
 // StorageCookies 返回账户当前 Cookie，格式与 Camoufox storage.getCookies 导出一致
@@ -1072,8 +1296,9 @@ func (runtime *goWAARuntime) Close() error {
 		runtime.incidentsTimer.Stop()
 	}
 	if runtime.vm != nil {
-		runtime.vm.Close()
+		runtime.closeVM(runtime.vm)
 		runtime.vm = nil
 	}
+	runtime.closeTelemetry()
 	return nil
 }

@@ -43,9 +43,13 @@ let sourceResized = false
 let resizeStartX = 0
 let resizeStartWidth = 0
 
-const sources = computed(() =>
-  Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort(),
-)
+// sources 是日志中出现过的来源，来源集合不变时沿用原数组，来源下拉不随每批日志重新渲染
+const sources = computed<string[]>((previous) => {
+  const next = Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort()
+  return previous?.length === next.length && previous.every((item, index) => item === next[index])
+    ? previous
+    : next
+})
 
 // sourceLabel 是来源列文字，请求卡片依次列出用到的账户
 function sourceLabel(row: LogRow): string {
@@ -167,6 +171,7 @@ function trackTrimmed(): void {
     return
   }
   const kept = new Set(visibleLogs.value.map((row) => row.key))
+  if (kept.has(first.dataset.logKey!)) return
   for (const row of rows!) {
     if (kept.has(row.dataset.logKey!)) {
       trimmed.value += row.offsetTop - first.offsetTop

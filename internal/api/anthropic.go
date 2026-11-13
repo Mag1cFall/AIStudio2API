@@ -1299,13 +1299,13 @@ func (writer *anthropicStreamWriter) live(event aistudio.Event) error {
 		if writer.currentBlock == "text" || writer.currentBlock == anthropicCitedBlock {
 			return nil
 		}
-		return writer.redactedThinking(event.ThoughtSignature)
+		return writer.signatureThinking(event.ThoughtSignature)
 	case aistudio.EventToolCall:
 		call := event.FunctionCall
 		if call.ThoughtSignature != "" {
 			if writer.currentBlock == "thinking" {
 				writer.thinkingSignature = call.ThoughtSignature
-			} else if err := writer.redactedThinking(call.ThoughtSignature); err != nil {
+			} else if err := writer.signatureThinking(call.ThoughtSignature); err != nil {
 				return err
 			}
 		}
@@ -1369,7 +1369,7 @@ func (writer *anthropicStreamWriter) live(event aistudio.Event) error {
 		if event.ThoughtSignature != "" {
 			if writer.currentBlock == "thinking" {
 				writer.thinkingSignature = event.ThoughtSignature
-			} else if err := writer.redactedThinking(event.ThoughtSignature); err != nil {
+			} else if err := writer.signatureThinking(event.ThoughtSignature); err != nil {
 				return err
 			}
 		}
@@ -1506,23 +1506,16 @@ func (writer *anthropicStreamWriter) ensureBlock(blockType string) error {
 	return nil
 }
 
-func (writer *anthropicStreamWriter) redactedThinking(data string) error {
+// signatureThinking 把没有思考正文的思考签名输出为正文为空的 thinking 块，与官方不显示思考时的输出同形
+func (writer *anthropicStreamWriter) signatureThinking(signature string) error {
 	if err := writer.closeBlock(); err != nil {
 		return err
 	}
-	if err := writer.send("content_block_start", map[string]any{
-		"type": "content_block_start", "index": writer.blockIndex,
-		"content_block": map[string]any{"type": "redacted_thinking", "data": data},
-	}); err != nil {
+	if err := writer.ensureBlock("thinking"); err != nil {
 		return err
 	}
-	if err := writer.send("content_block_stop", map[string]any{
-		"type": "content_block_stop", "index": writer.blockIndex,
-	}); err != nil {
-		return err
-	}
-	writer.blockIndex++
-	return nil
+	writer.thinkingSignature = signature
+	return writer.closeBlock()
 }
 
 func (writer *anthropicStreamWriter) closeBlock() error {
