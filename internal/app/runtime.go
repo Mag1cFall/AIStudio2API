@@ -61,7 +61,7 @@ func newRuntime(
 		globalProxy = proxyList[0]
 	}
 	cfg.Proxy = strings.Join(proxyList, ",")
-	camoufoxPath, login := prepareWAABackend(cfg, requests, len(accounts), globalProxy)
+	camoufoxPath, login := prepareWAABackend(cfg, requests, accounts, globalProxy)
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
@@ -1288,7 +1288,7 @@ func (service *trackedService) GenerateImage(ctx context.Context, request aistud
 	return images, requestErr
 }
 
-// CreateDecision 回答决策问题并登记请求目标与账户，每次请求在运行日志中提醒官网前端尚未调用该模型
+// CreateDecision 回答决策问题并登记请求目标与账户，每次请求在运行日志中提醒该模型在 AI Studio 官网中隐藏
 func (service *trackedService) CreateDecision(ctx context.Context, request aistudio.DecisionRequest) (aistudio.DecisionResult, error) {
 	request.Model = service.catalogModelID(ctx, service.mappedModel(request.Model))
 	requestCtx, cancel, err := service.observedDataRequestContext(ctx, request.Model)
@@ -1298,7 +1298,7 @@ func (service *trackedService) CreateDecision(ctx context.Context, request aistu
 	defer cancel()
 	result, requestErr := service.service.(aistudio.DecisionService).CreateDecision(requestCtx, request)
 	api.SetAccessLogError(requestCtx, requestErr)
-	service.requests.log("service", "WARN", fmt.Sprintf("Decision 请求 | 模型=%s | 官网前端尚未调用该模型", request.Model))
+	service.requests.log("service", "WARN", fmt.Sprintf("Decision 请求 | 模型=%s | 该模型在 AI Studio 官网中隐藏", request.Model))
 	return result, requestErr
 }
 
@@ -1484,8 +1484,14 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			len(groups.StandbyReady) + len(groups.StandbyBusy)
 		standbyReady, opening := service.workers.withoutOpening(groups.StandbyReady)
 		groups.StandbyReady = standbyReady
+		// preferred 是 -build 对话 trajectory 所在、尚未载入 Worker 的空闲账户，先于已载入 Worker 的账户使用以续接对话
+		preferred := ""
+		if selection.PreferredAccountID != "" && slices.Contains(groups.StandbyReady, selection.PreferredAccountID) && service.pool.AssistantModel(selection.ModelID) &&
+			(len(active) < service.workers.activeLimit() || service.workers.idleWarmVictim("") != "") {
+			preferred = selection.PreferredAccountID
+		}
 		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
-		if len(warmAvailable) > 0 {
+		if len(warmAvailable) > 0 && preferred == "" {
 			candidate := selection
 			candidate.AllowedAccountIDs = warmAvailable
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
@@ -1505,7 +1511,7 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		warmCandidates := len(warmAvailable) + len(groups.WarmBusy)
 		coolingVictim := len(active) >= service.workers.activeLimit() &&
 			service.workers.idleWarmVictimFor("", selection.ModelID, true) != ""
-		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() || coolingVictim) && warmCandidates > 0 && !fixedAccount {
+		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() || coolingVictim) && warmCandidates > 0 && !fixedAccount && preferred == "" {
 			standby := groups.StandbyReady
 			if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 				standby = cold
@@ -1517,14 +1523,14 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		if len(groups.StandbyReady) > 0 && (len(active) < service.workers.activeLimit() ||
-			warmCandidates == 0 && service.workers.idleWarmVictim("") != "") {
+			(warmCandidates == 0 || preferred != "") && service.workers.idleWarmVictim("") != "") {
 			standby := groups.StandbyReady
 			if len(active) < service.workers.activeLimit() {
 				if cold := service.workers.coldAccounts(standby); len(cold) > 0 {
 					standby = cold
 				}
 			}
-			accountID := standby[0]
+			accountID := cmp.Or(preferred, standby[0])
 			candidate := selection
 			candidate.AccountID = accountID
 			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
@@ -1894,8 +1900,14 @@ func (service *trackedService) generateWithRetry(
 		}
 	}
 	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
-	preferredAccountID := service.pool.InlineMediaAccount(request.Contents)
-	hedgeable := !request.Background && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0) && slices.Contains(service.hedgeModels, modelID)
+	assistant := service.pool.AssistantModel(modelID)
+	preferredAccountID := ""
+	if assistant {
+		preferredAccountID = service.service.(aistudio.AssistantService).AssistantAccount(requestCtx, request)
+	} else {
+		preferredAccountID = service.pool.InlineMediaAccount(request.Contents)
+	}
+	hedgeable := !request.Background && !assistant && !service.pool.InteractionAgentModel(modelID) && (service.hedgeAuto || service.hedgeAfter > 0) && slices.Contains(service.hedgeModels, modelID)
 	hedged := false
 	var winner *generateAttempt
 	var activity *upstreamActivity
@@ -1922,12 +1934,13 @@ func (service *trackedService) generateWithRetry(
 		if continuationRounds > 1 && (request.Config.MaxOutputTokens != nil || !aistudio.RequestNeedsBuild(request)) {
 			selection.PlaygroundOnly = true
 		}
-		if !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuild(request) {
+		if !assistant && !selection.PlaygroundOnly && service.pool.BuildEnabled() && aistudio.RequestNeedsBuild(request) {
 			selection.Channel = aistudio.ChannelBuild
 		}
 		fallbackReason := ""
 		if request.Unary {
 			switch {
+			case assistant:
 			case selection.PlaygroundOnly:
 				fallbackReason = "请求包含 Playground 专用能力或文件引用"
 			case selection.Channel != "":

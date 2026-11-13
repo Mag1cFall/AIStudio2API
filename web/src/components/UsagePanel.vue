@@ -10,6 +10,7 @@ import KpiCard from './usage/KpiCard.vue'
 import RangePicker from './usage/RangePicker.vue'
 import RankingTable from './usage/RankingTable.vue'
 import RecordsTable from './usage/RecordsTable.vue'
+import RefreshButton from './usage/RefreshButton.vue'
 import UsageCharts from './usage/UsageCharts.vue'
 import { usageClock, useUsageFormat } from './usage/format'
 import { readPreference, writePreference } from '@/preference'
@@ -25,8 +26,7 @@ import {
 
 const props = defineProps<{ models: Model[] }>()
 const { t, errorText } = useI18n()
-const { compact, integer, usd, percent, duration, dateTime, clock, ago, dimensionLabel } =
-  useUsageFormat()
+const { compact, integer, usd, percent, duration, dateTime, dimensionLabel } = useUsageFormat()
 const state = useUsageState()
 
 // filterOptions 返回筛选候选，模型按模型目录顺序排列，目录外的取值排在最后
@@ -56,7 +56,9 @@ const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 let controller: AbortController | undefined
 let clockTimer: number | undefined
 
-const resolved = computed(() => resolveRange(state, new Date(now.value)))
+// minute 是取整到分钟的时钟，时间范围只显示到分钟
+const minute = computed(() => Math.floor(now.value / 60_000) * 60_000)
+const resolved = computed(() => resolveRange(state, new Date(minute.value)))
 const live = computed(() => liveRange(state.range))
 const hasFilters = computed(() => dimensions.some((item) => (state.filters[item] ?? []).length > 0))
 const scope = computed(() => JSON.stringify([state.range, state.from, state.to, state.filters]))
@@ -187,20 +189,6 @@ const activeChips = computed(() =>
     (state.filters[dimension] ?? []).map((value) => ({ dimension, value })),
   ),
 )
-
-// refreshTip 是刷新按钮的提示：数据更新时间与账本中最新请求距今多久
-const refreshTip = computed(() => {
-  const latest = report.value?.latest_at
-  return [
-    t('app.refresh'),
-    updatedAt.value > 0 && t('usage.updatedAt').replace('{time}', clock(new Date(updatedAt.value))),
-    latest === undefined
-      ? t('usage.latestNone')
-      : t('usage.latest').replace('{time}', ago(latest, now.value)),
-  ]
-    .filter(Boolean)
-    .join(' · ')
-})
 
 // relative 返回相对变化比例，上一周期为 0 时返回 null
 function relative(current: number, previous: number): number | null {
@@ -384,16 +372,13 @@ const statusOptions = computed(() =>
         <p class="mt-1 text-sm text-gray-500">{{ t('usage.description') }}</p>
       </div>
       <div class="flex h-10 items-stretch rounded border border-line text-sm">
-        <button
-          v-tooltip="refreshTip"
-          type="button"
-          class="flex w-10 items-center justify-center text-gray-400 transition hover:bg-raised hover:text-white"
-          :class="live ? 'rounded-l' : 'rounded'"
-          :aria-label="t('app.refresh')"
-          @click="refresh"
-        >
-          <UiIcon name="refresh" :size="15" :class="{ 'animate-spin': loading }" />
-        </button>
+        <RefreshButton
+          :loading="loading"
+          :live="live"
+          :updated-at="updatedAt"
+          :latest-at="report?.latest_at"
+          @refresh="refresh"
+        />
         <UiSelect
           v-if="live"
           :model-value="autoRefresh"

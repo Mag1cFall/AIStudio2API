@@ -254,6 +254,7 @@ export interface StreamUpdate {
   tokens?: number
   thoughtTokens?: number
   promptTokens?: number
+  cachedTokens?: number
   sources?: Source[]
   supports?: Support[]
   searchQueries?: string[]
@@ -299,6 +300,7 @@ interface GeminiChunk {
   promptFeedback?: { blockReason?: string }
   usageMetadata?: {
     promptTokenCount?: number
+    cachedContentTokenCount?: number
     candidatesTokenCount?: number
     thoughtsTokenCount?: number
   }
@@ -317,6 +319,8 @@ export function streamUpdate(raw: unknown): StreamUpdate {
   }
   if (usage?.thoughtsTokenCount !== undefined) update.thoughtTokens = usage.thoughtsTokenCount
   if (usage?.promptTokenCount !== undefined) update.promptTokens = usage.promptTokenCount
+  if (usage?.cachedContentTokenCount !== undefined)
+    update.cachedTokens = usage.cachedContentTokenCount
   const grounding = candidate?.groundingMetadata
   if (grounding?.groundingChunks) {
     update.sources = grounding.groundingChunks
@@ -356,13 +360,31 @@ export function appendParts(parts: Part[], incoming: readonly Part[]): void {
   }
 }
 
-// countTokens 调用本服务 countTokens 计算当前对话的输入 token
-export async function countTokens(
+// TokenCountResult 是 countTokens 返回的总 token 数、系统指令 token 数与各轮次 token 数
+export interface TokenCountResult {
+  totalTokens: number
+  systemTokens?: number
+  contentTokens?: number[]
+}
+
+interface RawTokenPart {
+  partTokens?: number[]
+  roleTokens?: number
+}
+
+// sumTokenPart 汇总系统指令或单个轮次的各 Part 与角色 token 数
+function sumTokenPart(item: RawTokenPart | undefined): number | undefined {
+  if (!item || (item.partTokens === undefined && item.roleTokens === undefined)) return undefined
+  return (item.partTokens ?? []).reduce((sum, count) => sum + count, 0) + (item.roleTokens ?? 0)
+}
+
+// countTokensDetailed 调用本服务 countTokens 返回总输入 token、系统指令 token 与各轮次 token 明细
+export async function countTokensDetailed(
   modelID: string,
   apiKey: string,
   request: GenerateRequest,
   signal: AbortSignal,
-): Promise<number> {
+): Promise<TokenCountResult> {
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (apiKey !== '') headers.set('x-goog-api-key', apiKey)
   const response = await fetch(`/v1beta/models/${encodeURIComponent(modelID)}:countTokens`, {
@@ -374,6 +396,27 @@ export async function countTokens(
     }),
   })
   if (!response.ok) throw new Error(await errorMessage(response))
-  const value = (await response.json()) as { totalTokens?: number }
-  return value.totalTokens ?? 0
+  const value = (await response.json()) as {
+    totalTokens?: number
+    systemInstructionsTokens?: RawTokenPart
+    contentTokens?: RawTokenPart[]
+  }
+  const systemTokens = sumTokenPart(value.systemInstructionsTokens)
+  const contentTokens = value.contentTokens?.map((item) => sumTokenPart(item) ?? 0)
+  return {
+    totalTokens: value.totalTokens ?? 0,
+    ...(systemTokens !== undefined && { systemTokens }),
+    ...(contentTokens !== undefined && { contentTokens }),
+  }
+}
+
+// countTokens 调用本服务 countTokens 计算当前对话或单个附件的输入 token
+export async function countTokens(
+  modelID: string,
+  apiKey: string,
+  request: GenerateRequest,
+  signal: AbortSignal,
+): Promise<number> {
+  const result = await countTokensDetailed(modelID, apiKey, request, signal)
+  return result.totalTokens
 }

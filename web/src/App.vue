@@ -13,13 +13,9 @@ import {
 import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { TabID } from '@/types'
-import AccountsPanel from '@/components/AccountsPanel.vue'
 import CamoufoxBanner from '@/components/CamoufoxBanner.vue'
 import UiDisclosure from '@/components/UiDisclosure.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
-import ModelsTable from '@/components/ModelsTable.vue'
-import RequestsPanel from '@/components/RequestsPanel.vue'
-import SettingsPanel from '@/components/SettingsPanel.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import { useClampToggle } from '@/clamp'
@@ -48,6 +44,10 @@ function lazyPanel(loader: AsyncComponentLoader) {
 const UsagePanel = lazyPanel(() => import('@/components/UsagePanel.vue'))
 const VersionPanel = lazyPanel(() => import('@/components/VersionPanel.vue'))
 const AccessPanel = lazyPanel(() => import('@/components/AccessPanel.vue'))
+const AccountsPanel = lazyPanel(() => import('@/components/AccountsPanel.vue'))
+const ModelsTable = lazyPanel(() => import('@/components/ModelsTable.vue'))
+const RequestsPanel = lazyPanel(() => import('@/components/RequestsPanel.vue'))
+const SettingsPanel = lazyPanel(() => import('@/components/SettingsPanel.vue'))
 const validTabs: TabID[] = [
   'logs',
   'accounts',

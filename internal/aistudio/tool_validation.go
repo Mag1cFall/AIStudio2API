@@ -60,16 +60,14 @@ func supportedTools(tools Tools, model Model) (Tools, error) {
 	return tools, nil
 }
 
-// transcribeFunctionParts 把函数调用与函数结果 part 改写为文本转录，缺少名称的函数结果按待返回调用补齐名称
+// transcribeFunctionParts 把函数调用与函数结果 part 改写为文本转录，函数结果按 linkFunctionResults 的规则关联调用
 func transcribeFunctionParts(contents []Content) ([]Content, error) {
-	transcribed := cloneContentsForFileCopies(contents)
-	var pendingCalls []FunctionCall
+	transcribed, err := linkedContents(cloneContentsForFileCopies(contents))
+	if err != nil {
+		return nil, err
+	}
 	for contentIndex, content := range transcribed {
-		linked, err := linkFunctionResults(content, &pendingCalls)
-		if err != nil {
-			return nil, fmt.Errorf("contents[%d]: %w", contentIndex, err)
-		}
-		for partIndex, part := range linked.Parts {
+		for partIndex, part := range content.Parts {
 			if part.FunctionCall == nil && part.FunctionResult == nil {
 				continue
 			}

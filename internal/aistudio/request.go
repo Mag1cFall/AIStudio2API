@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -175,6 +176,12 @@ func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, re
 	if lease, ok := AccountLeaseFromContext(ctx); ok && lease.Channel() == ChannelBuild {
 		return c.buildCountTokens(ctx, accountID, request)
 	}
+	c.catalogMu.RLock()
+	entry, listed := c.catalogs[accountID].lookup(strings.TrimPrefix(request.Model, "models/"))
+	c.catalogMu.RUnlock()
+	if listed && entry.model.Capabilities["assistant_route"] {
+		request.Model = assistantBaseModelID(request.Model)
+	}
 	body, err := EncodeCountTokensRequest(request)
 	if err != nil {
 		return TokenCount{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -188,17 +195,16 @@ func (c *Client) CountTokensForAccount(ctx context.Context, accountID string, re
 }
 
 func encodeContents(contents []Content) ([]any, error) {
-	wire := make([]any, 0, len(contents))
-	var pendingCalls []FunctionCall
-	for index, content := range contents {
+	linked, err := linkedContents(contents)
+	if err != nil {
+		return nil, err
+	}
+	wire := make([]any, 0, len(linked))
+	for index, content := range linked {
 		if len(content.Parts) == 0 {
 			continue
 		}
-		linked, err := linkFunctionResults(content, &pendingCalls)
-		if err != nil {
-			return nil, fmt.Errorf("编码 content %d: %w", index, err)
-		}
-		encoded, err := encodeContent(linked)
+		encoded, err := encodeContent(content)
 		if err != nil {
 			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
@@ -207,12 +213,36 @@ func encodeContents(contents []Content) ([]any, error) {
 	return wire, nil
 }
 
-// linkFunctionResults 记录 content 中的函数调用，按调用 ID 或唯一待返回调用为缺少名称的函数结果补齐名称，无法关联时返回错误
+// linkedContents 返回逐个 content 经 linkFunctionResults 关联函数结果后的 contents，不修改输入
+func linkedContents(contents []Content) ([]Content, error) {
+	linked := slices.Clone(contents)
+	var pendingCalls []FunctionCall
+	for index, content := range linked {
+		if len(content.Parts) == 0 {
+			continue
+		}
+		content, err := linkFunctionResults(content, &pendingCalls)
+		if err != nil {
+			return nil, fmt.Errorf("content %d: %w", index, err)
+		}
+		linked[index] = content
+	}
+	return linked, nil
+}
+
+// linkFunctionResults 记录 content 中的函数调用，按调用 ID、唯一待返回调用或同名调用关联函数结果并补齐缺少的名称，关联不到调用的函数结果改写为文本转录
 func linkFunctionResults(content Content, pendingCalls *[]FunctionCall) (Content, error) {
 	if content.Role == RoleUser && !slices.ContainsFunc(content.Parts, func(part Part) bool { return part.FunctionResult != nil }) {
 		*pendingCalls = nil
 	}
 	cloned := false
+	replace := func(index int, part Part) {
+		if !cloned {
+			content.Parts = slices.Clone(content.Parts)
+			cloned = true
+		}
+		content.Parts[index] = part
+	}
 	for index, part := range content.Parts {
 		if part.FunctionCall != nil {
 			*pendingCalls = append(*pendingCalls, *part.FunctionCall)
@@ -225,20 +255,22 @@ func linkFunctionResults(content Content, pendingCalls *[]FunctionCall) (Content
 		if matched < 0 && len(*pendingCalls) == 1 && (result.Name == "" || result.Name == (*pendingCalls)[0].Name) {
 			matched = 0
 		}
+		if matched < 0 && result.Name != "" {
+			matched = slices.IndexFunc(*pendingCalls, func(call FunctionCall) bool { return call.Name == result.Name })
+		}
 		if matched < 0 {
-			if result.Name == "" {
-				return Content{}, fmt.Errorf("part %d: function result 缺少名称且无法唯一关联调用", index)
+			transcript, err := ToolPartTranscript(part)
+			if err != nil {
+				return Content{}, fmt.Errorf("part %d: %w", index, err)
 			}
+			replace(index, Part{Text: transcript})
 			continue
 		}
 		if result.Name == "" {
-			if !cloned {
-				content.Parts = slices.Clone(content.Parts)
-				cloned = true
-			}
 			named := *result
 			named.Name = (*pendingCalls)[matched].Name
-			content.Parts[index].FunctionResult = &named
+			part.FunctionResult = &named
+			replace(index, part)
 		}
 		*pendingCalls = slices.Delete(*pendingCalls, matched, matched+1)
 	}
@@ -280,6 +312,9 @@ func encodePart(part Part) ([]any, error) {
 		variants++
 	}
 	if part.File != nil {
+		variants++
+	}
+	if part.Upload != nil {
 		variants++
 	}
 	if part.FunctionCall != nil {
@@ -345,6 +380,12 @@ func encodePart(part Part) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		return encodeVideoPart(wire, part)
+	}
+	if upload := part.Upload; upload != nil {
+		// Part field 18 上传附件：MIME、上传路径、文件名、字节数
+		wire := make([]any, 18)
+		wire[17] = []any{upload.MIME, upload.Path, upload.Name, strconv.FormatInt(upload.Size, 10)}
 		return encodeVideoPart(wire, part)
 	}
 	if part.FunctionCall != nil {

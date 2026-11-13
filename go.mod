@@ -1,6 +1,6 @@
 module github.com/Mag1cFall/AIStudio2API
 
-go 1.27
+go 1.27.3
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
@@ -24,18 +24,19 @@ require (
 	github.com/minio/selfupdate v0.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nlnwa/whatwg-url v0.6.2
+	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.9
-	github.com/thesyncim/gopus v0.1.2
+	github.com/thesyncim/gopus v0.2.3
 	github.com/tphakala/go-aac v0.7.2
 	github.com/vearutop/statigz v1.5.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.29
 	github.com/zaf/g711 v1.4.0
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261030153154-30a33513ff6d
 	golang.org/x/image v0.41.0
-	golang.org/x/mod v0.41.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/net v0.60.0
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.42.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1

@@ -17,6 +17,8 @@ type Challenge struct {
 	Program                    string
 	GlobalName                 string
 	ClientExperimentsStateBlob string
+	// Packed 表示 challenge 来自响应第 2 字段的混淆字节，官网包装层为它记录解码耗时
+	Packed bool
 }
 
 // ParseChallenge 解析 Waa/Create 响应，第 2 字段的混淆 challenge 为空时读取第 1 字段的明文 challenge
@@ -54,6 +56,7 @@ func ParseChallenge(raw []byte) (Challenge, error) {
 		Program:                    decodeString(fields[4]),
 		GlobalName:                 decodeString(fields[5]),
 		ClientExperimentsStateBlob: decodeString(fields[7]),
+		Packed:                     encoded != "",
 	}
 	if interpreterPath := decodeFirstString(fields[2]); interpreterPath != "" {
 		challenge.InterpreterURL = "https:" + strings.TrimPrefix(interpreterPath, "https:")

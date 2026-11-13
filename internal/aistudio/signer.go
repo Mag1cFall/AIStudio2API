@@ -34,6 +34,21 @@ func (s *Signer) Authorization(state StorageState) (string, error) {
 	return s.AuthorizationAt(state, time.Now())
 }
 
+// OriginHashes 返回不带时间戳的三段 SAPISID 摘要，官网 play.google.com/log 上报以它作 auth 参数与 Authorization 头
+func (s *Signer) OriginHashes(state StorageState) (string, error) {
+	now := time.Now()
+	parts := make([]string, 0, len(signatureCookies))
+	for _, item := range signatureCookies {
+		value, ok := state.CookieValue(item.name, aiStudioOrigin+"/", now)
+		if !ok {
+			return "", fmt.Errorf("%w: storage state 缺少有效 Cookie: %s", camoufoxnative.ErrAuthenticationRequired, item.name)
+		}
+		digest := sha1.Sum([]byte(value + " " + aiStudioOrigin))
+		parts = append(parts, item.label+" "+hex.EncodeToString(digest[:]))
+	}
+	return strings.Join(parts, " "), nil
+}
+
 // AuthorizationAt 使用指定时间生成授权头
 func (s *Signer) AuthorizationAt(state StorageState, now time.Time) (string, error) {
 	timestamp := now.Unix()

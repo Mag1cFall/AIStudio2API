@@ -281,9 +281,7 @@ func trailerError(method string, raw json.RawMessage) error {
 
 func rawArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]json.RawMessage, error) {
 	var values []json.RawMessage
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&values); err != nil {
+	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, &ProtocolEvidenceError{Path: path, Detail: "期望数组", Raw: cloneEvidence(raw, evidence)}
 	}
 	return values, nil
@@ -299,9 +297,7 @@ func rawString(raw json.RawMessage, path string, evidence json.RawMessage) (stri
 
 func rawInt64(raw json.RawMessage, path string, evidence json.RawMessage) (int64, error) {
 	var number json.Number
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&number); err != nil {
+	if err := json.Unmarshal(raw, &number); err != nil {
 		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望整数", Raw: cloneEvidence(raw, evidence)}
 	}
 	value, err := strconv.ParseInt(number.String(), 10, 64)
@@ -313,9 +309,7 @@ func rawInt64(raw json.RawMessage, path string, evidence json.RawMessage) (int64
 
 func rawFloat64(raw json.RawMessage, path string, evidence json.RawMessage) (float64, error) {
 	var number json.Number
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&number); err != nil {
+	if err := json.Unmarshal(raw, &number); err != nil {
 		return 0, &ProtocolEvidenceError{Path: path, Detail: "期望数字", Raw: cloneEvidence(raw, evidence)}
 	}
 	value, err := strconv.ParseFloat(number.String(), 64)

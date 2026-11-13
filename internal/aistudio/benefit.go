@@ -24,6 +24,7 @@ var tieredRPCMethods = map[string]struct{}{
 	"GenerateContent":          {},
 	"CountTokens":              {},
 	"ProxyUnaryCall":           {},
+	"CodeAssistantOffline":     {},
 	"CancelInteraction":        {},
 	"CreateInteraction":        {},
 	"CreateDecision":           {},

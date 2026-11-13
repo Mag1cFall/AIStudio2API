@@ -9,7 +9,7 @@ AIStudio2API 使用 Go 直接调用 Google AI Studio 的 MakerSuite 私有协议
 | 场景 | 必需组件 | 说明 |
 | --- | --- | --- |
 | Release 运行 | `aistudio2api` | 需要时在后台自动下载 Camoufox，不需要 Python、Node.js 或 Playwright |
-| 源码运行 | Go 1.27+、Node.js 22.18+、24.11+ 或 26+、配套 npm | Node.js 只用于构建 Vue 管理端 |
+| 源码运行 | Go 1.27.3+、Node.js 22.18+、24.11+ 或 26+、配套 npm | Node.js 只用于构建 Vue 管理端 |
 | Windows Chrome 导入 | Windows amd64、稳定版 Chrome | Go 程序直接读取本机 Profile 的 OAuth/DBSC 材料 |
 
 Windows 用户解压发布包后双击 `aistudio2api.exe`。程序启动后自动打开管理页面，生成服务初始保持停止；账户登录、日志查看和生成服务启停均在该页面完成。
@@ -61,8 +61,8 @@ go run ./cmd/aistudio2api
 | --- | --- |
 | `--chrome-root <DIR>` | 指定 Chrome User Data 根目录 |
 | `--proxy <URL>` | 固定到账户初始化、WAA 与业务请求 |
-| `--locale <LOCALE>` | 设置账户语言 |
-| `--timezone <IANA_ZONE>` | 设置账户时区 |
+| `--locale <LOCALE>` | 设置账户语言，省略时按出口位置 |
+| `--timezone <IANA_ZONE>` | 设置账户时区，省略时按出口位置 |
 | `--remote <origin>` | 账户上传到该远程实例，非本机地址必须使用 HTTPS |
 | `--token <TOKEN>` | 远程实例的配对令牌，省略时从标准输入读取 |
 | `--renew` | 在前台为本机上传到 `--remote` 实例的 Chrome 导入账户按时续签，用于重启电脑后恢复续签；不带 `--token` 与导入参数 |
@@ -71,7 +71,7 @@ go run ./cmd/aistudio2api
 
 - 文件导入：`--storage-state`
 - Cookie 导入：`--cookie`、`--cookie-file` 或 `--cdp`，账户邮箱按 Cookie 识别，也可用一个 `--email` 指定；`--authuser N` 选择 Cookie 中第 N 个 Google 会话（官网 `/u/N/`）的账户并验证其邮箱；只保留 google.com 及其子域的 Cookie，缺少 `__Secure-1PSID`、`SAPISID`、`__Secure-1PAPISID` 或 `__Secure-3PAPISID` 时报告缺少的 Cookie
-- `--cdp` 接受 `host:port`、HTTP 调试地址或浏览器级 `ws://` 地址，经 CDP `Storage.getCookies` 读取该浏览器的全部未分区 Cookie，再附加到第一个页面读取 `navigator.language` 与 Intl 时区，未给 `--locale`、`--timezone` 时作为账户的语言与时区
+- `--cdp` 接受 `host:port`、HTTP 调试地址或浏览器级 `ws://` 地址，经 CDP `Storage.getCookies` 读取该浏览器的全部未分区 Cookie
 - 管理页面导入 Cookie 只需粘贴 Cookie 或选择 Cookie 文件：页面在粘贴或输入停顿后自动识别，服务以 Cookie 打开 AI Studio 对话页，从页面全局数据 `oPEP7c` 读取登录账户邮箱，再读取 `ListModels` 确认可用；页面转到登录页时返回 `signed_out`
 - 管理页面的添加、导入与重新登录在服务端的账户任务中运行（`internal/api/account_tasks.go`）：请求返回 202 与任务后对话框即关闭，任务用不随请求取消的 context 运行，逐个处理账户并把每个账户的状态、错误码与原因推送到管理事件流的 `account_tasks`，账户页据此显示任务行；浏览器登录任务带登录窗口 ID，页内登录窗口隐藏或页面刷新后以同一 ID 重新连接
 - “从指纹浏览器导入”从本机进程命令行找出带 `--remote-debugging-port` 的浏览器（端口为 0 时读取用户数据目录的 `DevToolsActivePort`），逐个读取 Cookie 并识别账户，列出可导入、已导入与未登录的浏览器
@@ -83,7 +83,7 @@ go run ./cmd/aistudio2api
 加 `--remote` 时，Chrome 导入、隔离登录、文件导入与 Cookie 导入照常在本机完成，结果凭远程实例账户页“远程添加”生成的配对令牌逐个上传，隔离登录同时上传 Camoufox 指纹。远程账户使用远程实例的默认代理，`--proxy` 只用于本机导入与登录。上传的账户带 Chrome OAuth 材料时（本机 Chrome 导入，或带该材料的认证状态文件），上传完成后命令留在前台：立即并每 100 分钟以本机 Chrome 来源与 OAuth 材料签发新会话，经 `PUT /api/pairing/accounts/{account}/cookies` 凭上传响应的 `renewal_token` 替换远程账户的 Cookie，失败时 5 分钟后重试，重试时沿用尚未送达、签发不到 100 分钟的会话，远程返回 401 `pairing_renewal_invalid` 或 404 `account_not_found` 时停止该账户并从记录中删除，其他失败照常重试，每次一行日志；续签材料与凭据保存在本机 `runtime/remote-renewals.json`（权限 0600），`--remote <origin> --renew` 读取该 origin 的记录恢复续签。只含隔离登录、文件或 Cookie 导入的账户时上传后退出。
 
 - `--proxy` 会同时固定到新账户的初始化、WAA 与业务请求，接受 HTTP、HTTPS 或 SOCKS5 URL，代理认证写在 URL 的 `user:password@` 部分；未指定时导入与登录使用 `PROXY` 中的第一个代理，新账户不设账户代理
-- `--locale` 和 `--timezone` 设置账户环境；Chrome 导入未显式指定语言时读取 Profile 的首选语言
+- `--locale` 和 `--timezone` 设置账户环境；未指定的项按 setup 出口（`--proxy`，未指定时为 `PROXY` 中的第一个代理或直连）的地理位置填写，命令输出出口 IP、国家与采用的语言和时区；`--remote` 上传的账户由远程实例按它的出口填写
 
 Camoufox 按以下顺序定位，只使用发行目录 `application.ini` 中 `Version` 与程序固定版本相同的 Camoufox：
 
@@ -181,7 +181,7 @@ HTTP route
 
 WebSocket 入口沿用相同分层：`internal/api` 解码公开协议，`internal/app` 绑定账户和运行状态，`internal/aistudio` 执行 WebChannel 与规范事件转换。公开适配器只消费规范请求与事件；账户文件、WAA 对象、原始数组和资源粘性由 `internal/aistudio` 与 `internal/app` 管理。
 
-Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 与 `WARM_STARTUP_CONCURRENCY` 准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。无头 runtime 的软件 vsync 为每秒 60 次，浏览器启动与首次载入官网页面期间页面每秒刷新 60 帧，Worker 就绪后以 `gfx.display.frame-rate-divisor` 每 60 次分发一次，页面每秒刷新 1 帧；界面运行的输入、点击与新开对话期间分频为 1，页面从下一次 vsync 起每秒刷新 60 帧，WebRender 以单通道灰度光栅化字形；官网页面就绪后，服务经 WebDriver BiDi 访问浏览器界面层（Camoufox 以 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` 启动），把标签页的 `renderLayers` 设为 false，标签页不再光栅化与合成，页面的可见状态、焦点、动画帧与定时器不变。WebGL 在所有主机上强制启用，取账户指纹中的 Windows 显卡配置；语音列表在所有主机上只含账户指纹中的语音。非 Windows 主机上，Camoufox 按 Windows 版 Firefox 的字体偏好解析字体名，字体白名单补入已声明字体所在字体文件的其他字体族名，并启用 WebGPU、Windows 10 滚动条样式与 2 声道 AudioContext；`window.innerHeight` 取 `window.outerHeight` 减 Windows 浏览器界面高度 57，站点存储的全局上限固定为 50 GiB；无头时经 WebDriver BiDi 移动主窗口，使页面内容区的屏幕坐标与 Windows 版一致。Linux 上 Camoufox 只加载发行包内的 Windows 字体（字形微调为 `hintslight`），按 Windows 字体替换表解析字体名；macOS 上服务在启动 Camoufox 前把 Windows 字体替换名写入发行包字体的 name 表，并给这些字体的 PostScript 名加 `-Windows` 后缀，避免与系统同名字体冲突。没有 `DISPLAY` 的 Linux 主机上，每个无头 Camoufox 使用服务启动的 Xvfb 虚拟显示，WebGL 经 Mesa GLX 软件渲染，Camoufox 退出时一并结束该 Xvfb。每个 runtime 使用关闭时删除的临时 profile，HTTP 磁盘缓存写入账户目录的 `camoufox-cache/`，同一账户重启时复用官网静态资源；同一账户同时存在的第二个 runtime 使用临时 profile 内的缓存。创建临时 profile 的进程在 profile 内持有锁文件，运行时装配时删除锁已释放的遗留 profile。Windows 上每个 Camoufox 进程树加入服务进程持有的 Job，服务进程退出时由系统一并结束。每个 runtime 以临时对话打开官网新对话页 `/prompts/new_chat?model=<模型>&temporary=true`：页面脚本之前注入的预载脚本取得官网应用的 WAA service 对象，页面发出的 MakerSuite 请求提供动态请求头，`GetLoggingContext` 响应提供 `X-Goog-Ext-519733851-Bin`。最后一轮是带文本的 user 轮次的 GenerateContent 在页面界面运行：输入框没有焦点时服务先以可信指针点击输入框（官网新开对话后焦点已在输入框中），再在输入框输入该轮各文本 Part 以空格连接的文本并以可信指针点击 Run；一轮返回 200 且响应正文读完后，服务在后台点击 New chat 并丢弃该对话（临时对话中新开的对话仍是临时对话），下一轮在空白对话中直接输入，期间到达的请求等待该标签页；其余情况下标签页保留该对话，与上一轮的对话相同时点击该轮的 Rerun，在其后追加 model 与 user 两轮时在当前对话中继续，其余对话先点击 New chat 并丢弃当前对话；页面应用生成 proof 并创建 GenerateContent 的 `XMLHttpRequest`，发送时正文换成 Go 编码的业务正文与这份 proof，响应头与响应块由页面经 WebDriver BiDi `script.message` 通道推送给 Go，随后的 CountTokens 与统计上报由页面应用发出；请求取消时点击 Stop。同一账户同时进行的界面请求各用一个标签页。其余受保护请求的正文由 Go 编码，proof 由 WAA service 生成，通过同一固定指纹页面以官网同样的 `XMLHttpRequest` 发送，GenerateContent 带官网点击 Run 时的 `Priority: u=0`，响应同样经 `script.message` 推送给 Go。WebDriver BiDi 命令在同一连接上并发执行：每条命令带唯一 ID，后台读取连接的 goroutine 按 ID 把响应交给等待的调用方，单条命令最长 150 秒；请求取消或超时时调用立即返回，迟到的响应被丢弃，其他命令不受影响。其他 MakerSuite、Drive 与媒体控制面请求继续使用账户固定出口的 Go HTTP transport。
+Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 逐个准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。无头 runtime 的软件 vsync 为每秒 60 次，浏览器启动与首次载入官网页面期间页面每秒刷新 60 帧，Worker 就绪后以 `gfx.display.frame-rate-divisor` 每 60 次分发一次，页面每秒刷新 1 帧；界面运行的输入、点击与新开对话期间分频为 1，页面从下一次 vsync 起每秒刷新 60 帧，WebRender 以单通道灰度光栅化字形；官网页面就绪后，服务经 WebDriver BiDi 访问浏览器界面层（Camoufox 以 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` 启动），把标签页的 `renderLayers` 设为 false，标签页不再光栅化与合成，页面的可见状态、焦点、动画帧与定时器不变。WebGL 在所有主机上强制启用，取账户指纹中的 Windows 显卡配置；语音列表在所有主机上只含账户指纹中的语音。非 Windows 主机上，Camoufox 按 Windows 版 Firefox 的字体偏好解析字体名，字体白名单补入已声明字体所在字体文件的其他字体族名，并启用 WebGPU、Windows 10 滚动条样式与 2 声道 AudioContext；`window.innerHeight` 取 `window.outerHeight` 减 Windows 浏览器界面高度 57，站点存储的全局上限固定为 50 GiB；无头时经 WebDriver BiDi 移动主窗口，使页面内容区的屏幕坐标与 Windows 版一致。Linux 上 Camoufox 只加载发行包内的 Windows 字体（字形微调为 `hintslight`），按 Windows 字体替换表解析字体名；macOS 上服务在启动 Camoufox 前把 Windows 字体替换名写入发行包字体的 name 表，并给这些字体的 PostScript 名加 `-Windows` 后缀，避免与系统同名字体冲突。没有 `DISPLAY` 的 Linux 主机上，每个无头 Camoufox 使用服务启动的 Xvfb 虚拟显示，WebGL 经 Mesa GLX 软件渲染，Camoufox 退出时一并结束该 Xvfb。每个 runtime 使用关闭时删除的临时 profile，HTTP 磁盘缓存写入账户目录的 `camoufox-cache/`，同一账户重启时复用官网静态资源；同一账户同时存在的第二个 runtime 使用临时 profile 内的缓存。创建临时 profile 的进程在 profile 内持有锁文件，运行时装配时删除锁已释放的遗留 profile。Windows 上每个 Camoufox 进程树加入服务进程持有的 Job，服务进程退出时由系统一并结束。每个 runtime 以临时对话打开官网新对话页 `/prompts/new_chat?model=<模型>&temporary=true`：页面脚本之前注入的预载脚本取得官网应用的 WAA service 对象，页面发出的 MakerSuite 请求提供动态请求头，`GetLoggingContext` 响应提供 `X-Goog-Ext-519733851-Bin`。最后一轮是带文本的 user 轮次的 GenerateContent 在页面界面运行：输入框没有焦点时服务先以可信指针点击输入框（官网新开对话后焦点已在输入框中），再在输入框输入该轮各文本 Part 以空格连接的文本并以可信指针点击 Run；一轮返回 200 且响应正文读完后，服务在后台点击 New chat 并丢弃该对话（临时对话中新开的对话仍是临时对话），下一轮在空白对话中直接输入，期间到达的请求等待该标签页；其余情况下标签页保留该对话，与上一轮的对话相同时点击该轮的 Rerun，在其后追加 model 与 user 两轮时在当前对话中继续，其余对话先点击 New chat 并丢弃当前对话；页面应用生成 proof 并创建 GenerateContent 的 `XMLHttpRequest`，发送时正文换成 Go 编码的业务正文与这份 proof，响应头与响应块由页面经 WebDriver BiDi `script.message` 通道推送给 Go，随后的 CountTokens 与统计上报由页面应用发出；请求取消时点击 Stop。同一账户同时进行的界面请求各用一个标签页。其余受保护请求的正文由 Go 编码，proof 由 WAA service 生成，通过同一固定指纹页面以官网同样的 `XMLHttpRequest` 发送，GenerateContent 带官网点击 Run 时的 `Priority: u=0`，响应同样经 `script.message` 推送给 Go。WebDriver BiDi 命令在同一连接上并发执行：每条命令带唯一 ID，后台读取连接的 goroutine 按 ID 把响应交给等待的调用方，单条命令最长 150 秒；请求取消或超时时调用立即返回，迟到的响应被丢弃，其他命令不受影响。其他 MakerSuite、Drive 与媒体控制面请求继续使用账户固定出口的 Go HTTP transport。
 
 `WAA_BACKEND=spidermonkey` 时不定位、不下载也不启动 Camoufox。每个账户 runtime 在服务进程内请求官网页面、页面 HTML 引用的样式表与脚本、网站图标与 Cloud Console 认证预热 iframe，再请求 `GetLoggingContext` 得到公开请求头，调用 `Waa/Create` 取得 challenge，按 hash 下载并缓存解释器到 `auth/.waa-interpreters/`，在 `internal/waa` 链接的 SpiderMonkey 与 Firefox 形状宿主中执行 program，program 插入的 iframe 由宿主以 Firefox iframe 导航请求；页面子资源与解释器按 Firefox HTTP 缓存的新鲜度与条件请求规则发送，缓存元数据写入账户目录的 `spidermonkey-cache.json`；带页面提示词的 GenerateContent 先在宿主页面的输入框填入提示词并点击 Run，再生成 proof。受保护请求携带 Firefox 请求头与账户 Cookie，由账户固定出口的 Go HTTP transport 发送，响应 Cookie 写回账户状态。账户页的浏览器登录在首次使用时准备 Camoufox。
 
@@ -209,7 +209,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 | `30m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `10`，Camoufox 后端 `5` |
 | `MAX_ACTIVE_WORKERS` | 活动 Worker 容量上限，必须不小于热池目标 | `20`，Camoufox 后端 `10` |
-| `WARM_STARTUP_CONCURRENCY` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 | `5` |
+| `WARM_STARTUP_CONCURRENCY` | 按需扩容时同时冷启动的 Camoufox Worker 数，预热逐个启动；`WAA_BACKEND=spidermonkey` 时不限制 | `5` |
 | `PER_ACCOUNT_CONCURRENCY` | 单账号同时执行的请求数 | `2` |
 | `ROUTING_STRATEGY` | 账户轮询 `round-robin` 或粘性优先 `fill-first` | `round-robin` |
 | `ACCOUNT_ORDER` | 逗号分隔的账户 ID，`fill-first` 依次使用并按此顺序预热，未列出的账户排在后面并按 ID 排序；保存后立即生效 | 空 |
@@ -234,7 +234,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `MEDIA_OUTPUT` | Chat Completions 与 Messages 正文中生成媒体的引用方式 `inline` 或 `url` | `inline` |
 | `MEDIA_BASE_URL` | 媒体 URL 的服务地址，`http` 或 `https`；留空时取请求的协议与 Host | 空 |
 
-`LISTEN_ADDR` 与 `PREVIEW_LISTEN_ADDR` 使用 `host:port`，端口范围为 `1..65535`。时长和容量字段必须为正值，`MAX_ACCOUNT_SWITCHES` 为非负整数，`WARM_STARTUP_CONCURRENCY` 的有效范围为 `1..MAX_ACTIVE_WORKERS`。全局代理 URL 使用 `http`、`https` 或 `socks5` 的 origin 形状，可带 `user:password@` 认证信息。命令行 `--auth` 与 `--proxy` 会覆盖每次启动生成服务时读取的保存值。
+`LISTEN_ADDR` 与 `PREVIEW_LISTEN_ADDR` 使用 `host:port`，端口范围为 `1..65535`。时长和容量字段必须为正值，`MAX_ACCOUNT_SWITCHES` 为非负整数，`WARM_STARTUP_CONCURRENCY` 的有效范围为 `1..MAX_ACTIVE_WORKERS`，没有设置 `WARM_WORKER_LIMIT` 或 `WARM_STARTUP_CONCURRENCY` 时取默认值且不超过 `MAX_ACTIVE_WORKERS`。全局代理 URL 使用 `http`、`https` 或 `socks5` 的 origin 形状，可带 `user:password@` 认证信息。命令行 `--auth` 与 `--proxy` 会覆盖每次启动生成服务时读取的保存值。
 
 `GET /api/config` 与 `PUT /api/config` 同时暴露保存值和当前生效值：
 
@@ -299,7 +299,7 @@ POST /api/control/start
   -> 剩余目录同步与热池预热继续在后台运行
 ```
 
-配置读取、校验、生成服务实例创建失败或启用前取消时，当前已停止实例保持不变。切换到新实例后启动失败时，该实例进入 `STOPPED`，管理端返回结构化错误。账户的 ListModels 响应与 Build 模型目录在每次成功刷新后写入账户目录的 `catalog.json`，载入账户时只采用目录指纹与 `runtime-state.json` 一致的缓存，新的生成服务实例因此可以用上次同步的目录立即预热，请求编码所需的模型条目也从缓存恢复；`catalog.json` 同时记录同步时刻，启动时只在后台刷新没有一致缓存或最近一次同步已满 24 小时的账户，其余账户沿用缓存，由每 24 小时的巡检刷新。预热按 `WARM_STARTUP_CONCURRENCY` 同时启动多个账户的 Worker，账户的目录就绪后立即占用空出的启动名额，不等待同批其他 Worker。没有 Worker 就绪也没有 Worker 在启动时，预热先只启动一个 Worker，它的 Camoufox 进程完成启动（开始连接 WebDriver BiDi）或启动结束后再启动其余 Worker，首个 Worker 独自通过浏览器进程的启动阶段。
+配置读取、校验、生成服务实例创建失败或启用前取消时，当前已停止实例保持不变。切换到新实例后启动失败时，该实例进入 `STOPPED`，管理端返回结构化错误。账户的 ListModels 响应与 Build 模型目录在每次成功刷新后写入账户目录的 `catalog.json`，载入账户时只采用目录指纹与 `runtime-state.json` 一致的缓存，新的生成服务实例因此可以用上次同步的目录立即预热，请求编码所需的模型条目也从缓存恢复；`catalog.json` 同时记录同步时刻，启动时只在后台刷新没有一致缓存或最近一次同步已满 24 小时的账户，其余账户沿用缓存，由每 24 小时的巡检刷新。预热逐个启动账户的 Worker：候选账户的目录就绪后启动，上一个 Worker 启动结束后再启动下一个。
 
 模型目录刷新与当前生成服务共用 context（Go 取消信号）。启动失败、取消或 Stop 后等待刷新退出的上界为 2 秒；未完成的 lifecycle transition（启动或停止操作）最多等待 12 秒。超时与 Worker 清理错误通过 `errors.Join` 保留在同一错误链中。
 
@@ -320,15 +320,15 @@ POST /api/control/start
 
 账户更新以 `account.json` 原子写入为持久提交点。`internal/app` 先准备 `pending`（尚未提交）的固定出口，关闭旧 Worker并锁定该账户的 Worker 配置，再调用 `AccountLease.SaveConfig`；保存成功后依次提交 Worker 配置与固定出口。准备、关闭或保存失败时丢弃 pending 更新；保存后的租约释放错误原样返回，已发布配置继续生效。
 
-账户调度先按每个账户实时 `ListModels` 返回的模型和方法筛选，再选择已经就绪且有并发槽位的 Worker。`ROUTING_STRATEGY=round-robin` 在每个模型的候选账户间轮询，按上次选中的账户 ID 继续；`fill-first` 持续使用 `ACCOUNT_ORDER` 顺序（未列出的账户在后并按 ID 排序）中的首个可用账户，并在并发槽位用满、冷却或不可用时切换。带内联附件的生成请求优先选择已上传其中最多附件的账户，该账户并发槽位用满、冷却或不可用时再按策略选择。生成请求的候选为账户与 `UPSTREAM_CHANNELS` 所启用通道的组合：Playground 按 `ListModels` 与权益判断，Build 按 Build 代理返回的 Gemini API 模型目录与相同权益判断；轮询与粘性在组合间按账户 ID 与通道顺序推进，冷却按通道记录（Build 为 `build:<模型>`），一个通道冷却后同一账户可由另一通道继续，全部启用通道都冷却时按下文的冷却规则排队或返回 429；通道规格见 [Build 通道](build.md)。并发槽位、Worker 与 WAA 按账户共享；计数、Live、转录与 Drive 文件引用使用 Playground RPC。每个账号最多同时租用 `PER_ACCOUNT_CONCURRENCY` 个请求槽位；首个请求获取跨进程文件锁，最后一个请求释放。WAA proof 由账号 worker 串行生成，`GenerateContent` 由同一 Camoufox 页面并发发送并流式读取（`WAA_BACKEND=spidermonkey` 时由账户 runtime 的 Go HTTP 发送）；请求前使用 Worker 当前 Cookie 生成 Authorization，响应头到达后把 Worker Cookie 原子同步到账户持久状态。其他 MakerSuite HTTP 响应的 Cookie 在响应头到达时与最新账户状态合并。未固定账户的请求遇到可重试的 401、403、404、429、5xx、收到响应前的连接断开或单账户初始化超时时，可以在首个上游语义事件前继续切换尚未尝试的同能力账户，额度以外的失败最多换 `MAX_ACCOUNT_SWITCHES` 次，额度失败不计入；上游以 403、协议错误码 7 拒绝账户（官网不跳转拒绝页的情形）时，该账户在该模型上按连续次数冷却 1、5、15、30、60 分钟，成功一次后从 1 分钟重新开始；Drive 引用随需要临时复制到生成账户，显式账户和视频任务保持账户绑定。Chrome 导入状态保留续签材料，HTTP `401` 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
+账户调度先按每个账户实时 `ListModels` 返回的模型和方法筛选，再选择已经就绪且有并发槽位的 Worker。`ROUTING_STRATEGY=round-robin` 在每个模型的候选账户间轮询，按上次选中的账户 ID 继续；`fill-first` 持续使用 `ACCOUNT_ORDER` 顺序（未列出的账户在后并按 ID 排序）中的首个可用账户，并在并发槽位用满、冷却或不可用时切换。带内联附件的生成请求优先选择已上传其中最多附件的账户，该账户并发槽位用满、冷却或不可用时再按策略选择。生成请求的候选为账户与 `UPSTREAM_CHANNELS` 所启用通道的组合：Playground 按 `ListModels` 与权益判断，Build 按 Build 代理返回的 Gemini API 模型目录与相同权益判断；轮询与粘性在组合间按账户 ID 与通道顺序推进，冷却按通道记录（Build 为 `build:<模型>`），一个通道冷却后同一账户可由另一通道继续，全部启用通道都冷却时按下文的冷却规则排队或返回 429；`-build` 模型只使用 Build 写代码助手通道 `assistant`，冷却 scope 为 `-build` 模型 ID，同一账户同时只运行一个 `-build` 生成，对话续接得上某账户应用中的 trajectory 时该账户优先；通道规格见 [Build 通道](build.md)。并发槽位、Worker 与 WAA 按账户共享；计数、Live、转录与 Drive 文件引用使用 Playground RPC。每个账号最多同时租用 `PER_ACCOUNT_CONCURRENCY` 个请求槽位；首个请求获取跨进程文件锁，最后一个请求释放。WAA proof 由账号 worker 串行生成，`GenerateContent` 由同一 Camoufox 页面并发发送并流式读取（`WAA_BACKEND=spidermonkey` 时由账户 runtime 的 Go HTTP 发送）；请求前使用 Worker 当前 Cookie 生成 Authorization，响应头到达后把 Worker Cookie 原子同步到账户持久状态。其他 MakerSuite HTTP 响应的 Cookie 在响应头到达时与最新账户状态合并。未固定账户的请求遇到可重试的 401、403、404、429、5xx、收到响应前的连接断开或单账户初始化超时时，可以在首个上游语义事件前继续切换尚未尝试的同能力账户，额度以外的失败最多换 `MAX_ACCOUNT_SWITCHES` 次，额度失败不计入；上游以 403、协议错误码 7 拒绝账户（官网不跳转拒绝页的情形）时，该账户在该模型上按连续次数冷却 1、5、15、30、60 分钟，成功一次后从 1 分钟重新开始；Drive 引用随需要临时复制到生成账户，显式账户和视频任务保持账户绑定。Chrome 导入状态保留续签材料，HTTP `401` 时在同一固定出口续签一次、重建该账户 WAA runtime 并重放请求。
 
-Worker 容量由热池目标、活动上限和单账户并发共同约束。活动数低于 `MAX_ACTIVE_WORKERS` 时直接启动并发布新 Worker。容量已满且存在空闲旧实例时，先启动 pending Worker（正在启动、尚未发布的替代 Worker），再关闭旧实例并发布替代 Worker；对请求模型处于冷却（全局或该模型限额）的空闲实例优先，同类中最久未用者优先，其次为最久未用实例。多个冷却实例可并行替换，每次替换预留独立的旧实例，启动期间新旧进程会短暂共存。启动失败或取消时现有 Worker 继续服务。请求只在取得容量槽位时占用冷账户；没有可立即使用的槽位时释放该账户并重新分类，由任一空闲的热 Worker 或新释放的槽位接收。存在可调度账户但暂时没有空闲槽位的请求按相同选择条件先到先服务排队，在租约释放或 Worker 状态变化时唤醒，直到请求超时。候选账户全部处于冷却时，最早恢复时间在 1 分钟内的请求排队等待恢复，更晚的请求直接返回 429，错误信息给出最早恢复时间。超出 `WARM_WORKER_LIMIT` 的 Worker 空闲 5 分钟后关闭，热池保持目标数量。管理端保存容量设置后立即作用于当前生成服务：Worker 数超过新的 `MAX_ACTIVE_WORKERS` 时立即关闭多出的空闲 Worker，忙碌的在请求结束后的回收检查中关闭；热池少于新的 `WARM_WORKER_LIMIT` 时补足预热；等待中的启动与请求按新的 `WARM_STARTUP_CONCURRENCY` 与 `PER_ACCOUNT_CONCURRENCY` 放行。旧 Worker 与 pending 回收同时失败时，两份进程与租约均保留为 cleanup pending（仍待关闭）并占用容量槽，后续 Stop 会重试关闭。账户的 WAA runtime 租约由其他进程持有时，该账户退出预热与调度候选，首次 5 秒后重新探测，每次仍被占用时间隔翻倍、上限 1 分钟，每段占用只记录一条日志；指定该账户或只剩该类账户的请求返回账户正在使用的错误。
+Worker 容量由热池目标、活动上限和单账户并发共同约束。活动数低于 `MAX_ACTIVE_WORKERS` 时直接启动并发布新 Worker。容量已满且存在空闲旧实例时，先启动 pending Worker（正在启动、尚未发布的替代 Worker），再关闭旧实例并发布替代 Worker；对请求模型处于冷却（全局或该模型限额）的空闲实例优先，同类中最久未用者优先，其次为最久未用实例。多个冷却实例可并行替换，每次替换预留独立的旧实例，启动期间新旧进程会短暂共存。启动失败或取消时现有 Worker 继续服务。请求只在取得容量槽位时占用冷账户；没有可立即使用的槽位时释放该账户并重新分类，由任一空闲的热 Worker 或新释放的槽位接收。存在可调度账户但暂时没有空闲槽位的请求按相同选择条件先到先服务排队，在租约释放或 Worker 状态变化时唤醒，直到请求超时。候选账户全部处于冷却时，最早恢复时间在 1 分钟内的请求排队等待恢复，更晚的请求直接返回 429，错误信息给出最早恢复时间。超出 `WARM_WORKER_LIMIT` 的 Worker 空闲 5 分钟后关闭，热池保持目标数量。全部账户 30 分钟没有请求时进入闲置休眠：常驻 Worker 关闭，预热暂停；之后有请求取得账户时退出休眠，逐个补足热池。管理端保存容量设置后立即作用于当前生成服务：Worker 数超过新的 `MAX_ACTIVE_WORKERS` 时立即关闭多出的空闲 Worker，忙碌的在请求结束后的回收检查中关闭；热池少于新的 `WARM_WORKER_LIMIT` 时补足预热；等待中的启动与请求按新的 `WARM_STARTUP_CONCURRENCY` 与 `PER_ACCOUNT_CONCURRENCY` 放行。旧 Worker 与 pending 回收同时失败时，两份进程与租约均保留为 cleanup pending（仍待关闭）并占用容量槽，后续 Stop 会重试关闭。账户的 WAA runtime 租约由其他进程持有时，该账户退出预热与调度候选，首次 5 秒后重新探测，每次仍被占用时间隔翻倍、上限 1 分钟，每段占用只记录一条日志；指定该账户或只剩该类账户的请求返回账户正在使用的错误。
 
-`FIRST_EVENT_HEDGE` 不为 `off` 时，`FIRST_EVENT_HEDGE_MODELS` 列出的模型的生成请求，原请求从取得账户起等待首个语义事件达到阈值后，为该请求发起一个备用请求：自定义秒数为固定阈值；`auto` 取该模型与通道近 24 小时最近 200 个原请求首字等待的 p95，样本少于 20 个时不发起。原请求的样本为取得账户到首事件的时长，被备用请求取代的原请求按已等时长计入，备用请求不计入；管理进程启动时从请求账本补入近 24 小时的样本。备用请求先用 Worker 已就绪且没有活动请求的其他账户，没有时用原账户的其余并发槽位；引用已上传文件或指定账户的请求只用原账户的其余并发槽位；都没有时每秒复查；同时进行的备用请求最多 4 个；后台 Responses 与 Interaction、Deep Research 与 Antigravity 等经后台任务生成的 agent（`interaction_task`）请求不发起。先出首事件的一方继续，另一方取消上游请求、清理临时文件并释放租约，被取消的请求同样计入上游的每日与每分钟请求额度；账本的 `attempts` 以 `hedge` 标记备用请求，以 `superseded` 标记被取代的一方。
+`FIRST_EVENT_HEDGE` 不为 `off` 时，`FIRST_EVENT_HEDGE_MODELS` 列出的模型的生成请求，原请求从取得账户起等待首个语义事件达到阈值后，为该请求发起一个备用请求：自定义秒数为固定阈值；`auto` 取该模型与通道近 24 小时最近 200 个原请求首字等待的 p95，样本少于 20 个时不发起。原请求的样本为取得账户到首事件的时长，被备用请求取代的原请求按已等时长计入，备用请求不计入；管理进程启动时从请求账本补入近 24 小时的样本。备用请求先用 Worker 已就绪且没有活动请求的其他账户，没有时用原账户的其余并发槽位；引用已上传文件或指定账户的请求只用原账户的其余并发槽位；都没有时每秒复查；同时进行的备用请求最多 4 个；后台 Responses 与 Interaction、Deep Research 与 Antigravity 等经后台任务生成的 agent（`interaction_task`）与 `-build` 写代码助手请求不发起。先出首事件的一方继续，另一方取消上游请求、清理临时文件并释放租约，被取消的请求同样计入上游的每日与每分钟请求额度；账本的 `attempts` 以 `hedge` 标记备用请求，以 `superseded` 标记被取代的一方。
 
 故障重置先等待同账户的活动请求释放租约；等待期间该账户暂停接收新请求。客户端取消只结束自身请求。启动预热在官网 Run 按钮启用后提交，请求在发送前再次检查账户冷却状态。
 
-额度冷却按 `quota_unit`、`quota_limit`、`quota_metric`、错误文案依次判定周期。明确的每日限额在美国太平洋时间次日零点恢复；分钟限额按有效的 `window_start_time` 恢复；通用 429 冷却一分钟。写明恢复时间的套餐限额（`You've reached your usage limit for this model (resets in 10 hours, 2 minutes)`）冷却到该时间；没有重试时间的套餐限额（`You've reached your usage limit`）按同一账户同一 scope 的连续次数冷却 1、5、15、30、60 分钟，冷却未结束时的并发失败沿用当前期限，该 scope 成功一次后从 1 分钟重新开始；订阅模型遇到额度错误时，后台立即刷新该账户的权益与目录，同一账户每分钟最多一次。`RetryInfo` 与 `Retry-After` 提供的重试时间优先。错误列出的额度项上限全部为 0（`limit: 0`）时冷却类型为无配额，期限同样按上述规则。全局范围由额度元数据确认，其余错误只冷却失败模型或能力 scope；正文后的额度错误与 Live 会话错误使用同一规则。全部候选账户都在冷却且最早恢复晚于 1 分钟时，套餐限额与每日限额冷却中的账户仍接收请求：上游按每个请求判定是否放行，用尽后较短的请求仍可能完成；同一请求依次发往这些账户、每个账户一次，上游放行即完成，被拒的账户按上游原因更新冷却，全部拒绝时返回最后一次的 429。
+额度冷却按 `quota_unit`、`quota_limit`、`quota_metric`、错误文案依次判定周期。明确的每日限额在美国太平洋时间次日零点恢复；分钟限额按有效的 `window_start_time` 恢复；通用 429 冷却一分钟。写明恢复时间的套餐限额（`You've reached your usage limit for this model (resets in 10 hours, 2 minutes)`）冷却到该时间；没有重试时间的套餐限额（`You've reached your usage limit` 或 Build 写代码助手步骤带每用户额度标记）按同一账户同一 scope 的连续次数冷却 1、5、15、30、60 分钟，冷却未结束时的并发失败沿用当前期限，该 scope 成功一次后从 1 分钟重新开始；订阅模型遇到额度错误时，后台立即刷新该账户的权益与目录，同一账户每分钟最多一次。`RetryInfo` 与 `Retry-After` 提供的重试时间优先。错误列出的额度项上限全部为 0（`limit: 0`）时冷却类型为无配额，期限同样按上述规则。全局范围由额度元数据确认，其余错误只冷却失败模型或能力 scope；正文后的额度错误与 Live 会话错误使用同一规则。全部候选账户都在冷却且最早恢复晚于 1 分钟时，套餐限额与每日限额冷却中的账户仍接收请求：上游按每个请求判定是否放行，用尽后较短的请求仍可能完成；同一请求依次发往这些账户、每个账户一次，上游放行即完成，被拒的账户按上游原因更新冷却，全部拒绝时返回最后一次的 429。
 
 账户状态：
 
@@ -384,7 +384,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。活�
 | 能力 | 路由 |
 | --- | --- |
 | 健康与状态 | `GET /health`、`GET /api/status` |
-| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}` |
+| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET /api/accounts/exits`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
 | 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |

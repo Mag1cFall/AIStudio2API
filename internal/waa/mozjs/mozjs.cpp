@@ -110,6 +110,20 @@ static const JSClassOps WindowClassOps = {
 // WindowClass 的两个宿主槽保存惰性解析与枚举回调
 static const JSClass WindowClass = {"Window", JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(2), &WindowClassOps};
 
+static bool TemplateResolve(JSContext* cx, JS::HandleObject object, JS::HandleId id, bool* resolved);
+static bool TemplateEnumerate(JSContext* cx, JS::HandleObject object);
+static bool TemplateMayResolve(const JSAtomState& names, jsid id, JSObject* maybeObject);
+
+// TemplateClassOps 在接口原型首次被查找或枚举时定义其全部成员
+static const JSClassOps TemplateClassOps = {
+    .enumerate = TemplateEnumerate,
+    .resolve = TemplateResolve,
+    .mayResolve = TemplateMayResolve,
+};
+
+// TemplateClass 的宿主槽保存尚未调用的成员定义回调
+static const JSClass TemplateClass = {"Object", JSCLASS_HAS_RESERVED_SLOTS(1), &TemplateClassOps};
+
 // Keep 把值放入根表并返回句柄
 static uint32_t Keep(mz_context* mz, const JS::Value& value) {
   if (!mz->freeSlots.empty()) {
@@ -269,6 +283,53 @@ static bool WindowEnumerate(JSContext* cx, JS::HandleObject object, JS::MutableH
       return false;
     }
   }
+  return true;
+}
+
+// MaterializeTemplate 清空接口原型的成员定义回调后调用它
+static bool MaterializeTemplate(JSContext* cx, JS::HandleObject object) {
+  JS::RootedValue callback(cx, JS::GetReservedSlot(object, 0));
+  if (callback.isUndefined()) {
+    return true;
+  }
+  JS::SetReservedSlot(object, 0, JS::UndefinedValue());
+  JS::RootedValue argument(cx, JS::ObjectValue(*object));
+  JS::RootedValue result(cx);
+  return JS::Call(cx, JS::UndefinedHandleValue, callback, JS::HandleValueArray(argument), &result);
+}
+
+// TemplateResolve 在首次查找时定义接口原型的成员，再报告所查的键是否已定义
+static bool TemplateResolve(JSContext* cx, JS::HandleObject object, JS::HandleId id, bool* resolved) {
+  *resolved = false;
+  if (JS::GetReservedSlot(object, 0).isUndefined()) {
+    return true;
+  }
+  if (!MaterializeTemplate(cx, object)) {
+    return false;
+  }
+  return JS_AlreadyHasOwnPropertyById(cx, object, id, resolved);
+}
+
+// TemplateEnumerate 在枚举或冻结前定义接口原型的成员
+static bool TemplateEnumerate(JSContext* cx, JS::HandleObject object) {
+  return MaterializeTemplate(cx, object);
+}
+
+// TemplateMayResolve 判断接口原型是否仍有未定义的成员
+static bool TemplateMayResolve(const JSAtomState& names, jsid id, JSObject* maybeObject) {
+  return !maybeObject || !JS::GetReservedSlot(maybeObject, 0).isUndefined();
+}
+
+// HostTemplateObject 以给定原型新建接口原型对象，成员在首次查找或枚举时由回调定义
+static bool HostTemplateObject(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  JS::RootedObject proto(cx, &args[0].toObject());
+  JS::RootedObject object(cx, JS_NewObjectWithGivenProto(cx, &TemplateClass, proto));
+  if (!object) {
+    return false;
+  }
+  JS::SetReservedSlot(object, 0, args[1]);
+  args.rval().setObject(*object);
   return true;
 }
 
@@ -1238,6 +1299,7 @@ extern "C" bool mz_install_host_natives(mz_context* mz, uint32_t target) {
       !JS_DefineFunction(cx, object, "throwLocation", HostThrowLocation, 0, 0) ||
       !JS_DefineFunction(cx, object, "incumbent", HostIncumbent, 0, 0) ||
       !JS_DefineFunction(cx, object, "lazyGlobals", HostLazyGlobals, 3, 0) ||
+      !JS_DefineFunction(cx, object, "templateObject", HostTemplateObject, 2, 0) ||
       !JS_DefineFunction(cx, object, "callListener", HostCallListener, 3, 0) ||
       !JS_DefineFunction(cx, object, "promiseResult", HostPromiseResult, 1, 0)) {
     Capture(mz);

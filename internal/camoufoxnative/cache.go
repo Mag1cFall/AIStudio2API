@@ -1,7 +1,9 @@
 package camoufoxnative
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -29,6 +31,42 @@ func lockAccountCache(storageStatePath string) (string, *flock.Flock, error) {
 		return "", nil, nil
 	}
 	return directory, lock, nil
+}
+
+// RemoveAccountCache 删除账户目录下的 Camoufox HTTP 磁盘缓存与启动缓存，缓存正被另一个浏览器使用时保留
+func RemoveAccountCache(storageStatePath string) error {
+	directory := filepath.Join(filepath.Dir(storageStatePath), accountCacheDirectoryName)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取账户浏览器缓存: %w", err)
+	}
+	lock := flock.New(filepath.Join(directory, ".lock"))
+	locked, err := lock.TryLock()
+	if err != nil {
+		return fmt.Errorf("锁定账户浏览器缓存: %w", err)
+	}
+	if !locked {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".lock" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
+			_ = lock.Unlock()
+			return fmt.Errorf("删除账户浏览器缓存: %w", err)
+		}
+	}
+	if err := lock.Unlock(); err != nil {
+		return fmt.Errorf("释放账户浏览器缓存: %w", err)
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		return fmt.Errorf("删除账户浏览器缓存: %w", err)
+	}
+	return nil
 }
 
 // releaseAccountCache 在浏览器进程退出后释放账户 HTTP 磁盘缓存目录

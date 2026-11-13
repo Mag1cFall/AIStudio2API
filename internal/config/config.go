@@ -460,7 +460,7 @@ var configChecks = []configCheck{
 	}},
 }
 
-// Load 从指定 env 文件和进程环境加载配置，取值无效的项改用默认值并记入 Invalid，两者都没有 WAA 后端时按账户状态目录确定后端并追加到文件
+// Load 从指定 env 文件和进程环境加载配置，取值无效的项改用默认值并记入 Invalid，没写的常驻预热账户数与启动并发取默认值且不超过活动 Worker 上限，两者都没有 WAA 后端时按账户状态目录确定后端并追加到文件
 func Load(path string) (Config, error) {
 	values, commented, err := readEnvFile(path)
 	if err != nil {
@@ -498,6 +498,12 @@ func Load(path string) (Config, error) {
 		if _, ok := values[key]; !ok {
 			configSetters[key](&cfg, defaults[key])
 		}
+	}
+	if _, ok := values["WARM_WORKER_LIMIT"]; !ok {
+		cfg.WarmWorkerLimit = min(cfg.WarmWorkerLimit, cfg.MaxActiveWorkers)
+	}
+	if _, ok := values["WARM_STARTUP_CONCURRENCY"]; !ok {
+		cfg.WarmStartupConcurrency = min(cfg.WarmStartupConcurrency, cfg.MaxActiveWorkers)
 	}
 	for failed := true; failed; {
 		failed = false

@@ -166,15 +166,14 @@ func buildBindingPrompt(body []byte) (string, error) {
 }
 
 func encodeBuildContents(contents []Content) ([]any, error) {
-	wire := make([]any, 0, len(contents))
-	var pendingCalls []FunctionCall
-	for index, content := range contents {
+	linked, err := linkedContents(contents)
+	if err != nil {
+		return nil, err
+	}
+	wire := make([]any, 0, len(linked))
+	for index, content := range linked {
 		if len(content.Parts) == 0 {
 			continue
-		}
-		content, err := linkFunctionResults(content, &pendingCalls)
-		if err != nil {
-			return nil, fmt.Errorf("编码 content %d: %w", index, err)
 		}
 		role := "user"
 		switch content.Role {
@@ -256,9 +255,6 @@ func encodeBuildPart(part Part) (map[string]any, error) {
 			signature = "skip_thought_signature_validator"
 		}
 	case part.FunctionResult != nil:
-		if part.FunctionResult.Name == "" {
-			return nil, fmt.Errorf("function result 缺少名称且无法唯一关联调用")
-		}
 		response, err := buildJSONObject(part.FunctionResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("function result content: %w", err)

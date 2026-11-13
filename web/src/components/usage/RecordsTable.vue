@@ -333,7 +333,7 @@ function latencyWidth(milliseconds: number): number {
                   {{ dateTime(record.time, true) }}
                 </button>
               </td>
-              <td class="px-4 py-2">
+              <td class="px-4 py-2 whitespace-nowrap">
                 <span class="inline-block rounded px-1.5 py-0.5" :class="stateClass(record)">{{
                   dimensionLabel('state', record.state)
                 }}</span>

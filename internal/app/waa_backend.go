@@ -14,14 +14,19 @@ import (
 const camoufoxWorkerPath = "camoufox"
 
 // prepareWAABackend 按 WAA 后端返回 Worker 选项中的 Camoufox 路径与账户登录驱动，Camoufox 后端在后台准备 Camoufox
-func prepareWAABackend(cfg config.Config, requests *requestRegistry, accounts int, proxy string) (string, aistudio.IsolatedLoginDriver) {
+func prepareWAABackend(cfg config.Config, requests *requestRegistry, accounts []*aistudio.Account, proxy string) (string, aistudio.IsolatedLoginDriver) {
 	removeStaleCamoufoxProfiles(requests)
 	login := camoufoxLoginDriver{proxy: proxy}
 	if cfg.WAABackend == config.WAABackendSpiderMonkey {
-		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=spidermonkey | 账户=%d", accounts))
+		requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | WAA 后端=spidermonkey | 账户=%d", len(accounts)))
+		for _, account := range accounts {
+			if err := camoufoxnative.RemoveAccountCache(account.StoragePath); err != nil {
+				requests.log(account.ID, "WARN", "Camoufox 缓存清理失败 | 错误="+strings.TrimSpace(err.Error()))
+			}
+		}
 		return "", login
 	}
-	requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | 校验 Camoufox | 账户=%d", accounts))
+	requests.log("service", "INFO", fmt.Sprintf("运行时装配 | 2/3 | 校验 Camoufox | 账户=%d", len(accounts)))
 	camoufoxnative.PrepareInBackground(proxy)
 	return camoufoxWorkerPath, login
 }

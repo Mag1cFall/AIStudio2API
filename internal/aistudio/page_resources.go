@@ -256,10 +256,19 @@ func (runtime *goWAARuntime) loadPageIcons(ctx context.Context, document pageDoc
 	}
 }
 
-// fetchCached 按账户页面缓存发出子资源请求：新鲜的缓存不发请求，过期且有校验值时发条件请求，读完响应后更新缓存
+// fetchCached 按账户页面缓存发出子资源请求：新鲜的缓存不发请求，过期且有校验值时发条件请求，读完响应后更新缓存；前端主程序的缓存条目还记下脚本加载调用的位置，入门卡片模块的缓存条目还记下各模型系列的入门卡片，没有记下时重新完整下载
 func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, headers http.Header) error {
 	requested := time.Now()
+	address, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+	bundle := camoufoxnative.FrontendBundle(address)
+	starters := strings.HasSuffix(address.Path, "/m="+starterModule)
 	entry, fresh := runtime.pageCache.lookup(target, requested)
+	if bundle && entry.Loader == nil || starters && entry.Starters == nil {
+		entry, fresh = pageCacheEntry{}, false
+	}
 	if fresh {
 		return nil
 	}
@@ -273,7 +282,7 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(io.Discard, response.Body)
+	body, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
 		return err
@@ -281,7 +290,21 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotModified {
 		return fmt.Errorf("HTTP %d", response.StatusCode)
 	}
-	return runtime.pageCache.store(target, response, time.Now())
+	var loader *sourcePosition
+	if bundle && response.StatusCode == http.StatusOK {
+		position, err := scriptLoaderPosition(body)
+		if err != nil {
+			return err
+		}
+		loader = &position
+	}
+	var series []starterSeries
+	if starters && response.StatusCode == http.StatusOK {
+		if series, err = parseStarterSeries(body); err != nil {
+			return err
+		}
+	}
+	return runtime.pageCache.store(target, response, time.Now(), loader, series)
 }
 
 // firefoxRedirectionLimit 是 Firefox network.http.redirection-limit 的默认值
@@ -351,6 +374,10 @@ type pageCacheEntry struct {
 	CacheControl string    `json:"cacheControl,omitempty"`
 	LastModified string    `json:"lastModified,omitempty"`
 	ETag         string    `json:"etag,omitempty"`
+	// Loader 是前端主程序中脚本加载调用的位置，其余资源为空
+	Loader *sourcePosition `json:"loader,omitempty"`
+	// Starters 是入门卡片模块中各模型系列的入门卡片，其余资源为空
+	Starters []starterSeries `json:"starters,omitempty"`
 }
 
 // loadPageCache 读取账户目录中的页面缓存元数据，文件不存在时为空缓存
@@ -391,14 +418,32 @@ func (cache *pageCache) lookup(target string, now time.Time) (pageCacheEntry, bo
 	return entry, age+now.Sub(entry.Received) < maxAge
 }
 
-// store 按响应更新地址的缓存条目并写回文件：304 刷新新鲜度，200 替换条目，no-store 删除条目
-func (cache *pageCache) store(target string, response *http.Response, received time.Time) error {
+// loader 返回前端主程序缓存条目中脚本加载调用的位置
+func (cache *pageCache) loader(target string) (sourcePosition, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry, ok := cache.entries[target]
+	if !ok || entry.Loader == nil {
+		return sourcePosition{}, fmt.Errorf("页面缓存缺少前端主程序 %s 的脚本加载调用位置", target)
+	}
+	return *entry.Loader, nil
+}
+
+// starters 返回入门卡片模块缓存条目中的模型系列
+func (cache *pageCache) starters(target string) []starterSeries {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.entries[target].Starters
+}
+
+// store 按响应更新地址的缓存条目并写回文件：304 刷新新鲜度，200 替换条目并记下 loader 与 starters，no-store 删除条目
+func (cache *pageCache) store(target string, response *http.Response, received time.Time, loader *sourcePosition, starters []starterSeries) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	entry := cache.entries[target]
 	header := response.Header
 	if response.StatusCode == http.StatusOK {
-		entry = pageCacheEntry{LastModified: header.Get("Last-Modified"), ETag: header.Get("ETag")}
+		entry = pageCacheEntry{LastModified: header.Get("Last-Modified"), ETag: header.Get("ETag"), Loader: loader, Starters: starters}
 	}
 	entry.Received, entry.Date, entry.Age = received, header.Get("Date"), header.Get("Age")
 	if value := header.Get("Cache-Control"); value != "" || response.StatusCode == http.StatusOK {

@@ -293,6 +293,10 @@ func mcpApprovalTarget(tools []responsesTool, name string) (string, string, bool
 
 // applyMCPApprovals 把输入中的批准请求改写为函数调用、批准响应改写为函数结果：execute 为真时批准的调用由服务执行，已有 mcp_call 结果的不再执行；返回改写后的输入与排在输出首位的 mcp_call 项
 func (s *server) applyMCPApprovals(ctx context.Context, previousID string, tools []responsesTool, input json.RawMessage, execute bool) (json.RawMessage, []map[string]any, error) {
+	var heads []responsesItemHead
+	if json.Unmarshal(input, &heads) == nil && !slices.ContainsFunc(heads, func(head responsesItemHead) bool { return head.Type == "mcp_approval_response" }) {
+		return input, nil, nil
+	}
 	var raws []json.RawMessage
 	if json.Unmarshal(input, &raws) != nil {
 		return input, nil, nil
@@ -300,9 +304,6 @@ func (s *server) applyMCPApprovals(ctx context.Context, previousID string, tools
 	items := make([]mcpApprovalItem, len(raws))
 	for index, raw := range raws {
 		_ = json.Unmarshal(raw, &items[index])
-	}
-	if !slices.ContainsFunc(items, func(item mcpApprovalItem) bool { return item.Type == "mcp_approval_response" }) {
-		return input, nil, nil
 	}
 	requests := map[string]mcpApprovalItem{}
 	executed := map[string]mcpApprovalItem{}

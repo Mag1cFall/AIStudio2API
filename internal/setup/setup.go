@@ -23,6 +23,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 )
 
@@ -52,9 +53,7 @@ type setupOptions struct {
 	proxy        string
 	egress       string
 	locale       string
-	localeSet    bool
 	timezone     string
-	timezoneSet  bool
 	authUser     int
 	authUserSet  bool
 	remote       string
@@ -100,6 +99,9 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 			return err
 		}
 		target = localTarget{store: aistudio.NewAccountStore(cfg.AuthStates)}
+		if options.locale, options.timezone, err = exitEnvironment(ctx, options); err != nil {
+			return err
+		}
 	}
 	importErr := importAccounts(ctx, cfg, target, options, input)
 	if remote == nil || len(remote.renewals) == 0 {
@@ -286,12 +288,6 @@ func importCookies(ctx context.Context, target accountTarget, options setupOptio
 			return err
 		}
 		options.cookies = browser.Cookies
-		if !options.localeSet && browser.Locale != "" {
-			options.locale = browser.Locale
-		}
-		if !options.timezoneSet && browser.Timezone != "" {
-			options.timezone = browser.Timezone
-		}
 	}
 	state, err := aistudio.ParseCookieText(options.cookies)
 	if err != nil {
@@ -336,9 +332,13 @@ func importIsolatedLogin(
 		return fmt.Errorf("创建隔离登录目录: %w", err)
 	}
 	defer os.RemoveAll(loginDirectory)
+	locale, timezone, err := exitEnvironment(ctx, options)
+	if err != nil {
+		return err
+	}
 	result, err := driver.Login(ctx, aistudio.IsolatedLoginRequest{
 		Directory: loginDirectory, Proxy: options.egress,
-		Locale: options.locale, Timezone: options.timezone,
+		Locale: locale, Timezone: timezone,
 	})
 	if err != nil {
 		return err
@@ -400,11 +400,7 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 		modelCounts[index] = verification.ModelCount
 	}
 	for index, result := range results {
-		accountOptions := options
-		if !options.localeSet && result.Locale != "" {
-			accountOptions.locale = result.Locale
-		}
-		if _, err := target.Save(ctx, setupAccountConfig(result.Email, accountOptions), result.State, ""); err != nil {
+		if _, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.State, ""); err != nil {
 			return err
 		}
 		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, modelCounts[index])
@@ -479,8 +475,8 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	login := flags.Bool("login", false, "使用隔离 Camoufox 登录")
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
 	proxy := flags.String("proxy", "", "账户固定 HTTP、HTTPS 或 SOCKS5 代理")
-	locale := flags.String("locale", aistudio.DefaultAccountLocale(), "账户语言")
-	timezone := flags.String("timezone", aistudio.DefaultAccountTimezone(), "账户时区")
+	locale := flags.String("locale", "", "账户语言，省略时按出口位置")
+	timezone := flags.String("timezone", "", "账户时区，省略时按出口位置")
 	authUser := flags.Int("authuser", 0, "Google 多账号会话序号 (0..9，对应 /u/0、/u/1...)")
 	remote := flags.String("remote", "", "远程实例 origin，账户上传到该实例")
 	token := flags.String("token", "", "远程实例账户页生成的配对令牌，省略时从标准输入读取")
@@ -544,12 +540,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		}
 	}
 	flags.Visit(func(value *flag.Flag) {
-		switch value.Name {
-		case "locale":
-			options.localeSet = true
-		case "timezone":
-			options.timezoneSet = true
-		case "authuser":
+		if value.Name == "authuser" {
 			options.authUserSet = true
 		}
 	})
@@ -570,6 +561,18 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 		return setupOptions{}, err
 	}
 	return options, nil
+}
+
+// exitEnvironment 返回账户语言与时区：未用 --locale、--timezone 指定的项按 setup 出口的地理位置填写
+func exitEnvironment(ctx context.Context, options setupOptions) (string, string, error) {
+	exit, err := egress.Environment(ctx, options.egress, options.locale, options.timezone)
+	if err != nil {
+		return "", "", fmt.Errorf("按出口位置确定账户语言与时区: %w", err)
+	}
+	if exit.IP != "" {
+		fmt.Fprintf(i18n.Stdout, "按出口 %s（%s）设置账户语言 %s、时区 %s\n", exit.IP, exit.Country, exit.Locale, exit.Timezone)
+	}
+	return exit.Locale, exit.Timezone, nil
 }
 
 func setupAccountConfig(label string, options setupOptions) aistudio.AccountConfig {

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { parseAccountBindings } from '@/accountBindings'
 import { api } from '@/api'
-import { channelLabelKey, useI18n } from '@/i18n'
+import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { priceLines } from '@/playground/catalog'
 import type { Account, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
@@ -147,9 +147,15 @@ const filteredModels = computed(() => {
   })
 })
 
-// frontendUncalled 判断模型是否只能经官网前端尚未调用的 RPC 使用（Gemini Decision 的 createDecision）
-function frontendUncalled(model: Model): boolean {
-  return model.methods.includes('createDecision')
+// hiddenHelp 返回在 AI Studio 官网中隐藏的模型的说明，其他模型为 null
+function hiddenHelp(model: Model): TranslationKey | null {
+  if (model.methods.includes('createDecision')) return 'models.decisionHiddenHelp'
+  return model.hidden ? 'models.hiddenHelp' : null
+}
+
+// accountRisk 判断模型是否经 Build 写代码助手回答，使用时有账户被限制的风险
+function accountRisk(model: Model): boolean {
+  return model.channels?.includes('assistant') ?? false
 }
 
 // capabilityNames 返回模型明确启用的能力名称
@@ -238,7 +244,10 @@ function modelSummary(model: Model): string {
           <option v-for="method in methods" :key="method" :value="method">{{ method }}</option>
         </UiSelect>
         <span v-if="!loading" class="shrink-0 text-xs text-gray-500 tabular-nums">{{
-          t('models.count').replace('{count}', String(filteredModels.length))
+          t(filteredModels.length === 1 ? 'models.countOne' : 'models.count').replace(
+            '{count}',
+            String(filteredModels.length),
+          )
         }}</span>
       </div>
 
@@ -286,18 +295,18 @@ function modelSummary(model: Model): string {
                 {{ t('models.paid') }}
               </span>
               <span
-                v-if="frontendUncalled(model)"
-                v-tooltip="t('models.frontendUncalledHelp')"
-                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
-              >
-                {{ t('models.frontendUncalled') }}
-              </span>
-              <span
-                v-if="model.hidden"
-                v-tooltip="t('models.hiddenHelp')"
+                v-if="hiddenHelp(model)"
+                v-tooltip="t(hiddenHelp(model)!)"
                 class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
               >
                 {{ t('models.hidden') }}
+              </span>
+              <span
+                v-if="accountRisk(model)"
+                v-tooltip="t('models.accountRiskHelp')"
+                class="shrink-0 rounded border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-xs font-medium text-amber-300"
+              >
+                {{ t('models.accountRisk') }}
               </span>
             </div>
             <code v-tooltip.overflow="model.id" class="block truncate text-xs text-blue-400">{{
@@ -355,15 +364,18 @@ function modelSummary(model: Model): string {
           <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{ detail.details.warning }}
         </p>
         <p
-          v-if="frontendUncalled(detail)"
+          v-if="hiddenHelp(detail)"
+          class="flex items-start gap-2 text-xs leading-5 text-amber-200"
+        >
+          <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{ t(hiddenHelp(detail)!) }}
+        </p>
+        <p
+          v-if="accountRisk(detail)"
           class="flex items-start gap-2 text-xs leading-5 text-amber-200"
         >
           <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{
-            t('models.frontendUncalledHelp')
+            t('models.accountRiskHelp')
           }}
-        </p>
-        <p v-if="detail.hidden" class="flex items-start gap-2 text-xs leading-5 text-amber-200">
-          <UiIcon name="warning" :size="14" class="mt-0.5 shrink-0" />{{ t('models.hiddenHelp') }}
         </p>
         <div>
           <dl class="grid grid-cols-2 gap-3 font-mono text-xs sm:grid-cols-4">

@@ -62,6 +62,10 @@ type Profile struct {
 	TrustedTypes bool
 	// NavigationStart 是页面导航开始的时间，为零时页面时间起点取宿主安装时刻
 	NavigationStart time.Time
+	// Navigation 是顶层页面 PerformanceNavigationTiming 的取值，以导航开始为零点的毫秒数
+	Navigation map[string]any
+	// DOMLoading 是顶层页面旧版 performance.timing.domLoading 相对导航开始的毫秒数
+	DOMLoading int
 }
 
 // closureListenerMapPattern 匹配 Closure 事件库在页面载入时以随机数命名的监听表全局名
@@ -177,6 +181,8 @@ type agent struct {
 	shared          mozjs.Handle
 	track           mozjs.Handle
 	notify          mozjs.Handle
+	activate        mozjs.Handle
+	mouseInput      mozjs.Handle
 	array           mozjs.Handle
 	top             *realmHost
 	realms          []*realmHost
@@ -398,6 +404,12 @@ func (state *agent) installAgent(result mozjs.Handle) error {
 	if state.notify, err = handleOf(cx.Get(result, "notify")); err != nil {
 		return err
 	}
+	if state.activate, err = handleOf(cx.Get(result, "activate")); err != nil {
+		return err
+	}
+	if state.mouseInput, err = handleOf(cx.Get(result, "mouseInput")); err != nil {
+		return err
+	}
 	reporter, err := handleOf(cx.Get(result, "reportMicrotask"))
 	if err != nil {
 		return err
@@ -546,6 +558,9 @@ func (state *agent) realmProfile(realm string) map[string]any {
 		if width, ok := profile.Window["innerWidth"]; ok {
 			values["visualViewport"] = map[string]any{"width": width, "height": profile.Window["innerHeight"]}
 		}
+		if len(profile.Navigation) > 0 {
+			values["performance.navigationEntry"] = profile.Navigation
+		}
 	} else {
 		for _, name := range frameWindowNames {
 			if value, ok := profile.Window[name]; ok {
@@ -563,6 +578,9 @@ func (state *agent) realmProfile(realm string) map[string]any {
 		}
 	}
 	result := map[string]any{"hasFocus": profile.HasFocus, "window": window, "values": values}
+	if realm == "top" && len(profile.Navigation) > 0 {
+		result["domLoading"] = profile.DOMLoading
+	}
 	if realm == "top" && len(profile.Globals) > 0 {
 		result["globals"] = profile.Globals
 	}

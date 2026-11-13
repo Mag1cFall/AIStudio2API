@@ -755,7 +755,7 @@ func parseBidiContent(raw json.RawMessage, evidence json.RawMessage) ([]BidiEven
 	decoder := NewFrameDecoder()
 	events := make([]BidiEvent, 0, len(parts))
 	for index, partRaw := range parts {
-		decoded, err := decoder.decodePart(partRaw, fmt.Sprintf("$message[2][0][0][%d]", index), evidence)
+		decoded, err := decoder.decodePart(nil, partRaw, fmt.Sprintf("$message[2][0][0][%d]", index), evidence)
 		if err != nil {
 			return nil, withBidiMethod(err)
 		}

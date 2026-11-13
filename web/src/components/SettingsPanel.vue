@@ -188,7 +188,7 @@ function setWorkerRange(range: number[] | undefined): void {
 
 // capacitySummary 是当前容量下最多同时处理的请求数：运行的 Worker 数不超过账户数
 const capacitySummary = computed(() =>
-  t('settings.capacitySummary')
+  t(props.accounts.length === 1 ? 'settings.capacitySummaryOne' : 'settings.capacitySummary')
     .replace(
       '{requests}',
       String(
@@ -390,6 +390,8 @@ async function saveConfig(): Promise<void> {
   try {
     const saved = await api.saveConfig({
       ...form,
+      warm_worker_limit: Math.min(form.warm_worker_limit, form.max_active_workers),
+      warm_startup_concurrency: Math.min(form.warm_startup_concurrency, form.max_active_workers),
       ...(adminPassword.value ? { admin_password: adminPassword.value } : {}),
     })
     emit('saved', saved)
@@ -698,7 +700,7 @@ async function saveConfig(): Promise<void> {
                     v-for="item in capacityItems"
                     :key="item.field"
                     :for="`setting-${item.field}`"
-                    class="block text-xs text-gray-400"
+                    class="flex flex-col justify-between text-xs text-gray-400"
                   >
                     {{ t(item.label) }}
                     <input

@@ -83,13 +83,11 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 			d.latestToken = frameToken
 		}
 	}
-	events := make([]Event, 0, 4)
+	events := make([]Event, 0, 1)
 	if len(candidate) > 0 && !isJSONNull(candidate[0]) {
-		contentEvents, err := d.decodeContent(candidate[0], raw)
-		if err != nil {
+		if events, err = d.decodeContent(events, candidate[0], raw); err != nil {
 			return nil, err
 		}
-		events = append(events, contentEvents...)
 	}
 	if citationsRaw := rawAt(candidate, 6); !isJSONNull(citationsRaw) {
 		citations, err := decodeCitations(citationsRaw, raw)
@@ -300,13 +298,14 @@ func (d *FrameDecoder) End() error {
 	return &StreamInterruptedError{Method: "GenerateContent", Frames: d.frames, Err: errMissingFinishFrame}
 }
 
-func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
+// decodeContent 把候选内容各 part 的事件追加到 events
+func (d *FrameDecoder) decodeContent(events []Event, raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
 	content, err := rawArray(raw, "$[0][][0][0][0]", evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if len(content) == 0 {
-		return nil, nil
+		return events, nil
 	}
 	role, err := rawString(rawAt(content, 1), "$[0][][0][0][0][1]", evidence)
 	if err != nil {
@@ -317,24 +316,22 @@ func (d *FrameDecoder) decodeContent(raw json.RawMessage, evidence json.RawMessa
 	}
 	partsRaw := rawAt(content, 0)
 	if isJSONNull(partsRaw) {
-		return nil, nil
+		return events, nil
 	}
 	parts, err := rawArray(partsRaw, "$[0][][0][0][0][0]", evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
-	events := make([]Event, 0, len(parts))
 	for index, partRaw := range parts {
-		partEvents, err := d.decodePart(partRaw, fmt.Sprintf("$[0][][0][0][0][0][%d]", index), evidence)
-		if err != nil {
+		if events, err = d.decodePart(events, partRaw, fmt.Sprintf("$[0][][0][0][0][0][%d]", index), evidence); err != nil {
 			return nil, err
 		}
-		events = append(events, partEvents...)
 	}
 	return events, nil
 }
 
-func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence json.RawMessage) ([]Event, error) {
+// decodePart 把一个 part 的事件追加到 events
+func (d *FrameDecoder) decodePart(events []Event, raw json.RawMessage, path string, evidence json.RawMessage) ([]Event, error) {
 	part, err := rawArray(raw, path, evidence)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
@@ -353,7 +350,7 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			return nil, withMethod(err, "GenerateContent")
 		}
 	}
-	events := make([]Event, 0, 2)
+	start := len(events)
 	textEvent := -1
 	if textRaw := rawAt(part, 1); !isJSONNull(textRaw) {
 		text, err := rawString(textRaw, path+"[1]", raw)
@@ -438,8 +435,8 @@ func (d *FrameDecoder) decodePart(raw json.RawMessage, path string, evidence jso
 			}
 		}
 	}
-	if len(events) == 0 && signature != "" {
-		return []Event{{Kind: EventThoughtSignature, ThoughtSignature: signature}}, nil
+	if len(events) == start && signature != "" {
+		events = append(events, Event{Kind: EventThoughtSignature, ThoughtSignature: signature})
 	}
 	return events, nil
 }

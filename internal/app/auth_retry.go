@@ -141,6 +141,11 @@ func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accoun
 	return transport.transport.(aistudio.DriveFileChecker).DriveFileExists(ctx, accountID, token, fileID)
 }
 
+// UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
+func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
+	return transport.transport.(aistudio.AssistantUploader).UploadAssistantFile(ctx, accountID, blob)
+}
+
 // newAuthRuntimeRefresher 创建生产环境认证续签器
 func newAuthRuntimeRefresher(
 	workers *accountWorkerManager,
@@ -340,6 +345,17 @@ func (transport *authRetryProtectedTransport) DoProtectedTitle(
 ) (*aistudio.RPCResponse, error) {
 	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
 		return transport.transport.(aistudio.TitleProtectedTransport).DoProtectedTitle(ctx, request, rpc)
+	})
+}
+
+// DoProtectedApplet 在认证失败后续签同一账户并重放 Build 应用与云项目请求
+func (transport *authRetryProtectedTransport) DoProtectedApplet(
+	ctx context.Context,
+	request aistudio.AppletProtectedRequest,
+	rpc aistudio.RPCRequest,
+) (*aistudio.RPCResponse, error) {
+	return transport.refresher.do(ctx, rpc.Method, func() (*aistudio.RPCResponse, error) {
+		return transport.transport.(aistudio.AppletProtectedTransport).DoProtectedApplet(ctx, request, rpc)
 	})
 }
 

@@ -118,6 +118,8 @@ Google 对部分账户强制设备绑定会话：OAuthMultilogin 响应的 `devi
 
 OAuthMultilogin 以该 Profile 的 Chrome 身份发出，请求头与 Chrome `GaiaAuthFetcher` 相同：HTTP/2 下依次为 `content-length`、`authorization`、`content-type`、`sec-fetch-site: none`、`sec-fetch-mode: no-cors`、`sec-fetch-dest: empty`、`user-agent`、`accept-encoding: gzip, deflate, br, zstd`、`accept-language` 与 `priority: u=4, i`。`user-agent` 的主版本取 User Data 的 `Last Version`；`accept-language` 取 Profile `Preferences` 的 `intl.accept_languages`，没有该项时取 `intl.selected_languages`，按 Chromium 的规则在带地区的语言后补主语言并依次加 `q=0.9` 到 `q=0.1`。导入与续签都读取账户导入来源的 User Data 目录中当前的 Chrome 版本与该 Profile 的语言设置，来源没有记录目录时读取稳定版 Chrome 的默认目录。
 
+OAuthMultilogin 与 DBSC 刷新的 TLS 与 HTTP/2 形状同 Chrome 157：ClientHello 的扩展集合与 Chrome 相同、每条连接重新随机排列，签名算法以 GREASE 与 ML-DSA（`0x0904`–`0x0906`）开头，trust_anchors 扩展带 Chrome 根证书库的信任锚 ID 列表，ALPS、证书压缩、GREASE ECH 与 key share 同 Chrome；HTTP/2 的 SETTINGS、WINDOW_UPDATE 与伪头顺序同 Chrome。OAuthMultilogin 与绑定 Cookie 仍有效时的 DBSC 刷新按 Chrome 的 IDLE 优先级发出（HEADERS 帧权重 110、`priority: u=4, i`），绑定 Cookie 已缺少或到期时的 DBSC 刷新按 HIGHEST 优先级发出（权重 256、`priority: u=0, i`）；DBSC 刷新请求头依次为 `content-length`、`sec-fetch-mode`、`sec-fetch-dest`、`sec-fetch-site`、`origin`、`sec-secure-session-id`、`secure-session-response`（带签名时）、`user-agent`、`accept-encoding`、`accept-language`、`cookie` 与 `priority`。
+
 Chrome 导入状态在 `storage-state.json` 的 `aistudio2api` 扩展中保存来源（浏览器、User Data 目录、Profile 与邮箱）、Gaia ID、refresh token、wrapped binding key 与 DBSC 会话登记。登录页跳转、签名 Cookie 失效、HTTP `401` 与协议 Code 16 进入同一认证恢复流程，覆盖 Worker 预热、按需启动、普通 RPC、受保护 RPC 与 Live 建连。服务优先在同一账户出口续签 Cookie；保存的 OAuth 材料被拒绝时，从当前 Chrome 匹配原账户邮箱与 Gaia ID，更新来源材料。没有 OAuth 材料的账户（Cookie 导入、外部 storage state 与隔离 Camoufox 登录的账户）在本机 Chrome 登录着同一邮箱时，从 Chrome 导入该邮箱的材料并写入扩展，此后按 Chrome 导入账户续签；在账户页重新登录时沿用账户已保存的 OAuth 材料。有效 Cookie 提交后使动态头失效、关闭该账户 WAA runtime，并重放一次。恢复失败后，服务以账户的指纹、出口与保存的 Cookie 打开 AI Studio 新对话页：被转到 Google 登录页时账户标为 `auth_required`，管理事件同步发布账户状态，后续调度使用其他合格账户；页面正常打开时账户状态不变，只有该次请求失败或换号。
 
 认证恢复等待同账户的正常请求结束；并发失效复用一次提交结果。替换登录材料推进认证代际，旧请求的认证结果按代际和请求顺序写回；生成正常结束后确认认证有效。HTTP `403`、协议 Code 7 与 Drive `unauthorized_client` 保留模型权限或 Drive 授权含义。隔离 Camoufox 登录和外部 storage state 在本机 Chrome 没有同一邮箱时只使用各自的登录材料。
@@ -177,7 +179,7 @@ Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secu
 | `auth/.leases/<Google 邮箱>.runtime.lock` | 每次 `runtime-state.json` 读取、合并与写回的短事务锁 |
 | `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
 
-Google 邮箱的小写形式同时作为账户目录、管理页面标识和日志来源。新账户的 locale 与 timezone 读取当前电脑设置，管理页面使用浏览器语言和 IANA 时区；CLI 使用操作系统语言和时区。初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。同一电脑上的多个进程按邮箱共享 WAA runtime lease，调度器只会为未被占用的邮箱创建 Worker。
+Google 邮箱的小写形式同时作为账户目录、管理页面标识和日志来源。新账户的 locale 与 timezone 未填写时按出口地理位置填写：服务经账户出口（账户代理、代理池或全局代理，没有代理时直连）向 IP 回显服务（api.ipify.org，失败时依次换用 checkip.amazonaws.com、ipinfo.io、icanhazip.com、ifconfig.co、ipecho.net）查询公网 IP，在本地 IP 库中查出国家与时区，语言取该国 CLDR 最可能的语言与国家组合（JP 为 ja-JP、TW 为 zh-TW、CH 为 de-CH）。IP 库为 Camoufox 默认使用的 GeoIP AIO（`daijro/geoip-all-in-one` 按 IPv4、IPv6 发布的 mmdb），首次使用时经同一出口下载到 `runtime/geoip/`，文件超过 8 天时重新下载；回显与下载请求只带默认请求头，不含账户信息。已有账户的语言与时区不变。初始化、WAA、MakerSuite、OAuth 续签和 Drive 使用账户固定代理。locale 同时设置 navigator language、Accept-Language 与地区，timezone 设置浏览器时区；重新登录和 WAA runtime 复用同一账户指纹。同一电脑上的多个进程按邮箱共享 WAA runtime lease，调度器只会为未被占用的邮箱创建 Worker。
 
 `runtime-state.json` 根字段为 `cooldowns`、`resources`、`model_access`、`benefit_tier`、`catalog_fingerprint`。cooldown value 为 `{until,reason?}`；model access value 为 `{state,checked_at,reason?}`；resource value 为 `{kind?,name?,mime?,size?,purpose?,created_at,video?:{model,seconds,size,file?,prompt?,completed_at?},alias?,sha256?,video_duration?,used_at?,display_name?,expires_at?}`：`alias` 为上传时指定的公开文件 ID，`sha256` 为内容的 SHA-256 摘要（Base64），`video_duration` 为视频时长（纳秒），`used_at` 为内联附件最近被请求引用的时间，`display_name` 为内联附件在请求中给出的文件名，`expires_at` 为上传文件的到期时间。
 
@@ -198,7 +200,7 @@ Google 邮箱的小写形式同时作为账户目录、管理页面标识和日�
 | 2 | Ultra | `X-AIStudio-G1-Tier: TIER2` |
 | 3 | Plus | `X-AIStudio-G1-Tier: TIER0` |
 
-官网为 `GenerateContent`、`CountTokens`、Interaction 与 `StreamExtractVideoFrames` 注入该 header。模型 field 83 描述访问方式：`1` 为付费 API key，`3` 为 Pro/Ultra 订阅，`4` 为 Ultra 订阅。公开模型目录合并全部账户的实时 `ListModels` 记录；账户调度使用 AccessModes、BenefitTier 与成功调用历史选择具体账户。
+官网为 `GenerateContent`、`CountTokens`、Interaction、Code Assistant 与 `StreamExtractVideoFrames` 注入该 header。模型 field 83 描述访问方式：`1` 为付费 API key，`3` 为 Pro/Ultra 订阅，`4` 为 Ultra 订阅。公开模型目录合并全部账户的实时 `ListModels` 记录；账户调度使用 AccessModes、BenefitTier 与成功调用历史选择具体账户。
 
 ### 条款同意
 
@@ -263,7 +265,7 @@ snapshot 的底层输入是四槽数组，首槽承载 binding：
 [{content: sha256(bindingPrompt)}, undefined, undefined, undefined]
 ```
 
-返回值是 `!` 开头的 proof。`GenerateContent`、`CreateInteractionStream`、`CreateInteraction` 与 `GetInteractionStream` 写入 field 5，Build 代理写入 field 3，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
+返回值是 `!` 开头的 proof。`GenerateContent`、`CreateInteractionStream`、`CreateInteraction` 与 `GetInteractionStream` 写入 field 5，Build 代理写入 field 3，Build 写代码助手 `CodeAssistantOffline` 写入 field 2，Bidi 的每个客户端 wire 写入 field 6；原请求的其他槽位保持不变。GenerateContent 按 contents 和 parts 原顺序以单个空格连接。
 
 `Waa/Ping` 请求和成功响应：
 
@@ -329,7 +331,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 54 | image search | 58 | Google Maps |
 | 59 | private Interaction route | 85 | TTS 分段说话人 |
 | 69 | Agentic 视频理解 | | |
-| 46 | Live 实时翻译 | | |
+| 46 | Live 实时翻译 | 48 | Build 写代码助手可选 |
 
 未知能力码按原值保留为 `capability_code_<N>` 或 `secondary_capability_code_<N>`。
 
@@ -351,7 +353,7 @@ field 1 是 `request_key`，field 2 是 `botguard_response`。正确 proof、损
 | 76 | `transcription_language_codes` | 77 | `transcription_output` |
 | 80 | `transcription_speaker_labels` | 81 | `transcription_custom_vocabulary` |
 | 84 | `transcription_smart` | 85 | `speech_metadata` |
-| 46 | `speech_translation` | | |
+| 46 | `speech_translation` | 48 | `code_assistant` |
 
 每个主能力码都保留为 `capability_code_<N>`，同时为上表中的已知码增加语义键；次能力码保留为 `secondary_capability_code_<N>`；field 82 中默认开启的码保留为 `default_capability_code_<N>`；有 field 79 的模型带 `interactions_api`，其中经后台任务生成的模型另带 `interaction_task`。
 
@@ -457,6 +459,7 @@ Content 形状：
 | 12 | 13 | thought boolean |
 | 14 | 15 | thought signature |
 | 15 | 16 | 视频静态处理元数据 `[startOffset?, endOffset?, fps?]`；offset 为 `[seconds,nanos?]` |
+| 17 | 18 | 上传附件 `[mime, 上传路径, 文件名, 字节数]`，字节数为十进制字符串；用于 Build 写代码助手，见 [Build 通道](build.md) 第 8 节 |
 | 22 | 23 | transcription metadata `[text, speaker?, timestamp spans?]` |
 | 25 | 26 | 服务端媒体处理调用 `[13, name?, Struct?, callId?]` |
 | 26 | 27 | 服务端媒体处理结果 `[13, name?, Struct?, callId?]` |
@@ -539,6 +542,8 @@ generation config 字段：
 `reasoning_effort` / `thinkingLevel` / Anthropic `output_config.effort` 接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max`，`xhigh`、`extra_high` 与 `max` 对应官网的 Extra High 档位（目录中写作 `EXTRA_HIGH`），模型没有这一档时按 `high` 处理；Interactions 通道按 `high` 处理；`THINKING_LEVEL_UNSPECIFIED` 视为未设置。`none` 在只支持 thinking budget 的模型使用预算 0，支持 thinking level 的模型使用最低可用 level。模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high；没有 thinking level 能力的模型忽略其余 effort，两类能力都缺少时同时忽略 budget。
 
 生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
+
+能力码 48 的模型在目录中另有 `<模型 ID>-build` 条目，经 Build 写代码助手生成，思考后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`；条目定义、请求与流格式见 [Build 通道](build.md) 第 8 节。
 
 模型名等于 `MODEL_MAPPING` 中的别名（可带 `models/` 前缀）时，生成、计数、embedding、Live、视频与转录请求先换成映射的模型名，再解析思考后缀，映射目标可以带后缀，例如 `fast:gemini-4-argon(low)`；别名本身带后缀时以该后缀替换目标自带的后缀，例如 `fast(high)` 按 `gemini-4-argon(high)` 处理。同一别名写了多次时以第一项为准，映射只替换一次。`/v1/models` 与 `/v1beta/models` 在目录之后列出目标在目录中的别名，字段取自目标模型；与目录 ID 同名的别名替换该条目。
 
@@ -668,7 +673,7 @@ Part 文本带 `part[12]=1` 时属于 reasoning summary，普通文本属于可�
 | --- | --- | --- |
 | OpenAI Chat | assistant tool call 的 `extra_content.google.thought_signature` | tool call 的同名扩展字段 |
 | OpenAI Responses | `reasoning.encrypted_content` 紧邻后续 `function_call` | `include` 含 `reasoning.encrypted_content` 时为 reasoning item 的 `encrypted_content` |
-| Anthropic | `thinking` 或 `redacted_thinking` block 的 `signature` | thinking block 的 `signature` |
+| Anthropic | `thinking` block 的 `signature` 或 `redacted_thinking` block 的 `data` | thinking block 的 `signature` |
 | Gemini | 数据 Part 或独立 Part 的 `thoughtSignature` | Part 的 `thoughtSignature` |
 
 OpenAI Chat 的 assistant tool call 未带 `extra_content` 时，服务按调用 ID、函数名和参数补回本进程最近签发的签名；查不到时写入 `skip_thought_signature_validator`。
@@ -770,7 +775,7 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 | 18 | missing_thought_signature | 19 | malformed_response |
 | 22 | continuation | 其他整数 | `provider_<code>` |
 
-Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call`、`unexpected_tool_call` 或 `malformed_response` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时（不输出给客户端的搜索、网址上下文、地图与文件检索步骤不计入，MCP 调用计入），服务在同一账户上以同一请求重新生成；已经输出纯文本且没有输出函数调用、媒体、可执行代码与服务端工具步骤时，Playground 与 Build 通道在同一账户上把已输出纯文本作为 model 轮并附上带 `<partial_reply>`（最后至多 20000 个字符）的用户提示继续生成，续写轮开头重复已输出正文的前缀自动去掉并保留思考签名，用量按续写合并。两种情况合计最多 3 次，之后按最后一次的终止原因或中断错误结束；被重新生成取代的那一次的网页来源与引用不输出，每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
+Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为上表的同名小写原因，上表没有的名称为 `provider_<小写名称>`。上游以 `malformed_function_call`、`unexpected_tool_call` 或 `malformed_response` 结束，或流在完成帧之前中断、以 5xx 流尾状态结束，且这次生成没有输出正文、函数调用与媒体时（不输出给客户端的搜索、网址上下文、地图与文件检索步骤不计入，MCP 调用计入），服务在同一账户上以同一请求重新生成，最多再生成 3 次，之后按最后一次的终止原因或中断错误结束；被重新生成取代的那一次的网页来源与引用不输出，每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀不输出，重新生成的请求发送失败时本次生成以该错误结束。两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
 
 候选 field 5（`$[0][frame][0][0][4]`）为安全评级 `[[null, null, 类别, 概率, blocked?], ...]`，类别编号与安全设置相同，概率 `NEGLIGIBLE`=1、`LOW`=2、`MEDIUM`=3、`HIGH`=4；输入拒绝帧 `[null,[block_reason,ratings?,message]]` 的 ratings 为同形数组。Build 通道读取候选与 `promptFeedback` 的 `safetyRatings`。
 
@@ -844,7 +849,7 @@ Interactions 的 `google_search`、`google_maps`、`computer_use`、`mcp_server`
 
 编码器将全部函数声明合并为一个 Tool entry；Google Search 与 Image Search 合并为一个 search entry 并分别占用 `searchTypes` 索引 `0/1`；Code Execution、URL Context 与 Maps 各占一个 entry。Google Maps 与 Code Execution/URL Context 构成互斥工具组，每个请求选择其中一组。Anthropic server tool 的定义规则见“Anthropic Messages”节。
 
-Playground 的 `GenerateContent` 与 `CountTokens` 接受最长 63 字符的函数名。更长的名称在函数声明、历史函数调用与函数结果中统一编码为原名的前 50 个字符、`_` 与原名 SHA-256 前 6 字节的十六进制，共 63 字符；上游返回的函数调用在交给公开协议前换回声明的原名。Live 会话按原名发送。
+Playground 的 `GenerateContent` 与 `CountTokens` 接受最长 63 字符的函数名。更长的名称在函数声明、历史函数调用与函数结果中统一编码为原名的前 50 个字符、`_` 与原名 SHA-256 前 6 字节的十六进制，共 63 字符；上游返回的函数调用在交给公开协议前换回声明的原名。写代码助手与 Live 会话按原名发送。
 
 函数 JSON Struct 使用 protobuf `Struct/Value` 数组：map 为 `[[[key,value],...]]`；Value oneof 索引 `0..5` 分别表示 null、number、string、bool、Struct、ListValue。对象键排序后编码。
 
@@ -963,7 +968,7 @@ Playground 的函数参数载体和结构化输出 Schema 使用以下 protobuf 
 | Anthropic | 默认、`auto`、`none` | `any`、named `tool` |
 | Gemini | 默认、`AUTO`、`NONE`、`VALIDATED` | `ANY` 与 `allowedFunctionNames` |
 
-函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。tool result 显式提供函数名时保留该值；缺少名称时，先按 call ID 关联当前轮尚未返回结果的调用，未匹配且仅剩一个调用时使用其名称。每个结果对应一个调用，调用与结果之间的助手文本不影响关联，新一轮普通对话开始后重新建立关联；存在歧义或缺少调用记录时返回参数错误。函数参数和结果使用 JSON object，非对象的参数与结果封装为 `{"result":<VALUE>}`，与 Build 的 Gemini API 编码相同。
+函数调用响应 Part 为 `[name, Struct, callId?]`；下一轮 function result 使用同一形状并原样带回 thought signature。tool result 先按 call ID 关联当前轮尚未返回结果的调用，未匹配且仅剩一个调用时关联该调用，再按函数名关联同名调用；显式提供的函数名保留，缺少名称时使用所关联调用的名称。每个结果对应一个调用，调用与结果之间的助手文本不影响关联，新一轮普通对话开始后重新建立关联；关联不到调用的结果（存在歧义或缺少调用记录）以 `{"functionResponse":{"name":...,"response":...}}` 文本作为普通文本 Part 发送，四个协议与 Build 通道相同。函数参数和结果使用 JSON object，非对象的参数与结果封装为 `{"result":<VALUE>}`，与 Build 的 Gemini API 编码相同。
 
 四个协议的工具结果为内容块数组（每个元素带 `type`）时，文本块以换行相连写成 `{"result":"<文本>"}`，错误结果写成 `{"error":"<文本>"}`；图片、文档、音频与视频块按所属协议的媒体规则转换，作为紧随该函数结果的 Part 发送；其他块以 JSON 文本并入结果文本。Gemini `functionResponse.parts` 中的 `inlineData` 与 `fileData` 同样作为紧随该函数结果的 Part 发送。
 
@@ -1275,7 +1280,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | 管理登录 | `GET /api/auth/session`、`POST /api/auth/login`、`POST /api/auth/logout` |
 | 状态与模型 | `GET /api/status`、`GET /api/models` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 账户 | `GET /api/accounts`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
+| 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
 | 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
@@ -1291,6 +1296,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `GET /api/status` | 200 | `AdminStatus` |
 | `GET /api/models` | 200 | `{"models":[Model,...]}` |
 | `GET /api/accounts` | 200 | `{"accounts":[AdminAccount,...]}` |
+| `GET /api/accounts/exits` | 200 | `{"exits":[AccountExit,...]}` |
 | `POST /api/accounts` | 202 | `{"task":AccountTask}` |
 | `GET /api/accounts/import/chrome` | 200 | `{"profiles":[ChromeImportProfile,...]}` |
 | `POST /api/accounts/import/chrome` | 202 | `{"task":AccountTask}` |
@@ -1337,16 +1343,17 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `AdminAccountCounts` | `total`、`ready`、`busy`、`cooldown`、`auth_required` |
 | `AdminCamoufox` | `ready`、可选 `download`（`received`、`total`） |
 | `AdminAccount` | `id`、`label`、`enabled`、`state`、`proxy`、`locale`、`timezone`、`models`、`benefit_tier`、`message`、`active_requests`、可选 `pairing_renewed_at`、可选 `transition` |
+| `AccountExit` | `proxy`（账户出口代理，空为直连）、可选 `ip`、`country`、`timezone`、`locale`、`error`（查询失败的原因） |
 | `AccountCreateInput` | `proxy`、`locale`、`timezone` |
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
-| `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`locale` |
+| `ChromeImportProfile` | `id`、`profile`、`display_name`、`email`、`restricted` |
 | `AccountRefresh` | `account`、`previous_tier`、`tier`、`previous_models`、`models` |
 | `ChromeImportInput` | `accounts`（每项 `id` 与 `email`）、`proxy`、`locale`、`timezone` |
 | `CookieImportInput` | `cookies`、`proxy`（识别 Cookie 中的账户时提交） |
-| `CookieAccountsInput` | `items`（每项 `email`、`cookies` 或 `cdp`、可选 `auth_user`：Cookie 中的会话序号 0–9，默认 0）、`proxy`、`locale`、`timezone`；`cdp` 导入时 `locale`、`timezone` 为空则取该浏览器页面的语言与时区 |
+| `CookieAccountsInput` | `items`（每项 `email`、`cookies` 或 `cdp`、可选 `auth_user`：Cookie 中的会话序号 0–9，默认 0）、`proxy`、`locale`、`timezone` |
 | `AccountTask` | `id`、`kind`（`login`、`relogin`、`chrome`、`cookies`、`browser`）、可选 `view`、`state`（`running`、`done`、`failed`）、`items`、`started_at` |
 | `AccountTaskItem` | `label`（账户邮箱，浏览器登录完成前为空）、`state`（`pending`、`running`、`done`、`failed`）、可选 `code`、`error` |
-| `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`locale`、`timezone`、`imported`、`signed_out`、`error` |
+| `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`imported`、`signed_out`、`error` |
 | `PairingToken` | `token`、`expires_at` |
 | `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `auth_user`（默认 0）、可选 `fingerprint` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |
@@ -1390,6 +1397,7 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 - `AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取
 - `ChromeImportInput.account_ids` 可一次选择多个账号
 - `CookieImportInput.cookies` 接受 Cookie 扩展导出的 storage state 或 Cookie 数组 JSON、Netscape cookies.txt 和一行 Cookie 请求头，只保留 google.com 及其子域的 Cookie，`label` 为账户邮箱；`cdp` 非空时改从该远程调试地址读取浏览器的全部未分区 Cookie
+- `AccountCreateInput`、`ChromeImportInput`、`CookieAccountsInput` 与 `AccountStateInput` 的 `locale`、`timezone` 为空时按账户出口的地理位置填写；`GET /api/accounts/exits` 对各账户出口代理各查询一次公网 IP 与地理位置
 - `AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空；`proxy` 使用 HTTP、HTTPS 或 SOCKS5 origin，可带 `user:password@`，不含 path、query 或 fragment
 
 新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
@@ -1461,7 +1469,7 @@ POST /api/control/start
   -> if cache is empty, read the page catalog of every enabled ready/busy account
      and wait for the first non-empty live catalog
   -> prewarm up to WARM_WORKER_LIMIT workers
-     with WARM_STARTUP_CONCURRENCY bootstraps
+     one at a time
   -> first worker ready, or every warmable account is cooling
   -> RUNNING
   -> with a cache, read page catalogs after the first worker result
@@ -1689,7 +1697,7 @@ OpenAI Chat 与 Anthropic 省略转换后没有 parts 的空历史消息；纯�
 
 - OpenAI Chat 与 Responses 的 `parallel_tool_calls` 省略或为 `true` 时允许并行；Responses 同时把该值写入响应元数据
 - Responses `truncation:auto` 按上游权威计数移除最早的完整对话轮次，保留最新轮次与工具调用/结果配对；省略或 `disabled` 时保留完整输入
-- Anthropic 省略 `thinking` 或 `thinking.type:"disabled"` 时不返回思考正文，续接签名以 `redacted_thinking` 保持；未知 type 返回 `400 invalid_request_error`
+- Anthropic 省略 `thinking` 或 `thinking.type:"disabled"` 时不返回思考正文，续接签名放在正文为空的 `thinking` block 的 `signature` 中；未知 type 返回 `400 invalid_request_error`
 - Chat、Responses 与 Gemini 的协议专属参数见各协议小节
 
 ### OpenAI Chat Completions
@@ -2101,7 +2109,7 @@ server tool 接受对应 `type`、`name` 与任意工具选项（如 Claude Code
 
 `stop_details`、`container` 与 `usage.inference_geo` 为 null；`usage.server_tool_use` 在发生网页搜索或网址读取时为 `{web_search_requests,web_fetch_requests}`，其余为 null；`usage.service_tier` 在上游用量报告 `priority` 时为 `priority`，其余为 `standard`。text block 带 `citations`，没有引用时为 null。
 
-content 输出 block 为 `text`、`thinking`、`redacted_thinking`、`tool_use`、`server_tool_use`、`web_search_tool_result` 或 `compaction`；thinking block 总带 `signature`，签名不在该 block 上时为空字符串。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn`、`compaction` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`；它提供独立计数估算，PDF 等媒体请求的最终用量以生成响应 `usage.input_tokens` 为准。
+content 输出 block 为 `text`、`thinking`、`tool_use`、`server_tool_use`、`web_search_tool_result` 或 `compaction`；thinking block 总带 `signature`，签名不在该 block 上时为空字符串。stop reason 为 `end_turn`、`tool_use`、`stop_sequence`、`max_tokens`、`pause_turn`、`compaction` 或 `refusal`。`POST /v1/messages/count_tokens` 接受同一 message/system/tools 输入并返回 `{"input_tokens":<INT>}`；它提供独立计数估算，PDF 等媒体请求的最终用量以生成响应 `usage.input_tokens` 为准。
 
 Anthropic 响应中的媒体编码为 text block 中的 Markdown 链接，`MEDIA_OUTPUT=inline` 时为 data URL，`url` 时为本服务的 `/media/<文件名>` URL，代码编码为 fenced text。Google Search 的每个去重查询生成一组 `server_tool_use` 和 `web_search_tool_result`，结果按 URL 去重，来源集合覆盖本次搜索的全部查询。声明 `web_search` 时请求上游返回服务端工具步骤，每组搜索块位于对应搜索调用步骤之后；来源随上游末尾的 grounding 到达，流式响应中开头思考之后的块等到 grounding 到达后按发生顺序写出，等待期间发送 `ping`。`usage.server_tool_use.web_search_requests` 记录上游报告的去重查询数。grounding 中带正文区间的来源把搜索回答拆成多个 text block：被来源支撑的区间单独成块，`citations` 为 `[{"type":"web_search_result_location","url","title","encrypted_index","cited_text"}]`，`cited_text` 为该区间的回答正文，`encrypted_index` 与 `encrypted_content` 同样由本服务加密；其余正文的 `citations` 为 null。流式响应中带引用的块在 `content_block_start` 之后先以 `citations_delta{citation}` 逐条给出引用，再写出正文。URL Context 读取的每个网址按首次出现生成一组 `server_tool_use`（`name:"web_fetch"`、`input:{"url":...}`）和 `web_fetch_tool_result`：读取成功时 content 为 `{"type":"web_fetch_result","url":...,"retrieved_at":null,"content":{"type":"document","source":{"type":"text","media_type":"text/plain","data":""}}}`，上游不返回网页正文；`URL_RETRIEVAL_STATUS_UNSAFE` 为 `{"type":"web_fetch_tool_result_error","error_code":"url_not_allowed"}`，`URL_RETRIEVAL_STATUS_ERROR` 与 `URL_RETRIEVAL_STATUS_PAYWALL` 为 `url_not_accessible`，其余状态为 `unavailable`；`web_fetch_requests` 为读取的网址数。其余引用在末尾追加 `Sources:` Markdown 列表。
 
