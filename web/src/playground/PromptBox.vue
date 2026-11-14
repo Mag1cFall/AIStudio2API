@@ -192,10 +192,20 @@ const tokenCapOpen = ref(false)
 
 // placeholderHeight 是占位文字在当前宽度下的高度，输入框宽度、网页字体或界面语言变化后重新测量
 let placeholderHeight: number | undefined
+let lastLength = 0
 
 // resize 与官网 cdkTextareaAutosize 一致：输入框高度取内容与占位文字中较高者，超过 210 px 后在框内滚动
 function resize(): void {
-  const element = textarea.value!
+  const element = textarea.value
+  if (!element) return
+  const length = element.value.length
+  const grew = length > lastLength
+  lastLength = length
+  if (placeholderHeight !== undefined && grew) {
+    if (element.clientHeight < 210 && element.scrollHeight > element.clientHeight)
+      element.style.height = `${Math.min(element.scrollHeight, 210)}px`
+    return
+  }
   if (element.clientHeight >= 210 && element.scrollHeight > element.clientHeight) return
   element.style.height = 'auto'
   if (placeholderHeight === undefined) {
@@ -344,7 +354,9 @@ async function onPaste(event: ClipboardEvent): Promise<void> {
   if (text.length > largePaste) {
     event.preventDefault()
     await addFiles([new File([text], pasteName(), { type: 'text/plain' })])
+    return
   }
+  lastLength = Infinity
 }
 
 // textPart 表示片段是可以转回输入框文字的文本附件

@@ -443,6 +443,8 @@ function responseText(call: NonNullable<Part['functionCall']>): string {
     : JSON.stringify(response)
 }
 
+let editorLength = 0
+
 // startEdit 进入编辑：文本变为可编辑文本框
 async function startEdit(): Promise<void> {
   if (editing.value) {
@@ -451,6 +453,7 @@ async function startEdit(): Promise<void> {
   }
   draft.value = plainText()
   editing.value = true
+  editorLength = 0
   await nextTick()
   resizeEditor()
   editor.value!.focus({ preventScroll: true })
@@ -499,6 +502,14 @@ function onEditorBlur(event: FocusEvent): void {
 // resizeEditor 让编辑框随内容增高并保持滚动容器位置
 function resizeEditor(): void {
   const element = editor.value!
+  const length = element.value.length
+  const grew = editorLength > 0 && length > editorLength
+  editorLength = length
+  if (grew) {
+    if (element.scrollHeight > element.clientHeight)
+      element.style.height = `${element.scrollHeight}px`
+    return
+  }
   const scroller = element.closest<HTMLElement>('.chat-scroller')
   const top = scroller?.scrollTop
   element.style.height = 'auto'
@@ -863,6 +874,7 @@ onUnmounted(releasePreview)
           class="edit-textarea"
           :aria-label="t('pg.edit')"
           @input="resizeEditor"
+          @paste="editorLength = 0"
           @keydown="onEditorKeydown"
           @blur="onEditorBlur"
         ></textarea>
