@@ -443,6 +443,9 @@ function responseText(call: NonNullable<Part['functionCall']>): string {
     : JSON.stringify(response)
 }
 
+// editorText 是上次定高时编辑框的文字，文字只在末尾增加时按内容高度直接增高，进入编辑时为 undefined
+let editorText: string | undefined
+
 // startEdit 进入编辑：文本变为可编辑文本框
 async function startEdit(): Promise<void> {
   if (editing.value) {
@@ -451,6 +454,7 @@ async function startEdit(): Promise<void> {
   }
   draft.value = plainText()
   editing.value = true
+  editorText = undefined
   await nextTick()
   resizeEditor()
   editor.value!.focus({ preventScroll: true })
@@ -499,6 +503,15 @@ function onEditorBlur(event: FocusEvent): void {
 // resizeEditor 让编辑框随内容增高并保持滚动容器位置
 function resizeEditor(): void {
   const element = editor.value!
+  const text = element.value
+  const appended =
+    editorText !== undefined && text.length > editorText.length && text.startsWith(editorText)
+  editorText = text
+  if (appended) {
+    if (element.scrollHeight > element.clientHeight)
+      element.style.height = `${element.scrollHeight}px`
+    return
+  }
   const scroller = element.closest<HTMLElement>('.chat-scroller')
   const top = scroller?.scrollTop
   element.style.height = 'auto'

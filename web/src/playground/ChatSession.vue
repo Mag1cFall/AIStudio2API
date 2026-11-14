@@ -256,7 +256,7 @@ onUnmounted(() => {
   margin-top: 12px;
   overflow-y: auto;
   padding-top: var(--ms-autoscroll-container-padding-top);
-  container-type: size;
+  container-type: inline-size;
   outline: none;
   scrollbar-width: none;
 }
