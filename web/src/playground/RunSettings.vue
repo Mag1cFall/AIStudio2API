@@ -259,11 +259,17 @@ function setOutputLength(event: Event): void {
   input.value = String(settings.value.maxOutputTokens ?? '')
 }
 
-// onOutputLengthInput 在输入有效整数时同步更新输出长度，留待失焦或回车时修正空值与越界值
+// onOutputLengthInput 在输入写成规范十进制的有效整数时同步更新输出长度，留待失焦或回车时修正空值、越界值与前导零
 function onOutputLengthInput(event: Event): void {
   const value = numberInput(event)
   const limit = outputLimit(model.value) ?? Number.MAX_SAFE_INTEGER
-  if (value !== null && Number.isInteger(value) && value >= 1 && value <= limit)
+  if (
+    value !== null &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= limit &&
+    (event.target as HTMLInputElement).value === String(value)
+  )
     settings.value.maxOutputTokens = value
 }
 
