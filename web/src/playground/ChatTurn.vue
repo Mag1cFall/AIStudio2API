@@ -443,7 +443,8 @@ function responseText(call: NonNullable<Part['functionCall']>): string {
     : JSON.stringify(response)
 }
 
-let editorLength = 0
+// editorText 是上次定高时编辑框的文字，文字只在末尾增加时按内容高度直接增高，进入编辑时为 undefined
+let editorText: string | undefined
 
 // startEdit 进入编辑：文本变为可编辑文本框
 async function startEdit(): Promise<void> {
@@ -453,7 +454,7 @@ async function startEdit(): Promise<void> {
   }
   draft.value = plainText()
   editing.value = true
-  editorLength = 0
+  editorText = undefined
   await nextTick()
   resizeEditor()
   editor.value!.focus({ preventScroll: true })
@@ -502,10 +503,11 @@ function onEditorBlur(event: FocusEvent): void {
 // resizeEditor 让编辑框随内容增高并保持滚动容器位置
 function resizeEditor(): void {
   const element = editor.value!
-  const length = element.value.length
-  const grew = editorLength > 0 && length > editorLength
-  editorLength = length
-  if (grew) {
+  const text = element.value
+  const appended =
+    editorText !== undefined && text.length > editorText.length && text.startsWith(editorText)
+  editorText = text
+  if (appended) {
     if (element.scrollHeight > element.clientHeight)
       element.style.height = `${element.scrollHeight}px`
     return
@@ -874,7 +876,6 @@ onUnmounted(releasePreview)
           class="edit-textarea"
           :aria-label="t('pg.edit')"
           @input="resizeEditor"
-          @paste="editorLength = 0"
           @keydown="onEditorKeydown"
           @blur="onEditorBlur"
         ></textarea>
