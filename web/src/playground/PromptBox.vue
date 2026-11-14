@@ -192,16 +192,16 @@ const tokenCapOpen = ref(false)
 
 // placeholderHeight 是占位文字在当前宽度下的高度，输入框宽度、网页字体或界面语言变化后重新测量
 let placeholderHeight: number | undefined
-let lastLength = 0
+// measuredText 是上次定高时输入框的文字，文字只在末尾增加时按内容高度直接增高
+let measuredText = ''
 
 // resize 与官网 cdkTextareaAutosize 一致：输入框高度取内容与占位文字中较高者，超过 210 px 后在框内滚动
 function resize(): void {
-  const element = textarea.value
-  if (!element) return
-  const length = element.value.length
-  const grew = length > lastLength
-  lastLength = length
-  if (placeholderHeight !== undefined && grew) {
+  const element = textarea.value!
+  const text = element.value
+  const appended = text.length > measuredText.length && text.startsWith(measuredText)
+  measuredText = text
+  if (placeholderHeight !== undefined && appended) {
     if (element.clientHeight < 210 && element.scrollHeight > element.clientHeight)
       element.style.height = `${Math.min(element.scrollHeight, 210)}px`
     return
@@ -238,10 +238,7 @@ function onFontsLoaded(): void {
   measuredWidth = 0
   measureWidth(textarea.value!.clientWidth)
 }
-watch(
-  () => session.draft,
-  () => void nextTick(resize),
-)
+watch(() => session.draft, resize, { flush: 'post' })
 watch(placeholder, remeasure, { flush: 'post' })
 onMounted(() => {
   widthObserver.observe(textarea.value!)
@@ -354,9 +351,7 @@ async function onPaste(event: ClipboardEvent): Promise<void> {
   if (text.length > largePaste) {
     event.preventDefault()
     await addFiles([new File([text], pasteName(), { type: 'text/plain' })])
-    return
   }
-  lastLength = Infinity
 }
 
 // textPart 表示片段是可以转回输入框文字的文本附件
