@@ -716,7 +716,7 @@ func (d *BuildStreamDecoder) Decode(raw []byte) ([]Event, error) {
 	if len(response.Candidates) == 0 {
 		if response.PromptFeedback != nil && response.PromptFeedback.BlockReason != "" {
 			feedback := response.PromptFeedback
-			return nil, &PromptFeedbackError{Reason: buildEnumName(feedback.BlockReason, "BLOCK_REASON_"), Message: feedback.BlockReasonMessage, SafetyRatings: feedback.SafetyRatings, Raw: cloneRaw(raw)}
+			return nil, &PromptFeedbackError{Reason: buildEnumName(feedback.BlockReason, "BLOCK_REASON_"), Message: feedback.BlockReasonMessage, SafetyRatings: feedback.SafetyRatings, Usage: frameUsage, Raw: cloneRaw(raw)}
 		}
 		return nil, nil
 	}
@@ -1065,7 +1065,7 @@ func (c *Client) sendBuildMode(ctx context.Context, request GenerateRequest, ent
 	if unary {
 		mode = "native"
 	}
-	reportUpstreamMode(ctx, method, mode, reason)
+	reportUpstreamMode(ctx, method, mode, 0, reason)
 	rpc := newRPCRequest(method, request.AccountID, request.ID, proxy, !unary)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)

@@ -448,6 +448,8 @@ type GenerateRequest struct {
 	Background bool `json:"-"`
 	// Truncate 在生成前按模型上下文窗口移除最早的完整轮次
 	Truncate bool `json:"-"`
+	// KeepAbnormalFinish 表示异常结束重新生成耗尽且没有输出时仍以该结束原因结束，供按官方形状输出的 Gemini 入口使用
+	KeepAbnormalFinish bool `json:"-"`
 	// continuationRound 为自动续写的轮次，首轮为 0
 	continuationRound int
 	// continuationToken 为上一轮响应给出的续写 token

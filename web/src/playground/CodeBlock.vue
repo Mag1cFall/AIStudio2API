@@ -339,7 +339,7 @@ pre {
 }
 
 code {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   text-wrap: wrap;
 }

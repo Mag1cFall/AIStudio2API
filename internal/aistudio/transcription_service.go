@@ -91,7 +91,7 @@ func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionReq
 		}
 		selection.AccountID = recoveryAccountID
 		recoveryAccountID = ""
-		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
+		lease, owned, err := acquireQueuedLease(ctx, s.pool, selection)
 		if err != nil {
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
 				break

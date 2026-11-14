@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import { useTheme, type ThemePreference } from '@/theme'
 import UiDialog from '@/playground/ui/UiDialog.vue'
@@ -34,6 +34,13 @@ async function loadMicrophones(): Promise<void> {
     label: device.label || `${t('pg.microphone')} ${index + 1}`,
   }))
 }
+
+// shownMicrophone 是下拉框显示的麦克风，所选设备不在设备列表中时录音使用默认设备
+const shownMicrophone = computed({
+  get: () =>
+    microphones.value.some((item) => item.id === microphone.value) ? microphone.value : '',
+  set: (value: string | number | undefined) => (microphone.value = String(value ?? '')),
+})
 
 watch(open, (value) => {
   if (value) void loadMicrophones()
@@ -107,7 +114,7 @@ watch(open, (value) => {
         <div v-tooltip="t('pg.microphoneTip')">
           <UiSelect
             id="studio-microphone"
-            v-model="microphone"
+            v-model="shownMicrophone"
             class="w-full"
             :aria-label="t('pg.microphoneSelect')"
           >

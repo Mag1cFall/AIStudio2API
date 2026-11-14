@@ -26,8 +26,8 @@ const scrollbar = ref<InstanceType<typeof ItemsScrollbar>>()
 
 // streamingIndex 是正在生成的模型轮次下标
 const streamingIndex = computed(() => (session.running ? session.turns.length - 1 : -1))
-// renderBatch controls how many turns are prepended per frame after opening a chat.
-const renderBatch = 4
+// renderBatch 是打开对话后每帧渲染的轮次数，长对话从末尾一批开始逐帧向前补齐
+const renderBatch = 1
 // firstShown 是已渲染的第一个轮次下标
 const firstShown = ref(0)
 let filling = 0

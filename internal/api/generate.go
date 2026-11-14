@@ -264,8 +264,9 @@ func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawM
 	if isError {
 		key = "error"
 	}
+	trimmed := bytes.TrimSpace(raw)
 	var blocks []json.RawMessage
-	if json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
+	if bytes.HasPrefix(trimmed, []byte("[")) && json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
 		var texts []string
 		var media []aistudio.Part
 		contentBlocks := true
@@ -297,16 +298,14 @@ func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawM
 		}
 	}
 	if len(raw) == 0 {
-		raw = json.RawMessage("null")
+		raw, trimmed = json.RawMessage("null"), []byte("null")
 	}
-	if !json.Valid(raw) {
-		return nil, nil, fmt.Errorf("function result must be JSON")
-	}
-	trimmed := strings.TrimSpace(string(raw))
-	if !isError && strings.HasPrefix(trimmed, "{") {
+	if !isError && bytes.HasPrefix(trimmed, []byte("{")) {
 		return raw, nil, nil
 	}
-	return json.RawMessage(`{"` + key + `":` + trimmed + `}`), nil, nil
+	content := make(json.RawMessage, 0, len(key)+len(trimmed)+5)
+	content = append(append(append(append(content, `{"`...), key...), `":`...), trimmed...)
+	return append(content, '}'), nil, nil
 }
 
 func groundingCitations(metadata aistudio.GroundingMetadata) []aistudio.Citation {

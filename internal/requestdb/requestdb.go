@@ -93,8 +93,8 @@ type write struct {
 	body *api.RequestBody
 }
 
-// Logger 输出账本写入失败与丢弃记录的运行日志
-type Logger func(level string, message string)
+// Logger 输出账本写入失败与丢弃记录的运行日志，attrs 依次为字段的英文标识与取值
+type Logger func(level, message string, attrs ...any)
 
 // Store 串行批量写入请求账本与汇总，并提供聚合与明细查询
 type Store struct {
@@ -217,10 +217,10 @@ func (store *Store) run() {
 // commit 写入一批记录，记录写入失败与队列丢弃
 func (store *Store) commit(batch []write) {
 	if err := store.write(batch); err != nil {
-		store.log("ERROR", fmt.Sprintf("请求账本写入失败 | 记录=%d | 错误=%v", len(batch), err))
+		store.log("ERROR", "请求账本写入失败", "records", len(batch), "error", err)
 	}
 	if dropped := store.dropped.Swap(0); dropped > 0 {
-		store.log("WARN", fmt.Sprintf("请求账本写入队列已满 | 丢弃=%d", dropped))
+		store.log("WARN", "请求账本写入队列已满", "dropped", dropped)
 	}
 }
 
@@ -369,7 +369,7 @@ func (store *Store) prune() {
 	_, daysErr := store.db.Exec(`DELETE FROM days WHERE start < ?`, day)
 	reclaimErr := sqlitedb.Reclaim(context.Background(), store.db)
 	if err := errors.Join(requestsErr, hoursErr, daysErr, reclaimErr); err != nil {
-		store.log("ERROR", fmt.Sprintf("请求账本清理失败 | 错误=%v", err))
+		store.log("ERROR", "请求账本清理失败", "error", err)
 	}
 }
 
@@ -426,7 +426,7 @@ func (store *Store) alignDays() (err error) {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	store.log("INFO", fmt.Sprintf("请求账本已按服务器时区重建本地日汇总 | 天数=%d", rebuilt))
+	store.log("INFO", "请求账本已按服务器时区重建本地日汇总", "days", rebuilt)
 	return nil
 }
 

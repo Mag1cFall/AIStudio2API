@@ -114,7 +114,7 @@ const blocks = computed(() => (props.raw ? [] : engine.render(props.text)))
   border-radius: 4px;
   background: light-dark(var(--color-v3-surface-container-high), var(--color-v3-button-container));
   color: var(--color-v3-text-on-button);
-  font-family: 'DM Mono', monospace;
+  font-family: 'DM Mono', var(--font-mono);
   font-size: 1em;
 }
 

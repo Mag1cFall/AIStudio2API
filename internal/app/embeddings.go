@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -33,9 +32,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", fmt.Sprintf(
-			"账号切换 | 模型=%s\n原因: %s", modelID, strings.TrimSpace(cause.Error()),
-		))
+		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", "账号切换", attemptFields(modelID, cause)...)
 	}
 	request.RecoverWAARuntime = func(recoveryCtx context.Context, accountID string, cause error) (bool, error) {
 		workerFailed := service.workers.WorkerFailed(accountID)
@@ -48,7 +45,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 			true, workerFailed || aistudio.DefinitiveWAARuntimeFailure(cause),
 		)
 		if recovered && recoveryErr == nil {
-			service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", "WAA Worker 重建 | 模型="+modelID+" | 重放当前请求")
+			service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", "WAA Worker 重建，重放当前请求", "model", modelID)
 		}
 		return recovered, recoveryErr
 	}

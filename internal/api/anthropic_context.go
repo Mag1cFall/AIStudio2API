@@ -65,6 +65,14 @@ type anthropicBlockHead struct {
 // anthropicCompactedMessages 丢弃最后一个 compaction 块之前的全部内容，摘要成为首个 user 消息
 func anthropicCompactedMessages(messages []anthropicMessage) []anthropicMessage {
 	for index := len(messages) - 1; index >= 0; index-- {
+		content := messages[index].Content
+		if len(content) == 0 || content[0] != '[' {
+			continue
+		}
+		var heads []anthropicBlockHead
+		if json.Unmarshal(content, &heads) == nil && !slices.ContainsFunc(heads, func(head anthropicBlockHead) bool { return head.Type == "compaction" }) {
+			continue
+		}
 		var blocks []json.RawMessage
 		if json.Unmarshal(messages[index].Content, &blocks) != nil {
 			continue

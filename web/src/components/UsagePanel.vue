@@ -4,7 +4,7 @@ import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { Model, UsageDimension, UsageReport, UsageStats } from '@/types'
 import UiIcon from './UiIcon.vue'
-import UiSelect from './UiSelect.vue'
+import UiSelect, { keepSelected } from './UiSelect.vue'
 import FilterMenu from './FilterMenu.vue'
 import KpiCard from './usage/KpiCard.vue'
 import RangePicker from './usage/RangePicker.vue'
@@ -360,12 +360,16 @@ const kpis = computed(() => {
 })
 
 const statusOptions = computed(() =>
-  (report.value?.groups.status ?? []).map((group) => group.key).sort(),
+  keepSelected(
+    (report.value?.groups.status ?? []).map((group) => group.key).sort(),
+    state.status,
+    '',
+  ),
 )
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 flex-col overflow-auto [scrollbar-gutter:stable]">
+  <section class="relative flex min-h-0 flex-1 flex-col overflow-auto [scrollbar-gutter:stable]">
     <header class="page-x flex flex-wrap items-center gap-3 border-b border-line py-4">
       <div class="min-w-0 flex-1">
         <h2 class="text-xl font-semibold text-white">{{ t('usage.title') }}</h2>

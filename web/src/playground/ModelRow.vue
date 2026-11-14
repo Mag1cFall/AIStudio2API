@@ -1,6 +1,6 @@
 <script lang="ts">
 import { computed } from 'vue'
-import { useI18n, type TranslationKey } from '@/i18n'
+import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 
 const { locale } = useI18n()
 // dateFormat、monthFormat 与 numberFormat 是各模型行共用的发布日期、知识截止月份与 token 数格式
@@ -130,7 +130,10 @@ function openAgent(event: Event): void {
         </li>
         <li v-if="model.channels?.length">
           <UiIcon name="channel" :size="15" />
-          <span>{{ t('pg.channels') }} {{ model.channels.join(', ') }}</span>
+          <span
+            >{{ t('pg.channels') }}
+            {{ model.channels.map((channel) => t(channelLabelKey(channel))).join(', ') }}</span
+          >
         </li>
       </ul>
       <div v-if="agentModel" class="agent-model">

@@ -19,16 +19,6 @@ interface GenerateResponse {
   promptFeedback?: { blockReason?: string }
 }
 
-// VideoOperation 是 Gemini 视频长任务的状态
-interface VideoOperation {
-  name: string
-  done?: boolean
-  error?: { message?: string }
-  response?: {
-    generateVideoResponse?: { generatedSamples?: { video?: { uri?: string } }[] }
-  }
-}
-
 // headers 返回带本服务 API key 的请求头
 function headers(json = true): Headers {
   const result = new Headers()
@@ -91,80 +81,6 @@ export async function predictImages(
       predictions.find((item) => item.raiFilteredReason)?.raiFilteredReason ?? t('pg.noImages'),
     )
   return images
-}
-
-// OpenAIVideo 是 OpenAI Videos 视频对象
-interface OpenAIVideo {
-  id: string
-  status: string
-  error?: { message?: string } | null
-}
-
-// createOpenAIVideo 以 multipart 调用 /v1/videos 创建视频任务
-export async function createOpenAIVideo(form: FormData, signal: AbortSignal): Promise<OpenAIVideo> {
-  const response = await fetch('/v1/videos', {
-    method: 'POST',
-    headers: headers(false),
-    body: form,
-    signal,
-  })
-  if (!response.ok) throw new Error(await errorMessage(response))
-  return (await response.json()) as OpenAIVideo
-}
-
-// pollDelay 等待一个视频轮询间隔，signal 取消时以 AbortError 结束，到时与取消后都移除取消监听
-function pollDelay(signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const abort = () => {
-      window.clearTimeout(timer)
-      reject(new DOMException('Aborted', 'AbortError'))
-    }
-    const timer = window.setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, 5000)
-    signal.addEventListener('abort', abort, { once: true })
-  })
-}
-
-// waitOpenAIVideo 每 5 秒轮询 OpenAI 视频对象直到完成，返回结果视频地址
-export async function waitOpenAIVideo(video: OpenAIVideo, signal: AbortSignal): Promise<string> {
-  let current = video
-  while (current.status !== 'completed' && current.status !== 'failed') {
-    await pollDelay(signal)
-    const response = await fetch(`/v1/videos/${encodeURIComponent(video.id)}`, {
-      headers: headers(false),
-      signal,
-    })
-    if (!response.ok) throw new Error(await errorMessage(response))
-    current = (await response.json()) as OpenAIVideo
-  }
-  if (current.status === 'failed')
-    throw new Error(current.error?.message ?? t('pg.videoGenerationFailed'))
-  return `/v1/videos/${encodeURIComponent(video.id)}/content`
-}
-
-// createVideo 调用 predictLongRunning 创建视频任务
-export function createVideo(
-  modelID: string,
-  body: unknown,
-  signal: AbortSignal,
-): Promise<VideoOperation> {
-  return post(`/v1beta/models/${encodeURIComponent(modelID)}:predictLongRunning`, body, signal)
-}
-
-// waitVideo 每 5 秒轮询视频任务直到完成，返回生成的视频地址
-export async function waitVideo(operation: VideoOperation, signal: AbortSignal): Promise<string[]> {
-  let current = operation
-  while (current.done !== true) {
-    await pollDelay(signal)
-    const response = await fetch(`/v1beta/${current.name}`, { headers: headers(false), signal })
-    if (!response.ok) throw new Error(await errorMessage(response))
-    current = (await response.json()) as VideoOperation
-  }
-  if (current.error) throw new Error(current.error.message ?? t('pg.videoGenerationFailed'))
-  const samples = current.response?.generateVideoResponse?.generatedSamples ?? []
-  return samples.map((sample) => sample.video?.uri ?? '').filter((uri) => uri !== '')
 }
 
 // downloadMedia 下载本服务返回的媒体地址

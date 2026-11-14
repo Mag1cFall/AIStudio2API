@@ -28,11 +28,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/playground/media/ImageRoute.vue').then(afterTask),
     meta: studio,
   },
+  // 视频页与官网一样转到对话页，以目录别名 omni-featured 选中当前的 Omni 模型
   {
     path: '/prompts/new_video',
-    name: 'video',
-    component: () => import('@/playground/media/VideoPage.vue').then(afterTask),
-    meta: studio,
+    redirect: (to) => ({
+      path: '/prompts/new_chat',
+      query: { ...to.query, model: 'omni-featured' },
+    }),
   },
   {
     path: '/generate-speech',

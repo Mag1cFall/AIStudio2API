@@ -31,15 +31,15 @@ func reportContinuationRound(ctx context.Context) {
 	}
 }
 
-// ContextWithUpstreamModeObserver 记录实际 RPC、传输模式与流式回退原因
-func ContextWithUpstreamModeObserver(ctx context.Context, observer func(string, string, string)) context.Context {
+// ContextWithUpstreamModeObserver 记录实际 RPC、传输模式、续写轮次与流式回退原因
+func ContextWithUpstreamModeObserver(ctx context.Context, observer func(method, mode string, round int, reason string)) context.Context {
 	return context.WithValue(ctx, upstreamModeContextKey{}, observer)
 }
 
-// reportUpstreamMode 在发送请求前报告实际采用的上游调用方式
-func reportUpstreamMode(ctx context.Context, method, mode, reason string) {
-	if observer, ok := ctx.Value(upstreamModeContextKey{}).(func(string, string, string)); ok {
-		observer(method, mode, reason)
+// reportUpstreamMode 在发送请求前报告实际采用的上游调用方式，round 为续写轮次，原请求为 0
+func reportUpstreamMode(ctx context.Context, method, mode string, round int, reason string) {
+	if observer, ok := ctx.Value(upstreamModeContextKey{}).(func(string, string, int, string)); ok {
+		observer(method, mode, round, reason)
 	}
 }
 

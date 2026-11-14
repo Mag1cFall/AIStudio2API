@@ -21,13 +21,13 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS prompts (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL, description TEXT NOT NULL,
- created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL);
+ created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL, turns INTEGER, tokens INTEGER);
 CREATE INDEX IF NOT EXISTS prompts_updated ON prompts(updated);
 CREATE TABLE IF NOT EXISTS system_instructions (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL);`
 
 // summaryColumns 是对话列表项的列
-const summaryColumns = `id, title, model, description, created, updated`
+const summaryColumns = `id, title, model, description, created, updated, turns, tokens`
 
 // Store 读写对话库
 type Store struct {
@@ -110,10 +110,11 @@ func (s *Store) Prompt(ctx context.Context, id string) (api.Prompt, error) {
 // SavePrompt 创建或覆盖一份对话，保留首次创建时间
 func (s *Store) SavePrompt(ctx context.Context, prompt api.Prompt) (api.PromptSummary, error) {
 	now := time.Now().UnixMilli()
-	return scanSummary(s.db.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET title = excluded.title, model = excluded.model, description = excluded.description, updated = excluded.updated, data = excluded.data
+	return scanSummary(s.db.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data, turns, tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET title = excluded.title, model = excluded.model, description = excluded.description, updated = excluded.updated, data = excluded.data,
+ turns = excluded.turns, tokens = excluded.tokens
 RETURNING `+summaryColumns,
-		prompt.ID, prompt.Title, prompt.Model, prompt.Description, now, now, []byte(prompt.Data)))
+		prompt.ID, prompt.Title, prompt.Model, prompt.Description, now, now, []byte(prompt.Data), prompt.Turns, prompt.Tokens))
 }
 
 // RenamePrompt 改写一份对话的标题与描述，不存在时返回 api.ErrPromptNotFound
@@ -125,8 +126,8 @@ func (s *Store) RenamePrompt(ctx context.Context, id, title, description string)
 // CopyPrompt 以 id 与 title 复制 source 的模型、描述与内容，source 不存在时返回 api.ErrPromptNotFound
 func (s *Store) CopyPrompt(ctx context.Context, source, id, title string) (api.PromptSummary, error) {
 	now := time.Now().UnixMilli()
-	return scanSummary(s.db.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data)
-SELECT ?, ?, model, description, ?, ?, data FROM prompts WHERE id = ? RETURNING `+summaryColumns,
+	return scanSummary(s.db.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data, turns, tokens)
+SELECT ?, ?, model, description, ?, ?, data, turns, tokens FROM prompts WHERE id = ? RETURNING `+summaryColumns,
 		id, title, now, now, source))
 }
 
@@ -179,7 +180,8 @@ func (s *Store) DeleteSystemInstruction(ctx context.Context, id string) error {
 func scanSummary(row interface{ Scan(...any) error }) (api.PromptSummary, error) {
 	var item api.PromptSummary
 	var created, updated int64
-	err := row.Scan(&item.ID, &item.Title, &item.Model, &item.Description, &created, &updated)
+	var turns, tokens sql.NullInt64
+	err := row.Scan(&item.ID, &item.Title, &item.Model, &item.Description, &created, &updated, &turns, &tokens)
 	if errors.Is(err, sql.ErrNoRows) {
 		return api.PromptSummary{}, api.ErrPromptNotFound
 	}
@@ -187,5 +189,11 @@ func scanSummary(row interface{ Scan(...any) error }) (api.PromptSummary, error)
 		return api.PromptSummary{}, err
 	}
 	item.Created, item.Updated = time.UnixMilli(created), time.UnixMilli(updated)
+	if turns.Valid {
+		item.Turns = new(int(turns.Int64))
+	}
+	if tokens.Valid {
+		item.Tokens = new(int(tokens.Int64))
+	}
 	return item, nil
 }

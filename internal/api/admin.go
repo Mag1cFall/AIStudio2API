@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 )
 
 // AdminService 定义管理端需要的权威状态能力
@@ -52,6 +53,7 @@ type AdminStatus struct {
 	ActiveRequests int                        `json:"active_requests"`
 	Accounts       AdminAccountCounts         `json:"accounts"`
 	Camoufox       camoufoxnative.Preparation `json:"camoufox"`
+	GeoIP          egress.Preparation         `json:"geoip"`
 	ChromeImport   bool                       `json:"chrome_import"`
 }
 
@@ -68,8 +70,24 @@ type AdminLog struct {
 	Level   string      `json:"level"`
 	Source  string      `json:"source"`
 	Message string      `json:"message"`
+	Fields  []LogField  `json:"fields,omitempty"`
+	Stage   *LogStage   `json:"stage,omitempty"`
 	Event   string      `json:"event"`
 	Request *RequestLog `json:"request,omitempty"`
+}
+
+// LogField 是日志按顺序排列的一个字段，Key 为英文标识
+type LogField struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// LogStage 是分阶段运行日志所属的阶段，Step 与 Steps 为当前步骤与总步骤数，State 为结束状态 completed、failed 或 cancelled
+type LogStage struct {
+	Name  string `json:"name"`
+	Step  int    `json:"step,omitempty"`
+	Steps int    `json:"steps,omitempty"`
+	State string `json:"state,omitempty"`
 }
 
 // RequestLog 保存可关联的请求状态、用量与诊断字段

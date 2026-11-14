@@ -182,9 +182,6 @@ func (current *catalog) translate(text string) string {
 			return item.text + " " + current.translate(text[len(item.anchor)+1:])
 		}
 	}
-	if key, value, ok := strings.Cut(text, "="); ok {
-		return current.translate(key) + "=" + current.translate(value)
-	}
 	return text
 }
 

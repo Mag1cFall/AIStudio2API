@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onUnmounted, reactive, ref, watch } from 'vue'
-import { useI18n } from '@/i18n'
+import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n, type TranslationKey } from '@/i18n'
 import type { AdminLog } from '@/types'
 import UiIcon from './UiIcon.vue'
-import UiSelect from './UiSelect.vue'
+import UiSelect, { keepSelected } from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import StageLogCard from './StageLogCard.vue'
 import LogText from './LogText.vue'
@@ -26,6 +26,17 @@ const source = useQueryText('source', 'ALL')
 const search = useQueryText('q')
 const autoScroll = ref(true)
 const output = ref<HTMLElement>()
+// levelRuler 叠放三个级别文字，宽度为当前语言最宽的级别文字
+const levelRuler = ref<HTMLElement>()
+// levelWidth 是级别列宽度，单位 px
+const levelWidth = ref(0)
+const levelResize = new ResizeObserver(([entry]) => {
+  levelWidth.value = Math.ceil(entry!.borderBoxSize[0]!.inlineSize)
+})
+watch(levelRuler, (element) => {
+  levelResize.disconnect()
+  if (element) levelResize.observe(element)
+})
 const sourceWidth = ref(136)
 const resizingSource = ref(false)
 const minSourceWidth = 96
@@ -33,34 +44,75 @@ const minSourceWidth = 96
 const metricsWidth = 694
 // messageMinWidth 是拖动来源列时保留给消息列的最小宽度，单位 px
 const messageMinWidth = 360
+// outputWidth 是日志区的 clientWidth，由尺寸观察在每次布局之后记录
+const outputWidth = ref(0)
 // maxSourceWidth 返回来源列可拖到的最大宽度：当前日志区宽度减去时间、级别、列间距与消息列保留的宽度
 function maxSourceWidth(): number {
-  return Math.max(minSourceWidth, (output.value?.clientWidth ?? 0) - 200 - messageMinWidth)
+  return Math.max(minSourceWidth, outputWidth.value - 200 - messageMinWidth)
 }
 
 // sourceResized 表示来源列宽度已由用户调整
 let sourceResized = false
+// fitPending 表示页面激活后尚未按日志区宽度设定来源列的默认宽度
+let fitPending = false
+// outputResize 在布局之后记录日志区宽度，激活后的首次记录设定来源列默认宽度，激活与挂载时不强制同步布局
+const outputResize = new ResizeObserver(() => {
+  outputWidth.value = output.value!.clientWidth
+  if (!fitPending || outputWidth.value === 0) return
+  fitPending = false
+  if (!sourceResized) sourceWidth.value = fittedSourceWidth()
+})
 let resizeStartX = 0
 let resizeStartWidth = 0
 
-// sources 是日志中出现过的来源，来源集合不变时沿用原数组，来源下拉不随每批日志重新渲染
+// sources 是日志中出现过的来源与当前选中的来源，来源集合不变时沿用原数组，来源下拉不随每批日志重新渲染
 const sources = computed<string[]>((previous) => {
-  const next = Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort()
+  const next = keepSelected(
+    Array.from(new Set(props.logs.map((entry) => entry.source).filter(Boolean))).sort(),
+    source.value,
+    'ALL',
+  )
   return previous?.length === next.length && previous.every((item, index) => item === next[index])
     ? previous
     : next
 })
 
+// sourceKeys 是服务自身各来源的显示文案键，其余来源为账户名
+const sourceKeys: Partial<Record<string, TranslationKey>> = {
+  service: 'logs.sources.service',
+  auth: 'logs.sources.auth',
+  request: 'logs.sources.request',
+}
+
+// sourceName 返回来源的显示名
+function sourceName(source: string): string {
+  const key = sourceKeys[source]
+  return key === undefined ? source : t(key)
+}
+
 // sourceLabel 是来源列文字，请求卡片依次列出用到的账户
 function sourceLabel(row: LogRow): string {
-  return row.entry.request ? requestSources(row).join(' → ') : row.entry.source
+  return row.entry.request
+    ? requestSources(row).map(sourceName).join(' → ')
+    : sourceName(row.entry.source)
+}
+
+// matchText 判断文字的原文或界面语言译文是否含搜索词
+function matchText(text: string, query: string): boolean {
+  return text.toLowerCase().includes(query) || logText(text).toLowerCase().includes(query)
 }
 
 function matchLog(entry: AdminLog, query: string): boolean {
-  if (entry.message.toLowerCase().includes(query)) return true
-  if (logText(entry.message).toLowerCase().includes(query)) return true
+  if (matchText(entry.message, query)) return true
   if (entry.source.toLowerCase().includes(query)) return true
+  if (sourceName(entry.source).toLowerCase().includes(query)) return true
   if (entry.event.toLowerCase().includes(query)) return true
+  if (entry.stage && matchText(entry.stage.name, query)) return true
+  for (const field of entry.fields ?? []) {
+    if (matchText(field.value, query)) return true
+    const label = t(`logs.field.${field.key}` as TranslationKey) ?? field.key
+    if (label.toLowerCase().includes(query)) return true
+  }
   if (entry.request) {
     const req = entry.request
     if (req.id.toLowerCase().includes(query)) return true
@@ -127,7 +179,10 @@ watch([level, source, search], () => {
   pinWindow()
 })
 
-const logGridStyle = computed(() => ({ '--log-source-width': `${sourceWidth.value}px` }))
+const logGridStyle = computed(() => ({
+  '--log-source-width': `${sourceWidth.value}px`,
+  '--log-level-width': `${levelWidth.value}px`,
+}))
 
 function levelLabel(value: (typeof levels)[number]): string {
   const keys = {
@@ -295,7 +350,7 @@ function clampSourceWidth(value: number): number {
 
 // fittedSourceWidth 返回来源列的默认宽度：消息列留够一行指标后的剩余宽度，最多 224 px
 function fittedSourceWidth(): number {
-  return Math.min(224, Math.max(136, (output.value?.clientWidth ?? 0) - 170 - metricsWidth))
+  return Math.min(224, Math.max(136, outputWidth.value - 170 - metricsWidth))
 }
 
 function startSourceResize(event: PointerEvent): void {
@@ -334,14 +389,17 @@ watch(autoScroll, (enabled) => {
   pinWindow()
   if (enabled) void nextTick(glideToBottom)
 })
+onMounted(() => outputResize.observe(output.value!))
 onActivated(() => {
   trimmed.value = 0
-  if (!sourceResized) sourceWidth.value = fittedSourceWidth()
+  fitPending = true
   scrollToBottom()
 })
 onUnmounted(() => {
   cancelAnimationFrame(glide)
   cancelAnimationFrame(pinFrame)
+  levelResize.disconnect()
+  outputResize.disconnect()
 })
 </script>
 
@@ -381,7 +439,7 @@ onUnmounted(() => {
           class="max-w-48 rounded border border-line bg-canvas px-2 py-0.5 text-gray-200 outline-none"
         >
           <option value="ALL">{{ t('logs.allSources') }}</option>
-          <option v-for="item in sources" :key="item" :value="item">{{ item }}</option>
+          <option v-for="item in sources" :key="item" :value="item">{{ sourceName(item) }}</option>
         </UiSelect>
       </label>
       <input
@@ -423,7 +481,7 @@ onUnmounted(() => {
 
     <div
       ref="output"
-      class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable] bg-canvas p-2 font-mono text-[13px] leading-5"
+      class="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable] bg-canvas p-2 text-[13px] leading-5"
       @scroll.passive="followScroll"
       @collapse-resize="followDetails"
     >
@@ -431,6 +489,15 @@ onUnmounted(() => {
         {{ t('logs.waiting') }}
       </div>
       <div v-else class="log-table" :style="logGridStyle">
+        <span ref="levelRuler" class="log-level-ruler" aria-hidden="true">
+          <span
+            v-for="value in levels.slice(1)"
+            :key="value"
+            class="log-level"
+            :class="`log-level-${value.toLowerCase()}`"
+            >{{ levelLabel(value) }}</span
+          >
+        </span>
         <div
           class="source-resizer"
           :class="{ 'is-resizing': resizingSource }"
@@ -468,15 +535,17 @@ onUnmounted(() => {
           class="log-entry log-grid border-l-2 px-2 py-1 select-text"
           :class="{
             'log-expandable': expandable(row),
-            'border-l-transparent text-gray-300': row.entry.level === 'INFO',
-            'border-l-yellow-500 bg-yellow-500/5 text-yellow-100': row.entry.level === 'WARN',
-            'border-l-red-500 bg-red-500/10 text-red-100': row.entry.level === 'ERROR',
+            'border-l-transparent': row.entry.level === 'INFO',
+            'border-l-yellow-500 bg-yellow-500/5': row.entry.level === 'WARN',
+            'border-l-red-500 bg-red-500/10': row.entry.level === 'ERROR',
           }"
           @click="toggleRow(row, $event)"
         >
-          <span class="text-right text-gray-500">{{ clock(row.entry.time) }}</span>
-          <span class="font-semibold">{{ levelLabel(row.entry.level) }}</span>
-          <span v-tooltip="sourceLabel(row)" class="log-cell log-source text-gray-500">{{
+          <span class="log-time font-mono">{{ clock(row.events[0]!.time) }}</span>
+          <span class="log-level" :class="`log-level-${row.entry.level.toLowerCase()}`">{{
+            levelLabel(row.entry.level)
+          }}</span>
+          <span v-tooltip="sourceLabel(row)" class="log-cell log-source">{{
             sourceLabel(row)
           }}</span>
           <div class="log-cell log-message">
@@ -494,7 +563,7 @@ onUnmounted(() => {
             />
             <LogText
               v-else
-              :message="row.entry.message"
+              :entry="row.entry"
               :open="openRows.has(row.key)"
               :clipped="clippedRows.has(row.key)"
               @update:open="setRowOpen(row.key, $event)"
@@ -510,6 +579,7 @@ onUnmounted(() => {
 <style scoped>
 /* 日志区窄于 52rem 时每行改为时间、级别、来源在上，消息在下占满整行 */
 .log-table {
+  --log-level-column: max(3.5rem, var(--log-level-width));
   position: relative;
   width: 100%;
   min-width: 0;
@@ -537,7 +607,7 @@ onUnmounted(() => {
 
 .log-grid {
   display: grid;
-  grid-template-columns: 4.5rem 3.5rem var(--log-source-width) minmax(0, 1fr);
+  grid-template-columns: 4.5rem var(--log-level-column) var(--log-source-width) minmax(0, 1fr);
   column-gap: 0.5rem;
   align-items: start;
 }
@@ -552,8 +622,38 @@ onUnmounted(() => {
   padding-left: 0.5rem;
 }
 
+/* 时间、级别与来源为浅色小字，时间为等宽数字 */
+.log-time {
+  color: var(--color-gray-500);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.log-level {
+  color: var(--color-gray-500);
+  white-space: nowrap;
+}
+
+.log-level-ruler {
+  position: absolute;
+  display: grid;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.log-level-warn {
+  color: var(--color-yellow-400);
+  font-weight: 600;
+}
+
+.log-level-error {
+  color: var(--color-red-400);
+  font-weight: 600;
+}
+
 .log-source {
   overflow: hidden;
+  color: var(--color-gray-500);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -563,7 +663,7 @@ onUnmounted(() => {
   z-index: 10;
   top: 0;
   bottom: 0;
-  left: calc(9.5rem + var(--log-source-width) + 2px);
+  left: calc(6rem + var(--log-level-column) + var(--log-source-width) + 2px);
   width: 0.75rem;
   cursor: col-resize;
   overflow-anchor: none;
@@ -594,7 +694,7 @@ onUnmounted(() => {
 
 @container log-table (width < 52rem) {
   .log-grid {
-    grid-template-columns: 4.5rem 3.25rem minmax(0, 1fr);
+    grid-template-columns: 4.5rem max(3.25rem, var(--log-level-width)) minmax(0, 1fr);
     column-gap: 0.5rem;
     row-gap: 0.125rem;
   }

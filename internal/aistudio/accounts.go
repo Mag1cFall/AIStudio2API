@@ -2030,10 +2030,11 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 		}
 		runtimeState.BenefitTier = tier
 		runtimeState.CatalogFingerprint = fingerprint
-		if runtimeState.Restricted != "" {
+		if runtimeState.Restricted != "" && !verificationRestriction(runtimeState.Restricted) {
 			runtimeState.Restricted = ""
 			runtimeChanged = true
 		}
+		restricted := runtimeState.Restricted
 		return runtimeChanged, func(account *Account) {
 			if (firstCatalog || tierChanged || catalogChanged) && account.modelAccessGeneration == previousGeneration {
 				account.modelAccessGeneration++
@@ -2042,9 +2043,11 @@ func (p *AccountPool) SetCatalog(accountID string, tier BenefitTier, models []Mo
 			account.Models = cloneModels(models)
 			account.catalogErr = nil
 			account.initializedAt = time.Now()
-			if account.State == AccountUnavailable || account.State == AccountRestricted {
-				account.State = AccountReady
-				account.stateMessage = ""
+			switch {
+			case restricted != "" && account.Config.Enabled:
+				account.State, account.stateMessage = AccountRestricted, restricted
+			case account.State == AccountUnavailable || account.State == AccountRestricted:
+				account.State, account.stateMessage = AccountReady, ""
 			}
 		}, nil
 	})
@@ -2314,7 +2317,7 @@ func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
 	return result
 }
 
-// MarkCooldownIfGeneration 保存当前目录版本下的作用域冷却
+// MarkCooldownIfGeneration 保存当前目录版本下的作用域冷却，同范围已有更晚恢复的冷却时保留它
 func (p *AccountPool) MarkCooldownIfGeneration(
 	accountID string,
 	modelAccessScope string,
@@ -2326,52 +2329,28 @@ func (p *AccountPool) MarkCooldownIfGeneration(
 	if !until.After(time.Now()) {
 		return fmt.Errorf("冷却期限必须在未来")
 	}
-	checkedAt = checkedAt.UTC()
-	if checkedAt.IsZero() {
-		return fmt.Errorf("冷却检查时间不能为空")
-	}
-	modelAccessScope = strings.TrimSpace(modelAccessScope)
-	if modelAccessScope == "" {
-		modelAccessScope = globalCooldownKey
-	}
-	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
-		if generation != account.modelAccessGeneration {
-			return false, nil, nil
-		}
-		modelAccessScope = canonicalAccountModelID(account, modelAccessScope)
-		currentAccess := runtimeState.ModelAccess[modelAccessScope]
-		if !currentAccess.CheckedAt.Before(checkedAt) {
-			return false, nil, nil
-		}
-		next := CooldownState{Until: until.UTC(), Reason: reason}
-		currentAccess.CheckedAt = checkedAt
-		runtimeState.ModelAccess[modelAccessScope] = currentAccess
-		runtimeState.Cooldowns[modelAccessScope] = next
-		return true, nil, nil
-	})
+	_, _, err := p.MarkQuotaCooldownIfGeneration(accountID, modelAccessScope, generation, checkedAt, QuotaCooldown{Until: until, Reason: reason})
 	return err
 }
 
-// MarkQuotaCooldownIfGeneration 保存当前目录版本下的额度冷却，返回实际生效的冷却期限；递增冷却被较新结果跳过时返回零值
+// MarkQuotaCooldownIfGeneration 保存当前目录版本下检查时间为 checkedAt 的额度冷却，递增冷却按同范围上一次冷却计算，同范围已有更晚恢复的冷却时保留它，套餐限额或每日限额冷却期间的其他额度失败只冷却回退选号，换成恢复更晚的同类冷却时回退选号的冷却保留；返回该冷却的恢复时刻与冷却是否因此改变，结果早于已记录的检查时间时恢复时刻为零值
 func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 	accountID string,
 	modelAccessScope string,
 	generation uint64,
 	checkedAt time.Time,
 	cooldown QuotaCooldown,
-) (time.Time, error) {
-	if !cooldown.Escalate {
-		return cooldown.Until, p.MarkCooldownIfGeneration(accountID, modelAccessScope, generation, checkedAt, cooldown.Until, cooldown.Reason)
-	}
+) (time.Time, bool, error) {
 	checkedAt = checkedAt.UTC()
 	if checkedAt.IsZero() {
-		return time.Time{}, fmt.Errorf("冷却检查时间不能为空")
+		return time.Time{}, false, fmt.Errorf("冷却检查时间不能为空")
 	}
 	modelAccessScope = strings.TrimSpace(modelAccessScope)
 	if modelAccessScope == "" {
 		modelAccessScope = globalCooldownKey
 	}
 	var until time.Time
+	changed := false
 	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
 		if generation != account.modelAccessGeneration {
 			return false, nil, nil
@@ -2381,15 +2360,42 @@ func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 		if !currentAccess.CheckedAt.Before(checkedAt) {
 			return false, nil, nil
 		}
+		now := time.Now()
 		previous, exists := runtimeState.Cooldowns[modelAccessScope]
-		next := planLimitCooldown(previous, exists, time.Now(), cooldown.Reason)
+		// layered 表示回退选号在套餐限额或每日限额冷却期间收到其他额度失败，按 previous.Fallback 计算回退选号的冷却
+		layered := exists && previous.Active(now) && RequestQuotaCooldown(previous.Reason) && !RequestQuotaCooldown(cooldown.Reason)
+		base, baseExists := previous, exists
+		if layered {
+			base, baseExists = CooldownState{}, previous.Fallback != nil
+			if baseExists {
+				base = *previous.Fallback
+			}
+		}
+		next := CooldownState{Until: cooldown.Until.UTC(), Reason: cooldown.Reason}
+		if cooldown.Escalate {
+			next = planLimitCooldown(base, baseExists, now, cooldown.Reason)
+		}
+		if baseExists && base.Active(now) && !next.Until.After(base.Until) {
+			next = base
+		}
 		until = next.Until
+		if layered && next.Until.Before(previous.Until) {
+			changed = !baseExists || !next.Until.Equal(base.Until)
+			fallback := next
+			previous.Fallback = &fallback
+			next = previous
+		} else {
+			if previous.Fallback != nil && previous.Fallback.Active(now) {
+				next.Fallback = previous.Fallback
+			}
+			changed = !exists || !next.Until.Equal(previous.Until)
+		}
 		currentAccess.CheckedAt = checkedAt
 		runtimeState.ModelAccess[modelAccessScope] = currentAccess
 		runtimeState.Cooldowns[modelAccessScope] = next
 		return true, nil, nil
 	})
-	return until, err
+	return until, changed, err
 }
 
 // ClearCooldownIfGeneration 清除当前目录版本下的作用域冷却
@@ -2398,6 +2404,21 @@ func (p *AccountPool) ClearCooldownIfGeneration(
 	modelAccessScope string,
 	generation uint64,
 	checkedAt time.Time,
+) error {
+	return p.clearCooldownIfGeneration(accountID, modelAccessScope, generation, checkedAt, false)
+}
+
+// ClearPageCooldownIfGeneration 在账户页面载入成功后清除当前目录版本下的全局冷却，上游额度冷却保留到恢复时间
+func (p *AccountPool) ClearPageCooldownIfGeneration(accountID string, generation uint64, checkedAt time.Time) error {
+	return p.clearCooldownIfGeneration(accountID, "", generation, checkedAt, true)
+}
+
+func (p *AccountPool) clearCooldownIfGeneration(
+	accountID string,
+	modelAccessScope string,
+	generation uint64,
+	checkedAt time.Time,
+	keepQuota bool,
 ) error {
 	checkedAt = checkedAt.UTC()
 	if checkedAt.IsZero() {
@@ -2412,6 +2433,9 @@ func (p *AccountPool) ClearCooldownIfGeneration(
 			return false, nil, nil
 		}
 		modelAccessScope = canonicalAccountModelID(account, modelAccessScope)
+		if keepQuota && quotaCooldownReason(runtimeState.Cooldowns[modelAccessScope].Reason) {
+			return false, nil, nil
+		}
 		currentAccess := runtimeState.ModelAccess[modelAccessScope]
 		changed := false
 		if !currentAccess.CheckedAt.After(checkedAt) {
@@ -2595,7 +2619,39 @@ func (p *AccountPool) MarkAuthRequired(accountID string, reason string) error {
 	return p.setAccountState(accountID, AccountAuthRequired, reason)
 }
 
-// MarkRestricted 把账户标为服务受限并把原因写入 runtime-state.json，之后不再为该账户载入页面，目录同步成功时恢复
+// verificationDenial 是上游要求验证账户时的服务受限原因，官网页面与目录读取照常成功，只有生成请求返回它
+var verificationDenial = (&camoufoxnative.AccessDenial{Err: camoufoxnative.ErrAccountVerification, URL: camoufoxnative.AccountVerificationURL}).Error()
+
+// verificationRestriction 判断服务受限原因是上游要求验证账户
+func verificationRestriction(reason string) bool {
+	return reason == verificationDenial
+}
+
+// verificationRestricted 判断账户因上游要求验证而服务受限
+func (p *AccountPool) verificationRestricted(accountID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[accountID]
+	return account != nil && verificationRestriction(account.runtime.Restricted)
+}
+
+// clearRestriction 解除账户的服务受限并删除 runtime-state.json 中的记录
+func (p *AccountPool) clearRestriction(accountID string) error {
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if runtimeState.Restricted == "" {
+			return false, nil, nil
+		}
+		runtimeState.Restricted = ""
+		return true, func(account *Account) {
+			if account.State == AccountRestricted {
+				account.State, account.stateMessage = AccountReady, ""
+			}
+		}, nil
+	})
+	return err
+}
+
+// MarkRestricted 把账户标为服务受限并把原因写入 runtime-state.json，之后不再为该账户载入页面；目录同步成功时恢复，上游要求验证账户的受限只在刷新账户状态时的生成请求不再被要求验证后恢复
 func (p *AccountPool) MarkRestricted(accountID string, denial *camoufoxnative.AccessDenial) error {
 	reason := denial.Error()
 	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
@@ -2977,7 +3033,7 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 			return nil, ErrResourceNotFound
 		}
 		if accountID != "" && accountID != owner {
-			return nil, fmt.Errorf("资源 %s 绑定账户 %s", selection.ResourceID, owner)
+			return nil, resourceOwnerError(selection.ResourceID, owner, accountID)
 		}
 		accountID = owner
 	}
@@ -3082,24 +3138,17 @@ func (p *AccountPool) setAccountState(accountID string, state AccountState, reas
 	return nil
 }
 
-// EnabledAccounts 返回已启用账户 ID 与其中 ready 或 busy 的账户数量
-func (p *AccountPool) EnabledAccounts() ([]string, int) {
+// EnabledAccounts 返回已启用账户 ID
+func (p *AccountPool) EnabledAccounts() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now()
 	ids := make([]string, 0, len(p.accounts))
-	schedulable := 0
 	for _, account := range p.accounts {
-		if !account.Config.Enabled {
-			continue
-		}
-		ids = append(ids, account.ID)
-		_, cooling := accountCooldown(account, "", now)
-		if account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0 || account.State == AccountReady && !cooling {
-			schedulable++
+		if account.Config.Enabled {
+			ids = append(ids, account.ID)
 		}
 	}
-	return ids, schedulable
+	return ids
 }
 
 // Activity 返回账户是否存在活动租约或独占操作及最近使用时间
@@ -3832,7 +3881,7 @@ func accountCatalogFingerprint(tier BenefitTier, models []Model) (string, error)
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
-// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额与每日限额冷却限制
+// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额与每日限额冷却限制，只受其中记录的回退冷却限制
 func selectionCooldown(account *Account, scope string, selection AccountSelection, now time.Time) (CooldownState, bool) {
 	var selected CooldownState
 	for _, key := range []string{globalCooldownKey, scope} {
@@ -3840,8 +3889,14 @@ func selectionCooldown(account *Account, scope string, selection AccountSelectio
 			continue
 		}
 		cooldown, exists := account.runtime.Cooldowns[key]
-		if !exists || !cooldown.Active(now) || selection.IgnoreQuotaCooldown && RequestQuotaCooldown(cooldown.Reason) {
+		if !exists || !cooldown.Active(now) {
 			continue
+		}
+		if selection.IgnoreQuotaCooldown && RequestQuotaCooldown(cooldown.Reason) {
+			if cooldown.Fallback == nil || !cooldown.Fallback.Active(now) {
+				continue
+			}
+			cooldown = *cooldown.Fallback
 		}
 		if selected.Until.IsZero() || cooldown.Until.After(selected.Until) {
 			selected = cooldown

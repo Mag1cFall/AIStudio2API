@@ -271,7 +271,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config file libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config file libgtk-3-dev libwebkit2gtk-4.1-dev glib-networking ibus-gtk3 fcitx5-frontend-gtk3
       - uses: ./.github/actions/static-libraries
         with:
           target: linux-amd64-gnu
@@ -289,9 +289,7 @@ jobs:
         run: |
           version="$GITHUB_REF_NAME"
           mkdir -p dist
-          cp build/appicon.png dist/aistudio2api.png
-          wails3 generate appimage -binary bin/aistudio2api -icon dist/aistudio2api.png -desktopfile build/linux/aistudio2api.desktop -outputdir dist -builddir dist/appimage
-          mv dist/aistudio2api-x86_64.AppImage "dist/aistudio2api-${version}-linux-amd64.AppImage"
+          bash build/linux/appimage.sh bin/aistudio2api "dist/aistudio2api-${version}-linux-amd64.AppImage"
           VERSION="${version#v}" GOARCH=amd64 wails3 tool package -name aistudio2api -format deb -config build/linux/nfpm.yaml -out dist
           mv dist/aistudio2api*.deb "dist/aistudio2api-${version}-linux-amd64.deb"
       - uses: actions/cache/save@v5

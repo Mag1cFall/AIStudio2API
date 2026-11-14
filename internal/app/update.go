@@ -68,7 +68,7 @@ type selfUpdater struct {
 	releaseURL string
 	executable string
 	proxy      func() string
-	log        func(level, message string)
+	requests   *requestRegistry
 	restart    func()
 	mu         sync.Mutex
 	release    *githubRelease
@@ -79,10 +79,10 @@ type selfUpdater struct {
 }
 
 // newSelfUpdater 按构建版本与运行环境创建替换 executable 的更新器
-func newSelfUpdater(version, executable string, proxy func() string, log func(level, message string), restart func()) *selfUpdater {
+func newSelfUpdater(version, executable string, proxy func() string, requests *requestRegistry, restart func()) *selfUpdater {
 	return &selfUpdater{
 		version: version, mode: updateMode(version), releaseURL: releaseAPI, executable: executable,
-		proxy: proxy, log: log, restart: restart,
+		proxy: proxy, requests: requests, restart: restart,
 	}
 }
 
@@ -147,19 +147,19 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 		err = updateConflictError("当前已是最新版本 " + u.version)
 	}
 	if err == nil {
-		u.log("INFO", "在线更新 | 1/2 | 下载发行包 | 版本="+release.TagName)
+		u.requests.logStage("service", "INFO", api.LogStage{Name: "在线更新", Step: 1, Steps: 2}, "下载发行包", "version", release.TagName)
 		err = u.install(ctx, release)
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err != nil {
 		u.updating = false
-		u.log("ERROR", "在线更新失败 | 错误="+err.Error())
+		u.requests.logStage("service", "ERROR", api.LogStage{Name: "在线更新", State: "failed"}, "在线更新失败", "error", err)
 		return api.UpdateStatus{}, err
 	}
 	u.release, u.checked, u.checkErr = release, time.Now(), nil
 	u.progress.Stage = "restart"
-	u.log("INFO", "在线更新完成 | 版本="+release.TagName)
+	u.requests.logStage("service", "INFO", api.LogStage{Name: "在线更新", State: "completed"}, "在线更新完成", "version", release.TagName)
 	status := u.statusLocked()
 	u.restart()
 	return status, nil

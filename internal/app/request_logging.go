@@ -2,12 +2,15 @@ package app
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 )
 
@@ -132,11 +135,31 @@ func (admin *runtimeAdmin) recordRequestLog(source, level, event, message string
 	admin.requests.recordLog(api.AdminLog{Source: source, Level: level, Event: event, Message: message, Request: data})
 }
 
-// logRequestProgress 将等待与恢复事件关联到所属请求，并带上登记时的模型与开始时间
-func (registry *requestRegistry) logRequestProgress(id, source, level, message string) {
+// logRequestProgress 将等待与恢复事件关联到所属请求，并带上登记时的模型与开始时间，attrs 依次为字段的英文标识与取值
+func (registry *requestRegistry) logRequestProgress(id, source, level, message string, attrs ...any) {
 	registry.mu.Lock()
 	request := registry.active[id].request
 	registry.mu.Unlock()
-	registry.recordLog(api.AdminLog{Source: source, Level: level, Event: "request.progress", Message: message,
+	registry.recordLog(api.AdminLog{Source: source, Level: level, Event: "request.progress", Message: message, Fields: logFields(attrs),
 		Request: &api.RequestLog{ID: id, State: "running", StartedAt: request.StartedAt, Model: request.Model}})
+}
+
+// attemptFields 返回一次上游尝试失败的日志字段：模型、错误链中上游 RPC 错误的 HTTP 状态与协议错误码、Google 拒绝账户时的失败类型与原因
+func attemptFields(model string, err error) []any {
+	fields := []any{"model", model}
+	var rpc *aistudio.RPCError
+	if errors.As(err, &rpc) {
+		fields = append(fields, "status", rpc.StatusCode)
+		if rpc.Code != 0 {
+			fields = append(fields, "code", rpc.Code)
+		}
+	}
+	var denial *camoufoxnative.AccessDenial
+	switch {
+	case errors.Is(err, camoufoxnative.ErrAccountVerification):
+		fields = append(fields, "cause", "verification")
+	case errors.As(err, &denial):
+		fields = append(fields, "cause", "restricted")
+	}
+	return append(fields, "reason", err)
 }

@@ -9,16 +9,18 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// dispatchQueue 按账户选择条件分组，先到先唤醒等待账户槽位的请求
+// dispatchQueue 按账户选择条件分组，同条件的请求按到达先后取号
 type dispatchQueue struct {
 	mu     sync.Mutex
 	queues map[string][]*dispatchWaiter
 }
 
-// dispatchWaiter 表示一个等待账户槽位的请求
+// dispatchWaiter 表示一个正在取号的请求
 type dispatchWaiter struct {
 	key  string
 	wake chan struct{}
+	// starting 表示请求已取得账户、正在等它的 Worker 启动，排在后面的请求不必等它
+	starting bool
 }
 
 func newDispatchQueue() *dispatchQueue {
@@ -35,21 +37,37 @@ func dispatchKey(selection aistudio.AccountSelection) string {
 	}, "\x00")
 }
 
-// join 把请求排到同条件队列末尾，队列原本非空时唤醒队首
+// join 把请求排到同条件队列末尾
 func (queue *dispatchQueue) join(key string) *dispatchWaiter {
 	waiter := &dispatchWaiter{key: key, wake: make(chan struct{}, 1)}
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 	queue.queues[key] = append(queue.queues[key], waiter)
-	queue.queues[key][0].signal()
 	return waiter
 }
 
-// leave 移除请求并在其位于队首时唤醒下一个请求
-func (queue *dispatchQueue) leave(waiter *dispatchWaiter) {
-	if waiter == nil {
-		return
+// turn 判断请求是否轮到取号：排在它前面的请求都在等 Worker 启动
+func (queue *dispatchQueue) turn(waiter *dispatchWaiter) bool {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	for _, ahead := range queue.queues[waiter.key] {
+		if ahead == waiter || !ahead.starting {
+			return ahead == waiter
+		}
 	}
+	return false
+}
+
+// setStarting 记录请求是否在等 Worker 启动并唤醒随之轮到取号的请求
+func (queue *dispatchQueue) setStarting(waiter *dispatchWaiter, starting bool) {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	waiter.starting = starting
+	queue.wakeTurnLocked(waiter.key)
+}
+
+// leave 移除请求并唤醒随之轮到取号的请求
+func (queue *dispatchQueue) leave(waiter *dispatchWaiter) {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 	waiters := queue.queues[waiter.key]
@@ -60,17 +78,25 @@ func (queue *dispatchQueue) leave(waiter *dispatchWaiter) {
 		return
 	}
 	queue.queues[waiter.key] = waiters
-	if index == 0 {
-		waiters[0].signal()
-	}
+	queue.wakeTurnLocked(waiter.key)
 }
 
-// wakeHeads 在账户或 Worker 状态变化后唤醒每个队列的队首
+// wakeHeads 在账户或 Worker 状态变化后唤醒每个队列中轮到取号的请求
 func (queue *dispatchQueue) wakeHeads() {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
-	for _, waiters := range queue.queues {
-		waiters[0].signal()
+	for key := range queue.queues {
+		queue.wakeTurnLocked(key)
+	}
+}
+
+// wakeTurnLocked 唤醒队列中第一个不在等 Worker 启动的请求
+func (queue *dispatchQueue) wakeTurnLocked(key string) {
+	for _, waiter := range queue.queues[key] {
+		if !waiter.starting {
+			waiter.signal()
+			return
+		}
 	}
 }
 

@@ -27,12 +27,14 @@ type Options struct {
 // Pointer 是页面上可信指针与焦点所在的位置
 type Pointer struct {
 	mu sync.Mutex
-	// at 是指针所在的位置（run、turn、rerun、content），指针还没进入页面时为空
+	// at 是指针所在的位置（prompt、run、turn、rerun、content、result、submit），指针还没进入页面时为空
 	at string
-	// focus 是焦点所在的位置（prompt、run、rerun），焦点不在页面元素上时为空
+	// focus 是焦点所在的位置（prompt、run、rerun、result、submit），焦点不在页面元素上时为空
 	focus string
 	// rounds 是最近一次 Rerun 时对话的轮数，决定最后一轮与其 Rerun 按钮的位置
 	rounds int
+	// edited 表示焦点进入提示词或函数响应输入框后粘贴过内容，焦点移出时 Firefox 派发 change
+	edited bool
 	// clicked 是最近一次派发可信 click 的时刻
 	clicked time.Time
 }
@@ -57,6 +59,7 @@ type Runtime struct {
 	shutdown   mozjs.Handle
 	prompt     mozjs.Handle
 	mouse      mozjs.Handle
+	key        mozjs.Handle
 	clear      mozjs.Handle
 	options    mozjs.Handle
 	bind       mozjs.Handle
@@ -92,8 +95,16 @@ const promptScript = `(prompt => {` + promptElements + `
   return textarea.value;
 })`
 
-// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件：from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数。位置 run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径，content 为 Rerun 后最后一轮被移除时指针下的对话区；焦点位置 prompt 为提示词输入框，run 与 rerun 为对应按钮。布局按官网新对话页：左侧导航宽 220、右侧运行设置宽 300，对话列宽至多 1000 并在两者之间居中；Run 按钮宽 101.2、高 32、右缘距对话列右缘 25、上缘距视口底 59，中心处文字距按钮左缘 45、上缘 6，宽 24.2、高 20；每轮为一行短文本时最后一轮上缘一轮为 197.5、每多一轮下移 212，高 125.5，对话区超出时滚到底部，Rerun 按钮距对话列左缘 911、在最后一轮上缘之上 19、边长 32，图标与路径的矩形按官网取值；取值按 Firefox 以单精度浮点返回
-const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {` + promptElements + `
+// functionElements 在页面还没有函数调用块时建出函数响应输入框与提交按钮
+const functionElements = `
+  if (!document.querySelector('ms-function-call-chunk')) {
+    const form = document.body.appendChild(document.createElement('ms-function-call-chunk')).appendChild(document.createElement('form'));
+    form.appendChild(document.createElement('ms-input-field')).appendChild(document.createElement('div')).appendChild(document.createElement('div')).appendChild(document.createElement('input'));
+    form.appendChild(document.createElement('button'));
+  }`
+
+// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件：from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数。位置 prompt 为空提示词输入框的中心，run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径，content 为 Rerun 后最后一轮被移除时指针下的对话区，result 与 submit 为最后一轮函数调用块中的函数响应输入框与提交按钮；焦点位置 prompt 为提示词输入框，result 为函数响应输入框，run、rerun 与 submit 为对应按钮。布局按官网新对话页：左侧导航宽 220、右侧运行设置宽 300，对话列宽至多 1000 并在两者之间居中；空提示词输入框距对话列左缘 25、上缘距视口底 105，宽为对话列宽减 50、高 21，其父元素高 36；Run 按钮宽 101.2、高 32、右缘距对话列右缘 25、上缘距视口底 59，中心处文字距按钮左缘 45、上缘 6，宽 24.2、高 20；每轮为一行短文本时最后一轮上缘一轮为 197.5、每多一轮下移 212，高 125.5，对话区超出时滚到底部，Rerun 按钮距对话列左缘 911、在最后一轮上缘之上 19、边长 32，图标与路径的矩形按官网取值；函数调用轮次上缘与最后一轮相同，函数响应表单距对话列左缘 14、轮次上缘 193.5，宽为对话列宽减 28、高 82，输入框距对话列左缘 26、轮次上缘 231.5，宽为对话列宽减 120 1/3、高 32，其外层字段距轮次上缘 205.5、高 58，提交按钮右缘距对话列右缘 26、宽 60 1/3、高 32、与输入框同高；取值按 Firefox 以单精度浮点返回
+const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {` + promptElements + functionElements + `
   const section = innerWidth - 520;
   const box = Math.min(section, 1000);
   const left = 220 + (section - box) / 2;
@@ -106,22 +117,38 @@ const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {`
   }
   const run = document.querySelector('ms-run-button').querySelector('button');
   const rerun = turn.querySelector('button');
+  const textarea = document.querySelector('ms-prompt-box').querySelector('textarea');
   const x = Math.fround(left + box - 126.2);
   const y = innerHeight - 59;
   const button = [x, y, Math.fround(101.2), 32];
   const top = Math.min(197.5 + 212 * (rounds - 1), innerHeight - 307.5);
   const icon = [Math.fround(left + 919 + 25 / 60), Math.fround(top - 10.5 - 5 / 60), Math.fround(15 + 11 / 60), Math.fround(15 + 11 / 60)];
   const rerunPoint = [Math.round(left + 927), Math.round(top - 3)];
+  const form = document.querySelector('ms-function-call-chunk').querySelector('form');
+  const field = form.querySelector('input');
+  const send = form.querySelector('button');
+  const fieldRect = [left + 26, top + 231.5, Math.fround(box - 120 - 1 / 3), 32];
+  const formRect = [left + 14, top + 193.5, box - 28, 82];
   const spots = {
+    prompt: { target: textarea, point: [Math.round(left + box / 2), Math.round(innerHeight - 94.5)], nodes: [textarea, textarea.parentElement], rects: [[left + 25, innerHeight - 105, box - 50, 21], [left + 25, innerHeight - 105, box - 50, 36]] },
     run: { target: run.firstElementChild, point: [Math.round(x + Math.fround(101.2) / 2), y + 16], nodes: [run.firstElementChild, run, run.parentElement], rects: [[Math.fround(x + 45), y + 6, Math.fround(24.2), 20], button, button] },
     turn: { target: turn.firstElementChild, point: [Math.round(left + box / 2), Math.round(top + 62.75)], nodes: [turn], rects: [[left, top, box, 125.5]] },
     rerun: { target: rerun.querySelector('path'), point: rerunPoint, nodes: [rerun.querySelector('path'), rerun.querySelector('g'), rerun.querySelector('svg'), rerun, rerun.parentElement], rects: [icon, icon, [left + 917, top - 13, 20, 20], [left + 911, top - 19, 32, 32], [left + 867, top - 23, 120, 40]] },
     content: { target: turn.parentElement, point: rerunPoint, nodes: [turn.parentElement], rects: [[left, 88, box, top + 81.5]] },
+    result: { target: field, point: [Math.round(left + 26 + (box - 120 - 1 / 3) / 2), Math.round(top + 247.5)], nodes: [field, field.parentElement, field.parentElement.parentElement, field.parentElement.parentElement.parentElement, form], rects: [fieldRect, fieldRect, fieldRect, [left + 26, top + 205.5, Math.fround(box - 120 - 1 / 3), 58], formRect] },
+    submit: { target: send, point: [Math.round(left + box - 86 - 1 / 3 + (60 + 1 / 3) / 2), Math.round(top + 247.5)], nodes: [send, form], rects: [[Math.fround(left + box - 86 - 1 / 3), top + 231.5, Math.fround(60 + 1 / 3), 32], formRect] },
   };
-  const focusable = { prompt: document.querySelector('ms-prompt-box').querySelector('textarea'), run, rerun };
+  const focusable = { prompt: textarea, run, rerun, result: field, submit: send };
   const spot = spots[to];
   const movement = from ? [spot.point[0] - spots[from].point[0], spot.point[1] - spots[from].point[1]] : [0, 0];
   input(spot.nodes, spot.rects, spot.target, from ? spots[from].target : null, spot.point, movement, focusable[blurred] ?? null, focusable[focused] ?? null, types);
+})`
+
+// keyScript 以宿主的 keyInput 向提示词输入框（target 为 result 时向函数响应输入框）派发一组可信键盘与输入事件，返回输入框的值
+const keyScript = `((input, text, types, target) => {` + promptElements + functionElements + `
+  const element = target === 'result' ? document.querySelector('ms-function-call-chunk').querySelector('input') : document.querySelector('ms-prompt-box').querySelector('textarea');
+  input(element, text, types);
+  return element.value;
 })`
 
 // pointerStep 是一次可信指针操作与它之前的间隔：move 把指针移到 to，press 按下并把焦点移到指针下的按钮，release 抬起并点击，replace 为页面替换了指针下的元素
@@ -136,9 +163,24 @@ var (
 	runClick = []pointerStep{{0, "move", "run"}, {5 * time.Millisecond, "press", ""}, {65 * time.Millisecond, "release", ""}}
 	// rerunClick 是 Camoufox 后端把指针移到最后一轮中心、等 Rerun 按钮出现后以同样方式点击它时 Firefox 派发各组事件的间隔
 	rerunClick = []pointerStep{{0, "move", "turn"}, {time.Second, "move", "rerun"}, {5 * time.Millisecond, "press", ""}, {65 * time.Millisecond, "release", ""}}
+	// promptClick 是 Camoufox 后端在输入框没有焦点时以可信指针点击输入框各组事件的间隔
+	promptClick = []pointerStep{{0, "move", "prompt"}, {5 * time.Millisecond, "press", ""}, {65 * time.Millisecond, "release", ""}}
+	// resultClick 是 Camoufox 后端以可信指针点击最后一轮函数调用块中函数响应输入框各组事件的间隔
+	resultClick = []pointerStep{{0, "move", "result"}, {5 * time.Millisecond, "press", ""}, {65 * time.Millisecond, "release", ""}}
+	// submitClick 是 Camoufox 后端粘贴函数结果后以可信指针点击提交按钮各组事件的间隔
+	submitClick = []pointerStep{{0, "move", "submit"}, {5 * time.Millisecond, "press", ""}, {65 * time.Millisecond, "release", ""}}
 )
 
-// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后：指针换到另一元素时先派发离开与进入事件，按下时焦点移到指针下的按钮，原焦点不在页面元素上时只有 focusin；Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮，Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
+// keyStep 是一组可信键盘与输入事件与它之前的间隔
+type keyStep struct {
+	delay time.Duration
+	types []string
+}
+
+// pasteKeys 是 Camoufox 后端在官网输入框按 Ctrl+V 粘贴时 Firefox 派发各组事件的间隔：按下 Control，再按下 V 并粘贴，抬起 V，抬起 Control
+var pasteKeys = []keyStep{{10 * time.Millisecond, []string{"keydown:Control"}}, {30 * time.Millisecond, []string{"keydown:v", "paste", "beforeinput", "input"}}, {100 * time.Millisecond, []string{"keyup:v"}}, {27 * time.Millisecond, []string{"keyup:Control"}}}
+
+// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后：指针换到另一元素时先派发离开与进入事件，按下时焦点移到指针下的元素，焦点从粘贴过内容的输入框移出时先派发 change，原焦点不在页面元素上时只有 focusin；Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮，Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
 func (pointer *Pointer) events(step pointerStep) (from, to, blurred, focused string, rounds int, types []string) {
 	pointer.mu.Lock()
 	defer pointer.mu.Unlock()
@@ -157,6 +199,10 @@ func (pointer *Pointer) events(step pointerStep) (from, to, blurred, focused str
 	case "press":
 		types = []string{"pointerdown", "mousedown"}
 		if focused = from; focused != blurred {
+			if (blurred == "prompt" || blurred == "result") && pointer.edited {
+				types = append(types, "change")
+				pointer.edited = false
+			}
 			if blurred != "" {
 				types = append(types, "focusout")
 			}
@@ -173,6 +219,8 @@ func (pointer *Pointer) events(step pointerStep) (from, to, blurred, focused str
 			if focused == "rerun" {
 				focused = ""
 			}
+		case "submit":
+			to = "content"
 		default:
 			return
 		}
@@ -319,6 +367,9 @@ func (runtime *Runtime) start(options Options, sourceName, prelude string, compl
 		return err
 	}
 	if runtime.mouse, err = handleOf(state.evaluate(top.global, pointerScript, hostScriptName)); err != nil {
+		return err
+	}
+	if runtime.key, err = handleOf(state.evaluate(top.global, keyScript, hostScriptName)); err != nil {
 		return err
 	}
 	if runtime.clear, err = handleOf(state.evaluate(top.global, clearPromptScript, hostScriptName)); err != nil {
@@ -561,12 +612,101 @@ func textareaValue(value string) string {
 
 // Proof 同步页面提示词后为 SHA-256 digest 生成 snapshot proof，结束后清空输入框
 func (runtime *Runtime) Proof(ctx context.Context, digest string, prompt string) (string, error) {
-	return runtime.proof(ctx, digest, prompt, true, nil)
+	return runtime.proof(ctx, digest, prompt, runtime.fillPrompt, nil)
 }
 
-// RunProof 向页面提示词输入框写入文本并点击 Run 后为 SHA-256 digest 生成 fresh proof，与官网用户点击 Run 后页面为 GenerateContent 取 proof 的顺序相同，返回前清空输入框
+// RunProof 以可信键盘把文本粘贴进页面提示词输入框（输入框没有焦点时先以可信指针点击它）并点击 Run 后为 SHA-256 digest 生成 fresh proof，与官网用户粘贴提示词、点击 Run 后页面为 GenerateContent 取 proof 的顺序相同，返回前清空输入框
 func (runtime *Runtime) RunProof(ctx context.Context, digest string, prompt string) (string, error) {
-	return runtime.proof(ctx, digest, prompt, true, runClick)
+	return runtime.proof(ctx, digest, prompt, runtime.paste, runClick)
+}
+
+// SubmitProof 在 rounds 轮的对话上以可信指针点击最后一轮函数调用块中的函数响应输入框、以可信键盘粘贴 result，再点击提交后为 SHA-256 digest 生成 fresh proof，与官网用户提交函数结果后页面为 GenerateContent 取 proof 的顺序相同
+func (runtime *Runtime) SubmitProof(ctx context.Context, digest string, result string, rounds int) (string, error) {
+	runtime.pointer.mu.Lock()
+	runtime.pointer.rounds = rounds
+	runtime.pointer.mu.Unlock()
+	return runtime.proof(ctx, digest, result, func(ctx context.Context, text string) error {
+		if err := runtime.steps(ctx, resultClick); err != nil {
+			return err
+		}
+		return runtime.pasteInto(ctx, "result", text)
+	}, submitClick)
+}
+
+// paste 在输入框没有焦点时以可信指针点击输入框，再按 pasteKeys 以可信键盘粘贴提示词
+func (runtime *Runtime) paste(ctx context.Context, prompt string) error {
+	runtime.pointer.mu.Lock()
+	focused := runtime.pointer.focus == "prompt"
+	runtime.pointer.mu.Unlock()
+	if !focused {
+		if err := runtime.steps(ctx, promptClick); err != nil {
+			return err
+		}
+	}
+	return runtime.pasteInto(ctx, "prompt", prompt)
+}
+
+// pasteInto 按 pasteKeys 以可信键盘把 text 粘贴进有焦点的 target 输入框（prompt 或 result）
+func (runtime *Runtime) pasteInto(ctx context.Context, target string, text string) error {
+	prompt := textareaValue(text)
+	for _, step := range pasteKeys {
+		select {
+		case <-time.After(step.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		value, err := runtime.keyInput(ctx, target, prompt, step.types)
+		if err != nil {
+			return err
+		}
+		if step.types[len(step.types)-1] == "input" {
+			if value != prompt {
+				return errors.New("页面提示词状态未同步")
+			}
+			runtime.pointer.mu.Lock()
+			runtime.pointer.edited = true
+			runtime.pointer.mu.Unlock()
+		}
+	}
+	return nil
+}
+
+// keyInput 在事件循环中以可信键盘向 target 输入框（prompt 或 result）派发 types 中的事件，返回输入框的值
+func (runtime *Runtime) keyInput(ctx context.Context, target string, text string, types []string) (string, error) {
+	var value string
+	result := make(chan error, 1)
+	if !runtime.loop.post(func() {
+		state := runtime.agent
+		names := make([]mozjs.Value, len(types))
+		for index, name := range types {
+			names[index] = mozjs.String(name)
+		}
+		list, err := state.newArray(names...)
+		if err != nil {
+			result <- err
+			return
+		}
+		defer state.cx.ReleaseValue(list)
+		returned, err := state.invoke(runtime.key, 0, mozjs.Object(state.keyInput), mozjs.String(text), list, mozjs.String(target))
+		if err != nil {
+			state.release(err)
+			result <- fmt.Errorf("派发键盘事件: %w", err)
+			return
+		}
+		state.cx.ReleaseValue(returned)
+		value = returned.String
+		result <- nil
+	}) {
+		return "", errors.New("WAA runtime 已关闭")
+	}
+	select {
+	case err := <-result:
+		return value, err
+	case <-runtime.loop.done:
+		return "", errors.New("WAA runtime 已关闭")
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 // RerunProof 在 rounds 轮的对话上点击最后一轮的 Rerun 后为 SHA-256 digest 生成 fresh proof，与官网 Rerun 一样不写入提示词
@@ -574,11 +714,11 @@ func (runtime *Runtime) RerunProof(ctx context.Context, digest string, rounds in
 	runtime.pointer.mu.Lock()
 	runtime.pointer.rounds = rounds
 	runtime.pointer.mu.Unlock()
-	return runtime.proof(ctx, digest, "", false, rerunClick)
+	return runtime.proof(ctx, digest, "", nil, rerunClick)
 }
 
-// proof 在 fill 时写入提示词，按 click 以可信鼠标点击，再为 digest 生成 proof，返回前清空输入框
-func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string, fill bool, click []pointerStep) (string, error) {
+// proof 以 write 写入提示词，按 click 以可信鼠标点击，再为 digest 生成 proof，返回前清空输入框
+func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string, write func(context.Context, string) error, click []pointerStep) (string, error) {
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
 	defer runtime.idle.Reset(idleShrinkDelay)
@@ -589,8 +729,8 @@ func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string,
 			runtime.agent.release(err)
 		}
 	})
-	if fill {
-		if err := runtime.fillPrompt(ctx, prompt); err != nil {
+	if write != nil {
+		if err := write(ctx, prompt); err != nil {
 			return "", err
 		}
 	}
@@ -604,6 +744,19 @@ func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string,
 
 // click 按 steps 的顺序与间隔以可信鼠标操作，再等到官网页面应用取 proof 的时刻
 func (runtime *Runtime) click(ctx context.Context, steps []pointerStep) error {
+	if err := runtime.steps(ctx, steps); err != nil {
+		return err
+	}
+	select {
+	case <-time.After(runProofDelay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// steps 按 steps 的顺序与间隔以可信鼠标操作
+func (runtime *Runtime) steps(ctx context.Context, steps []pointerStep) error {
 	for _, step := range steps {
 		select {
 		case <-time.After(step.delay):
@@ -614,15 +767,10 @@ func (runtime *Runtime) click(ctx context.Context, steps []pointerStep) error {
 			return err
 		}
 	}
-	select {
-	case <-time.After(runProofDelay):
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
-// Replaced 在页面替换指针下的元素时派发 Firefox 的 pointerover 与 mouseover：点击 Run 后按钮切换为 Stop 与切换回 Run，点击 Rerun 后最后一轮被移除；指针不在这两处时不派发
+// Replaced 在页面替换指针下的元素时派发 Firefox 的 pointerover 与 mouseover：点击 Run 后按钮切换为 Stop 与切换回 Run，点击 Rerun 后最后一轮被移除，提交函数结果后函数调用块被替换；指针不在这三处时不派发
 func (runtime *Runtime) Replaced(ctx context.Context) error {
 	return runtime.pointerInput(ctx, pointerStep{action: "replace"})
 }

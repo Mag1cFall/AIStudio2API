@@ -37,6 +37,8 @@ type pageVitals struct {
 	mu     sync.Mutex
 	timer  *time.Timer
 	closed bool
+	// window 是已发 1957、等待发出 2584 时计数窗口的起点，以导航开始为零点的毫秒数，没有等待中的 2584 时为 0
+	window int64
 }
 
 // navigationInt 返回导航计时中的整数毫秒值
@@ -95,6 +97,7 @@ func (vitals *pageVitals) report() {
 	now := time.Now()
 	window := now.Sub(vitals.origin).Milliseconds()
 	vitals.send(clearcutBeacon, vitals.body(now))
+	vitals.window = window
 	vitals.timer = time.AfterFunc(pageCountersDelay, func() { vitals.count(window) })
 }
 
@@ -120,6 +123,7 @@ func (vitals *pageVitals) count(window int64) {
 	defer vitals.mu.Unlock()
 	if !vitals.closed {
 		vitals.send(clearcutPlain, vitals.countersBody(window, time.Now()))
+		vitals.window = 0
 	}
 }
 
@@ -132,10 +136,16 @@ func (vitals *pageVitals) countersBody(window int64, now time.Time) []byte {
 	return []byte(body)
 }
 
-// close 停止尚未发出的上报
+// close 像官网页面卸载时一样立即发出已发 1957、还没发出的 2584 计数，再停止上报
 func (vitals *pageVitals) close() {
 	vitals.mu.Lock()
 	defer vitals.mu.Unlock()
+	if vitals.closed {
+		return
+	}
 	vitals.closed = true
 	vitals.timer.Stop()
+	if vitals.window != 0 {
+		vitals.send(clearcutPlain, vitals.countersBody(vitals.window, time.Now()))
+	}
 }

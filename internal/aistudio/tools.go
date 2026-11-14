@@ -476,6 +476,24 @@ func encodeWireValue(value any) []any {
 	}
 }
 
+// wireFunctionResult 返回 GenerateContent 正文最后一个 user 轮次只有一个函数响应 Part 时的函数结果 JSON 文本，即官网用户在函数调用块中输入的函数结果
+func wireFunctionResult(body []byte) (string, bool) {
+	var fields []json.RawMessage
+	var contents [][]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil || len(fields) < 2 || json.Unmarshal(fields[1], &contents) != nil || len(contents) == 0 {
+		return "", false
+	}
+	last := contents[len(contents)-1]
+	var role string
+	var parts [][]json.RawMessage
+	var response []json.RawMessage
+	if json.Unmarshal(rawAt(last, 1), &role) != nil || role != "user" || json.Unmarshal(rawAt(last, 0), &parts) != nil || len(parts) != 1 || json.Unmarshal(rawAt(parts[0], 11), &response) != nil || len(response) < 2 {
+		return "", false
+	}
+	result, err := decodeWireStruct(response[1], "functionResponse.response", body)
+	return string(result), err == nil
+}
+
 func decodeWireStruct(raw json.RawMessage, path string, evidence json.RawMessage) (json.RawMessage, error) {
 	object, err := decodeWireStructObject(raw, path, evidence)
 	if err != nil {

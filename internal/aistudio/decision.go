@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -87,21 +86,14 @@ var _ DecisionProtectedTransport = (*WorkerProtectedTransport)(nil)
 // decisionModalities 是 CreateDecision 用量中的模态枚举
 var decisionModalities = map[int64]string{1: "text", 2: "image", 3: "audio"}
 
-// CreateDecision 以目录中有该模型 createDecision 方法的账户回答决策问题
+// CreateDecision 以目录中有该模型 createDecision 方法的账户回答决策问题，上游拒绝账户、额度用尽或服务端出错时换到其他账户
 func (s *PooledService) CreateDecision(ctx context.Context, request DecisionRequest) (DecisionResult, error) {
 	request.Model = strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{
-		ModelID: request.Model, Method: "createDecision", AccountID: strings.TrimSpace(request.AccountID),
+	selection := AccountSelection{ModelID: request.Model, Method: "createDecision", AccountID: strings.TrimSpace(request.AccountID)}
+	return withAccountAttempts(ctx, s, selection, request.Model, func(ctx context.Context, accountID string) (DecisionResult, error) {
+		request.AccountID = accountID
+		return s.client.CreateDecision(ctx, request)
 	})
-	if err != nil {
-		return DecisionResult{}, err
-	}
-	request.AccountID = lease.Account().ID
-	result, err := s.client.CreateDecision(ContextWithAccountLease(ctx, lease), request)
-	if owned {
-		err = errors.Join(err, lease.Release())
-	}
-	return result, err
 }
 
 // CreateDecision 发送 CreateDecision 并返回各问题的回答

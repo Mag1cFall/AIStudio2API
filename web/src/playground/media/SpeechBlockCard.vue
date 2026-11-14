@@ -334,7 +334,7 @@ defineExpose({ focus })
 
 .add-expression-btn .tag-brackets {
   color: var(--color-v3-text-var);
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 400;
   line-height: 16px;

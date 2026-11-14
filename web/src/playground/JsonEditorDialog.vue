@@ -285,7 +285,7 @@ watch(open, (value) => {
 .code-input {
   flex: 1;
   min-height: 400px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 20px;
 }

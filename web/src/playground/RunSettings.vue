@@ -229,9 +229,11 @@ const imageQualities: { value: ImageQuality; label: string }[] = [
   { value: 'high', label: 'pg.high' },
 ]
 
-// systemSubtitle 是系统指令卡片的副标题
-const systemSubtitle = computed(
-  () => settings.value.systemInstruction.trim().split('\n')[0] || t('pg.systemHint'),
+// systemSubtitle 是系统指令卡片的副标题，模型不支持系统指令时与官网一样写明不支持
+const systemSubtitle = computed(() =>
+  can(Capability.SystemInstruction)
+    ? settings.value.systemInstruction.trim().split('\n')[0] || t('pg.systemHint')
+    : t('pg.systemNotSupported'),
 )
 // temperatureTooltip 是温度滑块的说明
 const temperatureTooltip = computed(() => {

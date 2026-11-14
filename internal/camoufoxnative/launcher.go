@@ -116,6 +116,8 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		}
 		// gfx.font_loader.delay 为 0 时 Firefox 同步加载本地化与带字重的字体族名
 		prefs["gfx.font_loader.delay"] = 0
+		// ui.key.accelKey 为 17 时快捷键修饰键与 Windows 指纹一致为 Control
+		prefs["ui.key.accelKey"] = 17
 		if !options.Headless {
 			// layers.gpu-process.enabled 为 false 时由注册了随包字体的主进程绘制窗口，webgl.allow-in-parent 让 WebGL 随之在主进程运行
 			prefs["layers.gpu-process.enabled"] = false

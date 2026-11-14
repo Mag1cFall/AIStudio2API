@@ -75,12 +75,15 @@ watch(
   () => playground.ensureModel(),
   { immediate: true },
 )
+// 地址中的模型为目录别名时与官网一样把地址改写为目录中的模型名
 watch(
   () => [route.query.model, store.models.value] as const,
   ([id, models]) => {
     if (typeof id !== 'string' || route.params.id !== undefined || session.turns.length > 0) return
     const model = models.find((model) => modelMatches(model, id) && isChatModel(model))
-    if (model !== undefined && session.settings.model !== model.id) playground.selectModel(model.id)
+    if (model === undefined) return
+    if (model.id !== id) void router.replace({ query: { ...route.query, model: model.id } })
+    if (session.settings.model !== model.id) playground.selectModel(model.id)
   },
   { immediate: true },
 )
@@ -147,6 +150,13 @@ function newChat(): void {
         <div v-else-if="session.loadError === 'not_found'" class="load-error">
           <h2>{{ t('pg.notFoundTitle') }}</h2>
           <p>{{ t('pg.notFoundBody') }}</p>
+          <button type="button" ms-button class="ms-button-primary" @click="newChat">
+            {{ t('pg.newChat') }}
+          </button>
+        </div>
+        <div v-else-if="session.loadError === 'not_chat'" class="load-error">
+          <h2>{{ t('pg.loadFailedTitle') }}</h2>
+          <p>{{ t('pg.notChatBody') }}</p>
           <button type="button" ms-button class="ms-button-primary" @click="newChat">
             {{ t('pg.newChat') }}
           </button>

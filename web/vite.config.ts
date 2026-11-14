@@ -1,10 +1,32 @@
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vite-plus'
+import { defineConfig, type Plugin } from 'vite-plus'
 import { compression, defineAlgorithm } from 'vite-plugin-compression2'
 import { fileURLToPath, URL } from 'node:url'
 
 const serviceTarget = 'http://127.0.0.1:2048'
+
+// GenerateBundle 是插件 generateBundle 钩子的函数形式
+type GenerateBundle = Extract<NonNullable<Plugin['generateBundle']>, (...args: never[]) => unknown>
+
+// compileHintFirst 在 vite 往块开头写入预加载依赖表之后、vite-plugin-compression2 压缩之前，于各块第一行写入 V8 显式编译提示：块在流式解析时于后台编译全部函数，页面挂载与首张图表绘制时主线程不再逐个编译；V8 只采用位于脚本开头的编译提示
+function compileHintFirst(): Plugin {
+  return {
+    name: 'compile-hint-first',
+    apply: 'build',
+    configResolved(config) {
+      const analysis = config.plugins.find(
+        (plugin) => plugin.name === 'vite:build-import-analysis',
+      )!
+      const generate = analysis.generateBundle as GenerateBundle
+      analysis.generateBundle = async function (options, bundle, isWrite) {
+        await generate.call(this, options, bundle, isWrite)
+        for (const chunk of Object.values(bundle))
+          if (chunk.type === 'chunk') chunk.code = `//# allFunctionsCalledOnLoad\n${chunk.code}`
+      }
+    },
+  }
+}
 
 // defineConfig 定义前端构建、本地联调、静态检查与格式化入口
 export default defineConfig({
@@ -191,6 +213,7 @@ export default defineConfig({
   plugins: [
     vue(),
     tailwindcss(),
+    compileHintFirst(),
     compression({
       algorithms: [defineAlgorithm('gzip', { level: 9 })],
       exclude: /index\.html$/,
@@ -205,12 +228,6 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL('../internal/webui/dist', import.meta.url)),
     emptyOutDir: true,
-    rolldownOptions: {
-      output: {
-        // postBanner 在 ECharts 块开头写入 V8 显式编译提示，块在流式解析时于后台编译全部函数，首张图表挂载时主线程不再逐个编译
-        postBanner: (chunk) => (chunk.name === 'chart' ? '//# allFunctionsCalledOnLoad' : ''),
-      },
-    },
   },
   server: {
     // fs.allow 让本地联调读取各语言文案引用的服务文案翻译表 internal/i18n/messages

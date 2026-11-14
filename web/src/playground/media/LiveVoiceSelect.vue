@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import {
   SelectContent,
   SelectItem,
@@ -30,16 +30,22 @@ const options = computed(() =>
 )
 
 onUnmounted(stopSample)
+// primed 在触发器首次获得焦点或首次打开后为真，此前不挂载音色列表
+const primed = ref(false)
 </script>
 
 <template>
-  <SelectRoot v-model="model" :disabled="disabled">
-    <SelectTrigger class="ms-select-trigger w-full" :aria-label="t('pg.voice')">
+  <SelectRoot v-model="model" :disabled="disabled" @update:open="primed = true">
+    <SelectTrigger
+      class="ms-select-trigger w-full"
+      :aria-label="t('pg.voice')"
+      @focus="primed = true"
+    >
       <UiIcon name="voiceSelection" :size="18" />
       <span class="ms-select-value">{{ model }}</span>
       <UiIcon name="chevronDown" :size="20" class="ms-select-arrow" />
     </SelectTrigger>
-    <SelectPortal>
+    <SelectPortal v-if="primed">
       <SelectContent position="popper" :side-offset="0" class="ms-select-panel">
         <SelectViewport>
           <SelectItem

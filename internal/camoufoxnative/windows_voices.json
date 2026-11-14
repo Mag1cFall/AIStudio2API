@@ -1,0 +1,729 @@
+[
+ {
+  "weight": 83,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 10,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 9,
+  "voices": [
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 6,
+  "voices": [
+   "Microsoft Raul - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 6,
+  "voices": [
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 5,
+  "voices": [
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 4,
+  "voices": [
+   "Microsoft Daniel - Portuguese (Brazil):pt-BR:local",
+   "Microsoft Maria - Portuguese (Brazil):pt-BR:local",
+   "Microsoft Maria Desktop - Portuguese(Brazil):pt-BR:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 3,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Richard - English (Canada):en-CA:local",
+   "Microsoft Linda - English (Canada):en-CA:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 3,
+  "voices": [
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 2,
+  "voices": []
+ },
+ {
+  "weight": 2,
+  "voices": [
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 2,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Ravi - English (India):en-IN:local",
+   "Microsoft Heera - English (India):en-IN:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 2,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 2,
+  "voices": [
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 2,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Karsten - German (Switzerland):de-CH:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Guillaume - French (Switzerland):fr-CH:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Tolga - Turkish (Turkey):tr-TR:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Naayf - Arabic (Saudi):ar-SA:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Jakub - Czech (Czech Republic):cs-CZ:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Raul - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina - Spanish (Mexico):es-MX:local",
+   "Microsoft Caroline - French (Canada):fr-CA:local",
+   "Microsoft Claude - French (Canada):fr-CA:local",
+   "Microsoft Nathalie - French (Canada):fr-CA:local",
+   "Microsoft Daniel - Portuguese (Brazil):pt-BR:local",
+   "Microsoft Maria - Portuguese (Brazil):pt-BR:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local",
+   "Microsoft Maria Desktop - Portuguese(Brazil):pt-BR:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Raul - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina - Spanish (Mexico):es-MX:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Heami - Korean (Korean):ko-KR:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Heami Desktop - Korean:ko-KR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hoda - Arabic (Egypt):ar-EG:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Cosimo - Italian (Italy):it-IT:local",
+   "Microsoft Elsa - Italian (Italy):it-IT:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local",
+   "Microsoft Elsa Desktop - Italian (Italy):it-IT:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Ivan - Bulgarian (Bulgaria):bg-BG:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft Heera - English (India):en-IN:local",
+   "Microsoft Ravi - English (India):en-IN:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Adam - Polish (Poland):pl-PL:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Paulina - Polish (Poland):pl-PL:local",
+   "Microsoft Paulina Desktop - Polish:pl-PL:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Helia - Portuguese (Portugal):pt-PT:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Daniel - Portuguese (Brazil):pt-BR:local",
+   "Microsoft Maria - Portuguese (Brazil):pt-BR:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Maria Desktop - Portuguese(Brazil):pt-BR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Stefanos - Greek (Greece):el-GR:local",
+   "Microsoft Tolga - Turkish (Turkey):tr-TR:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Heera - English (India):en-IN:local",
+   "Microsoft Ravi - English (India):en-IN:local",
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Heami - Korean (Korean):ko-KR:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Heami Desktop - Korean:ko-KR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Jakub - Czech (Czech Republic):cs-CZ:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Cosimo - Italian (Italy):it-IT:local",
+   "Microsoft Elsa - Italian (Italy):it-IT:local",
+   "Microsoft Elsa Desktop - Italian (Italy):it-IT:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft Raul - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina - Spanish (Mexico):es-MX:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft Guillaume - French (Switzerland):fr-CH:local",
+   "Microsoft Karsten - German (Switzerland):de-CH:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Hedda Desktop - German:de-DE:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Raul - Spanish (Mexico):es-MX:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Sabina - Spanish (Mexico):es-MX:local",
+   "Microsoft Sabina Desktop - Spanish (Mexico):es-MX:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft David Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Richard - English (Canada):en-CA:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft Linda - English (Canada):en-CA:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Caroline - French (Canada):fr-CA:local",
+   "Microsoft Claude - French (Canada):fr-CA:local",
+   "Microsoft Nathalie - French (Canada):fr-CA:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Helena Mobile - Spanish (Spain):es-ES:local",
+   "Microsoft Laura Mobile - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo Mobile - Spanish (Spain):es-ES:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Stefanos - Greek (Greece):el-GR:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Jon - Norwegian (Bokmål):nb-NO:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Szabolcs - Hungarian (Hungary):hu-HU:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Andika - Indonesian (Indonesia):id-ID:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Michael - German (Austria):de-AT:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Cosimo - Italian (Italy):it-IT:local",
+   "Microsoft Stefanos - Greek (Greece):el-GR:local",
+   "Microsoft Elsa - Italian (Italy):it-IT:local",
+   "Microsoft Elsa Desktop - Italian (Italy):it-IT:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hedda - German (Germany):de-DE:local",
+   "Microsoft Naayf - Arabic (Saudi):ar-SA:local",
+   "Microsoft Katja - German (Germany):de-DE:local",
+   "Microsoft Stefan - German (Germany):de-DE:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft Helena - Spanish (Spain):es-ES:local",
+   "Microsoft Laura - Spanish (Spain):es-ES:local",
+   "Microsoft Pablo - Spanish (Spain):es-ES:local",
+   "Microsoft Hortense - French (France):fr-FR:local",
+   "Microsoft Julie - French (France):fr-FR:local",
+   "Microsoft Paul - French (France):fr-FR:local",
+   "Microsoft Adam - Polish (Poland):pl-PL:local",
+   "Microsoft Paulina - Polish (Poland):pl-PL:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft Tolga - Turkish (Turkey):tr-TR:local",
+   "Microsoft Hedda Desktop - German:de-DE:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Helena Desktop - Spanish (Spain):es-ES:local",
+   "Microsoft Hortense Desktop - French:fr-FR:local",
+   "Microsoft Paulina Desktop - Polish:pl-PL:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft James - English (Australia):en-AU:local",
+   "Microsoft Catherine - English (Australia):en-AU:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Hoda - Arabic (Egypt):ar-EG:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Karsten - German (Switzerland):de-CH:local",
+   "Microsoft George - English (United Kingdom):en-GB:local",
+   "Microsoft Hazel - English (United Kingdom):en-GB:local",
+   "Microsoft Susan - English (United Kingdom):en-GB:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Hazel Desktop - English (Great Britain):en-GB:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Szabolcs - Hungarian (Hungary):hu-HU:local",
+   "Microsoft Irina - Russian (Russia):ru-RU:local",
+   "Microsoft Pavel - Russian (Russia):ru-RU:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft Irina Desktop - Russian:ru-RU:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Huihui - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Mark - English (United States):en-US:local",
+   "Microsoft Zira - English (United States):en-US:local",
+   "Microsoft David - English (United States):en-US:local",
+   "Microsoft Kangkang - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Yaoyao - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Hanhan - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Yating - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Zhiwei - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local",
+   "Microsoft David Desktop - English (United States):en-US:local",
+   "Microsoft Huihui Desktop - Chinese (Simplified):zh-CN:local",
+   "Microsoft Hanhan Desktop - Chinese (Taiwan):zh-TW:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Huihui - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Kangkang - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Yaoyao - Chinese (Simplified, PRC):zh-CN:local",
+   "Microsoft Huihui Desktop - Chinese (Simplified):zh-CN:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ },
+ {
+  "weight": 1,
+  "voices": [
+   "Microsoft Hanhan - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Yating - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Zhiwei - Chinese (Traditional, Taiwan):zh-TW:local",
+   "Microsoft Hanhan Desktop - Chinese (Taiwan):zh-TW:local",
+   "Microsoft Zira Desktop - English (United States):en-US:local"
+  ]
+ }
+]

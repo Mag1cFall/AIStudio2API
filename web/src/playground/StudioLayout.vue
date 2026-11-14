@@ -1,3 +1,8 @@
+<script lang="ts">
+// 标题字体在布局块求值时开始载入，不等首次排版用到字体时才发起
+void document.fonts.load('1em "Inter Tight Variable"').catch(() => [])
+</script>
+
 <script setup lang="ts">
 import '@fontsource-variable/inter'
 import '@fontsource-variable/inter-tight'
@@ -16,6 +21,7 @@ import AgentModelPanel from '@/playground/AgentModelPanel.vue'
 import ModelSelector from '@/playground/ModelSelector.vue'
 import { useMediaQuery } from '@/playground/media-query'
 import { editable } from '@/playground/shortcuts'
+import { useTabTitle } from '@/playground/tab-title'
 
 defineProps<{ adminUsername: string }>()
 const emit = defineEmits<{ logout: [] }>()
@@ -32,6 +38,7 @@ watch(
     if (route.meta.studio) Object.assign(studioRoute, route)
   },
 )
+useTabTitle(route)
 
 // narrow 与官网一致，960 px 以下导航为抽屉
 const narrow = useMediaQuery('(max-width: 960px)')
@@ -65,13 +72,11 @@ function onKeydown(event: KeyboardEvent): void {
 
 onActivated(() => {
   document.documentElement.classList.add('studio')
-  document.title = `${t('nav.playground')} | AIStudio2API`
   window.addEventListener('keydown', onKeydown)
 })
 
 onDeactivated(() => {
   document.documentElement.classList.remove('studio')
-  document.title = 'AIStudio2API'
   window.removeEventListener('keydown', onKeydown)
 })
 </script>

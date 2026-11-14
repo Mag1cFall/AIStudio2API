@@ -292,7 +292,7 @@ func (c *Client) generateInteraction(ctx context.Context, request GenerateReques
 	if request.Unary {
 		reason = "该模型使用 CreateInteractionStream，收集完成后返回"
 	}
-	reportUpstreamMode(ctx, "CreateInteractionStream", "stream", reason)
+	reportUpstreamMode(ctx, "CreateInteractionStream", "stream", 0, reason)
 	body, binding, err := EncodeCreateInteractionStreamRequest(request, entry.defaults)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -880,7 +880,7 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	if request.Unary {
 		reason = "该模型使用 CreateInteraction 后台任务，收集完成后返回"
 	}
-	reportUpstreamMode(ctx, "GetInteractionStream", "stream", reason)
+	reportUpstreamMode(ctx, "GetInteractionStream", "stream", 0, reason)
 	body, binding, err := EncodeCreateInteractionRequest(request, entry.model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)

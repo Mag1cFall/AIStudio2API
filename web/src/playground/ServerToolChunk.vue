@@ -149,7 +149,7 @@ const state = computed(() =>
 
 .fetch-url {
   color: var(--color-v3-text-link);
-  font-family: 'DM Mono', monospace;
+  font-family: 'DM Mono', var(--font-mono);
   font-size: 13px;
   font-weight: 500;
   line-height: 19px;

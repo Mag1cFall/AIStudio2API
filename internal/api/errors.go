@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,17 @@ type errorCodeProvider interface {
 	ErrorCode() string
 }
 
+// decodeJSON 把请求正文解码为一个 JSON 值；读取或解码失败时以同一正文与读取错误逐段解码，返回其错误
 func decodeJSON(r *http.Request, target any) error {
-	decoder := json.NewDecoder(r.Body)
+	body, readErr := io.ReadAll(r.Body)
+	if readErr == nil && json.Unmarshal(body, target) == nil {
+		return nil
+	}
+	reader := io.Reader(bytes.NewReader(body))
+	if readErr != nil {
+		reader = io.MultiReader(reader, errorReader{readErr})
+	}
+	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
@@ -35,6 +45,11 @@ func decodeJSON(r *http.Request, target any) error {
 	}
 	return nil
 }
+
+// errorReader 每次读取都返回同一个错误
+type errorReader struct{ err error }
+
+func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -299,25 +314,36 @@ func writeGeminiError(w http.ResponseWriter, status int, statusName string, mess
 	}}))
 }
 
-// writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After
+// writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After 并在消息末尾写明重试时间
 func writeOpenAIRequestError(w http.ResponseWriter, err error) {
-	setRetryAfter(w, err)
-	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), err.Error())
+	seconds := setRetryAfter(w, err)
+	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), retryMessage(err.Error(), seconds))
 }
 
-// writeOpenAISSEError 在已开始的 OpenAI 事件流中以 error 数据帧写出请求失败
+// writeOpenAISSEError 在已开始的 OpenAI 事件流中以 error 数据帧写出请求失败，可重试时在消息末尾写明重试时间
 func writeOpenAISSEError(w http.ResponseWriter, err error) {
 	status := statusFromError(err)
 	code := openAIErrorCode(err)
 	_ = writeSSE(w, "", map[string]any{"error": openAIErrorBody{
-		Message: publicErrorMessage(status, err.Error()), Type: openAIErrorType(status, code), Code: code,
+		Message: retryMessage(publicErrorMessage(status, err.Error()), retryAfterSeconds(err)), Type: openAIErrorType(status, code), Code: code,
 	}})
 }
 
-// writeAnthropicRequestError 以 Anthropic 错误体写出请求失败，可重试时带 Retry-After
+// writeAnthropicRequestError 以 Anthropic 错误体写出请求失败，可重试时带 Retry-After 并在消息末尾写明重试时间
 func writeAnthropicRequestError(w http.ResponseWriter, err error) {
-	setRetryAfter(w, err)
-	writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), anthropicErrorMessage(err))
+	seconds := setRetryAfter(w, err)
+	writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), retryMessage(anthropicErrorMessage(err), seconds))
+}
+
+// retryMessage 在 seconds 大于 0 时于消息末尾按 OpenAI 限流消息的写法另起一句 Please try again in <seconds>s.
+func retryMessage(message string, seconds int64) string {
+	if seconds <= 0 {
+		return message
+	}
+	if !strings.HasSuffix(message, ".") {
+		message += "."
+	}
+	return message + " Please try again in " + strconv.FormatInt(seconds, 10) + "s."
 }
 
 // contextOverflow 判断错误是否为上游的上下文超限
@@ -336,17 +362,31 @@ func anthropicErrorMessage(err error) string {
 
 // writeGeminiRequestError 以 Gemini 错误体写出请求失败，可重试时带 Retry-After 与 RetryInfo
 func writeGeminiRequestError(w http.ResponseWriter, err error) {
-	status := statusFromError(err)
-	payload := map[string]any{"code": status, "message": err.Error(), "status": geminiErrorStatus(err)}
-	if seconds := setRetryAfter(w, err); seconds > 0 {
+	payload := geminiErrorPayload(err, setRetryAfter(w, err))
+	setAccessLogResponseError(w, err.Error())
+	writeJSON(w, statusFromError(err), officialOrder("gemini", map[string]any{"error": payload}))
+}
+
+// geminiErrorPayload 返回 Gemini 错误对象，seconds 大于 0 时 details 带该时长的 RetryInfo
+func geminiErrorPayload(err error, seconds int64) map[string]any {
+	payload := map[string]any{"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err)}
+	if seconds > 0 {
 		payload["details"] = []any{map[string]any{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": strconv.FormatInt(seconds, 10) + "s"}}
 	}
-	setAccessLogResponseError(w, err.Error())
-	writeJSON(w, status, officialOrder("gemini", map[string]any{"error": payload}))
+	return payload
 }
 
 // setRetryAfter 在错误给出可重试时刻时写入 Retry-After 秒数并返回它，否则返回 0
 func setRetryAfter(w http.ResponseWriter, err error) int64 {
+	seconds := retryAfterSeconds(err)
+	if seconds > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
+	return seconds
+}
+
+// retryAfterSeconds 返回错误给出的可重试时刻距现在的秒数，没有可重试时刻时返回 0
+func retryAfterSeconds(err error) int64 {
 	var retry interface{ RetryAt(time.Time) time.Time }
 	if !errors.As(err, &retry) {
 		return 0
@@ -356,9 +396,7 @@ func setRetryAfter(w http.ResponseWriter, err error) int64 {
 	if !at.After(now) {
 		return 0
 	}
-	seconds := int64(math.Ceil(at.Sub(now).Seconds()))
-	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	return seconds
+	return int64(math.Ceil(at.Sub(now).Seconds()))
 }
 
 func writeAdminError(w http.ResponseWriter, status int, code string, message string) {
@@ -381,6 +419,10 @@ func openAIErrorCode(err error) string {
 	}
 	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
 		return "account_required"
+	}
+	var feedback *aistudio.PromptFeedbackError
+	if errors.As(err, &feedback) {
+		return "invalid_prompt"
 	}
 	if errors.Is(err, aistudio.ErrInvalidArgument) || isUnverifiedProtocolError(err) {
 		return "invalid_request"

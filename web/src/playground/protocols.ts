@@ -1344,6 +1344,16 @@ interface GenerateOptions {
   onUpdate: (update: StreamUpdate) => void
 }
 
+// streamChunks 以 reader 逐块读取 stream，提前结束时取消读取
+async function* streamChunks<T>(stream: ReadableStream<T>): AsyncGenerator<T> {
+  const reader = stream.getReader()
+  try {
+    for (let next = await reader.read(); !next.done; next = await reader.read()) yield next.value
+  } finally {
+    await reader.cancel()
+  }
+}
+
 // generate 以所选协议调用本服务公开接口，把流式事件或完整响应换为片段变化回调
 export async function generate(options: GenerateOptions): Promise<void> {
   const call = protocolCall(
@@ -1386,7 +1396,7 @@ export async function generate(options: GenerateOptions): Promise<void> {
       },
     }),
   )
-  for await (const { data } of events) {
+  for await (const { data } of streamChunks(events)) {
     if (data === '[DONE]') return
     const value = record(JSON.parse(data))
     const error = errorOf(value)

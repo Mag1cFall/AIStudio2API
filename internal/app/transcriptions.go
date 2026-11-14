@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
@@ -40,10 +40,7 @@ func (service *trackedService) Transcribe(
 	workerGenerations := make(map[string]uint64)
 	recoveredWorkers := make(map[string]struct{})
 	request.ObserveAccountFailure = func(accountID string, cause error) {
-		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", fmt.Sprintf(
-			"账号切换 | 模型=%s\n原因: %s",
-			strings.TrimPrefix(request.Model, "models/"), strings.TrimSpace(cause.Error()),
-		))
+		service.requests.logRequestProgress(request.ID, service.accountLabel(accountID), "WARN", "账号切换", attemptFields(strings.TrimPrefix(request.Model, "models/"), cause)...)
 	}
 	request.RecoverWAARuntime = func(recoveryCtx context.Context, accountID string, cause error) (bool, error) {
 		if !aistudio.TranscriptionGenerationFailure(cause) {
@@ -71,9 +68,9 @@ func (service *trackedService) Transcribe(
 		label := service.accountLabel(accountID)
 		modelID := strings.TrimPrefix(request.Model, "models/")
 		if workerFailed || waaRuntimeFailed {
-			service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 重建 | 模型="+modelID)
+			service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 重建", "model", modelID)
 		}
-		service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 已更新 | 模型="+modelID+" | 重放当前请求")
+		service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 已更新，重放当前请求", "model", modelID)
 		return true, nil
 	}
 	observed := aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
@@ -94,31 +91,37 @@ func (service *trackedService) Transcribe(
 	return result, err
 }
 
+// transcriptionCandidates 按已有 Worker 优先的顺序列出支持转录的账户，全部冷却时按排队上限等待恢复
 func (service *trackedService) transcriptionCandidates(ctx context.Context, model string) ([]string, error) {
 	modelID := strings.TrimPrefix(strings.TrimSpace(model), "models/")
-	groups, err := service.pool.ClassifyCandidates(
-		ctx,
-		aistudio.AccountSelection{
-			ModelID: modelID, ModelAccessScope: modelID,
-			Method: "generateContent", Capability: "transcription_output",
-		},
-		service.workers.WarmAccountIDs(),
-	)
-	if err != nil {
-		return nil, err
+	var cooled time.Duration
+	for {
+		groups, err := service.pool.ClassifyCandidates(
+			ctx,
+			aistudio.AccountSelection{
+				ModelID: modelID, ModelAccessScope: modelID,
+				Method: "generateContent", Capability: "transcription_output",
+			},
+			service.workers.WarmAccountIDs(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
+		candidates := service.pool.OrderCandidates(warmAvailable, modelID)
+		candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyReady, modelID)...)
+		candidates = append(candidates, service.pool.OrderCandidates(groups.WarmBusy, modelID)...)
+		candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyBusy, modelID)...)
+		if len(candidates) > 0 {
+			return candidates, nil
+		}
+		if err := waitAllCooling(ctx, modelID, groups.EarliestCooldown, &cooled); err != nil {
+			return nil, err
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	warmAvailable := append(append([]string(nil), groups.WarmReady...), groups.WarmAvailable...)
-	candidates := service.pool.OrderCandidates(warmAvailable, modelID)
-	candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyReady, modelID)...)
-	candidates = append(candidates, service.pool.OrderCandidates(groups.WarmBusy, modelID)...)
-	candidates = append(candidates, service.pool.OrderCandidates(groups.StandbyBusy, modelID)...)
-	if len(candidates) == 0 {
-		return nil, aistudio.ErrNoEligibleAccount
-	}
-	return candidates, nil
 }
 
 var _ aistudio.TranscriptionService = (*trackedService)(nil)

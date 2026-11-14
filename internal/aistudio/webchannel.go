@@ -928,7 +928,7 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 				scope = ""
 			}
 			checkedAt := s.finishQualificationAttempt(true)
-			if _, err := s.lease.pool.MarkQuotaCooldownIfGeneration(s.accountID, scope, s.lease.ModelAccessGeneration(), checkedAt, cooldown); err != nil {
+			if _, _, err := s.lease.pool.MarkQuotaCooldownIfGeneration(s.accountID, scope, s.lease.ModelAccessGeneration(), checkedAt, cooldown); err != nil {
 				event.Err = errors.Join(event.Err, err)
 			} else {
 				s.notifyModelAccessChanged()

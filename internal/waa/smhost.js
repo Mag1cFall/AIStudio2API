@@ -266,6 +266,8 @@
     activate: () => api.activate(),
     // mouseInput 在顶层页面按 Firefox 可信鼠标输入依次派发事件
     mouseInput: (nodes, rects, target, left, point, movement, blurred, focused, types) => api.mouseInput(nodes, rects, target, left, point, movement, blurred, focused, types),
+    // keyInput 在顶层页面按 Firefox 可信键盘输入依次派发事件
+    keyInput: (target, text, types) => api.keyInput(target, text, types),
     shared,
     // track 按 Promise 拒绝跟踪事件维护未处理与已处理队列
     track(promise, handled, global) {

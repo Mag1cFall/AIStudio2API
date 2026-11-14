@@ -3,7 +3,6 @@ package aistudio
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -39,21 +38,14 @@ type ImageProtectedTransport interface {
 
 var _ ImageProtectedTransport = (*WorkerProtectedTransport)(nil)
 
-// GenerateImage 以目录中有该模型 predict 方法的账户生成图片
+// GenerateImage 以目录中有该模型 predict 方法的账户生成图片，上游拒绝账户、额度用尽或服务端出错时换到其他账户
 func (s *PooledService) GenerateImage(ctx context.Context, request ImageRequest) ([]GeneratedImage, error) {
 	request.Model = strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	lease, owned, err := resolveAccountLease(ctx, s.pool, AccountSelection{
-		ModelID: request.Model, Method: "predict", AccountID: strings.TrimSpace(request.AccountID),
+	selection := AccountSelection{ModelID: request.Model, Method: "predict", AccountID: strings.TrimSpace(request.AccountID)}
+	return withAccountAttempts(ctx, s, selection, request.Model, func(ctx context.Context, accountID string) ([]GeneratedImage, error) {
+		request.AccountID = accountID
+		return s.client.GenerateImage(ctx, request)
 	})
-	if err != nil {
-		return nil, err
-	}
-	request.AccountID = lease.Account().ID
-	images, err := s.client.GenerateImage(ContextWithAccountLease(ctx, lease), request)
-	if owned {
-		err = errors.Join(err, lease.Release())
-	}
-	return images, err
 }
 
 // GenerateImage 按官网 Imagen 页发送 GenerateImage 并返回图片

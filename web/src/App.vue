@@ -10,6 +10,7 @@ import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
 } from 'reka-ui'
+import { waitsForCamoufox } from '@/camoufox'
 import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { TabID } from '@/types'
@@ -205,6 +206,13 @@ const navigation: { id: TabID; label: TranslationKey; icon: IconName }[] = [
   { id: 'playground', label: 'nav.playground', icon: 'playground' },
   { id: 'version', label: 'nav.version', icon: 'version' },
 ]
+
+// camoufoxInTask 表示账户页的浏览器登录任务行正在显示 Camoufox 下载进度，此时不再显示顶部横幅
+const camoufoxInTask = computed(
+  () =>
+    currentTab.value === 'accounts' &&
+    accountTasks.value.some((task) => waitsForCamoufox(task, status.value?.camoufox)),
+)
 
 const statusColor = computed(() => {
   if (serviceState.value === 'running') return 'bg-green-500'
@@ -429,7 +437,11 @@ onMounted(revealCurrentTab)
             .replace('{active}', config.active_listen_addr)
         }}
       </div>
-      <CamoufoxBanner v-if="status" :camoufox="status.camoufox" @retry="retryCamoufox" />
+      <CamoufoxBanner
+        v-if="status && !camoufoxInTask"
+        :camoufox="status.camoufox"
+        @retry="retryCamoufox"
+      />
       <div
         v-if="config?.invalid.length"
         role="alert"
@@ -451,6 +463,8 @@ onMounted(revealCurrentTab)
           :loading="loading.accounts"
           :error="errors.accounts"
           :chrome-import="status?.chrome_import ?? false"
+          :camoufox="status?.camoufox"
+          :geoip="status?.geoip"
           @refresh="loadAccountData"
           @updated="updateAccount"
           @notice="showNotice"

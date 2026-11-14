@@ -141,6 +141,11 @@ func (transport *authRetryTransport) DriveFileExists(ctx context.Context, accoun
 	return transport.transport.(aistudio.DriveFileChecker).DriveFileExists(ctx, accountID, token, fileID)
 }
 
+// ReadDriveFile 将对话附件的读取委托给同一认证传输
+func (transport *authRetryTransport) ReadDriveFile(ctx context.Context, accountID string, token string, fileID string) {
+	transport.transport.(aistudio.DriveFileReader).ReadDriveFile(ctx, accountID, token, fileID)
+}
+
 // UploadAssistantFile 将写代码助手附件上传委托给同一认证传输
 func (transport *authRetryTransport) UploadAssistantFile(ctx context.Context, accountID string, blob aistudio.Blob) (string, error) {
 	return transport.transport.(aistudio.AssistantUploader).UploadAssistantFile(ctx, accountID, blob)
@@ -398,14 +403,15 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	account := lease.Account()
 	startedAt := time.Now()
 	refreshed := false
-	logRenewal := func(level, message string) {
+	logRenewal := func(level string, stage api.LogStage, message string, attrs ...any) {
 		if startup, _ := ctx.Value(workerStartupRenewalKey{}).(bool); !startup {
-			refresher.requests.log(account.Config.Label, level, message)
+			stage.Name = "账户认证续签"
+			refresher.requests.logStage(account.Config.Label, level, stage, message, attrs...)
 		}
 	}
 	err := lease.RefreshStorageState(generation, func(state *aistudio.StorageState) error {
 		refreshed = true
-		logRenewal("INFO", "账户认证续签 | 1/2 | 刷新 Cookie")
+		logRenewal("INFO", api.LogStage{Step: 1, Steps: 2}, "刷新 Cookie")
 		extension, _, err := state.AuthExtension()
 		if err != nil {
 			return err
@@ -422,7 +428,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 			if extension.Source.Browser != "chrome" || !strings.EqualFold(extension.Source.Email, account.ID) {
 				return errors.Join(fmt.Errorf("账户 %s 缺少可更新的 Chrome 来源", account.ID), err)
 			}
-			logRenewal("INFO", "账户认证续签 | 更新 Chrome 来源材料")
+			logRenewal("INFO", api.LogStage{}, "更新 Chrome 来源材料")
 			updated, importErr := refresher.importCurrent(ctx, extension.Source, extension.OAuth, proxy)
 			if importErr != nil {
 				return errors.Join(err, importErr)
@@ -443,7 +449,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 		_, err = aistudio.NewSigner().Authorization(*state)
 		return err
 	}, func() error {
-		logRenewal("INFO", "账户认证续签 | 2/2 | 重置协议运行时")
+		logRenewal("INFO", api.LogStage{Step: 2, Steps: 2}, "重置协议运行时")
 		if err := refresher.reset(account.ID); err != nil {
 			return fmt.Errorf("重置账户 %s runtime: %w", account.ID, err)
 		}
@@ -451,10 +457,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
-		logRenewal("ERROR", fmt.Sprintf(
-			"账户认证续签失败 | 耗时=%s | 错误=%s",
-			time.Since(startedAt).Round(time.Millisecond), wrapped.Error(),
-		))
+		logRenewal("ERROR", api.LogStage{State: "failed"}, "账户认证续签失败", "duration", time.Since(startedAt), "error", wrapped)
 		return wrapped
 	}
 	if !refreshed {
@@ -463,10 +466,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	if err := setCookieAuthUser(lease, 0, refresher.prepareWorker); err != nil {
 		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
-	logRenewal("INFO", fmt.Sprintf(
-		"账户认证续签完成 | 耗时=%s",
-		time.Since(startedAt).Round(time.Millisecond),
-	))
+	logRenewal("INFO", api.LogStage{State: "completed"}, "账户认证续签完成", "duration", time.Since(startedAt))
 	return nil
 }
 

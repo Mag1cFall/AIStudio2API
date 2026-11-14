@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -85,12 +86,28 @@ func anthropicSearchBlocks(events []aistudio.Event, apiKey string) ([]string, ma
 	return queries, blocks
 }
 
+// anthropicSearchHead 是 anthropicContentBlock 的字符串字段，用于判断消息是否含搜索历史
+type anthropicSearchHead struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ToolUseID string `json:"tool_use_id"`
+}
+
 // decodeAnthropicSearchHistory 将搜索历史改写为文本块，查询与其结果合并到同一块
 func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
 	aead := anthropicSearchCipher(s.config.APIKey)
 	for index := range request.Messages {
 		message := &request.Messages[index]
-		if !strings.HasPrefix(strings.TrimSpace(string(message.Content)), "[") {
+		if !bytes.HasPrefix(bytes.TrimSpace(message.Content), []byte("[")) {
+			continue
+		}
+		var heads []anthropicSearchHead
+		if json.Unmarshal(message.Content, &heads) == nil && !slices.ContainsFunc(heads, func(head anthropicSearchHead) bool {
+			return head.Type == "server_tool_use" || head.Type == "web_search_tool_result"
+		}) {
+			message.Content, _ = json.Marshal(message.Content)
 			continue
 		}
 		var blocks []json.RawMessage

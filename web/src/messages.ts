@@ -96,7 +96,7 @@ export class Catalog {
     return this.wide ? separator : (halfWidth[separator] ?? separator)
   }
 
-  // resolve 先按整句匹配格式串，没有匹配时去掉首尾空白，依次按列表切分符分段、按错误链拆开外层与内层、按不含动词的文案前缀拆开，最后拆开键与值
+  // resolve 先按整句匹配格式串，没有匹配时去掉首尾空白，依次按列表切分符分段、按错误链拆开外层与内层、按不含动词的文案前缀拆开
   private resolve(text: string): string {
     for (const item of this.entries) {
       if (!text.includes(item.anchor)) continue
@@ -131,9 +131,6 @@ export class Catalog {
       if (item.plain && text.startsWith(`${item.anchor} `))
         return `${item.text} ${this.translate(text.slice(item.anchor.length + 1))}`
     }
-    const equals = text.indexOf('=')
-    if (equals >= 0)
-      return `${this.translate(text.slice(0, equals))}=${this.translate(text.slice(equals + 1))}`
     return text
   }
 }

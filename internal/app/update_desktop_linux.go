@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/api"
 )
 
 // platformUpdateMode 返回 Linux 桌面版的更新方式：AppImage 与 deb 都原地更新
@@ -33,10 +35,10 @@ func (u *selfUpdater) install(ctx context.Context, release *githubRelease) error
 	}
 	u.setStage("install")
 	if image != "" {
-		u.log("INFO", "在线更新 | 2/2 | 替换 AppImage | 版本="+release.TagName)
+		u.requests.logStage("service", "INFO", api.LogStage{Name: "在线更新", Step: 2, Steps: 2}, "替换 AppImage", "version", release.TagName)
 		return replaceAppImage(image, payload)
 	}
-	u.log("INFO", "在线更新 | 2/2 | 安装 deb | 版本="+release.TagName)
+	u.requests.logStage("service", "INFO", api.LogStage{Name: "在线更新", Step: 2, Steps: 2}, "安装 deb", "version", release.TagName)
 	return installDeb(payload)
 }
 
@@ -88,10 +90,10 @@ func installDeb(payload []byte) error {
 }
 
 // updateRestart 返回在线更新完成后的重启动作：启动等待当前进程退出后运行新版本的进程，再结束服务与桌面应用
-func updateRestart(stop func(), _ *atomic.Bool, log func(level, message string)) func() {
+func updateRestart(stop func(), _ *atomic.Bool, log func(level, message string, attrs ...any)) func() {
 	return func() {
 		if err := startSuccessor(); err != nil {
-			log("ERROR", "在线更新重启失败 | 错误="+err.Error())
+			log("ERROR", "在线更新重启失败", "error", err)
 			return
 		}
 		stop()

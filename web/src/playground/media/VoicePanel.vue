@@ -16,7 +16,7 @@ import UiSlidingPanel from '@/playground/ui/UiSlidingPanel.vue'
 import StyleDropdown from './StyleDropdown.vue'
 import { useSamplePlayer } from './sample'
 import { accentOptions, paceOptions, useSpeech, type StylePreset } from './speech'
-import { voiceTraits } from './speech-voices'
+import { voiceTraits, voiceValue } from './speech-voices'
 
 const open = defineModel<boolean>('open', { required: true })
 const props = defineProps<{ speaker: number }>()
@@ -64,9 +64,10 @@ function languageName(code: string): string {
   return new Intl.DisplayNames([locale.value], { type: 'language' }).of(code) ?? code
 }
 
-// optionLabel 返回筛选值的显示文字
+// optionLabel 返回筛选值的显示文字，语言显示为语言名，音高与性别按界面语言显示
 function optionLabel(key: FilterKey, value: string): string {
-  return key === 'locale' ? languageName(value) : value
+  if (key === 'locale') return languageName(value)
+  return key === 'pitch' || key === 'gender' ? voiceValue(value) : value
 }
 
 // filterOptions 返回音色中出现过的筛选值
