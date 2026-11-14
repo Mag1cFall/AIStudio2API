@@ -253,10 +253,24 @@ function setOutputLength(event: Event): void {
   const value = numberInput(event)
   const limit = outputLimit(model.value) ?? Number.MAX_SAFE_INTEGER
   settings.value.maxOutputTokens =
-    value === null
+    value === null || !Number.isFinite(value)
       ? (model.value?.output_token_limit ?? null)
       : Math.min(Math.max(Math.round(value), 1), limit)
   input.value = String(settings.value.maxOutputTokens ?? '')
+}
+
+// onOutputLengthInput 在输入写成规范十进制的有效整数时同步更新输出长度，留待失焦或回车时修正空值、越界值与前导零
+function onOutputLengthInput(event: Event): void {
+  const value = numberInput(event)
+  const limit = outputLimit(model.value) ?? Number.MAX_SAFE_INTEGER
+  if (
+    value !== null &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= limit &&
+    (event.target as HTMLInputElement).value === String(value)
+  )
+    settings.value.maxOutputTokens = value
 }
 
 // setTopK 按官网规则只保留正整数的 Top K，其他输入清空
@@ -807,7 +821,9 @@ watch(schemaOpen, (open) => {
               :max="outputLimit(model)"
               :aria-label="t('pg.maxOutputTokens')"
               :value="settings.maxOutputTokens ?? outputLimit(model)"
+              @input="onOutputLengthInput"
               @change="setOutputLength"
+              @keydown.enter.prevent="setOutputLength"
             />
             <p v-if="model?.capabilities?.output_continuation" class="setting-hint">
               {{ t('pg.outputContinuation') }}

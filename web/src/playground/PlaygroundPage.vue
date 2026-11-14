@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
@@ -29,7 +29,7 @@ const { t } = useI18n()
 const store = useConsole()
 const playground = usePlayground()
 const { session } = playground
-const { panes, comparing, toggleRaw } = useCompare()
+const { panes, comparing, toggleRaw, flush } = useCompare()
 
 const promptBox = ref<InstanceType<typeof PromptBox>>()
 // narrow 与 settingsOpen 是运行设置面板的状态，/ 聚焦输入框，Shift+R 切换原始模式
@@ -98,12 +98,23 @@ watch(
   },
   { immediate: true },
 )
-watch(
-  () => session.id,
-  (id) => {
-    if (id !== null && route.params.id !== id) void router.replace(`/prompts/${id}`)
-  },
-)
+// active 表示试用页正在显示，管理端显示期间保存得到的对话 ID 留到回到试用页时写入地址
+let active = true
+function syncRoute(): void {
+  if (active && session.id !== null && route.params.id !== session.id)
+    void router.replace(`/prompts/${session.id}`)
+}
+watch(() => session.id, syncRoute)
+
+onActivated(() => {
+  active = true
+  syncRoute()
+})
+onDeactivated(() => {
+  active = false
+  flush()
+})
+onBeforeUnmount(flush)
 
 // newChat 与官网一致打开保留当前系统指令的新对话
 function newChat(): void {

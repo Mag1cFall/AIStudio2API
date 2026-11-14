@@ -233,6 +233,7 @@ function models(): Model[] {
 interface SessionLinks {
   compare?: () => CompareData | undefined
   save?: () => Promise<void>
+  canSave?: () => boolean
   draft?: () => { text: string; attachments: Part[] }
 }
 
@@ -240,13 +241,13 @@ interface SessionLinks {
 const draftCountDelay = 500
 
 // createSession 创建一个对话实例，temporary 为真时不单独写入对话库
-function createSession(temporary = false, links: SessionLinks = {}) {
+function createSession(temporary = false, links: SessionLinks = {}, initial?: PaneData) {
   const session = reactive({
     id: null as string | null,
     title: '',
     description: '',
-    settings: defaultSettings(undefined),
-    turns: [] as Turn[],
+    settings: initial ? cloneData(initial.settings) : defaultSettings(undefined),
+    turns: initial ? cloneData(initial.turns) : ([] as Turn[]),
     draft: '',
     attachments: [] as Part[],
     running: false,
@@ -399,8 +400,15 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     return text.length > 60 ? `${text.slice(0, 60)}…` : text
   }
 
+  // clearSave 取消尚未到时的合并保存
+  function clearSave(): void {
+    window.clearTimeout(saveTimer.value)
+    saveTimer.value = 0
+  }
+
   // save 把调用时的对话连同对比模式的右侧窗格写入对话库，右侧窗格保存所在的页面对话，其他临时对话不保存；保存状态只回写到仍在显示的同一对话
   async function save(): Promise<void> {
+    clearSave()
     if (links.save) return links.save()
     if (
       session.temporary ||
@@ -429,7 +437,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
   // scheduleSave 在对话变化后合并保存，生成中到时的保存由生成结束时的保存代替
   function scheduleSave(): void {
     if (session.saveState === 'saved') session.saveState = 'idle'
-    window.clearTimeout(saveTimer.value)
+    clearSave()
     saveTimer.value = window.setTimeout(() => {
       saveTimer.value = 0
       if (!session.running) void save()
@@ -443,8 +451,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
 
   // discard 撤销尚未到时的合并保存并中止生成
   function discard(): void {
-    window.clearTimeout(saveTimer.value)
-    saveTimer.value = 0
+    clearSave()
     controller?.abort()
   }
 
@@ -842,7 +849,11 @@ function createSession(temporary = false, links: SessionLinks = {}) {
       () => [session.settings, session.temporary] as const,
       ([settings], [previous]) => {
         if (settings !== previous && settings === opened) return
-        if ((session.id !== null || session.turns.length > 0) && !session.running) scheduleSave()
+        if (
+          (session.id !== null || session.turns.length > 0 || links.canSave?.()) &&
+          !session.running
+        )
+          scheduleSave()
       },
       { deep: true },
     )
@@ -852,6 +863,7 @@ function createSession(temporary = false, links: SessionLinks = {}) {
         scheduleTokens()
         scheduleDraftTokens()
       },
+      { immediate: true },
     )
     watch(() => draftSource().text, scheduleDraftTokens)
     watch(
@@ -883,6 +895,8 @@ function createSession(temporary = false, links: SessionLinks = {}) {
     applyStarter,
     rename,
     save,
+    scheduleSave,
+    clearSave,
     pending,
     refreshTokens,
     countAttachment,
@@ -912,7 +926,9 @@ function comparePane(): CompareData | undefined {
 
 // flush 在切换对话前立即保存页面对话与对比模式右侧窗格尚未写入的内容，生成中保存已收到的内容
 function flush(): void {
-  if (panes.some((pane) => pane.pending())) void main.save()
+  if (!panes.some((pane) => pane.pending())) return
+  for (const pane of panes) pane.clearSave()
+  void main.save()
 }
 
 // newChat 保存当前对话后开始一个空白对话并退出对比模式，systemInstruction 为新对话的系统指令
@@ -993,9 +1009,11 @@ watch(
   },
 )
 
-// setSync 与官网一致切换系统指令同步，开启时把 index 窗格的系统指令写入右侧窗格
+// setSync 与官网一致切换系统指令同步并保存页面对话，开启时把 index 窗格的系统指令写入右侧窗格
 function setSync(index: number, value: boolean): void {
   syncInstructions.value = value
+  if (!main.session.temporary && (main.session.id !== null || main.session.turns.length > 0))
+    main.scheduleSave()
   if (!value) return
   const text = panes[index]!.session.settings.systemInstruction
   for (const pane of panes.slice(1)) pane.session.settings.systemInstruction = text
@@ -1007,13 +1025,17 @@ const running = computed(() => panes.some((pane) => pane.session.running))
 // addPane 以 data 的运行设置与对话加入右侧窗格并返回它，右侧窗格变化时保存页面对话
 function addPane(data: PaneData): Playground {
   const pane = page(
-    createSession(true, {
-      save: main.save,
-      draft: () => ({ text: main.session.draft, attachments: main.session.attachments }),
-    }),
+    createSession(
+      true,
+      {
+        save: main.save,
+        canSave: () =>
+          !main.session.temporary && (main.session.id !== null || main.session.turns.length > 0),
+        draft: () => ({ text: main.session.draft, attachments: main.session.attachments }),
+      },
+      data,
+    ),
   )
-  pane.session.settings = cloneData(data.settings)
-  pane.session.turns = cloneData(data.turns)
   panes.push(pane)
   return pane
 }
@@ -1029,6 +1051,8 @@ function enterCompare(): void {
   pane.session.systemTokens = main.session.systemTokens
   pane.session.rawMode = main.session.rawMode
   syncInstructions.value = true
+  if (!main.session.temporary && (main.session.id !== null || main.session.turns.length > 0))
+    void main.save()
 }
 
 // leaveCompare 关闭右侧窗格回到单对话
@@ -1109,6 +1133,7 @@ export function useCompare() {
     submitAll,
     appendAll,
     stopAll,
+    flush,
     toggleRaw,
   }
 }
