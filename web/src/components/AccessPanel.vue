@@ -588,15 +588,17 @@ function methodClass(method: string): string {
           </template>
 
           <template v-else-if="section === 'clients'">
-            <div class="space-y-1.5">
+            <div class="grid gap-x-3 gap-y-1.5 @lg:grid-cols-[max-content_minmax(0,1fr)]">
               <div
                 v-for="group in clientGroups"
                 :key="group.label"
-                class="grid gap-x-3 gap-y-1 @lg:grid-cols-[5.5rem_minmax(0,1fr)]"
+                class="grid gap-y-1 @lg:col-span-2 @lg:grid-cols-subgrid"
                 role="group"
                 :aria-label="group.label"
               >
-                <div class="text-xs leading-8 text-gray-500">{{ group.label }}</div>
+                <div class="text-xs leading-8 whitespace-nowrap text-gray-500">
+                  {{ group.label }}
+                </div>
                 <div class="flex flex-wrap gap-1">
                   <button
                     v-for="item in group.items"

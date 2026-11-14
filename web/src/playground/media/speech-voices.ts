@@ -1,5 +1,5 @@
 import type { OrbState } from 'thinking-orbs/engine'
-import { useI18n } from '@/i18n'
+import { useI18n, type TranslationKey } from '@/i18n'
 import type { VoiceDetail } from '@/types'
 
 // SpeechVoice 是官网语音页 Voice Design 的一个示例声音：标题、描述、试听音频与卡片动画
@@ -13,11 +13,34 @@ interface SpeechVoice {
 
 const { t } = useI18n()
 
+// valueKeys 是目录音色音高与性别取值的翻译键，未列出的取值原样显示
+const valueKeys: Partial<Record<string, TranslationKey>> = {
+  Deep: 'pg.pitch.deep',
+  Lower: 'pg.pitch.lower',
+  Low: 'pg.pitch.low',
+  'Lower middle': 'pg.pitch.lowerMiddle',
+  'Medium-low': 'pg.pitch.mediumLow',
+  Middle: 'pg.pitch.middle',
+  Medium: 'pg.pitch.medium',
+  'Medium-high': 'pg.pitch.mediumHigh',
+  High: 'pg.pitch.high',
+  Higher: 'pg.pitch.higher',
+  'Very high': 'pg.pitch.veryHigh',
+  Masculine: 'pg.gender.masculine',
+  Feminine: 'pg.gender.feminine',
+}
+
+// voiceValue 返回音色音高或性别取值在界面语言下的文字
+export function voiceValue(value: string): string {
+  const key = valueKeys[value]
+  return key ? t(key) : value
+}
+
 // voiceTraits 返回目录音色的官网描述与音高
 export function voiceTraits(voice: VoiceDetail): string[] {
   return [
     ...(voice.descriptions ?? []),
-    ...(voice.pitch ? [t('pg.pitchValue').replace('{pitch}', voice.pitch)] : []),
+    ...(voice.pitch ? [t('pg.pitchValue').replace('{pitch}', voiceValue(voice.pitch))] : []),
   ]
 }
 

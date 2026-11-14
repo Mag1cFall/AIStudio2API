@@ -12,6 +12,8 @@ defineProps<{
   env?: string | undefined
   // envNote 是部分控件由环境变量决定时的说明，整行控件仍可编辑
   envNote?: string | undefined
+  // wide 表示控件列加宽，放得下成对的模型下拉
+  wide?: boolean
 }>()
 
 const { t } = useI18n()
@@ -50,7 +52,8 @@ const { t } = useI18n()
       </div>
       <fieldset
         :disabled="env !== undefined"
-        class="w-full min-w-0 disabled:opacity-60 has-[[role=switch]]:flex has-[[role=switch]]:w-auto has-[[role=switch]]:shrink-0 @xl:w-80 @xl:shrink-0 @xl:has-[[role=switch]]:py-[11px]"
+        class="w-full min-w-0 disabled:opacity-60 has-[[role=switch]]:flex has-[[role=switch]]:w-auto has-[[role=switch]]:shrink-0 @xl:shrink-0 @xl:has-[[role=switch]]:py-[11px]"
+        :class="wide ? '@xl:w-[30rem]' : '@xl:w-80'"
       >
         <slot />
       </fieldset>

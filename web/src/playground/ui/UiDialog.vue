@@ -8,6 +8,7 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
+import { ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
@@ -18,11 +19,14 @@ withDefaults(
   { width: '560px', closable: true, headerless: false },
 )
 const { t } = useI18n()
+// shown 在首次打开后保持为真，对话框首次打开前不挂载浮层与内容
+const shown = ref(open.value)
+watch(open, (value) => (shown.value ||= value))
 </script>
 
 <template>
   <DialogRoot v-model:open="open">
-    <DialogPortal>
+    <DialogPortal v-if="shown">
       <DialogOverlay class="ms-dialog-overlay" />
       <DialogContent class="ms-dialog" :style="{ width }" :aria-describedby="undefined">
         <VisuallyHidden v-if="headerless" as-child>

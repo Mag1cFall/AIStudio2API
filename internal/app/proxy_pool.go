@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -50,7 +49,7 @@ func proxyNetworkError(ctx context.Context, err error) bool {
 func (service *trackedService) reportProxyFailure(proxy string, label string, err error) {
 	changed, proxyErr := service.proxies.ReportFailure(proxy, err)
 	if proxyErr != nil {
-		service.requests.log(label, "WARN", "代理改绑 | 错误="+proxyErr.Error())
+		service.requests.log(label, "WARN", "代理改绑失败", "error", proxyErr)
 	}
 	if len(changed) > 0 && service.rebindAccounts != nil {
 		service.rebindAccounts(changed)
@@ -64,7 +63,7 @@ func (service *trackedService) probeProxyPool(ctx context.Context) {
 	}
 	changed, err := service.proxies.Probe(ctx, checkProxy)
 	if err != nil && ctx.Err() == nil {
-		service.requests.log("service", "WARN", "代理改绑 | 错误="+err.Error())
+		service.requests.log("service", "WARN", "代理改绑失败", "error", err)
 	}
 	service.rebindAccounts(changed)
 }
@@ -81,7 +80,7 @@ func (admin *runtimeAdmin) probeProxies(ctx context.Context) {
 		}
 		changed, err := admin.proxies.Probe(ctx, checkProxy)
 		if err != nil && ctx.Err() == nil {
-			admin.requests.log("service", "WARN", "代理改绑 | 错误="+err.Error())
+			admin.requests.log("service", "WARN", "代理改绑失败", "error", err)
 		}
 		admin.rebindAccounts(changed)
 	}
@@ -95,7 +94,7 @@ func (admin *runtimeAdmin) rebindAccounts(accountIDs []string) {
 	go func() {
 		for _, accountID := range accountIDs {
 			if err := admin.rebindAccount(admin.lifecycle, accountID); err != nil && admin.lifecycle.Err() == nil {
-				admin.requests.log(accountID, "WARN", "代理改绑 | 错误="+err.Error())
+				admin.requests.log(accountID, "WARN", "代理改绑失败", "error", err)
 			}
 		}
 	}()
@@ -112,6 +111,6 @@ func (admin *runtimeAdmin) rebindAccount(ctx context.Context, accountID string) 
 		return errors.Join(err, lease.Release())
 	}
 	workerUpdate.Commit()
-	admin.requests.log(account.Config.Label, "WARN", fmt.Sprintf("代理改绑 | 出口=%s", redactedProxy(account.EffectiveProxy(admin.globalProxy))))
+	admin.requests.log(account.Config.Label, "WARN", "代理已改绑", "egress", redactedProxy(account.EffectiveProxy(admin.globalProxy)))
 	return lease.Release()
 }

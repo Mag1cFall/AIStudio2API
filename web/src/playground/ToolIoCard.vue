@@ -34,7 +34,7 @@ const hasOutput = computed(() => props.output !== undefined || slots.output !== 
   border: 1px solid var(--color-v3-outline-var);
   border-radius: 12px;
   background: var(--color-v3-surface-container);
-  font-family: 'DM Mono', monospace;
+  font-family: 'DM Mono', var(--font-mono);
   font-size: 12px;
   line-height: 18px;
 }

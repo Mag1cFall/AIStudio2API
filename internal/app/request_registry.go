@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,7 +66,7 @@ func (registry *requestRegistry) start(request aistudio.GenerateRequest, cancel 
 	tracked := trackedRequest{
 		request: api.AdminRequest{
 			ID: request.ID, Model: request.Model, AccountID: request.AccountID,
-			State: "queued", StartedAt: time.Now().UTC(),
+			State: "queued", StartedAt: time.Now(),
 		},
 		cancel: cancel,
 	}
@@ -156,13 +157,35 @@ func (registry *requestRegistry) cancelAll() {
 	}
 }
 
-func (registry *requestRegistry) log(source string, level string, message string) {
-	registry.recordLog(api.AdminLog{Source: source, Level: level, Message: message, Event: "runtime.message"})
+// log 记录一条运行日志，attrs 依次为字段的英文标识与取值
+func (registry *requestRegistry) log(source, level, message string, attrs ...any) {
+	registry.recordLog(api.AdminLog{Source: source, Level: level, Message: message, Fields: logFields(attrs), Event: "runtime.message"})
 }
 
-// recordLog 将同一结构化事件发布到管理页面与控制台
+// logStage 记录一条属于 stage 的运行日志，attrs 依次为字段的英文标识与取值
+func (registry *requestRegistry) logStage(source, level string, stage api.LogStage, message string, attrs ...any) {
+	registry.recordLog(api.AdminLog{Source: source, Level: level, Message: message, Fields: logFields(attrs), Stage: &stage, Event: "runtime.message"})
+}
+
+// logFields 把依次排列的标识与取值转为日志字段，取值去掉首尾空白，时长取到毫秒
+func logFields(attrs []any) []api.LogField {
+	if len(attrs) == 0 {
+		return nil
+	}
+	fields := make([]api.LogField, 0, len(attrs)/2)
+	for index := 0; index+1 < len(attrs); index += 2 {
+		value := attrs[index+1]
+		if duration, ok := value.(time.Duration); ok {
+			value = duration.Round(time.Millisecond)
+		}
+		fields = append(fields, api.LogField{Key: attrs[index].(string), Value: strings.TrimSpace(fmt.Sprint(value))})
+	}
+	return fields
+}
+
+// recordLog 将同一结构化事件发布到管理页面与控制台，时间为带时区偏移的本地时间
 func (registry *requestRegistry) recordLog(entry api.AdminLog) {
-	entry.Time = time.Now().UTC()
+	entry.Time = time.Now()
 	registry.mu.Lock()
 	registry.logs = append(registry.logs, entry)
 	if len(registry.logs) >= adminLogCompactAt {
@@ -190,6 +213,12 @@ func (registry *requestRegistry) writeConsole(ctx context.Context) {
 			}
 			record := slog.NewRecord(entry.Time, level, entry.Message, 0)
 			record.AddAttrs(slog.String("event", entry.Event), slog.String("source", entry.Source))
+			if entry.Stage != nil {
+				record.AddAttrs(slog.Any("stage", entry.Stage))
+			}
+			for _, field := range entry.Fields {
+				record.AddAttrs(slog.String(field.Key, field.Value))
+			}
 			if entry.Request != nil {
 				record.AddAttrs(slog.Any("request", entry.Request))
 			}

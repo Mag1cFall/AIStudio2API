@@ -36,14 +36,16 @@ function collectOptions(nodes: VNode[], result: SelectOption[]): SelectOption[] 
   return result
 }
 
-// useSelectOptions 解析插槽选项并以索引映射字符串与数字选中值
+// useSelectOptions 解析插槽选项并以索引映射字符串与数字选中值；选中值不在选项中时显示选中值本身
 export function useSelectOptions(model: Ref<string | number | undefined>) {
   const slots = useSlots()
   const options = computed(() => collectOptions(slots.default?.() ?? [], []))
   const selectedIndex = computed(() =>
     options.value.findIndex((option) => option.value === model.value),
   )
-  const selectedLabel = computed(() => options.value[selectedIndex.value]?.label ?? '')
+  const selectedLabel = computed(
+    () => options.value[selectedIndex.value]?.label ?? String(model.value ?? ''),
+  )
   const selectedKey = computed({
     get: () => (selectedIndex.value < 0 ? '' : String(selectedIndex.value)),
     set: (key: string) => {
@@ -52,6 +54,13 @@ export function useSelectOptions(model: Ref<string | number | undefined>) {
     },
   })
   return { options, selectedLabel, selectedKey }
+}
+
+// keepSelected 在选项末尾补上已不在数据中的筛选值，all 为表示全部的取值
+export function keepSelected<T extends string>(values: T[], selected: string, all: string): T[] {
+  return selected === all || (values as string[]).includes(selected)
+    ? values
+    : [...values, selected as T]
 }
 
 // selectTriggerClass 是下拉框触发器的公共样式
@@ -75,17 +84,20 @@ import {
   SelectTrigger,
   SelectViewport,
 } from 'reka-ui'
+import { ref } from 'vue'
 import UiIcon from './UiIcon.vue'
 
 defineOptions({ inheritAttrs: false })
 
 const model = defineModel<string | number>()
 const { options, selectedLabel, selectedKey } = useSelectOptions(model)
+// primed 在触发器首次获得焦点或首次打开后为真，此前不挂载选项列表
+const primed = ref(false)
 </script>
 
 <template>
-  <SelectRoot v-model="selectedKey">
-    <SelectTrigger v-bind="$attrs" :class="selectTriggerClass">
+  <SelectRoot v-model="selectedKey" @update:open="primed = true">
+    <SelectTrigger v-bind="$attrs" :class="selectTriggerClass" @focus="primed = true">
       <span class="min-w-0 flex-1 truncate">{{ selectedLabel }}</span>
       <UiIcon
         name="chevronDown"
@@ -93,7 +105,7 @@ const { options, selectedLabel, selectedKey } = useSelectOptions(model)
         class="text-gray-500 transition-transform duration-150 group-data-[state=open]:rotate-180"
       />
     </SelectTrigger>
-    <SelectPortal>
+    <SelectPortal v-if="primed">
       <SelectContent
         position="popper"
         :side-offset="4"

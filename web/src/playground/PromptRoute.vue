@@ -1,47 +1,37 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { SavedPrompt } from '@/types'
 import PlaygroundPage from './PlaygroundPage.vue'
-import VideoPage from './media/VideoPage.vue'
 import UiGradientSpinner from './ui/UiGradientSpinner.vue'
-import { useVideo, type VideoData } from './media/video'
 import { usePlayground } from './session'
 import type { PromptData } from './types'
 
 const route = useRoute()
 const { t } = useI18n()
 const playground = usePlayground()
-const video = useVideo()
-// kind 是已保存提示词的页面类型，读取完成前为空
-const kind = ref<'chat' | 'video' | ''>('')
-const prompt = ref<SavedPrompt<PromptData | VideoData>>()
-// savedVideo 是当前地址对应的已保存视频会话
-const savedVideo = computed(() => {
-  const saved = prompt.value
-  if (!saved || saved.id !== route.params.id) return undefined
-  return { title: saved.title, description: saved.description, data: saved.data as VideoData }
-})
+// ready 表示已读取过地址中的会话，读取完成前显示读取中
+const ready = ref(false)
+const prompt = ref<SavedPrompt<PromptData>>()
 
-// load 读取已保存的会话并按其类型选择页面，读取失败时交给对话页再读一次并显示原因
+// load 读取已保存的会话交给对话页，读取失败时交给对话页再读一次并显示原因
 async function load(id: string): Promise<void> {
   try {
-    const saved = await api.prompt<PromptData | VideoData>(id)
+    const saved = await api.prompt<PromptData>(id)
     if (route.params.id !== id) return
     prompt.value = saved
-    kind.value = 'kind' in saved.data && saved.data.kind === 'video' ? 'video' : 'chat'
   } catch {
     if (route.params.id !== id) return
     prompt.value = undefined
-    kind.value = 'chat'
   }
+  ready.value = true
 }
 
-// retry 重新打开读取失败的会话，与打开地址时一样按会话类型选择页面
+// retry 重新打开读取失败的会话
 function retry(): void {
-  kind.value = ''
+  ready.value = false
   void load(String(route.params.id))
 }
 
@@ -50,11 +40,7 @@ watch(
   (id) => {
     if (typeof id !== 'string' || id === '') return
     if (playground.session.id === id) {
-      kind.value = 'chat'
-      return
-    }
-    if (video.state.id === id) {
-      kind.value = 'video'
+      ready.value = true
       return
     }
     void load(id)
@@ -65,14 +51,9 @@ watch(
 
 <template>
   <PlaygroundPage
-    v-if="kind === 'chat'"
-    :prompt="prompt?.id === route.params.id ? (prompt as SavedPrompt<PromptData>) : undefined"
+    v-if="ready"
+    :prompt="prompt?.id === route.params.id ? prompt : undefined"
     @retry="retry"
-  />
-  <VideoPage
-    v-else-if="kind === 'video'"
-    :prompt-id="String(route.params.id)"
-    :prompt="savedVideo"
   />
   <div v-else class="prompt-loading" role="status" :aria-label="t('common.loading')">
     <UiGradientSpinner />

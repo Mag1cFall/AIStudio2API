@@ -449,7 +449,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 	if request.Unary {
 		reason = "Build 写代码助手使用服务端流，收集完成后返回"
 	}
-	reportUpstreamMode(ctx, assistantOfflineMethod, "stream", reason)
+	reportUpstreamMode(ctx, assistantOfflineMethod, "stream", 0, reason)
 	lease, ok := AccountLeaseFromContext(ctx)
 	if !ok {
 		return nil, nil, fmt.Errorf("Build 写代码助手请求缺少账户租约")

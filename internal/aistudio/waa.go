@@ -50,11 +50,12 @@ func followUpFrom(ctx context.Context) (followUp, bool) {
 	return item, ok
 }
 
-// PreparedProtectedRequest 表示已写入 proof 的请求与写入的 proof，由页面界面运行的请求 proof 为空
+// PreparedProtectedRequest 表示已写入 proof 的请求、写入的 proof 与页面输入框中的提示词，由页面界面运行的请求 proof 为空
 type PreparedProtectedRequest struct {
-	Body    []byte
-	Headers http.Header
-	Proof   string
+	Body       []byte
+	Headers    http.Header
+	Proof      string
+	PagePrompt string
 }
 
 // WorkerPhase 表示账户 runtime 当前阶段

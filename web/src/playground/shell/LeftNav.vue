@@ -36,7 +36,7 @@ const entries: NavEntry[] = [
 ]
 
 // playgroundRoutes 是导航中高亮 API 试用的页面：官网高亮 Playground 的页面，音乐页不高亮
-const playgroundRoutes = new Set(['prompt', 'saved', 'video', 'image', 'speech', 'live'])
+const playgroundRoutes = new Set(['prompt', 'saved', 'image', 'speech', 'live'])
 
 // active 判断入口是否对应当前页面
 function active(entry: NavEntry): boolean {

@@ -2,9 +2,19 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
-import { byteLength, formatLogNumber, prettyBody, requestSources, type LogRow } from '@/logs'
-import type { RequestBody } from '@/types'
+import {
+  byteLength,
+  formatLogNumber,
+  isAttempt,
+  logField,
+  prettyBody,
+  requestSources,
+  requestTimeline,
+  type LogRow,
+} from '@/logs'
+import type { AdminLog, RequestBody } from '@/types'
 import DisclosureChevron from './DisclosureChevron.vue'
+import LogLine from './LogLine.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiDisclosure from './UiDisclosure.vue'
 import UiIcon from './UiIcon.vue'
@@ -40,27 +50,121 @@ const runningSeconds = computed(() =>
   ),
 )
 
-// currentStep 是运行中请求最近一条进度日志的首行
+// currentStep 是运行中请求最近一条进度日志，请求刚开始或刚换账户时为空
 const currentStep = computed(() => {
   const latest = props.row.events.at(-1)!
-  return latest.event === 'request.started' ? '' : logText(latest.message.split('\n')[0]!)
+  return latest.event === 'request.started' || isAttempt(latest) ? undefined : latest
 })
 
 // sources 是请求依次用到的账户
 const sources = computed(() => requestSources(props.row))
-// switchReasons 是请求结束后换下的各账户最后一条警告或错误
-const switchReasons = computed(() =>
-  running.value
-    ? []
-    : sources.value
-        .filter((source) => source !== props.row.entry.source)
-        .flatMap((source) => {
-          const event = [...props.row.events]
-            .reverse()
-            .find((item) => item.source === source && item.level !== 'INFO')
-          return event ? [{ source, message: logText(event.message).replaceAll('\n', ' ') }] : []
-        }),
-)
+// attempts 是请求中失败后换账户的各次上游尝试
+const attempts = computed(() => props.row.events.filter(isAttempt))
+// attemptGroups 按 Google 拒绝账户的失败类型或上游 HTTP 状态汇总换账户次数，次数多的在前，两者都没有的归入“其他”
+const attemptGroups = computed(() => {
+  const groups = new Map<string, { label: string; tone: string; count: number }>()
+  for (const attempt of attempts.value) {
+    const cause = logField(attempt, 'cause')
+    const status = logField(attempt, 'status') ?? ''
+    const key = cause ?? status
+    const group = groups.get(key) ?? {
+      label: cause ? t(`logs.cause.${cause}` as TranslationKey) : status || t('logs.attemptOther'),
+      tone: cause ? 'tone-error' : statusTone(status),
+      count: 0,
+    }
+    group.count += 1
+    groups.set(key, group)
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count)
+})
+// timeline 是详情中的时间线
+const timeline = computed(() => requestTimeline(props.row.events))
+// openAttempts 是时间线中展开了全部事件的尝试序号
+const openAttempts = ref(new Set<number>())
+
+// toggleAttempt 展开或收起时间线中一次尝试的全部事件
+function toggleAttempt(index: number): void {
+  const next = new Set(openAttempts.value)
+  if (!next.delete(index)) next.add(index)
+  openAttempts.value = next
+}
+
+// causeKeys 是上游 HTTP 状态对应的失败原因文案键
+const causeKeys: Record<string, TranslationKey> = {
+  '400': 'logs.cause.invalid',
+  '401': 'logs.cause.signedOut',
+  '403': 'logs.cause.permission',
+  '404': 'logs.cause.notFound',
+  '429': 'logs.cause.quota',
+  '500': 'logs.cause.internal',
+  '503': 'logs.cause.unavailable',
+}
+
+// attemptCause 返回一次尝试的失败原因：Google 拒绝账户时按失败类型，其余按上游 HTTP 状态归类，两者都没有时为原因原文的首行
+function attemptCause(attempt: AdminLog): string {
+  const cause = logField(attempt, 'cause')
+  if (cause !== undefined) return t(`logs.cause.${cause}` as TranslationKey)
+  const status = logField(attempt, 'status')
+  if (status !== undefined) return t(causeKeys[status] ?? 'logs.cause.failed')
+  return logText(logField(attempt, 'reason') ?? '').split('\n')[0]!
+}
+
+// attemptReason 返回已归类的尝试按界面语言显示的完整原因，未归类时原因已作为失败原因显示
+function attemptReason(attempt: AdminLog): string {
+  return logField(attempt, 'status') === undefined && logField(attempt, 'cause') === undefined
+    ? ''
+    : logText(logField(attempt, 'reason') ?? '')
+}
+
+// upstreamMessage 返回原因中上游 RPC 错误自带的原文，即“返回 HTTP 状态、协议错误码”之后的文字，没有时为完整原因
+function upstreamMessage(attempt: AdminLog): string {
+  const reason = logField(attempt, 'reason') ?? ''
+  return (
+    /返回 HTTP \d+(?:、协议错误码 \d+)?: ([\s\S]*)$/.exec(reason)?.[1] ?? attemptReason(attempt)
+  )
+}
+
+// statusTone 返回上游状态标记的颜色：额度用尽的 429 为警告色，401、403 与 5xx 为错误色，其余为中性色
+function statusTone(status: string): string {
+  if (status === '429') return 'tone-warn'
+  return status === '401' || status === '403' || status.startsWith('5')
+    ? 'tone-error'
+    : 'tone-neutral'
+}
+
+// sourceName 返回时间线中的来源：账户只显示邮箱的本地部分，服务、请求与账户管理显示界面语言的名称
+function sourceName(source: string): string {
+  const at = source.indexOf('@')
+  if (at > 0) return source.slice(0, at)
+  return t(`logs.sources.${source}` as TranslationKey) ?? source
+}
+
+// trimmed 返回去掉与卡片模型相同的 model 字段后的事件
+function trimmed(event: AdminLog): AdminLog {
+  return event.fields?.some((field) => field.key === 'model' && field.value === request.value.model)
+    ? { ...event, fields: event.fields.filter((field) => field.key !== 'model') }
+    : event
+}
+
+// clock 返回事件按界面语言显示的时刻
+function clock(event: AdminLog): string {
+  return new Date(event.time).toLocaleTimeString(locale.value, { hour12: false })
+}
+
+// occurrences 列出合并的同类事件各自的时刻与字段原文
+function occurrences(events: AdminLog[]): string {
+  return events
+    .map((event) =>
+      [
+        clock(event),
+        ...(event.fields ?? []).map(
+          (field) =>
+            `${t(`logs.field.${field.key}` as TranslationKey) ?? field.key} ${logText(field.value)}`,
+        ),
+      ].join('  '),
+    )
+    .join('\n')
+}
 
 const body = ref<RequestBody | null>(null)
 const bodyState = ref<'idle' | 'loading' | 'missing' | 'error' | 'ready'>('idle')
@@ -105,6 +209,11 @@ const finishLabel = computed(() => {
 // number 按当前语言格式化统计数值
 function number(value: number, digits = 0): string {
   return formatLogNumber(value, locale.value, digits)
+}
+
+// seconds 按当前语言格式化以秒计的时长
+function seconds(value: number, digits = 0): string {
+  return formatLogNumber(value, locale.value, digits, 'second')
 }
 
 // toggleBody 展开或收起正文一节，首次展开时读取账本保存的请求与响应正文
@@ -160,36 +269,53 @@ const bodyParts = computed(() =>
       <span v-if="request.channel" class="request-channel">{{
         t(channelLabelKey(request.channel))
       }}</span>
-      <span v-if="request.duration_ms !== undefined" class="request-duration"
-        >{{ number(request.duration_ms / 1000, 2) }} s</span
+      <span v-if="attempts.length" class="request-attempts"
+        ><span class="log-field-key">{{ t('logs.switches') }}</span
+        >&nbsp;{{ number(attempts.length) }}
+        <span
+          v-for="group in attemptGroups"
+          :key="group.label"
+          class="attempt-status"
+          :class="group.tone"
+          >{{ group.label }} ×{{ number(group.count) }}</span
+        ></span
       >
-      <span v-else-if="running" class="request-duration">{{ number(runningSeconds) }} s</span>
-      <span v-if="request.tool_calls" class="tool-count"
-        >{{ t('logs.tools') }} {{ number(request.tool_calls) }}</span
-      >
+      <span v-if="request.duration_ms !== undefined" class="request-duration">{{
+        seconds(request.duration_ms / 1000, 2)
+      }}</span>
+      <span v-else-if="running" class="request-duration">{{ seconds(runningSeconds) }}</span>
     </div>
-    <p v-if="running && currentStep" class="request-step">{{ currentStep }}</p>
-    <div v-if="request.usage" class="request-metrics">
-      <span
-        >{{ t('logs.reasoning') }} <b>{{ number(request.usage.reasoning_tokens) }}</b></span
-      >
-      <span
-        >{{ t('logs.reply') }} <b>{{ number(request.usage.reply_tokens) }}</b></span
-      >
-      <span
-        >{{ t('logs.outputTotal') }} <b>{{ number(request.usage.output_tokens) }}</b> tokens</span
-      >
-      <span v-if="request.usage.average_tokens_per_second !== undefined"
-        >{{ t('logs.averageSpeed') }}
-        <b>{{ number(request.usage.average_tokens_per_second, 1) }}</b> tokens/s</span
-      >
-      <span v-if="request.first_event_ms !== undefined"
-        >{{ t('logs.firstToken') }} <b>{{ number(request.first_event_ms / 1000, 1) }}</b> s</span
-      >
-    </div>
-    <p v-for="reason in switchReasons" :key="reason.source" class="request-switch">
-      {{ reason.source }} · {{ reason.message }}
+    <p v-if="running && currentStep" class="request-step">
+      <LogLine :entry="trimmed(currentStep)" part="inline" />
     </p>
+    <div v-if="request.usage || request.tool_calls" class="request-metrics">
+      <template v-if="request.usage">
+        <span class="log-field"
+          ><span class="log-field-key">{{ t('logs.reasoning') }}</span
+          >&nbsp;{{ number(request.usage.reasoning_tokens) }}</span
+        >
+        <span class="log-field"
+          ><span class="log-field-key">{{ t('logs.reply') }}</span
+          >&nbsp;{{ number(request.usage.reply_tokens) }}</span
+        >
+        <span class="log-field"
+          ><span class="log-field-key">{{ t('logs.outputTotal') }}</span
+          >&nbsp;{{ number(request.usage.output_tokens) }} tokens</span
+        >
+        <span v-if="request.usage.average_tokens_per_second !== undefined" class="log-field"
+          ><span class="log-field-key">{{ t('logs.averageSpeed') }}</span
+          >&nbsp;{{ number(request.usage.average_tokens_per_second, 1) }} tokens/s</span
+        >
+        <span v-if="request.first_event_ms !== undefined" class="log-field"
+          ><span class="log-field-key">{{ t('logs.firstToken') }}</span
+          >&nbsp;{{ seconds(request.first_event_ms / 1000, 1) }}</span
+        >
+      </template>
+      <span v-if="request.tool_calls" class="log-field"
+        ><span class="log-field-key">{{ t('logs.tools') }}</span
+        >&nbsp;{{ number(request.tool_calls) }}</span
+      >
+    </div>
     <p v-if="request.error" class="request-error request-error-summary">
       {{ logText(request.error) }}
     </p>
@@ -240,12 +366,69 @@ const bodyParts = computed(() =>
           </template>
         </dl>
         <ol class="request-timeline">
-          <li v-for="(event, index) in row.events" :key="index">
-            <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
-            <span v-if="sources.length > 1" class="request-timeline-source">{{
-              event.source
-            }}</span>
-            <span>{{ logText(event.message) }}</span>
+          <li
+            v-for="(item, index) in timeline"
+            :key="index"
+            :class="{ 'timeline-attempt': item.kind === 'attempt' }"
+          >
+            <template v-if="item.kind === 'attempt'">
+              <button
+                type="button"
+                class="attempt-toggle"
+                :aria-expanded="openAttempts.has(index)"
+                @click="toggleAttempt(index)"
+              >
+                <time class="font-mono">{{ clock(item.events[0]!) }}</time>
+                <span class="request-timeline-source" :title="item.attempt.source">{{
+                  sourceName(item.attempt.source)
+                }}</span>
+                <span class="attempt-line">
+                  <span
+                    v-if="logField(item.attempt, 'status')"
+                    class="attempt-status"
+                    :class="statusTone(logField(item.attempt, 'status')!)"
+                    >{{ logField(item.attempt, 'status') }}</span
+                  >
+                  <span class="attempt-cause">{{ attemptCause(item.attempt) }}</span>
+                  <span
+                    v-if="attemptReason(item.attempt)"
+                    class="attempt-detail"
+                    :title="attemptReason(item.attempt)"
+                    >{{ logText(upstreamMessage(item.attempt)) }}</span
+                  >
+                </span>
+                <DisclosureChevron class="request-disclosure-icon" :open="openAttempts.has(index)"
+                  ><UiIcon name="chevronRight" :size="13"
+                /></DisclosureChevron>
+              </button>
+              <UiCollapse :open="openAttempts.has(index)">
+                <ol class="attempt-events">
+                  <li v-for="(event, step) in item.events" :key="step">
+                    <time class="font-mono">{{ clock(event) }}</time>
+                    <span class="request-timeline-line"><LogLine :entry="trimmed(event)" /></span>
+                  </li>
+                </ol>
+              </UiCollapse>
+            </template>
+            <template v-else>
+              <time class="font-mono">{{ clock(item.events[0]!) }}</time>
+              <span
+                v-if="sources.length > 1"
+                class="request-timeline-source"
+                :title="item.events[0]!.source"
+                >{{ sourceName(item.events[0]!.source) }}</span
+              >
+              <span class="request-timeline-line"
+                ><LogLine :entry="trimmed(item.events.at(-1)!)"
+                  ><span
+                    v-if="item.events.length > 1"
+                    class="timeline-count"
+                    :title="occurrences(item.events)"
+                    >×{{ number(item.events.length) }}</span
+                  ></LogLine
+                ></span
+              >
+            </template>
           </li>
         </ol>
         <section class="request-json">
@@ -311,7 +494,7 @@ const bodyParts = computed(() =>
   gap: 2px 10px;
 }
 .request-heading strong {
-  color: var(--color-gray-200);
+  color: var(--color-fg);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -319,7 +502,6 @@ const bodyParts = computed(() =>
   border: 1px solid currentColor;
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 13px;
   line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
@@ -342,7 +524,6 @@ const bodyParts = computed(() =>
 }
 .request-channel {
   color: var(--color-gray-500);
-  font-size: 13px;
 }
 .request-duration {
   color: var(--color-fg);
@@ -351,26 +532,17 @@ const bodyParts = computed(() =>
 }
 .request-step {
   margin: 2px 0 0;
-  color: var(--color-gray-400);
-  font-size: 13px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.tool-count {
-  color: var(--color-gray-400);
-  font-size: 13px;
+.request-step :deep(.log-line-message) {
+  color: var(--color-gray-300);
 }
 .request-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 14px;
+  gap: 2px 6px;
   margin-top: 2px;
-  color: var(--color-gray-400);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.request-metrics b {
-  color: var(--color-gray-200);
-  font-weight: 500;
 }
 .request-error {
   margin: 2px 0 0;
@@ -403,16 +575,20 @@ const bodyParts = computed(() =>
   gap: 4px 16px;
   margin: 0 0 8px;
 }
+.request-details dt {
+  color: var(--color-gray-500);
+}
 .request-details dd {
   color: var(--color-fg);
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 .request-timeline {
   border-left: 1px solid var(--color-line);
   padding-left: 12px;
   margin: 8px 0;
 }
-.request-timeline li {
+.request-timeline > li:not(.timeline-attempt) {
   display: flex;
   align-items: baseline;
   gap: 12px;
@@ -423,17 +599,112 @@ const bodyParts = computed(() =>
   flex-shrink: 0;
   color: var(--color-gray-500);
 }
-/* request-switch 为卡片上换下账户的原因，最多两行，全文在详情中 */
-.request-switch {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 2px 0 0;
-  color: var(--color-yellow-400);
-  font-size: 13px;
+.request-timeline time {
+  font-variant-numeric: tabular-nums;
+}
+.request-timeline-line {
+  min-width: 0;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+}
+.timeline-count {
+  margin-inline-end: 8px;
+  color: var(--color-gray-400);
+  font-variant-numeric: tabular-nums;
+}
+/* request-attempts 为卡片标题行的换账户次数与按上游状态的分组计数 */
+.request-attempts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  color: var(--color-gray-300);
+  font-variant-numeric: tabular-nums;
+}
+.attempt-status {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tone-warn {
+  color: var(--color-yellow-400);
+}
+.tone-error {
+  color: var(--color-red-400);
+}
+.tone-neutral {
+  color: var(--color-gray-400);
+}
+/* timeline-attempt 为时间线中一次失败后换账户的尝试，一行显示账户、上游状态与原因，点击展开该次尝试的全部事件 */
+.timeline-attempt {
+  margin-bottom: 4px;
+}
+.attempt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% + 6px);
+  margin-left: -6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  text-align: start;
+  transition: background-color 120ms ease;
+}
+.attempt-toggle:hover {
+  background: color-mix(in oklab, var(--color-line) 40%, transparent);
+}
+.attempt-toggle .request-timeline-source {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attempt-toggle:focus-visible {
+  outline: 1px solid var(--color-blue-400);
+  outline-offset: 2px;
+}
+.attempt-line {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* attempt-cause 与 attempt-detail 单行显示，上游原文只占剩余宽度，悬停显示全文 */
+.attempt-cause {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--color-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attempt-detail {
+  flex: 1 1 0;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--color-gray-500);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attempt-events {
+  margin: 4px 0 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--color-line);
+}
+.attempt-events li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.attempt-events time {
+  flex-shrink: 0;
+  color: var(--color-gray-500);
+  font-variant-numeric: tabular-nums;
 }
 .request-section-toggle {
   display: flex;
@@ -492,6 +763,18 @@ const bodyParts = computed(() =>
 @media (max-width: 767px) {
   .request-duration {
     margin-left: 0;
+  }
+  /* 窄屏下换号行只显示账户、上游状态与原因，账户名先截断，上游原文在展开的事件中 */
+  .attempt-toggle .request-timeline-source {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .attempt-line {
+    flex: 0 0 auto;
+    margin-inline-end: auto;
+  }
+  .attempt-detail {
+    display: none;
   }
   .request-metrics {
     gap: 2px 12px;

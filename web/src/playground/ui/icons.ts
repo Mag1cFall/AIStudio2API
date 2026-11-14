@@ -91,7 +91,6 @@ import symbol_stars from '@material-symbols/svg-300/outlined/stars.svg?raw'
 import symbol_stop from '@material-symbols/svg-300/outlined/stop.svg?raw'
 import symbol_stop_circle from '@material-symbols/svg-300/outlined/stop_circle.svg?raw'
 import symbol_support_agent from '@material-symbols/svg-300/outlined/support_agent.svg?raw'
-import symbol_swap_horiz from '@material-symbols/svg-300/outlined/swap_horiz.svg?raw'
 import symbol_terminal from '@material-symbols/svg-300/outlined/terminal.svg?raw'
 import symbol_text_compare from '@material-symbols/svg-300/outlined/text_compare.svg?raw'
 import symbol_toll from '@material-symbols/svg-300/outlined/toll.svg?raw'
@@ -216,7 +215,6 @@ export const icons = {
   asterisk: symbol_asterisk,
   chatBubble: symbol_chat_bubble,
   addPhoto: symbol_add_photo_alternate,
-  swapHoriz: symbol_swap_horiz,
   fullscreen: symbol_fullscreen,
   fullscreenExit: symbol_fullscreen_exit,
   hub: symbol_hub,

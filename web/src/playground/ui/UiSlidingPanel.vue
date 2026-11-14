@@ -7,6 +7,7 @@ import {
   DialogRoot,
   DialogTitle,
 } from 'reka-ui'
+import { ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
@@ -18,6 +19,9 @@ withDefaults(defineProps<{ title: string; width?: string; back?: boolean }>(), {
 })
 const emit = defineEmits<{ back: [] }>()
 const { t } = useI18n()
+// shown 在首次打开后保持为真，面板首次打开前不挂载浮层与内容
+const shown = ref(open.value)
+watch(open, (value) => (shown.value ||= value))
 
 // focusInitial 打开面板时把焦点交给内容中带 autofocus 的元素，没有时保留默认的首个可聚焦元素
 function focusInitial(event: Event): void {
@@ -30,7 +34,7 @@ function focusInitial(event: Event): void {
 
 <template>
   <DialogRoot v-model:open="open">
-    <DialogPortal>
+    <DialogPortal v-if="shown">
       <DialogOverlay class="ms-panel-overlay" />
       <DialogContent
         class="ms-panel"

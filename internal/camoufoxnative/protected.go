@@ -1,6 +1,7 @@
 package camoufoxnative
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -344,8 +345,11 @@ type protectedResponseBody struct {
 	channel   *bidiChannel
 	// stop 在正文读完前关闭时中止请求，为空时在页面中止 XHR
 	stop func() error
-	// release 在关闭时结束请求所在的标签页使用，参数表示正文已读完；为空时按受保护请求结束
-	release func(done bool)
+	// release 在关闭时结束请求所在的标签页使用，参数表示正文已读完与正文中出现了函数调用；为空时按受保护请求结束
+	release func(done, call bool)
+	// call 表示正文中出现了函数调用 Part，tail 是已读正文末尾不足一个标记长度的字节
+	call bool
+	tail []byte
 
 	mu       sync.Mutex
 	buffer   []byte
@@ -370,9 +374,15 @@ func (body *protectedResponseBody) Read(target []byte) (int, error) {
 			return 0, errors.Join(err, body.worker.cancelProtectedRequest(body.contextID, body.page, body.requestID))
 		}
 		if !strings.HasPrefix(value, "{") {
+			start := len(body.buffer)
 			body.buffer, err = base64.StdEncoding.AppendDecode(body.buffer, []byte(value))
 			if err != nil {
 				return 0, fmt.Errorf("解码浏览器响应块: %w", err)
+			}
+			if !body.call {
+				window := append(body.tail, body.buffer[start:]...)
+				body.call = bytes.Contains(window, FunctionCallMarker)
+				body.tail = window[max(len(window)-len(FunctionCallMarker)+1, 0):]
 			}
 			if body.consumed++; body.consumed == protectedGrantBatch {
 				body.consumed = 0
@@ -410,10 +420,10 @@ func (body *protectedResponseBody) Close() error {
 		return nil
 	}
 	body.closed = true
-	done := body.done
+	done, call := body.done, body.call
 	body.mu.Unlock()
 	if body.release != nil {
-		defer body.release(done)
+		defer body.release(done, call)
 	} else {
 		defer body.worker.finishRequest(body.contextID)
 	}

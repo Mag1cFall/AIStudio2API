@@ -108,6 +108,7 @@ export const vTooltip: Directive<HTMLElement, string | undefined, TooltipModifie
     element.addEventListener('pointerdown', hideTooltip)
   },
   updated(element, binding) {
+    if (binding.value === binding.oldValue) return
     element.dataset.tooltip = binding.value ?? ''
     if (shown !== element || !tip) return
     if (element.dataset.tooltip) tip.textContent = element.dataset.tooltip

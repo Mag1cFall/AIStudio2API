@@ -22,6 +22,8 @@
   const userActivation = topRealm ? topRealm.userActivation : { at: null };
   // transientActivationMs 是 Firefox dom.user_activation.transient.timeout 的瞬时激活时长
   const transientActivationMs = 5000;
+  // inputKeys 是 Windows Firefox 粘贴时按下的键：KeyboardEvent 的 code、keyCode、location 与是否为修饰键
+  const inputKeys = { Control: { code: 'ControlLeft', keyCode: 17, location: 1, modifier: true }, v: { code: 'KeyV', keyCode: 86, location: 0, modifier: false } };
   // frameURL 是 iframe Realm 当前文档的地址，导航提交前为初始 about:blank 文档
   let frameURL = realmName === 'frame' ? 'about:blank' : '';
   // locationFields 返回地址对应的 Location 各字段
@@ -454,6 +456,12 @@
       nodes.forEach((node, index) => { brandFor(node).rect = rects[index]; });
       const [clientX, clientY] = point;
       for (const type of types) {
+        if (type === 'change') {
+          const event = create('Event');
+          Object.assign(brandFor(event).over, { type, isTrusted: true, bubbles: true, cancelable: false, composed: false, timeStamp: host.performanceNow() });
+          dispatch(blurred, event);
+          continue;
+        }
         const focus = type === 'focusin' || type === 'focusout';
         const out = type === 'pointerout' || type === 'mouseout';
         const pointer = type.startsWith('pointer') || type === 'click';
@@ -468,6 +476,28 @@
         if (pointer) Object.assign(over, { pointerId: 0, pointerType: 'mouse', width: 1, height: 1, pressure: pressed ? 0.5 : 0, isPrimary: true, altitudeAngle: Math.PI / 2, azimuthAngle: 0 });
         if (type === 'pointerdown') api.activate();
         dispatch(type === 'focusout' ? blurred : type === 'focusin' ? focused : out ? left : target, event);
+      }
+    },
+    // keyInput 按 Firefox 可信键盘输入依次向有焦点的 target 派发 types 中的事件：keydown 与 keyup 的冒号后为键名，paste 带只含 text/plain 的剪贴板数据，beforeinput 之后把 text 写入 target 再派发 input，按下非修饰键时记录一次用户按键
+    keyInput: (target, text, types) => {
+      for (const entry of types) {
+        const [type, name] = entry.split(':');
+        const key = inputKeys[name];
+        const event = create(key ? 'KeyboardEvent' : type === 'paste' ? 'ClipboardEvent' : 'InputEvent');
+        const over = brandFor(event).over;
+        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: type !== 'input', composed: true, timeStamp: host.performanceNow() });
+        if (key) {
+          Object.assign(over, { view: g, detail: 0, key: name, code: key.code, keyCode: key.keyCode, which: key.keyCode, charCode: 0, location: key.location, ctrlKey: !(type === 'keyup' && name === 'Control'), altKey: false, shiftKey: false, metaKey: false, repeat: false, isComposing: false });
+          if (type === 'keydown' && !key.modifier) api.activate();
+        } else if (type === 'paste') {
+          const data = create('DataTransfer');
+          Object.assign(brandFor(data).over, { types: Object.freeze(['text/plain']), dropEffect: 'none', effectAllowed: 'uninitialized' });
+          over.clipboardData = data;
+        } else {
+          Object.assign(over, { view: g, detail: 0, inputType: 'insertFromPaste', data: text, dataTransfer: null, isComposing: false });
+          if (type === 'input') Object.getOwnPropertyDescriptor(protos[isA(brandFor(target).iface, 'HTMLInputElement') ? 'HTMLInputElement' : 'HTMLTextAreaElement'], 'value').set.call(target, text);
+        }
+        dispatch(target, event);
       }
     },
     reportException: error => reportException(error),
@@ -1271,6 +1301,7 @@
     },
     'Element.className': (brand, value) => { (brand.attrs || (brand.attrs = new Map())).set('class', String(value)); },
     'HTMLTextAreaElement.value': (brand, value) => { brand.over.value = String(value).replace(/\r\n?/g, '\n'); },
+    'HTMLInputElement.value': (brand, value) => { brand.over.value = String(value).replace(/[\r\n]/g, ''); },
     'Document.cookie': (brand, value) => {
       const [pair, ...attributes] = String(value).split(';');
       const index = pair.indexOf('=');
@@ -1745,7 +1776,7 @@
       return Promise.resolve(cookieItems().filter(item => name === undefined || item.name === String(name)));
     },
     'GPU.requestAdapter': () => Promise.resolve(null),
-    'MediaDevices.enumerateDevices': () => Promise.resolve(['audioinput', 'videoinput'].map(kind => {
+    'MediaDevices.enumerateDevices': () => Promise.resolve(profile.mediaInputs.map(kind => {
       const device = create('MediaDeviceInfo');
       Object.assign(brandFor(device).over, { deviceId: '', kind, label: '', groupId: '' });
       return device;

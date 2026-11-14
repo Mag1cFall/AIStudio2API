@@ -26,18 +26,16 @@ import UiIcon from '@/playground/ui/UiIcon.vue'
 import LibraryPaginator from './LibraryPaginator.vue'
 import LibraryRowMenu from './LibraryRowMenu.vue'
 import SavePromptDialog from './SavePromptDialog.vue'
-import { useVideo } from './media/video'
 import { useMediaQuery } from './media-query'
 import { newTurnID, usePlayground } from './session'
 
 // SortColumn 是排序所依据的列，空字符串为默认的更新时间倒序
 type SortColumn = '' | 'name' | 'updated'
 
-const { t, locale, errorText } = useI18n()
+const { t, locale, errorText, tokenLabel } = useI18n()
 const store = useConsole()
 const router = useRouter()
 const playground = usePlayground()
-const video = useVideo()
 const handset = useMediaQuery('(max-width: 768px)')
 const { prompts, nextPageToken, loaded, page } = library
 const loadingMore = ref(false)
@@ -159,7 +157,6 @@ async function rename(newTitle: string, description: string): Promise<void> {
     prompts.value = [summary, ...prompts.value.filter((entry) => entry.id !== item.id)]
     if (playground.session.id === item.id)
       Object.assign(playground.session, { title: newTitle, description })
-    if (video.state.id === item.id) Object.assign(video.state, { title: newTitle, description })
   } catch (error) {
     store.showNotice(errorText(error), 'error')
   }
@@ -172,7 +169,6 @@ async function remove(): Promise<void> {
   if (item === null) return
   try {
     if (playground.session.id === item.id) await playground.deletePrompt()
-    else if (video.state.id === item.id) await video.remove()
     else await api.deletePrompt(item.id)
     prompts.value = prompts.value.filter((entry) => entry.id !== item.id)
   } catch (error) {
@@ -270,7 +266,6 @@ watch(
 )
 
 onMounted(async () => {
-  document.title = `${t('pg.history')} | AIStudio2API`
   // 回到历史页时在下一帧绘制前恢复上次的滚动位置，滚动所需的布局随这一帧完成，不并入挂载页面的任务
   if (library.scrollTop > 0)
     requestAnimationFrame(() => (scroller.value!.scrollTop = library.scrollTop))
@@ -359,6 +354,19 @@ onBeforeUnmount(() => {
                 </RouterLink>
                 <div class="sub-text subtitle-line">
                   <span>{{ t('pg.createdByYou') }}</span>
+                  <template v-if="item.turns !== undefined">
+                    <span class="subtitle-separator">•</span>
+                    <span class="subtitle-stat">{{
+                      t(item.turns === 1 ? 'pg.historyMessagesOne' : 'pg.historyMessages').replace(
+                        '{count}',
+                        String(item.turns),
+                      )
+                    }}</span>
+                  </template>
+                  <template v-if="item.tokens !== undefined">
+                    <span class="subtitle-separator">•</span>
+                    <span class="subtitle-stat">{{ tokenLabel(item.tokens) }}</span>
+                  </template>
                   <template v-if="item.description">
                     <span class="subtitle-separator">•</span>
                     <span class="subtitle-description">{{ item.description }}</span>
@@ -470,6 +478,19 @@ onBeforeUnmount(() => {
                 </RouterLink>
                 <div class="sub-text subtitle-line">
                   <span>{{ t('pg.createdByYou') }}</span>
+                  <template v-if="item.turns !== undefined">
+                    <span class="subtitle-separator">•</span>
+                    <span class="subtitle-stat">{{
+                      t(item.turns === 1 ? 'pg.historyMessagesOne' : 'pg.historyMessages').replace(
+                        '{count}',
+                        String(item.turns),
+                      )
+                    }}</span>
+                  </template>
+                  <template v-if="item.tokens !== undefined">
+                    <span class="subtitle-separator">•</span>
+                    <span class="subtitle-stat">{{ tokenLabel(item.tokens) }}</span>
+                  </template>
                   <template v-if="item.description">
                     <span class="subtitle-separator">•</span>
                     <span class="subtitle-description">{{ item.description }}</span>
@@ -754,18 +775,23 @@ onBeforeUnmount(() => {
 
 .subtitle-line {
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 2px 4px;
   align-items: baseline;
   margin-top: 2px;
   overflow: hidden;
   line-height: 1.3;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .subtitle-separator {
   flex-shrink: 0;
   opacity: 0.5;
+}
+
+.subtitle-stat {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .subtitle-description {

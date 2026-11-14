@@ -570,7 +570,10 @@ func (worker *Worker) State() State {
 	return state
 }
 
-// Close 结束 BiDi session 并清理 Camoufox profile
+// pageUnloadDelay 是标签页离开官网页面后等浏览器发出页面卸载时 sendBeacon 上报的时长
+const pageUnloadDelay = time.Second
+
+// Close 像用户离开页面一样先把各标签页导航到空白页，等页面卸载时的上报发出后结束 BiDi session 并清理 Camoufox profile
 func (worker *Worker) Close() error {
 	if worker == nil {
 		return nil
@@ -583,6 +586,10 @@ func (worker *Worker) Close() error {
 	client := worker.client
 	connection := worker.connection
 	process := worker.process
+	contexts := make([]string, 0, len(worker.chats))
+	for _, tab := range worker.chats {
+		contexts = append(contexts, tab.contextID)
+	}
 	worker.mu.Unlock()
 	if worker.idle != nil {
 		worker.idle.Stop()
@@ -590,6 +597,12 @@ func (worker *Worker) Close() error {
 	}
 	if client != nil && connection != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		for _, contextID := range contexts {
+			_, _ = client.command(closeCtx, "browsingContext.navigate", map[string]any{"context": contextID, "url": "about:blank", "wait": "complete"})
+		}
+		if len(contexts) > 0 {
+			_ = waitContext(closeCtx, pageUnloadDelay)
+		}
 		_, _ = client.command(closeCtx, "session.end", map[string]any{})
 		cancel()
 		_ = connection.Close()

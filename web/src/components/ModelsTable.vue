@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { parseAccountBindings } from '@/accountBindings'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
@@ -7,11 +7,9 @@ import { priceLines } from '@/playground/catalog'
 import type { Account, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
 import DetailDialog from './DetailDialog.vue'
-import DisclosureChevron from './DisclosureChevron.vue'
 import FilterMenu from './FilterMenu.vue'
-import UiCollapse from './UiCollapse.vue'
 import UiIcon from './UiIcon.vue'
-import UiSelect from './UiSelect.vue'
+import UiSelect, { keepSelected } from './UiSelect.vue'
 
 const props = defineProps<{
   models: Model[]
@@ -29,9 +27,6 @@ const { locale, t, errorText } = useI18n()
 const query = useQueryText('q')
 const selectedMethod = useQueryText('method')
 const detail = ref<Model | null>(null)
-// codedOpen 是详情中未命名能力码是否展开，打开另一个模型的详情时收起
-const codedOpen = ref(false)
-watch(detail, () => (codedOpen.value = false))
 const saving = ref(false)
 
 // modelChannels 与服务端一致解析 MODEL_CHANNELS 为模型到限定通道的映射：模型 ID 去掉 models/ 前缀，通道转为小写
@@ -127,8 +122,12 @@ async function saveConfig(changes: Partial<ServiceConfig>, savedNotice: string):
 }
 
 const methods = computed(() =>
-  [...new Set(props.models.flatMap((model) => model.methods))].sort((left, right) =>
-    left.localeCompare(right),
+  keepSelected(
+    [...new Set(props.models.flatMap((model) => model.methods))].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    selectedMethod.value,
+    '',
   ),
 )
 
@@ -158,30 +157,83 @@ function accountRisk(model: Model): boolean {
   return model.channels?.includes('assistant') ?? false
 }
 
-// capabilityNames 返回模型明确启用的能力名称
+// capabilityKeys 是模型目录能力在界面上的名称，与官网运行设置的用词一致；未列出的能力是内部路由标记或只有编号的能力码，不显示
+const capabilityKeys: Partial<Record<string, TranslationKey>> = {
+  thinking: 'models.capability.thinking',
+  thinking_level: 'pg.thinkingLevel',
+  thinking_summaries: 'models.capability.thinkingSummaries',
+  function_declarations: 'pg.functionCalling',
+  code_execution: 'pg.codeExecution',
+  google_search: 'pg.googleSearch',
+  google_maps: 'pg.googleMaps',
+  browse: 'pg.urlContext',
+  image_search: 'pg.imageSearch',
+  media_resolution: 'pg.mediaResolution',
+  aspect_ratio: 'pg.aspectRatio',
+  output_resolution: 'pg.outputResolution',
+  speech_translation: 'models.capability.speechTranslation',
+  transcription_speaker_labels: 'models.capability.speakerLabels',
+  transcription_word_timestamps: 'models.capability.wordTimestamps',
+  transcription_custom_vocabulary: 'models.capability.customVocabulary',
+  interactions_api: 'models.capability.interactions',
+}
+
+// capabilityNames 返回模型明确启用、且有界面名称的能力
 function capabilityNames(model: Model): string[] {
-  return Object.entries(model.capabilities ?? {})
-    .filter(([, enabled]) => enabled)
-    .map(([name]) => name)
+  return Object.entries(model.capabilities ?? {}).flatMap(([name, enabled]) => {
+    const key = capabilityKeys[name]
+    return enabled && key ? [t(key)] : []
+  })
 }
 
-// unnamedCapability 匹配目录中只有编号、没有名称的能力码
-const unnamedCapability = /^(secondary_)?capability_code_\d+$/
+// optionKeys 是模型目录能力选项在界面上的名称，顺序即详情中的显示顺序
+const optionKeys: [string, TranslationKey][] = [
+  ['aliases', 'models.aliases'],
+  ['voices', 'pg.voice'],
+  ['languages', 'pg.voiceLanguage'],
+  ['image_aspect_ratios', 'models.imageAspectRatios'],
+  ['image_output_resolutions', 'models.imageResolutions'],
+  ['video_tasks', 'pg.videoTask'],
+  ['video_aspect_ratios', 'models.videoAspectRatios'],
+  ['video_output_resolutions', 'models.videoResolutions'],
+  ['video_duration_range', 'pg.videoDuration'],
+  ['video_frame_rates', 'pg.frameRate'],
+]
 
-// capabilityGroups 把模型能力分成有名称的能力与未命名的能力码
-function capabilityGroups(model: Model): { named: string[]; coded: string[] } {
-  const names = capabilityNames(model)
-  return {
-    named: names.filter((name) => !unnamedCapability.test(name)),
-    coded: names.filter((name) => unnamedCapability.test(name)),
+// videoTaskKeys 是视频任务取值的界面名称
+const videoTaskKeys: Partial<Record<string, TranslationKey>> = {
+  text_to_video: 'pg.videoTaskText',
+  image_to_video: 'pg.videoTaskImage',
+  reference_to_video: 'pg.videoTaskReference',
+  edit: 'pg.videoTaskEdit',
+  extend: 'pg.videoTaskExtend',
+}
+
+// optionValues 返回能力选项按界面语言显示的取值：语言代码显示为语言名，视频时长显示为秒数范围
+function optionValues(name: string, values: string[]): string {
+  if (name === 'languages') {
+    const names = new Intl.DisplayNames([locale.value], { type: 'language' })
+    return values.map((code) => names.of(code) ?? code).join(' / ')
   }
+  if (name === 'video_tasks') {
+    return values
+      .map((value) => (videoTaskKeys[value] ? t(videoTaskKeys[value]) : value))
+      .join(' / ')
+  }
+  if (name === 'video_duration_range') {
+    const range = Object.fromEntries(values.map((value) => value.split('=')))
+    const seconds = new Intl.NumberFormat(locale.value, { style: 'unit', unit: 'second' })
+    return `${new Intl.NumberFormat(locale.value).format(Number(range.min))}–${seconds.format(Number(range.max))}`
+  }
+  return values.join(' / ')
 }
 
-// capabilityOptionEntries 展开模型目录返回的真实能力选项
-function capabilityOptionEntries(model: Model): [string, string[]][] {
-  return Object.entries(model.capability_options ?? {}).sort(([left], [right]) =>
-    left.localeCompare(right),
-  )
+// capabilityOptions 返回模型目录中有界面名称的能力选项
+function capabilityOptions(model: Model): { label: string; values: string }[] {
+  return optionKeys.flatMap(([name, key]) => {
+    const values = model.capability_options?.[name]
+    return values?.length ? [{ label: t(key), values: optionValues(name, values) }] : []
+  })
 }
 
 // outputLimit 返回模型可设置的输出上限，自动续写模型为输入上限
@@ -261,7 +313,7 @@ function modelSummary(model: Model): string {
         v-else-if="filteredModels.length === 0"
         class="rounded border border-line bg-panel py-10 text-center text-gray-500"
       >
-        {{ t('models.empty') }}
+        {{ props.models.length === 0 ? t('models.empty') : t('models.noMatches') }}
       </div>
       <div
         v-else
@@ -502,53 +554,24 @@ function modelSummary(model: Model): string {
           <span class="mb-2 block text-xs text-gray-500">{{ t('models.capabilities') }}</span>
           <div class="flex flex-wrap gap-2">
             <span
-              v-for="capability in capabilityGroups(detail).named"
+              v-for="capability in capabilityNames(detail)"
               :key="capability"
-              class="rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-gray-300"
+              class="rounded border border-line bg-canvas px-2 py-1 text-xs text-gray-300"
             >
               {{ capability }}
             </span>
             <span v-if="capabilityNames(detail).length === 0" class="text-gray-600">—</span>
           </div>
-          <template v-if="capabilityGroups(detail).coded.length">
-            <button
-              type="button"
-              class="mt-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300"
-              :aria-expanded="codedOpen"
-              @click="codedOpen = !codedOpen"
-            >
-              <DisclosureChevron :open="codedOpen"
-                ><UiIcon name="chevronRight" :size="12"
-              /></DisclosureChevron>
-              {{
-                t('models.unnamedCapabilities').replace(
-                  '{count}',
-                  String(capabilityGroups(detail).coded.length),
-                )
-              }}
-            </button>
-            <UiCollapse :open="codedOpen">
-              <div class="flex flex-wrap gap-2 pt-2">
-                <span
-                  v-for="capability in capabilityGroups(detail).coded"
-                  :key="capability"
-                  class="rounded border border-line bg-canvas px-2 py-1 font-mono text-xs text-gray-500"
-                >
-                  {{ capability }}
-                </span>
-              </div>
-            </UiCollapse>
-          </template>
-          <div v-if="capabilityOptionEntries(detail).length" class="mt-3 space-y-1 text-xs">
+          <dl v-if="capabilityOptions(detail).length" class="mt-3 space-y-1 text-xs">
             <div
-              v-for="[name, values] in capabilityOptionEntries(detail)"
-              :key="name"
+              v-for="option in capabilityOptions(detail)"
+              :key="option.label"
               class="[overflow-wrap:anywhere]"
             >
-              <code class="text-gray-500">{{ name }}:</code>
-              <span class="ml-1 text-gray-400">{{ values.join(' / ') }}</span>
+              <dt class="inline text-gray-500">{{ option.label }}:</dt>
+              <dd class="ml-1 inline text-gray-400">{{ option.values }}</dd>
             </div>
-          </div>
+          </dl>
         </div>
       </div>
     </DetailDialog>

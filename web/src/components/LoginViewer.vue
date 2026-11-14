@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '@/api'
+import { useDownloadProgress } from '@/camoufox'
 import { useI18n } from '@/i18n'
+import type { PreparationStatus } from '@/types'
+import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 import UiIcon from './UiIcon.vue'
 
 // ViewerFrame 是服务端推送的画面所属页面，宽高为 CSS 像素
@@ -26,9 +29,21 @@ type ViewerMessage =
   | { type: 'dialog'; dialog: ViewerDialog | null }
   | (ViewerFrame & { type: 'frame' })
 
-const props = defineProps<{ view: string; error: string }>()
+const props = defineProps<{
+  view: string
+  error: string
+  camoufox: PreparationStatus | undefined
+}>()
 const emit = defineEmits<{ unavailable: []; cancel: []; hide: []; close: [] }>()
 const { t } = useI18n()
+// camoufoxPercent 与 camoufoxSize 是登录浏览器启动前 Camoufox 的下载进度
+const { percent: camoufoxPercent, sizeText: camoufoxSize } = useDownloadProgress(
+  () => props.camoufox,
+)
+// camoufoxLabel 是 Camoufox 下载或解压阶段的文字
+const camoufoxLabel = computed(() =>
+  t(props.camoufox?.download ? 'accounts.downloadingBrowser' : 'camoufox.preparing'),
+)
 
 const status = ref('')
 const frame = ref<ViewerFrame | null>(null)
@@ -67,16 +82,20 @@ let touch: {
   scrolling: boolean
 } | null = null
 
-const visible = computed(() => status.value !== '' || props.error !== '')
+// preparing 表示登录浏览器在等 Camoufox 下载或解压，服务端还没有开始启动浏览器
+const preparing = computed(() => status.value === '' && props.camoufox?.preparing === true)
+const visible = computed(() => status.value !== '' || props.error !== '' || preparing.value)
 const pageURL = computed(() => (frame.value === null ? null : new URL(frame.value.url)))
 const host = computed(() => pageURL.value?.hostname ?? '')
 const secure = computed(() => pageURL.value?.protocol === 'https:')
 const busy = computed(
-  () => props.error === '' && (status.value === 'starting' || status.value === 'saving'),
+  () =>
+    props.error === '' &&
+    (preparing.value || status.value === 'starting' || status.value === 'saving'),
 )
 const statusText = computed(() => {
   if (props.error !== '') return t('accounts.liveFailed')
-  if (status.value === 'starting') return t('accounts.liveStarting')
+  if (preparing.value || status.value === 'starting') return t('accounts.liveStarting')
   if (status.value === 'saving') return t('accounts.liveSaving')
   return t('accounts.liveWaiting')
 })
@@ -462,6 +481,23 @@ onBeforeUnmount(() => {
         >
           <UiIcon name="spinner" :size="22" />
           {{ statusText }}
+          <div v-if="preparing" role="status" class="w-72 max-w-[80vw] text-xs">
+            <div class="flex flex-wrap justify-between gap-x-3 gap-y-1">
+              <span>{{ camoufoxLabel }}</span>
+              <span v-if="camoufoxSize" class="font-mono text-gray-500 tabular-nums"
+                >{{ camoufoxSize
+                }}<template v-if="camoufoxPercent !== null">
+                  · {{ camoufoxPercent }}%</template
+                ></span
+              >
+            </div>
+            <CamoufoxProgressBar
+              class="mt-2"
+              :label="camoufoxLabel"
+              :percent="camoufoxPercent"
+              :size-text="camoufoxSize"
+            />
+          </div>
         </div>
         <div
           v-if="reconnecting && error === ''"

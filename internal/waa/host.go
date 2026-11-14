@@ -66,6 +66,8 @@ type Profile struct {
 	Navigation map[string]any
 	// DOMLoading 是顶层页面旧版 performance.timing.domLoading 相对导航开始的毫秒数
 	DOMLoading int
+	// MediaInputs 是页面未授权时 enumerateDevices 列出的输入设备种类，按 audioinput、videoinput 顺序
+	MediaInputs []string
 }
 
 // closureListenerMapPattern 匹配 Closure 事件库在页面载入时以随机数命名的监听表全局名
@@ -183,6 +185,7 @@ type agent struct {
 	notify          mozjs.Handle
 	activate        mozjs.Handle
 	mouseInput      mozjs.Handle
+	keyInput        mozjs.Handle
 	array           mozjs.Handle
 	top             *realmHost
 	realms          []*realmHost
@@ -410,6 +413,9 @@ func (state *agent) installAgent(result mozjs.Handle) error {
 	if state.mouseInput, err = handleOf(cx.Get(result, "mouseInput")); err != nil {
 		return err
 	}
+	if state.keyInput, err = handleOf(cx.Get(result, "keyInput")); err != nil {
+		return err
+	}
 	reporter, err := handleOf(cx.Get(result, "reportMicrotask"))
 	if err != nil {
 		return err
@@ -577,7 +583,7 @@ func (state *agent) realmProfile(realm string) map[string]any {
 			values["document"] = document
 		}
 	}
-	result := map[string]any{"hasFocus": profile.HasFocus, "window": window, "values": values}
+	result := map[string]any{"hasFocus": profile.HasFocus, "window": window, "values": values, "mediaInputs": append([]string{}, profile.MediaInputs...)}
 	if realm == "top" && len(profile.Navigation) > 0 {
 		result["domLoading"] = profile.DOMLoading
 	}

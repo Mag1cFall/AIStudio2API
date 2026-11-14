@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -240,7 +239,7 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 	manager.finishStart(launchCancel)
 	if next != current {
 		if err := current.Close(); err != nil {
-			manager.requests.log("service", "WARN", "旧生成服务关闭失败 | 错误="+err.Error())
+			manager.requests.log("service", "WARN", "旧生成服务关闭失败", "error", err)
 		}
 	}
 	return status, startErr
@@ -594,11 +593,15 @@ func (manager *runtimeManager) LoginAccount(ctx context.Context, id string, view
 // prepareLoginCamoufox 在浏览器登录前等 Camoufox 就绪，需要下载时记录等待，失败时记录原因
 func (manager *runtimeManager) prepareLoginCamoufox(ctx context.Context, source string) error {
 	if !camoufoxnative.PreparationState().Ready {
-		manager.requests.log(source, "INFO", "浏览器登录 | 等待 Camoufox 下载")
+		manager.requests.log(source, "INFO", "浏览器登录等待 Camoufox 下载")
+		camoufoxnative.PrepareInBackground(manager.egressProxy())
+		if status, err := manager.Status(ctx); err == nil {
+			manager.requests.publish(api.AdminEvent{Type: "status", Data: status})
+		}
 	}
 	_, err := camoufoxnative.Prepare(ctx, manager.egressProxy())
 	if err != nil {
-		manager.requests.log(source, "ERROR", "浏览器登录失败 | 错误="+strings.TrimSpace(err.Error()))
+		manager.requests.log(source, "ERROR", "浏览器登录失败", "error", err)
 	}
 	return err
 }

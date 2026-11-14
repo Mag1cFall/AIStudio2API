@@ -19,12 +19,12 @@ CREATE TABLE IF NOT EXISTS states (
 // Store 读写续接状态库
 type Store struct {
 	db     *sql.DB
-	log    func(level, message string)
+	log    func(level, message string, attrs ...any)
 	loaded []api.SavedState
 }
 
 // Open 打开或创建续接状态库，按保存顺序读出全部节点，写入失败时经 log 记录
-func Open(path string, log func(level, message string)) (*Store, error) {
+func Open(path string, log func(level, message string, attrs ...any)) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (s *Store) Load() []api.SavedState {
 // Save 在一个事务中写入节点并删除已移除的节点，已有节点保留原保存顺序
 func (s *Store) Save(saved []api.SavedState, removed []string) {
 	if err := s.save(saved, removed); err != nil {
-		s.log("WARN", "保存续接状态失败 | 错误="+err.Error())
+		s.log("WARN", "保存续接状态失败", "error", err)
 	}
 }
 

@@ -7,7 +7,7 @@ import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import DetailDialog from './DetailDialog.vue'
 import UiIcon from './UiIcon.vue'
 import UiPager from './UiPager.vue'
-import UiSelect from './UiSelect.vue'
+import UiSelect, { keepSelected } from './UiSelect.vue'
 
 const props = defineProps<{
   accounts: Account[]
@@ -29,8 +29,12 @@ const refreshing = ref(false)
 const selectedCategory = ref('')
 const cooldownModel = ref('')
 const requestModel = ref('')
-const cooldownModels = computed(() => [...new Set(props.cooldowns.map((item) => item.model_id))])
-const requestModels = computed(() => [...new Set(props.requests.map((item) => item.model))])
+const cooldownModels = computed(() =>
+  keepSelected([...new Set(props.cooldowns.map((item) => item.model_id))], cooldownModel.value, ''),
+)
+const requestModels = computed(() =>
+  keepSelected([...new Set(props.requests.map((item) => item.model))], requestModel.value, ''),
+)
 const modelCooldowns = computed(() =>
   props.cooldowns.filter(
     (item) => cooldownModel.value === '' || item.model_id === cooldownModel.value,

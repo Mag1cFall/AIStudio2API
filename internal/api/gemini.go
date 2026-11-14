@@ -821,6 +821,7 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 	return aistudio.GenerateRequest{
 		ID: id, Model: model, System: system, Contents: contents, Config: config, Tools: tools,
 		SafetySettings: safety, ServiceTier: request.ServiceTier, Store: request.Store, Labels: request.Labels,
+		KeepAbnormalFinish: true,
 	}, nil
 }
 
@@ -1349,9 +1350,7 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	defer candidates.cancel()
 	if err := candidates.err; err != nil {
 		candidates.settle(r.Context())
-		if shouldWriteRequestError(r, err) {
-			writeGeminiRequestError(w, err)
-		}
+		writeGeminiFailure(w, r, request, err, stream)
 		return
 	}
 	if stream {
@@ -1370,13 +1369,50 @@ func (s *server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, re
 	})
 	if err != nil {
 		candidates.settle(r.Context())
-		if shouldWriteRequestError(r, err) {
-			writeGeminiRequestError(w, err)
-		}
+		writeGeminiFailure(w, r, request, err, false)
 		return
 	}
 	candidates.record(r.Context(), results)
 	writeJSON(w, http.StatusOK, officialOrder("gemini", buildGeminiResponse(request, output.cache, results)))
+}
+
+// writeGeminiFailure 写出响应头之前的生成失败，上游按输入拦截时按 Gemini API 返回 200 与 promptFeedback
+func writeGeminiFailure(w http.ResponseWriter, r *http.Request, request aistudio.GenerateRequest, err error, stream bool) {
+	if !shouldWriteRequestError(r, err) {
+		return
+	}
+	response, ok := geminiPromptFeedback(request, err)
+	switch {
+	case !ok:
+		writeGeminiRequestError(w, err)
+	case stream:
+		if output, err := openGeminiStream(w, r); err == nil {
+			_ = output.write(response)
+			output.close()
+		}
+	default:
+		writeJSON(w, http.StatusOK, officialOrder("gemini", response))
+	}
+}
+
+// geminiPromptFeedback 把上游输入拦截投影为不含候选的 Gemini 响应，用量为拦截帧中上游计入的输入
+func geminiPromptFeedback(request aistudio.GenerateRequest, err error) (map[string]any, bool) {
+	var feedback *aistudio.PromptFeedbackError
+	if !errors.As(err, &feedback) {
+		return nil, false
+	}
+	block := map[string]any{"blockReason": strings.ToUpper(feedback.Reason)}
+	if feedback.Message != "" {
+		block["blockReasonMessage"] = feedback.Message
+	}
+	if len(feedback.SafetyRatings) > 0 {
+		block["safetyRatings"] = feedback.SafetyRatings
+	}
+	response := map[string]any{"promptFeedback": block, "modelVersion": request.Model, "responseId": request.ID}
+	if feedback.Usage != nil {
+		response["usageMetadata"] = geminiUsage(feedback.Usage)
+	}
+	return response, true
 }
 
 // buildGeminiResponse 按候选序号输出各候选内容与终止原因，用量为全部候选之和，cache 非空时计入缓存部分
@@ -1882,9 +1918,11 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 		if !shouldWriteRequestError(r, err) {
 			return
 		}
-		_ = stream.fail(map[string]any{"error": map[string]any{
-			"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err),
-		}})
+		if response, ok := geminiPromptFeedback(request, err); ok {
+			_ = write(response)
+			return
+		}
+		_ = stream.fail(map[string]any{"error": geminiErrorPayload(err, retryAfterSeconds(err))})
 		return
 	}
 	candidates.record(r.Context(), results)

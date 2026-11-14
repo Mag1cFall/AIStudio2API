@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import { markdown } from '@/markdown'
@@ -35,7 +35,8 @@ function revealNotes(): void {
   }
   revealFrame = requestAnimationFrame(next)
 }
-watch(notes, revealNotes, { flush: 'post', immediate: true })
+watch(notes, revealNotes, { flush: 'post' })
+onMounted(revealNotes)
 onUnmounted(() => cancelAnimationFrame(revealFrame))
 const publishedAt = computed(() =>
   props.status?.published_at

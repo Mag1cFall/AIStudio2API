@@ -500,18 +500,50 @@ func anthropicRole(role string) (aistudio.Role, error) {
 	}
 }
 
-// anthropicParts 转换消息块并保留工具调用的思考签名
+// anthropicPartBlock 是 anthropicParts 读取的消息块字段
+type anthropicPartBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Data      string          `json:"data"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
+	Signature string          `json:"signature"`
+	Source    json.RawMessage `json:"source"`
+	Title     string          `json:"title"`
+	Context   string          `json:"context"`
+	FileID    string          `json:"file_id"`
+}
+
+// anthropicParts 转换消息块并保留工具调用的思考签名；块解码失败时先转换其前的块，再返回该块的解码错误
 func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		if text == "" {
-			return nil, nil
+	if len(raw) == 0 || raw[0] != '[' {
+		if err := json.Unmarshal(raw, &text); err == nil {
+			if text == "" {
+				return nil, nil
+			}
+			return []aistudio.Part{{Text: text}}, nil
 		}
-		return []aistudio.Part{{Text: text}}, nil
 	}
-	var blocks []json.RawMessage
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return nil, fmt.Errorf("content must be a string or block array")
+	var blocks []anthropicPartBlock
+	decodeErr := json.Unmarshal(raw, &blocks)
+	if decodeErr != nil {
+		var rawBlocks []json.RawMessage
+		if err := json.Unmarshal(raw, &rawBlocks); err != nil {
+			return nil, fmt.Errorf("content must be a string or block array")
+		}
+		blocks = make([]anthropicPartBlock, 0, len(rawBlocks))
+		for _, rawBlock := range rawBlocks {
+			var block anthropicPartBlock
+			if decodeErr = json.Unmarshal(rawBlock, &block); decodeErr != nil {
+				break
+			}
+			blocks = append(blocks, block)
+		}
 	}
 	parts := make([]aistudio.Part, 0, len(blocks))
 	pendingSignature := ""
@@ -522,26 +554,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		parts = append(parts, aistudio.Part{ThoughtSignature: pendingSignature})
 		pendingSignature = ""
 	}
-	for _, rawBlock := range blocks {
-		var block struct {
-			Type      string          `json:"type"`
-			Text      string          `json:"text"`
-			Data      string          `json:"data"`
-			ID        string          `json:"id"`
-			Name      string          `json:"name"`
-			Input     json.RawMessage `json:"input"`
-			ToolUseID string          `json:"tool_use_id"`
-			Content   json.RawMessage `json:"content"`
-			IsError   bool            `json:"is_error"`
-			Signature string          `json:"signature"`
-			Source    json.RawMessage `json:"source"`
-			Title     string          `json:"title"`
-			Context   string          `json:"context"`
-			FileID    string          `json:"file_id"`
-		}
-		if err := json.Unmarshal(rawBlock, &block); err != nil {
-			return nil, err
-		}
+	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			if block.Text == "" {
@@ -705,6 +718,9 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		default:
 			return nil, fmt.Errorf("unsupported content block type %q", block.Type)
 		}
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
 	}
 	flushPendingSignature()
 	return parts, nil
@@ -1648,6 +1664,6 @@ func (writer *anthropicStreamWriter) finish(result generationResult) error {
 func (writer *anthropicStreamWriter) error(err error) error {
 	return writer.send("error", map[string]any{
 		"type":  "error",
-		"error": map[string]string{"type": anthropicErrorType(err), "message": publicErrorMessage(statusFromError(err), anthropicErrorMessage(err))},
+		"error": map[string]string{"type": anthropicErrorType(err), "message": retryMessage(publicErrorMessage(statusFromError(err), anthropicErrorMessage(err)), retryAfterSeconds(err))},
 	})
 }

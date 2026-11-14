@@ -3,7 +3,6 @@ package app
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -139,8 +138,7 @@ func (service *trackedService) hedgeSelections(primary aistudio.AccountSelection
 	}
 	other := primary
 	other.AllowedAccountIDs = nil
-	enabled, _ := service.pool.EnabledAccounts()
-	for _, id := range enabled {
+	for _, id := range service.pool.EnabledAccounts() {
 		if _, tried := attempted[id]; !tried {
 			other.AllowedAccountIDs = append(other.AllowedAccountIDs, id)
 		}
@@ -212,9 +210,7 @@ func (service *trackedService) awaitFirstEvent(
 				service.requests.firstEvents.observe(modelID, string(primary.lease.Channel()), primary.firstAt, primary.firstAt.Sub(primary.startedAt))
 				if hedgeDone != nil {
 					service.supersede(requestCtx, request.ID, hedge, "原请求先返回首事件")
-					service.requests.logRequestProgress(request.ID, primary.accountLabel, "INFO", fmt.Sprintf(
-						"原请求胜出 | 取消备用请求 | 备用账户=%s | 模型=%s", hedge.accountLabel, modelID,
-					))
+					service.requests.logRequestProgress(request.ID, primary.accountLabel, "INFO", "原请求胜出，取消备用请求", "hedge_account", hedge.accountLabel, "model", modelID)
 				}
 				return primary
 			}
@@ -227,9 +223,7 @@ func (service *trackedService) awaitFirstEvent(
 					service.requests.firstEvents.observe(modelID, string(primary.lease.Channel()), time.Now(), waited)
 					service.supersede(requestCtx, request.ID, primary, "备用请求先返回首事件")
 				}
-				service.requests.logRequestProgress(request.ID, hedge.accountLabel, "INFO", fmt.Sprintf(
-					"备用请求胜出 | 账户=%s | 原请求已等待=%s | 模型=%s", hedge.accountLabel, waited.Round(time.Millisecond), modelID,
-				))
+				service.requests.logRequestProgress(request.ID, hedge.accountLabel, "INFO", "备用请求胜出", "primary_waited", waited, "model", modelID)
 				return hedge
 			}
 			failed(hedge, primaryDone != nil && primary.lease.Account().ID == hedge.lease.Account().ID)
@@ -248,10 +242,8 @@ func (service *trackedService) awaitFirstEvent(
 			}
 			hedge = plan.start(lease, selection)
 			hedgeDone = hedge.done
-			service.requests.logRequestProgress(request.ID, hedge.accountLabel, "WARN", fmt.Sprintf(
-				"备用请求发起 | 账户=%s | 原请求已等待=%s | 阈值=%s | 模型=%s",
-				hedge.accountLabel, time.Since(primary.startedAt).Round(time.Millisecond), plan.delay.Round(time.Millisecond), modelID,
-			))
+			service.requests.logRequestProgress(request.ID, hedge.accountLabel, "WARN", "备用请求发起",
+				"primary_waited", time.Since(primary.startedAt), "threshold", plan.delay, "model", modelID)
 		}
 	}
 	return nil
@@ -272,11 +264,11 @@ func (service *trackedService) supersede(requestCtx context.Context, requestID s
 		}
 		if loser.copies != nil {
 			if err := loser.copies.Cleanup(); err != nil {
-				service.requests.log(loser.accountLabel, "WARN", "临时文件清理失败 | 错误="+err.Error())
+				service.requests.log(loser.accountLabel, "WARN", "临时文件清理失败", "error", err)
 			}
 		}
 		if err := loser.lease.Release(); err != nil {
-			service.requests.logRequestProgress(requestID, loser.accountLabel, "WARN", "账户租约释放失败 | 错误="+err.Error())
+			service.requests.logRequestProgress(requestID, loser.accountLabel, "WARN", "账户租约释放失败", "error", err)
 		}
 	}()
 }

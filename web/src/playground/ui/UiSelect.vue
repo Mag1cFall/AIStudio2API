@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectViewport,
 } from 'reka-ui'
+import { ref } from 'vue'
 import type { IconName } from './icons'
 import UiIcon from './UiIcon.vue'
 
@@ -17,16 +18,18 @@ defineOptions({ inheritAttrs: false })
 const model = defineModel<string | number>()
 defineProps<{ disabled?: boolean; icon?: IconName }>()
 const { options, selectedLabel, selectedKey } = useSelectOptions(model)
+// primed 在触发器首次获得焦点或首次打开后为真，此前不挂载选项列表
+const primed = ref(false)
 </script>
 
 <template>
-  <SelectRoot v-model="selectedKey" :disabled="disabled">
-    <SelectTrigger v-bind="$attrs" class="ms-select-trigger">
+  <SelectRoot v-model="selectedKey" :disabled="disabled" @update:open="primed = true">
+    <SelectTrigger v-bind="$attrs" class="ms-select-trigger" @focus="primed = true">
       <UiIcon v-if="icon" :name="icon" :size="18" />
       <span class="ms-select-value">{{ selectedLabel }}</span>
       <UiIcon name="chevronDown" :size="20" class="ms-select-arrow" />
     </SelectTrigger>
-    <SelectPortal>
+    <SelectPortal v-if="primed">
       <SelectContent position="popper" :side-offset="0" class="ms-select-panel">
         <SelectViewport @pointerup.capture="keepPrimarySelect">
           <SelectItem

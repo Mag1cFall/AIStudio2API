@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,15 @@ func RequestQuotaCooldown(reason string) bool {
 	return strings.HasPrefix(reason, PlanLimitKind) || strings.HasPrefix(reason, DailyLimitKind)
 }
 
-// planLimitBackoff 为没有恢复时间的套餐限额按连续次数递增的冷却时长
+// quotaCooldownKinds 是上游以 429 限制额度时冷却的类型名
+var quotaCooldownKinds = []string{"短期限额", "分钟限额", DailyLimitKind, PlanLimitKind, "无配额"}
+
+// quotaCooldownReason 判断冷却原因是否来自上游 429 额度限制
+func quotaCooldownReason(reason string) bool {
+	return slices.ContainsFunc(quotaCooldownKinds, func(kind string) bool { return strings.HasPrefix(reason, kind+": ") })
+}
+
+// planLimitBackoff 为没有恢复时间的套餐限额与短期限额按连续次数递增的冷却时长
 var planLimitBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
 
 // quotaLimitPattern 匹配额度错误中逐项列出的额度上限
@@ -37,6 +46,8 @@ type CooldownState struct {
 	Until  time.Time `json:"until"`
 	Reason string    `json:"reason,omitempty"`
 	Level  int       `json:"level,omitempty"`
+	// Fallback 是套餐限额或每日限额冷却期间，忽略这两类冷却的回退选号另受的较早结束的冷却
+	Fallback *CooldownState `json:"fallback,omitempty"`
 }
 
 // Active 判断冷却状态当前是否生效
@@ -87,8 +98,11 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		until = now.Add(rpcError.RetryDelay)
 	} else if reset, ok := usageLimitReset(message); ok {
 		until, kind = now.Add(reset), PlanLimitKind
-	} else if kind == "短期限额" && (rpcError.PerUserQuota || strings.Contains(message, "reached your usage limit")) {
-		kind, escalate = PlanLimitKind, true
+	} else if kind == "短期限额" {
+		escalate = true
+		if rpcError.PerUserQuota || strings.Contains(message, "reached your usage limit") {
+			kind = PlanLimitKind
+		}
 	}
 	return QuotaCooldown{Until: until, Global: global, Kind: kind, Reason: kind + ": " + err.Error(), Escalate: escalate}, true
 }

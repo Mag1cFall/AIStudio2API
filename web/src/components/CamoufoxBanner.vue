@@ -1,31 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useDownloadProgress } from '@/camoufox'
 import { useI18n } from '@/i18n'
-import type { CamoufoxStatus } from '@/types'
+import type { PreparationStatus } from '@/types'
+import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 
-const props = defineProps<{ camoufox: CamoufoxStatus }>()
+const props = defineProps<{ camoufox: PreparationStatus }>()
 const emit = defineEmits<{ retry: [] }>()
-const { t, locale, logText } = useI18n()
-
-// percent 是 Camoufox 发行包的下载百分比，总大小未知时为 null
-const percent = computed(() => {
-  const download = props.camoufox.download
-  return download && download.total > 0
-    ? Math.floor((download.received / download.total) * 100)
-    : null
-})
-// sizeText 是已下载与总大小，按界面语言格式化为 MB
-const sizeText = computed(() => {
-  const download = props.camoufox.download
-  if (!download) return ''
-  const format = new Intl.NumberFormat(locale.value, {
-    style: 'unit',
-    unit: 'megabyte',
-    maximumFractionDigits: 0,
-  })
-  const received = format.format(download.received / 1e6)
-  return download.total > 0 ? `${received} / ${format.format(download.total / 1e6)}` : received
-})
+const { t, logText } = useI18n()
+const { percent, sizeText } = useDownloadProgress(() => props.camoufox)
 // label 是下载或解压阶段的文字
 const label = computed(() =>
   t(props.camoufox.download ? 'camoufox.downloading' : 'camoufox.preparing'),
@@ -44,22 +27,7 @@ const label = computed(() =>
         {{ sizeText }}<template v-if="percent !== null"> · {{ percent }}%</template>
       </span>
     </div>
-    <div
-      role="progressbar"
-      :aria-label="label"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      :aria-valuenow="percent ?? undefined"
-      :aria-valuetext="sizeText || undefined"
-      class="mt-2 h-1 overflow-hidden rounded-full bg-blue-500/20"
-    >
-      <div
-        v-if="percent !== null"
-        class="h-full rounded-full bg-blue-500 transition-[width] duration-200 ease-out"
-        :style="{ width: `${percent}%` }"
-      />
-      <div v-else class="camoufox-indeterminate h-full w-1/3 rounded-full bg-blue-500" />
-    </div>
+    <CamoufoxProgressBar class="mt-2" :label="label" :percent="percent" :size-text="sizeText" />
   </div>
   <div
     v-else-if="camoufox.error"
@@ -78,22 +46,3 @@ const label = computed(() =>
     </button>
   </div>
 </template>
-
-<style scoped>
-.camoufox-indeterminate {
-  animation: camoufox-indeterminate 1.2s ease-in-out infinite;
-}
-@keyframes camoufox-indeterminate {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(300%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .camoufox-indeterminate {
-    animation: none;
-  }
-}
-</style>

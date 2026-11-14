@@ -50,8 +50,8 @@ var firefoxDisplays = []weighted[windowsDisplay]{
 	{windowsDisplay{3440, 1440, []weighted[float64]{{1, 1}}}, 0.0103},
 }
 
-// windowsTaskbars 是 Windows 11 与 Windows 10 任务栏以 DIP 计的高度，权重为 Firefox 硬件报告中两者的占比
-var windowsTaskbars = []weighted[int]{{48, 0.5127}, {40, 0.2888}}
+// firefoxTaskbar 是 Firefox 158 指纹保护（ScreenAvailToResolution）在 Windows 上报告可用区域时从屏幕高度减去的 DIP 数，与实际任务栏高度无关
+const firefoxTaskbar = 48
 
 // firefoxThreads 是 Firefox 硬件报告中各物理核数的占比与对应常见 CPU 的逻辑处理器数
 var firefoxThreads = []weighted[[]weighted[int]]{
@@ -69,20 +69,31 @@ var firefoxThreads = []weighted[[]weighted[int]]{
 // firefoxGPUVendors 是 Firefox 硬件报告中 Windows 可能的显卡厂商占比，Microsoft 为没有显卡驱动时的基本显示驱动
 var firefoxGPUVendors = map[string]float64{"Intel": 0.6381, "AMD": 0.1422, "NVIDIA": 0.1308, "Microsoft": 0.0122}
 
+// windowsMediaDeviceCounts 是 BrowserForge 指纹数据（apify_fingerprint_datapoints 0.10.0）中 Windows 桌面 Chrome 与 Edge 未授权时列出的麦克风、摄像头、扬声器个数组合的占比，每类至多一个
+var windowsMediaDeviceCounts = []weighted[[3]int]{
+	{[3]int{1, 1, 1}, 0.7974},
+	{[3]int{1, 0, 1}, 0.0947},
+	{[3]int{0, 0, 1}, 0.0710},
+	{[3]int{0, 1, 1}, 0.0213},
+	{[3]int{0, 0, 0}, 0.0138},
+	{[3]int{1, 0, 0}, 0.0007},
+	{[3]int{0, 1, 0}, 0.0006},
+	{[3]int{1, 1, 0}, 0.0006},
+}
+
 // maximizedShare 是新指纹中 Firefox 窗口为最大化状态的比例
 const maximizedShare = 0.7
 
-// applyWindowsDisplay 按抽到的主屏、缩放与任务栏写入 Firefox 158 在 Windows 上报告的屏幕、可用区域、devicePixelRatio、外窗、内窗与窗口位置：可用区域为屏幕减任务栏，最大化窗口位于 -b、外窗比可用区域大 2b，b 为 9 个物理像素的 CSS 像素数；普通窗口在可用区域内随机放置
+// applyWindowsDisplay 按抽到的主屏与缩放写入 Firefox 158 在 Windows 上报告的屏幕、可用区域、devicePixelRatio、外窗、内窗与窗口位置：可用区域为屏幕减 firefoxTaskbar，最大化窗口位于 -b、外窗比可用区域大 2b，b 为 9 个物理像素的 CSS 像素数；普通窗口在可用区域内随机放置
 func applyWindowsDisplay(config map[string]any) {
 	display := draw(firefoxDisplays)
 	scale := draw(display.scales)
 	width := int(math.Round(float64(display.width) / scale))
 	height := int(math.Round(float64(display.height) / scale))
-	availHeight := height - draw(windowsTaskbars)
+	availHeight := height - firefoxTaskbar
 	border := int(math.Round(9 / scale))
 	config["screen.width"], config["screen.height"] = width, height
 	config["screen.availWidth"], config["screen.availHeight"] = width, availHeight
-	config["screen.availLeft"], config["screen.availTop"] = 0, 0
 	config["window.devicePixelRatio"] = scale
 	if rand.Float64() < maximizedShare {
 		config["window.screenX"], config["window.screenY"] = -border, -border
@@ -115,6 +126,12 @@ func windowsWebGLByVendor() map[string]any {
 		}
 	}
 	return maps.Clone(draw(profiles))
+}
+
+// windowsMediaDevices 按 windowsMediaDeviceCounts 抽取 Camoufox 媒体设备个数，Firefox 158 未授权时每类输入设备至多列出一个、不列出扬声器
+func windowsMediaDevices() map[string]any {
+	counts := draw(windowsMediaDeviceCounts)
+	return map[string]any{"mediaDevices:enabled": true, "mediaDevices:micros": counts[0], "mediaDevices:webcams": counts[1], "mediaDevices:speakers": counts[2]}
 }
 
 // windowsLocaleFonts 是 Windows 以该语言为显示语言时自动安装的补充字体，英文名与本地化名都列出

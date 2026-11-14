@@ -2,7 +2,7 @@
 html.studio {
   --font-sans: 'Inter Variable', Inter, var(--font-cjk), sans-serif;
   --font-heading: 'Inter Tight Variable', 'Inter Tight', var(--font-cjk), sans-serif;
-  --font-mono: 'Google Sans Code Variable', 'Google Sans Mono', monospace;
+  --font-mono: 'Google Sans Code Variable', 'Google Sans Mono', var(--font-cjk), monospace;
   color-scheme: light;
   font-family: var(--font-sans);
   font-optical-sizing: auto;

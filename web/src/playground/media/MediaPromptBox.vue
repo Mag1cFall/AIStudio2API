@@ -6,18 +6,15 @@ import RunKeyHint from '../RunKeyHint.vue'
 import { submits, useRunTooltip } from '../run-keys'
 
 const draft = defineModel<string>({ required: true })
-// runTooltip 是页面给出的运行按钮提示，为空时显示发送快捷键
 const props = defineProps<{
   placeholder: string
   label: string
   running: boolean
   canRun: boolean
-  runTooltip?: string
 }>()
-const emit = defineEmits<{ run: []; stop: []; files: [files: File[]] }>()
+const emit = defineEmits<{ run: []; stop: [] }>()
 const { t } = useI18n()
 const textarea = ref<HTMLTextAreaElement>()
-const dragging = ref(false)
 
 // resize 让输入框随内容增高，超过 210 px 后在框内滚动
 function resize(): void {
@@ -49,31 +46,11 @@ function onKeydown(event: KeyboardEvent): void {
     emit('run')
   }
 }
-
-// onDrop 把拖入的文件交给页面
-function onDrop(event: DragEvent): void {
-  dragging.value = false
-  const files = [...event.dataTransfer!.files]
-  if (files.length > 0) emit('files', files)
-}
 </script>
 
 <template>
-  <div class="ms-prompt-box" @dragenter.prevent="dragging = true">
-    <div
-      class="dragging-overlay"
-      :class="{ dragging }"
-      @dragover.prevent
-      @dragleave="dragging = false"
-      @drop.prevent="onDrop"
-    >
-      <UiIcon name="addCircle" :size="24" />
-      {{ t('pg.dropFiles') }}
-    </div>
+  <div class="ms-prompt-box">
     <div class="prompt-box-container">
-      <div v-if="$slots.top" class="augmentation">
-        <slot name="top" />
-      </div>
       <div class="textarea-row">
         <div class="text-wrapper">
           <textarea
@@ -87,9 +64,6 @@ function onDrop(event: DragEvent): void {
           ></textarea>
         </div>
       </div>
-      <div v-if="$slots.media" class="multi-media-row">
-        <slot name="media" />
-      </div>
       <div class="buttons-row">
         <div class="button-row-left">
           <slot name="left" />
@@ -97,7 +71,7 @@ function onDrop(event: DragEvent): void {
         <div class="button-wrapper">
           <slot name="right" />
           <button
-            v-tooltip="runTooltip || defaultTooltip"
+            v-tooltip="defaultTooltip"
             type="button"
             ms-button
             class="run-button ms-button-primary"
@@ -130,35 +104,6 @@ function onDrop(event: DragEvent): void {
   margin: 0 auto;
 }
 
-.dragging-overlay {
-  position: absolute;
-  z-index: 10;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 174px;
-  margin: 0 12px 12px;
-  border: 4px dashed var(--color-v3-text-link);
-  border-radius: 12px;
-  backdrop-filter: blur(5px);
-  background-color: var(--color-v3-overlay-background);
-  box-shadow: var(--shadow-v3-lg);
-  font-weight: 500;
-  line-height: 21px;
-  pointer-events: none;
-  visibility: hidden;
-}
-
-.dragging-overlay.dragging {
-  pointer-events: auto;
-  visibility: visible;
-}
-
 .prompt-box-container {
   position: relative;
   display: flex;
@@ -170,22 +115,6 @@ function onDrop(event: DragEvent): void {
   border-radius: 12px;
   background-color: var(--color-v3-surface-container-high);
   box-shadow: var(--shadow-v3-md);
-}
-
-.augmentation {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-}
-
-.multi-media-row {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
-  margin: 0 -2px;
-  padding: 2px;
-  overflow-x: auto;
 }
 
 .textarea-row {

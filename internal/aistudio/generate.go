@@ -889,15 +889,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		var turn modelTurn
 		// committed 表示本次生成已有不能随重新生成丢弃的输出：客户端收到的正文、函数调用与媒体，或重新执行有外部副作用的服务端工具调用
 		committed := false
-		// sources 暂存 committed 之前收到的网页来源与引用，重新生成时丢弃
-		var sources []Event
-		releaseSources := func() error {
-			for _, source := range sources {
-				if err := send(source); err != nil {
+		// held 暂存 committed 之前收到的网页来源、引用与思考签名，非流式请求另暂存思考内容，重新生成时丢弃
+		var held []Event
+		releaseHeld := func() error {
+			for _, event := range held {
+				if err := send(event); err != nil {
 					return err
 				}
 			}
-			sources = nil
+			held = nil
 			return nil
 		}
 		matchedStopSequence := ""
@@ -925,13 +925,13 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 					}
 					committed = committed || !event.Thought && event.payload()
 				}
-				if !committed {
-					if event.Kind == EventGrounding || event.Kind == EventCitation {
-						sources = append(sources, event)
-						return nil
+				if committed {
+					if err := releaseHeld(); err != nil {
+						return err
 					}
-				} else if err := releaseSources(); err != nil {
-					return err
+				} else if event.Kind == EventGrounding || event.Kind == EventCitation {
+					held = append(held, event)
+					return nil
 				}
 				if request.Config.HideThinking && event.Kind == EventReasoning || hiddenTool {
 					if event.ThoughtSignature == "" {
@@ -941,6 +941,10 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 						Kind: EventThoughtSignature, Part: Part{ThoughtSignature: event.ThoughtSignature},
 						TurnToken: event.TurnToken, DebugInfo: event.DebugInfo, ResponseID: event.ResponseID, FrameUsage: event.FrameUsage, FinishFrame: event.FinishFrame,
 					}
+				}
+				if !committed && (event.Kind == EventThoughtSignature || request.Unary && event.Thought) {
+					held = append(held, event)
+					return nil
 				}
 				return send(event)
 			}
@@ -959,7 +963,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed) && (err != nil || !assistant); regenerated++ {
 			stopClose()
 			_ = response.Body.Close()
-			usage, finish, sources, turn, roundUsage = nil, nil, nil, modelTurn{}, nil
+			usage, finish, held, turn, roundUsage, output = nil, nil, nil, modelTurn{}, nil, Output{}
 			if response, decodeStream, err = sendRequest(); err != nil {
 				if ctx.Err() == nil {
 					_ = send(Event{Kind: EventError, Err: err})
@@ -972,7 +976,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
-			if releaseSources() != nil {
+			if releaseHeld() != nil {
 				return
 			}
 			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
@@ -988,9 +992,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				}
 			}
 		}
+		// feedback 是上游拦截帧，按输入本身拦截时保持输入拒绝，其余拦截作为内容策略错误由客户端重试
 		var feedback *PromptFeedbackError
-		if errors.As(err, &feedback) {
+		if errors.As(err, &feedback) && !feedback.InputBlocked() {
 			err = &ContentPolicyError{Reason: feedback.Reason, Message: feedback.Message}
+			usage = cmp.Or(usage, feedback.Usage)
 		}
 		// trailing 是上游在函数调用之后结束生成的错误，客户端已收到完整的函数调用，按正常完成结束
 		var trailing error
@@ -1016,6 +1022,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return
 		case finish != nil && contentPolicyFinish(finish.FinishReason):
 			policy = &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
+		case finish != nil && abnormalGenerationFinish(finish.FinishReason) && len(output.Visible()) == 0 && (request.Config.HideThinking || len(output.Parts) == 0) && !request.KeepAbnormalFinish:
+			if ctx.Err() == nil {
+				_ = send(Event{Kind: EventError, Err: &AbnormalFinishError{Reason: finish.FinishReason, Message: finish.FinishMessage, Usage: usage}})
+			}
+			return
 		}
 		if policy != nil {
 			if !sentOutput {
@@ -1028,7 +1039,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			return
 		}
-		if releaseSources() != nil {
+		if releaseHeld() != nil {
 			return
 		}
 		if usage == nil {
@@ -1218,7 +1229,7 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 	if request.Unary {
 		reason = "Playground GenerateContent 使用服务端流，收集完成后返回"
 	}
-	reportUpstreamMode(ctx, "GenerateContent", "stream", reason)
+	reportUpstreamMode(ctx, "GenerateContent", "stream", 0, reason)
 	runtime := RequestContext{}
 	if c.contextProvider != nil {
 		var err error
@@ -1305,7 +1316,7 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		request.continuationRound++
 		request.continuationToken = decoder.continuation
 		reportContinuationRound(ctx)
-		reportUpstreamMode(ctx, "GenerateContent", fmt.Sprintf("stream | 续写=%d", request.continuationRound), "")
+		reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
 		body, err := EncodeGenerateContentRequest(request, defaults, runtime)
 		if err != nil {
 			return err
@@ -1336,7 +1347,7 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 			if body, err = EncodeGenerateContentRequest(request, defaults, runtime); err != nil {
 				return err
 			}
-			reportUpstreamMode(ctx, "GenerateContent", fmt.Sprintf("stream | 续写=%d", request.continuationRound), "")
+			reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
 			response, err = c.doProtected(ctx, request, body)
 		}
 		if err != nil {

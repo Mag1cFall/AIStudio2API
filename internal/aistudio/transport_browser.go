@@ -64,14 +64,20 @@ var firefoxHTTP2SettingsOrder = []http2.SettingID{
 // firefoxPseudoHeaderOrder 是 Firefox 请求 HEADERS 帧的伪头顺序
 var firefoxPseudoHeaderOrder = []string{":method", ":path", ":authority", ":scheme"}
 
-// firefoxStreamPriority 返回 Firefox 为请求的 HEADERS 帧写入的优先级：页面文档、用户输入中发起的请求（Priority: u=0）与预载脚本（Priority: u=1）为 41，页面图片为 11，其余（包括 Priority: u=6 的网站图标）为 21，线上权重各加 1
+// firefoxStreamPriority 返回 Firefox 为请求的 HEADERS 帧写入的优先级：页面文档、用户输入中发起的请求（Priority: u=0）与预载脚本（Priority: u=1）为 41，字体为 31，Priority: u=4, i 的图片为 12，其余页面图片为 11，Priority: u=6 的预取与 sendBeacon 为 1，其余（包括 Priority: u=6 的网站图标）为 21，线上权重各加 1
 func firefoxStreamPriority(header fhttp.Header) http2.PriorityParam {
-	priority := header.Get("Priority")
+	priority, destination := header.Get("Priority"), header.Get("Sec-Fetch-Dest")
 	switch {
-	case header.Get("Sec-Fetch-Dest") == "document" || priority == "u=0" || priority == "u=1":
+	case destination == "document" || priority == "u=0" || priority == "u=1":
 		return http2.PriorityParam{Weight: 41}
-	case header.Get("Sec-Fetch-Dest") == "image" && priority != "u=6":
+	case destination == "font":
+		return http2.PriorityParam{Weight: 31}
+	case destination == "image" && priority == "u=4, i":
+		return http2.PriorityParam{Weight: 12}
+	case destination == "image" && priority != "u=6":
 		return http2.PriorityParam{Weight: 11}
+	case destination != "image" && priority == "u=6":
+		return http2.PriorityParam{Weight: 1}
 	}
 	return http2.PriorityParam{Weight: 21}
 }
@@ -85,6 +91,7 @@ var firefoxRequestHeaderOrder = []string{
 	"access-control-request-method",
 	"access-control-request-headers",
 	"referer",
+	"sec-purpose",
 	"x-aistudio-g1-tier",
 	"x-aistudio-visit-id",
 	"x-goog-ext-519733851-bin",
@@ -634,14 +641,18 @@ func standardHeader(source fhttp.Header) stdhttp.Header {
 	return result
 }
 
-// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检，结果按 Access-Control-Max-Age（上限 24 小时）缓存；no-cors 请求不预检
+// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检，结果按 Access-Control-Max-Age（上限 24 小时）缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
 func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) error {
 	origin, err := url.Parse(request.Header.Get("Origin"))
 	if request.Method == stdhttp.MethodOptions || request.Header.Get("Sec-Fetch-Mode") == "no-cors" || err != nil || origin.Host == "" || origin.Host == request.URL.Host {
 		return nil
 	}
+	unsafe := corsRequestHeaders(request.Header)
+	if len(unsafe) == 0 && (request.Method == stdhttp.MethodGet || request.Method == stdhttp.MethodHead || request.Method == stdhttp.MethodPost) {
+		return nil
+	}
 	target := request.URL.String()
-	requestHeaders := strings.Join(corsRequestHeaders(request.Header), ",")
+	requestHeaders := strings.Join(unsafe, ",")
 	key := request.Method + " " + requestHeaders
 	transport.mu.Lock()
 	expiry, cached := transport.preflights[target][key]
@@ -687,14 +698,22 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	return nil
 }
 
-// corsRequestHeaders 返回页面脚本设置、需要写入预检 access-control-request-headers 的小写请求头名，按字母排序
+// corsRequestHeaders 返回页面脚本设置、需要写入预检 access-control-request-headers 的小写请求头名，按字母排序；值为 text/plain、multipart/form-data 或 application/x-www-form-urlencoded 的 content-type 属于 CORS 安全头，不列出
 func corsRequestHeaders(headers stdhttp.Header) []string {
 	names := make([]string, 0, len(headers))
-	for name := range headers {
+	for name, values := range headers {
 		name = strings.ToLower(name)
-		if _, managed := browserManagedHeaders[name]; !managed {
-			names = append(names, name)
+		if _, managed := browserManagedHeaders[name]; managed {
+			continue
 		}
+		if name == "content-type" {
+			essence, _, _ := strings.Cut(values[0], ";")
+			switch strings.ToLower(strings.TrimSpace(essence)) {
+			case "text/plain", "multipart/form-data", "application/x-www-form-urlencoded":
+				continue
+			}
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -714,9 +733,13 @@ func requestHeaderOrder(host string) []string {
 	return order
 }
 
-// orderedHeaderNames 返回按 Firefox 顺序排列的全部请求头名，顺序表之外的头按字母序排在最后
+// orderedHeaderNames 返回按 Firefox 顺序排列的全部请求头名，顺序表之外的头按字母序排在最后；跨源样式表引用的字体在 CORS 加上 origin 之后才写入 referer
 func orderedHeaderNames(headers fhttp.Header, host string) []string {
 	order := requestHeaderOrder(host)
+	if headers.Get("Sec-Fetch-Dest") == "font" && !strings.HasPrefix(headers.Get("Referer"), headers.Get("Origin")+"/") {
+		order = slices.DeleteFunc(slices.Clone(order), func(name string) bool { return name == "origin" })
+		order = slices.Insert(order, slices.Index(order, "referer"), "origin")
+	}
 	seen := make(map[string]struct{}, len(order))
 	for _, name := range order {
 		seen[name] = struct{}{}

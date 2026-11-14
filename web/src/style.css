@@ -74,6 +74,7 @@
 
 :root:lang(ko) {
   --font-cjk: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR';
+  word-break: keep-all;
 }
 
 :root[data-theme='light'] {
@@ -161,7 +162,7 @@ textarea:disabled {
 code,
 pre,
 .font-mono {
-  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-family: 'JetBrains Mono', Consolas, Menlo, var(--font-cjk), monospace;
 }
 
 ::-webkit-scrollbar {
@@ -387,7 +388,7 @@ button[aria-busy='true']:has(> svg)::before {
   }
 }
 
-.markdown > * + * {
+.markdown > :where(:not(:first-child)) {
   margin-top: 0.75rem;
 }
 

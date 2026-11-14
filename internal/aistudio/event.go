@@ -50,7 +50,21 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 	}
 	if isJSONNull(frame[0]) {
 		if feedbackRaw := rawAt(frame, 1); !isJSONNull(feedbackRaw) {
-			return nil, decodePromptFeedback(feedbackRaw, raw)
+			feedback, err := decodePromptFeedback(feedbackRaw, raw)
+			if err != nil {
+				return nil, err
+			}
+			if usageRaw := rawAt(frame, 2); !isJSONNull(usageRaw) {
+				usage, complete, err := decodeUsage(usageRaw, raw)
+				if err != nil {
+					return nil, err
+				}
+				if complete {
+					usage = excludeSystemRole(usage, d.systemRoleTokens)
+					feedback.Usage = &usage
+				}
+			}
+			return nil, feedback
 		}
 		return nil, nil
 	}
@@ -199,24 +213,24 @@ func excludeSystemRole(usage Usage, tokens int64) Usage {
 	return usage
 }
 
-func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) error {
+func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) (*PromptFeedbackError, error) {
 	feedback, err := rawArray(raw, "$[0][][1]", evidence)
 	if err != nil {
-		return withMethod(err, "GenerateContent")
+		return nil, withMethod(err, "GenerateContent")
 	}
 	reason, err := rawInt64(rawAt(feedback, 0), "$[0][][1][0]", evidence)
 	if err != nil {
-		return withMethod(err, "GenerateContent")
+		return nil, withMethod(err, "GenerateContent")
 	}
 	var message string
 	_ = json.Unmarshal(rawAt(feedback, 2), &message)
 	var ratings []SafetyRating
 	if ratingsRaw := rawAt(feedback, 1); !isJSONNull(ratingsRaw) {
 		if ratings, err = decodeSafetyRatings(ratingsRaw, "$[0][][1][1]", evidence); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Message: message, SafetyRatings: ratings, Raw: append(json.RawMessage(nil), raw...)}
+	return &PromptFeedbackError{Reason: decodePromptBlockReason(reason), Message: message, SafetyRatings: ratings, Raw: append(json.RawMessage(nil), raw...)}, nil
 }
 
 func decodePromptBlockReason(reason int64) string {

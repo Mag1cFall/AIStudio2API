@@ -225,13 +225,20 @@ async function retryCamoufox(): Promise<void> {
   }
 }
 
-// camoufoxTimer 是 Camoufox 下载或解压期间每秒刷新服务状态的定时器
-let camoufoxTimer: number | undefined
+// exitLookups 是进行中的出口查询数，查询可能开始新一轮出口 IP 库下载
+const exitLookups = ref(0)
+
+// statusTimer 在 Camoufox 或出口 IP 库下载期间、出口查询或账户任务进行中每秒刷新服务状态，服务端不在下载期间推送进度
+let statusTimer: number | undefined
 watch(
-  () => status.value?.camoufox.preparing === true,
-  (preparing) => {
-    window.clearInterval(camoufoxTimer)
-    camoufoxTimer = preparing ? window.setInterval(() => void loadStatus(), 1000) : undefined
+  () =>
+    status.value?.camoufox.preparing === true ||
+    status.value?.geoip.preparing === true ||
+    exitLookups.value > 0 ||
+    accountTasks.value.some((task) => task.state === 'running'),
+  (polling) => {
+    window.clearInterval(statusTimer)
+    statusTimer = polling ? window.setInterval(() => void loadStatus(), 1000) : undefined
   },
 )
 
@@ -380,6 +387,7 @@ function stopConsole(): void {
 // useConsole 返回管理端共享的服务数据与操作
 export function useConsole() {
   return {
+    exitLookups,
     status,
     logs,
     accounts,

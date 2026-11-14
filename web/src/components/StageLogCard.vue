@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n, type TranslationKey } from '@/i18n'
-import type { LogRow, LogStageState } from '@/logs'
+import { isBlockField, type LogRow, type LogStageState } from '@/logs'
+import LogLine from './LogLine.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiDisclosure from './UiDisclosure.vue'
 
@@ -11,15 +12,24 @@ const stage = computed(() => props.row.stage!)
 // open 是步骤列表是否展开，由日志页按行保存
 const open = defineModel<boolean>('open', { required: true })
 
-// stateKeys 是阶段结束状态的显示文案键
-const stateKeys: Record<Exclude<LogStageState, 'running'>, TranslationKey> = {
+// stateKeys 是阶段状态的显示文案键
+const stateKeys: Record<LogStageState, TranslationKey> = {
+  running: 'state.running',
   completed: 'state.completed',
   failed: 'state.failed',
   cancelled: 'state.cancelled',
 }
 
-// progress 是阶段当前步骤与总步骤数
-const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
+// progress 是阶段当前步骤与总步骤数，阶段没有编号的步骤时为空
+const progress = computed(() =>
+  stage.value.steps > 0 ? `${stage.value.step}/${stage.value.steps}` : '',
+)
+// latest 是阶段最近一条日志，结束后为结束日志
+const latest = computed(() => props.row.events.at(-1)!)
+// ended 是阶段是否已结束，结束后标题行只显示结束日志的字段
+const ended = computed(() => stage.value.state !== 'running')
+// blocks 是最近一条日志是否带另起一行的长字段
+const blocks = computed(() => latest.value.fields?.some(isBlockField) ?? false)
 </script>
 
 <template>
@@ -27,22 +37,22 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
     <div class="stage-heading">
       <UiDisclosure v-model="open" />
       <span class="stage-state" :class="`state-${stage.state}`">{{
-        stage.state === 'running' ? progress : t(stateKeys[stage.state])
+        stage.state === 'running' && progress ? progress : t(stateKeys[stage.state])
       }}</span>
       <strong>{{ logText(stage.name) }}</strong>
-      <span v-if="stage.state !== 'running'" class="stage-progress">{{ progress }}</span>
-      <span
-        v-if="stage.detail"
-        class="stage-detail"
-        :class="{ 'stage-error': stage.state === 'failed' }"
-        >{{ logText(stage.detail) }}</span
-      >
+      <span v-if="ended && progress" class="stage-progress">{{ progress }}</span>
+      <span class="stage-detail"><LogLine :entry="latest" :message="!ended" part="inline" /></span>
     </div>
+    <p v-if="blocks" class="stage-blocks">
+      <LogLine :entry="latest" :message="false" part="block" />
+    </p>
     <UiCollapse :open="open">
       <ol class="stage-timeline">
         <li v-for="(event, index) in row.events" :key="index">
-          <time>{{ new Date(event.time).toLocaleTimeString(locale, { hour12: false }) }}</time>
-          <span>{{ logText(event.message) }}</span>
+          <time class="font-mono">{{
+            new Date(event.time).toLocaleTimeString(locale, { hour12: false })
+          }}</time>
+          <span><LogLine :entry="event" /></span>
         </li>
       </ol>
     </UiCollapse>
@@ -52,20 +62,23 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
 <style scoped>
 .stage-heading {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   flex-wrap: wrap;
   gap: 2px 10px;
 }
+.stage-heading :deep(.ui-disclosure) {
+  align-self: center;
+}
 .stage-heading strong {
-  color: var(--color-gray-200);
+  color: var(--color-fg);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .stage-state {
+  align-self: center;
   border: 1px solid currentColor;
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 13px;
   line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
@@ -79,16 +92,14 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
 .state-cancelled {
   color: var(--color-yellow-400);
 }
-.state-failed,
-.stage-error {
+.state-failed {
   color: var(--color-red-400);
 }
 .stage-progress {
-  color: var(--color-gray-400);
-  font-size: 13px;
+  color: var(--color-gray-500);
   font-variant-numeric: tabular-nums;
 }
-/* stage-detail 为最后一步的详情，最多两行，全文在步骤列表中 */
+/* stage-detail 为最近一步的消息与短字段，最多两行，全文在步骤列表中 */
 .stage-detail {
   display: -webkit-box;
   overflow: hidden;
@@ -96,7 +107,20 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
   -webkit-line-clamp: 2;
   line-clamp: 2;
   min-width: 0;
-  color: var(--color-gray-400);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.stage-detail :deep(.log-line-message) {
+  color: var(--color-gray-300);
+}
+/* stage-blocks 为最近一步另起一行的错误等长字段，最多两行，全文在步骤列表中 */
+.stage-blocks {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 2px 0 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -104,8 +128,6 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
   border-left: 1px solid var(--color-line);
   padding-left: 12px;
   margin: 6px 0 6px 6px;
-  color: var(--color-gray-400);
-  font-size: 13px;
 }
 .stage-timeline li {
   display: flex;
@@ -116,9 +138,11 @@ const progress = computed(() => `${stage.value.step}/${stage.value.steps}`)
 .stage-timeline time {
   flex-shrink: 0;
   color: var(--color-gray-500);
+  font-variant-numeric: tabular-nums;
 }
 .stage-timeline span {
   min-width: 0;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 </style>

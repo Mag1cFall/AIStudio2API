@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { api } from '@/api'
+import { useDownloadProgress } from '@/camoufox'
+import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import { maskedProxy } from '@/proxy'
-import type { Account, AccountExit } from '@/types'
+import type { Account, AccountExit, PreparationStatus } from '@/types'
+import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 import UiIcon from './UiIcon.vue'
 
-const props = defineProps<{ accounts: Account[] }>()
+const props = defineProps<{ accounts: Account[]; geoip: PreparationStatus | undefined }>()
 const { t, errorText, logText } = useI18n()
+const { exitLookups } = useConsole()
+// geoipPercent 与 geoipSize 是出口 IP 库的下载进度，查询出口所在地要等它下载完
+const { percent: geoipPercent, sizeText: geoipSize } = useDownloadProgress(() => props.geoip)
 
 // exitGroup 是同一出口 IP 的代理与经它访问上游的账户数，查询失败的代理各成一组
 interface exitGroup {
@@ -33,12 +39,14 @@ async function loadExits(): Promise<void> {
   const current = ++sequence
   loading.value = true
   failure.value = ''
+  exitLookups.value += 1
   try {
     const result = await api.accountExits()
     if (current === sequence) exits.value = result
   } catch (error) {
     if (current === sequence) failure.value = errorText(error)
   } finally {
+    exitLookups.value -= 1
     if (current === sequence) loading.value = false
   }
 }
@@ -65,9 +73,6 @@ const groups = computed(() => {
     .filter((group) => group.accounts > 0)
     .sort((left, right) => right.accounts - left.accounts)
 })
-// shared 判断是否有出口承载多个账户
-const shared = computed(() => groups.value.some((group) => group.ip && group.accounts > 1))
-
 // proxyText 返回出口所用代理的显示文字
 function proxyText(proxies: string[]): string {
   return proxies.map((proxy) => (proxy ? maskedProxy(proxy) : t('accounts.direct'))).join(', ')
@@ -112,8 +117,29 @@ function proxyText(proxies: string[]): string {
         }}</span>
       </span>
     </div>
-    <p v-if="shared" class="flex items-start gap-2 text-xs text-yellow-300">
-      <UiIcon name="warning" :size="14" class="mt-px shrink-0" />{{ t('accounts.exitShared') }}
+    <div v-if="geoip?.preparing" role="status" class="max-w-xl text-xs text-gray-400">
+      <div class="flex flex-wrap justify-between gap-x-3 gap-y-1">
+        <span>{{ t('accounts.downloadingGeoip') }}</span>
+        <span v-if="geoipSize" class="font-mono text-gray-500 tabular-nums"
+          >{{ geoipSize
+          }}<template v-if="geoipPercent !== null"> · {{ geoipPercent }}%</template></span
+        >
+      </div>
+      <CamoufoxProgressBar
+        class="mt-1.5"
+        :label="t('accounts.downloadingGeoip')"
+        :percent="geoipPercent"
+        :size-text="geoipSize"
+      />
+    </div>
+    <p
+      v-else-if="geoip?.error && !geoip.ready"
+      role="alert"
+      class="flex items-start gap-2 text-xs break-words text-red-300"
+    >
+      <UiIcon name="warning" :size="14" class="mt-px shrink-0" />{{
+        t('accounts.geoipFailed').replace('{reason}', logText(geoip.error))
+      }}
     </p>
   </section>
 </template>

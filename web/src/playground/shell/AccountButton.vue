@@ -36,20 +36,25 @@ const avatar = computed(() => ({
       <span class="avatar" :style="{ backgroundColor: avatar.color }" aria-hidden="true">{{
         avatar.letter
       }}</span>
-      <span v-if="adminUsername" v-tooltip.overflow="adminUsername" class="account-switcher-text">{{
-        adminUsername
-      }}</span>
-      <span class="navbar-badge"
-        ><span class="status-dot" :class="serviceState"></span
-        ><span class="badge-labels"
-          ><span
-            v-for="state in serviceStates"
-            :key="state"
-            :class="{ inactive: state !== serviceState }"
-            >{{ t(`state.${state}`) }}</span
+      <span class="account-switcher-labels">
+        <span
+          v-if="adminUsername"
+          v-tooltip.overflow="adminUsername"
+          class="account-switcher-text"
+          >{{ adminUsername }}</span
+        >
+        <span class="navbar-badge"
+          ><span class="status-dot" :class="serviceState"></span
+          ><span class="badge-labels"
+            ><span
+              v-for="state in serviceStates"
+              :key="state"
+              :class="{ inactive: state !== serviceState }"
+              >{{ t(`state.${state}`) }}</span
+            ></span
           ></span
-        ></span
-      >
+        >
+      </span>
     </PopoverTrigger>
     <PopoverPortal>
       <PopoverContent side="top" align="start" :side-offset="8" class="account-panel">
@@ -130,9 +135,19 @@ const avatar = computed(() => ({
   background-color: var(--color-v3-hover);
 }
 
+.account-switcher-labels {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
 .account-switcher-text {
   display: block;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--color-v3-text-var);
   font-size: 12px;
