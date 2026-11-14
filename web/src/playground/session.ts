@@ -863,6 +863,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         scheduleTokens()
         scheduleDraftTokens()
       },
+      { immediate: true },
     )
     watch(() => draftSource().text, scheduleDraftTokens)
     watch(
@@ -894,6 +895,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     applyStarter,
     rename,
     save,
+    scheduleSave,
     clearSave,
     pending,
     refreshTokens,
@@ -1007,9 +1009,11 @@ watch(
   },
 )
 
-// setSync 与官网一致切换系统指令同步，开启时把 index 窗格的系统指令写入右侧窗格
+// setSync 与官网一致切换系统指令同步并保存页面对话，开启时把 index 窗格的系统指令写入右侧窗格
 function setSync(index: number, value: boolean): void {
   syncInstructions.value = value
+  if (!main.session.temporary && (main.session.id !== null || main.session.turns.length > 0))
+    main.scheduleSave()
   if (!value) return
   const text = panes[index]!.session.settings.systemInstruction
   for (const pane of panes.slice(1)) pane.session.settings.systemInstruction = text
