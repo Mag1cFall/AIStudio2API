@@ -723,12 +723,13 @@ func driveFileNotFound(err error, method string) bool {
 	return errors.As(err, &rpcError) && rpcError.Method == method && rpcError.StatusCode == http.StatusNotFound
 }
 
-// driveAuthorizationMissing 判断 GenerateAccessToken 或 GetAppFolder 因账户仅缺少 Google Drive 授权被拒绝
+// driveAuthorizationMissing 判断 GenerateAccessToken 或 GetAppFolder 是否返回可回退到内联数据的 Drive 授权错误
 func driveAuthorizationMissing(err error) bool {
 	var rpcError *RPCError
 	return errors.As(err, &rpcError) && (rpcError.Method == "GenerateAccessToken" || rpcError.Method == "GetAppFolder") &&
 		rpcError.StatusCode == http.StatusUnauthorized && rpcError.Code == 16 &&
-		strings.Contains(strings.ToLower(rpcError.Message), "unauthorized_client")
+		(strings.Contains(strings.ToLower(rpcError.Message), "unauthorized_client") ||
+			strings.Contains(strings.ToLower(rpcError.Message), "missing required authentication credential"))
 }
 
 // driveStorageQuotaExceeded 判断 Drive 上传因账户存储空间已满被拒绝
@@ -1197,7 +1198,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 		uploadErr = failures.Join(nil)
 	}
 	temporary.release = s.useInlineMedia(used)
-	if uploadErr != nil && (keepImages || !driveStorageQuotaExceeded(uploadErr)) {
+	if uploadErr != nil && (keepImages || !driveAuthorizationMissing(uploadErr) && !driveStorageQuotaExceeded(uploadErr)) {
 		if DefinitiveAuthenticationFailure(uploadErr) {
 			uploadErr = errors.Join(uploadErr, target.ConfirmAuthenticationFailure(targetCtx, uploadErr))
 		}
