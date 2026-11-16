@@ -295,6 +295,28 @@ func publicErrorMessage(status int, message string) string {
 	return message
 }
 
+// publicRequestErrorMessage 返回公开协议的请求错误消息，账户与服务故障使用通用说明
+func publicRequestErrorMessage(err error) string {
+	if errors.Is(err, aistudio.ErrNoEligibleAccount) {
+		return "No available account for this request"
+	}
+	var cooling *aistudio.AllCoolingError
+	if errors.As(err, &cooling) {
+		if cooling.HTTPStatus() == http.StatusServiceUnavailable {
+			return "Service unavailable"
+		}
+		return "Rate limit exceeded"
+	}
+	var rpc *aistudio.RPCError
+	if errors.As(err, &rpc) && (rpc.StatusCode == http.StatusUnauthorized || rpc.StatusCode == http.StatusForbidden) {
+		return "Upstream account unavailable"
+	}
+	if prefix := serverErrorPrefix(statusFromError(err)); prefix != "" {
+		return prefix
+	}
+	return err.Error()
+}
+
 func writeOpenAIError(w http.ResponseWriter, status int, code string, message string) {
 	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
@@ -349,7 +371,8 @@ func writeGeminiError(w http.ResponseWriter, status int, statusName string, mess
 // writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After 并在消息末尾写明重试时间
 func writeOpenAIRequestError(w http.ResponseWriter, err error) {
 	seconds := setRetryAfter(w, err)
-	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), retryMessage(err.Error(), seconds))
+	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), retryMessage(publicRequestErrorMessage(err), seconds))
+	setAccessLogResponseError(w, err.Error())
 }
 
 // writeOpenAISSEError 在已开始的 OpenAI 事件流中以 error 数据帧写出请求失败，可重试时在消息末尾写明重试时间
@@ -357,7 +380,7 @@ func writeOpenAISSEError(w http.ResponseWriter, err error) {
 	status := statusFromError(err)
 	code := openAIErrorCode(err)
 	_ = writeSSE(w, "", map[string]any{"error": openAIErrorBody{
-		Message: retryMessage(publicErrorMessage(status, err.Error()), retryAfterSeconds(err)), Type: openAIErrorType(status, code), Code: code,
+		Message: retryMessage(publicErrorMessage(status, publicRequestErrorMessage(err)), retryAfterSeconds(err)), Type: openAIErrorType(status, code), Code: code,
 	}})
 }
 
@@ -365,6 +388,7 @@ func writeOpenAISSEError(w http.ResponseWriter, err error) {
 func writeAnthropicRequestError(w http.ResponseWriter, err error) {
 	seconds := setRetryAfter(w, err)
 	writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), retryMessage(anthropicErrorMessage(err), seconds))
+	setAccessLogResponseError(w, err.Error())
 }
 
 // retryMessage 在 seconds 大于 0 时于消息末尾按 OpenAI 限流消息的写法另起一句 Please try again in <seconds>s.
@@ -389,7 +413,7 @@ func anthropicErrorMessage(err error) string {
 	if contextOverflow(err) {
 		return "prompt is too long: " + err.Error()
 	}
-	return err.Error()
+	return publicRequestErrorMessage(err)
 }
 
 // writeGeminiRequestError 以 Gemini 错误体写出请求失败，可重试时带 Retry-After 与 RetryInfo
@@ -401,7 +425,7 @@ func writeGeminiRequestError(w http.ResponseWriter, err error) {
 
 // geminiErrorPayload 返回 Gemini 错误对象，seconds 大于 0 时 details 带该时长的 RetryInfo
 func geminiErrorPayload(err error, seconds int64) map[string]any {
-	payload := map[string]any{"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err)}
+	payload := map[string]any{"code": statusFromError(err), "message": publicRequestErrorMessage(err), "status": geminiErrorStatus(err)}
 	if seconds > 0 {
 		payload["details"] = []any{map[string]any{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": strconv.FormatInt(seconds, 10) + "s"}}
 	}
