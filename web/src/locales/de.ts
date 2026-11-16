@@ -2054,6 +2054,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': 'Tokens',
   'usage.stackBy': 'Stapeln nach',
   'usage.other': 'Sonstige',
+  'usage.noGenerationChannel': 'Kein Generierungskanal',
+  'usage.channelHelp':
+    'Anfragen umfassen auch Hilfsaufrufe wie countTokens. Diese Aufrufe und Anfragen, die vor der Kanalauswahl enden, können ohne Kanal erscheinen.',
+  'usage.outcomeHelp':
+    'Die Erfolgsquote misst erfolgreiche Anfragen, nicht vollständige Antworten. Ein Ausgabelimit kann Text abschneiden und bedeutet nicht, dass das Kontokontingent erschöpft ist.',
   'usage.unassigned': 'Nicht zugeordnet',
   'usage.chartOutcomes': 'Ergebnisse und Fehler',
   'usage.chartLatency': 'Latenz-Perzentile',

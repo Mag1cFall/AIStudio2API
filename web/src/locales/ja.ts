@@ -2007,6 +2007,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': 'トークン',
   'usage.stackBy': '積み上げの基準',
   'usage.other': 'その他',
+  'usage.noGenerationChannel': '生成チャネル未割り当て',
+  'usage.channelHelp':
+    'リクエスト数には countTokens などの補助 API 呼び出しも含まれます。これらの呼び出しや、生成チャネルの選択前に終了したリクエストには、チャネルが記録されない場合があります。',
+  'usage.outcomeHelp':
+    '成功率はリクエストの成功を示し、返信の完全性を示すものではありません。出力上限に達すると本文が途切れる場合がありますが、アカウントの割り当てを使い切ったという意味ではありません。',
   'usage.unassigned': '未割り当て',
   'usage.chartOutcomes': '結果とエラー',
   'usage.chartLatency': '所要時間のパーセンタイル',

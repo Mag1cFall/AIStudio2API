@@ -2019,6 +2019,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': 'Tokens',
   'usage.stackBy': 'Stack by',
   'usage.other': 'Other',
+  'usage.noGenerationChannel': 'No generation channel',
+  'usage.channelHelp':
+    'Requests include auxiliary API calls such as countTokens. These calls, and requests that end before a generation channel is selected, can appear without a channel.',
+  'usage.outcomeHelp':
+    'Success rate measures request success, not complete replies. Output-limit results may contain truncated text; this does not mean the account quota is exhausted.',
   'usage.unassigned': 'Unassigned',
   'usage.chartOutcomes': 'Outcomes and errors',
   'usage.chartLatency': 'Latency percentiles',

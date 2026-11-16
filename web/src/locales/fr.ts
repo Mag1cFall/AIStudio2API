@@ -2060,6 +2060,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': 'Jetons',
   'usage.stackBy': 'Empiler par',
   'usage.other': 'Autres',
+  'usage.noGenerationChannel': 'Aucun canal de génération',
+  'usage.channelHelp':
+    'Les requêtes incluent les appels auxiliaires comme countTokens. Ces appels, ainsi que les requêtes terminées avant la sélection du canal, peuvent apparaître sans canal.',
+  'usage.outcomeHelp':
+    'Le taux de réussite mesure les requêtes réussies, pas les réponses complètes. Une limite de sortie peut tronquer le texte sans que le quota du compte soit épuisé.',
   'usage.unassigned': 'Non attribué',
   'usage.chartOutcomes': 'Résultats et erreurs',
   'usage.chartLatency': 'Percentiles de latence',

@@ -218,6 +218,12 @@ function childCells(stats: UsageStats): { key: string; text: string; tone?: stri
         </button>
       </div>
     </header>
+    <p
+      v-if="tab === 'channel' || tab === 'state'"
+      class="border-b border-line px-4 py-2 text-xs text-gray-400"
+    >
+      {{ t(tab === 'channel' ? 'usage.channelHelp' : 'usage.outcomeHelp') }}
+    </p>
     <div
       :id="`${id}-panel`"
       role="tabpanel"
@@ -238,6 +244,13 @@ function childCells(stats: UsageStats): { key: string; text: string; tone?: stri
               "
             >
               <button
+                v-tooltip="
+                  column.key === 'rate'
+                    ? t('usage.successRateHelp')
+                    : column.key === 'requests'
+                      ? t('usage.channelHelp')
+                      : ''
+                "
                 type="button"
                 class="inline-flex items-center gap-1 hover:text-gray-200"
                 :class="sort.key === column.key ? 'text-gray-200' : ''"

@@ -1905,6 +1905,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': 'Token',
   'usage.stackBy': '堆疊維度',
   'usage.other': '其他',
+  'usage.noGenerationChannel': '未分配生成通道',
+  'usage.channelHelp':
+    '請求數包含 countTokens 等輔助 API 呼叫。這些呼叫，以及在選定生成通道前結束的請求，可能沒有通道記錄。',
+  'usage.outcomeHelp':
+    '成功率衡量請求是否成功，不代表回覆完整。達到輸出上限時內文可能被截斷，不表示帳號額度耗盡。',
   'usage.unassigned': '未指派',
   'usage.chartOutcomes': '結果與錯誤',
   'usage.chartLatency': '耗時百分位數',

@@ -1988,6 +1988,11 @@ export const messages: Record<TranslationKey, string> = {
   'usage.metricTokens': '토큰',
   'usage.stackBy': '쌓기 기준',
   'usage.other': '기타',
+  'usage.noGenerationChannel': '생성 채널 미할당',
+  'usage.channelHelp':
+    '요청 수에는 countTokens 같은 보조 API 호출도 포함됩니다. 이러한 호출이나 생성 채널 선택 전에 종료된 요청에는 채널이 기록되지 않을 수 있습니다.',
+  'usage.outcomeHelp':
+    '성공률은 요청 성공 여부를 나타내며 답변의 완전성을 의미하지 않습니다. 출력 한도에 도달하면 텍스트가 잘릴 수 있지만 계정 할당량이 소진되었다는 뜻은 아닙니다.',
   'usage.unassigned': '미지정',
   'usage.chartOutcomes': '결과 및 오류',
   'usage.chartLatency': '소요 시간 백분위수',

@@ -1898,6 +1898,11 @@ export const messages = {
   'usage.metricTokens': 'Token',
   'usage.stackBy': '堆叠维度',
   'usage.other': '其他',
+  'usage.noGenerationChannel': '未分配生成通道',
+  'usage.channelHelp':
+    '请求数包含 countTokens 等辅助 API 调用。这些调用，以及在选定生成通道前结束的请求，可能没有通道记录。',
+  'usage.outcomeHelp':
+    '成功率衡量请求是否成功，不代表回复完整。达到输出上限时正文可能被截断，不表示账号额度耗尽。',
   'usage.unassigned': '未分配',
   'usage.chartOutcomes': '结果与错误',
   'usage.chartLatency': '耗时分位',
