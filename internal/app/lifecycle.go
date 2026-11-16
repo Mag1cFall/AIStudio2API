@@ -723,6 +723,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		UpstreamChannels:      value.UpstreamChannels,
 		ModelMapping:          value.ModelMapping,
 		MaxAccountSwitches:    value.MaxAccountSwitches,
+		AuthRecovery:          value.SavedAuthRecovery,
 		WAABackend:            value.WAABackend,
 		BuildNativeNonstream:  value.BuildNativeNonstream,
 		NonstreamKeepalive:    value.NonstreamKeepalive,
@@ -743,6 +744,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) && saved.ModelMapping == active.ModelMapping &&
 		saved.MaxAccountSwitches == active.MaxAccountSwitches &&
+		saved.AuthRecovery == active.AuthRecovery &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
 		saved.NonstreamKeepalive == active.NonstreamKeepalive && saved.FakeStream == active.FakeStream &&

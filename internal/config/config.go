@@ -44,6 +44,7 @@ var configKeys = [...]string{
 	"ROUTING_STRATEGY",
 	"ACCOUNT_ORDER",
 	"MAX_ACCOUNT_SWITCHES",
+	"AUTH_RECOVERY",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
 	"MODEL_CHANNELS",
@@ -146,6 +147,7 @@ type Config struct {
 	RoutingStrategy        string
 	AccountOrder           string
 	MaxAccountSwitches     int
+	AuthRecovery           bool
 	UpstreamChannels       []string
 	ModelMapping           string
 	ModelChannels          string
@@ -195,6 +197,7 @@ func Default() Config {
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		RoutingStrategy:        "round-robin",
 		MaxAccountSwitches:     DefaultMaxAccountSwitches,
+		AuthRecovery:           true,
 		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendSpiderMonkey,
 		MediaOutput:            MediaOutputInline,
@@ -241,6 +244,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
 	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
 	"MAX_ACCOUNT_SWITCHES":     setMaxAccountSwitches,
+	"AUTH_RECOVERY":            boolSetter("AUTH_RECOVERY", func(c *Config) *bool { return &c.AuthRecovery }),
 	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
 	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
 	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
@@ -626,6 +630,7 @@ func (c Config) envValues() map[string]string {
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"ACCOUNT_ORDER":            c.AccountOrder,
 		"MAX_ACCOUNT_SWITCHES":     strconv.Itoa(c.MaxAccountSwitches),
+		"AUTH_RECOVERY":            strconv.FormatBool(c.AuthRecovery),
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
 		"MODEL_CHANNELS":           c.ModelChannels,

@@ -648,6 +648,7 @@ cp .env.example .env
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
 | `MAX_ACCOUNT_SWITCHES` | `3` | 上游返回 403、5xx 等非额度错误时一个请求最多换几次账户重试，`0` 为不换号；额度用尽不计入，照常依次尝试其余账户 |
+| `AUTH_RECOVERY` | `true` | 控制账户会话失效（上游 401 等）后的恢复：`true` 时自动读取已保存的续签材料为账户原地续签并重放请求；`false` 时账户直接标为“需要重新登录”，由人工在账户页重新登录。DBSC 会话的主动刷新与人工登录、导入按原有规则执行。修改后重启生成服务生效 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
