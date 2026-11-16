@@ -407,7 +407,7 @@ func (s *server) writeBidiEvents(
 }
 
 func bidiErrorMessage(err error) bidiServerMessage {
-	message := bidiServerMessage{Type: "error", Error: err.Error()}
+	message := bidiServerMessage{Type: "error", Error: publicRequestErrorMessage(err)}
 	var coded errorCodeProvider
 	switch {
 	case errors.Is(err, aistudio.ErrInvalidArgument):

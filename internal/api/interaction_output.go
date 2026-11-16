@@ -506,7 +506,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 
 // interactionErrorEvent 返回交互流的 error 事件正文，eventID 非空时带 event_id
 func interactionErrorEvent(err error, eventID string) map[string]any {
-	event := map[string]any{"event_type": "error", "error": map[string]any{"code": geminiErrorStatus(err), "message": err.Error()}}
+	event := map[string]any{"event_type": "error", "error": map[string]any{"code": geminiErrorStatus(err), "message": publicRequestErrorMessage(err)}}
 	if eventID != "" {
 		event["event_id"] = eventID
 	}

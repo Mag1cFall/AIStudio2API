@@ -271,7 +271,7 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	response := map[string]any{"name": "operations/" + operationID, "done": done}
 	if done && failure != nil {
 		status := geminiErrorStatus(failure)
-		response["error"] = map[string]any{"code": rpcCodes[status], "message": failure.Error(), "status": status}
+		response["error"] = map[string]any{"code": rpcCodes[status], "message": publicRequestErrorMessage(failure), "status": status}
 	} else if done && missing != "" {
 		response["error"] = map[string]any{"code": rpcCodes["NOT_FOUND"], "message": missing, "status": "NOT_FOUND"}
 	} else if done {

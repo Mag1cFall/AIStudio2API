@@ -304,7 +304,8 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if audio[index], err = s.takeChatAudio(&results[index], format); err != nil {
-			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", publicRequestErrorMessage(err))
+			setAccessLogResponseError(w, err.Error())
 			return
 		}
 	}
