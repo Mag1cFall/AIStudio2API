@@ -89,7 +89,7 @@ func newRuntime(
 	protected := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
 		Transport: transport, Workers: workers, SetupTimeout: cfg.InitTimeout,
 	})
-	refresher := newAuthRuntimeRefresher(workers, requests, globalProxy)
+	refresher := newAuthRuntimeRefresher(workers, requests, globalProxy, cfg.AuthRecovery)
 	workers.refresher = refresher
 	client := aistudio.NewClient(aistudio.ClientOptions{
 		Transport:       &authRetryTransport{transport: transport, refresher: refresher},

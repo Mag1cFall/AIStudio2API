@@ -214,6 +214,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `ROUTING_STRATEGY` | 账户轮询 `round-robin` 或粘性优先 `fill-first` | `round-robin` |
 | `ACCOUNT_ORDER` | 逗号分隔的账户 ID，`fill-first` 依次使用并按此顺序预热，未列出的账户排在后面并按 ID 排序；保存后立即生效 | 空 |
 | `MAX_ACCOUNT_SWITCHES` | 一个请求因上游 401、403、404、5xx、连接断开等非额度失败换号的次数上限，`0` 为不换号；额度失败不计入；保存后停止再启动生成服务生效 | `3` |
+| `AUTH_RECOVERY` | 控制账户会话失效（上游 401 等）后的恢复：`true` 时自动读取已保存的续签材料原地续签；`false` 时账户直接标记需要重新登录，由人工登录。DBSC 会话的主动刷新与人工登录、导入按原有规则执行；修改后重启生成服务生效 | `true` |
 | `UPSTREAM_CHANNELS` | 生成请求的上游通道 `playground`、`build`（旧通道，上游已停用其生成），逗号分隔 | `playground` |
 | `MODEL_MAPPING` | 逗号分隔，每项以最后一个 `:` 分成别名与模型 ID | 空 |
 | `MODEL_CHANNELS` | 逗号分隔，每项以最后一个 `:` 分成模型 ID 与通道 `playground` 或 `build`；保存后立即生效 | 空 |

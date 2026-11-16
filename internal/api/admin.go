@@ -289,6 +289,7 @@ type RuntimeConfig struct {
 	AdminPassword             *string              `json:"admin_password,omitempty"`
 	AdminPasswordSet          bool                 `json:"admin_password_set"`
 	SavedAdminPassword        string               `json:"-"`
+	SavedAuthRecovery         bool                 `json:"-"`
 	BuildNativeNonstream      bool                 `json:"build_native_nonstream"`
 	NonstreamKeepalive        bool                 `json:"nonstream_keepalive"`
 	FakeStream                bool                 `json:"fake_stream"`

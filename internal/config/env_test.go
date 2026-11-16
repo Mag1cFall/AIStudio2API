@@ -151,3 +151,89 @@ func TestEnvKeepEnvironmentKeepsInvalid(t *testing.T) {
 		t.Fatalf("保存后无效记录=%v 媒体输出=%q", kept.Invalid, kept.MediaOutput)
 	}
 }
+
+// TestAuthRecoveryEnvRoundTrip 核对 AUTH_RECOVERY 从 .env 读取、非默认值保存时写回
+func TestAuthRecoveryEnvRoundTrip(t *testing.T) {
+	path := writeTestEnv(t, "AUTH_RECOVERY=false\n")
+	cfg, err := Load(path)
+	if err != nil || cfg.AuthRecovery {
+		t.Fatalf("loaded AuthRecovery=%t err=%v", cfg.AuthRecovery, err)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestEnv(t, path); got != "AUTH_RECOVERY=false\nWAA_BACKEND=spidermonkey\n" {
+		t.Fatalf(".env = %q", got)
+	}
+	loaded, err := Load(path)
+	if err != nil || loaded.AuthRecovery {
+		t.Fatalf("reload AuthRecovery=%t err=%v", loaded.AuthRecovery, err)
+	}
+}
+
+// TestAuthRecoveryInvalidValue 核对 AUTH_RECOVERY 取值无效时按默认值 true 加载并记录
+func TestAuthRecoveryInvalidValue(t *testing.T) {
+	path := writeTestEnv(t, "AUTH_RECOVERY=off\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AuthRecovery {
+		t.Fatalf("AuthRecovery = %t", cfg.AuthRecovery)
+	}
+	if len(cfg.Invalid) != 1 || cfg.Invalid[0].Key != "AUTH_RECOVERY" {
+		t.Fatalf("invalid = %+v", cfg.Invalid)
+	}
+}
+
+// TestAuthRecoveryAdminSaveRoundTrip 核对管理端按 UpdateRuntimeConfig 相同方式重建配置时 AUTH_RECOVERY 的表现：
+// DTO 未覆盖该键，由 saved 补齐。.env 中 false 经无关设置保存仍写回 false；
+// 仅进程环境变量 false 且 .env 未写该键时，保存不把环境值写入文件，环境变量仍决定取值
+func TestAuthRecoveryAdminSaveRoundTrip(t *testing.T) {
+	t.Run("file false", func(t *testing.T) {
+		path := writeTestEnv(t, "AUTH_RECOVERY=false\n")
+		saved, err := Load(path)
+		if err != nil || saved.AuthRecovery {
+			t.Fatalf("saved = %+v, err = %v", saved, err)
+		}
+		// admin.go UpdateRuntimeConfig: 重建配置带 saved.AuthRecovery 后再 KeepEnvironment
+		update := Default()
+		update.AuthRecovery = saved.AuthRecovery
+		update.RequestBodyLog = true
+		update = update.KeepEnvironment(saved)
+		if update.AuthRecovery {
+			t.Fatalf("重建后 AuthRecovery = %t", update.AuthRecovery)
+		}
+		if err := update.Save(path); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestEnv(t, path); !strings.Contains(got, "AUTH_RECOVERY=false") {
+			t.Fatalf(".env = %q", got)
+		}
+		if loaded, err := Load(path); err != nil || loaded.AuthRecovery {
+			t.Fatalf("reload AuthRecovery = %t, err = %v", loaded.AuthRecovery, err)
+		}
+	})
+
+	t.Run("env only false", func(t *testing.T) {
+		t.Setenv("AUTH_RECOVERY", "false")
+		path := writeTestEnv(t, "")
+		saved, err := Load(path)
+		if err != nil || saved.AuthRecovery || !slices.Contains(saved.Environment, "AUTH_RECOVERY") {
+			t.Fatalf("saved = %+v, err = %v", saved, err)
+		}
+		update := Default()
+		update.AuthRecovery = saved.AuthRecovery
+		update.RequestBodyLog = true
+		update = update.KeepEnvironment(saved)
+		if update.AuthRecovery {
+			t.Fatalf("重建后 AuthRecovery = %t", update.AuthRecovery)
+		}
+		if err := update.Save(path); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestEnv(t, path); strings.Contains(got, "AUTH_RECOVERY") {
+			t.Fatalf("仅环境变量决定的键被写入 .env: %q", got)
+		}
+	})
+}

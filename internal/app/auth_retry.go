@@ -37,6 +37,8 @@ type authRuntimeRefresher struct {
 	boundLocks  sync.Map
 	globalProxy string
 	requests    *requestRegistry
+	// authRecovery 为 false 时账户认证失败不读取续签材料，直接标记需要重新登录
+	authRecovery bool
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -156,14 +158,16 @@ func newAuthRuntimeRefresher(
 	workers *accountWorkerManager,
 	requests *requestRegistry,
 	globalProxy string,
+	authRecovery bool,
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
 		reset: workers.Reset, prepareWorker: workers.prepareUpdate,
 		rotate: chromeauth.RotateBoundCookies, mergeWorker: workers.MergeCookies,
-		globalProxy: globalProxy,
-		requests:    requests,
+		globalProxy:  globalProxy,
+		requests:     requests,
+		authRecovery: authRecovery,
 	}
 }
 
@@ -248,6 +252,9 @@ func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error,
 	var startup *accountWorkerInitError
 	if errors.As(cause, &startup) && startup.authHandled {
 		return cause
+	}
+	if !refresher.authRecovery {
+		return refresher.markAuthenticationRequired(ctx, cause)
 	}
 	if refresher.Available(ctx) {
 		if err := refresher.Refresh(ctx, generation); err == nil {

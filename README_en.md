@@ -648,6 +648,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
 | `MAX_ACCOUNT_SWITCHES` | `3` | How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; `0` disables switching. Quota errors do not count, and the remaining accounts are still tried in turn |
+| `AUTH_RECOVERY` | `true` | Controls recovery after an account session is judged expired (upstream 401 and similar): `true` renews in place from the account's saved renewal material and replays the request; `false` marks the account as sign-in required for a manual re-login on the Accounts page. Proactive DBSC refresh and manual sign-in/import follow their existing lifecycle. Applies when the generation service restarts |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
