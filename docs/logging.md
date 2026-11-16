@@ -188,7 +188,7 @@ ERROR  account@example.com  WAA Worker 停止失败 pid=18240 duration=10.002s e
 {"time":"2026-09-06T22:11:47.248+08:00","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"cached_tokens":0,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
 ```
 
-采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
+采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间，`proof_phases` 把它分为等待页面 `lock_ms`、页面操作 `interaction_ms`、等待 WAA 刷新 `refresh_ms` 与 WAA 计算 `compute_ms`，请求卡片展开后的“WAA 耗时”与用量页请求详情按这四项显示。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
 
 客户端取消记录为 `499`；认证、额度和上游失败分别使用对应 HTTP 状态与 `request.error`。
 
@@ -249,7 +249,7 @@ INFO  account@example.com  [账户认证续签 completed] 账户认证续签完�
 ERROR account@example.com  [账户认证续签 failed] 账户认证续签失败 duration=1.116s error=<ERROR>
 ```
 
-HTTP `403` 与协议 Code 7 保留当前账户和模型的 `verified` 记录，不标记永久权限失败；官网不跳转拒绝页的这类拒绝让该账户在该模型上按连续次数冷却 1、5、15、30、60 分钟，类型为 `权限拒绝`，成功一次后从 1 分钟重新开始。协议 Code 5、Worker 进程失败或 Worker 被替换时重建当前账户 Worker 并重放一次，额度、权限拒绝与服务受限的失败直接换号、不重放；其他可重试错误写入临时冷却。
+HTTP `403` 与协议 Code 7 保留当前账户和模型的 `verified` 记录，不标记永久权限失败；官网不跳转拒绝页的这类拒绝在自上次成功后第一次出现时只换号，没有其他账户可换时在该账户上重试一次并记 WARN “没有其他账户可换，同账户重试被上游拒绝的请求”；连续第二次起该账户在该模型上冷却 1、5、15、30、60 分钟，类型为 `权限拒绝`，成功一次后重新计数；全部候选账户都在冷却时，权限拒绝冷却中的账户仍依次接收请求，每个账户一次。协议 Code 5、Worker 进程失败或 Worker 被替换时重建当前账户 Worker 并重放一次，额度、权限拒绝与服务受限的失败直接换号、不重放；其他可重试错误写入临时冷却。
 
 ```text
 WARN  account@example.com  账号冷却 kind=权限拒绝 scope=gemini-3.7-flash until=2026-11-12T20:41:07+08:00

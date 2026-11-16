@@ -2,8 +2,8 @@
 package libwebp
 
 /*
-#cgo LDFLAGS: -lwebp -lsharpyuv
-#cgo linux LDFLAGS: -lm
+#cgo !linux LDFLAGS: -lwebp -lsharpyuv
+#cgo linux LDFLAGS: -Wl,-Bstatic -lwebp -lsharpyuv -Wl,-Bdynamic -lm
 #include <webp/encode.h>
 
 // encode 以默认预设与 quality 编码 RGBX 或 RGBA 像素，成功时 out 为 libwebp 分配的输出，失败时返回 0 并在 code 中给出 WebPEncodingError

@@ -73,15 +73,30 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	if err != nil {
 		return err
 	}
-	frame := make([]byte, 0, len(event)+len(data)+16)
+	return writeSSEFrame(w, append(append(sseFrameStart(event, len(data)), data...), "\n\n"...))
+}
+
+// sseFrameStart 返回具名事件 SSE 帧到 data: 为止的开头，容量另留 size 字节正文
+func sseFrameStart(event string, size int) []byte {
+	frame := make([]byte, 0, len(event)+size+16)
 	if event != "" {
 		frame = append(append(append(frame, "event: "...), event...), '\n')
 	}
-	frame = append(append(append(frame, "data: "...), data...), "\n\n"...)
+	return append(frame, "data: "...)
+}
+
+// writeSSEFrame 写入完整的 SSE 帧并传播缓冲刷新错误
+func writeSSEFrame(w http.ResponseWriter, frame []byte) error {
 	if _, err := w.Write(frame); err != nil {
 		return err
 	}
 	return http.NewResponseController(w).Flush()
+}
+
+// appendJSONString 追加按 json.Marshal 转义的 JSON 字符串
+func appendJSONString(buffer []byte, value string) []byte {
+	encoded, _ := json.Marshal(value)
+	return append(buffer, encoded...)
 }
 
 // writeSSEText 写入文本事件并刷新网络缓冲
@@ -151,12 +166,29 @@ func codeFromError(err error, defaultCode string) string {
 // requestProtocol 返回请求路径与请求头所属的公开协议：gemini、anthropic 或 openai
 func requestProtocol(r *http.Request) string {
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/v1beta/"), strings.HasPrefix(r.URL.Path, "/upload/"), interactionsPath(r.URL.Path):
+	case strings.HasPrefix(r.URL.Path, "/v1beta/"), strings.HasPrefix(r.URL.Path, "/upload/"), interactionsPath(r.URL.Path), geminiV1Path(r):
 		return "gemini"
 	case strings.HasPrefix(r.URL.Path, "/v1/messages"), r.Header.Get("Anthropic-Version") != "":
 		return "anthropic"
 	}
 	return "openai"
+}
+
+// geminiV1Path 表示 /v1 下的 Gemini API 请求：模型方法调用、上下文缓存与长时操作，以及以 Gemini API 方式鉴权的模型与文件请求
+func geminiV1Path(r *http.Request) bool {
+	path := r.URL.Path
+	switch {
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/models/"), strings.HasPrefix(path, "/v1/cachedContents"), strings.HasPrefix(path, "/v1/operations/"):
+		return true
+	case path == "/v1/models", strings.HasPrefix(path, "/v1/models/"), path == "/v1/files", strings.HasPrefix(path, "/v1/files/"):
+		return geminiAuth(r)
+	}
+	return false
+}
+
+// geminiAuth 表示请求以 Gemini API 的方式鉴权：带 x-goog-api-key 请求头或 key 查询参数，不带 Authorization
+func geminiAuth(r *http.Request) bool {
+	return r.Header.Get("Authorization") == "" && (r.Header.Get("X-Goog-Api-Key") != "" || r.URL.Query().Has("key"))
 }
 
 // writeAuthError 按请求所属协议写入 API key 错误，OpenAI 与 Anthropic 为 401

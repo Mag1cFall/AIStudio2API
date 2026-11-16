@@ -271,7 +271,7 @@ func (runtime *goWAARuntime) loadPageIcons(ctx context.Context, document pageDoc
 	}
 }
 
-// fetchCached 按账户页面缓存发出子资源请求：新鲜的缓存不发请求，过期且有校验值时发条件请求，读完响应后更新缓存；需要从正文读出内容的资源（前端主程序、入门卡片模块、Google Fonts 样式表、Cookie 提示条脚本与文案、api.js）缓存条目没有记下内容时重新完整下载
+// fetchCached 按账户页面缓存发出子资源请求：新鲜的缓存不发请求，过期且有校验值时发条件请求，读完响应后更新缓存；需要从正文读出内容的资源（前端主程序、入门卡片模块、Google Fonts 样式表、Cookie 提示条脚本与文案、api.js、googleapis.proxy.js、GTM 容器脚本与 gtag 脚本）缓存条目没有记下内容时重新完整下载
 func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, headers http.Header) error {
 	requested := time.Now()
 	address, err := url.Parse(target)
@@ -315,7 +315,7 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 
 // empty 判断缓存条目没有记下任何正文内容
 func (notes pageCacheNotes) empty() bool {
-	return notes.Loader == nil && notes.Starters == nil && notes.Fonts == nil && notes.AuditKey == "" && notes.Consent == "" && notes.Gapi == ""
+	return notes.Loader == nil && notes.Starters == nil && notes.Fonts == nil && notes.AuditKey == "" && notes.Consent == "" && notes.Gapi == "" && notes.GapiProxy == "" && notes.Tags == nil
 }
 
 // noteReader 返回从该资源正文读出缓存内容的函数，不需要读正文的资源返回 nil
@@ -352,6 +352,21 @@ func noteReader(address *url.URL) func([]byte) (pageCacheNotes, error) {
 		return func(body []byte) (pageCacheNotes, error) {
 			loader, err := gapiClientURL(body)
 			return pageCacheNotes{Gapi: loader}, err
+		}
+	case address.String() == gapiProxyScript:
+		return func(body []byte) (pageCacheNotes, error) {
+			extensions, err := gapiProxyExtensions(body)
+			return pageCacheNotes{GapiProxy: extensions}, err
+		}
+	case address.Scheme+"://"+address.Host == tagManagerOrigin && address.Path == "/gtm.js":
+		return func(body []byte) (pageCacheNotes, error) {
+			script, err := parseContainerScript(body)
+			return pageCacheNotes{Tags: &script}, err
+		}
+	case address.Scheme+"://"+address.Host == tagManagerOrigin && address.Path == "/gtag/js":
+		return func(body []byte) (pageCacheNotes, error) {
+			script, err := parseGtagScript(body)
+			return pageCacheNotes{Tags: &script}, err
 		}
 	}
 	return nil
@@ -448,6 +463,10 @@ type pageCacheNotes struct {
 	Consent string `json:"consent,omitempty"`
 	// Gapi 是 api.js 加载 gapi client 模块的地址
 	Gapi string `json:"gapi,omitempty"`
+	// GapiProxy 是 googleapis.proxy.js 载入代理模块时附加的 le 列表
+	GapiProxy string `json:"gapiProxy,omitempty"`
+	// Tags 是 GTM 容器脚本或 gtag 脚本中生成 GA4 命中用到的值
+	Tags *tagScript `json:"tags,omitempty"`
 }
 
 // loadPageCache 读取账户目录中的页面缓存元数据，文件不存在时为空缓存

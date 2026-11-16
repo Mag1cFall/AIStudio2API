@@ -192,6 +192,14 @@ func decodeUsageCursor(value string) (*UsageCursor, error) {
 	return &UsageCursor{Time: time.UnixMilli(milliseconds).UTC(), ID: id}, nil
 }
 
+// ProofPhasesMS 是生成 WAA proof 的分项毫秒数：等待操作锁、界面操作、等待 VM 重建与 VM 生成 proof
+type ProofPhasesMS struct {
+	LockMS        float64 `json:"lock_ms"`
+	InteractionMS float64 `json:"interaction_ms"`
+	RefreshMS     float64 `json:"refresh_ms"`
+	ComputeMS     float64 `json:"compute_ms"`
+}
+
 // UsageRecord 是一条已完成请求的账本记录
 type UsageRecord struct {
 	ID              string           `json:"id"`
@@ -206,6 +214,8 @@ type UsageRecord struct {
 	DurationMS      int64            `json:"duration_ms"`
 	FirstEventMS    int64            `json:"first_event_ms"`
 	QueueMS         int64            `json:"queue_ms"`
+	ProofMS         int64            `json:"proof_ms"`
+	ProofPhases     ProofPhasesMS    `json:"proof_phases"`
 	InputTokens     int64            `json:"input_tokens"`
 	CachedTokens    int64            `json:"cached_tokens"`
 	ReasoningTokens int64            `json:"reasoning_tokens"`
@@ -404,18 +414,18 @@ func (s *server) handleRequestBody(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// bodyCapture 保存截断后的正文与原始字节数
+// bodyCapture 保存截断后的正文与原始字节数，result 直接返回已保存的正文不另复制
 type bodyCapture struct {
 	mu   sync.Mutex
-	data []byte
+	data strings.Builder
 	size int64
 }
 
 func (capture *bodyCapture) add(data []byte) {
 	capture.mu.Lock()
 	capture.size += int64(len(data))
-	if room := requestBodyLimit - len(capture.data); room > 0 {
-		capture.data = append(capture.data, data[:min(room, len(data))]...)
+	if room := requestBodyLimit - capture.data.Len(); room > 0 {
+		capture.data.Write(data[:min(room, len(data))])
 	}
 	capture.mu.Unlock()
 }
@@ -423,7 +433,7 @@ func (capture *bodyCapture) add(data []byte) {
 func (capture *bodyCapture) result() (string, int64) {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
-	return string(capture.data), capture.size
+	return capture.data.String(), capture.size
 }
 
 // captureReader 在读取请求正文时复制前缀
@@ -469,6 +479,7 @@ func requestBodyMiddleware(ledger RequestLedger, next http.Handler) http.Handler
 			return
 		}
 		request, response := &bodyCapture{}, &bodyCapture{}
+		request.data.Grow(int(min(max(r.ContentLength, 0), requestBodyLimit)))
 		r.Body = &captureReader{ReadCloser: r.Body, capture: request}
 		next.ServeHTTP(&captureWriter{ResponseWriter: w, capture: response}, r)
 		body := RequestBody{ID: r.Context().Value(accessLogContextKey{}).(*accessLogMetadata).id(), Time: time.Now().UTC()}

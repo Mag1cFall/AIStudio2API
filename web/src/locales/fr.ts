@@ -261,6 +261,10 @@ export const messages: Record<TranslationKey, string> = {
   'logs.cachedTokens': 'Jetons en cache',
   'logs.totalTokens': 'Total des jetons',
   'logs.inputMessages': 'Messages en entrée',
+  'logs.proofLock': 'Attente de la page',
+  'logs.proofInteraction': 'Actions sur la page',
+  'logs.proofRefresh': 'Attente du rafraîchissement WAA',
+  'logs.proofCompute': 'Calcul WAA',
   'logs.finishReason': 'Motif de fin',
   'logs.errorDetail': 'Erreur',
   'logs.finish.stop': 'Terminé normalement',
@@ -2206,6 +2210,8 @@ export const messages: Record<TranslationKey, string> = {
   'access.client.omp': 'Version étendue de pi, avec la recherche web par l’API Gemini',
   'access.client.dsh':
     'Agent en terminal de DeepSeek, avec un fournisseur personnalisé ajouté par un fichier de correctif',
+  'access.client.agy':
+    'L’agent en terminal de Google, connecté avec une clé API Gemini ; choisissez le modèle avec /model dans agy',
   'access.client.cherry':
     'Client IA de bureau qui ajoute des fournisseurs de type OpenAI, Gemini ou Anthropic',
   'access.client.sillytavern':

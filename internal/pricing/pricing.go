@@ -14,7 +14,7 @@ type price struct {
 var prices = map[string]price{
 	"gemini-4-carbon":                        {input: 2, cached: 0.10, output: 10},
 	"gemini-4-argon":                         {input: 2, cached: 0.10, output: 10},
-	"gemini-4-hydrogen":                      {input: 1.50, cached: 0.15, output: 7.50},
+	"gemini-4-hydrogen":                      {input: 1.50, cached: 0.075, output: 7.50},
 	"gemini-3.8-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
 	"gemini-3.7-flash":                       {input: 0.75, cached: 0.075, output: 3.75},
 	"gemini-3.6-flash":                       {input: 0.75, cached: 0.075, output: 3.75},

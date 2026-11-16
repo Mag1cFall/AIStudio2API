@@ -500,7 +500,7 @@ Build 页面的对话面板由写代码助手回复。助手带有服务端的�
 
 | RPC | 服务 |
 | --- | --- |
-| `ApplyFileSystemOperation` | 同一主机的 `google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService` |
+| `ApplyFileSystemOperation`、`GetBufferedLogs`、`StreamLogs` | 同一主机的 `google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService` |
 | `MintAppletAuthToken` | `https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletAuthService` |
 
 方法为 `POST`，正文为 `application/json+protobuf` 稀疏数组：protobuf field N 对应 JSON 索引 N-1，中间未设置的 field 写 `null`。
@@ -583,8 +583,9 @@ The conversation before the first user message of this chat is transcribed at th
   CreateApplet（WAA proof） → StoreRecentApplet
 本进程第一次使用账户的应用（官网从 My apps 打开应用）：
   GetApplet
-  StoreRecentApplet、ProvisionAndInitializeApplet（WAA proof）、ListUnsetAppletSecrets、ListCodeAssistantOfflineGenerations、ListAppletTrajectories、ListAppletSecrets
-  ApplyFileSystemOperation、MintAppletAuthToken
+  GetCodeAssistantSnapshot、StoreRecentApplet、ProvisionAndInitializeApplet（WAA proof）、ListCodeAssistantFeatures、GetPendingArenaInteraction、
+  ListUnsetAppletSecrets、LoadCodeAssistantInteractionHistory、ListCodeAssistantOfflineGenerations、ListAppletTrajectories、ListAppletSecrets
+  在后台与本轮同时进行：ApplyFileSystemOperation、GetBufferedLogs → StreamLogs、MintAppletAuthToken（生成服务停止时结束）
 开启新 trajectory（官网点 New chat）：
   ListAppletTrajectories、ListCodeAssistantOfflineGenerations
 每轮：
@@ -597,8 +598,8 @@ The conversation before the first user message of this chat is transcribed at th
   ListUnsetAppletSecrets、ListAppletTrajectories、ListAppletSecrets
 回复完整结束后在后台：
   新应用的第一段对话：ProvisionAndInitializeApplet（WAA proof）、ListAppletSecrets、ListUnsetAppletSecrets
-                      → ApplyFileSystemOperation、SaveApplet、MintAppletAuthToken
-  其余各轮：          ApplyFileSystemOperation、SaveApplet、ListAppletSecrets、ListUnsetAppletSecrets
+                      → ApplyFileSystemOperation、SaveApplet、MintAppletAuthToken、GenerateCodeAssistantSuggestionChips（WAA proof）
+  其余各轮：          ApplyFileSystemOperation、SaveApplet、ListAppletSecrets、ListUnsetAppletSecrets、GenerateCodeAssistantSuggestionChips（WAA proof）
   → StoreRecentApplet
 回复没有完整结束时在后台：
   CancelCodeAssistantOfflineGeneration        （已取得任务 ID、流没有正常解码完成且任务没有以失败步骤结束时）
@@ -657,13 +658,17 @@ The conversation before the first user message of this chat is transcribed at th
 
 | RPC | 正文 | 响应 |
 | --- | --- | --- |
-| `GetApplet` | `["<APPLET_ID>"]` | field 1 为应用 `[应用 ID, 创建时间, 修改时间, 元数据, ...]`，应用 field 12 为 `[开发环境地址]` |
+| `GetApplet` | `["<APPLET_ID>"]` | field 1 为应用 `[应用 ID, 创建时间, 修改时间, 元数据, ...]`，应用 field 7 为最近一次快照时间、field 12 为 `[开发环境地址]` |
+| `GetCodeAssistantSnapshot` | 有快照时 `["<APPLET_ID>",null,<快照时间>]`，没有快照时 `["<APPLET_ID>",true]` | 丢弃 |
 | `StoreRecentApplet` | `[[null,null,<应用引用>,"<标题>","<描述>",null,1]]` | `[]` |
 | `ProvisionAndInitializeApplet` | `["<APPLET_ID>",1,null,"<WAA_PROOF>"]`，proof 写入 field 4，binding 为应用 ID | field 1 为 `[开发环境地址]` |
-| `ListUnsetAppletSecrets`、`ListAppletTrajectories` | `["<APPLET_ID>"]` | 丢弃 |
+| `ListUnsetAppletSecrets`、`ListAppletTrajectories`、`GetPendingArenaInteraction` | `["<APPLET_ID>"]` | 丢弃 |
+| `ListCodeAssistantFeatures` | `[1]` | 丢弃 |
+| `LoadCodeAssistantInteractionHistory` | `["<APPLET_ID>",100,null,null,null,"<APPLET_ID>"]` | 丢弃 |
 | `ListCodeAssistantOfflineGenerations` | `[null,null,[1,2],["<APPLET_ID>"]]` | 丢弃 |
 | `ListAppletSecrets` | `["applets/<APPLET_ID>",100]` | 丢弃 |
 | `ApplyFileSystemOperation` | `[[[null,null,null,null,["."]]],null,null,null,"<APPLET_ID>"]` | 丢弃 |
+| `GetBufferedLogs`、`StreamLogs` | `[null,null,null,"<APPLET_ID>"]` | 丢弃 |
 | `MintAppletAuthToken` | `["<APPLET_ID>","<开发环境地址>"]`，没有开发环境地址时不发送 | 丢弃 |
 
 应用引用为 `[8,null,null,null,null,null,null,null,["<APPLET_ID>"]]`。元数据为 `[标题, 描述, 首条提示, null, 模板, ...]`；`GetApplet` 缺少应用 ID 或元数据时返回协议错误 “缺少应用 ID 或元数据”。
@@ -755,6 +760,7 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 | --- | --- |
 | `SaveApplet` | `["<APPLET_ID>",<元数据>]`，元数据取打开或新建应用时读到的元数据并补齐到 11 项，field 6 为应用 ID、field 8 为 `null` |
 | `StoreRecentApplet` | `[[[<秒>,<纳秒>],null,<应用引用>,"<标题>","<描述>"]]` |
+| `GenerateCodeAssistantSuggestionChips` | `[<对话>,"<WAA_PROOF>","<标题>","<描述>",null,"<APPLET_ID>"]`，对话为请求的对话加本轮回复中各轮的非思考正文 `[[[null,"<正文>"]...],"user"|"model"]`，proof 写入 field 2，binding 为这些正文以空格连接 |
 
 其余伴随请求的正文见“打开应用”。
 
@@ -764,7 +770,7 @@ WAA binding 与 Playground `GenerateContent` 相同：contents 各 Part 依次�
 ["<GENERATION_ID>","<APPLET_ID>"]
 ```
 
-- 任务流正文关闭时结束请求，包括正常读完、客户端断开与停止序列截断；回复完整结束时写入续接位置并发送回复后的伴随请求，否则删除本轮续接的续接位置
+- 任务流正文关闭时结束请求，包括正常读完、客户端断开与停止序列截断；回复完整结束时写入续接位置并发送回复后的伴随请求，否则删除本轮续接的续接位置；生成服务停止时尚未发出的伴随请求不再发送
 - 已取得任务 ID、流没有正常解码完成且任务没有以失败步骤结束时，在后台以独立的 1 分钟期限发送一次 `CancelCodeAssistantOfflineGeneration`；任务已在上游结束时上游返回 400 `FAILED_PRECONDITION`，视为已停止；其他失败以 WARN 记录 “Build 写代码助手取消任务失败”，字段为 `account`、`method`、`applet` 与 `error`
 
 ### 任务流

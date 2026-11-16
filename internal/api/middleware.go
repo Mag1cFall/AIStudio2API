@@ -52,7 +52,7 @@ type accessLogMetadata struct {
 	requestID       string
 	startedAt       time.Time
 	queueWait       time.Duration
-	proof           time.Duration
+	proof           ProofTiming
 	attempts        []RequestAttempt
 	authorized      bool
 }
@@ -185,11 +185,27 @@ func AddAccessLogAttempt(ctx context.Context, attempt RequestAttempt) {
 	}
 }
 
-// AddAccessLogProof 累计请求等待并生成 WAA proof 的时间
-func AddAccessLogProof(ctx context.Context, duration time.Duration) {
+// ProofTiming 是请求各次生成 WAA proof 的累计耗时：Total 为整个准备过程，其中等待操作锁、界面操作、等待 VM 重建与 VM 生成 proof 分项累计
+type ProofTiming struct {
+	Total       time.Duration
+	Lock        time.Duration
+	Interaction time.Duration
+	Refresh     time.Duration
+	Compute     time.Duration
+	// SettingsSkipped 是空闲不够而没有做的运行设置步数
+	SettingsSkipped int
+}
+
+// AddAccessLogProof 累计请求等待并生成 WAA proof 的总耗时与分项
+func AddAccessLogProof(ctx context.Context, timing ProofTiming) {
 	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
 		metadata.mu.Lock()
-		metadata.proof += duration
+		metadata.proof.Total += timing.Total
+		metadata.proof.Lock += timing.Lock
+		metadata.proof.Interaction += timing.Interaction
+		metadata.proof.Refresh += timing.Refresh
+		metadata.proof.Compute += timing.Compute
+		metadata.proof.SettingsSkipped += timing.SettingsSkipped
 		metadata.mu.Unlock()
 	}
 }

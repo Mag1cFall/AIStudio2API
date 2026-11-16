@@ -834,7 +834,7 @@ type inlineMediaKey struct {
 
 // inlineMediaKeyOf 返回内联附件 part 的标识
 func inlineMediaKeyOf(part Part) inlineMediaKey {
-	digest := sha256.Sum256(part.InlineData.Data)
+	digest := part.InlineData.SHA256()
 	return inlineMediaKey{mime: part.InlineData.MIME, sha256: base64.StdEncoding.EncodeToString(digest[:]), name: part.DisplayName}
 }
 
@@ -1125,9 +1125,30 @@ func (s *PooledService) UploadInlineMediaToLease(
 	staged := slices.DeleteFunc(slices.Clone(pending), func(job uploadJob) bool {
 		return rewritten[last].Role != RoleUser || !slices.ContainsFunc(parts[job.key], func(index partIndex) bool { return index.content == last })
 	})
-	uploader, _ := pageOf(targetID).(pageUploader)
+	var uploader pageUploader
+	if worker := pageWorker(targetID); worker != nil {
+		page, _, pageErr := worker.usePage(targetCtx)
+		if pageErr != nil {
+			return nil, nil, errors.Join(pageErr, temporary.Cleanup())
+		}
+		uploader, _ = page.(pageUploader)
+	}
+	rerun := false
 	if uploader != nil && len(staged) > 0 {
-		token = uploader.beforeUpload(targetCtx)
+		runs, _ := s.client.protected.(PageRunsProtectedTransport)
+		rerun = runs != nil && runs.RanBefore(targetID, contents)
+		token = uploader.beforeUpload(targetCtx, rerun)
+	}
+	if uploader != nil && (len(pending) > 0 || len(expired) > 0) && uploader.driveDenied(targetCtx) {
+		temporary.release = s.useInlineMedia(used)
+		inline := make([]inlineFile, 0, len(staged))
+		for _, job := range staged {
+			inline = append(inline, inlineFile{name: job.name, blob: job.blob})
+		}
+		uploader.inlined(targetCtx, rerun, inline, func(ctx context.Context, body []byte) ([]byte, error) {
+			return s.client.readRPC(issuedByPage(ctx), "CountTokens", targetID, body)
+		})
+		return rewritten, temporary, nil
 	}
 	if len(pending) > 0 || len(expired) > 0 {
 		var lookup sync.WaitGroup
@@ -1224,7 +1245,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 		reader := s.client.transport.(DriveFileReader)
 		uploader.uploaded(targetCtx, refs, pageDrive{
 			count: func(ctx context.Context, body []byte) ([]byte, error) {
-				return s.client.readRPC(ctx, "CountTokens", targetID, body)
+				return s.client.readRPC(issuedByPage(ctx), "CountTokens", targetID, body)
 			},
 			read: func(ctx context.Context, fileID string) {
 				reader.ReadDriveFile(ctx, targetID, token, fileID)
@@ -1296,7 +1317,7 @@ func (t *MakerSuiteHTTPTransport) UploadDrive(ctx context.Context, accountID str
 	if err != nil {
 		return FileRef{}, err
 	}
-	if err := t.loadDriveDiscovery(ctx, lease, client, headers, apiKey); err != nil {
+	if err := t.loadDriveDiscovery(ctx, lease.Account(), client, headers, apiKey); err != nil {
 		return FileRef{}, err
 	}
 	headers.Set("Authorization", "Bearer "+token)
@@ -1345,24 +1366,22 @@ func uriComponent(value string) string {
 }
 
 // loadDriveDiscovery 在账户第一次经 gapi 上传前按官网页面读取 Drive v3 discovery 文档，每个账户读取一次，同时上传的多个文件等待同一次读取
-func (t *MakerSuiteHTTPTransport) loadDriveDiscovery(ctx context.Context, lease *AccountLease, client *http.Client, gapi http.Header, apiKey string) error {
-	account := lease.Account()
+func (t *MakerSuiteHTTPTransport) loadDriveDiscovery(ctx context.Context, account *Account, client *http.Client, gapi http.Header, apiKey string) error {
 	_, err, _ := t.driveDiscovery.Do(account.ID, func() (any, error) {
-		return nil, t.readDriveDiscovery(ctx, lease, client, gapi, apiKey)
+		return nil, t.readDriveDiscovery(ctx, account, client, gapi, apiKey)
 	})
 	return err
 }
 
 // readDriveDiscovery 读取账户尚未读取过的 Drive v3 discovery 文档
-func (t *MakerSuiteHTTPTransport) readDriveDiscovery(ctx context.Context, lease *AccountLease, client *http.Client, gapi http.Header, apiKey string) error {
-	account := lease.Account()
+func (t *MakerSuiteHTTPTransport) readDriveDiscovery(ctx context.Context, account *Account, client *http.Client, gapi http.Header, apiKey string) error {
 	t.driveMu.Lock()
 	loaded := t.driveDiscovered[account.ID]
 	t.driveMu.Unlock()
 	if loaded {
 		return nil
 	}
-	if err := t.getDriveDiscovery(ctx, lease, client, gapi, apiKey); err != nil {
+	if err := t.getDriveDiscovery(ctx, account, client, gapi, apiKey); err != nil {
 		return err
 	}
 	t.driveMu.Lock()
@@ -1371,13 +1390,12 @@ func (t *MakerSuiteHTTPTransport) readDriveDiscovery(ctx context.Context, lease 
 	return nil
 }
 
-// getDriveDiscovery 以页面 gapi 的请求形状读取 Drive v3 discovery 文档
-func (t *MakerSuiteHTTPTransport) getDriveDiscovery(ctx context.Context, lease *AccountLease, client *http.Client, gapi http.Header, apiKey string) error {
-	account := lease.Account()
+// getDriveDiscovery 以页面 gapi 的请求形状、页面的登录凭据读取 Drive v3 discovery 文档
+func (t *MakerSuiteHTTPTransport) getDriveDiscovery(ctx context.Context, account *Account, client *http.Client, gapi http.Header, apiKey string) error {
 	address := fmt.Sprintf(driveDiscoveryURL, url.QueryEscape(apiKey))
-	state, err := lease.ReloadStorageState()
+	state, err := pageLoginState(ctx, account)
 	if err != nil {
-		return fmt.Errorf("读取账户 storage state: %w", err)
+		return fmt.Errorf("读取账户登录状态: %w", err)
 	}
 	authorization, err := t.signer.Authorization(state)
 	if err != nil {
@@ -1426,24 +1444,21 @@ func (t *MakerSuiteHTTPTransport) ReadDriveFile(ctx context.Context, accountID, 
 	}
 }
 
-// getDriveFile 读取一次对话附件的 discovery 文档、元数据与缩略图
-func (t *MakerSuiteHTTPTransport) getDriveFile(ctx context.Context, accountID, token, fileID string) (err error) {
-	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: accountID})
+// getDriveFile 像页面显示附件一样不占用账户读取一次对话附件的 discovery 文档、元数据与缩略图
+func (t *MakerSuiteHTTPTransport) getDriveFile(ctx context.Context, accountID, token, fileID string) error {
+	account, err := t.pool.Account(accountID)
 	if err != nil {
 		return err
 	}
-	if owned {
-		defer func() { err = errors.Join(err, lease.Release()) }()
-	}
-	client, err := t.clientForProxy(lease.Account().EffectiveProxy(t.globalProxy))
+	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
 	if err != nil {
 		return err
 	}
-	headers, apiKey, err := t.gapiHeaders(ctx, lease.Account())
+	headers, apiKey, err := t.gapiHeaders(ctx, account)
 	if err != nil {
 		return err
 	}
-	if err := t.getDriveDiscovery(ctx, lease, client, headers, apiKey); err != nil {
+	if err := t.getDriveDiscovery(ctx, account, client, headers, apiKey); err != nil {
 		return err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf(driveFileURL, url.PathEscape(fileID), url.QueryEscape(apiKey)), nil)

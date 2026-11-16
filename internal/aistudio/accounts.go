@@ -346,6 +346,8 @@ type Account struct {
 	boundProxy       atomic.Pointer[string]
 	// assistantBusy 表示账户正在运行写代码助手生成
 	assistantBusy bool
+	// pendingProofs 是已选定该账户、还没有取完 proof 的生成租约数
+	pendingProofs int
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
@@ -399,10 +401,12 @@ type AccountSelection struct {
 	PlaygroundOnly     bool
 	Channel            Channel
 	PreferredChannel   Channel
-	// IgnoreQuotaCooldown 为 true 时套餐限额与每日限额冷却中的账户照常参与选号
+	// IgnoreQuotaCooldown 为 true 时套餐限额、每日限额与权限拒绝冷却中的账户照常参与选号，每日限额一分钟内拒绝过不大于 RequestSize 的请求的账户除外，余量多的账户优先
 	IgnoreQuotaCooldown bool
-	anyTier             bool
-	anyState            bool
+	// RequestSize 是请求输入正文的字节数，0 表示未知
+	RequestSize int64
+	anyTier     bool
+	anyState    bool
 }
 
 const preferredBootstrapModelID = "gemini-flash-latest"
@@ -516,6 +520,10 @@ type AccountLease struct {
 	channel               Channel
 	// ignoreQuotaCooldown 表示租约在全部账户冷却时取自套餐限额或每日限额冷却中的账户，这两种冷却不阻止它发送
 	ignoreQuotaCooldown bool
+	// requestSize 是租约所服务请求的输入字节数
+	requestSize int64
+	// proofPending 表示生成租约还没有取完 proof，计入账户的 pendingProofs
+	proofPending bool
 	// assistantDone 表示本租约的写代码助手生成已结束，账户已可接其他 -build 请求
 	assistantDone bool
 	operation     sync.Mutex
@@ -1560,7 +1568,7 @@ func (l *AccountLease) CoolingDown(modelID string) bool {
 	if account == nil {
 		return false
 	}
-	_, active := selectionCooldown(account, scope, AccountSelection{IgnoreQuotaCooldown: l.ignoreQuotaCooldown}, time.Now())
+	_, active := selectionCooldown(account, scope, AccountSelection{IgnoreQuotaCooldown: l.ignoreQuotaCooldown, RequestSize: l.requestSize}, time.Now())
 	return active
 }
 
@@ -1962,6 +1970,34 @@ func (l *AccountLease) Release() error {
 	return l.err
 }
 
+// ProofDone 记录生成租约已取完 proof，账户不再为它排队取 proof
+func (l *AccountLease) ProofDone() {
+	l.pool.mu.Lock()
+	l.finishProofLocked()
+	l.pool.mu.Unlock()
+}
+
+// finishProofLocked 结束租约对账户 pendingProofs 的计数，调用方持有 pool.mu
+func (l *AccountLease) finishProofLocked() {
+	if l.proofPending {
+		l.proofPending = false
+		l.account.pendingProofs--
+	}
+}
+
+// WithoutPendingProofs 返回 accountIDs 中没有生成租约在等待或生成 proof 的账户，保持原顺序
+func (p *AccountPool) WithoutPendingProofs(accountIDs []string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	idle := make([]string, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if account := p.byID[accountID]; account == nil || account.pendingProofs == 0 {
+			idle = append(idle, accountID)
+		}
+	}
+	return idle
+}
+
 // Retain 让租约在返回的函数调用前保持占用，期间的 Release 推迟到该函数调用时生效
 func (l *AccountLease) Retain() func() error {
 	l.operation.Lock()
@@ -1985,6 +2021,7 @@ func (l *AccountLease) releaseLocked() {
 	}
 	l.released = true
 	l.pool.mu.Lock()
+	l.finishProofLocked()
 	if l.exclusive {
 		l.account.exclusive = false
 	} else if l.account.active > 0 {
@@ -2372,11 +2409,20 @@ func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 			}
 		}
 		next := CooldownState{Until: cooldown.Until.UTC(), Reason: cooldown.Reason}
-		if cooldown.Escalate {
+		switch {
+		case cooldown.Escalate && strings.HasPrefix(cooldown.Reason, AccountRejectionKind) && !(baseExists && strings.HasPrefix(base.Reason, AccountRejectionKind)):
+			next = CooldownState{Until: now.UTC(), Reason: cooldown.Reason}
+		case cooldown.Escalate:
 			next = planLimitCooldown(base, baseExists, now, cooldown.Reason)
 		}
 		if baseExists && base.Active(now) && !next.Until.After(base.Until) {
 			next = base
+		}
+		if strings.HasPrefix(cooldown.Reason, DailyLimitKind) && cooldown.RequestSize > 0 {
+			next.RejectedSize, next.RejectedUntil = cooldown.RequestSize, now.Add(rejectedSizeWindow)
+			if exists && now.Before(previous.RejectedUntil) {
+				next.RejectedSize = min(next.RejectedSize, previous.RejectedSize)
+			}
 		}
 		until = next.Until
 		if layered && next.Until.Before(previous.Until) {
@@ -2856,6 +2902,11 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 	waitable := false
 	var earliest time.Time
 	candidates := p.channelCandidatesLocked(indices, selection)
+	if selection.IgnoreQuotaCooldown {
+		sort.SliceStable(candidates, func(left, right int) bool {
+			return p.quotaHeadroomLocked(candidates[left], selection, now) > p.quotaHeadroomLocked(candidates[right], selection, now)
+		})
+	}
 	sort.SliceStable(candidates, func(left, right int) bool {
 		return p.accounts[candidates[left].index].ID == selection.PreferredAccountID && p.accounts[candidates[right].index].ID != selection.PreferredAccountID
 	})
@@ -2900,6 +2951,10 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 			refreshRuntime = leaseLock != nil
 		}
 		account.active++
+		proofPending := selection.Method == "generateContent"
+		if proofPending {
+			account.pendingProofs++
+		}
 		if candidate.channel == ChannelAssistant {
 			account.assistantBusy = true
 		}
@@ -2909,7 +2964,8 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
-			channel: candidate.channel, ignoreQuotaCooldown: selection.IgnoreQuotaCooldown,
+			channel: candidate.channel, ignoreQuotaCooldown: selection.IgnoreQuotaCooldown, requestSize: selection.RequestSize,
+			proofPending: proofPending,
 		}, time.Time{}, true, nil
 	}
 	return nil, earliest, waitable, nil
@@ -3881,7 +3937,17 @@ func accountCatalogFingerprint(tier BenefitTier, models []Model) (string, error)
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
-// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额与每日限额冷却限制，只受其中记录的回退冷却限制
+// quotaHeadroomLocked 返回候选在回退选号中的额度余量：每日限额冷却中为一分钟内上游拒绝过的最小请求字节数，没有拒绝记录时为最大值
+func (p *AccountPool) quotaHeadroomLocked(candidate channelCandidate, selection AccountSelection, now time.Time) int64 {
+	account := p.accounts[candidate.index]
+	cooldown, exists := account.runtime.Cooldowns[ChannelCooldownScope(candidate.channel, selectionAccessScope(selection))]
+	if !exists || !cooldown.Active(now) || !now.Before(cooldown.RejectedUntil) {
+		return math.MaxInt64
+	}
+	return cooldown.RejectedSize
+}
+
+// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额、每日限额与权限拒绝冷却限制，只受其中记录的非权限拒绝回退冷却与每日限额一分钟内拒绝过不大于 RequestSize 的请求的拒绝记录限制，生效到两者中较晚结束的一个
 func selectionCooldown(account *Account, scope string, selection AccountSelection, now time.Time) (CooldownState, bool) {
 	var selected CooldownState
 	for _, key := range []string{globalCooldownKey, scope} {
@@ -3889,14 +3955,22 @@ func selectionCooldown(account *Account, scope string, selection AccountSelectio
 			continue
 		}
 		cooldown, exists := account.runtime.Cooldowns[key]
-		if !exists || !cooldown.Active(now) {
+		if !exists || !cooldown.Active(now) || selection.IgnoreQuotaCooldown && strings.HasPrefix(cooldown.Reason, AccountRejectionKind) {
 			continue
 		}
 		if selection.IgnoreQuotaCooldown && RequestQuotaCooldown(cooldown.Reason) {
-			if cooldown.Fallback == nil || !cooldown.Fallback.Active(now) {
+			blocking := CooldownState{}
+			if cooldown.rejects(selection.RequestSize, now) {
+				blocking = cooldown
+				blocking.Until = cooldown.RejectedUntil
+			}
+			if fallback := cooldown.Fallback; fallback != nil && fallback.Active(now) && !strings.HasPrefix(fallback.Reason, AccountRejectionKind) && fallback.Until.After(blocking.Until) {
+				blocking = *fallback
+			}
+			if blocking.Until.IsZero() {
 				continue
 			}
-			cooldown = *cooldown.Fallback
+			cooldown = blocking
 		}
 		if selected.Until.IsZero() || cooldown.Until.After(selected.Until) {
 			selected = cooldown

@@ -60,7 +60,11 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	}
 	var retrieval []any
 	if len(tools) > 0 {
-		retrieval = encodeRetrievalConfig(request.Tools.ToolConfig.Retrieval, runtime.Timezone)
+		timezone := ""
+		if slices.ContainsFunc(tools, groundingTool) {
+			timezone = runtime.Timezone
+		}
+		retrieval = encodeRetrievalConfig(request.Tools.ToolConfig.Retrieval, timezone)
 	}
 	length := 11
 	if request.turnToken != "" {
@@ -107,6 +111,12 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 		wire[16] = request.continuationToken
 	}
 	return json.Marshal(wire)
+}
+
+// groundingTool 判断编码后的工具是 Google 搜索或地图检索工具，账户时区只随这两类工具发送
+func groundingTool(tool any) bool {
+	fields, _ := tool.([]any)
+	return len(fields) > 3 && fields[3] != nil || len(fields) > 10 && fields[10] != nil
 }
 
 // encodeRetrievalConfig 编码 ToolConfig.retrieval_config：用户坐标、语言代码与时区，都未设置时为 nil
@@ -787,9 +797,10 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	assistant := entry.model.Capabilities["assistant_route"]
 	restoring := request.restoreModelTurns && !build && !assistant && !entry.defaults.InteractionStream && !entry.defaults.InteractionTask
 	if restoring {
-		request.Contents, request.turnToken = c.turns.restore(apiKey, request.Contents)
+		var tip turnLink
+		request.Contents, request.turnToken, tip = c.turns.restore(apiKey, request.Contents)
+		request.turnChain = turnChain{contents: request.Contents, tip: tip}
 	}
-	history := request.Contents
 	if err := validateVideoParts(request.Contents); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -1060,7 +1071,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			_ = send(*finish)
 		}
 		if restoring && trailing == nil {
-			c.turns.store(apiKey, history, turn)
+			c.turns.store(apiKey, request.turnChain.tip, turn)
 		}
 	}()
 	return contract.forward(ctx, events), nil
@@ -1386,7 +1397,7 @@ func mergeContinuedUsage(previous Usage, next Usage) Usage {
 // DecodeGenerateStream 按网络到达顺序解码 GenerateContent repeated 帧
 func DecodeGenerateStream(source io.Reader, decoder *FrameDecoder, emit func(Event) error) error {
 	return decodeGenerateItems(source, func(raw json.RawMessage) error {
-		events, err := decoder.Decode(raw)
+		events, err := decoder.decodeValid(raw)
 		if err != nil {
 			return err
 		}

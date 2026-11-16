@@ -11,6 +11,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -643,7 +644,7 @@ func openAIContentBlock(block openAIBlock) (aistudio.Part, error) {
 		if err != nil {
 			return aistudio.Part{}, fmt.Errorf("input_audio.data: %w", err)
 		}
-		return aistudio.Part{InlineData: &aistudio.Blob{MIME: audioMIME(block.InputAudio.Format), Data: data}}, nil
+		return aistudio.Part{InlineData: aistudio.NewBlob(audioMIME(block.InputAudio.Format), data)}, nil
 	default:
 		return aistudio.Part{}, fmt.Errorf("unsupported content type %q", block.Type)
 	}
@@ -689,7 +690,7 @@ func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
 	}
 	mediaType, _, _ := mime.ParseMediaType(metadata)
 	mimeType, data := normalizeImagePayload(attachmentMIME(mediaType, name, data), data)
-	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}, DisplayName: name}, nil
+	return aistudio.Part{InlineData: aistudio.NewBlob(mimeType, data), DisplayName: name}, nil
 }
 
 // fileDataPart 解析 data URL 或 base64 文件内容
@@ -702,7 +703,7 @@ func fileDataPart(value string, name string) (aistudio.Part, error) {
 		return aistudio.Part{}, fmt.Errorf("file_data: %w", err)
 	}
 	mimeType, data := normalizeImagePayload(detectMediaType(name, data), data)
-	return aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}, DisplayName: name}, nil
+	return aistudio.Part{InlineData: aistudio.NewBlob(mimeType, data), DisplayName: name}, nil
 }
 
 // detectMediaType 按内容前缀判断不带参数的 MIME，无法识别时依次按 FLAC 头、MPEG 音频帧头与扩展名判断
@@ -1305,6 +1306,9 @@ func (choice *chatStreamChoice) emit(event aistudio.Event) error {
 }
 
 func writeChatChunk(w http.ResponseWriter, id string, created int64, model string, index int, delta map[string]any, finish *string, includeUsage bool) error {
+	if content, ok := delta["content"].(string); ok && len(delta) == 1 && finish == nil {
+		return writeSSEFrame(w, chatTextChunk(id, created, model, index, content, includeUsage))
+	}
 	choice := map[string]any{
 		"index":         index,
 		"delta":         delta,
@@ -1325,6 +1329,19 @@ func writeChatChunk(w http.ResponseWriter, id string, created int64, model strin
 		chunk["usage"] = nil
 	}
 	return writeSSE(w, "", officialOrder("chat", chunk))
+}
+
+// chatTextChunk 返回只含正文增量的 chat.completion.chunk SSE 帧，字节与按官方字段顺序编码的同一对象相同
+func chatTextChunk(id string, created int64, model string, index int, content string, includeUsage bool) []byte {
+	frame := appendJSONString(append(sseFrameStart("", 160+len(content)), `{"id":`...), id)
+	frame = strconv.AppendInt(append(frame, `,"object":"chat.completion.chunk","created":`...), created, 10)
+	frame = appendJSONString(append(frame, `,"model":`...), model)
+	frame = strconv.AppendInt(append(frame, `,"choices":[{"index":`...), int64(index), 10)
+	frame = append(appendJSONString(append(frame, `,"delta":{"content":`...), content), `},"finish_reason":null}]`...)
+	if includeUsage {
+		frame = append(frame, `,"usage":null`...)
+	}
+	return append(frame, "}\n\n"...)
 }
 
 func openAIFinishReason(reason string, hasTools bool) string {

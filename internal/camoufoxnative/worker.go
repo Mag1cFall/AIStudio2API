@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/prooftime"
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/rhythm"
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
 )
@@ -46,6 +48,8 @@ type Worker struct {
 	connection *websocket.Conn
 	client     *bidiClient
 	contextID  string
+	// rhythm 是账户点击与粘贴的事件节奏
+	rhythm rhythm.Rhythm
 	// page 为页面主世界中保存官方 WAA service 与受保护请求状态的对象
 	page      pageHandle
 	state     State
@@ -98,12 +102,16 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheDirectory, cacheLock, err := lockAccountCache(options.StorageStatePath)
+	account, err := loadAccountRhythm(options.StorageStatePath)
+	if err != nil {
+		return nil, err
+	}
+	cacheDirectory, cacheLock, pending, err := lockAccountCache(options.StorageStatePath)
 	if err != nil {
 		return nil, err
 	}
 	options.CacheDirectory = cacheDirectory
-	worker := &Worker{cacheLock: cacheLock, options: options, tabs: make(map[string]*tabUse)}
+	worker := &Worker{cacheLock: cacheLock, options: options, tabs: make(map[string]*tabUse), rhythm: account}
 	failed := true
 	defer func() {
 		if failed {
@@ -122,11 +130,15 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 			return nil, err
 		}
 	}
+	if pending {
+		if _, err := cacheLock.TryLockContext(ctx, cacheLockPoll); err != nil {
+			return nil, fmt.Errorf("等待旧 Worker 释放账户浏览器缓存: %w", err)
+		}
+	}
 	if err := worker.bootstrap(ctx, options, state); err != nil {
 		return nil, err
 	}
 	if options.Headless && !options.liveView {
-		// 浏览器启动与首次载入按 interactiveFrameRate 刷新，Worker 就绪后降到 idleFrameDivisor 并停止标签页绘制
 		if _, err := worker.chromeEvaluate(ctx, idleRenderingExpression); err != nil {
 			return nil, fmt.Errorf("停止 Camoufox 标签页绘制: %w", err)
 		}
@@ -203,6 +215,7 @@ func (worker *Worker) launch(ctx context.Context, options Options, fingerprint m
 	}
 	worker.connection = connection
 	worker.client = newBiDiClient(connection)
+	worker.client.rhythm = worker.rhythm
 	sessionCtx, cancel := context.WithTimeout(ctx, browserStartupTimeout)
 	defer cancel()
 	if _, err := worker.client.command(sessionCtx, "session.new", map[string]any{"capabilities": map[string]any{}}); err != nil {
@@ -531,10 +544,13 @@ func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) 
 
 // Proof 在一次页面调用中写入官网 prompt 并为 SHA-256 digest 生成 fresh WAA proof，页面值未同步时最多重试 5 秒
 func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (string, error) {
+	lockStarted := time.Now()
 	worker.lockInput()
 	defer worker.inputMu.Unlock()
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
+	locked := time.Now()
+	prooftime.Observe(ctx, prooftime.Lock, locked.Sub(lockStarted))
 	if worker.closed {
 		return "", errors.New("Camoufox runtime 已关闭")
 	}
@@ -546,11 +562,21 @@ func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (
 			return "", fmt.Errorf("生成 fresh WAA proof: %w", err)
 		}
 		if result["type"] != "null" {
-			proof, _ := result["value"].(string)
-			if !strings.HasPrefix(proof, "!") {
+			value, _ := result["value"].(string)
+			var page struct {
+				Proof   string  `json:"proof"`
+				Compute float64 `json:"compute"`
+			}
+			if err := json.Unmarshal([]byte(value), &page); err != nil {
+				return "", fmt.Errorf("解析 fresh WAA proof: %w", err)
+			}
+			if !strings.HasPrefix(page.Proof, "!") {
 				return "", errors.New("fresh WAA proof 前缀无效")
 			}
-			return proof, nil
+			compute := time.Duration(page.Compute * float64(time.Millisecond))
+			prooftime.Observe(ctx, prooftime.Compute, compute)
+			prooftime.Observe(ctx, prooftime.Interaction, time.Since(locked)-compute)
+			return page.Proof, nil
 		}
 		if time.Now().After(deadline) {
 			return "", errors.New("官网 prompt 状态未同步")
@@ -579,10 +605,55 @@ func (worker *Worker) Close() error {
 		return nil
 	}
 	worker.mu.Lock()
-	if worker.closed {
-		worker.mu.Unlock()
+	closed := worker.closed
+	worker.mu.Unlock()
+	if closed {
 		return nil
 	}
+	if err := worker.shutdown(); err != nil {
+		return err
+	}
+	worker.mu.Lock()
+	worker.closed = true
+	worker.mu.Unlock()
+	return nil
+}
+
+// retiring 是在后台关闭中的 Worker
+var retiring sync.WaitGroup
+
+// Retire 让 Worker 退出服务后立即返回，Close 的离开页面、等待上报、结束 session 与清理都在后台进行；同账户随后启动的 Worker 先启动浏览器，载入页面前等账户缓存释放；之后的 Close 直接返回
+func (worker *Worker) Retire() {
+	if worker == nil {
+		return
+	}
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return
+	}
+	worker.closed = true
+	worker.mu.Unlock()
+	directory := worker.options.CacheDirectory
+	if directory != "" {
+		retiringCaches.Store(directory, struct{}{})
+	}
+	retiring.Go(func() {
+		if err := worker.shutdown(); err != nil {
+			slog.Warn("Camoufox Worker 后台关闭失败", "error", err)
+		}
+		retiringCaches.Delete(directory)
+	})
+}
+
+// WaitRetired 等待在后台关闭中的 Worker 全部关闭
+func WaitRetired() {
+	retiring.Wait()
+}
+
+// shutdown 把各标签页导航到空白页，等页面卸载时的上报发出后结束 BiDi session、关闭浏览器并释放账户缓存
+func (worker *Worker) shutdown() error {
+	worker.mu.Lock()
 	client := worker.client
 	connection := worker.connection
 	process := worker.process
@@ -610,13 +681,7 @@ func (worker *Worker) Close() error {
 	if err := process.Close(); err != nil {
 		return err
 	}
-	if err := releaseAccountCache(worker.cacheLock); err != nil {
-		return err
-	}
-	worker.mu.Lock()
-	worker.closed = true
-	worker.mu.Unlock()
-	return nil
+	return releaseAccountCache(worker.cacheLock)
 }
 
 // parallel 同时执行各函数并合并它们的错误

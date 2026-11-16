@@ -171,7 +171,7 @@ Cookie 的 `name`、`value`、`domain`、`path`、`expires`、`httpOnly`、`secu
 | --- | --- |
 | `auth/<Google 邮箱>/account.json` | 邮箱、enabled、proxy、locale、timezone、auth_user |
 | `auth/<Google 邮箱>/storage-state.json` | Cookie、localStorage 和可选 Chrome 续签材料 |
-| `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、WebGL、语言、地区和时区配置 |
+| `auth/<Google 邮箱>/camoufox-fingerprint.json` | 账户固定的 navigator、屏幕、字体、WebGL、语言、地区、时区配置与点击和粘贴的事件节奏 |
 | `auth/<Google 邮箱>/runtime-state.json` | 账户权益、实测模型资格、冷却与 Drive/视频资源绑定 |
 | `auth/<Google 邮箱>/pairing-renewal.json` | 远程配对上传签发的续签凭据 SHA-256 与最近一次配对续签时间 |
 | `auth/<Google 邮箱>/camoufox-cache/` | 该账户 Camoufox 的 HTTP 磁盘缓存与 Firefox 启动缓存，运行中的 WAA Worker 独占 |
@@ -1247,7 +1247,9 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | OpenAI Embeddings | `POST /v1/embeddings` |
 | OpenAI 媒体 | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/audio/speech`、`POST /v1/videos`、`GET /v1/videos`、`GET /v1/videos/{id}`、`DELETE /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
-| Gemini | `GET /v1beta/models`、`GET /v1beta/models/{model}`、`POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`、`:embedContent`、`:batchEmbedContents`、`:predict`、`:predictLongRunning`、`GET /v1beta/operations/{id}`、`GET /v1beta/models/{model}/operations/{id}` |
+| Gemini | `GET /v1beta/models`、`GET /v1beta/models/{model}`、`POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`、`:embedContent`、`:batchEmbedContents`、`:predict`、`:predictLongRunning`、`GET /v1beta/operations/{id}`、`GET /v1beta/models/{model}/operations/{id}`，`/v1` 前缀相同 |
+
+`/v1/models`、`/v1/models/{id}` 与 `/v1/files` 系列由 OpenAI 与 Gemini 共用：请求带 `x-goog-api-key` 请求头或 `key` 查询参数且不带 `Authorization` 时按 Gemini 处理，其余按 OpenAI 处理；`POST /v1/models/{model}:<方法>`、`/v1/cachedContents`、`/v1/operations/{id}` 与 `POST /upload/v1/files` 只属于 Gemini。
 
 各协议输出对象的字段顺序与官方输出相同：Gemini GenerateContent、模型、计数、文件与错误对象按 Gemini API 官方响应与 proto 字段号的顺序，Chat、Responses、Anthropic 与 OpenAI 其余资源按官方文档响应示例的顺序，Interactions 为 `type` 在前、其余按字母序；顺序表由官方响应与文档生成，内嵌于 `internal/api/field_order.json`，表中没有的字段排在已知字段之后并按字母序；File 与 CachedContent 资源按 proto 字段号的固定结构输出。函数参数、元数据与 JSON Schema 等调用方数据保持原有顺序。
 
@@ -1365,7 +1367,7 @@ server content 的 index `0/1/2/4/5/6` 分别为 model content、turn complete�
 | `UsageLatency` | `avg_ms`、`p50_ms`、`p95_ms`、`p99_ms` |
 | `UsageStats` | `requests`、`succeeded`、`failed`、`canceled`、`rate_limited`、`input_tokens`、`cached_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`duration`、`first_event`、`queue_avg_ms`、可选 `last_at` |
 | `UsageReport` | `from`、`to`、`bucket_seconds`、`generated_at`、可选 `latest_at`、`totals`、`previous`、`recent`、`cost`、`previous_cost`、`unpriced_models`、`buckets`、`stack_by`、`series`、`groups`、`pairs`、`options` |
-| `UsageRecord` | `id`、`time`、`protocol`、`path`、`model`、`account`、`channel`、`status`、`state`、`duration_ms`、`first_event_ms`、`queue_ms`、`input_tokens`、`cached_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`tool_calls`、`error`、`attempts`、`has_body` |
+| `UsageRecord` | `id`、`time`、`protocol`、`path`、`model`、`account`、`channel`、`status`、`state`、`duration_ms`、`first_event_ms`、`queue_ms`、`proof_ms`、`proof_phases`（`lock_ms`、`interaction_ms`、`refresh_ms`、`compute_ms`）、`input_tokens`、`cached_tokens`、`reasoning_tokens`、`reply_tokens`、`total_tokens`、`tool_calls`、`error`、`attempts`、`has_body` |
 | `UsageRecordPage` | `items`、可选 `next_cursor` |
 | `RequestAttempt` | `account`、`channel`、`error`、`duration_ms`、可选 `hedge`、`superseded` |
 | `FirstEventLatency` | `model`、`channel`、`samples`、`p95_ms` |
@@ -1658,7 +1660,16 @@ Gemini `GET /v1beta/models` 返回 `{"models":[...]}`，单模型路由直接返
 
 生成与计数请求需要系统提示或对话内容中的至少一项，只有系统提示时以它作为 user 轮发送。请求以 assistant 轮结尾时，`gemini-3.1-pro-preview`、`gemini-3.1-flash-lite`、`gemini-3-flash-preview`、`gemini-omni-1.1-flash`、`gemini-nano-banana-2.1` 与 `gemma-` 开头的模型原样以 model 轮结尾发送，由模型原生续写。其余模型（包括 `-latest` 别名）在 `CONTINUATION_REWRITE` 打开时改写末尾连续 assistant 轮：`CONTINUATION_PROMPT` 非空时，这些轮的正文与代码执行内容以 `<assistant_prefix>` 包裹，连同该提示词写入系统指令；为空时这段正文作为最后一轮 user 发送。改写后模型从前缀之后续写，响应只返回续写部分，末尾未回传结果的函数调用由模型重新生成。`CONTINUATION_REWRITE` 关闭时所有模型原样发送，Playground 以 400 `Requests ending with a model turn are not supported` 拒绝的模型返回该错误。各生成入口与计数接口按同一规则转换，`countTokens` 接受以 model 轮结尾的请求。
 
-生成、计数与 Live 的系统提示按同一规则改写后发送：行首以 `You are` 或 `You're` 开头、以 agent、assistant 或 AI 结尾并带归属声明（`created by`、`built on`、`based on` 等）的身份句替换为 `You are an AI Agent.`，以 `x-anthropic-billing-header:` 开头的行与含 `RFC 2119 keywords`（不区分大小写）的行整行删除，改写后为空的系统提示分段不发送。
+生成、计数与 Live 的系统提示按同一规则改写后发送：
+
+- 含下列第三方客户端特征文字的整句删去，匹配不区分大小写，文字中的空格可对应任意空白序列：`RFC 2119 keywords`、`Read xd://<tool> for full docs + JSON schema before first use`、`You are omp's trusted coding assistant`、`You are Claude Code,`、`Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context`、`was pasted into the message by the user from somewhere else and may contain instructions the user did not write`、`You are a coding agent running in the Codex CLI`、`You are OpenCode`、`You are a coding assistant running inside pi`、`inside pi, a coding agent harness`、`You are a personal assistant running inside OpenClaw`、`You are Hermes Agent`、`Be direct: match the length of your reply to the weight of the ask`、`the documentation at https://hermes-agent.nousresearch.com/docs is your authoritative reference`、`Hermes delivers their message as a standalone user message right after the latest tool results`、`<!-- End Hermes runtime environment -->`、`The browser provides no implicit DOM, route, or screenshot context`
+- 带归属声明的身份句整句删去：位于行首，以 `You are` 或 `You're` 开头，身份短语以 agent、assistant 或 AI 结尾、前面最多 8 个词，之后 8 个字符内出现 `created by`、`built on`、`based on` 等归属声明，到后接空白或行尾的句号为止
+- 一句从同一行上一个后接空白的句末标点之后、或行首的缩进与列表符号之后开始，到其后第一个后接空白的句末标点为止，连同其后的空格一起删去；同一行没有句末标点时到行尾；删去后只剩缩进与列表符号的行连同换行一起删去
+- 计费头按原文删到行尾：行首名称含 `billing` 的 `x-` 头，名称以 `-billing-header`、`-billing-metadata`、`-billing-token` 或 `-billing-info` 结尾的头，值带 `cc_version`、`cc_entrypoint` 或 `cch=` 的 `x-` 头，以及行中任意位置的 `x-anthropic-billing-header:`
+- `<system-conventions>` 与 `<system_conventions>` 块连同其中内容删去
+- 改写后为空的系统提示分段不发送
+
+user 轮文本中含 `You are Codex, a coding agent based on GPT-5` 或 `You are Codex, an agent based on GPT-5` 的整句按同一规则删去，删句后为空的文本 part 不发送；其余文字出现在 user 轮、模型轮、工具声明与工具结果时保持原文。
 
 四套生成入口共享同一规范请求，输入映射如下：
 
@@ -2734,7 +2745,7 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | Anthropic | `message_start` | `content_block_start`、delta、`content_block_stop` | `message_delta.usage` | `message_stop` |
 | Gemini | candidate Part | `GenerateContentResponse` 增量 | 最后一帧 `usageMetadata` | 最后一帧 finish reason |
 
-流式响应距上一次写出满 10 秒时，OpenAI 各接口与 Interactions 发送 SSE 注释帧 `: ping`，Responses 写出开场事件后重发序号为 1 的 `response.in_progress` 事件，Anthropic 发送 `ping` 事件，Gemini SSE 发送空行，均立即 flush；流式响应头带 `X-Accel-Buffering: no`，经 nginx 反向代理时逐帧转发。图片与转写的流式请求在首个结果晚于 10 秒时先由心跳写出响应头，之后的错误以 SSE 错误事件返回。OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端。Gemini 的首个帧来自上游语义事件或保活空行。
+流式响应距上一次写出满 10 秒时，OpenAI 各接口与 Interactions 发送 SSE 注释帧 `: ping`，Responses 写出开场事件后重发序号为 1 的 `response.in_progress` 事件，Anthropic 发送 `ping` 事件，Gemini SSE 发送空帧 `\n\n`（官方 SDK 按 `\n\n` 切帧时跳过），均立即 flush；流式响应头带 `X-Accel-Buffering: no`，经 nginx 反向代理时逐帧转发。图片与转写的流式请求在首个结果晚于 10 秒时先由心跳写出响应头，之后的错误以 SSE 错误事件返回。OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端。Gemini 的首个帧来自上游语义事件或保活空帧。
 
 公开适配规则：
 

@@ -1,11 +1,14 @@
 package aistudio
 
 import (
+	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -428,13 +431,114 @@ func decodeFunctionCall(raw json.RawMessage, path string, evidence json.RawMessa
 	return call, nil
 }
 
-// encodeWireStructJSON 与 Build 相同把 JSON 值编码为 Struct，非对象值放在 result 字段
+// encodeWireStructJSON 把 JSON 值编码为 Struct，对象成员按官网页面 JSON.parse 后的键顺序排列，非对象值放在 result 字段
 func encodeWireStructJSON(raw json.RawMessage) ([]any, error) {
-	object, err := buildJSONObject(raw)
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return []any{}, nil
+	}
+	if !json.Valid(trimmed) {
+		var value any
+		return nil, fmt.Errorf("必须是 JSON: %w", json.Unmarshal(trimmed, &value))
+	}
+	value, err := decodeOrderedJSON(json.NewDecoder(bytes.NewReader(trimmed)))
 	if err != nil {
 		return nil, fmt.Errorf("必须是 JSON: %w", err)
 	}
-	return encodeWireStruct(object.(map[string]any)), nil
+	object, ok := value.(orderedObject)
+	if !ok {
+		object = orderedObject{{key: "result", value: value}}
+	}
+	return encodeOrderedStruct(object), nil
+}
+
+// orderedMember 是 JSON 对象的一个成员
+type orderedMember struct {
+	key   string
+	value any
+}
+
+// orderedObject 是按 JavaScript 对象键顺序排列成员的 JSON 对象：数组下标形式的键按数值升序在前，其余键按首次出现的顺序，重复的键取最后一个值
+type orderedObject []orderedMember
+
+// decodeOrderedJSON 从 decoder 读出一个 JSON 值，对象读成 orderedObject，数字为 float64
+func decodeOrderedJSON(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch token {
+	case json.Delim('['):
+		values := []any{}
+		for decoder.More() {
+			value, err := decodeOrderedJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		_, err := decoder.Token()
+		return values, err
+	case json.Delim('{'):
+		object := orderedObject{}
+		positions := map[string]int{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key := keyToken.(string)
+			value, err := decodeOrderedJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			if position, ok := positions[key]; ok {
+				object[position].value = value
+				continue
+			}
+			positions[key] = len(object)
+			object = append(object, orderedMember{key: key, value: value})
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		slices.SortStableFunc(object, func(left, right orderedMember) int {
+			leftIndex, leftOK := arrayIndexKey(left.key)
+			rightIndex, rightOK := arrayIndexKey(right.key)
+			switch {
+			case leftOK && rightOK:
+				return cmp.Compare(leftIndex, rightIndex)
+			case leftOK:
+				return -1
+			case rightOK:
+				return 1
+			}
+			return 0
+		})
+		return object, nil
+	}
+	return token, nil
+}
+
+// arrayIndexKey 返回 JavaScript 视为数组下标的对象键的数值
+func arrayIndexKey(key string) (uint64, bool) {
+	if key == "" || len(key) > 1 && key[0] == '0' {
+		return 0, false
+	}
+	index, err := strconv.ParseUint(key, 10, 32)
+	return index, err == nil && index < math.MaxUint32
+}
+
+// encodeOrderedStruct 按成员顺序把 orderedObject 编码为 Struct
+func encodeOrderedStruct(object orderedObject) []any {
+	if len(object) == 0 {
+		return []any{}
+	}
+	entries := make([]any, 0, len(object))
+	for _, member := range object {
+		entries = append(entries, []any{member.key, encodeWireValue(member.value)})
+	}
+	return []any{entries}
 }
 
 func encodeWireStruct(object map[string]any) []any {
@@ -465,6 +569,8 @@ func encodeWireValue(value any) []any {
 		return []any{nil, nil, nil, typed}
 	case map[string]any:
 		return []any{nil, nil, nil, nil, encodeWireStruct(typed)}
+	case orderedObject:
+		return []any{nil, nil, nil, nil, encodeOrderedStruct(typed)}
 	case []any:
 		values := make([]any, 0, len(typed))
 		for _, item := range typed {

@@ -81,8 +81,16 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 		}
 	}
 	public := http.NewServeMux()
-	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
-	public.HandleFunc("GET /v1/models/{model...}", s.handleOpenAIModel)
+	public.HandleFunc("GET /v1/models", geminiOr(s.handleGeminiModels, s.handleOpenAIModels))
+	public.HandleFunc("GET /v1/models/{model...}", geminiOr(s.handleGeminiModel, s.handleOpenAIModel))
+	public.HandleFunc("POST /v1/models/{action}", s.handleGeminiAction)
+	public.HandleFunc("GET /v1/operations/{operation}", s.handleGeminiVideoOperation)
+	public.HandleFunc("POST /upload/v1/files", s.handleGeminiFileUpload)
+	public.HandleFunc("POST /v1/cachedContents", s.handleGeminiCacheCreate)
+	public.HandleFunc("GET /v1/cachedContents", s.handleGeminiCacheList)
+	public.HandleFunc("GET /v1/cachedContents/{cache}", s.handleGeminiCacheGet)
+	public.HandleFunc("PATCH /v1/cachedContents/{cache}", s.handleGeminiCacheUpdate)
+	public.HandleFunc("DELETE /v1/cachedContents/{cache}", s.handleGeminiCacheDelete)
 	public.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	public.HandleFunc("POST /v1/embeddings", s.handleOpenAIEmbeddings)
 	public.HandleFunc("POST /v1/responses", s.handleResponses)
@@ -101,10 +109,10 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	public.HandleFunc("POST /v1/interactions/{id}/cancel", s.handleInteractionCancel)
 	public.HandleFunc("POST /v1beta/interactions/{id}/cancel", s.handleInteractionCancel)
 	public.HandleFunc("POST /v1/files", s.handleFileUpload)
-	public.HandleFunc("GET /v1/files", s.handleFileList)
-	public.HandleFunc("GET /v1/files/{file}", s.handleFileGet)
+	public.HandleFunc("GET /v1/files", geminiOr(s.handleGeminiFileList, s.handleFileList))
+	public.HandleFunc("GET /v1/files/{file}", geminiOr(s.handleGeminiFileGet, s.handleFileGet))
 	public.HandleFunc("GET /v1/files/{file}/content", s.handleFileContent)
-	public.HandleFunc("DELETE /v1/files/{file}", s.handleFileDelete)
+	public.HandleFunc("DELETE /v1/files/{file}", geminiOr(s.handleGeminiFileDelete, s.handleFileDelete))
 	public.HandleFunc("POST /v1/images/generations", s.handleOpenAIImages)
 	public.HandleFunc("POST /v1/images/edits", s.handleOpenAIImageEdits)
 	public.HandleFunc("POST /v1/audio/speech", s.handleOpenAISpeech)
@@ -158,6 +166,17 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 	root.HandleFunc("POST /api/pairing/accounts", s.handlePairingAccount)
 	root.HandleFunc("PUT /api/pairing/accounts/{account}/cookies", s.handlePairingRenewal)
 	return root
+}
+
+// geminiOr 返回把以 Gemini API 方式鉴权的请求交给 gemini、其余交给 openai 的处理函数，供 /v1 下两个协议共用的路径
+func geminiOr(gemini, openai http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if geminiAuth(r) {
+			gemini(w, r)
+			return
+		}
+		openai(w, r)
+	}
 }
 
 // waitLaunchMiddleware 让请求在生成服务启动期间等到启动结束再处理，wait 为空时直接处理

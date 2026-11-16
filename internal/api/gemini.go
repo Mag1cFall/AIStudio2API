@@ -1049,7 +1049,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			}
 			mimeType, data := normalizeImagePayload(attachmentMIME(mime, inline.DisplayName, data), data)
 			parts = append(parts, aistudio.Part{
-				InlineData:       &aistudio.Blob{MIME: mimeType, Data: data},
+				InlineData:       aistudio.NewBlob(mimeType, data),
 				ThoughtSignature: part.ThoughtSignature,
 				VideoMetadata:    video, MediaProcessing: processing, DisplayName: inline.DisplayName, MediaResolution: resolution,
 			})
@@ -1778,7 +1778,7 @@ func geminiUsage(usage *aistudio.Usage) map[string]any {
 	return metadata
 }
 
-// geminiStream 写出 streamGenerateContent 的响应块：alt=sse 时为静默时写出空行心跳的 SSE，否则与官方 REST 一样为逐个对象写出的 JSON 数组
+// geminiStream 写出 streamGenerateContent 的响应块：alt=sse 时为静默时写出空帧心跳的 SSE，否则与官方 REST 一样为逐个对象写出的 JSON 数组
 type geminiStream struct {
 	w         http.ResponseWriter
 	keepalive *streamKeepalive
@@ -1801,14 +1801,27 @@ func openGeminiStream(w http.ResponseWriter, r *http.Request) (*geminiStream, er
 
 // write 写出一个响应块
 func (stream *geminiStream) write(value map[string]any) error {
-	stream.mu.Lock()
-	defer stream.mu.Unlock()
-	if stream.keepalive != nil {
-		return writeSSE(stream.w, "", officialOrder("gemini", value))
-	}
 	data, err := json.Marshal(officialOrder("gemini", value))
 	if err != nil {
 		return err
+	}
+	return stream.writeJSON(data)
+}
+
+// geminiTextChunk 返回只含一段正文的流式响应块，字节与按官方字段顺序编码的同一对象相同
+func geminiTextChunk(index int, text, model, responseID string) []byte {
+	chunk := appendJSONString(append(make([]byte, 0, 128+len(text)), `{"candidates":[{"content":{"parts":[{"text":`...), text)
+	chunk = strconv.AppendInt(append(chunk, `}],"role":"model"},"index":`...), int64(index), 10)
+	chunk = appendJSONString(append(chunk, `}],"modelVersion":`...), model)
+	return append(appendJSONString(append(chunk, `,"responseId":`...), responseID), '}')
+}
+
+// writeJSON 写出一个已编码的响应块
+func (stream *geminiStream) writeJSON(data []byte) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.keepalive != nil {
+		return writeSSEFrame(stream.w, append(append(sseFrameStart("", len(data)), data...), "\n\n"...))
 	}
 	prefix := "["
 	if stream.written {
@@ -1875,6 +1888,9 @@ func (s *server) streamGemini(w http.ResponseWriter, r *http.Request, request ai
 			if event.FinishFrame {
 				finalParts[index] = append(finalParts[index], part)
 				return nil
+			}
+			if text, ok := part["text"].(string); ok && len(part) == 1 && event.TurnToken == "" && event.FrameUsage == nil {
+				return stream.writeJSON(geminiTextChunk(index, text, cmp.Or(event.ProviderModel, request.Model), cmp.Or(event.ResponseID, request.ID)))
 			}
 			candidate := map[string]any{"index": index, "content": map[string]any{"role": "model", "parts": []any{part}}}
 			frame := map[string]any{"responseId": cmp.Or(event.ResponseID, request.ID), "modelVersion": cmp.Or(event.ProviderModel, request.Model), "candidates": []any{candidate}}

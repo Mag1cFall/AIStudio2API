@@ -63,6 +63,18 @@ const summary = computed(() => {
     { label: t('usage.duration'), value: duration(record.duration_ms) },
     { label: t('usage.firstEvent'), value: duration(record.first_event_ms) },
     { label: t('usage.queue'), value: duration(record.queue_ms) },
+    ...(record.proof_ms > 0
+      ? [
+          { label: t('logs.field.waa'), value: duration(record.proof_ms) },
+          { label: t('logs.proofLock'), value: duration(record.proof_phases.lock_ms) },
+          {
+            label: t('logs.proofInteraction'),
+            value: duration(record.proof_phases.interaction_ms),
+          },
+          { label: t('logs.proofRefresh'), value: duration(record.proof_phases.refresh_ms) },
+          { label: t('logs.proofCompute'), value: duration(record.proof_phases.compute_ms) },
+        ]
+      : []),
     { label: t('usage.toolCalls'), value: integer(record.tool_calls) },
     { label: t('usage.input'), value: integer(record.input_tokens) },
     { label: t('usage.cached'), value: integer(record.cached_tokens) },

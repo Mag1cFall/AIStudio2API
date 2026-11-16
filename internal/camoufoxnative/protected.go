@@ -27,8 +27,10 @@ type ProtectedResponse struct {
 
 // protectedMessage 是受保护请求通道上以 { 开头的控制消息：界面运行时先是带 proof 的发出标记，之后是状态码与响应头，最后是结束标记或错误；其余消息为 Base64 正文块
 type protectedMessage struct {
-	Sent    bool        `json:"sent"`
-	Proof   string      `json:"proof"`
+	Sent  bool   `json:"sent"`
+	Proof string `json:"proof"`
+	// Compute 是页面应用取 proof 的毫秒数
+	Compute float64     `json:"compute"`
 	Status  int         `json:"status"`
 	Headers [][2]string `json:"headers"`
 	Done    bool        `json:"done"`

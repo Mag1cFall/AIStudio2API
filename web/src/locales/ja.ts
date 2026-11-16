@@ -259,6 +259,10 @@ export const messages: Record<TranslationKey, string> = {
   'logs.cachedTokens': 'キャッシュ済みトークン',
   'logs.totalTokens': '合計トークン',
   'logs.inputMessages': '入力メッセージ',
+  'logs.proofLock': 'ページ待ち',
+  'logs.proofInteraction': 'ページ操作',
+  'logs.proofRefresh': 'WAA の更新待ち',
+  'logs.proofCompute': 'WAA の計算',
   'logs.finishReason': '終了理由',
   'logs.errorDetail': 'エラー',
   'logs.finish.stop': '正常終了',
@@ -2153,6 +2157,8 @@ export const messages: Record<TranslationKey, string> = {
   'access.client.omp': 'pi の拡張版。ウェブ検索は Gemini API を使います',
   'access.client.dsh':
     'DeepSeek のターミナル向けエージェント。パッチファイルでカスタムプロバイダーを追加します',
+  'access.client.agy':
+    'Google のターミナル エージェント。Gemini API キーで接続し、agy の /model でモデルを選びます',
   'access.client.cherry':
     'デスクトップ AI クライアント。OpenAI、Gemini、Anthropic のいずれかのタイプでプロバイダーを追加します',
   'access.client.sillytavern':

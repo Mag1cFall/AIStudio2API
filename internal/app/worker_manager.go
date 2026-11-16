@@ -14,6 +14,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/prooftime"
 )
 
 // accountWorkerManager 管理每账户的长驻 WAA worker
@@ -115,20 +116,43 @@ func (preparer *accountWorkerPreparer) Prepare(ctx context.Context, request aist
 		return aistudio.PreparedProtectedRequest{}, errAccountWorkerReplaced
 	}
 	startedAt := time.Now()
-	defer func() { api.AddAccessLogProof(ctx, time.Since(startedAt)) }()
-	prepared, err := preparer.worker.Prepare(ctx, request)
+	timing := &prooftime.Timing{}
+	defer func() {
+		proof := accessLogProof(timing)
+		proof.Total = time.Since(startedAt)
+		api.AddAccessLogProof(ctx, proof)
+	}()
+	prepared, err := preparer.worker.Prepare(prooftime.With(ctx, timing), request)
+	if lease, ok := aistudio.AccountLeaseFromContext(ctx); ok && prepared.Proof != "" {
+		lease.ProofDone()
+	}
 	if err != nil && !preparer.current() {
 		return aistudio.PreparedProtectedRequest{}, errAccountWorkerReplaced
 	}
 	return prepared, err
 }
 
-// SendProtected 校验当前账户 Worker 后发送浏览器请求
+// SendProtected 校验当前账户 Worker 后发送浏览器请求，界面运行时页面取 proof 的分项计入请求的 WAA 耗时
 func (preparer *accountWorkerPreparer) SendProtected(ctx context.Context, request aistudio.ProtectedRequest) (*aistudio.RPCResponse, error) {
 	if !preparer.current() {
 		return nil, errAccountWorkerReplaced
 	}
-	return preparer.worker.SendProtected(ctx, request)
+	if lease, ok := aistudio.AccountLeaseFromContext(ctx); ok {
+		defer lease.ProofDone()
+	}
+	timing := &prooftime.Timing{}
+	defer func() { api.AddAccessLogProof(ctx, accessLogProof(timing)) }()
+	return preparer.worker.SendProtected(prooftime.With(ctx, timing), request)
+}
+
+// accessLogProof 返回 timing 累计的各分项，Total 为分项之和
+func accessLogProof(timing *prooftime.Timing) api.ProofTiming {
+	proof := api.ProofTiming{
+		Lock: timing.Duration(prooftime.Lock), Interaction: timing.Duration(prooftime.Interaction),
+		Refresh: timing.Duration(prooftime.Refresh), Compute: timing.Duration(prooftime.Compute), SettingsSkipped: timing.Skipped(),
+	}
+	proof.Total = proof.Lock + proof.Interaction + proof.Refresh + proof.Compute
+	return proof
 }
 
 // BrowserStorageState 返回同一有效账户 Worker 的浏览器 Cookie 状态
@@ -506,6 +530,9 @@ func (manager *accountWorkerManager) ResetIfGeneration(ctx context.Context, acco
 	defer account.mu.Unlock()
 	if account.generation.Load() != generation {
 		return nil
+	}
+	if account.worker != nil {
+		account.worker.Retire()
 	}
 	return manager.stopAccountWorker(account)
 }
