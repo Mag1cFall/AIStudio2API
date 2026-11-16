@@ -150,8 +150,60 @@ var gapiRequestHeaderOrder = []string{
 	"te",
 }
 
+// noStoreFetchHeaderOrder 是 Firefox 158 发出页面脚本以 fetch 的 cache: "no-store" 发出的请求（带 Pragma 与 Cache-Control）的请求头顺序，没有正文的 POST 把 content-length 写在 te 之前
+var noStoreFetchHeaderOrder = []string{
+	"user-agent",
+	"accept",
+	"accept-language",
+	"accept-encoding",
+	"content-type",
+	"referer",
+	"content-length",
+	"origin",
+	"sec-fetch-storage-access",
+	"cookie",
+	"sec-fetch-dest",
+	"sec-fetch-mode",
+	"sec-fetch-site",
+	"priority",
+	"pragma",
+	"cache-control",
+	"te",
+}
+
 // gapiHosts 是官网页面 gapi 请求的主机
 var gapiHosts = map[string]bool{"clients6.google.com": true, "content.googleapis.com": true}
+
+// feedbackHost 是页面 HaTS 问卷代理 iframe 与问卷请求的主机
+const feedbackHost = "feedback-pa.clients6.google.com"
+
+// feedbackRequestHeaderOrder 是 Firefox 158 载入问卷代理 iframe、从中发出问卷请求的请求头顺序
+var feedbackRequestHeaderOrder = []string{
+	"user-agent",
+	"accept",
+	"accept-language",
+	"accept-encoding",
+	"x-clientdetails",
+	"authorization",
+	"x-goog-authuser",
+	"x-requested-with",
+	"x-javascript-user-agent",
+	"x-goog-api-key",
+	"content-type",
+	"x-origin",
+	"x-referer",
+	"x-goog-encode-response-if-executable",
+	"content-length",
+	"origin",
+	"referer",
+	"cookie",
+	"upgrade-insecure-requests",
+	"sec-fetch-dest",
+	"sec-fetch-mode",
+	"sec-fetch-site",
+	"priority",
+	"te",
+}
 
 // browserManagedHeaders 是浏览器自行附加、不进入 CORS 预检 access-control-request-headers 的请求头
 var browserManagedHeaders = map[string]struct{}{
@@ -166,8 +218,27 @@ type browserRoundTripper struct {
 	// http3 在直连时按 Alt-Svc 把请求切换到 HTTP/3，经代理时为 nil
 	http3 *firefoxHTTP3
 	mu    sync.Mutex
-	// preflights 按 URL 记录跨域请求（方法与脚本设置的头集合）的 CORS 预检缓存到期时刻
-	preflights map[string]map[string]time.Time
+	// preflights 按 URL 记录 CORS 预检缓存
+	preflights map[string]preflightGrant
+}
+
+// preflightGrant 是一个 URL 的 CORS 预检缓存：预检响应允许的方法与请求头（小写）各自的到期时刻，与 Firefox nsPreflightCache 相同
+type preflightGrant struct {
+	methods map[string]time.Time
+	headers map[string]time.Time
+}
+
+// allows 判断缓存是否覆盖请求：GET 与 POST 不查方法，其余方法与每个脚本设置的请求头都在有效期内
+func (grant preflightGrant) allows(method string, headers []string, now time.Time) bool {
+	if method != stdhttp.MethodGet && method != stdhttp.MethodPost && !now.Before(grant.methods[method]) {
+		return false
+	}
+	for _, name := range headers {
+		if !now.Before(grant.headers[name]) {
+			return false
+		}
+	}
+	return true
 }
 
 type browserResponseBody struct {
@@ -223,7 +294,7 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 		StreamWindowUpdate:         firefoxStreamWindowUpdate,
 		WindowUpdateThreshold:      firefoxWindowUpdateThreshold,
 	}
-	roundTripper := &browserRoundTripper{preflights: map[string]map[string]time.Time{}, transport: pool.transport, pool: pool}
+	roundTripper := &browserRoundTripper{preflights: map[string]preflightGrant{}, transport: pool.transport, pool: pool}
 	if proxyURL == "" {
 		roundTripper.http3 = newFirefoxHTTP3(pool)
 	}
@@ -339,6 +410,12 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 	if timing != nil {
 		timing.dialed = true
 	}
+	return pool.connect(address, class, timing)
+}
+
+// connect 拨出一条 class 类别的连接并放入池中，调用方已为它计入 dialing
+func (pool *firefoxConnPool) connect(address string, class requestClass, timing *connectionTiming) (*http2.ClientConn, error) {
+	var conn *http2.ClientConn
 	raw, err := pool.dial(address, class.anonymous, timing)
 	if err == nil {
 		conn, err = pool.transport.NewClientConn(raw)
@@ -346,6 +423,7 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 			_ = raw.Close()
 		}
 	}
+	key := poolKey(address, class)
 	pool.mu.Lock()
 	pool.dialing[key]--
 	if err == nil {
@@ -354,6 +432,18 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 	pool.notifyLocked()
 	pool.mu.Unlock()
 	return conn, err
+}
+
+// speculate 与 Firefox 为需要预检的跨域请求预先连接实际请求所属的连接类别一样，该类别没有连接也没有正在拨出的连接时在后台拨出一条
+func (pool *firefoxConnPool) speculate(address string, class requestClass) {
+	key := poolKey(address, class)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if len(pool.conns[key])+pool.dialing[key] > 0 {
+		return
+	}
+	pool.dialing[key]++
+	go func() { _, _ = pool.connect(address, class, nil) }()
 }
 
 // availableLocked 返回本类能接受新请求的最早连接，没有时返回另一类已复用过的连接；dispatch 时把取到的本类连接记为已复用
@@ -641,7 +731,7 @@ func standardHeader(source fhttp.Header) stdhttp.Header {
 	return result
 }
 
-// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检，结果按 Access-Control-Max-Age（上限 24 小时）缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
+// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检：经 HTTP/2 时先在后台为实际请求的类别预先拨出连接，预检走匿名连接，预检响应允许的方法与请求头按 Access-Control-Max-Age（上限 24 小时）逐个缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
 func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) error {
 	origin, err := url.Parse(request.Header.Get("Origin"))
 	if request.Method == stdhttp.MethodOptions || request.Header.Get("Sec-Fetch-Mode") == "no-cors" || err != nil || origin.Host == "" || origin.Host == request.URL.Host {
@@ -652,13 +742,18 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 		return nil
 	}
 	target := request.URL.String()
-	requestHeaders := strings.Join(unsafe, ",")
-	key := request.Method + " " + requestHeaders
 	transport.mu.Lock()
-	expiry, cached := transport.preflights[target][key]
+	cached := transport.preflights[target].allows(request.Method, unsafe, time.Now())
 	transport.mu.Unlock()
-	if cached && time.Now().Before(expiry) {
+	if cached {
 		return nil
+	}
+	if transport.http3 == nil {
+		port := request.URL.Port()
+		if port == "" {
+			port = "443"
+		}
+		transport.pool.speculate(net.JoinHostPort(request.URL.Hostname(), port), requestClass{anonymous: requestClassOf(request.Context()).anonymous})
 	}
 	preflight, err := fhttp.NewRequestWithContext(request.Context(), stdhttp.MethodOptions, target, nil)
 	if err != nil {
@@ -672,7 +767,7 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	}
 	preflight.Header.Set("Accept", "*/*")
 	preflight.Header.Set("Access-Control-Request-Method", request.Method)
-	preflight.Header.Set("Access-Control-Request-Headers", requestHeaders)
+	preflight.Header.Set("Access-Control-Request-Headers", strings.Join(unsafe, ","))
 	preflight.Header.Set("Priority", "u=4")
 	preflight.Header.Set("Te", "trailers")
 	preflight.Header[fhttp.HeaderOrderKey] = orderedHeaderNames(preflight.Header, request.URL.Host)
@@ -689,11 +784,19 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	if seconds, err := strconv.Atoi(response.Header.Get("Access-Control-Max-Age")); err == nil {
 		maxAge = min(time.Duration(seconds)*time.Second, 24*time.Hour)
 	}
+	expiry := time.Now().Add(maxAge)
 	transport.mu.Lock()
-	if transport.preflights[target] == nil {
-		transport.preflights[target] = map[string]time.Time{}
+	grant := transport.preflights[target]
+	if grant.headers == nil {
+		grant = preflightGrant{methods: map[string]time.Time{}, headers: map[string]time.Time{}}
+		transport.preflights[target] = grant
 	}
-	transport.preflights[target][key] = time.Now().Add(maxAge)
+	for _, method := range strings.Split(response.Header.Get("Access-Control-Allow-Methods"), ",") {
+		grant.methods[strings.TrimSpace(method)] = expiry
+	}
+	for _, name := range strings.Split(response.Header.Get("Access-Control-Allow-Headers"), ",") {
+		grant.headers[strings.ToLower(strings.TrimSpace(name))] = expiry
+	}
 	transport.mu.Unlock()
 	return nil
 }
@@ -724,6 +827,9 @@ func requestHeaderOrder(host string) []string {
 	if gapiHosts[host] {
 		return gapiRequestHeaderOrder
 	}
+	if host == feedbackHost {
+		return feedbackRequestHeaderOrder
+	}
 	if host != waaHost && host != clearcutHost {
 		return firefoxRequestHeaderOrder
 	}
@@ -736,6 +842,13 @@ func requestHeaderOrder(host string) []string {
 // orderedHeaderNames 返回按 Firefox 顺序排列的全部请求头名，顺序表之外的头按字母序排在最后；跨源样式表引用的字体在 CORS 加上 origin 之后才写入 referer
 func orderedHeaderNames(headers fhttp.Header, host string) []string {
 	order := requestHeaderOrder(host)
+	if headers.Get("Pragma") != "" {
+		order = noStoreFetchHeaderOrder
+		if headers.Get("Content-Type") == "" {
+			order = slices.DeleteFunc(slices.Clone(order), func(name string) bool { return name == "content-length" })
+			order = slices.Insert(order, slices.Index(order, "te"), "content-length")
+		}
+	}
 	if headers.Get("Sec-Fetch-Dest") == "font" && !strings.HasPrefix(headers.Get("Referer"), headers.Get("Origin")+"/") {
 		order = slices.DeleteFunc(slices.Clone(order), func(name string) bool { return name == "origin" })
 		order = slices.Insert(order, slices.Index(order, "referer"), "origin")

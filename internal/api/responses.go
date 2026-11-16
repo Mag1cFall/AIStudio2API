@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1150,7 +1151,7 @@ func responsesHostedItem(kind string, raw json.RawMessage) (aistudio.Content, er
 			if err != nil {
 				return aistudio.Content{}, fmt.Errorf("result: %w", err)
 			}
-			media = append(media, aistudio.Part{InlineData: &aistudio.Blob{MIME: detectMediaType("", data), Data: data}})
+			media = append(media, aistudio.Part{InlineData: aistudio.NewBlob(detectMediaType("", data), data)})
 			delete(item, "result")
 		}
 	case "mcp_approval_response":
@@ -1917,6 +1918,20 @@ func (writer *responsesStreamWriter) emit(eventType string, payload map[string]a
 	return writeSSE(writer.w, eventType, officialOrder("responses", payload))
 }
 
+// textDelta 写出正文的 response.output_text.delta 事件，字节与按官方字段顺序编码的同一事件相同
+func (writer *responsesStreamWriter) textDelta(text string) error {
+	sequence := writer.sequence.Add(1) - 1
+	if writer.w == nil {
+		return nil
+	}
+	frame := sseFrameStart("response.output_text.delta", 192+len(text))
+	frame = appendJSONString(append(frame, `{"type":"response.output_text.delta","item_id":`...), writer.output.message["id"].(string))
+	frame = strconv.AppendInt(append(frame, `,"output_index":`...), int64(writer.index(writer.output.message)), 10)
+	frame = appendJSONString(append(frame, `,"content_index":0,"delta":`...), text)
+	frame = strconv.AppendInt(append(frame, `,"sequence_number":`...), sequence, 10)
+	return writeSSEFrame(writer.w, append(frame, `,"logprobs":[]}`+"\n\n"...))
+}
+
 // index 返回输出项在响应 output 中的位置
 func (writer *responsesStreamWriter) index(item map[string]any) int {
 	return len(writer.prefix) + slices.IndexFunc(writer.output.items, func(candidate map[string]any) bool { return candidate["id"] == item["id"] })
@@ -1954,9 +1969,7 @@ func (writer *responsesStreamWriter) live(event aistudio.Event) error {
 			"item_id": writer.output.reasoning["id"], "output_index": writer.index(writer.output.reasoning), "summary_index": 0, "delta": event.Text,
 		})
 	case aistudio.EventText:
-		return writer.emit("response.output_text.delta", map[string]any{
-			"item_id": writer.output.message["id"], "output_index": writer.index(writer.output.message), "content_index": 0, "delta": event.Text, "logprobs": []any{},
-		})
+		return writer.textDelta(event.Text)
 	case aistudio.EventGrounding:
 		return writer.finishSearches()
 	case aistudio.EventCodeExecutionResult:
@@ -2250,12 +2263,17 @@ func (writer *responsesStreamWriter) terminal(response map[string]any) error {
 	return writer.emit(eventType, map[string]any{"response": response})
 }
 
-// failed 发送 response.failed：output 为已写出的输出项，error.code 取 Responses 错误枚举，可重试时消息末尾写明重试时间
+// failed 发送 response.failed：output 为已写出的输出项，error 按 responsesError
 func (writer *responsesStreamWriter) failed(err error) error {
 	response := responseShell(writer.id, writer.created, "failed", writer.request)
 	response["output"] = writer.items()
-	response["error"] = map[string]any{"code": responsesErrorCode(err), "message": retryMessage(publicErrorMessage(statusFromError(err), err.Error()), retryAfterSeconds(err))}
+	response["error"] = responsesError(err)
 	return writer.emit("response.failed", map[string]any{"response": response})
+}
+
+// responsesError 返回 Responses 失败对象的 error 字段：code 取 Responses 错误枚举，可重试时消息末尾写明重试时间
+func responsesError(err error) map[string]any {
+	return map[string]any{"code": responsesErrorCode(err), "message": retryMessage(publicErrorMessage(statusFromError(err), err.Error()), retryAfterSeconds(err))}
 }
 
 // responsesErrorCode 返回 Responses 错误对象的官方枚举 code

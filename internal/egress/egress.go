@@ -58,12 +58,12 @@ type downloadRound struct {
 	err      error
 }
 
-// downloads 是各地址族进行中的 IP 库下载与最近一轮下载失败的原因，进程内共用
+// downloads 是各地址族进行中的 IP 库下载与各自最近一轮下载失败的原因，进程内共用
 var downloads = struct {
 	sync.Mutex
-	rounds  map[string]*downloadRound
-	failure error
-}{rounds: map[string]*downloadRound{}}
+	rounds   map[string]*downloadRound
+	failures map[string]error
+}{rounds: map[string]*downloadRound{}, failures: map[string]error{}}
 
 // Download 是正在进行的 IP 库下载的已收与总字节，总字节未知时为 0
 type Download struct {
@@ -79,12 +79,12 @@ type Preparation struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// PreparationState 返回 IP 库的准备状态，同时下载多个地址族时合计已收与总字节，收到下载响应前 Download 为 nil
+// PreparationState 返回 IP 库的准备状态，同时下载多个地址族时合计已收与总字节，收到下载响应前 Download 为 nil，各地址族最近一轮的失败原因依次合并
 func PreparationState() Preparation {
 	downloads.Lock()
 	state := Preparation{Preparing: len(downloads.rounds) > 0}
-	if downloads.failure != nil {
-		state.Error = downloads.failure.Error()
+	if failure := errors.Join(downloads.failures["ipv4"], downloads.failures["ipv6"]); failure != nil {
+		state.Error = failure.Error()
 	}
 	var download Download
 	for _, round := range downloads.rounds {
@@ -291,7 +291,7 @@ func database(ctx context.Context, client *http.Client, family string) (string, 
 	}
 }
 
-// startDownload 返回地址族进行中的一轮下载，没有时开始一轮并清除上一轮的失败原因；下载不随调用方取消，失败写入日志
+// startDownload 返回地址族进行中的一轮下载，没有时开始一轮并清除该地址族上一轮的失败原因；下载不随调用方取消，失败写入日志
 func startDownload(client *http.Client, family string, path string) *downloadRound {
 	downloads.Lock()
 	defer downloads.Unlock()
@@ -299,7 +299,8 @@ func startDownload(client *http.Client, family string, path string) *downloadRou
 		return round
 	}
 	round := &downloadRound{client: client, done: make(chan struct{})}
-	downloads.rounds[family], downloads.failure = round, nil
+	downloads.rounds[family] = round
+	delete(downloads.failures, family)
 	go func() {
 		if err := download(round, fmt.Sprintf(databaseURL, family), path); err != nil {
 			round.err = fmt.Errorf("下载 IP 库: %w", err)
@@ -307,7 +308,9 @@ func startDownload(client *http.Client, family string, path string) *downloadRou
 		}
 		downloads.Lock()
 		delete(downloads.rounds, family)
-		downloads.failure = round.err
+		if round.err != nil {
+			downloads.failures[family] = round.err
+		}
 		downloads.Unlock()
 		close(round.done)
 	}()

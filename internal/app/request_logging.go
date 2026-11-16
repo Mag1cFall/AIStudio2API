@@ -23,8 +23,14 @@ func requestLogData(entry api.AccessLog) *api.RequestLog {
 		InputMessages: entry.InputMessages, InputTextChars: entry.InputTextChars,
 		InputMedia: entry.InputMedia, InputMediaBytes: entry.InputMediaBytes, InputFiles: entry.InputFiles,
 		FirstEventMS: float64(entry.FirstEvent) / float64(time.Millisecond), UpstreamBytes: entry.UpstreamBytes,
-		QueueMS: float64(entry.QueueWait) / float64(time.Millisecond), ProofMS: float64(entry.Proof) / float64(time.Millisecond),
+		QueueMS: float64(entry.QueueWait) / float64(time.Millisecond), ProofMS: float64(entry.Proof.Total) / float64(time.Millisecond),
 		Channel: entry.Channel,
+	}
+	if entry.Proof.Total > 0 {
+		data.ProofPhases = &api.RequestLogProofPhases{ProofPhasesMS: api.ProofPhasesMS{
+			LockMS: float64(entry.Proof.Lock) / float64(time.Millisecond), InteractionMS: float64(entry.Proof.Interaction) / float64(time.Millisecond),
+			RefreshMS: float64(entry.Proof.Refresh) / float64(time.Millisecond), ComputeMS: float64(entry.Proof.Compute) / float64(time.Millisecond),
+		}, SettingsSkipped: entry.Proof.SettingsSkipped}
 	}
 	if entry.Generation {
 		data.Parameters = map[string]string{
@@ -92,7 +98,7 @@ func requestRow(entry api.AccessLog, finished time.Time) requestdb.Row {
 	row := requestdb.Row{
 		ID: entry.RequestID, Time: finished, Protocol: requestProtocol(entry.Path), Path: entry.Path,
 		Model: entry.Model, Account: entry.Account, Channel: entry.Channel, Status: entry.Status, State: data.State,
-		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, ToolCalls: entry.ToolCalls, Error: cmp.Or(data.Error, entry.TrailingError),
+		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, Proof: entry.Proof, ToolCalls: entry.ToolCalls, Error: cmp.Or(data.Error, entry.TrailingError),
 		Attempts: entry.Attempts,
 	}
 	if usage := data.Usage; usage != nil {
@@ -115,7 +121,7 @@ func requestProtocol(path string) string {
 		return "interactions"
 	case strings.Contains(path, "/files"):
 		return "files"
-	case strings.HasPrefix(path, "/v1beta/"):
+	case strings.HasPrefix(path, "/v1beta/"), strings.HasPrefix(path, "/v1/models/") && strings.Contains(path, ":"), strings.HasPrefix(path, "/v1/cachedContents"):
 		return "gemini"
 	case strings.HasPrefix(path, "/v1/images/"):
 		return "images"

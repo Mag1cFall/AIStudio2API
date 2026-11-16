@@ -581,6 +581,8 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 			cleanup.record.Store(&assistantTrajectory{
 				Tip: assistantTip(apiKey, turnLinkDigest(links[len(links)-1].digest, true, reply)), ID: cleanup.generation.Load().trajectory, HistoryGroups: turn.historyGroups,
 			})
+			history := append(slices.Clone(request.Contents), Content{Role: RoleAssistant, Parts: []Part{{Text: answer.String()}}})
+			cleanup.history.Store(&history)
 		}
 		if !decoder.called && (decoder.malformed || decoder.invalidTool) {
 			if finish == nil {
@@ -648,7 +650,7 @@ func assistantHistoryDigest(contents []Content) string {
 			}
 			part.ThoughtSignature = ""
 			if part.InlineData != nil {
-				sum := sha256.Sum256(part.InlineData.Data)
+				sum := part.InlineData.SHA256()
 				part.InlineData = &Blob{MIME: part.InlineData.MIME, Data: sum[:]}
 			}
 			encoded, _ := json.Marshal(part)
@@ -773,7 +775,9 @@ type assistantCleanup struct {
 	generation atomic.Pointer[assistantGeneration]
 	completed  atomic.Bool
 	// record 是本轮回复完整结束后 trajectory 的续接位置
-	record  atomic.Pointer[assistantTrajectory]
+	record atomic.Pointer[assistantTrajectory]
+	// history 是本轮回复完整结束后包含回复的对话
+	history atomic.Pointer[[]Content]
 	release func() error
 	once    sync.Once
 }
@@ -822,7 +826,8 @@ func (cleanup *assistantCleanup) run() {
 			ctx, stop := context.WithTimeout(cleanup.ctx, assistantCleanupTimeout)
 			defer stop()
 			if !cancel {
-				cleanup.client.afterAssistantTurn(ctx, accountID, cleanup.turn.request.Model, cleanup.turn.target)
+				defer afterServiceStop(ctx, stop)()
+				cleanup.client.afterAssistantTurn(ctx, accountID, cleanup.turn.request.Model, cleanup.turn.target, *cleanup.history.Load())
 				return
 			}
 			if err := cleanup.cancel(ctx); err != nil {

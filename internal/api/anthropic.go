@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -597,7 +598,7 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 					return nil, fmt.Errorf("%s source data: %w", block.Type, err)
 				}
 				mediaType, data := normalizeImagePayload(attachmentMIME(source.MediaType, block.Title, data), data)
-				parts = append(parts, aistudio.Part{InlineData: &aistudio.Blob{MIME: mediaType, Data: data}, DisplayName: block.Title})
+				parts = append(parts, aistudio.Part{InlineData: aistudio.NewBlob(mediaType, data), DisplayName: block.Title})
 			case "url":
 				if media, ok := aistudio.ExternalMediaForURL(source.URL); ok {
 					parts = append(parts, aistudio.Part{ExternalMedia: media, DisplayName: block.Title})
@@ -1066,8 +1067,25 @@ func anthropicBlocks(result generationResult, omitted bool, media mediaOutput, s
 // sseSender 返回把流式事件写成 SSE 的发送函数
 func sseSender(w http.ResponseWriter) func(string, any) error {
 	return func(eventType string, payload any) error {
+		if frame, ok := anthropicTextDelta(eventType, payload); ok {
+			return writeSSEFrame(w, frame)
+		}
 		return writeSSE(w, eventType, officialOrder("anthropic", payload))
 	}
+}
+
+// anthropicTextDelta 返回正文 text_delta 的 content_block_delta SSE 帧，字节与按官方字段顺序编码的同一事件相同；其他事件返回 false
+func anthropicTextDelta(eventType string, payload any) ([]byte, bool) {
+	event, _ := payload.(map[string]any)
+	delta, _ := event["delta"].(map[string]any)
+	index, indexed := event["index"].(int)
+	text, texted := delta["text"].(string)
+	if eventType != "content_block_delta" || len(event) != 3 || len(delta) != 2 || delta["type"] != "text_delta" || !indexed || !texted {
+		return nil, false
+	}
+	frame := strconv.AppendInt(append(sseFrameStart(eventType, 96+len(text)), `{"type":"content_block_delta","index":`...), int64(index), 10)
+	frame = appendJSONString(append(frame, `,"delta":{"type":"text_delta","text":`...), text)
+	return append(frame, "}}\n\n"...), true
 }
 
 // anthropicBlockCollector 把流式内容块事件累积为非流式 Message 的内容块

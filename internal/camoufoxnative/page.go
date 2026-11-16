@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/rhythm"
 )
 
 // pageDOMHelpers 定义官网页面共用的可见目标与按钮状态判断
@@ -45,10 +48,13 @@ const fillPromptStatements = pageDOMHelpers + `
   const synced = textarea.value === prompt;
 `
 
-// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，之后清空输入框并通知页面表单；页面值与提示词不同时不调用 snapshot，返回 null
+// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，返回 proof 与 snapshot 毫秒数的 JSON，之后清空输入框并通知页面表单；页面值与提示词不同时不调用 snapshot，返回 null
 const proofFunction = `async (page, prompt, digest) => {
   if (!page.service) throw new Error('官方 WAA service 尚未就绪');` + fillPromptStatements + `  try {
-    return synced ? await page.snapshot(digest) : null;
+    if (!synced) return null;
+    const started = performance.now();
+    const proof = await page.snapshot(digest);
+    return JSON.stringify({proof, compute: performance.now() - started});
   } finally {
     setValue.call(textarea, '');
     textarea.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContent'}));
@@ -58,12 +64,28 @@ const proofFunction = `async (page, prompt, digest) => {
 // clipboardWriteFunction 把参数文本写入剪贴板，调用时带用户激活
 const clipboardWriteFunction = `text => navigator.clipboard.writeText(text)`
 
-// pasteKeyActions 是在官网输入框按 Ctrl+V 的可信键盘动作：按下 Control 与 V，按住 70 ms 后依次抬起
-var pasteKeyActions = []map[string]any{
-	{"type": "keyDown", "value": "\uE009"}, {"type": "pause", "duration": 25},
-	{"type": "keyDown", "value": "v"}, {"type": "pause", "duration": 25}, {"type": "pause", "duration": 70},
-	{"type": "keyUp", "value": "v"}, {"type": "pause", "duration": 25},
-	{"type": "keyUp", "value": "\uE009"},
+// 官网现场中 Firefox 在 BiDi 停顿之外为各组事件多用的毫秒数：Control 到 V、V 按住、V 抬起到 Control 抬起、指针移到按下与按下到抬起
+const (
+	controlOverhead = 4.5
+	keyOverhead     = 9.5
+	releaseOverhead = 3
+	pressOverhead   = 8
+	holdOverhead    = 8
+)
+
+// pause 返回让 Firefox 派发的两组事件相隔 interval 毫秒的 BiDi 停顿动作
+func pause(interval, overhead float64) map[string]any {
+	return map[string]any{"type": "pause", "duration": int(math.Round(max(interval-overhead, 0)))}
+}
+
+// pasteKeyActions 返回按账户节奏在官网输入框按 Ctrl+V 的可信键盘动作：按下 Control 与 V，按住后依次抬起
+func pasteKeyActions(account rhythm.Rhythm) []map[string]any {
+	return []map[string]any{
+		{"type": "keyDown", "value": "\uE009"}, pause(account.Control, controlOverhead),
+		{"type": "keyDown", "value": "v"}, pause(account.Key, keyOverhead),
+		{"type": "keyUp", "value": "v"}, pause(account.Release, releaseOverhead),
+		{"type": "keyUp", "value": "\uE009"},
+	}
 }
 
 // promptValueFunction 返回可见提示框的当前值
@@ -78,7 +100,7 @@ func pasteText(ctx context.Context, client *bidiClient, contextID, text string) 
 	if _, err := client.invoke(ctx, contextID, clipboardWriteFunction, []any{text}, map[string]any{"userActivation": true}); err != nil {
 		return fmt.Errorf("写入剪贴板: %w", err)
 	}
-	return pressKeys(ctx, client, contextID, pasteKeyActions)
+	return pressKeys(ctx, client, contextID, pasteKeyActions(client.rhythm))
 }
 
 // pressKeys 以可信键盘依次执行 actions
@@ -232,7 +254,7 @@ const pointerTargetFunction = `(selector, pattern) => {
 // pointerMoveDuration 是可信指针从别处移到目标元素所用的毫秒数
 const pointerMoveDuration = 120
 
-// pointer 以可信指针用 move 毫秒移到 selector 与 pattern 匹配的可见元素中心，click 为真时再按下、停顿并抬起，返回是否找到该元素
+// pointer 以可信指针用 move 毫秒移到 selector 与 pattern 匹配的可见元素中心，click 为真时再按账户节奏停顿、按下、停顿并抬起，返回是否找到该元素
 func (client *bidiClient) pointer(ctx context.Context, contextID, selector, pattern string, click bool, move int) (bool, error) {
 	located, err := client.callFunctionString(ctx, contextID, pointerTargetFunction, selector, pattern)
 	if err != nil || located == "" {
@@ -247,7 +269,7 @@ func (client *bidiClient) pointer(ctx context.Context, contextID, selector, patt
 	}
 	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": move}}
 	if click {
-		actions = append(actions, map[string]any{"type": "pointerDown", "button": 0}, map[string]any{"type": "pause", "duration": 60}, map[string]any{"type": "pointerUp", "button": 0})
+		actions = append(actions, pause(client.rhythm.Press, pressOverhead), map[string]any{"type": "pointerDown", "button": 0}, pause(client.rhythm.Hold, holdOverhead), map[string]any{"type": "pointerUp", "button": 0})
 	}
 	_, err = client.command(ctx, "input.performActions", map[string]any{
 		"context": contextID,

@@ -41,14 +41,14 @@ func (s *server) stopBackground(id string) {
 	}
 }
 
-// storeBackgroundEnd 保存后台响应的结束状态：被 cancel 接口终止时为 cancelled，生成出错时为 failed
+// storeBackgroundEnd 保存后台响应的结束状态：被 cancel 接口终止时为 cancelled，生成出错时为 failed，error 按 responsesError
 func (s *server) storeBackgroundEnd(ctx context.Context, id string, created int64, request responsesRequest, prepared responsesPreparation, err error) {
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
 		s.storeResponse(id, request, prepared, generationResult{}, responseShell(id, created, "cancelled", request))
 	case err != nil:
 		failed := responseShell(id, created, "failed", request)
-		failed["error"] = map[string]any{"code": responsesErrorCode(err), "message": err.Error()}
+		failed["error"] = responsesError(err)
 		s.storeResponse(id, request, prepared, generationResult{}, failed)
 	}
 }

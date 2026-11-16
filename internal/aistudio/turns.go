@@ -24,9 +24,10 @@ func (s *PooledService) rewritesAssistantTail(modelID string) bool {
 	return s.ContinuationRewrite && !nativePrefillModels[modelID] && !strings.HasPrefix(modelID, "gemma-")
 }
 
-// normalizeTurns 按 clientSystem 改写客户端系统提示；在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮
+// normalizeTurns 按 clientSystem 改写客户端系统提示，按 dropUserRejected 删去 user 轮中的客户端身份句；在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮
 func normalizeTurns(system []string, contents []Content, rewrite bool, prompt string) ([]string, []Content) {
 	system = clientSystem(system)
+	contents = dropUserRejected(contents)
 	if rewrite {
 		tail := len(contents)
 		for tail > 0 && contents[tail-1].Role == RoleAssistant {

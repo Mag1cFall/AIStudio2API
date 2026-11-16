@@ -14,6 +14,7 @@
   const arrayBufferDetached = getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached').get;
   const indirectEval = g.eval;
   const now = natives.now;
+  const taskStarted = natives.taskStarted;
   if (!shared) {
     shared = {
       registry: { native: new WeakMap(), trusted: new WeakMap() },
@@ -24,6 +25,26 @@
       notifiers: new Map(),
       reporters: new Map(),
       rejections: { pending: [], handled: [], notified: new Map() },
+    };
+    // 各接口默认值在首次读取时由宿主的只读形状表解析
+    const defaults = shared.shape.defaults;
+    for (const name of parseJSON(config.shapeDefaults)) {
+      defineProperty(defaults, name, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          const value = parseJSON(natives.shapeEntry('defaults', name));
+          defineProperty(defaults, name, { configurable: true, enumerable: true, writable: true, value });
+          return value;
+        },
+      });
+    }
+    // members 返回接口 name 的原型成员，首次读取时由宿主的只读形状表解析
+    const members = new Map();
+    shared.shape.members = name => {
+      let value = members.get(name);
+      if (!value) members.set(name, value = parseJSON(natives.shapeEntry('pr', name)));
+      return value;
     };
   }
   const registry = shared.registry;
@@ -191,6 +212,7 @@
     profile: parseJSON(config.profileJSON),
     timeOrigin: config.timeOrigin,
     performanceNow: () => mathFloor(now() - started),
+    inputNow: () => mathFloor(taskStarted() - started),
     preciseNow: () => mathFloor((now() - started) * 1000) / 1000,
     queueTask(delay, callback) {
       const wait = +delay;

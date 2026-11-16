@@ -53,7 +53,18 @@ func testColor(random *rand.Rand, x, y int) color.NRGBA {
 
 func TestEncodePNGMatchesImagePNG(t *testing.T) {
 	filters := map[byte]int{}
-	for name, img := range testImages() {
+	images := testImages()
+	random := rand.New(rand.NewPCG(3, 4))
+	for _, size := range []image.Point{{700, 400}, {90000, 5}} {
+		img := image.NewNRGBA(image.Rectangle{Max: size})
+		for y := range size.Y {
+			for x := range size.X {
+				img.SetNRGBA(x, y, testColor(random, x, y))
+			}
+		}
+		images["strips-"+img.Rect.String()] = img
+	}
+	for name, img := range images {
 		var want, got bytes.Buffer
 		if err := png.Encode(&want, img); err != nil {
 			t.Fatal(err)
@@ -61,9 +72,14 @@ func TestEncodePNGMatchesImagePNG(t *testing.T) {
 		if err := EncodePNG(&got, img); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !bytes.Equal(got.Bytes(), want.Bytes()) {
-			t.Errorf("%s: EncodePNG 输出 %d 字节，与 png.Encode 的 %d 字节不同", name, got.Len(), want.Len())
+		wantChunks, wantRaw := pngChunks(t, want.Bytes())
+		gotChunks, gotRaw := pngChunks(t, got.Bytes())
+		if !bytes.Equal(gotChunks, wantChunks) || !bytes.Equal(gotRaw, wantRaw) {
+			t.Errorf("%s: EncodePNG 的数据块或解压后数据与 png.Encode 不同", name)
 			continue
+		}
+		if _, err := png.Decode(bytes.NewReader(got.Bytes())); err != nil {
+			t.Errorf("%s: image/png 解码 EncodePNG 输出: %v", name, err)
 		}
 		for _, f := range pngRowFilters(t, got.Bytes()) {
 			filters[f]++
@@ -76,16 +92,17 @@ func TestEncodePNGMatchesImagePNG(t *testing.T) {
 	}
 }
 
-// pngRowFilters 解出 PNG 每行的过滤类型字节
-func pngRowFilters(t *testing.T, data []byte) []byte {
+// pngChunks 返回 PNG 签名与 IDAT 之外的数据块原样字节，以及 IDAT 拼接后以 zlib 解压的数据
+func pngChunks(t *testing.T, data []byte) ([]byte, []byte) {
 	t.Helper()
-	width, height := binary.BigEndian.Uint32(data[16:20]), binary.BigEndian.Uint32(data[20:24])
-	bits := map[[2]byte]int{{8, 0}: 8, {8, 2}: 24, {8, 6}: 32}[[2]byte{data[24], data[25]}]
+	chunks := append([]byte(nil), data[:8]...)
 	var idat []byte
 	for offset := 8; offset < len(data); {
 		length := int(binary.BigEndian.Uint32(data[offset:]))
 		if string(data[offset+4:offset+8]) == "IDAT" {
 			idat = append(idat, data[offset+8:offset+8+length]...)
+		} else {
+			chunks = append(chunks, data[offset:offset+12+length]...)
 		}
 		offset += 12 + length
 	}
@@ -97,6 +114,15 @@ func pngRowFilters(t *testing.T, data []byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return chunks, raw
+}
+
+// pngRowFilters 解出 PNG 每行的过滤类型字节
+func pngRowFilters(t *testing.T, data []byte) []byte {
+	t.Helper()
+	width, height := binary.BigEndian.Uint32(data[16:20]), binary.BigEndian.Uint32(data[20:24])
+	bits := map[[2]byte]int{{8, 0}: 8, {8, 2}: 24, {8, 6}: 32}[[2]byte{data[24], data[25]}]
+	_, raw := pngChunks(t, data)
 	stride := 1 + int(width)*bits/8
 	filters := make([]byte, height)
 	for y := range filters {

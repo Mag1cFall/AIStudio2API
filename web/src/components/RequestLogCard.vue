@@ -18,11 +18,13 @@ import LogLine from './LogLine.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiDisclosure from './UiDisclosure.vue'
 import UiIcon from './UiIcon.vue'
+import { useUsageFormat } from './usage/format'
 
 const props = defineProps<{ row: LogRow }>()
 // open 是详情是否展开，由日志页按行保存
 const open = defineModel<boolean>('open', { required: true })
 const { t, locale, errorText, logText } = useI18n()
+const { duration } = useUsageFormat()
 const request = computed(() => props.row.entry.request!)
 const running = computed(() => request.value.state === 'running')
 
@@ -216,6 +218,23 @@ function seconds(value: number, digits = 0): string {
   return formatLogNumber(value, locale.value, digits, 'second')
 }
 
+// proofPhases 列出 WAA 耗时中不为零的分项
+const proofPhases = computed(() => {
+  const phases = request.value.proof_phases
+  if (phases === undefined) return ''
+  return (
+    [
+      ['logs.proofLock', phases.lock_ms],
+      ['logs.proofInteraction', phases.interaction_ms],
+      ['logs.proofRefresh', phases.refresh_ms],
+      ['logs.proofCompute', phases.compute_ms],
+    ] as const
+  )
+    .filter(([, value]) => value >= 1)
+    .map(([key, value]) => `${t(key)} ${duration(value)}`)
+    .join(' · ')
+})
+
 // toggleBody 展开或收起正文一节，首次展开时读取账本保存的请求与响应正文
 async function toggleBody(): Promise<void> {
   bodyOpen.value = !bodyOpen.value
@@ -350,6 +369,13 @@ const bodyParts = computed(() =>
           <template v-if="request.input_messages">
             <dt>{{ t('logs.inputMessages') }}</dt>
             <dd>{{ number(request.input_messages) }}</dd>
+          </template>
+          <template v-if="request.proof_ms">
+            <dt>{{ t('logs.field.waa') }}</dt>
+            <dd>
+              {{ duration(request.proof_ms)
+              }}<span v-if="proofPhases" class="text-gray-500"> · {{ proofPhases }}</span>
+            </dd>
           </template>
           <template v-if="request.error">
             <dt>{{ t('logs.errorDetail') }}</dt>

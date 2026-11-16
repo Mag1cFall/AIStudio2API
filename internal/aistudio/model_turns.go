@@ -37,14 +37,13 @@ func newModelTurnHistory() *modelTurnHistory {
 	return &modelTurnHistory{entries: make(map[modelTurnKey]modelTurn)}
 }
 
-// store 保存接在 history 之后生成的模型轮；history 以模型轮结尾、回复带内联媒体或没有思考、签名与轮次令牌时不保存，超过上限时丢弃最早的一条
-func (turns *modelTurnHistory) store(apiKey string, history []Content, turn modelTurn) {
-	if history[len(history)-1].Role == RoleAssistant || slices.ContainsFunc(turn.parts, func(part Part) bool { return part.InlineData != nil }) ||
+// store 保存接在 tip 所在对话之后生成的模型轮；tip 为模型轮、回复带内联媒体或没有思考、签名与轮次令牌时不保存，超过上限时丢弃最早的一条
+func (turns *modelTurnHistory) store(apiKey string, tip turnLink, turn modelTurn) {
+	if tip.model || slices.ContainsFunc(turn.parts, func(part Part) bool { return part.InlineData != nil }) ||
 		turn.turnToken == "" && !slices.ContainsFunc(turn.parts, func(part Part) bool { return part.Thought || part.ThoughtSignature != "" }) {
 		return
 	}
-	links := turnLinks(append(slices.Clone(history), Content{Role: RoleAssistant, Parts: turn.parts}))
-	key := modelTurnKey{apiKey: apiKey, digest: links[len(links)-1].digest}
+	key := modelTurnKey{apiKey: apiKey, digest: turnLinkDigest(tip.digest, true, turn.parts)}
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
 	if _, exists := turns.entries[key]; !exists {
@@ -57,13 +56,14 @@ func (turns *modelTurnHistory) store(apiKey string, history []Content, turn mode
 	}
 }
 
-// restore 把对话中本进程生成过的模型轮换成生成时的 Part，函数调用沿用客户端回传的 ID，返回改写后的对话与最后一个模型轮的轮次令牌
-func (turns *modelTurnHistory) restore(apiKey string, contents []Content) ([]Content, string) {
+// restore 把对话中本进程生成过的模型轮换成生成时的 Part，函数调用沿用客户端回传的 ID，返回改写后的对话、最后一个模型轮的轮次令牌与对话最后一组轮次的累积摘要
+func (turns *modelTurnHistory) restore(apiKey string, contents []Content) ([]Content, string, turnLink) {
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
 	restored := make([]Content, 0, len(contents))
 	token := ""
 	start := 0
+	var tip turnLink
 	for _, link := range turnLinks(contents) {
 		turn, found := turns.entries[modelTurnKey{apiKey: apiKey, digest: link.digest}]
 		switch {
@@ -76,9 +76,9 @@ func (turns *modelTurnHistory) restore(apiKey string, contents []Content) ([]Con
 		default:
 			restored = append(restored, contents[start:link.end]...)
 		}
-		start = link.end
+		start, tip = link.end, link
 	}
-	return restored, token
+	return restored, token, tip
 }
 
 // withCallIDs 返回 parts 的副本，其中的函数调用依次换成 echoed 中函数调用的 ID
@@ -110,14 +110,32 @@ type turnLink struct {
 	digest string
 }
 
+// turnChain 是一份对话与其末尾一组轮次的累积摘要
+type turnChain struct {
+	contents []Content
+	tip      turnLink
+}
+
+// tipOf 返回 contents 末尾一组轮次的累积摘要：contents 就是 chain 记下的那份对话时直接沿用，否则重新计算
+func (chain turnChain) tipOf(contents []Content) turnLink {
+	if len(contents) > 0 && len(chain.contents) == len(contents) && &chain.contents[0] == &contents[0] {
+		return chain.tip
+	}
+	links := turnLinks(contents)
+	if len(links) == 0 {
+		return turnLink{}
+	}
+	return links[len(links)-1]
+}
+
 // turnLinks 把对话按连续的模型轮与其余轮次分组，返回每组结束处的累积摘要
 func turnLinks(contents []Content) []turnLink {
 	var links []turnLink
 	digest := ""
 	for start := 0; start < len(contents); {
 		model := contents[start].Role == RoleAssistant
-		end := start
-		var parts []Part
+		parts := slices.Clip(contents[start].Parts)
+		end := start + 1
 		for ; end < len(contents) && (contents[end].Role == RoleAssistant) == model; end++ {
 			parts = append(parts, contents[end].Parts...)
 		}
@@ -160,7 +178,7 @@ func computeTurnLinkDigest(previous string, model bool, parts []Part) string {
 		default:
 			part.ThoughtSignature = ""
 			if part.InlineData != nil {
-				sum := sha256.Sum256(part.InlineData.Data)
+				sum := part.InlineData.SHA256()
 				part.InlineData = &Blob{MIME: part.InlineData.MIME, Data: sum[:]}
 			}
 			items = append(items, part)

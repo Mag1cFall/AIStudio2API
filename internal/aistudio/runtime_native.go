@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/prooftime"
 )
 
 // NativeWorker 将单个账户的 Camoufox 或 SpiderMonkey WAA runtime 适配为受保护请求 preparer
@@ -27,6 +29,11 @@ type NativeWorker struct {
 	operationMu sync.Mutex
 	stateMu     sync.RWMutex
 	state       WorkerState
+	// tabsMu 保护 tabs；tabs 是账户的各页面，第一个是主页面，其余是账户并发时按需打开的页面
+	tabsMu sync.Mutex
+	tabs   []*pageTab
+	// openingMu 串行化按需新开页面，关闭页面时先等进行中的新开结束
+	openingMu sync.Mutex
 }
 
 // ErrProtectedTransport 表示 SpiderMonkey 后端受保护请求在出口连接上失败，VM 与页面状态不受影响
@@ -143,16 +150,16 @@ func submitRounds(body []byte) int {
 
 // Prepare 生成 fresh proof 并写入请求指定的 WAA field，请求带 Proof 时写入该 proof；在页面界面运行的 GenerateContent 由页面应用取 proof，只返回公共协议头
 func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedRequest) (PreparedProtectedRequest, error) {
-	start, end, err := arrayElementSpan(request.Body, request.ProofField-1)
-	if err != nil {
-		return PreparedProtectedRequest{}, fmt.Errorf("受保护请求缺少 WAA field %d: %w", request.ProofField, err)
-	}
 	if _, ok := worker.generator(request); ok {
 		headers, err := worker.current().ProtocolHeaders(ctx)
 		if err != nil {
 			return PreparedProtectedRequest{}, err
 		}
 		return PreparedProtectedRequest{Body: request.Body, Headers: headers, PagePrompt: request.PagePrompt}, nil
+	}
+	start, end, err := arrayElementSpan(request.Body, request.ProofField-1)
+	if err != nil {
+		return PreparedProtectedRequest{}, fmt.Errorf("受保护请求缺少 WAA field %d: %w", request.ProofField, err)
 	}
 	proof, page := request.Proof, request.PagePrompt
 	var headers http.Header
@@ -187,12 +194,16 @@ type pageRunner interface {
 
 // proofAndHeaders 把 page 写入页面提示词后为 digest 生成 fresh proof，run 时写入后点击 Run，submit 时在函数调用块中粘贴函数结果 result 后点击提交，再取公共协议头；返回 proof、页面输入框中的提示词（run 时为页面实际粘贴的文本）与协议头
 func (worker *NativeWorker) proofAndHeaders(ctx context.Context, digest, page string, body []byte, run bool, result string, submit bool) (string, string, http.Header, error) {
-	worker.operationMu.Lock()
-	defer worker.operationMu.Unlock()
+	lockStarted := time.Now()
+	runtime, operationMu, err := worker.usePage(ctx)
+	if err != nil {
+		return "", "", nil, err
+	}
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	prooftime.Observe(ctx, prooftime.Lock, time.Since(lockStarted))
 	worker.setPhase(WorkerBusy)
-	runtime := worker.current()
 	var proof string
-	var err error
 	submitter, submits := runtime.(resultSubmitter)
 	if runner, ok := runtime.(pageRunner); ok && run {
 		proof, page, err = runner.RunProof(ctx, digest, page, body)
@@ -217,25 +228,22 @@ func (worker *NativeWorker) proofAndHeaders(ctx context.Context, digest, page st
 	return proof, page, headers, nil
 }
 
-// arrayElementSpan 返回紧凑 JSON 顶层数组第 index 个元素的字节范围
+// arrayElementSpan 返回紧凑 JSON 顶层数组第 index 个元素的字节范围，字符串内容按 bytes.IndexByte 跳到下一个未转义的引号
 func arrayElementSpan(body []byte, index int) (int, int, error) {
 	depth, element, start := 0, 0, -1
-	inString, escaped := false, false
-	for position, char := range body {
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case char == '\\':
-				escaped = true
-			case char == '"':
-				inString = false
-			}
-			continue
-		}
+	for position := 0; position < len(body); position++ {
+		char := body[position]
 		switch char {
 		case '"':
-			inString = true
+			if depth >= 1 && element == index && start < 0 {
+				start = position
+			}
+			closing, ok := stringEnd(body, position+1)
+			if !ok {
+				return 0, 0, fmt.Errorf("JSON 顶层数组不完整")
+			}
+			position = closing
+			continue
 		case '[', '{':
 			depth++
 			if depth == 1 {
@@ -266,6 +274,26 @@ func arrayElementSpan(body []byte, index int) (int, int, error) {
 	return 0, 0, fmt.Errorf("JSON 顶层数组不完整")
 }
 
+// stringEnd 返回从 from 开始的 JSON 字符串内容之后结束引号的位置：前面连续反斜杠为偶数个的引号
+func stringEnd(body []byte, from int) (int, bool) {
+	for from <= len(body) {
+		quote := bytes.IndexByte(body[from:], '"')
+		if quote < 0 {
+			return 0, false
+		}
+		quote += from
+		escapes := 0
+		for escapes < quote-from && body[quote-1-escapes] == '\\' {
+			escapes++
+		}
+		if escapes%2 == 0 {
+			return quote, true
+		}
+		from = quote + 1
+	}
+	return 0, false
+}
+
 // pageCountTokensDelay 是官网页面在 GenerateContent 发出后统计用户轮次 token 的时延
 const pageCountTokensDelay = 2200 * time.Millisecond
 
@@ -285,7 +313,11 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 		headers = headers.Clone()
 		headers.Set("Priority", "u=0")
 	}
-	response, err := worker.current().SendProtected(ctx, request.URL, headers, request.Body)
+	runtime, _, err := worker.usePage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	response, err := runtime.SendProtected(ctx, request.URL, headers, request.Body)
 	if err != nil {
 		var transport *url.Error
 		if errors.As(err, &transport) {
@@ -367,6 +399,38 @@ func (worker *NativeWorker) BrowserStorageState(ctx context.Context) (StorageSta
 	return state, nil
 }
 
+// SendPageRPC 像官网页面一样在当前页面中发出一次 MakerSuite RPC：带页面的公共协议头与 rpc 的请求头，以页面当前的 Cookie 签名，Cookie 由页面自己附带
+func (worker *NativeWorker) SendPageRPC(ctx context.Context, signer *Signer, rpc RPCRequest) (*RPCResponse, error) {
+	state, err := worker.BrowserStorageState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+	}
+	authorization, err := signer.Authorization(state)
+	if err != nil {
+		return nil, err
+	}
+	runtime, _, err := worker.usePage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	headers, err := runtime.ProtocolHeaders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for name, values := range rpc.Header {
+		headers.Del(name)
+		for _, value := range values {
+			headers.Add(name, value)
+		}
+	}
+	headers.Set("Authorization", authorization)
+	response, err := runtime.SendProtected(ctx, rpc.URL, headers, rpc.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &RPCResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body}, nil
+}
+
 // MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入当前页面
 func (worker *NativeWorker) MergeSetCookieHeaders(ctx context.Context, headers []string, requestURL string) error {
 	return worker.current().MergeSetCookieHeaders(ctx, headers, requestURL)
@@ -407,7 +471,7 @@ func (worker *NativeWorker) Reload(ctx context.Context) error {
 	worker.runtime = next
 	worker.runtimeMu.Unlock()
 	worker.operationMu.Unlock()
-	return previous.Close()
+	return errors.Join(worker.closeExtraPages(), previous.Close())
 }
 
 // State 返回账户 WAA runtime 状态
@@ -417,13 +481,20 @@ func (worker *NativeWorker) State() WorkerState {
 	return worker.state
 }
 
+// Retire 让 Camoufox 后端的页面在后台离开并关闭浏览器，随后的 Close 不再等待；SpiderMonkey 后端不做操作
+func (worker *NativeWorker) Retire() {
+	if runtime, ok := worker.current().(camoufoxRuntime); ok {
+		runtime.Worker.Retire()
+	}
+}
+
 // Close 关闭账户 WAA runtime
 func (worker *NativeWorker) Close() error {
 	worker.operationMu.Lock()
 	defer worker.operationMu.Unlock()
 	pageWorkers.CompareAndDelete(worker.accountID, worker)
 	worker.setPhase(WorkerClosing)
-	err := worker.current().Close()
+	err := errors.Join(worker.closeExtraPages(), worker.current().Close())
 	if err == nil {
 		worker.setPhase(WorkerClosed)
 	}

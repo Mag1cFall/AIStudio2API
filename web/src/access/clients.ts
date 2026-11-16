@@ -4,6 +4,7 @@ import openCodeIcon from '@lobehub/icons-static-svg/icons/opencode.svg?raw'
 import openClawIcon from '@lobehub/icons-static-svg/icons/openclaw-color.svg?raw'
 import magpieIcon from '@lobehub/icons-static-svg/icons/magpie.svg?raw'
 import deepSeekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?raw'
+import antigravityIcon from '@lobehub/icons-static-svg/icons/antigravity-color.svg?raw'
 import cherryIcon from '@lobehub/icons-static-svg/icons/cherrystudio-color.svg?raw'
 import sillyTavernIcon from '@lobehub/icons-static-svg/icons/sillytavern-color.svg?raw'
 import openWebuiIcon from '@lobehub/icons-static-svg/icons/openwebui.svg?raw'
@@ -588,6 +589,35 @@ export const clients: Client[] = [
         'access.step.keyRun',
         [[keyVariable, input.key]],
         'dsh --patch aistudio2api.patch.yml',
+      ),
+    ],
+  },
+  {
+    id: 'agy',
+    name: 'Antigravity CLI',
+    icon: antigravityIcon,
+    group: 'agent',
+    protocols: ['gemini'],
+    summary: 'access.client.agy',
+    homepage: 'https://antigravity.google/docs/install?tab=cli',
+    noModel: true,
+    shell: true,
+    steps: (input) => [
+      {
+        kind: 'code',
+        text: 'access.step.configFile',
+        file: '~/.gemini/antigravity-cli/settings.json',
+        language: 'json',
+        code: json({ modelProvider: 'gemini' }),
+      },
+      envStep(
+        input,
+        'access.step.envRun',
+        [
+          ['GEMINI_API_KEY', input.key],
+          ['GOOGLE_GEMINI_BASE_URL', input.origin],
+        ],
+        'agy',
       ),
     ],
   },

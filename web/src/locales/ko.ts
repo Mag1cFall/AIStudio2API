@@ -256,6 +256,10 @@ export const messages: Record<TranslationKey, string> = {
   'logs.cachedTokens': '캐시된 토큰',
   'logs.totalTokens': '총 토큰',
   'logs.inputMessages': '입력 메시지',
+  'logs.proofLock': '페이지 대기',
+  'logs.proofInteraction': '페이지 조작',
+  'logs.proofRefresh': 'WAA 새로 고침 대기',
+  'logs.proofCompute': 'WAA 계산',
   'logs.finishReason': '종료 이유',
   'logs.errorDetail': '오류',
   'logs.finish.stop': '정상 종료',
@@ -2129,6 +2133,8 @@ export const messages: Record<TranslationKey, string> = {
     '오픈 소스 터미널 코딩 에이전트. models.json에 사용자 지정 제공자를 추가합니다',
   'access.client.omp': 'pi의 확장판. 웹 검색은 Gemini API를 사용합니다',
   'access.client.dsh': 'DeepSeek의 터미널 에이전트. 패치 파일로 사용자 지정 제공자를 추가합니다',
+  'access.client.agy':
+    'Google의 터미널 에이전트로, Gemini API 키로 연결하고 agy에서 /model로 모델을 선택합니다',
   'access.client.cherry':
     '데스크톱 AI 클라이언트. OpenAI, Gemini, Anthropic 유형으로 제공자를 추가합니다',
   'access.client.sillytavern':

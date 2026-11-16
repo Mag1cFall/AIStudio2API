@@ -243,7 +243,8 @@
     return method;
   };
   // installable 判断形状表条目是否在目标对象上定义属性
-  const installable = entry => keyOf(entry.n) !== undefined && !entry.err && (entry.k === 'v' || entry.k === 'm' || entry.k === 'a' || (entry.k === 'i' && entry.n === 'constructor'));
+  const memberInstallable = (name, kind) => keyOf(name) !== undefined && (kind === 'v' || kind === 'm' || kind === 'a' || (kind === 'i' && name === 'constructor'));
+  const installable = entry => !entry.err && memberInstallable(entry.n, entry.k);
   // entryDescriptor 返回可安装条目在 target 上的属性描述符
   const entryDescriptor = (target, iface, entry, ctor) => {
     const flags = entry.f || '';
@@ -260,7 +261,8 @@
   const templateEntries = Object.create(null);
   // templateProperty 生成接口原型模板中第 index 个成员，返回是否访问器、值、getter、setter 与三个属性标志
   const templateProperty = (iface, index) => {
-    const descriptor = entryDescriptor(protos[iface], iface, templateEntries[iface][index], ctors[iface]);
+    const entries = templateEntries[iface] ??= shape.members(iface).filter(installable);
+    const descriptor = entryDescriptor(protos[iface], iface, entries[index], ctors[iface]);
     return ['get' in descriptor, descriptor.value, descriptor.get, descriptor.set, Boolean(descriptor.writable), descriptor.enumerable, descriptor.configurable];
   };
   host.setTemplateResolver(templateProperty);
@@ -315,8 +317,7 @@
       protos[info.n] = g[info.n].prototype;
       continue;
     }
-    templateEntries[info.cn] = info.pr.filter(installable);
-    const proto = host.templatedObject(info.cn, templateEntries[info.cn].map(entry => entry.n), info.pp && protos[info.pp] ? protos[info.pp] : Object.prototype);
+    const proto = host.templatedObject(info.cn, info.pk.filter(([name, kind]) => memberInstallable(name, kind)).map(([name]) => name), info.pp && protos[info.pp] ? protos[info.pp] : Object.prototype);
     const ctor = makeConstructor(info, proto);
     if (info.p && ctors[info.p]) Object.setPrototypeOf(ctor, ctors[info.p]);
     for (const entry of info.st) installEntry(ctor, info.cn, entry, ctor);
@@ -451,14 +452,15 @@
     userActivation,
     // activate 记录一次用户点击或按键
     activate: () => { userActivation.at = host.timeOrigin + host.performanceNow(); },
-    // mouseInput 按 Firefox 可信鼠标输入依次派发 types 中的事件：nodes 的布局矩形取 rects，指针与鼠标事件派发到指针下的 target，out 事件派发到指针离开的 left，坐标为 point，pointermove 与 mousemove 的移动量为 movement，焦点从 blurred 移到 focused，pointerdown 记录一次用户点击
+    // mouseInput 按 Firefox 可信鼠标输入依次派发 types 中的事件：nodes 的布局矩形取 rects，指针与鼠标事件派发到指针下的 target，out 事件派发到指针离开的 left，坐标为 point，pointermove 与 mousemove 的移动量为 movement，焦点从 blurred 移到 focused，pointerdown 记录一次用户点击，同一次原生输入派生的各事件共用这次输入发生时的时间戳
     mouseInput: (nodes, rects, target, left, point, movement, blurred, focused, types) => {
       nodes.forEach((node, index) => { brandFor(node).rect = rects[index]; });
       const [clientX, clientY] = point;
+      const timeStamp = host.inputNow();
       for (const type of types) {
         if (type === 'change') {
           const event = create('Event');
-          Object.assign(brandFor(event).over, { type, isTrusted: true, bubbles: true, cancelable: false, composed: false, timeStamp: host.performanceNow() });
+          Object.assign(brandFor(event).over, { type, isTrusted: true, bubbles: true, cancelable: false, composed: false, timeStamp });
           dispatch(blurred, event);
           continue;
         }
@@ -470,7 +472,7 @@
         const moved = type === 'pointermove' || type === 'mousemove';
         const event = create(focus ? 'FocusEvent' : pointer ? 'PointerEvent' : 'MouseEvent');
         const over = brandFor(event).over;
-        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: !focus, composed: true, view: g, detail: !focus && type !== 'mouseover' && type !== 'mouseout' && (!pointer || type === 'click') ? 1 : 0, timeStamp: host.performanceNow() });
+        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: !focus, composed: true, view: g, detail: !focus && type !== 'mouseover' && type !== 'mouseout' && (!pointer || type === 'click') ? 1 : 0, timeStamp });
         if (focus) over.relatedTarget = type === 'focusout' ? focused : blurred;
         else Object.assign(over, { button: pointer && !changed ? -1 : 0, buttons: pressed ? 1 : 0, clientX, clientY, screenX: clientX + g.mozInnerScreenX, screenY: clientY + g.mozInnerScreenY, movementX: moved ? movement[0] : 0, movementY: moved ? movement[1] : 0 });
         if (pointer) Object.assign(over, { pointerId: 0, pointerType: 'mouse', width: 1, height: 1, pressure: pressed ? 0.5 : 0, isPrimary: true, altitudeAngle: Math.PI / 2, azimuthAngle: 0 });
@@ -478,14 +480,15 @@
         dispatch(type === 'focusout' ? blurred : type === 'focusin' ? focused : out ? left : target, event);
       }
     },
-    // keyInput 按 Firefox 可信键盘输入依次向有焦点的 target 派发 types 中的事件：keydown 与 keyup 的冒号后为键名，paste 带只含 text/plain 的剪贴板数据，beforeinput 之后把 text 写入 target 再派发 input，按下非修饰键时记录一次用户按键
+    // keyInput 按 Firefox 可信键盘输入依次向有焦点的 target 派发 types 中的事件：keydown 与 keyup 的冒号后为键名，paste 带只含 text/plain 的剪贴板数据，beforeinput 之后把 text 写入 target 再派发 input，按下非修饰键时记录一次用户按键，同一次原生输入派生的各事件共用这次输入发生时的时间戳
     keyInput: (target, text, types) => {
+      const timeStamp = host.inputNow();
       for (const entry of types) {
         const [type, name] = entry.split(':');
         const key = inputKeys[name];
         const event = create(key ? 'KeyboardEvent' : type === 'paste' ? 'ClipboardEvent' : 'InputEvent');
         const over = brandFor(event).over;
-        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: type !== 'input', composed: true, timeStamp: host.performanceNow() });
+        Object.assign(over, { type, isTrusted: true, bubbles: true, cancelable: type !== 'input', composed: true, timeStamp });
         if (key) {
           Object.assign(over, { view: g, detail: 0, key: name, code: key.code, keyCode: key.keyCode, which: key.keyCode, charCode: 0, location: key.location, ctrlKey: !(type === 'keyup' && name === 'Control'), altKey: false, shiftKey: false, metaKey: false, repeat: false, isComposing: false });
           if (type === 'keydown' && !key.modifier) api.activate();
@@ -1216,7 +1219,7 @@
     const names = [];
     for (let current = iface; current; current = parentOf[current]) {
       const info = infos[current];
-      if (info) for (const entry of info.pr) if (entry.k === 'a') names.push(entry.n);
+      if (info) for (const [name, kind] of info.pk) if (kind === 'a') names.push(name);
     }
     attributeCache.set(iface, names);
     return names;
@@ -1670,8 +1673,8 @@
       const result = {};
       for (const iface of chain) {
         const info = infos[iface];
-        if (!info || !info.pr.some(entry => entry.n === 'toJSON')) continue;
-        for (const entry of info.pr) {
+        if (!info || !shape.members(iface).some(entry => entry.n === 'toJSON')) continue;
+        for (const entry of shape.members(iface)) {
           if (entry.k !== 'a' || !entry.g || /^on[a-z]/.test(entry.n)) continue;
           const value = read(this, brand, entry.n, iface);
           const converted = Array.isArray(value) ? value.map(json) : json(value);
@@ -1925,7 +1928,7 @@
     'Window.blur': () => {},
   });
   for (const info of shape.interfaces) {
-    if (ES.has(info.n) || !info.pr.some(entry => entry.n === '@@iterator' && entry.fn === 'entries')) continue;
+    if (ES.has(info.n) || !info.pi) continue;
     const iface = info.n;
     methods[iface + '.entries'] = brand => pairIterator(iface, brand, 'key+value');
     methods[iface + '.keys'] = brand => pairIterator(iface, brand, 'key');

@@ -274,7 +274,7 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 	return path, nil
 }
 
-// Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
+// Do 发送普通 MakerSuite RPC 并让响应 body 持有租约，账户有 WAA Worker 时 pageIssuedRPCs 中的方法与 issuedByPage 上下文中的请求由页面发出
 func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
 	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: rpc.AccountID})
 	if err != nil {
@@ -287,6 +287,20 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 		return errors.Join(requestErr, lease.Release())
 	}
 	account := lease.Account()
+	finish := func() error {
+		if owned {
+			return lease.Release()
+		}
+		return nil
+	}
+	if worker := pageWorker(account.ID); worker != nil && (pageIssuedRPCs[rpc.Method] || ctx.Value(pageIssuedKey{}) != nil) {
+		response, err := worker.SendPageRPC(ctx, t.signer, rpc)
+		if err != nil {
+			return nil, releaseOnError(fmt.Errorf("页面发送 MakerSuite %s 请求: %w", rpc.Method, err))
+		}
+		response.Body = &leaseResponseBody{body: response.Body, finish: finish}
+		return response, nil
+	}
 	_, headers, err := prepareProtocolHeaders(ctx, lease, rpc, t.signer, t.headers, t.now(), true)
 	if err != nil {
 		return nil, releaseOnError(err)
@@ -310,17 +324,12 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 			return nil, releaseOnError(fmt.Errorf("合并 MakerSuite %s 响应 Cookie: %w", rpc.Method, err))
 		}
 	}
-	body := &leaseResponseBody{
-		body: response.Body,
-		finish: func() error {
-			if owned {
-				return lease.Release()
-			}
-			return nil
-		},
-	}
+	body := &leaseResponseBody{body: response.Body, finish: finish}
 	return &RPCResponse{StatusCode: response.StatusCode, Header: response.Header.Clone(), Body: body}, nil
 }
+
+// pageIssuedRPCs 是官网页面为对话附件上传自己发出的 RPC，账户有 WAA Worker 时由页面以页面的登录凭据发出
+var pageIssuedRPCs = map[string]bool{"GenerateAccessToken": true, "GetAppFolder": true}
 
 // FetchStatic 经账户的固定出口以 GET 读取官网静态资源
 func (t *MakerSuiteHTTPTransport) FetchStatic(ctx context.Context, accountID string, address string) ([]byte, error) {

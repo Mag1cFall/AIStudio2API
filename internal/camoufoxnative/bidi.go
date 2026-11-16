@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/rhythm"
 )
 
 // bidiCommandTimeout 为单条 BiDi 命令等待响应的最长时间
@@ -41,6 +43,8 @@ type bidiClient struct {
 	denial *AccessDenial
 	// listener 接收 BiDi 事件，在读取连接的协程中调用
 	listener func(map[string]any)
+	// rhythm 是账户点击与粘贴的事件节奏，决定可信指针与键盘动作中的停顿
+	rhythm rhythm.Rhythm
 	// loads 是正在载入官网页面的标签页记下的网络状态，键为标签页的 context
 	loads map[string]*pageLoad
 }

@@ -460,6 +460,8 @@ type GenerateRequest struct {
 	restoreModelTurns bool
 	// turnToken 为历史中最后一个模型轮的轮次令牌
 	turnToken string
+	// turnChain 为恢复历史后的对话与其末尾一组轮次的累积摘要
+	turnChain turnChain
 }
 
 // TokenCountRequest 表示计数请求

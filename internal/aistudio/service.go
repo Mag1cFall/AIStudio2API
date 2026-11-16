@@ -124,7 +124,7 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 		return nil, err
 	}
 	page := contentsText(contents[max(len(contents)-1, 0):])
-	if lease, ok := AccountLeaseFromContext(ctx); ok && rpc.Method == "GenerateContent" && t.runs.rerun(lease.Account().ID, request.Contents) {
+	if lease, ok := AccountLeaseFromContext(ctx); ok && rpc.Method == "GenerateContent" && t.runs.rerun(lease.Account().ID, request.turnChain.tipOf(request.Contents)) {
 		page = ""
 		rounds := 0
 		for _, content := range request.Contents {
@@ -622,6 +622,7 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 		return TokenCount{}, fmt.Errorf("%w: CountTokens model 不能为空", ErrInvalidArgument)
 	}
 	request.System = clientSystem(request.System)
+	request.Contents = dropUserRejected(request.Contents)
 	if s.YouTubeLinks {
 		request.Contents = attachYouTubeLinks(request.Contents)
 	}

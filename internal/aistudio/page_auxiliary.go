@@ -94,9 +94,21 @@ func latinFontFaces(css []byte) map[string]string {
 // gapiClientURL 按 api.js 中的配置推出 gapi.load("client") 载入的模块地址
 func gapiClientURL(script []byte) (string, error) {
 	base := gapiBasePattern.FindSubmatch(script)
-	extensions := gapiExtensionsPattern.FindSubmatch(script)
-	if base == nil || extensions == nil {
+	names, ok := gapiExtensions(script)
+	if base == nil || !ok {
 		return "", errors.New("api.js 缺少 gapi 模块配置")
+	}
+	for _, match := range gapiPushedExtensionPattern.FindAllSubmatch(script, -1) {
+		names = append(names, string(match[1]))
+	}
+	return "https://apis.google.com" + string(base[1]) + "/m=client/rt=j/sv=1/d=1/ed=1/rs=" + string(base[2]) + "/cb=gapi.loaded_0?le=" + strings.Join(names, ","), nil
+}
+
+// gapiExtensions 返回 gapi 加载脚本配置中声明的 le 列表，配置中没有 le 时返回 false
+func gapiExtensions(script []byte) ([]string, bool) {
+	extensions := gapiExtensionsPattern.FindSubmatch(script)
+	if extensions == nil {
+		return nil, false
 	}
 	var names []string
 	for _, item := range strings.Split(string(extensions[1]), ",") {
@@ -104,10 +116,7 @@ func gapiClientURL(script []byte) (string, error) {
 			names = append(names, name)
 		}
 	}
-	for _, match := range gapiPushedExtensionPattern.FindAllSubmatch(script, -1) {
-		names = append(names, string(match[1]))
-	}
-	return "https://apis.google.com" + string(base[1]) + "/m=client/rt=j/sv=1/d=1/ed=1/rs=" + string(base[2]) + "/cb=gapi.loaded_0?le=" + strings.Join(names, ","), nil
+	return names, true
 }
 
 // cookieBarLanguages 是 Cookie 提示条有文案的语言
@@ -140,7 +149,7 @@ func cookieBarConfigURL(language string) string {
 	return cookieBarConfig + "?hl=" + language
 }
 
-// loadPageScripts 在文档子资源载入后按官网页面的时序请求前端主程序随后载入的脚本与配置：预取 api.js、反馈服务脚本与 Cookie 提示条文案，再载入 gapi client 模块，最后经 gapi 读取账户资料并载入头像；失败不影响页面
+// loadPageScripts 在文档子资源载入后按官网页面的时序请求前端主程序随后载入的脚本与配置：预取 api.js、反馈服务脚本与 Cookie 提示条文案（载入后提示条回调载入 GTM），再载入 gapi client 模块，最后经 gapi 读取账户资料并载入头像；失败不影响页面
 func (runtime *goWAARuntime) loadPageScripts(ctx context.Context) {
 	start := time.Now()
 	wait := func(offset time.Duration) bool {
@@ -152,6 +161,18 @@ func (runtime *goWAARuntime) loadPageScripts(ctx context.Context) {
 		case <-timer.C:
 			return true
 		}
+	}
+	// 同账户的第二个标签页从缓存载入 gapi 的加载脚本与 client 模块，页面应用开始请求后 180–720 ms 读取账户资料
+	client := runtime.pageCache.notes(gapiLoaderScript).Gapi
+	_, loaderCached := runtime.pageCache.lookup(gapiLoaderScript, start)
+	_, clientCached := runtime.pageCache.lookup(client, start)
+	cached := client != "" && loaderCached && clientCached
+	if cached {
+		go func() {
+			if wait(time.Duration(180+rand.IntN(500)) * time.Millisecond) {
+				runtime.loadAvatar(ctx)
+			}
+		}()
 	}
 	if !wait(770 * time.Millisecond) {
 		return
@@ -171,15 +192,22 @@ func (runtime *goWAARuntime) loadPageScripts(ctx context.Context) {
 	}()
 	go func() {
 		target := cookieBarConfigURL(runtime.cookieBarLanguage)
-		_ = runtime.fetchCached(ctx, target, corsHeaders(target))
+		if runtime.fetchCached(ctx, target, corsHeaders(target)) == nil {
+			runtime.analytics.load(ctx)
+		}
 	}()
-	if <-loaded != nil || !wait(1410*time.Millisecond) {
+	if <-loaded != nil || cached || !wait(1410*time.Millisecond) {
 		return
 	}
-	client := runtime.pageCache.notes(gapiLoaderScript).Gapi
+	client = runtime.pageCache.notes(gapiLoaderScript).Gapi
 	if client == "" || runtime.fetchCached(ctx, client, subresourceHeaders(client, "*/*", "script", "")) != nil || !wait(2320*time.Millisecond) {
 		return
 	}
+	runtime.loadAvatar(ctx)
+}
+
+// loadAvatar 经 gapi 读取账户资料并载入页面右上角的头像，失败不影响页面
+func (runtime *goWAARuntime) loadAvatar(ctx context.Context) {
 	photo, err := runtime.loadProfile(ctx)
 	if err != nil || photo == "" {
 		return
@@ -366,6 +394,15 @@ func (runtime *goWAARuntime) dismissOverlays(ctx context.Context) {
 	}
 }
 
+// requestGDPProfile 在 GetAiStudioBenefitTier 返回、权益 benefitTier 满足导航栏条件时像官网导航栏一样立即读取 Google Developer Program 权益，响应到达后按导航栏处理额度入口；各请求在发出时带 extension 返回的日志上下文，GetLoggingContext 尚未返回时为空，与官网页面在请求创建时才附带该头一致
+func (runtime *goWAARuntime) requestGDPProfile(ctx context.Context, apiKey string, visitID string, benefitTier []byte, extension func() string) {
+	if !runtime.pageFlags.requestsGDPProfile(benefitTier) {
+		return
+	}
+	profile := runtime.sendPageRPCs(ctx, apiKey, visitID, extension(), []pageRPC{gdpProfileRPC})[0]
+	runtime.loadGDPCredits(ctx, apiKey, visitID, extension(), profile)
+}
+
 // gdpProfile 是 GetGdpProfileAndBenefits 响应中决定导航栏额度入口的字段
 type gdpProfile struct {
 	// member 为第 1 字段：账户已加入 Google Developer Program
@@ -465,24 +502,92 @@ var mediaDisclaimer = bidiDisclaimer{index: 1, mask: "uploading_media_disclaimer
 // pageTokenLifetime 是页面载入时取得的 Drive access token 在上传附件时仍沿用的时长
 const pageTokenLifetime = 50 * time.Minute
 
-// beforeUpload 在服务上传附件前，账户尚未确认首次上传素材提示时像官网一样发送 UpdateUserPreferences；返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
-func (runtime *goWAARuntime) beforeUpload(ctx context.Context) string {
+// insertPause 返回插入文件时相邻两步之间的停顿：点开插入菜单后点上传文件、选好文件、阅读确认框后点确认
+func insertPause() time.Duration {
+	return 800*time.Millisecond + rand.N(600*time.Millisecond)
+}
+
+// pauseContext 等待 duration，ctx 先结束时提前返回
+func pauseContext(ctx context.Context, duration time.Duration) {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
+// driveDenied 判断页面载入时的 GenerateAccessToken 没有取得 Drive access token（账户未授权 Drive）
+func (runtime *goWAARuntime) driveDenied(ctx context.Context) bool {
+	select {
+	case <-runtime.startupDone:
+	case <-ctx.Done():
+		return false
+	}
+	return runtime.accessToken == ""
+}
+
+// acknowledgedMedia 判断 GetUserPreferences 响应中账户已确认首次上传素材提示（第 2 字段不为空）
+func acknowledgedMedia(preferences []byte) bool {
+	var fields []json.RawMessage
+	return json.Unmarshal(preferences, &fields) == nil && len(fields) > mediaDisclaimer.index && !isJSONNull(fields[mediaDisclaimer.index])
+}
+
+// beforeUpload 在服务上传附件前像官网插入文件一样记录点击插入按钮打开菜单、再点击上传文件并在文件选择框中选好文件，页面尚未确认首次上传素材提示时再记录确认框的显示与确认，并像点击确认一样以 Priority u=0 发出 UpdateUserPreferences、不等响应；这组操作整组排进页面此前的空闲区间，最后一步落在现在、第一步不早于页面上一条已记录事件，放不下时这次不做也不等待，步数计入下一次取 proof 的跳过步数；rerun 为真且本页面点过 Run 时与官网 Rerun 一样不动输入框、不记录这组操作；返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
+func (runtime *goWAARuntime) beforeUpload(ctx context.Context, rerun bool) string {
 	<-runtime.startupDone
-	runtime.mediaDisclaimer.Do(func() {
-		var fields []json.RawMessage
-		if json.Unmarshal(runtime.preferences, &fields) == nil && len(fields) > mediaDisclaimer.index && !isJSONNull(fields[mediaDisclaimer.index]) {
-			return
+	if rerun && !runtime.pointer.Clicked().IsZero() {
+		return runtime.pageToken()
+	}
+	dialog := !runtime.mediaAcknowledged.Load() && !acknowledgedMedia(runtime.preferences)
+	menu, picker := insertPause(), insertPause()
+	var reading time.Duration
+	steps := 2
+	if dialog {
+		reading, steps = insertPause(), 3
+	}
+	finished := time.Now()
+	opened := finished.Add(-menu - picker - reading)
+	if opened.Before(runtime.elements.lastRecorded()) {
+		runtime.skippedInserts.Add(int64(steps))
+	} else {
+		runtime.elements.insertClicked(opened)
+		runtime.elements.insertClicked(opened.Add(menu))
+		if dialog {
+			runtime.mediaAcknowledged.Store(true)
+			runtime.elements.disclaimer(opened.Add(menu+picker), finished)
+			runtime.acknowledgeMedia(ctx, finished)
 		}
-		body, _ := json.Marshal(disclaimerBody(mediaDisclaimer, time.Now()))
-		runtime.sendPageRPCs(ctx, runtime.headers.Get("x-goog-api-key"), runtime.headers.Get("x-aistudio-visit-id"), runtime.headers.Get("x-goog-ext-519733851-bin"), []pageRPC{{"UpdateUserPreferences", string(body)}})
-	})
+	}
+	return runtime.pageToken()
+}
+
+// pageToken 返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
+func (runtime *goWAARuntime) pageToken() string {
 	if time.Since(runtime.tokenAt) > pageTokenLifetime {
 		return ""
 	}
 	return runtime.accessToken
 }
 
-// uploaded 在服务上传完附件后像官网输入框显示附件一样立即为每个附件发出只含该文件的 CountTokens，等待响应并把统计出的 token 数计入页面 token 统计，记下读取附件的 drive
+// acknowledgeMedia 像官网点击首次上传素材提示的确认一样以 Priority u=0 发出确认时刻为 confirmed 的 UpdateUserPreferences，不等响应
+func (runtime *goWAARuntime) acknowledgeMedia(ctx context.Context, confirmed time.Time) {
+	headers, err := runtime.rpcHeaders(runtime.headers.Get("x-goog-api-key"))
+	if err != nil {
+		return
+	}
+	headers.Set("X-AIStudio-Visit-Id", runtime.headers.Get("x-aistudio-visit-id"))
+	if extension := runtime.headers.Get("x-goog-ext-519733851-bin"); extension != "" {
+		headers.Set("X-Goog-Ext-519733851-Bin", extension)
+	}
+	headers.Set("Priority", "u=0")
+	body, _ := json.Marshal(disclaimerBody(mediaDisclaimer, confirmed))
+	go func() {
+		runtime.drain(runtime.do(context.WithoutCancel(ctx), http.MethodPost, makerSuiteRPCURL+"UpdateUserPreferences", body, headers))
+	}()
+}
+
+// uploaded 在服务上传完附件后像官网输入框显示附件一样立即经 drive.count 由页面为每个附件发出只含该文件的 CountTokens，等待响应并把统计出的 token 数计入页面 token 统计，记下读取附件的 drive
 func (runtime *goWAARuntime) uploaded(ctx context.Context, files []FileRef, drive pageDrive) {
 	model := runtime.elements.pageModel()
 	for _, file := range files {
@@ -492,6 +597,22 @@ func (runtime *goWAARuntime) uploaded(ctx context.Context, files []FileRef, driv
 			runtime.elements.chipCounted(int(count.InputTokens))
 		}
 		runtime.attachedFiles.Store(file.ID, drive)
+	}
+}
+
+// inlined 在页面没有 Drive 令牌、附件内联时像官网输入框显示附件一样立即经 count 由页面为每个附件发出只含该文件内联数据的 CountTokens，等待响应并把统计出的 token 数计入页面 token 统计；rerun 为真且本页面点过 Run 时附件已在对话中，不发
+func (runtime *goWAARuntime) inlined(ctx context.Context, rerun bool, files []inlineFile, count func(context.Context, []byte) ([]byte, error)) {
+	if rerun && !runtime.pointer.Clicked().IsZero() {
+		return
+	}
+	model := runtime.elements.pageModel()
+	for _, file := range files {
+		data := []any{file.blob.MIME, base64.StdEncoding.EncodeToString(file.blob.Data), nil, nil, nil, file.name}
+		body, _ := json.Marshal([]any{model, nil, []any{model, []any{[]any{[]any{[]any{nil, nil, data}}, "user"}}}})
+		if counted, err := count(ctx, body); err == nil {
+			tokens, _ := ParseTokenCount(bytes.NewReader(counted))
+			runtime.elements.chipCounted(int(tokens.InputTokens))
+		}
 	}
 }
 
@@ -525,6 +646,7 @@ func (runtime *goWAARuntime) rejectCookieBar(ctx context.Context) error {
 		return errors.New("Cookie 提示条文案或 API key 未载入")
 	}
 	now := time.Now()
+	runtime.analytics.rejected(now)
 	record := cookieBarRecord{Category: "2A", Date: now.UTC().Format("2006-01-02T15:04:05.000Z"), SiteID: cookieBarSite, Status: "REJECTED", UUID: uuid.NewString()}
 	body, err := json.Marshal([]any{auditRecordBody(text, record), 264, []any{nil, nil, nil, nil, []any{runtime.userAgent, runtime.cookieBarLanguage}}, []any{now.UnixMilli(), now.UnixMilli()}})
 	if err != nil {

@@ -255,6 +255,10 @@ export const messages: Record<TranslationKey, string> = {
   'logs.cachedTokens': 'Cached tokens',
   'logs.totalTokens': 'Total tokens',
   'logs.inputMessages': 'Input messages',
+  'logs.proofLock': 'Waiting for page',
+  'logs.proofInteraction': 'Page actions',
+  'logs.proofRefresh': 'Waiting for WAA refresh',
+  'logs.proofCompute': 'WAA compute',
   'logs.finishReason': 'Finish reason',
   'logs.errorDetail': 'Error',
   'logs.finish.stop': 'Finished',
@@ -2161,6 +2165,8 @@ export const messages: Record<TranslationKey, string> = {
     'Open-source terminal coding agent, connected as a custom provider in models.json',
   'access.client.omp': 'Extended version of pi, with web search through the Gemini API',
   'access.client.dsh': 'DeepSeek’s terminal agent, with a custom provider added from a patch file',
+  'access.client.agy':
+    'Google’s terminal agent, connected with a Gemini API key; pick the model with /model in agy',
   'access.client.cherry':
     'Desktop AI client that adds providers of the OpenAI, Gemini, or Anthropic type',
   'access.client.sillytavern':

@@ -74,6 +74,8 @@ type assistantOpenedApplet struct {
 	metadata []any
 	// devURL 是应用开发环境地址
 	devURL string
+	// snapshot 是应用最近一次快照的时间戳，应用没有快照时为 nil
+	snapshot any
 }
 
 // title 返回应用元数据中的标题与简介
@@ -217,7 +219,7 @@ func firstString(values []any, index int) string {
 	return value
 }
 
-// openAssistantApplet 照官网从 My apps 打开账户的应用：读取应用后同时记入最近使用、开通开发环境并列出密钥、任务与 trajectory，再列出文件并签发令牌，本进程每个应用只打开一次；应用以 404 报告不存在时返回 errAssistantAppletGone
+// openAssistantApplet 照官网从 My apps 打开账户的应用：读取应用后同时读取快照、对话记录、功能与待处理的对比、记入最近使用、开通开发环境并列出密钥、任务与 trajectory，之后在后台列出文件、读取日志并签发令牌，本进程每个应用只打开一次；应用以 404 报告不存在时返回 errAssistantAppletGone
 func (c *Client) openAssistantApplet(ctx context.Context, lease *AccountLease, applet string, model string) (assistantOpenedApplet, error) {
 	accountID := lease.Account().ID
 	if opened, ok := c.assistants.get(accountID, applet); ok {
@@ -238,6 +240,13 @@ func (c *Client) openAssistantApplet(ctx context.Context, lease *AccountLease, a
 	title, description := opened.title()
 	var group sync.WaitGroup
 	group.Go(func() {
+		snapshot := []any{applet, true}
+		if opened.snapshot != nil {
+			snapshot = []any{applet, nil, opened.snapshot}
+		}
+		c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "GetCodeAssistantSnapshot", snapshot)
+	})
+	group.Go(func() {
 		c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "StoreRecentApplet", []any{[]any{nil, nil, appletReference(applet), title, description, nil, int64(1)}})
 	})
 	group.Go(func() {
@@ -245,19 +254,44 @@ func (c *Client) openAssistantApplet(ctx context.Context, lease *AccountLease, a
 			opened.devURL = devURL
 		}
 	})
+	group.Go(func() {
+		c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "ListCodeAssistantFeatures", []any{int64(1)})
+	})
+	group.Go(func() {
+		c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "GetPendingArenaInteraction", []any{applet})
+	})
 	group.Go(func() { c.listAssistantUnsetSecrets(ctx, accountID, applet) })
+	group.Go(func() {
+		c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "LoadCodeAssistantInteractionHistory", []any{applet, int64(100), nil, nil, nil, applet})
+	})
 	group.Go(func() { c.listAssistantGenerations(ctx, accountID, applet) })
 	group.Go(func() { c.listAssistantTrajectories(ctx, accountID, applet) })
 	group.Go(func() { c.listAssistantSecrets(ctx, accountID, applet) })
 	group.Wait()
-	group.Go(func() { c.listAssistantFiles(ctx, accountID, applet) })
-	group.Go(func() { c.mintAssistantToken(ctx, accountID, applet, opened.devURL) })
-	group.Wait()
 	c.assistants.put(accountID, opened)
+	background, stop := context.WithTimeout(context.WithoutCancel(ctx), assistantCleanupTimeout)
+	go func() {
+		defer stop()
+		defer afterServiceStop(background, stop)()
+		var group sync.WaitGroup
+		group.Go(func() { c.listAssistantFiles(background, accountID, applet) })
+		group.Go(func() { c.assistantLogs(background, accountID, applet) })
+		group.Go(func() { c.mintAssistantToken(background, accountID, applet, opened.devURL) })
+		group.Wait()
+	}()
 	return opened, nil
 }
 
-// decodeAssistantApplet 读取 GetApplet 或 CreateApplet 响应第 index 项的应用 [应用 ID, 创建时间, 修改时间, 元数据, ...]，开发环境地址在 field 12
+// assistantLogs 读取应用开发环境缓存的日志并打开日志流，日志流读到 ctx 结束
+func (c *Client) assistantLogs(ctx context.Context, accountID string, applet string) {
+	body := []any{nil, nil, nil, applet}
+	c.assistantCompanion(ctx, accountID, appletControlRPCBase, "GetBufferedLogs", body)
+	if _, err := c.assistantRPC(ctx, accountID, appletControlRPCBase, "StreamLogs", body); err != nil && ctx.Err() == nil {
+		slog.Warn("Build 写代码助手伴随请求失败", "account", accountID, "method", "StreamLogs", "error", err)
+	}
+}
+
+// decodeAssistantApplet 读取 GetApplet 或 CreateApplet 响应第 index 项的应用 [应用 ID, 创建时间, 修改时间, 元数据, ...]，快照时间在 field 7，开发环境地址在 field 12
 func decodeAssistantApplet(raw json.RawMessage, method string, index int) (assistantOpenedApplet, error) {
 	var root []any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -269,7 +303,7 @@ func decodeAssistantApplet(raw json.RawMessage, method string, index int) (assis
 	if id == "" || len(metadata) < 2 {
 		return assistantOpenedApplet{}, &ProtocolEvidenceError{Method: method, Path: fmt.Sprintf("$[%d]", index), Detail: "缺少应用 ID 或元数据", Raw: cloneRaw(raw)}
 	}
-	return assistantOpenedApplet{applet: id, metadata: metadata, devURL: firstString(applet, 11)}, nil
+	return assistantOpenedApplet{applet: id, metadata: metadata, devURL: firstString(applet, 11), snapshot: valueAt(applet, 6)}, nil
 }
 
 // valueAt 返回 values[index]，越界时为 nil
@@ -500,8 +534,8 @@ func (c *Client) afterAssistantCreated(ctx context.Context, accountID string, ap
 	group.Wait()
 }
 
-// afterAssistantTurn 发送官网在回复完成后发出的伴随请求：新应用的第一段对话先开通开发环境并签发令牌，每轮都列出文件与密钥、保存应用并记入最近使用
-func (c *Client) afterAssistantTurn(ctx context.Context, accountID string, model string, target assistantTarget) {
+// afterAssistantTurn 发送官网在回复完成后发出的伴随请求：新应用的第一段对话先开通开发环境并签发令牌，每轮都列出文件与密钥、保存应用、按包含回复的对话 history 生成后续建议并记入最近使用
+func (c *Client) afterAssistantTurn(ctx context.Context, accountID string, model string, target assistantTarget, history []Content) {
 	opened, ok := c.assistants.get(accountID, target.applet)
 	if !ok {
 		return
@@ -532,8 +566,38 @@ func (c *Client) afterAssistantTurn(ctx context.Context, accountID string, model
 		group.Go(func() { c.listAssistantSecrets(ctx, accountID, target.applet) })
 		group.Go(func() { c.listAssistantUnsetSecrets(ctx, accountID, target.applet) })
 	}
-	group.Wait()
 	title, description := opened.title()
+	group.Go(func() { c.suggestAssistantChips(ctx, accountID, model, target.applet, title, description, history) })
+	group.Wait()
 	c.assistantCompanion(ctx, accountID, MakerSuiteRPCBase, "StoreRecentApplet",
 		[]any{[]any{assistantTimestamp(time.Now()), nil, appletReference(target.applet), title, description}})
+}
+
+// suggestAssistantChips 照官网按对话生成后续操作建议，正文为 [对话, proof, 标题, 简介, null, 应用 ID]，对话只含文本 Part，proof 绑定全部文本以空格连接；失败只记入日志
+func (c *Client) suggestAssistantChips(ctx context.Context, accountID string, model string, applet string, title string, description string, history []Content) {
+	var contents []any
+	var texts []string
+	for _, content := range history {
+		var parts []any
+		for _, part := range content.Parts {
+			if part.Text != "" && !part.Thought {
+				parts = append(parts, []any{nil, part.Text})
+				texts = append(texts, part.Text)
+			}
+		}
+		role := "model"
+		if content.Role == RoleUser {
+			role = "user"
+		}
+		if len(parts) > 0 {
+			contents = append(contents, []any{parts, role})
+		}
+	}
+	if len(contents) == 0 {
+		return
+	}
+	if _, err := c.assistantProtectedRPC(ctx, accountID, "GenerateCodeAssistantSuggestionChips", []any{contents, nil, title, description, nil, applet},
+		AppletProtectedRequest{Model: model, Binding: strings.Join(texts, " "), ProofField: 2}); err != nil {
+		slog.Warn("Build 写代码助手伴随请求失败", "account", accountID, "method", "GenerateCodeAssistantSuggestionChips", "error", err)
+	}
 }

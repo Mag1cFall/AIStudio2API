@@ -342,6 +342,11 @@ func (transport *authRetryProtectedTransport) OpenBidiProtected(
 	return session, err
 }
 
+// RanBefore 判断账户页面此前运行过 contents 这同一段对话
+func (transport *authRetryProtectedTransport) RanBefore(accountID string, contents []aistudio.Content) bool {
+	return transport.transport.(aistudio.PageRunsProtectedTransport).RanBefore(accountID, contents)
+}
+
 // DoProtectedTitle 在认证失败后续签同一账户并重放 GenerateTitle 请求
 func (transport *authRetryProtectedTransport) DoProtectedTitle(
 	ctx context.Context,

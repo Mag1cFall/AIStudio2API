@@ -75,7 +75,7 @@
 - **多账户高并发**: 识别 Free、Pro、Ultra 与 Plus 权益，按实时模型目录在账户间轮询或优先复用
 - **两种 WAA 后端**: 默认由服务进程内的 SpiderMonkey（Firefox 的 JavaScript 引擎）生成官方 proof，运行时不下载、不启动浏览器；设置 `WAA_BACKEND=camoufox` 后由 Camoufox 持有官方 WAA 生命周期
 - **四套 API 协议**: OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini GenerateContent；Responses 支持 `/v1/responses/compact` 与 `compaction`、`compaction_trigger` 输入项的上下文压缩，Anthropic Messages 支持 `context_management` 的工具结果与思考清理和阈值压缩
-- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、dsh、OpenClaw、Magpie 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
+- **主流 Agent 客户端**: 支持 Claude Code、Codex、OpenCode、pi、omp、dsh、OpenClaw、Magpie、Antigravity CLI 的文件读写工具调用，Claude Code、Codex、omp 的原生联网搜索可直接使用
 
 ## 特性
 
@@ -131,7 +131,7 @@ npm ci
 npm run build
 cd ..
 mkdir spidermonkey
-curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
+curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.2/spidermonkey-v158.0.1-aistudio2api.2-windows-amd64.tar.gz
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
@@ -203,7 +203,7 @@ cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
 mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
+curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.2/spidermonkey-v158.0.1-aistudio2api.2-$platform-$arch.tar.gz | tar -xz -C spidermonkey
 mkdir -p libwebp
 curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
@@ -399,6 +399,14 @@ modelRoles:
   web: aistudio-gemini/gemini-3.8-flash
 ```
 
+[Antigravity CLI](https://antigravity.google/docs/install?tab=cli)（`agy`）使用 Gemini 接口。在 `~/.gemini/antigravity-cli/settings.json` 中写入 `{"modelProvider": "gemini"}`，设置以下环境变量后运行 `agy`，模型在 agy 中用 `/model` 选择：
+
+```powershell
+$env:GEMINI_API_KEY = "<PROXY_API_KEY>"
+$env:GOOGLE_GEMINI_BASE_URL = "http://127.0.0.1:2048"
+agy
+```
+
 主要端点：
 
 | 能力 | 端点 |
@@ -417,6 +425,8 @@ modelRoles:
 | 视频 | `POST /v1/videos`、`GET /v1/videos`、`GET`/`DELETE /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | Gemini 视频 | `POST /v1beta/models/{model}:predictLongRunning`、`GET /v1beta/operations/{id}` |
 | Live（含实时翻译、实时转录与实时音乐）/ Robotics | `GET /v1/live`、`GET /v1/robotics/stream` |
+
+Gemini 的 `/v1beta` 路径在 `/v1` 下同样可用，Google Gen AI SDK 3.x 默认使用 `/v1`。`/v1/models` 与 `/v1/files` 的请求带 `x-goog-api-key` 请求头或 `key` 参数且不带 `Authorization` 时按 Gemini 格式返回，其余按 OpenAI 格式返回。
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 

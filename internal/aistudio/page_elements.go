@@ -2,7 +2,6 @@ package aistudio
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +27,8 @@ const (
 	pageElementsSource = 2712
 	// pageElementsDelay 是官网界面元素日志从一批的第一条事件到发出这批的延迟
 	pageElementsDelay = 10 * time.Second
+	// pageElementsBurst 是虚拟时钟上一串界面操作在真实时间中执行完所需的上限，发出时刻已过的一批等它结束再发出
+	pageElementsBurst = 200 * time.Millisecond
 	// pageElementsBeaconSize 与 pageElementsBeacons 是页面隐藏时每个 sendBeacon 的事件数与 sendBeacon 个数上限
 	pageElementsBeaconSize, pageElementsBeacons = 32, 10
 	// pageElementsPath 是界面元素日志上下文中官网新对话页的路由
@@ -79,7 +82,7 @@ const pageMainFirst = 233240
 // pageTurnElements 是对话每个模型轮次下方的一组按钮，第二个与第四个为 Rerun 按钮
 var pageTurnElements = []int{228330, veRerun, veTurnLate, veRerun}
 
-// pageThoughtTurnElements 是带思考的模型轮次在回答结束时曝光的一组按钮，veTurnLate 约 1 s 后单独曝光
+// pageThoughtTurnElements 是带思考的模型轮次在回答结束时曝光的一组按钮，最后的正文段更多选项按钮在 Rerun 中随正文段曝光，veTurnLate 在下一次扫描中单独曝光
 var pageThoughtTurnElements = []int{228330, veRerun, veRerun, veRerun, veChunkOptions}
 
 // veTurnLate 是模型轮次下方按钮组的第三个元素
@@ -88,8 +91,11 @@ const veTurnLate = 269715
 // pageRunElements 是回答结束后输入区重新曝光的元素
 var pageRunElements = []int{234541, 234542}
 
-// pageFunctionCallElements 是回答为函数调用时在回答结束时曝光的模型轮次按钮与函数调用块中的函数响应输入区，输入区不重新曝光
-var pageFunctionCallElements = []int{228330, veRerun, veTurnLate, 273046, 273045}
+// pageFunctionCallElements 是回答为函数调用时在回答结束时曝光的模型轮次按钮，输入区不重新曝光
+var pageFunctionCallElements = []int{228330, veRerun, veTurnLate}
+
+// pageFunctionCallBlock 是函数调用块渲染时曝光的函数响应输入区
+var pageFunctionCallBlock = []int{273046, 273045}
 
 // pageFunctionResultElements 是在函数调用块中提交函数结果后的回答结束时曝光的两个模型轮次的按钮与输入区
 var pageFunctionResultElements = []int{228330, veRerun, veTurnLate, veRerun, veTurnLate, veRerun, 234541, 234542}
@@ -104,38 +110,114 @@ type veData struct {
 
 // MarshalJSON 按官网页面的键序编码附加数据
 func (data veData) MarshalJSON() ([]byte, error) {
-	var buffer bytes.Buffer
-	buffer.WriteByte('{')
-	write := func(key string, value any) error {
-		if buffer.Len() > 1 {
-			buffer.WriteByte(',')
+	return data.appendJSON(nil), nil
+}
+
+// appendJSON 把按官网页面键序编码的附加数据追加到 dst
+func (data veData) appendJSON(dst []byte) []byte {
+	start := len(dst)
+	dst = append(dst, '{')
+	key := func(name string) {
+		if len(dst) > start+1 {
+			dst = append(dst, ',')
 		}
-		encoded, err := scriptJSON(value)
-		buffer.WriteString(`"` + key + `":` + encoded)
-		return err
+		dst = append(dst, `"`+name+`":`...)
 	}
 	if data.at != 0 {
-		if err := write("126", []any{[]any{data.at}}); err != nil {
-			return nil, err
-		}
+		key("126")
+		dst = append(strconv.AppendInt(append(dst, "[["...), data.at, 10), "]]"...)
 	}
 	if data.page != nil {
-		if err := write("340", data.page); err != nil {
-			return nil, err
-		}
+		key("340")
+		dst = appendScriptJSON(dst, data.page)
 	}
 	if data.shown != 0 {
-		if err := write("618", []any{[]any{data.shown}}); err != nil {
-			return nil, err
-		}
+		key("618")
+		dst = append(strconv.AppendInt(append(dst, "[["...), data.shown, 10), "]]"...)
 	}
 	if data.detail != nil {
-		if err := write("1174", data.detail); err != nil {
-			return nil, err
-		}
+		key("1174")
+		dst = appendScriptJSON(dst, data.detail)
 	}
-	buffer.WriteByte('}')
-	return buffer.Bytes(), nil
+	return append(dst, '}')
+}
+
+// appendScriptJSON 把 value 按 scriptJSON 的编码追加到 dst：界面元素事件中的 nil、整数、字符串、数组与附加数据直接追加，其余类型经 scriptJSON 编码
+func appendScriptJSON(dst []byte, value any) []byte {
+	switch value := value.(type) {
+	case nil:
+		return append(dst, "null"...)
+	case int:
+		return strconv.AppendInt(dst, int64(value), 10)
+	case int64:
+		return strconv.AppendInt(dst, value, 10)
+	case string:
+		return appendScriptString(dst, value)
+	case []any:
+		dst = append(dst, '[')
+		for index, item := range value {
+			if index > 0 {
+				dst = append(dst, ',')
+			}
+			dst = appendScriptJSON(dst, item)
+		}
+		return append(dst, ']')
+	case veData:
+		return value.appendJSON(dst)
+	default:
+		encoded, _ := scriptJSON(value)
+		return append(dst, encoded...)
+	}
+}
+
+// appendScriptString 把 text 按 encoding/json 不转义 HTML 字符时的规则编码为 JSON 字符串追加到 dst
+func appendScriptString(dst []byte, text string) []byte {
+	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
+	start := 0
+	for index := 0; index < len(text); {
+		if b := text[index]; b < utf8.RuneSelf {
+			if b >= 0x20 && b != '"' && b != '\\' {
+				index++
+				continue
+			}
+			dst = append(dst, text[start:index]...)
+			switch b {
+			case '"', '\\':
+				dst = append(dst, '\\', b)
+			case '\b':
+				dst = append(dst, '\\', 'b')
+			case '\f':
+				dst = append(dst, '\\', 'f')
+			case '\n':
+				dst = append(dst, '\\', 'n')
+			case '\r':
+				dst = append(dst, '\\', 'r')
+			case '\t':
+				dst = append(dst, '\\', 't')
+			default:
+				dst = append(dst, '\\', 'u', '0', '0', hex[b>>4], hex[b&0xf])
+			}
+			index++
+			start = index
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[index:])
+		if r == utf8.RuneError && size == 1 {
+			dst = append(append(dst, text[start:index]...), "\ufffd"...)
+			index += size
+			start = index
+			continue
+		}
+		if r == '\u2028' || r == '\u2029' {
+			dst = append(append(dst, text[start:index]...), '\\', 'u', '2', '0', '2', hex[r&0xf])
+			index += size
+			start = index
+			continue
+		}
+		index += size
+	}
+	return append(append(dst, text[start:]...), '"')
 }
 
 // starterSeries 是 starterModule 中一个模型系列的入门卡片，models 为官网判断页面模型属于该系列的名单
@@ -311,7 +393,9 @@ type pageElements struct {
 	seq    int
 	batch  []encodedEvent
 	timer  *time.Timer
-	tier   string
+	// due 是这一批按第一条事件时刻应发出的时刻，之后时刻的事件进入下一批
+	due  time.Time
+	tier string
 	// contextJSON 是带 contextTier 权益的上下文编码后的 JSON 字符串字面量，同一权益的事件共用
 	contextJSON []byte
 	contextTier string
@@ -331,6 +415,26 @@ type pageElements struct {
 	exposed map[int]int
 	// level 是思考档位下拉框的当前值，页面模型没有思考档位时为 0
 	level int64
+	// levelChanged 表示上次点击 Run 之后改过思考档位，下一次回答随回答占位再曝光一次下拉框
+	levelChanged bool
+	// models 是页面 ListModels 中的模型，模型面板按它列出各行
+	models []catalogModel
+	// recorded 是上一条事件的时刻
+	recorded time.Time
+	// queued 是以 later 安排、尚未执行的后续事件
+	queued []laterAction
+	// allSeries 是 starterModule 中全部模型系列，换模型后按新模型取入门卡片
+	allSeries []starterSeries
+	// panel 是模型面板打开时曝光、随后进入视口的元素序号与 VE，tabs 是其中各分类页签的
+	panel [][2]int
+	tabs  [][2]int
+	// listing 是模型面板当前分类的元素参数，rows 是该分类中各模型行的曝光序号，listed 是 All 分类中各行元素的序号、VE 与是否跟踪可见性，listedBottom 是 All 分类曝光时视口中最下面一行
+	listing      string
+	rows         map[string]int
+	listed       [][][3]int
+	listedBottom int
+	// viewport 是页面视口高度
+	viewport float64
 	// thoughtsRendered 表示本页已渲染过思考面板
 	thoughtsRendered bool
 	// answers 是本页已完成的回答数
@@ -338,6 +442,9 @@ type pageElements struct {
 	// chips 是上次点击 Run 之后输入框中附件的 CountTokens 总数
 	chips   int
 	pending *pageTurn
+	// scanned 是 VE 记录器上一次扫描曝光元素的时刻，scanQueued 表示节流窗口结束时还有一次扫描
+	scanned    time.Time
+	scanQueued bool
 	// render 在页面框架、主体与入门卡片渲染时请求其中的图片与字体
 	render func(part pageRenderPart, images []string)
 }
@@ -366,7 +473,7 @@ func (log *pageElements) rendered(part pageRenderPart, images []string) {
 // newPageElements 建立页面载入的界面元素日志：window 为浏览器窗口 ID，experiments 为页面 WIZ 数据的实验 ID
 func newPageElements(send func(clearcutShape, []byte), locale string, zone *time.Location, experiments []int64, window string, language string, model string) *pageElements {
 	return &pageElements{
-		send: send, locale: locale, zone: zone, model: model, exposed: map[int]int{},
+		send: send, locale: locale, zone: zone, model: model, exposed: map[int]int{}, rows: map[string]int{},
 		context: []any{nil, nil, nil, nil, experiments, pageElementsPath, window, nil, language, nil, pageElementsHost, uuid.NewString()},
 	}
 }
@@ -381,8 +488,9 @@ func (log *pageElements) ref(seq int) []any {
 	return []any{[]any{log.origin, 0, 0}, seq}
 }
 
-// record 以下一个序号记录 body 构造的事件，第一条事件开始计时发出这一批；调用方持有 mu
-func (log *pageElements) record(body func(seq int) []any) int {
+// record 以下一个序号记录 body 构造的事件，事件时刻为 at（早于上一条事件时取上一条的时刻），第一条事件开始计时发出这一批；调用方持有 mu
+func (log *pageElements) record(at time.Time, body func(seq int) []any) int {
+	log.runPending(at)
 	log.seq++
 	if log.contextJSON == nil || log.contextTier != log.tier {
 		context := log.context
@@ -393,44 +501,58 @@ func (log *pageElements) record(body func(seq int) []any) int {
 		literal, _ := scriptJSON(encodedContext)
 		log.contextJSON, log.contextTier = []byte(literal), log.tier
 	}
-	encodedBody, _ := scriptJSON(body(log.seq))
-	event := clearcutEvent(24, time.Now(), log.zone, "")
-	event[20] = log.seq
-	event[23] = encodedBody
-	head, _ := scriptJSON(event[:7])
-	tail, _ := scriptJSON(event[8:])
-	log.batch = append(log.batch, encodedEvent{head: []byte(head[:len(head)-1] + ","), context: log.contextJSON, tail: []byte("," + tail[1:])})
+	now := at
+	if now.Before(log.recorded) {
+		now = log.recorded
+	}
+	log.recorded = now
+	if log.timer != nil && !now.Before(log.due) {
+		log.timer.Stop()
+		events := log.batch
+		log.batch, log.timer = nil, nil
+		log.sendGzip(clearcutClient(log.locale, nil, 4), events, time.Now())
+	}
+	_, offset := now.In(log.zone).Zone()
+	head := append(strconv.AppendInt([]byte{'['}, now.UnixMilli(), 10), ",null,null,null,null,null,null,"...)
+	tail := strconv.AppendInt([]byte(",null,null,null,null,null,null,"), int64(-offset), 10)
+	tail = strconv.AppendInt(append(tail, ",null,null,null,null,null,"...), int64(log.seq), 10)
+	tail = append(appendScriptString(append(tail, ",null,null,"...), string(appendScriptJSON(nil, body(log.seq)))), ']')
+	log.batch = append(log.batch, encodedEvent{head: head, context: log.contextJSON, tail: tail})
 	if log.timer == nil {
-		log.timer = time.AfterFunc(pageElementsDelay, log.flush)
+		log.due = now.Add(pageElementsDelay)
+		log.timer = time.AfterFunc(max(time.Until(log.due), pageElementsBurst), log.flush)
 	}
 	return log.seq
 }
 
-// flush 发出积攒的一批事件
+// flush 发出积攒的一批事件：持锁取出这一批并记下发出时刻，编码与压缩在锁外进行
 func (log *pageElements) flush() {
 	log.mu.Lock()
-	defer log.mu.Unlock()
 	if log.closed {
+		log.mu.Unlock()
 		return
 	}
-	log.sendGzip(clearcutClient(log.locale, nil, 4), log.batch)
+	events, now := log.batch, time.Now()
 	log.batch, log.timer = nil, nil
+	log.mu.Unlock()
+	log.sendGzip(clearcutClient(log.locale, nil, 4), events, now)
 }
 
-// sendGzip 以 gzip 正文发出 events，客户端信息为 client
-func (log *pageElements) sendGzip(client []any, events []encodedEvent) {
-	var body bytes.Buffer
-	writer := pageElementsWriters.Get().(*gzip.Writer)
-	defer pageElementsWriters.Put(writer)
-	writer.Reset(&body)
-	writer.OS = 10
-	writeElementsPayload(writer, client, events)
-	_ = writer.Close()
-	log.send(clearcutGzip, body.Bytes())
+// sendGzip 以官网页面 CompressionStream 压缩的 gzip 正文发出 events，客户端信息为 client，now 为发出时刻
+func (log *pageElements) sendGzip(client []any, events []encodedEvent, now time.Time) {
+	body := elementsPayloads.Get().(*bytes.Buffer)
+	body.Reset()
+	writeElementsPayload(body, client, events, now)
+	compressed := mozjs.Gzip(body.Bytes())
+	elementsPayloads.Put(body)
+	log.send(clearcutGzip, compressed)
 }
 
-// writeElementsPayload 把客户端信息为 client 的一批事件按官网上报正文写入 writer
-func writeElementsPayload(writer io.Writer, client []any, events []encodedEvent) {
+// elementsPayloads 是压缩界面元素日志批次前复用的正文缓冲区
+var elementsPayloads = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+// writeElementsPayload 把客户端信息为 client、发出时刻为 now 的一批事件按官网上报正文写入 writer
+func writeElementsPayload(writer io.Writer, client []any, events []encodedEvent, now time.Time) {
 	head, _ := scriptJSON([]any{client, pageElementsSource})
 	_, _ = writer.Write([]byte(head[:len(head)-1] + ",["))
 	for index, event := range events {
@@ -441,7 +563,7 @@ func writeElementsPayload(writer io.Writer, client []any, events []encodedEvent)
 		_, _ = writer.Write(event.context)
 		_, _ = writer.Write(event.tail)
 	}
-	_, _ = writer.Write([]byte("]," + strconv.FormatInt(time.Now().UnixMilli(), 10) + "]"))
+	_, _ = writer.Write([]byte("]," + strconv.FormatInt(now.UnixMilli(), 10) + "]"))
 }
 
 // encodedEvent 是一条已编码为 JSON 的界面元素事件：载荷之前的字段、上下文载荷与载荷之后的字段
@@ -449,15 +571,9 @@ type encodedEvent struct {
 	head, context, tail []byte
 }
 
-// pageElementsWriters 是发出界面元素日志批次时复用的 gzip 写入器
-var pageElementsWriters = sync.Pool{New: func() any {
-	writer, _ := gzip.NewWriterLevel(nil, gzip.DefaultCompression)
-	return writer
-}}
-
 // pageEvent 记录页面事件
 func (log *pageElements) pageEvent(ve int, at time.Time, page any) int {
-	return log.record(func(seq int) []any {
+	return log.record(at, func(seq int) []any {
 		element := append([]any{ve, nil, 1}, make([]any, 11)...)
 		element = append(element, []any{veData{at: at.UnixMilli(), page: page}})
 		return []any{log.ref(seq), nil, nil, element, nil, nil, nil, nil, []any{}}
@@ -466,7 +582,7 @@ func (log *pageElements) pageEvent(ve int, at time.Time, page any) int {
 
 // shown 记录元素曝光并记下它的序号，tracked 为跟踪可见性的元素
 func (log *pageElements) shown(ve int, at time.Time, detail any, tracked bool) int {
-	seq := log.record(func(seq int) []any {
+	seq := log.record(at, func(seq int) []any {
 		element := []any{ve, veData{shown: at.UnixMilli(), detail: detail}}
 		if tracked {
 			element = []any{ve, nil, nil, nil, nil, 1, veData{shown: at.UnixMilli(), detail: detail}}
@@ -474,12 +590,42 @@ func (log *pageElements) shown(ve int, at time.Time, detail any, tracked bool) i
 		return []any{log.ref(seq), []any{element}, nil, nil, nil, nil, nil, nil, []any{log.ref(seq)}}
 	})
 	log.exposed[ve] = seq
+	log.settleScan(at)
+	if !log.scanQueued && !at.Before(log.scanned.Add(veThrottle)) {
+		log.scanned = at
+	}
 	return seq
+}
+
+// veThrottle 是官网 VE 记录器扫描曝光元素的节流间隔：页面内容变化（对话区滚动、载入）后立即扫描，此后这段时间内的变化合并到窗口结束时再扫描一次
+const veThrottle = 500 * time.Millisecond
+
+// scan 返回 at 时刻页面内容变化后 VE 记录器扫描的时刻：节流窗口外即为 at，窗口内为窗口结束时；调用方持有 mu
+func (log *pageElements) scan(at time.Time) time.Time {
+	log.settleScan(at)
+	if end := log.scanned.Add(veThrottle); at.Before(end) {
+		log.scanQueued = true
+		return end
+	}
+	log.scanned = at
+	return at
+}
+
+// settleScan 把 at 之前已到窗口结束时刻的扫描记为上一次扫描；调用方持有 mu
+func (log *pageElements) settleScan(at time.Time) {
+	if end := log.scanned.Add(veThrottle); log.scanQueued && !at.Before(end) {
+		log.scanned, log.scanQueued = end, false
+	}
+}
+
+// scanFrame 返回扫描时刻 scan 之后在其后的动画帧中完成扫描、曝光新元素的时刻（15–44 ms 后），同一次扫描的元素时刻相同
+func scanFrame(scan time.Time) time.Time {
+	return scan.Add(time.Duration(15+scan.UnixMilli()%30) * time.Millisecond)
 }
 
 // visible 记录跟踪元素进入视口
 func (log *pageElements) visible(target int, ve int, at time.Time) int {
-	return log.record(func(seq int) []any {
+	return log.record(at, func(seq int) []any {
 		state := []any{[]any{[]any{[]any{nil, []any{0, ve}, log.ref(target)}, 1, nil, at.UnixMilli() * 1000}}}
 		return []any{log.ref(seq), nil, log.ref(target), nil, nil, nil, state, nil, []any{log.ref(target)}}
 	})
@@ -487,7 +633,7 @@ func (log *pageElements) visible(target int, ve int, at time.Time) int {
 
 // clicked 记录对 target 处元素的点击
 func (log *pageElements) clicked(target int, ve int, detail any, at time.Time) int {
-	return log.record(func(seq int) []any {
+	return log.record(at, func(seq int) []any {
 		element := []any{ve}
 		if detail != nil {
 			element = append(element, detail)
@@ -496,6 +642,42 @@ func (log *pageElements) clicked(target int, ve int, detail any, at time.Time) i
 		action = append(action, []any{element}, []any{veData{at: at.UnixMilli()}})
 		return []any{log.ref(seq), nil, log.ref(target), action, nil, nil, nil, nil, []any{log.ref(target)}}
 	})
+}
+
+// laterAction 是以 later 安排在 at 时刻执行的后续事件
+type laterAction struct {
+	at     time.Time
+	action func()
+}
+
+// later 安排在 at 时刻持有 mu 执行 action，at 之后时刻的事件记录前先执行它，日志关闭后不再执行；调用方持有 mu
+func (log *pageElements) later(at time.Time, action func()) {
+	log.queued = append(log.queued, laterAction{at, action})
+	time.AfterFunc(time.Until(at), func() {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		if !log.closed {
+			log.runPending(at)
+		}
+	})
+}
+
+// runPending 按时刻先后执行 at 及之前以 later 安排的后续事件；调用方持有 mu
+func (log *pageElements) runPending(at time.Time) {
+	for {
+		index := -1
+		for current, item := range log.queued {
+			if !item.at.After(at) && (index < 0 || item.at.Before(log.queued[index].at)) {
+				index = current
+			}
+		}
+		if index < 0 {
+			return
+		}
+		item := log.queued[index]
+		log.queued = slices.Delete(log.queued, index, index+1)
+		item.action()
+	}
 }
 
 // after 在 at 时刻持有 mu 执行 action，日志关闭后不再执行
@@ -549,6 +731,7 @@ func (log *pageElements) catalog(at time.Time, tier string, models []catalogMode
 	if index := slices.IndexFunc(models, func(model catalogModel) bool { return model.name == log.model }); index >= 0 {
 		log.level = models[index].level
 	}
+	log.models = models
 	log.mainTier = tier
 	log.mainAt = at.Add(time.Duration(390+rand.IntN(20)) * time.Millisecond)
 	if log.mainAt.Before(log.shellAt) {
@@ -608,6 +791,7 @@ func (log *pageElements) showMain() {
 func (log *pageElements) starters(series []starterSeries) {
 	log.mu.Lock()
 	defer log.mu.Unlock()
+	log.allSeries = series
 	log.series = modelSeries(series, log.model)
 	if !log.closed && log.series != nil && !log.cardsAt.IsZero() {
 		log.showCards(time.Now())
@@ -653,12 +837,13 @@ func (log *pageElements) press(at time.Time, rerun bool) {
 	if log.closed {
 		return
 	}
+	log.runPending(at)
 	if rerun {
 		log.clicked(log.exposed[veRerun], veRerun, nil, at)
 	} else {
 		log.clicked(log.exposed[veRun], veRun, veData{detail: modelDetail(log.model)}, at)
 	}
-	log.pending = &pageTurn{log: log, rerun: rerun}
+	log.pending = &pageTurn{log: log, rerun: rerun, pressed: at}
 }
 
 // submit 记录在函数调用块中提交函数结果：提交按钮没有点击事件，随后的回答按提交函数结果的回答记录
@@ -666,7 +851,7 @@ func (log *pageElements) submit() {
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	if !log.closed {
-		log.pending = &pageTurn{log: log, result: true}
+		log.pending = &pageTurn{log: log, result: true, pressed: time.Now()}
 	}
 }
 
@@ -674,7 +859,9 @@ func (log *pageElements) submit() {
 type pageTurn struct {
 	log   *pageElements
 	rerun bool
-	model string
+	// pressed 是点击 Run、Rerun 或提交函数结果的时刻
+	pressed time.Time
+	model   string
 	// turns 是回答后对话中的模型轮次数
 	turns int
 	// first 表示这是本页第一次回答
@@ -690,8 +877,12 @@ type pageTurn struct {
 	attachments int
 	// thoughts 表示回答中出现了思考 Part
 	thoughts bool
+	// stopped 表示 Rerun 换成 Stop 的按钮已安排曝光，回答结束时 Run 按钮随之重新曝光
+	stopped bool
 	// result 表示这是提交函数结果后的回答，call 表示回答中出现了函数调用 Part
 	result, call bool
+	// block 是函数调用块的输入区等待曝光的扫描时刻，与回答结束组同一次扫描时按页面顺序排在模型轮次按钮之后
+	block time.Time
 	// input、output 与 total 是响应最后一帧 usage 中的输入、可见输出与总 token 数
 	input, output, total int
 }
@@ -726,69 +917,156 @@ func (log *pageElements) turn(body []byte, counting bool) *pageTurn {
 	return turn
 }
 
-// started 在 GenerateContent 响应头到达（at）时曝光回答占位，与 Run 按钮在指针下换成 Stop 同时渲染，Rerun 没有这一步
-func (turn *pageTurn) started(at time.Time) {
+// changed 安排页面内容在 at 时刻变化（对话区重新布局并滚动）：VE 记录器按节流扫描，show 在这次扫描完成的时刻曝光新渲染的元素，show 为 nil 时只推进节流；调用方持有 mu
+func (log *pageElements) changed(at time.Time, show func(shown time.Time)) {
+	log.later(at, func() {
+		scan := log.scan(at)
+		if show == nil {
+			return
+		}
+		shown := scanFrame(scan)
+		log.later(shown, func() { show(shown) })
+	})
+}
+
+// started 在点击 Run 或提交函数结果后 80–150 ms 页面渲染对话轮次时安排回答占位的曝光：用户轮次与模型占位的各段与换成 Stop 的按钮，提交函数结果只多模型占位一段；跟踪可见性的模型占位在其后一帧渲染，扫描已排在节流窗口结束时与其余元素一同曝光（排在 Stop 按钮之前），否则在窗口结束时单独曝光。Rerun 在原处重新生成，对话区不滚动，换成 Stop 的按钮在回答中第一次扫描时曝光
+func (turn *pageTurn) started() {
 	if turn.rerun {
 		return
 	}
 	log := turn.log
-	log.after(at, func() {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	render := turn.pressed.Add(time.Duration(80+rand.IntN(70)) * time.Millisecond)
+	var placeholder time.Time
+	together := false
+	log.changed(render, func(shown time.Time) {
+		together = placeholder.Equal(shown)
 		if turn.first {
-			log.shown(313896, at, nil, false)
+			log.shown(313896, shown, nil, false)
 		}
 		chunks := 2 + turn.attachments
 		if turn.result {
 			chunks = 1
 		}
 		for range chunks {
-			log.shown(veChunkOptions, at, nil, false)
+			log.shown(veChunkOptions, shown, nil, false)
 		}
-		log.shown(243616, at, nil, true)
+		if together {
+			log.shown(243616, shown, nil, true)
+		}
 		if turn.first {
-			log.shown(veScrollbar, at, nil, false)
+			log.shown(veScrollbar, shown, nil, false)
 		}
-		log.shown(250044, at, modelDetail(turn.model), false)
+		log.shown(250044, shown, modelDetail(turn.model), false)
+		if log.levelChanged {
+			log.shown(veLevel, shown, levelDetail(log.level), false)
+			log.levelChanged = false
+		}
+	})
+	tracked := render.Add(25 * time.Millisecond)
+	log.later(tracked, func() {
+		placeholder = scanFrame(log.scan(tracked))
+		log.later(placeholder, func() {
+			if !together {
+				log.shown(243616, placeholder, nil, true)
+			}
+		})
 	})
 }
 
-// thought 在回答的第一个思考 Part 到达（at）时曝光思考面板，带附件的对话随后长出对话区滚动条；Rerun 没有这一步
+// thought 在回答的第一个思考 Part 到达（at）时渲染思考面板，带附件的对话约 1 s 后长出对话区滚动条
 func (turn *pageTurn) thought(at time.Time) {
-	if turn.rerun {
-		return
-	}
 	log := turn.log
-	log.after(at, func() {
-		turn.thoughts = true
-		log.shown(veThoughts, at, append(make([]any, 18), []any{1, 2}), false)
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	turn.thoughts = true
+	turn.change(at, func(shown time.Time) {
+		log.shown(veThoughts, shown, append(make([]any, 18), []any{1, 2}), false)
 		if !log.thoughtsRendered {
 			log.thoughtsRendered = true
 			log.rendered(pageRenderThoughts, nil)
 		}
 	})
-	if turn.attachments > 0 {
+	if turn.attachments > 0 && !turn.rerun {
 		scrollbar := at.Add(time.Duration(980+rand.IntN(30)) * time.Millisecond)
-		log.after(scrollbar, func() { log.shown(veScrollbar, scrollbar, nil, false) })
+		log.changed(scrollbar, func(shown time.Time) { log.shown(veScrollbar, shown, nil, false) })
 	}
 }
 
-// functionCall 在回答的第一个函数调用 Part 到达（at）时记下回答是函数调用
-func (turn *pageTurn) functionCall(at time.Time) {
-	turn.log.after(at, func() { turn.call = true })
+// answerText 在 Rerun 的思考之后第一个回答正文 Part 到达（at）时渲染正文段，曝光它的更多选项按钮，跟踪可见性的正文段在节流窗口结束时曝光
+func (turn *pageTurn) answerText(at time.Time) {
+	log := turn.log
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	turn.change(at, func(shown time.Time) { log.shown(veChunkOptions, shown, nil, false) })
+	turn.change(at.Add(10*time.Millisecond), func(shown time.Time) { log.shown(243616, shown, nil, true) })
 }
 
-// done 在响应正文关闭（at）后安排各模型轮次的按钮与输入区的曝光，点击 Run 的回答再记录回答结束；函数调用与提交函数结果后的回答按官网各自的一组元素曝光
+// functionCall 在回答的第一个函数调用 Part 到达（at）时渲染函数调用块，在其后的扫描中曝光其中的函数响应输入区
+func (turn *pageTurn) functionCall(at time.Time) {
+	log := turn.log
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	turn.call = true
+	turn.change(at, func(shown time.Time) {
+		turn.block = shown
+		log.later(shown, func() {
+			if turn.block.Equal(shown) {
+				turn.block = time.Time{}
+				turn.showBlock(shown)
+			}
+		})
+	})
+}
+
+// showBlock 曝光函数调用块的输入区；调用方持有 mu
+func (turn *pageTurn) showBlock(shown time.Time) {
+	for _, ve := range pageFunctionCallBlock {
+		turn.log.shown(ve, shown, nil, false)
+	}
+}
+
+// streamed 记录回答在 at 时刻又到达一段正文，对话区随之滚动
+func (turn *pageTurn) streamed(at time.Time) {
+	turn.log.mu.Lock()
+	turn.change(at, nil)
+	turn.log.mu.Unlock()
+}
+
+// change 安排回答中的页面内容在 at 时刻变化，Rerun 换成 Stop 的按钮在点击后的第一次扫描中随其余元素之后曝光；调用方持有 mu
+func (turn *pageTurn) change(at time.Time, show func(shown time.Time)) {
+	if !turn.rerun || turn.stopped {
+		turn.log.changed(at, show)
+		return
+	}
+	turn.stopped = true
+	turn.log.changed(at, func(shown time.Time) {
+		if show != nil {
+			show(shown)
+		}
+		turn.log.shown(250044, shown, modelDetail(turn.model), false)
+	})
+}
+
+// done 在响应正文关闭（at）后 50–59 ms（回答结束的页面事件之后）渲染各模型轮次的按钮与输入区并在其后的扫描中曝光，点击 Run 的回答再记录回答结束；函数调用与提交函数结果后的回答按官网各自的一组元素曝光，Rerun 的 Run 按钮只在换成 Stop 的按钮曝光过时重新曝光，带思考的模型轮次最后一个按钮紧随其后渲染、在下一次扫描中曝光
 func (turn *pageTurn) done(at time.Time) {
 	log := turn.log
-	shown := at.Add(time.Duration(50+rand.IntN(20)) * time.Millisecond)
-	log.after(shown, func() {
+	log.mu.Lock()
+	log.changed(at.Add(time.Duration(50+rand.IntN(10))*time.Millisecond), func(shown time.Time) {
 		log.answers++
 		if turn.call || turn.result {
 			elements := pageFunctionCallElements
 			if turn.result {
 				elements = pageFunctionResultElements
 			}
+			block := turn.block.Equal(shown)
+			turn.block = time.Time{}
 			for _, ve := range elements {
 				log.shown(ve, shown, nil, false)
+			}
+			if block {
+				turn.showBlock(shown)
 			}
 			log.shown(veRun, shown, modelDetail(turn.model), false)
 			return
@@ -803,25 +1081,28 @@ func (turn *pageTurn) done(at time.Time) {
 			}
 		}
 		if turn.thoughts {
-			for _, ve := range pageThoughtTurnElements {
+			elements := pageThoughtTurnElements
+			if turn.rerun {
+				elements = elements[:len(elements)-1]
+			}
+			for _, ve := range elements {
 				log.shown(ve, shown, nil, false)
 			}
 		}
 		for _, ve := range pageRunElements {
 			log.shown(ve, shown, nil, false)
 		}
-		if !turn.rerun {
+		if !turn.rerun || turn.stopped {
 			log.shown(veRun, shown, modelDetail(turn.model), false)
 		}
 		if turn.thoughts {
-			feedback := shown.Add(time.Duration(980+rand.IntN(30)) * time.Millisecond)
-			log.after(feedback, func() { log.shown(veTurnLate, feedback, nil, false) })
+			log.changed(shown.Add(10*time.Millisecond), func(late time.Time) { log.shown(veTurnLate, late, nil, false) })
 		}
 	})
 	if turn.rerun || turn.result {
+		log.mu.Unlock()
 		return
 	}
-	log.mu.Lock()
 	turn.closed = at
 	ready := !turn.counting || !turn.counted.IsZero()
 	log.mu.Unlock()
@@ -886,15 +1167,16 @@ func (log *pageElements) close() {
 	}
 	client := clearcutClient(log.locale, nil, 3)
 	client[10].([]any)[9] = []any{3, 1}
+	now := time.Now()
 	for beacons := 0; len(log.batch) > 0 && beacons < pageElementsBeacons; beacons++ {
 		size := min(len(log.batch), pageElementsBeaconSize)
 		var body bytes.Buffer
-		writeElementsPayload(&body, client, log.batch[:size])
+		writeElementsPayload(&body, client, log.batch[:size], now)
 		log.send(clearcutBeacon, body.Bytes())
 		log.batch = log.batch[size:]
 	}
 	if len(log.batch) > 0 {
-		log.sendGzip(client, log.batch)
+		log.sendGzip(client, log.batch, now)
 	}
 	log.batch = nil
 }
@@ -909,11 +1191,17 @@ const (
 	veChunkOptions = 228332
 )
 
-// catalogModel 是页面 ListModels 中一个模型的名称与默认思考档位
+// catalogModel 是页面 ListModels 中一个模型的名称、默认思考档位与在模型面板中的分类
 type catalogModel struct {
 	name string
 	// level 是默认思考档位的目录编号，没有思考档位时为 0
 	level int64
+	// categories 是模型所在的模型面板分类编号
+	categories []int64
+	// docs 表示模型有文档链接，模型面板中该行多一个文档按钮
+	docs bool
+	// environment 表示模型带能力码 65（运行环境），模型面板 All 分类中该行带环境标记
+	environment bool
 }
 
 // parseCatalogModels 按目录顺序从 ListModels 响应读出各模型的名称与默认思考档位
@@ -937,6 +1225,18 @@ func parseCatalogModels(body []byte) []catalogModel {
 		if len(row) > 71 && json.Unmarshal(row[71], &thinking) == nil && len(thinking) > 5 {
 			_ = json.Unmarshal(thinking[5], &model.level)
 		}
+		if len(row) > 74 {
+			_ = json.Unmarshal(row[74], &model.categories)
+		}
+		var capabilities []int64
+		if len(row) > 64 && json.Unmarshal(row[64], &capabilities) == nil {
+			model.environment = slices.Contains(capabilities, 65)
+		}
+		var details []json.RawMessage
+		var docs string
+		if len(row) > 38 && json.Unmarshal(row[38], &details) == nil && len(details) > 15 && json.Unmarshal(details[15], &docs) == nil {
+			model.docs = docs != ""
+		}
 		models = append(models, model)
 	}
 	return models
@@ -947,4 +1247,32 @@ func (log *pageElements) pageModel() string {
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	return log.model
+}
+
+// lastRecorded 返回页面上一条已记录事件的时刻
+func (log *pageElements) lastRecorded() time.Time {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	return log.recorded
+}
+
+// veDisclaimer 是首次上传素材提示确认框中的确认按钮
+const veDisclaimer = 265442
+
+// insertClicked 记录点击输入框旁的插入按钮：官网插入文件时先点它打开菜单，再点菜单中的上传文件，两次都记为该按钮的点击
+func (log *pageElements) insertClicked(at time.Time) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if !log.closed {
+		log.clicked(log.exposed[veInsert], veInsert, nil, at)
+	}
+}
+
+// disclaimer 记录选好文件后弹出的首次上传素材提示确认框在 shown 显示、在 confirmed 点击确认
+func (log *pageElements) disclaimer(shown, confirmed time.Time) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if !log.closed {
+		log.clicked(log.shown(veDisclaimer, shown, nil, false), veDisclaimer, nil, confirmed)
+	}
 }

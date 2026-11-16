@@ -75,7 +75,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **High-Concurrency Multi-Account**: Detects Free, Pro, Ultra, and Plus benefits and routes across accounts by the live model catalog with round-robin or fill-first
 - **Two WAA Backends**: By default, SpiderMonkey (the Firefox JavaScript engine) generates the official proof inside the service process and no browser is downloaded or launched at runtime; with `WAA_BACKEND=camoufox`, Camoufox holds the official WAA lifecycle
 - **Four API Protocols**: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent; Responses supports context compaction through `/v1/responses/compact` and `compaction` and `compaction_trigger` input items, and Anthropic Messages supports `context_management` tool-result and thinking clearing and threshold compaction
-- **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, dsh, OpenClaw, and Magpie, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
+- **Mainstream Agent Clients**: Works with Claude Code, Codex, OpenCode, pi, omp, dsh, OpenClaw, Magpie, and Antigravity CLI, including file read and write tool calls; native web search works in Claude Code, Codex, and omp
 
 ## Features
 
@@ -131,7 +131,7 @@ npm ci
 npm run build
 cd ..
 mkdir spidermonkey
-curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
+curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.2/spidermonkey-v158.0.1-aistudio2api.2-windows-amd64.tar.gz
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
@@ -203,7 +203,7 @@ cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
 mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
+curl -L https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.2/spidermonkey-v158.0.1-aistudio2api.2-$platform-$arch.tar.gz | tar -xz -C spidermonkey
 mkdir -p libwebp
 curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
@@ -399,6 +399,14 @@ modelRoles:
   web: aistudio-gemini/gemini-3.8-flash
 ```
 
+[Antigravity CLI](https://antigravity.google/docs/install?tab=cli) (`agy`) uses the Gemini endpoint. Write `{"modelProvider": "gemini"}` to `~/.gemini/antigravity-cli/settings.json`, set the variables below, run `agy`, and pick the model with `/model` in agy:
+
+```powershell
+$env:GEMINI_API_KEY = "<PROXY_API_KEY>"
+$env:GOOGLE_GEMINI_BASE_URL = "http://127.0.0.1:2048"
+agy
+```
+
 Main endpoints:
 
 | Capability | Endpoint |
@@ -417,6 +425,8 @@ Main endpoints:
 | Video | `POST /v1/videos`, `GET /v1/videos`, `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content` |
 | Gemini Video | `POST /v1beta/models/{model}:predictLongRunning`, `GET /v1beta/operations/{id}` |
 | Live (including live translation, live transcription, and live music) / Robotics | `GET /v1/live`, `GET /v1/robotics/stream` |
+
+The Gemini `/v1beta` paths are also available under `/v1`, which Google Gen AI SDK 3.x uses by default. Requests to `/v1/models` and `/v1/files` that carry an `x-goog-api-key` header or a `key` parameter without `Authorization` get Gemini responses; all others get OpenAI responses.
 
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
