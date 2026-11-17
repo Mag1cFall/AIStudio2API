@@ -65,3 +65,53 @@ func TestLedgerUsageAndBodies(t *testing.T) {
 		t.Fatalf("body=%+v err=%v", body, err)
 	}
 }
+
+// TestLedgerTimeZoneChange 验证服务器时区改变后重新打开账本时按新时区重建本地日汇总，小时汇总与原始记录不变
+func TestLedgerTimeZoneChange(t *testing.T) {
+	local := time.Local
+	t.Cleanup(func() { time.Local = local })
+	logs := func(level, message string, attrs ...any) {
+		if level != "INFO" {
+			t.Errorf("%s %s %v", level, message, attrs)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "requests.db")
+	time.Local = time.FixedZone("UTC+8", 8*60*60)
+	store, err := Open(path, logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	midnight := time.Now().UTC().Truncate(24 * time.Hour).Add(-48 * time.Hour)
+	// at 在 UTC+8 是 midnight 当日 23:30，在 UTC+9 是次日 00:30
+	at := midnight.Add(15*time.Hour + 30*time.Minute)
+	store.Record(Row{ID: "a", Time: at, Model: "flash", State: "completed", Duration: 2 * time.Second, InputTokens: 10, TotalTokens: 30})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zone := time.FixedZone("UTC+9", 9*60*60)
+	time.Local = zone
+	store, err = Open(path, logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	usage := func(from, to time.Time, bucket time.Duration) api.UsageReport {
+		t.Helper()
+		report, err := store.Usage(context.Background(), api.UsageQuery{From: from, To: to, Bucket: bucket, Location: zone, Stack: "model"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	// day 是 at 在 UTC+9 所在本地日的起点
+	day := midnight.Add(15 * time.Hour)
+	if report := usage(day, day.Add(24*time.Hour), 24*time.Hour); report.Totals.Requests != 1 || report.Totals.TotalTokens != 30 || report.Previous.Requests != 0 {
+		t.Fatalf("本地日 totals=%+v previous=%+v", report.Totals, report.Previous)
+	}
+	if report := usage(day, day.Add(time.Hour), time.Hour); report.Totals.Requests != 1 || report.Totals.Duration.AvgMS != 2000 {
+		t.Fatalf("小时 totals=%+v", report.Totals)
+	}
+	if report := usage(at.Add(-time.Minute), at.Add(time.Minute), time.Minute); report.Totals.Requests != 1 || report.Totals.InputTokens != 10 {
+		t.Fatalf("原始记录 totals=%+v", report.Totals)
+	}
+}
