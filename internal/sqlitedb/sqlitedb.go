@@ -12,12 +12,11 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-// driverName 是每个连接都设置好收缩、日志与等待参数的 SQLite 驱动名
+// driverName 是每个连接都设置好日志与等待参数的 SQLite 驱动名
 const driverName = "sqlite3_aistudio2api"
 
-// connectPragmas 是每个新连接执行的设置，增量收缩须在启用 WAL 之前设置
-const connectPragmas = `PRAGMA auto_vacuum = INCREMENTAL;
-PRAGMA busy_timeout = 10000;
+// connectPragmas 是每个新连接执行的设置
+const connectPragmas = `PRAGMA busy_timeout = 10000;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA journal_size_limit = 524288;`
@@ -32,20 +31,14 @@ func init() {
 	}})
 }
 
-// Open 打开或创建数据库，为已有表补上缺少的列、执行 schema 并删除 schema 没有定义的对象，非增量收缩的已有库先整理为增量收缩，最后交还空闲页
+// Open 打开或创建数据库，新库与非增量收缩的已有库先整理为增量收缩，再为已有表补上缺少的列、执行 schema 并删除 schema 没有定义的对象，最后交还空闲页
 func Open(path string, schema string) (*sql.DB, error) {
 	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(path))
 	if err != nil {
 		return nil, err
 	}
-	var mode int
-	if err := db.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode); err != nil {
-		return nil, errors.Join(fmt.Errorf("读取收缩模式: %w", err), db.Close())
-	}
-	if mode != incrementalVacuum {
-		if _, err := db.Exec(`VACUUM`); err != nil {
-			return nil, errors.Join(fmt.Errorf("整理数据库: %w", err), db.Close())
-		}
+	if err := useIncrementalVacuum(db); err != nil {
+		return nil, errors.Join(err, db.Close())
 	}
 	if err := applySchema(db, schema); err != nil {
 		return nil, errors.Join(fmt.Errorf("同步表结构: %w", err), db.Close())
@@ -54,6 +47,30 @@ func Open(path string, schema string) (*sql.DB, error) {
 		return nil, errors.Join(err, db.Close())
 	}
 	return db, nil
+}
+
+// useIncrementalVacuum 在同一连接上把不是增量收缩的库设为增量收缩并整理一次
+func useIncrementalVacuum(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var mode int
+	if err := conn.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return fmt.Errorf("读取收缩模式: %w", err)
+	}
+	if mode == incrementalVacuum {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA auto_vacuum = INCREMENTAL`); err != nil {
+		return fmt.Errorf("设置收缩模式: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `VACUUM`); err != nil {
+		return fmt.Errorf("整理数据库: %w", err)
+	}
+	return nil
 }
 
 // applySchema 为已有表补上 schema 定义而缺少的列，执行 schema，再删除 schema 没有定义的表、索引、视图与触发器
