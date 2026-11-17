@@ -286,6 +286,8 @@ WARN  account@example.com  账号切换 model=gemini-3.7-flash status=403 code=7
 
 ## 用量账本
 
+`GET /v1/models` 与 `GET /v1/models/{model}` 的 `estimated_cost` 提供用量页采用的每百万 token 美元估算单价：`input`、`output`（含思考）与 `cache_read`。长上下文模型的 `tiers` 按 `above` 从小到大排列，输入（含缓存命中）严格超过该阈值时整次请求使用该档单价。搜索型号使用基础型号的单价；未计价模型省略 `estimated_cost`。
+
 `runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量（含缓存命中数）、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage` 与 `GET /api/usage/records` 查询。看板的估算费用按 Gemini API 与 Vertex AI 公布的当前文本单价从原始记录逐条计算，缓存命中的输入按缓存单价计算。
 
 ```text

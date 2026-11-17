@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/pricing"
 )
 
 type chatRequest struct {
@@ -123,6 +124,10 @@ func openAIModelObject(model aistudio.Model) map[string]any {
 		"name": model.Name, "description": model.Description,
 		"supported_generation_methods": model.Methods,
 		"input_token_limit":            model.InputTokenLimit, "output_token_limit": model.OutputTokenLimit,
+	}
+	base, _ := aistudio.ResolveSearchModelAlias(model.ID)
+	if cost := pricing.ModelCost(base); cost != nil {
+		item["estimated_cost"] = cost
 	}
 	if len(model.Capabilities) > 0 {
 		item["capabilities"] = model.Capabilities

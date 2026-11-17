@@ -38,6 +38,19 @@ func Priced(model string) bool {
 	return ok
 }
 
+// ModelCost 返回用量页采用的每百万 token 美元估算单价与长上下文分档
+func ModelCost(model string) map[string]any {
+	value, ok := prices[model]
+	if !ok {
+		return nil
+	}
+	result := map[string]any{"input": value.input, "output": value.output, "cache_read": value.cached}
+	if value.longInput > 0 {
+		result["tiers"] = []map[string]any{{"above": LongContext, "input": value.longInput, "output": value.longOutput, "cache_read": value.longCached}}
+	}
+	return result
+}
+
 // Cost 返回一个请求按模型单价估算的美元费用，cached 为 input 中命中缓存的部分，output 为思考与回复 token 之和，模型没有单价时为 0
 func Cost(model string, input, cached, output int64) float64 {
 	return TierCost(model, input > LongContext, input, cached, output)
