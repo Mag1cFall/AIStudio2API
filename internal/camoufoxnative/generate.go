@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // GenerateTurn 是在页面界面运行的一轮 GenerateContent：Body 第 ProofStart 到 ProofEnd 字节是 proof 字段，发送时换成页面应用为 Digest 取得的 proof；Digest 为 binding 的 SHA-256 十六进制，Result 是最后一个 user 轮次为函数结果时官网用户在函数调用块中输入的函数结果，其余为空
@@ -406,17 +407,17 @@ var selectAllKeyActions = []map[string]any{
 	{"type": "keyUp", "value": "\uE009"},
 }
 
-// promptFillLimit 是界面运行写入官网输入框的最多字符数，与官网把更长的粘贴转为文本附件的长度相同；页面发出时正文整体换成服务的正文
+// promptFillLimit 是界面运行写入官网输入框的最多 UTF-16 码元数，与官网把更长的粘贴转为文本附件的长度相同；页面发出时正文整体换成服务的正文
 const promptFillLimit = 25000
 
-// promptHead 返回界面运行写入官网输入框的提示词开头，最多 promptFillLimit 个字符
+// promptHead 返回界面运行写入官网输入框的提示词开头，最多 promptFillLimit 个 UTF-16 码元，不拆开代理对
 func promptHead(prompt string) string {
-	count := 0
-	for index := range prompt {
-		if count == promptFillLimit {
+	units := 0
+	for index, char := range prompt {
+		units += utf16.RuneLen(char)
+		if units > promptFillLimit {
 			return prompt[:index]
 		}
-		count++
 	}
 	return prompt
 }
