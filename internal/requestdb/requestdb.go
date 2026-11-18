@@ -32,6 +32,9 @@ const batchLimit = 256
 // queueLimit 是等待写入的最大记录数，队列已满时丢弃新记录
 const queueLimit = 4096
 
+// statementCache 是账本每个连接缓存的预编译语句数，容纳写入记录、正文、小时与日汇总的全部语句
+const statementCache = 16
+
 // hourMS 是一小时的毫秒数
 const hourMS = int64(time.Hour / time.Millisecond)
 
@@ -115,7 +118,7 @@ func Open(path string, log Logger) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sqlitedb.Open(path, schema)
+	db, err := sqlitedb.Open(path, schema, statementCache)
 	if err != nil {
 		return nil, fmt.Errorf("初始化请求账本: %w", err)
 	}

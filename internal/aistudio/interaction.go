@@ -59,14 +59,14 @@ var interactionStatusHTTP = map[int64]int{
 }
 
 // EncodeCreateInteractionStreamRequest 编码官网 CreateInteractionStream 请求并返回参与 WAA 绑定的文本内容
-func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults GenerationDefaults) ([]byte, []Content, error) {
+func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults GenerationDefaults) ([]byte, int, []Content, error) {
 	steps, binding, hasModelTurn, err := encodeInteractionSteps(request.Contents)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	level, err := interactionThinkingLevel(request.Config, defaults)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	maxOutput := defaults.MaxOutputTokens
 	if request.Config.MaxOutputTokens != nil {
@@ -76,11 +76,11 @@ func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults Gene
 		maxOutput = defaults.MaxOutputTokens
 	}
 	if maxOutput <= 0 {
-		return nil, nil, fmt.Errorf("max output tokens %d 超出模型范围 1-%d", maxOutput, defaults.MaxOutputTokens)
+		return nil, 0, nil, fmt.Errorf("max output tokens %d 超出模型范围 1-%d", maxOutput, defaults.MaxOutputTokens)
 	}
 	video, task, err := interactionVideoFormat(request.Config.VideoConfig, defaults.VideoResolution)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	// GenerationConfig：field 6 thinking level、field 7 thinking summaries、field 8 max output tokens、field 25 视频任务
 	config := make([]any, 8)
@@ -108,8 +108,8 @@ func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults Gene
 	} else {
 		interaction[53] = []any{[]any{[]any{nil, nil, nil, video}}}
 	}
-	body, _ := json.Marshal([]any{int64(1), int64(1), nil, interaction, nil, int64(1)})
-	return body, binding, nil
+	body, proofAt, _ := marshalWAAArray([]any{int64(1), int64(1), nil, interaction, nil, int64(1)}, 5)
+	return body, proofAt, binding, nil
 }
 
 // interactionVideoAspectRatios 是 CreateInteractionStream 视频输出格式的宽高比枚举
@@ -293,11 +293,12 @@ func (c *Client) generateInteraction(ctx context.Context, request GenerateReques
 		reason = "该模型使用 CreateInteractionStream，收集完成后返回"
 	}
 	reportUpstreamMode(ctx, "CreateInteractionStream", "stream", 0, reason)
-	body, binding, err := EncodeCreateInteractionStreamRequest(request, entry.defaults)
+	body, proofAt, binding, err := EncodeCreateInteractionStreamRequest(request, entry.defaults)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	rpc := newRPCRequest("CreateInteractionStream", request.AccountID, request.ID, body, true)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	bindingRequest := request
 	bindingRequest.Contents = binding
@@ -431,22 +432,27 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 
 // DecodeInteractionStream 按网络顺序解码 CreateInteractionStream 或 GetInteractionStream 的事件与流尾状态
 func DecodeInteractionStream(method string, source io.Reader, emit func(Event) error) error {
-	decoder := json.NewDecoder(newSparseJSONReader(source))
+	reader := &streamReadRecorder{source: source}
+	decoder := json.NewDecoder(newSparseJSONReader(reader))
 	decoder.UseNumber()
+	index := 0
+	fail := func(path string, detail string) error {
+		return reader.failure(method, index, &ProtocolEvidenceError{Method: method, Path: path, Detail: detail})
+	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
-		return &ProtocolEvidenceError{Method: method, Path: "$", Detail: "根值不是数组"}
+		return fail("$", "根值不是数组")
 	}
 	if !decoder.More() {
-		return &ProtocolEvidenceError{Method: method, Path: "$", Detail: "根数组缺少事件列表"}
+		return fail("$", "根数组缺少事件列表")
 	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
-		return &ProtocolEvidenceError{Method: method, Path: "$[0]", Detail: "事件列表不是数组"}
+		return fail("$[0]", "事件列表不是数组")
 	}
 	finished := false
-	for index := 0; decoder.More(); index++ {
+	for ; decoder.More(); index++ {
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {
-			return &ProtocolEvidenceError{Method: method, Path: fmt.Sprintf("$[0][%d]", index), Detail: err.Error()}
+			return fail(fmt.Sprintf("$[0][%d]", index), err.Error())
 		}
 		done, err := decodeInteractionEvent(method, raw, emit)
 		if err != nil {
@@ -455,13 +461,13 @@ func DecodeInteractionStream(method string, source io.Reader, emit func(Event) e
 		finished = finished || done
 	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
-		return &ProtocolEvidenceError{Method: method, Path: "$[0]", Detail: "事件列表没有正常结束"}
+		return fail("$[0]", "事件列表没有正常结束")
 	}
 	trailing := make([]json.RawMessage, 0, 3)
 	for decoder.More() {
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {
-			return &ProtocolEvidenceError{Method: method, Path: "$", Detail: err.Error()}
+			return fail("$", err.Error())
 		}
 		trailing = append(trailing, raw)
 	}
@@ -799,7 +805,7 @@ func trimWireNil(values []any) []any {
 }
 
 // EncodeCreateInteractionRequest 编码官网后台 agent 的 CreateInteraction 请求并返回参与 WAA 绑定的文本内容
-func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byte, []Content, error) {
+func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byte, int, []Content, error) {
 	agent := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	// kind 是该 agent 的 agent_config 类型：带默认模型的 agent 为 antigravity，其余为 deep-research
 	kind := "deep-research"
@@ -807,15 +813,15 @@ func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byt
 		kind = "antigravity"
 	}
 	if config := request.AgentConfig; config != nil && config.Type != kind {
-		return nil, nil, fmt.Errorf("agent_config.type %q 与 agent %s 不匹配，应为 %q", config.Type, agent, kind)
+		return nil, 0, nil, fmt.Errorf("agent_config.type %q 与 agent %s 不匹配，应为 %q", config.Type, agent, kind)
 	}
 	steps, binding, _, err := encodeInteractionSteps(AgentInput(request.Contents, request.PreviousInteractionID != ""))
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	tools, err := agentTools(request.Tools, model)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	interaction := make([]any, 27)
 	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
@@ -847,18 +853,18 @@ func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byt
 	}
 	if request.Environment != nil || model.AgentModel != "" {
 		if err := setInteractionEnvironment(interaction, request.Environment); err != nil {
-			return nil, nil, err
+			return nil, 0, nil, err
 		}
 	}
 	interaction[18] = target
 	interaction[26] = []any{steps}
-	body, _ := json.Marshal([]any{nil, int64(1), int64(1), interaction, nil, int64(1)})
-	return body, binding, nil
+	body, proofAt, _ := marshalWAAArray([]any{nil, int64(1), int64(1), interaction, nil, int64(1)}, 5)
+	return body, proofAt, binding, nil
 }
 
 // EncodeGetInteractionStreamRequest 编码按 interaction ID 读取后台任务增量与终态的请求
-func EncodeGetInteractionStreamRequest(id string, model string) ([]byte, error) {
-	return json.Marshal([]any{id, int64(1), nil, nil, nil, int64(1), wireModelName(model)})
+func EncodeGetInteractionStreamRequest(id string, model string) ([]byte, int, error) {
+	return marshalWAAArray([]any{id, int64(1), nil, nil, nil, int64(1), wireModelName(model)}, 5)
 }
 
 // decodeCreateInteractionResponse 读取 CreateInteraction 返回的 interaction ID
@@ -881,11 +887,12 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 		reason = "该模型使用 CreateInteraction 后台任务，收集完成后返回"
 	}
 	reportUpstreamMode(ctx, "GetInteractionStream", "stream", 0, reason)
-	body, binding, err := EncodeCreateInteractionRequest(request, entry.model)
+	body, proofAt, binding, err := EncodeCreateInteractionRequest(request, entry.model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	rpc := newRPCRequest("CreateInteraction", request.AccountID, request.ID, body, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	bindingRequest := request
 	bindingRequest.Contents = binding
@@ -927,11 +934,12 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 			}
 		}()
 	}
-	streamBody, err := EncodeGetInteractionStreamRequest(id, request.Model)
+	streamBody, streamProofAt, err := EncodeGetInteractionStreamRequest(id, request.Model)
 	if err != nil {
 		return nil, err
 	}
 	stream := newRPCRequest("GetInteractionStream", request.AccountID, request.ID, streamBody, true)
+	stream.ProofAt = streamProofAt
 	c.applyBenefitTier(stream.Method, request.AccountID, stream.Header)
 	// GetInteractionStream 的 WAA 绑定输入是 interaction ID
 	streamRequest := request

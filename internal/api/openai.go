@@ -259,6 +259,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	generateRequest = s.prepareSearch(generateRequest)
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
+	media := s.mediaOutputFor(r)
 	if !request.Stream {
 		var stopKeepalive func()
 		w, stopKeepalive = s.nonstreamKeepalive(w, r)
@@ -280,7 +281,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	created := time.Now().Unix()
 	if request.Stream {
-		s.streamChatCompletion(w, r, request, requestID, created, choices)
+		s.streamChatCompletion(w, r, request, requestID, created, choices, media)
 		return
 	}
 	results, err := choices.run(func(_ int, events <-chan aistudio.Event) (generationResult, error) {
@@ -304,11 +305,10 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if audio[index], err = s.takeChatAudio(&results[index], format); err != nil {
-			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			writeOpenAIFailure(w, http.StatusBadGateway, "upstream_error", err)
 			return
 		}
 	}
-	media := s.mediaOutputFor(r)
 	for index := range results {
 		if err := media.saveEvents(results[index].events); err != nil {
 			writeOpenAIRequestError(w, err)
@@ -1157,7 +1157,7 @@ func chatCompletionChoice(index int, result generationResult, tools []openAITool
 	return choice
 }
 
-func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, choices *chatChoices) {
+func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, request chatRequest, id string, created int64, choices *chatChoices, media mediaOutput) {
 	stream, err := openStream(w, sseHeartbeat)
 	defer stream.stop()
 	if err != nil {
@@ -1175,7 +1175,6 @@ func (s *server) streamChatCompletion(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 	}
-	media := s.mediaOutputFor(r)
 	format, _, _ := request.audioOutput()
 	results, err := choices.run(func(index int, events <-chan aistudio.Event) (generationResult, error) {
 		choice := &chatStreamChoice{server: s, tools: request.Tools, index: index, write: write, media: media, audioFormat: format, audioID: newID("audio")}

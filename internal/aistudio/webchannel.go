@@ -288,52 +288,52 @@ func (s *BidiSession) notifyModelAccessChanged() {
 
 // SendText 发送一条官网文本输入帧
 func (s *BidiSession) SendText(ctx context.Context, text string) error {
-	body, binding, err := s.liveFrame(
-		func() ([]byte, string, error) { return EncodeBidiTextRequest(text) },
-		func() ([]byte, string, error) { return encodeBuildLiveText(text) },
+	body, proofAt, binding, err := s.liveFrame(
+		func() ([]byte, int, string, error) { return EncodeBidiTextRequest(text) },
+		func() ([]byte, int, string, error) { return encodeBuildLiveText(text) },
 	)
 	if err != nil {
 		return err
 	}
 	return s.sendProtected(
-		ctx, body, binding, text,
+		ctx, body, proofAt, binding, text,
 		s.modelAccessScope != "" && (s.mode == BidiModeRobotics || s.modelAccessScope == s.model), true,
 	)
 }
 
 // SendMedia 把一条官网实时音频或图像输入帧排入前向通道，发送失败在后续调用返回
 func (s *BidiSession) SendMedia(ctx context.Context, mimeType string, data []byte) error {
-	body, binding, err := s.liveFrame(
-		func() ([]byte, string, error) { return EncodeBidiMediaRequest(mimeType, data) },
-		func() ([]byte, string, error) { return encodeBuildLiveMedia(mimeType, data) },
+	body, proofAt, binding, err := s.liveFrame(
+		func() ([]byte, int, string, error) { return EncodeBidiMediaRequest(mimeType, data) },
+		func() ([]byte, int, string, error) { return encodeBuildLiveMedia(mimeType, data) },
 	)
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, "", s.modelAccessScope != "", false)
+	return s.sendProtected(ctx, body, proofAt, binding, "", s.modelAccessScope != "", false)
 }
 
 // SendMediaEnd 发送官网实时媒体结束帧并等待此前排队的媒体帧送达
 func (s *BidiSession) SendMediaEnd(ctx context.Context) error {
-	body, binding, err := s.liveFrame(EncodeBidiMediaEndRequest, func() ([]byte, string, error) {
+	body, proofAt, binding, err := s.liveFrame(EncodeBidiMediaEndRequest, func() ([]byte, int, string, error) {
 		return encodeBuildBidiMessage(buildLivePath, map[string]any{"realtimeInput": map[string]any{"audioStreamEnd": true}})
 	})
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, "", false, true)
+	return s.sendProtected(ctx, body, proofAt, binding, "", false, true)
 }
 
 // SendToolResponses 发送官网函数响应帧
 func (s *BidiSession) SendToolResponses(ctx context.Context, results []FunctionResult) error {
-	body, binding, err := s.liveFrame(
-		func() ([]byte, string, error) { return EncodeBidiToolResponseRequest(results) },
-		func() ([]byte, string, error) { return encodeBuildLiveToolResponses(results) },
+	body, proofAt, binding, err := s.liveFrame(
+		func() ([]byte, int, string, error) { return EncodeBidiToolResponseRequest(results) },
+		func() ([]byte, int, string, error) { return encodeBuildLiveToolResponses(results) },
 	)
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, "", false, true)
+	return s.sendProtected(ctx, body, proofAt, binding, "", false, true)
 }
 
 // Close 取消网络读取并等待账户租约释放
@@ -366,13 +366,14 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 ) (*BidiSession, error) {
 	webChannelURL, buildPath, page := bidiWebChannelURL, "", ""
 	var body []byte
+	var proofAt int
 	var binding string
 	var err error
 	if lease.Channel() == ChannelBuild {
 		webChannelURL, buildPath = buildBidiWebChannelURL, buildBidiPath(request.method)
-		body, binding, err = EncodeBuildBidiSetup(request)
+		body, proofAt, binding, err = EncodeBuildBidiSetup(request)
 	} else {
-		body, binding, err = EncodeBidiSetupRequest(request, runtime)
+		body, proofAt, binding, err = EncodeBidiSetupRequest(request, runtime)
 		page = binding
 	}
 	if err != nil {
@@ -389,7 +390,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 	}
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
 		URL: webChannelURL, Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
-		Body: body, Prompt: binding, PagePrompt: page, ProofField: bidiProofField(buildPath != ""),
+		Body: body, ProofAt: proofAt, Prompt: binding, PagePrompt: page,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("准备 bidi setup fresh WAA proof: %w", err)
@@ -432,7 +433,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		err = setupCtx.Err()
 	}
 	if err == nil {
-		err = session.postBatch(setupCtx, []bidiOutgoing{{payload: prepared.Body}})
+		err = session.postBatch(setupCtx, []bidiOutgoing{{payload: prepared.Payload()}})
 	}
 	if err == nil {
 		err = session.awaitSetup(setupCtx)
@@ -547,8 +548,8 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	return nil
 }
 
-// sendProtected 为客户端消息写入 fresh proof 后排入前向通道，页面提示词在 Playground 为 binding，在 Build 为消息中的用户文本 text
-func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding string, text string, qualifies bool, wait bool) error {
+// sendProtected 为客户端消息在 proofAt 处写入 fresh proof 后排入前向通道，页面提示词在 Playground 为 binding，在 Build 为消息中的用户文本 text
+func (s *BidiSession) sendProtected(ctx context.Context, body []byte, proofAt int, binding string, text string, qualifies bool, wait bool) error {
 	requestCtx, cancel := context.WithCancel(ctx)
 	stopSession := context.AfterFunc(s.ctx, cancel)
 	defer func() {
@@ -561,12 +562,12 @@ func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding st
 	}
 	prepared, err := s.worker.Prepare(requestCtx, ProtectedRequest{
 		URL: s.webChannelURL(), Headers: http.Header{"Content-Type": []string{JSONProtobufContentType}},
-		Body: body, Prompt: binding, PagePrompt: page, ProofField: bidiProofField(s.buildPath != ""),
+		Body: body, ProofAt: proofAt, Prompt: binding, PagePrompt: page,
 	})
 	if err != nil {
 		return fmt.Errorf("准备 bidi fresh WAA proof: %w", err)
 	}
-	return s.enqueueMessage(requestCtx, prepared.Body, qualifies, wait)
+	return s.enqueueMessage(requestCtx, prepared.Payload(), qualifies, wait)
 }
 
 // enqueueMessage 按调用顺序把消息交给前向通道，wait 为 true 时等待该消息的 ACK

@@ -62,8 +62,6 @@ const serviceState = computed<'unavailable' | 'running' | 'launching' | 'stopped
 })
 
 let eventConnection: EventSource | undefined
-// consoleGeneration 为 startConsole 与 stopConsole 的调用序号，离开后才完成的初始化据此不再订阅事件
-let consoleGeneration = 0
 let noticeTimer: number | undefined
 let pendingLogs: AdminLog[] = []
 let logFlushTimer: number | undefined
@@ -320,9 +318,11 @@ function waitForRestart(previous = status.value?.version): void {
   }, 1000)
 }
 
+// handleAdminEvent 应用一条管理事件，各区域在收到第一份快照时结束加载
 function handleAdminEvent(event: AdminEvent): void {
   if (event.type === 'status') {
     status.value = event.data
+    loading.status = false
     return
   }
   if (event.type === 'log') {
@@ -332,14 +332,17 @@ function handleAdminEvent(event: AdminEvent): void {
   }
   if (event.type === 'accounts') {
     accounts.value = event.data.accounts
+    loading.accounts = false
     return
   }
   if (event.type === 'models') {
     models.value = event.data.models
+    loading.models = false
     return
   }
   if (event.type === 'cooldowns') {
     cooldowns.value = event.data
+    loading.cooldowns = false
     return
   }
   if (event.type === 'account_tasks') {
@@ -349,32 +352,23 @@ function handleAdminEvent(event: AdminEvent): void {
   requests.value = upsertRequest(requests.value, event.data)
 }
 
-// startConsole 加载全部管理数据并订阅管理事件
-async function startConsole(): Promise<void> {
-  const generation = ++consoleGeneration
+// startConsole 订阅管理事件并读取设置，状态、账户、模型、冷却、日志与请求取自事件流的初始快照
+function startConsole(): void {
   window.addEventListener('pagehide', flushDelete)
-  await Promise.all([
-    loadStatus(),
-    loadAccounts(),
-    loadModels(),
-    loadCooldowns(),
-    loadRequests(),
-    loadConfig(),
-  ])
-  if (generation !== consoleGeneration) return
+  eventConnection = openAdminEvents(handleAdminEvent, () => {
+    resetLogs()
+    requests.value = []
+    loading.requests = false
+  })
+  void loadConfig()
   api.updateStatus().then(
     (value) => (update.value = value),
     () => undefined,
   )
-  eventConnection = openAdminEvents(handleAdminEvent, () => {
-    resetLogs()
-    requests.value = []
-  })
 }
 
 // stopConsole 关闭事件订阅并提交等待中的删除
 function stopConsole(): void {
-  consoleGeneration++
   eventConnection?.close()
   eventConnection = undefined
   window.clearTimeout(logFlushTimer)

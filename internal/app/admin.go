@@ -42,6 +42,8 @@ type runtimeAdmin struct {
 	transitionMu sync.Mutex
 	// transitions 是各账户进行中的启停后台收尾
 	transitions map[string]*accountTransition
+	// accountCommit 返回提交账户新增、导入与登录结果所用的管理接口与结束提交的函数，结束前生成服务不换代
+	accountCommit func() (*runtimeAdmin, func())
 }
 
 // accountTransition 是一次进行中的账户启停后台收尾
@@ -84,11 +86,13 @@ func newRuntimeAdmin(
 	workers *accountWorkerManager,
 	cfg config.Config,
 ) *runtimeAdmin {
-	return &runtimeAdmin{
+	admin := &runtimeAdmin{
 		lifecycle: lifecycle, pool: pool, store: store, service: service, requests: registry, login: login,
 		workers:    workers,
 		configPath: ".env", config: cfg,
 	}
+	admin.accountCommit = func() (*runtimeAdmin, func()) { return admin, func() {} }
+	return admin
 }
 
 func (admin *runtimeAdmin) Status(context.Context) (api.AdminStatus, error) {
@@ -122,11 +126,15 @@ func (admin *runtimeAdmin) Status(context.Context) (api.AdminStatus, error) {
 	return status, nil
 }
 
+// Accounts 返回各账户的状态，无法载入的账户目录列为不可用，原因写明出错的文件
 func (admin *runtimeAdmin) Accounts(context.Context) ([]api.AdminAccount, error) {
 	statuses := admin.pool.Status()
 	accounts := make([]api.AdminAccount, 0, len(statuses))
 	for _, status := range statuses {
 		accounts = append(accounts, adminAccountDTO(status))
+	}
+	for _, failure := range admin.store.Failures() {
+		accounts = append(accounts, api.AdminAccount{ID: failure.ID, Label: failure.ID, State: string(aistudio.AccountUnavailable), Message: failure.Err.Error()})
 	}
 	return accounts, nil
 }
@@ -212,7 +220,13 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountC
 	if err := accountConfig.Validate(); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
-	created, err := admin.upsertAccount(ctx, accountConfig.Label, accountConfig, result.StorageState, directory)
+	target, done := admin.accountCommit()
+	account, err := target.upsertAccount(ctx, accountConfig.Label, accountConfig, result.StorageState, directory)
+	done()
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	created, err := target.syncedAccount(ctx, account)
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
@@ -374,19 +388,19 @@ func (admin *runtimeAdmin) accountIDs() map[string]string {
 	return existing
 }
 
-// checkAccountAccess 在导入前确认账户不在服务受限状态，再以认证状态打开 AI Studio，Google 拒绝该账户使用 AI Studio 时返回说明原因的错误，服务受限时另在账户根目录记下原因
-func (admin *runtimeAdmin) checkAccountAccess(ctx context.Context, email string, state *aistudio.StorageState, proxy string, authUser int) error {
+// checkAccountAccess 在导入前确认账户不在服务受限状态，再以认证状态打开 AI Studio 并返回页面中登录账户的邮箱，Google 拒绝该账户使用 AI Studio 时返回说明原因的错误，服务受限时另在账户根目录记下原因
+func (admin *runtimeAdmin) checkAccountAccess(ctx context.Context, email string, state *aistudio.StorageState, proxy string, authUser int) (string, error) {
 	if restricted := admin.accountIDs()[strings.ToLower(email)]; restricted != "" {
-		return accountRestricted(email, restricted)
+		return "", accountRestricted(email, restricted)
 	}
-	err := chromeauth.CheckAccess(ctx, state, proxy, authUser)
+	signedIn, err := chromeauth.CheckAccess(ctx, state, proxy, authUser)
 	if denial := aistudio.RestrictionDenial(err); denial != nil {
 		if !errors.Is(denial, camoufoxnative.ErrServiceRestricted) {
-			return accountRestricted(email, denial.Error())
+			return "", accountRestricted(email, denial.Error())
 		}
-		return errors.Join(accountRestricted(email, denial.Error()), admin.store.RecordRestrictedImport(email, denial.Error()))
+		return "", errors.Join(accountRestricted(email, denial.Error()), admin.store.RecordRestrictedImport(email, denial.Error()))
 	}
-	return err
+	return signedIn, err
 }
 
 // accountRestricted 返回账户服务受限、拒绝导入的错误
@@ -445,19 +459,30 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 		if _, err := aistudio.NewSigner().Authorization(result.State); err != nil {
 			return nil, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 		}
-		if err := admin.checkAccountAccess(ctx, email, &results[index].State, admin.effectiveProxy(accountProxy), 0); err != nil {
+		if _, err := admin.checkAccountAccess(ctx, email, &results[index].State, admin.effectiveProxy(accountProxy), 0); err != nil {
 			return nil, err
 		}
 		configs[index] = accountConfig
 	}
-	accounts := make([]api.AdminAccount, 0, len(results))
+	target, done := admin.accountCommit()
+	imported := make([]*aistudio.Account, 0, len(results))
 	for index, result := range results {
-		account, err := admin.upsertAccount(ctx, configs[index].Label, configs[index], result.State, "")
+		account, err := target.upsertAccount(ctx, configs[index].Label, configs[index], result.State, "")
+		if err != nil {
+			done()
+			return nil, err
+		}
+		imported = append(imported, account)
+		admin.requests.log("auth", "INFO", "Chrome 账户已导入", "account", account.Config.Label)
+	}
+	done()
+	accounts := make([]api.AdminAccount, 0, len(imported))
+	for _, account := range imported {
+		synced, err := target.syncedAccount(ctx, account)
 		if err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, account)
-		admin.requests.log("auth", "INFO", "Chrome 账户已导入", "account", account.Label)
+		accounts = append(accounts, synced)
 	}
 	return accounts, nil
 }
@@ -505,13 +530,12 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
 		email = extension.Source.Email
 	}
-	if err := admin.checkAccountAccess(ctx, email, &input.StorageState, admin.effectiveProxy(input.Proxy), input.AuthUser); err != nil {
+	signedIn, err := admin.checkAccountAccess(ctx, email, &input.StorageState, admin.effectiveProxy(input.Proxy), input.AuthUser)
+	if err != nil {
 		return api.AdminAccount{}, err
 	}
-	if existing := admin.accountID(email); existing != "" && input.RenewalToken != "" {
-		return api.AdminAccount{}, &adminOperationError{
-			status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + existing,
-		}
+	if !strings.EqualFold(signedIn, email) {
+		return api.AdminAccount{}, invalidAccount(fmt.Errorf("登录邮箱与账户不一致: %s", signedIn))
 	}
 	fingerprintDirectory := ""
 	if len(input.Fingerprint) != 0 {
@@ -525,17 +549,29 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 		}
 		fingerprintDirectory = directory
 	}
-	account, err := admin.upsertAccount(ctx, email, accountConfig, input.StorageState, fingerprintDirectory)
+	target, done := admin.accountCommit()
+	if existing := target.accountID(email); existing != "" && input.RenewalToken != "" {
+		done()
+		return api.AdminAccount{}, &adminOperationError{
+			status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + existing,
+		}
+	}
+	account, err := target.upsertAccount(ctx, email, accountConfig, input.StorageState, fingerprintDirectory)
+	if err == nil && input.RenewalToken != "" {
+		err = target.savePairingRenewal(account.ID, input.RenewalToken)
+	}
+	done()
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
-	if input.RenewalToken != "" {
-		if err := admin.savePairingRenewal(account.ID, input.RenewalToken); err != nil {
-			return api.AdminAccount{}, err
-		}
-	}
-	admin.requests.log("auth", "INFO", "认证状态账户已导入", "account", account.Label)
-	return account, nil
+	admin.requests.log("auth", "INFO", "认证状态账户已导入", "account", account.Config.Label)
+	return target.syncedAccount(ctx, account)
+}
+
+// syncedAccount 同步账户模型目录后返回账户，新增、导入与登录在提交结束后调用，同步期间不阻止生成服务换代
+func (admin *runtimeAdmin) syncedAccount(ctx context.Context, account *aistudio.Account) (api.AdminAccount, error) {
+	admin.syncAccountModelCatalog(ctx, account)
+	return admin.account(account.ID)
 }
 
 // upsertAccount 在 id 对应的账户已存在时就地更新其认证状态并保留运行态资源绑定，否则以 accountConfig 新增账户
@@ -545,11 +581,11 @@ func (admin *runtimeAdmin) upsertAccount(
 	accountConfig aistudio.AccountConfig,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
-) (api.AdminAccount, error) {
+) (*aistudio.Account, error) {
 	if existing := admin.accountID(id); existing != "" {
 		return admin.updateImportedAccount(ctx, existing, accountConfig.AuthUser, state, fingerprintDirectory)
 	}
-	return admin.addAccount(ctx, accountConfig, state, fingerprintDirectory)
+	return admin.addAccount(accountConfig, state, fingerprintDirectory)
 }
 
 // accountID 返回与 id 不区分大小写相同的已有账户 ID，没有时为空
@@ -569,46 +605,44 @@ func (admin *runtimeAdmin) updateImportedAccount(
 	authUser int,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
-) (api.AdminAccount, error) {
+) (*aistudio.Account, error) {
 	admin.cancelTransition(accountID)
 	lease, err := admin.pool.AcquireAccount(ctx, accountID)
 	if err != nil {
-		return api.AdminAccount{}, accountOperationError(err)
+		return nil, accountOperationError(err)
 	}
 	account := lease.Account()
 	if err := admin.workers.Reset(account.ID); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := replaceAccountState(lease, state, fingerprintDirectory); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := setCookieAuthUser(lease, authUser, admin.workers.prepareUpdate); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
 		return admin.pool.MarkReady(account.ID)
 	}); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := lease.Release(); err != nil {
-		return api.AdminAccount{}, err
+		return nil, err
 	}
-	admin.syncAccountModelCatalog(ctx, account)
-	return admin.account(account.ID)
+	return account, nil
 }
 
 func (admin *runtimeAdmin) addAccount(
-	ctx context.Context,
 	accountConfig aistudio.AccountConfig,
 	state aistudio.StorageState,
 	fingerprintDirectory string,
-) (created api.AdminAccount, resultErr error) {
+) (created *aistudio.Account, resultErr error) {
 	account, publishLease, err := admin.store.Create(accountConfig, state)
 	if errors.Is(err, aistudio.ErrAccountExists) {
-		return api.AdminAccount{}, &adminOperationError{status: http.StatusConflict, code: "account_exists", message: err.Error()}
+		return nil, &adminOperationError{status: http.StatusConflict, code: "account_exists", message: err.Error()}
 	}
 	if err != nil {
-		return api.AdminAccount{}, err
+		return nil, err
 	}
 	defer func() {
 		if publishLease != nil {
@@ -617,34 +651,45 @@ func (admin *runtimeAdmin) addAccount(
 	}()
 	if fingerprintDirectory != "" {
 		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
-			return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
+			return nil, errors.Join(err, admin.store.Delete(account))
 		}
 	}
 	if strings.TrimSpace(account.Config.Proxy) == "" {
 		account.SetPoolProxy(admin.proxies.Next())
 	}
 	if err := admin.workers.Add(account); err != nil {
-		return api.AdminAccount{}, errors.Join(err, admin.store.Delete(account))
+		return nil, errors.Join(err, admin.store.Delete(account))
 	}
 	if err := admin.service.changeModels(func() error {
 		return admin.pool.Add(account)
 	}); err != nil {
-		return api.AdminAccount{}, errors.Join(err, admin.workers.Remove(account.ID), admin.store.Delete(account))
+		return nil, errors.Join(err, admin.workers.Remove(account.ID), admin.store.Delete(account))
 	}
 	if err := publishLease.Release(); err != nil {
-		return api.AdminAccount{}, err
+		return nil, err
 	}
 	publishLease = nil
 	if _, err := admin.proxies.Assign(); err != nil {
-		return api.AdminAccount{}, err
+		return nil, err
 	}
-	admin.syncAccountModelCatalog(ctx, account)
-	return admin.account(account.ID)
+	return account, nil
 }
 
+// UpdateAccount 在提交时的生成服务保存账户配置，启用账户并同时修改其他配置时在提交结束、释放账户读锁后同步模型目录
 func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, input api.AccountInput) (api.AdminAccount, error) {
+	target, done := admin.accountCommit()
+	updated, enabled, err := target.saveAccountConfig(ctx, accountID, input)
+	done()
+	if err != nil || enabled == nil {
+		return updated, err
+	}
+	return target.syncedAccount(ctx, enabled)
+}
+
+// saveAccountConfig 保存账户配置并返回账户，启用账户并同时修改其他配置时另返回需要同步模型目录的账户
+func (admin *runtimeAdmin) saveAccountConfig(ctx context.Context, accountID string, input api.AccountInput) (api.AdminAccount, *aistudio.Account, error) {
 	if !strings.EqualFold(strings.TrimSpace(input.Label), strings.TrimSpace(accountID)) {
-		return api.AdminAccount{}, invalidAccount(fmt.Errorf("账户邮箱不可修改"))
+		return api.AdminAccount{}, nil, invalidAccount(fmt.Errorf("账户邮箱不可修改"))
 	}
 	accountConfig := aistudio.DefaultAccountConfig(strings.ToLower(strings.TrimSpace(accountID)))
 	accountConfig.Enabled = input.Enabled
@@ -652,24 +697,25 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	accountConfig.Locale = strings.TrimSpace(input.Locale)
 	timezone, err := accountTimezone(input.Timezone)
 	if err != nil {
-		return api.AdminAccount{}, invalidAccount(err)
+		return api.AdminAccount{}, nil, invalidAccount(err)
 	}
 	accountConfig.Timezone = timezone
 	if err := accountConfig.Validate(); err != nil {
-		return api.AdminAccount{}, invalidAccount(err)
+		return api.AdminAccount{}, nil, invalidAccount(err)
 	}
 	current, err := admin.account(accountID)
 	if err != nil {
-		return api.AdminAccount{}, err
+		return api.AdminAccount{}, nil, err
 	}
 	if current.Enabled != accountConfig.Enabled && current.Proxy == accountConfig.Proxy &&
 		current.Locale == accountConfig.Locale && current.Timezone == accountConfig.Timezone {
-		return admin.setAccountEnabled(accountID, accountConfig.Enabled)
+		updated, err := admin.setAccountEnabled(accountID, accountConfig.Enabled)
+		return updated, nil, err
 	}
 	admin.cancelTransition(accountID)
 	lease, err := admin.pool.AcquireAccount(ctx, accountID)
 	if err != nil {
-		return api.AdminAccount{}, accountOperationError(err)
+		return api.AdminAccount{}, nil, accountOperationError(err)
 	}
 	account := lease.Account()
 	accountConfig.AuthUser = account.Config.AuthUser
@@ -679,27 +725,28 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	}
 	workerUpdate, err := admin.workers.prepareUpdate(account, accountConfig)
 	if err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return api.AdminAccount{}, nil, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
 		return lease.SaveConfig(accountConfig)
 	}); err != nil {
 		workerUpdate.Discard()
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return api.AdminAccount{}, nil, errors.Join(err, lease.Release())
 	}
 	workerUpdate.Commit()
 	if err := lease.Release(); err != nil {
-		return api.AdminAccount{}, err
+		return api.AdminAccount{}, nil, err
 	}
 	if _, err := admin.proxies.Assign(); err != nil {
-		return api.AdminAccount{}, err
+		return api.AdminAccount{}, nil, err
 	}
 	admin.syncModelCache()
-	if enabling {
-		admin.syncAccountModelCatalog(ctx, account)
-	}
 	admin.requests.log("auth", "INFO", "账户配置已更新", "account", accountConfig.Label)
-	return admin.account(account.ID)
+	if enabling {
+		return api.AdminAccount{}, account, nil
+	}
+	updated, err := admin.account(account.ID)
+	return updated, nil, err
 }
 
 // setAccountEnabled 立即保存账户启用状态并返回，等待在途请求、关闭 Worker 与同步模型目录转入后台，阶段显示在账户状态上
@@ -786,7 +833,14 @@ func (admin *runtimeAdmin) cancelTransition(accountID string) {
 	}
 }
 
+// DeleteAccount 删除账户与它的目录，无法载入的账户目录直接删除
 func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
+	if failed, err := admin.store.DeleteFailure(accountID); failed {
+		if err == nil {
+			admin.requests.log("auth", "INFO", "无法载入的账户目录已删除", "account", accountID)
+		}
+		return err
+	}
 	admin.cancelTransition(accountID)
 	account, err := admin.account(accountID)
 	if err != nil {
@@ -814,21 +868,17 @@ func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) 
 }
 
 func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
-	lease, err := admin.pool.AcquireAccount(ctx, accountID)
+	account, err := admin.pool.Account(accountID)
 	if err != nil {
 		return api.AdminAccount{}, accountOperationError(err)
 	}
-	account := lease.Account()
-	if err := admin.workers.Reset(account.ID); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
 	directory, err := os.MkdirTemp("", "aistudio2api-account-login-*")
 	if err != nil {
-		return api.AdminAccount{}, errors.Join(fmt.Errorf("创建隔离登录目录: %w", err), lease.Release())
+		return api.AdminAccount{}, fmt.Errorf("创建隔离登录目录: %w", err)
 	}
 	defer os.RemoveAll(directory)
 	if err := camoufoxnative.PersistAccountFingerprint(account.Directory, directory); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return api.AdminAccount{}, err
 	}
 	startedAt := time.Now()
 	admin.requests.logStage(account.Config.Label, "INFO", api.LogStage{Name: "账户登录", Step: 1, Steps: 2}, "等待隔离登录")
@@ -837,12 +887,10 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	result, err := admin.login.Login(ctx, request)
 	if err != nil {
 		admin.requests.logStage(account.Config.Label, "ERROR", api.LogStage{Name: "账户登录", State: "failed"}, "账户登录失败", "duration", time.Since(startedAt), "error", err)
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return api.AdminAccount{}, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(result.Email), account.ID) {
-		return api.AdminAccount{}, errors.Join(
-			invalidAccount(fmt.Errorf("登录邮箱与账户不一致: %s", result.Email)), lease.Release(),
-		)
+		return api.AdminAccount{}, invalidAccount(fmt.Errorf("登录邮箱与账户不一致: %s", result.Email))
 	}
 	if result.DriveError != "" {
 		admin.requests.logStage(account.Config.Label, "WARN", api.LogStage{Name: "账户登录"}, "Drive 授权失败", "error", result.DriveError)
@@ -852,13 +900,37 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	}
 	admin.requests.logStage(account.Config.Label, "INFO", api.LogStage{Name: "账户登录", Step: 2, Steps: 2}, "保存认证状态")
 	if _, err := aistudio.NewSigner().Authorization(result.StorageState); err != nil {
-		return api.AdminAccount{}, errors.Join(fmt.Errorf("认证状态无法用于 AI Studio: %w", err), lease.Release())
+		return api.AdminAccount{}, fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	if err := replaceAccountState(lease, result.StorageState, directory); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	target, done := admin.accountCommit()
+	account, err = target.saveLogin(ctx, accountID, result.StorageState, directory)
+	done()
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	saved, err := target.syncedAccount(ctx, account)
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	admin.requests.logStage(account.Config.Label, "INFO", api.LogStage{Name: "账户登录", State: "completed"}, "账户登录完成", "duration", time.Since(startedAt))
+	return saved, nil
+}
+
+// saveLogin 以浏览器登录得到的认证状态与指纹目录替换账户的登录状态，重建该账户的 Worker 并返回账户
+func (admin *runtimeAdmin) saveLogin(ctx context.Context, accountID string, state aistudio.StorageState, fingerprintDirectory string) (*aistudio.Account, error) {
+	lease, err := admin.pool.AcquireAccount(ctx, accountID)
+	if err != nil {
+		return nil, accountOperationError(err)
+	}
+	account := lease.Account()
+	if err := admin.workers.Reset(account.ID); err != nil {
+		return nil, errors.Join(err, lease.Release())
+	}
+	if err := replaceAccountState(lease, state, fingerprintDirectory); err != nil {
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := setCookieAuthUser(lease, 0, admin.workers.prepareUpdate); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
 		return errors.Join(
@@ -867,26 +939,21 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 			admin.pool.SetCatalog(account.ID, account.BenefitTier, nil),
 		)
 	}); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
+		return nil, errors.Join(err, lease.Release())
 	}
 	if err := lease.Release(); err != nil {
-		return api.AdminAccount{}, err
+		return nil, err
 	}
-	admin.syncAccountModelCatalog(ctx, account)
-	admin.requests.logStage(account.Config.Label, "INFO", api.LogStage{Name: "账户登录", State: "completed"}, "账户登录完成", "duration", time.Since(startedAt))
-	return admin.account(account.ID)
+	return account, nil
 }
 
-// replaceAccountState 以新登录状态替换账户的认证状态并沿用账户已有的续签材料，fingerprintDirectory 非空时一并替换 Camoufox 指纹
+// replaceAccountState 以新登录状态替换账户的认证状态，fingerprintDirectory 非空时一并替换 Camoufox 指纹
 func replaceAccountState(lease *aistudio.AccountLease, state aistudio.StorageState, fingerprintDirectory string) error {
 	account := lease.Account()
 	if fingerprintDirectory != "" {
 		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
 			return err
 		}
-	}
-	if err := keepAuthExtension(&state, account.StorageState); err != nil {
-		return err
 	}
 	return lease.SaveStorageState(state)
 }
@@ -908,20 +975,6 @@ func setCookieAuthUser(lease *aistudio.AccountLease, authUser int, prepare func(
 		return err
 	}
 	workerUpdate.Commit()
-	return nil
-}
-
-// keepAuthExtension 在新登录状态没有 OAuth 续签材料时沿用账户已有的 Chrome 来源与 OAuth 材料，DBSC 会话登记属于旧会话不沿用
-func keepAuthExtension(next *aistudio.StorageState, current aistudio.StorageState) error {
-	if extension, _, err := next.AuthExtension(); err != nil || extension.OAuth != nil {
-		return err
-	}
-	extension, _, err := current.AuthExtension()
-	if err != nil || extension.OAuth == nil {
-		return err
-	}
-	extension.Bound = nil
-	next.SetAuthExtension(extension)
 	return nil
 }
 
@@ -1173,10 +1226,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err := cfg.Save(admin.configPath); err != nil {
 		return api.RuntimeConfig{}, err
 	}
-	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
-	admin.pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
-	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
-	admin.pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
+	admin.ApplyAccountSelection(cfg)
 	admin.requests.log("service", "INFO", "服务配置已保存")
 	models, _ := admin.CatalogModels(context.Background())
 	admin.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": models}})
@@ -1184,6 +1234,14 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	value.ActiveProxy = admin.config.Proxy
 	value.ProxyPool = admin.proxyPoolStatus()
 	return value, nil
+}
+
+// ApplyAccountSelection 让 cfg 中的账户选择策略、账户顺序与模型限定的通道和账户作用于之后的选号
+func (admin *runtimeAdmin) ApplyAccountSelection(cfg config.Config) {
+	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	admin.pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
+	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
+	admin.pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
 }
 
 func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, error) {
@@ -1352,8 +1410,19 @@ func openAdminEvents(
 				return false
 			}
 		}
+		// seen 是本连接各活动请求最近一次的状态与执行账户，只有输出时刻变化的请求事件不刷新快照
+		seen := map[string][2]string{}
 		scheduleRequestRefresh := func(event api.AdminEvent) {
 			request := event.Data.(api.AdminRequest)
+			current := [2]string{request.State, request.AccountID}
+			if seen[request.ID] == current {
+				return
+			}
+			if request.State == "queued" || request.State == "running" {
+				seen[request.ID] = current
+			} else {
+				delete(seen, request.ID)
+			}
 			if request.State != "queued" {
 				refreshAccounts = true
 			}

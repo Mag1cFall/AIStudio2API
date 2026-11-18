@@ -76,6 +76,7 @@ func (conn *http3Conn) exchange(request *fhttp.Request, fields []qpackField) (*f
 	if err != nil {
 		return nil, false, err
 	}
+	conn.streams.Add(1)
 	id := int64(stream.StreamID())
 	conn.mu.Lock()
 	block := conn.encoder.encode(fields, id)
@@ -96,7 +97,7 @@ func (conn *http3Conn) exchange(request *fhttp.Request, fields []qpackField) (*f
 	conn.decoderMu.Unlock()
 	body.stopWatch = context.AfterFunc(ctx, body.abort)
 	if request.Body != nil && request.Body != fhttp.NoBody {
-		go body.writeRequest(request.Body)
+		go body.writeRequest(request.Body, request.ContentLength)
 	} else {
 		_ = stream.Close()
 	}
@@ -127,13 +128,23 @@ type http3Body struct {
 	stopWatch func() bool
 }
 
-func (body *http3Body) writeRequest(source io.ReadCloser) {
+// h3DataHeaderMax 是 DATA 帧头的最大长度：1 字节帧类型与 4 字节帧长
+const h3DataHeaderMax = 5
+
+// writeRequest 把 source 每次读到的正文写成一个 DATA 帧：读取缓冲前预留帧头的位置，帧头紧贴正文写入后以一次 Write 发出整帧；length 为已知的正文长度，小于每帧上限时缓冲只取这么长
+func (body *http3Body) writeRequest(source io.ReadCloser, length int64) {
 	defer source.Close()
-	buffer := make([]byte, h3RequestBodyChunk)
+	size := h3RequestBodyChunk
+	if length > 0 && length < int64(size) {
+		size = int(length)
+	}
+	buffer := make([]byte, h3DataHeaderMax+size)
 	for {
-		read, err := source.Read(buffer)
+		read, err := source.Read(buffer[h3DataHeaderMax:])
 		if read > 0 {
-			if _, werr := body.stream.Write(appendH3Frame(nil, h3FrameData, buffer[:read])); werr != nil {
+			start := h3DataHeaderMax - quicvarint.Len(h3FrameData) - quicvarint.Len(uint64(read))
+			quicvarint.Append(quicvarint.Append(buffer[start:start], h3FrameData), uint64(read))
+			if _, werr := body.stream.Write(buffer[start : h3DataHeaderMax+read]); werr != nil {
 				return
 			}
 		}

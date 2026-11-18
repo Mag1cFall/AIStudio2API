@@ -59,7 +59,7 @@ func (worker *Worker) submitResult(ctx, input context.Context, tab *chatTab, tur
 	worker.mu.Lock()
 	tab.unsent = true
 	worker.mu.Unlock()
-	if err := pasteText(input, worker.client, tab.contextID, turn.Result); err != nil {
+	if err := pasteText(input, worker.client, tab.contextID, turn.Result, false); err != nil {
 		return fmt.Errorf("粘贴函数结果: %w", err)
 	}
 	if err := worker.arm(ctx, tab, turn, requestID); err != nil {

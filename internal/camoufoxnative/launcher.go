@@ -3,6 +3,7 @@ package camoufoxnative
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -411,14 +412,28 @@ var hostChromeHeight = map[string]int{"darwin": 85, "linux": 86}[runtime.GOOS]
 // windowsWindowPosition 为 Windows 版按 browser.xhtml 的 screenX、screenY 放置主窗口的坐标
 const windowsWindowPosition = 4
 
-// windowsFontconfig 在 profile 中写入只加载 Camoufox 发行包 Windows 字体并带 Windows 字体替换表的 fontconfig 配置并返回其路径
+// windowsFontconfig 在 profile 中写入只加载 Camoufox 发行包中 Windows 读取的字体分组（fonts/groups.json 的 readBy.win）并带 Windows 字体替换表的 fontconfig 配置并返回其路径
 func windowsFontconfig(executablePath string, profile string) (string, error) {
 	directory := filepath.Dir(executablePath)
 	data, err := os.ReadFile(filepath.Join(directory, "fontconfig", "windows", "fonts.conf"))
 	if err != nil {
 		return "", fmt.Errorf("读取 Camoufox Windows 字体配置: %w", err)
 	}
-	content := strings.ReplaceAll(string(data), `<dir prefix="cwd">fonts</dir>`, "<dir>"+filepath.Join(directory, "fonts", "windows")+"</dir>")
+	groupData, err := os.ReadFile(filepath.Join(directory, "fonts", "groups.json"))
+	if err != nil {
+		return "", fmt.Errorf("读取 Camoufox 字体分组: %w", err)
+	}
+	var groups struct {
+		ReadBy map[string][]string `json:"readBy"`
+	}
+	if err := json.Unmarshal(groupData, &groups); err != nil {
+		return "", fmt.Errorf("解析 Camoufox 字体分组: %w", err)
+	}
+	var dirs strings.Builder
+	for _, group := range groups.ReadBy["win"] {
+		dirs.WriteString("<dir>" + filepath.Join(directory, "fonts", group) + "</dir>")
+	}
+	content := strings.ReplaceAll(string(data), `<dir prefix="cwd">fonts</dir>`, dirs.String())
 	content = strings.ReplaceAll(content, "<const>hintfull</const>", "<const>hintslight</const>")
 	var substitutes strings.Builder
 	// fantasy 族取 Windows 版 Firefox 的平台默认字体 Arial
@@ -572,6 +587,8 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"media.sanity-test.disabled": true,
 		// browser.opaqueResponseBlocking.javascriptValidator 为 false 时不单独启动校验不透明响应的 JS 校验 utility 进程
 		"browser.opaqueResponseBlocking.javascriptValidator": false,
+		// camoufox.virtual_input_time 为 true 时页面从第一次读取时间起按各自的页面时钟看到时间，input.performActions 的停顿与指针移动不实际等待，只推进页面时钟
+		"camoufox.virtual_input_time": true,
 	}
 	proxyValue = strings.TrimSpace(proxyValue)
 	if proxyValue == "" {

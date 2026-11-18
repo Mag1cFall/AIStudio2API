@@ -100,7 +100,7 @@
 
 ## 系统要求
 
-- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，安装进度显示在微软安装程序的窗口中，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
+- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，安装进度显示在微软安装程序的窗口中，安装期间管理页面可从托盘在浏览器中打开，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
 - **macOS 桌面版**: macOS 13 或更高版本，Apple 芯片与 Intel 通用
 - **Linux 桌面版**: GTK 3 与 WebKitGTK 4.1，例如 Ubuntu 22.04、Debian 12 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
 - **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库与 Xvfb，Debian/Ubuntu 执行 `sudo apt-get update && sudo apt-get satisfy -y "libgtk-3-0, libasound2t64 | libasound2, libx11-xcb1, xvfb"`
@@ -300,7 +300,7 @@ docker compose up -d
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
-停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址、预览地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索与媒体输出设置保存后立即生效，进行中的请求沿用开始时的设置；管理页面地址、预览地址和 `PROXY_API_KEY` 在管理进程重启后生效。
 
 桌面版关闭窗口后在系统托盘继续运行，从托盘菜单“退出”结束管理进程；命令行版在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
@@ -399,7 +399,7 @@ modelRoles:
   web: aistudio-gemini/gemini-3.8-flash
 ```
 
-[Antigravity CLI](https://antigravity.google/docs/install?tab=cli)（`agy`）使用 Gemini 接口。在 `~/.gemini/antigravity-cli/settings.json` 中写入 `{"modelProvider": "gemini"}`，设置以下环境变量后运行 `agy`，模型在 agy 中用 `/model` 选择：
+[Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)（`agy`）使用 Gemini 接口。在 `~/.gemini/antigravity-cli/settings.json` 中写入 `{"modelProvider": "gemini"}`，设置以下环境变量后运行 `agy`，模型在 agy 中用 `/model` 选择：
 
 ```powershell
 $env:GEMINI_API_KEY = "<PROXY_API_KEY>"
@@ -758,8 +758,8 @@ Go 负责编码、调度、流式解码与公开协议；`WAA_BACKEND=camoufox` 
 
 - **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
 - **AI Studio 历史**: API 请求不保存到官网历史
-- **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
-- **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
+- **Responses 会话**: `previous_response_id` 与 `previous_interaction_id` 共用最多 256 个响应节点，保存在 `runtime/states.db`，重启后仍可续接
+- **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时在账户页重新登录
 
 ## 贡献
 

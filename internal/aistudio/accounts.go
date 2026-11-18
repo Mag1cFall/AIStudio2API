@@ -131,6 +131,8 @@ func (e *AllCoolingError) accountRejection() bool {
 // AccountsNotReadyError 表示支持请求的账户都处于不可调度状态
 type AccountsNotReadyError struct {
 	Reasons []string
+	// States 是各不可调度账户的状态，与 Reasons 一一对应，停用的账户为 AccountDisabled
+	States []AccountState
 }
 
 func (e *AccountsNotReadyError) Error() string {
@@ -440,6 +442,39 @@ type AccountCandidateState struct {
 // AccountStore 从一个或多个账户文件或目录加载账户
 type AccountStore struct {
 	paths []string
+	// failuresMu 保护 failures
+	failuresMu sync.Mutex
+	// failures 是最近一次 Load 中无法载入、尚未删除的账户目录
+	failures []AccountLoadFailure
+}
+
+// AccountLoadFailure 是一个无法载入的账户目录与原因
+type AccountLoadFailure struct {
+	ID        string
+	Directory string
+	Err       error
+}
+
+// Failures 返回最近一次 Load 中无法载入、尚未删除的账户目录
+func (s *AccountStore) Failures() []AccountLoadFailure {
+	s.failuresMu.Lock()
+	defer s.failuresMu.Unlock()
+	return slices.Clone(s.failures)
+}
+
+// DeleteFailure 删除无法载入的账户目录 id，返回它是否是无法载入的账户目录
+func (s *AccountStore) DeleteFailure(id string) (bool, error) {
+	s.failuresMu.Lock()
+	defer s.failuresMu.Unlock()
+	index := slices.IndexFunc(s.failures, func(failure AccountLoadFailure) bool { return failure.ID == id })
+	if index < 0 {
+		return false, nil
+	}
+	if err := os.RemoveAll(s.failures[index].Directory); err != nil {
+		return true, fmt.Errorf("删除账户目录: %w", err)
+	}
+	s.failures = slices.Delete(s.failures, index, index+1)
+	return true, nil
 }
 
 // restrictedImportsName 是账户根目录中记下导入时被 Google 限制使用 AI Studio 的账户邮箱与原因的文件
@@ -532,7 +567,9 @@ type AccountLease struct {
 	holds int
 	// releaseDeferred 表示 Release 已被推迟
 	releaseDeferred bool
-	err             error
+	// afterRelease 是租约归还后在后台执行的函数
+	afterRelease []func()
+	err          error
 	// sessionOnce 使同一租约内的认证失败只检查一次会话
 	sessionOnce sync.Once
 	// sessionErr 是本租约会话检查的结果
@@ -575,7 +612,7 @@ func NewAccountStore(paths ...string) *AccountStore {
 	return &AccountStore{paths: cleaned}
 }
 
-// Load 扫描账户目录并恢复冷却与资源粘性
+// Load 扫描账户目录并恢复冷却与资源粘性，无法载入的账户目录跳过并记入 Failures
 func (s *AccountStore) Load() ([]*Account, error) {
 	if len(s.paths) == 0 {
 		return nil, fmt.Errorf("账户路径为空")
@@ -623,14 +660,30 @@ func (s *AccountStore) Load() ([]*Account, error) {
 	}
 	sort.Strings(directories)
 
+	type loaded struct {
+		account *Account
+		err     error
+	}
+	results := make([]loaded, len(directories))
+	catalogs := &catalogParses{entries: make(map[catalogCacheKey]catalogCacheParse)}
+	var group sync.WaitGroup
+	for index, directory := range directories {
+		group.Go(func() {
+			account, err := loadAccount(directory, catalogs)
+			results[index] = loaded{account, err}
+		})
+	}
+	group.Wait()
+
 	accounts := make([]*Account, 0, len(directories))
 	ids := make(map[string]struct{}, len(directories))
 	resources := make(map[string]string)
-	catalogs := make(map[catalogCacheKey]catalogCacheParse)
-	for _, directory := range directories {
-		account, err := loadAccount(directory, catalogs)
+	var failures []AccountLoadFailure
+	for index, directory := range directories {
+		account, err := results[index].account, results[index].err
 		if err != nil {
-			return nil, err
+			failures = append(failures, AccountLoadFailure{ID: filepath.Base(directory), Directory: directory, Err: err})
+			continue
 		}
 		if _, exists := ids[account.ID]; exists {
 			return nil, fmt.Errorf("账户 ID 重复: %s", account.ID)
@@ -644,6 +697,9 @@ func (s *AccountStore) Load() ([]*Account, error) {
 		}
 		accounts = append(accounts, account)
 	}
+	s.failuresMu.Lock()
+	s.failures = failures
+	s.failuresMu.Unlock()
 	return accounts, nil
 }
 
@@ -1214,7 +1270,7 @@ func (p *AccountPool) AcquireAccount(ctx context.Context, accountID string) (*Ac
 
 // AcquireFor 按模型方法账户或资源粘性获取账户槽位
 func (p *AccountPool) AcquireFor(ctx context.Context, selection AccountSelection) (*AccountLease, error) {
-	selection = p.scopedSelection(ctx, selection)
+	selection = p.ScopedSelection(ctx, selection)
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
 			return nil, err
@@ -1311,7 +1367,7 @@ func (p *AccountPool) resourceOwners() []string {
 
 // TryAcquireFor 尝试获取账户槽位并立即返回当前结果
 func (p *AccountPool) TryAcquireFor(ctx context.Context, selection AccountSelection) (*AccountLease, bool, error) {
-	selection = p.scopedSelection(ctx, selection)
+	selection = p.ScopedSelection(ctx, selection)
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
 			return nil, false, err
@@ -1410,6 +1466,7 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	scope, bound := p.modelAccounts[selection.ModelID]
 	var reasons []string
+	var states []AccountState
 	for _, account := range p.accounts {
 		if account.Config.Enabled && account.State == AccountReady || bound && !slices.Contains(scope, account.ID) {
 			continue
@@ -1418,6 +1475,11 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 			continue
 		}
 		reasons = append(reasons, accountStateReason(account))
+		state := account.State
+		if !account.Config.Enabled {
+			state = AccountDisabled
+		}
+		states = append(states, state)
 	}
 	if len(reasons) == 0 && bound {
 		return fmt.Errorf("%w：模型 %s 绑定的账户都无法调用", ErrNoEligibleAccount, selection.ModelID)
@@ -1425,7 +1487,7 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 	if len(reasons) == 0 {
 		return ErrNoEligibleAccount
 	}
-	return &AccountsNotReadyError{Reasons: reasons}
+	return &AccountsNotReadyError{Reasons: reasons, States: states}
 }
 
 func (p *AccountPool) markStaleAccountUnavailable(account *Account) {
@@ -2014,12 +2076,27 @@ func (l *AccountLease) Retain() func() error {
 	}
 }
 
-// releaseLocked 归还租约占用的账户名额，调用方持有 operation，已归还时不重复归还
+// AfterRelease 在租约归还后于后台执行 run，租约已归还时立即在后台执行
+func (l *AccountLease) AfterRelease(run func()) {
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		go run()
+		return
+	}
+	l.afterRelease = append(l.afterRelease, run)
+}
+
+// releaseLocked 归还租约占用的账户名额并在后台执行 afterRelease，调用方持有 operation，已归还时不重复归还
 func (l *AccountLease) releaseLocked() {
 	if l.released {
 		return
 	}
 	l.released = true
+	for _, run := range l.afterRelease {
+		go run()
+	}
+	l.afterRelease = nil
 	l.pool.mu.Lock()
 	l.finishProofLocked()
 	if l.exclusive {
@@ -2800,7 +2877,7 @@ func (p *AccountPool) ClassifyCandidates(
 	selection AccountSelection,
 	warmAccountIDs []string,
 ) (AccountCandidateGroups, error) {
-	selection = p.scopedSelection(ctx, selection)
+	selection = p.ScopedSelection(ctx, selection)
 	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
@@ -3231,7 +3308,7 @@ func (p *AccountPool) notifyLocked() {
 }
 
 // loadAccount 载入账户目录，catalogs 不为 nil 时保存本次载入已解析的目录缓存，内容与权益等级相同的账户共用一次解析
-func loadAccount(directory string, catalogs map[catalogCacheKey]catalogCacheParse) (*Account, error) {
+func loadAccount(directory string, catalogs *catalogParses) (*Account, error) {
 	directory, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, fmt.Errorf("解析账户目录: %w", err)
@@ -3297,8 +3374,14 @@ type catalogCacheParse struct {
 	fingerprint string
 }
 
+// catalogParses 是一次载入中各账户共用的目录缓存解析结果
+type catalogParses struct {
+	mu      sync.Mutex
+	entries map[catalogCacheKey]catalogCacheParse
+}
+
 // readCatalogCache 读取 catalog.json，返回加入官网隐藏模型后的 ListModels 目录与缓存内容，内容与 runtime-state 的目录指纹不一致或无法读取时返回空目录与空缓存；catalogs 中已有同一权益等级与原文的解析结果时直接沿用，catalogs 不为 nil 时保存本次解析结果
-func readCatalogCache(filePath string, runtimeState accountRuntimeState, catalogs map[catalogCacheKey]catalogCacheParse) (modelCatalog, accountCatalogCache) {
+func readCatalogCache(filePath string, runtimeState accountRuntimeState, catalogs *catalogParses) (modelCatalog, accountCatalogCache) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return modelCatalog{}, accountCatalogCache{}
@@ -3308,7 +3391,13 @@ func readCatalogCache(filePath string, runtimeState accountRuntimeState, catalog
 		return modelCatalog{}, accountCatalogCache{}
 	}
 	key := catalogCacheKey{tier: runtimeState.BenefitTier, source: string(cache.ListModels)}
-	parsed, ok := catalogs[key]
+	var parsed catalogCacheParse
+	ok := false
+	if catalogs != nil {
+		catalogs.mu.Lock()
+		parsed, ok = catalogs.entries[key]
+		catalogs.mu.Unlock()
+	}
 	if !ok {
 		catalog, err := parseModelCatalog(bytes.NewReader(cache.ListModels))
 		if err != nil {
@@ -3320,7 +3409,9 @@ func readCatalogCache(filePath string, runtimeState accountRuntimeState, catalog
 		}
 		parsed = catalogCacheParse{catalog: catalog, fingerprint: fingerprint}
 		if catalogs != nil {
-			catalogs[key] = parsed
+			catalogs.mu.Lock()
+			catalogs.entries[key] = parsed
+			catalogs.mu.Unlock()
 		}
 	}
 	if parsed.fingerprint != runtimeState.CatalogFingerprint {

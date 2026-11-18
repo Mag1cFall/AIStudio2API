@@ -41,8 +41,8 @@ func (runtime *goWAARuntime) settingSteps(body []byte) [][]waa.SettingStep {
 	if elements == nil {
 		return nil
 	}
-	var fields []json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || len(fields) < 2 {
+	fields, ok := wireArray(body)
+	if !ok || len(fields) < 2 {
 		return nil
 	}
 	var model string

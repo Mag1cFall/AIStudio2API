@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/waa/prooftime"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/rhythm"
 )
 
@@ -48,13 +51,42 @@ const fillPromptStatements = pageDOMHelpers + `
   const synced = textarea.value === prompt;
 `
 
-// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，返回 proof 与 snapshot 毫秒数的 JSON，之后清空输入框并通知页面表单；页面值与提示词不同时不调用 snapshot，返回 null
+// proofTimingFunction 是在调用官网高层 proof 函数之前开始计时的函数声明：参数为官网 WAA service，service 自身与其 VM 管理对象上的初始化与到期重建 Promise 每完成一个记下一次时刻，先于官网函数对同一 Promise 的等待；返回的函数给出等待初始化与重建、生成 proof 的毫秒数
+const proofTimingFunction = `service => {
+  const started = performance.now();
+  let refreshed = started;
+  const done = () => { refreshed = performance.now(); };
+  const vm = Object.values(service).find(value => typeof value?.snapshot === 'function');
+  for (const wait of [...Object.values(service), ...Object.values(vm ?? {}).map(value => value?.promise)]) {
+    if (typeof wait?.then === 'function') wait.then(done, done);
+  }
+  return () => ({refresh: refreshed - started, compute: performance.now() - refreshed});
+}`
+
+// pageProofTiming 是页面一次取 proof 的分项毫秒数
+type pageProofTiming struct {
+	// Refresh 是等待官网 WAA 初始化与 VM 到期重建的毫秒数
+	Refresh float64 `json:"refresh"`
+	// Compute 是 VM 生成 proof 的毫秒数
+	Compute float64 `json:"compute"`
+}
+
+// observe 把分项累计进 ctx 所带的取 proof 耗时，自 started 起的其余时间记为界面操作
+func (timing pageProofTiming) observe(ctx context.Context, started time.Time) {
+	refresh := time.Duration(timing.Refresh * float64(time.Millisecond))
+	compute := time.Duration(timing.Compute * float64(time.Millisecond))
+	prooftime.Observe(ctx, prooftime.Refresh, refresh)
+	prooftime.Observe(ctx, prooftime.Compute, compute)
+	prooftime.Observe(ctx, prooftime.Interaction, time.Since(started)-refresh-compute)
+}
+
+// proofFunction 写入提示词后以保存的官方 WAA service 为 digest 调用官网 snapshot 函数，返回 proof 与 pageProofTiming 分项的 JSON，之后清空输入框并通知页面表单；页面值与提示词不同时不调用 snapshot，返回 null
 const proofFunction = `async (page, prompt, digest) => {
   if (!page.service) throw new Error('官方 WAA service 尚未就绪');` + fillPromptStatements + `  try {
     if (!synced) return null;
-    const started = performance.now();
+    const timing = (` + proofTimingFunction + `)(page.service);
     const proof = await page.snapshot(digest);
-    return JSON.stringify({proof, compute: performance.now() - started});
+    return JSON.stringify({proof, ...timing()});
   } finally {
     setValue.call(textarea, '');
     textarea.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContent'}));
@@ -64,29 +96,33 @@ const proofFunction = `async (page, prompt, digest) => {
 // clipboardWriteFunction 把参数文本写入剪贴板，调用时带用户激活
 const clipboardWriteFunction = `text => navigator.clipboard.writeText(text)`
 
-// 官网现场中 Firefox 在 BiDi 停顿之外为各组事件多用的毫秒数：Control 到 V、V 按住、V 抬起到 Control 抬起、指针移到按下与按下到抬起
-const (
-	controlOverhead = 4.5
-	keyOverhead     = 9.5
-	releaseOverhead = 3
-	pressOverhead   = 8
-	holdOverhead    = 8
-)
-
-// pause 返回让 Firefox 派发的两组事件相隔 interval 毫秒的 BiDi 停顿动作
-func pause(interval, overhead float64) map[string]any {
-	return map[string]any{"type": "pause", "duration": int(math.Round(max(interval-overhead, 0)))}
+// pause 返回让页面看到的两组事件相隔 interval 毫秒的 BiDi 停顿动作
+func pause(interval float64) map[string]any {
+	return map[string]any{"type": "pause", "duration": int(math.Round(interval))}
 }
 
-// pasteKeyActions 返回按账户节奏在官网输入框按 Ctrl+V 的可信键盘动作：按下 Control 与 V，按住后依次抬起
-func pasteKeyActions(account rhythm.Rhythm) []map[string]any {
+// pasteKeyActions 返回按账户节奏在官网输入框按 Ctrl+V 的可信键盘动作：按下 Control 与 V，按住后依次抬起；shift 为真时在 Control 之后按下 Shift、抬起 V 之后抬起 Shift，以 Ctrl+Shift+V 粘贴
+func pasteKeyActions(account rhythm.Rhythm, shift bool) []map[string]any {
+	if !shift {
+		return []map[string]any{
+			{"type": "keyDown", "value": "\uE009"}, pause(account.Control),
+			{"type": "keyDown", "value": "v"}, pause(account.Key),
+			{"type": "keyUp", "value": "v"}, pause(account.Release),
+			{"type": "keyUp", "value": "\uE009"},
+		}
+	}
 	return []map[string]any{
-		{"type": "keyDown", "value": "\uE009"}, pause(account.Control, controlOverhead),
-		{"type": "keyDown", "value": "v"}, pause(account.Key, keyOverhead),
-		{"type": "keyUp", "value": "v"}, pause(account.Release, releaseOverhead),
+		{"type": "keyDown", "value": "\uE009"}, pause(account.Control),
+		{"type": "keyDown", "value": "\uE008"}, pause(account.Control),
+		{"type": "keyDown", "value": "v"}, pause(account.Key),
+		{"type": "keyUp", "value": "v"}, pause(account.Release),
+		{"type": "keyUp", "value": "\uE008"}, pause(account.Release),
 		{"type": "keyUp", "value": "\uE009"},
 	}
 }
+
+// pasteLinkPattern 匹配官网提示词输入框按 Ctrl+V 粘贴时取出为附件的 Google 文档与云端硬盘、YouTube 与 Figma 链接（官网对 YouTube 链接不要求协议头）；按住 Shift 粘贴时页面不取出
+var pasteLinkPattern = regexp.MustCompile(`(?i)(?:docs\.google\.com|drive\.google\.com|youtube(?:-nocookie)?\.com|youtu\.be|figma\.com)/`)
 
 // promptValueFunction 返回可见提示框的当前值
 const promptValueFunction = `() => {` + pageDOMHelpers + `
@@ -95,27 +131,23 @@ const promptValueFunction = `() => {` + pageDOMHelpers + `
   return textarea.value;
 }`
 
-// pasteText 把 text 写入剪贴板，再以可信键盘按 Ctrl+V 粘贴到有焦点的输入框
-func pasteText(ctx context.Context, client *bidiClient, contextID, text string) error {
+// pasteText 把 text 写入剪贴板，再以可信键盘按 Ctrl+V 粘贴到有焦点的输入框，shift 为真时按 Ctrl+Shift+V
+func pasteText(ctx context.Context, client *bidiClient, contextID, text string, shift bool) error {
 	if _, err := client.invoke(ctx, contextID, clipboardWriteFunction, []any{text}, map[string]any{"userActivation": true}); err != nil {
 		return fmt.Errorf("写入剪贴板: %w", err)
 	}
-	return pressKeys(ctx, client, contextID, pasteKeyActions(client.rhythm))
+	return pressKeys(ctx, client, contextID, pasteKeyActions(client.rhythm, shift))
 }
 
 // pressKeys 以可信键盘依次执行 actions
 func pressKeys(ctx context.Context, client *bidiClient, contextID string, actions []map[string]any) error {
-	_, err := client.command(ctx, "input.performActions", map[string]any{
-		"context": contextID,
-		"actions": []map[string]any{{"type": "key", "id": "keyboard", "actions": actions}},
-	})
-	return err
+	return client.performInput(ctx, contextID, map[string]any{"type": "key", "id": "keyboard", "actions": actions})
 }
 
-// pastePrompt 把按 LF 规范化的提示词写入剪贴板，再以可信键盘按 Ctrl+V 粘贴到有焦点的官网提示框，页面值与之不同时返回错误
+// pastePrompt 把按 LF 规范化的提示词写入剪贴板，再以可信键盘按 Ctrl+V 粘贴到有焦点的官网提示框，提示词含页面会取出为附件的链接时按 Ctrl+Shift+V，页面值与之不同时返回错误
 func pastePrompt(ctx context.Context, client *bidiClient, contextID, prompt string) error {
 	prompt = normalizePromptNewlines(prompt)
-	if err := pasteText(ctx, client, contextID, prompt); err != nil {
+	if err := pasteText(ctx, client, contextID, prompt, pasteLinkPattern.MatchString(prompt)); err != nil {
 		return fmt.Errorf("粘贴提示词: %w", err)
 	}
 	value, err := client.callFunctionString(ctx, contextID, promptValueFunction)
@@ -269,13 +301,9 @@ func (client *bidiClient) pointer(ctx context.Context, contextID, selector, patt
 	}
 	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": move}}
 	if click {
-		actions = append(actions, pause(client.rhythm.Press, pressOverhead), map[string]any{"type": "pointerDown", "button": 0}, pause(client.rhythm.Hold, holdOverhead), map[string]any{"type": "pointerUp", "button": 0})
+		actions = append(actions, pause(client.rhythm.Press), map[string]any{"type": "pointerDown", "button": 0}, pause(client.rhythm.Hold), map[string]any{"type": "pointerUp", "button": 0})
 	}
-	_, err = client.command(ctx, "input.performActions", map[string]any{
-		"context": contextID,
-		"actions": []map[string]any{{"type": "pointer", "id": "mouse", "parameters": map[string]any{"pointerType": "mouse"}, "actions": actions}},
-	})
-	return true, err
+	return true, client.performInput(ctx, contextID, map[string]any{"type": "pointer", "id": "mouse", "parameters": map[string]any{"pointerType": "mouse"}, "actions": actions})
 }
 
 // dismissOverlaysExpression 关闭官网已知且可交互的启动弹层：G1 欢迎对话框、引导浏览浮层与 Cookie 提示条，提示条有拒绝按钮时拒绝，只有确认按钮时确认

@@ -21,8 +21,8 @@ type toolContract struct {
 	serverSide bool
 }
 
-// prepareToolRequest 将工具选择与约束转换为共同生成请求
-func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract, error) {
+// prepareToolRequest 将工具选择与约束转换为共同生成请求，compile 为 true 时编译严格函数的参数 Schema 供校验函数调用参数
+func prepareToolRequest(request GenerateRequest, compile bool) (GenerateRequest, *toolContract, error) {
 	config := request.Tools.ToolConfig
 	if config.Mode == "none" {
 		return request, nil, nil
@@ -76,6 +76,9 @@ func prepareToolRequest(request GenerateRequest) (GenerateRequest, *toolContract
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 		if err != nil {
 			return request, nil, err
+		}
+		if !compile {
+			continue
 		}
 		document = validationSchema(document)
 		compiler := jsonschema.NewCompiler()

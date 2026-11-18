@@ -29,8 +29,7 @@ type ProtectedResponse struct {
 type protectedMessage struct {
 	Sent  bool   `json:"sent"`
 	Proof string `json:"proof"`
-	// Compute 是页面应用取 proof 的毫秒数
-	Compute float64     `json:"compute"`
+	pageProofTiming
 	Status  int         `json:"status"`
 	Headers [][2]string `json:"headers"`
 	Done    bool        `json:"done"`

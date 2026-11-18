@@ -45,8 +45,9 @@ func (c *Client) GenerateTitle(ctx context.Context, accountID string, request Ti
 	if request.Answer != "" {
 		answer = request.Answer
 	}
-	body, _ := json.Marshal([]any{request.Prompt, answer, nil})
+	body, proofAt, _ := marshalWAAArray([]any{request.Prompt, answer, nil}, 3)
 	rpc := newRPCRequest("GenerateTitle", accountID, "", body, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, accountID, rpc.Header)
 	response, err := c.protected.(TitleProtectedTransport).DoProtectedTitle(ctx, request, rpc)
 	if err != nil {

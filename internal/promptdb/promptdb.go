@@ -22,7 +22,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS prompts (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL, description TEXT NOT NULL,
  created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL, turns INTEGER, tokens INTEGER);
-CREATE INDEX IF NOT EXISTS prompts_updated ON prompts(updated);
+CREATE INDEX IF NOT EXISTS prompts_list ON prompts(updated, id, title, model, description, created, turns, tokens);
 CREATE TABLE IF NOT EXISTS system_instructions (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL);`
 
@@ -39,7 +39,7 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sqlitedb.Open(path, schema)
+	db, err := sqlitedb.Open(path, schema, 0)
 	if err != nil {
 		return nil, fmt.Errorf("初始化对话库: %w", err)
 	}
@@ -49,6 +49,11 @@ func Open(path string) (*Store, error) {
 // Close 关闭对话库
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// Reclaim 把空闲页交还文件系统
+func (s *Store) Reclaim(ctx context.Context) error {
+	return sqlitedb.Reclaim(ctx, s.db)
 }
 
 // Prompts 按更新时间倒序列出对话，pageSize 为 0 时列出 pageToken 之后的全部，返回下一页的令牌，没有下一页时为空

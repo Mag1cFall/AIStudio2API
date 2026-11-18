@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -80,7 +81,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 		if err != nil {
 			return err
 		}
-		return renewRemote(ctx, client, renewals, i18n.Stdout)
+		return renewRemote(ctx, renewals, i18n.Stdout, pushTo(client))
 	}
 	input := bufio.NewReader(os.Stdin)
 	var target accountTarget
@@ -110,7 +111,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 	if err := saveRenewals(remote.renewals); err != nil || importErr != nil {
 		return errors.Join(importErr, err)
 	}
-	return renewRemote(ctx, client, remote.renewals, i18n.Stdout)
+	return renewRemote(ctx, remote.renewals, i18n.Stdout, pushTo(client))
 }
 
 // importAccounts 按参数从 storage state 文件、Cookie、隔离登录或本机 Chrome 导入账户
@@ -386,25 +387,35 @@ func importChromeAccounts(ctx context.Context, cfg config.Config, target account
 	if err != nil {
 		return err
 	}
-	modelCounts := make([]int, len(results))
+	var saving sync.Mutex
+	var group sync.WaitGroup
+	failures := make([]error, len(results))
 	for index := range results {
-		verifyContext, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-		verification, verifyErr := chromeauth.VerifyAuthUser(verifyContext, &results[index].State, options.egress, 0)
-		cancel()
-		if verifyErr != nil {
-			return fmt.Errorf("验证 %s: %w", results[index].Email, verifyErr)
-		}
-		if err := checkAccess(ctx, results[index].Email, &results[index].State, options.egress, 0); err != nil {
-			return err
-		}
-		modelCounts[index] = verification.ModelCount
+		group.Go(func() {
+			failures[index] = importChromeResult(ctx, cfg, target, options, &results[index], &saving, output)
+		})
 	}
-	for index, result := range results {
-		if _, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.State, ""); err != nil {
-			return err
-		}
-		fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, modelCounts[index])
+	group.Wait()
+	return errors.Join(failures...)
+}
+
+// importChromeResult 验证一个 Chrome 账号，通过后保存并输出，saving 串行化各账号的保存与输出
+func importChromeResult(ctx context.Context, cfg config.Config, target accountTarget, options setupOptions, result *chromeauth.ImportResult, saving *sync.Mutex, output io.Writer) error {
+	verifyContext, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	verification, err := chromeauth.VerifyAuthUser(verifyContext, &result.State, options.egress, 0)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("验证 %s: %w", result.Email, err)
 	}
+	if err := checkAccess(ctx, result.Email, &result.State, options.egress, 0); err != nil {
+		return err
+	}
+	saving.Lock()
+	defer saving.Unlock()
+	if _, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.State, ""); err != nil {
+		return err
+	}
+	fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, verification.ModelCount)
 	return nil
 }
 
@@ -619,7 +630,7 @@ func validateSetupRoot(root string) error {
 
 // checkAccess 在保存前确认 Google 没有拒绝该账户使用 AI Studio
 func checkAccess(ctx context.Context, email string, state *aistudio.StorageState, egress string, authUser int) error {
-	err := chromeauth.CheckAccess(ctx, state, egress, authUser)
+	_, err := chromeauth.CheckAccess(ctx, state, egress, authUser)
 	if denial := aistudio.RestrictionDenial(err); denial != nil {
 		return fmt.Errorf("%s 服务受限，未导入：%v", email, denial)
 	}

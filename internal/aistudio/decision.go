@@ -105,11 +105,12 @@ func (c *Client) CreateDecision(ctx context.Context, request DecisionRequest) (D
 	if !hasMethod(entry.model, "createDecision") {
 		return DecisionResult{}, fmt.Errorf("%w: 模型 %q 的实时目录没有 createDecision 方法", ErrInvalidArgument, entry.model.ID)
 	}
-	body, err := EncodeCreateDecisionRequest(request)
+	body, proofAt, err := EncodeCreateDecisionRequest(request)
 	if err != nil {
 		return DecisionResult{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	rpc := newRPCRequest("CreateDecision", request.AccountID, "", body, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.(DecisionProtectedTransport).DoProtectedDecision(ctx, request, rpc)
 	if err != nil {
@@ -129,21 +130,21 @@ func (t *WorkerProtectedTransport) DoProtectedDecision(ctx context.Context, requ
 	if err != nil {
 		return nil, err
 	}
-	return t.doPrepared(ctx, prompt, "", 5, "", AccountSelection{
+	return t.doPrepared(ctx, prompt, "", "", AccountSelection{
 		ModelID: request.Model, Method: "createDecision", AccountID: request.AccountID,
 	}, rpc)
 }
 
-// EncodeCreateDecisionRequest 编码官网 CreateDecision 数组协议：模型、输入 Content 列表、问题 map 与 field 5 的 proof 位
-func EncodeCreateDecisionRequest(request DecisionRequest) ([]byte, error) {
+// EncodeCreateDecisionRequest 编码官网 CreateDecision 数组协议：模型、输入 Content 列表、问题 map 与 field 5 的 proof 位，返回正文与 proof 位在正文中的起始字节
+func EncodeCreateDecisionRequest(request DecisionRequest) ([]byte, int, error) {
 	if len(request.Input) == 0 {
-		return nil, fmt.Errorf("input 不能为空")
+		return nil, 0, fmt.Errorf("input 不能为空")
 	}
 	input := make([]any, 0, len(request.Input))
 	for index, part := range request.Input {
 		content, err := decisionContent(part)
 		if err != nil {
-			return nil, fmt.Errorf("input[%d]: %w", index, err)
+			return nil, 0, fmt.Errorf("input[%d]: %w", index, err)
 		}
 		input = append(input, content)
 	}
@@ -171,11 +172,11 @@ func EncodeCreateDecisionRequest(request DecisionRequest) ([]byte, error) {
 		case "score":
 			wire[3] = []any{question.Levels}
 		default:
-			return nil, fmt.Errorf("questions.%s.type 必须是 noul、choice 或 score", question.Key)
+			return nil, 0, fmt.Errorf("questions.%s.type 必须是 noul、choice 或 score", question.Key)
 		}
 		questions = append(questions, []any{question.Key, trimWireNil(wire)})
 	}
-	return json.Marshal([]any{"models/" + request.Model, input, questions, nil, nil})
+	return marshalWAAArray([]any{"models/" + request.Model, input, questions, nil, nil}, 5)
 }
 
 // decisionContent 编码一个输入块：field 1 文本，field 2 至 5 依次为图片、音频、文档与视频的 MIME 枚举、Base64 数据或 URI 与分辨率

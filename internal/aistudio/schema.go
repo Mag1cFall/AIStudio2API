@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,28 +41,40 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return playgroundSchema(schema), nil
+	return playgroundSchema(schema, true, false), nil
 }
 
-// playgroundSchema 把 Gemini Schema 对象编码为 Playground Schema 数组，属性按名称排序
-func playgroundSchema(schema map[string]any) []any {
+// playgroundSchema 把 Gemini Schema 对象编码为 Playground Schema 数组，属性按 propertyOrdering 排列，其余属性按名称排在后面；emit 为 false 时不写 propertyOrdering 字段，联合分支内是否写由 branchEmit 决定（官网函数声明的联合分支不带该字段）
+func playgroundSchema(schema map[string]any, emit, branchEmit bool) []any {
 	var wire []any
+	ordering, _ := schema["propertyOrdering"].([]string)
 	for name, value := range schema {
 		switch name {
 		case "type":
 			value = int64(slices.Index(schemaTypeNames, value.(string)))
 		case "items", "not":
-			value = playgroundSchema(value.(map[string]any))
+			value = playgroundSchema(value.(map[string]any), emit, branchEmit)
 		case "properties":
 			properties := value.(map[string]any)
 			names := make([]string, 0, len(properties))
 			for name := range properties {
 				names = append(names, name)
 			}
-			sort.Strings(names)
+			slices.SortFunc(names, func(left, right string) int {
+				leftIndex, rightIndex := slices.Index(ordering, left), slices.Index(ordering, right)
+				switch {
+				case leftIndex >= 0 && rightIndex >= 0:
+					return cmp.Compare(leftIndex, rightIndex)
+				case leftIndex >= 0:
+					return -1
+				case rightIndex >= 0:
+					return 1
+				}
+				return strings.Compare(left, right)
+			})
 			entries := make([]any, 0, len(names))
 			for _, name := range names {
-				entries = append(entries, []any{name, playgroundSchema(properties[name].(map[string]any))})
+				entries = append(entries, []any{name, playgroundSchema(properties[name].(map[string]any), emit, branchEmit)})
 			}
 			value = entries
 		case "example":
@@ -69,9 +82,13 @@ func playgroundSchema(schema map[string]any) []any {
 		case "oneOf", "anyOf", "allOf":
 			variants := make([]any, 0, len(value.([]any)))
 			for _, variant := range value.([]any) {
-				variants = append(variants, playgroundSchema(variant.(map[string]any)))
+				variants = append(variants, playgroundSchema(variant.(map[string]any), branchEmit, branchEmit))
 			}
 			value = variants
+		case "propertyOrdering":
+			if !emit {
+				continue
+			}
 		}
 		wire = setWireField(wire, playgroundSchemaFields[name], value)
 	}
@@ -263,7 +280,19 @@ func geminiSchema(raw json.RawMessage) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		encoded["propertyOrdering"] = ordering
+		// propertyOrdering 只列编码后的属性，没有列出的属性按名称排在后面
+		properties, _ := encoded["properties"].(map[string]any)
+		ordering = slices.DeleteFunc(ordering, func(name string) bool { return properties[name] == nil })
+		var rest []string
+		for name := range properties {
+			if !slices.Contains(ordering, name) {
+				rest = append(rest, name)
+			}
+		}
+		sort.Strings(rest)
+		if ordering = append(ordering, rest...); len(ordering) > 0 {
+			encoded["propertyOrdering"] = ordering
+		}
 	}
 	if encoded["type"] == schemaTypeNames[0] && encoded["anyOf"] == nil && encoded["oneOf"] == nil && encoded["allOf"] == nil {
 		for name, value := range openSchema() {
@@ -715,6 +744,51 @@ func normalizeFunctionParameters(raw json.RawMessage) (json.RawMessage, error) {
 		return cleaned, nil
 	}
 	return json.Marshal(schema)
+}
+
+// schemaWithPropertyOrdering 为 Schema 与其子 Schema 中带 properties、没有 propertyOrdering 的对象补上 propertyOrdering，属性名按官网页面 JSON.parse 后的键顺序排列
+func schemaWithPropertyOrdering(raw json.RawMessage) json.RawMessage {
+	var schema map[string]json.RawMessage
+	if json.Unmarshal(raw, &schema) != nil || schema == nil {
+		return raw
+	}
+	if value, ok := schema["properties"]; ok {
+		var properties map[string]json.RawMessage
+		if json.Unmarshal(value, &properties) == nil && len(properties) > 0 {
+			for name, property := range properties {
+				properties[name] = schemaWithPropertyOrdering(property)
+			}
+			schema["properties"], _ = json.Marshal(properties)
+			if _, ok := schema["propertyOrdering"]; !ok {
+				schema["propertyOrdering"], _ = json.Marshal(objectKeys(value))
+			}
+		}
+	}
+	for _, name := range []string{"items", "not", "additionalProperties"} {
+		if value, ok := schema[name]; ok {
+			schema[name] = schemaWithPropertyOrdering(value)
+		}
+	}
+	for _, name := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
+		var variants []json.RawMessage
+		if json.Unmarshal(schema[name], &variants) == nil && len(variants) > 0 {
+			for index, variant := range variants {
+				variants[index] = schemaWithPropertyOrdering(variant)
+			}
+			schema[name], _ = json.Marshal(variants)
+		}
+	}
+	for _, name := range []string{"$defs", "definitions"} {
+		var definitions map[string]json.RawMessage
+		if json.Unmarshal(schema[name], &definitions) == nil && len(definitions) > 0 {
+			for key, definition := range definitions {
+				definitions[key] = schemaWithPropertyOrdering(definition)
+			}
+			schema[name], _ = json.Marshal(definitions)
+		}
+	}
+	encoded, _ := json.Marshal(schema)
+	return encoded
 }
 
 // decodeSchemaValue 解码 Schema 并保留数值原文

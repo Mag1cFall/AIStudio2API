@@ -138,12 +138,12 @@ func buildSystemInstruction(system []string) map[string]any {
 	return map[string]any{"parts": parts}
 }
 
-// EncodeBuildProxyRequest 编码代理请求：ProxyStreamedCall 为 [路径, 请求体, WAA proof]，ProxyUnaryCall 追加 HTTP 方法
-func EncodeBuildProxyRequest(path string, body []byte, unary bool) ([]byte, error) {
+// EncodeBuildProxyRequest 编码代理请求：ProxyStreamedCall 为 [路径, 请求体, WAA proof]，ProxyUnaryCall 追加 HTTP 方法；返回正文与 WAA proof 字段在正文中的起始字节
+func EncodeBuildProxyRequest(path string, body []byte, unary bool) ([]byte, int, error) {
 	if unary {
-		return json.Marshal([]any{path, string(body), nil, http.MethodPost})
+		return marshalWAAArray([]any{path, string(body), nil, http.MethodPost}, buildProofField)
 	}
-	return json.Marshal([]any{path, string(body), nil})
+	return marshalWAAArray([]any{path, string(body), nil}, buildProofField)
 }
 
 // buildUsesUnary 判断模型是否需要订阅权益，需要时经 ProxyUnaryCall 单次代理调用
@@ -1053,7 +1053,7 @@ func (c *Client) sendBuildMode(ctx context.Context, request GenerateRequest, ent
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	proxy, err := EncodeBuildProxyRequest(path, body, unary)
+	proxy, proofAt, err := EncodeBuildProxyRequest(path, body, unary)
 	if err != nil {
 		return nil, nil, fmt.Errorf("编码 Build 代理请求: %w", err)
 	}
@@ -1067,6 +1067,7 @@ func (c *Client) sendBuildMode(ctx context.Context, request GenerateRequest, ent
 	}
 	reportUpstreamMode(ctx, method, mode, 0, reason)
 	rpc := newRPCRequest(method, request.AccountID, request.ID, proxy, !unary)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err != nil {

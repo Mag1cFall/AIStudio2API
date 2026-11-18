@@ -45,7 +45,7 @@ type workerRuntime interface {
 	Proof(context.Context, string, string) (string, error)
 	ProtocolHeaders(context.Context) (http.Header, error)
 	PageCatalog() camoufoxnative.PageCatalog
-	SendProtected(context.Context, string, http.Header, []byte) (*camoufoxnative.ProtectedResponse, error)
+	SendProtected(context.Context, string, http.Header, protectedBody) (*camoufoxnative.ProtectedResponse, error)
 	StorageCookies(context.Context) ([]byte, error)
 	// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入页面
 	MergeSetCookieHeaders(context.Context, []string, string) error
@@ -96,6 +96,8 @@ type goWAARuntime struct {
 	previous *goWAARuntime
 	// running 是最近一次点击 Run 或 Rerun 取 proof 的 VM，随后的 GenerateContent 响应开始与结束时在其中派发指针下元素被替换的事件
 	running *waa.Runtime
+	// chat 是本页点击后发出的上一个 GenerateContent 的对话轮次，页面还没有对话、点过 New chat 或上一次响应不是 200 时为 nil；与 running 同由 vmMu 保护
+	chat []json.RawMessage
 
 	// uiLocale 是官网前端主程序地址声明的界面语言
 	uiLocale string
@@ -112,6 +114,9 @@ type goWAARuntime struct {
 	vitals *pageVitals
 	// elements 是页面载入的 2712 界面元素日志
 	elements *pageElements
+	// elementsSent 在本页上一批 2712 上报的请求结束时关闭
+	elementsMu   sync.Mutex
+	elementsSent chan struct{}
 	// analytics 是页面载入的 GTM 与 GA4 上报
 	analytics *pageAnalytics
 	// windowID 是页面 sessionStorage 中的浏览器窗口 ID，重新载入后的页面沿用
@@ -124,11 +129,13 @@ type goWAARuntime struct {
 	cookieBarLanguage string
 	// storage 是页面写入、随账户保存的 localStorage 项
 	storage *pageStorage
-	// startupDone 在页面启动请求全部返回后关闭，preferences 是其中 GetUserPreferences 的响应正文，accessToken 是其中 GenerateAccessToken 返回的 Drive access token，tokenAt 为取得的时刻
-	startupDone chan struct{}
-	preferences []byte
-	accessToken string
-	tokenAt     time.Time
+	// startupDone 在页面启动请求全部返回后关闭；preferencesReady 在其中 GetUserPreferences 返回、preferences 记下响应正文后关闭；tokenReady 在第二个 GenerateAccessToken 返回、accessToken 记下 Drive access token 与取得时刻 tokenAt 后关闭
+	startupDone      chan struct{}
+	preferencesReady chan struct{}
+	tokenReady       chan struct{}
+	preferences      []byte
+	accessToken      string
+	tokenAt          time.Time
 	// mediaAcknowledged 表示页面已确认首次上传素材提示，skippedInserts 是空闲不够而没有做、尚未计入取 proof 跳过步数的插入附件操作步数
 	mediaAcknowledged atomic.Bool
 	skippedInserts    atomic.Int64
@@ -416,6 +423,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	}
 	runtime.elements = newPageElements(runtime.sendClearcut, runtime.uiLocale, runtime.location(), runtime.telemetry.experiments, runtime.windowID, runtime.profile.Locale, "models/"+strings.TrimPrefix(options.Model, "models/"))
 	runtime.elements.viewport, _ = numberValue(runtime.profile.Window["innerHeight"])
+	runtime.elements.width, _ = numberValue(runtime.profile.Window["innerWidth"])
 	runtime.elements.render = func(part pageRenderPart, images []string) {
 		runtime.loadRenderedResources(context.WithoutCancel(ctx), document, part, images)
 	}
@@ -476,22 +484,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 		catalogAt = time.Now()
 		catalogDone <- bodies
 	}()
-	runtime.startupDone = make(chan struct{})
-	go func() {
-		bodies := make([][][]byte, len(pageStartupRPCs))
-		var group sync.WaitGroup
-		for index, slot := range []int{0, 2, 3} {
-			group.Go(func() {
-				time.Sleep(time.Until(pageStarted.Add(offsets[slot])))
-				bodies[index] = runtime.sendPageRPCs(context.WithoutCancel(ctx), apiKey, visitID, "", pageStartupRPCs[index])
-			})
-		}
-		group.Wait()
-		runtime.preferences = bodies[0][0]
-		runtime.accessToken, _ = parseFirstString(bytes.NewReader(bodies[1][0]), "GenerateAccessToken", "bearer token")
-		runtime.tokenAt = time.Now()
-		close(runtime.startupDone)
-	}()
+	runtime.requestStartup(context.WithoutCancel(ctx), apiKey, visitID, pageStarted, offsets)
 	type startedVM struct {
 		vm  *waa.Runtime
 		err error
@@ -683,13 +676,25 @@ func (runtime *goWAARuntime) mergeResponseCookies(response *http.Response, reque
 
 // do 以 Firefox 请求头形状发送请求并写回响应 Cookie，context 标为匿名类别的请求不带 Cookie 也不写回
 func (runtime *goWAARuntime) do(ctx context.Context, method string, target string, body []byte, headers http.Header) (*http.Response, error) {
+	if body == nil {
+		return runtime.send(ctx, method, target, nil, headers)
+	}
+	return runtime.send(ctx, method, target, &protectedBody{data: body}, headers)
+}
+
+// send 与 do 相同，正文为 body，为 nil 时不带正文；写入 proof 的正文分段读出，不复制
+func (runtime *goWAARuntime) send(ctx context.Context, method string, target string, body *protectedBody, headers http.Header) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
-		reader = bytes.NewReader(body)
+		reader = body.Reader()
 	}
 	request, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return nil, err
+	}
+	if body != nil && body.proof != nil {
+		request.ContentLength = int64(body.Len())
+		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(body.Reader()), nil }
 	}
 	request.Header = headers.Clone()
 	if request.Header.Get("User-Agent") == "" {
@@ -1082,7 +1087,7 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 	return string(data), nil
 }
 
-// startVM 加载 challenge 指定的解释器并初始化新 VM，导航计时的 loadEventEnd 之前等到页面 load 事件结束
+// startVM 加载 challenge 指定的解释器并初始化新 VM，VM 从导航计时的 loadEventEnd 开始
 func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challenge) (*waa.Runtime, error) {
 	interpreter, err := runtime.loadInterpreter(ctx, challenge)
 	if err != nil {
@@ -1098,14 +1103,11 @@ func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challeng
 	cookie, _ := documentCookie(runtime.cookies())
 	profile := runtime.profile
 	profile.Document = map[string]any{"cookie": cookie, "lastModified": runtime.pageLoaded.In(runtime.location()).Format("01/02/2006 15:04:05")}
+	var loaded time.Time
 	if loadEnd, ok := profile.Navigation["loadEventEnd"].(int); ok {
-		select {
-		case <-time.After(time.Until(profile.NavigationStart.Add(time.Duration(loadEnd) * time.Millisecond))):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		loaded = profile.NavigationStart.Add(time.Duration(loadEnd) * time.Millisecond)
 	}
-	vm, err := waa.NewRuntime(ctx, waa.Options{Challenge: challenge, Interpreter: interpreter, Profile: profile, LoadImage: runtime.loadImage, LoadFrame: runtime.loadFrame, Pointer: runtime.pointer, Rhythm: runtime.rhythm})
+	vm, err := waa.NewRuntime(ctx, waa.Options{Challenge: challenge, Interpreter: interpreter, Profile: profile, LoadImage: runtime.loadImage, LoadFrame: runtime.loadFrame, Pointer: runtime.pointer, Rhythm: runtime.rhythm, Start: loaded})
 	if err != nil {
 		return nil, err
 	}
@@ -1270,26 +1272,35 @@ func (runtime *goWAARuntime) nextVM(ctx context.Context, previous *waa.Runtime) 
 
 // Proof 同步页面提示词后为 SHA-256 digest 生成 fresh WAA proof
 func (runtime *goWAARuntime) Proof(ctx context.Context, digest string, prompt string) (string, error) {
-	return runtime.proof(ctx, digest, prompt, proofSync, 0, nil)
+	return runtime.proof(ctx, digest, prompt, proofSync, 0, nil, nil)
 }
 
 // SubmitProof 像官网用户一样在 rounds 轮对话最后一轮的函数调用块中点击函数响应输入框、粘贴 result 并点击提交后为 SHA-256 digest 生成 fresh WAA proof
 func (runtime *goWAARuntime) SubmitProof(ctx context.Context, digest string, result string, rounds int) (string, error) {
-	return runtime.proof(ctx, digest, result, proofSubmit, rounds, nil)
+	return runtime.proof(ctx, digest, result, proofSubmit, rounds, nil, nil)
 }
 
-// RunProof 为 SHA-256 digest 生成 GenerateContent 的 fresh WAA proof，返回 proof 与粘贴进页面的提示词：ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun；其余粘贴 prompt（为空时取 body 最后一个 user 轮次的文本）后点击 Run；此前因空闲不够没有做的插入附件操作步数计入这次取 proof 的跳过步数
+// RunProof 为 SHA-256 digest 生成 GenerateContent 的 fresh WAA proof，返回 proof 与粘贴进页面的提示词：ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun；其余粘贴 prompt（为空时取 body 最后一个 user 轮次的文本）后点击 Run，body 的对话不接着本页上一次的对话时先点 New chat；此前因空闲不够没有做的插入附件操作步数计入这次取 proof 的跳过步数
 func (runtime *goWAARuntime) RunProof(ctx context.Context, digest string, prompt string, body []byte) (string, string, error) {
 	prooftime.Skip(ctx, int(runtime.skippedInserts.Swap(0)))
 	if _, rerun := ctx.Value(pageRerunKey{}).(int); rerun && !runtime.pointer.Clicked().IsZero() {
-		proof, err := runtime.proof(ctx, digest, "", proofSync, 0, nil)
+		proof, err := runtime.proof(ctx, digest, "", proofSync, 0, nil, nil)
 		return proof, "", err
 	}
 	if prompt == "" {
 		prompt, _ = camoufoxnative.GeneratePrompt(body)
 	}
-	proof, err := runtime.proof(ctx, digest, prompt, proofRun, 0, runtime.settingSteps(body))
+	proof, err := runtime.proof(ctx, digest, prompt, proofRun, 0, runtime.settingSteps(body), generateContents(body))
 	return proof, prompt, err
+}
+
+// generateContents 返回 GenerateContent 正文中的对话轮次
+func generateContents(body []byte) []json.RawMessage {
+	var contents []json.RawMessage
+	if fields, ok := wireArray(body); ok && len(fields) > 1 {
+		contents, _ = wireArray(fields[1])
+	}
+	return contents
 }
 
 // userGestureKey 标记 proof 所属请求在官网由页面上的点击或按键触发
@@ -1310,8 +1321,8 @@ const (
 	proofSubmit
 )
 
-// proof 以当前 VM 生成 fresh WAA proof：input 为 proofRun 时先做 settings 中空闲放得下的各组运行设置操作，再写入提示词后以可信鼠标点击 Run，为 proofSubmit 时在 submitted 轮对话最后一轮的函数调用块中粘贴函数结果并点击提交，ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余 ctx 带 userGestureKey 的请求先记录一次用户操作；VM 到期时等待后台重建完成，等待随 ctx 结束
-func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt string, input proofInput, submitted int, settings [][]waa.SettingStep) (string, error) {
+// proof 以当前 VM 生成 fresh WAA proof：input 为 proofRun 时先在页面上一次的对话不接到 contents 时点 New chat（空闲放不下时不做），再做 settings 中的各组运行设置操作，然后写入提示词后以可信鼠标点击 Run，为 proofSubmit 时在 submitted 轮对话最后一轮的函数调用块中粘贴函数结果并点击提交，ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余 ctx 带 userGestureKey 的请求先记录一次用户操作；VM 到期时等待后台重建完成，等待随 ctx 结束
+func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt string, input proofInput, submitted int, settings [][]waa.SettingStep, contents []json.RawMessage) (string, error) {
 	lockStarted := time.Now()
 	runtime.vmMu.Lock()
 	defer runtime.vmMu.Unlock()
@@ -1353,7 +1364,11 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 	var err error
 	switch {
 	case run:
-		proof, err = vm.RunProofAfter(ctx, digest, prompt, settings, pickedPause)
+		var newChat func(at time.Time)
+		if camoufoxnative.StartsNewChat(runtime.chat, contents) {
+			newChat = runtime.newChat
+		}
+		proof, err = vm.RunProofAfter(ctx, digest, prompt, newChat, settings, pickedPause)
 	case input == proofSubmit:
 		proof, err = vm.SubmitProof(ctx, digest, prompt, submitted)
 	case rerun:
@@ -1382,6 +1397,22 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 	return proof, nil
 }
 
+// newChatRoute 是官网点确认框的 Discard and continue 到页面渲染新对话页、提示词输入框取得焦点的间隔
+const newChatRoute = 383 * time.Millisecond
+
+// newChat 记录在 at 点确认框的 Discard and continue 后页面切换到新对话页：界面元素日志、web vitals 与 GA4 记下 newChatRoute 后的路由切换，本页对话清空；在取 proof 的界面操作中调用，调用方持有 vmMu
+func (runtime *goWAARuntime) newChat(at time.Time) {
+	route := at.Add(newChatRoute)
+	runtime.chat = nil
+	if runtime.elements != nil {
+		runtime.elements.newChat(route)
+	}
+	if runtime.vitals != nil {
+		runtime.vitals.route()
+	}
+	runtime.analytics.newChat(route)
+}
+
 // PageCatalog 返回页面载入时 GetLoggingContext、GetAiStudioBenefitTier 与 ListModels 的响应正文
 func (runtime *goWAARuntime) PageCatalog() camoufoxnative.PageCatalog {
 	return runtime.pageCatalog
@@ -1396,7 +1427,8 @@ func (runtime *goWAARuntime) ProtocolHeaders(ctx context.Context) (http.Header, 
 }
 
 // SendProtected 以官网页面 XHR 的 Firefox 请求形状流式发送受保护请求；点击 Run 或 Rerun 后的 GenerateContent 在响应头到达与正文关闭时各派发一次指针下元素被替换的事件，并在界面元素日志中记录回答占位、回答结束与随后曝光的按钮
-func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, headers http.Header, body []byte) (*camoufoxnative.ProtectedResponse, error) {
+func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, headers http.Header, protected protectedBody) (*camoufoxnative.ProtectedResponse, error) {
+	body := protected.data
 	request := headers.Clone()
 	request.Set("Accept", "*/*")
 	request.Set("Referer", aiStudioOrigin+"/")
@@ -1411,6 +1443,9 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 	if strings.HasSuffix(rawURL, "/GenerateContent") {
 		runtime.vmMu.Lock()
 		running, runtime.running = runtime.running, nil
+		if running != nil {
+			runtime.chat = generateContents(body)
+		}
 		runtime.vmMu.Unlock()
 		turn = runtime.elements.turn(body, counting)
 		if turn != nil {
@@ -1430,7 +1465,12 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 			}
 		})
 	}
-	response, err := runtime.do(ctx, http.MethodPost, rawURL, body, request)
+	response, err := runtime.send(ctx, http.MethodPost, rawURL, &protected, request)
+	if running != nil && (err != nil || response.StatusCode != http.StatusOK) {
+		runtime.vmMu.Lock()
+		runtime.chat = nil
+		runtime.vmMu.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1450,10 +1490,10 @@ type runningBody struct {
 	once sync.Once
 	// tail 是读到的最后 runningTailSize 个字节，用于查找跨读取边界的思考 Part 与最后一帧的 usage
 	tail []byte
-	// thought 表示已读到思考 Part，call 表示已读到函数调用 Part，text 表示 Rerun 已读到思考之后的回答正文 Part
+	// thought 表示已读到思考 Part，call 表示已读到函数调用 Part，text 表示已读到思考之后的回答正文 Part
 	thought, call, text bool
-	// reads 是读到数据的次数，textFrom 是 tail 中查找回答正文 Part 的起点
-	reads, textFrom int
+	// reads 是读到数据的次数，textFrom 是 tail 中查找回答正文 Part 的起点，answerFrom 是 tail 中取回答正文增量的起点
+	reads, textFrom, answerFrom int
 	// runtime 是发出这次 GenerateContent 的页面，ended 表示正文已读到结尾
 	runtime *goWAARuntime
 	ended   bool
@@ -1469,7 +1509,7 @@ var (
 	frameUsagePattern = regexp.MustCompile(`,null,\[(\d+),(\d*|null),(\d+)`)
 )
 
-// Read 读取响应正文，第一次读到思考文本 Part 时在界面元素日志中记录思考面板，第一次读到函数调用 Part 时记录函数调用块，Rerun 在思考之后第一次读到回答正文 Part 时记录正文段，其余后续数据记为对话区滚动
+// Read 读取响应正文，第一次读到思考文本 Part 时在界面元素日志中记录思考面板，第一次读到函数调用 Part 时记录函数调用块，Rerun 在思考之后第一次读到回答正文 Part 时记录正文段，其余后续数据记为对话区滚动，思考之外的滚动在 VM 中派发静止指针下元素变化的事件
 func (body *runningBody) Read(buffer []byte) (int, error) {
 	read, err := body.ReadCloser.Read(buffer)
 	body.ended = body.ended || err == io.EOF
@@ -1486,19 +1526,28 @@ func (body *runningBody) Read(buffer []byte) (int, error) {
 			body.call, scrolled = true, false
 			body.turn.functionCall(time.Now())
 		}
-		if body.turn.rerun && body.thought && !body.text {
-			if body.text, body.textFrom = answerTextPart(body.tail, body.textFrom); body.text {
+		if body.thought && !body.text {
+			if body.text, body.textFrom = answerTextPart(body.tail, body.textFrom); body.text && body.turn.rerun {
 				scrolled = false
 				body.turn.answerText(time.Now())
 			}
 		}
+		var grown string
+		grown, body.answerFrom = answerTexts(body.tail, body.answerFrom)
+		if grown != "" {
+			body.turn.grew(time.Now(), grown)
+		}
 		if scrolled {
 			body.turn.streamed(time.Now())
+			if body.text || !body.thought {
+				body.vm.Streamed()
+			}
 		}
 		if len(body.tail) > runningTailSize {
 			trimmed := len(body.tail) - runningTailSize
 			body.tail = append(body.tail[:0], body.tail[trimmed:]...)
 			body.textFrom = max(body.textFrom-trimmed, 0)
+			body.answerFrom = max(body.answerFrom-trimmed, 0)
 		}
 	}
 	return read, err
@@ -1527,6 +1576,35 @@ func answerTextPart(data []byte, from int) (bool, int) {
 		}
 		if end > start && data[end+1] == ']' {
 			return true, end
+		}
+		from = end + 1
+	}
+}
+
+// answerTexts 返回 data[from:] 中完整到达的各回答正文 Part 的文本之和与下次查找的起点
+func answerTexts(data []byte, from int) (string, int) {
+	var text strings.Builder
+	for {
+		index := bytes.Index(data[from:], framePartPrefix)
+		if index < 0 {
+			return text.String(), max(from, len(data)-len(framePartPrefix)+1)
+		}
+		start := from + index + len(framePartPrefix)
+		end := start
+		for end < len(data) && data[end] != '"' {
+			if data[end] == '\\' {
+				end++
+			}
+			end++
+		}
+		if end+1 >= len(data) {
+			return text.String(), from + index
+		}
+		if data[end+1] == ']' {
+			var value string
+			if json.Unmarshal(data[start-1:end+1], &value) == nil {
+				text.WriteString(value)
+			}
 		}
 		from = end + 1
 	}

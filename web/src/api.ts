@@ -27,6 +27,7 @@ import type {
   ServiceConfig,
   ServiceStatus,
   UpdateStatus,
+  UsagePair,
   UsageRecordPage,
   UsageReport,
 } from '@/types'
@@ -142,6 +143,8 @@ export const api = {
   config: () => requestJSON<ServiceConfig>('/api/config'),
   usage: (query: URLSearchParams, signal: AbortSignal) =>
     requestJSON<UsageReport>(`/api/usage?${query.toString()}`, { signal }),
+  usagePairs: async (query: URLSearchParams) =>
+    (await requestJSON<{ pairs: UsagePair[] }>(`/api/usage/pairs?${query.toString()}`)).pairs,
   usageRecords: (query: URLSearchParams, signal: AbortSignal) =>
     requestJSON<UsageRecordPage>(`/api/usage/records?${query.toString()}`, { signal }),
   usageExportURL: (query: URLSearchParams) => `/api/usage/records.csv?${query.toString()}`,

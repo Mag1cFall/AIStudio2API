@@ -71,7 +71,7 @@ INFO  service              WAA Worker 预热完成 workers=5/5 duration=34.903s
 INFO  account@example.com  模型目录已更新 models=39
 ```
 
-同一循环从启动期同步开始时起每 24 小时按权益从高到低、同权益按账户 ID 的顺序逐个重新载入全部 `enabled` 且处于 `ready`、`busy` 或 `cooldown` 的账户的页面读取权益与 `ListModels` 目录，没有空闲并发槽位或正在冷却的账户在本轮最后等到槽位空闲再读：有常驻 Worker 的账户重新载入它的页面，其余账户临时载入一个页面，取得响应后关闭。请求的模型不在任何账户的目录中时，巡检正在读取一轮的第一个账户则请求等它读完，没有进行中的一轮且距上一轮开始已超过 10 分钟时立即读取一轮，请求等这一轮读完第一个账户后再查找模型，其余账户在后台继续读取。订阅模型遇到额度错误时同样刷新该账户。权益或模型数变化时更新账户调度与公开目录，读取失败时记录原因并把账户加入 pending ID 集合，登录失效的账户转为需要登录：
+同一循环从启动期同步开始时起每 24 小时按权益从高到低、同权益按账户 ID 的顺序逐个重新载入全部 `enabled` 且处于 `ready`、`busy` 或 `cooldown` 的账户的页面读取权益与 `ListModels` 目录，没有空闲并发槽位或正在冷却的账户在本轮最后等到槽位空闲再读：有常驻 Worker 的账户重新载入它的页面，其余账户临时载入一个页面，取得响应后关闭。请求的模型不在任何账户的目录中时，目录读取正在进行（启动期同步或巡检的一轮）则请求等到该模型出现在某个账户的目录中或这一轮读完；没有进行中的一轮且距上一轮开始已超过 10 分钟时巡检立即开始一轮，请求同样等到该模型出现或这一轮读完再查找模型；等待最长为 `REQUEST_TIMEOUT`。订阅模型遇到额度错误时同样刷新该账户。权益或模型数变化时更新账户调度与公开目录，读取失败时记录原因并把账户加入 pending ID 集合，登录失效的账户转为需要登录：
 
 ```text
 INFO  account@example.com  WAA Worker 页面已重新载入 duration=4.521s
@@ -108,7 +108,7 @@ INFO   service  生成服务已处于停止状态
 ERROR  service  生成服务停止失败 duration=10.006s error=<JOINED_ERROR>
 ```
 
-`服务配置已保存` 表示 `.env` 已写入。管理进程配置通过进程重启应用；生成服务配置通过停止、启动生成服务应用。
+`服务配置已保存` 表示 `.env` 已写入。管理进程配置通过进程重启应用；Worker 容量、账户选择策略、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索与媒体输出设置保存后立即应用，其余生成服务配置通过停止、启动生成服务应用。
 
 ### Worker 生命周期
 
@@ -188,7 +188,7 @@ ERROR  account@example.com  WAA Worker 停止失败 pid=18240 duration=10.002s e
 {"time":"2026-09-06T22:11:47.248+08:00","level":"INFO","msg":"工具调用完成","event":"request.finished","source":"account@example.com","request":{"id":"chatcmpl_example","state":"tool_calls","model":"gemini-3.8-flash","status":200,"duration_ms":4758,"tool_calls":1,"finish_reason":"stop","usage":{"input_tokens":100,"cached_tokens":0,"reasoning_tokens":32,"reply_tokens":38,"output_tokens":70,"total_tokens":170,"average_tokens_per_second":14.712064}}}
 ```
 
-采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间，`proof_phases` 把它分为等待页面 `lock_ms`、页面操作 `interaction_ms`、等待 WAA 刷新 `refresh_ms` 与 WAA 计算 `compute_ms`，请求卡片展开后的“WAA 耗时”与用量页请求详情按这四项显示。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
+采样参数保存在 `request.parameters`。`first_event_ms`、`queue_ms`、`proof_ms` 和 `upstream_bytes` 作为 JSON 诊断字段保留：`queue_ms` 是请求进入服务到取得最终执行账户的时间，`proof_ms` 是等待并生成 WAA proof 的累计时间，`proof_phases` 把它分为等待页面 `lock_ms`、页面操作 `interaction_ms`（到页面应用发出请求为止）、等待 WAA 刷新 `refresh_ms` 与 WAA 计算 `compute_ms`，请求卡片展开后的“WAA 耗时”与用量页请求详情按这四项显示。页面支持按级别、账户以及模型、请求 ID、状态码搜索。
 
 客户端取消记录为 `499`；认证、额度和上游失败分别使用对应 HTTP 状态与 `request.error`。
 
@@ -207,6 +207,7 @@ ERROR  account@example.com  WAA Worker 停止失败 pid=18240 duration=10.002s e
 | `等待模型继续输出` | 已有语义事件，连续 15 秒没有下一事件；模型在正文之后生成函数调用参数时，上游生成完整个调用才发出；上游在输出中途审核后续内容时，审完放出剩余内容或以 `OTHER` 拦截结束；两种情况期间连接上都没有数据 | `last_event`、`reasoning_events`、`text_events`、`network_bytes`、`network_idle` |
 | `模型继续输出` | 等待后解出下一语义事件 | `waited`、`current_event` |
 | `账号切换` | 当前账户在首个上游语义事件前失败，或非流式请求的上游流中途中断，额度以外的失败最多换 `MAX_ACCOUNT_SWITCHES` 次；`续写轮账号切换` 为自动续写轮在当前账户上失败后换账户重发 | 当前账户来源、`model`、上游 HTTP 状态 `status` 与协议错误码 `code`、原始原因 `reason` |
+| `同模型同通道最近两个请求都因连接断开失败，本请求也连续两次连接断开，停止重试` | 同一模型与通道最近两个请求都在本请求开始前 30 秒内以连接断开失败，本请求在前两个账户上的尝试也都以连接断开失败，以原错误结束 | 当前账户来源、`model`、原始原因 `reason` |
 | `备用请求发起` | 原请求等待首个语义事件达到 `FIRST_EVENT_HEDGE` 的阈值，空闲账户开始同一请求 | 备用账户来源、`primary_waited`、`threshold`、`model` |
 | `备用请求胜出` | 备用请求先解出首个语义事件，原请求取消 | 备用账户来源、`primary_waited`、`model` |
 | `原请求胜出，取消备用请求` | 原请求先解出首个语义事件，备用请求取消 | `hedge_account`、`model` |
@@ -239,7 +240,7 @@ SSE 客户端把该帧作为连接存活信号，正文、推理和 usage 继续
 
 ## 账户事件
 
-HTTP `401` 会使用账户保存的 OAuth/DBSC 材料续签 Cookie；账户没有材料或材料被拒绝时，从本机 Chrome 导入同一邮箱的材料。随后重置 WAA Worker 并重放一次请求。同一账户在续签完成前发出的请求同时收到 `401` 时只续签一次，其余请求等这次续签完成后直接重放。
+HTTP `401` 会使用账户保存的 OAuth/DBSC 材料续签 Cookie；材料被拒绝时，从本机 Chrome 重新导入同一 Google 账户的材料。随后重置 WAA Worker 并重放一次请求。没有 OAuth 材料的账户不续签，按认证恢复失败处理。同一账户在续签完成前发出的请求同时收到 `401` 时只续签一次，其余请求等这次续签完成后直接重放。
 
 ```text
 INFO  account@example.com  [账户认证续签 1/2] 刷新 Cookie
@@ -286,7 +287,7 @@ WARN  account@example.com  账号切换 model=gemini-3.7-flash status=403 code=7
 
 ## 用量账本
 
-`runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量（含缓存命中数）、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage` 与 `GET /api/usage/records` 查询。看板的估算费用按 Gemini API 与 Vertex AI 公布的当前文本单价从原始记录逐条计算，缓存命中的输入按缓存单价计算。
+`runtime/requests.db` 是本地 SQLite 账本。`/v1` 与 `/v1beta` 通过 API key 校验的每个 POST 请求完成后写入一行：请求 ID、完成时间、协议、路径、模型、账户、通道、HTTP 状态、`request.state`、耗时、首个上游事件、排队时间、token 用量（含缓存命中数）、工具调用数、错误摘要，以及最终结果之前未成功的上游尝试。同一事务按 UTC 小时与服务器本地日累加汇总与耗时分布：完整落在范围与单个分桶内的本地日读取日汇总，其余整小时读取小时汇总，范围边缘与跨分桶的部分读取原始记录。服务器时区变化后，下次启动时从小时汇总与原始记录重建本地日汇总。写入由后台协程批量提交，不阻塞响应：等待写入的记录超过 4096 条时丢弃新记录，写入恢复后输出丢弃数。记录与汇总按服务器本地日整日保留 90 天。管理页的用量看板通过 `GET /api/usage`、`GET /api/usage/pairs` 与 `GET /api/usage/records` 查询。看板的估算费用按 Gemini API 与 Vertex AI 公布的当前文本单价从原始记录逐条计算，缓存命中的输入按缓存单价计算。
 
 ```text
 INFO  service  请求账本已按服务器时区重建本地日汇总 days=<COUNT>

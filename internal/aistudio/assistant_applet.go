@@ -57,14 +57,14 @@ func (t *WorkerProtectedTransport) DoProtectedApplet(ctx context.Context, reques
 			return nil, fmt.Errorf("获取账户 WAA preparer: %w", err)
 		}
 		prepared, err := worker.Prepare(ctx, ProtectedRequest{
-			URL: rpc.URL, Headers: rpc.Header.Clone(), Body: rpc.Body, Digest: request.Digest, ProofField: request.ProofField,
+			URL: rpc.URL, Headers: rpc.Header.Clone(), Body: rpc.Body, ProofAt: rpc.ProofAt, Digest: request.Digest,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("准备 fresh WAA proof: %w", err)
 		}
 		proof = prepared.Proof
 	}
-	return t.doPrepared(ctx, request.Binding, "", request.ProofField, proof, selection, rpc)
+	return t.doPrepared(ctx, request.Binding, "", proof, selection, rpc)
 }
 
 // assistantOpenedApplet 是本进程打开过的账户 Build 应用
@@ -157,17 +157,19 @@ func (c *Client) assistantRPC(ctx context.Context, accountID string, base string
 	return raw, nil
 }
 
-// assistantProtectedRPC 以账户身份写入 fresh proof 后发送 Build 应用与云项目 RPC 并返回响应正文
-func (c *Client) assistantProtectedRPC(ctx context.Context, accountID string, method string, body any, request AppletProtectedRequest) (json.RawMessage, error) {
+// assistantProtectedRPC 以账户身份写入 fresh proof 后发送 Build 应用与云项目 RPC 并返回响应正文，proof 写在 body 的第 request.ProofField 个字段
+func (c *Client) assistantProtectedRPC(ctx context.Context, accountID string, method string, body []any, request AppletProtectedRequest) (json.RawMessage, error) {
 	transport, ok := c.protected.(AppletProtectedTransport)
 	if !ok {
 		return nil, fmt.Errorf("AI Studio 受保护传输不支持 Build 应用请求")
 	}
-	data, err := json.Marshal(body)
+	data, proofAt, err := marshalWAAArray(body, request.ProofField)
 	if err != nil {
 		return nil, err
 	}
-	response, err := transport.DoProtectedApplet(ctx, request, newRPCRequest(method, accountID, "", data, false))
+	rpc := newRPCRequest(method, accountID, "", data, false)
+	rpc.ProofAt = proofAt
+	response, err := transport.DoProtectedApplet(ctx, request, rpc)
 	if err == nil {
 		response, err = validateRPCResponse(method, response)
 	}

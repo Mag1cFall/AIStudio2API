@@ -105,7 +105,7 @@ func TestOpenAIToolMessageNameInference(t *testing.T) {
 	if len(genReq.Contents) != 2 {
 		t.Fatalf("expected 2 contents, got %d", len(genReq.Contents))
 	}
-	wire, err := aistudio.EncodeGenerateContentRequest(genReq, aistudio.GenerationDefaults{MaxOutputTokens: 1024}, aistudio.RequestContext{})
+	wire, _, err := aistudio.EncodeGenerateContentRequest(genReq, aistudio.GenerationDefaults{MaxOutputTokens: 1024}, aistudio.RequestContext{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -364,6 +364,10 @@ export interface RequestSummary {
   channel?: UpstreamChannel
   state: RequestState
   started_at: string
+  // sent_at 是最近一次取得账户发往上游的时刻
+  sent_at?: string
+  // last_data_at 是最近一次收到上游输出的时刻
+  last_data_at?: string
 }
 
 // FirstEventLatency 是一个模型与通道近期原请求首事件等待的 p95 与样本数
@@ -481,7 +485,7 @@ interface UsageGroup extends UsageStats {
   key: string
 }
 
-interface UsagePair extends UsageStats {
+export interface UsagePair extends UsageStats {
   account: string
   model: string
 }
@@ -509,7 +513,6 @@ export interface UsageReport {
   stack_by: UsageDimension
   series: UsageSeries[]
   groups: Record<UsageDimension | 'status', UsageGroup[]>
-  pairs: UsagePair[]
   options: Record<UsageDimension, string[]>
 }
 

@@ -202,8 +202,20 @@ func replayInteraction(w http.ResponseWriter, r *http.Request, object json.RawMe
 			if signature, ok := step["signature"]; ok {
 				events = append(events, interactionEvent{"step.delta", map[string]any{"index": index, "delta": map[string]any{"type": "thought_signature", "signature": signature}}})
 			}
+		case "function_call":
+			start, delta := interactionCallStream(step)
+			events = append(events, interactionEvent{"step.start", map[string]any{"index": index, "step": start}}, interactionEvent{"step.delta", map[string]any{"index": index, "delta": delta}})
 		default:
-			events = append(events, interactionEvent{"step.start", map[string]any{"index": index, "step": step}})
+			if !interactionToolStepKind(kind) {
+				events = append(events, interactionEvent{"step.start", map[string]any{"index": index, "step": step}})
+				break
+			}
+			start, delta := maps.Clone(step), maps.Clone(step)
+			delete(start, "signature")
+			for _, key := range []string{"id", "call_id", "search_type"} {
+				delete(delta, key)
+			}
+			events = append(events, interactionEvent{"step.start", map[string]any{"index": index, "step": start}}, interactionEvent{"step.delta", map[string]any{"index": index, "delta": delta}})
 		}
 		events = append(events, interactionEvent{"step.stop", map[string]any{"index": index}})
 	}

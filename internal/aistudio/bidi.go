@@ -207,11 +207,11 @@ type BidiEvent struct {
 }
 
 // EncodeBidiSetupRequest 编码 Live 或 Robotics 的已验证 setup 帧，系统指令按 clientSystemText 改写
-func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte, string, error) {
+func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte, int, string, error) {
 	request.SystemInstruction = clientSystemText(request.SystemInstruction)
 	model := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	if model == "" {
-		return nil, "", fmt.Errorf("%w: bidi model 不能为空", ErrInvalidArgument)
+		return nil, 0, "", fmt.Errorf("%w: bidi model 不能为空", ErrInvalidArgument)
 	}
 	configuration := make([]any, 18)
 	setup := make([]any, 16)
@@ -219,7 +219,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	switch request.Mode {
 	case BidiModeLive:
 		if err := validateLiveVariant(request); err != nil {
-			return nil, "", err
+			return nil, 0, "", err
 		}
 		switch request.variant {
 		case bidiVariantTranslation:
@@ -251,7 +251,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 		configuration[14] = []any{int64(1)}
 		configuration[16] = []any{int64(1), nil, nil, int64(3)}
 	default:
-		return nil, "", fmt.Errorf("%w: 未识别的 bidi mode %q", ErrInvalidArgument, request.Mode)
+		return nil, 0, "", fmt.Errorf("%w: 未识别的 bidi mode %q", ErrInvalidArgument, request.Mode)
 	}
 	if conversation {
 		configuration[17] = bidiMediaResolutions[cmp.Or(request.MediaResolution, "medium")]
@@ -271,7 +271,7 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 		for _, declaration := range request.Tools {
 			encoded, err := encodeFunctionDeclaration(declaration)
 			if err != nil {
-				return nil, "", fmt.Errorf("编码 bidi function declaration: %w", err)
+				return nil, 0, "", fmt.Errorf("编码 bidi function declaration: %w", err)
 			}
 			declarations = append(declarations, encoded)
 			bindingParts = append(bindingParts, declaration.Name+" "+declaration.Description)
@@ -323,11 +323,11 @@ func EncodeBidiSetupRequest(request BidiRequest, runtime RequestContext) ([]byte
 	}
 	wire := make([]any, 7)
 	wire[6] = setup
-	body, err := json.Marshal(wire)
+	body, proofAt, err := marshalWAAArray(wire, bidiProofField)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi setup: %w", err)
+		return nil, 0, "", fmt.Errorf("编码 bidi setup: %w", err)
 	}
-	return body, strings.Join(bindingParts, " "), nil
+	return body, proofAt, strings.Join(bindingParts, " "), nil
 }
 
 // validateBidiText 校验实时文本输入非空
@@ -366,21 +366,21 @@ func validateBidiToolResponses(results []FunctionResult) error {
 }
 
 // EncodeBidiTextRequest 编码官网文本输入帧
-func EncodeBidiTextRequest(text string) ([]byte, string, error) {
+func EncodeBidiTextRequest(text string) ([]byte, int, string, error) {
 	if err := validateBidiText(text); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, nil, nil, text}
-	body, _ := json.Marshal(wire)
-	return body, "", nil
+	body, proofAt, _ := marshalWAAArray(wire, bidiProofField)
+	return body, proofAt, "", nil
 }
 
 // EncodeBidiMediaRequest 编码官网实时音频或图像输入帧
-func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error) {
+func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, int, string, error) {
 	mimeType = strings.TrimSpace(mimeType)
 	if err := validateBidiMedia(mimeType, data); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	var realtimeInput []any
@@ -393,28 +393,28 @@ func EncodeBidiMediaRequest(mimeType string, data []byte) ([]byte, string, error
 	}
 	wire := make([]any, 6)
 	wire[2] = realtimeInput
-	body, _ := json.Marshal(wire)
-	return body, "", nil
+	body, proofAt, _ := marshalWAAArray(wire, bidiProofField)
+	return body, proofAt, "", nil
 }
 
 // EncodeBidiMediaEndRequest 编码官网实时媒体结束帧
-func EncodeBidiMediaEndRequest() ([]byte, string, error) {
+func EncodeBidiMediaEndRequest() ([]byte, int, string, error) {
 	wire := make([]any, 6)
 	wire[2] = []any{nil, nil, int64(1)}
-	body, _ := json.Marshal(wire)
-	return body, "", nil
+	body, proofAt, _ := marshalWAAArray(wire, bidiProofField)
+	return body, proofAt, "", nil
 }
 
 // EncodeBidiToolResponseRequest 编码官网函数响应帧
-func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, error) {
+func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, int, string, error) {
 	if err := validateBidiToolResponses(results); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	functionResponses := make([]any, 0, len(results))
 	for _, result := range results {
 		response, err := encodeWireStructJSON(result.Content)
 		if err != nil {
-			return nil, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
+			return nil, 0, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
 		}
 		entry := []any{result.Name, response, result.ID}
 		if result.WillContinue {
@@ -427,11 +427,11 @@ func EncodeBidiToolResponseRequest(results []FunctionResult) ([]byte, string, er
 	responses[1] = functionResponses
 	wire := make([]any, 6)
 	wire[3] = responses
-	body, err := json.Marshal(wire)
+	body, proofAt, err := marshalWAAArray(wire, bidiProofField)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 bidi function response: %w", err)
+		return nil, 0, "", fmt.Errorf("编码 bidi function response: %w", err)
 	}
-	return body, results[0].ID, nil
+	return body, proofAt, results[0].ID, nil
 }
 
 // ParseBidiServerPayload 解码一条 WebChannel 业务 payload
