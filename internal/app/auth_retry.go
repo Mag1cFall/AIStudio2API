@@ -25,8 +25,7 @@ const boundRefreshThreshold = 2 * time.Minute
 type authRuntimeRefresher struct {
 	pool          *aistudio.AccountPool
 	refresh       chromeCookieRefreshFunc
-	importCurrent func(context.Context, aistudio.AuthSource, *aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
-	chromeHas     func(string) bool
+	importCurrent func(context.Context, aistudio.AuthSource, aistudio.ChromeOAuthMaterial, string) (aistudio.StorageState, error)
 	reset         func(string) error
 	prepareWorker func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)
 	// rotate 刷新账户的 DBSC 会话并返回响应 Cookie
@@ -159,7 +158,7 @@ func newAuthRuntimeRefresher(
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
 		pool:    workers.pool,
-		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
+		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState,
 		reset: workers.Reset, prepareWorker: workers.prepareUpdate,
 		rotate: chromeauth.RotateBoundCookies, mergeWorker: workers.MergeCookies,
 		globalProxy: globalProxy,
@@ -167,26 +166,8 @@ func newAuthRuntimeRefresher(
 	}
 }
 
-// chromeIdentityImportable 判断本机 Chrome 是否登录着该邮箱且材料可导入
-func chromeIdentityImportable(email string) bool {
-	root, err := chromeauth.DefaultChromeRoot()
-	if err != nil {
-		return false
-	}
-	accounts, err := chromeauth.Discover(root)
-	if err != nil {
-		return false
-	}
-	for _, account := range accounts {
-		if account.Importable && strings.EqualFold(account.Email, email) {
-			return true
-		}
-	}
-	return false
-}
-
 // importCurrentChromeState 从原来源中更新同一 Google 账户的认证材料
-func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, material *aistudio.ChromeOAuthMaterial, proxy string) (aistudio.StorageState, error) {
+func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, material aistudio.ChromeOAuthMaterial, proxy string) (aistudio.StorageState, error) {
 	root, err := chromeauth.DefaultChromeRoot()
 	if err != nil {
 		return aistudio.StorageState{}, err
@@ -197,7 +178,7 @@ func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, m
 	}
 	var selected string
 	for _, account := range accounts {
-		if !account.Importable || !strings.EqualFold(account.Email, source.Email) || material != nil && account.GaiaID != material.GaiaID {
+		if !account.Importable || !strings.EqualFold(account.Email, source.Email) || account.GaiaID != material.GaiaID {
 			continue
 		}
 		selected = account.ID
@@ -422,25 +403,23 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 			return err
 		}
 		if extension.OAuth == nil {
-			extension = aistudio.AuthExtension{Source: aistudio.AuthSource{Browser: "chrome", Email: account.ID}}
+			return fmt.Errorf("账户 %s 没有续签材料，需要重新登录", account.ID)
 		}
 		proxy := account.EffectiveProxy(refresher.globalProxy)
 		var cookies []aistudio.StateCookie
-		if extension.OAuth != nil {
-			cookies, extension.Bound, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
-		}
-		if extension.OAuth == nil || errors.Is(err, chromeauth.ErrCredentialsRejected) {
+		cookies, extension.Bound, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
+		if errors.Is(err, chromeauth.ErrCredentialsRejected) {
 			if extension.Source.Browser != "chrome" || !strings.EqualFold(extension.Source.Email, account.ID) {
 				return errors.Join(fmt.Errorf("账户 %s 缺少可更新的 Chrome 来源", account.ID), err)
 			}
 			logRenewal("INFO", api.LogStage{}, "更新 Chrome 来源材料")
-			updated, importErr := refresher.importCurrent(ctx, extension.Source, extension.OAuth, proxy)
+			updated, importErr := refresher.importCurrent(ctx, extension.Source, *extension.OAuth, proxy)
 			if importErr != nil {
 				return errors.Join(err, importErr)
 			}
 			current, exists, importErr := updated.AuthExtension()
 			if importErr != nil || !exists || current.OAuth == nil || !strings.EqualFold(current.Source.Email, account.ID) ||
-				extension.OAuth != nil && current.OAuth.GaiaID != extension.OAuth.GaiaID {
+				current.OAuth.GaiaID != extension.OAuth.GaiaID {
 				return fmt.Errorf("Chrome 更新结果与账户 %s 不匹配", account.ID)
 			}
 			extension = current
@@ -517,7 +496,7 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	return refresher.mergeWorker(ctx, account.ID, headers, extension.Bound.RefreshURL)
 }
 
-// Available 返回当前租约账户能否续签：保存了 Chrome OAuth 续签材料，或本机 Chrome 登录着同一邮箱
+// Available 返回当前租约账户是否保存了 Chrome OAuth 续签材料
 func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 	lease, ok := aistudio.AccountLeaseFromContext(ctx)
 	if !ok {
@@ -531,7 +510,7 @@ func (refresher *authRuntimeRefresher) Available(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return extension.OAuth != nil || refresher.chromeHas != nil && refresher.chromeHas(lease.Account().ID)
+	return extension.OAuth != nil
 }
 
 func authenticationFailed(response *aistudio.RPCResponse) bool {

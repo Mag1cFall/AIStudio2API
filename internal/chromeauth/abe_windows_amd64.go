@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -157,12 +158,10 @@ func decryptAppBoundCiphertext(chromePath string, encrypted []byte) ([]byte, err
 		return nil, fmt.Errorf("写入 ABE helper: %w", err)
 	}
 
-	restoreEnv := setTemporaryEnv(map[string]string{
-		abeInputEnv:  base64.StdEncoding.EncodeToString(encrypted),
-		abeOutputEnv: outputPath,
+	process, thread, err := startHiddenChrome(chromePath, filepath.Join(tempDir, "profile"), []string{
+		abeInputEnv + "=" + base64.StdEncoding.EncodeToString(encrypted),
+		abeOutputEnv + "=" + outputPath,
 	})
-	process, thread, err := startHiddenChrome(chromePath, filepath.Join(tempDir, "profile"))
-	restoreEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +177,6 @@ func decryptAppBoundCiphertext(chromePath string, encrypted []byte) ([]byte, err
 	if _, err := windows.ResumeThread(thread); err != nil {
 		return nil, fmt.Errorf("启动临时 Chrome: %w", err)
 	}
-	time.Sleep(750 * time.Millisecond)
 	if err := injectDLL(process, helperPath); err != nil {
 		return nil, err
 	}
@@ -229,33 +227,8 @@ func closeChromeProcess(job windows.Handle, process windows.Handle, thread windo
 	windows.CloseHandle(process)
 }
 
-// temporaryEnvValue 保存父进程环境变量原值
-type temporaryEnvValue struct {
-	value string
-	set   bool
-}
-
-// setTemporaryEnv 设置子进程继承用环境变量
-func setTemporaryEnv(values map[string]string) func() {
-	oldValues := make(map[string]temporaryEnvValue, len(values))
-	for key, value := range values {
-		oldValue, ok := os.LookupEnv(key)
-		oldValues[key] = temporaryEnvValue{value: oldValue, set: ok}
-		os.Setenv(key, value)
-	}
-	return func() {
-		for key, oldValue := range oldValues {
-			if oldValue.set {
-				os.Setenv(key, oldValue.value)
-			} else {
-				os.Unsetenv(key)
-			}
-		}
-	}
-}
-
-// startHiddenChrome 创建隐藏的独立临时 Chrome
-func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, windows.Handle, error) {
+// startHiddenChrome 创建隐藏的独立临时 Chrome，env 追加在本进程环境变量之后
+func startHiddenChrome(chromePath string, profileDir string, env []string) (windows.Handle, windows.Handle, error) {
 	commandLine := strings.Join([]string{
 		quoteWindowsArg(chromePath),
 		"--user-data-dir=" + quoteWindowsArg(profileDir),
@@ -282,6 +255,11 @@ func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, wi
 		Flags:      startfUseShowWindow,
 		ShowWindow: swHide,
 	}
+	var environment []uint16
+	for _, entry := range append(os.Environ(), env...) {
+		environment = append(append(environment, utf16.Encode([]rune(entry))...), 0)
+	}
+	environment = append(environment, 0)
 	var processInfo windows.ProcessInformation
 	err = windows.CreateProcess(
 		chromePathUTF16,
@@ -289,8 +267,8 @@ func startHiddenChrome(chromePath string, profileDir string) (windows.Handle, wi
 		nil,
 		nil,
 		false,
-		createSuspended,
-		nil,
+		createSuspended|windows.CREATE_UNICODE_ENVIRONMENT,
+		&environment[0],
 		nil,
 		&startupInfo,
 		&processInfo,

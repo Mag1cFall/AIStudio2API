@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"sort"
@@ -245,7 +247,11 @@ func encodeFunctionDeclaration(declaration FunctionDeclaration) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parameters: %w", err)
 	}
-	inlined := inlineSchemaRefs(raw)
+	ordered, err := normalizeFunctionParameters(schemaWithPropertyOrdering(declaration.Parameters))
+	if err != nil {
+		return nil, fmt.Errorf("parameters: %w", err)
+	}
+	inlined := inlineSchemaRefs(ordered)
 	parameters, encodingError := encodeJSONSchema(inlined)
 	description := declaration.Description
 	if encodingError != nil {
@@ -437,11 +443,7 @@ func encodeWireStructJSON(raw json.RawMessage) ([]any, error) {
 	if len(trimmed) == 0 {
 		return []any{}, nil
 	}
-	if !json.Valid(trimmed) {
-		var value any
-		return nil, fmt.Errorf("必须是 JSON: %w", json.Unmarshal(trimmed, &value))
-	}
-	value, err := decodeOrderedJSON(json.NewDecoder(bytes.NewReader(trimmed)))
+	value, err := parseOrderedJSON(trimmed)
 	if err != nil {
 		return nil, fmt.Errorf("必须是 JSON: %w", err)
 	}
@@ -461,33 +463,47 @@ type orderedMember struct {
 // orderedObject 是按 JavaScript 对象键顺序排列成员的 JSON 对象：数组下标形式的键按数值升序在前，其余键按首次出现的顺序，重复的键取最后一个值
 type orderedObject []orderedMember
 
-// decodeOrderedJSON 从 decoder 读出一个 JSON 值，对象读成 orderedObject，数字为 float64
-func decodeOrderedJSON(decoder *json.Decoder) (any, error) {
-	token, err := decoder.Token()
+// parseOrderedJSON 把 raw 读成一个 JSON 值，对象读成 orderedObject，数字为 float64；raw 不是单个合法 JSON 值时返回 json.Unmarshal 的错误
+func parseOrderedJSON(raw []byte) (any, error) {
+	decoder := jsontext.NewDecoder(bytes.NewBuffer(raw), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	value, err := decodeOrderedJSON(decoder)
+	if _, end := decoder.ReadToken(); err != nil || end != io.EOF {
+		if !json.Valid(raw) {
+			var value any
+			return nil, json.Unmarshal(raw, &value)
+		}
+		return nil, err
+	}
+	return value, nil
+}
+
+// decodeOrderedJSON 从 decoder 读出一个 JSON 值，对象读成 orderedObject，数字为 float64，超出 float64 范围的数字返回 json.Unmarshal 的错误
+func decodeOrderedJSON(decoder *jsontext.Decoder) (any, error) {
+	token, err := decoder.ReadToken()
 	if err != nil {
 		return nil, err
 	}
-	switch token {
-	case json.Delim('['):
+	switch token.Kind() {
+	case '[':
 		values := []any{}
-		for decoder.More() {
+		for decoder.PeekKind() != ']' {
 			value, err := decodeOrderedJSON(decoder)
 			if err != nil {
 				return nil, err
 			}
 			values = append(values, value)
 		}
-		_, err := decoder.Token()
+		_, err := decoder.ReadToken()
 		return values, err
-	case json.Delim('{'):
+	case '{':
 		object := orderedObject{}
 		positions := map[string]int{}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
+		for decoder.PeekKind() != '}' {
+			keyToken, err := decoder.ReadToken()
 			if err != nil {
 				return nil, err
 			}
-			key := keyToken.(string)
+			key := keyToken.String()
 			value, err := decodeOrderedJSON(decoder)
 			if err != nil {
 				return nil, err
@@ -499,25 +515,58 @@ func decodeOrderedJSON(decoder *json.Decoder) (any, error) {
 			positions[key] = len(object)
 			object = append(object, orderedMember{key: key, value: value})
 		}
-		if _, err := decoder.Token(); err != nil {
+		if _, err := decoder.ReadToken(); err != nil {
 			return nil, err
 		}
-		slices.SortStableFunc(object, func(left, right orderedMember) int {
-			leftIndex, leftOK := arrayIndexKey(left.key)
-			rightIndex, rightOK := arrayIndexKey(right.key)
-			switch {
-			case leftOK && rightOK:
-				return cmp.Compare(leftIndex, rightIndex)
-			case leftOK:
-				return -1
-			case rightOK:
-				return 1
-			}
-			return 0
-		})
+		slices.SortStableFunc(object, func(left, right orderedMember) int { return compareObjectKeys(left.key, right.key) })
 		return object, nil
+	case '"':
+		return token.String(), nil
+	case '0':
+		number, err := token.Float()
+		if err != nil {
+			return nil, json.Unmarshal([]byte(token.String()), new(float64))
+		}
+		return number, nil
+	case 't':
+		return true, nil
+	case 'f':
+		return false, nil
 	}
-	return token, nil
+	return nil, nil
+}
+
+// objectKeys 返回 JSON 对象 raw 的键名，按官网页面 JSON.parse 后的键顺序排列，成员值不解码
+func objectKeys(raw []byte) []string {
+	decoder := jsontext.NewDecoder(bytes.NewReader(raw), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	keys := []string{}
+	seen := map[string]bool{}
+	_, _ = decoder.ReadToken()
+	for decoder.PeekKind() == '"' {
+		token, _ := decoder.ReadToken()
+		if key := token.String(); !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+		_ = decoder.SkipValue()
+	}
+	slices.SortStableFunc(keys, compareObjectKeys)
+	return keys
+}
+
+// compareObjectKeys 按 JavaScript 对象键顺序比较两个键：数组下标形式的键按数值升序排在其余键之前，其余键保持原顺序
+func compareObjectKeys(left, right string) int {
+	leftIndex, leftOK := arrayIndexKey(left)
+	rightIndex, rightOK := arrayIndexKey(right)
+	switch {
+	case leftOK && rightOK:
+		return cmp.Compare(leftIndex, rightIndex)
+	case leftOK:
+		return -1
+	case rightOK:
+		return 1
+	}
+	return 0
 }
 
 // arrayIndexKey 返回 JavaScript 视为数组下标的对象键的数值
@@ -582,14 +631,26 @@ func encodeWireValue(value any) []any {
 	}
 }
 
+// wireArray 返回本服务编码的 GenerateContent 正文中数组 raw 的各元素，与 raw 共用字节，raw 不是数组时返回 false
+func wireArray(raw []byte) ([]json.RawMessage, bool) {
+	values, err := splitArray(raw, "$", nil, nil)
+	return values, err == nil
+}
+
 // wireFunctionResult 返回 GenerateContent 正文最后一个 user 轮次只有一个函数响应 Part 时的函数结果 JSON 文本，即官网用户在函数调用块中输入的函数结果
 func wireFunctionResult(body []byte) (string, bool) {
-	var fields []json.RawMessage
-	var contents [][]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || len(fields) < 2 || json.Unmarshal(fields[1], &contents) != nil || len(contents) == 0 {
+	fields, ok := wireArray(body)
+	if !ok || len(fields) < 2 {
 		return "", false
 	}
-	last := contents[len(contents)-1]
+	contents, ok := wireArray(fields[1])
+	if !ok || len(contents) == 0 {
+		return "", false
+	}
+	last, ok := wireArray(contents[len(contents)-1])
+	if !ok {
+		return "", false
+	}
 	var role string
 	var parts [][]json.RawMessage
 	var response []json.RawMessage

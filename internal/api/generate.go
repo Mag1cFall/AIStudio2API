@@ -19,6 +19,8 @@ var errIncompleteStream = errors.New("upstream stream closed before finish")
 const streamHeartbeatInterval = 10 * time.Second
 
 type generationResult struct {
+	// streamed 表示正文、思考与内联媒体已逐个写给客户端，结果中不再保留
+	streamed      bool
 	events        []aistudio.Event
 	text          bytes.Buffer
 	reasoning     bytes.Buffer
@@ -70,8 +72,14 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	case aistudio.EventError:
 		return event.Err
 	case aistudio.EventText:
+		if result.streamed {
+			return nil
+		}
 		result.text.WriteString(event.Text)
 	case aistudio.EventReasoning:
+		if result.streamed {
+			return nil
+		}
 		result.reasoning.WriteString(event.Text)
 	case aistudio.EventToolCall:
 		result.toolCalls = append(result.toolCalls, *event.FunctionCall)
@@ -91,6 +99,9 @@ func (result *generationResult) apply(event aistudio.Event) error {
 		if event.InlineData != nil {
 			if event.InlineData.MIME == "" || len(event.InlineData.Data) == 0 {
 				return fmt.Errorf("upstream media is missing MIME or content")
+			}
+			if result.streamed {
+				return nil
 			}
 			if count := len(result.events); count > 0 && result.events[count-1].Kind == aistudio.EventMedia && aistudio.MergePCM(&result.events[count-1].Part, event.Part) {
 				result.media[len(result.media)-1].Data = result.events[count-1].InlineData.Data
@@ -166,7 +177,13 @@ func consumeEvents(ctx context.Context, events <-chan aistudio.Event) (generatio
 }
 
 // consumeStreamEvents 收集事件并逐个交给 emit
-func consumeStreamEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (result generationResult, resultErr error) {
+func consumeStreamEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error) (generationResult, error) {
+	return collectStreamEvents(ctx, events, emit, false)
+}
+
+// collectStreamEvents 收集事件并逐个交给 emit，streamed 为真时 emit 写出的正文、思考与内联媒体不留在结果中
+func collectStreamEvents(ctx context.Context, events <-chan aistudio.Event, emit func(aistudio.Event) error, streamed bool) (result generationResult, resultErr error) {
+	result.streamed = streamed
 	defer func() {
 		SetAccessLogError(ctx, resultErr)
 	}()

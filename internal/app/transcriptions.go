@@ -73,8 +73,10 @@ func (service *trackedService) Transcribe(
 		service.requests.logRequestProgress(request.ID, label, "WARN", "WAA Worker 已更新，重放当前请求", "model", modelID)
 		return true, nil
 	}
-	observed := aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
+	observed := aistudio.ContextWithAccountSelectionObserver(requestCtx, func(lease *aistudio.AccountLease) {
+		account := lease.Account()
 		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
+		api.SetAccessLogChannel(requestCtx, string(lease.Channel()))
 		api.SetAccessLogTarget(requestCtx, request.Model, account.Config.Label)
 		service.requests.markRunning(request.ID, account.ID, account.Config.Label)
 	})

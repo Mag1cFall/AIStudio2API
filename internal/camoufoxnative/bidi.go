@@ -47,6 +47,8 @@ type bidiClient struct {
 	rhythm rhythm.Rhythm
 	// loads 是正在载入官网页面的标签页记下的网络状态，键为标签页的 context
 	loads map[string]*pageLoad
+	// clocks 是各标签页的页面时钟状态，键为标签页的 context
+	clocks map[string]*pageClock
 }
 
 // pageLoad 是一个标签页载入官网页面期间从网络事件记下的状态

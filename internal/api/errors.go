@@ -9,12 +9,14 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 )
 
 type httpStatusError interface {
@@ -295,9 +297,91 @@ func publicErrorMessage(status int, message string) string {
 	return message
 }
 
+// rpcFailurePrefix 匹配冷却原因中上游错误的方法、HTTP 状态与协议错误码前缀
+var rpcFailurePrefix = regexp.MustCompile(`AI Studio \S+ \p{Han}+ [^:]+: `)
+
+// emailPattern 匹配错误文案中的邮箱地址
+var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+
+// publicText 返回写给 API 客户端的错误文案：中文按英文翻译表译为英文，邮箱地址换成 [account]
+func publicText(message string) string {
+	return emailPattern.ReplaceAllString(i18n.Translate("en", message), "[account]")
+}
+
+// publicReason 返回请求失败写给 API 客户端的英文原因：上游错误取上游原始消息，账户都不可调度时按状态给出账户数，其余 5xx 只取最内层原因
+func publicReason(err error) string {
+	var (
+		notReady *aistudio.AccountsNotReadyError
+		cooling  *aistudio.AllCoolingError
+		stream   *aistudio.StreamInterruptedError
+		rpc      *aistudio.RPCError
+	)
+	switch {
+	case errors.As(err, &notReady):
+		return notReadyReason(notReady)
+	case errors.As(err, &cooling):
+		return publicText(rpcFailurePrefix.ReplaceAllString(cooling.Error(), ""))
+	case errors.As(err, &stream):
+		return "Upstream stream interrupted: " + publicText(innermostError(stream.Err).Error())
+	case errors.As(err, &rpc) && rpc.Message != "":
+		return publicText(rpc.Message)
+	case statusFromError(err) >= http.StatusInternalServerError:
+		return publicText(innermostError(err).Error())
+	}
+	return publicText(err.Error())
+}
+
+// innermostError 沿错误链取最内层错误，合并的错误取第一个
+func innermostError(err error) error {
+	for {
+		switch wrapped := err.(type) {
+		case interface{ Unwrap() error }:
+			if next := wrapped.Unwrap(); next != nil {
+				err = next
+				continue
+			}
+		case interface{ Unwrap() []error }:
+			if next := wrapped.Unwrap(); len(next) > 0 {
+				err = next[0]
+				continue
+			}
+		}
+		return err
+	}
+}
+
+// accountStateNames 是不可调度账户状态在公开错误中的英文说明
+var accountStateNames = map[aistudio.AccountState]string{
+	aistudio.AccountAuthRequired: "sign-in required",
+	aistudio.AccountRestricted:   "service restricted",
+	aistudio.AccountUnavailable:  "unavailable",
+	aistudio.AccountDisabled:     "disabled",
+}
+
+// notReadyReason 返回账户都不可调度时的公开原因，按状态给出账户数
+func notReadyReason(err *aistudio.AccountsNotReadyError) string {
+	counts := map[aistudio.AccountState]int{}
+	var states []aistudio.AccountState
+	for _, state := range err.States {
+		if counts[state] == 0 {
+			states = append(states, state)
+		}
+		counts[state]++
+	}
+	parts := make([]string, len(states))
+	for index, state := range states {
+		name := accountStateNames[state]
+		if name == "" {
+			name = string(state)
+		}
+		parts[index] = fmt.Sprintf("%s: %d", name, counts[state])
+	}
+	return "No account can serve this request (accounts " + strings.Join(parts, ", ") + ")"
+}
+
 func writeOpenAIError(w http.ResponseWriter, status int, code string, message string) {
-	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
+	message = publicErrorMessage(status, publicText(message))
 	writeJSON(w, status, map[string]any{"error": openAIErrorBody{Message: message, Type: openAIErrorType(status, code), Code: code}})
 }
 
@@ -320,8 +404,8 @@ func openAIErrorType(status int, code string) string {
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, errorType string, message string) {
-	message = publicErrorMessage(status, message)
 	setAccessLogResponseError(w, message)
+	message = publicErrorMessage(status, publicText(message))
 	writeJSON(w, status, anthropicErrorResponse{Type: "error", Error: anthropicErrorBody{Type: errorType, Message: message}})
 }
 
@@ -341,15 +425,21 @@ func writeGeminiError(w http.ResponseWriter, status int, statusName string, mess
 	setAccessLogResponseError(w, message)
 	writeJSON(w, status, officialOrder("gemini", map[string]any{"error": map[string]any{
 		"code":    status,
-		"message": message,
+		"message": publicText(message),
 		"status":  statusName,
 	}}))
 }
 
-// writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After 并在消息末尾写明重试时间
+// writeOpenAIRequestError 以 OpenAI 错误体写出请求失败，可重试时带 Retry-After 并在消息末尾写明重试时间，请求记录保留完整原因
 func writeOpenAIRequestError(w http.ResponseWriter, err error) {
+	writeOpenAIFailure(w, statusFromError(err), openAIErrorCode(err), err)
+}
+
+// writeOpenAIFailure 以给定状态与错误码写出请求失败的公开原因，可重试时带 Retry-After，请求记录保留完整原因
+func writeOpenAIFailure(w http.ResponseWriter, status int, code string, err error) {
 	seconds := setRetryAfter(w, err)
-	writeOpenAIError(w, statusFromError(err), openAIErrorCode(err), retryMessage(err.Error(), seconds))
+	writeOpenAIError(w, status, code, retryMessage(publicReason(err), seconds))
+	setAccessLogResponseError(w, err.Error())
 }
 
 // writeOpenAISSEError 在已开始的 OpenAI 事件流中以 error 数据帧写出请求失败，可重试时在消息末尾写明重试时间
@@ -357,7 +447,7 @@ func writeOpenAISSEError(w http.ResponseWriter, err error) {
 	status := statusFromError(err)
 	code := openAIErrorCode(err)
 	_ = writeSSE(w, "", map[string]any{"error": openAIErrorBody{
-		Message: retryMessage(publicErrorMessage(status, err.Error()), retryAfterSeconds(err)), Type: openAIErrorType(status, code), Code: code,
+		Message: retryMessage(publicErrorMessage(status, publicReason(err)), retryAfterSeconds(err)), Type: openAIErrorType(status, code), Code: code,
 	}})
 }
 
@@ -365,6 +455,7 @@ func writeOpenAISSEError(w http.ResponseWriter, err error) {
 func writeAnthropicRequestError(w http.ResponseWriter, err error) {
 	seconds := setRetryAfter(w, err)
 	writeAnthropicError(w, statusFromError(err), anthropicErrorType(err), retryMessage(anthropicErrorMessage(err), seconds))
+	setAccessLogResponseError(w, err.Error())
 }
 
 // retryMessage 在 seconds 大于 0 时于消息末尾按 OpenAI 限流消息的写法另起一句 Please try again in <seconds>s.
@@ -387,9 +478,9 @@ func contextOverflow(err error) bool {
 // anthropicErrorMessage 返回 Anthropic 错误消息，上下文超限时以 prompt is too long 开头
 func anthropicErrorMessage(err error) string {
 	if contextOverflow(err) {
-		return "prompt is too long: " + err.Error()
+		return "prompt is too long: " + publicReason(err)
 	}
-	return err.Error()
+	return publicReason(err)
 }
 
 // writeGeminiRequestError 以 Gemini 错误体写出请求失败，可重试时带 Retry-After 与 RetryInfo
@@ -401,7 +492,7 @@ func writeGeminiRequestError(w http.ResponseWriter, err error) {
 
 // geminiErrorPayload 返回 Gemini 错误对象，seconds 大于 0 时 details 带该时长的 RetryInfo
 func geminiErrorPayload(err error, seconds int64) map[string]any {
-	payload := map[string]any{"code": statusFromError(err), "message": err.Error(), "status": geminiErrorStatus(err)}
+	payload := map[string]any{"code": statusFromError(err), "message": publicReason(err), "status": geminiErrorStatus(err)}
 	if seconds > 0 {
 		payload["details"] = []any{map[string]any{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": strconv.FormatInt(seconds, 10) + "s"}}
 	}

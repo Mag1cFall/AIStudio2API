@@ -1,8 +1,11 @@
 package aistudio
 
 import (
+	"encoding/json"
 	"math/rand/v2"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -38,25 +41,113 @@ type modelTab struct {
 // modelTabs 是模型面板按官网顺序排列的分类页签，All 列出全部模型
 var modelTabs = []modelTab{{"All", 0}, {"Featured", 10}, {"Gemini", 17}, {"Live", 18}, {"Images", 15}, {"Video", 14}, {"Audio", 13}, {"Music", 16}, {"Agents", 19}, {"Gemma", 3}}
 
-// modelRowHeight 与 panelChrome 是模型面板中一行模型的高度与面板中不放模型行的高度，面板在视口中完整容纳 (视口高度 - panelChrome) / modelRowHeight 行
+// 官网模型面板 All 分类与运行设置面板的布局，单位为 CSS 像素
 const (
-	modelRowHeight = 141
-	panelChrome    = 212
+	// panelTop 是模型列表在视口中的上缘，panelBottom 是列表下缘到视口底部的距离，panelGap 是相邻两行的间距
+	panelTop    = 211
+	panelBottom = 26
+	panelGap    = 17
+	// rowButtonTop 与 rowButtonSize 是一行中标记、说明与文档按钮相对行上缘的位置与边长
+	rowButtonTop  = 20
+	rowButtonSize = 28
+	// veVisibleSize 是官网 VE 记录器把元素记为可见时它与视口相交部分的最小宽高
+	veVisibleSize = 10
 )
 
-// pickedTabs 是从 All 分类选中模型后不跟踪地重新曝光的页签
-var pickedTabs = []string{"Featured", "Gemini", "Images", "Video", "Audio", "Live"}
+// categoryCards 是新对话页在页面模型没有入门卡片系列时列出的各分类卡片
+var categoryCards = []string{"Featured", "Gemini", "Images", "Video", "Audio", "Live"}
 
-// panelRows 返回模型面板在视口中完整容纳的模型行数
-func (log *pageElements) panelRows() int {
-	return max(1, int((log.viewport-panelChrome)/modelRowHeight))
+// showCategories 在 at 曝光新对话页的各分类卡片；调用方持有 mu
+func (log *pageElements) showCategories(at time.Time) {
+	for _, name := range categoryCards {
+		log.shown(veModelTab, at, []any{nil, []any{nil, nil, name}}, false)
+	}
+}
+
+// inView 判断上缘为 top、高为 height 的元素与视口相交的高度达到官网 VE 记录器记为可见的大小
+func (log *pageElements) inView(top, height float64) bool {
+	return min(top+height, log.viewport)-max(top, 0) >= veVisibleSize
+}
+
+// panelRow 是模型面板当前分类列出的一行：model 为 ListModels 中的下标，elements 为该行各元素的曝光序号、VE 与是否跟踪可见性（1 为跟踪）
+type panelRow struct {
+	model    int
+	elements [][3]int
+}
+
+// listTops 返回 rows 各行相对列表顶部的上缘与列表总高
+func (log *pageElements) listTops(rows []panelRow) ([]float64, float64) {
+	tops := make([]float64, len(rows))
+	var offset float64
+	for index, row := range rows {
+		tops[index] = offset
+		offset += log.models[row.model].height + panelGap
+	}
+	return tops, max(offset-panelGap, 0)
+}
+
+// listHeight 返回模型列表在视口中的高度
+func (log *pageElements) listHeight() float64 {
+	return log.viewport - panelTop - panelBottom
+}
+
+// clampScroll 返回列表总高为 total 时 scroll 在可滚动范围内的值
+func (log *pageElements) clampScroll(scroll, total float64) float64 {
+	return max(min(scroll, total-log.listHeight()), 0)
+}
+
+// rowsInView 记录 log.listed 中跟踪可见性、在列表滚到 log.listScroll 后进入视口的元素在 seen 可见，按行与行内元素的顺序；调用方持有 mu
+func (log *pageElements) rowsInView(seen time.Time) {
+	tops, _ := log.listTops(log.listed)
+	for index, row := range log.listed {
+		model := log.models[row.model]
+		for _, item := range row.elements {
+			offset, height := listedBox(model, item[1])
+			if item[2] == 1 && log.inView(panelTop+tops[index]-log.listScroll+offset, height) {
+				log.visible(item[0], item[1], seen)
+			}
+		}
+	}
+}
+
+// listedBox 返回 All 分类中 model 一行的 ve 元素相对行上缘的位置与高度
+func listedBox(model catalogModel, ve int) (float64, float64) {
+	switch ve {
+	case veModelRow:
+		return 0, model.height
+	case veModelEnvironment:
+		return model.height - agentMarkBottom, agentMarkHeight
+	}
+	return rowButtonTop, rowButtonSize
+}
+
+// settingsTops 是页面模型卡片高 settingsCardHeight 时运行设置面板中各元素在视口中的上缘与高度
+var settingsTops = map[int][2]float64{
+	veSelector: {60, settingsCardHeight}, veSystem: {167, 81}, veLevel: {308, 24}, 228153: {417, 32}, 228152: {422.1, 21.7}, 228154: {461, 21.7},
+	veFunctionsEdit: {494.7, 32}, veFunctions: {499.8, 21.7}, veGrounding: {547.3, 21.7}, 329280: {589.7, 21.7}, 249371: {631.4, 21.7}, 228155: {694, 36},
+}
+
+// settingsCardHeight 是两行说明的模型卡片高度
+const settingsCardHeight = 99
+
+// settingsInView 判断运行设置面板中的 ve 元素在页面载入时位于视口内，模型卡片按页面模型的说明行数增高，其后各元素随之下移；不在运行设置面板中的元素都在视口内
+func (log *pageElements) settingsInView(ve int) bool {
+	box, ok := settingsTops[ve]
+	if !ok {
+		return true
+	}
+	card := float64(settingsCardHeight)
+	if index := slices.IndexFunc(log.models, func(item catalogModel) bool { return item.name == log.model }); index >= 0 {
+		card = log.models[index].card
+	}
+	if ve == veSelector {
+		return log.inView(box[0], card)
+	}
+	return log.inView(box[0]+card-settingsCardHeight, box[1])
 }
 
 // featuredTab 是打开模型面板时选中的分类
 const featuredTab = 10
-
-// visibleModelRows 是打开模型面板后视口内的模型行数
-const visibleModelRows = 5
 
 // renderDelay 返回官网界面元素日志在一次点击后记录新渲染元素的间隔
 func renderDelay() time.Duration {
@@ -113,7 +204,7 @@ func rowElementDetail(ve int, tab string, model string) []any {
 	return rowDetail(tab, model)
 }
 
-// openSelector 记录在 at 点击模型选择卡片，模型面板随后曝光各分类页签与 Featured 分类中的每行模型
+// openSelector 记录在 at 点击模型选择卡片，模型面板随后曝光各分类页签与 Featured 分类中的每行模型，面板展开中曝光的元素都跟踪可见性；Featured 列表把页面模型一行滚到列表中央
 func (log *pageElements) openSelector(at time.Time) {
 	log.mu.Lock()
 	defer log.mu.Unlock()
@@ -128,28 +219,31 @@ func (log *pageElements) openSelector(at time.Time) {
 		for _, tab := range modelTabs {
 			log.tabs = append(log.tabs, [2]int{log.shown(veModelTab, shown, []any{nil, []any{nil, nil, tab.name}}, true), veModelTab})
 		}
-		log.panel = slices.Clone(log.tabs)
-		log.listing = "10"
-		rows := 0
-		for _, model := range log.models {
+		log.listing = strconv.Itoa(featuredTab)
+		log.listed = log.listed[:0]
+		for index, model := range log.models {
 			if !slices.Contains(model.categories, featuredTab) {
 				continue
 			}
+			row := panelRow{model: index}
 			for _, ve := range rowElements(model) {
 				seq := log.shown(ve, shown, rowElementDetail(ve, log.listing, model.name), true)
-				if rows < visibleModelRows {
-					log.panel = append(log.panel, [2]int{seq, ve})
-				}
+				row.elements = append(row.elements, [3]int{seq, ve, 1})
 				if ve == veModelRow {
 					log.rows[model.name] = seq
 				}
 			}
-			rows++
+			log.listed = append(log.listed, row)
+		}
+		tops, total := log.listTops(log.listed)
+		log.listScroll = 0
+		if selected := slices.IndexFunc(log.listed, func(row panelRow) bool { return log.models[row.model].name == log.model }); selected >= 0 {
+			log.listScroll = log.clampScroll(tops[selected]+log.models[log.listed[selected].model].height/2-log.listHeight()/2, total)
 		}
 	})
 }
 
-// openAll 记录在 at 点击模型面板的 All 页签，随后按 ListModels 顺序曝光每个模型的一行（带运行环境的模型一行另带环境标记），9 ms 后各页签进入视口：列表停在页面模型下一行为视口最下面一行的位置，视口中完整的各行与其上只露出行底部的一行的行元素不跟踪可见性
+// openAll 记录在 at 点击模型面板的 All 页签，随后按 ListModels 顺序曝光每个模型的一行（带运行环境的模型一行另带环境标记），9 ms 后各页签进入视口：Firefox 的滚动锚定让 Featured 列表中第一个露出的行留在原处，曝光时不在视口内的元素跟踪可见性
 func (log *pageElements) openAll(at time.Time) {
 	log.mu.Lock()
 	defer log.mu.Unlock()
@@ -162,15 +256,28 @@ func (log *pageElements) openAll(at time.Time) {
 	}
 	shown := at.Add(renderDelay())
 	log.later(shown, func() {
+		previous, _ := log.listTops(log.listed)
+		anchor := -1
+		for index, row := range log.listed {
+			if panelTop+previous[index]-log.listScroll+log.models[row.model].height > panelTop {
+				anchor = index
+				break
+			}
+		}
+		all := make([]panelRow, len(log.models))
+		for index := range log.models {
+			all[index] = panelRow{model: index}
+		}
+		tops, total := log.listTops(all)
+		if anchor >= 0 {
+			log.listScroll += tops[log.listed[anchor].model] - previous[anchor]
+		}
+		log.listScroll = log.clampScroll(log.listScroll, total)
 		log.listing = modelTabs[0].name
-		log.listed = log.listed[:0]
-		selected := slices.IndexFunc(log.models, func(item catalogModel) bool { return item.name == log.model })
-		log.listedBottom = min(selected+1, len(log.models)-1)
-		top := log.listedBottom - log.panelRows()
 		for index, model := range log.models {
-			var row [][3]int
 			for _, ve := range rowElements(model) {
-				tracked := selected < 0 || index < top || index > log.listedBottom || index == top && ve != veModelRow
+				offset, height := listedBox(model, ve)
+				tracked := !log.inView(panelTop+tops[index]-log.listScroll+offset, height)
 				detail := veData{shown: shown.UnixMilli(), detail: rowElementDetail(ve, log.listing, model.name)}
 				var seq int
 				if ve == veModelRow && model.environment {
@@ -180,6 +287,7 @@ func (log *pageElements) openAll(at time.Time) {
 						return []any{log.ref(seq), elements, nil, nil, nil, nil, nil, nil, []any{log.ref(seq)}}
 					})
 					log.exposed[ve], log.exposed[veModelEnvironment] = seq, seq
+					tracked = true
 				} else {
 					seq = log.shown(ve, shown, detail.detail, tracked)
 				}
@@ -187,13 +295,13 @@ func (log *pageElements) openAll(at time.Time) {
 				if tracked {
 					flag = 1
 				}
-				row = append(row, [3]int{seq, ve, flag})
+				all[index].elements = append(all[index].elements, [3]int{seq, ve, flag})
 				if ve == veModelRow {
 					log.rows[model.name] = seq
 				}
 			}
-			log.listed = append(log.listed, row)
 		}
+		log.listed = all
 		tabsSeen := shown.Add(9 * time.Millisecond)
 		for _, item := range log.tabs {
 			log.visible(item[0], item[1], tabsSeen)
@@ -201,19 +309,7 @@ func (log *pageElements) openAll(at time.Time) {
 	})
 }
 
-// listedVisible 返回滚到 All 分类第 index 行后视口中的各行与只露出行底部的一行（没有时为 -1）：该行在 All 分类曝光时视口最下面一行之下时滚到视口底部，不是最后一行且其上有第 panelRows 行时该行只露出行底部，列表滚到顶时视口从第一行开始；否则滚到视口顶部，其上一行在面板页签下
-func (log *pageElements) listedVisible(index int) (int, int, int) {
-	rows := log.panelRows()
-	if index <= log.listedBottom {
-		return max(0, index-1), min(len(log.listed)-1, index+rows-1), -1
-	}
-	if index == len(log.listed)-1 || index < rows {
-		return max(0, index-rows+1), index, -1
-	}
-	return index - rows + 1, index, index - rows
-}
-
-// pickModel 记录模型面板视口内跟踪可见性的元素在 seen 进入视口、在 at 点击 model 一行，面板关闭后页面以新模型重新曝光入门卡片、Run 按钮与取值变化的思考档位下拉框：Featured 分类中为各页签与前 5 行，All 分类中为滚到 model 一行后视口中的行（见 listedVisible），从 All 分类选中时先曝光 pickedTabs 各页签
+// pickModel 记录模型面板中 model 一行滚入列表后跟踪可见性的元素在 seen 进入视口、在 at 点击这一行，面板关闭后页面以新模型重新曝光入门卡片（没有入门卡片系列时为各分类卡片，免费账户换成需要付费的模型时为付费提示）、Run 按钮与取值变化的思考档位下拉框：这一行在列表上方时滚到列表顶部、在下方时滚到列表底部；Featured 分类中各页签先进入视口
 func (log *pageElements) pickModel(seen, at time.Time, model string) {
 	log.mu.Lock()
 	defer log.mu.Unlock()
@@ -221,25 +317,22 @@ func (log *pageElements) pickModel(seen, at time.Time, model string) {
 		return
 	}
 	log.runPending(seen)
-	listed := log.listing == modelTabs[0].name
-	if listed {
-		index := slices.IndexFunc(log.models, func(item catalogModel) bool { return item.name == model })
-		first, last, partial := log.listedVisible(max(index, 0))
-		if partial >= 0 {
-			first = partial
-		}
-		for current := first; current <= last; current++ {
-			for _, item := range log.listed[current] {
-				if item[2] == 1 && (current != partial || item[1] == veModelRow) {
-					log.visible(item[0], item[1], seen)
-				}
-			}
-		}
-	} else {
-		for _, item := range log.panel {
+	if log.listing != modelTabs[0].name {
+		for _, item := range log.tabs {
 			log.visible(item[0], item[1], seen)
 		}
 	}
+	if target := slices.IndexFunc(log.listed, func(row panelRow) bool { return log.models[row.model].name == model }); target >= 0 {
+		tops, _ := log.listTops(log.listed)
+		height := log.models[log.listed[target].model].height
+		switch top := panelTop + tops[target] - log.listScroll; {
+		case top < panelTop:
+			log.listScroll = tops[target]
+		case top+height > panelTop+log.listHeight():
+			log.listScroll = tops[target] + height - log.listHeight()
+		}
+	}
+	log.rowsInView(seen)
 	log.clicked(log.rows[model], veModelRow, veData{detail: rowDetail(log.listing, model)}, at)
 	log.model = model
 	previous := log.level
@@ -249,19 +342,16 @@ func (log *pageElements) pickModel(seen, at time.Time, model string) {
 	}
 	shown := at.Add(renderDelay())
 	log.later(shown, func() {
-		if listed {
-			for _, name := range pickedTabs {
-				log.shown(veModelTab, shown, []any{nil, []any{nil, nil, name}}, false)
-			}
-		}
-		if series := modelSeries(log.allSeries, model); series != nil {
-			log.series = series
-			for _, card := range series.Cards {
+		log.series = modelSeries(log.allSeries, model)
+		if log.series == nil || log.paidNotice() {
+			log.showZeroState(shown)
+		} else {
+			for _, card := range log.series.Cards {
 				var applet any
 				if card.Applet != "" {
 					applet = []any{card.Applet}
 				}
-				log.shown(veCard, shown, []any{nil, []any{model}, applet, nil, series.ID + ":" + card.Title}, false)
+				log.shown(veCard, shown, []any{nil, []any{model}, applet, nil, log.series.ID + ":" + card.Title}, false)
 			}
 		}
 		log.shown(veRun, shown, modelDetail(model), false)
@@ -330,4 +420,129 @@ func (log *pageElements) toggle(at time.Time, ve int) {
 		log.runPending(at)
 		log.clicked(log.exposed[ve], ve, nil, at)
 	}
+}
+
+// interGlyphs 是官网 12px Inter 中 ASCII 可见字符的宽度，单位为 Firefox 的 1/60 像素，下标为字符码减 32
+var interGlyphs = [95]uint16{
+	203, 207, 335, 456, 462, 707, 464, 216, 263, 263, 361, 476, 207, 331, 207, 259,
+	454, 293, 439, 445, 465, 427, 446, 407, 445, 446, 207, 217, 476, 476, 476, 368,
+	695, 497, 471, 526, 520, 433, 425, 537, 535, 193, 411, 484, 407, 650, 542, 551,
+	460, 551, 463, 462, 465, 536, 497, 709, 491, 489, 453, 263, 259, 263, 339, 328,
+	232, 404, 441, 411, 441, 420, 266, 442, 426, 174, 174, 395, 174, 631, 425, 432,
+	441, 441, 271, 380, 236, 426, 405, 589, 393, 405, 398, 307, 239, 307, 476,
+}
+
+// interSymbols 是官网模型说明中出现的其余字符在 12px Inter 中的宽度，单位为 1/60 像素
+var interSymbols = map[rune]uint16{'•': 405, '—': 720, '–': 360, '’': 188, '…': 622, 'é': 420}
+
+// interWidth 返回 text 以 12px Inter 排版的宽度，单位为像素，未列出的字符按小写字母的平均宽度计
+func interWidth(text string) float64 {
+	var total int
+	for _, char := range text {
+		switch width, ok := interSymbols[char]; {
+		case char >= 32 && char < 127:
+			total += int(interGlyphs[char-32])
+		case ok:
+			total += int(width)
+		default:
+			total += 420
+		}
+	}
+	return float64(total) / 60
+}
+
+// interLines 返回 text 在宽 width 的行框中以 12px Inter 按空格折行的行数
+func interLines(text string, width float64) int {
+	lines, line := 1, 0.0
+	space := interWidth(" ")
+	for index, word := range strings.Split(text, " ") {
+		size := interWidth(word)
+		switch {
+		case index == 0:
+			line = size
+		case line+space+size > width:
+			lines++
+			line = size
+		default:
+			line += space + size
+		}
+	}
+	return lines
+}
+
+// 官网模型面板一行与运行设置模型卡片的排版，单位为 CSS 像素
+const (
+	// rowHeader 是一行的标题区高度，rowPadding 是详情列表下方的留白，rowItemGap 是详情各项的间距，rowLine 是详情的行高，rowText 是详情文字的行宽
+	rowHeader  = 64
+	rowPadding = 12
+	rowItemGap = 8
+	rowLine    = 16
+	rowText    = 454
+	// agentRow 是带运行环境的模型一行在详情列表之后的所选模型与价格两栏，agentMarkBottom 与 agentMarkHeight 是其中环境标记距行下缘的距离与高度
+	agentRow        = 8 + 47 + 8 + 16
+	agentMarkBottom = 58
+	agentMarkHeight = 22
+	// cardBase 是模型卡片中说明之外的高度，cardLine 与 cardText 是说明的行高与行宽
+	cardBase = 63
+	cardLine = 18
+	cardText = 227
+)
+
+// modelLayout 按 ListModels 中模型的说明字段（下标 38）返回模型面板中该行的高度与运行设置中模型卡片的高度：一行的详情依次为别名、说明、每档价格或价格说明（带链接时后接 Learn more）、发布日期，各占折行后的行数；带运行环境的模型不列价格，改为所选模型与价格两栏
+func modelLayout(details []json.RawMessage, environment bool) (float64, float64) {
+	field := func(index int) string {
+		var text string
+		if len(details) > index {
+			_ = json.Unmarshal(details[index], &text)
+		}
+		return text
+	}
+	var items []int
+	if alias := field(14); alias != "" {
+		items = append(items, interLines(alias, rowText))
+	}
+	description := field(9)
+	if description != "" {
+		items = append(items, interLines(description, rowText))
+	}
+	var pricing []json.RawMessage
+	if !environment && len(details) > 0 && json.Unmarshal(details[0], &pricing) == nil {
+		var note, link string
+		if len(pricing) > 4 && json.Unmarshal(pricing[3], &note) == nil && note != "" {
+			if json.Unmarshal(pricing[4], &link) == nil && link != "" {
+				note += " Learn more"
+			}
+			items = append(items, interLines(note, rowText))
+		} else {
+			tiers := 0
+			for _, side := range pricing[:min(len(pricing), 2)] {
+				var groups [][]json.RawMessage
+				if json.Unmarshal(side, &groups) == nil && len(groups) > 0 {
+					tiers = max(tiers, len(groups[0]))
+				}
+			}
+			for range tiers {
+				items = append(items, 1)
+			}
+		}
+	}
+	var released []string
+	if len(details) > 19 && json.Unmarshal(details[19], &released) == nil && len(released) > 0 {
+		items = append(items, 1)
+	}
+	height := float64(rowHeader + rowPadding)
+	for index, lines := range items {
+		height += float64(lines * rowLine)
+		if index > 0 {
+			height += rowItemGap
+		}
+	}
+	if environment {
+		height += agentRow
+	}
+	card := float64(cardBase)
+	if description != "" {
+		card += float64(interLines(description, cardText) * cardLine)
+	}
+	return height, card
 }

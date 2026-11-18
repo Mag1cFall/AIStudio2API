@@ -76,14 +76,14 @@ func AccountLeaseFromContext(ctx context.Context) (*AccountLease, bool) {
 	return lease, ok && lease != nil && lease.Account() != nil
 }
 
-// ContextWithAccountSelectionObserver 观察请求最终选择的账户
-func ContextWithAccountSelectionObserver(ctx context.Context, observer func(*Account)) context.Context {
+// ContextWithAccountSelectionObserver 观察请求最终取得的账户租约
+func ContextWithAccountSelectionObserver(ctx context.Context, observer func(*AccountLease)) context.Context {
 	return context.WithValue(ctx, accountSelectionObserverContextKey{}, observer)
 }
 
-func observeAccountSelection(ctx context.Context, account *Account) {
-	if observer, ok := ctx.Value(accountSelectionObserverContextKey{}).(func(*Account)); ok {
-		observer(account)
+func observeAccountSelection(ctx context.Context, lease *AccountLease) {
+	if observer, ok := ctx.Value(accountSelectionObserverContextKey{}).(func(*AccountLease)); ok {
+		observer(lease)
 	}
 }
 
@@ -444,9 +444,11 @@ func prepareProtocolHeaders(
 // CooldownQueueLimit 为全部候选账户冷却时一个请求排队等待恢复的累计上限，覆盖分钟限额窗口
 const CooldownQueueLimit = time.Minute
 
-// QueuedCoolingError 返回全部候选账户冷却时的排队结果：最早恢复的冷却在已排队 queued 之后的上限内且不是权限拒绝冷却时为 nil，否则为 AllCoolingError
-func QueuedCoolingError(modelID string, cooldown CooldownState, queued time.Duration) error {
-	if time.Until(cooldown.Until) <= CooldownQueueLimit-queued && !strings.HasPrefix(cooldown.Reason, AccountRejectionKind) {
+// QueuedCoolingError 返回全部候选账户冷却时的排队结果：最早恢复的冷却在已排队 queued 之后的上限内、不晚于 ctx 的期限且不是权限拒绝冷却时为 nil，否则为 AllCoolingError
+func QueuedCoolingError(ctx context.Context, modelID string, cooldown CooldownState, queued time.Duration) error {
+	deadline, bounded := ctx.Deadline()
+	if time.Until(cooldown.Until) <= CooldownQueueLimit-queued && !(bounded && cooldown.Until.After(deadline)) &&
+		!strings.HasPrefix(cooldown.Reason, AccountRejectionKind) {
 		return nil
 	}
 	return &AllCoolingError{ModelID: modelID, Until: cooldown.Until, Reason: cooldown.Reason}
@@ -474,7 +476,7 @@ func acquireQueuedLease(ctx context.Context, pool *AccountPool, selection Accoun
 		available := len(groups.WarmReady) + len(groups.WarmAvailable) + len(groups.WarmBusy) + len(groups.StandbyReady) + len(groups.StandbyBusy)
 		cooling := available == 0 && !groups.EarliestCooldown.Until.IsZero()
 		if cooling {
-			if err := QueuedCoolingError(selection.ModelID, groups.EarliestCooldown, cooled); err != nil {
+			if err := QueuedCoolingError(ctx, selection.ModelID, groups.EarliestCooldown, cooled); err != nil {
 				return nil, false, err
 			}
 		}
@@ -496,14 +498,14 @@ func resolveAccountLease(ctx context.Context, pool *AccountPool, selection Accou
 		if err := validateLeaseSelection(lease, selection); err != nil {
 			return nil, false, err
 		}
-		observeAccountSelection(ctx, lease.Account())
+		observeAccountSelection(ctx, lease)
 		return lease, false, nil
 	}
 	lease, err := pool.AcquireFor(ctx, selection)
 	if err != nil {
 		return nil, false, err
 	}
-	observeAccountSelection(ctx, lease.Account())
+	observeAccountSelection(ctx, lease)
 	return lease, true, nil
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"cmp"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"mime"
@@ -120,6 +121,17 @@ func interactionStep(event aistudio.Event, audio outputAudioFormat) (map[string]
 		return nil, nil, nil
 	}
 	return map[string]any{"type": "model_output", "content": []map[string]any{content}}, content, nil
+}
+
+// interactionCallStream 返回函数调用步骤的 step.start 内容与 arguments_delta 增量，start 带空参数对象，增量以 JSON 字符串携带完整参数
+func interactionCallStream[V any](step map[string]V) (map[string]any, map[string]any) {
+	start := make(map[string]any, len(step))
+	for key, value := range step {
+		start[key] = value
+	}
+	start["arguments"] = map[string]any{}
+	arguments, _ := json.Marshal(step["arguments"])
+	return start, map[string]any{"type": "arguments_delta", "arguments": string(arguments)}
 }
 
 // interactionWordInfos 把转录逐词时间投影为 word_info 注释，下标为词在 text 中的字节位置加 offset
@@ -432,7 +444,10 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 			if kind == "thought" {
 				start["summary"] = []any{}
 			}
-			if standalone {
+			switch {
+			case kind == "function_call":
+				start, delta = interactionCallStream(step)
+			case standalone:
 				start = maps.Clone(step)
 				delete(start, "signature")
 			}
@@ -506,7 +521,7 @@ func (s *server) streamInteraction(w http.ResponseWriter, r *http.Request, reque
 
 // interactionErrorEvent 返回交互流的 error 事件正文，eventID 非空时带 event_id
 func interactionErrorEvent(err error, eventID string) map[string]any {
-	event := map[string]any{"event_type": "error", "error": map[string]any{"code": geminiErrorStatus(err), "message": err.Error()}}
+	event := map[string]any{"event_type": "error", "error": map[string]any{"code": geminiErrorStatus(err), "message": publicReason(err)}}
 	if eventID != "" {
 		event["event_id"] = eventID
 	}

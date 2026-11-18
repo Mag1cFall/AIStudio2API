@@ -61,20 +61,21 @@ func VerifyAuthUser(ctx context.Context, state *aistudio.StorageState, proxy str
 	return Verification{Email: email, ModelCount: models}, nil
 }
 
-// CheckAccess 以 Cookie 中第 authUser 个会话打开对话页并读取 GetLoggingContext，Google 拒绝该账户使用 AI Studio 时返回官网跳转页对应的原因，出口地区不受支持不算拒绝
-func CheckAccess(ctx context.Context, state *aistudio.StorageState, proxy string, authUser int) error {
+// CheckAccess 以 Cookie 中第 authUser 个会话打开对话页并读取 GetLoggingContext，返回页面中登录账户的邮箱；Google 拒绝该账户使用 AI Studio 时返回官网跳转页对应的原因，出口地区不受支持不算拒绝
+func CheckAccess(ctx context.Context, state *aistudio.StorageState, proxy string, authUser int) (string, error) {
 	client, headers, err := newVerifyClient(ctx, state, proxy)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer client.CloseIdleConnections()
-	if _, err := verifyChatPage(ctx, client, state, headers.Get("User-Agent"), authUser); err != nil {
-		return err
+	email, err := verifyChatPage(ctx, client, state, headers.Get("User-Agent"), authUser)
+	if err != nil {
+		return "", err
 	}
 	if err := verifyLoggingContext(ctx, client, state, headers, authUser); err != nil && !errors.Is(err, camoufoxnative.ErrRegionNotSupported) {
-		return err
+		return "", err
 	}
-	return nil
+	return email, nil
 }
 
 // DiscoverCookieAccounts 从 u/0 起依次打开 Cookie 中各会话的对话页，返回各序号登录的账户，被转到受限页的会话记下原因后继续，序号不存在（受限页之后以 GetLoggingContext 返回 401 判断）或账户与前面重复时结束

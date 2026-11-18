@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"regexp"
 	"slices"
@@ -79,10 +80,10 @@ var pageMainElements = []int{veInsert, 296303, 282217, veRun, veSelector, veSyst
 // pageMainFirst 是权益与模型目录返回后新对话页第一个曝光的元素，入门卡片与它同时渲染时紧跟其后
 const pageMainFirst = 233240
 
-// pageTurnElements 是对话每个模型轮次下方的一组按钮，第二个与第四个为 Rerun 按钮
+// pageTurnElements 是对话每个模型轮次下方的一组按钮，第二个与第四个为 Rerun 按钮，这一轮回答的 veTurnLate 在下一次扫描中单独曝光
 var pageTurnElements = []int{228330, veRerun, veTurnLate, veRerun}
 
-// pageThoughtTurnElements 是带思考的模型轮次在回答结束时曝光的一组按钮，最后的正文段更多选项按钮在 Rerun 中随正文段曝光，veTurnLate 在下一次扫描中单独曝光
+// pageThoughtTurnElements 是带思考的模型轮次在回答结束时曝光的一组按钮，最后的正文段更多选项按钮在 Rerun 中随正文段曝光
 var pageThoughtTurnElements = []int{228330, veRerun, veRerun, veRerun, veChunkOptions}
 
 // veTurnLate 是模型轮次下方按钮组的第三个元素
@@ -237,8 +238,10 @@ type starterCard struct {
 var (
 	// starterSeriesPattern 匹配 starterModule 中一个系列对象的开头
 	starterSeriesPattern = regexp.MustCompile(`\{id:"([^"\\]+)",type:"[a-z]+"`)
-	// starterListPattern 匹配系列以 includes 判断模型名单的变量
-	starterListPattern = regexp.MustCompile(`Ek:a=>(?:[^,]*?)([\w$]+)\.includes\(a\.getName\(\)\)`)
+	// starterListPattern 匹配系列以 includes 判断模型名单的变量，属性名随官网构建变化
+	starterListPattern = regexp.MustCompile(`[\w$]+:a=>(?:[^,]*?)([\w$]+)\.includes\(a\.getName\(\)\)`)
+	// starterArrayPattern 匹配系列中卡片数组的开头，第一个是提示词卡片数组，属性名随官网构建变化
+	starterArrayPattern = regexp.MustCompile(`[,{\s]([\w$]+):\[\s*\{\s*title:`)
 	// starterTitlePattern 匹配卡片对象的标题
 	starterTitlePattern = regexp.MustCompile(`(?:^\{|,)\s*title:("(?:[^"\\]|\\.)*")`)
 	// starterAppletPattern 匹配卡片对象的示例应用 ID
@@ -247,7 +250,7 @@ var (
 	starterPreviewPattern = regexp.MustCompile(`,\s*preview:("(?:[^"\\]|\\.)*")`)
 )
 
-// parseStarterSeries 从 starterModule 的脚本中读出以 includes 判断模型名单的各模型系列与入门卡片：先列出 yl 中的提示词卡片，再列出 examples 中的示例应用卡片；卡片引用模块之外示例应用（没有标题）的系列不读出
+// parseStarterSeries 从 starterModule 的脚本中读出以 includes 判断模型名单的各模型系列与入门卡片：先列出提示词卡片数组中的卡片，再列出 examples 中的示例应用卡片；卡片引用模块之外示例应用（没有标题）的系列不读出
 func parseStarterSeries(script []byte) ([]starterSeries, error) {
 	text := string(script)
 	starts := starterSeriesPattern.FindAllStringSubmatchIndex(text, -1)
@@ -267,13 +270,16 @@ func parseStarterSeries(script []byte) ([]starterSeries, error) {
 		if definition == nil || json.Unmarshal([]byte(definition[1]), &series.Models) != nil {
 			return nil, fmt.Errorf("入门卡片模块缺少系列 %s 的模型名单 %s", series.ID, match[1])
 		}
+		var arrays []int
+		if prompts := starterArrayPattern.FindStringSubmatchIndex(block); prompts != nil && block[prompts[2]:prompts[3]] != "examples" {
+			arrays = append(arrays, prompts[3]+1)
+		}
+		if position := strings.Index(block, "examples:["); position >= 0 {
+			arrays = append(arrays, position+len("examples:"))
+		}
 		complete := true
-		for _, field := range []string{"yl:[", "examples:["} {
-			position := strings.Index(block, field)
-			if position < 0 {
-				continue
-			}
-			array := block[position+len(field)-1 : jsSpan(block, position+len(field)-1)]
+		for _, open := range arrays {
+			array := block[open:jsSpan(block, open)]
 			for _, item := range jsObjects(array) {
 				title := starterTitlePattern.FindStringSubmatch(item)
 				if title == nil {
@@ -405,8 +411,9 @@ type pageElements struct {
 	// mainAt 是主体元素的曝光时刻，权益与模型目录返回前为零值，mainTier 是从主体元素起写入上下文的权益串
 	mainAt   time.Time
 	mainTier string
-	// tracked 是跟踪可见性元素的序号与 VE
-	tracked [][2]int
+	// tracked 是页面框架中跟踪可见性元素的序号与 VE，trackedSeen 表示它们已进入视口
+	tracked     [][2]int
+	trackedSeen bool
 	// series 是页面模型所属的入门卡片系列，cardsAt 非零时入门卡片已到渲染时刻、等待 series
 	series  *starterSeries
 	cardsAt time.Time
@@ -425,22 +432,21 @@ type pageElements struct {
 	queued []laterAction
 	// allSeries 是 starterModule 中全部模型系列，换模型后按新模型取入门卡片
 	allSeries []starterSeries
-	// panel 是模型面板打开时曝光、随后进入视口的元素序号与 VE，tabs 是其中各分类页签的
-	panel [][2]int
-	tabs  [][2]int
-	// listing 是模型面板当前分类的元素参数，rows 是该分类中各模型行的曝光序号，listed 是 All 分类中各行元素的序号、VE 与是否跟踪可见性，listedBottom 是 All 分类曝光时视口中最下面一行
-	listing      string
-	rows         map[string]int
-	listed       [][][3]int
-	listedBottom int
-	// viewport 是页面视口高度
-	viewport float64
+	// tabs 是模型面板各分类页签的曝光序号与 VE
+	tabs [][2]int
+	// listing 是模型面板当前分类的元素参数，rows 是各模型行最近一次曝光的序号，listed 是当前分类列出的各行，listScroll 是列表的滚动位置
+	listing    string
+	rows       map[string]int
+	listed     []panelRow
+	listScroll float64
+	// viewport 与 width 是页面视口的高度与宽度
+	viewport, width float64
 	// thoughtsRendered 表示本页已渲染过思考面板
 	thoughtsRendered bool
 	// answers 是本页已完成的回答数
 	answers int
-	// chips 是上次点击 Run 之后输入框中附件的 CountTokens 总数
-	chips   int
+	// chips 是上次点击 Run 之后输入框中附件的 CountTokens，还没有时为 nil
+	chips   *pageChips
 	pending *pageTurn
 	// scanned 是 VE 记录器上一次扫描曝光元素的时刻，scanQueued 表示节流窗口结束时还有一次扫描
 	scanned    time.Time
@@ -719,8 +725,21 @@ func (log *pageElements) showShell() {
 	}
 	log.shellDone = true
 	log.rendered(pageRenderShell, nil)
+	seen := log.shellAt.Add(time.Duration(405+rand.IntN(10)) * time.Millisecond)
+	log.later(seen, func() { log.showTracked(seen) })
 	if !log.mainAt.IsZero() {
 		log.after(log.mainAt, log.showMain)
+	}
+}
+
+// showTracked 记录页面框架中跟踪可见性的元素在 at 进入视口，每页一次：官网 60 Hz 页面在框架曝光约 0.41 s 后，主体元素先渲染时在其后 4–6 ms；调用方持有 mu
+func (log *pageElements) showTracked(at time.Time) {
+	if log.trackedSeen {
+		return
+	}
+	log.trackedSeen = true
+	for _, item := range log.tracked {
+		log.visible(item[0], item[1], at)
 	}
 }
 
@@ -754,6 +773,25 @@ func (log *pageElements) showMain() {
 	if log.series != nil && rand.IntN(2) == 0 {
 		log.showCards(main)
 	}
+	log.showMainElements(main)
+	visible := main.Add(time.Duration(4+rand.IntN(3)) * time.Millisecond)
+	log.after(visible, func() {
+		log.showTracked(visible)
+		if log.cards {
+			return
+		}
+		cards := main.Add(time.Duration(260+rand.IntN(750)) * time.Millisecond)
+		log.after(cards, func() {
+			log.cardsAt = cards
+			if log.series != nil {
+				log.showCards(cards)
+			}
+		})
+	})
+}
+
+// showMainElements 在 at 曝光新对话页输入区与运行设置面板的元素，运行设置面板中在视口之外的元素跟踪可见性；调用方持有 mu
+func (log *pageElements) showMainElements(at time.Time) {
 	for _, ve := range pageMainElements {
 		var detail any
 		switch ve {
@@ -767,24 +805,53 @@ func (log *pageElements) showMain() {
 			}
 			detail = levelDetail(log.level)
 		}
-		log.shown(ve, main, detail, false)
+		log.shown(ve, at, detail, !log.settingsInView(ve))
 	}
-	visible := main.Add(time.Duration(4+rand.IntN(3)) * time.Millisecond)
-	log.after(visible, func() {
-		for _, item := range log.tracked {
-			log.visible(item[0], item[1], visible)
-		}
-		if log.cards {
-			return
-		}
-		cards := main.Add(time.Duration(260+rand.IntN(750)) * time.Millisecond)
-		log.after(cards, func() {
-			log.cardsAt = cards
-			if log.series != nil {
-				log.showCards(cards)
-			}
-		})
-	})
+}
+
+// newChat 记录点 New chat 并确认后页面在 at 切换到新对话页：同一时刻曝光主体元素，页面模型没有入门卡片系列时先曝光各分类卡片，有时 0.40–0.45 s 后曝光入门卡片；之后的第一次回答按页面第一次回答记录
+func (log *pageElements) newChat(at time.Time) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if !log.closed {
+		log.later(at, func() { log.showNewChat(at) })
+	}
+}
+
+// showNewChat 在 at 曝光新对话页，见 newChat；调用方持有 mu
+func (log *pageElements) showNewChat(at time.Time) {
+	log.answers = 0
+	log.cards = false
+	log.shown(pageMainFirst, at, nil, false)
+	if log.series == nil || log.paidNotice() {
+		log.showZeroState(at)
+	}
+	log.showMainElements(at)
+	if log.series != nil && !log.paidNotice() {
+		cards := at.Add(time.Duration(400+rand.IntN(50)) * time.Millisecond)
+		log.later(cards, func() { log.showCards(cards) })
+	}
+}
+
+// vePaidNotice 是免费账户的页面模型需要付费时新对话页在入门卡片处显示的付费提示
+const vePaidNotice = 296304
+
+// paidNotice 判断新对话页显示付费提示：免费账户的页面模型在 ListModels 中标为需要付费；调用方持有 mu
+func (log *pageElements) paidNotice() bool {
+	if log.tier != "" {
+		return false
+	}
+	index := slices.IndexFunc(log.models, func(item catalogModel) bool { return item.name == log.model })
+	return index >= 0 && log.models[index].paid
+}
+
+// showZeroState 在 at 曝光页面模型没有入门卡片时新对话页的内容：付费提示或各分类卡片；调用方持有 mu
+func (log *pageElements) showZeroState(at time.Time) {
+	if log.paidNotice() {
+		log.shown(vePaidNotice, at, nil, false)
+		return
+	}
+	log.showCategories(at)
 }
 
 // starters 设置 starterModule 的模型系列，入门卡片已到渲染时刻时随即曝光
@@ -870,8 +937,8 @@ type pageTurn struct {
 	counting bool
 	counted  time.Time
 	prompted int
-	// chips 是这一轮输入框中附件的 CountTokens 总数
-	chips  int
+	// chips 是这一轮输入框中附件的 CountTokens，没有附件时为 nil
+	chips  *pageChips
 	closed time.Time
 	// attachments 是最后一个 user 轮次的附件数，每个附件在对话中是单独一段
 	attachments int
@@ -883,6 +950,12 @@ type pageTurn struct {
 	result, call bool
 	// block 是函数调用块的输入区等待曝光的扫描时刻，与回答结束组同一次扫描时按页面顺序排在模型轮次按钮之后
 	block time.Time
+	// tracked 是 Rerun 中跟踪可见性的正文段等待曝光的扫描时刻
+	tracked time.Time
+	// height 是点击 Run 后对话各轮与回答占位不含回答正文的估算高度，answer 是已到达的回答正文，scrolled 表示这一轮已安排对话区滚动条曝光
+	height   float64
+	answer   string
+	scrolled bool
 	// input、output 与 total 是响应最后一帧 usage 中的输入、可见输出与总 token 数
 	input, output, total int
 }
@@ -896,22 +969,29 @@ func (log *pageElements) turn(body []byte, counting bool) *pageTurn {
 	if turn == nil {
 		return nil
 	}
-	var fields []json.RawMessage
-	var contents [][]json.RawMessage
+	var contents []json.RawMessage
 	turn.model = log.model
-	if json.Unmarshal(body, &fields) == nil && len(fields) > 1 {
+	if fields, ok := wireArray(body); ok && len(fields) > 1 {
 		_ = json.Unmarshal(fields[0], &turn.model)
-		_ = json.Unmarshal(fields[1], &contents)
+		contents, _ = wireArray(fields[1])
 	}
 	turn.turns = 1
-	for _, content := range contents {
+	turn.height = chatTurn
+	for _, raw := range contents {
+		content, _ := wireArray(raw)
 		var role string
 		if len(content) > 1 && json.Unmarshal(content[1], &role) == nil && role == "model" {
 			turn.turns++
+			turn.height += chatThoughts
 		}
+		turn.height += chatTurn + float64(log.chatLines(wireText(content)))*chatLine
 	}
+	turn.scrolled = !turn.rerun && !turn.result && turn.height > log.viewport-chatChrome
 	turn.first = log.answers == 0
-	turn.chips, log.chips = log.chips, 0
+	turn.chips, log.chips = log.chips, nil
+	if turn.chips != nil {
+		turn.chips.turn = turn
+	}
 	turn.counting = counting
 	turn.attachments = camoufoxnative.GenerateAttachments(body)
 	return turn
@@ -955,7 +1035,7 @@ func (turn *pageTurn) started() {
 		if together {
 			log.shown(243616, shown, nil, true)
 		}
-		if turn.first {
+		if turn.scrolled {
 			log.shown(veScrollbar, shown, nil, false)
 		}
 		log.shown(250044, shown, modelDetail(turn.model), false)
@@ -988,19 +1068,32 @@ func (turn *pageTurn) thought(at time.Time) {
 			log.rendered(pageRenderThoughts, nil)
 		}
 	})
-	if turn.attachments > 0 && !turn.rerun {
+	if turn.attachments > 0 && !turn.rerun && !turn.scrolled {
+		turn.scrolled = true
 		scrollbar := at.Add(time.Duration(980+rand.IntN(30)) * time.Millisecond)
 		log.changed(scrollbar, func(shown time.Time) { log.shown(veScrollbar, shown, nil, false) })
 	}
 }
 
-// answerText 在 Rerun 的思考之后第一个回答正文 Part 到达（at）时渲染正文段，曝光它的更多选项按钮，跟踪可见性的正文段在节流窗口结束时曝光
+// answerText 在 Rerun 的思考之后第一个回答正文 Part 到达（at）时渲染正文段，曝光它的更多选项按钮，跟踪可见性的正文段在节流窗口结束时曝光，这次扫描同时曝光回答结束的一组元素时排在输入区之后
 func (turn *pageTurn) answerText(at time.Time) {
 	log := turn.log
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	turn.change(at, func(shown time.Time) { log.shown(veChunkOptions, shown, nil, false) })
-	turn.change(at.Add(10*time.Millisecond), func(shown time.Time) { log.shown(243616, shown, nil, true) })
+	text := at.Add(10 * time.Millisecond)
+	log.later(text, func() {
+		shown := scanFrame(log.scan(text))
+		turn.tracked = shown
+		log.later(shown, func() {
+			log.later(shown, func() {
+				if turn.tracked.Equal(shown) {
+					turn.tracked = time.Time{}
+					log.shown(243616, shown, nil, true)
+				}
+			})
+		})
+	})
 }
 
 // functionCall 在回答的第一个函数调用 Part 到达（at）时渲染函数调用块，在其后的扫描中曝光其中的函数响应输入区
@@ -1027,6 +1120,80 @@ func (turn *pageTurn) showBlock(shown time.Time) {
 	}
 }
 
+// grew 记录点击 Run 的回答在 at 时刻又到达回答正文 text：对话内容按官网对话区排版估算第一次超出视口时对话区长出滚动条，在这次内容变化后的扫描中曝光两次（官网 60 Hz 现场的长回答在流式到超出视口时同一次扫描曝光两个 273488）；回答占位时已超出视口的这一轮不再曝光
+func (turn *pageTurn) grew(at time.Time, text string) {
+	log := turn.log
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if turn.rerun || turn.result || turn.scrolled {
+		return
+	}
+	turn.answer += text
+	height := turn.height + float64(log.chatLines(turn.answer))*chatLine
+	if turn.thoughts {
+		height += chatThoughts
+	}
+	if height <= log.viewport-chatChrome {
+		return
+	}
+	turn.scrolled = true
+	turn.change(at, func(shown time.Time) {
+		log.shown(veScrollbar, shown, nil, false)
+		log.shown(veScrollbar, shown, nil, false)
+	})
+}
+
+// 官网对话区的排版，单位为 CSS 像素，由 2026-11-16 三个视口（1600×775、1680×917、1920×947）每秒 60 帧会话现场中 273488 曝光时的对话内容推出：chatLine 是正文行高，chatTurn 是一轮正文之外的高度，chatThoughts 是模型轮次收起的思考面板，chatChrome 是视口中顶栏与输入框占去的高度，chatColumn 是对话列的最大宽度，chatSides 是视口宽度中导航栏与运行设置面板，chatPadding 是一轮正文两侧的内边距，chatFont 是正文字号
+const (
+	chatLine     = 20
+	chatTurn     = 30
+	chatThoughts = 40
+	chatChrome   = 182
+	chatColumn   = 1000
+	chatSides    = 600
+	chatPadding  = 48
+	chatFont     = 14
+)
+
+// chatLines 返回 text 在对话区按正文字号与行宽折行的行数，每个换行另起一行；CJK 字符按全角宽度计
+func (log *pageElements) chatLines(text string) int {
+	if text == "" {
+		return 0
+	}
+	column := min(chatColumn, log.width-chatSides) - chatPadding
+	lines := 0
+	for line := range strings.SplitSeq(text, "\n") {
+		width := 0.0
+		for _, char := range line {
+			if char >= 0x2E80 {
+				width += chatFont
+			} else {
+				width += interWidth(string(char)) * chatFont / 12
+			}
+		}
+		lines += max(1, int(math.Ceil(width/column)))
+	}
+	return lines
+}
+
+// wireText 返回 GenerateContent 正文中一个对话轮次的正文，不含思考
+func wireText(content []json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+	parts, _ := wireArray(content[0])
+	var text strings.Builder
+	for _, raw := range parts {
+		part, _ := wireArray(raw)
+		var value string
+		if len(part) < 2 || json.Unmarshal(part[1], &value) != nil || len(part) > 12 && string(part[12]) == "1" {
+			continue
+		}
+		text.WriteString(value)
+	}
+	return text.String()
+}
+
 // streamed 记录回答在 at 时刻又到达一段正文，对话区随之滚动
 func (turn *pageTurn) streamed(at time.Time) {
 	turn.log.mu.Lock()
@@ -1049,7 +1216,7 @@ func (turn *pageTurn) change(at time.Time, show func(shown time.Time)) {
 	})
 }
 
-// done 在响应正文关闭（at）后 50–59 ms（回答结束的页面事件之后）渲染各模型轮次的按钮与输入区并在其后的扫描中曝光，点击 Run 的回答再记录回答结束；函数调用与提交函数结果后的回答按官网各自的一组元素曝光，Rerun 的 Run 按钮只在换成 Stop 的按钮曝光过时重新曝光，带思考的模型轮次最后一个按钮紧随其后渲染、在下一次扫描中曝光
+// done 在响应正文关闭（at）后 50–59 ms（回答结束的页面事件之后）渲染各模型轮次的按钮与输入区并在其后的扫描中曝光，点击 Run 的回答再记录回答结束；函数调用与提交函数结果后的回答按官网各自的一组元素曝光，Rerun 的 Run 按钮只在换成 Stop 的按钮曝光过时重新曝光，点击 Run 的带思考的回答与同一次扫描中等待曝光的 Rerun 正文段在输入区之后曝光跟踪可见性的正文段，这一轮模型轮次的 veTurnLate 紧随其后渲染、在下一次扫描中曝光
 func (turn *pageTurn) done(at time.Time) {
 	log := turn.log
 	log.mu.Lock()
@@ -1071,11 +1238,11 @@ func (turn *pageTurn) done(at time.Time) {
 			log.shown(veRun, shown, modelDetail(turn.model), false)
 			return
 		}
-		groups := turn.turns
-		if turn.thoughts {
-			groups--
+		text := turn.thoughts && (!turn.rerun || turn.tracked.Equal(shown))
+		if text {
+			turn.tracked = time.Time{}
 		}
-		for range groups {
+		for group := 1; group < turn.turns; group++ {
 			for _, ve := range pageTurnElements {
 				log.shown(ve, shown, nil, false)
 			}
@@ -1088,40 +1255,52 @@ func (turn *pageTurn) done(at time.Time) {
 			for _, ve := range elements {
 				log.shown(ve, shown, nil, false)
 			}
+		} else {
+			for _, ve := range pageTurnElements {
+				if ve != veTurnLate {
+					log.shown(ve, shown, nil, false)
+				}
+			}
 		}
 		for _, ve := range pageRunElements {
 			log.shown(ve, shown, nil, false)
 		}
+		if text {
+			log.shown(243616, shown, nil, true)
+		}
 		if !turn.rerun || turn.stopped {
 			log.shown(veRun, shown, modelDetail(turn.model), false)
 		}
-		if turn.thoughts {
-			log.changed(shown.Add(10*time.Millisecond), func(late time.Time) { log.shown(veTurnLate, late, nil, false) })
-		}
+		log.changed(shown.Add(10*time.Millisecond), func(late time.Time) { log.shown(veTurnLate, late, nil, false) })
 	})
 	if turn.rerun || turn.result {
 		log.mu.Unlock()
 		return
 	}
 	turn.closed = at
-	ready := !turn.counting || !turn.counted.IsZero()
+	ready := turn.ready()
 	log.mu.Unlock()
 	if ready {
 		turn.answered()
 	}
 }
 
-// count 记录伴随的 CountTokens 在 at 时刻完成、统计出 tokens 个 token，正文已关闭时随即安排回答结束
+// count 记录伴随的 CountTokens 在 at 时刻完成、统计出 tokens 个 token，正文已关闭且附件的 CountTokens 都已返回时随即安排回答结束
 func (turn *pageTurn) count(at time.Time, tokens int) {
 	log := turn.log
 	log.mu.Lock()
 	turn.counted = at
 	turn.prompted = tokens
-	ready := !turn.closed.IsZero()
+	ready := turn.ready()
 	log.mu.Unlock()
 	if ready {
 		turn.answered()
 	}
+}
+
+// ready 判断回答结束所需的统计都已到齐：正文已关闭，伴随的 CountTokens 与输入框中附件的 CountTokens 都已返回；调用方持有 mu
+func (turn *pageTurn) ready() bool {
+	return !turn.closed.IsZero() && (!turn.counting || !turn.counted.IsZero()) && (turn.chips == nil || turn.chips.pending == 0)
 }
 
 // usage 记下响应最后一帧 usage 中的输入、可见输出与总 token 数
@@ -1131,18 +1310,49 @@ func (turn *pageTurn) usage(input, output, total int) {
 	turn.log.mu.Unlock()
 }
 
-// chipCounted 记下输入框中一个附件的 CountTokens 统计出 tokens 个 token
-func (log *pageElements) chipCounted(tokens int) {
-	log.mu.Lock()
-	log.chips += tokens
-	log.mu.Unlock()
+// pageChips 是一次点击 Run 之前输入框中附件的 CountTokens：pending 为尚未返回的个数，tokens 为已统计出的 token 数之和，counted 为最近一个返回的时刻，turn 为点击 Run 后带这些附件的回答；由 mu 保护
+type pageChips struct {
+	pending int
+	tokens  int
+	counted time.Time
+	turn    *pageTurn
 }
 
-// answered 在正文关闭后 44–49 ms 与 CountTokens 完成后 4 ms 的较晚者记录回答结束，参数为页面 token 统计在这一轮增加的输入与输出 token 数：输入为伴随 CountTokens 统计的输入框与各附件的 token 数之和，输出为可见输出，显示了思考面板时再加思考
+// chipCounting 记下输入框中一个附件发出了 CountTokens，返回它返回时以统计出的 token 数（失败为 0）调用的函数，带这个附件的回答在等它时随即安排回答结束
+func (log *pageElements) chipCounting() func(tokens int) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.chips == nil {
+		log.chips = &pageChips{}
+	}
+	chips := log.chips
+	chips.pending++
+	return func(tokens int) {
+		log.mu.Lock()
+		chips.pending--
+		chips.tokens += tokens
+		chips.counted = time.Now()
+		turn := chips.turn
+		ready := turn != nil && turn.ready()
+		log.mu.Unlock()
+		if ready {
+			turn.answered()
+		}
+	}
+}
+
+// answered 在正文关闭后 44–49 ms、伴随的 CountTokens 与附件的 CountTokens 完成后 4 ms 中最晚的时刻记录回答结束，参数为页面 token 统计在这一轮增加的输入与输出 token 数：输入为伴随 CountTokens 统计的输入框与各附件的 token 数之和，输出为可见输出，显示了思考面板时再加思考
 func (turn *pageTurn) answered() {
 	at := turn.closed.Add(time.Duration(44+rand.IntN(6)) * time.Millisecond)
 	if counted := turn.counted.Add(4 * time.Millisecond); counted.After(at) {
 		at = counted
+	}
+	input := turn.prompted
+	if turn.chips != nil {
+		input += turn.chips.tokens
+		if counted := turn.chips.counted.Add(4 * time.Millisecond); counted.After(at) {
+			at = counted
+		}
 	}
 	log := turn.log
 	log.after(at, func() {
@@ -1150,7 +1360,7 @@ func (turn *pageTurn) answered() {
 		if turn.thoughts {
 			output = turn.total - turn.input
 		}
-		log.pageEvent(veAnswered, at, []any{nil, nil, nil, nil, nil, nil, nil, nil, []any{turn.prompted + turn.chips, output, nil, turn.model}})
+		log.pageEvent(veAnswered, at, []any{nil, nil, nil, nil, nil, nil, nil, nil, []any{input, output, nil, turn.model}})
 	})
 }
 
@@ -1191,7 +1401,7 @@ const (
 	veChunkOptions = 228332
 )
 
-// catalogModel 是页面 ListModels 中一个模型的名称、默认思考档位与在模型面板中的分类
+// catalogModel 是页面 ListModels 中一个模型的名称、默认思考档位、在模型面板中的分类与排版
 type catalogModel struct {
 	name string
 	// level 是默认思考档位的目录编号，没有思考档位时为 0
@@ -1202,9 +1412,13 @@ type catalogModel struct {
 	docs bool
 	// environment 表示模型带能力码 65（运行环境），模型面板 All 分类中该行带环境标记
 	environment bool
+	// height 是模型面板中该行的高度，card 是运行设置中该模型卡片的高度
+	height, card float64
+	// paid 表示模型在免费账户上需要付费（ListModels 下标 77 为 2）
+	paid bool
 }
 
-// parseCatalogModels 按目录顺序从 ListModels 响应读出各模型的名称与默认思考档位
+// parseCatalogModels 按目录顺序从 ListModels 响应读出各模型的名称、默认思考档位与模型面板中的排版
 func parseCatalogModels(body []byte) []catalogModel {
 	raw, err := io.ReadAll(newSparseJSONReader(bytes.NewReader(body)))
 	if err != nil {
@@ -1237,6 +1451,11 @@ func parseCatalogModels(body []byte) []catalogModel {
 		if len(row) > 38 && json.Unmarshal(row[38], &details) == nil && len(details) > 15 && json.Unmarshal(details[15], &docs) == nil {
 			model.docs = docs != ""
 		}
+		var billing int
+		if len(row) > 77 && json.Unmarshal(row[77], &billing) == nil {
+			model.paid = billing == 2
+		}
+		model.height, model.card = modelLayout(details, model.environment)
 		models = append(models, model)
 	}
 	return models

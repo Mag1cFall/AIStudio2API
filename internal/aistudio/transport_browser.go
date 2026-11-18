@@ -218,7 +218,7 @@ type browserRoundTripper struct {
 	// http3 在直连时按 Alt-Svc 把请求切换到 HTTP/3，经代理时为 nil
 	http3 *firefoxHTTP3
 	mu    sync.Mutex
-	// preflights 按 URL 记录 CORS 预检缓存
+	// preflights 按 preflightKey 记录 CORS 预检缓存
 	preflights map[string]preflightGrant
 }
 
@@ -604,7 +604,7 @@ func dialBrowserTLS(dialer proxy.ContextDialer, sessions *firefoxSessionCache, a
 	return connection, nil
 }
 
-// RoundTrip 按缓存先发 CORS 预检再发送请求，context 标为匿名类别的请求经不带凭据的连接发送，请求在收到响应头前失败时清除该 URL 的预检缓存
+// RoundTrip 按缓存先发 CORS 预检再发送请求，context 标为匿名类别的请求经不带凭据的连接发送，请求在收到响应头前失败时清除它的预检缓存
 func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdhttp.Response, error) {
 	err := transport.ensurePreflight(request)
 	var upstream *fhttp.Request
@@ -619,6 +619,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	}
 	upstream.Host = request.Host
 	upstream.ContentLength = request.ContentLength
+	upstream.GetBody = request.GetBody
 	upstream.Header = make(fhttp.Header, len(request.Header)+2)
 	for name, values := range request.Header {
 		upstream.Header[name] = append([]string(nil), values...)
@@ -628,7 +629,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	response, err := transport.roundTrip(upstream, requestClassOf(request.Context()).anonymous)
 	if err != nil {
 		transport.mu.Lock()
-		delete(transport.preflights, request.URL.String())
+		delete(transport.preflights, preflightKey(request))
 		transport.mu.Unlock()
 		return nil, err
 	}
@@ -731,6 +732,14 @@ func standardHeader(source fhttp.Header) stdhttp.Header {
 	return result
 }
 
+// preflightKey 返回请求的 CORS 预检缓存键：与 Firefox nsPreflightCache 一样按 URL 与是否携带凭据区分
+func preflightKey(request *stdhttp.Request) string {
+	if requestClassOf(request.Context()).anonymous {
+		return "anonymous " + request.URL.String()
+	}
+	return request.URL.String()
+}
+
 // ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检：经 HTTP/2 时先在后台为实际请求的类别预先拨出连接，预检走匿名连接，预检响应允许的方法与请求头按 Access-Control-Max-Age（上限 24 小时）逐个缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
 func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) error {
 	origin, err := url.Parse(request.Header.Get("Origin"))
@@ -742,8 +751,9 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 		return nil
 	}
 	target := request.URL.String()
+	key := preflightKey(request)
 	transport.mu.Lock()
-	cached := transport.preflights[target].allows(request.Method, unsafe, time.Now())
+	cached := transport.preflights[key].allows(request.Method, unsafe, time.Now())
 	transport.mu.Unlock()
 	if cached {
 		return nil
@@ -786,10 +796,10 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	}
 	expiry := time.Now().Add(maxAge)
 	transport.mu.Lock()
-	grant := transport.preflights[target]
+	grant := transport.preflights[key]
 	if grant.headers == nil {
 		grant = preflightGrant{methods: map[string]time.Time{}, headers: map[string]time.Time{}}
-		transport.preflights[target] = grant
+		transport.preflights[key] = grant
 	}
 	for _, method := range strings.Split(response.Header.Get("Access-Control-Allow-Methods"), ",") {
 		grant.methods[strings.TrimSpace(method)] = expiry

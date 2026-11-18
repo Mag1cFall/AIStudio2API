@@ -236,7 +236,7 @@ Playground 目录没有的 embedding（`embedContent`）、Live（`bidiGenerateC
 - 冷却按通道记录：Playground 为 `<模型>`，Build 为 `build:<模型>`；Live 媒体输入的 scope 为 `bidi-media:<模型>`，经 Build 时为 `build:bidi-media:<模型>`；全局 `*` 冷却对两个通道都生效
 - 账户只有在其全部支持的通道都冷却时才视为该模型冷却
 - 一个通道返回额度错误后写入该通道冷却；同一账户另一通道可用时，请求在同一账户的另一通道重试，不计为已尝试账户
-- 全部候选组合冷却时，最早恢复时间在 1 分钟内的请求排队等待，一个请求累计排队不超过 1 分钟，更晚的请求返回 HTTP 429 `rate_limit_exceeded`，消息给出最早恢复时间，`Retry-After` 为距最早恢复的秒数
+- 全部候选组合冷却时，最早恢复时间在 1 分钟内且不晚于请求期限的请求排队等待，一个请求累计排队不超过 1 分钟，更晚的请求返回 HTTP 429 `rate_limit_exceeded`，消息给出最早恢复时间，`Retry-After` 为距最早恢复的秒数
 - 生成成功在该通道的 scope（`<模型>` 或 `build:<模型>`）上写入 `verified`
 
 ### 附件与文件引用
@@ -446,7 +446,7 @@ HTTP 非 200 响应解码为协议错误，保留 HTTP 状态、google.rpc code�
 | --- | --- |
 | `internal/config/config.go` | `UPSTREAM_CHANNELS` 解析与校验 |
 | `internal/app/channels.go` | 配置到调度池通道的转换 |
-| `internal/aistudio/channel.go` | 通道定义、冷却 scope、通道资格、组合排序与公开目录 `channels`；`-build` 模型只用 `assistant` 通道，同一账户同时只运行一个 `-build` 生成 |
+| `internal/aistudio/channel.go` | 通道定义、冷却 scope、通道资格、组合排序与公开目录 `channels`；`-build` 模型的生成只用 `assistant` 通道，同一账户同时只运行一个 `-build` 生成 |
 | `internal/aistudio/accounts.go` | 候选分类、租约通道、全部冷却错误 |
 | `internal/aistudio/build.go` | 请求编码、代理 wire、binding、响应与流尾解码、Build 目录 |
 | `internal/aistudio/generate.go` | 通道分派、共用预处理、停止序列与 usage |
@@ -524,23 +524,23 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 目录追加:   gemini-3.8-flash-build  "Gemini 3.8 Flash (Build)"  methods [countTokens, generateContent]
 ```
 
-- `-build` 模型的候选通道只有 `assistant`；该通道始终启用，`UPSTREAM_CHANNELS` 与 `BUILD_NATIVE_NONSTREAM` 只作用于其他模型
+- `-build` 模型生成的候选通道只有 `assistant`；该通道始终启用，`UPSTREAM_CHANNELS` 与 `BUILD_NATIVE_NONSTREAM` 只作用于其他模型
 - 账户的目录含该 `-build` 条目、且账户权益满足基础模型的 AccessModes 时，账户可以承担请求；候选顺序、热 Worker 优先与 `round-robin`、`fill-first` 策略与其他模型相同
 - 同一账户同时只运行一个 `-build` 生成：从取得租约起，到本轮回复完整结束为止（回复没有完整结束时到取消请求结束为止），账户不接其他 `-build` 请求，这些请求分到其他账户，都在运行时排队；回复后的伴随请求在后台继续，只占用账户的并发名额，期间账户可以接下一个 `-build` 请求，同一对话的下一轮在原 trajectory 续接；同一账户的其他模型请求照常调度
 - 请求的对话续接得上某个账户应用中保存的 trajectory 时，该账户空闲就先于其他账户选择，见“对话与应用”；该账户停用、冷却或正运行另一个 `-build` 生成时，请求分到其他账户，在那里开启新 trajectory 并转录之前的对话，之后的轮次续接新账户上的 trajectory
 - 冷却 scope 为 `-build` 模型 ID 本身，例如 `gemini-3.8-flash-build`，与基础模型的 Playground `<模型>`、Build `build:<模型>` 分开记录；额度错误、换号与排队按“调度与冷却”与“错误、额度与能力边界”处理
-- 模型 `channels`、请求 `channel` 与冷却 `channel` 为 `assistant`，管理页面显示为 “Build 对话”
+- 模型 `channels`、生成请求的 `channel` 与冷却 `channel` 为 `assistant`，管理页面显示为 “Build 对话”
 - 模型名可以带思考后缀，后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`
-- 计数请求把模型换成基础模型 ID，调用 Playground `CountTokens`
+- 计数请求经 Playground 通道取号，把模型换成基础模型 ID 调用 Playground `CountTokens`，请求 `channel` 为 `playground`，与同一账户进行中的 `-build` 生成同时运行
 
 ### 请求映射
 
 | 规范请求 | `CodeAssistantOffline` |
 | --- | --- |
 | contents | field 1，续接 trajectory 时只含续接位置之后的轮次 |
-| system | field 9 自定义指令 |
+| system | field 9 自定义指令；超过上限时为 field 1 第一轮开头的说明文件 |
 | 内置工具禁止说明 | field 9 开头 |
-| 函数声明 | field 9 中系统提示之前的函数调用说明 |
+| 函数声明 | field 9 中系统提示之前的函数调用说明；超过上限且函数调用说明也放不下时为说明文件 |
 | 思考强度或思考预算 | field 19 的 thinking level |
 
 - 上游请求只携带对话轮、系统提示、函数调用说明与思考强度；生成参数、结构化输出与安全设置使用助手的服务端设置
@@ -548,10 +548,13 @@ ListModels: gemini-3.8-flash（主能力码含 48）
 - field 9 以内置工具禁止说明开头：写代码助手服务端指令声明的 25 个工作区工具（`run_command`、`write_to_file`、`view_file`、`search_web` 等）作用于与对话无关的应用工作区，说明列出这些工具名并禁止调用；请求带 Google Search 工具时列表不含 `search_web`，并在说明末尾允许调用 `search_web`；请求声明函数且 tool choice 不是 `none` 时列表不含 `ask_question`，模型写出调用代码块后以它结束本轮
 - `CodeAssistantOffline` 没有客户端函数声明字段，对话轮中的函数调用与结果 Part 不进入模型输入。请求声明函数且 tool choice 不是 `none` 时，函数声明以 JSON 写入下面的函数调用说明，接在禁止说明之后（中间空一行）
 - 对话轮中的函数调用与结果 Part 转录为代码块文本：同一轮内相邻的调用合为一个 `function_calls` 块，相邻的结果合为一个 `function_results` 块，元素分别为 `{"name","arguments"}` 与 `{"name","response"}`；转录在上传附件与计算 WAA binding 之前完成
-- 写代码助手只把 field 1 中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮，合并后的消息超过约 33k token 时只有开头部分进入模型输入；field 9 不截短（33 万 token 完整进入）；trajectory 中以前各轮由上游保存，按原角色进入模型输入，见“对话与应用”
+- 写代码助手只把 field 1 中的 user 轮放入模型输入，model 轮被丢弃，多个 user 轮合为一轮，合并后的消息超过约 33k token 时只有开头部分进入模型输入；trajectory 中以前各轮由上游保存，按原角色进入模型输入，附件随所在的轮次保存，见“对话与应用”
 - 开启新 trajectory 时最后一组之前还有对话轮的，这些轮次去掉思考与空 Part 后转录在 field 9 末尾，field 1 只提交最后一组：field 9 的说明之后另起一段写入下面的对话历史说明，系统提示之后另起一段写入 `<conversation_history>` 与 `</conversation_history>` 包住的各轮，user 轮为 `<user_turn>\n<正文>\n</user_turn>\n`，model 轮为 `<assistant_turn>\n<正文>\n</assistant_turn>\n`，同一轮的多个 Part 以换行连接。转录轮次中的附件写为 `[attachment <序号>]`，附件本身按序号放在 field 1 第一轮开头，每个附件前是它的 `[attachment <序号>]` 文本 Part
 - 续接该 trajectory 时，field 9 按开启时转录同样多的开头分组再次转录：每次 `CodeAssistantOffline` 的 field 9 都是本轮的自定义指令，上游保存的是对话轮而不是之前各轮的 field 9；客户端回传的历史格式不同（例如合并了相邻的 user 轮）时按回传的格式转录。trajectory 开启时没有转录历史的，续接时 field 9 只有说明与系统提示
 - 最后一组是 model 轮，或其本地 Token 数超过 24576 时，不续接已保存的 trajectory：开启新 trajectory，最后一组也转录在 field 9 中，field 1 只提交用户轮 `Continue the conversation from the last turn of the conversation history at the end of your instructions.`，转录轮次中的附件放在这一轮开头
+- 上游把 field 9 截到 24 KB 并在截断处加 `[TRUNCATED: Additional user instructions exceeded the 24KB limit.]`。按上面写成的 field 9 超过 24000 字节时，系统提示与转录的对话历史写成一个 text/plain 说明文件，作为附件放在 field 1 第一轮开头、转录轮次的附件之前，field 9 写禁止说明、函数调用说明与下面的说明文件说明（各段之间空一行）；这三段合计仍超过 24000 字节时，函数声明也写进说明文件，field 9 中的函数调用说明换成下面的函数调用格式。文件依次为 `System instructions:\n<系统提示>`、`Client functions:\n<函数声明 JSON>`、说明文件版的对话历史说明与转录的对话历史，各段之间空一行，没有的段省略。全部转录时提交的用户轮为 `Continue the conversation from the last turn of the conversation history at the end of the instructions file.`。模型能读到约 6 万 token 以内的说明文件全文，约 15 万 token 时读不全
+- 说明文件随所在的第一轮保存在 trajectory 中：续接用了说明文件的 trajectory 时 field 9 同上一条；系统提示与函数声明的摘要和 trajectory 中最近一个说明文件相同时不提交说明文件，不同时随本轮提交只含系统提示与写进说明文件的函数声明的说明文件；续接没有说明文件的 trajectory 而 field 9 超过 24000 字节时，本轮改用说明文件，开头分组的转录写入说明文件，之后按用了说明文件的 trajectory 续接
+- 附件与说明文件的上传与新建应用、开启新 trajectory 的请求（`ListAppletTrajectories`、`ListCodeAssistantOfflineGenerations`）同时进行
 - 本进程读到的回复中，`search_web` 步骤的查询与摘要按请求所用 API key、该轮之前对话轮的角色与正文摘要、回复正文保存（最多 1000 条回复）；之后以同一 API key 发送的请求中，某个 model 轮之前的对话与正文都和某条回复相同时，在该轮开头补回文本 Part `search_web results for "<查询>":\n<摘要>`，每次搜索一个
 
 ````text
@@ -566,6 +569,25 @@ Right after the block, call your ask_question tool once with the question "Run t
 
 ````text
 The conversation before the first user message of this chat is transcribed at the end of these instructions between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself.
+````
+
+使用说明文件时，field 9 中的说明文件说明、函数声明写进说明文件时的函数调用格式与说明文件中的对话历史说明：
+
+````text
+A user message of this chat may start with an attached plain-text instructions file from the user's client. It holds what the client sent that does not fit in these instructions: its system instructions, the client functions you can call or the conversation before this chat. Follow it as your system instructions. A later instructions file replaces the earlier one.
+````
+
+````text
+You can call the client functions declared in the instructions file. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.
+To call functions, write one fenced block:
+```function_calls
+[{"name": "<function name>", "arguments": {<arguments>}}]
+```
+Right after the block, call your ask_question tool once with the question "Run these function calls and send me their results." and write nothing more. The user's machine runs the calls and the results arrive as the answer in a fenced function_results block. Never write a function_results block yourself. Answer normally when no function is needed.
+````
+
+````text
+The conversation before the first user message of this chat is transcribed at the end of this file between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order after this file at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself.
 ````
 
 - Google Search 工具不写入请求：写代码助手按需调用内置的 `search_web`，搜索步骤按“任务流”输出为 grounding；其他 Google 工具在发送前丢弃
@@ -589,7 +611,7 @@ The conversation before the first user message of this chat is transcribed at th
 开启新 trajectory（官网点 New chat）：
   ListAppletTrajectories、ListCodeAssistantOfflineGenerations
 每轮：
-  /_/upload（field 1 中每个内联附件一次）
+  /_/upload（field 1 中每个内联附件一次，与上面新建应用或开启新 trajectory 的请求同时进行）
   CodeAssistantOffline（WAA proof）           → 任务 ID 与 trajectory ID
   StreamCodeAssistantOfflineGeneration        → 步骤快照流，读到本轮回复结束或上游关闭
   StreamCodeAssistantOfflineGeneration        （消息列表在回复完成前结束时再请求一次）
@@ -629,11 +651,12 @@ The conversation before the first user message of this chat is transcribed at th
 | `trajectories[].tip` | 请求所用 API key 与到本轮回复为止的对话摘要合成的 SHA-256，不含明文 key |
 | `trajectories[].id` | trajectory ID |
 | `trajectories[].history_groups` | 开启 trajectory 时转录在 field 9 中的开头分组数，没有转录时省略 |
+| `trajectories[].context` | trajectory 中最近一个说明文件的系统提示与函数声明的 SHA-256，没有说明文件时省略 |
 
 - 对话轮按连续的 model 轮与其余轮次分组，逐组累积 SHA-256 摘要。每组计入非思考正文 Part 直接连接后按空白归一的结果、函数调用的名称与键排序的参数、函数结果键排序的内容，其余 Part 去掉思考签名计入，内联数据以其 SHA-256 计入；调用 ID 不计入，客户端以不同格式回传同一回复时摘要相同
 - 本轮回复完整结束、没有以 `malformed_function_call` 结束、没有调用被禁止的工作区内置工具、也没有在函数调用之后继续输出正文时，把“请求的对话 + 本轮回复的正文与函数调用”的续接位置写入该 trajectory，替换它之前的续接位置；最多保存 200 个 trajectory，超过时丢弃最早续接的
 - 新请求最后一组之前最近的 model 轮组与某个续接位置相同时，续接该 trajectory：field 1 只提交该组之后的轮次，field 21 为 trajectory ID；回复没有完整结束时删除该续接位置
-- 找不到时在账户的应用中开启新 trajectory，最后一组之前的对话轮转录在 field 9 中，见“请求映射”；包括新对话、重新生成、编辑或压缩过的历史、回到较早的回复另起分支、另一个 API key、上一轮回复没有完整结束、最后一组过长或是 model 轮
+- 找不到时在账户的应用中开启新 trajectory，最后一组之前的对话轮转录在 field 9 或说明文件中，见“请求映射”；包括新对话、重新生成、编辑或压缩过的历史、回到较早的回复另起分支、另一个 API key、上一轮回复没有完整结束、最后一组过长或是 model 轮
 - 账户没有应用时照官网新建应用，新应用的应用 ID 写入 `assistant.id` 并清空 trajectory；之后该账户的全部对话都在这个应用中，服务不删除应用
 - 应用与续接位置保存在账户目录的运行状态中：同一 Google 账户在多个服务实例或账户目录中使用时，每份运行状态各自新建一个应用、各自续接；管理端删除账户时账户目录与运行状态一并删除，应用留在该 Google 账户的 My apps 中，再次导入该账户后新建应用
 - 本进程第一次使用账户的应用时照官网打开它，见“RPC 顺序”；`GetApplet` 返回 404 时新建应用。应用已被删除或续接的 trajectory 不存在时，`CodeAssistantOffline` 返回 404 code 5；已打开的应用上 `CodeAssistantOffline` 返回 404 且还没有取得任务 ID 时，删除本轮续接的续接位置，重新打开应用（应用已不存在时新建）后重新提交本轮一次
@@ -720,7 +743,7 @@ The conversation before the first user message of this chat is transcribed at th
 | 2 | WAA proof |
 | 6 | 新应用的第一段对话为 `1`，其余为 `2` |
 | 8 | `models/<基础模型 ID>` |
-| 9 | 自定义指令：内置工具禁止说明、函数调用说明、对话历史说明、系统提示与转录的对话历史 |
+| 9 | 自定义指令：内置工具禁止说明、函数调用说明、对话历史说明、系统提示与转录的对话历史；超过 24000 字节时为禁止说明、函数调用说明（放不下时为函数调用格式）与说明文件的说明 |
 | 12 | 应用 ID |
 | 14 | 新应用的第一段对话为 `[2,null,2]`，其余为 `[2]` |
 | 16 | `1` |

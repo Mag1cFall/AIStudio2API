@@ -169,11 +169,21 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	}
 	started, err = runServer(ctx, cfg, manager, updater, func(address string) {
 		ready <- serviceReady{url: address, log: logService}
+		go reclaimFreePages(ctx, logService, prompts, states)
 	})
 	if started {
 		cancel()
 	}
 	return started, errors.Join(err, manager.Close(), ledger.Close(), prompts.Close(), states.Close())
+}
+
+// reclaimFreePages 在服务就绪后把各本地库的空闲页交还文件系统
+func reclaimFreePages(ctx context.Context, log func(level, message string, attrs ...any), stores ...interface{ Reclaim(context.Context) error }) {
+	for _, store := range stores {
+		if err := store.Reclaim(ctx); err != nil && ctx.Err() == nil {
+			log("WARN", "交还本地库空闲页失败", "error", err)
+		}
+	}
 }
 
 // parseFlags 使用命令行参数覆盖本次启动配置
@@ -247,6 +257,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		manager.requests.log("service", "WARN", "预览端口不可用，改用空闲端口", "configured_addr", cfg.PreviewListenAddr, "addr", previewListener.Addr())
 	}
 	manager.previewAddress = previewListener.Addr().String()
+	manager.settings.Store(requestSettingsOf(manager.currentConfig()))
 	apiHandler := api.NewHandler(manager, api.Config{
 		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,

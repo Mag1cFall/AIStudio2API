@@ -27,6 +27,8 @@ type Options struct {
 	Pointer *Pointer
 	// Rhythm 是账户点击与粘贴的事件节奏
 	Rhythm rhythm.Rhythm
+	// Start 是页面 load 事件结束的时刻，VM 的第一个任务从它开始；晚于现在时 VM 时钟领先真实时间，超出 leadLimit 的部分真实等待
+	Start time.Time
 }
 
 // Pointer 是页面上可信指针与焦点所在的位置
@@ -42,6 +44,8 @@ type Pointer struct {
 	edited bool
 	// clicked 是最近一次派发可信 click 的时刻
 	clicked time.Time
+	// streamed 是流式回答中最近一次派发指针下元素变化事件的时刻
+	streamed time.Time
 }
 
 // Clicked 返回最近一次点击 Run 或 Rerun 时派发可信 click 的时刻
@@ -77,14 +81,12 @@ type Runtime struct {
 	pointer     *Pointer
 	rhythm      rhythm.Rhythm
 	closeOnce   sync.Once
-	// proofCost 是本 VM 读到的取 proof 毫秒耗时
-	proofCost float64
-	// idle 在最后一次操作 idleShrinkDelay 后执行收缩 GC
+	// idle 在最后一次操作 idleGCDelay 后执行普通 GC
 	idle *time.Timer
 }
 
-// idleShrinkDelay 为 VM 最后一次操作后执行收缩 GC 的空闲时长，与 Firefox 正式版 javascript.options.compact_on_user_inactive_delay 相同
-const idleShrinkDelay = 5 * time.Minute
+// idleGCDelay 为 VM 最后一次操作后执行普通 GC 的空闲时长，普通 GC 回收空闲前的垃圾并保留 JIT 代码
+const idleGCDelay = 5 * time.Minute
 
 // promptElements 在页面还没有提示词输入框时建出输入框与 Run 按钮
 const promptElements = `
@@ -124,8 +126,23 @@ const settingsElements = `
   }
   const settings = name => settingsRoot.children[settingsSpots.findIndex(([spot]) => spot === name)];`
 
-// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件：from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数。位置 prompt 为空提示词输入框的中心，run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径，content 为 Rerun 后最后一轮被移除时指针下的对话区，result 与 submit 为最后一轮函数调用块中的函数响应输入框与提交按钮；焦点位置 prompt 为提示词输入框，result 为函数响应输入框，run、rerun 与 submit 为对应按钮。布局按官网新对话页：左侧导航宽 220、右侧运行设置宽 300，对话列宽至多 1000 并在两者之间居中；空提示词输入框距对话列左缘 25、上缘距视口底 105，宽为对话列宽减 50、高 21，其父元素高 36；Run 按钮宽 101.2、高 32、右缘距对话列右缘 25、上缘距视口底 59，中心处文字距按钮左缘 45、上缘 6，宽 24.2、高 20；每轮为一行短文本时最后一轮上缘一轮为 197.5、每多一轮下移 212，高 125.5，对话区超出时滚到底部，Rerun 按钮距对话列左缘 911、在最后一轮上缘之上 19、边长 32，图标与路径的矩形按官网取值；函数调用轮次上缘与最后一轮相同，函数响应表单距对话列左缘 14、轮次上缘 193.5，宽为对话列宽减 28、高 82，输入框距对话列左缘 26、轮次上缘 231.5，宽为对话列宽减 120 1/3、高 32，其外层字段距轮次上缘 205.5、高 58，提交按钮右缘距对话列右缘 26、宽 60 1/3、高 32、与输入框同高；运行设置各位置的按下点取官网点击坐标：模型选择卡片、思考档位下拉框与选项、系统指令卡片距运行设置列左缘 150、距视口顶 110、320、354、208，模型面板中的一行距视口右缘 283、顶 281，All 页签距右缘 510、顶 135，系统指令输入框距右缘 275、顶 506，关闭按钮距右缘 27、顶 33，Function calling 与 Grounding with Google Search 开关距右缘 32、顶 512 与 559，编辑按钮距右缘 79、顶 511，函数声明输入框在视口水平中线、顶 270，保存按钮在中线右侧 355、顶 636，这些元素的矩形为近似值；取值按 Firefox 以单精度浮点返回
-const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {` + promptElements + functionElements + settingsElements + `
+// newChatElements 在页面还没有顶栏 New chat 按钮时建出按钮与图标、确认框的遮罩、对话框与其中的 Discard and continue 按钮，以及新对话页内容区中的分类卡片
+const newChatElements = `
+  if (!document.querySelector('ms-playground-toolbar')) {
+    document.body.appendChild(document.createElement('ms-playground-toolbar')).appendChild(document.createElement('button')).appendChild(document.createElement('span'));
+    const overlay = document.body.appendChild(document.createElement('ms-dialog-overlay'));
+    overlay.appendChild(document.createElement('div'));
+    overlay.appendChild(document.createElement('mat-dialog-container')).appendChild(document.createElement('button')).appendChild(document.createElement('span'));
+    document.body.appendChild(document.createElement('ms-zero-state')).appendChild(document.createElement('button'));
+  }
+  const toolbar = document.querySelector('ms-playground-toolbar').querySelector('button');
+  const backdrop = document.querySelector('ms-dialog-overlay').firstElementChild;
+  const dialog = document.querySelector('mat-dialog-container');
+  const discard = dialog.querySelector('button');
+  const category = document.querySelector('ms-zero-state').querySelector('button');`
+
+// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件：from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数。位置 prompt 为空提示词输入框的中心，run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径，content 为 Rerun 后最后一轮被移除时指针下的对话区，answer 为流式回答的段落移到 content 处的指针下，result 与 submit 为最后一轮函数调用块中的函数响应输入框与提交按钮；焦点位置 prompt 为提示词输入框，result 为函数响应输入框，run、rerun 与 submit 为对应按钮。布局按官网新对话页：左侧导航宽 220、右侧运行设置宽 300，对话列宽至多 1000 并在两者之间居中；空提示词输入框距对话列左缘 25、上缘距视口底 105，宽为对话列宽减 50、高 21，其父元素高 36；Run 按钮宽 101.2、高 32、右缘距对话列右缘 25、上缘距视口底 59，中心处文字距按钮左缘 45、上缘 6，宽 24.2、高 20；每轮为一行短文本时最后一轮上缘一轮为 197.5、每多一轮下移 212，高 125.5，对话区超出时滚到底部，Rerun 按钮距对话列左缘 911、在最后一轮上缘之上 19、边长 32，图标与路径的矩形按官网取值；函数调用轮次上缘与最后一轮相同，函数响应表单距对话列左缘 14、轮次上缘 193.5，宽为对话列宽减 28、高 82，输入框距对话列左缘 26、轮次上缘 231.5，宽为对话列宽减 120 1/3、高 32，其外层字段距轮次上缘 205.5、高 58，提交按钮右缘距对话列右缘 26、宽 60 1/3、高 32、与输入框同高；运行设置各位置的按下点取官网点击坐标：模型选择卡片、思考档位下拉框与选项、系统指令卡片距运行设置列左缘 150、距视口顶 110、320、354、208，模型面板中的一行距视口右缘 283、顶 281，All 页签距右缘 510、顶 135，系统指令输入框距右缘 275、顶 506，关闭按钮距右缘 27、顶 33，Function calling 与 Grounding with Google Search 开关距右缘 32、顶 512 与 559，编辑按钮距右缘 79、顶 511，函数声明输入框在视口水平中线、顶 270，保存按钮在中线右侧 355、顶 636，这些元素的矩形为近似值；取值按 Firefox 以单精度浮点返回
+const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {` + promptElements + functionElements + settingsElements + newChatElements + `
   const section = innerWidth - 520;
   const box = Math.min(section, 1000);
   const left = 220 + (section - box) / 2;
@@ -156,6 +173,7 @@ const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {`
     turn: { target: turn.firstElementChild, point: [Math.round(left + box / 2), Math.round(top + 62.75)], nodes: [turn], rects: [[left, top, box, 125.5]] },
     rerun: { target: rerun.querySelector('path'), point: rerunPoint, nodes: [rerun.querySelector('path'), rerun.querySelector('g'), rerun.querySelector('svg'), rerun, rerun.parentElement], rects: [icon, icon, [left + 917, top - 13, 20, 20], [left + 911, top - 19, 32, 32], [left + 867, top - 23, 120, 40]] },
     content: { target: turn.parentElement, point: rerunPoint, nodes: [turn.parentElement], rects: [[left, 88, box, top + 81.5]] },
+    answer: { target: turn.firstElementChild, point: rerunPoint, nodes: [turn.firstElementChild, turn.parentElement], rects: [[left, 88, box, top + 81.5], [left, 88, box, top + 81.5]] },
     result: { target: field, point: [Math.round(left + 26 + (box - 120 - 1 / 3) / 2), Math.round(top + 247.5)], nodes: [field, field.parentElement, field.parentElement.parentElement, field.parentElement.parentElement.parentElement, form], rects: [fieldRect, fieldRect, fieldRect, [left + 26, top + 205.5, Math.fround(box - 120 - 1 / 3), 58], formRect] },
     submit: { target: send, point: [Math.round(left + box - 86 - 1 / 3 + (60 + 1 / 3) / 2), Math.round(top + 247.5)], nodes: [send, form], rects: [[Math.fround(left + box - 86 - 1 / 3), top + 231.5, Math.fround(60 + 1 / 3), 32], formRect] },
   };
@@ -165,7 +183,13 @@ const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {`
     const target = node.firstElementChild ?? node;
     spots[name] = { target, point: [Math.round(rect[0] + rect[2] / 2), Math.round(rect[1] + rect[3] / 2)], nodes: target === node ? [node, settingsRoot] : [target, node, settingsRoot], rects: target === node ? [rect, [column, 0, 300, innerHeight]] : [rect, rect, [column, 0, 300, innerHeight]] };
   }
-  const focusable = { prompt: textarea, run, rerun, result: field, submit: send, selector: settings('selector'), row: settings('row'), level: settings('level'), option: settings('option'), system: settings('system'), instructions: settings('instructions'), close: settings('close'), grounding: settings('grounding'), functions: settings('functions'), edit: settings('edit'), declarations: settings('declarations'), save: settings('save'), all: settings('all') };
+  const chatPoint = [innerWidth - 372, 32];
+  const discardPoint = [Math.round(innerWidth / 2 + 137), Math.round(innerHeight / 2 + 33.5)];
+  spots.newchat = { target: toolbar.firstElementChild, point: chatPoint, nodes: [toolbar.firstElementChild, toolbar], rects: [[innerWidth - 384, 20, 24, 24], [innerWidth - 392, 12, 40, 40]] };
+  spots.backdrop = { target: backdrop, point: chatPoint, nodes: [backdrop], rects: [[0, 0, innerWidth, innerHeight]] };
+  spots.discard = { target: discard.firstElementChild, point: discardPoint, nodes: [discard.firstElementChild, discard, dialog], rects: [[discardPoint[0] - 63, discardPoint[1] - 10, 126, 20], [discardPoint[0] - 75, discardPoint[1] - 18, 150, 36], [innerWidth / 2 - 280, innerHeight / 2 - 110, 560, 220]] };
+  spots.category = { target: category, point: discardPoint, nodes: [category], rects: [[discardPoint[0] - 120, discardPoint[1] - 40, 240, 80]] };
+  const focusable = { prompt: textarea, run, rerun, result: field, submit: send, newchat: toolbar, dialog, selector: settings('selector'), row: settings('row'), level: settings('level'), option: settings('option'), system: settings('system'), instructions: settings('instructions'), close: settings('close'), grounding: settings('grounding'), functions: settings('functions'), edit: settings('edit'), declarations: settings('declarations'), save: settings('save'), all: settings('all') };
   const spot = spots[to];
   const movement = from ? [spot.point[0] - spots[from].point[0], spot.point[1] - spots[from].point[1]] : [0, 0];
   input(spot.nodes, spot.rects, spot.target, from ? spots[from].target : null, spot.point, movement, focusable[blurred] ?? null, focusable[focused] ?? null, types);
@@ -178,7 +202,7 @@ const keyScript = `((input, text, types, target) => {` + promptElements + functi
   return element.value === text;
 })`
 
-// pointerStep 是一次可信指针操作与它之前的间隔：move 把指针移到 to，press 按下并把焦点移到指针下的按钮，release 抬起并点击，replace 为页面替换了指针下的元素
+// pointerStep 是一次可信指针操作与它之前的间隔：move 把指针移到 to，press 按下并把焦点移到指针下的按钮，release 抬起并点击，replace 为页面替换了指针下的元素，stream 为流式回答使指针下的元素在对话区与回答段落之间变化，focus 与 refocus 为页面把焦点移到 to（refocus 时原焦点所在元素已移除），cover 为 to 处的遮罩盖住指针下的元素，uncover 为遮罩移除后指针下为 to
 type pointerStep struct {
 	delay  time.Duration
 	action string
@@ -187,6 +211,9 @@ type pointerStep struct {
 
 // rerunHover 是把指针移到最后一轮中心到 Rerun 按钮出现、指针移到按钮上的间隔
 const rerunHover = time.Second
+
+// streamFrame 是 Firefox 在内容移动后为静止指针补发离开与进入事件的最小间隔，即 60 Hz 下的一帧
+const streamFrame = 16 * time.Millisecond
 
 // click 返回以可信指针移到 to、按账户节奏按下再抬起的各步
 func (runtime *Runtime) click(to string) []pointerStep {
@@ -219,7 +246,7 @@ func (runtime *Runtime) pasteKeys() []keyStep {
 	}
 }
 
-// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后：指针换到另一元素时先派发离开与进入事件，按下时焦点移到指针下的元素，焦点从粘贴过内容的输入框移出时先派发 change，原焦点不在页面元素上时只有 focusin；Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮，Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
+// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后：指针换到另一元素时先派发离开与进入事件，按下时焦点移到指针下的元素（确认框的 Discard and continue 按钮不取得焦点），焦点从粘贴过内容的输入框移出时先派发 change，原焦点不在页面元素上时只有 focusin；Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮，Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
 func (pointer *Pointer) events(step pointerStep, at time.Time) (from, to, blurred, focused string, rounds int, types []string) {
 	pointer.mu.Lock()
 	defer pointer.mu.Unlock()
@@ -237,6 +264,9 @@ func (pointer *Pointer) events(step pointerStep, at time.Time) (from, to, blurre
 		}
 	case "press":
 		types = []string{"pointerdown", "mousedown"}
+		if from == "discard" {
+			break
+		}
 		if focused = from; focused != blurred {
 			if (blurred == "prompt" || blurred == "result" || blurred == "instructions" || blurred == "declarations") && pointer.edited {
 				types = append(types, "change")
@@ -263,6 +293,32 @@ func (pointer *Pointer) events(step pointerStep, at time.Time) (from, to, blurre
 		default:
 			return
 		}
+		types = []string{"pointerover", "mouseover"}
+	case "stream":
+		switch from {
+		case "content":
+			to = "answer"
+		case "answer":
+			to = "content"
+		default:
+			return
+		}
+		if at.Sub(pointer.streamed) < streamFrame {
+			return
+		}
+		pointer.streamed = at
+		types = []string{"pointerout", "pointerover", "mouseout", "mouseover"}
+	case "focus":
+		focused = step.to
+		types = []string{"focusout", "focusin"}
+	case "refocus":
+		focused = step.to
+		types = []string{"focusin"}
+	case "cover":
+		to = step.to
+		types = []string{"pointerout", "pointerover", "mouseout", "mouseover"}
+	case "uncover":
+		to = step.to
 		types = []string{"pointerover", "mouseover"}
 	}
 	pointer.at, pointer.focus = to, focused
@@ -334,12 +390,19 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 	if err != nil {
 		return nil, err
 	}
-	loop := newEventLoop()
+	if lead := time.Until(options.Start); lead > time.Duration(leadLimit*float64(time.Millisecond)) {
+		select {
+		case <-time.After(lead - time.Duration(leadLimit*float64(time.Millisecond))):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	loop := newEventLoop(mozjs.Now() + milliseconds(max(0, time.Until(options.Start))))
 	pointer := options.Pointer
 	if pointer == nil {
 		pointer = NewPointer()
 	}
-	runtime := &Runtime{loop: loop, results: make(map[float64]func(string)), pointer: pointer, rhythm: options.Rhythm, proofCost: newProofCost()}
+	runtime := &Runtime{loop: loop, results: make(map[float64]func(string)), pointer: pointer, rhythm: options.Rhythm}
 	ready := make(chan error, 1)
 	var readyOnce sync.Once
 	complete := func(err error) { readyOnce.Do(func() { ready <- err }) }
@@ -367,8 +430,8 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 			loop.close()
 			return nil, err
 		}
-		loop.post(runtime.agent.cx.GC)
-		runtime.idle = time.AfterFunc(idleShrinkDelay, func() { loop.post(runtime.agent.cx.ShrinkGC) })
+		loop.postHost(runtime.agent.cx.GC)
+		runtime.idle = time.AfterFunc(idleGCDelay, func() { loop.postHost(runtime.agent.cx.GC) })
 		return runtime, nil
 	case <-ctx.Done():
 		loop.close()
@@ -592,6 +655,7 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	done := make(chan struct{})
 	if !runtime.loop.post(func() {
 		if runtime.agent.pending == 0 {
+			runtime.loop.starting = false
 			close(done)
 			return
 		}
@@ -609,15 +673,15 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	}
 }
 
-// action 是一次界面操作中的一步：after 为与上一步的 VM 时钟间隔，run 在事件循环中执行这一步，span 与 ramp 见 timedJob
+// action 是一次界面操作中的一步：after 为与上一步的 VM 时钟间隔，run 在事件循环中执行这一步，span 与 pace 见 timedJob
 type action struct {
 	after time.Duration
 	run   func() error
 	span  float64
-	ramp  float64
+	pace  float64
 }
 
-// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完：VM 空闲足够长时各步不真实等待，不够时只等差额；一步出错或 ctx 结束后其余各步不再执行
+// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完，各步不真实等待，空闲不够时 VM 时钟暂时领先；一步出错或 ctx 结束后其余各步不再执行
 func (runtime *Runtime) perform(ctx context.Context, actions []action) error {
 	return runtime.performFitted(ctx, func(float64) []action { return actions })
 }
@@ -630,7 +694,7 @@ func (runtime *Runtime) performFitted(ctx context.Context, build func(idle float
 		actions := build(idle)
 		jobs := make([]timedJob, len(actions))
 		for index, item := range actions {
-			jobs[index] = timedJob{after: item.after, span: item.span, ramp: item.ramp, job: func() {
+			jobs[index] = timedJob{after: item.after, span: item.span, pace: item.pace, job: func() {
 				if failed {
 					return
 				}
@@ -666,7 +730,7 @@ func (runtime *Runtime) performFitted(ctx context.Context, build func(idle float
 func actionsNeed(actions []action) float64 {
 	var total float64
 	for _, item := range actions {
-		total += need(item.after, item.span, item.ramp)
+		total += need(item.after, item.span, item.pace)
 	}
 	return total
 }
@@ -711,31 +775,83 @@ type SettingStep struct {
 	Clicked func(at time.Time)
 }
 
-// RunProofAfter 先按顺序做 groups 中能排进此前空闲区间的各组运行设置操作，一组放不下时它与其后各组这次不做，步数计入 prooftime 的跳过步数；做过运行设置时隔 back 以可信指针点击提示词输入框，再粘贴文本并点击 Run 后为 SHA-256 digest 生成 fresh proof；各步按 VM 时钟排进此前的空闲区间，运行设置不真实等待
-func (runtime *Runtime) RunProofAfter(ctx context.Context, digest string, prompt string, groups [][]SettingStep, back time.Duration) (string, error) {
+// RunProofAfter 按顺序做 groups 中能排进此前空闲区间的各组运行设置操作（放不下的一组与其后各组这次不做，步数计入 prooftime 的跳过步数），newChat 不为 nil 且连同这些操作与粘贴都放得下时先像官网用户一样点顶栏 New chat 并在确认框点 Discard and continue（放不下时这次不做，两次点击计入跳过步数，点击确认后以 click 事件发生时的 VM 墙上时刻调用 newChat），做过运行设置时隔 back 以可信指针点击提示词输入框，再粘贴文本并点击 Run 后为 SHA-256 digest 生成 fresh proof；各步按 VM 时钟排进此前的空闲区间，不真实等待
+func (runtime *Runtime) RunProofAfter(ctx context.Context, digest string, prompt string, newChat func(at time.Time), groups [][]SettingStep, back time.Duration) (string, error) {
 	return runtime.proof(ctx, digest, prompt, func(text string, idle float64) []action {
 		click := runtime.click("prompt")
 		click[0].delay = back
 		resume := append(runtime.pointerActions(click), runtime.pasteInto("prompt", text)...)
-		var actions []action
+		var settings []action
 		done := 0
 		for ; done < len(groups); done++ {
 			group := runtime.settingActions(groups[done])
-			if actionsNeed(actions)+actionsNeed(group)+actionsNeed(resume) > idle {
+			if actionsNeed(settings)+actionsNeed(group)+actionsNeed(resume) > idle {
 				break
 			}
-			actions = append(actions, group...)
+			settings = append(settings, group...)
 		}
 		skipped := 0
 		for _, group := range groups[done:] {
 			skipped += len(group)
 		}
+		var actions []action
+		if newChat != nil {
+			chat := runtime.newChatActions(newChat)
+			paste := runtime.pasteInto("prompt", text)
+			if len(settings) > 0 {
+				paste = resume
+			}
+			if actionsNeed(chat)+actionsNeed(settings)+actionsNeed(paste) <= idle {
+				actions = chat
+			} else {
+				skipped += newChatClicks
+			}
+		}
 		prooftime.Skip(ctx, skipped)
-		if done == 0 {
+		if len(settings) == 0 {
+			if len(actions) > 0 {
+				return append(actions, runtime.pasteInto("prompt", text)...)
+			}
 			return runtime.paste(text)
 		}
-		return append(actions, resume...)
+		return append(append(actions, settings...), resume...)
 	}, runtime.click("run"))
+}
+
+// newChatClicks 是开启新对话的点击数：顶栏 New chat 与确认框的 Discard and continue
+const newChatClicks = 2
+
+// 官网点顶栏 New chat 后确认框各步的间隔
+const (
+	// newChatDialogFocus 是点击 New chat 到焦点移入确认框
+	newChatDialogFocus = 18 * time.Millisecond
+	// newChatBackdrop 是焦点移入确认框到遮罩出现在指针下
+	newChatBackdrop = 860 * time.Millisecond
+	// newChatDiscardMove 是遮罩出现到指针移到 Discard and continue
+	newChatDiscardMove = 300 * time.Millisecond
+	// newChatPromptFocus 是点击 Discard and continue 到新对话页的提示词输入框取得焦点
+	newChatPromptFocus = 383 * time.Millisecond
+	// newChatUncover 是提示词输入框取得焦点到确认框移除后指针下为新对话页内容
+	newChatUncover = 560 * time.Millisecond
+)
+
+// newChatActions 返回点顶栏 New chat、焦点移入确认框、遮罩出现在指针下、点 Discard and continue、新对话页提示词输入框取得焦点、确认框移除的各步，点击确认后以 click 事件发生时的 VM 墙上时刻调用 discarded
+func (runtime *Runtime) newChatActions(discarded func(at time.Time)) []action {
+	actions := runtime.pointerActions(runtime.click("newchat"))
+	confirm := runtime.click("discard")
+	confirm[0].delay = newChatDiscardMove
+	actions = append(actions, runtime.pointerActions([]pointerStep{{newChatDialogFocus, "focus", "dialog"}, {newChatBackdrop, "cover", "backdrop"}})...)
+	confirmed := runtime.pointerActions(confirm)
+	release := confirmed[len(confirmed)-1].run
+	confirmed[len(confirmed)-1].run = func() error {
+		if err := release(); err != nil {
+			return err
+		}
+		discarded(runtime.pointer.Clicked())
+		return nil
+	}
+	actions = append(actions, confirmed...)
+	return append(actions, runtime.pointerActions([]pointerStep{{newChatPromptFocus, "refocus", "prompt"}, {newChatUncover, "uncover", "category"}})...)
 }
 
 // settingActions 返回以可信指针点击 steps 各位置、需要时以可信键盘粘贴的各步，Clicked 在抬起后调用
@@ -843,14 +959,14 @@ func (runtime *Runtime) RerunProof(ctx context.Context, digest string, rounds in
 	return runtime.proof(ctx, digest, "", nil, runtime.rerunClick())
 }
 
-// proof 以 write 返回的各步写入提示词，按 click 以可信鼠标点击，再按账户节奏在 click 后为 digest 生成 proof，各步按 VM 时钟排进此前的空闲区间，返回前清空输入框；write 在事件循环中调用，idle 为点击与取 proof 之外剩余的空闲 VM 时钟毫秒数
+// proof 以 write 返回的各步写入提示词，按 click 以可信鼠标点击，再按账户节奏在 click 后为 digest 生成 proof，各步按 VM 时钟排进此前的空闲区间，空闲不够时不等真实时间、VM 时钟暂时领先，领先会超过 leadLimit 时这次只取 proof、不做界面操作，返回前清空输入框；write 在事件循环中调用，idle 为点击与取 proof 之外剩余的空闲 VM 时钟毫秒数
 func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string, write func(text string, idle float64) []action, click []pointerStep) (string, error) {
 	lockStarted := time.Now()
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
 	locked := time.Now()
 	prooftime.Observe(ctx, prooftime.Lock, locked.Sub(lockStarted))
-	defer runtime.idle.Reset(idleShrinkDelay)
+	defer runtime.idle.Reset(idleGCDelay)
 	defer runtime.loop.post(func() {
 		if value, err := runtime.agent.invoke(runtime.clear, 0); err == nil {
 			runtime.agent.cx.ReleaseValue(value)
@@ -866,15 +982,23 @@ func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string,
 	}
 	result := make(chan snapshotResult, 1)
 	var computeStarted time.Time
-	tail = append(tail, action{after: delay, span: runtime.proofCost, ramp: proofRamp(), run: func() error {
+	cost := newProofCost()
+	tail = append(tail, action{after: delay, span: cost, pace: proofPace(cost), run: func() error {
 		computeStarted = time.Now()
 		return runtime.startSnapshot(mozjs.String(digest), func(value string, err error) { result <- snapshotResult{value, err} })
 	}})
 	if err := runtime.performFitted(ctx, func(idle float64) []action {
-		if write == nil {
-			return tail
+		actions := tail
+		if write != nil {
+			actions = append(write(prompt, idle-actionsNeed(tail)), tail...)
 		}
-		return append(write(prompt, idle-actionsNeed(tail)), tail...)
+		if actionsNeed(actions)-idle <= leadLimit {
+			return actions
+		}
+		prooftime.Skip(ctx, len(actions)-1)
+		snapshot := actions[len(actions)-1]
+		snapshot.after = 0
+		return []action{snapshot}
 	}); err != nil {
 		return "", err
 	}
@@ -911,6 +1035,11 @@ func (runtime *Runtime) Replaced(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Streamed 在回答正文流式渲染、对话区内容在静止的指针下移动时排入一组 Firefox 的 pointerout、pointerover、mouseout 与 mouseover：指针在对话区（Rerun 或提交函数结果之后）时指针下的元素在对话区与回答段落之间交替，同一帧内只派发一组，指针不在对话区时不派发；不等待派发
+func (runtime *Runtime) Streamed() {
+	runtime.loop.post(func() { _ = runtime.pointerInput(pointerStep{action: "stream"}) })
 }
 
 // pointerInput 在事件循环中按 step 与页面当前的指针和焦点位置派发可信鼠标与焦点事件
@@ -961,35 +1090,17 @@ func (runtime *Runtime) Activate(ctx context.Context) error {
 	}
 }
 
-// RefreshSnapshot 生成官网刷新 Waa/Create 时携带的无绑定 snapshot
+// RefreshSnapshot 生成官网刷新 Waa/Create 时携带的无绑定 snapshot，与取 proof 一样从官网取 proof 耗时中抽值并排进此前的空闲区间
 func (runtime *Runtime) RefreshSnapshot(ctx context.Context) (string, error) {
 	runtime.operationMu.Lock()
 	defer runtime.operationMu.Unlock()
-	defer runtime.idle.Reset(idleShrinkDelay)
-	return runtime.snapshotWith(ctx, mozjs.Undefined())
-}
-
-// snapshotResult 是一次 snapshot 的输出与错误
-type snapshotResult struct {
-	value string
-	err   error
-}
-
-func (runtime *Runtime) snapshotWith(ctx context.Context, digest mozjs.Value) (string, error) {
+	defer runtime.idle.Reset(idleGCDelay)
 	result := make(chan snapshotResult, 1)
-	if !runtime.loop.post(func() {
-		if err := ctx.Err(); err != nil {
-			result <- snapshotResult{err: err}
-			return
-		}
-		if err := runtime.startSnapshot(digest, func(value string, err error) { result <- snapshotResult{value, err} }); err != nil {
-			select {
-			case result <- snapshotResult{err: err}:
-			default:
-			}
-		}
-	}) {
-		return "", errors.New("WAA runtime 已关闭")
+	cost := newProofCost()
+	if err := runtime.perform(ctx, []action{{span: cost, pace: proofPace(cost), run: func() error {
+		return runtime.startSnapshot(mozjs.Undefined(), func(value string, err error) { result <- snapshotResult{value, err} })
+	}}}); err != nil {
+		return "", err
 	}
 	select {
 	case output := <-result:
@@ -999,15 +1110,21 @@ func (runtime *Runtime) snapshotWith(ctx context.Context, digest mozjs.Value) (s
 	}
 }
 
+// snapshotResult 是一次 snapshot 的输出与错误
+type snapshotResult struct {
+	value string
+	err   error
+}
+
 // startSnapshot 在事件循环中为 digest 调用 snapshot，snapshot 交回结果时以结果调用 finish；调用失败时返回错误、不调用 finish
 func (runtime *Runtime) startSnapshot(digest mozjs.Value, finish func(string, error)) error {
 	state := runtime.agent
 	runtime.nextResult++
 	id := runtime.nextResult
 	runtime.metrics = append(runtime.metrics, BotGuardMetric{Metric: "ec", Label: "n", Value: 1})
-	started, real := runtime.loop.now(), time.Now()
+	started, cpu := runtime.loop.now(), mozjs.CPU()
 	runtime.results[id] = func(value string) {
-		recordSnapshotCost(float64(time.Since(real)) / float64(time.Millisecond))
+		recordSnapshotCost(mozjs.CPU() - cpu)
 		runtime.metrics = append(runtime.metrics,
 			BotGuardMetric{Metric: "el", Label: "n", Value: math.Floor(runtime.loop.now() - started)},
 			BotGuardMetric{Metric: "frs", Value: float64(len(value))})

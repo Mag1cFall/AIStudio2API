@@ -28,23 +28,23 @@ type tokenCountResult struct {
 	err   error
 }
 
-// EncodeGenerateContentRequest 编码 GenerateContent 数组
-func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDefaults, runtime RequestContext) ([]byte, error) {
+// EncodeGenerateContentRequest 编码 GenerateContent 数组，返回正文与 WAA proof 字段（field 5）在正文中的起始字节
+func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDefaults, runtime RequestContext) ([]byte, int, error) {
 	tools, explicitTools, err := encodeRequestedTools(request.Tools)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	contents, err := encodeContents(request.Contents)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(contents) == 0 {
-		return nil, fmt.Errorf("GenerateContent contents 不能为空")
+		return nil, 0, fmt.Errorf("GenerateContent contents 不能为空")
 	}
 	request.Config.MediaResolution = cmp.Or(request.Config.MediaResolution, partMediaResolution(request.Contents))
 	config, err := encodeGenerationConfig(request.Config, defaults)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if config[8] != nil && responseSchemaBeyondPlayground(request.Config, config[8].([]any)) {
 		config[7], config[8] = "application/json", nil
@@ -81,7 +81,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	wire[1] = contents
 	safety, err := resolveSafetySettings(request.SafetySettings, defaults.ImageRoute)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(safety) > 0 {
 		wire[2] = encodeSafetySettings(safety)
@@ -110,7 +110,7 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if request.continuationToken != "" {
 		wire[16] = request.continuationToken
 	}
-	return json.Marshal(wire)
+	return marshalWAAArray(wire, 5)
 }
 
 // groundingTool 判断编码后的工具是 Google 搜索或地图检索工具，账户时区只随这两类工具发送
@@ -327,7 +327,7 @@ func encodeGenerationConfig(config GenerationConfig, defaults GenerationDefaults
 		wire[7] = config.ResponseMIMEType
 	}
 	if settings.responseSchema != nil {
-		wire[8] = playgroundSchema(settings.responseSchema)
+		wire[8] = playgroundSchema(settings.responseSchema, true, true)
 	}
 	if !defaults.ImageRoute {
 		wire[13] = int64(1)
@@ -819,7 +819,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if interaction {
 		request.Tools = Tools{}
 	}
-	request, contract, err := prepareToolRequest(request)
+	request, contract, err := prepareToolRequest(request, true)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -1249,11 +1249,11 @@ func (c *Client) sendPlayground(ctx context.Context, request GenerateRequest, en
 			return nil, nil, fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
 		}
 	}
-	body, err := EncodeGenerateContentRequest(request, entry.defaults, runtime)
+	body, proofAt, err := EncodeGenerateContentRequest(request, entry.defaults, runtime)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	response, err := c.doProtected(ctx, request, body)
+	response, err := c.doProtected(ctx, request, body, proofAt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1328,12 +1328,12 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		request.continuationToken = decoder.continuation
 		reportContinuationRound(ctx)
 		reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
-		body, err := EncodeGenerateContentRequest(request, defaults, runtime)
+		body, proofAt, err := EncodeGenerateContentRequest(request, defaults, runtime)
 		if err != nil {
 			return err
 		}
 		closeRound()
-		response, err := c.doProtected(ctx, request, body)
+		response, err := c.doProtected(ctx, request, body, proofAt)
 		for err != nil && retryableAccountError(err) {
 			accounts, ok := ctx.Value(continuationAccountsKey{}).(ContinuationAccounts)
 			if !ok {
@@ -1355,11 +1355,11 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 					return fmt.Errorf("读取 AI Studio 请求上下文: %w", err)
 				}
 			}
-			if body, err = EncodeGenerateContentRequest(request, defaults, runtime); err != nil {
+			if body, proofAt, err = EncodeGenerateContentRequest(request, defaults, runtime); err != nil {
 				return err
 			}
 			reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
-			response, err = c.doProtected(ctx, request, body)
+			response, err = c.doProtected(ctx, request, body, proofAt)
 		}
 		if err != nil {
 			return err

@@ -26,6 +26,8 @@ type assistantTrajectory struct {
 	ID string `json:"id"`
 	// HistoryGroups 是开启 trajectory 时转录在自定义指令中的开头分组数
 	HistoryGroups int `json:"history_groups,omitempty"`
+	// Context 是 trajectory 中最近一个说明文件的系统提示词与函数声明摘要，trajectory 没有说明文件时为空
+	Context string `json:"context,omitempty"`
 }
 
 // assistantTip 返回 API key 与对话摘要合成的续接位置，运行状态中不保存明文 key

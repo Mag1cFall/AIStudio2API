@@ -389,7 +389,7 @@ func (store *Store) scanCost(ctx context.Context, from, to int64, starts []int64
 	tier := "input_tokens > " + strconv.Itoa(pricing.LongContext)
 	rows, err := store.db.QueryContext(ctx, `WITH slots(slot, start, stop) AS (VALUES `+slots.String()+`)
  SELECT slot, model, `+tier+`, SUM(input_tokens), SUM(cached_tokens), SUM(reasoning_tokens + reply_tokens)
- FROM slots JOIN requests ON time >= start AND time < stop`+clause+`
+ FROM slots JOIN requests INDEXED BY requests_cost ON time >= start AND time < stop`+clause+`
  GROUP BY slot, model, `+tier, append(args, filterArgs...)...)
 	if err != nil {
 		return cost{}, err
@@ -432,7 +432,6 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 	for _, dimension := range usageDimensions {
 		groups[dimension] = map[string]*aggregate{}
 	}
-	pairs := map[[2]string]*aggregate{}
 	stack := map[string][][2]int64{}
 	add := func(target map[string]*aggregate, key string, value *entry) {
 		if target[key] == nil {
@@ -446,13 +445,6 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 		buckets[index].add(value)
 		for _, dimension := range usageDimensions {
 			add(groups[dimension], value.dimension(dimension), value)
-		}
-		if !query.SkipPairs {
-			pair := [2]string{value.account, value.model}
-			if pairs[pair] == nil {
-				pairs[pair] = &aggregate{}
-			}
-			pairs[pair].add(value)
 		}
 		key := value.dimension(query.Stack)
 		if stack[key] == nil {
@@ -491,7 +483,7 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 		From: query.From.UTC(), To: query.To.UTC(), BucketSeconds: int64(query.Bucket / time.Second), GeneratedAt: now.UTC(),
 		Totals: totals.stats(), Previous: previous.stats(), Cost: current.total, PreviousCost: before.total, UnpricedModels: unpriced, StackBy: query.Stack,
 		Recent:  api.UsageRecent{Minutes: int(recentWindow / time.Minute), Requests: recent.requests, Tokens: recent.totalTokens},
-		Buckets: make([]api.UsageBucket, len(starts)), Groups: map[string][]api.UsageGroup{}, Pairs: []api.UsagePair{},
+		Buckets: make([]api.UsageBucket, len(starts)), Groups: map[string][]api.UsageGroup{},
 	}
 	for index, start := range starts {
 		report.Buckets[index] = api.UsageBucket{At: time.UnixMilli(start).UTC(), Cost: current.buckets[index], UsageStats: buckets[index].stats()}
@@ -499,12 +491,6 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 	for _, dimension := range usageDimensions {
 		report.Groups[dimension] = rankGroups(groups[dimension])
 	}
-	for pair, total := range pairs {
-		report.Pairs = append(report.Pairs, api.UsagePair{Account: pair[0], Model: pair[1], UsageStats: total.stats()})
-	}
-	slices.SortFunc(report.Pairs, func(a, b api.UsagePair) int {
-		return cmp.Or(cmp.Compare(b.Requests, a.Requests), strings.Compare(a.Account, b.Account), strings.Compare(a.Model, b.Model))
-	})
 	report.Series = stackSeries(report.Groups[query.Stack], stack, len(starts))
 	var latest sql.NullInt64
 	if err := store.db.QueryRowContext(ctx, `SELECT MAX(time) FROM requests`).Scan(&latest); err != nil {
@@ -527,6 +513,31 @@ func (store *Store) Usage(ctx context.Context, query api.UsageQuery) (api.UsageR
 		report.Options[dimension] = slices.Sorted(maps.Keys(groups[dimension]))
 	}
 	return report, nil
+}
+
+// UsagePairs 返回时间范围内符合筛选的账户与模型组合汇总，按请求数降序、账户与模型升序排列
+func (store *Store) UsagePairs(ctx context.Context, query api.UsageQuery) ([]api.UsagePair, error) {
+	totals := map[[2]string]*aggregate{}
+	visit := func(value *entry) {
+		key := [2]string{value.account, value.model}
+		if totals[key] == nil {
+			totals[key] = &aggregate{}
+		}
+		totals[key].add(value)
+	}
+	for _, part := range plan(query.From.UnixMilli(), query.To.UnixMilli(), nil) {
+		if err := store.scan(ctx, part, query.Filters, visit); err != nil {
+			return nil, err
+		}
+	}
+	pairs := make([]api.UsagePair, 0, len(totals))
+	for key, total := range totals {
+		pairs = append(pairs, api.UsagePair{Account: key[0], Model: key[1], UsageStats: total.stats()})
+	}
+	slices.SortFunc(pairs, func(a, b api.UsagePair) int {
+		return cmp.Or(cmp.Compare(b.Requests, a.Requests), strings.Compare(a.Account, b.Account), strings.Compare(a.Model, b.Model))
+	})
+	return pairs, nil
 }
 
 // rankGroups 按请求数降序、取值升序排列维度分项

@@ -49,7 +49,8 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 		}
 		return recovered, recoveryErr
 	}
-	observed := aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
+	observed := aistudio.ContextWithAccountSelectionObserver(requestCtx, func(lease *aistudio.AccountLease) {
+		account := lease.Account()
 		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
 		api.SetAccessLogChannel(requestCtx, string(aistudio.ChannelBuild))
 		api.SetAccessLogTarget(requestCtx, modelID, account.Config.Label)

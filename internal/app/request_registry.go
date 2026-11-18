@@ -42,11 +42,15 @@ const (
 	adminRequestRetain         = 512
 	adminRequestCompactAt      = 640
 	adminRequestRefreshLatency = 50 * time.Millisecond
+	// adminRequestDataInterval 是正在输出的请求向管理页发布最近收到输出时刻的最短间隔
+	adminRequestDataInterval = time.Second
 )
 
 type trackedRequest struct {
 	request api.AdminRequest
 	cancel  context.CancelFunc
+	// publishedDataAt 是最近一次发布给管理页的收到输出时刻
+	publishedDataAt time.Time
 }
 
 // newRequestRegistry 创建活动请求注册表
@@ -83,6 +87,20 @@ func (registry *requestRegistry) markRunning(id string, accountID string, accoun
 		tracked.request.AccountID = accountID
 		tracked.request.AccountLabel = accountLabel
 		tracked.request.State = "running"
+		tracked.request.SentAt = time.Now()
+		registry.active[id] = tracked
+		registry.publishLocked(api.AdminEvent{Type: "request", Data: tracked.request})
+	}
+	registry.mu.Unlock()
+}
+
+// markQueued 把换号后重新等待账户的请求改回等待执行，accountID 为请求指定的账户，清掉上一次尝试的账户、通道、发出与收到输出的时刻
+func (registry *requestRegistry) markQueued(id string, accountID string) {
+	registry.mu.Lock()
+	if tracked, exists := registry.active[id]; exists {
+		tracked.request.AccountID, tracked.request.AccountLabel, tracked.request.Channel = accountID, "", ""
+		tracked.request.State = "queued"
+		tracked.request.SentAt, tracked.request.LastDataAt, tracked.publishedDataAt = time.Time{}, time.Time{}, time.Time{}
 		registry.active[id] = tracked
 		registry.publishLocked(api.AdminEvent{Type: "request", Data: tracked.request})
 	}
@@ -96,6 +114,20 @@ func (registry *requestRegistry) markChannel(id string, channel string) {
 		tracked.request.Channel = channel
 		registry.active[id] = tracked
 		registry.publishLocked(api.AdminEvent{Type: "request", Data: tracked.request})
+	}
+	registry.mu.Unlock()
+}
+
+// markData 记下请求最近一次收到上游输出的时刻，首个输出立即发布，之后至多每 adminRequestDataInterval 发布一次
+func (registry *requestRegistry) markData(id string, at time.Time) {
+	registry.mu.Lock()
+	if tracked, exists := registry.active[id]; exists {
+		tracked.request.LastDataAt = at
+		if at.Sub(tracked.publishedDataAt) >= adminRequestDataInterval {
+			tracked.publishedDataAt = at
+			registry.publishLocked(api.AdminEvent{Type: "request", Data: tracked.request})
+		}
+		registry.active[id] = tracked
 	}
 	registry.mu.Unlock()
 }

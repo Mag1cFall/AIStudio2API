@@ -38,38 +38,38 @@ func buildBidiPath(method string) string {
 	return buildLivePath
 }
 
-// encodeBuildBidiMessage 把一条 Gemini Live JSON 消息编码为 [路径, JSON, proof] 代理外层并返回 binding
-func encodeBuildBidiMessage(path string, message any) ([]byte, string, error) {
+// encodeBuildBidiMessage 把一条 Gemini Live JSON 消息编码为 [路径, JSON, proof] 代理外层，返回正文、proof 字段在正文中的起始字节与 binding
+func encodeBuildBidiMessage(path string, message any) ([]byte, int, string, error) {
 	body, err := json.Marshal(message)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 Build 实时消息: %w", err)
+		return nil, 0, "", fmt.Errorf("编码 Build 实时消息: %w", err)
 	}
-	wire, err := EncodeBuildProxyRequest(path, body, false)
+	wire, proofAt, err := EncodeBuildProxyRequest(path, body, false)
 	if err != nil {
-		return nil, "", fmt.Errorf("编码 Build 实时代理外层: %w", err)
+		return nil, 0, "", fmt.Errorf("编码 Build 实时代理外层: %w", err)
 	}
-	return wire, path + " " + string(body), nil
+	return wire, proofAt, path + " " + string(body), nil
 }
 
 // EncodeBuildBidiSetup 编码 Build 代理的 Live 或实时音乐 setup，Live 字段与 Playground setup 的语义一致
-func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
+func EncodeBuildBidiSetup(request BidiRequest) ([]byte, int, string, error) {
 	model := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	setup := map[string]any{"model": wireModelName(model)}
 	if request.method == "bidiGenerateMusic" {
 		if len(request.Tools) > 0 || request.Translation != nil || request.Transcription != nil {
-			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 tools、translation 或 transcription", ErrInvalidArgument, model)
+			return nil, 0, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 tools、translation 或 transcription", ErrInvalidArgument, model)
 		}
 		if request.SystemInstruction != "" || request.Voice != "" || request.MediaResolution != "" || request.ThinkingLevel != "" || request.ContextWindow != nil || request.GoogleSearch {
-			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 system_instruction、voice、media_resolution、thinking_level、context_window_compression 与 google_search", ErrInvalidArgument, model)
+			return nil, 0, "", fmt.Errorf("%w: 实时音乐模型 %s 不支持 system_instruction、voice、media_resolution、thinking_level、context_window_compression 与 google_search", ErrInvalidArgument, model)
 		}
 		if output := strings.ToLower(strings.TrimSpace(request.OutputModality)); output != "" && output != "audio" {
-			return nil, "", fmt.Errorf("%w: 实时音乐模型 %s 的 output_modalities 必须是 [audio]", ErrInvalidArgument, model)
+			return nil, 0, "", fmt.Errorf("%w: 实时音乐模型 %s 的 output_modalities 必须是 [audio]", ErrInvalidArgument, model)
 		}
 		return encodeBuildBidiMessage(buildMusicPath, map[string]any{"setup": setup})
 	}
 	request.variant = bidiVariantConversation
 	if err := validateLiveVariant(request); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	generation := map[string]any{
 		"responseModalities": []string{"AUDIO"},
@@ -90,7 +90,7 @@ func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
 		}
 		wire, err := encodeBuildTools(tools)
 		if err != nil {
-			return nil, "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+			return nil, 0, "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 		}
 		setup["tools"] = wire
 	}
@@ -110,18 +110,18 @@ func EncodeBuildBidiSetup(request BidiRequest) ([]byte, string, error) {
 }
 
 // encodeBuildLiveText 编码 Build Live 的文本实时输入
-func encodeBuildLiveText(text string) ([]byte, string, error) {
+func encodeBuildLiveText(text string) ([]byte, int, string, error) {
 	if err := validateBidiText(text); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	return encodeBuildBidiMessage(buildLivePath, map[string]any{"realtimeInput": map[string]any{"text": text}})
 }
 
 // encodeBuildLiveMedia 编码 Build Live 的 16 kHz PCM 音频或 JPEG 图像实时输入
-func encodeBuildLiveMedia(mimeType string, data []byte) ([]byte, string, error) {
+func encodeBuildLiveMedia(mimeType string, data []byte) ([]byte, int, string, error) {
 	mimeType = strings.TrimSpace(mimeType)
 	if err := validateBidiMedia(mimeType, data); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	blob := map[string]any{"mimeType": mimeType, "data": base64.StdEncoding.EncodeToString(data)}
 	field := "video"
@@ -133,15 +133,15 @@ func encodeBuildLiveMedia(mimeType string, data []byte) ([]byte, string, error) 
 }
 
 // encodeBuildLiveToolResponses 编码 Build Live 的函数响应
-func encodeBuildLiveToolResponses(results []FunctionResult) ([]byte, string, error) {
+func encodeBuildLiveToolResponses(results []FunctionResult) ([]byte, int, string, error) {
 	if err := validateBidiToolResponses(results); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	responses := make([]any, 0, len(results))
 	for _, result := range results {
 		response, err := buildJSONObject(result.Content)
 		if err != nil {
-			return nil, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
+			return nil, 0, "", fmt.Errorf("%w: bidi function response content %v", ErrInvalidArgument, err)
 		}
 		entry := map[string]any{"id": result.ID, "name": result.Name, "response": response}
 		if result.WillContinue {
@@ -160,23 +160,18 @@ func (s *BidiSession) webChannelURL() string {
 	return bidiWebChannelURL
 }
 
-// bidiProofField 返回 WebChannel 客户端消息中 WAA proof 的字段号
-func bidiProofField(build bool) int {
-	if build {
-		return buildProofField
-	}
-	return 6
-}
+// bidiProofField 是 Playground 实时客户端帧中 WAA proof 的字段号
+const bidiProofField = 6
 
 // liveFrame 按会话通道编码 Live 客户端帧：Playground 会话用 playground，Build Live 会话用 build，实时音乐会话返回参数错误
-func (s *BidiSession) liveFrame(playground, build func() ([]byte, string, error)) ([]byte, string, error) {
+func (s *BidiSession) liveFrame(playground, build func() ([]byte, int, string, error)) ([]byte, int, string, error) {
 	switch s.buildPath {
 	case "":
 		return playground()
 	case buildLivePath:
 		return build()
 	default:
-		return nil, "", fmt.Errorf("%w: 实时音乐会话只接受 music_prompts、music_config 与 playback", ErrInvalidArgument)
+		return nil, 0, "", fmt.Errorf("%w: 实时音乐会话只接受 music_prompts、music_config 与 playback", ErrInvalidArgument)
 	}
 }
 
@@ -194,46 +189,46 @@ func (s *BidiSession) Channel() Channel {
 }
 
 // encodeBuildMusicPrompts 编码实时音乐的加权提示词
-func encodeBuildMusicPrompts(prompts []WeightedPrompt) ([]byte, string, error) {
+func encodeBuildMusicPrompts(prompts []WeightedPrompt) ([]byte, int, string, error) {
 	if len(prompts) == 0 {
-		return nil, "", fmt.Errorf("%w: weighted_prompts 不能为空", ErrInvalidArgument)
+		return nil, 0, "", fmt.Errorf("%w: weighted_prompts 不能为空", ErrInvalidArgument)
 	}
 	for index, prompt := range prompts {
 		if strings.TrimSpace(prompt.Text) == "" {
-			return nil, "", fmt.Errorf("%w: weighted_prompts[%d].text 不能为空", ErrInvalidArgument, index)
+			return nil, 0, "", fmt.Errorf("%w: weighted_prompts[%d].text 不能为空", ErrInvalidArgument, index)
 		}
 	}
 	return encodeBuildBidiMessage(buildMusicPath, map[string]any{"clientContent": map[string]any{"weightedPrompts": prompts}})
 }
 
 // encodeBuildMusicConfig 编码实时音乐的生成参数，字段沿用 Gemini API LiveMusicGenerationConfig
-func encodeBuildMusicConfig(config json.RawMessage) ([]byte, string, error) {
+func encodeBuildMusicConfig(config json.RawMessage) ([]byte, int, string, error) {
 	var object map[string]any
 	if err := json.Unmarshal(config, &object); err != nil || object == nil {
-		return nil, "", fmt.Errorf("%w: music_config 必须是 JSON 对象", ErrInvalidArgument)
+		return nil, 0, "", fmt.Errorf("%w: music_config 必须是 JSON 对象", ErrInvalidArgument)
 	}
 	return encodeBuildBidiMessage(buildMusicPath, map[string]any{"musicGenerationConfig": object})
 }
 
 // encodeBuildPlaybackControl 编码实时音乐的播放控制
-func encodeBuildPlaybackControl(control string) ([]byte, string, error) {
+func encodeBuildPlaybackControl(control string) ([]byte, int, string, error) {
 	control = strings.ToUpper(strings.TrimSpace(control))
 	if !slices.Contains(buildPlaybackControls, control) {
-		return nil, "", fmt.Errorf("%w: playback_control 必须是 play、pause、stop 或 reset_context", ErrInvalidArgument)
+		return nil, 0, "", fmt.Errorf("%w: playback_control 必须是 play、pause、stop 或 reset_context", ErrInvalidArgument)
 	}
 	return encodeBuildBidiMessage(buildMusicPath, map[string]any{"playbackControl": control})
 }
 
 // sendMusic 校验会话为实时音乐后编码并发送一条 BidiGenerateMusic 客户端消息，text 为消息中的用户文本
-func (s *BidiSession) sendMusic(ctx context.Context, text string, encode func() ([]byte, string, error)) error {
+func (s *BidiSession) sendMusic(ctx context.Context, text string, encode func() ([]byte, int, string, error)) error {
 	if s.buildPath != buildMusicPath {
 		return fmt.Errorf("%w: 模型 %s 不是实时音乐模型", ErrInvalidArgument, s.model)
 	}
-	body, binding, err := encode()
+	body, proofAt, binding, err := encode()
 	if err != nil {
 		return err
 	}
-	return s.sendProtected(ctx, body, binding, text, false, true)
+	return s.sendProtected(ctx, body, proofAt, binding, text, false, true)
 }
 
 // SendMusicPrompts 发送实时音乐的加权提示词
@@ -242,17 +237,17 @@ func (s *BidiSession) SendMusicPrompts(ctx context.Context, prompts []WeightedPr
 	for _, prompt := range prompts {
 		texts = append(texts, prompt.Text)
 	}
-	return s.sendMusic(ctx, strings.Join(texts, " "), func() ([]byte, string, error) { return encodeBuildMusicPrompts(prompts) })
+	return s.sendMusic(ctx, strings.Join(texts, " "), func() ([]byte, int, string, error) { return encodeBuildMusicPrompts(prompts) })
 }
 
 // SendMusicConfig 发送实时音乐的生成参数
 func (s *BidiSession) SendMusicConfig(ctx context.Context, config json.RawMessage) error {
-	return s.sendMusic(ctx, "", func() ([]byte, string, error) { return encodeBuildMusicConfig(config) })
+	return s.sendMusic(ctx, "", func() ([]byte, int, string, error) { return encodeBuildMusicConfig(config) })
 }
 
 // SendPlaybackControl 发送实时音乐的播放控制
 func (s *BidiSession) SendPlaybackControl(ctx context.Context, control string) error {
-	return s.sendMusic(ctx, "", func() ([]byte, string, error) { return encodeBuildPlaybackControl(control) })
+	return s.sendMusic(ctx, "", func() ([]byte, int, string, error) { return encodeBuildPlaybackControl(control) })
 }
 
 // buildLiveServerMessage 表示 Build 代理转发的 Gemini Live 与实时音乐服务端消息

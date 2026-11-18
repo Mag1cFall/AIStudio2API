@@ -2,7 +2,7 @@
 import { computed, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import { usePaged } from '@/paging'
-import type { UsageDimension, UsageReport, UsageStats } from '@/types'
+import type { UsageDimension, UsagePair, UsageReport, UsageStats } from '@/types'
 import DisclosureChevron from '../DisclosureChevron.vue'
 import UiCollapse from '../UiCollapse.vue'
 import UiIcon from '../UiIcon.vue'
@@ -16,7 +16,7 @@ type Tab = UsageDimension | 'status'
 type SortKey = 'key' | 'requests' | 'rate' | 'tokens' | 'p50' | 'p95' | 'first' | 'last'
 
 type Breakdown = 'account' | 'model'
-type Pairs = UsageReport['pairs']
+type Pairs = UsagePair[]
 
 const props = defineProps<{
   report: UsageReport

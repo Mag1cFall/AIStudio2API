@@ -172,20 +172,27 @@ func (tasks *accountTasks) publishLocked() {
 	}
 }
 
-// runAccountTaskItems 依次处理任务中的各个账户，单个账户失败时记录原因后继续下一个，任务被取消后停止
+// runAccountTaskItems 同时处理任务中的各个账户，每个账户各自验证、保存并更新结果，单个账户失败或较慢时不影响其他账户，任务被取消后不再开始处理
 func runAccountTaskItems(ctx context.Context, update accountTaskUpdate, count int, run func(int) (AdminAccount, error)) {
-	for index := 0; index < count && ctx.Err() == nil; index++ {
-		update(func(task *AccountTask) { task.Items[index].State = "running" })
-		account, err := run(index)
-		update(func(task *AccountTask) {
-			item := &task.Items[index]
-			if err != nil {
-				item.State, item.Code, item.Error = "failed", codeFromError(err, ""), err.Error()
+	var group sync.WaitGroup
+	for index := range count {
+		group.Go(func() {
+			if ctx.Err() != nil {
 				return
 			}
-			item.State, item.Label = "done", account.Label
+			update(func(task *AccountTask) { task.Items[index].State = "running" })
+			account, err := run(index)
+			update(func(task *AccountTask) {
+				item := &task.Items[index]
+				if err != nil {
+					item.State, item.Code, item.Error = "failed", codeFromError(err, ""), err.Error()
+					return
+				}
+				item.State, item.Label = "done", account.Label
+			})
 		})
 	}
+	group.Wait()
 }
 
 // startAccountTask 登记并启动账户任务，返回 202 与任务
@@ -255,7 +262,7 @@ func (s *server) handleLoginAccount(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleImportChromeAccounts 在账户任务中逐个导入选中的本机 Chrome 账号
+// handleImportChromeAccounts 在账户任务中同时导入选中的本机 Chrome 账号，各账号独立保存
 func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Request) {
 	var input chromeImportRequest
 	if err := decodeJSON(r, &input); err != nil {
@@ -280,7 +287,7 @@ func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleImportCookieAccounts 在账户任务中逐个导入 Cookie 文本或调试浏览器中的账户
+// handleImportCookieAccounts 在账户任务中同时导入 Cookie 文本或调试浏览器中的账户，各账户独立保存
 func (s *server) handleImportCookieAccounts(w http.ResponseWriter, r *http.Request) {
 	var input cookieImportRequest
 	if err := decodeJSON(r, &input); err != nil {
@@ -301,7 +308,7 @@ func (s *server) handleImportCookieAccounts(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// importCookieAccount 读取调试浏览器的 Cookie 或解析 Cookie 文本，导入第 auth_user 个会话登录的账户
+// importCookieAccount 读取调试浏览器的 Cookie 或解析 Cookie 文本，以识别会话时得到的邮箱为标签导入第 auth_user 个会话登录的账户
 func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem, proxy string, locale string, timezone string) (AdminAccount, error) {
 	cookies := item.Cookies
 	if address := strings.TrimSpace(item.CDP); address != "" {
@@ -316,6 +323,6 @@ func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem,
 		return AdminAccount{}, err
 	}
 	return s.config.Admin.ImportAccountState(ctx, AccountStateInput{
-		Proxy: proxy, Locale: locale, Timezone: timezone, AuthUser: item.AuthUser, StorageState: state,
+		Label: item.Email, Proxy: proxy, Locale: locale, Timezone: timezone, AuthUser: item.AuthUser, StorageState: state,
 	})
 }

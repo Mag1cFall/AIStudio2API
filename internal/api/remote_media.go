@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"golang.org/x/sync/errgroup"
 )
 
 // remoteMediaUserAgent 是下载外部媒体时声明的客户端标识
@@ -60,26 +61,48 @@ func remoteMediaProxy(address string) bool {
 // proxyDefaultPorts 为代理 URL 省略端口时各协议的端口
 var proxyDefaultPorts = map[string]string{"http": "80", "https": "443", "socks5": "1080", "socks5h": "1080"}
 
-// inlineRemoteMedia 把内容中 http(s) URL 形式的文件引用下载为内联媒体，同一 URL 只下载一次，Gemini Files API 的文件 URI 保持文件引用
+// remoteMediaConcurrency 是一次请求同时下载的外部媒体 URL 数上限
+const remoteMediaConcurrency = 4
+
+// inlineRemoteMedia 把内容中 http(s) URL 形式的文件引用下载为内联媒体，同一 URL 只下载一次，不同 URL 最多 remoteMediaConcurrency 个同时下载，一个失败时取消其余下载，Gemini Files API 的文件 URI 保持文件引用
 func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
-	downloaded := make(map[string]*aistudio.Blob)
+	var parts []*aistudio.Part
+	// first 是每个 URL 第一次出现的片段，下载时取它声明的 MIME
+	var first []*aistudio.Part
+	index := make(map[string]int)
 	for contentIndex := range contents {
 		for partIndex := range contents[contentIndex].Parts {
 			part := &contents[contentIndex].Parts[partIndex]
 			if part.File == nil || !remoteMediaURL(part.File.ID) || geminiFilesAPIURI(part.File.ID) {
 				continue
 			}
-			blob, ok := downloaded[part.File.ID]
-			if !ok {
-				var err error
-				if blob, err = downloadRemoteMedia(ctx, part.File.ID, part.File.MIME); err != nil {
-					return fmt.Errorf("Error while downloading %s: %w", part.File.ID, err)
-				}
-				downloaded[part.File.ID] = blob
+			parts = append(parts, part)
+			if _, ok := index[part.File.ID]; !ok {
+				index[part.File.ID] = len(first)
+				first = append(first, part)
 			}
-			part.DisplayName = cmp.Or(part.DisplayName, part.File.Name)
-			part.File, part.InlineData = nil, blob
 		}
+	}
+	blobs := make([]*aistudio.Blob, len(first))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(remoteMediaConcurrency)
+	for i, part := range first {
+		url, declared := part.File.ID, part.File.MIME
+		group.Go(func() error {
+			var err error
+			if blobs[i], err = downloadRemoteMedia(groupCtx, url, declared); err != nil {
+				return fmt.Errorf("Error while downloading %s: %w", url, err)
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	for _, part := range parts {
+		blob := blobs[index[part.File.ID]]
+		part.DisplayName = cmp.Or(part.DisplayName, part.File.Name)
+		part.File, part.InlineData = nil, blob
 	}
 	return nil
 }

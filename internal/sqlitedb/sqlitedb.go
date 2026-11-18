@@ -31,9 +31,9 @@ func init() {
 	}})
 }
 
-// Open 打开或创建数据库，新库与非增量收缩的已有库先整理为增量收缩，再为已有表补上缺少的列、执行 schema 并删除 schema 没有定义的对象，最后交还空闲页
-func Open(path string, schema string) (*sql.DB, error) {
-	db, err := sql.Open(driverName, "file:"+filepath.ToSlash(path))
+// Open 打开或创建数据库，每个连接缓存最近用过的 statements 条预编译语句；新库与非增量收缩的已有库先整理为增量收缩，再为已有表补上缺少的列、执行 schema 并删除 schema 没有定义的对象
+func Open(path string, schema string, statements int) (*sql.DB, error) {
+	db, err := sql.Open(driverName, fmt.Sprintf("file:%s?_stmt_cache_size=%d", filepath.ToSlash(path), statements))
 	if err != nil {
 		return nil, err
 	}
@@ -42,9 +42,6 @@ func Open(path string, schema string) (*sql.DB, error) {
 	}
 	if err := applySchema(db, schema); err != nil {
 		return nil, errors.Join(fmt.Errorf("同步表结构: %w", err), db.Close())
-	}
-	if err := Reclaim(context.Background(), db); err != nil {
-		return nil, errors.Join(err, db.Close())
 	}
 	return db, nil
 }

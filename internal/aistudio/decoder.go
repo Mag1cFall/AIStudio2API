@@ -256,7 +256,7 @@ func decodeJSONValue(raw []byte) (json.RawMessage, error) {
 	return value, nil
 }
 
-// decodeGenerateItems 依次把 GenerateContent 流 field 1 中的帧交给 consume：补齐空位后单遍切出各值并逐个校验，切分或校验不接受时从流开头按标准解码重放
+// decodeGenerateItems 依次把 GenerateContent 流 field 1 中的帧交给 consume：补齐空位后单遍切出各值并逐个校验，切分或校验不接受时按标准解码从最后交出的帧之后重放，最后交出的帧以同样结束方式的空值代替
 func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) error {
 	reader := &streamReadRecorder{source: source}
 	scanner := &frameScanner{source: newSparseJSONReader(reader)}
@@ -267,8 +267,20 @@ func decodeGenerateItems(source io.Reader, consume func(json.RawMessage) error) 
 	if scanner.err != nil {
 		reader.source, reader.err = failedReader{scanner.err}, nil
 	}
-	replay := &replayReader{data: slices.Concat(append(scanner.done, scanner.filled)...), ends: scanner.ends}
-	return decodeGenerateItemsStandard(io.MultiReader(replay, scanner.source), reader, frames, consume)
+	data := slices.Concat(append(scanner.done, scanner.filled)...)[scanner.kept-scanner.doneAt:]
+	ends := make([]int, len(scanner.ends))
+	for index, end := range scanner.ends {
+		ends[index] = end - scanner.kept
+	}
+	var head []byte
+	if frames > 0 {
+		head = []byte(`[[""`)
+		if scanner.closed {
+			head = []byte(`[[[]`)
+		}
+	}
+	replay := &replayReader{data: data, ends: ends}
+	return decodeGenerateItemsStandard(io.MultiReader(bytes.NewReader(head), replay, scanner.source), reader, frames, consume)
 }
 
 // errFrameReplay 表示单遍切分不接受当前输入，需要按标准解码重放
@@ -281,7 +293,7 @@ func (reader failedReader) Read([]byte) (int, error) {
 	return 0, reader.err
 }
 
-// replayReader 按单遍切分时每次读取的边界重放已读到的字节，标准解码读到的各块与直接读原流时相同
+// replayReader 按单遍切分时每次读取的边界重放已读到、尚未交出的字节，ends 为各次读取结束处在 data 中的位置
 type replayReader struct {
 	data []byte
 	ends []int
@@ -300,16 +312,35 @@ func (reader *replayReader) Read(buffer []byte) (int, error) {
 	return count, nil
 }
 
-// frameScanner 从补齐空位后的 GenerateContent 流中切出根数组内的各值：filled 从 mark 起是尚未切完的字节，之前读到的字节依次存入 done，ends 保存每次读取结束时的流内位置，供重放使用
+// frameScanner 从补齐空位后的 GenerateContent 流中切出根数组内的各值：filled 从 mark 起是尚未切完的字节，此前读到的字节从流内位置 doneAt 起依次存入 done；kept 是最后交出的帧之后的流内位置，closed 表示该帧以括号结束，ends 保存 kept 之后每次读取结束时的流内位置，done 与 ends 只保留重放所需的部分
 type frameScanner struct {
 	source io.Reader
 	done   [][]byte
+	doneAt int
+	kept   int
+	closed bool
 	filled []byte
 	ends   []int
 	read   int
 	mark   int
 	pos    int
 	err    error
+}
+
+// delivered 记下 raw 已交出：此后重放从它之后开始，丢弃此前读到的字节与读取边界
+func (s *frameScanner) delivered(raw []byte) {
+	s.kept = s.read + s.pos
+	s.closed = raw[len(raw)-1] == ']' || raw[len(raw)-1] == '}'
+	clear(s.done)
+	s.done = s.done[:0]
+	s.doneAt = s.read
+	ends := s.ends[:0]
+	for _, end := range s.ends {
+		if end > s.kept {
+			ends = append(ends, end)
+		}
+	}
+	s.ends = ends
 }
 
 // fill 再读一块数据，返回尚未切完的字节在 filled 中前移的距离；流已结束或读取出错时返回 false
@@ -320,6 +351,9 @@ func (s *frameScanner) fill() (int, bool) {
 			shift += s.mark
 			kept := s.filled[s.mark:]
 			if s.mark > 0 {
+				if len(s.done) == 0 {
+					s.doneAt = s.read
+				}
 				s.done = append(s.done, s.filled[:s.mark:s.mark])
 			}
 			s.filled = append(make([]byte, 0, max(64<<10, 2*len(kept))), kept...)
@@ -435,6 +469,7 @@ func (s *frameScanner) decode(consume func(json.RawMessage) error) (int, error) 
 				return frames, err
 			}
 			frames++
+			s.delivered(raw)
 			char, ok := s.peek()
 			if !ok || char != ',' && char != ']' {
 				return frames, errFrameReplay
@@ -473,11 +508,11 @@ func (s *frameScanner) decode(consume func(json.RawMessage) error) (int, error) 
 	return frames, nil
 }
 
-// decodeGenerateItemsStandard 以标准 JSON 解码逐个读取补齐空位后的 GenerateContent 流，前 skip 帧已经交出，不再交给 consume
+// decodeGenerateItemsStandard 以标准 JSON 解码逐个读取补齐空位后的 GenerateContent 流，前 skip 帧已经交出，不再交给 consume；skip 大于 0 时 source 以代替最后交出那一帧的占位值开始
 func decodeGenerateItemsStandard(source io.Reader, reader *streamReadRecorder, skip int, consume func(json.RawMessage) error) error {
 	decoder := json.NewDecoder(source)
 	decoder.UseNumber()
-	index := 0
+	index := max(skip-1, 0)
 	fail := func(path string, err error) error {
 		return reader.failure("GenerateContent", index, &ProtocolEvidenceError{Method: "GenerateContent", Path: path, Detail: err.Error()})
 	}
@@ -581,8 +616,8 @@ func rawString(raw json.RawMessage, path string, evidence json.RawMessage) (stri
 	return value, nil
 }
 
-// splitArray 返回与 rawArray 相同的元素与错误，raw 须为合法 JSON：按顶层逗号切分数组，元素与 raw 共用字节且容量截止到元素末尾
-func splitArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]json.RawMessage, error) {
+// splitArray 返回与 rawArray 相同的元素与错误，raw 须为合法 JSON：按顶层逗号切分数组，元素追加到调用方提供的 values 之后，与 raw 共用字节且容量截止到元素末尾
+func splitArray(raw json.RawMessage, path string, evidence json.RawMessage, values []json.RawMessage) ([]json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if bytes.Equal(trimmed, []byte("null")) {
 		return nil, nil
@@ -590,7 +625,6 @@ func splitArray(raw json.RawMessage, path string, evidence json.RawMessage) ([]j
 	if len(trimmed) == 0 || trimmed[0] != '[' {
 		return nil, &ProtocolEvidenceError{Path: path, Detail: "期望数组", Raw: cloneEvidence(raw, evidence)}
 	}
-	values := []json.RawMessage{}
 	depth, start := 0, 1
 	for position := 1; position < len(trimmed); position++ {
 		switch trimmed[position] {

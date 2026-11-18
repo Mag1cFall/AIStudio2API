@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,7 +155,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public)))))))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, s.catalogRead, public)))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)
@@ -179,15 +180,35 @@ func geminiOr(gemini, openai http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// waitLaunchMiddleware 让请求在生成服务启动期间等到启动结束再处理，wait 为空时直接处理
-func waitLaunchMiddleware(wait func(context.Context), next http.Handler) http.Handler {
+// waitLaunchMiddleware 让请求在生成服务启动期间等到启动结束再处理，已发布的公开目录能回答的模型查询直接处理，wait 为空时直接处理
+func waitLaunchMiddleware(wait func(context.Context), catalogRead func(*http.Request) bool, next http.Handler) http.Handler {
 	if wait == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wait(r.Context())
+		if !catalogRead(r) {
+			wait(r.Context())
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// catalogRead 判断请求是否为已发布的公开目录能回答的模型查询：目录非空时的模型列表，或目录中已有该模型的单模型查询
+func (s *server) catalogRead(r *http.Request) bool {
+	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1beta"), "/v1")
+	if r.Method != http.MethodGet || path != "/models" && (!strings.HasPrefix(path, "/models/") || strings.Contains(path, "/operations/")) {
+		return false
+	}
+	models, err := s.service.Models(r.Context())
+	if err != nil || len(models) == 0 {
+		return false
+	}
+	id, single := strings.CutPrefix(path, "/models/")
+	if !single {
+		return true
+	}
+	_, found := LookupPublicModel(s.searchModels(models), id)
+	return found
 }
 
 func newID(prefix string) string {

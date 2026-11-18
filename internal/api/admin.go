@@ -364,6 +364,10 @@ type AdminRequest struct {
 	Channel      string    `json:"channel,omitempty"`
 	State        string    `json:"state"`
 	StartedAt    time.Time `json:"started_at"`
+	// SentAt 是请求最近一次取得账户发往上游的时刻，排队中为零值
+	SentAt time.Time `json:"sent_at,omitzero"`
+	// LastDataAt 是最近一次收到上游输出的时刻，收到首个输出前为零值
+	LastDataAt time.Time `json:"last_data_at,omitzero"`
 }
 
 // AdminEvent 表示管理端增量事件

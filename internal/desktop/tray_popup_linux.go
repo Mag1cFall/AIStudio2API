@@ -22,7 +22,7 @@ func (s *App) attachMenu(tray *application.SystemTray) {
 	s.bindTray(tray, click, popup)
 }
 
-// popupTray 在托盘旁创建菜单，文字、主题与勾选状态取自当前设置
+// popupTray 在托盘旁创建菜单并定位后显示，文字、主题与勾选状态取自当前设置
 func (s *App) popupTray(tray *application.SystemTray, x, y int) {
 	s.mu.Lock()
 	previous, locale, theme := s.menu, s.locale, s.theme
@@ -57,8 +57,8 @@ func (s *App) popupTray(tray *application.SystemTray, x, y int) {
 		}
 		s.mu.Unlock()
 	})
-	window.Show()
 	s.positionTrayMenu(tray, window, x, y)
+	window.Show()
 	window.Focus()
 }
 

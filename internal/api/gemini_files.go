@@ -575,7 +575,8 @@ func writeGeminiUploadFailure(w http.ResponseWriter, err error, uploadStatus str
 	if uploadStatus != "" {
 		w.Header().Set("X-Goog-Upload-Status", uploadStatus)
 	}
-	writeGeminiError(w, status, statusName, err.Error())
+	writeGeminiError(w, status, statusName, publicReason(err))
+	setAccessLogResponseError(w, err.Error())
 }
 
 // requestOrigin 返回客户端访问本服务使用的协议与主机

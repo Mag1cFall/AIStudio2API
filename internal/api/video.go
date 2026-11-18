@@ -271,9 +271,9 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 	response := map[string]any{"name": "operations/" + operationID, "done": done}
 	if done && failure != nil {
 		status := geminiErrorStatus(failure)
-		response["error"] = map[string]any{"code": rpcCodes[status], "message": failure.Error(), "status": status}
+		response["error"] = map[string]any{"code": rpcCodes[status], "message": publicReason(failure), "status": status}
 	} else if done && missing != "" {
-		response["error"] = map[string]any{"code": rpcCodes["NOT_FOUND"], "message": missing, "status": "NOT_FOUND"}
+		response["error"] = map[string]any{"code": rpcCodes["NOT_FOUND"], "message": publicText(missing), "status": "NOT_FOUND"}
 	} else if done {
 		response["response"] = map[string]any{
 			"@type":                 "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
@@ -516,10 +516,10 @@ func openAIVideoObject(operation aistudio.VideoOperation) map[string]any {
 		object["expires_at"] = operation.ExpiresAt
 	}
 	if operation.Missing != "" {
-		object["error"] = map[string]any{"code": "video_not_found", "message": operation.Missing}
+		object["error"] = map[string]any{"code": "video_not_found", "message": publicText(operation.Missing)}
 	}
 	if operation.Failure != nil {
-		object["error"] = map[string]any{"code": "video_generation_failed", "message": operation.Failure.Error()}
+		object["error"] = map[string]any{"code": "video_generation_failed", "message": publicReason(operation.Failure)}
 	}
 	return object
 }

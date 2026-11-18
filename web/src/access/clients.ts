@@ -599,7 +599,7 @@ export const clients: Client[] = [
     group: 'agent',
     protocols: ['gemini'],
     summary: 'access.client.agy',
-    homepage: 'https://antigravity.google/docs/install?tab=cli',
+    homepage: 'https://github.com/google-antigravity/antigravity-cli',
     noModel: true,
     shell: true,
     steps: (input) => [

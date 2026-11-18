@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -40,9 +41,14 @@ const (
 	assistantCallFence = assistantFence + "function_calls"
 	// assistantResultFence 是转录函数结果的代码块开头
 	assistantResultFence = assistantFence + "function_results"
-	// assistantToolProtocol 是写入自定义指令的客户端函数说明，%s 为函数声明 JSON
-	assistantToolProtocol = "You can call the following client functions. They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services.\n%s\n" +
-		"To call functions, write one fenced block:\n" + assistantCallFence + "\n[{\"name\": \"<function name>\", \"arguments\": {<arguments>}}]\n```\n" +
+	// assistantToolProtocol 是自定义指令中的客户端函数说明，%s 为函数声明 JSON
+	assistantToolProtocol = "You can call the following client functions. " + assistantToolScope + "\n%s\n" + assistantCallProtocol
+	// assistantFileToolProtocol 是函数声明写在说明文件中时自定义指令中的客户端函数说明
+	assistantFileToolProtocol = "You can call the client functions declared in the instructions file. " + assistantToolScope + "\n" + assistantCallProtocol
+	// assistantToolScope 是客户端函数的运行位置与用途
+	assistantToolScope = "They run on the user's machine, not in this workspace, and are the only way to read or change the user's files, run the user's commands or reach the user's services."
+	// assistantCallProtocol 是写出函数调用代码块并以 ask_question 交回调用的格式
+	assistantCallProtocol = "To call functions, write one fenced block:\n" + assistantCallFence + "\n[{\"name\": \"<function name>\", \"arguments\": {<arguments>}}]\n```\n" +
 		"Right after the block, call your ask_question tool once with the question \"" + assistantCallQuestion + "\" and write nothing more. The user's machine runs the calls and the results arrive as the answer in a fenced function_results block. Never write a function_results block yourself. Answer normally when no function is needed."
 	// assistantCallQuestion 是模型写出调用代码块后以 ask_question 交回调用的问题
 	assistantCallQuestion = "Run these function calls and send me their results."
@@ -63,12 +69,20 @@ const (
 	assistantSearchTranscript = "search_web results for %q:\n%s"
 	// assistantSearchHistoryLimit 是保存 search_web 结果的模型回复数上限
 	assistantSearchHistoryLimit = 1000
-	// assistantHistoryRule 是自定义指令转录了对话历史时的说明
-	assistantHistoryRule = "The conversation before the first user message of this chat is transcribed at the end of these instructions between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself."
+	// assistantInstructionsRule 是写在自定义指令中、说明本轮用户轮开头的说明文件的说明
+	assistantInstructionsRule = "A user message of this chat may start with an attached plain-text instructions file from the user's client. It holds what the client sent that does not fit in these instructions: its system instructions, the client functions you can call or the conversation before this chat. Follow it as your system instructions. A later instructions file replaces the earlier one."
+	// assistantInstructionsSystem 是说明文件中客户端系统提示词的标题
+	assistantInstructionsSystem = "System instructions:\n"
+	// assistantInstructionsFunctions 是说明文件中函数声明的标题
+	assistantInstructionsFunctions = "Client functions:\n"
+	// assistantHistoryRule 是转录了对话历史时的说明，依次为转录所在的位置与附件之前的说明文件
+	assistantHistoryRule = "The conversation before the first user message of this chat is transcribed at the end of %s between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order %sat the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself."
+	// assistantInstructionLimit 是上游不截断的自定义指令字节数，超过时上游截到 24KB 并加截断标记
+	assistantInstructionLimit = 24000
 	// assistantTurnTokenLimit 是最后一组留在 field 1 提交的本地 Token 数上限，超过时与之前的对话一起转录在自定义指令中
 	assistantTurnTokenLimit = 24576
-	// assistantLatestPrompt 是对话全部转录在自定义指令中时提交的用户轮
-	assistantLatestPrompt = "Continue the conversation from the last turn of the conversation history at the end of your instructions."
+	// assistantLatestPrompt 是对话全部转录时提交的用户轮，%s 为转录所在的位置
+	assistantLatestPrompt = "Continue the conversation from the last turn of the conversation history at the end of %s."
 	// assistantEmptyReplyPrompt 是模型一轮结束时没有正文与函数调用后在同一 trajectory 中追加的用户轮
 	assistantEmptyReplyPrompt = "Your last turn ended without any visible reply. Continue now and give your reply."
 	// assistantCallFormat 是要求重写调用时附带的 function_calls 代码块格式与交回调用的说明
@@ -184,17 +198,17 @@ func (target assistantTarget) created() bool {
 }
 
 // EncodeAssistantRequest 编码 CodeAssistantOffline：field 1 对话轮、6 模式、8 模型、9 自定义指令、12 应用、14 框架、16、19 思考配置、21 续接的 trajectory、23 开启新 trajectory、29 请求 ID，field 2 由 WAA proof 写入；新应用的第一段对话模式为 1、框架为 [2,null,2]，其余模式为 2、框架为 [2]
-func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults, target assistantTarget, requestID string) ([]byte, error) {
+func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults, target assistantTarget, requestID string) ([]byte, int, error) {
 	contents, err := encodeContents(request.Contents)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(contents) == 0 {
-		return nil, fmt.Errorf("CodeAssistantOffline contents 不能为空")
+		return nil, 0, fmt.Errorf("CodeAssistantOffline contents 不能为空")
 	}
 	level, err := assistantThinkingLevel(request.Config, defaults)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	wire := make([]any, 29)
 	wire[0] = contents
@@ -217,36 +231,48 @@ func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults
 	wire[15] = int64(1)
 	wire[18] = []any{int64(1), nil, nil, level}
 	wire[28] = requestID
-	return json.Marshal(wire)
+	return marshalWAAArray(wire, assistantProofField)
 }
 
-// assistantToolPrompt 把禁止调用内置工具的说明与函数声明写在自定义指令开头，声明函数时允许以 ask_question 交回调用，把对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块；前 transcriptEnd 轮去掉思考后转录在自定义指令末尾，只提交 start 起的对话轮，全部转录时提交请模型从最后一轮继续的用户轮，start 等于 transcriptEnd 时其中的附件按编号放在提交的第一轮开头
-func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int) (GenerateRequest, error) {
-	functions := len(request.Tools.Functions) > 0 && request.Tools.ToolConfig.Mode != "none"
+// assistantContext 返回请求的系统提示词与函数声明 JSON，tool choice 为 none 时没有函数声明
+func assistantContext(request GenerateRequest) (string, string, error) {
+	if len(request.Tools.Functions) == 0 || request.Tools.ToolConfig.Mode == "none" {
+		return SystemText(request.System), "", nil
+	}
+	declarations, err := scriptJSON(request.Tools.Functions)
+	return SystemText(request.System), declarations, err
+}
+
+// assistantContextDigest 返回请求的系统提示词与函数声明的 SHA-256 十六进制摘要
+func assistantContextDigest(request GenerateRequest) (string, error) {
+	system, declarations, err := assistantContext(request)
+	sum := sha256.Sum256([]byte(system + "\x00" + declarations))
+	return fmt.Sprintf("%x", sum), err
+}
+
+// assistantToolPrompt 改写写代码助手的一轮请求，返回是否用了说明文件：自定义指令以禁止调用内置工具的说明开头，对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块，前 transcriptEnd 轮去掉思考后转录，只提交 start 起的对话轮，全部转录时提交请模型从最后一轮继续的用户轮，start 等于 transcriptEnd 时转录中的附件按编号放在提交的第一轮开头；file 为假且自定义指令依次写入函数声明、系统提示词与转录后不超过 assistantInstructionLimit 时都写在自定义指令中，否则自定义指令只有说明与函数声明（函数声明放不下时只有说明），context 为真时的系统提示词、放不下的函数声明与转录写成一个 text/plain 说明文件，放在提交的第一轮开头、转录中的附件之前
+func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int, file bool, context bool) (GenerateRequest, bool, error) {
+	system, declarations, err := assistantContext(request)
+	if err != nil {
+		return request, false, err
+	}
 	forbidden := assistantWorkspaceTools
 	if request.Tools.GoogleSearch != nil {
 		forbidden = forbidden[:len(forbidden)-1]
 	}
-	if functions {
+	if declarations != "" {
 		forbidden = slices.DeleteFunc(slices.Clone(forbidden), func(name string) bool { return name == assistantQuestionTool })
 	}
 	prompt := fmt.Sprintf(assistantWorkspaceRule, strings.Join(forbidden, ", "))
 	if request.Tools.GoogleSearch != nil {
 		prompt += assistantSearchRule
 	}
-	if functions {
-		declarations, err := scriptJSON(request.Tools.Functions)
-		if err != nil {
-			return request, err
-		}
-		prompt += "\n\n" + fmt.Sprintf(assistantToolProtocol, declarations)
-	}
 	turns := make([][]Part, 0, len(request.Contents))
 	var pending []FunctionCall
 	for index, content := range request.Contents {
 		linked, err := linkFunctionResults(content, &pending)
 		if err != nil {
-			return request, fmt.Errorf("contents[%d]: %w", index, err)
+			return request, false, fmt.Errorf("contents[%d]: %w", index, err)
 		}
 		parts := make([]Part, 0, len(linked.Parts))
 		fence := ""
@@ -273,7 +299,7 @@ func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int) 
 			}
 			if next != fence {
 				if err := flush(); err != nil {
-					return request, err
+					return request, false, err
 				}
 				fence = next
 			}
@@ -284,35 +310,66 @@ func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int) 
 			block = append(block, entry)
 		}
 		if err := flush(); err != nil {
-			return request, err
+			return request, false, err
 		}
 		turns = append(turns, parts)
 	}
-	if transcriptEnd > 0 {
-		prompt += "\n\n" + assistantHistoryRule
-	}
-	if len(request.System) > 0 {
-		prompt += "\n\n"
-	}
-	request.System = append([]string{prompt}, request.System...)
+	var transcript string
 	var attachments []Part
 	if transcriptEnd > 0 {
-		var transcript string
 		transcript, attachments = assistantTranscript(request.Contents[:transcriptEnd], turns)
-		request.System = append(request.System, "\n\n"+transcript)
 	}
+	tools := ""
+	if declarations != "" {
+		tools = "\n\n" + fmt.Sprintf(assistantToolProtocol, declarations)
+	}
+	instructions := prompt + tools
+	if transcriptEnd > 0 {
+		instructions += "\n\n" + fmt.Sprintf(assistantHistoryRule, "these instructions", "")
+	}
+	if system != "" {
+		instructions += "\n\n" + system
+	}
+	if transcriptEnd > 0 {
+		instructions += "\n\n" + transcript
+	}
+	file = file || len(instructions) > assistantInstructionLimit
+	latest := "your instructions"
+	var sections []string
+	if file {
+		instructions = prompt + tools + "\n\n" + assistantInstructionsRule
+		filed := len(instructions) > assistantInstructionLimit
+		if filed {
+			instructions = prompt + "\n\n" + assistantFileToolProtocol + "\n\n" + assistantInstructionsRule
+		}
+		if context && system != "" {
+			sections = append(sections, assistantInstructionsSystem+system)
+		}
+		if context && filed {
+			sections = append(sections, assistantInstructionsFunctions+declarations)
+		}
+		if transcriptEnd > 0 {
+			sections = append(sections, fmt.Sprintf(assistantHistoryRule, "this file", "after this file "), transcript)
+		}
+		latest = "the instructions file"
+	}
+	request.System = []string{instructions}
 	contents := make([]Content, 0, len(turns)-start+1)
 	for _, parts := range turns[start:] {
 		contents = append(contents, Content{Role: RoleUser, Parts: parts})
 	}
 	if len(contents) == 0 {
-		contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: assistantLatestPrompt}}})
+		contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: fmt.Sprintf(assistantLatestPrompt, latest)}}})
 	}
 	if start == transcriptEnd && len(attachments) > 0 {
 		contents[0].Parts = append(attachments, contents[0].Parts...)
 	}
+	if len(sections) > 0 {
+		instructionsFile := Part{InlineData: &Blob{MIME: "text/plain", Data: []byte(strings.Join(sections, "\n\n"))}}
+		contents[0].Parts = append([]Part{instructionsFile}, contents[0].Parts...)
+	}
 	request.Contents = contents
-	return request, nil
+	return request, file, nil
 }
 
 // assistantTranscript 返回 contents 转录成的对话历史与其中的附件：各轮取 turns 中同一位置改写后的 Part，去掉思考与空 Part，附件写为编号，附件依次以编号文本 Part 与附件 Part 返回
@@ -351,9 +408,11 @@ type assistantTurn struct {
 	previous string
 	// historyGroups 是 trajectory 转录在自定义指令中的开头分组数
 	historyGroups int
+	// context 是 trajectory 中最近一个说明文件的系统提示词与函数声明摘要，trajectory 没有说明文件时为空
+	context string
 }
 
-// assistantLatest 表示最后一组也要转录在自定义指令中：最后一组是模型轮，或本地 Token 数超过 assistantTurnTokenLimit
+// assistantLatest 表示最后一组也要转录在说明文件中：最后一组是模型轮，或本地 Token 数超过 assistantTurnTokenLimit
 func assistantLatest(contents []Content, links []turnLink) bool {
 	count := len(links)
 	if count == 0 {
@@ -370,8 +429,12 @@ func assistantLatest(contents []Content, links []turnLink) bool {
 	return links[count-1].model || localPartsTokens(parts) > assistantTurnTokenLimit
 }
 
-// planAssistantTurn 按续接的 trajectory 改写请求：续接时沿用 trajectory 开启时转录的开头分组，只提交 start 起的轮次；开启新 trajectory 时最后一组之前的对话转录在自定义指令中，最后一组也要转录时全部转录
-func planAssistantTurn(request GenerateRequest, links []turnLink, trajectory *assistantTrajectory, start int) (GenerateRequest, int, error) {
+// planAssistantTurn 按续接的 trajectory 改写请求，返回本轮之后 trajectory 转录在自定义指令中的开头分组数与说明文件摘要：续接没有说明文件的 trajectory 时沿用开启时转录的开头分组，续接有说明文件的 trajectory 时只在系统提示词或函数声明改变时提交新的说明文件；开启新 trajectory 时最后一组之前的对话转录，最后一组也要转录时全部转录；用了说明文件时转录随说明文件存入 trajectory，开头分组数为 0
+func planAssistantTurn(request GenerateRequest, links []turnLink, trajectory *assistantTrajectory, start int) (GenerateRequest, int, string, error) {
+	context, err := assistantContextDigest(request)
+	if err != nil {
+		return request, 0, "", err
+	}
 	groups := 0
 	switch {
 	case trajectory != nil:
@@ -387,8 +450,12 @@ func planAssistantTurn(request GenerateRequest, links []turnLink, trajectory *as
 	if groups > 0 {
 		transcribed = links[groups-1].end
 	}
-	prepared, err := assistantToolPrompt(request, transcribed, start)
-	return prepared, groups, err
+	filed := trajectory != nil && trajectory.Context != ""
+	prepared, file, err := assistantToolPrompt(request, transcribed, start, filed, !filed || trajectory.Context != context)
+	if !file {
+		return prepared, groups, "", err
+	}
+	return prepared, 0, context, err
 }
 
 // assistantPromptText 返回提交轮次中的正文，以换行连接，作为新建应用的首条提示
@@ -404,7 +471,7 @@ func assistantPromptText(contents []Content) string {
 	return strings.Join(texts, "\n")
 }
 
-// prepareAssistantTurn 决定本轮提交到的 trajectory 并改写请求：对话续接得上账户应用中保存的 trajectory 时只提交续接位置之后的轮次，否则在应用中开启新 trajectory，账户没有应用或应用已被删除时照官网新建应用
+// prepareAssistantTurn 决定本轮提交到的 trajectory 并改写请求：对话续接得上账户应用中保存的 trajectory 时只提交续接位置之后的轮次，否则在应用中开启新 trajectory，账户没有应用或应用已被删除时照官网新建应用；附件与说明文件的上传和新建应用、开启新 trajectory 的请求同时进行
 func (c *Client) prepareAssistantTurn(ctx context.Context, lease *AccountLease, request GenerateRequest, links []turnLink, apiKey string) (assistantTurn, error) {
 	applet := lease.assistantAppletID()
 	if applet != "" {
@@ -419,19 +486,18 @@ func (c *Client) prepareAssistantTurn(ctx context.Context, lease *AccountLease, 
 	if applet != "" && !assistantLatest(request.Contents, links) {
 		trajectory, start = lease.findAssistantTrajectory(apiKey, links)
 	}
-	prepared, groups, err := planAssistantTurn(request, links, trajectory, start)
+	prepared, groups, context, err := planAssistantTurn(request, links, trajectory, start)
 	if err != nil {
 		return assistantTurn{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if prepared.Contents, err = c.uploadAssistantAttachments(ctx, request.AccountID, prepared.Contents); err != nil {
-		return assistantTurn{}, err
-	}
-	turn := assistantTurn{request: prepared, historyGroups: groups}
+	turn := assistantTurn{historyGroups: groups, context: context}
+	contents := prepared.Contents
+	var uploaded sync.WaitGroup
+	var uploadErr error
+	uploaded.Go(func() { prepared.Contents, uploadErr = c.uploadAssistantAttachments(ctx, request.AccountID, contents) })
 	switch {
 	case applet == "":
-		if applet, err = c.createAssistantApplet(ctx, lease, request.Model, assistantPromptText(prepared.Contents)); err != nil {
-			return assistantTurn{}, err
-		}
+		applet, err = c.createAssistantApplet(ctx, lease, request.Model, assistantPromptText(contents))
 		turn.target = assistantTarget{applet: applet}
 	case trajectory != nil:
 		turn.target = assistantTarget{applet: applet, trajectory: trajectory.ID}
@@ -440,6 +506,11 @@ func (c *Client) prepareAssistantTurn(ctx context.Context, lease *AccountLease, 
 		c.startAssistantTrajectory(ctx, request.AccountID, applet)
 		turn.target = assistantTarget{applet: applet, fresh: true}
 	}
+	uploaded.Wait()
+	if err = cmp.Or(err, uploadErr); err != nil {
+		return assistantTurn{}, err
+	}
+	turn.request = prepared
 	return turn, nil
 }
 
@@ -579,7 +650,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 		assistantSearches.store(apiKey, historyDigest, answer.String(), append(searches, decoder.searches...))
 		if decoder.finished && !decoder.stopped && !decoder.malformed && !decoder.invalidTool {
 			cleanup.record.Store(&assistantTrajectory{
-				Tip: assistantTip(apiKey, turnLinkDigest(links[len(links)-1].digest, true, reply)), ID: cleanup.generation.Load().trajectory, HistoryGroups: turn.historyGroups,
+				Tip: assistantTip(apiKey, turnLinkDigest(links[len(links)-1].digest, true, reply)), ID: cleanup.generation.Load().trajectory, HistoryGroups: turn.historyGroups, Context: turn.context,
 			})
 			history := append(slices.Clone(request.Contents), Content{Role: RoleAssistant, Parts: []Part{{Text: answer.String()}}})
 			cleanup.history.Store(&history)
@@ -605,11 +676,12 @@ type assistantGeneration struct {
 
 // openAssistantGeneration 把请求的对话轮提交到 target 并打开任务流，返回任务、任务流请求正文与任务流；任务流请求的第 4 项为应用 ID
 func (c *Client) openAssistantGeneration(ctx context.Context, request GenerateRequest, entry modelEntry, target assistantTarget) (assistantGeneration, []byte, *RPCResponse, error) {
-	body, err := EncodeAssistantRequest(request, entry.defaults, target, strings.ToUpper(uuid.NewString()))
+	body, proofAt, err := EncodeAssistantRequest(request, entry.defaults, target, strings.ToUpper(uuid.NewString()))
 	if err != nil {
 		return assistantGeneration{}, nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	rpc := newRPCRequest(assistantOfflineMethod, request.AccountID, request.ID, body, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err == nil {

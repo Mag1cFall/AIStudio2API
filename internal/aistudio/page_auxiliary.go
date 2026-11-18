@@ -517,14 +517,46 @@ func pauseContext(ctx context.Context, duration time.Duration) {
 	}
 }
 
-// driveDenied 判断页面载入时的 GenerateAccessToken 没有取得 Drive access token（账户未授权 Drive）
-func (runtime *goWAARuntime) driveDenied(ctx context.Context) bool {
+// requestStartup 按 offsets 在 pageStarted 之后分组发出 pageStartupRPCs，同组请求同时发出；GetUserPreferences 返回后关闭 preferencesReady，第二个 GenerateAccessToken 返回后关闭 tokenReady，全部返回后关闭 startupDone
+func (runtime *goWAARuntime) requestStartup(ctx context.Context, apiKey string, visitID string, pageStarted time.Time, offsets [5]time.Duration) {
+	runtime.startupDone, runtime.preferencesReady, runtime.tokenReady = make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var group sync.WaitGroup
+	for index, slot := range []int{0, 2, 3} {
+		for position := range pageStartupRPCs[index] {
+			group.Go(func() {
+				time.Sleep(time.Until(pageStarted.Add(offsets[slot])))
+				body := runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageStartupRPCs[index][position:position+1])[0]
+				switch {
+				case index == 0 && position == 0:
+					runtime.preferences = body
+					close(runtime.preferencesReady)
+				case index == 1:
+					runtime.accessToken, _ = parseFirstString(bytes.NewReader(body), "GenerateAccessToken", "bearer token")
+					runtime.tokenAt = time.Now()
+					close(runtime.tokenReady)
+				}
+			})
+		}
+	}
+	go func() {
+		group.Wait()
+		close(runtime.startupDone)
+	}()
+}
+
+// closedBefore 等待 ready 关闭，ctx 先结束时返回 false
+func closedBefore(ctx context.Context, ready chan struct{}) bool {
 	select {
-	case <-runtime.startupDone:
+	case <-ready:
+		return true
 	case <-ctx.Done():
 		return false
 	}
-	return runtime.accessToken == ""
+}
+
+// driveDenied 判断页面载入时的 GenerateAccessToken 没有取得 Drive access token（账户未授权 Drive）
+func (runtime *goWAARuntime) driveDenied(ctx context.Context) bool {
+	return closedBefore(ctx, runtime.tokenReady) && runtime.accessToken == ""
 }
 
 // acknowledgedMedia 判断 GetUserPreferences 响应中账户已确认首次上传素材提示（第 2 字段不为空）
@@ -533,11 +565,16 @@ func acknowledgedMedia(preferences []byte) bool {
 	return json.Unmarshal(preferences, &fields) == nil && len(fields) > mediaDisclaimer.index && !isJSONNull(fields[mediaDisclaimer.index])
 }
 
-// beforeUpload 在服务上传附件前像官网插入文件一样记录点击插入按钮打开菜单、再点击上传文件并在文件选择框中选好文件，页面尚未确认首次上传素材提示时再记录确认框的显示与确认，并像点击确认一样以 Priority u=0 发出 UpdateUserPreferences、不等响应；这组操作整组排进页面此前的空闲区间，最后一步落在现在、第一步不早于页面上一条已记录事件，放不下时这次不做也不等待，步数计入下一次取 proof 的跳过步数；rerun 为真且本页面点过 Run 时与官网 Rerun 一样不动输入框、不记录这组操作；返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
+// beforeUpload 在服务上传附件前像官网插入文件一样记录点击插入按钮打开菜单、再点击上传文件并在文件选择框中选好文件，页面尚未确认首次上传素材提示时再记录确认框的显示与确认，并像点击确认一样以 Priority u=0 发出 UpdateUserPreferences、不等响应；这组操作整组排进页面此前的空闲区间，最后一步落在现在、第一步不早于页面上一条已记录事件，放不下时这次不做也不等待，步数计入下一次取 proof 的跳过步数；rerun 为真且本页面点过 Run 时与官网 Rerun 一样不动输入框、不记录这组操作；先等页面载入时的 GenerateAccessToken 与（记录这组操作时）GetUserPreferences 返回，ctx 先结束时返回空；返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
 func (runtime *goWAARuntime) beforeUpload(ctx context.Context, rerun bool) string {
-	<-runtime.startupDone
+	if !closedBefore(ctx, runtime.tokenReady) {
+		return ""
+	}
 	if rerun && !runtime.pointer.Clicked().IsZero() {
 		return runtime.pageToken()
+	}
+	if !closedBefore(ctx, runtime.preferencesReady) {
+		return ""
 	}
 	dialog := !runtime.mediaAcknowledged.Load() && !acknowledgedMedia(runtime.preferences)
 	menu, picker := insertPause(), insertPause()
@@ -587,20 +624,17 @@ func (runtime *goWAARuntime) acknowledgeMedia(ctx context.Context, confirmed tim
 	}()
 }
 
-// uploaded 在服务上传完附件后像官网输入框显示附件一样立即经 drive.count 由页面为每个附件发出只含该文件的 CountTokens，等待响应并把统计出的 token 数计入页面 token 统计，记下读取附件的 drive
+// uploaded 在服务上传完附件后像官网输入框显示附件一样立即经 drive.count 由页面为每个附件同时发出只含该文件的 CountTokens，不等响应，记下读取附件的 drive
 func (runtime *goWAARuntime) uploaded(ctx context.Context, files []FileRef, drive pageDrive) {
 	model := runtime.elements.pageModel()
 	for _, file := range files {
 		body, _ := json.Marshal([]any{model, nil, []any{model, []any{[]any{[]any{[]any{nil, nil, nil, nil, nil, []string{file.ID}}}, "user"}}}})
-		if counted, err := drive.count(ctx, body); err == nil {
-			count, _ := ParseTokenCount(bytes.NewReader(counted))
-			runtime.elements.chipCounted(int(count.InputTokens))
-		}
+		runtime.countChip(ctx, body, drive.count)
 		runtime.attachedFiles.Store(file.ID, drive)
 	}
 }
 
-// inlined 在页面没有 Drive 令牌、附件内联时像官网输入框显示附件一样立即经 count 由页面为每个附件发出只含该文件内联数据的 CountTokens，等待响应并把统计出的 token 数计入页面 token 统计；rerun 为真且本页面点过 Run 时附件已在对话中，不发
+// inlined 在页面没有 Drive 令牌、附件内联时像官网输入框显示附件一样立即经 count 由页面为每个附件同时发出只含该文件内联数据的 CountTokens，不等响应；rerun 为真且本页面点过 Run 时附件已在对话中，不发
 func (runtime *goWAARuntime) inlined(ctx context.Context, rerun bool, files []inlineFile, count func(context.Context, []byte) ([]byte, error)) {
 	if rerun && !runtime.pointer.Clicked().IsZero() {
 		return
@@ -609,11 +643,21 @@ func (runtime *goWAARuntime) inlined(ctx context.Context, rerun bool, files []in
 	for _, file := range files {
 		data := []any{file.blob.MIME, base64.StdEncoding.EncodeToString(file.blob.Data), nil, nil, nil, file.name}
 		body, _ := json.Marshal([]any{model, nil, []any{model, []any{[]any{[]any{[]any{nil, nil, data}}, "user"}}}})
-		if counted, err := count(ctx, body); err == nil {
-			tokens, _ := ParseTokenCount(bytes.NewReader(counted))
-			runtime.elements.chipCounted(int(tokens.InputTokens))
-		}
+		runtime.countChip(ctx, body, count)
 	}
+}
+
+// countChip 在后台经 count 发出输入框中一个附件的 CountTokens，官网附件统计 token 期间 Run 照常可点，请求结束不取消它，统计出的 token 数计入带这个附件的回答结束
+func (runtime *goWAARuntime) countChip(ctx context.Context, body []byte, count func(context.Context, []byte) ([]byte, error)) {
+	counted := runtime.elements.chipCounting()
+	go func() {
+		tokens := 0
+		if response, err := count(context.WithoutCancel(ctx), body); err == nil {
+			usage, _ := ParseTokenCount(bytes.NewReader(response))
+			tokens = int(usage.InputTokens)
+		}
+		counted(tokens)
+	}()
 }
 
 // readAttached 在页面发出 GenerateContent 后像对话中新一轮显示附件一样，0.7–0.9 秒后经上传时记下的 pageDrive 读取最后一个 user 轮次中输入框里的各附件

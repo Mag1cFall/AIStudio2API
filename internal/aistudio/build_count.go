@@ -76,11 +76,12 @@ func (c *Client) buildCountTokens(ctx context.Context, accountID string, request
 	if err != nil {
 		return TokenCount{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	proxy, err := EncodeBuildProxyRequest(path, body, true)
+	proxy, proofAt, err := EncodeBuildProxyRequest(path, body, true)
 	if err != nil {
 		return TokenCount{}, fmt.Errorf("编码 Build 代理请求: %w", err)
 	}
 	rpc := newRPCRequest(buildProxyUnaryMethod, accountID, "", proxy, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, accountID, rpc.Header)
 	selection := AccountSelection{
 		ModelID: request.Model, ModelAccessScope: ModelAccessKey("count-tokens", request.Model), Method: "countTokens", AccountID: accountID, Channel: ChannelBuild,

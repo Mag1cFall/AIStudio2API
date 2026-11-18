@@ -649,7 +649,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.mediaOutput')"
               control-id="setting-media-output"
               :description="t('settings.mediaOutputHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('media_output')"
               :env="environmentKey('media_output')"
             >
@@ -663,7 +663,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.mediaBaseURL')"
               control-id="setting-media-base-url"
               :description="t('settings.mediaBaseURLHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('media_base_url')"
               :env="environmentKey('media_base_url')"
             >
@@ -766,7 +766,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.maxAccountSwitches')"
               control-id="setting-max-account-switches"
               :description="t('settings.maxAccountSwitchesHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('max_account_switches')"
               :env="environmentKey('max_account_switches')"
             >
@@ -930,7 +930,7 @@ async function saveConfig(): Promise<void> {
               group-id="setting-model-mapping"
               wide
               :description="t('settings.modelMappingHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('model_mapping')"
               :env="environmentKey('model_mapping')"
             >
@@ -970,7 +970,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.nonstreamKeepalive')"
               control-id="setting-nonstream-keepalive"
               :description="t('settings.nonstreamKeepaliveHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('nonstream_keepalive')"
               :env="environmentKey('nonstream_keepalive')"
             >
@@ -980,7 +980,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.fakeStream')"
               control-id="setting-fake-stream"
               :description="t('settings.fakeStreamHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('fake_stream')"
               :env="environmentKey('fake_stream')"
             >
@@ -1000,7 +1000,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.searchModelAliases')"
               control-id="setting-search-model-aliases"
               :description="t('settings.searchModelAliasesHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('search_model_aliases')"
               :env="environmentKey('search_model_aliases')"
             >
@@ -1020,7 +1020,7 @@ async function saveConfig(): Promise<void> {
               :label="t('settings.googleSearch')"
               control-id="setting-google-search"
               :description="t('settings.googleSearchHelp')"
-              effect="service"
+              effect="immediate"
               :changed="changedFields.has('google_search')"
               :env="environmentKey('google_search')"
             >

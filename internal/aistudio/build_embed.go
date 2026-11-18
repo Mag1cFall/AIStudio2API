@@ -136,7 +136,7 @@ func (t *WorkerProtectedTransport) DoProtectedBuild(ctx context.Context, selecti
 	if err != nil {
 		return nil, err
 	}
-	return t.doPrepared(ctx, prompt, page, buildProofField, "", selection, rpc)
+	return t.doPrepared(ctx, prompt, page, "", selection, rpc)
 }
 
 // buildEmbedBatchLimit 是上游 batchEmbedContents 单次接受的最大请求数
@@ -163,11 +163,12 @@ func (c *Client) embedBatch(ctx context.Context, transport BuildProtectedTranspo
 	if err != nil {
 		return EmbeddingResult{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	proxy, err := EncodeBuildProxyRequest(path, body, true)
+	proxy, proofAt, err := EncodeBuildProxyRequest(path, body, true)
 	if err != nil {
 		return EmbeddingResult{}, fmt.Errorf("编码 Build 代理请求: %w", err)
 	}
 	rpc := newRPCRequest(buildProxyUnaryMethod, request.AccountID, request.ID, proxy, false)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	selection := AccountSelection{ModelID: request.Model, Method: "embedContent", AccountID: request.AccountID}
 	inputs := make([]Content, 0, len(requests))

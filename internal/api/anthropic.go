@@ -133,8 +133,10 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	declaredSearch := generateRequest.Tools.GoogleSearch != nil || slices.Contains(generateRequest.Tools.Google, "google_search")
 	generateRequest = s.prepareSearch(generateRequest)
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
+	media := s.mediaOutputFor(r)
 	if !request.Stream {
 		var stopKeepalive func()
 		w, stopKeepalive = s.nonstreamKeepalive(w, r)
@@ -181,7 +183,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			send: sseSender(stream), id: messageID, model: request.Model,
 			inputTokens: <-estimate, startUsage: startUsage,
 			searchKey: s.config.APIKey, omitted: request.thinkingOmitted(),
-			media: s.mediaOutputFor(r), context: contextResult, search: generateRequest.Tools.GoogleSearch != nil || slices.Contains(generateRequest.Tools.Google, "google_search"),
+			media: media, context: contextResult, search: declaredSearch,
 		}
 		if err := writer.start(); err != nil {
 			return
@@ -196,7 +198,6 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
-	media := s.mediaOutputFor(r)
 	if err := media.saveEvents(result.events); err != nil {
 		writeAnthropicRequestError(w, err)
 		return
@@ -1247,7 +1248,7 @@ type anthropicStreamWriter struct {
 	media             mediaOutput
 	codeIDs           codeExecutionIDs
 	context           anthropicContextResult
-	// search 为 true 时思考之后的事件推迟到搜索块之后写出
+	// search 为 true 时思考之后的事件推迟到搜索块之后写出，流式请求只在客户端声明 web_search 工具时为 true，全局搜索与搜索型号的正文实时写出、搜索块写在其后
 	search bool
 	// deferred 是等待搜索块写出的事件
 	deferred []aistudio.Event

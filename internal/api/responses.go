@@ -174,54 +174,98 @@ type responseHistory struct {
 	Agent     string
 }
 
-// StateStore 持久保存续接节点，服务重启后由 Load 按保存顺序读回
+// StateStore 持久保存续接节点：Index 按保存顺序返回服务启动前保存的节点，Read 在访问时读出节点正文
 type StateStore interface {
-	Load() []SavedState
+	Index() []StateNode
+	Read(id string) ([]byte, bool)
 	Save(saved []SavedState, removed []string)
+}
+
+// StateNode 是已保存续接节点的 ID 与续接起点
+type StateNode struct {
+	ID       string
+	ParentID string
 }
 
 // SavedState 是写入 StateStore 的一个续接节点
 type SavedState struct {
-	ID   string
-	Data []byte
+	ID       string
+	ParentID string
+	Data     []byte
 }
 
 type responseStateStore struct {
-	mu      sync.Mutex
-	states  map[string]responseState
+	mu sync.Mutex
+	// states 是正文已载入内存的节点
+	states map[string]responseState
+	// parents 是全部节点的续接起点，正文还在 persist 中的节点也在其中
+	parents map[string]string
 	order   []string
 	persist StateStore
+	// committed 在最近一次排队的写入提交完成时关闭，写入按排队顺序提交
+	committed chan struct{}
 }
 
-// newResponseStateStore 创建续接节点存储，persist 非空时读回其中保存的节点并把之后的变化写入它
+// newResponseStateStore 创建续接节点存储，persist 非空时读回其中保存的节点索引，正文在访问时载入，之后的变化写入 persist
 func newResponseStateStore(persist StateStore) *responseStateStore {
-	store := &responseStateStore{states: make(map[string]responseState, responseStateCapacity), persist: persist}
+	committed := make(chan struct{})
+	close(committed)
+	store := &responseStateStore{
+		states: make(map[string]responseState, responseStateCapacity), parents: make(map[string]string, responseStateCapacity),
+		persist: persist, committed: committed,
+	}
 	if persist == nil {
 		return store
 	}
-	for _, saved := range persist.Load() {
-		var state responseState
-		if json.Unmarshal(saved.Data, &state) == nil {
-			store.states[saved.ID] = state
-			store.order = append(store.order, saved.ID)
-		}
+	for _, node := range persist.Index() {
+		store.parents[node.ID] = node.ParentID
+		store.order = append(store.order, node.ID)
 	}
 	return store
 }
 
-// persistLocked 把仍存在且已结束的节点写入 persist，并删除已移除的节点；进行中的后台响应与交互在服务重启后不能继续，只保存终态
-func (store *responseStateStore) persistLocked(saved, removed []string) {
+// stateLocked 返回节点，正文还在 persist 中时读出并留在内存
+func (store *responseStateStore) stateLocked(id string) (responseState, bool) {
+	if state, exists := store.states[id]; exists {
+		return state, true
+	}
+	if _, exists := store.parents[id]; !exists {
+		return responseState{}, false
+	}
+	data, ok := store.persist.Read(id)
+	var state responseState
+	if !ok || json.Unmarshal(data, &state) != nil {
+		return responseState{}, false
+	}
+	store.states[id] = state
+	return state, true
+}
+
+// putLocked 保存节点并记录它的续接起点
+func (store *responseStateStore) putLocked(id string, state responseState) {
+	store.states[id] = state
+	store.parents[id] = state.ParentID
+}
+
+// persistLocked 编码仍存在且已结束的节点并排队删除已移除的节点，返回按排队顺序提交这次写入的函数，调用方释放 mu 后调用；进行中的后台响应与交互在服务重启后不能继续，只保存终态
+func (store *responseStateStore) persistLocked(saved, removed []string) func() {
 	if store.persist == nil {
-		return
+		return func() {}
 	}
 	states := make([]SavedState, 0, len(saved))
 	for _, id := range saved {
 		if state, exists := store.states[id]; exists && state.finished() {
 			data, _ := json.Marshal(state)
-			states = append(states, SavedState{ID: id, Data: data})
+			states = append(states, SavedState{ID: id, ParentID: state.ParentID, Data: data})
 		}
 	}
-	store.persist.Save(states, removed)
+	previous, done := store.committed, make(chan struct{})
+	store.committed = done
+	return func() {
+		<-previous
+		store.persist.Save(states, removed)
+		close(done)
+	}
 }
 
 // finished 返回节点的响应或交互是否已不在进行中
@@ -244,7 +288,7 @@ func (store *responseStateStore) Load(id string) (responseHistory, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	history := responseHistory{ID: id, Contents: make([]aistudio.Content, 0), InlineInstructions: make([]string, 0)}
-	if state, exists := store.states[id]; exists {
+	if state, exists := store.stateLocked(id); exists {
 		history.Interaction = state.Interaction != nil
 		if state.Interaction != nil {
 			history.Upstream, history.AccountID, history.Agent = state.Interaction.upstream, state.Interaction.account, state.Interaction.agent
@@ -255,7 +299,7 @@ func (store *responseStateStore) Load(id string) (responseHistory, bool) {
 	}
 	chain := make([]responseState, 0)
 	for id != "" {
-		state, exists := store.states[id]
+		state, exists := store.stateLocked(id)
 		if !exists {
 			return responseHistory{}, false
 		}
@@ -281,8 +325,7 @@ func (store *responseStateStore) Store(id string, previous responseHistory, resu
 	}
 	state.InlineInstructions = append([]string(nil), state.InlineInstructions...)
 	store.mu.Lock()
-	defer store.mu.Unlock()
-	if _, exists := store.states[previous.ID]; previous.ID != "" && !exists {
+	if _, exists := store.parents[previous.ID]; previous.ID != "" && !exists {
 		state.ParentID = ""
 		state.Contents = append(cloneResponseContents(previous.Contents), state.Contents...)
 		state.InlineInstructions = append(append([]string(nil), previous.InlineInstructions...), state.InlineInstructions...)
@@ -290,10 +333,10 @@ func (store *responseStateStore) Store(id string, previous responseHistory, resu
 			state.Record.Input = append(append([]storedItem(nil), previous.Items...), state.Record.Input...)
 		}
 	}
-	if _, exists := store.states[id]; !exists {
+	if _, exists := store.parents[id]; !exists {
 		store.order = append(store.order, id)
 	}
-	store.states[id] = state
+	store.putLocked(id, state)
 	saved, removed := []string{id}, []string(nil)
 	for len(store.order) > responseStateCapacity {
 		evicted := store.order[0]
@@ -301,17 +344,20 @@ func (store *responseStateStore) Store(id string, previous responseHistory, resu
 		saved = append(saved, store.removeLocked(evicted)...)
 		removed = append(removed, evicted)
 	}
-	store.persistLocked(saved, removed)
+	commit := store.persistLocked(saved, removed)
+	store.mu.Unlock()
+	commit()
 }
 
 // removeLocked 删除一个节点，并把它的上下文并入以它为续接起点的子节点，返回这些子节点的 ID
 func (store *responseStateStore) removeLocked(id string) []string {
-	parent := store.states[id]
+	parent, _ := store.stateLocked(id)
 	var children []string
-	for childID, child := range store.states {
-		if child.ParentID != id {
+	for childID, parentID := range store.parents {
+		if parentID != id {
 			continue
 		}
+		child, _ := store.stateLocked(childID)
 		child.ParentID = parent.ParentID
 		child.Contents = append(cloneResponseContents(parent.Contents), child.Contents...)
 		child.InlineInstructions = append(append([]string(nil), parent.InlineInstructions...), child.InlineInstructions...)
@@ -320,10 +366,11 @@ func (store *responseStateStore) removeLocked(id string) []string {
 			merged.Input = append(append(append([]storedItem(nil), parent.Record.Input...), parent.Record.Output...), child.Record.Input...)
 			child.Record = &merged
 		}
-		store.states[childID] = child
+		store.putLocked(childID, child)
 		children = append(children, childID)
 	}
 	delete(store.states, id)
+	delete(store.parents, id)
 	return children
 }
 
@@ -331,7 +378,7 @@ func (store *responseStateStore) removeLocked(id string) []string {
 func (store *responseStateStore) Response(id string, include []string) (json.RawMessage, bool, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	state, exists := store.states[id]
+	state, exists := store.stateLocked(id)
 	if !exists || state.Record == nil {
 		return nil, false, false
 	}
@@ -353,7 +400,7 @@ func (store *responseStateStore) Response(id string, include []string) (json.Raw
 func (store *responseStateStore) Stream(id string) (*streamLog, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	state, exists := store.states[id]
+	state, exists := store.stateLocked(id)
 	if !exists || state.Record == nil || state.Record.Stream == nil {
 		return nil, false
 	}
@@ -364,21 +411,21 @@ func (store *responseStateStore) Stream(id string) (*streamLog, bool) {
 func (store *responseStateStore) Interaction(id string) (*interactionRecord, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	interaction := store.states[id].Interaction
-	return interaction, interaction != nil
+	state, _ := store.stateLocked(id)
+	return state.Interaction, state.Interaction != nil
 }
 
 // InputItems 返回生成该响应时的全部输入项：续接链上各前序响应的输入与输出，以及本次输入
 func (store *responseStateStore) InputItems(id string) ([]storedItem, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	state, exists := store.states[id]
+	state, exists := store.stateLocked(id)
 	if !exists || state.Record == nil {
 		return nil, false
 	}
 	items := append([]storedItem(nil), state.Record.Input...)
 	for parentID := state.ParentID; parentID != ""; {
-		parent := store.states[parentID]
+		parent, _ := store.stateLocked(parentID)
 		if parent.Record != nil {
 			items = append(append(append([]storedItem(nil), parent.Record.Input...), parent.Record.Output...), items...)
 		}
@@ -390,12 +437,14 @@ func (store *responseStateStore) InputItems(id string) ([]storedItem, bool) {
 // Delete 删除 Responses 接口保存的响应，interaction 为 true 时删除 Interactions 接口保存的交互，以它为起点的续接保留完整上下文
 func (store *responseStateStore) Delete(id string, interaction bool) bool {
 	store.mu.Lock()
-	defer store.mu.Unlock()
-	if state, exists := store.states[id]; !exists || (state.Interaction != nil) != interaction {
+	if state, exists := store.stateLocked(id); !exists || (state.Interaction != nil) != interaction {
+		store.mu.Unlock()
 		return false
 	}
-	store.persistLocked(store.removeLocked(id), []string{id})
+	commit := store.persistLocked(store.removeLocked(id), []string{id})
 	store.order = slices.DeleteFunc(store.order, func(value string) bool { return value == id })
+	store.mu.Unlock()
+	commit()
 	return true
 }
 
@@ -412,7 +461,8 @@ func (store *responseStateStore) ResolveItems(input splitInput) (splitInput, err
 			continue
 		}
 		found := false
-		for _, state := range store.states {
+		for stateID := range store.parents {
+			state, _ := store.stateLocked(stateID)
 			if state.Record == nil {
 				continue
 			}
@@ -2273,7 +2323,7 @@ func (writer *responsesStreamWriter) failed(err error) error {
 
 // responsesError 返回 Responses 失败对象的 error 字段：code 取 Responses 错误枚举，可重试时消息末尾写明重试时间
 func responsesError(err error) map[string]any {
-	return map[string]any{"code": responsesErrorCode(err), "message": retryMessage(publicErrorMessage(statusFromError(err), err.Error()), retryAfterSeconds(err))}
+	return map[string]any{"code": responsesErrorCode(err), "message": retryMessage(publicErrorMessage(statusFromError(err), publicReason(err)), retryAfterSeconds(err))}
 }
 
 // responsesErrorCode 返回 Responses 错误对象的官方枚举 code

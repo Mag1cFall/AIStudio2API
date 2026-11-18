@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
+import { formatLogNumber } from '@/logs'
 import { usePaged } from '@/paging'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
 import DetailDialog from './DetailDialog.vue'
@@ -119,12 +120,38 @@ const requestStateKeys: Record<RequestState, TranslationKey> = {
   failed: 'state.failed',
 }
 
-const activeCount = computed(
-  () =>
-    visibleRequests.value.filter(
-      (request) => request.state === 'queued' || request.state === 'running',
-    ).length,
+// active 判断请求是否仍在排队或运行
+function active(request: RequestSummary): boolean {
+  return request.state === 'queued' || request.state === 'running'
+}
+
+const activeCount = computed(() => visibleRequests.value.filter(active).length)
+
+// now 是有活动请求时每秒更新的当前时间
+const now = ref(Date.now())
+let ticker: number | undefined
+watch(
+  () => props.requests.some(active),
+  (live) => {
+    window.clearInterval(ticker)
+    ticker = live ? window.setInterval(() => (now.value = Date.now()), 1000) : undefined
+    now.value = Date.now()
+  },
+  { immediate: true },
 )
+onUnmounted(() => window.clearInterval(ticker))
+
+// phaseText 返回活动请求所处阶段与该阶段的计时
+function phaseText(request: RequestSummary): string {
+  const [key, since] =
+    request.state === 'queued'
+      ? (['requests.phaseQueued', request.started_at] as const)
+      : request.last_data_at === undefined
+        ? (['requests.phaseSent', request.sent_at ?? request.started_at] as const)
+        : (['requests.phaseStreaming', request.last_data_at] as const)
+  const seconds = Math.max(0, Math.floor((now.value - Date.parse(since)) / 1000))
+  return t(key).replace('{duration}', formatLogNumber(seconds, locale.value, 0, 'second'))
+}
 
 const accountLabels = computed(
   () => new Map(props.accounts.map((account) => [account.id, account.label])),
@@ -349,7 +376,7 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
                 <span v-tooltip.overflow="request.model" class="truncate text-sm text-gray-200">{{
                   request.model
                 }}</span>
-                <span class="shrink-0 text-xs text-gray-500">{{
+                <span v-if="!active(request)" class="shrink-0 text-xs text-gray-500">{{
                   t(requestStateKeys[request.state])
                 }}</span>
               </div>
@@ -365,12 +392,15 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
                   · {{ t(channelLabelKey(request.channel)) }}</template
                 ></span
               >
+              <span v-if="active(request)" class="block text-xs break-words text-gray-400">{{
+                phaseText(request)
+              }}</span>
             </div>
             <time class="shrink-0 font-mono text-xs whitespace-nowrap text-gray-500">{{
               formatTime(request.started_at)
             }}</time>
             <button
-              v-if="request.state === 'queued' || request.state === 'running'"
+              v-if="active(request)"
               class="shrink-0 rounded border border-red-900/50 bg-red-900/30 px-3 py-1 text-xs text-red-400 transition hover:bg-red-900/50 disabled:opacity-50"
               type="button"
               :disabled="cancelling !== ''"

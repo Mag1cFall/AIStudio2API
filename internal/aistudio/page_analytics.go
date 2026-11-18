@@ -99,12 +99,14 @@ type tagScript struct {
 	EEA bool `json:"eea,omitempty"`
 	// HostSuffix 是 GTM 改写 google.com 主机名时插入的后缀
 	HostSuffix string `json:"hostSuffix,omitempty"`
-	// Version 是 gtag 目标的容器版本
+	// Version 是 gtag 目标或 GTM 容器的版本
 	Version string `json:"version,omitempty"`
-	// Experiments 是 gtag 固定上报的实验 ID
+	// Experiments 是标签脚本固定上报的实验 ID
 	Experiments []string `json:"experiments,omitempty"`
-	// Studies 是 gtag 初始化时按概率分组的实验研究
+	// Studies 是标签脚本初始化时按概率分组的实验研究
 	Studies []tagStudy `json:"studies,omitempty"`
+	// Diagnostics 是标签脚本每次载入进入 tag 诊断抽样的概率（blob 42）
+	Diagnostics float64 `json:"diagnostics,omitempty"`
 }
 
 // tagBlob 读出 GTM 容器脚本或 gtag 脚本的 blob 与其中的构建号（14）
@@ -124,9 +126,9 @@ func tagBlob(body []byte) (map[string]json.RawMessage, string, error) {
 	return blob, build, nil
 }
 
-// parseContainerScript 读出 GTM 容器脚本的构建号、容器内部编号、改写主机名的后缀与 blob 22 中按访问地区判定的欧洲经济区标记
+// parseContainerScript 读出 GTM 容器脚本的构建号、容器内部编号、改写主机名的后缀、blob 22 中按访问地区判定的欧洲经济区标记，以及与 gtag 脚本同样位置的容器版本、实验、实验研究与诊断抽样概率
 func parseContainerScript(body []byte) (tagScript, error) {
-	blob, build, err := tagBlob(body)
+	blob, _, err := tagBlob(body)
 	if err != nil {
 		return tagScript{}, err
 	}
@@ -134,7 +136,11 @@ func parseContainerScript(body []byte) (tagScript, error) {
 	if match == nil {
 		return tagScript{}, errors.New("GTM 容器脚本缺少内部编号")
 	}
-	script := tagScript{Build: build, Container: string(match[1])}
+	script, err := parseGtagScript(body)
+	if err != nil {
+		return tagScript{}, err
+	}
+	script.Container = string(match[1])
 	if host := tagHostPattern.FindSubmatch(body); host != nil {
 		script.HostSuffix = string(host[1])
 	}
@@ -165,6 +171,7 @@ func parseGtagScript(body []byte) (tagScript, error) {
 	var extra []string
 	_ = json.Unmarshal(blob["67"], &extra)
 	script.Experiments = append(script.Experiments, extra...)
+	_ = json.Unmarshal(blob["42"], &script.Diagnostics)
 	var focused []int
 	if match := tagFocusedPattern.FindSubmatch(body); match != nil {
 		for _, item := range strings.Split(strings.TrimSuffix(string(match[1]), ":"), ":") {
@@ -236,6 +243,13 @@ type analyticsTarget struct {
 	last      time.Time
 	queue     []analyticsEvent
 	timer     *time.Timer
+	// script 是目标的 gtag 脚本地址，cached 表示它取自页面缓存
+	script string
+	cached bool
+	// diagnostics 表示这次载入进入 tag 诊断抽样，pid 是诊断上报的页面编号，hits 与 fallbacks 是已发出的命中与改发到 www.google.com 的命中数
+	diagnostics     bool
+	pid             int64
+	hits, fallbacks int
 }
 
 // pageAnalytics 是官网页面上 GTM 与 gtag 的 GA4 上报
@@ -290,6 +304,7 @@ func (analytics *pageAnalytics) load(ctx context.Context) {
 	analytics.mu.Unlock()
 	pauseContext(ctx, 100*time.Millisecond+rand.N(100*time.Millisecond))
 	runtime := analytics.runtime
+	containerCached := runtime.pageCache.notes(analytics.container).Tags != nil
 	if runtime.fetchCached(ctx, analytics.container, subresourceHeaders(analytics.container, "*/*", "script", "")) != nil {
 		return
 	}
@@ -301,17 +316,27 @@ func (analytics *pageAnalytics) load(ctx context.Context) {
 	}
 	analytics.mu.Unlock()
 	pauseContext(ctx, 70*time.Millisecond+rand.N(150*time.Millisecond))
+	if tagSample() >= 1-container.Diagnostics {
+		analytics.mu.Lock()
+		experiments := analytics.experiments(container)
+		analytics.mu.Unlock()
+		go func() {
+			pauseContext(ctx, 40*time.Millisecond+rand.N(10*time.Millisecond))
+			analytics.diagnoseContainer(container, experiments, containerCached)
+		}()
+	}
 	var group sync.WaitGroup
 	for index, tag := range analyticsTags {
 		group.Go(func() {
 			pauseContext(ctx, time.Duration(index)*(10*time.Millisecond+rand.N(20*time.Millisecond)))
 			target := tagManagerOrigin + "/gtag/js?id=" + tag.id + "&cx=c&gtm=4e" + container.Build
+			cached := runtime.pageCache.notes(target).Tags != nil
 			if runtime.fetchCached(ctx, target, subresourceHeaders(target, "*/*", "script", "")) != nil {
 				return
 			}
 			script := runtime.pageCache.notes(target).Tags
 			pauseContext(ctx, 90*time.Millisecond+rand.N(60*time.Millisecond))
-			analytics.ready(tag, container, script)
+			analytics.ready(tag, container, script, target, cached)
 		})
 	}
 	group.Wait()
@@ -330,14 +355,38 @@ func (analytics *pageAnalytics) finishLoad() {
 	analytics.waiting = nil
 }
 
-// ready 在 gtag 目标载入后按页面共用与本目标的实验分组定下命中参数并发出 page_view
-func (analytics *pageAnalytics) ready(tag analyticsTag, container *tagScript, script *tagScript) {
+// ready 在 gtag 目标载入后按页面共用与本目标的实验分组定下命中参数，按诊断抽样在 gtm.init 时发出 tag 诊断，再发出 page_view；address 是 gtag 脚本地址，cached 表示它取自页面缓存
+func (analytics *pageAnalytics) ready(tag analyticsTag, container *tagScript, script *tagScript, address string, cached bool) {
 	analytics.mu.Lock()
 	defer analytics.mu.Unlock()
 	if analytics.closed {
 		return
 	}
 	now := time.Now()
+	target := &analyticsTarget{
+		tag: tag, build: container.Build, version: script.Version, container: container.Container, tagExp: analytics.experiments(script),
+		rcb: rand.IntN(20), ecid: rand.Uint32() >> 1, sid: now.Unix(), last: now, script: address, cached: cached,
+	}
+	if tagSample() >= 1-script.Diagnostics {
+		target.diagnostics, target.pid = true, rand.Int64N(1<<31)
+		analytics.diagnose(target, false)
+	}
+	first := analytics.cid == ""
+	if first {
+		analytics.cid = strconv.FormatUint(uint64(rand.Uint32()>>1), 10) + "." + strconv.FormatInt(now.Unix(), 10)
+	}
+	analytics.targets = append(analytics.targets, target)
+	view := analyticsEvent{name: "page_view", gtm: true, at: now, params: []string{"_fv=1"}}
+	if first {
+		view.params = append(view.params, "_nsi=1")
+	}
+	view.params = append(view.params, "_ss=1")
+	view.params = append(view.params, analytics.eventParams(tag, "ep.percent_scrolled=0", "ep.scroll_increment=0", "ep.scroll_instance=1")...)
+	analytics.send(target, []analyticsEvent{view}, now)
+}
+
+// experiments 按页面上各标签共用的分组与本脚本自己的分组返回标签脚本上报的实验 ID，按数值排序以 ~ 连接；调用方持有 mu
+func (analytics *pageAnalytics) experiments(script *tagScript) string {
 	experiments := slices.Clone(script.Experiments)
 	for _, study := range script.Studies {
 		id, ok := analytics.shared[study.ID]
@@ -356,22 +405,7 @@ func (analytics *pageAnalytics) ready(tag analyticsTag, container *tagScript, sc
 		y, _ := strconv.ParseInt(b, 10, 64)
 		return int(x - y)
 	})
-	target := &analyticsTarget{
-		tag: tag, build: container.Build, version: script.Version, container: container.Container, tagExp: strings.Join(slices.Compact(experiments), "~"),
-		rcb: rand.IntN(20), ecid: rand.Uint32() >> 1, sid: now.Unix(), last: now,
-	}
-	first := analytics.cid == ""
-	if first {
-		analytics.cid = strconv.FormatUint(uint64(rand.Uint32()>>1), 10) + "." + strconv.FormatInt(now.Unix(), 10)
-	}
-	analytics.targets = append(analytics.targets, target)
-	view := analyticsEvent{name: "page_view", gtm: true, at: now, params: []string{"_fv=1"}}
-	if first {
-		view.params = append(view.params, "_nsi=1")
-	}
-	view.params = append(view.params, "_ss=1")
-	view.params = append(view.params, analytics.eventParams(tag, "ep.percent_scrolled=0", "ep.scroll_increment=0", "ep.scroll_instance=1")...)
-	analytics.send(target, []analyticsEvent{view}, now)
+	return strings.Join(slices.Compact(experiments), "~")
 }
 
 // eventParams 返回 GTM 为事件附加的页面参数，后接 extra；调用方持有 mu
@@ -433,6 +467,20 @@ func (analytics *pageAnalytics) clicked(at time.Time) {
 				events = []analyticsEvent{prompt, click}
 			}
 			analytics.fire(target, events)
+		}
+	})
+}
+
+// newChat 记录在 at 点 New chat 并确认后页面切换到新对话页：GTM 的页面浏览触发器为各目标记下 page_view，攒入这一批
+func (analytics *pageAnalytics) newChat(at time.Time) {
+	if analytics == nil {
+		return
+	}
+	analytics.mu.Lock()
+	defer analytics.mu.Unlock()
+	analytics.record(func() {
+		for _, target := range analytics.targets {
+			analytics.queue(target, analyticsEvent{name: "page_view", gtm: true, at: at, params: analytics.eventParams(target.tag, "ep.percent_scrolled=0", "ep.scroll_increment=25", "ep.scroll_instance=1")})
 		}
 	})
 }
@@ -499,14 +547,18 @@ func (analytics *pageAnalytics) close() {
 			engagement.location = analytics.rewritten
 		}
 		analytics.send(target, []analyticsEvent{engagement}, now)
+		if target.diagnostics && target.hits > 0 {
+			analytics.diagnose(target, true)
+		}
 	}
 	analytics.closed = true
 	analytics.waiting = nil
 }
 
-// send 以 fetch keepalive 发出目标的一次命中：一个事件时参数全在地址中，多个事件时共用参数在地址中、各事件参数按行放在正文；调用方持有 mu
+// send 以 fetch keepalive 发出目标的一次命中：一个事件时参数全在地址中，多个事件时共用参数在地址中、各事件参数按行放在正文；请求没有得到响应时像 gtag 一样以不带凭据的请求改发到 www.google.com；调用方持有 mu
 func (analytics *pageAnalytics) send(target *analyticsTarget, events []analyticsEvent, now time.Time) {
 	target.seq++
+	target.hits++
 	tag := target.tag
 	fired := slices.ContainsFunc(events, func(event analyticsEvent) bool { return event.gtm })
 	query := []string{"v=2", "tid=" + tag.id, "gtm=" + target.gtmParam(fired), "_p=" + strconv.FormatInt(analytics.start.UnixMilli(), 10), analyticsConsent}
@@ -591,12 +643,120 @@ func (analytics *pageAnalytics) send(target *analyticsTarget, events []analytics
 	headers.Set("Pragma", "no-cache")
 	headers.Set("Cache-Control", "no-cache")
 	address := analyticsCollectURL + "?" + strings.Join(query, "&")
+	fallback := analyticsFallbackURL + "?" + strings.Join(fallbackQuery(query, tag.flags), "&")
 	runtime := analytics.runtime
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		runtime.drain(runtime.do(ctx, http.MethodPost, address, body, headers))
+		response, err := runtime.do(ctx, http.MethodPost, address, body, headers)
+		if err == nil {
+			runtime.drain(response, nil)
+			return
+		}
+		analytics.mu.Lock()
+		target.fallbacks++
+		analytics.mu.Unlock()
+		headers.Set("Sec-Fetch-Site", fetchSite(analyticsFallbackURL))
+		anonymous, cancel := context.WithTimeout(withRequestClass(context.Background(), requestClass{anonymous: true}), time.Minute)
+		defer cancel()
+		runtime.drain(runtime.do(anonymous, http.MethodPost, fallback, body, headers))
 	}()
+}
+
+// tagSample 是 GTM 容器与 gtag 每次载入为 tag 诊断抽样取的随机数
+var tagSample = rand.Float64
+
+// analyticsDiagnosticsURL 是 GTM 容器与 gtag 发出 tag 诊断的地址
+const analyticsDiagnosticsURL = tagManagerOrigin + "/td"
+
+// diagnose 像抽中诊断的 gtag 一样发出 tag 诊断：gtm.init 时以图片请求发 seq=1，页面 pagehide 时（fin）以 fetch keepalive 发 seq=2 并带各端点的命中计数 mde，再以脚本地址加 is_td=1 请求一次；调用方持有 mu
+func (analytics *pageAnalytics) diagnose(target *analyticsTarget, fin bool) {
+	tag := target.tag
+	params := []string{"v=3", "t=t", "pid=" + strconv.FormatInt(target.pid, 10), "gtm=" + target.gtmParam(false), "seq=1", "exp=" + target.tagExp,
+		"dl=" + uriComponent(strings.TrimPrefix(analytics.location, "https://")), "tdp=" + tag.id + ";" + target.version + ";1;6;0"}
+	headers := http.Header{}
+	method := http.MethodGet
+	if fin {
+		params[4] = "seq=2"
+		mde := "mde=" + tag.id + ";16_" + strconv.Itoa(target.hits) + ";61_1"
+		if target.fallbacks > 0 {
+			mde += ";67_" + strconv.Itoa(target.fallbacks)
+		}
+		params = append(params, mde, "fin=1", "z=0")
+		method = http.MethodPost
+		headers.Set("Accept", "*/*")
+		headers.Set("Referer", aiStudioOrigin+"/")
+		headers.Set("Origin", aiStudioOrigin)
+		headers.Set("Sec-Fetch-Dest", "empty")
+		headers.Set("Sec-Fetch-Mode", "no-cors")
+		headers.Set("Sec-Fetch-Site", fetchSite(analyticsDiagnosticsURL))
+		headers.Set("Priority", "u=4")
+		headers.Set("Pragma", "no-cache")
+		headers.Set("Cache-Control", "no-cache")
+	} else {
+		slo := "slo=4"
+		if target.cached {
+			slo = "slo=1"
+		}
+		params = append(params, "frm=0", "rtg="+target.container, slo, "hlo=1", "lst=2", "pcid="+target.container, "bt=0", "ct=3", "jsp=16~17", "z=0")
+		headers = diagnosticsImageHeaders()
+	}
+	query := "&" + strings.Join(params, "&")
+	address := analyticsDiagnosticsURL + "?id=" + tag.id + query
+	runtime := analytics.runtime
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		runtime.drain(runtime.do(ctx, method, address, nil, headers))
+		if fin {
+			script := target.script + "&is_td=1" + query
+			runtime.drain(runtime.do(ctx, http.MethodGet, script, nil, subresourceHeaders(script, "*/*", "script", "")))
+		}
+	}()
+}
+
+// diagnoseContainer 像抽中诊断的 GTM 容器一样在 gtm.init 时以图片请求发出 seq=1 的 tag 诊断：experiments 是容器上报的实验，cached 表示容器脚本取自页面缓存
+func (analytics *pageAnalytics) diagnoseContainer(container *tagScript, experiments string, cached bool) {
+	address, err := url.Parse(analytics.container)
+	if err != nil {
+		return
+	}
+	id := address.Query().Get("id")
+	slo := "slo=4"
+	if cached {
+		slo = "slo=1"
+	}
+	params := []string{"id=" + id, "v=3", "t=t", "pid=" + strconv.FormatInt(rand.Int64N(1<<31), 10), "gtm=45He" + container.Build + "v9" + container.Version + "za200zd9" + container.Container + "xf1", "seq=1", "exp=" + experiments,
+		"dl=" + uriComponent(strings.TrimPrefix(analytics.location, "https://")), "tdp=" + id + ";" + container.Version + ";0;0;0", "frm=0", "rtg=" + container.Container, slo, "hlo=1", "lst=2", "bt=0", "ct=3", "jsp=16~17", "z=0"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	analytics.runtime.drain(analytics.runtime.do(ctx, http.MethodGet, analyticsDiagnosticsURL+"?"+strings.Join(params, "&"), nil, diagnosticsImageHeaders()))
+}
+
+// diagnosticsImageHeaders 返回 Firefox 以图片请求发出 tag 诊断的请求头
+func diagnosticsImageHeaders() http.Header {
+	headers := http.Header{}
+	headers.Set("Accept", "image/avif,image/jxl,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5")
+	headers.Set("Referer", aiStudioOrigin+"/")
+	headers.Set("Sec-Fetch-Storage-Access", "none")
+	headers.Set("Sec-Fetch-Dest", "image")
+	headers.Set("Sec-Fetch-Mode", "no-cors")
+	headers.Set("Sec-Fetch-Site", fetchSite(analyticsDiagnosticsURL))
+	headers.Set("Priority", "u=5, i")
+	return headers
+}
+
+// analyticsFallbackURL 是 gtag 发往 www.google-analytics.com 的命中请求失败后改发的地址
+const analyticsFallbackURL = "https://www.google.com/g/collect"
+
+// fallbackQuery 返回 gtag 改发命中时的参数：gaf 置上最低位，原来没有 gaf 时以 gaf=1 接在末尾
+func fallbackQuery(query []string, flags int) []string {
+	query = slices.Clone(query)
+	if index := slices.Index(query, "gaf="+strconv.Itoa(flags)); flags > 0 && index >= 0 {
+		query[index] = "gaf=" + strconv.Itoa(flags|1)
+		return query
+	}
+	return append(query, "gaf=1")
 }
 
 // gtmParam 返回命中的 gtm 参数：GTM 构建号与目标版本，fired 为命中含 GTM 标签触发的事件时带上 GTM 容器编号，再接容器标记

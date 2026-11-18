@@ -52,7 +52,9 @@ func (d *FrameDecoder) Decode(raw json.RawMessage) ([]Event, error) {
 func (d *FrameDecoder) decodeValid(raw json.RawMessage) ([]Event, error) {
 	d.frames++
 	d.lastFrame = raw
-	frame, err := splitArray(raw, "$[0][]", raw)
+	var frameFields, candidateFields [10]json.RawMessage
+	var candidateList [1]json.RawMessage
+	frame, err := splitArray(raw, "$[0][]", raw, frameFields[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -87,14 +89,14 @@ func (d *FrameDecoder) decodeValid(raw json.RawMessage) ([]Event, error) {
 			return nil, nil
 		}
 	}
-	candidates, err := splitArray(frame[0], "$[0][][0]", raw)
+	candidates, err := splitArray(frame[0], "$[0][][0]", raw, candidateList[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	if len(candidates) != 1 {
 		return nil, d.protocolError("$[0][][0]", "候选数量不是现场确认的 1", raw)
 	}
-	candidate, err := splitArray(candidates[0], "$[0][][0][0]", raw)
+	candidate, err := splitArray(candidates[0], "$[0][][0][0]", raw, candidateFields[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -225,7 +227,7 @@ func excludeSystemRole(usage Usage, tokens int64) Usage {
 }
 
 func decodePromptFeedback(raw json.RawMessage, evidence json.RawMessage) (*PromptFeedbackError, error) {
-	feedback, err := splitArray(raw, "$[0][][1]", evidence)
+	feedback, err := splitArray(raw, "$[0][][1]", evidence, nil)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -325,7 +327,9 @@ func (d *FrameDecoder) End() error {
 
 // decodeContent 把候选内容各 part 的事件追加到 events
 func (d *FrameDecoder) decodeContent(events []Event, raw json.RawMessage, evidence json.RawMessage) ([]Event, error) {
-	content, err := splitArray(raw, "$[0][][0][0][0]", evidence)
+	var contentFields [2]json.RawMessage
+	var partList [4]json.RawMessage
+	content, err := splitArray(raw, "$[0][][0][0][0]", evidence, contentFields[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -343,7 +347,7 @@ func (d *FrameDecoder) decodeContent(events []Event, raw json.RawMessage, eviden
 	if isJSONNull(partsRaw) {
 		return events, nil
 	}
-	parts, err := splitArray(partsRaw, "$[0][][0][0][0][0]", evidence)
+	parts, err := splitArray(partsRaw, "$[0][][0][0][0][0]", evidence, partList[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -357,7 +361,8 @@ func (d *FrameDecoder) decodeContent(events []Event, raw json.RawMessage, eviden
 
 // decodePart 把一个 part 的事件追加到 events
 func (d *FrameDecoder) decodePart(events []Event, raw json.RawMessage, path string, evidence json.RawMessage) ([]Event, error) {
-	part, err := splitArray(raw, path, evidence)
+	var fields [16]json.RawMessage
+	part, err := splitArray(raw, path, evidence, fields[:0])
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -467,7 +472,7 @@ func (d *FrameDecoder) decodePart(events []Event, raw json.RawMessage, path stri
 }
 
 func decodeCitations(raw json.RawMessage, evidence json.RawMessage) ([]Citation, error) {
-	metadata, err := splitArray(raw, "$[0][][0][0][6]", evidence)
+	metadata, err := splitArray(raw, "$[0][][0][0][6]", evidence, nil)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
@@ -475,14 +480,14 @@ func decodeCitations(raw json.RawMessage, evidence json.RawMessage) ([]Citation,
 	if isJSONNull(entriesRaw) {
 		return nil, nil
 	}
-	entries, err := splitArray(entriesRaw, "$[0][][0][0][6][0]", evidence)
+	entries, err := splitArray(entriesRaw, "$[0][][0][0][6][0]", evidence, nil)
 	if err != nil {
 		return nil, withMethod(err, "GenerateContent")
 	}
 	citations := make([]Citation, 0, len(entries))
 	for index, entryRaw := range entries {
 		path := fmt.Sprintf("$[0][][0][0][6][0][%d]", index)
-		entry, err := splitArray(entryRaw, path, evidence)
+		entry, err := splitArray(entryRaw, path, evidence, nil)
 		if err != nil {
 			return nil, withMethod(err, "GenerateContent")
 		}
@@ -503,7 +508,8 @@ func decodeCitations(raw json.RawMessage, evidence json.RawMessage) ([]Citation,
 }
 
 func decodeUsage(raw json.RawMessage, evidence json.RawMessage) (Usage, bool, error) {
-	values, err := splitArray(raw, "$[0][][2]", evidence)
+	var fields [10]json.RawMessage
+	values, err := splitArray(raw, "$[0][][2]", evidence, fields[:0])
 	if err != nil {
 		return Usage{}, false, withMethod(err, "GenerateContent")
 	}
@@ -586,13 +592,15 @@ func decodeModalityTokenCounts(raw json.RawMessage, path string, evidence json.R
 	if isJSONNull(raw) {
 		return nil, nil
 	}
-	items, err := splitArray(raw, path, evidence)
+	var list [4]json.RawMessage
+	items, err := splitArray(raw, path, evidence, list[:0])
 	if err != nil {
 		return nil, err
 	}
 	counts := make([]ModalityTokenCount, 0, len(items))
 	for index, item := range items {
-		fields, err := splitArray(item, "", evidence)
+		var pair [2]json.RawMessage
+		fields, err := splitArray(item, "", evidence, pair[:0])
 		if err != nil {
 			return nil, evidenceAt(err, fmt.Sprintf("%s[%d]", path, index))
 		}

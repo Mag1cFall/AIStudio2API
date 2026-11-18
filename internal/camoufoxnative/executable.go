@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,38 +32,7 @@ func FindExecutable(ctx context.Context, proxy string) (string, error) {
 			return "", fmt.Errorf("自动准备 Camoufox: %w", err)
 		}
 	}
-	if err := trimBundledFonts(path); err != nil {
-		slog.Warn("清理 Camoufox 内置字体失败", "error", err)
-	}
 	return path, nil
-}
-
-// bundledTwemojiFont 是 Firefox 自带的彩色 emoji 字体
-const bundledTwemojiFont = "TwemojiMozilla.ttf"
-
-// trimBundledFonts 在 Windows 上删除 Camoufox fonts 目录中 Twemoji 以外的内置字体，Firefox 启动时把这些字体全部注册到 DirectWrite
-func trimBundledFonts(executable string) error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	directory := filepath.Join(filepath.Dir(executable), "fonts")
-	entries, err := os.ReadDir(directory)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var failures []error
-	for _, entry := range entries {
-		if entry.Name() == bundledTwemojiFont {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
 }
 
 // Installed 表示本机已有与 camoufoxRelease 同版本的 Camoufox，不触发下载

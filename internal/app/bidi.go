@@ -51,7 +51,8 @@ func (service *trackedService) OpenBidi(ctx context.Context, request aistudio.Bi
 		)
 		return recovered, recoveryErr
 	}
-	requestCtx = aistudio.ContextWithAccountSelectionObserver(requestCtx, func(account *aistudio.Account) {
+	requestCtx = aistudio.ContextWithAccountSelectionObserver(requestCtx, func(lease *aistudio.AccountLease) {
+		account := lease.Account()
 		workerGenerations[account.ID] = service.workers.WorkerGeneration(account.ID)
 		api.SetAccessLogTarget(ctx, request.Model, account.Config.Label)
 	})

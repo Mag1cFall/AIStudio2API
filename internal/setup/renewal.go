@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -124,29 +125,32 @@ type renewalState struct {
 	mintedAt time.Time
 }
 
-// renewRemote 在前台为配对账户立即签发并推送新会话，之后在会话签发 100 分钟后推送下一个，失败 5 分钟后重试，远程实例已删除账户或续签凭据失效时停止该账户并删除其记录，直到 ctx 结束或没有账户
-func renewRemote(ctx context.Context, client *http.Client, renewals []remoteRenewal, output io.Writer) error {
+// renewRemote 在前台为每个配对账户各自立即以 push 签发并推送新会话，之后在会话签发 100 分钟后推送下一个，推送失败时从这次推送结束起 5 分钟后重试，远程实例已删除账户或续签凭据失效时停止该账户并删除其记录；各账户互不等待，直到 ctx 结束或没有账户
+func renewRemote(ctx context.Context, renewals []remoteRenewal, output io.Writer, push func(context.Context, *renewalState) error) error {
 	fmt.Fprintln(output, "保持此窗口打开，本机按时为这些账户续签")
-	states := make([]renewalState, len(renewals))
-	for index, renewal := range renewals {
-		states[index].renewal = renewal
-	}
-	for len(states) > 0 {
-		next := time.Time{}
-		kept := states[:0]
-		for _, state := range states {
-			now := time.Now()
-			if !now.Before(state.due) {
-				err := pushRenewal(ctx, client, &state)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	// records 串行化各账户的输出与续签记录写入
+	var records sync.Mutex
+	var group sync.WaitGroup
+	for _, renewal := range renewals {
+		group.Go(func() {
+			state := renewalState{renewal: renewal}
+			for {
+				err := push(ctx, &state)
+				now := time.Now()
+				records.Lock()
 				switch {
 				case ctx.Err() != nil:
-					return nil
+					records.Unlock()
+					return
 				case errors.Is(err, errRenewalRevoked):
 					fmt.Fprintf(output, "%s 账户 %s 停止续签: %v\n", now.Format(time.DateTime), state.renewal.Account, err)
 					if err := removeRenewal(state.renewal); err != nil {
-						return err
+						cancel(err)
 					}
-					continue
+					records.Unlock()
+					return
 				case err != nil:
 					state.due = now.Add(renewalRetry)
 					fmt.Fprintf(output, "%s 账户 %s 续签失败，5 分钟后重试: %v\n", now.Format(time.DateTime), state.renewal.Account, err)
@@ -154,20 +158,25 @@ func renewRemote(ctx context.Context, client *http.Client, renewals []remoteRene
 					state.due = state.mintedAt.Add(renewalInterval)
 					fmt.Fprintf(output, "%s 账户 %s 已续签，下次续签 %s\n", now.Format(time.DateTime), state.renewal.Account, state.due.Format(time.TimeOnly))
 				}
+				records.Unlock()
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Until(state.due)):
+				}
 			}
-			kept = append(kept, state)
-			if next.IsZero() || state.due.Before(next) {
-				next = state.due
-			}
-		}
-		states = kept
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(time.Until(next)):
-		}
+		})
+	}
+	group.Wait()
+	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
+		return err
 	}
 	return nil
+}
+
+// pushTo 返回经 client 推送续签的函数
+func pushTo(client *http.Client) func(context.Context, *renewalState) error {
+	return func(ctx context.Context, state *renewalState) error { return pushRenewal(ctx, client, state) }
 }
 
 // pushRenewal 凭续签凭据把会话 Cookie 写入远程实例；state 中没有签发不到 renewalInterval、尚未推送成功的会话时先以本机 Chrome 来源与 OAuth 材料签发新会话
