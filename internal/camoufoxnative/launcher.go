@@ -32,14 +32,73 @@ const browserProcessCloseTimeout = 5 * time.Second
 type browserProcess struct {
 	command *exec.Cmd
 	done    chan struct{}
-	waitErr error
 	profile string
 	lock    *flock.Flock
 	tree    browserTree
 	// cacheDirectory 为账户缓存目录，浏览器退出后把 profile 的启动缓存存回这里
 	cacheDirectory string
-	mu             sync.Mutex
-	closed         bool
+	// output 是 Camoufox 最近输出的行，drained 在标准输出与标准错误都读完后关闭
+	output  *browserOutput
+	drained chan struct{}
+	mu      sync.Mutex
+	// stopping 表示服务已开始关闭这个进程
+	stopping bool
+	closed   bool
+}
+
+// browserExitWait 是 BiDi 连接断开后等待 Camoufox 进程退出的最长时间
+const browserExitWait = 5 * time.Second
+
+// browserExited 是 Camoufox 进程退出导致 BiDi 连接断开的错误：code 为退出码，clean 表示退出码为 0，output 为 Camoufox 最近的输出
+type browserExited struct {
+	code   string
+	clean  bool
+	output string
+}
+
+func (exited *browserExited) Error() string {
+	if exited.output == "" {
+		return fmt.Sprintf("Camoufox 已退出，退出码 %s", exited.code)
+	}
+	return fmt.Sprintf("Camoufox 已退出，退出码 %s，最近的输出：\n%s", exited.code, exited.output)
+}
+
+// exitFailure 在 Camoufox 进程 wait 内自行退出时，在同一时限内等输出读完，返回写明退出码与最近输出的 browserExited；进程仍在运行、由服务关闭或 process 为 nil 时返回 nil
+func (process *browserProcess) exitFailure(wait time.Duration) error {
+	if process == nil {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-process.done:
+	case <-timer.C:
+		return nil
+	}
+	process.mu.Lock()
+	stopping := process.stopping
+	process.mu.Unlock()
+	state := process.command.ProcessState
+	if stopping || state == nil {
+		return nil
+	}
+	select {
+	case <-process.drained:
+	case <-timer.C:
+	}
+	return &browserExited{code: exitCodeText(state), clean: state.ExitCode() == 0, output: process.output.text()}
+}
+
+// exitCodeText 返回进程的退出码：Windows 上为十六进制，其他系统为十进制，进程被信号结束时为信号名
+func exitCodeText(state *os.ProcessState) string {
+	code := state.ExitCode()
+	switch {
+	case code < 0:
+		return state.String()
+	case runtime.GOOS == "windows":
+		return fmt.Sprintf("0x%08X", uint32(code))
+	}
+	return strconv.Itoa(code)
 }
 
 // launchBrowser 启动 Camoufox 并返回原生 WebDriver BiDi 端点
@@ -166,17 +225,26 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	command := exec.Command(options.ExecutablePath, arguments...)
 	command.Env = environment
 	configureBrowserProcess(command, options.Headless)
-	stdout, err := command.StdoutPipe()
+	// stdout 与 stderr 读到 Camoufox 及继承它们的子进程都退出为止，Wait 不关闭读端，退出前最后的输出不丢失
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
-	stderr, err := command.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		_ = removeProfile(profile, profileLock)
 		return nil, "", err
 	}
-	if err := command.Start(); err != nil {
+	command.Stdout, command.Stderr = stdoutWriter, stderrWriter
+	err = command.Start()
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
 		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("启动 Camoufox: %w", err)
 	}
@@ -184,6 +252,8 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
+		_ = stdout.Close()
+		_ = stderr.Close()
 		_ = removeProfile(profile, profileLock)
 		return nil, "", fmt.Errorf("绑定 Camoufox 进程: %w", err)
 	}
@@ -194,26 +264,33 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		lock:           profileLock,
 		tree:           tree,
 		cacheDirectory: options.CacheDirectory,
+		output:         &browserOutput{},
+		drained:        make(chan struct{}),
 	}
 	launched = true
 	go func() {
-		waitErr := command.Wait()
+		_ = command.Wait()
 		if relay != nil {
 			_ = relay.Close()
 		}
 		if display {
 			releaseVirtualDisplay()
 		}
-		process.mu.Lock()
-		process.waitErr = waitErr
-		process.mu.Unlock()
 		close(process.done)
 	}()
 	endpoints := make(chan string, 2)
-	output := &browserOutput{}
+	output := process.output
 	var scanned sync.WaitGroup
-	scanned.Go(func() { scanBrowserOutput(stdout, options.Log, endpoints, output) })
-	scanned.Go(func() { scanBrowserOutput(stderr, options.Log, endpoints, output) })
+	for _, reader := range []*os.File{stdout, stderr} {
+		scanned.Go(func() {
+			scanBrowserOutput(reader, options.Log, endpoints, output)
+			_ = reader.Close()
+		})
+	}
+	go func() {
+		scanned.Wait()
+		close(process.drained)
+	}()
 	timeout := options.ReadyTimeout
 	if timeout <= 0 {
 		timeout = 45 * time.Second
@@ -224,15 +301,13 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 	case endpoint := <-endpoints:
 		return process, normalizeBiDiEndpoint(endpoint), nil
 	case <-process.done:
-		process.mu.Lock()
-		err := process.waitErr
-		process.mu.Unlock()
 		_ = process.Close()
-		scanned.Wait()
-		if err == nil {
-			err = errors.New("Camoufox 在报告 BiDi 端点前退出")
+		select {
+		case <-process.drained:
+		case <-timer.C:
+		case <-ctx.Done():
 		}
-		return nil, "", output.exitError(err, options.ExecutablePath)
+		return nil, "", output.exitError(exitCodeText(process.command.ProcessState), options.ExecutablePath)
 	case <-timer.C:
 		_ = process.Close()
 		return nil, "", fmt.Errorf("等待 Camoufox BiDi 端点超时: %s", timeout)
@@ -252,6 +327,7 @@ func (process *browserProcess) Close() error {
 		process.mu.Unlock()
 		return nil
 	}
+	process.stopping = true
 	process.mu.Unlock()
 	closeCtx, cancel := context.WithTimeout(context.Background(), browserProcessCloseTimeout)
 	defer cancel()
@@ -275,7 +351,7 @@ func (process *browserProcess) Close() error {
 	return nil
 }
 
-// browserOutput 保存 Camoufox 或 Xvfb 最近输出的行，进程在报告 BiDi 端点或显示号前退出时写入错误
+// browserOutput 保存 Camoufox 或 Xvfb 最近输出的行，进程在报告 BiDi 端点或显示号前退出、运行中退出时写入错误
 type browserOutput struct {
 	mu    sync.Mutex
 	lines []string
@@ -284,10 +360,24 @@ type browserOutput struct {
 // browserOutputLines 是退出错误中保留的输出行数
 const browserOutputLines = 20
 
+// pageScriptMessage 匹配网页脚本的控制台消息行，它们不进入退出错误
+var pageScriptMessage = regexp.MustCompile(`^JavaScript (warning|error): https?://`)
+
 // missingLibrary 匹配动态链接器报告缺少的共享库名
 var missingLibrary = regexp.MustCompile(`([^\s:]+\.so[^\s:]*): cannot open shared object file`)
 
+// text 返回最近输出的各行
+func (output *browserOutput) text() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return strings.Join(output.lines, "\n")
+}
+
+// add 记下一行输出，网页脚本的控制台消息不记
 func (output *browserOutput) add(line string) {
+	if pageScriptMessage.MatchString(line) {
+		return
+	}
 	output.mu.Lock()
 	defer output.mu.Unlock()
 	output.lines = append(output.lines, line)
@@ -296,17 +386,15 @@ func (output *browserOutput) add(line string) {
 	}
 }
 
-// exitError 在 err 后附上 Camoufox 最近的输出；输出报告缺少系统运行库时只写明 executable 缺少的全部系统库，Debian 系发行版另附安装命令
-func (output *browserOutput) exitError(err error, executable string) error {
-	output.mu.Lock()
-	defer output.mu.Unlock()
-	if len(output.lines) == 0 {
-		return err
+// exitError 返回 Camoufox 在报告 BiDi 端点前以退出码 code 退出的错误并附上最近的输出；输出报告缺少系统运行库时只写明 executable 缺少的全部系统库，Debian 系发行版另附安装命令
+func (output *browserOutput) exitError(code string, executable string) error {
+	text := output.text()
+	if text == "" {
+		return fmt.Errorf("Camoufox 在报告 BiDi 端点前退出，退出码 %s", code)
 	}
-	text := strings.Join(output.lines, "\n")
 	reported := missingLibrary.FindAllStringSubmatch(text, -1)
 	if len(reported) == 0 {
-		return fmt.Errorf("Camoufox 在报告 BiDi 端点前退出（%w）：%s", err, text)
+		return fmt.Errorf("Camoufox 在报告 BiDi 端点前退出，退出码 %s，最近的输出：\n%s", code, text)
 	}
 	libraries := missingLibraries(executable)
 	for _, match := range reported {
@@ -315,9 +403,9 @@ func (output *browserOutput) exitError(err error, executable string) error {
 		}
 	}
 	if command := runtimeInstallCommand(); command != "" {
-		return fmt.Errorf("Camoufox 缺少系统运行库 %s，执行 %s 后重试（%w）", strings.Join(libraries, ", "), command, err)
+		return fmt.Errorf("Camoufox 缺少系统运行库 %s，执行 %s 后重试（退出码 %s）", strings.Join(libraries, ", "), command, code)
 	}
-	return fmt.Errorf("Camoufox 缺少系统运行库 %s，安装提供这些库的系统包后重试（%w）", strings.Join(libraries, ", "), err)
+	return fmt.Errorf("Camoufox 缺少系统运行库 %s，安装提供这些库的系统包后重试（退出码 %s）", strings.Join(libraries, ", "), code)
 }
 
 // lddMissing 匹配 ldd 报告找不到的共享库名
@@ -587,8 +675,6 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"media.sanity-test.disabled": true,
 		// browser.opaqueResponseBlocking.javascriptValidator 为 false 时不单独启动校验不透明响应的 JS 校验 utility 进程
 		"browser.opaqueResponseBlocking.javascriptValidator": false,
-		// camoufox.virtual_input_time 为 true 时页面从第一次读取时间起按各自的页面时钟看到时间，input.performActions 的停顿与指针移动不实际等待，只推进页面时钟
-		"camoufox.virtual_input_time": true,
 	}
 	proxyValue = strings.TrimSpace(proxyValue)
 	if proxyValue == "" {

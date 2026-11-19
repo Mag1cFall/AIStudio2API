@@ -366,7 +366,6 @@ func (state *agent) loaded() {
 		return
 	}
 	for _, done := range state.settled {
-		state.loop.starting = false
 		close(done)
 	}
 	state.settled = nil

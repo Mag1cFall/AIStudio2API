@@ -258,7 +258,7 @@ func (worker *Worker) Generate(ctx context.Context, turn GenerateTurn) (*Protect
 	return response, err
 }
 
-// generate 在已取得的标签页上运行一轮对话并等待响应头；从界面输入开始到页面发出请求为止页面时钟不追平真实时间，页面取 proof 时页面时间按真实速率走
+// generate 在已取得的标签页上运行一轮对话并等待响应头
 func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateTurn, contents []json.RawMessage, prompt string) (*ProtectedResponse, error) {
 	client := worker.client
 	requestID := rand.Text()
@@ -275,7 +275,6 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateT
 	worker.lockInput()
 	locked := time.Now()
 	prooftime.Observe(ctx, prooftime.Lock, locked.Sub(inputStarted))
-	client.holdPageClock(tab.contextID)
 	turned := make(chan error, 1)
 	go func() {
 		defer worker.inputMu.Unlock()
@@ -283,7 +282,6 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateT
 	}()
 	sent, err := worker.waitSent(ctx, tab, requestID, channel, turned)
 	unboost()
-	go worker.releasePageClock(tab.contextID)
 	if err != nil {
 		prooftime.Observe(ctx, prooftime.Interaction, time.Since(locked))
 		return nil, worker.abandonProtectedRequest(ctx, tab.contextID, tab.page, requestID, err)
@@ -393,13 +391,6 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 		move = 0
 	}
 	return worker.click(input, tab.contextID, runButtonSelector, "", "官网 Run 按钮", move)
-}
-
-// releasePageClock 在没有前台操作等待时结束标签页页面时钟的暂停追平
-func (worker *Worker) releasePageClock(contextID string) {
-	worker.lockInputIdle()
-	defer worker.inputMu.Unlock()
-	worker.client.releasePageClock(contextID)
 }
 
 // arm 在标签页上为下一次 Run 或提交安装 generateArmFunction 一次性钩子

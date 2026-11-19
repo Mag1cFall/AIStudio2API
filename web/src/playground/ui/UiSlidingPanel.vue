@@ -93,6 +93,7 @@ function focusInitial(event: Event): void {
   background-color: var(--color-v3-surface);
   color: var(--color-v3-text);
   box-shadow: var(--shadow-v3-md);
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
   animation: ms-panel-enter 300ms ease-in-out;
 }
 

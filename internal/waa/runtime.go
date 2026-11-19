@@ -27,7 +27,7 @@ type Options struct {
 	Pointer *Pointer
 	// Rhythm 是账户点击与粘贴的事件节奏
 	Rhythm rhythm.Rhythm
-	// Start 是页面 load 事件结束的时刻，VM 的第一个任务从它开始；晚于现在时 VM 时钟领先真实时间，超出 leadLimit 的部分真实等待
+	// Start 是页面 load 事件结束的时刻，晚于现在时真实等到这一时刻再新建 VM
 	Start time.Time
 }
 
@@ -390,14 +390,16 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 	if err != nil {
 		return nil, err
 	}
-	if lead := time.Until(options.Start); lead > time.Duration(leadLimit*float64(time.Millisecond)) {
+	if wait := time.Until(options.Start); wait > 0 {
+		timer := time.NewTimer(wait)
 		select {
-		case <-time.After(lead - time.Duration(leadLimit*float64(time.Millisecond))):
+		case <-timer.C:
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, ctx.Err()
 		}
 	}
-	loop := newEventLoop(mozjs.Now() + milliseconds(max(0, time.Until(options.Start))))
+	loop := newEventLoop()
 	pointer := options.Pointer
 	if pointer == nil {
 		pointer = NewPointer()
@@ -655,7 +657,6 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	done := make(chan struct{})
 	if !runtime.loop.post(func() {
 		if runtime.agent.pending == 0 {
-			runtime.loop.starting = false
 			close(done)
 			return
 		}
@@ -681,7 +682,7 @@ type action struct {
 	pace  float64
 }
 
-// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完，各步不真实等待，空闲不够时 VM 时钟暂时领先；一步出错或 ctx 结束后其余各步不再执行
+// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完：VM 空闲足够长时各步不真实等待，不够时只等差额；一步出错或 ctx 结束后其余各步不再执行
 func (runtime *Runtime) perform(ctx context.Context, actions []action) error {
 	return runtime.performFitted(ctx, func(float64) []action { return actions })
 }
@@ -775,7 +776,7 @@ type SettingStep struct {
 	Clicked func(at time.Time)
 }
 
-// RunProofAfter 按顺序做 groups 中能排进此前空闲区间的各组运行设置操作（放不下的一组与其后各组这次不做，步数计入 prooftime 的跳过步数），newChat 不为 nil 且连同这些操作与粘贴都放得下时先像官网用户一样点顶栏 New chat 并在确认框点 Discard and continue（放不下时这次不做，两次点击计入跳过步数，点击确认后以 click 事件发生时的 VM 墙上时刻调用 newChat），做过运行设置时隔 back 以可信指针点击提示词输入框，再粘贴文本并点击 Run 后为 SHA-256 digest 生成 fresh proof；各步按 VM 时钟排进此前的空闲区间，不真实等待
+// RunProofAfter 按顺序做 groups 中能排进此前空闲区间的各组运行设置操作（放不下的一组与其后各组这次不做，步数计入 prooftime 的跳过步数），newChat 不为 nil 且连同这些操作与粘贴都放得下时先像官网用户一样点顶栏 New chat 并在确认框点 Discard and continue（放不下时这次不做，两次点击计入跳过步数，点击确认后以 click 事件发生时的 VM 墙上时刻调用 newChat），做过运行设置时隔 back 以可信指针点击提示词输入框，再粘贴文本并点击 Run 后为 SHA-256 digest 生成 fresh proof；各步按 VM 时钟排进此前的空闲区间，空闲不够时只真实等待差额
 func (runtime *Runtime) RunProofAfter(ctx context.Context, digest string, prompt string, newChat func(at time.Time), groups [][]SettingStep, back time.Duration) (string, error) {
 	return runtime.proof(ctx, digest, prompt, func(text string, idle float64) []action {
 		click := runtime.click("prompt")
@@ -959,7 +960,7 @@ func (runtime *Runtime) RerunProof(ctx context.Context, digest string, rounds in
 	return runtime.proof(ctx, digest, "", nil, runtime.rerunClick())
 }
 
-// proof 以 write 返回的各步写入提示词，按 click 以可信鼠标点击，再按账户节奏在 click 后为 digest 生成 proof，各步按 VM 时钟排进此前的空闲区间，空闲不够时不等真实时间、VM 时钟暂时领先，领先会超过 leadLimit 时这次只取 proof、不做界面操作，返回前清空输入框；write 在事件循环中调用，idle 为点击与取 proof 之外剩余的空闲 VM 时钟毫秒数
+// proof 以 write 返回的各步写入提示词，按 click 以可信鼠标点击，再按账户节奏在 click 后为 digest 生成 proof，各步按 VM 时钟排进此前的空闲区间，空闲不够时只真实等待差额，返回前清空输入框；write 在事件循环中调用，idle 为点击与取 proof 之外剩余的空闲 VM 时钟毫秒数
 func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string, write func(text string, idle float64) []action, click []pointerStep) (string, error) {
 	lockStarted := time.Now()
 	runtime.operationMu.Lock()
@@ -988,17 +989,10 @@ func (runtime *Runtime) proof(ctx context.Context, digest string, prompt string,
 		return runtime.startSnapshot(mozjs.String(digest), func(value string, err error) { result <- snapshotResult{value, err} })
 	}})
 	if err := runtime.performFitted(ctx, func(idle float64) []action {
-		actions := tail
-		if write != nil {
-			actions = append(write(prompt, idle-actionsNeed(tail)), tail...)
+		if write == nil {
+			return tail
 		}
-		if actionsNeed(actions)-idle <= leadLimit {
-			return actions
-		}
-		prooftime.Skip(ctx, len(actions)-1)
-		snapshot := actions[len(actions)-1]
-		snapshot.after = 0
-		return []action{snapshot}
+		return append(write(prompt, idle-actionsNeed(tail)), tail...)
 	}); err != nil {
 		return "", err
 	}

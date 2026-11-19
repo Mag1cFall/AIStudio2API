@@ -95,7 +95,7 @@ func (session *loginSession) navigate(ctx context.Context, pageURL string) error
 		"context": session.contextID,
 		"url":     pageURL,
 		"wait":    "interactive",
-	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
+	}); err != nil && !commandErrorContains(err, "NS_ERROR_ABORT") {
 		return fmt.Errorf("导航 %s: %w", pageURL, err)
 	}
 	return nil

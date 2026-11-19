@@ -5,10 +5,16 @@ import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 const { locale } = useI18n()
 // dateFormat、monthFormat 与 numberFormat 是各模型行共用的发布日期、知识截止月份与 token 数格式
 const dateFormat = computed(
-  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', day: 'numeric' }),
+  () =>
+    new Intl.DateTimeFormat(locale.value, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }),
 )
 const monthFormat = computed(
-  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short' }),
+  () => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', timeZone: 'UTC' }),
 )
 const numberFormat = computed(() => new Intl.NumberFormat(locale.value))
 

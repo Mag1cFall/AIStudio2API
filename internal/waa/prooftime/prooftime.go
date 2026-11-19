@@ -22,7 +22,7 @@ const (
 	phases
 )
 
-// Timing 累计一次请求各次取 proof 的分项耗时与空闲不够而没有做的运行设置步数
+// Timing 累计一次请求各次取 proof 的分项耗时与空闲不够而没有做的界面操作步数
 type Timing struct {
 	phases  [phases]atomic.Int64
 	skipped atomic.Int64
@@ -33,7 +33,7 @@ func (timing *Timing) Duration(phase Phase) time.Duration {
 	return time.Duration(timing.phases[phase].Load())
 }
 
-// Skipped 返回空闲不够而没有做的运行设置步数，以及没有空闲且 VM 时钟领先到上界时没有做的界面操作步数
+// Skipped 返回空闲不够而没有做的界面操作步数
 func (timing *Timing) Skipped() int {
 	return int(timing.skipped.Load())
 }

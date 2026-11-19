@@ -96,27 +96,36 @@ const proofFunction = `async (page, prompt, digest) => {
 // clipboardWriteFunction 把参数文本写入剪贴板，调用时带用户激活
 const clipboardWriteFunction = `text => navigator.clipboard.writeText(text)`
 
-// pause 返回让页面看到的两组事件相隔 interval 毫秒的 BiDi 停顿动作
-func pause(interval float64) map[string]any {
-	return map[string]any{"type": "pause", "duration": int(math.Round(interval))}
+// 官网现场中 Firefox 在 BiDi 停顿之外为各组事件多用的毫秒数：Control 到 V、V 按住、V 抬起到 Control 抬起、指针移到按下与按下到抬起
+const (
+	controlOverhead = 4.5
+	keyOverhead     = 9.5
+	releaseOverhead = 3
+	pressOverhead   = 8
+	holdOverhead    = 8
+)
+
+// pause 返回让 Firefox 派发的两组事件相隔 interval 毫秒的 BiDi 停顿动作
+func pause(interval, overhead float64) map[string]any {
+	return map[string]any{"type": "pause", "duration": int(math.Round(max(interval-overhead, 0)))}
 }
 
 // pasteKeyActions 返回按账户节奏在官网输入框按 Ctrl+V 的可信键盘动作：按下 Control 与 V，按住后依次抬起；shift 为真时在 Control 之后按下 Shift、抬起 V 之后抬起 Shift，以 Ctrl+Shift+V 粘贴
 func pasteKeyActions(account rhythm.Rhythm, shift bool) []map[string]any {
 	if !shift {
 		return []map[string]any{
-			{"type": "keyDown", "value": "\uE009"}, pause(account.Control),
-			{"type": "keyDown", "value": "v"}, pause(account.Key),
-			{"type": "keyUp", "value": "v"}, pause(account.Release),
+			{"type": "keyDown", "value": "\uE009"}, pause(account.Control, controlOverhead),
+			{"type": "keyDown", "value": "v"}, pause(account.Key, keyOverhead),
+			{"type": "keyUp", "value": "v"}, pause(account.Release, releaseOverhead),
 			{"type": "keyUp", "value": "\uE009"},
 		}
 	}
 	return []map[string]any{
-		{"type": "keyDown", "value": "\uE009"}, pause(account.Control),
-		{"type": "keyDown", "value": "\uE008"}, pause(account.Control),
-		{"type": "keyDown", "value": "v"}, pause(account.Key),
-		{"type": "keyUp", "value": "v"}, pause(account.Release),
-		{"type": "keyUp", "value": "\uE008"}, pause(account.Release),
+		{"type": "keyDown", "value": "\uE009"}, pause(account.Control, controlOverhead),
+		{"type": "keyDown", "value": "\uE008"}, pause(account.Control, controlOverhead),
+		{"type": "keyDown", "value": "v"}, pause(account.Key, keyOverhead),
+		{"type": "keyUp", "value": "v"}, pause(account.Release, releaseOverhead),
+		{"type": "keyUp", "value": "\uE008"}, pause(account.Release, releaseOverhead),
 		{"type": "keyUp", "value": "\uE009"},
 	}
 }
@@ -141,7 +150,11 @@ func pasteText(ctx context.Context, client *bidiClient, contextID, text string, 
 
 // pressKeys 以可信键盘依次执行 actions
 func pressKeys(ctx context.Context, client *bidiClient, contextID string, actions []map[string]any) error {
-	return client.performInput(ctx, contextID, map[string]any{"type": "key", "id": "keyboard", "actions": actions})
+	_, err := client.command(ctx, "input.performActions", map[string]any{
+		"context": contextID,
+		"actions": []map[string]any{{"type": "key", "id": "keyboard", "actions": actions}},
+	})
+	return err
 }
 
 // pastePrompt 把按 LF 规范化的提示词写入剪贴板，再以可信键盘按 Ctrl+V 粘贴到有焦点的官网提示框，提示词含页面会取出为附件的链接时按 Ctrl+Shift+V，页面值与之不同时返回错误
@@ -301,9 +314,13 @@ func (client *bidiClient) pointer(ctx context.Context, contextID, selector, patt
 	}
 	actions := []map[string]any{{"type": "pointerMove", "x": target.X, "y": target.Y, "duration": move}}
 	if click {
-		actions = append(actions, pause(client.rhythm.Press), map[string]any{"type": "pointerDown", "button": 0}, pause(client.rhythm.Hold), map[string]any{"type": "pointerUp", "button": 0})
+		actions = append(actions, pause(client.rhythm.Press, pressOverhead), map[string]any{"type": "pointerDown", "button": 0}, pause(client.rhythm.Hold, holdOverhead), map[string]any{"type": "pointerUp", "button": 0})
 	}
-	return true, client.performInput(ctx, contextID, map[string]any{"type": "pointer", "id": "mouse", "parameters": map[string]any{"pointerType": "mouse"}, "actions": actions})
+	_, err = client.command(ctx, "input.performActions", map[string]any{
+		"context": contextID,
+		"actions": []map[string]any{{"type": "pointer", "id": "mouse", "parameters": map[string]any{"pointerType": "mouse"}, "actions": actions}},
+	})
+	return true, err
 }
 
 // dismissOverlaysExpression 关闭官网已知且可交互的启动弹层：G1 欢迎对话框、引导浏览浮层与 Cookie 提示条，提示条有拒绝按钮时拒绝，只有确认按钮时确认

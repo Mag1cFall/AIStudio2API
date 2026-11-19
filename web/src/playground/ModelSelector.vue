@@ -8,8 +8,10 @@ import UiDialog from '@/playground/ui/UiDialog.vue'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import UiSlidingPanel from '@/playground/ui/UiSlidingPanel.vue'
 import ModelRow from './ModelRow.vue'
+import PeriodicTable from './PeriodicTable.vue'
 import { categoryLabels, categoryOrder, hasCategory, hasCode, type ModelCategory } from './catalog'
 import { pageKindOf, pageRoutes, unsavedKinds } from './media/kinds'
+import { releasedElements } from './periodic'
 import {
   agentModelID,
   modelChoice,
@@ -28,6 +30,21 @@ const pending = ref<Model>()
 
 const search = ref('')
 const category = ref<ModelCategory>(10)
+// periodic 表示面板显示 Gemini 4 元素周期表，每次打开面板时回到模型列表
+const periodic = ref(false)
+// hasPeriodic 表示实时目录中有 Gemini 4 的元素代号模型
+const hasPeriodic = computed(() => releasedElements(models.value).size > 0)
+// showPeriodic 表示面板正在显示周期表
+const showPeriodic = computed(() => periodic.value && hasPeriodic.value)
+watch(open, (value) => {
+  if (value) periodic.value = false
+})
+
+// pickCategory 切换到模型列表的一个分类
+function pickCategory(item: ModelCategory): void {
+  category.value = item
+  periodic.value = false
+}
 
 // categories 是至少有一个模型的分类，Starred 在有收藏时显示
 const categories = computed(() =>
@@ -101,7 +118,11 @@ function choose(model: Model): void {
 </script>
 
 <template>
-  <UiSlidingPanel v-model:open="open" :title="t('pg.modelSelection')">
+  <UiSlidingPanel
+    v-model:open="open"
+    :title="t('pg.modelSelection')"
+    :width="showPeriodic ? '900px' : '550px'"
+  >
     <div class="model-carousel">
       <div class="input-wrapper">
         <UiIcon name="search" :size="20" class="prefix-icon" />
@@ -127,31 +148,56 @@ function choose(model: Model): void {
       </div>
       <div class="model-categories-container">
         <button
+          v-if="hasPeriodic"
+          v-tooltip.below="t('pg.periodicLabel')"
+          type="button"
+          ms-button
+          class="ms-button-filter-chip periodic-tab"
+          :class="{ 'ms-button-active ms-button-active-border': showPeriodic }"
+          :aria-selected="showPeriodic"
+          :aria-label="t('pg.periodicLabel')"
+          @click="periodic = true"
+        >
+          <span class="periodic-glyph" aria-hidden="true">4</span>
+        </button>
+        <button
           v-for="item in categories"
           :key="item"
           type="button"
           ms-button
           class="ms-button-filter-chip"
-          :class="{ 'ms-button-active ms-button-active-border': category === item && !search }"
-          :aria-selected="category === item"
-          @click="category = item"
+          :class="{
+            'ms-button-active ms-button-active-border':
+              category === item && !search && !showPeriodic,
+          }"
+          :aria-selected="category === item && !showPeriodic"
+          @click="pickCategory(item)"
         >
           {{ categoryLabel(item) }}
         </button>
       </div>
       <div class="model-options-container">
-        <p v-if="visibleModels.length === 0" class="empty">{{ t('pg.noModels') }}</p>
-        <template v-for="(model, index) in shownModels" :key="model.id">
-          <div v-if="index > 0" class="row-divider"></div>
-          <ModelRow
-            :model="model"
-            :category="category"
-            :selected="model.id === choice!.selected"
-            :agent-model="agentModelName(model)"
-            :agent-locked="choice!.setAgentModel === undefined"
-            @choose="choose(model)"
-            @agent="openAgentModel(model, choice!)"
-          />
+        <PeriodicTable
+          v-if="showPeriodic"
+          :models="models"
+          :selected="choice!.selected"
+          :query="search"
+          @choose="choose"
+        />
+        <template v-else>
+          <p v-if="visibleModels.length === 0" class="empty">{{ t('pg.noModels') }}</p>
+          <template v-for="(model, index) in shownModels" :key="model.id">
+            <div v-if="index > 0" class="row-divider"></div>
+            <ModelRow
+              :model="model"
+              :category="category"
+              :selected="model.id === choice!.selected"
+              :agent-model="agentModelName(model)"
+              :agent-locked="choice!.setAgentModel === undefined"
+              @choose="choose(model)"
+              @agent="openAgentModel(model, choice!)"
+            />
+          </template>
         </template>
       </div>
     </div>
@@ -223,6 +269,26 @@ function choose(model: Model): void {
   border-color: var(--color-v3-text-link);
   background-image: none;
   padding-left: 12px;
+}
+
+.periodic-tab[ms-button] {
+  min-width: 36px;
+  padding: 0 10px;
+}
+
+.periodic-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: var(--color-v3-text);
+  color: var(--color-v3-surface-container);
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .model-options-container {
