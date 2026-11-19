@@ -65,6 +65,20 @@ type MakerSuiteHTTPTransport struct {
 type accountLeaseContextKey struct{}
 type accountSelectionObserverContextKey struct{}
 
+// residentCatalogContextKey 是 context 中要求账户目录读取在常驻 Worker 的页面上进行的键
+type residentCatalogContextKey struct{}
+
+// ContextWithResidentCatalog 返回要求账户目录读取在常驻 Worker 的页面上进行、不临时载入页面的 ctx
+func ContextWithResidentCatalog(ctx context.Context) context.Context {
+	return context.WithValue(ctx, residentCatalogContextKey{}, true)
+}
+
+// ResidentCatalog 判断 ctx 是否要求账户目录读取在常驻 Worker 的页面上进行
+func ResidentCatalog(ctx context.Context) bool {
+	resident, _ := ctx.Value(residentCatalogContextKey{}).(bool)
+	return resident
+}
+
 // ContextWithAccountLease 将上层已持有的租约传给协议传输
 func ContextWithAccountLease(ctx context.Context, lease *AccountLease) context.Context {
 	return context.WithValue(ctx, accountLeaseContextKey{}, lease)

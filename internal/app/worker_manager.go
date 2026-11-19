@@ -864,7 +864,7 @@ func (manager *accountWorkerManager) Worker(ctx context.Context, accountID strin
 	return manager.ensureWorker(ctx, accountID, modelID, true, false)
 }
 
-// PageCatalog 返回账户页面载入时目录 RPC 的响应：有常驻 Worker 的账户取其当前页面，reload 时先在 Worker 中重新载入页面，登录态失效时续签后重新启动 Worker；其余账户在常驻名额未满时启动常驻 Worker，否则临时载入页面，取得响应后关闭
+// PageCatalog 返回账户页面载入时目录 RPC 的响应：有常驻 Worker 的账户取其当前页面，reload 时先在 Worker 中重新载入页面，登录态失效时续签后重新启动 Worker；其余账户在常驻名额未满时启动常驻 Worker，否则临时载入页面，取得响应后关闭；ctx 要求 ResidentCatalog 时常驻名额已满也启动常驻 Worker
 func (manager *accountWorkerManager) PageCatalog(ctx context.Context, accountID string, reload bool) (camoufoxnative.PageCatalog, error) {
 	if err := manager.waitOpening(ctx, accountID); err != nil {
 		return camoufoxnative.PageCatalog{}, err
@@ -885,7 +885,7 @@ func (manager *accountWorkerManager) PageCatalog(ctx context.Context, accountID 
 			return camoufoxnative.PageCatalog{}, &accountWorkerInitError{err: err, authHandled: true}
 		}
 	}
-	preparer, err := manager.ensureWorker(ctx, accountID, "", true, true)
+	preparer, err := manager.ensureWorker(ctx, accountID, "", true, !aistudio.ResidentCatalog(ctx))
 	if err == nil {
 		return preparer.(*accountWorkerPreparer).worker.PageCatalog(), nil
 	}

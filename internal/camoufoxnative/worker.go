@@ -219,7 +219,7 @@ func (worker *Worker) launch(ctx context.Context, options Options, fingerprint m
 		return fmt.Errorf("连接 Camoufox BiDi: %w", err)
 	}
 	worker.connection = connection
-	worker.client = newBiDiClient(connection)
+	worker.client = newBiDiClient(connection, process)
 	worker.client.rhythm = worker.rhythm
 	sessionCtx, cancel := context.WithTimeout(ctx, browserStartupTimeout)
 	defer cancel()
@@ -557,13 +557,11 @@ func (worker *Worker) ProtocolHeaders(ctx context.Context) (http.Header, error) 
 	return worker.state.Headers.Clone(), nil
 }
 
-// Proof 在一次页面调用中写入官网 prompt 并为 SHA-256 digest 生成 fresh WAA proof，页面值未同步时最多重试 5 秒；期间页面时钟不追平真实时间
+// Proof 在一次页面调用中写入官网 prompt 并为 SHA-256 digest 生成 fresh WAA proof，页面值未同步时最多重试 5 秒
 func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (string, error) {
 	lockStarted := time.Now()
 	worker.lockInput()
 	defer worker.inputMu.Unlock()
-	worker.client.holdPageClock(worker.contextID)
-	defer worker.client.releasePageClock(worker.contextID)
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	locked := time.Now()
@@ -864,11 +862,11 @@ func (worker *Worker) openPage(ctx context.Context, options Options, contextID s
 		"context": contextID,
 		"url":     target,
 		"wait":    "interactive",
-	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
+	}); err != nil && !commandErrorContains(err, "NS_ERROR_ABORT") {
 		if cause := context.Cause(pageCtx); errors.Is(cause, ErrProxyUnreachable) {
 			return loadedPage{}, cause
 		}
-		if strings.Contains(err.Error(), "NS_ERROR_PROXY_") {
+		if commandErrorContains(err, "NS_ERROR_PROXY_") {
 			return loadedPage{}, fmt.Errorf("%w: 导航 AI Studio: %v", ErrProxyUnreachable, err)
 		}
 		return loadedPage{}, fmt.Errorf("导航 AI Studio: %w", err)
