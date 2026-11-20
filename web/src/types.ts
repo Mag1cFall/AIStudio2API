@@ -34,8 +34,19 @@ export interface Account {
   message: string
   // pairing_renewed_at 是远程添加的账户最近一次由原电脑续签的时间
   pairing_renewed_at?: string
-  // transition 是账户启停的后台收尾阶段：draining 等待在途请求结束并关闭 Worker，syncing 同步模型目录
-  transition?: 'draining' | 'syncing'
+  // transition 是账户正在进行的后台操作：draining 停用收尾并关闭 Worker，syncing 同步模型目录，saving 保存配置，refreshing 立即刷新
+  transition?: 'draining' | 'syncing' | 'saving' | 'refreshing'
+  // transition_step 是后台操作当前的步骤：等该账户的在途请求结束、读取权益与模型目录、核对验证状态
+  transition_step?: 'waiting' | 'catalog' | 'verifying'
+  // transition_index 与 transition_total 是立即刷新当前步骤的序号与步数
+  transition_index?: number
+  transition_total?: number
+  // transition_since 是进入当前后台阶段的时刻
+  transition_since?: string
+  // active_requests 是账户上进行中的请求数
+  active_requests: number
+  // catalog_error 是已有模型目录的账户最近一次目录同步失败的原因
+  catalog_error?: string
 }
 
 // AccountExit 是一个账户出口代理的公网 IP 与按 IP 定位的国家，proxy 为空时是直连，查询失败时 error 为原因
@@ -115,6 +126,8 @@ export interface AccountTaskItem {
   state: 'pending' | 'running' | 'done' | 'failed'
   code?: string
   error?: string
+  // step 是处理中的账户当前的步骤：等待登录、读取浏览器里的登录状态、检查 AI Studio 访问、保存账户
+  step?: 'login' | 'reading' | 'checking' | 'saving'
 }
 
 // AccountTask 是在服务端运行的添加或重新登录账户任务，view 为显示登录画面的登录窗口 ID
@@ -155,7 +168,7 @@ interface AccountCounters {
   auth_required: number
 }
 
-// PreparationStatus 是 Camoufox 或出口 IP 库是否就绪、是否正在下载或解压、正在进行的下载与最近一次准备失败的原因
+// PreparationStatus 是 Camoufox 是否就绪、是否正在下载或解压、正在进行的下载与最近一次准备失败的原因
 export interface PreparationStatus {
   ready: boolean
   preparing: boolean
@@ -171,10 +184,24 @@ export interface ServiceStatus {
   active_requests: number
   accounts: AccountCounters
   camoufox: PreparationStatus
-  // geoip 是识别出口所在地的 IP 库的准备状态，结构与 camoufox 相同
-  geoip: PreparationStatus
   chrome_import: boolean
+  // transition 是生成服务正在进行的启动或停止步骤
+  transition?: ServiceTransition
+  // transition_since 是进入当前步骤的时刻
+  transition_since?: string
+  // time 是生成这份状态的服务端时刻
+  time: string
 }
+
+// ServiceTransition 是生成服务的启动步骤（检测代理池、等待 Camoufox 下载、等待首个账户读取模型目录、开始预热）与停止步骤（停止在途请求、等待模型目录同步停止、关闭 Worker）
+export type ServiceTransition =
+  | 'probe_proxies'
+  | 'wait_camoufox'
+  | 'wait_catalog'
+  | 'start_prewarm'
+  | 'cancel_requests'
+  | 'wait_catalog_stop'
+  | 'close_workers'
 
 export interface UpdateStatus {
   current: string
@@ -189,6 +216,8 @@ export interface UpdateStatus {
   error?: string
   updating: boolean
   progress?: UpdateProgress
+  // log_dir 是服务日志目录的绝对路径
+  log_dir: string
 }
 
 // UpdateProgress 是进行中的在线更新的阶段与发行包的已下载和总字节数，总字节数未知时为 0

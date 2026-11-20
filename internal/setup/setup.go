@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -100,9 +101,7 @@ func Run(ctx context.Context, cfg config.Config, args []string) error {
 			return err
 		}
 		target = localTarget{store: aistudio.NewAccountStore(cfg.AuthStates)}
-		if options.locale, options.timezone, err = exitEnvironment(ctx, options); err != nil {
-			return err
-		}
+		options.locale, options.timezone = exitEnvironment(ctx, options)
 	}
 	importErr := importAccounts(ctx, cfg, target, options, input)
 	if remote == nil || len(remote.renewals) == 0 {
@@ -333,10 +332,7 @@ func importIsolatedLogin(
 		return fmt.Errorf("创建隔离登录目录: %w", err)
 	}
 	defer os.RemoveAll(loginDirectory)
-	locale, timezone, err := exitEnvironment(ctx, options)
-	if err != nil {
-		return err
-	}
+	locale, timezone := exitEnvironment(ctx, options)
 	result, err := driver.Login(ctx, aistudio.IsolatedLoginRequest{
 		Directory: loginDirectory, Proxy: options.egress,
 		Locale: locale, Timezone: timezone,
@@ -574,16 +570,15 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	return options, nil
 }
 
-// exitEnvironment 返回账户语言与时区：未用 --locale、--timezone 指定的项按 setup 出口的地理位置填写
-func exitEnvironment(ctx context.Context, options setupOptions) (string, string, error) {
+// exitEnvironment 返回账户语言与时区：未用 --locale、--timezone 指定的项按 setup 出口的地理位置填写，查询出口失败时取本机的语言与时区并写入 WARN 日志
+func exitEnvironment(ctx context.Context, options setupOptions) (string, string) {
 	exit, err := egress.Environment(ctx, options.egress, options.locale, options.timezone)
 	if err != nil {
-		return "", "", fmt.Errorf("按出口位置确定账户语言与时区: %w", err)
-	}
-	if exit.IP != "" {
+		slog.Warn("查询出口位置失败，账户语言与时区使用本机设置", "locale", exit.Locale, "timezone", exit.Timezone, "error", err)
+	} else if exit.IP != "" {
 		fmt.Fprintf(i18n.Stdout, "按出口 %s（%s）设置账户语言 %s、时区 %s\n", exit.IP, exit.Country, exit.Locale, exit.Timezone)
 	}
-	return exit.Locale, exit.Timezone, nil
+	return exit.Locale, exit.Timezone
 }
 
 func setupAccountConfig(label string, options setupOptions) aistudio.AccountConfig {

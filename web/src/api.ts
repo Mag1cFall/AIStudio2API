@@ -190,10 +190,16 @@ export const api = {
     requestCommand(`/api/accounts/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   activePairing: () => requestJSON<PairingToken>('/api/pairing'),
   createPairing: () => requestJSON<PairingToken>('/api/pairing', { method: 'POST' }),
-  updateAccount: (id: string, draft: AccountDraft) =>
+  updateAccount: (id: string, draft: AccountDraft, signal?: AbortSignal) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: jsonBody(draft),
+      signal: signal ?? null,
+    }),
+  setAccountState: (id: string, state: 'ready' | 'disabled') =>
+    requestCommand(`/api/accounts/${encodeURIComponent(id)}/state`, {
+      method: 'PUT',
+      body: jsonBody({ state }),
     }),
   deleteAccount: (id: string, keepalive: boolean) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive }),
@@ -207,6 +213,10 @@ export const api = {
   loginViewURL: (view: string) =>
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/login-view/${encodeURIComponent(view)}`,
   paths: (path: string) => requestJSON<PathListing>(`/api/paths?path=${encodeURIComponent(path)}`),
+  pickPath: (path: string) =>
+    requestJSON<{ path: string }>(`/api/paths/pick?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+    }),
   refreshAccount: (id: string) =>
     requestJSON<AccountRefresh>(`/api/accounts/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',

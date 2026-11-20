@@ -15,6 +15,8 @@ import (
 
 // Config 定义公开 API 服务配置
 type Config struct {
+	// PickPath 以系统对话框选择账户目录并返回选中的路径，用户取消时返回空串；只在桌面版提供
+	PickPath         func(start string) (string, error)
 	APIKey           string
 	Admin            AdminService
 	AdminAuthEnabled bool

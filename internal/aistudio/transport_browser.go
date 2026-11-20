@@ -64,7 +64,8 @@ var firefoxHTTP2SettingsOrder = []http2.SettingID{
 // firefoxPseudoHeaderOrder 是 Firefox 请求 HEADERS 帧的伪头顺序
 var firefoxPseudoHeaderOrder = []string{":method", ":path", ":authority", ":scheme"}
 
-// firefoxStreamPriority 返回 Firefox 为请求的 HEADERS 帧写入的优先级：页面文档、用户输入中发起的请求（Priority: u=0）与预载脚本（Priority: u=1）为 41，字体为 31，Priority: u=4, i 的图片为 12，其余页面图片为 11，Priority: u=6 的预取与 sendBeacon 为 1，其余（包括 Priority: u=6 的网站图标）为 21，线上权重各加 1
+// firefoxStreamPriority 返回 Firefox 按请求目的地与 Priority 头为 HEADERS 帧写入的优先级
+// Weight 为帧中的权重字节，实际权重为它加 1
 func firefoxStreamPriority(header fhttp.Header) http2.PriorityParam {
 	priority, destination := header.Get("Priority"), header.Get("Sec-Fetch-Dest")
 	switch {
@@ -879,7 +880,8 @@ func orderedHeaderNames(headers fhttp.Header, host string) []string {
 	return append(slices.Clone(order), remaining...)
 }
 
-// firefox158ClientHello 返回以 tls-client 的 Firefox 148 档案为底、密码套件与支持的组按 Firefox 158 排列、GREASE ECH 按 NSS 选套件与长度的 ClientHello；psk 为 pre_shared_key 扩展长度，非 0 时与 Firefox 的 TLS 1.3 会话恢复一样去掉 session_ticket、末尾加 pre_shared_key
+// firefox158ClientHello 返回 Firefox 158 的 ClientHello，以 tls-client 的 Firefox 148 档案为底
+// psk 为 pre_shared_key 扩展长度，非 0 时去掉 session_ticket、末尾加 pre_shared_key
 func firefox158ClientHello(psk int) tls.ClientHelloID {
 	base := profiles.Firefox_148
 	hello := base.GetClientHelloId()

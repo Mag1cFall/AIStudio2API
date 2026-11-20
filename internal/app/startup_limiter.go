@@ -23,13 +23,6 @@ func (limiter *startupLimiter) setLimit(limit int) {
 	limiter.mu.Unlock()
 }
 
-// size 返回同时启动的上限
-func (limiter *startupLimiter) size() int {
-	limiter.mu.Lock()
-	defer limiter.mu.Unlock()
-	return limiter.limit
-}
-
 // acquire 等待一个启动名额，temporary 为临时页面载入的账户，非空时只在除该账户的预约外没有普通等待者时取得，ctx 结束时返回其错误
 func (limiter *startupLimiter) acquire(ctx context.Context, temporary string) error {
 	low := temporary != ""

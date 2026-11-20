@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -141,7 +142,13 @@ const newChatElements = `
   const discard = dialog.querySelector('button');
   const category = document.querySelector('ms-zero-state').querySelector('button');`
 
-// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件：from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数。位置 prompt 为空提示词输入框的中心，run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径，content 为 Rerun 后最后一轮被移除时指针下的对话区，answer 为流式回答的段落移到 content 处的指针下，result 与 submit 为最后一轮函数调用块中的函数响应输入框与提交按钮；焦点位置 prompt 为提示词输入框，result 为函数响应输入框，run、rerun 与 submit 为对应按钮。布局按官网新对话页：左侧导航宽 220、右侧运行设置宽 300，对话列宽至多 1000 并在两者之间居中；空提示词输入框距对话列左缘 25、上缘距视口底 105，宽为对话列宽减 50、高 21，其父元素高 36；Run 按钮宽 101.2、高 32、右缘距对话列右缘 25、上缘距视口底 59，中心处文字距按钮左缘 45、上缘 6，宽 24.2、高 20；每轮为一行短文本时最后一轮上缘一轮为 197.5、每多一轮下移 212，高 125.5，对话区超出时滚到底部，Rerun 按钮距对话列左缘 911、在最后一轮上缘之上 19、边长 32，图标与路径的矩形按官网取值；函数调用轮次上缘与最后一轮相同，函数响应表单距对话列左缘 14、轮次上缘 193.5，宽为对话列宽减 28、高 82，输入框距对话列左缘 26、轮次上缘 231.5，宽为对话列宽减 120 1/3、高 32，其外层字段距轮次上缘 205.5、高 58，提交按钮右缘距对话列右缘 26、宽 60 1/3、高 32、与输入框同高；运行设置各位置的按下点取官网点击坐标：模型选择卡片、思考档位下拉框与选项、系统指令卡片距运行设置列左缘 150、距视口顶 110、320、354、208，模型面板中的一行距视口右缘 283、顶 281，All 页签距右缘 510、顶 135，系统指令输入框距右缘 275、顶 506，关闭按钮距右缘 27、顶 33，Function calling 与 Grounding with Google Search 开关距右缘 32、顶 512 与 559，编辑按钮距右缘 79、顶 511，函数声明输入框在视口水平中线、顶 270，保存按钮在中线右侧 355、顶 636，这些元素的矩形为近似值；取值按 Firefox 以单精度浮点返回
+// pointerScript 以宿主的 mouseInput 派发一组可信鼠标与焦点事件
+// from 与 to 为指针移动前后的位置，blurred 与 focused 为焦点移出与移入的位置，空串表示不在页面元素上，rounds 为对话轮数
+// 位置 prompt 为空提示词输入框的中心，run 为 Run 按钮中心处的文字，turn 为最后一轮中心处的正文，rerun 为 Rerun 按钮中心处的图标路径
+// content 为 Rerun 后最后一轮被移除时指针下的对话区，answer 为流式回答的段落移到 content 处的指针下
+// result 与 submit 为最后一轮函数调用块中的函数响应输入框与提交按钮
+// 焦点位置 prompt 为提示词输入框，result 为函数响应输入框，run、rerun 与 submit 为对应按钮
+// 元素矩形按官网新对话页的布局，取值按 Firefox 以单精度浮点返回
 const pointerScript = `((input, from, to, blurred, focused, rounds, types) => {` + promptElements + functionElements + settingsElements + newChatElements + `
   const section = innerWidth - 520;
   const box = Math.min(section, 1000);
@@ -202,7 +209,11 @@ const keyScript = `((input, text, types, target) => {` + promptElements + functi
   return element.value === text;
 })`
 
-// pointerStep 是一次可信指针操作与它之前的间隔：move 把指针移到 to，press 按下并把焦点移到指针下的按钮，release 抬起并点击，replace 为页面替换了指针下的元素，stream 为流式回答使指针下的元素在对话区与回答段落之间变化，focus 与 refocus 为页面把焦点移到 to（refocus 时原焦点所在元素已移除），cover 为 to 处的遮罩盖住指针下的元素，uncover 为遮罩移除后指针下为 to
+// pointerStep 是一次可信指针操作与它之前的间隔
+// move 把指针移到 to，press 按下并把焦点移到指针下的按钮，release 抬起并点击
+// replace 为页面替换了指针下的元素，stream 为流式回答使指针下的元素在对话区与回答段落之间变化
+// focus 与 refocus 为页面把焦点移到 to，refocus 时原焦点所在元素已移除
+// cover 为 to 处的遮罩盖住指针下的元素，uncover 为遮罩移除后指针下为 to
 type pointerStep struct {
 	delay  time.Duration
 	action string
@@ -246,7 +257,10 @@ func (runtime *Runtime) pasteKeys() []keyStep {
 	}
 }
 
-// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后：指针换到另一元素时先派发离开与进入事件，按下时焦点移到指针下的元素（确认框的 Discard and continue 按钮不取得焦点），焦点从粘贴过内容的输入框移出时先派发 change，原焦点不在页面元素上时只有 focusin；Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮，Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
+// events 返回 step 在当前位置上 Firefox 依次派发的事件与事件涉及的位置，并把位置更新为操作之后
+// 按下时焦点移到指针下的元素，确认框的 Discard and continue 按钮不取得焦点
+// Run 按钮切换为 Stop 或切换回 Run 时指针下为新按钮
+// Rerun 后最后一轮被移除时指针下为对话区，焦点随按钮移除而不在页面元素上，不派发 focusout
 func (pointer *Pointer) events(step pointerStep, at time.Time) (from, to, blurred, focused string, rounds int, types []string) {
 	pointer.mu.Lock()
 	defer pointer.mu.Unlock()
@@ -674,15 +688,17 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	}
 }
 
-// action 是一次界面操作中的一步：after 为与上一步的 VM 时钟间隔，run 在事件循环中执行这一步，span 与 pace 见 timedJob
+// action 是一次界面操作中的一步：after 为与上一步的 VM 时钟间隔，run 在事件循环中执行这一步，span 与 pace 见 timedJob，holds 与 frees 是这一步按下与抬起的指针或按键
 type action struct {
 	after time.Duration
 	run   func() error
 	span  float64
 	pace  float64
+	holds string
+	frees string
 }
 
-// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完：VM 空闲足够长时各步不真实等待，不够时只等差额；一步出错或 ctx 结束后其余各步不再执行
+// perform 把 actions 按各自的间隔排进 VM 此前的空闲区间并等到最后一步执行完：VM 空闲足够长时各步不真实等待，不够时只等差额；一步出错或 ctx 结束后立即抬起已按下的指针与按键，其余各步不再执行，也不推进 VM 时钟
 func (runtime *Runtime) perform(ctx context.Context, actions []action) error {
 	return runtime.performFitted(ctx, func(float64) []action { return actions })
 }
@@ -691,21 +707,51 @@ func (runtime *Runtime) perform(ctx context.Context, actions []action) error {
 func (runtime *Runtime) performFitted(ctx context.Context, build func(idle float64) []action) error {
 	result := make(chan error, 1)
 	failed := false
+	var actions []action
+	done := 0
+	// release 返回其余各步中抬起已按下、还没有抬起的指针与按键的各步，只在事件循环中调用
+	release := func() []action {
+		held := map[string]bool{}
+		for _, item := range actions[:done] {
+			if item.holds != "" {
+				held[item.holds] = true
+			}
+			delete(held, item.frees)
+		}
+		var pending []action
+		for _, item := range actions[done:] {
+			if held[item.frees] {
+				delete(held, item.frees)
+				pending = append(pending, item)
+			}
+		}
+		return pending
+	}
+	// stop 在事件循环中停止其余各步，并依次执行 release 给出的各步
+	stop := func() error {
+		failed = true
+		var errs []error
+		for _, item := range release() {
+			errs = append(errs, item.run())
+		}
+		if err := errors.Join(errs...); err != nil {
+			return fmt.Errorf("抬起按下的指针与按键: %w", err)
+		}
+		return nil
+	}
 	if !runtime.loop.arrange(func(idle float64) []timedJob {
-		actions := build(idle)
+		actions = build(idle)
 		jobs := make([]timedJob, len(actions))
 		for index, item := range actions {
-			jobs[index] = timedJob{after: item.after, span: item.span, pace: item.pace, job: func() {
-				if failed {
+			jobs[index] = timedJob{after: item.after, span: item.span, pace: item.pace, halt: &failed, job: func() {
+				if err := ctx.Err(); err != nil {
+					result <- errors.Join(err, stop())
 					return
 				}
-				err := ctx.Err()
-				if err == nil {
-					err = item.run()
-				}
+				err := item.run()
+				done = index + 1
 				if err != nil {
-					failed = true
-					result <- err
+					result <- errors.Join(err, stop())
 					return
 				}
 				if index == len(actions)-1 {
@@ -723,6 +769,22 @@ func (runtime *Runtime) performFitted(ctx context.Context, build func(idle float
 	case <-runtime.loop.done:
 		return errors.New("WAA runtime 已关闭")
 	case <-ctx.Done():
+		// 停止其余各步与抬起按下的指针与按键都排在取消时刻，此后排进事件循环的操作都在它们之后
+		at := mozjs.Now()
+		runtime.loop.push(&task{at: at, host: true, job: func() {
+			if failed || done == len(actions) || len(release()) == 0 {
+				failed = true
+				return
+			}
+			runtime.loop.push(&task{at: at, job: func() {
+				if failed {
+					return
+				}
+				if err := stop(); err != nil {
+					slog.Warn("取消界面操作后抬起按下的指针与按键失败", "error", err)
+				}
+			}})
+		}})
 		return ctx.Err()
 	}
 }
@@ -768,7 +830,10 @@ func (runtime *Runtime) RunProof(ctx context.Context, digest string, prompt stri
 	return runtime.proof(ctx, digest, prompt, func(text string, _ float64) []action { return runtime.paste(text) }, runtime.click("run"))
 }
 
-// SettingStep 是点击 Run 之前在运行设置中的一次可信指针点击：Wait 为与上一步的间隔，To 为点击的位置（selector、all、row、level、option、system、instructions、close、grounding、functions、edit、declarations、save），Text 非空时点击后以可信键盘粘贴 Text，Clicked 在抬起后以 click 事件发生时的 VM 墙上时刻调用
+// SettingStep 是点击 Run 之前在运行设置中的一次可信指针点击
+// Wait 为与上一步的间隔，Text 非空时点击后以可信键盘粘贴 Text
+// To 为点击的位置：selector、all、row、level、option、system、instructions、close、grounding、functions、edit、declarations、save
+// Clicked 在抬起后以 click 事件发生时的 VM 墙上时刻调用
 type SettingStep struct {
 	Wait    time.Duration
 	To      string
@@ -776,7 +841,12 @@ type SettingStep struct {
 	Clicked func(at time.Time)
 }
 
-// RunProofAfter 按顺序做 groups 中能排进此前空闲区间的各组运行设置操作（放不下的一组与其后各组这次不做，步数计入 prooftime 的跳过步数），newChat 不为 nil 且连同这些操作与粘贴都放得下时先像官网用户一样点顶栏 New chat 并在确认框点 Discard and continue（放不下时这次不做，两次点击计入跳过步数，点击确认后以 click 事件发生时的 VM 墙上时刻调用 newChat），做过运行设置时隔 back 以可信指针点击提示词输入框，再粘贴文本并点击 Run 后为 SHA-256 digest 生成 fresh proof；各步按 VM 时钟排进此前的空闲区间，空闲不够时只真实等待差额
+// RunProofAfter 做完运行设置操作后粘贴文本并点击 Run，为 SHA-256 digest 生成 fresh proof
+// groups 按顺序做，放不下的一组与其后各组这次不做，步数计入 prooftime 的跳过步数
+// newChat 不为 nil 且连同运行设置与粘贴都放得下时先点顶栏 New chat 并在确认框点 Discard and continue
+// 放不下时这次不点 New chat，两次点击计入跳过步数；点击确认后以 click 事件发生时的 VM 墙上时刻调用 newChat
+// 做过运行设置时隔 back 以可信指针点击提示词输入框
+// 各步按 VM 时钟排进此前的空闲区间，空闲不够时只真实等待差额
 func (runtime *Runtime) RunProofAfter(ctx context.Context, digest string, prompt string, newChat func(at time.Time), groups [][]SettingStep, back time.Duration) (string, error) {
 	return runtime.proof(ctx, digest, prompt, func(text string, idle float64) []action {
 		click := runtime.click("prompt")
@@ -928,6 +998,11 @@ func (runtime *Runtime) pasteInto(target string, text string) []action {
 			}
 			return nil
 		}}
+		if key, ok := strings.CutPrefix(step.types[0], "keydown:"); ok {
+			actions[index].holds = key
+		} else if key, ok := strings.CutPrefix(step.types[0], "keyup:"); ok {
+			actions[index].frees = key
+		}
 	}
 	return actions
 }
@@ -1011,6 +1086,12 @@ func (runtime *Runtime) pointerActions(steps []pointerStep) []action {
 	actions := make([]action, len(steps))
 	for index, step := range steps {
 		actions[index] = action{after: step.delay, run: func() error { return runtime.pointerInput(step) }}
+		switch step.action {
+		case "press":
+			actions[index].holds = "mouse"
+		case "release":
+			actions[index].frees = "mouse"
+		}
 	}
 	return actions
 }

@@ -10,6 +10,7 @@ import {
 } from 'reka-ui'
 import { api, ApiError } from '@/api'
 import { useDownloadProgress, waitsForCamoufox } from '@/camoufox'
+import { elapsedText, serverTime, useSecondClock } from '@/elapsed'
 import { useI18n, type TranslationKey } from '@/i18n'
 import { usePaged } from '@/paging'
 import { maskedProxy } from '@/proxy'
@@ -27,6 +28,7 @@ import type {
 } from '@/types'
 import type { IconName } from '@/icons'
 import AccountEnvironmentFields from './AccountEnvironmentFields.vue'
+import AccountModelsDialog from './AccountModelsDialog.vue'
 import AccountExits from './AccountExits.vue'
 import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 import DetailDialog from './DetailDialog.vue'
@@ -51,8 +53,6 @@ const props = defineProps<{
   chromeImport: boolean
   // camoufox 是 Camoufox 的准备状态，浏览器登录等待下载时在任务行显示进度
   camoufox: PreparationStatus | undefined
-  // geoip 是出口 IP 库的准备状态，下载期间在出口区块与进行中的任务行显示进度
-  geoip: PreparationStatus | undefined
 }>()
 
 const emit = defineEmits<{
@@ -74,8 +74,9 @@ const cookieFiles = ref<{ name: string; text: string }[]>([])
 const cookieFileInput = useTemplateRef<HTMLInputElement>('cookieFileInput')
 const cookieCandidates = ref<CookieCandidate[]>([])
 const selectedCookieUsers = ref<string[]>([])
-// discoveringCookies 表示正在识别 Cookie 中登录的账户
+// discoveringCookies 表示正在识别 Cookie 中登录的账户，cookieLookupStartedAt 是这次识别开始的时刻
 const discoveringCookies = ref(false)
+const cookieLookupStartedAt = ref(0)
 // cookieDiscoveryError 是最近一次识别失败的原因，来自文件时以文件名开头
 const cookieDiscoveryError = ref('')
 // cookieDiscovery 是识别的序号，Cookie 变化后较早开始的识别结果被丢弃
@@ -87,7 +88,9 @@ const moreSettingsOpen = ref(false)
 watch([showCookieImport, showBrowserImport], () => (moreSettingsOpen.value = false))
 // cookieBrowsers 是本机找到的调试浏览器与其中登录 AI Studio 的账户
 const cookieBrowsers = ref<CookieBrowser[]>([])
+// scanningBrowsers 表示正在查找调试浏览器，browserLookupStartedAt 是这次查找开始的时刻
 const scanningBrowsers = ref(false)
+const browserLookupStartedAt = ref(0)
 const selectedBrowsers = ref<string[]>([])
 const editingAccountID = ref('')
 const pendingAction = ref('')
@@ -103,7 +106,13 @@ const refreshErrors = reactive(new Map<string, string>())
 // refreshTotal 与 refreshDone 是进行中的刷新全部的账户数与已完成数，没有刷新全部时 refreshTotal 为 0
 const refreshTotal = ref(0)
 const refreshDone = ref(0)
-// toggling 是正在切换启用状态的账户
+// refreshAllProgress 是刷新全部的进度文字
+const refreshAllProgress = computed(() =>
+  t('accounts.refreshingAll')
+    .replace('{done}', String(refreshDone.value))
+    .replace('{total}', String(refreshTotal.value)),
+)
+// toggling 是正在改变启用状态或账户状态的账户
 const toggling = reactive(new Set<string>())
 const chromeProfiles = ref<ChromeImportProfile[]>([])
 const pairing = ref<PairingToken | null>(null)
@@ -192,15 +201,105 @@ const accountIconClass =
 // reasonClass 是查看失败原因的文字按钮样式
 const reasonClass =
   'shrink-0 text-xs text-gray-400 underline underline-offset-2 transition hover:text-gray-200'
-// transitionKeys 是账户启停后台收尾阶段的文字，宽屏下各行按最长的一项留出位置，阶段出现时状态列宽度不变
-const transitionKeys: TranslationKey[] = ['accounts.draining', 'accounts.syncing']
+// transitionTitles 是各后台操作的文字
+const transitionTitles: Record<NonNullable<Account['transition']>, TranslationKey> = {
+  draining: 'accounts.stageDisabling',
+  syncing: 'accounts.stageSyncing',
+  saving: 'accounts.stageSaving',
+  refreshing: 'accounts.stageRefreshing',
+}
+// stepLabels 是后台操作各步骤的文字
+const stepLabels: Record<NonNullable<Account['transition_step']>, TranslationKey> = {
+  waiting: 'accounts.waiting',
+  catalog: 'accounts.refreshCatalog',
+  verifying: 'accounts.refreshVerifying',
+}
+// transitionSizer 是停用时等待在途请求的文字，宽屏下各行按它留出位置（上限 18rem），操作出现时状态列宽度不变，更长的文字截断
+const transitionSizer = computed(
+  () =>
+    `${t('accounts.stageDisabling')} · ${t('accounts.waitingRequests').replace('{count}', '88')}`,
+)
 // reasonKeys 是状态旁说明按钮的文字，宽屏下各行按最长的一项留出位置，按钮出现时状态列宽度不变
-const reasonKeys: TranslationKey[] = ['accounts.reason', 'accounts.refreshFailed']
+const reasonKeys: TranslationKey[] = [
+  'accounts.reason',
+  'accounts.refreshFailed',
+  'accounts.syncFailed',
+]
 
-// transitionText 返回账户启停收尾阶段的文字：停用时等待在途请求与 Worker 启动等占用结束，没有收尾时返回空串
+// now 是有账户处于后台阶段、有账户任务在运行或正在识别账户时每秒更新的当前时间
+const now = useSecondClock(
+  () =>
+    props.accounts.some((account) => account.transition !== undefined) ||
+    props.tasks.some((task) => task.state === 'running') ||
+    discoveringCookies.value ||
+    scanningBrowsers.value,
+)
+
+// elapsedSizer 是 888 秒的已用时间文字，已用时间按它留出位置
+const elapsedSizer = computed(() => elapsedText(0, 888000, locale.value))
+
+// elapsedSince 返回从 start 到现在的已用时间文字，start 为毫秒时间戳
+function elapsedSince(start: number): string {
+  return elapsedText(start, now.value, locale.value)
+}
+
+// transitionStep 返回账户后台操作当前步骤的文字：等待在途请求时有进行中的请求则带请求数，立即刷新带步骤序号；停用收尾没有步骤，为等待请求或正在收尾；其余操作没有步骤时返回空串
+function transitionStep(account: Account): string {
+  const step = account.transition_step
+  const requests =
+    account.active_requests > 0
+      ? t('accounts.waitingRequests').replace('{count}', String(account.active_requests))
+      : ''
+  if (step === undefined) {
+    return account.transition === 'draining' ? requests || t('accounts.finishing') : ''
+  }
+  const text = step === 'waiting' && requests ? requests : t(stepLabels[step])
+  return account.transition_index && account.transition_total
+    ? `${text} ${account.transition_index}/${account.transition_total}`
+    : text
+}
+
+// transitionTitle 返回账户后台操作的文字
+function transitionTitle(account: Account): string {
+  return t(transitionTitles[account.transition!])
+}
+
+// transitionLabel 返回宽屏状态按钮上的后台操作文字：读取目录与核对验证两步只写步骤，其余写操作与步骤
+function transitionLabel(account: Account): string {
+  const step = account.transition_step
+  return step === 'catalog' || step === 'verifying'
+    ? transitionStep(account)
+    : transitionOperation(account)
+}
+
+// transitionElapsed 返回账户进入当前操作或步骤以来的已用时间文字，没有进入时刻时返回空串
+function transitionElapsed(account: Account): string {
+  return account.transition_since === undefined
+    ? ''
+    : elapsedSince(serverTime(account.transition_since))
+}
+
+// transitionOperation 返回账户后台操作与当前步骤的文字，窄屏下显示在邮箱下一行
+function transitionOperation(account: Account): string {
+  return [transitionTitle(account), transitionStep(account)].filter(Boolean).join(' · ')
+}
+
+// transitionText 返回账户后台操作、当前步骤与已用时间的完整文字
 function transitionText(account: Account): string {
-  if (account.transition === 'syncing') return t('accounts.syncing')
-  return account.transition === 'draining' ? t('accounts.draining') : ''
+  return [transitionOperation(account), transitionElapsed(account)].filter(Boolean).join(' · ')
+}
+
+// modelsAccountID 是模型对话框显示的账户，modelsTrigger 是打开它的按钮
+const modelsAccountID = ref('')
+const modelsTrigger = ref<HTMLElement | null>(null)
+const modelsAccount = computed(() =>
+  props.accounts.find((account) => account.id === modelsAccountID.value),
+)
+
+// openModels 打开账户的模型对话框，关闭后焦点回到 event 所在的按钮
+function openModels(account: Account, event: MouseEvent): void {
+  modelsTrigger.value = event.currentTarget as HTMLElement
+  modelsAccountID.value = account.id
 }
 
 const search = ref('')
@@ -319,8 +418,14 @@ function bulkDelete(): void {
   selected.clear()
 }
 
-// reason 是悬窗中显示的账户或任务、原因类别与完整原因
-const reason = ref<{ title: string; kind: string; text: string } | null>(null)
+// reason 是悬窗中显示的账户或任务、原因类别与完整原因，syncError 是同时存在的目录同步失败原因
+const reason = ref<{
+  title: string
+  kind: string
+  text: string
+  restricted?: boolean
+  syncError?: string | undefined
+} | null>(null)
 
 // accountSummary 把账户等级、出口、语言、时区与原电脑最近续签的时间合成一行
 function accountSummary(account: Account): string {
@@ -362,6 +467,7 @@ function beginEdit(account: Account): void {
 }
 
 function closeEditor(): void {
+  saveController?.abort()
   showEditor.value = false
   editingAccountID.value = ''
 }
@@ -379,8 +485,6 @@ function closeBrowserLogin(): void {
 const { percent: camoufoxPercent, sizeText: camoufoxSize } = useDownloadProgress(
   () => props.camoufox,
 )
-// geoipPercent 与 geoipSize 是进行中的任务行显示的出口 IP 库下载进度
-const { percent: geoipPercent, sizeText: geoipSize } = useDownloadProgress(() => props.geoip)
 
 // downloadText 是等待 Camoufox 下载的任务行文字，重新登录时带上账户
 function downloadText(task: AccountTask): string {
@@ -402,6 +506,24 @@ const taskStates: Record<AccountTaskItem['state'], TranslationKey> = {
   running: 'accounts.taskRunning',
   done: 'accounts.taskDone',
   failed: 'accounts.taskFailed',
+}
+
+// taskSteps 是任务中处理中的账户各步骤的文字
+const taskSteps: Record<NonNullable<AccountTaskItem['step']>, TranslationKey> = {
+  login: 'accounts.liveWaiting',
+  reading: 'accounts.taskReading',
+  checking: 'accounts.taskChecking',
+  saving: 'accounts.taskSaving',
+}
+
+// taskStep 返回任务中处理中的账户当前步骤的文字，没有步骤时为空串
+function taskStep(item: AccountTaskItem): string {
+  return item.step === undefined ? '' : t(taskSteps[item.step])
+}
+
+// taskElapsed 返回任务的已用时间
+function taskElapsed(task: AccountTask): string {
+  return elapsedSince(serverTime(task.started_at))
 }
 
 // taskFinished 返回任务中已结束的账户数
@@ -654,6 +776,7 @@ async function discoverCookieAccounts(): Promise<void> {
   const sequence = cookieDiscovery
   const sources = cookieSources()
   if (sources.every((source) => source.text.trim() === '')) return
+  cookieLookupStartedAt.value = Date.now()
   discoveringCookies.value = true
   // failed 是出错时正在识别的文件名
   let failed = ''
@@ -739,6 +862,7 @@ function browserSummary(browser: CookieBrowser): string {
 
 // scanBrowsers 查找本机调试浏览器并经对话框里的代理识别账户，默认勾选可导入的账户
 async function scanBrowsers(): Promise<void> {
+  browserLookupStartedAt.value = Date.now()
   scanningBrowsers.value = true
   try {
     cookieBrowsers.value = await api.cookieBrowsers(accountEnvironment.proxy)
@@ -871,17 +995,37 @@ async function importCookieAccounts(): Promise<void> {
   }
 }
 
-// saveAccount 保存已有账户配置并刷新产品数据
+// reasonCopy 是原因对话框复制的文字：状态原因与目录同步失败的原因
+const reasonCopy = computed(() =>
+  [reason.value?.text, reason.value?.syncError].filter(Boolean).join('\n\n'),
+)
+
+// savingText 是编辑保存进行中时该账户后台操作的当前步骤与已用时间，保存在等账户的在途请求结束时显示在对话框中
+const savingText = computed(() => {
+  const account = props.accounts.find((item) => item.id === editingAccountID.value)
+  return account?.transition === 'saving' && pendingAction.value.startsWith('edit:')
+    ? [transitionStep(account), transitionElapsed(account)].filter(Boolean).join(' · ')
+    : ''
+})
+
+// saveController 中止进行中的编辑保存，关闭编辑对话框时使用
+let saveController: AbortController | undefined
+
+// saveAccount 保存已有账户配置并刷新产品数据，保存期间关闭对话框会中止保存
 async function saveAccount(): Promise<void> {
   pendingAction.value = `edit:${editingAccountID.value}`
+  const controller = new AbortController()
+  saveController = controller
   try {
-    await api.updateAccount(editingAccountID.value, { ...draft })
+    await api.updateAccount(editingAccountID.value, { ...draft }, controller.signal)
+    saveController = undefined
     closeEditor()
     emit('refresh')
     emit('notice', t('accounts.saved'), 'success')
   } catch (error) {
-    actionError(error)
+    if (!controller.signal.aborted) actionError(error)
   } finally {
+    if (saveController === controller) saveController = undefined
     pendingAction.value = ''
   }
 }
@@ -902,13 +1046,16 @@ async function updateEnabled(account: Account, enabled: boolean): Promise<void> 
   }
 }
 
-// toggleAccount 切换账户是否参与请求，收尾在后台进行并显示在账户状态上
-async function toggleAccount(account: Account): Promise<void> {
+// changeState 把账户改为就绪或停用：就绪会启用停用的账户并清除服务受限、冷却与需要登录的标记，收尾在后台进行并显示在账户状态上
+async function changeState(account: Account, state: 'ready' | 'disabled'): Promise<void> {
+  toggling.add(account.id)
   try {
-    await updateEnabled(account, !account.enabled)
+    await api.setAccountState(account.id, state)
     emit('refresh')
   } catch (error) {
     actionError(error)
+  } finally {
+    toggling.delete(account.id)
   }
 }
 
@@ -924,12 +1071,17 @@ async function loginAccount(account: Account): Promise<void> {
   }
 }
 
-// refreshNotice 返回刷新结果提示，写出权益与模型数的变化
-function refreshNotice(result: AccountRefresh): string {
+// refreshNotice 返回刷新结果提示：账户仍为服务受限时只写这一点，由服务受限变为就绪时写明已解除，其余写出权益与模型数的变化，previous 为刷新前的状态
+function refreshNotice(result: AccountRefresh, previous: Account['state']): string {
+  const state = result.account.state
+  if (state === 'restricted') {
+    return t('accounts.refreshedRestricted').replace('{name}', result.account.label)
+  }
   const change = (before: string, after: string) =>
     before === after ? after : `${before} → ${after}`
   const tier = (value: string) => (value === 'Unknown' ? t('accounts.tierUnknown') : value)
-  return t('accounts.refreshed')
+  const unrestricted = previous === 'restricted' && (state === 'ready' || state === 'busy')
+  return t(unrestricted ? 'accounts.refreshedUnrestricted' : 'accounts.refreshed')
     .replace('{name}', result.account.label)
     .replace('{tier}', change(tier(result.previous_tier), tier(result.tier)))
     .replace('{models}', change(String(result.previous_models), String(result.models)))
@@ -956,7 +1108,11 @@ async function refreshAccount(account: Account): Promise<void> {
   try {
     const result = await refreshOne(account.id)
     emit('refresh')
-    emit('notice', refreshNotice(result), 'success')
+    emit(
+      'notice',
+      refreshNotice(result, account.state),
+      result.account.state === 'restricted' ? 'error' : 'success',
+    )
   } catch (error) {
     actionError(error)
   }
@@ -1006,6 +1162,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
       </div>
       <div class="ml-auto flex flex-wrap justify-end gap-2">
         <button
+          v-tooltip="refreshTotal > 0 ? refreshAllProgress : undefined"
           class="relative isolate flex items-center gap-2 overflow-hidden rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
           type="button"
           :disabled="refreshTotal > 0"
@@ -1024,9 +1181,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
           {{ t('accounts.refreshAll') }}
         </button>
         <span v-if="refreshTotal > 0" id="refresh-all-progress" class="sr-only">{{
-          t('accounts.refreshingAll')
-            .replace('{done}', String(refreshDone))
-            .replace('{total}', String(refreshTotal))
+          refreshAllProgress
         }}</span>
         <DropdownMenuRoot :modal="false">
           <DropdownMenuTrigger
@@ -1112,23 +1267,30 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   ></span
                 >
               </template>
-              <template v-else-if="task.state === 'running' && geoip?.preparing">
-                <span
-                  v-tooltip.overflow="t('accounts.downloadingGeoip')"
-                  class="min-w-0 truncate text-xs text-gray-400"
-                  >{{ t('accounts.downloadingGeoip') }}</span
-                >
-                <span v-if="geoipSize" class="shrink-0 font-mono text-xs text-gray-500 tabular-nums"
-                  >{{ geoipSize
-                  }}<template v-if="geoipPercent !== null"> · {{ geoipPercent }}%</template></span
-                >
-              </template>
               <template v-else>
-                <span
-                  v-tooltip.overflow="task.items[0]!.label || t('accounts.liveWaiting')"
-                  class="min-w-0 truncate text-xs text-gray-400"
-                  >{{ task.items[0]!.label || t('accounts.liveWaiting') }}</span
-                >
+                <span class="flex min-w-0 flex-wrap gap-x-2.5 text-xs">
+                  <span
+                    v-if="task.items[0]!.label"
+                    v-tooltip.overflow="task.items[0]!.label"
+                    class="min-w-0 truncate text-gray-400"
+                    >{{ task.items[0]!.label }}</span
+                  >
+                  <span
+                    v-if="task.items[0]!.state === 'running'"
+                    class="flex min-w-0 gap-x-1 text-gray-500"
+                  >
+                    <span
+                      v-if="task.items[0]!.step"
+                      v-tooltip.overflow="taskStep(task.items[0]!)"
+                      class="min-w-0 truncate"
+                      >{{ taskStep(task.items[0]!) }}</span
+                    >
+                    <span class="shrink-0 tabular-nums"
+                      ><template v-if="task.items[0]!.step">· </template
+                      >{{ taskElapsed(task) }}</span
+                    >
+                  </span>
+                </span>
                 <button
                   v-if="task.items[0]!.state === 'failed'"
                   type="button"
@@ -1175,13 +1337,6 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
             :percent="camoufoxPercent"
             :size-text="camoufoxSize"
           />
-          <CamoufoxProgressBar
-            v-else-if="task.state === 'running' && geoip?.preparing"
-            class="mt-2"
-            :label="t('accounts.downloadingGeoip')"
-            :percent="geoipPercent"
-            :size-text="geoipSize"
-          />
           <ul
             v-if="task.items.length > 1"
             class="mt-2 max-h-40 space-y-1 overflow-y-auto border-t border-line/60 pt-2"
@@ -1202,12 +1357,25 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               />
               <span v-else class="w-[13px] shrink-0"></span>
               <span class="sr-only">{{ t(taskStates[item.state]) }}</span>
-              <span
-                v-tooltip.overflow="item.label"
-                class="min-w-0 truncate"
-                :class="item.state === 'pending' ? 'text-gray-500' : 'text-gray-300'"
-                >{{ item.label }}</span
-              >
+              <span class="flex min-w-0 flex-wrap gap-x-2.5">
+                <span
+                  v-tooltip.overflow="item.label"
+                  class="min-w-0 truncate"
+                  :class="item.state === 'pending' ? 'text-gray-500' : 'text-gray-300'"
+                  >{{ item.label }}</span
+                >
+                <span v-if="item.state === 'running'" class="flex min-w-0 gap-x-1 text-gray-500">
+                  <span
+                    v-if="item.step"
+                    v-tooltip.overflow="taskStep(item)"
+                    class="min-w-0 truncate"
+                    >{{ taskStep(item) }}</span
+                  >
+                  <span class="shrink-0 tabular-nums"
+                    ><template v-if="item.step">· </template>{{ taskElapsed(task) }}</span
+                  >
+                </span>
+              </span>
               <button
                 v-if="item.state === 'failed'"
                 type="button"
@@ -1259,7 +1427,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
           </option>
         </UiSelect>
       </div>
-      <AccountExits v-if="accounts.length > 0" :accounts="accounts" :geoip="geoip" />
+      <AccountExits v-if="accounts.length > 0" :accounts="accounts" />
       <p v-if="error" class="flex items-center gap-2 text-sm text-red-300">
         <UiIcon name="warning" :size="15" class="shrink-0" />{{ error }}
       </p>
@@ -1378,7 +1546,13 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 <span
                   v-tooltip.overflow="accountSummary(account)"
                   class="block truncate text-xs text-gray-500"
+                  :class="{ 'max-lg:hidden': account.transition }"
                   >{{ accountSummary(account) }}</span
+                >
+                <span
+                  v-if="account.transition"
+                  class="block truncate text-xs text-gray-400 lg:hidden"
+                  >{{ transitionOperation(account) }}</span
                 >
                 <template v-if="downloadingRelogins.has(account.id)">
                   <span class="mt-1 flex flex-wrap gap-x-2 text-xs text-gray-400"
@@ -1399,41 +1573,102 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 </template>
               </div>
             </div>
-            <span class="shrink-0 text-xs text-gray-500 md:w-20"
-              >{{ t('accounts.models') }}
-              {{ account.models.length === 0 ? '—' : account.models.length }}</span
+            <button
+              v-if="account.models.length > 0"
+              type="button"
+              class="shrink-0 rounded text-left text-xs text-gray-500 underline decoration-gray-600 decoration-dotted underline-offset-4 transition hover:text-gray-200 md:w-20"
+              @click="openModels(account, $event)"
+            >
+              {{ t('accounts.models') }} {{ account.models.length }}
+            </button>
+            <span v-else class="shrink-0 text-xs text-gray-500 md:w-20"
+              >{{ t('accounts.models') }} —</span
             >
             <div
-              class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 md:w-36 lg:w-auto lg:min-w-36 lg:flex-nowrap lg:whitespace-nowrap"
+              class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 max-md:min-w-0 max-md:flex-1 max-md:basis-0 md:w-36 lg:w-auto lg:min-w-36 lg:flex-nowrap lg:whitespace-nowrap"
             >
-              <span class="grid text-xs">
+              <span class="grid min-w-0 grid-cols-[minmax(0,1fr)] text-xs">
                 <span
                   v-for="(key, state) in stateKeys"
                   :key="state"
-                  class="invisible border px-1.5 [grid-area:1/1] max-md:hidden"
+                  class="invisible border pr-5 pl-1.5 [grid-area:1/1] max-md:hidden"
                   aria-hidden="true"
                   >{{ t(key) }}</span
                 >
                 <span
-                  v-for="key in transitionKeys"
-                  :key="key"
-                  class="invisible pl-[19px] [grid-area:1/1] max-lg:hidden"
+                  class="invisible max-w-72 overflow-hidden pr-4 pl-[18px] whitespace-nowrap [grid-area:1/1] max-lg:hidden"
                   aria-hidden="true"
-                  >{{ t(key) }}</span
+                  >{{ transitionSizer }} · {{ elapsedSizer }}</span
                 >
-                <span
-                  v-if="account.transition"
-                  class="flex items-center gap-1.5 text-gray-400 [grid-area:1/1]"
-                  ><UiIcon name="spinner" :size="13" class="shrink-0" />{{
-                    transitionText(account)
-                  }}</span
-                >
-                <span
-                  v-else
-                  class="justify-self-start rounded border border-current px-1.5 [grid-area:1/1]"
-                  :class="stateTone[account.state]"
-                  >{{ t(stateKeys[account.state]) }}</span
-                >
+                <DropdownMenuRoot :modal="false">
+                  <DropdownMenuTrigger
+                    v-tooltip="account.transition ? transitionText(account) : undefined"
+                    class="flex min-w-0 items-center gap-1 justify-self-start rounded [grid-area:1/1] disabled:opacity-50"
+                    :class="
+                      account.transition
+                        ? 'w-0 min-w-full py-px text-gray-400 hover:text-gray-200'
+                        : [
+                            'border border-current pr-1 pl-1.5 hover:brightness-125',
+                            stateTone[account.state],
+                          ]
+                    "
+                    :disabled="
+                      pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
+                    "
+                    :aria-label="
+                      t('accounts.stateMenu').replace(
+                        '{state}',
+                        account.transition ? transitionText(account) : t(stateKeys[account.state]),
+                      )
+                    "
+                    :aria-busy="toggling.has(account.id)"
+                  >
+                    <template v-if="account.transition">
+                      <UiIcon name="spinner" :size="13" />
+                      <span class="truncate max-lg:hidden">{{ transitionLabel(account) }}</span>
+                      <span v-if="account.transition_since" class="grid shrink-0 tabular-nums">
+                        <span class="invisible [grid-area:1/1]" aria-hidden="true"
+                          ><span class="max-lg:hidden">· </span>{{ elapsedSizer }}</span
+                        >
+                        <span class="[grid-area:1/1]"
+                          ><span class="max-lg:hidden">· </span
+                          >{{ transitionElapsed(account) }}</span
+                        >
+                      </span>
+                    </template>
+                    <template v-else>{{ t(stateKeys[account.state]) }}</template>
+                    <UiIcon
+                      :name="
+                        toggling.has(account.id) && !account.transition ? 'spinner' : 'chevronDown'
+                      "
+                      :size="12"
+                    />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuContent
+                      align="start"
+                      :side-offset="4"
+                      class="z-[60] min-w-32 rounded-lg border border-line bg-panel p-1 shadow-xl"
+                    >
+                      <DropdownMenuItem
+                        class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-gray-200 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-raised"
+                        :disabled="account.state === 'ready' || account.state === 'busy'"
+                        @select="changeState(account, 'ready')"
+                      >
+                        <UiIcon name="success" :size="15" />
+                        {{ t('state.ready') }}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        class="flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm text-gray-200 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-raised"
+                        :disabled="!account.enabled"
+                        @select="changeState(account, 'disabled')"
+                      >
+                        <UiIcon name="disable" :size="15" />
+                        {{ t('state.disabled') }}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuRoot>
               </span>
               <span class="grid text-xs">
                 <span
@@ -1453,6 +1688,8 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                       title: account.label,
                       kind: t(stateKeys[account.state]),
                       text: account.message,
+                      restricted: account.state === 'restricted',
+                      syncError: account.catalog_error,
                     }
                   "
                 >
@@ -1472,6 +1709,21 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   "
                 >
                   {{ t('accounts.refreshFailed') }}
+                </button>
+                <button
+                  v-else-if="account.catalog_error"
+                  type="button"
+                  class="[grid-area:1/1]"
+                  :class="reasonClass"
+                  @click="
+                    reason = {
+                      title: account.label,
+                      kind: t('accounts.syncFailed'),
+                      text: account.catalog_error,
+                    }
+                  "
+                >
+                  {{ t('accounts.syncFailed') }}
                 </button>
               </span>
             </div>
@@ -1511,12 +1763,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 :aria-busy="refreshing.has(account.id)"
                 @click="refreshAccount(account)"
               >
-                <UiIcon
-                  :name="
-                    refreshing.has(account.id) || queued.has(account.id) ? 'spinner' : 'refresh'
-                  "
-                  :size="15"
-                />
+                <UiIcon :name="refreshing.has(account.id) ? 'spinner' : 'refresh'" :size="15" />
               </button>
               <button
                 v-tooltip="t('common.edit')"
@@ -1529,24 +1776,6 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 @click="beginEdit(account)"
               >
                 <UiIcon name="edit" :size="15" />
-              </button>
-              <button
-                v-tooltip="t(account.enabled ? 'common.disable' : 'common.enable')"
-                type="button"
-                :class="[accountIconClass, 'hover:text-gray-200']"
-                :disabled="
-                  pendingAction !== '' || refreshing.has(account.id) || toggling.has(account.id)
-                "
-                :aria-label="t(account.enabled ? 'common.disable' : 'common.enable')"
-                :aria-busy="toggling.has(account.id)"
-                @click="toggleAccount(account)"
-              >
-                <UiIcon
-                  :name="
-                    toggling.has(account.id) ? 'spinner' : account.enabled ? 'disable' : 'success'
-                  "
-                  :size="15"
-                />
               </button>
               <button
                 v-tooltip="t('common.delete')"
@@ -1566,17 +1795,33 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         <UiPager v-model="accountPage" :pages="accountPages" />
       </div>
 
+      <AccountModelsDialog
+        :account="modelsAccount?.label ?? ''"
+        :models="modelsAccount?.models ?? []"
+        :trigger="modelsTrigger"
+        @close="modelsAccountID = ''"
+      />
+
       <DetailDialog
         :open="reason !== null"
         :title="reason?.title ?? ''"
         :description="reason?.kind ?? ''"
-        :copy-text="reason?.text"
+        :copy-text="reasonCopy"
         @close="reason = null"
       >
         <pre
           v-if="reason"
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-300"
         ><LinkedText :text="logText(reason.text)" /></pre>
+        <p v-if="reason?.restricted" class="mt-3 text-xs text-gray-400">
+          {{ t('accounts.restrictedHint') }}
+        </p>
+        <template v-if="reason?.syncError">
+          <p class="mt-4 mb-1.5 text-xs text-gray-400">{{ t('accounts.syncFailed') }}</p>
+          <pre
+            class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-300"
+          ><LinkedText :text="logText(reason.syncError)" /></pre>
+        </template>
       </DetailDialog>
 
       <LoginViewer
@@ -1618,6 +1863,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               </label>
               <AccountEnvironmentFields :model-value="draft" />
             </div>
+            <p v-if="savingText" class="mt-4 text-xs text-gray-400" aria-live="polite">
+              {{ savingText }}
+            </p>
             <div class="mt-6 flex gap-2">
               <button
                 class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line"
@@ -1627,11 +1875,12 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 {{ t('common.cancel') }}
               </button>
               <button
-                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+                class="flex flex-1 items-center justify-center gap-2 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
                 type="submit"
                 :disabled="pendingAction !== ''"
                 :aria-busy="pendingAction.startsWith('edit:')"
               >
+                <UiIcon v-if="pendingAction.startsWith('edit:')" name="spinner" :size="14" />
                 {{ t('common.save') }}
               </button>
             </div>
@@ -1852,7 +2101,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   aria-live="polite"
                 >
                   <UiIcon name="spinner" :size="13" />
-                  {{ t('accounts.cookieDiscovering') }}
+                  {{ t('accounts.cookieDiscovering') }} · {{ elapsedSince(cookieLookupStartedAt) }}
                 </p>
                 <p
                   v-else-if="cookieDiscoveryError"
@@ -2000,7 +2249,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 @click="scanBrowsers"
               >
                 <UiIcon name="refresh" :size="14" :class="{ 'animate-spin': scanningBrowsers }" />
-                {{ t('accounts.rescan') }}
+                <span class="tabular-nums">{{
+                  scanningBrowsers
+                    ? `${t('accounts.browserScanning')} ${elapsedSince(browserLookupStartedAt)}`
+                    : t('accounts.rescan')
+                }}</span>
               </button>
             </div>
             <p class="-mt-2 mb-4 text-xs leading-5 text-gray-400">

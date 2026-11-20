@@ -345,6 +345,22 @@ func (s *App) openPage() {
 	}
 }
 
+// PickPath 以系统对话框选择账户目录，从 start 开始，start 为空时从系统默认位置开始；用户取消时返回空串
+func (s *App) PickPath(start string) (string, error) {
+	dialog := s.app.Dialog.OpenFile().CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(true).SetDirectory(start)
+	s.mu.Lock()
+	window := s.window
+	s.mu.Unlock()
+	if window != nil {
+		dialog.AttachToWindow(window)
+	}
+	path, err := dialog.PromptForSingleSelection()
+	if err != nil && err.Error() == "cancelled by user" {
+		return "", nil
+	}
+	return path, err
+}
+
 // show 显示、还原并聚焦主窗口，没有窗口时先创建，关闭后仍隐藏保留的窗口取消销毁；没有 WebView2 或正在安装时在浏览器中打开管理页面
 func (s *App) show() {
 	s.mu.Lock()

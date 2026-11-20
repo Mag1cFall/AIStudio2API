@@ -4,7 +4,7 @@ import { defineConfig, type Plugin } from 'vite-plus'
 import { compression, defineAlgorithm } from 'vite-plugin-compression2'
 import { fileURLToPath, URL } from 'node:url'
 
-const serviceTarget = 'http://127.0.0.1:2048'
+const serviceTarget = process.env.SERVICE_TARGET ?? 'http://127.0.0.1:2048'
 
 // GenerateBundle 是插件 generateBundle 钩子的函数形式
 type GenerateBundle = Extract<NonNullable<Plugin['generateBundle']>, (...args: never[]) => unknown>

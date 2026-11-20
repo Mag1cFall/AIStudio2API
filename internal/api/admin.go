@@ -8,7 +8,6 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
-	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 )
 
 // AdminService 定义管理端需要的权威状态能力
@@ -25,6 +24,7 @@ type AdminService interface {
 	ImportAccountState(context.Context, AccountStateInput) (AdminAccount, error)
 	RenewAccountCookies(ctx context.Context, accountID string, token string, cookies []aistudio.StateCookie) (AdminAccount, error)
 	UpdateAccount(context.Context, string, AccountInput) (AdminAccount, error)
+	SetAccountState(ctx context.Context, accountID string, state string) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
@@ -53,8 +53,15 @@ type AdminStatus struct {
 	ActiveRequests int                        `json:"active_requests"`
 	Accounts       AdminAccountCounts         `json:"accounts"`
 	Camoufox       camoufoxnative.Preparation `json:"camoufox"`
-	GeoIP          egress.Preparation         `json:"geoip"`
 	ChromeImport   bool                       `json:"chrome_import"`
+	// Transition 是生成服务正在进行的启动或停止步骤，没有时省略
+	// 启动：probe_proxies 检测代理池，wait_camoufox 等待 Camoufox 下载，wait_catalog 等待首个账户读取模型目录，start_prewarm 开始预热 WAA Worker
+	// 停止：cancel_requests 停止在途请求，wait_catalog_stop 等待模型目录同步停止，close_workers 关闭 WAA Worker
+	Transition string `json:"transition,omitempty"`
+	// TransitionSince 是进入当前步骤的时刻，没有步骤时省略
+	TransitionSince *time.Time `json:"transition_since,omitempty"`
+	// Time 是生成这份状态的服务端时刻，管理页以它换算各阶段的已用时间
+	Time time.Time `json:"time"`
 }
 
 // InvalidConfigValue 表示加载时取值无效、按默认值生效的一个配置项
@@ -196,10 +203,21 @@ type AdminAccount struct {
 	// PairingRenewedAt 是远程配对账户最近一次由原电脑续签的时间，没有经配对续签时省略
 	PairingRenewedAt *time.Time `json:"pairing_renewed_at,omitempty"`
 
-	// Transition 是账户启停的后台收尾阶段，draining 为等待在途请求结束，syncing 为同步模型目录，没有收尾时省略
+	// Transition 是账户正在进行的后台操作，没有时省略
+	// draining 为停用后等待在途请求结束并关闭 Worker，syncing 为启用、添加、导入或重新登录后同步模型目录，saving 为保存配置或登录状态，refreshing 为立即刷新
 	Transition string `json:"transition,omitempty"`
+	// TransitionStep 是后台操作当前的步骤，操作没有分步时省略
+	// waiting 为等该账户的在途请求结束，catalog 为读取权益与模型目录，verifying 为发一次生成请求核对验证状态
+	TransitionStep string `json:"transition_step,omitempty"`
+	// TransitionIndex 与 TransitionTotal 是立即刷新当前步骤的序号与步数，其他操作省略
+	TransitionIndex int `json:"transition_index,omitempty"`
+	TransitionTotal int `json:"transition_total,omitempty"`
+	// TransitionSince 是进入当前操作或步骤的时刻，没有后台操作时省略
+	TransitionSince *time.Time `json:"transition_since,omitempty"`
 	// ActiveRequests 是账户上进行中的请求数
 	ActiveRequests int `json:"active_requests"`
+	// CatalogError 是已有模型目录的账户最近一次目录同步失败的原因，下一次同步成功后省略
+	CatalogError string `json:"catalog_error,omitempty"`
 }
 
 // AccountExit 表示一个账户出口代理的公网 IP 与按 IP 定位的国家、时区和语言，Proxy 为空时是直连，查询失败时 Error 为原因
@@ -390,7 +408,9 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pairing", s.handleActivePairing)
 	mux.HandleFunc("POST /api/pairing", s.handleCreatePairing)
 	mux.HandleFunc("GET /api/paths", s.handlePaths)
+	mux.HandleFunc("POST /api/paths/pick", s.handlePickPath)
 	mux.HandleFunc("PUT /api/accounts/{id}", s.handleUpdateAccount)
+	mux.HandleFunc("PUT /api/accounts/{id}/state", s.handleSetAccountState)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
 	mux.HandleFunc("GET /api/login-view/{view}", s.handleLoginView)
@@ -489,6 +509,23 @@ func (s *server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	account, err := s.config.Admin.UpdateAccount(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]AdminAccount{"account": account})
+}
+
+// handleSetAccountState 把账户改为正文 state 给出的就绪或停用
+func (s *server) handleSetAccountState(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		State string `json:"state"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	account, err := s.config.Admin.SetAccountState(r.Context(), r.PathValue("id"), input.State)
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return

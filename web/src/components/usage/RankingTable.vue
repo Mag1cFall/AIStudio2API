@@ -259,33 +259,41 @@ function childCells(stats: UsageStats): { key: string; text: string; tone?: stri
         </thead>
         <tbody>
           <template v-for="row in pagedRows" :key="row.key">
-            <tr class="border-t border-line/60 text-gray-300 hover:bg-raised/40">
+            <tr
+              class="border-t border-line/60 text-gray-300 hover:bg-raised/40"
+              :class="{ 'cursor-pointer': breakdown !== null }"
+              @click="breakdown !== null && toggleRow(row.key)"
+            >
               <th scope="row" class="w-[30%] max-w-0 px-4 py-2 font-normal">
                 <div class="flex items-center gap-1.5">
                   <button
                     v-if="breakdown !== null"
                     type="button"
-                    class="rounded p-0.5 text-gray-500 hover:bg-raised hover:text-white"
+                    class="flex size-4 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-raised hover:text-white"
                     :aria-expanded="expanded.has(row.key)"
                     :aria-label="
                       expanded.has(row.key) ? t('usage.hideBreakdown') : t('usage.showBreakdown')
                     "
-                    @click="toggleRow(row.key)"
+                    @click.stop="toggleRow(row.key)"
                   >
                     <DisclosureChevron :open="expanded.has(row.key)"
                       ><UiIcon name="chevronRight" :size="12"
                     /></DisclosureChevron>
                   </button>
-                  <span v-else class="w-4"></span>
-                  <span v-tooltip="dimensionLabel(tab, row.key)" class="truncate text-gray-200">{{
-                    dimensionLabel(tab, row.key)
-                  }}</span>
-                </div>
-                <div class="mt-1 ml-5 h-1 rounded-full bg-raised">
-                  <div
-                    class="h-1 rounded-full bg-blue-500/70"
-                    :style="{ width: `${Math.max((row.requests / total) * 100, 1)}%` }"
-                  ></div>
+                  <span v-else class="w-4 shrink-0"></span>
+                  <div class="min-w-0 flex-1">
+                    <span
+                      v-tooltip="dimensionLabel(tab, row.key)"
+                      class="block truncate text-gray-200"
+                      >{{ dimensionLabel(tab, row.key) }}</span
+                    >
+                    <div class="mt-1 h-1 rounded-full bg-raised">
+                      <div
+                        class="h-1 rounded-full bg-blue-500/70"
+                        :style="{ width: `${Math.max((row.requests / total) * 100, 1)}%` }"
+                      ></div>
+                    </div>
+                  </div>
                 </div>
               </th>
               <td class="px-2 py-2 text-right tabular-nums">
@@ -310,7 +318,7 @@ function childCells(stats: UsageStats): { key: string; text: string; tone?: stri
                   type="button"
                   class="rounded p-1 text-gray-500 hover:bg-raised hover:text-white"
                   :aria-label="`${t('usage.onlyThis')}: ${dimensionLabel(tab, row.key)}`"
-                  @click="applyFilter(row.key)"
+                  @click.stop="applyFilter(row.key)"
                 >
                   <UiIcon name="filter" :size="13" />
                 </button>

@@ -324,7 +324,9 @@ const pageCountTokensDelay = 2200 * time.Millisecond
 // pageSubmitCountDelay 是官网页面提交函数结果、发出 GenerateContent 后统计函数调用与函数结果两轮 token 的最短时延，实际另加不超过 150 ms 的随机值
 const pageSubmitCountDelay = 250 * time.Millisecond
 
-// SendProtected 经账户 WAA runtime 流式发送已准备的请求，响应带实际写入的 proof：Camoufox 后端未带 proof 的 GenerateContent 在页面界面运行，请求头、proof 与随后的 CountTokens 都由页面应用产生；其余 GenerateContent 带官网点击运行时的 Priority: u=0，发出 pageCountTokensDelay 后由 runtime 以相同请求头统计页面提示词的 token
+// SendProtected 经账户 WAA runtime 流式发送已准备的请求，响应带实际写入的 proof
+// Camoufox 后端未带 proof 的 GenerateContent 在页面界面运行，请求头、proof 与随后的 CountTokens 由页面应用产生
+// 其余 GenerateContent 发出 pageCountTokensDelay 后由 runtime 以相同请求头统计页面提示词的 token
 func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
 	if generator, ok := worker.generator(request); ok {
 		return worker.generate(ctx, generator, request)
@@ -360,13 +362,20 @@ func (worker *NativeWorker) SendProtected(ctx context.Context, request Protected
 	}, nil
 }
 
-// generate 在页面界面运行 GenerateContent，proof 绑定 request.Prompt 的 SHA-256
+// generate 在页面界面运行 GenerateContent，proof 绑定 request.Prompt 的 SHA-256；页面发出之前以当前界面步骤报告请求阶段，发出后报告等待响应头
 func (worker *NativeWorker) generate(ctx context.Context, generator pageGenerator, request ProtectedRequest) (*RPCResponse, error) {
 	digest := sha256.Sum256([]byte(request.Prompt))
 	result, _ := wireFunctionResult(request.Body)
 	worker.setPhase(WorkerBusy)
 	response, err := generator.Generate(ctx, camoufoxnative.GenerateTurn{
 		Body: request.Body, ProofStart: request.ProofAt, ProofEnd: request.ProofAt + len("null"), Digest: fmt.Sprintf("%x", digest), Result: result,
+		Step: func(step camoufoxnative.GenerateStep) {
+			if step == camoufoxnative.StepSent {
+				reportRequestPhase(ctx, RequestPhaseSendingUpstream)
+				return
+			}
+			reportRequestPhase(ctx, RequestPhase(step))
+		},
 	})
 	if err != nil {
 		if ctx.Err() != nil {

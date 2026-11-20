@@ -19,7 +19,6 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
-	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
@@ -99,7 +98,7 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 	defer stopShell()
 	var restarting atomic.Bool
 	go func() {
-		started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
+		started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready, shell.pickPath())
 		serviceErr = err
 		close(stopped)
 		if started {
@@ -129,7 +128,7 @@ type serviceReady struct {
 }
 
 // runService 装配运行时、打开请求账本并运行管理监听；就绪或启动失败时向 ready 发送一次结果，started 表示服务曾经就绪
-func runService(ctx context.Context, cancel func(), cfg config.Config, options commandOptions, logs *logOutput, executable string, restarting *atomic.Bool, ready chan<- serviceReady) (started bool, err error) {
+func runService(ctx context.Context, cancel func(), cfg config.Config, options commandOptions, logs *logOutput, executable string, restarting *atomic.Bool, ready chan<- serviceReady, pickPath func(start string) (string, error)) (started bool, err error) {
 	defer func() {
 		if !started && err != nil {
 			ready <- serviceReady{err: err}
@@ -139,7 +138,6 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	if err != nil {
 		return false, err
 	}
-	egress.Prefetch(manager.egressProxy())
 	logService := func(level, message string, attrs ...any) {
 		manager.requests.log("service", level, message, attrs...)
 	}
@@ -149,9 +147,6 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	}
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
-	if err := manager.seedFirstEvents(ctx); err != nil {
-		logService("WARN", "读取近期首事件样本失败", "error", err)
-	}
 	prompts, err := promptdb.Open(filepath.Join("runtime", "prompts.db"))
 	if err != nil {
 		return false, errors.Join(fmt.Errorf("打开对话库: %w", err), manager.Close(), ledger.Close())
@@ -167,8 +162,14 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	if err := removeReplacedExecutables(executable); err != nil {
 		logService("WARN", "删除在线更新留下的旧版本失败", "error", err)
 	}
+	manager.pickPath = pickPath
 	started, err = runServer(ctx, cfg, manager, updater, func(address string) {
 		ready <- serviceReady{url: address, log: logService}
+		go func() {
+			if err := manager.seedFirstEvents(ctx); err != nil && ctx.Err() == nil {
+				logService("WARN", "读取近期首事件样本失败", "error", err)
+			}
+		}()
 		go reclaimFreePages(ctx, logService, prompts, states)
 	})
 	if started {
@@ -232,20 +233,23 @@ const mediaLimit = 1 << 30
 
 // runServer 管理 HTTP 监听，就绪后以管理页面地址调用 onReady，运行到 ctx 结束或监听出错；started 表示监听曾经就绪
 func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, updater api.UpdateService, onReady func(address string)) (started bool, err error) {
-	manager.requests.log("service", "INFO", "管理监听启动", "addr", cfg.ListenAddr)
+	startedAt := time.Now()
+	stage := api.LogStage{Name: "管理服务启动", Step: 1, Steps: 2}
+	manager.requests.logStage("service", "INFO", stage, "管理监听启动", "addr", cfg.ListenAddr)
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if errors.Is(err, portReserved) {
 		var address string
 		listener, address, err = listenAfter(cfg.ListenAddr)
 		if err == nil {
 			manager.reservedListenAddr, manager.activeManagement.ListenAddr = cfg.ListenAddr, address
-			manager.requests.log("service", "WARN", "监听端口被 Windows 保留，改用其后第一个可用端口", "configured_addr", cfg.ListenAddr, "addr", address)
+			manager.requests.logStage("service", "WARN", api.LogStage{Name: stage.Name}, "监听端口被 Windows 保留，改用其后第一个可用端口", "configured_addr", cfg.ListenAddr, "addr", address)
 		}
 	}
 	if err != nil {
 		return false, fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
-	manager.requests.log("service", "INFO", "预览监听启动", "addr", cfg.PreviewListenAddr)
+	stage.Step = 2
+	manager.requests.logStage("service", "INFO", stage, "预览监听启动", "addr", cfg.PreviewListenAddr)
 	previewListener, err := net.Listen("tcp", cfg.PreviewListenAddr)
 	if err != nil {
 		host, _, _ := net.SplitHostPort(cfg.PreviewListenAddr)
@@ -254,7 +258,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 			listener.Close()
 			return false, fmt.Errorf("监听 %s: %w", cfg.PreviewListenAddr, err)
 		}
-		manager.requests.log("service", "WARN", "预览端口不可用，改用空闲端口", "configured_addr", cfg.PreviewListenAddr, "addr", previewListener.Addr())
+		manager.requests.logStage("service", "WARN", api.LogStage{Name: stage.Name}, "预览端口不可用，改用空闲端口", "configured_addr", cfg.PreviewListenAddr, "addr", previewListener.Addr())
 	}
 	manager.previewAddress = previewListener.Addr().String()
 	manager.settings.Store(requestSettingsOf(manager.currentConfig()))
@@ -265,6 +269,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		MediaDir:         filepath.Join("runtime", "media"), MediaLimit: mediaLimit, MediaLinks: manager.mediaLinks,
 		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
 		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy, States: manager.states,
+		PickPath: manager.pickPath,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),
@@ -285,7 +290,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	}()
 
 	address := "http://" + browserAddress(listener.Addr().String())
-	manager.requests.log("service", "INFO", "管理服务就绪", "addr", address)
+	manager.requests.logStage("service", "INFO", api.LogStage{Name: stage.Name, State: "completed"}, "管理服务就绪", "addr", address, "duration", time.Since(startedAt))
 	onReady(address)
 	if cfg.AutoStart {
 		go autoStartService(ctx, manager)

@@ -138,7 +138,7 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 	}, rpc)
 }
 
-// doPrepared 为请求取得 proof 后经账户的 WAA 运行时发送，proof 写在 rpc.ProofAt 处，并写回运行时导出的 Cookie；proof 非空时写入该 proof
+// doPrepared 为请求取得 proof 后经账户的 WAA 运行时发送，proof 写在 rpc.ProofAt 处，并写回运行时导出的 Cookie；proof 非空时写入该 proof；准备结果没有 proof 时由页面应用在界面运行中取 proof 并构造请求头，不签 Authorization，等待响应头的阶段由运行时在页面发出后报告
 func (t *WorkerProtectedTransport) doPrepared(
 	ctx context.Context,
 	prompt string,
@@ -151,20 +151,25 @@ func (t *WorkerProtectedTransport) doPrepared(
 	if err != nil {
 		return nil, err
 	}
-	browserState, err := worker.BrowserStorageState(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+	headers := rpc.Header
+	if prepared.Proof != "" {
+		browserState, err := worker.BrowserStorageState(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+		}
+		authorization, err := t.transport.signer.Authorization(browserState)
+		if err != nil {
+			return nil, err
+		}
+		headers = rpc.Header.Clone()
+		headers.Set("Authorization", authorization)
 	}
-	authorization, err := t.transport.signer.Authorization(browserState)
-	if err != nil {
-		return nil, err
-	}
-	headers := rpc.Header.Clone()
-	headers.Set("Authorization", authorization)
 	if lease.CoolingDown(selectionAccessScope(selection)) {
 		return nil, ErrAccountCoolingDown
 	}
-	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
+	if prepared.Proof != "" {
+		reportRequestPhase(ctx, RequestPhaseSendingUpstream)
+	}
 	response, err := worker.SendProtected(ctx, ProtectedRequest{
 		URL: rpc.URL, Headers: headers, Body: rpc.Body, ProofAt: rpc.ProofAt, Prompt: prompt, PagePrompt: prepared.PagePrompt, Proof: prepared.Proof,
 	})
@@ -335,10 +340,12 @@ func (s *PooledService) Models(ctx context.Context) ([]Model, error) {
 // RefreshAccountModels 占用指定账户的一个普通槽位刷新其权益与模型目录，不受账户启用、调度状态与冷却限制；reload 为 true 时重新载入账户页面
 func (s *PooledService) RefreshAccountModels(ctx context.Context, accountID string, reload bool) ([]Model, error) {
 	accountID = strings.TrimSpace(accountID)
+	enter := s.refreshSteps(ctx, accountID, true)
 	lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: accountID, anyState: true})
 	if err != nil {
 		return nil, err
 	}
+	enter(AccountStepCatalog)
 	models, requestErr := s.modelsForLease(ContextWithAccountLease(ctx, lease), lease, reload)
 	releaseErr := lease.Release()
 	if requestErr != nil {
@@ -363,6 +370,7 @@ type AccountRefresh struct {
 // RefreshAccountState 重新载入账户页面读取权益与模型目录，登录失效时标记账户需要登录，因上游要求验证而受限的账户在常驻 Worker 的页面上读取目录后再发一次生成请求核对验证状态；wait 为 true 时等待该账户的一个普通槽位且不受调度状态限制，否则只用就绪账户的空闲槽位
 func (s *PooledService) RefreshAccountState(ctx context.Context, accountID string, wait bool) (AccountRefresh, error) {
 	accountID = strings.TrimSpace(accountID)
+	enter := s.refreshSteps(ctx, accountID, wait)
 	var lease *AccountLease
 	var err error
 	if wait {
@@ -382,8 +390,10 @@ func (s *PooledService) RefreshAccountState(ctx context.Context, accountID strin
 	if s.pool.verificationRestricted(accountID) {
 		catalogCtx = ContextWithResidentCatalog(ctx)
 	}
+	enter(AccountStepCatalog)
 	models, err := s.modelsForLease(ContextWithAccountLease(catalogCtx, lease), lease, true)
 	if err == nil && s.pool.verificationRestricted(accountID) {
+		enter(AccountStepVerifying)
 		err = s.checkAccountVerification(ctx, lease)
 	}
 	if err != nil {
@@ -395,6 +405,39 @@ func (s *PooledService) RefreshAccountState(ctx context.Context, accountID strin
 	s.pool.mu.Unlock()
 	refresh.Models = len(models)
 	return refresh, lease.Release()
+}
+
+// refreshStepsContextKey 是 context 中账户刷新与目录同步步骤回调的键
+type refreshStepsContextKey struct{}
+
+// ContextWithRefreshSteps 让账户刷新与目录同步在进入每一步时调用 report，index 从 1 开始，total 为这次操作的步数
+func ContextWithRefreshSteps(ctx context.Context, report func(step AccountStep, index, total int)) context.Context {
+	return context.WithValue(ctx, refreshStepsContextKey{}, report)
+}
+
+// refreshSteps 返回向 ctx 中的步骤回调报告进入一步的函数；wait 为 true 且账户没有空闲槽位时先报告等待在途请求
+// 步数为读取目录一步，加上等待与因要求验证而受限时的核对各一步
+func (s *PooledService) refreshSteps(ctx context.Context, accountID string, wait bool) func(AccountStep) {
+	report, _ := ctx.Value(refreshStepsContextKey{}).(func(AccountStep, int, int))
+	if report == nil {
+		return func(AccountStep) {}
+	}
+	waiting := wait && s.pool.SlotBusy(accountID)
+	steps, done := 1, 0
+	if waiting {
+		steps++
+	}
+	if s.pool.verificationRestricted(accountID) {
+		steps++
+	}
+	enter := func(step AccountStep) {
+		done++
+		report(step, done, max(steps, done))
+	}
+	if waiting {
+		enter(AccountStepWaiting)
+	}
+	return enter
 }
 
 // checkAccountVerification 以账户的页面初始化模型在租约内发一次最小生成请求，第一次被上游 403、协议错误码 7 拒绝时与普通请求一样在同一账户重试一次：生成成功时解除受限，上游仍拒绝账户时按其原因保持服务受限，其他失败保持受限并返回该失败
@@ -609,12 +652,16 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease,
 		slog.Warn("账户模型目录缓存保存失败", "account", account.ID, "error", err)
 	}
 	if buildEnabled && buildErr != nil {
-		return models, fmt.Errorf("读取 Build 模型目录: %w", buildErr)
+		err := fmt.Errorf("读取 Build 模型目录: %w", buildErr)
+		if !errors.Is(buildErr, context.Canceled) {
+			s.pool.recordCatalogFailure(account.ID, err)
+		}
+		return models, err
 	}
 	return models, nil
 }
 
-// catalogFailure 认证失败时确认账户会话并把已失效的账户标为需要登录，Google 拒绝该账户时标为服务受限，其余失败记为该账户最近一次目录读取错误
+// catalogFailure 认证失败时确认账户会话并把已失效的账户标为需要登录，Google 拒绝该账户时标为服务受限，其余失败记为该账户最近一次目录读取错误，随请求取消而中止的读取不记
 func (s *PooledService) catalogFailure(ctx context.Context, lease *AccountLease, err error) error {
 	if DefinitiveAuthenticationFailure(err) {
 		return errors.Join(err, lease.ConfirmAuthenticationFailure(ctx, err))
@@ -622,7 +669,9 @@ func (s *PooledService) catalogFailure(ctx context.Context, lease *AccountLease,
 	if denial := RestrictionDenial(err); denial != nil {
 		return errors.Join(err, s.pool.MarkRestricted(lease.Account().ID, denial))
 	}
-	s.pool.recordCatalogFailure(lease.Account().ID, err)
+	if !errors.Is(err, context.Canceled) {
+		s.pool.recordCatalogFailure(lease.Account().ID, err)
+	}
 	return err
 }
 

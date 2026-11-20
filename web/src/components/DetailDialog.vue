@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
   DialogClose,
   DialogContent,
@@ -12,15 +12,25 @@ import {
 import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   title: string
   description?: string | undefined
   copyText?: string | undefined
+  narrow?: boolean
 }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const copied = ref(false)
+// opener 是对话框打开时持有焦点的元素，关闭后焦点回到它
+let opener: Element | null = null
+watch(
+  () => props.open,
+  (open) => {
+    if (open) opener = document.activeElement
+  },
+  { flush: 'sync' },
+)
 // clipboardAvailable 表示页面处于可使用剪贴板 API 的安全上下文
 const clipboardAvailable = window.isSecureContext
 
@@ -37,7 +47,9 @@ async function copy(text: string): Promise<void> {
     <DialogPortal>
       <DialogOverlay class="fixed inset-0 z-[70] bg-black/60" />
       <DialogContent
-        class="detail-dialog fixed top-1/2 left-1/2 z-[71] flex max-h-[85vh] w-[calc(100vw-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl focus:outline-none"
+        class="detail-dialog fixed top-1/2 left-1/2 z-[71] flex max-h-[85vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl focus:outline-none"
+        :class="narrow ? 'max-w-xl' : 'max-w-3xl'"
+        @close-auto-focus.prevent="(opener as HTMLElement | null)?.focus()"
       >
         <header class="flex items-start gap-3 border-b border-line px-5 py-4">
           <div class="min-w-0 flex-1">
@@ -61,6 +73,7 @@ async function copy(text: string): Promise<void> {
             {{ copied ? t('common.copied') : t('common.copy') }}
           </button>
           <DialogClose
+            v-tooltip="t('common.close')"
             class="shrink-0 rounded p-1 text-gray-500 hover:bg-raised hover:text-white"
             :aria-label="t('common.close')"
           >

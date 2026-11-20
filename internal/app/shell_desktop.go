@@ -76,6 +76,11 @@ func newShell(open, hideDock bool, stop func()) *uiShell {
 	return &uiShell{app: desktop.New(open, hideDock, filepath.Join(cache, "AIStudio2API", "WebView2"), stop)}
 }
 
+// pickPath 返回以系统对话框选择账户目录的函数
+func (s *uiShell) pickPath() func(start string) (string, error) {
+	return s.app.PickPath
+}
+
 // run 运行窗口与托盘：服务就绪前显示启动画面，就绪后显示管理页面，启动失败时显示错误对话框后退出
 func (s *uiShell) run(ctx context.Context, start func() (serviceReady, error)) error {
 	if err := linkWebKitHelpers(); err != nil {

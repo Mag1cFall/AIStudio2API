@@ -1054,7 +1054,10 @@ func (s *PooledService) inlineMediaBusy(id string) bool {
 	return s.inlineMediaUses[id] > 0
 }
 
-// UploadInlineMediaToLease 把内联附件改写为目标账户 Drive 文件的引用，keepImages 为真时 CreateInteractionStream 可内联的图片保持内联，同一账户已上传过的相同内容直接引用，Drive 存储空间已满时没有上传成功的附件保持内联（keepImages 为真时只接受内联图片，仍返回上传错误），闲置超过 inlineMediaIdle 的旧文件在本次请求结束时删除
+// UploadInlineMediaToLease 把内联附件改写为目标账户 Drive 文件的引用
+// keepImages 为真时 CreateInteractionStream 可内联的图片保持内联
+// 同一账户已上传过的相同内容直接引用；闲置超过 inlineMediaIdle 的旧文件在本次请求结束时删除
+// Drive 存储空间已满时没有上传成功的附件保持内联，keepImages 为真时只接受内联图片，仍返回上传错误
 func (s *PooledService) UploadInlineMediaToLease(
 	ctx context.Context,
 	target *AccountLease,

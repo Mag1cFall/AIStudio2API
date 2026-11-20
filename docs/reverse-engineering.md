@@ -446,8 +446,8 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 
 | 缓存 | 启动顺序 |
 | --- | --- |
-| 非空 | 立即开始 Worker 预热，首个 Worker 有结果后在后台读取目录 |
-| 空 | 先开始读取目录，等到新 generation 的首个非空结果，再开始 Worker 预热 |
+| 非空 | 进入 `RUNNING` 并在后台预热 Worker，首个 Worker 有结果后在后台读取目录 |
+| 空 | 先开始读取目录，等到新 generation 的首个非空结果后进入 `RUNNING`，并在后台预热 Worker |
 
 读取目录的账户与方式：
 

@@ -174,7 +174,10 @@ var pageStartupRPCs = [][]pageRPC{
 	{incidentsRPC, {"ListPromos", "[]"}},
 }
 
-// pageStartupTimes 是官网四次预检已缓存的页面载入中各组启动请求在 GetLoggingContext 之后的发出时刻（毫秒），各组依次为 GetUserPreferences 与第一个 GenerateAccessToken、Waa/Create、第二个 GenerateAccessToken、ListIncidentsHistory 与 ListPromos、GetAiStudioBenefitTier 与 ListModels
+// pageStartupTimes 是官网页面载入中各组启动请求在 GetLoggingContext 之后的发出时刻
+// 单位为毫秒；每行是一次预检已缓存的官网载入，共四次
+// 各列依次为 GetUserPreferences 与第一个 GenerateAccessToken、Waa/Create、第二个 GenerateAccessToken、
+// ListIncidentsHistory 与 ListPromos、GetAiStudioBenefitTier 与 ListModels
 var pageStartupTimes = [][5]int{{49, 119, 124, 125, 150}, {25, 36, 40, 61, 85}, {40, 53, 71, 95, 120}, {26, 38, 53, 74, 95}}
 
 // pageStartupOffsets 返回这次载入各组启动请求在 GetLoggingContext 之后的发出时刻：随机取官网的一次载入，整体按 0.9–1.1 倍缩放
@@ -1280,7 +1283,10 @@ func (runtime *goWAARuntime) SubmitProof(ctx context.Context, digest string, res
 	return runtime.proof(ctx, digest, result, proofSubmit, rounds, nil, nil)
 }
 
-// RunProof 为 SHA-256 digest 生成 GenerateContent 的 fresh WAA proof，返回 proof 与粘贴进页面的提示词：ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun；其余粘贴 prompt（为空时取 body 最后一个 user 轮次的文本）后点击 Run，body 的对话不接着本页上一次的对话时先点 New chat；此前因空闲不够没有做的插入附件操作步数计入这次取 proof 的跳过步数
+// RunProof 为 SHA-256 digest 生成 GenerateContent 的 fresh WAA proof，返回 proof 与粘贴进页面的提示词
+// ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余粘贴 prompt 后点击 Run
+// prompt 为空时取 body 最后一个 user 轮次的文本；body 的对话不接着本页上一次的对话时先点 New chat
+// 因空闲不够没有做的插入附件操作步数计入这次取 proof 的跳过步数
 func (runtime *goWAARuntime) RunProof(ctx context.Context, digest string, prompt string, body []byte) (string, string, error) {
 	prooftime.Skip(ctx, int(runtime.skippedInserts.Swap(0)))
 	if _, rerun := ctx.Value(pageRerunKey{}).(int); rerun && !runtime.pointer.Clicked().IsZero() {
@@ -1321,7 +1327,11 @@ const (
 	proofSubmit
 )
 
-// proof 以当前 VM 生成 fresh WAA proof：input 为 proofRun 时先在页面上一次的对话不接到 contents 时点 New chat（空闲放不下时不做），再做 settings 中的各组运行设置操作，然后写入提示词后以可信鼠标点击 Run，为 proofSubmit 时在 submitted 轮对话最后一轮的函数调用块中粘贴函数结果并点击提交，ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余 ctx 带 userGestureKey 的请求先记录一次用户操作；VM 到期时等待后台重建完成，等待随 ctx 结束
+// proof 以当前 VM 生成 fresh WAA proof
+// input 为 proofRun 时依次点 New chat（页面上一次的对话不接到 contents 时，空闲放不下时不做）、做 settings 中的各组运行设置、
+// 写入提示词并以可信鼠标点击 Run；为 proofSubmit 时在 submitted 轮对话最后一轮的函数调用块中粘贴函数结果并点击提交
+// ctx 带 pageRerunKey 且本页面点过 Run 时点击最后一轮的 Rerun，其余 ctx 带 userGestureKey 的请求先记录一次用户操作
+// VM 到期时等待后台重建完成，等待随 ctx 结束
 func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt string, input proofInput, submitted int, settings [][]waa.SettingStep, contents []json.RawMessage) (string, error) {
 	lockStarted := time.Now()
 	runtime.vmMu.Lock()

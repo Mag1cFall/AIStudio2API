@@ -22,7 +22,8 @@ type pageLoad struct {
 // firefoxEncodedRatio 是 Firefox 158 经同一代理载入官网新对话页时压缩正文与解压正文的字节比
 const firefoxEncodedRatio = 0.1943
 
-// navigationTiming 按一次页面载入的实测时刻生成 Firefox 158 的 PerformanceNavigationTiming 网络阶段（以导航开始为零点的毫秒数）并返回旧版 timing 的 domLoading：新建连接的 DNS、TCP 与 HTTP 代理 CONNECT 应答取拨号实测，隧道内 TLS 与服务端耗时落在 requestStart 之后，响应各时刻取读完正文的实测时刻，Firefox 内部派发间隔与压缩正文大小取 Firefox 158 现场取值
+// navigationTiming 按一次页面载入的实测时刻生成 Firefox 158 的 PerformanceNavigationTiming 网络阶段
+// 各时刻为以导航开始为零点的毫秒数，第二个返回值为 performance.timing 的 domLoading
 func navigationTiming(load pageLoad) (map[string]any, int) {
 	at := func(moment time.Time) int { return int(moment.Sub(load.started).Milliseconds()) }
 	fetch := rand.IntN(2)

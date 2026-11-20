@@ -9,7 +9,11 @@ import (
 	"time"
 )
 
-// pageTab 是账户 WAA Worker 的一个页面：holder 为正在使用它的请求租约，extra 为 nil 时是 Worker 的主页面；used 是 holder 在主页面上取 proof 或发送请求时的 Worker 页面，retired 表示页面在重新载入后等 holder 结束再关闭，不再分给其他请求，退役的主页面让出主页面的位置、holder 之后仍在 used 上取 proof 与发送；freed 是页面最近一次空出（请求归还租约或页面打开）的时刻，还没用过的主页面为零值
+// pageTab 是账户 WAA Worker 的一个页面
+// holder 为正在使用它的请求租约，extra 为 nil 时是 Worker 的主页面
+// used 是 holder 在主页面上取 proof 或发送请求时的 Worker 页面
+// retired 表示页面在重新载入后等 holder 结束再关闭，不分给其他请求；退役的主页面让出主页面的位置，holder 仍在 used 上取 proof 与发送
+// freed 是页面最近一次空出（请求归还租约或页面打开）的时刻，还没用过的主页面为零值
 type pageTab struct {
 	holder  *AccountLease
 	extra   *extraPage
@@ -56,7 +60,10 @@ func leaseActive(lease *AccountLease) bool {
 	return !lease.released
 }
 
-// usePage 返回 ctx 中请求使用的页面：同一租约始终使用同一页面；有空闲页面时用空出最早的一个，账户并发时在后台预先打开下一个页面（见 openSpare）；都在使用中时在后台像用户新开标签页一样再载入一个页面，同时等已有页面空出与新页面载入完成，先到哪个用哪个，新开失败且没有页面空出时返回失败原因；载入期间其他请求照常取用已有页面，Worker 关闭后不再新开；没有租约或运行时不能新开页面时用主页面
+// usePage 返回 ctx 中请求使用的页面
+// 同一租约始终使用同一页面；有空闲页面时用空出最早的一个，账户并发时由 openSpare 在后台预先打开下一个页面
+// 都在使用中时在后台再载入一个页面，已有页面空出与新页面载入完成先到哪个用哪个，新开失败且没有页面空出时返回失败原因
+// Worker 关闭后不新开页面；没有租约或运行时不能新开页面时用主页面
 func (worker *NativeWorker) usePage(ctx context.Context) (*pageTab, error) {
 	lease, ok := AccountLeaseFromContext(ctx)
 	if _, opens := worker.current().(tabOpener); !ok || !opens {

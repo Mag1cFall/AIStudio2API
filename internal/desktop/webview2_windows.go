@@ -11,12 +11,16 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
 
 // webview2BootstrapperURL 为微软 WebView2 Evergreen 引导程序的下载地址
 const webview2BootstrapperURL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+
+// webview2DownloadTimeout 为下载 WebView2 引导程序一次请求从发出到读完的上限，超时按下载失败处理
+const webview2DownloadTimeout = 2 * time.Minute
 
 // webview2Cancelled 为用户在引导程序窗口中取消安装时引导程序的退出码
 const webview2Cancelled = 0x80040810
@@ -76,7 +80,7 @@ func installWebView2() bool {
 // downloadWebView2Bootstrapper 下载 WebView2 Evergreen 引导程序到临时文件并返回其路径
 func downloadWebView2Bootstrapper(ctx context.Context) (string, error) {
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, webview2BootstrapperURL, nil)
-	response, err := http.DefaultClient.Do(request)
+	response, err := (&http.Client{Timeout: webview2DownloadTimeout}).Do(request)
 	if err != nil {
 		return "", fmt.Errorf("下载 WebView2 引导程序: %w", err)
 	}

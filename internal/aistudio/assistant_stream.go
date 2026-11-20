@@ -44,7 +44,9 @@ type AssistantStreamDecoder struct {
 	failed bool
 }
 
-// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应：field 1 为消息列表，其后可带 google.rpc 状态；本轮回复结束、函数调用之后模型继续输出正文或上游后续步骤失败时不再读取上游，消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取，仍未完成而已解出完整函数调用或写出正文时以已有内容结束本轮
+// DecodeAssistantStream 解码 StreamCodeAssistantOfflineGeneration 响应并把事件交给 emit
+// 消息列表在回复完成前正常结束时经 Reopen 重新打开一次任务流继续读取
+// 停止读取与以已有内容结束本轮的条件见 docs/build.md 的“任务流”一节
 func DecodeAssistantStream(source io.Reader, decoder *AssistantStreamDecoder, emit func(Event) error) error {
 	err := decodeAssistantMessages(source, decoder, emit)
 	if err == nil && !decoder.finished && !decoder.stopped && decoder.Reopen != nil {

@@ -6,7 +6,11 @@ import { markdown } from '@/markdown'
 import type { UpdateProgress, UpdateStatus } from '@/types'
 import UiIcon from '@/components/UiIcon.vue'
 
-const props = defineProps<{ status: UpdateStatus | null; activeRequests: number }>()
+const props = defineProps<{
+  status: UpdateStatus | null
+  activeRequests: number
+  restartStalled: boolean
+}>()
 const emit = defineEmits<{ status: [UpdateStatus]; restarting: [] }>()
 const { t, locale, errorText, logText } = useI18n()
 const checking = ref(false)
@@ -55,7 +59,7 @@ const summary = computed(() => {
           ? 'version.installing'
           : 'version.downloading',
     )
-  if (phase.value === 'restarting') return t('version.restarting')
+  if (phase.value === 'restarting') return props.restartStalled ? '' : t('version.restarting')
   if (props.status?.available) return t('version.available').replace('{version}', latest.value)
   if (latest.value) return t('version.upToDate')
   return ''
@@ -256,11 +260,15 @@ onActivated(() => void check(false))
         </p>
 
         <p
-          v-if="error || status?.error"
+          v-if="restartStalled || error || status?.error"
           role="alert"
           class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm break-words text-red-300"
         >
-          {{ error || logText(status?.error ?? '') }}
+          {{
+            restartStalled
+              ? t('version.restartStalled').replace('{path}', status?.log_dir ?? '')
+              : error || logText(status?.error ?? '')
+          }}
         </p>
       </article>
 
