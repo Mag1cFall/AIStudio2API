@@ -5,8 +5,14 @@ import { formatLogDuration, isBlockField, parseGoDuration } from '@/logs'
 import type { AdminLog } from '@/types'
 
 const props = withDefaults(
-  defineProps<{ entry: AdminLog; message?: boolean; part?: 'all' | 'inline' | 'block' }>(),
-  { message: true, part: 'all' },
+  defineProps<{
+    entry: AdminLog
+    message?: boolean
+    part?: 'all' | 'inline' | 'block'
+    duration?: boolean
+    title?: boolean
+  }>(),
+  { message: true, part: 'all', duration: true, title: false },
 )
 const { t, logText, locale } = useI18n()
 
@@ -18,6 +24,7 @@ const valueKeys: Partial<Record<string, string>> = {
   mode: 'logs.mode',
   channel: 'channel',
   cause: 'logs.cause',
+  trigger: 'logs.trigger',
 }
 
 // fieldValue 返回字段取值按界面语言显示的文字，时长按界面语言的单位显示
@@ -28,10 +35,11 @@ function fieldValue(key: string, value: string): string {
   return (prefix && t(`${prefix}.${value}` as TranslationKey)) || logText(value)
 }
 
-// fields 是按界面语言显示的字段：part 为 inline 时只取与消息同行的短字段，为 block 时只取另起一行的长字段
+// fields 是按界面语言显示的字段：part 为 inline 时只取与消息同行的短字段，为 block 时只取另起一行的长字段；duration 为 false 时不含耗时，耗时显示在行尾
 const fields = computed(() =>
   (props.entry.fields ?? [])
     .filter((field) => props.part === 'all' || isBlockField(field) === (props.part === 'block'))
+    .filter((field) => props.duration || field.key !== 'duration')
     .map((field) => ({
       key: field.key,
       label: t(`logs.field.${field.key}` as TranslationKey) ?? field.key,
@@ -42,7 +50,9 @@ const fields = computed(() =>
 </script>
 
 <template>
-  <span v-if="message" class="log-line-message">{{ logText(entry.message) }}</span
+  <span v-if="message" class="log-line-message" :class="{ 'log-op-title': title }">{{
+    logText(entry.message)
+  }}</span
   ><slot />
   <template v-for="(field, index) in fields" :key="field.key"
     >{{ message || index > 0 ? ' ' : ''

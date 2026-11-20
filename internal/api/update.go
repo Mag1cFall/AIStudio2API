@@ -26,6 +26,8 @@ type UpdateStatus struct {
 	Error       string          `json:"error,omitempty"`
 	Updating    bool            `json:"updating"`
 	Progress    *UpdateProgress `json:"progress,omitempty"`
+	// LogDir 是服务日志目录的绝对路径
+	LogDir string `json:"log_dir"`
 }
 
 // UpdateProgress 表示在线更新的阶段（download、verify、install、restart）与发行包的已下载和总字节数，总字节数未知时为 0

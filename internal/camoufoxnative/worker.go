@@ -361,6 +361,34 @@ func (worker *Worker) lockInput() {
 	worker.inputWaiters.Add(-1)
 }
 
+// lockInputWithin 为前台操作取得 inputMu，ctx 结束或等满 limit 时放弃等待并返回错误，此后取得的 inputMu 立即释放
+func (worker *Worker) lockInputWithin(ctx context.Context, limit time.Duration) error {
+	worker.inputWaiters.Add(1)
+	locked := make(chan struct{})
+	go func() {
+		worker.inputMu.Lock()
+		close(locked)
+	}()
+	timeout := time.NewTimer(limit)
+	defer timeout.Stop()
+	var err error
+	select {
+	case <-locked:
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-timeout.C:
+		err = context.DeadlineExceeded
+	}
+	worker.inputWaiters.Add(-1)
+	if err != nil {
+		go func() {
+			<-locked
+			worker.inputMu.Unlock()
+		}()
+	}
+	return err
+}
+
 // lockInputIdle 在没有前台操作等待时取得 inputMu，后台新开对话让界面运行先接收输入
 func (worker *Worker) lockInputIdle() {
 	for {

@@ -85,7 +85,7 @@ function applyCustom(): void {
         align="start"
         :side-offset="6"
         :collision-padding="12"
-        class="ui-popover z-[60] w-[min(36rem,calc(100vw-24px))] rounded-lg border border-line bg-panel p-3 text-sm shadow-xl shadow-black/40"
+        class="ui-popover z-[60] max-h-(--reka-popover-content-available-height) w-[min(36rem,calc(100vw-24px))] overflow-y-auto rounded-lg border border-line bg-panel p-3 text-sm shadow-xl shadow-black/40"
       >
         <div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">
           <div class="space-y-3">

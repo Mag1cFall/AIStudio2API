@@ -6,6 +6,7 @@ import {
   GridComponent,
   LegendComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TooltipComponent,
 } from 'echarts/components'
 import VChart from 'vue-echarts'
@@ -18,6 +19,7 @@ use([
   GridComponent,
   LegendComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TooltipComponent,
 ])
 

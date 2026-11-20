@@ -39,7 +39,8 @@ var userRejected = []*regexp.Regexp{phrases(
 // clientIdentity 匹配行首带归属声明的身份句：You are 加以 agent、assistant 或 AI 结尾的身份短语，8 个字符内接 created by、built on、based on 等归属声明，到后接空格、Tab、CR 或行尾的句号为止
 var clientIdentity = regexp.MustCompile(`(?im)^[ \t]*(?:you are|you're)\s+(?:an?\s+)?(?:[\w'-]+[\s,]+){0,8}(?:agent|assistant|ai)\b[^.!?\n<>]{0,8}?\b(?:(?:created|built|made|developed|designed|trained|powered|maintained|published|released|provided)\s+(?:by|on|upon)|based\s+on)\s+[^\n<>]{1,80}?\.(?:[ \t\r]|$)`)
 
-// billingHeader 匹配计费头到行尾：行首以 x- 开头且名称含 billing、名称以 -billing-header、-billing-metadata、-billing-token 或 -billing-info 结尾、x- 开头且值带 cc_version、cc_entrypoint 或 cch= 的行，以及行中任意位置的 x-anthropic-billing-header:
+// billingHeader 匹配客户端系统提示中从计费头名称到行尾的文本
+// 匹配的头依据见 docs/protocol.md 的“公开端点、状态映射与实现”一节中的计费头规则
 var billingHeader = regexp.MustCompile(`(?im)^[ \t]*(?:x-[a-z0-9_-]*billing[a-z0-9_-]*|[a-z0-9_-]+-billing-(?:header|metadata|token|info)):[^\n]*|^[ \t]*x-[a-z0-9_-]+:[^\n]*(?:cc_version|cc_entrypoint|cch=)[^\n]*|x-anthropic-billing-header:[^\n]*`)
 
 // conventionsBlock 匹配 omp 旧版系统提示中的 system-conventions 块

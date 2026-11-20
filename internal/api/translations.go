@@ -140,7 +140,7 @@ func (s *server) translateSegments(ctx context.Context, model string, sources []
 	var output struct {
 		Segments []string `json:"segments"`
 	}
-	if err := json.Unmarshal([]byte(result.text.String()), &output); err != nil || len(output.Segments) != len(sources) {
+	if err := json.Unmarshal(result.text.Bytes(), &output); err != nil || len(output.Segments) != len(sources) {
 		return nil, fmt.Errorf("AI Studio returned %d translated segments for %d transcript segments: %q", len(output.Segments), len(sources), result.text.String())
 	}
 	return output.Segments, nil

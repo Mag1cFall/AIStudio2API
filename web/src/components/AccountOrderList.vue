@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from '@/i18n'
+import { useAppendList } from '@/rows'
 import type { Account } from '@/types'
 import FilterMenu from './FilterMenu.vue'
 import UiIcon from './UiIcon.vue'
@@ -60,6 +61,13 @@ function drop(index: number): void {
   endDrag()
 }
 
+const reveal = useAppendList('list')
+// 新加入的账户排在末尾，加入后把它滚入列表
+watch(
+  () => priority.value.length,
+  (count, before) => count > before && reveal(false),
+)
+
 // endDrag 结束拖动
 function endDrag(): void {
   dragging.value = -1
@@ -69,7 +77,12 @@ function endDrag(): void {
 
 <template>
   <div class="space-y-2">
-    <ol v-if="priority.length > 0" aria-labelledby="setting-account-order-label">
+    <ol
+      v-if="priority.length > 0"
+      ref="list"
+      class="append-list"
+      aria-labelledby="setting-account-order-label"
+    >
       <li
         v-for="(id, index) in priority"
         :key="id"
@@ -115,6 +128,7 @@ function endDrag(): void {
           <UiIcon name="chevronDown" :size="14" />
         </button>
         <button
+          v-tooltip="t('settings.accountOrderRemove').replace('{account}', label(id))"
           type="button"
           class="rounded p-0.5 text-gray-500 opacity-0 transition group-hover/item:opacity-100 hover:text-gray-200 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
           :aria-label="t('settings.accountOrderRemove').replace('{account}', label(id))"

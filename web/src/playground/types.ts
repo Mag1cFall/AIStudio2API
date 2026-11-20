@@ -106,7 +106,11 @@ export interface AgentEnvironment {
   rules: EgressRule[]
 }
 
-// RunSettings 是 Playground 运行设置，数值项为 null 时使用模型默认值；thinkingBudget 为 -1 时由模型决定、0 时不思考；protocol 与 stream 决定请求使用的公开协议与是否流式；agentModel 与 maxTotalTokens 是 Antigravity 所选的模型与 token 上限，空值为 agent 默认，environment 是带远程环境的 agent 的运行环境；thinkingSummaries、visualization 与 collaborativePlanning 是 Deep Research 的思考摘要、可视化与协作规划
+// RunSettings 是 Playground 运行设置，数值项为 null 时使用模型默认值
+// thinkingBudget 为 -1 时由模型决定、0 时不思考；protocol 与 stream 决定请求使用的公开协议与是否流式
+// agentModel 与 maxTotalTokens 是 Antigravity 所选的模型与 token 上限，空值为 agent 默认
+// environment 是带远程环境的 agent 的运行环境
+// thinkingSummaries、visualization 与 collaborativePlanning 是 Deep Research 的思考摘要、可视化与协作规划
 export interface RunSettings {
   model: string
   protocol: Protocol

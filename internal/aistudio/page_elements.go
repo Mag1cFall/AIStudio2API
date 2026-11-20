@@ -251,6 +251,7 @@ var (
 )
 
 // parseStarterSeries 从 starterModule 的脚本中读出以 includes 判断模型名单的各模型系列与入门卡片：先列出提示词卡片数组中的卡片，再列出 examples 中的示例应用卡片；卡片引用模块之外示例应用（没有标题）的系列不读出
+// 返回的字符串不引用 script 的内存
 func parseStarterSeries(script []byte) ([]starterSeries, error) {
 	text := string(script)
 	starts := starterSeriesPattern.FindAllStringSubmatchIndex(text, -1)
@@ -261,7 +262,7 @@ func parseStarterSeries(script []byte) ([]starterSeries, error) {
 			end = starts[index+1][0]
 		}
 		block := text[start[0]:end]
-		series := starterSeries{ID: text[start[2]:start[3]]}
+		series := starterSeries{ID: strings.Clone(text[start[2]:start[3]])}
 		match := starterListPattern.FindStringSubmatch(block)
 		if match == nil {
 			continue
@@ -301,7 +302,7 @@ func parseStarterSeries(script []byte) ([]starterSeries, error) {
 						return nil, fmt.Errorf("入门卡片模块系列 %s 的预览图: %w", series.ID, err)
 					}
 				}
-				series.Cards = append(series.Cards, card)
+				series.Cards = append(series.Cards, starterCard{Title: strings.Clone(card.Title), Applet: strings.Clone(card.Applet), Preview: strings.Clone(card.Preview)})
 			}
 		}
 		if complete && len(series.Cards) > 0 {
@@ -1009,7 +1010,7 @@ func (log *pageElements) changed(at time.Time, show func(shown time.Time)) {
 	})
 }
 
-// started 在点击 Run 或提交函数结果后 80–150 ms 页面渲染对话轮次时安排回答占位的曝光：用户轮次与模型占位的各段与换成 Stop 的按钮，提交函数结果只多模型占位一段；跟踪可见性的模型占位在其后一帧渲染，扫描已排在节流窗口结束时与其余元素一同曝光（排在 Stop 按钮之前），否则在窗口结束时单独曝光。Rerun 在原处重新生成，对话区不滚动，换成 Stop 的按钮在回答中第一次扫描时曝光
+// started 在点击 Run、Rerun 或提交函数结果后安排页面渲染对话轮次与回答占位的曝光
 func (turn *pageTurn) started() {
 	if turn.rerun {
 		return
@@ -1143,7 +1144,10 @@ func (turn *pageTurn) grew(at time.Time, text string) {
 	})
 }
 
-// 官网对话区的排版，单位为 CSS 像素，由 2026-11-16 三个视口（1600×775、1680×917、1920×947）每秒 60 帧会话现场中 273488 曝光时的对话内容推出：chatLine 是正文行高，chatTurn 是一轮正文之外的高度，chatThoughts 是模型轮次收起的思考面板，chatChrome 是视口中顶栏与输入框占去的高度，chatColumn 是对话列的最大宽度，chatSides 是视口宽度中导航栏与运行设置面板，chatPadding 是一轮正文两侧的内边距，chatFont 是正文字号
+// 官网对话区的排版，单位为 CSS 像素
+// chatLine 是正文行高，chatTurn 是一轮正文之外的高度，chatThoughts 是模型轮次收起的思考面板
+// chatChrome 是视口中顶栏与输入框占去的高度，chatColumn 是对话列的最大宽度
+// chatSides 是视口宽度中导航栏与运行设置面板，chatPadding 是一轮正文两侧的内边距，chatFont 是正文字号
 const (
 	chatLine     = 20
 	chatTurn     = 30
@@ -1216,7 +1220,7 @@ func (turn *pageTurn) change(at time.Time, show func(shown time.Time)) {
 	})
 }
 
-// done 在响应正文关闭（at）后 50–59 ms（回答结束的页面事件之后）渲染各模型轮次的按钮与输入区并在其后的扫描中曝光，点击 Run 的回答再记录回答结束；函数调用与提交函数结果后的回答按官网各自的一组元素曝光，Rerun 的 Run 按钮只在换成 Stop 的按钮曝光过时重新曝光，点击 Run 的带思考的回答与同一次扫描中等待曝光的 Rerun 正文段在输入区之后曝光跟踪可见性的正文段，这一轮模型轮次的 veTurnLate 紧随其后渲染、在下一次扫描中曝光
+// done 在响应正文于 at 关闭后安排渲染各模型轮次的按钮与输入区并曝光，点击 Run 的回答再记录回答结束
 func (turn *pageTurn) done(at time.Time) {
 	log := turn.log
 	log.mu.Lock()

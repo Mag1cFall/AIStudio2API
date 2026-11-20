@@ -37,6 +37,9 @@ const releaseAPI = "https://api.github.com/repos/Mag1cFall/AIStudio2API/releases
 // releaseCheckInterval 为最新发行版本的缓存时长
 const releaseCheckInterval = time.Hour
 
+// releaseCheckTimeout 是读取一次最新发行版本的总时限
+const releaseCheckTimeout = 10 * time.Second
+
 // githubRelease 为 GitHub 发行版本接口中用到的字段
 type githubRelease struct {
 	TagName     string        `json:"tag_name"`
@@ -112,6 +115,9 @@ func (u *selfUpdater) UpdateStatus(ctx context.Context, refresh bool) (api.Updat
 		if ctx.Err() != nil {
 			return api.UpdateStatus{}, ctx.Err()
 		}
+		if err != nil {
+			u.requests.log("service", "WARN", "检查更新失败", "error", err)
+		}
 		u.mu.Lock()
 		u.checked, u.checkErr = time.Now(), err
 		if err == nil {
@@ -168,6 +174,7 @@ func (u *selfUpdater) ApplyUpdate(ctx context.Context) (api.UpdateStatus, error)
 // statusLocked 在持有锁时生成更新状态
 func (u *selfUpdater) statusLocked() api.UpdateStatus {
 	status := api.UpdateStatus{Current: u.version, Mode: u.mode, ManagedBy: managedBy, CheckedAt: u.checked, Updating: u.updating}
+	status.LogDir, _ = filepath.Abs(filepath.Join("runtime", "logs"))
 	if u.updating {
 		progress := u.progress
 		status.Progress = &progress
@@ -182,16 +189,21 @@ func (u *selfUpdater) statusLocked() api.UpdateStatus {
 	return status
 }
 
-// fetchRelease 读取 GitHub 最新发行版本
+// fetchRelease 读取 GitHub 最新发行版本，总时限 releaseCheckTimeout
 func (u *selfUpdater) fetchRelease(ctx context.Context) (*githubRelease, error) {
-	response, err := u.get(ctx, u.releaseURL, "application/vnd.github+json")
-	if err != nil {
-		return nil, fmt.Errorf("读取最新发行版本: %w", err)
-	}
-	defer response.Body.Close()
+	ctx, cancel := context.WithTimeout(ctx, releaseCheckTimeout)
+	defer cancel()
 	var release githubRelease
-	if err := json.NewDecoder(response.Body).Decode(&release); err != nil {
-		return nil, fmt.Errorf("解析最新发行版本: %w", err)
+	response, err := u.get(ctx, u.releaseURL, "application/vnd.github+json")
+	if err == nil {
+		defer response.Body.Close()
+		err = json.NewDecoder(response.Body).Decode(&release)
+	}
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("GitHub 在 %d 秒内没有响应", int(releaseCheckTimeout/time.Second))
+		}
+		return nil, fmt.Errorf("读取最新发行版本: %w", err)
 	}
 	return &release, nil
 }

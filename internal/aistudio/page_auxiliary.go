@@ -394,7 +394,8 @@ func (runtime *goWAARuntime) dismissOverlays(ctx context.Context) {
 	}
 }
 
-// requestGDPProfile 在 GetAiStudioBenefitTier 返回、权益 benefitTier 满足导航栏条件时像官网导航栏一样立即读取 Google Developer Program 权益，响应到达后按导航栏处理额度入口；各请求在发出时带 extension 返回的日志上下文，GetLoggingContext 尚未返回时为空，与官网页面在请求创建时才附带该头一致
+// requestGDPProfile 在权益 benefitTier 满足导航栏条件时读取 Google Developer Program 权益并处理额度入口
+// 各请求在发出时带 extension 返回的日志上下文，GetLoggingContext 尚未返回时为空
 func (runtime *goWAARuntime) requestGDPProfile(ctx context.Context, apiKey string, visitID string, benefitTier []byte, extension func() string) {
 	if !runtime.pageFlags.requestsGDPProfile(benefitTier) {
 		return
@@ -565,7 +566,11 @@ func acknowledgedMedia(preferences []byte) bool {
 	return json.Unmarshal(preferences, &fields) == nil && len(fields) > mediaDisclaimer.index && !isJSONNull(fields[mediaDisclaimer.index])
 }
 
-// beforeUpload 在服务上传附件前像官网插入文件一样记录点击插入按钮打开菜单、再点击上传文件并在文件选择框中选好文件，页面尚未确认首次上传素材提示时再记录确认框的显示与确认，并像点击确认一样以 Priority u=0 发出 UpdateUserPreferences、不等响应；这组操作整组排进页面此前的空闲区间，最后一步落在现在、第一步不早于页面上一条已记录事件，放不下时这次不做也不等待，步数计入下一次取 proof 的跳过步数；rerun 为真且本页面点过 Run 时与官网 Rerun 一样不动输入框、不记录这组操作；先等页面载入时的 GenerateAccessToken 与（记录这组操作时）GetUserPreferences 返回，ctx 先结束时返回空；返回页面载入时取得、仍在 pageTokenLifetime 内的 access token，没有时为空
+// beforeUpload 在服务上传附件前记录官网插入文件的界面操作，返回页面载入时取得的 access token
+// 这组操作整组排进页面此前的空闲区间，放不下时这次不做也不等待，步数计入下一次取 proof 的跳过步数
+// rerun 为真且本页面点过 Run 时不记录这组操作
+// 先等 GenerateAccessToken 与（记录这组操作时）GetUserPreferences 返回，ctx 先结束时返回空
+// access token 没有或超过 pageTokenLifetime 时为空
 func (runtime *goWAARuntime) beforeUpload(ctx context.Context, rerun bool) string {
 	if !closedBefore(ctx, runtime.tokenReady) {
 		return ""

@@ -22,6 +22,62 @@ type GenerateTurn struct {
 	ProofEnd   int
 	Digest     string
 	Result     string
+	// Step 在界面运行进入每个界面步骤与页面发出 GenerateContent 时调用，为空时不报告
+	Step func(GenerateStep)
+}
+
+// GenerateStep 是界面运行一轮 GenerateContent 所在的界面步骤，取值为步骤说明
+type GenerateStep string
+
+const (
+	// StepAcquireTab 等待空闲的界面对话标签页
+	StepAcquireTab GenerateStep = "取得标签页"
+	// StepLockInput 等待其他请求的界面操作结束
+	StepLockInput GenerateStep = "等待其他请求的界面操作"
+	// StepSelectTab 选中标签页并等上一轮生成结束
+	StepSelectTab GenerateStep = "选中标签页"
+	// StepNewChat 点 New chat 并丢弃当前对话
+	StepNewChat GenerateStep = "新开对话"
+	// StepPastePrompt 点击输入框并粘贴提示词
+	StepPastePrompt GenerateStep = "粘贴提示词"
+	// StepWaitRunnable 等官网 Run 按钮可点
+	StepWaitRunnable GenerateStep = "等待 Run 可点"
+	// StepClickRun 点击 Run
+	StepClickRun GenerateStep = "点击 Run"
+	// StepClickRerun 点击最后一轮的 Rerun
+	StepClickRerun GenerateStep = "点击 Rerun"
+	// StepPasteResult 在函数调用块中点击函数响应输入框并粘贴函数结果
+	StepPasteResult GenerateStep = "粘贴函数结果"
+	// StepClickSubmit 点击函数调用块的提交按钮
+	StepClickSubmit GenerateStep = "点击提交"
+	// StepWaitSent 点击后等页面应用发出 GenerateContent
+	StepWaitSent GenerateStep = "等待页面发出请求"
+	// StepSent 页面已发出 GenerateContent，此后等待响应头
+	StepSent GenerateStep = "页面已发出请求"
+)
+
+// 界面运行各步骤的等待上限
+const (
+	// chatAcquireTimeout 是取得界面对话标签页并提高其刷新帧率的上限，与新标签页载入官网页面时等输入框出现的上限相同
+	chatAcquireTimeout = 2 * time.Minute
+	// inputLockTimeout 是等待其他请求界面操作结束的上限，与重新载入页面期间持有界面输入时等输入框出现的上限相同
+	inputLockTimeout = 2 * time.Minute
+	// turnInputTimeout 是一轮界面输入从选中标签页到点击结束的上限，覆盖其中等上一轮生成结束、新开对话各步的上限之和与页面忙碌时的等待
+	turnInputTimeout = time.Minute
+	// pageSendTimeout 是页面进入运行后发出 GenerateContent 的上限，与载入页面时等官网 WAA service 与 WAA 程序图片请求的上限相同
+	pageSendTimeout = 30 * time.Second
+)
+
+// report 报告界面运行进入 step
+func (turn GenerateTurn) report(step GenerateStep) {
+	if turn.Step != nil {
+		turn.Step(step)
+	}
+}
+
+// stepTimeout 返回界面运行在 step 等满 limit 的错误
+func stepTimeout(step GenerateStep, limit time.Duration) error {
+	return fmt.Errorf("界面运行停在%s，%s 内没有完成", step, limit)
 }
 
 // chatTab 是运行界面对话的标签页
@@ -172,7 +228,11 @@ func StartsNewChat(previous, contents []json.RawMessage) bool {
 	return nextChatAction(previous, contents) == chatNew
 }
 
-// generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明：官网高层 proof 函数下一次被调用时记下请求已开始并以本请求的 digest 取 proof，proof 返回后下一个 GenerateContent XHR 发送时把正文换成 head + proof + tail，并在该 XHR 上监听响应，经通道先发出带 proof、等待官网 WAA 初始化与重建和生成 proof 毫秒数的 {sent: true, proof, refresh, compute}，再依次发出响应头、正文块与结束标记；参数依次为页面对象、请求 ID、digest、head、tail 与通道
+// generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明
+// 参数依次为页面对象、请求 ID、digest、head、tail 与通道；页面发送的正文换成 head + proof + tail
+// 通道先发出 {sent: true, proof, refresh, compute}，再依次发出响应头、正文块与结束标记
+// refresh 与 compute 是等待官网 WAA 初始化与重建和生成 proof 的毫秒数
+// request.release 之后返回的 proof 不改写页面的请求；request.cancel 之后的下一次可信点击在捕获阶段整次拦下
 const generateArmFunction = `(page, id, digest, head, tail, emit) => {
   const makerSuite = window.default_MakerSuite;
   const open = XMLHttpRequest.prototype.open;
@@ -180,6 +240,20 @@ const generateArmFunction = `(page, id, digest, head, tail, emit) => {
   const request = {xhr: null, credit: 8, resume: null};
   (page.requests ||= new Map()).set(id, request);
   let loaded = false, failure = "", wake = null;
+  const guarded = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"];
+  let canceled = false, blocking = false;
+  const guard = event => {
+    if (!event.isTrusted) return;
+    if (event.type === "pointerdown") blocking = canceled;
+    if (blocking) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+    if (event.type === "click") unguard();
+  };
+  const unguard = () => guarded.forEach(type => removeEventListener(type, guard, true));
+  guarded.forEach(type => addEventListener(type, guard, true));
+  request.cancel = () => canceled = true;
   const changed = () => {
     wake?.();
     wake = null;
@@ -190,6 +264,7 @@ const generateArmFunction = `(page, id, digest, head, tail, emit) => {
     request.started = true;
     const timing = (` + proofTimingFunction + `)(service);
     return page.original.call(this, service, digest).then(proof => {
+      if (failure) return proof;
       const {refresh, compute} = timing();
       XMLHttpRequest.prototype.open = function(method, url) {
         if (String(url).endsWith("` + generateContentPath + `")) {
@@ -223,6 +298,7 @@ const generateArmFunction = `(page, id, digest, head, tail, emit) => {
     });
   };
   request.release = () => {
+    unguard();
     if (request.xhr) return;
     if (makerSuite[page.key] !== page.original) makerSuite[page.key] = page.original;
     if (XMLHttpRequest.prototype.open !== open) XMLHttpRequest.prototype.open = open;
@@ -231,7 +307,14 @@ const generateArmFunction = `(page, id, digest, head, tail, emit) => {
   };
 ` + protectedPump + `}`
 
-// Generate 像官网用户一样在标签页界面运行一轮 GenerateContent：按标签页上一轮的对话决定继续、Rerun 或先开新对话，输入框没有焦点时以可信指针点击输入框，写入最后一个 user 轮次文本的开头后点击 Run，页面应用自己取 proof、构造请求头并发出请求，发送时正文换成 turn 的正文；最后一个 user 轮次是函数结果时在最后一轮是其所回应函数调用的标签页中，于函数调用块中粘贴并提交；一轮成功完成后在后台新开对话（回答为函数调用时留在当前对话等函数结果），上游返回错误时下一轮在当前对话中继续；全部标签页都在运行对话时在新标签页中载入官网页面
+// generateCancelFunction 是让页面拦下界面运行还没有按下的点击的函数声明，参数为页面对象与请求 ID
+const generateCancelFunction = `(page, id) => page.requests?.get(id)?.cancel()`
+
+// Generate 在标签页界面运行一轮 GenerateContent
+// 页面应用自己取 proof、构造请求头并发出请求，发送时正文换成 turn 的正文
+// 最后一个 user 轮次是函数结果时，在最后一轮是其所回应函数调用的标签页中运行
+// 一轮成功完成后在后台新开对话，回答为函数调用时留在当前对话；上游返回错误时下一轮在当前对话中继续
+// 全部标签页都在运行对话时在新标签页中载入官网页面
 func (worker *Worker) Generate(ctx context.Context, turn GenerateTurn) (*ProtectedResponse, error) {
 	contents, err := generateContents(turn.Body)
 	if err != nil {
@@ -242,50 +325,78 @@ func (worker *Worker) Generate(ctx context.Context, turn GenerateTurn) (*Protect
 		return nil, errors.New("GenerateContent 最后一个轮次不是带文本或函数结果的 user 轮次")
 	}
 	lockStarted := time.Now()
+	turn.report(StepAcquireTab)
+	acquireCtx, cancel := context.WithTimeout(ctx, chatAcquireTimeout)
+	defer cancel()
 	var tab *chatTab
 	if turn.Result != "" {
-		if tab, err = worker.acquireFunctionChat(contents); err != nil {
-			return nil, err
+		tab, err = worker.acquireFunctionChat(contents)
+	} else {
+		tab, err = worker.acquireChat(acquireCtx)
+	}
+	var unboost func()
+	if err == nil {
+		if unboost, err = worker.boostFrames(acquireCtx); err != nil {
+			worker.releaseChat(tab, false)
 		}
-	} else if tab, err = worker.acquireChat(ctx); err != nil {
+	}
+	if err != nil {
+		if ctx.Err() == nil && acquireCtx.Err() != nil {
+			err = fmt.Errorf("%w: %w", stepTimeout(StepAcquireTab, chatAcquireTimeout), err)
+		}
 		return nil, err
 	}
 	prooftime.Observe(ctx, prooftime.Lock, time.Since(lockStarted))
-	response, err := worker.generate(ctx, tab, turn, contents, prompt)
+	response, err := worker.generate(ctx, tab, unboost, turn, contents, prompt)
 	if err != nil {
 		worker.releaseChat(tab, false)
 	}
 	return response, err
 }
 
-// generate 在已取得的标签页上运行一轮对话并等待响应头
-func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateTurn, contents []json.RawMessage, prompt string) (*ProtectedResponse, error) {
+// generate 在已取得并提高了刷新帧率的标签页上运行一轮对话并等待响应头，界面输入结束或失败时调用 unboost
+func (worker *Worker) generate(ctx context.Context, tab *chatTab, unboost func(), turn GenerateTurn, contents []json.RawMessage, prompt string) (*ProtectedResponse, error) {
 	client := worker.client
 	requestID := rand.Text()
 	channel, err := client.openChannel(requestID)
 	if err != nil {
+		unboost()
 		return nil, fmt.Errorf("界面运行 GenerateContent: %w", err)
 	}
-	unboost, err := worker.boostFrames(ctx)
-	if err != nil {
+	inputStarted := time.Now()
+	turn.report(StepLockInput)
+	if err := worker.lockInputWithin(ctx, inputLockTimeout); err != nil {
+		unboost()
 		client.closeChannel(requestID)
+		if ctx.Err() == nil {
+			err = stepTimeout(StepLockInput, inputLockTimeout)
+		}
 		return nil, err
 	}
-	inputStarted := time.Now()
-	worker.lockInput()
 	locked := time.Now()
 	prooftime.Observe(ctx, prooftime.Lock, locked.Sub(inputStarted))
 	turned := make(chan error, 1)
 	go func() {
 		defer worker.inputMu.Unlock()
-		turned <- worker.startTurn(ctx, tab, turn, contents, prompt, requestID)
+		turnCtx, cancel := context.WithTimeoutCause(ctx, turnInputTimeout, errTurnInputTimeout)
+		current := StepSelectTab
+		err := worker.startTurn(turnCtx, tab, turn, contents, prompt, requestID, func(step GenerateStep) {
+			current = step
+			turn.report(step)
+		})
+		if err != nil && context.Cause(turnCtx) == errTurnInputTimeout {
+			err = fmt.Errorf("%w: %w", stepTimeout(current, turnInputTimeout), err)
+		}
+		cancel()
+		turned <- err
 	}()
-	sent, err := worker.waitSent(ctx, tab, requestID, channel, turned)
+	sent, err := worker.waitSent(ctx, tab, turn, requestID, channel, turned)
 	unboost()
 	if err != nil {
 		prooftime.Observe(ctx, prooftime.Interaction, time.Since(locked))
 		return nil, worker.abandonProtectedRequest(ctx, tab.contextID, tab.page, requestID, err)
 	}
+	turn.report(StepSent)
 	sent.observe(ctx, locked)
 	worker.mu.Lock()
 	tab.contents = contents
@@ -313,11 +424,20 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, turn GenerateT
 	}, nil
 }
 
-// startTurn 在标签页上关闭页面启动后出现的已知弹层，完成本轮的界面输入（输入框没有焦点时先点击输入框；函数结果在最后一轮的函数调用块中输入并提交），安装一次性钩子后点击 Run 或 Rerun，指针仍停在 Run 上时原地点击；调用方持有 inputMu
-func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn GenerateTurn, contents []json.RawMessage, prompt string, requestID string) error {
+// errTurnInputTimeout 是一轮界面输入超过 turnInputTimeout 时输入上下文的结束原因
+var errTurnInputTimeout = errors.New("界面输入超时")
+
+// startTurn 在标签页上关闭页面启动后出现的已知弹层，完成本轮的界面输入（输入框没有焦点时先点击输入框；函数结果在最后一轮的函数调用块中输入并提交），安装一次性钩子后点击 Run 或 Rerun，指针仍停在 Run 上时原地点击，进入每个界面步骤时调用 step；调用方持有 inputMu
+func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn GenerateTurn, contents []json.RawMessage, prompt string, requestID string, step func(GenerateStep)) error {
 	client := worker.client
-	// input 是界面操作使用的上下文，请求取消只在两次操作之间生效，页面不会停在确认弹窗等操作中途
+	// input 是界面操作使用的上下文：ctx 被取消只在两次操作之间生效，页面不会停在确认弹窗等操作中途；ctx 的期限照常约束每个操作
 	input := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		input, cancel = context.WithDeadline(input, deadline)
+		defer cancel()
+	}
+	step(StepSelectTab)
 	if err := worker.selectChat(input, tab); err != nil {
 		return err
 	}
@@ -336,18 +456,23 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 	}
 	worker.mu.Unlock()
 	if turn.Result != "" {
-		return worker.submitResult(ctx, input, tab, turn, requestID)
+		return worker.submitResult(ctx, input, tab, turn, requestID, step)
 	}
 	if action == chatNew {
 		hovered = false
-		if err := worker.newChat(input, tab); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := ctx.Err(); err != nil {
+		step(StepNewChat)
+		if err := worker.newChat(input, tab); err != nil {
 			return err
 		}
 	}
 	if action != chatRerun {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		step(StepPastePrompt)
 		focused, err := client.evaluate(input, tab.contextID, promptFocusedExpression)
 		if err != nil {
 			return fmt.Errorf("检查官网输入框焦点: %w", err)
@@ -355,6 +480,9 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 		if focused["value"] != true {
 			hovered = false
 			if err := worker.click(input, tab.contextID, promptBoxSelector, "", "官网输入框", pointerMoveDuration); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
@@ -370,6 +498,7 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 		if err := pastePrompt(input, client, tab.contextID, promptHead(prompt)); err != nil {
 			return err
 		}
+		step(StepWaitRunnable)
 		if err := worker.waitRunnable(ctx, tab); err != nil {
 			return fmt.Errorf("等待官网 Run 按钮启用: %w", err)
 		}
@@ -378,19 +507,44 @@ func (worker *Worker) startTurn(ctx context.Context, tab *chatTab, turn Generate
 		return err
 	}
 	if action == chatRerun {
+		step(StepClickRerun)
 		if _, err := client.pointer(input, tab.contextID, lastTurnSelector, "", false, pointerMoveDuration); err != nil {
 			return fmt.Errorf("指针移到最后一轮: %w", err)
 		}
 		if err := client.waitFor(ctx, tab.contextID, `Boolean(document.querySelector('`+rerunButtonSelector+`'))`, 5*time.Second); err != nil {
 			return fmt.Errorf("等待官网 Rerun 按钮: %w", err)
 		}
-		return worker.click(input, tab.contextID, rerunButtonSelector, "", "官网 Rerun 按钮", pointerMoveDuration)
+		return worker.clickArmed(ctx, tab, requestID, rerunButtonSelector, "官网 Rerun 按钮", pointerMoveDuration)
 	}
 	move := pointerMoveDuration
 	if hovered {
 		move = 0
 	}
-	return worker.click(input, tab.contextID, runButtonSelector, "", "官网 Run 按钮", move)
+	step(StepClickRun)
+	return worker.clickArmed(ctx, tab, requestID, runButtonSelector, "官网 Run 按钮", move)
+}
+
+// clickArmed 以可信指针用 move 毫秒移到已安装一次性钩子的标签页上 selector 匹配的可见按钮并点击，name 为错误中的按钮名；ctx 在点击前结束时不点击，点击期间结束时让页面拦下还没有按下的这次点击，两种情况都返回 ctx 的错误
+func (worker *Worker) clickArmed(ctx context.Context, tab *chatTab, requestID, selector, name string, move int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cancelErr error
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(canceled)
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := worker.client.callFunction(cancelCtx, tab.contextID, generateCancelFunction, tab.page, requestID); err != nil {
+			cancelErr = fmt.Errorf("让页面拦下点击%s: %w", name, err)
+		}
+	})
+	err := worker.click(context.WithoutCancel(ctx), tab.contextID, selector, "", name, move)
+	if !stop() {
+		<-canceled
+		return errors.Join(err, ctx.Err(), cancelErr)
+	}
+	return err
 }
 
 // arm 在标签页上为下一次 Run 或提交安装 generateArmFunction 一次性钩子
@@ -456,8 +610,8 @@ func (worker *Worker) waitRunnable(ctx context.Context, tab *chatTab) error {
 // errInputEnded 表示本轮界面输入已经结束
 var errInputEnded = errors.New("界面输入已结束")
 
-// waitSent 等页面应用发出本轮 GenerateContent 并返回发出标记，turned 送出本轮界面输入的结果；页面在界面输入结束前发出时立即返回发出标记，没有提前发出时等界面输入结束后继续等待，输入失败时返回它的错误
-func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, requestID string, channel *bidiChannel, turned <-chan error) (protectedMessage, error) {
+// waitSent 等页面应用发出本轮 GenerateContent 并返回发出标记，turned 送出本轮界面输入的结果；页面在界面输入结束前发出时立即返回发出标记，没有提前发出时等界面输入结束后报告 StepWaitSent 并继续等待，输入失败时返回它的错误
+func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, turn GenerateTurn, requestID string, channel *bidiChannel, turned <-chan error) (protectedMessage, error) {
 	inputCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var inputErr error
@@ -483,6 +637,7 @@ func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, requestID stri
 	if context.Cause(inputCtx) != errInputEnded {
 		return protectedMessage{}, fmt.Errorf("等待页面应用发出 GenerateContent: %w", err)
 	}
+	turn.report(StepWaitSent)
 	sent, err := worker.waitStarted(ctx, tab, requestID, channel)
 	if err != nil {
 		return protectedMessage{}, fmt.Errorf("等待页面应用发出 GenerateContent: %w", err)
@@ -490,7 +645,7 @@ func (worker *Worker) waitSent(ctx context.Context, tab *chatTab, requestID stri
 	return sent, nil
 }
 
-// waitStarted 在界面输入结束后等页面应用发出本轮 GenerateContent 并返回发出标记；页面忙于处理或已开始运行时随之等待，点击后页面空闲时持续没有开始运行或弹出对话框时以页面给出的原因失败
+// waitStarted 在界面输入结束后等页面应用发出本轮 GenerateContent 并返回发出标记；页面忙于处理时随之等待，开始运行后最多等 pageSendTimeout，点击后页面空闲时持续没有开始运行或弹出对话框时以页面给出的原因失败
 func (worker *Worker) waitStarted(ctx context.Context, tab *chatTab, requestID string, channel *bidiChannel) (protectedMessage, error) {
 	for checks := 1; ; checks++ {
 		pollCtx, cancel := context.WithTimeout(ctx, pagePollInterval)
@@ -507,7 +662,12 @@ func (worker *Worker) waitStarted(ctx context.Context, tab *chatTab, requestID s
 			return protectedMessage{}, err
 		}
 		if state.Started || state.Running {
-			message, err := readProtectedMessage(ctx, channel)
+			sendCtx, cancel := context.WithTimeout(ctx, pageSendTimeout)
+			message, err := readProtectedMessage(sendCtx, channel)
+			cancel()
+			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+				return protectedMessage{}, fmt.Errorf("%w: 页面已开始运行，官网取 proof 的函数已调用=%t", stepTimeout(StepWaitSent, pageSendTimeout), state.Started)
+			}
 			if err != nil {
 				return protectedMessage{}, err
 			}
@@ -589,7 +749,7 @@ func (worker *Worker) click(ctx context.Context, contextID, selector, pattern, n
 	return nil
 }
 
-// acquireChat 取得一个空闲的界面对话标签页并标为忙碌；没有空闲标签页时等待在后台新开对话的标签页，全部标签页都在运行对话时在后台新建标签页并载入官网页面，同时等已有标签页空出与新标签页载入完成，先到哪个用哪个，新开失败且没有标签页空出时返回失败原因；载入期间其他标签页照常接收输入
+// acquireChat 取得一个空闲的界面对话标签页并标为忙碌；没有空闲标签页时等待在后台新开对话的标签页，全部标签页都在运行对话时在后台新建标签页并载入官网页面，同时等已有标签页空出与新标签页载入完成，先到哪个用哪个，新开失败且没有标签页空出时返回失败原因，ctx 结束时返回它的错误；载入期间其他标签页照常接收输入
 func (worker *Worker) acquireChat(ctx context.Context) (*chatTab, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()

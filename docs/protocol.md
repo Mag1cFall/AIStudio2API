@@ -257,16 +257,11 @@ Google 邮箱的小写形式同时作为账户目录、管理页面标识和日�
 
 新账户的 locale 与 timezone 未填写时按出口地理位置填写，已有账户保留原有的语言与时区：
 
-1. 服务经账户出口（账户代理、代理池或全局代理，没有代理时直连）向 IP 回显服务查询公网 IP：先用 api.ipify.org，失败时依次换用 checkip.amazonaws.com、ipinfo.io、icanhazip.com、ifconfig.co、ipecho.net
-2. 在本地 IP 库中查出国家与时区
-3. 语言取该国 CLDR 最可能的语言与国家组合，例如 JP 为 ja-JP、TW 为 zh-TW、CH 为 de-CH
+1. 服务经账户出口（账户代理、代理池或全局代理，没有代理时直连）同时请求 `ipinfo.io/json`、`ipapi.co/json/`、`ipwho.is`、`api.ip.sb/geoip`，取第一个给出有效 IP、国家代码与 IANA 时区的结果，总时限 5 秒
+2. 语言取该国 CLDR 最可能的语言与国家组合，例如 JP 为 ja-JP、TW 为 zh-TW、CH 为 de-CH
+3. 四个服务都没有给出有效结果时，未填写的项取本机的语言与时区（Windows 为当前用户的区域设置与系统时区，其他系统为 `LC_ALL`、`LC_MESSAGES`、`LANG` 与 `TZ`、`/etc/localtime`），写一条带失败原因的 WARN 日志，添加照常完成
 
-IP 库为 Camoufox 默认使用的 GeoIP AIO（`daijro/geoip-all-in-one` 按 IPv4、IPv6 发布的 mmdb），下载到 `runtime/geoip/`：
-
-- 服务启动时 IPv4 库缺失或超过 8 天，就经运行时出口在后台下载；IPv6 库在首次查到 IPv6 出口时下载
-- 下载在进程内共用，查询取消不中断下载，连接中途断开时从断点续传
-- 库超过 8 天时查询先用旧库，新库下载完成后替换
-- 回显与下载请求只带默认请求头，不含账户信息
+查询请求只带默认请求头，不含账户信息。管理端账户页的出口 IP 区块用同一查询显示各出口的 IP 与国家，查询失败的出口以红色标出、悬停显示原因。
 
 账户的出口与指纹：
 
@@ -1699,7 +1694,7 @@ GET/DELETE /v1beta/files/{file}
 | 管理登录 | `GET /api/auth/session`、`POST /api/auth/login`、`POST /api/auth/logout` |
 | 状态与模型 | `GET /api/status`、`GET /api/models` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`DELETE /api/accounts/{id}` |
+| 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`PUT /api/accounts/{id}/state`、`DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
 | 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
@@ -1709,7 +1704,7 @@ GET/DELETE /v1beta/files/{file}
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
 | 对话库 | `GET /api/prompts`、`GET/PUT/PATCH/DELETE /api/prompts/{id}`、`POST /api/prompts/{id}/copy`、`POST /api/prompts/title`、`GET /api/prompts/system-instructions`、`PUT/DELETE /api/prompts/system-instructions/{id}` |
 | 视频 token | `POST /api/video-tokens` |
-| 运行环境 | `POST /api/camoufox/download`、`GET /api/paths`、`GET /api/update`、`POST /api/update` |
+| 运行环境 | `POST /api/camoufox/download`、`GET /api/paths`、`POST /api/paths/pick`、`GET /api/update`、`POST /api/update` |
 
 管理 API 使用 DTO（data transfer object）表示请求、响应和事件对象。端点结果：
 
@@ -1732,6 +1727,7 @@ GET/DELETE /v1beta/files/{file}
 | `POST /api/pairing/accounts` | 201 | `{"account":AdminAccount,"renewal_token":"<续签凭据>"}` |
 | `PUT /api/pairing/accounts/{account}/cookies` | 200 | `{"account":AdminAccount}` |
 | `PUT /api/accounts/{id}` | 200 | `{"account":AdminAccount}` |
+| `PUT /api/accounts/{id}/state` | 200 | `{"account":AdminAccount}` |
 | `POST /api/accounts/{id}/login` | 202 | `{"task":AccountTask}` |
 | `POST /api/accounts/{id}/refresh` | 200 | `AccountRefresh` |
 | `DELETE /api/accounts/{id}` | 204 | 空 body |
@@ -1758,6 +1754,7 @@ GET/DELETE /v1beta/files/{file}
 | `POST /api/video-tokens` | 200 | `{"totalTokens":<INT>}` |
 | `POST /api/camoufox/download` | 200 | `AdminStatus` |
 | `GET /api/paths` | 200 | `PathListing` |
+| `POST /api/paths/pick` | 200 | `{ "path": string }` |
 | `GET /api/update` | 200 | `UpdateStatus` |
 | `POST /api/update` | 202 | `UpdateStatus` |
 | `GET /api/events` | 200 SSE | `{"type":"<TYPE>","data":<DTO>}` |
@@ -1790,6 +1787,7 @@ GET/DELETE /v1beta/files/{file}
 - `POST /api/video-tokens` 以 `{model,file,videoMetadata?:{startOffset?,endOffset?,fps?}}` 统计已上传视频按视频设置抽帧后的 token 数，与官网视频附件一样调用 `StreamExtractVideoFrames`；`file` 为 Gemini 文件名 `files/<id>` 或文件 URI；缺少 `model` 或 `file` 时返回 400 `invalid_argument`，文件不存在时返回 404 `not_found`
 - `POST /api/camoufox/download` 在后台重新开始下载 Camoufox，并返回当前 `AdminStatus`
 - `GET /api/paths?path=<路径>` 列出服务所在机器上该路径（不存在时取最近的已存在上级目录）中名称不以点开头的目录与 `storage-state.json` 文件，目录在前、按名称排序；省略 `path` 时从工作目录开始，`path=roots` 或上级目录都不存在时返回文件系统根（Windows 为存在的盘符，其余系统为 `/`），此时 `path` 为空；`parent` 为上级目录，已在根时为 `roots`
+- `POST /api/paths/pick?path=<路径>` 在桌面版以系统对话框选择账户目录，对话框从该路径或其最近的已存在上级目录打开，返回选中的路径，用户取消时 `path` 为空串；对话框只选择目录；命令行版返回 404，管理页在浏览器中使用页内选择器
 - `GET /api/update` 返回当前版本与 GitHub 最新发行版本，`refresh=1` 时重新读取；`mode` 为 `managed`（由 `managed_by` 管理）、`development`（非正式版本号）、`container`（容器内运行）或 `binary`（原地替换可执行文件）
 - `POST /api/update` 开始在线更新并返回 202；`progress.stage` 依次为 `download`、`verify`、`install`、`restart`；由外部管理、当前运行方式不支持在线更新、更新正在进行或已是最新版本时返回 409
 - `POST /api/accounts` 与 `POST /api/accounts/{id}/login` 的 body 可带 `view`，即管理页面为本次登录生成的登录窗口 ID；`POST /api/accounts/{id}/login` 也接受空 body。服务器没有图形界面，或请求来自非回环地址、带 `Forwarded` 或 `X-Forwarded-For` 时，登录画面经同一 ID 的 `GET /api/login-view/{view}` 传递，任务的 `view` 为该 ID；登录窗口断开后以同一 ID 重新连接，继续显示当前画面
@@ -1803,16 +1801,15 @@ GET/DELETE /v1beta/files/{file}
 
 | DTO | 字段 |
 | --- | --- |
-| `AdminStatus` | `state`、`running`、`ready`、`version`、`active_requests`、`accounts`、`camoufox`、`geoip`、`chrome_import` |
+| `AdminStatus` | `state`、`running`、`ready`、`version`、`active_requests`、`accounts`、`camoufox`、`chrome_import`、可选 `transition`、可选 `transition_since`、`time` |
 | `AdminAccountCounts` | `total`、`ready`、`busy`、`cooldown`、`auth_required` |
 | `AdminCamoufox` | `ready`、`preparing`、可选 `download`（`received`、`total`）、可选 `error` |
-| `AdminGeoIP` | 同 `AdminCamoufox` |
-| `AdminAccount` | `id`、`label`、`enabled`、`state`、`proxy`、`egress`、`locale`、`timezone`、`models`、`benefit_tier`、`message`、`active_requests`、可选 `pairing_renewed_at`、可选 `transition` |
+| `AdminAccount` | `id`、`label`、`enabled`、`state`、`proxy`、`egress`、`locale`、`timezone`、`models`、`benefit_tier`、`message`、`active_requests`、可选 `pairing_renewed_at`、可选 `transition`、可选 `transition_step`、可选 `transition_index`、可选 `transition_total`、可选 `transition_since`、可选 `catalog_error` |
 | `PromptSummary` | `id`、`title`、`model`、`description`、`created_at`、`updated_at`、可选 `turns`、`tokens` |
 | `Prompt` | `PromptSummary` 的字段与 `data` |
 | `SystemInstructionPreset` | `id`、`title`、`text` |
 | `PathListing` | `path`、`parent`、`entries`（每项 `name`、`path`、`dir`） |
-| `UpdateStatus` | `current`、可选 `latest`、`available`、`mode`、可选 `managed_by`、`notes`、`url`、`published_at`、`checked_at`、`error`、`updating`、可选 `progress`（`stage`、`downloaded`、`total`） |
+| `UpdateStatus` | `current`、可选 `latest`、`available`、`mode`、可选 `managed_by`、`notes`、`url`、`published_at`、`checked_at`、`error`、`updating`、可选 `progress`（`stage`、`downloaded`、`total`）、`log_dir`（服务日志目录的绝对路径） |
 | `AccountExit` | `proxy`（账户出口代理，空为直连）、可选 `ip`、`country`、`timezone`、`locale`、`error`（查询失败的原因） |
 | `AccountCreateInput` | `proxy`、`locale`、`timezone` |
 | `AccountInput` | `label`、`enabled`、`proxy`、`locale`、`timezone` |
@@ -1822,7 +1819,7 @@ GET/DELETE /v1beta/files/{file}
 | `CookieImportInput` | `cookies`、`proxy`（识别 Cookie 中的账户时提交） |
 | `CookieAccountsInput` | `items`（每项 `email`、`cookies` 或 `cdp`、可选 `auth_user`：Cookie 中的会话序号 0–9，默认 0）、`proxy`、`locale`、`timezone` |
 | `AccountTask` | `id`、`kind`（`login`、`relogin`、`chrome`、`cookies`、`browser`）、可选 `view`、`state`（`running`、`done`、`failed`）、`items`、`started_at` |
-| `AccountTaskItem` | `label`（账户邮箱，浏览器登录完成前为空）、`state`（`pending`、`running`、`done`、`failed`）、可选 `code`、`error` |
+| `AccountTaskItem` | `label`（账户邮箱，浏览器登录完成前为空）、`state`（`pending`、`running`、`done`、`failed`）、可选 `step`（处理中的账户当前的步骤：`login` 等待登录、`reading` 读取浏览器里的登录状态、`checking` 检查 AI Studio 访问、`saving` 保存账户）、可选 `code`、`error` |
 | `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`imported`、`signed_out`、`error`、`restricted`、`device_bound` |
 | `PairingToken` | `token`、`expires_at` |
 | `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `auth_user`（默认 0）、可选 `fingerprint` |
@@ -1840,8 +1837,8 @@ GET/DELETE /v1beta/files/{file}
 | `FirstEventLatency` | `model`、`channel`、`samples`、`p95_ms` |
 | `RequestBody` | `id`、`time`、`request`、`request_size`、`response`、`response_size` |
 
+- `AdminStatus.transition` 是生成服务进行中的启动或停止步骤：启动为 `probe_proxies`（检测代理池）、`wait_camoufox`（等待 Camoufox 下载）、`wait_catalog`（等待首个账户读取模型目录）、`start_prewarm`（开始预热 Worker），停止为 `cancel_requests`（停止在途请求）、`wait_catalog_stop`（等待模型目录同步停止）、`close_workers`（关闭 Worker）；`transition_since` 是进入该步骤的时刻，步骤变化时推送 `status` 事件；`transition` 为停止步骤时清理还在进行，与 `state` 无关；`time` 是生成这份状态的服务端时刻，管理页以它与本机时钟的差换算各阶段的已用时间
 - `AdminStatus.state` 为 `STOPPED`、`LAUNCHING` 或 `RUNNING`；`running` 只在 `RUNNING` 为 true；`ready` 要求 `RUNNING` 且至少一个账户处于 ready 或 busy；`version` 来自构建信息；`active_requests` 是当前进程请求注册表数量；`camoufox.ready` 表示本机已有所需版本的 Camoufox，下载进行时 `camoufox.download` 给出已收与总字节，续传时已收字节包含已下载部分，总字节未知时为 0
-- `geoip` 是账户出口定位所用 IP 库的准备状态，字段与 `camoufox` 相同
 - `chrome_import` 表示当前构建能否从本机 Chrome 导入账户（Windows amd64 为 true），管理页据此显示 Chrome 导入
 - `AdminAccount.message` 保存当前状态原因，`models` 是该账户实时目录 ID，`egress` 是账户实际使用的出口代理（账户固定代理或代理池绑定的代理，都没有时为空），管理页按它分组显示账户出口
 - `until` 与 `started_at` 使用 RFC 3339 JSON time
@@ -1920,9 +1917,20 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 - `AccountCreateInput`、`ChromeImportInput`、`CookieAccountsInput` 与 `AccountStateInput` 的 `locale`、`timezone` 为空时按账户出口的地理位置填写；`GET /api/accounts/exits` 对各账户出口代理各查询一次公网 IP 与地理位置
 - `AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空；`proxy` 使用 HTTP、HTTPS 或 SOCKS5 origin，可带 `user:password@`，不含 path、query 或 fragment
 
-新增、导入、登录和验证成功后立即刷新该账户模型目录，并发布最新账户与模型事件。
+新增、导入与登录在保存账户后立即返回，该账户的模型目录在后台同步，期间 `AdminAccount.transition` 为 `syncing`，同步结束后推送最新账户与模型事件；同步随生成服务的生命周期结束。验证成功后同样刷新该账户模型目录。
 
-`PUT /api/accounts/{id}` 只切换 `enabled` 时立即写回 `account.json` 并返回，账户状态同时更新，后台收尾的阶段写在 `AdminAccount.transition`：`draining` 表示停用后等待该账户在途请求结束（`active_requests` 为等待的请求数）并关闭 Worker，`syncing` 表示启用后载入页面同步该账户的模型目录，收尾结束后字段省略；再次切换同一账户会取消进行中的收尾。
+`PUT /api/accounts/{id}/state` 的 body 为 `{"state":"ready"|"disabled"}`：`disabled` 与停用账户相同；`ready` 先启用停用的账户，再清除服务受限、全部冷却与需要重新登录的标记（删除 `runtime-state.json` 中的受限与冷却记录），账户回到 `ready`，之后由下一次请求按上游结果重新判定，仍被上游拒绝时照常标回并换用其他账户；之后推送 `cooldowns`、`models` 与 `accounts` 事件。其他取值返回 400 `invalid_account`，账户不存在时返回 404 `account_not_found`。
+
+`PUT /api/accounts/{id}` 只切换 `enabled` 时立即写回 `account.json` 并返回，账户状态同时更新，后台收尾的操作写在 `AdminAccount.transition`，结束后字段省略；再次切换同一账户会取消进行中的收尾。
+
+| `transition` | 操作 | `transition_step` |
+| --- | --- | --- |
+| `draining` | 停用后等该账户的在途请求结束（`active_requests` 为等待的请求数）并关闭 Worker | 省略 |
+| `syncing` | 启用、新增、导入或登录后载入页面同步该账户的模型目录 | 等在途请求结束时为 `waiting`，其余省略 |
+| `saving` | 编辑保存、重新登录与导入已有账户 | `waiting` |
+| `refreshing` | 立即刷新 | `waiting`、`catalog`、`verifying` |
+
+`transition_step` 的 `waiting` 为等该账户的在途请求结束，`catalog` 为读取权益与模型目录，`verifying` 为对因要求验证而受限的账户发一次生成请求核对。立即刷新另带 `transition_index` 与 `transition_total`，是当前步骤的序号与步数。`transition_since` 是进入当前操作或步骤的时刻，账户页据此显示已用时间；操作或步骤变化时推送 `accounts` 事件。
 
 其余账户更新的提交顺序固定为：校验不可变邮箱 ID，取得账户独占租约，创建未发布的新固定出口，关闭当前 Worker 并把新 Worker 配置标记为 `pending`（尚未发布），在模型目录写锁内原子写入 `account.json` 并更新账户池，随后发布 Worker 配置、替换固定出口、释放租约并重建模型缓存。`account.json` 写入是唯一持久提交点。
 
@@ -1991,10 +1999,9 @@ POST /api/control/start
   -> load CachedModels
   -> if cache is empty, read the page catalog of every enabled ready/busy/cooldown account
      and wait for the first non-empty live catalog
-  -> prewarm up to WARM_WORKER_LIMIT workers
-     one at a time
-  -> first worker ready, or every warmable account is cooling
   -> RUNNING
+  -> prewarm up to WARM_WORKER_LIMIT workers in background
+     one at a time
   -> with a cache, read page catalogs after the first worker result
   -> continue the catalog sync and remaining worker prewarm in background
   -> every 30s, reload the page of every pending account
@@ -2024,7 +2031,7 @@ POST /api/control/stop
 
 - 新 generation 载入各账户目录中目录指纹与 `runtime-state.json` 一致的 `catalog.json` 作为缓存，公开目录与请求编码使用的模型条目都由其中保存的 ListModels 响应解析得到
 - 启动先用当前 generation 的 `catalog.CachedModels()` 建立公开快照
-- 缓存非空时直接进入 Worker 预热；首个 Worker 有结果后，为 `enabled`、处于 `ready`、`busy` 或 `cooldown` 且目录缓存缺失或最近一次同步已满 24 小时的账户开始后台目录同步，其余账户沿用缓存
+- 缓存非空时生成服务进入 `RUNNING` 并在后台预热 Worker；首个 Worker 有结果后，为 `enabled`、处于 `ready`、`busy` 或 `cooldown` 且目录缓存缺失或最近一次同步已满 24 小时的账户开始后台目录同步，其余账户沿用缓存
 - 缓存为空时立即开始目录同步
 
 目录同步读取账户会话页面载入时的响应：
@@ -2035,10 +2042,11 @@ POST /api/control/stop
 
 同步结果与服务状态：
 
-- 可预热的账户全部处于冷却时，预热不返回错误，生成服务直接进入 `RUNNING`，预热在最早的冷却结束时开始
+- 预热的首个 Worker 有结果之前到达的请求等待这个 Worker，指定账户的请求直接启动该账户的 Worker
+- 可预热的账户全部处于冷却时，预热在最早的冷却结束时开始；首轮目录同步完成前预热失败时，同步完成后再预热一次，仍失败时记录 WARN 日志，生成服务保持 `RUNNING`
 - 每个非空结果到达时立即从 `CachedModels` 合并公共目录并发布 `accounts`、`models`；生成服务已经 `RUNNING` 时同时触发 Worker 预热，新 generation 的首个非空结果还会解除启动等待
 - 全账户同步结束时，`auth_required` 集合发生变化会补发一次账户与模型快照，并记录沿用缓存的账户数、同步成功数、非空数、公共模型数、待重试账户数和耗时
-- 第一个 Worker 就绪后重新读取当前缓存，并在持有账户与配置变化锁时把服务状态设为 `RUNNING`
+- 公开快照非空后重新读取当前缓存，并在持有账户与配置变化锁时把服务状态设为 `RUNNING`
 
 账户状态：
 
@@ -2100,8 +2108,8 @@ Worker 进程故障、Worker 被替换与协议 Code 5 会重建当前账户 Wor
 - 读取经认证续签，续签后仍为认证失败时账户转为 `auth_required`
 - 权益或目录变化时写回 `benefit_tier` 与目录，权益变化清除该账户的模型资格记录，更新公共目录快照并发布 `accounts` 和 `models`
 - 订阅模型的生成遇到额度错误时，同一读取在后台对该账户执行一次，同一账户每分钟最多一次
-- 管理端的立即刷新等待该账户的独占租约，任何状态的账户都执行同一读取，管理页断开连接不中止
-- 账户从未成功读取目录时 `benefit_tier` 为 `Unknown`，`message` 为最近一次读取失败的原因
+- 管理端的立即刷新等待该账户的一个普通槽位，任何状态的账户都执行同一读取，管理页断开连接不中止；经过的步骤写在 `AdminAccount.transition` 与日志的“账户刷新”阶段，结束时日志写明耗时与账户是否解除服务受限
+- 账户从未成功读取目录时 `benefit_tier` 为 `Unknown`，`message` 为最近一次读取失败的原因；已有目录的账户读取失败时继续使用已有目录，`catalog_error` 为失败原因，下一次读取成功后省略
 
 模型目录投影：
 
@@ -2541,6 +2549,7 @@ Responses tool 字段：
   - 不需要批准的工具由上游在生成中直接调用；上游的 MCP 调用输出为 `mcp_call` 项，`output` 为工具结果文本
   - 需要批准的工具由服务经出口代理读取 `tools/list`，声明为 `mcp__<server_label>__<name>` 函数；模型调用时输出 `mcp_approval_request` 项（`id` 为 `mcpr_` 加调用 ID）并结束本轮
   - 下一轮输入给出 `mcp_approval_response` 且 `approve` 为 true 时，服务以 `tools/call` 调用该工具，结果以带 `approval_request_id` 的 `mcp_call` 项排在本轮输出首位；客户端回传该 `mcp_call` 时服务直接使用其中的结果
+  - `mcp_call` 失败时 `status` 为 `failed`，流式输出以 `response.mcp_call.failed` 结束该项：工具结果的 `isError` 为 true 时 `error.type` 为 `mcp_tool_execution_error`、`content` 为结果内容；服务调用批准的工具时连接或协议出错为 `mcp_protocol_error`
   - 需要批准的工具按 `tool_choice` 展开：为 `none` 或指定函数时跳过 `tools/list`；为 `mcp` 或 `allowed_tools` 时只声明其中列出的服务器与工具；`allowed_tools` 同时列出函数时，声明的 MCP 工具函数也加入允许调用的函数
   - `additional_tools` 输入项中的 `mcp` 工具与 `tools` 中的相同
   - `connector_id` 返回 400

@@ -95,18 +95,26 @@
 - **反指纹检测**: 为每个账户固定 Firefox 指纹与出口，官方 WAA 在 SpiderMonkey 的 Firefox 页面环境或 Camoufox 页面中运行
 - **图形界面启动器**: 通过网页管理账户、服务启停、实时日志、模型、请求、用量统计和配置，界面提供深色与浅色两种配色，以及简体中文、繁體中文、English、日本語、한국어、Français 与 Deutsch 七种语言
 - **桌面版**: Windows、macOS 与 Linux 桌面应用在窗口中显示管理页面，关闭窗口后在系统托盘继续运行
-- **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，桌面版与 Linux、macOS 命令行版一键下载、校验并重启到新版本，Linux deb 安装时由系统弹出管理员认证
+- **在线更新**: 管理端“版本”页显示最新发行版本与更新说明，桌面版与 Linux、macOS 命令行版一键下载、校验并重启到新版本，Linux deb 安装时由系统弹出管理员认证；新版本 1 分钟内没有启动时，浏览器中的管理页面提示重新打开程序与日志位置
 - **模块化架构**: Go 负责协议、调度、API 与管理端，SpiderMonkey 或 Camoufox 负责 WAA 运行时，Camoufox 负责隔离登录
 
 ## 系统要求
 
-- **Windows Release 运行**: Windows 10 或更高版本；系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，安装进度显示在微软安装程序的窗口中，安装期间管理页面可从托盘在浏览器中打开，安装完成后打开桌面窗口；取消或安装失败时在默认浏览器中打开管理页面
+- **Windows Release 运行**: Windows 10 或更高版本
+  - 系统没有 WebView2 运行时时，桌面版询问是否从微软下载安装，进度显示在微软安装程序的窗口中
+  - 安装期间管理页面可从托盘在浏览器中打开，安装完成后打开桌面窗口
+  - 取消或安装失败时在默认浏览器中打开管理页面
 - **macOS 桌面版**: macOS 13 或更高版本，Apple 芯片与 Intel 通用
 - **Linux 桌面版**: GTK 3 与 WebKitGTK 4.1，例如 Ubuntu 22.04、Debian 12 或更新版本；deb 安装时一并安装这些依赖与 Camoufox 运行库，AppImage 另需下一行的 Camoufox 运行库
 - **Linux Release 运行**: 解压 `linux-amd64.tar.gz` 后运行 `./aistudio2api`，Camoufox 需要 Firefox 系运行库与 Xvfb，Debian/Ubuntu 执行 `sudo apt-get update && sudo apt-get satisfy -y "libgtk-3-0, libasound2t64 | libasound2, libx11-xcb1, xvfb"`
-- **源码运行**: Go 1.27.3+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm；C/C++ 编译器，Windows 为 [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 的 UCRT 版 clang，macOS 为 Xcode Command Line Tools，Linux 为 [Zig](https://ziglang.org/download/) 0.16；当前平台的 SpiderMonkey 与 libwebp 静态库，分别从 [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) 与 [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases) 的 Releases 下载
+- **源码运行**:
+  - Go 1.27.3+、Node.js 22.18+、24.11+ 或 26+，以及配套 npm
+  - C/C++ 编译器：Windows 为 [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 的 UCRT 版 clang，macOS 为 Xcode Command Line Tools，Linux 为 [Zig](https://ziglang.org/download/) 0.16
+  - 当前平台的 SpiderMonkey 与 libwebp 静态库，分别从 [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) 与 [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases) 的 Releases 下载
 - **操作系统**: Windows、macOS、Linux
-- **内存**: 默认的 SpiderMonkey 后端单账户在 macOS 上约 100 MB、Windows 与 Linux 上约 150 MB，每增加一个常驻预热账户约增加 55 MB；Camoufox 后端单账户在 Windows 与 macOS 上约 0.5 GB、Linux 上约 0.7 GB，每增加一个常驻预热账户约增加 0.4 GB
+- **内存**:
+  - SpiderMonkey 后端（默认）：单账户在 macOS 上约 100 MB、Windows 与 Linux 上约 150 MB，每增加一个常驻预热账户约增加 55 MB
+  - Camoufox 后端：单账户在 Windows 与 macOS 上约 0.5 GB、Linux 上约 0.7 GB，每增加一个常驻预热账户约增加 0.4 GB
 - **CPU**: SpiderMonkey 后端空闲时几乎不占用，Camoufox 后端空闲时每个常驻预热账户约占单核的 0.5%；两个后端每个请求的 CPU 时间都在 0.1 秒以内
 - **网络**: 稳定的互联网连接访问 Google AI Studio
 
@@ -244,67 +252,46 @@ docker compose up -d
 
 ### 首次使用（需要认证）
 
-1. **准备首个账户**:
-
-   Windows 可以导入本机 Chrome 账户：
-
-   ```powershell
-   cmd /c start /wait aistudio2api.exe setup
-   ```
-
-   Linux 与 macOS 使用隔离 Camoufox 登录：
-
-   ```bash
-   ./aistudio2api setup --login
-   ```
-
-   登录完成后会从 AI Studio 页面读取 Google 邮箱，并为账户授权 Google Drive。账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录；语言和时区默认按出口 IP 的地理位置填写，也可以通过 `--locale`、`--timezone` 指定。
-
-2. **启动图形界面**:
+1. **启动程序**:
    - Windows 双击 `aistudio2api.exe`
    - macOS 与 Linux 桌面版从应用程序启动，命令行版运行 `./aistudio2api`
    - 桌面版在窗口中打开管理页面，命令行版在浏览器中打开 `http://127.0.0.1:2048`
    - 页面初始状态为 `STOPPED`，默认显示“日志”页面
 
-3. **添加其他账户**:
-   - 打开“账户”页面，点击“添加账户”选择方式
-   - “从 Chrome 导入”可多选本机 Chrome 账户
-   - “粘贴 Cookie”粘贴 Cookie 扩展（如 Cookie-Editor）在 aistudio.google.com 导出的 JSON、请求头中的 Cookie 一行或 Netscape cookies.txt，服务自动识别账户邮箱
-   - “从指纹浏览器导入”自动列出本机指纹浏览器与 Chromium 中已登录 AI Studio 的窗口，勾选后导入；浏览器需开启远程调试
-   - “浏览器登录”会打开独立 Camoufox 窗口，登录完成后自动识别邮箱、授权 Google Drive 并保存；Google 要求验证身份时，在该窗口或手机上确认
-   - 服务器没有图形界面，或从其他电脑、经反向代理打开管理页面时，“浏览器登录”与“重新登录”的 Camoufox 在服务器上无头运行，画面显示在管理页面的全屏登录窗口中，在其中点击、输入与粘贴，点“取消”结束登录
-   - 账户代理、语言区域与时区在对话框的“更多设置”中填写，语言区域与时区留空时按出口 IP 的地理位置填写
-   - 账户列表上方列出每个出口 IP 与经它访问 Google 的账户数，多个账户共用的出口 IP 以黄色标出
+2. **添加首个账户**: 在“账户”页面点击“添加账户”
+   - Windows 选“从 Chrome 导入”，勾选本机 Chrome 中已登录的 Google 账户
+   - macOS 与 Linux 选“浏览器登录”，在弹出的窗口中登录 Google
+   - 其余方式见 [账户管理](#账户管理)，命令行导入见 [命令](#命令) 的 `setup`
 
-4. **启动 API**:
+3. **启动 API**:
    - 点击“启动服务”启动数据面
    - 状态依次显示 `LAUNCHING` 和 `RUNNING`；`LAUNCHING` 期间可以点击“停止服务”取消启动
    - 在“日志”页面确认账户、模型和请求状态
    - API 默认监听 `http://127.0.0.1:2048`
 
-账户操作随状态显示：
+4. **发出请求**: 按 [API 使用](#api-使用) 配置客户端
 
-| 账户状态 | 可用操作 |
-| --- | --- |
-| `ready` | 编辑、停用、验证、删除 |
-| `disabled` | 编辑、启用、删除 |
-| `auth_required` | 编辑、停用、重新登录、验证、删除 |
-| `restricted` | 编辑、停用、验证、删除 |
-
-“重新登录”只在账户状态为 `auth_required` 时显示。
+更多账户同样在“账户”页面添加，各种添加方式、账户状态与可用操作见 [账户管理](#账户管理)。
 
 ### 日常使用（已有认证）
 
 1. 桌面版双击 `aistudio2api.exe` 或从应用程序启动；命令行版运行 `./aistudio2api`
-2. 点击“启动服务”启用 API；设置 `AUTO_START=true` 后，程序启动时自动启动服务
+2. 点击“启动服务”启用 API；设置 `AUTO_START=true` 后，程序启动时自动启动服务；启动与停止期间侧栏显示当前步骤与已用时间
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
-停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索与媒体输出设置保存后立即生效，进行中的请求沿用开始时的设置；管理页面地址、预览地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+设置的生效时机：
 
-桌面版关闭窗口后在系统托盘继续运行，从托盘菜单“退出”结束管理进程；命令行版在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
+- 保存后立即生效：账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索与媒体输出；进行中的请求沿用开始时的设置
+- 停止再启动生成服务后生效：其余生成服务配置，启动时读取最新 `.env`
+- 重启管理进程后生效：管理页面地址、预览地址和 `PROXY_API_KEY`
 
-### 快速启动
+退出程序：
+
+- 桌面版关闭窗口后在系统托盘继续运行，从托盘菜单“退出”结束管理进程
+- 命令行版在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程；关闭浏览器标签页不会停止管理进程
+
+### 命令
 
 Windows 桌面版在命令行中运行以下命令时写作 `cmd /c start /wait aistudio2api.exe <参数>`，命令行等程序结束后返回。
 
@@ -315,11 +302,21 @@ Windows 桌面版在命令行中运行以下命令时写作 `cmd /c start /wait 
 `aistudio2api setup`：导入账户。
 
 - 不带参数时扫描本机 Chrome 账户，`--email` 或 `--profile` 选择明确的 Chrome 账户
+- `--locale`、`--timezone` 指定账户的语言与时区，省略时按出口 IP 的地理位置填写
 - 隔离登录：`aistudio2api setup --login`，需要图形界面；没有图形界面时启动服务，在管理页面的“浏览器登录”中登录
 - 文件导入：`aistudio2api setup --storage-state <file>`
-- Cookie 导入：`aistudio2api setup --cookie-file <file>`、`aistudio2api setup --cookie "<Cookie 请求头>"` 或 `aistudio2api setup --cdp <调试地址>`，账户邮箱按 Cookie 识别，`--cdp` 导入的账户沿用该浏览器的语言与时区；Cookie 来自同时登录多个 Google 账户的浏览器时，以 `--authuser N` 选择官网地址 `/u/N/` 中第 N 个账户
+- Cookie 导入：`aistudio2api setup --cookie-file <file>`、`aistudio2api setup --cookie "<Cookie 请求头>"` 或 `aistudio2api setup --cdp <调试地址>`
+  - 账户邮箱按 Cookie 识别，`--cdp` 导入的账户沿用该浏览器的语言与时区
+  - Cookie 来自同时登录多个 Google 账户的浏览器时，以 `--authuser N` 选择官网地址 `/u/N/` 中第 N 个账户
 
-`aistudio2api setup --remote https://<远程实例>`：向远程实例添加账户。在远程实例的账户页点击“远程添加”，对话框给出完整命令（Windows 为 `cmd /c start /wait aistudio2api.exe setup --remote <地址> --token <令牌>`，其他系统为 `./aistudio2api setup --remote <地址> --token <令牌>`），账户来源可选“该电脑 Chrome 中的账户”或“在新窗口登录”（命令带 `--login`），一键复制后在能登录 Google 的电脑上运行；省略 `--token` 时运行后从标准输入读取令牌。对话框打开期间沿用仍有效的令牌，令牌到期时自动换新，点击“换一个令牌”立即换新，旧令牌随即失效。从该电脑 Chrome 导入的账户只能由这台电脑续签：命令上传这类账户后留在前台，立即并每 100 分钟向远程实例发送它们的新会话，失败时 5 分钟后重试，远程实例已删除账户或续签凭据失效时停止为该账户续签；保持该窗口打开，重启电脑后运行 `aistudio2api setup --remote <地址> --renew` 恢复续签。
+`aistudio2api setup --remote https://<远程实例>`：向远程实例添加账户。
+
+- 在远程实例的账户页点击“远程添加”，对话框给出完整命令，一键复制后在能登录 Google 的电脑上运行：Windows 为 `cmd /c start /wait aistudio2api.exe setup --remote <地址> --token <令牌>`，其他系统为 `./aistudio2api setup --remote <地址> --token <令牌>`
+- 账户来源可选“该电脑 Chrome 中的账户”或“在新窗口登录”（命令带 `--login`）
+- 省略 `--token` 时运行后从标准输入读取令牌
+- 对话框打开期间沿用仍有效的令牌，令牌到期时自动换新；点击“换一个令牌”立即换新，旧令牌随即失效
+- 从该电脑 Chrome 导入的账户只能由这台电脑续签：命令上传这类账户后留在前台，立即并每 100 分钟向远程实例发送它们的新会话，失败时 5 分钟后重试；远程实例已删除账户或续签凭据失效时停止为该账户续签
+- 保持该窗口打开；重启电脑后运行 `aistudio2api setup --remote <地址> --renew` 恢复续签
 
 ## API 使用
 
@@ -332,7 +329,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.7-flash",
+    "model": "gemini-3.8-flash",
     "messages": [{"role": "user", "content": "Hello, world!"}],
     "stream": true
   }'
@@ -346,7 +343,11 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 | Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 
-模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。请求带 `X-AIStudio-Account: <账户>` 请求头时只由该账户处理，账户填账户页显示的邮箱；该账户出错时直接返回它的错误，不换到其他账户。
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。
+
+- `PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`
+- 多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户
+- 请求带 `X-AIStudio-Account: <账户>` 请求头时只由该账户处理，账户填账户页显示的邮箱；该账户出错时直接返回它的错误，不换到其他账户
 
 以 Cherry Studio 为例：
 
@@ -354,7 +355,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 2. 新增 OpenAI 兼容提供商
 3. API 主机地址填写 `http://127.0.0.1:2048/v1`
 4. API 密钥填写 `.env` 中的 `PROXY_API_KEY`
-5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.6-flash`、`gemini-3.7-flash`
+5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.8-flash`、`gemini-3.5-flash-lite`
 
 [Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
 
@@ -430,9 +431,18 @@ Gemini 的 `/v1beta` 路径在 `/v1` 下同样可用，Google Gen AI SDK 3.x 默
 
 四套生成接口均可按各自协议字段启用 Search、Image Search、URL Context、Code Execution 和 Maps。Files、Transcribe、Live、Robotics 的请求与事件格式见 [Google AI Studio 协议规范](docs/protocol.md)。
 
-生成请求中的内联附件会优先上传到生成账户的 Drive，之后带相同附件的请求优先发往已上传该附件的账户并直接引用已上传的文件，闲置 1 小时后删除；账户未授予 Drive 权限或存储配额不足时保持内联数据发送。图片、音频、视频、PDF 等输入仍需所选模型支持。重复使用的附件可通过 Files 接口上传一次并复用文件 ID。
+生成请求中的内联附件：
 
-Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`。媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀。OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行。内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景；经 Files API 上传的 GIF 按首帧转换为白底 JPEG。
+- 优先上传到生成账户的 Drive，之后带相同附件的请求优先发往已上传该附件的账户并直接引用已上传的文件，闲置 1 小时后删除
+- 账户未授予 Drive 权限或存储配额不足时保持内联数据发送
+- 图片、音频、视频、PDF 等输入需要所选模型支持
+- 重复使用的附件可通过 Files 接口上传一次并复用文件 ID
+
+附件字段与编码：
+
+- Gemini 附件与视频图片输入支持 `inlineData` / `inline_data`、`fileData` / `file_data`、`mimeType` / `mime_type` 和 `fileUri` / `file_uri`
+- 媒体 Base64 数据支持标准与 URL-safe 字母表、带填充与无填充形式，以及 `data:<MIME>;base64,` 前缀；OpenAI 助手历史中的 Markdown 图片同样支持 URL-safe Base64 和 CR/LF 换行
+- 内联 GIF 和视频表单上传的 GIF 按首帧静态图片转换为 PNG，保留逻辑画布、帧位置与透明背景；经 Files API 上传的 GIF 按首帧转换为白底 JPEG
 
 ### TTS 语音生成
 
@@ -461,7 +471,7 @@ curl http://127.0.0.1:2048/v1/audio/speech \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.1-flash-tts-preview",
+    "model": "gemini-3.8-flash-tts",
     "input": "Hello, this is a test.",
     "voice": "Kore",
     "response_format": "wav"
@@ -491,7 +501,9 @@ curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateCo
   }' --output speech.json
 ```
 
-可用语音由实时模型目录中的 `capability_options.voices` 返回。`gemini-3.8-flash-tts` 等带 `speech_metadata` 能力的模型同样接受上面的 `说话人: 台词` 写法，也可以为每个文本 part 设置 `speechMetadata.speaker` 与 `speechMetadata.style`，并用 `multiSpeakerVoiceConfig.mode` 选择 `VERBATIM` 或 `CONVERSATIONAL`；OpenAI `instructions` 在这些模型上作为语音风格。
+- 可用语音由实时模型目录中的 `capability_options.voices` 返回
+- `gemini-3.8-flash-tts` 等带 `speech_metadata` 能力的模型同样接受上面的 `说话人: 台词` 写法，也可以为每个文本 part 设置 `speechMetadata.speaker` 与 `speechMetadata.style`，并用 `multiSpeakerVoiceConfig.mode` 选择 `VERBATIM` 或 `CONVERSATIONAL`
+- OpenAI `instructions` 在这些模型上作为语音风格
 
 ### 图片生成 (Nano Banana)
 
@@ -500,14 +512,17 @@ curl http://127.0.0.1:2048/v1/images/generations \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.1-flash-image",
+    "model": "gemini-nano-banana-2.1",
     "prompt": "A cute cat wearing a tiny hat",
     "n": 1,
     "size": "1024x1024"
   }'
 ```
 
-`size` 为输出图片的宽高，例如 `2560x1440`，服务按最接近的宽高比与能覆盖该尺寸的分辨率生成后缩放为该尺寸；`size` 为 `auto` 或省略时，`quality` 的 `low`、`medium`、`high` 分别按 1K、2K、4K 生成。`output_format` 取 `png`（默认）、`jpeg` 或 `webp`。`/v1/images/edits` 与 Responses 的 `image_generation` 工具使用同样的字段，Gemini 原生接口使用 `imageConfig.aspectRatio` 与 `imageConfig.imageSize`。
+- `size` 为输出图片的宽高，例如 `2560x1440`：服务按最接近的宽高比与能覆盖该尺寸的分辨率生成后缩放为该尺寸
+- `size` 为 `auto` 或省略时，`quality` 的 `low`、`medium`、`high` 分别按 1K、2K、4K 生成
+- `output_format` 取 `png`（默认）、`jpeg` 或 `webp`
+- `/v1/images/edits` 与 Responses 的 `image_generation` 工具使用同样的字段，Gemini 原生接口使用 `imageConfig.aspectRatio` 与 `imageConfig.imageSize`
 
 ### 视频生成
 
@@ -516,12 +531,12 @@ curl http://127.0.0.1:2048/v1/videos \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-omni-1.1-flash",
+    "model": "gemini-omni-1.2-flash",
     "prompt": "A drone flying over a forest"
   }'
 ```
 
-创建任务后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果；`gemini-omni-1.1-flash` 等能输出视频的 Omni 模型同样经 `:predictLongRunning` 创建任务。
+创建任务后通过 `GET /v1/videos/{id}` 查询状态，通过 `GET /v1/videos/{id}/content` 下载结果；`gemini-omni-1.2-flash` 等能输出视频的 Omni 模型同样经 `:predictLongRunning` 创建任务。
 
 ### 决策 (Gemini Decision)
 
@@ -543,7 +558,12 @@ curl http://127.0.0.1:2048/v1beta/decisions \
   }'
 ```
 
-`questions` 的键由调用方命名，回答按同样的键返回。`noul` 返回为真的概率 `noul`，`criteria` 可写 `true_description` 与 `false_description`；`choice` 的 `criteria` 为选项 ID 到说明，返回 `choice` 与各选项的 `probabilities`；`score` 的 `criteria` 为从低到高的等级说明，返回期望等级 `score`、各等级的 `probabilities` 与 `legend`。每个回答都带 `confidence`。`input` 接受字符串或 Interactions 内容块，图片、音频、视频与 PDF 以 `data`（Base64）或 `uri`（HTTPS 链接或本服务 Files API 的文件）给出并写明 `mime_type`。Google Gen AI SDK 以 `client.decisions.create` 调用。
+- `questions` 的键由调用方命名，回答按同样的键返回，每个回答都带 `confidence`
+- `noul`：返回为真的概率 `noul`，`criteria` 可写 `true_description` 与 `false_description`
+- `choice`：`criteria` 为选项 ID 到说明，返回 `choice` 与各选项的 `probabilities`
+- `score`：`criteria` 为从低到高的等级说明，返回期望等级 `score`、各等级的 `probabilities` 与 `legend`
+- `input` 接受字符串或 Interactions 内容块，图片、音频、视频与 PDF 以 `data`（Base64）或 `uri`（HTTPS 链接或本服务 Files API 的文件）给出并写明 `mime_type`
+- Google Gen AI SDK 以 `client.decisions.create` 调用
 
 `gemini-decision-1` 在 AI Studio 官网中隐藏：官网 Playground 选这个模型时只显示示例应用，不能直接对话；本服务可以直接使用，每次使用在运行日志中提醒。
 
@@ -553,19 +573,18 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 
 | Model ID | 名称 | 类型 | 输入 | 输出 |
 | --- | --- | --- | ---: | ---: |
+| `gemini-4-hydrogen` | Gemini 4 Hydrogen | 文本 | 1048576 | 65536 |
 | `gemini-4-carbon` | Gemini 4 Carbon | 文本 | 1048576 | 32768 |
+| `gemini-4-neon` | Gemini 4 Neon | 文本 | 1048576 | 65536 |
 | `gemini-4-argon` | Gemini 4 Argon | 文本 | 1048576 | 32768 |
 | `gemini-3.8-flash` | Gemini 3.8 Flash | 文本 | 1048576 | 65536 |
-| `gemini-3.6-flash` | Gemini 3.6 Flash | 文本 | 1048576 | 65536 |
 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | 文本 | 1048576 | 65536 |
-| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | 文本 | 1048576 | 65536 |
-| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | 文本 | 1048576 | 65536 |
 | `gemma-4-31b-it` | Gemma 4 31B IT | 文本 | 262144 | 32768 |
-| `gemini-omni-1.1-flash` | Gemini Omni 1.1 Flash | 文本与视频 | 131072 | 65536 |
-| `deep-research-preview-04-2026` | Deep Research Preview | 深度研究 | 131072 | 65536 |
-| `gemini-decision-1` | Gemini Decision 1 | 决策 | 262144 | 0 |
+| `gemini-omni-1.2-flash` | Gemini Omni 1.2 Flash | 文本与视频 | 131072 | 65536 |
+| `deep-research-preview-04-2026` | Deep Research Preview | 深度研究 | 1048576 | 65536 |
+| `deep-research-max-preview-04-2026` | Deep Research Max Preview | 深度研究 | 1048576 | 65536 |
+| `gemini-decision-1` | Gemini Decision 1 | 决策 | 262144 | 1 |
 | `gemini-nano-banana-2.1` | Nano Banana 2.1 | 图片 | 65536 | 65536 |
-| `gemini-3.1-flash-image` | Nano Banana 2 | 图片 | 65536 | 65536 |
 | `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | 图片 | 65536 | 65536 |
 | `gemini-3-pro-image` | Nano Banana Pro | 图片 | 131072 | 32768 |
 | `gemini-3.8-flash-tts` | Gemini 3.8 Flash TTS | 语音合成 | 8192 | 16384 |
@@ -576,11 +595,14 @@ curl http://127.0.0.1:2048/v1beta/decisions \
 | `gemini-3.8-live` | Gemini 3.8 Live | 实时对话 | 131072 | 65536 |
 | `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | 实时翻译 | 16384 | 32768 |
 
-目录中另有 `-latest` 别名、Robotics-ER、早期版本的图片与 TTS 模型，以及 Build 通道的 `-build` 模型。
+目录中另有 `-latest` 别名、Robotics-ER、Gemini 3 系列与早期版本的图片、TTS、Live 模型，各文本与图片模型带 Google 搜索的 `-search` 变体，以及 Build 通道的 `-build` 模型。Genie 4（`genie-4`）只对开通计费的 API key 开放，列在目录中、不含 `channels`。
 
 公开端点实现标准 `generateContent`、`countTokens`、`embedContent`、`batchEmbedContents`、`predictLongRunning` 和 `createDecision`（`/v1beta/decisions`）；`bidiGenerateContent` 与 `bidiGenerateMusic` 模型经 `/v1/live` 调用。`/v1/models` 与 `/v1beta/models` 原样汇总各账户实时上游目录；调度按目录明确提供的模型 ID、方法、能力字段和账户当前运行状态选择账户。
 
-启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅。能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限，未指定输出上限时取 `input_token_limit`，超过 32768 时分轮自动续写，各轮输出合并为一个响应。模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数。客户端写死的模型名可用 `MODEL_MAPPING` 映射到目录中的模型，例如 `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`，别名以目标模型的字段列在模型目录中。
+- 启用账户的订阅都不满足的模型（如只对 Google AI Ultra 开放的模型）同样列在目录中、不含 `channels`，调用时返回 403 并写明所需订阅
+- 能力含 `output_continuation` 的模型（如 Gemini 4 Argon）与官网一样接受到 `input_token_limit` 的输出上限：未指定输出上限时取 `input_token_limit`，超过 32768 时分轮自动续写，各轮输出合并为一个响应
+- 模型名可以带思考后缀，例如 `gemini-4-argon(low)`：括号内为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max`、`auto` 或思考预算 token 数，后缀优先于请求体中的思考参数
+- 客户端写死的模型名可用 `MODEL_MAPPING` 映射到目录中的模型，例如 `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`，别名以目标模型的字段列在模型目录中
 
 ## 项目架构
 
@@ -637,10 +659,10 @@ cp .env.example .env
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
-| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览 |
+| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同 |
 | `PROXY_API_KEY` | 空 | 公开 API key |
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
-| `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
+| `AUTO_START` | `false` | 管理程序启动后自动启动生成服务 |
 | `HIDE_DOCK_ICON` | `false` | macOS 桌面版只在菜单栏显示图标、不显示 Dock 图标，关闭窗口后服务继续运行；在设置页修改立即生效 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
 | `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
@@ -657,28 +679,55 @@ cp .env.example .env
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
-| `MAX_ACCOUNT_SWITCHES` | `3` | 上游返回 403、5xx 等非额度错误时一个请求最多换几次账户重试，`0` 为不换号；额度用尽不计入，照常依次尝试其余账户 |
+| `MAX_ACCOUNT_SWITCHES` | `3` | 上游返回 403、5xx 等非额度错误时一个请求最多换几次账户重试，`0` 为不换号 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
 | `MODEL_ACCOUNTS` | 空 | 模型可用的账户，每项写成 `模型 ID:账户\|账户`，未列出的模型可用全部账户；也可在“模型目录”的模型详情中勾选，保存后立即生效 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 启用 Build 通道时非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
-| `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
+| `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200 并定时写出换行保持连接 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |
 | `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
-| `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名，函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少 |
+| `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名 |
 | `SEARCH_MODEL_ALIASES` | `true` | 提供支持搜索的模型的 `-search` 型号，使用该型号时启用 Google 搜索 |
-| `DISCOVER_HIDDEN_MODELS` | `false` | 同步账户模型目录时（启动、每 24 小时与账户页“刷新全部”），找出 AI Studio 官网尚未公开的模型，确认账户能用后加入目录，可直接用于各协议请求并列在 `/v1/models` 中，“模型目录”页标为“官网隐藏”；官网公开后改用官网的模型信息，关闭后下一次启动生成服务时从目录中移除 |
+| `DISCOVER_HIDDEN_MODELS` | `false` | 同步账户模型目录时找出 AI Studio 官网尚未公开的模型并加入目录 |
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |
-| `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户（其他账户优先，没有时用原账户的空闲槽位）发起一个备用请求，先出首字的一方继续、另一方取消；`auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起；正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95 |
+| `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户发起一个备用请求，取值 `off`、`auto` 或等待秒数 |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | 发起备用请求的模型 ID，逗号分隔；备用请求同样计入账户额度 |
-| `WAA_BACKEND` | `spidermonkey` | `spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox；`camoufox` 在 Camoufox 页面运行 WAA；其他取值按 `spidermonkey`；未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `auth/.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey` |
-| `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key；目录总量超过 1 GB 时从最久未使用的文件开始删除 |
+| `WAA_BACKEND` | `spidermonkey` | WAA 运行的位置，`spidermonkey` 或 `camoufox` |
+| `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式，`inline` 或 `url` |
 | `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，经反向代理时跟随 `X-Forwarded-Proto` |
 
-服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制同时冷启动的 Camoufox Worker 数，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位；这四项在管理页面保存后立即作用于后续调度，峰值上限调低时关闭多出的空闲 Worker，常驻数调高时补足预热。
+补充说明：
+
+- `PREVIEW_LISTEN_ADDR`：无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览
+- `AUTO_START`：网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试
+- `MAX_ACCOUNT_SWITCHES`：额度用尽不计入，照常依次尝试其余账户
+- `NONSTREAM_KEEPALIVE`：返回 200 后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回
+- `STRIP_THOUGHT_SIGNATURES`：函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少
+- `DISCOVER_HIDDEN_MODELS`：
+  - 在同步账户模型目录时探测：启动、每 24 小时与账户页“刷新全部”
+  - 确认账户能用的模型加入目录，可直接用于各协议请求并列在 `/v1/models` 中，“模型目录”页标为“官网隐藏”
+  - 官网公开后改用官网的模型信息；关闭后下一次启动生成服务时从目录中移除
+- `FIRST_EVENT_HEDGE`：
+  - 备用请求优先用其他账户，没有时用原账户的空闲槽位；先出首字的一方继续，另一方取消
+  - `auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起
+  - 正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95
+- `WAA_BACKEND`：
+  - `spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox；`camoufox` 在 Camoufox 页面运行 WAA；其他取值按 `spidermonkey`
+  - 未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `auth/.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey`
+- `MEDIA_OUTPUT`：
+  - `inline` 以 data URI 内联
+  - `url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key；目录总量超过 1 GB 时从最久未使用的文件开始删除
+
+服务启动时载入 `AISTUDIO_AUTH_STATES` 中的全部账户，容量由四项控制，在管理页面保存后立即作用于后续调度：
+
+- `WARM_WORKER_LIMIT`：常驻预热规模，调高时补足预热
+- `MAX_ACTIVE_WORKERS`：峰值 Worker 上限，调低时关闭多出的空闲 Worker
+- `WARM_STARTUP_CONCURRENCY`：同时冷启动的 Camoufox Worker 数
+- `PER_ACCOUNT_CONCURRENCY`：单账户请求槽位
 
 ### 端口配置
 
@@ -692,7 +741,10 @@ cp .env.example .env
 
 反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。管理页“服务配置”可调整登录开关及凭据，保存后重启程序生效。
 
-API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来源，页面以当前访问的主机名加该端口打开预览。从其他电脑访问时，`PREVIEW_LISTEN_ADDR` 与 `LISTEN_ADDR` 一样监听可访问的地址；经反向代理访问时，在同一主机名的同一端口号上再代理到 `PREVIEW_LISTEN_ADDR`，例如管理页面为 `https://ai.example.com` 时，代理 `https://ai.example.com:2050` 到本机 `2050`。
+API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来源，页面以当前访问的主机名加该端口打开预览：
+
+- 从其他电脑访问时，`PREVIEW_LISTEN_ADDR` 与 `LISTEN_ADDR` 一样监听可访问的地址
+- 经反向代理访问时，在同一主机名的同一端口号上再代理到 `PREVIEW_LISTEN_ADDR`，例如管理页面为 `https://ai.example.com` 时，代理 `https://ai.example.com:2050` 到本机 `2050`
 
 - **管理页面与 API**: 默认端口 `2048`
 - **HTML 预览**: 默认端口 `2050`
@@ -705,10 +757,65 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 支持通过 HTTP、HTTPS 或 SOCKS5 代理访问 AI Studio，代理需要认证时在 URL 中填写账号密码，例如 `socks5://user:password@host:1080`：
 
 1. 在“服务配置”中设置全局代理；留空时使用系统代理，先读 `HTTPS_PROXY` 环境变量，未设置时读 Windows 或 macOS 的系统代理设置，代理输入框下方显示当前生成服务实际使用的出口
-2. 全局代理可以填写多个，用逗号分隔组成代理池：没有专用代理的账户固定绑定到绑定账户最少的可用代理，绑定写入账户状态，重启后不变；代理连续 3 次网络错误或定时检测失败时，其账户改绑到其他可用代理，检测恢复后重新参与分配；“服务配置”列出各代理的状态与绑定账户数，账户卡片显示每个账户的出口
+2. 全局代理可以填写多个，用逗号分隔组成代理池：
+   - 没有专用代理的账户固定绑定到绑定账户最少的可用代理，绑定写入账户状态，重启后不变
+   - 代理连续 3 次网络错误或定时检测失败时，其账户改绑到其他可用代理，检测恢复后重新参与分配
+   - “服务配置”列出各代理的状态与绑定账户数，账户卡片显示每个账户的出口
 3. 在“账户”页面编辑单个账户时可以设置账户专用代理
 4. 账户代理同时用于登录、WAA 与业务请求
 5. 带账号密码的代理由程序在本机回环地址提供无认证 SOCKS5 中转供 Camoufox 使用，账号密码不写入浏览器 profile；中转运行期间，本机其他进程也能经它使用该代理
+
+### 账户管理
+
+“账户”页面的“添加账户”提供以下方式：
+
+| 方式 | 账户来源 | 说明 |
+| --- | --- | --- |
+| 从 Chrome 导入 | 本机 Chrome 中已登录的账户 | 可多选，Windows 可用 |
+| 粘贴 Cookie | Cookie 扩展导出的 JSON、请求头中的 Cookie 一行或 Netscape cookies.txt | 自动识别其中登录的账户邮箱 |
+| 从指纹浏览器导入 | 本机指纹浏览器与 Chromium 中已登录 AI Studio 的窗口 | 浏览器需开启远程调试 |
+| 浏览器登录 | 独立的 Camoufox 窗口 | 登录后自动识别邮箱并授权 Google Drive |
+| 远程添加 | 另一台能登录 Google 的电脑 | 见 [命令](#命令) 的 `setup --remote` |
+
+添加过程：
+
+- 账户代理、语言区域与时区在对话框的“更多设置”中填写；语言区域与时区留空时按出口 IP 的地理位置填写，查不到出口位置时用本机的语言区域与时区
+- 添加与重新登录在服务端的任务中运行：提交后即可离开对话框，账户页上方逐个显示当前步骤、已用时间、结果与失败原因，关闭或刷新管理页面后任务继续
+- 账户保存到 `.env` 中 `AISTUDIO_AUTH_STATES` 指向的目录，保存后立即出现在列表中，模型数与权益在后台读取完成后显示
+- Edge、Brave 等日常使用的浏览器用 Cookie 扩展（如 Cookie-Editor）在 aistudio.google.com 导出后粘贴，或选择 Cookie 文件
+- 账户列表上方列出每个出口 IP 与经它访问 Google 的账户数，多个账户共用的出口 IP 以黄色标出，查询失败的出口以红色标出、悬停显示原因
+
+浏览器登录：
+
+- 在本机打开可见的 Camoufox 窗口；Google 要求验证身份时，在该窗口或手机上确认
+- 服务器没有图形界面，或从其他电脑、经反向代理打开管理页面时，“浏览器登录”与“重新登录”的 Camoufox 在服务器上无头运行，画面显示在管理页面的全屏登录窗口中，在其中点击、输入与粘贴，点“取消”结束登录
+- 页内登录窗口可以隐藏，之后从任务行再次打开；经反向代理访问时需要转发 `/api/login-view/` 的 WebSocket
+
+账户操作随状态显示，点击账户行的状态可把账户改为“就绪”或“已停用”：
+
+| 账户状态 | 可用操作 |
+| --- | --- |
+| `ready` | 编辑、停用、立即刷新、删除 |
+| `disabled` | 编辑、改为就绪、删除 |
+| `cooldown` | 编辑、改为就绪、停用、立即刷新、删除 |
+| `auth_required` | 编辑、改为就绪、停用、重新登录、立即刷新、删除 |
+| `restricted` | 编辑、改为就绪、停用、立即刷新、删除 |
+
+- 改为就绪会启用已停用的账户，并清除服务受限、冷却与需要登录的标记；账户仍被 Google 拒绝时，下一次请求把它标回原状态并换用其他账户
+- 刷新、停用、启用与保存在进行时，账户行显示当前步骤与已用时间（等待几个请求结束、读取权益与模型目录、核对验证状态），日志页有同样的步骤与结果
+
+权益与模型目录的读取：
+
+- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
+- 从未读取成功的账户权益显示为未知，并显示最近一次失败原因；已有目录的账户读取失败时照常使用，账户行显示“目录同步失败”与原因
+- 读取报告 AI Studio 不支持当前出口地区时，已有目录的账户同样显示该原因
+
+服务受限（`restricted`）：
+
+- Google 限制账户使用 AI Studio、账户未满足 AI Studio 的年龄要求或所属 Workspace 没有开放 AI Studio 时，账户进入该状态并显示原因与官网页面链接
+- 启动、调度与后台读取都跳过该账户，不续签
+- 在官网完成验证后，把账户状态改为“就绪”或点“立即刷新”都能恢复：立即刷新只载入一次页面，读取成功后恢复
+- 从 Chrome、Cookie 与指纹浏览器导入时，服务受限的账户标出原因且不能导入
 
 ### 认证文件管理
 
@@ -725,16 +832,6 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 账户邮箱同时作为目录名、管理页面标识和日志来源，统一使用小写形式。`.leases` 协调账户目录读写，用户缓存中的 runtime lease 保证同一邮箱在当前电脑上只有一个 WAA Worker。
 
-账户页的“添加账户”支持从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、隔离 Camoufox 登录和远程添加：
-
-- 隔离 Camoufox 登录在本机打开可见窗口；服务器没有图形界面或从其他电脑访问时，登录画面显示在管理页面的登录窗口中，经反向代理访问时需要转发 `/api/login-view/` 的 WebSocket
-- 添加与重新登录账户在服务端的任务中运行：提交后即可离开对话框，账户页上方逐个显示进度、结果与失败原因，关闭或刷新管理页面后任务继续；页内登录窗口可以隐藏，之后从任务行再次打开
-- 粘贴 Cookie 或选择 Cookie 文件后自动识别其中登录的账户；Edge、Brave 等日常使用的浏览器用 Cookie 扩展导出后粘贴
-- `ready` 账户可以编辑、停用、立即刷新和删除，`auth_required` 账户可以重新登录
-- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
-- 从未读取成功的账户权益显示为未知，并显示最近一次失败原因
-- 读取报告 AI Studio 不支持当前出口地区时，已有目录的账户同样显示该原因
-- Google 限制账户使用 AI Studio、账户未满足 AI Studio 的年龄要求或所属 Workspace 没有开放 AI Studio 时，账户进入 `restricted`（服务受限）状态并显示原因与官网页面链接：启动、调度与后台读取都跳过该账户，不续签，验证时只载入一次页面，读取成功后恢复；从 Chrome、Cookie 与指纹浏览器导入时，服务受限的账户标出原因且不能导入
 
 ## 详细文档
 

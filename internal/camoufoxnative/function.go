@@ -51,9 +51,16 @@ func (worker *Worker) acquireFunctionChat(contents []json.RawMessage) (*chatTab,
 	return tab, nil
 }
 
-// submitResult 像官网用户一样在最后一轮的函数调用块中以可信指针点击函数响应输入框、以 Ctrl+V 粘贴 turn 的函数结果，随后安装一次性钩子并点击提交
-func (worker *Worker) submitResult(ctx, input context.Context, tab *chatTab, turn GenerateTurn, requestID string) error {
+// submitResult 像官网用户一样在最后一轮的函数调用块中以可信指针点击函数响应输入框、以 Ctrl+V 粘贴 turn 的函数结果，随后安装一次性钩子并点击提交，进入每个界面步骤时调用 step
+func (worker *Worker) submitResult(ctx, input context.Context, tab *chatTab, turn GenerateTurn, requestID string, step func(GenerateStep)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	step(StepPasteResult)
 	if err := worker.click(input, tab.contextID, functionResultInputSelector, "", "官网函数响应输入框", pointerMoveDuration); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	worker.mu.Lock()
@@ -65,5 +72,6 @@ func (worker *Worker) submitResult(ctx, input context.Context, tab *chatTab, tur
 	if err := worker.arm(ctx, tab, turn, requestID); err != nil {
 		return err
 	}
-	return worker.click(input, tab.contextID, functionResultSubmitSelector, "", "官网函数响应提交按钮", pointerMoveDuration)
+	step(StepClickSubmit)
+	return worker.clickArmed(ctx, tab, requestID, functionResultSubmitSelector, "官网函数响应提交按钮", pointerMoveDuration)
 }

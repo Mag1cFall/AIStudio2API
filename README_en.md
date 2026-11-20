@@ -95,18 +95,26 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 - **Anti-Fingerprinting**: Each account keeps a stable Firefox fingerprint and network exit, and the official WAA runs in the Firefox page environment of SpiderMonkey or in a Camoufox page
 - **GUI Launcher**: Manage accounts, service controls, live logs, models, requests, usage statistics, and configuration in the web UI, with dark and light color themes and seven languages: 简体中文, 繁體中文, English, 日本語, 한국어, Français, and Deutsch
 - **Desktop App**: Windows, macOS, and Linux desktop apps show the management UI in a window and keep running in the system tray after the window is closed
-- **Online Update**: The Version page shows the latest release and its notes; the desktop apps and the Linux and macOS command-line builds download, verify, and restart into the new version in one click, and a Linux deb install asks for administrator authentication
+- **Online Update**: The Version page shows the latest release and its notes; the desktop apps and the Linux and macOS command-line builds download, verify, and restart into the new version in one click, and a Linux deb install asks for administrator authentication; if the new version has not started within a minute, the admin page open in a browser says to reopen the app and where the logs are
 - **Modular Architecture**: Go handles protocols, scheduling, APIs, and management; SpiderMonkey or Camoufox hosts WAA, and Camoufox hosts isolated login
 
 ## System Requirements
 
-- **Windows Release Runtime**: Windows 10 or later; on systems without the WebView2 Runtime, the desktop app asks whether to download it from Microsoft and installs it with the Microsoft installer showing its progress (the management UI can be opened in the browser from the tray meanwhile), then opens its window; if you cancel or the installation fails, it opens the management UI in the default browser
+- **Windows Release Runtime**: Windows 10 or later
+  - On systems without the WebView2 Runtime, the desktop app asks whether to download it from Microsoft; the Microsoft installer shows the progress in its own window
+  - During the installation the management UI can be opened in the browser from the tray; the desktop window opens once it finishes
+  - If you cancel or the installation fails, the management UI opens in the default browser
 - **macOS Desktop App**: macOS 13 or later, universal for Apple silicon and Intel
 - **Linux Desktop App**: GTK 3 and WebKitGTK 4.1, such as Ubuntu 22.04, Debian 12, or later; the deb installs these and the Camoufox libraries, while the AppImage also needs the Camoufox libraries listed on the next line
 - **Linux Release Runtime**: Extract `linux-amd64.tar.gz` and run `./aistudio2api`; Camoufox needs the Firefox system libraries and Xvfb, on Debian/Ubuntu run `sudo apt-get update && sudo apt-get satisfy -y "libgtk-3-0, libasound2t64 | libasound2, libx11-xcb1, xvfb"`
-- **Source Build**: Go 1.27.3+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm; a C/C++ compiler: the UCRT clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) on Windows, Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux; the SpiderMonkey and libwebp static libraries for the platform from the Releases of [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) and [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases)
+- **Source Build**:
+  - Go 1.27.3+, Node.js 22.18+, 24.11+, or 26+, and its bundled npm
+  - A C/C++ compiler: the UCRT clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) on Windows, Xcode Command Line Tools on macOS, [Zig](https://ziglang.org/download/) 0.16 on Linux
+  - The SpiderMonkey and libwebp static libraries for the platform, from the Releases of [Mag1cFall/firefox](https://github.com/Mag1cFall/firefox/releases) and [Mag1cFall/libwebp](https://github.com/Mag1cFall/libwebp/releases)
 - **Operating System**: Windows, macOS, Linux
-- **Memory**: with the default SpiderMonkey backend, one account takes about 100 MB on macOS and about 150 MB on Windows and Linux, plus about 55 MB for each additional resident prewarmed account; with the Camoufox backend, one account takes about 0.5 GB on Windows and macOS and about 0.7 GB on Linux, plus about 0.4 GB for each additional resident prewarmed account
+- **Memory**:
+  - SpiderMonkey backend (default): one account takes about 100 MB on macOS and about 150 MB on Windows and Linux, plus about 55 MB for each additional resident prewarmed account
+  - Camoufox backend: one account takes about 0.5 GB on Windows and macOS and about 0.7 GB on Linux, plus about 0.4 GB for each additional resident prewarmed account
 - **CPU**: the SpiderMonkey backend uses almost none while idle, and the Camoufox backend uses about 0.5% of one core per resident prewarmed account while idle; each request takes under 0.1 s of CPU time on either backend
 - **Network**: Stable internet connection to Google AI Studio
 
@@ -244,67 +252,46 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
 
 ### First-Time Use (Authentication Required)
 
-1. **Prepare the first account**:
-
-   Windows can import a local Chrome account:
-
-   ```powershell
-   cmd /c start /wait aistudio2api.exe setup
-   ```
-
-   Linux and macOS use an isolated Camoufox login:
-
-   ```bash
-   ./aistudio2api setup --login
-   ```
-
-   The Google email is read from AI Studio after login, and Google Drive is authorized for the account. The account is saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`. Locale and timezone default to the location of the exit IP and can be set with `--locale` and `--timezone`.
-
-2. **Start the management UI**:
+1. **Start the app**:
    - Double-click `aistudio2api.exe` on Windows
    - Start the macOS or Linux desktop app from the application menu, or run `./aistudio2api` for the command-line build
    - The desktop app opens the management UI in its window; the command-line build opens `http://127.0.0.1:2048` in the browser
    - The initial state is `STOPPED`, with Logs open by default
 
-3. **Add another account**:
-   - Open Accounts and click "Add account" to pick a method
-   - "Import from Chrome" supports selecting multiple local Chrome accounts
-   - "Paste cookies" takes the JSON exported on aistudio.google.com by a cookie extension (such as Cookie-Editor), a Cookie request header line, or a Netscape cookies.txt file, and the service detects the account email
-   - "Import from an antidetect browser" lists the windows signed in to AI Studio in local antidetect browsers and Chromium; select them and import. The browser needs remote debugging enabled
-   - "Sign in with browser" opens an isolated Camoufox window, detects the email after login, authorizes Google Drive, and saves the account; when Google asks to verify your identity, confirm it in that window or on your phone
-   - When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type and paste; Cancel ends the sign-in
-   - Account proxy, locale and time zone are under "More settings" in the dialog; locale and time zone left empty follow the location of the exit IP
-   - Above the account list, each exit IP is shown with the number of accounts that reach Google through it, and an exit IP shared by several accounts is highlighted in yellow
+2. **Add the first account**: click "Add account" on the Accounts page
+   - On Windows choose "Import from Chrome" and select a Google account signed in to Chrome on this computer
+   - On macOS and Linux choose "Sign in with browser" and sign in to Google in the window that opens
+   - [Account Management](#account-management) covers the other methods; `setup` under [Commands](#commands) imports from the command line
 
-4. **Start the API**:
+3. **Start the API**:
    - Click "Start service" to start the data plane
    - The state advances through `LAUNCHING` to `RUNNING`; "Stop service" cancels an in-progress launch
    - Use Logs to confirm account, model, and request status
    - The API listens on `http://127.0.0.1:2048` by default
 
-Account actions depend on state:
+4. **Send a request**: Configure your client as described in [API Usage](#api-usage)
 
-| Account state | Available actions |
-| --- | --- |
-| `ready` | Edit, disable, verify, delete |
-| `disabled` | Edit, enable, delete |
-| `auth_required` | Edit, disable, log in again, verify, delete |
-| `restricted` | Edit, disable, verify, delete |
-
-"Log in again" appears only when the account state is `auth_required`.
+Add more accounts on the same page; [Account Management](#account-management) covers every method, the account states, and the actions available in each.
 
 ### Daily Use (With Existing Authentication)
 
 1. Double-click `aistudio2api.exe` or start the desktop app from the application menu; run `./aistudio2api` for the command-line build
-2. Click "Start service" to enable the APIs; with `AUTO_START=true`, the service starts together with the manager
+2. Click "Start service" to enable the APIs; with `AUTO_START=true`, the service starts together with the manager; while it starts or stops, the sidebar shows the current step and elapsed time
 3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
-Starting again loads the latest data-plane settings from `.env`; the account selection strategy, worker capacity, max account switches, model mapping, non-streaming keepalive, fake streaming, search model variants, Google Search for all models and media output settings apply as soon as they are saved, while requests already in progress keep the settings they started with. Changes to `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
+When settings take effect:
 
-Closing the desktop window keeps the app running in the system tray; choose Quit in the tray menu to exit the manager. For the command-line build, press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
+- As soon as they are saved: the account selection strategy, worker capacity, max account switches, model mapping, non-streaming keepalive, fake streaming, search model variants, Google Search for all models, and media output; requests already in progress keep the settings they started with
+- After stopping and starting the generation service: the other data-plane settings, read from the latest `.env` at start
+- After restarting the management process: `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR`, and `PROXY_API_KEY`
 
-### Quick Start
+Exiting:
+
+- Closing the desktop window keeps the app running in the system tray; choose Quit in the tray menu to exit the manager
+- For the command-line build, press `Ctrl+C` in the launch window or close that window to exit the manager; closing the browser tab does not stop the manager
+
+### Commands
 
 On Windows, run these commands for the desktop app as `cmd /c start /wait aistudio2api.exe <arguments>`; the command line returns after the program exits.
 
@@ -315,11 +302,21 @@ On Windows, run these commands for the desktop app as `cmd /c start /wait aistud
 `aistudio2api setup`: Imports accounts.
 
 - Without options it scans local Chrome accounts; `--email` or `--profile` selects a Chrome account
+- `--locale` and `--timezone` set the account locale and time zone; when omitted they follow the location of the exit IP
 - Isolated login: `aistudio2api setup --login`, which needs a graphical display; without one, start the service and sign in with "Sign in with browser" in the console
 - File import: `aistudio2api setup --storage-state <file>`
-- Cookie import: `aistudio2api setup --cookie-file <file>`, `aistudio2api setup --cookie "<Cookie request header>"`, or `aistudio2api setup --cdp <debugging address>`; the account email is detected from the cookies, and an account imported with `--cdp` keeps the language and time zone of that browser; when the cookies come from a browser signed in to several Google accounts, `--authuser N` selects the account at `/u/N/` on the official site
+- Cookie import: `aistudio2api setup --cookie-file <file>`, `aistudio2api setup --cookie "<Cookie request header>"`, or `aistudio2api setup --cdp <debugging address>`
+  - The account email is detected from the cookies, and an account imported with `--cdp` keeps the language and time zone of that browser
+  - When the cookies come from a browser signed in to several Google accounts, `--authuser N` selects the account at `/u/N/` on the official site
 
-`aistudio2api setup --remote https://<remote-instance>`: Adds accounts to a remote instance. Click "Add remotely" on the remote instance's Accounts page; the dialog shows the full command (`cmd /c start /wait aistudio2api.exe setup --remote <address> --token <token>` on Windows, `./aistudio2api setup --remote <address> --token <token>` on other systems) with the account source set to "That computer's Chrome accounts" or "Sign in in a new window" (which adds `--login`). Copy it with one click and run it on a computer that can sign in to Google; without `--token`, the command reads the token from standard input. While the dialog is open it keeps a token that is still valid and replaces it when it expires; "New token" replaces it at once and the old token stops working. Only the computer that imported an account from its Chrome can renew that account: after uploading such accounts the command stays in the foreground, sends their new sessions to the remote instance right away and every 100 minutes, retries 5 minutes after a failed renewal, and stops renewing an account once the remote instance has deleted it or its renewal credential is invalid. Keep that window open, and after restarting the computer run `aistudio2api setup --remote <address> --renew` to resume renewal.
+`aistudio2api setup --remote https://<remote-instance>`: Adds accounts to a remote instance.
+
+- Click "Add remotely" on the remote instance's Accounts page; the dialog shows the full command. Copy it with one click and run it on a computer that can sign in to Google: `cmd /c start /wait aistudio2api.exe setup --remote <address> --token <token>` on Windows, `./aistudio2api setup --remote <address> --token <token>` on other systems
+- The account source is "That computer's Chrome accounts" or "Sign in in a new window" (which adds `--login`)
+- Without `--token`, the command reads the token from standard input
+- While the dialog is open it keeps a token that is still valid and replaces it when it expires; "New token" replaces it at once and the old token stops working
+- Only the computer that imported an account from its Chrome can renew that account: after uploading such accounts the command stays in the foreground, sends their new sessions to the remote instance right away and every 100 minutes, and retries 5 minutes after a failed renewal; it stops renewing an account once the remote instance has deleted it or its renewal credential is invalid
+- Keep that window open; after restarting the computer, run `aistudio2api setup --remote <address> --renew` to resume renewal
 
 ## API Usage
 
@@ -332,7 +329,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.7-flash",
+    "model": "gemini-3.8-flash",
     "messages": [{"role": "user", "content": "Hello, world!"}],
     "stream": true
   }'
@@ -346,7 +343,11 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 | Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 
-Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests. A request with the header `X-AIStudio-Account: <account>` is handled only by that account, written as the email shown on the Accounts page; if that account fails, its error is returned directly instead of switching to another account.
+Read model names from `GET /v1/models` or `GET /v1beta/models`.
+
+- When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set
+- Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests
+- A request with the header `X-AIStudio-Account: <account>` is handled only by that account, written as the email shown on the Accounts page; if that account fails, its error is returned directly instead of switching to another account
 
 For Cherry Studio:
 
@@ -354,7 +355,7 @@ For Cherry Studio:
 2. Add an OpenAI-compatible provider
 3. Set the API host to `http://127.0.0.1:2048/v1`
 4. Set the API key to `PROXY_API_KEY` from `.env`
-5. Load models from `/v1/models`, or add `gemini-3.6-flash` and `gemini-3.7-flash` manually
+5. Load models from `/v1/models`, or add `gemini-3.8-flash` and `gemini-3.5-flash-lite` manually
 
 [Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
 
@@ -430,9 +431,18 @@ The Gemini `/v1beta` paths are also available under `/v1`, which Google Gen AI S
 
 All four generation APIs can enable Search, Image Search, URL Context, Code Execution, and Maps through their protocol fields. Request and event formats for Files, Transcribe, Live, and Robotics are documented in the [Google AI Studio protocol specification](docs/protocol.md).
 
-Inline attachments in generation requests are preferentially uploaded to the generating account's Drive; later requests carrying the same attachment go first to the account that already holds it and reference the uploaded file, and files idle for 1 hour are deleted. If the account has not granted Drive access or has exceeded its storage quota, the original inline data is sent instead. Images, audio, video, PDFs, and other inputs must be supported by the selected model. Upload reusable attachments once through the Files API and reuse their file IDs.
+Inline attachments in generation requests:
 
-Gemini attachments and video image inputs accept `inlineData` / `inline_data`, `fileData` / `file_data`, `mimeType` / `mime_type`, and `fileUri` / `file_uri`. Base64 media data supports standard and URL-safe alphabets, padded and unpadded forms, and the `data:<MIME>;base64,` prefix. Markdown images in OpenAI assistant history also support URL-safe Base64 and CR/LF line breaks. Inline GIFs and GIFs uploaded through video multipart requests are converted to PNG using the first frame, preserving the logical canvas, frame position, and transparency; GIFs uploaded through the Files API are converted to JPEG on a white background using the first frame.
+- They are uploaded to the generating account's Drive first; later requests carrying the same attachment go first to the account that already holds it and reference the uploaded file, and files idle for 1 hour are deleted
+- If the account has not granted Drive access or has exceeded its storage quota, the original inline data is sent
+- Images, audio, video, PDFs, and other inputs must be supported by the selected model
+- Upload reusable attachments once through the Files API and reuse their file IDs
+
+Attachment fields and encoding:
+
+- Gemini attachments and video image inputs accept `inlineData` / `inline_data`, `fileData` / `file_data`, `mimeType` / `mime_type`, and `fileUri` / `file_uri`
+- Base64 media data supports standard and URL-safe alphabets, padded and unpadded forms, and the `data:<MIME>;base64,` prefix; Markdown images in OpenAI assistant history also support URL-safe Base64 and CR/LF line breaks
+- Inline GIFs and GIFs uploaded through video multipart requests are converted to PNG using the first frame, preserving the logical canvas, frame position, and transparency; GIFs uploaded through the Files API are converted to JPEG on a white background using the first frame
 
 ### TTS Speech Generation
 
@@ -461,7 +471,7 @@ curl http://127.0.0.1:2048/v1/audio/speech \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.1-flash-tts-preview",
+    "model": "gemini-3.8-flash-tts",
     "input": "Hello, this is a test.",
     "voice": "Kore",
     "response_format": "wav"
@@ -491,7 +501,9 @@ curl http://127.0.0.1:2048/v1beta/models/gemini-2.5-flash-preview-tts:generateCo
   }' --output speech.json
 ```
 
-Available voices are returned by `capability_options.voices` in the live model catalog. Models with the `speech_metadata` capability, such as `gemini-3.8-flash-tts`, accept the same `Speaker: line` script, and each text part can also set `speechMetadata.speaker` and `speechMetadata.style`, with `multiSpeakerVoiceConfig.mode` selecting `VERBATIM` or `CONVERSATIONAL`; OpenAI `instructions` become the speech style on these models.
+- Available voices are returned by `capability_options.voices` in the live model catalog
+- Models with the `speech_metadata` capability, such as `gemini-3.8-flash-tts`, accept the same `Speaker: line` script; each text part can also set `speechMetadata.speaker` and `speechMetadata.style`, with `multiSpeakerVoiceConfig.mode` selecting `VERBATIM` or `CONVERSATIONAL`
+- OpenAI `instructions` become the speech style on these models
 
 ### Image Generation (Nano Banana)
 
@@ -500,14 +512,17 @@ curl http://127.0.0.1:2048/v1/images/generations \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.1-flash-image",
+    "model": "gemini-nano-banana-2.1",
     "prompt": "A cute cat wearing a tiny hat",
     "n": 1,
     "size": "1024x1024"
   }'
 ```
 
-`size` is the output width and height, such as `2560x1440`: the service generates at the closest aspect ratio and the smallest resolution that covers the size, then scales the image to it; when `size` is `auto` or omitted, `quality` `low`, `medium`, and `high` generate at 1K, 2K, and 4K. `output_format` is `png` (default), `jpeg`, or `webp`. `/v1/images/edits` and the Responses `image_generation` tool take the same fields, and the native Gemini API uses `imageConfig.aspectRatio` and `imageConfig.imageSize`.
+- `size` is the output width and height, such as `2560x1440`: the service generates at the closest aspect ratio and the smallest resolution that covers the size, then scales the image to it
+- When `size` is `auto` or omitted, `quality` `low`, `medium`, and `high` generate at 1K, 2K, and 4K
+- `output_format` is `png` (default), `jpeg`, or `webp`
+- `/v1/images/edits` and the Responses `image_generation` tool take the same fields, and the native Gemini API uses `imageConfig.aspectRatio` and `imageConfig.imageSize`
 
 ### Video Generation
 
@@ -516,12 +531,12 @@ curl http://127.0.0.1:2048/v1/videos \
   -H "Authorization: Bearer 123" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-omni-1.1-flash",
+    "model": "gemini-omni-1.2-flash",
     "prompt": "A drone flying over a forest"
   }'
 ```
 
-After creating the task, poll `GET /v1/videos/{id}` and download the result from `GET /v1/videos/{id}/content`; video-capable Omni models such as `gemini-omni-1.1-flash` also create tasks through `:predictLongRunning`.
+After creating the task, poll `GET /v1/videos/{id}` and download the result from `GET /v1/videos/{id}/content`; video-capable Omni models such as `gemini-omni-1.2-flash` also create tasks through `:predictLongRunning`.
 
 ### Decisions (Gemini Decision)
 
@@ -543,7 +558,12 @@ curl http://127.0.0.1:2048/v1beta/decisions \
   }'
 ```
 
-You name the keys of `questions`, and answers come back under the same keys. `noul` returns the probability `noul` that the statement holds, with optional `true_description` and `false_description` in `criteria`; `choice` takes option IDs mapped to descriptions in `criteria` and returns `choice` plus `probabilities` for every option; `score` takes level descriptions from low to high in `criteria` and returns the expected level `score`, per-level `probabilities`, and `legend`. Every answer includes `confidence`. `input` accepts a string or Interactions content blocks; images, audio, video, and PDF use `data` (Base64) or `uri` (an HTTPS URL or a file from this service's Files API) with `mime_type`. The Google Gen AI SDK calls it through `client.decisions.create`.
+- You name the keys of `questions`, and answers come back under the same keys; every answer includes `confidence`
+- `noul`: returns the probability `noul` that the statement holds, with optional `true_description` and `false_description` in `criteria`
+- `choice`: takes option IDs mapped to descriptions in `criteria` and returns `choice` plus `probabilities` for every option
+- `score`: takes level descriptions from low to high in `criteria` and returns the expected level `score`, per-level `probabilities`, and `legend`
+- `input` accepts a string or Interactions content blocks; images, audio, video, and PDF use `data` (Base64) or `uri` (an HTTPS URL or a file from this service's Files API) with `mime_type`
+- The Google Gen AI SDK calls it through `client.decisions.create`
 
 `gemini-decision-1` is hidden on the AI Studio website: choosing it in the official Playground only shows sample apps and doesn't open a chat. This service can use it directly and logs a reminder in the runtime log for every request.
 
@@ -553,19 +573,18 @@ The model catalog follows AI Studio updates; clients read the current values fro
 
 | Model ID | Name | Type | Input | Output |
 | --- | --- | --- | ---: | ---: |
+| `gemini-4-hydrogen` | Gemini 4 Hydrogen | Text | 1048576 | 65536 |
 | `gemini-4-carbon` | Gemini 4 Carbon | Text | 1048576 | 32768 |
+| `gemini-4-neon` | Gemini 4 Neon | Text | 1048576 | 65536 |
 | `gemini-4-argon` | Gemini 4 Argon | Text | 1048576 | 32768 |
 | `gemini-3.8-flash` | Gemini 3.8 Flash | Text | 1048576 | 65536 |
-| `gemini-3.6-flash` | Gemini 3.6 Flash | Text | 1048576 | 65536 |
 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | Text | 1048576 | 65536 |
-| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview | Text | 1048576 | 65536 |
-| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | Text | 1048576 | 65536 |
 | `gemma-4-31b-it` | Gemma 4 31B IT | Text | 262144 | 32768 |
-| `gemini-omni-1.1-flash` | Gemini Omni 1.1 Flash | Text and video | 131072 | 65536 |
-| `deep-research-preview-04-2026` | Deep Research Preview | Deep research | 131072 | 65536 |
-| `gemini-decision-1` | Gemini Decision 1 | Decision | 262144 | 0 |
+| `gemini-omni-1.2-flash` | Gemini Omni 1.2 Flash | Text and video | 131072 | 65536 |
+| `deep-research-preview-04-2026` | Deep Research Preview | Deep research | 1048576 | 65536 |
+| `deep-research-max-preview-04-2026` | Deep Research Max Preview | Deep research | 1048576 | 65536 |
+| `gemini-decision-1` | Gemini Decision 1 | Decision | 262144 | 1 |
 | `gemini-nano-banana-2.1` | Nano Banana 2.1 | Image | 65536 | 65536 |
-| `gemini-3.1-flash-image` | Nano Banana 2 | Image | 65536 | 65536 |
 | `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | Image | 65536 | 65536 |
 | `gemini-3-pro-image` | Nano Banana Pro | Image | 131072 | 32768 |
 | `gemini-3.8-flash-tts` | Gemini 3.8 Flash TTS | Speech | 8192 | 16384 |
@@ -576,11 +595,14 @@ The model catalog follows AI Studio updates; clients read the current values fro
 | `gemini-3.8-live` | Gemini 3.8 Live | Live | 131072 | 65536 |
 | `gemini-3.5-live-translate-preview` | Gemini 3.5 Live Translate Preview | Live translation | 16384 | 32768 |
 
-The catalog also includes `-latest` aliases, Robotics-ER, earlier image and TTS models, and the Build channel's `-build` models.
+The catalog also includes `-latest` aliases, Robotics-ER, the Gemini 3 series, earlier image, TTS, and Live models, `-search` variants of text and image models with Google Search turned on, and the Build channel's `-build` models. Genie 4 (`genie-4`) is open only to API keys with billing enabled; it is listed without `channels`.
 
 Public endpoints implement `generateContent`, `countTokens`, `embedContent`, `batchEmbedContents`, `predictLongRunning`, and `createDecision` (`/v1beta/decisions`); `bidiGenerateContent` and `bidiGenerateMusic` models are called through `/v1/live`. `/v1/models` and `/v1beta/models` preserve the live upstream catalogs across accounts; scheduling uses explicit model ID, method, and capability fields plus current account runtime state.
 
-Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription. Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site, and use `input_token_limit` when the request sets no output limit; beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response. Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `extra_high`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body. Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target.
+- Models that no enabled account's subscription covers (such as models open only to Google AI Ultra) are still listed without `channels`, and calls return 403 naming the required subscription
+- Models with the `output_continuation` capability (such as Gemini 4 Argon) accept an output limit up to `input_token_limit`, as on the official site: they use `input_token_limit` when the request sets no output limit, and beyond 32768 tokens the response continues automatically in multiple rounds and is returned as one response
+- Model names accept a thinking suffix such as `gemini-4-argon(low)`: the value in parentheses is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `extra_high`, `max`, `auto`, or a thinking budget in tokens, and it overrides thinking parameters in the request body
+- Model names fixed in a client can be mapped to catalog models with `MODEL_MAPPING`, for example `MODEL_MAPPING=claude-haiku-5-5:gemini-3.8-flash`; each alias is listed in the model catalog with the fields of its target
 
 ## Project Architecture
 
@@ -637,10 +659,10 @@ Process environment variables override the same keys in `.env`, and those settin
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
 | `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
-| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | Listen address for HTML previews in the API playground, on a port different from `LISTEN_ADDR`; when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use |
+| `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | Listen address for HTML previews in the API playground, on a port different from `LISTEN_ADDR` |
 | `PROXY_API_KEY` | empty | Public API key |
 | `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
-| `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
+| `AUTO_START` | `false` | Start the generation service when the manager starts |
 | `HIDE_DOCK_ICON` | `false` | On the macOS desktop app, show the icon only in the menu bar instead of the Dock; the service keeps running after the window closes. Changes in Settings take effect immediately |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
 | `LOG_FILE` | `true` | Also write service logs to `runtime/logs/`, rotating at 10 MB per file |
@@ -657,28 +679,55 @@ Process environment variables override the same keys in `.env`, and those settin
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
-| `MAX_ACCOUNT_SWITCHES` | `3` | How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; `0` disables switching. Quota errors do not count, and the remaining accounts are still tried in turn |
+| `MAX_ACCOUNT_SWITCHES` | `3` | How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; `0` disables switching |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
 | `MODEL_ACCOUNTS` | empty | Accounts a model may use, each item `model ID:account\|account`; models not listed can use every account. Also selectable in model details on the Model catalog page, applied on save |
 | `BUILD_NATIVE_NONSTREAM` | `true` | With the Build channel enabled, prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
-| `NONSTREAM_KEEPALIVE` | `true` | When a non-streaming request waits longer than 10 seconds, return 200 first and write a newline every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body |
+| `NONSTREAM_KEEPALIVE` | `true` | When a non-streaming request waits longer than 10 seconds, return 200 first and keep the connection open with periodic newlines |
 | `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats continue while waiting |
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
-| `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream and send function calls with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens |
+| `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream |
 | `SEARCH_MODEL_ALIASES` | `true` | Offer `-search` variants of search-capable models; requests using these variants enable Google Search |
-| `DISCOVER_HIDDEN_MODELS` | `false` | When syncing account model catalogs (at startup, every 24 hours, and on Refresh all in Accounts), find models that AI Studio hasn't made public yet and add them to the catalog once the account is confirmed to be able to use them; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page. Once AI Studio lists a model, its official details are used; turning this off removes them the next time the generation service starts |
+| `DISCOVER_HIDDEN_MODELS` | `false` | When syncing account model catalogs, find models that AI Studio hasn't made public yet and add them to the catalog |
 | `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
 | `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
 | `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
-| `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account (another account first, otherwise a free slot on the same account); the first to answer continues and the other is cancelled. `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged; a positive integer is the wait in seconds, and choosing Custom in settings fills in the recent p95 of the busiest model |
+| `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account; `off`, `auto`, or a wait in seconds |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | Comma-separated model IDs that get backup requests; backup requests also count against account quota |
-| `WAA_BACKEND` | `spidermonkey` | `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox; `camoufox` runs WAA in a Camoufox page; any other value means `spidermonkey`; when unset, startup picks it from `auth/` and writes it to `.env`: `camoufox` if `auth/` already has accounts but no `auth/.waa-interpreters`, otherwise `spidermonkey` |
-| `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key; when the directory exceeds 1 GB, the least recently used files are deleted first |
+| `WAA_BACKEND` | `spidermonkey` | Where WAA runs: `spidermonkey` or `camoufox` |
+| `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` or `url` |
 | `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
 
-The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
+Notes:
+
+- `PREVIEW_LISTEN_ADDR`: when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use
+- `AUTO_START`: if startup fails for reasons such as the network, it retries at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually
+- `MAX_ACCOUNT_SWITCHES`: quota errors do not count, and the remaining accounts are still tried in turn
+- `NONSTREAM_KEEPALIVE`: after returning 200, a newline is written every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body
+- `STRIP_THOUGHT_SIGNATURES`: function calls are sent with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens
+- `DISCOVER_HIDDEN_MODELS`:
+  - Discovery runs when account model catalogs sync: at startup, every 24 hours, and on Refresh all in Accounts
+  - Models the account is confirmed to be able to use are added to the catalog; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page
+  - Once AI Studio lists a model, its official details are used; turning this off removes them the next time the generation service starts
+- `FIRST_EVENT_HEDGE`:
+  - The backup request uses another account first, otherwise a free slot on the same account; the first to answer continues and the other is cancelled
+  - `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged
+  - A positive integer is the wait in seconds; choosing Custom in settings fills in the recent p95 of the busiest model
+- `WAA_BACKEND`:
+  - `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox; `camoufox` runs WAA in a Camoufox page; any other value means `spidermonkey`
+  - When unset, startup picks it from `auth/` and writes it to `.env`: `camoufox` if `auth/` already has accounts but no `auth/.waa-interpreters`, otherwise `spidermonkey`
+- `MEDIA_OUTPUT`:
+  - `inline` embeds a data URI
+  - `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key; when the directory exceeds 1 GB, the least recently used files are deleted first
+
+The service loads every account from `AISTUDIO_AUTH_STATES`. Four settings control capacity, and saving them in the console applies them to scheduling right away:
+
+- `WARM_WORKER_LIMIT`: the resident warm pool; raising it prewarms more
+- `MAX_ACTIVE_WORKERS`: the peak worker count; lowering it closes the extra idle workers
+- `WARM_STARTUP_CONCURRENCY`: how many Camoufox workers cold-start at once
+- `PER_ACCOUNT_CONCURRENCY`: request slots per account
 
 ### Port Configuration
 
@@ -692,7 +741,10 @@ Public APIs use the separate `PROXY_API_KEY`.
 
 Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Console login settings can also be saved from the settings page and take effect after restarting the process.
 
-HTML previews in the API playground run on a separate origin served at `PREVIEW_LISTEN_ADDR`, and the page opens them at the current host name with that port. When the console is opened from another computer, `PREVIEW_LISTEN_ADDR` listens on a reachable address like `LISTEN_ADDR`; behind a reverse proxy, also proxy the same port number on the same host name to `PREVIEW_LISTEN_ADDR`, for example `https://ai.example.com:2050` to local port `2050` when the console is `https://ai.example.com`.
+HTML previews in the API playground run on a separate origin served at `PREVIEW_LISTEN_ADDR`, and the page opens them at the current host name with that port:
+
+- When the console is opened from another computer, `PREVIEW_LISTEN_ADDR` listens on a reachable address like `LISTEN_ADDR`
+- Behind a reverse proxy, also proxy the same port number on the same host name to `PREVIEW_LISTEN_ADDR`, for example `https://ai.example.com:2050` to local port `2050` when the console is `https://ai.example.com`
 
 - **Management UI and APIs**: Default port `2048`
 - **Camoufox**: Local ports are allocated dynamically
@@ -704,10 +756,65 @@ HTML previews in the API playground run on a separate origin served at `PREVIEW_
 HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authentication, include the credentials in the URL, for example `socks5://user:password@host:1080`:
 
 1. Set the global proxy under Service Configuration. When it is empty, the system proxy is used: the `HTTPS_PROXY` environment variable first, then the Windows or macOS system proxy setting. The egress the running generation service actually uses is shown below the proxy field
-2. The global proxy accepts several comma-separated proxies that form a proxy pool: each account without its own proxy is bound to the available proxy with the fewest accounts, and the binding is stored in the account state and survives restarts. When a proxy has 3 consecutive network errors or fails the periodic check, its accounts move to another available proxy, and it takes part in assignment again once a check succeeds. Service Configuration lists each proxy with its status and account count, and each account card shows that account's egress
+2. The global proxy accepts several comma-separated proxies that form a proxy pool:
+   - Each account without its own proxy is bound to the available proxy with the fewest accounts; the binding is stored in the account state and survives restarts
+   - When a proxy has 3 consecutive network errors or fails the periodic check, its accounts move to another available proxy, and it takes part in assignment again once a check succeeds
+   - Service Configuration lists each proxy with its status and account count, and each account card shows that account's egress
 3. Edit an account to set an account-specific proxy
 4. The account proxy is used for login, WAA, and business requests
 5. For authenticated proxies, the program gives Camoufox a credential-free SOCKS5 relay on the loopback address; the credentials are not written to the browser profile. While the relay runs, other local processes can also use the proxy through it
+
+### Account Management
+
+"Add account" on the Accounts page offers these methods:
+
+| Method | Account source | Notes |
+| --- | --- | --- |
+| Import from Chrome | Accounts signed in to Chrome on this computer | Several can be selected; available on Windows |
+| Paste cookies | JSON exported by a cookie extension, a Cookie request header line, or a Netscape cookies.txt file | The account email is detected automatically |
+| Import from an antidetect browser | Windows signed in to AI Studio in local antidetect browsers and Chromium | The browser needs remote debugging enabled |
+| Sign in with browser | An isolated Camoufox window | Detects the email and authorizes Google Drive after login |
+| Add remotely | Another computer that can sign in to Google | See `setup --remote` under [Commands](#commands) |
+
+Adding accounts:
+
+- Account proxy, locale, and time zone are under "More settings" in the dialog; locale and time zone left empty follow the location of the exit IP, or the locale and time zone of the server when the exit location cannot be looked up
+- Adding and signing in again run as tasks on the server: you can leave the dialog right after submitting, the top of the Accounts page shows each task's current step, elapsed time, results, and failure reasons, and tasks keep running after the console is closed or reloaded
+- Accounts are saved under the path configured by `AISTUDIO_AUTH_STATES` in `.env`; a saved account appears in the list right away, and its model count and tier show up once they are read in the background
+- For everyday browsers such as Edge and Brave, export the cookies on aistudio.google.com with a cookie extension (such as Cookie-Editor) and paste them, or choose the cookie file
+- Above the account list, each exit IP is shown with the number of accounts that reach Google through it; an exit IP shared by several accounts is highlighted in yellow, and an exit whose lookup failed is marked in red and shows the reason on hover
+
+Sign in with browser:
+
+- It opens a visible Camoufox window on this computer; when Google asks to verify your identity, confirm it in that window or on your phone
+- When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type, and paste; Cancel ends the sign-in
+- The in-page sign-in window can be hidden and reopened from its task row; a reverse proxy must forward the WebSocket at `/api/login-view/`
+
+Account actions depend on state. Click the state in an account row to set the account to Ready or Disabled:
+
+| Account state | Available actions |
+| --- | --- |
+| `ready` | Edit, disable, refresh now, delete |
+| `disabled` | Edit, set to Ready, delete |
+| `cooldown` | Edit, set to Ready, disable, refresh now, delete |
+| `auth_required` | Edit, set to Ready, disable, sign in again, refresh now, delete |
+| `restricted` | Edit, set to Ready, disable, refresh now, delete |
+
+- Setting an account to Ready enables a disabled account and clears the service restriction, cooldown, and sign-in required marks; if Google still rejects the account, the next request marks it again and switches to another account
+- While a refresh, disable, enable, or save is in progress, the account row shows the current step and elapsed time (how many requests it is waiting for, reading the plan and models, checking verification), and Logs shows the same steps and the result
+
+Reading the benefit tier and model catalog:
+
+- Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
+- An account whose catalog has never been read shows an unknown tier and the reason for the last failed read; an account with an existing catalog keeps working when a read fails, and its row shows "Model sync failed" with the reason
+- When a read reports that AI Studio does not support the current egress region, accounts with an existing catalog show that reason as well
+
+Service restricted (`restricted`):
+
+- An account enters this state and shows the reason with a link to the official page when Google restricts it from using AI Studio, it does not meet AI Studio's age requirements, or its Workspace has not enabled AI Studio
+- Startup, scheduling, and background reads skip the account, and it is not renewed
+- After completing verification on the AI Studio website, set the account state to Ready or click Refresh now to restore it: Refresh now loads the page once, and a successful read restores the account
+- When importing from Chrome, cookies, or an antidetect browser, service-restricted accounts are marked with the reason and cannot be imported
 
 ### Authentication File Management
 
@@ -724,16 +831,6 @@ Authentication files are stored in `auth/` by default:
 
 The lowercase Google email is the account directory, management UI identity, and log source. `.leases` coordinates account-directory access, while the runtime lease in the user cache allows one WAA Worker per email on the current computer.
 
-"Add account" on the Accounts page supports Chrome import, pasted cookies, antidetect browser import, isolated Camoufox login, and remote adding:
-
-- Isolated Camoufox login opens a visible local window; when the server has no graphical display or the console is opened from another computer, the sign-in screen appears in a sign-in window in the console, and a reverse proxy must forward the WebSocket at `/api/login-view/`
-- Adding and signing in again run as tasks on the server: you can leave the dialog right after submitting, the top of the Accounts page shows each task's progress, results, and failure reasons, and tasks keep running after the console is closed or reloaded; the in-page sign-in window can be hidden and reopened from its task row
-- Pasted cookies and chosen cookie files are scanned for signed-in accounts automatically; for everyday browsers such as Edge and Brave, export the cookies with a cookie extension and paste them
-- `ready` accounts can be edited, disabled, refreshed, and deleted; `auth_required` accounts can log in again
-- Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
-- An account whose catalog has never been read shows an unknown tier and the reason for the last failed read
-- When a read reports that AI Studio does not support the current egress region, accounts with an existing catalog show that reason as well
-- When Google restricts an account from using AI Studio, the account does not meet AI Studio's age requirements, or its Workspace has not enabled AI Studio, the account enters the `restricted` (Service restricted) state and shows the reason with a link to the official page: startup, scheduling, and background reads skip the account, it is not renewed, verification loads the page once, and a successful read restores it; when importing from Chrome, cookies, or an antidetect browser, service-restricted accounts are marked with the reason and cannot be imported
 
 ## Documentation
 

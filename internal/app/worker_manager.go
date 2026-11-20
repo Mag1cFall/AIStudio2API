@@ -48,6 +48,8 @@ type accountWorkerManager struct {
 	headersMu      sync.Mutex
 	// pageHeaders 是各账户最近一次页面载入的公共协议头，由 headersMu 保护
 	pageHeaders map[string]http.Header
+	// warming 表示一轮预热已开始而还没有给出第一个结果
+	warming atomic.Bool
 }
 
 type accountWorker struct {
@@ -406,14 +408,11 @@ func (manager *accountWorkerManager) reapIdleWorker(before time.Time) bool {
 	}
 	manager.reserveVictim(victim)
 	manager.rebalanceMu.Unlock()
-	evicted, err := manager.evictIdleWorker(manager.lifecycle, victim)
+	evicted, err := manager.evictIdleWorker(manager.lifecycle, victim, "idle_reclaim")
 	manager.releaseVictim(victim)
 	if err != nil {
 		manager.requests.log(victim, "WARN", "WAA Worker 空闲回收失败", "error", err)
 		return false
-	}
-	if evicted {
-		manager.requests.log("service", "INFO", "WAA Worker 空闲回收", "workers", fmt.Sprintf("%d/%d", len(manager.WarmAccountIDs()), manager.activeLimit()))
 	}
 	return evicted
 }
@@ -470,6 +469,11 @@ func (manager *accountWorkerManager) Add(account *aistudio.Account) error {
 
 // Reset 关闭账户当前 WAA worker 并保留重建配置
 func (manager *accountWorkerManager) Reset(accountID string) error {
+	return manager.reset(accountID, "")
+}
+
+// reset 关闭账户当前 WAA worker 并保留重建配置，trigger 为停止日志记录的起因，为空时不记录
+func (manager *accountWorkerManager) reset(accountID string, trigger string) error {
 	manager.mu.RLock()
 	account := manager.accounts[accountID]
 	manager.mu.RUnlock()
@@ -480,11 +484,11 @@ func (manager *accountWorkerManager) Reset(accountID string) error {
 	defer account.startupMu.Unlock()
 	account.mu.Lock()
 	defer account.mu.Unlock()
-	return manager.stopAccountWorker(account)
+	return manager.stopAccountWorker(account, trigger)
 }
 
-// stopAccountWorker 在持有账户启动锁与状态锁时关闭账户当前 Worker 并记录停止日志，没有 Worker 时直接返回
-func (manager *accountWorkerManager) stopAccountWorker(account *accountWorker) error {
+// stopAccountWorker 在持有账户启动锁与状态锁时关闭账户当前 Worker 并记录停止阶段日志，没有 Worker 时直接返回；trigger 为 idle_reclaim 时结束日志带关闭后的热池 Worker 数
+func (manager *accountWorkerManager) stopAccountWorker(account *accountWorker, trigger string) error {
 	if account.worker == nil && account.cleanupWorker == nil && account.runtimeLease == nil && account.cleanupLease == nil {
 		return nil
 	}
@@ -495,12 +499,22 @@ func (manager *accountWorkerManager) stopAccountWorker(account *accountWorker) e
 	} else if account.cleanupWorker != nil {
 		pid = account.cleanupWorker.State().PID
 	}
-	manager.requests.log(account.label, "INFO", "WAA Worker 停止", "pid", pid)
+	stage := api.LogStage{Name: "WAA Worker 停止"}
+	var attrs []any
+	if trigger != "" {
+		attrs = append(attrs, "trigger", trigger)
+	}
+	manager.requests.logStage(account.label, "INFO", stage, "WAA Worker 停止", append(attrs, "pid", pid)...)
 	if err := manager.closeAccountWorker(account); err != nil {
-		manager.requests.log(account.label, "ERROR", "WAA Worker 停止失败", "pid", pid, "duration", time.Since(startedAt), "error", err)
+		stage.State = "failed"
+		manager.requests.logStage(account.label, "ERROR", stage, "WAA Worker 停止失败", append(attrs, "pid", pid, "duration", time.Since(startedAt), "error", err)...)
 		return err
 	}
-	manager.requests.log(account.label, "INFO", "WAA Worker 已停止", "pid", pid, "duration", time.Since(startedAt))
+	if trigger == "idle_reclaim" {
+		attrs = append(attrs, "workers", fmt.Sprintf("%d/%d", len(manager.WarmAccountIDs()), manager.activeLimit()))
+	}
+	stage.State = "completed"
+	manager.requests.logStage(account.label, "INFO", stage, "WAA Worker 已停止", append(attrs, "pid", pid, "duration", time.Since(startedAt))...)
 	return nil
 }
 
@@ -555,7 +569,7 @@ func (manager *accountWorkerManager) ResetIfGeneration(ctx context.Context, acco
 	if account.worker != nil {
 		account.worker.Retire()
 	}
-	return manager.stopAccountWorker(account)
+	return manager.stopAccountWorker(account, "")
 }
 
 // prepareUpdate 关闭旧 Worker 并保持新配置待发布
@@ -804,6 +818,9 @@ func (manager *accountWorkerManager) classifyBootstrapCandidates(
 	modelIDs := make([]string, 0)
 	seenModels := make(map[string]struct{})
 	for _, status := range manager.pool.Status() {
+		if !status.Enabled {
+			continue
+		}
 		models, err := manager.pool.BootstrapModels(status.ID)
 		if err != nil {
 			continue
@@ -1193,8 +1210,8 @@ func (manager *accountWorkerManager) startReservedWorker(
 	}, nil
 }
 
-// activateAccountWorker 将已启动 Worker 发布到热池
-func activateAccountWorker(preparer *accountWorkerPreparer) error {
+// activateAccountWorker 将已启动 Worker 发布到热池；replacing 为 true 时这个 Worker 替换了一个空闲 Worker，就绪日志记录起因与发布后的热池 Worker 数，超出常驻名额的按需启动同样记录
+func activateAccountWorker(preparer *accountWorkerPreparer, replacing bool) error {
 	if !preparer.pending {
 		return nil
 	}
@@ -1231,8 +1248,17 @@ func activateAccountWorker(preparer *accountWorkerPreparer) error {
 	label := preparer.account.label
 	preparer.account.mu.Unlock()
 	preparer.manager.notifyScheduling()
+	var attrs []any
+	warm := len(preparer.manager.WarmAccountIDs())
+	if replacing || warm > preparer.manager.warmLimit() {
+		trigger := "scale_up"
+		if replacing {
+			trigger = "replace"
+		}
+		attrs = append(attrs, "trigger", trigger, "workers", fmt.Sprintf("%d/%d", warm, preparer.manager.activeLimit()))
+	}
 	preparer.manager.requests.logStage(label, "INFO", api.LogStage{Name: "WAA Worker 启动", State: "completed"}, "WAA Worker 就绪",
-		"page_model", preparer.bootstrapModel, "pid", preparer.worker.State().PID, "duration", time.Since(preparer.startedAt))
+		append(attrs, "page_model", preparer.bootstrapModel, "pid", preparer.worker.State().PID, "duration", time.Since(preparer.startedAt))...)
 	preparer.pending = false
 	preparer.account.startupMu.Unlock()
 	return nil
@@ -1374,7 +1400,8 @@ func (manager *accountWorkerManager) idleWarmVictimFor(excludeID string, modelID
 	return selected
 }
 
-func (manager *accountWorkerManager) evictIdleWorker(ctx context.Context, accountID string) (bool, error) {
+// evictIdleWorker 取得账户租约后关闭账户的空闲 Worker，trigger 为停止日志记录的起因
+func (manager *accountWorkerManager) evictIdleWorker(ctx context.Context, accountID string, trigger string) (bool, error) {
 	evictionCtx, cancel := context.WithTimeout(ctx, workerEvictionTimeout)
 	defer cancel()
 	lease, err := manager.pool.AcquireAccount(evictionCtx, accountID)
@@ -1387,7 +1414,7 @@ func (manager *accountWorkerManager) evictIdleWorker(ctx context.Context, accoun
 	if err := ctx.Err(); err != nil {
 		return false, errors.Join(err, lease.Release())
 	}
-	resetErr := manager.Reset(accountID)
+	resetErr := manager.reset(accountID, trigger)
 	releaseErr := lease.Release()
 	return true, errors.Join(resetErr, releaseErr)
 }
@@ -1509,24 +1536,16 @@ func (manager *accountWorkerManager) openWorker(
 		if err != nil {
 			err = errors.Join(err, discardAccountWorker(preparer))
 		} else {
-			err = activateAccountWorker(preparer)
+			err = activateAccountWorker(preparer, replacing)
 		}
 	} else if preparer != nil {
 		err = errors.Join(err, discardAccountWorker(preparer))
 	}
 	manager.rebalanceMu.Lock()
 	manager.finishOpening(accountID, opening)
-	warmCount := len(manager.WarmAccountIDs())
 	manager.rebalanceMu.Unlock()
 	if err != nil {
 		return nil, err
-	}
-	switch {
-	case warmCount <= manager.warmLimit():
-	case replacing:
-		manager.requests.log("service", "INFO", "WAA Worker 按需替换", "workers", fmt.Sprintf("%d/%d", warmCount, manager.activeLimit()))
-	default:
-		manager.requests.log("service", "INFO", "WAA Worker 按需扩容", "workers", fmt.Sprintf("%d/%d", warmCount, manager.activeLimit()))
 	}
 	return preparer, nil
 }
@@ -1551,7 +1570,7 @@ func (manager *accountWorkerManager) evictForOpening(ctx context.Context, accoun
 			}
 			continue
 		}
-		evicted, err := manager.evictIdleWorker(ctx, victim)
+		evicted, err := manager.evictIdleWorker(ctx, victim, "replace")
 		if err != nil || evicted {
 			return victim, err
 		}
@@ -1689,6 +1708,7 @@ func (manager *accountWorkerManager) StartPrewarm(ctx context.Context) <-chan er
 		close(first)
 		return first
 	}
+	manager.warming.Store(true)
 	fillContext, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(manager.lifecycle, cancel)
 	go manager.fillWarm(fillContext, first, func() {
@@ -1696,6 +1716,11 @@ func (manager *accountWorkerManager) StartPrewarm(ctx context.Context) <-chan er
 		cancel()
 	})
 	return first
+}
+
+// FirstWarmPending 返回是否有一轮预热已开始而还没有给出第一个结果
+func (manager *accountWorkerManager) FirstWarmPending() bool {
+	return manager.warming.Load()
 }
 
 // temporaryPageKey 是 context 中标记临时页面载入的键，临时页面载入只在除同账户预约外没有启动等待名额时取得名额
@@ -1716,6 +1741,8 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			return
 		}
 		notified = true
+		manager.warming.Store(false)
+		manager.dispatch.wakeHeads()
 		first <- err
 	}
 	var failures aistudio.GroupedErrors

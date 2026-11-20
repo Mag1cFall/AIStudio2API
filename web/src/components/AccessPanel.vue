@@ -15,7 +15,9 @@ import {
 import { maskKey, splitKeys } from '@/apikey'
 import { useI18n, type TranslationKey } from '@/i18n'
 import type { IconName } from '@/icons'
+import { formatLogNumber } from '@/logs'
 import { defaultChatModel } from '@/playground/catalog'
+import { useRunningClock } from '@/playground/clock'
 import { errorMessage } from '@/playground/request'
 import type { Model, ServiceConfig } from '@/types'
 import { useQueryParam } from '@/url'
@@ -30,7 +32,7 @@ import UiSelect from './UiSelect.vue'
 defineOptions({ name: 'AccessPanel' })
 const props = defineProps<{ config: ServiceConfig | null; models: Model[] }>()
 const emit = defineEmits<{ settings: [] }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 // origin 是浏览器访问本服务所用的地址，客户端与示例代码以它为服务地址
 const origin = window.location.origin
@@ -129,11 +131,13 @@ function keepModel(selected: string, list: readonly Model[]): string {
   return (defaultChatModel(list) ?? list[0])?.id ?? ''
 }
 
-// TestResult 是连通测试中一个请求的结果：请求、是否成功、说明与耗时
+// TestResult 是连通测试中一个请求的结果：请求、是否成功、说明、发出时刻与耗时毫秒数
+// 约束：请求进行中时 ok 为 undefined、elapsed 为 0
 interface TestResult {
   request: string
-  ok: boolean
+  ok?: boolean
   detail: string
+  started: number
   elapsed: number
 }
 const testModel = ref('')
@@ -142,36 +146,40 @@ watch(chatModels, (list) => (testModel.value = keepModel(testModel.value, list))
 })
 const testing = ref(false)
 const results = ref<TestResult[]>([])
+// now 是测试进行中按时钟更新的 performance.now()
+const now = useRunningClock(() => testing.value)
 
-// probe 发送一个测试请求并记录结果，read 读取成功响应的说明；连接失败或返回错误时记录原因并返回 false
+// runningText 返回进行中的请求已用的秒数
+function runningText(item: TestResult): string {
+  const seconds = Math.max(0, Math.floor((now.value - item.started) / 1000))
+  return formatLogNumber(seconds, locale.value, 0, 'second')
+}
+
+// probe 先放入一行进行中的请求，发送后原地换成结果，read 读取成功响应的说明；连接失败或返回错误时记录原因并返回 false
 async function probe(
   request: string,
   init: RequestInit & { path: string },
   read: (body: unknown) => string,
 ): Promise<boolean> {
   const started = performance.now()
+  const index =
+    results.value.push({ request, detail: t('access.testWaiting'), started, elapsed: 0 }) - 1
+  const finish = (ok: boolean, detail: string) => {
+    results.value[index] = {
+      request,
+      ok,
+      detail,
+      started,
+      elapsed: Math.round(performance.now() - started),
+    }
+    return ok
+  }
   try {
     const response = await fetch(init.path, init)
-    const elapsed = Math.round(performance.now() - started)
-    if (!response.ok) {
-      results.value.push({
-        request,
-        ok: false,
-        detail: `${response.status} ${await errorMessage(response)}`,
-        elapsed,
-      })
-      return false
-    }
-    results.value.push({ request, ok: true, detail: read(await response.json()), elapsed })
-    return true
+    if (!response.ok) return finish(false, `${response.status} ${await errorMessage(response)}`)
+    return finish(true, read(await response.json()))
   } catch (error) {
-    results.value.push({
-      request,
-      ok: false,
-      detail: error instanceof TypeError ? t('access.testUnreachable') : String(error),
-      elapsed: Math.round(performance.now() - started),
-    })
-    return false
+    return finish(false, error instanceof TypeError ? t('access.testUnreachable') : String(error))
   }
 }
 
@@ -566,21 +574,28 @@ function methodClass(method: string): string {
                   class="flex items-start gap-2 py-2 text-sm"
                 >
                   <UiIcon
-                    :name="item.ok ? 'success' : 'warning'"
+                    :name="item.ok === undefined ? 'spinner' : item.ok ? 'success' : 'warning'"
                     :size="15"
                     class="mt-0.5"
-                    :class="item.ok ? 'text-gray-400' : 'text-red-400'"
+                    :class="item.ok === false ? 'text-red-400' : 'text-gray-400'"
                   />
                   <code class="shrink-0 font-mono text-xs leading-5 text-gray-400">{{
                     item.request
                   }}</code>
                   <span
                     class="min-w-0 flex-1 break-words"
-                    :class="item.ok ? 'text-gray-200' : 'text-red-300'"
+                    :class="
+                      item.ok === undefined
+                        ? 'text-gray-400'
+                        : item.ok
+                          ? 'text-gray-200'
+                          : 'text-red-300'
+                    "
                     >{{ item.detail }}</span
                   >
-                  <span class="shrink-0 font-mono text-xs leading-5 text-gray-500 tabular-nums"
-                    >{{ item.elapsed }} ms</span
+                  <span
+                    class="min-w-16 shrink-0 text-right font-mono text-xs leading-5 text-gray-500 tabular-nums"
+                    >{{ item.ok === undefined ? runningText(item) : `${item.elapsed} ms` }}</span
                   >
                 </li>
               </ul>
@@ -923,13 +938,15 @@ function methodClass(method: string): string {
                     :key="endpoint.method + endpoint.path"
                     class="scroll-mt-16"
                   >
-                    <div class="flex items-center gap-1 py-1 pr-1.5 pl-2">
+                    <div
+                      class="flex cursor-pointer items-center gap-1 py-1 pr-1.5 pl-2"
+                      @click="toggleEndpoint(endpointKey(endpoint.method, endpoint.path))"
+                    >
                       <button
                         type="button"
                         class="flex min-h-8 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1 text-left transition hover:bg-raised"
                         :aria-expanded="expanded.has(endpointKey(endpoint.method, endpoint.path))"
                         :aria-controls="`${endpointID(endpointKey(endpoint.method, endpoint.path))}-detail`"
-                        @click="toggleEndpoint(endpointKey(endpoint.method, endpoint.path))"
                       >
                         <span
                           class="w-14 shrink-0 font-mono text-xs font-semibold"
@@ -962,6 +979,7 @@ function methodClass(method: string): string {
                             `${endpoint.method} ${endpoint.path}`,
                           )
                         "
+                        @click.stop
                       />
                     </div>
                     <UiCollapse :open="expanded.has(endpointKey(endpoint.method, endpoint.path))">

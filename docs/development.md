@@ -21,6 +21,7 @@ Windows 用户解压发布包后双击 `aistudio2api.exe`。程序启动后自�
 - 启动时窗口先显示启动画面，管理服务就绪后打开管理页面
 - 关闭窗口后程序在系统托盘继续运行：Windows 双击托盘图标显示窗口，Linux 单击托盘图标显示窗口，两者右键打开托盘菜单；macOS 单击菜单栏图标显示窗口、右键打开菜单，点 Dock 图标或从“应用程序”再次打开时显示窗口；菜单可以显示窗口、在浏览器中打开管理页面、开关开机自启动或退出
 - 再次启动时唤回已运行实例的窗口；`-open-ui=false` 启动时只显示托盘图标
+- 页面中的外部链接用系统浏览器打开；拖入窗口的链接与文件由页面中的上传区接收，其余位置的拖放被取消，窗口停留在管理页面
 - 数据目录：Windows 为可执行文件所在目录，macOS 为 `~/Library/Application Support/AIStudio2API/`，Linux 为 `~/.config/AIStudio2API/`（设置 `XDG_CONFIG_HOME` 时为其中的 `AIStudio2API/`）；`.env`、`auth/` 与 `runtime/` 都在数据目录中
 - Windows 桌面版以 `cmd /c start /wait aistudio2api.exe setup` 的形式运行命令时在该控制台中输入输出，命令行等程序结束后返回
 - Windows 在替换运行中的输出文件时可能留下 `aistudio2api.exe~`，它是旧进程占用目标文件期间产生的构建副本
@@ -35,7 +36,7 @@ cd ..
 go run ./cmd/aistudio2api
 ```
 
-管理页面“账户”页的“添加账户”菜单提供从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、浏览器登录和远程添加，也可以重新登录、立即刷新、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。
+管理页面“账户”页的“添加账户”菜单提供从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、浏览器登录和远程添加，也可以重新登录、立即刷新、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。启停账户保存后立即返回，停用后等待在途请求结束并关闭 Worker、启用后载入页面同步模型目录，都在后台完成。
 
 浏览器登录与重新登录的显示方式由服务端按请求决定：
 
@@ -83,7 +84,7 @@ go run ./cmd/aistudio2api
 - Cookie 导入：`--cookie`、`--cookie-file` 或 `--cdp`，账户邮箱按 Cookie 识别，也可用一个 `--email` 指定；`--authuser N` 选择 Cookie 中第 N 个 Google 会话（官网 `/u/N/`）的账户并验证其邮箱；只保留 google.com 及其子域的 Cookie，缺少 `__Secure-1PSID`、`SAPISID`、`__Secure-1PAPISID` 或 `__Secure-3PAPISID` 时报告缺少的 Cookie
 - `--cdp` 接受 `host:port`、HTTP 调试地址或浏览器级 `ws://` 地址，经 CDP `Storage.getCookies` 读取该浏览器的全部未分区 Cookie
 - 管理页面导入 Cookie 只需粘贴 Cookie 或选择 Cookie 文件：页面在粘贴或输入停顿后自动识别，服务以 Cookie 打开 AI Studio 对话页，从页面全局数据 `oPEP7c` 读取登录账户邮箱，再读取 `ListModels` 确认可用；页面转到登录页时返回 `signed_out`
-- 管理页面的添加、导入与重新登录在服务端的账户任务中运行（`internal/api/account_tasks.go`）：请求返回 202 与任务后对话框即关闭，任务在请求结束后继续运行，逐个处理账户并把每个账户的状态、错误码与原因推送到管理事件流的 `account_tasks`，账户页据此显示任务行；浏览器登录任务带登录窗口 ID，页内登录窗口隐藏或页面刷新后以同一 ID 重新连接
+- 管理页面的添加、导入与重新登录在服务端的账户任务中运行（`internal/api/account_tasks.go`）：请求返回 202 与任务后对话框即关闭，任务在请求结束后继续运行，逐个处理账户并把每个账户的状态、当前步骤、错误码与原因推送到管理事件流的 `account_tasks`，账户页据此显示任务行；浏览器登录任务带登录窗口 ID，页内登录窗口隐藏或页面刷新后以同一 ID 重新连接
 - “从指纹浏览器导入”从本机进程命令行找出带 `--remote-debugging-port` 的浏览器（端口为 0 时读取用户数据目录的 `DevToolsActivePort`），逐个读取 Cookie 并识别账户，列出可导入、已导入与未登录的浏览器
 - 隔离登录：`--login`
 - 浏览器导入：Chrome 导入参数
@@ -167,7 +168,7 @@ internal/waa/            SpiderMonkey WAA：BotGuard VM、Firefox 形状宿主�
 internal/imagecodec/     生成图片的 JPEG 解码、CatmullRom 缩放、PNG 编码与经 cgo 链接 libwebp 的 WebP 编码
 internal/resample/       语音 PCM 的 Kaiser 窗 sinc 多相重采样
 internal/proxydial/      上游代理拨号与带认证代理的本机 SOCKS5 中转
-internal/egress/         查询出口公网 IP，按本地 IP 库推出出口所在的国家、时区与语言
+internal/egress/         经出口在线查询公网 IP、国家与时区，推出出口所在地的语言
 internal/requestdb/      请求用量账本与可选正文的 SQLite 存储
 internal/statedb/        Responses 与 Interactions 续接节点的 SQLite 存储
 internal/promptdb/       Playground 对话的 SQLite 存储
@@ -491,9 +492,10 @@ POST /api/control/start
   -> 重新读取 .env 并应用命令行 --auth/--proxy 覆盖
   -> 创建并启用新的生成服务实例
   -> 从账户目录的 catalog.json 建立模型目录
-  -> 有缓存目录：立即预热 WAA Worker，首个 Worker 有结果后读取 enabled 且处于 ready、busy 或 cooldown 的账户中目录缓存缺失或最近一次同步已满 24 小时的账户的页面目录
-  -> 无缓存目录：同时读取全部 enabled 且处于 ready、busy 或 cooldown 的账户的页面目录，等待首个非空真实目录后预热 WAA Worker
-  -> 首个 Worker 就绪后进入 RUNNING；可预热的账户全部处于冷却时直接进入 RUNNING，冷却结束后预热；首轮目录同步完成前没有可预热账户时，同步完成后再预热一次
+  -> 有缓存目录：进入 RUNNING 并在后台预热 WAA Worker，首个 Worker 有结果后读取 enabled 且处于 ready、busy 或 cooldown 的账户中目录缓存缺失或最近一次同步已满 24 小时的账户的页面目录
+  -> 无缓存目录：同时读取全部 enabled 且处于 ready、busy 或 cooldown 的账户的页面目录，取得首个非空真实目录后进入 RUNNING 并在后台预热 WAA Worker
+  -> 可预热的账户全部处于冷却时，冷却结束后预热；首轮目录同步完成前预热失败时，同步完成后再预热一次，仍失败时记录 WARN 日志 `WAA Worker 预热失败`
+  -> 预热的首个 Worker 有结果之前到达的请求等待这个 Worker，指定账户的请求直接启动该账户的 Worker
   -> 剩余目录同步与热池预热继续在后台运行
 ```
 
@@ -646,6 +648,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 - 同一请求依次发往这些账户、每个账户一次，上游放行即完成
 - 被拒的账户按上游原因更新冷却，全部拒绝时按最后一次的原因返回 429 或 503
 - 每日限额冷却中的账户被拒后，记下被拒请求的输入字节数（系统指令、各轮文本、函数参数与结果、内联附件）；1 分钟内输入字节数不小于它的请求不再发往该账户，记下的字节数越大的账户越先使用
+- 冷却中的账户在这类发送中收到恢复更早的其他额度错误（如不带细节的 429）时，该错误另记为回退冷却，按连续次数 1、5、15、30、60 分钟递增，原冷却不变；回退冷却未结束的账户不再接收这类发送
 - 没有可发的账户时直接返回 429 与最早恢复时间
 
 账户状态：
@@ -656,7 +659,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 | `busy` | 账户存在独占操作、认证刷新或活动请求；调度仍按 `PER_ACCOUNT_CONCURRENCY` 判断剩余槽位 |
 | `cooldown` | 账户的全局 `*` 冷却仍有效；模型 `scope`（状态记录范围）冷却只影响对应请求的候选分类 |
 | `auth_required` | 账户级认证失败，需要重新登录或续签 |
-| `restricted` | Google 拒绝账户使用 AI Studio（服务受限、年龄要求或 Workspace 停用），原因写入 `runtime-state.json`；启动、调度与巡检跳过，手动刷新读取成功后恢复；上游要求验证账户时，手动刷新另发一次生成请求，这次生成成功后恢复，其他结果保持受限并返回原因 |
+| `restricted` | Google 拒绝账户使用 AI Studio（服务受限、年龄要求或 Workspace 停用），原因写入 `runtime-state.json`；启动、调度与巡检跳过，手动刷新读取成功后恢复；上游要求验证账户时，手动刷新另发一次生成请求，这次生成成功后恢复，其他结果保持受限并返回原因；账户状态改为就绪时直接清除受限记录，下一次请求仍被上游拒绝时重新标为受限 |
 | `unavailable` | 当前运行时无法使用账户 |
 | `disabled` | 账户配置已停用 |
 
@@ -725,12 +728,12 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 | 能力 | 路由 |
 | --- | --- |
 | 健康与状态 | `GET /health`、`GET /api/status` |
-| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET /api/accounts/exits`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}` |
+| 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET /api/accounts/exits`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}`、`PUT /api/accounts/{id}/state` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
 | 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
-| 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/paths?path=`（列出服务所在机器的目录与账户状态文件 `storage-state.json`，`path=roots` 列出文件系统根） |
+| 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/paths?path=`（列出服务所在机器的目录与账户状态文件 `storage-state.json`，`path=roots` 列出文件系统根）、`POST /api/paths/pick?path=`（桌面版以系统对话框选择账户目录） |
 | 冷却与请求 | `GET /api/cooldowns`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
 | 用量与正文 | `GET /api/usage`、`GET /api/usage/pairs`、`GET /api/usage/records`、`GET /api/usage/records.csv`、`GET /api/requests/{id}/body` |
 | 日志与事件 | `DELETE /api/logs`、`GET /api/events` |
@@ -763,6 +766,7 @@ npm run build
 
 前端工具链为 Vite+：`vite.config.ts` 同时配置开发服务、构建、Oxlint 与 Oxfmt。
 
+- `npm run dev` 的开发服务把 `/api`、各协议路径等请求转发到 `http://127.0.0.1:2048`；环境变量 `SERVICE_TARGET` 指定另一个服务地址
 - `npm run lint` 先运行 Oxlint，再运行 ESLint；ESLint 只负责 eslint-plugin-vue 的 `recommended` 模板规则，`<script lang="ts">` 由 `@typescript-eslint/parser` 解析，与 Oxlint 共有的规则由 eslint-plugin-oxlint 关闭，与格式化冲突的格式规则由 eslint-config-prettier 关闭
 - `npm run typecheck` 由 vue-tsc 检查脚本与模板类型
 - `npm run format:check` 由 Oxfmt 检查格式
@@ -932,6 +936,18 @@ wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/wi
 ```
 
 Camoufox 在首次浏览器登录时准备；`WAA_BACKEND=camoufox` 时在管理服务启动后于后台下载，生成服务等下载完成后就绪。
+
+实现与评审按以下设计原则取舍：
+
+- 全兼容：公开协议接受各协议标准的全部有效输入；上游或某个标准拒绝的输入，在适配与编码层改写成上游接受的形式
+- fail fast：出错时在出错处以真实原因失败，错误让客户端能按自己的策略重试；找不到合理解释的输入在发送前返回说明原因的错误
+- 默认行为先保证请求可用，其次照上游原样；上游的额度、权限与模型状态按上游返回处理
+- 接口与官方 API 用法一致：同样的请求发给官方 API，模型看到的上下文相同
+- 主路径只包含必需的步骤：可有可无的步骤删除，必需而耗时的步骤（下载、目录同步、预热）在后台或按需进行
+- 请求、身份、节奏与界面行为对齐官网；官网能完成而服务失败属于服务缺陷
+- 修复沿报错路径修根因，同类字段、嵌套结构与其他协议入口一起修
+- 代码只处理真实会发生的情况，选能满足需求的最简单实现
+- 模型、方法与能力以账户的实时目录为准
 
 贡献内容聚焦单一功能或协议变更，并使用脱敏后的请求与响应样例。
 

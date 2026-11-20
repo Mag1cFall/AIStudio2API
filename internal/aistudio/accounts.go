@@ -335,11 +335,14 @@ type Account struct {
 	// verifiedGeneration 是 verifiedAt 记录时的模型资格目录版本
 	verifiedGeneration uint64
 	stateMessage       string
-	transition         AccountTransition
-	catalogErr         error
-	initializedAt      time.Time
-	buildModels        []Model
-	cachedCatalog      modelCatalog
+	// transition 是停用收尾、目录同步或账户保存的进度，refresh 是立即刷新的进度
+	// 约束：账户状态取操作非空的 transition，否则取 refresh
+	transition    accountProgress
+	refresh       accountProgress
+	catalogErr    error
+	initializedAt time.Time
+	buildModels   []Model
+	cachedCatalog modelCatalog
 	// catalogSyncedAt 是目录缓存最近一次同步的时刻，没有一致的缓存时为零值
 	catalogSyncedAt time.Time
 	// hiddenModels 是目录中官网隐藏模型 ID 到依据模型 ID 的映射，hiddenDiscovered 表示该目录同步时探测过官网隐藏模型
@@ -368,10 +371,19 @@ type AccountStatus struct {
 	LastUsed    *time.Time               `json:"last_used,omitempty"`
 	Message     string                   `json:"message,omitempty"`
 	Directory   string                   `json:"-"`
-	// Transition 是账户启停的后台收尾阶段，没有收尾时为空
+	// Transition 是账户正在进行的后台操作，没有时为空
 	Transition AccountTransition `json:"-"`
+	// TransitionStep 是后台操作当前的步骤，操作没有分步时为空
+	TransitionStep AccountStep `json:"-"`
+	// TransitionIndex 与 TransitionTotal 是立即刷新当前步骤的序号与步数，其他操作为 0
+	TransitionIndex int `json:"-"`
+	TransitionTotal int `json:"-"`
+	// TransitionSince 是进入当前操作或步骤的时刻
+	TransitionSince time.Time `json:"-"`
 	// ActiveRequests 是账户上进行中的请求数
 	ActiveRequests int `json:"-"`
+	// CatalogError 是已有目录的账户最近一次权益或目录读取失败的原因，下一次读取成功后为空
+	CatalogError string `json:"-"`
 	// CatalogSyncedAt 是目录缓存最近一次同步的时刻，没有一致的缓存时为零值
 	CatalogSyncedAt time.Time `json:"-"`
 	// HiddenDiscovered 表示账户目录同步时探测过官网隐藏模型，HiddenModels 是目录中的官网隐藏模型数
@@ -379,15 +391,39 @@ type AccountStatus struct {
 	HiddenModels     int  `json:"-"`
 }
 
-// AccountTransition 是账户启停的后台收尾阶段
+// AccountTransition 是账户正在进行的后台操作
 type AccountTransition string
 
 const (
 	// AccountDraining 表示账户已停用，正在等待在途请求结束并关闭 Worker
 	AccountDraining AccountTransition = "draining"
-	// AccountSyncing 表示账户已启用，正在载入页面同步模型目录
+	// AccountSyncing 表示账户已启用、添加、导入或重新登录，正在载入页面同步模型目录
 	AccountSyncing AccountTransition = "syncing"
+	// AccountSaving 表示正在保存账户配置或登录状态
+	AccountSaving AccountTransition = "saving"
+	// AccountRefreshing 表示正在立即刷新账户
+	AccountRefreshing AccountTransition = "refreshing"
 )
+
+// AccountStep 是后台操作当前的步骤
+type AccountStep string
+
+const (
+	// AccountStepWaiting 表示操作正在等账户的在途请求结束
+	AccountStepWaiting AccountStep = "waiting"
+	// AccountStepCatalog 表示正在载入页面读取权益与模型目录
+	AccountStepCatalog AccountStep = "catalog"
+	// AccountStepVerifying 表示正在发一次生成请求核对验证状态
+	AccountStepVerifying AccountStep = "verifying"
+)
+
+// accountProgress 是一次后台操作的当前步骤、步骤序号与进入该步骤的时刻，没有序号时 index 与 total 为 0
+type accountProgress struct {
+	operation    AccountTransition
+	step         AccountStep
+	index, total int
+	since        time.Time
+}
 
 // AccountSelection 描述账户调度所需的能力或粘性条件
 type AccountSelection struct {
@@ -1879,13 +1915,36 @@ func (p *AccountPool) SetEnabled(accountID string, enabled bool) (*Account, erro
 	return account, nil
 }
 
-// SetTransition记录账户启停的后台收尾阶段，空值表示收尾结束
-func (p *AccountPool) SetTransition(accountID string, transition AccountTransition) {
+// SetTransition 记录停用收尾、目录同步或账户保存进行到的步骤，operation 为空表示结束
+func (p *AccountPool) SetTransition(accountID string, operation AccountTransition, step AccountStep) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if account := p.byID[strings.TrimSpace(accountID)]; account != nil {
-		account.transition = transition
+		p.setProgressLocked(&account.transition, accountProgress{operation: operation, step: step})
 	}
+}
+
+// SetRefreshStep 记录立即刷新进入第 index 步 step，共 total 步，step 为空表示刷新结束
+func (p *AccountPool) SetRefreshStep(accountID string, step AccountStep, index, total int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if account := p.byID[strings.TrimSpace(accountID)]; account != nil {
+		next := accountProgress{step: step, index: index, total: total}
+		if step != "" {
+			next.operation = AccountRefreshing
+		}
+		p.setProgressLocked(&account.refresh, next)
+	}
+}
+
+// setProgressLocked 在操作或步骤变化时记下新进度与进入时刻并通知账户池的订阅者
+func (p *AccountPool) setProgressLocked(current *accountProgress, next accountProgress) {
+	if current.operation == next.operation && current.step == next.step {
+		return
+	}
+	next.since = time.Now()
+	*current = next
+	p.notifyLocked()
 }
 
 // ReloadStorageState 在租约内重新读取认证状态
@@ -2774,6 +2833,22 @@ func (p *AccountPool) clearRestriction(accountID string) error {
 	return err
 }
 
+// ClearAccountState 清除账户的服务受限、全部冷却与需要重新登录的标记并删除 runtime-state.json 中的受限与冷却记录，启用的账户回到就绪
+func (p *AccountPool) ClearAccountState(accountID string) error {
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		changed := runtimeState.Restricted != "" || len(runtimeState.Cooldowns) > 0
+		runtimeState.Restricted = ""
+		clear(runtimeState.Cooldowns)
+		return changed, func(account *Account) {
+			if account.Config.Enabled {
+				account.State, account.stateMessage = AccountReady, ""
+				account.authCheckedAt = time.Now().UTC()
+			}
+		}, nil
+	})
+	return err
+}
+
 // MarkRestricted 把账户标为服务受限并把原因写入 runtime-state.json，之后不再为该账户载入页面；目录同步成功时恢复，上游要求验证账户的受限只在刷新账户状态时的生成请求不再被要求验证后恢复
 func (p *AccountPool) MarkRestricted(accountID string, denial *camoufoxnative.AccessDenial) error {
 	reason := denial.Error()
@@ -2805,6 +2880,7 @@ func (p *AccountPool) recordCatalogFailure(accountID string, err error) {
 	defer p.mu.Unlock()
 	if account := p.byID[accountID]; account != nil {
 		account.catalogErr = err
+		p.notifyLocked()
 	}
 }
 
@@ -2839,8 +2915,17 @@ func (p *AccountPool) Status() []AccountStatus {
 		if account.runtime.CatalogFingerprint == "" {
 			tier = "Unknown"
 		}
-		if message == "" && account.catalogErr != nil && (account.runtime.CatalogFingerprint == "" || errors.Is(account.catalogErr, camoufoxnative.ErrRegionNotSupported)) {
+		catalogError := ""
+		switch {
+		case account.catalogErr == nil:
+		case account.runtime.CatalogFingerprint != "" && !errors.Is(account.catalogErr, camoufoxnative.ErrRegionNotSupported):
+			catalogError = account.catalogErr.Error()
+		case message == "":
 			message = account.catalogErr.Error()
+		}
+		progress := account.transition
+		if progress.operation == "" {
+			progress = account.refresh
 		}
 		status := AccountStatus{
 			ID:          account.ID,
@@ -2857,7 +2942,12 @@ func (p *AccountPool) Status() []AccountStatus {
 			Message:     message,
 			Directory:   account.Directory,
 
-			Transition:       account.transition,
+			Transition:       progress.operation,
+			TransitionStep:   progress.step,
+			TransitionIndex:  progress.index,
+			TransitionTotal:  progress.total,
+			TransitionSince:  progress.since,
+			CatalogError:     catalogError,
 			ActiveRequests:   account.active,
 			CatalogSyncedAt:  account.catalogSyncedAt,
 			HiddenDiscovered: account.hiddenDiscovered,
@@ -3282,6 +3372,14 @@ func (p *AccountPool) EnabledAccounts() []string {
 		}
 	}
 	return ids
+}
+
+// SlotBusy 表示账户此刻没有空闲的普通槽位，取槽位的操作要等在途请求结束；账户不存在时为 false
+func (p *AccountPool) SlotBusy(accountID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[strings.TrimSpace(accountID)]
+	return account != nil && (account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active >= p.perAccountConcurrency)
 }
 
 // Activity 返回账户是否存在活动租约或独占操作及最近使用时间

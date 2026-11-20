@@ -13,7 +13,8 @@ import {
 import { waitsForCamoufox } from '@/camoufox'
 import { useConsole } from '@/console'
 import { useI18n, type TranslationKey } from '@/i18n'
-import type { TabID } from '@/types'
+import { elapsedText, serverTime, useSecondClock } from '@/elapsed'
+import type { ServiceTransition, TabID } from '@/types'
 import CamoufoxBanner from '@/components/CamoufoxBanner.vue'
 import UiDisclosure from '@/components/UiDisclosure.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
@@ -167,6 +168,7 @@ const {
   retryCamoufox,
   clearLogs,
   waitForRestart,
+  restartStalled,
 } = useConsole()
 
 // noticeText 是按界面语言显示的提示正文，服务文案翻译表到达后随之更新
@@ -214,20 +216,48 @@ const camoufoxInTask = computed(
     accountTasks.value.some((task) => waitsForCamoufox(task, status.value?.camoufox)),
 )
 
+// switching 表示生成服务正在启动或停止
+const switching = computed(
+  () => serviceState.value === 'launching' || serviceState.value === 'stopping',
+)
 const statusColor = computed(() => {
   if (serviceState.value === 'running') return 'bg-green-500'
-  if (serviceState.value === 'launching') return 'bg-cyan-400 animate-pulse'
+  if (switching.value) return 'bg-cyan-400 animate-pulse'
   return 'bg-gray-600'
 })
 const statusTextColor = computed(() => {
   if (serviceState.value === 'running') return 'text-green-400'
-  if (serviceState.value === 'launching') return 'text-cyan-300'
+  if (switching.value) return 'text-cyan-300'
   return 'text-gray-500'
 })
 // serviceStateLabel 是生成服务状态在当前语言下的文案
 const serviceStateLabel = computed(() => t(`state.${serviceState.value}`))
 // serviceStates 是状态区可能显示的服务状态，各状态文案叠放在同一格，宽度取最长的一项
-const serviceStates = ['running', 'launching', 'stopped', 'unavailable'] as const
+const serviceStates = ['running', 'launching', 'stopping', 'stopped', 'unavailable'] as const
+// transitionLabels 是生成服务各启动与停止步骤的文字
+const transitionLabels: Record<ServiceTransition, TranslationKey> = {
+  probe_proxies: 'app.stepProbeProxies',
+  wait_camoufox: 'app.stepWaitCamoufox',
+  wait_catalog: 'app.stepWaitCatalog',
+  start_prewarm: 'app.stepStartPrewarm',
+  cancel_requests: 'app.stepCancelRequests',
+  wait_catalog_stop: 'app.stepWaitCatalogStop',
+  close_workers: 'app.stepCloseWorkers',
+}
+// now 是生成服务处于启动或停止步骤时每秒更新的当前时间
+const now = useSecondClock(() => status.value?.transition_since !== undefined)
+
+// transitionStep 是当前启动或停止步骤的文字，没有步骤时为空串
+const transitionStep = computed(() => {
+  const transition = status.value?.transition
+  return transition === undefined ? '' : t(transitionLabels[transition])
+})
+
+// transitionElapsed 是当前步骤的已用时间文字
+const transitionElapsed = computed(() => {
+  const since = status.value?.transition_since
+  return elapsedText(since === undefined ? now.value : serverTime(since), now.value, locale.value)
+})
 
 // logout 先在当前会话内提交等待中的删除再退出登录
 async function logout(): Promise<void> {
@@ -339,9 +369,16 @@ onMounted(revealCurrentTab)
       </nav>
 
       <div class="min-w-0 overflow-hidden border-t border-line p-2 [grid-area:status] md:p-4">
-        <div class="mb-2 hidden text-xs text-gray-500 md:block">{{ t('app.status') }}</div>
-        <div class="flex items-center justify-between gap-2 md:mb-4">
-          <div class="flex min-w-0 items-center gap-2 md:contents">
+        <div class="flex min-h-6 items-center justify-between gap-2 md:mb-4">
+          <div
+            v-if="transitionStep"
+            class="flex min-w-0 flex-1 justify-between gap-2 text-sm"
+            :class="statusTextColor"
+          >
+            <span v-tooltip.overflow="transitionStep" class="truncate">{{ transitionStep }}</span>
+            <span class="shrink-0 text-gray-400 tabular-nums">{{ transitionElapsed }}</span>
+          </div>
+          <div v-else class="flex min-w-0 items-center gap-2 md:contents">
             <span
               class="grid shrink-0 font-mono font-bold whitespace-nowrap uppercase"
               :class="statusTextColor"
@@ -374,13 +411,16 @@ onMounted(revealCurrentTab)
             {{ t('app.start') }}
           </button>
           <button
-            v-else-if="serviceState === 'launching' || serviceState === 'running'"
+            v-else
             class="flex shrink-0 items-center gap-1.5 rounded bg-red-600 px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50 md:hidden"
             type="button"
-            :disabled="stopPending"
+            :disabled="stopPending || serviceState === 'stopping'"
             @click="stopService"
           >
-            <UiIcon :name="stopPending ? 'spinner' : 'stop'" :size="13" />
+            <UiIcon
+              :name="stopPending || serviceState === 'stopping' ? 'spinner' : 'stop'"
+              :size="13"
+            />
             {{ t('app.stop') }}
           </button>
         </div>
@@ -396,13 +436,16 @@ onMounted(revealCurrentTab)
           {{ t('app.start') }}
         </button>
         <button
-          v-else-if="serviceState === 'launching' || serviceState === 'running'"
+          v-else
           class="hidden w-full items-center justify-center gap-2 rounded bg-red-600 py-2 font-bold text-white shadow transition hover:bg-red-500 disabled:opacity-50 md:flex"
           type="button"
-          :disabled="stopPending"
+          :disabled="stopPending || serviceState === 'stopping'"
           @click="stopService"
         >
-          <UiIcon :name="stopPending ? 'spinner' : 'stop'" :size="16" />
+          <UiIcon
+            :name="stopPending || serviceState === 'stopping' ? 'spinner' : 'stop'"
+            :size="16"
+          />
           {{ t('app.stop') }}
         </button>
       </div>
@@ -464,7 +507,6 @@ onMounted(revealCurrentTab)
           :error="errors.accounts"
           :chrome-import="status?.chrome_import ?? false"
           :camoufox="status?.camoufox"
-          :geoip="status?.geoip"
           @refresh="loadAccountData"
           @updated="updateAccount"
           @notice="showNotice"
@@ -512,6 +554,7 @@ onMounted(revealCurrentTab)
           v-else-if="currentTab === 'version'"
           :status="update"
           :active-requests="status?.active_requests ?? 0"
+          :restart-stalled="restartStalled"
           @status="update = $event"
           @restarting="waitForRestart"
         />

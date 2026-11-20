@@ -35,7 +35,8 @@ const (
 	dialogPause = 5900 * time.Millisecond
 )
 
-// settingSteps 返回点击 Run 之前像官网用户一样把页面运行设置改成 body 所需的各组可信界面操作：请求模型在 ListModels 中且与页面模型不同时在模型面板中换模型（不在 Featured 分类时先点 All 页签），思考档位与页面不同时在下拉框中选中，系统指令与工具声明与上次写入页面的不同时在面板中写入；各步点击时记录官网界面元素事件并更新页面状态，放不进空闲区间的组不做，页面状态不变
+// settingSteps 返回点击 Run 之前把页面运行设置改成 body 所需的各组可信界面操作
+// 各步点击时记录官网界面元素事件并更新页面状态，放不进空闲区间的组不做，页面状态不变
 func (runtime *goWAARuntime) settingSteps(body []byte) [][]waa.SettingStep {
 	elements := runtime.elements
 	if elements == nil {

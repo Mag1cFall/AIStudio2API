@@ -4,6 +4,7 @@ import { api, ApiError } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import {
   byteLength,
+  formatLogDuration,
   formatLogNumber,
   isAttempt,
   logField,
@@ -278,17 +279,23 @@ const bodyParts = computed(() =>
 </script>
 
 <template>
-  <div class="request-log">
-    <div class="request-heading">
-      <UiDisclosure v-model="open" />
-      <span class="request-state" :class="`state-${request.state}`">{{
-        request.status ?? t('logs.running')
-      }}</span>
-      <strong>{{ request.model || `${request.method} ${request.path}` }}</strong>
-      <span v-if="request.channel" class="request-channel">{{
+  <div class="log-op request-log">
+    <UiDisclosure v-model="open" />
+    <span
+      class="log-state"
+      :class="`log-state-${request.state}`"
+      :aria-label="request.status === undefined ? t('logs.running') : undefined"
+      ><template v-if="request.status !== undefined">{{ request.status }}</template
+      ><UiIcon v-else name="spinner" :size="13" class="request-spinner"
+    /></span>
+    <span class="log-op-main request-heading"
+      ><strong class="log-op-title">{{
+        request.model || `${request.method} ${request.path}`
+      }}</strong
+      ><span v-if="request.channel" class="request-channel">{{
         t(channelLabelKey(request.channel))
-      }}</span>
-      <span v-if="attempts.length" class="request-attempts"
+      }}</span
+      ><span v-if="attempts.length" class="request-attempts"
         ><span class="log-field-key">{{ t('logs.switches') }}</span
         >&nbsp;{{ number(attempts.length) }}
         <span
@@ -298,16 +305,21 @@ const bodyParts = computed(() =>
           :class="group.tone"
           >{{ group.label }} ×{{ number(group.count) }}</span
         ></span
-      >
-      <span v-if="request.duration_ms !== undefined" class="request-duration">{{
-        seconds(request.duration_ms / 1000, 2)
-      }}</span>
-      <span v-else-if="running" class="request-duration">{{ seconds(runningSeconds) }}</span>
-    </div>
-    <p v-if="running && currentStep" class="request-step">
+      ></span
+    >
+    <span class="log-op-duration">{{
+      request.duration_ms !== undefined
+        ? request.duration_ms < 1000
+          ? formatLogDuration(request.duration_ms, locale)
+          : seconds(request.duration_ms / 1000, 2)
+        : running
+          ? seconds(runningSeconds)
+          : ''
+    }}</span>
+    <p v-if="running && currentStep" class="log-op-row request-step">
       <LogLine :entry="trimmed(currentStep)" part="inline" />
     </p>
-    <div v-if="request.usage || request.tool_calls" class="request-metrics">
+    <div v-if="request.usage || request.tool_calls" class="log-op-row request-metrics">
       <template v-if="request.usage">
         <span class="log-field"
           ><span class="log-field-key">{{ t('logs.reasoning') }}</span
@@ -335,13 +347,16 @@ const bodyParts = computed(() =>
         >&nbsp;{{ number(request.tool_calls) }}</span
       >
     </div>
-    <p v-if="request.error" class="request-error request-error-summary">
+    <p v-if="request.error" class="log-op-row request-error request-error-summary">
       {{ logText(request.error) }}
     </p>
-    <p v-else-if="request.state === 'blocked' || request.state === 'limited'" class="request-error">
+    <p
+      v-else-if="request.state === 'blocked' || request.state === 'limited'"
+      class="log-op-row request-error"
+    >
       {{ finishLabel }}
     </p>
-    <UiCollapse :open="open">
+    <UiCollapse class="log-op-row log-op-detail" :open="open">
       <div class="request-details">
         <dl>
           <dt>ID</dt>
@@ -513,48 +528,30 @@ const bodyParts = computed(() =>
 </template>
 
 <style scoped>
-.request-heading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 10px;
+.request-heading > * {
+  margin-inline-end: 10px;
 }
-.request-heading strong {
-  color: var(--color-fg);
-  font-weight: 600;
-  overflow-wrap: anywhere;
+.request-heading > :last-child {
+  margin-inline-end: 0;
 }
-.request-state {
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  padding: 0 6px;
-  line-height: 18px;
-  font-variant-numeric: tabular-nums;
+.request-spinner {
+  animation: request-spin 1s linear infinite;
 }
-.state-completed,
-.state-tool_calls {
-  color: var(--color-green-400);
-  background: color-mix(in oklab, var(--color-green-400) 8%, transparent);
+@keyframes request-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
-.state-running {
-  color: var(--color-blue-400);
+@media (prefers-reduced-motion: reduce) {
+  .request-spinner {
+    animation: none;
+  }
 }
-.state-limited,
-.state-blocked,
-.state-cancelled {
-  color: var(--color-yellow-400);
-}
-.state-failed,
 .request-error {
   color: var(--color-red-400);
 }
 .request-channel {
   color: var(--color-gray-500);
-}
-.request-duration {
-  color: var(--color-fg);
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
 }
 .request-step {
   margin: 2px 0 0;
@@ -641,6 +638,7 @@ const bodyParts = computed(() =>
 /* request-attempts 为卡片标题行的换账户次数与按上游状态的分组计数 */
 .request-attempts {
   display: inline-flex;
+  vertical-align: top;
   align-items: center;
   flex-wrap: wrap;
   gap: 2px 6px;
@@ -787,9 +785,6 @@ const bodyParts = computed(() =>
   font-size: 13px;
 }
 @media (max-width: 767px) {
-  .request-duration {
-    margin-left: 0;
-  }
   /* 窄屏下换号行只显示账户、上游状态与原因，账户名先截断，上游原文在展开的事件中 */
   .attempt-toggle .request-timeline-source {
     flex-shrink: 1;

@@ -104,6 +104,12 @@ export function logField(entry: AdminLog, key: string): string | undefined {
   return entry.fields?.find((field) => field.key === key)?.value
 }
 
+// logDuration 返回日志 duration 字段的毫秒数，没有该字段时返回 undefined
+export function logDuration(entry: AdminLog): number | undefined {
+  const value = logField(entry, 'duration')
+  return value === undefined ? undefined : parseGoDuration(value)
+}
+
 // attemptMessages 是上游尝试失败后换账户重试的日志消息
 const attemptMessages = new Set(['账号切换', '续写轮账号切换'])
 
@@ -179,14 +185,22 @@ function mergeStage(row: StageRow, entry: AdminLog): void {
   row.entry = { ...row.events[0]!, level: severerLevel(row.entry.level, entry.level) }
 }
 
-// groupStage 按来源与阶段名把运行日志并入阶段卡片：结束日志结束进行中的卡片，步骤号不大于当前步骤的日志开始新卡片，不属于阶段卡片时返回 false
+// groupStage 按来源与阶段名把运行日志并入阶段卡片：结束日志结束进行中的卡片，没有进行中的卡片时自成一张已结束的卡片，步骤号不大于当前步骤的日志开始新卡片，不属于阶段卡片时返回 false
 function groupStage(rows: LogRow[], stages: Map<string, StageRow>, entry: AdminLog): boolean {
   const stage = entry.stage
   if (stage === undefined) return false
   const key = `${entry.source}\n${stage.name}`
   const open = stages.get(key)
   if (stage.state !== undefined) {
-    if (open === undefined) return false
+    if (open === undefined) {
+      rows.push({
+        key: entryKey(entry),
+        entry,
+        events: [entry],
+        stage: { name: stage.name, step: 0, steps: 0, state: stage.state },
+      })
+      return true
+    }
     mergeStage(open, entry)
     open.stage.state = stage.state
     stages.delete(key)

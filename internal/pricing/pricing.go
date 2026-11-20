@@ -38,12 +38,7 @@ func Priced(model string) bool {
 	return ok
 }
 
-// Cost 返回一个请求按模型单价估算的美元费用，cached 为 input 中命中缓存的部分，output 为思考与回复 token 之和，模型没有单价时为 0
-func Cost(model string, input, cached, output int64) float64 {
-	return TierCost(model, input > LongContext, input, cached, output)
-}
-
-// TierCost 返回一组同模型同分档请求的美元费用，long 表示这些请求的输入都超过 LongContext，token 为各请求之和
+// TierCost 返回一组同模型同分档请求的美元费用，long 表示这些请求的输入都超过 LongContext，token 为各请求之和，cached 为 input 中命中缓存的部分，output 为思考与回复 token 之和，模型没有单价时为 0
 func TierCost(model string, long bool, input, cached, output int64) float64 {
 	value := prices[model]
 	if value.longInput > 0 && long {

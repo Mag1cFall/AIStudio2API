@@ -685,7 +685,12 @@ func schemaInteger(raw json.RawMessage, name string) (int64, error) {
 }
 
 func schemaNumber(raw json.RawMessage, name string) (float64, error) {
-	value, err := strconv.ParseFloat(string(raw), 64)
+	text := string(raw)
+	var quoted string
+	if json.Unmarshal(raw, &quoted) == nil {
+		text = strings.TrimSpace(quoted)
+	}
+	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return 0, fmt.Errorf("schema.%s 必须是数字", name)
 	}

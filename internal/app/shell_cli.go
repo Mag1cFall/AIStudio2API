@@ -24,6 +24,11 @@ func newShell(open, _ bool, _ func()) *uiShell {
 	return &uiShell{open: open}
 }
 
+// pickPath 返回 nil，命令行版没有系统对话框
+func (s *uiShell) pickPath() func(start string) (string, error) {
+	return nil
+}
+
 // run 等待 start 返回管理服务就绪，需要时用系统浏览器打开管理页面，等到 ctx 结束；启动失败的原因由服务返回
 func (s *uiShell) run(ctx context.Context, start func() (serviceReady, error)) error {
 	service, err := start()

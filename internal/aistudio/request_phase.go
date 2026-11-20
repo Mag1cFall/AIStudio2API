@@ -2,7 +2,7 @@ package aistudio
 
 import "context"
 
-// RequestPhase 表示受保护请求的当前准备阶段
+// RequestPhase 表示受保护请求的当前准备阶段，Camoufox 界面运行在页面发出 GenerateContent 之前以 camoufoxnative.GenerateStep 的步骤说明为阶段
 type RequestPhase string
 
 const (

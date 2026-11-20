@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
 import { useClampToggle } from '@/clamp'
 import { useI18n } from '@/i18n'
-import { isBlockField } from '@/logs'
+import { formatLogDuration, isBlockField, logDuration } from '@/logs'
 import type { AdminLog } from '@/types'
 import LogLine from './LogLine.vue'
 import UiDisclosure from './UiDisclosure.vue'
@@ -19,6 +19,11 @@ const body = useTemplateRef<HTMLElement>('body')
 const lines = props.entry.fields?.some(isBlockField) ? 3 : 2
 // clamped 是消息当前是否折叠，收起过渡结束后才折叠
 const clamped = useClampToggle(body, open, lines)
+// duration 是日志的耗时，显示在行尾
+const duration = computed(() => {
+  const ms = logDuration(props.entry)
+  return ms === undefined ? '' : formatLogDuration(ms, locale.value)
+})
 
 // measure 在折叠状态下判断折叠行数之外是否还有内容，判断为有之后不再改回
 function measure(): void {
@@ -33,29 +38,25 @@ watch(locale, measure, { flush: 'post' })
 </script>
 
 <template>
-  <div ref="root" class="log-text">
+  <div ref="root" class="log-op log-text">
+    <UiDisclosure v-if="clipped" v-model="open" />
+    <span
+      class="log-state log-state-event"
+      :class="`log-state-${entry.level.toLowerCase()}`"
+      aria-hidden="true"
+    ></span>
     <span
       ref="body"
-      class="log-text-body"
+      class="log-op-main log-text-body"
       :class="{ 'log-text-clamp': clamped }"
       :style="{ '--log-lines': lines }"
-      ><LogLine :entry="entry"
+      ><LogLine :entry="entry" :duration="false" title
     /></span>
-    <UiDisclosure v-if="clipped" v-model="open" />
+    <span class="log-op-duration">{{ duration }}</span>
   </div>
 </template>
 
 <style scoped>
-.log-text {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.log-text-body {
-  display: block;
-  flex: 1;
-  min-width: 0;
-}
 .log-text-clamp {
   display: -webkit-box;
   overflow: hidden;

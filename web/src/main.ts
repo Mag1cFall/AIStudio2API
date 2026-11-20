@@ -22,6 +22,15 @@ function warmCjkFont(): void {
   })
 }
 
+// prefetchStudio 在挂载 3 s 后的空闲时间载入 API 试用页布局与对话页的分块和样式表，没有空闲回调的 WebKit 在 3 s 后直接载入
+function prefetchStudio(): void {
+  const load = () => {
+    void import('./playground/StudioLayout.vue')
+    void import('./playground/PlaygroundPage.vue')
+  }
+  setTimeout(() => ('requestIdleCallback' in window ? requestIdleCallback(load) : load()), 3000)
+}
+
 // 界面字体在入口求值时开始载入，与路由和界面语言的准备并行，不等首次排版用到字体时才发起
 void document.fonts.load('1em "Inter Variable"').catch(() => [])
 
@@ -29,4 +38,5 @@ const app = createApp(ConsoleRoot).use(router).directive('tooltip', vTooltip)
 void Promise.all([router.isReady(), loadInitialLocale()]).then(() => {
   app.mount('#app')
   warmCjkFont()
+  prefetchStudio()
 })

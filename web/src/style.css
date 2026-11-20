@@ -485,3 +485,10 @@ button[aria-busy='true']:has(> svg)::before {
 .markdown hr {
   border-color: var(--color-line);
 }
+
+/* append-list 是可追加行的列表：约 5 行后在列表内滚动 */
+.append-list {
+  max-height: 14rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}

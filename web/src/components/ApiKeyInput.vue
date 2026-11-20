@@ -135,6 +135,7 @@ function pasted(event: ClipboardEvent): void {
             >
           </button>
           <button
+            v-tooltip="t('settings.keyRemove').replace('{key}', maskKey(key))"
             type="button"
             class="flex h-6 w-6 shrink-0 items-center justify-center rounded-r text-gray-500 transition hover:bg-line hover:text-gray-200 focus-visible:bg-line focus-visible:outline-none"
             :aria-label="t('settings.keyRemove').replace('{key}', maskKey(key))"

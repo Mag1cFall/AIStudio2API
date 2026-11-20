@@ -709,3 +709,90 @@ onUnmounted(() => {
   }
 }
 </style>
+
+<style>
+/* log-op 是日志页每一行的消息列：展开箭头、状态位、标题与字段、行尾耗时四列，其后各行从标题列开始 */
+.log-op {
+  display: grid;
+  grid-template-columns: 20px 3rem minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: start;
+}
+.log-op > .ui-disclosure {
+  grid-column: 1;
+}
+.log-op-main {
+  grid-column: 3;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.log-op-row {
+  grid-column: 3 / -1;
+  min-width: 0;
+}
+/* 日志区窄于 52rem 时展开的详情占满消息列 */
+@container log-table (width < 52rem) {
+  .log-op-detail {
+    grid-column: 1 / -1;
+  }
+}
+.log-op-title {
+  color: var(--color-fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.log-op-duration {
+  grid-column: 4;
+  color: var(--color-fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: end;
+}
+
+/* log-state 是状态位：请求为 HTTP 状态，阶段为结束图标或进度，单条事件为中性圆点 */
+.log-state {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+.log-state-event {
+  border-color: transparent;
+  color: var(--color-gray-500);
+}
+.log-state-event::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+.log-state-event.log-state-warn {
+  color: var(--color-yellow-400);
+}
+.log-state-event.log-state-error {
+  color: var(--color-red-400);
+}
+.log-state-running {
+  color: var(--color-blue-400);
+}
+.log-state-completed,
+.log-state-tool_calls {
+  color: var(--color-green-400);
+  background: color-mix(in oklab, var(--color-green-400) 8%, transparent);
+}
+.log-state-limited,
+.log-state-blocked,
+.log-state-cancelled {
+  color: var(--color-yellow-400);
+}
+.log-state-failed {
+  color: var(--color-red-400);
+}
+</style>

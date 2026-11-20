@@ -14,7 +14,7 @@ export function waitsForCamoufox(
   )
 }
 
-// useDownloadProgress 返回 Camoufox 发行包或出口 IP 库的下载百分比与按界面语言格式化的已下载与总大小，总大小未知时百分比为 null
+// useDownloadProgress 返回 Camoufox 发行包的下载百分比与按界面语言格式化的已下载与总大小，总大小未知时百分比为 null
 export function useDownloadProgress(status: () => PreparationStatus | undefined): {
   percent: ComputedRef<number | null>
   sizeText: ComputedRef<string>
