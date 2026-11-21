@@ -12,7 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-// DebugAddresses 从本机进程命令行找出开启远程调试端口的 Chromium 浏览器，返回去重排序后的 127.0.0.1:端口
+// DebugAddresses 从本机进程命令行找出开启远程调试端口的浏览器（Chromium 与 Firefox 内核），返回去重排序后的 127.0.0.1:端口
 func DebugAddresses(ctx context.Context) ([]string, error) {
 	processes, err := process.ProcessesWithContext(ctx)
 	if err != nil {
@@ -55,13 +55,4 @@ func debugAddress(args []string) string {
 		return ""
 	}
 	return "127.0.0.1:" + port
-}
-
-// DebugBrowserName 返回远程调试地址对应浏览器的产品名与版本
-func DebugBrowserName(ctx context.Context, address string) (string, error) {
-	version, err := debugVersion(ctx, address)
-	if err != nil {
-		return "", err
-	}
-	return version.Browser, nil
 }

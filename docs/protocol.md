@@ -1913,7 +1913,7 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 - `AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取
 - `ChromeImportInput.accounts` 可一次选择多个账号，每个账号作为账户任务中的一项单独导入
 - `CookieImportInput.cookies` 与 `CookieAccountsInput` 每项的 `cookies` 接受 Cookie 扩展导出的 storage state 或 Cookie 数组 JSON、Netscape cookies.txt 和一行 Cookie 请求头，只保留 google.com 及其子域的 Cookie，导入账户的 `label` 为账户邮箱
-- `CookieAccountsInput` 每项的 `cdp` 非空时，改从该远程调试地址读取浏览器的全部未分区 Cookie
+- `CookieAccountsInput` 每项的 `cdp` 非空时，改从该远程调试地址读取浏览器的全部未分区 Cookie：Chromium 走 CDP `Storage.getCookies`，Firefox 内核（`/json/version` 返回 404）回退 WebDriver BiDi 的 `session.new` 与 `storage.getCookies`，分区 Cookie 一律过滤
 - `AccountCreateInput`、`ChromeImportInput`、`CookieAccountsInput` 与 `AccountStateInput` 的 `locale`、`timezone` 为空时按账户出口的地理位置填写；`GET /api/accounts/exits` 对各账户出口代理各查询一次公网 IP 与地理位置
 - `AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空；`proxy` 使用 HTTP、HTTPS 或 SOCKS5 origin，可带 `user:password@`，不含 path、query 或 fragment
 
