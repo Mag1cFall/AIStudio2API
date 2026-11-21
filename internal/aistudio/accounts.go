@@ -439,7 +439,7 @@ type AccountSelection struct {
 	PlaygroundOnly     bool
 	Channel            Channel
 	PreferredChannel   Channel
-	// IgnoreQuotaCooldown 为 true 时套餐限额、每日限额与权限拒绝冷却中的账户照常参与选号，每日限额一分钟内拒绝过不大于 RequestSize 的请求的账户除外，余量多的账户优先
+	// IgnoreQuotaCooldown 为 true 时套餐限额、每日限额与权限拒绝冷却中的账户照常参与选号，拒绝记录有效期内拒绝过不大于 RequestSize 的请求的账户除外，余量多的账户优先
 	IgnoreQuotaCooldown bool
 	// RequestSize 是请求输入正文的字节数，0 表示未知
 	RequestSize int64
@@ -2506,7 +2506,7 @@ func (p *AccountPool) MarkCooldownIfGeneration(
 	return err
 }
 
-// MarkQuotaCooldownIfGeneration 保存当前目录版本下检查时间为 checkedAt 的额度冷却，递增冷却按同范围上一次冷却计算，同范围已有更晚恢复的冷却时保留它，套餐限额或每日限额冷却期间的其他额度失败只冷却回退选号，换成恢复更晚的同类冷却时回退选号的冷却保留；返回该冷却的恢复时刻与冷却是否因此改变，结果早于已记录的检查时间时恢复时刻为零值
+// MarkQuotaCooldownIfGeneration 保存当前目录版本下检查时间为 checkedAt 的额度冷却，递增冷却按同范围上一次冷却计算，同范围已有恢复更晚的冷却或恢复时刻相差不到一分钟的套餐限额冷却时保留它，套餐限额或每日限额冷却期间的其他额度失败只冷却回退选号，换成恢复更晚的同类冷却时回退选号的冷却保留；返回该冷却的恢复时刻与冷却是否因此改变，结果早于已记录的检查时间时恢复时刻为零值
 func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 	accountID string,
 	modelAccessScope string,
@@ -2551,14 +2551,11 @@ func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 		case cooldown.Escalate:
 			next = planLimitCooldown(base, baseExists, now, cooldown.Reason)
 		}
-		if baseExists && base.Active(now) && !next.Until.After(base.Until) {
+		if baseExists && base.Active(now) && (!next.Until.After(base.Until) || samePlanWindow(base, next)) {
 			next = base
 		}
-		if strings.HasPrefix(cooldown.Reason, DailyLimitKind) && cooldown.RequestSize > 0 {
-			next.RejectedSize, next.RejectedUntil = cooldown.RequestSize, now.Add(rejectedSizeWindow)
-			if exists && now.Before(previous.RejectedUntil) {
-				next.RejectedSize = min(next.RejectedSize, previous.RejectedSize)
-			}
+		if RequestQuotaCooldown(cooldown.Reason) {
+			next = next.withRejection(previous, cooldown.RequestSize, now)
 		}
 		until = next.Until
 		if layered && next.Until.Before(previous.Until) {
@@ -2833,12 +2830,13 @@ func (p *AccountPool) clearRestriction(accountID string) error {
 	return err
 }
 
-// ClearAccountState 清除账户的服务受限、全部冷却与需要重新登录的标记并删除 runtime-state.json 中的受限与冷却记录，启用的账户回到就绪
+// ClearAccountState 清除账户的服务受限、全局冷却与需要重新登录的标记并删除 runtime-state.json 中的受限与全局冷却记录，各模型的冷却保留，启用的账户回到就绪
 func (p *AccountPool) ClearAccountState(accountID string) error {
 	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
-		changed := runtimeState.Restricted != "" || len(runtimeState.Cooldowns) > 0
+		_, cooling := runtimeState.Cooldowns[globalCooldownKey]
+		changed := runtimeState.Restricted != "" || cooling
 		runtimeState.Restricted = ""
-		clear(runtimeState.Cooldowns)
+		delete(runtimeState.Cooldowns, globalCooldownKey)
 		return changed, func(account *Account) {
 			if account.Config.Enabled {
 				account.State, account.stateMessage = AccountReady, ""
@@ -4126,7 +4124,7 @@ func accountCatalogFingerprint(tier BenefitTier, models []Model) (string, error)
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
-// quotaHeadroomLocked 返回候选在回退选号中的额度余量：每日限额冷却中为一分钟内上游拒绝过的最小请求字节数，没有拒绝记录时为最大值
+// quotaHeadroomLocked 返回候选在回退选号中的额度余量：套餐限额或每日限额冷却中为有效的拒绝记录记下的最小请求字节数，没有时为最大值
 func (p *AccountPool) quotaHeadroomLocked(candidate channelCandidate, selection AccountSelection, now time.Time) int64 {
 	account := p.accounts[candidate.index]
 	cooldown, exists := account.runtime.Cooldowns[ChannelCooldownScope(candidate.channel, selectionAccessScope(selection))]
@@ -4136,7 +4134,7 @@ func (p *AccountPool) quotaHeadroomLocked(candidate channelCandidate, selection 
 	return cooldown.RejectedSize
 }
 
-// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额、每日限额与权限拒绝冷却限制，只受其中记录的非权限拒绝回退冷却与每日限额一分钟内拒绝过不大于 RequestSize 的请求的拒绝记录限制，生效到两者中较晚结束的一个
+// selectionCooldown 返回账户在作用域上对选择生效的冷却，IgnoreQuotaCooldown 的选择不受套餐限额、每日限额与权限拒绝冷却限制，只受其中记录的非权限拒绝回退冷却与拒绝过不大于 RequestSize 的请求的有效拒绝记录限制，拒绝记录生效到它失效与冷却恢复中较早的一个，两种限制都有时生效到较晚结束的一个
 func selectionCooldown(account *Account, scope string, selection AccountSelection, now time.Time) (CooldownState, bool) {
 	var selected CooldownState
 	for _, key := range []string{globalCooldownKey, scope} {
@@ -4151,7 +4149,9 @@ func selectionCooldown(account *Account, scope string, selection AccountSelectio
 			blocking := CooldownState{}
 			if cooldown.rejects(selection.RequestSize, now) {
 				blocking = cooldown
-				blocking.Until = cooldown.RejectedUntil
+				if cooldown.RejectedUntil.Before(cooldown.Until) {
+					blocking.Until = cooldown.RejectedUntil
+				}
 			}
 			if fallback := cooldown.Fallback; fallback != nil && fallback.Active(now) && !strings.HasPrefix(fallback.Reason, AccountRejectionKind) && fallback.Until.After(blocking.Until) {
 				blocking = *fallback
