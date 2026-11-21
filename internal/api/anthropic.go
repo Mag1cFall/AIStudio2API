@@ -729,7 +729,19 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 }
 
 func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.Tools, error) {
+	config, err := anthropicToolChoice(choice)
+	if err != nil {
+		return aistudio.Tools{}, err
+	}
 	var mapped aistudio.Tools
+	// chosen 是 tool_choice 指定的 server tool 对应的 Google 工具
+	chosen := ""
+	server := func(tool anthropicTool, google string) {
+		mapped.Google = appendUnique(mapped.Google, google)
+		if len(config.AllowedFunctionNames) == 1 && config.AllowedFunctionNames[0] == tool.Name {
+			chosen = google
+		}
+	}
 	for _, tool := range tools {
 		typeName := strings.ToLower(tool.Type)
 		switch {
@@ -748,12 +760,12 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 				return aistudio.Tools{}, fmt.Errorf("web_search blocked_domains: %w", err)
 			}
 			mapped.GoogleSearch = search
-			mapped.Google = appendUnique(mapped.Google, "google_search")
+			server(tool, "google_search")
 		case typeName == "image_search":
 			if err := validateAnthropicServerTool(tool, "image_search"); err != nil {
 				return aistudio.Tools{}, err
 			}
-			mapped.Google = appendUnique(mapped.Google, "image_search")
+			server(tool, "image_search")
 		case strings.HasPrefix(typeName, "web_fetch_"):
 			if err := validateAnthropicServerTool(tool, "web_fetch"); err != nil {
 				return aistudio.Tools{}, err
@@ -769,12 +781,12 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 			if len(fetch.AllowedDomains) > 0 || len(fetch.BlockedDomains) > 0 {
 				mapped.URLContext = &fetch
 			}
-			mapped.Google = appendUnique(mapped.Google, "url_context")
+			server(tool, "url_context")
 		case strings.HasPrefix(typeName, "code_execution_"):
 			if err := validateAnthropicServerTool(tool, "code_execution"); err != nil {
 				return aistudio.Tools{}, err
 			}
-			mapped.Google = appendUnique(mapped.Google, "code_execution")
+			server(tool, "code_execution")
 		case strings.HasPrefix(typeName, "tool_search_tool_"), strings.HasPrefix(typeName, "advisor_"), strings.Contains(typeName, "toolset"):
 		case strings.HasPrefix(typeName, "bash_"), strings.HasPrefix(typeName, "text_editor_"), strings.HasPrefix(typeName, "memory_"), strings.HasPrefix(typeName, "computer_"):
 			declaration, err := anthropicClientTool(tool, typeName)
@@ -786,12 +798,12 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 			if err := validateAnthropicServerTool(tool, "url_context"); err != nil {
 				return aistudio.Tools{}, err
 			}
-			mapped.Google = appendUnique(mapped.Google, "url_context")
+			server(tool, "url_context")
 		case typeName == "google_maps":
 			if err := validateAnthropicServerTool(tool, "google_maps"); err != nil {
 				return aistudio.Tools{}, err
 			}
-			mapped.Google = appendUnique(mapped.Google, "google_maps")
+			server(tool, "google_maps")
 		case typeName == "", typeName == "custom":
 			if tool.Name == "" {
 				return aistudio.Tools{}, fmt.Errorf("tool name is required")
@@ -813,9 +825,14 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
 		}
 	}
-	config, err := anthropicToolChoice(choice)
-	if err != nil {
-		return aistudio.Tools{}, err
+	if chosen != "" {
+		config.AllowedFunctionNames, mapped.Functions, mapped.Google = nil, nil, []string{chosen}
+		if chosen != "google_search" {
+			mapped.GoogleSearch = nil
+		}
+		if chosen != "url_context" {
+			mapped.URLContext = nil
+		}
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
