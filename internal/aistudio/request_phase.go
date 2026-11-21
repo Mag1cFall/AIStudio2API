@@ -27,6 +27,12 @@ func ContextWithServiceRun(ctx context.Context, run context.Context) context.Con
 	return context.WithValue(ctx, serviceRunContextKey{}, run)
 }
 
+// ServiceStopped 返回 ctx 所属的生成服务是否已停止，ctx 没有记下服务运行时为 false
+func ServiceStopped(ctx context.Context) bool {
+	run, ok := ctx.Value(serviceRunContextKey{}).(context.Context)
+	return ok && run.Err() != nil
+}
+
 // afterServiceStop 在 ctx 所属的生成服务停止时调用 stop，服务已停止时在返回前调用，返回撤销注册的函数；ctx 没有记下服务运行时不调用
 func afterServiceStop(ctx context.Context, stop func()) func() bool {
 	run, ok := ctx.Value(serviceRunContextKey{}).(context.Context)
