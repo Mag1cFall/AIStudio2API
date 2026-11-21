@@ -812,10 +812,10 @@ const importableCookieCandidates = computed(() =>
   cookieCandidates.value.filter((item) => item.restricted === ''),
 )
 
-// defaultCookieUsers 是默认勾选的候选账户：有未导入账户时为未导入账户，全部已导入时为全部可导入的候选账户
+// defaultCookieUsers 是默认勾选的候选账户：有未导入或需要重新登录的账户时为这些账户，否则为全部可导入的候选账户
 const defaultCookieUsers = computed(() => {
   const unimported = importableCookieCandidates.value
-    .filter((item) => !item.imported)
+    .filter((item) => !item.imported || item.sign_in_required)
     .map(cookieKey)
   return unimported.length > 0 ? unimported : importableCookieCandidates.value.map(cookieKey)
 })
@@ -870,7 +870,7 @@ async function scanBrowsers(): Promise<void> {
       .filter(
         (browser) =>
           browser.email !== '' &&
-          !browser.imported &&
+          (!browser.imported || browser.sign_in_required) &&
           browser.error === '' &&
           browser.restricted === '',
       )
@@ -2163,6 +2163,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                         >{{ t('accounts.deviceBound') }}</span
                       >
                       <span
+                        v-if="candidate.sign_in_required"
+                        class="mt-1 block text-xs leading-5 text-gray-400"
+                        >{{ t('accounts.signInUpdates') }}</span
+                      >
+                      <span
                         v-if="candidate.restricted"
                         class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
                         ><template v-if="candidate.email">{{ t('state.restricted') }} · </template
@@ -2317,6 +2322,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                     v-if="browser.device_bound"
                     class="mt-1 block text-xs leading-5 text-amber-200"
                     >{{ t('accounts.deviceBound') }}</span
+                  >
+                  <span
+                    v-if="browser.sign_in_required"
+                    class="mt-1 block text-xs leading-5 text-gray-400"
+                    >{{ t('accounts.signInUpdates') }}</span
                   >
                   <span
                     v-if="browser.restricted"

@@ -169,6 +169,8 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': 'Not signed in to AI Studio',
   'accounts.rescan': 'Search again',
   'accounts.alreadyImported': 'Imported',
+  'accounts.signInUpdates':
+    'Sign-in required: importing updates this account’s cookies and keeps each model’s cooldown',
   'accounts.remoteAddHelp': 'Sign in on another computer and send the account here',
   'accounts.pasteStep1':
     'In a browser signed in to AI Studio, install a cookie extension such as Cookie-Editor',
