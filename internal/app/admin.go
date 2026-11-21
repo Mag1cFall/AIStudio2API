@@ -747,7 +747,7 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	return target.syncedAccount(enabled)
 }
 
-// SetAccountState 在提交时的生成服务把账户改为 state：disabled 停用账户；ready 先启用停用的账户，再清除服务受限、全部冷却与需要重新登录的标记，之后由下一次请求按上游结果重新判定
+// SetAccountState 在提交时的生成服务把账户改为 state：disabled 停用账户；ready 先启用停用的账户，再清除服务受限、全局冷却与需要重新登录的标记（各模型的冷却保留），之后由下一次请求按上游结果重新判定
 func (admin *runtimeAdmin) SetAccountState(_ context.Context, accountID string, state string) (api.AdminAccount, error) {
 	target, done := admin.accountCommit()
 	defer done()
@@ -760,7 +760,7 @@ func (admin *runtimeAdmin) SetAccountState(_ context.Context, accountID string, 
 	return api.AdminAccount{}, invalidAccount(fmt.Errorf("账户状态只能改为 ready 或 disabled: %q", state))
 }
 
-// restoreAccount 启用停用的账户并清除它的服务受限、全部冷却与需要重新登录的标记，已启用而没有模型目录的账户在后台同步目录；写一条日志并推送冷却、目录与账户状态
+// restoreAccount 启用停用的账户并清除它的服务受限、全局冷却与需要重新登录的标记，已启用而没有模型目录的账户在后台同步目录；写一条日志并推送冷却、目录与账户状态
 func (admin *runtimeAdmin) restoreAccount(accountID string) (api.AdminAccount, error) {
 	current, err := admin.account(accountID)
 	if err != nil {

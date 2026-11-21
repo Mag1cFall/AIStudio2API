@@ -1919,7 +1919,7 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 
 新增、导入与登录在保存账户后立即返回，该账户的模型目录在后台同步，期间 `AdminAccount.transition` 为 `syncing`，同步结束后推送最新账户与模型事件；同步随生成服务的生命周期结束。验证成功后同样刷新该账户模型目录。
 
-`PUT /api/accounts/{id}/state` 的 body 为 `{"state":"ready"|"disabled"}`：`disabled` 与停用账户相同；`ready` 先启用停用的账户，再清除服务受限、全部冷却与需要重新登录的标记（删除 `runtime-state.json` 中的受限与冷却记录），账户回到 `ready`，之后由下一次请求按上游结果重新判定，仍被上游拒绝时照常标回并换用其他账户；之后推送 `cooldowns`、`models` 与 `accounts` 事件。其他取值返回 400 `invalid_account`，账户不存在时返回 404 `account_not_found`。
+`PUT /api/accounts/{id}/state` 的 body 为 `{"state":"ready"|"disabled"}`：`disabled` 与停用账户相同；`ready` 先启用停用的账户，再清除服务受限、全局冷却与需要重新登录的标记（删除 `runtime-state.json` 中的受限与全局冷却记录，各模型的冷却保留，由 `DELETE /api/accounts/{id}/cooldowns/{scope}` 逐个清除），账户回到 `ready`，之后由下一次请求按上游结果重新判定，仍被上游拒绝时照常标回并换用其他账户；之后推送 `cooldowns`、`models` 与 `accounts` 事件。其他取值返回 400 `invalid_account`，账户不存在时返回 404 `account_not_found`。
 
 `PUT /api/accounts/{id}` 只切换 `enabled` 时立即写回 `account.json` 并返回，账户状态同时更新，后台收尾的操作写在 `AdminAccount.transition`，结束后字段省略；再次切换同一账户会取消进行中的收尾。
 
@@ -3927,7 +3927,7 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 | 视频仍在生成 | 409 | `video_not_ready` | `api_error` | `INTERNAL` |
 | 文件超过 512 MiB | 413 | `file_too_large` | `request_too_large` | `INTERNAL` |
 | 上游配额或限流（上游给出重试时长时带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
-| 候选账户均在冷却且在本请求累计排队 1 分钟内不恢复，或已试账户都因额度失败而其余账户在冷却（套餐限额与每日限额冷却中的账户逐个发送一次，其中收到其他额度失败的账户在该失败的冷却结束前不再这样发送，全部拒绝时返回最后一次拒绝；带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
+| 候选账户均在冷却且在本请求累计排队 1 分钟内不恢复，或已试账户都因额度失败而其余账户在冷却（套餐限额与每日限额冷却中的账户逐个发送一次，其中 5 到 60 分钟内拒绝过同样大或更小请求的账户、收到其他额度失败且该失败的冷却没有结束的账户跳过，全部拒绝时返回最后一次拒绝，全部跳过时立即返回；带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
 | 上游过载 | 529 | `upstream_error` | `overloaded_error` | `INTERNAL` |
 | 当前客户端请求被管理端取消 | 503 | `request_canceled` | `api_error` | `UNAVAILABLE` |
 | 生成服务已停止 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
