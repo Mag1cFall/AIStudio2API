@@ -253,7 +253,7 @@ ERROR  account@example.com  [WAA Worker 停止 failed] WAA Worker 停止失败 p
 
 客户端取消记录为 `499`；认证、额度和上游失败分别使用对应 HTTP 状态与 `request.error`。
 
-管理端取消活动请求或停止生成服务时，仍连接的客户端按公开协议收到 `503 request_canceled` 或对应的流式 error event。
+管理端取消活动请求时，仍连接的客户端按公开协议收到 `503 request_canceled` 或对应的流式 error event；停止生成服务时收到 `503 service_stopped` 或对应的流式 error event，错误消息写明生成服务已停止。
 
 ## 流式等待
 

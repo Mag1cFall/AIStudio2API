@@ -15,6 +15,7 @@ func (service *trackedService) UploadFile(ctx context.Context, request aistudio.
 	}
 	defer cancel()
 	file, requestErr := service.service.(aistudio.FileService).UploadFile(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return file, requestErr
 }
@@ -27,6 +28,7 @@ func (service *trackedService) FileMetadata(ctx context.Context, fileID string) 
 	}
 	defer cancel()
 	metadata, requestErr := service.service.(aistudio.FileService).FileMetadata(requestCtx, fileID)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return metadata, requestErr
 }
@@ -39,6 +41,7 @@ func (service *trackedService) ListFiles(ctx context.Context) ([]aistudio.FileMe
 	}
 	defer cancel()
 	list, requestErr := service.service.(aistudio.FileService).ListFiles(requestCtx)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return list, requestErr
 }
@@ -51,6 +54,7 @@ func (service *trackedService) DeleteFile(ctx context.Context, fileID string) er
 	}
 	defer cancel()
 	requestErr := service.service.(aistudio.FileService).DeleteFile(requestCtx, fileID)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return requestErr
 }
@@ -63,6 +67,7 @@ func (service *trackedService) VideoFrameTokens(ctx context.Context, request ais
 	}
 	defer cancel()
 	tokens, requestErr := service.service.(aistudio.VideoFrameService).VideoFrameTokens(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return tokens, requestErr
 }
