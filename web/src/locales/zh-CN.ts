@@ -159,6 +159,7 @@ export const messages = {
   'accounts.browserSignedOut': '未登录 AI Studio',
   'accounts.rescan': '重新查找',
   'accounts.alreadyImported': '已导入',
+  'accounts.signInUpdates': '需要登录：导入后直接更新这个账户的 Cookie，各模型的冷却保留',
   'accounts.remoteAddHelp': '在另一台电脑登录后发送到这里',
   'accounts.pasteStep1': '在已登录 AI Studio 的浏览器中安装 Cookie 扩展，例如 Cookie-Editor',
   'accounts.pasteStep2': '打开 aistudio.google.com，用扩展导出 Cookie 并粘贴到下方',

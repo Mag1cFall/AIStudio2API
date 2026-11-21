@@ -164,6 +164,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': '未登入 AI Studio',
   'accounts.rescan': '重新尋找',
   'accounts.alreadyImported': '已匯入',
+  'accounts.signInUpdates': '需要登入：匯入後直接更新這個帳戶的 Cookie，各模型的冷卻保留',
   'accounts.remoteAddHelp': '在另一台電腦登入後傳送到這裡',
   'accounts.pasteStep1': '在已登入 AI Studio 的瀏覽器安裝 Cookie 擴充功能，例如 Cookie-Editor',
   'accounts.pasteStep2': '開啟 aistudio.google.com，用擴充功能匯出 Cookie 並貼到下方',
