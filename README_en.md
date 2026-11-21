@@ -800,7 +800,7 @@ Account actions depend on state. Click the state in an account row to set the ac
 | `auth_required` | Edit, set to Ready, disable, sign in again, refresh now, delete |
 | `restricted` | Edit, set to Ready, disable, refresh now, delete |
 
-- Setting an account to Ready enables a disabled account and clears the service restriction, cooldown, and sign-in required marks; if Google still rejects the account, the next request marks it again and switches to another account
+- Setting an account to Ready enables a disabled account and clears the service restriction, the account-wide cooldown, and the sign-in required mark, while per-model cooldowns stay until they recover; if Google still rejects the account, the next request marks it again and switches to another account
 - While a refresh, disable, enable, or save is in progress, the account row shows the current step and elapsed time (how many requests it is waiting for, reading the plan and models, checking verification), and Logs shows the same steps and the result
 
 Reading the benefit tier and model catalog:
