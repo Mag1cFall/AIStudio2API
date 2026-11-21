@@ -78,8 +78,6 @@ func documentTiming(entry map[string]any, resources time.Duration) {
 // nextHopProtocol 返回响应协议对应的 ALPN 名称
 func nextHopProtocol(proto string) string {
 	switch proto {
-	case "HTTP/3.0":
-		return "h3"
 	case "HTTP/2.0":
 		return "h2"
 	default:
