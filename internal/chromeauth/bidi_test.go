@@ -204,7 +204,17 @@ func TestReadBrowserCookiesBiDiFallback(t *testing.T) {
 	if sessionID := <-ended; sessionID != "test-session" {
 		t.Fatalf("会话结束参数 = %q，期望 test-session", sessionID)
 	}
-	assertExportedCookieState(t, browser.Cookies)
+	state := assertExportedCookieState(t, browser.Cookies)
+	// base64 解码只发生在 BiDi 路径，CDP 的 Storage.getCookies 返回明文值
+	for _, cookie := range state.Cookies {
+		if cookie.Name == "BiDiBase64" {
+			if cookie.Value != "hello" {
+				t.Fatalf("base64 Cookie 值 = %q，期望 hello", cookie.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("缺少解码后的 BiDiBase64 Cookie")
 }
 
 func TestReadBrowserCookiesFirefoxWithBothProtocols(t *testing.T) {
@@ -273,8 +283,8 @@ func TestReadBrowserCookiesUnreachable(t *testing.T) {
 	}
 }
 
-// assertExportedCookieState 验证 Cookie 文本可被存储状态解析，并包含解码后的 base64 Cookie
-func assertExportedCookieState(t *testing.T, text string) {
+// assertExportedCookieState 验证 Cookie 文本可被存储状态解析、登录 Cookie 齐全且分区 Cookie 被过滤，返回解析后的状态
+func assertExportedCookieState(t *testing.T, text string) aistudio.StorageState {
 	t.Helper()
 	state, err := aistudio.ParseCookieText(text)
 	if err != nil {
@@ -289,12 +299,10 @@ func assertExportedCookieState(t *testing.T, text string) {
 			t.Fatalf("缺少必需 Cookie %s，实际有 %v", required, names)
 		}
 	}
-	if names["BiDiBase64"] != "hello" {
-		t.Fatalf("base64 Cookie 值 = %q，期望 hello", names["BiDiBase64"])
-	}
 	if _, ok := names["PartitionedCookie"]; ok {
 		t.Fatal("分区 Cookie 不应进入存储状态")
 	}
+	return state
 }
 
 func TestBiDiCookiesToExport(t *testing.T) {
