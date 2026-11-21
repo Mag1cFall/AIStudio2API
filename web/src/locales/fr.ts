@@ -174,6 +174,8 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': 'Non connecté à AI Studio',
   'accounts.rescan': 'Rechercher à nouveau',
   'accounts.alreadyImported': 'Importé',
+  'accounts.signInUpdates':
+    'Connexion requise : l’importation met à jour les cookies de ce compte et conserve le refroidissement de chaque modèle',
   'accounts.remoteAddHelp': 'Se connecter sur un autre ordinateur et envoyer le compte ici',
   'accounts.pasteStep1':
     'Dans un navigateur connecté à AI Studio, installer une extension de cookies comme Cookie-Editor',

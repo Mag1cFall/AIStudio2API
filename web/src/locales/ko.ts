@@ -170,6 +170,8 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': 'AI Studio에 로그인되지 않음',
   'accounts.rescan': '다시 찾기',
   'accounts.alreadyImported': '가져옴',
+  'accounts.signInUpdates':
+    '로그인 필요: 가져오면 이 계정의 쿠키를 업데이트하고 모델별 쿨다운은 유지됩니다',
   'accounts.remoteAddHelp': '다른 컴퓨터에서 로그인한 뒤 여기로 보내기',
   'accounts.pasteStep1':
     'AI Studio에 로그인된 브라우저에 Cookie-Editor 같은 쿠키 확장 프로그램 설치',
