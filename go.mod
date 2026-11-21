@@ -7,8 +7,6 @@ require (
 	github.com/Mag1cFall/fhttp v0.6.8-firefox.2
 	github.com/Mag1cFall/go-mp3 v0.1.1
 	github.com/Mag1cFall/go-sentencepiece v0.7.1
-	github.com/Mag1cFall/uquic v0.0.6-firefox.6
-	github.com/Mag1cFall/utls v1.8.2-firefox.3
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/bogdanfinn/utls v1.7.7-barnius
@@ -60,7 +58,6 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
-	github.com/molecule-man/go-brrr v1.2.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
