@@ -312,7 +312,7 @@ func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]
 		admin.requests.log("auth", "ERROR", "查找本机调试浏览器失败", "error", err)
 		return nil, err
 	}
-	existing := admin.accountIDs()
+	statuses := admin.pool.Status()
 	browsers := make([][]api.CookieBrowser, len(addresses))
 	var group sync.WaitGroup
 	for index, address := range addresses {
@@ -330,7 +330,7 @@ func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]
 			if err != nil && !browser.SignedOut {
 				browser.Error = err.Error()
 			}
-			browsers[index] = cookieAccountEntries(browser, accounts, existing)
+			browsers[index] = cookieAccountEntries(browser, accounts, statuses)
 		})
 	}
 	group.Wait()
@@ -365,7 +365,7 @@ func (admin *runtimeAdmin) DiscoverCookieAccounts(ctx context.Context, input api
 		admin.requests.log("auth", "ERROR", "识别 Cookie 中的账户失败", "error", err)
 		return nil, invalidAccount(err)
 	}
-	return cookieAccountEntries(api.CookieBrowser{DeviceBound: deviceBoundSession(state)}, accounts, admin.accountIDs()), nil
+	return cookieAccountEntries(api.CookieBrowser{DeviceBound: deviceBoundSession(state)}, accounts, admin.pool.Status()), nil
 }
 
 // deviceBoundSession 表示 Cookie 带 __Secure-1PSIDRTS，会话绑定签发它的设备
@@ -373,19 +373,23 @@ func deviceBoundSession(state aistudio.StorageState) bool {
 	return slices.ContainsFunc(state.Cookies, func(cookie aistudio.StateCookie) bool { return cookie.Name == "__Secure-1PSIDRTS" })
 }
 
-// cookieAccountEntries 以 template 为模板为每个会话账户生成一项并标记已导入与服务受限的账户，没有账户时只返回 template
-func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.CookieAccount, existing map[string]string) []api.CookieBrowser {
+// cookieAccountEntries 以 template 为模板为每个会话账户生成一项，按账户池状态 statuses 标记已导入、需要重新登录与服务受限的账户，没有账户时只返回 template
+func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.CookieAccount, statuses []aistudio.AccountStatus) []api.CookieBrowser {
 	if len(accounts) == 0 {
 		return []api.CookieBrowser{template}
+	}
+	existing := make(map[string]aistudio.AccountStatus, len(statuses))
+	for _, status := range statuses {
+		existing[strings.ToLower(strings.TrimSpace(status.ID))] = status
 	}
 	entries := make([]api.CookieBrowser, len(accounts))
 	for index, account := range accounts {
 		entry := template
 		entry.Email, entry.AuthUser, entry.Restricted = account.Email, account.AuthUser, account.Restricted
-		if restricted, imported := existing[account.Email]; imported {
-			entry.Imported = true
-			if restricted != "" {
-				entry.Restricted = restricted
+		if status, imported := existing[account.Email]; imported {
+			entry.Imported, entry.SignInRequired = true, status.State == aistudio.AccountAuthRequired
+			if status.State == aistudio.AccountRestricted && status.Message != "" {
+				entry.Restricted = status.Message
 			}
 		}
 		entries[index] = entry

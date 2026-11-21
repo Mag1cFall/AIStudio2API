@@ -294,6 +294,8 @@ type CookieBrowser struct {
 
 	// DeviceBound 表示 Cookie 带 __Secure-1PSIDRTS，会话绑定原浏览器所在的设备，导入的副本约 2 小时内失效
 	DeviceBound bool `json:"device_bound"`
+	// SignInRequired 表示该账户已导入且需要重新登录，导入时原地更新它的认证状态
+	SignInRequired bool `json:"sign_in_required"`
 }
 
 // ChromeImportInput 表示批量导入的 Chrome 账号与账户环境

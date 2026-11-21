@@ -172,6 +172,8 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': 'Nicht bei AI Studio angemeldet',
   'accounts.rescan': 'Erneut suchen',
   'accounts.alreadyImported': 'Importiert',
+  'accounts.signInUpdates':
+    'Anmeldung erforderlich: Beim Import werden die Cookies dieses Kontos aktualisiert, die Cooldowns der Modelle bleiben erhalten',
   'accounts.remoteAddHelp': 'Auf einem anderen Computer anmelden und hierher senden',
   'accounts.pasteStep1':
     'Im bei AI Studio angemeldeten Browser eine Cookie-Erweiterung wie Cookie-Editor installieren',

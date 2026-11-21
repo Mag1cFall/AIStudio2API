@@ -173,6 +173,8 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.browserSignedOut': 'AI Studio に未ログイン',
   'accounts.rescan': '再検索',
   'accounts.alreadyImported': 'インポート済み',
+  'accounts.signInUpdates':
+    'ログインが必要：インポートするとこのアカウントの Cookie を更新し、各モデルのクールダウンは保持されます',
   'accounts.remoteAddHelp': '別のパソコンでログインしてここへ送信',
   'accounts.pasteStep1':
     'AI Studio にログイン済みのブラウザに Cookie 拡張機能（Cookie-Editor など）をインストール',

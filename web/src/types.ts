@@ -158,6 +158,8 @@ export interface CookieBrowser {
   error: string
   // restricted 是账户服务受限的原因，受限的账户不能导入
   restricted: string
+  // sign_in_required 为真时该账户已导入且需要重新登录，导入时原地更新它的认证状态
+  sign_in_required: boolean
 }
 
 interface AccountCounters {
