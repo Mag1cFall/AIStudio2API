@@ -2776,6 +2776,7 @@ custom tool 为 `{name,description,input_schema}`，可选 `type:"custom"`。ser
 - `web_search_*` 的 `allowed_domains`、`blocked_domains` 与 `user_location` 写入搜索偏好，域名限制使用 `site:` 与 `-site:` 查询
 - `web_fetch_*` 的 `allowed_domains` 与 `blocked_domains` 作为读取 URL 的域名范围（含子域名）写入系统指令
 - 调用次数由上游决定，其余选项保持上游请求不变
+- named `tool` 的 `tool_choice` 指定上表的 server tool 时为 `required`，本次只允许该工具
 - `tool_search_tool_*`、`advisor_*` 与类型名含 `toolset` 的工具不声明到上游
 
 Anthropic 定义的客户端工具以请求中的 `name` 声明为函数，描述与参数由服务固定，模型调用以 `tool_use` 返回由客户端执行：
