@@ -11,7 +11,6 @@ import {
 import LogLine from './LogLine.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiDisclosure from './UiDisclosure.vue'
-import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
 const { t, locale, logText } = useI18n()
@@ -26,9 +25,6 @@ const stateKeys: Record<LogStageState, TranslationKey> = {
   failed: 'state.failed',
   cancelled: 'state.cancelled',
 }
-
-// stateIcons 是已结束阶段在状态位显示的图标
-const stateIcons = { completed: 'check', failed: 'close', cancelled: 'disable' } as const
 
 // progress 是阶段当前步骤与总步骤数，阶段没有编号的步骤时为空
 const progress = computed(() =>
@@ -50,16 +46,9 @@ const duration = computed(() => {
 <template>
   <div class="log-op log-op-stage">
     <UiDisclosure v-model="open" />
-    <span
-      v-tooltip="t(stateKeys[stage.state])"
-      class="log-state"
-      :class="`log-state-${stage.state}`"
-      :aria-label="t(stateKeys[stage.state])"
-    >
-      <UiIcon v-if="stage.state !== 'running'" :name="stateIcons[stage.state]" :size="13" />
-      <template v-else-if="progress">{{ progress }}</template>
-      <UiIcon v-else name="spinner" :size="13" class="stage-spinner" />
-    </span>
+    <span class="log-state" :class="`log-state-${stage.state}`">{{
+      stage.state === 'running' && progress ? progress : t(stateKeys[stage.state])
+    }}</span>
     <span class="log-op-main"
       ><strong class="log-op-title">{{ logText(stage.name) }}</strong
       ><span v-if="ended && progress" class="stage-progress">{{ progress }}</span
@@ -92,19 +81,6 @@ const duration = computed(() => {
   color: var(--color-gray-500);
   font-variant-numeric: tabular-nums;
 }
-.stage-spinner {
-  animation: stage-spin 1s linear infinite;
-}
-@keyframes stage-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .stage-spinner {
-    animation: none;
-  }
-}
 .stage-detail :deep(.log-line-message) {
   color: var(--color-gray-300);
 }
@@ -119,10 +95,11 @@ const duration = computed(() => {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* stage-timeline 从行首开始，左边线对齐展开箭头的中线 */
 .stage-timeline {
   border-left: 1px solid var(--color-line);
   padding-left: 12px;
-  margin: 6px 0 6px;
+  margin: 6px 0 6px 9px;
 }
 .stage-timeline li {
   display: flex;

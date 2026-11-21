@@ -972,6 +972,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		err := decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
 		// 写代码助手的调用块错误已在 trajectory 内重答，这里只重新生成发送与读取失败
 		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed) && (err != nil || !assistant); regenerated++ {
+			if err != nil {
+				reportRegeneration(ctx, regenerated+1, err.Error())
+			} else {
+				reportRegeneration(ctx, regenerated+1, fmt.Sprintf("结束原因 %s", finish.FinishReason))
+			}
 			stopClose()
 			_ = response.Body.Close()
 			usage, finish, held, turn, roundUsage, output = nil, nil, nil, modelTurn{}, nil, Output{}
@@ -1326,7 +1331,6 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		}
 		request.continuationRound++
 		request.continuationToken = decoder.continuation
-		reportContinuationRound(ctx)
 		reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
 		body, proofAt, err := EncodeGenerateContentRequest(request, defaults, runtime)
 		if err != nil {

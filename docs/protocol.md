@@ -706,7 +706,7 @@ generation config 字段：
 - 模型只有 thinking level 能力时，显式 budget 按 0、1024、8192 以内与更大预算分别退化为 minimal、low、medium、high
 - 没有 thinking level 能力的模型忽略其余 effort；两类能力都缺少时同时忽略 budget
 
-生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。
+生成与计数请求的模型名可以带思考后缀 `<模型 ID>(<值>)`，例如 `gemini-4-argon(low)`、`gemini-2.5-pro(16384)`。值不区分大小写：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`extra_high`、`max` 作为思考强度，非负整数作为思考预算，`auto` 与 `-1` 使用模型默认思考设置；后缀覆盖请求体中的思考强度与预算，去掉后缀的模型 ID 用于调度、请求日志与用量统计。其他值返回 400。Claude Code 1M 上下文模式加在模型名末尾的 `[1m]`（不区分大小写）在完整模型名不是 `MODEL_MAPPING` 别名时去掉，例如 `gemini-4-argon(low)[1m]` 按 `gemini-4-argon(low)` 处理。
 
 能力码 48 的模型在目录中另有 `<模型 ID>-build` 条目，经 Build 写代码助手生成，思考后缀写在 `-build` 之后，例如 `gemini-3.8-flash-build(low)`；条目定义、请求与流格式见 [Build 通道](build.md)。
 
@@ -955,7 +955,7 @@ ListModels 能力码 91（目录能力 `output_continuation`）的模型由官�
 - usage 以最后一轮为基础，visible output、thought 与 tool tokens 逐轮累加，total 为最后一轮 total 加之前各轮的这三项
 - 未指定输出上限时，输出总量为模型的 `inputTokenLimit`
 - 输出总量超过 32768 的自动续写请求只经 Playground 调度；未指定输出上限且含 File Search、`serviceTier`、`store:false` 等经 Build 通道发送的设置时仍可经 Build，按 Build 的单轮上限发送
-- 请求期限为 `REQUEST_TIMEOUT`，每个续写轮开始时重新计时
+- 上游连续 `REQUEST_TIMEOUT` 没有数据时请求以超时结束，续写轮之间等待响应的时间同样计入
 - 每个续写轮在日志中记一条“上游调用”，模式后附 `续写=<轮次>`
 
 续写 token 可由其他账户接续：续写轮以 401、403、429 或 5xx 失败时，未指定账户、不含文件与内联媒体的请求换到本请求续写轮尚未失败的其他账户，以该账户的新 proof 重发同一续写轮，之后各轮沿用这个 proof。额度失败的账户按额度冷却规则冷却，用量明细记为最后生成的账户。
@@ -989,6 +989,7 @@ Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为�
 - 非流式请求丢弃被取代那一次的思考；流式请求已输出的思考保留，之后接着输出重新生成那一次的思考
 - 每次重新生成从头匹配停止序列，上一次暂存的停止序列前缀丢弃
 - 重新生成的请求发送失败时，本次生成以该错误结束
+- 每次重新生成在请求日志中记一条“重新生成”，写明第几次与原因（中断错误或结束原因）
 
 两个通道第一次带终止原因的帧中的内容事件标记为结束帧，自动续写中转入下一轮的帧不标记；Gemini 流式输出把结束帧的内容放进最后一块。
 
@@ -1671,6 +1672,7 @@ GET/DELETE /v1beta/files/{file}
 - `/v1*`、`/upload/` 与 `/health` 响应允许任意 origin，并以 `Access-Control-Expose-Headers: *` 暴露响应头
 - OPTIONS 预检跳过 API key 校验，允许 `GET/POST/PUT/DELETE/OPTIONS`，`Access-Control-Allow-Headers` 回显请求的 `Access-Control-Request-Headers`
 - `/v1*` 请求体上限约为 684 MiB，可容纳 Base64 编码的 512 MiB 文件
+- 请求头 `Content-Encoding` 为 `gzip`、`x-gzip`、`zstd` 或它们以逗号相连（多个同名请求头按出现顺序相连）时按顺序解压请求体，解压后的正文同样受上限约束；无法解压返回 400，其他编码返回 415
 - `/upload/v1beta/files` 使用相同的认证与请求体上限；可续传上传的分块请求发往 start 响应 `X-Goog-Upload-URL` 给出的地址，凭其中的 `upload_id` 鉴权，无需 API key
 
 公开 `/v1`、`/v1beta` 与 `/upload/` 的请求带 `X-AIStudio-Account: <账户 ID>` 时，账户池只在该账户上选号，视频后台生成与可续传上传同样只用该账户；上游出错时返回该错误，不换到其他账户，账户冷却中的处理与只有这一个可用账户时相同；该账户仍受所用 key 的 `API_KEY_ACCOUNTS` 绑定限制，不受 `MODEL_ACCOUNTS` 限制。
@@ -1696,7 +1698,7 @@ GET/DELETE /v1beta/files/{file}
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`PUT /api/accounts/{id}/state`、`DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
-| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
+| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`POST /api/accounts/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/first-event-latency` |
 | 冷却与请求 | `GET /api/cooldowns`、`DELETE /api/accounts/{id}/cooldowns/{scope}`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
@@ -1730,6 +1732,7 @@ GET/DELETE /v1beta/files/{file}
 | `PUT /api/accounts/{id}/state` | 200 | `{"account":AdminAccount}` |
 | `POST /api/accounts/{id}/login` | 202 | `{"task":AccountTask}` |
 | `POST /api/accounts/{id}/refresh` | 200 | `AccountRefresh` |
+| `POST /api/accounts/refresh` | 202 | `{"task":AccountTask}` |
 | `DELETE /api/accounts/{id}` | 204 | 空 body |
 | `POST /api/control/start`、`stop` | 200 | `AdminStatus` |
 | `GET /api/config`、`PUT /api/config` | 200 | `RuntimeConfig` |
@@ -1766,9 +1769,10 @@ GET/DELETE /v1beta/files/{file}
   - `GET /api/accounts/import/browsers` 为每个浏览器的每个会话各列一项，查询参数 `proxy` 为识别账户的请求出口，省略时用默认出口
   - `POST /api/accounts/import/cookies` 中每项的 `auth_user` 选择导入的会话，省略时为 0；`email` 为识别会话时列出的邮箱，作为导入账户的邮箱，为空时按该会话的对话页识别
   - 账户的 `auth_user` 写入 `account.json`，运行时以 `/u/N/` 页面与 `X-Goog-AuthUser: N` 访问官网；浏览器重新登录后为 0
-- 添加、导入与重新登录账户在账户任务中运行：
+- 添加、导入、重新登录与刷新账户在账户任务中运行：
   - 请求解析 body 后返回 202 与任务；任务在服务端运行到结束，请求结束或管理页面关闭时继续
   - 任务中的账户同时处理；单个账户失败时在该项记下错误码与原因，其他账户照常处理
+  - `POST /api/accounts/refresh` 以 `{"ids":[账户 ID,...]}` 刷新所列账户，任务的 `kind` 为 `refresh`，各项的 `label` 为账户 ID；同时刷新 4 个账户，其余以 `pending` 排队
   - 错误码：Cookie 无法解析或缺少登录 Cookie 为 `invalid_cookies`，调试地址连接或读取失败为 `cdp_unavailable`，账户目录已存在而账户不在列表中时为 `account_exists`
   - 导入或浏览器登录得到账户列表中已有的账户时，就地替换它的认证状态，保留文件资源绑定
   - 有账户失败时任务以 `failed` 结束，否则为 `done`
@@ -2511,9 +2515,11 @@ Responses 的图片、视频与文件 Part 复用上述 data URL、file ID 与 Y
 | `local_shell_call` | `local_shell` 函数调用，参数为去掉 `type` 的 `action` |
 | `shell_call` | `shell` 函数调用，参数为 `action` |
 | `apply_patch_call` | `apply_patch` 函数调用，参数为 `operation` |
-| `custom_tool_call_output`、`local_shell_call_output`、`shell_call_output`、`apply_patch_call_output` | 按 `call_id` 关联的函数结果 |
+| `custom_tool_call_output`、`local_shell_call_output`、`shell_call_output`、`apply_patch_call_output` | 按 `call_id` 关联的函数结果；`function_call_output` 等的 `status` 为 `incomplete` 时结果为 `{"status":"incomplete","output":...}`，`output` 为带媒体内容字段（如 `image_url`、`file_data`、`source`、`data`）的单个媒体块对象时按只含它的块数组处理 |
+| `reasoning` | `encrypted_content` 作为随后函数调用的签名，没有 `encrypted_content` 的 reasoning 项不改变待用的签名 |
 | `computer_call` | `computer` 函数调用，参数为 `action`，或 `{"actions":[...]}` |
-| `web_search_call`、`code_interpreter_call`、`file_search_call`、`mcp_call`、`mcp_list_tools`、`mcp_approval_request`、`tool_search_call`、`tool_search_output`、`program`、`program_output` | assistant 文本摘要 `<type> <JSON>`；输入含 `mcp_approval_response` 时 `mcp_approval_request` 为 `mcp__<server_label>__<name>` 函数调用，带 `approval_request_id` 的 `mcp_call` 并入对应函数结果 |
+| `tool_search_call`、`tool_search_output`（`execution` 为 `client` 或省略） | `tool_search` 函数的调用与按 `call_id` 关联的结果，结果为 `{"status","tools":[<工具名>]}`；`tool_search_output.tools` 中的工具并入请求的工具列表，与已有工具同名时只声明一次，同名命名空间合并成员，结果中的命名空间列出 `<命名空间>.<成员>` |
+| `web_search_call`、`code_interpreter_call`、`file_search_call`、`mcp_call`、`mcp_list_tools`、`mcp_approval_request`、服务端执行的 `tool_search_call` 与 `tool_search_output`、`program`、`program_output` | assistant 文本摘要 `<type> <JSON>`；输入含 `mcp_approval_response` 时 `mcp_approval_request` 为 `mcp__<server_label>__<name>` 函数调用，带 `approval_request_id` 的 `mcp_call` 并入对应函数结果 |
 | `additional_tools` | `tools` 并入请求的工具列表 |
 | `configuration_update` | 最后一个带 `reasoning.effort` 的项覆盖请求的推理强度 |
 | `image_generation_call` | assistant 文本摘要与 `result` 图片 |
@@ -2540,7 +2546,8 @@ Responses tool 字段：
 | `image_generation` | 图片模型按与 `POST /v1/images/generations` 相同的规则处理 `size`、`quality`、`output_format` 与 `output_compression`；`input_image_mask` 见下文 |
 | `computer_use_preview`、`computer` | 名为 `computer` 的函数；`computer_use_preview` 的 `display_width`、`display_height` 与 `environment` 写入描述，参数为单个 `action`，`computer` 的参数为 `actions` 列表 |
 | `mcp` | 上游 MCP 服务器：`server_label`、`server_url`、`authorization`、`headers`、`allowed_tools`（数组或 `tool_names`），`server_description` 写入系统指令 |
-| `file_search`、`tool_search`、`programmatic_tool_calling` | 接受但不声明 |
+| `tool_search`（`execution:"client"`） | 名为 `tool_search` 的函数，说明与参数取声明中的 `description` 与 `parameters`，没有时参数为 `query` 与 `limit` |
+| `file_search`、服务端执行的 `tool_search`、`programmatic_tool_calling` | 接受但不声明 |
 
 - web search 工具的 `search_context_size`、`user_location` 与 `filters.allowed_domains` 写入搜索指令，域名限制使用 `site:` 查询；上游 grounding query 与 sources 原样返回
 - `search_content_types` 只含 `image` 时只开启图片搜索，同时含 `text` 时同时开启网页搜索；图片搜索查询同样输出为 `web_search_call`
@@ -2611,9 +2618,10 @@ output item 联合类型：
 | type | 字段 |
 | --- | --- |
 | `reasoning` | `id`、`status`、`summary:[{type:"summary_text",text}]`、可选 `encrypted_content`；摘要文本只在请求 `reasoning.summary`（或 `generate_summary`）为 `auto`、`concise`、`detailed` 时返回 |
-| `message` | `id`、`status`、`role:"assistant"`、`content:[{type:"output_text",text,annotations}]` |
-| `function_call` | `id`、`status`、`call_id`、`name`、`arguments` |
-| `custom_tool_call` | `id`、`status`、`call_id`、`name`、`input`，可选 `namespace` |
+| `message` | `id`、`status`、`role:"assistant"`、`content:[{type:"output_text",text,annotations,logprobs:[]}]` |
+| `function_call` | `id`（`fc_` 开头）、`status`、`call_id`、`name`、`arguments`；`collaboration` 命名空间的 `spawn_agent`、`send_message`、`followup_task` 另带 `encrypted_function_args:[]` |
+| `custom_tool_call` | `id`（`ctc_` 开头）、`status`、`call_id`、`name`、`input`，可选 `namespace` |
+| `tool_search_call` | 客户端执行的 `tool_search` 被调用时输出：`id`（`tsc_` 开头）、`status`、`call_id`、`execution:"client"`、`arguments` 对象 |
 | `local_shell_call` | `id`、`status`、`call_id`、`action:{type:"exec",command,env,...}` |
 | `shell_call` | `id`、`status`、`call_id`、`action:{commands,timeout_ms,max_output_length}`、`environment:null` |
 | `apply_patch_call` | `id`、`status`、`call_id`、`operation:{type,path,diff}` |
@@ -2718,8 +2726,10 @@ Responses usage：
 | `context_management` | `{edits:[...]}`，见下文上下文管理 |
 
 - `system` 消息以 `<system-reminder>` 包裹并入相邻的用户内容：前一条为 user 时追加在其末尾，否则并入下一条 user 消息、排在其 `tool_result` 之后，使函数调用之后紧跟函数结果
-- `system` 消息中的 `tool_addition` 与 `tool_removal` 块按出现顺序增删声明的工具：`tool_reference` 按 `name` 引用 `tools` 中的工具（含 `defer_loading` 工具，`tools` 中的工具都声明给上游），`tool_definition` 的 `definition` 加入工具列表，`tool_removal` 移除同名工具
+- `system`、`user` 与 `assistant` 消息中的 `tool_addition` 与 `tool_removal` 块按出现顺序增删声明的工具，块以 `tool` 给出一个工具或以 `tools` 给出多个，这两类块不进入对话内容：`tool_reference` 按 `name` 引用 `tools` 中的工具（含 `defer_loading` 工具，`tools` 中的工具都声明给上游），`tool_definition` 的 `definition` 加入工具列表，`tool_removal` 移除同名工具
 - `output_config.format` 的 `json_schema` 设置结构化输出，其他 type 返回 `400 invalid_request_error`
+- `thinking.type:"disabled"` 时思考关闭，`output_config.effort` 不改变它；对话中途 `system` 消息的 `output_config.effort` 覆盖顶层的 `output_config.effort`，最后一个生效
+- 已开始流式响应后，5xx 原因的流内 `error` 事件 `error.type` 为 `overloaded_error`，消息为真实原因
 - `thinking.display:"omitted"` 时 thinking block 的正文为空，签名照常返回
 
 message content 可以是 string 或 block 数组：
@@ -3200,7 +3210,7 @@ tool group 字段：
 
 `:countTokens` 也接受把生成请求放在 `generateContentRequest`（或 `generate_content_request`）中的包装形式，按其中的 `contents`、`systemInstruction` 与 `tools` 计数。
 
-`systemInstruction` 的各文本 Part 作为系统指令的独立分段发送，图片与文件 Part 移到首个 user 轮开头，函数调用与函数结果各以 Gemini API JSON 文本（如 `{"functionCall":{"args":{"city":"Paris"},"name":"get_weather"}}`）作为一个分段。
+`systemInstruction` 的各文本 Part 作为系统指令的独立分段发送，图片与文件 Part 移到首个 user 轮开头，函数调用与函数结果各以 Gemini API JSON 文本（如 `{"functionCall":{"args":{"city":"Paris"},"name":"get_weather"}}`）作为一个分段。`contents` 中 `role` 为 `system` 或 `developer` 的轮按 `systemInstruction` 的方式把函数调用与函数结果转为 JSON 文本，在首个对话轮之前时文本并入系统指令，在对话中途时以 `<system-reminder>` 包裹并入相邻的 user 轮，图片与文件移到首个 user 轮开头。
 
 `serviceTier` 取 `standard`、`flex`、`priority`，`store:false` 与 `labels` 经 Build 通道发送；`safetySettings` 中的 `HARM_CATEGORY_JAILBREAK` 同样经 Build 通道发送。Build 通道响应的 `usageMetadata.serviceTier` 为上游实际使用的等级。
 
@@ -3930,9 +3940,9 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 | 候选账户均在冷却且在本请求累计排队 1 分钟内不恢复，或已试账户都因额度失败而其余账户在冷却（套餐限额与每日限额冷却中的账户逐个发送一次，其中 5 到 60 分钟内拒绝过同样大或更小请求的账户、收到其他额度失败且该失败的冷却没有结束的账户跳过，全部拒绝时返回最后一次拒绝，全部跳过时立即返回；带 `Retry-After`，Gemini 错误体带 `RetryInfo`） | 429 | `rate_limit_exceeded` | `rate_limit_error` | `RESOURCE_EXHAUSTED` |
 | 上游过载 | 529 | `upstream_error` | `overloaded_error` | `INTERNAL` |
 | 当前客户端请求被管理端取消 | 503 | `request_canceled` | `api_error` | `UNAVAILABLE` |
-| 生成服务已停止 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
+| 生成服务已停止，包括停止时进行中的请求 | 503 | `service_stopped` | `api_error` | `UNAVAILABLE` |
 | 生成服务正在启动且模型目录尚未就绪 | 503 | `service_starting` | `api_error` | `UNAVAILABLE` |
-| 请求期限到期 | 504 | `upstream_error` | `timeout_error` | `DEADLINE_EXCEEDED` |
+| 上游连续 `REQUEST_TIMEOUT` 没有数据 | 504 | `upstream_error` | `timeout_error` | `DEADLINE_EXCEEDED` |
 | 传输、Content-Type、解码或缺失终态 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 | 上游以内容策略类原因结束生成或以 `other`、`image_safety` 拦截请求 | 502 | `upstream_error` | `api_error` | `INTERNAL` |
 | 上游异常结束、重新生成后仍如此且没有输出 | 502 | `upstream_error` | `api_error` | 200 与对应 `finishReason` |
@@ -3943,7 +3953,7 @@ Gemini 列中注明状态码的行以该状态码返回；Interactions 路由与
 - “支持请求的账户均不可调度”指这些账户都处于需要重新登录、服务受限、不可用或已停用状态，错误消息按状态给出账户数，例如 `No account can serve this request (accounts sign-in required: 2, service restricted: 1)`
 - 管理端启动生成服务期间到达的公开 API 请求等启动结束再处理；生成服务处于 `STOPPED` 时，生成与计数端点返回 `service_stopped`，错误消息说明在管理页面点击“启动服务”或开启“自动启动生成服务”
 - OpenAI 错误对象的 `type` 在参数、认证、权限与资源不存在时为 `invalid_request_error`，429 为 `requests`，其余为 `server_error`；`param` 为 `null`
-- Responses 流中的 `response.failed` 的 `error.code` 取官方枚举：429 为 `rate_limit_exceeded`，400 为 `invalid_prompt`，其余为 `server_error`
+- Responses 流中的 `response.failed` 的 `error.code` 取官方枚举：429 为 `rate_limit_exceeded`，400 为 `invalid_prompt`，其余为 `server_error`；输入 token 超过模型上限时为 `context_length_exceeded`
 - 错误消息为英文：上游错误为上游原文，例如 `You've reached your usage limit…`；服务自身的错误为英文说明，5xx 只给出最内层原因；消息中的邮箱地址写作 `[account]`；管理端请求记录保留完整原因，含上游方法、HTTP 状态、协议错误码与账户
 - 可重试的 OpenAI 与 Anthropic 错误消息末尾另起一句 `Please try again in <秒数>s.`，秒数与 Retry-After 相同；已开始流式响应后的错误事件同样带这句，Gemini 流内错误对象带 RetryInfo
 - 候选账户均在冷却时，消息在最早恢复时间后附上该冷却的类型与触发它的上游原文，例如 `Daily limit: … limit: 100, model: gemini-3.8-flash …`

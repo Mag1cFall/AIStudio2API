@@ -18,9 +18,9 @@ type requestPhaseContextKey struct{}
 
 type upstreamModeContextKey struct{}
 
-type continuationContextKey struct{}
-
 type serviceRunContextKey struct{}
+
+type regenerationContextKey struct{}
 
 // ContextWithServiceRun 记下生成服务本次运行的上下文，服务停止时它被取消
 func ContextWithServiceRun(ctx context.Context, run context.Context) context.Context {
@@ -39,14 +39,14 @@ func afterServiceStop(ctx context.Context, stop func()) func() bool {
 	return context.AfterFunc(run, stop)
 }
 
-// ContextWithContinuationObserver 在自动续写开始新一轮时调用 observer
-func ContextWithContinuationObserver(ctx context.Context, observer func()) context.Context {
-	return context.WithValue(ctx, continuationContextKey{}, observer)
+// ContextWithRegenerationObserver 在流在完成前中断、流尾为 5xx 或上游异常结束而重新生成之前调用 observer，attempt 从 1 起，reason 为中断错误或结束原因
+func ContextWithRegenerationObserver(ctx context.Context, observer func(attempt int, reason string)) context.Context {
+	return context.WithValue(ctx, regenerationContextKey{}, observer)
 }
 
-func reportContinuationRound(ctx context.Context) {
-	if observer, ok := ctx.Value(continuationContextKey{}).(func()); ok {
-		observer()
+func reportRegeneration(ctx context.Context, attempt int, reason string) {
+	if observer, ok := ctx.Value(regenerationContextKey{}).(func(int, string)); ok {
+		observer(attempt, reason)
 	}
 }
 

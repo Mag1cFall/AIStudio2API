@@ -93,6 +93,56 @@ export const categoryOrder: ModelCategory[] = [
   3,
 ]
 
+// familyOrder 是模型所属的官网产品分类，按模型选择面板的顺序，一个模型归入第一个所属的分类
+const familyOrder = [17, 18, 15, 14, 13, 16, 19, 3]
+
+// modelFamily 返回模型所属的官网产品分类码，不属于任何产品分类时为 undefined
+export function modelFamily(model: Model): number | undefined {
+  return familyOrder.find((code) => hasCategory(model, code))
+}
+
+// capabilityKeys 是模型目录能力在界面上的名称，与官网运行设置的用词一致；未列出的能力是内部路由标记或只有编号的能力码，不显示
+const capabilityKeys: Partial<Record<string, TranslationKey>> = {
+  thinking: 'models.capability.thinking',
+  thinking_level: 'pg.thinkingLevel',
+  thinking_summaries: 'models.capability.thinkingSummaries',
+  function_declarations: 'pg.functionCalling',
+  code_execution: 'pg.codeExecution',
+  google_search: 'pg.googleSearch',
+  google_maps: 'pg.googleMaps',
+  browse: 'pg.urlContext',
+  image_search: 'pg.imageSearch',
+  media_resolution: 'pg.mediaResolution',
+  aspect_ratio: 'pg.aspectRatio',
+  output_resolution: 'pg.outputResolution',
+  speech_translation: 'models.capability.speechTranslation',
+  transcription_speaker_labels: 'models.capability.speakerLabels',
+  transcription_word_timestamps: 'models.capability.wordTimestamps',
+  transcription_custom_vocabulary: 'models.capability.customVocabulary',
+  interactions_api: 'models.capability.interactions',
+}
+
+// capabilityNames 返回模型明确启用、且有界面名称的能力
+export function capabilityNames(model: Model, t: (key: TranslationKey) => string): string[] {
+  return Object.entries(model.capabilities ?? {}).flatMap(([name, enabled]) => {
+    const key = capabilityKeys[name]
+    return enabled && key ? [t(key)] : []
+  })
+}
+
+// outputLimit 返回模型可设置的输出上限，自动续写模型为输入上限
+export function outputLimit(model: Model | undefined): number | undefined {
+  return model?.capabilities?.output_continuation
+    ? model.input_token_limit
+    : model?.output_token_limit
+}
+
+// tokenLimit 按界面语言格式化模型的 token 上限，没有上限时为破折号
+export function tokenLimit(value: number | undefined, locale: string): string {
+  if (value === undefined || value === 0) return '—'
+  return new Intl.NumberFormat(locale).format(value)
+}
+
 // Tool 是运行设置中的工具开关
 export type Tool =
   | 'structured_output'

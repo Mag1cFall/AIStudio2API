@@ -74,13 +74,6 @@ export const safetyThresholds: SafetyThreshold[] = [
   'BLOCK_LOW_AND_ABOVE',
 ]
 
-// outputLimit 返回模型输出长度上限，自动续写模型为输入上限
-export function outputLimit(model: Model | undefined): number | undefined {
-  return model?.capabilities?.output_continuation
-    ? model.input_token_limit
-    : model?.output_token_limit
-}
-
 // researchDefaults 是 Deep Research 的思考摘要、可视化与协作规划默认值，与官网一样取模型目录 field 82 默认开启的能力码
 function researchDefaults(model: Model | undefined) {
   return {

@@ -218,6 +218,18 @@ func writeRouteNotFound(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// writeRequestBodyError 以请求所属协议的错误体返回请求体无法读取的错误
+func writeRequestBodyError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	switch requestProtocol(r) {
+	case "gemini":
+		writeGeminiError(w, status, "INVALID_ARGUMENT", message)
+	case "anthropic":
+		writeAnthropicError(w, status, "invalid_request_error", message)
+	default:
+		writeOpenAIError(w, status, "invalid_request", message)
+	}
+}
+
 // geminiInvalidKeyMessage 是 Gemini API 对无效 API key 的错误信息
 const geminiInvalidKeyMessage = "API key not valid. Please pass a valid API key."
 
@@ -394,7 +406,7 @@ type openAIErrorBody struct {
 }
 
 func openAIErrorType(status int, code string) string {
-	if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound {
+	if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusUnsupportedMediaType {
 		return "invalid_request_error"
 	}
 	if code == "rate_limit_exceeded" {

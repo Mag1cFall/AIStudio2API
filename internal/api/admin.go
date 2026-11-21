@@ -415,6 +415,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
 	mux.HandleFunc("GET /api/login-view/{view}", s.handleLoginView)
 	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
+	mux.HandleFunc("POST /api/accounts/refresh", s.handleRefreshAccounts)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
 	mux.HandleFunc("POST /api/camoufox/download", s.handleDownloadCamoufox)

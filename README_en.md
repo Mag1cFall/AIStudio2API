@@ -357,12 +357,13 @@ For Cherry Studio:
 4. Set the API key to `PROXY_API_KEY` from `.env`
 5. Load models from `/v1/models`, or add `gemini-3.8-flash` and `gemini-3.5-flash-lite` manually
 
-[Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
+[Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the fable, opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
 $env:ANTHROPIC_API_KEY = "<PROXY_API_KEY>"
 $env:ANTHROPIC_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_FABLE_MODEL = "gemini-4-argon"
 $env:ANTHROPIC_DEFAULT_OPUS_MODEL = "gemini-3.1-pro-preview"
 $env:ANTHROPIC_DEFAULT_SONNET_MODEL = "gemini-3.8-flash"
 $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "gemini-3.5-flash-lite"
@@ -672,7 +673,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
-| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
+| `REQUEST_TIMEOUT` | `30m` | Longest time upstream may send no data, counted from the start of the request until the first data too; requests that upstream is still streaming have no total time limit |
 | `WARM_WORKER_LIMIT` | `10`, `5` with Camoufox | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `20`, `10` with Camoufox | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently during on-demand scaling; prewarming starts workers one at a time; unlimited with `WAA_BACKEND=spidermonkey` |
@@ -805,7 +806,7 @@ Account actions depend on state. Click the state in an account row to set the ac
 
 Reading the benefit tier and model catalog:
 
-- Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
+- Refresh all reads the benefit tier and model catalog of every enabled account immediately; it runs on the server and keeps going after the console is closed or reloaded, and reopening the console shows its progress and the queued accounts; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
 - An account whose catalog has never been read shows an unknown tier and the reason for the last failed read; an account with an existing catalog keeps working when a read fails, and its row shows "Model sync failed" with the reason
 - When a read reports that AI Studio does not support the current egress region, accounts with an existing catalog show that reason as well
 

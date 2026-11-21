@@ -778,13 +778,20 @@ func (service *trackedService) withAliases(models []aistudio.Model) []aistudio.M
 	return models
 }
 
-// mappedModel 返回 MODEL_MAPPING 中别名映射到的模型名，别名带思考后缀时该后缀替换目标自带的后缀，不是别名时原样返回
+// oneMillionContextSuffix 是 Claude Code 1M 上下文模式加在模型名末尾的标记，按去掉它的模型处理
+const oneMillionContextSuffix = "[1m]"
+
+// mappedModel 返回 MODEL_MAPPING 中别名映射到的模型名，别名带思考后缀时该后缀替换目标自带的后缀，不是别名时原样返回；完整名称不是别名时去掉末尾的 [1m] 再映射
 func (service *trackedService) mappedModel(name string) string {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(name), "models/")
+	name = strings.TrimSpace(name)
+	trimmed := strings.TrimPrefix(name, "models/")
 	for _, alias := range service.aliases() {
 		if alias.Alias == trimmed {
 			return alias.Model
 		}
+	}
+	if strings.HasSuffix(strings.ToLower(trimmed), oneMillionContextSuffix) {
+		return service.mappedModel(name[:len(name)-len(oneMillionContextSuffix)])
 	}
 	open := strings.LastIndex(trimmed, "(")
 	if open <= 0 || !strings.HasSuffix(trimmed, ")") {
@@ -1430,6 +1437,7 @@ func (service *trackedService) CountTokens(ctx context.Context, request aistudio
 	}
 	defer cancel()
 	count, requestErr := service.service.CountTokens(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return count, requestErr
 }
@@ -1442,7 +1450,8 @@ func (service *trackedService) GenerateTitle(ctx context.Context, request aistud
 		return "", err
 	}
 	defer cancel()
-	return service.service.(aistudio.TitleService).GenerateTitle(requestCtx, request)
+	title, err := service.service.(aistudio.TitleService).GenerateTitle(requestCtx, request)
+	return title, endedRequestError(requestCtx, err)
 }
 
 // GenerateImage 生成 Imagen 图片并登记请求目标与账户
@@ -1454,6 +1463,7 @@ func (service *trackedService) GenerateImage(ctx context.Context, request aistud
 	}
 	defer cancel()
 	images, requestErr := service.service.(aistudio.ImageService).GenerateImage(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return images, requestErr
 }
@@ -1467,6 +1477,7 @@ func (service *trackedService) CreateDecision(ctx context.Context, request aistu
 	}
 	defer cancel()
 	result, requestErr := service.service.(aistudio.DecisionService).CreateDecision(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	service.requests.log("service", "WARN", "Decision 请求使用 AI Studio 官网中隐藏的模型", "model", request.Model)
 	return result, requestErr
@@ -1495,6 +1506,7 @@ func (service *trackedService) GenerateVideo(ctx context.Context, request aistud
 		return service.dataRequestContext(context.Background())
 	}
 	operation, requestErr := service.service.(aistudio.VideoService).GenerateVideo(requestCtx, request)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return operation, requestErr
 }
@@ -1556,6 +1568,7 @@ func (service *trackedService) GetGenerateVideoOperation(ctx context.Context, op
 	}
 	defer cancel()
 	operation, requestErr := service.service.(aistudio.VideoService).GetGenerateVideoOperation(requestCtx, operationID)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return operation, requestErr
 }
@@ -1568,6 +1581,7 @@ func (service *trackedService) ListVideos(ctx context.Context) ([]aistudio.Video
 	}
 	defer cancel()
 	videos, requestErr := service.service.(aistudio.VideoService).ListVideos(requestCtx)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return videos, requestErr
 }
@@ -1580,6 +1594,7 @@ func (service *trackedService) DeleteVideo(ctx context.Context, operationID stri
 	}
 	defer cancel()
 	requestErr := service.service.(aistudio.VideoService).DeleteVideo(requestCtx, operationID)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	return requestErr
 }
@@ -1591,6 +1606,7 @@ func (service *trackedService) DownloadFile(ctx context.Context, fileID string) 
 		return aistudio.MediaStream{}, err
 	}
 	media, requestErr := service.service.(aistudio.VideoService).DownloadFile(requestCtx, fileID)
+	requestErr = endedRequestError(requestCtx, requestErr)
 	api.SetAccessLogError(requestCtx, requestErr)
 	if requestErr != nil {
 		cancel()
@@ -2053,6 +2069,7 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	service.requests.start(request, cancel)
 	resourceID, err := service.pool.ResourceIDForContents(requestCtx, request.Contents)
 	if err != nil {
+		err = endedRequestError(requestCtx, err)
 		api.SetAccessLogError(requestCtx, err)
 		cancel()
 		service.requests.finish(request.ID, finalRequestState(err))
@@ -2386,6 +2403,9 @@ func (service *trackedService) generateWithRetry(
 		if activity != nil {
 			api.SetAccessLogUpstreamBytes(requestCtx, activity.bytes.Load())
 		}
+		if cause := requestEndCause(requestCtx); cause != nil {
+			err = cause
+		}
 		err = accountsUnavailable(err, retry.rejectionUntil)
 		api.SetAccessLogError(requestCtx, err)
 		service.requests.finish(request.ID, finalRequestState(err))
@@ -2509,6 +2529,9 @@ func (service *trackedService) runAttempt(
 		service.requests.logRequestProgress(request.ID, accountLabel, "WARN", "请求准备等待", "waited", waited, "current_step", current, "model", modelID)
 	})
 	ctx = aistudio.ContextWithStreamActivityObserver(ctx, attempt.activity.observe)
+	ctx = aistudio.ContextWithRegenerationObserver(ctx, func(regenerated int, reason string) {
+		service.requests.logRequestProgress(request.ID, accountLabel, "WARN", "重新生成", "attempt", regenerated, "model", modelID, "reason", reason)
+	})
 	ctx = aistudio.ContextWithRequestPhaseObserver(ctx, prepareTiming.observe)
 	if err == nil {
 		attempt.source, err = service.service.Generate(ctx, request)
@@ -2998,84 +3021,141 @@ func (service *trackedService) lifecycleRequestContext(ctx context.Context) (con
 	}
 }
 
-// dataRequestContext 返回绑定数据面生命周期、期限为 REQUEST_TIMEOUT 的请求上下文，自动续写每开始一轮期限重新计时
+// dataRequestContext 返回绑定数据面生命周期的请求上下文，上游连续 REQUEST_TIMEOUT 没有数据时到期
 func (service *trackedService) dataRequestContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	service.lifecycleMu.Lock()
 	if service.state.Load() != serviceRunning || service.dataContext == nil {
 		service.lifecycleMu.Unlock()
 		return nil, nil, service.stoppedError()
 	}
-	deadline, cancel := newRoundDeadlineContext(ctx, service.timeout)
 	run := service.dataContext
-	stopData := context.AfterFunc(run, cancel)
+	deadline, cancel := newIdleDeadlineContext(ctx, run, service.timeout)
+	stopData := context.AfterFunc(run, func() { deadline.finish(context.Canceled, &serviceStoppedError{}) })
 	service.lifecycleMu.Unlock()
-	return aistudio.ContextWithServiceRun(aistudio.ContextWithContinuationObserver(deadline, deadline.extend), run), func() {
+	return aistudio.ContextWithServiceRun(aistudio.ContextWithStreamActivityObserver(deadline, deadline.observe), run), func() {
 		stopData()
 		cancel()
 	}, nil
 }
 
-// roundDeadlineContext 是期限可在自动续写每轮开始时重新计时的请求上下文，到期时 Err 为 context.DeadlineExceeded
-type roundDeadlineContext struct {
-	parent   context.Context
-	timeout  time.Duration
-	done     chan struct{}
-	mu       sync.Mutex
-	timer    *time.Timer
-	stop     func() bool
-	deadline time.Time
-	err      error
+// idleDeadlineContext 是上游连续 timeout 没有数据时到期的请求上下文，请求开始到首个字节同样计入，到期时 Err 为 context.DeadlineExceeded
+// 约束：active 为最近一次收到上游数据距 started 的纳秒数，由读取上游响应的 goroutine 并发写入
+type idleDeadlineContext struct {
+	parent  context.Context
+	timeout time.Duration
+	started time.Time
+	active  atomic.Int64
+	done    chan struct{}
+	mu      sync.Mutex
+	timer   *time.Timer
+	stop    func() bool
+	err     error
+	// cause 是到期或生成服务停止时说明原因的错误，其余结束方式为 nil
+	cause error
+	// run 是请求所属的生成服务数据面上下文
+	run context.Context
 }
 
-// newRoundDeadlineContext 返回期限为 timeout、随 parent 结束的请求上下文
-func newRoundDeadlineContext(parent context.Context, timeout time.Duration) (*roundDeadlineContext, context.CancelFunc) {
-	ctx := &roundDeadlineContext{parent: parent, timeout: timeout, done: make(chan struct{}), deadline: time.Now().Add(timeout)}
+type idleDeadlineKey struct{}
+
+// upstreamIdleError 是上游连续 REQUEST_TIMEOUT 没有数据时请求的结束原因
+type upstreamIdleError struct {
+	timeout time.Duration
+}
+
+func (e *upstreamIdleError) Error() string {
+	return fmt.Sprintf("上游连续 %s 没有数据，超过 REQUEST_TIMEOUT", e.timeout)
+}
+
+func (e *upstreamIdleError) Is(target error) bool {
+	return target == context.DeadlineExceeded
+}
+
+// requestEndCause 返回请求上下文结束的原因：上游连续没有数据超过 REQUEST_TIMEOUT 或生成服务停止时为说明原因的错误，其余为 ctx.Err()
+func requestEndCause(ctx context.Context) error {
+	if deadline, ok := ctx.Value(idleDeadlineKey{}).(*idleDeadlineContext); ok {
+		deadline.mu.Lock()
+		cause := deadline.cause
+		deadline.mu.Unlock()
+		if cause != nil {
+			return cause
+		}
+		if deadline.run != nil && deadline.run.Err() != nil {
+			return &serviceStoppedError{}
+		}
+	}
+	return ctx.Err()
+}
+
+// endedRequestError 在 err 为上下文取消或到期时返回请求上下文结束的原因，其余原样返回 err
+func endedRequestError(ctx context.Context, err error) error {
+	if cause := requestEndCause(ctx); cause != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return cause
+	}
+	return err
+}
+
+// newIdleDeadlineContext 返回上游连续 timeout 没有数据时到期、随 parent 结束的请求上下文，run 为请求所属的生成服务数据面上下文
+func newIdleDeadlineContext(parent context.Context, run context.Context, timeout time.Duration) (*idleDeadlineContext, context.CancelFunc) {
+	ctx := &idleDeadlineContext{parent: parent, run: run, timeout: timeout, started: time.Now(), done: make(chan struct{})}
 	ctx.mu.Lock()
-	ctx.timer = time.AfterFunc(timeout, func() { ctx.finish(context.DeadlineExceeded) })
-	ctx.stop = context.AfterFunc(parent, func() { ctx.finish(parent.Err()) })
+	ctx.timer = time.AfterFunc(timeout, ctx.expire)
+	ctx.stop = context.AfterFunc(parent, func() { ctx.finish(parent.Err(), nil) })
 	ctx.mu.Unlock()
-	return ctx, func() { ctx.finish(context.Canceled) }
+	return ctx, func() { ctx.finish(context.Canceled, nil) }
 }
 
-func (ctx *roundDeadlineContext) finish(err error) {
+// observe 记录收到上游数据的时刻
+func (ctx *idleDeadlineContext) observe(int) {
+	ctx.active.Store(int64(time.Since(ctx.started)))
+}
+
+// expire 在计时到达时结束请求，计时期间收到过上游数据时改为从最近一次数据起再计 timeout
+func (ctx *idleDeadlineContext) expire() {
+	remaining := time.Duration(ctx.active.Load()) + ctx.timeout - time.Since(ctx.started)
+	if remaining <= 0 {
+		ctx.finish(context.DeadlineExceeded, &upstreamIdleError{timeout: ctx.timeout})
+		return
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.err == nil {
+		ctx.timer.Reset(remaining)
+	}
+}
+
+// finish 以 err 结束请求上下文，cause 为说明原因的错误
+func (ctx *idleDeadlineContext) finish(err error, cause error) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	if ctx.err != nil {
 		return
 	}
-	ctx.err = err
+	ctx.err, ctx.cause = err, cause
 	ctx.timer.Stop()
 	ctx.stop()
 	close(ctx.done)
 }
 
-// extend 把期限重新计为 timeout
-func (ctx *roundDeadlineContext) extend() {
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	if ctx.err == nil {
-		ctx.deadline = time.Now().Add(ctx.timeout)
-		ctx.timer.Reset(ctx.timeout)
-	}
+// Deadline 返回最近一次收到上游数据之后 timeout 的时刻
+func (ctx *idleDeadlineContext) Deadline() (time.Time, bool) {
+	return ctx.started.Add(time.Duration(ctx.active.Load()) + ctx.timeout), true
 }
 
-func (ctx *roundDeadlineContext) Deadline() (time.Time, bool) {
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	return ctx.deadline, true
-}
-
-func (ctx *roundDeadlineContext) Done() <-chan struct{} {
+func (ctx *idleDeadlineContext) Done() <-chan struct{} {
 	return ctx.done
 }
 
-func (ctx *roundDeadlineContext) Err() error {
+func (ctx *idleDeadlineContext) Err() error {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	return ctx.err
 }
 
-func (ctx *roundDeadlineContext) Value(key any) any {
+func (ctx *idleDeadlineContext) Value(key any) any {
+	if key == (idleDeadlineKey{}) {
+		return ctx
+	}
 	return ctx.parent.Value(key)
 }
 
@@ -3109,7 +3189,7 @@ func (service *trackedService) forwardEvents(
 	defer stallTimer.Stop()
 	var stall <-chan time.Time
 	finishFromContext := func() {
-		requestErr = requestCtx.Err()
+		requestErr = requestEndCause(requestCtx)
 		state = finalRequestState(requestErr)
 		if requestErr == nil || terminal || clientCtx.Err() != nil {
 			return
@@ -3224,6 +3304,7 @@ func (service *trackedService) forwardEvents(
 			continue
 		}
 		if event.Kind == aistudio.EventError {
+			event.Err = endedRequestError(requestCtx, event.Err)
 			event.Err = service.settleStreamError(requestCtx, requestID, requestedModelID, serving.Load(), event.Err)
 			requestErr = event.Err
 			state = finalRequestState(event.Err)

@@ -130,10 +130,10 @@ export interface AccountTaskItem {
   step?: 'login' | 'reading' | 'checking' | 'saving'
 }
 
-// AccountTask 是在服务端运行的添加或重新登录账户任务，view 为显示登录画面的登录窗口 ID
+// AccountTask 是在服务端运行的添加、重新登录或刷新账户任务，view 为显示登录画面的登录窗口 ID；刷新任务中账户的 label 为账户 ID
 export interface AccountTask {
   id: string
-  kind: 'login' | 'relogin' | 'chrome' | 'cookies' | 'browser'
+  kind: 'login' | 'relogin' | 'chrome' | 'cookies' | 'browser' | 'refresh'
   view?: string
   state: 'running' | 'done' | 'failed'
   items: AccountTaskItem[]

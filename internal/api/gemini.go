@@ -701,6 +701,27 @@ func geminiJSONName(name string) string {
 	return builder.String()
 }
 
+// geminiSystemParts 把系统指令中的 part 分为指令文本与移到首个 user 轮开头的媒体，函数调用与结果转录为文本
+func geminiSystemParts(parts []aistudio.Part) ([]string, []aistudio.Part, error) {
+	var texts []string
+	var media []aistudio.Part
+	for _, part := range parts {
+		switch {
+		case part.FunctionCall != nil || part.FunctionResult != nil:
+			transcript, err := aistudio.ToolPartTranscript(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			texts = append(texts, transcript)
+		case part.Text != "":
+			texts = append(texts, part.Text)
+		case part.InlineData != nil || part.File != nil || part.ExternalMedia != nil:
+			media = append(media, part)
+		}
+	}
+	return texts, media, nil
+}
+
 func (request geminiRequest) toGenerateRequest(id string, model string) (aistudio.GenerateRequest, error) {
 	if err := request.GenerationConfig.validate(); err != nil {
 		return aistudio.GenerateRequest{}, err
@@ -712,30 +733,33 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		if err != nil {
 			return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
 		}
-		for _, part := range parts {
-			if part.FunctionCall != nil || part.FunctionResult != nil {
-				transcript, err := aistudio.ToolPartTranscript(part)
-				if err != nil {
-					return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
-				}
-				system = append(system, transcript)
-				continue
-			}
-			if part.Text == "" && (part.InlineData != nil || part.File != nil || part.ExternalMedia != nil) {
-				systemMedia = append(systemMedia, part)
-			}
-			if part.Text != "" {
-				system = append(system, part.Text)
-			}
+		texts, media, err := geminiSystemParts(parts)
+		if err != nil {
+			return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
 		}
+		system, systemMedia = texts, media
 	}
 	contents := make([]aistudio.Content, 0, len(request.Contents))
+	var reminders []aistudio.Part
 	for _, content := range request.Contents {
 		parts, hasResult, err := mapGeminiParts(content.Parts)
 		if err != nil {
 			return aistudio.GenerateRequest{}, err
 		}
 		if len(parts) == 0 {
+			continue
+		}
+		if content.Role == "system" || content.Role == "developer" {
+			texts, media, err := geminiSystemParts(parts)
+			if err != nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("%s content: %w", content.Role, err)
+			}
+			systemMedia = append(systemMedia, media...)
+			if len(contents) == 0 {
+				system = append(system, texts...)
+			} else if len(texts) > 0 {
+				reminders = addSystemReminder(contents, reminders, strings.Join(texts, "\n"))
+			}
 			continue
 		}
 		role, err := geminiRole(content.Role)
@@ -745,7 +769,10 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		if hasResult {
 			role = aistudio.RoleTool
 		}
-		contents = append(contents, aistudio.Content{Role: role, Parts: parts})
+		contents, reminders = appendWithReminders(contents, aistudio.Content{Role: role, Parts: parts}, reminders)
+	}
+	if len(reminders) > 0 {
+		contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: reminders})
 	}
 	contents = prependSystemMedia(contents, systemMedia)
 	tools, err := mapGeminiTools(request.Tools, request.ToolConfig)

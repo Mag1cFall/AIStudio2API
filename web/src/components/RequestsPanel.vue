@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
+import { splitReason } from '@/cooldowns'
 import { formatLogNumber } from '@/logs'
 import { usePaged } from '@/paging'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
@@ -49,14 +50,6 @@ const visibleRequests = computed(() =>
 )
 const detail = ref<Cooldown | null>(null)
 const clearing = ref(false)
-
-// splitReason 把冷却原因拆成冷却类型与上游错误原文
-function splitReason(reason: string | undefined): { category: string; text: string } {
-  const value = reason ?? ''
-  const separator = value.indexOf(': ')
-  if (separator <= 0) return { category: '', text: value }
-  return { category: value.slice(0, separator), text: value.slice(separator + 2) }
-}
 
 // categoryLabel 返回冷却类型的当前语言名称，没有类型时为其他
 function categoryLabel(category: string): string {

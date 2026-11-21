@@ -41,11 +41,6 @@ watch(locale, measure, { flush: 'post' })
   <div ref="root" class="log-op log-text">
     <UiDisclosure v-if="clipped" v-model="open" />
     <span
-      class="log-state log-state-event"
-      :class="`log-state-${entry.level.toLowerCase()}`"
-      aria-hidden="true"
-    ></span>
-    <span
       ref="body"
       class="log-op-main log-text-body"
       :class="{ 'log-text-clamp': clamped }"

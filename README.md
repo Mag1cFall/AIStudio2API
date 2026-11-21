@@ -357,12 +357,13 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 4. API 密钥填写 `.env` 中的 `PROXY_API_KEY`
 5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.8-flash`、`gemini-3.5-flash-lite`
 
-[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
+[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 fable、opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
 $env:ANTHROPIC_API_KEY = "<PROXY_API_KEY>"
 $env:ANTHROPIC_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_FABLE_MODEL = "gemini-4-argon"
 $env:ANTHROPIC_DEFAULT_OPUS_MODEL = "gemini-3.1-pro-preview"
 $env:ANTHROPIC_DEFAULT_SONNET_MODEL = "gemini-3.8-flash"
 $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "gemini-3.5-flash-lite"
@@ -672,7 +673,7 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
-| `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |
+| `REQUEST_TIMEOUT` | `30m` | 上游连续没有数据的最长时间，从请求开始到首个数据同样计入；上游仍在输出的请求不受总时长限制 |
 | `WARM_WORKER_LIMIT` | `10`，Camoufox 后端 `5` | 常驻预热账户数 |
 | `MAX_ACTIVE_WORKERS` | `20`，Camoufox 后端 `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 按需扩容时同时冷启动的 Camoufox Worker 数，预热逐个启动；`WAA_BACKEND=spidermonkey` 时不限制 |
@@ -806,7 +807,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 权益与模型目录的读取：
 
-- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
+- “刷新全部”立即读取全部启用账户的权益与模型目录，在服务端运行，关闭或刷新管理页后继续，重新打开时显示进度与排队的账户；后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
 - 从未读取成功的账户权益显示为未知，并显示最近一次失败原因；已有目录的账户读取失败时照常使用，账户行显示“目录同步失败”与原因
 - 读取报告 AI Studio 不支持当前出口地区时，已有目录的账户同样显示该原因
 

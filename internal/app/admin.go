@@ -365,7 +365,7 @@ func (admin *runtimeAdmin) DiscoverCookieAccounts(ctx context.Context, input api
 		admin.requests.log("auth", "ERROR", "识别 Cookie 中的账户失败", "error", err)
 		return nil, invalidAccount(err)
 	}
-	return cookieAccountEntries(api.CookieBrowser{DeviceBound: deviceBoundSession(state)}, accounts, admin.accountIDs()), nil
+	return cookieAccountEntries(api.CookieBrowser{DeviceBound: deviceBoundSession(state)}, accounts, importedAccountIDs(admin.pool.Status(), true)), nil
 }
 
 // deviceBoundSession 表示 Cookie 带 __Secure-1PSIDRTS，会话绑定签发它的设备
@@ -395,9 +395,14 @@ func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.Cook
 
 // accountIDs 返回已导入且不需要重新登录的账户小写 ID 与其服务受限的原因，没有受限时原因为空
 func (admin *runtimeAdmin) accountIDs() map[string]string {
+	return importedAccountIDs(admin.pool.Status(), false)
+}
+
+// importedAccountIDs 返回 statuses 中已导入账户的小写 ID 与其服务受限的原因，signInRequired 为假时不含需要重新登录的账户
+func importedAccountIDs(statuses []aistudio.AccountStatus, signInRequired bool) map[string]string {
 	existing := make(map[string]string)
-	for _, status := range admin.pool.Status() {
-		if status.State == aistudio.AccountAuthRequired {
+	for _, status := range statuses {
+		if status.State == aistudio.AccountAuthRequired && !signInRequired {
 			continue
 		}
 		restricted := ""

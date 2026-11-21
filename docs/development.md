@@ -332,7 +332,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 | `ADMIN_PASSWORD` | 管理员密码 | 空 |
 | `PROXY` | 全局出口代理或代理池 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
-| `REQUEST_TIMEOUT` | 单次请求最大执行时间 | `30m` |
+| `REQUEST_TIMEOUT` | 上游连续没有数据的最长时间 | `30m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `10`，Camoufox 后端 `5` |
 | `MAX_ACTIVE_WORKERS` | 活动 Worker 容量上限 | `20`，Camoufox 后端 `10` |
 | `WARM_STARTUP_CONCURRENCY` | 同时冷启动的 Camoufox Worker 数 | `5` |
@@ -373,7 +373,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 - `LOG_MAX_TOTAL_MB`：超出时删除最旧的文件，不小于 20；保存后立即生效
 - `ADMIN_PASSWORD`：开启登录时必填
 - `PROXY`：setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理
-- `REQUEST_TIMEOUT`：自动续写的每一轮开始时重新计时
+- `REQUEST_TIMEOUT`：从请求开始计时，每收到一次上游数据重新计时，上游仍在输出的请求不受总时长限制
 - `MAX_ACTIVE_WORKERS`：必须不小于热池目标
 - `WARM_STARTUP_CONCURRENCY`：限制按需扩容时的冷启动数，预热逐个启动；`WAA_BACKEND=spidermonkey` 时不限制
 - `ROUTING_STRATEGY`：账户轮询 `round-robin` 或粘性优先 `fill-first`
@@ -730,7 +730,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 | 健康与状态 | `GET /health`、`GET /api/status` |
 | 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET /api/accounts/exits`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}`、`PUT /api/accounts/{id}/state` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
-| 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
+| 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`POST /api/accounts/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/paths?path=`（列出服务所在机器的目录与账户状态文件 `storage-state.json`，`path=roots` 列出文件系统根）、`POST /api/paths/pick?path=`（桌面版以系统对话框选择账户目录） |

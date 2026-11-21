@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { parseAccountBindings } from '@/accountBindings'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
-import { priceLines } from '@/playground/catalog'
+import { capabilityNames, outputLimit, priceLines, tokenLimit } from '@/playground/catalog'
 import type { Account, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
 import DetailDialog from './DetailDialog.vue'
@@ -134,7 +134,7 @@ const methods = computed(() =>
 const filteredModels = computed(() => {
   const term = query.value.trim().toLowerCase()
   return props.models.filter((model) => {
-    const capabilities = capabilityNames(model)
+    const capabilities = capabilityNames(model, t)
     const matchesQuery =
       term === '' ||
       [model.id, model.name, model.description ?? '', ...model.methods, ...capabilities].some(
@@ -155,35 +155,6 @@ function hiddenHelp(model: Model): TranslationKey | null {
 // accountRisk 判断模型是否经 Build 写代码助手回答，使用时有账户被限制的风险
 function accountRisk(model: Model): boolean {
   return model.channels?.includes('assistant') ?? false
-}
-
-// capabilityKeys 是模型目录能力在界面上的名称，与官网运行设置的用词一致；未列出的能力是内部路由标记或只有编号的能力码，不显示
-const capabilityKeys: Partial<Record<string, TranslationKey>> = {
-  thinking: 'models.capability.thinking',
-  thinking_level: 'pg.thinkingLevel',
-  thinking_summaries: 'models.capability.thinkingSummaries',
-  function_declarations: 'pg.functionCalling',
-  code_execution: 'pg.codeExecution',
-  google_search: 'pg.googleSearch',
-  google_maps: 'pg.googleMaps',
-  browse: 'pg.urlContext',
-  image_search: 'pg.imageSearch',
-  media_resolution: 'pg.mediaResolution',
-  aspect_ratio: 'pg.aspectRatio',
-  output_resolution: 'pg.outputResolution',
-  speech_translation: 'models.capability.speechTranslation',
-  transcription_speaker_labels: 'models.capability.speakerLabels',
-  transcription_word_timestamps: 'models.capability.wordTimestamps',
-  transcription_custom_vocabulary: 'models.capability.customVocabulary',
-  interactions_api: 'models.capability.interactions',
-}
-
-// capabilityNames 返回模型明确启用、且有界面名称的能力
-function capabilityNames(model: Model): string[] {
-  return Object.entries(model.capabilities ?? {}).flatMap(([name, enabled]) => {
-    const key = capabilityKeys[name]
-    return enabled && key ? [t(key)] : []
-  })
 }
 
 // optionKeys 是模型目录能力选项在界面上的名称，顺序即详情中的显示顺序
@@ -234,19 +205,6 @@ function capabilityOptions(model: Model): { label: string; values: string }[] {
     const values = model.capability_options?.[name]
     return values?.length ? [{ label: t(key), values: optionValues(name, values) }] : []
   })
-}
-
-// outputLimit 返回模型可设置的输出上限，自动续写模型为输入上限
-function outputLimit(model: Model): number | undefined {
-  return model.capabilities?.output_continuation
-    ? model.input_token_limit
-    : model.output_token_limit
-}
-
-// tokenLimit 使用当前界面语言格式化模型限制
-function tokenLimit(value: number | undefined): string {
-  if (value === undefined || value === 0) return '—'
-  return new Intl.NumberFormat(locale.value).format(value)
 }
 
 // dateFormat 与 monthFormat 是详情中发布日期与知识截止月份的格式
@@ -375,10 +333,10 @@ function modelSummary(model: Model): string {
             </span>
           </div>
           <span class="hidden w-28 shrink-0 text-right text-xs text-gray-300 tabular-nums sm:block">
-            {{ tokenLimit(model.input_token_limit) }}
+            {{ tokenLimit(model.input_token_limit, locale) }}
           </span>
           <span class="hidden w-28 shrink-0 text-right text-xs text-gray-300 tabular-nums sm:block">
-            {{ tokenLimit(outputLimit(model)) }}
+            {{ tokenLimit(outputLimit(model), locale) }}
           </span>
           <UiIcon name="chevronRight" :size="14" class="shrink-0 text-gray-600" />
         </button>
@@ -433,11 +391,11 @@ function modelSummary(model: Model): string {
           <dl class="grid grid-cols-2 gap-3 font-mono text-xs sm:grid-cols-4">
             <div>
               <dt class="text-gray-500">{{ t('models.context') }}</dt>
-              <dd class="text-gray-200">{{ tokenLimit(detail.input_token_limit) }}</dd>
+              <dd class="text-gray-200">{{ tokenLimit(detail.input_token_limit, locale) }}</dd>
             </div>
             <div>
               <dt class="text-gray-500">{{ t('models.output') }}</dt>
-              <dd class="text-gray-200">{{ tokenLimit(outputLimit(detail)) }}</dd>
+              <dd class="text-gray-200">{{ tokenLimit(outputLimit(detail), locale) }}</dd>
             </div>
             <div v-if="detail.details?.release_date">
               <dt class="text-gray-500">{{ t('models.releaseDate') }}</dt>
@@ -554,13 +512,13 @@ function modelSummary(model: Model): string {
           <span class="mb-2 block text-xs text-gray-500">{{ t('models.capabilities') }}</span>
           <div class="flex flex-wrap gap-2">
             <span
-              v-for="capability in capabilityNames(detail)"
+              v-for="capability in capabilityNames(detail, t)"
               :key="capability"
               class="rounded border border-line bg-canvas px-2 py-1 text-xs text-gray-300"
             >
               {{ capability }}
             </span>
-            <span v-if="capabilityNames(detail).length === 0" class="text-gray-600">—</span>
+            <span v-if="capabilityNames(detail, t).length === 0" class="text-gray-600">—</span>
           </div>
           <dl v-if="capabilityOptions(detail).length" class="mt-3 space-y-1 text-xs">
             <div

@@ -221,6 +221,13 @@ export const api = {
     requestJSON<AccountRefresh>(`/api/accounts/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',
     }),
+  refreshAccounts: async (ids: string[]) =>
+    (
+      await requestJSON<AccountTaskResponse>('/api/accounts/refresh', {
+        method: 'POST',
+        body: jsonBody({ ids }),
+      })
+    ).task,
   startService: () => requestJSON<ServiceStatus>('/api/control/start', { method: 'POST' }),
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
   downloadCamoufox: () => requestJSON<ServiceStatus>('/api/camoufox/download', { method: 'POST' }),

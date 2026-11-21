@@ -59,6 +59,7 @@ func (service *trackedService) Embed(ctx context.Context, request aistudio.Embed
 		service.requests.markChannel(request.ID, string(aistudio.ChannelBuild))
 	})
 	result, err := service.service.(aistudio.EmbeddingService).Embed(observed, request)
+	err = endedRequestError(requestCtx, err)
 	if err == nil {
 		api.SetAccessLogGenerationResult(requestCtx, &aistudio.Usage{InputTokens: result.TokenCount, TotalTokens: result.TokenCount}, 0)
 	}

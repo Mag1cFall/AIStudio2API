@@ -13,7 +13,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 )
 
-// AccountTask 是在服务端运行的添加或重新登录账户任务，管理页关闭或刷新后继续运行，结束后保留到用户关闭
+// AccountTask 是在服务端运行的添加、重新登录或刷新账户任务，管理页关闭或刷新后继续运行，结束后保留到用户关闭
 type AccountTask struct {
 	ID        string            `json:"id"`
 	Kind      string            `json:"kind"`
@@ -296,6 +296,50 @@ func (s *server) handleLoginAccount(w http.ResponseWriter, r *http.Request) {
 		runAccountTaskItems(ctx, update, 1, func(ctx context.Context, _ int) (AdminAccount, error) {
 			return s.config.Admin.LoginAccount(ctx, id, view)
 		})
+	})
+}
+
+// refreshTaskConcurrency 是刷新任务同时刷新的账户数
+const refreshTaskConcurrency = 4
+
+// handleRefreshAccounts 在账户任务中按 refreshTaskConcurrency 的并发依次刷新所列账户，账户标签为账户 ID，任务被关闭后不再开始刷新
+func (s *server) handleRefreshAccounts(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	task := AccountTask{Kind: "refresh", Items: make([]AccountTaskItem, len(input.IDs))}
+	next := make(chan int, len(input.IDs))
+	for index, id := range input.IDs {
+		task.Items[index] = AccountTaskItem{Label: id, State: "pending"}
+		next <- index
+	}
+	close(next)
+	s.startAccountTask(w, r, task, func(ctx context.Context, update accountTaskUpdate) {
+		var group sync.WaitGroup
+		for range min(refreshTaskConcurrency, len(input.IDs)) {
+			group.Go(func() {
+				for index := range next {
+					if ctx.Err() != nil {
+						return
+					}
+					update(func(task *AccountTask) { task.Items[index].State = "running" })
+					_, err := s.config.Admin.RefreshAccount(ctx, input.IDs[index])
+					update(func(task *AccountTask) {
+						item := &task.Items[index]
+						if err != nil {
+							item.State, item.Code, item.Error = "failed", codeFromError(err, ""), err.Error()
+							return
+						}
+						item.State = "done"
+					})
+				}
+			})
+		}
+		group.Wait()
 	})
 }
 

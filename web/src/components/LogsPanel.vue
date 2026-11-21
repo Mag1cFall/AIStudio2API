@@ -30,12 +30,28 @@ const output = ref<HTMLElement>()
 const levelRuler = ref<HTMLElement>()
 // levelWidth 是级别列宽度，单位 px
 const levelWidth = ref(0)
-const levelResize = new ResizeObserver(([entry]) => {
-  levelWidth.value = Math.ceil(entry!.borderBoxSize[0]!.inlineSize)
+// stateRuler 叠放请求与阶段的状态标签，宽度为当前语言最宽的状态标签
+const stateRuler = ref<HTMLElement>()
+// stateWidth 是消息列中状态标签的宽度，单位 px
+const stateWidth = ref(0)
+// stateLabels 是状态标签可能显示的文字：处理中的请求与各状态的阶段
+const stateLabels = [
+  'logs.running',
+  'state.running',
+  'state.completed',
+  'state.failed',
+  'state.cancelled',
+] as const
+const rulerResize = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    const width = Math.ceil(entry.borderBoxSize[0]!.inlineSize)
+    if (entry.target === levelRuler.value) levelWidth.value = width
+    else stateWidth.value = width
+  }
 })
-watch(levelRuler, (element) => {
-  levelResize.disconnect()
-  if (element) levelResize.observe(element)
+watch([levelRuler, stateRuler], (elements) => {
+  rulerResize.disconnect()
+  for (const element of elements) if (element) rulerResize.observe(element)
 })
 const sourceWidth = ref(136)
 const resizingSource = ref(false)
@@ -182,6 +198,7 @@ watch([level, source, search], () => {
 const logGridStyle = computed(() => ({
   '--log-source-width': `${sourceWidth.value}px`,
   '--log-level-width': `${levelWidth.value}px`,
+  '--log-state-width': `${stateWidth.value}px`,
 }))
 
 function levelLabel(value: (typeof levels)[number]): string {
@@ -398,7 +415,7 @@ onActivated(() => {
 onUnmounted(() => {
   cancelAnimationFrame(glide)
   cancelAnimationFrame(pinFrame)
-  levelResize.disconnect()
+  rulerResize.disconnect()
   outputResize.disconnect()
 })
 </script>
@@ -489,7 +506,7 @@ onUnmounted(() => {
         {{ t('logs.waiting') }}
       </div>
       <div v-else class="log-table" :style="logGridStyle">
-        <span ref="levelRuler" class="log-level-ruler" aria-hidden="true">
+        <span ref="levelRuler" class="log-ruler" aria-hidden="true">
           <span
             v-for="value in levels.slice(1)"
             :key="value"
@@ -497,6 +514,9 @@ onUnmounted(() => {
             :class="`log-level-${value.toLowerCase()}`"
             >{{ levelLabel(value) }}</span
           >
+        </span>
+        <span ref="stateRuler" class="log-ruler" aria-hidden="true">
+          <span v-for="key in stateLabels" :key="key" class="log-state">{{ t(key) }}</span>
         </span>
         <div
           class="source-resizer"
@@ -634,7 +654,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.log-level-ruler {
+.log-ruler {
   position: absolute;
   display: grid;
   visibility: hidden;
@@ -711,10 +731,10 @@ onUnmounted(() => {
 </style>
 
 <style>
-/* log-op 是日志页每一行的消息列：展开箭头、状态位、标题与字段、行尾耗时四列，其后各行从标题列开始 */
+/* log-op 是日志页每一行的消息列：展开箭头、状态标签、标题与字段、行尾耗时四列，其后各行从标题列开始，展开的详情从行首开始；状态列宽为当前语言最宽的状态标签，各行标题左缘相同 */
 .log-op {
   display: grid;
-  grid-template-columns: 20px 3rem minmax(0, 1fr) auto;
+  grid-template-columns: 20px max(3rem, var(--log-state-width)) minmax(0, 1fr) auto;
   column-gap: 8px;
   align-items: start;
 }
@@ -731,11 +751,8 @@ onUnmounted(() => {
   grid-column: 3 / -1;
   min-width: 0;
 }
-/* 日志区窄于 52rem 时展开的详情占满消息列 */
-@container log-table (width < 52rem) {
-  .log-op-detail {
-    grid-column: 1 / -1;
-  }
+.log-op-detail {
+  grid-column: 1 / -1;
 }
 .log-op-title {
   color: var(--color-fg);
@@ -750,34 +767,21 @@ onUnmounted(() => {
   text-align: end;
 }
 
-/* log-state 是状态位：请求为 HTTP 状态，阶段为结束图标或进度，单条事件为中性圆点 */
+/* log-state 是状态标签：请求为 HTTP 状态或处理中，阶段为进度或状态名；标签按文字取宽，至少 3rem，在状态列中靠左 */
 .log-state {
   grid-column: 2;
+  justify-self: start;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 3rem;
   height: 20px;
+  padding: 0 6px;
   border: 1px solid currentColor;
   border-radius: 4px;
   font-variant-numeric: tabular-nums;
   line-height: 18px;
-}
-.log-state-event {
-  border-color: transparent;
-  color: var(--color-gray-500);
-}
-.log-state-event::before {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  content: '';
-}
-.log-state-event.log-state-warn {
-  color: var(--color-yellow-400);
-}
-.log-state-event.log-state-error {
-  color: var(--color-red-400);
+  white-space: nowrap;
 }
 .log-state-running {
   color: var(--color-blue-400);

@@ -23,7 +23,9 @@ import type {
   AccountTaskItem,
   PreparationStatus,
   ChromeImportProfile,
+  Cooldown,
   CookieBrowser,
+  Model,
   PairingToken,
 } from '@/types'
 import type { IconName } from '@/icons'
@@ -53,6 +55,9 @@ const props = defineProps<{
   chromeImport: boolean
   // camoufox 是 Camoufox 的准备状态，浏览器登录等待下载时在任务行显示进度
   camoufox: PreparationStatus | undefined
+  // models 与 cooldowns 是实时模型目录与模型冷却，供账户的模型对话框显示
+  models: Model[]
+  cooldowns: Cooldown[]
 }>()
 
 const emit = defineEmits<{
@@ -98,14 +103,33 @@ const pendingAction = ref('')
 const addPending = computed(
   () => pendingAction.value === 'pairing' || pendingAction.value === 'chrome-discover',
 )
-const refreshing = reactive(new Set<string>())
-// queued 是刷新全部中尚未轮到的账户
-const queued = reactive(new Set<string>())
+// refreshingOne 是单独立即刷新中的账户
+const refreshingOne = reactive(new Set<string>())
+// refreshTasks 是服务端进行中的刷新任务
+const refreshTasks = computed(() =>
+  props.tasks.filter((task) => task.kind === 'refresh' && task.state === 'running'),
+)
+// refreshTaskAccounts 返回进行中的刷新任务里处于 state 的账户
+function refreshTaskAccounts(state: AccountTaskItem['state']): string[] {
+  return refreshTasks.value.flatMap((task) =>
+    task.items.filter((item) => item.state === state).map((item) => item.label),
+  )
+}
+// refreshing 是单独刷新或刷新任务中正在刷新的账户
+const refreshing = computed(() => new Set([...refreshingOne, ...refreshTaskAccounts('running')]))
+// submitted 是已提交刷新、服务端任务还没有经事件流送达的账户
+const submitted = reactive(new Set<string>())
+// queued 是已提交或刷新任务中尚未轮到的账户
+const queued = computed(() => new Set([...submitted, ...refreshTaskAccounts('pending')]))
 // refreshErrors 是最近一次刷新失败的账户与失败原因
 const refreshErrors = reactive(new Map<string, string>())
-// refreshTotal 与 refreshDone 是进行中的刷新全部的账户数与已完成数，没有刷新全部时 refreshTotal 为 0
-const refreshTotal = ref(0)
-const refreshDone = ref(0)
+// refreshTotal 与 refreshDone 是进行中的刷新任务的账户数与已结束数，没有刷新任务时 refreshTotal 为 0
+const refreshTotal = computed(() =>
+  refreshTasks.value.reduce((sum, task) => sum + task.items.length, 0),
+)
+const refreshDone = computed(() =>
+  refreshTasks.value.reduce((sum, task) => sum + taskFinished(task), 0),
+)
 // refreshAllProgress 是刷新全部的进度文字
 const refreshAllProgress = computed(() =>
   t('accounts.refreshingAll')
@@ -491,6 +515,9 @@ function downloadText(task: AccountTask): string {
   return [task.items[0]!.label, t('accounts.downloadingBrowser')].filter(Boolean).join(' · ')
 }
 
+// listedTasks 是任务列表显示的账户任务，刷新任务的进度显示在刷新全部按钮与账户行
+const listedTasks = computed(() => props.tasks.filter((task) => task.kind !== 'refresh'))
+
 // taskTitles 是各类账户任务的标题
 const taskTitles: Record<AccountTask['kind'], TranslationKey> = {
   login: 'accounts.browserLogin',
@@ -498,6 +525,7 @@ const taskTitles: Record<AccountTask['kind'], TranslationKey> = {
   chrome: 'accounts.importChrome',
   cookies: 'accounts.pasteCookie',
   browser: 'accounts.readBrowser',
+  refresh: 'accounts.refreshAll',
 }
 
 // taskStates 是任务中账户各状态的读屏文字
@@ -1089,7 +1117,7 @@ function refreshNotice(result: AccountRefresh, previous: Account['state']): stri
 
 // refreshOne 读取一个账户的权益与模型目录，完成后立即更新该行，失败原因记在该行
 async function refreshOne(id: string): Promise<AccountRefresh> {
-  refreshing.add(id)
+  refreshingOne.add(id)
   refreshErrors.delete(id)
   try {
     const result = await api.refreshAccount(id)
@@ -1099,7 +1127,7 @@ async function refreshOne(id: string): Promise<AccountRefresh> {
     refreshErrors.set(id, errorText(error))
     throw error
   } finally {
-    refreshing.delete(id)
+    refreshingOne.delete(id)
   }
 }
 
@@ -1118,35 +1146,50 @@ async function refreshAccount(account: Account): Promise<void> {
   }
 }
 
-// refreshConcurrency 是刷新全部时同时刷新的账户数
-const refreshConcurrency = 4
-
-// refreshAccounts 按 refreshConcurrency 的并发依次刷新 accounts 中尚未在刷新的账户，结束后提示成功与失败的数量
+// refreshAccounts 把 accounts 中尚未在刷新或排队的账户交给服务端的刷新任务
 async function refreshAccounts(accounts: Account[]): Promise<void> {
-  const targets = accounts.filter((account) => !refreshing.has(account.id))
-  for (const account of targets) queued.add(account.id)
-  refreshTotal.value = targets.length
-  refreshDone.value = 0
-  let failed = 0
-  const worker = async (): Promise<void> => {
-    for (let account = targets.shift(); account; account = targets.shift()) {
-      queued.delete(account.id)
-      await refreshOne(account.id).catch(() => failed++)
-      refreshDone.value++
-    }
+  const ids = accounts
+    .map((account) => account.id)
+    .filter((id) => !refreshing.value.has(id) && !queued.value.has(id))
+  if (ids.length === 0) return
+  for (const id of ids) submitted.add(id)
+  try {
+    await api.refreshAccounts(ids)
+  } catch (error) {
+    for (const id of ids) submitted.delete(id)
+    actionError(error)
   }
-  await Promise.all(Array.from({ length: refreshConcurrency }, worker))
-  const total = refreshTotal.value
-  refreshTotal.value = 0
-  emit('refresh')
-  emit(
-    'notice',
-    t(total - failed === 1 ? 'accounts.refreshedAllOne' : 'accounts.refreshedAll')
-      .replace('{count}', String(total - failed))
-      .replace('{failed}', String(failed)),
-    failed === 0 ? 'success' : 'error',
-  )
 }
+
+// finishedRefreshes 是已提示结果的刷新任务
+const finishedRefreshes = new Set<string>()
+
+// 刷新任务送达后由任务接管已提交的账户；账户开始刷新或刷新成功时清除该行上次的失败原因，失败时记下原因；任务结束后提示成功与失败的数量并关闭任务
+watch(
+  () => props.tasks.filter((task) => task.kind === 'refresh'),
+  (tasks) => {
+    for (const task of tasks) {
+      for (const item of task.items) {
+        submitted.delete(item.label)
+        if (item.state === 'running' || item.state === 'done') refreshErrors.delete(item.label)
+        if (item.state === 'failed') refreshErrors.set(item.label, taskError(item))
+      }
+      if (task.state === 'running' || finishedRefreshes.has(task.id)) continue
+      finishedRefreshes.add(task.id)
+      const failed = task.items.filter((item) => item.state === 'failed').length
+      const count = task.items.length - failed
+      emit(
+        'notice',
+        t(count === 1 ? 'accounts.refreshedAllOne' : 'accounts.refreshedAll')
+          .replace('{count}', String(count))
+          .replace('{failed}', String(failed)),
+        failed === 0 ? 'success' : 'error',
+      )
+      api.dismissAccountTask(task.id).catch(() => undefined)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -1227,11 +1270,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
       class="page-x flex min-h-0 flex-1 flex-col py-4 md:overflow-hidden md:py-8 md:[scrollbar-gutter:stable]"
     >
       <ul
-        v-if="tasks.length > 0"
+        v-if="listedTasks.length > 0"
         class="mb-3 divide-y divide-line/60 rounded-lg border border-line bg-panel"
         :aria-label="t('accounts.tasks')"
       >
-        <li v-for="task in tasks" :key="task.id" class="px-4 py-2.5">
+        <li v-for="task in listedTasks" :key="task.id" class="px-4 py-2.5">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex min-w-0 flex-1 basis-64 items-center gap-2.5">
               <UiIcon
@@ -1796,8 +1839,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
       </div>
 
       <AccountModelsDialog
-        :account="modelsAccount?.label ?? ''"
-        :models="modelsAccount?.models ?? []"
+        :account="modelsAccount"
+        :catalog="models"
+        :cooldowns="cooldowns"
         :trigger="modelsTrigger"
         @close="modelsAccountID = ''"
       />
