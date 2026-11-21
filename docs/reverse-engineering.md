@@ -428,7 +428,7 @@ Bidi setup 成功使用 lease（本次会话持有的账户租约）的 `checked
 | `benefit_tier` | 账户权益 |
 | `catalog_fingerprint` | 目录指纹 |
 | `model_access` | `{state,checked_at,reason?}` |
-| `cooldowns` | `{until,reason?,level?,fallback?,rejected_size?,rejected_until?}` |
+| `cooldowns` | `{until,reason?,level?,fallback?,rejected_size?,rejected_until?,rejected_level?}` |
 | `resources` | `{kind?,name?,mime?,size?,purpose?,created_at,video?,alias?,sha256?,video_duration?,used_at?,display_name?,expires_at?}` |
 | `proxy` | 从 `PROXY` 代理池分配给账户的代理 |
 | `restricted` | Google 拒绝账户使用 AI Studio 的原因与跳转页 |
