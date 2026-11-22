@@ -1,0 +1,28 @@
+name: Issue limit
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  limit:
+    if: ${{ !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close issues beyond the per-author limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          NUMBER: ${{ github.event.issue.number }}
+          LIMIT: 3
+        run: |
+          earlier=$(gh issue list -R "$REPO" --author "$AUTHOR" --state open --limit 100 --json number --jq "map(select(.number < $NUMBER)) | length")
+          if [ "$earlier" -ge "$LIMIT" ]; then
+            gh issue close "$NUMBER" -R "$REPO" --reason "not planned" --comment "每人最多同时打开 ${LIMIT} 个 Issue，这个 Issue 已自动关闭。请等已有的 Issue 处理完再提，或把内容补充到已有的 Issue 里。
+
+          Each user can have at most ${LIMIT} open issues at a time, so this one was closed automatically. Please wait until your existing issues are resolved, or add this to one of them."
+          fi
