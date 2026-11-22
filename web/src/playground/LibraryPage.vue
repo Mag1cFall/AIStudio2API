@@ -169,7 +169,10 @@ async function remove(): Promise<void> {
   if (item === null) return
   try {
     if (playground.session.id === item.id) await playground.deletePrompt()
-    else await api.deletePrompt(item.id)
+    else {
+      await playground.cancelSave(item.id)
+      await api.deletePrompt(item.id)
+    }
     prompts.value = prompts.value.filter((entry) => entry.id !== item.id)
   } catch (error) {
     store.showNotice(errorText(error), 'error')

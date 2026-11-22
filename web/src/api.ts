@@ -268,6 +268,14 @@ export const api = {
     }),
   deletePrompt: (id: string) =>
     requestCommand(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  uploadPromptMedia: async (file: Blob, mimeType: string) =>
+    (
+      await requestJSON<{ id: string }>('/api/prompts/media', {
+        method: 'POST',
+        headers: { 'Content-Type': mimeType || 'application/octet-stream' },
+        body: file,
+      })
+    ).id,
   generateTitle: async (model: string, prompt: string, answer: string) =>
     (
       await requestJSON<{ title: string }>('/api/prompts/title', {

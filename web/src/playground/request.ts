@@ -1,6 +1,6 @@
-import { jsonBody } from '@/api'
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
+import { blobToBase64, hasCachedAttachmentBlob, loadAttachmentBlob } from './media-store'
 import { Capability, hasCode, isAgent, isOmniModel, toolCodes, type Tool } from './catalog'
 import type { Protocol } from './protocols'
 import type { AgentEnvironment, Part, RunSettings, Source, Support, Turn } from './types'
@@ -54,7 +54,7 @@ function omitVideoSettings({
   return part
 }
 
-// apiPart 返回去掉试用页显示字段的片段：已上传 Drive 的附件只发送文件引用，内联数据只用于本页预览，内联附件的文件名写为 inlineData.displayName
+// apiPart 返回去掉试用页显示字段与 mediaId 的片段：已上传 Drive 的附件只发送文件引用，内联附件的文件名写为 inlineData.displayName
 export function apiPart({
   fileName,
   fileExpires: _fileExpires,
@@ -65,8 +65,46 @@ export function apiPart({
     const { inlineData: _preview, ...uploaded } = part
     return uploaded
   }
-  if (fileName === undefined || part.inlineData === undefined) return part
-  return { ...part, inlineData: { ...part.inlineData, displayName: fileName } }
+  if (part.inlineData === undefined) return part
+  const { mediaId: _mediaId, ...inline } = part.inlineData
+  return {
+    ...part,
+    inlineData: fileName === undefined ? inline : { ...inline, displayName: fileName },
+  }
+}
+
+// needsInlineHydration 判断附件片段在发送请求前需要从本地 Blob 或对话媒体库补齐 Base64
+function needsInlineHydration(part: Part): boolean {
+  const inline = part.inlineData
+  return (
+    part.fileData === undefined &&
+    inline !== undefined &&
+    inline.data === '' &&
+    (inline.mediaId !== undefined || hasCachedAttachmentBlob(inline))
+  )
+}
+
+// hydratePart 按需为附件片段临时补齐 Base64 正文
+export async function hydratePart(part: Part, signal: AbortSignal | null = null): Promise<Part> {
+  if (!needsInlineHydration(part)) return part
+  const data = await blobToBase64(await loadAttachmentBlob(part, signal), signal)
+  return { ...part, inlineData: { ...part.inlineData!, data } }
+}
+
+// hydrateRequestTurns 为即将发出的对话轮次按需补齐非 Drive 附件的临时 Base64 正文
+export function hydrateRequestTurns(
+  turns: readonly Turn[],
+  signal: AbortSignal | null = null,
+): Promise<Turn[]> {
+  return Promise.all(
+    turns.map(async (turn) => {
+      if (!turn.parts.some(needsInlineHydration)) return turn
+      return {
+        ...turn,
+        parts: await Promise.all(turn.parts.map((part) => hydratePart(part, signal))),
+      }
+    }),
+  )
 }
 
 // buildRequest 按模型能力把运行设置写为 Gemini API 请求，模型不支持的设置不发送，采样参数按所设值发送
@@ -391,7 +429,7 @@ export async function countTokensDetailed(
     method: 'POST',
     headers,
     signal,
-    body: jsonBody({
+    body: JSON.stringify({
       generateContentRequest: { model: `models/${modelID}`, ...request },
     }),
   })

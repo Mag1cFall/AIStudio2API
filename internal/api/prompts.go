@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -48,7 +52,7 @@ type SystemInstructionPreset struct {
 	Text  string `json:"text"`
 }
 
-// PromptStore 保存 Playground 对话与系统指令预设
+// PromptStore 保存 Playground 对话、附件媒体与系统指令预设
 type PromptStore interface {
 	Prompts(ctx context.Context, pageSize int, pageToken string) ([]PromptSummary, string, error)
 	Prompt(context.Context, string) (Prompt, error)
@@ -56,6 +60,8 @@ type PromptStore interface {
 	RenamePrompt(ctx context.Context, id, title, description string) (PromptSummary, error)
 	CopyPrompt(ctx context.Context, source, id, title string) (PromptSummary, error)
 	DeletePrompt(context.Context, string) error
+	SaveMedia(ctx context.Context, mimeType string, content io.Reader) (string, error)
+	OpenMedia(ctx context.Context, id string) (*os.File, string, error)
 	SystemInstructions(context.Context) ([]SystemInstructionPreset, error)
 	SaveSystemInstruction(context.Context, SystemInstructionPreset) error
 	DeleteSystemInstruction(context.Context, string) error
@@ -65,6 +71,8 @@ func (s *server) registerPrompts(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/prompts/system-instructions", s.handleSystemInstructions)
 	mux.HandleFunc("PUT /api/prompts/system-instructions/{id}", s.handleSaveSystemInstruction)
 	mux.HandleFunc("DELETE /api/prompts/system-instructions/{id}", s.handleDeleteSystemInstruction)
+	mux.HandleFunc("POST /api/prompts/media", s.handleUploadPromptMedia)
+	mux.HandleFunc("GET /api/prompts/media/{id}", s.handlePromptMedia)
 	mux.HandleFunc("GET /api/prompts", s.handlePrompts)
 	mux.HandleFunc("GET /api/prompts/{id}", s.handlePrompt)
 	mux.HandleFunc("PUT /api/prompts/{id}", s.handleSavePrompt)
@@ -212,6 +220,60 @@ func (s *server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUploadPromptMedia 流式保存对话附件媒体并返回按内容计算的媒体 ID
+func (s *server) handleUploadPromptMedia(w http.ResponseWriter, r *http.Request) {
+	mimeType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if parsed, params, err := mime.ParseMediaType(mimeType); err == nil && parsed != "" {
+		if formatted := mime.FormatMediaType(parsed, params); formatted != "" {
+			mimeType = formatted
+		} else {
+			mimeType = parsed
+		}
+	} else {
+		mimeType = "application/octet-stream"
+	}
+	id, err := s.config.Prompts.SaveMedia(r.Context(), mimeType, r.Body)
+	if err != nil {
+		var maxBytes *http.MaxBytesError
+		if errors.As(err, &maxBytes) {
+			writeAdminError(w, http.StatusRequestEntityTooLarge, "file_too_large", "Attachment exceeds 512 MB")
+			return
+		}
+		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+// handlePromptMedia 流式返回已保存的对话附件媒体，支持浏览器 Range 播放与跳转
+func (s *server) handlePromptMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	file, mimeType, err := s.config.Prompts.OpenMedia(r.Context(), id)
+	if err != nil {
+		writePromptError(w, err)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "prompt_store_failed", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	if mimeType == "application/pdf" || strings.HasPrefix(mimeType, "application/pdf;") {
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+	} else {
+		w.Header().Set("Content-Security-Policy", "sandbox; frame-ancestors 'self'")
+	}
+	if info.Size() == 0 {
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.ServeContent(w, r, id, info.ModTime(), file)
 }
 
 // handleSystemInstructions 返回保存在对话库中的系统指令预设列表
