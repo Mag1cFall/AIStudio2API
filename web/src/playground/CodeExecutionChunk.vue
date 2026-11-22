@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import CodeBlock from './CodeBlock.vue'
-import { dataURL } from './protocols'
+import { attachmentURL } from './attachment'
 import ToolIoCard from './ToolIoCard.vue'
 import ToolStepRow from './ToolStepRow.vue'
 import type { Part } from './types'
@@ -60,7 +60,12 @@ const output = computed(() => {
     </div>
     <ToolIoCard v-if="output !== undefined" :output="output" :error="state === 'error'" />
     <div v-if="images.length > 0" class="step-images">
-      <img v-for="(image, index) in images" :key="index" :src="dataURL(image)" alt="" />
+      <img
+        v-for="(image, index) in images"
+        :key="index"
+        :src="attachmentURL({ inlineData: image })"
+        alt=""
+      />
     </div>
   </ToolStepRow>
 </template>

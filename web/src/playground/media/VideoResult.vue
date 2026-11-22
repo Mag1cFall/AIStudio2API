@@ -21,14 +21,22 @@ const source = computed(() => props.src ?? downloaded.value)
 
 watch(
   () => props.path,
-  async (path) => {
+  async (path, _previous, onCleanup) => {
     if (downloaded.value) URL.revokeObjectURL(downloaded.value)
     downloaded.value = ''
     error.value = ''
     if (!path) return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
     try {
-      downloaded.value = URL.createObjectURL(await downloadMedia(path))
+      const url = URL.createObjectURL(await downloadMedia(path, controller.signal))
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      downloaded.value = url
     } catch (reason) {
+      if (controller.signal.aborted) return
       error.value = failureText(reason, t('pg.videoDownloadUnreachable'))
     }
   },

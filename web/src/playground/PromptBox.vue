@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -22,8 +22,10 @@ import {
   attachmentName,
   attachmentText,
   attachmentURL,
-  cacheAttachmentBlob,
   downloadAttachment,
+  localAttachment,
+  revokeAttachmentURL,
+  uploadAttachment,
   useAttachmentPreview,
 } from './attachment'
 import ApiKeyButton from './ApiKeyButton.vue'
@@ -34,7 +36,6 @@ import TokenCapDialog from './TokenCapDialog.vue'
 import { Capability, hasCode, isAgent, isOmniModel } from './catalog'
 import { driveNames, uploadDriveFile, type DriveFile } from './drive'
 import { fileMIME } from './file-types'
-import { readImage } from './media/api'
 import MediaViewDialog from './media/MediaViewDialog.vue'
 import VideoSettingsDialog from './media/VideoSettingsDialog.vue'
 import { useCompare, usePlayground } from './session'
@@ -91,7 +92,11 @@ async function addSample(selection: SampleSelection): Promise<void> {
   try {
     const response = await fetch(selection.image)
     if (!response.ok) throw new Error(`${response.status} ${selection.image}`)
-    attach({ inlineData: await readImage(await response.blob()) })
+    const blob = await response.blob()
+    const mimeType = blob.type || 'image/png'
+    attach(
+      session.temporary ? localAttachment(blob, mimeType) : await uploadAttachment(blob, mimeType),
+    )
   } catch (error) {
     showNotice(failureText(error, t('pg.sampleImageFailed'), t('pg.sampleImageFailed')), 'error')
   } finally {
@@ -111,8 +116,13 @@ const {
   transcribe,
 } = useAudioRecording(async (audio) => {
   window.clearInterval(timer)
-  if (recordingMode.value === 'attach') attach(await readFile(audio, audio.type.split(';')[0]))
-  else {
+  if (recordingMode.value === 'attach') {
+    try {
+      attach(await readFile(audio, audio.type.split(';')[0]))
+    } catch (error) {
+      showNotice(failureText(error, t('pg.uploadFailed'), t('pg.uploadFailed')), 'error')
+    }
+  } else {
     const text = await transcribe(audio)
     if (text !== '') session.draft = session.draft === '' ? text : `${session.draft} ${text}`
   }
@@ -278,19 +288,10 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
-// readFile 读取文件为内联数据片段，并绑定原文件 Blob 供预览与上传复用
+// readFile 为正式对话流式上传文件到媒体库，为临时对话保留本地 Blob 引用
 function readFile(file: Blob, mimeType = file.type || 'application/octet-stream'): Promise<Part> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result)
-      const inlineData = markRaw({ mimeType, data: result.slice(result.indexOf(',') + 1) })
-      cacheAttachmentBlob(inlineData, file)
-      resolve({ inlineData })
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
+  if (session.temporary) return Promise.resolve(localAttachment(file, mimeType))
+  return uploadAttachment(file, mimeType)
 }
 
 // addFiles 把文件加入待发送附件，读取期间显示占位，文件附件随后统计 token 数；与官网一样 Gemini API 协议下的视频先上传 Drive，生成时引用该文件
@@ -365,6 +366,7 @@ async function inlineAttachment(index: number): Promise<void> {
   const text = await attachmentText(part)
   const at = session.attachments.indexOf(part)
   if (at === -1) return
+  revokeAttachmentURL(part)
   session.attachments.splice(at, 1)
   session.draft = [session.draft, text].filter(Boolean).join('\n\n')
 }
@@ -406,7 +408,9 @@ function toggleAudio(part: Part): void {
 
 // removeAttachment 移除附件，正在播放的音频随之停止
 function removeAttachment(index: number): void {
-  if (playing.value === session.attachments[index]) player.pause()
+  const part = session.attachments[index]!
+  if (playing.value === part) player.pause()
+  revokeAttachmentURL(part)
   session.attachments.splice(index, 1)
 }
 
@@ -432,7 +436,11 @@ async function startRecording(mode: 'attach' | 'transcribe'): Promise<void> {
 
 // addPhoto 把相机拍下的照片加入附件
 async function addPhoto(photo: Blob): Promise<void> {
-  attach(await readFile(photo))
+  try {
+    attach(await readFile(photo))
+  } catch (error) {
+    showNotice(failureText(error, t('pg.uploadFailed'), t('pg.uploadFailed')), 'error')
+  }
 }
 
 // addYouTube 把 YouTube 链接作为视频附件

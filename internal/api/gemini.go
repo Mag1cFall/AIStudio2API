@@ -485,6 +485,7 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}
+	request.Contents, request.SystemInstruction = nil, nil
 	cache, ok := s.applyGeminiCache(w, request.CachedContent, &generateRequest)
 	if !ok {
 		return
@@ -521,7 +522,7 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 
 // decodeGeminiJSON 读取请求体，按 proto3 JSON 规则统一字段名后解码到 target
 func decodeGeminiJSON(r *http.Request, target any) error {
-	body, err := io.ReadAll(r.Body)
+	body, err := readRequestBody(r, 8<<20)
 	if err == nil {
 		body, err = geminiCamelKeys(body)
 	}
@@ -1050,6 +1051,7 @@ func mapGeminiParts(input []geminiPart) ([]aistudio.Part, bool, error) {
 			if err != nil {
 				return nil, false, fmt.Errorf("inlineData.data: %w", err)
 			}
+			inline.Data = ""
 			mimeType, data := normalizeImagePayload(attachmentMIME(mime, inline.DisplayName, data), data)
 			parts = append(parts, aistudio.Part{
 				InlineData:       aistudio.NewBlob(mimeType, data),

@@ -380,13 +380,20 @@ func rootHandler(apiHandler http.Handler) http.Handler {
 	return securityHeaders(root)
 }
 
-// compressAdmin 以 gzip 压缩管理接口发给接受 gzip 的客户端的 JSON、CSV 与事件流响应
+// compressAdmin 以 gzip 压缩管理接口发给接受 gzip 的客户端的 JSON、CSV 与事件流响应，媒体流原样输出以支持 Range
 func compressAdmin(next http.Handler) http.Handler {
 	wrap, err := gzhttp.NewWrapper(gzhttp.ContentTypes([]string{"application/json", "text/csv", "text/event-stream"}))
 	if err != nil {
 		panic(err)
 	}
-	return wrap(next)
+	compressed := wrap(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/prompts/media/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		compressed.ServeHTTP(w, r)
+	})
 }
 
 // securityHeaders 禁止页面被其他站点嵌入并关闭 MIME 嗅探与 Referer

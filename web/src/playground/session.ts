@@ -16,8 +16,17 @@ import { api, ApiError } from '@/api'
 import { useConsole } from '@/console'
 import { keepPage } from '@/desktop'
 import { useI18n } from '@/i18n'
-import type { Model, SavedPrompt, SystemInstructionPreset } from '@/types'
-import { attachmentBlob, copyAttachmentBlob } from './attachment'
+import type { Model, PromptInput, SavedPrompt, SystemInstructionPreset } from '@/types'
+import {
+  copyAttachmentBlob,
+  hasCachedAttachmentBlob,
+  hasSameAttachmentBlob,
+  loadAttachmentBlob,
+  localAttachment,
+  revokeAttachmentURL,
+  revokeTurnURLs,
+  uploadAttachment,
+} from './attachment'
 import {
   agentTools,
   Capability,
@@ -30,7 +39,6 @@ import {
   type Tool,
 } from './catalog'
 import { countVideoFrames, driveFileExists, uploadDriveFile } from './drive'
-import { readImage } from './media/api'
 import { generate, protocolsFor } from './protocols'
 import {
   agentFields,
@@ -42,6 +50,8 @@ import {
   countTokens,
   countTokensDetailed,
   failureText,
+  hydratePart,
+  hydrateRequestTurns,
   type TokenCountResult,
 } from './request'
 import type {
@@ -173,21 +183,64 @@ function uploadedVideo(part: Part): boolean {
   return part.fileData !== undefined && part.inlineData?.mimeType.startsWith('video/') === true
 }
 
-// renewUploads 在发送前同时检查各视频的 Files API 上传文件，已到期或已不存在的以对话中保留的原视频重新上传，片段改为引用新文件；signal 中止时检查与上传随之中止
+// renewUploads 在发送前并行检查各视频的 Files API 上传文件，已到期或已不存在的按顺序以原视频重新上传；signal 中止时检查与上传随之中止
 async function renewUploads(
   turns: readonly Turn[],
   signal: AbortSignal | null = null,
 ): Promise<void> {
   const videos = turns.flatMap((turn) => turn.parts).filter(uploadedVideo)
-  await Promise.all(
-    videos.map(async (part) => {
-      if (Date.now() < part.fileExpires! && (await driveFileExists(part.fileData!.fileUri, signal)))
-        return
-      const uploaded = await uploadDriveFile(attachmentBlob(part), part.fileName!, signal)
-      part.fileData = { mimeType: uploaded.mimeType, fileUri: uploaded.uri }
-      part.fileExpires = Date.parse(uploaded.expirationTime)
-    }),
-  )
+  const missing = (
+    await Promise.all(
+      videos.map(async (part) =>
+        Date.now() < part.fileExpires! && (await driveFileExists(part.fileData!.fileUri, signal))
+          ? null
+          : part,
+      ),
+    )
+  ).filter((part): part is Part => part !== null)
+  for (const part of missing) {
+    const uploaded = await uploadDriveFile(
+      await loadAttachmentBlob(part, signal),
+      part.fileName!,
+      signal,
+    )
+    part.fileData = { mimeType: uploaded.mimeType, fileUri: uploaded.uri }
+    part.fileExpires = Date.parse(uploaded.expirationTime)
+  }
+}
+
+// persistLocalMedia 把尚未落盘的本地 Blob 与内联 Base64 媒体上传到对话媒体库并写入 mediaId
+async function persistLocalMedia(turns: readonly Turn[], live?: readonly Turn[]): Promise<void> {
+  for (let ti = 0; ti < turns.length; ti++) {
+    const turn = turns[ti]!
+    const liveTurn = live?.[ti]?.id === turn.id ? live[ti] : undefined
+    for (let pi = 0; pi < turn.parts.length; pi++) {
+      const part = turn.parts[pi]!
+      const inline = part.inlineData
+      if (!inline || inline.mediaId || (inline.data === '' && !hasCachedAttachmentBlob(inline)))
+        continue
+      const blob = await loadAttachmentBlob(part)
+      const mediaId = await api.uploadPromptMedia(blob, inline.mimeType)
+      revokeAttachmentURL(part)
+      const persisted = markRaw({
+        mimeType: inline.mimeType,
+        data: '',
+        mediaId,
+        ...(inline.displayName !== undefined && { displayName: inline.displayName }),
+      })
+      part.inlineData = persisted
+      const livePart = liveTurn?.parts[pi]
+      if (
+        livePart?.inlineData &&
+        !livePart.inlineData.mediaId &&
+        (hasSameAttachmentBlob(livePart.inlineData, blob) ||
+          (inline.data !== '' && livePart.inlineData.data === inline.data))
+      ) {
+        revokeAttachmentURL(livePart)
+        livePart.inlineData = persisted
+      }
+    }
+  }
 }
 
 // rawInlineMarks 把对话轮次中的内联媒体标记为非响应式对象
@@ -270,8 +323,12 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   // opened 是 open 装入的运行设置，换入它引起的设置变化不触发保存
   let opened: RunSettings | undefined
   let tokenController: AbortController | undefined
-  // writing 是最近一次写入对话库的请求，保存按调用顺序依次写入
+  // writing 是正在执行的写入请求，pendingSaves 按对话 ID 合并排队中的最新快照，persistedIds 记录已落盘到服务端的对话 ID
   let writing: Promise<unknown> = Promise.resolve()
+  let draining = false
+  let savingId: string | null = null
+  const pendingSaves = new Map<string, PromptInput<PromptData>>()
+  const persistedIds = new Set<string>()
   // staleTokens 表示最近一次保存写入时对话的 token 统计尚未返回，统计返回后再保存一次
   let staleTokens = false
   let draftController: AbortController | undefined
@@ -312,6 +369,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   // newChat 丢弃尚未写入的保存与生成，开始一个空白对话，systemInstruction 为新对话的系统指令
   function newChat(systemInstruction = ''): void {
     discard()
+    revokeTurnURLs(session.turns)
+    for (const part of session.attachments) revokeAttachmentURL(part)
     Object.assign(session, {
       id: null,
       title: '',
@@ -371,6 +430,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         session.loadError = 'not_chat'
         return undefined
       }
+      revokeTurnURLs(session.turns)
+      for (const part of session.attachments) revokeAttachmentURL(part)
       Object.assign(session, {
         id,
         title: prompt.title,
@@ -388,6 +449,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
       })
       lastRun.value = null
       opened = session.settings
+      persistedIds.add(id)
       // 打开对话后在下一个任务统计 token，构造整段对话的请求不并入渲染对话的任务
       scheduleTokens()
       return prompt
@@ -429,10 +491,10 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         session.settings.systemInstruction.trim() === '')
     )
       return
-    const compare = links.compare?.()
     session.id ??= newTurnID()
     const id = session.id
-    const prompt = {
+    const compare = links.compare?.()
+    const prompt: PromptInput<PromptData> = {
       title: session.title,
       model: session.settings.model,
       description: session.description,
@@ -445,15 +507,52 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
       }),
     }
     staleTokens = tokenTimer !== 0 || tokenController !== undefined
+    pendingSaves.set(id, prompt)
     session.saveState = 'saving'
-    const write = writing.then(() => api.savePrompt<PromptData>(id, prompt))
-    const queued = (writing = write.catch(() => undefined))
-    try {
-      await write
-      if (writing === queued && session.id === id) session.saveState = 'saved'
-    } catch {
-      if (writing === queued && session.id === id) session.saveState = 'error'
+    if (draining) {
+      await writing
+      return
     }
+    draining = true
+    writing = (async () => {
+      try {
+        while (pendingSaves.size > 0) {
+          const entry = pendingSaves.entries().next().value
+          if (!entry) break
+          const [nextId, nextPrompt] = entry
+          pendingSaves.delete(nextId)
+          savingId = nextId
+          try {
+            const live = session.id === nextId
+            await persistLocalMedia(nextPrompt.data.turns, live ? session.turns : undefined)
+            if (nextPrompt.data.compare)
+              await persistLocalMedia(
+                nextPrompt.data.compare.turns,
+                live ? links.compare?.()?.turns : undefined,
+              )
+            await api.savePrompt<PromptData>(nextId, nextPrompt)
+            persistedIds.add(nextId)
+            if (!pendingSaves.has(nextId) && session.id === nextId) session.saveState = 'saved'
+          } catch {
+            if (!pendingSaves.has(nextId) && session.id === nextId) session.saveState = 'error'
+          } finally {
+            savingId = null
+          }
+        }
+      } finally {
+        draining = false
+      }
+    })()
+    await writing
+  }
+
+  // cancelSave 丢弃指定对话尚未发出的保存并等待该对话在途写入结束，返回该对话是否已在服务端存在
+  async function cancelSave(id: string): Promise<boolean> {
+    pendingSaves.delete(id)
+    if (savingId === id) await writing
+    const existed = persistedIds.has(id)
+    persistedIds.delete(id)
+    return existed
   }
 
   // scheduleSave 在对话变化后合并保存，生成中到时的保存由生成结束时的保存代替
@@ -478,6 +577,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     window.clearTimeout(tokenTimer)
     window.clearTimeout(draftTimer)
     tokenTimer = draftTimer = 0
+    tokenController?.abort()
+    draftController?.abort()
     tokenController = draftController = undefined
     controller?.abort()
   }
@@ -507,7 +608,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         : await countTokensDetailed(
             model.id,
             apiKey(),
-            buildRequest(session.settings, model, turns),
+            buildRequest(session.settings, model, await hydrateRequestTurns(turns, signal)),
             signal,
           )
     const count = framed.reduce((sum, part) => sum + part.tokenCount!, counted.totalTokens)
@@ -515,9 +616,10 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   }
 
   // refreshTokens 统计当前对话与系统指令的输入 token，系统指令与末尾模型轮次的 token 取统计的逐轮明细；统计返回前有保存写入时，返回后再保存一次
-  async function refreshTokens(): Promise<void> {
+  async function refreshTokens(prehydrated?: Turn[]): Promise<void> {
     window.clearTimeout(tokenTimer)
     tokenTimer = 0
+    tokenController?.abort()
     tokenController = undefined
     const model = currentModel.value
     const hasSystem = hasSystemInput()
@@ -531,7 +633,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     try {
       const { count, counted, turns } = await countPrompt(
         model,
-        session.turns,
+        prehydrated ?? session.turns,
         hasSystem,
         counter.signal,
       )
@@ -567,6 +669,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   function scheduleDraftTokens(): void {
     window.clearTimeout(draftTimer)
     draftTimer = 0
+    draftController?.abort()
     draftController = undefined
     const text = draftSource().text
     const model = currentModel.value
@@ -607,7 +710,10 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         : await countTokens(
             model.id,
             apiKey(),
-            { contents: [{ role: 'user', parts: [apiPart(part)] }], generationConfig: {} },
+            {
+              contents: [{ role: 'user', parts: [apiPart(await hydratePart(part))] }],
+              generationConfig: {},
+            },
             new AbortController().signal,
           )
       if (attachmentCounts.get(toRaw(part)) === request) part.tokenCount = count
@@ -654,19 +760,27 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     owner.push(turn)
     session.running = true
     session.started = performance.now()
-    controller = new AbortController()
-    const signal = controller.signal
+    const active = new AbortController()
+    controller = active
+    const signal = active.signal
     if (session.id === null && !session.temporary) void save()
     try {
-      await renewUploads(sent, signal)
-      void refreshTokens()
+      const lastUser =
+        session.settings.protocol === 'openai-images'
+          ? [...sent].reverse().find((item) => item.role === 'user')
+          : undefined
+      const toSend = lastUser ? [lastUser] : sent
+      await renewUploads(toSend, signal)
+      const hydrated = await hydrateRequestTurns(toSend, signal)
+      if (controller !== active || signal.aborted || session.turns !== owner) return
+      void refreshTokens(input.previous === undefined && !lastUser ? hydrated : undefined)
       await generate({
         protocol: session.settings.protocol,
         stream: session.settings.stream,
         model,
         modelID: model.id,
         apiKey: apiKey(),
-        request: buildRequest(session.settings, model, sent),
+        request: buildRequest(session.settings, model, hydrated),
         images: {
           count: session.settings.imageCount,
           size: session.settings.openAISize,
@@ -699,6 +813,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
           if (update.thoughtTokens !== undefined) turn.thoughtTokens = update.thoughtTokens
           if (update.cachedTokens !== undefined) turn.cachedTokens = update.cachedTokens
           if (update.promptTokens !== undefined) {
+            tokenController?.abort()
             tokenController = undefined
             session.promptTokens = update.promptTokens + (turn.tokens ?? 0)
             lastRun.value = { id: turn.id, input: update.promptTokens, output: turn.tokens ?? 0 }
@@ -717,8 +832,6 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
       turn.duration = Math.round(performance.now() - session.started)
       if (turn.thinking === undefined && turn.parts.some((part) => part.thought))
         turn.thinking = turn.duration
-      session.running = false
-      controller = undefined
       const index = session.turns.indexOf(turn)
       if (
         index !== -1 &&
@@ -727,9 +840,19 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
         turn.finishReason === undefined
       )
         session.turns.splice(index, 1)
+      if (controller === active) {
+        session.running = false
+        controller = undefined
+      }
       if (!links.save && session.title === '' && session.turns.includes(turn))
         void generateTitle(model.id)
-      if (session.turns === owner) scheduleSave()
+      if (session.turns === owner) {
+        const hasPendingMedia =
+          (!session.temporary || Boolean(links.canSave?.())) &&
+          turn.parts.some((part) => part.inlineData && !part.inlineData.mediaId)
+        if (hasPendingMedia) void save()
+        else scheduleSave()
+      }
     }
   }
 
@@ -752,15 +875,17 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     scheduleSave()
   }
 
-  // stop 中止当前生成
+  // stop 中止当前生成与关联的输入 token 统计
   function stop(): void {
     controller?.abort()
+    tokenController?.abort()
+    tokenController = undefined
   }
 
   // rerun 从某一轮重新生成：模型轮次替换自身，用户轮次替换其后的回复
   function rerun(index: number): void {
     if (session.running) return
-    session.turns.splice(session.turns[index]!.role === 'model' ? index : index + 1)
+    revokeTurnURLs(session.turns.splice(session.turns[index]!.role === 'model' ? index : index + 1))
     void run()
   }
 
@@ -820,7 +945,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
 
   // deleteTurn 删除一轮并重新统计 token，其后的交互不再用于续接
   function deleteTurn(index: number): void {
-    session.turns.splice(index, 1)
+    const [removed] = session.turns.splice(index, 1)
+    if (removed) revokeTurnURLs([removed])
     forgetInteractions(index)
     scheduleSave()
     scheduleTokens()
@@ -852,6 +978,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
               (result) => result.count,
               () => null,
             )
+    await persistLocalMedia(prompt.data.turns)
     await api.savePrompt<PromptData>(id, { ...prompt, ...(tokens !== null && { tokens }) })
     return id
   }
@@ -872,12 +999,19 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     if (item.search) enable('google_search')
     if (item.codeExecution) enable('code_execution')
     session.draft = item.prompt
+    for (const part of session.attachments) revokeAttachmentURL(part)
     session.attachments = []
     try {
       for (const url of item.images ?? []) {
         const response = await fetch(url)
         if (!response.ok) throw new Error(`${response.status} ${url}`)
-        session.attachments.push({ inlineData: await readImage(await response.blob()) })
+        const blob = await response.blob()
+        const mimeType = blob.type || 'image/png'
+        session.attachments.push(
+          session.temporary
+            ? localAttachment(blob, mimeType)
+            : await uploadAttachment(blob, mimeType),
+        )
         void countAttachment(session.attachments.at(-1)!)
       }
     } catch (error) {
@@ -896,6 +1030,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   // dispose 中止生成与保存并停止监听
   function dispose(): void {
     discard()
+    revokeTurnURLs(session.turns)
+    for (const part of session.attachments) revokeAttachmentURL(part)
     scope.stop()
   }
 
@@ -950,6 +1086,7 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     applyStarter,
     rename,
     save,
+    cancelSave,
     scheduleSave,
     clearSave,
     pending,
@@ -1020,7 +1157,7 @@ async function deletePrompt(): Promise<void> {
   const id = main.session.id
   leaveCompare()
   main.newChat()
-  if (id !== null) await api.deletePrompt(id)
+  if (id !== null && (await main.cancelSave(id))) await api.deletePrompt(id)
 }
 
 // page 为对话实例加上页面级操作
@@ -1121,11 +1258,13 @@ function closePane(index: number): void {
   if (index === 0) {
     main.stop()
     right.stop()
+    revokeTurnURLs(main.session.turns)
     Object.assign(main.session, {
       settings: right.session.settings,
       turns: right.session.turns,
       promptTokens: right.session.promptTokens,
     })
+    right.session.turns = []
   }
   leaveCompare()
   if (main.session.id !== null) void main.save()
