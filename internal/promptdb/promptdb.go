@@ -2,7 +2,6 @@
 package promptdb
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -31,7 +30,7 @@ CREATE TABLE IF NOT EXISTS prompts (
  created INTEGER NOT NULL, updated INTEGER NOT NULL, data BLOB NOT NULL, turns INTEGER, tokens INTEGER);
 CREATE INDEX IF NOT EXISTS prompts_list ON prompts(updated, id, title, model, description, created, turns, tokens);
 CREATE TABLE IF NOT EXISTS media (
- id TEXT PRIMARY KEY, mime TEXT NOT NULL, created INTEGER NOT NULL);
+ id TEXT PRIMARY KEY, mime TEXT NOT NULL, created INTEGER NOT NULL, pending INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS prompt_media (
  prompt_id TEXT NOT NULL, media_id TEXT NOT NULL, PRIMARY KEY (prompt_id, media_id));
 CREATE INDEX IF NOT EXISTS prompt_media_id ON prompt_media(media_id);
@@ -47,11 +46,15 @@ var mediaIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // orphanMediaGrace 是未关联对话的临时媒体在 Reclaim 回收前的保留时长
 const orphanMediaGrace = 24 * time.Hour
 
+// orphanReclaimInterval 是运行期间触发未关联媒体回收的最小间隔
+const orphanReclaimInterval = time.Hour
+
 // Store 读写对话库与附件媒体目录
 type Store struct {
-	db       *sql.DB
-	mediaDir string
-	mediaMu  sync.Mutex
+	db          *sql.DB
+	mediaDir    string
+	mediaMu     sync.Mutex
+	lastReclaim time.Time
 }
 
 // Open 打开或创建对话库
@@ -64,7 +67,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化对话库: %w", err)
 	}
-	return &Store{db: db, mediaDir: filepath.Join(dir, "prompt-media")}, nil
+	return &Store{db: db, mediaDir: filepath.Join(dir, "prompt-media"), lastReclaim: time.Now()}, nil
 }
 
 // Close 关闭对话库
@@ -72,9 +75,20 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Reclaim 回收过期无引用的附件媒体并把空闲页交还文件系统
+// Reclaim 回收过期无引用与磁盘遗留的附件媒体，并把空闲页交还文件系统
 func (s *Store) Reclaim(ctx context.Context) error {
-	cutoff := time.Now().Add(-orphanMediaGrace).UnixMilli()
+	s.mediaMu.Lock()
+	s.reclaimOrphanMediaLocked(ctx)
+	s.mediaMu.Unlock()
+	return sqlitedb.Reclaim(ctx, s.db)
+}
+
+// reclaimOrphanMediaLocked 在持有 mediaMu 时回收过期无引用的媒体记录，以及磁盘上不在媒体表内或已过期的临时文件
+func (s *Store) reclaimOrphanMediaLocked(ctx context.Context) {
+	now := time.Now()
+	s.lastReclaim = now
+	cutoffTime := now.Add(-orphanMediaGrace)
+	cutoff := cutoffTime.UnixMilli()
 	rows, err := s.db.QueryContext(ctx, `SELECT m.id FROM media m
 LEFT JOIN prompt_media pm ON pm.media_id = m.id
 WHERE pm.media_id IS NULL AND m.created < ?`, cutoff)
@@ -89,10 +103,46 @@ WHERE pm.media_id IS NULL AND m.created < ?`, cutoff)
 		rowsErr := rows.Err()
 		_ = rows.Close()
 		if rowsErr == nil {
-			s.deleteUnreferencedMedia(ctx, orphans)
+			s.deleteUnreferencedMediaLocked(ctx, orphans, cutoff)
 		}
 	}
-	return sqlitedb.Reclaim(ctx, s.db)
+	entries, err := os.ReadDir(s.mediaDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	live := make(map[string]struct{})
+	liveRows, err := s.db.QueryContext(ctx, `SELECT id FROM media`)
+	if err != nil {
+		return
+	}
+	for liveRows.Next() {
+		var id string
+		if scanErr := liveRows.Scan(&id); scanErr == nil {
+			live[id] = struct{}{}
+		}
+	}
+	liveErr := liveRows.Err()
+	_ = liveRows.Close()
+	if liveErr != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if mediaIDPattern.MatchString(name) {
+			if _, ok := live[name]; !ok {
+				_ = os.Remove(filepath.Join(s.mediaDir, name))
+			}
+			continue
+		}
+		if strings.HasPrefix(name, ".tmp-") {
+			if info, statErr := entry.Info(); statErr == nil && info.ModTime().Before(cutoffTime) {
+				_ = os.Remove(filepath.Join(s.mediaDir, name))
+			}
+		}
+	}
 }
 
 // SaveMedia 流式写入附件媒体文件并返回按 SHA-256 计算的媒体 ID
@@ -136,12 +186,18 @@ func (s *Store) SaveMedia(ctx context.Context, mimeType string, content io.Reade
 	} else if err != nil {
 		return "", err
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO media (id, mime, created) VALUES (?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET mime = excluded.mime, created = excluded.created`, id, mimeType, time.Now().UnixMilli()); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO media (id, mime, created, pending) VALUES (?, ?, ?, 1)
+ON CONFLICT(id) DO UPDATE SET
+ mime = CASE WHEN media.mime = '' OR media.mime = 'application/octet-stream' THEN excluded.mime ELSE media.mime END,
+ created = excluded.created,
+ pending = media.pending + 1`, id, mimeType, time.Now().UnixMilli()); err != nil {
 		if moved {
 			_ = os.Remove(finalPath)
 		}
 		return "", err
+	}
+	if time.Since(s.lastReclaim) >= orphanReclaimInterval {
+		s.reclaimOrphanMediaLocked(ctx)
 	}
 	return id, nil
 }
@@ -227,7 +283,10 @@ func (s *Store) Prompt(ctx context.Context, id string) (api.Prompt, error) {
 
 // SavePrompt 创建或覆盖一份对话，保留首次创建时间并同步对话的媒体引用
 func (s *Store) SavePrompt(ctx context.Context, prompt api.Prompt) (api.PromptSummary, error) {
-	mediaIDs := promptMediaRefs(prompt.Data)
+	mediaIDs, err := promptMediaRefs(prompt.Data)
+	if err != nil {
+		return api.PromptSummary{}, err
+	}
 	s.mediaMu.Lock()
 	defer s.mediaMu.Unlock()
 	previous, err := s.promptMediaIDs(ctx, prompt.ID)
@@ -238,6 +297,15 @@ func (s *Store) SavePrompt(ctx context.Context, prompt api.Prompt) (api.PromptSu
 	if err != nil {
 		return api.PromptSummary{}, err
 	}
+	defer func() { _ = tx.Rollback() }()
+	for _, id := range mediaIDs {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM media WHERE id = ?`, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+			return api.PromptSummary{}, fmt.Errorf("%w: media %s", api.ErrPromptNotFound, id)
+		} else if err != nil {
+			return api.PromptSummary{}, err
+		}
+	}
 	now := time.Now().UnixMilli()
 	summary, err := scanSummary(tx.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data, turns, tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET title = excluded.title, model = excluded.model, description = excluded.description, updated = excluded.updated, data = excluded.data,
@@ -245,31 +313,42 @@ ON CONFLICT(id) DO UPDATE SET title = excluded.title, model = excluded.model, de
 RETURNING `+summaryColumns,
 		prompt.ID, prompt.Title, prompt.Model, prompt.Description, now, now, []byte(prompt.Data), prompt.Turns, prompt.Tokens))
 	if err != nil {
-		_ = tx.Rollback()
 		return api.PromptSummary{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM prompt_media WHERE prompt_id = ?`, prompt.ID); err != nil {
-		_ = tx.Rollback()
-		return api.PromptSummary{}, err
+	prevSet := make(map[string]struct{}, len(previous))
+	for _, id := range previous {
+		prevSet[id] = struct{}{}
 	}
 	next := make(map[string]struct{}, len(mediaIDs))
 	for _, id := range mediaIDs {
 		next[id] = struct{}{}
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO prompt_media (prompt_id, media_id) VALUES (?, ?)`, prompt.ID, id); err != nil {
-			_ = tx.Rollback()
+		if _, had := prevSet[id]; had {
+			continue
+		}
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO prompt_media (prompt_id, media_id) VALUES (?, ?)`, prompt.ID, id)
+		if err != nil {
+			return api.PromptSummary{}, err
+		}
+		if rows, err := res.RowsAffected(); err == nil && rows > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE media SET pending = MAX(0, pending - 1) WHERE id = ?`, id); err != nil {
+				return api.PromptSummary{}, err
+			}
+		}
+	}
+	var removed []string
+	for _, id := range previous {
+		if _, kept := next[id]; kept {
+			continue
+		}
+		removed = append(removed, id)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM prompt_media WHERE prompt_id = ? AND media_id = ?`, prompt.ID, id); err != nil {
 			return api.PromptSummary{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return api.PromptSummary{}, err
 	}
-	var removed []string
-	for _, id := range previous {
-		if _, kept := next[id]; !kept {
-			removed = append(removed, id)
-		}
-	}
-	s.deleteUnreferencedMediaLocked(ctx, removed)
+	s.deleteUnreferencedMediaLocked(ctx, removed, time.Now().Add(-orphanMediaGrace).UnixMilli())
 	return summary, nil
 }
 
@@ -287,17 +366,16 @@ func (s *Store) CopyPrompt(ctx context.Context, source, id, title string) (api.P
 	if err != nil {
 		return api.PromptSummary{}, err
 	}
+	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UnixMilli()
 	summary, err := scanSummary(tx.QueryRowContext(ctx, `INSERT INTO prompts (id, title, model, description, created, updated, data, turns, tokens)
 SELECT ?, ?, model, description, ?, ?, data, turns, tokens FROM prompts WHERE id = ? RETURNING `+summaryColumns,
 		id, title, now, now, source))
 	if err != nil {
-		_ = tx.Rollback()
 		return api.PromptSummary{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO prompt_media (prompt_id, media_id)
 SELECT ?, media_id FROM prompt_media WHERE prompt_id = ?`, id, source); err != nil {
-		_ = tx.Rollback()
 		return api.PromptSummary{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -326,26 +404,23 @@ func (s *Store) deletePromptLocked(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `DELETE FROM prompts WHERE id = ?`, id)
 	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	if count, err := result.RowsAffected(); err != nil {
-		_ = tx.Rollback()
 		return err
 	} else if count == 0 {
-		_ = tx.Rollback()
 		return api.ErrPromptNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM prompt_media WHERE prompt_id = ?`, id); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	s.deleteUnreferencedMediaLocked(ctx, previous)
+	s.deleteUnreferencedMediaLocked(ctx, previous, time.Now().Add(-orphanMediaGrace).UnixMilli())
 	return nil
 }
 
@@ -380,10 +455,10 @@ func (s *Store) DeleteSystemInstruction(ctx context.Context, id string) error {
 	return err
 }
 
-// promptMediaRefs 提取对话轮次与对比窗格中引用的媒体 ID
-func promptMediaRefs(data []byte) []string {
-	if !bytes.Contains(data, []byte(`"mediaId"`)) {
-		return nil
+// promptMediaRefs 提取对话轮次与对比窗格中引用的媒体 ID，JSON 无效时返回错误以免误删旧引用
+func promptMediaRefs(data []byte) ([]string, error) {
+	if len(data) == 0 {
+		return nil, nil
 	}
 	type turnList struct {
 		Turns []struct {
@@ -398,8 +473,8 @@ func promptMediaRefs(data []byte) []string {
 		turnList
 		Compare *turnList `json:"compare"`
 	}
-	if json.Unmarshal(data, &parsed) != nil {
-		return nil
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("解析对话媒体引用: %w", err)
 	}
 	seen := make(map[string]struct{})
 	var ids []string
@@ -425,7 +500,7 @@ func promptMediaRefs(data []byte) []string {
 	}
 	collect(&parsed.turnList)
 	collect(parsed.Compare)
-	return ids
+	return ids, nil
 }
 
 // promptMediaIDs 返回对话当前关联的全部媒体 ID
@@ -446,20 +521,12 @@ func (s *Store) promptMediaIDs(ctx context.Context, promptID string) ([]string, 
 	return ids, rows.Err()
 }
 
-// deleteUnreferencedMedia 删除不再被任何对话引用的媒体记录与磁盘文件
-func (s *Store) deleteUnreferencedMedia(ctx context.Context, candidates []string) {
-	if len(candidates) == 0 {
-		return
-	}
-	s.mediaMu.Lock()
-	defer s.mediaMu.Unlock()
-	s.deleteUnreferencedMediaLocked(ctx, candidates)
-}
-
-// deleteUnreferencedMediaLocked 在持有 mediaMu 时删除无引用的媒体记录与磁盘文件
-func (s *Store) deleteUnreferencedMediaLocked(ctx context.Context, candidates []string) {
+// deleteUnreferencedMediaLocked 在持有 mediaMu 时删除无引用且已无待保存上传（或超过宽限期）的媒体记录与磁盘文件
+func (s *Store) deleteUnreferencedMediaLocked(ctx context.Context, candidates []string, cutoff int64) {
 	for _, id := range candidates {
-		res, err := s.db.ExecContext(ctx, `DELETE FROM media WHERE id = ? AND NOT EXISTS (SELECT 1 FROM prompt_media WHERE media_id = ?)`, id, id)
+		res, err := s.db.ExecContext(ctx, `DELETE FROM media WHERE id = ?
+AND NOT EXISTS (SELECT 1 FROM prompt_media WHERE media_id = ?)
+AND (pending <= 0 OR created < ?)`, id, id, cutoff)
 		if err != nil {
 			continue
 		}

@@ -116,8 +116,13 @@ const {
   transcribe,
 } = useAudioRecording(async (audio) => {
   window.clearInterval(timer)
-  if (recordingMode.value === 'attach') attach(await readFile(audio, audio.type.split(';')[0]))
-  else {
+  if (recordingMode.value === 'attach') {
+    try {
+      attach(await readFile(audio, audio.type.split(';')[0]))
+    } catch (error) {
+      showNotice(failureText(error, t('pg.uploadFailed'), t('pg.uploadFailed')), 'error')
+    }
+  } else {
     const text = await transcribe(audio)
     if (text !== '') session.draft = session.draft === '' ? text : `${session.draft} ${text}`
   }
@@ -361,6 +366,7 @@ async function inlineAttachment(index: number): Promise<void> {
   const text = await attachmentText(part)
   const at = session.attachments.indexOf(part)
   if (at === -1) return
+  revokeAttachmentURL(part)
   session.attachments.splice(at, 1)
   session.draft = [session.draft, text].filter(Boolean).join('\n\n')
 }
@@ -430,7 +436,11 @@ async function startRecording(mode: 'attach' | 'transcribe'): Promise<void> {
 
 // addPhoto 把相机拍下的照片加入附件
 async function addPhoto(photo: Blob): Promise<void> {
-  attach(await readFile(photo))
+  try {
+    attach(await readFile(photo))
+  } catch (error) {
+    showNotice(failureText(error, t('pg.uploadFailed'), t('pg.uploadFailed')), 'error')
+  }
 }
 
 // addYouTube 把 YouTube 链接作为视频附件

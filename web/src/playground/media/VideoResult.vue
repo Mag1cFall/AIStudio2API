@@ -19,39 +19,30 @@ const portrait = ref(props.aspectRatio === '9:16')
 // source 是播放的视频地址
 const source = computed(() => props.src ?? downloaded.value)
 
-let downloadController: AbortController | undefined
-let downloadSequence = 0
-let unmounted = false
-
 watch(
   () => props.path,
-  async (path) => {
-    downloadController?.abort()
-    downloadController = undefined
-    const sequence = ++downloadSequence
+  async (path, _previous, onCleanup) => {
     if (downloaded.value) URL.revokeObjectURL(downloaded.value)
     downloaded.value = ''
     error.value = ''
     if (!path) return
     const controller = new AbortController()
-    downloadController = controller
+    onCleanup(() => controller.abort())
     try {
       const url = URL.createObjectURL(await downloadMedia(path, controller.signal))
-      if (unmounted || sequence !== downloadSequence) {
+      if (controller.signal.aborted) {
         URL.revokeObjectURL(url)
         return
       }
       downloaded.value = url
     } catch (reason) {
-      if (unmounted || sequence !== downloadSequence || controller.signal.aborted) return
+      if (controller.signal.aborted) return
       error.value = failureText(reason, t('pg.videoDownloadUnreachable'))
     }
   },
   { immediate: true },
 )
 onUnmounted(() => {
-  unmounted = true
-  downloadController?.abort()
   if (downloaded.value) URL.revokeObjectURL(downloaded.value)
 })
 
