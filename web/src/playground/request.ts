@@ -1,6 +1,6 @@
 import { useConsole } from '@/console'
 import type { Model } from '@/types'
-import { blobToBase64, hasCachedAttachmentBlob, loadAttachmentBlob } from './attachment'
+import { blobToBase64, hasCachedAttachmentBlob, loadAttachmentBlob } from './media-store'
 import { Capability, hasCode, isAgent, isOmniModel, toolCodes, type Tool } from './catalog'
 import type { Protocol } from './protocols'
 import type { AgentEnvironment, Part, RunSettings, Source, Support, Turn } from './types'
@@ -87,7 +87,7 @@ function needsInlineHydration(part: Part): boolean {
 // hydratePart 按需为附件片段临时补齐 Base64 正文
 export async function hydratePart(part: Part, signal: AbortSignal | null = null): Promise<Part> {
   if (!needsInlineHydration(part)) return part
-  const data = await blobToBase64(await loadAttachmentBlob(part, signal))
+  const data = await blobToBase64(await loadAttachmentBlob(part, signal), signal)
   return { ...part, inlineData: { ...part.inlineData!, data } }
 }
 

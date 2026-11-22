@@ -225,8 +225,12 @@ func (s *server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 // handleUploadPromptMedia 流式保存对话附件媒体并返回按内容计算的媒体 ID
 func (s *server) handleUploadPromptMedia(w http.ResponseWriter, r *http.Request) {
 	mimeType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	if parsed, _, err := mime.ParseMediaType(mimeType); err == nil && parsed != "" {
-		mimeType = parsed
+	if parsed, params, err := mime.ParseMediaType(mimeType); err == nil && parsed != "" {
+		if formatted := mime.FormatMediaType(parsed, params); formatted != "" {
+			mimeType = formatted
+		} else {
+			mimeType = parsed
+		}
 	} else {
 		mimeType = "application/octet-stream"
 	}
@@ -259,12 +263,11 @@ func (s *server) handlePromptMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-	if mimeType == "application/pdf" {
+	if mimeType == "application/pdf" || strings.HasPrefix(mimeType, "application/pdf;") {
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
 	} else {
 		w.Header().Set("Content-Security-Policy", "sandbox; frame-ancestors 'self'")
 	}
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	if info.Size() == 0 {
 		w.Header().Set("Content-Length", "0")
 		w.WriteHeader(http.StatusOK)
