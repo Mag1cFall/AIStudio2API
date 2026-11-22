@@ -227,12 +227,27 @@ func newRPCRequest(method string, accountID string, requestID string, body []byt
 	}
 }
 
+// ResponseReadError 表示收到上游非 200 响应头后读取错误响应体失败
+type ResponseReadError struct {
+	Err error
+}
+
+// Error 返回错误文本
+func (e *ResponseReadError) Error() string {
+	return e.Err.Error()
+}
+
+// Unwrap 返回底层读取错误
+func (e *ResponseReadError) Unwrap() error {
+	return e.Err
+}
+
 func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, error) {
 	if response.StatusCode != http.StatusOK {
 		defer response.Body.Close()
 		raw, readErr := io.ReadAll(response.Body)
 		if readErr != nil {
-			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
+			return nil, &ResponseReadError{Err: fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)}
 		}
 		rpcError := DecodeRPCError(method, response.StatusCode, raw)
 		if rpcError.RetryDelay <= 0 {

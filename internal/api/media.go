@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -729,20 +730,69 @@ func wavPCM(media aistudio.Blob) (aistudio.Blob, error) {
 	return aistudio.Blob{MIME: fmt.Sprintf("audio/l16;rate=%d;channels=%d", rate, channels), Data: pcm}, nil
 }
 
-// decodeBase64Flexible 根据字母表和填充形式解码 Base64 与 Data URL
-func decodeBase64Flexible(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	if idx := strings.Index(s, ","); idx != -1 && strings.HasPrefix(s, "data:") {
-		s = s[idx+1:]
+// jsonSlice 在局部解码时零拷贝引用父 JSON 字节片段，避免大附件被重复拷贝
+type jsonSlice []byte
+
+// UnmarshalJSON 直接记录输入切片，不分配新缓冲
+func (slice *jsonSlice) UnmarshalJSON(data []byte) error {
+	*slice = data
+	return nil
+}
+
+// hasValue 返回字段是否包含非空且非 null 的 JSON 值
+func (slice jsonSlice) hasValue() bool {
+	trimmed := bytes.TrimSpace(slice)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
+// hasString 返回字段是否包含非空 JSON 字符串；非字符串值返回 true 交由后续解码报类型错误
+func (slice jsonSlice) hasString() bool {
+	trimmed := bytes.TrimSpace(slice)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte(`""`))
+}
+
+// stringBytes 返回 JSON 字符串的内容字节，不含反斜杠转义时零拷贝切片返回，null 返回 nil
+func (slice jsonSlice) stringBytes() ([]byte, error) {
+	trimmed := bytes.TrimSpace(slice)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' && bytes.IndexByte(trimmed[1:len(trimmed)-1], '\\') < 0 {
+		return trimmed[1 : len(trimmed)-1], nil
+	}
+	var value string
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return nil, err
+	}
+	return []byte(value), nil
+}
+
+// decodeBase64Bytes 根据字母表和填充形式直接从字节切片解码 Base64 与 Data URL，不产生字符串副本
+func decodeBase64Bytes(raw []byte) ([]byte, error) {
+	raw = bytes.TrimSpace(raw)
+	if bytes.HasPrefix(raw, []byte("data:")) {
+		if idx := bytes.IndexByte(raw, ','); idx != -1 {
+			raw = raw[idx+1:]
+		}
 	}
 	encoding := base64.StdEncoding
-	if index := strings.IndexAny(s, "+/-_"); index >= 0 && (s[index] == '-' || s[index] == '_') {
+	if index := bytes.IndexAny(raw, "+/-_"); index >= 0 && (raw[index] == '-' || raw[index] == '_') {
 		encoding = base64.URLEncoding
 	}
-	if !strings.HasSuffix(s, "=") {
+	if !bytes.HasSuffix(raw, []byte("=")) {
 		encoding = encoding.WithPadding(base64.NoPadding)
 	}
-	return encoding.DecodeString(s)
+	dst := make([]byte, encoding.DecodedLen(len(raw)))
+	n, err := encoding.Decode(dst, raw)
+	if err != nil {
+		return nil, err
+	}
+	return dst[:n], nil
+}
+
+// decodeBase64Flexible 根据字母表和填充形式解码 Base64 与 Data URL
+func decodeBase64Flexible(s string) ([]byte, error) {
+	return decodeBase64Bytes([]byte(s))
 }
 
 // normalizeImagePayload 将 GIF 首帧按逻辑画布转换为 PNG 图片
@@ -770,13 +820,16 @@ func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	return mimeType, data
 }
 
-// decodeGIFFrame 解码 GIF 的首帧与逻辑画布配置
+// maxGIFCanvasPixels 是 GIF 首帧转换允许的最大逻辑画布像素数
+const maxGIFCanvasPixels = 64_000_000
+
+// decodeGIFFrame 解码 GIF 的首帧与逻辑画布配置，画布宽或高为 0 或像素数超过 maxGIFCanvasPixels 时返回 false
 func decodeGIFFrame(data []byte) (*image.Paletted, image.Config, bool) {
-	img, err := gif.Decode(bytes.NewReader(data))
-	if err != nil {
+	config, err := gif.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 || int64(config.Width) > maxGIFCanvasPixels/int64(config.Height) {
 		return nil, image.Config{}, false
 	}
-	config, err := gif.DecodeConfig(bytes.NewReader(data))
+	img, err := gif.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, image.Config{}, false
 	}

@@ -168,7 +168,7 @@ func newAuthRuntimeRefresher(
 
 // importCurrentChromeState 从原来源中更新同一 Google 账户的认证材料
 func importCurrentChromeState(ctx context.Context, source aistudio.AuthSource, material aistudio.ChromeOAuthMaterial, proxy string) (aistudio.StorageState, error) {
-	root, err := chromeauth.DefaultChromeRoot()
+	root, err := chromeauth.ChromeRoot(source.Root)
 	if err != nil {
 		return aistudio.StorageState{}, err
 	}
@@ -460,8 +460,54 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+	account := lease.Account()
+	return refresher.ensureBoundWith(
+		ctx,
+		account.ID,
+		account.EffectiveProxy(refresher.globalProxy),
+		lease.ReloadStorageState,
+		lease.MergeSetCookieHeaders,
+	)
+}
+
+// ensureBoundAccount 为指定账户刷新即将到期的 DBSC 会话并写回磁盘与当前 Worker，ctx 带有同账户租约时直接经租约读写
+func (refresher *authRuntimeRefresher) ensureBoundAccount(ctx context.Context, accountID string) error {
+	if lease, ok := aistudio.AccountLeaseFromContext(ctx); ok && lease.Account().ID == accountID {
+		return refresher.ensureBound(ctx)
+	}
+	if refresher.pool == nil {
+		return nil
+	}
+	account, err := refresher.pool.Account(accountID)
+	if err != nil {
+		return err
+	}
+	return refresher.ensureBoundWith(
+		ctx,
+		account.ID,
+		account.EffectiveProxy(refresher.globalProxy),
+		func() (aistudio.StorageState, error) {
+			return refresher.pool.ReloadStorageState(account.ID)
+		},
+		func(headers []string, requestURL string, now time.Time) error {
+			return refresher.pool.MergeSetCookieHeaders(account.ID, headers, requestURL, now)
+		},
+	)
+}
+
+// ensureBoundWith 按账户级互斥锁在 DBSC 绑定 Cookie 剩余不足 boundRefreshThreshold 时刷新并写回账户与当前 Worker
+func (refresher *authRuntimeRefresher) ensureBoundWith(
+	ctx context.Context,
+	accountID string,
+	proxy string,
+	reload func() (aistudio.StorageState, error),
+	merge func([]string, string, time.Time) error,
+) error {
+	if refresher.rotate == nil {
+		return nil
+	}
 	due := func() (aistudio.StorageState, aistudio.AuthExtension, bool, error) {
-		state, err := lease.ReloadStorageState()
+		state, err := reload()
 		if err != nil {
 			return state, aistudio.AuthExtension{}, false, err
 		}
@@ -474,8 +520,7 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if _, _, refresh, err := due(); err != nil || !refresh {
 		return err
 	}
-	account := lease.Account()
-	value, _ := refresher.boundLocks.LoadOrStore(account.ID, &sync.Mutex{})
+	value, _ := refresher.boundLocks.LoadOrStore(accountID, &sync.Mutex{})
 	mu := value.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
@@ -483,17 +528,20 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if err != nil || !refresh {
 		return err
 	}
-	headers, err := refresher.rotate(ctx, state, extension, account.EffectiveProxy(refresher.globalProxy))
+	headers, err := refresher.rotate(ctx, state, extension, proxy)
 	if errors.Is(err, chromeauth.ErrBoundSessionRejected) {
 		return errors.Join(camoufoxnative.ErrAuthenticationRequired, err)
 	}
 	if err != nil {
-		return fmt.Errorf("刷新账户 %s DBSC 会话: %w", account.ID, err)
+		return fmt.Errorf("刷新账户 %s DBSC 会话: %w", accountID, err)
 	}
-	if err := lease.MergeSetCookieHeaders(headers, extension.Bound.RefreshURL, time.Now()); err != nil {
-		return fmt.Errorf("保存账户 %s DBSC 会话 Cookie: %w", account.ID, err)
+	if err := merge(headers, extension.Bound.RefreshURL, time.Now()); err != nil {
+		return fmt.Errorf("保存账户 %s DBSC 会话 Cookie: %w", accountID, err)
 	}
-	return refresher.mergeWorker(ctx, account.ID, headers, extension.Bound.RefreshURL)
+	if refresher.mergeWorker == nil {
+		return nil
+	}
+	return refresher.mergeWorker(ctx, accountID, headers, extension.Bound.RefreshURL)
 }
 
 // Available 返回当前租约账户是否保存了 Chrome OAuth 续签材料
@@ -521,7 +569,7 @@ func authenticationFailed(response *aistudio.RPCResponse) bool {
 func readAuthenticationFailure(method string, response *aistudio.RPCResponse) (*aistudio.RPCError, error) {
 	body, readErr := io.ReadAll(response.Body)
 	if err := errors.Join(readErr, response.Body.Close()); err != nil {
-		return nil, fmt.Errorf("读取认证失败响应: %w", err)
+		return nil, &aistudio.ResponseReadError{Err: fmt.Errorf("读取认证失败响应: %w", err)}
 	}
 	return aistudio.DecodeRPCError(method, response.StatusCode, body), nil
 }

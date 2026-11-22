@@ -28,7 +28,6 @@ function closeSettings(): void {
       <header class="ms-header">
         <div class="page-title" :class="{ 'title-enter': fadeTitle }">
           <h1 class="mode-title">{{ title || t('nav.playground') }}</h1>
-          <slot name="title" />
         </div>
         <div class="toolbar-right">
           <slot name="actions" />

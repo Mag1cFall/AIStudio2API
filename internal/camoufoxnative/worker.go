@@ -70,6 +70,8 @@ type Worker struct {
 	// chatOpening 表示正在后台新开界面对话标签页，chatOpenErr 是最近一次新开失败的原因
 	chatOpening bool
 	chatOpenErr error
+	// reloads 是重新载入切换标签页的次数，用于丢弃切换前开始新开的标签页
+	reloads uint64
 	// selected 是浏览器窗口中选中的标签页
 	selected string
 	// inputMu 串行化页面输入与标签页切换，同一时刻只有一个标签页接收指针与输入
@@ -495,6 +497,14 @@ func (worker *Worker) Reload(ctx context.Context) error {
 		contextID = opened
 	}
 	loaded, err := worker.openPage(ctx, options, contextID)
+	if err == nil && !busy {
+		worker.mu.Lock()
+		selected := worker.selected
+		worker.mu.Unlock()
+		if selected != "" && selected != contextID {
+			err = worker.selectTab(ctx, contextID)
+		}
+	}
 	if err == nil && options.Headless && !options.liveView {
 		err = worker.stopRendering(ctx)
 	}
@@ -507,25 +517,44 @@ func (worker *Worker) Reload(ctx context.Context) error {
 	return worker.switchTab(contextID, loaded)
 }
 
-// switchTab 切换到已载入页面的标签页；页面在原标签页中重新载入时不关闭标签页，否则原标签页没有进行中的受保护请求时立即关闭，有时在其中最后一个请求结束后关闭
+// switchTab 切换到已载入页面的标签页，关闭空闲的额外标签页并退役在用标签页，在用标签页在其中最后一个请求结束后关闭
 func (worker *Worker) switchTab(contextID string, loaded loadedPage) error {
 	worker.mu.Lock()
 	previous := worker.contextID
+	var extra []*chatTab
+	if len(worker.chats) > 1 {
+		extra = worker.chats[1:]
+	}
+	worker.reloads++
 	worker.contextID, worker.page, worker.state, worker.pageCatalog = contextID, loaded.page, loaded.state, loaded.catalog
-	worker.chats[0], worker.selected = &chatTab{contextID: contextID, page: loaded.page}, contextID
-	if previous == contextID {
-		worker.mu.Unlock()
-		return nil
+	worker.chats = []*chatTab{{contextID: contextID, page: loaded.page}}
+	if previous != contextID || worker.selected == "" {
+		worker.selected = contextID
 	}
-	use := worker.tabs[previous]
-	if use != nil {
-		use.retired = true
+	var closing []string
+	retire := func(id string) {
+		if use := worker.tabs[id]; use != nil {
+			use.retired = true
+			return
+		}
+		if worker.selected == id {
+			worker.selected = ""
+		}
+		closing = append(closing, id)
 	}
+	if previous != contextID {
+		retire(previous)
+	}
+	for _, tab := range extra {
+		retire(tab.contextID)
+	}
+	worker.notifyChats()
 	worker.mu.Unlock()
-	if use == nil {
-		return worker.closeTab(previous)
+	var err error
+	for _, id := range closing {
+		err = errors.Join(err, worker.closeTab(id))
 	}
-	return nil
+	return err
 }
 
 // beginRequest 记下当前标签页中开始的一个受保护请求，返回该标签页与其中的 WAA 页面对象
@@ -554,6 +583,9 @@ func (worker *Worker) finishRequest(contextID string) {
 		delete(worker.tabs, contextID)
 	}
 	closing := idle && use.retired && !worker.closed
+	if closing && worker.selected == contextID {
+		worker.selected = ""
+	}
 	worker.mu.Unlock()
 	if closing {
 		if err := worker.closeTab(contextID); err != nil {
@@ -698,9 +730,16 @@ func (worker *Worker) shutdown() error {
 	client := worker.client
 	connection := worker.connection
 	process := worker.process
-	contexts := make([]string, 0, len(worker.chats))
+	contexts := make([]string, 0, len(worker.chats)+len(worker.tabs))
+	seen := make(map[string]struct{}, len(worker.chats)+len(worker.tabs))
 	for _, tab := range worker.chats {
 		contexts = append(contexts, tab.contextID)
+		seen[tab.contextID] = struct{}{}
+	}
+	for contextID := range worker.tabs {
+		if _, ok := seen[contextID]; !ok {
+			contexts = append(contexts, contextID)
+		}
 	}
 	worker.mu.Unlock()
 	if worker.idle != nil {

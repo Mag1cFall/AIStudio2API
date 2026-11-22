@@ -243,6 +243,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	requestID := newID("chatcmpl")
 	s.resolveChatAudio(request.Messages)
 	generateRequest, err := request.toGenerateRequest(requestID)
+	request.Messages = nil
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -355,6 +356,7 @@ func (request *chatRequest) mergeLegacyFunctions() error {
 func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateRequest, error) {
 	var system []string
 	contents := make([]aistudio.Content, 0, len(request.Messages))
+	var reminders []aistudio.Part
 	for _, message := range request.Messages {
 		if message.Role == "system" || message.Role == "developer" {
 			text, err := openAITextContent(message.Content)
@@ -365,7 +367,11 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 				text = message.Name + ": " + text
 			}
 			if text != "" {
-				system = append(system, text)
+				if len(contents) == 0 {
+					system = append(system, text)
+				} else {
+					reminders = addSystemReminder(contents, reminders, text)
+				}
 			}
 			continue
 		}
@@ -376,7 +382,10 @@ func (request chatRequest) toGenerateRequest(id string) (aistudio.GenerateReques
 		if len(content.Parts) == 0 {
 			continue
 		}
-		contents = append(contents, content)
+		contents, reminders = appendWithReminders(contents, content, reminders)
+	}
+	if len(reminders) > 0 {
+		contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: reminders})
 	}
 	tools, err := mapOpenAITools(request.Tools, request.ToolChoice)
 	if err != nil {
@@ -553,8 +562,9 @@ func openAIContentParts(raw json.RawMessage) ([]aistudio.Part, error) {
 		return nil, err
 	}
 	parts := make([]aistudio.Part, 0, len(blocks))
-	for _, block := range blocks {
-		part, err := openAIContentPart(block)
+	for index := range blocks {
+		part, err := openAIContentPart(blocks[index])
+		blocks[index] = openAIBlock{}
 		if err != nil {
 			return nil, err
 		}
@@ -571,139 +581,173 @@ var openAIDetailResolutions = map[string]string{"low": "MEDIA_RESOLUTION_LOW", "
 
 // openAIBlock 是 Chat 与 Responses 的内容块，image_url 与 video_url 为字符串或带 url 的对象
 type openAIBlock struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Refusal  string `json:"refusal"`
-	Detail   string `json:"detail"`
-	ImageURL any    `json:"image_url"`
-	VideoURL any    `json:"video_url"`
-	FileID   string `json:"file_id"`
-	Filename string `json:"filename"`
-	FileData string `json:"file_data"`
-	FileURL  string `json:"file_url"`
+	Type     string    `json:"type"`
+	Text     string    `json:"text"`
+	Refusal  string    `json:"refusal"`
+	Detail   string    `json:"detail"`
+	ImageURL jsonSlice `json:"image_url"`
+	VideoURL jsonSlice `json:"video_url"`
+	FileID   string    `json:"file_id"`
+	Filename string    `json:"filename"`
+	FileData jsonSlice `json:"file_data"`
+	FileURL  string    `json:"file_url"`
 	File     *struct {
-		FileID   string `json:"file_id"`
-		Filename string `json:"filename"`
-		FileData string `json:"file_data"`
+		FileID   string    `json:"file_id"`
+		Filename string    `json:"filename"`
+		FileData jsonSlice `json:"file_data"`
 	} `json:"file"`
 	InputAudio *struct {
-		Data   string `json:"data"`
-		Format string `json:"format"`
+		Data   jsonSlice `json:"data"`
+		Format string    `json:"format"`
 	} `json:"input_audio"`
 }
 
 // openAIContentPart 映射内容块，并把图片与文件的 detail 写为媒体分辨率
 func openAIContentPart(block openAIBlock) (aistudio.Part, error) {
-	part, err := openAIContentBlock(block)
+	part, detail, err := openAIContentBlock(block)
 	if err != nil {
 		return part, err
 	}
-	if image, ok := block.ImageURL.(map[string]any); ok && block.Detail == "" {
-		block.Detail, _ = image["detail"].(string)
+	if block.Detail == "" {
+		block.Detail = detail
 	}
 	part.MediaResolution = openAIDetailResolutions[block.Detail]
 	return part, nil
 }
 
-// openAIContentBlock 把 Chat 与 Responses 内容块映射为 Part
-func openAIContentBlock(block openAIBlock) (aistudio.Part, error) {
+// openAIContentBlock 把 Chat 与 Responses 内容块映射为 Part，并在 image_url 对象含 detail 时返回它
+func openAIContentBlock(block openAIBlock) (aistudio.Part, string, error) {
 	switch block.Type {
 	case "text", "input_text", "output_text":
-		return aistudio.Part{Text: block.Text}, nil
+		return aistudio.Part{Text: block.Text}, "", nil
 	case "refusal":
-		return aistudio.Part{Text: block.Refusal}, nil
+		return aistudio.Part{Text: block.Refusal}, "", nil
 	case "image_url", "input_image", "video_url", "input_video":
 		field, rawURL := "image_url", block.ImageURL
 		if block.Type == "video_url" || block.Type == "input_video" {
 			field, rawURL = "video_url", block.VideoURL
 		}
-		if rawURL == nil && block.FileID != "" {
-			return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID}}, nil
+		if !rawURL.hasValue() && block.FileID != "" {
+			return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID}}, "", nil
 		}
-		url, err := mediaURLString(rawURL, field)
+		rawValue, detail, err := mediaURLBytes(rawURL, field)
 		if err != nil {
-			return aistudio.Part{}, err
+			return aistudio.Part{}, "", err
 		}
-		return fileOrInlinePart(url, "")
+		if field != "image_url" {
+			detail = ""
+		}
+		part, err := fileOrInlineBytes(rawValue, "")
+		return part, detail, err
 	case "file", "input_file":
 		if block.File != nil {
 			block.FileID, block.Filename, block.FileData = block.File.FileID, block.File.Filename, block.File.FileData
 		}
-		if block.FileData != "" {
-			return fileDataPart(block.FileData, block.Filename)
+		if block.FileData.hasString() {
+			raw, err := block.FileData.stringBytes()
+			if err != nil {
+				return aistudio.Part{}, "", fmt.Errorf("file_data: %w", err)
+			}
+			part, err := fileDataBytes(raw, block.Filename)
+			return part, "", err
 		}
 		if block.FileID == "" {
 			block.FileID = block.FileURL
 		}
-		return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID, Name: block.Filename}}, nil
+		return aistudio.Part{File: &aistudio.FileRef{ID: block.FileID, Name: block.Filename}}, "", nil
 	case "input_audio":
 		if block.InputAudio == nil {
-			return aistudio.Part{}, fmt.Errorf("input_audio is required")
+			return aistudio.Part{}, "", fmt.Errorf("input_audio is required")
 		}
-		data, err := decodeBase64Flexible(block.InputAudio.Data)
+		raw, err := block.InputAudio.Data.stringBytes()
 		if err != nil {
-			return aistudio.Part{}, fmt.Errorf("input_audio.data: %w", err)
+			return aistudio.Part{}, "", fmt.Errorf("input_audio.data: %w", err)
 		}
-		return aistudio.Part{InlineData: aistudio.NewBlob(audioMIME(block.InputAudio.Format), data)}, nil
+		data, err := decodeBase64Bytes(raw)
+		if err != nil {
+			return aistudio.Part{}, "", fmt.Errorf("input_audio.data: %w", err)
+		}
+		return aistudio.Part{InlineData: aistudio.NewBlob(audioMIME(block.InputAudio.Format), data)}, "", nil
 	default:
-		return aistudio.Part{}, fmt.Errorf("unsupported content type %q", block.Type)
+		return aistudio.Part{}, "", fmt.Errorf("unsupported content type %q", block.Type)
 	}
 }
 
-// mediaURLString 读取 image_url 或 video_url 的字符串值或 url 字段
-func mediaURLString(value any, field string) (string, error) {
-	switch value := value.(type) {
-	case string:
-		return value, nil
-	case map[string]any:
-		if url, _ := value["url"].(string); url != "" {
-			return url, nil
+// mediaURLBytes 零拷贝读取 image_url 或 video_url 的字符串值或 url 字段，并在对象含 detail 时一并返回
+func mediaURLBytes(raw jsonSlice, field string) ([]byte, string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, "", fmt.Errorf("%s must contain url", field)
+	}
+	if trimmed[0] == '"' {
+		value, err := jsonSlice(trimmed).stringBytes()
+		if err != nil || len(value) == 0 {
+			return nil, "", fmt.Errorf("%s must contain url", field)
+		}
+		return value, "", nil
+	}
+	if trimmed[0] == '{' {
+		var object struct {
+			URL    jsonSlice `json:"url"`
+			Detail string    `json:"detail"`
+		}
+		if json.Unmarshal(trimmed, &object) == nil {
+			if value, err := object.URL.stringBytes(); err == nil && len(value) > 0 {
+				return value, object.Detail, nil
+			}
 		}
 	}
-	return "", fmt.Errorf("%s must contain url", field)
+	return nil, "", fmt.Errorf("%s must contain url", field)
 }
 
-func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
-	if media, ok := aistudio.ExternalMediaForURL(value); ok {
-		return aistudio.Part{ExternalMedia: media, DisplayName: name}, nil
-	}
-	if !strings.HasPrefix(value, "data:") {
+// fileOrInlineBytes 零拷贝解析 data URL、外部媒体链接或普通文件引用，避免为大 Base64 分配字符串副本
+func fileOrInlineBytes(raw []byte, name string) (aistudio.Part, error) {
+	if !bytes.HasPrefix(raw, []byte("data:")) {
+		value := string(raw)
+		if media, ok := aistudio.ExternalMediaForURL(value); ok {
+			return aistudio.Part{ExternalMedia: media, DisplayName: name}, nil
+		}
 		return aistudio.Part{File: &aistudio.FileRef{ID: value, Name: name}}, nil
 	}
-	metadata, encoded, ok := strings.Cut(strings.TrimPrefix(value, "data:"), ",")
+	metadata, encoded, ok := bytes.Cut(raw[len("data:"):], []byte(","))
 	if !ok {
 		return aistudio.Part{}, fmt.Errorf("data URL must contain a comma")
 	}
 	var data []byte
-	if mediaType, isBase64 := strings.CutSuffix(metadata, ";base64"); isBase64 {
-		decoded, err := decodeBase64Flexible(encoded)
+	if mediaType, isBase64 := bytes.CutSuffix(metadata, []byte(";base64")); isBase64 {
+		decoded, err := decodeBase64Bytes(encoded)
 		if err != nil {
 			return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
 		}
 		metadata, data = mediaType, decoded
 	} else {
-		decoded, err := url.PathUnescape(encoded)
+		decoded, err := url.PathUnescape(string(encoded))
 		if err != nil {
 			return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
 		}
 		data = []byte(decoded)
 	}
-	mediaType, _, _ := mime.ParseMediaType(metadata)
+	mediaType, _, _ := mime.ParseMediaType(string(metadata))
 	mimeType, data := normalizeImagePayload(attachmentMIME(mediaType, name, data), data)
 	return aistudio.Part{InlineData: aistudio.NewBlob(mimeType, data), DisplayName: name}, nil
 }
 
-// fileDataPart 解析 data URL 或 base64 文件内容
-func fileDataPart(value string, name string) (aistudio.Part, error) {
-	if strings.HasPrefix(value, "data:") {
-		return fileOrInlinePart(value, name)
+// fileDataBytes 零拷贝解析 data URL 或 base64 文件内容
+func fileDataBytes(raw []byte, name string) (aistudio.Part, error) {
+	if bytes.HasPrefix(raw, []byte("data:")) {
+		return fileOrInlineBytes(raw, name)
 	}
-	data, err := decodeBase64Flexible(value)
+	data, err := decodeBase64Bytes(raw)
 	if err != nil {
 		return aistudio.Part{}, fmt.Errorf("file_data: %w", err)
 	}
 	mimeType, data := normalizeImagePayload(detectMediaType(name, data), data)
 	return aistudio.Part{InlineData: aistudio.NewBlob(mimeType, data), DisplayName: name}, nil
+}
+
+// fileOrInlinePart 解析字符串形式的 data URL、外部媒体链接或普通文件引用
+func fileOrInlinePart(value string, name string) (aistudio.Part, error) {
+	return fileOrInlineBytes([]byte(value), name)
 }
 
 // detectMediaType 按内容前缀判断不带参数的 MIME，无法识别时依次按 FLAC 头、MPEG 音频帧头与扩展名判断
@@ -871,16 +915,42 @@ func restrictAllowedTools(tools aistudio.Tools, allowed []toolReference) aistudi
 		tools.GoogleSearch = nil
 	}
 	servers := allowedMCPServers(allowed)
-	tools.MCPServers = slices.DeleteFunc(tools.MCPServers, func(server aistudio.MCPServer) bool {
-		_, ok := servers[server.Name]
-		return !ok
-	})
-	for index, server := range tools.MCPServers {
-		if names := servers[server.Name]; names != nil {
-			tools.MCPServers[index].AllowedTools = names
+	kept := make([]aistudio.MCPServer, 0, len(tools.MCPServers))
+	for _, server := range tools.MCPServers {
+		if server, ok := restrictMCPServer(server, servers); ok {
+			kept = append(kept, server)
 		}
 	}
+	tools.MCPServers = kept
 	return tools
+}
+
+// restrictMCPServer 按 tool_choice 限定的 MCP 服务器与工具名裁剪 server，与 server.AllowedTools 取交集；服务器不被允许或交集为空时返回 false
+func restrictMCPServer(server aistudio.MCPServer, restricted map[string][]string) (aistudio.MCPServer, bool) {
+	names, ok := restricted[server.Name]
+	if !ok {
+		return server, false
+	}
+	if names != nil {
+		if server.AllowedTools == nil {
+			server.AllowedTools = names
+		} else {
+			var common []string
+			for _, name := range server.AllowedTools {
+				if slices.Contains(names, name) {
+					common = appendUnique(common, name)
+				}
+			}
+			if len(common) == 0 {
+				return server, false
+			}
+			server.AllowedTools = common
+		}
+	}
+	if server.AllowedTools != nil && len(server.AllowedTools) == 0 {
+		return server, false
+	}
+	return server, true
 }
 
 // allowedMCPServers 返回引用中限定的 MCP 服务器标签与工具名，工具名为 nil 表示该服务器的全部工具

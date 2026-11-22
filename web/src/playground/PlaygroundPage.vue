@@ -140,7 +140,7 @@ function newChat(): void {
       </div>
       <div v-else class="chat-area">
         <div
-          v-if="session.loading"
+          v-if="session.loading || store.loading.models"
           class="chat-loading"
           role="status"
           :aria-label="t('common.loading')"

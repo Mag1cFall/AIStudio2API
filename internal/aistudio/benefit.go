@@ -68,6 +68,11 @@ func (c *Client) setBenefitTier(accountID string, tier BenefitTier) {
 	c.tierMu.Unlock()
 }
 
+// DecodeBenefitTier 解码 GetAiStudioBenefitTier 响应正文为账户权益等级
+func DecodeBenefitTier(raw []byte) (BenefitTier, error) {
+	return decodeBenefitTier(raw)
+}
+
 func decodeBenefitTier(raw []byte) (BenefitTier, error) {
 	value, err := decodeJSONValue(raw)
 	if err != nil {

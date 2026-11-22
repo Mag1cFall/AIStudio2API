@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -49,11 +51,15 @@ type responsesRequest struct {
 	} `json:"context_management"`
 	// split 是 prepareResponses 对 Input 的切分结果
 	split splitInput
+	// effectiveTools 是合并输入项配置后的工具列表，生成后不再需要保留原始 Input
+	effectiveTools []responsesTool
+	// hasHistory 表示该请求经 previous_response_id 续接已有对话轮次，输入中的 system 与 developer 消息按对话中途提醒处理
+	hasHistory bool
 }
 
 // inputItems 返回 Input 的切分结果，prepareResponses 已切分同一输入时直接沿用
 func (request responsesRequest) inputItems() splitInput {
-	if bytes.Equal(request.split.raw, request.Input) {
+	if request.split.array && request.Input == nil || bytes.Equal(request.split.raw, request.Input) {
 		return request.split
 	}
 	return splitResponsesInput(request.Input)
@@ -102,7 +108,16 @@ type responsesTool struct {
 	AllowedTools      json.RawMessage   `json:"allowed_tools,omitempty"`
 	RequireApproval   json.RawMessage   `json:"require_approval,omitempty"`
 	ServerDescription string            `json:"server_description,omitempty"`
+	// Execution 是 tool_search 工具的执行方，client 时由客户端检索并在 tool_search_output 中给出找到的工具
+	Execution string `json:"execution,omitempty"`
 }
+
+// clientToolSearch 是客户端执行的 tool_search 在上游声明的函数名、默认说明与默认参数
+const (
+	clientToolSearch            = "tool_search"
+	clientToolSearchDescription = "Search for deferred tools by query and load the matching tools."
+	clientToolSearchParameters  = `{"type":"object","properties":{"query":{"type":"string","description":"Search query for deferred tools."},"limit":{"type":"number","description":"Maximum number of tools to return."}},"required":["query"],"additionalProperties":false}`
+)
 
 // imageGenerationTool 返回请求声明的 image_generation 工具
 func imageGenerationTool(tools []responsesTool) *responsesTool {
@@ -117,7 +132,7 @@ type responsesInputItem struct {
 	Type             string          `json:"type"`
 	ID               string          `json:"id"`
 	Role             string          `json:"role"`
-	Content          json.RawMessage `json:"content"`
+	Content          jsonSlice       `json:"content"`
 	CallID           string          `json:"call_id"`
 	Name             string          `json:"name"`
 	Namespace        string          `json:"namespace"`
@@ -158,7 +173,12 @@ type storedItem struct {
 	Raw json.RawMessage
 }
 
-const responseStateCapacity = 256
+const (
+	responseStateCapacity = 256
+	// responseStateCacheItemLimit 与 responseStateCacheBytes 限制 persist 启用时内存中保留的已落盘节点正文体积，超过时仅留索引、按需从持久层读取
+	responseStateCacheItemLimit = 256 << 10
+	responseStateCacheBytes     = 8 << 20
+)
 
 // responseHistory 是续接起点的响应 ID 及其按顺序展开的完整上下文
 type responseHistory struct {
@@ -178,7 +198,7 @@ type responseHistory struct {
 type StateStore interface {
 	Index() []StateNode
 	Read(id string) ([]byte, bool)
-	Save(saved []SavedState, removed []string)
+	Save(saved []SavedState, removed []string) error
 }
 
 // StateNode 是已保存续接节点的 ID 与续接起点
@@ -201,7 +221,15 @@ type responseStateStore struct {
 	// parents 是全部节点的续接起点，正文还在 persist 中的节点也在其中
 	parents map[string]string
 	order   []string
-	persist StateStore
+	// streams 独立保留后台流式响应与交互的事件记录，节点正文落盘释放后仍可续传
+	streams map[string]*streamLog
+	// sizes 与 cachedBytes 记录 persist 启用时留在 states 中的已落盘节点估算字节数
+	sizes       map[string]int
+	cachedBytes int
+	// versions 标记每个节点的内存版本，落盘提交后只处理版本未变的节点
+	versions    map[string]uint64
+	nextVersion uint64
+	persist     StateStore
 	// committed 在最近一次排队的写入提交完成时关闭，写入按排队顺序提交
 	committed chan struct{}
 }
@@ -211,8 +239,13 @@ func newResponseStateStore(persist StateStore) *responseStateStore {
 	committed := make(chan struct{})
 	close(committed)
 	store := &responseStateStore{
-		states: make(map[string]responseState, responseStateCapacity), parents: make(map[string]string, responseStateCapacity),
-		persist: persist, committed: committed,
+		states:   make(map[string]responseState, responseStateCapacity),
+		parents:  make(map[string]string, responseStateCapacity),
+		streams:  make(map[string]*streamLog),
+		sizes:    make(map[string]int, responseStateCapacity),
+		versions: make(map[string]uint64, responseStateCapacity),
+		persist:  persist,
+		committed: committed,
 	}
 	if persist == nil {
 		return store
@@ -224,7 +257,59 @@ func newResponseStateStore(persist StateStore) *responseStateStore {
 	return store
 }
 
-// stateLocked 返回节点，正文还在 persist 中时读出并留在内存
+// recordStreamLocked 把后台流式事件记录独立保存在内存索引中，避免正文释放后丢失流状态
+func (store *responseStateStore) recordStreamLocked(id string, state responseState) {
+	switch {
+	case state.Record != nil && state.Record.Stream != nil:
+		store.streams[id] = state.Record.Stream
+	case state.Interaction != nil && state.Interaction.stream != nil:
+		store.streams[id] = state.Interaction.stream
+	}
+}
+
+// attachStreamLocked 为从持久层读出的节点回填仍在内存中的后台事件记录
+func (store *responseStateStore) attachStreamLocked(id string, state *responseState) {
+	stream := store.streams[id]
+	if stream == nil {
+		return
+	}
+	if state.Record != nil && state.Record.Stream == nil {
+		state.Record.Stream = stream
+	}
+	if state.Interaction != nil && state.Interaction.stream == nil {
+		state.Interaction.stream = stream
+	}
+}
+
+// cacheLocked 在预算内把已落盘节点正文保留在 states 中，超出总预算时按写入顺序释放最旧的已落盘正文
+func (store *responseStateStore) cacheLocked(id string, state responseState, size int) {
+	if old, exists := store.sizes[id]; exists {
+		store.cachedBytes -= old
+		delete(store.sizes, id)
+	}
+	if size > responseStateCacheItemLimit {
+		delete(store.states, id)
+		return
+	}
+	store.states[id] = state
+	store.sizes[id] = size
+	store.cachedBytes += size
+	for _, candidate := range store.order {
+		if store.cachedBytes <= responseStateCacheBytes {
+			break
+		}
+		if candidate == id {
+			continue
+		}
+		if old, exists := store.sizes[candidate]; exists {
+			delete(store.states, candidate)
+			delete(store.sizes, candidate)
+			store.cachedBytes -= old
+		}
+	}
+}
+
+// stateLocked 返回节点，正文还在 persist 中时读出并在预算内保留于内存
 func (store *responseStateStore) stateLocked(id string) (responseState, bool) {
 	if state, exists := store.states[id]; exists {
 		return state, true
@@ -237,33 +322,63 @@ func (store *responseStateStore) stateLocked(id string) (responseState, bool) {
 	if !ok || json.Unmarshal(data, &state) != nil {
 		return responseState{}, false
 	}
-	store.states[id] = state
+	store.attachStreamLocked(id, &state)
+	if len(data) <= responseStateCacheItemLimit {
+		store.cacheLocked(id, state, len(data))
+	}
 	return state, true
 }
 
 // putLocked 保存节点并记录它的续接起点
 func (store *responseStateStore) putLocked(id string, state responseState) {
+	store.nextVersion++
+	store.versions[id] = store.nextVersion
+	if old, exists := store.sizes[id]; exists {
+		store.cachedBytes -= old
+		delete(store.sizes, id)
+	}
 	store.states[id] = state
 	store.parents[id] = state.ParentID
+	store.recordStreamLocked(id, state)
 }
 
-// persistLocked 编码仍存在且已结束的节点并排队删除已移除的节点，返回按排队顺序提交这次写入的函数，调用方释放 mu 后调用；进行中的后台响应与交互在服务重启后不能继续，只保存终态
+// persistLocked 编码仍存在且已结束的节点并排队删除已移除的节点，返回按排队顺序提交这次写入的函数，调用方释放 mu 后调用；进行中的后台响应与交互在服务重启后不能继续，只保存终态，落盘后超出内存预算的大节点从 states 释放
 func (store *responseStateStore) persistLocked(saved, removed []string) func() {
 	if store.persist == nil {
 		return func() {}
 	}
+	type savedVersion struct {
+		id      string
+		version uint64
+		size    int
+	}
 	states := make([]SavedState, 0, len(saved))
+	tracked := make([]savedVersion, 0, len(saved))
 	for _, id := range saved {
 		if state, exists := store.states[id]; exists && state.finished() {
 			data, _ := json.Marshal(state)
 			states = append(states, SavedState{ID: id, ParentID: state.ParentID, Data: data})
+			tracked = append(tracked, savedVersion{id: id, version: store.versions[id], size: len(data)})
 		}
 	}
 	previous, done := store.committed, make(chan struct{})
 	store.committed = done
 	return func() {
 		<-previous
-		store.persist.Save(states, removed)
+		if err := store.persist.Save(states, removed); err == nil && len(tracked) > 0 {
+			store.mu.Lock()
+			for _, item := range tracked {
+				if store.versions[item.id] != item.version {
+					continue
+				}
+				state, exists := store.states[item.id]
+				if !exists {
+					continue
+				}
+				store.cacheLocked(item.id, state, item.size)
+			}
+			store.mu.Unlock()
+		}
 		close(done)
 	}
 }
@@ -288,23 +403,24 @@ func (store *responseStateStore) Load(id string) (responseHistory, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	history := responseHistory{ID: id, Contents: make([]aistudio.Content, 0), InlineInstructions: make([]string, 0)}
-	if state, exists := store.stateLocked(id); exists {
-		history.Interaction = state.Interaction != nil
-		if state.Interaction != nil {
-			history.Upstream, history.AccountID, history.Agent = state.Interaction.upstream, state.Interaction.account, state.Interaction.agent
-		}
-		if state.Record != nil {
-			history.Model = state.Record.Model
-		}
-	}
 	chain := make([]responseState, 0)
-	for id != "" {
-		state, exists := store.stateLocked(id)
+	for cursor := id; cursor != ""; {
+		state, exists := store.stateLocked(cursor)
 		if !exists {
 			return responseHistory{}, false
 		}
 		chain = append(chain, state)
-		id = state.ParentID
+		cursor = state.ParentID
+	}
+	if len(chain) > 0 {
+		head := chain[0]
+		history.Interaction = head.Interaction != nil
+		if head.Interaction != nil {
+			history.Upstream, history.AccountID, history.Agent = head.Interaction.upstream, head.Interaction.account, head.Interaction.agent
+		}
+		if head.Record != nil {
+			history.Model = head.Record.Model
+		}
 	}
 	for index := len(chain) - 1; index >= 0; index-- {
 		history.Contents = append(history.Contents, cloneResponseContents(chain[index].Contents)...)
@@ -371,6 +487,12 @@ func (store *responseStateStore) removeLocked(id string) []string {
 	}
 	delete(store.states, id)
 	delete(store.parents, id)
+	delete(store.streams, id)
+	delete(store.versions, id)
+	if old, exists := store.sizes[id]; exists {
+		store.cachedBytes -= old
+		delete(store.sizes, id)
+	}
 	return children
 }
 
@@ -509,15 +631,40 @@ type splitInput struct {
 	heads []responsesItemHead
 }
 
-// splitResponsesInput 把 Responses 输入切分为各输入项原文与类型、角色和 ID
+// splitResponsesInput 零拷贝按字节偏移把 Responses 输入数组切分为各输入项原文与类型、角色和 ID
 func splitResponsesInput(raw json.RawMessage) splitInput {
 	input := splitInput{raw: raw}
-	if json.Unmarshal(raw, &input.items) != nil {
-		input.items = nil
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return input
+	}
+	decoder := jsontext.NewDecoder(bytes.NewBuffer(raw))
+	token, err := decoder.ReadToken()
+	if err != nil || token.Kind() != '[' {
+		return input
+	}
+	var items []json.RawMessage
+	for decoder.PeekKind() != ']' {
+		start := decoder.InputOffset()
+		if err := decoder.SkipValue(); err != nil {
+			return input
+		}
+		end := decoder.InputOffset()
+		elem := bytes.TrimSpace(raw[start:end])
+		if len(elem) > 0 && elem[0] == ',' {
+			elem = bytes.TrimSpace(elem[1:])
+		}
+		items = append(items, json.RawMessage(elem))
+	}
+	if _, err := decoder.ReadToken(); err != nil {
+		return input
+	}
+	if _, err := decoder.ReadToken(); err != io.EOF {
 		return input
 	}
 	input.array = true
-	input.heads = responsesItemHeads(input.items)
+	input.items = items
+	input.heads = responsesItemHeads(items)
 	return input
 }
 
@@ -583,6 +730,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		defer stopKeepalive()
 	}
 	compaction, err := s.compactOverThreshold(r.Context(), &request, &prepared, responseID)
+	request.Input, request.split = nil, splitInput{}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIRequestError(w, err)
@@ -714,17 +862,42 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 			request.Tools[index].Strict = &strict
 		}
 	}
-	additionalTools, _ := responsesInputConfig(input)
-	tools := slices.Concat(request.Tools, additionalTools)
-	rewritten, approved, err := s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input.raw, execute)
-	if err != nil {
-		return responsesPreparation{}, err
+	tools, _ := responsesInputConfig(request.Tools, input)
+	rewritten := input.raw
+	var approved []map[string]any
+	if input.hasType("mcp_approval_response") {
+		rewritten, approved, err = s.applyMCPApprovals(ctx, request.PreviousResponseID, tools, input.raw, execute)
+		if err != nil {
+			return responsesPreparation{}, err
+		}
 	}
 	request.Input, request.split = rewritten, input
 	if !bytes.Equal(rewritten, input.raw) {
 		request.split = splitResponsesInput(rewritten)
+		tools, _ = responsesInputConfig(request.Tools, request.split)
+	}
+	if tools == nil {
+		tools = []responsesTool{}
+	}
+	request.effectiveTools = tools
+	var previous responseHistory
+	if request.PreviousResponseID != "" {
+		var ok bool
+		previous, ok = s.responseStates.Load(request.PreviousResponseID)
+		if !ok || previous.Interaction {
+			return responsesPreparation{}, fmt.Errorf("previous response %q was not found", request.PreviousResponseID)
+		}
+		request.hasHistory = len(previous.Contents) > 0
+	}
+	consumable := request.split.array && !request.storesResponse() && request.compactThreshold() <= 0 && !responsesCompactionTrigger(request.split)
+	if consumable {
+		request.Input = nil
+		request.split.raw = nil
 	}
 	generateRequest, inlineInstructions, err := request.toGenerateRequest(id)
+	if consumable {
+		request.split = splitInput{}
+	}
 	if err == nil {
 		generateRequest, err = s.resolveMCPTools(ctx, generateRequest)
 	}
@@ -755,10 +928,11 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 		}
 	}
 	prepared := responsesPreparation{
-		generate: generateRequest, contents: cloneResponseContents(generateRequest.Contents),
+		generate:           generateRequest,
 		inlineInstructions: append([]string(nil), inlineInstructions...), approved: approved,
 	}
 	if request.storesResponse() {
+		prepared.contents = cloneResponseContents(generateRequest.Contents)
 		prepared.input = responsesInputItems(input, id)
 	}
 	if tool := imageGenerationTool(request.Tools); tool != nil && tool.InputImageMask != nil {
@@ -771,10 +945,6 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	}
 	if request.PreviousResponseID == "" {
 		return prepared, nil
-	}
-	previous, ok := s.responseStates.Load(request.PreviousResponseID)
-	if !ok || previous.Interaction {
-		return responsesPreparation{}, fmt.Errorf("previous response %q was not found", request.PreviousResponseID)
 	}
 	prepared.previous = previous
 	prepared.generate.Contents = append(cloneResponseContents(previous.Contents), generateRequest.Contents...)
@@ -848,7 +1018,7 @@ func responsesInputItems(input splitInput, responseID string) []storedItem {
 			if json.Unmarshal(head.Content, &content) == nil {
 				part := map[string]any{"type": "input_text", "text": content}
 				if head.Role == "assistant" {
-					part = map[string]any{"type": "output_text", "text": content, "annotations": []any{}}
+					part = map[string]any{"type": "output_text", "text": content, "annotations": []any{}, "logprobs": []any{}}
 				}
 				item["content"], _ = json.Marshal([]any{part})
 			}
@@ -885,13 +1055,13 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 		return aistudio.GenerateRequest{}, nil, fmt.Errorf("unsupported truncation %q", request.Truncation)
 	}
 	input := request.inputItems()
-	contents, inlineInstructions, err := responsesContents(input)
+	contents, inlineInstructions, err := responsesContentsWithHistory(input, request.hasHistory)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
 	}
 	instructions := request.instructions(inlineInstructions)
-	additionalTools, configuredEffort := responsesInputConfig(input)
-	tools, err := mapResponsesTools(slices.Concat(request.Tools, additionalTools), request.ToolChoice)
+	declared, configuredEffort := responsesInputConfig(request.Tools, input)
+	tools, err := mapResponsesTools(declared, request.ToolChoice)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
 	}
@@ -984,10 +1154,15 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 }
 
 func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
-	if !rawJSONConfigured(input.raw) {
-		return nil, nil, nil
-	}
+	return responsesContentsWithHistory(input, false)
+}
+
+// responsesContentsWithHistory 转换 Responses 输入项为规范轮次与开头系统指令，hasHistory 为真或已有对话轮次之后的 system 与 developer 消息按出现位置进入当轮提醒
+func responsesContentsWithHistory(input splitInput, hasHistory bool) ([]aistudio.Content, []string, error) {
 	if !input.array {
+		if !rawJSONConfigured(input.raw) {
+			return nil, nil, nil
+		}
 		var text string
 		if err := json.Unmarshal(input.raw, &text); err != nil {
 			return nil, nil, fmt.Errorf("input must be a string or item array")
@@ -1006,6 +1181,7 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 	contents := make([]aistudio.Content, 0, len(items))
 	var instructions []string
 	var systemMedia []aistudio.Part
+	var reminders []aistudio.Part
 	pendingSignature := ""
 	for index, rawItem := range items {
 		var item responsesInputItem
@@ -1017,14 +1193,61 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 			continue
 		case "additional_tools", "configuration_update":
 			continue
+		case "tool_search_call", "tool_search_output":
+			var search struct {
+				CallID    string          `json:"call_id"`
+				Execution string          `json:"execution"`
+				Status    string          `json:"status"`
+				Arguments json.RawMessage `json:"arguments"`
+				Tools     []responsesTool `json:"tools"`
+			}
+			if err := json.Unmarshal(rawItem, &search); err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", kind, err)
+			}
+			if search.Execution != "client" {
+				pendingSignature = ""
+				content, err := responsesHostedItem(kind, rawItem)
+				if err != nil {
+					return nil, nil, fmt.Errorf("%s: %w", kind, err)
+				}
+				contents, reminders = appendWithReminders(contents, content, reminders)
+				continue
+			}
+			if kind == "tool_search_call" {
+				arguments := search.Arguments
+				var text string
+				if json.Unmarshal(arguments, &text) == nil {
+					arguments = json.RawMessage(text)
+				}
+				contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleAssistant, Parts: []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{
+					ID: search.CallID, Name: clientToolSearch, Arguments: functionCallArguments(string(arguments)), ThoughtSignature: pendingSignature,
+				}}}}, reminders)
+				pendingSignature = ""
+				continue
+			}
+			pendingSignature = ""
+			names := make([]string, 0, len(search.Tools))
+			for _, tool := range search.Tools {
+				if tool.Type != "namespace" {
+					names = append(names, tool.Name)
+				}
+				for _, member := range tool.Tools {
+					names = append(names, namespacedName(tool.Name, member.Name))
+				}
+			}
+			output, _ := json.Marshal(map[string]any{"status": cmp.Or(search.Status, "completed"), "tools": names})
+			contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: []aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
+				ID: search.CallID, Name: clientToolSearch, Content: output,
+			}}}}, reminders)
+			continue
 		case "web_search_call", "code_interpreter_call", "image_generation_call", "file_search_call",
-			"mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "tool_search_call", "tool_search_output", "program", "program_output":
+			"mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "program", "program_output":
 			pendingSignature = ""
 			content, err := responsesHostedItem(kind, rawItem)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", kind, err)
 			}
-			contents = append(contents, content)
+			contents, reminders = appendWithReminders(contents, content, reminders)
 			continue
 		default:
 			if err := json.Unmarshal(rawItem, &item); err != nil {
@@ -1037,19 +1260,30 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 		case "", "message":
 			pendingSignature = ""
 			if item.Role == "system" || item.Role == "developer" {
-				parts, err := openAIContentParts(item.Content)
+				parts, err := openAIContentParts(json.RawMessage(item.Content))
 				if err != nil {
 					return nil, nil, fmt.Errorf("%s message: %w", item.Role, err)
 				}
 				var text strings.Builder
+				var media []aistudio.Part
 				for _, part := range parts {
 					if part.Text == "" {
-						systemMedia = append(systemMedia, part)
+						media = append(media, part)
 					}
 					text.WriteString(part.Text)
 				}
-				if text.Len() > 0 {
-					instructions = append(instructions, text.String())
+				if !hasHistory && len(contents) == 0 {
+					systemMedia = append(systemMedia, media...)
+					if text.Len() > 0 {
+						instructions = append(instructions, text.String())
+					}
+				} else {
+					var mid []aistudio.Part
+					if text.Len() > 0 {
+						mid = append(mid, aistudio.Part{Text: "<system-reminder>\n" + text.String() + "\n</system-reminder>"})
+					}
+					mid = append(mid, media...)
+					reminders = addSystemReminderParts(contents, reminders, mid)
 				}
 				continue
 			}
@@ -1057,19 +1291,19 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			parts, err := openAIContentParts(item.Content)
+			parts, err := openAIContentParts(json.RawMessage(item.Content))
 			if err != nil {
 				return nil, nil, err
 			}
-			contents = append(contents, aistudio.Content{Role: role, Parts: parts})
+			contents, reminders = appendWithReminders(contents, aistudio.Content{Role: role, Parts: parts}, reminders)
 			continue
 		case "agent_message":
 			pendingSignature = ""
-			parts, err := agentMessageParts(item.Content)
+			parts, err := agentMessageParts(json.RawMessage(item.Content))
 			if err != nil {
 				return nil, nil, fmt.Errorf("agent_message: %w", err)
 			}
-			contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: parts})
+			contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: parts}, reminders)
 			continue
 		case "function_call":
 			call.Arguments = functionCallArguments(item.Arguments)
@@ -1092,9 +1326,9 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 			if err != nil {
 				return nil, nil, fmt.Errorf("computer_call_output: %w", err)
 			}
-			contents = append(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
+			contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
 				ID: item.CallID, Name: "computer", Content: json.RawMessage(`{"type":"computer_screenshot"}`),
-			}}}, screenshot...)})
+			}}}, screenshot...)}, reminders)
 			continue
 		case "function_call_output", "custom_tool_call_output", "local_shell_call_output", "shell_call_output", "apply_patch_call_output":
 			pendingSignature = ""
@@ -1108,18 +1342,26 @@ func responsesContents(input splitInput) ([]aistudio.Content, []string, error) {
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", item.Type, err)
 			}
-			contents = append(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
+			if item.Status == "incomplete" && item.Type != "apply_patch_call_output" {
+				output, _ = json.Marshal(map[string]any{"status": item.Status, "output": rawJSONValue(output, nil)})
+			}
+			contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: append([]aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
 				ID: item.CallID, Content: output,
-			}}}, media...)})
+			}}}, media...)}, reminders)
 			continue
 		case "reasoning":
-			pendingSignature = item.EncryptedContent
+			if item.EncryptedContent != "" {
+				pendingSignature = item.EncryptedContent
+			}
 			continue
 		default:
 			return nil, nil, fmt.Errorf("unsupported input item type %q", item.Type)
 		}
-		contents = append(contents, aistudio.Content{Role: aistudio.RoleAssistant, Parts: []aistudio.Part{{FunctionCall: &call}}})
+		contents, reminders = appendWithReminders(contents, aistudio.Content{Role: aistudio.RoleAssistant, Parts: []aistudio.Part{{FunctionCall: &call}}}, reminders)
 		pendingSignature = ""
+	}
+	if len(reminders) > 0 {
+		contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: reminders})
 	}
 	return prependSystemMedia(contents, systemMedia), instructions, nil
 }
@@ -1148,27 +1390,40 @@ func agentMessageParts(raw json.RawMessage) ([]aistudio.Part, error) {
 	return parts, nil
 }
 
-// responsesInputConfig 返回输入项中 additional_tools 提供的工具与最后一个 configuration_update 的推理强度
-func responsesInputConfig(input splitInput) ([]responsesTool, string) {
-	if !input.hasType("additional_tools", "configuration_update") {
-		return nil, ""
+// responsesInputConfig 返回 declared 加上输入项中 additional_tools 提供的工具与客户端 tool_search_output 找到的工具，以及最后一个 configuration_update 的推理强度
+func responsesInputConfig(declared []responsesTool, input splitInput) ([]responsesTool, string) {
+	tools := slices.Clone(declared)
+	if !input.hasType("additional_tools", "configuration_update", "tool_search_output") {
+		return tools, ""
 	}
-	var items []struct {
-		Type      string          `json:"type"`
-		Tools     []responsesTool `json:"tools"`
-		Reasoning *struct {
-			Effort string `json:"effort"`
-		} `json:"reasoning"`
-	}
-	if json.Unmarshal(input.raw, &items) != nil {
-		return nil, ""
-	}
-	var tools []responsesTool
 	effort := ""
-	for _, item := range items {
+	for index, head := range input.heads {
+		switch head.Type {
+		case "additional_tools", "configuration_update", "tool_search_output":
+		default:
+			continue
+		}
+		var item struct {
+			Type      string          `json:"type"`
+			Execution string          `json:"execution"`
+			Tools     []responsesTool `json:"tools"`
+			Reasoning *struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+		}
+		if json.Unmarshal(input.items[index], &item) != nil {
+			continue
+		}
 		switch item.Type {
 		case "additional_tools":
 			tools = append(tools, item.Tools...)
+		case "tool_search_output":
+			if item.Execution != "client" {
+				continue
+			}
+			for _, tool := range item.Tools {
+				tools = addFoundTool(tools, tool)
+			}
 		case "configuration_update":
 			if item.Reasoning != nil && item.Reasoning.Effort != "" {
 				effort = item.Reasoning.Effort
@@ -1176,6 +1431,26 @@ func responsesInputConfig(input splitInput) ([]responsesTool, string) {
 		}
 	}
 	return tools, effort
+}
+
+// addFoundTool 把 tool_search 找到的工具加入 tools：已有同类同名的工具时跳过，已有同名命名空间时加入其中没有的成员
+func addFoundTool(tools []responsesTool, tool responsesTool) []responsesTool {
+	index := slices.IndexFunc(tools, func(found responsesTool) bool { return found.Type == tool.Type && found.Name == tool.Name })
+	if index < 0 {
+		return append(tools, tool)
+	}
+	if tool.Type != "namespace" {
+		return tools
+	}
+	namespace := tools[index]
+	namespace.Tools = slices.Clone(namespace.Tools)
+	for _, member := range tool.Tools {
+		if !slices.ContainsFunc(namespace.Tools, func(found responsesTool) bool { return found.Name == member.Name }) {
+			namespace.Tools = append(namespace.Tools, member)
+		}
+	}
+	tools[index] = namespace
+	return tools
 }
 
 // responsesItemType 读取输入项的 type 字段
@@ -1342,6 +1617,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.strict(),
 		})
 	}
+	clientSearch := false
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function", "custom":
@@ -1399,10 +1675,22 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 			if err != nil {
 				return aistudio.Tools{}, err
 			}
-			if approval.never {
+			if approval.never && (server.AllowedTools == nil || len(server.AllowedTools) > 0) {
 				mapped.MCPServers = append(mapped.MCPServers, server)
 			}
-		case "image_generation", "file_search", "tool_search", "programmatic_tool_calling":
+		case "tool_search":
+			if tool.Execution != "client" {
+				continue
+			}
+			declaration := aistudio.FunctionDeclaration{Name: clientToolSearch, Description: cmp.Or(tool.Description, clientToolSearchDescription), Parameters: tool.Parameters}
+			if len(declaration.Parameters) == 0 {
+				declaration.Parameters = json.RawMessage(clientToolSearchParameters)
+			}
+			if err := addDeclaration(declaration); err != nil {
+				return aistudio.Tools{}, err
+			}
+			clientSearch = true
+		case "image_generation", "file_search", "programmatic_tool_calling":
 		default:
 			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
 		}
@@ -1410,6 +1698,18 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 	config, allowed, err := openAIToolChoice(choice)
 	if err != nil {
 		return aistudio.Tools{}, err
+	}
+	if clientSearch {
+		if allowed != nil {
+			for index, reference := range allowed {
+				if reference.Type == "tool_search" {
+					allowed[index] = toolReference{Type: "function", Name: clientToolSearch}
+					config.AllowedFunctionNames = appendUnique(config.AllowedFunctionNames, clientToolSearch)
+				}
+			}
+		} else if responsesItemType(choice) == "tool_search" {
+			config = aistudio.ToolConfig{Mode: "required", AllowedFunctionNames: []string{clientToolSearch}}
+		}
 	}
 	if allowed != nil {
 		mapped = restrictAllowedTools(mapped, allowed)
@@ -1541,6 +1841,9 @@ func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map
 	}
 	item := map[string]any{"id": "fc_" + call.ID, "status": "completed", "call_id": call.ID}
 	switch responsesToolKind(tools, call.Name) {
+	case "tool_search":
+		item["id"], item["type"], item["execution"], item["arguments"] = "tsc_"+call.ID, "tool_search_call", "client", rawJSONValue(call.Arguments, map[string]any{})
+		return item
 	case "local_shell":
 		item["type"], item["action"] = "local_shell_call", localShellAction(call.Arguments)
 		return item
@@ -1561,16 +1864,22 @@ func responseFunctionCall(call aistudio.FunctionCall, tools []responsesTool) map
 		item["type"], item["actions"], item["pending_safety_checks"] = "computer_call", arguments.Actions, []any{}
 		return item
 	case "custom":
-		item["type"], item["name"], item["input"] = "custom_tool_call", call.Name, customToolInput(call.Arguments)
+		item["id"], item["type"], item["name"], item["input"] = "ctc_"+call.ID, "custom_tool_call", call.Name, customToolInput(call.Arguments)
 	default:
 		item["type"], item["name"], item["arguments"] = "function_call", call.Name, string(call.Arguments)
 	}
 	if namespace := responsesNamespace(tools, call.Name); namespace != "" {
 		item["namespace"] = namespace
 		item["name"] = strings.TrimPrefix(call.Name, namespace+".")
+		if namespace == "collaboration" && item["type"] == "function_call" && slices.Contains(collaborationPlaintextCalls, item["name"].(string)) {
+			item["encrypted_function_args"] = []string{}
+		}
 	}
 	return item
 }
+
+// collaborationPlaintextCalls 是 Codex multi_agent_v2 collaboration 命名空间中以空 encrypted_function_args 标明参数为明文的函数
+var collaborationPlaintextCalls = []string{"spawn_agent", "send_message", "followup_task"}
 
 // namespacedName 返回命名空间中函数的声明名：默认命名空间 functions 中的函数与顶层函数相同，用原名，其余为 <命名空间>.<名>
 func namespacedName(namespace, name string) string {
@@ -1682,7 +1991,7 @@ func (o *responsesOutput) add(event aistudio.Event) ([]map[string]any, error) {
 		write(o.reasoning, o.reasoning["summary"].([]any)[0].(map[string]any), event.Text)
 	case aistudio.EventText:
 		if !isLast(o.message) {
-			o.message = map[string]any{"id": o.itemID("msg_"), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}}
+			o.message = map[string]any{"id": o.itemID("msg_"), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}, "logprobs": []any{}}}}
 			o.texts[o.message["id"].(string)] = &strings.Builder{}
 			o.starts[o.message["id"].(string)] = o.text
 			push(o.message)
@@ -1879,11 +2188,14 @@ func outputPrefix(compaction map[string]any, prepared responsesPreparation) []ma
 
 // newResponsesWriter 返回 Responses 输出写出器
 func newResponsesWriter(w http.ResponseWriter, id string, created int64, request responsesRequest) *responsesStreamWriter {
-	additional, _ := responsesInputConfig(request.inputItems())
+	tools := request.effectiveTools
+	if tools == nil {
+		tools, _ = responsesInputConfig(request.Tools, request.inputItems())
+	}
 	return &responsesStreamWriter{
 		w: w, id: id, created: created, request: request,
 		output: &responsesOutput{
-			id: id, request: request, tools: slices.Concat(request.Tools, additional), texts: make(map[string]*strings.Builder),
+			id: id, request: request, tools: tools, texts: make(map[string]*strings.Builder),
 			starts: make(map[string]int), queries: make(map[string]struct{}), pages: make(map[string]struct{}), mcpCalls: make(map[string]aistudio.ServerToolStep),
 		},
 	}
@@ -2062,7 +2374,7 @@ func (writer *responsesStreamWriter) added(item map[string]any) error {
 		writer.open = append(writer.open, item)
 		return writer.emit("response.content_part.added", map[string]any{
 			"item_id": item["id"], "output_index": index, "content_index": 0,
-			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}, "logprobs": []any{}},
 		})
 	case item["type"] == "reasoning":
 		pending := maps.Clone(item)
@@ -2326,8 +2638,11 @@ func responsesError(err error) map[string]any {
 	return map[string]any{"code": responsesErrorCode(err), "message": retryMessage(publicErrorMessage(statusFromError(err), publicReason(err)), retryAfterSeconds(err))}
 }
 
-// responsesErrorCode 返回 Responses 错误对象的官方枚举 code
+// responsesErrorCode 返回 Responses 错误对象的官方枚举 code，输入 token 超限时为 Codex 识别的 context_length_exceeded
 func responsesErrorCode(err error) string {
+	if contextOverflow(err) {
+		return "context_length_exceeded"
+	}
 	switch statusFromError(err) {
 	case http.StatusTooManyRequests:
 		return "rate_limit_exceeded"

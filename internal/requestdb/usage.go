@@ -367,46 +367,71 @@ type cost struct {
 	unpriced map[string]bool
 }
 
-// scanCost 在 SQL 中按分桶、模型与长上下文分档汇总 [from, to) 内符合筛选的原始记录 token，再按单价累加费用，starts 非空时同时累加到各分桶
+// scanCost 在 SQL 中按分桶、单价分段、模型与长上下文分档汇总 [from, to) 内符合筛选的原始记录 token，再按单价累加费用，starts 非空时同时累加到各分桶
 func (store *Store) scanCost(ctx context.Context, from, to int64, starts []int64, filters api.UsageFilters) (cost, error) {
 	clause, filterArgs := filterSQL(filters)
+	boundaries := pricing.Boundaries(time.UnixMilli(from), time.UnixMilli(to))
+	cuts := make([]int64, len(boundaries))
+	for index, at := range boundaries {
+		cuts[index] = at.UnixMilli()
+	}
 	var slots strings.Builder
 	var args []any
-	for index := range max(len(starts), 1) {
-		start, stop := from, to
-		if starts != nil {
-			start = max(starts[index], from)
-			if index+1 < len(starts) {
-				stop = starts[index+1]
-			}
-		}
-		if index > 0 {
+	addSlot := func(index int, start, stop int64) {
+		if len(args) > 0 {
 			slots.WriteByte(',')
 		}
 		slots.WriteString("(?,?,?)")
 		args = append(args, index, start, stop)
 	}
+	for index := range max(len(starts), 1) {
+		start, stop := from, to
+		if starts != nil {
+			start = max(starts[index], from)
+			if index+1 < len(starts) {
+				stop = min(starts[index+1], to)
+			}
+		}
+		if start >= stop {
+			continue
+		}
+		for _, cut := range cuts {
+			if cut <= start {
+				continue
+			}
+			if cut >= stop {
+				break
+			}
+			addSlot(index, start, cut)
+			start = cut
+		}
+		addSlot(index, start, stop)
+	}
+	result := cost{buckets: make([]float64, len(starts)), unpriced: map[string]bool{}}
+	if len(args) == 0 {
+		return result, nil
+	}
 	tier := "input_tokens > " + strconv.Itoa(pricing.LongContext)
 	rows, err := store.db.QueryContext(ctx, `WITH slots(slot, start, stop) AS (VALUES `+slots.String()+`)
- SELECT slot, model, `+tier+`, SUM(input_tokens), SUM(cached_tokens), SUM(reasoning_tokens + reply_tokens)
+ SELECT slot, start, model, `+tier+`, SUM(input_tokens), SUM(cached_tokens), SUM(reasoning_tokens + reply_tokens)
  FROM slots JOIN requests INDEXED BY requests_cost ON time >= start AND time < stop`+clause+`
- GROUP BY slot, model, `+tier, append(args, filterArgs...)...)
+ GROUP BY slot, start, model, `+tier, append(args, filterArgs...)...)
 	if err != nil {
 		return cost{}, err
 	}
-	result := cost{buckets: make([]float64, len(starts)), unpriced: map[string]bool{}}
 	var slot int
+	var start int64
 	var long bool
 	var input, cached, output int64
 	var model string
 	for rows.Next() {
-		if err := rows.Scan(&slot, &model, &long, &input, &cached, &output); err != nil {
+		if err := rows.Scan(&slot, &start, &model, &long, &input, &cached, &output); err != nil {
 			return cost{}, errors.Join(err, rows.Close())
 		}
 		if input+output > 0 && !pricing.Priced(model) {
 			result.unpriced[model] = true
 		}
-		value := pricing.TierCost(model, long, input, cached, output)
+		value := pricing.TierCost(model, time.UnixMilli(start), long, input, cached, output)
 		result.total += value
 		if starts != nil {
 			result.buckets[slot] += value

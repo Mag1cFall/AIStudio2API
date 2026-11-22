@@ -282,7 +282,7 @@ docker compose up -d
 
 设置的生效时机：
 
-- 保存后立即生效：账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索与媒体输出；进行中的请求沿用开始时的设置
+- 保存后立即生效：账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索、回复工具防截断、简体转繁体改写与媒体输出；进行中的请求沿用开始时的设置
 - 停止再启动生成服务后生效：其余生成服务配置，启动时读取最新 `.env`
 - 重启管理进程后生效：管理页面地址、预览地址和 `PROXY_API_KEY`
 
@@ -357,12 +357,13 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 4. API 密钥填写 `.env` 中的 `PROXY_API_KEY`
 5. 从 `/v1/models` 获取模型，或手动添加 `gemini-3.8-flash`、`gemini-3.5-flash-lite`
 
-[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
+[Claude Code](https://github.com/anthropics/claude-code) 使用 Anthropic 接口，子 Agent 按 fable、opus、sonnet、haiku 档位选择模型，以下变量把它们映射到 AI Studio 模型；WebSearch 由 Google Search 执行：
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
 $env:ANTHROPIC_API_KEY = "<PROXY_API_KEY>"
 $env:ANTHROPIC_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_FABLE_MODEL = "gemini-4-argon"
 $env:ANTHROPIC_DEFAULT_OPUS_MODEL = "gemini-3.1-pro-preview"
 $env:ANTHROPIC_DEFAULT_SONNET_MODEL = "gemini-3.8-flash"
 $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "gemini-3.5-flash-lite"
@@ -672,7 +673,7 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
-| `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |
+| `REQUEST_TIMEOUT` | `30m` | 上游连续没有数据的最长时间，从请求开始到首个数据同样计入；上游仍在输出的请求不受总时长限制 |
 | `WARM_WORKER_LIMIT` | `10`，Camoufox 后端 `5` | 常驻预热账户数 |
 | `MAX_ACTIVE_WORKERS` | `20`，Camoufox 后端 `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 按需扩容时同时冷启动的 Camoufox Worker 数，预热逐个启动；`WAA_BACKEND=spidermonkey` 时不限制 |
@@ -694,8 +695,12 @@ cp .env.example .env
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |
+| `REPLY_TOOL` | `false` | 仅限角色扮演场景：声明内部 `final` 工具让模型一次性交付完整正文以减轻流式截断，思考照常实时输出；保存后立即生效 |
+| `THINKING_GUARD` | `false` | 角色扮演场景思考防拦截：引导模型在内部思考中保持简洁抽象、不复述敏感词，并将思考强度上限收敛到低档，降低思考阶段触发上游过滤截断的概率；保存后立即生效 |
+| `USER_MESSAGE_REWRITE` | `off` | 发送前将用户消息中的中文改写为繁体中文或火星文（不改模型历史回答），并在系统指令中要求模型默认以简体中文回复；取值 `off`、`traditional` 或 `martian`，保存后立即生效 |
 | `FIRST_EVENT_HEDGE` | `off` | 原请求迟迟没有首字时用空闲账户发起一个备用请求，取值 `off`、`auto` 或等待秒数 |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | 发起备用请求的模型 ID，逗号分隔；备用请求同样计入账户额度 |
+| `FIRST_EVENT_TIMEOUT` | `off` | 单次尝试从取得账户起等待首个上游事件的最长时间，到时取消并换号，取值 `off` 或正整数秒 |
 | `WAA_BACKEND` | `spidermonkey` | WAA 运行的位置，`spidermonkey` 或 `camoufox` |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式，`inline` 或 `url` |
 | `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，经反向代理时跟随 `X-Forwarded-Proto` |
@@ -704,7 +709,7 @@ cp .env.example .env
 
 - `PREVIEW_LISTEN_ADDR`：无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览
 - `AUTO_START`：网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试
-- `MAX_ACCOUNT_SWITCHES`：额度用尽不计入，照常依次尝试其余账户
+- `MAX_ACCOUNT_SWITCHES`：登录失效与额度用尽不计入，照常依次尝试其余账户
 - `NONSTREAM_KEEPALIVE`：返回 200 后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回
 - `STRIP_THOUGHT_SIGNATURES`：函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少
 - `DISCOVER_HIDDEN_MODELS`：
@@ -715,6 +720,9 @@ cp .env.example .env
   - 备用请求优先用其他账户，没有时用原账户的空闲槽位；先出首字的一方继续，另一方取消
   - `auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起
   - 正整数为等待秒数，设置页选自定义时填入请求最多的模型的近期 p95
+- `FIRST_EVENT_TIMEOUT`：
+  - 每次尝试从取得账户起独立计时，收到首个语义事件即停止；到时取消这次尝试并换号，计入 `MAX_ACCOUNT_SWITCHES`、不冷却账户，没有可换账户时返回 504
+  - 与 `FIRST_EVENT_HEDGE` 同开时原请求与备用请求各自计时，建议大于对冲等待秒数；排除后台请求与 agent 后台任务，慢思考请求的首字可能需要几分钟
 - `WAA_BACKEND`：
   - `spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox；`camoufox` 在 Camoufox 页面运行 WAA；其他取值按 `spidermonkey`
   - 未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `auth/.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey`
@@ -806,7 +814,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 
 权益与模型目录的读取：
 
-- “刷新全部”立即读取全部启用账户的权益与模型目录，后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
+- “刷新全部”立即读取全部启用账户的权益与模型目录，在服务端运行，关闭或刷新管理页后继续，重新打开时显示进度与排队的账户；后台每 24 小时也会读取一次；请求的模型不在目录中且距上次读取超过 10 分钟时，服务先读取一次再处理该请求
 - 从未读取成功的账户权益显示为未知，并显示最近一次失败原因；已有目录的账户读取失败时照常使用，账户行显示“目录同步失败”与原因
 - 读取报告 AI Studio 不支持当前出口地区时，已有目录的账户同样显示该原因
 

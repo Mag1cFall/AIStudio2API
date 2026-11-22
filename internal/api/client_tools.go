@@ -133,6 +133,10 @@ func responsesToolKind(tools []responsesTool, name string) string {
 			if name == "computer" {
 				return tool.Type
 			}
+		case "tool_search":
+			if tool.Execution == "client" && name == clientToolSearch {
+				return "tool_search"
+			}
 		case "namespace":
 			for _, inner := range tool.Tools {
 				if inner.Type == "custom" && namespacedName(tool.Name, inner.Name) == name {

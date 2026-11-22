@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 )
 
 type accessLogContextKey struct{}
@@ -435,7 +439,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Expose-Headers", "*")
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -496,6 +500,47 @@ const maxPublicBodyBytes = openAIFileMaxBytes/3*4 + openAIFileRequestOverhead
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxPublicBodyBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requestEncodingMiddleware 按 Content-Encoding 依次解压 gzip 与 zstd 请求体，解压后的正文同样受公开接口请求体上限约束，不支持的编码返回 415
+func requestEncodingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := strings.Join(r.Header.Values("Content-Encoding"), ",")
+		if header == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		encodings := strings.Split(header, ",")
+		var body io.Reader = r.Body
+		for index := len(encodings) - 1; index >= 0; index-- {
+			switch encoding := strings.ToLower(strings.TrimSpace(encodings[index])); encoding {
+			case "", "identity":
+			case "gzip", "x-gzip":
+				reader, err := gzip.NewReader(body)
+				if err != nil {
+					writeRequestBodyError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid gzip request body: %v", err))
+					return
+				}
+				defer reader.Close()
+				body = reader
+			case "zstd":
+				decoder, err := zstd.NewReader(body, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(uint64(maxPublicBodyBytes)))
+				if err != nil {
+					writeRequestBodyError(w, r, http.StatusBadRequest, fmt.Sprintf("invalid zstd request body: %v", err))
+					return
+				}
+				defer decoder.Close()
+				body = decoder
+			default:
+				writeRequestBodyError(w, r, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q", encoding))
+				return
+			}
+		}
+		r.Body = http.MaxBytesReader(w, io.NopCloser(body), maxPublicBodyBytes)
+		r.Header.Del("Content-Encoding")
+		r.ContentLength = -1
 		next.ServeHTTP(w, r)
 	})
 }

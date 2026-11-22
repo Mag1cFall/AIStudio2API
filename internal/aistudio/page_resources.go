@@ -231,7 +231,12 @@ func (document pageDocument) frontendBundle() string {
 	return ""
 }
 
-// loadDocumentResources 像 Firefox 解析官网文档一样按文档顺序并发请求样式表与脚本，全部完成后返回
+// optionalDocumentResource 判断官网文档子资源在真实 Firefox 中失败时页面是否照常运行：全部样式表与 Cookie 提示条脚本为可选
+func optionalDocumentResource(resource pageResource) bool {
+	return resource.kind == pageStylesheet || resource.url == cookieBarScript
+}
+
+// loadDocumentResources 像 Firefox 解析官网文档一样按文档顺序并发请求样式表与脚本，全部完成后返回；样式表与 Cookie 提示条脚本失败时不中止页面载入，ctx 取消时照常返回取消
 func (runtime *goWAARuntime) loadDocumentResources(ctx context.Context, document pageDocument) error {
 	errs := make([]error, len(document.resources))
 	var group sync.WaitGroup
@@ -246,6 +251,9 @@ func (runtime *goWAARuntime) loadDocumentResources(ctx context.Context, document
 		headers := subresourceHeaders(resource.url, accept, destination, priority)
 		group.Go(func() {
 			if err := runtime.fetchCached(ctx, resource.url, headers); err != nil {
+				if optionalDocumentResource(resource) && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
 				errs[index] = fmt.Errorf("载入官网页面资源 %s: %w", resource.url, err)
 			}
 		})
@@ -315,7 +323,7 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 
 // empty 判断缓存条目没有记下任何正文内容
 func (notes pageCacheNotes) empty() bool {
-	return notes.Loader == nil && notes.Starters == nil && notes.Fonts == nil && notes.AuditKey == "" && notes.Consent == "" && notes.Gapi == "" && notes.GapiProxy == "" && notes.Tags == nil
+	return notes.Loader == nil && notes.Starters == nil && notes.Fonts == nil && notes.AuditKey == "" && notes.Consent == "" && !notes.ConsentOptional && notes.Gapi == "" && notes.GapiProxy == "" && notes.Tags == nil
 }
 
 // noteReader 返回从该资源正文读出缓存内容的函数，不需要读正文的资源返回 nil
@@ -344,10 +352,7 @@ func noteReader(address *url.URL) func([]byte) (pageCacheNotes, error) {
 			return pageCacheNotes{AuditKey: string(match[1])}, nil
 		}
 	case strings.HasPrefix(address.String(), cookieBarConfig):
-		return func(body []byte) (pageCacheNotes, error) {
-			text, err := cookieBarText(body)
-			return pageCacheNotes{Consent: text}, err
-		}
+		return cookieBarConfigNotes
 	case address.String() == gapiLoaderScript:
 		return func(body []byte) (pageCacheNotes, error) {
 			loader, err := gapiClientURL(body)
@@ -461,6 +466,8 @@ type pageCacheNotes struct {
 	AuditKey string `json:"auditKey,omitempty"`
 	// Consent 是 Cookie 提示条按页面语言显示的正文
 	Consent string `json:"consent,omitempty"`
+	// ConsentOptional 表示 2a.json 声明当前地区不需要显示 Cookie 提示条（required 为 false）
+	ConsentOptional bool `json:"consentOptional,omitempty"`
 	// Gapi 是 api.js 加载 gapi client 模块的地址
 	Gapi string `json:"gapi,omitempty"`
 	// GapiProxy 是 googleapis.proxy.js 载入代理模块时附加的 le 列表

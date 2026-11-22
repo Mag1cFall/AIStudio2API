@@ -64,7 +64,11 @@ function place(element: HTMLDivElement, rect: DOMRect, position: string, gap: nu
 // showTooltip 在目标元素旁显示其 data-tooltip 文字，API 试用页用官网样式，管理端用站内样式
 export function showTooltip(target: HTMLElement): void {
   if (!target.dataset.tooltip) return
-  if (target.dataset.tooltipOverflow !== undefined && target.scrollWidth <= target.clientWidth)
+  if (
+    target.dataset.tooltipOverflow !== undefined &&
+    target.scrollWidth <= target.clientWidth &&
+    target.scrollHeight <= target.clientHeight + 1
+  )
     return
   window.clearTimeout(timer)
   pending = target

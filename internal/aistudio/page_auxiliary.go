@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -149,8 +148,21 @@ func cookieBarConfigURL(language string) string {
 	return cookieBarConfig + "?hl=" + language
 }
 
+// cookieBarReady 返回本次页面启动的 2a.json 请求结束时关闭的通道
+func (runtime *goWAARuntime) cookieBarReady() chan struct{} {
+	runtime.cookieBarOnce.Do(func() { runtime.cookieBarDone = make(chan struct{}) })
+	return runtime.cookieBarDone
+}
+
 // loadPageScripts 在文档子资源载入后按官网页面的时序请求前端主程序随后载入的脚本与配置：预取 api.js、反馈服务脚本与 Cookie 提示条文案（载入后提示条回调载入 GTM），再载入 gapi client 模块，最后经 gapi 读取账户资料并载入头像；失败不影响页面
 func (runtime *goWAARuntime) loadPageScripts(ctx context.Context) {
+	ready := runtime.cookieBarReady()
+	configStarted := false
+	defer func() {
+		if !configStarted {
+			close(ready)
+		}
+	}()
 	start := time.Now()
 	wait := func(offset time.Duration) bool {
 		timer := time.NewTimer(time.Until(start.Add(offset + time.Duration(rand.IntN(40))*time.Millisecond)))
@@ -190,9 +202,12 @@ func (runtime *goWAARuntime) loadPageScripts(ctx context.Context) {
 	go func() {
 		_ = runtime.fetchCached(ctx, feedbackScript, subresourceHeaders(feedbackScript, "*/*", "script", ""))
 	}()
+	configStarted = true
 	go func() {
 		target := cookieBarConfigURL(runtime.cookieBarLanguage)
-		if runtime.fetchCached(ctx, target, corsHeaders(target)) == nil {
+		err := runtime.fetchCached(ctx, target, corsHeaders(target))
+		close(ready)
+		if err == nil {
 			runtime.analytics.load(ctx)
 		}
 	}()
@@ -381,7 +396,7 @@ type cookieBarRecord struct {
 	UUID     string `json:"uuid"`
 }
 
-// dismissOverlays 在页面启动完成后与 Camoufox 后端一样关闭启动弹层：Google AI 方案账户尚未看过欢迎对话框时点击 Continue，Cookie 提示条尚未记录选择时点击 No thanks；失败不影响页面
+// dismissOverlays 在页面启动完成后与 Camoufox 后端一样关闭启动弹层：Google AI 方案账户尚未看过欢迎对话框时点击 Continue，等本次启动的 2a.json 结束后若需要显示 Cookie 提示条且尚未记录选择则点击 No thanks；失败不影响页面也不写入用户日志
 func (runtime *goWAARuntime) dismissOverlays(ctx context.Context) {
 	<-runtime.startupDone
 	tier, _ := decodeBenefitTier(runtime.pageCatalog.Tier)
@@ -389,9 +404,10 @@ func (runtime *goWAARuntime) dismissOverlays(ctx context.Context) {
 		body := `[[null,null,null,null,null,null,null,null,null,null,null,1],[["has_seen_g1_welcome_dialog"]]]`
 		runtime.sendPageRPCs(ctx, runtime.headers.Get("x-goog-api-key"), runtime.headers.Get("x-aistudio-visit-id"), runtime.headers.Get("x-goog-ext-519733851-bin"), []pageRPC{{"UpdateUserPreferences", body}})
 	}
-	if err := runtime.rejectCookieBar(ctx); err != nil {
-		slog.Warn("关闭 Cookie 提示条失败", "error", err)
+	if !closedBefore(ctx, runtime.cookieBarReady()) {
+		return
 	}
+	_ = runtime.rejectCookieBar(ctx)
 }
 
 // requestGDPProfile 在权益 benefitTier 满足导航栏条件时读取 Google Developer Program 权益并处理额度入口
@@ -684,12 +700,16 @@ func welcomeSeen(preferences []byte) bool {
 	return value == "1" || value == "true"
 }
 
-// rejectCookieBar 在账户页面尚未记录 Cookie 提示条选择时发出 CreateAuditRecord 并把拒绝记录写入账户目录，下次载入的页面读到该记录，每个账户一次
+// rejectCookieBar 在账户页面尚未记录 Cookie 提示条选择且当前地区需要显示提示条时发出 CreateAuditRecord 并把拒绝记录写入账户目录，下次载入的页面读到该记录，每个账户一次
 func (runtime *goWAARuntime) rejectCookieBar(ctx context.Context) error {
 	if _, ok := runtime.profile.LocalStorage[cookieBarStorageKey]; ok {
 		return nil
 	}
-	text := runtime.pageCache.notes(cookieBarConfigURL(runtime.cookieBarLanguage)).Consent
+	notes := runtime.pageCache.notes(cookieBarConfigURL(runtime.cookieBarLanguage))
+	if notes.ConsentOptional {
+		return nil
+	}
+	text := notes.Consent
 	key := runtime.pageCache.notes(cookieBarScript).AuditKey
 	if text == "" || key == "" {
 		return errors.New("Cookie 提示条文案或 API key 未载入")
@@ -733,6 +753,21 @@ func auditRecordBody(text string, record cookieBarRecord) string {
 		field(5, identifier),
 	)
 	return base64.StdEncoding.EncodeToString(message)
+}
+
+// cookieBarConfigNotes 解析 2a.json 为缓存条目：required 为 false 时标记当前地区不需要提示条，否则推出提示条正文
+func cookieBarConfigNotes(config []byte) (pageCacheNotes, error) {
+	var parsed struct {
+		Required *bool `json:"required"`
+	}
+	if err := json.Unmarshal(config, &parsed); err != nil {
+		return pageCacheNotes{}, errors.New("Cookie 提示条文案无效")
+	}
+	if parsed.Required != nil && !*parsed.Required {
+		return pageCacheNotes{ConsentOptional: true}, nil
+	}
+	text, err := cookieBarText(config)
+	return pageCacheNotes{Consent: text}, err
 }
 
 // cookieBarText 按 2a.json 的文案推出提示条正文：站点名替换 [This site]，末尾接“了解详情”链接

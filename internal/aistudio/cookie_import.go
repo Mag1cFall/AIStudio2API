@@ -173,6 +173,9 @@ func parseCookieHeader(header string) ([]StateCookie, error) {
 	}
 	cookies := make([]StateCookie, 0)
 	for _, item := range strings.Split(header, ";") {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
 		name, value, found := strings.Cut(strings.TrimSpace(item), "=")
 		name = strings.TrimSpace(name)
 		if !found || name == "" {

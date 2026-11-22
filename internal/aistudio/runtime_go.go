@@ -3,6 +3,7 @@ package aistudio
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,7 +50,6 @@ type workerRuntime interface {
 	StorageCookies(context.Context) ([]byte, error)
 	// MergeSetCookieHeaders 把账户在页面之外取得的响应 Cookie 写入页面
 	MergeSetCookieHeaders(context.Context, []string, string) error
-	State() camoufoxnative.State
 	// Reload 按官网冷启动重新载入页面，返回新页面就绪后使用的 runtime
 	Reload(context.Context) (workerRuntime, error)
 	Close() error
@@ -96,8 +96,8 @@ type goWAARuntime struct {
 	previous *goWAARuntime
 	// running 是最近一次点击 Run 或 Rerun 取 proof 的 VM，随后的 GenerateContent 响应开始与结束时在其中派发指针下元素被替换的事件
 	running *waa.Runtime
-	// chat 是本页点击后发出的上一个 GenerateContent 的对话轮次，页面还没有对话、点过 New chat 或上一次响应不是 200 时为 nil；与 running 同由 vmMu 保护
-	chat []json.RawMessage
+	// chat 是本页点击后发出的上一个 GenerateContent 各对话轮次的 SHA-256 摘要，页面还没有对话、点过 New chat 或上一次响应不是 200 时为 nil；与 running 同由 vmMu 保护
+	chat [][sha256.Size]byte
 
 	// uiLocale 是官网前端主程序地址声明的界面语言
 	uiLocale string
@@ -129,10 +129,12 @@ type goWAARuntime struct {
 	cookieBarLanguage string
 	// storage 是页面写入、随账户保存的 localStorage 项
 	storage *pageStorage
-	// startupDone 在页面启动请求全部返回后关闭；preferencesReady 在其中 GetUserPreferences 返回、preferences 记下响应正文后关闭；tokenReady 在第二个 GenerateAccessToken 返回、accessToken 记下 Drive access token 与取得时刻 tokenAt 后关闭
+	// startupDone 在页面启动请求全部返回后关闭；preferencesReady 在其中 GetUserPreferences 返回、preferences 记下响应正文后关闭；tokenReady 在第二个 GenerateAccessToken 返回、accessToken 记下 Drive access token 与取得时刻 tokenAt 后关闭；cookieBarDone 在本次启动的 2a.json 请求结束后关闭
 	startupDone      chan struct{}
 	preferencesReady chan struct{}
 	tokenReady       chan struct{}
+	cookieBarOnce    sync.Once
+	cookieBarDone    chan struct{}
 	preferences      []byte
 	accessToken      string
 	tokenAt          time.Time
@@ -1002,6 +1004,7 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 		return waa.Challenge{}, err
 	}
 	started := time.Now()
+	sentSession := hasSessionCookie(runtime.cookies(), waaCreateURL, started)
 	status := -1
 	defer func() {
 		runtime.serviceStreamz.record(streamzRecord{metric: "wrl", labels: []any{"c", 1, status, waaRequestKey, streamzMachineKey}, value: float64(time.Since(started).Milliseconds())})
@@ -1018,6 +1021,9 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 	if response.StatusCode != http.StatusOK {
 		return waa.Challenge{}, fmt.Errorf("Waa/Create 返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
 	}
+	if sentSession && !responseConfirmedSession(response.Header.Values("Set-Cookie")) {
+		return waa.Challenge{}, fmt.Errorf("%w: Waa/Create 未确认账户会话", camoufoxnative.ErrAuthenticationRequired)
+	}
 	status = 0
 	decoded := time.Now()
 	challenge, err := waa.ParseChallenge(raw)
@@ -1025,6 +1031,28 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 		runtime.serviceStreamz.record(streamzRecord{metric: "el", labels: []any{"U", streamzMachineKey}, value: float64(time.Since(decoded).Milliseconds())})
 	}
 	return challenge, err
+}
+
+// hasSessionCookie 判断状态中包含用于目标地址的 Google 登录会话 Cookie
+func hasSessionCookie(state StorageState, targetURL string, now time.Time) bool {
+	for _, name := range []string{"SID", "__Secure-1PSID", "__Secure-3PSID"} {
+		if _, ok := state.CookieValue(name, targetURL, now); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// responseConfirmedSession 判断响应通过 SIDCC 系列 Set-Cookie 确认了账户会话
+func responseConfirmedSession(headers []string) bool {
+	for _, header := range headers {
+		for _, cookie := range (&http.Response{Header: http.Header{"Set-Cookie": []string{header}}}).Cookies() {
+			if rotatingCookieNames[cookie.Name] && cookie.Value != "" && cookie.MaxAge >= 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // loadInterpreter 按 challenge 指定的 hash 取得解释器并校验摘要：challenge 不带解释器地址或账户页面缓存中新鲜时沿用同 hash 的已有解释器，否则像页面脚本一样请求（有本地副本时带条件头）
@@ -1249,6 +1277,11 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 
 // nextVM 以旧 VM 的无绑定 snapshot 调用 Waa/Create 并返回静置后的新 VM，没有旧 VM 时按首次载入创建
 func (runtime *goWAARuntime) nextVM(ctx context.Context, previous *waa.Runtime) (*waa.Runtime, error) {
+	if runtime.options.RefreshCookies != nil {
+		if err := runtime.options.RefreshCookies(ctx); err != nil {
+			return nil, err
+		}
+	}
 	var refresh []string
 	if previous != nil {
 		snapshot, err := previous.RefreshSnapshot(ctx)
@@ -1307,6 +1340,52 @@ func generateContents(body []byte) []json.RawMessage {
 		contents, _ = wireArray(fields[1])
 	}
 	return contents
+}
+
+// chatDigests 返回 GenerateContent 正文各对话轮次的 SHA-256 摘要，不持有正文底层数组
+func chatDigests(body []byte) [][sha256.Size]byte {
+	contents := generateContents(body)
+	if contents == nil {
+		return nil
+	}
+	digests := make([][sha256.Size]byte, len(contents))
+	for index, content := range contents {
+		digests[index] = sha256.Sum256(content)
+	}
+	return digests
+}
+
+// startsNewChat 返回页面上一次发出的对话轮次摘要 previous 之后要发出 contents 时是否先开新对话
+func startsNewChat(previous [][sha256.Size]byte, contents []json.RawMessage) bool {
+	if previous == nil {
+		return false
+	}
+	samePrefix := func() bool {
+		for index, digest := range previous {
+			if sha256.Sum256(contents[index]) != digest {
+				return false
+			}
+		}
+		return true
+	}
+	if len(contents) == len(previous) && samePrefix() {
+		return false
+	}
+	if len(contents) == len(previous)+2 && samePrefix() && wireContentRole(contents[len(previous)]) == "model" {
+		return false
+	}
+	return true
+}
+
+// wireContentRole 返回 GenerateContent 对话轮次 [parts, role] 的角色
+func wireContentRole(content json.RawMessage) string {
+	fields, ok := wireArray(content)
+	if !ok || len(fields) <= 1 {
+		return ""
+	}
+	var role string
+	_ = json.Unmarshal(fields[1], &role)
+	return role
 }
 
 // userGestureKey 标记 proof 所属请求在官网由页面上的点击或按键触发
@@ -1375,7 +1454,7 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 	switch {
 	case run:
 		var newChat func(at time.Time)
-		if camoufoxnative.StartsNewChat(runtime.chat, contents) {
+		if startsNewChat(runtime.chat, contents) {
 			newChat = runtime.newChat
 		}
 		proof, err = vm.RunProofAfter(ctx, digest, prompt, newChat, settings, pickedPause)
@@ -1454,7 +1533,7 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 		runtime.vmMu.Lock()
 		running, runtime.running = runtime.running, nil
 		if running != nil {
-			runtime.chat = generateContents(body)
+			runtime.chat = chatDigests(body)
 		}
 		runtime.vmMu.Unlock()
 		turn = runtime.elements.turn(body, counting)
@@ -1652,16 +1731,6 @@ func (runtime *goWAARuntime) MergeSetCookieHeaders(_ context.Context, headers []
 	runtime.session.mu.Lock()
 	defer runtime.session.mu.Unlock()
 	return runtime.session.state.MergeSetCookieHeaders(headers, requestURL, time.Now())
-}
-
-// State 返回 SpiderMonkey runtime 的页面与协议状态
-func (runtime *goWAARuntime) State() camoufoxnative.State {
-	return camoufoxnative.State{
-		PID:       os.Getpid(),
-		PageURL:   runtime.pageURL,
-		UserAgent: runtime.userAgent,
-		Headers:   runtime.headers.Clone(),
-	}
 }
 
 // Close 结束 VM 生命周期

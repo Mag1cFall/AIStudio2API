@@ -1,6 +1,7 @@
 package camoufoxnative
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,8 @@ type Options struct {
 	ReadyTimeout     time.Duration
 	Log              io.Writer
 	StartupProgress  func(StartupStage)
+	// RefreshCookies 在重建 WAA VM 前刷新即将到期的 DBSC 绑定 Cookie，为空时跳过
+	RefreshCookies func(context.Context) error
 	// liveView 表示无头画面实时显示在管理页登录窗口，页面保持 Firefox 默认刷新帧率
 	liveView bool
 }

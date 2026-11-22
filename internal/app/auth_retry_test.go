@@ -37,7 +37,7 @@ func TestAuthRefreshKeepsAccountSource(t *testing.T) {
 		cookies = append(cookies, aistudio.StateCookie{Name: name, Value: "chrome", Domain: ".google.com", Path: "/", Expires: -1, Secure: true, SameSite: "Lax"})
 	}
 	refresher := &authRuntimeRefresher{
-		pool: pool, requests: newRequestRegistry(t.Context()),
+		pool: pool, requests: newRequestRegistry(),
 		importCurrent: func(_ context.Context, source aistudio.AuthSource, _ aistudio.ChromeOAuthMaterial, _ string) (aistudio.StorageState, error) {
 			updated := aistudio.StorageState{Cookies: cookies}
 			updated.SetAuthExtension(aistudio.AuthExtension{

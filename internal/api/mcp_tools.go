@@ -313,13 +313,12 @@ func (s *server) mcpApprovalTools(ctx context.Context, tools []responsesTool, ch
 			return request, err
 		}
 		if allowed != nil {
-			names, ok := restricted[server.Name]
-			if !ok {
+			var ok bool
+			if server, ok = restrictMCPServer(server, restricted); !ok {
 				continue
 			}
-			if names != nil {
-				server.AllowedTools = names
-			}
+		} else if server.AllowedTools != nil && len(server.AllowedTools) == 0 {
+			continue
 		}
 		listed, err := s.listMCPTools(ctx, server)
 		if err != nil {

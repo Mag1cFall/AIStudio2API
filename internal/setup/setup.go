@@ -179,7 +179,7 @@ func (target *remoteTarget) Save(
 		state.SetAuthExtension(extension)
 	}
 	input := api.AccountStateInput{
-		Label: accountConfig.Label, Locale: accountConfig.Locale, Timezone: accountConfig.Timezone,
+		Label: accountConfig.Label, Note: accountConfig.Note, Locale: accountConfig.Locale, Timezone: accountConfig.Timezone,
 		AuthUser: accountConfig.AuthUser, StorageState: state,
 	}
 	if fingerprintDirectory != "" {
@@ -258,6 +258,9 @@ func remoteOrigin(raw string) (string, error) {
 	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
+// verifyAuthUser 识别 Cookie 登录 AI Studio 的账户
+var verifyAuthUser = chromeauth.VerifyAuthUser
+
 func importStorageState(ctx context.Context, target accountTarget, options setupOptions) error {
 	state, err := aistudio.LoadStorageState(options.storageState)
 	if err != nil {
@@ -266,11 +269,18 @@ func importStorageState(ctx context.Context, target accountTarget, options setup
 	if _, err := aistudio.NewSigner().Authorization(state); err != nil {
 		return fmt.Errorf("认证状态无法用于 AI Studio: %w", err)
 	}
-	label := defaultSetupLabel(options.storageState)
+	label := ""
 	if extension, exists, err := state.AuthExtension(); err != nil {
 		return err
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
-		label = extension.Source.Email
+		label = strings.ToLower(strings.TrimSpace(extension.Source.Email))
+	}
+	if label == "" {
+		verification, err := verifyAuthUser(ctx, &state, options.egress, options.authUser)
+		if err != nil {
+			return fmt.Errorf("识别 Cookie 登录的账户: %w", err)
+		}
+		label = strings.ToLower(strings.TrimSpace(verification.Email))
 	}
 	saved, err := target.Save(ctx, setupAccountConfig(label, options), state, "")
 	if err != nil {
@@ -301,7 +311,7 @@ func importCookies(ctx context.Context, target accountTarget, options setupOptio
 		email = options.emails[0]
 	}
 	if email == "" || options.authUserSet {
-		verification, err := chromeauth.VerifyAuthUser(ctx, &state, options.egress, options.authUser)
+		verification, err := verifyAuthUser(ctx, &state, options.egress, options.authUser)
 		if err != nil {
 			return fmt.Errorf("识别 Cookie 登录的账户: %w", err)
 		}
@@ -408,7 +418,9 @@ func importChromeResult(ctx context.Context, cfg config.Config, target accountTa
 	}
 	saving.Lock()
 	defer saving.Unlock()
-	if _, err := target.Save(ctx, setupAccountConfig(result.Email, options), result.State, ""); err != nil {
+	accountConfig := setupAccountConfig(result.Email, options)
+	accountConfig.Note = aistudio.TruncateAccountNote(result.DisplayName)
+	if _, err := target.Save(ctx, accountConfig, result.State, ""); err != nil {
 		return err
 	}
 	fmt.Fprintf(output, "已导入: %s (%s)，%d 个模型\n", result.Email, result.Profile, verification.ModelCount)
@@ -588,14 +600,6 @@ func setupAccountConfig(label string, options setupOptions) aistudio.AccountConf
 	accountConfig.Timezone = options.timezone
 	accountConfig.AuthUser = options.authUser
 	return accountConfig
-}
-
-func defaultSetupLabel(storageState string) string {
-	parent := filepath.Base(filepath.Dir(storageState))
-	if parent == "." || parent == string(filepath.Separator) {
-		return "Default"
-	}
-	return parent
 }
 
 func defaultSetupLoginDriver(ctx context.Context, egress string) (aistudio.IsolatedLoginDriver, error) {

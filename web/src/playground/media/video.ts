@@ -1,10 +1,4 @@
 import type { Model } from '@/types'
-import type { InlineImage } from './api'
-
-// VideoFrame 是视频示例代码中的一张帧图片或参考图
-export interface VideoFrame extends InlineImage {
-  name: string
-}
 
 // VideoSettings 是视频示例代码使用的模型与运行设置
 export interface VideoSettings {

@@ -228,6 +228,29 @@ HTTP route
 
 WebSocket 入口沿用相同分层：`internal/api` 解码公开协议，`internal/app` 绑定账户和运行状态，`internal/aistudio` 执行 WebChannel 与规范事件转换。公开适配器只消费规范请求与事件；账户文件、WAA 对象、原始数组和资源粘性由 `internal/aistudio` 与 `internal/app` 管理。
 
+一次请求中的决策点与负责代码（按请求流转顺序）：
+
+| 决策 | 负责文件与函数 |
+| --- | --- |
+| 入口鉴权与账户范围 | `internal/api/middleware.go` `authMiddleware` / `accountContextMiddleware` |
+| 模型映射、后缀与通道路由 | `internal/app/runtime.go` `trackedService.mappedModel`、`internal/aistudio/channel.go` `AccountPool.selectionChannelsLocked` |
+| 模型能力判断 | `internal/aistudio/service.go` `AccountLease.Model`、`internal/aistudio/generate.go` `validateGenerateEntry` |
+| 对话中途的系统消息 | `internal/api/generate.go` `appendWithReminders`、`internal/aistudio/turns.go` `normalizeTurns` |
+| 续写 | `internal/aistudio/turns.go` `normalizeTurns`、`internal/aistudio/generate.go` `Client.decodePlaygroundRounds` |
+| 自动压缩 | `internal/api/responses_compaction.go` `server.generateCompactionSummary`、`internal/api/anthropic_context.go` `server.applyAnthropicContextEdits` |
+| 工具约束与 MCP 白名单 | `internal/aistudio/tool_contract.go` `prepareToolRequest`、`internal/api/openai.go` `restrictMCPServer` |
+| 用户消息改写、思考防拦截与回复工具 | `internal/aistudio/chinese_rewrite.go` `applyChineseRewrite`、`internal/aistudio/thinking_guard.go` `applyThinkingGuard`、`internal/aistudio/reply_tool.go` `applyReplyTool` |
+| 历史回复与状态续接 | `internal/aistudio/model_turns.go` `modelTurnHistory.restore`、`internal/api/responses.go` `server.prepareResponses` |
+| 附件与媒体处理 | `internal/aistudio/upload.go` `PooledService.UploadInlineMediaToLease`、`internal/api/remote_media.go` `inlineRemoteMedia` |
+| 选账户与 Worker 调度 | `internal/app/runtime.go` `trackedService.acquireWarmLease`、`internal/aistudio/accounts.go` `AccountPool.TryAcquireFor` |
+| 备用请求与超时控制 | `internal/app/hedge.go` `trackedService.awaitFirstEvent`、`internal/app/runtime.go` `trackedService.startAttempt` |
+| 换号与换号计数 | `internal/app/runtime.go` `trackedService.generateWithRetry` / `countSwitchFailure` |
+| 冷却判定与冷却放行 | `internal/aistudio/quota.go` `QuotaCooldownForError`、`internal/aistudio/accounts.go` `selectionCooldown` |
+| 认证续签与 DBSC 刷新 | `internal/app/auth_retry.go` `authRuntimeRefresher.do` / `ensureBoundAccount` |
+| WAA 证明 | `internal/aistudio/service.go` `WorkerProtectedTransport.DoProtected`、`internal/aistudio/runtime_native.go` `NativeWorker.Prepare` |
+| 上游出口与连接隔离 | `internal/aistudio/transport_http.go` `MakerSuiteHTTPTransport.clientForAccount`、`internal/aistudio/transport_browser.go` `browserRoundTripper.RoundTrip` |
+| 内容拦截与错误映射 | `internal/aistudio/generate.go` `Client.Generate`、`internal/api/errors.go` `statusFromError` |
+
 ### Camoufox 后端
 
 Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务按 `WARM_WORKER_LIMIT` 逐个准备隔离、无头、长驻的账户 runtime，并在需要其他账户能力时替换最久未用的空闲 runtime。
@@ -332,7 +355,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 | `ADMIN_PASSWORD` | 管理员密码 | 空 |
 | `PROXY` | 全局出口代理或代理池 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
-| `REQUEST_TIMEOUT` | 单次请求最大执行时间 | `30m` |
+| `REQUEST_TIMEOUT` | 上游连续没有数据的最长时间 | `30m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `10`，Camoufox 后端 `5` |
 | `MAX_ACTIVE_WORKERS` | 活动 Worker 容量上限 | `20`，Camoufox 后端 `10` |
 | `WARM_STARTUP_CONCURRENCY` | 同时冷启动的 Camoufox Worker 数 | `5` |
@@ -356,6 +379,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 | `CONTINUATION_PROMPT` | 续写提示词 | 内置英文续写句 |
 | `FIRST_EVENT_HEDGE` | 首字超时备用请求阈值 | `off` |
 | `FIRST_EVENT_HEDGE_MODELS` | 发起备用请求的模型 | `gemini-4-argon` |
+| `FIRST_EVENT_TIMEOUT` | 单次尝试首字超时换号阈值 | `off` |
 | `WAA_BACKEND` | WAA 后端 | `spidermonkey` |
 | `MEDIA_OUTPUT` | 生成媒体的引用方式 | `inline` |
 | `MEDIA_BASE_URL` | 媒体 URL 的服务地址 | 空 |
@@ -373,12 +397,12 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 - `LOG_MAX_TOTAL_MB`：超出时删除最旧的文件，不小于 20；保存后立即生效
 - `ADMIN_PASSWORD`：开启登录时必填
 - `PROXY`：setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理
-- `REQUEST_TIMEOUT`：自动续写的每一轮开始时重新计时
+- `REQUEST_TIMEOUT`：从请求开始计时，每收到一次上游数据重新计时，上游仍在输出的请求不受总时长限制
 - `MAX_ACTIVE_WORKERS`：必须不小于热池目标
 - `WARM_STARTUP_CONCURRENCY`：限制按需扩容时的冷启动数，预热逐个启动；`WAA_BACKEND=spidermonkey` 时不限制
 - `ROUTING_STRATEGY`：账户轮询 `round-robin` 或粘性优先 `fill-first`
 - `ACCOUNT_ORDER`：逗号分隔的账户 ID，`fill-first` 依次使用并按此顺序预热，未列出的账户排在后面并按 ID 排序；保存后立即生效
-- `MAX_ACCOUNT_SWITCHES`：一个请求因上游 401、403、404、5xx、连接断开等非额度失败换号的次数上限，`0` 为不换号，额度失败不计入；保存后立即生效
+- `MAX_ACCOUNT_SWITCHES`：一个请求因上游 403、404、5xx、连接断开、首字超时等非额度失败换号的次数上限，`0` 为不换号，登录失效与额度失败不计入；保存后立即生效
 - `UPSTREAM_CHANNELS`：`playground`、`build`（旧通道，上游已停用其生成），逗号分隔
 - `MODEL_MAPPING`：逗号分隔，每项以最后一个 `:` 分成别名与模型 ID；保存后立即生效
 - `MODEL_CHANNELS`：逗号分隔，每项以最后一个 `:` 分成模型 ID 与通道 `playground` 或 `build`；保存后立即生效
@@ -395,6 +419,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 - `CONTINUATION_PROMPT`：改写时与末尾 assistant 正文一起写入系统指令；键存在且为空时，末尾 assistant 正文作为最后一轮 user；保存后停止再启动生成服务生效
 - `FIRST_EVENT_HEDGE`：`off`、`auto`（各模型与通道近 24 小时原请求首字等待的 p95）或正整数秒
 - `FIRST_EVENT_HEDGE_MODELS`：模型 ID，逗号分隔
+- `FIRST_EVENT_TIMEOUT`：`off` 或正整数秒，每次尝试从取得账户起到首个语义事件的上限；保存后停止再启动生成服务生效
 - `WAA_BACKEND`：`spidermonkey` 或 `camoufox`，其他取值按 `spidermonkey`；未设置时，启动时按 `auth/` 确定后写入 `.env`：已有账户而没有 `.waa-interpreters` 时为 `camoufox`，否则为 `spidermonkey`
 - `MEDIA_OUTPUT`：Chat Completions 与 Messages 正文中生成媒体的引用方式，`inline` 或 `url`
 - `MEDIA_BASE_URL`：`http` 或 `https`；留空时取请求的协议与 Host
@@ -420,7 +445,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 | `discover_hidden_models` | 下一次启动生成服务时使用的官网隐藏模型探测开关 |
 | `google_search` | 保存后立即作用于新请求的全模型 Google 搜索开关 |
 | `continuation_rewrite`、`continuation_prompt` | 下一次启动生成服务时使用的末尾 assistant 轮改写开关与续写提示词 |
-| `first_event_hedge`、`first_event_hedge_models` | 下一次启动生成服务时使用的首字超时备用请求设置与模型 |
+| `first_event_hedge`、`first_event_hedge_models`、`first_event_timeout` | 下一次启动生成服务时使用的首字超时备用请求与单次首字超时设置 |
 | `strip_thought_signatures` | 下一次启动生成服务时使用的思考签名去除开关 |
 | `routing_strategy`、`account_order` | 保存后立即作用于账户选择的策略与 `fill-first` 顺序 |
 | `max_account_switches` | 保存后立即作用于换号判断的次数上限 |
@@ -622,6 +647,11 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 - 被取消的请求同样计入上游的每日与每分钟请求额度
 - 账本的 `attempts` 以 `hedge` 标记备用请求，以 `superseded` 标记被取代的一方
 
+`FIRST_EVENT_TIMEOUT` 不为 `off` 时，除后台 Responses、后台 Interactions 与经后台任务生成的 agent（`interaction_task`）外，每次生成尝试（含 `-build` 写代码助手）从取得账户起等待首个语义事件达到阈值后，取消该尝试并换号：
+
+- 计入 `MAX_ACCOUNT_SWITCHES`，不冷却账户、不改账户状态、不重建 Worker；没有可换账户或换号用尽时返回 504 并写明 `FIRST_EVENT_TIMEOUT`
+- 与 `FIRST_EVENT_HEDGE` 同开时原请求与备用请求各自计时，一方到期取消不影响另一方继续等待；`REQUEST_TIMEOUT` 管整个请求，更早到期时直接结束请求不换号
+
 同一模型与通道最近两个请求都在本请求开始前 30 秒内以连接断开失败、其间没有请求收到首个事件时，本请求在前两个账户上的尝试也都以连接断开失败就以原错误结束。
 
 故障重置先等待同账户的活动请求释放租约；等待期间该账户暂停接收新请求。客户端取消只结束自身请求。启动预热在官网 Run 按钮启用后提交，请求在发送前再次检查账户冷却状态。
@@ -730,7 +760,7 @@ Worker 容量由热池目标、活动上限和单账户并发共同约束。
 | 健康与状态 | `GET /health`、`GET /api/status` |
 | 模型与账户 | `GET /api/models`、`GET/POST /api/accounts`、`GET /api/accounts/exits`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT/DELETE /api/accounts/{id}`、`PUT /api/accounts/{id}/state` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
-| 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
+| 登录与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`POST /api/accounts/refresh`、`GET /api/login-view/{view}`（WebSocket） |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/paths?path=`（列出服务所在机器的目录与账户状态文件 `storage-state.json`，`path=roots` 列出文件系统根）、`POST /api/paths/pick?path=`（桌面版以系统对话框选择账户目录） |
@@ -933,6 +963,12 @@ Windows 与 Linux 托盘菜单的“开机自启动”每次打开菜单时从�
 
 ```bash
 wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out cmd/aistudio2api/rsrc_windows_amd64.syso
+```
+
+- `internal/chromeauth/native/abe_helper_amd64.bin` 是 Windows Chrome 导入用于解密 App-Bound 主密钥的无导出 x64 DLL，使用上文的 llvm-mingw UCRT 版 clang 从 `abe_helper.c` 编译，只链接 Windows 系统库与系统 UCRT：
+
+```bash
+x86_64-w64-mingw32-clang -shared -O2 -s -o internal/chromeauth/native/abe_helper_amd64.bin internal/chromeauth/native/abe_helper.c -lole32 -loleaut32 -lcrypt32
 ```
 
 Camoufox 在首次浏览器登录时准备；`WAA_BACKEND=camoufox` 时在管理服务启动后于后台下载，生成服务等下载完成后就绪。

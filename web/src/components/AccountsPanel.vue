@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, useTemplateRef, watch } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -10,8 +10,10 @@ import {
 } from 'reka-ui'
 import { api, ApiError } from '@/api'
 import { useDownloadProgress, waitsForCamoufox } from '@/camoufox'
+import { useConsole } from '@/console'
 import { elapsedText, serverTime, useSecondClock } from '@/elapsed'
 import { useI18n, type TranslationKey } from '@/i18n'
+import { useImportCandidates } from '@/importCandidates'
 import { usePaged } from '@/paging'
 import { maskedProxy } from '@/proxy'
 import type {
@@ -23,7 +25,9 @@ import type {
   AccountTaskItem,
   PreparationStatus,
   ChromeImportProfile,
+  Cooldown,
   CookieBrowser,
+  Model,
   PairingToken,
 } from '@/types'
 import type { IconName } from '@/icons'
@@ -33,6 +37,11 @@ import AccountExits from './AccountExits.vue'
 import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 import DetailDialog from './DetailDialog.vue'
 import DisclosureChevron from './DisclosureChevron.vue'
+import ImportFilterBar, {
+  isProTier,
+  tierBadgeClass,
+  type ImportFilterKind,
+} from './ImportFilterBar.vue'
 import LinkedText from './LinkedText.vue'
 import LoginViewer from './LoginViewer.vue'
 import StagedRefreshIcon from './StagedRefreshIcon.vue'
@@ -53,6 +62,9 @@ const props = defineProps<{
   chromeImport: boolean
   // camoufox 是 Camoufox 的准备状态，浏览器登录等待下载时在任务行显示进度
   camoufox: PreparationStatus | undefined
+  // models 与 cooldowns 是实时模型目录与模型冷却，供账户的模型对话框显示
+  models: Model[]
+  cooldowns: Cooldown[]
 }>()
 
 const emit = defineEmits<{
@@ -63,6 +75,7 @@ const emit = defineEmits<{
 }>()
 
 const { t, locale, errorText, logText } = useI18n()
+const { commitDelete } = useConsole()
 const defaultAccountLocale = navigator.language
 const showEditor = ref(false)
 const showBrowserLogin = ref(false)
@@ -98,14 +111,33 @@ const pendingAction = ref('')
 const addPending = computed(
   () => pendingAction.value === 'pairing' || pendingAction.value === 'chrome-discover',
 )
-const refreshing = reactive(new Set<string>())
-// queued 是刷新全部中尚未轮到的账户
-const queued = reactive(new Set<string>())
+// refreshingOne 是单独立即刷新中的账户
+const refreshingOne = reactive(new Set<string>())
+// refreshTasks 是服务端进行中的刷新任务
+const refreshTasks = computed(() =>
+  props.tasks.filter((task) => task.kind === 'refresh' && task.state === 'running'),
+)
+// refreshTaskAccounts 返回进行中的刷新任务里处于 state 的账户
+function refreshTaskAccounts(state: AccountTaskItem['state']): string[] {
+  return refreshTasks.value.flatMap((task) =>
+    task.items.filter((item) => item.state === state).map((item) => item.label),
+  )
+}
+// refreshing 是单独刷新或刷新任务中正在刷新的账户
+const refreshing = computed(() => new Set([...refreshingOne, ...refreshTaskAccounts('running')]))
+// submitted 是已提交刷新、服务端任务还没有经事件流送达的账户
+const submitted = reactive(new Set<string>())
+// queued 是已提交或刷新任务中尚未轮到的账户
+const queued = computed(() => new Set([...submitted, ...refreshTaskAccounts('pending')]))
 // refreshErrors 是最近一次刷新失败的账户与失败原因
 const refreshErrors = reactive(new Map<string, string>())
-// refreshTotal 与 refreshDone 是进行中的刷新全部的账户数与已完成数，没有刷新全部时 refreshTotal 为 0
-const refreshTotal = ref(0)
-const refreshDone = ref(0)
+// refreshTotal 与 refreshDone 是进行中的刷新任务的账户数与已结束数，没有刷新任务时 refreshTotal 为 0
+const refreshTotal = computed(() =>
+  refreshTasks.value.reduce((sum, task) => sum + task.items.length, 0),
+)
+const refreshDone = computed(() =>
+  refreshTasks.value.reduce((sum, task) => sum + taskFinished(task), 0),
+)
 // refreshAllProgress 是刷新全部的进度文字
 const refreshAllProgress = computed(() =>
   t('accounts.refreshingAll')
@@ -147,21 +179,124 @@ const pairingInsecure = computed(() => {
 // clipboardAvailable 表示页面处于可使用剪贴板 API 的安全上下文
 const clipboardAvailable = window.isSecureContext
 const selectedChromeProfiles = ref<string[]>([])
-// importableChromeProfiles 是没有服务受限、可以勾选的 Chrome 账户
-const importableChromeProfiles = computed(() =>
-  chromeProfiles.value.filter((profile) => profile.restricted === ''),
+// chromeTiers 记录按需检测返回的 Chrome 账户权益、受限原因或单条错误
+const chromeTiers = reactive(
+  new Map<string, { tier?: string; restricted?: string; error?: string }>(),
 )
-const allChromeProfilesSelected = computed(
-  () =>
-    importableChromeProfiles.value.length > 0 &&
-    selectedChromeProfiles.value.length === importableChromeProfiles.value.length,
+const chromeCheckingIDs = reactive(new Set<string>())
+const probingChromeTiers = ref(false)
+const chromeTierDone = ref(0)
+const chromeTierTotal = ref(0)
+let chromeTierController: AbortController | undefined
+
+// chromeTierOf 返回 Chrome 候选行当前已知或已检测出的权益等级
+function chromeTierOf(profile: ChromeImportProfile): string {
+  return chromeTiers.get(profile.id)?.tier ?? profile.benefit_tier ?? ''
+}
+
+// chromeRestrictedOf 返回 Chrome 候选行已知或检测发现的受限原因
+function chromeRestrictedOf(profile: ChromeImportProfile): string {
+  return profile.restricted || chromeTiers.get(profile.id)?.restricted || ''
+}
+
+// chromeProfileLabel 返回 Chrome 设定档显示名与目录名（重复时去重）
+function chromeProfileLabel(profile: ChromeImportProfile): string {
+  const parts = [profile.display_name.trim(), profile.profile.trim()].filter(Boolean)
+  return [...new Set(parts)].join(' · ')
+}
+
+const {
+  search: chromeSearch,
+  filter: chromeFilter,
+  counts: chromeFilterCounts,
+  filtered: filteredChromeProfiles,
+  visibleSelectable: visibleImportableChromeProfiles,
+  allSelected: allChromeProfilesSelected,
+  toggleAll: toggleAllChromeProfiles,
+  reset: resetChromeFilter,
+} = useImportCandidates(chromeProfiles, selectedChromeProfiles, {
+  key: (profile) => profile.id,
+  matches: (profile, needle) =>
+    profile.email.toLowerCase().includes(needle) ||
+    profile.display_name.toLowerCase().includes(needle) ||
+    profile.profile.toLowerCase().includes(needle),
+  imported: (profile) => Boolean(profile.imported),
+  pro: (profile) => isProTier(chromeTierOf(profile)),
+  selectable: (profile) => chromeRestrictedOf(profile) === '',
+})
+
+// hasUncheckedChromeTiers 表示是否存在尚未检测权益且未受限的 Chrome 候选行
+const hasUncheckedChromeTiers = computed(() =>
+  chromeProfiles.value.some(
+    (profile) =>
+      chromeRestrictedOf(profile) === '' &&
+      chromeTierOf(profile) === '' &&
+      !chromeTiers.get(profile.id)?.error,
+  ),
 )
 
-function toggleAllChromeProfiles(): void {
-  selectedChromeProfiles.value = allChromeProfilesSelected.value
-    ? []
-    : importableChromeProfiles.value.map((profile) => profile.id)
+// probeChromeTiers 按需并发流式检测 Chrome 候选行的 AI Studio 权益，forceAll 为真时在全部已检时重新检测
+async function probeChromeTiers(forceAll = false): Promise<void> {
+  if (probingChromeTiers.value) return
+  let targets = chromeProfiles.value.filter(
+    (profile) =>
+      chromeRestrictedOf(profile) === '' &&
+      chromeTierOf(profile) === '' &&
+      !chromeTiers.get(profile.id)?.error,
+  )
+  if (targets.length === 0 && forceAll) {
+    targets = chromeProfiles.value.filter((profile) => chromeRestrictedOf(profile) === '')
+    for (const target of targets) chromeTiers.delete(target.id)
+  }
+  if (targets.length === 0) return
+  chromeTierController?.abort()
+  const controller = new AbortController()
+  chromeTierController = controller
+  probingChromeTiers.value = true
+  chromeTierDone.value = 0
+  chromeTierTotal.value = targets.length
+  chromeCheckingIDs.clear()
+  for (const target of targets) chromeCheckingIDs.add(target.id)
+  try {
+    await api.checkChromeImportTiers(
+      targets.map((target) => target.id),
+      accountEnvironment.proxy,
+      (item) => {
+        chromeCheckingIDs.delete(item.id)
+        chromeTierDone.value++
+        chromeTiers.set(item.id, {
+          ...(item.benefit_tier ? { tier: item.benefit_tier } : {}),
+          ...(item.restricted ? { restricted: item.restricted } : {}),
+          ...(item.error ? { error: item.error } : {}),
+        })
+        if (item.restricted) {
+          selectedChromeProfiles.value = selectedChromeProfiles.value.filter((id) => id !== item.id)
+        }
+      },
+      controller.signal,
+    )
+  } catch (error) {
+    if (!controller.signal.aborted) actionError(error)
+  } finally {
+    if (chromeTierController === controller) {
+      chromeTierController = undefined
+      probingChromeTiers.value = false
+      chromeCheckingIDs.clear()
+    }
+  }
 }
+
+// setChromeFilter 切换 Chrome 导入框的分段筛选，切到 Pro+ 且仍有未检测行时自动开始检测
+function setChromeFilter(next: ImportFilterKind): void {
+  chromeFilter.value = next
+  if (next === 'pro' && hasUncheckedChromeTiers.value && !probingChromeTiers.value) {
+    void probeChromeTiers(false)
+  }
+}
+
+onUnmounted(() => {
+  chromeTierController?.abort()
+})
 // accountEnvironment 是添加账户时的代理、语言与时区，语言与时区留空时按出口位置填写
 const accountEnvironment = reactive({
   proxy: '',
@@ -170,27 +305,40 @@ const accountEnvironment = reactive({
 })
 const draft = reactive<AccountDraft>({
   label: '',
+  note: '',
   enabled: true,
   proxy: '',
   locale: defaultAccountLocale,
   timezone: '',
 })
 
-const stateKeys: Record<AccountState, TranslationKey> = {
+// DisplayAccountState 是账户列表与筛选使用的展示状态，区分需要验证与一般服务受限
+type DisplayAccountState = AccountState | 'verification_required'
+
+// displayState 返回账户在界面上的展示状态
+function displayState(account: Account): DisplayAccountState {
+  return account.state === 'restricted' && account.verification_required
+    ? 'verification_required'
+    : account.state
+}
+
+const stateKeys: Record<DisplayAccountState, TranslationKey> = {
   ready: 'state.ready',
   busy: 'state.busy',
   cooldown: 'state.cooldown',
   auth_required: 'state.auth_required',
+  verification_required: 'state.verification_required',
   restricted: 'state.restricted',
   unavailable: 'state.unavailable',
   disabled: 'state.disabled',
 }
 // stateTone 是各账户状态气泡的颜色
-const stateTone: Record<AccountState, string> = {
+const stateTone: Record<DisplayAccountState, string> = {
   ready: 'bg-green-400/10 text-green-400',
   busy: 'bg-blue-400/10 text-blue-400',
   cooldown: 'bg-yellow-400/10 text-yellow-400',
   auth_required: 'bg-red-400/10 text-red-400',
+  verification_required: 'bg-amber-400/10 text-amber-400',
   restricted: 'bg-red-400/10 text-red-400',
   unavailable: 'bg-red-400/10 text-red-400',
   disabled: 'bg-gray-500/10 text-gray-500',
@@ -308,7 +456,7 @@ const selectedTier = ref('')
 const selectedEgress = ref('*')
 const states = computed(() =>
   keepSelected(
-    [...new Set(props.accounts.map((account) => account.state))],
+    [...new Set(props.accounts.map((account) => displayState(account)))],
     selectedState.value,
     '',
   ),
@@ -328,13 +476,15 @@ const egresses = computed(() =>
   ),
 )
 
-// visibleAccounts 是邮箱检索与账户属性筛选的交集
+// visibleAccounts 是邮箱与备注检索以及账户属性筛选的交集
 const visibleAccounts = computed(() => {
   const needle = search.value.trim().toLowerCase()
   return props.accounts.filter(
     (account) =>
-      (account.label.toLowerCase().includes(needle) || account.id.toLowerCase().includes(needle)) &&
-      (selectedState.value === '' || account.state === selectedState.value) &&
+      (account.label.toLowerCase().includes(needle) ||
+        account.id.toLowerCase().includes(needle) ||
+        (account.note ?? '').toLowerCase().includes(needle)) &&
+      (selectedState.value === '' || displayState(account) === selectedState.value) &&
       (selectedTier.value === '' || account.benefit_tier === selectedTier.value) &&
       (selectedEgress.value === '*' || account.egress === selectedEgress.value),
   )
@@ -424,6 +574,7 @@ const reason = ref<{
   kind: string
   text: string
   restricted?: boolean
+  verificationRequired?: boolean
   syncError?: string | undefined
 } | null>(null)
 
@@ -459,6 +610,7 @@ function actionError(error: unknown): void {
 function beginEdit(account: Account): void {
   editingAccountID.value = account.id
   draft.label = account.label
+  draft.note = account.note ?? ''
   draft.enabled = account.enabled
   draft.proxy = account.proxy
   draft.locale = account.locale
@@ -472,7 +624,8 @@ function closeEditor(): void {
   editingAccountID.value = ''
 }
 
-function openBrowserLogin(): void {
+async function openBrowserLogin(): Promise<void> {
+  await commitDelete()
   showBrowserLogin.value = true
 }
 
@@ -491,13 +644,18 @@ function downloadText(task: AccountTask): string {
   return [task.items[0]!.label, t('accounts.downloadingBrowser')].filter(Boolean).join(' · ')
 }
 
+// listedTasks 是任务列表显示的账户任务，刷新任务的进度显示在刷新全部按钮与账户行
+const listedTasks = computed(() => props.tasks.filter((task) => task.kind !== 'refresh'))
+
 // taskTitles 是各类账户任务的标题
 const taskTitles: Record<AccountTask['kind'], TranslationKey> = {
   login: 'accounts.browserLogin',
   relogin: 'common.relogin',
+  verify: 'accounts.verifyAccount',
   chrome: 'accounts.importChrome',
   cookies: 'accounts.pasteCookie',
   browser: 'accounts.readBrowser',
+  refresh: 'accounts.refreshAll',
 }
 
 // taskStates 是任务中账户各状态的读屏文字
@@ -514,6 +672,8 @@ const taskSteps: Record<NonNullable<AccountTaskItem['step']>, TranslationKey> = 
   reading: 'accounts.taskReading',
   checking: 'accounts.taskChecking',
   saving: 'accounts.taskSaving',
+  verifying: 'accounts.refreshVerifying',
+  verify: 'accounts.liveVerifying',
 }
 
 // taskStep 返回任务中处理中的账户当前步骤的文字，没有步骤时为空串
@@ -564,12 +724,32 @@ const downloadingRelogins = computed(
     ),
 )
 
+// downloadingVerifications 是账户验证正在等待 Camoufox 下载的账户，账户行显示下载进度
+const downloadingVerifications = computed(
+  () =>
+    new Set(
+      props.tasks
+        .filter((task) => task.kind === 'verify' && waitsForCamoufox(task, props.camoufox))
+        .map((task) => task.items[0]!.label),
+    ),
+)
+
 // reloggingAccounts 是有进行中重新登录任务的账户
 const reloggingAccounts = computed(
   () =>
     new Set(
       props.tasks
         .filter((task) => task.kind === 'relogin' && task.state === 'running')
+        .map((task) => task.items[0]!.label),
+    ),
+)
+
+// verifyingAccounts 是有进行中账户验证任务的账户
+const verifyingAccounts = computed(
+  () =>
+    new Set(
+      props.tasks
+        .filter((task) => task.kind === 'verify' && task.state === 'running')
         .map((task) => task.items[0]!.label),
     ),
 )
@@ -619,6 +799,7 @@ function viewerUnavailable(): void {
 async function beginBrowserLogin(): Promise<void> {
   pendingAction.value = 'browser-login'
   try {
+    await commitDelete()
     openViewer(await api.createAccount({ ...accountEnvironment }, newViewID()))
     showBrowserLogin.value = false
   } catch (error) {
@@ -642,6 +823,7 @@ function showPairing(token: PairingToken): void {
 async function openPairing(): Promise<void> {
   pendingAction.value = 'pairing'
   try {
+    await commitDelete()
     showPairing(
       await api.activePairing().catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 404) return api.createPairing()
@@ -684,10 +866,19 @@ async function copyPairing(): Promise<void> {
   }
 }
 
-// openChromeImport 读取本机可导入的 Chrome 账户
+// openChromeImport 读取本机可导入的 Chrome 账户（纯本地秒开，不联网检测权益）
 async function openChromeImport(): Promise<void> {
   pendingAction.value = 'chrome-discover'
   try {
+    await commitDelete()
+    chromeTierController?.abort()
+    chromeTierController = undefined
+    probingChromeTiers.value = false
+    chromeTiers.clear()
+    chromeCheckingIDs.clear()
+    chromeTierDone.value = 0
+    chromeTierTotal.value = 0
+    resetChromeFilter()
     chromeProfiles.value = await api.chromeImportProfiles()
     selectedChromeProfiles.value = []
     showChromeImport.value = true
@@ -700,6 +891,12 @@ async function openChromeImport(): Promise<void> {
 
 function closeChromeImport(): void {
   if (pendingAction.value === 'chrome-import') return
+  chromeTierController?.abort()
+  chromeTierController = undefined
+  probingChromeTiers.value = false
+  chromeCheckingIDs.clear()
+  chromeTiers.clear()
+  resetChromeFilter()
   showChromeImport.value = false
   chromeProfiles.value = []
   selectedChromeProfiles.value = []
@@ -709,6 +906,7 @@ function closeChromeImport(): void {
 async function importChromeAccounts(): Promise<void> {
   pendingAction.value = 'chrome-import'
   try {
+    await commitDelete()
     const chosen = new Set(selectedChromeProfiles.value)
     await api.importChromeAccounts({
       accounts: chromeProfiles.value
@@ -723,6 +921,12 @@ async function importChromeAccounts(): Promise<void> {
   } finally {
     pendingAction.value = ''
   }
+}
+
+// openCookieImport 提交等待中的删除后打开粘贴 Cookie 对话框
+async function openCookieImport(): Promise<void> {
+  await commitDelete()
+  showCookieImport.value = true
 }
 
 function closeCookieImport(): void {
@@ -741,6 +945,7 @@ function resetCookieDiscovery(): void {
   cookieDiscoveryError.value = ''
   cookieCandidates.value = []
   selectedCookieUsers.value = []
+  resetCookieFilter()
 }
 
 // scheduleCookieDiscovery 在粘贴或输入停顿后识别 Cookie
@@ -781,6 +986,7 @@ async function discoverCookieAccounts(): Promise<void> {
   // failed 是出错时正在识别的文件名
   let failed = ''
   try {
+    await commitDelete()
     const found: CookieCandidate[] = []
     for (const [source, item] of sources.entries()) {
       failed = item.name
@@ -820,23 +1026,51 @@ const defaultCookieUsers = computed(() => {
   return unimported.length > 0 ? unimported : importableCookieCandidates.value.map(cookieKey)
 })
 
-const allCookieCandidatesSelected = computed(
-  () =>
-    importableCookieCandidates.value.length > 0 &&
-    selectedCookieUsers.value.length === importableCookieCandidates.value.length,
-)
+const {
+  search: cookieSearch,
+  filter: cookieFilter,
+  counts: cookieFilterCounts,
+  filtered: filteredCookieCandidates,
+  visibleSelectable: visibleImportableCookieCandidates,
+  allSelected: allCookieCandidatesSelected,
+  toggleAll: toggleAllCookieCandidates,
+  reset: resetCookieFilter,
+} = useImportCandidates(cookieCandidates, selectedCookieUsers, {
+  key: cookieKey,
+  matches: (item, needle) =>
+    item.email.toLowerCase().includes(needle) ||
+    (cookieFiles.value[item.source]?.name ?? '').toLowerCase().includes(needle),
+  imported: (item) => item.imported,
+  pro: (item) => isProTier(item.benefit_tier),
+  selectable: (item) => item.restricted === '',
+})
 
-function toggleAllCookieCandidates(): void {
-  selectedCookieUsers.value = allCookieCandidatesSelected.value
-    ? []
-    : importableCookieCandidates.value.map(cookieKey)
-}
+const {
+  search: browserSearch,
+  filter: browserFilter,
+  counts: browserFilterCounts,
+  filtered: filteredCookieBrowsers,
+  visibleSelectable: visibleImportableBrowsers,
+  allSelected: allBrowsersSelected,
+  toggleAll: toggleAllBrowsers,
+  reset: resetBrowserFilter,
+} = useImportCandidates(cookieBrowsers, selectedBrowsers, {
+  key: browserKey,
+  matches: (item, needle) =>
+    item.email.toLowerCase().includes(needle) ||
+    item.browser.toLowerCase().includes(needle) ||
+    item.address.toLowerCase().includes(needle),
+  imported: (item) => item.imported,
+  pro: (item) => isProTier(item.benefit_tier),
+  selectable: (item) => item.email !== '' && item.error === '' && item.restricted === '',
+})
 
 // pasteSteps 是粘贴 Cookie 的操作步骤
 const pasteSteps: TranslationKey[] = ['accounts.pasteStep1', 'accounts.pasteStep2']
 
 // openBrowserImport 打开指纹浏览器导入并查找本机调试浏览器
-function openBrowserImport(): void {
+async function openBrowserImport(): Promise<void> {
+  await commitDelete()
   showBrowserImport.value = true
   void scanBrowsers()
 }
@@ -865,6 +1099,7 @@ async function scanBrowsers(): Promise<void> {
   browserLookupStartedAt.value = Date.now()
   scanningBrowsers.value = true
   try {
+    await commitDelete()
     cookieBrowsers.value = await api.cookieBrowsers(accountEnvironment.proxy)
     selectedBrowsers.value = cookieBrowsers.value
       .filter(
@@ -887,18 +1122,20 @@ function closeBrowserImport(): void {
   showBrowserImport.value = false
   cookieBrowsers.value = []
   selectedBrowsers.value = []
+  resetBrowserFilter()
 }
 
 // switchToCookiePaste 关闭指纹浏览器导入并打开粘贴 Cookie
 function switchToCookiePaste(): void {
   closeBrowserImport()
-  showCookieImport.value = true
+  void openCookieImport()
 }
 
 // importBrowserAccounts 在账户任务中导入勾选的调试浏览器账户并关闭对话框，语言与时区按出口位置填写
 async function importBrowserAccounts(): Promise<void> {
   pendingAction.value = 'browser-import'
   try {
+    await commitDelete()
     const chosen = new Set(selectedBrowsers.value)
     await api.importCookieAccounts({
       items: cookieBrowsers.value
@@ -936,7 +1173,7 @@ const addMethods = computed<
     label: 'accounts.browserLogin',
     help: 'accounts.browserLoginHelp',
     icon: 'login',
-    action: () => openBrowserLogin(),
+    action: () => void openBrowserLogin(),
   },
   {
     label: 'accounts.importChrome',
@@ -949,13 +1186,13 @@ const addMethods = computed<
     label: 'accounts.pasteCookie',
     help: 'accounts.pasteCookieHelp',
     icon: 'cookie',
-    action: () => (showCookieImport.value = true),
+    action: () => void openCookieImport(),
   },
   {
     label: 'accounts.readBrowser',
     help: 'accounts.readBrowserHelp',
     icon: 'fingerprint',
-    action: () => openBrowserImport(),
+    action: () => void openBrowserImport(),
   },
   {
     label: 'accounts.remoteAdd',
@@ -973,6 +1210,7 @@ async function importCookieAccounts(): Promise<void> {
   }
   pendingAction.value = 'cookie-import'
   try {
+    await commitDelete()
     const sources = cookieSources()
     const chosen = new Set(selectedCookieUsers.value)
     await api.importCookieAccounts({
@@ -1036,6 +1274,7 @@ async function updateEnabled(account: Account, enabled: boolean): Promise<void> 
   try {
     await api.updateAccount(account.id, {
       label: account.label,
+      note: account.note ?? '',
       enabled,
       proxy: account.proxy,
       locale: account.locale,
@@ -1063,7 +1302,21 @@ async function changeState(account: Account, state: 'ready' | 'disabled'): Promi
 async function loginAccount(account: Account): Promise<void> {
   pendingAction.value = `login:${account.id}`
   try {
+    await commitDelete()
     openViewer(await api.loginAccount(account.id, newViewID()))
+  } catch (error) {
+    actionError(error)
+  } finally {
+    pendingAction.value = ''
+  }
+}
+
+// verifyAccount 在账户任务中打开浏览器停在验证页完成账户验证
+async function verifyAccount(account: Account): Promise<void> {
+  pendingAction.value = `verify:${account.id}`
+  try {
+    await commitDelete()
+    openViewer(await api.verifyAccount(account.id, newViewID()))
   } catch (error) {
     actionError(error)
   } finally {
@@ -1089,7 +1342,7 @@ function refreshNotice(result: AccountRefresh, previous: Account['state']): stri
 
 // refreshOne 读取一个账户的权益与模型目录，完成后立即更新该行，失败原因记在该行
 async function refreshOne(id: string): Promise<AccountRefresh> {
-  refreshing.add(id)
+  refreshingOne.add(id)
   refreshErrors.delete(id)
   try {
     const result = await api.refreshAccount(id)
@@ -1099,7 +1352,7 @@ async function refreshOne(id: string): Promise<AccountRefresh> {
     refreshErrors.set(id, errorText(error))
     throw error
   } finally {
-    refreshing.delete(id)
+    refreshingOne.delete(id)
   }
 }
 
@@ -1118,35 +1371,50 @@ async function refreshAccount(account: Account): Promise<void> {
   }
 }
 
-// refreshConcurrency 是刷新全部时同时刷新的账户数
-const refreshConcurrency = 4
-
-// refreshAccounts 按 refreshConcurrency 的并发依次刷新 accounts 中尚未在刷新的账户，结束后提示成功与失败的数量
+// refreshAccounts 把 accounts 中尚未在刷新或排队的账户交给服务端的刷新任务
 async function refreshAccounts(accounts: Account[]): Promise<void> {
-  const targets = accounts.filter((account) => !refreshing.has(account.id))
-  for (const account of targets) queued.add(account.id)
-  refreshTotal.value = targets.length
-  refreshDone.value = 0
-  let failed = 0
-  const worker = async (): Promise<void> => {
-    for (let account = targets.shift(); account; account = targets.shift()) {
-      queued.delete(account.id)
-      await refreshOne(account.id).catch(() => failed++)
-      refreshDone.value++
-    }
+  const ids = accounts
+    .map((account) => account.id)
+    .filter((id) => !refreshing.value.has(id) && !queued.value.has(id))
+  if (ids.length === 0) return
+  for (const id of ids) submitted.add(id)
+  try {
+    await api.refreshAccounts(ids)
+  } catch (error) {
+    for (const id of ids) submitted.delete(id)
+    actionError(error)
   }
-  await Promise.all(Array.from({ length: refreshConcurrency }, worker))
-  const total = refreshTotal.value
-  refreshTotal.value = 0
-  emit('refresh')
-  emit(
-    'notice',
-    t(total - failed === 1 ? 'accounts.refreshedAllOne' : 'accounts.refreshedAll')
-      .replace('{count}', String(total - failed))
-      .replace('{failed}', String(failed)),
-    failed === 0 ? 'success' : 'error',
-  )
 }
+
+// finishedRefreshes 是已提示结果的刷新任务
+const finishedRefreshes = new Set<string>()
+
+// 刷新任务送达后由任务接管已提交的账户；账户开始刷新或刷新成功时清除该行上次的失败原因，失败时记下原因；任务结束后提示成功与失败的数量并关闭任务
+watch(
+  () => props.tasks.filter((task) => task.kind === 'refresh'),
+  (tasks) => {
+    for (const task of tasks) {
+      for (const item of task.items) {
+        submitted.delete(item.label)
+        if (item.state === 'running' || item.state === 'done') refreshErrors.delete(item.label)
+        if (item.state === 'failed') refreshErrors.set(item.label, taskError(item))
+      }
+      if (task.state === 'running' || finishedRefreshes.has(task.id)) continue
+      finishedRefreshes.add(task.id)
+      const failed = task.items.filter((item) => item.state === 'failed').length
+      const count = task.items.length - failed
+      emit(
+        'notice',
+        t(count === 1 ? 'accounts.refreshedAllOne' : 'accounts.refreshedAll')
+          .replace('{count}', String(count))
+          .replace('{failed}', String(failed)),
+        failed === 0 ? 'success' : 'error',
+      )
+      api.dismissAccountTask(task.id).catch(() => undefined)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -1227,11 +1495,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
       class="page-x flex min-h-0 flex-1 flex-col py-4 md:overflow-hidden md:py-8 md:[scrollbar-gutter:stable]"
     >
       <ul
-        v-if="tasks.length > 0"
+        v-if="listedTasks.length > 0"
         class="mb-3 divide-y divide-line/60 rounded-lg border border-line bg-panel"
         :aria-label="t('accounts.tasks')"
       >
-        <li v-for="task in tasks" :key="task.id" class="px-4 py-2.5">
+        <li v-for="task in listedTasks" :key="task.id" class="px-4 py-2.5">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex min-w-0 flex-1 basis-64 items-center gap-2.5">
               <UiIcon
@@ -1308,7 +1576,13 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 class="rounded border border-line bg-raised px-3 py-1 text-xs text-gray-300 transition hover:bg-line"
                 @click="viewerTaskID = task.id"
               >
-                {{ t('accounts.liveShow') }}
+                {{
+                  t(
+                    task.kind === 'verify' || task.items[0]?.step === 'verify'
+                      ? 'accounts.liveShowVerify'
+                      : 'accounts.liveShow',
+                  )
+                }}
               </button>
               <button
                 v-if="task.state === 'running'"
@@ -1392,8 +1666,8 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         <input
           v-model="search"
           type="search"
-          :aria-label="t('accounts.search')"
-          :placeholder="t('accounts.search')"
+          :aria-label="t('accounts.searchPlaceholder')"
+          :placeholder="t('accounts.searchPlaceholder')"
           class="min-w-0 flex-[1_1_12rem] rounded-md border border-line bg-canvas px-3 py-1 text-sm text-white focus:border-blue-500 focus:outline-none"
         />
         <UiSelect
@@ -1537,24 +1811,46 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 :aria-label="t('accounts.selectRow').replace('{name}', account.label)"
                 @change="toggleAccountSelected(account.id)"
               />
-              <div class="min-w-0">
-                <span
-                  v-tooltip.overflow="account.label"
-                  class="block truncate text-sm font-medium text-white"
-                  >{{ account.label }}</span
-                >
-                <span
-                  v-tooltip.overflow="accountSummary(account)"
-                  class="block truncate text-xs text-gray-500"
+              <div class="min-w-0 flex-1">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span
+                    v-tooltip.overflow="account.label"
+                    class="min-w-0 truncate text-sm font-medium text-white"
+                    >{{ account.label }}</span
+                  >
+                  <span
+                    v-if="account.note"
+                    v-tooltip.overflow="account.note"
+                    class="max-w-52 shrink-0 truncate rounded border border-line bg-raised px-1.5 text-xs text-gray-300"
+                    >{{ account.note }}</span
+                  >
+                </div>
+                <div
+                  class="flex min-w-0 items-center gap-1.5"
                   :class="{ 'max-lg:hidden': account.transition }"
-                  >{{ accountSummary(account) }}</span
                 >
+                  <span
+                    v-tooltip.overflow="accountSummary(account)"
+                    class="min-w-0 truncate text-xs text-gray-500"
+                    >{{ accountSummary(account) }}</span
+                  >
+                  <span
+                    v-if="account.device_bound_session && account.state !== 'auth_required'"
+                    v-tooltip="t('accounts.deviceBoundHint')"
+                    class="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1.5 text-xs text-amber-300"
+                    >{{ t('accounts.deviceBoundShort') }}</span
+                  >
+                </div>
                 <span
                   v-if="account.transition"
                   class="block truncate text-xs text-gray-400 lg:hidden"
                   >{{ transitionOperation(account) }}</span
                 >
-                <template v-if="downloadingRelogins.has(account.id)">
+                <template
+                  v-if="
+                    downloadingRelogins.has(account.id) || downloadingVerifications.has(account.id)
+                  "
+                >
                   <span class="mt-1 flex flex-wrap gap-x-2 text-xs text-gray-400"
                     >{{ t('accounts.downloadingBrowser') }}
                     <span v-if="camoufoxSize" class="font-mono text-gray-500 tabular-nums"
@@ -1609,7 +1905,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                         ? 'w-0 min-w-full py-px text-gray-400 hover:text-gray-200'
                         : [
                             'border border-current pr-1 pl-1.5 hover:brightness-125',
-                            stateTone[account.state],
+                            stateTone[displayState(account)],
                           ]
                     "
                     :disabled="
@@ -1618,7 +1914,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                     :aria-label="
                       t('accounts.stateMenu').replace(
                         '{state}',
-                        account.transition ? transitionText(account) : t(stateKeys[account.state]),
+                        account.transition
+                          ? transitionText(account)
+                          : t(stateKeys[displayState(account)]),
                       )
                     "
                     :aria-busy="toggling.has(account.id)"
@@ -1636,7 +1934,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                         >
                       </span>
                     </template>
-                    <template v-else>{{ t(stateKeys[account.state]) }}</template>
+                    <template v-else>{{ t(stateKeys[displayState(account)]) }}</template>
                     <UiIcon
                       :name="
                         toggling.has(account.id) && !account.transition ? 'spinner' : 'chevronDown'
@@ -1686,9 +1984,11 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   @click="
                     reason = {
                       title: account.label,
-                      kind: t(stateKeys[account.state]),
+                      kind: t(stateKeys[displayState(account)]),
                       text: account.message,
-                      restricted: account.state === 'restricted',
+                      restricted: account.state === 'restricted' && !account.verification_required,
+                      verificationRequired:
+                        account.state === 'restricted' && Boolean(account.verification_required),
                       syncError: account.catalog_error,
                     }
                   "
@@ -1748,6 +2048,23 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 {{ t('common.relogin') }}
               </button>
               <button
+                v-else-if="account.state === 'restricted' && account.verification_required"
+                class="rounded bg-blue-600 px-3 py-1 text-xs text-white transition hover:bg-blue-500 disabled:opacity-50"
+                type="button"
+                :disabled="
+                  pendingAction !== '' ||
+                  verifyingAccounts.has(account.id) ||
+                  refreshing.has(account.id) ||
+                  !account.enabled
+                "
+                :aria-busy="
+                  pendingAction === `verify:${account.id}` || verifyingAccounts.has(account.id)
+                "
+                @click="verifyAccount(account)"
+              >
+                {{ t('accounts.verify') }}
+              </button>
+              <button
                 v-tooltip="t(queued.has(account.id) ? 'accounts.queued' : 'accounts.refresh')"
                 type="button"
                 :class="[accountIconClass, 'hover:text-gray-200']"
@@ -1755,7 +2072,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   refreshing.has(account.id) ||
                   queued.has(account.id) ||
                   pendingAction === `login:${account.id}` ||
+                  pendingAction === `verify:${account.id}` ||
                   reloggingAccounts.has(account.id) ||
+                  verifyingAccounts.has(account.id) ||
                   !account.enabled ||
                   account.transition !== undefined
                 "
@@ -1796,8 +2115,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
       </div>
 
       <AccountModelsDialog
-        :account="modelsAccount?.label ?? ''"
-        :models="modelsAccount?.models ?? []"
+        :account="modelsAccount"
+        :catalog="models"
+        :cooldowns="cooldowns"
         :trigger="modelsTrigger"
         @close="modelsAccountID = ''"
       />
@@ -1813,7 +2133,10 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
           v-if="reason"
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-300"
         ><LinkedText :text="logText(reason.text)" /></pre>
-        <p v-if="reason?.restricted" class="mt-3 text-xs text-gray-400">
+        <p v-if="reason?.verificationRequired" class="mt-3 text-xs text-gray-400">
+          {{ t('accounts.verificationHint') }}
+        </p>
+        <p v-else-if="reason?.restricted" class="mt-3 text-xs text-gray-400">
           {{ t('accounts.restrictedHint') }}
         </p>
         <template v-if="reason?.syncError">
@@ -1828,6 +2151,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         v-if="viewerTask?.view"
         :key="viewerTask.view"
         :view="viewerTask.view"
+        :mode="viewerTask.kind === 'verify' ? 'verify' : 'login'"
         :error="viewerTask.state === 'failed' ? taskError(viewerTask.items[0]!) : ''"
         :camoufox="camoufox"
         @unavailable="viewerUnavailable"
@@ -1860,6 +2184,23 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               <label class="flex items-center justify-between">
                 <span class="text-sm font-medium text-gray-400">{{ t('common.enable') }}</span>
                 <input v-model="draft.enabled" class="h-4 w-4 accent-blue-600" type="checkbox" />
+              </label>
+              <label class="block">
+                <span
+                  class="mb-1 flex items-center justify-between gap-2 text-sm font-medium text-gray-400"
+                >
+                  <span>{{ t('accounts.note') }}</span>
+                  <span class="text-xs font-normal text-gray-500 tabular-nums"
+                    >{{ [...draft.note].length }}/120</span
+                  >
+                </span>
+                <input
+                  v-model="draft.note"
+                  maxlength="120"
+                  class="w-full rounded border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none"
+                  :placeholder="t('accounts.notePlaceholder')"
+                />
+                <span class="mt-1 block text-xs text-gray-500">{{ t('accounts.noteHelp') }}</span>
               </label>
               <AccountEnvironmentFields :model-value="draft" />
             </div>
@@ -1930,7 +2271,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
 
         <div v-if="showChromeImport" class="modal-overlay" @click.self="closeChromeImport">
           <form
-            class="mx-4 w-full max-w-lg rounded-lg border border-line bg-panel p-6 shadow-xl"
+            class="mx-4 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col rounded-lg border border-line bg-panel p-6 shadow-xl"
             @submit.prevent="importChromeAccounts"
           >
             <div class="mb-4 flex items-center justify-between">
@@ -1951,56 +2292,120 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
             <div v-if="chromeProfiles.length === 0" class="py-8 text-center text-sm text-gray-500">
               {{ t('accounts.chromeEmpty') }}
             </div>
-            <div v-else class="mb-2 flex justify-end">
-              <button
-                class="text-xs text-blue-400 transition hover:text-blue-300"
-                type="button"
-                @click="toggleAllChromeProfiles"
+            <template v-else>
+              <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span class="text-xs font-medium text-gray-400 tabular-nums">
+                  {{ t('accounts.chromeAccounts') }} ({{ chromeProfiles.length }})
+                </span>
+                <div class="flex items-center gap-2.5">
+                  <button
+                    class="inline-flex items-center gap-1.5 rounded border border-line bg-raised px-2 py-0.5 text-xs text-gray-200 tabular-nums transition hover:bg-line disabled:opacity-50"
+                    type="button"
+                    :disabled="probingChromeTiers || pendingAction === 'chrome-import'"
+                    :aria-busy="probingChromeTiers"
+                    @click="probeChromeTiers(true)"
+                  >
+                    <UiIcon
+                      :name="probingChromeTiers ? 'spinner' : 'refresh'"
+                      :size="12"
+                      class="shrink-0"
+                    />
+                    {{
+                      probingChromeTiers
+                        ? t('accounts.checkingTiers')
+                            .replace('{done}', String(chromeTierDone))
+                            .replace('{total}', String(chromeTierTotal))
+                        : t('accounts.checkTiers')
+                    }}
+                  </button>
+                  <button
+                    class="text-xs text-blue-400 transition hover:text-blue-300 disabled:opacity-50"
+                    type="button"
+                    :disabled="visibleImportableChromeProfiles.length === 0"
+                    @click="toggleAllChromeProfiles"
+                  >
+                    {{
+                      allChromeProfilesSelected
+                        ? t('accounts.deselectAll')
+                        : t('accounts.selectAll')
+                    }}
+                  </button>
+                </div>
+              </div>
+              <ImportFilterBar
+                v-model:search="chromeSearch"
+                :filter="chromeFilter"
+                :placeholder="t('accounts.importSearchChrome')"
+                :counts="chromeFilterCounts"
+                class="mb-2"
+                @update:filter="setChromeFilter"
+              />
+              <div
+                v-if="filteredChromeProfiles.length === 0"
+                class="rounded border border-line bg-canvas py-6 text-center text-xs text-gray-500"
               >
                 {{
-                  allChromeProfilesSelected ? t('accounts.deselectAll') : t('accounts.selectAll')
+                  chromeFilter === 'pro' && probingChromeTiers
+                    ? t('accounts.tierChecking')
+                    : t('accounts.importNoMatches')
                 }}
-              </button>
-            </div>
-            <div v-if="chromeProfiles.length > 0" class="max-h-[50vh] space-y-2 overflow-auto">
-              <label
-                v-for="profile in chromeProfiles"
-                :key="profile.id"
-                class="flex items-start gap-3 rounded border border-line bg-canvas p-3 transition"
-                :class="profile.restricted ? 'opacity-70' : 'cursor-pointer hover:border-gray-600'"
-              >
-                <input
-                  v-model="selectedChromeProfiles"
-                  class="mt-1 h-4 w-4 shrink-0 accent-blue-600"
-                  type="checkbox"
-                  :value="profile.id"
-                  :disabled="profile.restricted !== ''"
-                />
-                <span class="min-w-0 flex-1">
-                  <strong
-                    v-tooltip.overflow="profile.email"
-                    class="block truncate text-sm text-white"
-                    >{{ profile.email }}</strong
-                  >
-                  <span
-                    v-tooltip.overflow="profile.display_name"
-                    class="block truncate text-xs text-gray-400"
-                    >{{ profile.display_name }}</span
-                  >
-                  <span
-                    v-tooltip.overflow="profile.profile"
-                    class="block truncate font-mono text-xs text-gray-500"
-                    >{{ profile.profile }}</span
-                  >
-                  <span
-                    v-if="profile.restricted"
-                    class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
-                    >{{ t('state.restricted') }} ·
-                    <LinkedText :text="logText(profile.restricted)" compact
-                  /></span>
-                </span>
-              </label>
-            </div>
+              </div>
+              <div v-else class="min-h-0 flex-1 space-y-2 overflow-auto">
+                <label
+                  v-for="profile in filteredChromeProfiles"
+                  :key="profile.id"
+                  class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
+                  :class="
+                    chromeRestrictedOf(profile)
+                      ? 'opacity-70'
+                      : 'cursor-pointer hover:border-gray-600'
+                  "
+                >
+                  <input
+                    v-model="selectedChromeProfiles"
+                    class="h-4 w-4 shrink-0 accent-blue-600"
+                    type="checkbox"
+                    :value="profile.id"
+                    :disabled="chromeRestrictedOf(profile) !== ''"
+                  />
+                  <span class="min-w-0 flex-1">
+                    <strong
+                      v-tooltip.overflow="profile.email"
+                      class="block truncate text-sm text-white"
+                      >{{ profile.email }}</strong
+                    >
+                    <span
+                      v-if="chromeProfileLabel(profile)"
+                      v-tooltip.overflow="chromeProfileLabel(profile)"
+                      class="block truncate text-xs text-gray-400"
+                      >{{ chromeProfileLabel(profile) }}</span
+                    >
+                    <span
+                      v-if="chromeRestrictedOf(profile)"
+                      class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
+                      >{{ t('state.restricted') }} ·
+                      <LinkedText :text="logText(chromeRestrictedOf(profile))" compact
+                    /></span>
+                  </span>
+                  <span class="flex shrink-0 items-center gap-1.5">
+                    <span v-if="profile.imported" class="text-xs text-gray-400">{{
+                      t('accounts.alreadyImported')
+                    }}</span>
+                    <span
+                      v-if="chromeTierOf(profile)"
+                      class="rounded border px-1.5 text-xs font-medium"
+                      :class="tierBadgeClass(chromeTierOf(profile))"
+                      >{{ chromeTierOf(profile) }}</span
+                    >
+                    <span
+                      v-else-if="chromeCheckingIDs.has(profile.id)"
+                      class="text-xs text-gray-400"
+                      >{{ t('accounts.tierChecking') }}</span
+                    >
+                  </span>
+                </label>
+              </div>
+            </template>
             <div class="mt-6 flex gap-2">
               <button
                 class="flex-1 rounded bg-raised py-2 text-sm text-gray-300 transition hover:bg-line disabled:opacity-50"
@@ -2011,12 +2416,19 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 {{ t('common.cancel') }}
               </button>
               <button
-                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white tabular-nums transition hover:bg-blue-500 disabled:opacity-50"
                 type="submit"
                 :disabled="pendingAction !== '' || selectedChromeProfiles.length === 0"
                 :aria-busy="pendingAction === 'chrome-import'"
               >
-                {{ t('accounts.importSelected') }}
+                {{
+                  selectedChromeProfiles.length > 0
+                    ? t('accounts.importSelectedCount').replace(
+                        '{count}',
+                        String(selectedChromeProfiles.length),
+                      )
+                    : t('accounts.importSelected')
+                }}
               </button>
             </div>
           </form>
@@ -2114,12 +2526,13 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
 
               <div v-if="cookieCandidates.length > 0" class="space-y-2">
                 <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-gray-400">
+                  <span class="text-xs font-medium text-gray-400 tabular-nums">
                     {{ t('accounts.cookieAccounts') }} ({{ cookieCandidates.length }})
                   </span>
                   <button
-                    class="text-xs text-blue-400 transition hover:text-blue-300"
+                    class="text-xs text-blue-400 transition hover:text-blue-300 disabled:opacity-50"
                     type="button"
+                    :disabled="visibleImportableCookieCandidates.length === 0"
                     @click="toggleAllCookieCandidates"
                   >
                     {{
@@ -2129,9 +2542,21 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                     }}
                   </button>
                 </div>
-                <div class="max-h-[35vh] space-y-2 overflow-auto">
+                <ImportFilterBar
+                  v-model:search="cookieSearch"
+                  v-model:filter="cookieFilter"
+                  :placeholder="t('accounts.search')"
+                  :counts="cookieFilterCounts"
+                />
+                <div
+                  v-if="filteredCookieCandidates.length === 0"
+                  class="rounded border border-line bg-canvas py-6 text-center text-xs text-gray-500"
+                >
+                  {{ t('accounts.importNoMatches') }}
+                </div>
+                <div v-else class="max-h-[35vh] space-y-2 overflow-auto">
                   <label
-                    v-for="candidate in cookieCandidates"
+                    v-for="candidate in filteredCookieCandidates"
                     :key="cookieKey(candidate)"
                     class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
                     :class="
@@ -2152,16 +2577,21 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                       >
                         {{ candidate.email || t('state.restricted') }}
                       </strong>
-                      <span class="block truncate font-mono text-xs text-gray-400">
-                        {{
-                          cookieFiles.length > 0 ? `${cookieFiles[candidate.source]!.name} · ` : ''
-                        }}u/{{ candidate.auth_user }}
+                      <span class="flex min-w-0 items-center gap-1.5">
+                        <span class="truncate font-mono text-xs text-gray-400">
+                          {{
+                            cookieFiles.length > 0
+                              ? `${cookieFiles[candidate.source]!.name} · `
+                              : ''
+                          }}u/{{ candidate.auth_user }}
+                        </span>
+                        <span
+                          v-if="candidate.device_bound"
+                          v-tooltip="t('accounts.deviceBound')"
+                          class="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1.5 text-xs text-amber-300"
+                          >{{ t('accounts.deviceBoundShort') }}</span
+                        >
                       </span>
-                      <span
-                        v-if="candidate.device_bound"
-                        class="mt-1 block text-xs leading-5 text-amber-200"
-                        >{{ t('accounts.deviceBound') }}</span
-                      >
                       <span
                         v-if="candidate.sign_in_required"
                         class="mt-1 block text-xs leading-5 text-gray-400"
@@ -2174,9 +2604,17 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                         ><LinkedText :text="logText(candidate.restricted)" compact
                       /></span>
                     </span>
-                    <span v-if="candidate.imported" class="shrink-0 text-xs text-gray-400">{{
-                      t('accounts.alreadyImported')
-                    }}</span>
+                    <span class="flex shrink-0 items-center gap-1.5">
+                      <span v-if="candidate.imported" class="text-xs text-gray-400">{{
+                        t('accounts.alreadyImported')
+                      }}</span>
+                      <span
+                        v-if="candidate.benefit_tier"
+                        class="rounded border px-1.5 text-xs font-medium"
+                        :class="tierBadgeClass(candidate.benefit_tier)"
+                        >{{ candidate.benefit_tier }}</span
+                      >
+                    </span>
                   </label>
                 </div>
               </div>
@@ -2210,7 +2648,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 {{ t('common.cancel') }}
               </button>
               <button
-                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white tabular-nums transition hover:bg-blue-500 disabled:opacity-50"
                 type="submit"
                 :disabled="
                   pendingAction !== '' ||
@@ -2220,7 +2658,14 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 :aria-busy="pendingAction === 'cookie-import' || discoveringCookies"
               >
                 {{
-                  cookieCandidates.length > 0 ? t('accounts.importSelected') : t('accounts.import')
+                  cookieCandidates.length > 0
+                    ? selectedCookieUsers.length > 0
+                      ? t('accounts.importSelectedCount').replace(
+                          '{count}',
+                          String(selectedCookieUsers.length),
+                        )
+                      : t('accounts.importSelected')
+                    : t('accounts.import')
                 }}
               </button>
             </div>
@@ -2289,56 +2734,94 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
             >
               {{ t('accounts.browserEmpty') }}
             </div>
-            <div v-else class="max-h-[50vh] space-y-2 overflow-auto">
-              <label
-                v-for="browser in cookieBrowsers"
-                :key="browserKey(browser)"
-                class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
-                :class="
-                  browser.email && !browser.error && !browser.restricted
-                    ? 'cursor-pointer hover:border-gray-600'
-                    : 'opacity-70'
-                "
-              >
-                <input
-                  v-model="selectedBrowsers"
-                  class="h-4 w-4 shrink-0 accent-blue-600"
-                  type="checkbox"
-                  :value="browserKey(browser)"
-                  :disabled="!browser.email || browser.error !== '' || browser.restricted !== ''"
-                />
-                <span class="min-w-0 flex-1">
-                  <span
-                    v-tooltip.overflow="browser.email || browser.browser || browser.address"
-                    class="block truncate text-sm font-medium text-white"
-                    >{{ browser.email || browser.browser || browser.address }}</span
-                  >
-                  <span
-                    v-tooltip.overflow="browserSummary(browser)"
-                    class="block truncate text-xs text-gray-400"
-                    >{{ browserSummary(browser) }}</span
-                  >
-                  <span
-                    v-if="browser.device_bound"
-                    class="mt-1 block text-xs leading-5 text-amber-200"
-                    >{{ t('accounts.deviceBound') }}</span
-                  >
-                  <span
-                    v-if="browser.sign_in_required"
-                    class="mt-1 block text-xs leading-5 text-gray-400"
-                    >{{ t('accounts.signInUpdates') }}</span
-                  >
-                  <span
-                    v-if="browser.restricted"
-                    class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
-                    >{{ t('state.restricted') }} ·
-                    <LinkedText :text="logText(browser.restricted)" compact
-                  /></span>
+            <div v-else class="space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-gray-400 tabular-nums">
+                  {{ t('accounts.browserAccounts') }} ({{ cookieBrowsers.length }})
                 </span>
-                <span v-if="browser.imported" class="shrink-0 text-xs text-gray-400">{{
-                  t('accounts.alreadyImported')
-                }}</span>
-              </label>
+                <button
+                  class="text-xs text-blue-400 transition hover:text-blue-300 disabled:opacity-50"
+                  type="button"
+                  :disabled="visibleImportableBrowsers.length === 0"
+                  @click="toggleAllBrowsers"
+                >
+                  {{ allBrowsersSelected ? t('accounts.deselectAll') : t('accounts.selectAll') }}
+                </button>
+              </div>
+              <ImportFilterBar
+                v-model:search="browserSearch"
+                v-model:filter="browserFilter"
+                :placeholder="t('accounts.importSearchBrowser')"
+                :counts="browserFilterCounts"
+              />
+              <div
+                v-if="filteredCookieBrowsers.length === 0"
+                class="rounded border border-line bg-canvas py-6 text-center text-xs text-gray-500"
+              >
+                {{ t('accounts.importNoMatches') }}
+              </div>
+              <div v-else class="max-h-[45vh] space-y-2 overflow-auto">
+                <label
+                  v-for="browser in filteredCookieBrowsers"
+                  :key="browserKey(browser)"
+                  class="flex items-center gap-3 rounded border border-line bg-canvas p-3 transition"
+                  :class="
+                    browser.email && !browser.error && !browser.restricted
+                      ? 'cursor-pointer hover:border-gray-600'
+                      : 'opacity-70'
+                  "
+                >
+                  <input
+                    v-model="selectedBrowsers"
+                    class="h-4 w-4 shrink-0 accent-blue-600"
+                    type="checkbox"
+                    :value="browserKey(browser)"
+                    :disabled="!browser.email || browser.error !== '' || browser.restricted !== ''"
+                  />
+                  <span class="min-w-0 flex-1">
+                    <span
+                      v-tooltip.overflow="browser.email || browser.browser || browser.address"
+                      class="block truncate text-sm font-medium text-white"
+                      >{{ browser.email || browser.browser || browser.address }}</span
+                    >
+                    <span class="flex min-w-0 items-center gap-1.5">
+                      <span
+                        v-tooltip.overflow="browserSummary(browser)"
+                        class="truncate text-xs text-gray-400"
+                        >{{ browserSummary(browser) }}</span
+                      >
+                      <span
+                        v-if="browser.device_bound"
+                        v-tooltip="t('accounts.deviceBound')"
+                        class="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1.5 text-xs text-amber-300"
+                        >{{ t('accounts.deviceBoundShort') }}</span
+                      >
+                    </span>
+                    <span
+                      v-if="browser.sign_in_required"
+                      class="mt-1 block text-xs leading-5 text-gray-400"
+                      >{{ t('accounts.signInUpdates') }}</span
+                    >
+                    <span
+                      v-if="browser.restricted"
+                      class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
+                      >{{ t('state.restricted') }} ·
+                      <LinkedText :text="logText(browser.restricted)" compact
+                    /></span>
+                  </span>
+                  <span class="flex shrink-0 items-center gap-1.5">
+                    <span v-if="browser.imported" class="text-xs text-gray-400">{{
+                      t('accounts.alreadyImported')
+                    }}</span>
+                    <span
+                      v-if="browser.benefit_tier"
+                      class="rounded border px-1.5 text-xs font-medium"
+                      :class="tierBadgeClass(browser.benefit_tier)"
+                      >{{ browser.benefit_tier }}</span
+                    >
+                  </span>
+                </label>
+              </div>
             </div>
             <div class="mt-4 rounded border border-line">
               <button
@@ -2377,12 +2860,19 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 {{ t('common.cancel') }}
               </button>
               <button
-                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white transition hover:bg-blue-500 disabled:opacity-50"
+                class="flex-1 rounded bg-blue-600 py-2 text-sm text-white tabular-nums transition hover:bg-blue-500 disabled:opacity-50"
                 type="submit"
                 :disabled="selectedBrowsers.length === 0 || pendingAction !== ''"
                 :aria-busy="pendingAction === 'browser-import'"
               >
-                {{ t('accounts.importSelected') }}
+                {{
+                  selectedBrowsers.length > 0
+                    ? t('accounts.importSelectedCount').replace(
+                        '{count}',
+                        String(selectedBrowsers.length),
+                      )
+                    : t('accounts.importSelected')
+                }}
               </button>
             </div>
           </form>

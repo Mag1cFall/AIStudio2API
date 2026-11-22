@@ -62,6 +62,8 @@ type interactionRequest struct {
 	stream *streamLog
 	// cache 是 cached_content 引用的显式缓存
 	cache *geminiCache
+	// inputSteps 是提前整理好的输入步骤，避免生成期间整份持有原始 Input JSON
+	inputSteps []json.RawMessage
 }
 
 // interactionAgentConfig 是公开请求的 agent_config，max_total_tokens 按官方 REST 为字符串，也接受数字
@@ -239,7 +241,7 @@ type interactionFormat struct {
 type interactionInput struct {
 	Type        string             `json:"type"`
 	Text        *string            `json:"text"`
-	Data        string             `json:"data"`
+	Data        jsonSlice          `json:"data"`
 	URI         string             `json:"uri"`
 	MIME        string             `json:"mime_type"`
 	Processing  json.RawMessage    `json:"processing"`
@@ -570,7 +572,9 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 	pendingSignature := ""
 	// mcpFunctions 记录按函数调用发送的 MCP 调用 ID 与函数名
 	mcpFunctions := map[string]string{}
-	for _, item := range items {
+	for index := range items {
+		item := items[index]
+		items[index] = interactionInput{}
 		role := aistudio.RoleUser
 		var parts []aistudio.Part
 		switch item.Type {
@@ -578,7 +582,9 @@ func interactionContents(raw json.RawMessage) ([]aistudio.Content, error) {
 			if item.Type == "model_output" {
 				role = aistudio.RoleAssistant
 			}
-			for _, content := range item.Content {
+			for contentIndex := range item.Content {
+				content := item.Content[contentIndex]
+				item.Content[contentIndex] = interactionInput{}
 				mapped, mapErr := content.parts()
 				if mapErr != nil {
 					return nil, mapErr
@@ -682,25 +688,41 @@ func (content interactionInput) parts() ([]aistudio.Part, error) {
 			}
 		}
 	case "image", "audio", "video", "document":
-		if (content.Data == "") == (content.URI == "") {
+		hasData := content.Data.hasString()
+		if hasData == (content.URI != "") {
 			return nil, fmt.Errorf("%s content requires exactly one of data or uri", content.Type)
 		}
-		if content.Data != "" {
+		if hasData {
+			rawData, err := content.Data.stringBytes()
+			content.Data = nil
+			if err != nil {
+				return nil, fmt.Errorf("%s data: %w", content.Type, err)
+			}
+			data, err := decodeBase64Bytes(rawData)
+			if err != nil {
+				return nil, fmt.Errorf("%s data: %w", content.Type, err)
+			}
 			mimeType := content.MIME
 			if mimeType == "" {
-				data, err := decodeBase64Flexible(content.Data)
-				if err != nil {
-					return nil, fmt.Errorf("%s data: %w", content.Type, err)
-				}
 				mimeType = detectMediaType("", data)
 				if mimeType == "application/octet-stream" {
 					return nil, fmt.Errorf("%s content requires mime_type", content.Type)
 				}
 			}
-			part.InlineData = &geminiBlobPart{MIMEType: content.audioMIME(mimeType), Data: content.Data, DisplayName: content.Name}
-		} else {
-			part.FileData = &geminiFilePart{MIMEType: content.audioMIME(content.MIME), FileURI: content.URI, DisplayName: content.Name}
+			mediaType, data := normalizeImagePayload(attachmentMIME(content.audioMIME(mimeType), content.Name, data), data)
+			resolution := ""
+			if part.MediaResolution != nil {
+				resolution = part.MediaResolution.Level
+			}
+			return []aistudio.Part{{
+				InlineData:      aistudio.NewBlob(mediaType, data),
+				VideoMetadata:   (*aistudio.VideoMetadata)(part.VideoMetadata),
+				MediaProcessing: part.MediaProcessing,
+				DisplayName:     content.Name,
+				MediaResolution: resolution,
+			}}, nil
 		}
+		part.FileData = &geminiFilePart{MIMEType: content.audioMIME(content.MIME), FileURI: content.URI, DisplayName: content.Name}
 	default:
 		return nil, fmt.Errorf("unsupported input type %q", content.Type)
 	}
@@ -835,8 +857,10 @@ func (audio outputAudioFormat) encode(media aistudio.Blob) (aistudio.Blob, error
 	switch {
 	case baseType == "audio/mpeg" && encoding.format == "mp3" && sameRate && audio.BitRate == 0:
 		return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, source.SampleRate, source.Channels), Data: media.Data}, nil
-	case baseType != "audio/mpeg" && encoding.format == "pcm" && sameRate:
+	case baseType == "audio/l16" && encoding.format == "pcm" && sameRate:
 		return media, nil
+	case (baseType == "audio/wav" || baseType == "audio/x-wav") && audio.MIME == "audio/wav" && sameRate:
+		return aistudio.Blob{MIME: "audio/wav", Data: media.Data}, nil
 	}
 	data, encoded, err := encodeAudio(source, audioOutput{Format: encoding.format, SampleRate: audio.SampleRate, BitRate: audio.BitRate})
 	return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, encoded.SampleRate, encoded.Channels), Data: data}, err

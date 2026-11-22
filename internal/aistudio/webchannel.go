@@ -405,7 +405,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 	if err != nil {
 		return nil, err
 	}
-	client, err := t.transport.clientForProxy(lease.Account().EffectiveProxy(t.transport.globalProxy))
+	client, err := t.transport.clientForAccount(lease.Account())
 	if err != nil {
 		return nil, err
 	}

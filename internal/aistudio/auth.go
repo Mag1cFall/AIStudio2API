@@ -124,6 +124,28 @@ func (s StorageState) AuthExtension() (AuthExtension, bool, error) {
 	return extension, true, nil
 }
 
+// HasBoundCookie 表示认证状态包含设备绑定的 __Secure-1PSIDRTS Cookie
+func (s StorageState) HasBoundCookie() bool {
+	for _, cookie := range s.Cookies {
+		if cookie.Name == "__Secure-1PSIDRTS" {
+			return true
+		}
+	}
+	return false
+}
+
+// DeviceBoundSession 表示会话带 __Secure-1PSIDRTS 且缺少本地 Chrome OAuth 续签材料，属于约 2 小时内失效的设备绑定副本
+func (s StorageState) DeviceBoundSession() bool {
+	if !s.HasBoundCookie() {
+		return false
+	}
+	extension, exists, err := s.AuthExtension()
+	if err == nil && exists && extension.OAuth != nil && strings.TrimSpace(extension.OAuth.RefreshToken) != "" {
+		return false
+	}
+	return true
+}
+
 // BoundCookieLifetime 按 Chromium MinimumBoundCookieLifetime 返回 DBSC 会话绑定 Cookie 中最早到期者的剩余时间，缺少或已到期时为 0
 func (s StorageState) BoundCookieLifetime(session BoundSession, now time.Time) time.Duration {
 	lifetime := time.Duration(1<<63 - 1)
@@ -146,25 +168,51 @@ func (s StorageState) BoundCookieLifetime(session BoundSession, now time.Time) t
 
 // IsolatedLoginRequest 描述独立浏览器登录所需的稳定环境，View 不为空时登录画面显示在管理页登录窗口
 type IsolatedLoginRequest struct {
-	Directory string
-	Proxy     string
-	Locale    string
-	Timezone  string
-	View      *camoufoxnative.LiveView
+	Directory          string
+	Proxy              string
+	Locale             string
+	Timezone           string
+	View               *camoufoxnative.LiveView
+	OnLoggedIn         func(context.Context, IsolatedLoginResult) error
+	CheckVerification  func(context.Context, StorageState) (bool, error)
+	OnVerifyStep       func(string)
+	VerifyPollInterval time.Duration
 }
 
 // IsolatedLoginResult 返回独立浏览器导出的认证状态
 type IsolatedLoginResult struct {
-	StorageState StorageState
-	Email        string
-	VerifiedAt   time.Time
-	DriveError   string
-	CloseError   string
+	StorageState        StorageState
+	Email               string
+	VerifiedAt          time.Time
+	DriveError          string
+	CloseError          string
+	Saved               bool
+	VerificationPending bool
+	VerificationError   string
 }
 
 // IsolatedLoginDriver 定义独立浏览器登录
 type IsolatedLoginDriver interface {
 	Login(context.Context, IsolatedLoginRequest) (IsolatedLoginResult, error)
+}
+
+// AccountVerifyRequest 描述在独立浏览器中打开账户验证页所需的环境与核对回调
+type AccountVerifyRequest struct {
+	Directory         string
+	StorageState      StorageState
+	AuthUser          int
+	Proxy             string
+	Locale            string
+	Timezone          string
+	View              *camoufoxnative.LiveView
+	CheckVerification func(context.Context, StorageState) (bool, error)
+	OnVerifyStep      func(string)
+	PollInterval      time.Duration
+}
+
+// AccountVerifyDriver 定义在独立浏览器中打开账户验证页并自动再核对的能力
+type AccountVerifyDriver interface {
+	Verify(context.Context, AccountVerifyRequest) (bool, error)
 }
 
 // LoadStorageState 读取并校验 Playwright storage state
