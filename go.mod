@@ -12,6 +12,7 @@ require (
 	github.com/bogdanfinn/utls v1.7.7-barnius
 	github.com/brainplusplus/go-browserforge v0.1.0
 	github.com/dlclark/regexp2/v2 v2.5.2
+	github.com/go-ego/gocc v0.10.0
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
@@ -66,6 +67,7 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/tphakala/simd v1.15.0 // indirect
+	github.com/vcaesar/cedar v0.50.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect

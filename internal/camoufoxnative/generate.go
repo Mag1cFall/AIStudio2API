@@ -86,7 +86,7 @@ type chatTab struct {
 	page      pageHandle
 	// busy 表示标签页正在运行一轮对话
 	busy bool
-	// contents 是标签页上一轮发出的 GenerateContent 的 contents，页面没有对话或上一轮以上游错误结束时为空
+	// contents 是标签页上一轮成功完成的 GenerateContent 的 contents，页面没有对话或上一轮未成功完成时为空
 	contents []json.RawMessage
 	// resetting 表示一轮对话结束后正在后台新开对话，或页面正在原标签页重新载入
 	resetting bool
@@ -221,11 +221,6 @@ func nextChatAction(previous, contents []json.RawMessage) chatAction {
 		return chatContinue
 	}
 	return chatNew
-}
-
-// StartsNewChat 返回页面上一次发出的对话 previous 之后要发出 contents 时是否先开新对话
-func StartsNewChat(previous, contents []json.RawMessage) bool {
-	return nextChatAction(previous, contents) == chatNew
 }
 
 // generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明
@@ -399,18 +394,13 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, unboost func()
 	turn.report(StepSent)
 	sent.observe(ctx, locked)
 	worker.mu.Lock()
-	tab.contents = contents
+	tab.contents = nil
 	tab.unsent = false
 	worker.mu.Unlock()
 	status, header, err := readResponseHead(ctx, channel)
 	if err != nil {
 		client.closeChannel(requestID)
 		return nil, errors.Join(err, worker.stopTurn(tab))
-	}
-	if status != http.StatusOK {
-		worker.mu.Lock()
-		tab.contents = nil
-		worker.mu.Unlock()
 	}
 	bodyCtx, cancelBody := context.WithCancel(ctx)
 	return &ProtectedResponse{
@@ -419,7 +409,16 @@ func (worker *Worker) generate(ctx context.Context, tab *chatTab, unboost func()
 		Proof:      sent.Proof,
 		Body: &protectedResponseBody{
 			ctx: bodyCtx, cancel: cancelBody, worker: worker, contextID: tab.contextID, page: tab.page, requestID: requestID, channel: channel,
-			stop: func() error { return worker.stopTurn(tab) }, release: func(done, call bool) { worker.releaseChat(tab, done && status == http.StatusOK && !call) },
+			stop: func() error { return worker.stopTurn(tab) },
+			release: func(completed, call bool) {
+				ok := completed && status == http.StatusOK
+				if ok {
+					worker.mu.Lock()
+					tab.contents = contents
+					worker.mu.Unlock()
+				}
+				worker.releaseChat(tab, ok && !call)
+			},
 		},
 	}, nil
 }
@@ -759,13 +758,25 @@ func (worker *Worker) acquireChat(ctx context.Context) (*chatTab, error) {
 			return nil, errors.New("Camoufox runtime 已关闭")
 		}
 		resetting := false
+		var fallback *chatTab
 		for _, tab := range worker.chats {
 			if !tab.busy {
-				tab.busy = true
-				worker.useTab(tab.contextID)
-				return tab, nil
+				if tab.contents == nil && !tab.unsent {
+					tab.busy = true
+					worker.useTab(tab.contextID)
+					return tab, nil
+				}
+				if fallback == nil {
+					fallback = tab
+				}
+				continue
 			}
 			resetting = resetting || tab.resetting
+		}
+		if fallback != nil {
+			fallback.busy = true
+			worker.useTab(fallback.contextID)
+			return fallback, nil
 		}
 		if !resetting && !worker.chatOpening {
 			if waited && worker.chatOpenErr != nil {
@@ -797,20 +808,35 @@ func (worker *Worker) notifyChats() {
 	}
 }
 
-// openChat 在后台新建标签页并载入官网页面，结束后把它作为空闲标签页加入或记下失败原因，并唤醒等待标签页的请求；调用方持有 mu
+// openChat 在后台新建标签页并载入官网页面，结束后把它作为空闲标签页加入或记下失败原因，并唤醒等待标签页的请求；期间发生重新载入时关闭该旧标签页；调用方持有 mu
 func (worker *Worker) openChat() {
 	worker.chatOpening, worker.chatOpenErr = true, nil
+	generation := worker.reloads
 	options := worker.options
 	options.StartupProgress = nil
 	go func() {
 		tab, err := worker.loadChat(context.Background(), options)
 		worker.mu.Lock()
-		defer worker.mu.Unlock()
-		worker.chatOpening, worker.chatOpenErr = false, err
-		if err == nil && !worker.closed {
+		closed := worker.closed
+		stale := worker.reloads != generation
+		if stale {
+			worker.chatOpenErr = nil
+		} else {
+			worker.chatOpenErr = err
+		}
+		worker.chatOpening = false
+		if err == nil && !closed && !stale {
 			worker.chats = append(worker.chats, tab)
+		} else if err == nil && worker.selected == tab.contextID {
+			worker.selected = ""
 		}
 		worker.notifyChats()
+		worker.mu.Unlock()
+		if err == nil && !closed && stale {
+			if closeErr := worker.closeTab(tab.contextID); closeErr != nil {
+				slog.Warn("关闭重新载入前新开的 Camoufox 标签页失败", "context", tab.contextID, "error", closeErr)
+			}
+		}
 	}()
 }
 
@@ -843,10 +869,11 @@ func (worker *Worker) loadChat(ctx context.Context, options Options) (*chatTab, 
 	return &chatTab{contextID: contextID, page: loaded.page}, nil
 }
 
-// releaseChat 结束标签页上的一轮对话；completed 表示本轮成功完成，此时在后台新开对话，下一轮在空白对话中直接输入
+// releaseChat 结束标签页上的一轮对话；completed 表示本轮成功完成，标签页未退役时在后台新开对话，下一轮在空白对话中直接输入
 func (worker *Worker) releaseChat(tab *chatTab, completed bool) {
 	worker.mu.Lock()
-	reset := completed && !worker.closed
+	retired := worker.tabs[tab.contextID] != nil && worker.tabs[tab.contextID].retired
+	reset := completed && !worker.closed && !retired
 	if reset {
 		tab.resetting = true
 	} else {
@@ -886,6 +913,12 @@ func (worker *Worker) clearChat(ctx context.Context, tab *chatTab) error {
 	defer unboost()
 	worker.lockInputIdle()
 	defer worker.inputMu.Unlock()
+	worker.mu.Lock()
+	retired := worker.closed || (worker.tabs[tab.contextID] != nil && worker.tabs[tab.contextID].retired)
+	worker.mu.Unlock()
+	if retired {
+		return nil
+	}
 	if err := worker.selectChat(ctx, tab); err != nil {
 		return err
 	}

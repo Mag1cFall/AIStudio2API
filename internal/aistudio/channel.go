@@ -373,13 +373,6 @@ func (p *AccountPool) assistantBusyLocked(account *Account, selection AccountSel
 	return account.assistantBusy && p.assistantSelectionLocked(selection)
 }
 
-// InteractionAgentModel 判断模型是否为经 CreateInteraction 后台任务生成的 agent，如 Deep Research 与 Antigravity
-func (p *AccountPool) InteractionAgentModel(modelID string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.modelCapabilityLocked(modelID, "interaction_task")
-}
-
 // modelCapabilityLocked 返回目录中首个同 ID 模型的能力标记
 func (p *AccountPool) modelCapabilityLocked(modelID string, capability string) bool {
 	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
@@ -408,6 +401,11 @@ func (p *AccountPool) buildSupportsModelLocked(account *Account, modelID string,
 	}
 	if !found {
 		return false
+	}
+	for _, model := range account.Models {
+		if modelMatchesID(model, modelID) {
+			return !buildExcludedPlaygroundModel(model) && (anyTier || modelAllowedByTier(model, account.BenefitTier))
+		}
 	}
 	for _, candidate := range p.accounts {
 		for _, model := range candidate.Models {

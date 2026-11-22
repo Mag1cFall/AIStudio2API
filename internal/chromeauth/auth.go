@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -41,6 +42,90 @@ type ImportResult struct {
 	Email       string
 	CookieCount int
 	State       aistudio.StorageState
+}
+
+// ProfileTierResult 是按需检测单个本机 Chrome 账号权益的结果
+type ProfileTierResult struct {
+	ID          string
+	BenefitTier string
+	Restricted  string
+	Error       string
+}
+
+// CheckProfileTiers 复用一次主密钥读取与官网公共头，并发检测所选 Chrome 账号的 AI Studio 权益并逐条回调结果
+func CheckProfileTiers(ctx context.Context, options ImportOptions, onResult func(ProfileTierResult)) error {
+	if err := ensurePlatformImport(); err != nil {
+		return err
+	}
+	proxyURL := strings.TrimSpace(options.Proxy)
+	if err := config.ValidateProxy(proxyURL); err != nil {
+		return err
+	}
+	accounts, err := Discover(options.ChromeRoot)
+	if err != nil {
+		return err
+	}
+	selected, err := selectAccounts(accounts, options.Profiles, options.Emails, options.AccountIDs)
+	if err != nil {
+		return err
+	}
+	masterKey, err := retrieveV20Key(options.ChromeRoot)
+	if err != nil {
+		return err
+	}
+	client, err := aistudio.NewProxyHTTPClient(proxyURL)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	headers, err := aistudio.DiscoverPublicHeaders(ctx, client)
+	if err != nil {
+		return err
+	}
+	const maxConcurrency = 4
+	sem := make(chan struct{}, maxConcurrency)
+	var emitMu sync.Mutex
+	var group sync.WaitGroup
+	for _, account := range selected {
+		if ctx.Err() != nil {
+			break
+		}
+		account := account
+		group.Go(func() {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			item := ProfileTierResult{ID: account.ID}
+			imported, err := importAccount(ctx, options.ChromeRoot, proxyURL, account, masterKey)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				item.Error = err.Error()
+			} else if tier, err := fetchBenefitTier(ctx, client, &imported.State, headers, 0); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if denial := aistudio.RestrictionDenial(err); denial != nil {
+					item.Restricted = denial.Error()
+				} else {
+					item.Error = err.Error()
+				}
+			} else {
+				item.BenefitTier = tier.String()
+			}
+			if onResult != nil && ctx.Err() == nil {
+				emitMu.Lock()
+				onResult(item)
+				emitMu.Unlock()
+			}
+		})
+	}
+	group.Wait()
+	return ctx.Err()
 }
 
 // Import 用本机 Chrome 的 OAuth 续签材料生成 Playwright storage state
@@ -88,6 +173,14 @@ func Refresh(ctx context.Context, source aistudio.AuthSource, material aistudio.
 	return toStorageCookies(cookies), bound, nil
 }
 
+// ChromeRoot 返回非空的自定义 Chrome User Data 目录，root 为空时返回稳定版默认目录
+func ChromeRoot(root string) (string, error) {
+	if trimmed := strings.TrimSpace(root); trimmed != "" {
+		return trimmed, nil
+	}
+	return DefaultChromeRoot()
+}
+
 // sourceIdentity 返回导入来源 Chrome profile 的请求身份与校验后的代理，来源未记录目录时使用稳定版 Chrome 目录
 func sourceIdentity(source aistudio.AuthSource, proxy string) (chromeIdentity, string, error) {
 	if err := ensurePlatformImport(); err != nil {
@@ -98,11 +191,9 @@ func sourceIdentity(source aistudio.AuthSource, proxy string) (chromeIdentity, s
 	if err != nil {
 		return chromeIdentity{}, "", err
 	}
-	root := source.Root
-	if root == "" {
-		if root, err = DefaultChromeRoot(); err != nil {
-			return chromeIdentity{}, "", err
-		}
+	root, err := ChromeRoot(source.Root)
+	if err != nil {
+		return chromeIdentity{}, "", err
 	}
 	identity, err := readChromeIdentity(root, source.Profile)
 	return identity, proxyURL, err

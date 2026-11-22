@@ -18,6 +18,7 @@ func (s *server) handleResponsesInputTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	prepared, err := s.prepareResponses(r.Context(), &request, newID("count"), false)
+	request.Input, request.split = nil, splitInput{}
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -90,6 +91,10 @@ func (s *server) resumeResponseStream(w http.ResponseWriter, r *http.Request) {
 // handleResponseDelete 删除已保存的响应
 func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("response")
+	if _, _, ok := s.responseStates.Response(id, nil); !ok {
+		writeResponseNotFound(w, id)
+		return
+	}
 	s.stopBackground(id)
 	if !s.responseStates.Delete(id, false) {
 		writeResponseNotFound(w, id)
@@ -100,14 +105,20 @@ func (s *server) handleResponseDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleResponseCancel 终止进行中的后台响应并返回保存的 cancelled 对象，已结束的后台响应返回最终对象，其他响应不可取消
 func (s *server) handleResponseCancel(w http.ResponseWriter, r *http.Request) {
-	s.stopBackground(r.PathValue("response"))
-	response, background, ok := s.responseStates.Response(r.PathValue("response"), nil)
+	id := r.PathValue("response")
+	response, background, ok := s.responseStates.Response(id, nil)
 	if !ok {
-		writeResponseNotFound(w, r.PathValue("response"))
+		writeResponseNotFound(w, id)
 		return
 	}
 	if !background {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "Only responses created with background=true can be cancelled.")
+		return
+	}
+	s.stopBackground(id)
+	response, _, ok = s.responseStates.Response(id, nil)
+	if !ok {
+		writeResponseNotFound(w, id)
 		return
 	}
 	writeJSON(w, http.StatusOK, officialOrder("responses", response))

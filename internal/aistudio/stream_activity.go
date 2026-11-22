@@ -12,8 +12,15 @@ type streamActivityReader struct {
 	notify func(int)
 }
 
-// ContextWithStreamActivityObserver 记录上游响应体实际到达的字节
+// ContextWithStreamActivityObserver 记录上游响应体实际到达的字节，ctx 已有的观察函数照常收到同样的字节
 func ContextWithStreamActivityObserver(ctx context.Context, observer func(int)) context.Context {
+	if parent, _ := ctx.Value(streamActivityContextKey{}).(func(int)); parent != nil {
+		own := observer
+		observer = func(count int) {
+			parent(count)
+			own(count)
+		}
+	}
 	return context.WithValue(ctx, streamActivityContextKey{}, observer)
 }
 

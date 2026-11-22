@@ -69,8 +69,12 @@ var configKeys = [...]string{
 	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
 	"FIRST_EVENT_HEDGE_MODELS",
+	"FIRST_EVENT_TIMEOUT",
 	"CONTINUATION_REWRITE",
 	"CONTINUATION_PROMPT",
+	"REPLY_TOOL",
+	"USER_MESSAGE_REWRITE",
+	"THINKING_GUARD",
 }
 
 // LogFileMB 是单个日志文件的轮转大小
@@ -94,6 +98,9 @@ const FirstEventHedgeOff = "off"
 // FirstEventHedgeAuto 表示按模型与通道近期原请求首事件等待的 p95 发起备用请求
 const FirstEventHedgeAuto = "auto"
 
+// FirstEventTimeoutOff 表示不限制单次尝试等待首个事件的时间
+const FirstEventTimeoutOff = "off"
+
 // DefaultMaxAccountSwitches 是 MAX_ACCOUNT_SWITCHES 的默认值
 const DefaultMaxAccountSwitches = 3
 
@@ -105,6 +112,15 @@ const MediaOutputInline = "inline"
 
 // MediaOutputURL 表示生成的媒体保存到本地，Chat 与 Messages 正文以 URL 引用
 const MediaOutputURL = "url"
+
+// UserMessageRewriteOff 表示不改写用户消息文字
+const UserMessageRewriteOff = "off"
+
+// UserMessageRewriteTraditional 表示发送前将用户消息中的简体中文转为繁体
+const UserMessageRewriteTraditional = "traditional"
+
+// UserMessageRewriteMartian 表示发送前将用户消息中的中文转为火星文
+const UserMessageRewriteMartian = "martian"
 
 // DefaultContinuationPrompt 是 CONTINUATION_PROMPT 未设置时改写末尾 assistant 轮所用的续写提示词
 const DefaultContinuationPrompt = "Continue the assistant response after the following prefix. Return only the continuation, without repeating the prefix."
@@ -129,8 +145,12 @@ type Config struct {
 	GoogleSearch           bool
 	FirstEventHedge        string
 	FirstEventHedgeModels  string
+	FirstEventTimeout      string
 	ContinuationRewrite    bool
 	ContinuationPrompt     string
+	ReplyTool              bool
+	UserMessageRewrite     string
+	ThinkingGuard          bool
 	AuthStates             string
 	ListenAddr             string
 	PreviewListenAddr      string
@@ -182,8 +202,10 @@ func Default() Config {
 		SearchModelAliases:     true,
 		FirstEventHedge:        FirstEventHedgeOff,
 		FirstEventHedgeModels:  DefaultFirstEventHedgeModels,
+		FirstEventTimeout:      FirstEventTimeoutOff,
 		ContinuationRewrite:    true,
 		ContinuationPrompt:     DefaultContinuationPrompt,
+		UserMessageRewrite:     UserMessageRewriteOff,
 		AuthStates:             defaultAuthStates,
 		ListenAddr:             defaultListenAddr,
 		PreviewListenAddr:      defaultPreviewListenAddr,
@@ -234,7 +256,10 @@ var configSetters = map[string]func(*Config, string) error{
 	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
 	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
 	"STRIP_THOUGHT_SIGNATURES": boolSetter("STRIP_THOUGHT_SIGNATURES", func(c *Config) *bool { return &c.StripThoughtSignatures }),
-	"CONTINUATION_REWRITE":     boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
+	"CONTINUATION_REWRITE":      boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
+	"REPLY_TOOL":                boolSetter("REPLY_TOOL", func(c *Config) *bool { return &c.ReplyTool }),
+	"USER_MESSAGE_REWRITE":      textSetter(func(c *Config) *string { return &c.UserMessageRewrite }, lowerTrim),
+	"THINKING_GUARD":            boolSetter("THINKING_GUARD", func(c *Config) *bool { return &c.ThinkingGuard }),
 	"LOG_MAX_TOTAL_MB":         intSetter("LOG_MAX_TOTAL_MB", func(c *Config) *int { return &c.LogMaxTotalMB }),
 	"WARM_WORKER_LIMIT":        intSetter("WARM_WORKER_LIMIT", func(c *Config) *int { return &c.WarmWorkerLimit }),
 	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
@@ -247,6 +272,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
 	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
 	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
+	"FIRST_EVENT_TIMEOUT":      textSetter(func(c *Config) *string { return &c.FirstEventTimeout }, lowerTrim),
 	"CONTINUATION_PROMPT":      textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
 	"AISTUDIO_AUTH_STATES":     textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
 	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
@@ -436,11 +462,23 @@ var configChecks = []configCheck{
 		_, _, err := ParseFirstEventHedge(c.FirstEventHedge)
 		return err
 	}},
+	{[]string{"FIRST_EVENT_TIMEOUT"}, func(c Config) error {
+		_, err := ParseFirstEventTimeout(c.FirstEventTimeout)
+		return err
+	}},
 	{[]string{"MEDIA_OUTPUT"}, func(c Config) error {
 		if c.MediaOutput != MediaOutputInline && c.MediaOutput != MediaOutputURL {
 			return fmt.Errorf("MEDIA_OUTPUT 必须是 inline 或 url")
 		}
 		return nil
+	}},
+	{[]string{"USER_MESSAGE_REWRITE"}, func(c Config) error {
+		switch c.UserMessageRewrite {
+		case UserMessageRewriteOff, UserMessageRewriteTraditional, UserMessageRewriteMartian:
+			return nil
+		default:
+			return fmt.Errorf("USER_MESSAGE_REWRITE 必须是 off、traditional 或 martian")
+		}
 	}},
 	{[]string{"MEDIA_BASE_URL"}, func(c Config) error {
 		if c.MediaBaseURL == "" {
@@ -610,8 +648,12 @@ func (c Config) envValues() map[string]string {
 		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
 		"FIRST_EVENT_HEDGE_MODELS": c.FirstEventHedgeModels,
-		"CONTINUATION_REWRITE":     strconv.FormatBool(c.ContinuationRewrite),
-		"CONTINUATION_PROMPT":      c.ContinuationPrompt,
+		"FIRST_EVENT_TIMEOUT":      c.FirstEventTimeout,
+		"CONTINUATION_REWRITE":      strconv.FormatBool(c.ContinuationRewrite),
+		"CONTINUATION_PROMPT":       c.ContinuationPrompt,
+		"REPLY_TOOL":                strconv.FormatBool(c.ReplyTool),
+		"USER_MESSAGE_REWRITE":      c.UserMessageRewrite,
+		"THINKING_GUARD":            strconv.FormatBool(c.ThinkingGuard),
 		"AISTUDIO_AUTH_STATES":     c.AuthStates,
 		"LISTEN_ADDR":              c.ListenAddr,
 		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
@@ -722,6 +764,18 @@ func ParseFirstEventHedge(value string) (bool, time.Duration, error) {
 		return false, 0, fmt.Errorf("FIRST_EVENT_HEDGE 必须是 off、auto 或正整数秒")
 	}
 	return false, time.Duration(seconds) * time.Second, nil
+}
+
+// ParseFirstEventTimeout 解析 FIRST_EVENT_TIMEOUT，返回单次尝试等待首个事件的最长时间，off 时为零值
+func ParseFirstEventTimeout(value string) (time.Duration, error) {
+	if value == FirstEventTimeoutOff {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("FIRST_EVENT_TIMEOUT 必须是 off 或正整数秒")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 // ModelList 解析逗号分隔的模型 ID 列表

@@ -17,6 +17,9 @@ const (
 // FunctionCallMarker 是 GenerateContent 响应流中函数调用 Part 的开头：十个空字段后为带函数名的 functionCall
 var FunctionCallMarker = []byte(`[null,null,null,null,null,null,null,null,null,null,["`)
 
+// ErrFunctionTabUnavailable 表示没有最后一轮是本请求回应的函数调用的空闲标签页
+var ErrFunctionTabUnavailable = errors.New("没有最后一轮是本请求回应的函数调用的标签页")
+
 // functionTab 返回最后一轮是 contents 所回应的函数调用、输入框中没有未发出输入的空闲标签页，即 contents 在其上一轮的对话后追加了 model 与 user 两轮，没有时为 nil；调用方持有 mu
 func (worker *Worker) functionTab(contents []json.RawMessage) *chatTab {
 	for _, tab := range worker.chats {
@@ -44,7 +47,7 @@ func (worker *Worker) acquireFunctionChat(contents []json.RawMessage) (*chatTab,
 	defer worker.mu.Unlock()
 	tab := worker.functionTab(contents)
 	if tab == nil {
-		return nil, errors.New("没有最后一轮是本请求回应的函数调用的标签页")
+		return nil, ErrFunctionTabUnavailable
 	}
 	tab.busy = true
 	worker.useTab(tab.contextID)

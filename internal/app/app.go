@@ -138,6 +138,7 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	if err != nil {
 		return false, err
 	}
+	defer manager.requests.close()
 	logService := func(level, message string, attrs ...any) {
 		manager.requests.log("service", level, message, attrs...)
 	}

@@ -23,6 +23,7 @@ export type AccountState =
 export interface Account {
   id: string
   label: string
+  note?: string
   enabled: boolean
   state: AccountState
   proxy: string
@@ -47,6 +48,10 @@ export interface Account {
   active_requests: number
   // catalog_error 是已有模型目录的账户最近一次目录同步失败的原因
   catalog_error?: string
+  // verification_required 表示账户因 Google 要求完成账户验证而受限，可在账户页打开验证页扫码
+  verification_required?: boolean
+  // device_bound_session 表示账户会话带 __Secure-1PSIDRTS 且缺少本地与远程续签材料，约 2 小时内失效
+  device_bound_session?: boolean
 }
 
 // AccountExit 是一个账户出口代理的公网 IP 与按 IP 定位的国家，proxy 为空时是直连，查询失败时 error 为原因
@@ -77,6 +82,7 @@ export interface AccountRefresh {
 
 export interface AccountDraft {
   label: string
+  note: string
   enabled: boolean
   proxy: string
   locale: string
@@ -94,8 +100,20 @@ export interface ChromeImportProfile {
   profile: string
   display_name: string
   email: string
+  // imported 表示该邮箱已存在于账户列表中
+  imported?: boolean
+  // benefit_tier 是账户已知或检测出的权益等级
+  benefit_tier?: string
   // restricted 是账户服务受限的原因，受限的账户不能导入
   restricted: string
+}
+
+// ChromeProfileTier 是按需检测单个本机 Chrome 账号权益的流式结果
+export interface ChromeProfileTier {
+  id: string
+  benefit_tier?: string
+  restricted?: string
+  error?: string
 }
 
 export interface PairingToken {
@@ -126,14 +144,14 @@ export interface AccountTaskItem {
   state: 'pending' | 'running' | 'done' | 'failed'
   code?: string
   error?: string
-  // step 是处理中的账户当前的步骤：等待登录、读取浏览器里的登录状态、检查 AI Studio 访问、保存账户
-  step?: 'login' | 'reading' | 'checking' | 'saving'
+  // step 是处理中的账户当前的步骤：等待登录、读取浏览器里的登录状态、检查 AI Studio 访问、保存账户、核对验证状态、等待扫码验证
+  step?: 'login' | 'reading' | 'checking' | 'saving' | 'verifying' | 'verify'
 }
 
-// AccountTask 是在服务端运行的添加或重新登录账户任务，view 为显示登录画面的登录窗口 ID
+// AccountTask 是在服务端运行的添加、重新登录、验证或刷新账户任务，view 为显示登录或验证画面的窗口 ID；刷新任务中账户的 label 为账户 ID
 export interface AccountTask {
   id: string
-  kind: 'login' | 'relogin' | 'chrome' | 'cookies' | 'browser'
+  kind: 'login' | 'relogin' | 'verify' | 'chrome' | 'cookies' | 'browser' | 'refresh'
   view?: string
   state: 'running' | 'done' | 'failed'
   items: AccountTaskItem[]
@@ -160,6 +178,8 @@ export interface CookieBrowser {
   restricted: string
   // sign_in_required 为真时该账户已导入且需要重新登录，导入时原地更新它的认证状态
   sign_in_required: boolean
+  // benefit_tier 是识别阶段读取到的账户权益等级
+  benefit_tier?: string
 }
 
 interface AccountCounters {
@@ -435,9 +455,13 @@ export interface ServiceConfig {
   google_search: boolean
   continuation_rewrite: boolean
   continuation_prompt: string
+  reply_tool: boolean
+  user_message_rewrite: 'off' | 'traditional' | 'martian'
+  thinking_guard: boolean
   strip_thought_signatures: boolean
   first_event_hedge: string
   first_event_hedge_models: string
+  first_event_timeout: string
   auth_states: string
   listen_addr: string
   preview_listen_addr: string

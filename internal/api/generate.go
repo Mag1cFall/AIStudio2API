@@ -233,12 +233,19 @@ func providerFinishReason(reason string) string {
 
 // addSystemReminder 把对话中途的系统消息以 system-reminder 追加到上一个 user 轮，上一轮不是 user 时返回待并入下一个 user 轮的 reminder
 func addSystemReminder(contents []aistudio.Content, pending []aistudio.Part, text string) []aistudio.Part {
-	reminder := aistudio.Part{Text: "<system-reminder>\n" + text + "\n</system-reminder>"}
-	if last := len(contents) - 1; last >= 0 && contents[last].Role == aistudio.RoleUser {
-		contents[last].Parts = append(contents[last].Parts, reminder)
+	return addSystemReminderParts(contents, pending, []aistudio.Part{{Text: "<system-reminder>\n" + text + "\n</system-reminder>"}})
+}
+
+// addSystemReminderParts 把对话中途的系统提醒内容追加到上一个 user 轮，上一轮不是 user 时返回待并入下一个 user 轮的片段
+func addSystemReminderParts(contents []aistudio.Content, pending []aistudio.Part, parts []aistudio.Part) []aistudio.Part {
+	if len(parts) == 0 {
 		return pending
 	}
-	return append(pending, reminder)
+	if last := len(contents) - 1; last >= 0 && contents[last].Role == aistudio.RoleUser {
+		contents[last].Parts = append(contents[last].Parts, parts...)
+		return pending
+	}
+	return append(pending, parts...)
 }
 
 // appendWithReminders 追加一条消息，待并入的 reminder 排在下一个 user 消息的函数结果之后
@@ -275,7 +282,10 @@ var functionResultMediaTypes = map[string]bool{
 	"image_url": true, "input_image": true, "input_file": true, "input_audio": true, "video_url": true, "input_video": true,
 }
 
-// functionResultParts 把工具结果转成函数结果内容与紧随其后的媒体 part，文本块以换行相连作为结果文本，isError 时结果写在 error 键下
+// functionResultMediaPayloads 是媒体块中承载内容的字段，单个对象带其中之一时才按媒体块处理
+var functionResultMediaPayloads = []string{"image_url", "file_id", "file_data", "file_url", "input_audio", "video_url", "source", "data", "uri"}
+
+// functionResultParts 把工具结果转成函数结果内容与紧随其后的媒体 part，文本块以换行相连作为结果文本，类型与内容字段都是媒体块的单个对象按只含它的块数组处理，isError 时结果写在 error 键下
 func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawMessage) ([]aistudio.Part, error)) (json.RawMessage, []aistudio.Part, error) {
 	key := "result"
 	if isError {
@@ -283,7 +293,15 @@ func functionResultParts(raw json.RawMessage, isError bool, parse func(json.RawM
 	}
 	trimmed := bytes.TrimSpace(raw)
 	var blocks []json.RawMessage
-	if bytes.HasPrefix(trimmed, []byte("[")) && json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
+	var single struct {
+		Type string `json:"type"`
+	}
+	var fields map[string]json.RawMessage
+	if bytes.HasPrefix(trimmed, []byte("{")) && json.Unmarshal(raw, &single) == nil && functionResultMediaTypes[single.Type] && json.Unmarshal(raw, &fields) == nil &&
+		slices.ContainsFunc(functionResultMediaPayloads, func(name string) bool { return fields[name] != nil }) {
+		blocks = []json.RawMessage{raw}
+	}
+	if len(blocks) > 0 || bytes.HasPrefix(trimmed, []byte("[")) && json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
 		var texts []string
 		var media []aistudio.Part
 		contentBlocks := true

@@ -104,9 +104,9 @@ export function logField(entry: AdminLog, key: string): string | undefined {
   return entry.fields?.find((field) => field.key === key)?.value
 }
 
-// logDuration 返回日志 duration 字段的毫秒数，没有该字段时返回 undefined
-export function logDuration(entry: AdminLog): number | undefined {
-  const value = logField(entry, 'duration')
+// logDuration 返回日志时长字段（默认 duration）的毫秒数，没有该字段时返回 undefined
+export function logDuration(entry: AdminLog, key = 'duration'): number | undefined {
+  const value = logField(entry, key)
   return value === undefined ? undefined : parseGoDuration(value)
 }
 
@@ -118,25 +118,37 @@ export function isAttempt(entry: AdminLog): boolean {
   return attemptMessages.has(entry.message)
 }
 
-// TimelineItem 是请求时间线的一行：event 为来源、级别与消息相同的连续进度事件，attempt 为一次失败后换账户的尝试及其全部事件
-export type TimelineItem =
-  | { kind: 'event'; events: AdminLog[] }
-  | { kind: 'attempt'; attempt: AdminLog; events: AdminLog[] }
+// waitMessage 与 resumeMessage 是流式输出中模型停顿与恢复输出的日志消息
+const waitMessage = '等待模型继续输出'
+const resumeMessage = '模型继续输出'
 
-// requestTimeline 把请求事件整理为时间线：每次换账户前的事件并入该次尝试，其余连续的同类进度事件合为一行
+// TimelineStep 是请求时间线中的一步：event 为来源、级别与消息相同的连续进度事件，pause 为同一来源模型停顿期间的等待事件与随后的恢复事件
+export interface TimelineStep {
+  kind: 'event' | 'pause'
+  events: AdminLog[]
+}
+
+// TimelineItem 是请求时间线的一行：一步，或一次失败后换账户的尝试及该次尝试的全部步骤
+export type TimelineItem =
+  | TimelineStep
+  | { kind: 'attempt'; attempt: AdminLog; steps: TimelineStep[] }
+
+// requestTimeline 把请求事件整理为时间线：每次换账户前的事件并入该次尝试，其余事件按 appendStep 合并
 export function requestTimeline(events: AdminLog[]): TimelineItem[] {
   const items: TimelineItem[] = []
   let pending: AdminLog[] = []
   const flush = () => {
-    for (const event of pending) appendEvent(items, event)
+    for (const event of pending) appendStep(items, event)
     pending = []
   }
   for (const event of events) {
     if (event.event !== 'request.progress') {
       flush()
-      appendEvent(items, event)
+      appendStep(items, event)
     } else if (isAttempt(event)) {
-      items.push({ kind: 'attempt', attempt: event, events: [...pending, event] })
+      const steps: TimelineStep[] = []
+      for (const item of [...pending, event]) appendStep(steps, item)
+      items.push({ kind: 'attempt', attempt: event, steps })
       pending = []
     } else {
       pending.push(event)
@@ -146,18 +158,47 @@ export function requestTimeline(events: AdminLog[]): TimelineItem[] {
   return items
 }
 
-// appendEvent 把事件追加到时间线，与上一行同为来源、级别与消息相同的进度事件时并入该行
-function appendEvent(items: TimelineItem[], event: AdminLog): void {
+// pauseResumed 判断停顿是否已以恢复输出结束
+export function pauseResumed(step: TimelineStep): boolean {
+  return step.events.at(-1)!.message === resumeMessage
+}
+
+// pauseDuration 返回停顿的毫秒数：恢复时为恢复事件记录的等待时长，仍在等待时为最近一次等待事件记录的时长
+export function pauseDuration(step: TimelineStep): number {
+  return logDuration(step.events.at(-1)!, 'waited') ?? 0
+}
+
+// pauseStart 返回停顿开始的时刻，即最后一次收到输出的时刻
+export function pauseStart(step: TimelineStep): Date {
+  return new Date(Date.parse(step.events.at(-1)!.time) - pauseDuration(step))
+}
+
+// appendStep 把事件追加到时间线：等待模型继续输出的事件与随后同一来源的恢复事件合为一步停顿，其余与上一步同为来源、级别与消息相同的进度事件并入该步
+function appendStep(items: TimelineItem[], event: AdminLog): void {
   const last = items.at(-1)
+  const openPause =
+    last?.kind === 'pause' && !pauseResumed(last) && last.events[0]!.source === event.source
+      ? last
+      : undefined
+  if (event.event === 'request.progress' && event.message === waitMessage) {
+    if (openPause) openPause.events.push(event)
+    else items.push({ kind: 'pause', events: [event] })
+    return
+  }
+  if (event.event === 'request.progress' && event.message === resumeMessage && openPause) {
+    openPause.events.push(event)
+    return
+  }
   const previous = last?.kind === 'event' ? last.events.at(-1)! : undefined
   if (
+    last?.kind === 'event' &&
     previous?.event === 'request.progress' &&
     event.event === 'request.progress' &&
     previous.source === event.source &&
     previous.level === event.level &&
     previous.message === event.message
   ) {
-    last!.events.push(event)
+    last.events.push(event)
     return
   }
   items.push({ kind: 'event', events: [event] })
@@ -234,7 +275,6 @@ export function requestSources(row: LogRow): string[] {
 }
 
 // groupLogs 按请求标识合并生命周期、按来源与阶段名合并分阶段运行日志，并保持服务事件的原始顺序；previous 中事件相同的行沿用原对象
-
 export function groupLogs(logs: AdminLog[], previous: ReadonlyMap<string, LogRow>): LogRow[] {
   const rows: LogRow[] = []
   const requests = new Map<string, LogRow>()

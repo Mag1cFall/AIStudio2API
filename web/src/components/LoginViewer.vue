@@ -33,6 +33,7 @@ const props = defineProps<{
   view: string
   error: string
   camoufox: PreparationStatus | undefined
+  mode?: 'login' | 'verify'
 }>()
 const emit = defineEmits<{ unavailable: []; cancel: []; hide: []; close: [] }>()
 const { t } = useI18n()
@@ -91,12 +92,27 @@ const secure = computed(() => pageURL.value?.protocol === 'https:')
 const busy = computed(
   () =>
     props.error === '' &&
-    (preparing.value || status.value === 'starting' || status.value === 'saving'),
+    (preparing.value ||
+      status.value === 'starting' ||
+      status.value === 'saving' ||
+      status.value === 'checking'),
+)
+const failedTitle = computed(() =>
+  t(props.mode === 'verify' ? 'accounts.liveVerifyFailed' : 'accounts.liveFailed'),
+)
+const dialogTitle = computed(() =>
+  t(
+    props.mode === 'verify' || status.value === 'verifying'
+      ? 'accounts.verifyAccount'
+      : 'accounts.browserLogin',
+  ),
 )
 const statusText = computed(() => {
-  if (props.error !== '') return t('accounts.liveFailed')
+  if (props.error !== '') return failedTitle.value
   if (preparing.value || status.value === 'starting') return t('accounts.liveStarting')
   if (status.value === 'saving') return t('accounts.liveSaving')
+  if (status.value === 'checking') return t('accounts.liveChecking')
+  if (status.value === 'verifying' || props.mode === 'verify') return t('accounts.liveVerifying')
   return t('accounts.liveWaiting')
 })
 // fitScale 是画面完整放进画布区时的缩放，放得下时为 1
@@ -394,7 +410,7 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-[80] flex flex-col bg-canvas"
       role="dialog"
       aria-modal="true"
-      :aria-label="t('accounts.browserLogin')"
+      :aria-label="dialogTitle"
     >
       <header
         class="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-panel px-2 sm:gap-3 sm:px-4"
@@ -557,7 +573,7 @@ onBeforeUnmount(() => {
           >
             <p class="mb-2 flex shrink-0 items-center gap-2 text-sm font-medium text-red-300">
               <UiIcon name="warning" :size="16" />
-              {{ t('accounts.liveFailed') }}
+              {{ failedTitle }}
             </p>
             <p
               class="mb-4 min-h-0 overflow-y-auto text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-gray-300"

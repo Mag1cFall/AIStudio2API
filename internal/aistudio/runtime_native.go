@@ -121,8 +121,11 @@ type functionContinuer interface {
 	ContinuesFunctionCall([]byte) bool
 }
 
+// skipFunctionTabKey 标记请求在函数调用标签页不可用后改走非界面取 proof 路径
+type skipFunctionTabKey struct{}
+
 // generator 返回在页面界面运行该请求的 runtime：Camoufox 后端、未带 proof 的 GenerateContent，最后一个轮次是带文本的 user 轮次，或是回应页面最后一轮函数调用的函数结果
-func (worker *NativeWorker) generator(request ProtectedRequest) (pageGenerator, bool) {
+func (worker *NativeWorker) generator(ctx context.Context, request ProtectedRequest) (pageGenerator, bool) {
 	runtime := worker.current()
 	generator, ok := runtime.(pageGenerator)
 	if !ok || request.Proof != "" || !strings.HasSuffix(request.URL, "/GenerateContent") {
@@ -131,9 +134,28 @@ func (worker *NativeWorker) generator(request ProtectedRequest) (pageGenerator, 
 	if _, typed := camoufoxnative.GeneratePrompt(request.Body); typed {
 		return generator, true
 	}
+	if ctx.Value(skipFunctionTabKey{}) != nil {
+		return nil, false
+	}
 	continuer, ok := runtime.(functionContinuer)
 	_, result := wireFunctionResult(request.Body)
 	return generator, ok && result && continuer.ContinuesFunctionCall(request.Body)
+}
+
+// missingFunctionTab 判断请求本应在 Camoufox 函数调用标签页由页面取 proof，但该标签页已不可用
+func (worker *NativeWorker) missingFunctionTab(request ProtectedRequest) bool {
+	if !strings.HasSuffix(request.URL, "/GenerateContent") {
+		return false
+	}
+	runtime := worker.current()
+	if _, ok := runtime.(pageGenerator); !ok {
+		return false
+	}
+	if _, ok := runtime.(functionContinuer); !ok {
+		return false
+	}
+	_, result := wireFunctionResult(request.Body)
+	return result
 }
 
 // resultSubmitter 是像官网用户一样在函数调用块中粘贴函数结果并点击提交后取 proof 的 workerRuntime
@@ -164,7 +186,7 @@ func submitRounds(body []byte) int {
 
 // Prepare 生成 fresh proof，请求带 Proof 时沿用该 proof，正文原样返回，发送时在 ProofAt 处写入；在页面界面运行的 GenerateContent 由页面应用取 proof，只返回公共协议头
 func (worker *NativeWorker) Prepare(ctx context.Context, request ProtectedRequest) (PreparedProtectedRequest, error) {
-	if _, ok := worker.generator(request); ok {
+	if _, ok := worker.generator(ctx, request); ok {
 		headers, err := worker.current().ProtocolHeaders(ctx)
 		if err != nil {
 			return PreparedProtectedRequest{}, err
@@ -328,8 +350,11 @@ const pageSubmitCountDelay = 250 * time.Millisecond
 // Camoufox 后端未带 proof 的 GenerateContent 在页面界面运行，请求头、proof 与随后的 CountTokens 由页面应用产生
 // 其余 GenerateContent 发出 pageCountTokensDelay 后由 runtime 以相同请求头统计页面提示词的 token
 func (worker *NativeWorker) SendProtected(ctx context.Context, request ProtectedRequest) (*RPCResponse, error) {
-	if generator, ok := worker.generator(request); ok {
+	if generator, ok := worker.generator(ctx, request); ok {
 		return worker.generate(ctx, generator, request)
+	}
+	if request.Proof == "" && worker.missingFunctionTab(request) {
+		return nil, camoufoxnative.ErrFunctionTabUnavailable
 	}
 	if body, delay, ok := countTokensBody(request); ok {
 		ctx = withFollowUp(ctx, followUp{URL: makerSuiteRPCURL + "CountTokens", Body: body, Delay: delay})
@@ -378,7 +403,7 @@ func (worker *NativeWorker) generate(ctx context.Context, generator pageGenerato
 		},
 	})
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, camoufoxnative.ErrFunctionTabUnavailable) {
 			worker.setPhase(WorkerReady)
 		} else {
 			worker.setPhase(WorkerFailed)

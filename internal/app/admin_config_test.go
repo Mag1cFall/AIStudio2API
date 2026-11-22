@@ -26,7 +26,7 @@ func TestAdminConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pool := aistudio.NewAccountPool(nil, 1)
-	admin := &runtimeAdmin{configPath: path, requests: newRequestRegistry(ctx), pool: pool, service: &trackedService{pool: pool}}
+	admin := &runtimeAdmin{configPath: path, requests: newRequestRegistry(), pool: pool, service: &trackedService{pool: pool}}
 	value, err := admin.RuntimeConfig(ctx)
 	if err != nil {
 		t.Fatal(err)

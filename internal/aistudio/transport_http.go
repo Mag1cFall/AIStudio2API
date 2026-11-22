@@ -45,15 +45,22 @@ type HTTPTransportOptions struct {
 	GlobalProxy string
 }
 
+// accountHTTPClient 保存单个账户当前出口代理对应的 HTTP 客户端
+type accountHTTPClient struct {
+	proxyURL string
+	client   *http.Client
+}
+
 // MakerSuiteHTTPTransport 使用账户固定出口发送普通 RPC
 type MakerSuiteHTTPTransport struct {
-	pool        *AccountPool
-	signer      *Signer
-	headers     ProtocolHeaderProvider
-	globalProxy string
-	now         func() time.Time
-	clientsMu   sync.Mutex
-	clients     map[string]*http.Client
+	pool           *AccountPool
+	signer         *Signer
+	headers        ProtocolHeaderProvider
+	globalProxy    string
+	now            func() time.Time
+	clientsMu      sync.Mutex
+	clients        map[string]*http.Client
+	accountClients map[string]accountHTTPClient
 	// driveMu 保护 driveDiscovered
 	driveMu sync.Mutex
 	// driveDiscovered 记录已按官网页面读取 Drive discovery 文档的账户
@@ -114,6 +121,7 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 		globalProxy:     strings.TrimSpace(options.GlobalProxy),
 		now:             time.Now,
 		clients:         make(map[string]*http.Client),
+		accountClients:  make(map[string]accountHTTPClient),
 		driveDiscovered: make(map[string]bool),
 	}
 	if _, err := transport.clientForProxy(transport.globalProxy); err != nil {
@@ -205,7 +213,7 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 	if err != nil {
 		return "", fmt.Errorf("读取账户动态公共头: %w", err)
 	}
-	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
+	client, err := t.clientForAccount(account)
 	if err != nil {
 		return "", err
 	}
@@ -324,7 +332,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 		return nil, releaseOnError(fmt.Errorf("创建 MakerSuite %s 请求: %w", rpc.Method, err))
 	}
 	request.Header = headers
-	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
+	client, err := t.clientForAccount(account)
 	if err != nil {
 		return nil, releaseOnError(err)
 	}
@@ -378,8 +386,34 @@ func (t *MakerSuiteHTTPTransport) CloseIdleConnections() {
 	for _, client := range t.clients {
 		client.CloseIdleConnections()
 	}
+	for _, entry := range t.accountClients {
+		entry.client.CloseIdleConnections()
+	}
 }
 
+// clientForAccount 返回账户专用的固定出口客户端，与每账户一个浏览器的 Firefox 一致，按账户隔离连接池、预检缓存与 TLS 票据缓存
+func (t *MakerSuiteHTTPTransport) clientForAccount(account *Account) (*http.Client, error) {
+	proxyURL := account.EffectiveProxy(t.globalProxy)
+	t.clientsMu.Lock()
+	if entry, ok := t.accountClients[account.ID]; ok && entry.proxyURL == proxyURL {
+		t.clientsMu.Unlock()
+		return entry.client, nil
+	}
+	client, err := NewProxyHTTPClient(proxyURL)
+	if err != nil {
+		t.clientsMu.Unlock()
+		return nil, err
+	}
+	previous := t.accountClients[account.ID].client
+	t.accountClients[account.ID] = accountHTTPClient{proxyURL: proxyURL, client: client}
+	t.clientsMu.Unlock()
+	if previous != nil {
+		previous.CloseIdleConnections()
+	}
+	return client, nil
+}
+
+// clientForProxy 返回按代理共用的无凭据客户端，供不带账户 Cookie 与授权头的公开静态资源请求使用
 func (t *MakerSuiteHTTPTransport) clientForProxy(proxyURL string) (*http.Client, error) {
 	t.clientsMu.Lock()
 	defer t.clientsMu.Unlock()
