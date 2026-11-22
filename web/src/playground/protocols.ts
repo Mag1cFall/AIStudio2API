@@ -1,6 +1,5 @@
 import { ParseError } from 'eventsource-parser'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
-import { jsonBody } from '@/api'
 import type { Model } from '@/types'
 import { base64Bytes } from './bytes'
 import { isAgent } from './catalog'
@@ -1370,7 +1369,7 @@ export async function generate(options: GenerateOptions): Promise<void> {
   const response = await fetch(call.path, {
     method: 'POST',
     headers: call.headers,
-    body: call.body instanceof FormData ? call.body : jsonBody(call.body),
+    body: call.body instanceof FormData ? call.body : JSON.stringify(call.body),
     signal: options.signal,
   })
   if (!response.ok) throw new Error(await errorMessage(response))

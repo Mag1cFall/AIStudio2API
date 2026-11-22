@@ -1187,8 +1187,16 @@ func (s *PooledService) UploadInlineMediaToLease(
 		drive := s.client.transport.(DriveTransport)
 		uploadCtx, cancelUploads := context.WithCancel(targetCtx)
 		resultChannel := make(chan uploadResult, len(pending))
+		sem := make(chan struct{}, min(len(pending), 4))
 		for index, job := range pending {
 			go func(index int, job uploadJob) {
+				select {
+				case sem <- struct{}{}:
+				case <-uploadCtx.Done():
+					resultChannel <- uploadResult{index: index, err: uploadCtx.Err()}
+					return
+				}
+				defer func() { <-sem }()
 				file, err := drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
 					AccountID: targetID,
 					Name:      job.name,

@@ -28,7 +28,7 @@ func (scan *mp4Duration) Write(data []byte) (int, error) {
 			take := min(int64(len(data)), scan.moovLeft)
 			scan.moov, scan.moovLeft, data = append(scan.moov, data[:take]...), scan.moovLeft-take, data[take:]
 			if scan.moovLeft == 0 {
-				scan.duration, scan.done = mvhdDuration(scan.moov), true
+				scan.duration, scan.done, scan.moov = mvhdDuration(scan.moov), true, nil
 			}
 		case scan.skip > 0:
 			take := min(int64(len(data)), scan.skip)

@@ -7,7 +7,7 @@ export interface Part {
   text?: string
   thought?: boolean
   thoughtSignature?: string
-  inlineData?: { mimeType: string; data: string; displayName?: string }
+  inlineData?: { mimeType: string; data: string; mediaId?: string; displayName?: string }
   fileData?: { mimeType?: string; fileUri: string }
   functionCall?: { name: string; args?: Record<string, unknown>; id?: string }
   functionResponse?: { name: string; response: Record<string, unknown>; id?: string }

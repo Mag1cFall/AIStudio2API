@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
-import { attachmentKind, attachmentName, attachmentURL } from './attachment'
+import { attachmentKind, attachmentName, attachmentURL, loadAttachmentBlob } from './attachment'
 import { base64Bytes } from './bytes'
 import { pdfThumbnail } from './pdf'
 import { youtubeVideoID } from './sample-media'
@@ -31,13 +31,28 @@ const thumbnail = ref('')
 const textPage = ref('')
 onMounted(async () => {
   const inline = props.part.inlineData
-  if (inline?.mimeType === 'application/pdf')
-    thumbnail.value = await pdfThumbnail(inline.data, 346).catch(() => '')
-  else if (inline?.mimeType.startsWith('text/'))
-    textPage.value = new TextDecoder()
-      .decode(base64Bytes(inline.data.slice(0, 8000)))
-      .replace(/\s+/g, ' ')
-      .slice(0, 5000)
+  if (inline?.mimeType === 'application/pdf') {
+    thumbnail.value = await pdfThumbnail(attachmentURL(props.part), 346).catch(() => '')
+  } else if (inline?.mimeType.startsWith('text/')) {
+    if (inline.mediaId) {
+      const response = await fetch(attachmentURL(props.part), {
+        headers: { Range: 'bytes=0-5999' },
+      }).catch(() => undefined)
+      if (response?.ok) {
+        textPage.value = (await response.text()).replace(/\s+/g, ' ').slice(0, 5000)
+      }
+    } else if (inline.data === '') {
+      const blob = await loadAttachmentBlob(props.part).catch(() => undefined)
+      if (blob) {
+        textPage.value = (await blob.slice(0, 6000).text()).replace(/\s+/g, ' ').slice(0, 5000)
+      }
+    } else {
+      textPage.value = new TextDecoder()
+        .decode(base64Bytes(inline.data.slice(0, 8000)))
+        .replace(/\s+/g, ' ')
+        .slice(0, 5000)
+    }
+  }
 })
 </script>
 

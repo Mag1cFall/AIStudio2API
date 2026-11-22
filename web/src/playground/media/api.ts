@@ -1,4 +1,3 @@
-import { jsonBody } from '@/api'
 import { useI18n } from '@/i18n'
 import { base64Bytes, bytesToBase64, pcmToWav } from '../bytes'
 import { apiKey, errorMessage } from '../request'
@@ -33,7 +32,7 @@ async function post<T>(path: string, body: unknown, signal: AbortSignal): Promis
   const response = await fetch(path, {
     method: 'POST',
     headers: headers(),
-    body: jsonBody(body),
+    body: JSON.stringify(body),
     signal,
   })
   if (!response.ok) throw new Error(await errorMessage(response))
@@ -84,8 +83,8 @@ export async function predictImages(
 }
 
 // downloadMedia 下载本服务返回的媒体地址
-export async function downloadMedia(url: string): Promise<Blob> {
-  const response = await fetch(url, { headers: headers(false) })
+export async function downloadMedia(url: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(url, { headers: headers(false), signal: signal ?? null })
   if (!response.ok) throw new Error(await errorMessage(response))
   return response.blob()
 }
