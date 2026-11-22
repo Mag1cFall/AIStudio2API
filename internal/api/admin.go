@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -18,6 +19,7 @@ type AdminService interface {
 	AccountExits(context.Context) ([]AccountExit, error)
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
+	CheckChromeImportTiers(context.Context, ChromeTierCheckInput, func(ChromeProfileTier)) error
 	CookieBrowsers(ctx context.Context, proxy string) ([]CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, CookieImportInput) ([]CookieBrowser, error)
 	ImportChromeAccounts(context.Context, ChromeImportInput) ([]AdminAccount, error)
@@ -27,6 +29,7 @@ type AdminService interface {
 	SetAccountState(ctx context.Context, accountID string, state string) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
+	VerifyAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
@@ -190,6 +193,7 @@ type AdminAccountCounts struct {
 type AdminAccount struct {
 	ID          string   `json:"id"`
 	Label       string   `json:"label"`
+	Note        string   `json:"note,omitempty"`
 	Enabled     bool     `json:"enabled"`
 	State       string   `json:"state"`
 	Proxy       string   `json:"proxy"`
@@ -218,6 +222,10 @@ type AdminAccount struct {
 	ActiveRequests int `json:"active_requests"`
 	// CatalogError 是已有模型目录的账户最近一次目录同步失败的原因，下一次同步成功后省略
 	CatalogError string `json:"catalog_error,omitempty"`
+	// VerificationRequired 表示账户因上游要求验证而受限，可在验证页完成验证后恢复
+	VerificationRequired bool `json:"verification_required,omitempty"`
+	// DeviceBoundSession 表示账户会话带 __Secure-1PSIDRTS 且缺少本地与远程续签材料，约 2 小时内失效
+	DeviceBoundSession bool `json:"device_bound_session,omitempty"`
 }
 
 // AccountExit 表示一个账户出口代理的公网 IP 与按 IP 定位的国家、时区和语言，Proxy 为空时是直连，查询失败时 Error 为原因
@@ -251,6 +259,7 @@ type AdminAccountRefresh struct {
 // AccountInput 表示已有账户配置
 type AccountInput struct {
 	Label    string `json:"label"`
+	Note     string `json:"note"`
 	Enabled  bool   `json:"enabled"`
 	Proxy    string `json:"proxy"`
 	Locale   string `json:"locale"`
@@ -276,8 +285,26 @@ type ChromeImportProfile struct {
 	Profile     string `json:"profile"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+	// Imported 表示该邮箱已存在于账户列表中（需要重新登录或受限）
+	Imported bool `json:"imported,omitempty"`
+	// BenefitTier 是该账户已知或检测出的 AI Studio 权益等级，未检测时省略
+	BenefitTier string `json:"benefit_tier,omitempty"`
 	// Restricted 是该账户服务受限的原因，受限的账户不能导入
 	Restricted string `json:"restricted"`
+}
+
+// ChromeTierCheckInput 是按需检测本机 Chrome 账号权益的请求参数
+type ChromeTierCheckInput struct {
+	AccountIDs []string `json:"account_ids"`
+	Proxy      string   `json:"proxy"`
+}
+
+// ChromeProfileTier 是按需检测单个本机 Chrome 账号权益的流式结果
+type ChromeProfileTier struct {
+	ID          string `json:"id"`
+	BenefitTier string `json:"benefit_tier,omitempty"`
+	Restricted  string `json:"restricted,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // CookieBrowser 表示本机开启远程调试的浏览器与其中登录 AI Studio 的账户
@@ -296,6 +323,8 @@ type CookieBrowser struct {
 	DeviceBound bool `json:"device_bound"`
 	// SignInRequired 表示该账户已导入且需要重新登录，导入时原地更新它的认证状态
 	SignInRequired bool `json:"sign_in_required"`
+	// BenefitTier 是识别阶段读取到的 AI Studio 权益等级，未读取到时省略
+	BenefitTier string `json:"benefit_tier,omitempty"`
 }
 
 // ChromeImportInput 表示批量导入的 Chrome 账号与账户环境
@@ -326,8 +355,12 @@ type RuntimeConfig struct {
 	GoogleSearch              bool                 `json:"google_search"`
 	FirstEventHedge           string               `json:"first_event_hedge"`
 	FirstEventHedgeModels     string               `json:"first_event_hedge_models"`
+	FirstEventTimeout         string               `json:"first_event_timeout"`
 	ContinuationRewrite       bool                 `json:"continuation_rewrite"`
 	ContinuationPrompt        string               `json:"continuation_prompt"`
+	ReplyTool                 bool                 `json:"reply_tool"`
+	UserMessageRewrite        string               `json:"user_message_rewrite"`
+	ThinkingGuard             bool                 `json:"thinking_guard"`
 	LogFile                   bool                 `json:"log_file"`
 	LogMaxTotalMB             int                  `json:"log_max_total_mb"`
 	AuthStates                string               `json:"auth_states"`
@@ -401,6 +434,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/accounts/exits", s.handleAccountExits)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
+	mux.HandleFunc("POST /api/accounts/import/chrome/tiers", s.handleCheckChromeImportTiers)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
 	mux.HandleFunc("GET /api/accounts/import/browsers", s.handleCookieBrowsers)
 	mux.HandleFunc("POST /api/accounts/import/cookies/discover", s.handleDiscoverCookieAccounts)
@@ -415,8 +449,10 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/accounts/{id}/state", s.handleSetAccountState)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
+	mux.HandleFunc("POST /api/accounts/{id}/verify", s.handleVerifyAccount)
 	mux.HandleFunc("GET /api/login-view/{view}", s.handleLoginView)
 	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
+	mux.HandleFunc("POST /api/accounts/refresh", s.handleRefreshAccounts)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
 	mux.HandleFunc("POST /api/camoufox/download", s.handleDownloadCamoufox)
@@ -479,6 +515,43 @@ func (s *server) handleChromeImportProfiles(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]ChromeImportProfile{"profiles": profiles})
+}
+
+// handleCheckChromeImportTiers 流式按行输出所选 Chrome 账号的权益检测结果（NDJSON），每完成一个账号即刷新到客户端
+func (s *server) handleCheckChromeImportTiers(w http.ResponseWriter, r *http.Request) {
+	var input ChromeTierCheckInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.AccountIDs) == 0 {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", "未选择 Chrome 账号")
+		return
+	}
+	flusher, _ := w.(http.Flusher)
+	started := false
+	err := s.config.Admin.CheckChromeImportTiers(r.Context(), input, func(item ChromeProfileTier) {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+		}
+		if line, marshalErr := json.Marshal(item); marshalErr == nil {
+			_, _ = w.Write(append(line, '\n'))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+	if err != nil && !started {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	if !started {
+		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func (s *server) handleCookieBrowsers(w http.ResponseWriter, r *http.Request) {

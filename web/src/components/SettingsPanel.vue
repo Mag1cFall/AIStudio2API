@@ -42,7 +42,14 @@ const adminPassword = ref('')
 // form 是编辑中的配置，读到 props.config 后由 resetForm 填入，表单只在读到配置后显示
 const form = reactive({} as ServiceConfig)
 
-type SectionID = 'service' | 'capacity' | 'runtime' | 'models' | 'network' | 'security'
+type SectionID =
+  | 'service'
+  | 'capacity'
+  | 'runtime'
+  | 'models'
+  | 'sillytavern'
+  | 'network'
+  | 'security'
 
 // sections 是设置分组与各组包含的可编辑字段
 const sections: {
@@ -91,6 +98,7 @@ const sections: {
       'build_native_nonstream',
       'init_timeout',
       'request_timeout',
+      'first_event_timeout',
       'first_event_hedge',
       'first_event_hedge_models',
     ],
@@ -112,6 +120,12 @@ const sections: {
       'continuation_prompt',
       'strip_thought_signatures',
     ],
+  },
+  {
+    id: 'sillytavern',
+    label: 'settings.section.sillytavern',
+    icon: 'playground',
+    fields: ['reply_tool', 'thinking_guard', 'user_message_rewrite'],
   },
   {
     id: 'network',
@@ -144,6 +158,34 @@ const waaBackendOptions: { value: ServiceConfig['waa_backend']; label: Translati
   { value: 'camoufox', label: 'settings.waaBackendCamoufox' },
   { value: 'spidermonkey', label: 'settings.waaBackendSpiderMonkey' },
 ]
+// userMessageRewriteOptions 是用户消息改写模式与对应的实时预览文案键
+const userMessageRewriteOptions: {
+  value: ServiceConfig['user_message_rewrite']
+  label: TranslationKey
+  preview: TranslationKey
+}[] = [
+  {
+    value: 'off',
+    label: 'settings.userMessageRewriteOff',
+    preview: 'settings.userMessageRewritePreviewOff',
+  },
+  {
+    value: 'traditional',
+    label: 'settings.userMessageRewriteTraditional',
+    preview: 'settings.userMessageRewritePreviewTraditional',
+  },
+  {
+    value: 'martian',
+    label: 'settings.userMessageRewriteMartian',
+    preview: 'settings.userMessageRewritePreviewMartian',
+  },
+]
+const userMessageRewritePreview = computed(() => {
+  const matched = userMessageRewriteOptions.find(
+    (option) => option.value === form.user_message_rewrite,
+  )
+  return t((matched ?? userMessageRewriteOptions[0]!).preview)
+})
 const inputClass =
   'w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-white transition focus:border-blue-500 focus:outline-none'
 
@@ -254,6 +296,28 @@ const hedgeMode = computed({
   set: (mode: string) => {
     form.first_event_hedge = mode === 'custom' ? String(suggestedSeconds.value) : mode
   },
+})
+
+// firstEventTimeoutMode 是单次首字超时的方式，选自定义时填入默认 120 秒
+const firstEventTimeoutMode = computed({
+  get: () => (form.first_event_timeout === 'off' ? 'off' : 'custom'),
+  set: (mode: string) => {
+    form.first_event_timeout = mode === 'custom' ? '120' : 'off'
+  },
+})
+
+// firstEventTimeoutHedgeWarning 在同时自定义首字超时与首字对冲且首字超时不大于对冲秒数时提醒
+const firstEventTimeoutHedgeWarning = computed(() => {
+  if (firstEventTimeoutMode.value !== 'custom' || hedgeMode.value !== 'custom') return false
+  const timeout = Number(form.first_event_timeout)
+  const hedge = Number(form.first_event_hedge)
+  return (
+    Number.isFinite(timeout) &&
+    timeout > 0 &&
+    Number.isFinite(hedge) &&
+    hedge > 0 &&
+    timeout <= hedge
+  )
 })
 
 // hedgeDescription 是问号里的说明，自动方式时附上取值规则
@@ -874,6 +938,43 @@ async function saveConfig(): Promise<void> {
               />
             </SettingRow>
             <SettingRow
+              :label="t('settings.firstEventTimeout')"
+              control-id="setting-first-event-timeout"
+              :description="t('settings.firstEventTimeoutHelp')"
+              effect="service"
+              :changed="changedFields.has('first_event_timeout')"
+              :env="environmentKey('first_event_timeout')"
+            >
+              <UiSelect
+                id="setting-first-event-timeout"
+                v-model="firstEventTimeoutMode"
+                :class="inputClass"
+              >
+                <option value="off">{{ t('settings.firstEventHedgeOff') }}</option>
+                <option value="custom">{{ t('settings.firstEventHedgeCustom') }}</option>
+              </UiSelect>
+              <div v-if="firstEventTimeoutMode === 'custom'" class="mt-2 flex items-center gap-2">
+                <input
+                  id="setting-first-event-timeout-seconds"
+                  v-model.trim="form.first_event_timeout"
+                  :class="inputClass"
+                  :aria-label="t('settings.firstEventHedgeSeconds')"
+                  inputmode="numeric"
+                  autocomplete="off"
+                />
+                <span class="shrink-0 text-sm text-gray-400">{{
+                  t('settings.firstEventHedgeUnit')
+                }}</span>
+              </div>
+              <p
+                v-if="firstEventTimeoutHedgeWarning"
+                class="mt-2 flex items-start gap-1.5 text-xs leading-5 text-gray-400"
+              >
+                <UiIcon name="warning" :size="13" class="mt-1 shrink-0 text-amber-400" />
+                {{ t('settings.firstEventTimeoutHedgeHint') }}
+              </p>
+            </SettingRow>
+            <SettingRow
               :label="t('settings.firstEventHedge')"
               control-id="setting-first-event-hedge"
               :description="hedgeDescription"
@@ -1065,6 +1166,74 @@ async function saveConfig(): Promise<void> {
                 id="setting-strip-thought-signatures"
                 v-model="form.strip_thought_signatures"
               />
+            </SettingRow>
+          </template>
+
+          <template v-else-if="section === 'sillytavern'">
+            <SettingRow
+              :label="t('settings.replyTool')"
+              control-id="setting-reply-tool"
+              :description="t('settings.replyToolHelp')"
+              effect="immediate"
+              :changed="changedFields.has('reply_tool')"
+              :env="environmentKey('reply_tool')"
+            >
+              <UiSwitch id="setting-reply-tool" v-model="form.reply_tool" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.thinkingGuard')"
+              control-id="setting-thinking-guard"
+              :description="t('settings.thinkingGuardHelp')"
+              effect="immediate"
+              :changed="changedFields.has('thinking_guard')"
+              :env="environmentKey('thinking_guard')"
+            >
+              <UiSwitch id="setting-thinking-guard" v-model="form.thinking_guard" />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.userMessageRewrite')"
+              group-id="setting-user-message-rewrite"
+              wide
+              :description="t('settings.userMessageRewriteHelp')"
+              effect="immediate"
+              :changed="changedFields.has('user_message_rewrite')"
+              :env="environmentKey('user_message_rewrite')"
+            >
+              <div class="space-y-2">
+                <div
+                  class="grid grid-cols-3 rounded-md border border-line bg-panel p-0.5"
+                  role="radiogroup"
+                  aria-labelledby="setting-user-message-rewrite-label"
+                >
+                  <button
+                    v-for="option in userMessageRewriteOptions"
+                    :key="option.value"
+                    type="button"
+                    role="radio"
+                    :aria-checked="form.user_message_rewrite === option.value"
+                    class="rounded px-2.5 py-1.5 text-center text-xs leading-4 transition-colors"
+                    :class="
+                      form.user_message_rewrite === option.value
+                        ? 'bg-raised font-medium text-white ring-1 ring-line-strong/70'
+                        : 'text-gray-400 hover:text-gray-200'
+                    "
+                    @click="form.user_message_rewrite = option.value"
+                  >
+                    {{ t(option.label) }}
+                  </button>
+                </div>
+                <p
+                  data-user-message-rewrite-preview
+                  class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-line bg-panel px-3 py-2 text-xs leading-5"
+                >
+                  <span class="shrink-0 font-medium text-gray-400">{{
+                    t('settings.userMessageRewritePreview')
+                  }}</span>
+                  <span class="min-w-0 break-words text-gray-200">{{
+                    userMessageRewritePreview
+                  }}</span>
+                </p>
+              </div>
             </SettingRow>
           </template>
 

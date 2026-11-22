@@ -48,6 +48,10 @@ const (
 	liveViewWaiting = "waiting"
 	// liveViewSaving 表示登录完成，正在授权 Drive 并保存认证状态
 	liveViewSaving = "saving"
+	// liveViewChecking 表示账户已保存，正在发一次生成请求核对账户状态
+	liveViewChecking = "checking"
+	// liveViewVerifying 表示官网要求验证，窗口停在验证页等待完成验证
+	liveViewVerifying = "verifying"
 )
 
 // errLiveViewReplaced 表示同一 LiveView 连接了新的登录窗口

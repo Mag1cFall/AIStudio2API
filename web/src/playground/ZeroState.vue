@@ -172,7 +172,6 @@ h3,
 
 @keyframes empty-arrive {
   from {
-    filter: blur(6px);
     opacity: 0;
     transform: translateY(10px);
   }

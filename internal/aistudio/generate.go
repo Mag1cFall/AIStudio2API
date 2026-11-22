@@ -768,7 +768,7 @@ func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if entry.defaults.InteractionStream || entry.defaults.InteractionTask {
+	if stream, task := interactionRoute(entry.model, entry.defaults, ChannelPlayground); stream || task {
 		return nil
 	}
 	if _, err := encodeGenerationConfig(applyModelMediaDefaults(request.Config, entry.model), entry.defaults); err != nil {
@@ -793,9 +793,23 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if err != nil {
 		return nil, err
 	}
+	channel := ChannelPlayground
+	if build {
+		channel = ChannelBuild
+	}
+	interaction, task := interactionRoute(entry.model, entry.defaults, channel)
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
 	assistant := entry.model.Capabilities["assistant_route"]
-	restoring := request.restoreModelTurns && !build && !assistant && !entry.defaults.InteractionStream && !entry.defaults.InteractionTask
+	if chineseRewriteEligible(request, entry) {
+		request, err = applyChineseRewrite(request)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if thinkingGuardEligible(request, entry) {
+		request = applyThinkingGuard(request, entry)
+	}
+	restoring := request.restoreModelTurns && !build && !assistant && !interaction && !task
 	if restoring {
 		var tip turnLink
 		request.Contents, request.turnToken, tip = c.turns.restore(apiKey, request.Contents)
@@ -814,14 +828,20 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 		}
 	}
-	interaction := entry.defaults.InteractionStream && !build
-	task := entry.defaults.InteractionTask && !build
 	if interaction {
 		request.Tools = Tools{}
 	}
 	request, contract, err := prepareToolRequest(request, true)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	if !interaction && !task && replyToolEligible(request, entry, build, assistant) {
+		request = applyReplyTool(request)
+		if contract == nil {
+			contract = &toolContract{}
+		}
+		contract.replyTool = true
+		contract.stopSequences = request.Config.StopSequences
 	}
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -972,6 +992,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		err := decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
 		// 写代码助手的调用块错误已在 trajectory 内重答，这里只重新生成发送与读取失败
 		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed) && (err != nil || !assistant); regenerated++ {
+			if err != nil {
+				reportRegeneration(ctx, regenerated+1, err.Error())
+			} else {
+				reportRegeneration(ctx, regenerated+1, fmt.Sprintf("结束原因 %s", finish.FinishReason))
+			}
 			stopClose()
 			_ = response.Body.Close()
 			usage, finish, held, turn, roundUsage, output = nil, nil, nil, modelTurn{}, nil, Output{}
@@ -1070,7 +1095,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			finish.TrailingError = trailing
 			_ = send(*finish)
 		}
-		if restoring && trailing == nil {
+		if restoring && trailing == nil && !(contract != nil && contract.replyTool && calledReplyTool(output)) {
 			c.turns.store(apiKey, request.turnChain.tip, turn)
 		}
 	}()
@@ -1326,7 +1351,6 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		}
 		request.continuationRound++
 		request.continuationToken = decoder.continuation
-		reportContinuationRound(ctx)
 		reportUpstreamMode(ctx, "GenerateContent", "stream", request.continuationRound, "")
 		body, proofAt, err := EncodeGenerateContentRequest(request, defaults, runtime)
 		if err != nil {

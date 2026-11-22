@@ -133,15 +133,15 @@ const rows = computed(() => {
   previousRows = new Map(next.map((row) => [row.key, row]))
   return next
 })
-// filteredLogs 按级别、来源与搜索筛选日志行，阶段卡片的任一步骤命中即显示
+// filteredLogs 按级别、来源与搜索筛选日志行，请求卡片的警告、错误与搜索和阶段卡片的任一步骤命中即显示，请求卡片的信息按最终级别筛选
 const filteredLogs = computed(() => {
   const query = search.value.trim().toLowerCase()
   return rows.value.filter(({ entry, events, stage }) => {
-    const checked = stage ? events : [entry]
+    const levelEvents = level.value === 'INFO' && !stage ? [entry] : events
     return (
-      (level.value === 'ALL' || checked.some((event) => event.level === level.value)) &&
+      (level.value === 'ALL' || levelEvents.some((event) => event.level === level.value)) &&
       (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
-      (query === '' || checked.some((event) => matchLog(event, query)))
+      (query === '' || events.some((event) => matchLog(event, query)))
     )
   })
 })
@@ -489,7 +489,7 @@ onUnmounted(() => {
         {{ t('logs.waiting') }}
       </div>
       <div v-else class="log-table" :style="logGridStyle">
-        <span ref="levelRuler" class="log-level-ruler" aria-hidden="true">
+        <span ref="levelRuler" class="log-ruler" aria-hidden="true">
           <span
             v-for="value in levels.slice(1)"
             :key="value"
@@ -634,7 +634,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.log-level-ruler {
+.log-ruler {
   position: absolute;
   display: grid;
   visibility: hidden;
@@ -711,10 +711,10 @@ onUnmounted(() => {
 </style>
 
 <style>
-/* log-op 是日志页每一行的消息列：展开箭头、状态位、标题与字段、行尾耗时四列，其后各行从标题列开始 */
+/* log-op 是日志页每一行的消息列：展开箭头、状态标签、标题与字段、行尾耗时四列，其后各行与状态标签左缘对齐，展开的详情从行首开始 */
 .log-op {
   display: grid;
-  grid-template-columns: 20px 3rem minmax(0, 1fr) auto;
+  grid-template-columns: 20px auto minmax(0, 1fr) auto;
   column-gap: 8px;
   align-items: start;
 }
@@ -728,14 +728,11 @@ onUnmounted(() => {
   overflow-wrap: anywhere;
 }
 .log-op-row {
-  grid-column: 3 / -1;
+  grid-column: 2 / -1;
   min-width: 0;
 }
-/* 日志区窄于 52rem 时展开的详情占满消息列 */
-@container log-table (width < 52rem) {
-  .log-op-detail {
-    grid-column: 1 / -1;
-  }
+.log-op-detail {
+  grid-column: 1 / -1;
 }
 .log-op-title {
   color: var(--color-fg);
@@ -750,34 +747,21 @@ onUnmounted(() => {
   text-align: end;
 }
 
-/* log-state 是状态位：请求为 HTTP 状态，阶段为结束图标或进度，单条事件为中性圆点 */
+/* log-state 是状态标签：请求为 HTTP 状态或处理中，阶段为进度或状态名，按文字宽度收紧 */
 .log-state {
   grid-column: 2;
+  justify-self: start;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   height: 20px;
+  padding: 0 6px;
   border: 1px solid currentColor;
   border-radius: 4px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   line-height: 18px;
-}
-.log-state-event {
-  border-color: transparent;
-  color: var(--color-gray-500);
-}
-.log-state-event::before {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  content: '';
-}
-.log-state-event.log-state-warn {
-  color: var(--color-yellow-400);
-}
-.log-state-event.log-state-error {
-  color: var(--color-red-400);
+  white-space: nowrap;
 }
 .log-state-running {
   color: var(--color-blue-400);

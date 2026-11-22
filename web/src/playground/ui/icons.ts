@@ -53,7 +53,6 @@ import symbol_info from '@material-symbols/svg-300/outlined/info.svg?raw'
 import symbol_key from '@material-symbols/svg-300/outlined/key.svg?raw'
 import symbol_key_off from '@material-symbols/svg-300/outlined/key_off.svg?raw'
 import symbol_keyboard_arrow_down from '@material-symbols/svg-300/outlined/keyboard_arrow_down.svg?raw'
-import symbol_keyboard_arrow_up from '@material-symbols/svg-300/outlined/keyboard_arrow_up.svg?raw'
 import symbol_keyboard_command_key from '@material-symbols/svg-300/outlined/keyboard_command_key.svg?raw'
 import symbol_keyboard_return from '@material-symbols/svg-300/outlined/keyboard_return.svg?raw'
 import symbol_link from '@material-symbols/svg-300/outlined/link.svg?raw'
@@ -183,7 +182,6 @@ export const icons = {
   code: symbol_code,
   resetSettings: symbol_reset_settings,
   edit: symbol_edit,
-  expandLess: symbol_keyboard_arrow_up,
   branch: symbol_arrow_split,
   markdownCopy: symbol_markdown_copy,
   save: symbol_save,

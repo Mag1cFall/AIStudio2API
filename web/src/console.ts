@@ -186,24 +186,36 @@ function undoDelete(): void {
   pendingDelete.value = null
 }
 
-// commitDelete 立即提交等待中的账户删除，页面关闭时使用 keepalive 请求
+// committingDelete 跟踪已发出、尚未完成的账户删除请求，新的添加或导入入口先等它结束
+let committingDelete: Promise<void> | null = null
+
+// commitDelete 立即提交等待中的账户删除并等待进行中的删除结束，页面关闭时使用 keepalive 请求
 async function commitDelete(keepalive = false): Promise<void> {
   const pending = pendingDelete.value
-  if (pending === null) return
-  window.clearTimeout(pending.timer)
-  pendingDelete.value = null
-  const ids = pending.accounts.map((account) => account.id)
-  deletingAccounts.value = new Set([...deletingAccounts.value, ...ids])
-  const results = await Promise.allSettled(ids.map((id) => api.deleteAccount(id, keepalive)))
-  const failed = results.find((result) => result.status === 'rejected')
-  if (failed !== undefined) showNotice(errorText(failed.reason), 'error')
-  try {
-    await loadAccountData()
-  } finally {
-    const deleting = new Set(deletingAccounts.value)
-    for (const id of ids) deleting.delete(id)
-    deletingAccounts.value = deleting
+  if (pending !== null) {
+    window.clearTimeout(pending.timer)
+    pendingDelete.value = null
+    const ids = pending.accounts.map((account) => account.id)
+    deletingAccounts.value = new Set([...deletingAccounts.value, ...ids])
+    const previous = committingDelete
+    const task = (async () => {
+      if (previous !== null) await previous
+      const results = await Promise.allSettled(ids.map((id) => api.deleteAccount(id, keepalive)))
+      const failed = results.find((result) => result.status === 'rejected')
+      if (failed !== undefined) showNotice(errorText(failed.reason), 'error')
+      try {
+        await loadAccountData()
+      } finally {
+        const deleting = new Set(deletingAccounts.value)
+        for (const id of ids) deleting.delete(id)
+        deletingAccounts.value = deleting
+      }
+    })()
+    committingDelete = task.finally(() => {
+      if (committingDelete === task) committingDelete = null
+    })
   }
+  if (committingDelete !== null) await committingDelete
 }
 
 // flushDelete 在页面隐藏时提交等待中的删除

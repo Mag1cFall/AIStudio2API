@@ -1,5 +1,5 @@
 import type { CodeOption } from '../code'
-import type { VideoFrame, VideoSettings } from './video'
+import type { VideoSettings } from './video'
 
 // MediaCodeLanguage 是媒体页获取代码的语言选项
 export type MediaCodeLanguage =
@@ -54,35 +54,9 @@ interface VideoCodeInput {
   baseURL: string
   prompt: string
   settings: VideoSettings
-  start?: VideoFrame | undefined
-  last?: VideoFrame | undefined
-  references: readonly VideoFrame[]
   aspectRatios: readonly string[]
   durations: readonly number[]
   resolutions: readonly string[]
-}
-
-// VideoImage 是示例代码中的一张输入图片：本地文件名与 MIME
-interface VideoImage {
-  file: string
-  mimeType: string
-}
-
-// videoImages 返回起始帧、尾帧与参考图在示例代码中的本地文件
-function videoImages(input: VideoCodeInput): {
-  start?: VideoImage
-  last?: VideoImage
-  references: VideoImage[]
-} {
-  const image = (frame: VideoFrame, name: string): VideoImage => ({
-    file: `${name}.${extension(frame.mimeType)}`,
-    mimeType: frame.mimeType,
-  })
-  return {
-    ...(input.start ? { start: image(input.start, 'start_frame') } : {}),
-    ...(input.last ? { last: image(input.last, 'last_frame') } : {}),
-    references: input.references.map((frame, index) => image(frame, `reference_${index + 1}`)),
-  }
 }
 
 // videoPrompt 返回示例代码中的提示词，空输入为官网占位
@@ -93,31 +67,12 @@ function videoPrompt(input: VideoCodeInput): string {
 // videoPython 按官网写法生成 google-genai Python 视频示例，结果经视频地址加 key 下载
 function videoPython(input: VideoCodeInput): string {
   const { settings } = input
-  const images = videoImages(input)
-  const hasImage = images.start !== undefined
-  const pyImage = (image: VideoImage) =>
-    `types.Image.from_file(location="${image.file}", mime_type="${image.mimeType}")`
   const config = [
-    hasImage
-      ? '    # person_generation is not allowed for image-to-video generation'
-      : '    person_generation="dont_allow", # supported values: "dont_allow" or "allow_adult" or "allow_all"',
+    '    person_generation="dont_allow", # supported values: "dont_allow" or "allow_adult" or "allow_all"',
     `    aspect_ratio="${settings.aspectRatio}",${supported(input.aspectRatios)}`,
     '    number_of_videos=1,',
     `    duration_seconds=${settings.durationSeconds},${supported(input.durations)}`,
     `    resolution="${settings.resolution}",${supported(input.resolutions)}`,
-    ...(images.last ? [`    last_frame=${pyImage(images.last)},`] : []),
-    ...(images.references.length > 0
-      ? [
-          '    reference_images=[',
-          ...images.references.flatMap((image) => [
-            '        types.VideoGenerationReferenceImage(',
-            `            image=${pyImage(image)},`,
-            '            reference_type=types.VideoGenerationReferenceType.ASSET,',
-            '        ),',
-          ]),
-          '    ],',
-        ]
-      : []),
   ]
   return `"""
 To run this code you need to install the following dependencies:
@@ -146,7 +101,7 @@ def generate():
     operation = client.models.generate_videos(
         model=MODEL,
         source=types.GenerateVideosSource(
-            prompt="""${pyTriple(videoPrompt(input))}""",${images.start ? `\n            image=${pyImage(images.start)},` : ''}
+            prompt="""${pyTriple(videoPrompt(input))}""",
         ),
         config=video_config,
     )
@@ -182,38 +137,22 @@ if __name__ == "__main__":
 // videoTypescript 按官网写法生成 @google/genai TypeScript 视频示例
 function videoTypescript(input: VideoCodeInput): string {
   const { settings } = input
-  const images = videoImages(input)
-  const tsImage = (image: VideoImage) =>
-    `{ imageBytes: (await readFile('${image.file}')).toString('base64'), mimeType: '${image.mimeType}' }`
   const config = [
     '        numberOfVideos: 1,',
     `        aspectRatio: '${settings.aspectRatio}',`,
     `        resolution: '${settings.resolution}',`,
-    ...(images.start ? [] : ["        personGeneration: 'dont_allow',"]),
+    "        personGeneration: 'dont_allow',",
     `        durationSeconds: ${settings.durationSeconds},`,
-    ...(images.last ? [`        lastFrame: ${tsImage(images.last)},`] : []),
-    ...(images.references.length > 0
-      ? [
-          '        referenceImages: [',
-          ...images.references.map(
-            (image) =>
-              `          { image: ${tsImage(image)}, referenceType: VideoGenerationReferenceType.ASSET },`,
-          ),
-          '        ],',
-        ]
-      : []),
   ]
-  const imports = images.references.length > 0 ? '\n  VideoGenerationReferenceType,' : ''
-  const fsImports = images.start || images.last || images.references.length > 0 ? 'readFile, ' : ''
   return `// To run this code you need to install the following dependencies:
 // npm install @google/genai
 // npm install -D @types/node
 
 import {
-  GoogleGenAI,${imports}
+  GoogleGenAI,
 } from '@google/genai';
 
-import {${fsImports}writeFile} from 'fs/promises';
+import {writeFile} from 'fs/promises';
 
 async function main() {
   const ai = new GoogleGenAI({
@@ -224,7 +163,7 @@ async function main() {
   let operation = await ai.models.generateVideos({
     model: '${settings.model}',
     source: {
-      prompt: \`${tsTemplate(videoPrompt(input))}\`,${images.start ? `\n      image: ${tsImage(images.start)},` : ''}
+      prompt: \`${tsTemplate(videoPrompt(input))}\`,
     },
     config: {
 ${config.join('\n')}
@@ -254,38 +193,20 @@ main();
 `
 }
 
-// videoRest 按官网写法生成 predictLongRunning 的 bash 示例，图片在运行时以 base64 写入请求
+// videoRest 按官网写法生成 predictLongRunning 的 bash 示例
 function videoRest(input: VideoCodeInput): string {
   const { settings } = input
-  const images = videoImages(input)
-  const marker = (index: number) => `__IMAGE_${index}__`
-  const files: VideoImage[] = []
-  const restImage = (image: VideoImage) => {
-    files.push(image)
-    return { bytesBase64Encoded: marker(files.length - 1), mimeType: image.mimeType }
-  }
-  const instance: Record<string, unknown> = { prompt: videoPrompt(input) }
-  if (images.start) instance.image = restImage(images.start)
-  if (images.last) instance.lastFrame = restImage(images.last)
-  if (images.references.length > 0)
-    instance.referenceImages = images.references.map((image) => ({
-      image: restImage(image),
-      referenceType: 'asset',
-    }))
   const body = {
-    instances: [instance],
+    instances: [{ prompt: videoPrompt(input) }],
     parameters: {
-      ...(images.start ? {} : { personGeneration: 'dont_allow' }),
+      personGeneration: 'dont_allow',
       aspectRatio: settings.aspectRatio,
       sampleCount: 1,
       durationSeconds: settings.durationSeconds,
       resolution: settings.resolution,
     },
   }
-  let json = heredoc(JSON.stringify(body, null, 4))
-  files.forEach((image, index) => {
-    json = json.replace(marker(index), `$(base64 < ${image.file} | tr -d '\\n')`)
-  })
+  const json = heredoc(JSON.stringify(body, null, 4))
   return `#!/bin/bash
 set -e -E
 
@@ -343,9 +264,8 @@ function openAIVideoSize({ aspectRatio, resolution }: VideoSettings): string {
   return aspectRatio === '9:16' ? `${short}x${long}` : `${long}x${short}`
 }
 
-// videoOpenAIPython 生成 OpenAI Python SDK 视频示例，起始帧作为 input_reference
+// videoOpenAIPython 生成 OpenAI Python SDK 视频示例
 function videoOpenAIPython(input: VideoCodeInput): string {
-  const images = videoImages(input)
   return `import os
 
 from openai import OpenAI
@@ -359,7 +279,7 @@ video = client.videos.create_and_poll(
     model="${input.settings.model}",
     prompt="""${pyTriple(videoPrompt(input))}""",
     seconds="${input.settings.durationSeconds}",
-    size="${openAIVideoSize(input.settings)}",${images.start ? `\n    input_reference=open("${images.start.file}", "rb"),` : ''}
+    size="${openAIVideoSize(input.settings)}",
 )
 
 if video.status == "failed":
@@ -370,11 +290,10 @@ else:
 `
 }
 
-// videoOpenAITypescript 生成 OpenAI TypeScript SDK 视频示例，起始帧作为 input_reference
+// videoOpenAITypescript 生成 OpenAI TypeScript SDK 视频示例
 function videoOpenAITypescript(input: VideoCodeInput): string {
-  const images = videoImages(input)
-  return `import OpenAI${images.start ? ', { toFile }' : ''} from 'openai';
-import { ${images.start ? 'readFile, ' : ''}writeFile } from 'fs/promises';
+  return `import OpenAI from 'openai';
+import { writeFile } from 'fs/promises';
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -385,7 +304,7 @@ const video = await client.videos.createAndPoll({
   model: '${input.settings.model}',
   prompt: \`${tsTemplate(videoPrompt(input))}\`,
   seconds: '${input.settings.durationSeconds}',
-  size: '${openAIVideoSize(input.settings)}',${images.start ? `\n  input_reference: await toFile(await readFile('${images.start.file}'), '${images.start.file}', { type: '${images.start.mimeType}' }),` : ''}
+  size: '${openAIVideoSize(input.settings)}',
 });
 
 if (video.status === 'failed') {

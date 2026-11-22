@@ -2,14 +2,14 @@ import { computed, type ComputedRef } from 'vue'
 import { useI18n } from '@/i18n'
 import type { AccountTask, PreparationStatus } from '@/types'
 
-// waitsForCamoufox 判断浏览器登录或重新登录任务是否正在等待 Camoufox 下载或解压
+// waitsForCamoufox 判断浏览器登录、重新登录或账户验证任务是否正在等待 Camoufox 下载或解压
 export function waitsForCamoufox(
   task: AccountTask,
   camoufox: PreparationStatus | undefined,
 ): boolean {
   return (
     task.state === 'running' &&
-    (task.kind === 'login' || task.kind === 'relogin') &&
+    (task.kind === 'login' || task.kind === 'relogin' || task.kind === 'verify') &&
     camoufox?.preparing === true
   )
 }

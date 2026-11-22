@@ -79,10 +79,17 @@ const (
 	assistantHistoryRule = "The conversation before the first user message of this chat is transcribed at the end of %s between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order %sat the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself."
 	// assistantInstructionLimit 是上游不截断的自定义指令字节数，超过时上游截到 24KB 并加截断标记
 	assistantInstructionLimit = 24000
-	// assistantTurnTokenLimit 是最后一组留在 field 1 提交的本地 Token 数上限，超过时与之前的对话一起转录在自定义指令中
+	// assistantTurnTokenLimit 是最后一组直接留在 field 1 提交的本地 Token 数上限，超过时续接原 trajectory 写成最新消息文件、查不到 trajectory 时与之前的对话一起转录
 	assistantTurnTokenLimit = 24576
 	// assistantLatestPrompt 是对话全部转录时提交的用户轮，%s 为转录所在的位置
 	assistantLatestPrompt = "Continue the conversation from the last turn of the conversation history at the end of %s."
+	// assistantMessageOpen 与 assistantMessageClose 包住写在最新消息文件中的超长对话轮
+	assistantMessageOpen  = "<latest_message>\n"
+	assistantMessageClose = "</latest_message>"
+	// assistantMessageRule 是写在最新消息文件开头的说明，与说明文件区分
+	assistantMessageRule = "Latest user message (not an instructions file; keep all earlier system instructions, client functions and conversation history unchanged). The latest user message and tool results of this chat are transcribed below between <latest_message> and </latest_message> in <user_turn> blocks. Attachments in it are numbered like [attachment 1] and are attached right after this file in the same order. Continue the conversation from this latest message and never write these tags yourself."
+	// assistantMessagePrompt 是最新一组写在最新消息文件中提交时的用户轮正文
+	assistantMessagePrompt = "Continue the conversation from the attached latest user message file (not an instructions file)."
 	// assistantEmptyReplyPrompt 是模型一轮结束时没有正文与函数调用后在同一 trajectory 中追加的用户轮
 	assistantEmptyReplyPrompt = "Your last turn ended without any visible reply. Continue now and give your reply."
 	// assistantCallFormat 是要求重写调用时附带的 function_calls 代码块格式与交回调用的说明
@@ -321,7 +328,7 @@ func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int, 
 	var transcript string
 	var attachments []Part
 	if transcriptEnd > 0 {
-		transcript, attachments = assistantTranscript(request.Contents[:transcriptEnd], turns)
+		transcript, attachments = assistantTranscript(request.Contents[:transcriptEnd], turns[:transcriptEnd], assistantHistoryOpen, assistantHistoryClose)
 	}
 	tools := ""
 	if declarations != "" {
@@ -358,12 +365,22 @@ func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int, 
 		latest = "the instructions file"
 	}
 	request.System = []string{instructions}
-	contents := make([]Content, 0, len(turns)-start+1)
-	for _, parts := range turns[start:] {
-		contents = append(contents, Content{Role: RoleUser, Parts: parts})
-	}
-	if len(contents) == 0 {
-		contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: fmt.Sprintf(assistantLatestPrompt, latest)}}})
+	var contents []Content
+	if start < len(turns) && assistantPartsTooLong(request.Contents[start:]) {
+		message, messageAttachments := assistantTranscript(request.Contents[start:], turns[start:], assistantMessageOpen, assistantMessageClose)
+		parts := make([]Part, 0, 2+len(messageAttachments))
+		parts = append(parts, Part{InlineData: &Blob{MIME: "text/plain", Data: []byte(assistantMessageRule + "\n\n" + message)}})
+		parts = append(parts, messageAttachments...)
+		parts = append(parts, Part{Text: assistantMessagePrompt})
+		contents = []Content{{Role: RoleUser, Parts: parts}}
+	} else {
+		contents = make([]Content, 0, len(turns)-start+1)
+		for _, parts := range turns[start:] {
+			contents = append(contents, Content{Role: RoleUser, Parts: parts})
+		}
+		if len(contents) == 0 {
+			contents = append(contents, Content{Role: RoleUser, Parts: []Part{{Text: fmt.Sprintf(assistantLatestPrompt, latest)}}})
+		}
 	}
 	if start == transcriptEnd && len(attachments) > 0 {
 		contents[0].Parts = append(attachments, contents[0].Parts...)
@@ -376,11 +393,11 @@ func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int, 
 	return request, file, nil
 }
 
-// assistantTranscript 返回 contents 转录成的对话历史与其中的附件：各轮取 turns 中同一位置改写后的 Part，去掉思考与空 Part，附件写为编号，附件依次以编号文本 Part 与附件 Part 返回
-func assistantTranscript(contents []Content, turns [][]Part) (string, []Part) {
+// assistantTranscript 返回 contents 按 open 与 close 包住转录成的文本与其中的附件：各轮取 turns 中同一位置改写后的 Part，去掉思考与空 Part，附件写为编号，附件依次以编号文本 Part 与附件 Part 返回
+func assistantTranscript(contents []Content, turns [][]Part, open string, close string) (string, []Part) {
 	var transcript strings.Builder
 	var attachments []Part
-	transcript.WriteString(assistantHistoryOpen)
+	transcript.WriteString(open)
 	for index, content := range contents {
 		tag := "user_turn"
 		if content.Role == RoleAssistant {
@@ -400,7 +417,7 @@ func assistantTranscript(contents []Content, turns [][]Part) (string, []Part) {
 		}
 		fmt.Fprintf(&transcript, assistantHistoryTurn, tag, strings.Join(texts, "\n"), tag)
 	}
-	transcript.WriteString(assistantHistoryClose)
+	transcript.WriteString(close)
 	return transcript.String(), attachments
 }
 
@@ -416,21 +433,21 @@ type assistantTurn struct {
 	context string
 }
 
-// assistantLatest 表示最后一组也要转录在说明文件中：最后一组是模型轮，或本地 Token 数超过 assistantTurnTokenLimit
-func assistantLatest(contents []Content, links []turnLink) bool {
-	count := len(links)
-	if count == 0 {
-		return false
+// assistantModelTail 表示对话最后一组是模型轮
+func assistantModelTail(links []turnLink) bool {
+	return len(links) > 0 && links[len(links)-1].model
+}
+
+// assistantPartsTooLong 表示 contents 中各轮的本地 Token 数之和超过 assistantTurnTokenLimit
+func assistantPartsTooLong(contents []Content) bool {
+	var total int64
+	for _, content := range contents {
+		total += localPartsTokens(content.Parts)
+		if total > assistantTurnTokenLimit {
+			return true
+		}
 	}
-	tail := 0
-	if count > 1 {
-		tail = links[count-2].end
-	}
-	var parts []Part
-	for _, content := range contents[tail:] {
-		parts = append(parts, content.Parts...)
-	}
-	return links[count-1].model || localPartsTokens(parts) > assistantTurnTokenLimit
+	return false
 }
 
 // planAssistantTurn 按续接的 trajectory 改写请求，返回本轮之后自定义指令中转录的开头分组数与说明文件摘要
@@ -442,15 +459,19 @@ func planAssistantTurn(request GenerateRequest, links []turnLink, trajectory *as
 		return request, 0, "", err
 	}
 	groups := 0
+	tail := 0
+	if len(links) > 1 {
+		tail = links[len(links)-2].end
+	}
 	switch {
 	case trajectory != nil:
 		groups = trajectory.HistoryGroups
-	case assistantLatest(request.Contents, links):
+	case assistantModelTail(links) || len(links) > 0 && assistantPartsTooLong(request.Contents[tail:]):
 		groups = len(links)
 		start = len(request.Contents)
 	case len(links) > 1:
 		groups = len(links) - 1
-		start = links[groups-1].end
+		start = tail
 	}
 	transcribed := 0
 	if groups > 0 {
@@ -489,7 +510,7 @@ func (c *Client) prepareAssistantTurn(ctx context.Context, lease *AccountLease, 
 	}
 	var trajectory *assistantTrajectory
 	start := 0
-	if applet != "" && !assistantLatest(request.Contents, links) {
+	if applet != "" {
 		trajectory, start = lease.findAssistantTrajectory(apiKey, links)
 	}
 	prepared, groups, context, err := planAssistantTurn(request, links, trajectory, start)

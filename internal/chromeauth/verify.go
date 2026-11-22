@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -39,6 +40,8 @@ type Verification struct {
 type CookieAccount struct {
 	AuthUser int
 	Email    string
+	// BenefitTier 是识别阶段顺带读取的账户权益等级，读取失败时为空
+	BenefitTier string
 	// Restricted 是该会话打开 AI Studio 时被转到 Google 受限页的原因，此时邮箱为空
 	Restricted string
 }
@@ -112,6 +115,20 @@ func discoverSessions(ctx context.Context, client *http.Client, state *aistudio.
 		}
 		accounts = append(accounts, CookieAccount{AuthUser: authUser, Email: email})
 	}
+	var group sync.WaitGroup
+	for index := range accounts {
+		if accounts[index].Restricted != "" || accounts[index].Email == "" {
+			continue
+		}
+		accountIndex := index
+		authUser := accounts[accountIndex].AuthUser
+		group.Go(func() {
+			if tier, err := fetchBenefitTier(ctx, client, state, headers, authUser); err == nil {
+				accounts[accountIndex].BenefitTier = tier.String()
+			}
+		})
+	}
+	group.Wait()
 	return accounts, nil
 }
 
@@ -179,6 +196,23 @@ func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.St
 		return "", fmt.Errorf("AI Studio 页面缺少登录账户")
 	}
 	return email, mergeResponseCookies(state, response, targetURL)
+}
+
+// fetchBenefitTier 以页面的请求头与 Cookie 读取 GetAiStudioBenefitTier 并解码账户权益等级
+func fetchBenefitTier(ctx context.Context, client *http.Client, state *aistudio.StorageState, headers http.Header, authUser int) (aistudio.BenefitTier, error) {
+	response, err := makerSuiteRequest(ctx, client, state, headers, authUser, "GetAiStudioBenefitTier")
+	if err != nil {
+		return aistudio.BenefitTierFree, fmt.Errorf("读取 AI Studio 账户权益: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return aistudio.BenefitTierFree, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return aistudio.BenefitTierFree, aistudio.DecodeRPCError("GetAiStudioBenefitTier", response.StatusCode, body)
+	}
+	return aistudio.DecodeBenefitTier(body)
 }
 
 // verifyLoggingContext 以页面的请求头读取 GetLoggingContext，上游拒绝时返回解码后的错误

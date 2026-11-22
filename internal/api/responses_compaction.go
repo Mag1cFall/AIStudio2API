@@ -358,6 +358,31 @@ func conversationItems(items []json.RawMessage) []json.RawMessage {
 	return slices.DeleteFunc(slices.Clone(items), instructionItem)
 }
 
+// generateCompactionSummary 在不沿用调用方输出格式、输出上限与停止词的前提下，以非流式、禁用工具的方式生成压缩摘要
+func (s *server) generateCompactionSummary(ctx context.Context, base aistudio.GenerateRequest, instructions string) (string, *aistudio.Usage, error) {
+	summarize := base
+	summarize.Contents = append(slices.Clone(base.Contents), aistudio.Content{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: instructions}}})
+	summarize.Tools.ToolConfig.Mode = "none"
+	summarize.Unary = true
+	summarize.Config.ResponseMIMEType = ""
+	summarize.Config.ResponseSchema = nil
+	summarize.Config.ResponseJSONSchema = nil
+	summarize.Config.MaxOutputTokens = nil
+	summarize.Config.StopSequences = nil
+	events, err := s.service.Generate(ctx, summarize)
+	if err != nil {
+		return "", nil, err
+	}
+	result, err := consumeEvents(ctx, events)
+	if err != nil {
+		return "", nil, err
+	}
+	if result.finishReason != "stop" {
+		return "", nil, fmt.Errorf("compaction summary finished with %s", result.finishReason)
+	}
+	return strings.TrimSpace(result.text.String()), result.usage, nil
+}
+
 // compactionSummary 以请求的模型、指令与工具非流式生成摘要，工具调用关闭，旧摘要作为首个 user 轮，摘要提示词作为末尾 user 轮
 func (s *server) compactionSummary(ctx context.Context, request responsesRequest, items []json.RawMessage, previous, id string) (string, *aistudio.Usage, error) {
 	prompt := compactionSummaryPrompt
@@ -377,21 +402,7 @@ func (s *server) compactionSummary(ctx context.Context, request responsesRequest
 	if err := inlineRemoteMedia(ctx, generate.Contents); err != nil {
 		return "", nil, err
 	}
-	generate.Contents = append(generate.Contents, aistudio.Content{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: fmt.Sprintf(compactionInstructions, prompt)}}})
-	generate.Tools.ToolConfig.Mode = "none"
-	generate.Unary = true
-	events, err := s.service.Generate(ctx, generate)
-	if err != nil {
-		return "", nil, err
-	}
-	result, err := consumeEvents(ctx, events)
-	if err != nil {
-		return "", nil, err
-	}
-	if result.finishReason != "stop" {
-		return "", nil, fmt.Errorf("compaction summary finished with %s", result.finishReason)
-	}
-	return strings.TrimSpace(result.text.String()), result.usage, nil
+	return s.generateCompactionSummary(ctx, generate, fmt.Sprintf(compactionInstructions, prompt))
 }
 
 // handleResponsesCompact 返回保留的 user 消息与一个 compaction 项

@@ -282,7 +282,7 @@ Add more accounts on the same page; [Account Management](#account-management) co
 
 When settings take effect:
 
-- As soon as they are saved: the account selection strategy, worker capacity, max account switches, model mapping, non-streaming keepalive, fake streaming, search model variants, Google Search for all models, and media output; requests already in progress keep the settings they started with
+- As soon as they are saved: the account selection strategy, worker capacity, max account switches, model mapping, non-streaming keepalive, fake streaming, search model variants, Google Search for all models, reply tool anti-truncation, Simplified to Traditional Chinese rewrite, and media output; requests already in progress keep the settings they started with
 - After stopping and starting the generation service: the other data-plane settings, read from the latest `.env` at start
 - After restarting the management process: `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR`, and `PROXY_API_KEY`
 
@@ -357,12 +357,13 @@ For Cherry Studio:
 4. Set the API key to `PROXY_API_KEY` from `.env`
 5. Load models from `/v1/models`, or add `gemini-3.8-flash` and `gemini-3.5-flash-lite` manually
 
-[Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
+[Claude Code](https://github.com/anthropics/claude-code) uses the Anthropic endpoint. Subagents pick models by the fable, opus, sonnet, and haiku tiers; the variables below map them to AI Studio models. WebSearch runs on Google Search:
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:2048"
 $env:ANTHROPIC_API_KEY = "<PROXY_API_KEY>"
 $env:ANTHROPIC_MODEL = "gemini-3.8-flash"
+$env:ANTHROPIC_DEFAULT_FABLE_MODEL = "gemini-4-argon"
 $env:ANTHROPIC_DEFAULT_OPUS_MODEL = "gemini-3.1-pro-preview"
 $env:ANTHROPIC_DEFAULT_SONNET_MODEL = "gemini-3.8-flash"
 $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "gemini-3.5-flash-lite"
@@ -672,7 +673,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
-| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
+| `REQUEST_TIMEOUT` | `30m` | Longest time upstream may send no data, counted from the start of the request until the first data too; requests that upstream is still streaming have no total time limit |
 | `WARM_WORKER_LIMIT` | `10`, `5` with Camoufox | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `20`, `10` with Camoufox | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently during on-demand scaling; prewarming starts workers one at a time; unlimited with `WAA_BACKEND=spidermonkey` |
@@ -694,8 +695,12 @@ Process environment variables override the same keys in `.env`, and those settin
 | `GOOGLE_SEARCH` | `false` | Enable Google Search for OpenAI, Anthropic, Gemini, and Interactions generation requests, including ordinary model IDs and requests with function tools |
 | `CONTINUATION_REWRITE` | `true` | Rewrite requests ending with an assistant message as continuation requests on models without native continuation; when off, every model receives them unchanged and an upstream rejection is returned as is |
 | `CONTINUATION_PROMPT` | built-in English sentence | Prompt written into the system instruction together with the trailing assistant message when rewriting; when set empty, the trailing assistant message is sent as a user message |
+| `REPLY_TOOL` | `false` | For roleplay only: declare an internal `final` tool so the model delivers the complete reply at once to reduce mid-stream truncation while keeping thinking streamed live; applies on save |
+| `THINKING_GUARD` | `false` | Roleplay thinking anti-block: guide internal reasoning to stay brief and abstract without repeating sensitive terms and cap thinking effort at low, reducing upstream filter truncation during reasoning; applies on save |
+| `USER_MESSAGE_REWRITE` | `off` | Rewrite Chinese text in user messages to Traditional Chinese or Martian Chinese before sending (leaving assistant history unchanged) and instruct the model to reply in Simplified Chinese by default; `off`, `traditional`, or `martian`; applies on save |
 | `FIRST_EVENT_HEDGE` | `off` | When a request has no first token for a while, send a backup request on an idle account; `off`, `auto`, or a wait in seconds |
 | `FIRST_EVENT_HEDGE_MODELS` | `gemini-4-argon` | Comma-separated model IDs that get backup requests; backup requests also count against account quota |
+| `FIRST_EVENT_TIMEOUT` | `off` | Longest time a single attempt waits for its first upstream event after taking an account before cancelling and switching accounts; `off` or a positive integer in seconds |
 | `WAA_BACKEND` | `spidermonkey` | Where WAA runs: `spidermonkey` or `camoufox` |
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` or `url` |
 | `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
@@ -704,7 +709,7 @@ Notes:
 
 - `PREVIEW_LISTEN_ADDR`: when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use
 - `AUTO_START`: if startup fails for reasons such as the network, it retries at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually
-- `MAX_ACCOUNT_SWITCHES`: quota errors do not count, and the remaining accounts are still tried in turn
+- `MAX_ACCOUNT_SWITCHES`: expired sessions and quota errors do not count, and the remaining accounts are still tried in turn
 - `NONSTREAM_KEEPALIVE`: after returning 200, a newline is written every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body
 - `STRIP_THOUGHT_SIGNATURES`: function calls are sent with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens
 - `DISCOVER_HIDDEN_MODELS`:
@@ -715,6 +720,9 @@ Notes:
   - The backup request uses another account first, otherwise a free slot on the same account; the first to answer continues and the other is cancelled
   - `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged
   - A positive integer is the wait in seconds; choosing Custom in settings fills in the recent p95 of the busiest model
+- `FIRST_EVENT_TIMEOUT`:
+  - Each attempt is timed independently from taking an account until the first semantic event arrives; on timeout it cancels the attempt and switches accounts (counts toward `MAX_ACCOUNT_SWITCHES`, does not cool the account), returning 504 if no account is left
+  - With `FIRST_EVENT_HEDGE` enabled, the primary and backup requests keep separate timers and this should be set higher than the hedge wait; excludes background requests and background agent tasks; slow thinking requests may take several minutes before their first token
 - `WAA_BACKEND`:
   - `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox; `camoufox` runs WAA in a Camoufox page; any other value means `spidermonkey`
   - When unset, startup picks it from `auth/` and writes it to `.env`: `camoufox` if `auth/` already has accounts but no `auth/.waa-interpreters`, otherwise `spidermonkey`
@@ -805,7 +813,7 @@ Account actions depend on state. Click the state in an account row to set the ac
 
 Reading the benefit tier and model catalog:
 
-- Refresh all reads the benefit tier and model catalog of every enabled account immediately; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
+- Refresh all reads the benefit tier and model catalog of every enabled account immediately; it runs on the server and keeps going after the console is closed or reloaded, and reopening the console shows its progress and the queued accounts; the service also reads them every 24 hours, and when a request names a model missing from the catalog and the last read was more than 10 minutes ago, the service reads them first and then handles the request
 - An account whose catalog has never been read shows an unknown tier and the reason for the last failed read; an account with an existing catalog keeps working when a read fails, and its row shows "Model sync failed" with the reason
 - When a read reports that AI Studio does not support the current egress region, accounts with an existing catalog show that reason as well
 

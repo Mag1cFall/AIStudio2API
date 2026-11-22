@@ -891,7 +891,13 @@ func (manager *accountWorkerManager) PageCatalog(ctx context.Context, accountID 
 			return worker.PageCatalog(), nil
 		}
 		generation := authGeneration(ctx)
-		err := manager.reloadWorker(ctx, accountID, worker)
+		var err error
+		if manager.refresher != nil {
+			err = manager.refresher.ensureBoundAccount(ctx, accountID)
+		}
+		if err == nil {
+			err = manager.reloadWorker(ctx, accountID, worker)
+		}
 		if err == nil {
 			return worker.PageCatalog(), nil
 		}
@@ -1177,6 +1183,11 @@ func (manager *accountWorkerManager) startReservedWorker(
 	options.Model = bootstrapModel
 	options.StartupProgress = func(stage camoufoxnative.StartupStage) {
 		logStep(workerStartupProgress(stage))
+	}
+	if manager.refresher != nil {
+		options.RefreshCookies = func(refreshCtx context.Context) error {
+			return manager.refresher.ensureBoundAccount(refreshCtx, account.id)
+		}
 	}
 	worker, initErr := newWAAWorker(initCtx, account.id, options)
 	if initErr == nil {

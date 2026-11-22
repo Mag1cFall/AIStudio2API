@@ -16,11 +16,13 @@ import (
 
 // requestRegistry 保存活动请求与事件订阅
 type requestRegistry struct {
-	mu          sync.Mutex
-	active      map[string]trackedRequest
-	logs        []api.AdminLog
-	subscribers map[*eventSubscriber]struct{}
-	console     chan api.AdminLog
+	mu            sync.Mutex
+	active        map[string]trackedRequest
+	logs          []api.AdminLog
+	subscribers   map[*eventSubscriber]struct{}
+	console       chan api.AdminLog
+	consoleClosed bool
+	consoleDone   chan struct{}
 	// firstEvents 是各模型与通道近期原请求的首事件等待，生成服务重启后保留
 	firstEvents *firstEventStats
 }
@@ -53,16 +55,17 @@ type trackedRequest struct {
 	publishedDataAt time.Time
 }
 
-// newRequestRegistry 创建活动请求注册表
-func newRequestRegistry(ctx context.Context) *requestRegistry {
+// newRequestRegistry 创建活动请求注册表，进程退出前调用 close 排空控制台日志队列
+func newRequestRegistry() *requestRegistry {
 	registry := &requestRegistry{
 		active:      make(map[string]trackedRequest),
 		logs:        make([]api.AdminLog, 0, 128),
 		subscribers: make(map[*eventSubscriber]struct{}),
 		console:     make(chan api.AdminLog, 256),
+		consoleDone: make(chan struct{}),
 		firstEvents: newFirstEventStats(),
 	}
-	go registry.writeConsole(ctx)
+	go registry.writeConsole()
 	return registry
 }
 
@@ -225,39 +228,48 @@ func (registry *requestRegistry) recordLog(entry api.AdminLog) {
 		registry.logs = registry.logs[:adminLogRetain]
 	}
 	registry.publishLocked(api.AdminEvent{Type: "log", Data: entry})
-	registry.mu.Unlock()
-	select {
-	case registry.console <- entry:
-	default:
+	if !registry.consoleClosed {
+		select {
+		case registry.console <- entry:
+		default:
+		}
 	}
+	registry.mu.Unlock()
 }
 
-func (registry *requestRegistry) writeConsole(ctx context.Context) {
-	for {
-		select {
-		case entry := <-registry.console:
-			level := slog.LevelInfo
-			switch entry.Level {
-			case "ERROR":
-				level = slog.LevelError
-			case "WARN":
-				level = slog.LevelWarn
-			}
-			record := slog.NewRecord(entry.Time, level, entry.Message, 0)
-			record.AddAttrs(slog.String("event", entry.Event), slog.String("source", entry.Source))
-			if entry.Stage != nil {
-				record.AddAttrs(slog.Any("stage", entry.Stage))
-			}
-			for _, field := range entry.Fields {
-				record.AddAttrs(slog.String(field.Key, field.Value))
-			}
-			if entry.Request != nil {
-				record.AddAttrs(slog.Any("request", entry.Request))
-			}
-			_ = slog.Default().Handler().Handle(ctx, record)
-		case <-ctx.Done():
-			return
+// close 关闭控制台日志队列并等待已缓冲日志全部写出
+func (registry *requestRegistry) close() {
+	registry.mu.Lock()
+	if !registry.consoleClosed {
+		registry.consoleClosed = true
+		close(registry.console)
+	}
+	registry.mu.Unlock()
+	<-registry.consoleDone
+}
+
+func (registry *requestRegistry) writeConsole() {
+	defer close(registry.consoleDone)
+	for entry := range registry.console {
+		level := slog.LevelInfo
+		switch entry.Level {
+		case "ERROR":
+			level = slog.LevelError
+		case "WARN":
+			level = slog.LevelWarn
 		}
+		record := slog.NewRecord(entry.Time, level, entry.Message, 0)
+		record.AddAttrs(slog.String("event", entry.Event), slog.String("source", entry.Source))
+		if entry.Stage != nil {
+			record.AddAttrs(slog.Any("stage", entry.Stage))
+		}
+		for _, field := range entry.Fields {
+			record.AddAttrs(slog.String(field.Key, field.Value))
+		}
+		if entry.Request != nil {
+			record.AddAttrs(slog.Any("request", entry.Request))
+		}
+		_ = slog.Default().Handler().Handle(context.Background(), record)
 	}
 }
 

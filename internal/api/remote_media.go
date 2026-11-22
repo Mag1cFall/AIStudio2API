@@ -30,9 +30,13 @@ var remoteMediaClient = &http.Client{Transport: remoteMediaTransport(), CheckRed
 	return checkRemoteMediaHost(request.Context(), request.URL.Hostname())
 }}
 
-// remoteMediaTransport 返回按进程环境变量选择代理的 Transport，直连时在建立连接时拒绝实际连接的非公网地址
+// remoteMediaHeaderTimeout 是下载外部媒体等待响应头的超时
+const remoteMediaHeaderTimeout = 30 * time.Second
+
+// remoteMediaTransport 返回按进程环境变量选择代理并设置响应头超时的 Transport，直连时在建立连接时拒绝实际连接的非公网地址
 func remoteMediaTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = remoteMediaHeaderTimeout
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	direct := *dialer
 	direct.Control = func(_, address string, _ syscall.RawConn) error {

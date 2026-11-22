@@ -9,6 +9,7 @@ import type {
   AccountTask,
   AdminEvent,
   ChromeImportInput,
+  ChromeProfileTier,
   CookieAccountsInput,
   CookieBrowser,
   CookieImportInput,
@@ -159,6 +160,36 @@ export const api = {
     ).task,
   chromeImportProfiles: async () =>
     (await requestJSON<ChromeProfilesResponse>('/api/accounts/import/chrome')).profiles,
+  checkChromeImportTiers: async (
+    accountIDs: string[],
+    proxy: string,
+    onResult: (item: ChromeProfileTier) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const response = await send('/api/accounts/import/chrome/tiers', {
+      method: 'POST',
+      body: jsonBody({ account_ids: accountIDs, proxy }),
+      signal: signal ?? null,
+    })
+    const reader = response.body?.getReader()
+    if (!reader) return
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      for (;;) {
+        const newline = buffer.indexOf('\n')
+        if (newline < 0) break
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        if (line !== '') onResult(JSON.parse(line) as ChromeProfileTier)
+      }
+    }
+    const tail = (buffer + decoder.decode()).trim()
+    if (tail !== '') onResult(JSON.parse(tail) as ChromeProfileTier)
+  },
   importChromeAccounts: async (input: ChromeImportInput) =>
     (
       await requestJSON<AccountTaskResponse>('/api/accounts/import/chrome', {
@@ -210,6 +241,13 @@ export const api = {
         body: jsonBody({ view }),
       })
     ).task,
+  verifyAccount: async (id: string, view: string) =>
+    (
+      await requestJSON<AccountTaskResponse>(`/api/accounts/${encodeURIComponent(id)}/verify`, {
+        method: 'POST',
+        body: jsonBody({ view }),
+      })
+    ).task,
   loginViewURL: (view: string) =>
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/login-view/${encodeURIComponent(view)}`,
   paths: (path: string) => requestJSON<PathListing>(`/api/paths?path=${encodeURIComponent(path)}`),
@@ -221,6 +259,13 @@ export const api = {
     requestJSON<AccountRefresh>(`/api/accounts/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',
     }),
+  refreshAccounts: async (ids: string[]) =>
+    (
+      await requestJSON<AccountTaskResponse>('/api/accounts/refresh', {
+        method: 'POST',
+        body: jsonBody({ ids }),
+      })
+    ).task,
   startService: () => requestJSON<ServiceStatus>('/api/control/start', { method: 'POST' }),
   stopService: () => requestJSON<ServiceStatus>('/api/control/stop', { method: 'POST' }),
   downloadCamoufox: () => requestJSON<ServiceStatus>('/api/camoufox/download', { method: 'POST' }),

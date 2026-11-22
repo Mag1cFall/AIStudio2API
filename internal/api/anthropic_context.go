@@ -333,27 +333,15 @@ func (s *server) compactAnthropic(ctx context.Context, request anthropicRequest,
 	if instructions == "" {
 		instructions = anthropicCompactionPrompt
 	}
-	summarize := *generate
-	summarize.Contents = append(slices.Clone(generate.Contents), aistudio.Content{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: instructions}}})
-	summarize.Tools.ToolConfig.Mode = "none"
-	summarize.Unary = true
-	events, err := s.service.Generate(ctx, summarize)
+	summary, usage, err := s.generateCompactionSummary(ctx, *generate, instructions)
 	if err != nil {
 		return nil, err
 	}
-	result, err := consumeEvents(ctx, events)
-	if err != nil {
-		return nil, err
-	}
-	if result.finishReason != "stop" {
-		return nil, fmt.Errorf("compaction summary finished with %s", result.finishReason)
-	}
-	summary := strings.TrimSpace(result.text.String())
 	if start, end := strings.Index(summary, "<summary>"), strings.LastIndex(summary, "</summary>"); start >= 0 && end > start {
 		summary = strings.TrimSpace(summary[start+len("<summary>") : end])
 	}
 	generate.Contents = []aistudio.Content{{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: fmt.Sprintf(compactionSummaryContext, summary)}}}}
-	return &anthropicCompaction{summary: summary, usage: result.usage, pause: edit.PauseAfterCompaction}, nil
+	return &anthropicCompaction{summary: summary, usage: usage, pause: edit.PauseAfterCompaction}, nil
 }
 
 // block 返回压缩摘要的 compaction 内容块

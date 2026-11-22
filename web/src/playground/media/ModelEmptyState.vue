@@ -221,13 +221,11 @@ const played = ref(new Set<number>())
 
 @keyframes empty-arrive {
   0% {
-    filter: blur(6px);
     opacity: 0;
     transform: translateY(10px);
   }
 
   to {
-    filter: none;
     opacity: 1;
     transform: none;
   }
@@ -303,90 +301,54 @@ const played = ref(new Set<number>())
 
 .tile__halo {
   position: absolute;
-  inset: 0;
-  animation: empty-halo-sway calc(var(--empty-duration) * 1.5) ease-in-out infinite alternate;
-  transition: opacity 0.3s;
-}
-
-.tile__halo::after,
-.tile__halo::before {
-  position: absolute;
-  inset: -3px;
-  border-radius: 20px;
+  inset: -40px;
   background: conic-gradient(
     from 220deg,
-    #3186ff,
-    #3186ff 22%,
-    #ff4641 40%,
+    #1d7cff,
+    #1d7cff 22%,
+    #ff2e28 40%,
     #fc0 58%,
-    #0ebc5f 76%,
-    #3186ff
+    #00c858 76%,
+    #1d7cff
   );
-  content: '';
-  filter: blur(16px) saturate(1.3);
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent 0,
+      rgb(0 0 0 / 6%) 12px,
+      rgb(0 0 0 / 24%) 26px,
+      rgb(0 0 0 / 78%) 48px,
+      rgb(0 0 0 / 78%) calc(100% - 48px),
+      rgb(0 0 0 / 24%) calc(100% - 26px),
+      rgb(0 0 0 / 6%) calc(100% - 12px),
+      transparent 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      rgb(0 0 0 / 6%) 12px,
+      rgb(0 0 0 / 24%) 26px,
+      rgb(0 0 0 / 78%) 48px,
+      rgb(0 0 0 / 78%) calc(100% - 48px),
+      rgb(0 0 0 / 24%) calc(100% - 26px),
+      rgb(0 0 0 / 6%) calc(100% - 12px),
+      transparent 100%
+    );
+  mask-composite: intersect;
   opacity: 0;
-}
-
-.tile__halo::before {
-  animation: empty-halo-visit calc(var(--empty-duration) * 2) ease-in-out infinite;
-  animation-delay: calc(0.5s + var(--i) * var(--empty-duration) * 2 / var(--count));
-}
-
-.empty-state__examples[data-count='1'] .tile__halo::before {
-  animation-name: empty-halo-breathe;
-}
-
-.tile__halo::after {
+  pointer-events: none;
   transition: opacity 0.35s;
 }
 
-.tile:focus-within .tile__halo::after,
-.tile:hover .tile__halo::after {
+.tile:first-child .tile__halo,
+.tile:focus-within .tile__halo,
+.tile:hover .tile__halo {
   opacity: var(--halo);
-}
-
-.tile:focus-within .tile__halo::before,
-.tile:hover .tile__halo::before {
-  animation-play-state: paused;
 }
 
 .empty-state__examples:has(.tile:focus-within) .tile:not(:focus-within) .tile__halo,
 .empty-state__examples:has(.tile:hover) .tile:not(:hover) .tile__halo {
   opacity: 0;
-}
-
-@keyframes empty-halo-visit {
-  0%,
-  36%,
-  to {
-    opacity: 0;
-  }
-
-  8%,
-  26% {
-    opacity: var(--halo);
-  }
-}
-
-@keyframes empty-halo-breathe {
-  0%,
-  to {
-    opacity: calc(var(--halo) * 0.35);
-  }
-
-  50% {
-    opacity: var(--halo);
-  }
-}
-
-@keyframes empty-halo-sway {
-  0% {
-    transform: rotate(-4deg);
-  }
-
-  to {
-    transform: rotate(4deg);
-  }
 }
 
 .tile__frame {
@@ -442,8 +404,7 @@ const played = ref(new Set<number>())
   max-width: calc(100% - 20px);
   padding: 5px 10px;
   border-radius: 12px;
-  backdrop-filter: blur(8px);
-  background: rgb(0 0 0 / 55%);
+  background: rgb(0 0 0 / 74%);
   color: var(--color-v3-text-on-button-reverse);
   font-size: 12px;
   line-height: 1.3;
@@ -698,15 +659,9 @@ const played = ref(new Set<number>())
   .starters li,
   .tile,
   .tile__frame,
-  .tile__halo,
-  .tile__halo::after,
-  .tile__halo::before {
+  .tile__halo {
     animation: none;
     transition: none;
-  }
-
-  .tile:first-child .tile__halo::before {
-    opacity: var(--halo);
   }
 
   .tile:hover .tile__frame {

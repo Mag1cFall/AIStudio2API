@@ -121,10 +121,16 @@ The tools listed earlier in your instructions (<工具名>) act on an empty remo
 - 客户端回传的历史格式不同（例如合并了相邻的 user 轮）时，按回传的格式转录
 - trajectory 开启时没有转录历史的，续接时 field 9 只有说明与系统提示
 
-最后一组是 model 轮，或其本地 Token 数超过 24576 时，开启新 trajectory：
+最后一组不是 model 轮、本地 Token 数超过 24576 且对话续接得上已有 trajectory 时，续接原 trajectory，只把最后一组写成 text/plain 最新消息文件：
 
-- 最后一组也转录在 field 9 中
-- field 1 只提交用户轮 `Continue the conversation from the last turn of the conversation history at the end of your instructions.`
+- 最新消息文件以说明与 `<latest_message>`、`<user_turn>` 转录最后一组，注明它不是说明文件、不替换之前的系统提示与函数声明
+- 最后一组中的附件按 `[attachment <序号>]` 编号，紧跟在最新消息文件之后；本轮同时提交说明文件时，最新消息文件排在说明文件之后
+- field 1 的文本为 `Continue the conversation from the attached latest user message file (not an instructions file).`
+
+最后一组是 model 轮，或其本地 Token 数超过 24576 且找不到可续接的 trajectory 时，开启新 trajectory：
+
+- 最后一组也转录在 field 9 或说明文件中
+- field 1 只提交用户轮 `Continue the conversation from the last turn of the conversation history at the end of your instructions.`（使用说明文件时为 `the instructions file`）
 - 转录轮次中的附件放在这一轮开头
 
 ### 说明文件
@@ -191,6 +197,12 @@ Right after the block, call your ask_question tool once with the question "Run t
 
 ````text
 The conversation before the first user message of this chat is transcribed at the end of this file between <conversation_history> and </conversation_history>: user turns between <user_turn> and </user_turn>, and your own earlier replies, including your function_calls blocks, between <assistant_turn> and </assistant_turn>. Attachments in it are numbered like [attachment 1] and are attached in the same order after this file at the start of the first user message of this chat. Continue the conversation from the latest message and never write these tags yourself.
+````
+
+续接 trajectory 且最后一组超过 24576 token 时，最新消息文件开头的说明：
+
+````text
+Latest user message (not an instructions file; keep all earlier system instructions, client functions and conversation history unchanged). The latest user message and tool results of this chat are transcribed below between <latest_message> and </latest_message> in <user_turn> blocks. Attachments in it are numbered like [attachment 1] and are attached right after this file in the same order. Continue the conversation from this latest message and never write these tags yourself.
 ````
 
 ### 工具、停止序列与思考强度
@@ -280,7 +292,7 @@ field 19 的 thinking level 取值：
 - 对话轮按连续的 model 轮与其余轮次分组，逐组累积 SHA-256 摘要。每组计入非思考正文 Part 直接连接后按空白归一的结果、函数调用的名称与键排序的参数、函数结果键排序的内容，其余 Part 去掉思考签名计入，内联数据以其 SHA-256 计入；调用 ID 不计入，客户端以不同格式回传同一回复时摘要相同
 - 本轮回复完整结束、没有以 `malformed_function_call` 结束、没有调用被禁止的工作区内置工具、也没有在函数调用之后继续输出正文时，把“请求的对话 + 本轮回复的正文与函数调用”的续接位置写入该 trajectory，替换它之前的续接位置；最多保存 200 个 trajectory，超过时丢弃最早续接的
 - 新请求最后一组之前最近的 model 轮组与某个续接位置相同时，续接该 trajectory：field 1 只提交该组之后的轮次，field 21 为 trajectory ID；回复没有完整结束时删除该续接位置
-- 找不到时在账户的应用中开启新 trajectory，最后一组之前的对话轮转录在 field 9 或说明文件中，见第 3 节；包括新对话、重新生成、编辑或压缩过的历史、回到较早的回复另起分支、另一个 API key、上一轮回复没有完整结束、最后一组过长或是 model 轮
+- 找不到时在账户的应用中开启新 trajectory，最后一组之前的对话轮转录在 field 9 或说明文件中，见第 3 节；包括新对话、重新生成、编辑或压缩过的历史、回到较早的回复另起分支、另一个 API key、上一轮回复没有完整结束或最后一组是 model 轮
 - 账户没有应用时照官网新建应用，新应用的应用 ID 写入 `assistant.id` 并清空 trajectory；之后该账户的全部对话都在这个应用中，应用保留在该 Google 账户的 My apps 中
 - 应用与续接位置保存在账户目录的运行状态中：同一 Google 账户在多个服务实例或账户目录中使用时，每份运行状态各自新建一个应用、各自续接；管理端删除账户时账户目录与运行状态一并删除，应用留在该 Google 账户的 My apps 中，再次导入该账户后新建应用
 - 本进程第一次使用账户的应用时照官网打开它，见“RPC 顺序”；`GetApplet` 返回 404 时新建应用。应用已被删除或续接的 trajectory 不存在时，`CodeAssistantOffline` 返回 404 code 5；已打开的应用上 `CodeAssistantOffline` 返回 404 且还没有取得任务 ID 时，删除本轮续接的续接位置，重新打开应用（应用已不存在时新建）后重新提交本轮一次

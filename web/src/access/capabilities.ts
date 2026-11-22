@@ -238,7 +238,6 @@ export const capabilities: Capability[] = [
         baseURL: input.origin,
         prompt: 'A drone flying over a forest at sunrise',
         settings: { ...defaultSettings(input.model), model: input.modelID },
-        references: [],
         aspectRatios: options.video_aspect_ratios ?? [],
         durations: (options.video_durations_seconds ?? []).map(Number),
         resolutions: options.video_output_resolutions ?? [],

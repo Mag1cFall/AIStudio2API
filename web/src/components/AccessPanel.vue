@@ -237,12 +237,12 @@ const clientGroups = computed(() =>
   })),
 )
 const clientModel = ref('')
-const tiers = reactive({ opus: '', sonnet: '', haiku: '' })
+const tiers = reactive({ fable: '', opus: '', sonnet: '', haiku: '' })
 watch(
   chatModels,
   (list) => {
     clientModel.value = keepModel(clientModel.value, list)
-    for (const tier of ['opus', 'sonnet', 'haiku'] as const)
+    for (const tier of ['fable', 'opus', 'sonnet', 'haiku'] as const)
       tiers[tier] = list.some((model) => model.id === tiers[tier]) ? tiers[tier] : clientModel.value
   },
   { immediate: true },
@@ -256,8 +256,9 @@ const clientProtocol = computed<Protocol>({
     selectedProtocols[client.value.id] = value
   },
 })
-// tierLabels 是 Claude Code 三档模型的选择框名称
+// tierLabels 是 Claude Code 四档模型的选择框名称
 const tierLabels: { tier: keyof typeof tiers; label: TranslationKey }[] = [
+  { tier: 'fable', label: 'access.tierFable' },
   { tier: 'opus', label: 'access.tierOpus' },
   { tier: 'sonnet', label: 'access.tierSonnet' },
   { tier: 'haiku', label: 'access.tierHaiku' },
@@ -269,6 +270,7 @@ const clientInput = computed(() => ({
   model: chatModels.value.find((model) => model.id === clientModel.value),
   modelID: clientModel.value || modelPlaceholder,
   tiers: {
+    fable: tiers.fable || modelPlaceholder,
     opus: tiers.opus || modelPlaceholder,
     sonnet: tiers.sonnet || modelPlaceholder,
     haiku: tiers.haiku || modelPlaceholder,

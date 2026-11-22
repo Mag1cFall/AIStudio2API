@@ -8,13 +8,13 @@ import {
   type LogRow,
   type LogStageState,
 } from '@/logs'
-import LogLine from './LogLine.vue'
+import LogLine, { useLogLineText } from './LogLine.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiDisclosure from './UiDisclosure.vue'
-import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{ row: LogRow }>()
 const { t, locale, logText } = useI18n()
+const formatLine = useLogLineText()
 const stage = computed(() => props.row.stage!)
 // open 是步骤列表是否展开，由日志页按行保存
 const open = defineModel<boolean>('open', { required: true })
@@ -26,9 +26,6 @@ const stateKeys: Record<LogStageState, TranslationKey> = {
   failed: 'state.failed',
   cancelled: 'state.cancelled',
 }
-
-// stateIcons 是已结束阶段在状态位显示的图标
-const stateIcons = { completed: 'check', failed: 'close', cancelled: 'disable' } as const
 
 // progress 是阶段当前步骤与总步骤数，阶段没有编号的步骤时为空
 const progress = computed(() =>
@@ -45,29 +42,39 @@ const duration = computed(() => {
   const ms = logDuration(latest.value)
   return ms === undefined ? '' : formatLogDuration(ms, locale.value)
 })
+// mainTooltip 返回阶段主行的完整文字，供截断时悬停显示
+const mainTooltip = computed(() =>
+  [
+    logText(stage.value.name),
+    ended.value && progress.value ? progress.value : '',
+    formatLine(latest.value, { message: !ended.value, part: 'inline', duration: false }),
+  ]
+    .filter(Boolean)
+    .join(' '),
+)
+// blocksTooltip 返回阶段原因行的完整文字，供截断时悬停显示
+const blocksTooltip = computed(() =>
+  blocks.value ? formatLine(latest.value, { message: false, part: 'block' }) : '',
+)
 </script>
 
 <template>
   <div class="log-op log-op-stage">
     <UiDisclosure v-model="open" />
+    <span class="log-state" :class="`log-state-${stage.state}`">{{
+      stage.state === 'running' && progress ? progress : t(stateKeys[stage.state])
+    }}</span>
     <span
-      v-tooltip="t(stateKeys[stage.state])"
-      class="log-state"
-      :class="`log-state-${stage.state}`"
-      :aria-label="t(stateKeys[stage.state])"
-    >
-      <UiIcon v-if="stage.state !== 'running'" :name="stateIcons[stage.state]" :size="13" />
-      <template v-else-if="progress">{{ progress }}</template>
-      <UiIcon v-else name="spinner" :size="13" class="stage-spinner" />
-    </span>
-    <span class="log-op-main"
+      v-tooltip.overflow="mainTooltip"
+      class="log-op-main"
+      :class="blocks ? 'stage-main-single' : 'stage-main-clamp'"
       ><strong class="log-op-title">{{ logText(stage.name) }}</strong
       ><span v-if="ended && progress" class="stage-progress">{{ progress }}</span
       ><span class="stage-detail"
         ><LogLine :entry="latest" :message="!ended" part="inline" :duration="false" /></span
     ></span>
     <span class="log-op-duration">{{ duration }}</span>
-    <p v-if="blocks" class="log-op-row stage-blocks">
+    <p v-if="blocks" v-tooltip.overflow="blocksTooltip" class="log-op-row stage-blocks">
       <LogLine :entry="latest" :message="false" part="block" />
     </p>
     <UiCollapse class="log-op-row log-op-detail" :open="open">
@@ -92,37 +99,38 @@ const duration = computed(() => {
   color: var(--color-gray-500);
   font-variant-numeric: tabular-nums;
 }
-.stage-spinner {
-  animation: stage-spin 1s linear infinite;
+.stage-main-single {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-@keyframes stage-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .stage-spinner {
-    animation: none;
-  }
+.stage-main-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .stage-detail :deep(.log-line-message) {
   color: var(--color-gray-300);
 }
-/* stage-blocks 为最近一步另起一行的错误等长字段，最多两行，全文在步骤列表中 */
+/* stage-blocks 为最近一步另起一行的错误或原因字段，单行截断，悬停或步骤列表中看全文 */
 .stage-blocks {
-  display: -webkit-box;
   overflow: hidden;
   margin: 2px 0 0;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.stage-blocks :deep(.log-field-block) {
+  display: inline;
+  margin-inline-end: 8px;
+}
+/* stage-timeline 从行首开始，左边线对齐展开箭头的中线 */
 .stage-timeline {
   border-left: 1px solid var(--color-line);
   padding-left: 12px;
-  margin: 6px 0 6px;
+  margin: 6px 0 6px 9px;
 }
 .stage-timeline li {
   display: flex;

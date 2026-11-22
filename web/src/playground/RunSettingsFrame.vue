@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useConsole } from '@/console'
 import { useI18n } from '@/i18n'
 import UiIcon from '@/playground/ui/UiIcon.vue'
 import '@/playground/styles/run-settings.css'
@@ -16,6 +17,8 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ close: []; code: []; reset: [] }>()
 const { t, locale } = useI18n()
+// loading 是管理端各项数据的首次载入状态，模型目录到达前面板不显示设置
+const loading = useConsole().loading
 const heading = ref<HTMLElement | null>(null)
 // compact 表示标题放不下时获取代码按钮只显示图标
 const compact = ref(false)
@@ -82,7 +85,7 @@ watch([locale, () => props.title], refit)
       </div>
     </div>
     <div class="scrollable-area">
-      <slot />
+      <slot v-if="!loading.models" />
     </div>
   </aside>
 </template>

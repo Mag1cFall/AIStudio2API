@@ -104,11 +104,10 @@ func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
 			continue
 		}
 		var heads []anthropicSearchHead
-		searched := bytes.Contains(message.Content, []byte(`"server_tool_use"`)) || bytes.Contains(message.Content, []byte(`"web_search_tool_result"`))
+		searched := bytes.Contains(message.Content, []byte(`"server_tool_use"`)) || bytes.Contains(message.Content, []byte(`"web_search_tool_result"`)) || bytes.Contains(message.Content, []byte(`\u`))
 		if !searched || json.Unmarshal(message.Content, &heads) == nil && !slices.ContainsFunc(heads, func(head anthropicSearchHead) bool {
 			return head.Type == "server_tool_use" || head.Type == "web_search_tool_result"
 		}) {
-			message.Content, _ = json.Marshal(message.Content)
 			continue
 		}
 		var blocks []json.RawMessage

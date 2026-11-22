@@ -22,10 +22,16 @@ const (
 	tagManagerOrigin = "https://www.googletagmanager.com"
 	// analyticsCollectURL 是 gtag 发出 GA4 命中的地址
 	analyticsCollectURL = "https://www.google-analytics.com/g/collect"
+	// analyticsGoogleCollectURL 是同意广告存储且开启 Google Signals 的 gtag 目标发出 GA4 命中的地址
+	analyticsGoogleCollectURL = "https://analytics.google.com/g/collect"
 	// analyticsFlushDelay 是 gtag 从攒下第一个非转化事件到把这一批发出的延迟
 	analyticsFlushDelay = 5 * time.Second
-	// analyticsConsent 是 Cookie 提示条拒绝后 gtag 命中的同意状态参数
-	analyticsConsent = "gcs=G100&gcd=13q3q3l3q5l1&npa=1&dma=0"
+	// analyticsJoinInterval 是 gtag 经 analytics.google.com 发送命中时再次附带 _gaz=1 的最小间隔
+	analyticsJoinInterval = 60 * time.Second
+	// analyticsConsentDenied 是 Cookie 提示条拒绝后 gtag 命中的同意状态参数
+	analyticsConsentDenied = "gcs=G100&gcd=13q3q3l3q5l1&npa=1&dma=0"
+	// analyticsConsentGranted 是不需要 Cookie 提示条且无本地选择记录时 gtag 命中的同意状态参数
+	analyticsConsentGranted = "gcs=G111&gcd=13r3r3l3r5l1&npa=0&dma=0"
 )
 
 var (
@@ -241,6 +247,8 @@ type analyticsTarget struct {
 	sid       int64
 	seq       int
 	last      time.Time
+	// gazAt 是上次经 analytics.google.com 发送命中时附带 _gaz=1 的时刻
+	gazAt     time.Time
 	queue     []analyticsEvent
 	timer     *time.Timer
 	// script 是目标的 gtag 脚本地址，cached 表示它取自页面缓存
@@ -263,10 +271,12 @@ type pageAnalytics struct {
 	screen   string
 	language string
 
-	mu     sync.Mutex
-	start  time.Time
-	closed bool
-	eea    bool
+	mu      sync.Mutex
+	start   time.Time
+	closed  bool
+	eea     bool
+	// granted 表示 2a.json 返回不需要提示条且账户无本地选择记录，广告与统计存储均为 granted
+	granted bool
 	// rewritten 是 GTM 改写主机名后的页面地址
 	rewritten string
 	cid       string
@@ -299,11 +309,14 @@ func (analytics *pageAnalytics) load(ctx context.Context) {
 	if analytics.container == "" {
 		return
 	}
+	runtime := analytics.runtime
+	_, decided := runtime.profile.LocalStorage[cookieBarStorageKey]
+	granted := !decided && runtime.pageCache.notes(cookieBarConfigURL(runtime.cookieBarLanguage)).ConsentOptional
 	analytics.mu.Lock()
 	analytics.start = time.Now()
+	analytics.granted = granted
 	analytics.mu.Unlock()
 	pauseContext(ctx, 100*time.Millisecond+rand.N(100*time.Millisecond))
-	runtime := analytics.runtime
 	containerCached := runtime.pageCache.notes(analytics.container).Tags != nil
 	if runtime.fetchCached(ctx, analytics.container, subresourceHeaders(analytics.container, "*/*", "script", "")) != nil {
 		return
@@ -411,11 +424,12 @@ func (analytics *pageAnalytics) experiments(script *tagScript) string {
 // eventParams 返回 GTM 为事件附加的页面参数，后接 extra；调用方持有 mu
 func (analytics *pageAnalytics) eventParams(tag analyticsTag, extra ...string) []string {
 	eea := strconv.FormatBool(analytics.eea)
+	storage := strconv.FormatBool(analytics.granted)
 	params := []string{"ep.page_locale=default", "ep.is_eea=" + eea}
 	if tag.iseea {
 		params = append(params, "ep.iseea="+eea)
 	}
-	params = append(params, "ep.ads_storage=false", "ep.analytics_storage=false", "ep.signed_in=true")
+	params = append(params, "ep.ads_storage="+storage, "ep.analytics_storage="+storage, "ep.signed_in=true")
 	return append(params, extra...)
 }
 
@@ -561,7 +575,20 @@ func (analytics *pageAnalytics) send(target *analyticsTarget, events []analytics
 	target.hits++
 	tag := target.tag
 	fired := slices.ContainsFunc(events, func(event analyticsEvent) bool { return event.gtm })
-	query := []string{"v=2", "tid=" + tag.id, "gtm=" + target.gtmParam(fired), "_p=" + strconv.FormatInt(analytics.start.UnixMilli(), 10), analyticsConsent}
+	collectURL, consent, pscdl := analyticsCollectURL, analyticsConsentDenied, "pscdl=denied"
+	googleEndpoint := analytics.granted && tag.google && !tag.signals
+	if analytics.granted {
+		consent, pscdl = analyticsConsentGranted, "pscdl=noapi"
+		if googleEndpoint {
+			collectURL = analyticsGoogleCollectURL
+		}
+	}
+	query := []string{"v=2", "tid=" + tag.id, "gtm=" + target.gtmParam(fired), "_p=" + strconv.FormatInt(analytics.start.UnixMilli(), 10)}
+	if googleEndpoint && (target.gazAt.IsZero() || now.Sub(target.gazAt) >= analyticsJoinInterval) {
+		query = append(query, "_gaz=1")
+		target.gazAt = now
+	}
+	query = append(query, consent)
 	if tag.euid {
 		query = append(query, "ecid="+strconv.FormatUint(uint64(target.ecid), 10))
 	}
@@ -571,14 +598,17 @@ func (analytics *pageAnalytics) send(target *analyticsTarget, events []analytics
 	if tag.google {
 		query = append(query, "_ng=1")
 	}
-	query = append(query, "cid="+analytics.cid, "frm=0", "gtm_up=1")
+	query = append(query, "cid="+analytics.cid, "frm=0")
+	if !analytics.granted {
+		query = append(query, "gtm_up=1")
+	}
 	if tag.redact {
 		query = append(query, "ir=1")
 	}
 	if tag.signals {
 		query = append(query, "ngs=1")
 	}
-	query = append(query, "pscdl=denied", "rcb="+strconv.Itoa(target.rcb), "sr="+analytics.screen, "ul="+analytics.language)
+	query = append(query, pscdl, "rcb="+strconv.Itoa(target.rcb), "sr="+analytics.screen, "ul="+analytics.language)
 	if tag.flags > 0 {
 		query = append(query, "gaf="+strconv.Itoa(tag.flags))
 	}
@@ -638,11 +668,11 @@ func (analytics *pageAnalytics) send(target *analyticsTarget, events []analytics
 	headers.Set("Origin", aiStudioOrigin)
 	headers.Set("Sec-Fetch-Dest", "empty")
 	headers.Set("Sec-Fetch-Mode", "no-cors")
-	headers.Set("Sec-Fetch-Site", fetchSite(analyticsCollectURL))
+	headers.Set("Sec-Fetch-Site", fetchSite(collectURL))
 	headers.Set("Priority", "u=4")
 	headers.Set("Pragma", "no-cache")
 	headers.Set("Cache-Control", "no-cache")
-	address := analyticsCollectURL + "?" + strings.Join(query, "&")
+	address := collectURL + "?" + strings.Join(query, "&")
 	fallback := analyticsFallbackURL + "?" + strings.Join(fallbackQuery(query, tag.flags), "&")
 	runtime := analytics.runtime
 	go func() {

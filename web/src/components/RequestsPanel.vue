@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { api } from '@/api'
 import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
+import { splitReason } from '@/cooldowns'
 import { formatLogNumber } from '@/logs'
 import { usePaged } from '@/paging'
 import type { Account, Cooldown, RequestState, RequestSummary } from '@/types'
@@ -27,36 +28,72 @@ const emit = defineEmits<{
 const { locale, t, errorText, logText } = useI18n()
 const cancelling = ref('')
 const refreshing = ref(false)
+const search = ref('')
 const selectedCategory = ref('')
 const cooldownModel = ref('')
 const requestModel = ref('')
+
+const accountLabels = computed(
+  () => new Map(props.accounts.map((account) => [account.id, account.label])),
+)
+
+// accountLabel 将稳定账户 ID 映射为用户显示名称
+function accountLabel(id: string, label: string): string {
+  return label || accountLabels.value.get(id) || '—'
+}
+
+// matchesAccount 按邮箱或账户 ID 子串匹配（不区分大小写）
+function matchesAccount(accountID: string, label: string): boolean {
+  const needle = search.value.trim().toLowerCase()
+  if (needle === '') return true
+  return (
+    accountLabel(accountID, label).toLowerCase().includes(needle) ||
+    accountID.toLowerCase().includes(needle)
+  )
+}
+
+const searchedCooldowns = computed(() =>
+  props.cooldowns.filter((item) => matchesAccount(item.account_id, item.account_label)),
+)
+const searchedRequests = computed(() =>
+  props.requests.filter((item) => matchesAccount(item.account_id, item.account_label)),
+)
 const cooldownModels = computed(() =>
-  keepSelected([...new Set(props.cooldowns.map((item) => item.model_id))], cooldownModel.value, ''),
+  keepSelected(
+    [...new Set(searchedCooldowns.value.map((item) => item.model_id))],
+    cooldownModel.value,
+    '',
+  ),
 )
 const requestModels = computed(() =>
-  keepSelected([...new Set(props.requests.map((item) => item.model))], requestModel.value, ''),
+  keepSelected(
+    [...new Set(searchedRequests.value.map((item) => item.model))],
+    requestModel.value,
+    '',
+  ),
 )
 const modelCooldowns = computed(() =>
-  props.cooldowns.filter(
+  searchedCooldowns.value.filter(
     (item) => cooldownModel.value === '' || item.model_id === cooldownModel.value,
   ),
 )
-// visibleRequests 是所选模型的请求，最近开始的在前
+// visibleRequests 是搜索与所选模型的请求，最近开始的在前
 const visibleRequests = computed(() =>
-  props.requests
+  searchedRequests.value
     .filter((item) => requestModel.value === '' || item.model === requestModel.value)
     .sort((left, right) => Date.parse(right.started_at) - Date.parse(left.started_at)),
 )
 const detail = ref<Cooldown | null>(null)
 const clearing = ref(false)
 
-// splitReason 把冷却原因拆成冷却类型与上游错误原文
-function splitReason(reason: string | undefined): { category: string; text: string } {
-  const value = reason ?? ''
-  const separator = value.indexOf(': ')
-  if (separator <= 0) return { category: '', text: value }
-  return { category: value.slice(0, separator), text: value.slice(separator + 2) }
+interface BulkClearSnapshot {
+  rows: number
+  accounts: number
+  accountWide: number
+  targets: { accountID: string; scope: string; count: number }[]
 }
+const bulkConfirm = ref<BulkClearSnapshot | null>(null)
+const bulkClearing = ref(false)
 
 // categoryLabel 返回冷却类型的当前语言名称，没有类型时为其他
 function categoryLabel(category: string): string {
@@ -104,8 +141,8 @@ const {
   pages: requestPages,
   paged: pagedRequests,
 } = usePaged(visibleRequests, pageSize)
-watch([cooldownModel, activeCategory], () => (cooldownPage.value = 1))
-watch(requestModel, () => (requestPage.value = 1))
+watch([search, cooldownModel, activeCategory], () => (cooldownPage.value = 1))
+watch([search, requestModel], () => (requestPage.value = 1))
 const cooldownList = ref<HTMLElement>()
 const requestList = ref<HTMLElement>()
 // 翻页后列表回到顶部
@@ -151,15 +188,6 @@ function phaseText(request: RequestSummary): string {
         : (['requests.phaseStreaming', request.last_data_at] as const)
   const seconds = Math.max(0, Math.floor((now.value - Date.parse(since)) / 1000))
   return t(key).replace('{duration}', formatLogNumber(seconds, locale.value, 0, 'second'))
-}
-
-const accountLabels = computed(
-  () => new Map(props.accounts.map((account) => [account.id, account.label])),
-)
-
-// accountLabel 将稳定账户 ID 映射为用户显示名称
-function accountLabel(id: string, label: string): string {
-  return label || accountLabels.value.get(id) || '—'
 }
 
 // timeFormat 是当前语言的请求时间格式
@@ -213,6 +241,65 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
     clearing.value = false
   }
 }
+
+// openBulkClear 按账户与作用范围去重当前筛选出的冷却并打开确认对话框
+function openBulkClear(): void {
+  const list = visibleCooldowns.value
+  if (list.length === 0) return
+  const accounts = new Set<string>()
+  const accountWide = new Set<string>()
+  const targets = new Map<string, { accountID: string; scope: string; count: number }>()
+  for (const item of list) {
+    accounts.add(item.account_id)
+    if (item.scope === '*') accountWide.add(item.account_id)
+    const key = `${item.account_id}\0${item.scope}`
+    const entry = targets.get(key)
+    if (entry) entry.count++
+    else targets.set(key, { accountID: item.account_id, scope: item.scope, count: 1 })
+  }
+  bulkConfirm.value = {
+    rows: list.length,
+    accounts: accounts.size,
+    accountWide: accountWide.size,
+    targets: [...targets.values()],
+  }
+}
+
+// confirmBulkClear 限并发调用逐条清除接口，结束后提示成功与失败条数
+async function confirmBulkClear(): Promise<void> {
+  const snapshot = bulkConfirm.value
+  if (snapshot === null || bulkClearing.value) return
+  bulkClearing.value = true
+  let succeeded = 0
+  let failed = 0
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < snapshot.targets.length) {
+      const target = snapshot.targets[next++]!
+      try {
+        await api.clearCooldown(target.accountID, target.scope)
+        succeeded += target.count
+      } catch {
+        failed += target.count
+      }
+    }
+  }
+  try {
+    const concurrency = Math.min(6, snapshot.targets.length)
+    await Promise.all(Array.from({ length: concurrency }, worker))
+    bulkConfirm.value = null
+    emit(
+      'notice',
+      t('cooldowns.bulkCleared')
+        .replace('{count}', String(succeeded))
+        .replace('{failed}', String(failed)),
+      failed === 0 ? 'success' : 'error',
+    )
+    emit('refresh')
+  } finally {
+    bulkClearing.value = false
+  }
+}
 </script>
 
 <template>
@@ -222,10 +309,17 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
     <header
       class="page-x flex flex-wrap items-center gap-3 border-b border-line py-4 md:overflow-hidden md:[scrollbar-gutter:stable]"
     >
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 basis-56">
         <h2 class="text-xl font-semibold text-white">{{ t('section.requests.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500">{{ t('section.requests.description') }}</p>
       </div>
+      <input
+        v-model="search"
+        type="search"
+        :aria-label="t('accounts.search')"
+        :placeholder="t('accounts.search')"
+        class="min-w-0 flex-[1_1_12rem] rounded-md border border-line bg-canvas px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none sm:w-56 sm:flex-none"
+      />
       <button
         class="flex items-center gap-2 rounded border border-line bg-raised px-4 py-2 text-sm font-medium text-gray-200 transition hover:bg-line disabled:opacity-50"
         type="button"
@@ -255,21 +349,36 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
             <option value="">{{ t('requests.allModels') }}</option>
             <option v-for="model in cooldownModels" :key="model" :value="model">{{ model }}</option>
           </UiSelect>
-          <div v-if="categories.length > 1" class="ml-auto flex flex-wrap gap-1">
+          <div
+            v-if="categories.length > 1 || visibleCooldowns.length > 0"
+            class="ml-auto flex flex-wrap items-center gap-1"
+          >
+            <template v-if="categories.length > 1">
+              <button
+                v-for="[category, count] in [['', modelCooldowns.length] as const, ...categories]"
+                :key="category || 'all'"
+                type="button"
+                class="rounded px-2 py-0.5 text-xs transition"
+                :class="
+                  activeCategory === category
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-raised text-gray-400 hover:text-gray-200'
+                "
+                :aria-pressed="activeCategory === category"
+                @click="selectedCategory = category"
+              >
+                {{ category === '' ? t('cooldowns.all') : categoryLabel(category) }} {{ count }}
+              </button>
+            </template>
             <button
-              v-for="[category, count] in [['', modelCooldowns.length] as const, ...categories]"
-              :key="category || 'all'"
+              v-if="visibleCooldowns.length > 0"
               type="button"
-              class="rounded px-2 py-0.5 text-xs transition"
-              :class="
-                activeCategory === category
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-raised text-gray-400 hover:text-gray-200'
-              "
-              :aria-pressed="activeCategory === category"
-              @click="selectedCategory = category"
+              class="rounded border border-line bg-raised px-2 py-0.5 text-xs text-gray-200 transition hover:bg-line disabled:opacity-50"
+              :disabled="bulkClearing"
+              :aria-busy="bulkClearing"
+              @click="openBulkClear"
             >
-              {{ category === '' ? t('cooldowns.all') : categoryLabel(category) }} {{ count }}
+              {{ t('cooldowns.clearFiltered').replace('{count}', String(visibleCooldowns.length)) }}
             </button>
           </div>
         </div>
@@ -448,6 +557,54 @@ async function clearCooldown(cooldown: Cooldown): Promise<void> {
             @click="clearCooldown(detail)"
           >
             {{ t('cooldowns.clear') }}
+          </button>
+        </div>
+      </template>
+    </DetailDialog>
+
+    <DetailDialog
+      :open="bulkConfirm !== null"
+      :title="
+        bulkConfirm
+          ? t(
+              bulkConfirm.rows === 1
+                ? 'cooldowns.clearConfirmTitleOne'
+                : 'cooldowns.clearConfirmTitle',
+            ).replace('{count}', String(bulkConfirm.rows))
+          : ''
+      "
+      narrow
+      @close="!bulkClearing && (bulkConfirm = null)"
+    >
+      <template v-if="bulkConfirm">
+        <p class="leading-6 text-gray-300">
+          {{
+            t(
+              bulkConfirm.accountWide > 0
+                ? 'cooldowns.clearConfirmBodyAccountWide'
+                : 'cooldowns.clearConfirmBody',
+            )
+              .replace('{accounts}', String(bulkConfirm.accounts))
+              .replace('{accountWide}', String(bulkConfirm.accountWide))
+          }}
+        </p>
+        <div class="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded border border-line bg-raised px-3 py-1.5 text-sm text-gray-300 transition hover:bg-line disabled:opacity-50"
+            :disabled="bulkClearing"
+            @click="bulkConfirm = null"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="button"
+            class="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-500 disabled:opacity-50"
+            :disabled="bulkClearing"
+            :aria-busy="bulkClearing"
+            @click="confirmBulkClear"
+          >
+            {{ t('cooldowns.clearConfirmAction') }}
           </button>
         </div>
       </template>

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"slices"
@@ -35,6 +36,7 @@ type generationAdmin interface {
 	AccountExits(context.Context) ([]api.AccountExit, error)
 	CreateAccount(context.Context, api.AccountCreateInput, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error)
+	CheckChromeImportTiers(context.Context, api.ChromeTierCheckInput, func(api.ChromeProfileTier)) error
 	CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error)
 	DiscoverCookieAccounts(context.Context, api.CookieImportInput) ([]api.CookieBrowser, error)
 	ImportChromeAccounts(context.Context, api.ChromeImportInput) ([]api.AdminAccount, error)
@@ -44,6 +46,7 @@ type generationAdmin interface {
 	SetAccountState(ctx context.Context, accountID string, state string) (api.AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (api.AdminAccount, error)
+	VerifyAccount(context.Context, string, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	RefreshAccount(context.Context, string) (api.AdminAccountRefresh, error)
 	StartService(context.Context) (api.AdminStatus, error)
 	StopService(context.Context) (api.AdminStatus, error)
@@ -143,16 +146,18 @@ func newRuntimeManager(
 	cfg config.Config,
 	overrides dataConfigOverrides,
 ) (*runtimeManager, error) {
-	requests := newRequestRegistry(ctx)
+	requests := newRequestRegistry()
 	manager := &runtimeManager{
 		lifecycle: ctx, configPath: configPath, activeManagement: cfg,
 		overrides: overrides, requests: requests, factory: buildRuntimeGeneration,
 	}
 	generation, err := manager.factory(ctx, ctx, cfg, requests)
 	if err != nil {
+		requests.close()
 		return nil, err
 	}
 	generation.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts, cfg))
+	manager.settings.Store(requestSettingsOf(cfg))
 	manager.current = generation
 	manager.wireAccounts(generation)
 	if cfg.AutoStart {
@@ -363,29 +368,38 @@ func (manager *runtimeManager) stopAutoStart() {
 	}
 }
 
-// Close 释放当前生成服务
+// Close 停止生成服务并释放当前生成服务实例
 func (manager *runtimeManager) Close() error {
+	_, stopErr := manager.StopService(context.Background())
 	manager.mu.RLock()
 	current := manager.current
 	manager.mu.RUnlock()
-	return current.Close()
+	return errors.Join(stopErr, current.Close())
 }
 
 // requestSettings 是只决定新请求行为的设置，保存后下一个请求即采用，进行中的请求沿用开始时的值
 type requestSettings struct {
-	modes              api.ResponseModes
-	searchModelAliases bool
-	googleSearch       bool
-	mediaOutput        string
-	mediaBaseURL       string
+	modes                   api.ResponseModes
+	searchModelAliases      bool
+	googleSearch            bool
+	mediaOutput             string
+	mediaBaseURL            string
+	replyTool          bool
+	userMessageRewrite string
+	thinkingGuard      bool
 }
 
 // requestSettingsOf 返回 cfg 中只决定新请求行为的设置
 func requestSettingsOf(cfg config.Config) *requestSettings {
 	return &requestSettings{
 		modes:              api.ResponseModes{NonstreamKeepalive: cfg.NonstreamKeepalive, FakeStream: cfg.FakeStream},
-		searchModelAliases: cfg.SearchModelAliases, googleSearch: cfg.GoogleSearch,
-		mediaOutput: cfg.MediaOutput, mediaBaseURL: cfg.MediaBaseURL,
+		searchModelAliases: cfg.SearchModelAliases,
+		googleSearch:       cfg.GoogleSearch,
+		mediaOutput:        cfg.MediaOutput,
+		mediaBaseURL:       cfg.MediaBaseURL,
+		replyTool:          cfg.ReplyTool,
+		userMessageRewrite: cfg.UserMessageRewrite,
+		thinkingGuard:      cfg.ThinkingGuard,
 	}
 }
 
@@ -438,6 +452,13 @@ func (manager *runtimeManager) CountTokens(ctx context.Context, request aistudio
 
 // Generate 由当前生成服务生成事件流
 func (manager *runtimeManager) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
+	if settings := manager.settings.Load(); settings != nil {
+		request.ReplyTool = request.ReplyTool || settings.replyTool
+		if request.UserMessageRewrite == "" {
+			request.UserMessageRewrite = settings.userMessageRewrite
+		}
+		request.ThinkingGuard = request.ThinkingGuard || settings.thinkingGuard
+	}
 	current, done := manager.generation()
 	defer done()
 	return current.service.Generate(ctx, request)
@@ -632,6 +653,13 @@ func (manager *runtimeManager) ChromeImportProfiles(ctx context.Context) ([]api.
 	return current.admin.ChromeImportProfiles(ctx)
 }
 
+// CheckChromeImportTiers 按需检测选中的本机 Chrome 账号的 AI Studio 权益并逐条回调结果
+func (manager *runtimeManager) CheckChromeImportTiers(ctx context.Context, input api.ChromeTierCheckInput, emit func(api.ChromeProfileTier)) error {
+	current, done := manager.generation()
+	defer done()
+	return current.admin.CheckChromeImportTiers(ctx, input, emit)
+}
+
 // CookieBrowsers 返回当前生成服务发现的本机调试浏览器，proxy 为识别账户的请求出口
 func (manager *runtimeManager) CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error) {
 	current, done := manager.generation()
@@ -686,6 +714,14 @@ func (manager *runtimeManager) LoginAccount(ctx context.Context, id string, view
 		return api.AdminAccount{}, err
 	}
 	return manager.currentAdmin().LoginAccount(ctx, id, view)
+}
+
+// VerifyAccount 等 Camoufox 就绪后打开账户验证页并自动再核对，期间不阻止生成服务换代
+func (manager *runtimeManager) VerifyAccount(ctx context.Context, id string, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
+	if err := manager.prepareLoginCamoufox(ctx, id); err != nil {
+		return api.AdminAccount{}, err
+	}
+	return manager.currentAdmin().VerifyAccount(ctx, id, view)
 }
 
 // prepareLoginCamoufox 在浏览器登录前等 Camoufox 就绪，需要下载时记录等待，失败时记录原因
@@ -744,8 +780,13 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	current.service.SetRequestPolicy(mapping, updated.MaxAccountSwitches)
 	manager.settings.Store(&requestSettings{
 		modes:              api.ResponseModes{NonstreamKeepalive: updated.NonstreamKeepalive, FakeStream: updated.FakeStream},
-		searchModelAliases: updated.SearchModelAliases, googleSearch: updated.GoogleSearch,
-		mediaOutput: updated.MediaOutput, mediaBaseURL: updated.MediaBaseURL,
+		searchModelAliases: updated.SearchModelAliases,
+		googleSearch:       updated.GoogleSearch,
+		mediaOutput:        updated.MediaOutput,
+		mediaBaseURL:       updated.MediaBaseURL,
+		replyTool:          updated.ReplyTool,
+		userMessageRewrite: updated.UserMessageRewrite,
+		thinkingGuard:      updated.ThinkingGuard,
 	})
 	updated = manager.decorateRuntimeConfig(updated, current.config)
 	manager.ledger.SetBodyCapture(updated.RequestBodyLog)
@@ -832,6 +873,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		DiscoverHiddenModels:  value.DiscoverHiddenModels,
 		FirstEventHedge:       value.FirstEventHedge,
 		FirstEventHedgeModels: value.FirstEventHedgeModels,
+		FirstEventTimeout:     value.FirstEventTimeout,
 		ContinuationRewrite:   value.ContinuationRewrite,
 		ContinuationPrompt:    value.ContinuationPrompt,
 	}
@@ -841,7 +883,7 @@ func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dat
 		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) &&
 		saved.WAABackend == active.WAABackend &&
 		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
-		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels &&
+		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels && saved.FirstEventTimeout == active.FirstEventTimeout &&
 		saved.DiscoverHiddenModels == active.DiscoverHiddenModels &&
 		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt
 }

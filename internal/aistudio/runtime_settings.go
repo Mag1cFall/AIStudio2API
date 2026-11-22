@@ -74,7 +74,7 @@ func (runtime *goWAARuntime) settingSteps(body []byte) [][]waa.SettingStep {
 			groups = append(groups, []waa.SettingStep{
 				{Wait: wait(), To: "system", Clicked: elements.openSystem},
 				{Wait: systemPause, To: "instructions", Text: text, Clicked: elements.editSystem},
-				{Wait: closePause, To: "close", Clicked: func(time.Time) { runtime.settings.system = system }},
+				{Wait: closePause, To: "close", Clicked: func(time.Time) { runtime.settings.system = bytes.Clone(system) }},
 			})
 		}
 	}
@@ -98,7 +98,7 @@ func (runtime *goWAARuntime) settingSteps(body []byte) [][]waa.SettingStep {
 		groups = append(groups, append(group,
 			waa.SettingStep{Wait: pause, To: "edit", Clicked: func(at time.Time) { elements.toggle(at, veFunctionsEdit) }},
 			waa.SettingStep{Wait: dialogPause, To: "declarations", Text: string(tools)},
-			waa.SettingStep{Wait: closePause, To: "save", Clicked: func(time.Time) { runtime.settings.tools = tools }},
+			waa.SettingStep{Wait: closePause, To: "save", Clicked: func(time.Time) { runtime.settings.tools = bytes.Clone(tools) }},
 		))
 	}
 	return groups

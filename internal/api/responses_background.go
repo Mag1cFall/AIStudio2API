@@ -68,6 +68,7 @@ func (s *server) respondBackground(w http.ResponseWriter, r *http.Request, reque
 	_ = http.NewResponseController(w).Flush()
 
 	compaction, err := s.compactOverThreshold(ctx, &request, &prepared, id)
+	request.Input, request.split = nil, splitInput{}
 	var events <-chan aistudio.Event
 	if err == nil {
 		generate := prepared.generate
@@ -118,6 +119,7 @@ func (s *server) streamBackground(w http.ResponseWriter, r *http.Request, reques
 	_ = writer.emit("response.queued", map[string]any{"response": queued})
 
 	compaction, err := s.compactOverThreshold(ctx, &request, &prepared, id)
+	request.Input, request.split = nil, splitInput{}
 	prepared.stream = stream
 	prepared.generate.Background = true
 	var events <-chan aistudio.Event

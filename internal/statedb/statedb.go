@@ -88,10 +88,12 @@ func (s *Store) Read(id string) ([]byte, bool) {
 }
 
 // Save 在一个事务中写入节点并删除已移除的节点，已有节点保留原保存顺序
-func (s *Store) Save(saved []api.SavedState, removed []string) {
+func (s *Store) Save(saved []api.SavedState, removed []string) error {
 	if err := s.save(saved, removed); err != nil {
 		s.log("WARN", "保存续接状态失败", "error", err)
+		return err
 	}
+	return nil
 }
 
 func (s *Store) save(saved []api.SavedState, removed []string) error {

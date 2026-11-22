@@ -3,6 +3,7 @@ package aistudio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,11 +15,13 @@ import (
 
 // toolContract 保存客户端显式要求的调用模式与参数约束
 type toolContract struct {
-	required   bool
-	parallel   *bool
-	names      map[string]bool
-	schemas    map[string]*jsonschema.Schema
-	serverSide bool
+	required      bool
+	parallel      *bool
+	names         map[string]bool
+	schemas       map[string]*jsonschema.Schema
+	serverSide    bool
+	replyTool     bool
+	stopSequences []string
 }
 
 // prepareToolRequest 将工具选择与约束转换为共同生成请求，compile 为 true 时编译严格函数的参数 Schema 供校验函数调用参数
@@ -202,7 +205,7 @@ func validationSchema(value any) any {
 	return schema
 }
 
-// forward 在完整工具事件发送给客户端前核对显式约束
+// forward 在完整工具事件发送给客户端前核对显式约束并转换回复工具输出
 func (contract *toolContract) forward(ctx context.Context, source <-chan Event) <-chan Event {
 	if contract == nil {
 		return source
@@ -213,9 +216,136 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 		calls := 0
 		serverSideUsed := false
 		failed := false
+		usedReplyTool := false
+		sawPlainText := false
+		bypassReported := false
+		matchedStop := ""
+		var pendingCalls []Event
+		var lastTextEvent Event
+		var matcher *stopSequenceMatcher
+		if contract.replyTool && len(contract.stopSequences) > 0 {
+			matcher = newStopSequenceMatcher(contract.stopSequences)
+		}
+		send := func(event Event) bool {
+			select {
+			case destination <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		flushTextTail := func() bool {
+			if matcher == nil || matchedStop != "" {
+				return true
+			}
+			pending := matcher.flush()
+			if pending == "" {
+				return true
+			}
+			textEvent := Event{
+				Kind:          EventText,
+				Part:          Part{Text: pending},
+				ProviderModel: lastTextEvent.ProviderModel,
+				TurnToken:     lastTextEvent.TurnToken,
+				DebugInfo:     lastTextEvent.DebugInfo,
+				ResponseID:    lastTextEvent.ResponseID,
+				FrameUsage:    lastTextEvent.FrameUsage,
+				FinishFrame:   lastTextEvent.FinishFrame,
+			}
+			return send(textEvent)
+		}
+		flushPendingCalls := func() bool {
+			if !flushTextTail() {
+				return false
+			}
+			if matchedStop != "" {
+				pendingCalls = nil
+				return true
+			}
+			for _, pending := range pendingCalls {
+				if !send(pending) {
+					return false
+				}
+			}
+			pendingCalls = nil
+			return true
+		}
+		reportBypass := func() {
+			if contract.replyTool && !usedReplyTool && sawPlainText && !bypassReported {
+				bypassReported = true
+				reportReplyToolBypassed(ctx)
+			}
+		}
 		for event := range source {
 			if failed {
 				continue
+			}
+			if matchedStop != "" {
+				pendingCalls = nil
+				switch event.Kind {
+				case EventUsage:
+					if !send(event) {
+						return
+					}
+				case EventFinish:
+					reportBypass()
+					event.FinishReason = "stop_sequence"
+					event.StopSequence = matchedStop
+					if !send(event) {
+						return
+					}
+				}
+				continue
+			}
+			if contract.replyTool && event.Kind == EventToolCall && event.FunctionCall != nil && event.FunctionCall.Name == replyToolName {
+				text, ok := replyToolText(event.FunctionCall.Arguments)
+				if !ok {
+					failed = true
+					reportBypass()
+					if !send(Event{Kind: EventError, Err: fmt.Errorf("上游 function %q 参数违反 strict Schema: %w", replyToolName, errors.New("reply tool final arguments must include string content"))}) {
+						return
+					}
+					continue
+				}
+				usedReplyTool = true
+				lastTextEvent = event
+				if matcher != nil {
+					var sequence string
+					text, sequence = matcher.write(text)
+					if sequence != "" {
+						matchedStop = sequence
+					}
+				}
+				if text != "" {
+					textEvent := Event{
+						Kind:          EventText,
+						Part:          Part{Text: text},
+						ProviderModel: event.ProviderModel,
+						TurnToken:     event.TurnToken,
+						DebugInfo:     event.DebugInfo,
+						ResponseID:    event.ResponseID,
+						FrameUsage:    event.FrameUsage,
+						FinishFrame:   event.FinishFrame,
+					}
+					if !send(textEvent) {
+						return
+					}
+				}
+				continue
+			}
+			if contract.replyTool && event.Kind == EventText && event.Text != "" {
+				sawPlainText = true
+				lastTextEvent = event
+				if matcher != nil {
+					text, sequence := matcher.write(event.Text)
+					if sequence != "" {
+						matchedStop = sequence
+					}
+					if text == "" {
+						continue
+					}
+					event.Text = text
+				}
 			}
 			var err error
 			if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult || event.Kind == EventServerToolCall {
@@ -225,7 +355,7 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 				calls++
 				call := event.FunctionCall
 				switch {
-				case !contract.names[call.Name]:
+				case contract.names != nil && !contract.names[call.Name]:
 					err = fmt.Errorf("上游返回了未选择的函数 %q", call.Name)
 				case contract.parallel != nil && !*contract.parallel && calls > 1:
 					err = fmt.Errorf("上游违反单次工具调用约束")
@@ -250,11 +380,31 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 				event = Event{Kind: EventError, Err: err}
 				failed = true
 			}
-			select {
-			case destination <- event:
-			case <-ctx.Done():
+			if contract.replyTool && !failed && event.Kind == EventToolCall && event.FunctionCall != nil {
+				pendingCalls = append(pendingCalls, event)
+				continue
+			}
+			if contract.replyTool && (event.Kind == EventUsage || event.Kind == EventFinish) {
+				if !flushPendingCalls() {
+					return
+				}
+			} else if contract.replyTool && !failed && event.Kind != EventText && event.Kind != EventError {
+				if !flushTextTail() {
+					return
+				}
+			}
+			if contract.replyTool && (event.Kind == EventFinish || event.Kind == EventError) {
+				reportBypass()
+			}
+			if !send(event) {
 				return
 			}
+		}
+		if !failed {
+			if !flushPendingCalls() {
+				return
+			}
+			reportBypass()
 		}
 	}()
 	return destination

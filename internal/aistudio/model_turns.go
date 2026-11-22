@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,18 +27,24 @@ type modelTurnKey struct {
 	digest string
 }
 
-// modelTurnHistory 按 API key 与对话摘要保存本进程生成的模型轮，客户端回传同一回复时与官网一样带回思考 Part、签名 Part 与轮次令牌
+// modelTurnEntry 是模型回复历史中的一条记录
+type modelTurnEntry struct {
+	key  modelTurnKey
+	turn modelTurn
+}
+
+// modelTurnHistory 按 API key 与对话摘要保存本进程生成的模型轮，order 从最近使用到最久未用排列，客户端回传同一回复时与官网一样带回思考 Part、签名 Part 与轮次令牌
 type modelTurnHistory struct {
 	mu      sync.Mutex
-	entries map[modelTurnKey]modelTurn
-	order   []modelTurnKey
+	entries map[modelTurnKey]*list.Element
+	order   list.List
 }
 
 func newModelTurnHistory() *modelTurnHistory {
-	return &modelTurnHistory{entries: make(map[modelTurnKey]modelTurn)}
+	return &modelTurnHistory{entries: make(map[modelTurnKey]*list.Element)}
 }
 
-// store 保存接在 tip 所在对话之后生成的模型轮；tip 为模型轮、回复带内联媒体或没有思考、签名与轮次令牌时不保存，超过上限时丢弃最早的一条
+// store 保存接在 tip 所在对话之后生成的模型轮；tip 为模型轮、回复带内联媒体或没有思考、签名与轮次令牌时不保存，达到上限时淘汰最久未用的一条
 func (turns *modelTurnHistory) store(apiKey string, tip turnLink, turn modelTurn) {
 	if tip.model || slices.ContainsFunc(turn.parts, func(part Part) bool { return part.InlineData != nil }) ||
 		turn.turnToken == "" && !slices.ContainsFunc(turn.parts, func(part Part) bool { return part.Thought || part.ThoughtSignature != "" }) {
@@ -46,34 +53,40 @@ func (turns *modelTurnHistory) store(apiKey string, tip turnLink, turn modelTurn
 	key := modelTurnKey{apiKey: apiKey, digest: turnLinkDigest(tip.digest, true, turn.parts)}
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
-	if _, exists := turns.entries[key]; !exists {
-		turns.order = append(turns.order, key)
+	if element, exists := turns.entries[key]; exists {
+		element.Value = modelTurnEntry{key: key, turn: turn}
+		turns.order.MoveToFront(element)
+		return
 	}
-	turns.entries[key] = turn
-	if len(turns.order) > modelTurnLimit {
-		delete(turns.entries, turns.order[0])
-		turns.order = turns.order[1:]
+	if turns.order.Len() >= modelTurnLimit {
+		oldest := turns.order.Back()
+		delete(turns.entries, oldest.Value.(modelTurnEntry).key)
+		turns.order.Remove(oldest)
 	}
+	turns.entries[key] = turns.order.PushFront(modelTurnEntry{key: key, turn: turn})
 }
 
-// restore 把对话中本进程生成过的模型轮换成生成时的 Part，函数调用沿用客户端回传的 ID，返回改写后的对话、最后一个模型轮的轮次令牌与对话最后一组轮次的累积摘要
+// restore 把对话中本进程生成过的模型轮换成生成时的 Part 并刷新其最近使用顺序，函数调用沿用客户端回传的 ID，返回改写后的对话、最后一个模型轮的轮次令牌与对话最后一组轮次的累积摘要
 func (turns *modelTurnHistory) restore(apiKey string, contents []Content) ([]Content, string, turnLink) {
+	links := turnLinks(contents)
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
 	restored := make([]Content, 0, len(contents))
 	token := ""
 	start := 0
 	var tip turnLink
-	for _, link := range turnLinks(contents) {
-		turn, found := turns.entries[modelTurnKey{apiKey: apiKey, digest: link.digest}]
-		switch {
-		case link.model && found:
-			restored = append(restored, Content{Role: RoleAssistant, Parts: withCallIDs(turn.parts, contents[start:link.end])})
-			token = turn.turnToken
-		case link.model:
-			restored = append(restored, contents[start:link.end]...)
-			token = ""
-		default:
+	for _, link := range links {
+		if link.model {
+			if element, found := turns.entries[modelTurnKey{apiKey: apiKey, digest: link.digest}]; found {
+				turns.order.MoveToFront(element)
+				turn := element.Value.(modelTurnEntry).turn
+				restored = append(restored, Content{Role: RoleAssistant, Parts: withCallIDs(turn.parts, contents[start:link.end])})
+				token = turn.turnToken
+			} else {
+				restored = append(restored, contents[start:link.end]...)
+				token = ""
+			}
+		} else {
 			restored = append(restored, contents[start:link.end]...)
 		}
 		start, tip = link.end, link

@@ -702,6 +702,27 @@ func geminiJSONName(name string) string {
 	return builder.String()
 }
 
+// geminiSystemParts 把系统指令中的 part 分为指令文本与移到首个 user 轮开头的媒体，函数调用与结果转录为文本
+func geminiSystemParts(parts []aistudio.Part) ([]string, []aistudio.Part, error) {
+	var texts []string
+	var media []aistudio.Part
+	for _, part := range parts {
+		switch {
+		case part.FunctionCall != nil || part.FunctionResult != nil:
+			transcript, err := aistudio.ToolPartTranscript(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			texts = append(texts, transcript)
+		case part.Text != "":
+			texts = append(texts, part.Text)
+		case part.InlineData != nil || part.File != nil || part.ExternalMedia != nil:
+			media = append(media, part)
+		}
+	}
+	return texts, media, nil
+}
+
 func (request geminiRequest) toGenerateRequest(id string, model string) (aistudio.GenerateRequest, error) {
 	if err := request.GenerationConfig.validate(); err != nil {
 		return aistudio.GenerateRequest{}, err
@@ -713,30 +734,33 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		if err != nil {
 			return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
 		}
-		for _, part := range parts {
-			if part.FunctionCall != nil || part.FunctionResult != nil {
-				transcript, err := aistudio.ToolPartTranscript(part)
-				if err != nil {
-					return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
-				}
-				system = append(system, transcript)
-				continue
-			}
-			if part.Text == "" && (part.InlineData != nil || part.File != nil || part.ExternalMedia != nil) {
-				systemMedia = append(systemMedia, part)
-			}
-			if part.Text != "" {
-				system = append(system, part.Text)
-			}
+		texts, media, err := geminiSystemParts(parts)
+		if err != nil {
+			return aistudio.GenerateRequest{}, fmt.Errorf("systemInstruction: %w", err)
 		}
+		system, systemMedia = texts, media
 	}
 	contents := make([]aistudio.Content, 0, len(request.Contents))
+	var reminders []aistudio.Part
 	for _, content := range request.Contents {
 		parts, hasResult, err := mapGeminiParts(content.Parts)
 		if err != nil {
 			return aistudio.GenerateRequest{}, err
 		}
 		if len(parts) == 0 {
+			continue
+		}
+		if content.Role == "system" || content.Role == "developer" {
+			texts, media, err := geminiSystemParts(parts)
+			if err != nil {
+				return aistudio.GenerateRequest{}, fmt.Errorf("%s content: %w", content.Role, err)
+			}
+			systemMedia = append(systemMedia, media...)
+			if len(contents) == 0 {
+				system = append(system, texts...)
+			} else if len(texts) > 0 {
+				reminders = addSystemReminder(contents, reminders, strings.Join(texts, "\n"))
+			}
 			continue
 		}
 		role, err := geminiRole(content.Role)
@@ -746,7 +770,10 @@ func (request geminiRequest) toGenerateRequest(id string, model string) (aistudi
 		if hasResult {
 			role = aistudio.RoleTool
 		}
-		contents = append(contents, aistudio.Content{Role: role, Parts: parts})
+		contents, reminders = appendWithReminders(contents, aistudio.Content{Role: role, Parts: parts}, reminders)
+	}
+	if len(reminders) > 0 {
+		contents = append(contents, aistudio.Content{Role: aistudio.RoleUser, Parts: reminders})
 	}
 	contents = prependSystemMedia(contents, systemMedia)
 	tools, err := mapGeminiTools(request.Tools, request.ToolConfig)
@@ -1781,6 +1808,7 @@ func geminiUsage(usage *aistudio.Usage) geminiUsageMetadata {
 type geminiStream struct {
 	w         http.ResponseWriter
 	keepalive *streamKeepalive
+	bareError bool
 	mu        sync.Mutex
 	written   bool
 }
@@ -1789,13 +1817,39 @@ type geminiStream struct {
 func openGeminiStream(w http.ResponseWriter, r *http.Request) (*geminiStream, error) {
 	if r.URL.Query().Get("alt") == "sse" {
 		keepalive, err := openStream(w, geminiHeartbeat)
-		return &geminiStream{w: keepalive, keepalive: keepalive}, err
+		return &geminiStream{w: keepalive, keepalive: keepalive, bareError: geminiBareStreamError(r)}, err
 	}
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	return &geminiStream{w: w}, http.NewResponseController(w).Flush()
+}
+
+// geminiBareStreamError 判断客户端是否为只识别裸 JSON 流内错误的旧版 JS @google/genai（< 3.2）
+func geminiBareStreamError(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	client := strings.Join(r.Header.Values("X-Goog-Api-Client"), " ")
+	if !strings.Contains(client, "google-genai-sdk/") {
+		client = r.Header.Get("User-Agent")
+	}
+	if !strings.Contains(client, "gl-node/") {
+		return false
+	}
+	_, rest, ok := strings.Cut(client, "google-genai-sdk/")
+	if !ok {
+		return false
+	}
+	version, _, _ := strings.Cut(rest, " ")
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	major, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	return err1 == nil && err2 == nil && (major < 3 || (major == 3 && minor < 2))
 }
 
 // write 写出一个响应块
@@ -1844,9 +1898,9 @@ func (stream *geminiStream) writeJSON(data []byte) error {
 	return http.NewResponseController(stream.w).Flush()
 }
 
-// fail 写出流内错误：SSE 按官方 SDK 的解析方式写成不带 data: 前缀的整块 JSON，JSON 数组中写为一个元素
+// fail 写出流内错误：SSE 默认写为标准 data: 帧以便标准 SSE 客户端与新版 SDK 解析，旧版 JS @google/genai（< 3.2）不检查 data: 帧内的 error 字段故写为裸 JSON，JSON 数组中写为一个元素
 func (stream *geminiStream) fail(value map[string]any) error {
-	if stream.keepalive == nil {
+	if stream.keepalive == nil || !stream.bareError {
 		return stream.write(value)
 	}
 	data, err := json.Marshal(officialOrder("gemini", value))
