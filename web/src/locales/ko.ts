@@ -244,7 +244,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveSaving': '저장하는 중',
   'accounts.liveReconnecting': '연결이 끊어져 다시 연결하는 중',
   'accounts.liveUnavailable':
-    '로그인 창에 연결할 수 없습니다. 리버스 프록시를 거치는 경우 WebSocket을 전달해야 합니다',
+    '브라우저 창에 연결할 수 없습니다. 리버스 프록시를 거치는 경우 WebSocket을 전달해야 합니다',
   'accounts.liveFailed': '로그인 실패',
   'accounts.liveDialog': '{host} 메시지',
   'accounts.liveOk': '확인',
@@ -269,7 +269,6 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': '계정 브라우저에 연결 중',
   'accounts.liveDisconnected': '브라우저 연결이 종료되었습니다',
   'accounts.liveClosed': '원격 조작이 종료되었습니다',
-  'accounts.liveUnavailable': '원격 조작을 현재 사용할 수 없습니다',
   'accounts.cookieDiscovering': '계정을 확인하는 중',
   'logs.level': '로그 수준',
   'logs.source': '출처',

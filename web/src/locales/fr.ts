@@ -249,7 +249,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveSaving': 'Enregistrement',
   'accounts.liveReconnecting': 'Connexion perdue, reconnexion',
   'accounts.liveUnavailable':
-    'Impossible de joindre la fenêtre de connexion ; un proxy inverse doit relayer WebSocket',
+    'Impossible de joindre la fenêtre du navigateur ; un proxy inverse doit relayer WebSocket',
   'accounts.liveFailed': 'Échec de la connexion',
   'accounts.liveDialog': '{host} indique',
   'accounts.liveOk': 'OK',
@@ -275,7 +275,6 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': 'Connexion au navigateur du compte',
   'accounts.liveDisconnected': 'Connexion au navigateur interrompue',
   'accounts.liveClosed': 'Contrôle à distance terminé',
-  'accounts.liveUnavailable': 'Le contrôle à distance est actuellement indisponible',
   'accounts.cookieDiscovering': 'Recherche des comptes',
   'logs.level': 'Niveau de journalisation',
   'logs.source': 'Source',
