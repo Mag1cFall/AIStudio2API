@@ -25,6 +25,7 @@ type ViewerMessage =
   | { type: 'status'; status: string }
   | { type: 'dialog'; dialog: ViewerDialog | null }
   | { type: 'closed'; error?: string }
+  | { type: 'control-error'; message: string }
   | (ViewerFrame & { type: 'frame' })
 
 const props = defineProps<{ accountId: string; accountLabel: string }>()
@@ -39,6 +40,11 @@ const actualSize = ref(false)
 const connecting = ref(true)
 const fatal = ref('')
 const address = ref('')
+// addressFocused 表示用户正在地址栏输入，此时帧消息不能覆盖已输入的网址
+const addressFocused = ref(false)
+// controlError 是导航或标签页命令的临时错误提示，controlErrorTimer 控制其自动消失
+const controlError = ref('')
+let controlErrorTimer = 0
 const stage = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
 const sink = ref<HTMLTextAreaElement>()
@@ -114,7 +120,7 @@ function connect(): void {
   }
 }
 
-// receive 处理对话框、画面元数据与浏览器断连
+// receive 处理对话框、画面元数据、控制错误与浏览器断连
 function receive(message: ViewerMessage): void {
   if (message.type === 'dialog') {
     dialog.value = message.dialog
@@ -123,10 +129,22 @@ function receive(message: ViewerMessage): void {
       void nextTick(() => (dialogInput.value ?? dialogConfirm.value)?.focus())
   } else if (message.type === 'closed') {
     fatal.value = message.error || t('accounts.liveDisconnected')
+  } else if (message.type === 'control-error') {
+    showControlError(message.message)
   } else if (message.type === 'frame') {
     pendingFrame = message
-    address.value = message.url
+    // 用户正在编辑地址栏时保留其输入，提交或失焦后再恢复与页面地址同步
+    if (!addressFocused.value) address.value = message.url
   }
+}
+
+// showControlError 在顶部显示 5 秒控制命令错误
+function showControlError(message: string): void {
+  controlError.value = message
+  window.clearTimeout(controlErrorTimer)
+  controlErrorTimer = window.setTimeout(() => {
+    controlError.value = ''
+  }, 5000)
 }
 
 // draw 解码一帧 JPEG 画到画布上，较早到达但较晚解码完成的帧被丢弃
@@ -175,6 +193,17 @@ function submitAddress(): void {
   }
   if (!/^[a-z]+:\/\//i.test(target)) target = `https://${target}`
   control({ type: 'navigate', url: target })
+  // 交还焦点，让帧消息重新同步导航后的真实地址
+  focusSink()
+}
+
+// onAddressFocus / onAddressBlur 切换地址栏编辑状态
+function onAddressFocus(): void {
+  addressFocused.value = true
+}
+function onAddressBlur(): void {
+  addressFocused.value = false
+  if (frame.value !== null) address.value = frame.value.url
 }
 
 function remotePoint(event: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -382,6 +411,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true
   cancelAnimationFrame(moveFrame)
+  window.clearTimeout(controlErrorTimer)
   resizeObserver.disconnect()
   socket?.close()
 })
@@ -447,6 +477,8 @@ onBeforeUnmount(() => {
             :placeholder="t('accounts.liveAddressPlaceholder')"
             :aria-label="t('accounts.liveAddress')"
             :disabled="fatal !== ''"
+            @focus="onAddressFocus"
+            @blur="onAddressBlur"
           />
         </form>
         <button
@@ -496,6 +528,13 @@ onBeforeUnmount(() => {
           {{ t('common.close') }}
         </button>
       </header>
+      <div
+        v-if="controlError !== '' && fatal === ''"
+        class="shrink-0 border-b border-amber-500/30 bg-amber-950/40 px-4 py-2 text-xs text-amber-200"
+        role="alert"
+      >
+        {{ controlError }}
+      </div>
       <div ref="stage" class="relative flex min-h-0 flex-1 overflow-auto">
         <canvas
           v-show="frame"
