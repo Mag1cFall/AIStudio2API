@@ -469,7 +469,10 @@ onBeforeUnmount(() => {
         >
           <UiIcon :name="actualSize ? 'zoomFit' : 'zoomActual'" :size="16" />
         </button>
-        <span class="hidden max-w-32 shrink-0 truncate text-xs text-gray-500 sm:block" :title="accountLabel">
+        <span
+          class="hidden max-w-32 shrink-0 truncate text-xs text-gray-500 sm:block"
+          :title="accountLabel"
+        >
           {{ accountLabel }}
         </span>
         <button
