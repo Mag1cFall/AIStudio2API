@@ -27,6 +27,8 @@ type AdminService interface {
 	SetAccountState(ctx context.Context, accountID string, state string) (AdminAccount, error)
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
+	// AttachAccountLiveView 把远程操作窗口接到账户的常驻浏览器，返回的函数在窗口断开时清理
+	AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error)
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
@@ -414,6 +416,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
 	mux.HandleFunc("GET /api/login-view/{view}", s.handleLoginView)
+	mux.HandleFunc("GET /api/accounts/{id}/live-view", s.handleAccountLiveView)
 	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)

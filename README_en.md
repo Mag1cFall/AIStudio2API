@@ -772,7 +772,7 @@ HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authenti
 | --- | --- | --- |
 | Import from Chrome | Accounts signed in to Chrome on this computer | Several can be selected; available on Windows |
 | Paste cookies | JSON exported by a cookie extension, a Cookie request header line, or a Netscape cookies.txt file | The account email is detected automatically |
-| Import from an antidetect browser | Windows signed in to AI Studio in local antidetect browsers and Chromium | The browser needs remote debugging enabled |
+| Import from an antidetect browser | Windows signed in to AI Studio in local antidetect browsers and Chromium | The browser needs remote debugging enabled; Chromium uses CDP while Firefox-based browsers use WebDriver BiDi |
 | Sign in with browser | An isolated Camoufox window | Detects the email and authorizes Google Drive after login |
 | Add remotely | Another computer that can sign in to Google | See `setup --remote` under [Commands](#commands) |
 

@@ -74,6 +74,7 @@ import {
   Bot,
   Scale,
   FileText,
+  Redo2,
 } from '@lucide/vue'
 
 // icons 将界面语义名映射到 Lucide 图标
@@ -151,6 +152,7 @@ export const icons = {
   decision: Scale,
   file: FileText,
   folder: Folder,
+  forward: Redo2,
   help: CircleHelp,
   arrowUp: ArrowUp,
   grip: GripVertical,
