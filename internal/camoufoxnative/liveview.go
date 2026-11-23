@@ -17,8 +17,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// liveViewFrameInterval 为登录窗口截取画面的最短间隔，约每秒 10 帧
-const liveViewFrameInterval = 100 * time.Millisecond
+// liveViewFrameInterval 为登录窗口截取画面的最短间隔，约每秒 20 帧
+const liveViewFrameInterval = 50 * time.Millisecond
 
 // liveViewWriteTimeout 为向登录窗口写出一条消息的最长等待
 const liveViewWriteTimeout = 10 * time.Second
