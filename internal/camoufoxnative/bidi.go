@@ -41,8 +41,8 @@ type bidiClient struct {
 	accessTokenStatus atomic.Int64
 	// denial 是页面导航到官网拒绝页时的原因，之后的命令立即以它返回
 	denial *AccessDenial
-	// listener 接收 BiDi 事件，在读取连接的协程中调用
-	listener func(map[string]any)
+	// listeners 接收 BiDi 事件，在读取连接的协程中调用，由 mu 保护
+	listeners []*eventListener
 	// rhythm 是账户点击与粘贴的事件节奏，决定可信指针与键盘动作中的停顿
 	rhythm rhythm.Rhythm
 	// loads 是正在载入官网页面的标签页记下的网络状态，键为标签页的 context
@@ -230,20 +230,45 @@ func (client *bidiClient) fail(err error) {
 	}
 }
 
-// setListener 设置接收 BiDi 事件的函数
-func (client *bidiClient) setListener(listener func(map[string]any)) {
-	client.mu.Lock()
-	client.listener = listener
-	client.mu.Unlock()
+// eventListener 是一个 BiDi 事件订阅
+type eventListener struct {
+	fn func(map[string]any)
 }
 
-// observe 把事件交给 listener 与 script.message 通道，记下载入中标签页的目录 RPC、公共请求头与 WAA 图片请求，以及 GenerateAccessToken 的响应状态和跳转到地区不可用页的导航
+// addListener 注册一个 BiDi 事件回调，返回取消注册的函数；回调在读取连接的协程中执行，不能阻塞
+func (client *bidiClient) addListener(fn func(map[string]any)) func() {
+	listener := &eventListener{fn: fn}
+	client.mu.Lock()
+	client.listeners = append(client.listeners, listener)
+	client.mu.Unlock()
+	return func() {
+		client.mu.Lock()
+		client.listeners = slices.DeleteFunc(client.listeners, func(item *eventListener) bool { return item == listener })
+		client.mu.Unlock()
+	}
+}
+
+// Done 在 BiDi 连接读取失败时关闭
+func (client *bidiClient) Done() <-chan struct{} {
+	return client.done
+}
+
+// Failure 返回连接读取失败的原因，连接仍正常时为 nil
+func (client *bidiClient) Failure() error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.failure
+}
+
+// observe 把事件交给各订阅者与 script.message 通道，记下载入中标签页的目录 RPC、公共请求头与 WAA 图片请求，以及 GenerateAccessToken 的响应状态和跳转到地区不可用页的导航
 func (client *bidiClient) observe(message map[string]any) {
 	client.mu.Lock()
-	listener := client.listener
+	listeners := slices.Clone(client.listeners)
 	client.mu.Unlock()
-	if listener != nil && message["type"] == "event" {
-		listener(message)
+	if message["type"] == "event" {
+		for _, listener := range listeners {
+			listener.fn(message)
+		}
 	}
 	method, _ := message["method"].(string)
 	params, _ := message["params"].(map[string]any)

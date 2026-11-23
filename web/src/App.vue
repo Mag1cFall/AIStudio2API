@@ -507,6 +507,7 @@ onMounted(revealCurrentTab)
           :error="errors.accounts"
           :chrome-import="status?.chrome_import ?? false"
           :camoufox="status?.camoufox"
+          :service-running="serviceState === 'running'"
           @refresh="loadAccountData"
           @updated="updateAccount"
           @notice="showNotice"

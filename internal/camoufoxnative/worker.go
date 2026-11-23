@@ -84,6 +84,8 @@ type Worker struct {
 	idle *time.Timer
 	// settle 在 Worker 就绪 readyMinimizeDelay 后发出一次 memory-pressure
 	settle *time.Timer
+	// liveView 是当前挂载的远程操作窗口，同一 Worker 同时只允许一个
+	liveView *LiveView
 }
 
 // tabUse 是一个标签页中进行中的受保护请求数，retired 表示该标签页已被重新载入的页面替换

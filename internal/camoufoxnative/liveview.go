@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -66,6 +68,9 @@ type LiveView struct {
 	viewer   *liveViewer
 	inputs   []liveInput
 	client   *bidiClient
+	// closed 表示浏览器连接已断开，closedReason 是断开原因，由 mu 保护
+	closed       bool
+	closedReason string
 	// inputReady 在有待转发的输入时唤醒输入协程
 	inputReady chan struct{}
 	// capture 在登录窗口连接或页面对话框关闭时唤醒截图协程
@@ -108,10 +113,15 @@ type liveInput struct {
 	Button  int     `json:"button"`
 	DeltaX  float64 `json:"dx"`
 	DeltaY  float64 `json:"dy"`
+	Delta   int64   `json:"delta"`
 	Key     string  `json:"key"`
 	Text    string  `json:"text"`
+	URL     string  `json:"url"`
 	Accept  bool    `json:"accept"`
 }
+
+// liveControlTimeout 是地址栏导航、开关标签页等控制命令的最长时间
+const liveControlTimeout = 30 * time.Second
 
 // liveBatch 是对同一页面执行的一次 input.performActions
 type liveBatch struct {
@@ -180,7 +190,7 @@ func (view *LiveView) Serve(ctx context.Context, connection *websocket.Conn) err
 	return errors.Join(err, <-received)
 }
 
-// receive 读取登录窗口的输入与对话框选择，直到连接出错
+// receive 读取登录窗口的输入、导航控制与对话框选择，直到连接出错
 func (view *LiveView) receive(connection *websocket.Conn) error {
 	connection.SetReadLimit(liveViewReadLimit)
 	for {
@@ -188,11 +198,64 @@ func (view *LiveView) receive(connection *websocket.Conn) error {
 		if err := connection.ReadJSON(&input); err != nil {
 			return err
 		}
-		if input.Type == "dialog" {
+		switch input.Type {
+		case "dialog":
 			view.answerDialog(input.Accept, input.Text)
+			continue
+		case "navigate", "reload", "history", "newTab", "closeTab":
+			view.control(input)
 			continue
 		}
 		view.enqueue(input)
+	}
+}
+
+// control 执行地址栏导航、历史进退、刷新与标签页开关命令
+func (view *LiveView) control(input liveInput) {
+	view.mu.Lock()
+	client := view.client
+	contextID := input.Context
+	if contextID == "" {
+		contextID = view.activeContextLocked()
+	}
+	view.mu.Unlock()
+	if client == nil || contextID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveControlTimeout)
+	defer cancel()
+	switch input.Type {
+	case "navigate":
+		if strings.TrimSpace(input.URL) == "" {
+			return
+		}
+		_, _ = client.command(ctx, "browsingContext.navigate", map[string]any{
+			"context": contextID, "url": input.URL, "wait": "none",
+		})
+	case "reload":
+		_, _ = client.command(ctx, "browsingContext.reload", map[string]any{
+			"context": contextID, "ignoreCache": false,
+		})
+	case "history":
+		_, _ = client.command(ctx, "browsingContext.traverseHistory", map[string]any{
+			"context": contextID, "delta": input.Delta,
+		})
+	case "newTab":
+		result, err := client.command(ctx, "browsingContext.create", map[string]any{"type": "tab"})
+		if err != nil {
+			return
+		}
+		newContext, _ := result["context"].(string)
+		if newContext == "" {
+			return
+		}
+		if url := strings.TrimSpace(input.URL); url != "" {
+			_, _ = client.command(ctx, "browsingContext.navigate", map[string]any{
+				"context": newContext, "url": url, "wait": "none",
+			})
+		}
+	case "closeTab":
+		_, _ = client.command(ctx, "browsingContext.close", map[string]any{"context": contextID})
 	}
 }
 
@@ -234,6 +297,7 @@ func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, view
 		}
 		return write(websocket.TextMessage, encoded)
 	}
+	closedSent := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -244,7 +308,14 @@ func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, view
 		}
 		view.mu.Lock()
 		currentStatus, frame, currentFrame, dialog, currentDialog := view.status, view.frame, view.frameSeq, view.dialog, view.dialogSeq
+		closed, closedReason := view.closed, view.closedReason
 		view.mu.Unlock()
+		if closed && !closedSent {
+			if err := writeJSON(map[string]any{"type": "closed", "error": closedReason}); err != nil {
+				return err
+			}
+			closedSent = true
+		}
 		if currentStatus != status {
 			if err := writeJSON(map[string]any{"type": "status", "status": currentStatus}); err != nil {
 				return err
@@ -328,14 +399,44 @@ func (view *LiveView) closeDialog() {
 	signal(view.capture)
 }
 
-// attach 把登录浏览器接到 LiveView：订阅顶层页面与对话框事件，开始截图与输入转发；返回的函数停止并等待这些协程
+// attach 把新启动的登录浏览器接到 LiveView，root 为它的初始顶层页面
 func (view *LiveView) attach(ctx context.Context, client *bidiClient, root string) (func(), error) {
+	return view.attachWith(ctx, client, []string{root})
+}
+
+// attachTo 把运行中的浏览器接到 LiveView：读取现有顶层页面后开始截图与输入转发，返回的函数停止转发
+func (view *LiveView) attachTo(ctx context.Context, client *bidiClient) (func(), error) {
+	tree, err := client.command(ctx, "browsingContext.getTree", map[string]any{"maxDepth": 0})
+	if err != nil {
+		return nil, fmt.Errorf("读取浏览器标签页: %w", err)
+	}
+	rawContexts, _ := tree["contexts"].([]any)
+	roots := make([]string, 0, len(rawContexts))
+	for _, raw := range rawContexts {
+		if item, ok := raw.(map[string]any); ok {
+			if id, _ := item["context"].(string); id != "" {
+				roots = append(roots, id)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		return nil, errors.New("浏览器没有打开的标签页")
+	}
+	return view.attachWith(ctx, client, roots)
+}
+
+// attachWith 订阅顶层页面与对话框事件，开始截图与输入转发；返回的函数停止并等待这些协程
+func (view *LiveView) attachWith(ctx context.Context, client *bidiClient, roots []string) (func(), error) {
 	view.mu.Lock()
-	view.contexts = []string{root}
+	view.contexts = append([]string(nil), roots...)
 	view.client = client
+	view.closed = false
+	view.closedReason = ""
 	view.mu.Unlock()
-	client.setListener(view.observe)
-	if _, err := client.command(ctx, "session.subscribe", map[string]any{"events": liveViewEvents}); err != nil {
+	unsubscribe := client.addListener(view.observe)
+	subscription := map[string]any{"events": liveViewEvents}
+	if _, err := client.command(ctx, "session.subscribe", subscription); err != nil {
+		unsubscribe()
 		return nil, err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -345,6 +446,13 @@ func (view *LiveView) attach(ctx context.Context, client *bidiClient, root strin
 	return func() {
 		cancel()
 		group.Wait()
+		unsubscribe()
+		// 连接仍正常时取消订阅，连接已断开则命令失败可忽略
+		if client.Failure() == nil {
+			unsubCtx, unsubCancel := context.WithTimeout(context.Background(), liveControlTimeout)
+			_, _ = client.command(unsubCtx, "session.unsubscribe", subscription)
+			unsubCancel()
+		}
 		view.mu.Lock()
 		view.client = nil
 		view.inputs = nil
@@ -363,10 +471,32 @@ func (view *LiveView) watched() bool {
 func (view *LiveView) activeContext() string {
 	view.mu.Lock()
 	defer view.mu.Unlock()
+	return view.activeContextLocked()
+}
+
+// activeContextLocked 返回当前顶层页面，调用方需持有 view.mu
+func (view *LiveView) activeContextLocked() string {
 	if len(view.contexts) == 0 {
 		return ""
 	}
 	return view.contexts[len(view.contexts)-1]
+}
+
+// markClosed 记下浏览器连接断开的原因并唤醒窗口连接
+func (view *LiveView) markClosed(reason error) {
+	view.mu.Lock()
+	if view.closed {
+		view.mu.Unlock()
+		return
+	}
+	view.closed = true
+	if reason != nil {
+		view.closedReason = reason.Error()
+	} else {
+		view.closedReason = "浏览器连接已断开"
+	}
+	view.mu.Unlock()
+	view.notify()
 }
 
 // runFrames 在登录窗口连接期间按间隔截取当前顶层页面，画面变化时推给登录窗口
@@ -376,14 +506,26 @@ func (view *LiveView) runFrames(ctx context.Context, client *bidiClient) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-client.Done():
+				view.markClosed(client.Failure())
+				return
 			case <-view.capture:
 			}
 			continue
 		}
 		started := time.Now()
 		view.captureFrame(ctx, client)
-		if err := waitContext(ctx, liveViewFrameInterval-time.Since(started)); err != nil {
+		wait := liveViewFrameInterval - time.Since(started)
+		timer := time.NewTimer(max(wait, 0))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-client.Done():
+			timer.Stop()
+			view.markClosed(client.Failure())
+			return
+		case <-timer.C:
 		}
 	}
 }
@@ -446,6 +588,8 @@ func (view *LiveView) runInputs(ctx context.Context, client *bidiClient) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-client.Done():
 			return
 		case <-view.inputReady:
 		}
