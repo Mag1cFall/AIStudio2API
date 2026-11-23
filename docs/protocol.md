@@ -1696,7 +1696,7 @@ GET/DELETE /v1beta/files/{file}
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`PUT /api/accounts/{id}/state`、`DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
-| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket）、`GET /api/accounts/{id}/live-view`（WebSocket） |
+| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket）、`GET /api/accounts/{id}/live-view`（WebSocket）、`GET /api/accounts/{id}/live-view/status` |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/first-event-latency` |
 | 冷却与请求 | `GET /api/cooldowns`、`DELETE /api/accounts/{id}/cooldowns/{scope}`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
@@ -1797,6 +1797,7 @@ GET/DELETE /v1beta/files/{file}
   - 服务端推送 `{"type":"frame","context","url","title","width","height","scale"}`，后面紧跟一条 JPEG 二进制消息
   - 客户端发送 `{"type":"pointer","action":"move|down|up","x","y","button","context"}`、`{"type":"wheel","x","y","dx","dy","context"}`、`{"type":"key","action":"down|up","key","context"}`、`{"type":"text","text","context"}` 与 `{"type":"dialog","accept","text"}`
 - `GET /api/accounts/{id}/live-view` 把管理页远程操作窗口接到账户的常驻 Camoufox Worker（仅 Camoufox 后端、Worker 就绪时可用，冲突时返回 409 `live_view_unavailable`）：挂载期间账户被手动占用，不参与请求调度；窗口断开后解除占用并把浏览器当前 Cookie 全量回写 `storage-state.json`。推送消息与 `GET /api/login-view/{view}` 相同，另推送 `{"type":"closed","error"}` 表示浏览器连接断开且不重连；客户端除指针、键盘、文本与对话框消息外，还可发送 `{"type":"navigate","url","context"}`、`{"type":"reload","context"}`、`{"type":"history","delta","context"}`、`{"type":"newTab","url?","context"}` 与 `{"type":"closeTab","context"}`
+- `GET /api/accounts/{id}/live-view/status` 在建立 WebSocket 前预检，返回 `{"available":bool,"reason"?:string}`：SpiderMonkey 后端、无就绪常驻 Worker 或窗口已被占用时 `available` 为假并给出具体原因，供管理页在握手失败（浏览器读不到 WebSocket 拒绝响应体）时展示真实提示
 
 管理 DTO 字段：
 

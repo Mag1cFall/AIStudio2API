@@ -45,6 +45,7 @@ type generationAdmin interface {
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error)
+	LiveViewAvailability(ctx context.Context, accountID string) (api.LiveViewAvailability, error)
 	RefreshAccount(context.Context, string) (api.AdminAccountRefresh, error)
 	StartService(context.Context) (api.AdminStatus, error)
 	StopService(context.Context) (api.AdminStatus, error)
@@ -692,6 +693,11 @@ func (manager *runtimeManager) LoginAccount(ctx context.Context, id string, view
 // AttachAccountLiveView 把远程操作窗口接到当前生成服务中账户的常驻浏览器
 func (manager *runtimeManager) AttachAccountLiveView(ctx context.Context, id string, view *camoufoxnative.LiveView) (func(), error) {
 	return manager.currentAdmin().AttachAccountLiveView(ctx, id, view)
+}
+
+// LiveViewAvailability 返回当前生成服务中账户远程操作的可用性
+func (manager *runtimeManager) LiveViewAvailability(ctx context.Context, id string) (api.LiveViewAvailability, error) {
+	return manager.currentAdmin().LiveViewAvailability(ctx, id)
 }
 
 // prepareLoginCamoufox 在浏览器登录前等 Camoufox 就绪，需要下载时记录等待，失败时记录原因

@@ -273,6 +273,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': 'アカウント ブラウザに接続中',
   'accounts.liveDisconnected': 'ブラウザ接続が切断されました',
   'accounts.liveClosed': 'リモート操作は終了しました',
+  'accounts.liveUnavailable': 'リモート操作は現在利用できません',
   'accounts.cookieDiscovering': 'アカウントを確認しています',
   'logs.level': 'ログレベル',
   'logs.source': 'ソース',

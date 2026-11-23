@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { api } from '@/api'
+import { api, ApiError } from '@/api'
 import { useI18n } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 
@@ -361,8 +361,21 @@ function answer(accept: boolean): void {
 const navButtonClass =
   'rounded p-1.5 text-gray-400 transition hover:bg-raised hover:text-white disabled:opacity-40 disabled:hover:bg-transparent'
 
-onMounted(() => {
+onMounted(async () => {
   resizeObserver.observe(stage.value!)
+  // 浏览器 WebSocket 握手失败时读不到响应体，先经 REST 预检拿到不可用的具体原因
+  try {
+    const status = await api.liveViewStatus(props.accountId)
+    if (!status.available) {
+      fatal.value = status.reason || t('accounts.liveUnavailable')
+      connecting.value = false
+      return
+    }
+  } catch (error) {
+    fatal.value = error instanceof ApiError ? error.message : t('accounts.liveUnavailable')
+    connecting.value = false
+    return
+  }
   connect()
 })
 

@@ -8,15 +8,34 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
 
 // liveViewWritebackTimeout 是远程操作结束后把浏览器 Cookie 写回 storage state 的最长时间
 const liveViewWritebackTimeout = 20 * time.Second
 
+// liveViewNoWorkerReason 是账户没有就绪的常驻浏览器时的提示
+const liveViewNoWorkerReason = "账户的常驻浏览器未运行，请先启动生成服务并等待该账户预热完成"
+
+// LiveViewAvailability 检查账户常驻浏览器当前能否挂载远程操作窗口
+func (manager *accountWorkerManager) LiveViewAvailability(accountID string) api.LiveViewAvailability {
+	worker := manager.residentWorker(accountID)
+	if worker == nil {
+		return api.LiveViewAvailability{Available: false, Reason: liveViewNoWorkerReason}
+	}
+	available, reason := worker.LiveViewAvailability()
+	return api.LiveViewAvailability{Available: available, Reason: reason}
+}
+
 // AttachAccountLiveView 实现 api.AdminService，委托给 Worker 管理器
 func (admin *runtimeAdmin) AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error) {
 	return admin.workers.AttachAccountLiveView(ctx, accountID, view)
+}
+
+// LiveViewAvailability 实现 api.AdminService，返回账户远程操作的可用性
+func (admin *runtimeAdmin) LiveViewAvailability(_ context.Context, accountID string) (api.LiveViewAvailability, error) {
+	return admin.workers.LiveViewAvailability(accountID), nil
 }
 
 // AttachAccountLiveView 把远程操作窗口接到账户的常驻 Camoufox Worker：
@@ -24,7 +43,7 @@ func (admin *runtimeAdmin) AttachAccountLiveView(ctx context.Context, accountID 
 func (manager *accountWorkerManager) AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error) {
 	worker := manager.residentWorker(accountID)
 	if worker == nil {
-		return nil, errors.New("账户的常驻浏览器未运行，请先启动生成服务并等待该账户预热完成")
+		return nil, errors.New(liveViewNoWorkerReason)
 	}
 	manager.pool.SetManualHold(accountID, 1)
 	detach, err := worker.AttachLiveView(ctx, view)

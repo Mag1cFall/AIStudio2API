@@ -251,6 +251,7 @@ export const messages = {
   'accounts.liveConnecting': '正在连接账户浏览器',
   'accounts.liveDisconnected': '浏览器连接已断开',
   'accounts.liveClosed': '远程操作已结束',
+  'accounts.liveUnavailable': '远程操作当前不可用',
   'accounts.cookieDiscovering': '正在识别账户',
   'logs.level': '日志等级',
   'logs.source': '来源',

@@ -275,6 +275,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': 'Connexion au navigateur du compte',
   'accounts.liveDisconnected': 'Connexion au navigateur interrompue',
   'accounts.liveClosed': 'Contrôle à distance terminé',
+  'accounts.liveUnavailable': 'Le contrôle à distance est actuellement indisponible',
   'accounts.cookieDiscovering': 'Recherche des comptes',
   'logs.level': 'Niveau de journalisation',
   'logs.source': 'Source',

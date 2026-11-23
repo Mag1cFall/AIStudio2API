@@ -257,6 +257,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': '正在連線帳戶瀏覽器',
   'accounts.liveDisconnected': '瀏覽器連線已中斷',
   'accounts.liveClosed': '遠端操作已結束',
+  'accounts.liveUnavailable': '遠端操作目前無法使用',
   'accounts.cookieDiscovering': '正在識別帳號',
   'logs.level': '記錄等級',
   'logs.source': '來源',

@@ -214,6 +214,10 @@ export const api = {
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/login-view/${encodeURIComponent(view)}`,
   accountLiveViewURL: (id: string) =>
     `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/accounts/${encodeURIComponent(id)}/live-view`,
+  liveViewStatus: (id: string) =>
+    requestJSON<{ available: boolean; reason?: string }>(
+      `/api/accounts/${encodeURIComponent(id)}/live-view/status`,
+    ),
   paths: (path: string) => requestJSON<PathListing>(`/api/paths?path=${encodeURIComponent(path)}`),
   pickPath: (path: string) =>
     requestJSON<{ path: string }>(`/api/paths/pick?path=${encodeURIComponent(path)}`, {

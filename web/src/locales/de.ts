@@ -272,6 +272,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveConnecting': 'Verbinde mit dem Konto-Browser',
   'accounts.liveDisconnected': 'Browser-Verbindung getrennt',
   'accounts.liveClosed': 'Fernsteuerung beendet',
+  'accounts.liveUnavailable': 'Fernsteuerung ist derzeit nicht verfügbar',
   'accounts.cookieDiscovering': 'Konten werden ermittelt',
   'logs.level': 'Protokollebene',
   'logs.source': 'Quelle',
