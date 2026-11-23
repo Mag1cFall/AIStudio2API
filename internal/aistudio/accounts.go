@@ -82,7 +82,7 @@ var (
 	ErrAccountCoolingDown = errors.New("账户已进入冷却")
 	// ErrResourceNotFound 表示资源没有创建账户映射
 	ErrResourceNotFound = errors.New("资源账户映射不存在")
-	// ErrAccountManualHold 表示账户正在被远程操作，临时不接受请求
+	// ErrAccountManualHold 表示账户正在被远程操作，临时不接受生成请求选号；管理操作租约 AcquireAccount 不受此限制
 	ErrAccountManualHold = errors.New("账户正在远程操作中")
 )
 

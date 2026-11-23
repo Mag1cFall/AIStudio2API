@@ -65,26 +65,50 @@ func TestManualHoldSkipsAccount(t *testing.T) {
 	}
 }
 
-// TestManualHoldDirectSelection 验证指定被占用账户时返回明确错误，嵌套占用可逐层释放
+// TestManualHoldDirectSelection 验证手动占用只拦截生成请求选号、不拦截管理租约，嵌套占用可逐层释放
 func TestManualHoldDirectSelection(t *testing.T) {
 	pool := newManualHoldPool()
+	selection := AccountSelection{AccountID: "a@example.com"}
 	pool.SetManualHold("a@example.com", 1)
-	_, err := pool.AcquireAccount(context.Background(), "a@example.com")
+
+	// 生成请求路径指定被占用账户时返回明确错误
+	_, ok, err := pool.TryAcquireFor(context.Background(), selection)
 	if !errors.Is(err, ErrAccountManualHold) {
-		t.Fatalf("指定被占用账户的错误 = %v，期望 ErrAccountManualHold", err)
+		t.Fatalf("指定被占用账户的选号错误 = %v，期望 ErrAccountManualHold", err)
+	}
+	if ok {
+		t.Fatal("被占用账户不应返回可用租约")
 	}
 
-	// 计数语义：两层占用时释放一层仍保持占用
+	// 管理操作租约不受调度占用限制，远程操作结束后的 Cookie 回写依赖它
+	lease, err := pool.AcquireAccount(context.Background(), "a@example.com")
+	if err != nil {
+		t.Fatalf("管理租约不应被手动占用拦截: %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 计数语义：两层占用时释放一层仍保持占用，生成请求继续被拦截
 	pool.SetManualHold("a@example.com", 1)
 	pool.SetManualHold("a@example.com", -1)
 	if !pool.ManualHold("a@example.com") {
 		t.Fatal("计数占用释放一层后不应提前解除")
 	}
+	if _, _, err := pool.TryAcquireFor(context.Background(), selection); !errors.Is(err, ErrAccountManualHold) {
+		t.Fatalf("占用未解除时选号错误 = %v，期望 ErrAccountManualHold", err)
+	}
+
 	pool.SetManualHold("a@example.com", -1)
 	if pool.ManualHold("a@example.com") {
 		t.Fatal("全部释放后占用应解除")
 	}
-	if _, err := pool.AcquireAccount(context.Background(), "a@example.com"); err != nil {
-		t.Fatalf("占用解除后应能获取租约: %v", err)
+	// 释放后生成请求路径恢复
+	lease, ok, err = pool.TryAcquireFor(context.Background(), selection)
+	if err != nil || !ok || lease == nil {
+		t.Fatalf("占用解除后应能选号，lease=%v ok=%v err=%v", lease, ok, err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
