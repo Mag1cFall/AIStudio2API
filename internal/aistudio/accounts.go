@@ -82,7 +82,7 @@ var (
 	ErrAccountCoolingDown = errors.New("账户已进入冷却")
 	// ErrResourceNotFound 表示资源没有创建账户映射
 	ErrResourceNotFound = errors.New("资源账户映射不存在")
-	// ErrAccountManualHold 表示账户正在被远程操作，生成请求选号返回该错误
+	// ErrAccountManualHold 表示账户正在被远程操作，临时不接受生成请求选号；管理操作租约 AcquireAccount 不受此限制
 	ErrAccountManualHold = errors.New("账户正在远程操作中")
 )
 
@@ -579,7 +579,7 @@ type AccountPool struct {
 	sessions singleflight.Group
 	// fileBindMu 串行化文件绑定，使公开文件名的重名检查与绑定成为一步
 	fileBindMu sync.Mutex
-	// manualHolds 是远程操作期间禁止调度的账户及占用次数，由 mu 保护
+	// manualHolds 是远程操作等场景临时禁止调度的账户及占用次数，由 mu 保护
 	manualHolds map[string]int
 }
 

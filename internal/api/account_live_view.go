@@ -13,7 +13,7 @@ type LiveViewAvailability struct {
 }
 
 // handleAccountLiveView 把管理页远程操作窗口接到账户的常驻 Camoufox Worker，
-// 连接期间转发画面与输入，断开后由服务清理挂载与账户调度占用并写回 Cookie
+// 连接期间转发画面与输入，断开后由服务清理挂载与账户调度占用并回写 Cookie
 func (s *server) handleAccountLiveView(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("id")
 	view := camoufoxnative.NewLiveView()

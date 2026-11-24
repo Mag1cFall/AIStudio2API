@@ -18,7 +18,7 @@ const liveViewWritebackTimeout = 20 * time.Second
 // liveViewNoWorkerReason 是账户没有就绪的常驻浏览器时的提示
 const liveViewNoWorkerReason = "账户的常驻浏览器未运行，请先启动生成服务并等待该账户预热完成"
 
-// LiveViewAvailability 返回账户常驻浏览器挂载远程操作窗口的可用性与原因
+// LiveViewAvailability 检查账户常驻浏览器当前能否挂载远程操作窗口
 func (manager *accountWorkerManager) LiveViewAvailability(accountID string) api.LiveViewAvailability {
 	worker := manager.residentWorker(accountID)
 	if worker == nil {
@@ -39,7 +39,7 @@ func (admin *runtimeAdmin) LiveViewAvailability(_ context.Context, accountID str
 }
 
 // AttachAccountLiveView 把远程操作窗口接到账户的常驻 Camoufox Worker：
-// 挂载期间账户不参与请求调度，窗口断开后解除占用并把浏览器当前 Cookie 写回到 storage state，返回的清理函数幂等
+// 挂载期间账户不参与请求调度，窗口断开后解除占用并把浏览器当前 Cookie 回写到 storage state，返回的清理函数幂等
 func (manager *accountWorkerManager) AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error) {
 	worker := manager.residentWorker(accountID)
 	if worker == nil {
@@ -69,24 +69,24 @@ func (manager *accountWorkerManager) writebackLiveViewCookies(accountID string, 
 	defer cancel()
 	encoded, err := worker.StorageCookies(writebackCtx)
 	if err != nil {
-		manager.requests.log(accountID, "WARN", "远程操作 Cookie 写回跳过：读取浏览器 Cookie 失败", "error", err)
+		manager.requests.log(accountID, "WARN", "远程操作 Cookie 回写跳过：读取浏览器 Cookie 失败", "error", err)
 		return
 	}
 	var cookies []aistudio.StateCookie
 	if err := json.Unmarshal(encoded, &cookies); err != nil {
-		manager.requests.log(accountID, "WARN", "远程操作 Cookie 写回跳过：Cookie 格式无效", "error", err)
+		manager.requests.log(accountID, "WARN", "远程操作 Cookie 回写跳过：Cookie 格式无效", "error", err)
 		return
 	}
 	lease, err := manager.pool.AcquireAccount(writebackCtx, accountID)
 	if err != nil {
-		manager.requests.log(accountID, "WARN", "远程操作 Cookie 写回跳过：获取账户租约失败", "error", err)
+		manager.requests.log(accountID, "WARN", "远程操作 Cookie 回写跳过：获取账户租约失败", "error", err)
 		return
 	}
 	defer func() { _ = lease.Release() }()
 	// ReplaceCookies 从磁盘载入最新状态后只替换 Cookie，保留 localStorage 与认证扩展
 	if err := lease.ReplaceCookies(cookies); err != nil {
-		manager.requests.log(accountID, "WARN", "远程操作 Cookie 写回失败", "error", err)
+		manager.requests.log(accountID, "WARN", "远程操作 Cookie 回写失败", "error", err)
 		return
 	}
-	manager.requests.log(accountID, "INFO", "远程操作后的浏览器 Cookie 已写回", "cookies", len(cookies))
+	manager.requests.log(accountID, "INFO", "远程操作后的浏览器 Cookie 已回写", "cookies", len(cookies))
 }

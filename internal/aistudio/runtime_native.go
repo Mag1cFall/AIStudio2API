@@ -56,7 +56,7 @@ type liveViewAttacher interface {
 // liveViewUnsupportedReason 是 SpiderMonkey 后端不支持远程操作时的原因
 const liveViewUnsupportedReason = "SpiderMonkey 后端没有可操作的浏览器，请在服务配置切换为 Camoufox 后端并重启"
 
-// LiveViewAvailability 返回该 runtime 挂载远程操作窗口的可用性与原因
+// LiveViewAvailability 报告该 runtime 当前能否挂载远程操作窗口，不能时返回原因
 func (worker *NativeWorker) LiveViewAvailability() (bool, string) {
 	worker.runtimeMu.RLock()
 	runtime := worker.runtime
