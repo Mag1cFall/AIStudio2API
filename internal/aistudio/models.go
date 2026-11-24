@@ -290,6 +290,8 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		}
 		// field 4 为 2 且不是后台任务的模型经 CreateInteractionStream 生成，与官网一样以内联数据发送图片
 		model.Capabilities["interaction_stream"] = kind == 2 && !model.Capabilities["interaction_task"]
+		// field 4 为 2 表示 interaction 目标是模型而非 agent，后台任务的 CreateInteraction 在 field 17 携带模型目标
+		model.Capabilities["interaction_model"] = kind == 2
 		if value := rawAt(interaction, 5); !isJSONNull(value) {
 			agentModel, err := rawString(value, path+"[78][5]", raw)
 			if err != nil {
