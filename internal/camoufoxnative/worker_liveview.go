@@ -8,7 +8,7 @@ import (
 // ErrLiveViewAttached 表示账户浏览器已挂载远程操作窗口
 var ErrLiveViewAttached = errors.New("账户浏览器已在远程操作中")
 
-// LiveViewAvailable 报告当前 Worker 能否挂载远程操作窗口，不能时返回原因
+// LiveViewAvailable 返回当前 Worker 挂载远程操作窗口的可用性与原因
 func (worker *Worker) LiveViewAvailable() (bool, string) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
@@ -19,13 +19,6 @@ func (worker *Worker) LiveViewAvailable() (bool, string) {
 		return false, ErrLiveViewAttached.Error()
 	}
 	return true, ""
-}
-
-// HasLiveView 报告 Worker 是否正被远程操作窗口占用
-func (worker *Worker) HasLiveView() bool {
-	worker.mu.Lock()
-	defer worker.mu.Unlock()
-	return worker.liveView != nil
 }
 
 // AttachLiveView 把远程操作窗口接到运行中的 Worker，返回停止画面与输入转发的函数；同一 Worker 同时只允许一个窗口

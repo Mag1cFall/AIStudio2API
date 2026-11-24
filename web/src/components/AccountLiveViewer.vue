@@ -40,9 +40,9 @@ const actualSize = ref(false)
 const connecting = ref(true)
 const fatal = ref('')
 const address = ref('')
-// addressFocused 表示用户正在地址栏输入，此时帧消息不能覆盖已输入的网址
+// addressFocused 表示用户正在地址栏输入，此期间帧消息保留已输入的网址
 const addressFocused = ref(false)
-// controlError 是导航或标签页命令的临时错误提示，controlErrorTimer 控制其自动消失
+// controlError 是最近一次导航或标签页命令的错误提示，controlErrorTimer 控制其展示时长
 const controlError = ref('')
 let controlErrorTimer = 0
 const stage = ref<HTMLDivElement>()
@@ -97,7 +97,7 @@ const canvasStyle = computed(() =>
       },
 )
 
-// connect 建立远程操作连接，浏览器连接断开时不重连
+// connect 建立远程操作连接
 function connect(): void {
   const current = new WebSocket(api.accountLiveViewURL(props.accountId))
   current.binaryType = 'blob'

@@ -36,7 +36,7 @@ cd ..
 go run ./cmd/aistudio2api
 ```
 
-管理页面“账户”页的“添加账户”菜单提供从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、浏览器登录和远程添加，也可以重新登录、立即刷新、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。启停账户保存后立即返回，停用后等待在途请求结束并关闭 Worker、启用后载入页面同步模型目录，都在后台完成。
+管理页面“账户”页的“添加账户”菜单提供从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、浏览器登录和远程添加，也可以重新登录、立即刷新、编辑、启停和删除账户。浏览器登录会在隔离 Camoufox 中完成并自动读取邮箱。启停账户保存后立即返回，停用后等待在途请求结束并关闭 Worker、启用后载入页面同步模型目录，都在后台完成。生成服务运行时，账户行的“远程操作”把常驻 Camoufox Worker 的画面接入全屏窗口，支持地址栏导航、历史进退、刷新、标签页开关与指针键盘输入，窗口连接期间账户暂停参与请求调度，断开时把浏览器当前 Cookie 写回账户状态。
 
 浏览器登录与重新登录的显示方式由服务端按请求决定：
 
@@ -46,7 +46,7 @@ go run ./cmd/aistudio2api
 管理页面为每次登录生成随机 ID，在 `POST /api/accounts` 或 `POST /api/accounts/{id}/login` 的 body 中以 `view` 带上该 ID，同时连接 `GET /api/login-view/{ID}` 的 WebSocket，两者在服务端取得同一个登录窗口。使用登录窗口时：
 
 - 隔离 Camoufox 以无头方式启动，Linux 没有 `DISPLAY` 时使用服务启动的 Xvfb，页面保持 Firefox 默认刷新帧率；导航 AI Studio 后立即返回，登录窗口显示载入过程
-- 登录窗口连接期间，服务端经 WebDriver BiDi `browsingContext.captureScreenshot` 以 JPEG（质量 0.8）截取最后打开且仍存在的顶层页面，间隔不短于 100 ms，只推送与上一帧不同的画面；每帧先发 JSON 元数据（页面 context、URL、标题、CSS 视口宽高与 devicePixelRatio），再发 JPEG 二进制。弹窗关闭后画面回到原页面
+- 登录窗口连接期间，服务端经 WebDriver BiDi `browsingContext.captureScreenshot` 以 JPEG（质量 0.8）截取最后打开且仍存在的顶层页面，间隔不短于 50 ms，只推送与上一帧不同的画面；每帧先发 JSON 元数据（页面 context、URL、标题、CSS 视口宽高与 devicePixelRatio），再发 JPEG 二进制。弹窗关闭后画面回到原页面
 - 管理页面把鼠标移动、按下与抬起、滚轮、按键按下与抬起和粘贴文本经同一连接发回，附带画面所属页面；服务端按到达顺序合并成 `input.performActions`：指针为 mouse，滚轮为 wheel，`KeyboardEvent.key` 的命名键映射为 WebDriver 键码点，粘贴文本逐字符按下与抬起；页面已关闭的输入丢弃，输入内容不写日志
 - 会话以 `unhandledPromptBehavior` 让 alert、confirm 与 prompt 保持打开，`browsingContext.userPromptOpened` 时登录窗口显示对话框，用户的选择以 `browsingContext.handleUserPrompt` 不经命令锁发送，打开对话框的输入命令随之返回
 - 关闭登录窗口时管理页面中止登录请求，请求取消后服务端结束 Camoufox 并删除 profile 与隔离登录目录

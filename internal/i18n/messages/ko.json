@@ -1216,7 +1216,7 @@
   "经 WebDriver BiDi 读取浏览器 Cookie": "WebDriver BiDi로 브라우저 쿠키 읽기",
   "解析 WebDriver BiDi Cookie": "WebDriver BiDi 쿠키 구문 분석",
   "解码 WebDriver BiDi Cookie %s 的 base64 值": "WebDriver BiDi 쿠키 {0}의 base64 값 디코딩",
-  "回退 WebDriver BiDi 也失败": "WebDriver BiDi 대체 시도도 실패했습니다",
+  "WebDriver BiDi 读取失败": "WebDriver BiDi 읽기 실패",
   "连接浏览器调试地址: %w": "브라우저 디버그 주소 연결: {0}",
   "连接远程实例: %w": "원격 인스턴스 연결: {0}",
   "选中新标签页: %w": "새 탭 선택: {0}",

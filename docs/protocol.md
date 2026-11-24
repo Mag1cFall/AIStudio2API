@@ -1824,6 +1824,7 @@ GET/DELETE /v1beta/files/{file}
 | `AccountTask` | `id`、`kind`（`login`、`relogin`、`chrome`、`cookies`、`browser`）、可选 `view`、`state`（`running`、`done`、`failed`）、`items`、`started_at` |
 | `AccountTaskItem` | `label`（账户邮箱，浏览器登录完成前为空）、`state`（`pending`、`running`、`done`、`failed`）、可选 `step`（处理中的账户当前的步骤：`login` 等待登录、`reading` 读取浏览器里的登录状态、`checking` 检查 AI Studio 访问、`saving` 保存账户）、可选 `code`、`error` |
 | `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`imported`、`signed_out`、`error`、`restricted`、`device_bound` |
+| `LiveViewAvailability` | `available`、可选 `reason` |
 | `PairingToken` | `token`、`expires_at` |
 | `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `auth_user`（默认 0）、可选 `fingerprint` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |

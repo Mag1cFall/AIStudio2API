@@ -19,7 +19,7 @@ type BrowserCookies struct {
 	Cookies string
 }
 
-// ReadBrowserCookies 经远程调试地址读取浏览器 Cookie：Chromium 走 CDP，仅开放 WebDriver BiDi 的 Firefox 内核浏览器回退 BiDi
+// ReadBrowserCookies 经远程调试地址读取浏览器 Cookie：Chromium 走 CDP，Firefox 内核浏览器走 WebDriver BiDi
 func ReadBrowserCookies(ctx context.Context, address string) (BrowserCookies, error) {
 	address = strings.TrimSpace(address)
 	if strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://") {
@@ -31,20 +31,19 @@ func ReadBrowserCookies(ctx context.Context, address string) (BrowserCookies, er
 	}
 	version, status, err := probeCDPVersion(ctx, address)
 	if err == nil {
-		// Firefox 同时开放 CDP 与 BiDi（remote.active-protocols=3）时其 CDP 不提供 Storage 域，直接走 BiDi
+		// Firefox 的 CDP 不提供 Storage 域，统一使用 WebDriver BiDi
 		if strings.Contains(strings.ToLower(version.Browser), "firefox") {
 			return readBiDiBrowser(ctx, address)
 		}
 		return readCDPBrowser(ctx, version.WebSocketDebuggerURL, version.Browser)
 	}
 	if status == 0 {
-		// 传输层失败时同一端口的 BiDi 同样不可达，直接返回
 		return BrowserCookies{}, err
 	}
-	// HTTP 有响应但没有 CDP 调试信息：Firefox 仅开放 BiDi 时 /json/version 返回 404，回退 WebDriver BiDi
+	// HTTP 有响应但没有 CDP 调试信息时，Firefox 内核浏览器改用 WebDriver BiDi
 	bidi, bidiErr := readBiDiBrowser(ctx, address)
 	if bidiErr != nil {
-		return BrowserCookies{}, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d；回退 WebDriver BiDi 也失败: %w", status, bidiErr)
+		return BrowserCookies{}, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w", status, bidiErr)
 	}
 	return bidi, nil
 }

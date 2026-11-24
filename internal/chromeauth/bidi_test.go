@@ -196,7 +196,7 @@ func TestReadBrowserCookiesBiDiFallback(t *testing.T) {
 
 	browser, err := ReadBrowserCookies(context.Background(), address)
 	if err != nil {
-		t.Fatalf("BiDi 回退读取失败: %v", err)
+		t.Fatalf("BiDi 读取失败: %v", err)
 	}
 	if browser.Product != "Firefox/128.0.2" {
 		t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
@@ -288,7 +288,7 @@ func assertExportedCookieState(t *testing.T, text string) aistudio.StorageState 
 	t.Helper()
 	state, err := aistudio.ParseCookieText(text)
 	if err != nil {
-		t.Fatalf("Cookie 无法解析为存储状态: %v", err)
+		t.Fatalf("Cookie 解析为存储状态失败: %v", err)
 	}
 	names := make(map[string]string, len(state.Cookies))
 	for _, cookie := range state.Cookies {

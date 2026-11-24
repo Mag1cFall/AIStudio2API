@@ -1216,7 +1216,7 @@
   "经 WebDriver BiDi 读取浏览器 Cookie": "WebDriver BiDi 経由でブラウザ Cookie を読み込み",
   "解析 WebDriver BiDi Cookie": "WebDriver BiDi Cookie の解析",
   "解码 WebDriver BiDi Cookie %s 的 base64 值": "WebDriver BiDi Cookie {0} の base64 値をデコード",
-  "回退 WebDriver BiDi 也失败": "WebDriver BiDi へのフォールバックにも失敗しました",
+  "WebDriver BiDi 读取失败": "WebDriver BiDi の読み取りに失敗しました",
   "连接浏览器调试地址: %w": "ブラウザ デバッグ アドレスへの接続: {0}",
   "连接远程实例: %w": "リモート インスタンスへの接続: {0}",
   "选中新标签页: %w": "新しいタブを選択: {0}",

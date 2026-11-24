@@ -235,7 +235,7 @@ type eventListener struct {
 	fn func(map[string]any)
 }
 
-// addListener 注册一个 BiDi 事件回调，返回取消注册的函数；回调在读取连接的协程中执行，不能阻塞
+// addListener 注册一个 BiDi 事件回调，返回取消注册的函数；回调在读取连接的协程中执行，需立即返回
 func (client *bidiClient) addListener(fn func(map[string]any)) func() {
 	listener := &eventListener{fn: fn}
 	client.mu.Lock()
