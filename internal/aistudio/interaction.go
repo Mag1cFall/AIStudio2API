@@ -874,9 +874,9 @@ func trimWireNil(values []any) []any {
 
 // EncodeCreateInteractionRequest 编码官网后台 interaction 的 CreateInteraction 请求并返回参与 WAA 绑定的文本内容；目标是 agent 或 kind=2 模型
 func EncodeCreateInteractionRequest(request GenerateRequest, model Model, defaults GenerationDefaults) ([]byte, int, []Content, error) {
-	// field 79 kind=2 的模型不是 agent：field 18 携带模型目标与 generation config，与官网一致
+	// field 79 kind=2 的模型不是 agent：field 17 携带模型目标与 generation config，与官网一致
 	if model.Capabilities["interaction_model"] {
-		return encodeModelInteractionTarget(request, defaults)
+		return encodeModelInteractionTarget(request, model, defaults)
 	}
 	agent := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
 	// kind 是该 agent 的 agent_config 类型：带默认模型的 agent 为 antigravity，其余为 deep-research
@@ -934,11 +934,19 @@ func EncodeCreateInteractionRequest(request GenerateRequest, model Model, defaul
 	return body, proofAt, binding, nil
 }
 
-// encodeModelInteractionTarget 编码 kind=2 模型的 CreateInteraction 请求：field 18 为模型目标与 generation config，generation config 与 CreateInteractionStream 同构
-func encodeModelInteractionTarget(request GenerateRequest, defaults GenerationDefaults) ([]byte, int, []Content, error) {
+// encodeModelInteractionTarget 编码 kind=2 模型的 CreateInteraction 请求：field 17 为模型目标与 generation config，generation config 与 CreateInteractionStream 同构
+func encodeModelInteractionTarget(request GenerateRequest, model Model, defaults GenerationDefaults) ([]byte, int, []Content, error) {
 	steps, binding, _, err := encodeInteractionSteps(request.Contents)
 	if err != nil {
 		return nil, 0, nil, err
+	}
+	// field 7 只在请求显式声明工具时写入：kind=2 模型不注入目录默认工具，与官网一致
+	var tools []any
+	if request.Tools.Explicit {
+		tools, err = agentTools(request.Tools, model)
+		if err != nil {
+			return nil, 0, nil, err
+		}
 	}
 	level, err := interactionThinkingLevel(request.Config, defaults)
 	if err != nil {
@@ -964,11 +972,14 @@ func encodeModelInteractionTarget(request GenerateRequest, defaults GenerationDe
 	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
 		interaction[6] = system
 	}
+	if len(tools) > 0 {
+		interaction[7] = tools
+	}
 	// field 17 为续接的上一轮 interaction ID
 	if request.PreviousInteractionID != "" {
 		interaction[16] = request.PreviousInteractionID
 	}
-	// field 18 为模型目标：field 1 为模型名、field 2 为 generation config
+	// field 17 为模型目标：field 1 为模型名、field 2 为 generation config
 	interaction[17] = []any{wireModelName(request.Model), config}
 	interaction[26] = []any{steps}
 	body, proofAt, _ := marshalWAAArray([]any{nil, int64(1), int64(1), interaction, nil, int64(1)}, 5)
