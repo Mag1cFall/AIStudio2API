@@ -1696,7 +1696,7 @@ GET/DELETE /v1beta/files/{file}
 | 生成服务 | `POST /api/control/start`、`POST /api/control/stop` |
 | 账户 | `GET /api/accounts`、`GET /api/accounts/exits`、`POST /api/accounts`、`GET/POST /api/accounts/import/chrome`、`GET /api/accounts/import/browsers`、`POST /api/accounts/import/cookies/discover`、`POST /api/accounts/import/cookies`、`PUT /api/accounts/{id}`、`PUT /api/accounts/{id}/state`、`DELETE /api/accounts/{id}` |
 | 账户任务 | `GET /api/accounts/tasks`、`DELETE /api/accounts/tasks/{id}` |
-| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket） |
+| 账户认证与刷新 | `POST /api/accounts/{id}/login`、`POST /api/accounts/{id}/refresh`、`GET /api/login-view/{view}`（WebSocket）、`GET /api/accounts/{id}/live-view`（WebSocket）、`GET /api/accounts/{id}/live-view/status` |
 | 远程配对 | `GET /api/pairing`、`POST /api/pairing`、`POST /api/pairing/accounts`、`PUT /api/pairing/accounts/{account}/cookies` |
 | 配置 | `GET /api/config`、`PUT /api/config`、`GET /api/first-event-latency` |
 | 冷却与请求 | `GET /api/cooldowns`、`DELETE /api/accounts/{id}/cooldowns/{scope}`、`GET /api/requests`、`POST /api/requests/{id}/cancel` |
@@ -1795,7 +1795,10 @@ GET/DELETE /v1beta/files/{file}
   - 服务端推送 `{"type":"status","status":"starting|waiting|saving"}`
   - 服务端推送 `{"type":"dialog","dialog":{"kind","message","value"}|null}`
   - 服务端推送 `{"type":"frame","context","url","title","width","height","scale"}`，后面紧跟一条 JPEG 二进制消息
+  - 服务端推送 `{"type":"control-error","message"}` 报告导航或标签页控制命令的失败
   - 客户端发送 `{"type":"pointer","action":"move|down|up","x","y","button","context"}`、`{"type":"wheel","x","y","dx","dy","context"}`、`{"type":"key","action":"down|up","key","context"}`、`{"type":"text","text","context"}` 与 `{"type":"dialog","accept","text"}`
+- `GET /api/accounts/{id}/live-view` 把管理页远程操作窗口接到账户的常驻 Camoufox Worker（Camoufox 后端且 Worker 就绪时可用，冲突时返回 409 `live_view_unavailable`）：挂载期间账户被手动占用，不参与请求调度；窗口断开后解除占用并把浏览器当前 Cookie 全量写回 `storage-state.json`。推送消息与 `GET /api/login-view/{view}` 相同，另推送 `{"type":"closed","error"}` 表示浏览器连接断开并结束远程操作；客户端除指针、键盘、文本与对话框消息外，还可发送 `{"type":"navigate","url","context"}`、`{"type":"reload","context"}`、`{"type":"history","delta","context"}`、`{"type":"newTab","url?","context"}` 与 `{"type":"closeTab","context"}`
+- `GET /api/accounts/{id}/live-view/status` 在建立 WebSocket 前返回 `{"available":bool,"reason"?:string}`：SpiderMonkey 后端、无就绪常驻 Worker 或窗口已被占用时 `available` 为假并给出具体原因，管理页据此在打开远程操作窗口前展示提示
 
 管理 DTO 字段：
 
@@ -1821,6 +1824,7 @@ GET/DELETE /v1beta/files/{file}
 | `AccountTask` | `id`、`kind`（`login`、`relogin`、`chrome`、`cookies`、`browser`）、可选 `view`、`state`（`running`、`done`、`failed`）、`items`、`started_at` |
 | `AccountTaskItem` | `label`（账户邮箱，浏览器登录完成前为空）、`state`（`pending`、`running`、`done`、`failed`）、可选 `step`（处理中的账户当前的步骤：`login` 等待登录、`reading` 读取浏览器里的登录状态、`checking` 检查 AI Studio 访问、`saving` 保存账户）、可选 `code`、`error` |
 | `CookieBrowser` | `address`、`browser`、`email`、`auth_user`、`imported`、`signed_out`、`error`、`restricted`、`device_bound` |
+| `LiveViewAvailability` | `available`、可选 `reason` |
 | `PairingToken` | `token`、`expires_at` |
 | `AccountStateInput` | `label`、`locale`、`timezone`、`storage_state`、可选 `auth_user`（默认 0）、可选 `fingerprint` |
 | `AdminCooldown` | `account_id`、`account_label`、`model_id`、`until`、可选 `reason` |
@@ -1913,7 +1917,7 @@ Chrome 导入列表按 `Preferences.account_info` 中的 Gaia ID 与邮箱逐个
 - `AccountCreateInput` 启动隔离 Camoufox 登录，邮箱由 AI Studio 页面读取
 - `ChromeImportInput.accounts` 可一次选择多个账号，每个账号作为账户任务中的一项单独导入
 - `CookieImportInput.cookies` 与 `CookieAccountsInput` 每项的 `cookies` 接受 Cookie 扩展导出的 storage state 或 Cookie 数组 JSON、Netscape cookies.txt 和一行 Cookie 请求头，只保留 google.com 及其子域的 Cookie，导入账户的 `label` 为账户邮箱
-- `CookieAccountsInput` 每项的 `cdp` 非空时，改从该远程调试地址读取浏览器的全部未分区 Cookie
+- `CookieAccountsInput` 每项的 `cdp` 非空时，改从该远程调试地址读取浏览器的全部未分区 Cookie：Chromium 走 CDP `Storage.getCookies`，Firefox 内核（`/json/version` 返回 404）走 WebDriver BiDi 的 `session.new` 与 `storage.getCookies`，分区 Cookie 一律过滤
 - `AccountCreateInput`、`ChromeImportInput`、`CookieAccountsInput` 与 `AccountStateInput` 的 `locale`、`timezone` 为空时按账户出口的地理位置填写；`GET /api/accounts/exits` 对各账户出口代理各查询一次公网 IP 与地理位置
 - `AccountInput.label` 必须与不可变的 Google 邮箱 ID 一致，`locale` 与 `timezone` 必须非空；`proxy` 使用 HTTP、HTTPS 或 SOCKS5 origin，可带 `user:password@`，不含 path、query 或 fragment
 

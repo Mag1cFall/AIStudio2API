@@ -35,6 +35,7 @@ import DetailDialog from './DetailDialog.vue'
 import DisclosureChevron from './DisclosureChevron.vue'
 import LinkedText from './LinkedText.vue'
 import LoginViewer from './LoginViewer.vue'
+import AccountLiveViewer from './AccountLiveViewer.vue'
 import StagedRefreshIcon from './StagedRefreshIcon.vue'
 import UiCollapse from './UiCollapse.vue'
 import UiIcon from './UiIcon.vue'
@@ -53,6 +54,8 @@ const props = defineProps<{
   chromeImport: boolean
   // camoufox 是 Camoufox 的准备状态，浏览器登录等待下载时在任务行显示进度
   camoufox: PreparationStatus | undefined
+  // serviceRunning 表示生成服务正在运行，常驻浏览器远程操作仅此时可用
+  serviceRunning: boolean
 }>()
 
 const emit = defineEmits<{
@@ -585,6 +588,13 @@ watch(
 // viewerTaskID 是页内登录窗口显示的登录任务，为空时登录窗口关闭
 const viewerTaskID = ref('')
 const viewerTask = computed(() => props.tasks.find((task) => task.id === viewerTaskID.value))
+// liveViewAccount 是打开远程操作窗口的账户，为空时窗口关闭
+const liveViewAccount = ref<Account | null>(null)
+
+// openLiveView 打开账户常驻浏览器的远程操作窗口
+function openLiveView(account: Account): void {
+  liveViewAccount.value = account
+}
 
 // 登录窗口显示的任务被关闭或登录完成时关闭登录窗口，登录失败时窗口显示原因
 watch(viewerTask, (task) => {
@@ -1731,6 +1741,22 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1 lg:flex-nowrap"
             >
               <button
+                v-if="serviceRunning && account.enabled"
+                v-tooltip="t('accounts.liveViewOpen')"
+                type="button"
+                :class="[accountIconClass, 'hover:text-gray-200']"
+                :disabled="
+                  pendingAction !== '' ||
+                  refreshing.has(account.id) ||
+                  toggling.has(account.id) ||
+                  account.transition !== undefined
+                "
+                :aria-label="t('accounts.liveViewOpen')"
+                @click="openLiveView(account)"
+              >
+                <UiIcon name="remote" :size="15" />
+              </button>
+              <button
                 v-if="account.state === 'auth_required'"
                 class="rounded bg-blue-600 px-3 py-1 text-xs text-white transition hover:bg-blue-500 disabled:opacity-50"
                 type="button"
@@ -1834,6 +1860,14 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         @cancel="cancelViewerTask"
         @hide="viewerTaskID = ''"
         @close="viewerTaskID = ''"
+      />
+
+      <AccountLiveViewer
+        v-if="liveViewAccount !== null"
+        :key="liveViewAccount.id"
+        :account-id="liveViewAccount.id"
+        :account-label="liveViewAccount.label"
+        @close="liveViewAccount = null"
       />
 
       <Teleport to="body">

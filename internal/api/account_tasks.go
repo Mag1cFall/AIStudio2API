@@ -350,7 +350,7 @@ func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem,
 	cookies := item.Cookies
 	if address := strings.TrimSpace(item.CDP); address != "" {
 		ReportTaskStep(ctx, TaskStepReading)
-		browser, err := chromeauth.ReadCDPBrowser(ctx, address)
+		browser, err := chromeauth.ReadBrowserCookies(ctx, address)
 		if err != nil {
 			return AdminAccount{}, err
 		}
