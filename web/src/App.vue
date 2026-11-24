@@ -509,6 +509,7 @@ onMounted(revealCurrentTab)
           :camoufox="status?.camoufox"
           :models="models"
           :cooldowns="cooldowns"
+          :service-running="serviceState === 'running'"
           @refresh="loadAccountData"
           @updated="updateAccount"
           @notice="showNotice"

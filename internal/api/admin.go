@@ -30,6 +30,10 @@ type AdminService interface {
 	DeleteAccount(context.Context, string) error
 	LoginAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
 	VerifyAccount(context.Context, string, *camoufoxnative.LiveView) (AdminAccount, error)
+	// AttachAccountLiveView 把远程操作窗口接到账户的常驻浏览器，返回的函数在窗口断开时清理
+	AttachAccountLiveView(ctx context.Context, accountID string, view *camoufoxnative.LiveView) (func(), error)
+	// LiveViewAvailability 返回账户远程操作窗口的可用性与原因
+	LiveViewAvailability(ctx context.Context, accountID string) (LiveViewAvailability, error)
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
@@ -451,6 +455,8 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleLoginAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.handleVerifyAccount)
 	mux.HandleFunc("GET /api/login-view/{view}", s.handleLoginView)
+	mux.HandleFunc("GET /api/accounts/{id}/live-view", s.handleAccountLiveView)
+	mux.HandleFunc("GET /api/accounts/{id}/live-view/status", s.handleAccountLiveViewStatus)
 	mux.HandleFunc("POST /api/accounts/{id}/refresh", s.handleRefreshAccount)
 	mux.HandleFunc("POST /api/accounts/refresh", s.handleRefreshAccounts)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)

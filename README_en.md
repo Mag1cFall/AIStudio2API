@@ -780,7 +780,7 @@ HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authenti
 | --- | --- | --- |
 | Import from Chrome | Accounts signed in to Chrome on this computer | Several can be selected; available on Windows |
 | Paste cookies | JSON exported by a cookie extension, a Cookie request header line, or a Netscape cookies.txt file | The account email is detected automatically |
-| Import from an antidetect browser | Windows signed in to AI Studio in local antidetect browsers and Chromium | The browser needs remote debugging enabled |
+| Import from an antidetect browser | Windows signed in to AI Studio in local antidetect browsers and Chromium | The browser needs remote debugging enabled; Chromium uses CDP while Firefox-based browsers use WebDriver BiDi |
 | Sign in with browser | An isolated Camoufox window | Detects the email and authorizes Google Drive after login |
 | Add remotely | Another computer that can sign in to Google | See `setup --remote` under [Commands](#commands) |
 
@@ -797,6 +797,12 @@ Sign in with browser:
 - It opens a visible Camoufox window on this computer; when Google asks to verify your identity, confirm it in that window or on your phone
 - When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type, and paste; Cancel ends the sign-in
 - The in-page sign-in window can be hidden and reopened from its task row; a reverse proxy must forward the WebSocket at `/api/login-view/`
+
+Remote control of the resident browser:
+
+- While the generation service runs, "Remote control" in an account row streams that account's resident Camoufox screen into a full-screen console window, with an address bar for entering URLs, back/forward, reload, and tab open/close controls, plus direct clicks, typing, and dialog handling for verification and authorization steps
+- The account stays out of request scheduling while the window is connected and resumes when it closes; cookies produced during the session are written back to the account state on disconnect, and a dropped browser connection shows the reason and ends the session
+- Requires the Camoufox backend and a ready resident worker; a reverse proxy must forward WebSockets under `/api/accounts/`
 
 Account actions depend on state. Click the state in an account row to set the account to Ready or Disabled:
 
