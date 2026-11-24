@@ -50,6 +50,22 @@ var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
 // liveViewAttacher 是能挂载远程操作窗口的浏览器 runtime，SpiderMonkey 后端不满足
 type liveViewAttacher interface {
 	AttachLiveView(context.Context, *camoufoxnative.LiveView) (func(), error)
+	LiveViewAvailable() (bool, string)
+}
+
+// liveViewUnsupportedReason 是 SpiderMonkey 后端不支持远程操作时的原因
+const liveViewUnsupportedReason = "SpiderMonkey 后端没有可操作的浏览器，请在服务配置切换为 Camoufox 后端并重启"
+
+// LiveViewAvailability 报告该 runtime 当前能否挂载远程操作窗口，不能时返回原因
+func (worker *NativeWorker) LiveViewAvailability() (bool, string) {
+	worker.runtimeMu.RLock()
+	runtime := worker.runtime
+	worker.runtimeMu.RUnlock()
+	attacher, ok := runtime.(liveViewAttacher)
+	if !ok {
+		return false, liveViewUnsupportedReason
+	}
+	return attacher.LiveViewAvailable()
 }
 
 // AttachLiveView 把远程操作窗口接到账户的 Camoufox runtime，SpiderMonkey 后端没有可操作的浏览器
@@ -59,7 +75,7 @@ func (worker *NativeWorker) AttachLiveView(ctx context.Context, view *camoufoxna
 	worker.runtimeMu.RUnlock()
 	attacher, ok := runtime.(liveViewAttacher)
 	if !ok {
-		return nil, errors.New("SpiderMonkey 后端没有可操作的浏览器，请在服务配置切换为 Camoufox 后端")
+		return nil, errors.New(liveViewUnsupportedReason)
 	}
 	return attacher.AttachLiveView(ctx, view)
 }

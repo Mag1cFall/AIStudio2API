@@ -232,7 +232,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.downloadingBrowser': '正在下載登入用的 Camoufox 瀏覽器',
   'accounts.liveSaving': '正在儲存',
   'accounts.liveReconnecting': '連線已中斷，正在重新連線',
-  'accounts.liveUnavailable': '無法連線登入視窗，經反向代理存取時需要轉送 WebSocket',
+  'accounts.liveUnavailable': '無法連線瀏覽器視窗，經反向代理存取時需要轉送 WebSocket',
   'accounts.liveFailed': '登入失敗',
   'accounts.liveDialog': '{host} 顯示',
   'accounts.liveOk': '確定',

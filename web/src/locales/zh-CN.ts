@@ -226,7 +226,7 @@ export const messages = {
   'accounts.downloadingBrowser': '正在下载登录用的 Camoufox 浏览器',
   'accounts.liveSaving': '正在保存',
   'accounts.liveReconnecting': '连接已断开，正在重新连接',
-  'accounts.liveUnavailable': '无法连接登录窗口，经反向代理访问时需要转发 WebSocket',
+  'accounts.liveUnavailable': '无法连接浏览器窗口，经反向代理访问时需要转发 WebSocket',
   'accounts.liveFailed': '登录失败',
   'accounts.liveDialog': '{host} 显示',
   'accounts.liveOk': '确定',

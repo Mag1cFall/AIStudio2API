@@ -247,7 +247,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveSaving': 'Wird gespeichert',
   'accounts.liveReconnecting': 'Verbindung unterbrochen, wird wiederhergestellt',
   'accounts.liveUnavailable':
-    'Keine Verbindung zum Anmeldefenster; ein Reverse-Proxy muss WebSocket weiterleiten',
+    'Keine Verbindung zum Browserfenster; ein Reverse-Proxy muss WebSocket weiterleiten',
   'accounts.liveFailed': 'Anmeldung fehlgeschlagen',
   'accounts.liveDialog': '{host} meldet',
   'accounts.liveOk': 'OK',

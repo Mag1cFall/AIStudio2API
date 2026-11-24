@@ -17,8 +17,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// liveViewFrameInterval 为登录窗口截取画面的最短间隔，约每秒 10 帧
-const liveViewFrameInterval = 100 * time.Millisecond
+// liveViewFrameInterval 为登录窗口截取画面的最短间隔，约每秒 20 帧
+const liveViewFrameInterval = 50 * time.Millisecond
 
 // liveViewWriteTimeout 为向登录窗口写出一条消息的最长等待
 const liveViewWriteTimeout = 10 * time.Second
@@ -71,6 +71,9 @@ type LiveView struct {
 	// closed 表示浏览器连接已断开，closedReason 是断开原因，由 mu 保护
 	closed       bool
 	closedReason string
+	// controlError 是最近一次导航或标签页控制命令的失败原因，controlErrorSeq 随其递增，由 mu 保护
+	controlError    string
+	controlErrorSeq int
 	// inputReady 在有待转发的输入时唤醒输入协程
 	inputReady chan struct{}
 	// capture 在登录窗口连接或页面对话框关闭时唤醒截图协程
@@ -203,15 +206,29 @@ func (view *LiveView) receive(connection *websocket.Conn) error {
 			view.answerDialog(input.Accept, input.Text)
 			continue
 		case "navigate", "reload", "history", "newTab", "closeTab":
-			view.control(input)
+			if err := view.control(input); err != nil {
+				view.reportControlError(err)
+			}
 			continue
 		}
 		view.enqueue(input)
 	}
 }
 
-// control 执行地址栏导航、历史进退、刷新与标签页开关命令
-func (view *LiveView) control(input liveInput) {
+// reportControlError 记下控制命令错误并唤醒窗口连接推送
+func (view *LiveView) reportControlError(err error) {
+	if err == nil {
+		return
+	}
+	view.mu.Lock()
+	view.controlError = err.Error()
+	view.controlErrorSeq++
+	view.mu.Unlock()
+	view.notify()
+}
+
+// control 执行地址栏导航、历史进退、刷新与标签页开关命令，失败时返回错误
+func (view *LiveView) control(input liveInput) error {
 	view.mu.Lock()
 	client := view.client
 	contextID := input.Context
@@ -219,44 +236,58 @@ func (view *LiveView) control(input liveInput) {
 		contextID = view.activeContextLocked()
 	}
 	view.mu.Unlock()
-	if client == nil || contextID == "" {
-		return
+	if client == nil {
+		return errors.New("浏览器连接不可用")
+	}
+	if contextID == "" && input.Type != "newTab" {
+		return errors.New("没有可操作的标签页")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveControlTimeout)
 	defer cancel()
 	switch input.Type {
 	case "navigate":
 		if strings.TrimSpace(input.URL) == "" {
-			return
+			return nil
 		}
-		_, _ = client.command(ctx, "browsingContext.navigate", map[string]any{
+		if _, err := client.command(ctx, "browsingContext.navigate", map[string]any{
 			"context": contextID, "url": input.URL, "wait": "none",
-		})
+		}); err != nil {
+			return fmt.Errorf("打开网址失败: %w", err)
+		}
 	case "reload":
-		_, _ = client.command(ctx, "browsingContext.reload", map[string]any{
+		if _, err := client.command(ctx, "browsingContext.reload", map[string]any{
 			"context": contextID, "ignoreCache": false,
-		})
+		}); err != nil {
+			return fmt.Errorf("刷新失败: %w", err)
+		}
 	case "history":
-		_, _ = client.command(ctx, "browsingContext.traverseHistory", map[string]any{
+		if _, err := client.command(ctx, "browsingContext.traverseHistory", map[string]any{
 			"context": contextID, "delta": input.Delta,
-		})
+		}); err != nil {
+			return fmt.Errorf("历史导航失败: %w", err)
+		}
 	case "newTab":
 		result, err := client.command(ctx, "browsingContext.create", map[string]any{"type": "tab"})
 		if err != nil {
-			return
+			return fmt.Errorf("新建标签页失败: %w", err)
 		}
 		newContext, _ := result["context"].(string)
 		if newContext == "" {
-			return
+			return errors.New("新建标签页失败：浏览器未返回标签页")
 		}
 		if url := strings.TrimSpace(input.URL); url != "" {
-			_, _ = client.command(ctx, "browsingContext.navigate", map[string]any{
+			if _, err := client.command(ctx, "browsingContext.navigate", map[string]any{
 				"context": newContext, "url": url, "wait": "none",
-			})
+			}); err != nil {
+				return fmt.Errorf("新标签页打开网址失败: %w", err)
+			}
 		}
 	case "closeTab":
-		_, _ = client.command(ctx, "browsingContext.close", map[string]any{"context": contextID})
+		if _, err := client.command(ctx, "browsingContext.close", map[string]any{"context": contextID}); err != nil {
+			return fmt.Errorf("关闭标签页失败: %w", err)
+		}
 	}
+	return nil
 }
 
 // enqueue 把输入排入转发队列，连续的指针移动只保留最后一次，同一位置连续的滚动合并
@@ -283,7 +314,7 @@ func (view *LiveView) enqueue(input liveInput) {
 
 // push 在状态变化时向登录窗口写出登录阶段、页面对话框与最新一帧画面
 func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, viewer *liveViewer) error {
-	status, frameSeq, dialogSeq := "", 0, 0
+	status, frameSeq, dialogSeq, controlErrorSeq := "", 0, 0, 0
 	write := func(messageType int, data []byte) error {
 		if err := connection.SetWriteDeadline(time.Now().Add(liveViewWriteTimeout)); err != nil {
 			return err
@@ -309,6 +340,7 @@ func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, view
 		view.mu.Lock()
 		currentStatus, frame, currentFrame, dialog, currentDialog := view.status, view.frame, view.frameSeq, view.dialog, view.dialogSeq
 		closed, closedReason := view.closed, view.closedReason
+		controlError, currentControlErrorSeq := view.controlError, view.controlErrorSeq
 		view.mu.Unlock()
 		if closed && !closedSent {
 			if err := writeJSON(map[string]any{"type": "closed", "error": closedReason}); err != nil {
@@ -327,6 +359,12 @@ func (view *LiveView) push(ctx context.Context, connection *websocket.Conn, view
 				return err
 			}
 			dialogSeq = currentDialog
+		}
+		if currentControlErrorSeq != controlErrorSeq {
+			if err := writeJSON(map[string]any{"type": "control-error", "message": controlError}); err != nil {
+				return err
+			}
+			controlErrorSeq = currentControlErrorSeq
 		}
 		if currentFrame != frameSeq && frame != nil {
 			if err := writeJSON(frame); err != nil {

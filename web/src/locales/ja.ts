@@ -248,7 +248,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveSaving': '保存しています',
   'accounts.liveReconnecting': '接続が切れました。再接続しています',
   'accounts.liveUnavailable':
-    'ログインウィンドウに接続できません。リバースプロキシ経由の場合は WebSocket を転送してください',
+    'ブラウザウィンドウに接続できません。リバースプロキシ経由の場合は WebSocket を転送してください',
   'accounts.liveFailed': 'ログインに失敗しました',
   'accounts.liveDialog': '{host} のメッセージ',
   'accounts.liveOk': 'OK',

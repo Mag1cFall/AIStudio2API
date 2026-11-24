@@ -243,7 +243,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.liveSaving': 'Saving',
   'accounts.liveReconnecting': 'Connection lost, reconnecting',
   'accounts.liveUnavailable':
-    'Cannot connect to the sign-in window; a reverse proxy must forward WebSocket',
+    'Cannot connect to the browser window; a reverse proxy must forward WebSocket',
   'accounts.liveFailed': 'Sign-in failed',
   'accounts.liveDialog': '{host} says',
   'accounts.liveOk': 'OK',
