@@ -524,6 +524,8 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 		return false, withMethod(err, method)
 	}
 	switch status {
+	case 2:
+		finishReason = "tool_calls"
 	case 3:
 	case 4:
 		return false, &RPCError{Method: method, StatusCode: http.StatusBadGateway, Message: "interaction failed"}
@@ -531,6 +533,11 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 		return false, &RPCError{Method: method, StatusCode: http.StatusBadGateway, Message: "interaction cancelled"}
 	default:
 		return false, &ProtocolEvidenceError{Method: method, Path: "$event[19][0][1]", Detail: fmt.Sprintf("未识别的最终状态 %d", status), Raw: cloneRaw(raw)}
+	}
+	if status == 2 {
+		if err := decodeInteractionCalls(method, interaction, raw, emit); err != nil {
+			return false, err
+		}
 	}
 	if usage := rawAt(interaction, 12); !isJSONNull(usage) {
 		decoded, err := decodeInteractionUsage(method, usage, raw)
@@ -548,6 +555,64 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 		}
 	}
 	return true, emit(Event{Kind: EventFinish, FinishReason: "stop", EnvironmentID: environmentID})
+}
+
+// decodeInteractionCalls 从 requires_action 终态的 interaction 提取函数调用：调用以 content 形式出现在 step 列表（索引 26）的模型 step 内，content 索引 10 为 ["<NAME>",<ARGS>,"<ID>"?]；step 列表缺失时回退扫描整个 interaction
+func decodeInteractionCalls(method string, interaction []json.RawMessage, raw json.RawMessage, emit func(Event) error) error {
+	var root any
+	if steps := rawAt(interaction, 26); !isJSONNull(steps) {
+		if err := json.Unmarshal(steps, &root); err != nil {
+			return withMethod(err, method)
+		}
+	} else {
+		data, err := json.Marshal(interaction)
+		if err != nil {
+			return withMethod(err, method)
+		}
+		if err := json.Unmarshal(data, &root); err != nil {
+			return withMethod(err, method)
+		}
+	}
+	var calls []json.RawMessage
+	scanInteractionCalls(root, &calls, 0)
+	emitted := make(map[string]bool, len(calls))
+	for index, callRaw := range calls {
+		call, err := decodeFunctionCall(callRaw, fmt.Sprintf("$event[19][0] call[%d]", index), raw)
+		if err != nil {
+			continue
+		}
+		if emitted[string(callRaw)] {
+			continue
+		}
+		emitted[string(callRaw)] = true
+		if err := emit(Event{Kind: EventToolCall, FunctionCall: &call}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scanInteractionCalls 递归收集形如函数调用的 content：数组索引 10 为以字符串（名称）开头的数组
+func scanInteractionCalls(node any, calls *[]json.RawMessage, depth int) {
+	if depth > 12 {
+		return
+	}
+	arr, ok := node.([]any)
+	if !ok {
+		return
+	}
+	if len(arr) > 10 {
+		if candidate, ok := arr[10].([]any); ok && len(candidate) > 0 {
+			if _, ok := candidate[0].(string); ok {
+				if data, err := json.Marshal(candidate); err == nil {
+					*calls = append(*calls, data)
+				}
+			}
+		}
+	}
+	for _, child := range arr {
+		scanInteractionCalls(child, calls, depth+1)
+	}
 }
 
 // decodeInteractionDelta 解码 content delta：field 1 文本、field 2 图片、field 3 音频、field 4 文档、field 5 视频、field 6 思考摘要、field 7 思考签名、field 10 引用
