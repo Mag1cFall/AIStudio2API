@@ -293,7 +293,7 @@ func importStorageState(ctx context.Context, target accountTarget, options setup
 // importCookies 把 --cookie、--cookie-file 或 --cdp 浏览器中的 Cookie 导入为账户，未给 --email 时以 Cookie 登录的账户邮箱为账户
 func importCookies(ctx context.Context, target accountTarget, options setupOptions) error {
 	if options.cdp != "" {
-		browser, err := chromeauth.ReadCDPBrowser(ctx, options.cdp)
+		browser, err := chromeauth.ReadBrowserCookies(ctx, options.cdp)
 		if err != nil {
 			return err
 		}
