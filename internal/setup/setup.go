@@ -490,7 +490,7 @@ func parseSetupFlags(args []string, cfg config.Config) (setupOptions, error) {
 	storageState := flags.String("storage-state", "", "Playwright storage state 文件")
 	cookieHeader := flags.String("cookie", "", "一行 Cookie 请求头")
 	cookieFile := flags.String("cookie-file", "", "浏览器导出的 Cookie JSON 或 Netscape cookies.txt 文件")
-	cdp := flags.String("cdp", "", "指纹浏览器或 Chromium 的远程调试地址，读取其中的 Cookie")
+	cdp := flags.String("cdp", "", "支持远程调试的 Chromium 或 Firefox 浏览器调试地址，读取其中的 Cookie")
 	login := flags.Bool("login", false, "使用隔离 Camoufox 登录")
 	chromeRoot := flags.String("chrome-root", "", "Chrome User Data 目录")
 	proxy := flags.String("proxy", "", "账户固定 HTTP、HTTPS 或 SOCKS5 代理")

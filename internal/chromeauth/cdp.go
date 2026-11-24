@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// BrowserCookies 是经远程调试地址读取的浏览器产品名与全部未分区 Cookie，Cookie 为 JSON 数组文本
+// BrowserCookies 是经远程调试地址读取的浏览器产品名与 Cookie JSON 数组文本
 type BrowserCookies struct {
 	Product string
 	Cookies string
@@ -23,27 +23,26 @@ type BrowserCookies struct {
 func ReadBrowserCookies(ctx context.Context, address string) (BrowserCookies, error) {
 	address = strings.TrimSpace(address)
 	if strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://") {
-		// /session 是 WebDriver BiDi 的 WebSocket 路径，其余按浏览器级 CDP WebSocket 处理
-		if parsed, err := url.Parse(address); err == nil && strings.TrimSuffix(parsed.Path, "/") == "/session" {
-			return readBiDiBrowser(ctx, address)
+		if parsed, err := url.Parse(address); err == nil {
+			if path := strings.TrimSuffix(parsed.Path, "/"); path == "" || path == "/session" {
+				return readBiDiBrowser(ctx, address)
+			}
 		}
 		return readCDPBrowser(ctx, address, "")
 	}
-	version, status, err := probeCDPVersion(ctx, address)
+	version, status, tryBiDi, err := probeCDPVersion(ctx, address)
 	if err == nil {
-		// Firefox 的 CDP 不提供 Storage 域，统一使用 WebDriver BiDi
 		if strings.Contains(strings.ToLower(version.Browser), "firefox") {
 			return readBiDiBrowser(ctx, address)
 		}
 		return readCDPBrowser(ctx, version.WebSocketDebuggerURL, version.Browser)
 	}
-	if status == 0 {
+	if !tryBiDi {
 		return BrowserCookies{}, err
 	}
-	// HTTP 有响应但没有 CDP 调试信息时，Firefox 内核浏览器改用 WebDriver BiDi
 	bidi, bidiErr := readBiDiBrowser(ctx, address)
 	if bidiErr != nil {
-		return BrowserCookies{}, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w", status, bidiErr)
+		return BrowserCookies{Product: bidi.Product}, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w", status, bidiErr)
 	}
 	return bidi, nil
 }
@@ -52,7 +51,7 @@ func ReadBrowserCookies(ctx context.Context, address string) (BrowserCookies, er
 func readCDPBrowser(ctx context.Context, endpoint, product string) (BrowserCookies, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, nil)
 	if err != nil {
-		return BrowserCookies{}, fmt.Errorf("连接浏览器调试地址: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("连接浏览器调试地址: %w", err)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -62,7 +61,7 @@ func readCDPBrowser(ctx context.Context, endpoint, product string) (BrowserCooki
 		Cookies []map[string]any `json:"cookies"`
 	}
 	if err := session.call(ctx, "Storage.getCookies", nil, &stored); err != nil {
-		return BrowserCookies{}, fmt.Errorf("读取浏览器 Cookie: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("读取浏览器 Cookie: %w", err)
 	}
 	cookies := make([]map[string]any, 0, len(stored.Cookies))
 	for _, cookie := range stored.Cookies {
@@ -72,7 +71,7 @@ func readCDPBrowser(ctx context.Context, endpoint, product string) (BrowserCooki
 	}
 	data, err := json.Marshal(cookies)
 	if err != nil {
-		return BrowserCookies{}, fmt.Errorf("编码浏览器 Cookie: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("编码浏览器 Cookie: %w", err)
 	}
 	return BrowserCookies{Product: product, Cookies: string(data)}, nil
 }
@@ -123,30 +122,38 @@ type cdpVersion struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-// probeCDPVersion 读取 host:port 或 HTTP 调试地址的 /json/version。
-// 传输层失败时返回的 status 为 0；收到 HTTP 响应但不是 CDP 调试信息时 status 为响应状态码
-func probeCDPVersion(ctx context.Context, address string) (cdpVersion, int, error) {
+// parseDebugHTTPURL 解析 host:port 或 http(s):// 远程调试地址
+func parseDebugHTTPURL(address string) (*url.URL, error) {
 	address = strings.TrimSpace(address)
 	if !strings.Contains(address, "://") {
 		address = "http://" + address
 	}
 	parsed, err := url.Parse(address)
 	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return cdpVersion{}, 0, fmt.Errorf("浏览器调试地址无效，例如 127.0.0.1:9222")
+		return nil, fmt.Errorf("浏览器调试地址无效，例如 127.0.0.1:9222")
+	}
+	return parsed, nil
+}
+
+// probeCDPVersion 读取 host:port 或 HTTP 调试地址的 /json/version，仅在完整收到非 CDP 响应时置 tryBiDi 为真
+func probeCDPVersion(ctx context.Context, address string) (cdpVersion, int, bool, error) {
+	parsed, err := parseDebugHTTPURL(address)
+	if err != nil {
+		return cdpVersion{}, 0, false, err
 	}
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, parsed.Scheme+"://"+parsed.Host+"/json/version", nil)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return cdpVersion{}, 0, fmt.Errorf("连接浏览器调试地址: %w", err)
+		return cdpVersion{}, 0, false, fmt.Errorf("连接浏览器调试地址: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return cdpVersion{}, response.StatusCode, fmt.Errorf("读取浏览器调试信息: %w", err)
+		return cdpVersion{}, response.StatusCode, false, fmt.Errorf("读取浏览器调试信息: %w", err)
 	}
 	var version cdpVersion
 	if response.StatusCode != http.StatusOK || json.Unmarshal(body, &version) != nil || version.WebSocketDebuggerURL == "" {
-		return cdpVersion{}, response.StatusCode, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d", response.StatusCode)
+		return cdpVersion{}, response.StatusCode, true, fmt.Errorf("浏览器调试地址没有返回调试信息: HTTP %d", response.StatusCode)
 	}
-	return version, response.StatusCode, nil
+	return version, response.StatusCode, false, nil
 }
