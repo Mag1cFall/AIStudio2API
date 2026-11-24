@@ -778,6 +778,7 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	)
 	mapping, _ := config.ParseModelMapping(updated.ModelMapping)
 	current.service.SetRequestPolicy(mapping, updated.MaxAccountSwitches)
+	aistudio.DisableInteractionModels = updated.DisableInteractionModels
 	manager.settings.Store(&requestSettings{
 		modes:              api.ResponseModes{NonstreamKeepalive: updated.NonstreamKeepalive, FakeStream: updated.FakeStream},
 		searchModelAliases: updated.SearchModelAliases,

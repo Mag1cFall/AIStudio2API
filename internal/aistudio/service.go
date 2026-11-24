@@ -645,9 +645,15 @@ func (l *AccountLease) InteractionRoute(modelID string) (stream bool, task bool)
 	return interactionRoute(model, GenerationDefaults{}, l.Channel())
 }
 
+// DisableInteractionModels 置位时 kind=2 interaction 模型不按目录标记走 CreateInteractionStream/CreateInteraction，改与普通模型一样走 GenerateContent；由应用层按配置设置
+var DisableInteractionModels bool
+
 // interactionRoute 返回模型在指定通道上是否走 CreateInteractionStream 或 CreateInteraction 后台任务
 func interactionRoute(model Model, defaults GenerationDefaults, channel Channel) (stream bool, task bool) {
 	if channel == ChannelBuild {
+		return false, false
+	}
+	if DisableInteractionModels && model.Capabilities["interaction_model"] {
 		return false, false
 	}
 	return model.Capabilities["interaction_stream"] || defaults.InteractionStream,

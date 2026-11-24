@@ -692,6 +692,7 @@ cp .env.example .env
 | `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名 |
 | `SEARCH_MODEL_ALIASES` | `true` | 提供支持搜索的模型的 `-search` 型号，使用该型号时启用 Google 搜索 |
 | `DISCOVER_HIDDEN_MODELS` | `false` | 同步账户模型目录时找出 AI Studio 官网尚未公开的模型并加入目录 |
+| `DISABLE_INTERACTION_MODELS` | `false` | kind=2 interaction 模型不按目录标记走 CreateInteractionStream/CreateInteraction，改与普通模型一样走 GenerateContent（目录标记为前端建议，实测服务端仍接受） |
 | `GOOGLE_SEARCH` | `false` | 为 OpenAI、Anthropic、Gemini 与 Interactions 的生成请求启用 Google 搜索，包含普通型号与携带函数工具的请求 |
 | `CONTINUATION_REWRITE` | `true` | 以 assistant 消息结尾的请求在不支持原生续写的模型上改写为续写请求；关闭时所有模型原样发送，上游拒绝时返回其错误 |
 | `CONTINUATION_PROMPT` | 内置英文续写句 | 改写时与末尾 assistant 消息一起写入系统指令的提示词；设为空时末尾 assistant 消息改作 user 消息发送 |

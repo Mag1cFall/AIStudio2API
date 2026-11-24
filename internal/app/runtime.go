@@ -106,6 +106,7 @@ func newRuntime(
 	pooled.YouTubeLinks = cfg.YouTubeLinks
 	pooled.DiscoverHiddenModels = cfg.DiscoverHiddenModels
 	pooled.StripThoughtSignatures = cfg.StripThoughtSignatures
+	aistudio.DisableInteractionModels = cfg.DisableInteractionModels
 	pooled.ContinuationRewrite = cfg.ContinuationRewrite
 	pooled.ContinuationPrompt = cfg.ContinuationPrompt
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)

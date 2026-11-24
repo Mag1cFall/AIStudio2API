@@ -66,6 +66,7 @@ var configKeys = [...]string{
 	"STRIP_THOUGHT_SIGNATURES",
 	"SEARCH_MODEL_ALIASES",
 	"DISCOVER_HIDDEN_MODELS",
+	"DISABLE_INTERACTION_MODELS",
 	"GOOGLE_SEARCH",
 	"FIRST_EVENT_HEDGE",
 	"FIRST_EVENT_HEDGE_MODELS",
@@ -142,6 +143,7 @@ type Config struct {
 	StripThoughtSignatures bool
 	SearchModelAliases     bool
 	DiscoverHiddenModels   bool
+	DisableInteractionModels bool
 	GoogleSearch           bool
 	FirstEventHedge        string
 	FirstEventHedgeModels  string
@@ -256,6 +258,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
 	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
 	"STRIP_THOUGHT_SIGNATURES": boolSetter("STRIP_THOUGHT_SIGNATURES", func(c *Config) *bool { return &c.StripThoughtSignatures }),
+	"DISABLE_INTERACTION_MODELS": boolSetter("DISABLE_INTERACTION_MODELS", func(c *Config) *bool { return &c.DisableInteractionModels }),
 	"CONTINUATION_REWRITE":      boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
 	"REPLY_TOOL":                boolSetter("REPLY_TOOL", func(c *Config) *bool { return &c.ReplyTool }),
 	"USER_MESSAGE_REWRITE":      textSetter(func(c *Config) *string { return &c.UserMessageRewrite }, lowerTrim),
@@ -644,6 +647,7 @@ func (c Config) envValues() map[string]string {
 		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
 		"STRIP_THOUGHT_SIGNATURES": strconv.FormatBool(c.StripThoughtSignatures),
 		"SEARCH_MODEL_ALIASES":     strconv.FormatBool(c.SearchModelAliases),
+		"DISABLE_INTERACTION_MODELS": strconv.FormatBool(c.DisableInteractionModels),
 		"DISCOVER_HIDDEN_MODELS":   strconv.FormatBool(c.DiscoverHiddenModels),
 		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
 		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,

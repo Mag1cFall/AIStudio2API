@@ -352,6 +352,7 @@ type RuntimeConfig struct {
 	StripThoughtSignatures    bool                 `json:"strip_thought_signatures"`
 	SearchModelAliases        bool                 `json:"search_model_aliases"`
 	DiscoverHiddenModels      bool                 `json:"discover_hidden_models"`
+	DisableInteractionModels  bool                 `json:"disable_interaction_models"`
 	GoogleSearch              bool                 `json:"google_search"`
 	FirstEventHedge           string               `json:"first_event_hedge"`
 	FirstEventHedgeModels     string               `json:"first_event_hedge_models"`
