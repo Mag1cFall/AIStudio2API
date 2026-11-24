@@ -47,47 +47,6 @@ var ErrProtectedTransport = errors.New("受保护请求网络错误")
 var _ ProtectedPreparer = (*NativeWorker)(nil)
 var _ ProtocolHeaderProvider = (*NativeWorker)(nil)
 
-// liveViewAttacher 是能挂载远程操作窗口的浏览器 runtime，SpiderMonkey 后端不满足
-type liveViewAttacher interface {
-	AttachLiveView(context.Context, *camoufoxnative.LiveView) (func(), error)
-	LiveViewAvailable() (bool, string)
-}
-
-// liveViewUnsupportedReason 是 SpiderMonkey 后端不支持远程操作时的原因
-const liveViewUnsupportedReason = "SpiderMonkey 后端没有可操作的浏览器，请在服务配置切换为 Camoufox 后端并重启"
-
-// LiveViewAvailability 返回该 runtime 挂载远程操作窗口的可用性与原因
-func (worker *NativeWorker) LiveViewAvailability() (bool, string) {
-	worker.runtimeMu.RLock()
-	runtime := worker.runtime
-	worker.runtimeMu.RUnlock()
-	attacher, ok := runtime.(liveViewAttacher)
-	if !ok {
-		return false, liveViewUnsupportedReason
-	}
-	return attacher.LiveViewAvailable()
-}
-
-// AttachLiveView 把远程操作窗口接到账户的 Camoufox runtime，SpiderMonkey 后端没有可操作的浏览器
-func (worker *NativeWorker) AttachLiveView(ctx context.Context, view *camoufoxnative.LiveView) (func(), error) {
-	worker.runtimeMu.RLock()
-	runtime := worker.runtime
-	worker.runtimeMu.RUnlock()
-	attacher, ok := runtime.(liveViewAttacher)
-	if !ok {
-		return nil, errors.New(liveViewUnsupportedReason)
-	}
-	return attacher.AttachLiveView(ctx, view)
-}
-
-// StorageCookies 导出当前浏览器 Cookie 的 storage state JSON
-func (worker *NativeWorker) StorageCookies(ctx context.Context) ([]byte, error) {
-	worker.runtimeMu.RLock()
-	runtime := worker.runtime
-	worker.runtimeMu.RUnlock()
-	return runtime.StorageCookies(ctx)
-}
-
 // camoufoxRuntime 是 Camoufox 后端的 workerRuntime，重新载入在同一浏览器中进行
 type camoufoxRuntime struct {
 	*camoufoxnative.Worker

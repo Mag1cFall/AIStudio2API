@@ -83,8 +83,6 @@ var (
 	ErrAccountCoolingDown = errors.New("账户已进入冷却")
 	// ErrResourceNotFound 表示资源没有创建账户映射
 	ErrResourceNotFound = errors.New("资源账户映射不存在")
-	// ErrAccountManualHold 表示账户正在被远程操作，生成请求选号返回该错误
-	ErrAccountManualHold = errors.New("账户正在远程操作中")
 )
 
 // AllCoolingError 表示请求的全部候选账户都在冷却且不会很快恢复
@@ -600,8 +598,6 @@ type AccountPool struct {
 	sessions singleflight.Group
 	// fileBindMu 串行化文件绑定，使公开文件名的重名检查与绑定成为一步
 	fileBindMu sync.Mutex
-	// manualHolds 是远程操作期间禁止调度的账户及占用次数，由 mu 保护
-	manualHolds map[string]int
 }
 
 // AccountLease 表示一个账户请求槽位
@@ -1082,7 +1078,6 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
 		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
-		manualHolds: make(map[string]int),
 	}
 	for _, account := range p.accounts {
 		if account.runtime.Cooldowns == nil {
@@ -3354,9 +3349,6 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	if accountID != "" {
 		for index, account := range p.accounts {
 			if account.ID == accountID {
-				if p.manualHolds[accountID] > 0 {
-					return nil, ErrAccountManualHold
-				}
 				if allowed != nil {
 					if _, exists := allowed[accountID]; !exists {
 						return nil, fmt.Errorf("%w：账户 %s 不在本次请求可用的账户中", ErrNoEligibleAccount, accountID)
@@ -3369,9 +3361,6 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	}
 	indices := make([]int, 0, len(p.accounts))
 	for index, account := range p.accounts {
-		if p.manualHolds[account.ID] > 0 {
-			continue
-		}
 		if allowed != nil {
 			if _, exists := allowed[account.ID]; !exists {
 				continue
@@ -3495,29 +3484,6 @@ func (p *AccountPool) Changed() <-chan struct{} {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.changed
-}
-
-// SetManualHold 增加或释放账户的手动占用，占用期间该账户不参与请求调度，释放时唤醒等待者
-func (p *AccountPool) SetManualHold(accountID string, delta int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.manualHolds == nil {
-		p.manualHolds = make(map[string]int)
-	}
-	count := p.manualHolds[accountID] + delta
-	if count <= 0 {
-		delete(p.manualHolds, accountID)
-	} else {
-		p.manualHolds[accountID] = count
-	}
-	p.notifyLocked()
-}
-
-// ManualHold 报告账户当前是否被手动占用
-func (p *AccountPool) ManualHold(accountID string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.manualHolds[accountID] > 0
 }
 
 func (p *AccountPool) notifyLocked() {

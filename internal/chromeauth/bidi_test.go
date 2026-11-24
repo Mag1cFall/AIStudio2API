@@ -3,9 +3,13 @@ package chromeauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,12 +17,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// biDiGoogleCookies 是满足 aistudio.ParseCookieText 登录 Cookie 校验的 BiDi Cookie 集合
-func biDiGoogleCookies() []map[string]any {
+// bidiGoogleCookies 构造满足 aistudio.ParseCookieText 校验的 BiDi Cookie 样本，有效期相对当前时间生成
+func bidiGoogleCookies() []map[string]any {
+	expiry := float64(time.Now().Add(24 * time.Hour).Unix())
 	return []map[string]any{
 		{
 			"name": "__Secure-1PSID", "value": map[string]string{"type": "string", "value": "sid-value"},
-			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": 1900000000.0,
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
 		},
 		{
 			"name": "SAPISID", "value": map[string]string{"type": "string", "value": "sapisid-value"},
@@ -26,42 +31,41 @@ func biDiGoogleCookies() []map[string]any {
 		},
 		{
 			"name": "__Secure-1PAPISID", "value": map[string]string{"type": "string", "value": "papisid1"},
-			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": 1900000000.0,
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
 		},
 		{
 			"name": "__Secure-3PAPISID", "value": map[string]string{"type": "string", "value": "papisid3"},
-			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": 1900000000.0,
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
 		},
 		{
-			// base64 编码的 Cookie 值应被解码
 			"name": "BiDiBase64", "value": map[string]string{"type": "base64", "value": "aGVsbG8="},
 			"domain": ".google.com", "path": "/", "secure": true,
 		},
+		// 模拟 Firefox 按 sourceOrigin 返回时在未分区项之后追加的同站分区同名 Cookie
 		{
-			// 分区 Cookie 应被过滤
-			"name": "PartitionedCookie", "value": map[string]string{"type": "string", "value": "partitioned"},
-			"domain": ".google.com", "path": "/", "secure": true,
-			"partitionKey": map[string]any{"userContext": "default", "sourceOrigin": "https://aistudio.google.com"},
-		},
-		{
-			// 非 google.com 域的 Cookie 在 ParseCookieText 中被过滤，但 chromeauth 层仍原样返回
-			"name": "OtherSite", "value": map[string]string{"type": "string", "value": "other"},
-			"domain": "example.com", "path": "/",
+			"name": "__Secure-1PSID", "value": map[string]string{"type": "string", "value": "same-origin-partitioned"},
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
 		},
 	}
 }
 
-// newBiDiRemoteServer 启动模拟远程调试浏览器：mode 为 bidi-only 时 /json/version 返回 404，
-// 为 firefox-both 时返回带 Firefox 产品名的 CDP 信息，为 chrome 时返回 Chrome 的 CDP 信息
-func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan string) {
+type fakeBiDiOptions struct {
+	mode               string
+	blockCookies       chan struct{}
+	cookiesRequested   chan struct{}
+	failCookiesMessage string
+}
+
+// newBiDiRemoteServer 启动模拟 Firefox WebDriver BiDi 服务端，按真实 Firefox 语义只允许同时存在一个活跃会话，断线不自动销毁会话
+func newBiDiRemoteServer(t *testing.T, opts fakeBiDiOptions) (*httptest.Server, <-chan bool) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
-	ended := make(chan string, 1)
+	ended := make(chan bool, 4)
+	var mu sync.Mutex
+	activeSession := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
-		switch mode {
-		case "bidi-only":
-			http.NotFound(w, nil)
+		switch opts.mode {
 		case "firefox-both":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -69,11 +73,7 @@ func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan st
 				"webSocketDebuggerUrl": "ws://invalid-cdp.example.invalid/devtools/browser/firefox",
 			})
 		default:
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"Browser":              "Chrome/131.0.0.0",
-				"webSocketDebuggerUrl": "",
-			})
+			http.NotFound(w, nil)
 		}
 	})
 	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +83,12 @@ func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan st
 			return
 		}
 		defer conn.Close()
+		var writeMu sync.Mutex
+		write := func(payload any) error {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			return conn.WriteJSON(payload)
+		}
 		for {
 			var message struct {
 				ID     int            `json:"id"`
@@ -94,7 +100,19 @@ func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan st
 			}
 			switch message.Method {
 			case "session.new":
-				_ = conn.WriteJSON(map[string]any{
+				mu.Lock()
+				already := activeSession
+				if !already {
+					activeSession = true
+				}
+				mu.Unlock()
+				if already {
+					_ = write(map[string]any{
+						"id": message.ID, "error": "session not created", "message": "Maximum number of active sessions",
+					})
+					continue
+				}
+				_ = write(map[string]any{
 					"id": message.ID,
 					"result": map[string]any{
 						"sessionId": "test-session",
@@ -104,16 +122,49 @@ func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan st
 					},
 				})
 			case "storage.getCookies":
-				_ = conn.WriteJSON(map[string]any{
+				if opts.cookiesRequested != nil {
+					select {
+					case opts.cookiesRequested <- struct{}{}:
+					default:
+					}
+				}
+				if opts.blockCookies != nil {
+					// 在独立协程中等待放行，确保同一连接上后续到达的 session.end 可被读取循环及时处理
+					msgID := message.ID
+					params := message.Params
+					go func() {
+						<-opts.blockCookies
+						_ = write(map[string]any{
+							"id":     msgID,
+							"result": map[string]any{"cookies": fakeBiDiCookiesForParams(params)},
+						})
+					}()
+					continue
+				}
+				if opts.failCookiesMessage != "" {
+					_ = write(map[string]any{
+						"id": message.ID, "error": "unknown error", "message": opts.failCookiesMessage,
+					})
+					continue
+				}
+				_ = write(map[string]any{
 					"id":     message.ID,
-					"result": map[string]any{"cookies": biDiGoogleCookies()},
+					"result": map[string]any{"cookies": fakeBiDiCookiesForParams(message.Params)},
 				})
 			case "session.end":
-				ended <- message.Params["sessionId"].(string)
-				_ = conn.WriteJSON(map[string]any{"id": message.ID, "result": map[string]any{}})
+				mu.Lock()
+				activeSession = false
+				mu.Unlock()
+				ended <- len(message.Params) == 0
+				if opts.mode == "stall-end" {
+					var discard any
+					_ = conn.ReadJSON(&discard)
+					return
+				}
+				_ = write(map[string]any{"id": message.ID, "result": map[string]any{}})
 				return
 			default:
-				_ = conn.WriteJSON(map[string]any{
+				_ = write(map[string]any{
 					"id": message.ID, "error": "unknown command", "message": message.Method,
 				})
 				return
@@ -125,9 +176,45 @@ func newBiDiRemoteServer(t *testing.T, mode string) (*httptest.Server, <-chan st
 	return server, ended
 }
 
-// newCDPRemoteServer 启动只说 CDP 的模拟 Chromium 调试端口
-func newCDPRemoteServer(t *testing.T) *httptest.Server {
+// fakeBiDiCookiesForParams 按真实 Firefox 行为校验 partition 参数，缺 default 容器或 AI Studio 来源时追加混淆 Cookie
+func fakeBiDiCookiesForParams(params map[string]any) []map[string]any {
+	expiry := float64(time.Now().Add(24 * time.Hour).Unix())
+	cookies := bidiGoogleCookies()
+	partition, _ := params["partition"].(map[string]any)
+	if partition["type"] != "storageKey" || partition["sourceOrigin"] != "https://aistudio.google.com" {
+		// 未限定 AI Studio 存储分区时返回第三方分区 Cookie 放在最前以模拟污染
+		return append([]map[string]any{{
+			"name": "__Secure-1PSID", "value": map[string]string{"type": "string", "value": "third-party-partitioned"},
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
+		}}, cookies...)
+	}
+	if partition["userContext"] != "default" {
+		// 未限定默认容器时混入其他容器的会话 Cookie
+		return append([]map[string]any{{
+			"name": "__Secure-1PSID", "value": map[string]string{"type": "string", "value": "other-container-sid"},
+			"domain": ".google.com", "path": "/", "secure": true, "httpOnly": true, "sameSite": "none", "expiry": expiry,
+		}}, cookies...)
+	}
+	return cookies
+}
+
+// waitSessionEnded 在有界时间内等待服务端收到 session.end，避免漏发时测试挂死
+func waitSessionEnded(t *testing.T, ended <-chan bool) {
 	t.Helper()
+	select {
+	case emptyParams := <-ended:
+		if !emptyParams {
+			t.Fatal("session.end 应传入空参数对象")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待服务端收到 session.end 超时")
+	}
+}
+
+// newCDPRemoteServer 启动只说 CDP 的模拟 Chromium 调试端口
+func newCDPRemoteServer(t *testing.T, failCookies bool) *httptest.Server {
+	t.Helper()
+	expiry := float64(time.Now().Add(24 * time.Hour).Unix())
 	upgrader := websocket.Upgrader{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
@@ -145,8 +232,8 @@ func newCDPRemoteServer(t *testing.T) *httptest.Server {
 			if err := conn.ReadJSON(&message); err != nil {
 				return
 			}
-			if message.Method != "Storage.getCookies" {
-				_ = conn.WriteJSON(map[string]any{"id": message.ID, "error": map[string]string{"message": "unknown method"}})
+			if failCookies || message.Method != "Storage.getCookies" {
+				_ = conn.WriteJSON(map[string]any{"id": message.ID, "error": map[string]string{"message": "storage unavailable"}})
 				return
 			}
 			_ = conn.WriteJSON(map[string]any{
@@ -154,7 +241,7 @@ func newCDPRemoteServer(t *testing.T) *httptest.Server {
 				"result": map[string]any{"cookies": []map[string]any{
 					{
 						"name": "__Secure-1PSID", "value": "sid-value", "domain": ".google.com",
-						"path": "/", "expires": 1900000000.0, "httpOnly": true, "secure": true, "sameSite": "None",
+						"path": "/", "expires": expiry, "httpOnly": true, "secure": true, "sameSite": "None",
 					},
 					{
 						"name": "SAPISID", "value": "sapisid-value", "domain": ".google.com",
@@ -162,11 +249,11 @@ func newCDPRemoteServer(t *testing.T) *httptest.Server {
 					},
 					{
 						"name": "__Secure-1PAPISID", "value": "papisid1", "domain": ".google.com",
-						"path": "/", "expires": 1900000000.0, "httpOnly": true, "secure": true,
+						"path": "/", "expires": expiry, "httpOnly": true, "secure": true,
 					},
 					{
 						"name": "__Secure-3PAPISID", "value": "papisid3", "domain": ".google.com",
-						"path": "/", "expires": 1900000000.0, "httpOnly": true, "secure": true,
+						"path": "/", "expires": expiry, "httpOnly": true, "secure": true,
 					},
 					{
 						"name": "PartitionedCookie", "value": "partitioned", "domain": ".google.com",
@@ -176,7 +263,6 @@ func newCDPRemoteServer(t *testing.T) *httptest.Server {
 			})
 		}
 	})
-	// /json/version 回报指向当前测试服务器的浏览器级 WebSocket
 	var server *httptest.Server
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -191,7 +277,7 @@ func newCDPRemoteServer(t *testing.T) *httptest.Server {
 }
 
 func TestReadBrowserCookiesBiDiFallback(t *testing.T) {
-	server, ended := newBiDiRemoteServer(t, "bidi-only")
+	server, ended := newBiDiRemoteServer(t, fakeBiDiOptions{mode: "bidi-only"})
 	address := strings.TrimPrefix(server.URL, "http://")
 
 	browser, err := ReadBrowserCookies(context.Background(), address)
@@ -201,24 +287,27 @@ func TestReadBrowserCookiesBiDiFallback(t *testing.T) {
 	if browser.Product != "Firefox/128.0.2" {
 		t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
 	}
-	if sessionID := <-ended; sessionID != "test-session" {
-		t.Fatalf("会话结束参数 = %q，期望 test-session", sessionID)
-	}
+	waitSessionEnded(t, ended)
 	state := assertExportedCookieState(t, browser.Cookies)
-	// base64 解码只发生在 BiDi 路径，CDP 的 Storage.getCookies 返回明文值
+	var sawBase64 bool
 	for _, cookie := range state.Cookies {
+		if cookie.Name == "__Secure-1PSID" && cookie.Value != "sid-value" {
+			t.Fatalf("__Secure-1PSID = %q，期望未分区的 sid-value", cookie.Value)
+		}
 		if cookie.Name == "BiDiBase64" {
 			if cookie.Value != "hello" {
 				t.Fatalf("base64 Cookie 值 = %q，期望 hello", cookie.Value)
 			}
-			return
+			sawBase64 = true
 		}
 	}
-	t.Fatal("缺少解码后的 BiDiBase64 Cookie")
+	if !sawBase64 {
+		t.Fatal("缺少解码后的 BiDiBase64 Cookie")
+	}
 }
 
 func TestReadBrowserCookiesFirefoxWithBothProtocols(t *testing.T) {
-	server, _ := newBiDiRemoteServer(t, "firefox-both")
+	server, ended := newBiDiRemoteServer(t, fakeBiDiOptions{mode: "firefox-both"})
 	address := strings.TrimPrefix(server.URL, "http://")
 
 	browser, err := ReadBrowserCookies(context.Background(), address)
@@ -228,26 +317,145 @@ func TestReadBrowserCookiesFirefoxWithBothProtocols(t *testing.T) {
 	if browser.Product != "Firefox/128.0.2" {
 		t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
 	}
+	waitSessionEnded(t, ended)
 }
 
 func TestReadBrowserCookiesDirectBiDiURL(t *testing.T) {
-	server, ended := newBiDiRemoteServer(t, "bidi-only")
-	address := "ws://" + strings.TrimPrefix(server.URL, "http://") + "/session"
+	for _, suffix := range []string{"", "/", "/session", "/session/"} {
+		t.Run("path="+suffix, func(t *testing.T) {
+			server, ended := newBiDiRemoteServer(t, fakeBiDiOptions{mode: "bidi-only"})
+			address := "ws://" + strings.TrimPrefix(server.URL, "http://") + suffix
 
+			browser, err := ReadBrowserCookies(context.Background(), address)
+			if err != nil {
+				t.Fatalf("直连 BiDi WebSocket (%q) 失败: %v", address, err)
+			}
+			if browser.Product != "Firefox/128.0.2" {
+				t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
+			}
+			waitSessionEnded(t, ended)
+		})
+	}
+}
+
+func TestReadBrowserCookiesBiDiCancelReleasesSession(t *testing.T) {
+	block := make(chan struct{})
+	requested := make(chan struct{}, 1)
+	server, ended := newBiDiRemoteServer(t, fakeBiDiOptions{
+		mode:             "bidi-only",
+		blockCookies:     block,
+		cookiesRequested: requested,
+	})
+	address := strings.TrimPrefix(server.URL, "http://")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadBrowserCookies(ctx, address)
+		done <- err
+	}()
+	select {
+	case <-requested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 storage.getCookies 请求超时")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("取消后的错误 = %v，期望 context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("取消后 ReadBrowserCookies 未及时返回")
+	}
+	waitSessionEnded(t, ended)
+	close(block)
+
+	// 会话已正确结束，第二次扫描必须能立即新建会话并读出 Cookie
 	browser, err := ReadBrowserCookies(context.Background(), address)
 	if err != nil {
-		t.Fatalf("直连 BiDi WebSocket 失败: %v", err)
+		t.Fatalf("取消后第二次 BiDi 读取失败: %v", err)
 	}
 	if browser.Product != "Firefox/128.0.2" {
 		t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
 	}
-	if sessionID := <-ended; sessionID != "test-session" {
-		t.Fatalf("会话结束参数 = %q，期望 test-session", sessionID)
+	waitSessionEnded(t, ended)
+}
+
+func TestReadBrowserCookiesBiDiSessionEndTimeout(t *testing.T) {
+	previous := bidiSessionEndTimeout
+	bidiSessionEndTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { bidiSessionEndTimeout = previous })
+
+	server, ended := newBiDiRemoteServer(t, fakeBiDiOptions{mode: "stall-end"})
+	started := time.Now()
+	browser, err := ReadBrowserCookies(context.Background(), strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("BiDi 读取失败: %v", err)
+	}
+	if browser.Product != "Firefox/128.0.2" {
+		t.Fatalf("产品名 = %q，期望 Firefox/128.0.2", browser.Product)
+	}
+	waitSessionEnded(t, ended)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("session.end 阻塞过久: %v", elapsed)
+	}
+}
+
+func TestReadBrowserCookiesPreservesProductOnReadError(t *testing.T) {
+	cdpServer := newCDPRemoteServer(t, true)
+	cdpBrowser, err := ReadBrowserCookies(context.Background(), strings.TrimPrefix(cdpServer.URL, "http://"))
+	if err == nil {
+		t.Fatal("CDP Cookie 读取失败应当返回错误")
+	}
+	if cdpBrowser.Product != "Chrome/131.0.0.0" {
+		t.Fatalf("CDP 失败时产品名 = %q，期望保留 Chrome/131.0.0.0", cdpBrowser.Product)
+	}
+
+	bidiServer, ended := newBiDiRemoteServer(t, fakeBiDiOptions{mode: "bidi-only", failCookiesMessage: "storage error"})
+	bidiBrowser, err := ReadBrowserCookies(context.Background(), strings.TrimPrefix(bidiServer.URL, "http://"))
+	if err == nil {
+		t.Fatal("BiDi Cookie 读取失败应当返回错误")
+	}
+	if bidiBrowser.Product != "Firefox/128.0.2" {
+		t.Fatalf("BiDi 失败时产品名 = %q，期望保留 Firefox/128.0.2", bidiBrowser.Product)
+	}
+	waitSessionEnded(t, ended)
+}
+
+func TestReadBrowserCookiesVersionReadErrorDoesNotFallbackToBiDi(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			t.Errorf("收到非预期的 BiDi 回退请求 %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"Browser":"Chrome"`))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		if hijacker, ok := w.(http.Hijacker); ok {
+			conn, _, err := hijacker.Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := ReadBrowserCookies(context.Background(), strings.TrimPrefix(server.URL, "http://"))
+	if err == nil {
+		t.Fatal("中断的 /json/version 响应应当返回错误")
+	}
+	if !strings.Contains(err.Error(), "读取浏览器调试信息") || strings.Contains(err.Error(), "WebDriver BiDi") {
+		t.Fatalf("错误 = %q，期望保留读取错误而不回退 BiDi", err.Error())
 	}
 }
 
 func TestReadBrowserCookiesCDP(t *testing.T) {
-	server := newCDPRemoteServer(t)
+	server := newCDPRemoteServer(t, false)
 	address := strings.TrimPrefix(server.URL, "http://")
 
 	browser, err := ReadBrowserCookies(context.Background(), address)
@@ -310,59 +518,39 @@ func TestBiDiCookiesToExport(t *testing.T) {
 	items := []bidiCookie{
 		{
 			Name: "Persistent", Domain: ".google.com", Path: "/", Secure: true, SameSite: "lax", Expiry: &expiry,
-			Value: struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}{Type: "string", Value: "persisted"},
+			Value: bidiBytesValue{Type: "string", Value: "persisted"},
+		},
+		{
+			// 同键后出现的项模拟同站分区副本，应保留先出现的未分区值
+			Name: "Persistent", Domain: ".google.com", Path: "/", Secure: true, SameSite: "lax", Expiry: &expiry,
+			Value: bidiBytesValue{Type: "string", Value: "partitioned-duplicate"},
 		},
 		{
 			Name: "Session", Domain: ".google.com",
-			Value: struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}{Type: "string", Value: "session"},
+			Value: bidiBytesValue{Type: "string", Value: "session"},
 		},
 		{
 			Name: "Encoded", Domain: ".google.com",
-			Value: struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}{Type: "base64", Value: "aGVsbG8="},
-		},
-		{
-			Name: "Partitioned", Domain: ".google.com",
-			Value: struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}{Type: "string", Value: "x"},
-			PartitionKey: json.RawMessage(`{"userContext":"default"}`),
-		},
-		{
-			Name: "NullPartition", Domain: ".google.com",
-			Value: struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}{Type: "string", Value: "y"},
-			PartitionKey: json.RawMessage("null"),
+			Value: bidiBytesValue{Type: "base64", Value: "aGVsbG8="},
 		},
 		{Name: "", Domain: ".google.com"},
 	}
-	cookies, err := biDiCookiesToExport(items)
+	cookies, err := bidiCookiesToExport(items)
 	if err != nil {
 		t.Fatalf("转换 BiDi Cookie 失败: %v", err)
 	}
-	names := make(map[string]browserCookieExport, len(cookies))
+	names := make(map[string]aistudio.StateCookie, len(cookies))
 	for _, cookie := range cookies {
 		names[cookie.Name] = cookie
 	}
-	if len(cookies) != 4 {
-		t.Fatalf("保留 Cookie 数 = %d，期望 4", len(cookies))
+	if len(cookies) != 3 {
+		t.Fatalf("保留 Cookie 数 = %d，期望 3", len(cookies))
 	}
-	if names["Persistent"].Expires != expiry || names["Persistent"].Session {
-		t.Fatal("持久 Cookie 的过期时间转换错误")
+	if names["Persistent"].Expires != expiry || names["Persistent"].Value != "persisted" {
+		t.Fatalf("持久 Cookie 转换错误: %+v", names["Persistent"])
 	}
-	if names["Session"].Expires != 0 || !names["Session"].Session {
-		t.Fatal("会话 Cookie 应标记 session 且没有过期时间")
+	if names["Session"].Expires != -1 {
+		t.Fatalf("会话 Cookie Expires = %v，期望 -1", names["Session"].Expires)
 	}
 	if names["Session"].Path != "/" {
 		t.Fatal("空路径应补为 /")
@@ -370,69 +558,63 @@ func TestBiDiCookiesToExport(t *testing.T) {
 	if names["Encoded"].Value != "hello" {
 		t.Fatalf("base64 值 = %q，期望 hello", names["Encoded"].Value)
 	}
-	if names["NullPartition"].SameSite != "" {
-		t.Fatal("SameSite 缺省应为空字符串")
-	}
 
 	invalid := []bidiCookie{{
-		Name: "BadBase64", Domain: ".google.com",
-		Value: struct {
-			Type  string `json:"type"`
-			Value string `json:"value"`
-		}{Type: "base64", Value: "not-base64!"},
+		Name:  "BadBase64",
+		Domain: ".google.com",
+		Value: bidiBytesValue{Type: "base64", Value: "not-base64!"},
 	}}
-	if _, err := biDiCookiesToExport(invalid); err == nil {
+	if _, err := bidiCookiesToExport(invalid); err == nil {
 		t.Fatal("非法 base64 应当返回错误")
 	}
 }
 
-func TestBidiSessionEndpoint(t *testing.T) {
+func TestDebugAddress(t *testing.T) {
+	userData := t.TempDir()
+	if err := os.WriteFile(filepath.Join(userData, "DevToolsActivePort"), []byte("9333\n/devtools/browser/x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extFirefox := t.TempDir()
+	if err := os.WriteFile(filepath.Join(extFirefox, "WebDriverBiDiServer.json"), []byte(`{"ws_host":"127.0.0.1","ws_port":9444}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ownCamoufox := filepath.Join(t.TempDir(), "aistudio-camoufox-12345")
+	if err := os.MkdirAll(ownCamoufox, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ownCamoufox, "WebDriverBiDiServer.json"), []byte(`{"ws_host":"127.0.0.1","ws_port":9555}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockedCamoufox := t.TempDir()
+	if err := os.WriteFile(filepath.Join(lockedCamoufox, ".aistudio2api-profile.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lockedCamoufox, "WebDriverBiDiServer.json"), []byte(`{"ws_host":"127.0.0.1","ws_port":9556}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
-		name    string
-		input   string
-		expect  string
-		wantErr bool
+		name   string
+		args   []string
+		expect string
 	}{
-		{name: "主机端口", input: "127.0.0.1:9222", expect: "ws://127.0.0.1:9222/session"},
-		{name: "HTTP 地址", input: "http://127.0.0.1:9222", expect: "ws://127.0.0.1:9222/session"},
-		{name: "HTTPS 地址", input: "https://127.0.0.1:9222", expect: "wss://127.0.0.1:9222/session"},
-		{name: "WS 根路径补 session", input: "ws://127.0.0.1:9222", expect: "ws://127.0.0.1:9222/session"},
-		{name: "WS session 保持不变", input: "ws://127.0.0.1:9222/session", expect: "ws://127.0.0.1:9222/session"},
-		{name: "无效地址", input: "bad url", wantErr: true},
-		{name: "空地址", input: "", wantErr: true},
+		{name: "等号形式", args: []string{"firefox.exe", "--remote-debugging-port=9222"}, expect: "127.0.0.1:9222"},
+		{name: "空格分隔", args: []string{"firefox.exe", "--remote-debugging-port", "9225", "-headless"}, expect: "127.0.0.1:9225"},
+		{name: "单短横线等号", args: []string{"firefox.exe", "-remote-debugging-port=9223"}, expect: "127.0.0.1:9223"},
+		{name: "单短横线空格", args: []string{"firefox.exe", "-remote-debugging-port", "9224"}, expect: "127.0.0.1:9224"},
+		{name: "Firefox 省略端口默认 9222", args: []string{"firefox.exe", "--remote-debugging-port", "-headless"}, expect: "127.0.0.1:9222"},
+		{name: "Firefox 末尾省略端口默认 9222", args: []string{"firefox.exe", "-remote-debugging-port"}, expect: "127.0.0.1:9222"},
+		{name: "Chromium 端口 0 读 DevToolsActivePort", args: []string{"chrome.exe", "--remote-debugging-port=0", "--user-data-dir=" + userData}, expect: "127.0.0.1:9333"},
+		{name: "Chromium 空格参数读 DevToolsActivePort", args: []string{"chrome.exe", "--remote-debugging-port", "0", "--user-data-dir", userData}, expect: "127.0.0.1:9333"},
+		{name: "外部 Firefox 端口 0 读 WebDriverBiDiServer.json", args: []string{"firefox.exe", "--remote-debugging-port=0", "-profile", extFirefox}, expect: "127.0.0.1:9444"},
+		{name: "内置 Camoufox 前缀目录不纳入扫描", args: []string{"camoufox.exe", "--remote-debugging-port=0", "-no-remote", "-headless", "-profile", ownCamoufox}, expect: ""},
+		{name: "内置 Camoufox 锁文件目录不纳入扫描", args: []string{"camoufox.exe", "--remote-debugging-port=0", "-profile", lockedCamoufox}, expect: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			endpoint, err := bidiSessionEndpoint(tc.input)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("输入 %q 应当返回错误", tc.input)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("输入 %q 返回错误: %v", tc.input, err)
-			}
-			if endpoint != tc.expect {
-				t.Fatalf("端点 = %q，期望 %q", endpoint, tc.expect)
+			if got := debugAddress(tc.args); got != tc.expect {
+				t.Fatalf("debugAddress(%v) = %q，期望 %q", tc.args, got, tc.expect)
 			}
 		})
-	}
-}
-
-func TestBidiProductName(t *testing.T) {
-	cases := []struct {
-		name, version, expect string
-	}{
-		{name: "firefox", version: "128.0.2", expect: "Firefox/128.0.2"},
-		{name: "camoufox", version: "", expect: "Camoufox"},
-		{name: "", version: "128", expect: bidiProductFallback + "/128"},
-		{name: "", version: "", expect: bidiProductFallback},
-		{name: "Firefox", version: "1", expect: "Firefox/1"},
-	}
-	for _, tc := range cases {
-		if got := bidiProductName(tc.name, tc.version); got != tc.expect {
-			t.Fatalf("bidiProductName(%q, %q) = %q，期望 %q", tc.name, tc.version, got, tc.expect)
-		}
 	}
 }

@@ -6,71 +6,65 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/gorilla/websocket"
 )
 
+// bidiSessionEndTimeout 是关闭 BiDi 会话的最长时间
+var bidiSessionEndTimeout = 3 * time.Second
+
 const (
-	// bidiHandshakeTimeout 是 BiDi WebSocket 握手的最长时间
-	bidiHandshakeTimeout = 15 * time.Second
-	// bidiSessionEndTimeout 是关闭 BiDi 会话的最长时间
-	bidiSessionEndTimeout = 3 * time.Second
+	// bidiDefaultUserContext 是 Firefox 普通窗口使用的默认用户上下文
+	bidiDefaultUserContext = "default"
+	// bidiCookiePartitionOrigin 是读取 AI Studio 相关 Cookie 时传给 storage.getCookies 的存储分区来源
+	bidiCookiePartitionOrigin = "https://aistudio.google.com"
+	// bidiProductFallback 是 BiDi 会话没有回报产品名时显示的浏览器名
+	bidiProductFallback = "Firefox (WebDriver BiDi)"
 )
 
-// bidiProductFallback 是 BiDi 会话没有回报产品名时显示的浏览器名
-const bidiProductFallback = "Firefox (WebDriver BiDi)"
+// bidiBytesValue 是 WebDriver BiDi 协议的 BytesValue，type 为 string 时 Value 为明文，为 base64 时是标准 base64
+type bidiBytesValue struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
 
 // bidiCookie 是 WebDriver BiDi storage.getCookies 返回的 Cookie
 type bidiCookie struct {
-	Name string `json:"name"`
-	// Value 是 BytesRemoteValue，type 为 string 时 Value 为明文，为 base64 时是标准 base64
-	Value struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	} `json:"value"`
-	Domain       string          `json:"domain"`
-	Path         string          `json:"path"`
-	HTTPOnly     bool            `json:"httpOnly"`
-	Secure       bool            `json:"secure"`
-	SameSite     string          `json:"sameSite"`
-	Expiry       *float64        `json:"expiry"`
-	PartitionKey json.RawMessage `json:"partitionKey"`
+	Name     string         `json:"name"`
+	Value    bidiBytesValue `json:"value"`
+	Domain   string         `json:"domain"`
+	Path     string         `json:"path"`
+	HTTPOnly bool           `json:"httpOnly"`
+	Secure   bool           `json:"secure"`
+	SameSite string         `json:"sameSite"`
+	Expiry   *float64       `json:"expiry"`
 }
 
-// browserCookieExport 是 aistudio.ParseCookieText 接受的浏览器扩展导出 Cookie 形状
-type browserCookieExport struct {
-	Name     string  `json:"name"`
-	Value    string  `json:"value"`
-	Domain   string  `json:"domain"`
-	Path     string  `json:"path"`
-	Expires  float64 `json:"expires,omitempty"`
-	Session  bool    `json:"session,omitempty"`
-	HTTPOnly bool    `json:"httpOnly"`
-	Secure   bool    `json:"secure"`
-	SameSite string  `json:"sameSite,omitempty"`
-}
-
-// readBiDiBrowser 经 Firefox WebDriver BiDi 读取浏览器全部未分区 Cookie，返回产品名与扩展导出形状的 Cookie JSON
+// readBiDiBrowser 经 Firefox WebDriver BiDi 读取默认上下文下 AI Studio 存储分区的 Cookie，返回产品名与 storage state Cookie 数组 JSON
 func readBiDiBrowser(ctx context.Context, address string) (BrowserCookies, error) {
 	endpoint, err := bidiSessionEndpoint(address)
 	if err != nil {
 		return BrowserCookies{}, err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: bidiHandshakeTimeout}
-	conn, _, err := dialer.DialContext(ctx, endpoint, nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, nil)
 	if err != nil {
 		return BrowserCookies{}, fmt.Errorf("连接 Firefox WebDriver BiDi 调试地址: %w", err)
 	}
-	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
-	client := &bidiSession{conn: conn}
+	client := newBiDiSession(conn)
+	defer client.close()
 
 	session, err := client.call(ctx, "session.new", map[string]any{"capabilities": map[string]any{}})
 	if err != nil {
+		if ctx.Err() != nil {
+			endCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bidiSessionEndTimeout)
+			_, _ = client.call(endCtx, "session.end", map[string]any{})
+			cancel()
+		}
 		return BrowserCookies{}, fmt.Errorf("创建 WebDriver BiDi 会话: %w", err)
 	}
 	var info struct {
@@ -83,49 +77,75 @@ func readBiDiBrowser(ctx context.Context, address string) (BrowserCookies, error
 	if err := json.Unmarshal(session, &info); err != nil || info.SessionID == "" {
 		return BrowserCookies{}, errors.New("WebDriver BiDi 会话没有返回 sessionId")
 	}
+	product := bidiProductName(info.Capabilities.BrowserName, info.Capabilities.BrowserVersion)
 	defer func() {
-		// 用脱离调用方取消的上下文结束会话，避免浏览器侧残留会话；失败时连接关闭也会让浏览器自行回收
 		endCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bidiSessionEndTimeout)
 		defer cancel()
-		_, _ = client.call(endCtx, "session.end", map[string]any{"sessionId": info.SessionID})
+		_, _ = client.call(endCtx, "session.end", map[string]any{})
 	}()
 
-	result, err := client.call(ctx, "storage.getCookies", map[string]any{})
+	result, err := client.call(ctx, "storage.getCookies", map[string]any{
+		"partition": map[string]any{
+			"type":         "storageKey",
+			"userContext":  bidiDefaultUserContext,
+			"sourceOrigin": bidiCookiePartitionOrigin,
+		},
+	})
 	if err != nil {
-		return BrowserCookies{}, fmt.Errorf("经 WebDriver BiDi 读取浏览器 Cookie: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("经 WebDriver BiDi 读取浏览器 Cookie: %w", err)
 	}
 	var stored struct {
 		Cookies []bidiCookie `json:"cookies"`
 	}
 	if err := json.Unmarshal(result, &stored); err != nil {
-		return BrowserCookies{}, fmt.Errorf("解析 WebDriver BiDi Cookie: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("解析 WebDriver BiDi Cookie: %w", err)
 	}
-	cookies, err := biDiCookiesToExport(stored.Cookies)
+	cookies, err := bidiCookiesToExport(stored.Cookies)
 	if err != nil {
-		return BrowserCookies{}, err
+		return BrowserCookies{Product: product}, err
 	}
 	data, err := json.Marshal(cookies)
 	if err != nil {
-		return BrowserCookies{}, fmt.Errorf("编码浏览器 Cookie: %w", err)
+		return BrowserCookies{Product: product}, fmt.Errorf("编码浏览器 Cookie: %w", err)
 	}
 	return BrowserCookies{
-		Product: bidiProductName(info.Capabilities.BrowserName, info.Capabilities.BrowserVersion),
+		Product: product,
 		Cookies: string(data),
 	}, nil
 }
 
-// bidiSession 在一条 WebDriver BiDi WebSocket 上依次发送命令
-type bidiSession struct {
-	conn *websocket.Conn
-	id   int
+// bidiReply 是读取协程交付的一条命令响应或读取错误
+type bidiReply struct {
+	id      int
+	result  json.RawMessage
+	errCode string
+	errMsg  string
+	readErr error
 }
 
-// call 发送一条 BiDi 命令并等待同一 id 的响应，事件消息没有 id，读取后跳过
-func (session *bidiSession) call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
-	session.id++
-	if err := session.conn.WriteJSON(map[string]any{"id": session.id, "method": method, "params": params}); err != nil {
-		return nil, err
+// bidiSession 在一条 WebDriver BiDi WebSocket 上依次发送命令，独立读取协程保证取消上下文后连接仍可发送 session.end
+type bidiSession struct {
+	conn    *websocket.Conn
+	id      int
+	replies chan bidiReply
+	done    chan struct{}
+}
+
+// newBiDiSession 创建 BiDi 会话并启动响应读取协程
+func newBiDiSession(conn *websocket.Conn) *bidiSession {
+	session := &bidiSession{
+		conn:    conn,
+		replies: make(chan bidiReply, 8),
+		done:    make(chan struct{}),
 	}
+	go session.readLoop()
+	return session
+}
+
+// readLoop 持续读取连接响应并投递到 replies，连接关闭或出错时退出
+func (session *bidiSession) readLoop() {
+	defer close(session.done)
+	defer close(session.replies)
 	for {
 		var response struct {
 			ID      int             `json:"id"`
@@ -134,18 +154,71 @@ func (session *bidiSession) call(ctx context.Context, method string, params map[
 			Message string          `json:"message"`
 		}
 		if err := session.conn.ReadJSON(&response); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, err
+			session.replies <- bidiReply{readErr: err}
+			return
 		}
-		if response.ID != session.id {
+		if response.ID == 0 {
 			continue
 		}
-		if response.Error != "" {
-			return nil, fmt.Errorf("%s: %s", response.Error, response.Message)
+		session.replies <- bidiReply{
+			id:      response.ID,
+			result:  response.Result,
+			errCode: response.Error,
+			errMsg:  response.Message,
 		}
-		return response.Result, nil
+	}
+}
+
+// close 关闭底层连接并等待读取协程退出
+func (session *bidiSession) close() {
+	_ = session.conn.Close()
+	for range session.replies {
+	}
+	<-session.done
+}
+
+// call 发送一条 BiDi 命令并等待同一 id 的响应，非匹配 id 的消息忽略，ctx 取消时立即返回而不关闭连接
+func (session *bidiSession) call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	session.id++
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = session.conn.SetWriteDeadline(deadline)
+	} else {
+		_ = session.conn.SetWriteDeadline(time.Time{})
+	}
+	if err := session.conn.WriteJSON(map[string]any{"id": session.id, "method": method, "params": params}); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case reply, ok := <-session.replies:
+			if !ok {
+				return nil, io.EOF
+			}
+			if reply.readErr != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, reply.readErr
+			}
+			if reply.id != session.id {
+				continue
+			}
+			if reply.errCode != "" {
+				if reply.errMsg == "" {
+					return nil, errors.New(reply.errCode)
+				}
+				return nil, fmt.Errorf("%s: %s", reply.errCode, reply.errMsg)
+			}
+			return reply.result, nil
+		}
 	}
 }
 
@@ -157,17 +230,14 @@ func bidiSessionEndpoint(address string) (string, error) {
 		if err != nil || parsed.Host == "" {
 			return "", fmt.Errorf("浏览器调试地址无效，例如 127.0.0.1:9222")
 		}
-		if parsed.Path == "" || parsed.Path == "/" {
+		if path := strings.TrimSuffix(parsed.Path, "/"); path == "" || path == "/session" {
 			parsed.Path = "/session"
 		}
 		return parsed.String(), nil
 	}
-	if !strings.Contains(address, "://") {
-		address = "http://" + address
-	}
-	parsed, err := url.Parse(address)
-	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("浏览器调试地址无效，例如 127.0.0.1:9222")
+	parsed, err := parseDebugHTTPURL(address)
+	if err != nil {
+		return "", err
 	}
 	scheme := "ws"
 	if parsed.Scheme == "https" {
@@ -176,16 +246,23 @@ func bidiSessionEndpoint(address string) (string, error) {
 	return scheme + "://" + parsed.Host + "/session", nil
 }
 
-// biDiCookiesToExport 把 BiDi Cookie 转为扩展导出形状，跳过分区 Cookie 与缺少名称或域的条目
-func biDiCookiesToExport(items []bidiCookie) ([]browserCookieExport, error) {
-	cookies := make([]browserCookieExport, 0, len(items))
+// bidiCookiesToExport 把 BiDi Cookie 转为 StateCookie 列表，跳过缺少名称或域的条目，同键保留先出现的未分区项
+func bidiCookiesToExport(items []bidiCookie) ([]aistudio.StateCookie, error) {
+	cookies := make([]aistudio.StateCookie, 0, len(items))
+	seen := make(map[[3]string]struct{}, len(items))
 	for _, item := range items {
-		if len(item.PartitionKey) > 0 && string(item.PartitionKey) != "null" {
-			continue
-		}
 		if item.Name == "" || item.Domain == "" {
 			continue
 		}
+		path := item.Path
+		if path == "" {
+			path = "/"
+		}
+		key := [3]string{strings.ToLower(item.Domain), path, item.Name}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 		value := item.Value.Value
 		if item.Value.Type == "base64" {
 			decoded, err := base64.StdEncoding.DecodeString(value)
@@ -194,19 +271,14 @@ func biDiCookiesToExport(items []bidiCookie) ([]browserCookieExport, error) {
 			}
 			value = string(decoded)
 		}
-		export := browserCookieExport{
-			Name: item.Name, Value: value, Domain: item.Domain, Path: item.Path,
-			HTTPOnly: item.HTTPOnly, Secure: item.Secure, SameSite: item.SameSite,
+		expires := float64(-1)
+		if item.Expiry != nil {
+			expires = *item.Expiry
 		}
-		if export.Path == "" {
-			export.Path = "/"
-		}
-		if item.Expiry == nil {
-			export.Session = true
-		} else {
-			export.Expires = *item.Expiry
-		}
-		cookies = append(cookies, export)
+		cookies = append(cookies, aistudio.StateCookie{
+			Name: item.Name, Value: value, Domain: item.Domain, Path: path,
+			Expires: expires, HTTPOnly: item.HTTPOnly, Secure: item.Secure, SameSite: item.SameSite,
+		})
 	}
 	return cookies, nil
 }

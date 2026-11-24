@@ -781,7 +781,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 | --- | --- | --- |
 | 从 Chrome 导入 | 本机 Chrome 中已登录的账户 | 可多选，Windows 可用 |
 | 粘贴 Cookie | Cookie 扩展导出的 JSON、请求头中的 Cookie 一行或 Netscape cookies.txt | 自动识别其中登录的账户邮箱 |
-| 从指纹浏览器导入 | 本机指纹浏览器与 Chromium 中已登录 AI Studio 的窗口 | 浏览器需开启远程调试，Chromium 走 CDP，Firefox 内核走 WebDriver BiDi |
+| 从指纹浏览器导入 | 本机指纹浏览器、Chromium 与 Firefox 中已登录 AI Studio 的窗口 | 浏览器需开启远程调试，Chromium 走 CDP，Firefox 内核走 WebDriver BiDi |
 | 浏览器登录 | 独立的 Camoufox 窗口 | 登录后自动识别邮箱并授权 Google Drive |
 | 远程添加 | 另一台能登录 Google 的电脑 | 见 [命令](#命令) 的 `setup --remote` |
 
@@ -798,12 +798,6 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 - 在本机打开可见的 Camoufox 窗口；Google 要求验证身份时，在该窗口或手机上确认
 - 服务器没有图形界面，或从其他电脑、经反向代理打开管理页面时，“浏览器登录”与“重新登录”的 Camoufox 在服务器上无头运行，画面显示在管理页面的全屏登录窗口中，在其中点击、输入与粘贴，点“取消”结束登录
 - 页内登录窗口可以隐藏，之后从任务行再次打开；经反向代理访问时需要转发 `/api/login-view/` 的 WebSocket
-
-远程操作常驻浏览器：
-
-- 生成服务运行时，账户行的“远程操作”把该账户的常驻 Camoufox 画面接入管理页全屏窗口，可在地址栏输入网址、前进后退、刷新、开关标签页，并直接点击、输入与处理对话框，用于完成验证、授权邮件等操作
-- 窗口连接期间账户不参与请求调度，断开后自动恢复；操作产生的 Cookie 在断开时全量回写账户状态，浏览器连接中断时窗口显示原因并结束远程操作
-- 需要 Camoufox 后端与已就绪的常驻 Worker；经反向代理访问时需要转发 `/api/accounts/` 下的 WebSocket
 
 账户操作随状态显示，点击账户行的状态可把账户改为“就绪”或“已停用”：
 
