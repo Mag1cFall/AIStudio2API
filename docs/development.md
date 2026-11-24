@@ -374,6 +374,7 @@ Camoufox 运行中与服务的 WebDriver BiDi 连接断开时，服务最多等 
 | `STRIP_THOUGHT_SIGNATURES` | 去掉历史中的思考签名 | `false` |
 | `SEARCH_MODEL_ALIASES` | 提供 `-search` 型号 | `true` |
 | `DISCOVER_HIDDEN_MODELS` | 探测官网隐藏模型 | `false` |
+| `DISABLE_INTERACTION_MODELS` | kind=2 interaction 模型改走 GenerateContent | `false` |
 | `GOOGLE_SEARCH` | 全模型启用 Google 搜索 | `false` |
 | `CONTINUATION_REWRITE` | 末尾 assistant 轮改写为续写 | `true` |
 | `CONTINUATION_PROMPT` | 续写提示词 | 内置英文续写句 |
