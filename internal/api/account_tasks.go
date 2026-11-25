@@ -411,7 +411,7 @@ func (s *server) handleImportChromeAccounts(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleImportCookieAccounts 在账户任务中同时导入 Cookie 文本或调试浏览器中的账户，各账户独立保存
+// handleImportCookieAccounts 在账户任务中同时导入 Cookie 文本或调试浏览器中的账户，同一调试地址只读取一次 Cookie，各账户独立保存
 func (s *server) handleImportCookieAccounts(w http.ResponseWriter, r *http.Request) {
 	var input cookieImportRequest
 	if err := decodeJSON(r, &input); err != nil {
@@ -426,22 +426,63 @@ func (s *server) handleImportCookieAccounts(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	s.startAccountTask(w, r, task, func(ctx context.Context, update accountTaskUpdate) {
+		reads := newBrowserCookieCache(ctx)
 		runAccountTaskItems(ctx, update, len(input.Items), func(ctx context.Context, index int) (AdminAccount, error) {
-			return s.importCookieAccount(ctx, input.Items[index], input.Proxy, input.Locale, input.Timezone)
+			return s.importCookieAccount(ctx, input.Items[index], input.Proxy, input.Locale, input.Timezone, reads.read)
 		})
 	})
 }
 
+// browserCookieCache 在单次导入任务内按远程调试地址复用 Cookie 读取结果，避免同一 Firefox 浏览器并发建会话失败
+type browserCookieCache struct {
+	taskCtx context.Context
+	mu      sync.Mutex
+	entries map[string]*browserCookieEntry
+}
+
+// browserCookieEntry 是一次按调试地址读取 Cookie 的进行中或已完成结果
+type browserCookieEntry struct {
+	done    chan struct{}
+	cookies string
+	err     error
+}
+
+func newBrowserCookieCache(taskCtx context.Context) *browserCookieCache {
+	return &browserCookieCache{taskCtx: taskCtx, entries: make(map[string]*browserCookieEntry)}
+}
+
+// read 返回 address 对应浏览器的 Cookie，同一地址在任务内只读取一次
+func (cache *browserCookieCache) read(ctx context.Context, address string) (string, error) {
+	cache.mu.Lock()
+	entry, exists := cache.entries[address]
+	if !exists {
+		entry = &browserCookieEntry{done: make(chan struct{})}
+		cache.entries[address] = entry
+		cache.mu.Unlock()
+		browser, err := chromeauth.ReadBrowserCookies(cache.taskCtx, address)
+		entry.cookies, entry.err = browser.Cookies, err
+		close(entry.done)
+		return entry.cookies, entry.err
+	}
+	cache.mu.Unlock()
+	select {
+	case <-entry.done:
+		return entry.cookies, entry.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 // importCookieAccount 读取调试浏览器的 Cookie 或解析 Cookie 文本，以识别会话时得到的邮箱为标签导入第 auth_user 个会话登录的账户
-func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem, proxy string, locale string, timezone string) (AdminAccount, error) {
+func (s *server) importCookieAccount(ctx context.Context, item cookieImportItem, proxy string, locale string, timezone string, readBrowser func(context.Context, string) (string, error)) (AdminAccount, error) {
 	cookies := item.Cookies
 	if address := strings.TrimSpace(item.CDP); address != "" {
 		ReportTaskStep(ctx, TaskStepReading)
-		browser, err := chromeauth.ReadCDPBrowser(ctx, address)
+		var err error
+		cookies, err = readBrowser(ctx, address)
 		if err != nil {
 			return AdminAccount{}, err
 		}
-		cookies = browser.Cookies
 	}
 	state, err := aistudio.ParseCookieText(cookies)
 	if err != nil {

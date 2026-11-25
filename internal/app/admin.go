@@ -392,6 +392,9 @@ func restrictedChromeSelection(accounts []chromeauth.Account, ids []string, exis
 	return nil
 }
 
+// browserDebugReadTimeout 是扫描单个本机远程调试浏览器读取 Cookie 的最长时间
+const browserDebugReadTimeout = 15 * time.Second
+
 // CookieBrowsers 列出本机开启远程调试的浏览器，读取其 Cookie 并经 proxy 识别其中各会话登录 AI Studio 的账户，每个账户一项，proxy 为空时用默认出口
 func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error) {
 	addresses, err := chromeauth.DebugAddresses(ctx)
@@ -405,14 +408,16 @@ func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]
 	for index, address := range addresses {
 		group.Go(func() {
 			browser := api.CookieBrowser{Address: address}
-			name, err := chromeauth.DebugBrowserName(ctx, address)
+			readCtx, cancel := context.WithTimeout(ctx, browserDebugReadTimeout)
+			source, err := chromeauth.ReadBrowserCookies(readCtx, address)
+			cancel()
+			browser.Browser = source.Product
 			if err != nil {
 				browser.Error = err.Error()
 				browsers[index] = []api.CookieBrowser{browser}
 				return
 			}
-			browser.Browser = name
-			accounts, err := admin.readCookieBrowser(ctx, &browser, proxy)
+			accounts, err := admin.readCookieBrowser(ctx, &browser, proxy, source.Cookies)
 			browser.SignedOut = errors.Is(err, chromeauth.ErrSignedOut) || errors.Is(err, aistudio.ErrLoginCookieMissing)
 			if err != nil && !browser.SignedOut {
 				browser.Error = err.Error()
@@ -424,13 +429,9 @@ func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]
 	return append([]api.CookieBrowser{}, slices.Concat(browsers...)...), nil
 }
 
-// readCookieBrowser 读取调试浏览器的 Cookie，经 proxy 识别其中各会话登录 AI Studio 的账户
-func (admin *runtimeAdmin) readCookieBrowser(ctx context.Context, browser *api.CookieBrowser, proxy string) ([]chromeauth.CookieAccount, error) {
-	source, err := chromeauth.ReadCDPBrowser(ctx, browser.Address)
-	if err != nil {
-		return nil, err
-	}
-	state, err := aistudio.ParseCookieText(source.Cookies)
+// readCookieBrowser 解析调试浏览器的 Cookie 文本，经 proxy 识别其中各会话登录 AI Studio 的账户
+func (admin *runtimeAdmin) readCookieBrowser(ctx context.Context, browser *api.CookieBrowser, proxy, cookies string) ([]chromeauth.CookieAccount, error) {
+	state, err := aistudio.ParseCookieText(cookies)
 	if err != nil {
 		return nil, err
 	}
