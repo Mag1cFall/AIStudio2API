@@ -138,16 +138,12 @@ func mergeURLContext(previous, next []aistudio.URLMetadata) []aistudio.URLMetada
 	return merged
 }
 
-// awaitStreamStart 在写出流式响应头前等待首个事件，返回重放该事件的事件流与首个事件所在上游帧的用量；首个事件为错误时返回该错误，心跳间隔内没有事件时直接返回原事件流
+// awaitStreamStart 在写出流式响应头前等待首个事件或请求取消，返回重放事件流与首帧用量，首事件为错误时返回该错误。
 func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan aistudio.Event, *aistudio.Usage, error) {
-	timer := time.NewTimer(streamHeartbeatInterval)
-	defer timer.Stop()
 	var first aistudio.Event
 	select {
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
-	case <-timer.C:
-		return events, nil, nil
 	case event, ok := <-events:
 		if !ok {
 			return nil, nil, errIncompleteStream
@@ -160,11 +156,20 @@ func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan
 	replay := make(chan aistudio.Event)
 	go func() {
 		defer close(replay)
-		for event, ok := first, true; ok; event, ok = <-events {
+		for event := first; ; {
 			select {
 			case replay <- event:
 			case <-ctx.Done():
 				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case next, ok := <-events:
+				if !ok {
+					return
+				}
+				event = next
 			}
 		}
 	}()

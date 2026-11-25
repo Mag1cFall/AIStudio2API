@@ -161,7 +161,7 @@ func (s *server) handleOpenAITranscription(w http.ResponseWriter, r *http.Reques
 	writeTranscriptionResponse(w, responseFormat, "transcribe", language, result, words, wavSeconds(file, header.Size))
 }
 
-// streamTranscription 以 SSE 写出转录：每段正文为 transcript.text.delta，diarized_json 另为每个分段写出 transcript.text.segment，结束时写出带全文与用量的 transcript.text.done；首段正文晚于心跳间隔时由心跳先写出响应头
+// streamTranscription 以 SSE 写出转录：每段正文为 transcript.text.delta，diarized_json 另为每个分段写出 transcript.text.segment，结束时写出带全文与用量的 transcript.text.done；收到首段正文后才写出响应头并启动心跳
 func streamTranscription(w http.ResponseWriter, r *http.Request, service aistudio.TranscriptionService, request aistudio.TranscriptionRequest, responseFormat string) {
 	stream := keepStreamAlive(w, sseHeartbeat)
 	defer stream.stop()

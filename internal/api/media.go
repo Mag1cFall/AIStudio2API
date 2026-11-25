@@ -119,7 +119,7 @@ func (s *server) writeOpenAIImages(w http.ResponseWriter, r *http.Request, reque
 		stream = keepStreamAlive(w, sseHeartbeat)
 		defer stream.stop()
 	}
-	// streamed 在流式响应头已由心跳写出时以 SSE 错误事件写出 err 并返回 true
+	// streamed 在流式响应头已写出时以 SSE 错误事件写出 err 并返回 true
 	streamed := func(err error) bool {
 		if stream == nil || !stream.stop() {
 			return false

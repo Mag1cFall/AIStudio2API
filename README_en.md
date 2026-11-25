@@ -687,7 +687,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `MODEL_ACCOUNTS` | empty | Accounts a model may use, each item `model ID:account\|account`; models not listed can use every account. Also selectable in model details on the Model catalog page, applied on save |
 | `BUILD_NATIVE_NONSTREAM` | `true` | With the Build channel enabled, prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
 | `NONSTREAM_KEEPALIVE` | `true` | When a non-streaming request waits longer than 10 seconds, return 200 first and keep the connection open with periodic newlines |
-| `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats continue while waiting |
+| `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats start only after streaming begins so early failures retain their HTTP error status |
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream |
 | `SEARCH_MODEL_ALIASES` | `true` | Offer `-search` variants of search-capable models; requests using these variants enable Google Search |

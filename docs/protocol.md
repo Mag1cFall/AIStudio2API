@@ -997,10 +997,10 @@ Build 通道的 Gemini API 终止原因去掉 `FINISH_REASON_` 前缀后转为�
 
 generation config、安全设置、工具与转写配置在选择账户前按各账户已载入的模型目录校验，任一账户的条目接受即通过。
 
-- 流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；10 秒内没有事件时先写出响应头，此后的错误以各协议的流内错误事件返回；流内错误与响应头之前的错误给出同一重试时间：Gemini 错误对象的 details 带 RetryInfo，OpenAI 与 Anthropic 的错误消息末尾写 Please try again in <秒数>s.
+- 流式请求在写出响应头前等待首个事件：参数错误与首个事件之前的上游错误按非流式返回 HTTP 状态与错误对象；收到首个非错误上游事件后写出响应头，此后的错误以各协议的流内错误事件返回；流内错误与响应头之前的错误给出同一重试时间：Gemini 错误对象的 details 带 RetryInfo，OpenAI 与 Anthropic 的错误消息末尾写 Please try again in <秒数>s.
 - 非流式请求收齐上游事件后再输出，上游流中途中断或在完成帧之前结束时换号重发
 - `NONSTREAM_KEEPALIVE=true` 时，Chat Completions、Responses、Messages、Gemini `generateContent`、Interactions 与图片生成的非流式请求在 10 秒内没有结果时先写出 `200`、`Content-Type: application/json` 与 `X-Accel-Buffering: no`，之后每 10 秒写出一个换行，结果就绪后写出 JSON 正文；此后的错误以各协议的错误对象作为正文，访问日志与请求账本记录错误的 HTTP 状态
-- `FAKE_STREAM=true` 时，上述协议的流式请求按非流式方式生成：收齐上游事件、中途中断时换号重发，再以各协议的流式事件输出；等待期间按下文的流式心跳保持连接
+- `FAKE_STREAM=true` 时，上述协议的流式请求按非流式方式生成：收齐上游事件、中途中断时换号重发，再以各协议的流式事件输出；开始输出前不发送心跳，以保留正确的 HTTP 错误状态码
 
 错误响应根形状为 `[null,[code,message,...]]`。
 
@@ -3860,7 +3860,7 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | Anthropic | `message_start` | `content_block_start`、delta、`content_block_stop` | `message_delta.usage` | `message_stop` |
 | Gemini | candidate Part | `GenerateContentResponse` 增量 | 最后一帧 `usageMetadata` | 最后一帧 finish reason |
 
-流式响应距上一次写出满 10 秒时发送心跳，均立即 flush：
+流式响应头提交后，距上一次写出满 10 秒时发送心跳，均立即 flush；等待首个上游事件期间不因超时提前提交 200：
 
 | 协议 | 心跳 |
 | --- | --- |
@@ -3870,9 +3870,11 @@ setup 之后的客户端对象统一字段为 `type`、可选 `text`、`mime_typ
 | Gemini SSE | 空帧 `\n\n`（官方 SDK 按 `\n\n` 切帧时跳过） |
 
 - 流式响应头带 `X-Accel-Buffering: no`，经 nginx 反向代理时逐帧转发
-- 图片与转写的流式请求在首个结果晚于 10 秒时先由心跳写出响应头，之后的错误以 SSE 错误事件返回
-- OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；这些起始事件在账户调度期间即可到达客户端
-- Gemini 的首个帧来自上游语义事件或保活空帧
+- 图片与转写的流式请求在结果就绪后才写出响应头；此前失败时返回 HTTP 错误状态码与 JSON 错误体
+- OpenAI Chat 先发送 assistant role chunk，Responses 先发送 `response.created` 与 `response.in_progress`，Anthropic 先发送 `message_start`；前台请求收到首个非错误上游事件后才提交这些起始事件
+- Gemini 的首个帧来自上游语义事件，保活空帧只在响应头提交后发送
+- 响应头已提交后发生的错误仍以协议内错误事件返回；后台 Responses 已接受任务后也通过事件报告失败
+- 首事件等待期间没有响应字节，反向代理的读取超时应覆盖账户排队与上游首事件耗时
 
 公开适配规则：
 

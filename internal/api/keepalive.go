@@ -102,7 +102,7 @@ const (
 	geminiHeartbeat    = "\n\n"
 )
 
-// streamKeepalive 是流式响应的 ResponseWriter，距最近一次写出满心跳间隔时写出心跳帧，响应头由 open 或首个心跳写出
+// streamKeepalive 在 open 提交响应头后，距最近一次写出满心跳间隔时写出心跳帧。
 type streamKeepalive struct {
 	http.ResponseWriter
 	frame   func() string
@@ -112,12 +112,9 @@ type streamKeepalive struct {
 	stopped bool
 }
 
-// keepStreamAlive 返回静默满心跳间隔时写出 frame 的流式 ResponseWriter，首个事件可能晚于心跳间隔的流式响应用它在等待期间写出响应头与心跳
+// keepStreamAlive 返回尚未提交响应头的写出器；open 后才启动心跳，等待上游时保留返回 HTTP 错误的能力。
 func keepStreamAlive(w http.ResponseWriter, frame string) *streamKeepalive {
 	writer := &streamKeepalive{ResponseWriter: w, frame: func() string { return frame }}
-	writer.mu.Lock()
-	writer.timer = time.AfterFunc(streamHeartbeatInterval, writer.beat)
-	writer.mu.Unlock()
 	return writer
 }
 
@@ -150,14 +147,20 @@ func (writer *streamKeepalive) openLocked() error {
 		return nil
 	}
 	writer.opened = true
-	return streamHeaders(writer.ResponseWriter)
+	if err := streamHeaders(writer.ResponseWriter); err != nil {
+		return err
+	}
+	if !writer.stopped {
+		writer.timer = time.AfterFunc(streamHeartbeatInterval, writer.beat)
+	}
+	return nil
 }
 
 // beat 写出心跳帧并安排下一次心跳
 func (writer *streamKeepalive) beat() {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	if writer.stopped || writer.openLocked() != nil {
+	if writer.stopped || !writer.opened {
 		return
 	}
 	if _, err := io.WriteString(writer.ResponseWriter, writer.frame()); err != nil {
@@ -174,7 +177,9 @@ func (writer *streamKeepalive) stop() bool {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	writer.stopped = true
-	writer.timer.Stop()
+	if writer.timer != nil {
+		writer.timer.Stop()
+	}
 	return writer.opened
 }
 
@@ -182,7 +187,7 @@ func (writer *streamKeepalive) stop() bool {
 func (writer *streamKeepalive) Write(data []byte) (int, error) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	if !writer.stopped {
+	if !writer.stopped && writer.timer != nil {
 		writer.timer.Reset(streamHeartbeatInterval)
 	}
 	return writer.ResponseWriter.Write(data)
