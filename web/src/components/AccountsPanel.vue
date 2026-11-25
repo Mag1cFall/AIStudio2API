@@ -34,6 +34,7 @@ import type { IconName } from '@/icons'
 import AccountEnvironmentFields from './AccountEnvironmentFields.vue'
 import AccountModelsDialog from './AccountModelsDialog.vue'
 import AccountExits from './AccountExits.vue'
+import AutoDismissRow from './AutoDismissRow.vue'
 import CamoufoxProgressBar from './CamoufoxProgressBar.vue'
 import DetailDialog from './DetailDialog.vue'
 import DisclosureChevron from './DisclosureChevron.vue'
@@ -799,7 +800,6 @@ function viewerUnavailable(): void {
 async function beginBrowserLogin(): Promise<void> {
   pendingAction.value = 'browser-login'
   try {
-    await commitDelete()
     openViewer(await api.createAccount({ ...accountEnvironment }, newViewID()))
     showBrowserLogin.value = false
   } catch (error) {
@@ -871,14 +871,6 @@ async function openChromeImport(): Promise<void> {
   pendingAction.value = 'chrome-discover'
   try {
     await commitDelete()
-    chromeTierController?.abort()
-    chromeTierController = undefined
-    probingChromeTiers.value = false
-    chromeTiers.clear()
-    chromeCheckingIDs.clear()
-    chromeTierDone.value = 0
-    chromeTierTotal.value = 0
-    resetChromeFilter()
     chromeProfiles.value = await api.chromeImportProfiles()
     selectedChromeProfiles.value = []
     showChromeImport.value = true
@@ -906,7 +898,6 @@ function closeChromeImport(): void {
 async function importChromeAccounts(): Promise<void> {
   pendingAction.value = 'chrome-import'
   try {
-    await commitDelete()
     const chosen = new Set(selectedChromeProfiles.value)
     await api.importChromeAccounts({
       accounts: chromeProfiles.value
@@ -986,7 +977,6 @@ async function discoverCookieAccounts(): Promise<void> {
   // failed 是出错时正在识别的文件名
   let failed = ''
   try {
-    await commitDelete()
     const found: CookieCandidate[] = []
     for (const [source, item] of sources.entries()) {
       failed = item.name
@@ -1099,7 +1089,6 @@ async function scanBrowsers(): Promise<void> {
   browserLookupStartedAt.value = Date.now()
   scanningBrowsers.value = true
   try {
-    await commitDelete()
     cookieBrowsers.value = await api.cookieBrowsers(accountEnvironment.proxy)
     selectedBrowsers.value = cookieBrowsers.value
       .filter(
@@ -1135,7 +1124,6 @@ function switchToCookiePaste(): void {
 async function importBrowserAccounts(): Promise<void> {
   pendingAction.value = 'browser-import'
   try {
-    await commitDelete()
     const chosen = new Set(selectedBrowsers.value)
     await api.importCookieAccounts({
       items: cookieBrowsers.value
@@ -1210,7 +1198,6 @@ async function importCookieAccounts(): Promise<void> {
   }
   pendingAction.value = 'cookie-import'
   try {
-    await commitDelete()
     const sources = cookieSources()
     const chosen = new Set(selectedCookieUsers.value)
     await api.importCookieAccounts({
@@ -1302,7 +1289,6 @@ async function changeState(account: Account, state: 'ready' | 'disabled'): Promi
 async function loginAccount(account: Account): Promise<void> {
   pendingAction.value = `login:${account.id}`
   try {
-    await commitDelete()
     openViewer(await api.loginAccount(account.id, newViewID()))
   } catch (error) {
     actionError(error)
@@ -1315,7 +1301,6 @@ async function loginAccount(account: Account): Promise<void> {
 async function verifyAccount(account: Account): Promise<void> {
   pendingAction.value = `verify:${account.id}`
   try {
-    await commitDelete()
     openViewer(await api.verifyAccount(account.id, newViewID()))
   } catch (error) {
     actionError(error)
@@ -1496,10 +1481,16 @@ watch(
     >
       <ul
         v-if="listedTasks.length > 0"
-        class="mb-3 divide-y divide-line/60 rounded-lg border border-line bg-panel"
+        class="mb-3 max-h-60 shrink-0 divide-y divide-line/60 overflow-y-auto rounded-lg border border-line bg-panel"
         :aria-label="t('accounts.tasks')"
       >
-        <li v-for="task in listedTasks" :key="task.id" class="px-4 py-2.5">
+        <AutoDismissRow
+          v-for="task in listedTasks"
+          :key="task.id"
+          class="px-4 py-2.5"
+          :active="task.state === 'done' && task.items.every((item) => item.state === 'done')"
+          @dismiss="dismissTask(task)"
+        >
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex min-w-0 flex-1 basis-64 items-center gap-2.5">
               <UiIcon
@@ -1514,9 +1505,11 @@ watch(
                 class="shrink-0"
                 :class="task.state === 'failed' ? 'text-red-400' : 'text-gray-400'"
               />
-              <span class="shrink-0 text-sm font-medium text-white">{{
-                t(taskTitles[task.kind])
-              }}</span>
+              <span
+                v-tooltip.overflow="t(taskTitles[task.kind])"
+                class="min-w-0 truncate text-sm font-medium text-white"
+                >{{ t(taskTitles[task.kind]) }}</span
+              >
               <span v-if="task.items.length > 1" class="shrink-0 text-xs text-gray-500 tabular-nums"
                 >{{ taskFinished(task) }}/{{ task.items.length }}</span
               >
@@ -1660,7 +1653,7 @@ watch(
               </button>
             </li>
           </ul>
-        </li>
+        </AutoDismissRow>
       </ul>
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <input

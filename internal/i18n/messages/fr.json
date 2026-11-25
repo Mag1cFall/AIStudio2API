@@ -1531,5 +1531,17 @@
   "解析 WebDriver BiDi Cookie: %w": "Analyse des cookies WebDriver BiDi : {0}",
   "解码 WebDriver BiDi Cookie %s 的 base64 值: %w": "Décodage de la valeur base64 du cookie WebDriver BiDi {0} : {1}",
   "WebDriver BiDi 读取失败: %w": "Échec de la lecture WebDriver BiDi : {0}",
-  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "L’adresse de débogage du navigateur n’a renvoyé aucune information de débogage: HTTP {0}; Échec de la lecture WebDriver BiDi : {1}"
+  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "L’adresse de débogage du navigateur n’a renvoyé aucune information de débogage: HTTP {0}; Échec de la lecture WebDriver BiDi : {1}",
+  "ACCOUNT_SWITCH_INTERVAL 必须是 off 或正整数秒": "ACCOUNT_SWITCH_INTERVAL doit être off ou un entier positif en secondes",
+  "Build 模型目录同步失败": "Échec de la synchronisation du catalogue de modèles Build",
+  "GitHub 访问频率受限（HTTP %d）": "Limite de fréquence GitHub dépassée (HTTP {0})",
+  "MAX_QUOTA_SWITCHES 必须是 off、0 或正整数": "MAX_QUOTA_SWITCHES doit être off, 0 ou un entier positif",
+  "只能在本机访问时关闭管理登录": "La connexion à la console ne peut être désactivée que depuis cet ordinateur",
+  "最新发行版本跳转缺少版本号": "La redirection de la dernière version ne contient pas de numéro de version",
+  "等待换号间隔": "Attente de l’intervalle de changement de compte",
+  "读取校验摘要: %w": "Lecture de la somme de contrôle : {0}",
+  "读取账户历史使用记录失败": "Échec de la lecture de l’historique d’utilisation des comptes",
+  "模型 %s 需要 %s，本次请求可用的账户 %s 都不具备": "Le modèle {0} nécessite {1}, que ne possèdent pas les comptes disponibles pour cette requête ({2})",
+  "模型 %s 需要以下任一权益，本次请求可用的账户 %s 都不具备：%s": "Le modèle {0} nécessite l'un de ces droits, que ne possèdent pas les comptes disponibles pour cette requête ({1}) : {2}",
+  "Interaction 模型的 contents[%d] 不接受服务端工具步骤 %s": "Le modèle Interaction contents[{0}] n'accepte pas l'étape d'outil côté serveur {1}"
 }

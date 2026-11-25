@@ -598,10 +598,10 @@ onMounted(revealCurrentTab)
       <Transition name="notice">
         <div
           v-if="pendingDelete"
-          class="pointer-events-auto flex max-w-full items-center gap-4 rounded border border-line-strong bg-panel px-4 py-3 text-sm text-gray-200 shadow-xl"
+          class="pointer-events-auto flex max-w-full items-center gap-2 rounded border border-line-strong bg-panel py-3 pr-2 pl-4 text-sm text-gray-200 shadow-xl"
           role="status"
         >
-          <span v-tooltip.overflow="deletedNotice" class="min-w-0 truncate">{{
+          <span v-tooltip.overflow="deletedNotice" class="mr-2 min-w-0 truncate">{{
             deletedNotice
           }}</span>
           <button
@@ -611,6 +611,14 @@ onMounted(revealCurrentTab)
           >
             <UiIcon name="undo" :size="14" />
             {{ t('common.undo') }}
+          </button>
+          <button
+            type="button"
+            class="shrink-0 rounded p-1 text-gray-500 transition hover:bg-raised hover:text-gray-200"
+            :aria-label="t('common.close')"
+            @click="commitDelete()"
+          >
+            <UiIcon name="close" :size="14" />
           </button>
         </div>
       </Transition>

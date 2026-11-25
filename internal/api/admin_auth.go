@@ -101,6 +101,9 @@ func (auth *adminAuth) addSession(token string, expires time.Time, remembered bo
 
 // saveRemembered 在持锁期间把记住我的会话写入会话文件
 func (auth *adminAuth) saveRemembered() error {
+	if auth.config.AdminSessionPath == "" {
+		return nil
+	}
 	saved := rememberedSessions{Credential: auth.credential(), Sessions: []rememberedSessionRow{}}
 	for token, session := range auth.sessions {
 		if session.remembered {
@@ -118,17 +121,94 @@ func (auth *adminAuth) saveRemembered() error {
 	return os.Rename(temporary, auth.config.AdminSessionPath)
 }
 
+// isEnabled 返回当前是否开启了管理登录
+func (auth *adminAuth) isEnabled() bool {
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	return auth.config.AdminAuthEnabled
+}
+
+// ValidateConfigUpdate 校验远程请求不可关闭管理登录，防止关闭后立刻被回环限制拒绝访问
+func (auth *adminAuth) ValidateConfigUpdate(r *http.Request, nextEnabled bool) error {
+	if auth == nil || nextEnabled || !auth.isEnabled() {
+		return nil
+	}
+	if !isLoopbackRequest(r) {
+		return errors.New("只能在本机访问时关闭管理登录")
+	}
+	return nil
+}
+
+// ApplyConfig 热更新管理登录开关与凭据：开启或改密时撤销旧会话并为当前请求签发新会话 Cookie，关闭时清除全部会话
+func (auth *adminAuth) ApplyConfig(enabled bool, username, password string, w http.ResponseWriter, r *http.Request) {
+	if auth == nil {
+		return
+	}
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	if auth.config.AdminAuthEnabled == enabled && (!enabled || (auth.config.AdminUsername == username && auth.config.AdminPassword == password)) {
+		return
+	}
+	currentToken := ""
+	remembered := false
+	if r != nil {
+		if cookie, err := r.Cookie(adminCookieName); err == nil {
+			currentToken = cookie.Value
+			if current := auth.sessions[currentToken]; current != nil {
+				remembered = current.remembered
+			}
+		}
+	}
+	for token, session := range auth.sessions {
+		// 当前保存请求的上下文绑定在 currentToken 上，该会话在保存请求结束、响应写回之后撤销
+		if token == currentToken {
+			context.AfterFunc(r.Context(), session.cancel)
+		} else {
+			session.cancel()
+		}
+		delete(auth.sessions, token)
+	}
+	clear(auth.attempts)
+	auth.config.AdminAuthEnabled = enabled
+	auth.config.AdminUsername = username
+	auth.config.AdminPassword = password
+	if !enabled {
+		if err := auth.saveRemembered(); err != nil {
+			slog.Warn("写入管理会话文件失败", "path", auth.config.AdminSessionPath, "error", err)
+		}
+		if w != nil && r != nil {
+			auth.setCookie(w, r, "", -1)
+		}
+		return
+	}
+	now := time.Now()
+	lifetime := adminSessionLifetime
+	if remembered {
+		lifetime = adminRememberLifetime
+	}
+	if w != nil && r != nil {
+		token := rand.Text()
+		auth.addSession(token, now.Add(lifetime), remembered)
+		auth.setCookie(w, r, token, int(lifetime.Seconds()))
+	}
+	if err := auth.saveRemembered(); err != nil {
+		slog.Warn("写入管理会话文件失败", "path", auth.config.AdminSessionPath, "error", err)
+	}
+}
+
 // handler 统一管理认证、同源检查与会话接口
 func (auth *adminAuth) handler(next http.Handler) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/auth/session", auth.status)
-	mux.HandleFunc("POST /api/auth/login", auth.login)
-	mux.HandleFunc("POST /api/auth/logout", auth.logout)
-	mux.Handle("/", auth.requireSession(next))
-	var handler http.Handler = sameOriginMiddleware(mux)
-	if !auth.config.AdminAuthEnabled {
-		handler = loopbackMiddleware(handler)
+	routes := func(root http.Handler) http.Handler {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /api/auth/session", auth.status)
+		mux.HandleFunc("POST /api/auth/login", auth.login)
+		mux.HandleFunc("POST /api/auth/logout", auth.logout)
+		mux.Handle("/", root)
+		return sameOriginMiddleware(mux)
 	}
+	// loopback 是关闭管理登录时只放行本机来源的链，guarded 是开启时要求有效会话的链；每个请求只按进入时读取的开关走其中一条
+	loopback := loopbackMiddleware(routes(next))
+	guarded := routes(auth.requireSession(next))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		limit := int64(1 << 20)
@@ -139,7 +219,11 @@ func (auth *adminAuth) handler(next http.Handler) http.Handler {
 			limit = maxPublicBodyBytes
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
-		handler.ServeHTTP(w, r)
+		if !auth.isEnabled() {
+			loopback.ServeHTTP(w, r)
+			return
+		}
+		guarded.ServeHTTP(w, r)
 	})
 }
 
@@ -159,13 +243,9 @@ func (auth *adminAuth) session(r *http.Request) *adminSession {
 	return session
 }
 
-// requireSession 在管理请求期间同时监听退出登录和会话到期
+// requireSession 要求有效会话，并在管理请求期间同时监听退出登录和会话到期
 func (auth *adminAuth) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !auth.config.AdminAuthEnabled {
-			next.ServeHTTP(w, r)
-			return
-		}
 		session := auth.session(r)
 		if session == nil {
 			writeAdminError(w, http.StatusUnauthorized, "admin_login_required", "Sign in to the console")
@@ -181,19 +261,23 @@ func (auth *adminAuth) requireSession(next http.Handler) http.Handler {
 
 // status 返回登录页面需要的会话状态
 func (auth *adminAuth) status(w http.ResponseWriter, r *http.Request) {
-	loggedIn := auth.config.AdminAuthEnabled && auth.session(r) != nil
+	auth.mu.Lock()
+	enabled := auth.config.AdminAuthEnabled
+	configuredUser := auth.config.AdminUsername
+	auth.mu.Unlock()
+	loggedIn := enabled && auth.session(r) != nil
 	username := ""
 	if loggedIn {
-		username = auth.config.AdminUsername
+		username = configuredUser
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled": auth.config.AdminAuthEnabled, "authenticated": loggedIn || !auth.config.AdminAuthEnabled, "username": username,
+		"enabled": enabled, "authenticated": loggedIn || !enabled, "username": username,
 	})
 }
 
 // login 验证管理员凭据并签发限时会话
 func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
-	if !auth.config.AdminAuthEnabled {
+	if !auth.isEnabled() {
 		auth.status(w, r)
 		return
 	}
@@ -211,6 +295,10 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
+	if !auth.config.AdminAuthEnabled {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "authenticated": true, "username": ""})
+		return
+	}
 	for address, attempt := range auth.attempts {
 		if !now.Before(attempt.until) {
 			delete(auth.attempts, address)

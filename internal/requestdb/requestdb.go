@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS requests (
  input_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, reply_tokens INTEGER NOT NULL,
  total_tokens INTEGER NOT NULL, tool_calls INTEGER NOT NULL, error TEXT NOT NULL, attempts TEXT NOT NULL,
  cached_tokens INTEGER NOT NULL DEFAULT 0, proof_ms INTEGER NOT NULL DEFAULT 0, proof_lock_ms INTEGER NOT NULL DEFAULT 0,
- proof_interaction_ms INTEGER NOT NULL DEFAULT 0, proof_refresh_ms INTEGER NOT NULL DEFAULT 0, proof_compute_ms INTEGER NOT NULL DEFAULT 0);
+ proof_interaction_ms INTEGER NOT NULL DEFAULT 0, proof_refresh_ms INTEGER NOT NULL DEFAULT 0, proof_compute_ms INTEGER NOT NULL DEFAULT 0,
+ reply_tool INTEGER NOT NULL DEFAULT 0, reply_tool_calls INTEGER NOT NULL DEFAULT 0, reply_tool_continuations INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS requests_time ON requests(time);
 CREATE INDEX IF NOT EXISTS requests_cost ON requests(time, model, input_tokens, cached_tokens, reasoning_tokens, reply_tokens);
 CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model, time);
@@ -69,27 +70,30 @@ CREATE TABLE IF NOT EXISTS request_bodies (
 
 // Row 是一次完成请求的用量记录
 type Row struct {
-	ID              string
-	Time            time.Time
-	Protocol        string
-	Path            string
-	Model           string
-	Account         string
-	Channel         string
-	Status          int
-	State           string
-	Duration        time.Duration
-	FirstEvent      time.Duration
-	Queue           time.Duration
-	Proof           api.ProofTiming
-	InputTokens     int64
-	CachedTokens    int64
-	ReasoningTokens int64
-	ReplyTokens     int64
-	TotalTokens     int64
-	ToolCalls       int
-	Error           string
-	Attempts        []api.RequestAttempt
+	ID                     string
+	Time                   time.Time
+	Protocol               string
+	Path                   string
+	Model                  string
+	Account                string
+	Channel                string
+	Status                 int
+	State                  string
+	Duration               time.Duration
+	FirstEvent             time.Duration
+	Queue                  time.Duration
+	Proof                  api.ProofTiming
+	InputTokens            int64
+	CachedTokens           int64
+	ReasoningTokens        int64
+	ReplyTokens            int64
+	TotalTokens            int64
+	ToolCalls              int
+	ReplyTool              bool
+	ReplyToolCalls         int
+	ReplyToolContinuations int
+	Error                  string
+	Attempts               []api.RequestAttempt
 }
 
 // write 是写入协程处理的一条用量或正文
@@ -282,12 +286,16 @@ func (store *Store) write(batch []write) (err error) {
 			if err != nil {
 				return err
 			}
-			result, err := tx.Exec(`INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			replyTool := 0
+			if row.ReplyTool {
+				replyTool = 1
+			}
+			result, err := tx.Exec(`INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				row.ID, row.Time.UnixMilli(), row.Protocol, row.Path, row.Model, row.Account, row.Channel, row.Status, row.State,
 				row.Duration.Milliseconds(), row.FirstEvent.Milliseconds(), row.Queue.Milliseconds(),
 				row.InputTokens, row.ReasoningTokens, row.ReplyTokens, row.TotalTokens, row.ToolCalls, row.Error, string(encoded),
 				row.CachedTokens, row.Proof.Total.Milliseconds(), row.Proof.Lock.Milliseconds(), row.Proof.Interaction.Milliseconds(),
-				row.Proof.Refresh.Milliseconds(), row.Proof.Compute.Milliseconds())
+				row.Proof.Refresh.Milliseconds(), row.Proof.Compute.Milliseconds(), replyTool, row.ReplyToolCalls, row.ReplyToolContinuations)
 			if err != nil {
 				return err
 			}

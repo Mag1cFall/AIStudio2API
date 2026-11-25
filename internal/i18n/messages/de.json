@@ -1531,5 +1531,17 @@
   "解析 WebDriver BiDi Cookie: %w": "WebDriver-BiDi-Cookies parsen: {0}",
   "解码 WebDriver BiDi Cookie %s 的 base64 值: %w": "Base64-Wert des WebDriver-BiDi-Cookies {0} dekodieren: {1}",
   "WebDriver BiDi 读取失败: %w": "WebDriver-BiDi-Lesen fehlgeschlagen: {0}",
-  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "Browser-Debug-Adresse hat keine Debug-Informationen zurückgegeben: HTTP {0}; WebDriver-BiDi-Lesen fehlgeschlagen: {1}"
+  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "Browser-Debug-Adresse hat keine Debug-Informationen zurückgegeben: HTTP {0}; WebDriver-BiDi-Lesen fehlgeschlagen: {1}",
+  "ACCOUNT_SWITCH_INTERVAL 必须是 off 或正整数秒": "ACCOUNT_SWITCH_INTERVAL muss off oder eine positive ganze Zahl in Sekunden sein",
+  "Build 模型目录同步失败": "Synchronisierung des Build-Modellkatalogs fehlgeschlagen",
+  "GitHub 访问频率受限（HTTP %d）": "GitHub-Ratenlimit überschritten (HTTP {0})",
+  "MAX_QUOTA_SWITCHES 必须是 off、0 或正整数": "MAX_QUOTA_SWITCHES muss off, 0 oder eine positive Ganzzahl sein",
+  "只能在本机访问时关闭管理登录": "Die Konsolenanmeldung kann nur auf diesem Computer deaktiviert werden",
+  "最新发行版本跳转缺少版本号": "Die Weiterleitung zur neuesten Version enthält keine Versionsnummer",
+  "等待换号间隔": "Warten auf Kontowechsel-Intervall",
+  "读取校验摘要: %w": "Prüfsumme wird gelesen: {0}",
+  "读取账户历史使用记录失败": "Lesen des Kontonutzungsverlaufs fehlgeschlagen",
+  "模型 %s 需要 %s，本次请求可用的账户 %s 都不具备": "Modell {0} erfordert {1}, die für diese Anfrage verfügbaren Konten ({2}) verfügen nicht darüber",
+  "模型 %s 需要以下任一权益，本次请求可用的账户 %s 都不具备：%s": "Modell {0} erfordert eine dieser Berechtigungen, die für diese Anfrage verfügbaren Konten ({1}) verfügen nicht darüber: {2}",
+  "Interaction 模型的 contents[%d] 不接受服务端工具步骤 %s": "Interaction-Modell contents[{0}] akzeptiert keinen serverseitigen Tool-Schritt {1}"
 }

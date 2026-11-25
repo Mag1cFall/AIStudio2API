@@ -768,7 +768,7 @@ func validateGenerateEntry(request GenerateRequest, entry modelEntry) error {
 	if err := validateTranscriptionConfig(request.Config.TranscriptionConfig, entry.model); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if stream, task := interactionRoute(entry.model, entry.defaults, ChannelPlayground); stream || task {
+	if interactionRouting(entry.model, entry.defaults, ChannelPlayground).IsInteraction() {
 		return nil
 	}
 	if _, err := encodeGenerationConfig(applyModelMediaDefaults(request.Config, entry.model), entry.defaults); err != nil {
@@ -797,7 +797,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if build {
 		channel = ChannelBuild
 	}
-	interaction, task := interactionRoute(entry.model, entry.defaults, channel)
+	route := interactionRouting(entry.model, entry.defaults, channel)
 	apiKey, _ := ctx.Value(apiKeyContextKey{}).(string)
 	assistant := entry.model.Capabilities["assistant_route"]
 	if chineseRewriteEligible(request, entry) {
@@ -809,11 +809,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 	if thinkingGuardEligible(request, entry) {
 		request = applyThinkingGuard(request, entry)
 	}
-	restoring := request.restoreModelTurns && !build && !assistant && !interaction && !task
-	if restoring {
-		var tip turnLink
-		request.Contents, request.turnToken, tip = c.turns.restore(apiKey, request.Contents)
-		request.turnChain = turnChain{contents: request.Contents, tip: tip}
+	restoring := request.restoreModelTurns && !build && !assistant && !route.IsAgent()
+	if restoring && c.turns != nil {
+		if !route.IsInteraction() {
+			var tip turnLink
+			request.Contents, request.turnToken, tip = c.turns.restore(apiKey, request.Contents)
+			request.turnChain = turnChain{contents: request.Contents, tip: tip}
+		} else {
+			request.turnChain = turnChain{contents: request.Contents, tip: turnChain{}.tipOf(request.Contents)}
+		}
 	}
 	if err := validateVideoParts(request.Contents); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
@@ -828,14 +832,16 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 		}
 	}
-	if interaction {
+	if route.IsStream() && entry.defaults.VideoOutput {
 		request.Tools = Tools{}
 	}
-	request, contract, err := prepareToolRequest(request, true)
+	useReplyTool := !route.IsInteraction() && replyToolEligible(request, entry, build, assistant)
+	request, contract, err := prepareToolRequestWithReplyTool(request, true, useReplyTool)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if !interaction && !task && replyToolEligible(request, entry, build, assistant) {
+	reportReplyToolActive(ctx, useReplyTool)
+	if useReplyTool {
 		request = applyReplyTool(request)
 		if contract == nil {
 			contract = &toolContract{}
@@ -852,11 +858,19 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			return nil, err
 		}
 	}
-	if interaction {
-		return c.generateInteraction(ctx, request, entry)
+	if route.IsStream() {
+		events, err := c.generateInteraction(ctx, request, entry, route, apiKey, restoring)
+		if err != nil {
+			return nil, err
+		}
+		return contract.forward(ctx, events), nil
 	}
-	if task {
-		return c.generateInteractionTask(ctx, request, entry)
+	if route.IsTask() {
+		events, err := c.generateInteractionTask(ctx, request, entry, route, apiKey, restoring)
+		if err != nil {
+			return nil, err
+		}
+		return contract.forward(ctx, events), nil
 	}
 	request.Config = applyModelMediaDefaults(request.Config, entry.model)
 	request.ImageRoute = entry.defaults.ImageRoute
@@ -931,6 +945,15 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			held = nil
 			return nil
 		}
+		// roundParts 记录当前上游回合收到的未合并 Part，用于回复工具在 more=true 提前收尾时自动构造续接轮
+		var roundParts []Part
+		var replyStopMatcher *stopSequenceMatcher
+		replyStopMatched := false
+		replyHasFinalText := false
+		replyLastEndedNewline := false
+		if useReplyTool && len(request.Config.StopSequences) > 0 {
+			replyStopMatcher = newStopSequenceMatcher(request.Config.StopSequences)
+		}
 		matchedStopSequence := ""
 		emitEvent := func(event Event) error {
 			turn.turnToken = cmp.Or(event.TurnToken, turn.turnToken)
@@ -951,8 +974,26 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 				}
 				if !hiddenTool || !serverToolReplayable(event) {
 					output.Add(event)
-					if restoring && event.HasContent() {
-						turn.parts = append(turn.parts, clonePart(event.Part))
+					if event.HasContent() {
+						if restoring {
+							turn.parts = append(turn.parts, clonePart(event.Part))
+						}
+						if useReplyTool {
+							roundParts = append(roundParts, clonePart(event.Part))
+						}
+					}
+					if replyStopMatcher != nil && !replyStopMatched && event.Kind == EventToolCall && event.FunctionCall != nil && isReplyToolName(event.FunctionCall.Name) {
+						if text, _, ok := replyToolCallArgs(event.FunctionCall.Arguments); ok && text != "" {
+							chunk := text
+							if replyHasFinalText && !replyLastEndedNewline && !strings.HasPrefix(text, "\n") && !strings.HasPrefix(text, "\r") {
+								chunk = "\n\n" + text
+							}
+							replyHasFinalText = true
+							replyLastEndedNewline = strings.HasSuffix(text, "\n") || strings.HasSuffix(text, "\r")
+							if _, seq := replyStopMatcher.write(chunk); seq != "" {
+								replyStopMatched = true
+							}
+						}
 					}
 					committed = committed || !event.Thought && event.payload()
 				}
@@ -999,7 +1040,11 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			}
 			stopClose()
 			_ = response.Body.Close()
-			usage, finish, held, turn, roundUsage, output = nil, nil, nil, modelTurn{}, nil, Output{}
+			usage, finish, held, turn, roundUsage, output, roundParts = nil, nil, nil, modelTurn{}, nil, Output{}, nil
+			replyStopMatched, replyHasFinalText, replyLastEndedNewline = false, false, false
+			if useReplyTool && len(request.Config.StopSequences) > 0 {
+				replyStopMatcher = newStopSequenceMatcher(request.Config.StopSequences)
+			}
 			if response, decodeStream, err = sendRequest(); err != nil {
 				if ctx.Err() == nil {
 					_ = send(Event{Kind: EventError, Err: err})
@@ -1010,16 +1055,74 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			matcher = newStopSequenceMatcher(request.Config.StopSequences)
 			err = decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
 		}
-		if errors.Is(err, errStopSequenceMatched) {
+		// 模型在回复工具开启时若发出 final(more=true) 后即结束回合（期待工具返回），自动回传 functionResponse 续接剩余段落
+		replyContinued := false
+		for replyRound := 0; useReplyTool && !build && !assistant && replyRound < maxReplyToolContinuationRounds && ctx.Err() == nil && err == nil && finish != nil && finish.FinishReason == "stop" && !replyStopMatched; replyRound++ {
+			results, ok := replyToolContinuationResults(roundParts)
+			if !ok {
+				break
+			}
+			replyContinued = true
+			reportReplyToolContinuation(ctx)
+			stopClose()
 			_ = response.Body.Close()
+			prevUsage := cmp.Or(usage, roundUsage)
+			wireRequest.Contents = append(slices.Clip(wireRequest.Contents),
+				Content{Role: RoleAssistant, Parts: roundParts},
+				Content{Role: RoleUser, Parts: results},
+			)
+			wireRequest.continuationProof = ""
+			wireRequest.continuationToken = ""
+			wireRequest.continuationRound = 0
+			wireRequest.turnToken = ""
+			usage, finish, roundUsage, roundParts = nil, nil, nil, nil
+			response, decodeStream, err = sendRequest()
+			for err != nil && retryableAccountError(err) {
+				accounts, ok := accountCtx.Value(continuationAccountsKey{}).(ContinuationAccounts)
+				if !ok {
+					break
+				}
+				next, switchErr := accounts(accountCtx, err)
+				if switchErr != nil {
+					if !errors.Is(switchErr, ErrNoEligibleAccount) {
+						err = errors.Join(err, switchErr)
+					}
+					break
+				}
+				lease, _ := AccountLeaseFromContext(next)
+				switched(next, lease.Account().ID)
+				response, decodeStream, err = sendRequest()
+			}
+			if err != nil {
+				stopClose = func() bool { return false }
+				usage = prevUsage
+				break
+			}
+			stopClose = closeOnCancel(response)
+			err = decodeStream(observeStreamActivity(ctx, response.Body), roundEmit())
+			if prevUsage != nil {
+				if current := cmp.Or(usage, roundUsage); current != nil {
+					merged := mergeContinuedUsage(*prevUsage, *current)
+					usage = &merged
+				} else {
+					usage = prevUsage
+				}
+			}
+		}
+		if errors.Is(err, errStopSequenceMatched) {
+			if response != nil && response.Body != nil {
+				_ = response.Body.Close()
+			}
 			if releaseHeld() != nil {
 				return
 			}
 			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
 			return
 		}
-		if closeErr := response.Body.Close(); err == nil {
-			err = closeErr
+		if response != nil && response.Body != nil {
+			if closeErr := response.Body.Close(); err == nil {
+				err = closeErr
+			}
 		}
 		if ctx.Err() == nil && matcher != nil {
 			if pending := matcher.flush(); pending != "" {
@@ -1034,17 +1137,18 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 			err = &ContentPolicyError{Reason: feedback.Reason, Message: feedback.Message}
 			usage = cmp.Or(usage, feedback.Usage)
 		}
-		// trailing 是上游在函数调用之后结束生成的错误，客户端已收到完整的函数调用，按正常完成结束
+		// trailing 是上游在首轮函数调用之后结束生成的错误，客户端已收到完整的函数调用，按正常完成结束；
+		// 回复工具自动续接轮中出错或遇内容策略时不吞错，交由下方流中错误路径写明原因结束。
 		var trailing error
 		switch {
 		case ctx.Err() != nil:
-		case err != nil && calledFunction(output):
+		case err != nil && !replyContinued && calledFunction(output):
 			trailing, err = err, nil
 			finish = &Event{Kind: EventFinish, FinishReason: "stop"}
 			if usage == nil {
 				usage = roundUsage
 			}
-		case finish != nil && contentPolicyFinish(finish.FinishReason) && calledFunction(output):
+		case finish != nil && !replyContinued && contentPolicyFinish(finish.FinishReason) && calledFunction(output):
 			trailing = &ContentPolicyError{Reason: finish.FinishReason, Message: finish.FinishMessage}
 			finish.FinishReason, finish.FinishMessage = "stop", ""
 		}

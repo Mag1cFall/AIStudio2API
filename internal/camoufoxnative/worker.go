@@ -463,7 +463,7 @@ func (worker *Worker) PageCatalog() PageCatalog {
 	return worker.pageCatalog
 }
 
-// Reload 像官网用户一样在当前标签页中按官网冷启动重新载入页面，载入期间界面对话不取用该标签页；当前标签页有进行中的请求时改在新标签页中载入并切换过去，原标签页在其中的请求结束后关闭
+// Reload 在新标签页中按官网冷启动重新载入页面，载入成功后切换过去并关闭空闲旧标签页，有进行中请求的旧标签页在其请求结束后关闭；载入失败时关闭新标签页并保留原页面
 func (worker *Worker) Reload(ctx context.Context) error {
 	worker.mu.Lock()
 	if worker.closed {
@@ -475,44 +475,32 @@ func (worker *Worker) Reload(ctx context.Context) error {
 	options.StartupProgress = nil
 	worker.lockInput()
 	defer worker.inputMu.Unlock()
-	worker.mu.Lock()
-	contextID := worker.contextID
-	busy := worker.tabs[contextID] != nil
-	if !busy {
-		reloading := worker.chats[0]
-		reloading.busy, reloading.resetting = true, true
-		defer func() {
-			worker.mu.Lock()
-			reloading.busy, reloading.resetting = false, false
-			worker.notifyChats()
-			worker.mu.Unlock()
-		}()
-	}
-	worker.mu.Unlock()
-	if busy {
-		opened, err := worker.openTab(ctx)
-		if err != nil {
-			return err
-		}
-		contextID = opened
+	contextID, err := worker.openTab(ctx)
+	if err != nil {
+		return err
 	}
 	loaded, err := worker.openPage(ctx, options, contextID)
-	if err == nil && !busy {
-		worker.mu.Lock()
-		selected := worker.selected
-		worker.mu.Unlock()
-		if selected != "" && selected != contextID {
-			err = worker.selectTab(ctx, contextID)
-		}
-	}
 	if err == nil && options.Headless && !options.liveView {
 		err = worker.stopRendering(ctx)
 	}
-	if err != nil && busy {
-		return errors.Join(err, worker.closeTab(contextID))
-	}
 	if err != nil {
-		return err
+		worker.mu.Lock()
+		if worker.selected == contextID {
+			worker.selected = ""
+		}
+		worker.mu.Unlock()
+		closeErr := worker.closeTab(contextID)
+		if closeErr == nil && options.Headless && !options.liveView {
+			worker.frameMu.Lock()
+			idle := worker.frameBoosts == 0
+			worker.frameMu.Unlock()
+			if idle {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = worker.stopRendering(stopCtx)
+				cancel()
+			}
+		}
+		return errors.Join(err, closeErr)
 	}
 	return worker.switchTab(contextID, loaded)
 }

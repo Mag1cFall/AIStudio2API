@@ -820,16 +820,13 @@ func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	return mimeType, data
 }
 
-// maxGIFCanvasPixels 是 GIF 首帧转换允许的最大逻辑画布像素数
-const maxGIFCanvasPixels = 64_000_000
-
-// decodeGIFFrame 解码 GIF 的首帧与逻辑画布配置，画布宽或高为 0 或像素数超过 maxGIFCanvasPixels 时返回 false
+// decodeGIFFrame 解码 GIF 的首帧与逻辑画布配置
 func decodeGIFFrame(data []byte) (*image.Paletted, image.Config, bool) {
-	config, err := gif.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width <= 0 || config.Height <= 0 || int64(config.Width) > maxGIFCanvasPixels/int64(config.Height) {
+	img, err := gif.Decode(bytes.NewReader(data))
+	if err != nil {
 		return nil, image.Config{}, false
 	}
-	img, err := gif.Decode(bytes.NewReader(data))
+	config, err := gif.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, image.Config{}, false
 	}

@@ -22,6 +22,22 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
+// resolveProxyConfig 解析全局代理配置，空时回退系统代理，返回代理池列表、默认出口、展示串与是否来自系统代理
+func resolveProxyConfig(raw string) (proxyList []string, globalProxy string, activeProxy string, fromSystem bool) {
+	proxyList = config.ProxyList(raw)
+	if len(proxyList) == 0 {
+		if system := systemProxy(); system != "" {
+			proxyList = []string{system}
+			fromSystem = true
+		}
+	}
+	if len(proxyList) > 0 {
+		globalProxy = proxyList[0]
+	}
+	activeProxy = strings.Join(proxyList, ",")
+	return proxyList, globalProxy, activeProxy, fromSystem
+}
+
 // newRuntime 装配单个生成服务实例
 func newRuntime(
 	launchCtx context.Context,
@@ -46,25 +62,28 @@ func newRuntime(
 		return nil, nil, nil, err
 	}
 	egress := []any{"egress", "直连"}
-	proxyList := config.ProxyList(cfg.Proxy)
-	if len(proxyList) == 0 {
-		if system := systemProxy(); system != "" {
-			proxyList = []string{system}
-			egress = []any{"egress", redactedProxy(system), "proxy_source", "系统代理"}
-		}
-	} else {
-		redacted := make([]string, 0, len(proxyList))
-		for _, proxy := range proxyList {
-			redacted = append(redacted, redactedProxy(proxy))
-		}
-		egress = []any{"egress", strings.Join(redacted, ",")}
-	}
-	globalProxy := ""
+	proxyList, globalProxy, activeProxy, fromSystem := resolveProxyConfig(cfg.Proxy)
 	if len(proxyList) > 0 {
-		globalProxy = proxyList[0]
+		if fromSystem {
+			egress = []any{"egress", redactedProxy(globalProxy), "proxy_source", "系统代理"}
+		} else {
+			redacted := make([]string, 0, len(proxyList))
+			for _, proxy := range proxyList {
+				redacted = append(redacted, redactedProxy(proxy))
+			}
+			egress = []any{"egress", strings.Join(redacted, ",")}
+		}
 	}
-	cfg.Proxy = strings.Join(proxyList, ",")
-	camoufoxPath, login := prepareWAABackend(cfg, requests, accounts, globalProxy)
+	cfg.Proxy = activeProxy
+	var sharedGlobalProxy atomic.Pointer[string]
+	sharedGlobalProxy.Store(&globalProxy)
+	currentProxy := func() string {
+		if proxy := sharedGlobalProxy.Load(); proxy != nil {
+			return *proxy
+		}
+		return ""
+	}
+	camoufoxPath, login := prepareWAABackend(cfg, requests, accounts, currentProxy)
 	requests.logStage("service", "INFO", api.LogStage{Name: "运行时装配", Step: 3, Steps: 3}, "创建协议客户端", egress...)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
@@ -102,35 +121,27 @@ func newRuntime(
 		Static:          transport,
 	})
 	pooled := aistudio.NewPooledService(pool, client)
-	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
-	pooled.YouTubeLinks = cfg.YouTubeLinks
-	pooled.DiscoverHiddenModels = cfg.DiscoverHiddenModels
-	pooled.StripThoughtSignatures = cfg.StripThoughtSignatures
-	pooled.ContinuationRewrite = cfg.ContinuationRewrite
-	pooled.ContinuationPrompt = cfg.ContinuationPrompt
 	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
-	service.buildNativeNonstream = cfg.BuildNativeNonstream
-	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
-	service.hedgeModels = config.ModelList(cfg.FirstEventHedgeModels)
-	service.firstEventTimeout, _ = config.ParseFirstEventTimeout(cfg.FirstEventTimeout)
+	service.pooled = pooled
+	service.transport = transport
+	service.protected = protected
+	service.refresher = refresher
+	service.sharedGlobalProxy = &sharedGlobalProxy
+	service.ApplyHotConfig(cfg)
 	service.discoverHiddenModels = cfg.DiscoverHiddenModels
-	mapping, _ := config.ParseModelMapping(cfg.ModelMapping)
-	service.SetRequestPolicy(mapping, cfg.MaxAccountSwitches)
 	if camoufoxPath != "" {
-		service.camoufoxProxy, service.camoufoxWait = globalProxy, make(chan struct{})
+		service.camoufoxWait = make(chan struct{})
 	}
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, cfg)
 	service.publishStatus = func() { admin.publishStatus(lifecycle) }
-	admin.proxies, admin.globalProxy = proxies, globalProxy
+	admin.proxies = proxies
+	admin.setProxyState(globalProxy, activeProxy)
 	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
 	workers.proxyFailed = service.reportProxyFailure
-	probeCtx, stopProbe := context.WithCancel(lifecycle)
-	if len(proxyList) > 1 {
-		go admin.probeProxies(probeCtx)
-	}
+	admin.syncProxyProbe(len(proxyList), false)
 	requests.logStage("service", "INFO", api.LogStage{Name: "运行时装配", State: "completed"}, "协议运行时就绪", "accounts", len(accounts), "duration", time.Since(startedAt))
 	closeRuntime := func() error {
-		stopProbe()
+		admin.stopProxyProbe()
 		err := workers.Close()
 		camoufoxnative.WaitRetired()
 		transport.CloseIdleConnections()
@@ -139,9 +150,23 @@ func newRuntime(
 	return service, admin, closeRuntime, nil
 }
 
+// firstEventPolicy 是单次请求开始时快照的首字超时与备用请求策略
+type firstEventPolicy struct {
+	hedgeAuto         bool
+	hedgeAfter        time.Duration
+	hedgeModels       []string
+	firstEventTimeout time.Duration
+}
+
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
 	buildNativeNonstream bool
+	hotBuildNative       atomic.Pointer[bool]
+	pooled               *aistudio.PooledService
+	transport            *aistudio.MakerSuiteHTTPTransport
+	protected            *aistudio.WorkerProtectedTransport
+	refresher            *authRuntimeRefresher
+	sharedGlobalProxy    *atomic.Pointer[string]
 	proxies              *aistudio.ProxyPool
 	rebindAccounts       func([]string)
 	lifecycle            context.Context
@@ -151,6 +176,7 @@ type trackedService struct {
 	requests             *requestRegistry
 	workers              *accountWorkerManager
 	timeout              time.Duration
+	hotTimeout           atomic.Pointer[time.Duration]
 	state                atomic.Int32
 	lifecycleMu          sync.Mutex
 	transitionDone       chan struct{}
@@ -175,26 +201,31 @@ type trackedService struct {
 	catalogRoundDone chan struct{}
 	// catalogRoundWake 让巡检循环立即开始请求缺少模型时排定的一轮
 	catalogRoundWake chan struct{}
-	// hedgeAuto 与 hedgeAfter 是首事件超时备用请求的自适应开关与自定义等待
-	hedgeAuto  bool
-	hedgeAfter time.Duration
-	// hedgeModels 是发起备用请求的模型
-	hedgeModels []string
-	// firstEventTimeout 是单次尝试从取得账户起等待首个上游事件的最长时间，零值表示不限制
+	// hedgeAuto、hedgeAfter、hedgeModels 与 firstEventTimeout 保留为未调用 ApplyHotConfig 时的测试兼容回退字段
+	hedgeAuto         bool
+	hedgeAfter        time.Duration
+	hedgeModels       []string
 	firstEventTimeout time.Duration
+	// firstEventPolicy 是保存设置后立即替换的首字超时与备用请求策略快照
+	firstEventPolicy atomic.Pointer[firstEventPolicy]
 	// hedges 是正在进行的备用请求数
 	hedges atomic.Int32
 	// maxAccountSwitches 是一个请求因非额度失败换号的次数上限，保存设置后立即替换
 	maxAccountSwitches atomic.Int64
+	// accountSwitchInterval 是同一请求内换号前的最短等待间隔（纳秒），0 表示关闭
+	accountSwitchInterval atomic.Int64
+	// quotaSwitchLimit 编码额度失败换号上限：0 表示不限制，k > 0 表示最多换 k-1 次号（零值即默认不限）
+	quotaSwitchLimit atomic.Int64
 	// modelMapping 是 MODEL_MAPPING 解析出的模型别名，保存设置后立即替换
 	modelMapping atomic.Pointer[[]config.ModelAlias]
 	// disconnects 记录各模型与通道最近的请求终态，判断成片断连
 	disconnects disconnectTracker
-	// discoverHiddenModels 表示同步账户目录时探测官网隐藏模型
+	// discoverHiddenModels 表示同步账户目录时探测官网隐藏模型（未热更新前的初始值）；热更新后以 hotDiscoverHidden 为准
 	discoverHiddenModels bool
+	hotDiscoverHidden    atomic.Pointer[bool]
 	// camoufoxWait 在 Camoufox 后端的启动开始等待 Camoufox 下载时关闭，SpiderMonkey 后端为 nil
 	camoufoxWait chan struct{}
-	// camoufoxProxy 是 Camoufox 后端下载 Camoufox 的出口代理
+	// camoufoxProxy 是未绑定 sharedGlobalProxy 时 Camoufox 下载使用的兼容回退代理
 	camoufoxProxy string
 	// step 是生成服务正在进行的启动或停止步骤，没有时为 nil，取值见 api.AdminStatus.Transition
 	// 约束：启动步骤在持有 lifecycleMu 且服务仍在启动时写入，停止步骤由停止流程写入
@@ -228,7 +259,8 @@ func newTrackedService(
 	catalog := service.(modelCatalogService)
 	tracked := &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
-		timeout: timeout, modelRetries: make(map[string]struct{}), catalogRoundWake: make(chan struct{}, 1),
+		timeout:      timeout,
+		modelRetries: make(map[string]struct{}), catalogRoundWake: make(chan struct{}, 1),
 		publishStatus: func() {},
 	}
 	tracked.SetRequestPolicy(nil, config.DefaultMaxAccountSwitches)
@@ -293,6 +325,258 @@ func (service *trackedService) enterLaunchStep(name string) {
 func (service *trackedService) SetRequestPolicy(mapping []config.ModelAlias, maxAccountSwitches int) {
 	service.modelMapping.Store(&mapping)
 	service.maxAccountSwitches.Store(int64(maxAccountSwitches))
+}
+
+// SetSwitchPolicy 替换之后的请求使用的最短换号间隔与额度失败换号上限
+func (service *trackedService) SetSwitchPolicy(interval time.Duration, maxQuotaSwitches int, quotaLimited bool) {
+	service.accountSwitchInterval.Store(int64(max(interval, 0)))
+	if !quotaLimited {
+		service.quotaSwitchLimit.Store(0)
+		return
+	}
+	service.quotaSwitchLimit.Store(int64(max(maxQuotaSwitches, 0)) + 1)
+}
+
+// ApplyHotConfig 原子应用所有支持热加载的生成服务设置，不中断进行中的请求
+func (service *trackedService) ApplyHotConfig(cfg config.Config) {
+	if service.pooled != nil {
+		service.pooled.SetRequestOptions(aistudio.RequestOptions{
+			BuildNativeNonstream:   cfg.BuildNativeNonstream,
+			YouTubeLinks:           cfg.YouTubeLinks,
+			DiscoverHiddenModels:   cfg.DiscoverHiddenModels,
+			StripThoughtSignatures: cfg.StripThoughtSignatures,
+			ContinuationRewrite:    cfg.ContinuationRewrite,
+			ContinuationPrompt:     cfg.ContinuationPrompt,
+		})
+	}
+	buildNative := cfg.BuildNativeNonstream
+	service.hotBuildNative.Store(&buildNative)
+	if cfg.RequestTimeout > 0 {
+		timeout := cfg.RequestTimeout
+		service.hotTimeout.Store(&timeout)
+	}
+	if cfg.InitTimeout > 0 {
+		if service.workers != nil {
+			service.workers.SetInitTimeout(cfg.InitTimeout)
+		}
+		if service.protected != nil {
+			service.protected.SetSetupTimeout(cfg.InitTimeout)
+		}
+	}
+	hedgeAuto, hedgeAfter, _ := config.ParseFirstEventHedge(cfg.FirstEventHedge)
+	firstEventTimeout, _ := config.ParseFirstEventTimeout(cfg.FirstEventTimeout)
+	service.firstEventPolicy.Store(&firstEventPolicy{
+		hedgeAuto:         hedgeAuto,
+		hedgeAfter:        hedgeAfter,
+		hedgeModels:       config.ModelList(cfg.FirstEventHedgeModels),
+		firstEventTimeout: firstEventTimeout,
+	})
+	mapping, _ := config.ParseModelMapping(cfg.ModelMapping)
+	service.SetRequestPolicy(mapping, cfg.MaxAccountSwitches)
+	switchInterval, _ := config.ParseAccountSwitchInterval(cfg.AccountSwitchInterval)
+	quotaLimit, quotaLimited, _ := config.ParseMaxQuotaSwitches(cfg.MaxQuotaSwitches)
+	service.SetSwitchPolicy(switchInterval, quotaLimit, quotaLimited)
+}
+
+// useBuildNativeNonstream 返回非流式请求是否优先使用 Build 原生单次调用
+func (service *trackedService) useBuildNativeNonstream() bool {
+	if value := service.hotBuildNative.Load(); value != nil {
+		return *value
+	}
+	return service.buildNativeNonstream
+}
+
+// currentFirstEventPolicy 返回当前生效的首字超时与备用请求策略快照
+func (service *trackedService) currentFirstEventPolicy() firstEventPolicy {
+	if policy := service.firstEventPolicy.Load(); policy != nil {
+		return *policy
+	}
+	return firstEventPolicy{
+		hedgeAuto:         service.hedgeAuto,
+		hedgeAfter:        service.hedgeAfter,
+		hedgeModels:       service.hedgeModels,
+		firstEventTimeout: service.firstEventTimeout,
+	}
+}
+
+// requestTimeout 返回后续请求使用的无数据超时时长
+func (service *trackedService) requestTimeout() time.Duration {
+	if timeout := service.hotTimeout.Load(); timeout != nil {
+		return *timeout
+	}
+	return service.timeout
+}
+
+// switchInterval 返回同一请求内换号前的最短等待间隔，未启用时为 0
+func (service *trackedService) switchInterval() time.Duration {
+	return time.Duration(service.accountSwitchInterval.Load())
+}
+
+// currentCamoufoxProxy 返回 Camoufox 下载使用的当前出口代理
+func (service *trackedService) currentCamoufoxProxy() string {
+	if service.sharedGlobalProxy != nil {
+		if proxy := service.sharedGlobalProxy.Load(); proxy != nil {
+			return *proxy
+		}
+	}
+	return service.camoufoxProxy
+}
+
+// setSharedGlobalProxy 同步更新生成服务内部各传输、续签器与 Worker 管理器持有的默认出口代理
+func (service *trackedService) setSharedGlobalProxy(proxy string) error {
+	if service.transport != nil {
+		if err := service.transport.SetGlobalProxy(proxy); err != nil {
+			return err
+		}
+	}
+	if service.sharedGlobalProxy != nil {
+		copyProxy := proxy
+		service.sharedGlobalProxy.Store(&copyProxy)
+	}
+	if service.workers != nil {
+		service.workers.SetGlobalProxy(proxy)
+	}
+	if service.refresher != nil {
+		service.refresher.SetGlobalProxy(proxy)
+	}
+	return nil
+}
+
+// applyUpstreamChannels 热替换上游通道，必要时在后台为缺失 Build 目录的账户补拉 Build 目录
+func (service *trackedService) applyUpstreamChannels(channels []string) {
+	if service.pool == nil {
+		return
+	}
+	wasBuild := service.pool.BuildEnabled()
+	service.pool.SetUpstreamChannels(upstreamChannels(channels))
+	if service.catalog != nil {
+		service.modelSyncMu.Lock()
+		service.applyCachedModelCatalog()
+		service.modelSyncMu.Unlock()
+	}
+	if wasBuild || !service.pool.BuildEnabled() || service.pooled == nil {
+		return
+	}
+	missing := service.pool.AccountsMissingBuildCatalog()
+	if len(missing) == 0 {
+		return
+	}
+	service.lifecycleMu.Lock()
+	dataCtx := service.dataContext
+	running := service.state.Load() == serviceRunning && dataCtx != nil && dataCtx.Err() == nil
+	service.lifecycleMu.Unlock()
+	if !running {
+		return
+	}
+	go func() {
+		updated := false
+		for _, accountID := range missing {
+			if dataCtx.Err() != nil {
+				return
+			}
+			reqCtx, cancel := service.lifecycleRequestContext(dataCtx)
+			ok, err := service.pooled.RefreshBuildCatalog(reqCtx, accountID)
+			cancel()
+			if err != nil {
+				if dataCtx.Err() == nil {
+					service.requests.log(accountID, "WARN", "Build 模型目录同步失败", "error", err)
+				}
+				continue
+			}
+			if ok {
+				updated = true
+			}
+		}
+		if updated && dataCtx.Err() == nil {
+			service.modelSyncMu.Lock()
+			service.applyCachedModelCatalog()
+			service.modelSyncMu.Unlock()
+			service.publishModelAccess()
+		}
+	}()
+}
+
+// isDiscoverHiddenModels 返回当前是否开启官网隐藏模型探测
+func (service *trackedService) isDiscoverHiddenModels() bool {
+	if value := service.hotDiscoverHidden.Load(); value != nil {
+		return *value
+	}
+	return service.discoverHiddenModels
+}
+
+// applyDiscoverHiddenModels 热切换官网隐藏模型探测：关闭时立即从目录剥离并持久化，开启时在运行中后台增量探测
+func (service *trackedService) applyDiscoverHiddenModels(enabled bool) {
+	next := enabled
+	prevPtr := service.hotDiscoverHidden.Swap(&next)
+	previous := service.discoverHiddenModels
+	if prevPtr != nil {
+		previous = *prevPtr
+	}
+	if previous == enabled {
+		return
+	}
+	if !enabled {
+		if service.pooled != nil && service.pooled.ClearHiddenModels() > 0 {
+			service.modelSyncMu.Lock()
+			service.applyCachedModelCatalog()
+			service.modelSyncMu.Unlock()
+		}
+		service.publishModelAccess()
+		return
+	}
+	service.lifecycleMu.Lock()
+	dataCtx := service.dataContext
+	running := service.state.Load() == serviceRunning && dataCtx != nil && dataCtx.Err() == nil
+	service.lifecycleMu.Unlock()
+	if !running || service.catalog == nil {
+		return
+	}
+	accounts := service.modelCatalogAccountIDs()
+	if len(accounts) == 0 {
+		return
+	}
+	go func() {
+		for result := range service.refreshAccountModelCatalogs(dataCtx, accounts, false) {
+			if dataCtx.Err() != nil {
+				return
+			}
+			if !result.skipped && result.err == nil && len(result.models) > 0 {
+				service.modelSyncMu.Lock()
+				service.applyCachedModelCatalog()
+				service.modelSyncMu.Unlock()
+				service.publishModelAccess()
+			}
+		}
+	}()
+}
+
+// ApplyChannelsAndHidden 应用上游通道与官网隐藏模型探测的热切换
+func (service *trackedService) ApplyChannelsAndHidden(cfg config.Config) {
+	service.applyUpstreamChannels(cfg.UpstreamChannels)
+	service.applyDiscoverHiddenModels(cfg.DiscoverHiddenModels)
+}
+
+// waitSwitchInterval 等满从 lastFailureAt 算起的最短换号间隔，等待期间 ctx 取消则立即返回
+func (service *trackedService) waitSwitchInterval(ctx context.Context, requestID string, lastFailureAt time.Time) error {
+	interval := service.switchInterval()
+	if interval <= 0 || lastFailureAt.IsZero() {
+		return nil
+	}
+	remaining := interval - time.Since(lastFailureAt)
+	if remaining <= 0 {
+		return nil
+	}
+	if requestID != "" && service.requests != nil {
+		service.requests.logRequestProgress(requestID, "request", "INFO", "等待换号间隔", "wait", remaining.Round(time.Millisecond))
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // aliases 返回之后的请求使用的模型别名
@@ -378,7 +662,7 @@ func (service *trackedService) prepareCamoufox(ctx context.Context) error {
 		return nil
 	}
 	if camoufoxnative.PreparationState().Ready {
-		_, err := camoufoxnative.Prepare(ctx, service.camoufoxProxy)
+		_, err := camoufoxnative.Prepare(ctx, service.currentCamoufoxProxy())
 		return err
 	}
 	select {
@@ -389,7 +673,7 @@ func (service *trackedService) prepareCamoufox(ctx context.Context) error {
 	startedAt := time.Now()
 	service.enterLaunchStep("wait_camoufox")
 	service.requests.logStage("service", "INFO", api.LogStage{Name: "生成服务启动"}, "等待 Camoufox 下载")
-	if _, err := camoufoxnative.Prepare(ctx, service.camoufoxProxy); err != nil {
+	if _, err := camoufoxnative.Prepare(ctx, service.currentCamoufoxProxy()); err != nil {
 		return err
 	}
 	service.requests.logStage("service", "INFO", api.LogStage{Name: "生成服务启动"}, "Camoufox 已就绪", "duration", time.Since(startedAt))
@@ -923,9 +1207,10 @@ func (service *trackedService) modelCatalogAccountIDs() []string {
 func (service *trackedService) staleCatalogAccountIDs(accountIDs []string) []string {
 	now := time.Now()
 	fresh := make(map[string]bool)
+	discoverHidden := service.isDiscoverHiddenModels()
 	for _, status := range service.pool.Status() {
 		fresh[status.ID] = len(status.Models) > 0 && now.Sub(status.CatalogSyncedAt) < accountStateRefreshInterval &&
-			status.HiddenDiscovered == service.discoverHiddenModels && (service.discoverHiddenModels || status.HiddenModels == 0)
+			status.HiddenDiscovered == discoverHidden && (discoverHidden || status.HiddenModels == 0)
 	}
 	return slices.DeleteFunc(accountIDs, func(accountID string) bool { return fresh[accountID] })
 }
@@ -970,14 +1255,16 @@ func (service *trackedService) refreshAccountModelCatalogs(
 	return results
 }
 
-// refreshAccountModelCatalog 以账户页面载入时的响应同步权益与模型目录，reload 为 true 时重新载入页面，失败或目录为空时登记 30 秒后重试
+// refreshAccountModelCatalog 以账户页面载入时的响应同步权益与模型目录，reload 为 true 时重新载入页面，失败或目录为空时登记 30 秒后重试（出口地区不受支持除外）
 func (service *trackedService) refreshAccountModelCatalog(ctx context.Context, accountID string, reload bool) ([]aistudio.Model, error) {
 	requestCtx, cancel := service.lifecycleRequestContext(ctx)
 	defer cancel()
 	models, err := service.catalog.RefreshAccountModels(requestCtx, accountID, reload)
 	service.modelRetriesMu.Lock()
 	if err != nil {
-		if ctx.Err() == nil {
+		if errors.Is(err, camoufoxnative.ErrRegionNotSupported) {
+			delete(service.modelRetries, accountID)
+		} else if ctx.Err() == nil {
 			service.modelRetries[accountID] = struct{}{}
 		}
 		service.modelRetriesMu.Unlock()
@@ -1157,7 +1444,7 @@ func (service *trackedService) awaitCatalogModel(ctx context.Context, model stri
 	if done == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, service.timeout)
+	ctx, cancel := context.WithTimeout(ctx, service.requestTimeout())
 	defer cancel()
 	for {
 		changed := service.pool.Changed()
@@ -1233,7 +1520,7 @@ func (service *trackedService) refreshAccountStates(ctx context.Context) {
 	}
 }
 
-// refreshAccountState 重新载入账户页面读取权益与模型目录，失败或变化时发布账户与模型事件并记录日志，失败的账户登记 30 秒后重试目录
+// refreshAccountState 重新载入账户页面读取权益与模型目录，失败或变化时发布账户与模型事件并记录日志，失败的账户登记 30 秒后重试目录（出口地区不受支持除外）
 func (service *trackedService) refreshAccountState(ctx context.Context, accountID string, wait bool) (aistudio.AccountRefresh, error) {
 	requestCtx, cancel := service.lifecycleRequestContext(ctx)
 	defer cancel()
@@ -1243,7 +1530,11 @@ func (service *trackedService) refreshAccountState(ctx context.Context, accountI
 	}
 	if err != nil {
 		service.modelRetriesMu.Lock()
-		service.modelRetries[accountID] = struct{}{}
+		if errors.Is(err, camoufoxnative.ErrRegionNotSupported) {
+			delete(service.modelRetries, accountID)
+		} else {
+			service.modelRetries[accountID] = struct{}{}
+		}
 		service.modelRetriesMu.Unlock()
 		service.publishModelAccess()
 		service.requests.log(accountID, "WARN", "账户状态刷新失败", "error", err)
@@ -1673,7 +1964,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 	failedWorkers := make(map[string]struct{})
 	var promoteFailure error
 	dispatch := service.workers.dispatch
-	waiter := dispatch.join(service.pool.ScopedSelection(ctx, selection))
+	// scoped 是并入请求指定账户、API key 与模型绑定账户后的选择，没有账户可用时按它写明原因
+	scoped := service.pool.ScopedSelection(ctx, selection)
+	waiter := dispatch.join(scoped)
 	defer dispatch.leave(waiter)
 	wait := func(delay time.Duration) error {
 		return waitScheduling(ctx, waiter.wake, delay)
@@ -1819,8 +2112,11 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			}
 			failedWorkers[accountID] = struct{}{}
 			promoteFailure = promoteErr
-			if !service.countSwitchFailure(failures, promoteErr) {
-				return nil, promotionFailure(service.pool, selection, promoteErr)
+			if !service.countSwitchFailure(failures, nil, promoteErr) {
+				return nil, promotionFailure(service.pool, scoped, promoteErr)
+			}
+			if waitErr := service.waitSwitchInterval(ctx, "", time.Now()); waitErr != nil {
+				return nil, waitErr
 			}
 			continue
 		}
@@ -1847,12 +2143,12 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 			continue
 		}
 		if promoteFailure != nil {
-			return nil, promotionFailure(service.pool, selection, promoteFailure)
+			return nil, promotionFailure(service.pool, scoped, promoteFailure)
 		}
 		if runtimeBusyErr != nil {
 			return nil, runtimeBusyErr
 		}
-		return nil, service.pool.NoEligibleError(selection)
+		return nil, service.pool.NoEligibleError(scoped)
 	}
 }
 
@@ -2123,17 +2419,18 @@ type generateAttempt struct {
 	source           <-chan aistudio.Event
 	first            aistudio.Event
 	firstAt          time.Time
-	err            error
-	cancel         context.CancelFunc
-	stopFirstEvent func()
-	done           chan struct{}
+	err              error
+	cancel           context.CancelFunc
+	stopFirstEvent   func()
+	done             chan struct{}
 	// serving 是正在生成回答的账户租约，续写轮换账户后为新账户的租约
 	serving atomic.Pointer[aistudio.AccountLease]
-	// failures 是请求已用掉的换号次数，续写轮换号在此基础上计数
+	// failures 是请求已用掉的非额度换号次数，续写轮换号在此基础上计数
 	failures int
-	// interactionStream 与 interactionTask 是租约账户与通道对该模型的 Interaction 路由
-	interactionStream bool
-	interactionTask   bool
+	// quotaFailures 是请求已用掉的额度失败换号次数，续写轮换号在此基础上计数
+	quotaFailures int
+	// interaction 是租约账户与通道对该模型的 Interaction 选路
+	interaction aistudio.InteractionRouting
 }
 
 // generateRetry 是生成请求跨尝试的换号与恢复状态
@@ -2165,6 +2462,10 @@ type generateRetry struct {
 	rejectionRetried bool
 	// failures 是本次请求中换号重试的非额度失败次数
 	failures int
+	// quotaFailures 是本次请求中因额度用尽换号重试的次数
+	quotaFailures int
+	// lastSwitchFailureAt 是上次准备换号时的失败时刻，用于满足最短换号间隔
+	lastSwitchFailureAt time.Time
 }
 
 // attemptOutcome 是失败尝试处理后的错误与换号决定
@@ -2172,6 +2473,8 @@ type attemptOutcome struct {
 	err           error
 	retryable     bool
 	recoverWorker bool
+	sameAccount   bool
+	failedAt      time.Time
 	accountID     string
 	accountLabel  string
 }
@@ -2203,7 +2506,9 @@ func (service *trackedService) generateWithRetry(
 	} else {
 		preferredAccountID = service.pool.InlineMediaAccount(request.Contents)
 	}
-	hedgeable := !request.Background && !assistant && (service.hedgeAuto || service.hedgeAfter > 0) && slices.Contains(service.hedgeModels, modelID)
+	fePolicy := service.currentFirstEventPolicy()
+	buildNativeNonstream := service.useBuildNativeNonstream()
+	hedgeable := service.canHedge(request, assistant, modelID)
 	hedged := false
 	var winner *generateAttempt
 	var activity *upstreamActivity
@@ -2246,7 +2551,7 @@ func (service *trackedService) generateWithRetry(
 				fallbackReason = "请求包含 Playground 专用能力或文件引用"
 			case selection.Channel != "":
 			case !service.pool.BuildEnabled():
-			case !service.buildNativeNonstream:
+			case !buildNativeNonstream:
 				fallbackReason = "Build 非流式优先选项已关闭"
 			default:
 				selection.PreferredChannel = aistudio.ChannelBuild
@@ -2267,6 +2572,24 @@ func (service *trackedService) generateWithRetry(
 		}
 		if len(retry.attempted) > 0 {
 			service.requests.markQueued(request.ID, request.AccountID)
+		}
+		if !retry.lastSwitchFailureAt.IsZero() {
+			hasCandidate := (!unbound && !fileBound) || len(selection.AllowedAccountIDs) > 0
+			if hasCandidate {
+				if _, checkErr := service.pool.ClassifyCandidates(requestCtx, selection, nil); checkErr != nil {
+					hasCandidate = false
+				}
+			}
+			if hasCandidate {
+				waitErr := service.waitSwitchInterval(requestCtx, request.ID, retry.lastSwitchFailureAt)
+				retry.lastSwitchFailureAt = time.Time{}
+				if waitErr != nil {
+					err = waitErr
+					break
+				}
+			} else {
+				retry.lastSwitchFailureAt = time.Time{}
+			}
 		}
 		queueStartedAt := time.Now()
 		queueWait := startWaitReporter(func(waited time.Duration) {
@@ -2330,16 +2653,16 @@ func (service *trackedService) generateWithRetry(
 			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "排队结束", "waited", time.Since(queueStartedAt))
 		}
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "等待上游响应")
-		primary := service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, lease, selection, false, retry.failures)
+		primary := service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, lease, selection, false, retry.failures, retry.quotaFailures, fePolicy.firstEventTimeout)
 		var plan *hedgePlan
-		if hedgeable && !primary.interactionTask && !hedged {
+		if hedgeable && !primary.interaction.IsAgent() && !hedged {
 			if delay, ok := service.hedgeDelay(modelID, string(lease.Channel())); ok {
 				fixed := resourceID != "" || requestedAccountID != ""
 				plan = &hedgePlan{delay: delay, selections: service.hedgeSelections(selection, lease.Account().ID, fixed, retry.attempted)}
 				plan.start = func(hedgeLease *aistudio.AccountLease, hedgeSelection aistudio.AccountSelection) *generateAttempt {
 					hedged = true
 					retry.attempted[hedgeLease.Account().ID] = struct{}{}
-					return service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, hedgeLease, hedgeSelection, true, retry.failures)
+					return service.startAttempt(requestCtx, request, resourceID, modelID, fallbackReason, hedgeLease, hedgeSelection, true, retry.failures, retry.quotaFailures, fePolicy.firstEventTimeout)
 				}
 			}
 		}
@@ -2427,6 +2750,9 @@ func (service *trackedService) generateWithRetry(
 			service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", "WAA Worker 重建，重放当前请求", attemptFields(modelID, err)...)
 			continue
 		}
+		if !last.sameAccount {
+			retry.lastSwitchFailureAt = last.failedAt
+		}
 		service.requests.logRequestProgress(request.ID, last.accountLabel, "WARN", "账号切换", attemptFields(modelID, err)...)
 	}
 	if winner == nil {
@@ -2472,7 +2798,7 @@ func (service *trackedService) accountLabel(accountID string) string {
 	return accountID
 }
 
-// startAttempt 在租约账户上准备并发送请求，后台等待首事件，结束时关闭 done；failures 是发起这次尝试前请求已用掉的换号次数
+// startAttempt 在租约账户上准备并发送请求，后台等待首事件，结束时关闭 done；failures 与 quotaFailures 是发起这次尝试前请求已用掉的换号次数
 func (service *trackedService) startAttempt(
 	requestCtx context.Context,
 	request aistudio.GenerateRequest,
@@ -2483,21 +2809,23 @@ func (service *trackedService) startAttempt(
 	selection aistudio.AccountSelection,
 	hedge bool,
 	failures int,
+	quotaFailures int,
+	firstEventTimeout time.Duration,
 ) *generateAttempt {
 	unbound := strings.TrimSpace(request.AccountID) == "" && resourceID == ""
 	request.AccountID = lease.Account().ID
-	interactionStream, interactionTask := lease.InteractionRoute(modelID)
+	interaction := lease.InteractionRoute(modelID)
 	attempt := &generateAttempt{
 		lease: lease, selection: selection, hedge: hedge, unbound: unbound, accountLabel: lease.Account().Config.Label,
 		proxy: service.proxies.Binding(request.AccountID), workerGeneration: service.workers.WorkerGeneration(request.AccountID),
-		startedAt: time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}), failures: failures,
-		interactionStream: interactionStream, interactionTask: interactionTask,
+		startedAt: time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}), failures: failures, quotaFailures: quotaFailures,
+		interaction: interaction,
 	}
 	attempt.serving.Store(lease)
 	attemptCtx, cancel := context.WithCancelCause(requestCtx)
 	attempt.cancel = func() { cancel(context.Canceled) }
-	if service.firstEventTimeout > 0 && !request.Background && !attempt.interactionTask {
-		timeout := service.firstEventTimeout
+	if firstEventTimeout > 0 && !request.Background && !attempt.interaction.IsAgent() {
+		timeout := firstEventTimeout
 		var mu sync.Mutex
 		stopped := false
 		timer := time.AfterFunc(timeout, func() {
@@ -2534,7 +2862,7 @@ func (service *trackedService) runAttempt(
 		defer attempt.stopFirstEvent()
 	}
 	lease, accountLabel := attempt.lease, attempt.accountLabel
-	if attempt.interactionTask {
+	if attempt.interaction.IsAgent() {
 		// agent 后台任务只发送 AgentInput 选出的内容，其余轮次的文件不复制、附件不上传
 		request.Contents = aistudio.AgentInput(request.Contents, request.PreviousInteractionID != "")
 	}
@@ -2562,7 +2890,7 @@ func (service *trackedService) runAttempt(
 		uploadStartedAt := time.Now()
 		request.Contents, attempt.copies, err = service.service.(interface {
 			UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies, bool) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
-		}).UploadInlineMediaToLease(ctx, lease, request.Contents, attempt.copies, attempt.interactionStream)
+		}).UploadInlineMediaToLease(ctx, lease, request.Contents, attempt.copies, attempt.interaction.IsModel())
 		if err == nil {
 			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "内联附件处理完成",
 				"attachments", mediaCount, "bytes", fmt.Sprintf("%d B", mediaBytes), "duration", time.Since(uploadStartedAt))
@@ -2580,6 +2908,17 @@ func (service *trackedService) runAttempt(
 	})
 	ctx = aistudio.ContextWithReplyToolBypassObserver(ctx, func() {
 		service.requests.logRequestProgress(request.ID, accountLabel, "INFO", "模型没有使用回复工具", "model", modelID)
+	})
+	ctx = aistudio.ContextWithReplyToolObserver(ctx, aistudio.ReplyToolObserver{
+		OnActive: func(enabled bool) {
+			api.SetAccessLogReplyTool(ctx, enabled)
+		},
+		OnCall: func() {
+			api.AddAccessLogReplyToolCall(ctx)
+		},
+		OnContinuation: func() {
+			api.AddAccessLogReplyToolContinuation(ctx)
+		},
 	})
 	ctx = aistudio.ContextWithRequestPhaseObserver(ctx, prepareTiming.observe)
 	if err == nil {
@@ -2674,8 +3013,11 @@ func (service *trackedService) continuationAccount(ctx context.Context, requestI
 	if releaseErr := current.Release(); releaseErr != nil {
 		return nil, releaseErr
 	}
-	if !service.countSwitchFailure(&attempt.failures, err) {
+	if !service.countSwitchFailure(&attempt.failures, &attempt.quotaFailures, err) {
 		return nil, aistudio.ErrNoEligibleAccount
+	}
+	if waitErr := service.waitSwitchInterval(ctx, requestID, time.Now()); waitErr != nil {
+		return nil, waitErr
 	}
 	selection := aistudio.AccountSelection{ModelID: modelID, Method: "generateContent", PlaygroundOnly: true, AllowedAccountIDs: []string{}}
 	for _, accountID := range service.pool.EnabledAccounts() {
@@ -2845,6 +3187,7 @@ func (service *trackedService) settleAttempt(
 	}
 	// cooledUntil 是这次失败使账户在该模型上冷却到的时刻
 	var cooledUntil time.Time
+	sameAccountChannel := false
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
 		cooldown.RequestSize = attempt.selection.RequestSize
@@ -2862,6 +3205,7 @@ func (service *trackedService) settleAttempt(
 				err = &quotaCooldownError{err: err, until: retry.quotaUntil}
 			}
 			if !cooldown.Global && service.pool.AccountChannelAvailable(accountID, attempt.selection) {
+				sameAccountChannel = true
 				delete(retry.attempted, accountID)
 				retry.maxAttempts++
 			}
@@ -2926,9 +3270,11 @@ func (service *trackedService) settleAttempt(
 		retry.attemptFailure = err
 	}
 	if releaseErr := lease.Release(); releaseErr != nil {
-		return attemptOutcome{err: errors.Join(err, releaseErr), accountID: accountID, accountLabel: accountLabel}
+		return attemptOutcome{err: errors.Join(err, releaseErr), failedAt: time.Now(), accountID: accountID, accountLabel: accountLabel}
 	}
-	service.workers.spareForCooling(requestCtx, attempt.selection, accountID, cooledUntil)
+	if service.switchInterval() == 0 {
+		service.workers.spareForCooling(requestCtx, attempt.selection, accountID, cooledUntil)
+	}
 	recoverWorker := false
 	var firstEventTimedOut *firstEventTimeoutError
 	// 上游以额度、权限拒绝、服务受限或首字超时结束尝试时不重建 Worker 重放，直接换号
@@ -2944,19 +3290,28 @@ func (service *trackedService) settleAttempt(
 			retryable = false
 		}
 	}
-	if retryable && !buildRejected && !missingInlineMedia && !recoverWorker {
-		retryable = service.countSwitchFailure(&retry.failures, err)
+	if retryable && !buildRejected && !missingInlineMedia && !recoverWorker && !sameAccountChannel {
+		retryable = service.countSwitchFailure(&retry.failures, &retry.quotaFailures, err)
 	}
-	return attemptOutcome{err: err, retryable: retryable, recoverWorker: recoverWorker, accountID: accountID, accountLabel: accountLabel}
+	return attemptOutcome{
+		err: err, retryable: retryable, recoverWorker: recoverWorker,
+		sameAccount: recoverWorker || buildRejected || missingInlineMedia || coolingDown || sameAccountChannel,
+		failedAt:    time.Now(), accountID: accountID, accountLabel: accountLabel,
+	}
 }
 
-// countSwitchFailure 判断 err 引起的换号是否计入 MAX_ACCOUNT_SWITCHES，返回是否仍在换号上限内；登录失效、发送前进入冷却与额度失败不计入
-func (service *trackedService) countSwitchFailure(failures *int, err error) bool {
+// countSwitchFailure 判断 err 引起的换号是否仍在换号上限内：登录失效与发送前进入冷却不计入；额度失败按 MAX_QUOTA_SWITCHES 计数（默认不限），其余非额度失败按 MAX_ACCOUNT_SWITCHES 计数
+func (service *trackedService) countSwitchFailure(failures *int, quotaFailures *int, err error) bool {
 	if aistudio.DefinitiveAuthenticationFailure(err) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
 		return true
 	}
 	if _, quota := aistudio.QuotaCooldownForError(err, time.Now()); quota {
-		return true
+		encoded := service.quotaSwitchLimit.Load()
+		if encoded <= 0 || quotaFailures == nil {
+			return true
+		}
+		*quotaFailures++
+		return int64(*quotaFailures) <= encoded-1
 	}
 	*failures++
 	return int64(*failures) <= service.maxAccountSwitches.Load()
@@ -3091,7 +3446,7 @@ func retryableGenerateAccountError(ctx context.Context, err error) bool {
 }
 
 func (service *trackedService) lifecycleRequestContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	requestCtx, cancel := context.WithTimeout(ctx, service.timeout)
+	requestCtx, cancel := context.WithTimeout(ctx, service.requestTimeout())
 	stopLifecycle := context.AfterFunc(service.lifecycle, cancel)
 	return requestCtx, func() {
 		stopLifecycle()
@@ -3106,7 +3461,7 @@ func (service *trackedService) dataRequestContext(ctx context.Context) (context.
 		service.lifecycleMu.Unlock()
 		return nil, nil, service.stoppedError()
 	}
-	deadline, cancel := newIdleDeadlineContext(ctx, service.timeout)
+	deadline, cancel := newIdleDeadlineContext(ctx, service.requestTimeout())
 	run := service.dataContext
 	stopData := context.AfterFunc(run, cancel)
 	service.lifecycleMu.Unlock()

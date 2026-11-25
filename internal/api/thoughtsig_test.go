@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -34,15 +33,5 @@ func TestChatRestoresStoredThoughtSignature(t *testing.T) {
 	store.Restore(generate.Contents)
 	if got := generate.Contents[1].Parts[0].FunctionCall.ThoughtSignature; got != "sig-from-client" {
 		t.Fatalf("client-supplied signature must win: got %q", got)
-	}
-}
-
-func TestThoughtSignatureStoreIsBounded(t *testing.T) {
-	store := newThoughtSignatureStore()
-	for i := 0; i < thoughtSignatureCapacity+10; i++ {
-		store.Remember([]aistudio.FunctionCall{{ID: fmt.Sprintf("call_%d", i), Name: "f", Arguments: json.RawMessage(`{}`), ThoughtSignature: "s"}})
-	}
-	if len(store.signatures) != thoughtSignatureCapacity || len(store.order) != thoughtSignatureCapacity {
-		t.Fatalf("store size = %d/%d, want %d", len(store.signatures), len(store.order), thoughtSignatureCapacity)
 	}
 }

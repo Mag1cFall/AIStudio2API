@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -56,7 +57,7 @@ type MakerSuiteHTTPTransport struct {
 	pool           *AccountPool
 	signer         *Signer
 	headers        ProtocolHeaderProvider
-	globalProxy    string
+	globalProxy    atomic.Pointer[string]
 	now            func() time.Time
 	clientsMu      sync.Mutex
 	clients        map[string]*http.Client
@@ -118,16 +119,33 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 		pool:            options.Pool,
 		signer:          signer,
 		headers:         options.Headers,
-		globalProxy:     strings.TrimSpace(options.GlobalProxy),
 		now:             time.Now,
 		clients:         make(map[string]*http.Client),
 		accountClients:  make(map[string]accountHTTPClient),
 		driveDiscovered: make(map[string]bool),
 	}
-	if _, err := transport.clientForProxy(transport.globalProxy); err != nil {
+	if err := transport.SetGlobalProxy(options.GlobalProxy); err != nil {
 		return nil, err
 	}
 	return transport, nil
+}
+
+// GlobalProxy 返回当前默认出口代理
+func (t *MakerSuiteHTTPTransport) GlobalProxy() string {
+	if proxy := t.globalProxy.Load(); proxy != nil {
+		return *proxy
+	}
+	return ""
+}
+
+// SetGlobalProxy 替换默认出口代理并校验可建立代理客户端，不中断进行中的请求
+func (t *MakerSuiteHTTPTransport) SetGlobalProxy(proxy string) error {
+	trimmed := strings.TrimSpace(proxy)
+	if _, err := t.clientForProxy(trimmed); err != nil {
+		return err
+	}
+	t.globalProxy.Store(&trimmed)
+	return nil
 }
 
 // sendHTTP 发送 HTTP 请求，请求失败时错误中的地址不含查询参数
@@ -359,7 +377,7 @@ func (t *MakerSuiteHTTPTransport) FetchStatic(ctx context.Context, accountID str
 	if err != nil {
 		return nil, err
 	}
-	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
+	client, err := t.clientForProxy(account.EffectiveProxy(t.GlobalProxy()))
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +411,7 @@ func (t *MakerSuiteHTTPTransport) CloseIdleConnections() {
 
 // clientForAccount 返回账户专用的固定出口客户端，与每账户一个浏览器的 Firefox 一致，按账户隔离连接池、预检缓存与 TLS 票据缓存
 func (t *MakerSuiteHTTPTransport) clientForAccount(account *Account) (*http.Client, error) {
-	proxyURL := account.EffectiveProxy(t.globalProxy)
+	proxyURL := account.EffectiveProxy(t.GlobalProxy())
 	t.clientsMu.Lock()
 	if entry, ok := t.accountClients[account.ID]; ok && entry.proxyURL == proxyURL {
 		t.clientsMu.Unlock()

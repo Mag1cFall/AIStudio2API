@@ -3,7 +3,6 @@ package aistudio
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -96,8 +95,8 @@ type goWAARuntime struct {
 	previous *goWAARuntime
 	// running 是最近一次点击 Run 或 Rerun 取 proof 的 VM，随后的 GenerateContent 响应开始与结束时在其中派发指针下元素被替换的事件
 	running *waa.Runtime
-	// chat 是本页点击后发出的上一个 GenerateContent 各对话轮次的 SHA-256 摘要，页面还没有对话、点过 New chat 或上一次响应不是 200 时为 nil；与 running 同由 vmMu 保护
-	chat [][sha256.Size]byte
+	// chat 是本页点击后发出的上一个 GenerateContent 的对话轮次，页面还没有对话、点过 New chat 或上一次响应不是 200 时为 nil；与 running 同由 vmMu 保护
+	chat []json.RawMessage
 
 	// uiLocale 是官网前端主程序地址声明的界面语言
 	uiLocale string
@@ -1342,52 +1341,6 @@ func generateContents(body []byte) []json.RawMessage {
 	return contents
 }
 
-// chatDigests 返回 GenerateContent 正文各对话轮次的 SHA-256 摘要，不持有正文底层数组
-func chatDigests(body []byte) [][sha256.Size]byte {
-	contents := generateContents(body)
-	if contents == nil {
-		return nil
-	}
-	digests := make([][sha256.Size]byte, len(contents))
-	for index, content := range contents {
-		digests[index] = sha256.Sum256(content)
-	}
-	return digests
-}
-
-// startsNewChat 返回页面上一次发出的对话轮次摘要 previous 之后要发出 contents 时是否先开新对话
-func startsNewChat(previous [][sha256.Size]byte, contents []json.RawMessage) bool {
-	if previous == nil {
-		return false
-	}
-	samePrefix := func() bool {
-		for index, digest := range previous {
-			if sha256.Sum256(contents[index]) != digest {
-				return false
-			}
-		}
-		return true
-	}
-	if len(contents) == len(previous) && samePrefix() {
-		return false
-	}
-	if len(contents) == len(previous)+2 && samePrefix() && wireContentRole(contents[len(previous)]) == "model" {
-		return false
-	}
-	return true
-}
-
-// wireContentRole 返回 GenerateContent 对话轮次 [parts, role] 的角色
-func wireContentRole(content json.RawMessage) string {
-	fields, ok := wireArray(content)
-	if !ok || len(fields) <= 1 {
-		return ""
-	}
-	var role string
-	_ = json.Unmarshal(fields[1], &role)
-	return role
-}
-
 // userGestureKey 标记 proof 所属请求在官网由页面上的点击或按键触发
 type userGestureKey struct{}
 
@@ -1454,7 +1407,7 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 	switch {
 	case run:
 		var newChat func(at time.Time)
-		if startsNewChat(runtime.chat, contents) {
+		if camoufoxnative.StartsNewChat(runtime.chat, contents) {
 			newChat = runtime.newChat
 		}
 		proof, err = vm.RunProofAfter(ctx, digest, prompt, newChat, settings, pickedPause)
@@ -1533,7 +1486,7 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 		runtime.vmMu.Lock()
 		running, runtime.running = runtime.running, nil
 		if running != nil {
-			runtime.chat = chatDigests(body)
+			runtime.chat = generateContents(body)
 		}
 		runtime.vmMu.Unlock()
 		turn = runtime.elements.turn(body, counting)

@@ -188,7 +188,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writer := &anthropicStreamWriter{
 			send: sseSender(stream), id: messageID, model: request.Model,
 			inputTokens: <-estimate, startUsage: startUsage,
-			searchKey: s.config.APIKey, omitted: request.thinkingOmitted(),
+			searchKey: s.config.APIKeys(), omitted: request.thinkingOmitted(),
 			media: media, context: contextResult, search: declaredSearch,
 		}
 		if err := writer.start(); err != nil {
@@ -208,7 +208,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicRequestError(w, err)
 		return
 	}
-	response := buildAnthropicResponse(messageID, request.Model, result, s.config.APIKey, request.thinkingOmitted(), media)
+	response := buildAnthropicResponse(messageID, request.Model, result, s.config.APIKeys(), request.thinkingOmitted(), media)
 	contextResult.response(response, result.usage)
 	writeJSON(w, http.StatusOK, officialOrder("anthropic", response))
 }
@@ -217,7 +217,7 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 func (s *server) writeAnthropicCompactionPause(w http.ResponseWriter, request anthropicRequest, id string, contextResult anthropicContextResult) {
 	result := generationResult{finishReason: "compaction", usage: &aistudio.Usage{}}
 	if !request.Stream {
-		response := buildAnthropicResponse(id, request.Model, result, s.config.APIKey, false, mediaOutput{})
+		response := buildAnthropicResponse(id, request.Model, result, s.config.APIKeys(), false, mediaOutput{})
 		contextResult.response(response, result.usage)
 		writeJSON(w, http.StatusOK, officialOrder("anthropic", response))
 		return
@@ -250,7 +250,7 @@ func (s *server) writeAnthropicPrefill(w http.ResponseWriter, r *http.Request, r
 	}
 	result := generationResult{finishReason: "max_tokens", usage: generated.usage}
 	if !request.Stream {
-		response := buildAnthropicResponse(id, request.Model, result, s.config.APIKey, false, mediaOutput{})
+		response := buildAnthropicResponse(id, request.Model, result, s.config.APIKeys(), false, mediaOutput{})
 		contextResult.response(response, result.usage)
 		writeJSON(w, http.StatusOK, officialOrder("anthropic", response))
 		return

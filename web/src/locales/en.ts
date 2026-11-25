@@ -84,6 +84,10 @@ export const messages: Record<TranslationKey, string> = {
     'The new version didn’t start within 1 minute. Open AIStudio2API again and this page reloads once it’s running. If it still won’t start, check the logs in {path}.',
   'version.available': '{version} is available',
   'version.upToDate': 'Up to date',
+  'version.rateLimited':
+    'GitHub is temporarily limiting requests from this network, so updates cannot be checked right now.',
+  'version.retryAt': 'Checks again automatically at {time} (in about {minutes} min).',
+  'version.retryAtSoon': 'Checks again automatically at {time} (within a minute).',
   'version.release': 'View on GitHub',
   'version.notes': 'Release notes for {version}',
   'version.container':
@@ -115,7 +119,6 @@ export const messages: Record<TranslationKey, string> = {
   'common.edit': 'Edit',
   'common.enable': 'Enable',
   'common.disable': 'Disable',
-  'common.empty': 'No data',
   'common.copy': 'Copy',
   'common.copied': 'Copied',
   'common.error': 'Request failed',
@@ -140,6 +143,12 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.exitAccounts': 'Accounts: {count}',
   'accounts.exitLooking': 'Looking up exit IPs…',
   'accounts.exitFailed': 'Lookup failed',
+  'accounts.exitsTotal': '{count} total',
+  'accounts.exitsShared': '{count} shared',
+  'accounts.exitsFailed': '{count} failed',
+  'accounts.exitsSingle': '1 account each',
+  'accounts.exitsExpand': 'Show all {count}',
+  'accounts.exitsCollapse': 'Show less',
   'accounts.byExit': 'From exit location',
   'accounts.noMatches': 'No matching accounts',
   'accounts.proxy': 'Account proxy',
@@ -556,6 +565,15 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxAccountSwitches': 'Max account switches',
   'settings.maxAccountSwitchesHelp':
     'How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; 0 disables switching, and quota errors do not count',
+  'settings.maxQuotaSwitches': 'Max switches on quota errors',
+  'settings.maxQuotaSwitchesHelp':
+    'How many times a request moves to another account when an account runs out of quota before it returns the quota error; 0 disables switching',
+  'settings.maxQuotaSwitchesOff': 'Unlimited',
+  'settings.maxQuotaSwitchesCount': 'Number of switches',
+  'settings.maxQuotaSwitchesUnit': 'switches',
+  'settings.accountSwitchInterval': 'Minimum switch interval',
+  'settings.accountSwitchIntervalHelp':
+    'When a request switches accounts, the next account waits at least this long before contacting Google, so a request does not burn through every account within seconds',
   'settings.authPathAdd': 'Add path',
   'settings.authPathBrowse': 'Browse',
   'settings.authPathRemove': 'Remove {path}',
@@ -584,6 +602,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURLHelp':
     'Service address used in media links. Empty uses the address of each request.',
   'settings.modelChannelsHelp': 'Limit a model to one channel; also selectable in model details',
+  'settings.modelAccounts': 'Accounts per model',
+  'settings.modelAccountsHelp':
+    'Only the selected accounts serve the model; if none is available, the request fails instead of using other accounts',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build chat',
@@ -598,14 +619,19 @@ export const messages: Record<TranslationKey, string> = {
   'settings.activeValue': 'Active',
   'settings.previewFallback':
     '{configured} is in use or unavailable, so the preview service uses {active}',
-  'settings.pendingService': 'Saved values apply the next time the generation service starts',
-  'settings.pendingManagement':
-    'Restart the app to apply the listen address, API key, or console sign-in',
+  'settings.pendingService':
+    'The WAA backend or account state path changed and applies after the generation service restarts.',
+  'settings.pendingManagement': 'Restart the app to apply the listen address',
+  'settings.restartTitle': 'Restart the generation service to apply changes',
+  'settings.restartService': 'Restart generation service',
+  'settings.restartLater': 'Later',
+  'settings.restartNoRequests': 'No requests are in progress.',
+  'settings.restartInterrupts': 'Restarting interrupts {count} in-progress requests.',
+  'settings.restartInterruptsOne': 'Restarting interrupts {count} in-progress request.',
+  'settings.serviceRestarted': 'Generation service restarted',
+  'settings.serviceRestartState': 'Generation service status after restart: {state}',
   'settings.saved': 'Settings saved',
-  'settings.savedService':
-    'Settings saved. Stop and start the generation service at the bottom left to apply them.',
-  'settings.savedManagement': 'Settings saved. Restart the app to apply them.',
-  'settings.savedBoth': 'Settings saved. Restart the app',
+  'settings.savedManagement': 'Settings saved. Restart the app to apply the listen address',
   'settings.reveal': 'Reveal key',
   'settings.hide': 'Hide key',
   'playground.protocol': 'Protocol',
@@ -2014,7 +2040,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.section.sillytavern': 'For SillyTavern',
   'settings.replyTool': 'Reply tool anti-truncation',
   'settings.replyToolHelp':
-    'For roleplay only: declare an internal final tool so the model delivers the complete reply at once to reduce mid-stream truncation while keeping thinking streamed live; skipped for structured output, required tool choice, and non-text models',
+    'For roleplay only: declare an internal final tool so the model delivers replies paragraph by paragraph in the same turn to reduce mid-stream truncation without long-reply timeouts, while keeping thinking streamed live; skipped for structured output, required tool choice, and non-text models',
   'settings.thinkingGuard': 'Thinking anti-block',
   'settings.thinkingGuardHelp':
     'For roleplay: guide internal reasoning to stay brief and abstract without repeating sensitive terms and cap thinking effort at low, reducing upstream filter truncation during reasoning; works alongside message rewrite and reply tool',
@@ -2031,6 +2057,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.effect.immediate': 'Applies when saved',
   'settings.effect.service': 'Applies after restarting the generation service',
   'settings.effect.management': 'Applies after restarting the app',
+  'settings.effect.launch': 'Applies the next time the app starts',
   'settings.unsavedSection': 'This section has unsaved changes',
   'settings.unsavedBar': 'Unsaved changes',
   'settings.unsavedCount': '{count} unsaved changes',
@@ -2048,8 +2075,10 @@ export const messages: Record<TranslationKey, string> = {
     'Separate origin for API playground HTML previews, opened at the current host name with this port. Use a port other than the listen port.',
   'settings.apiKeyAccountsHelp':
     'Choose which accounts handle requests made with each key. A key with none selected can use every account',
+  'settings.apiKeyAccountsEmpty':
+    'After you add a local API key, choose here which accounts each key can use',
+  'settings.apiKeyAdd': 'Add key',
   'settings.keyAccountsAll': 'All accounts',
-  'settings.keyAccountsSome': 'Selected accounts',
   'settings.accountSearch': 'Search accounts',
   'settings.accountNone': 'No matching accounts',
   'settings.keyAccountsClear': 'Use all accounts',

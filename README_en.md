@@ -282,9 +282,10 @@ Add more accounts on the same page; [Account Management](#account-management) co
 
 When settings take effect:
 
-- As soon as they are saved: the account selection strategy, worker capacity, max account switches, model mapping, non-streaming keepalive, fake streaming, search model variants, Google Search for all models, reply tool anti-truncation, Simplified to Traditional Chinese rewrite, and media output; requests already in progress keep the settings they started with
-- After stopping and starting the generation service: the other data-plane settings, read from the latest `.env` at start
-- After restarting the management process: `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR`, and `PROXY_API_KEY`
+- On the next request as soon as they are saved: almost all settings (including `PROXY_API_KEY`, console login, default proxy and proxy pool, upstream channels, hidden model discovery, timeouts, first-event hedge, account switching policy, request rewrites, and logging); requests already in progress keep the settings they started with, and proxy changes drain and rebind affected account workers once their in-flight requests finish
+- After restarting the generation service: `WAA_BACKEND` and `AISTUDIO_AUTH_STATES` (when the generation service is running, Settings offers a button to restart it)
+- After restarting the management process: `LISTEN_ADDR` and `PREVIEW_LISTEN_ADDR`
+- On the next program start: `AUTO_START`
 
 Exiting:
 
@@ -681,6 +682,8 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
 | `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
 | `MAX_ACCOUNT_SWITCHES` | `3` | How many times a request moves to another account after a non-quota upstream error such as 403 or 5xx; `0` disables switching |
+| `ACCOUNT_SWITCH_INTERVAL` | `off` | Minimum wait in seconds from a failed account attempt before the next account sends any request to Google (or cold-starts a standby worker); `off` disables waiting |
+| `MAX_QUOTA_SWITCHES` | `off` | Maximum account switches for quota exhaustion (429) within one request; `off` tries all remaining accounts, `0` disables quota switching, and a positive integer returns the last 429 once exceeded |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
@@ -709,13 +712,14 @@ Notes:
 
 - `PREVIEW_LISTEN_ADDR`: when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use
 - `AUTO_START`: if startup fails for reasons such as the network, it retries at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually
-- `MAX_ACCOUNT_SWITCHES`: expired sessions and quota errors do not count, and the remaining accounts are still tried in turn
+- `MAX_ACCOUNT_SWITCHES`: expired sessions and quota errors do not count; quota-exhaustion switches are controlled separately by `MAX_QUOTA_SWITCHES` (unlimited by default)
+- `ACCOUNT_SWITCH_INTERVAL`: when moving to a standby account, waits for the interval before starting the worker and sends immediately once ready without waiting again; stops immediately if the client disconnects
 - `NONSTREAM_KEEPALIVE`: after returning 200, a newline is written every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body
 - `STRIP_THOUGHT_SIGNATURES`: function calls are sent with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens
 - `DISCOVER_HIDDEN_MODELS`:
   - Discovery runs when account model catalogs sync: at startup, every 24 hours, and on Refresh all in Accounts
   - Models the account is confirmed to be able to use are added to the catalog; they can be used through every protocol, appear in `/v1/models`, and are marked Hidden in AI Studio on the Model catalog page
-  - Once AI Studio lists a model, its official details are used; turning this off removes them the next time the generation service starts
+  - Once AI Studio lists a model, its official details are used; turning this off removes hidden models immediately, and turning it on discovers them in the background
 - `FIRST_EVENT_HEDGE`:
   - The backup request uses another account first, otherwise a free slot on the same account; the first to answer continues and the other is cancelled
   - `auto` waits for the p95 of each model and channel over the last 24 hours, and models with fewer than 20 requests are not hedged
@@ -741,13 +745,13 @@ The service loads every account from `AISTUDIO_AUTH_STATES`. Four settings contr
 
 The console allows passwordless loopback access by default. For remote management:
 
-- Set `ADMIN_AUTH_ENABLED=true`, configure the administrator username and password, restart the process, and sign in on the separate `/login` page
+- Set `ADMIN_AUTH_ENABLED=true`, configure the administrator username and password, and sign in on the separate `/login` page (saving in Settings takes effect immediately and keeps the current browser signed in)
 - A session lasts 12 hours; with "Stay signed in for 30 days" checked it lasts 30 days and survives restarts
 - Sign-out is supported; administrators share the instance's account pool, configuration, and logs
 
 Public APIs use the separate `PROXY_API_KEY`.
 
-Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Console login settings can also be saved from the settings page and take effect after restarting the process.
+Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Console login settings saved from the Settings page take effect immediately (disabling login is only allowed from loopback).
 
 HTML previews in the API playground run on a separate origin served at `PREVIEW_LISTEN_ADDR`, and the page opens them at the current host name with that port:
 

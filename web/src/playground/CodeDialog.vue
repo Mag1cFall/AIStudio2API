@@ -15,8 +15,16 @@ const props = defineProps<{
 }>()
 const open = defineModel<boolean>('open', { required: true })
 const { t } = useI18n()
-const language = ref<string>(props.options[0]!.value)
-const option = computed(() => props.options.find((item) => item.value === language.value)!)
+// chosen 是用户最近选择的语言，不在当前可选语言中时显示第一项，重新可选时恢复
+const chosen = ref<string>(props.options[0]!.value)
+const option = computed(
+  () => props.options.find((item) => item.value === chosen.value) ?? props.options[0]!,
+)
+// language 是下拉框显示的语言
+const language = computed({
+  get: () => option.value.value,
+  set: (value: string) => (chosen.value = value),
+})
 const text = computed(() => props.code(option.value.value))
 // highlighted 是共用 Worker 返回的高亮结果与对应原文，结果返回前显示原文
 const highlighted = shallowRef<{ text: string; html: string }>()

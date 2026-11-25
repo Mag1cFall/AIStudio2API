@@ -81,7 +81,7 @@ func transcribeFunctionParts(contents []Content) ([]Content, error) {
 	return transcribed, nil
 }
 
-// ToolPartTranscript 返回函数调用、函数结果与代码执行 part 的 Gemini API JSON 文本
+// ToolPartTranscript 返回函数调用、函数结果、代码执行与服务端工具步骤 part 的 Gemini API JSON 文本
 func ToolPartTranscript(part Part) (string, error) {
 	var value map[string]any
 	switch {
@@ -93,6 +93,10 @@ func ToolPartTranscript(part Part) (string, error) {
 		value = map[string]any{"executableCode": part.ExecutableCode}
 	case part.CodeExecutionResult != nil:
 		value = map[string]any{"codeExecutionResult": part.CodeExecutionResult}
+	case part.ToolCall != nil:
+		value = map[string]any{"toolCall": map[string]any{"id": part.ToolCall.ID, "toolType": part.ToolCall.Type, "args": transcriptJSON(part.ToolCall.Data)}}
+	case part.ToolResponse != nil:
+		value = map[string]any{"toolResponse": map[string]any{"id": part.ToolResponse.ID, "toolType": part.ToolResponse.Type, "response": transcriptJSON(part.ToolResponse.Data)}}
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {

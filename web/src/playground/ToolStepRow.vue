@@ -120,8 +120,10 @@ function onKey(event: KeyboardEvent): void {
   opacity: 1;
 }
 
+/* 标题不随摘要收缩，单独超过整行时才截断；22px 为前导图标与间距 */
 .title {
-  flex: 0 1 auto;
+  flex: none;
+  max-width: calc(100% - 22px);
 }
 
 .sep {

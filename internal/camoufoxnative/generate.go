@@ -223,6 +223,11 @@ func nextChatAction(previous, contents []json.RawMessage) chatAction {
 	return chatNew
 }
 
+// StartsNewChat 返回页面上一次发出的对话 previous 之后要发出 contents 时是否先开新对话
+func StartsNewChat(previous, contents []json.RawMessage) bool {
+	return nextChatAction(previous, contents) == chatNew
+}
+
 // generateArmFunction 是在页面上为下一次 Run 安装一次性钩子的函数声明
 // 参数依次为页面对象、请求 ID、digest、head、tail 与通道；页面发送的正文换成 head + proof + tail
 // 通道先发出 {sent: true, proof, refresh, compute}，再依次发出响应头、正文块与结束标记

@@ -7,7 +7,8 @@ defineProps<{
   controlId?: string
   groupId?: string
   description?: string
-  effect: 'immediate' | 'service' | 'management'
+  // effect 是保存后的生效时机：立即、重启生成服务、重启程序、下次启动程序
+  effect: 'immediate' | 'service' | 'management' | 'launch'
   changed?: boolean
   env?: string | undefined
   // envNote 是部分控件由环境变量决定时的说明，整行控件仍可编辑

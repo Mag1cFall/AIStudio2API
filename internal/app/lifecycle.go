@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +24,8 @@ type managedService interface {
 	ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int)
 	SetAPIKeyAccounts(map[string][]string)
 	SetRequestPolicy(mapping []config.ModelAlias, maxAccountSwitches int)
+	ApplyHotConfig(config.Config)
+	ApplyChannelsAndHidden(config.Config)
 }
 
 // generationAdmin 表示进程级管理器转交给当前生成服务的管理操作
@@ -53,6 +54,8 @@ type generationAdmin interface {
 	RuntimeConfig(context.Context) (api.RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, api.RuntimeConfig) (api.RuntimeConfig, error)
 	ApplyAccountSelection(config.Config)
+	ApplyProxy(string) error
+	ProxyState() (string, []api.AdminProxy)
 	Cooldowns(context.Context) ([]api.AdminCooldown, error)
 	ClearCooldown(ctx context.Context, accountID string, scope string) error
 	Requests(context.Context) ([]api.AdminRequest, error)
@@ -133,10 +136,14 @@ type runtimeManager struct {
 	autoStartCancel context.CancelFunc
 	// settings 是已保存的只决定新请求行为的设置
 	settings atomic.Pointer[requestSettings]
-	ledger   *requestdb.Store
-	prompts  *promptdb.Store
-	states   api.StateStore
-	logs     *logOutput
+	// apiKey 是当前生效的逗号分隔本地 API 密钥，保存后立即替换
+	apiKey atomic.Pointer[string]
+	// egressProxyVal 是管理进程访问外网使用的默认代理，为空时回退系统代理，保存 PROXY 后立即替换
+	egressProxyVal atomic.Pointer[string]
+	ledger         *requestdb.Store
+	prompts        *promptdb.Store
+	states         api.StateStore
+	logs           *logOutput
 }
 
 // newRuntimeManager 创建进程级管理器与初始生成服务
@@ -156,7 +163,9 @@ func newRuntimeManager(
 		requests.close()
 		return nil, err
 	}
-	generation.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts, cfg))
+	generation.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts))
+	manager.setAPIKey(cfg.ProxyAPIKey)
+	manager.setEgressProxy(cfg.Proxy)
 	manager.settings.Store(requestSettingsOf(cfg))
 	manager.current = generation
 	manager.wireAccounts(generation)
@@ -164,6 +173,26 @@ func newRuntimeManager(
 		manager.initial = generation
 	}
 	return manager, nil
+}
+
+// setAPIKey 原子更新当前生效的本地 API 密钥
+func (manager *runtimeManager) setAPIKey(value string) {
+	copyVal := value
+	manager.apiKey.Store(&copyVal)
+}
+
+// currentAPIKey 返回当前生效的本地 API 密钥
+func (manager *runtimeManager) currentAPIKey() string {
+	if value := manager.apiKey.Load(); value != nil {
+		return *value
+	}
+	return manager.activeManagement.ProxyAPIKey
+}
+
+// setEgressProxy 原子更新管理进程外联使用的代理配置
+func (manager *runtimeManager) setEgressProxy(rawProxy string) {
+	copyVal := rawProxy
+	manager.egressProxyVal.Store(&copyVal)
 }
 
 // buildRuntimeGeneration 从配置快照创建账户池、Worker 与协议运行时
@@ -237,6 +266,7 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 			return api.AdminStatus{}, err
 		}
 		manager.wireAccounts(next)
+		manager.seedAccountUsage(launchCtx, next)
 	}
 	if launchCtx.Err() != nil {
 		release()
@@ -258,11 +288,19 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 		}
 		return api.AdminStatus{}, err
 	}
+	manager.overrides.Apply(&saved)
 	next.admin.ApplyAccountSelection(saved)
-	next.service.SetAPIKeyAccounts(apiKeyAccounts(saved.ProxyAPIKey, saved.APIKeyAccounts, manager.activeManagement))
+	next.service.SetAPIKeyAccounts(apiKeyAccounts(saved.ProxyAPIKey, saved.APIKeyAccounts))
 	next.service.ApplyCapacity(saved.WarmWorkerLimit, saved.MaxActiveWorkers, saved.WarmStartupConcurrency, saved.PerAccountConcurrency)
 	mapping, _ := config.ParseModelMapping(saved.ModelMapping)
 	next.service.SetRequestPolicy(mapping, saved.MaxAccountSwitches)
+	next.service.ApplyHotConfig(saved)
+	next.service.ApplyChannelsAndHidden(saved)
+	if saved.Proxy != next.config.Proxy {
+		_ = next.admin.ApplyProxy(saved.Proxy)
+	}
+	manager.setAPIKey(saved.ProxyAPIKey)
+	manager.setEgressProxy(saved.Proxy)
 	manager.settings.Store(requestSettingsOf(saved))
 	manager.mu.Lock()
 	current = manager.current
@@ -342,6 +380,14 @@ func (manager *runtimeManager) StopService(ctx context.Context) (api.AdminStatus
 	return current.admin.StopService(ctx)
 }
 
+// RestartService 停止当前生成服务并以最新配置重新启动
+func (manager *runtimeManager) RestartService(ctx context.Context) (api.AdminStatus, error) {
+	if _, err := manager.StopService(ctx); err != nil {
+		return api.AdminStatus{}, err
+	}
+	return manager.StartService(ctx)
+}
+
 // DownloadCamoufox 在 Camoufox 未就绪且没有进行中的下载时经出口代理在后台开始下载
 func (manager *runtimeManager) DownloadCamoufox(ctx context.Context) (api.AdminStatus, error) {
 	camoufoxnative.PrepareInBackground(manager.egressProxy())
@@ -379,11 +425,11 @@ func (manager *runtimeManager) Close() error {
 
 // requestSettings 是只决定新请求行为的设置，保存后下一个请求即采用，进行中的请求沿用开始时的值
 type requestSettings struct {
-	modes                   api.ResponseModes
-	searchModelAliases      bool
-	googleSearch            bool
-	mediaOutput             string
-	mediaBaseURL            string
+	modes              api.ResponseModes
+	searchModelAliases bool
+	googleSearch       bool
+	mediaOutput        string
+	mediaBaseURL       string
 	replyTool          bool
 	userMessageRewrite string
 	thinkingGuard      bool
@@ -571,9 +617,17 @@ func (manager *runtimeManager) Transcribe(ctx context.Context, request aistudio.
 
 // egressProxy 返回管理进程访问外网的代理：PROXY 的第一个代理，未设置时为系统代理
 func (manager *runtimeManager) egressProxy() string {
-	manager.mu.RLock()
-	proxies := config.ProxyList(manager.current.config.Proxy)
-	manager.mu.RUnlock()
+	raw := ""
+	if value := manager.egressProxyVal.Load(); value != nil {
+		raw = *value
+	} else {
+		manager.mu.RLock()
+		if manager.current != nil {
+			raw = manager.current.config.Proxy
+		}
+		manager.mu.RUnlock()
+	}
+	proxies := config.ProxyList(raw)
 	if len(proxies) > 0 {
 		return proxies[0]
 	}
@@ -762,7 +816,63 @@ func (manager *runtimeManager) RuntimeConfig(ctx context.Context) (api.RuntimeCo
 	return value, err
 }
 
-// UpdateRuntimeConfig 保存生成服务配置，账户选择策略、容量设置与只决定新请求行为的设置立即生效
+// configFromDTO 把管理接口配置对象转换为内部 Config，供测试替身未落盘时使用
+func configFromDTO(value api.RuntimeConfig) config.Config {
+	initTimeout, _ := time.ParseDuration(value.InitTimeout)
+	requestTimeout, _ := time.ParseDuration(value.RequestTimeout)
+	return config.Config{
+		AutoStart:              value.AutoStart,
+		HideDockIcon:           value.HideDockIcon,
+		RequestBodyLog:         value.RequestBodyLog,
+		LogFile:                value.LogFile,
+		LogMaxTotalMB:          value.LogMaxTotalMB,
+		AdminAuthEnabled:       value.AdminAuthEnabled,
+		AdminUsername:          value.AdminUsername,
+		AdminPassword:          value.SavedAdminPassword,
+		BuildNativeNonstream:   value.BuildNativeNonstream,
+		NonstreamKeepalive:     value.NonstreamKeepalive,
+		FakeStream:             value.FakeStream,
+		YouTubeLinks:           value.YouTubeLinks,
+		SearchModelAliases:     value.SearchModelAliases,
+		DiscoverHiddenModels:   value.DiscoverHiddenModels,
+		GoogleSearch:           value.GoogleSearch,
+		StripThoughtSignatures: value.StripThoughtSignatures,
+		ContinuationRewrite:    value.ContinuationRewrite,
+		ContinuationPrompt:     value.ContinuationPrompt,
+		ReplyTool:              value.ReplyTool,
+		UserMessageRewrite:     value.UserMessageRewrite,
+		ThinkingGuard:          value.ThinkingGuard,
+		FirstEventHedge:        value.FirstEventHedge,
+		FirstEventHedgeModels:  value.FirstEventHedgeModels,
+		FirstEventTimeout:      value.FirstEventTimeout,
+		AuthStates:             value.AuthStates,
+		ListenAddr:             value.ListenAddr,
+		PreviewListenAddr:      value.PreviewListenAddr,
+		ProxyAPIKey:            value.APIKey,
+		Proxy:                  value.Proxy,
+		InitTimeout:            initTimeout,
+		RequestTimeout:         requestTimeout,
+		WarmWorkerLimit:        value.WarmWorkerLimit,
+		MaxActiveWorkers:       value.MaxActiveWorkers,
+		WarmStartupConcurrency: value.WarmStartupConcurrency,
+		PerAccountConcurrency:  value.PerAccountConcurrency,
+		RoutingStrategy:        value.RoutingStrategy,
+		AccountOrder:           value.AccountOrder,
+		MaxAccountSwitches:     value.MaxAccountSwitches,
+		AccountSwitchInterval:  value.AccountSwitchInterval,
+		MaxQuotaSwitches:       value.MaxQuotaSwitches,
+		UpstreamChannels:       value.UpstreamChannels,
+		ModelMapping:           value.ModelMapping,
+		ModelChannels:          value.ModelChannels,
+		ModelAccounts:          value.ModelAccounts,
+		APIKeyAccounts:         value.APIKeyAccounts,
+		WAABackend:             value.WAABackend,
+		MediaOutput:            value.MediaOutput,
+		MediaBaseURL:           value.MediaBaseURL,
+	}
+}
+
+// UpdateRuntimeConfig 保存生成服务配置，除必须重建生成服务或重启程序的极少数项外，其余设置均对下一次请求立即生效
 func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value api.RuntimeConfig) (api.RuntimeConfig, error) {
 	manager.configMu.Lock()
 	defer manager.configMu.Unlock()
@@ -772,25 +882,37 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 	if err != nil {
 		return updated, err
 	}
-	current.service.SetAPIKeyAccounts(apiKeyAccounts(updated.APIKey, updated.APIKeyAccounts, manager.activeManagement))
+	var saved config.Config
+	if manager.configPath != "" {
+		var loadErr error
+		saved, loadErr = config.Load(manager.configPath)
+		if loadErr != nil {
+			return updated, loadErr
+		}
+	} else {
+		saved = configFromDTO(updated)
+	}
+	manager.overrides.Apply(&saved)
+	manager.setAPIKey(saved.ProxyAPIKey)
+	manager.setEgressProxy(saved.Proxy)
+	manager.activeManagement.ProxyAPIKey = saved.ProxyAPIKey
+	manager.activeManagement.AdminAuthEnabled = saved.AdminAuthEnabled
+	manager.activeManagement.AdminUsername = saved.AdminUsername
+	manager.activeManagement.AdminPassword = saved.AdminPassword
+	current.service.SetAPIKeyAccounts(apiKeyAccounts(saved.ProxyAPIKey, saved.APIKeyAccounts))
 	current.service.ApplyCapacity(
-		updated.WarmWorkerLimit, updated.MaxActiveWorkers, updated.WarmStartupConcurrency, updated.PerAccountConcurrency,
+		saved.WarmWorkerLimit, saved.MaxActiveWorkers, saved.WarmStartupConcurrency, saved.PerAccountConcurrency,
 	)
-	mapping, _ := config.ParseModelMapping(updated.ModelMapping)
-	current.service.SetRequestPolicy(mapping, updated.MaxAccountSwitches)
-	manager.settings.Store(&requestSettings{
-		modes:              api.ResponseModes{NonstreamKeepalive: updated.NonstreamKeepalive, FakeStream: updated.FakeStream},
-		searchModelAliases: updated.SearchModelAliases,
-		googleSearch:       updated.GoogleSearch,
-		mediaOutput:        updated.MediaOutput,
-		mediaBaseURL:       updated.MediaBaseURL,
-		replyTool:          updated.ReplyTool,
-		userMessageRewrite: updated.UserMessageRewrite,
-		thinkingGuard:      updated.ThinkingGuard,
-	})
+	mapping, _ := config.ParseModelMapping(saved.ModelMapping)
+	current.service.SetRequestPolicy(mapping, saved.MaxAccountSwitches)
+	current.service.ApplyHotConfig(saved)
+	current.service.ApplyChannelsAndHidden(saved)
+	proxyErr := current.admin.ApplyProxy(saved.Proxy)
+	updated.ActiveProxy, updated.ProxyPool = current.admin.ProxyState()
+	manager.settings.Store(requestSettingsOf(saved))
 	updated = manager.decorateRuntimeConfig(updated, current.config)
-	manager.ledger.SetBodyCapture(updated.RequestBodyLog)
-	return updated, manager.logs.set(updated.LogFile, updated.LogMaxTotalMB)
+	manager.ledger.SetBodyCapture(saved.RequestBodyLog)
+	return updated, errors.Join(proxyErr, manager.logs.set(saved.LogFile, saved.LogMaxTotalMB))
 }
 
 // Cooldowns 返回当前生成服务冷却状态
@@ -845,47 +967,32 @@ func (manager *runtimeManager) RecordAccessLog(entry api.AccessLog) {
 
 // decorateRuntimeConfig 标记配置所属的进程级与生成服务生效时机
 func (manager *runtimeManager) decorateRuntimeConfig(value api.RuntimeConfig, active config.Config) api.RuntimeConfig {
+	serviceRunning := false
+	manager.mu.RLock()
+	if manager.current != nil && manager.current.service != nil {
+		serviceRunning = manager.current.service.State() != "STOPPED"
+	}
+	manager.mu.RUnlock()
 	value.ActiveListenAddr = manager.activeManagement.ListenAddr
 	value.ReservedListenAddr = manager.reservedListenAddr
-	value.ActiveAPIKey = manager.activeManagement.ProxyAPIKey
 	value.ActivePreviewListenAddr = manager.previewAddress
-	value.ManagementRestartRequired = value.ListenAddr != value.ActiveListenAddr && value.ListenAddr != value.ReservedListenAddr || value.APIKey != value.ActiveAPIKey ||
+	if manager.requests != nil {
+		value.ActiveRequests = manager.requests.count()
+	}
+	value.ManagementRestartRequired = (value.ListenAddr != value.ActiveListenAddr && value.ListenAddr != value.ReservedListenAddr) ||
 		value.PreviewListenAddr != manager.activeManagement.PreviewListenAddr
-	value.ManagementRestartRequired = value.ManagementRestartRequired ||
-		value.AdminAuthEnabled != manager.activeManagement.AdminAuthEnabled ||
-		value.AdminUsername != manager.activeManagement.AdminUsername ||
-		value.SavedAdminPassword != manager.activeManagement.AdminPassword
-	value.ServiceRestartRequired = !sameDataConfig(value, active, manager.overrides)
+	value.ServiceRestartRequired = serviceRunning && !sameDataConfig(value, active, manager.overrides)
 	return value
 }
 
-// sameDataConfig 比较已保存配置与当前生成服务配置
+// sameDataConfig 比较必须重建生成服务才能生效的配置项（账户目录与 WAA 后端）
 func sameDataConfig(value api.RuntimeConfig, active config.Config, overrides dataConfigOverrides) bool {
-	initTimeout, _ := time.ParseDuration(value.InitTimeout)
-	requestTimeout, _ := time.ParseDuration(value.RequestTimeout)
 	saved := config.Config{
-		AuthStates: value.AuthStates, Proxy: value.Proxy,
-		InitTimeout: initTimeout, RequestTimeout: requestTimeout, StripThoughtSignatures: value.StripThoughtSignatures,
-		UpstreamChannels:      value.UpstreamChannels,
-		WAABackend:            value.WAABackend,
-		BuildNativeNonstream:  value.BuildNativeNonstream,
-		YouTubeLinks:          value.YouTubeLinks,
-		DiscoverHiddenModels:  value.DiscoverHiddenModels,
-		FirstEventHedge:       value.FirstEventHedge,
-		FirstEventHedgeModels: value.FirstEventHedgeModels,
-		FirstEventTimeout:     value.FirstEventTimeout,
-		ContinuationRewrite:   value.ContinuationRewrite,
-		ContinuationPrompt:    value.ContinuationPrompt,
+		AuthStates: value.AuthStates,
+		WAABackend: value.WAABackend,
 	}
 	overrides.Apply(&saved)
-	return saved.AuthStates == active.AuthStates && saved.Proxy == active.Proxy &&
-		saved.InitTimeout == active.InitTimeout && saved.RequestTimeout == active.RequestTimeout &&
-		slices.Equal(saved.UpstreamChannels, active.UpstreamChannels) &&
-		saved.WAABackend == active.WAABackend &&
-		saved.BuildNativeNonstream == active.BuildNativeNonstream &&
-		saved.YouTubeLinks == active.YouTubeLinks && saved.StripThoughtSignatures == active.StripThoughtSignatures && saved.FirstEventHedge == active.FirstEventHedge && saved.FirstEventHedgeModels == active.FirstEventHedgeModels && saved.FirstEventTimeout == active.FirstEventTimeout &&
-		saved.DiscoverHiddenModels == active.DiscoverHiddenModels &&
-		saved.ContinuationRewrite == active.ContinuationRewrite && saved.ContinuationPrompt == active.ContinuationPrompt
+	return saved.AuthStates == active.AuthStates && saved.WAABackend == active.WAABackend
 }
 
 var _ aistudio.Service = (*runtimeManager)(nil)

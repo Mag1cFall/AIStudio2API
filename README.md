@@ -282,9 +282,10 @@ docker compose up -d
 
 设置的生效时机：
 
-- 保存后立即生效：账户选择策略、Worker 容量、换号次数上限、模型映射、非流式保活、假流式、搜索型号、全模型搜索、回复工具防截断、简体转繁体改写与媒体输出；进行中的请求沿用开始时的设置
-- 停止再启动生成服务后生效：其余生成服务配置，启动时读取最新 `.env`
-- 重启管理进程后生效：管理页面地址、预览地址和 `PROXY_API_KEY`
+- 绝大多数设置保存后对下一次请求立即生效（包括本地 API 密钥、管理登录、默认代理与代理池、上游通道、隐藏模型探测、超时、首字对冲、换号策略、请求改写与日志设置）；进行中的请求沿用开始时的设置，默认代理变更会在各账户在途请求结束后自动切换 Worker
+- 重启生成服务后生效：`WAA_BACKEND` 与 `AISTUDIO_AUTH_STATES`（生成服务运行时可在设置页直接点击重启生成服务）
+- 重启管理进程后生效：`LISTEN_ADDR` 与 `PREVIEW_LISTEN_ADDR`
+- 下次启动程序时生效：`AUTO_START`
 
 退出程序：
 
@@ -681,6 +682,8 @@ cp .env.example .env
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
 | `MAX_ACCOUNT_SWITCHES` | `3` | 上游返回 403、5xx 等非额度错误时一个请求最多换几次账户重试，`0` 为不换号 |
+| `ACCOUNT_SWITCH_INTERVAL` | `off` | 同一请求内前一个账户失败后，下一个账户向 Google 发出请求（或启动冷备 Worker）前从上次失败起等待的最短秒数；`off` 为不等待，正整数为秒数 |
+| `MAX_QUOTA_SWITCHES` | `off` | 同一请求内因额度用尽（429）切换账户的次数上限；`off` 为不限制，依次尝试全部账户，`0` 为不换号，正整数为最多换号次数，超出后返回最后一次 429 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
@@ -709,13 +712,14 @@ cp .env.example .env
 
 - `PREVIEW_LISTEN_ADDR`：无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览
 - `AUTO_START`：网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试
-- `MAX_ACCOUNT_SWITCHES`：登录失效与额度用尽不计入，照常依次尝试其余账户
+- `MAX_ACCOUNT_SWITCHES`：登录失效与额度用尽不计入；额度用尽的换号次数由 `MAX_QUOTA_SWITCHES` 单独控制（默认不限）
+- `ACCOUNT_SWITCH_INTERVAL`：切往冷备账户时先等满间隔再启动 Worker，就绪后直接发送，不重复等待；等待期间客户端断开即结束
 - `NONSTREAM_KEEPALIVE`：返回 200 后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回
 - `STRIP_THOUGHT_SIGNATURES`：函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少
 - `DISCOVER_HIDDEN_MODELS`：
   - 在同步账户模型目录时探测：启动、每 24 小时与账户页“刷新全部”
   - 确认账户能用的模型加入目录，可直接用于各协议请求并列在 `/v1/models` 中，“模型目录”页标为“官网隐藏”
-  - 官网公开后改用官网的模型信息；关闭后下一次启动生成服务时从目录中移除
+  - 官网公开后改用官网的模型信息；关闭后立即从目录中移除，开启后在后台自动探测
 - `FIRST_EVENT_HEDGE`：
   - 备用请求优先用其他账户，没有时用原账户的空闲槽位；先出首字的一方继续，另一方取消
   - `auto` 按各模型与通道近 24 小时首字等待的 p95，请求少于 20 次的模型与通道不发起
@@ -741,13 +745,13 @@ cp .env.example .env
 
 管理控制台默认通过本机回环地址免密访问。远程管理时：
 
-- 设置 `ADMIN_AUTH_ENABLED=true`、管理员账号和密码，重启程序后通过独立 `/login` 页面登录
+- 设置 `ADMIN_AUTH_ENABLED=true`、管理员账号和密码后通过独立 `/login` 页面登录（在设置页保存后立即生效，并为当前浏览器自动保持登录）
 - 登录会话有效期为 12 小时；勾选“30 天内保持登录”时为 30 天，程序重启后仍有效
 - 支持退出登录，管理员共享同一个账户池、配置与日志
 
 公开 API 使用独立的 `PROXY_API_KEY`。
 
-反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。管理页“服务配置”可调整登录开关及凭据，保存后重启程序生效。
+反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。管理页“服务配置”可调整登录开关及凭据，保存后立即生效（关闭登录仅限本机访问操作）。
 
 API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来源，页面以当前访问的主机名加该端口打开预览：
 

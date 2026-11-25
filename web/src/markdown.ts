@@ -1,4 +1,4 @@
-import MarkdownIt, { type MarkdownIt as Markdown } from 'markdown-it'
+import type { MarkdownIt as Markdown } from 'markdown-it'
 
 // trailingPunctuation 是 GFM 自动链接末尾不计入网址的标点
 const trailingPunctuation = /[?!.,:*_~]+$/
@@ -13,13 +13,4 @@ export function gfmLinkify(md: Markdown) {
     match.raw = match.text = match.url = text
     normalize(match)
   }
-}
-
-// markdown 渲染 Markdown 正文，原始 HTML 按文本转义，链接在新标签页打开
-export const markdown = new MarkdownIt({ linkify: true, breaks: true })
-gfmLinkify(markdown)
-markdown.renderer.rules.link_open = (tokens, index, options, _env, self) => {
-  tokens[index]!.attrSet('target', '_blank')
-  tokens[index]!.attrSet('rel', 'noreferrer')
-  return self.renderToken(tokens, index, options)
 }

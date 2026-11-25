@@ -90,6 +90,53 @@ func (admin *runtimeAdmin) probeProxies(ctx context.Context) {
 	}
 }
 
+// syncProxyProbe 按代理池中的代理数量动态启动或停止定时探测协程；initialProbe 为 true 且新启动探测时先异步立即检测一次
+func (admin *runtimeAdmin) syncProxyProbe(proxyCount int, initialProbe bool) {
+	admin.probeMu.Lock()
+	if proxyCount <= 1 {
+		cancel := admin.probeCancel
+		admin.probeCancel = nil
+		admin.probeMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	if admin.probeCancel != nil {
+		admin.probeMu.Unlock()
+		if initialProbe {
+			go admin.runProxyProbeOnce(admin.lifecycle)
+		}
+		return
+	}
+	probeCtx, stopProbe := context.WithCancel(admin.lifecycle)
+	admin.probeCancel = stopProbe
+	admin.probeMu.Unlock()
+	if initialProbe {
+		go admin.runProxyProbeOnce(probeCtx)
+	}
+	go admin.probeProxies(probeCtx)
+}
+
+// stopProxyProbe 停止代理池定时探测协程
+func (admin *runtimeAdmin) stopProxyProbe() {
+	admin.probeMu.Lock()
+	cancel := admin.probeCancel
+	admin.probeCancel = nil
+	admin.probeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (admin *runtimeAdmin) runProxyProbeOnce(ctx context.Context) {
+	changed, err := admin.proxies.Probe(ctx, checkProxy)
+	if err != nil && ctx.Err() == nil {
+		admin.requests.log("service", "WARN", "代理改绑失败", "error", err)
+	}
+	admin.rebindAccounts(changed)
+}
+
 // rebindAccounts 在后台按代理池的新绑定各自重建受影响账户的请求头客户端与 Worker
 func (admin *runtimeAdmin) rebindAccounts(accountIDs []string) {
 	for _, accountID := range accountIDs {
@@ -112,6 +159,10 @@ func (admin *runtimeAdmin) rebindAccount(ctx context.Context, accountID string) 
 		return errors.Join(err, lease.Release())
 	}
 	workerUpdate.Commit()
-	admin.requests.log(account.Config.Label, "WARN", "代理已改绑", "egress", redactedProxy(account.EffectiveProxy(admin.globalProxy)))
-	return lease.Release()
+	admin.requests.log(account.Config.Label, "WARN", "代理已改绑", "egress", redactedProxy(account.EffectiveProxy(admin.currentGlobalProxy())))
+	err = lease.Release()
+	if admin.service != nil {
+		admin.publishRuntimeSnapshot(admin.lifecycle)
+	}
+	return err
 }

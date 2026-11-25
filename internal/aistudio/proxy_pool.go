@@ -58,6 +58,79 @@ func (p *ProxyPool) Assign() ([]string, error) {
 	return p.assignLocked()
 }
 
+// SetProxies 热替换代理池条目并重新分配未固定代理的账户：保留仍在池中代理的健康状态与已有绑定，切回直连时清除账户的代理池绑定；返回实际出口发生变化的账户 ID
+func (p *ProxyPool) SetProxies(previousGlobal string, proxies []string) ([]string, error) {
+	if p == nil {
+		return nil, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	previousGlobal = strings.TrimSpace(previousGlobal)
+	existing := make(map[string]*proxyEntry, len(p.entries))
+	for _, entry := range p.entries {
+		existing[entry.proxy] = entry
+	}
+	entries := make([]*proxyEntry, 0, len(proxies))
+	for _, proxy := range proxies {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" {
+			continue
+		}
+		if prev := existing[proxy]; prev != nil {
+			entries = append(entries, prev)
+			continue
+		}
+		entries = append(entries, &proxyEntry{proxy: proxy})
+	}
+	p.pool.mu.Lock()
+	accounts := slices.Clone(p.pool.accounts)
+	p.pool.mu.Unlock()
+	before := make(map[string]string, len(accounts))
+	for _, account := range accounts {
+		if strings.TrimSpace(account.Config.Proxy) != "" {
+			continue
+		}
+		before[account.ID] = account.PoolProxy(previousGlobal)
+	}
+	p.entries = entries
+	var errs []error
+	if len(p.entries) == 0 {
+		for _, account := range accounts {
+			if strings.TrimSpace(account.Config.Proxy) != "" {
+				continue
+			}
+			_, err := p.pool.updateRuntime(account.ID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+				if runtimeState.Proxy == "" {
+					return false, nil, nil
+				}
+				runtimeState.Proxy = ""
+				return true, nil, nil
+			})
+			if err != nil {
+				errs = append(errs, err)
+			}
+			account.boundProxy.Store(nil)
+		}
+	} else if _, err := p.assignLocked(); err != nil {
+		errs = append(errs, err)
+	}
+	nextGlobal := ""
+	if len(p.entries) > 0 {
+		nextGlobal = p.entries[0].proxy
+	}
+	var changed []string
+	for _, account := range accounts {
+		prev, tracked := before[account.ID]
+		if !tracked {
+			continue
+		}
+		if account.PoolProxy(nextGlobal) != prev {
+			changed = append(changed, account.ID)
+		}
+	}
+	return changed, errors.Join(errs...)
+}
+
 func (p *ProxyPool) assignLocked() ([]string, error) {
 	if len(p.entries) == 0 {
 		return nil, nil
@@ -249,11 +322,17 @@ func (p *ProxyPool) Probe(ctx context.Context, check func(context.Context, strin
 	if p == nil {
 		return nil, nil
 	}
-	results := make([]error, len(p.entries))
-	var wait sync.WaitGroup
+	p.mu.Lock()
+	proxies := make([]string, len(p.entries))
 	for index, entry := range p.entries {
+		proxies[index] = entry.proxy
+	}
+	p.mu.Unlock()
+	results := make([]error, len(proxies))
+	var wait sync.WaitGroup
+	for index, proxy := range proxies {
 		wait.Go(func() {
-			results[index] = check(ctx, entry.proxy)
+			results[index] = check(ctx, proxy)
 		})
 	}
 	wait.Wait()
@@ -263,7 +342,12 @@ func (p *ProxyPool) Probe(ctx context.Context, check func(context.Context, strin
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now().UTC()
-	for index, entry := range p.entries {
+	// 结果按代理回写到仍在池中的条目，检测期间新增的代理保持未检测
+	for index, proxy := range proxies {
+		entry := p.entryLocked(proxy)
+		if entry == nil {
+			continue
+		}
 		entry.checkedAt = now
 		if results[index] != nil {
 			entry.down = true

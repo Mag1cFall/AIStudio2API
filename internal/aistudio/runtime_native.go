@@ -52,7 +52,7 @@ type camoufoxRuntime struct {
 	*camoufoxnative.Worker
 }
 
-// Reload 按官网冷启动重新载入页面：当前标签页空闲时在其中重新载入，有进行中的请求时在新标签页中载入并切换过去，原标签页在请求结束后关闭；返回同一 runtime
+// Reload 在新标签页中按官网冷启动重新载入页面，载入成功后切换过去并关闭空闲原标签页，原标签页有进行中的请求时在其请求结束后关闭；返回同一 runtime
 func (runtime camoufoxRuntime) Reload(ctx context.Context) (workerRuntime, error) {
 	return runtime, runtime.Worker.Reload(ctx)
 }

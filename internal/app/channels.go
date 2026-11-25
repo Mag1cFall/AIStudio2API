@@ -1,7 +1,6 @@
 package app
 
 import (
-	"slices"
 	"strings"
 	"unicode"
 
@@ -39,14 +38,8 @@ func accountOrder(value string) []string {
 	return strings.FieldsFunc(value, func(char rune) bool { return char == ',' || unicode.IsSpace(char) })
 }
 
-// apiKeyAccounts 解析 API_KEY_ACCOUNTS 为各 API key 可用的账户 ID；active 是管理服务启动时的配置，已从 keys 中移除而管理服务仍接受的 key 沿用 active 中的绑定
-func apiKeyAccounts(keys, bindings string, active config.Config) map[string][]string {
+// apiKeyAccounts 解析 API_KEY_ACCOUNTS 为各 API key 可用的账户 ID
+func apiKeyAccounts(keys, bindings string) map[string][]string {
 	accounts, _ := config.ParseAPIKeyAccounts(bindings, keys)
-	previous, _ := config.ParseAPIKeyAccounts(active.APIKeyAccounts, active.ProxyAPIKey)
-	for key, ids := range previous {
-		if !slices.Contains(config.APIKeys(keys), key) {
-			accounts[key] = ids
-		}
-	}
 	return accounts
 }

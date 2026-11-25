@@ -155,7 +155,7 @@ func (s *server) resolveMCPTools(ctx context.Context, request aistudio.GenerateR
 		servers = append(servers, server)
 	}
 	request.Tools.MCPServers = servers
-	request.Tools.ToolConfig.ServerSideInvocations = len(servers) > 0
+	request.Tools.ToolConfig.ServerSideInvocations = len(servers) > 0 || slices.Contains(request.Tools.Google, "google_search") || request.Tools.GoogleSearch != nil || len(request.Tools.FileSearch) > 0
 	return request, nil
 }
 

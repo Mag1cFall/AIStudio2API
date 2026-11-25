@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -15,8 +16,8 @@ import (
 	"time"
 )
 
-// interactionThinkingLevels 把 GenerateContent thinking level 换算为 Interaction 枚举
-var interactionThinkingLevels = map[int64]int64{4: 1, 1: 2, 2: 3, 3: 4}
+// interactionThinkingLevels 把 GenerateContent thinking level 换算为 Interaction 枚举，含 extra_high(5)
+var interactionThinkingLevels = map[int64]int64{4: 1, 1: 2, 2: 3, 3: 4, 5: 5}
 
 // interactionCancelTimeout 是取消后台任务的期限，包含等待账户请求槽位的时间
 const interactionCancelTimeout = time.Minute
@@ -39,7 +40,7 @@ func interactionImageCode(mime string) (int64, bool) {
 	return 0, false
 }
 
-// InteractionInlineMIME 表示该 MIME 的附件经 CreateInteractionStream 与官网一样以内联数据发送，范围为图片枚举表中的类型
+// InteractionInlineMIME 表示该 MIME 的附件经 Interaction 模型路径与官网一样以内联数据发送，范围为图片枚举表中的类型
 func InteractionInlineMIME(mime string) bool {
 	_, ok := interactionImageCode(mime)
 	return ok
@@ -58,68 +59,341 @@ var interactionStatusHTTP = map[int64]int{
 	14: http.StatusServiceUnavailable, 16: http.StatusUnauthorized,
 }
 
+// interactionVideoAspectRatios 是 Interaction 视频输出格式的宽高比枚举
+var interactionVideoAspectRatios = map[string]int64{"16:9": 1, "9:16": 2}
+
+// interactionVideoResolutions 是 Interaction 视频输出格式的分辨率枚举
+var interactionVideoResolutions = map[string]int64{"360p": 1, "720p": 2, "1080p": 3, "4k": 4}
+
+// interactionVideoTasks 是 Interaction 视频任务枚举，名称取 Interactions API video_config.task
+var interactionVideoTasks = map[string]int64{"text_to_video": 1, "image_to_video": 2, "reference_to_video": 3, "edit": 4, "extend": 5}
+
+// thinkingLevelCode 把目录中保存的思考档位名称换算回 ListModels 数值码
+func thinkingLevelCode(name string) int64 {
+	for code, label := range buildThinkingLevels {
+		if strings.EqualFold(label, strings.TrimSpace(name)) {
+			return code
+		}
+	}
+	return 0
+}
+
+// modelGenerationDefaults 从 Model 还原 Interaction 编码所需的生成默认值
+func modelGenerationDefaults(model Model) GenerationDefaults {
+	defaults := GenerationDefaults{
+		MaxOutputTokens:      model.OutputTokenLimit,
+		Temperature:          model.Temperature,
+		TopP:                 model.TopP,
+		TopK:                 model.TopK,
+		Thinking:             model.Capabilities["thinking"],
+		ThinkingBudget:       model.Capabilities["thinking_budget"],
+		ThinkingLevel:        model.Capabilities["thinking_level"],
+		DefaultThinkingLevel: 2,
+		ImageRoute:           model.Capabilities["image_route"],
+		OutputResolution:     model.Capabilities["output_resolution"],
+		InteractionStream:    model.Capabilities["interaction_stream"],
+		InteractionTask:      model.Capabilities["interaction_task"],
+		InteractionAgent:     model.Capabilities["interaction_agent"],
+		InteractionModel:     model.Capabilities["interaction_model"],
+		VideoOutput:          model.Capabilities["secondary_capability_code_14"] && model.Capabilities["chat_model"],
+	}
+	if code := thinkingLevelCode(model.DefaultThinkingLevel); code > 0 {
+		defaults.DefaultThinkingLevel = code
+	}
+	for _, name := range model.ThinkingLevels {
+		if code := thinkingLevelCode(name); code > 0 {
+			defaults.ThinkingLevels = append(defaults.ThinkingLevels, code)
+		}
+	}
+	if resolutions := model.CapabilityOptions["video_output_resolutions"]; len(resolutions) > 0 {
+		defaults.VideoResolution = resolutions[0]
+	}
+	return defaults
+}
+
 // EncodeCreateInteractionStreamRequest 编码官网 CreateInteractionStream 请求并返回参与 WAA 绑定的文本内容
 func EncodeCreateInteractionStreamRequest(request GenerateRequest, defaults GenerationDefaults) ([]byte, int, []Content, error) {
-	steps, binding, hasModelTurn, err := encodeInteractionSteps(request.Contents)
+	capabilities := map[string]bool{}
+	if defaults.VideoOutput || defaults.VideoResolution != "" {
+		capabilities["secondary_capability_code_14"] = true
+		capabilities["chat_model"] = true
+	}
+	if defaults.Thinking {
+		capabilities["thinking"] = true
+	}
+	if defaults.ThinkingLevel {
+		capabilities["thinking_level"] = true
+	}
+	model := Model{
+		ID:               strings.TrimPrefix(strings.TrimSpace(request.Model), "models/"),
+		OutputTokenLimit: defaults.MaxOutputTokens,
+		Temperature:      defaults.Temperature,
+		TopP:             defaults.TopP,
+		TopK:             defaults.TopK,
+		Capabilities:     capabilities,
+	}
+	route := interactionRouting(model, defaults, ChannelPlayground)
+	if !route.IsStream() {
+		kind := int64(2)
+		if route.IsAgent() {
+			kind = 1
+		}
+		route = ResolveInteractionRouting(kind, false)
+	}
+	return encodeInteractionRequest(request, model, defaults, route)
+}
+
+// EncodeCreateInteractionRequest 编码官网 CreateInteraction 请求并返回参与 WAA 绑定的内容，按 field 79 选路写入模型目标（field 18）或 agent 目标（field 19）
+func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byte, int, []Content, error) {
+	defaults := modelGenerationDefaults(model)
+	route := interactionRouting(model, defaults, ChannelPlayground)
+	if !route.IsTask() {
+		kind := int64(1)
+		if route.IsModel() {
+			kind = 2
+		}
+		route = ResolveInteractionRouting(kind, true)
+	}
+	return encodeInteractionRequest(request, model, defaults, route)
+}
+
+// encodeInteractionRequest 统一编码 CreateInteractionStream 与 CreateInteraction 请求：按 route.Target 选择模型（field 18）或 agent（field 19），按 route.Method 选择流式或后台信封
+func encodeInteractionRequest(request GenerateRequest, model Model, defaults GenerationDefaults, route InteractionRouting) ([]byte, int, []Content, error) {
+	streamFlag, taskFlag := any(nil), any(int64(1))
+	if route.IsStream() {
+		streamFlag, taskFlag = int64(1), nil
+	}
+	if route.IsAgent() {
+		interaction, binding, err := encodeAgentInteraction(request, model)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		body, proofAt, _ := marshalWAAArray([]any{streamFlag, int64(1), taskFlag, interaction, nil, int64(1)}, 5)
+		return body, proofAt, binding, nil
+	}
+	interaction, binding, err := encodeModelInteraction(request, model, defaults)
 	if err != nil {
 		return nil, 0, nil, err
+	}
+	body, proofAt, _ := marshalWAAArray([]any{streamFlag, int64(1), taskFlag, interaction, nil, int64(1)}, 5)
+	return body, proofAt, binding, nil
+}
+
+// encodeModelInteraction 编码 field 79 kind == 2 模型目标的 Interaction 正文（写入 field 18，保留多轮历史，仅视频输出聊天模型发送 field 54 与 config[24]）
+func encodeModelInteraction(request GenerateRequest, model Model, defaults GenerationDefaults) ([]any, []Content, error) {
+	if request.AgentConfig != nil {
+		return nil, nil, fmt.Errorf("模型 %s 不接受 agent_config", request.Model)
+	}
+	contents := request.Contents
+	if request.PreviousInteractionID != "" {
+		// 续接上游 interaction 时与官网 oLb 一样只发送最后一个模型轮之后的新输入与工具结果
+		contents = AgentInput(request.Contents, true)
+	}
+	nativeTools := model.Capabilities["function_declarations"]
+	steps, binding, hasModelTurn, err := encodeInteractionSteps(contents, nativeTools)
+	if err != nil {
+		return nil, nil, err
 	}
 	level, err := interactionThinkingLevel(request.Config, defaults)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, nil, err
 	}
-	maxOutput := defaults.MaxOutputTokens
-	if request.Config.MaxOutputTokens != nil {
-		maxOutput = *request.Config.MaxOutputTokens
-	}
-	if maxOutput > defaults.MaxOutputTokens {
+	var maxOutput int64
+	if defaults.MaxOutputTokens > 0 || request.Config.MaxOutputTokens != nil {
 		maxOutput = defaults.MaxOutputTokens
+		if request.Config.MaxOutputTokens != nil {
+			maxOutput = *request.Config.MaxOutputTokens
+		}
+		if defaults.MaxOutputTokens > 0 && maxOutput > defaults.MaxOutputTokens {
+			maxOutput = defaults.MaxOutputTokens
+		}
+		if maxOutput <= 0 {
+			return nil, nil, fmt.Errorf("max output tokens %d 超出模型范围 1-%d", maxOutput, defaults.MaxOutputTokens)
+		}
 	}
-	if maxOutput <= 0 {
-		return nil, 0, nil, fmt.Errorf("max output tokens %d 超出模型范围 1-%d", maxOutput, defaults.MaxOutputTokens)
+	isVideo := defaults.VideoOutput || defaults.VideoResolution != "" || (model.Capabilities["secondary_capability_code_14"] && model.Capabilities["chat_model"])
+	var video []any
+	var task int64
+	if isVideo {
+		video, task, err = interactionVideoFormat(request.Config.VideoConfig, defaults.VideoResolution)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	video, task, err := interactionVideoFormat(request.Config.VideoConfig, defaults.VideoResolution)
-	if err != nil {
-		return nil, 0, nil, err
+	// GenerationConfig (JZa)：按官网 sLb/NMb 门控温度、topP、seed、思考档位、思考摘要、输出上限、图像与视频任务
+	config := make([]any, 25)
+	if model.Capabilities["capability_code_62"] {
+		if temperature := cmp.Or(request.Config.Temperature, defaults.Temperature); temperature != nil {
+			if *temperature < 0 || *temperature > 2 {
+				return nil, nil, fmt.Errorf("temperature 必须在 0 到 2 之间")
+			}
+			config[0] = *temperature
+		}
 	}
-	// GenerationConfig：field 6 thinking level、field 7 thinking summaries、field 8 max output tokens、field 25 视频任务
-	config := make([]any, 8)
+	if model.Capabilities["capability_code_23"] {
+		if topP := cmp.Or(request.Config.TopP, defaults.TopP); topP != nil {
+			if *topP < 0 || *topP > 1 {
+				return nil, nil, fmt.Errorf("top_p 必须在 0 到 1 之间")
+			}
+			config[1] = *topP
+		}
+	}
+	if request.Config.Seed != nil {
+		config[2] = *request.Config.Seed
+	}
 	if level != 0 {
 		config[5] = level
 	}
-	config[6] = int64(1)
-	config[7] = maxOutput
-	if !hasModelTurn || task != 0 {
-		config = append(config, make([]any, 17)...)
+	if defaults.Thinking || defaults.ThinkingLevel || len(defaults.ThinkingLevels) > 0 {
+		config[6] = int64(1)
+	}
+	if maxOutput > 0 {
+		config[7] = maxOutput
+	}
+	if image := request.Config.ImageConfig; image != nil {
+		aspect := ""
+		if model.Capabilities["aspect_ratio"] && !isVideo {
+			aspect = strings.TrimSpace(image.AspectRatio)
+		}
+		resolution := ""
+		if model.Capabilities["output_resolution"] {
+			resolution = strings.TrimSpace(image.ImageSize)
+		}
+		if aspect != "" || resolution != "" {
+			config[12] = trimWireNil([]any{emptyNil(aspect), emptyNil(resolution)})
+		}
+	}
+	if isVideo && (!hasModelTurn || task != 0) {
 		config[24] = []any{}
 		if task != 0 {
 			config[24] = []any{task}
 		}
 	}
+	config = trimWireNil(config)
+
+	system := request.System
+	responseMIME := strings.TrimSpace(request.Config.ResponseMIMEType)
+	if schema := request.Config.responseSchema(); len(schema) > 0 {
+		if _, err := encodeResponseSchema(schema); err != nil {
+			return nil, nil, fmt.Errorf("response schema: %w", err)
+		}
+		system = append(slices.Clone(system), describedSchema("", schema))
+		if responseMIME == "" {
+			responseMIME = "application/json"
+		}
+	}
+	var tools []any
+	if !isVideo && request.Tools.ToolConfig.Mode != "none" {
+		tools, err = interactionTools(request.Tools, model, false)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	var modalities []int64
+	if len(request.Config.ResponseModalities) > 0 {
+		modalities, err = encodeResponseModalities(request.Config.ResponseModalities)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	interaction := make([]any, 54)
+	if text := strings.TrimSpace(SystemText(system)); text != "" {
+		interaction[6] = text
+	}
+	if len(tools) > 0 {
+		interaction[7] = tools
+	}
+	if len(modalities) > 0 {
+		interaction[13] = modalities
+	}
+	if responseMIME != "" {
+		interaction[15] = responseMIME
+	}
+	if request.PreviousInteractionID != "" {
+		interaction[16] = request.PreviousInteractionID
+	}
+	target := []any{wireModelName(request.Model)}
+	if len(config) > 0 {
+		target = append(target, config)
+	}
+	interaction[17] = target
+	interaction[26] = []any{steps}
+	// field 54 输出格式：官网仅对视频输出聊天模型（_.rl）且非编辑任务发送，其余模型截止到索引 26
+	if isVideo && task != interactionVideoTasks["edit"] && interactionVideoFormatNonEmpty(video) {
+		interaction[53] = []any{[]any{[]any{nil, nil, nil, video}}}
+	} else {
+		interaction = interaction[:27]
+	}
+	return interaction, binding, nil
+}
+
+// encodeAgentInteraction 编码 field 79 kind == 1 agent 目标的 Interaction 正文（写入 field 19）
+func encodeAgentInteraction(request GenerateRequest, model Model) ([]any, []Content, error) {
+	agent := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
+	// kind 是该 agent 的 agent_config 类型：带默认模型的 agent 为 antigravity，其余为 deep-research
+	kind := "deep-research"
+	if model.AgentModel != "" {
+		kind = "antigravity"
+	}
+	if config := request.AgentConfig; config != nil && config.Type != kind {
+		return nil, nil, fmt.Errorf("agent_config.type %q 与 agent %s 不匹配，应为 %q", config.Type, agent, kind)
+	}
+	steps, binding, _, err := encodeInteractionSteps(AgentInput(request.Contents, request.PreviousInteractionID != ""), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	tools, err := interactionTools(request.Tools, model, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	interaction := make([]any, 27)
 	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
 		interaction[6] = system
 	}
-	interaction[17] = []any{wireModelName(request.Model), config}
-	interaction[26] = []any{steps}
-	// field 54 输出格式：视频格式 field 4 宽高比、field 5 时长、field 6 分辨率，编辑任务不带输出格式
-	if task == interactionVideoTasks["edit"] {
-		interaction = interaction[:27]
-	} else {
-		interaction[53] = []any{[]any{[]any{nil, nil, nil, video}}}
+	if len(tools) > 0 {
+		interaction[7] = tools
 	}
-	body, proofAt, _ := marshalWAAArray([]any{int64(1), int64(1), nil, interaction, nil, int64(1)}, 5)
-	return body, proofAt, binding, nil
+	// field 17 为续接的上一轮 interaction ID
+	if request.PreviousInteractionID != "" {
+		interaction[16] = request.PreviousInteractionID
+	}
+	// field 19 为 agent 目标：field 1 agent 名称，Deep Research 的 field 3 为 agent 配置
+	target := []any{agent, nil, deepResearchConfig(request.AgentConfig)}
+	if model.AgentModel != "" {
+		// Antigravity：field 12 为所选模型与 token 上限
+		target = target[:1]
+		if config := request.AgentConfig; config != nil && (config.Model != "" || config.MaxTotalTokens > 0) {
+			antigravity := make([]any, 7)
+			if config.Model != "" {
+				antigravity[0] = strings.TrimPrefix(config.Model, "models/")
+			}
+			if config.MaxTotalTokens > 0 {
+				antigravity[6] = config.MaxTotalTokens
+			}
+			target = append(target, make([]any, 11)...)
+			target[11] = antigravity
+		}
+	}
+	if request.Environment != nil || model.AgentModel != "" {
+		if err := setInteractionEnvironment(interaction, request.Environment); err != nil {
+			return nil, nil, err
+		}
+	}
+	interaction[18] = target
+	interaction[26] = []any{steps}
+	return interaction, binding, nil
 }
 
-// interactionVideoAspectRatios 是 CreateInteractionStream 视频输出格式的宽高比枚举
-var interactionVideoAspectRatios = map[string]int64{"16:9": 1, "9:16": 2}
-
-// interactionVideoResolutions 是 CreateInteractionStream 视频输出格式的分辨率枚举
-var interactionVideoResolutions = map[string]int64{"360p": 1, "720p": 2, "1080p": 3, "4k": 4}
-
-// interactionVideoTasks 是 CreateInteractionStream 视频任务枚举，名称取 Interactions API video_config.task
-var interactionVideoTasks = map[string]int64{"text_to_video": 1, "image_to_video": 2, "reference_to_video": 3, "edit": 4, "extend": 5}
+// interactionVideoFormatNonEmpty 判断视频输出格式数组中是否至少有一项非空参数
+func interactionVideoFormatNonEmpty(format []any) bool {
+	for _, item := range format {
+		if item != nil {
+			return true
+		}
+	}
+	return false
+}
 
 // interactionVideoFormat 编码视频输出格式并返回任务枚举：宽高比与分辨率取最接近的上游取值，未设置分辨率时取模型默认分辨率
 func interactionVideoFormat(config *VideoConfig, resolution string) ([]any, int64, error) {
@@ -160,52 +434,191 @@ func interactionVideoFormat(config *VideoConfig, resolution string) ([]any, int6
 	return format, task, nil
 }
 
-// encodeInteractionSteps 把规范消息编码为用户 step field 1 与模型 step field 2 交替的 input steps
-func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) {
-	type step struct {
-		model bool
-		parts []any
+// encodeInteractionSteps 把规范消息编码为 Interaction input steps（field 1 user、field 2 model、nativeTools 时支持 field 4 tool_call 与 field 5 tool_result），并返回参与 WAA 绑定的内容
+func encodeInteractionSteps(contents []Content, nativeTools bool) ([]any, []Content, bool, error) {
+	if !nativeTools {
+		var err error
+		contents, err = transcribeFunctionParts(contents)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("Interaction 模型的 %w", err)
+		}
 	}
-	contents, err := transcribeFunctionParts(contents)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("Interaction 模型的 %w", err)
+	callNames := make(map[string]string)
+	if nativeTools {
+		for _, content := range contents {
+			for _, part := range content.Parts {
+				if part.FunctionCall != nil && part.FunctionCall.ID != "" {
+					callNames[part.FunctionCall.ID] = part.FunctionCall.Name
+				}
+			}
+		}
 	}
-	steps := make([]step, 0, len(contents))
+	wire := make([]any, 0, len(contents))
 	binding := make([]Content, 0, len(contents))
+	hasModelTurn := false
+	var currentRole bool
+	var currentParts []any
+	var currentHasStep bool
+	flushText := func() {
+		if !currentHasStep || len(currentParts) == 0 {
+			currentHasStep = false
+			currentParts = nil
+			return
+		}
+		if currentRole {
+			wire = append(wire, []any{nil, []any{currentParts}})
+			hasModelTurn = true
+		} else {
+			wire = append(wire, []any{[]any{currentParts}})
+		}
+		currentHasStep = false
+		currentParts = nil
+	}
+	appendTextPart := func(model bool, part any) {
+		if currentHasStep && currentRole != model {
+			flushText()
+		}
+		currentRole = model
+		currentHasStep = true
+		currentParts = append(currentParts, part)
+	}
 	var carried []any
 	var carriedBinding []Part
+	// callSeq 为不带 ID 的调用生成序号，pendingCalls 与 pendingCodes 是尚未收到结果的函数调用与代码执行
+	callSeq := 0
+	type pendingCall struct{ id, name string }
+	var pendingCalls []pendingCall
+	var pendingCodes []string
 	for index, content := range contents {
 		if content.Role != RoleUser && content.Role != RoleAssistant && content.Role != RoleTool {
 			return nil, nil, false, fmt.Errorf("Interaction 模型不接受 %s 消息", content.Role)
 		}
 		model := content.Role == RoleAssistant
-		parts := make([]any, 0, len(content.Parts))
 		bindingParts := make([]Part, 0, len(content.Parts))
+		if !model && len(carried) > 0 {
+			for _, item := range carried {
+				appendTextPart(false, item)
+			}
+			bindingParts = append(bindingParts, carriedBinding...)
+			carried, carriedBinding = nil, nil
+		}
+		// signature 是本轮紧邻函数调用之前、只带思考签名的 Part 的签名，signed 表示本轮已写出签名步骤
+		signature, signed := "", false
 		for _, part := range content.Parts {
-			switch {
-			case part.VideoMetadata != nil || part.MediaProcessing != "" || part.ToolCall != nil || part.ToolResponse != nil:
-				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 不接受视频截取、采样、处理方式与处理步骤", index)
-			case part.Thought:
+			if part.Text == "" && part.ThoughtSignature != "" && part.InlineData == nil && part.File == nil && part.FunctionCall == nil && part.FunctionResult == nil &&
+				part.ExecutableCode == nil && part.CodeExecutionResult == nil && part.ToolCall == nil && part.ToolResponse == nil {
+				signature = part.ThoughtSignature
 				continue
-			case part.ExecutableCode != nil || part.CodeExecutionResult != nil:
+			}
+			if part.Thought {
+				continue
+			}
+			pending := signature
+			signature = ""
+			switch {
+			case part.VideoMetadata != nil || part.MediaProcessing != "":
+				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 不接受视频截取、采样、处理方式与处理步骤", index)
+			case !nativeTools && (part.ToolCall != nil || part.ToolResponse != nil):
+				step := part.ToolCall
+				if step == nil {
+					step = part.ToolResponse
+				}
+				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 不接受服务端工具步骤 %s", index, step.Type)
+			case nativeTools && part.FunctionCall != nil:
+				flushText()
+				// 函数调用历史之前写出思考步骤签名（Ww field 3 MZa field 1），本轮第一个调用没有签名时写跳过校验的占位签名
+				sig := cmp.Or(part.ThoughtSignature, part.FunctionCall.ThoughtSignature, pending)
+				if sig == "" && !signed {
+					sig = "skip_thought_signature_validator"
+				}
+				if sig != "" {
+					wire = append(wire, []any{nil, nil, []any{sig}})
+					signed = true
+				}
+				id := part.FunctionCall.ID
+				if id == "" {
+					callSeq++
+					id = fmt.Sprintf("call_%d", callSeq)
+				}
+				pendingCalls = append(pendingCalls, pendingCall{id: id, name: part.FunctionCall.Name})
+				step, err := encodeInteractionFunctionCall(part.FunctionCall, id)
+				if err != nil {
+					return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d]: %w", index, err)
+				}
+				wire = append(wire, step)
+				hasModelTurn = true
+			case nativeTools && part.FunctionResult != nil:
+				flushText()
+				// 结果按显式 ID、同名的待完成调用或唯一的待完成调用沿用调用的 ID
+				id := part.FunctionResult.ID
+				match := slices.IndexFunc(pendingCalls, func(call pendingCall) bool {
+					return id != "" && call.id == id || id == "" && call.name == part.FunctionResult.Name
+				})
+				if match < 0 && id == "" && len(pendingCalls) == 1 {
+					match = 0
+				}
+				name := part.FunctionResult.Name
+				if match >= 0 {
+					id, name = pendingCalls[match].id, cmp.Or(name, pendingCalls[match].name)
+					pendingCalls = slices.Delete(pendingCalls, match, match+1)
+				}
+				if id == "" {
+					callSeq++
+					id = fmt.Sprintf("call_%d", callSeq)
+				}
+				step, err := encodeInteractionFunctionResult(part.FunctionResult, id, cmp.Or(name, callNames[id]))
+				if err != nil {
+					return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d]: %w", index, err)
+				}
+				wire = append(wire, step)
+			case nativeTools && part.ExecutableCode != nil:
+				flushText()
+				id := part.ExecutableCode.ID
+				if id == "" {
+					callSeq++
+					id = fmt.Sprintf("code_%d", callSeq)
+				}
+				pendingCodes = append(pendingCodes, id)
+				wire = append(wire, encodeInteractionExecutableCode(part.ExecutableCode, id))
+				hasModelTurn = true
+			case nativeTools && part.CodeExecutionResult != nil:
+				flushText()
+				id := part.CodeExecutionResult.ID
+				if match := slices.Index(pendingCodes, id); match >= 0 {
+					pendingCodes = slices.Delete(pendingCodes, match, match+1)
+				} else if id == "" && len(pendingCodes) > 0 {
+					id, pendingCodes = pendingCodes[0], pendingCodes[1:]
+				}
+				if id == "" {
+					callSeq++
+					id = fmt.Sprintf("code_%d", callSeq)
+				}
+				wire = append(wire, encodeInteractionCodeResult(part.CodeExecutionResult, id))
+			case nativeTools && part.ToolCall != nil && part.ToolCall.Type == "GOOGLE_SEARCH_WEB":
+				flushText()
+				wire = append(wire, encodeInteractionServerToolCall(part.ToolCall))
+				hasModelTurn = true
+			case nativeTools && part.ToolResponse != nil && part.ToolResponse.Type == "GOOGLE_SEARCH_WEB":
+				flushText()
+				wire = append(wire, encodeInteractionServerToolResponse(part.ToolResponse))
+			case part.ExecutableCode != nil || part.CodeExecutionResult != nil || part.ToolCall != nil || part.ToolResponse != nil:
+				// 官网现场确认不了写法的服务端工具步骤与不接受原生工具的模型的代码执行转录为文本
 				transcript, err := ToolPartTranscript(part)
 				if err != nil {
 					return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d]: %w", index, err)
 				}
-				parts = append(parts, []any{[]any{transcript}})
+				appendTextPart(model, []any{[]any{transcript}})
 				bindingParts = append(bindingParts, Part{Text: transcript})
 			case part.Text != "" && part.InlineData == nil && part.File == nil:
-				parts = append(parts, []any{[]any{part.Text}})
+				appendTextPart(model, []any{[]any{part.Text}})
 				bindingParts = append(bindingParts, Part{Text: part.Text})
-			case part.Text == "" && part.ThoughtSignature != "" && part.InlineData == nil && part.File == nil:
-				continue
 			case part.File != nil && strings.TrimSpace(part.File.ID) != "" && part.Text == "":
 				// Content field 9 为 Drive 文件引用
 				file := []any{nil, nil, nil, nil, nil, nil, nil, nil, []any{strings.TrimSpace(part.File.ID)}}
 				if model {
 					carried = append(carried, file)
 				} else {
-					parts = append(parts, file)
+					appendTextPart(false, file)
 				}
 			case part.InlineData != nil:
 				code, ok := interactionImageCode(part.InlineData.MIME)
@@ -218,42 +631,114 @@ func encodeInteractionSteps(contents []Content) ([]any, []Content, bool, error) 
 					carried = append(carried, media)
 					carriedBinding = append(carriedBinding, Part{InlineData: part.InlineData})
 				} else {
-					parts = append(parts, media)
+					appendTextPart(false, media)
 					bindingParts = append(bindingParts, Part{InlineData: part.InlineData})
 				}
 			default:
 				return nil, nil, false, fmt.Errorf("Interaction 模型的 contents[%d] 只接受文本、附件与工具 part", index)
 			}
 		}
-		if !model && len(carried) > 0 {
-			parts = append(carried, parts...)
-			bindingParts = append(carriedBinding, bindingParts...)
-			carried, carriedBinding = nil, nil
+		if len(bindingParts) > 0 {
+			binding = append(binding, Content{Role: content.Role, Parts: bindingParts})
 		}
-		if len(parts) == 0 {
-			continue
-		}
-		if last := len(steps) - 1; last >= 0 && steps[last].model == model {
-			steps[last].parts = append(steps[last].parts, parts...)
-		} else {
-			steps = append(steps, step{model: model, parts: parts})
-		}
-		binding = append(binding, Content{Role: content.Role, Parts: bindingParts})
 	}
-	if len(steps) == 0 {
+	flushText()
+	if len(wire) == 0 {
 		return nil, nil, false, fmt.Errorf("CreateInteractionStream contents 不能为空")
 	}
-	wire := make([]any, 0, len(steps))
-	hasModelTurn := false
-	for _, step := range steps {
-		if step.model {
-			wire = append(wire, []any{nil, []any{step.parts}})
-			hasModelTurn = true
-		} else {
-			wire = append(wire, []any{[]any{step.parts}})
+	return wire, binding, hasModelTurn, nil
+}
+
+// encodeInteractionFunctionCall 按官网 $qb 编码函数调用为 Ww field 4 (_.a_a field 3)
+func encodeInteractionFunctionCall(call *FunctionCall, id string) ([]any, error) {
+	args := map[string]any{}
+	if trimmed := strings.TrimSpace(string(call.Arguments)); trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
+			return nil, fmt.Errorf("function call %q arguments: %w", call.Name, err)
 		}
 	}
-	return wire, binding, hasModelTurn, nil
+	fn := []any{wireFunctionName(call.Name), encodeWireStruct(args)}
+	return []any{nil, nil, nil, []any{id, nil, fn}}, nil
+}
+
+// encodeInteractionFunctionResult 按官网 $qb 编码函数结果为 Ww field 5 (_.Pw field 3 _.Gw)
+func encodeInteractionFunctionResult(result *FunctionResult, id string, name string) ([]any, error) {
+	if name != "" {
+		name = wireFunctionName(name)
+	}
+	gw := make([]any, 12)
+	if name != "" {
+		gw[1] = name
+	}
+	trimmed := strings.TrimSpace(string(result.Content))
+	if trimmed == "" {
+		gw[9] = encodeWireStruct(map[string]any{})
+	} else {
+		var parsed any
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+			switch typed := parsed.(type) {
+			case map[string]any:
+				gw[9] = encodeWireStruct(typed)
+			case string:
+				gw[11] = typed
+			default:
+				gw[11] = trimmed
+			}
+		} else {
+			gw[11] = trimmed
+		}
+	}
+	return []any{nil, nil, nil, nil, []any{id, nil, trimWireNil(gw)}}, nil
+}
+
+// encodeInteractionExecutableCode 按官网 $qb 编码代码执行为 Ww field 4 (_.a_a field 4)
+func encodeInteractionExecutableCode(code *ExecutableCode, id string) []any {
+	lang := int64(0)
+	if strings.EqualFold(code.Language, "python") {
+		lang = 1
+	}
+	return []any{nil, nil, nil, []any{id, nil, nil, []any{[]any{lang, code.Code}}}}
+}
+
+// encodeInteractionCodeResult 按官网 $qb 编码代码执行结果为 Ww field 5 (_.Pw field 4)
+func encodeInteractionCodeResult(result *CodeExecutionResult, id string) []any {
+	var isError any
+	if result.Outcome != "" && result.Outcome != "OUTCOME_OK" {
+		isError = true
+	}
+	return []any{nil, nil, nil, nil, []any{id, nil, nil, trimWireNil([]any{result.Output, isError})}}
+}
+
+// encodeInteractionServerToolCall 按官网 $qb 编码 Google Search 服务端工具调用步骤
+func encodeInteractionServerToolCall(step *ServerToolStep) []any {
+	var data struct {
+		Queries []string `json:"queries"`
+	}
+	_ = json.Unmarshal(step.Data, &data)
+	queries := make([]any, 0, len(data.Queries))
+	for _, query := range data.Queries {
+		queries = append(queries, query)
+	}
+	return []any{nil, nil, nil, []any{step.ID, nil, nil, nil, nil, nil, []any{[]any{queries}}}}
+}
+
+// encodeInteractionServerToolResponse 按官网 $qb 编码 Google Search 服务端工具结果步骤
+func encodeInteractionServerToolResponse(step *ServerToolStep) []any {
+	var data struct {
+		SearchSuggestions string `json:"search_suggestions"`
+		Results           []struct {
+			SearchSuggestions string `json:"search_suggestions"`
+		} `json:"results"`
+	}
+	_ = json.Unmarshal(step.Data, &data)
+	entries := make([]any, 0, len(data.Results)+1)
+	if data.SearchSuggestions != "" {
+		entries = append(entries, []any{nil, nil, nil, nil, data.SearchSuggestions})
+	}
+	for _, item := range data.Results {
+		entries = append(entries, []any{nil, nil, nil, nil, item.SearchSuggestions})
+	}
+	return []any{nil, nil, nil, nil, []any{step.ID, nil, nil, nil, nil, []any{entries}}}
 }
 
 // interactionThinkingLevel 按请求的思考强度或预算选择模型支持的 Interaction thinking level，模型没有思考档位能力时与官网一样不发送并返回 0
@@ -270,8 +755,10 @@ func interactionThinkingLevel(config GenerationConfig, defaults GenerationDefaul
 		level = 1
 	case "medium":
 		level = 2
-	case "high", "xhigh", "extra_high", "max":
+	case "high":
 		level = 3
+	case "xhigh", "extra_high", "max":
+		level = 5
 	default:
 		return 0, fmt.Errorf("reasoning effort 必须是 none、minimal、low、medium、high、xhigh、extra_high 或 max")
 	}
@@ -287,13 +774,13 @@ func interactionThinkingLevel(config GenerationConfig, defaults GenerationDefaul
 }
 
 // generateInteraction 经 CreateInteractionStream 生成并映射为规范事件
-func (c *Client) generateInteraction(ctx context.Context, request GenerateRequest, entry modelEntry) (<-chan Event, error) {
+func (c *Client) generateInteraction(ctx context.Context, request GenerateRequest, entry modelEntry, route InteractionRouting, apiKey string, restoring bool) (<-chan Event, error) {
 	reason := ""
 	if request.Unary {
 		reason = "该模型使用 CreateInteractionStream，收集完成后返回"
 	}
 	reportUpstreamMode(ctx, "CreateInteractionStream", "stream", 0, reason)
-	body, proofAt, binding, err := EncodeCreateInteractionStreamRequest(request, entry.defaults)
+	body, proofAt, binding, err := encodeInteractionRequest(request, entry.model, entry.defaults, route)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -310,18 +797,19 @@ func (c *Client) generateInteraction(ctx context.Context, request GenerateReques
 	if err != nil {
 		return nil, err
 	}
-	return c.interactionEvents(ctx, request, entry, "CreateInteractionStream", response, nil)
+	return c.interactionEvents(ctx, request, entry, "CreateInteractionStream", response, nil, apiKey, restoring)
 }
 
-// interactionTask 是 CreateInteraction 后台任务的上游 interaction ID、所属账户与取消任务的函数
+// interactionTask 是 CreateInteraction 后台任务的上游 interaction ID、所属账户、是否为 agent 目标与取消任务的函数
 type interactionTask struct {
 	id      string
 	account string
+	agent   bool
 	cancel  func()
 }
 
-// interactionEvents 解码 Interaction 流并映射为规范事件；task 为后台任务时结束事件带上 interaction ID 与账户，流在读到最终 interaction 之前因调用方取消而结束时取消任务
-func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest, entry modelEntry, method string, response *RPCResponse, task *interactionTask) (<-chan Event, error) {
+// interactionEvents 解码 Interaction 流并映射为规范事件；task 为后台 agent 任务时结束事件带上 interaction ID 与账户，流在读到最终 interaction 之前因调用方取消而结束时取消任务
+func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest, entry modelEntry, method string, response *RPCResponse, task *interactionTask, apiKey string, restoring bool) (<-chan Event, error) {
 	matcher := newStopSequenceMatcher(request.Config.StopSequences)
 	var stopTokenCount <-chan tokenCountResult
 	cancelTokenCount := context.CancelFunc(func() {})
@@ -338,19 +826,15 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 		})
 		defer stopClose()
 		committed := false
-		send := func(event Event) error {
-			if request.Config.HideThinking && event.Kind == EventReasoning {
-				if event.ThoughtSignature == "" {
-					return nil
-				}
-				event.Kind, event.Text = EventThoughtSignature, ""
-			}
+		var held []Event
+		var turn modelTurn
+		writeEvent := func(event Event) error {
 			if !committed {
 				committed = true
 				ready <- nil
 			}
 			event.ProviderModel = entry.model.ID
-			if event.Kind == EventFinish && task != nil {
+			if event.Kind == EventFinish && task != nil && task.agent {
 				event.InteractionID, event.AccountID = task.id, task.account
 			}
 			select {
@@ -359,6 +843,43 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		}
+		releaseHeld := func() error {
+			for _, event := range held {
+				if err := writeEvent(event); err != nil {
+					return err
+				}
+			}
+			held = nil
+			return nil
+		}
+		send := func(event Event) error {
+			hiddenTool := serverToolHidden(request, event)
+			if hiddenTool {
+				if event.ThoughtSignature == "" {
+					return nil
+				}
+				event = Event{Kind: EventThoughtSignature, Part: Part{ThoughtSignature: event.ThoughtSignature}}
+			}
+			if restoring && event.HasContent() {
+				turn.parts = append(turn.parts, clonePart(event.Part))
+			}
+			if request.Config.HideThinking && event.Kind == EventReasoning {
+				if event.ThoughtSignature == "" {
+					return nil
+				}
+				event.Kind, event.Text = EventThoughtSignature, ""
+			}
+			if !committed && event.Kind == EventThoughtSignature {
+				held = append(held, event)
+				return nil
+			}
+			if len(held) > 0 {
+				if err := releaseHeld(); err != nil {
+					return err
+				}
+			}
+			return writeEvent(event)
 		}
 		var output Output
 		var usage *Event
@@ -391,6 +912,7 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 		if matcher != nil {
 			emit = stopSequenceEmitter(matcher, forward, &matchedStopSequence)
 		}
+		emit = restoreFunctionNames(request.Tools.Functions, emit)
 		var err error
 		defer func() {
 			if !finished && task != nil && (ctx.Err() != nil || err != nil) {
@@ -400,10 +922,16 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 		err = DecodeInteractionStream(method, observeStreamActivity(ctx, response.Body), emit)
 		if errors.Is(err, errStopSequenceMatched) {
 			_ = response.Body.Close()
-			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
+			if len(held) > 0 {
+				_ = releaseHeld()
+			}
+			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, writeEvent)
 			err = ctx.Err()
 		} else if closeErr := response.Body.Close(); err == nil && ctx.Err() == nil {
 			err = closeErr
+		}
+		if err == nil && finished && restoring && c.turns != nil {
+			c.turns.store(apiKey, request.turnChain.tip, turn)
 		}
 		if err == nil || ctx.Err() != nil {
 			if !committed {
@@ -415,7 +943,7 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 			ready <- err
 			return
 		}
-		_ = send(Event{Kind: EventError, Err: err})
+		_ = writeEvent(Event{Kind: EventError, Err: err})
 	}()
 	select {
 	case err := <-ready:
@@ -430,11 +958,58 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 	return events, nil
 }
 
+// interactionStepState 保存流式解码中单个步骤的类型与增量缓冲
+type interactionStepState struct {
+	kind     string
+	toolType string
+	callID   string
+	funcName string
+	argsMap  map[string]any
+	argsJSON strings.Builder
+	codeLang string
+	codeText strings.Builder
+	queries  []string
+	emitted  bool
+}
+
+// interactionStreamDecoder 维护 Interaction 流式解码的步骤与签名状态
+type interactionStreamDecoder struct {
+	method           string
+	steps            map[int64]*interactionStepState
+	callSteps        map[string]*interactionStepState
+	pendingSignature string
+}
+
+// flushSignature 把暂存的思考签名作为独立 EventThoughtSignature 发出
+func (d *interactionStreamDecoder) flushSignature(emit func(Event) error) error {
+	if d.pendingSignature == "" {
+		return nil
+	}
+	sig := d.pendingSignature
+	d.pendingSignature = ""
+	return emit(Event{Kind: EventThoughtSignature, ThoughtSignature: sig})
+}
+
+// step 返回指定索引的步骤状态，不存在时按默认空步骤初始化
+func (d *interactionStreamDecoder) step(index int64) *interactionStepState {
+	step, ok := d.steps[index]
+	if !ok {
+		step = &interactionStepState{}
+		d.steps[index] = step
+	}
+	return step
+}
+
 // DecodeInteractionStream 按网络顺序解码 CreateInteractionStream 或 GetInteractionStream 的事件与流尾状态
 func DecodeInteractionStream(method string, source io.Reader, emit func(Event) error) error {
 	reader := &streamReadRecorder{source: source}
 	decoder := json.NewDecoder(newSparseJSONReader(reader))
 	decoder.UseNumber()
+	state := &interactionStreamDecoder{
+		method:    method,
+		steps:     make(map[int64]*interactionStepState),
+		callSteps: make(map[string]*interactionStepState),
+	}
 	index := 0
 	fail := func(path string, detail string) error {
 		return reader.failure(method, index, &ProtocolEvidenceError{Method: method, Path: path, Detail: detail})
@@ -454,7 +1029,7 @@ func DecodeInteractionStream(method string, source io.Reader, emit func(Event) e
 		if err := decoder.Decode(&raw); err != nil {
 			return fail(fmt.Sprintf("$[0][%d]", index), err.Error())
 		}
-		done, err := decodeInteractionEvent(method, raw, emit)
+		done, err := state.decodeEvent(raw, emit)
 		if err != nil {
 			return err
 		}
@@ -495,14 +1070,26 @@ func DecodeInteractionStream(method string, source io.Reader, emit func(Event) e
 	return nil
 }
 
-// decodeInteractionEvent 解码单个流事件，返回是否为最终 interaction
-func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event) error) (bool, error) {
+// decodeEvent 解码单个流事件（step_start、content_delta、step_end 与最终 interaction），返回是否为最终 interaction
+func (d *interactionStreamDecoder) decodeEvent(raw json.RawMessage, emit func(Event) error) (bool, error) {
 	event, err := rawArray(raw, "$event", raw)
 	if err != nil {
-		return false, withMethod(err, method)
+		return false, withMethod(err, d.method)
+	}
+	if start := rawAt(event, 9); !isJSONNull(start) {
+		if err := d.decodeStepStart(start, raw, emit); err != nil {
+			return false, err
+		}
 	}
 	if delta := rawAt(event, 10); !isJSONNull(delta) {
-		return false, decodeInteractionDelta(method, delta, emit)
+		if err := d.decodeDelta(delta, raw, emit); err != nil {
+			return false, err
+		}
+	}
+	if end := rawAt(event, 11); !isJSONNull(end) {
+		if err := d.decodeStepEnd(end, raw, emit); err != nil {
+			return false, err
+		}
 	}
 	final := rawAt(event, 19)
 	if isJSONNull(final) {
@@ -513,27 +1100,38 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 	}
 	wrapper, err := rawArray(final, "$event[19]", raw)
 	if err != nil || len(wrapper) == 0 {
-		return false, &ProtocolEvidenceError{Method: method, Path: "$event[19]", Detail: "最终 interaction 为空", Raw: cloneRaw(raw)}
+		return false, &ProtocolEvidenceError{Method: d.method, Path: "$event[19]", Detail: "最终 interaction 为空", Raw: cloneRaw(raw)}
 	}
 	interaction, err := rawArray(wrapper[0], "$event[19][0]", raw)
 	if err != nil {
-		return false, withMethod(err, method)
+		return false, withMethod(err, d.method)
 	}
 	status, err := optionalIntField(interaction, 1, "$event[19][0]", raw)
 	if err != nil {
-		return false, withMethod(err, method)
+		return false, withMethod(err, d.method)
 	}
+	finishReason := "stop"
 	switch status {
-	case 3:
+	case 2, 3:
+	case 6:
+		// 状态 6（Incomplete）对应输出上限截断，统一映射为规范终态 max_tokens
+		finishReason = "max_tokens"
 	case 4:
-		return false, &RPCError{Method: method, StatusCode: http.StatusBadGateway, Message: "interaction failed"}
+		message := decodeInteractionErrors(rawAt(interaction, 27))
+		if message == "" {
+			message = "interaction failed"
+		}
+		return false, &RPCError{Method: d.method, StatusCode: http.StatusBadGateway, Message: message}
 	case 5:
-		return false, &RPCError{Method: method, StatusCode: http.StatusBadGateway, Message: "interaction cancelled"}
+		return false, &RPCError{Method: d.method, StatusCode: http.StatusBadGateway, Message: "interaction cancelled"}
 	default:
-		return false, &ProtocolEvidenceError{Method: method, Path: "$event[19][0][1]", Detail: fmt.Sprintf("未识别的最终状态 %d", status), Raw: cloneRaw(raw)}
+		return false, &ProtocolEvidenceError{Method: d.method, Path: "$event[19][0][1]", Detail: fmt.Sprintf("未识别的最终状态 %d", status), Raw: cloneRaw(raw)}
+	}
+	if err := d.flushSignature(emit); err != nil {
+		return false, err
 	}
 	if usage := rawAt(interaction, 12); !isJSONNull(usage) {
-		decoded, err := decodeInteractionUsage(method, usage, raw)
+		decoded, err := decodeInteractionUsage(d.method, usage, raw)
 		if err != nil {
 			return false, err
 		}
@@ -544,21 +1142,286 @@ func decodeInteractionEvent(method string, raw json.RawMessage, emit func(Event)
 	environmentID := ""
 	if value := rawAt(interaction, 24); !isJSONNull(value) {
 		if environmentID, err = rawString(value, "$event[19][0][24]", raw); err != nil {
-			return false, withMethod(err, method)
+			return false, withMethod(err, d.method)
 		}
 	}
-	return true, emit(Event{Kind: EventFinish, FinishReason: "stop", EnvironmentID: environmentID})
+	return true, emit(Event{Kind: EventFinish, FinishReason: finishReason, EnvironmentID: environmentID})
 }
 
-// decodeInteractionDelta 解码 content delta：field 1 文本、field 2 图片、field 3 音频、field 4 文档、field 5 视频、field 6 思考摘要、field 7 思考签名、field 10 引用
-func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event) error) error {
-	delta, err := rawArray(raw, "$delta", raw)
-	if err != nil || len(delta) < 2 {
-		return &ProtocolEvidenceError{Method: method, Path: "$delta", Detail: "content delta 字段不足", Raw: cloneRaw(raw)}
+// decodeInteractionErrors 提取 interaction field 28 (_.ex) 中的错误码与消息
+func decodeInteractionErrors(raw json.RawMessage) string {
+	if isJSONNull(raw) {
+		return ""
 	}
-	content, err := rawArray(delta[1], "$delta[1]", raw)
+	items, err := rawArray(raw, "$errors", raw)
 	if err != nil {
-		return withMethod(err, method)
+		return ""
+	}
+	var messages []string
+	for _, item := range items {
+		fields, err := rawArray(item, "$errors[]", raw)
+		if err != nil {
+			continue
+		}
+		code, _ := optionalStringField(fields, 0, "$errors[]", raw)
+		msg, _ := optionalStringField(fields, 1, "$errors[]", raw)
+		switch {
+		case msg != "" && code != "":
+			messages = append(messages, code+": "+msg)
+		case msg != "":
+			messages = append(messages, msg)
+		case code != "":
+			messages = append(messages, code)
+		}
+	}
+	return strings.Join(messages, "; ")
+}
+
+// decodeStepStart 解码 event[9] (_.C1a) 步骤开始：记录步骤类型与工具调用/结果初始信息
+func (d *interactionStreamDecoder) decodeStepStart(raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	fields, err := rawArray(raw, "$step_start", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	stepIndex, err := optionalIntField(fields, 0, "$step_start", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	stepMsg := rawAt(fields, 1)
+	if isJSONNull(stepMsg) {
+		return nil
+	}
+	stepWire, err := rawArray(stepMsg, "$step_start[1]", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	state := &interactionStepState{}
+	d.steps[stepIndex] = state
+	switch {
+	case !isJSONNull(rawAt(stepWire, 0)):
+		state.kind = "user_input"
+	case !isJSONNull(rawAt(stepWire, 1)):
+		state.kind = "model_output"
+	case !isJSONNull(rawAt(stepWire, 2)):
+		state.kind = "thought"
+	case !isJSONNull(rawAt(stepWire, 3)):
+		state.kind = "tool_call"
+		if err := d.decodeToolCallStep(state, rawAt(stepWire, 3), evidence); err != nil {
+			return err
+		}
+		if state.callID != "" {
+			d.callSteps[state.callID] = state
+		}
+	case !isJSONNull(rawAt(stepWire, 4)):
+		state.kind = "tool_result"
+		if err := d.decodeToolResultStep(state, rawAt(stepWire, 4), evidence, emit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeToolCallStep 解析 step_start 中 Ww field 4 (_.a_a) 工具调用元信息与初始参数
+func (d *interactionStreamDecoder) decodeToolCallStep(state *interactionStepState, raw json.RawMessage, evidence json.RawMessage) error {
+	call, err := rawArray(raw, "$tool_call", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	state.callID, err = optionalStringField(call, 0, "$tool_call", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	switch {
+	case !isJSONNull(rawAt(call, 2)):
+		// field 3 (UZa): 函数调用 [name, Struct(args)]
+		state.toolType = "function"
+		fn, err := rawArray(call[2], "$tool_call[2]", evidence)
+		if err != nil {
+			return withMethod(err, d.method)
+		}
+		state.funcName, err = optionalStringField(fn, 0, "$tool_call[2]", evidence)
+		if err != nil {
+			return withMethod(err, d.method)
+		}
+		if argsRaw := rawAt(fn, 1); !isJSONNull(argsRaw) {
+			if decoded, err := decodeWireStructObject(argsRaw, "$tool_call[2][1]", evidence); err == nil {
+				state.argsMap = decoded
+			}
+		}
+	case !isJSONNull(rawAt(call, 3)):
+		// field 4 (_.RZa): 代码执行 [[lang, code]]
+		state.toolType = "code_execution"
+		wrapper, err := rawArray(call[3], "$tool_call[3]", evidence)
+		if err == nil && !isJSONNull(rawAt(wrapper, 0)) {
+			if inner, err := rawArray(wrapper[0], "$tool_call[3][0]", evidence); err == nil {
+				langCode, _ := optionalIntField(inner, 0, "$tool_call[3][0]", evidence)
+				state.codeLang = interactionCodeLanguage(langCode)
+				if code, _ := optionalStringField(inner, 1, "$tool_call[3][0]", evidence); code != "" {
+					state.codeText.WriteString(code)
+				}
+			}
+		}
+	case !isJSONNull(rawAt(call, 4)):
+		state.toolType = "url_context"
+	case !isJSONNull(rawAt(call, 5)):
+		// field 6 (ZZa): MCP 工具调用 [name, Struct(args)]
+		state.toolType = "mcp"
+		if mcp, err := rawArray(call[5], "$tool_call[5]", evidence); err == nil {
+			state.funcName, _ = optionalStringField(mcp, 0, "$tool_call[5]", evidence)
+			if argsRaw := rawAt(mcp, 1); !isJSONNull(argsRaw) {
+				if decoded, err := decodeWireStructObject(argsRaw, "$tool_call[5][1]", evidence); err == nil {
+					state.argsMap = decoded
+				}
+			}
+		}
+	case !isJSONNull(rawAt(call, 6)):
+		// field 7 (_.YZa): Google 搜索 [[queries]]
+		state.toolType = "google_search"
+		if wrapper, err := rawArray(call[6], "$tool_call[6]", evidence); err == nil && !isJSONNull(rawAt(wrapper, 0)) {
+			if inner, err := rawArray(wrapper[0], "$tool_call[6][0]", evidence); err == nil {
+				if queries, err := stringSliceField(inner, 0, "$tool_call[6][0]", evidence); err == nil {
+					state.queries = append(state.queries, queries...)
+				}
+			}
+		}
+	case !isJSONNull(rawAt(call, 7)):
+		state.toolType = "file_search"
+	case !isJSONNull(rawAt(call, 8)):
+		state.toolType = "google_maps"
+	}
+	return nil
+}
+
+// decodeToolResultStep 解析 step_start 中 Ww field 5 (_.Pw) 工具结果
+func (d *interactionStreamDecoder) decodeToolResultStep(state *interactionStepState, raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	result, err := rawArray(raw, "$tool_result", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	state.callID, err = optionalStringField(result, 0, "$tool_result", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	if linked := d.callSteps[state.callID]; linked != nil {
+		state.toolType = linked.toolType
+		state.funcName = linked.funcName
+	}
+	switch {
+	case !isJSONNull(rawAt(result, 3)):
+		// field 4 (_.c_a): 代码执行结果 [output, isError]
+		return d.emitCodeExecutionResult(state.callID, result[3], evidence, emit)
+	case !isJSONNull(rawAt(result, 4)):
+		// field 5 (l_a): URL 上下文结果 [[[url, status]...], isError]
+		if fields, err := rawArray(result[4], "$tool_result[4]", evidence); err == nil {
+			return d.emitURLContextResult(state.callID, rawAt(fields, 0), evidence, emit)
+		}
+	case !isJSONNull(rawAt(result, 5)):
+		// field 6 (j_a): Google 搜索结果 [[[..., search_suggestions(4)]...], isError]
+		if fields, err := rawArray(result[5], "$tool_result[5]", evidence); err == nil {
+			return d.emitSearchResult(state.callID, rawAt(fields, 0), 4, evidence, emit)
+		}
+	case !isJSONNull(rawAt(result, 6)):
+		// field 7 (_.k_a): MCP 结果 [name, nil, struct(2), str(3)]
+		if fields, err := rawArray(result[6], "$tool_result[6]", evidence); err == nil {
+			name, _ := optionalStringField(fields, 0, "$tool_result[6]", evidence)
+			data := decodeToolPayload(rawAt(fields, 2), rawAt(fields, 3), evidence)
+			return emit(Event{Kind: EventServerToolResponse, ToolResponse: &ServerToolStep{ID: state.callID, Type: "CUSTOM", Name: name, Data: data}})
+		}
+	}
+	return nil
+}
+
+// decodeStepEnd 处理 event[11] (_.oy) 步骤结束：把缓冲的客户端函数调用或服务端工具调用提交为规范事件
+func (d *interactionStreamDecoder) decodeStepEnd(raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	fields, err := rawArray(raw, "$step_end", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	stepIndex, err := optionalIntField(fields, 0, "$step_end", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	state, ok := d.steps[stepIndex]
+	if !ok || state.emitted || state.kind != "tool_call" {
+		return nil
+	}
+	state.emitted = true
+	switch state.toolType {
+	case "function":
+		args := json.RawMessage(`{}`)
+		if rawArgs := strings.TrimSpace(state.argsJSON.String()); rawArgs != "" && json.Valid([]byte(rawArgs)) {
+			args = json.RawMessage(rawArgs)
+		} else if len(state.argsMap) > 0 {
+			if encoded, err := json.Marshal(state.argsMap); err == nil {
+				args = encoded
+			}
+		}
+		sig := d.pendingSignature
+		d.pendingSignature = ""
+		call := &FunctionCall{ID: state.callID, Name: state.funcName, Arguments: args, ThoughtSignature: sig}
+		return emit(Event{Kind: EventToolCall, FunctionCall: call, ThoughtSignature: sig})
+	case "code_execution":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		lang := state.codeLang
+		if lang == "" {
+			lang = "PYTHON"
+		}
+		return emit(Event{Kind: EventExecutableCode, ExecutableCode: &ExecutableCode{ID: state.callID, Language: lang, Code: state.codeText.String()}})
+	case "google_search":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{"queries": state.queries})
+		if err := emit(Event{Kind: EventServerToolCall, ToolCall: &ServerToolStep{ID: state.callID, Type: "GOOGLE_SEARCH_WEB", Data: payload}}); err != nil {
+			return err
+		}
+		if len(state.queries) > 0 {
+			return emit(Event{Kind: EventGrounding, Grounding: &GroundingMetadata{WebSearchQueries: slices.Clone(state.queries)}})
+		}
+	case "url_context":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		return emit(Event{Kind: EventServerToolCall, ToolCall: &ServerToolStep{ID: state.callID, Type: "URL_CONTEXT"}})
+	case "google_maps":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		return emit(Event{Kind: EventServerToolCall, ToolCall: &ServerToolStep{ID: state.callID, Type: "GOOGLE_MAPS"}})
+	case "file_search":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		return emit(Event{Kind: EventServerToolCall, ToolCall: &ServerToolStep{ID: state.callID, Type: "FILE_SEARCH"}})
+	case "mcp":
+		if err := d.flushSignature(emit); err != nil {
+			return err
+		}
+		var data json.RawMessage
+		if len(state.argsMap) > 0 {
+			data, _ = json.Marshal(state.argsMap)
+		}
+		return emit(Event{Kind: EventServerToolCall, ToolCall: &ServerToolStep{ID: state.callID, Type: "CUSTOM", Name: state.funcName, Data: data}})
+	}
+	return nil
+}
+
+// decodeDelta 解码 content delta：field 1 文本、field 2-5 媒体、field 6 思考摘要、field 7 思考签名、field 10 引用、field 11-14 工具增量
+func (d *interactionStreamDecoder) decodeDelta(raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	delta, err := rawArray(raw, "$delta", evidence)
+	if err != nil || len(delta) < 2 {
+		return &ProtocolEvidenceError{Method: d.method, Path: "$delta", Detail: "content delta 字段不足", Raw: cloneRaw(raw)}
+	}
+	stepIndex, err := optionalIntField(delta, 0, "$delta", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	state := d.step(stepIndex)
+	content, err := rawArray(delta[1], "$delta[1]", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
 	}
 	for index, value := range content {
 		if isJSONNull(value) {
@@ -566,19 +1429,31 @@ func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event)
 		}
 		switch index {
 		case 0:
-			text, err := rawArray(value, "$delta[1][0]", raw)
+			text, err := rawArray(value, "$delta[1][0]", evidence)
 			if err != nil || len(text) == 0 {
-				return &ProtocolEvidenceError{Method: method, Path: "$delta[1][0]", Detail: "文本 delta 无效", Raw: cloneRaw(raw)}
+				return &ProtocolEvidenceError{Method: d.method, Path: "$delta[1][0]", Detail: "文本 delta 无效", Raw: cloneRaw(raw)}
 			}
-			decoded, err := rawString(text[0], "$delta[1][0][0]", raw)
+			decoded, err := rawString(text[0], "$delta[1][0][0]", evidence)
 			if err != nil {
-				return withMethod(err, method)
+				return withMethod(err, d.method)
 			}
-			if err := emit(Event{Kind: EventText, Text: decoded}); err != nil {
-				return err
+			if state.kind == "thought" {
+				if err := emit(Event{Kind: EventReasoning, Text: decoded, Thought: true}); err != nil {
+					return err
+				}
+			} else {
+				if err := d.flushSignature(emit); err != nil {
+					return err
+				}
+				if err := emit(Event{Kind: EventText, Text: decoded}); err != nil {
+					return err
+				}
 			}
 		case 1, 2, 3, 4:
-			media, err := decodeInteractionMedia(method, value, index, raw)
+			if err := d.flushSignature(emit); err != nil {
+				return err
+			}
+			media, err := decodeInteractionMedia(d.method, value, index, evidence)
 			if err != nil {
 				return err
 			}
@@ -593,15 +1468,285 @@ func decodeInteractionDelta(method string, raw json.RawMessage, emit func(Event)
 				}
 			}
 		case 6:
+			// field 7 为思考签名 ["<base64>"]，暂存以便紧随的函数调用附带或在下个非函数事件前发出
+			sig := ""
+			if items, err := rawArray(value, "$delta[1][6]", evidence); err == nil && len(items) > 0 && !isJSONNull(items[0]) {
+				sig, _ = rawString(items[0], "$delta[1][6][0]", evidence)
+			}
+			if sig != "" {
+				if err := d.flushSignature(emit); err != nil {
+					return err
+				}
+				d.pendingSignature = sig
+			}
 		case 9:
-			if err := decodeInteractionCitations(method, value, raw, emit); err != nil {
+			if err := decodeInteractionCitations(d.method, value, evidence, emit); err != nil {
+				return err
+			}
+		case 10:
+			// field 11 (_.u1a): 函数调用参数 JSON 字符串增量，field 2 (idx 1) 为片段
+			fields, err := rawArray(value, "$delta[1][10]", evidence)
+			if err != nil {
+				return withMethod(err, d.method)
+			}
+			if fragment, err := optionalStringField(fields, 1, "$delta[1][10]", evidence); err != nil {
+				return withMethod(err, d.method)
+			} else if fragment != "" {
+				state.argsJSON.WriteString(fragment)
+			}
+		case 11:
+			// field 12 (_.v1a): 服务端工具调用增量（oneof 2..8）
+			if err := d.decodeServerToolCallDelta(state, value, evidence); err != nil {
+				return err
+			}
+		case 12:
+			// field 13 (_.w1a): 服务端工具结果增量（oneof 2..8）
+			if err := d.decodeServerToolResultDelta(state, value, evidence, emit); err != nil {
+				return err
+			}
+		case 13:
+			// field 14 (_.Yx): 工具结果增量 [name(0), isError(1), ..., str(4), struct(5)]
+			if err := d.decodeGenericToolResultDelta(state, value, evidence, emit); err != nil {
 				return err
 			}
 		default:
-			return &ProtocolEvidenceError{Method: method, Path: fmt.Sprintf("$delta[1][%d]", index), Detail: "未识别的 content delta 字段", Raw: cloneRaw(raw)}
+			return &ProtocolEvidenceError{Method: d.method, Path: fmt.Sprintf("$delta[1][%d]", index), Detail: "未识别的 content delta 字段", Raw: cloneRaw(raw)}
 		}
 	}
 	return nil
+}
+
+// decodeServerToolCallDelta 解码 content delta field 12 (_.v1a) 的服务端工具调用参数增量
+func (d *interactionStreamDecoder) decodeServerToolCallDelta(state *interactionStepState, raw json.RawMessage, evidence json.RawMessage) error {
+	fields, err := rawArray(raw, "$delta[1][11]", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	switch {
+	case !isJSONNull(rawAt(fields, 1)):
+		// field 2 (_.Ox): [_.IAa = [lang(0), code(1)]]
+		state.toolType = "code_execution"
+		if ox, err := rawArray(fields[1], "$delta[1][11][1]", evidence); err == nil && !isJSONNull(rawAt(ox, 0)) {
+			if ia, err := rawArray(ox[0], "$delta[1][11][1][0]", evidence); err == nil {
+				if langCode, err := optionalIntField(ia, 0, "$delta[1][11][1][0]", evidence); err == nil && langCode != 0 {
+					state.codeLang = interactionCodeLanguage(langCode)
+				}
+				if fragment, err := optionalStringField(ia, 1, "$delta[1][11][1][0]", evidence); err == nil && fragment != "" {
+					state.codeText.WriteString(fragment)
+				}
+			}
+		}
+	case !isJSONNull(rawAt(fields, 2)):
+		state.toolType = "url_context"
+	case !isJSONNull(rawAt(fields, 3)):
+		// field 4 (_.Rx): [_.NAa = [queries(0)]]
+		state.toolType = "google_search"
+		if rx, err := rawArray(fields[3], "$delta[1][11][3]", evidence); err == nil && !isJSONNull(rawAt(rx, 0)) {
+			if na, err := rawArray(rx[0], "$delta[1][11][3][0]", evidence); err == nil {
+				if queries, err := stringSliceField(na, 0, "$delta[1][11][3][0]", evidence); err == nil {
+					for _, query := range queries {
+						if !slices.Contains(state.queries, query) {
+							state.queries = append(state.queries, query)
+						}
+					}
+				}
+			}
+		}
+	case !isJSONNull(rawAt(fields, 4)):
+		state.toolType = "mcp"
+	case !isJSONNull(rawAt(fields, 5)):
+		state.toolType = "file_search"
+	case !isJSONNull(rawAt(fields, 6)):
+		state.toolType = "google_maps"
+	}
+	return nil
+}
+
+// decodeServerToolResultDelta 解码 content delta field 13 (_.w1a) 的服务端工具结果增量
+func (d *interactionStreamDecoder) decodeServerToolResultDelta(state *interactionStepState, raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	fields, err := rawArray(raw, "$delta[1][12]", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	switch {
+	case !isJSONNull(rawAt(fields, 1)):
+		// field 2 (_.Wx): 代码执行结果 [output(0), isError(1)]
+		return d.emitCodeExecutionResult(state.callID, fields[1], evidence, emit)
+	case !isJSONNull(rawAt(fields, 2)):
+		// field 3 (j1a): URL 上下文结果 [nil, items(1), isError(2)]
+		if j1a, err := rawArray(fields[2], "$delta[1][12][2]", evidence); err == nil {
+			return d.emitURLContextResult(state.callID, rawAt(j1a, 1), evidence, emit)
+		}
+	case !isJSONNull(rawAt(fields, 3)):
+		// field 4 (h1a): Google 搜索结果 [nil, items(1), isError(2)]，search_suggestions 位于 field 4 (idx 3)
+		if h1a, err := rawArray(fields[3], "$delta[1][12][3]", evidence); err == nil {
+			return d.emitSearchResult(state.callID, rawAt(h1a, 1), 3, evidence, emit)
+		}
+	case !isJSONNull(rawAt(fields, 4)):
+		// field 5 (_.i1a): MCP 工具结果 [name(0), isError(1), nil, nil, str(4), struct(5)]
+		if i1a, err := rawArray(fields[4], "$delta[1][12][4]", evidence); err == nil {
+			name, _ := optionalStringField(i1a, 0, "$delta[1][12][4]", evidence)
+			data := decodeToolPayload(rawAt(i1a, 5), rawAt(i1a, 4), evidence)
+			return emit(Event{Kind: EventServerToolResponse, ToolResponse: &ServerToolStep{ID: state.callID, Type: "CUSTOM", Name: name, Data: data}})
+		}
+	}
+	return nil
+}
+
+// decodeGenericToolResultDelta 解码 content delta field 14 (_.Yx) 工具结果增量
+func (d *interactionStreamDecoder) decodeGenericToolResultDelta(state *interactionStepState, raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	fields, err := rawArray(raw, "$delta[1][13]", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	name, _ := optionalStringField(fields, 0, "$delta[1][13]", evidence)
+	if name == "" {
+		name = state.funcName
+	}
+	data := decodeToolPayload(rawAt(fields, 5), rawAt(fields, 4), evidence)
+	return emit(Event{Kind: EventServerToolResponse, ToolResponse: &ServerToolStep{ID: state.callID, Type: "CUSTOM", Name: name, Data: data}})
+}
+
+// emitCodeExecutionResult 把代码执行结果 [output, isError] 发为 EventCodeExecutionResult
+func (d *interactionStreamDecoder) emitCodeExecutionResult(callID string, raw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	fields, err := rawArray(raw, "$code_result", evidence)
+	if err != nil {
+		return withMethod(err, d.method)
+	}
+	output, _ := optionalStringField(fields, 0, "$code_result", evidence)
+	isErr := false
+	if v := rawAt(fields, 1); !isJSONNull(v) {
+		isErr, _ = rawBool(v, "$code_result[1]", evidence)
+	}
+	outcome := "OUTCOME_OK"
+	if isErr {
+		outcome = "OUTCOME_FAILED"
+	}
+	return emit(Event{Kind: EventCodeExecutionResult, CodeExecutionResult: &CodeExecutionResult{ID: callID, Outcome: outcome, Output: output}})
+}
+
+// emitURLContextResult 把 URL 上下文读取条目发为 EventServerToolResponse 与 EventGrounding
+func (d *interactionStreamDecoder) emitURLContextResult(callID string, itemsRaw json.RawMessage, evidence json.RawMessage, emit func(Event) error) error {
+	if isJSONNull(itemsRaw) {
+		return nil
+	}
+	items, err := rawArray(itemsRaw, "$url_results", evidence)
+	if err != nil {
+		return nil
+	}
+	var urls []URLMetadata
+	var metadata []map[string]any
+	for _, item := range items {
+		fields, err := rawArray(item, "$url_results[]", evidence)
+		if err != nil {
+			continue
+		}
+		url, _ := optionalStringField(fields, 0, "$url_results[]", evidence)
+		statusCode, _ := optionalIntField(fields, 1, "$url_results[]", evidence)
+		status := interactionURLStatus(statusCode)
+		if url != "" {
+			urls = append(urls, URLMetadata{RetrievedURL: url, Status: status})
+			metadata = append(metadata, map[string]any{"retrieved_url": url, "url_retrieval_status": status})
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"url_metadata": metadata})
+	if err := emit(Event{Kind: EventServerToolResponse, ToolResponse: &ServerToolStep{ID: callID, Type: "URL_CONTEXT", Data: data}}); err != nil {
+		return err
+	}
+	if len(urls) > 0 {
+		return emit(Event{Kind: EventGrounding, Grounding: &GroundingMetadata{URLContext: urls}})
+	}
+	return nil
+}
+
+// emitSearchResult 把 Google 搜索结果条目发为 EventServerToolResponse，含 search_suggestions 时附带 EventGrounding
+func (d *interactionStreamDecoder) emitSearchResult(callID string, itemsRaw json.RawMessage, suggestionIndex int, evidence json.RawMessage, emit func(Event) error) error {
+	if isJSONNull(itemsRaw) {
+		return nil
+	}
+	items, err := rawArray(itemsRaw, "$search_results", evidence)
+	if err != nil {
+		return nil
+	}
+	var chunks []GroundingChunk
+	var rendered string
+	var results []map[string]any
+	for _, item := range items {
+		fields, err := rawArray(item, "$search_results[]", evidence)
+		if err != nil {
+			continue
+		}
+		entry := map[string]any{}
+		if url, _ := optionalStringField(fields, 0, "$search_results[]", evidence); url != "" {
+			title, _ := optionalStringField(fields, 1, "$search_results[]", evidence)
+			chunks = append(chunks, GroundingChunk{Source: "web", URI: url, Title: title})
+			entry["url"] = url
+			if title != "" {
+				entry["title"] = title
+			}
+		}
+		if suggestion, _ := optionalStringField(fields, suggestionIndex, "$search_results[]", evidence); suggestion != "" {
+			if rendered == "" {
+				rendered = suggestion
+			}
+			entry["search_suggestions"] = suggestion
+		}
+		if len(entry) > 0 {
+			results = append(results, entry)
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"results": results})
+	if err := emit(Event{Kind: EventServerToolResponse, ToolResponse: &ServerToolStep{ID: callID, Type: "GOOGLE_SEARCH_WEB", Data: data}}); err != nil {
+		return err
+	}
+	if len(chunks) > 0 || rendered != "" {
+		grounding := &GroundingMetadata{Chunks: chunks}
+		if rendered != "" {
+			grounding.SearchEntryPoint = &SearchEntryPoint{RenderedContent: rendered}
+		}
+		return emit(Event{Kind: EventGrounding, Grounding: grounding})
+	}
+	return nil
+}
+
+// decodeToolPayload 从 Struct 槽位或字符串槽位提取工具结果 JSON
+func decodeToolPayload(structRaw json.RawMessage, strRaw json.RawMessage, evidence json.RawMessage) json.RawMessage {
+	if !isJSONNull(structRaw) {
+		if decoded, err := decodeWireStruct(structRaw, "$tool_payload", evidence); err == nil {
+			return decoded
+		}
+	}
+	if !isJSONNull(strRaw) {
+		if text, err := rawString(strRaw, "$tool_payload", evidence); err == nil {
+			encoded, _ := json.Marshal(map[string]any{"result": text})
+			return encoded
+		}
+	}
+	return nil
+}
+
+// interactionCodeLanguage 把代码执行语言枚举码换算为规范名称
+func interactionCodeLanguage(code int64) string {
+	switch code {
+	case 1:
+		return "PYTHON"
+	case 2:
+		return "BASH"
+	default:
+		return "LANGUAGE_UNSPECIFIED"
+	}
+}
+
+// interactionURLStatus 把 URL 上下文状态码换算为 Gemini API 枚举名
+func interactionURLStatus(code int64) string {
+	switch code {
+	case 1:
+		return "URL_RETRIEVAL_STATUS_SUCCESS"
+	case 2:
+		return "URL_RETRIEVAL_STATUS_ERROR"
+	default:
+		return "URL_RETRIEVAL_STATUS_UNSPECIFIED"
+	}
 }
 
 // interactionStrings 按顺序收集嵌套数组中的全部字符串
@@ -649,15 +1794,19 @@ func decodeInteractionUsage(method string, raw json.RawMessage, evidence json.Ra
 	return usage, nil
 }
 
-// agentTools 按官网的构造编码 CreateInteraction field 8 的工具列表，依次为代码执行、函数声明、Google 搜索与网址读取；请求带有工具列表字段时只用列出的工具，否则在目录 field 82 默认开启的工具上加入请求的工具
-func agentTools(tools Tools, model Model) ([]any, error) {
+// interactionTools 按官网 wLb 顺序编码 Interaction field 8 的工具列表：代码执行、函数声明、Google 搜索与网址读取；applyDefaults 为 true 时对未显式传 tools 的 agent 加入目录 field 82 默认开启的工具
+func interactionTools(tools Tools, model Model, applyDefaults bool) ([]any, error) {
+	subject := "Interaction 模型"
+	if applyDefaults {
+		subject = "agent"
+	}
 	switch {
 	case len(tools.MCPServers) > 0:
-		return nil, fmt.Errorf("agent 不接受 %s 工具", "mcp_server")
+		return nil, fmt.Errorf("%s 不接受 %s 工具", subject, "mcp_server")
 	case len(tools.FileSearch) > 0:
-		return nil, fmt.Errorf("agent 不接受 %s 工具", "file_search")
+		return nil, fmt.Errorf("%s 不接受 %s 工具", subject, "file_search")
 	case tools.ComputerUse != nil:
-		return nil, fmt.Errorf("agent 不接受 %s 工具", "computer_use")
+		return nil, fmt.Errorf("%s 不接受 %s 工具", subject, "computer_use")
 	}
 	code, search, fetch := false, tools.GoogleSearch != nil && tools.GoogleSearch.WebSearch, false
 	for _, name := range tools.Google {
@@ -669,10 +1818,10 @@ func agentTools(tools Tools, model Model) ([]any, error) {
 		case "url_context":
 			fetch = true
 		default:
-			return nil, fmt.Errorf("agent 不接受 %s 工具", name)
+			return nil, fmt.Errorf("%s 不接受 %s 工具", subject, name)
 		}
 	}
-	if !tools.Explicit {
+	if applyDefaults && !tools.Explicit {
 		code = code || model.Capabilities["default_capability_code_9"]
 		search = search || model.Capabilities["default_capability_code_12"]
 		fetch = fetch || model.Capabilities["default_capability_code_13"]
@@ -683,7 +1832,11 @@ func agentTools(tools Tools, model Model) ([]any, error) {
 	}
 	for _, function := range tools.Functions {
 		// Tool field 1 为函数声明：field 1 名称、field 2 说明、field 3 以 Value 表示的参数
-		declaration := []any{function.Name, nil, nil}
+		name := function.Name
+		if !applyDefaults {
+			name = wireFunctionName(name)
+		}
+		declaration := []any{name, nil, nil}
 		if function.Description != "" {
 			declaration[1] = function.Description
 		}
@@ -804,64 +1957,6 @@ func trimWireNil(values []any) []any {
 	return values
 }
 
-// EncodeCreateInteractionRequest 编码官网后台 agent 的 CreateInteraction 请求并返回参与 WAA 绑定的文本内容
-func EncodeCreateInteractionRequest(request GenerateRequest, model Model) ([]byte, int, []Content, error) {
-	agent := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	// kind 是该 agent 的 agent_config 类型：带默认模型的 agent 为 antigravity，其余为 deep-research
-	kind := "deep-research"
-	if model.AgentModel != "" {
-		kind = "antigravity"
-	}
-	if config := request.AgentConfig; config != nil && config.Type != kind {
-		return nil, 0, nil, fmt.Errorf("agent_config.type %q 与 agent %s 不匹配，应为 %q", config.Type, agent, kind)
-	}
-	steps, binding, _, err := encodeInteractionSteps(AgentInput(request.Contents, request.PreviousInteractionID != ""))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	tools, err := agentTools(request.Tools, model)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	interaction := make([]any, 27)
-	if system := strings.TrimSpace(SystemText(request.System)); system != "" {
-		interaction[6] = system
-	}
-	if len(tools) > 0 {
-		interaction[7] = tools
-	}
-	// field 17 为续接的上一轮 interaction ID
-	if request.PreviousInteractionID != "" {
-		interaction[16] = request.PreviousInteractionID
-	}
-	// field 19 为 agent 目标：field 1 agent 名称，Deep Research 的 field 3 为 agent 配置
-	target := []any{agent, nil, deepResearchConfig(request.AgentConfig)}
-	if model.AgentModel != "" {
-		// Antigravity：field 12 为所选模型与 token 上限
-		target = target[:1]
-		if config := request.AgentConfig; config != nil && (config.Model != "" || config.MaxTotalTokens > 0) {
-			antigravity := make([]any, 7)
-			if config.Model != "" {
-				antigravity[0] = strings.TrimPrefix(config.Model, "models/")
-			}
-			if config.MaxTotalTokens > 0 {
-				antigravity[6] = config.MaxTotalTokens
-			}
-			target = append(target, make([]any, 11)...)
-			target[11] = antigravity
-		}
-	}
-	if request.Environment != nil || model.AgentModel != "" {
-		if err := setInteractionEnvironment(interaction, request.Environment); err != nil {
-			return nil, 0, nil, err
-		}
-	}
-	interaction[18] = target
-	interaction[26] = []any{steps}
-	body, proofAt, _ := marshalWAAArray([]any{nil, int64(1), int64(1), interaction, nil, int64(1)}, 5)
-	return body, proofAt, binding, nil
-}
-
 // EncodeGetInteractionStreamRequest 编码按 interaction ID 读取后台任务增量与终态的请求
 func EncodeGetInteractionStreamRequest(id string, model string) ([]byte, int, error) {
 	return marshalWAAArray([]any{id, int64(1), nil, nil, nil, int64(1), wireModelName(model)}, 5)
@@ -881,13 +1976,13 @@ func decodeCreateInteractionResponse(raw []byte) (string, error) {
 }
 
 // generateInteractionTask 经 CreateInteraction 创建后台任务，再经 GetInteractionStream 读取增量与终态，调用方中途取消时发送 CancelInteraction
-func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRequest, entry modelEntry) (<-chan Event, error) {
+func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRequest, entry modelEntry, route InteractionRouting, apiKey string, restoring bool) (<-chan Event, error) {
 	reason := ""
 	if request.Unary {
 		reason = "该模型使用 CreateInteraction 后台任务，收集完成后返回"
 	}
 	reportUpstreamMode(ctx, "GetInteractionStream", "stream", 0, reason)
-	body, proofAt, binding, err := EncodeCreateInteractionRequest(request, entry.model)
+	body, proofAt, binding, err := encodeInteractionRequest(request, entry.model, entry.defaults, route)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -954,7 +2049,7 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 		cancel()
 		return nil, err
 	}
-	return c.interactionEvents(ctx, request, entry, "GetInteractionStream", response, &interactionTask{id: id, account: accountID, cancel: cancel})
+	return c.interactionEvents(ctx, request, entry, "GetInteractionStream", response, &interactionTask{id: id, account: accountID, agent: route.IsAgent(), cancel: cancel}, apiKey, restoring)
 }
 
 // decodeInteractionCitations 解码 content field 10 的引用：每项为正文中引用标记的起止字符位置与来源网址

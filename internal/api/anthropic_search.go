@@ -97,7 +97,7 @@ type anthropicSearchHead struct {
 
 // decodeAnthropicSearchHistory 将搜索历史改写为文本块，查询与其结果合并到同一块
 func (s *server) decodeAnthropicSearchHistory(request *anthropicRequest) error {
-	aead := anthropicSearchCipher(s.config.APIKey)
+	aead := anthropicSearchCipher(s.config.APIKeys())
 	for index := range request.Messages {
 		message := &request.Messages[index]
 		if !bytes.HasPrefix(bytes.TrimSpace(message.Content), []byte("[")) {

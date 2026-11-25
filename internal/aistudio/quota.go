@@ -41,11 +41,8 @@ var rejectedSizeBackoff = []time.Duration{5 * time.Minute, 15 * time.Minute, 30 
 // quotaLimitPattern 匹配额度错误中逐项列出的额度上限
 var quotaLimitPattern = regexp.MustCompile(`limit: (\d+)`)
 
-// usageLimitResetPattern 匹配套餐限额错误中 resets in 之后的恢复等待时长片段
-var usageLimitResetPattern = regexp.MustCompile(`resets in\s+(\d+\s+(?:days?|hours?|minutes?|seconds?)(?:(?:,\s*(?:and\s+)?|\s+and\s+|\s+)\d+\s+(?:days?|hours?|minutes?|seconds?))*)`)
-
-// usageLimitResetUnitPattern 匹配恢复等待时长片段中的每一项数值与单位
-var usageLimitResetUnitPattern = regexp.MustCompile(`(\d+)\s+(day|hour|minute|second)s?`)
+// usageLimitResetPattern 匹配套餐限额错误中 resets in 之后的小时与分钟
+var usageLimitResetPattern = regexp.MustCompile(`resets in (?:(\d+) hours?)?(?:, )?(?:(\d+) minutes?)?`)
 
 // CooldownState 表示账户或模型暂时不可调度的状态
 type CooldownState struct {
@@ -168,30 +165,12 @@ func zeroQuotaLimit(message string) bool {
 // usageLimitReset 返回套餐限额错误写明的恢复等待时长
 func usageLimitReset(message string) (time.Duration, bool) {
 	match := usageLimitResetPattern.FindStringSubmatch(message)
-	if match == nil {
+	if match == nil || match[1] == "" && match[2] == "" {
 		return 0, false
 	}
-	var total time.Duration
-	for _, unit := range usageLimitResetUnitPattern.FindAllStringSubmatch(match[1], -1) {
-		value, err := strconv.Atoi(unit[1])
-		if err != nil {
-			continue
-		}
-		switch unit[2] {
-		case "day":
-			total += time.Duration(value) * 24 * time.Hour
-		case "hour":
-			total += time.Duration(value) * time.Hour
-		case "minute":
-			total += time.Duration(value) * time.Minute
-		case "second":
-			total += time.Duration(value) * time.Second
-		}
-	}
-	if total <= 0 {
-		return 0, false
-	}
-	return total, true
+	hours, _ := strconv.Atoi(match[1])
+	minutes, _ := strconv.Atoi(match[2])
+	return time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute, true
 }
 
 // planLimitCooldown 按同一范围上一次套餐限额冷却计算本次冷却；上一次仍未结束时沿用它

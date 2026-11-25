@@ -328,6 +328,8 @@ jobs:
         run: |
           flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          rm -f dist/SHA256SUMS
+          (cd dist && sha256sum -- * > ../SHA256SUMS && mv ../SHA256SUMS SHA256SUMS)
           gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG" "${flags[@]}"
 
   docker:
