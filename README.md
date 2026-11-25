@@ -781,7 +781,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 | --- | --- | --- |
 | 从 Chrome 导入 | 本机 Chrome 中已登录的账户 | 可多选，Windows 可用 |
 | 粘贴 Cookie | Cookie 扩展导出的 JSON、请求头中的 Cookie 一行或 Netscape cookies.txt | 自动识别其中登录的账户邮箱 |
-| 从指纹浏览器导入 | 本机指纹浏览器与 Chromium 中已登录 AI Studio 的窗口 | 浏览器需开启远程调试 |
+| 从指纹浏览器导入 | 本机指纹浏览器、Chromium 与 Firefox 中已登录 AI Studio 的窗口 | 浏览器需开启远程调试，Chromium 走 CDP，Firefox 内核走 WebDriver BiDi |
 | 浏览器登录 | 独立的 Camoufox 窗口 | 登录后自动识别邮箱并授权 Google Drive |
 | 远程添加 | 另一台能登录 Google 的电脑 | 见 [命令](#命令) 的 `setup --remote` |
 

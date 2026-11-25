@@ -753,7 +753,7 @@
   "账户验证核对失败": "Échec du contrôle de vérification du compte",
   "账户验证窗口已关闭，账户仍需要验证": "Fenêtre de vérification fermée ; le compte nécessite toujours une vérification",
   "找不到选中的 Chrome 账号": "Compte Chrome sélectionné introuvable",
-  "指纹浏览器或 Chromium 的远程调试地址，读取其中的 Cookie": "Adresse de débogage distant du navigateur antidétection ou Chromium, pour en lire les Cookies",
+  "支持远程调试的 Chromium 或 Firefox 浏览器调试地址，读取其中的 Cookie": "Adresse de débogage distant d’un navigateur Chromium ou Firefox, pour en lire les Cookies",
   "排队等待": "En attente dans la file",
   "排队结束": "Fin de la file d’attente",
   "提示词输入框": "Zone de saisie du prompt",
@@ -1523,5 +1523,13 @@
   "关闭账户 Camoufox 指纹临时文件: %w": "Fermeture du fichier temporaire d’empreinte Camoufox du compte : {0}",
   "关闭重新载入前新开的 Camoufox 标签页失败": "Échec de la fermeture du nouvel onglet Camoufox ouvert avant le rechargement",
   "账户备注不能超过 %d 个字符": "La note du compte ne peut pas dépasser {0} caractères",
-  "读取 AI Studio 账户权益: %w": "Lecture du forfait du compte AI Studio : {0}"
+  "读取 AI Studio 账户权益: %w": "Lecture du forfait du compte AI Studio : {0}",
+  "连接 Firefox WebDriver BiDi 调试地址: %w": "Connexion à l’adresse de débogage Firefox WebDriver BiDi : {0}",
+  "创建 WebDriver BiDi 会话: %w": "Création de la session WebDriver BiDi : {0}",
+  "WebDriver BiDi 会话没有返回 sessionId": "La session WebDriver BiDi n’a pas renvoyé de sessionId",
+  "经 WebDriver BiDi 读取浏览器 Cookie: %w": "Lecture des cookies du navigateur via WebDriver BiDi : {0}",
+  "解析 WebDriver BiDi Cookie: %w": "Analyse des cookies WebDriver BiDi : {0}",
+  "解码 WebDriver BiDi Cookie %s 的 base64 值: %w": "Décodage de la valeur base64 du cookie WebDriver BiDi {0} : {1}",
+  "WebDriver BiDi 读取失败: %w": "Échec de la lecture WebDriver BiDi : {0}",
+  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "L’adresse de débogage du navigateur n’a renvoyé aucune information de débogage: HTTP {0}; Échec de la lecture WebDriver BiDi : {1}"
 }
