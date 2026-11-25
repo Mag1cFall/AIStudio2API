@@ -75,7 +75,7 @@ const section = useQueryParam<SectionID>(
 const current = computed(() => sections.find((item) => item.id === section.value)!)
 
 // keys 是生效中的 API key，多个 key 用逗号分隔
-const keys = computed(() => splitKeys(props.config?.active_proxy_api_key ?? ''))
+const keys = computed(() => splitKeys(props.config?.proxy_api_key ?? ''))
 const keyIndex = ref(0)
 const keyShown = ref(false)
 watch(keys, (list) => {

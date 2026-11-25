@@ -39,7 +39,11 @@ type runtimeAdmin struct {
 	configPath  string
 	config      config.Config
 	proxies     *aistudio.ProxyPool
+	proxyMu     sync.RWMutex
 	globalProxy string
+	activeProxy string
+	probeMu     sync.Mutex
+	probeCancel context.CancelFunc
 
 	transitionMu sync.Mutex
 	// transitions 是各账户进行中的后台收尾：启停收尾与添加、导入、登录后的目录同步
@@ -334,9 +338,6 @@ func enrichChromeImportProfiles(profiles []api.ChromeImportProfile, statuses []a
 
 // CheckChromeImportTiers 按需并发查询选中本机 Chrome 账号的 AI Studio 权益，每完成一个即通过 emit 回调输出
 func (admin *runtimeAdmin) CheckChromeImportTiers(ctx context.Context, input api.ChromeTierCheckInput, emit func(api.ChromeProfileTier)) error {
-	if len(input.AccountIDs) == 0 {
-		return invalidAccount(fmt.Errorf("未选择 Chrome 账号"))
-	}
 	root, err := chromeauth.DefaultChromeRoot()
 	if err != nil {
 		return err
@@ -1226,7 +1227,7 @@ func (admin *runtimeAdmin) VerifyAccount(ctx context.Context, accountID string, 
 		Directory:    directory,
 		StorageState: state,
 		AuthUser:     account.Config.AuthUser,
-		Proxy:        account.EffectiveProxy(admin.globalProxy),
+		Proxy:        account.EffectiveProxy(admin.currentGlobalProxy()),
 		Locale:       account.Config.Locale,
 		Timezone:     account.Config.Timezone,
 		View:         view,
@@ -1371,7 +1372,7 @@ func (admin *runtimeAdmin) saveLogin(ctx context.Context, accountID string, stat
 	if err := replaceAccountState(lease, state, fingerprintDirectory); err != nil {
 		return nil, errors.Join(err, lease.Release())
 	}
-	if err := setCookieAuthUser(lease, 0, admin.workers.prepareUpdate); err != nil {
+	if err := setImportedAccountConfig(lease, 0, "", admin.workers.prepareUpdate); err != nil {
 		return nil, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
@@ -1416,26 +1417,6 @@ func setImportedAccountConfig(lease *aistudio.AccountLease, authUser int, defaul
 	if !authUserChanged {
 		return lease.SaveConfig(accountConfig)
 	}
-	workerUpdate, err := prepare(account, accountConfig)
-	if err != nil {
-		return err
-	}
-	if err := lease.SaveConfig(accountConfig); err != nil {
-		workerUpdate.Discard()
-		return err
-	}
-	workerUpdate.Commit()
-	return nil
-}
-
-// setCookieAuthUser 把账户 Cookie 的会话序号改为 authUser 并同步到 Worker
-func setCookieAuthUser(lease *aistudio.AccountLease, authUser int, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
-	account := lease.Account()
-	if account.Config.AuthUser == authUser {
-		return nil
-	}
-	accountConfig := account.Config
-	accountConfig.AuthUser = authUser
 	workerUpdate, err := prepare(account, accountConfig)
 	if err != nil {
 		return err
@@ -1625,6 +1606,61 @@ func (admin *runtimeAdmin) proxyPoolStatus() []api.AdminProxy {
 	return pool
 }
 
+func (admin *runtimeAdmin) setProxyState(globalProxy, activeProxy string) {
+	admin.proxyMu.Lock()
+	admin.globalProxy = strings.TrimSpace(globalProxy)
+	admin.activeProxy = strings.TrimSpace(activeProxy)
+	admin.config.Proxy = admin.activeProxy
+	admin.proxyMu.Unlock()
+}
+
+func (admin *runtimeAdmin) currentGlobalProxy() string {
+	admin.proxyMu.RLock()
+	defer admin.proxyMu.RUnlock()
+	return admin.globalProxy
+}
+
+func (admin *runtimeAdmin) currentActiveProxy() string {
+	admin.proxyMu.RLock()
+	active := admin.activeProxy
+	fallback := admin.config.Proxy
+	admin.proxyMu.RUnlock()
+	if active != "" {
+		return active
+	}
+	return fallback
+}
+
+// ProxyState 返回当前生效的代理展示串与代理池健康状态
+func (admin *runtimeAdmin) ProxyState() (string, []api.AdminProxy) {
+	return admin.currentActiveProxy(), admin.proxyPoolStatus()
+}
+
+// ApplyProxy 热更新全局默认代理与代理池：更新传输、续签与 Worker 配置，并通过后台排空换绑重建受影响账户的 Worker，不中断进行中的请求
+func (admin *runtimeAdmin) ApplyProxy(rawProxy string) error {
+	if admin.proxies == nil || admin.service == nil {
+		return nil
+	}
+	proxyList, globalProxy, activeProxy, _ := resolveProxyConfig(rawProxy)
+	prevGlobal := admin.currentGlobalProxy()
+	prevActive := admin.currentActiveProxy()
+	if activeProxy == prevActive && globalProxy == prevGlobal {
+		return nil
+	}
+	if err := admin.service.setSharedGlobalProxy(globalProxy); err != nil {
+		return err
+	}
+	admin.setProxyState(globalProxy, activeProxy)
+	changed, err := admin.proxies.SetProxies(prevGlobal, proxyList)
+	admin.syncProxyProbe(len(proxyList), true)
+	if len(changed) > 0 {
+		admin.rebindAccounts(changed)
+	} else {
+		admin.publishRuntimeSnapshot(admin.lifecycle)
+	}
+	return err
+}
+
 func (admin *runtimeAdmin) effectiveProxy(accountProxy string) string {
 	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
 		return proxy
@@ -1632,12 +1668,12 @@ func (admin *runtimeAdmin) effectiveProxy(accountProxy string) string {
 	if proxy := admin.proxies.Next(); proxy != "" {
 		return proxy
 	}
-	return admin.globalProxy
+	return admin.currentGlobalProxy()
 }
 
 func (admin *runtimeAdmin) loginRequest(account *aistudio.Account, directory string) aistudio.IsolatedLoginRequest {
 	return aistudio.IsolatedLoginRequest{
-		Directory: directory, Proxy: account.EffectiveProxy(admin.globalProxy),
+		Directory: directory, Proxy: account.EffectiveProxy(admin.currentGlobalProxy()),
 		Locale: account.Config.Locale, Timezone: account.Config.Timezone,
 	}
 }
@@ -1648,8 +1684,8 @@ func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
 		Proxy: status.Proxy, Egress: status.Egress, Locale: status.Locale, Timezone: status.Timezone,
 		Models: status.Models, BenefitTier: status.BenefitTier, Message: status.Message,
 		PairingRenewedAt: pairingRenewedAt(status.Directory),
-		Transition:           string(status.Transition), ActiveRequests: status.ActiveRequests, CatalogError: status.CatalogError,
-		TransitionStep:       string(status.TransitionStep), TransitionIndex: status.TransitionIndex, TransitionTotal: status.TransitionTotal,
+		Transition:       string(status.Transition), ActiveRequests: status.ActiveRequests, CatalogError: status.CatalogError,
+		TransitionStep: string(status.TransitionStep), TransitionIndex: status.TransitionIndex, TransitionTotal: status.TransitionTotal,
 		VerificationRequired: status.VerificationRequired,
 		DeviceBoundSession:   status.DeviceBoundSession && !hasPairingRenewal(status.Directory),
 	}
@@ -1698,7 +1734,7 @@ func (admin *runtimeAdmin) RuntimeConfig(context.Context) (api.RuntimeConfig, er
 		return api.RuntimeConfig{}, err
 	}
 	value := runtimeConfigDTO(cfg)
-	value.ActiveProxy = admin.config.Proxy
+	value.ActiveProxy = admin.currentActiveProxy()
 	value.ProxyPool = admin.proxyPoolStatus()
 	return value, nil
 }
@@ -1720,6 +1756,14 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
+	switchInterval := strings.ToLower(strings.TrimSpace(value.AccountSwitchInterval))
+	if switchInterval == "" {
+		switchInterval = config.AccountSwitchIntervalOff
+	}
+	maxQuotaSwitches := strings.ToLower(strings.TrimSpace(value.MaxQuotaSwitches))
+	if maxQuotaSwitches == "" {
+		maxQuotaSwitches = config.MaxQuotaSwitchesOff
+	}
 	cfg := config.Config{
 		AutoStart:      value.AutoStart,
 		HideDockIcon:   value.HideDockIcon,
@@ -1739,6 +1783,8 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		RoutingStrategy:        value.RoutingStrategy,
 		AccountOrder:           strings.TrimSpace(value.AccountOrder),
 		MaxAccountSwitches:     value.MaxAccountSwitches,
+		AccountSwitchInterval:  switchInterval,
+		MaxQuotaSwitches:       maxQuotaSwitches,
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
@@ -1759,7 +1805,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	models, _ := admin.CatalogModels(context.Background())
 	admin.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": models}})
 	value = runtimeConfigDTO(cfg)
-	value.ActiveProxy = admin.config.Proxy
+	value.ActiveProxy = admin.currentActiveProxy()
 	value.ProxyPool = admin.proxyPoolStatus()
 	return value, nil
 }
@@ -2086,7 +2132,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		ContinuationRewrite: cfg.ContinuationRewrite, ContinuationPrompt: cfg.ContinuationPrompt,
 		ReplyTool: cfg.ReplyTool, UserMessageRewrite: cfg.UserMessageRewrite, ThinkingGuard: cfg.ThinkingGuard,
 		FirstEventHedge: cfg.FirstEventHedge, FirstEventHedgeModels: cfg.FirstEventHedgeModels, FirstEventTimeout: cfg.FirstEventTimeout, AuthStates: cfg.AuthStates, ListenAddr: cfg.ListenAddr, APIKey: cfg.ProxyAPIKey,
-		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
+		ActiveListenAddr:  cfg.ListenAddr,
 		PreviewListenAddr: cfg.PreviewListenAddr, ActivePreviewListenAddr: cfg.PreviewListenAddr,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
 		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,
@@ -2095,6 +2141,8 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		RoutingStrategy:        cfg.RoutingStrategy,
 		AccountOrder:           cfg.AccountOrder,
 		MaxAccountSwitches:     cfg.MaxAccountSwitches,
+		AccountSwitchInterval:  cfg.AccountSwitchInterval,
+		MaxQuotaSwitches:       cfg.MaxQuotaSwitches,
 		UpstreamChannels:       cfg.UpstreamChannels,
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,

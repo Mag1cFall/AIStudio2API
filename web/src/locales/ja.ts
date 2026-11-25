@@ -78,13 +78,16 @@ export const messages: Record<TranslationKey, string> = {
   'version.confirmText':
     '{version} をダウンロードしてサービスを再起動します。進行中の {count} 件のリクエストは中断されます。',
   'version.downloading': '新しいバージョンをダウンロードしています',
-  'version.verifying': 'リリースパッケージを検証しています',
   'version.installing': '新しいバージョンをインストールしています',
   'version.restarting': 'サービスを再起動しています。完了するとページを再読み込みします',
   'version.restartStalled':
     '新しいバージョンが 1 分以内に起動しませんでした。AIStudio2API をもう一度開くと、起動後にこのページが自動で再読み込みされます。それでも起動しない場合は、{path} にあるログを確認してください',
   'version.available': '{version} が利用可能です',
   'version.upToDate': '最新です',
+  'version.rateLimited':
+    'GitHub がこのネットワークからのアクセスを一時的に制限しているため、更新を確認できません。',
+  'version.retryAt': '{time}（約 {minutes} 分後）に自動で再確認します。',
+  'version.retryAtSoon': '{time}（1 分以内）に自動で再確認します。',
   'version.release': 'GitHub で表示',
   'version.notes': '{version} のリリースノート',
   'version.container':
@@ -118,7 +121,6 @@ export const messages: Record<TranslationKey, string> = {
   'common.edit': '編集',
   'common.enable': '有効にする',
   'common.disable': '無効にする',
-  'common.empty': 'データがありません',
   'common.copy': 'コピー',
   'common.copied': 'コピーしました',
   'common.error': 'リクエストに失敗しました',
@@ -139,6 +141,12 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.filterEgress': 'アカウントの接続先',
   'accounts.allEgresses': 'すべての接続先',
   'accounts.exits': 'グローバル IP',
+  'accounts.exitsTotal': '計 {count} 件',
+  'accounts.exitsShared': '{count} 件が共用',
+  'accounts.exitsFailed': '{count} 件の取得に失敗',
+  'accounts.exitsSingle': 'いずれも 1 アカウント',
+  'accounts.exitsExpand': 'すべて表示（{count} 件）',
+  'accounts.exitsCollapse': '折りたたむ',
   'accounts.exitAccounts': '{count} 件のアカウント',
   'accounts.exitLooking': 'グローバル IP を確認しています…',
   'accounts.exitFailed': '確認できませんでした',
@@ -560,6 +568,15 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxAccountSwitches': 'アカウント切り替え上限',
   'settings.maxAccountSwitchesHelp':
     '403 や 5xx などクォータ以外の上流エラーで、1 つのリクエストが別のアカウントに切り替える最大回数です。0 で切り替えず、クォータ超過は数えません',
+  'settings.maxQuotaSwitches': 'クォータ超過時の切り替え上限',
+  'settings.maxQuotaSwitchesHelp':
+    'アカウントのクォータを使い切ったとき、1 つのリクエストが別のアカウントに切り替える最大回数です。上限に達するとクォータエラーを返し、0 で切り替えません',
+  'settings.maxQuotaSwitchesOff': '無制限',
+  'settings.maxQuotaSwitchesCount': '切り替え回数',
+  'settings.maxQuotaSwitchesUnit': '回',
+  'settings.accountSwitchInterval': 'アカウント切り替えの最短間隔',
+  'settings.accountSwitchIntervalHelp':
+    'リクエストがアカウントを切り替えるとき、次のアカウントは少なくともこの時間待ってから Google にリクエストを送り、数秒ですべてのアカウントを使い切るのを防ぎます',
   'settings.authPathAdd': 'パスを追加',
   'settings.authPathBrowse': '参照',
   'settings.authPathRemove': '{path} を削除',
@@ -588,6 +605,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURLHelp':
     'メディアリンクに使うサービスのアドレスです。空欄の場合は各リクエストのアクセス先を使います。',
   'settings.modelChannelsHelp': 'モデルを 1 つのチャネルに限定します。モデル詳細でも選べます',
+  'settings.modelAccounts': 'モデルごとの利用アカウント',
+  'settings.modelAccountsHelp':
+    'モデルは選んだアカウントだけで処理し、どれも利用できない場合は他のアカウントを使わずにエラーを返します',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build チャット',
@@ -602,14 +622,20 @@ export const messages: Record<TranslationKey, string> = {
   'settings.activeValue': '適用中の値',
   'settings.previewFallback':
     '{configured} は使用中または利用できないため、プレビューは {active} で待ち受けています',
-  'settings.pendingService': '保存した値は次回の生成サービス起動時に反映されます',
-  'settings.pendingManagement':
-    '待ち受けアドレス、API キー、コンソールのログインはアプリを再起動すると反映されます',
+  'settings.pendingService':
+    'WAA バックエンドまたはアカウント状態のパスを変更しました。生成サービスの再起動後に反映されます。',
+  'settings.pendingManagement': '待ち受けアドレスはアプリを再起動すると反映されます',
+  'settings.restartTitle': '生成サービスを再起動して変更を反映',
+  'settings.restartService': '生成サービスを再起動',
+  'settings.restartLater': '後で',
+  'settings.restartNoRequests': '処理中のリクエストはありません。',
+  'settings.restartInterrupts': '再起動すると処理中の {count} 件のリクエストが中断されます。',
+  'settings.restartInterruptsOne': '再起動すると処理中の {count} 件のリクエストが中断されます。',
+  'settings.serviceRestarted': '生成サービスを再起動しました',
+  'settings.serviceRestartState': '再起動後の生成サービスの状態：{state}',
   'settings.saved': '設定を保存しました',
-  'settings.savedService':
-    '設定を保存しました。左下で生成サービスを停止してから再度開始すると反映されます',
-  'settings.savedManagement': '設定を保存しました。アプリを再起動すると反映されます',
-  'settings.savedBoth': '設定を保存しました。アプリを再起動してください',
+  'settings.savedManagement':
+    '設定を保存しました。待ち受けアドレスはアプリを再起動すると反映されます',
   'settings.reveal': 'キーを表示',
   'settings.hide': 'キーを隠す',
   'playground.protocol': 'プロトコル',
@@ -2002,7 +2028,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.section.sillytavern': 'For SillyTavern',
   'settings.replyTool': '返信ツールによる途中切断対策',
   'settings.replyToolHelp':
-    'ロールプレイ向け：内部の final ツールを宣言して本文全体を一度に受け取ることでストリーミング途中の遮断を軽減します（思考は通常どおりリアルタイム出力）。構造化出力、ツール呼び出し必須、非テキストモデルでは無効です',
+    'ロールプレイ向け：内部の final ツールを宣言し、本文を段落ごとに続けて受け取ることでストリーミング途中の遮断を軽減し、長い返信のタイムアウトを防ぎます（思考は通常どおりリアルタイム出力）。構造化出力、ツール呼び出し必須、非テキストモデルでは無効です',
   'settings.thinkingGuard': '思考ブロック対策',
   'settings.thinkingGuardHelp':
     'ロールプレイ向け：内部思考を簡潔かつ抽象的に保ち敏感語句の反復を避け、思考強度の上限を低に抑えることで、思考段階での上流フィルタ遮断を軽減します。メッセージ変換や返信ツールと併用できます',
@@ -2019,6 +2045,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.effect.immediate': '保存するとすぐに反映',
   'settings.effect.service': '生成サービスの再起動後に反映',
   'settings.effect.management': 'アプリの再起動後に反映',
+  'settings.effect.launch': '次回のアプリ起動時に反映',
   'settings.unsavedSection': 'このセクションには未保存の変更があります',
   'settings.unsavedBar': '未保存の変更',
   'settings.unsavedCount': '未保存の変更が {count} 件あります',
@@ -2035,8 +2062,10 @@ export const messages: Record<TranslationKey, string> = {
     'API プレイグラウンドの HTML プレビュー用オリジン。現在のホスト名とこのポートで開きます。',
   'settings.apiKeyAccountsHelp':
     '各キーのリクエストを処理するアカウントを選びます。選ばない場合はすべてのアカウントを使います',
+  'settings.apiKeyAccountsEmpty':
+    'ローカル API キーを追加すると、キーごとに利用するアカウントをここで指定できます',
+  'settings.apiKeyAdd': 'キーを追加',
   'settings.keyAccountsAll': 'すべてのアカウント',
-  'settings.keyAccountsSome': '指定したアカウント',
   'settings.accountSearch': 'アカウントを検索',
   'settings.accountNone': '一致するアカウントはありません',
   'settings.keyAccountsClear': 'すべてのアカウントを使う',

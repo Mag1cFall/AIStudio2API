@@ -21,7 +21,11 @@ var nativePrefillModels = map[string]bool{
 
 // rewritesAssistantTail 判断末尾 assistant 轮是否改写：ContinuationRewrite 打开且模型不接受以 model 轮结尾的请求
 func (s *PooledService) rewritesAssistantTail(modelID string) bool {
-	return s.ContinuationRewrite && !nativePrefillModels[modelID] && !strings.HasPrefix(modelID, "gemma-")
+	return shouldRewriteAssistantTail(modelID, s.requestOptions().ContinuationRewrite)
+}
+
+func shouldRewriteAssistantTail(modelID string, rewrite bool) bool {
+	return rewrite && !nativePrefillModels[modelID] && !strings.HasPrefix(modelID, "gemma-")
 }
 
 // normalizeTurns 按 clientSystem 改写客户端系统提示，按 dropUserRejected 删去 user 轮中的客户端身份句；在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮

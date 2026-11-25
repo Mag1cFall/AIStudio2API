@@ -327,6 +327,8 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
   let draftController: AbortController | undefined
   let draftTimer = 0
   let tokenTimer = 0
+  // opening 是对话读取的序号，每次丢弃读取时递增，读取返回时序号已变则丢弃结果
+  let opening = 0
   // lastRun 是对话末尾模型轮次那次运行的输入与输出 token 数，取自生成用量或整段统计的逐轮明细
   const lastRun = ref<{ id: string; input: number; output: number } | null>(null)
   const scope = effectScope(true)
@@ -407,17 +409,24 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
       session.settings.protocol = protocols[0]!.value
   }
 
-  // open 读取对话库中的对话并返回其内容，loaded 为已读取的内容，读取失败时换成空白对话并记录原因，返回 undefined
+  // open 读取对话库中的对话并返回其内容，loaded 为已读取的内容，replacing 在读取完成且仍是最新选择、换掉当前对话之前调用，读取失败时换成空白对话并记录原因，返回 undefined；已显示该对话或读取期间又切换了对话时返回 undefined
   async function open(
     id: string,
     loaded?: SavedPrompt<PromptData>,
+    replacing?: () => void,
   ): Promise<SavedPrompt<PromptData> | undefined> {
-    if (session.id === id) return undefined
+    if (session.id === id) {
+      cancelOpen()
+      return undefined
+    }
     discard()
+    const current = opening
     session.loading = true
     session.loadError = ''
     try {
       const prompt = loaded ?? (await api.prompt<PromptData>(id))
+      if (current !== opening) return undefined
+      replacing?.()
       if (!Array.isArray(prompt.data?.turns)) {
         newChat()
         session.loadError = 'not_chat'
@@ -447,13 +456,21 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
       scheduleTokens()
       return prompt
     } catch (error) {
+      if (current !== opening) return undefined
+      replacing?.()
       newChat()
       session.loadError =
         error instanceof ApiError && error.status === 404 ? 'not_found' : useI18n().errorText(error)
       return undefined
     } finally {
-      session.loading = false
+      if (current === opening) session.loading = false
     }
+  }
+
+  // cancelOpen 丢弃进行中的对话读取，读取结果返回后不再写入对话
+  function cancelOpen(): void {
+    opening++
+    session.loading = false
   }
 
   // promptTitle 以首条用户输入的第一行作为对话标题
@@ -563,8 +580,9 @@ function createSession(temporary = false, links: SessionLinks = {}, initial?: Pa
     return saveTimer.value !== 0 || session.running
   }
 
-  // discard 撤销尚未到时的合并保存、尚未到时与进行中的 token 统计和统计返回后的保存，并中止生成
+  // discard 撤销尚未到时的合并保存、尚未到时与进行中的 token 统计和统计返回后的保存，丢弃进行中的对话读取，并中止生成
   function discard(): void {
+    cancelOpen()
     clearSave()
     staleTokens = false
     window.clearTimeout(tokenTimer)
@@ -1123,15 +1141,13 @@ function newChat(systemInstruction = ''): void {
   main.newChat(systemInstruction)
 }
 
-// open 读取对话库中的对话，切换到其他对话时退出对比模式，对话带右侧窗格时恢复对比模式
+// open 读取对话库中的对话，读取完成且仍是最新选择时退出对比模式再换入该对话，对话带右侧窗格时恢复对比模式
 async function open(
   id: string,
   loaded?: SavedPrompt<PromptData>,
 ): Promise<SavedPrompt<PromptData> | undefined> {
-  if (main.session.id === id) return undefined
-  flush()
-  leaveCompare()
-  const prompt = await main.open(id, loaded)
+  if (main.session.id !== id) flush()
+  const prompt = await main.open(id, loaded, leaveCompare)
   const compare = prompt?.data.compare
   if (compare) {
     const pane = addPane({

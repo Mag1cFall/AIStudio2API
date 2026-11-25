@@ -236,6 +236,10 @@ export interface UpdateStatus {
   published_at?: string
   checked_at?: string
   error?: string
+  // error_kind 在 GitHub 限流导致检查失败时为 rate_limited，其余失败时省略
+  error_kind?: 'rate_limited'
+  // retry_at 是检查失败后服务端预计恢复并重新检查的时刻，只在 error 非空时出现
+  retry_at?: string
   updating: boolean
   progress?: UpdateProgress
   // log_dir 是服务日志目录的绝对路径
@@ -244,7 +248,7 @@ export interface UpdateStatus {
 
 // UpdateProgress 是进行中的在线更新的阶段与发行包的已下载和总字节数，总字节数未知时为 0
 export interface UpdateProgress {
-  stage: 'download' | 'verify' | 'install' | 'restart'
+  stage: 'download' | 'install' | 'restart'
   downloaded: number
   total: number
 }
@@ -469,9 +473,10 @@ export interface ServiceConfig {
   active_listen_addr: string
   reserved_listen_addr: string
   active_preview_listen_addr: string
-  active_proxy_api_key: string
   management_restart_required: boolean
   service_restart_required: boolean
+  // active_requests 是保存时生成服务进行中的请求数
+  active_requests: number
   proxy: string
   active_proxy: string
   proxy_pool: ProxyPoolEntry[]
@@ -482,6 +487,10 @@ export interface ServiceConfig {
   warm_startup_concurrency: number
   per_account_concurrency: number
   max_account_switches: number
+  // account_switch_interval 是同一请求换号前从上一次失败起等待的秒数，off 为不等待
+  account_switch_interval: string
+  // max_quota_switches 是同一请求因额度用尽换号的次数上限，off 为不限
+  max_quota_switches: string
   routing_strategy: 'round-robin' | 'fill-first'
   account_order: string
   upstream_channels: UpstreamChannel[]

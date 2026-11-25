@@ -33,6 +33,7 @@ type AdminService interface {
 	RefreshAccount(context.Context, string) (AdminAccountRefresh, error)
 	StartService(context.Context) (AdminStatus, error)
 	StopService(context.Context) (AdminStatus, error)
+	RestartService(context.Context) (AdminStatus, error)
 	DownloadCamoufox(context.Context) (AdminStatus, error)
 	ClearLogs(context.Context) error
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
@@ -102,30 +103,33 @@ type LogStage struct {
 
 // RequestLog 保存可关联的请求状态、用量与诊断字段
 type RequestLog struct {
-	ID              string                 `json:"id"`
-	State           string                 `json:"state"`
-	StartedAt       time.Time              `json:"started_at,omitzero"`
-	Model           string                 `json:"model,omitempty"`
-	Method          string                 `json:"method,omitempty"`
-	Path            string                 `json:"path,omitempty"`
-	Status          int                    `json:"status,omitempty"`
-	DurationMS      float64                `json:"duration_ms,omitempty"`
-	Usage           *RequestLogUsage       `json:"usage,omitempty"`
-	ToolCalls       int                    `json:"tool_calls,omitempty"`
-	FinishReason    string                 `json:"finish_reason,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	InputMessages   int                    `json:"input_messages,omitempty"`
-	InputTextChars  int                    `json:"input_text_chars,omitempty"`
-	InputMedia      int                    `json:"input_media,omitempty"`
-	InputMediaBytes int64                  `json:"input_media_bytes,omitempty"`
-	InputFiles      int                    `json:"input_files,omitempty"`
-	Parameters      map[string]string      `json:"parameters,omitempty"`
-	FirstEventMS    float64                `json:"first_event_ms,omitempty"`
-	QueueMS         float64                `json:"queue_ms,omitempty"`
-	ProofMS         float64                `json:"proof_ms,omitempty"`
-	ProofPhases     *RequestLogProofPhases `json:"proof_phases,omitempty"`
-	UpstreamBytes   int64                  `json:"upstream_bytes,omitempty"`
-	Channel         string                 `json:"channel,omitempty"`
+	ID                     string                 `json:"id"`
+	State                  string                 `json:"state"`
+	StartedAt              time.Time              `json:"started_at,omitzero"`
+	Model                  string                 `json:"model,omitempty"`
+	Method                 string                 `json:"method,omitempty"`
+	Path                   string                 `json:"path,omitempty"`
+	Status                 int                    `json:"status,omitempty"`
+	DurationMS             float64                `json:"duration_ms,omitempty"`
+	Usage                  *RequestLogUsage       `json:"usage,omitempty"`
+	ToolCalls              int                    `json:"tool_calls,omitempty"`
+	ReplyTool              bool                   `json:"reply_tool,omitempty"`
+	ReplyToolCalls         *int                   `json:"reply_tool_calls,omitempty"`
+	ReplyToolContinuations *int                   `json:"reply_tool_continuations,omitempty"`
+	FinishReason           string                 `json:"finish_reason,omitempty"`
+	Error                  string                 `json:"error,omitempty"`
+	InputMessages          int                    `json:"input_messages,omitempty"`
+	InputTextChars         int                    `json:"input_text_chars,omitempty"`
+	InputMedia             int                    `json:"input_media,omitempty"`
+	InputMediaBytes        int64                  `json:"input_media_bytes,omitempty"`
+	InputFiles             int                    `json:"input_files,omitempty"`
+	Parameters             map[string]string      `json:"parameters,omitempty"`
+	FirstEventMS           float64                `json:"first_event_ms,omitempty"`
+	QueueMS                float64                `json:"queue_ms,omitempty"`
+	ProofMS                float64                `json:"proof_ms,omitempty"`
+	ProofPhases            *RequestLogProofPhases `json:"proof_phases,omitempty"`
+	UpstreamBytes          int64                  `json:"upstream_bytes,omitempty"`
+	Channel                string                 `json:"channel,omitempty"`
 }
 
 // RequestLogProofPhases 是请求日志中生成 WAA proof 的分项，SettingsSkipped 是空闲不够而没有做的运行设置步数
@@ -147,37 +151,40 @@ type RequestLogUsage struct {
 
 // AccessLog 表示一次公开 API 请求的最终访问记录
 type AccessLog struct {
-	Status          int
-	Latency         time.Duration
-	FirstEvent      time.Duration
-	FirstOutput     int64
-	TrailingError   string
-	QueueWait       time.Duration
-	Proof           ProofTiming
-	UpstreamBytes   int64
-	Usage           *aistudio.Usage
-	ToolCalls       int
-	InputMessages   int
-	InputTextChars  int
-	InputMedia      int
-	InputMediaBytes int64
-	InputFiles      int
-	Temperature     string
-	TopP            string
-	Thinking        string
-	MaxOutputTokens string
-	RequestID       string
-	Method          string
-	Path            string
-	Model           string
-	Account         string
-	Channel         string
-	FinishReason    string
-	Error           string
-	Canceled        bool
-	Generation      bool
-	Attempts        []RequestAttempt
-	Authorized      bool
+	Status                 int
+	Latency                time.Duration
+	FirstEvent             time.Duration
+	FirstOutput            int64
+	TrailingError          string
+	QueueWait              time.Duration
+	Proof                  ProofTiming
+	UpstreamBytes          int64
+	Usage                  *aistudio.Usage
+	ToolCalls              int
+	ReplyTool              bool
+	ReplyToolCalls         int
+	ReplyToolContinuations int
+	InputMessages          int
+	InputTextChars         int
+	InputMedia             int
+	InputMediaBytes        int64
+	InputFiles             int
+	Temperature            string
+	TopP                   string
+	Thinking               string
+	MaxOutputTokens        string
+	RequestID              string
+	Method                 string
+	Path                   string
+	Model                  string
+	Account                string
+	Channel                string
+	FinishReason           string
+	Error                  string
+	Canceled               bool
+	Generation             bool
+	Attempts               []RequestAttempt
+	Authorized             bool
 }
 
 // AdminAccountCounts 表示账户状态计数
@@ -370,9 +377,9 @@ type RuntimeConfig struct {
 	ReservedListenAddr        string               `json:"reserved_listen_addr"`
 	PreviewListenAddr         string               `json:"preview_listen_addr"`
 	ActivePreviewListenAddr   string               `json:"active_preview_listen_addr"`
-	ActiveAPIKey              string               `json:"active_proxy_api_key"`
 	ManagementRestartRequired bool                 `json:"management_restart_required"`
 	ServiceRestartRequired    bool                 `json:"service_restart_required"`
+	ActiveRequests            int                  `json:"active_requests"`
 	Proxy                     string               `json:"proxy"`
 	ActiveProxy               string               `json:"active_proxy"`
 	ProxyPool                 []AdminProxy         `json:"proxy_pool"`
@@ -385,6 +392,8 @@ type RuntimeConfig struct {
 	RoutingStrategy           string               `json:"routing_strategy"`
 	AccountOrder              string               `json:"account_order"`
 	MaxAccountSwitches        int                  `json:"max_account_switches"`
+	AccountSwitchInterval     string               `json:"account_switch_interval"`
+	MaxQuotaSwitches          string               `json:"max_quota_switches"`
 	UpstreamChannels          []string             `json:"upstream_channels"`
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
@@ -455,6 +464,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/accounts/refresh", s.handleRefreshAccounts)
 	mux.HandleFunc("POST /api/control/start", s.handleStartService)
 	mux.HandleFunc("POST /api/control/stop", s.handleStopService)
+	mux.HandleFunc("POST /api/control/restart", s.handleRestartService)
 	mux.HandleFunc("POST /api/camoufox/download", s.handleDownloadCamoufox)
 	mux.HandleFunc("DELETE /api/logs", s.handleClearLogs)
 	mux.HandleFunc("GET /api/config", s.handleRuntimeConfig)
@@ -653,6 +663,15 @@ func (s *server) handleStopService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+func (s *server) handleRestartService(w http.ResponseWriter, r *http.Request) {
+	status, err := s.config.Admin.RestartService(r.Context())
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 func (s *server) handleClearLogs(w http.ResponseWriter, r *http.Request) {
 	if err := s.config.Admin.ClearLogs(r.Context()); err != nil {
 		writeAdminUpstreamError(w, err)
@@ -681,11 +700,16 @@ func (s *server) handleUpdateRuntimeConfig(w http.ResponseWriter, r *http.Reques
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if err := s.adminAuth.ValidateConfigUpdate(r, config.AdminAuthEnabled); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_config", err.Error())
+		return
+	}
 	updated, err := s.config.Admin.UpdateRuntimeConfig(r.Context(), config)
 	if err != nil {
 		writeAdminUpstreamError(w, err)
 		return
 	}
+	s.adminAuth.ApplyConfig(updated.AdminAuthEnabled, updated.AdminUsername, updated.SavedAdminPassword, w, r)
 	writeJSON(w, http.StatusOK, updated)
 }
 

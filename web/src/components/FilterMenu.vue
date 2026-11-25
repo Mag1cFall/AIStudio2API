@@ -10,11 +10,14 @@ const props = defineProps<{
   label: string
   options: string[]
   selected: string[]
+  // format 返回取值的显示与搜索文字，提供 option 插槽时只用于搜索
   format: (value: string) => string
   searchLabel: string
   emptyLabel: string
   clearLabel: string
   disabled?: boolean
+  // badge 是触发器上代替选中数显示的文字，空串时不显示
+  badge?: string
   // field 表示触发器使用表单下拉框的样式
   field?: boolean
 }>()
@@ -56,9 +59,9 @@ function toggle(value: string, checked: boolean): void {
     >
       <span class="min-w-0 truncate" :class="{ 'flex-1': field }">{{ label }}</span>
       <span
-        v-if="selected.length > 0"
-        class="rounded bg-blue-600/30 px-1 text-xs text-blue-100 tabular-nums"
-        >{{ selected.length }}</span
+        v-if="selected.length > 0 && badge !== ''"
+        class="shrink-0 rounded bg-blue-600/30 px-1 text-xs text-blue-100 tabular-nums"
+        >{{ badge ?? selected.length }}</span
       >
       <UiIcon name="chevronDown" :size="12" class="text-gray-500" />
     </PopoverTrigger>
@@ -101,9 +104,11 @@ function toggle(value: string, checked: boolean): void {
               :disabled="disabled"
               @change="toggle(value, ($event.target as HTMLInputElement).checked)"
             />
-            <span v-tooltip.overflow="format(value)" class="min-w-0 flex-1 truncate">{{
-              format(value)
-            }}</span>
+            <slot name="option" :value="value">
+              <span v-tooltip.overflow="format(value)" class="min-w-0 flex-1 truncate">{{
+                format(value)
+              }}</span>
+            </slot>
           </label>
         </fieldset>
         <div v-if="selected.length > 0" class="mt-2 border-t border-line pt-2">

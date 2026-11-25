@@ -6,8 +6,8 @@ import { channelLabelKey, useI18n, type TranslationKey } from '@/i18n'
 import { capabilityNames, outputLimit, priceLines, tokenLimit } from '@/playground/catalog'
 import type { Account, Model, ServiceConfig, UpstreamChannel } from '@/types'
 import { useQueryText } from '@/url'
+import AccountFilterMenu from './AccountFilterMenu.vue'
 import DetailDialog from './DetailDialog.vue'
-import FilterMenu from './FilterMenu.vue'
 import UiIcon from './UiIcon.vue'
 import UiSelect, { keepSelected } from './UiSelect.vue'
 
@@ -82,18 +82,6 @@ function modelAccountBindings(value: string): Map<string, string[]> {
 // modelAccounts 返回模型可用的账户 ID，未绑定时为空
 function modelAccounts(model: Model): string[] {
   return modelAccountBindings(props.config?.model_accounts ?? '').get(model.id) ?? []
-}
-
-// accountLabel 返回账户 ID 对应的显示名称
-function accountLabel(id: string): string {
-  return props.accounts.find((account) => account.id === id)?.label ?? id
-}
-
-// modelAccountsLabel 是模型账户选择按钮的文字：未选时为全部账户，只选一个时为该账户
-function modelAccountsLabel(model: Model): string {
-  const ids = modelAccounts(model)
-  if (ids.length === 0) return t('settings.keyAccountsAll')
-  return ids.length === 1 ? accountLabel(ids[0]!) : t('settings.keyAccountsSome')
 }
 
 // setModelAccounts 保存模型可用的账户，空列表表示可用全部账户
@@ -483,14 +471,9 @@ function modelSummary(model: Model): string {
         </div>
         <div v-if="config && (accounts.length > 1 || modelAccounts(detail).length > 0)">
           <span class="mb-2 block text-xs text-gray-500">{{ t('models.accounts') }}</span>
-          <FilterMenu
-            :label="modelAccountsLabel(detail)"
-            :options="accounts.map((account) => account.id)"
+          <AccountFilterMenu
+            :accounts="accounts"
             :selected="modelAccounts(detail)"
-            :format="accountLabel"
-            :search-label="t('settings.accountSearch')"
-            :empty-label="t('settings.accountNone')"
-            :clear-label="t('settings.keyAccountsClear')"
             :disabled="saving"
             @change="setModelAccounts(detail!, $event)"
           />

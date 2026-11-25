@@ -1531,5 +1531,17 @@
   "解析 WebDriver BiDi Cookie: %w": "剖析 WebDriver BiDi Cookie: {0}",
   "解码 WebDriver BiDi Cookie %s 的 base64 值: %w": "解碼 WebDriver BiDi Cookie {0} 的 base64 值: {1}",
   "WebDriver BiDi 读取失败: %w": "WebDriver BiDi 讀取失敗: {0}",
-  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "瀏覽器偵錯位址沒有傳回偵錯資訊: HTTP {0}；WebDriver BiDi 讀取失敗: {1}"
+  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "瀏覽器偵錯位址沒有傳回偵錯資訊: HTTP {0}；WebDriver BiDi 讀取失敗: {1}",
+  "ACCOUNT_SWITCH_INTERVAL 必须是 off 或正整数秒": "ACCOUNT_SWITCH_INTERVAL 必須是 off 或正整數秒",
+  "Build 模型目录同步失败": "Build 模型目錄同步失敗",
+  "GitHub 访问频率受限（HTTP %d）": "GitHub 存取頻率受限（HTTP {0}）",
+  "MAX_QUOTA_SWITCHES 必须是 off、0 或正整数": "MAX_QUOTA_SWITCHES 必須是 off、0 或正整數",
+  "只能在本机访问时关闭管理登录": "只能在本機存取時關閉管理登入",
+  "最新发行版本跳转缺少版本号": "最新發行版本跳轉缺少版本號",
+  "等待换号间隔": "等待換號間隔",
+  "读取校验摘要: %w": "讀取校驗摘要: {0}",
+  "读取账户历史使用记录失败": "讀取帳號歷史使用記錄失敗",
+  "模型 %s 需要 %s，本次请求可用的账户 %s 都不具备": "模型 {0} 需要 {1}，本次請求可用的帳號 {2} 都不具備",
+  "模型 %s 需要以下任一权益，本次请求可用的账户 %s 都不具备：%s": "模型 {0} 需要以下任一權益，本次請求可用的帳號 {1} 都不具備：{2}",
+  "Interaction 模型的 contents[%d] 不接受服务端工具步骤 %s": "Interaction 模型的 contents[{0}] 不接受伺服器端工具步驟 {1}"
 }

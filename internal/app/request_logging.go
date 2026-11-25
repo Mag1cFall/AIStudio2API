@@ -19,7 +19,7 @@ func requestLogData(entry api.AccessLog) *api.RequestLog {
 	data := &api.RequestLog{
 		ID: entry.RequestID, Model: entry.Model, Method: entry.Method, Path: entry.Path,
 		Status: entry.Status, DurationMS: float64(entry.Latency) / float64(time.Millisecond),
-		ToolCalls: entry.ToolCalls, FinishReason: entry.FinishReason, Error: entry.Error,
+		ToolCalls: entry.ToolCalls, ReplyTool: entry.ReplyTool, FinishReason: entry.FinishReason, Error: entry.Error,
 		InputMessages: entry.InputMessages, InputTextChars: entry.InputTextChars,
 		InputMedia: entry.InputMedia, InputMediaBytes: entry.InputMediaBytes, InputFiles: entry.InputFiles,
 		FirstEventMS: float64(entry.FirstEvent) / float64(time.Millisecond), UpstreamBytes: entry.UpstreamBytes,
@@ -78,6 +78,12 @@ func requestOutcome(entry api.AccessLog) (string, string, string) {
 // finishedRequestLog 投影请求结果日志，失败且没有错误信息时记录 HTTP 状态
 func finishedRequestLog(entry api.AccessLog) (*api.RequestLog, string, string) {
 	data := requestLogData(entry)
+	if entry.ReplyTool {
+		calls := entry.ReplyToolCalls
+		continuations := entry.ReplyToolContinuations
+		data.ReplyToolCalls = &calls
+		data.ReplyToolContinuations = &continuations
+	}
 	state, level, message := requestOutcome(entry)
 	data.State = state
 	if state == "failed" && data.Error == "" {
@@ -98,7 +104,9 @@ func requestRow(entry api.AccessLog, finished time.Time) requestdb.Row {
 	row := requestdb.Row{
 		ID: entry.RequestID, Time: finished, Protocol: requestProtocol(entry.Path), Path: entry.Path,
 		Model: entry.Model, Account: entry.Account, Channel: entry.Channel, Status: entry.Status, State: data.State,
-		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, Proof: entry.Proof, ToolCalls: entry.ToolCalls, Error: cmp.Or(data.Error, entry.TrailingError),
+		Duration: entry.Latency, FirstEvent: entry.FirstEvent, Queue: entry.QueueWait, Proof: entry.Proof,
+		ToolCalls: entry.ToolCalls, ReplyTool: entry.ReplyTool, ReplyToolCalls: entry.ReplyToolCalls, ReplyToolContinuations: entry.ReplyToolContinuations,
+		Error:    cmp.Or(data.Error, entry.TrailingError),
 		Attempts: entry.Attempts,
 	}
 	if usage := data.Usage; usage != nil {

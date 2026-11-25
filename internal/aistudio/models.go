@@ -68,6 +68,129 @@ var videoTasks = map[int64]string{1: "text_to_video", 2: "image_to_video", 3: "r
 // videoInputs 为视频能力 field 70[7] 中的输入方式编号，4 为起始帧与尾帧，5 为参考图
 var videoInputs = map[int64]string{4: "frames", 5: "reference_images"}
 
+// InteractionMethod 表示模型经 ListModels field 79 选定的生成接口
+type InteractionMethod string
+
+const (
+	// InteractionMethodGenerateContent 表示走普通 GenerateContent 接口
+	InteractionMethodGenerateContent InteractionMethod = "GenerateContent"
+	// InteractionMethodCreateInteractionStream 表示走非后台 CreateInteractionStream 接口
+	InteractionMethodCreateInteractionStream InteractionMethod = "CreateInteractionStream"
+	// InteractionMethodCreateInteraction 表示走后台 CreateInteraction 与 GetInteractionStream 接口
+	InteractionMethodCreateInteraction InteractionMethod = "CreateInteraction"
+)
+
+// InteractionTarget 表示 Interaction 请求中目标写入模型槽位还是 agent 槽位
+type InteractionTarget string
+
+const (
+	// InteractionTargetNone 表示不走 Interactions API
+	InteractionTargetNone InteractionTarget = ""
+	// InteractionTargetModel 表示模型目标（field 79 kind == 2，写 interaction field 18）
+	InteractionTargetModel InteractionTarget = "model"
+	// InteractionTargetAgent 表示 agent 目标（field 79 kind == 1，写 interaction field 19）
+	InteractionTargetAgent InteractionTarget = "agent"
+)
+
+// InteractionRouting 是由 ListModels field 79 换算出的生成接口与目标位置
+type InteractionRouting struct {
+	Method InteractionMethod
+	Target InteractionTarget
+}
+
+// IsInteraction 表示模型经 Interactions API 生成
+func (r InteractionRouting) IsInteraction() bool {
+	return r.Method == InteractionMethodCreateInteractionStream || r.Method == InteractionMethodCreateInteraction
+}
+
+// IsStream 表示模型经 CreateInteractionStream 生成
+func (r InteractionRouting) IsStream() bool {
+	return r.Method == InteractionMethodCreateInteractionStream
+}
+
+// IsTask 表示模型经 CreateInteraction 创建后台任务并经 GetInteractionStream 读取结果
+func (r InteractionRouting) IsTask() bool {
+	return r.Method == InteractionMethodCreateInteraction
+}
+
+// IsAgent 表示目标为 agent（field 79 kind == 1）
+func (r InteractionRouting) IsAgent() bool {
+	return r.Target == InteractionTargetAgent
+}
+
+// IsModel 表示目标为模型（field 79 kind == 2）
+func (r InteractionRouting) IsModel() bool {
+	return r.Target == InteractionTargetModel
+}
+
+// ResolveInteractionRouting 按官网 _.Ol、_.Pl、Rl、_.Sl 四个谓词把 ListModels field 79 的 kind 与 background 换算为接口与目标位置；不识别的 kind 走 GenerateContent
+func ResolveInteractionRouting(kind int64, background bool) InteractionRouting {
+	agent := kind == 1
+	interaction := agent || kind == 2
+	if !interaction {
+		return InteractionRouting{Method: InteractionMethodGenerateContent}
+	}
+	target := InteractionTargetModel
+	if agent {
+		target = InteractionTargetAgent
+	}
+	if !background {
+		return InteractionRouting{Method: InteractionMethodCreateInteractionStream, Target: target}
+	}
+	return InteractionRouting{Method: InteractionMethodCreateInteraction, Target: target}
+}
+
+// interactionRouting 返回模型在指定通道上的 Interaction 选路，全部选路判断统一经由 ResolveInteractionRouting
+func interactionRouting(model Model, defaults GenerationDefaults, channel Channel) InteractionRouting {
+	if channel == ChannelBuild {
+		return ResolveInteractionRouting(0, false)
+	}
+	var kind int64
+	switch {
+	case model.Capabilities["interaction_agent"] || defaults.InteractionAgent:
+		kind = 1
+	case model.Capabilities["interaction_model"] || defaults.InteractionModel:
+		kind = 2
+	case model.Capabilities["interaction_stream"] || defaults.InteractionStream:
+		kind = 2
+	case model.Capabilities["interaction_task"] || defaults.InteractionTask:
+		kind = 1
+	}
+	background := model.Capabilities["interaction_task"] || defaults.InteractionTask
+	return ResolveInteractionRouting(kind, background)
+}
+
+// decodeInteractionField79 解析 ListModels field 79 InteractionConfig 并经 ResolveInteractionRouting 换算接口与目标位置
+func decodeInteractionField79(config json.RawMessage, path string, evidence json.RawMessage) (InteractionRouting, string, error) {
+	if isJSONNull(config) {
+		return ResolveInteractionRouting(0, false), "", nil
+	}
+	interaction, err := rawArray(config, path, evidence)
+	if err != nil {
+		return InteractionRouting{}, "", withMethod(err, "ListModels")
+	}
+	background := false
+	if value := rawAt(interaction, 2); !isJSONNull(value) {
+		background, err = rawBool(value, path+"[2]", evidence)
+		if err != nil {
+			return InteractionRouting{}, "", withMethod(err, "ListModels")
+		}
+	}
+	kind, err := optionalIntField(interaction, 3, path, evidence)
+	if err != nil {
+		return InteractionRouting{}, "", err
+	}
+	agentModel := ""
+	if value := rawAt(interaction, 5); !isJSONNull(value) {
+		rawModel, err := rawString(value, path+"[5]", evidence)
+		if err != nil {
+			return InteractionRouting{}, "", withMethod(err, "ListModels")
+		}
+		agentModel = strings.TrimPrefix(rawModel, "models/")
+	}
+	return ResolveInteractionRouting(kind, background), agentModel, nil
+}
+
 // GenerationDefaults 保存 ListModels 返回的生成默认值
 type GenerationDefaults struct {
 	MaxOutputTokens      int64
@@ -87,6 +210,12 @@ type GenerationDefaults struct {
 	InteractionStream bool
 	// InteractionTask 表示官网经 CreateInteraction 创建后台任务、经 GetInteractionStream 读取结果的模型
 	InteractionTask bool
+	// InteractionAgent 表示 field 79 kind == 1 的 agent 目标
+	InteractionAgent bool
+	// InteractionModel 表示 field 79 kind == 2 的模型目标
+	InteractionModel bool
+	// VideoOutput 表示具备次能力码 14 与 chat_model 的视频输出聊天模型（官网 _.rl）
+	VideoOutput bool
 	// VideoResolution 为视频输出分辨率选项中的第一项，Interaction 视频输出格式的默认分辨率
 	VideoResolution string
 	// ContinuedOutputTokens 表示自动续写模型的输出总上限，其他模型为 0
@@ -219,10 +348,6 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 	for _, code := range defaultCodes {
 		capabilities["default_capability_code_"+strconv.FormatInt(code, 10)] = true
 	}
-	if !isJSONNull(rawAt(row, 78)) {
-		// field 79 InteractionConfig 表示模型只经 Interactions API 生成
-		capabilities["interactions_api"] = true
-	}
 	accessModes, err := intSliceField(row, 82, path, raw)
 	if err != nil {
 		return modelEntry{}, err
@@ -271,34 +396,27 @@ func decodeModelRow(raw json.RawMessage, rowIndex int) (modelEntry, error) {
 		AccessModes:       append([]int64(nil), accessModes...),
 		Paid:              paidCode == 2,
 	}
-	if config := rawAt(row, 78); !isJSONNull(config) {
-		// field 79 InteractionConfig 的 field 3 表示经 CreateInteraction 后台任务生成，field 6 是 agent 默认使用的模型
-		interaction, err := rawArray(config, path+"[78]", raw)
-		if err != nil {
-			return modelEntry{}, withMethod(err, "ListModels")
-		}
-		if value := rawAt(interaction, 2); !isJSONNull(value) {
-			background, err := rawBool(value, path+"[78][2]", raw)
-			if err != nil {
-				return modelEntry{}, withMethod(err, "ListModels")
-			}
-			model.Capabilities["interaction_task"] = background
-		}
-		kind, err := optionalIntField(interaction, 3, path+"[78]", raw)
-		if err != nil {
-			return modelEntry{}, withMethod(err, "ListModels")
-		}
-		// field 4 为 2 且不是后台任务的模型经 CreateInteractionStream 生成，与官网一样以内联数据发送图片
-		model.Capabilities["interaction_stream"] = kind == 2 && !model.Capabilities["interaction_task"]
-		if value := rawAt(interaction, 5); !isJSONNull(value) {
-			agentModel, err := rawString(value, path+"[78][5]", raw)
-			if err != nil {
-				return modelEntry{}, withMethod(err, "ListModels")
-			}
-			model.AgentModel = strings.TrimPrefix(agentModel, "models/")
-		}
+	routing, agentModel, err := decodeInteractionField79(rawAt(row, 78), path+"[78]", raw)
+	if err != nil {
+		return modelEntry{}, err
 	}
-	defaults, err := decodeGenerationDefaults(row, path, raw, capabilities)
+	if routing.IsInteraction() {
+		capabilities["interactions_api"] = true
+	}
+	if routing.IsStream() {
+		capabilities["interaction_stream"] = true
+	}
+	if routing.IsTask() {
+		capabilities["interaction_task"] = true
+	}
+	if routing.IsAgent() {
+		capabilities["interaction_agent"] = true
+		model.AgentModel = agentModel
+	}
+	if routing.IsModel() {
+		capabilities["interaction_model"] = true
+	}
+	defaults, err := decodeGenerationDefaults(row, path, raw, capabilities, routing)
 	if err != nil {
 		return modelEntry{}, err
 	}
@@ -508,11 +626,14 @@ func decodeCapabilityOptions(row []json.RawMessage, path string, evidence json.R
 	return options, nil
 }
 
-func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.RawMessage, capabilities map[string]bool) (GenerationDefaults, error) {
+func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.RawMessage, capabilities map[string]bool, routing InteractionRouting) (GenerationDefaults, error) {
 	defaults := GenerationDefaults{
 		Thinking: capabilities["thinking"], ThinkingBudget: capabilities["thinking_budget"],
 		ThinkingLevel: capabilities["thinking_level"], DefaultThinkingLevel: 2,
 		ImageRoute: capabilities["image_route"], OutputResolution: capabilities["output_resolution"],
+		InteractionStream: routing.IsStream(), InteractionTask: routing.IsTask(),
+		InteractionAgent: routing.IsAgent(), InteractionModel: routing.IsModel(),
+		VideoOutput: capabilities["secondary_capability_code_14"] && capabilities["chat_model"],
 	}
 	maxOutput, err := optionalIntField(row, 6, path, evidence)
 	if err != nil {
@@ -540,26 +661,6 @@ func decodeGenerationDefaults(row []json.RawMessage, path string, evidence json.
 		}
 		converted := int(value)
 		defaults.TopK = &converted
-	}
-	if raw := rawAt(row, 78); !isJSONNull(raw) {
-		// field 79 InteractionConfig：field 3 为后台任务，field 4 类型 1 为 agent、2 为模型
-		interaction, err := rawArray(raw, path+"[78]", evidence)
-		if err != nil {
-			return GenerationDefaults{}, withMethod(err, "ListModels")
-		}
-		kind, err := optionalIntField(interaction, 3, path+"[78]", evidence)
-		if err != nil {
-			return GenerationDefaults{}, err
-		}
-		background := false
-		if value := rawAt(interaction, 2); !isJSONNull(value) {
-			background, err = rawBool(value, path+"[78][2]", evidence)
-			if err != nil {
-				return GenerationDefaults{}, withMethod(err, "ListModels")
-			}
-		}
-		defaults.InteractionStream = kind == 2 && !background
-		defaults.InteractionTask = background
 	}
 	if video := rawAt(row, 70); !isJSONNull(video) {
 		items, err := rawArray(video, path+"[70]", evidence)

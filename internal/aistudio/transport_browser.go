@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,12 +48,6 @@ const (
 	firefoxWindowUpdateThreshold = 4 << 20
 	// firefoxMaxPersistentConns 是 Firefox network.http.max-persistent-connections-per-server：一类请求对一个主机的已建立与建立中连接数上限
 	firefoxMaxPersistentConns = 6
-	// firefoxPreflightCacheSize 是 Firefox nsPreflightCache 的条目上限
-	firefoxPreflightCacheSize = 100
-	// firefoxPreflightDefaultMaxAge 是 Firefox Access-Control-Max-Age 缺省或为空时的缓存有效期
-	firefoxPreflightDefaultMaxAge = 5 * time.Second
-	// firefoxPreflightMaxAgeLimit 是 Firefox Access-Control-Max-Age 的上限秒数（24 小时）
-	firefoxPreflightMaxAgeLimit = 86400
 )
 
 // firefoxDirectDialer 是直连拨号器，按 Firefox network.http.connection-timeout 设置 90 秒上限
@@ -229,17 +224,14 @@ type browserRoundTripper struct {
 	transport *http2.Transport
 	pool      *firefoxConnPool
 	mu        sync.Mutex
-	// preflights 按 preflightCacheKey 记录 CORS 预检缓存
+	// preflights 按 preflightKey 记录 CORS 预检缓存
 	preflights map[string]preflightGrant
-	// preflightSeq 递增记录预检缓存条目的最近使用顺序
-	preflightSeq uint64
 }
 
-// preflightGrant 是一个 URL 的 CORS 预检缓存：预检响应允许的方法与请求头（小写）各自的到期时刻与最近使用序号，与 Firefox nsPreflightCache 相同
+// preflightGrant 是一个 URL 的 CORS 预检缓存：预检响应允许的方法与请求头（小写）各自的到期时刻，与 Firefox nsPreflightCache 相同
 type preflightGrant struct {
 	methods map[string]time.Time
 	headers map[string]time.Time
-	used    uint64
 }
 
 // allows 判断缓存是否覆盖请求：GET 与 POST 不查方法，其余方法与每个脚本设置的请求头都在有效期内
@@ -253,21 +245,6 @@ func (grant preflightGrant) allows(method string, headers []string, now time.Tim
 		}
 	}
 	return true
-}
-
-// purgeExpired 删除缓存项中已到期的方法与请求头，全部清空时返回 true
-func (grant preflightGrant) purgeExpired(now time.Time) bool {
-	for method, expiry := range grant.methods {
-		if !now.Before(expiry) {
-			delete(grant.methods, method)
-		}
-	}
-	for name, expiry := range grant.headers {
-		if !now.Before(expiry) {
-			delete(grant.headers, name)
-		}
-	}
-	return len(grant.methods) == 0 && len(grant.headers) == 0
 }
 
 type browserResponseBody struct {
@@ -685,10 +662,8 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	upstream.Header[fhttp.HeaderOrderKey] = orderedHeaderNames(upstream.Header, request.URL.Host)
 	response, err := transport.roundTrip(upstream, requestClassOf(request.Context()).anonymous)
 	if err != nil {
-		target := request.URL.String()
 		transport.mu.Lock()
-		delete(transport.preflights, preflightCacheKey(target, false))
-		delete(transport.preflights, preflightCacheKey(target, true))
+		delete(transport.preflights, preflightKey(request))
 		transport.mu.Unlock()
 		return nil, err
 	}
@@ -775,34 +750,15 @@ func standardHeader(source fhttp.Header) stdhttp.Header {
 	return result
 }
 
-// preflightCacheKey 返回 URL 与是否匿名的 CORS 预检缓存键，与 Firefox nsPreflightCache 一样区分是否携带凭据
-func preflightCacheKey(target string, anonymous bool) string {
-	if anonymous {
-		return "anonymous " + target
+// preflightKey 返回请求的 CORS 预检缓存键：与 Firefox nsPreflightCache 一样按 URL 与是否携带凭据区分
+func preflightKey(request *stdhttp.Request) string {
+	if requestClassOf(request.Context()).anonymous {
+		return "anonymous " + request.URL.String()
 	}
-	return target
+	return request.URL.String()
 }
 
-// parsePreflightMaxAge 按 Firefox nsCORSPreflightListener::AddResultToCache 解析 Access-Control-Max-Age：空值按 5 秒，纯数字按秒封顶 24 小时，0 或含非数字字符时不缓存
-func parsePreflightMaxAge(value string) (time.Duration, bool) {
-	if value == "" {
-		return firefoxPreflightDefaultMaxAge, true
-	}
-	var seconds uint64
-	for i := range len(value) {
-		ch := value[i]
-		if ch < '0' || ch > '9' {
-			return 0, false
-		}
-		seconds = min(seconds*10+uint64(ch-'0'), firefoxPreflightMaxAgeLimit)
-	}
-	if seconds == 0 {
-		return 0, false
-	}
-	return time.Duration(seconds) * time.Second, true
-}
-
-// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检：携带凭据的请求先在后台预先拨出带凭据的连接，预检走匿名连接，预检响应允许的方法与请求头按 Access-Control-Max-Age（上限 24 小时、缓存上限 100 条）逐个缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
+// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检：携带凭据的请求先在后台预先拨出带凭据的连接，预检走匿名连接，预检响应允许的方法与请求头按 Access-Control-Max-Age（上限 24 小时）逐个缓存；no-cors 请求与只带安全头的 GET、HEAD、POST 不预检
 func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) error {
 	origin, err := url.Parse(request.Header.Get("Origin"))
 	if request.Method == stdhttp.MethodOptions || request.Header.Get("Sec-Fetch-Mode") == "no-cors" || err != nil || origin.Host == "" || origin.Host == request.URL.Host {
@@ -814,16 +770,9 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	}
 	target := request.URL.String()
 	class := requestClassOf(request.Context())
-	key := preflightCacheKey(target, class.anonymous)
-	now := time.Now()
+	key := preflightKey(request)
 	transport.mu.Lock()
-	grant, exists := transport.preflights[key]
-	if exists {
-		transport.preflightSeq++
-		grant.used = transport.preflightSeq
-		transport.preflights[key] = grant
-	}
-	cached := exists && grant.allows(request.Method, unsafe, now)
+	cached := transport.preflights[key].allows(request.Method, unsafe, time.Now())
 	transport.mu.Unlock()
 	if cached {
 		return nil
@@ -860,47 +809,23 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return fmt.Errorf("CORS 预检返回 HTTP %d", response.StatusCode)
 	}
-	maxAge, ok := parsePreflightMaxAge(response.Header.Get("Access-Control-Max-Age"))
-	if !ok {
-		return nil
+	maxAge := 5 * time.Second
+	if seconds, err := strconv.Atoi(response.Header.Get("Access-Control-Max-Age")); err == nil {
+		maxAge = min(time.Duration(seconds)*time.Second, 24*time.Hour)
 	}
-	storedAt := time.Now()
-	expiry := storedAt.Add(maxAge)
+	expiry := time.Now().Add(maxAge)
 	transport.mu.Lock()
-	grant, exists = transport.preflights[key]
-	if !exists {
-		if len(transport.preflights) >= firefoxPreflightCacheSize {
-			for cachedKey, cachedGrant := range transport.preflights {
-				if cachedGrant.purgeExpired(storedAt) {
-					delete(transport.preflights, cachedKey)
-				}
-			}
-			if len(transport.preflights) >= firefoxPreflightCacheSize {
-				var oldestKey string
-				var oldestUsed uint64
-				for cachedKey, cachedGrant := range transport.preflights {
-					if oldestKey == "" || cachedGrant.used < oldestUsed {
-						oldestKey, oldestUsed = cachedKey, cachedGrant.used
-					}
-				}
-				delete(transport.preflights, oldestKey)
-			}
-		}
+	grant := transport.preflights[key]
+	if grant.headers == nil {
 		grant = preflightGrant{methods: map[string]time.Time{}, headers: map[string]time.Time{}}
+		transport.preflights[key] = grant
 	}
-	transport.preflightSeq++
-	grant.used = transport.preflightSeq
 	for _, method := range strings.Split(response.Header.Get("Access-Control-Allow-Methods"), ",") {
-		if method = strings.TrimSpace(method); method != "" {
-			grant.methods[method] = expiry
-		}
+		grant.methods[strings.TrimSpace(method)] = expiry
 	}
 	for _, name := range strings.Split(response.Header.Get("Access-Control-Allow-Headers"), ",") {
-		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
-			grant.headers[name] = expiry
-		}
+		grant.headers[strings.ToLower(strings.TrimSpace(name))] = expiry
 	}
-	transport.preflights[key] = grant
 	transport.mu.Unlock()
 	return nil
 }

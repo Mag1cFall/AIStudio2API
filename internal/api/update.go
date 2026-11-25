@@ -24,6 +24,8 @@ type UpdateStatus struct {
 	PublishedAt time.Time       `json:"published_at,omitzero"`
 	CheckedAt   time.Time       `json:"checked_at,omitzero"`
 	Error       string          `json:"error,omitempty"`
+	ErrorKind   string          `json:"error_kind,omitempty"` // 限流时为 "rate_limited"，其余错误省略
+	RetryAt     time.Time       `json:"retry_at,omitzero"`
 	Updating    bool            `json:"updating"`
 	Progress    *UpdateProgress `json:"progress,omitempty"`
 	// LogDir 是服务日志目录的绝对路径

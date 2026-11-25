@@ -1531,5 +1531,17 @@
   "解析 WebDriver BiDi Cookie: %w": "Parsing WebDriver BiDi cookies: {0}",
   "解码 WebDriver BiDi Cookie %s 的 base64 值: %w": "Decoding base64 value of WebDriver BiDi cookie {0}: {1}",
   "WebDriver BiDi 读取失败: %w": "WebDriver BiDi read failed: {0}",
-  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "Browser debugging address returned no debugging information: HTTP {0}; WebDriver BiDi read failed: {1}"
+  "浏览器调试地址没有返回调试信息: HTTP %d；WebDriver BiDi 读取失败: %w": "Browser debugging address returned no debugging information: HTTP {0}; WebDriver BiDi read failed: {1}",
+  "ACCOUNT_SWITCH_INTERVAL 必须是 off 或正整数秒": "ACCOUNT_SWITCH_INTERVAL must be off or a positive integer in seconds",
+  "Build 模型目录同步失败": "Build model catalog sync failed",
+  "GitHub 访问频率受限（HTTP %d）": "GitHub rate limit exceeded (HTTP {0})",
+  "MAX_QUOTA_SWITCHES 必须是 off、0 或正整数": "MAX_QUOTA_SWITCHES must be off, 0, or a positive integer",
+  "只能在本机访问时关闭管理登录": "Console login can only be turned off from this computer",
+  "最新发行版本跳转缺少版本号": "Latest release redirect is missing a version tag",
+  "等待换号间隔": "Waiting for account switch interval",
+  "读取校验摘要: %w": "Reading checksums: {0}",
+  "读取账户历史使用记录失败": "Failed to read account usage history",
+  "模型 %s 需要 %s，本次请求可用的账户 %s 都不具备": "Model {0} requires {1}, which the accounts available to this request ({2}) do not have",
+  "模型 %s 需要以下任一权益，本次请求可用的账户 %s 都不具备：%s": "Model {0} requires one of these entitlements, which the accounts available to this request ({1}) do not have: {2}",
+  "Interaction 模型的 contents[%d] 不接受服务端工具步骤 %s": "Interaction model contents[{0}] does not accept server-side tool step {1}"
 }

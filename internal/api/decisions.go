@@ -91,10 +91,17 @@ func (s *server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, err := request.decision()
-	if err == nil {
-		err = s.inlineDecisionFiles(r, decision.Input)
-	}
 	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	if err := resolveGeminiFileNames(r.Context(), s.service, []aistudio.Content{{Parts: decision.Input}}); err != nil {
+		if shouldWriteRequestError(r, err) {
+			writeGeminiRequestError(w, err)
+		}
+		return
+	}
+	if err := s.inlineDecisionFiles(r, decision.Input); err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		return
 	}

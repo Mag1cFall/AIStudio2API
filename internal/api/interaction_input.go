@@ -857,10 +857,8 @@ func (audio outputAudioFormat) encode(media aistudio.Blob) (aistudio.Blob, error
 	switch {
 	case baseType == "audio/mpeg" && encoding.format == "mp3" && sameRate && audio.BitRate == 0:
 		return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, source.SampleRate, source.Channels), Data: media.Data}, nil
-	case baseType == "audio/l16" && encoding.format == "pcm" && sameRate:
+	case baseType != "audio/mpeg" && encoding.format == "pcm" && sameRate:
 		return media, nil
-	case (baseType == "audio/wav" || baseType == "audio/x-wav") && audio.MIME == "audio/wav" && sameRate:
-		return aistudio.Blob{MIME: "audio/wav", Data: media.Data}, nil
 	}
 	data, encoded, err := encodeAudio(source, audioOutput{Format: encoding.format, SampleRate: audio.SampleRate, BitRate: audio.BitRate})
 	return aistudio.Blob{MIME: fmt.Sprintf("%s;rate=%d;channels=%d", encoding.content, encoded.SampleRate, encoded.Channels), Data: data}, err

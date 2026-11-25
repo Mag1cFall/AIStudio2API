@@ -393,10 +393,13 @@ function startConsole(): void {
   )
 }
 
-// stopConsole 关闭事件订阅并提交等待中的删除
+// stopConsole 关闭事件订阅、清空服务状态与账户任务以停止状态轮询，并提交等待中的删除
 function stopConsole(): void {
   eventConnection?.close()
   eventConnection = undefined
+  status.value = null
+  loading.status = true
+  accountTasks.value = []
   window.clearTimeout(logFlushTimer)
   window.clearTimeout(noticeTimer)
   notice.message = ''

@@ -151,41 +151,40 @@ func (s *PooledService) OpenBidi(ctx context.Context, request BidiRequest) (*Bid
 			return nil, err
 		}
 		request.AccountID = lease.Account().ID
+		var session *BidiSession
 		if lease.Channel() == ChannelPlayground {
-			entry, err := s.client.modelEntry(ctx, request.AccountID, modelID)
-			if err != nil {
+			entry, entryErr := s.client.modelEntry(ctx, request.AccountID, modelID)
+			if entryErr != nil {
 				if owned {
-					err = errors.Join(err, lease.Release())
+					entryErr = errors.Join(entryErr, lease.Release())
 				}
-				return nil, err
+				return nil, entryErr
 			}
 			request.generationDefaults = entry.defaults
 			if request.Mode == BidiModeLive {
 				request.variant = bidiVariantFor(entry.model)
 			}
-			if err := s.client.EnsureDisclaimerAcknowledged(ContextWithAccountLease(ctx, lease), request.AccountID, request.Mode); err != nil {
-				if owned {
-					err = errors.Join(err, lease.Release())
+			err = s.client.EnsureDisclaimerAcknowledged(ContextWithAccountLease(ctx, lease), request.AccountID, request.Mode)
+		}
+		if err == nil {
+			runtime := RequestContext{}
+			if s.client.contextProvider != nil {
+				var runtimeErr error
+				runtime, runtimeErr = s.client.contextProvider.RequestContext(ctx, request.AccountID)
+				if runtimeErr != nil {
+					if owned {
+						runtimeErr = errors.Join(runtimeErr, lease.Release())
+					}
+					return nil, fmt.Errorf("读取 AI Studio bidi 请求上下文: %w", runtimeErr)
 				}
-				return nil, err
 			}
-		}
-		runtime := RequestContext{}
-		if s.client.contextProvider != nil {
-			runtime, err = s.client.contextProvider.RequestContext(ctx, request.AccountID)
-			if err != nil {
-				if owned {
-					err = errors.Join(err, lease.Release())
-				}
-				return nil, fmt.Errorf("读取 AI Studio bidi 请求上下文: %w", err)
+			var release func() error
+			if owned {
+				release = lease.Release
 			}
+			attemptCtx := ContextWithAccountLease(ctx, lease)
+			session, err = transport.OpenBidiProtected(attemptCtx, request, runtime, lease, release)
 		}
-		var release func() error
-		if owned {
-			release = lease.Release
-		}
-		attemptCtx := ContextWithAccountLease(ctx, lease)
-		session, err := transport.OpenBidiProtected(attemptCtx, request, runtime, lease, release)
 		if err == nil {
 			if stateErr := lease.MarkAuthenticationValid(); stateErr != nil {
 				slog.Error("Bidi 账户认证状态保存失败", "account", request.AccountID, "error", stateErr)
@@ -410,7 +409,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		return nil, err
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
-	setupCtx, cancelSetup := context.WithTimeout(ctx, t.setupTimeout)
+	setupCtx, cancelSetup := context.WithTimeout(ctx, time.Duration(t.setupTimeout.Load()))
 	defer cancelSetup()
 	session := &BidiSession{
 		ctx: requestCtx, cancel: cancel, lease: lease, release: release, worker: worker, client: client,

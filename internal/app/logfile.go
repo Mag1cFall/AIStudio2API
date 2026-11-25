@@ -15,21 +15,28 @@ const logFileName = "aistudio2api.log"
 
 // logOutput 把控制台日志写到标准错误与可开关的轮转日志文件
 type logOutput struct {
-	dir  string
-	mu   sync.Mutex
-	file *lumberjack.Logger
+	dir        string
+	mu         sync.Mutex
+	enabled    bool
+	maxTotalMB int
+	file       *lumberjack.Logger
 }
 
 // set 开启或关闭日志文件；单文件按 config.LogFileMB 轮转，目录总量超过 maxTotalMB 时删除最旧的文件
 func (output *logOutput) set(enabled bool, maxTotalMB int) error {
 	output.mu.Lock()
 	defer output.mu.Unlock()
+	if output.enabled == enabled && (!enabled || output.maxTotalMB == maxTotalMB) && (output.file != nil) == enabled {
+		return nil
+	}
 	if output.file != nil {
 		if err := output.file.Close(); err != nil {
 			return err
 		}
 		output.file = nil
 	}
+	output.enabled = enabled
+	output.maxTotalMB = maxTotalMB
 	if !enabled {
 		return nil
 	}

@@ -13,7 +13,7 @@ import (
 const camoufoxWorkerPath = "camoufox"
 
 // prepareWAABackend 按 WAA 后端返回 Worker 选项中的 Camoufox 路径与账户登录驱动，Camoufox 后端在后台准备 Camoufox
-func prepareWAABackend(cfg config.Config, requests *requestRegistry, accounts []*aistudio.Account, proxy string) (string, aistudio.IsolatedLoginDriver) {
+func prepareWAABackend(cfg config.Config, requests *requestRegistry, accounts []*aistudio.Account, proxy func() string) (string, aistudio.IsolatedLoginDriver) {
 	removeStaleCamoufoxProfiles(requests)
 	login := camoufoxLoginDriver{proxy: proxy}
 	if cfg.WAABackend == config.WAABackendSpiderMonkey {
@@ -26,7 +26,7 @@ func prepareWAABackend(cfg config.Config, requests *requestRegistry, accounts []
 		return "", login
 	}
 	requests.logStage("service", "INFO", api.LogStage{Name: "运行时装配", Step: 2, Steps: 3}, "使用 Camoufox WAA 后端", "accounts", len(accounts))
-	camoufoxnative.PrepareInBackground(proxy)
+	camoufoxnative.PrepareInBackground(proxy())
 	return camoufoxWorkerPath, login
 }
 
@@ -54,12 +54,16 @@ func newWAAWorker(ctx context.Context, accountID string, options camoufoxnative.
 
 // camoufoxLoginDriver 在登录时准备 Camoufox，同一进程内的登录与生成服务共用一次进行中的下载
 type camoufoxLoginDriver struct {
-	proxy string
+	proxy func() string
 }
 
 // Login 等 Camoufox 就绪后执行隔离登录
 func (driver camoufoxLoginDriver) Login(ctx context.Context, request aistudio.IsolatedLoginRequest) (aistudio.IsolatedLoginResult, error) {
-	path, err := camoufoxnative.Prepare(ctx, driver.proxy)
+	proxy := ""
+	if driver.proxy != nil {
+		proxy = driver.proxy()
+	}
+	path, err := camoufoxnative.Prepare(ctx, proxy)
 	if err != nil {
 		return aistudio.IsolatedLoginResult{}, err
 	}
@@ -72,7 +76,11 @@ func (driver camoufoxLoginDriver) Login(ctx context.Context, request aistudio.Is
 
 // Verify 等 Camoufox 就绪后打开账户验证页并自动再核对
 func (driver camoufoxLoginDriver) Verify(ctx context.Context, request aistudio.AccountVerifyRequest) (bool, error) {
-	path, err := camoufoxnative.Prepare(ctx, driver.proxy)
+	proxy := ""
+	if driver.proxy != nil {
+		proxy = driver.proxy()
+	}
+	path, err := camoufoxnative.Prepare(ctx, proxy)
 	if err != nil {
 		return true, err
 	}

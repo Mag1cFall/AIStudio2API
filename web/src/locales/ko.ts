@@ -78,13 +78,16 @@ export const messages: Record<TranslationKey, string> = {
   'version.confirmText':
     '{version}을(를) 다운로드하고 서비스를 다시 시작합니다. 진행 중인 요청 {count}개가 중단됩니다.',
   'version.downloading': '새 버전을 다운로드하는 중',
-  'version.verifying': '릴리스 패키지를 확인하는 중',
   'version.installing': '새 버전을 설치하는 중',
   'version.restarting': '서비스를 다시 시작하는 중입니다. 완료되면 페이지를 새로 고칩니다',
   'version.restartStalled':
     '새 버전이 1분 안에 시작되지 않았습니다. AIStudio2API를 다시 열면 시작된 뒤 이 페이지가 자동으로 새로 고쳐집니다. 그래도 시작되지 않으면 {path}에 있는 로그를 확인하세요',
   'version.available': '{version} 사용 가능',
   'version.upToDate': '최신 버전입니다',
+  'version.rateLimited':
+    'GitHub가 이 네트워크의 접근을 일시적으로 제한해 업데이트를 확인할 수 없습니다.',
+  'version.retryAt': '{time}(약 {minutes}분 후)에 자동으로 다시 확인합니다.',
+  'version.retryAtSoon': '{time}(1분 이내)에 자동으로 다시 확인합니다.',
   'version.release': 'GitHub에서 보기',
   'version.notes': '{version} 릴리스 노트',
   'version.container':
@@ -116,7 +119,6 @@ export const messages: Record<TranslationKey, string> = {
   'common.edit': '수정',
   'common.enable': '사용',
   'common.disable': '사용 중지',
-  'common.empty': '데이터가 없습니다',
   'common.copy': '복사',
   'common.copied': '복사했습니다',
   'common.error': '요청에 실패했습니다',
@@ -137,6 +139,12 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.filterEgress': '계정 연결 경로',
   'accounts.allEgresses': '모든 연결 경로',
   'accounts.exits': '공인 IP',
+  'accounts.exitsTotal': '총 {count}개',
+  'accounts.exitsShared': '{count}개 공유',
+  'accounts.exitsFailed': '{count}개 조회 실패',
+  'accounts.exitsSingle': '모두 계정 1개',
+  'accounts.exitsExpand': '모두 보기({count}개)',
+  'accounts.exitsCollapse': '접기',
   'accounts.exitAccounts': '계정 {count}개',
   'accounts.exitLooking': '공인 IP 확인 중…',
   'accounts.exitFailed': '확인 실패',
@@ -556,6 +564,15 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxAccountSwitches': '계정 전환 상한',
   'settings.maxAccountSwitchesHelp':
     '403, 5xx 등 할당량과 무관한 업스트림 오류가 나면 한 요청이 다른 계정으로 전환하는 최대 횟수입니다. 0이면 전환하지 않으며 할당량 초과는 세지 않습니다',
+  'settings.maxQuotaSwitches': '할당량 초과 시 전환 상한',
+  'settings.maxQuotaSwitchesHelp':
+    '계정의 할당량이 소진되면 한 요청이 다른 계정으로 전환하는 최대 횟수이며, 다 쓰면 할당량 오류를 반환합니다. 0이면 전환하지 않습니다',
+  'settings.maxQuotaSwitchesOff': '무제한',
+  'settings.maxQuotaSwitchesCount': '전환 횟수',
+  'settings.maxQuotaSwitchesUnit': '회',
+  'settings.accountSwitchInterval': '계정 전환 최소 간격',
+  'settings.accountSwitchIntervalHelp':
+    '요청이 계정을 전환할 때 다음 계정은 최소 이 시간만큼 기다린 뒤 Google에 요청을 보내므로, 몇 초 만에 모든 계정을 소진하지 않습니다',
   'settings.authPathAdd': '경로 추가',
   'settings.authPathBrowse': '찾아보기',
   'settings.authPathRemove': '{path} 제거',
@@ -584,6 +601,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURLHelp':
     '미디어 링크에 쓰는 서비스 주소입니다. 비워 두면 각 요청이 접속한 주소를 씁니다.',
   'settings.modelChannelsHelp': '모델을 한 채널로 제한합니다. 모델 상세에서도 선택할 수 있습니다',
+  'settings.modelAccounts': '모델별 사용 계정',
+  'settings.modelAccountsHelp':
+    '모델은 선택한 계정에서만 처리하며, 모두 사용할 수 없으면 다른 계정을 쓰지 않고 오류를 반환합니다',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build 채팅',
@@ -598,13 +618,19 @@ export const messages: Record<TranslationKey, string> = {
   'settings.activeValue': '현재 적용 값',
   'settings.previewFallback':
     '{configured} 주소가 사용 중이거나 사용할 수 없어 미리보기가 {active} 주소로 실행 중입니다',
-  'settings.pendingService': '저장한 값은 다음에 생성 서비스를 시작할 때 적용됩니다',
-  'settings.pendingManagement': '수신 주소, API 키, 콘솔 로그인은 앱을 다시 시작해야 적용됩니다',
+  'settings.pendingService':
+    'WAA 백엔드 또는 계정 상태 경로를 변경했습니다. 생성 서비스를 다시 시작하면 적용됩니다.',
+  'settings.pendingManagement': '수신 주소는 앱을 다시 시작해야 적용됩니다',
+  'settings.restartTitle': '생성 서비스를 다시 시작해 변경사항 적용',
+  'settings.restartService': '생성 서비스 다시 시작',
+  'settings.restartLater': '나중에',
+  'settings.restartNoRequests': '진행 중인 요청이 없습니다.',
+  'settings.restartInterrupts': '다시 시작하면 진행 중인 요청 {count}개가 중단됩니다.',
+  'settings.restartInterruptsOne': '다시 시작하면 진행 중인 요청 {count}개가 중단됩니다.',
+  'settings.serviceRestarted': '생성 서비스를 다시 시작했습니다',
+  'settings.serviceRestartState': '다시 시작한 후 생성 서비스 상태: {state}',
   'settings.saved': '설정을 저장했습니다',
-  'settings.savedService':
-    '설정을 저장했습니다. 왼쪽 아래에서 생성 서비스를 중지한 뒤 다시 시작하면 적용됩니다',
-  'settings.savedManagement': '설정을 저장했습니다. 앱을 다시 시작하면 적용됩니다',
-  'settings.savedBoth': '설정을 저장했습니다. 앱을 다시 시작하세요',
+  'settings.savedManagement': '설정을 저장했습니다. 수신 주소는 앱을 다시 시작하면 적용됩니다',
   'settings.reveal': '키 표시',
   'settings.hide': '키 숨기기',
   'playground.protocol': '프로토콜',
@@ -1985,7 +2011,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.section.sillytavern': 'For SillyTavern',
   'settings.replyTool': '응답 도구 잘림 방지',
   'settings.replyToolHelp':
-    '롤플레이 전용: 내부 final 도구를 선언해 모델이 전체 본문을 한 번에 전달하도록 하여 스트리밍 중간 차단을 줄입니다(사고 과정은 실시간 출력 유지). 구조화 출력, 필수 도구 호출, 비텍스트 모델에는 적용되지 않습니다',
+    '롤플레이 전용: 내부 final 도구를 선언해 모델이 본문을 단락별로 이어서 전달하도록 하여 스트리밍 중간 차단을 줄이고 긴 답변의 시간 초과를 막습니다(사고 과정은 실시간 출력 유지). 구조화 출력, 필수 도구 호출, 비텍스트 모델에는 적용되지 않습니다',
   'settings.thinkingGuard': '사고 차단 방지',
   'settings.thinkingGuardHelp':
     '롤플레이용: 내부 사고를 간결하고 추상적으로 유지하며 민감한 표현을 반복하지 않도록 안내하고 사고 강도 상한을 낮음으로 제한해 사고 단계의 업스트림 필터 차단을 줄입니다. 메시지 변환 및 응답 도구와 함께 사용할 수 있습니다',
@@ -2002,6 +2028,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.effect.immediate': '저장 즉시 적용',
   'settings.effect.service': '생성 서비스를 다시 시작하면 적용',
   'settings.effect.management': '앱을 다시 시작하면 적용',
+  'settings.effect.launch': '다음에 앱을 시작할 때 적용',
   'settings.unsavedSection': '이 섹션에 저장하지 않은 변경사항이 있습니다',
   'settings.unsavedBar': '저장하지 않은 변경사항',
   'settings.unsavedCount': '저장하지 않은 변경사항 {count}개',
@@ -2018,8 +2045,10 @@ export const messages: Record<TranslationKey, string> = {
     'API 플레이그라운드 HTML 미리보기용 출처입니다. 현재 호스트 이름과 이 포트로 엽니다.',
   'settings.apiKeyAccountsHelp':
     '각 키의 요청을 처리할 계정을 선택합니다. 선택하지 않으면 모든 계정을 사용합니다',
+  'settings.apiKeyAccountsEmpty':
+    '로컬 API 키를 추가하면 여기에서 키마다 사용할 계정을 지정할 수 있습니다',
+  'settings.apiKeyAdd': '키 추가',
   'settings.keyAccountsAll': '모든 계정',
-  'settings.keyAccountsSome': '선택한 계정',
   'settings.accountSearch': '계정 검색',
   'settings.accountNone': '일치하는 계정이 없습니다',
   'settings.keyAccountsClear': '모든 계정 사용',

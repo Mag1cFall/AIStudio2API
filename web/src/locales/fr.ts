@@ -79,13 +79,16 @@ export const messages: Record<TranslationKey, string> = {
   'version.confirmText':
     'Télécharge {version} et redémarre le service. {count} requêtes en cours seront interrompues.',
   'version.downloading': 'Téléchargement de la nouvelle version',
-  'version.verifying': 'Vérification du paquet téléchargé',
   'version.installing': 'Installation de la nouvelle version',
   'version.restarting': 'Redémarrage du service. La page se recharge une fois terminé.',
   'version.restartStalled':
     'La nouvelle version n’a pas démarré en 1 minute. Rouvrez AIStudio2API : cette page se recharge dès qu’il fonctionne. S’il ne démarre toujours pas, consultez les journaux dans {path}.',
   'version.available': '{version} est disponible',
   'version.upToDate': 'À jour',
+  'version.rateLimited':
+    'GitHub limite temporairement les accès depuis ce réseau ; impossible de vérifier les mises à jour pour le moment.',
+  'version.retryAt': 'Nouvelle vérification automatique à {time} (dans environ {minutes} min).',
+  'version.retryAtSoon': 'Nouvelle vérification automatique à {time} (dans moins d’une minute).',
   'version.release': 'Voir sur GitHub',
   'version.notes': 'Notes de version {version}',
   'version.container':
@@ -119,7 +122,6 @@ export const messages: Record<TranslationKey, string> = {
   'common.edit': 'Modifier',
   'common.enable': 'Activer',
   'common.disable': 'Désactiver',
-  'common.empty': 'Aucune donnée',
   'common.copy': 'Copier',
   'common.copied': 'Copié',
   'common.error': 'La requête a échoué',
@@ -141,6 +143,12 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.filterEgress': 'Sortie du compte',
   'accounts.allEgresses': 'Toutes les sorties',
   'accounts.exits': 'IP de sortie',
+  'accounts.exitsTotal': '{count} au total',
+  'accounts.exitsShared': '{count} partagées',
+  'accounts.exitsFailed': '{count} en échec',
+  'accounts.exitsSingle': '1 compte chacune',
+  'accounts.exitsExpand': 'Tout afficher ({count})',
+  'accounts.exitsCollapse': 'Afficher moins',
   'accounts.exitAccounts': 'Comptes : {count}',
   'accounts.exitLooking': 'Recherche des IP de sortie…',
   'accounts.exitFailed': 'Échec de la recherche',
@@ -563,6 +571,15 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxAccountSwitches': 'Changements de compte max.',
   'settings.maxAccountSwitchesHelp':
     "Nombre de fois qu'une requête passe à un autre compte après une erreur amont hors quota, comme 403 ou 5xx ; 0 désactive le changement et les erreurs de quota ne comptent pas",
+  'settings.maxQuotaSwitches': 'Changements max. sur quota épuisé',
+  'settings.maxQuotaSwitchesHelp':
+    'Nombre de fois qu’une requête passe à un autre compte quand un compte a épuisé son quota, avant de renvoyer l’erreur de quota ; 0 désactive le changement',
+  'settings.maxQuotaSwitchesOff': 'Illimité',
+  'settings.maxQuotaSwitchesCount': 'Nombre de changements',
+  'settings.maxQuotaSwitchesUnit': 'changements',
+  'settings.accountSwitchInterval': 'Intervalle minimal entre changements',
+  'settings.accountSwitchIntervalHelp':
+    'Quand une requête change de compte, le compte suivant attend au moins ce délai avant de contacter Google, pour ne pas épuiser tous les comptes en quelques secondes',
   'settings.authPathAdd': 'Ajouter un chemin',
   'settings.authPathBrowse': 'Parcourir',
   'settings.authPathRemove': 'Retirer {path}',
@@ -592,6 +609,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.mediaBaseURLHelp':
     'Adresse du service utilisée dans les liens média. Vide : adresse de chaque requête.',
   'settings.modelChannelsHelp': 'Limiter un modèle à un canal ; aussi dans les détails du modèle',
+  'settings.modelAccounts': 'Comptes par modèle',
+  'settings.modelAccountsHelp':
+    'Seuls les comptes sélectionnés traitent le modèle ; si aucun n’est disponible, la requête échoue sans utiliser d’autres comptes',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Chat Build',
@@ -607,14 +627,19 @@ export const messages: Record<TranslationKey, string> = {
   'settings.previewFallback':
     '{configured} est occupé ou indisponible ; l’aperçu écoute sur {active}',
   'settings.pendingService':
-    'Les valeurs enregistrées s’appliqueront au prochain démarrage du service de génération',
-  'settings.pendingManagement':
-    'Redémarrez l’application pour appliquer l’adresse d’écoute, la clé API ou la connexion à la console',
+    'Le moteur WAA ou le chemin des états de compte a changé ; la modification s’applique après le redémarrage du service de génération.',
+  'settings.pendingManagement': 'Redémarrez l’application pour appliquer l’adresse d’écoute',
+  'settings.restartTitle': 'Redémarrer le service de génération pour appliquer les modifications',
+  'settings.restartService': 'Redémarrer le service de génération',
+  'settings.restartLater': 'Plus tard',
+  'settings.restartNoRequests': 'Aucune requête en cours.',
+  'settings.restartInterrupts': 'Le redémarrage interrompt {count} requêtes en cours.',
+  'settings.restartInterruptsOne': 'Le redémarrage interrompt {count} requête en cours.',
+  'settings.serviceRestarted': 'Service de génération redémarré',
+  'settings.serviceRestartState': 'État du service de génération après le redémarrage : {state}',
   'settings.saved': 'Paramètres enregistrés',
-  'settings.savedService':
-    'Paramètres enregistrés. Arrêtez puis redémarrez le service de génération en bas à gauche pour les appliquer',
-  'settings.savedManagement': 'Paramètres enregistrés. Redémarrez l’application pour les appliquer',
-  'settings.savedBoth': 'Paramètres enregistrés. Redémarrez l’application',
+  'settings.savedManagement':
+    'Paramètres enregistrés. Redémarrez l’application pour appliquer l’adresse d’écoute',
   'settings.reveal': 'Afficher la clé',
   'settings.hide': 'Masquer la clé',
   'playground.protocol': 'Protocole',
@@ -2049,7 +2074,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.section.sillytavern': 'For SillyTavern',
   'settings.replyTool': 'Outil de réponse anti-troncature',
   'settings.replyToolHelp':
-    'Pour le jeu de rôle uniquement : déclare un outil interne final afin que le modèle livre la réponse complète en une fois pour limiter les coupures en cours de flux, tout en diffusant la réflexion en direct ; ignoré pour les sorties structurées, les appels d’outils obligatoires et les modèles non textuels',
+    'Pour le jeu de rôle uniquement : déclare un outil interne final afin que le modèle livre la réponse paragraphe par paragraphe dans le même tour, pour limiter les coupures en cours de flux sans expiration sur les longues réponses, tout en diffusant la réflexion en direct ; ignoré pour les sorties structurées, les appels d’outils obligatoires et les modèles non textuels',
   'settings.thinkingGuard': 'Protection de la réflexion',
   'settings.thinkingGuardHelp':
     'Pour le jeu de rôle : invite la réflexion interne à rester brève et abstraite sans répéter de termes sensibles et plafonne l’effort de réflexion au niveau faible afin de réduire les coupures du filtre amont pendant le raisonnement ; combinable avec la réécriture et l’outil de réponse',
@@ -2066,6 +2091,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.effect.immediate': 'Appliqué à l’enregistrement',
   'settings.effect.service': 'Appliqué après le redémarrage du service de génération',
   'settings.effect.management': 'Appliqué après le redémarrage de l’application',
+  'settings.effect.launch': 'Appliqué au prochain démarrage de l’application',
   'settings.unsavedSection': 'Cette section contient des modifications non enregistrées',
   'settings.unsavedBar': 'Modifications non enregistrées',
   'settings.unsavedCount': '{count} modifications non enregistrées',
@@ -2084,8 +2110,10 @@ export const messages: Record<TranslationKey, string> = {
     'Origine distincte des aperçus HTML du bac à sable API, ouverts avec le nom d’hôte actuel et ce port, différent du port d’écoute.',
   'settings.apiKeyAccountsHelp':
     'Choisissez les comptes qui traitent les requêtes de chaque clé. Sans sélection, la clé peut utiliser tous les comptes',
+  'settings.apiKeyAccountsEmpty':
+    'Après avoir ajouté une clé API locale, choisissez ici les comptes utilisables par chaque clé',
+  'settings.apiKeyAdd': 'Ajouter une clé',
   'settings.keyAccountsAll': 'Tous les comptes',
-  'settings.keyAccountsSome': 'Comptes choisis',
   'settings.accountSearch': 'Rechercher un compte',
   'settings.accountNone': 'Aucun compte correspondant',
   'settings.keyAccountsClear': 'Utiliser tous les comptes',

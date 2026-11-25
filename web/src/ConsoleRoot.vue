@@ -74,6 +74,7 @@ async function logout(): Promise<void> {
 onMounted(() => {
   startDesktop(locale, router)
   window.addEventListener('admin-session-expired', expireSession)
+  window.addEventListener('admin-session-changed', () => void loadSession())
   void loadSession(initialSession)
 })
 </script>

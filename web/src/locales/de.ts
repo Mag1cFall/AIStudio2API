@@ -78,13 +78,16 @@ export const messages: Record<TranslationKey, string> = {
   'version.confirmText':
     'Lädt {version} herunter und startet den Dienst neu. {count} laufende Anfragen werden unterbrochen.',
   'version.downloading': 'Neue Version wird heruntergeladen',
-  'version.verifying': 'Heruntergeladenes Paket wird geprüft',
   'version.installing': 'Neue Version wird installiert',
   'version.restarting': 'Dienst wird neu gestartet. Die Seite lädt danach automatisch neu.',
   'version.restartStalled':
     'Die neue Version ist nicht innerhalb von 1 Minute gestartet. Öffnen Sie AIStudio2API erneut; diese Seite lädt automatisch neu, sobald der Dienst läuft. Startet er weiterhin nicht, prüfen Sie die Protokolle in {path}.',
   'version.available': '{version} ist verfügbar',
   'version.upToDate': 'Aktuell',
+  'version.rateLimited':
+    'GitHub begrenzt vorübergehend Zugriffe aus diesem Netzwerk, daher können Updates gerade nicht geprüft werden.',
+  'version.retryAt': 'Automatische erneute Prüfung um {time} (in etwa {minutes} Min.).',
+  'version.retryAtSoon': 'Automatische erneute Prüfung um {time} (in weniger als einer Minute).',
   'version.release': 'Auf GitHub ansehen',
   'version.notes': 'Versionshinweise zu {version}',
   'version.container':
@@ -118,7 +121,6 @@ export const messages: Record<TranslationKey, string> = {
   'common.edit': 'Bearbeiten',
   'common.enable': 'Aktivieren',
   'common.disable': 'Deaktivieren',
-  'common.empty': 'Keine Daten',
   'common.copy': 'Kopieren',
   'common.copied': 'Kopiert',
   'common.error': 'Anfrage fehlgeschlagen',
@@ -140,6 +142,12 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.filterEgress': 'Kontoverbindung',
   'accounts.allEgresses': 'Alle Verbindungen',
   'accounts.exits': 'Ausgangs-IPs',
+  'accounts.exitsTotal': '{count} insgesamt',
+  'accounts.exitsShared': '{count} gemeinsam genutzt',
+  'accounts.exitsFailed': '{count} fehlgeschlagen',
+  'accounts.exitsSingle': 'je 1 Konto',
+  'accounts.exitsExpand': 'Alle {count} anzeigen',
+  'accounts.exitsCollapse': 'Weniger anzeigen',
   'accounts.exitAccounts': 'Konten: {count}',
   'accounts.exitLooking': 'Ausgangs-IPs werden ermittelt…',
   'accounts.exitFailed': 'Abfrage fehlgeschlagen',
@@ -560,6 +568,15 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxAccountSwitches': 'Maximale Kontowechsel',
   'settings.maxAccountSwitchesHelp':
     'Wie oft eine Anfrage nach einem Upstream-Fehler ohne Kontingentbezug wie 403 oder 5xx zu einem anderen Konto wechselt; 0 deaktiviert den Wechsel, Kontingentfehler zählen nicht',
+  'settings.maxQuotaSwitches': 'Maximale Wechsel bei Kontingentfehlern',
+  'settings.maxQuotaSwitchesHelp':
+    'Wie oft eine Anfrage zu einem anderen Konto wechselt, wenn ein Konto sein Kontingent aufgebraucht hat, bevor sie den Kontingentfehler zurückgibt; 0 deaktiviert den Wechsel',
+  'settings.maxQuotaSwitchesOff': 'Unbegrenzt',
+  'settings.maxQuotaSwitchesCount': 'Anzahl der Wechsel',
+  'settings.maxQuotaSwitchesUnit': 'Wechsel',
+  'settings.accountSwitchInterval': 'Mindestabstand zwischen Kontowechseln',
+  'settings.accountSwitchIntervalHelp':
+    'Wechselt eine Anfrage das Konto, wartet das nächste Konto mindestens so lange, bevor es Google kontaktiert, damit eine Anfrage nicht in Sekunden alle Konten aufbraucht',
   'settings.authPathAdd': 'Pfad hinzufügen',
   'settings.authPathBrowse': 'Durchsuchen',
   'settings.authPathRemove': '{path} entfernen',
@@ -589,6 +606,9 @@ export const messages: Record<TranslationKey, string> = {
     'Dienstadresse in Medienlinks. Leer verwendet die Adresse der jeweiligen Anfrage.',
   'settings.modelChannelsHelp':
     'Modell auf einen Kanal beschränken; auch in den Modelldetails wählbar',
+  'settings.modelAccounts': 'Konten pro Modell',
+  'settings.modelAccountsHelp':
+    'Nur die ausgewählten Konten bearbeiten das Modell; ist keines verfügbar, schlägt die Anfrage fehl, ohne andere Konten zu nutzen',
   'channel.playground': 'Playground',
   'channel.build': 'Build',
   'channel.assistant': 'Build-Chat',
@@ -604,15 +624,19 @@ export const messages: Record<TranslationKey, string> = {
   'settings.previewFallback':
     '{configured} ist belegt oder nicht verfügbar; die Vorschau lauscht auf {active}',
   'settings.pendingService':
-    'Gespeicherte Werte gelten ab dem nächsten Start des Generierungsdienstes',
-  'settings.pendingManagement':
-    'Starten Sie die App neu, um Listen-Adresse, API-Schlüssel oder Konsolenanmeldung zu übernehmen',
+    'WAA-Backend oder Pfad des Kontostatus wurde geändert und gilt nach dem Neustart des Generierungsdienstes.',
+  'settings.pendingManagement': 'Starten Sie die App neu, um die Listen-Adresse zu übernehmen',
+  'settings.restartTitle': 'Generierungsdienst neu starten, um Änderungen zu übernehmen',
+  'settings.restartService': 'Generierungsdienst neu starten',
+  'settings.restartLater': 'Später',
+  'settings.restartNoRequests': 'Es laufen keine Anfragen.',
+  'settings.restartInterrupts': 'Der Neustart bricht {count} laufende Anfragen ab.',
+  'settings.restartInterruptsOne': 'Der Neustart bricht {count} laufende Anfrage ab.',
+  'settings.serviceRestarted': 'Generierungsdienst neu gestartet',
+  'settings.serviceRestartState': 'Status des Generierungsdienstes nach dem Neustart: {state}',
   'settings.saved': 'Einstellungen gespeichert',
-  'settings.savedService':
-    'Einstellungen gespeichert. Beenden und starten Sie den Generierungsdienst unten links, um sie zu übernehmen',
   'settings.savedManagement':
-    'Einstellungen gespeichert. Starten Sie die App neu, um sie zu übernehmen',
-  'settings.savedBoth': 'Gespeichert. Starten Sie die App neu',
+    'Einstellungen gespeichert. Starten Sie die App neu, um die Listen-Adresse zu übernehmen',
   'settings.reveal': 'Schlüssel anzeigen',
   'settings.hide': 'Schlüssel ausblenden',
   'playground.protocol': 'Protokoll',
@@ -2045,7 +2069,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.section.sillytavern': 'For SillyTavern',
   'settings.replyTool': 'Antwort-Tool gegen Abbrüche',
   'settings.replyToolHelp':
-    'Nur für Rollenspiel-Szenarien: Deklariert ein internes final-Tool, damit das Modell die gesamte Antwort auf einmal liefert und Abbrüche mitten im Stream verringert, während das Denken weiter live gestreamt wird; gilt nicht für strukturierte Ausgaben, erzwungene Tool-Aufrufe und Nicht-Text-Modelle',
+    'Nur für Rollenspiel-Szenarien: Deklariert ein internes final-Tool, damit das Modell die Antwort im selben Zug Absatz für Absatz liefert, Abbrüche mitten im Stream verringert und Zeitüberschreitungen bei langen Antworten vermeidet, während das Denken weiter live gestreamt wird; gilt nicht für strukturierte Ausgaben, erzwungene Tool-Aufrufe und Nicht-Text-Modelle',
   'settings.thinkingGuard': 'Denkphase-Filterschutz',
   'settings.thinkingGuardHelp':
     'Für Rollenspiele: Hält die interne Denkphase kurz und abstrakt ohne Wiederholung sensibler Begriffe und begrenzt die Denkintensität auf niedrig, um Filterabbrüche während der Denkphase zu verringern; kombinierbar mit Nachrichtenumschreibung und Antwort-Tool',
@@ -2062,6 +2086,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.effect.immediate': 'Gilt sofort nach dem Speichern',
   'settings.effect.service': 'Gilt nach dem Neustart des Generierungsdienstes',
   'settings.effect.management': 'Gilt nach einem Neustart der App',
+  'settings.effect.launch': 'Gilt ab dem nächsten Start der App',
   'settings.unsavedSection': 'Dieser Bereich enthält nicht gespeicherte Änderungen',
   'settings.unsavedBar': 'Nicht gespeicherte Änderungen',
   'settings.unsavedCount': '{count} nicht gespeicherte Änderungen',
@@ -2079,8 +2104,10 @@ export const messages: Record<TranslationKey, string> = {
     'Eigener Ursprung für HTML-Vorschauen im API-Playground, geöffnet mit dem aktuellen Hostnamen und diesem Port, anders als der Listen-Port.',
   'settings.apiKeyAccountsHelp':
     'Wählen Sie, welche Konten die Anfragen jedes Schlüssels bearbeiten. Ohne Auswahl kann der Schlüssel alle Konten nutzen',
+  'settings.apiKeyAccountsEmpty':
+    'Nachdem Sie einen lokalen API-Schlüssel hinzugefügt haben, wählen Sie hier die Konten für jeden Schlüssel',
+  'settings.apiKeyAdd': 'Schlüssel hinzufügen',
   'settings.keyAccountsAll': 'Alle Konten',
-  'settings.keyAccountsSome': 'Ausgewählte Konten',
   'settings.accountSearch': 'Konten suchen',
   'settings.accountNone': 'Keine passenden Konten',
   'settings.keyAccountsClear': 'Alle Konten verwenden',

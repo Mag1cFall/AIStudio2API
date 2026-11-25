@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, onActivated, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import {
+  computed,
+  onActivated,
+  onDeactivated,
+  onMounted,
+  onUnmounted,
+  ref,
+  useTemplateRef,
+  watch,
+} from 'vue'
 import { api } from '@/api'
+import { serverTime, useSecondClock } from '@/elapsed'
 import { useI18n } from '@/i18n'
-import { markdown } from '@/markdown'
 import type { UpdateProgress, UpdateStatus } from '@/types'
 import UiIcon from '@/components/UiIcon.vue'
 
@@ -21,7 +30,15 @@ const error = ref('')
 const progress = ref<UpdateProgress | null>(null)
 
 const latest = computed(() => props.status?.latest ?? '')
-const notes = computed(() => markdown.render(props.status?.notes ?? ''))
+// notes 是 GitHub 渲染好的更新说明 HTML，其中的链接在新窗口打开
+const notes = computed(() => {
+  const document = new DOMParser().parseFromString(props.status?.notes ?? '', 'text/html')
+  for (const link of document.querySelectorAll('a')) {
+    link.target = '_blank'
+    link.rel = 'noreferrer'
+  }
+  return document.body.innerHTML
+})
 const notesBox = useTemplateRef<HTMLElement>('notesBox')
 // revealFrame 是放出下一段更新说明的动画帧，没有时为 0
 let revealFrame = 0
@@ -52,16 +69,10 @@ const installable = computed(
 )
 const summary = computed(() => {
   if (phase.value === 'installing')
-    return t(
-      progress.value?.stage === 'verify'
-        ? 'version.verifying'
-        : progress.value?.stage === 'install'
-          ? 'version.installing'
-          : 'version.downloading',
-    )
+    return t(progress.value?.stage === 'install' ? 'version.installing' : 'version.downloading')
   if (phase.value === 'restarting') return props.restartStalled ? '' : t('version.restarting')
   if (props.status?.available) return t('version.available').replace('{version}', latest.value)
-  if (latest.value) return t('version.upToDate')
+  if (latest.value && !props.status?.error) return t('version.upToDate')
   return ''
 })
 // percent 是发行包的下载百分比，总大小未知时为 null
@@ -125,7 +136,55 @@ async function install(): Promise<void> {
   emit('restarting')
 }
 
-onActivated(() => void check(false))
+// checkMessage 是检查更新失败的原因：限流时为写给用户的说明，其余为服务端给出的原因
+const checkMessage = computed(() =>
+  props.status?.error_kind === 'rate_limited'
+    ? t('version.rateLimited')
+    : logText(props.status?.error ?? ''),
+)
+// retryAt 是服务端预计恢复并重新检查的本机时钟毫秒时刻，没有时为 0
+const retryAt = computed(() =>
+  props.status?.error && props.status.retry_at ? serverTime(props.status.retry_at) : 0,
+)
+const now = useSecondClock(() => retryAt.value > Date.now())
+// retryText 是恢复时刻与剩余分钟数，已过恢复时刻时为空
+const retryText = computed(() => {
+  if (retryAt.value <= now.value) return ''
+  const minutes = Math.ceil((retryAt.value - now.value) / 60_000)
+  return t(minutes <= 1 ? 'version.retryAtSoon' : 'version.retryAt')
+    .replace(
+      '{time}',
+      new Date(retryAt.value).toLocaleTimeString(locale.value, {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    )
+    .replace('{minutes}', String(minutes))
+})
+
+// active 表示版本页正在显示
+let active = false
+let retryTimer = 0
+// scheduleRetry 在版本页显示期间于恢复时刻过后重新检查一次，服务端到时才再次访问 GitHub
+function scheduleRetry(): void {
+  window.clearTimeout(retryTimer)
+  if (!active || retryAt.value === 0) return
+  retryTimer = window.setTimeout(
+    () => phase.value === 'idle' && void check(false),
+    Math.max(retryAt.value - Date.now(), 0) + 1000,
+  )
+}
+watch(retryAt, scheduleRetry)
+
+onActivated(() => {
+  active = true
+  void check(false)
+  scheduleRetry()
+})
+onDeactivated(() => {
+  active = false
+  window.clearTimeout(retryTimer)
+})
 </script>
 
 <template>
@@ -259,15 +318,24 @@ onActivated(() => void check(false))
           {{ t('version.managed').replaceAll('{name}', status.managed_by ?? '') }}
         </p>
 
+        <div
+          v-if="status?.error"
+          role="status"
+          data-update-check-error
+          class="mt-4 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm leading-6 text-amber-200"
+        >
+          <p class="break-words">{{ checkMessage }}</p>
+          <p v-if="retryText">{{ retryText }}</p>
+        </div>
         <p
-          v-if="restartStalled || error || status?.error"
+          v-if="restartStalled || error"
           role="alert"
           class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm break-words text-red-300"
         >
           {{
             restartStalled
               ? t('version.restartStalled').replace('{path}', status?.log_dir ?? '')
-              : error || logText(status?.error ?? '')
+              : error
           }}
         </p>
       </article>

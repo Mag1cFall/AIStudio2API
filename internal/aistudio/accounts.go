@@ -369,6 +369,10 @@ type Account struct {
 	assistantBusy bool
 	// pendingProofs 是已选定该账户、还没有取完 proof 的生成租约数
 	pendingProofs int
+	// quotaDayStart 是 quotaDayRequests 对应的配额日起点
+	quotaDayStart time.Time
+	// quotaDayRequests 是账户在当前配额日内的请求数
+	quotaDayRequests int64
 }
 
 // AccountStatus 表示管理界面使用的脱敏账户状态
@@ -576,6 +580,44 @@ func (s *AccountStore) RecordRestrictedImport(email string, reason string) error
 	return atomicWriteFile(filepath.Join(s.paths[0], restrictedImportsName), data, 0o600)
 }
 
+// AccountUsageEntry 表示单个账户在指定模型与通道上的最近使用时刻
+type AccountUsageEntry struct {
+	Account  string
+	Model    string
+	Channel  Channel
+	LastUsed time.Time
+}
+
+// AccountUsageSeed 保存启动或换代时注入账户池的历史使用信息
+type AccountUsageSeed struct {
+	Entries          []AccountUsageEntry
+	QuotaDayStart    time.Time
+	QuotaDayRequests map[string]int64
+}
+
+// channelUseKey 是账户与通道组合的最近使用键
+type channelUseKey struct {
+	accountID string
+	channel   Channel
+}
+
+// quotaResetLocation 是配额日重置使用的太平洋时区
+var quotaResetLocation = mustLoadQuotaResetLocation()
+
+func mustLoadQuotaResetLocation() *time.Location {
+	location, err := time.LoadLocation(quotaResetTimezone)
+	if err != nil {
+		panic(err)
+	}
+	return location
+}
+
+// QuotaDayStart 返回 now 所在配额日（太平洋时间 00:00）的起始时刻
+func QuotaDayStart(now time.Time) time.Time {
+	local := now.In(quotaResetLocation)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, quotaResetLocation)
+}
+
 // AccountPool 在账户之间执行能力与并发槽位调度
 type AccountPool struct {
 	mu                    sync.Mutex
@@ -584,8 +626,8 @@ type AccountPool struct {
 	resources             map[string]string
 	perAccountConcurrency int
 	routingStrategy       string
-	lastPicked            map[string]string
-	lastPickedChannel     map[string]Channel
+	lastPickTime          time.Time
+	lastUsed              map[string]map[channelUseKey]time.Time
 	channels              []Channel
 	modelChannels         map[string]Channel
 	apiKeyAccounts        map[string][]string
@@ -1007,13 +1049,13 @@ func (p *AccountPool) PublicModels(models []Model) []Model {
 	return callableFirst(public)
 }
 
-// callableFirst 保持原顺序依次排列有通道的普通模型、经后台任务生成的 agent 与没有通道的普通模型
+// callableFirst 保持原顺序依次排列有通道的普通模型、agent 与没有通道的普通模型
 func callableFirst(models []Model) []Model {
 	ordered := make([]Model, 0, len(models))
 	var agents, restricted []Model
 	for _, model := range models {
 		switch {
-		case model.Capabilities["interaction_task"]:
+		case interactionRouting(model, GenerationDefaults{}, ChannelPlayground).IsAgent():
 			agents = append(agents, model)
 		case len(model.Channels) == 0:
 			restricted = append(restricted, model)
@@ -1077,7 +1119,8 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 	p := &AccountPool{
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
-		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
+		routingStrategy: "round-robin",
+		lastUsed:        make(map[string]map[channelUseKey]time.Time),
 	}
 	for _, account := range p.accounts {
 		if account.runtime.Cooldowns == nil {
@@ -1525,6 +1568,9 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 	}
 	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	scope, bound := p.modelAccounts[selection.ModelID]
+	if err := p.scopedModelAccessErrorLocked(selection, scope, bound); err != nil {
+		return err
+	}
 	var reasons []string
 	var states []AccountState
 	for _, account := range p.accounts {
@@ -1548,6 +1594,40 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 		return ErrNoEligibleAccount
 	}
 	return &AccountsNotReadyError{Reasons: reasons, States: states}
+}
+
+// scopedModelAccessErrorLocked 返回请求限定的账户（按请求指定、key 绑定或模型绑定）只因权益不足而无法调用模型时写明账户与所需权益的错误
+func (p *AccountPool) scopedModelAccessErrorLocked(selection AccountSelection, scope []string, bound bool) error {
+	pinned := strings.TrimSpace(selection.AccountID)
+	if selection.ModelID == "" || pinned == "" && selection.AllowedAccountIDs == nil && !bound {
+		return nil
+	}
+	anyTier := selection
+	anyTier.anyTier = true
+	var accounts []string
+	var modes []int64
+	for _, account := range p.accounts {
+		if !account.Config.Enabled || pinned != "" && account.ID != pinned || bound && !slices.Contains(scope, account.ID) ||
+			selection.AllowedAccountIDs != nil && !slices.Contains(selection.AllowedAccountIDs, account.ID) {
+			continue
+		}
+		if p.accountSupportsAnyChannelLocked(account, selection) {
+			return nil
+		}
+		if !p.accountSupportsAnyChannelLocked(account, anyTier) {
+			continue
+		}
+		accounts = append(accounts, account.ID)
+		for _, model := range account.Models {
+			if modelMatchesID(model, selection.ModelID) {
+				modes = unionInt64(modes, model.AccessModes)
+			}
+		}
+	}
+	if len(accounts) == 0 {
+		return nil
+	}
+	return &ModelAccessError{Model: selection.ModelID, AccessModes: modes, Accounts: accounts}
 }
 
 func (p *AccountPool) markStaleAccountUnavailable(account *Account) {
@@ -2512,13 +2592,97 @@ func (p *AccountPool) ByBenefitTier(accountIDs []string) []string {
 	return ordered
 }
 
-// PreferWarmPool 按权益分层轮选初始热账户，fill-first 时 ACCOUNT_ORDER 列出的账户在前
-func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
-	type warmCandidate struct {
-		id       string
-		coverage int
-	}
+// SeedUsage 把启动或换代时从请求账本读回的最近使用时间与当日请求数注入账户池
+func (p *AccountPool) SeedUsage(seed AccountUsageSeed) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	byLabel := make(map[string]*Account, len(p.accounts))
+	for _, account := range p.accounts {
+		if label := strings.TrimSpace(account.Config.Label); label != "" {
+			if _, exists := byLabel[label]; !exists {
+				byLabel[label] = account
+			}
+		}
+	}
+	resolve := func(name string) *Account {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil
+		}
+		if account := p.byID[name]; account != nil {
+			return account
+		}
+		return byLabel[name]
+	}
+	for _, entry := range seed.Entries {
+		account := resolve(entry.Account)
+		if account == nil || entry.LastUsed.IsZero() {
+			continue
+		}
+		at := entry.LastUsed.UTC()
+		if at.After(account.LastUsed) {
+			account.LastUsed = at
+		}
+		if at.After(p.lastPickTime) {
+			p.lastPickTime = at
+		}
+		scope := strings.TrimPrefix(strings.TrimSpace(entry.Model), "models/")
+		if scope == "" {
+			continue
+		}
+		channel := Channel(strings.TrimSpace(string(entry.Channel)))
+		if channel == "" {
+			channel = ChannelPlayground
+		}
+		byPair := p.lastUsed[scope]
+		if byPair == nil {
+			byPair = make(map[channelUseKey]time.Time)
+			p.lastUsed[scope] = byPair
+		}
+		key := channelUseKey{accountID: account.ID, channel: channel}
+		if at.After(byPair[key]) {
+			byPair[key] = at
+		}
+	}
+	if !seed.QuotaDayStart.IsZero() && len(seed.QuotaDayRequests) > 0 {
+		totals := make(map[string]int64, len(seed.QuotaDayRequests))
+		for name, count := range seed.QuotaDayRequests {
+			if count <= 0 {
+				continue
+			}
+			if account := resolve(name); account != nil {
+				totals[account.ID] += count
+			}
+		}
+		for accountID, count := range totals {
+			account := p.byID[accountID]
+			if !account.quotaDayStart.Equal(seed.QuotaDayStart) {
+				account.quotaDayStart = seed.QuotaDayStart
+				account.quotaDayRequests = count
+			} else if count > account.quotaDayRequests {
+				account.quotaDayRequests = count
+			}
+		}
+	}
+}
+
+// PreferWarmPool 按权益分层轮选初始热账户，round-robin 优先尚无或较少热账户的权益层，同层按覆盖度、当日用量少与最久未用优先，fill-first 时 ACCOUNT_ORDER 列出的账户在前
+func (p *AccountPool) PreferWarmPool(accountIDs []string, warm []string) []string {
+	type warmCandidate struct {
+		id               string
+		coverage         int
+		quotaDayRequests int64
+		lastUsed         time.Time
+	}
+	today := QuotaDayStart(time.Now())
+	p.mu.Lock()
+	roundRobin := p.routingStrategy == "round-robin"
+	warmByPriority := make(map[int]int)
+	for _, accountID := range warm {
+		if account := p.byID[accountID]; account != nil {
+			warmByPriority[benefitTierPriority(account.BenefitTier)]++
+		}
+	}
 	groups := make(map[int][]warmCandidate)
 	for _, accountID := range accountIDs {
 		account := p.byID[accountID]
@@ -2531,19 +2695,55 @@ func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
 				coverage++
 			}
 		}
+		requests := int64(0)
+		if account.quotaDayStart.Equal(today) {
+			requests = account.quotaDayRequests
+		}
 		priority := benefitTierPriority(account.BenefitTier)
-		groups[priority] = append(groups[priority], warmCandidate{id: accountID, coverage: coverage})
+		groups[priority] = append(groups[priority], warmCandidate{
+			id:               accountID,
+			coverage:         coverage,
+			quotaDayRequests: requests,
+			lastUsed:         account.LastUsed,
+		})
 	}
 	p.mu.Unlock()
 	priorities := make([]int, 0, len(groups))
 	for priority, candidates := range groups {
 		priorities = append(priorities, priority)
 		sort.SliceStable(candidates, func(left int, right int) bool {
-			return candidates[left].coverage > candidates[right].coverage
+			if candidates[left].coverage != candidates[right].coverage {
+				return candidates[left].coverage > candidates[right].coverage
+			}
+			if !roundRobin {
+				return false
+			}
+			if candidates[left].quotaDayRequests != candidates[right].quotaDayRequests {
+				return candidates[left].quotaDayRequests < candidates[right].quotaDayRequests
+			}
+			if diff := compareLastUsed(candidates[left].lastUsed, candidates[right].lastUsed); diff != 0 {
+				return diff < 0
+			}
+			return candidates[left].id < candidates[right].id
 		})
 		groups[priority] = candidates
 	}
-	sort.Ints(priorities)
+	sort.Slice(priorities, func(left, right int) bool {
+		leftP, rightP := priorities[left], priorities[right]
+		if warmByPriority[leftP] != warmByPriority[rightP] {
+			return warmByPriority[leftP] < warmByPriority[rightP]
+		}
+		if roundRobin {
+			leftTop, rightTop := groups[leftP][0], groups[rightP][0]
+			if leftTop.quotaDayRequests != rightTop.quotaDayRequests {
+				return leftTop.quotaDayRequests < rightTop.quotaDayRequests
+			}
+			if diff := compareLastUsed(leftTop.lastUsed, rightTop.lastUsed); diff != 0 {
+				return diff < 0
+			}
+		}
+		return leftP < rightP
+	})
 	result := make([]string, 0, len(accountIDs))
 	for len(result) < len(accountIDs) {
 		added := false
@@ -3026,13 +3226,13 @@ func (p *AccountPool) Status() []AccountStatus {
 			Message:     message,
 			Directory:   account.Directory,
 
-			Transition:       progress.operation,
-			TransitionStep:   progress.step,
-			TransitionIndex:  progress.index,
-			TransitionTotal:  progress.total,
-			TransitionSince:  progress.since,
-			CatalogError:     catalogError,
-			ActiveRequests:   account.active,
+			Transition:           progress.operation,
+			TransitionStep:       progress.step,
+			TransitionIndex:      progress.index,
+			TransitionTotal:      progress.total,
+			TransitionSince:      progress.since,
+			CatalogError:         catalogError,
+			ActiveRequests:       account.active,
 			CatalogSyncedAt:      account.catalogSyncedAt,
 			HiddenDiscovered:     account.hiddenDiscovered,
 			HiddenModels:         len(account.hiddenModels),
@@ -3211,9 +3411,13 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		if candidate.channel == ChannelAssistant {
 			account.assistantBusy = true
 		}
-		account.LastUsed = now
-		p.lastPicked[selectionAccessScope(selection)] = account.ID
-		p.lastPickedChannel[selectionAccessScope(selection)] = candidate.channel
+		usedAt := now
+		if !usedAt.After(p.lastPickTime) {
+			usedAt = p.lastPickTime.Add(time.Nanosecond)
+		}
+		p.lastPickTime = usedAt
+		account.LastUsed = usedAt
+		p.recordSelectionUseLocked(selection, account, candidate.channel, usedAt)
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
@@ -3368,18 +3572,76 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 		}
 		indices = append(indices, index)
 	}
+	if p.routingStrategy == "round-robin" {
+		scope := selectionAccessScope(selection)
+		channels := p.selectionChannelsLocked(selection)
+		sort.Slice(indices, func(left, right int) bool {
+			leftAccount, rightAccount := p.accounts[indices[left]], p.accounts[indices[right]]
+			if diff := compareLastUsed(p.accountLastUsedLocked(scope, leftAccount.ID, channels), p.accountLastUsedLocked(scope, rightAccount.ID, channels)); diff != 0 {
+				return diff < 0
+			}
+			return leftAccount.ID < rightAccount.ID
+		})
+		return indices, nil
+	}
 	sort.Slice(indices, func(left, right int) bool {
 		return p.accounts[indices[left]].ID < p.accounts[indices[right]].ID
 	})
-	if p.routingStrategy == "round-robin" {
-		last := p.lastPicked[selectionAccessScope(selection)]
-		start := sort.Search(len(indices), func(index int) bool { return p.accounts[indices[index]].ID > last })
-		return append(indices[start:], indices[:start]...), nil
-	}
 	sort.SliceStable(indices, func(left, right int) bool {
 		return p.accountRankLocked(p.accounts[indices[left]].ID) < p.accountRankLocked(p.accounts[indices[right]].ID)
 	})
 	return indices, nil
+}
+
+// recordSelectionUseLocked 更新账户在作用域与通道上的最近使用时刻及当前配额日请求数
+func (p *AccountPool) recordSelectionUseLocked(selection AccountSelection, account *Account, channel Channel, usedAt time.Time) {
+	scope := selectionAccessScope(selection)
+	byPair := p.lastUsed[scope]
+	if byPair == nil {
+		byPair = make(map[channelUseKey]time.Time)
+		p.lastUsed[scope] = byPair
+	}
+	byPair[channelUseKey{accountID: account.ID, channel: channel}] = usedAt
+	if selection.ModelID != "" || selection.Method != "" {
+		today := QuotaDayStart(usedAt)
+		if !account.quotaDayStart.Equal(today) {
+			account.quotaDayStart = today
+			account.quotaDayRequests = 0
+		}
+		account.quotaDayRequests++
+	}
+}
+
+// accountLastUsedLocked 返回账户在作用域可选通道中最早的最近使用时刻，读不到记录时返回零值
+func (p *AccountPool) accountLastUsedLocked(scope string, accountID string, channels []Channel) time.Time {
+	byPair := p.lastUsed[scope]
+	if len(byPair) == 0 {
+		return time.Time{}
+	}
+	if len(channels) == 0 {
+		return byPair[channelUseKey{accountID: accountID, channel: ChannelPlayground}]
+	}
+	earliest := byPair[channelUseKey{accountID: accountID, channel: channels[0]}]
+	for _, channel := range channels[1:] {
+		if at := byPair[channelUseKey{accountID: accountID, channel: channel}]; compareLastUsed(at, earliest) < 0 {
+			earliest = at
+		}
+	}
+	return earliest
+}
+
+// compareLastUsed 比较两个最近使用时刻，零值表示未用过并排在最前
+func compareLastUsed(left, right time.Time) int {
+	switch {
+	case left.IsZero() && right.IsZero():
+		return 0
+	case left.IsZero():
+		return -1
+	case right.IsZero():
+		return 1
+	default:
+		return left.Compare(right)
+	}
 }
 
 // accountRankLocked 返回账户在 ACCOUNT_ORDER 中的位置，未列出的账户排在最后

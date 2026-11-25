@@ -26,6 +26,11 @@ type toolContract struct {
 
 // prepareToolRequest 将工具选择与约束转换为共同生成请求，compile 为 true 时编译严格函数的参数 Schema 供校验函数调用参数
 func prepareToolRequest(request GenerateRequest, compile bool) (GenerateRequest, *toolContract, error) {
+	return prepareToolRequestWithReplyTool(request, compile, false)
+}
+
+// prepareToolRequestWithReplyTool 将工具选择与约束转换为共同生成请求，replyTool 为 true 时单次工具调用提示不约束内部 final 工具
+func prepareToolRequestWithReplyTool(request GenerateRequest, compile bool, replyTool bool) (GenerateRequest, *toolContract, error) {
 	config := request.Tools.ToolConfig
 	if config.Mode == "none" {
 		return request, nil, nil
@@ -126,9 +131,13 @@ func prepareToolRequest(request GenerateRequest, compile bool) (GenerateRequest,
 		request.System = appendSystem(request.System, "\nUse one of these tools in this response: "+strings.Join(names, ", ")+". Use the tool before answering.")
 	}
 	if contract.parallel != nil {
-		request.System = appendSystem(request.System, "\nCall at most one function in this response.")
+		if replyTool {
+			request.System = appendSystem(request.System, "\nCall at most one non-final tool in this response (this limit does not apply to `final`).")
+		} else {
+			request.System = appendSystem(request.System, "\nCall at most one function in this response.")
+		}
 	}
-	if !contract.required && len(config.AllowedFunctionNames) == 0 && len(contract.schemas) == 0 && contract.parallel == nil {
+	if !replyTool && !contract.required && len(config.AllowedFunctionNames) == 0 && len(contract.schemas) == 0 && contract.parallel == nil {
 		contract = nil
 	}
 	return request, contract, nil
@@ -217,6 +226,8 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 		serverSideUsed := false
 		failed := false
 		usedReplyTool := false
+		hasFinalText := false
+		lastFinalEndedNewline := false
 		sawPlainText := false
 		bypassReported := false
 		matchedStop := ""
@@ -297,7 +308,7 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 				}
 				continue
 			}
-			if contract.replyTool && event.Kind == EventToolCall && event.FunctionCall != nil && event.FunctionCall.Name == replyToolName {
+			if contract.replyTool && event.Kind == EventToolCall && event.FunctionCall != nil && isReplyToolName(event.FunctionCall.Name) {
 				text, ok := replyToolText(event.FunctionCall.Arguments)
 				if !ok {
 					failed = true
@@ -308,7 +319,16 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 					continue
 				}
 				usedReplyTool = true
+				reportReplyToolCall(ctx)
 				lastTextEvent = event
+				rawText := text
+				if rawText != "" {
+					if hasFinalText && !lastFinalEndedNewline && !strings.HasPrefix(rawText, "\n") && !strings.HasPrefix(rawText, "\r") {
+						text = "\n\n" + rawText
+					}
+					hasFinalText = true
+					lastFinalEndedNewline = strings.HasSuffix(rawText, "\n") || strings.HasSuffix(rawText, "\r")
+				}
 				if matcher != nil {
 					var sequence string
 					text, sequence = matcher.write(text)

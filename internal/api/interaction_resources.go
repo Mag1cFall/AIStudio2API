@@ -161,10 +161,6 @@ func (s *server) handleInteractionDelete(w http.ResponseWriter, r *http.Request)
 // handleInteractionCancel 停止进行中的后台交互并返回保存的交互
 func (s *server) handleInteractionCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := s.responseStates.Interaction(id); !ok {
-		writeInteractionNotFound(w, id)
-		return
-	}
 	s.stopBackground(id)
 	record, ok := s.responseStates.Interaction(id)
 	if !ok {

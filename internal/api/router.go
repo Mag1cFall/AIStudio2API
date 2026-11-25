@@ -16,8 +16,10 @@ import (
 // Config 定义公开 API 服务配置
 type Config struct {
 	// PickPath 以系统对话框选择账户目录并返回选中的路径，用户取消时返回空串；只在桌面版提供
-	PickPath         func(start string) (string, error)
-	APIKey           string
+	PickPath func(start string) (string, error)
+	APIKey   string
+	// APIKeys 返回当前生效的逗号分隔 API key，为空时使用 APIKey
+	APIKeys          func() string
 	Admin            AdminService
 	AdminAuthEnabled bool
 	AdminUsername    string
@@ -56,6 +58,7 @@ type ResponseModes struct {
 type server struct {
 	service           aistudio.Service
 	config            Config
+	adminAuth         *adminAuth
 	responseStates    *responseStateStore
 	uploads           *geminiUploads
 	caches            *geminiCaches
@@ -157,12 +160,19 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(requestEncodingMiddleware(requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, s.catalogRead, public))))))))
+	keySource := config.APIKeys
+	if keySource == nil {
+		staticKey := config.APIKey
+		keySource = func() string { return staticKey }
+	}
+	s.config.APIKeys = keySource
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(keySource, authMiddleware(keySource, apiKeyContextMiddleware(keySource, accountContextMiddleware(requestEncodingMiddleware(requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, s.catalogRead, public))))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)
 	root.Handle("/upload/", requestLoggingMiddleware(config.Admin, corsMiddleware(s.geminiUploadHandler(publicHandler))))
-	root.Handle("/api/", newAdminAuth(config).handler(control))
+	s.adminAuth = newAdminAuth(config)
+	root.Handle("/api/", s.adminAuth.handler(control))
 	if config.MediaDir != "" {
 		root.Handle("GET /media/{file}", corsMiddleware(http.HandlerFunc(s.handleMedia)))
 	}

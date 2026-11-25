@@ -1,6 +1,7 @@
 <script lang="ts">
-// ImportFilterKind 是导入对话框候选列表的筛选分段
-export type ImportFilterKind = 'all' | 'unimported' | 'pro'
+import type { ImportFilterKind } from '@/importCandidates'
+
+export type { ImportFilterKind }
 
 // isProTier 判断权益等级是否属于 Pro+（包含 Ultra、Pro 与 Plus）
 export function isProTier(tier?: string): boolean {
