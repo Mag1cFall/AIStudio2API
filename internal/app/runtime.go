@@ -2363,6 +2363,7 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 	generationStartedAt := time.Now()
 	model, config, suffixErr := aistudio.ApplyModelSuffix(service.mappedModel(request.Model), request.Config)
 	request.Model, request.Config = model, config
+	request.Contents = aistudio.DropUnsupportedAssistantMedia(request.Contents)
 	api.SetAccessLogTarget(ctx, request.Model, "")
 	api.SetAccessLogGenerationConfig(ctx, request.Config)
 	api.SetAccessLogGenerationInput(ctx, request)
