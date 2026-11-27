@@ -1,6 +1,7 @@
 package aistudio
 
 import (
+	"mime"
 	"slices"
 	"strings"
 )
@@ -28,10 +29,58 @@ func shouldRewriteAssistantTail(modelID string, rewrite bool) bool {
 	return rewrite && !nativePrefillModels[modelID] && !strings.HasPrefix(modelID, "gemma-")
 }
 
-// normalizeTurns 按 clientSystem 改写客户端系统提示，按 dropUserRejected 删去 user 轮中的客户端身份句；在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮
+// supportedAssistantMediaMIME 判断模型历史轮中的内联媒体 MIME 属于上游可接收的媒体类型
+func supportedAssistantMediaMIME(mimeType string) bool {
+	mediaType, _, err := mime.ParseMediaType(mimeType)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(mediaType, "text/") ||
+		strings.HasPrefix(mediaType, "image/") ||
+		strings.HasPrefix(mediaType, "audio/") ||
+		strings.HasPrefix(mediaType, "video/") ||
+		mediaType == "application/pdf" ||
+		mediaType == "application/json" ||
+		mediaType == "application/x-ipynb+json"
+}
+
+// DropUnsupportedAssistantMedia 过滤模型历史轮中上游不支持的内联媒体，保留该片段携带的思考签名
+func DropUnsupportedAssistantMedia(contents []Content) []Content {
+	if !slices.ContainsFunc(contents, func(content Content) bool {
+		return content.Role == RoleAssistant && slices.ContainsFunc(content.Parts, func(part Part) bool {
+			return part.InlineData != nil && !supportedAssistantMediaMIME(part.InlineData.MIME)
+		})
+	}) {
+		return contents
+	}
+	filtered := make([]Content, 0, len(contents))
+	for _, content := range contents {
+		if content.Role != RoleAssistant {
+			filtered = append(filtered, content)
+			continue
+		}
+		parts := make([]Part, 0, len(content.Parts))
+		for _, part := range content.Parts {
+			if part.InlineData != nil && !supportedAssistantMediaMIME(part.InlineData.MIME) {
+				if part.ThoughtSignature != "" {
+					parts = append(parts, Part{ThoughtSignature: part.ThoughtSignature})
+				}
+				continue
+			}
+			parts = append(parts, part)
+		}
+		if len(parts) > 0 {
+			content.Parts = parts
+			filtered = append(filtered, content)
+		}
+	}
+	return filtered
+}
+
+// normalizeTurns 按 clientSystem 改写客户端系统提示，按 dropUserRejected 删去 user 轮中的客户端身份句，按 DropUnsupportedAssistantMedia 过滤模型历史轮中不支持的内联媒体；在 rewrite 时改写末尾连续 assistant 轮：prompt 非空时正文作为续写前缀连同 prompt 写入系统指令，为空时正文作为最后一轮 user；没有对话内容时以系统提示作为 user 轮
 func normalizeTurns(system []string, contents []Content, rewrite bool, prompt string) ([]string, []Content) {
 	system = clientSystem(system)
-	contents = dropUserRejected(contents)
+	contents = DropUnsupportedAssistantMedia(dropUserRejected(contents))
 	if rewrite {
 		tail := len(contents)
 		for tail > 0 && contents[tail-1].Role == RoleAssistant {

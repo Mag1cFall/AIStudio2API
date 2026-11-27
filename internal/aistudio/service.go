@@ -846,7 +846,7 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	}
 	opts := s.requestOptions()
 	request.System = clientSystem(request.System)
-	request.Contents = dropUserRejected(request.Contents)
+	request.Contents = DropUnsupportedAssistantMedia(dropUserRejected(request.Contents))
 	if opts.YouTubeLinks {
 		request.Contents = attachYouTubeLinks(request.Contents)
 	}
